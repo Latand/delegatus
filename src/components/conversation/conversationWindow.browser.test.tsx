@@ -4796,6 +4796,8 @@ describe("Codex history paging", () => {
       return result.outputs[0].text();
     };
     const bundles = [await build(true), await build(false)];
+    const candidate = Bun.spawnSync(["git", "rev-parse", "HEAD"]).stdout.toString().trim();
+    const sourceHashes = ["src/components/feed/parse.ts", "src/components/feed/contextTokens.ts", "src/components/feed/codexHistory.ts"].map(file => ({ path: file, sha256: createHash("sha256").update(fs.readFileSync(file)).digest("hex") }));
     const manifest = process.env.LLV_CODEX_HISTORY_MANIFEST
       ? JSON.parse(fs.readFileSync(process.env.LLV_CODEX_HISTORY_MANIFEST, "utf8")) as { label: string; source: string; sha256: string }[]
       : [533, 866, 1112, 1277, 3146].map((length, index) => ({ label: String.fromCharCode(65 + index), lines: codexHistoryCorpus(length, 16000) }));
@@ -4844,16 +4846,16 @@ describe("Codex history paging", () => {
                 const window = lines.slice(start);
                 const samples: unknown[] = [], snapshots: unknown[] = [];
                 for (const index of reverse ? [1, 0] : [0, 1]) {
-                  await wait();
                   const stats = probes[index].codexHistoryStats?.(sessions[index]);
+                  await wait();
                   const t = performance.now();
                   snapshots[index] = sessions[index].feed(window, start, false);
                   const end = performance.now();
                   await wait();
                   const after = probes[index].codexHistoryStats?.(sessions[index]);
                   const delta = after && stats ? Object.fromEntries(["rawLines", "rawBytes", "effectChecks", "effectVisits", "rowPatches", "decodeMs", "replayMs", "verifyMs", "projectionMs"].map(key => [key, after[key as keyof typeof after] as number - (stats[key as keyof typeof stats] as number)])) : null;
-                  samples[index] = { ms: end - t, longTasks: tasks.filter(e => e.start >= t - 1 && e.start < end + 1).map(e => e.duration), delta,
-                    joins: probes[index].feedJoinStats(sessions[index]), retained: after ? { effects: after.effects, slots: after.slots, versions: after.versions, frontier: after.frontier, replayByDependency: after.replayByDependency } : null };
+                  samples[index] = { ms: end - t, longTasks: tasks.filter(e => e.start < end && e.start + e.duration > t).map(e => e.duration), delta,
+                    joins: probes[index].feedJoinStats(sessions[index]), retained: after ? { effects: after.effects, slots: after.slots, versions: after.versions, frontier: after.frontier, checkpointBytes: after.checkpointBytes, resets: after.resets, replayByDependency: after.replayByDependency } : null };
                 }
                 const equal = JSON.stringify(probes[0].shape(snapshots[0])) === JSON.stringify(probes[1].shape(snapshots[1]));
                 rows.push({ start, incoming: old - start, window: window.length, before: samples[0], after: samples[1], equal });
@@ -4866,7 +4868,7 @@ describe("Codex history paging", () => {
             if (repeat >= 0) {
               readings.push({ fixture: fixture.label, lines: lines.length, bytes: bytes.length, sha256, rate, partition, repeat, pages });
               fs.mkdirSync("evidence/codex-history", { recursive: true });
-              fs.writeFileSync("evidence/codex-history/parser.json", JSON.stringify({ base, browser: browser.version(), readings }, null, 2) + "\n");
+              fs.writeFileSync("evidence/codex-history/parser.json", JSON.stringify({ base, candidate, sourceHashes, browser: browser.version(), readings }, null, 2) + "\n");
             }
           }
         }
@@ -4880,10 +4882,11 @@ describe("Codex history paging rendered parity", () => {
   browserTest("Codex history paging: desktop and phone preserve rows, open calls and the scroll anchor", async () => {
     const out = path.resolve(".artifacts/codex-history/rendered"); fs.mkdirSync(out, { recursive: true });
     const served = await serveEvidenceFixture(out, FIXTURE);
-    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
     const readings = [];
     try {
-      for (const width of [1440, 390]) for (const locale of ["en", "uk"] as const) {
+      for (const width of [1440, 390]) {
+        const browser = await chromium.launch({ ...LAUNCH, ...(width === 1440 ? { ignoreDefaultArgs: ["--hide-scrollbars"] } : {}) });
+        try { for (const locale of ["en", "uk"] as const) {
         const viewport = { width, height: width === 390 ? 844 : 900 };
         const suffix = `case=codex-history&records=1277&page=300&window=300&latency=0&lang=${locale}`;
         const { page, context, pageErrors } = await openFixture(browser, `${served.base}?${suffix}`, viewport, "dark", locale, "reduce", width === 390);
@@ -4943,9 +4946,10 @@ describe("Codex history paging rendered parity", () => {
           expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
           readings.push({ width, locale, rows: pagedRows.length, equality: true, anchorDrift: drift, openCallRetained: true, expandedOutput: true });
         } finally { await context.close(); }
+        } } finally { await browser.close(); }
       }
       fs.mkdirSync("evidence/codex-history", { recursive: true });
       fs.writeFileSync("evidence/codex-history/rendered.json", JSON.stringify(readings, null, 2) + "\n");
-    } finally { await browser.close(); served.stop(); }
+    } finally { served.stop(); }
   }, 240_000);
 });

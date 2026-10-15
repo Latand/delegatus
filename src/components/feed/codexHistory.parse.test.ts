@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { createHash } from "node:crypto";
 import { getLocale, setLocale } from "@/lib/i18n";
 import {
   assistantEchoText, codexHistoryStats, createFeedSession, feedJoinStats,
@@ -42,18 +41,21 @@ function equalWalk(lines: string[], page: number, showSvc: boolean, offset = 0, 
 }
 
 describe("Codex history hand-over", () => {
-  test("one-shot semantics retain the immutable baseline's full shapes and private metadata", () => {
-    const locale = getLocale();
-    setLocale("en");
+  test("one-shot semantics retain the immutable baseline's full shapes and private metadata", async () => {
+    const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "__fixtures__/codexHistoryOracle.ts")], {
+      env: { ...process.env, TZ: oracle.timezone }, stdout: "pipe", stderr: "pipe",
+    });
     try {
-      const inputs: Record<string, string[]> = { seams: codexHistorySeams(), corpus: codexHistoryCorpus(533) };
-      for (const row of oracle.rows) {
-        const lines = inputs[row.name] ??= readFileSync(path.join(import.meta.dir, "fixtures", row.name), "utf8").trim().split("\n");
-        const snapshot = createFeedSession({ ...config, showSvc: row.showSvc }).feed(lines, row.offset, false);
-        expect(createHash("sha256").update(JSON.stringify(historyShape(snapshot, lines))).digest("hex")).toBe(row.sha256);
-      }
-    } finally { setLocale(locale); }
+      const [status, out, err] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+      expect(err).toBe("");
+      expect(status).toBe(0);
+      expect(JSON.parse(out)).toEqual(oracle.rows.map(row => row.sha256));
+    } finally {
+      if (child.exitCode === null) child.kill();
+      await child.exited;
+    }
   });
+
   for (const showSvc of [false, true]) for (const offset of [0, -100]) {
     test(`open exec, pending user and ledger/context seams; services=${showSvc}, offset=${offset}`, () => {
       const lines = codexHistorySeams();
