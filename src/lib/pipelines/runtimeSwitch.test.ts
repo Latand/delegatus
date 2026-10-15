@@ -361,7 +361,7 @@ for (const operatorKill of [false, true]) test(`automatic terminal reap preserve
   h.ports.conversationAgentActive = async id => id !== STAGE_CONVERSATION;
   h.ports.conversationGeneration = id => ({ engine: "claude", model: id === STAGE_CONVERSATION ? "fable" : "opus", effort: "high", serviceTier: null,
     accountId: id === STAGE_CONVERSATION ? "default" : "target", sessionId: id === STAGE_CONVERSATION ? "session-1" : "session-2", agentPath: STAGE_TRANSCRIPT });
-  h.setTurn({ turn: "idle", message: null, lastRecordAt: h.wallClock() });
+  h.setTurn({ turn: "terminal", message: null, lastRecordAt: h.wallClock() });
   const readSource = h.ports.durableTurnEvidence;
   h.ports.durableTurnEvidence = async (...args) => h.spawnCount() === 1 ? readSource(...args) : { turn: "busy", message: null, lastRecordAt: h.wallClock() };
   h.ports.retireRuntimeSwitch = async () => cleanupPending ? "continuation retirement pending" : null;
