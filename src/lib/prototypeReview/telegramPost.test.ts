@@ -23,7 +23,7 @@ const restores: Array<() => void> = [];
 const services: bot.TelegramBotService[] = [];
 afterEach(async () => {
   for (const restore of restores.splice(0)) restore();
-  for (const service of services.splice(0)) await service.remove();
+  for (const service of services.splice(0)) { await service.waitForReviewPolls(); await service.remove(); }
   for (const root of roots.splice(0)) await fs.rm(root, { recursive: true, force: true });
 });
 async function connected() {
@@ -33,7 +33,7 @@ async function connected() {
   let token: string | null = null;
   const service = new bot.TelegramBotService({ ...bot.productionTelegramBotDependencies(), openStore: () => store,
     removeStoreFiles: () => {}, transportFor: () => transport, saveToken: t => { token = t; }, removeToken: () => { token = null; },
-    withStoredToken: consume => token ? consume(token, "42") : null });
+    withStoredToken: consume => token ? consume(token, "42") : null, publishMessage: () => {} });
   services.push(service);
   transport.script("getMe", ok({ id: 42, is_bot: true, first_name: "Fixture" }));
   await service.connect(fakeBotToken()); await service.stopPoller();

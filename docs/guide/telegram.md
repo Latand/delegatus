@@ -103,3 +103,14 @@ as a compact preview with a link to the full review. A failed or unconfirmed
 post stays on the review with its reason and reaches the orchestrator on its
 next wake. **Send to Telegram again**, in the review's actions, sends any
 round again, older ones included.
+
+Each question also appears as a native poll beneath the form. Options keep
+their question number and letter (`1a`, `1b`), and ✅ marks the recommendation.
+Questions that allow several choices use multiple-answer polls. A custom-answer
+hint points to a text reply; full wording stays in the form when a poll is shortened.
+
+The owner's text reply to the form or any of its polls records the decision:
+`1b, 2a`, `1: b`, `рекомендовані`, or a comment. An ambiguous reply receives one
+clarification request. Votes show participants' opinions. A board answer leaves
+the polls in place. Poll failures are recorded on the round and reported to the
+orchestrator; the form remains published.

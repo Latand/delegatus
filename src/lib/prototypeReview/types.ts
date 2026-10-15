@@ -114,6 +114,15 @@ export interface PrototypeReviewRound {
   mediaRemovedAt?: string;
   /** Local Telegram receipt. Reasons are codes, never provider descriptions. */
   telegramPost?: PrototypeTelegramPost;
+  /** Local advisory poll outcomes; votes carry no decision authority. */
+  telegramPolls?: { key: string; questions: PrototypeTelegramPoll[] };
+}
+export interface PrototypeTelegramPoll {
+  questionId: string;
+  state: "pending" | "sent" | "failed" | "uncertain" | "text-only";
+  messageId?: number;
+  /** Bounded codes only, never Telegram descriptions or identities. */
+  reason?: string;
 }
 export interface PrototypeTelegramPost {
   state: "pending" | "sent" | "failed" | "uncertain";
