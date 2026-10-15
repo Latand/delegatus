@@ -51,11 +51,42 @@ function failure(result: Exclude<BotCallResult, { ok: true }>): string {
   return "telegram_failed";
 }
 const state = <T>(work: () => T) => waitForStateLock("telegram.review-polls.state", work, { waitMs: 5000 });
-const findRound = (review: ReviewPollInput) => review.taskId === null ? findSeatRound(review.id)
+const findRound = (review: Pick<ReviewPollInput, "id" | "taskId">) => review.taskId === null ? findSeatRound(review.id)
   : taskFeedSource()?.get(review.taskId)?.prototypeReviews?.find(round => round.id === review.id);
-function mutatePolls(review: ReviewPollInput, change: (held: PrototypeReviewRound["telegramPolls"]) => PrototypeReviewRound["telegramPolls"]) {
+function mutatePolls(review: Pick<ReviewPollInput, "id" | "taskId">, change: (held: PrototypeReviewRound["telegramPolls"]) => PrototypeReviewRound["telegramPolls"]) {
   if (review.taskId !== null) mutateTaskTelegramPolls(review.taskId, review.id, change);
   else mutateSeatRound(review.id, round => { round.telegramPolls = change(round.telegramPolls); });
+}
+
+/** A sent form can outlive its in-memory poll job, including before its first claim. */
+export function reviewPollsNeedRecovery(round: PrototypeReviewRound): boolean {
+  if (round.telegramPost?.state !== "sent" || !round.questions?.length || round.questions.length > 7) return false;
+  const polls = round.telegramPolls?.key === round.telegramPost.key ? round.telegramPolls.questions : [];
+  return round.questions.some(question => {
+    const poll = polls.find(p => p.questionId === question.id);
+    return !poll || poll.state === "pending";
+  });
+}
+
+/** Shares the sender's lock so an active send settles before reconciliation.
+ * The delivery sweep admits at most 16 rounds, each under the existing finite
+ * file-lock wait and five-second async state admission. No API call is made. */
+export async function reconcileReviewPolls(review: Pick<ReviewPollInput, "id" | "taskId">): Promise<void> {
+  await withViewerOperation("telegram.review-polls", () =>
+    withFileTransaction(path.join(prototypeRoot(), `${review.id}.polls.lock`), "Telegram review polls are busy", () => state(() => {
+      const round = findRound(review);
+      if (!round || !reviewPollsNeedRecovery(round)) return;
+      const key = round.telegramPost!.key;
+      const questions = round.questions!;
+      mutatePolls(review, held => ({ key, questions: questions.map((question, index) => {
+        const previous = held?.key === key ? held.questions.find(p => p.questionId === question.id) : undefined;
+        if (previous && previous.state !== "pending") return previous;
+        if (previous) return { questionId: question.id, state: "uncertain", reason: "interrupted" };
+        return reviewPollPayload(review, question, index)
+          ? { questionId: question.id, state: "failed", reason: "interrupted_before_send" }
+          : { questionId: question.id, state: "text-only", reason: "poll_limits" };
+      }) }));
+    })));
 }
 
 /** One owner (the shared bot service), at most 16 retained jobs, serial sends.

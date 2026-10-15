@@ -259,3 +259,14 @@ test("contextual answers preserve recommendations, custom comments, authority bo
   expect(matchPrototypeAnswer("1b", [telegramTask([round])], undefined, [])).toBeNull();
   expect(matchPrototypeAnswer("1b", [telegramTask([round])], undefined, [], `${prototypeReference(round)} #proto-aaaaaaaa`)).toBeNull();
 });
+
+test.each(["1b, 2", "1b 2", "1b; 2:", "1b\n2", "1b, 2m", "1b, 2: m", "1b, 2mn", "1b, 12a"])("mixed shorthand refuses incomplete or invalid fragments: %s", text => {
+  expect(parsePrototypeAnswer(telegramRound(), text, true)).toHaveProperty("error");
+});
+
+test.each(["1b, 2a", "1b, wait 2 days", "1b, 2 days should be enough", "1b · 2: Почнемо завтра."])("mixed shorthand preserves choices and ordinary comments: %s", text => {
+  const input = parsePrototypeAnswer(telegramRound(), text, true).input!;
+  expect(input.answers?.[0]).toMatchObject({ questionId: "place", options: [1] });
+  if (text === "1b, 2a") expect(input.answers?.[1]).toMatchObject({ questionId: "scope", options: [0] });
+  else expect(input.comment).toContain(text.slice(4).trim());
+});

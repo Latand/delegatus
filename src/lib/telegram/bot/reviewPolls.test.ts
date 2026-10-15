@@ -20,13 +20,14 @@ import { telegramPostSignals } from "@/lib/prototypeReview/telegramPostSignals";
 import { prototypeReviewReplica } from "@/lib/prototypeReview/model";
 import { isPrototypeReplica } from "@/lib/prototypeReview/replica";
 import { readPrototypeReviews } from "@/lib/prototypeReview/read";
-import { insertSeatRound, findSeatRound } from "@/lib/prototypeReview/seatRounds";
+import { insertSeatRound, findSeatRound, clearSeatRoundsForTests } from "@/lib/prototypeReview/seatRounds";
+import { resetPrototypeDeliveryWorkerForTests, sweepPrototypeDeliveries } from "@/lib/prototypeReview/deliveryWorker";
 import { prototypeRoot } from "@/lib/prototypeReview/store";
 import type { TelegramPublishReceipt } from "@/lib/externalRelay/publish";
 import * as bot from "./service";
 import { FakeBotTransport, fakeBotToken, ok, refused, unreachable } from "./fakeTransport";
 import { TelegramBotStore } from "./store";
-import { reviewPollPayload } from "./reviewPolls";
+import { reconcileReviewPolls, reviewPollPayload } from "./reviewPolls";
 
 const cleanups: Array<() => void | Promise<void>> = [];
 afterEach(async () => { for (const cleanup of cleanups.splice(0).reverse()) await cleanup(); });
@@ -141,9 +142,9 @@ test("a held or refused poll never delays form publication; failures are durable
   expect(transport.callsOf("sendRichMessage")).toHaveLength(1);
 });
 
-test.each(["form", "poll"])("fake Bot API vote does nothing; owner reply 1b to %s decides through authenticated relay and replay is stable", async parentKind => {
+test.each([["form", "1b"], ["poll", "1b"], ["poll", "1b, 2a"], ["poll", "Мій власний варіант."]])("fake Bot API vote does nothing; owner reply to %s (%s) decides through authenticated relay and replay is stable", async (parentKind, reply) => {
   const { round, service, transport, published } = await connected(`reply-${parentKind}`);
-  round.questions = round.questions!.slice(0, 1); // A seat can ask one question; the parser uses the published questionnaire.
+  if (reply !== "1b, 2a") round.questions = round.questions!.slice(0, 1);
   saveTasks([telegramTask([round])]);
   await postPrototypeReviewToTelegram(round); await service.waitForReviewPolls();
   const before = JSON.stringify(saved());
@@ -157,13 +158,16 @@ test.each(["form", "poll"])("fake Bot API vote does nothing; owner reply 1b to %
   const paired = { ...destinationRelay(), api_base: `${server.origin}/v1` };
   updateRelayStore(s => ({ ...s, relays: [paired] }));
   const parent = published[parentKind === "form" ? 0 : 1]!;
-  const request = requestSchema.parse({ ...sampleRequest, target_id: "first", answer: { max_chars: 4000, progress: "notes" }, request_id: `poll-answer-${parentKind}`, input: { ...sampleRequest.input,
+  const request = requestSchema.parse({ ...sampleRequest, target_id: "first", answer: { max_chars: 4000, progress: "notes" }, request_id: `poll-answer-${parentKind}-${reply === "1b" ? "single" : reply === "1b, 2a" ? "mixed" : "prose"}`, input: { ...sampleRequest.input,
     requester: { key: "owner", is_owner: true, is_admin: false, is_anonymous_admin: false, can_restrict_members: false, can_delete_messages: false },
     conversation: [{ id: "posted", author: { key: "bot", name: "Clone", self: true }, sent_at: "2026-10-11T13:20:00Z", text: parent.text, reply_to: null },
-      { id: "reply", author: { key: "owner", name: "Owner", self: false }, sent_at: "2026-10-11T13:21:00Z", text: "1b", reply_to: "posted" }], respond_to: "reply" } });
+      { id: "reply", author: { key: "owner", name: "Owner", self: false }, sent_at: "2026-10-11T13:21:00Z", text: reply, reply_to: "posted" }], respond_to: "reply" } });
   const result = await runClaimedRequest(paired, request, undefined, { command: "/missing-fixture-agent" });
   expect(result).toMatchObject({ outcome: "answered", answer: { text: expect.stringContaining("✅ Записав рішення") } });
-  expect(saved().decision).toMatchObject({ originalReply: "1b", answers: [{ questionId: "place", options: [1] }] });
+  expect(saved().decision?.originalReply).toBe(reply);
+  if (reply.startsWith("1b")) expect(saved().decision?.answers?.[0]).toMatchObject({ questionId: "place", options: [1] });
+  if (reply === "1b, 2a") expect(saved().decision?.answers?.[1]).toMatchObject({ questionId: "scope", options: [0] });
+  if (reply === "Мій власний варіант.") expect(saved().decision?.comment).toBe(reply);
   const settled = JSON.stringify(saved());
   await runClaimedRequest(paired, request, undefined, { command: "/missing-fixture-agent" });
   expect(JSON.stringify(saved())).toBe(settled);
@@ -171,7 +175,7 @@ test.each(["form", "poll"])("fake Bot API vote does nothing; owner reply 1b to %
   expect(transport.callsOf("stopPoll")).toHaveLength(0);
 });
 
-test("ambiguous owner reply asks back once across request replay and keeps the round open", async () => {
+test.each(["b", "1b, 2", "1b, 2m"])("ambiguous owner reply %s asks back once across request replay and keeps the round open", async reply => {
   const { round, service, published } = await connected("ambiguous");
   await postPrototypeReviewToTelegram(round); await service.waitForReviewPolls();
   const completions: unknown[] = [];
@@ -179,20 +183,99 @@ test("ambiguous owner reply asks back once across request replay and keeps the r
   cleanups.push(() => server.close());
   const paired = { ...destinationRelay(), api_base: `${server.origin}/v1` };
   updateRelayStore(s => ({ ...s, relays: [paired] }));
-  const request = requestSchema.parse({ ...sampleRequest, target_id: "first", answer: { max_chars: 4000, progress: "notes" }, request_id: "ambiguous-poll-answer", input: { ...sampleRequest.input,
+  const request = requestSchema.parse({ ...sampleRequest, target_id: "first", answer: { max_chars: 4000, progress: "notes" }, request_id: `ambiguous-poll-answer-${reply.replace(/\W/g, "")}`, input: { ...sampleRequest.input,
     requester: { key: "owner", is_owner: true, is_admin: false, is_anonymous_admin: false, can_restrict_members: false, can_delete_messages: false },
     conversation: [{ id: "poll", author: { key: "bot", name: "Clone", self: true }, sent_at: "2026-10-11T13:20:00Z", text: published[1]!.text, reply_to: null },
-      { id: "reply", author: { key: "owner", name: "Owner", self: false }, sent_at: "2026-10-11T13:21:00Z", text: "b", reply_to: "poll" }], respond_to: "reply" } });
+      { id: "reply", author: { key: "owner", name: "Owner", self: false }, sent_at: "2026-10-11T13:21:00Z", text: reply, reply_to: "poll" }], respond_to: "reply" } });
   for (let n = 0; n < 2; n++) expect(await runClaimedRequest(paired, request, undefined, { command: "/missing-fixture-agent" }))
     .toMatchObject({ outcome: "answered", answer: { text: expect.stringContaining("Уточніть відповідь") } });
   expect(completions).toHaveLength(1);
   expect(saved().decision).toBeUndefined();
 });
 
-test.each(["task", "seat"])("%s round poll writes yield under a peer SQLite write lock", async kind => {
+test.each(["task", "seat"])("restart sweep reconciles %s polls independently of a sent form without sending duplicates", async kind => {
+  const { round, service, transport } = await connected(`restart-${kind}`);
+  await resetPrototypeDeliveryWorkerForTests();
+  cleanups.push(resetPrototypeDeliveryWorkerForTests);
+  cleanups.push(clearSeatRoundsForTests);
+  round.taskId = kind === "seat" ? null : round.taskId;
+  round.telegramPost = { key: round.id, state: "sent", at: round.createdAt };
+  round.telegramPolls = { key: round.id, questions: [
+    { questionId: "place", state: "sent", messageId: 11 }, { questionId: "scope", state: "pending" },
+  ] };
+  if (kind === "seat") { saveTasks([]); insertSeatRound(round); }
+  else saveTasks([telegramTask([round])]);
+  const read = () => kind === "seat" ? findSeatRound(round.id)! : saved();
+  await sweepPrototypeDeliveries(undefined, { force: true, rescan: true });
+  await postPrototypeReviewToTelegram(round);
+  await service.waitForReviewPolls();
+  expect(read().telegramPost).toEqual(round.telegramPost);
+  expect(read().telegramPolls?.questions).toEqual([
+    { questionId: "place", state: "sent", messageId: 11 },
+    { questionId: "scope", state: "uncertain", reason: "interrupted" },
+    { questionId: "timing", state: "failed", reason: "interrupted_before_send" },
+  ]);
+  expect(telegramPostSignals(round.project, kind === "seat" ? [] : loadTasks(), kind === "seat" ? [read()] : []))
+    .toMatchObject([{ id: expect.stringContaining("prototype-telegram-polls:"), label: expect.stringContaining("interrupted") }]);
+  const settled = JSON.stringify(read());
+  await sweepPrototypeDeliveries(undefined, { force: true, rescan: true });
+  expect(JSON.stringify(read())).toBe(settled);
+  expect(transport.callsOf("sendPoll")).toHaveLength(0);
+  expect(transport.callsOf("sendRichMessage")).toHaveLength(0);
+});
+
+test("recovery accounts for jobs lost before the first claim in batches of sixteen", async () => {
+  const { service, transport } = await connected("lost-jobs");
+  await resetPrototypeDeliveryWorkerForTests();
+  cleanups.push(resetPrototypeDeliveryWorkerForTests);
+  const rounds = Array.from({ length: 17 }, (_, i) => {
+    const round = telegramRound(`lost-job-${i}`);
+    round.telegramPost = { key: round.id, state: "sent", at: round.createdAt };
+    return round;
+  });
+  saveTasks([telegramTask(rounds)]);
+  await sweepPrototypeDeliveries(undefined, { force: true, rescan: true });
+  const first = loadTasks()[0]!.prototypeReviews!;
+  expect(first.filter(round => round.telegramPolls)).toHaveLength(16);
+  expect(first[16]!.telegramPolls).toBeUndefined();
+  expect(first[0]!.telegramPolls?.questions.map(q => q.reason)).toEqual(Array(3).fill("interrupted_before_send"));
+  await sweepPrototypeDeliveries(undefined, { force: true, rescan: true });
+  expect(loadTasks()[0]!.prototypeReviews!.every(round => round.telegramPolls?.questions.length === 3)).toBe(true);
+  await service.waitForReviewPolls();
+  expect(transport.callsOf("sendPoll")).toHaveLength(0);
+});
+
+test("recovery waits for the active sender and preserves its confirmed outcomes", async () => {
+  const { round, service, transport } = await connected("active-recovery");
+  let entered!: () => void, release!: () => void;
+  const sending = new Promise<void>(resolve => { entered = resolve; });
+  const held = new Promise<void>(resolve => { release = resolve; });
+  cleanups.push(release);
+  let messageId = 10;
+  transport.handlers.sendPoll = async () => { entered(); await held; return ok({ message_id: ++messageId, date: 1791724801 }); };
+  await postPrototypeReviewToTelegram(round);
+  await sending;
+  let settled = false;
+  const recovery = reconcileReviewPolls(round).then(() => { settled = true; });
+  try {
+    await Bun.sleep(30);
+    expect(settled).toBe(false);
+    expect(saved().telegramPolls?.questions).toEqual([{ questionId: "place", state: "pending" }]);
+  } finally { release(); await recovery; await service.waitForReviewPolls(); }
+  expect(saved().telegramPolls?.questions.map(q => q.state)).toEqual(["sent", "sent", "sent"]);
+  expect(transport.callsOf("sendPoll")).toHaveLength(3);
+});
+
+test.each([["task", "send"], ["seat", "send"], ["task", "recover"], ["seat", "recover"]])("%s round poll %s yields under a peer SQLite write lock", async (kind, action) => {
   const { round, service } = await connected(`contention-${kind}`);
   const held = kind === "seat" ? { ...round, taskId: null } : round;
+  if (action === "recover") {
+    held.telegramPost = { key: held.id, state: "sent", at: held.createdAt };
+    held.telegramPolls = { key: held.id, questions: [{ questionId: "place", state: "pending" }] };
+    if (kind === "task") saveTasks([telegramTask([held])]);
+  }
   if (kind === "seat") insertSeatRound(held);
+  if (kind === "seat") cleanups.push(clearSeatRoundsForTests);
   const peer = new Database(statePath("state.sqlite"));
   peer.exec("PRAGMA busy_timeout = 0");
   peer.exec("BEGIN IMMEDIATE");
@@ -200,10 +283,12 @@ test.each(["task", "seat"])("%s round poll writes yield under a peer SQLite writ
   const timer = setInterval(() => { ticks++; }, 2);
   const release = setTimeout(() => { peer.exec("ROLLBACK"); }, 80);
   try {
-    await service.sendOwnerReview({ clientRequestId: held.id, message: renderPrototypeTelegram(held, []) });
+    if (action === "recover") await reconcileReviewPolls(held);
+    else await service.sendOwnerReview({ clientRequestId: held.id, message: renderPrototypeTelegram(held, []) });
     await service.waitForReviewPolls();
     expect(ticks).toBeGreaterThan(2);
-    expect((kind === "seat" ? findSeatRound(held.id) : saved())?.telegramPolls?.questions.map(q => q.state)).toEqual(["sent", "sent", "sent"]);
+    expect((kind === "seat" ? findSeatRound(held.id) : saved())?.telegramPolls?.questions.map(q => q.state))
+      .toEqual(action === "recover" ? ["uncertain", "failed", "failed"] : ["sent", "sent", "sent"]);
   } finally { clearInterval(timer); clearTimeout(release); peer.close(); }
 });
 
