@@ -400,3 +400,11 @@ test("parallel C: a legacy image ask recovers its envelope from the original del
   expect((await askOrchestratorInParallel({ retryAskId: saved.askId, clientRequestId: "legacy-retry" }, retry.ports)).ok).toBe(true);
   expect(sent).toEqual([[picture]]);
 });
+
+
+test("parallel C: a task-join refusal ends visibly before host delivery", async () => {
+  const refused = ports({ joinSeatTask: () => { throw new Error("task membership unavailable"); } });
+  expect(await askOrchestratorInParallel(ask, refused.ports)).toMatchObject({ ok: false, code: "launch_failed" });
+  expect(readDeputies()[0]).toMatchObject({ state: "ended", outcome: "failed", error: "launch: task membership unavailable", ask: { text: ask.text } });
+  expect(refused.calls.delivered).toEqual([]);
+});

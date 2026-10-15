@@ -1,3 +1,4 @@
+import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { tryConversationActuation } from "@/lib/deliveryActuation";
 import { withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
 import crypto from "node:crypto";
@@ -308,7 +309,7 @@ export function startDeputySweep(loadPorts: () => Promise<DeputySweepPorts> = pr
     if (sweepState.running) return;
     sweepState.running = true;
     try {
-      const live = await sweepDeputies(await loadPorts());
+      const live = await withViewerOperation("orchestrator.deputy", async () => sweepDeputies(await loadPorts()));
       if (!live && sweepState.timer) {
         clearInterval(sweepState.timer);
         sweepState.timer = null;

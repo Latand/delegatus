@@ -94,7 +94,7 @@ export interface DeputyCommandPorts {
   seatGeneration(seatConversationId: string): SeatGeneration | null;
   fork(input: { sourcePath: string; destination: string; sourceSessionId: string; sessionId: string; operationId: string }): { path: string; records: number | null; size?: number };
   registerConversation(input: { artifactPath: string; accountId: string | null; launchProfile: Partial<LaunchProfile> }): string;
-  joinSeatTask(input: { project: string; seatConversationId: string; seatPath: string | null; deputyConversationId: string; artifactPath: string; accountId: string | null }): void;
+  joinSeatTask(input: { project: string; seatConversationId: string; seatPath: string | null; deputyConversationId: string; artifactPath: string; accountId: string | null }): void | Promise<void>;
   workContext(project: string): DeputyWorkContext;
   deliver(input: { conversationId: string; path: string; clientMessageId: string; text: string; images: RuntimeImageUpload[]; origin: DeputyAskOrigin }): Promise<{ ok: true; outcome?: string; operationId?: string } | { ok: false; error: string; operationId?: string; uncertain?: true }>;
   imageRefsForRetry?(deputy: OrchestratorDeputy): StructuredImageRef[];
@@ -341,20 +341,28 @@ async function askOnce(input: AskInParallelInput, ports: DeputyCommandPorts): Pr
       plan: null,
     };
     const deputyConversationId = ports.registerConversation({ artifactPath: forked.path, accountId: generation.accountId, launchProfile });
-    ports.joinSeatTask({
-      project,
-      seatConversationId: seat.conversationId,
-      seatPath: seat.path ?? generation.path,
-      deputyConversationId,
-      artifactPath: forked.path,
-      accountId: generation.accountId,
-    });
     const forkRecordCount = forked.records;
     deputy = await withAccountMutationLockAsync(() => store.recordFork(deputy.askId, { deputyConversationId, artifactPath: forked.path, forkRecordCount, forkBytes: forked.size ?? null }), { caller: "deputy commit" }) ?? deputy;
   }
 
   /* Steps 4 and 5: one delivery, keyed by the record, resumes the fork. */
   if (deputy.state === "pending") {
+    try {
+      await ports.joinSeatTask({ project, seatConversationId: deputy.seatConversationId,
+        seatPath: deputy.seatPath, deputyConversationId: deputy.deputyConversationId!,
+        artifactPath: deputy.artifactPath!, accountId: generation.accountId });
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      await withAccountMutationLockAsync(() => store.end(deputy.askId, { outcome: "failed", expectedAttempt: deputy.attempt ?? 0,
+        error: `launch: ${reason}`, now: ports.now() }), { caller: "deputy membership refusal" });
+      return refusal("launch_failed", reason, 503, deputy.askId);
+    }
+    const currentSeat = ports.activeSeat(project);
+    if (currentSeat?.conversationId !== deputy.seatConversationId || currentSeat.seatEpoch !== deputy.seatEpoch) {
+      await withAccountMutationLockAsync(() => store.end(deputy.askId, { outcome: "seat-rotated", expectedAttempt: deputy.attempt ?? 0,
+        error: "the orchestrator seat changed before delivery", now: ports.now() }), { caller: "deputy seat change" });
+      return refusal("seat_not_found", "the orchestrator seat changed before delivery", 409, deputy.askId);
+    }
     const deliveryAttempt = deputy.attempt ?? 0;
     const delivered = await ports.deliver({
       conversationId: deputy.deputyConversationId!,

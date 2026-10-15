@@ -5337,7 +5337,7 @@ describe("parallel question failure and retry", () => {
             for (const box of [reading.question, reading.reason, reading.retry].filter(Boolean)) {
               expect(box!.x).toBeGreaterThanOrEqual(0); expect(box!.right).toBeLessThanOrEqual(width); expect(box!.bottom).toBeLessThanOrEqual(900);
             }
-            readings.push({ width, scheme, lang, state, ...reading });
+            readings.push({ scheme, lang, state, ...reading });
             await page.screenshot({ path: path.join(out, `${width}-${scheme}-${lang}-${state}.png`) });
           };
           await inspect("failed");

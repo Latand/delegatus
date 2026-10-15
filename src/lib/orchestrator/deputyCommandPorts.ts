@@ -1,7 +1,8 @@
+import { waitForStateLock } from "@/lib/state/lockWait";
 import { runtimeHostClient, readRuntimeSession } from "@/lib/runtime/client";
 import { resolveSendReceipt } from "@/lib/runtime/sendSettlement";
 import { applyConversationAction } from "@/lib/conversation/actions";
-import { deputyMessageKey } from "./deputies";
+import { deputyMessageKey, productionDeputyPrincipal } from "./deputies";
 import path from "node:path";
 
 import { forkClaudeHistory, HistorySecurityError } from "@/lib/accounts/migration/safeHistoryCopy";
@@ -55,18 +56,18 @@ export function productionDeputyCommandPorts(dependencies: { registry?: AgentReg
     },
     registerConversation: ({ artifactPath, accountId, launchProfile }) =>
       registry.ensureForkedConversation("claude", artifactPath, accountId, launchProfile).id,
-    joinSeatTask: ({ project, seatConversationId, seatPath, deputyConversationId, artifactPath, accountId }) => {
+    joinSeatTask: async ({ project, seatConversationId, seatPath, deputyConversationId, artifactPath, accountId }) => {
       /* The deputy joins the seat's own task (the seat-only task of #1841), so
          the scanner's admission finds its membership and mints no card. */
-      const result = commitTaskMembership({
+      const result = await waitForStateLock("deputy.task-membership", () => commitTaskMembership({
         project,
         origin: { kind: "conversation", key: deputyConversationId },
         identity: { conversationId: deputyConversationId, path: artifactPath, engine: "claude", accountId },
         inherit: [{ conversationId: seatConversationId, path: seatPath }],
         titled: true,
         title: "Orchestrator",
-      });
-      if (!result.ok) console.error("[deputy] seat task membership failed", result.status);
+      }), { subject: deputyConversationId });
+      if (!result.ok) throw new Error(result.error);
     },
     workContext: (project) => {
       const canonical = canonicalOrchestratorProject(project);
@@ -85,12 +86,16 @@ export function productionDeputyCommandPorts(dependencies: { registry?: AgentReg
       return { openLanes, recentTasks };
     },
     deliver: async ({ conversationId, path: artifactPath, clientMessageId, text, images, origin }) => {
+      const authorityGuard = () => {
+        if (!productionDeputyPrincipal(conversationId)) throw new Error("the parallel question is no longer authorized by its seat");
+      };
       const result = await enqueueStructuredMessage({
         path: artifactPath,
         conversationId,
         clientMessageId,
         text,
         images,
+        admissionGuard: authorityGuard, recoveryAuthorityGuard: authorityGuard,
         origin: origin.kind === "agent"
           ? agentMessageOrigin(registry.readOnlySnapshot(), origin.conversationId, origin.role)
           : deputyDeliveryOrigin(origin),
