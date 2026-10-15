@@ -31,9 +31,12 @@ import {
  * per-launch secret the stdio server reads from its inherited environment: the
  * registry holds only its digest, a relaunch rotates it and clears the old one,
  * and it resolves to exactly one conversation. A migration also keeps a pending
- * successor digest valid beside the predecessor's until commit. A request whose capability is
- * missing, malformed, unknown or rotated away is refused before any MCP
- * message is read.
+ * successor digest valid beside the predecessor's until commit. A presented
+ * capability that is malformed, unknown or rotated away is refused before
+ * dispatch. Without one, Linux adapters prove their kernel peer and exact
+ * request body; compatibility adapters authenticate as the MCP service and
+ * retain unidentified authority. The tool policy still resolves native proof
+ * and operator approval before permitting an operation.
  *
  * The capability identifies; it does not admit. Reaching the route at all
  * takes whatever every other Viewer route takes — LLV_TOKEN when one is
