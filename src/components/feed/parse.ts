@@ -1884,7 +1884,9 @@ function createReducerSession(cfg: FeedSessionConfig, history: CodexHistory | nu
   const copilotAssets = new Map<string, { src: number; block: ToolOutputBlock }>();
   const copilotViewPaths = new Map<string, string>();
   const agentCalls = history?.map<string>("agent") ?? new Map<string, string>();
-  const sessionOwners = history?.map<SessionOwner>("session") ?? new Map<string, SessionOwner>();
+  // Private tokens intern a raw session for the entire reducer generation.
+  // Earlier observations adopt the token already held by retained rows.
+  const sessionOwners = new Map<string, SessionOwner>();
   const sessionIdentity = (value: unknown): { label?: string; owner: SessionOwner } | undefined => {
     const raw = rawSessionId(value);
     if (raw === undefined) return undefined;

@@ -2,7 +2,7 @@
  * its source coordinate, including a lookup which found nothing. Inserting an
  * older write invalidates just that interval's readers. Payloads and rows stay
  * shared; there is no copy of the historical maps at a page boundary. */
-type Family = "exec-result" | "exec-child" | "user-bucket" | "pending-exec" | "frontier" | "call" | "row" | "reasoning" | "agent" | "session" | "image" | "represented" | "user" | "service" | "ledger" | "size" | "representation";
+type Family = "exec-result" | "exec-child" | "user-bucket" | "pending-exec" | "frontier" | "call" | "row" | "reasoning" | "agent" | "image" | "represented" | "user" | "service" | "ledger" | "size" | "representation";
 type Version = {
   at: number; value: unknown; readers: Set<Effect>; priority: number;
   left: Version | null; right: Version | null; next: Version | null;
@@ -288,7 +288,7 @@ export class CodexHistory {
         const old = prev.next?.at === effect.at ? prev.next : undefined;
         const present = writes.has(slot);
         const value = writes.get(slot);
-        if (old && present && (slot.family === "session" ? Object.is(old.value, value) : this.same(old.value, value))) continue;
+        if (old && present && this.same(old.value, value)) continue;
         this.revision += 1;
         if (old) {
           for (const reader of old.readers) this.invalidate(reader, slot);
@@ -326,7 +326,7 @@ export class CodexHistory {
       let changed = false;
       for (const [slot, version] of first.reads) {
         const now = this.preceding(slot, first.at);
-        if (!(slot.family === "session" ? Object.is(now.value, version.value) : this.same(now.value, version.value))) { changed = true; break; }
+        if (!this.same(now.value, version.value)) { changed = true; break; }
         if (now !== version) {
           version.readers.delete(first);
           now.readers.add(first);

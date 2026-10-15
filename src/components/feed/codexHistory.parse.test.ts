@@ -140,6 +140,22 @@ describe("Codex history hand-over", () => {
     expect(historyShape(old)).toEqual(oldShape);
   });
 
+  test("older observations adopt retained interactive-session ownership without replacing its call", () => {
+    const call = (id: string, n: number) => historyRecord("response_item", {
+      type: "function_call", call_id: id, name: "write_stdin", arguments: JSON.stringify({ session_id: 71, chars: "" }),
+    }, n);
+    const lines = [call("older-poll", 0), historyOutput("older-poll", 1), call("retained-poll", 2), historyOutput("retained-poll", 3)];
+    const calls = (snapshot: FeedSnapshot) => snapshot.items.flatMap(({ item }) => item.kind === "cmd-group" ? item.calls : item.kind === "tool" ? [item] : []);
+    const session = createFeedSession(config);
+    const old = session.feed(lines.slice(2), 2, true);
+    const held = calls(old).find(call => call.id === "retained-poll")!;
+    expect(held).toBeDefined();
+    const next = session.feed(lines, 0, true);
+    expect(calls(next).find(call => call.id === held.id)).toBe(held);
+    expect(hasSameSessionOwner(calls(next)[0], held)).toBe(true);
+    expect(historyShape(next)).toEqual(historyShape(createFeedSession(config).feed(lines, 0, true)));
+  });
+
   test("interior rewrite, truncation, gaps and eviction refuse reuse and release the old journal", () => {
     const lines = codexHistoryCorpus(60);
     const session = createFeedSession(config);
