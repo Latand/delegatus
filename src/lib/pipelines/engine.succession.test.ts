@@ -1129,7 +1129,7 @@ test.each(["codex", "claude"] as const)("a persisted provider cut recovers once 
   setAgentRegistryForTests(new AgentRegistry(registry.filename));
   try {
     await withRuntimeSnapshot(() => ({ runtime: { hostEpoch: 2 }, sessions: [
-      { conversationId: conversation.id, host: "alive", turn: "idle", attentionIds: [] },
+      { conversationId: conversation.id, host: "hosted", turn: "idle", attentionIds: [] },
     ] }), async () => {
       for (let tick = 0; tick < 5; tick += 1) {
         const production = defaultPipelinePorts();

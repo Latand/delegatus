@@ -1,3 +1,4 @@
+import { readSummaryBootstrap } from "./summaryBootstrap";
 import { captureProcessIdentity, processIdentityStatus } from "@/lib/processIdentity";
 import { signalFixtureIdentity, stopFixtureProcess } from "@/lib/testing/fixtureProcess";
 import { afterEach, expect, test } from "bun:test";
@@ -355,6 +356,26 @@ test("a projection from the snapshot file reports the scan generation that file 
     /* An inline snapshot is the caller's own; it knows what it sent. */
     const inline = await buildFilesResponseInWorker(request, runtimeFor(stateDir));
     expect(inline.snapshotRead).toBeUndefined();
+  } finally {
+    await stopTestWorker();
+    fs.rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+
+test("the production worker persists only a completed operator summary", async () => {
+  const stateDir = scratchState();
+  try {
+    const runtime = runtimeFor(stateDir);
+    await buildFilesResponseInWorker(request, runtime);
+    expect(await readSummaryBootstrap(stateDir)).toBeNull();
+    const summary = { ...request, url: "http://127.0.0.1/api/files?view=summary" };
+    await buildFilesResponseInWorker({ ...summary, headers: [["x-llv-spawn-capability", "fixture-agent"]] }, runtime);
+    expect(await readSummaryBootstrap(stateDir)).toBeNull();
+    const result = await buildFilesResponseInWorker(summary, runtime);
+    const restored = await readSummaryBootstrap(stateDir);
+    expect(restored?.etag).toBe(result.etag);
+    expect(Buffer.from(restored!.body).toString()).toBe(result.body);
   } finally {
     await stopTestWorker();
     fs.rmSync(stateDir, { recursive: true, force: true });

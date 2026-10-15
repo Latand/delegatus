@@ -1018,6 +1018,27 @@ test("long plain text is split into at most four parts; only the first replies; 
   expect((await refusal(() => service.send({ conversationId: null, clientRequestId: "req-empty", chat: "team-reports", text: "   " }))).code).toBe("text_empty");
 });
 
+test("HTML admission counts decoded text at the Telegram limit and keeps markup whole", async () => {
+  await allowedTeam();
+  transport.script("sendMessage", ok({ message_id: 71, date: T0 }));
+  const text = `<blockquote expandable><b>${"&amp;".repeat(4096)}</b></blockquote>`;
+  expect(await service.send({ conversationId: null, clientRequestId: "escaped-limit", chat: "team-reports", text, format: "html" })).toMatchObject({ parts: 1 });
+  expect(transport.callsOf("sendMessage")[0]!.params.text).toBe(text);
+  expect(() => splitMessageText(`<b>${"&amp;".repeat(4097)}</b>`, "html")).toThrow("after entity parsing");
+  expect(splitMessageText(`<b>${"&#128512;".repeat(2048)}</b>`, "html")).toHaveLength(1);
+  expect(() => splitMessageText(`<b>${"&#128512;".repeat(2048)}x</b>`, "html")).toThrow("after entity parsing");
+});
+
+test("malformed HTML length validation has a bounded CPU cost", () => {
+  for (const text of ["<".repeat(160_000), "<x".repeat(80_000), `${"x".repeat(160_000)}<`]) {
+    const started = process.cpuUsage();
+    expect(() => splitMessageText(text, "html")).toThrow("after entity parsing");
+    const used = process.cpuUsage(started);
+    // CPU time keeps descheduling out of the regression's generous budget.
+    expect(used.user + used.system).toBeLessThan(1_000_000);
+  }
+});
+
 test("Telegram's refusals map to codes: 403 forbidden, 429 rate_limited, entity errors format_invalid", async () => {
   await allowedTeam();
   transport.script("sendMessage", refused(403, "Forbidden: bot was kicked from the supergroup chat"));

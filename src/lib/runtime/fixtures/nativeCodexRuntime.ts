@@ -1,12 +1,12 @@
 import "@/lib/testing/fixtureLifetime";
 /** The composer's delivery and queue routes served by the real handlers over a
- * real runtime host journal, delivering to the installed Codex app-server.
+ * real runtime host journal, delivering to the installed Codex app-server or Claude broker.
  *
  * Everything below the routes is production: the journal behind a runtime host
  * socket, the structured delivery queue and native queue executor bound by
  * `bindStructuredDeliveryQueue`, the image store and the file inbox. The only
  * synthetic parts are the model provider — a credential-free local Responses
- * server that records what Codex sends it — and Codex's account and model
+ * or Messages server that records the engine requests — and Codex's account and model
  * catalog answers, which a credential-free CLI cannot produce. Queue, history,
  * native identities, dispatch and persistence execute in the real CLI.
  * State lives in a private temporary directory; no account is reachable. */
@@ -23,16 +23,18 @@ import { NextRequest } from "next/server";
 
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { AgentRegistry, setAgentRegistryForTests } from "@/lib/agent/registry";
+import { claudeTranscriptPath } from "@/lib/agent/transcript";
 import { RuntimeHost } from "@/runtime-host/host";
 import { RuntimeJournal } from "@/runtime-host/journal";
 import { serveRuntimeHost } from "@/runtime-host/socket";
 
 import { UnixRuntimeHostClient } from "../client";
+import { ClaudeStreamBrokerHost, FileClaudeDeliveryLedger } from "../claudeStreamBrokerHost";
 import { CodexAppServerHost } from "../codexAppServerHost";
 import type { RuntimeOperationReceipt } from "../contracts";
 import { handleRuntimeCommand, handleRuntimeOperationQuery, handleRuntimeRetry } from "../http";
 import { handleNativeQueue } from "../nativeQueueHttp";
-import { codexHostColumns } from "../registry";
+import { claudeHostColumns, codexHostColumns } from "../registry";
 import { admitRuntimeImagePayload } from "../runtimeImageAdmission";
 import { runtimeImageStore } from "../runtimeImageStore";
 import { resolveSendReceipt } from "../sendSettlement";
@@ -51,14 +53,15 @@ export interface ProviderRequest {
   texts: string[];
 }
 
-export interface NativeCodexRuntime {
+export interface NativeCodexRuntime<Host = CodexAppServerHost> {
+  ledger: FileClaudeDeliveryLedger;
   conversationId: string;
   threadId: string;
   accountId: string;
   artifactPath: string;
   registry: AgentRegistry;
   journal: RuntimeJournal;
-  host(): CodexAppServerHost;
+  host(): Host;
   /** Every JSON-RPC request the Viewer made to the CLI, by method. */
   rpc: Array<{ method: string; params: Record<string, unknown> }>;
   provider: {
@@ -94,12 +97,19 @@ function newestUserContent(body: Record<string, unknown>): { images: string[]; t
 /** `writerClaimOwner` registers the host under a writer claim, as a runtime host
  * that owns it would, so the published session names that claim. Context
  * injection freezes it at admission and refuses a session without one. */
+export function startNativeCodexRuntime(
+  directory: string, binary: string, options: { engine: "claude"; writerClaimOwner?: string },
+): Promise<NativeCodexRuntime<ClaudeStreamBrokerHost>>;
+export function startNativeCodexRuntime(
+  directory: string, binary: string, options?: { engine?: "codex"; writerClaimOwner?: string },
+): Promise<NativeCodexRuntime>;
 export async function startNativeCodexRuntime(
   directory: string,
   binary: string,
-  options: { writerClaimOwner?: string } = {},
-): Promise<NativeCodexRuntime> {
+  options: { writerClaimOwner?: string; engine?: "codex" | "claude" } = {},
+): Promise<NativeCodexRuntime<CodexAppServerHost | ClaudeStreamBrokerHost>> {
   isolateComposerPayloadRuntime(directory);
+  const engine = options.engine ?? "codex";
   const stateDirectory = process.env.LLV_STATE_DIR!;
   const env: NodeJS.ProcessEnv = { PATH: "/usr/bin:/bin", LANG: "C.UTF-8", NODE_ENV: "test" };
   for (const key of ["HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "CODEX_HOME", "TMPDIR"]) {
@@ -118,6 +128,22 @@ export async function startNativeCodexRuntime(
       const raw = Buffer.concat(chunks);
       let body: Record<string, unknown> = {};
       try { body = JSON.parse(raw.toString("utf8")) as Record<string, unknown>; } catch { /* recorded as empty */ }
+      if (engine === "claude") {
+        requests.push({ index: requests.length, bytes: raw.length, images: [], texts: [] });
+        const event = (type: string, data: unknown) => `event: ${type}\ndata: ${JSON.stringify(data)}\n\n`;
+        const message = { id: `msg_fixture_${requests.length}`, type: "message", role: "assistant", model: "fixture-model",
+          content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 1, output_tokens: 1 } };
+        response.writeHead(200, { "Content-Type": "text/event-stream" });
+        response.end([
+          event("message_start", { type: "message_start", message }),
+          event("content_block_start", { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } }),
+          event("content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "Fixture answer" } }),
+          event("content_block_stop", { type: "content_block_stop", index: 0 }),
+          event("message_delta", { type: "message_delta", delta: { stop_reason: "end_turn", stop_sequence: null }, usage: { output_tokens: 1 } }),
+          event("message_stop", { type: "message_stop" }),
+        ].join(""));
+        return;
+      }
       requests.push({ index: requests.length, bytes: raw.length, ...newestUserContent(body) });
       response.writeHead(200, { "Content-Type": "text/event-stream" });
       response.write(`event: response.created\ndata: ${JSON.stringify({ type: "response.created", response: { id: `fixture-response-${requests.length}` } })}\n\n`);
@@ -165,6 +191,7 @@ plugins = false
      message passes between the host and the installed CLI unchanged. */
   const spawnProcess = (_command: string, args: string[]) => {
     const child = spawn(binary, args, { cwd, env, detached: true, stdio: ["pipe", "pipe", "pipe"] });
+    fs.appendFileSync(path.join(directory, "owned-pids.jsonl"), JSON.stringify({ pid: child.pid, engine }) + "\n");
     const input = new PassThrough();
     const output = new PassThrough();
     const methods = new Map<number, string>();
@@ -192,16 +219,37 @@ plugins = false
       return typeof value === "function" ? value.bind(target) : value;
     } }) as ChildProcessWithoutNullStreams;
   };
-  const host = await CodexAppServerHost.start({ cwd, binary, codexHome: env.CODEX_HOME, env, model: "fixture-model", spawnProcess });
-  const threadId = host.identity.threadId;
+  const claudeConfig = path.join(directory, "claude-config");
+  fs.mkdirSync(claudeConfig);
+  fs.writeFileSync(path.join(env.HOME!, ".claude.json"), JSON.stringify({ hasCompletedOnboarding: true }));
+  const ledger = new FileClaudeDeliveryLedger(path.join(directory, "claude-ledger"));
+  const host = await (engine === "claude" ? ClaudeStreamBrokerHost.start({
+    cwd, binary, env, claudeConfigDir: claudeConfig, tools: [], model: "fixture-model", requestTimeoutMs: 20_000,
+    deliveryLedger: ledger, readTranscript: () => [],
+    readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }),
+    spawnProcess: (command, args, options) => {
+      const child = spawn(command, [...args, "--setting-sources", ""], { ...options, stdio: ["pipe", "pipe", "pipe"],
+        env: { ...options.env, NODE_ENV: "test", CLAUDE_CONFIG_DIR: claudeConfig, ANTHROPIC_BASE_URL: `http://127.0.0.1:${address.port}`,
+          CLAUDE_CODE_OAUTH_TOKEN: "isolated-fixture-credential", CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1" } });
+      fs.appendFileSync(path.join(directory, "owned-pids.jsonl"), JSON.stringify({ pid: child.pid, engine }) + "\n");
+      return child;
+    },
+  }) : CodexAppServerHost.start({ cwd, binary, codexHome: env.CODEX_HOME, env, model: "fixture-model", spawnProcess })).catch(async error => {
+    provider.closeAllConnections();
+    await new Promise<void>(resolve => provider.close(() => resolve()));
+    throw error;
+  });
+  const threadId = host instanceof ClaudeStreamBrokerHost ? host.identity.sessionId : host.identity.threadId;
   const accountId = "fixture-account";
-  const artifactPath = host.identity.path ?? path.join(env.CODEX_HOME!, "sessions", `rollout-fixture-${threadId}.jsonl`);
+  const artifactPath = host instanceof ClaudeStreamBrokerHost
+    ? claudeTranscriptPath(cwd, threadId, path.join(claudeConfig, "projects"))
+    : host.identity.path ?? path.join(env.CODEX_HOME!, "sessions", `rollout-fixture-${threadId}.jsonl`);
 
   const registry = new AgentRegistry(path.join(stateDirectory, "agent-registry.json"), undefined, undefined, { sqliteMode: "off" });
   setAgentRegistryForTests(registry);
   const profile = emptyLaunchProfile({ cwd });
   registry.reconcileConversations([{
-    engine: "codex",
+    engine,
     path: artifactPath,
     accountId,
     launchProfile: profile,
@@ -209,8 +257,8 @@ plugins = false
     observedAt: new Date().toISOString(),
   }]);
   const conversation = registry.conversationForPath(artifactPath);
-  if (!conversation) throw new Error("the Codex thread did not register as a conversation");
-  const key = { engine: "codex" as const, sessionId: threadId };
+  if (!conversation) throw new Error("the native thread did not register as a conversation");
+  const key = { engine, sessionId: threadId };
   registry.upsert({
     key,
     artifactPath,
@@ -219,7 +267,7 @@ plugins = false
     launchProfile: profile,
     status: "idle",
     host: null,
-    structuredHost: codexHostColumns(await host.health(), 0),
+    structuredHost: host instanceof ClaudeStreamBrokerHost ? claudeHostColumns(await host.health(), 0) : codexHostColumns(await host.health(), 0),
     claimEpoch: 0,
     claimOwner: options.writerClaimOwner ?? null,
     pendingAction: null,
@@ -277,6 +325,7 @@ plugins = false
   };
   return {
     conversationId: conversation.id,
+    ledger,
     threadId,
     accountId,
     artifactPath,
@@ -289,7 +338,7 @@ plugins = false
       const url = new URL(request.url);
       const next = new NextRequest(new URL(url.pathname + url.search, "http://localhost"), {
         method: request.method,
-        headers: { host: "localhost", "content-type": request.headers.get("content-type") ?? "application/json" },
+        headers: { host: "localhost", "sec-fetch-site": "same-origin", "content-type": request.headers.get("content-type") ?? "application/json" },
         ...(request.method === "GET" || request.method === "HEAD" ? {} : { body: await request.text() }),
       });
       const operation = /^\/api\/runtime\/operations\/([^/]+)$/.exec(url.pathname);
@@ -305,14 +354,19 @@ plugins = false
       return (snapshot.recentOperations ?? []).filter((receipt) => receipt.conversationId === conversation.id);
     },
     async close() {
-      await bindStructuredDeliveryQueue([], { registry, client: null });
-      await host.release().catch(() => {});
-      for (const response of open.splice(0)) response.end();
-      provider.closeAllConnections();
-      await new Promise<void>((resolve) => provider.close(() => resolve()));
-      server.close();
-      journal.close();
-      setAgentRegistryForTests(null);
+      try {
+        await bindStructuredDeliveryQueue([], { registry, client: null });
+      } finally {
+        try { await host.release(); }
+        finally {
+          for (const response of open.splice(0)) response.end();
+          provider.closeAllConnections();
+          await new Promise<void>((resolve) => provider.close(() => resolve()));
+          server.close();
+          journal.close();
+          setAgentRegistryForTests(null);
+        }
+      }
     },
   };
 }

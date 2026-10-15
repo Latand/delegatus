@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 
 import type { Pipeline } from "@/lib/pipelines/types";
+import { batchLandingFixture } from "./batchLanding.fixture";
 
 /* The merge runner against the real pipeline store and settings file
    (#2187 §4.1, §4.4, §4.6): a record it writes survives the store's
@@ -24,6 +25,8 @@ const { refreshLifecycleJournal } = await import("@/lib/lifecycle/projector");
 const { queryLifecycleEvents } = await import("@/lib/lifecycle/journal");
 const { createTask } = await import("@/lib/tasks/commands");
 const { loadTasks, mutateTasks } = await import("@/lib/tasks/store");
+const { stampAttentionRoutes } = await import("@/lib/attention/routing");
+const { seatAgendaAsks } = await import("@/lib/attention/seatAgenda");
 
 afterAll(() => {
   if (previousStateDir === undefined) delete process.env.LLV_STATE_DIR;
@@ -38,6 +41,35 @@ const T0 = Date.parse("2026-09-25T10:00:00Z");
 const iso = (ms: number) => new Date(ms).toISOString();
 const BUILDER = { engine: "claude", model: null, effort: null, roleId: null, access: "read-write", promptScaffold: null };
 const REVIEWER = { ...BUILDER, access: "read-only" };
+
+function markedTask(lane: Pipeline): string {
+  const task = mutateTasks((tasks) => {
+    const created = createTask(tasks, { project: PROJECT, text: "Finish the lane output", placement: "unplaced" });
+    if (!created.ok) throw new Error(created.error);
+    return { tasks: created.tasks, result: created.task };
+  });
+  lane.taskIds = [task.id];
+  lane.finishesTaskIds = [task.id];
+  return task.id;
+}
+
+function missingPrLane(id: string): Pipeline {
+  const lane = completedLane(id);
+  lane.baseRef = "b".repeat(40);
+  lane.delivery = {
+    target: { repository: PROJECT, remote: `https://github.com/${REPO}.git`, branch: `refs/heads/${lane.branch}` },
+    disposition: "owner", publish: "disabled", ownerId: lane.id, epoch: 1, active: false, journal: [],
+  };
+  return lane;
+}
+
+function workerAsks(lane: Pipeline) {
+  stampAttentionRoutes([], [lane], T0 / 1000, {
+    seatFor: () => "conversation_seat", canonicalProject: (project) => project,
+    isSeatConversation: (id) => id === "conversation_seat", escalation: () => null, formWaiting: () => false,
+  });
+  return seatAgendaAsks({ files: [], pipelines: [lane] }, T0 / 1000, PROJECT);
+}
 
 function attempt(n: number, state: string, role: typeof BUILDER) {
   return {
@@ -296,3 +328,264 @@ test("a human change request persists, and retry-merge waits for that reviewer's
   expect(loadPipelines()[0]!.merge).toMatchObject({ state: "merged", by: "auto-merge", attempts: 2, reason: null });
   expect(writes).toBe(1);
 });
+
+function setBatchReviewHead(lane: Pipeline, graph: ReturnType<typeof batchLandingFixture>) {
+  lane.lastPassedCommit = graph.outputHead ?? graph.head;
+  if (!graph.outputHead) return;
+  lane.publishedCommit = graph.head;
+  lane.delivery = {
+    target: { repository: PROJECT, remote: `https://github.com/${REPO}.git`, branch: `refs/heads/${lane.branch}` },
+    disposition: "owner", publish: "disabled", ownerId: lane.id, epoch: 1, active: false, journal: [],
+  };
+  lane.stages[1]!.outputs = ["result.md"];
+  const review = lane.runs[1]!.attempts[0]!;
+  review.completedAt = lane.closedAt;
+  review.outputBaseHead = lane.id.includes("unproved") ? graph.landing : graph.head;
+}
+
+// Archived batch lanes retained CLOSED plus a trusted landing receipt. The
+// individual landing commit precedes the rebased batch's final merge commit.
+for (const kind of ["rebased", "nearby-rebase", "offset-rebase", "local-output", "followup", "deletion", "binary", "mode"] as const) for (const initial of ["queued", "blocked", "refreshing"] as const) test(`batch-landed ${kind} closure settles a ${initial} lane without a worker ask`, async () => {
+  const stopped = initial !== "queued";
+  resetAutoMergeForTests();
+  setMergeOnReview(PROJECT, true, "operator", iso(T0 - 7_200_000));
+  const lane = completedLane("batch-landed");
+  const graph = batchLandingFixture(sandbox, kind);
+  lane.repoDir = graph.directory;
+  Object.assign(lane, pipelineIdentity(lane.id, lane.task, lane.repoDir));
+  setBatchReviewHead(lane, graph);
+  const taskId = markedTask(lane);
+  savePipelines([lane]);
+  let receipt = !stopped;
+  let readFailure = false;
+  let clock = T0;
+  const calls: string[][] = [];
+  const landing = graph.landing;
+  const batchTip = graph.tip;
+  const ports = productionAutoMergePorts({
+    now: () => clock, loadPipelines, pullRequestOf: () => ({ repository: REPO, number: 7 }),
+    cachedState: () => "closed", log: () => undefined,
+    write: async () => { throw new Error("a landed lane must never write to GitHub"); },
+    run: async (args) => {
+      calls.push(args);
+      if (args[0] === "pr" && args[1] === "view") return JSON.stringify({
+        state: args[2] === "9" ? "MERGED" : "CLOSED", headRefOid: graph.head, baseRefName: "main",
+        mergeCommit: args[2] === "9" ? { oid: batchTip } : null, mergedAt: args[2] === "9" ? iso(T0 - 500) : null,
+      });
+      if (args[1] === `repos/${REPO}/branches/main`) return graph.base;
+      if (args[1] === `repos/${REPO}/issues/7/comments?per_page=100`) {
+        expect(args).toContain("--paginate");
+        if (readFailure) throw new Error("comments unavailable");
+        return receipt ? JSON.stringify({ body: `Landed on main as ${landing} through #9.`, author_association: "OWNER" }) : "";
+      }
+      if (args[1]?.startsWith(`repos/${REPO}/compare/`)) {
+        const base = args[1].split("/compare/")[1]!.split("...")[0]!;
+        return JSON.stringify({ status: "ahead", merge_base_commit: { sha: base } });
+      }
+      throw new Error(`unexpected gh ${args.join(" ")}`);
+    },
+  });
+  if (stopped) {
+    await sweepAutoMerge(ports);
+    expect(loadPipelines()[0]!.merge?.state).toBe("blocked");
+    expect(laneNeed(loadPipelines()[0]!)?.need.kind).toBe("lane-merge");
+    expect(workerAsks(loadPipelines()[0]!)).toHaveLength(1);
+    if (graph.outputHead) {
+      // Replay the chain an older watcher stored before admitting the PR head.
+      const legacy = loadPipelines()[0]!;
+      legacy.merge!.chain = [graph.outputHead];
+      savePipelines([legacy]);
+    }
+    await sweepTaskFinishes(ports);
+    expect(loadTasks().find((task) => task.id === taskId)?.status).toBe("inbox");
+    await sweepAutoMerge(ports);
+    const reads = calls.length;
+    await sweepAutoMerge(ports);
+    expect(calls).toHaveLength(reads);
+    const blockedAt = loadPipelines()[0]!.merge!.blockedAt;
+    readFailure = true;
+    clock += MERGE_POLL_MS;
+    await sweepAutoMerge(ports);
+    expect(loadPipelines()[0]!.merge).toMatchObject({ state: "blocked", reason: MERGE_REASONS.closed, blockedAt });
+    expect(workerAsks(loadPipelines()[0]!)).toHaveLength(1);
+    readFailure = false;
+    receipt = true;
+    clock += MERGE_POLL_MS;
+    if (initial === "refreshing") {
+      const refreshing = loadPipelines()[0]!;
+      refreshing.merge!.state = "refreshing";
+      refreshing.merge!.reason = null;
+      refreshing.merge!.blockedAt = null;
+      refreshing.merge!.refresh = { attempt: 1, base: batchTip, head: graph.head, key: "refresh-fixture", digest: "f".repeat(64), requestedAt: iso(clock), pipelineId: "successor" };
+      savePipelines([refreshing]);
+    }
+  }
+  await sweepAutoMerge(ports);
+  await sweepTaskFinishes(ports);
+  const landed = loadPipelines()[0]!;
+  expect(landed.merge).toMatchObject({ state: "merged", by: "outside", chain: [graph.head], mergedHead: graph.head, mergeCommit: landing, reason: null, blockedAt: null });
+  expect(laneNeed(landed)).toBeNull();
+  expect(workerAsks(landed)).toEqual([]);
+  expect(loadTasks().find((task) => task.id === taskId)?.status).toBe("done");
+  const reads = calls.length;
+  await sweepAutoMerge(ports);
+  await sweepTaskFinishes(ports);
+  expect(calls).toHaveLength(reads);
+  expect(loadPipelines()[0]!.taskFinishes).toHaveLength(1);
+});
+
+for (const kind of ["reverted", "new-head", "wrong-sha", "reverted-deletion", "partial-revert", "whitespace", "reverted-binary", "reverted-mode", "wrong-occurrence", "unproved-local-output"] as const) for (const initial of ["queued", "blocked"] as const) {
+  test(`landing safety: ${kind} / ${initial}`, async () => {
+    resetAutoMergeForTests();
+    setMergeOnReview(PROJECT, true, "operator", iso(T0 - 7_200_000));
+    const graph = batchLandingFixture(sandbox, kind);
+    const lane = completedLane(`landing-${kind}-${initial}`);
+    lane.repoDir = graph.directory;
+    Object.assign(lane, pipelineIdentity(lane.id, lane.task, lane.repoDir));
+    setBatchReviewHead(lane, graph);
+    const taskId = markedTask(lane);
+    savePipelines([lane]);
+    let clock = T0;
+    let receipt = initial === "queued";
+    const ports = productionAutoMergePorts({
+      now: () => clock, loadPipelines, pullRequestOf: () => ({ repository: REPO, number: 7 }),
+      cachedState: () => "closed", log: () => undefined,
+      write: async () => { throw new Error("closed PR must not write"); },
+      run: async (args) => {
+        if (args[0] === "pr" && args[1] === "view") return JSON.stringify({
+          state: args[2] === "9" ? "MERGED" : "CLOSED", headRefOid: graph.head, baseRefName: "main",
+          mergeCommit: args[2] === "9" ? { oid: graph.tip } : null, mergedAt: iso(T0 - 500),
+        });
+        if (args[1] === `repos/${REPO}/issues/7/comments?per_page=100`) return receipt
+          ? JSON.stringify({ body: `Landed on main as ${graph.landing} through #9.`, author_association: "OWNER" }) : "";
+        if (args[1] === `repos/${REPO}/branches/main`) return graph.base;
+        if (args[1]?.startsWith(`repos/${REPO}/compare/`)) {
+          const [base, target] = args[1].split("/compare/")[1]!.split("...").map(decodeURIComponent);
+          graph.git("merge-base", "--is-ancestor", base!, target!);
+          return JSON.stringify({ status: base === target ? "identical" : "ahead", merge_base_commit: { sha: base } });
+        }
+        throw new Error(`unexpected gh ${args.join(" ")}`);
+      },
+    });
+    await sweepAutoMerge(ports);
+    if (initial === "blocked") {
+      expect(loadPipelines()[0]!.merge?.state).toBe("blocked");
+      receipt = true;
+      clock += MERGE_POLL_MS;
+      await sweepAutoMerge(ports);
+    }
+    await sweepTaskFinishes(ports);
+    const stored = loadPipelines()[0]!;
+    expect(stored.merge?.state).toBe("blocked");
+    expect(stored.merge).toMatchObject({ state: "blocked", reason: MERGE_REASONS.closed, mergeCommit: null });
+    expect(stored.taskFinishes ?? []).toHaveLength(0);
+    expect(loadTasks().find((task) => task.id === taskId)?.status).toBe("inbox");
+    expect(workerAsks(stored)).toHaveLength(1);
+    expect(graph.git("status", "--porcelain")).toBe("");
+    expect(graph.git("rev-parse", "main")).toBe(graph.base);
+  });
+}
+
+for (const kind of ["read-only outputs", "unchanged writer then outputs", "unchanged", "published prototype"] as const) for (const stopped of [false, true]) {
+  test(`no PR is expected for ${kind}: ${stopped ? "retire the old stop" : "skip admission"}, no worker ask, marked task finishes`, async () => {
+    resetAutoMergeForTests();
+    setMergeOnReview(PROJECT, true, "operator", iso(T0 - 7_200_000));
+    const lane = missingPrLane(`no-pr-${kind.replaceAll(" ", "-")}`);
+    const taskId = markedTask(lane);
+    const ports = productionAutoMergePorts({
+      now: () => T0, loadPipelines, pullRequestOf: () => null, cachedState: () => null,
+      run: async () => { throw new Error("no PR means no GitHub reads"); },
+    });
+    if (stopped) {
+      savePipelines([lane]);
+      await sweepAutoMerge(ports);
+      lane.merge = loadPipelines()[0]!.merge;
+      expect(lane.merge?.reason).toBe(MERGE_REASONS.noPr);
+    }
+    if (kind === "unchanged") lane.baseRef = HEAD;
+    if (kind === "unchanged writer then outputs") {
+      lane.runs[0]!.attempts[0]!.completedAt = iso(T0 - 60_000);
+      lane.stages[1]!.outputs = ["docs/design/audit.md"];
+      lane.runs[1]!.attempts[0]!.outputBaseHead = lane.baseRef;
+    }
+    if (kind === "read-only outputs") {
+      // Archived design/prototype lanes advance HEAD through controller-owned
+      // output commits, including when the critic spends its fail-edge budget.
+      lane.stages[0]!.effectiveRole = REVIEWER as never;
+      lane.stages[0]!.outputs = ["docs/design/prototype"];
+      lane.runs[0]!.attempts[0]!.effectiveRole = REVIEWER as never;
+      lane.runs[0]!.attempts[0]!.outputBaseHead = lane.baseRef;
+    }
+    if (kind === "published prototype") {
+      // The later archived prototype used writable builders and a terminal
+      // publisher. Its form is durably bound to that exact lane and attempt.
+      lane.stages.push({ id: "publish", kind: "run", prompt: "publish", next: null, onFail: null, effectiveRole: BUILDER } as never);
+      lane.stages[1]!.next = "publish";
+      lane.runs.push({ stageId: "publish", attempts: [attempt(1, "passed", BUILDER)] } as never);
+      lane.runs.at(-1)!.attempts[0]!.report = {
+        seq: 1, at: iso(T0 - 30_000), actor: { kind: "operator" }, verdict: { status: "pass" }, summary: null, calls: 1,
+        provenance: { state: "complete", head: HEAD, branch: lane.branch, uncommitted: [], pullRequest: null, pullRequestState: "absent", outputs: [] },
+      };
+      mutateTasks((tasks) => {
+        tasks.find((task) => task.id === taskId)!.prototypeReviews = [{
+          id: `pr_${"a".repeat(32)}`, title: "Prototype choices", taskId, project: PROJECT, createdAt: iso(T0 - 500),
+          source: { conversationId: null, pipelineId: lane.id, stageId: "publish", attempt: 1 },
+          publicationKey: "prototype-fixture", inputDigest: "fixture", variants: [],
+        }];
+        return { tasks, result: undefined };
+      });
+    }
+    savePipelines([lane]);
+    await sweepAutoMerge(ports);
+    await sweepTaskFinishes(ports);
+    expect(loadPipelines()[0]!.merge).toBeUndefined();
+    expect(laneNeed(loadPipelines()[0]!)).toBeNull();
+    expect(workerAsks(loadPipelines()[0]!)).toEqual([]);
+    expect(loadTasks().find((task) => task.id === taskId)?.status).toBe("done");
+  });
+}
+
+for (const evidence of ["another lane's form", "earlier publisher attempt", "older published head", "writer changed the output base", "pre-settlement report only"] as const) {
+  test(`${evidence} keeps a missing implementation PR blocked`, async () => {
+    resetAutoMergeForTests();
+    setMergeOnReview(PROJECT, true, "operator", iso(T0 - 7_200_000));
+    const lane = missingPrLane("implementation-needs-pr");
+    const taskId = markedTask(lane);
+    const publisher = lane.runs[1]!.attempts[0]!;
+    publisher.report = {
+      seq: 1, at: iso(T0 - 30_000), actor: { kind: "operator" }, verdict: { status: "pass" }, summary: null, calls: 1,
+      provenance: { state: "complete", head: evidence === "older published head" ? lane.baseRef : HEAD,
+        branch: lane.branch, uncommitted: [], pullRequest: null, pullRequestState: "absent", outputs: [] },
+    };
+    if (evidence === "earlier publisher attempt") {
+      lane.runs[1]!.attempts.unshift(structuredClone(publisher));
+      publisher.n = 2;
+    }
+    if (evidence === "writer changed the output base") {
+      publisher.outputBaseHead = "c".repeat(40);
+      lane.runs[0]!.attempts[0]!.completedAt = iso(T0 - 60_000);
+    }
+    if (evidence === "pre-settlement report only") {
+      lane.runs[0]!.attempts[0]!.report = structuredClone(publisher.report);
+      lane.runs[0]!.attempts[0]!.report!.provenance.head = lane.baseRef;
+    }
+    if (evidence.includes("form") || evidence.includes("publisher") || evidence.includes("published")) mutateTasks((tasks) => {
+      tasks.find((task) => task.id === taskId)!.prototypeReviews = [{
+        id: `pr_${"b".repeat(32)}`, title: "Choices", taskId, project: PROJECT, createdAt: iso(T0 - 500),
+        source: { conversationId: null, pipelineId: evidence === "another lane's form" ? "different-lane" : lane.id, stageId: "review", attempt: 1 },
+        publicationKey: "wrong-form-fixture", inputDigest: "fixture", variants: [],
+      }];
+      return { tasks, result: undefined };
+    });
+    savePipelines([lane]);
+    const ports = productionAutoMergePorts({
+      now: () => T0, loadPipelines, pullRequestOf: () => null, cachedState: () => null,
+      run: async () => { throw new Error("a missing PR must not query GitHub"); },
+    });
+    await sweepAutoMerge(ports);
+    await sweepTaskFinishes(ports);
+    expect(loadPipelines()[0]!.merge).toMatchObject({ state: "blocked", reason: MERGE_REASONS.noPr });
+    expect(workerAsks(loadPipelines()[0]!)).toHaveLength(1);
+    expect(loadTasks().find((task) => task.id === taskId)?.status).toBe("inbox");
+  });
+}

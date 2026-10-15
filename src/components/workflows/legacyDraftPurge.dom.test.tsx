@@ -17,13 +17,11 @@ import type { FileEntry } from "@/lib/types";
    draft's pane does. Disable that effect and drafts stay `[]`, so the agent pane
    never appears and this test fails — the regression the review asks for. */
 
-/* The dashboard's mobile surface renders ConnectionPill, which subscribes to the
-   runtime bus; a sibling suite (useFiles.dom.test) leaves a `./runtimeBus` mock
-   installed whose stub bus lacks `.start`. Mock the hooks inert — the shape
-   nodes.dom.test uses — and dynamic-import the components afterward so they bind
-   to the inert hooks. Restored in afterAll so no sibling suite inherits it. */
-const actualRuntimeHooks = await import("@/hooks/useRuntime");
-const actualConversationCatalogHooks = await import("@/hooks/useConversationCatalog");
+/* Keep the runtime plane inert while exercising draft restoration. Snapshot
+   each export before replacing the hooks: Bun's module namespace is live, so
+   retaining that namespace would restore the replacement itself. */
+const actualRuntimeHooks = { ...await import("@/hooks/useRuntime") };
+const actualConversationCatalogHooks = { ...await import("@/hooks/useConversationCatalog") };
 const inertRuntime = { enabled: false, connection: "offline" as const, resyncedAt: null, store: emptyStore() };
 mock.module("@/hooks/useRuntime", () => ({
   ...actualRuntimeHooks,
@@ -148,8 +146,8 @@ const WF_FIELDS = ["template", "dir", "task", "mode"];
    identifier that reads like a real resource id. */
 const agentA = "agent_3f2504e0_4f89_41d3";
 
-/* The working directory is a picker now (#887), so the chosen path lives on the
-   closed trigger instead of an input's value — same assertion, new surface. */
+/* The draft retains its inherited directory in session storage (#2559).
+   It is hidden from the form and verified on the launch request below. */
 /* The desktop's agent control (#1695 K9a): «+ Agent» in the Board's bar, or the
    empty project's offer while the project has nothing to draw a Board for. */
 /* What creates an agent draft: the empty project's own button, or on the Board the agent row of
@@ -165,7 +163,15 @@ const agentControl = (): { disabled: boolean; dispatchEvent: (event: Event) => b
 };
 /* A conversation's handoff on the Board: open its reader from its tile, then
    «Hand off to a new agent» in the reader's actions menu. */
+const expandCards = async () => {
+  if (!(await waitFor(() => dom.document.querySelector(".card") !== null))) return false;
+  for (const button of dom.document.querySelectorAll('.card .fold[aria-expanded="false"]')) {
+    flushSync(() => button.dispatchEvent(new dom.MouseEvent("click", { bubbles: true })));
+  }
+  return true;
+};
 const readerAction = async (path: string, label: string): Promise<boolean> => {
+  if (!(await expandCards())) return false;
   if (!(await waitFor(() => dom.document.querySelector(`[data-member="${path}"]`) !== null))) return false;
   (dom.document.querySelector(`[data-member="${path}"]`) as unknown as HTMLElement).dispatchEvent(new dom.MouseEvent("click", { bubbles: true }) as unknown as Event);
   if (!(await waitFor(() => dom.document.querySelector("[data-reader-menu]") !== null))) return false;
@@ -211,8 +217,12 @@ const serveBoardWrites = () => {
 /* The desktop opens on its Board, its one view. */
 const openBoardTab = (): Promise<boolean> => waitFor(() => dom.document.querySelector("[data-kanban-board]") !== null);
 
-const directoryTrigger = () => dom.document.querySelector("[data-directory-trigger]") as unknown as HTMLButtonElement | null;
-const directoryValue = () => directoryTrigger()?.getAttribute("data-directory-value") ?? null;
+const directoryValue = () => {
+  const keys = Array.from({ length: dom.sessionStorage.length }, (_, index) => dom.sessionStorage.key(index)!);
+  const draftList = keys.find((key) => key.startsWith("llvDrafts:"));
+  const ids = JSON.parse(draftList ? dom.sessionStorage.getItem(draftList)! : "[]") as string[];
+  return ids.length === 1 ? dom.sessionStorage.getItem(agentField(ids[0]!, "cwd")) : null;
+};
 
 /* React's own onChange, the way the sibling draft suites drive the composer:
    happy-dom's `input` event does not reach a controlled textarea. */
@@ -284,18 +294,31 @@ test("the dashboard's restoration effect purges the legacy draft and never mount
   for (const name of WF_FIELDS) expect(dom.sessionStorage.getItem(wfField("wf-legacy", name))).toBeNull();
 });
 
-test("a restored project draft renders with its deterministic project directory on the first pane render", async () => {
+test("a restored project draft retains its project directory when its composer first renders", async () => {
   const project = "legacy-project";
   dom.sessionStorage.setItem(draftsKey(project), JSON.stringify([agentA]));
   dom.sessionStorage.setItem(agentField(agentA, "cwd"), "   ");
+  const launches: Record<string, unknown>[] = [];
+  G.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (String(input) === "/api/spawn" && init?.method === "POST") {
+      launches.push(JSON.parse(String(init.body)));
+      return Response.json({ error: "Fixture launch refusal" }, { status: 400 });
+    }
+    return (OVERRIDES.fetch as typeof fetch)(input, init);
+  }) as typeof fetch;
 
   roots.push(mount(<ProjectDashboard {...dashboardProps(project)} />));
 
   expect(await waitFor(() => dom.document.querySelector(AGENT_PANE) !== null)).toBe(true);
   expect(directoryValue()).toBe(`/home/user/Projects/${project}`);
+  expect(dom.document.querySelector("[data-directory-trigger]")).toBeNull();
+  typePrompt("Inspect the restored project");
+  flushSync(() => dom.document.querySelector(`${AGENT_PANE} [data-draft-form]`)!.dispatchEvent(new dom.Event("submit", { bubbles: true, cancelable: true })));
+  expect(await waitFor(() => launches.length === 1)).toBe(true);
+  expect(launches[0]).toMatchObject({ cwd: `/home/user/Projects/${project}`, prompt: "Inspect the restored project" });
 });
 
-test("the 390px draft working-directory picker keeps a 44px touch target", async () => {
+test("the 390px draft inherits its directory and exposes a 44px launch target", async () => {
   const project = "mobile-cwd-target-project";
   const windowWithMatchMedia = dom as unknown as { matchMedia: typeof mobileMatchMedia };
   const previousMatchMedia = windowWithMatchMedia.matchMedia;
@@ -315,12 +338,11 @@ test("the 390px draft working-directory picker keeps a 44px touch target", async
     agent?.dispatchEvent(new dom.MouseEvent("click", { bubbles: true }) as unknown as Event);
     expect(await waitFor(() => dom.document.querySelector(AGENT_PANE) !== null)).toBe(true);
     expect(dom.innerWidth).toBe(390);
-    expect(directoryTrigger()?.className).toContain("min-h-11");
-    expect(directoryTrigger()?.className).toContain("sm:min-h-0");
-    /* The list the trigger opens is reachable and its rows are targets too. */
-    flushSync(() => directoryTrigger()?.dispatchEvent(new dom.MouseEvent("click", { bubbles: true }) as unknown as Event));
-    const option = dom.document.querySelector('[role="option"]') as unknown as HTMLElement | null;
-    expect(option?.className).toContain("min-h-11");
+    expect(dom.document.querySelector("[data-directory-trigger]")).toBeNull();
+    expect(directoryValue()).toBe(`/home/user/Projects/${project}`);
+    const launch = dom.document.querySelector('[data-mobile2-send]') as unknown as HTMLElement;
+    expect(launch).not.toBeNull();
+    expect(launch.className).toContain("h-11");
   } finally {
     windowWithMatchMedia.matchMedia = previousMatchMedia;
     (dom as unknown as { innerWidth: number }).innerWidth = previousInnerWidth;
@@ -348,7 +370,8 @@ test("a task card agent action seeds the task prompt and canonical project direc
   try {
     roots.push(mount(<ProjectDashboard {...dashboardProps(project)} projectCwd={projectRoot} tasks={[task]} />));
 
-    /* The card's «+ Agent» (#1695 K9a): the draft opens on that card. */
+    /* Expand the current default-collapsed card to reach its agent action. */
+    expect(await expandCards()).toBe(true);
     expect(await waitFor(() => dom.document.querySelector(`[data-add-agent="task:${task.id}"]`) !== null)).toBe(true);
     (dom.document.querySelector(`[data-add-agent="task:${task.id}"]`) as unknown as HTMLButtonElement).click();
 
@@ -361,7 +384,7 @@ test("a task card agent action seeds the task prompt and canonical project direc
   }
 });
 
-test("a restored handoff draft shows its populated source cwd and never asks to confirm it (#887)", async () => {
+test("a restored handoff draft retains its source cwd without a directory control", async () => {
   const project = "handoff-project";
   const sourcePath = "/sessions/source.jsonl";
   const sourceCwd = "/repos/handoff/.worktrees/source-branch";
@@ -454,7 +477,7 @@ test("a fresh handoff replaces its provisional project root with the resolved so
   expect(dom.document.querySelector('p[role="alert"]')).toBeNull();
 });
 
-test("a fresh handoff shows a deleted source checkout's cwd without gating on it (#887)", async () => {
+test("a fresh handoff preserves a deleted source checkout's cwd for its refusal", async () => {
   const project = "fresh-deleted-handoff-project";
   const sourcePath = "/sessions/fresh-deleted-source.jsonl";
   const projectRoot = "/repos/fresh-deleted-handoff";
@@ -501,7 +524,7 @@ test("a fresh handoff shows a deleted source checkout's cwd without gating on it
   /* The draft sits on the card that holds the conversation it continues. */
   const holder = [...dom.document.querySelectorAll("[data-kanban-card]")].find((card) => card.querySelector(AGENT_PANE) !== null);
   expect(holder?.querySelector(`[data-reader-slot], [data-member="${sourcePath}"]`)).toBeTruthy();
-  expect(dom.document.querySelector('p[role="alert"]')).toBeNull();
+  expect(await waitFor(() => dom.document.querySelector('[data-testid="composer-send-blocked"]')?.textContent?.includes("has been deleted") === true)).toBe(true);
 });
 
 test("a restored handoff waits for its out-of-snapshot source cwd before exposing the composer", async () => {
@@ -531,7 +554,7 @@ test("a restored handoff waits for its out-of-snapshot source cwd before exposin
   expect(await waitFor(() => directoryValue() === sourceCwd)).toBe(true);
 });
 
-test("a deleted source checkout's cwd launches with no confirmation in the way (#887)", async () => {
+test("a deleted source checkout holds the draft and explains why launching is unavailable", async () => {
   const project = "deleted-checkout-handoff-project";
   const sourcePath = "/archive/deleted-checkout-source.jsonl";
   const sourceCwd = "/repos/deleted-checkout/.worktrees/source-branch";
@@ -560,10 +583,13 @@ test("a deleted source checkout's cwd launches with no confirmation in the way (
   expect(await waitFor(() => directoryValue() === sourceCwd)).toBe(true);
   expect(dom.document.querySelector('p[role="alert"]')).toBeNull();
   typePrompt("Continue the review in the recovered checkout");
-  const launch = dom.document.querySelector('[aria-label="Launch the agent"]') as unknown as HTMLButtonElement | null;
+  const launch = dom.document.querySelector(`${AGENT_PANE} button[type="submit"]`) as unknown as HTMLButtonElement;
+  expect(launch.disabled).toBe(true);
   launch?.dispatchEvent(new dom.MouseEvent("click", { bubbles: true }) as unknown as Event);
   await settle();
-  expect(launchCalls).toBe(1);
+  expect(launchCalls).toBe(0);
+  expect(dom.document.querySelector('[data-testid="composer-send-blocked"]')?.textContent).toContain("has been deleted");
+  expect((dom.document.querySelector('textarea[aria-label="First prompt text"]') as unknown as HTMLTextAreaElement).value).toBe("Continue the review in the recovered checkout");
 });
 
 test("a restored handoff stays unresolved while source cwd lookup retries", async () => {
@@ -685,7 +711,7 @@ test("an untouched provisional project draft adopts a canonical root after catal
   expect(dom.document.querySelector('p[role="alert"]')).toBeNull();
 });
 
-test("a missing restored handoff reaches an editable bounded recovery card", async () => {
+test("a missing restored handoff reaches a bounded recovery draft with launch held", async () => {
   const project = "missing-handoff-project";
   const sourcePath = "/archive/deleted-source.jsonl";
   let spawnCalls = 0;
@@ -715,13 +741,16 @@ test("a missing restored handoff reaches an editable bounded recovery card", asy
   await new Promise((resolve) => setTimeout(resolve, 1100));
   expect(spawnCalls).toBe(settledCalls);
   expect(directoryValue()).toBe(`/home/user/Projects/${project}`);
-  expect(directoryTrigger()?.disabled).toBe(false);
+  expect(dom.document.querySelector("[data-directory-trigger]")).toBeNull();
   expect(dom.document.querySelector('p[role="alert"]')).toBeNull();
   typePrompt("Rebuild the lost handoff from the project root");
-  const launch = dom.document.querySelector('[aria-label="Launch the agent"]') as unknown as HTMLButtonElement | null;
+  const launch = dom.document.querySelector(`${AGENT_PANE} button[type="submit"]`) as unknown as HTMLButtonElement;
+  expect(launch.disabled).toBe(true);
   launch?.dispatchEvent(new dom.MouseEvent("click", { bubbles: true }) as unknown as Event);
   await settle();
-  expect(launchCalls).toBe(1);
+  expect(launchCalls).toBe(0);
+  expect(dom.document.querySelector('[data-testid="composer-send-blocked"]')?.textContent).toContain("could not be found");
+  expect((dom.document.querySelector('textarea[aria-label="First prompt text"]') as unknown as HTMLTextAreaElement).value).toBe("Rebuild the lost handoff from the project root");
 });
 
 test("a retried launch opens its draft on the Board, prefilled from the launch, and its receipt stays in the reader", async () => {
@@ -739,7 +768,7 @@ test("a retried launch opens its draft on the Board, prefilled from the launch, 
     spawn: { launchId: "launch-retry-fixture", clientAttemptId: null, accountId: "default", state: "failed", initialMessage: "failed", retrySafe: true, error: "structured spawn failed before host binding" },
   } as unknown as FileEntry;
   dom.localStorage.setItem(`llv:kanban-readers:v1:${project}`, JSON.stringify([{ key: receipt.conversationId, path: receipt.path, folded: false }]));
-  /* The project's own root differs from the launch's directory, so the draft's directory says which one it came from. */
+  /* The distinct launch directory must survive in the restored draft. */
   roots.push(mount(<ProjectDashboard {...dashboardProps(project)} tasks={[pending]} files={[receipt]} projectCatalog={[{ project, projectRoot: "/repos/retried-launch", smt: 2, conversations: 1 }]} />));
 
   expect(await waitFor(() => dom.document.querySelector('[data-reader-path="spawn:launch-retry-fixture"] [data-launch-retry]') !== null)).toBe(true);

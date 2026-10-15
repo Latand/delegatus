@@ -187,24 +187,24 @@ test("stage_report durably accepts pending provenance without waiting for the fo
 test.each(["control-before", "control-during", "delivery-before", "delivery-during", "worktree-during", "head-during", "branch-during"] as const)("deferred provenance fences %s against its durable admission", async (change) => {
   const h = harness(); await started(h.ports, [stage("build", null)]);
   const clock = "2026-01-01T00:00:00.000Z"; h.ports.now = () => clock;
-  await withPipelineMutation((pipelines, persist) => {
+  await withPipelineMutation(async (pipelines, persist) => {
     const lane = pipelines[0]!; lane.pausedAt = clock; lane.resumedAt = clock;
     lane.delivery = { target: { repository: "provenance-repo", remote: "origin", branch: `refs/heads/${lane.branch}` },
       disposition: "owner", publish: "enabled", active: true, ownerId: lane.id, epoch: 1, journal: [] };
-    persist();
+    await persist();
   });
   await h.report(1, { verdict: "pass", summary: "Checked." });
   const mutate = async () => {
     if (change.startsWith("control")) {
       await patchPipeline(current().id, { action: "pause" }, h.ports);
       await patchPipeline(current().id, { action: "resume" }, h.ports);
-    } else await withPipelineMutation((pipelines, persist) => {
+    } else await withPipelineMutation(async (pipelines, persist) => {
       const lane = pipelines[0]!;
       if (change.startsWith("delivery")) lane.delivery!.epoch++;
       if (change.startsWith("worktree")) { lane.repoDir += "-replacement"; Object.assign(lane, pipelineIdentity(lane.id, lane.task, lane.repoDir)); }
       if (change.startsWith("head")) lane.lastPassedCommit = "b".repeat(40);
       if (change.startsWith("branch")) { lane.task += " replacement"; Object.assign(lane, pipelineIdentity(lane.id, lane.task, lane.repoDir)); }
-      persist();
+      await persist();
     });
   };
   let commands = 0, observedSignal: AbortSignal | undefined;

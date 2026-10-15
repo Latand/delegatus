@@ -1,9 +1,9 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { initializeStateCollections, SqliteStateCollection, injectStateWriteFaultForTests, StateLeaseLostError, STATE_LEASE_MAX_AGE_MS } from "./sqliteStateStore";
+import { initializeStateCollections, SqliteStateCollection, injectStateWriteFaultForTests, stateLeaseHoldsInFlight, StateLeaseLostError, STATE_LEASE_MAX_AGE_MS } from "./sqliteStateStore";
 
 import { FileTransactionBusyError } from "./fileTransaction";
 import { StateDiskFullError, setStateFreeBytesProbeForTests, noteStateCommit, noteStateDiskFull, stateWriteHealth } from "./diskFull";
@@ -28,7 +28,7 @@ test("a disk-full release preserves the callback result and its committed row", 
   const db = new Database(c.filename);
   db.exec(`CREATE TRIGGER full_release BEFORE DELETE ON state_leases BEGIN SELECT RAISE(FAIL, 'database or disk is full'); END`);
   try {
-    expect(await c.mutate((rows, persist) => { rows.push({ key: "x", value: 1 }); persist(); return 42; })).toBe(42);
+    expect(await c.mutate(async (rows, persist) => { rows.push({ key: "x", value: 1 }); await persist(); return 42; })).toBe(42);
     expect(c.get("x")?.value).toBe(1);
     expect(db.query("SELECT owner_token FROM state_leases").get()).not.toBeNull();
   } finally { db.exec("DROP TRIGGER full_release"); db.close(); }
@@ -48,7 +48,7 @@ async function until(check: () => boolean, ms = 3000) {
 test("the owner's next write replaces its abandoned token without waiting for the timer", async () => {
   const c = setup();
   injectStateWriteFaultForTests({ site: "release", collection: "probe", error: full() });
-  expect(await c.mutate((rows, persist) => { rows.push({ key: "x", value: 1 }); persist(); return 42; })).toBe(42);
+  expect(await c.mutate(async (rows, persist) => { rows.push({ key: "x", value: 1 }); await persist(); return 42; })).toBe(42);
   const first = token(c);
   expect(first).toBeDefined();
   const start = Date.now();
@@ -58,6 +58,27 @@ test("the owner's next write replaces its abandoned token without waiting for th
   expect(token(c)).not.toBe(first);
   injectStateWriteFaultForTests(null);
   await until(() => token(c) === undefined);
+});
+test("replacing an abandoned token retires its active hold and warning timer", async () => {
+  const c = setup("replaced_hold");
+  const warnings = spyOn(console, "warn").mockImplementation(() => {});
+  const holds = () => stateLeaseHoldsInFlight().filter(hold => hold.collection === "replaced_hold");
+  try {
+    injectStateWriteFaultForTests({ site: "release", collection: "replaced_hold", times: 1, error: full() });
+    c.boundedPatch(1, tx => tx.put({ key: "x", value: 1 }));
+    expect(holds()).toHaveLength(1);
+    c.boundedPatch(1, tx => tx.put({ key: "x", value: 2 }));
+    const db = new Database(c.filename, { readonly: true });
+    try { expect(db.query("SELECT * FROM state_leases").get()).toBeNull(); }
+    finally { db.close(); }
+    // Observe the original timer even if the immediate active-hold check fails.
+    const afterReplacement = holds();
+    await Bun.sleep(1100);
+    expect(warnings.mock.calls.filter(([label, detail]) => label === "[state lease-hold]" && detail?.collection === "replaced_hold")).toEqual([]);
+    expect(afterReplacement).toEqual([]);
+    expect(holds()).toEqual([]);
+    expect(c.get("x")?.value).toBe(2);
+  } finally { warnings.mockRestore(); }
 });
 test("abandoned release retries without another store call", async () => {
   const c = setup();
@@ -93,14 +114,14 @@ test("expired live owner is fenced inside the write transaction", async () => {
   let enter!: () => void, resume!: () => void;
   const entered = new Promise<void>((resolve) => { enter = resolve; });
   const gate = new Promise<void>((resolve) => { resume = resolve; });
-  const old = c.mutate(async (rows, persist) => { enter(); await gate; rows.push({ key: "x", value: 1 }); persist(); });
+  const old = c.mutate(async (rows, persist) => { enter(); await gate; rows.push({ key: "x", value: 1 }); await persist(); });
   // Install the rejection handler before opening the gate.
   const oldResult = old.catch((error: unknown) => error);
   await entered;
   const db = new Database(c.filename);
   db.query("UPDATE state_leases SET acquired_at = ?").run(Date.now() - STATE_LEASE_MAX_AGE_MS - 1000);
   db.close();
-  await c.mutate((rows, persist) => { rows.push({ key: "x", value: 2 }); persist(); });
+  await c.mutate(async (rows, persist) => { rows.push({ key: "x", value: 2 }); await persist(); });
   resume();
   const error = await oldResult;
   expect(error).toBeInstanceOf(StateLeaseLostError);
@@ -158,7 +179,7 @@ test("read-only patches and unchanged persistence cannot certify disk recovery",
   noteStateDiskFull("data write");
   expect(c.boundedPatch(1, (tx) => tx.get("x"))?.value).toBe(1);
   expect(stateWriteHealth(path.dirname(c.filename)).state).toBe("disk-full");
-  await c.mutate((_rows, persist) => persist());
+  await c.mutate(async (_rows, persist) => await persist());
   expect(stateWriteHealth(path.dirname(c.filename)).state).toBe("disk-full");
   c.boundedPatch(1, (tx) => tx.put({ key: "x", value: 2 }));
   expect(stateWriteHealth(path.dirname(c.filename)).state).toBe("ok");
@@ -183,7 +204,7 @@ test("cross-process recovery leaves the original owner alive", async () => {
   try {
     await expect(c.mutate(() => {}, undefined, false, 300)).rejects.toBeInstanceOf(FileTransactionBusyError);
     fs.writeFileSync(path.join(owner.dir, "lift"), "");
-    await c.mutate((rows, persist) => { rows.push({ key: "parent", value: 2 }); persist(); }, undefined, false, 10_000);
+    await c.mutate(async (rows, persist) => { rows.push({ key: "parent", value: 2 }); await persist(); }, undefined, false, 10_000);
     expect(c.get("parent")?.value).toBe(2);
     expect(() => process.kill(owner.child.pid, 0)).not.toThrow();
   } finally { await owner.stop(); }

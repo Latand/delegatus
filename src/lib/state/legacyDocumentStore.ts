@@ -1,3 +1,4 @@
+import { stateLockAttempt } from "./lockWait";
 import { FileTransactionBusyError } from "./fileTransaction";
 import {
   importLegacyCollection,
@@ -70,13 +71,7 @@ function isBusyError(error: unknown): boolean {
   return /database is (?:locked|busy)|SQLITE_BUSY/i.test(error instanceof Error ? error.message : String(error));
 }
 
-/* The import reader opens read-only with `busy_timeout = 0`, so a writer
-   holding the database makes the first-touch marker probe raise SQLITE_BUSY.
-   The JSON stores queued on their own write lock instead, so the probe retries
-   on the collection's own bounded schedule (the board store's reasoning). */
-const BUSY_ATTEMPTS = 6_000;
-const BUSY_WAIT_MS = 5;
-const BUSY_SLEEP = new Int32Array(new SharedArrayBuffer(4));
+// Marker probes use the same zero-timeout admission policy as collection writes.
 
 let writeHookForTests: ((collection: string) => void) | null = null;
 
@@ -247,15 +242,7 @@ export class LegacyDocumentStore<D> {
   }
 
   private readMarker(database: string): StateImportRecord | null {
-    for (let attempt = 0; attempt < BUSY_ATTEMPTS; attempt += 1) {
-      try {
-        return readStateImport(database, this.options.collection);
-      } catch (error) {
-        if (!isBusyError(error)) throw error;
-        Atomics.wait(BUSY_SLEEP, 0, 0, BUSY_WAIT_MS);
-      }
-    }
-    throw new FileTransactionBusyError(this.options.busyMessage);
+    return stateLockAttempt("state.marker.legacy", () => readStateImport(database, this.options.collection), this.options.collection);
   }
 
   private open(database: string): SqliteStateCollection<DocumentRow> {

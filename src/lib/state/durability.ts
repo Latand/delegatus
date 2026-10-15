@@ -1,3 +1,4 @@
+import { stateLockAttempt } from "./lockWait";
 import type { Database as BunDatabase } from "bun:sqlite";
 import fs from "node:fs";
 import path from "node:path";
@@ -154,13 +155,13 @@ function inspect(filename: string, pragma: StateDatabase["check"], readonly: boo
   }
 }
 
-function readRevision(database: StateDatabase): string {
+export function readRevision(database: StateDatabase): string {
   if (database.revisionSql) {
     let db: BunDatabase | null = null;
     try {
       db = new (sqliteDatabase())(database.filename, { readonly: true });
-      db.exec("PRAGMA busy_timeout = 5000");
-      const row = db.query<{ revision: unknown }, []>(database.revisionSql).get();
+      db.exec("PRAGMA busy_timeout = 0");
+      const row = stateLockAttempt("state.durability.revision", () => db!.query<{ revision: unknown }, []>(database.revisionSql!).get());
       if (row && row.revision !== null && row.revision !== undefined) return `rev:${String(row.revision)}`;
     } catch {
       /* A database without the table yet: the signature stands in. */
