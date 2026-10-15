@@ -1,0 +1,2193 @@
+{
+  "commit": "018d4320a60664a30c18b56847fb91fceddf6da2",
+  "frames": {
+    "1440-en-managed-failed-light-header": {
+      "text": "Web runs1.6.1 \u00b7 ddddddd \u00b7 1 Jan 2026\nRuntime host runs1.6.1 \u00b7 aaaaaaa \u00b7 1 Jan 2026\nAvailable1.6.1 \u00b7 ccccccc \u00b7 1 Jan 2026\nCheck now\nUpdate available \u00b7 3 commits behind origin/main \u00b7 checked 02:00"
+    },
+    "1440-en-managed-failed-light": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 185,
+        "y": 237,
+        "width": 1070,
+        "height": 96
+      },
+      "controlVisible": true,
+      "text": "Automatic updates\nTurn on\n\nOff. You choose when to deploy."
+    },
+    "1440-en-managed-failed-light-failure": {
+      "text": "Update to bbbbbbb\nUpdate to checked ccccccc\nDeploy again\n\nDeployment stopped at health check after 1 m 00 s.\n\nadoption 2 of 2 - recovering pending spawns timed out\n\nResolve bbbbbbb\nBuild image\nStart candidate\nHealth check\nSwitch web\nHand over runtime host",
+      "rect": {
+        "x": 185,
+        "y": 349,
+        "width": 702.65625,
+        "height": 353.5
+      }
+    },
+    "1440-en-managed-rolling-back-light-header": {
+      "text": "Web runs1.6.1 \u00b7 ddddddd \u00b7 1 Jan 2026\nRuntime host runs1.6.1 \u00b7 aaaaaaa \u00b7 1 Jan 2026\nAvailable1.6.1 \u00b7 ccccccc \u00b7 1 Jan 2026\nCheck now\nUpdate available \u00b7 3 commits behind origin/main \u00b7 checked 02:00"
+    },
+    "1440-en-managed-rolling-back-light": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 185,
+        "y": 237,
+        "width": 1070,
+        "height": 96
+      },
+      "controlVisible": true,
+      "text": "Automatic updates\nTurn on\n\nOff. You choose when to deploy."
+    },
+    "1440-en-managed-rolling-back-light-failure": {
+      "text": "Update to bbbbbbb\nUpdate to checked ccccccc\nDeploy again\n\nDeployment stopped at health check after 1 m 00 s. Rollback is in progress.\n\nadoption 2 of 2 - recovering pending spawns timed out\n\nResolve bbbbbbb\nBuild image\nStart candidate\nHealth check\nSwitch web\nHand over runtime host",
+      "rect": {
+        "x": 185,
+        "y": 349,
+        "width": 702.65625,
+        "height": 353.5
+      }
+    },
+    "1440-en-managed-rollback-failed-light-header": {
+      "text": "Web runs1.6.1 \u00b7 ddddddd \u00b7 1 Jan 2026\nRuntime host runs1.6.1 \u00b7 aaaaaaa \u00b7 1 Jan 2026\nAvailable1.6.1 \u00b7 ccccccc \u00b7 1 Jan 2026\nCheck now\nUpdate available \u00b7 3 commits behind origin/main \u00b7 checked 02:00"
+    },
+    "1440-en-managed-rollback-failed-light": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 185,
+        "y": 237,
+        "width": 1070,
+        "height": 96
+      },
+      "controlVisible": true,
+      "text": "Automatic updates\nTurn on\n\nOff. You choose when to deploy."
+    },
+    "1440-en-managed-rollback-failed-light-failure": {
+      "text": "Update to bbbbbbb\nUpdate to checked ccccccc\nDeploy again\n\nDeployment stopped at health check after 1 m 00 s.\n\nrecovering pending spawns timed out; rollback could not prove owner death\n\nResolve bbbbbbb\nBuild image\nStart candidate\nHealth check\nSwitch web\nHand over runtime host",
+      "rect": {
+        "x": 185,
+        "y": 349,
+        "width": 702.65625,
+        "height": 353.5
+      }
+    },
+    "1440-en-managed-rolled-back-light-header": {
+      "text": "Web runs1.6.1 \u00b7 aaaaaaa \u00b7 1 Jan 2026\nRuntime host runs1.6.1 \u00b7 aaaaaaa \u00b7 1 Jan 2026\nAvailable1.6.1 \u00b7 ccccccc \u00b7 1 Jan 2026\nCheck now\nUpdate available \u00b7 3 commits behind origin/main \u00b7 checked 02:00"
+    },
+    "1440-en-managed-rolled-back-light": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 185,
+        "y": 237,
+        "width": 1070,
+        "height": 96
+      },
+      "controlVisible": true,
+      "text": "Automatic updates\nTurn on\n\nOff. You choose when to deploy."
+    },
+    "1440-en-managed-rolled-back-light-failure": {
+      "text": "Update to bbbbbbb\nUpdate to checked ccccccc\nDeploy again\n\nDeployment stopped at health check after 1 m 00 s. Rollback completed; current component revisions are shown above.\n\nadoption 2 of 2 - recovering pending spawns timed out\n\nResolve bbbbbbb\nBuild image\nStart candidate\nHealth check\nSwitch web\nHand over runtime host",
+      "rect": {
+        "x": 185,
+        "y": 349,
+        "width": 702.65625,
+        "height": 353.5
+      }
+    },
+    "1440-en-managed-external-success-light-header": {
+      "text": "Web runs1.6.1 \u00b7 ccccccc \u00b7 1 Jan 2026\nRuntime host runs1.6.1 \u00b7 ccccccc \u00b7 1 Jan 2026\nCheck now\nUp to date, checked at 02:00 \u00b7 Next check at \u2014"
+    },
+    "1440-en-managed-external-success-light": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 185,
+        "y": 237,
+        "width": 1070,
+        "height": 96
+      },
+      "controlVisible": true,
+      "text": "Automatic updates\nTurn on\n\nOff. You choose when to deploy."
+    },
+    "1440-en-managed-external-success-light-failure": {
+      "text": "Earlier deployment bbbbbbb failed.\n\nadoption 2 of 2 - recovering pending spawns timed out",
+      "rect": {
+        "x": 185,
+        "y": 678.25,
+        "width": 702.65625,
+        "height": 80.5
+      }
+    },
+    "1440-en-managed-external-success-light-reloaded": {
+      "previous": "Earlier deployment bbbbbbb failed.\n\nadoption 2 of 2 - recovering pending spawns timed out"
+    },
+    "1440-en-managed-external-success-unknown-host-light-header": {
+      "text": "Web runs1.6.1 \u00b7 ccccccc \u00b7 1 Jan 2026\nRuntime hostunknown revision\nCheck now\nUp to date, checked at 02:00 \u00b7 Next check at \u2014"
+    },
+    "1440-en-managed-external-success-unknown-host-light": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 185,
+        "y": 237,
+        "width": 1070,
+        "height": 96
+      },
+      "controlVisible": true,
+      "text": "Automatic updates\nTurn on\n\nOff. You choose when to deploy."
+    },
+    "1440-en-managed-external-success-unknown-host-light-failure": {
+      "text": "Earlier deployment bbbbbbb failed.\n\nadoption 2 of 2 - recovering pending spawns timed out",
+      "rect": {
+        "x": 185,
+        "y": 678.25,
+        "width": 702.65625,
+        "height": 80.5
+      }
+    },
+    "1440-en-managed-external-success-unknown-host-light-reloaded": {
+      "previous": "Earlier deployment bbbbbbb failed.\n\nadoption 2 of 2 - recovering pending spawns timed out"
+    },
+    "1440-en-managed-unknown-host-light-header": {
+      "text": "Web runs1.6.1 \u00b7 bbbbbbb \u00b7 1 Jan 2026\nRuntime hostunknown revision\nAvailable1.6.1 \u00b7 ccccccc \u00b7 1 Jan 2026\nCheck now\nUpdate available \u00b7 3 commits behind origin/main \u00b7 checked 02:00"
+    },
+    "1440-en-managed-unknown-host-light": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 185,
+        "y": 237,
+        "width": 1070,
+        "height": 96
+      },
+      "controlVisible": true,
+      "text": "Automatic updates\nTurn on\n\nOff. You choose when to deploy."
+    },
+    "1440-en-managed-unknown-host-light-failure": {
+      "text": "Update to bbbbbbb\nUpdate to checked ccccccc\nDeploy again\n\nDeployment stopped at health check after 1 m 00 s.\n\nadoption 2 of 2 - recovering pending spawns timed out\n\nResolve bbbbbbb\nBuild image\nStart candidate\nHealth check\nSwitch web\nHand over runtime host",
+      "rect": {
+        "x": 185,
+        "y": 349,
+        "width": 702.65625,
+        "height": 353.5
+      }
+    },
+    "1440-en-managed-failed-dark-header": {
+      "text": "Web runs1.6.1 \u00b7 ddddddd \u00b7 1 Jan 2026\nRuntime host runs1.6.1 \u00b7 aaaaaaa \u00b7 1 Jan 2026\nAvailable1.6.1 \u00b7 ccccccc \u00b7 1 Jan 2026\nCheck now\nUpdate available \u00b7 3 commits behind origin/main \u00b7 checked 02:00"
+    },
+    "1440-en-managed-failed-dark": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 185,
+        "y": 237,
+        "width": 1070,
+        "height": 96
+      },
+      "controlVisible": true,
+      "text": "Automatic updates\nTurn on\n\nOff. You choose when to deploy."
+    },
+    "1440-en-managed-failed-dark-failure": {
+      "text": "Update to bbbbbbb\nUpdate to checked ccccccc\nDeploy again\n\nDeployment stopped at health check after 1 m 00 s.\n\nadoption 2 of 2 - recovering pending spawns timed out\n\nResolve bbbbbbb\nBuild image\nStart candidate\nHealth check\nSwitch web\nHand over runtime host",
+      "rect": {
+        "x": 185,
+        "y": 349,
+        "width": 702.65625,
+        "height": 353.5
+      }
+    },
+    "1440-en-managed-rolling-back-dark-header": {
+      "text": "Web runs1.6.1 \u00b7 ddddddd \u00b7 1 Jan 2026\nRuntime host runs1.6.1 \u00b7 aaaaaaa \u00b7 1 Jan 2026\nAvailable1.6.1 \u00b7 ccccccc \u00b7 1 Jan 2026\nCheck now\nUpdate available \u00b7 3 commits behind origin/main \u00b7 checked 02:00"
+    },
+    "1440-en-managed-rolling-back-dark": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 185,
+        "y": 237,
+        "width": 1070,
+        "height": 96
+      },
+      "controlVisible": true,
+      "text": "Automatic updates\nTurn on\n\nOff. You choose when to deploy."
+    },
+    "1440-en-managed-rolling-back-dark-failure": {
+      "text": "Update to bbbbbbb\nUpdate to checked ccccccc\nDeploy again\n\nDeployment stopped at health check after 1 m 00 s. Rollback is in progress.\n\nadoption 2 of 2 - recovering pending spawns timed out\n\nResolve bbbbbbb\nBuild image\nStart candidate\nHealth check\nSwitch web\nHand over runtime host",
+      "rect": {
+        "x": 185,
+        "y": 349,
+        "width": 702.65625,
+        "height": 353.5
+      }
+    },
+    "1440-en-managed-rollback-failed-dark-header": {
+      "text": "Web runs1.6.1 \u00b7 ddddddd \u00b7 1 Jan 2026\nRuntime host runs1.6.1 \u00b7 aaaaaaa \u00b7 1 Jan 2026\nAvailable1.6.1 \u00b7 ccccccc \u00b7 1 Jan 2026\nCheck now\nUpdate available \u00b7 3 commits behind origin/main \u00b7 checked 02:00"
+    },
+    "1440-en-managed-rollback-failed-dark": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 185,
+        "y": 237,
+        "width": 1070,
+        "height": 96
+      },
+      "controlVisible": true,
+      "text": "Automatic updates\nTurn on\n\nOff. You choose when to deploy."
+    },
+    "1440-en-managed-rollback-failed-dark-failure": {
+      "text": "Update to bbbbbbb\nUpdate to checked ccccccc\nDeploy again\n\nDeployment stopped at health check after 1 m 00 s.\n\nrecovering pending spawns timed out; rollback could not prove owner death\n\nResolve bbbbbbb\nBuild image\nStart candidate\nHealth check\nSwitch web\nHand over runtime host",
+      "rect": {
+        "x": 185,
+        "y": 349,
+        "width": 702.65625,
+        "height": 353.5
+      }
+    },
+    "1440-en-managed-rolled-back-dark-header": {
+      "text": "Web runs1.6.1 \u00b7 aaaaaaa \u00b7 1 Jan 2026\nRuntime host runs1.6.1 \u00b7 aaaaaaa \u00b7 1 Jan 2026\nAvailable1.6.1 \u00b7 ccccccc \u00b7 1 Jan 2026\nCheck now\nUpdate available \u00b7 3 commits behind origin/main \u00b7 checked 02:00"
+    },
+    "1440-en-managed-rolled-back-dark": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 185,
+        "y": 237,
+        "width": 1070,
+        "height": 96
+      },
+      "controlVisible": true,
+      "text": "Automatic updates\nTurn on\n\nOff. You choose when to deploy."
+    },
+    "1440-en-managed-rolled-back-dark-failure": {
+      "text": "Update to bbbbbbb\nUpdate to checked ccccccc\nDeploy again\n\nDeployment stopped at health check after 1 m 00 s. Rollback completed; current component revisions are shown above.\n\nadoption 2 of 2 - recovering pending spawns timed out\n\nResolve bbbbbbb\nBuild image\nStart candidate\nHealth check\nSwitch web\nHand over runtime host",
+      "rect": {
+        "x": 185,
+        "y": 349,
+        "width": 702.65625,
+        "height": 353.5
+      }
+    },
+    "1440-en-managed-external-success-dark-header": {
+      "text": "Web runs1.6.1 \u00b7 ccccccc \u00b7 1 Jan 2026\nRuntime host runs1.6.1 \u00b7 ccccccc \u00b7 1 Jan 2026\nCheck now\nUp to date, checked at 02:00 \u00b7 Next check at \u2014"
+    },
+    "1440-en-managed-external-success-dark": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 185,
+        "y": 237,
+        "width": 1070,
+        "height": 96
+      },
+      "controlVisible": true,
+      "text": "Automatic updates\nTurn on\n\nOff. You choose when to deploy."
+    },
+    "1440-en-managed-external-success-dark-failure": {
+      "text": "Earlier deployment bbbbbbb failed.\n\nadoption 2 of 2 - recovering pending spawns timed out",
+      "rect": {
+        "x": 185,
+        "y": 678.25,
+        "width": 702.65625,
+        "height": 80.5
+      }
+    },
+    "1440-en-managed-external-success-dark-reloaded": {
+      "previous": "Earlier deployment bbbbbbb failed.\n\nadoption 2 of 2 - recovering pending spawns timed out"
+    },
+    "1440-en-managed-external-success-unknown-host-dark-header": {
+      "text": "Web runs1.6.1 \u00b7 ccccccc \u00b7 1 Jan 2026\nRuntime hostunknown revision\nCheck now\nUp to date, checked at 02:00 \u00b7 Next check at \u2014"
+    },
+    "1440-en-managed-external-success-unknown-host-dark": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 185,
+        "y": 237,
+        "width": 1070,
+        "height": 96
+      },
+      "controlVisible": true,
+      "text": "Automatic updates\nTurn on\n\nOff. You choose when to deploy."
+    },
+    "1440-en-managed-external-success-unknown-host-dark-failure": {
+      "text": "Earlier deployment bbbbbbb failed.\n\nadoption 2 of 2 - recovering pending spawns timed out",
+      "rect": {
+        "x": 185,
+        "y": 678.25,
+        "width": 702.65625,
+        "height": 80.5
+      }
+    },
+    "1440-en-managed-external-success-unknown-host-dark-reloaded": {
+      "previous": "Earlier deployment bbbbbbb failed.\n\nadoption 2 of 2 - recovering pending spawns timed out"
+    },
+    "1440-en-managed-unknown-host-dark-header": {
+      "text": "Web runs1.6.1 \u00b7 bbbbbbb \u00b7 1 Jan 2026\nRuntime hostunknown revision\nAvailable1.6.1 \u00b7 ccccccc \u00b7 1 Jan 2026\nCheck now\nUpdate available \u00b7 3 commits behind origin/main \u00b7 checked 02:00"
+    },
+    "1440-en-managed-unknown-host-dark": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 185,
+        "y": 237,
+        "width": 1070,
+        "height": 96
+      },
+      "controlVisible": true,
+      "text": "Automatic updates\nTurn on\n\nOff. You choose when to deploy."
+    },
+    "1440-en-managed-unknown-host-dark-failure": {
+      "text": "Update to bbbbbbb\nUpdate to checked ccccccc\nDeploy again\n\nDeployment stopped at health check after 1 m 00 s.\n\nadoption 2 of 2 - recovering pending spawns timed out\n\nResolve bbbbbbb\nBuild image\nStart candidate\nHealth check\nSwitch web\nHand over runtime host",
+      "rect": {
+        "x": 185,
+        "y": 349,
+        "width": 702.65625,
+        "height": 353.5
+      }
+    },
+    "1440-uk-managed-failed-light-header": {
+      "text": "\u0412\u0435\u0431 \u043f\u0440\u0430\u0446\u044e\u0454 \u043d\u04301.6.1 \u00b7 ddddddd \u00b7 1 \u0441\u0456\u0447. 2026 \u0440.\nRuntime host \u043f\u0440\u0430\u0446\u044e\u0454 \u043d\u04301.6.1 \u00b7 aaaaaaa \u00b7 1 \u0441\u0456\u0447. 2026 \u0440.\n\u0414\u043e\u0441\u0442\u0443\u043f\u043d\u043e1.6.1 \u00b7 ccccccc \u00b7 1 \u0441\u0456\u0447. 2026 \u0440.\n\u041f\u0435\u0440\u0435\u0432\u0456\u0440\u0438\u0442\u0438\n\u0404 \u043e\u043d\u043e\u0432\u043b\u0435\u043d\u043d\u044f \u00b7 3 \u043a\u043e\u043c\u0456\u0442\u0438 \u043f\u043e\u0437\u0430\u0434\u0443 origin/main \u00b7 \u043f\u0435\u0440\u0435\u0432\u0456\u0440\u0435\u043d\u043e \u043e 02:00"
+    },
+    "1440-uk-managed-failed-light": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 185,
+        "y": 237,
+        "width": 1070,
+        "height": 96
+      },
+      "controlVisible": true,
+      "text": "\u0410\u0432\u0442\u043e\u043e\u043d\u043e\u0432\u043b\u0435\u043d\u043d\u044f\n\u0423\u0432\u0456\u043c\u043a\u043d\u0443\u0442\u0438\n\n\u0412\u0438\u043c\u043a\u043d\u0435\u043d\u043e. \u0412\u0438 \u0441\u0430\u043c\u0456 \u043e\u0431\u0438\u0440\u0430\u0454\u0442\u0435 \u0447\u0430\u0441 \u0440\u043e\u0437\u0433\u043e\u0440\u0442\u0430\u043d\u043d\u044f."
+    },
+    "1440-uk-managed-failed-light-failure": {
+      "text": "\u041e\u043d\u043e\u0432\u0438\u0442\u0438 \u0434\u043e bbbbbbb\n\u041e\u043d\u043e\u0432\u0438\u0442\u0438 \u0434\u043e \u043f\u0435\u0440\u0435\u0432\u0456\u0440\u0435\u043d\u043e\u0457 \u0432\u0435\u0440\u0441\u0456\u0457 ccccccc\n\u0420\u043e\u0437\u0433\u043e\u0440\u043d\u0443\u0442\u0438 \u0449\u0435 \u0440\u0430\u0437\n\n\u0420\u043e\u0437\u0433\u043e\u0440\u0442\u0430\u043d\u043d\u044f \u0437\u0443\u043f\u0438\u043d\u0438\u043b\u043e\u0441\u044f \u043d\u0430 \u043a\u0440\u043e\u0446\u0456 \u00ab\u043f\u0435\u0440\u0435\u0432\u0456\u0440\u043a\u0430 \u0437\u0434\u043e\u0440\u043e\u0432'\u044f\u00bb \u0447\u0435\u0440\u0435\u0437 1 \u0445\u0432 00 \u0441.\n\nadoption 2 of 2 - recovering pending spawns timed out\n\n\u0412\u0438\u0437\u043d\u0430\u0447\u0438\u0442\u0438 bbbbbbb\n\u0417\u0456\u0431\u0440\u0430\u0442\u0438 \u043e\u0431\u0440\u0430\u0437\n\u0417\u0430\u043f\u0443\u0441\u0442\u0438\u0442\u0438 \u043a\u0430\u043d\u0434\u0438\u0434\u0430\u0442\u0430\n\u041f\u0435\u0440\u0435\u0432\u0456\u0440\u043a\u0430 \u0437\u0434\u043e\u0440\u043e\u0432'\u044f\n\u041f\u0435\u0440\u0435\u043c\u043a\u043d\u0443\u0442\u0438 \u0432\u0435\u0431\n\u041f\u0435\u0440\u0435\u0434\u0430\u0442\u0438 runtime host",
+      "rect": {
+        "x": 185,
+        "y": 349,
+        "width": 702.65625,
+        "height": 353.5
+      }
+    },
+    "1440-uk-managed-rolling-back-light-header": {
+      "text": "\u0412\u0435\u0431 \u043f\u0440\u0430\u0446\u044e\u0454 \u043d\u04301.6.1 \u00b7 ddddddd \u00b7 1 \u0441\u0456\u0447. 2026 \u0440.\nRuntime host \u043f\u0440\u0430\u0446\u044e\u0454 \u043d\u04301.6.1 \u00b7 aaaaaaa \u00b7 1 \u0441\u0456\u0447. 2026 \u0440.\n\u0414\u043e\u0441\u0442\u0443\u043f\u043d\u043e1.6.1 \u00b7 ccccccc \u00b7 1 \u0441\u0456\u0447. 2026 \u0440.\n\u041f\u0435\u0440\u0435\u0432\u0456\u0440\u0438\u0442\u0438\n\u0404 \u043e\u043d\u043e\u0432\u043b\u0435\u043d\u043d\u044f \u00b7 3 \u043a\u043e\u043c\u0456\u0442\u0438 \u043f\u043e\u0437\u0430\u0434\u0443 origin/main \u00b7 \u043f\u0435\u0440\u0435\u0432\u0456\u0440\u0435\u043d\u043e \u043e 02:00"
+    },
+    "1440-uk-managed-rolling-back-light": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 185,
+        "y": 237,
+        "width": 1070,
+        "height": 96
+      },
+      "controlVisible": true,
+      "text": "\u0410\u0432\u0442\u043e\u043e\u043d\u043e\u0432\u043b\u0435\u043d\u043d\u044f\n\u0423\u0432\u0456\u043c\u043a\u043d\u0443\u0442\u0438\n\n\u0412\u0438\u043c\u043a\u043d\u0435\u043d\u043e. \u0412\u0438 \u0441\u0430\u043c\u0456 \u043e\u0431\u0438\u0440\u0430\u0454\u0442\u0435 \u0447\u0430\u0441 \u0440\u043e\u0437\u0433\u043e\u0440\u0442\u0430\u043d\u043d\u044f."
+    },
+    "1440-uk-managed-rolling-back-light-failure": {
+      "text": "\u041e\u043d\u043e\u0432\u0438\u0442\u0438 \u0434\u043e bbbbbbb\n\u041e\u043d\u043e\u0432\u0438\u0442\u0438 \u0434\u043e \u043f\u0435\u0440\u0435\u0432\u0456\u0440\u0435\u043d\u043e\u0457 \u0432\u0435\u0440\u0441\u0456\u0457 ccccccc\n\u0420\u043e\u0437\u0433\u043e\u0440\u043d\u0443\u0442\u0438 \u0449\u0435 \u0440\u0430\u0437\n\n\u0420\u043e\u0437\u0433\u043e\u0440\u0442\u0430\u043d\u043d\u044f \u0437\u0443\u043f\u0438\u043d\u0438\u043b\u043e\u0441\u044f \u043d\u0430 \u043a\u0440\u043e\u0446\u0456 \u00ab\u043f\u0435\u0440\u0435\u0432\u0456\u0440\u043a\u0430 \u0437\u0434\u043e\u0440\u043e\u0432'\u044f\u00bb \u0447\u0435\u0440\u0435\u0437 1 \u0445\u0432 00 \u0441. \u0422\u0440\u0438\u0432\u0430\u0454 \u0432\u0456\u0434\u043a\u0430\u0442.\n\nadoption 2 of 2 - recovering pending spawns timed out\n\n\u0412\u0438\u0437\u043d\u0430\u0447\u0438\u0442\u0438 bbbbbbb\n\u0417\u0456\u0431\u0440\u0430\u0442\u0438 \u043e\u0431\u0440\u0430\u0437\n\u0417\u0430\u043f\u0443\u0441\u0442\u0438\u0442\u0438 \u043a\u0430\u043d\u0434\u0438\u0434\u0430\u0442\u0430\n\u041f\u0435\u0440\u0435\u0432\u0456\u0440\u043a\u0430 \u0437\u0434\u043e\u0440\u043e\u0432'\u044f\n\u041f\u0435\u0440\u0435\u043c\u043a\u043d\u0443\u0442\u0438 \u0432\u0435\u0431\n\u041f\u0435\u0440\u0435\u0434\u0430\u0442\u0438 runtime host",
+      "rect": {
+        "x": 185,
+        "y": 349,
+        "width": 702.65625,
+        "height": 353.5
+      }
+    },
+    "1440-uk-managed-rollback-failed-light-header": {
+      "text": "\u0412\u0435\u0431 \u043f\u0440\u0430\u0446\u044e\u0454 \u043d\u04301.6.1 \u00b7 ddddddd \u00b7 1 \u0441\u0456\u0447. 2026 \u0440.\nRuntime host \u043f\u0440\u0430\u0446\u044e\u0454 \u043d\u04301.6.1 \u00b7 aaaaaaa \u00b7 1 \u0441\u0456\u0447. 2026 \u0440.\n\u0414\u043e\u0441\u0442\u0443\u043f\u043d\u043e1.6.1 \u00b7 ccccccc \u00b7 1 \u0441\u0456\u0447. 2026 \u0440.\n\u041f\u0435\u0440\u0435\u0432\u0456\u0440\u0438\u0442\u0438\n\u0404 \u043e\u043d\u043e\u0432\u043b\u0435\u043d\u043d\u044f \u00b7 3 \u043a\u043e\u043c\u0456\u0442\u0438 \u043f\u043e\u0437\u0430\u0434\u0443 origin/main \u00b7 \u043f\u0435\u0440\u0435\u0432\u0456\u0440\u0435\u043d\u043e \u043e 02:00"
+    },
+    "1440-uk-managed-rollback-failed-light": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 185,
+        "y": 237,
+        "width": 1070,
+        "height": 96
+      },
+      "controlVisible": true,
+      "text": "\u0410\u0432\u0442\u043e\u043e\u043d\u043e\u0432\u043b\u0435\u043d\u043d\u044f\n\u0423\u0432\u0456\u043c\u043a\u043d\u0443\u0442\u0438\n\n\u0412\u0438\u043c\u043a\u043d\u0435\u043d\u043e. \u0412\u0438 \u0441\u0430\u043c\u0456 \u043e\u0431\u0438\u0440\u0430\u0454\u0442\u0435 \u0447\u0430\u0441 \u0440\u043e\u0437\u0433\u043e\u0440\u0442\u0430\u043d\u043d\u044f."
+    },
+    "1440-uk-managed-rollback-failed-light-failure": {
+      "text": "\u041e\u043d\u043e\u0432\u0438\u0442\u0438 \u0434\u043e bbbbbbb\n\u041e\u043d\u043e\u0432\u0438\u0442\u0438 \u0434\u043e \u043f\u0435\u0440\u0435\u0432\u0456\u0440\u0435\u043d\u043e\u0457 \u0432\u0435\u0440\u0441\u0456\u0457 ccccccc\n\u0420\u043e\u0437\u0433\u043e\u0440\u043d\u0443\u0442\u0438 \u0449\u0435 \u0440\u0430\u0437\n\n\u0420\u043e\u0437\u0433\u043e\u0440\u0442\u0430\u043d\u043d\u044f \u0437\u0443\u043f\u0438\u043d\u0438\u043b\u043e\u0441\u044f \u043d\u0430 \u043a\u0440\u043e\u0446\u0456 \u00ab\u043f\u0435\u0440\u0435\u0432\u0456\u0440\u043a\u0430 \u0437\u0434\u043e\u0440\u043e\u0432'\u044f\u00bb \u0447\u0435\u0440\u0435\u0437 1 \u0445\u0432 00 \u0441.\n\nrecovering pending spawns timed out; rollback could not prove owner death\n\n\u0412\u0438\u0437\u043d\u0430\u0447\u0438\u0442\u0438 bbbbbbb\n\u0417\u0456\u0431\u0440\u0430\u0442\u0438 \u043e\u0431\u0440\u0430\u0437\n\u0417\u0430\u043f\u0443\u0441\u0442\u0438\u0442\u0438 \u043a\u0430\u043d\u0434\u0438\u0434\u0430\u0442\u0430\n\u041f\u0435\u0440\u0435\u0432\u0456\u0440\u043a\u0430 \u0437\u0434\u043e\u0440\u043e\u0432'\u044f\n\u041f\u0435\u0440\u0435\u043c\u043a\u043d\u0443\u0442\u0438 \u0432\u0435\u0431\n\u041f\u0435\u0440\u0435\u0434\u0430\u0442\u0438 runtime host",
+      "rect": {
+        "x": 185,
+        "y": 349,
+        "width": 702.65625,
+        "height": 353.5
+      }
+    },
+    "1440-uk-managed-rolled-back-light-header": {
+      "text": "\u0412\u0435\u0431 \u043f\u0440\u0430\u0446\u044e\u0454 \u043d\u04301.6.1 \u00b7 aaaaaaa \u00b7 1 \u0441\u0456\u0447. 2026 \u0440.\nRuntime host \u043f\u0440\u0430\u0446\u044e\u0454 \u043d\u04301.6.1 \u00b7 aaaaaaa \u00b7 1 \u0441\u0456\u0447. 2026 \u0440.\n\u0414\u043e\u0441\u0442\u0443\u043f\u043d\u043e1.6.1 \u00b7 ccccccc \u00b7 1 \u0441\u0456\u0447. 2026 \u0440.\n\u041f\u0435\u0440\u0435\u0432\u0456\u0440\u0438\u0442\u0438\n\u0404 \u043e\u043d\u043e\u0432\u043b\u0435\u043d\u043d\u044f \u00b7 3 \u043a\u043e\u043c\u0456\u0442\u0438 \u043f\u043e\u0437\u0430\u0434\u0443 origin/main \u00b7 \u043f\u0435\u0440\u0435\u0432\u0456\u0440\u0435\u043d\u043e \u043e 02:00"
+    },
+    "1440-uk-managed-rolled-back-light": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 185,
+        "y": 237,
+        "width": 1070,
+        "height": 96
+      },
+      "controlVisible": true,
+      "text": "\u0410\u0432\u0442\u043e\u043e\u043d\u043e\u0432\u043b\u0435\u043d\u043d\u044f\n\u0423\u0432\u0456\u043c\u043a\u043d\u0443\u0442\u0438\n\n\u0412\u0438\u043c\u043a\u043d\u0435\u043d\u043e. \u0412\u0438 \u0441\u0430\u043c\u0456 \u043e\u0431\u0438\u0440\u0430\u0454\u0442\u0435 \u0447\u0430\u0441 \u0440\u043e\u0437\u0433\u043e\u0440\u0442\u0430\u043d\u043d\u044f."
+    },
+    "1440-uk-managed-rolled-back-light-failure": {
+      "text": "\u041e\u043d\u043e\u0432\u0438\u0442\u0438 \u0434\u043e bbbbbbb\n\u041e\u043d\u043e\u0432\u0438\u0442\u0438 \u0434\u043e \u043f\u0435\u0440\u0435\u0432\u0456\u0440\u0435\u043d\u043e\u0457 \u0432\u0435\u0440\u0441\u0456\u0457 ccccccc\n\u0420\u043e\u0437\u0433\u043e\u0440\u043d\u0443\u0442\u0438 \u0449\u0435 \u0440\u0430\u0437\n\n\u0420\u043e\u0437\u0433\u043e\u0440\u0442\u0430\u043d\u043d\u044f \u0437\u0443\u043f\u0438\u043d\u0438\u043b\u043e\u0441\u044f \u043d\u0430 \u043a\u0440\u043e\u0446\u0456 \u00ab\u043f\u0435\u0440\u0435\u0432\u0456\u0440\u043a\u0430 \u0437\u0434\u043e\u0440\u043e\u0432'\u044f\u00bb \u0447\u0435\u0440\u0435\u0437 1 \u0445\u0432 00 \u0441. \u0412\u0456\u0434\u043a\u0430\u0442 \u0437\u0430\u0432\u0435\u0440\u0448\u0435\u043d\u043e; \u043f\u043e\u0442\u043e\u0447\u043d\u0456 \u0440\u0435\u0432\u0456\u0437\u0456\u0457 \u043a\u043e\u043c\u043f\u043e\u043d\u0435\u043d\u0442\u0456\u0432 \u043d\u0430\u0432\u0435\u0434\u0435\u043d\u043e \u0432\u0438\u0449\u0435.\n\nadoption 2 of 2 - recovering pending spawns timed out\n\n\u0412\u0438\u0437\u043d\u0430\u0447\u0438\u0442\u0438 bbbbbbb\n\u0417\u0456\u0431\u0440\u0430\u0442\u0438 \u043e\u0431\u0440\u0430\u0437\n\u0417\u0430\u043f\u0443\u0441\u0442\u0438\u0442\u0438 \u043a\u0430\u043d\u0434\u0438\u0434\u0430\u0442\u0430\n\u041f\u0435\u0440\u0435\u0432\u0456\u0440\u043a\u0430 \u0437\u0434\u043e\u0440\u043e\u0432'\u044f\n\u041f\u0435\u0440\u0435\u043c\u043a\u043d\u0443\u0442\u0438 \u0432\u0435\u0431\n\u041f\u0435\u0440\u0435\u0434\u0430\u0442\u0438 runtime host",
+      "rect": {
+        "x": 185,
+        "y": 349,
+        "width": 702.65625,
+        "height": 371.5
+      }
+    },
+    "1440-uk-managed-external-success-light-header": {
+      "text": "\u0412\u0435\u0431 \u043f\u0440\u0430\u0446\u044e\u0454 \u043d\u04301.6.1 \u00b7 ccccccc \u00b7 1 \u0441\u0456\u0447. 2026 \u0440.\nRuntime host \u043f\u0440\u0430\u0446\u044e\u0454 \u043d\u04301.6.1 \u00b7 ccccccc \u00b7 1 \u0441\u0456\u0447. 2026 \u0440.\n\u041f\u0435\u0440\u0435\u0432\u0456\u0440\u0438\u0442\u0438\n\u0410\u043a\u0442\u0443\u0430\u043b\u044c\u043d\u0430 \u0432\u0435\u0440\u0441\u0456\u044f, \u043f\u0435\u0440\u0435\u0432\u0456\u0440\u0435\u043d\u043e \u043e 02:00 \u00b7 \u041d\u0430\u0441\u0442\u0443\u043f\u043d\u0430 \u043f\u0435\u0440\u0435\u0432\u0456\u0440\u043a\u0430 \u043e \u2014"
+    },
+    "1440-uk-managed-external-success-light": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 185,
+        "y": 237,
+        "width": 1070,
+        "height": 96
+      },
+      "controlVisible": true,
+      "text": "\u0410\u0432\u0442\u043e\u043e\u043d\u043e\u0432\u043b\u0435\u043d\u043d\u044f\n\u0423\u0432\u0456\u043c\u043a\u043d\u0443\u0442\u0438\n\n\u0412\u0438\u043c\u043a\u043d\u0435\u043d\u043e. \u0412\u0438 \u0441\u0430\u043c\u0456 \u043e\u0431\u0438\u0440\u0430\u0454\u0442\u0435 \u0447\u0430\u0441 \u0440\u043e\u0437\u0433\u043e\u0440\u0442\u0430\u043d\u043d\u044f."
+    },
+    "1440-uk-managed-external-success-light-failure": {
+      "text": "\u041f\u043e\u043f\u0435\u0440\u0435\u0434\u043d\u0454 \u0440\u043e\u0437\u0433\u043e\u0440\u0442\u0430\u043d\u043d\u044f bbbbbbb \u0437\u0430\u0432\u0435\u0440\u0448\u0438\u043b\u043e\u0441\u044f \u043f\u043e\u043c\u0438\u043b\u043a\u043e\u044e.\n\nadoption 2 of 2 - recovering pending spawns timed out",
+      "rect": {
+        "x": 185,
+        "y": 678.25,
+        "width": 702.65625,
+        "height": 80.5
+      }
+    },
+    "1440-uk-managed-external-success-light-reloaded": {
+      "previous": "\u041f\u043e\u043f\u0435\u0440\u0435\u0434\u043d\u0454 \u0440\u043e\u0437\u0433\u043e\u0440\u0442\u0430\u043d\u043d\u044f bbbbbbb \u0437\u0430\u0432\u0435\u0440\u0448\u0438\u043b\u043e\u0441\u044f \u043f\u043e\u043c\u0438\u043b\u043a\u043e\u044e.\n\nadoption 2 of 2 - recovering pending spawns timed out"
+    },
+    "1440-uk-managed-external-success-unknown-host-light-header": {
+      "text": "\u0412\u0435\u0431 \u043f\u0440\u0430\u0446\u044e\u0454 \u043d\u04301.6.1 \u00b7 ccccccc \u00b7 1 \u0441\u0456\u0447. 2026 \u0440.\nRuntime host\u0440\u0435\u0432\u0456\u0437\u0456\u044f \u043d\u0435\u0432\u0456\u0434\u043e\u043c\u0430\n\u041f\u0435\u0440\u0435\u0432\u0456\u0440\u0438\u0442\u0438\n\u0410\u043a\u0442\u0443\u0430\u043b\u044c\u043d\u0430 \u0432\u0435\u0440\u0441\u0456\u044f, \u043f\u0435\u0440\u0435\u0432\u0456\u0440\u0435\u043d\u043e \u043e 02:00 \u00b7 \u041d\u0430\u0441\u0442\u0443\u043f\u043d\u0430 \u043f\u0435\u0440\u0435\u0432\u0456\u0440\u043a\u0430 \u043e \u2014"
+    },
+    "1440-uk-managed-external-success-unknown-host-light": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 185,
+        "y": 237,
+        "width": 1070,
+        "height": 96
+      },
+      "controlVisible": true,
+      "text": "\u0410\u0432\u0442\u043e\u043e\u043d\u043e\u0432\u043b\u0435\u043d\u043d\u044f\n\u0423\u0432\u0456\u043c\u043a\u043d\u0443\u0442\u0438\n\n\u0412\u0438\u043c\u043a\u043d\u0435\u043d\u043e. \u0412\u0438 \u0441\u0430\u043c\u0456 \u043e\u0431\u0438\u0440\u0430\u0454\u0442\u0435 \u0447\u0430\u0441 \u0440\u043e\u0437\u0433\u043e\u0440\u0442\u0430\u043d\u043d\u044f."
+    },
+    "1440-uk-managed-external-success-unknown-host-light-failure": {
+      "text": "\u041f\u043e\u043f\u0435\u0440\u0435\u0434\u043d\u0454 \u0440\u043e\u0437\u0433\u043e\u0440\u0442\u0430\u043d\u043d\u044f bbbbbbb \u0437\u0430\u0432\u0435\u0440\u0448\u0438\u043b\u043e\u0441\u044f \u043f\u043e\u043c\u0438\u043b\u043a\u043e\u044e.\n\nadoption 2 of 2 - recovering pending spawns timed out",
+      "rect": {
+        "x": 185,
+        "y": 678.25,
+        "width": 702.65625,
+        "height": 80.5
+      }
+    },
+    "1440-uk-managed-external-success-unknown-host-light-reloaded": {
+      "previous": "\u041f\u043e\u043f\u0435\u0440\u0435\u0434\u043d\u0454 \u0440\u043e\u0437\u0433\u043e\u0440\u0442\u0430\u043d\u043d\u044f bbbbbbb \u0437\u0430\u0432\u0435\u0440\u0448\u0438\u043b\u043e\u0441\u044f \u043f\u043e\u043c\u0438\u043b\u043a\u043e\u044e.\n\nadoption 2 of 2 - recovering pending spawns timed out"
+    },
+    "1440-uk-managed-unknown-host-light-header": {
+      "text": "\u0412\u0435\u0431 \u043f\u0440\u0430\u0446\u044e\u0454 \u043d\u04301.6.1 \u00b7 bbbbbbb \u00b7 1 \u0441\u0456\u0447. 2026 \u0440.\nRuntime host\u0440\u0435\u0432\u0456\u0437\u0456\u044f \u043d\u0435\u0432\u0456\u0434\u043e\u043c\u0430\n\u0414\u043e\u0441\u0442\u0443\u043f\u043d\u043e1.6.1 \u00b7 ccccccc \u00b7 1 \u0441\u0456\u0447. 2026 \u0440.\n\u041f\u0435\u0440\u0435\u0432\u0456\u0440\u0438\u0442\u0438\n\u0404 \u043e\u043d\u043e\u0432\u043b\u0435\u043d\u043d\u044f \u00b7 3 \u043a\u043e\u043c\u0456\u0442\u0438 \u043f\u043e\u0437\u0430\u0434\u0443 origin/main \u00b7 \u043f\u0435\u0440\u0435\u0432\u0456\u0440\u0435\u043d\u043e \u043e 02:00"
+    },
+    "1440-uk-managed-unknown-host-light": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 185,
+        "y": 237,
+        "width": 1070,
+        "height": 96
+      },
+      "controlVisible": true,
+      "text": "\u0410\u0432\u0442\u043e\u043e\u043d\u043e\u0432\u043b\u0435\u043d\u043d\u044f\n\u0423\u0432\u0456\u043c\u043a\u043d\u0443\u0442\u0438\n\n\u0412\u0438\u043c\u043a\u043d\u0435\u043d\u043e. \u0412\u0438 \u0441\u0430\u043c\u0456 \u043e\u0431\u0438\u0440\u0430\u0454\u0442\u0435 \u0447\u0430\u0441 \u0440\u043e\u0437\u0433\u043e\u0440\u0442\u0430\u043d\u043d\u044f."
+    },
+    "1440-uk-managed-unknown-host-light-failure": {
+      "text": "\u041e\u043d\u043e\u0432\u0438\u0442\u0438 \u0434\u043e bbbbbbb\n\u041e\u043d\u043e\u0432\u0438\u0442\u0438 \u0434\u043e \u043f\u0435\u0440\u0435\u0432\u0456\u0440\u0435\u043d\u043e\u0457 \u0432\u0435\u0440\u0441\u0456\u0457 ccccccc\n\u0420\u043e\u0437\u0433\u043e\u0440\u043d\u0443\u0442\u0438 \u0449\u0435 \u0440\u0430\u0437\n\n\u0420\u043e\u0437\u0433\u043e\u0440\u0442\u0430\u043d\u043d\u044f \u0437\u0443\u043f\u0438\u043d\u0438\u043b\u043e\u0441\u044f \u043d\u0430 \u043a\u0440\u043e\u0446\u0456 \u00ab\u043f\u0435\u0440\u0435\u0432\u0456\u0440\u043a\u0430 \u0437\u0434\u043e\u0440\u043e\u0432'\u044f\u00bb \u0447\u0435\u0440\u0435\u0437 1 \u0445\u0432 00 \u0441.\n\nadoption 2 of 2 - recovering pending spawns timed out\n\n\u0412\u0438\u0437\u043d\u0430\u0447\u0438\u0442\u0438 bbbbbbb\n\u0417\u0456\u0431\u0440\u0430\u0442\u0438 \u043e\u0431\u0440\u0430\u0437\n\u0417\u0430\u043f\u0443\u0441\u0442\u0438\u0442\u0438 \u043a\u0430\u043d\u0434\u0438\u0434\u0430\u0442\u0430\n\u041f\u0435\u0440\u0435\u0432\u0456\u0440\u043a\u0430 \u0437\u0434\u043e\u0440\u043e\u0432'\u044f\n\u041f\u0435\u0440\u0435\u043c\u043a\u043d\u0443\u0442\u0438 \u0432\u0435\u0431\n\u041f\u0435\u0440\u0435\u0434\u0430\u0442\u0438 runtime host",
+      "rect": {
+        "x": 185,
+        "y": 349,
+        "width": 702.65625,
+        "height": 353.5
+      }
+    },
+    "1440-uk-managed-failed-dark-header": {
+      "text": "\u0412\u0435\u0431 \u043f\u0440\u0430\u0446\u044e\u0454 \u043d\u04301.6.1 \u00b7 ddddddd \u00b7 1 \u0441\u0456\u0447. 2026 \u0440.\nRuntime host \u043f\u0440\u0430\u0446\u044e\u0454 \u043d\u04301.6.1 \u00b7 aaaaaaa \u00b7 1 \u0441\u0456\u0447. 2026 \u0440.\n\u0414\u043e\u0441\u0442\u0443\u043f\u043d\u043e1.6.1 \u00b7 ccccccc \u00b7 1 \u0441\u0456\u0447. 2026 \u0440.\n\u041f\u0435\u0440\u0435\u0432\u0456\u0440\u0438\u0442\u0438\n\u0404 \u043e\u043d\u043e\u0432\u043b\u0435\u043d\u043d\u044f \u00b7 3 \u043a\u043e\u043c\u0456\u0442\u0438 \u043f\u043e\u0437\u0430\u0434\u0443 origin/main \u00b7 \u043f\u0435\u0440\u0435\u0432\u0456\u0440\u0435\u043d\u043e \u043e 02:00"
+    },
+    "1440-uk-managed-failed-dark": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 185,
+        "y": 237,
+        "width": 1070,
+        "height": 96
+      },
+      "controlVisible": true,
+      "text": "\u0410\u0432\u0442\u043e\u043e\u043d\u043e\u0432\u043b\u0435\u043d\u043d\u044f\n\u0423\u0432\u0456\u043c\u043a\u043d\u0443\u0442\u0438\n\n\u0412\u0438\u043c\u043a\u043d\u0435\u043d\u043e. \u0412\u0438 \u0441\u0430\u043c\u0456 \u043e\u0431\u0438\u0440\u0430\u0454\u0442\u0435 \u0447\u0430\u0441 \u0440\u043e\u0437\u0433\u043e\u0440\u0442\u0430\u043d\u043d\u044f."
+    },
+    "1440-uk-managed-failed-dark-failure": {
+      "text": "\u041e\u043d\u043e\u0432\u0438\u0442\u0438 \u0434\u043e bbbbbbb\n\u041e\u043d\u043e\u0432\u0438\u0442\u0438 \u0434\u043e \u043f\u0435\u0440\u0435\u0432\u0456\u0440\u0435\u043d\u043e\u0457 \u0432\u0435\u0440\u0441\u0456\u0457 ccccccc\n\u0420\u043e\u0437\u0433\u043e\u0440\u043d\u0443\u0442\u0438 \u0449\u0435 \u0440\u0430\u0437\n\n\u0420\u043e\u0437\u0433\u043e\u0440\u0442\u0430\u043d\u043d\u044f \u0437\u0443\u043f\u0438\u043d\u0438\u043b\u043e\u0441\u044f \u043d\u0430 \u043a\u0440\u043e\u0446\u0456 \u00ab\u043f\u0435\u0440\u0435\u0432\u0456\u0440\u043a\u0430 \u0437\u0434\u043e\u0440\u043e\u0432'\u044f\u00bb \u0447\u0435\u0440\u0435\u0437 1 \u0445\u0432 00 \u0441.\n\nadoption 2 of 2 - recovering pending spawns timed out\n\n\u0412\u0438\u0437\u043d\u0430\u0447\u0438\u0442\u0438 bbbbbbb\n\u0417\u0456\u0431\u0440\u0430\u0442\u0438 \u043e\u0431\u0440\u0430\u0437\n\u0417\u0430\u043f\u0443\u0441\u0442\u0438\u0442\u0438 \u043a\u0430\u043d\u0434\u0438\u0434\u0430\u0442\u0430\n\u041f\u0435\u0440\u0435\u0432\u0456\u0440\u043a\u0430 \u0437\u0434\u043e\u0440\u043e\u0432'\u044f\n\u041f\u0435\u0440\u0435\u043c\u043a\u043d\u0443\u0442\u0438 \u0432\u0435\u0431\n\u041f\u0435\u0440\u0435\u0434\u0430\u0442\u0438 runtime host",
+      "rect": {
+        "x": 185,
+        "y": 349,
+        "width": 702.65625,
+        "height": 353.5
+      }
+    },
+    "1440-uk-managed-rolling-back-dark-header": {
+      "text": "\u0412\u0435\u0431 \u043f\u0440\u0430\u0446\u044e\u0454 \u043d\u04301.6.1 \u00b7 ddddddd \u00b7 1 \u0441\u0456\u0447. 2026 \u0440.\nRuntime host \u043f\u0440\u0430\u0446\u044e\u0454 \u043d\u04301.6.1 \u00b7 aaaaaaa \u00b7 1 \u0441\u0456\u0447. 2026 \u0440.\n\u0414\u043e\u0441\u0442\u0443\u043f\u043d\u043e1.6.1 \u00b7 ccccccc \u00b7 1 \u0441\u0456\u0447. 2026 \u0440.\n\u041f\u0435\u0440\u0435\u0432\u0456\u0440\u0438\u0442\u0438\n\u0404 \u043e\u043d\u043e\u0432\u043b\u0435\u043d\u043d\u044f \u00b7 3 \u043a\u043e\u043c\u0456\u0442\u0438 \u043f\u043e\u0437\u0430\u0434\u0443 origin/main \u00b7 \u043f\u0435\u0440\u0435\u0432\u0456\u0440\u0435\u043d\u043e \u043e 02:00"
+    },
+    "1440-uk-managed-rolling-back-dark": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 185,
+        "y": 237,
+        "width": 1070,
+        "height": 96
+      },
+      "controlVisible": true,
+      "text": "\u0410\u0432\u0442\u043e\u043e\u043d\u043e\u0432\u043b\u0435\u043d\u043d\u044f\n\u0423\u0432\u0456\u043c\u043a\u043d\u0443\u0442\u0438\n\n\u0412\u0438\u043c\u043a\u043d\u0435\u043d\u043e. \u0412\u0438 \u0441\u0430\u043c\u0456 \u043e\u0431\u0438\u0440\u0430\u0454\u0442\u0435 \u0447\u0430\u0441 \u0440\u043e\u0437\u0433\u043e\u0440\u0442\u0430\u043d\u043d\u044f."
+    },
+    "1440-uk-managed-rolling-back-dark-failure": {
+      "text": "\u041e\u043d\u043e\u0432\u0438\u0442\u0438 \u0434\u043e bbbbbbb\n\u041e\u043d\u043e\u0432\u0438\u0442\u0438 \u0434\u043e \u043f\u0435\u0440\u0435\u0432\u0456\u0440\u0435\u043d\u043e\u0457 \u0432\u0435\u0440\u0441\u0456\u0457 ccccccc\n\u0420\u043e\u0437\u0433\u043e\u0440\u043d\u0443\u0442\u0438 \u0449\u0435 \u0440\u0430\u0437\n\n\u0420\u043e\u0437\u0433\u043e\u0440\u0442\u0430\u043d\u043d\u044f \u0437\u0443\u043f\u0438\u043d\u0438\u043b\u043e\u0441\u044f \u043d\u0430 \u043a\u0440\u043e\u0446\u0456 \u00ab\u043f\u0435\u0440\u0435\u0432\u0456\u0440\u043a\u0430 \u0437\u0434\u043e\u0440\u043e\u0432'\u044f\u00bb \u0447\u0435\u0440\u0435\u0437 1 \u0445\u0432 00 \u0441. \u0422\u0440\u0438\u0432\u0430\u0454 \u0432\u0456\u0434\u043a\u0430\u0442.\n\nadoption 2 of 2 - recovering pending spawns timed out\n\n\u0412\u0438\u0437\u043d\u0430\u0447\u0438\u0442\u0438 bbbbbbb\n\u0417\u0456\u0431\u0440\u0430\u0442\u0438 \u043e\u0431\u0440\u0430\u0437\n\u0417\u0430\u043f\u0443\u0441\u0442\u0438\u0442\u0438 \u043a\u0430\u043d\u0434\u0438\u0434\u0430\u0442\u0430\n\u041f\u0435\u0440\u0435\u0432\u0456\u0440\u043a\u0430 \u0437\u0434\u043e\u0440\u043e\u0432'\u044f\n\u041f\u0435\u0440\u0435\u043c\u043a\u043d\u0443\u0442\u0438 \u0432\u0435\u0431\n\u041f\u0435\u0440\u0435\u0434\u0430\u0442\u0438 runtime host",
+      "rect": {
+        "x": 185,
+        "y": 349,
+        "width": 702.65625,
+        "height": 353.5
+      }
+    },
+    "1440-uk-managed-rollback-failed-dark-header": {
+      "text": "\u0412\u0435\u0431 \u043f\u0440\u0430\u0446\u044e\u0454 \u043d\u04301.6.1 \u00b7 ddddddd \u00b7 1 \u0441\u0456\u0447. 2026 \u0440.\nRuntime host \u043f\u0440\u0430\u0446\u044e\u0454 \u043d\u04301.6.1 \u00b7 aaaaaaa \u00b7 1 \u0441\u0456\u0447. 2026 \u0440.\n\u0414\u043e\u0441\u0442\u0443\u043f\u043d\u043e1.6.1 \u00b7 ccccccc \u00b7 1 \u0441\u0456\u0447. 2026 \u0440.\n\u041f\u0435\u0440\u0435\u0432\u0456\u0440\u0438\u0442\u0438\n\u0404 \u043e\u043d\u043e\u0432\u043b\u0435\u043d\u043d\u044f \u00b7 3 \u043a\u043e\u043c\u0456\u0442\u0438 \u043f\u043e\u0437\u0430\u0434\u0443 origin/main \u00b7 \u043f\u0435\u0440\u0435\u0432\u0456\u0440\u0435\u043d\u043e \u043e 02:00"
+    },
+    "1440-uk-managed-rollback-failed-dark": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 185,
+        "y": 237,
+        "width": 1070,
+        "height": 96
+      },
+      "controlVisible": true,
+      "text": "\u0410\u0432\u0442\u043e\u043e\u043d\u043e\u0432\u043b\u0435\u043d\u043d\u044f\n\u0423\u0432\u0456\u043c\u043a\u043d\u0443\u0442\u0438\n\n\u0412\u0438\u043c\u043a\u043d\u0435\u043d\u043e. \u0412\u0438 \u0441\u0430\u043c\u0456 \u043e\u0431\u0438\u0440\u0430\u0454\u0442\u0435 \u0447\u0430\u0441 \u0440\u043e\u0437\u0433\u043e\u0440\u0442\u0430\u043d\u043d\u044f."
+    },
+    "1440-uk-managed-rollback-failed-dark-failure": {
+      "text": "\u041e\u043d\u043e\u0432\u0438\u0442\u0438 \u0434\u043e bbbbbbb\n\u041e\u043d\u043e\u0432\u0438\u0442\u0438 \u0434\u043e \u043f\u0435\u0440\u0435\u0432\u0456\u0440\u0435\u043d\u043e\u0457 \u0432\u0435\u0440\u0441\u0456\u0457 ccccccc\n\u0420\u043e\u0437\u0433\u043e\u0440\u043d\u0443\u0442\u0438 \u0449\u0435 \u0440\u0430\u0437\n\n\u0420\u043e\u0437\u0433\u043e\u0440\u0442\u0430\u043d\u043d\u044f \u0437\u0443\u043f\u0438\u043d\u0438\u043b\u043e\u0441\u044f \u043d\u0430 \u043a\u0440\u043e\u0446\u0456 \u00ab\u043f\u0435\u0440\u0435\u0432\u0456\u0440\u043a\u0430 \u0437\u0434\u043e\u0440\u043e\u0432'\u044f\u00bb \u0447\u0435\u0440\u0435\u0437 1 \u0445\u0432 00 \u0441.\n\nrecovering pending spawns timed out; rollback could not prove owner death\n\n\u0412\u0438\u0437\u043d\u0430\u0447\u0438\u0442\u0438 bbbbbbb\n\u0417\u0456\u0431\u0440\u0430\u0442\u0438 \u043e\u0431\u0440\u0430\u0437\n\u0417\u0430\u043f\u0443\u0441\u0442\u0438\u0442\u0438 \u043a\u0430\u043d\u0434\u0438\u0434\u0430\u0442\u0430\n\u041f\u0435\u0440\u0435\u0432\u0456\u0440\u043a\u0430 \u0437\u0434\u043e\u0440\u043e\u0432'\u044f\n\u041f\u0435\u0440\u0435\u043c\u043a\u043d\u0443\u0442\u0438 \u0432\u0435\u0431\n\u041f\u0435\u0440\u0435\u0434\u0430\u0442\u0438 runtime host",
+      "rect": {
+        "x": 185,
+        "y": 349,
+        "width": 702.65625,
+        "height": 353.5
+      }
+    },
+    "1440-uk-managed-rolled-back-dark-header": {
+      "text": "\u0412\u0435\u0431 \u043f\u0440\u0430\u0446\u044e\u0454 \u043d\u04301.6.1 \u00b7 aaaaaaa \u00b7 1 \u0441\u0456\u0447. 2026 \u0440.\nRuntime host \u043f\u0440\u0430\u0446\u044e\u0454 \u043d\u04301.6.1 \u00b7 aaaaaaa \u00b7 1 \u0441\u0456\u0447. 2026 \u0440.\n\u0414\u043e\u0441\u0442\u0443\u043f\u043d\u043e1.6.1 \u00b7 ccccccc \u00b7 1 \u0441\u0456\u0447. 2026 \u0440.\n\u041f\u0435\u0440\u0435\u0432\u0456\u0440\u0438\u0442\u0438\n\u0404 \u043e\u043d\u043e\u0432\u043b\u0435\u043d\u043d\u044f \u00b7 3 \u043a\u043e\u043c\u0456\u0442\u0438 \u043f\u043e\u0437\u0430\u0434\u0443 origin/main \u00b7 \u043f\u0435\u0440\u0435\u0432\u0456\u0440\u0435\u043d\u043e \u043e 02:00"
+    },
+    "1440-uk-managed-rolled-back-dark": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 185,
+        "y": 237,
+        "width": 1070,
+        "height": 96
+      },
+      "controlVisible": true,
+      "text": "\u0410\u0432\u0442\u043e\u043e\u043d\u043e\u0432\u043b\u0435\u043d\u043d\u044f\n\u0423\u0432\u0456\u043c\u043a\u043d\u0443\u0442\u0438\n\n\u0412\u0438\u043c\u043a\u043d\u0435\u043d\u043e. \u0412\u0438 \u0441\u0430\u043c\u0456 \u043e\u0431\u0438\u0440\u0430\u0454\u0442\u0435 \u0447\u0430\u0441 \u0440\u043e\u0437\u0433\u043e\u0440\u0442\u0430\u043d\u043d\u044f."
+    },
+    "1440-uk-managed-rolled-back-dark-failure": {
+      "text": "\u041e\u043d\u043e\u0432\u0438\u0442\u0438 \u0434\u043e bbbbbbb\n\u041e\u043d\u043e\u0432\u0438\u0442\u0438 \u0434\u043e \u043f\u0435\u0440\u0435\u0432\u0456\u0440\u0435\u043d\u043e\u0457 \u0432\u0435\u0440\u0441\u0456\u0457 ccccccc\n\u0420\u043e\u0437\u0433\u043e\u0440\u043d\u0443\u0442\u0438 \u0449\u0435 \u0440\u0430\u0437\n\n\u0420\u043e\u0437\u0433\u043e\u0440\u0442\u0430\u043d\u043d\u044f \u0437\u0443\u043f\u0438\u043d\u0438\u043b\u043e\u0441\u044f \u043d\u0430 \u043a\u0440\u043e\u0446\u0456 \u00ab\u043f\u0435\u0440\u0435\u0432\u0456\u0440\u043a\u0430 \u0437\u0434\u043e\u0440\u043e\u0432'\u044f\u00bb \u0447\u0435\u0440\u0435\u0437 1 \u0445\u0432 00 \u0441. \u0412\u0456\u0434\u043a\u0430\u0442 \u0437\u0430\u0432\u0435\u0440\u0448\u0435\u043d\u043e; \u043f\u043e\u0442\u043e\u0447\u043d\u0456 \u0440\u0435\u0432\u0456\u0437\u0456\u0457 \u043a\u043e\u043c\u043f\u043e\u043d\u0435\u043d\u0442\u0456\u0432 \u043d\u0430\u0432\u0435\u0434\u0435\u043d\u043e \u0432\u0438\u0449\u0435.\n\nadoption 2 of 2 - recovering pending spawns timed out\n\n\u0412\u0438\u0437\u043d\u0430\u0447\u0438\u0442\u0438 bbbbbbb\n\u0417\u0456\u0431\u0440\u0430\u0442\u0438 \u043e\u0431\u0440\u0430\u0437\n\u0417\u0430\u043f\u0443\u0441\u0442\u0438\u0442\u0438 \u043a\u0430\u043d\u0434\u0438\u0434\u0430\u0442\u0430\n\u041f\u0435\u0440\u0435\u0432\u0456\u0440\u043a\u0430 \u0437\u0434\u043e\u0440\u043e\u0432'\u044f\n\u041f\u0435\u0440\u0435\u043c\u043a\u043d\u0443\u0442\u0438 \u0432\u0435\u0431\n\u041f\u0435\u0440\u0435\u0434\u0430\u0442\u0438 runtime host",
+      "rect": {
+        "x": 185,
+        "y": 349,
+        "width": 702.65625,
+        "height": 371.5
+      }
+    },
+    "1440-uk-managed-external-success-dark-header": {
+      "text": "\u0412\u0435\u0431 \u043f\u0440\u0430\u0446\u044e\u0454 \u043d\u04301.6.1 \u00b7 ccccccc \u00b7 1 \u0441\u0456\u0447. 2026 \u0440.\nRuntime host \u043f\u0440\u0430\u0446\u044e\u0454 \u043d\u04301.6.1 \u00b7 ccccccc \u00b7 1 \u0441\u0456\u0447. 2026 \u0440.\n\u041f\u0435\u0440\u0435\u0432\u0456\u0440\u0438\u0442\u0438\n\u0410\u043a\u0442\u0443\u0430\u043b\u044c\u043d\u0430 \u0432\u0435\u0440\u0441\u0456\u044f, \u043f\u0435\u0440\u0435\u0432\u0456\u0440\u0435\u043d\u043e \u043e 02:00 \u00b7 \u041d\u0430\u0441\u0442\u0443\u043f\u043d\u0430 \u043f\u0435\u0440\u0435\u0432\u0456\u0440\u043a\u0430 \u043e \u2014"
+    },
+    "1440-uk-managed-external-success-dark": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 185,
+        "y": 237,
+        "width": 1070,
+        "height": 96
+      },
+      "controlVisible": true,
+      "text": "\u0410\u0432\u0442\u043e\u043e\u043d\u043e\u0432\u043b\u0435\u043d\u043d\u044f\n\u0423\u0432\u0456\u043c\u043a\u043d\u0443\u0442\u0438\n\n\u0412\u0438\u043c\u043a\u043d\u0435\u043d\u043e. \u0412\u0438 \u0441\u0430\u043c\u0456 \u043e\u0431\u0438\u0440\u0430\u0454\u0442\u0435 \u0447\u0430\u0441 \u0440\u043e\u0437\u0433\u043e\u0440\u0442\u0430\u043d\u043d\u044f."
+    },
+    "1440-uk-managed-external-success-dark-failure": {
+      "text": "\u041f\u043e\u043f\u0435\u0440\u0435\u0434\u043d\u0454 \u0440\u043e\u0437\u0433\u043e\u0440\u0442\u0430\u043d\u043d\u044f bbbbbbb \u0437\u0430\u0432\u0435\u0440\u0448\u0438\u043b\u043e\u0441\u044f \u043f\u043e\u043c\u0438\u043b\u043a\u043e\u044e.\n\nadoption 2 of 2 - recovering pending spawns timed out",
+      "rect": {
+        "x": 185,
+        "y": 678.25,
+        "width": 702.65625,
+        "height": 80.5
+      }
+    },
+    "1440-uk-managed-external-success-dark-reloaded": {
+      "previous": "\u041f\u043e\u043f\u0435\u0440\u0435\u0434\u043d\u0454 \u0440\u043e\u0437\u0433\u043e\u0440\u0442\u0430\u043d\u043d\u044f bbbbbbb \u0437\u0430\u0432\u0435\u0440\u0448\u0438\u043b\u043e\u0441\u044f \u043f\u043e\u043c\u0438\u043b\u043a\u043e\u044e.\n\nadoption 2 of 2 - recovering pending spawns timed out"
+    },
+    "1440-uk-managed-external-success-unknown-host-dark-header": {
+      "text": "\u0412\u0435\u0431 \u043f\u0440\u0430\u0446\u044e\u0454 \u043d\u04301.6.1 \u00b7 ccccccc \u00b7 1 \u0441\u0456\u0447. 2026 \u0440.\nRuntime host\u0440\u0435\u0432\u0456\u0437\u0456\u044f \u043d\u0435\u0432\u0456\u0434\u043e\u043c\u0430\n\u041f\u0435\u0440\u0435\u0432\u0456\u0440\u0438\u0442\u0438\n\u0410\u043a\u0442\u0443\u0430\u043b\u044c\u043d\u0430 \u0432\u0435\u0440\u0441\u0456\u044f, \u043f\u0435\u0440\u0435\u0432\u0456\u0440\u0435\u043d\u043e \u043e 02:00 \u00b7 \u041d\u0430\u0441\u0442\u0443\u043f\u043d\u0430 \u043f\u0435\u0440\u0435\u0432\u0456\u0440\u043a\u0430 \u043e \u2014"
+    },
+    "1440-uk-managed-external-success-unknown-host-dark": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 185,
+        "y": 237,
+        "width": 1070,
+        "height": 96
+      },
+      "controlVisible": true,
+      "text": "\u0410\u0432\u0442\u043e\u043e\u043d\u043e\u0432\u043b\u0435\u043d\u043d\u044f\n\u0423\u0432\u0456\u043c\u043a\u043d\u0443\u0442\u0438\n\n\u0412\u0438\u043c\u043a\u043d\u0435\u043d\u043e. \u0412\u0438 \u0441\u0430\u043c\u0456 \u043e\u0431\u0438\u0440\u0430\u0454\u0442\u0435 \u0447\u0430\u0441 \u0440\u043e\u0437\u0433\u043e\u0440\u0442\u0430\u043d\u043d\u044f."
+    },
+    "1440-uk-managed-external-success-unknown-host-dark-failure": {
+      "text": "\u041f\u043e\u043f\u0435\u0440\u0435\u0434\u043d\u0454 \u0440\u043e\u0437\u0433\u043e\u0440\u0442\u0430\u043d\u043d\u044f bbbbbbb \u0437\u0430\u0432\u0435\u0440\u0448\u0438\u043b\u043e\u0441\u044f \u043f\u043e\u043c\u0438\u043b\u043a\u043e\u044e.\n\nadoption 2 of 2 - recovering pending spawns timed out",
+      "rect": {
+        "x": 185,
+        "y": 678.25,
+        "width": 702.65625,
+        "height": 80.5
+      }
+    },
+    "1440-uk-managed-external-success-unknown-host-dark-reloaded": {
+      "previous": "\u041f\u043e\u043f\u0435\u0440\u0435\u0434\u043d\u0454 \u0440\u043e\u0437\u0433\u043e\u0440\u0442\u0430\u043d\u043d\u044f bbbbbbb \u0437\u0430\u0432\u0435\u0440\u0448\u0438\u043b\u043e\u0441\u044f \u043f\u043e\u043c\u0438\u043b\u043a\u043e\u044e.\n\nadoption 2 of 2 - recovering pending spawns timed out"
+    },
+    "1440-uk-managed-unknown-host-dark-header": {
+      "text": "\u0412\u0435\u0431 \u043f\u0440\u0430\u0446\u044e\u0454 \u043d\u04301.6.1 \u00b7 bbbbbbb \u00b7 1 \u0441\u0456\u0447. 2026 \u0440.\nRuntime host\u0440\u0435\u0432\u0456\u0437\u0456\u044f \u043d\u0435\u0432\u0456\u0434\u043e\u043c\u0430\n\u0414\u043e\u0441\u0442\u0443\u043f\u043d\u043e1.6.1 \u00b7 ccccccc \u00b7 1 \u0441\u0456\u0447. 2026 \u0440.\n\u041f\u0435\u0440\u0435\u0432\u0456\u0440\u0438\u0442\u0438\n\u0404 \u043e\u043d\u043e\u0432\u043b\u0435\u043d\u043d\u044f \u00b7 3 \u043a\u043e\u043c\u0456\u0442\u0438 \u043f\u043e\u0437\u0430\u0434\u0443 origin/main \u00b7 \u043f\u0435\u0440\u0435\u0432\u0456\u0440\u0435\u043d\u043e \u043e 02:00"
+    },
+    "1440-uk-managed-unknown-host-dark": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 185,
+        "y": 237,
+        "width": 1070,
+        "height": 96
+      },
+      "controlVisible": true,
+      "text": "\u0410\u0432\u0442\u043e\u043e\u043d\u043e\u0432\u043b\u0435\u043d\u043d\u044f\n\u0423\u0432\u0456\u043c\u043a\u043d\u0443\u0442\u0438\n\n\u0412\u0438\u043c\u043a\u043d\u0435\u043d\u043e. \u0412\u0438 \u0441\u0430\u043c\u0456 \u043e\u0431\u0438\u0440\u0430\u0454\u0442\u0435 \u0447\u0430\u0441 \u0440\u043e\u0437\u0433\u043e\u0440\u0442\u0430\u043d\u043d\u044f."
+    },
+    "1440-uk-managed-unknown-host-dark-failure": {
+      "text": "\u041e\u043d\u043e\u0432\u0438\u0442\u0438 \u0434\u043e bbbbbbb\n\u041e\u043d\u043e\u0432\u0438\u0442\u0438 \u0434\u043e \u043f\u0435\u0440\u0435\u0432\u0456\u0440\u0435\u043d\u043e\u0457 \u0432\u0435\u0440\u0441\u0456\u0457 ccccccc\n\u0420\u043e\u0437\u0433\u043e\u0440\u043d\u0443\u0442\u0438 \u0449\u0435 \u0440\u0430\u0437\n\n\u0420\u043e\u0437\u0433\u043e\u0440\u0442\u0430\u043d\u043d\u044f \u0437\u0443\u043f\u0438\u043d\u0438\u043b\u043e\u0441\u044f \u043d\u0430 \u043a\u0440\u043e\u0446\u0456 \u00ab\u043f\u0435\u0440\u0435\u0432\u0456\u0440\u043a\u0430 \u0437\u0434\u043e\u0440\u043e\u0432'\u044f\u00bb \u0447\u0435\u0440\u0435\u0437 1 \u0445\u0432 00 \u0441.\n\nadoption 2 of 2 - recovering pending spawns timed out\n\n\u0412\u0438\u0437\u043d\u0430\u0447\u0438\u0442\u0438 bbbbbbb\n\u0417\u0456\u0431\u0440\u0430\u0442\u0438 \u043e\u0431\u0440\u0430\u0437\n\u0417\u0430\u043f\u0443\u0441\u0442\u0438\u0442\u0438 \u043a\u0430\u043d\u0434\u0438\u0434\u0430\u0442\u0430\n\u041f\u0435\u0440\u0435\u0432\u0456\u0440\u043a\u0430 \u0437\u0434\u043e\u0440\u043e\u0432'\u044f\n\u041f\u0435\u0440\u0435\u043c\u043a\u043d\u0443\u0442\u0438 \u0432\u0435\u0431\n\u041f\u0435\u0440\u0435\u0434\u0430\u0442\u0438 runtime host",
+      "rect": {
+        "x": 185,
+        "y": 349,
+        "width": 702.65625,
+        "height": 353.5
+      }
+    },
+    "1000-en-managed-failed-light-header": {
+      "text": "Web runs1.6.1 \u00b7 ddddddd \u00b7 1 Jan 2026\nRuntime host runs1.6.1 \u00b7 aaaaaaa \u00b7 1 Jan 2026\nAvailable1.6.1 \u00b7 ccccccc \u00b7 1 Jan 2026\nCheck now\nUpdate available \u00b7 3 commits behind origin/main \u00b7 checked 02:00"
+    },
+    "1000-en-managed-failed-light": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 73,
+        "y": 247,
+        "width": 854,
+        "height": 96
+      },
+      "controlVisible": true,
+      "text": "Automatic updates\nTurn on\n\nOff. You choose when to deploy."
+    },
+    "1000-en-managed-failed-light-failure": {
+      "text": "Update to bbbbbbb\nUpdate to checked ccccccc\nDeploy again\n\nDeployment stopped at health check after 1 m 00 s.\n\nadoption 2 of 2 - recovering pending spawns timed out\n\nResolve bbbbbbb\nBuild image\nStart candidate\nHealth check\nSwitch web\nHand over runtime host",
+      "rect": {
+        "x": 73,
+        "y": 359,
+        "width": 558.65625,
+        "height": 353.5
+      }
+    },
+    "1000-en-managed-rolling-back-light-header": {
+      "text": "Web runs1.6.1 \u00b7 ddddddd \u00b7 1 Jan 2026\nRuntime host runs1.6.1 \u00b7 aaaaaaa \u00b7 1 Jan 2026\nAvailable1.6.1 \u00b7 ccccccc \u00b7 1 Jan 2026\nCheck now\nUpdate available \u00b7 3 commits behind origin/main \u00b7 checked 02:00"
+    },
+    "1000-en-managed-rolling-back-light": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 73,
+        "y": 247,
+        "width": 854,
+        "height": 96
+      },
+      "controlVisible": true,
+      "text": "Automatic updates\nTurn on\n\nOff. You choose when to deploy."
+    },
+    "1000-en-managed-rolling-back-light-failure": {
+      "text": "Update to bbbbbbb\nUpdate to checked ccccccc\nDeploy again\n\nDeployment stopped at health check after 1 m 00 s. Rollback is in progress.\n\nadoption 2 of 2 - recovering pending spawns timed out\n\nResolve bbbbbbb\nBuild image\nStart candidate\nHealth check\nSwitch web\nHand over runtime host",
+      "rect": {
+        "x": 73,
+        "y": 359,
+        "width": 558.65625,
+        "height": 353.5
+      }
+    },
+    "1000-en-managed-rollback-failed-light-header": {
+      "text": "Web runs1.6.1 \u00b7 ddddddd \u00b7 1 Jan 2026\nRuntime host runs1.6.1 \u00b7 aaaaaaa \u00b7 1 Jan 2026\nAvailable1.6.1 \u00b7 ccccccc \u00b7 1 Jan 2026\nCheck now\nUpdate available \u00b7 3 commits behind origin/main \u00b7 checked 02:00"
+    },
+    "1000-en-managed-rollback-failed-light": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 73,
+        "y": 247,
+        "width": 854,
+        "height": 96
+      },
+      "controlVisible": true,
+      "text": "Automatic updates\nTurn on\n\nOff. You choose when to deploy."
+    },
+    "1000-en-managed-rollback-failed-light-failure": {
+      "text": "Update to bbbbbbb\nUpdate to checked ccccccc\nDeploy again\n\nDeployment stopped at health check after 1 m 00 s.\n\nrecovering pending spawns timed out; rollback could not prove owner death\n\nResolve bbbbbbb\nBuild image\nStart candidate\nHealth check\nSwitch web\nHand over runtime host",
+      "rect": {
+        "x": 73,
+        "y": 359,
+        "width": 558.65625,
+        "height": 353.5
+      }
+    },
+    "1000-en-managed-rolled-back-light-header": {
+      "text": "Web runs1.6.1 \u00b7 aaaaaaa \u00b7 1 Jan 2026\nRuntime host runs1.6.1 \u00b7 aaaaaaa \u00b7 1 Jan 2026\nAvailable1.6.1 \u00b7 ccccccc \u00b7 1 Jan 2026\nCheck now\nUpdate available \u00b7 3 commits behind origin/main \u00b7 checked 02:00"
+    },
+    "1000-en-managed-rolled-back-light": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 73,
+        "y": 247,
+        "width": 854,
+        "height": 96
+      },
+      "controlVisible": true,
+      "text": "Automatic updates\nTurn on\n\nOff. You choose when to deploy."
+    },
+    "1000-en-managed-rolled-back-light-failure": {
+      "text": "Update to bbbbbbb\nUpdate to checked ccccccc\nDeploy again\n\nDeployment stopped at health check after 1 m 00 s. Rollback completed; current component revisions are shown above.\n\nadoption 2 of 2 - recovering pending spawns timed out\n\nResolve bbbbbbb\nBuild image\nStart candidate\nHealth check\nSwitch web\nHand over runtime host",
+      "rect": {
+        "x": 73,
+        "y": 359,
+        "width": 558.65625,
+        "height": 371.5
+      }
+    },
+    "1000-en-managed-external-success-light-header": {
+      "text": "Web runs1.6.1 \u00b7 ccccccc \u00b7 1 Jan 2026\nRuntime host runs1.6.1 \u00b7 ccccccc \u00b7 1 Jan 2026\nCheck now\nUp to date, checked at 02:00 \u00b7 Next check at \u2014"
+    },
+    "1000-en-managed-external-success-light": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 73,
+        "y": 237,
+        "width": 854,
+        "height": 96
+      },
+      "controlVisible": true,
+      "text": "Automatic updates\nTurn on\n\nOff. You choose when to deploy."
+    },
+    "1000-en-managed-external-success-light-failure": {
+      "text": "Earlier deployment bbbbbbb failed.\n\nadoption 2 of 2 - recovering pending spawns timed out",
+      "rect": {
+        "x": 73,
+        "y": 678.25,
+        "width": 558.65625,
+        "height": 80.5
+      }
+    },
+    "1000-en-managed-external-success-light-reloaded": {
+      "previous": "Earlier deployment bbbbbbb failed.\n\nadoption 2 of 2 - recovering pending spawns timed out"
+    },
+    "1000-en-managed-external-success-unknown-host-light-header": {
+      "text": "Web runs1.6.1 \u00b7 ccccccc \u00b7 1 Jan 2026\nRuntime hostunknown revision\nCheck now\nUp to date, checked at 02:00 \u00b7 Next check at \u2014"
+    },
+    "1000-en-managed-external-success-unknown-host-light": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 73,
+        "y": 237,
+        "width": 854,
+        "height": 96
+      },
+      "controlVisible": true,
+      "text": "Automatic updates\nTurn on\n\nOff. You choose when to deploy."
+    },
+    "1000-en-managed-external-success-unknown-host-light-failure": {
+      "text": "Earlier deployment bbbbbbb failed.\n\nadoption 2 of 2 - recovering pending spawns timed out",
+      "rect": {
+        "x": 73,
+        "y": 696.25,
+        "width": 558.65625,
+        "height": 80.5
+      }
+    },
+    "1000-en-managed-external-success-unknown-host-light-reloaded": {
+      "previous": "Earlier deployment bbbbbbb failed.\n\nadoption 2 of 2 - recovering pending spawns timed out"
+    },
+    "1000-en-managed-unknown-host-light-header": {
+      "text": "Web runs1.6.1 \u00b7 bbbbbbb \u00b7 1 Jan 2026\nRuntime hostunknown revision\nAvailable1.6.1 \u00b7 ccccccc \u00b7 1 Jan 2026\nCheck now\nUpdate available \u00b7 3 commits behind origin/main \u00b7 checked 02:00"
+    },
+    "1000-en-managed-unknown-host-light": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 73,
+        "y": 237,
+        "width": 854,
+        "height": 96
+      },
+      "controlVisible": true,
+      "text": "Automatic updates\nTurn on\n\nOff. You choose when to deploy."
+    },
+    "1000-en-managed-unknown-host-light-failure": {
+      "text": "Update to bbbbbbb\nUpdate to checked ccccccc\nDeploy again\n\nDeployment stopped at health check after 1 m 00 s.\n\nadoption 2 of 2 - recovering pending spawns timed out\n\nResolve bbbbbbb\nBuild image\nStart candidate\nHealth check\nSwitch web\nHand over runtime host",
+      "rect": {
+        "x": 73,
+        "y": 349,
+        "width": 558.65625,
+        "height": 353.5
+      }
+    },
+    "1000-en-managed-failed-dark-header": {
+      "text": "Web runs1.6.1 \u00b7 ddddddd \u00b7 1 Jan 2026\nRuntime host runs1.6.1 \u00b7 aaaaaaa \u00b7 1 Jan 2026\nAvailable1.6.1 \u00b7 ccccccc \u00b7 1 Jan 2026\nCheck now\nUpdate available \u00b7 3 commits behind origin/main \u00b7 checked 02:00"
+    },
+    "1000-en-managed-failed-dark": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 73,
+        "y": 247,
+        "width": 854,
+        "height": 96
+      },
+      "controlVisible": true,
+      "text": "Automatic updates\nTurn on\n\nOff. You choose when to deploy."
+    },
+    "1000-en-managed-failed-dark-failure": {
+      "text": "Update to bbbbbbb\nUpdate to checked ccccccc\nDeploy again\n\nDeployment stopped at health check after 1 m 00 s.\n\nadoption 2 of 2 - recovering pending spawns timed out\n\nResolve bbbbbbb\nBuild image\nStart candidate\nHealth check\nSwitch web\nHand over runtime host",
+      "rect": {
+        "x": 73,
+        "y": 359,
+        "width": 558.65625,
+        "height": 353.5
+      }
+    },
+    "1000-en-managed-rolling-back-dark-header": {
+      "text": "Web runs1.6.1 \u00b7 ddddddd \u00b7 1 Jan 2026\nRuntime host runs1.6.1 \u00b7 aaaaaaa \u00b7 1 Jan 2026\nAvailable1.6.1 \u00b7 ccccccc \u00b7 1 Jan 2026\nCheck now\nUpdate available \u00b7 3 commits behind origin/main \u00b7 checked 02:00"
+    },
+    "1000-en-managed-rolling-back-dark": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 73,
+        "y": 247,
+        "width": 854,
+        "height": 96
+      },
+      "controlVisible": true,
+      "text": "Automatic updates\nTurn on\n\nOff. You choose when to deploy."
+    },
+    "1000-en-managed-rolling-back-dark-failure": {
+      "text": "Update to bbbbbbb\nUpdate to checked ccccccc\nDeploy again\n\nDeployment stopped at health check after 1 m 00 s. Rollback is in progress.\n\nadoption 2 of 2 - recovering pending spawns timed out\n\nResolve bbbbbbb\nBuild image\nStart candidate\nHealth check\nSwitch web\nHand over runtime host",
+      "rect": {
+        "x": 73,
+        "y": 359,
+        "width": 558.65625,
+        "height": 353.5
+      }
+    },
+    "1000-en-managed-rollback-failed-dark-header": {
+      "text": "Web runs1.6.1 \u00b7 ddddddd \u00b7 1 Jan 2026\nRuntime host runs1.6.1 \u00b7 aaaaaaa \u00b7 1 Jan 2026\nAvailable1.6.1 \u00b7 ccccccc \u00b7 1 Jan 2026\nCheck now\nUpdate available \u00b7 3 commits behind origin/main \u00b7 checked 02:00"
+    },
+    "1000-en-managed-rollback-failed-dark": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 73,
+        "y": 247,
+        "width": 854,
+        "height": 96
+      },
+      "controlVisible": true,
+      "text": "Automatic updates\nTurn on\n\nOff. You choose when to deploy."
+    },
+    "1000-en-managed-rollback-failed-dark-failure": {
+      "text": "Update to bbbbbbb\nUpdate to checked ccccccc\nDeploy again\n\nDeployment stopped at health check after 1 m 00 s.\n\nrecovering pending spawns timed out; rollback could not prove owner death\n\nResolve bbbbbbb\nBuild image\nStart candidate\nHealth check\nSwitch web\nHand over runtime host",
+      "rect": {
+        "x": 73,
+        "y": 359,
+        "width": 558.65625,
+        "height": 353.5
+      }
+    },
+    "1000-en-managed-rolled-back-dark-header": {
+      "text": "Web runs1.6.1 \u00b7 aaaaaaa \u00b7 1 Jan 2026\nRuntime host runs1.6.1 \u00b7 aaaaaaa \u00b7 1 Jan 2026\nAvailable1.6.1 \u00b7 ccccccc \u00b7 1 Jan 2026\nCheck now\nUpdate available \u00b7 3 commits behind origin/main \u00b7 checked 02:00"
+    },
+    "1000-en-managed-rolled-back-dark": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 73,
+        "y": 247,
+        "width": 854,
+        "height": 96
+      },
+      "controlVisible": true,
+      "text": "Automatic updates\nTurn on\n\nOff. You choose when to deploy."
+    },
+    "1000-en-managed-rolled-back-dark-failure": {
+      "text": "Update to bbbbbbb\nUpdate to checked ccccccc\nDeploy again\n\nDeployment stopped at health check after 1 m 00 s. Rollback completed; current component revisions are shown above.\n\nadoption 2 of 2 - recovering pending spawns timed out\n\nResolve bbbbbbb\nBuild image\nStart candidate\nHealth check\nSwitch web\nHand over runtime host",
+      "rect": {
+        "x": 73,
+        "y": 359,
+        "width": 558.65625,
+        "height": 371.5
+      }
+    },
+    "1000-en-managed-external-success-dark-header": {
+      "text": "Web runs1.6.1 \u00b7 ccccccc \u00b7 1 Jan 2026\nRuntime host runs1.6.1 \u00b7 ccccccc \u00b7 1 Jan 2026\nCheck now\nUp to date, checked at 02:00 \u00b7 Next check at \u2014"
+    },
+    "1000-en-managed-external-success-dark": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 73,
+        "y": 237,
+        "width": 854,
+        "height": 96
+      },
+      "controlVisible": true,
+      "text": "Automatic updates\nTurn on\n\nOff. You choose when to deploy."
+    },
+    "1000-en-managed-external-success-dark-failure": {
+      "text": "Earlier deployment bbbbbbb failed.\n\nadoption 2 of 2 - recovering pending spawns timed out",
+      "rect": {
+        "x": 73,
+        "y": 678.25,
+        "width": 558.65625,
+        "height": 80.5
+      }
+    },
+    "1000-en-managed-external-success-dark-reloaded": {
+      "previous": "Earlier deployment bbbbbbb failed.\n\nadoption 2 of 2 - recovering pending spawns timed out"
+    },
+    "1000-en-managed-external-success-unknown-host-dark-header": {
+      "text": "Web runs1.6.1 \u00b7 ccccccc \u00b7 1 Jan 2026\nRuntime hostunknown revision\nCheck now\nUp to date, checked at 02:00 \u00b7 Next check at \u2014"
+    },
+    "1000-en-managed-external-success-unknown-host-dark": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 73,
+        "y": 237,
+        "width": 854,
+        "height": 96
+      },
+      "controlVisible": true,
+      "text": "Automatic updates\nTurn on\n\nOff. You choose when to deploy."
+    },
+    "1000-en-managed-external-success-unknown-host-dark-failure": {
+      "text": "Earlier deployment bbbbbbb failed.\n\nadoption 2 of 2 - recovering pending spawns timed out",
+      "rect": {
+        "x": 73,
+        "y": 696.25,
+        "width": 558.65625,
+        "height": 80.5
+      }
+    },
+    "1000-en-managed-external-success-unknown-host-dark-reloaded": {
+      "previous": "Earlier deployment bbbbbbb failed.\n\nadoption 2 of 2 - recovering pending spawns timed out"
+    },
+    "1000-en-managed-unknown-host-dark-header": {
+      "text": "Web runs1.6.1 \u00b7 bbbbbbb \u00b7 1 Jan 2026\nRuntime hostunknown revision\nAvailable1.6.1 \u00b7 ccccccc \u00b7 1 Jan 2026\nCheck now\nUpdate available \u00b7 3 commits behind origin/main \u00b7 checked 02:00"
+    },
+    "1000-en-managed-unknown-host-dark": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 73,
+        "y": 237,
+        "width": 854,
+        "height": 96
+      },
+      "controlVisible": true,
+      "text": "Automatic updates\nTurn on\n\nOff. You choose when to deploy."
+    },
+    "1000-en-managed-unknown-host-dark-failure": {
+      "text": "Update to bbbbbbb\nUpdate to checked ccccccc\nDeploy again\n\nDeployment stopped at health check after 1 m 00 s.\n\nadoption 2 of 2 - recovering pending spawns timed out\n\nResolve bbbbbbb\nBuild image\nStart candidate\nHealth check\nSwitch web\nHand over runtime host",
+      "rect": {
+        "x": 73,
+        "y": 349,
+        "width": 558.65625,
+        "height": 353.5
+      }
+    },
+    "1000-uk-managed-failed-light-header": {
+      "text": "\u0412\u0435\u0431 \u043f\u0440\u0430\u0446\u044e\u0454 \u043d\u04301.6.1 \u00b7 ddddddd \u00b7 1 \u0441\u0456\u0447. 2026 \u0440.\nRuntime host \u043f\u0440\u0430\u0446\u044e\u0454 \u043d\u04301.6.1 \u00b7 aaaaaaa \u00b7 1 \u0441\u0456\u0447. 2026 \u0440.\n\u0414\u043e\u0441\u0442\u0443\u043f\u043d\u043e1.6.1 \u00b7 ccccccc \u00b7 1 \u0441\u0456\u0447. 2026 \u0440.\n\u041f\u0435\u0440\u0435\u0432\u0456\u0440\u0438\u0442\u0438\n\u0404 \u043e\u043d\u043e\u0432\u043b\u0435\u043d\u043d\u044f \u00b7 3 \u043a\u043e\u043c\u0456\u0442\u0438 \u043f\u043e\u0437\u0430\u0434\u0443 origin/main \u00b7 \u043f\u0435\u0440\u0435\u0432\u0456\u0440\u0435\u043d\u043e \u043e 02:00"
+    },
+    "1000-uk-managed-failed-light": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 73,
+        "y": 247,
+        "width": 854,
+        "height": 96
+      },
+      "controlVisible": true,
+      "text": "\u0410\u0432\u0442\u043e\u043e\u043d\u043e\u0432\u043b\u0435\u043d\u043d\u044f\n\u0423\u0432\u0456\u043c\u043a\u043d\u0443\u0442\u0438\n\n\u0412\u0438\u043c\u043a\u043d\u0435\u043d\u043e. \u0412\u0438 \u0441\u0430\u043c\u0456 \u043e\u0431\u0438\u0440\u0430\u0454\u0442\u0435 \u0447\u0430\u0441 \u0440\u043e\u0437\u0433\u043e\u0440\u0442\u0430\u043d\u043d\u044f."
+    },
+    "1000-uk-managed-failed-light-failure": {
+      "text": "\u041e\u043d\u043e\u0432\u0438\u0442\u0438 \u0434\u043e bbbbbbb\n\u041e\u043d\u043e\u0432\u0438\u0442\u0438 \u0434\u043e \u043f\u0435\u0440\u0435\u0432\u0456\u0440\u0435\u043d\u043e\u0457 \u0432\u0435\u0440\u0441\u0456\u0457 ccccccc\n\u0420\u043e\u0437\u0433\u043e\u0440\u043d\u0443\u0442\u0438 \u0449\u0435 \u0440\u0430\u0437\n\n\u0420\u043e\u0437\u0433\u043e\u0440\u0442\u0430\u043d\u043d\u044f \u0437\u0443\u043f\u0438\u043d\u0438\u043b\u043e\u0441\u044f \u043d\u0430 \u043a\u0440\u043e\u0446\u0456 \u00ab\u043f\u0435\u0440\u0435\u0432\u0456\u0440\u043a\u0430 \u0437\u0434\u043e\u0440\u043e\u0432'\u044f\u00bb \u0447\u0435\u0440\u0435\u0437 1 \u0445\u0432 00 \u0441.\n\nadoption 2 of 2 - recovering pending spawns timed out\n\n\u0412\u0438\u0437\u043d\u0430\u0447\u0438\u0442\u0438 bbbbbbb\n\u0417\u0456\u0431\u0440\u0430\u0442\u0438 \u043e\u0431\u0440\u0430\u0437\n\u0417\u0430\u043f\u0443\u0441\u0442\u0438\u0442\u0438 \u043a\u0430\u043d\u0434\u0438\u0434\u0430\u0442\u0430\n\u041f\u0435\u0440\u0435\u0432\u0456\u0440\u043a\u0430 \u0437\u0434\u043e\u0440\u043e\u0432'\u044f\n\u041f\u0435\u0440\u0435\u043c\u043a\u043d\u0443\u0442\u0438 \u0432\u0435\u0431\n\u041f\u0435\u0440\u0435\u0434\u0430\u0442\u0438 runtime host",
+      "rect": {
+        "x": 73,
+        "y": 359,
+        "width": 558.65625,
+        "height": 375.75
+      }
+    },
+    "1000-uk-managed-rolling-back-light-header": {
+      "text": "\u0412\u0435\u0431 \u043f\u0440\u0430\u0446\u044e\u0454 \u043d\u04301.6.1 \u00b7 ddddddd \u00b7 1 \u0441\u0456\u0447. 2026 \u0440.\nRuntime host \u043f\u0440\u0430\u0446\u044e\u0454 \u043d\u04301.6.1 \u00b7 aaaaaaa \u00b7 1 \u0441\u0456\u0447. 2026 \u0440.\n\u0414\u043e\u0441\u0442\u0443\u043f\u043d\u043e1.6.1 \u00b7 ccccccc \u00b7 1 \u0441\u0456\u0447. 2026 \u0440.\n\u041f\u0435\u0440\u0435\u0432\u0456\u0440\u0438\u0442\u0438\n\u0404 \u043e\u043d\u043e\u0432\u043b\u0435\u043d\u043d\u044f \u00b7 3 \u043a\u043e\u043c\u0456\u0442\u0438 \u043f\u043e\u0437\u0430\u0434\u0443 origin/main \u00b7 \u043f\u0435\u0440\u0435\u0432\u0456\u0440\u0435\u043d\u043e \u043e 02:00"
+    },
+    "1000-uk-managed-rolling-back-light": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 73,
+        "y": 247,
+        "width": 854,
+        "height": 96
+      },
+      "controlVisible": true,
+      "text": "\u0410\u0432\u0442\u043e\u043e\u043d\u043e\u0432\u043b\u0435\u043d\u043d\u044f\n\u0423\u0432\u0456\u043c\u043a\u043d\u0443\u0442\u0438\n\n\u0412\u0438\u043c\u043a\u043d\u0435\u043d\u043e. \u0412\u0438 \u0441\u0430\u043c\u0456 \u043e\u0431\u0438\u0440\u0430\u0454\u0442\u0435 \u0447\u0430\u0441 \u0440\u043e\u0437\u0433\u043e\u0440\u0442\u0430\u043d\u043d\u044f."
+    },
+    "1000-uk-managed-rolling-back-light-failure": {
+      "text": "\u041e\u043d\u043e\u0432\u0438\u0442\u0438 \u0434\u043e bbbbbbb\n\u041e\u043d\u043e\u0432\u0438\u0442\u0438 \u0434\u043e \u043f\u0435\u0440\u0435\u0432\u0456\u0440\u0435\u043d\u043e\u0457 \u0432\u0435\u0440\u0441\u0456\u0457 ccccccc\n\u0420\u043e\u0437\u0433\u043e\u0440\u043d\u0443\u0442\u0438 \u0449\u0435 \u0440\u0430\u0437\n\n\u0420\u043e\u0437\u0433\u043e\u0440\u0442\u0430\u043d\u043d\u044f \u0437\u0443\u043f\u0438\u043d\u0438\u043b\u043e\u0441\u044f \u043d\u0430 \u043a\u0440\u043e\u0446\u0456 \u00ab\u043f\u0435\u0440\u0435\u0432\u0456\u0440\u043a\u0430 \u0437\u0434\u043e\u0440\u043e\u0432'\u044f\u00bb \u0447\u0435\u0440\u0435\u0437 1 \u0445\u0432 00 \u0441. \u0422\u0440\u0438\u0432\u0430\u0454 \u0432\u0456\u0434\u043a\u0430\u0442.\n\nadoption 2 of 2 - recovering pending spawns timed out\n\n\u0412\u0438\u0437\u043d\u0430\u0447\u0438\u0442\u0438 bbbbbbb\n\u0417\u0456\u0431\u0440\u0430\u0442\u0438 \u043e\u0431\u0440\u0430\u0437\n\u0417\u0430\u043f\u0443\u0441\u0442\u0438\u0442\u0438 \u043a\u0430\u043d\u0434\u0438\u0434\u0430\u0442\u0430\n\u041f\u0435\u0440\u0435\u0432\u0456\u0440\u043a\u0430 \u0437\u0434\u043e\u0440\u043e\u0432'\u044f\n\u041f\u0435\u0440\u0435\u043c\u043a\u043d\u0443\u0442\u0438 \u0432\u0435\u0431\n\u041f\u0435\u0440\u0435\u0434\u0430\u0442\u0438 runtime host",
+      "rect": {
+        "x": 73,
+        "y": 359,
+        "width": 558.65625,
+        "height": 375.75
+      }
+    },
+    "1000-uk-managed-rollback-failed-light-header": {
+      "text": "\u0412\u0435\u0431 \u043f\u0440\u0430\u0446\u044e\u0454 \u043d\u04301.6.1 \u00b7 ddddddd \u00b7 1 \u0441\u0456\u0447. 2026 \u0440.\nRuntime host \u043f\u0440\u0430\u0446\u044e\u0454 \u043d\u04301.6.1 \u00b7 aaaaaaa \u00b7 1 \u0441\u0456\u0447. 2026 \u0440.\n\u0414\u043e\u0441\u0442\u0443\u043f\u043d\u043e1.6.1 \u00b7 ccccccc \u00b7 1 \u0441\u0456\u0447. 2026 \u0440.\n\u041f\u0435\u0440\u0435\u0432\u0456\u0440\u0438\u0442\u0438\n\u0404 \u043e\u043d\u043e\u0432\u043b\u0435\u043d\u043d\u044f \u00b7 3 \u043a\u043e\u043c\u0456\u0442\u0438 \u043f\u043e\u0437\u0430\u0434\u0443 origin/main \u00b7 \u043f\u0435\u0440\u0435\u0432\u0456\u0440\u0435\u043d\u043e \u043e 02:00"
+    },
+    "1000-uk-managed-rollback-failed-light": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 73,
+        "y": 247,
+        "width": 854,
+        "height": 96
+      },
+      "controlVisible": true,
+      "text": "\u0410\u0432\u0442\u043e\u043e\u043d\u043e\u0432\u043b\u0435\u043d\u043d\u044f\n\u0423\u0432\u0456\u043c\u043a\u043d\u0443\u0442\u0438\n\n\u0412\u0438\u043c\u043a\u043d\u0435\u043d\u043e. \u0412\u0438 \u0441\u0430\u043c\u0456 \u043e\u0431\u0438\u0440\u0430\u0454\u0442\u0435 \u0447\u0430\u0441 \u0440\u043e\u0437\u0433\u043e\u0440\u0442\u0430\u043d\u043d\u044f."
+    },
+    "1000-uk-managed-rollback-failed-light-failure": {
+      "text": "\u041e\u043d\u043e\u0432\u0438\u0442\u0438 \u0434\u043e bbbbbbb\n\u041e\u043d\u043e\u0432\u0438\u0442\u0438 \u0434\u043e \u043f\u0435\u0440\u0435\u0432\u0456\u0440\u0435\u043d\u043e\u0457 \u0432\u0435\u0440\u0441\u0456\u0457 ccccccc\n\u0420\u043e\u0437\u0433\u043e\u0440\u043d\u0443\u0442\u0438 \u0449\u0435 \u0440\u0430\u0437\n\n\u0420\u043e\u0437\u0433\u043e\u0440\u0442\u0430\u043d\u043d\u044f \u0437\u0443\u043f\u0438\u043d\u0438\u043b\u043e\u0441\u044f \u043d\u0430 \u043a\u0440\u043e\u0446\u0456 \u00ab\u043f\u0435\u0440\u0435\u0432\u0456\u0440\u043a\u0430 \u0437\u0434\u043e\u0440\u043e\u0432'\u044f\u00bb \u0447\u0435\u0440\u0435\u0437 1 \u0445\u0432 00 \u0441.\n\nrecovering pending spawns timed out; rollback could not prove owner death\n\n\u0412\u0438\u0437\u043d\u0430\u0447\u0438\u0442\u0438 bbbbbbb\n\u0417\u0456\u0431\u0440\u0430\u0442\u0438 \u043e\u0431\u0440\u0430\u0437\n\u0417\u0430\u043f\u0443\u0441\u0442\u0438\u0442\u0438 \u043a\u0430\u043d\u0434\u0438\u0434\u0430\u0442\u0430\n\u041f\u0435\u0440\u0435\u0432\u0456\u0440\u043a\u0430 \u0437\u0434\u043e\u0440\u043e\u0432'\u044f\n\u041f\u0435\u0440\u0435\u043c\u043a\u043d\u0443\u0442\u0438 \u0432\u0435\u0431\n\u041f\u0435\u0440\u0435\u0434\u0430\u0442\u0438 runtime host",
+      "rect": {
+        "x": 73,
+        "y": 359,
+        "width": 558.65625,
+        "height": 375.75
+      }
+    },
+    "1000-uk-managed-rolled-back-light-header": {
+      "text": "\u0412\u0435\u0431 \u043f\u0440\u0430\u0446\u044e\u0454 \u043d\u04301.6.1 \u00b7 aaaaaaa \u00b7 1 \u0441\u0456\u0447. 2026 \u0440.\nRuntime host \u043f\u0440\u0430\u0446\u044e\u0454 \u043d\u04301.6.1 \u00b7 aaaaaaa \u00b7 1 \u0441\u0456\u0447. 2026 \u0440.\n\u0414\u043e\u0441\u0442\u0443\u043f\u043d\u043e1.6.1 \u00b7 ccccccc \u00b7 1 \u0441\u0456\u0447. 2026 \u0440.\n\u041f\u0435\u0440\u0435\u0432\u0456\u0440\u0438\u0442\u0438\n\u0404 \u043e\u043d\u043e\u0432\u043b\u0435\u043d\u043d\u044f \u00b7 3 \u043a\u043e\u043c\u0456\u0442\u0438 \u043f\u043e\u0437\u0430\u0434\u0443 origin/main \u00b7 \u043f\u0435\u0440\u0435\u0432\u0456\u0440\u0435\u043d\u043e \u043e 02:00"
+    },
+    "1000-uk-managed-rolled-back-light": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 73,
+        "y": 247,
+        "width": 854,
+        "height": 96
+      },
+      "controlVisible": true,
+      "text": "\u0410\u0432\u0442\u043e\u043e\u043d\u043e\u0432\u043b\u0435\u043d\u043d\u044f\n\u0423\u0432\u0456\u043c\u043a\u043d\u0443\u0442\u0438\n\n\u0412\u0438\u043c\u043a\u043d\u0435\u043d\u043e. \u0412\u0438 \u0441\u0430\u043c\u0456 \u043e\u0431\u0438\u0440\u0430\u0454\u0442\u0435 \u0447\u0430\u0441 \u0440\u043e\u0437\u0433\u043e\u0440\u0442\u0430\u043d\u043d\u044f."
+    },
+    "1000-uk-managed-rolled-back-light-failure": {
+      "text": "\u041e\u043d\u043e\u0432\u0438\u0442\u0438 \u0434\u043e bbbbbbb\n\u041e\u043d\u043e\u0432\u0438\u0442\u0438 \u0434\u043e \u043f\u0435\u0440\u0435\u0432\u0456\u0440\u0435\u043d\u043e\u0457 \u0432\u0435\u0440\u0441\u0456\u0457 ccccccc\n\u0420\u043e\u0437\u0433\u043e\u0440\u043d\u0443\u0442\u0438 \u0449\u0435 \u0440\u0430\u0437\n\n\u0420\u043e\u0437\u0433\u043e\u0440\u0442\u0430\u043d\u043d\u044f \u0437\u0443\u043f\u0438\u043d\u0438\u043b\u043e\u0441\u044f \u043d\u0430 \u043a\u0440\u043e\u0446\u0456 \u00ab\u043f\u0435\u0440\u0435\u0432\u0456\u0440\u043a\u0430 \u0437\u0434\u043e\u0440\u043e\u0432'\u044f\u00bb \u0447\u0435\u0440\u0435\u0437 1 \u0445\u0432 00 \u0441. \u0412\u0456\u0434\u043a\u0430\u0442 \u0437\u0430\u0432\u0435\u0440\u0448\u0435\u043d\u043e; \u043f\u043e\u0442\u043e\u0447\u043d\u0456 \u0440\u0435\u0432\u0456\u0437\u0456\u0457 \u043a\u043e\u043c\u043f\u043e\u043d\u0435\u043d\u0442\u0456\u0432 \u043d\u0430\u0432\u0435\u0434\u0435\u043d\u043e \u0432\u0438\u0449\u0435.\n\nadoption 2 of 2 - recovering pending spawns timed out\n\n\u0412\u0438\u0437\u043d\u0430\u0447\u0438\u0442\u0438 bbbbbbb\n\u0417\u0456\u0431\u0440\u0430\u0442\u0438 \u043e\u0431\u0440\u0430\u0437\n\u0417\u0430\u043f\u0443\u0441\u0442\u0438\u0442\u0438 \u043a\u0430\u043d\u0434\u0438\u0434\u0430\u0442\u0430\n\u041f\u0435\u0440\u0435\u0432\u0456\u0440\u043a\u0430 \u0437\u0434\u043e\u0440\u043e\u0432'\u044f\n\u041f\u0435\u0440\u0435\u043c\u043a\u043d\u0443\u0442\u0438 \u0432\u0435\u0431\n\u041f\u0435\u0440\u0435\u0434\u0430\u0442\u0438 runtime host",
+      "rect": {
+        "x": 73,
+        "y": 359,
+        "width": 558.65625,
+        "height": 393.75
+      }
+    },
+    "1000-uk-managed-external-success-light-header": {
+      "text": "\u0412\u0435\u0431 \u043f\u0440\u0430\u0446\u044e\u0454 \u043d\u04301.6.1 \u00b7 ccccccc \u00b7 1 \u0441\u0456\u0447. 2026 \u0440.\nRuntime host \u043f\u0440\u0430\u0446\u044e\u0454 \u043d\u04301.6.1 \u00b7 ccccccc \u00b7 1 \u0441\u0456\u0447. 2026 \u0440.\n\u041f\u0435\u0440\u0435\u0432\u0456\u0440\u0438\u0442\u0438\n\u0410\u043a\u0442\u0443\u0430\u043b\u044c\u043d\u0430 \u0432\u0435\u0440\u0441\u0456\u044f, \u043f\u0435\u0440\u0435\u0432\u0456\u0440\u0435\u043d\u043e \u043e 02:00 \u00b7 \u041d\u0430\u0441\u0442\u0443\u043f\u043d\u0430 \u043f\u0435\u0440\u0435\u0432\u0456\u0440\u043a\u0430 \u043e \u2014"
+    },
+    "1000-uk-managed-external-success-light": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 73,
+        "y": 237,
+        "width": 854,
+        "height": 96
+      },
+      "controlVisible": true,
+      "text": "\u0410\u0432\u0442\u043e\u043e\u043d\u043e\u0432\u043b\u0435\u043d\u043d\u044f\n\u0423\u0432\u0456\u043c\u043a\u043d\u0443\u0442\u0438\n\n\u0412\u0438\u043c\u043a\u043d\u0435\u043d\u043e. \u0412\u0438 \u0441\u0430\u043c\u0456 \u043e\u0431\u0438\u0440\u0430\u0454\u0442\u0435 \u0447\u0430\u0441 \u0440\u043e\u0437\u0433\u043e\u0440\u0442\u0430\u043d\u043d\u044f."
+    },
+    "1000-uk-managed-external-success-light-failure": {
+      "text": "\u041f\u043e\u043f\u0435\u0440\u0435\u0434\u043d\u0454 \u0440\u043e\u0437\u0433\u043e\u0440\u0442\u0430\u043d\u043d\u044f bbbbbbb \u0437\u0430\u0432\u0435\u0440\u0448\u0438\u043b\u043e\u0441\u044f \u043f\u043e\u043c\u0438\u043b\u043a\u043e\u044e.\n\nadoption 2 of 2 - recovering pending spawns timed out",
+      "rect": {
+        "x": 73,
+        "y": 678.25,
+        "width": 558.65625,
+        "height": 80.5
+      }
+    },
+    "1000-uk-managed-external-success-light-reloaded": {
+      "previous": "\u041f\u043e\u043f\u0435\u0440\u0435\u0434\u043d\u0454 \u0440\u043e\u0437\u0433\u043e\u0440\u0442\u0430\u043d\u043d\u044f bbbbbbb \u0437\u0430\u0432\u0435\u0440\u0448\u0438\u043b\u043e\u0441\u044f \u043f\u043e\u043c\u0438\u043b\u043a\u043e\u044e.\n\nadoption 2 of 2 - recovering pending spawns timed out"
+    },
+    "1000-uk-managed-external-success-unknown-host-light-header": {
+      "text": "\u0412\u0435\u0431 \u043f\u0440\u0430\u0446\u044e\u0454 \u043d\u04301.6.1 \u00b7 ccccccc \u00b7 1 \u0441\u0456\u0447. 2026 \u0440.\nRuntime host\u0440\u0435\u0432\u0456\u0437\u0456\u044f \u043d\u0435\u0432\u0456\u0434\u043e\u043c\u0430\n\u041f\u0435\u0440\u0435\u0432\u0456\u0440\u0438\u0442\u0438\n\u0410\u043a\u0442\u0443\u0430\u043b\u044c\u043d\u0430 \u0432\u0435\u0440\u0441\u0456\u044f, \u043f\u0435\u0440\u0435\u0432\u0456\u0440\u0435\u043d\u043e \u043e 02:00 \u00b7 \u041d\u0430\u0441\u0442\u0443\u043f\u043d\u0430 \u043f\u0435\u0440\u0435\u0432\u0456\u0440\u043a\u0430 \u043e \u2014"
+    },
+    "1000-uk-managed-external-success-unknown-host-light": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 73,
+        "y": 237,
+        "width": 854,
+        "height": 96
+      },
+      "controlVisible": true,
+      "text": "\u0410\u0432\u0442\u043e\u043e\u043d\u043e\u0432\u043b\u0435\u043d\u043d\u044f\n\u0423\u0432\u0456\u043c\u043a\u043d\u0443\u0442\u0438\n\n\u0412\u0438\u043c\u043a\u043d\u0435\u043d\u043e. \u0412\u0438 \u0441\u0430\u043c\u0456 \u043e\u0431\u0438\u0440\u0430\u0454\u0442\u0435 \u0447\u0430\u0441 \u0440\u043e\u0437\u0433\u043e\u0440\u0442\u0430\u043d\u043d\u044f."
+    },
+    "1000-uk-managed-external-success-unknown-host-light-failure": {
+      "text": "\u041f\u043e\u043f\u0435\u0440\u0435\u0434\u043d\u0454 \u0440\u043e\u0437\u0433\u043e\u0440\u0442\u0430\u043d\u043d\u044f bbbbbbb \u0437\u0430\u0432\u0435\u0440\u0448\u0438\u043b\u043e\u0441\u044f \u043f\u043e\u043c\u0438\u043b\u043a\u043e\u044e.\n\nadoption 2 of 2 - recovering pending spawns timed out",
+      "rect": {
+        "x": 73,
+        "y": 696.25,
+        "width": 558.65625,
+        "height": 80.5
+      }
+    },
+    "1000-uk-managed-external-success-unknown-host-light-reloaded": {
+      "previous": "\u041f\u043e\u043f\u0435\u0440\u0435\u0434\u043d\u0454 \u0440\u043e\u0437\u0433\u043e\u0440\u0442\u0430\u043d\u043d\u044f bbbbbbb \u0437\u0430\u0432\u0435\u0440\u0448\u0438\u043b\u043e\u0441\u044f \u043f\u043e\u043c\u0438\u043b\u043a\u043e\u044e.\n\nadoption 2 of 2 - recovering pending spawns timed out"
+    },
+    "1000-uk-managed-unknown-host-light-header": {
+      "text": "\u0412\u0435\u0431 \u043f\u0440\u0430\u0446\u044e\u0454 \u043d\u04301.6.1 \u00b7 bbbbbbb \u00b7 1 \u0441\u0456\u0447. 2026 \u0440.\nRuntime host\u0440\u0435\u0432\u0456\u0437\u0456\u044f \u043d\u0435\u0432\u0456\u0434\u043e\u043c\u0430\n\u0414\u043e\u0441\u0442\u0443\u043f\u043d\u043e1.6.1 \u00b7 ccccccc \u00b7 1 \u0441\u0456\u0447. 2026 \u0440.\n\u041f\u0435\u0440\u0435\u0432\u0456\u0440\u0438\u0442\u0438\n\u0404 \u043e\u043d\u043e\u0432\u043b\u0435\u043d\u043d\u044f \u00b7 3 \u043a\u043e\u043c\u0456\u0442\u0438 \u043f\u043e\u0437\u0430\u0434\u0443 origin/main \u00b7 \u043f\u0435\u0440\u0435\u0432\u0456\u0440\u0435\u043d\u043e \u043e 02:00"
+    },
+    "1000-uk-managed-unknown-host-light": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 73,
+        "y": 237,
+        "width": 854,
+        "height": 96
+      },
+      "controlVisible": true,
+      "text": "\u0410\u0432\u0442\u043e\u043e\u043d\u043e\u0432\u043b\u0435\u043d\u043d\u044f\n\u0423\u0432\u0456\u043c\u043a\u043d\u0443\u0442\u0438\n\n\u0412\u0438\u043c\u043a\u043d\u0435\u043d\u043e. \u0412\u0438 \u0441\u0430\u043c\u0456 \u043e\u0431\u0438\u0440\u0430\u0454\u0442\u0435 \u0447\u0430\u0441 \u0440\u043e\u0437\u0433\u043e\u0440\u0442\u0430\u043d\u043d\u044f."
+    },
+    "1000-uk-managed-unknown-host-light-failure": {
+      "text": "\u041e\u043d\u043e\u0432\u0438\u0442\u0438 \u0434\u043e bbbbbbb\n\u041e\u043d\u043e\u0432\u0438\u0442\u0438 \u0434\u043e \u043f\u0435\u0440\u0435\u0432\u0456\u0440\u0435\u043d\u043e\u0457 \u0432\u0435\u0440\u0441\u0456\u0457 ccccccc\n\u0420\u043e\u0437\u0433\u043e\u0440\u043d\u0443\u0442\u0438 \u0449\u0435 \u0440\u0430\u0437\n\n\u0420\u043e\u0437\u0433\u043e\u0440\u0442\u0430\u043d\u043d\u044f \u0437\u0443\u043f\u0438\u043d\u0438\u043b\u043e\u0441\u044f \u043d\u0430 \u043a\u0440\u043e\u0446\u0456 \u00ab\u043f\u0435\u0440\u0435\u0432\u0456\u0440\u043a\u0430 \u0437\u0434\u043e\u0440\u043e\u0432'\u044f\u00bb \u0447\u0435\u0440\u0435\u0437 1 \u0445\u0432 00 \u0441.\n\nadoption 2 of 2 - recovering pending spawns timed out\n\n\u0412\u0438\u0437\u043d\u0430\u0447\u0438\u0442\u0438 bbbbbbb\n\u0417\u0456\u0431\u0440\u0430\u0442\u0438 \u043e\u0431\u0440\u0430\u0437\n\u0417\u0430\u043f\u0443\u0441\u0442\u0438\u0442\u0438 \u043a\u0430\u043d\u0434\u0438\u0434\u0430\u0442\u0430\n\u041f\u0435\u0440\u0435\u0432\u0456\u0440\u043a\u0430 \u0437\u0434\u043e\u0440\u043e\u0432'\u044f\n\u041f\u0435\u0440\u0435\u043c\u043a\u043d\u0443\u0442\u0438 \u0432\u0435\u0431\n\u041f\u0435\u0440\u0435\u0434\u0430\u0442\u0438 runtime host",
+      "rect": {
+        "x": 73,
+        "y": 349,
+        "width": 558.65625,
+        "height": 375.75
+      }
+    },
+    "1000-uk-managed-failed-dark-header": {
+      "text": "\u0412\u0435\u0431 \u043f\u0440\u0430\u0446\u044e\u0454 \u043d\u04301.6.1 \u00b7 ddddddd \u00b7 1 \u0441\u0456\u0447. 2026 \u0440.\nRuntime host \u043f\u0440\u0430\u0446\u044e\u0454 \u043d\u04301.6.1 \u00b7 aaaaaaa \u00b7 1 \u0441\u0456\u0447. 2026 \u0440.\n\u0414\u043e\u0441\u0442\u0443\u043f\u043d\u043e1.6.1 \u00b7 ccccccc \u00b7 1 \u0441\u0456\u0447. 2026 \u0440.\n\u041f\u0435\u0440\u0435\u0432\u0456\u0440\u0438\u0442\u0438\n\u0404 \u043e\u043d\u043e\u0432\u043b\u0435\u043d\u043d\u044f \u00b7 3 \u043a\u043e\u043c\u0456\u0442\u0438 \u043f\u043e\u0437\u0430\u0434\u0443 origin/main \u00b7 \u043f\u0435\u0440\u0435\u0432\u0456\u0440\u0435\u043d\u043e \u043e 02:00"
+    },
+    "1000-uk-managed-failed-dark": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 73,
+        "y": 247,
+        "width": 854,
+        "height": 96
+      },
+      "controlVisible": true,
+      "text": "\u0410\u0432\u0442\u043e\u043e\u043d\u043e\u0432\u043b\u0435\u043d\u043d\u044f\n\u0423\u0432\u0456\u043c\u043a\u043d\u0443\u0442\u0438\n\n\u0412\u0438\u043c\u043a\u043d\u0435\u043d\u043e. \u0412\u0438 \u0441\u0430\u043c\u0456 \u043e\u0431\u0438\u0440\u0430\u0454\u0442\u0435 \u0447\u0430\u0441 \u0440\u043e\u0437\u0433\u043e\u0440\u0442\u0430\u043d\u043d\u044f."
+    },
+    "1000-uk-managed-failed-dark-failure": {
+      "text": "\u041e\u043d\u043e\u0432\u0438\u0442\u0438 \u0434\u043e bbbbbbb\n\u041e\u043d\u043e\u0432\u0438\u0442\u0438 \u0434\u043e \u043f\u0435\u0440\u0435\u0432\u0456\u0440\u0435\u043d\u043e\u0457 \u0432\u0435\u0440\u0441\u0456\u0457 ccccccc\n\u0420\u043e\u0437\u0433\u043e\u0440\u043d\u0443\u0442\u0438 \u0449\u0435 \u0440\u0430\u0437\n\n\u0420\u043e\u0437\u0433\u043e\u0440\u0442\u0430\u043d\u043d\u044f \u0437\u0443\u043f\u0438\u043d\u0438\u043b\u043e\u0441\u044f \u043d\u0430 \u043a\u0440\u043e\u0446\u0456 \u00ab\u043f\u0435\u0440\u0435\u0432\u0456\u0440\u043a\u0430 \u0437\u0434\u043e\u0440\u043e\u0432'\u044f\u00bb \u0447\u0435\u0440\u0435\u0437 1 \u0445\u0432 00 \u0441.\n\nadoption 2 of 2 - recovering pending spawns timed out\n\n\u0412\u0438\u0437\u043d\u0430\u0447\u0438\u0442\u0438 bbbbbbb\n\u0417\u0456\u0431\u0440\u0430\u0442\u0438 \u043e\u0431\u0440\u0430\u0437\n\u0417\u0430\u043f\u0443\u0441\u0442\u0438\u0442\u0438 \u043a\u0430\u043d\u0434\u0438\u0434\u0430\u0442\u0430\n\u041f\u0435\u0440\u0435\u0432\u0456\u0440\u043a\u0430 \u0437\u0434\u043e\u0440\u043e\u0432'\u044f\n\u041f\u0435\u0440\u0435\u043c\u043a\u043d\u0443\u0442\u0438 \u0432\u0435\u0431\n\u041f\u0435\u0440\u0435\u0434\u0430\u0442\u0438 runtime host",
+      "rect": {
+        "x": 73,
+        "y": 359,
+        "width": 558.65625,
+        "height": 375.75
+      }
+    },
+    "1000-uk-managed-rolling-back-dark-header": {
+      "text": "\u0412\u0435\u0431 \u043f\u0440\u0430\u0446\u044e\u0454 \u043d\u04301.6.1 \u00b7 ddddddd \u00b7 1 \u0441\u0456\u0447. 2026 \u0440.\nRuntime host \u043f\u0440\u0430\u0446\u044e\u0454 \u043d\u04301.6.1 \u00b7 aaaaaaa \u00b7 1 \u0441\u0456\u0447. 2026 \u0440.\n\u0414\u043e\u0441\u0442\u0443\u043f\u043d\u043e1.6.1 \u00b7 ccccccc \u00b7 1 \u0441\u0456\u0447. 2026 \u0440.\n\u041f\u0435\u0440\u0435\u0432\u0456\u0440\u0438\u0442\u0438\n\u0404 \u043e\u043d\u043e\u0432\u043b\u0435\u043d\u043d\u044f \u00b7 3 \u043a\u043e\u043c\u0456\u0442\u0438 \u043f\u043e\u0437\u0430\u0434\u0443 origin/main \u00b7 \u043f\u0435\u0440\u0435\u0432\u0456\u0440\u0435\u043d\u043e \u043e 02:00"
+    },
+    "1000-uk-managed-rolling-back-dark": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 73,
+        "y": 247,
+        "width": 854,
+        "height": 96
+      },
+      "controlVisible": true,
+      "text": "\u0410\u0432\u0442\u043e\u043e\u043d\u043e\u0432\u043b\u0435\u043d\u043d\u044f\n\u0423\u0432\u0456\u043c\u043a\u043d\u0443\u0442\u0438\n\n\u0412\u0438\u043c\u043a\u043d\u0435\u043d\u043e. \u0412\u0438 \u0441\u0430\u043c\u0456 \u043e\u0431\u0438\u0440\u0430\u0454\u0442\u0435 \u0447\u0430\u0441 \u0440\u043e\u0437\u0433\u043e\u0440\u0442\u0430\u043d\u043d\u044f."
+    },
+    "1000-uk-managed-rolling-back-dark-failure": {
+      "text": "\u041e\u043d\u043e\u0432\u0438\u0442\u0438 \u0434\u043e bbbbbbb\n\u041e\u043d\u043e\u0432\u0438\u0442\u0438 \u0434\u043e \u043f\u0435\u0440\u0435\u0432\u0456\u0440\u0435\u043d\u043e\u0457 \u0432\u0435\u0440\u0441\u0456\u0457 ccccccc\n\u0420\u043e\u0437\u0433\u043e\u0440\u043d\u0443\u0442\u0438 \u0449\u0435 \u0440\u0430\u0437\n\n\u0420\u043e\u0437\u0433\u043e\u0440\u0442\u0430\u043d\u043d\u044f \u0437\u0443\u043f\u0438\u043d\u0438\u043b\u043e\u0441\u044f \u043d\u0430 \u043a\u0440\u043e\u0446\u0456 \u00ab\u043f\u0435\u0440\u0435\u0432\u0456\u0440\u043a\u0430 \u0437\u0434\u043e\u0440\u043e\u0432'\u044f\u00bb \u0447\u0435\u0440\u0435\u0437 1 \u0445\u0432 00 \u0441. \u0422\u0440\u0438\u0432\u0430\u0454 \u0432\u0456\u0434\u043a\u0430\u0442.\n\nadoption 2 of 2 - recovering pending spawns timed out\n\n\u0412\u0438\u0437\u043d\u0430\u0447\u0438\u0442\u0438 bbbbbbb\n\u0417\u0456\u0431\u0440\u0430\u0442\u0438 \u043e\u0431\u0440\u0430\u0437\n\u0417\u0430\u043f\u0443\u0441\u0442\u0438\u0442\u0438 \u043a\u0430\u043d\u0434\u0438\u0434\u0430\u0442\u0430\n\u041f\u0435\u0440\u0435\u0432\u0456\u0440\u043a\u0430 \u0437\u0434\u043e\u0440\u043e\u0432'\u044f\n\u041f\u0435\u0440\u0435\u043c\u043a\u043d\u0443\u0442\u0438 \u0432\u0435\u0431\n\u041f\u0435\u0440\u0435\u0434\u0430\u0442\u0438 runtime host",
+      "rect": {
+        "x": 73,
+        "y": 359,
+        "width": 558.65625,
+        "height": 375.75
+      }
+    },
+    "1000-uk-managed-rollback-failed-dark-header": {
+      "text": "\u0412\u0435\u0431 \u043f\u0440\u0430\u0446\u044e\u0454 \u043d\u04301.6.1 \u00b7 ddddddd \u00b7 1 \u0441\u0456\u0447. 2026 \u0440.\nRuntime host \u043f\u0440\u0430\u0446\u044e\u0454 \u043d\u04301.6.1 \u00b7 aaaaaaa \u00b7 1 \u0441\u0456\u0447. 2026 \u0440.\n\u0414\u043e\u0441\u0442\u0443\u043f\u043d\u043e1.6.1 \u00b7 ccccccc \u00b7 1 \u0441\u0456\u0447. 2026 \u0440.\n\u041f\u0435\u0440\u0435\u0432\u0456\u0440\u0438\u0442\u0438\n\u0404 \u043e\u043d\u043e\u0432\u043b\u0435\u043d\u043d\u044f \u00b7 3 \u043a\u043e\u043c\u0456\u0442\u0438 \u043f\u043e\u0437\u0430\u0434\u0443 origin/main \u00b7 \u043f\u0435\u0440\u0435\u0432\u0456\u0440\u0435\u043d\u043e \u043e 02:00"
+    },
+    "1000-uk-managed-rollback-failed-dark": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 73,
+        "y": 247,
+        "width": 854,
+        "height": 96
+      },
+      "controlVisible": true,
+      "text": "\u0410\u0432\u0442\u043e\u043e\u043d\u043e\u0432\u043b\u0435\u043d\u043d\u044f\n\u0423\u0432\u0456\u043c\u043a\u043d\u0443\u0442\u0438\n\n\u0412\u0438\u043c\u043a\u043d\u0435\u043d\u043e. \u0412\u0438 \u0441\u0430\u043c\u0456 \u043e\u0431\u0438\u0440\u0430\u0454\u0442\u0435 \u0447\u0430\u0441 \u0440\u043e\u0437\u0433\u043e\u0440\u0442\u0430\u043d\u043d\u044f."
+    },
+    "1000-uk-managed-rollback-failed-dark-failure": {
+      "text": "\u041e\u043d\u043e\u0432\u0438\u0442\u0438 \u0434\u043e bbbbbbb\n\u041e\u043d\u043e\u0432\u0438\u0442\u0438 \u0434\u043e \u043f\u0435\u0440\u0435\u0432\u0456\u0440\u0435\u043d\u043e\u0457 \u0432\u0435\u0440\u0441\u0456\u0457 ccccccc\n\u0420\u043e\u0437\u0433\u043e\u0440\u043d\u0443\u0442\u0438 \u0449\u0435 \u0440\u0430\u0437\n\n\u0420\u043e\u0437\u0433\u043e\u0440\u0442\u0430\u043d\u043d\u044f \u0437\u0443\u043f\u0438\u043d\u0438\u043b\u043e\u0441\u044f \u043d\u0430 \u043a\u0440\u043e\u0446\u0456 \u00ab\u043f\u0435\u0440\u0435\u0432\u0456\u0440\u043a\u0430 \u0437\u0434\u043e\u0440\u043e\u0432'\u044f\u00bb \u0447\u0435\u0440\u0435\u0437 1 \u0445\u0432 00 \u0441.\n\nrecovering pending spawns timed out; rollback could not prove owner death\n\n\u0412\u0438\u0437\u043d\u0430\u0447\u0438\u0442\u0438 bbbbbbb\n\u0417\u0456\u0431\u0440\u0430\u0442\u0438 \u043e\u0431\u0440\u0430\u0437\n\u0417\u0430\u043f\u0443\u0441\u0442\u0438\u0442\u0438 \u043a\u0430\u043d\u0434\u0438\u0434\u0430\u0442\u0430\n\u041f\u0435\u0440\u0435\u0432\u0456\u0440\u043a\u0430 \u0437\u0434\u043e\u0440\u043e\u0432'\u044f\n\u041f\u0435\u0440\u0435\u043c\u043a\u043d\u0443\u0442\u0438 \u0432\u0435\u0431\n\u041f\u0435\u0440\u0435\u0434\u0430\u0442\u0438 runtime host",
+      "rect": {
+        "x": 73,
+        "y": 359,
+        "width": 558.65625,
+        "height": 375.75
+      }
+    },
+    "1000-uk-managed-rolled-back-dark-header": {
+      "text": "\u0412\u0435\u0431 \u043f\u0440\u0430\u0446\u044e\u0454 \u043d\u04301.6.1 \u00b7 aaaaaaa \u00b7 1 \u0441\u0456\u0447. 2026 \u0440.\nRuntime host \u043f\u0440\u0430\u0446\u044e\u0454 \u043d\u04301.6.1 \u00b7 aaaaaaa \u00b7 1 \u0441\u0456\u0447. 2026 \u0440.\n\u0414\u043e\u0441\u0442\u0443\u043f\u043d\u043e1.6.1 \u00b7 ccccccc \u00b7 1 \u0441\u0456\u0447. 2026 \u0440.\n\u041f\u0435\u0440\u0435\u0432\u0456\u0440\u0438\u0442\u0438\n\u0404 \u043e\u043d\u043e\u0432\u043b\u0435\u043d\u043d\u044f \u00b7 3 \u043a\u043e\u043c\u0456\u0442\u0438 \u043f\u043e\u0437\u0430\u0434\u0443 origin/main \u00b7 \u043f\u0435\u0440\u0435\u0432\u0456\u0440\u0435\u043d\u043e \u043e 02:00"
+    },
+    "1000-uk-managed-rolled-back-dark": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 73,
+        "y": 247,
+        "width": 854,
+        "height": 96
+      },
+      "controlVisible": true,
+      "text": "\u0410\u0432\u0442\u043e\u043e\u043d\u043e\u0432\u043b\u0435\u043d\u043d\u044f\n\u0423\u0432\u0456\u043c\u043a\u043d\u0443\u0442\u0438\n\n\u0412\u0438\u043c\u043a\u043d\u0435\u043d\u043e. \u0412\u0438 \u0441\u0430\u043c\u0456 \u043e\u0431\u0438\u0440\u0430\u0454\u0442\u0435 \u0447\u0430\u0441 \u0440\u043e\u0437\u0433\u043e\u0440\u0442\u0430\u043d\u043d\u044f."
+    },
+    "1000-uk-managed-rolled-back-dark-failure": {
+      "text": "\u041e\u043d\u043e\u0432\u0438\u0442\u0438 \u0434\u043e bbbbbbb\n\u041e\u043d\u043e\u0432\u0438\u0442\u0438 \u0434\u043e \u043f\u0435\u0440\u0435\u0432\u0456\u0440\u0435\u043d\u043e\u0457 \u0432\u0435\u0440\u0441\u0456\u0457 ccccccc\n\u0420\u043e\u0437\u0433\u043e\u0440\u043d\u0443\u0442\u0438 \u0449\u0435 \u0440\u0430\u0437\n\n\u0420\u043e\u0437\u0433\u043e\u0440\u0442\u0430\u043d\u043d\u044f \u0437\u0443\u043f\u0438\u043d\u0438\u043b\u043e\u0441\u044f \u043d\u0430 \u043a\u0440\u043e\u0446\u0456 \u00ab\u043f\u0435\u0440\u0435\u0432\u0456\u0440\u043a\u0430 \u0437\u0434\u043e\u0440\u043e\u0432'\u044f\u00bb \u0447\u0435\u0440\u0435\u0437 1 \u0445\u0432 00 \u0441. \u0412\u0456\u0434\u043a\u0430\u0442 \u0437\u0430\u0432\u0435\u0440\u0448\u0435\u043d\u043e; \u043f\u043e\u0442\u043e\u0447\u043d\u0456 \u0440\u0435\u0432\u0456\u0437\u0456\u0457 \u043a\u043e\u043c\u043f\u043e\u043d\u0435\u043d\u0442\u0456\u0432 \u043d\u0430\u0432\u0435\u0434\u0435\u043d\u043e \u0432\u0438\u0449\u0435.\n\nadoption 2 of 2 - recovering pending spawns timed out\n\n\u0412\u0438\u0437\u043d\u0430\u0447\u0438\u0442\u0438 bbbbbbb\n\u0417\u0456\u0431\u0440\u0430\u0442\u0438 \u043e\u0431\u0440\u0430\u0437\n\u0417\u0430\u043f\u0443\u0441\u0442\u0438\u0442\u0438 \u043a\u0430\u043d\u0434\u0438\u0434\u0430\u0442\u0430\n\u041f\u0435\u0440\u0435\u0432\u0456\u0440\u043a\u0430 \u0437\u0434\u043e\u0440\u043e\u0432'\u044f\n\u041f\u0435\u0440\u0435\u043c\u043a\u043d\u0443\u0442\u0438 \u0432\u0435\u0431\n\u041f\u0435\u0440\u0435\u0434\u0430\u0442\u0438 runtime host",
+      "rect": {
+        "x": 73,
+        "y": 359,
+        "width": 558.65625,
+        "height": 393.75
+      }
+    },
+    "1000-uk-managed-external-success-dark-header": {
+      "text": "\u0412\u0435\u0431 \u043f\u0440\u0430\u0446\u044e\u0454 \u043d\u04301.6.1 \u00b7 ccccccc \u00b7 1 \u0441\u0456\u0447. 2026 \u0440.\nRuntime host \u043f\u0440\u0430\u0446\u044e\u0454 \u043d\u04301.6.1 \u00b7 ccccccc \u00b7 1 \u0441\u0456\u0447. 2026 \u0440.\n\u041f\u0435\u0440\u0435\u0432\u0456\u0440\u0438\u0442\u0438\n\u0410\u043a\u0442\u0443\u0430\u043b\u044c\u043d\u0430 \u0432\u0435\u0440\u0441\u0456\u044f, \u043f\u0435\u0440\u0435\u0432\u0456\u0440\u0435\u043d\u043e \u043e 02:00 \u00b7 \u041d\u0430\u0441\u0442\u0443\u043f\u043d\u0430 \u043f\u0435\u0440\u0435\u0432\u0456\u0440\u043a\u0430 \u043e \u2014"
+    },
+    "1000-uk-managed-external-success-dark": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 73,
+        "y": 237,
+        "width": 854,
+        "height": 96
+      },
+      "controlVisible": true,
+      "text": "\u0410\u0432\u0442\u043e\u043e\u043d\u043e\u0432\u043b\u0435\u043d\u043d\u044f\n\u0423\u0432\u0456\u043c\u043a\u043d\u0443\u0442\u0438\n\n\u0412\u0438\u043c\u043a\u043d\u0435\u043d\u043e. \u0412\u0438 \u0441\u0430\u043c\u0456 \u043e\u0431\u0438\u0440\u0430\u0454\u0442\u0435 \u0447\u0430\u0441 \u0440\u043e\u0437\u0433\u043e\u0440\u0442\u0430\u043d\u043d\u044f."
+    },
+    "1000-uk-managed-external-success-dark-failure": {
+      "text": "\u041f\u043e\u043f\u0435\u0440\u0435\u0434\u043d\u0454 \u0440\u043e\u0437\u0433\u043e\u0440\u0442\u0430\u043d\u043d\u044f bbbbbbb \u0437\u0430\u0432\u0435\u0440\u0448\u0438\u043b\u043e\u0441\u044f \u043f\u043e\u043c\u0438\u043b\u043a\u043e\u044e.\n\nadoption 2 of 2 - recovering pending spawns timed out",
+      "rect": {
+        "x": 73,
+        "y": 678.25,
+        "width": 558.65625,
+        "height": 80.5
+      }
+    },
+    "1000-uk-managed-external-success-dark-reloaded": {
+      "previous": "\u041f\u043e\u043f\u0435\u0440\u0435\u0434\u043d\u0454 \u0440\u043e\u0437\u0433\u043e\u0440\u0442\u0430\u043d\u043d\u044f bbbbbbb \u0437\u0430\u0432\u0435\u0440\u0448\u0438\u043b\u043e\u0441\u044f \u043f\u043e\u043c\u0438\u043b\u043a\u043e\u044e.\n\nadoption 2 of 2 - recovering pending spawns timed out"
+    },
+    "1000-uk-managed-external-success-unknown-host-dark-header": {
+      "text": "\u0412\u0435\u0431 \u043f\u0440\u0430\u0446\u044e\u0454 \u043d\u04301.6.1 \u00b7 ccccccc \u00b7 1 \u0441\u0456\u0447. 2026 \u0440.\nRuntime host\u0440\u0435\u0432\u0456\u0437\u0456\u044f \u043d\u0435\u0432\u0456\u0434\u043e\u043c\u0430\n\u041f\u0435\u0440\u0435\u0432\u0456\u0440\u0438\u0442\u0438\n\u0410\u043a\u0442\u0443\u0430\u043b\u044c\u043d\u0430 \u0432\u0435\u0440\u0441\u0456\u044f, \u043f\u0435\u0440\u0435\u0432\u0456\u0440\u0435\u043d\u043e \u043e 02:00 \u00b7 \u041d\u0430\u0441\u0442\u0443\u043f\u043d\u0430 \u043f\u0435\u0440\u0435\u0432\u0456\u0440\u043a\u0430 \u043e \u2014"
+    },
+    "1000-uk-managed-external-success-unknown-host-dark": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 73,
+        "y": 237,
+        "width": 854,
+        "height": 96
+      },
+      "controlVisible": true,
+      "text": "\u0410\u0432\u0442\u043e\u043e\u043d\u043e\u0432\u043b\u0435\u043d\u043d\u044f\n\u0423\u0432\u0456\u043c\u043a\u043d\u0443\u0442\u0438\n\n\u0412\u0438\u043c\u043a\u043d\u0435\u043d\u043e. \u0412\u0438 \u0441\u0430\u043c\u0456 \u043e\u0431\u0438\u0440\u0430\u0454\u0442\u0435 \u0447\u0430\u0441 \u0440\u043e\u0437\u0433\u043e\u0440\u0442\u0430\u043d\u043d\u044f."
+    },
+    "1000-uk-managed-external-success-unknown-host-dark-failure": {
+      "text": "\u041f\u043e\u043f\u0435\u0440\u0435\u0434\u043d\u0454 \u0440\u043e\u0437\u0433\u043e\u0440\u0442\u0430\u043d\u043d\u044f bbbbbbb \u0437\u0430\u0432\u0435\u0440\u0448\u0438\u043b\u043e\u0441\u044f \u043f\u043e\u043c\u0438\u043b\u043a\u043e\u044e.\n\nadoption 2 of 2 - recovering pending spawns timed out",
+      "rect": {
+        "x": 73,
+        "y": 696.25,
+        "width": 558.65625,
+        "height": 80.5
+      }
+    },
+    "1000-uk-managed-external-success-unknown-host-dark-reloaded": {
+      "previous": "\u041f\u043e\u043f\u0435\u0440\u0435\u0434\u043d\u0454 \u0440\u043e\u0437\u0433\u043e\u0440\u0442\u0430\u043d\u043d\u044f bbbbbbb \u0437\u0430\u0432\u0435\u0440\u0448\u0438\u043b\u043e\u0441\u044f \u043f\u043e\u043c\u0438\u043b\u043a\u043e\u044e.\n\nadoption 2 of 2 - recovering pending spawns timed out"
+    },
+    "1000-uk-managed-unknown-host-dark-header": {
+      "text": "\u0412\u0435\u0431 \u043f\u0440\u0430\u0446\u044e\u0454 \u043d\u04301.6.1 \u00b7 bbbbbbb \u00b7 1 \u0441\u0456\u0447. 2026 \u0440.\nRuntime host\u0440\u0435\u0432\u0456\u0437\u0456\u044f \u043d\u0435\u0432\u0456\u0434\u043e\u043c\u0430\n\u0414\u043e\u0441\u0442\u0443\u043f\u043d\u043e1.6.1 \u00b7 ccccccc \u00b7 1 \u0441\u0456\u0447. 2026 \u0440.\n\u041f\u0435\u0440\u0435\u0432\u0456\u0440\u0438\u0442\u0438\n\u0404 \u043e\u043d\u043e\u0432\u043b\u0435\u043d\u043d\u044f \u00b7 3 \u043a\u043e\u043c\u0456\u0442\u0438 \u043f\u043e\u0437\u0430\u0434\u0443 origin/main \u00b7 \u043f\u0435\u0440\u0435\u0432\u0456\u0440\u0435\u043d\u043e \u043e 02:00"
+    },
+    "1000-uk-managed-unknown-host-dark": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 73,
+        "y": 237,
+        "width": 854,
+        "height": 96
+      },
+      "controlVisible": true,
+      "text": "\u0410\u0432\u0442\u043e\u043e\u043d\u043e\u0432\u043b\u0435\u043d\u043d\u044f\n\u0423\u0432\u0456\u043c\u043a\u043d\u0443\u0442\u0438\n\n\u0412\u0438\u043c\u043a\u043d\u0435\u043d\u043e. \u0412\u0438 \u0441\u0430\u043c\u0456 \u043e\u0431\u0438\u0440\u0430\u0454\u0442\u0435 \u0447\u0430\u0441 \u0440\u043e\u0437\u0433\u043e\u0440\u0442\u0430\u043d\u043d\u044f."
+    },
+    "1000-uk-managed-unknown-host-dark-failure": {
+      "text": "\u041e\u043d\u043e\u0432\u0438\u0442\u0438 \u0434\u043e bbbbbbb\n\u041e\u043d\u043e\u0432\u0438\u0442\u0438 \u0434\u043e \u043f\u0435\u0440\u0435\u0432\u0456\u0440\u0435\u043d\u043e\u0457 \u0432\u0435\u0440\u0441\u0456\u0457 ccccccc\n\u0420\u043e\u0437\u0433\u043e\u0440\u043d\u0443\u0442\u0438 \u0449\u0435 \u0440\u0430\u0437\n\n\u0420\u043e\u0437\u0433\u043e\u0440\u0442\u0430\u043d\u043d\u044f \u0437\u0443\u043f\u0438\u043d\u0438\u043b\u043e\u0441\u044f \u043d\u0430 \u043a\u0440\u043e\u0446\u0456 \u00ab\u043f\u0435\u0440\u0435\u0432\u0456\u0440\u043a\u0430 \u0437\u0434\u043e\u0440\u043e\u0432'\u044f\u00bb \u0447\u0435\u0440\u0435\u0437 1 \u0445\u0432 00 \u0441.\n\nadoption 2 of 2 - recovering pending spawns timed out\n\n\u0412\u0438\u0437\u043d\u0430\u0447\u0438\u0442\u0438 bbbbbbb\n\u0417\u0456\u0431\u0440\u0430\u0442\u0438 \u043e\u0431\u0440\u0430\u0437\n\u0417\u0430\u043f\u0443\u0441\u0442\u0438\u0442\u0438 \u043a\u0430\u043d\u0434\u0438\u0434\u0430\u0442\u0430\n\u041f\u0435\u0440\u0435\u0432\u0456\u0440\u043a\u0430 \u0437\u0434\u043e\u0440\u043e\u0432'\u044f\n\u041f\u0435\u0440\u0435\u043c\u043a\u043d\u0443\u0442\u0438 \u0432\u0435\u0431\n\u041f\u0435\u0440\u0435\u0434\u0430\u0442\u0438 runtime host",
+      "rect": {
+        "x": 73,
+        "y": 349,
+        "width": 558.65625,
+        "height": 375.75
+      }
+    },
+    "390-en-managed-failed-light-header": {
+      "text": "Web runs1.6.1 \u00b7 ddddddd \u00b7 1 Jan 2026\nRuntime host runs1.6.1 \u00b7 aaaaaaa \u00b7 1 Jan 2026\nAvailable1.6.1 \u00b7 ccccccc \u00b7 1 Jan 2026\nCheck now\nUpdate available \u00b7 3 commits behind origin/main \u00b7 checked 02:00"
+    },
+    "390-en-managed-failed-light": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 16,
+        "y": 277,
+        "width": 358,
+        "height": 131.5
+      },
+      "controlVisible": true,
+      "text": "Automatic updates\nTurn on\n\nOff. You choose when to deploy."
+    },
+    "390-en-managed-failed-light-failure": {
+      "text": "Update to bbbbbbb\nUpdate to checked ccccccc\nDeploy again\n\nDeployment stopped at health check after 1 m 00 s.\n\nadoption 2 of 2 - recovering pending spawns timed out\n\nResolve bbbbbbb\nBuild image\nStart candidate\nHealth check\nSwitch web\nHand over runtime host",
+      "rect": {
+        "x": 16,
+        "y": 391.5,
+        "width": 358,
+        "height": 452.25
+      }
+    },
+    "390-en-managed-rolling-back-light-header": {
+      "text": "Web runs1.6.1 \u00b7 ddddddd \u00b7 1 Jan 2026\nRuntime host runs1.6.1 \u00b7 aaaaaaa \u00b7 1 Jan 2026\nAvailable1.6.1 \u00b7 ccccccc \u00b7 1 Jan 2026\nCheck now\nUpdate available \u00b7 3 commits behind origin/main \u00b7 checked 02:00"
+    },
+    "390-en-managed-rolling-back-light": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 16,
+        "y": 277,
+        "width": 358,
+        "height": 131.5
+      },
+      "controlVisible": true,
+      "text": "Automatic updates\nTurn on\n\nOff. You choose when to deploy."
+    },
+    "390-en-managed-rolling-back-light-failure": {
+      "text": "Update to bbbbbbb\nUpdate to checked ccccccc\nDeploy again\n\nDeployment stopped at health check after 1 m 00 s. Rollback is in progress.\n\nadoption 2 of 2 - recovering pending spawns timed out\n\nResolve bbbbbbb\nBuild image\nStart candidate\nHealth check\nSwitch web\nHand over runtime host",
+      "rect": {
+        "x": 16,
+        "y": 373.5,
+        "width": 358,
+        "height": 470.25
+      }
+    },
+    "390-en-managed-rollback-failed-light-header": {
+      "text": "Web runs1.6.1 \u00b7 ddddddd \u00b7 1 Jan 2026\nRuntime host runs1.6.1 \u00b7 aaaaaaa \u00b7 1 Jan 2026\nAvailable1.6.1 \u00b7 ccccccc \u00b7 1 Jan 2026\nCheck now\nUpdate available \u00b7 3 commits behind origin/main \u00b7 checked 02:00"
+    },
+    "390-en-managed-rollback-failed-light": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 16,
+        "y": 277,
+        "width": 358,
+        "height": 131.5
+      },
+      "controlVisible": true,
+      "text": "Automatic updates\nTurn on\n\nOff. You choose when to deploy."
+    },
+    "390-en-managed-rollback-failed-light-failure": {
+      "text": "Update to bbbbbbb\nUpdate to checked ccccccc\nDeploy again\n\nDeployment stopped at health check after 1 m 00 s.\n\nrecovering pending spawns timed out; rollback could not prove owner death\n\nResolve bbbbbbb\nBuild image\nStart candidate\nHealth check\nSwitch web\nHand over runtime host",
+      "rect": {
+        "x": 16,
+        "y": 391.5,
+        "width": 358,
+        "height": 452.25
+      }
+    },
+    "390-en-managed-rolled-back-light-header": {
+      "text": "Web runs1.6.1 \u00b7 aaaaaaa \u00b7 1 Jan 2026\nRuntime host runs1.6.1 \u00b7 aaaaaaa \u00b7 1 Jan 2026\nAvailable1.6.1 \u00b7 ccccccc \u00b7 1 Jan 2026\nCheck now\nUpdate available \u00b7 3 commits behind origin/main \u00b7 checked 02:00"
+    },
+    "390-en-managed-rolled-back-light": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 16,
+        "y": 277,
+        "width": 358,
+        "height": 131.5
+      },
+      "controlVisible": true,
+      "text": "Automatic updates\nTurn on\n\nOff. You choose when to deploy."
+    },
+    "390-en-managed-rolled-back-light-failure": {
+      "text": "Update to bbbbbbb\nUpdate to checked ccccccc\nDeploy again\n\nDeployment stopped at health check after 1 m 00 s. Rollback completed; current component revisions are shown above.\n\nadoption 2 of 2 - recovering pending spawns timed out\n\nResolve bbbbbbb\nBuild image\nStart candidate\nHealth check\nSwitch web\nHand over runtime host",
+      "rect": {
+        "x": 16,
+        "y": 355.5,
+        "width": 358,
+        "height": 488.25
+      }
+    },
+    "390-en-managed-external-success-light-header": {
+      "text": "Web runs1.6.1 \u00b7 ccccccc \u00b7 1 Jan 2026\nRuntime host runs1.6.1 \u00b7 ccccccc \u00b7 1 Jan 2026\nCheck now\nUp to date, checked at 02:00 \u00b7 Next check at \u2014"
+    },
+    "390-en-managed-external-success-light": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 16,
+        "y": 237,
+        "width": 358,
+        "height": 131.5
+      },
+      "controlVisible": true,
+      "text": "Automatic updates\nTurn on\n\nOff. You choose when to deploy."
+    },
+    "390-en-managed-external-success-light-failure": {
+      "text": "Earlier deployment bbbbbbb failed.\n\nadoption 2 of 2 - recovering pending spawns timed out",
+      "rect": {
+        "x": 16,
+        "y": 673.75,
+        "width": 358,
+        "height": 76.5
+      }
+    },
+    "390-en-managed-external-success-light-reloaded": {
+      "previous": "Earlier deployment bbbbbbb failed.\n\nadoption 2 of 2 - recovering pending spawns timed out"
+    },
+    "390-en-managed-external-success-unknown-host-light-header": {
+      "text": "Web runs1.6.1 \u00b7 ccccccc \u00b7 1 Jan 2026\nRuntime hostunknown revision\nCheck now\nUp to date, checked at 02:00 \u00b7 Next check at \u2014"
+    },
+    "390-en-managed-external-success-unknown-host-light": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 16,
+        "y": 237,
+        "width": 358,
+        "height": 131.5
+      },
+      "controlVisible": true,
+      "text": "Automatic updates\nTurn on\n\nOff. You choose when to deploy."
+    },
+    "390-en-managed-external-success-unknown-host-light-failure": {
+      "text": "Earlier deployment bbbbbbb failed.\n\nadoption 2 of 2 - recovering pending spawns timed out",
+      "rect": {
+        "x": 16,
+        "y": 673.75,
+        "width": 358,
+        "height": 76.5
+      }
+    },
+    "390-en-managed-external-success-unknown-host-light-reloaded": {
+      "previous": "Earlier deployment bbbbbbb failed.\n\nadoption 2 of 2 - recovering pending spawns timed out"
+    },
+    "390-en-managed-unknown-host-light-header": {
+      "text": "Web runs1.6.1 \u00b7 bbbbbbb \u00b7 1 Jan 2026\nRuntime hostunknown revision\nAvailable1.6.1 \u00b7 ccccccc \u00b7 1 Jan 2026\nCheck now\nUpdate available \u00b7 3 commits behind origin/main \u00b7 checked 02:00"
+    },
+    "390-en-managed-unknown-host-light": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 16,
+        "y": 277,
+        "width": 358,
+        "height": 131.5
+      },
+      "controlVisible": true,
+      "text": "Automatic updates\nTurn on\n\nOff. You choose when to deploy."
+    },
+    "390-en-managed-unknown-host-light-failure": {
+      "text": "Update to bbbbbbb\nUpdate to checked ccccccc\nDeploy again\n\nDeployment stopped at health check after 1 m 00 s.\n\nadoption 2 of 2 - recovering pending spawns timed out\n\nResolve bbbbbbb\nBuild image\nStart candidate\nHealth check\nSwitch web\nHand over runtime host",
+      "rect": {
+        "x": 16,
+        "y": 391.5,
+        "width": 358,
+        "height": 452.25
+      }
+    },
+    "390-en-managed-failed-dark-header": {
+      "text": "Web runs1.6.1 \u00b7 ddddddd \u00b7 1 Jan 2026\nRuntime host runs1.6.1 \u00b7 aaaaaaa \u00b7 1 Jan 2026\nAvailable1.6.1 \u00b7 ccccccc \u00b7 1 Jan 2026\nCheck now\nUpdate available \u00b7 3 commits behind origin/main \u00b7 checked 02:00"
+    },
+    "390-en-managed-failed-dark": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 16,
+        "y": 277,
+        "width": 358,
+        "height": 131.5
+      },
+      "controlVisible": true,
+      "text": "Automatic updates\nTurn on\n\nOff. You choose when to deploy."
+    },
+    "390-en-managed-failed-dark-failure": {
+      "text": "Update to bbbbbbb\nUpdate to checked ccccccc\nDeploy again\n\nDeployment stopped at health check after 1 m 00 s.\n\nadoption 2 of 2 - recovering pending spawns timed out\n\nResolve bbbbbbb\nBuild image\nStart candidate\nHealth check\nSwitch web\nHand over runtime host",
+      "rect": {
+        "x": 16,
+        "y": 391.5,
+        "width": 358,
+        "height": 452.25
+      }
+    },
+    "390-en-managed-rolling-back-dark-header": {
+      "text": "Web runs1.6.1 \u00b7 ddddddd \u00b7 1 Jan 2026\nRuntime host runs1.6.1 \u00b7 aaaaaaa \u00b7 1 Jan 2026\nAvailable1.6.1 \u00b7 ccccccc \u00b7 1 Jan 2026\nCheck now\nUpdate available \u00b7 3 commits behind origin/main \u00b7 checked 02:00"
+    },
+    "390-en-managed-rolling-back-dark": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 16,
+        "y": 277,
+        "width": 358,
+        "height": 131.5
+      },
+      "controlVisible": true,
+      "text": "Automatic updates\nTurn on\n\nOff. You choose when to deploy."
+    },
+    "390-en-managed-rolling-back-dark-failure": {
+      "text": "Update to bbbbbbb\nUpdate to checked ccccccc\nDeploy again\n\nDeployment stopped at health check after 1 m 00 s. Rollback is in progress.\n\nadoption 2 of 2 - recovering pending spawns timed out\n\nResolve bbbbbbb\nBuild image\nStart candidate\nHealth check\nSwitch web\nHand over runtime host",
+      "rect": {
+        "x": 16,
+        "y": 373.5,
+        "width": 358,
+        "height": 470.25
+      }
+    },
+    "390-en-managed-rollback-failed-dark-header": {
+      "text": "Web runs1.6.1 \u00b7 ddddddd \u00b7 1 Jan 2026\nRuntime host runs1.6.1 \u00b7 aaaaaaa \u00b7 1 Jan 2026\nAvailable1.6.1 \u00b7 ccccccc \u00b7 1 Jan 2026\nCheck now\nUpdate available \u00b7 3 commits behind origin/main \u00b7 checked 02:00"
+    },
+    "390-en-managed-rollback-failed-dark": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 16,
+        "y": 277,
+        "width": 358,
+        "height": 131.5
+      },
+      "controlVisible": true,
+      "text": "Automatic updates\nTurn on\n\nOff. You choose when to deploy."
+    },
+    "390-en-managed-rollback-failed-dark-failure": {
+      "text": "Update to bbbbbbb\nUpdate to checked ccccccc\nDeploy again\n\nDeployment stopped at health check after 1 m 00 s.\n\nrecovering pending spawns timed out; rollback could not prove owner death\n\nResolve bbbbbbb\nBuild image\nStart candidate\nHealth check\nSwitch web\nHand over runtime host",
+      "rect": {
+        "x": 16,
+        "y": 391.5,
+        "width": 358,
+        "height": 452.25
+      }
+    },
+    "390-en-managed-rolled-back-dark-header": {
+      "text": "Web runs1.6.1 \u00b7 aaaaaaa \u00b7 1 Jan 2026\nRuntime host runs1.6.1 \u00b7 aaaaaaa \u00b7 1 Jan 2026\nAvailable1.6.1 \u00b7 ccccccc \u00b7 1 Jan 2026\nCheck now\nUpdate available \u00b7 3 commits behind origin/main \u00b7 checked 02:00"
+    },
+    "390-en-managed-rolled-back-dark": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 16,
+        "y": 277,
+        "width": 358,
+        "height": 131.5
+      },
+      "controlVisible": true,
+      "text": "Automatic updates\nTurn on\n\nOff. You choose when to deploy."
+    },
+    "390-en-managed-rolled-back-dark-failure": {
+      "text": "Update to bbbbbbb\nUpdate to checked ccccccc\nDeploy again\n\nDeployment stopped at health check after 1 m 00 s. Rollback completed; current component revisions are shown above.\n\nadoption 2 of 2 - recovering pending spawns timed out\n\nResolve bbbbbbb\nBuild image\nStart candidate\nHealth check\nSwitch web\nHand over runtime host",
+      "rect": {
+        "x": 16,
+        "y": 355.5,
+        "width": 358,
+        "height": 488.25
+      }
+    },
+    "390-en-managed-external-success-dark-header": {
+      "text": "Web runs1.6.1 \u00b7 ccccccc \u00b7 1 Jan 2026\nRuntime host runs1.6.1 \u00b7 ccccccc \u00b7 1 Jan 2026\nCheck now\nUp to date, checked at 02:00 \u00b7 Next check at \u2014"
+    },
+    "390-en-managed-external-success-dark": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 16,
+        "y": 237,
+        "width": 358,
+        "height": 131.5
+      },
+      "controlVisible": true,
+      "text": "Automatic updates\nTurn on\n\nOff. You choose when to deploy."
+    },
+    "390-en-managed-external-success-dark-failure": {
+      "text": "Earlier deployment bbbbbbb failed.\n\nadoption 2 of 2 - recovering pending spawns timed out",
+      "rect": {
+        "x": 16,
+        "y": 673.75,
+        "width": 358,
+        "height": 76.5
+      }
+    },
+    "390-en-managed-external-success-dark-reloaded": {
+      "previous": "Earlier deployment bbbbbbb failed.\n\nadoption 2 of 2 - recovering pending spawns timed out"
+    },
+    "390-en-managed-external-success-unknown-host-dark-header": {
+      "text": "Web runs1.6.1 \u00b7 ccccccc \u00b7 1 Jan 2026\nRuntime hostunknown revision\nCheck now\nUp to date, checked at 02:00 \u00b7 Next check at \u2014"
+    },
+    "390-en-managed-external-success-unknown-host-dark": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 16,
+        "y": 237,
+        "width": 358,
+        "height": 131.5
+      },
+      "controlVisible": true,
+      "text": "Automatic updates\nTurn on\n\nOff. You choose when to deploy."
+    },
+    "390-en-managed-external-success-unknown-host-dark-failure": {
+      "text": "Earlier deployment bbbbbbb failed.\n\nadoption 2 of 2 - recovering pending spawns timed out",
+      "rect": {
+        "x": 16,
+        "y": 673.75,
+        "width": 358,
+        "height": 76.5
+      }
+    },
+    "390-en-managed-external-success-unknown-host-dark-reloaded": {
+      "previous": "Earlier deployment bbbbbbb failed.\n\nadoption 2 of 2 - recovering pending spawns timed out"
+    },
+    "390-en-managed-unknown-host-dark-header": {
+      "text": "Web runs1.6.1 \u00b7 bbbbbbb \u00b7 1 Jan 2026\nRuntime hostunknown revision\nAvailable1.6.1 \u00b7 ccccccc \u00b7 1 Jan 2026\nCheck now\nUpdate available \u00b7 3 commits behind origin/main \u00b7 checked 02:00"
+    },
+    "390-en-managed-unknown-host-dark": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 16,
+        "y": 277,
+        "width": 358,
+        "height": 131.5
+      },
+      "controlVisible": true,
+      "text": "Automatic updates\nTurn on\n\nOff. You choose when to deploy."
+    },
+    "390-en-managed-unknown-host-dark-failure": {
+      "text": "Update to bbbbbbb\nUpdate to checked ccccccc\nDeploy again\n\nDeployment stopped at health check after 1 m 00 s.\n\nadoption 2 of 2 - recovering pending spawns timed out\n\nResolve bbbbbbb\nBuild image\nStart candidate\nHealth check\nSwitch web\nHand over runtime host",
+      "rect": {
+        "x": 16,
+        "y": 391.5,
+        "width": 358,
+        "height": 452.25
+      }
+    },
+    "390-uk-managed-failed-light-header": {
+      "text": "\u0412\u0435\u0431 \u043f\u0440\u0430\u0446\u044e\u0454 \u043d\u04301.6.1 \u00b7 ddddddd \u00b7 1 \u0441\u0456\u0447. 2026 \u0440.\nRuntime host \u043f\u0440\u0430\u0446\u044e\u0454 \u043d\u04301.6.1 \u00b7 aaaaaaa \u00b7 1 \u0441\u0456\u0447. 2026 \u0440.\n\u0414\u043e\u0441\u0442\u0443\u043f\u043d\u043e1.6.1 \u00b7 ccccccc \u00b7 1 \u0441\u0456\u0447. 2026 \u0440.\n\u041f\u0435\u0440\u0435\u0432\u0456\u0440\u0438\u0442\u0438\n\u0404 \u043e\u043d\u043e\u0432\u043b\u0435\u043d\u043d\u044f \u00b7 3 \u043a\u043e\u043c\u0456\u0442\u0438 \u043f\u043e\u0437\u0430\u0434\u0443 origin/main \u00b7 \u043f\u0435\u0440\u0435\u0432\u0456\u0440\u0435\u043d\u043e \u043e 02:00"
+    },
+    "390-uk-managed-failed-light": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 16,
+        "y": 277,
+        "width": 358,
+        "height": 131.5
+      },
+      "controlVisible": true,
+      "text": "\u0410\u0432\u0442\u043e\u043e\u043d\u043e\u0432\u043b\u0435\u043d\u043d\u044f\n\u0423\u0432\u0456\u043c\u043a\u043d\u0443\u0442\u0438\n\n\u0412\u0438\u043c\u043a\u043d\u0435\u043d\u043e. \u0412\u0438 \u0441\u0430\u043c\u0456 \u043e\u0431\u0438\u0440\u0430\u0454\u0442\u0435 \u0447\u0430\u0441 \u0440\u043e\u0437\u0433\u043e\u0440\u0442\u0430\u043d\u043d\u044f."
+    },
+    "390-uk-managed-failed-light-failure": {
+      "text": "\u041e\u043d\u043e\u0432\u0438\u0442\u0438 \u0434\u043e bbbbbbb\n\u041e\u043d\u043e\u0432\u0438\u0442\u0438 \u0434\u043e \u043f\u0435\u0440\u0435\u0432\u0456\u0440\u0435\u043d\u043e\u0457 \u0432\u0435\u0440\u0441\u0456\u0457 ccccccc\n\u0420\u043e\u0437\u0433\u043e\u0440\u043d\u0443\u0442\u0438 \u0449\u0435 \u0440\u0430\u0437\n\n\u0420\u043e\u0437\u0433\u043e\u0440\u0442\u0430\u043d\u043d\u044f \u0437\u0443\u043f\u0438\u043d\u0438\u043b\u043e\u0441\u044f \u043d\u0430 \u043a\u0440\u043e\u0446\u0456 \u00ab\u043f\u0435\u0440\u0435\u0432\u0456\u0440\u043a\u0430 \u0437\u0434\u043e\u0440\u043e\u0432'\u044f\u00bb \u0447\u0435\u0440\u0435\u0437 1 \u0445\u0432 00 \u0441.\n\nadoption 2 of 2 - recovering pending spawns timed out\n\n\u0412\u0438\u0437\u043d\u0430\u0447\u0438\u0442\u0438 bbbbbbb\n\u0417\u0456\u0431\u0440\u0430\u0442\u0438 \u043e\u0431\u0440\u0430\u0437\n\u0417\u0430\u043f\u0443\u0441\u0442\u0438\u0442\u0438 \u043a\u0430\u043d\u0434\u0438\u0434\u0430\u0442\u0430\n\u041f\u0435\u0440\u0435\u0432\u0456\u0440\u043a\u0430 \u0437\u0434\u043e\u0440\u043e\u0432'\u044f\n\u041f\u0435\u0440\u0435\u043c\u043a\u043d\u0443\u0442\u0438 \u0432\u0435\u0431\n\u041f\u0435\u0440\u0435\u0434\u0430\u0442\u0438 runtime host",
+      "rect": {
+        "x": 16,
+        "y": 373.5,
+        "width": 358,
+        "height": 470.25
+      }
+    },
+    "390-uk-managed-rolling-back-light-header": {
+      "text": "\u0412\u0435\u0431 \u043f\u0440\u0430\u0446\u044e\u0454 \u043d\u04301.6.1 \u00b7 ddddddd \u00b7 1 \u0441\u0456\u0447. 2026 \u0440.\nRuntime host \u043f\u0440\u0430\u0446\u044e\u0454 \u043d\u04301.6.1 \u00b7 aaaaaaa \u00b7 1 \u0441\u0456\u0447. 2026 \u0440.\n\u0414\u043e\u0441\u0442\u0443\u043f\u043d\u043e1.6.1 \u00b7 ccccccc \u00b7 1 \u0441\u0456\u0447. 2026 \u0440.\n\u041f\u0435\u0440\u0435\u0432\u0456\u0440\u0438\u0442\u0438\n\u0404 \u043e\u043d\u043e\u0432\u043b\u0435\u043d\u043d\u044f \u00b7 3 \u043a\u043e\u043c\u0456\u0442\u0438 \u043f\u043e\u0437\u0430\u0434\u0443 origin/main \u00b7 \u043f\u0435\u0440\u0435\u0432\u0456\u0440\u0435\u043d\u043e \u043e 02:00"
+    },
+    "390-uk-managed-rolling-back-light": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 16,
+        "y": 277,
+        "width": 358,
+        "height": 131.5
+      },
+      "controlVisible": true,
+      "text": "\u0410\u0432\u0442\u043e\u043e\u043d\u043e\u0432\u043b\u0435\u043d\u043d\u044f\n\u0423\u0432\u0456\u043c\u043a\u043d\u0443\u0442\u0438\n\n\u0412\u0438\u043c\u043a\u043d\u0435\u043d\u043e. \u0412\u0438 \u0441\u0430\u043c\u0456 \u043e\u0431\u0438\u0440\u0430\u0454\u0442\u0435 \u0447\u0430\u0441 \u0440\u043e\u0437\u0433\u043e\u0440\u0442\u0430\u043d\u043d\u044f."
+    },
+    "390-uk-managed-rolling-back-light-failure": {
+      "text": "\u041e\u043d\u043e\u0432\u0438\u0442\u0438 \u0434\u043e bbbbbbb\n\u041e\u043d\u043e\u0432\u0438\u0442\u0438 \u0434\u043e \u043f\u0435\u0440\u0435\u0432\u0456\u0440\u0435\u043d\u043e\u0457 \u0432\u0435\u0440\u0441\u0456\u0457 ccccccc\n\u0420\u043e\u0437\u0433\u043e\u0440\u043d\u0443\u0442\u0438 \u0449\u0435 \u0440\u0430\u0437\n\n\u0420\u043e\u0437\u0433\u043e\u0440\u0442\u0430\u043d\u043d\u044f \u0437\u0443\u043f\u0438\u043d\u0438\u043b\u043e\u0441\u044f \u043d\u0430 \u043a\u0440\u043e\u0446\u0456 \u00ab\u043f\u0435\u0440\u0435\u0432\u0456\u0440\u043a\u0430 \u0437\u0434\u043e\u0440\u043e\u0432'\u044f\u00bb \u0447\u0435\u0440\u0435\u0437 1 \u0445\u0432 00 \u0441. \u0422\u0440\u0438\u0432\u0430\u0454 \u0432\u0456\u0434\u043a\u0430\u0442.\n\nadoption 2 of 2 - recovering pending spawns timed out\n\n\u0412\u0438\u0437\u043d\u0430\u0447\u0438\u0442\u0438 bbbbbbb\n\u0417\u0456\u0431\u0440\u0430\u0442\u0438 \u043e\u0431\u0440\u0430\u0437\n\u0417\u0430\u043f\u0443\u0441\u0442\u0438\u0442\u0438 \u043a\u0430\u043d\u0434\u0438\u0434\u0430\u0442\u0430\n\u041f\u0435\u0440\u0435\u0432\u0456\u0440\u043a\u0430 \u0437\u0434\u043e\u0440\u043e\u0432'\u044f\n\u041f\u0435\u0440\u0435\u043c\u043a\u043d\u0443\u0442\u0438 \u0432\u0435\u0431\n\u041f\u0435\u0440\u0435\u0434\u0430\u0442\u0438 runtime host",
+      "rect": {
+        "x": 16,
+        "y": 373.5,
+        "width": 358,
+        "height": 470.25
+      }
+    },
+    "390-uk-managed-rollback-failed-light-header": {
+      "text": "\u0412\u0435\u0431 \u043f\u0440\u0430\u0446\u044e\u0454 \u043d\u04301.6.1 \u00b7 ddddddd \u00b7 1 \u0441\u0456\u0447. 2026 \u0440.\nRuntime host \u043f\u0440\u0430\u0446\u044e\u0454 \u043d\u04301.6.1 \u00b7 aaaaaaa \u00b7 1 \u0441\u0456\u0447. 2026 \u0440.\n\u0414\u043e\u0441\u0442\u0443\u043f\u043d\u043e1.6.1 \u00b7 ccccccc \u00b7 1 \u0441\u0456\u0447. 2026 \u0440.\n\u041f\u0435\u0440\u0435\u0432\u0456\u0440\u0438\u0442\u0438\n\u0404 \u043e\u043d\u043e\u0432\u043b\u0435\u043d\u043d\u044f \u00b7 3 \u043a\u043e\u043c\u0456\u0442\u0438 \u043f\u043e\u0437\u0430\u0434\u0443 origin/main \u00b7 \u043f\u0435\u0440\u0435\u0432\u0456\u0440\u0435\u043d\u043e \u043e 02:00"
+    },
+    "390-uk-managed-rollback-failed-light": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 16,
+        "y": 277,
+        "width": 358,
+        "height": 131.5
+      },
+      "controlVisible": true,
+      "text": "\u0410\u0432\u0442\u043e\u043e\u043d\u043e\u0432\u043b\u0435\u043d\u043d\u044f\n\u0423\u0432\u0456\u043c\u043a\u043d\u0443\u0442\u0438\n\n\u0412\u0438\u043c\u043a\u043d\u0435\u043d\u043e. \u0412\u0438 \u0441\u0430\u043c\u0456 \u043e\u0431\u0438\u0440\u0430\u0454\u0442\u0435 \u0447\u0430\u0441 \u0440\u043e\u0437\u0433\u043e\u0440\u0442\u0430\u043d\u043d\u044f."
+    },
+    "390-uk-managed-rollback-failed-light-failure": {
+      "text": "\u041e\u043d\u043e\u0432\u0438\u0442\u0438 \u0434\u043e bbbbbbb\n\u041e\u043d\u043e\u0432\u0438\u0442\u0438 \u0434\u043e \u043f\u0435\u0440\u0435\u0432\u0456\u0440\u0435\u043d\u043e\u0457 \u0432\u0435\u0440\u0441\u0456\u0457 ccccccc\n\u0420\u043e\u0437\u0433\u043e\u0440\u043d\u0443\u0442\u0438 \u0449\u0435 \u0440\u0430\u0437\n\n\u0420\u043e\u0437\u0433\u043e\u0440\u0442\u0430\u043d\u043d\u044f \u0437\u0443\u043f\u0438\u043d\u0438\u043b\u043e\u0441\u044f \u043d\u0430 \u043a\u0440\u043e\u0446\u0456 \u00ab\u043f\u0435\u0440\u0435\u0432\u0456\u0440\u043a\u0430 \u0437\u0434\u043e\u0440\u043e\u0432'\u044f\u00bb \u0447\u0435\u0440\u0435\u0437 1 \u0445\u0432 00 \u0441.\n\nrecovering pending spawns timed out; rollback could not prove owner death\n\n\u0412\u0438\u0437\u043d\u0430\u0447\u0438\u0442\u0438 bbbbbbb\n\u0417\u0456\u0431\u0440\u0430\u0442\u0438 \u043e\u0431\u0440\u0430\u0437\n\u0417\u0430\u043f\u0443\u0441\u0442\u0438\u0442\u0438 \u043a\u0430\u043d\u0434\u0438\u0434\u0430\u0442\u0430\n\u041f\u0435\u0440\u0435\u0432\u0456\u0440\u043a\u0430 \u0437\u0434\u043e\u0440\u043e\u0432'\u044f\n\u041f\u0435\u0440\u0435\u043c\u043a\u043d\u0443\u0442\u0438 \u0432\u0435\u0431\n\u041f\u0435\u0440\u0435\u0434\u0430\u0442\u0438 runtime host",
+      "rect": {
+        "x": 16,
+        "y": 373.5,
+        "width": 358,
+        "height": 470.25
+      }
+    },
+    "390-uk-managed-rolled-back-light-header": {
+      "text": "\u0412\u0435\u0431 \u043f\u0440\u0430\u0446\u044e\u0454 \u043d\u04301.6.1 \u00b7 aaaaaaa \u00b7 1 \u0441\u0456\u0447. 2026 \u0440.\nRuntime host \u043f\u0440\u0430\u0446\u044e\u0454 \u043d\u04301.6.1 \u00b7 aaaaaaa \u00b7 1 \u0441\u0456\u0447. 2026 \u0440.\n\u0414\u043e\u0441\u0442\u0443\u043f\u043d\u043e1.6.1 \u00b7 ccccccc \u00b7 1 \u0441\u0456\u0447. 2026 \u0440.\n\u041f\u0435\u0440\u0435\u0432\u0456\u0440\u0438\u0442\u0438\n\u0404 \u043e\u043d\u043e\u0432\u043b\u0435\u043d\u043d\u044f \u00b7 3 \u043a\u043e\u043c\u0456\u0442\u0438 \u043f\u043e\u0437\u0430\u0434\u0443 origin/main \u00b7 \u043f\u0435\u0440\u0435\u0432\u0456\u0440\u0435\u043d\u043e \u043e 02:00"
+    },
+    "390-uk-managed-rolled-back-light": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 16,
+        "y": 277,
+        "width": 358,
+        "height": 131.5
+      },
+      "controlVisible": true,
+      "text": "\u0410\u0432\u0442\u043e\u043e\u043d\u043e\u0432\u043b\u0435\u043d\u043d\u044f\n\u0423\u0432\u0456\u043c\u043a\u043d\u0443\u0442\u0438\n\n\u0412\u0438\u043c\u043a\u043d\u0435\u043d\u043e. \u0412\u0438 \u0441\u0430\u043c\u0456 \u043e\u0431\u0438\u0440\u0430\u0454\u0442\u0435 \u0447\u0430\u0441 \u0440\u043e\u0437\u0433\u043e\u0440\u0442\u0430\u043d\u043d\u044f."
+    },
+    "390-uk-managed-rolled-back-light-failure": {
+      "text": "\u041e\u043d\u043e\u0432\u0438\u0442\u0438 \u0434\u043e bbbbbbb\n\u041e\u043d\u043e\u0432\u0438\u0442\u0438 \u0434\u043e \u043f\u0435\u0440\u0435\u0432\u0456\u0440\u0435\u043d\u043e\u0457 \u0432\u0435\u0440\u0441\u0456\u0457 ccccccc\n\u0420\u043e\u0437\u0433\u043e\u0440\u043d\u0443\u0442\u0438 \u0449\u0435 \u0440\u0430\u0437\n\n\u0420\u043e\u0437\u0433\u043e\u0440\u0442\u0430\u043d\u043d\u044f \u0437\u0443\u043f\u0438\u043d\u0438\u043b\u043e\u0441\u044f \u043d\u0430 \u043a\u0440\u043e\u0446\u0456 \u00ab\u043f\u0435\u0440\u0435\u0432\u0456\u0440\u043a\u0430 \u0437\u0434\u043e\u0440\u043e\u0432'\u044f\u00bb \u0447\u0435\u0440\u0435\u0437 1 \u0445\u0432 00 \u0441. \u0412\u0456\u0434\u043a\u0430\u0442 \u0437\u0430\u0432\u0435\u0440\u0448\u0435\u043d\u043e; \u043f\u043e\u0442\u043e\u0447\u043d\u0456 \u0440\u0435\u0432\u0456\u0437\u0456\u0457 \u043a\u043e\u043c\u043f\u043e\u043d\u0435\u043d\u0442\u0456\u0432 \u043d\u0430\u0432\u0435\u0434\u0435\u043d\u043e \u0432\u0438\u0449\u0435.\n\nadoption 2 of 2 - recovering pending spawns timed out\n\n\u0412\u0438\u0437\u043d\u0430\u0447\u0438\u0442\u0438 bbbbbbb\n\u0417\u0456\u0431\u0440\u0430\u0442\u0438 \u043e\u0431\u0440\u0430\u0437\n\u0417\u0430\u043f\u0443\u0441\u0442\u0438\u0442\u0438 \u043a\u0430\u043d\u0434\u0438\u0434\u0430\u0442\u0430\n\u041f\u0435\u0440\u0435\u0432\u0456\u0440\u043a\u0430 \u0437\u0434\u043e\u0440\u043e\u0432'\u044f\n\u041f\u0435\u0440\u0435\u043c\u043a\u043d\u0443\u0442\u0438 \u0432\u0435\u0431\n\u041f\u0435\u0440\u0435\u0434\u0430\u0442\u0438 runtime host",
+      "rect": {
+        "x": 16,
+        "y": 355.5,
+        "width": 358,
+        "height": 488.25
+      }
+    },
+    "390-uk-managed-external-success-light-header": {
+      "text": "\u0412\u0435\u0431 \u043f\u0440\u0430\u0446\u044e\u0454 \u043d\u04301.6.1 \u00b7 ccccccc \u00b7 1 \u0441\u0456\u0447. 2026 \u0440.\nRuntime host \u043f\u0440\u0430\u0446\u044e\u0454 \u043d\u04301.6.1 \u00b7 ccccccc \u00b7 1 \u0441\u0456\u0447. 2026 \u0440.\n\u041f\u0435\u0440\u0435\u0432\u0456\u0440\u0438\u0442\u0438\n\u0410\u043a\u0442\u0443\u0430\u043b\u044c\u043d\u0430 \u0432\u0435\u0440\u0441\u0456\u044f, \u043f\u0435\u0440\u0435\u0432\u0456\u0440\u0435\u043d\u043e \u043e 02:00 \u00b7 \u041d\u0430\u0441\u0442\u0443\u043f\u043d\u0430 \u043f\u0435\u0440\u0435\u0432\u0456\u0440\u043a\u0430 \u043e \u2014"
+    },
+    "390-uk-managed-external-success-light": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 16,
+        "y": 255,
+        "width": 358,
+        "height": 131.5
+      },
+      "controlVisible": true,
+      "text": "\u0410\u0432\u0442\u043e\u043e\u043d\u043e\u0432\u043b\u0435\u043d\u043d\u044f\n\u0423\u0432\u0456\u043c\u043a\u043d\u0443\u0442\u0438\n\n\u0412\u0438\u043c\u043a\u043d\u0435\u043d\u043e. \u0412\u0438 \u0441\u0430\u043c\u0456 \u043e\u0431\u0438\u0440\u0430\u0454\u0442\u0435 \u0447\u0430\u0441 \u0440\u043e\u0437\u0433\u043e\u0440\u0442\u0430\u043d\u043d\u044f."
+    },
+    "390-uk-managed-external-success-light-failure": {
+      "text": "\u041f\u043e\u043f\u0435\u0440\u0435\u0434\u043d\u0454 \u0440\u043e\u0437\u0433\u043e\u0440\u0442\u0430\u043d\u043d\u044f bbbbbbb \u0437\u0430\u0432\u0435\u0440\u0448\u0438\u043b\u043e\u0441\u044f \u043f\u043e\u043c\u0438\u043b\u043a\u043e\u044e.\n\nadoption 2 of 2 - recovering pending spawns timed out",
+      "rect": {
+        "x": 16,
+        "y": 673.75,
+        "width": 358,
+        "height": 76.5
+      }
+    },
+    "390-uk-managed-external-success-light-reloaded": {
+      "previous": "\u041f\u043e\u043f\u0435\u0440\u0435\u0434\u043d\u0454 \u0440\u043e\u0437\u0433\u043e\u0440\u0442\u0430\u043d\u043d\u044f bbbbbbb \u0437\u0430\u0432\u0435\u0440\u0448\u0438\u043b\u043e\u0441\u044f \u043f\u043e\u043c\u0438\u043b\u043a\u043e\u044e.\n\nadoption 2 of 2 - recovering pending spawns timed out"
+    },
+    "390-uk-managed-external-success-unknown-host-light-header": {
+      "text": "\u0412\u0435\u0431 \u043f\u0440\u0430\u0446\u044e\u0454 \u043d\u04301.6.1 \u00b7 ccccccc \u00b7 1 \u0441\u0456\u0447. 2026 \u0440.\nRuntime host\u0440\u0435\u0432\u0456\u0437\u0456\u044f \u043d\u0435\u0432\u0456\u0434\u043e\u043c\u0430\n\u041f\u0435\u0440\u0435\u0432\u0456\u0440\u0438\u0442\u0438\n\u0410\u043a\u0442\u0443\u0430\u043b\u044c\u043d\u0430 \u0432\u0435\u0440\u0441\u0456\u044f, \u043f\u0435\u0440\u0435\u0432\u0456\u0440\u0435\u043d\u043e \u043e 02:00 \u00b7 \u041d\u0430\u0441\u0442\u0443\u043f\u043d\u0430 \u043f\u0435\u0440\u0435\u0432\u0456\u0440\u043a\u0430 \u043e \u2014"
+    },
+    "390-uk-managed-external-success-unknown-host-light": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 16,
+        "y": 255,
+        "width": 358,
+        "height": 131.5
+      },
+      "controlVisible": true,
+      "text": "\u0410\u0432\u0442\u043e\u043e\u043d\u043e\u0432\u043b\u0435\u043d\u043d\u044f\n\u0423\u0432\u0456\u043c\u043a\u043d\u0443\u0442\u0438\n\n\u0412\u0438\u043c\u043a\u043d\u0435\u043d\u043e. \u0412\u0438 \u0441\u0430\u043c\u0456 \u043e\u0431\u0438\u0440\u0430\u0454\u0442\u0435 \u0447\u0430\u0441 \u0440\u043e\u0437\u0433\u043e\u0440\u0442\u0430\u043d\u043d\u044f."
+    },
+    "390-uk-managed-external-success-unknown-host-light-failure": {
+      "text": "\u041f\u043e\u043f\u0435\u0440\u0435\u0434\u043d\u0454 \u0440\u043e\u0437\u0433\u043e\u0440\u0442\u0430\u043d\u043d\u044f bbbbbbb \u0437\u0430\u0432\u0435\u0440\u0448\u0438\u043b\u043e\u0441\u044f \u043f\u043e\u043c\u0438\u043b\u043a\u043e\u044e.\n\nadoption 2 of 2 - recovering pending spawns timed out",
+      "rect": {
+        "x": 16,
+        "y": 673.75,
+        "width": 358,
+        "height": 76.5
+      }
+    },
+    "390-uk-managed-external-success-unknown-host-light-reloaded": {
+      "previous": "\u041f\u043e\u043f\u0435\u0440\u0435\u0434\u043d\u0454 \u0440\u043e\u0437\u0433\u043e\u0440\u0442\u0430\u043d\u043d\u044f bbbbbbb \u0437\u0430\u0432\u0435\u0440\u0448\u0438\u043b\u043e\u0441\u044f \u043f\u043e\u043c\u0438\u043b\u043a\u043e\u044e.\n\nadoption 2 of 2 - recovering pending spawns timed out"
+    },
+    "390-uk-managed-unknown-host-light-header": {
+      "text": "\u0412\u0435\u0431 \u043f\u0440\u0430\u0446\u044e\u0454 \u043d\u04301.6.1 \u00b7 bbbbbbb \u00b7 1 \u0441\u0456\u0447. 2026 \u0440.\nRuntime host\u0440\u0435\u0432\u0456\u0437\u0456\u044f \u043d\u0435\u0432\u0456\u0434\u043e\u043c\u0430\n\u0414\u043e\u0441\u0442\u0443\u043f\u043d\u043e1.6.1 \u00b7 ccccccc \u00b7 1 \u0441\u0456\u0447. 2026 \u0440.\n\u041f\u0435\u0440\u0435\u0432\u0456\u0440\u0438\u0442\u0438\n\u0404 \u043e\u043d\u043e\u0432\u043b\u0435\u043d\u043d\u044f \u00b7 3 \u043a\u043e\u043c\u0456\u0442\u0438 \u043f\u043e\u0437\u0430\u0434\u0443 origin/main \u00b7 \u043f\u0435\u0440\u0435\u0432\u0456\u0440\u0435\u043d\u043e \u043e 02:00"
+    },
+    "390-uk-managed-unknown-host-light": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 16,
+        "y": 277,
+        "width": 358,
+        "height": 131.5
+      },
+      "controlVisible": true,
+      "text": "\u0410\u0432\u0442\u043e\u043e\u043d\u043e\u0432\u043b\u0435\u043d\u043d\u044f\n\u0423\u0432\u0456\u043c\u043a\u043d\u0443\u0442\u0438\n\n\u0412\u0438\u043c\u043a\u043d\u0435\u043d\u043e. \u0412\u0438 \u0441\u0430\u043c\u0456 \u043e\u0431\u0438\u0440\u0430\u0454\u0442\u0435 \u0447\u0430\u0441 \u0440\u043e\u0437\u0433\u043e\u0440\u0442\u0430\u043d\u043d\u044f."
+    },
+    "390-uk-managed-unknown-host-light-failure": {
+      "text": "\u041e\u043d\u043e\u0432\u0438\u0442\u0438 \u0434\u043e bbbbbbb\n\u041e\u043d\u043e\u0432\u0438\u0442\u0438 \u0434\u043e \u043f\u0435\u0440\u0435\u0432\u0456\u0440\u0435\u043d\u043e\u0457 \u0432\u0435\u0440\u0441\u0456\u0457 ccccccc\n\u0420\u043e\u0437\u0433\u043e\u0440\u043d\u0443\u0442\u0438 \u0449\u0435 \u0440\u0430\u0437\n\n\u0420\u043e\u0437\u0433\u043e\u0440\u0442\u0430\u043d\u043d\u044f \u0437\u0443\u043f\u0438\u043d\u0438\u043b\u043e\u0441\u044f \u043d\u0430 \u043a\u0440\u043e\u0446\u0456 \u00ab\u043f\u0435\u0440\u0435\u0432\u0456\u0440\u043a\u0430 \u0437\u0434\u043e\u0440\u043e\u0432'\u044f\u00bb \u0447\u0435\u0440\u0435\u0437 1 \u0445\u0432 00 \u0441.\n\nadoption 2 of 2 - recovering pending spawns timed out\n\n\u0412\u0438\u0437\u043d\u0430\u0447\u0438\u0442\u0438 bbbbbbb\n\u0417\u0456\u0431\u0440\u0430\u0442\u0438 \u043e\u0431\u0440\u0430\u0437\n\u0417\u0430\u043f\u0443\u0441\u0442\u0438\u0442\u0438 \u043a\u0430\u043d\u0434\u0438\u0434\u0430\u0442\u0430\n\u041f\u0435\u0440\u0435\u0432\u0456\u0440\u043a\u0430 \u0437\u0434\u043e\u0440\u043e\u0432'\u044f\n\u041f\u0435\u0440\u0435\u043c\u043a\u043d\u0443\u0442\u0438 \u0432\u0435\u0431\n\u041f\u0435\u0440\u0435\u0434\u0430\u0442\u0438 runtime host",
+      "rect": {
+        "x": 16,
+        "y": 373.5,
+        "width": 358,
+        "height": 470.25
+      }
+    },
+    "390-uk-managed-failed-dark-header": {
+      "text": "\u0412\u0435\u0431 \u043f\u0440\u0430\u0446\u044e\u0454 \u043d\u04301.6.1 \u00b7 ddddddd \u00b7 1 \u0441\u0456\u0447. 2026 \u0440.\nRuntime host \u043f\u0440\u0430\u0446\u044e\u0454 \u043d\u04301.6.1 \u00b7 aaaaaaa \u00b7 1 \u0441\u0456\u0447. 2026 \u0440.\n\u0414\u043e\u0441\u0442\u0443\u043f\u043d\u043e1.6.1 \u00b7 ccccccc \u00b7 1 \u0441\u0456\u0447. 2026 \u0440.\n\u041f\u0435\u0440\u0435\u0432\u0456\u0440\u0438\u0442\u0438\n\u0404 \u043e\u043d\u043e\u0432\u043b\u0435\u043d\u043d\u044f \u00b7 3 \u043a\u043e\u043c\u0456\u0442\u0438 \u043f\u043e\u0437\u0430\u0434\u0443 origin/main \u00b7 \u043f\u0435\u0440\u0435\u0432\u0456\u0440\u0435\u043d\u043e \u043e 02:00"
+    },
+    "390-uk-managed-failed-dark": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 16,
+        "y": 277,
+        "width": 358,
+        "height": 131.5
+      },
+      "controlVisible": true,
+      "text": "\u0410\u0432\u0442\u043e\u043e\u043d\u043e\u0432\u043b\u0435\u043d\u043d\u044f\n\u0423\u0432\u0456\u043c\u043a\u043d\u0443\u0442\u0438\n\n\u0412\u0438\u043c\u043a\u043d\u0435\u043d\u043e. \u0412\u0438 \u0441\u0430\u043c\u0456 \u043e\u0431\u0438\u0440\u0430\u0454\u0442\u0435 \u0447\u0430\u0441 \u0440\u043e\u0437\u0433\u043e\u0440\u0442\u0430\u043d\u043d\u044f."
+    },
+    "390-uk-managed-failed-dark-failure": {
+      "text": "\u041e\u043d\u043e\u0432\u0438\u0442\u0438 \u0434\u043e bbbbbbb\n\u041e\u043d\u043e\u0432\u0438\u0442\u0438 \u0434\u043e \u043f\u0435\u0440\u0435\u0432\u0456\u0440\u0435\u043d\u043e\u0457 \u0432\u0435\u0440\u0441\u0456\u0457 ccccccc\n\u0420\u043e\u0437\u0433\u043e\u0440\u043d\u0443\u0442\u0438 \u0449\u0435 \u0440\u0430\u0437\n\n\u0420\u043e\u0437\u0433\u043e\u0440\u0442\u0430\u043d\u043d\u044f \u0437\u0443\u043f\u0438\u043d\u0438\u043b\u043e\u0441\u044f \u043d\u0430 \u043a\u0440\u043e\u0446\u0456 \u00ab\u043f\u0435\u0440\u0435\u0432\u0456\u0440\u043a\u0430 \u0437\u0434\u043e\u0440\u043e\u0432'\u044f\u00bb \u0447\u0435\u0440\u0435\u0437 1 \u0445\u0432 00 \u0441.\n\nadoption 2 of 2 - recovering pending spawns timed out\n\n\u0412\u0438\u0437\u043d\u0430\u0447\u0438\u0442\u0438 bbbbbbb\n\u0417\u0456\u0431\u0440\u0430\u0442\u0438 \u043e\u0431\u0440\u0430\u0437\n\u0417\u0430\u043f\u0443\u0441\u0442\u0438\u0442\u0438 \u043a\u0430\u043d\u0434\u0438\u0434\u0430\u0442\u0430\n\u041f\u0435\u0440\u0435\u0432\u0456\u0440\u043a\u0430 \u0437\u0434\u043e\u0440\u043e\u0432'\u044f\n\u041f\u0435\u0440\u0435\u043c\u043a\u043d\u0443\u0442\u0438 \u0432\u0435\u0431\n\u041f\u0435\u0440\u0435\u0434\u0430\u0442\u0438 runtime host",
+      "rect": {
+        "x": 16,
+        "y": 373.5,
+        "width": 358,
+        "height": 470.25
+      }
+    },
+    "390-uk-managed-rolling-back-dark-header": {
+      "text": "\u0412\u0435\u0431 \u043f\u0440\u0430\u0446\u044e\u0454 \u043d\u04301.6.1 \u00b7 ddddddd \u00b7 1 \u0441\u0456\u0447. 2026 \u0440.\nRuntime host \u043f\u0440\u0430\u0446\u044e\u0454 \u043d\u04301.6.1 \u00b7 aaaaaaa \u00b7 1 \u0441\u0456\u0447. 2026 \u0440.\n\u0414\u043e\u0441\u0442\u0443\u043f\u043d\u043e1.6.1 \u00b7 ccccccc \u00b7 1 \u0441\u0456\u0447. 2026 \u0440.\n\u041f\u0435\u0440\u0435\u0432\u0456\u0440\u0438\u0442\u0438\n\u0404 \u043e\u043d\u043e\u0432\u043b\u0435\u043d\u043d\u044f \u00b7 3 \u043a\u043e\u043c\u0456\u0442\u0438 \u043f\u043e\u0437\u0430\u0434\u0443 origin/main \u00b7 \u043f\u0435\u0440\u0435\u0432\u0456\u0440\u0435\u043d\u043e \u043e 02:00"
+    },
+    "390-uk-managed-rolling-back-dark": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 16,
+        "y": 277,
+        "width": 358,
+        "height": 131.5
+      },
+      "controlVisible": true,
+      "text": "\u0410\u0432\u0442\u043e\u043e\u043d\u043e\u0432\u043b\u0435\u043d\u043d\u044f\n\u0423\u0432\u0456\u043c\u043a\u043d\u0443\u0442\u0438\n\n\u0412\u0438\u043c\u043a\u043d\u0435\u043d\u043e. \u0412\u0438 \u0441\u0430\u043c\u0456 \u043e\u0431\u0438\u0440\u0430\u0454\u0442\u0435 \u0447\u0430\u0441 \u0440\u043e\u0437\u0433\u043e\u0440\u0442\u0430\u043d\u043d\u044f."
+    },
+    "390-uk-managed-rolling-back-dark-failure": {
+      "text": "\u041e\u043d\u043e\u0432\u0438\u0442\u0438 \u0434\u043e bbbbbbb\n\u041e\u043d\u043e\u0432\u0438\u0442\u0438 \u0434\u043e \u043f\u0435\u0440\u0435\u0432\u0456\u0440\u0435\u043d\u043e\u0457 \u0432\u0435\u0440\u0441\u0456\u0457 ccccccc\n\u0420\u043e\u0437\u0433\u043e\u0440\u043d\u0443\u0442\u0438 \u0449\u0435 \u0440\u0430\u0437\n\n\u0420\u043e\u0437\u0433\u043e\u0440\u0442\u0430\u043d\u043d\u044f \u0437\u0443\u043f\u0438\u043d\u0438\u043b\u043e\u0441\u044f \u043d\u0430 \u043a\u0440\u043e\u0446\u0456 \u00ab\u043f\u0435\u0440\u0435\u0432\u0456\u0440\u043a\u0430 \u0437\u0434\u043e\u0440\u043e\u0432'\u044f\u00bb \u0447\u0435\u0440\u0435\u0437 1 \u0445\u0432 00 \u0441. \u0422\u0440\u0438\u0432\u0430\u0454 \u0432\u0456\u0434\u043a\u0430\u0442.\n\nadoption 2 of 2 - recovering pending spawns timed out\n\n\u0412\u0438\u0437\u043d\u0430\u0447\u0438\u0442\u0438 bbbbbbb\n\u0417\u0456\u0431\u0440\u0430\u0442\u0438 \u043e\u0431\u0440\u0430\u0437\n\u0417\u0430\u043f\u0443\u0441\u0442\u0438\u0442\u0438 \u043a\u0430\u043d\u0434\u0438\u0434\u0430\u0442\u0430\n\u041f\u0435\u0440\u0435\u0432\u0456\u0440\u043a\u0430 \u0437\u0434\u043e\u0440\u043e\u0432'\u044f\n\u041f\u0435\u0440\u0435\u043c\u043a\u043d\u0443\u0442\u0438 \u0432\u0435\u0431\n\u041f\u0435\u0440\u0435\u0434\u0430\u0442\u0438 runtime host",
+      "rect": {
+        "x": 16,
+        "y": 373.5,
+        "width": 358,
+        "height": 470.25
+      }
+    },
+    "390-uk-managed-rollback-failed-dark-header": {
+      "text": "\u0412\u0435\u0431 \u043f\u0440\u0430\u0446\u044e\u0454 \u043d\u04301.6.1 \u00b7 ddddddd \u00b7 1 \u0441\u0456\u0447. 2026 \u0440.\nRuntime host \u043f\u0440\u0430\u0446\u044e\u0454 \u043d\u04301.6.1 \u00b7 aaaaaaa \u00b7 1 \u0441\u0456\u0447. 2026 \u0440.\n\u0414\u043e\u0441\u0442\u0443\u043f\u043d\u043e1.6.1 \u00b7 ccccccc \u00b7 1 \u0441\u0456\u0447. 2026 \u0440.\n\u041f\u0435\u0440\u0435\u0432\u0456\u0440\u0438\u0442\u0438\n\u0404 \u043e\u043d\u043e\u0432\u043b\u0435\u043d\u043d\u044f \u00b7 3 \u043a\u043e\u043c\u0456\u0442\u0438 \u043f\u043e\u0437\u0430\u0434\u0443 origin/main \u00b7 \u043f\u0435\u0440\u0435\u0432\u0456\u0440\u0435\u043d\u043e \u043e 02:00"
+    },
+    "390-uk-managed-rollback-failed-dark": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 16,
+        "y": 277,
+        "width": 358,
+        "height": 131.5
+      },
+      "controlVisible": true,
+      "text": "\u0410\u0432\u0442\u043e\u043e\u043d\u043e\u0432\u043b\u0435\u043d\u043d\u044f\n\u0423\u0432\u0456\u043c\u043a\u043d\u0443\u0442\u0438\n\n\u0412\u0438\u043c\u043a\u043d\u0435\u043d\u043e. \u0412\u0438 \u0441\u0430\u043c\u0456 \u043e\u0431\u0438\u0440\u0430\u0454\u0442\u0435 \u0447\u0430\u0441 \u0440\u043e\u0437\u0433\u043e\u0440\u0442\u0430\u043d\u043d\u044f."
+    },
+    "390-uk-managed-rollback-failed-dark-failure": {
+      "text": "\u041e\u043d\u043e\u0432\u0438\u0442\u0438 \u0434\u043e bbbbbbb\n\u041e\u043d\u043e\u0432\u0438\u0442\u0438 \u0434\u043e \u043f\u0435\u0440\u0435\u0432\u0456\u0440\u0435\u043d\u043e\u0457 \u0432\u0435\u0440\u0441\u0456\u0457 ccccccc\n\u0420\u043e\u0437\u0433\u043e\u0440\u043d\u0443\u0442\u0438 \u0449\u0435 \u0440\u0430\u0437\n\n\u0420\u043e\u0437\u0433\u043e\u0440\u0442\u0430\u043d\u043d\u044f \u0437\u0443\u043f\u0438\u043d\u0438\u043b\u043e\u0441\u044f \u043d\u0430 \u043a\u0440\u043e\u0446\u0456 \u00ab\u043f\u0435\u0440\u0435\u0432\u0456\u0440\u043a\u0430 \u0437\u0434\u043e\u0440\u043e\u0432'\u044f\u00bb \u0447\u0435\u0440\u0435\u0437 1 \u0445\u0432 00 \u0441.\n\nrecovering pending spawns timed out; rollback could not prove owner death\n\n\u0412\u0438\u0437\u043d\u0430\u0447\u0438\u0442\u0438 bbbbbbb\n\u0417\u0456\u0431\u0440\u0430\u0442\u0438 \u043e\u0431\u0440\u0430\u0437\n\u0417\u0430\u043f\u0443\u0441\u0442\u0438\u0442\u0438 \u043a\u0430\u043d\u0434\u0438\u0434\u0430\u0442\u0430\n\u041f\u0435\u0440\u0435\u0432\u0456\u0440\u043a\u0430 \u0437\u0434\u043e\u0440\u043e\u0432'\u044f\n\u041f\u0435\u0440\u0435\u043c\u043a\u043d\u0443\u0442\u0438 \u0432\u0435\u0431\n\u041f\u0435\u0440\u0435\u0434\u0430\u0442\u0438 runtime host",
+      "rect": {
+        "x": 16,
+        "y": 373.5,
+        "width": 358,
+        "height": 470.25
+      }
+    },
+    "390-uk-managed-rolled-back-dark-header": {
+      "text": "\u0412\u0435\u0431 \u043f\u0440\u0430\u0446\u044e\u0454 \u043d\u04301.6.1 \u00b7 aaaaaaa \u00b7 1 \u0441\u0456\u0447. 2026 \u0440.\nRuntime host \u043f\u0440\u0430\u0446\u044e\u0454 \u043d\u04301.6.1 \u00b7 aaaaaaa \u00b7 1 \u0441\u0456\u0447. 2026 \u0440.\n\u0414\u043e\u0441\u0442\u0443\u043f\u043d\u043e1.6.1 \u00b7 ccccccc \u00b7 1 \u0441\u0456\u0447. 2026 \u0440.\n\u041f\u0435\u0440\u0435\u0432\u0456\u0440\u0438\u0442\u0438\n\u0404 \u043e\u043d\u043e\u0432\u043b\u0435\u043d\u043d\u044f \u00b7 3 \u043a\u043e\u043c\u0456\u0442\u0438 \u043f\u043e\u0437\u0430\u0434\u0443 origin/main \u00b7 \u043f\u0435\u0440\u0435\u0432\u0456\u0440\u0435\u043d\u043e \u043e 02:00"
+    },
+    "390-uk-managed-rolled-back-dark": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 16,
+        "y": 277,
+        "width": 358,
+        "height": 131.5
+      },
+      "controlVisible": true,
+      "text": "\u0410\u0432\u0442\u043e\u043e\u043d\u043e\u0432\u043b\u0435\u043d\u043d\u044f\n\u0423\u0432\u0456\u043c\u043a\u043d\u0443\u0442\u0438\n\n\u0412\u0438\u043c\u043a\u043d\u0435\u043d\u043e. \u0412\u0438 \u0441\u0430\u043c\u0456 \u043e\u0431\u0438\u0440\u0430\u0454\u0442\u0435 \u0447\u0430\u0441 \u0440\u043e\u0437\u0433\u043e\u0440\u0442\u0430\u043d\u043d\u044f."
+    },
+    "390-uk-managed-rolled-back-dark-failure": {
+      "text": "\u041e\u043d\u043e\u0432\u0438\u0442\u0438 \u0434\u043e bbbbbbb\n\u041e\u043d\u043e\u0432\u0438\u0442\u0438 \u0434\u043e \u043f\u0435\u0440\u0435\u0432\u0456\u0440\u0435\u043d\u043e\u0457 \u0432\u0435\u0440\u0441\u0456\u0457 ccccccc\n\u0420\u043e\u0437\u0433\u043e\u0440\u043d\u0443\u0442\u0438 \u0449\u0435 \u0440\u0430\u0437\n\n\u0420\u043e\u0437\u0433\u043e\u0440\u0442\u0430\u043d\u043d\u044f \u0437\u0443\u043f\u0438\u043d\u0438\u043b\u043e\u0441\u044f \u043d\u0430 \u043a\u0440\u043e\u0446\u0456 \u00ab\u043f\u0435\u0440\u0435\u0432\u0456\u0440\u043a\u0430 \u0437\u0434\u043e\u0440\u043e\u0432'\u044f\u00bb \u0447\u0435\u0440\u0435\u0437 1 \u0445\u0432 00 \u0441. \u0412\u0456\u0434\u043a\u0430\u0442 \u0437\u0430\u0432\u0435\u0440\u0448\u0435\u043d\u043e; \u043f\u043e\u0442\u043e\u0447\u043d\u0456 \u0440\u0435\u0432\u0456\u0437\u0456\u0457 \u043a\u043e\u043c\u043f\u043e\u043d\u0435\u043d\u0442\u0456\u0432 \u043d\u0430\u0432\u0435\u0434\u0435\u043d\u043e \u0432\u0438\u0449\u0435.\n\nadoption 2 of 2 - recovering pending spawns timed out\n\n\u0412\u0438\u0437\u043d\u0430\u0447\u0438\u0442\u0438 bbbbbbb\n\u0417\u0456\u0431\u0440\u0430\u0442\u0438 \u043e\u0431\u0440\u0430\u0437\n\u0417\u0430\u043f\u0443\u0441\u0442\u0438\u0442\u0438 \u043a\u0430\u043d\u0434\u0438\u0434\u0430\u0442\u0430\n\u041f\u0435\u0440\u0435\u0432\u0456\u0440\u043a\u0430 \u0437\u0434\u043e\u0440\u043e\u0432'\u044f\n\u041f\u0435\u0440\u0435\u043c\u043a\u043d\u0443\u0442\u0438 \u0432\u0435\u0431\n\u041f\u0435\u0440\u0435\u0434\u0430\u0442\u0438 runtime host",
+      "rect": {
+        "x": 16,
+        "y": 355.5,
+        "width": 358,
+        "height": 488.25
+      }
+    },
+    "390-uk-managed-external-success-dark-header": {
+      "text": "\u0412\u0435\u0431 \u043f\u0440\u0430\u0446\u044e\u0454 \u043d\u04301.6.1 \u00b7 ccccccc \u00b7 1 \u0441\u0456\u0447. 2026 \u0440.\nRuntime host \u043f\u0440\u0430\u0446\u044e\u0454 \u043d\u04301.6.1 \u00b7 ccccccc \u00b7 1 \u0441\u0456\u0447. 2026 \u0440.\n\u041f\u0435\u0440\u0435\u0432\u0456\u0440\u0438\u0442\u0438\n\u0410\u043a\u0442\u0443\u0430\u043b\u044c\u043d\u0430 \u0432\u0435\u0440\u0441\u0456\u044f, \u043f\u0435\u0440\u0435\u0432\u0456\u0440\u0435\u043d\u043e \u043e 02:00 \u00b7 \u041d\u0430\u0441\u0442\u0443\u043f\u043d\u0430 \u043f\u0435\u0440\u0435\u0432\u0456\u0440\u043a\u0430 \u043e \u2014"
+    },
+    "390-uk-managed-external-success-dark": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 16,
+        "y": 255,
+        "width": 358,
+        "height": 131.5
+      },
+      "controlVisible": true,
+      "text": "\u0410\u0432\u0442\u043e\u043e\u043d\u043e\u0432\u043b\u0435\u043d\u043d\u044f\n\u0423\u0432\u0456\u043c\u043a\u043d\u0443\u0442\u0438\n\n\u0412\u0438\u043c\u043a\u043d\u0435\u043d\u043e. \u0412\u0438 \u0441\u0430\u043c\u0456 \u043e\u0431\u0438\u0440\u0430\u0454\u0442\u0435 \u0447\u0430\u0441 \u0440\u043e\u0437\u0433\u043e\u0440\u0442\u0430\u043d\u043d\u044f."
+    },
+    "390-uk-managed-external-success-dark-failure": {
+      "text": "\u041f\u043e\u043f\u0435\u0440\u0435\u0434\u043d\u0454 \u0440\u043e\u0437\u0433\u043e\u0440\u0442\u0430\u043d\u043d\u044f bbbbbbb \u0437\u0430\u0432\u0435\u0440\u0448\u0438\u043b\u043e\u0441\u044f \u043f\u043e\u043c\u0438\u043b\u043a\u043e\u044e.\n\nadoption 2 of 2 - recovering pending spawns timed out",
+      "rect": {
+        "x": 16,
+        "y": 673.75,
+        "width": 358,
+        "height": 76.5
+      }
+    },
+    "390-uk-managed-external-success-dark-reloaded": {
+      "previous": "\u041f\u043e\u043f\u0435\u0440\u0435\u0434\u043d\u0454 \u0440\u043e\u0437\u0433\u043e\u0440\u0442\u0430\u043d\u043d\u044f bbbbbbb \u0437\u0430\u0432\u0435\u0440\u0448\u0438\u043b\u043e\u0441\u044f \u043f\u043e\u043c\u0438\u043b\u043a\u043e\u044e.\n\nadoption 2 of 2 - recovering pending spawns timed out"
+    },
+    "390-uk-managed-external-success-unknown-host-dark-header": {
+      "text": "\u0412\u0435\u0431 \u043f\u0440\u0430\u0446\u044e\u0454 \u043d\u04301.6.1 \u00b7 ccccccc \u00b7 1 \u0441\u0456\u0447. 2026 \u0440.\nRuntime host\u0440\u0435\u0432\u0456\u0437\u0456\u044f \u043d\u0435\u0432\u0456\u0434\u043e\u043c\u0430\n\u041f\u0435\u0440\u0435\u0432\u0456\u0440\u0438\u0442\u0438\n\u0410\u043a\u0442\u0443\u0430\u043b\u044c\u043d\u0430 \u0432\u0435\u0440\u0441\u0456\u044f, \u043f\u0435\u0440\u0435\u0432\u0456\u0440\u0435\u043d\u043e \u043e 02:00 \u00b7 \u041d\u0430\u0441\u0442\u0443\u043f\u043d\u0430 \u043f\u0435\u0440\u0435\u0432\u0456\u0440\u043a\u0430 \u043e \u2014"
+    },
+    "390-uk-managed-external-success-unknown-host-dark": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 16,
+        "y": 255,
+        "width": 358,
+        "height": 131.5
+      },
+      "controlVisible": true,
+      "text": "\u0410\u0432\u0442\u043e\u043e\u043d\u043e\u0432\u043b\u0435\u043d\u043d\u044f\n\u0423\u0432\u0456\u043c\u043a\u043d\u0443\u0442\u0438\n\n\u0412\u0438\u043c\u043a\u043d\u0435\u043d\u043e. \u0412\u0438 \u0441\u0430\u043c\u0456 \u043e\u0431\u0438\u0440\u0430\u0454\u0442\u0435 \u0447\u0430\u0441 \u0440\u043e\u0437\u0433\u043e\u0440\u0442\u0430\u043d\u043d\u044f."
+    },
+    "390-uk-managed-external-success-unknown-host-dark-failure": {
+      "text": "\u041f\u043e\u043f\u0435\u0440\u0435\u0434\u043d\u0454 \u0440\u043e\u0437\u0433\u043e\u0440\u0442\u0430\u043d\u043d\u044f bbbbbbb \u0437\u0430\u0432\u0435\u0440\u0448\u0438\u043b\u043e\u0441\u044f \u043f\u043e\u043c\u0438\u043b\u043a\u043e\u044e.\n\nadoption 2 of 2 - recovering pending spawns timed out",
+      "rect": {
+        "x": 16,
+        "y": 673.75,
+        "width": 358,
+        "height": 76.5
+      }
+    },
+    "390-uk-managed-external-success-unknown-host-dark-reloaded": {
+      "previous": "\u041f\u043e\u043f\u0435\u0440\u0435\u0434\u043d\u0454 \u0440\u043e\u0437\u0433\u043e\u0440\u0442\u0430\u043d\u043d\u044f bbbbbbb \u0437\u0430\u0432\u0435\u0440\u0448\u0438\u043b\u043e\u0441\u044f \u043f\u043e\u043c\u0438\u043b\u043a\u043e\u044e.\n\nadoption 2 of 2 - recovering pending spawns timed out"
+    },
+    "390-uk-managed-unknown-host-dark-header": {
+      "text": "\u0412\u0435\u0431 \u043f\u0440\u0430\u0446\u044e\u0454 \u043d\u04301.6.1 \u00b7 bbbbbbb \u00b7 1 \u0441\u0456\u0447. 2026 \u0440.\nRuntime host\u0440\u0435\u0432\u0456\u0437\u0456\u044f \u043d\u0435\u0432\u0456\u0434\u043e\u043c\u0430\n\u0414\u043e\u0441\u0442\u0443\u043f\u043d\u043e1.6.1 \u00b7 ccccccc \u00b7 1 \u0441\u0456\u0447. 2026 \u0440.\n\u041f\u0435\u0440\u0435\u0432\u0456\u0440\u0438\u0442\u0438\n\u0404 \u043e\u043d\u043e\u0432\u043b\u0435\u043d\u043d\u044f \u00b7 3 \u043a\u043e\u043c\u0456\u0442\u0438 \u043f\u043e\u0437\u0430\u0434\u0443 origin/main \u00b7 \u043f\u0435\u0440\u0435\u0432\u0456\u0440\u0435\u043d\u043e \u043e 02:00"
+    },
+    "390-uk-managed-unknown-host-dark": {
+      "blockerRows": [],
+      "cardOverflow": 0,
+      "overflow": 0,
+      "card": {
+        "x": 16,
+        "y": 277,
+        "width": 358,
+        "height": 131.5
+      },
+      "controlVisible": true,
+      "text": "\u0410\u0432\u0442\u043e\u043e\u043d\u043e\u0432\u043b\u0435\u043d\u043d\u044f\n\u0423\u0432\u0456\u043c\u043a\u043d\u0443\u0442\u0438\n\n\u0412\u0438\u043c\u043a\u043d\u0435\u043d\u043e. \u0412\u0438 \u0441\u0430\u043c\u0456 \u043e\u0431\u0438\u0440\u0430\u0454\u0442\u0435 \u0447\u0430\u0441 \u0440\u043e\u0437\u0433\u043e\u0440\u0442\u0430\u043d\u043d\u044f."
+    },
+    "390-uk-managed-unknown-host-dark-failure": {
+      "text": "\u041e\u043d\u043e\u0432\u0438\u0442\u0438 \u0434\u043e bbbbbbb\n\u041e\u043d\u043e\u0432\u0438\u0442\u0438 \u0434\u043e \u043f\u0435\u0440\u0435\u0432\u0456\u0440\u0435\u043d\u043e\u0457 \u0432\u0435\u0440\u0441\u0456\u0457 ccccccc\n\u0420\u043e\u0437\u0433\u043e\u0440\u043d\u0443\u0442\u0438 \u0449\u0435 \u0440\u0430\u0437\n\n\u0420\u043e\u0437\u0433\u043e\u0440\u0442\u0430\u043d\u043d\u044f \u0437\u0443\u043f\u0438\u043d\u0438\u043b\u043e\u0441\u044f \u043d\u0430 \u043a\u0440\u043e\u0446\u0456 \u00ab\u043f\u0435\u0440\u0435\u0432\u0456\u0440\u043a\u0430 \u0437\u0434\u043e\u0440\u043e\u0432'\u044f\u00bb \u0447\u0435\u0440\u0435\u0437 1 \u0445\u0432 00 \u0441.\n\nadoption 2 of 2 - recovering pending spawns timed out\n\n\u0412\u0438\u0437\u043d\u0430\u0447\u0438\u0442\u0438 bbbbbbb\n\u0417\u0456\u0431\u0440\u0430\u0442\u0438 \u043e\u0431\u0440\u0430\u0437\n\u0417\u0430\u043f\u0443\u0441\u0442\u0438\u0442\u0438 \u043a\u0430\u043d\u0434\u0438\u0434\u0430\u0442\u0430\n\u041f\u0435\u0440\u0435\u0432\u0456\u0440\u043a\u0430 \u0437\u0434\u043e\u0440\u043e\u0432'\u044f\n\u041f\u0435\u0440\u0435\u043c\u043a\u043d\u0443\u0442\u0438 \u0432\u0435\u0431\n\u041f\u0435\u0440\u0435\u0434\u0430\u0442\u0438 runtime host",
+      "rect": {
+        "x": 16,
+        "y": 373.5,
+        "width": 358,
+        "height": 470.25
+      }
+    }
+  },
+  "failures": [],
+  "renderedCases": 84,
+  "screenshots": 168,
+  "fixtureTransport": "polling",
+  "localFrameFiles": [
+    "managed-update-ui/1440-en-managed-failed-light.png",
+    "managed-update-ui/1000-uk-managed-rolling-back-dark.png",
+    "managed-update-ui/1000-en-managed-rollback-failed-light.png",
+    "managed-update-ui/390-en-managed-rolled-back-light.png",
+    "managed-update-ui/390-uk-managed-external-success-dark.png",
+    "managed-update-ui/390-uk-managed-unknown-host-dark-header.png",
+    "managed-update-ui/1440-en-managed-external-success-light-header.png",
+    "managed-update-ui/390-uk-managed-external-success-unknown-host-dark.png",
+    "managed-update-ui/1000-en-managed-external-success-unknown-host-light-header.png"
+  ],
+  "command": "BOARD_CAPTURE_CASE=managed-update bun scripts/capture-board-geometry.ts (isolated home/config/state/temp; Chromium)"
+}

@@ -68,7 +68,7 @@ export const CANDIDATE_PERFORMANCE_BOUNDS: CandidatePerformanceBounds = Object.f
 
 /** What a run must have measured before its numbers mean anything. */
 export const CANDIDATE_PERFORMANCE_MINIMUMS = Object.freeze({
-  rows: 29_000,
+  rows: 53_000,
   coldShare: 0.9,
   scopes: 8,
   writes: 50,
@@ -122,7 +122,8 @@ export function projectionBuildSummary(samples: readonly ProjectionBuildSample[]
 }
 
 export interface CandidatePerformanceMeasurements {
-  dataset: { scale: number; rows: number; coldRows: number; payloadBytes: number; transcripts: number; seedMs: number };
+  dataset: { scale: number; rows: number; coldRows: number; payloadBytes: number; transcripts: number; seedMs: number;
+    receipts: { total: number; failedStructured: number; failedLegacy: number; conflicted: number } };
   firstBoot: {
     registryOpenMs: number;
     firstSnapshotMs: number;
@@ -200,7 +201,7 @@ export interface CandidatePerformanceMeasurements {
       the count, the gate's own traffic's p95, the slowest call of any, and
       each call that timed out or failed on the socket. */
   runtimeRpc: { requests: number; p95Ms: number; maxMs: number; timeouts: number; failures: number; hostAlive: boolean };
-  deliveryEvidence: { pending: number; uncertain: number; preserved: boolean };
+  deliveryEvidence: { pending: number; uncertain: number; retained: number; pendingLaunches: number; preserved: boolean };
   /** The board in eight real browser views of the candidate's production
       build while two writers run; null when no browser view was measured,
       which is a refusal. */
@@ -240,6 +241,10 @@ export function candidatePerformanceBreaches(
   };
   if (measured.dataset.scale !== 1) breaches.push(`measured at scale ${measured.dataset.scale}; only the full dataset is a verdict`);
   fewer("registry rows", measured.dataset.rows, minimum.rows);
+  fewer("retained receipts", measured.dataset.receipts.total, 10_971);
+  fewer("failed structured receipts", measured.dataset.receipts.failedStructured, 892);
+  fewer("failed legacy receipts", measured.dataset.receipts.failedLegacy, 122);
+  fewer("conflicted receipts", measured.dataset.receipts.conflicted, 133);
   if (measured.dataset.rows > 0 && measured.dataset.coldRows / measured.dataset.rows < minimum.coldShare) {
     breaches.push(`only ${measured.dataset.coldRows} of ${measured.dataset.rows} registry rows were cold`);
   }
@@ -322,7 +327,9 @@ export function candidatePerformanceBreaches(
   if (!measured.runtimeRpc.hostAlive) breaches.push("the runtime host exited during the run");
   fewer("pending deliveries held as evidence", measured.deliveryEvidence.pending, minimum.pendingDeliveries);
   fewer("uncertain deliveries held as evidence", measured.deliveryEvidence.uncertain, minimum.uncertainDeliveries);
-  if (!measured.deliveryEvidence.preserved) breaches.push("pending or uncertain delivery evidence changed");
+  fewer("retained deliveries", measured.deliveryEvidence.retained, 666);
+  fewer("pending launch receipts", measured.deliveryEvidence.pendingLaunches, 20);
+  if (!measured.deliveryEvidence.preserved) breaches.push("retained launch or delivery evidence changed");
   if (!measured.browser) breaches.push("the board was not measured in a browser");
   else breaches.push(...candidateBrowserBreaches(measured.browser, bounds.browser));
   return breaches;
@@ -377,7 +384,8 @@ export function parseCandidatePerformanceReport(output: string): CandidatePerfor
 type Shape = "n" | "b" | "n?" | "s?" | readonly string[] | { readonly [key: string]: Shape };
 const LATENCY = { count: "n", p50Ms: "n", p95Ms: "n", maxMs: "n" } as const;
 const MEASUREMENT_SHAPE: Shape = {
-  dataset: { scale: "n", rows: "n", coldRows: "n", payloadBytes: "n", transcripts: "n", seedMs: "n" },
+  dataset: { scale: "n", rows: "n", coldRows: "n", payloadBytes: "n", transcripts: "n", seedMs: "n",
+    receipts: { total: "n", failedStructured: "n", failedLegacy: "n", conflicted: "n" } },
   firstBoot: {
     registryOpenMs: "n", firstSnapshotMs: "n", coldProjectionMs: "n", firstUsableMs: "n", eventLoopMaxMs: "n",
     coldBuild: { sequence: "n", buildMs: "n" },
@@ -405,7 +413,7 @@ const MEASUREMENT_SHAPE: Shape = {
   sqliteBusy: "n",
   runtimeTimeouts: "n",
   runtimeRpc: { requests: "n", p95Ms: "n", maxMs: "n", timeouts: "n", failures: "n", hostAlive: "b" },
-  deliveryEvidence: { pending: "n", uncertain: "n", preserved: "b" },
+  deliveryEvidence: { pending: "n", uncertain: "n", retained: "n", pendingLaunches: "n", preserved: "b" },
 };
 /* Present only when a browser ran; `browser: null` is read and refused. */
 const BROWSER_SHAPE: Shape = {

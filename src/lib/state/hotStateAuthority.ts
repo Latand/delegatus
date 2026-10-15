@@ -32,6 +32,8 @@ export interface HotStateAuthority {
   /** The Viewer that must finish startup and release its hosts before a live
    * generation can acknowledge its rollback mirror. Older records omit it. */
   activationOwner?: ProcessIdentity;
+  /** A newer adapter owns containment; older adapters omit this field. */
+  retirementOwner?: ProcessIdentity;
   checkpoint?: HotStateCheckpoint;
 }
 
@@ -61,6 +63,14 @@ function validCheckpoint(value: unknown): value is HotStateCheckpoint {
     && values.every((revision) => Number.isInteger(revision) && revision >= 0);
 }
 
+function validProcessIdentity(value: unknown): value is ProcessIdentity {
+  if (!value || typeof value !== "object") return false;
+  const identity = value as ProcessIdentity;
+  return Number.isSafeInteger(identity.pid) && identity.pid > 0
+    && (identity.startIdentity === null || typeof identity.startIdentity === "string")
+    && (identity.bootEpoch === undefined || identity.bootEpoch === null || typeof identity.bootEpoch === "string");
+}
+
 function parseAuthority(value: unknown): HotStateAuthority | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const authority = value as Partial<HotStateAuthority>;
@@ -73,11 +83,8 @@ function parseAuthority(value: unknown): HotStateAuthority | null {
     || (authority.activationReadyAt !== undefined && typeof authority.activationReadyAt !== "string")
     || (authority.releaseReadyAt !== undefined && typeof authority.releaseReadyAt !== "string")
     || (authority.releaseReadyAt !== undefined && authority.activationReadyAt === undefined)
-    || (authority.activationOwner !== undefined && (
-      !authority.activationOwner || !Number.isSafeInteger(authority.activationOwner.pid)
-      || authority.activationOwner.pid <= 0
-      || (authority.activationOwner.startIdentity !== null && typeof authority.activationOwner.startIdentity !== "string")
-      || (authority.activationOwner.bootEpoch !== undefined && authority.activationOwner.bootEpoch !== null && typeof authority.activationOwner.bootEpoch !== "string")))
+    || (authority.activationOwner !== undefined && !validProcessIdentity(authority.activationOwner))
+    || (authority.retirementOwner !== undefined && !validProcessIdentity(authority.retirementOwner))
     || (authority.checkpoint !== undefined && !validCheckpoint(authority.checkpoint))) return null;
   return authority as HotStateAuthority;
 }
@@ -205,6 +212,7 @@ function writeHotStateAuthority(
     activationReadyAt?: string;
     releaseReadyAt?: string;
     activationOwner?: ProcessIdentity;
+    retirementOwner?: ProcessIdentity;
   } = {},
 ): HotStateAuthority {
   if (options.releaseReadyAt && !options.activationReadyAt) {
@@ -219,6 +227,7 @@ function writeHotStateAuthority(
     ...(options.activationReadyAt ? { activationReadyAt: options.activationReadyAt } : {}),
     ...(options.releaseReadyAt ? { releaseReadyAt: options.releaseReadyAt } : {}),
     ...(options.checkpoint ? { checkpoint: options.checkpoint } : {}),
+    ...(options.retirementOwner ? { retirementOwner: options.retirementOwner } : {}),
     ...(options.activationOwner ? { activationOwner: options.activationOwner }
       : mode === "fencing" && previous?.releaseRevision === releaseRevision && previous.activationOwner
         ? { activationOwner: previous.activationOwner } : {}),
@@ -233,7 +242,7 @@ export function publishHotStateAuthority(
   directory: string,
   mode: HotStateAuthorityMode,
   releaseRevision: string | null,
-  options: { checkpoint?: HotStateCheckpoint; epoch?: number; activationReadyAt?: string; releaseReadyAt?: string; activationOwner?: ProcessIdentity } = {},
+  options: { checkpoint?: HotStateCheckpoint; epoch?: number; activationReadyAt?: string; releaseReadyAt?: string; activationOwner?: ProcessIdentity; retirementOwner?: ProcessIdentity } = {},
 ): HotStateAuthority {
   if (releaseRevision !== null && !validRevision(releaseRevision)) throw new Error("hot-state release revision is invalid");
   return withFileTransactionSync(authorityFile(directory), "hot-state authority is busy", () =>

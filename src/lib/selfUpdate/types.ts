@@ -100,6 +100,7 @@ export interface Step {
 }
 
 export interface UpdateState {
+  rollback?: "running" | "done";
   state: "idle" | "running" | "done" | "failed";
   target: string | null;
   targetShort: string | null;
@@ -214,6 +215,8 @@ export interface WorkEvidence {
 }
 
 export interface Snapshot {
+  /** The dialog's earlier attempt when a newer external deployment supersedes it. */
+  previousAttempt?: UpdateState;
   /** Present only while `workEvidence.state` is `ready`: unknown work is never zero work. */
   resumeWork?: ResumeWork;
   workEvidence?: WorkEvidence;

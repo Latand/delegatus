@@ -4200,15 +4200,12 @@ test("issue 1074: startup reconciliation recovers an overdue materialized placeh
     state: "path-pending",
     artifactLifecycle: "materialized",
   });
-  const client = {
-    effectBatch: async () => [],
-    operationStatus: async () => null,
-    snapshot: async () => ({ sessions: [] }),
-  } as unknown as RuntimeHostClient;
-
-  await recoverPendingStructuredSpawns(registry, client, {
-    now: () => Date.parse(begun.receipt.createdAt) + STALE_STRUCTURED_SPAWN_TIMEOUT_MS + 60_000,
-  });
+  const journal = new RuntimeJournal(path.join(cwd, "runtime.sqlite"), { structuredHosts: true });
+  try {
+    await recoverPendingStructuredSpawns(registry, runtimeClient(journal), {
+      now: () => Date.parse(begun.receipt.createdAt) + STALE_STRUCTURED_SPAWN_TIMEOUT_MS + 60_000,
+    });
+  } finally { journal.close(); }
 
   expect(registry.snapshot().receipts[begun.receipt.launchId]).toMatchObject({
     state: "completed",
@@ -4362,6 +4359,11 @@ test("startup recovery withholds a staged identity when recovered delivery has n
 
   await recoverPendingStructuredSpawns(registry, client);
 
+  // Boot returns after durable admission. The existing controller owns the
+  // send and its settlement under the original operation and message keys.
+  expect(registry.snapshot().receipts[begun.receipt.launchId]?.state).toBe("path-pending");
+  expect(await client.operationStatus(`spawn_message_${begun.receipt.launchId}`)).not.toBeNull();
+  await kickStructuredDeliveryQueue();
   expect(host.sent.map((entry) => entry.text)).toEqual(["recover this first prompt"]);
   expect(fs.existsSync(artifactPath)).toBeFalse();
   expect(registry.snapshot().receipts[begun.receipt.launchId]).toMatchObject({
