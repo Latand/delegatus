@@ -12958,8 +12958,6 @@ export async function patchPipeline(
         if (!isEffectiveRole(target.effectiveRole)) return { error: "stage role is not a valid engine/model/effort combination", status: 400 };
         const overrideSizingRefusal = stageSizingRefusal(pipeline.stages.map(item => item.id === target.id ? target : item), graphEditBriefer(actor, pipeline, ports), ports, new Set([target.id]));
         if (overrideSizingRefusal) return { error: overrideSizingRefusal.error, status: 400 };
-        const tierRefusal = stageAccountRefusal([target], pipeline.project, ports);
-        if (tierRefusal) return tierRefusal;
       }
 
       if (req.prompt !== undefined) {
@@ -12996,6 +12994,12 @@ export async function patchPipeline(
           target.account = requested;
         }
       }
+      // Validate the resolved runtime against the account this request leaves
+      // on the stage; clearing the pin checks the project's full allowed pool.
+      if (changesRoleOrRuntime || req.account !== undefined) {
+        const tierRefusal = stageAccountRefusal([target], pipeline.project, ports);
+        if (tierRefusal) return tierRefusal;
+      }
       let runtimeSwitch: PipelineRuntimeSwitch | null = null;
       if (req.applyNow && live?.conversationId) {
         const engine = target.effectiveRole.engine;
@@ -13010,16 +13014,22 @@ export async function patchPipeline(
         const effort = target.effectiveRole.effort ?? generation?.effort;
         if (!model || !effort) return { error: "apply now requires a resolved model and effort; select them explicitly", status: 400 };
         const preferredId = generation?.accountId ?? null;
-        const unavailableIds = usageLimitsOn(live, engine).filter(item => !providerAccountRecovered(pipeline, { ...live, effectiveRole: { ...live.effectiveRole, engine, model } }, item.accountId, item.limitedAt ?? null, item.resetsAt, ports)).map(item => item.accountId);
+        const serviceTier = target.effectiveRole.serviceTier ?? null;
+        const offers = engine === "codex" && serviceTier ? tierOffers(listCodexAccounts(), model, serviceTier) : null;
+        // A pool offering the tier does not prove the preferred account offers it.
+        const unavailableIds = [
+          ...usageLimitsOn(live, engine).filter(item => !providerAccountRecovered(pipeline, { ...live, effectiveRole: { ...live.effectiveRole, engine, model } }, item.accountId, item.limitedAt ?? null, item.resetsAt, ports)).map(item => item.accountId),
+          ...(offers?.lacking ?? []),
+        ];
         let accountId = target.account ?? (allowed(preferredId) ? preferredId : null);
         if (ports.resolveProjectSpawn) {
           const resolution = ports.resolveProjectSpawn(engine, { project: pipeline.project, model, requestedId: target.account, preferredId, unavailableIds });
           if (resolution.kind !== "available" || !allowed(resolution.account.accountId)) return { error: "no allowed target account is available", status: 409 };
           accountId = resolution.account.accountId;
         }
-        if (!allowed(accountId) || unavailableIds.includes(accountId!)) return { error: "no allowed target account is available", status: 409 };
+        if (!allowed(accountId) || unavailableIds.includes(accountId!) || (offers && !offers.offering.includes(accountId!))) return { error: "no allowed target account is available", status: 409 };
         const to = { engine, model, effort,
-          serviceTier: target.effectiveRole.serviceTier ?? null, accountId, accountPinned: !!target.account };
+          serviceTier, accountId, accountPinned: !!target.account };
         const open = openRuntimeSwitch(live);
         if (open) return runtimeTargetsEqual(open.to, to) && open.to.accountPinned === to.accountPinned ? { pipeline, runtimeSwitch: open, replayed: true }
           : { error: "another runtime switch is in progress", status: 409, code: "RUNTIME_SWITCH_IN_PROGRESS" };
