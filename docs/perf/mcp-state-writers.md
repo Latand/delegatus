@@ -848,3 +848,33 @@ and barrier fixtures retain their original parent checks. All three source
 revisions receive this same harness. The seed, request schedule, repetitions,
 load windows and declared no-regression criterion stay unchanged. The earlier
 samples remain failed evidence, with their original harness identities.
+
+### Bounded response transfer
+
+A preliminary pair with the calibrated harness used candidate
+`9361b0e1cdd4d7671d32054c4313e413de0e13d9` and matched main
+`fe18cb41d73481f6b4e4bd105b708cb03e2d3b05`. Each completed 300/300 measured
+calls without failures, pending calls, SQL contention or survivors. Normalized
+rows and responses matched, and both committed histories reproduced final
+state. Candidate p99/max was 0.607231/3.310372 ms; main was
+0.216447/5.979864 ms. Viewer CPU was 4.177086/3.898381 seconds respectively.
+The higher candidate p99 remains a failed diagnostic comparison. Collection
+stopped before the audit sample completed; no full acceptance cohort was
+claimed. The immutable pair is
+[`mcp-state-writers-calibrated-diagnostic.json`](../../evidence/mcp-state-writers-calibrated-diagnostic.json).
+
+The response reader now pauses the pipe while holding its current chunk,
+delivers HTTP headers on one turn, and transfers at most 16 KiB of body bytes
+per following turn. Consumer pulls resume the held chunk before requesting
+more pipe input. Cancellation drains through the same bounded path; end of
+pipe waits for queued bytes before reporting worker loss. Ingress parsing and
+executor admission also run on separate turns. Authority, original request
+keys, receipts and task transactions retain their existing execution path.
+
+The buffered-answer regression sends one 4 MiB body followed by another reply
+and closes its source. An independent timer must advance before consumption
+finishes, while bytes and reply order remain exact. The test fails on the
+previous response reader because the timer records zero progress; the bounded
+reader passes. The executor suite also covers full 128 MiB wire bounds,
+metadata bounds, split UTF-8, slow consumers, cancellation, worker loss,
+external capability rotation, receipt replay and actual Viewer owner death.

@@ -29,46 +29,69 @@ export class TaskExecutorReplies {
   private bytes = 0;
   private output?: { id: number; bytes: number; controller?: ReadableStreamDefaultController<Uint8Array> };
   private closed = false;
+  private ended = false;
+  private queued?: Buffer;
+  private continuation?: ReturnType<typeof setImmediate>;
 
   constructor(private source: Readable, private reply: (value: ExecutorReply) => void,
     private complete: (id: number) => void, private failed: (error: Error) => void) {
     source.on("data", (chunk: Buffer) => withViewerOperation("mcp.tasks.executor", () => {
       if (this.closed) return;
+      this.source.pause();
       try { this.accept(chunk); }
       catch (error) { this.close(error as Error); failed(error as Error); }
     }));
     source.on("error", error => { this.close(error); failed(error); });
     source.once("end", () => {
-      const error = new Error("task executor output ended");
-      this.close(error); failed(error);
+      this.ended = true;
+      this.defer();
     });
+  }
+
+  /** At most one pipe chunk is held outside the stream queue. Header delivery
+   * and each 16 KiB body slice run on separate turns, including while draining
+   * a cancelled reply. A consumer's pull cannot resume past that held chunk. */
+  private defer(chunk?: Buffer): void {
+    if (this.closed) return;
+    if (chunk?.length) this.queued = chunk;
+    if (this.continuation || (this.output?.controller?.desiredSize ?? 1) <= 0) return;
+    this.continuation = setImmediate(() => withViewerOperation("mcp.tasks.executor", () => {
+      this.continuation = undefined;
+      if (this.closed) return;
+      const queued = this.queued; this.queued = undefined;
+      try {
+        if (queued) this.accept(queued);
+        else if (this.ended) throw new Error("task executor output ended");
+        else this.source.resume();
+      } catch (error) { this.close(error as Error); this.failed(error as Error); }
+    }));
   }
 
   private accept(chunk: Buffer): void {
     while (chunk.length) {
       if (this.output) {
         const output = this.output;
-        const end = chunk.indexOf(10);
-        const body = end < 0 ? chunk : chunk.subarray(0, end);
+        const slice = chunk.subarray(0, 16_384);
+        const end = slice.indexOf(10);
+        const body = end < 0 ? slice : slice.subarray(0, end);
         output.bytes += body.length;
         if (output.bytes > TASK_EXECUTOR_HTTP_FRAME_BYTES) throw new Error("task executor HTTP frame exceeds its bound");
         if (body.length && output.controller) {
           output.controller.enqueue(body);
-          if ((output.controller.desiredSize ?? 0) <= 0) this.source.pause();
         }
-        if (end < 0) return;
+        if (end < 0) { this.defer(chunk.subarray(body.length)); return; }
         output.controller?.close(); this.output = undefined;
-        this.complete(output.id); this.source.resume();
-        chunk = chunk.subarray(end + 1);
-        continue;
+        this.complete(output.id);
+        this.defer(chunk.subarray(end + 1)); return;
       }
-      const newline = chunk.indexOf(10), tab = chunk.indexOf(9);
+      const tab = chunk.indexOf(9);
+      const newline = chunk.subarray(0, tab < 0 ? chunk.length : tab).indexOf(10);
       const http = tab >= 0 && (newline < 0 || tab < newline);
       const end = http ? tab : newline;
       const part = end < 0 ? chunk : chunk.subarray(0, end);
       this.parts.push(part); this.bytes += part.length;
       if (this.bytes + 1 > TASK_EXECUTOR_FRAME_BYTES) throw new Error("task executor frame exceeds its bound");
-      if (end < 0) return;
+      if (end < 0) { this.defer(); return; }
       if (http && this.bytes > 16_384) throw new Error("task executor HTTP header exceeds its bound");
       const value = JSON.parse(Buffer.concat(this.parts, this.bytes).toString("utf8")) as ExecutorWireReply;
       const headerBytes = this.bytes;
@@ -79,21 +102,24 @@ export class TaskExecutorReplies {
         this.output = output;
         const body = new ReadableStream<Uint8Array>({
           start(controller) { output.controller = controller; },
-          pull: () => { if (this.output === output) this.source.resume(); },
-          cancel: () => { output.controller = undefined; if (this.output === output) this.source.resume(); },
+          pull: () => { if (this.output === output) this.defer(); },
+          cancel: () => { output.controller = undefined; if (this.output === output) this.defer(); },
         }, { highWaterMark: 65_536, size: value => value?.byteLength ?? 0 });
         this.reply({ id: value.id, http: { ...value.http, body } });
+        this.defer(chunk.subarray(end + 1)); return;
       } else {
         if (value.http) throw new Error("task executor HTTP frame is missing its body delimiter");
         this.reply({ id: value.id, result: value.result, error: value.error }); this.complete(value.id);
       }
       chunk = chunk.subarray(end + 1);
     }
+    this.defer();
   }
 
   close(error = new Error("task executor reply ended before its frame completed")): void {
     if (this.closed) return;
     this.closed = true; this.parts = []; this.bytes = 0;
+    clearImmediate(this.continuation); this.continuation = undefined; this.queued = undefined;
     this.output?.controller?.error(error); this.output = undefined;
   }
 }

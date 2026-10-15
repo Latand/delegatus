@@ -234,6 +234,8 @@ export async function handleMcpHttpRequest(request: NextRequest): Promise<Respon
   try {
     if (!testDependencies && typeof requested === "string" && TASK_EXECUTOR_TOOLS.has(requested)) {
       try {
+        // Keep ingress parsing and executor admission on separate loop turns.
+        await new Promise<void>(resolve => setImmediate(resolve));
         return await viewerTaskExecutor().callHttpTool(requested, body, request,
           nativePeer ? { nativePeer } : unidentified ? {} : { capability }, {
             signal: registered.get(inflightKey(capability, connectionId, messages[0]?.id))?.signal ?? request.signal,

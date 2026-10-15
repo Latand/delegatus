@@ -45,14 +45,18 @@ test("HTTP pipe replies expose headers before the body ends and preserve split U
   const source = new PassThrough();
   const completed: number[] = [], errors: Error[] = [];
   let response: Response | undefined;
+  let headersArrived!: () => void;
+  const headers = new Promise<void>(resolve => { headersArrived = resolve; });
   const wire = new TaskExecutorReplies(source, value => {
     if (!value.http) throw new Error("expected HTTP reply");
     response = new Response(value.http.body, value.http);
+    headersArrived();
   }, id => completed.push(id), error => errors.push(error));
   try {
     const header = Buffer.from(JSON.stringify({ id: 1, http: { status: 200, headers: [["content-type", "application/json"]] } }) + "\t");
     const body = Buffer.from('"' + "x".repeat(16_383) + "🙂" + "λ".repeat(100_000) + '"');
     source.write(header.subarray(0, 7)); source.write(header.subarray(7));
+    await headers;
     expect(response).toBeDefined(); expect(completed).toEqual([]);
     let settled = false;
     const result = response!.text().then(value => { settled = true; return value; });
@@ -68,11 +72,13 @@ test("HTTP pipe replies expose headers before the body ends and preserve split U
 test("a slow HTTP consumer pauses the pipe and cancellation drains through the next reply", async () => {
   const source = new PassThrough();
   const completed: number[] = [], errors: Error[] = [], replies: unknown[] = [];
+  let finished!: () => void;
+  const drained = new Promise<void>(resolve => { finished = resolve; });
   let body: ReadableStream<Uint8Array> | undefined;
   const wire = new TaskExecutorReplies(source, value => {
     replies.push(value);
     if (value.http) body = value.http.body;
-  }, id => completed.push(id), error => errors.push(error));
+  }, id => { completed.push(id); if (id === 2) finished(); }, error => errors.push(error));
   try {
     source.write(JSON.stringify({ id: 1, http: { status: 200, headers: [] } }) + "\t");
     source.write(Buffer.alloc(65_536, 120));
@@ -80,9 +86,35 @@ test("a slow HTTP consumer pauses the pipe and cancellation drains through the n
     expect(source.isPaused()).toBe(true); expect(completed).toEqual([]);
     await body!.cancel();
     source.write(Buffer.from('tail\n{"id":2,"result":{"conversationId":null}}\n'));
-    await Bun.sleep(0);
+    await drained;
     expect(completed).toEqual([1, 2]); expect(replies).toHaveLength(2); expect(errors).toEqual([]);
   } finally { wire.close(); source.destroy(); }
+});
+
+test("a buffered HTTP answer yields to an independent timer and preserves its following frame", async () => {
+  const source = new PassThrough();
+  const completed: number[] = [], errors: Error[] = [];
+  let body: ReadableStream<Uint8Array> | undefined;
+  let finished!: () => void;
+  const drained = new Promise<void>(resolve => { finished = resolve; });
+  const wire = new TaskExecutorReplies(source, value => {
+    if (value.http) body = value.http.body;
+  }, id => { completed.push(id); if (id === 2) finished(); }, error => errors.push(error));
+  let ticks = 0;
+  const timer = setInterval(() => { ticks++; }, 0);
+  try {
+    source.write(JSON.stringify({ id: 1, http: { status: 200, headers: [] } }) + "\t");
+    const reading = new Response(body).text();
+    // Let the empty pipe resume before one already-buffered answer arrives.
+    await new Promise<void>(resolve => setImmediate(resolve));
+    ticks = 0;
+    const payload = "x".repeat(4 * 1024 * 1024);
+    source.end(payload + '\n{"id":2,"result":{"conversationId":null}}\n');
+    expect(await reading).toBe(payload);
+    await drained;
+    expect(ticks).toBeGreaterThan(0);
+    expect(completed).toEqual([1, 2]); expect(errors).toEqual([]);
+  } finally { clearInterval(timer); wire.close(); source.destroy(); }
 });
 
 test("worker loss errors an HTTP body whose headers already arrived", async () => {
