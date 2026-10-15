@@ -3,10 +3,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { CpuPressureGate, cpuPressurePolicy, DEFAULT_CPU_PRESSURE_POLICY, parseCpuPressure } from "../src/lib/runtime/cpuPressure";
 import { inheritedCpuSlot, machineCpuAdmissionQueue } from "../src/lib/runtime/cpuAdmission";
-import { captureProcessIdentity, processIdentityStatus } from "../src/lib/processIdentity";
-import { procBackend } from "../src/lib/proc";
 import { reportCpuWait } from "../src/lib/runtime/cpuAdmissionBudget";
 import { cpuQueueDetail } from "../src/lib/runtime/cpuQueueText";
+import { cpuOwnerIdentity, cpuOwnerStatus, cpuOwnerExited, signalSandboxContext } from "../src/lib/runtime/signalSandboxContext";
 
 const policy = cpuPressurePolicy();
 const pressure = new CpuPressureGate({ ...(policy ?? DEFAULT_CPU_PRESSURE_POLICY), releaseAfterMs: Number(process.env.LLV_GATE_PSI_RELEASE_SECONDS ?? 10) * 1000 }, {
@@ -18,19 +17,26 @@ const pressure = new CpuPressureGate({ ...(policy ?? DEFAULT_CPU_PRESSURE_POLICY
   },
 });
 const [mode, key, pid] = process.argv.slice(2);
-if (mode === "--reuse-slot") process.exit(inheritedCpuSlot() ? 0 : 75);
+if (mode === "--reuse-slot") {
+  if (inheritedCpuSlot()) process.exit(0);
+  if (process.env.LLV_GATE_SLOT_LEASE && signalSandboxContext()) {
+    console.error("gate-slot: inherited slot ownership is unverified or crosses a user namespace; cross-boundary lease transfer is unsupported");
+    process.exit(69);
+  }
+  process.exit(75);
+}
 // The shell owns this monitor across readiness, lock races and retry pauses.
 // A completed claim ends it before the command's execution clock starts.
 if (mode === "--watch-wait") {
   if (!key || !pid) throw new Error("CPU wait monitor needs a private directory and owner PID");
-  const owner = captureProcessIdentity(Number(pid));
+  const owner = cpuOwnerIdentity(Number(pid));
   const endWait = reportCpuWait();
   const cancel = () => { endWait(); process.exit(130); };
   process.on("SIGTERM", cancel); process.on("SIGINT", cancel);
   try {
     fs.writeFileSync(path.join(key, "ready"), "ready", { mode: 0o600 });
     while (!fs.existsSync(path.join(key, "done"))) {
-      if (processIdentityStatus(owner) === "dead" || procBackend.processExited(owner.pid)) break;
+      if (cpuOwnerStatus(owner) === "dead" || cpuOwnerExited(owner)) break;
       await Bun.sleep(100);
     }
   } finally { endWait(); }
@@ -38,7 +44,7 @@ if (mode === "--watch-wait") {
 }
 const queue = machineCpuAdmissionQueue();
 if (!key || !pid || !["--wait", "--claim"].includes(mode!)) throw new Error("cpu admission needs a mode, ticket and owner PID");
-const owner = captureProcessIdentity(Number(pid));
+const owner = cpuOwnerIdentity(Number(pid));
 if (mode === "--claim") {
   const admitted = !queue.check(key, !pressure.check(), owner);
   queue.close();
@@ -57,7 +63,7 @@ const endWait = reportCpuWait();
 const cancel = () => { queue.cancel(key); endWait(); process.exit(130); };
 process.on("SIGTERM", cancel); process.on("SIGINT", cancel);
 const parentGuard = setInterval(() => {
-  if (processIdentityStatus(owner) === "dead" || procBackend.processExited(owner.pid)) cancel();
+  if (cpuOwnerStatus(owner) === "dead" || cpuOwnerExited(owner)) cancel();
 }, 100);
 try {
   let shown = "";

@@ -1,6 +1,6 @@
+import { nativeProcessId, signalDomain, signalAgentDomain, spawnManagedEngine } from "./agentSignalSandbox";
 import { memoryField, memoryKillText } from "./agentMemoryState";
 import type { AgentMemoryCell } from "./agentMemory";
-import { spawn } from "node:child_process";
 import type { ChildProcessWithoutNullStreams, SpawnOptionsWithoutStdio } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -353,7 +353,7 @@ export class CopilotAcpHost implements EngineHost {
     this.shutdownGraceMs = options.shutdownGraceMs ?? DEFAULT_SHUTDOWN_GRACE_MS;
     this.signalProcess = options.signalProcess ?? process.kill;
     this.processIdentity = options.processIdentity ?? ((pid) => procBackend.processIdentity(pid));
-    this.childStartIdentity = child.pid ? this.processIdentity(child.pid) : null;
+    this.childStartIdentity = nativeProcessId(child) ? this.processIdentity(nativeProcessId(child)!) : null;
     this.releaseCleanup = options.releaseCleanup ?? null;
     this.cursor = options.initialEventCursor ?? 0;
     /* ACP advertises `promptCapabilities.image`; images ride `session/prompt`
@@ -435,13 +435,11 @@ export class CopilotAcpHost implements EngineHost {
       }
       /* Never the capability: it is in the 0600 file, not in the child env. */
       delete env[VIEWER_SPAWN_CAPABILITY_ENV];
-      const spawnProcess = options.memoryCell?.wrapSpawn(options.spawnProcess) ?? options.spawnProcess ?? ((command, childArgs, spawnOptions) =>
-        spawn(command, childArgs, { ...spawnOptions, stdio: ["pipe", "pipe", "pipe"] }));
-      child = spawnProcess(binary, copilotLaunchArgs(options, mcpConfigPath), {
+      child = await spawnManagedEngine(binary, copilotLaunchArgs(options, mcpConfigPath), {
         cwd: options.cwd,
         env,
         detached: true,
-      });
+      }, options.memoryCell, options.spawnProcess, options.env ?? process.env);
     } catch (error) {
       releaseCleanup();
       throw error;
@@ -691,7 +689,7 @@ export class CopilotAcpHost implements EngineHost {
 
   /** Resource cleanup may release only the exact child the row authorized. */
   async releaseIfOwned(expected: Readonly<ProcessIdentity>): Promise<boolean> {
-    const pid = this.child.pid;
+    const pid = nativeProcessId(this.child);
     if (this.released || this.releasing || this.releasePromise !== null
       || !pid || expected.startIdentity === null
       || pid !== expected.pid
@@ -730,7 +728,7 @@ export class CopilotAcpHost implements EngineHost {
   }
 
   private currentState(): HostState {
-    const pid = this.reaped || this.released ? null : this.child.pid ?? null;
+    const pid = this.reaped || this.released ? null : nativeProcessId(this.child) ?? null;
     const status: HostState["status"] = this.dead ? "dead"
       : this.released ? "unhosted"
       : this.attentions.size ? "attention"
@@ -742,6 +740,7 @@ export class CopilotAcpHost implements EngineHost {
       endpoint: pid ? `stdio:${pid}` : "stdio:released",
       pid,
       processStartIdentity: pid ? this.processIdentity(pid) : null,
+      ...(signalDomain(this.child) ? { signalDomain: signalDomain(this.child) } : {}),
       eventCursor: this.cursor,
       protocolVersion: this.protocolVersion,
       activeTurnRef: this.running?.turnId ?? null,
@@ -951,7 +950,7 @@ export class CopilotAcpHost implements EngineHost {
         throw new Error("Copilot child identity changed before signalling");
       }
       if (!await this.waitForReap(this.shutdownGraceMs)) {
-        const leaderExited = this.child.pid === undefined
+        const leaderExited = nativeProcessId(this.child) === undefined
           || (this.child.exitCode ?? null) !== null
           || (this.child.signalCode ?? null) !== null;
         if (!leaderExited) throw new Error("Copilot child could not be reaped");
@@ -1013,13 +1012,13 @@ export class CopilotAcpHost implements EngineHost {
     if (this.memoryCell?.fatalMemoryExit) return true;
     const expected = this.releaseFence;
     if (expected) {
-      const pid = this.child.pid;
+      const pid = nativeProcessId(this.child);
       if (!pid || expected.startIdentity === null
         || pid !== expected.pid
         || this.childStartIdentity !== expected.startIdentity
         || this.processIdentity(pid) !== expected.startIdentity) return false;
     }
-    return signalDetachedProcessGroup(this.child, signal, this.signalProcess);
+    return signalAgentDomain(this.child, signal) ?? signalDetachedProcessGroup(this.child, signal, this.signalProcess);
   }
 
   private startTermination(): boolean {

@@ -60,8 +60,10 @@ These steps take you from nothing to an orchestrator working on your project.
    [Compatible providers](docs/guide/accounts-and-roles.md#compatible-providers).
 6. Tell the orchestrator what you want done.
 
-Linux is the main platform and macOS works; native Windows runs Claude Code
-only, so use WSL 2 for the rest ([Platforms](docs/guide/getting-started.md#platforms)).
+New managed agents require Linux with unprivileged user namespaces, Bubblewrap,
+and a systemd user manager with delegated cgroups. The signal boundary is
+checked at launch. Other platforms retain their viewing backends and report
+managed launches as unavailable ([Platforms](docs/guide/getting-started.md#platforms)).
 Copilot runs single agents; it cannot run the orchestrator. To keep a
 `delegatus` command installed, change the port or set environment variables,
 read [Configuration](docs/guide/configuration.md).

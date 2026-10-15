@@ -46,16 +46,23 @@ you already use.
 - For pull requests and merging: the same `origin` on GitHub, and the GitHub
   CLI (`gh`) signed in. Without a GitHub pull request, pipelines end without
   a merge, and a stopped merge names a signed-out `gh` as its reason.
-- Linux or macOS. Linux is the main platform and macOS works. Native
-  Windows runs Delegatus with Claude Code only; use WSL 2 for Codex, the MCP
-  server and the rest. [Platforms](#platforms) has the details.
+- Linux with Bubblewrap (`bwrap`), Python 3, util-linux, unprivileged user/PID
+  namespaces and a systemd user manager delegating the cpu, memory and pids
+  cgroup v2 controllers. Managed launches verify these capabilities before
+  executing the engine. [Platforms](#platforms) has the details.
 
 ### Platforms
 
-Delegatus is built for Linux and also runs on macOS and Windows.
+Linux is the qualified platform for new managed agents. The kernel signal
+boundary is mandatory; missing namespace or delegation support refuses a
+launch with its cause. This applies with CPU or memory placement disabled too.
 
-macOS works through a backend that uses `ps` and `lsof` in place of `/proc`.
-Native Windows runs Delegatus with Claude Code; install Claude with its
+macOS and Windows retain their process viewing backends. New managed launches
+there report that Linux namespace support is required. Existing conversations
+can still be read. WSL 2 needs systemd and the Linux capabilities listed above.
+
+The macOS backend uses `ps` and `lsof` in place of `/proc`.
+The native Windows backend recognizes Claude Code; install Claude with its
 native installer so a `claude.exe` is on `PATH`. Codex, managed accounts,
 local dictation, the MCP server and `--tailscale` are missing there, so run
 under WSL 2 if you need them. Windows also has no open-file scan, so

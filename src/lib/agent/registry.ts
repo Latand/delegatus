@@ -1,3 +1,4 @@
+import { normalizeAgentSignalDomain, type AgentSignalDomain } from "@/lib/runtime/agentSignalSandbox";
 import { performanceSpans } from "@/lib/performanceSpans";
 import { normalizeHostMemory, type HostMemoryState } from "@/lib/runtime/agentMemoryState";
 import { normalizeHostEndCause, type HostEndCause } from "@/lib/runtime/hostEndCause";
@@ -134,6 +135,7 @@ export interface TmuxHostEvidence {
 }
 
 export interface StructuredHostColumns {
+  signalDomain?: AgentSignalDomain;
   memory?: HostMemoryState;
   /** Why the recorded host ended (#2790); kept with the terminal row. */
   ended?: HostEndCause;
@@ -2145,8 +2147,13 @@ function normalizeStructuredHost(value: unknown): StructuredHostColumns | null {
         ...(typeof host.process.bootEpoch === "string" ? { bootEpoch: host.process.bootEpoch } : {}),
       }
     : null;
+  const signalDomain = normalizeAgentSignalDomain(host.signalDomain);
+  if (signalDomain && processIdentity && !sameRecordedProcessIdentity(processIdentity, signalDomain.native)) {
+    throw new Error("structured host signal identity is contradictory");
+  }
   return {
     kind: host.kind,
+    ...(signalDomain ? { signalDomain } : {}),
     endpoint: typeof host.endpoint === "string" ? host.endpoint : "",
     process: processIdentity,
     eventCursor: eventCursor === undefined ? 0 : eventCursor as number,
@@ -6946,6 +6953,7 @@ export class AgentRegistry {
         throw new Error("structured spawn recovery identity is unavailable");
       }
       if (entry.host || entry.structuredHost?.process || entry.claimOwner
+        || (entry.structuredHost?.signalDomain && entry.structuredHost.signalDomain.retired !== true)
         || (entry.status !== "dead" && entry.status !== "unhosted")) {
         throw new Error("structured spawn host loss is unconfirmed");
       }
@@ -7333,7 +7341,9 @@ export class AgentRegistry {
          process table. Only this launch's registered live host qualifies.
          A captured descendant has the same preservation requirement: clearing
          the root row would strand its identity and let a resume start a twin. */
-      if (retainedSurvivors.length > 0 || (options.retainRegisteredHost === true
+      if (retainedSurvivors.length > 0
+        || (entry.structuredHost?.signalDomain && entry.structuredHost.signalDomain.retired !== true)
+        || (options.retainRegisteredHost === true
         && releaseRegisteredHost
         && entry.structuredHost?.process)) {
         entry.pendingAction = null;
@@ -7387,6 +7397,9 @@ export class AgentRegistry {
       const existing = file.entries[keyId];
       const survivors = existing?.structuredTerminationSurvivors ?? [];
       const requestedHost = entry.structuredHost === undefined ? existing?.structuredHost : entry.structuredHost;
+      if (existing?.structuredHost?.signalDomain && existing.structuredHost.signalDomain.retired !== true && !requestedHost?.signalDomain) {
+        throw new Error("structured host signal domain must be retired before replacement");
+      }
       if (survivors.length > 0 && (!existing?.structuredHost?.process || !requestedHost?.process
         || !sameRecordedProcessIdentity(existing.structuredHost.process, requestedHost.process))) {
         throw new Error("structured host termination still has live survivors");
@@ -7412,6 +7425,9 @@ export class AgentRegistry {
       const keyId = sessionKeyId(key);
       const entry = file.entries[keyId];
       if (!entry) throw new Error("agent registry entry is missing");
+      if (entry.structuredHost?.signalDomain && entry.structuredHost.signalDomain.retired !== true && !structuredHost?.signalDomain) {
+        throw new Error("structured host signal domain must be retired before replacement");
+      }
       if ((entry.structuredTerminationSurvivors?.length ?? 0) > 0
         && (!structuredHost?.process || !entry.structuredHost?.process
           || !sameRecordedProcessIdentity(entry.structuredHost.process, structuredHost.process))) {
@@ -7451,10 +7467,13 @@ export class AgentRegistry {
       if (retained.length > 0 && (!expected || !current || !sameRecordedProcessIdentity(current, expected))) return false;
       const confirmed = new Set(confirmedSurvivors.map(identity => `${identity.pid}:${identity.startIdentity}:${identity.bootEpoch ?? ""}`));
       if (retained.some(identity => !confirmed.has(`${identity.pid}:${identity.startIdentity}:${identity.bootEpoch ?? ""}`))) return false;
+      const domain = entry.structuredHost?.signalDomain;
+      if (domain && [domain.monitor, domain.bubblewrap, domain.init, domain.native].some(identity => processIdentityStatus(identity) !== "dead")) return false;
       const replacement = {
         ...entry,
         host: null,
-        structuredHost: null,
+        structuredHost: domain ? { ...entry.structuredHost!, endpoint: "stdio:released", process: null, activeTurnRef: null,
+          pendingAttention: [], activeFlags: [], signalDomain: { ...domain, retired: true as const } } : null,
         structuredTerminationSurvivors: [],
         status: "dead" as const,
         claimOwner: null,
@@ -7563,6 +7582,12 @@ export class AgentRegistry {
       const retained = entry.structuredTerminationSurvivors ?? [];
       const confirmed = new Set(confirmedSurvivors.map(identityKey));
       if (retained.some(identity => !confirmed.has(identityKey(identity)) || this.ownerAlive(identity))) return null;
+      const domain = entry.structuredHost?.signalDomain;
+      if (domain) {
+        if ([domain.monitor, domain.bubblewrap, domain.init, domain.native].some(identity => processIdentityStatus(identity) !== "dead")) return null;
+        entry.structuredHost!.signalDomain = { ...domain, retired: true };
+        entry.updatedAt = now();
+      }
       if (entry.structuredTerminationSurvivors === undefined) return [];
       delete entry.structuredTerminationSurvivors;
       entry.updatedAt = now();
@@ -7659,6 +7684,7 @@ export class AgentRegistry {
       const entry = file.entries[keyId];
       const structuredProcess = entry?.structuredHost?.process ?? null;
       const retainedSurvivors = entry?.structuredTerminationSurvivors ?? [];
+      const domain = entry?.structuredHost?.signalDomain;
       const staleStructuredWrapper = structuredProcess !== null && !this.ownerAlive(structuredProcess);
       if (!conversation
         || conversation.engine !== key.engine
@@ -7670,13 +7696,15 @@ export class AgentRegistry {
           || entry.structuredHost?.writerClaimEpoch !== expected.claimEpoch))
         || entry.host
         || retainedSurvivors.length > 0
+        || (domain && [domain.monitor, domain.bubblewrap, domain.init, domain.native].some(identity => processIdentityStatus(identity) !== "dead"))
         || (structuredProcess !== null && !staleStructuredWrapper)
         || (entry.claimOwner && !staleStructuredWrapper)
         || (!staleStructuredWrapper && entry.status !== "dead" && entry.status !== "unhosted")) return false;
       const replacement = {
         ...entry,
         host: null,
-        structuredHost: null,
+        structuredHost: domain ? { ...entry.structuredHost!, endpoint: "stdio:released", process: null, activeTurnRef: null,
+          pendingAttention: [], activeFlags: [], signalDomain: { ...domain, retired: true as const } } : null,
         status: "dead" as const,
         claimOwner: null,
         pendingAction: null,
@@ -7815,6 +7843,7 @@ export class AgentRegistry {
         ?? (!entry.host && options.allowUnhosted === true ? options.setupHost : null);
       if (!structuredHost) return null;
       if ((entry.structuredTerminationSurvivors?.length ?? 0) > 0) return null;
+      if (structuredHost.signalDomain && structuredHost.signalDomain.retired !== true) return null;
       if (entry.status === "unhosted" && options.allowUnhosted !== true) return null;
       /* Adoption builds its host options from the entry this returns, and a
          mutation loads rows lazily rather than from an assembled snapshot, so

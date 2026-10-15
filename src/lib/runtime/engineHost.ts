@@ -1,4 +1,5 @@
 import type { HostMemoryState } from "./agentMemory";
+import type { AgentSignalDomain } from "./agentSignalSandbox";
 import type { HostEndCause } from "./hostEndCause";
 import type { NativeQueueHost } from "./nativeQueueExecutor";
 import type { SelectedContextRef } from "@/lib/selection/selectedContext";
@@ -108,6 +109,7 @@ export type RuntimeEvent =
   | { kind: "session-status"; status: "active" | "idle" | "unhosted" | "dead"; activeFlags?: string[]; seq: number };
 
 export interface HostState {
+  signalDomain?: AgentSignalDomain;
   memory?: HostMemoryState;
   /** Why the host ended; absent while it runs and for hosts that record none. */
   ended?: HostEndCause;
