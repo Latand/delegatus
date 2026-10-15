@@ -10,6 +10,7 @@ import { openRuntimeSwitch } from "@/lib/pipelines/runtimeSwitch";
 import { activeOrchestratorSeats } from "@/lib/orchestrator/seats";
 import { StructuredSendRefusedError, type EngineHost } from "./engineHost";
 import { delegatusMessageOrigin } from "./agentMessageAuthor";
+import type { StructuredMessageRequest, StructuredMessageResult } from "./structuredMessageDelivery";
 import { interruptionObligationDirectory, interruptionObligationStore, submittedContinuationOutcome, STAGE_CUT_RESOLUTION, REVIEWER_CUT_RESOLUTION } from "./interruptionObligations";
 
 function pipelineOwner(conversationId: string, registry?: AgentRegistry) {
@@ -46,7 +47,8 @@ export function assertPipelineTurnAllowed(conversationId: string, registry?: Age
 export async function enforceAccountCreditGuard(registry: AgentRegistry,
   hosts: readonly { key: SessionKey; host: EngineHost }[],
   stop: (key: SessionKey, host: EngineHost) => Promise<boolean>,
-  operatorStopped: (conversationId: string, since: string) => Promise<boolean>): Promise<void> {
+  operatorStopped: (conversationId: string, since: string) => Promise<boolean>,
+  resumeCurrent: (request: StructuredMessageRequest) => Promise<StructuredMessageResult | null>): Promise<void> {
   const store = interruptionObligationStore(interruptionObligationDirectory(registry.filename));
   const blockedAccounts = new Set(registry.quotaObservations("codex")
     .filter(row => creditGuardBlock("codex", row.limits)).map(row => row.accountId));
@@ -124,7 +126,11 @@ export async function enforceAccountCreditGuard(registry: AgentRegistry,
     const target = selection.account.accountId;
     const authorizeTarget = () => {
       if (!eligible()) throw new Error("paid-credit recovery lost pipeline custody");
-      const selected = resolve("codex", { project, model: generation.launchProfile.model, requestedId: target, requireCapacity: true });
+      const latest = registry.conversation(conversation.id);
+      const latestProfile = latest?.generations.at(-1)?.launchProfile;
+      const latestProject = pipelineOwner(conversation.id, registry)?.pipeline.project
+        ?? conversationProjectKey(latest?.projectOwnership, latestProfile);
+      const selected = resolve("codex", { project: latestProject, model: latestProfile?.model, requestedId: target, requireCapacity: true });
       if (selected.kind !== "available" || selected.account.accountId !== target) throw new Error("paid-credit recovery target is no longer admissible");
     };
     authorizeTarget();
@@ -144,10 +150,21 @@ export async function enforceAccountCreditGuard(registry: AgentRegistry,
       requestAccountMigrationTick();
       continue;
     }
+    const text = "The paid-credit guard stopped your previous turn. Continue the same work from the preserved transcript and checkout; verify interrupted operations before repeating them.";
+    const origin = delegatusMessageOrigin("runtime-host", project, generation.launchProfile.cwd);
+    if (!moved) {
+      const result = await resumeCurrent({ conversationId: conversation.id, path: generation.path,
+        clientMessageId: obligation.id, operationId: obligation.id, text, origin, recoveryAuthorityGuard: authorizeTarget });
+      if (result?.ok) store.update(obligation.id, { state: result.outcome === "delivered" ? "delivered" : "submitted",
+        operationId: result.operationId, attempts: obligation.attempts + 1,
+        ...(result.outcome === "delivered" ? { resolvedAt: new Date().toISOString(), resolution: "delivered" } : {}) });
+      else throw new Error(result?.error ?? "credit-guard continuation could not be admitted");
+      continue;
+    }
     const held = registry.holdDelivery(conversation.id,
-      "The paid-credit guard stopped your previous turn. Continue the same work from the preserved transcript and checkout; verify interrupted operations before repeating them.",
+      text,
       obligation.id, "text", [], null, { operationId: obligation.id, kind: "send", policy: "queue", turnId: null,
-        origin: delegatusMessageOrigin("runtime-host", project, generation.launchProfile.cwd) });
+        origin });
     store.update(obligation.id, { state: "submitted", operationId: held.command.operationId, attempts: obligation.attempts + 1 });
     requestAccountMigrationTick();
   }

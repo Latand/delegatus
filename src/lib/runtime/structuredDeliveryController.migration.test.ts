@@ -8,7 +8,7 @@ import { beginLegacySpawnFixture } from "@/lib/agent/registryTestFixtures";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { advanceConversationMigration } from "@/lib/accounts/migration/coordinator";
 import { UnixRuntimeHostClient, type RuntimeHostClient } from "./client";
-import { bindStructuredDeliveryQueue } from "./structuredDeliveryController";
+import { bindStructuredDeliveryQueue, publishStructuredDeliveryHost } from "./structuredDeliveryController";
 import { kickStructuredDeliveryQueue } from "./structuredDeliverySignal";
 import { NativeCodexQueue } from "./nativeCodexQueue";
 import { FakeEngineHost } from "./fixtures/fakeEngineHost";
@@ -60,6 +60,12 @@ test.each(["conversation", "orchestrator", "review implementer", "reviewer", "re
     }, verify: async () => {},
   };
   const store = interruptionObligationStore(interruptionObligationDirectory(f.registry.filename));
+  const resumedHost = Object.assign(new FakeEngineHost(), { onStateChange: () => () => {} });
+  const originalEntry = f.registry.readOnlySnapshot().entries[`codex:${f.key.sessionId}`]!;
+  let recoveries = 0;
+  f.client.command = async command => f.journal.executeOperation(command);
+  f.client.readSession = async identity => identity.conversationId === f.conversation.id
+    ? f.journal.snapshot().sessions.find(session => session.conversationId === f.conversation.id) ?? null : null;
   const selection = spyOn(accountManager, "resolveProjectSpawn").mockImplementation((engine, request) => {
     const selected = selectProjectAccount({ ...request, engine, accounts: [{ id: "account-a", authPresent: true }, { id: "account-b", authPresent: true }],
       observations: f.registry.quotaObservations("codex"), bindings: [], now: Date.now() });
@@ -68,7 +74,13 @@ test.each(["conversation", "orchestrator", "review implementer", "reviewer", "re
   });
   try {
     await bindStructuredDeliveryQueue([{ key: f.key, host: f.host }], { registry: f.registry, client: f.client,
-      hostlessSettleIntervalMs: 0, watchdogIntervalMs: 0, settlementSweepMs: 0 });
+      hostlessSettleIntervalMs: 0, watchdogIntervalMs: 0, settlementSweepMs: 0,
+      recover: async () => {
+        recoveries++;
+        f.registry.upsert({ ...originalEntry, status: "idle", claimOwner: "fixture-resume" });
+        await publishStructuredDeliveryHost({ key: f.key, host: resumedHost });
+        return { target: null, path: originalEntry.artifactPath!, conversationId: f.conversation.id, spawned: true };
+      } });
     expect(active).toBe(true);
     if (kind === "orchestrator") {
       const { recordLiveObservation } = await import("@/lib/accounts/liveLimits");
@@ -87,10 +99,15 @@ test.each(["conversation", "orchestrator", "review implementer", "reviewer", "re
     if (kind === "recovered source") {
       observe(1);
       await kickStructuredDeliveryQueue();
-      const pending = f.registry.pendingDeliveries(f.conversation.id);
-      expect(pending).toHaveLength(1);
-      expect(pending[0]!.generationId).toBe(f.key.sessionId);
-      expect(store.list()[0]!.state).toBe("submitted");
+      expect(recoveries).toBe(1);
+      const { createMigrationDeliveryPort } = await import("@/lib/accounts/migration/deliveryPort");
+      const { deliverHeldStructuredMessage } = await import("./structuredMessageDelivery");
+      const delivery = createMigrationDeliveryPort({ structuredDelivery: request => deliverHeldStructuredMessage(request,
+        { enabled: () => true, registry: () => f.registry, client: () => f.client, kick: () => {} }) });
+      await reconcileAccountMigrationCycle(f.registry, { tick: async () => {} }, provider, delivery);
+      await kickStructuredDeliveryQueue();
+      expect(resumedHost.ledger.writes).toHaveLength(1);
+      expect(resumedHost.ledger.writes[0]!.id).toBe(store.list()[0]!.id);
       expect(creates).toBe(0);
       return;
     }

@@ -1289,7 +1289,16 @@ export async function bindStructuredDeliveryQueue(
     [...hosts].map(([id, host]) => ({ key: registrations.get(id)!.key, host })),
     async (key, host) => hosts.get(sessionKeyId(key)) === host
       && (await state.terminateActiveHost?.(key) ?? false),
-    (id, since) => hasRuntimeSwitchKill(client, id, since, [], true)).finally(() => { guarding = null; });
+    (id, since) => hasRuntimeSwitchKill(client, id, since, [], true), async request => {
+      const { enqueueStructuredMessage } = await import("./structuredMessageDelivery");
+      const authorize = () => {
+        if (stopped || state.activeQueue !== queue) throw new StructuredSendRefusedError("delivery controller changed during credit-guard recovery");
+      };
+      const authorizeRecovery = () => { authorize(); request.recoveryAuthorityGuard?.(); };
+      return enqueueStructuredMessage({ ...request, admissionGuard: authorize, recoveryAuthorityGuard: authorizeRecovery }, { enabled: () => true,
+        registry: () => registry, client: () => client, recover: dependencies.recover, kick: requestDrain,
+        authorizeDispatch: authorizeRecovery, interruptionContinuation: true });
+    }).finally(() => { guarding = null; });
   const scheduleDrain = (delayMs = DELIVERY_DRAIN_COALESCE_MS): boolean => {
     if (stopped || drainTimer) return false;
     drainTimer = setTimeout(() => {
