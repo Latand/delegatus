@@ -395,7 +395,9 @@ async function withRuntimeSnapshot(
       const newline = frame.indexOf("\n");
       if (newline < 0) return;
       const request = JSON.parse(frame.slice(0, newline)) as { id: string };
-      const result = typeof snapshot === "function" ? snapshot(requestNumber++) : snapshot;
+      const supplied = typeof snapshot === "function" ? snapshot(requestNumber++) : snapshot;
+      const result = { schemaVersion: 1, snapshotSeq: 0, retentionFloorSeq: 0, filesRevision: 0, ...supplied,
+        runtime: { hostEpoch: 1, health: "healthy", ...(supplied.runtime as object) } };
       socket.end(`${JSON.stringify({ id: request.id, ok: true, result })}\n`);
     });
   });
@@ -1902,7 +1904,7 @@ async function idleStageHostFixture(h: ReturnType<typeof harness>) {
   const target = { stageId: "build", attempt: attempt.n, launchId: attempt.launchId, conversationId: attempt.conversationId,
     agentPath: transcriptPath, paneId: null };
   const snapshot = () => ({ runtime: { hostEpoch: 7 }, sessions: [
-    { conversationId: begun.receipt.conversationId, host: "alive", turn: "idle", attentionIds: [] },
+    { conversationId: begun.receipt.conversationId, host: "hosted", turn: "idle", attentionIds: [] },
   ] });
   return {
     registry, key, claimOwner, transcriptPath, attempt, host, child, hostPid: identity.pid, termination, signals, row, journal, target, snapshot,

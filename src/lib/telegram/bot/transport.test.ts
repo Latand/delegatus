@@ -173,3 +173,60 @@ test("the token file is owner-only, read back only through a callback, and a sym
 test("the bot's token file never collides with the personal account's files", () => {
   expect(path.basename(telegramBotTokenPath())).toBe("bot-token.json");
 });
+
+test("failure descriptions redact identities before the length bound while preserving the cause", async () => {
+  const chatId = -(10 ** 12 + 101);
+  const handle = "@" + ["fixture", "person"].join("_");
+  const description = `Bad Request: chat not found; chat_id=${chatId}; user_id=7; bot_id=${TOKEN.split(":")[0]}; ${handle}; ${TOKEN}; ${TOKEN_TAIL}; ${"x".repeat(400)}`;
+  const transport = createBotApiTransport(TOKEN, async () => jsonResponse({ ok: false, error_code: 400, description }, 400));
+  const result = await transport.call("sendMessage", {});
+  expect(result.ok).toBe(false);
+  if (result.ok) throw new Error("expected refusal");
+  expect(result.description).toStartWith("Bad Request: chat not found");
+  expect(result.description).toHaveLength(300);
+  expect(result.description).toContain("user_id=[id]");
+  for (const value of [String(chatId), handle, TOKEN, TOKEN_TAIL, TOKEN.split(":")[0]!]) expect(result.description).not.toContain(value);
+});
+
+test("labelled numeric identities are scrubbed with quoted or unquoted keys and values", () => {
+  for (const label of ["chat_id", "user_id", "bot_id", "message_id", "topic_id"]) {
+    for (const value of [-7, 1, 2345]) {
+      for (const [keyQuote, valueQuote, separator] of [["", "", "="], ["", '"', "="], ['"', "", ": "], ['"', '"', ": "], ["'", "'", " = "]]) {
+        const prefix = `Bad Request: chat not found; ${keyQuote}${label}${keyQuote}${separator}${valueQuote}`;
+        expect(scrubTokenText(`${prefix}${value}${valueQuote}`, TOKEN)).toBe(`${prefix}[id]${valueQuote}`);
+      }
+    }
+  }
+});
+
+test("email candidates are scrubbed completely before bounding, including adjacent addresses", () => {
+  const address = (local: string, domain = "example.invalid") => [local, domain].join("@");
+  for (const value of [address("local.part+tag-test_"), address("x".repeat(400)), address("local", `${"x".repeat(400)}.invalid`)]) {
+    expect(scrubTokenText(`Bad Request: ${value}; chat not found`, TOKEN)).toBe("Bad Request: [email]; chat not found");
+  }
+  expect(scrubTokenText(address("first") + address("+second"), TOKEN)).toBe("[email][email]");
+  expect(scrubTokenText("Bad Request: " + ["local", "host"].join("@"), TOKEN)).toBe("Bad Request: local[handle]");
+});
+
+test("long Telegram error descriptions have a bounded CPU cost through the transport", async () => {
+  for (const hasSeparator of [false, true]) {
+    const samples: number[] = [];
+    for (const length of [16_000, 32_000, 64_000]) {
+      const tag = "x".repeat(length) + (hasSeparator ? "@host" : "");
+      const description = `Bad Request: can't parse entities: Unsupported start tag "${tag}" at byte offset 0`;
+      const transport = createBotApiTransport(TOKEN, async () => jsonResponse({ ok: false, error_code: 400, description }, 400));
+      const started = process.cpuUsage();
+      const result = await transport.call("sendMessage", { text: `<${tag}>`, parse_mode: "HTML" });
+      const used = process.cpuUsage(started);
+      samples.push(used.user + used.system);
+      expect(result.ok).toBe(false);
+      if (result.ok) throw new Error("expected refusal");
+      expect(result.description).toStartWith("Bad Request: can't parse entities: Unsupported start tag");
+      expect(result.description).toHaveLength(300);
+    }
+    console.info("Telegram diagnostic CPU microseconds", { hasSeparator, samples });
+    // CPU time excludes descheduling; leave ample room for JSON decoding and GC.
+    for (const sample of samples) expect(sample).toBeLessThan(100_000);
+    expect(samples[2]!).toBeLessThan(samples[0]! * 6 + 20_000);
+  }
+}, 15_000);

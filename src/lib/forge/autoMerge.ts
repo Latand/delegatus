@@ -10,12 +10,13 @@ import { openPipelinesOnTask } from "@/lib/pipelines/taskFinish";
 import { PIPELINE_MERGE_LIVE_STATES, type Pipeline, type PipelineMerge, type PipelineMergeMethod, type PipelineStage } from "@/lib/pipelines/types";
 import { mergeOnReviewSetting, type MergeOnReviewSetting } from "@/lib/projects/settings";
 import { patchTask } from "@/lib/tasks/commands";
-import { mutateTasks } from "@/lib/tasks/store";
+import { loadTasks, mutateTasks, taskSelectionSource } from "@/lib/tasks/store";
 
 import { forgeCacheView } from "./cache";
 import { checkFailedReason, MERGE_REASONS } from "./mergeReasons";
 import { lanePullRequest, pipelineRepository } from "./resolve";
 import { type PullRequestState } from "./workLinks";
+import { readBatchLanding } from "./batchLanding";
 
 /*
  * "Merge when the review passes" (#2187 §4, docs/design/merge-policy-and-task-finishing.md).
@@ -68,6 +69,8 @@ export interface AutoMergePorts {
   /** What the forge cache last read for a pull request, for a merge the
       runner no longer polls (blocked or cancelled) that someone merged. */
   cachedState: (repository: string, number: number) => PullRequestState | null;
+  /** A decision form published by this lane's terminal passed attempt. */
+  hasPublishedPrototype?: (pipeline: Pipeline) => boolean;
   startRefresh?: (request: ReturnType<typeof refreshRequest>, options: RefreshOptions) => Promise<{ pipeline?: Pipeline; error?: string }>;
   activeSeat?: (project: string) => Promise<RefreshLineage | null>;
   log?: (message: string, error?: unknown) => void;
@@ -288,6 +291,15 @@ function headBeforeLocalOutput(pipeline: Pipeline): string | null {
   return typeof baseHead === "string" && /^[0-9a-f]{40}$/i.test(baseHead) && baseHead !== pipeline.lastPassedCommit ? baseHead : null;
 }
 
+/** A terminal declared-output commit can remain local. The same proof admits
+ * its preceding PR head before either open-PR checks or closed-PR receipts. */
+function admitLocalOutputHead(pipeline: Pipeline, merge: PipelineMerge, head: string): void {
+  if (merge.updates.length === 0 && merge.chain.length === 1
+    && merge.chain[0] === pipeline.lastPassedCommit && head === headBeforeLocalOutput(pipeline)) {
+    merge.chain = [head];
+  }
+}
+
 /** Return the exact head the latest successful review judged. Older records
  * may omit the SHA; only those records may use the terminal-head timestamp
  * heuristic. Explicit review evidence always outranks timing. */
@@ -450,13 +462,10 @@ async function stepLane(read: Pipeline, ports: AutoMergePorts): Promise<void> {
   try {
     view = parsePullRequestView(await ports.run(["pr", "view", String(merge.prNumber), "--repo", merge.repository, "--json", PR_FIELDS]));
     if (!view) throw new Error("gh returned no parsable pull request");
-    /* The final declared-output commit may be local only. Admit exactly the
-       head the read-only stage reported before that commit, including when a
-       previously blocked merge is retried. A PR that has the output commit
-       keeps the usual chain; every other head still blocks. */
-    if (view.state === "OPEN" && merge.updates.length === 0 && merge.chain.length === 1
-      && merge.chain[0] === read.lastPassedCommit && view.headRefOid === headBeforeLocalOutput(read)) {
-      merge.chain = [view.headRefOid];
+    if (view.state === "OPEN" || view.state === "CLOSED") admitLocalOutputHead(read, merge, view.headRefOid);
+    if (view.state === "CLOSED" && merge.chain.includes(view.headRefOid)) {
+      const landed = await readBatchLanding(merge.repository, merge.prNumber, view.baseRefName || read.baseBranch, { head: view.headRefOid, repoDir: read.repoDir }, ports.run);
+      if (landed) view = { ...view, state: "MERGED", mergeCommit: landed.commit, mergedAt: landed.mergedAt };
     }
     const behindReviewedHead = view.state === "OPEN" && view.headRefOid !== merge.chain.at(-1)
       ? (await prHeadBehindReviewedHead(read, view.headRefOid))
@@ -529,6 +538,7 @@ async function stepLane(read: Pipeline, ports: AutoMergePorts): Promise<void> {
       live.mergeCommit = view!.mergeCommit;
       live.mergedAt = view!.mergedAt ?? iso(now);
       live.reason = null;
+      live.blockedAt = null;
       live.nextReadAt = null;
     });
     return;
@@ -664,16 +674,27 @@ export async function sweepAutoMerge(ports: AutoMergePorts): Promise<void> {
     if (pipeline.state !== "completed" || pipeline.hiddenAt) continue;
     const setting = ports.setting(pipeline.project);
     const merge = pipeline.merge;
+    const linkedPr = ports.pullRequestOf(pipeline);
+    if (!linkedPr && !merge?.prNumber && laneNeedsNoPr(pipeline, ports)) {
+      // Retire an old false stop as well as refusing admission for new lanes.
+      if (merge && merge.reason === MERGE_REASONS.noPr) await ports.mutate(pipeline.id, (live) => {
+        if (live.state !== "completed" || live.merge?.updatedAt !== merge.updatedAt || live.merge.prNumber
+          || ports.pullRequestOf(live) || !laneNeedsNoPr(live, ports)) return false;
+        delete live.merge;
+        return true;
+      });
+      continue;
+    }
     if (!merge) {
       /* Only lanes that complete after the setting went on (§4.1). */
       if (!setting.enabled || !setting.changedAt || !(Date.parse(pipeline.closedAt ?? "") >= Date.parse(setting.changedAt))) continue;
       if (!pipeline.lastPassedCommit || !mergeEligible(pipeline)) continue;
-      const pr = ports.pullRequestOf(pipeline);
-      if (!pr && (laneHasNoCommits(pipeline) || pipeline.delivery?.disposition === "comparison")) continue;
+      const pr = linkedPr;
+      if (!pr && pipeline.delivery?.disposition === "comparison") continue;
       const repository = pr?.repository ?? pipelineRepository(pipeline);
       if (!repository) continue;
       await ports.mutate(pipeline.id, (live) => {
-        if (live.state !== "completed" || live.merge) return false;
+        if (live.state !== "completed" || live.merge || (!pr && laneNeedsNoPr(live, ports))) return false;
         live.merge = newMerge(live, { repository, number: pr?.number ?? null }, setting, now);
         if (!pr) block(live.merge, MERGE_REASONS.noPr, now);
         return true;
@@ -696,19 +717,30 @@ export async function sweepAutoMerge(ports: AutoMergePorts): Promise<void> {
           live.mergeCommit = refreshed?.merge?.mergeCommit ?? null;
           live.reason = null;
         });
-      } else if (cached === "closed" || refreshed?.state === "closed") {
-        await commit(ports, pipeline, (live) => block(live, cached === "closed" ? MERGE_REASONS.closed : MERGE_REASONS.refreshClosed, now));
+      } else if (cached === "closed") {
+        const due = Date.parse(merge.nextReadAt ?? "");
+        if (!Number.isFinite(due) || due <= now) await reconcileBatchLanding(pipeline, { repository: merge.repository, number: merge.prNumber! }, ports, true);
+      } else if (refreshed?.state === "closed") {
+        await commit(ports, pipeline, (live) => block(live, MERGE_REASONS.refreshClosed, now));
       } else if (!merge.refresh?.pipelineId) await startRefresh(pipeline, ports);
       continue;
     }
     const pr = merge.prNumber === null ? ports.pullRequestOf(pipeline) : { repository: merge.repository, number: merge.prNumber };
-    if ((merge.state === "blocked" || merge.state === "cancelled") && pr && ports.cachedState(pr.repository, pr.number) === "merged") {
+    const cached = pr ? ports.cachedState(pr.repository, pr.number) : null;
+    if ((merge.state === "blocked" || merge.state === "cancelled") && pr && cached !== "merged"
+      && (merge.reason === MERGE_REASONS.closed || cached === "closed")) {
+      const due = Date.parse(merge.nextReadAt ?? "");
+      if (!Number.isFinite(due) || due <= now) await reconcileBatchLanding(pipeline, pr, ports);
+      continue;
+    }
+    if ((merge.state === "blocked" || merge.state === "cancelled") && pr && cached === "merged") {
       await commit(ports, pipeline, (live) => {
         live.repository = pr.repository;
         live.prNumber = pr.number;
         live.state = "merged";
         live.by = "outside";
         live.reason = null;
+        live.blockedAt = null;
         live.mergedAt = iso(now);
       });
     }
@@ -735,6 +767,44 @@ export async function sweepAutoMerge(ports: AutoMergePorts): Promise<void> {
   }
 }
 
+/** Closed PRs stay CLOSED in the forge cache after a batch lands. Recheck
+ * receipts on a poll interval, preserving a genuine stop and doing no writes
+ * to GitHub even if the PR has since reopened. */
+async function reconcileBatchLanding(read: Pipeline, pr: { repository: string; number: number }, ports: AutoMergePorts, stopClosedRefresh = false): Promise<void> {
+  const now = ports.now();
+  let view: PullRequestView | null = null;
+  try {
+    view = parsePullRequestView(await ports.run(["pr", "view", String(pr.number), "--repo", pr.repository, "--json", PR_FIELDS]));
+    if (!view) throw new Error("gh returned no parsable pull request");
+    if (view.state === "CLOSED") admitLocalOutputHead(read, read.merge!, view.headRefOid);
+    if (view.state === "CLOSED" && read.merge!.chain.includes(view.headRefOid)) {
+      const landed = await readBatchLanding(pr.repository, pr.number, view.baseRefName || read.baseBranch, { head: view.headRefOid, repoDir: read.repoDir }, ports.run);
+      if (landed) view = { ...view, state: "MERGED", mergeCommit: landed.commit, mergedAt: landed.mergedAt };
+    }
+  } catch (error) {
+    view = null;
+    ports.log?.(`[auto merge] ${read.id}: landing read failed`, error);
+  }
+  await commit(ports, read, (live) => {
+    live.readAt = iso(now);
+    live.nextReadAt = iso(now + MERGE_POLL_MS);
+    if (stopClosedRefresh && view?.state === "CLOSED") block(live, MERGE_REASONS.closed, now);
+    if (view?.state !== "MERGED") return;
+    live.chain = read.merge!.chain;
+    live.repository = pr.repository;
+    live.prNumber = pr.number;
+    live.state = "merged";
+    live.by = "outside";
+    live.mergedHead = view.headRefOid;
+    live.mergeCommit = view.mergeCommit;
+    live.mergedAt = view.mergedAt ?? iso(now);
+    live.reason = null;
+    live.blockedAt = null;
+    live.nextReadAt = null;
+    live.readFailures = 0;
+  });
+}
+
 /* ── A pipeline that finishes its task (#2187 §5) ───────────────────────── */
 
 /** Exact base/head equality proves a lane has nothing to merge. Legacy
@@ -743,19 +813,51 @@ function laneHasNoCommits(pipeline: Pipeline): boolean {
   return /^[0-9a-f]{40}$/i.test(pipeline.baseRef ?? "") && pipeline.lastPassedCommit === pipeline.baseRef;
 }
 
+function laneNeedsNoPr(pipeline: Pipeline, ports: Pick<AutoMergePorts, "hasPublishedPrototype">): boolean {
+  if (laneHasNoCommits(pipeline)) return true;
+  const attempts = pipeline.runs.flatMap((run) => run.attempts
+    .filter((attempt) => !attempt.historical && attempt.state !== "pending" && attempt.state !== "skipped")
+    .map((attempt) => ({ attempt, readOnly: pipeline.stages.some((stage) => stage.id === run.stageId && stage.kind === "run")
+      && attempt.effectiveRole.access === "read-only" })));
+  // Read-only outputs are committed by the controller. Those commits do not
+  // turn a research or design lane into an implementation awaiting a PR.
+  if (attempts.length && attempts.every((entry) => entry.readOnly)) return true;
+  // outputBaseHead is observed at settlement, after the preceding writers.
+  // A stage report alone precedes settlement and cannot prove no later commit.
+  const writers = attempts.filter((entry) => !entry.readOnly);
+  if (/^[0-9a-f]{40}$/i.test(pipeline.baseRef ?? "") && attempts.some(({ attempt: output, readOnly }) => readOnly
+    && output.state === "passed" && output.outputBaseHead === pipeline.baseRef
+    && writers.every(({ attempt: writer }) => Date.parse(writer.completedAt ?? "") < Date.parse(output.completedAt ?? "")))) return true;
+  return ports.hasPublishedPrototype?.(pipeline) === true;
+}
+
+function hasPublishedPrototype(pipeline: Pipeline): boolean {
+  if (!pipeline.taskIds.length) return false;
+  const terminal = pipeline.stages.filter((stage) => stage.next === null).flatMap((stage) => {
+    const attempt = pipeline.runs.find((run) => run.stageId === stage.id)?.attempts.filter((item) => !item.historical).at(-1);
+    return attempt?.state === "passed" && attempt.report?.provenance.head === pipeline.lastPassedCommit
+      ? [{ stageId: stage.id, attempt: attempt.n }] : [];
+  });
+  if (!terminal.length) return false;
+  const source = taskSelectionSource();
+  const tasks = source ? pipeline.taskIds.map((id) => source.read(id)) : loadTasks().filter((task) => pipeline.taskIds.includes(task.id));
+  return tasks.some((task) => task?.prototypeReviews?.some((round) => round.source.pipelineId === pipeline.id
+    && terminal.some((end) => end.stageId === round.source.stageId && end.attempt === round.source.attempt)));
+}
+
 /**
  * Whether a marked lane has finished its tasks (§5.2): it completed, and when
  * its project merges automatically, its pull request merged, by the runner
- * or by anyone. A lane proved unchanged has nothing to merge. The setting
- * is read now.
+ * or by anyone. Unchanged lanes, read-only outputs and published prototypes
+ * can finish without a PR. The setting is read now.
  */
-export function laneFinishedForTasks(pipeline: Pipeline, ports: Pick<AutoMergePorts, "setting" | "pullRequestOf" | "cachedState">): boolean {
+export function laneFinishedForTasks(pipeline: Pipeline, ports: Pick<AutoMergePorts, "setting" | "pullRequestOf" | "cachedState" | "hasPublishedPrototype">): boolean {
   if (pipeline.state !== "completed") return false;
   if (!ports.setting(pipeline.project).enabled) return true;
   if (pipeline.merge?.state === "merged") return true;
   const pr = ports.pullRequestOf(pipeline)
     ?? (pipeline.merge?.prNumber ? { repository: pipeline.merge.repository, number: pipeline.merge.prNumber } : null);
-  if (!pr) return laneHasNoCommits(pipeline);
+  if (!pr) return laneNeedsNoPr(pipeline, ports);
   return ports.cachedState(pr.repository, pr.number) === "merged";
 }
 
@@ -857,6 +959,7 @@ export function productionAutoMergePorts(overrides: Partial<AutoMergePorts> & Pi
     setting: mergeOnReviewSetting,
     pullRequestOf: lanePullRequest,
     cachedState: (repository, number) => forgeCacheView().repository(repository)?.pr(number)?.state ?? null,
+    hasPublishedPrototype,
     finishTask: finishBoardTask,
     startRefresh: async (request, options) => (await import("@/lib/pipelines/engine")).createPipelineFromRequest(request, undefined, options),
     activeSeat: async (project) => {

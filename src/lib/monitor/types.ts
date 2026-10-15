@@ -190,7 +190,11 @@ export type SeatTickWakeReasonKind =
   | "unmerged-pr"
   /** A parked or non-progressing lane that persisted across two checks. */
   | "stalled"
-  /** A board task the operator assigned that nothing has started. */
+  /** An active episode has free capacity to find work. */
+  | "autonomy-idle"
+  /** An ended episode owes its report. */
+  | "autonomy-ended"
+  /** A board task eligible to start. */
   | "unstarted-task"
   /** The wake interval elapsed while work is open — "roughly hourly". */
   | "interval"
@@ -225,6 +229,8 @@ export const SEAT_TICK_WAKE_REASON_KINDS: readonly SeatTickWakeReasonKind[] = [
   "lane-event",
   "unmerged-pr",
   "stalled",
+  "autonomy-idle",
+  "autonomy-ended",
   "unstarted-task",
   "interval",
   "child-terminal",
@@ -904,6 +910,10 @@ export interface SeatTickWakeCommit {
       wake shows the note again unless the seat actually received it. Absent
       on a plan written before this field existed, which records nothing. */
   noteShown?: string | null;
+  /** Episode whose end-report request reached this seat. */
+  autonomySummaryFor?: string;
+  /** Revision of the autonomy rules shown in this seat epoch. */
+  autonomyShown?: string;
   /** The settled outcomes this wake announces, each under the key its report
       must carry (docs/design/orchestrator-reports.md §5.1). A landing records
       them as owed; a wake that never landed announced nothing. */
@@ -1244,6 +1254,10 @@ export interface SeatTickProjectState {
    * successor's first wake shows the note it never received.
    */
   noteShown?: string | null;
+  /** Episode whose end-report request reached this seat. */
+  autonomySummaryFor?: string;
+  /** Revision of the autonomy rules shown in this seat epoch. */
+  autonomyShown?: string;
   /**
    * The stall tokens a landed wake showed THIS seat, newest last, bounded to
    * {@link SEAT_TICK_REPORTED_STALLS_LIMIT}. A persisted stall whose token is
