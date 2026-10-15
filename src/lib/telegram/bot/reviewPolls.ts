@@ -114,7 +114,10 @@ export class ReviewPollQueue {
       if (!findRound(job.review)) return;
       mutatePolls(job.review, held => held?.key === job.key ? held : { key: job.key, questions: [] });
     }));
-    const next = Promise.all([this.tail, scheduled]).then(() => new Promise<void>(resolve => setImmediate(resolve)))
+    const next = Promise.allSettled([this.tail, scheduled]).then(([, schedule]) => {
+      if (schedule.status === "rejected") throw schedule.reason;
+      return new Promise<void>(resolve => setImmediate(resolve));
+    })
       .then(() => withViewerOperation("telegram.review-polls", () => this.post(job)))
       .catch(() => { console.warn("Telegram review polls unavailable", "storage_unavailable"); })
       .finally(() => { this.jobs.delete(identity); });

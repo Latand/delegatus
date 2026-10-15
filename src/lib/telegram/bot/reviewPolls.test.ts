@@ -343,6 +343,35 @@ test.each(["task", "seat"])("%s poll scheduling yields to a peer state lock whil
   } finally { clearTimeout(deadline); clearInterval(timer); release(); peer.close(); }
 });
 
+test("a refused schedule write keeps later jobs behind the active sender", async () => {
+  const { round, service, transport } = await connected("schedule-error-owner");
+  let entered!: () => void, release!: () => void;
+  const sending = new Promise<void>(resolve => { entered = resolve; });
+  const held = new Promise<void>(resolve => { release = resolve; });
+  cleanups.push(release);
+  let messageId = 10;
+  transport.handlers.sendPoll = async () => { entered(); await held; return ok({ message_id: ++messageId, date: 1791724801 }); };
+  await postPrototypeReviewToTelegram(round);
+  await sending;
+  const refused = telegramRound("schedule-error"), queued = telegramRound("after-schedule-error");
+  saveTasks([telegramTask([saved(), refused, queued])]);
+  const store = await import("@/lib/tasks/store");
+  const mutate = store.mutateTaskTelegramPolls;
+  const failure = spyOn(store, "mutateTaskTelegramPolls").mockImplementation((taskId, reviewId, change) => {
+    if (reviewId === refused.id) throw new Error("Fixture storage unavailable");
+    return mutate(taskId, reviewId, change);
+  });
+  cleanups.push(() => failure.mockRestore());
+  try {
+    expect((await postPrototypeReviewToTelegram(refused))?.state).toBe("sent");
+    await postPrototypeReviewToTelegram(queued);
+    await Bun.sleep(30);
+    expect(transport.callsOf("sendPoll")).toHaveLength(1);
+  } finally { release(); await service.waitForReviewPolls(); }
+  expect(transport.callsOf("sendPoll")).toHaveLength(6);
+  expect(loadTasks()[0]!.prototypeReviews!.find(r => r.id === refused.id)?.telegramPolls).toBeUndefined();
+});
+
 test.each([["task", "send"], ["seat", "send"], ["task", "recover"], ["seat", "recover"]])("%s round poll %s yields under a peer SQLite write lock", async (kind, action) => {
   const { round, service } = await connected(`contention-${kind}`);
   const held = kind === "seat" ? { ...round, taskId: null } : round;
