@@ -126,6 +126,7 @@ test("caller cancellation does not claim that the original mutation never ran", 
   const caller = new AbortController(); caller.abort();
   await expect(call(executor, "create_task", { project: "fixture", text: "Cancelled", clientRequestId: "executor-cancel" }, { signal: caller.signal })).rejects.toThrow("before dispatch");
   const result = await call(executor, "create_task", { project: "fixture", text: "Cancelled", clientRequestId: "executor-cancel" });
+  if (!result.ok) throw new Error(JSON.stringify(result));
   expect(result.ok).toBe(true);
 });
 

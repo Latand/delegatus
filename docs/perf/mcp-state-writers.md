@@ -692,3 +692,28 @@ python3 -B scripts/mcp-state-writer-matrix.py --compare "$RUN_ROOT"
 ```
 
 The complete alternating matrix is required before performance acceptance.
+
+### Acceptance rules for the resumed matrix
+
+The resumed matrix freezes the candidate after merging main. Each of the twelve
+client/transport/sharing cohorts uses three repetitions, reversing the order of
+candidate, matched main and original audit on the second repetition. Every
+sample retains the same 30-second warmup, 300-second offered load, seed,
+dependencies, runtimes and observer. The report records the actual sample's
+CPU and memory quota hierarchy, in addition to the controller's hierarchy.
+
+For each cohort, compare the median of the three Viewer loop p99 values and
+the median of the three loop maxima with each control. Both candidate medians
+must be no higher. Publish every repetition, including individual maxima,
+failed responses and pending calls. An incomplete loop window, surviving
+fixture process, connection imbalance, adapter database access or unreconciled
+mutation prevents acceptance. Recovering a timed-out operation keeps its
+original measured failure and latency.
+
+Exact normalized response and row hashes remain separate from the committed
+history checks. Concurrent writes can settle in different orders and shared-task
+revision guards can admit different callers. A different exact hash therefore
+requires an explanation from the retained history; every successful or lost
+mutation reply must still reconcile with its one committed effect or with no
+effect after all owned processes have ended. Numeric row revisions, order and
+controller flags remain in the exact row comparison.

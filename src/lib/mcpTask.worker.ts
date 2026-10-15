@@ -2,9 +2,13 @@
 // imports or migrates the operator's state on its own authority.
 import { createInterface } from "node:readline";
 import { once } from "node:events";
+import { AsyncLocalStorage } from "node:async_hooks";
 import type { TaskExecutorRequest } from "./mcp/taskExecutor";
 
 if (!process.env.LLV_STATE_DIR) throw new Error("task executor needs an explicit state directory");
+// App Router modules capture this global when they load. A standalone executor
+// has no Next server bootstrap to install it before the compiled binding graph.
+(globalThis as typeof globalThis & { AsyncLocalStorage?: typeof AsyncLocalStorage }).AsyncLocalStorage ??= AsyncLocalStorage;
 const { runAsMcpHttpCaller } = await import("./mcp/callerContext");
 const { TASK_EXECUTOR_FRAME_BYTES, TASK_EXECUTOR_HTTP_FRAME_BYTES, TASK_EXECUTOR_TOOLS } = await import("./mcp/taskExecutor");
 const { createProductionViewerMcpService, createViewerMcpServer, MCP_HTTP_CLIENT_ID } = await import("./mcp/server");
