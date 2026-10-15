@@ -4640,7 +4640,7 @@ async function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDo
     /* A full read names nothing it left out (#2030). */
     ...(echoPrompt ? {} : {
       omittedFieldCount: 1,
-      readMore: "seat_tick_settings with verbose:true or full:true reads the complete stored note and settings.",
+      readMore: "seat_tick_settings verbose:true reads the full record.",
     }),
     effective: {
       enabled: effective.enabled,
@@ -4652,9 +4652,9 @@ async function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDo
     /* What a project that has never been configured runs on, so a caller can
        see what it is restoring before it restores it. */
     ...(verbose ? { defaults: seatTickScheduleDefaults(project) } : {}),
-    autonomy: { active: autonomyActive(settings.autonomy, now), until: settings.autonomy?.until ?? null, startedAt: settings.autonomy?.startedAt ?? null,
+    autonomy: settings.autonomy || settings.autonomyHistory?.length || verbose ? { active: autonomyActive(settings.autonomy, now), until: settings.autonomy?.until ?? null, startedAt: settings.autonomy?.startedAt ?? null,
       decisionCount: settings.autonomy?.decisions.length ?? 0, pendingReports: pendingAutonomyReports(settings, now).map(autonomyReportKey),
-      ...(verbose ? { mandate: autonomyMandate(settings.autonomy, now).join("\n").trim(), episode: effective.autonomy, history: settings.autonomyHistory ?? [] } : {}) },
+      ...(verbose ? { mandate: autonomyMandate(settings.autonomy, now).join("\n").trim(), episode: effective.autonomy, history: settings.autonomyHistory ?? [] } : {}) } : { active: false },
     release: { ...RELEASE_DEFAULTS, ...settings.release, effectiveAskBeforePublish: (settings.release?.askBeforePublish ?? true) && !autonomyActive(settings.autonomy, now), status: releaseStatus(project) },
     autoRotate: { enabled: settings.autoRotate?.enabled ?? false, thresholdPercent: settings.autoRotate?.thresholdPercent ?? 50,
       ...(verbose ? { setBy: settings.autoRotate?.setBy ?? null, updatedAt: settings.autoRotate?.updatedAt ?? null, why: settings.autoRotate?.why ?? null } : {}),
