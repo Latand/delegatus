@@ -339,6 +339,30 @@ test("paid credits survive window-only and failed periodic reads and accept an e
   expect(registry.quotaObservations("codex")[0]?.limits?.credits?.hasCredits).toBe(false);
 });
 
+test.each(["session", "weekly"] as const)("periodic refresh retains a missing blocked %s window", async blocked => {
+  const { selectHeadlessAccount } = await import("../headlessSelection");
+  const registry = new AgentRegistry(path.join(QUOTA_SANDBOX, `guard-${blocked}.json`));
+  const account: CodexAccount = { id: "account-a", label: "Account A", kind: "managed", home: QUOTA_SANDBOX,
+    sessionsDir: QUOTA_SANDBOX, authPresent: true, loginPane: null, createdAt: 1 };
+  let now = Date.now();
+  let limits: import("@/lib/types").EngineLimits = { session: { usedPercent: 99, resetsAt: null },
+    weekly: { usedPercent: 99, resetsAt: null }, plan: "pro", capturedAt: now / 1000,
+    credits: { hasCredits: true, balance: "10", unlimited: false } };
+  const controller = new QuotaController(registry, { list: () => [account], active: () => account.id,
+    credentialIdentity: () => "fixture", probe: async engine => ({ engine, accountId: account.id, authenticated: true,
+      authCheckedAt: now, observedAt: now, provenance: { source: "live", reason: null, staleSince: null }, limits }) }, "fixture", () => now);
+  const selection = () => selectHeadlessAccount([account], registry.quotaObservations("codex"), account.id, [], now).kind;
+  try {
+    await controller.tick("codex");
+    for (const partial of [{ session: null, weekly: null }, { session: { usedPercent: 1, resetsAt: null }, weekly: { usedPercent: 1, resetsAt: null }, [blocked]: null }]) {
+      limits = { ...limits, ...partial, credits: undefined }; now += 1000;
+      await controller.tick("codex"); expect(selection()).toBe("exhausted");
+    }
+    limits = { ...limits, session: { usedPercent: 1, resetsAt: null }, weekly: { usedPercent: 1, resetsAt: null } }; now += 1000;
+    await controller.tick("codex"); expect(selection()).toBe("available");
+  } finally { registry.close(); }
+});
+
 test("the controller records the probe's reset credits and carries them through a failed tick (#1373)", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-quota-reset-credits-"));
   try {

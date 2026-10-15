@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { retainCreditGuardEvidence } from "@/lib/accounts/creditGuard";
 import fs from "node:fs";
 import path from "node:path";
 import { accountsCollectionRevision } from "@/lib/accounts/accountsStore";
@@ -330,8 +331,9 @@ export class QuotaController {
         // Another read may have committed while this one waited for its provider.
         if (previous && Date.parse(previous.authCheckedAt) > now) continue;
         const observation = result.observation;
-        if (engine === "codex" && observation?.limits && !observation.limits.credits && previous?.limits?.credits) {
-          observation.limits = { ...observation.limits, credits: previous.limits.credits };
+        if (engine === "codex" && observation) {
+          observation.limits = retainCreditGuardEvidence(previous?.limits, observation.limits,
+            observation.authenticated && observation.provenance.source === "live");
         }
         const providerWithUnknownLimits = engine === "claude" && "provider" in account && Boolean(account.provider);
         if (!observation || (observation.authenticated && (!observation.limits && engine !== "copilot" && !providerWithUnknownLimits

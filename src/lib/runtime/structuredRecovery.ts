@@ -19,6 +19,7 @@ import { accountPark, type AccountPark } from "./accountPark";
 import { runtimeHostClient, type RuntimeHostClient } from "./client";
 import { reconcileDeadStructuredRegistryHost } from "./registry";
 import { restartCutEvidenceHolds } from "./restartCutHold";
+import { assertPipelineTurnAllowed } from "./accountCreditGuard";
 import { StructuredRecoveryContendedError } from "./structuredRecoveryContention";
 import { stagedLaunchRecovery } from "./stagedRecovery";
 import {
@@ -383,6 +384,7 @@ async function recoverCandidate(
   const ownership = dependencies.ownership;
   const assertOwnership = async (): Promise<void> => {
     if (ownership && !await ownership.owns()) throw new StructuredRecoverySupersededError();
+    assertPipelineTurnAllowed(candidate.conversationId, registry);
   };
   const owner = (dependencies.processIdentity ?? (() => captureProcessIdentity(process.pid)))();
   return registry.withOperationLock(candidate.key, owner, async () => {

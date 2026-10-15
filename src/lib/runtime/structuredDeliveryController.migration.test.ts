@@ -14,6 +14,11 @@ import { NativeCodexQueue } from "./nativeCodexQueue";
 import { FakeEngineHost } from "./fixtures/fakeEngineHost";
 import type { EngineHost } from "./engineHost";
 import type { NativeQueueProof } from "./nativeQueueContracts";
+import { reconcileAccountMigrationCycle } from "@/lib/accounts/migration/controller";
+import { drainHeldDeliveries } from "@/lib/accounts/migration/coordinator";
+import { selectProjectAccount } from "@/lib/accounts/projectSelection";
+import { interruptionObligationDirectory, interruptionObligationStore } from "./interruptionObligations";
+import { accountManager } from "@/lib/accounts/manager";
 
 const roots: string[] = [];
 afterEach(async () => {
@@ -27,6 +32,99 @@ function fixture() {
   roots.push(f.root);
   return f;
 }
+
+test.each(["conversation", "orchestrator", "review implementer", "reviewer"])("a fresh credit crossing stops an active %s and preserves recovery custody", async kind => {
+  const f = fixture();
+  let active = true, releases = 0, creates = 0, spare = false;
+  const health = f.host.health.bind(f.host);
+  f.host.health = async () => ({ ...await health(), status: active ? "active" : "dead", activeTurnRef: active ? "turn-a" : null });
+  f.host.release = async () => { active = false; releases++; };
+  if (kind !== "conversation") f.registry.rememberMembership(f.conversation.id, {
+    kind: kind === "orchestrator" ? "orchestrator" : "flow", containerId: "fixture-owner", role: kind === "orchestrator" ? "orchestrator" : kind === "reviewer" ? "reviewer" : "implementer", slot: "review:1",
+    stageId: null, stageOrder: null, round: 1, parentConversationId: null });
+  const observe = (usedPercent: number) => f.registry.recordQuotaObservation({ engine: "codex", accountId: "account-a",
+    authenticated: true, authCheckedAt: new Date().toISOString(), observedAt: new Date().toISOString(), bootId: "fixture",
+    provenance: { source: "live", reason: null, staleSince: null }, limits: { session: null,
+      weekly: { usedPercent, resetsAt: Math.floor(Date.now() / 1000) + 86400 }, plan: "pro", capturedAt: Date.now() / 1000,
+      credits: { hasCredits: true, balance: "10", unlimited: false } } });
+  observe(98);
+  const successor = path.join(f.root, "successor.jsonl");
+  const provider: import("@/lib/accounts/migration/contracts").SuccessorProviderPort = {
+    virtualSource: true,
+    create: async input => {
+      expect(active).toBe(false); creates++;
+      expect(input.targetAccountId).toBe("account-b");
+      fs.copyFileSync(f.conversation.generations[0]!.path, successor);
+      return { operationId: input.operationId, nativeId: "native-b", path: successor, continuityPaths: [successor], historyHash: "fixture",
+        host: { kind: "codex-app-server", identity: "native-b", epoch: 1, verifiedAt: new Date().toISOString() } };
+    }, verify: async () => {},
+  };
+  const store = interruptionObligationStore(interruptionObligationDirectory(f.registry.filename));
+  const selection = spyOn(accountManager, "resolveProjectSpawn").mockImplementation((engine, request) => {
+    const selected = selectProjectAccount({ ...request, engine, accounts: [{ id: "account-a", authPresent: true }, { id: "account-b", authPresent: true }],
+      observations: f.registry.quotaObservations("codex"), bindings: [], now: Date.now() });
+    return spare && selected.kind === "available" ? { kind: "available", account: { engine, accountId: selected.accountId!, kind: "managed",
+      home: f.root, transcriptRoot: f.root, env: { NODE_ENV: "test" } } } : { kind: "exhausted", resetsAt: null, allowedAccountIds: ["account-a", "account-b"] };
+  });
+  try {
+    await bindStructuredDeliveryQueue([{ key: f.key, host: f.host }], { registry: f.registry, client: f.client,
+      hostlessSettleIntervalMs: 0, watchdogIntervalMs: 0, settlementSweepMs: 0 });
+    expect(active).toBe(true);
+    if (kind === "orchestrator") {
+      const { recordLiveObservation } = await import("@/lib/accounts/liveLimits");
+      const previous = f.registry.quotaObservations("codex")[0]!;
+      recordLiveObservation({ ...previous, authCheckedAt: Date.now(), observedAt: Date.now(),
+        limits: { ...previous.limits!, weekly: { usedPercent: 99, resetsAt: null } } }, "managed", { registry: f.registry });
+      await kickStructuredDeliveryQueue();
+    } else {
+      await reconcileAccountMigrationCycle(f.registry, { tick: async engine => { if (engine === "codex") observe(99); } }, provider, { deliver: async () => "held" });
+    }
+    expect(active).toBe(false);
+    expect(releases).toBe(1);
+    expect(creates).toBe(0);
+    expect(store.list()).toMatchObject([{ reason: "account-guard", state: kind === "reviewer" ? "discharged" : "owed", turnRef: "turn-a" }]);
+    expect(fs.existsSync(f.conversation.generations[0]!.path)).toBe(true);
+    spare = true;
+    await kickStructuredDeliveryQueue();
+    if (kind === "reviewer") {
+      expect(creates).toBe(0);
+      expect(store.list()[0]!.resolution).toContain("flow relaunches");
+      expect(f.registry.conversationMemberships(f.conversation.id)).toMatchObject([{ containerId: "fixture-owner", role: "reviewer", round: 1 }]);
+      return;
+    }
+    expect(creates).toBe(0);
+    await reconcileAccountMigrationCycle(f.registry, { tick: async () => {} }, provider, { deliver: async () => "held" });
+    expect(creates).toBe(1);
+    expect(f.registry.conversation(f.conversation.id)?.generations.at(-1)).toMatchObject({ accountId: "account-b", path: successor });
+    const writes: string[] = [];
+    const delivery = { deliver: async (input: { path: string; clientMessageId: string }) => {
+      expect(input.path).toBe(successor); writes.push(input.clientMessageId); return "delivered" as const;
+    } };
+    await drainHeldDeliveries(f.conversation.id, delivery, f.registry);
+    await kickStructuredDeliveryQueue();
+    await drainHeldDeliveries(f.conversation.id, delivery, f.registry);
+    expect(writes).toEqual([store.list()[0]!.id]);
+    expect(creates).toBe(1);
+    expect(store.list()[0]!.state).toBe("delivered");
+  } finally { selection.mockRestore(); await f.cleanup(); }
+});
+
+test("a persisted guard migration rechecks capacity before creating its successor", async () => {
+  const f = fixture();
+  f.registry.requestConversationReseat(f.conversation.id, "account-b", undefined, undefined, true);
+  const { AgentRegistry } = await import("@/lib/agent/registry");
+  const reopened = new AgentRegistry(f.registry.filename, undefined, undefined, { sqliteMode: "sqlite" });
+  const selection = spyOn(accountManager, "resolveProjectSpawn").mockReturnValue({ kind: "exhausted", resetsAt: null, allowedAccountIds: ["account-b"] });
+  let creates = 0;
+  try {
+    expect(reopened.conversation(f.conversation.id)?.migration?.creditGuard).toBe(true);
+    await advanceConversationMigration(f.conversation.id, reopened, { virtualSource: true,
+      create: async () => { creates++; throw Error("inadmissible target must not launch"); }, verify: async () => {} }, { deferBoardRepair: true });
+    expect(creates).toBe(0);
+    expect(reopened.conversation(f.conversation.id)?.generations).toHaveLength(1);
+    expect(reopened.conversation(f.conversation.id)?.migration?.phase).toBe("failed-recoverable");
+  } finally { selection.mockRestore(); reopened.close(); await f.cleanup(); }
+});
 
 test.each(["before dispatch", "during journal transition"])("paid-credit guard refuses a queued Codex turn %s", async phase => {
   const f = fixture();

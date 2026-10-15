@@ -31,3 +31,22 @@ export function creditGuardBlock(engine: string, limits: EngineLimits | null | u
   return { resetsAt: windows.every(window => window!.resetsAt !== null)
     ? Math.max(...windows.map(window => window!.resetsAt!)) : null };
 }
+
+/** Missing windows do not retract a reached cutoff. Only a live, authenticated
+ * reading of that window can prove headroom; an explicit empty balance ends
+ * the paid-credit policy. Keep each governing window independently. */
+export function retainCreditGuardEvidence(previous: EngineLimits | null | undefined,
+  current: EngineLimits | null, verified: boolean): EngineLimits | null {
+  const credits = !verified && previous?.credits?.hasCredits ? previous.credits : current?.credits ?? previous?.credits;
+  const guarded = creditGuardBlock("codex", previous);
+  if (!current) return guarded ? previous! : null;
+  const merged = { ...current, ...(credits ? { credits } : {}) };
+  if (!guarded || credits?.hasCredits === false) return merged;
+  for (const key of ["session", "weekly"] as const) {
+    const old = previous?.[key];
+    const fresh = current[key];
+    if (old && old.usedPercent >= creditGuardUsedPercent()
+      && (!verified || !fresh || !Number.isFinite(fresh.usedPercent) || fresh.usedPercent < 0 || fresh.usedPercent > 100)) merged[key] = old;
+  }
+  return merged;
+}

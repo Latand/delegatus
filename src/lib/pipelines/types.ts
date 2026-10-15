@@ -370,7 +370,7 @@ export type PipelineRuntimeSwitch = {
 export type PipelineStageAttempt = {
   n: number;
   /** Stop custody for pause or account evacuation. A replacement keeps this checkout. */
-  suspension?: { reason: "pause" | "account"; detail: string; requestedAt: string; stoppedAt?: string; operatorStoppedAt?: string };
+  suspension?: { reason: "pause" | "account"; detail: string; requestedAt: string; stoppedAt?: string; stopRevision?: number; operatorStoppedAt?: string };
   runtimeSwitches?: PipelineRuntimeSwitch[];
   /** Monotonic verdict fence survives bounded switch-history retention. */
   runtimeEvidenceSince?: string;

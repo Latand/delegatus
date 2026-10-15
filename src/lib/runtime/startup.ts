@@ -746,7 +746,7 @@ function interruptionObligationDischarge(
   const generation = conversation?.generations.at(-1);
   if (!conversation || !generation) return "the conversation no longer exists";
   if (conversation.supersededBy) return "the conversation was superseded";
-  if (sessionKeyId({ engine: conversation.engine, sessionId: generation.id }) !== obligation.hostKey) {
+  if (obligation.reason !== "account-guard" && sessionKeyId({ engine: conversation.engine, sessionId: generation.id }) !== obligation.hostKey) {
     return "the conversation moved to another generation";
   }
   if (obligation.seat) {
@@ -765,6 +765,7 @@ function interruptionObligationDischarge(
   /* An admitted continuation is replayed under its own key until it reports
      arrival; a later message cannot un-send it. */
   if (obligation.state !== "owed") return null;
+  if (obligation.reason === "account-guard") return null; // The live credit guard owns its migration and continuation.
   /* A stage's cut is its controller's to answer with one fresh attempt,
      whoever recorded it: a continuation would resume the attempt it replaces. */
   if (interruptionStageOf(snapshot.memberships, conversationId)) return STAGE_CUT_RESOLUTION;
@@ -874,6 +875,7 @@ async function deliverInterruptionContinuations(
     byConversation.set(conversationId, [...byConversation.get(conversationId) ?? [], obligation]);
   }
   const deliverOne = async (obligation: InterruptionObligation): Promise<void> => {
+    if (obligation.reason === "account-guard") return;
     if (!publishedHostKeys.has(obligation.hostKey)) return;
     const snapshot = registry.readOnlySnapshot();
     const recorded = snapshot.entries[obligation.hostKey]?.structuredHost?.process ?? null;

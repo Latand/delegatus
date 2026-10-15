@@ -1,5 +1,7 @@
 import { spawnDiagnosticErrorForRegistry } from "@/lib/agent/spawnDiagnostics";
 import { creditGuardBlock } from "@/lib/accounts/creditGuard";
+import { assertPipelineTurnAllowed, enforceAccountCreditGuard } from "./accountCreditGuard";
+import { hasRuntimeSwitchKill } from "@/lib/pipelines/runtimeSwitch";
 import { ownerRelaySpawnAuthorized } from "@/lib/externalRelay/ownerAuthority";
 import { loadPipelinesForRetirement } from "@/lib/pipelines/store";
 import { pipelineHostHasLiveWork, providerRecoveryAttempt, providerRecoveryTurnProven } from "@/lib/pipelines/hostRetirement";
@@ -766,6 +768,7 @@ export async function bindStructuredDeliveryQueue(
   const nativeReconciliations = new Map<string, Promise<void>>();
   const nativeRetries = new Map<string, RetryBackoff>();
   const authorizeAccountDispatch = (conversationId: string) => {
+    assertPipelineTurnAllowed(conversationId, registry);
     const conversation = registry.conversation(conversationId as ViewerConversationId);
     if (conversation?.engine !== "codex") return;
     const accountId = conversation.generations.at(-1)?.accountId;
@@ -1281,6 +1284,12 @@ export async function bindStructuredDeliveryQueue(
   let settlementSweepTimer: ReturnType<typeof setInterval> | null = null;
   let drainBackoffMs = DELIVERY_DRAIN_COALESCE_MS;
   let stopped = false;
+  let guarding: Promise<void> | null = null;
+  const enforceGuard = () => guarding ??= enforceAccountCreditGuard(registry,
+    [...hosts].map(([id, host]) => ({ key: registrations.get(id)!.key, host })),
+    async (key, host) => hosts.get(sessionKeyId(key)) === host
+      && (await state.terminateActiveHost?.(key) ?? false),
+    (id, since) => hasRuntimeSwitchKill(client, id, since, [], true)).finally(() => { guarding = null; });
   const scheduleDrain = (delayMs = DELIVERY_DRAIN_COALESCE_MS): boolean => {
     if (stopped || drainTimer) return false;
     drainTimer = setTimeout(() => {
@@ -1294,6 +1303,7 @@ export async function bindStructuredDeliveryQueue(
   const drainWithRetry = async (afterAdmission = false): Promise<void> => {
     if (stopped) return;
     try {
+      if (!startupPending) await enforceGuard();
       if (afterAdmission) await queue.drainAfterAdmission();
       else await queue.drain();
       drainBackoffMs = DELIVERY_DRAIN_COALESCE_MS;
@@ -2028,6 +2038,7 @@ export async function bindStructuredDeliveryQueue(
          wakes only writes records; an unregistered host's target stays
          deferred by the drain, which notes `startup` on its records. */
       if (stopped || state.activeQueue !== queue) return;
+      void enforceGuard().catch(error => controllerDiagnosticError("[structured delivery] paid-credit guard retry pending", error));
       void queue.tick().catch((error) => {
         controllerDiagnosticError("[structured delivery] watchdog failed", { error: error instanceof Error ? error.message : String(error) });
       });

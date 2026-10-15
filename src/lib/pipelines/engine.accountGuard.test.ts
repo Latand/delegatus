@@ -1,7 +1,8 @@
-import { expect, test, harness, create, tickPipelines, loadPipelines, savePipelines, patchPipeline, providerRecoveryHarness, LIMITED_ACCOUNT, PASS_TEXT } from "./engine.fixture";
+import { expect, test, harness, create, tickPipelines, loadPipelines, savePipelines, patchPipeline, providerRecoveryHarness, LIMITED_ACCOUNT, PASS_TEXT, AgentRegistry, path, fs } from "./engine.fixture";
 import { selectProjectAccount } from "@/lib/accounts/projectSelection";
 import { selectHeadlessAccount } from "@/lib/accounts/headlessSelection";
 import type { DurableQuotaObservation } from "@/lib/accounts/migration/contracts";
+import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 
 async function fixture() {
   const h = harness();
@@ -123,15 +124,17 @@ test("an unconfirmed stop is retried with the same operation key before any repl
   expect(f.current().runs[0]!.attempts).toHaveLength(1);
   confirm = true;
   await tickPipelines([], { ...f.h.ports });
-  expect(keys).toHaveLength(2);
+  expect(keys).toHaveLength(3);
   expect(keys[1]).toBe(keys[0]);
+  expect(keys[2]).not.toBe(keys[1]);
   expect(f.current().runs[0]!.attempts).toHaveLength(2);
 });
 
 test("a newly forbidden target during host termination stays stopped until an allowed account appears", async () => {
   const f = await fixture();
   f.observations[0]!.limits!.weekly!.usedPercent = 99;
-  f.h.ports.stopStageAgent = async () => { f.allow(["account-a"]); return { outcome: "stopped" }; };
+  let revoke = true;
+  f.h.ports.stopStageAgent = async () => { if (revoke) f.allow(["account-a"]); revoke = false; return { outcome: "stopped" }; };
   await tickPipelines([], f.h.ports);
   expect(f.current().runs[0]!.attempts).toHaveLength(1);
   f.allow(["account-b"]);
@@ -151,6 +154,63 @@ test("guarded retry replay retains the stop key until termination is confirmed",
   expect((await patchPipeline(f.lane.id, request, f.h.ports)).error).toBeUndefined();
   expect(new Set(keys).size).toBe(1);
   expect(f.current().runs[0]!.attempts).toHaveLength(1);
+});
+
+test("a reactivated predecessor must stop again before delivery settlement admits its successor", async () => {
+  const f = await fixture();
+  f.allow(["account-b"]);
+  let outstanding = true, active = true, stopAllowed = true;
+  const keys: string[] = [];
+  f.h.ports.conversationDeliveryOutstanding = () => outstanding;
+  f.h.ports.stopStageAgent = async (_target, options) => {
+    keys.push(options!.operationId!);
+    if (!stopAllowed) return { outcome: "unconfirmed", operationId: options!.operationId!, detail: "still active" };
+    active = false; return { outcome: "stopped" };
+  };
+  await tickPipelines([], f.h.ports);
+  expect(active).toBe(false);
+  active = true; outstanding = false; stopAllowed = false;
+  await tickPipelines([], f.h.ports);
+  expect(active).toBe(true);
+  expect(f.current().runs[0]!.attempts).toHaveLength(1);
+  expect(keys[1]).not.toBe(keys[0]);
+  expect(await patchPipeline(f.lane.id, { action: "override-stage", stageId: "build", account: "account-b", applyNow: true }, f.h.ports))
+    .toMatchObject({ status: 409, error: expect.stringContaining("suspended") });
+  stopAllowed = true;
+  await tickPipelines([], f.h.ports);
+  expect(active).toBe(false);
+  expect(f.current().runs[0]!.attempts[1]!.accountId).toBe("account-b");
+});
+
+test("custody is rechecked after transcript reads and suspended attempts refuse late dispatch", async () => {
+  const f = await fixture();
+  f.allow(["account-b"]);
+  let active = true, stops = 0;
+  f.h.ports.stopStageAgent = async () => { stops++; active = false; return { outcome: "stopped" }; };
+  const read = f.h.ports.durableTurnEvidence;
+  f.h.ports.durableTurnEvidence = async (...args) => {
+    const evidence = await read(...args);
+    active = true;
+    return evidence;
+  };
+  await tickPipelines([], f.h.ports);
+  expect(stops).toBeGreaterThanOrEqual(2);
+  expect(active).toBe(false);
+  expect(f.current().runs[0]!.attempts[1]!.accountId).toBe("account-b");
+  const { assertPipelineTurnAllowed } = await import("@/lib/runtime/accountCreditGuard");
+  expect(() => assertPipelineTurnAllowed(f.attempt.conversationId!)).toThrow("suspended");
+  const registry = new AgentRegistry(path.join(process.env.LLV_STATE_DIR!, "suspended-turn-membership.json"));
+  try {
+    const transcript = path.join(process.env.LLV_STATE_DIR!, "guard-session.jsonl");
+    fs.writeFileSync(transcript, "{}\n");
+    registry.reconcileConversations([{ engine: "codex", path: transcript, accountId: "account-a", launchProfile: emptyLaunchProfile(), turn: { state: "idle", source: "empty", terminalAt: null }, observedAt: f.h.ports.now() }]);
+    const conversation = registry.conversationForPath(transcript)!;
+    const lane = f.current();
+    lane.runs[0]!.attempts[0]!.conversationId = conversation.id;
+    savePipelines([lane]);
+    registry.rememberMembership(conversation.id, { kind: "pipeline", containerId: lane.id, role: "builder", slot: "build:1", stageId: "build", stageOrder: 0, round: 1, parentConversationId: null });
+    expect(() => assertPipelineTurnAllowed(conversation.id, registry)).toThrow("suspended");
+  } finally { registry.close(); }
 });
 
 test("a failed continuation withdrawal still stops usage and holds replacement until withdrawal succeeds", async () => {

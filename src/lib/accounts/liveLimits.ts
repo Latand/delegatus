@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { creditGuardBlock, creditGuardUsedPercent } from "./creditGuard";
+import { creditGuardBlock, creditGuardUsedPercent, retainCreditGuardEvidence } from "./creditGuard";
 
 import type { ClaudeAccount } from "@/lib/accounts/claude";
 import type { CodexAccount } from "@/lib/accounts/codex";
@@ -10,6 +10,7 @@ import { gatingWindows, type QuotaObservation } from "@/lib/accounts/migration/q
 import { agentRegistry, type AgentRegistry } from "@/lib/agent/registry";
 import { logQuotaEvent } from "@/lib/events";
 import { forgetCachedLimits } from "@/lib/limits";
+import { kickStructuredDeliveryQueue } from "@/lib/runtime/structuredDeliverySignal";
 
 /**
  * A live re-read of one account's limits, including after login (issue #1418).
@@ -54,12 +55,17 @@ export function recordLiveObservation(
   deps: LiveLimitsDeps = {},
 ): DurableQuotaObservation {
   const registry = deps.registry ?? agentRegistry();
-  if (observation.engine === "codex" && observation.limits && !observation.limits.credits) {
-    const credits = registry.quotaObservations?.("codex").find(item => item.accountId === observation.accountId)?.limits?.credits;
-    if (credits) observation = { ...observation, limits: { ...observation.limits, credits } };
+  if (observation.engine === "codex") {
+    const previous = registry.quotaObservations?.("codex").find(item => item.accountId === observation.accountId);
+    if (previous && observation.observedAt < Date.parse(previous.observedAt)) return previous;
+    observation = { ...observation, limits: retainCreditGuardEvidence(previous?.limits, observation.limits,
+      observation.authenticated && observation.provenance.source === "live") };
   }
   const durable = durableQuotaObservation(observation, LIVE_READ_BOOT_ID);
   registry.recordQuotaObservation(durable);
+  if (observation.engine === "codex") void Promise.resolve(kickStructuredDeliveryQueue()).catch(error => {
+    console.error("[account limits] paid-credit guard reconciliation deferred", error);
+  });
   if (observation.engine === "codex") forgetCachedLimits(observation.engine, observation.accountId);
   if (observation.engine !== "copilot") logQuotaEvent({
     engine: observation.engine,

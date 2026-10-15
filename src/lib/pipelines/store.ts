@@ -238,6 +238,7 @@ function isStageSuspension(value: unknown): boolean {
   return (suspension.reason === "pause" || suspension.reason === "account") && typeof suspension.detail === "string"
     && dated(suspension.requestedAt)
     && (suspension.stoppedAt === undefined || dated(suspension.stoppedAt))
+    && (suspension.stopRevision === undefined || Number.isSafeInteger(suspension.stopRevision) && (suspension.stopRevision as number) >= 0)
     && (suspension.operatorStoppedAt === undefined || dated(suspension.operatorStoppedAt));
 }
 

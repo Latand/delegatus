@@ -27,7 +27,7 @@ import { VIEWER_RELEASE_INTERRUPTION_OPENING, VIEWER_RESTART_INTERRUPTION_OPENIN
  * reports arrival, `discharged` when something other than the continuation
  * resumed or retired the turn, `failed` when the queue refused it for good.
  */
-export type InterruptionReason = "viewer-release" | "viewer-restart";
+export type InterruptionReason = "viewer-release" | "viewer-restart" | "account-guard";
 export type InterruptionObligationState = "owed" | "submitted" | "delivered" | "discharged" | "failed";
 
 export interface InterruptionOwner {

@@ -1087,7 +1087,7 @@ export async function stopPipelineStageAgent(
        ladder, or a replayed terminal kill on an already-dead host. */
     const receiptStatus = body.receipt?.status ?? null;
     if (probes.onlyIfIdle && receiptStatus && KILL_REFUSED_STATES.has(receiptStatus)) return { outcome: "deferred" };
-    if (!receiptStatus || KILL_DELIVERED_STATES.has(receiptStatus)) return { outcome: "stopped" };
+    if ((!receiptStatus || KILL_DELIVERED_STATES.has(receiptStatus)) && !resident()) return { outcome: "stopped" };
 
     const operationId = body.operationId ?? null;
     const client = probes.client === undefined ? runtimeHostClient() : probes.client;
@@ -1100,7 +1100,7 @@ export async function stopPipelineStageAgent(
       if (operationId && client) {
         const durable = await client.operationStatus(operationId).catch(() => null);
         const status = durable?.receipt.status ?? null;
-        if (status && KILL_DELIVERED_STATES.has(status)) return { outcome: "stopped" };
+        if (status && KILL_DELIVERED_STATES.has(status) && !resident()) return { outcome: "stopped" };
         if (status && KILL_REFUSED_STATES.has(status)) {
           if (probes.onlyIfIdle) return { outcome: "deferred" };
           return {
@@ -6518,7 +6518,7 @@ function stageAccountBlocked(pipeline: Pipeline, attempt: PipelineStageAttempt, 
 }
 
 function suspensionStopKey(pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt): string {
-  return `stage-suspend-${pipeline.id}-${stage.id}-${attempt.n}-${Date.parse(attempt.suspension!.requestedAt)}`;
+  return `stage-suspend-${pipeline.id}-${stage.id}-${attempt.n}-${Date.parse(attempt.suspension!.requestedAt)}-${attempt.suspension!.stopRevision ?? 0}`;
 }
 
 /** Persist the stop before contacting the runtime. Replays use the same key and
@@ -6526,6 +6526,12 @@ function suspensionStopKey(pipeline: Pipeline, stage: PipelineStage, attempt: Pi
 async function stopSuspendedStage(pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt,
   ports: PipelinePorts, persist: () => void): Promise<boolean> {
   const suspension = attempt.suspension!;
+  // A settled stop receipt belongs to its old host. A later pass must obtain
+  // a fresh stop, including when a resume raced delivery settlement.
+  if (suspension.stoppedAt) {
+    suspension.stopRevision = (suspension.stopRevision ?? 0) + 1;
+    delete suspension.stoppedAt;
+  }
   persist();
   let continuationError: unknown;
   try {
@@ -6617,6 +6623,12 @@ async function reconcileStageAccountGuard(pipeline: Pipeline, stage: PipelineSta
     persist(); ports.scheduleTick?.(30_000); return true;
   }
   const oldDefinition = attemptStage(stage, attempt);
+  // Transcript and operator-evidence reads above yielded custody. Reconfirm
+  // the current host immediately before allocating a replacement.
+  if (!await stopSuspendedStage(pipeline, stage, attempt, ports, persist)) return true;
+  try {
+    if (stageAccountBlocked(pipeline, { ...attempt, accountId: target }, ports)) return true;
+  } catch { return true; }
   attempt.state = "failed"; attempt.completedAt = ports.now(); attempt.error = attempt.suspension.detail;
   resetStageForRetry(pipeline, stage);
   const next = newAttempt(pipeline, stage)!;
@@ -13161,6 +13173,7 @@ export async function patchPipeline(
       }
       let runtimeSwitch: PipelineRuntimeSwitch | null = null;
       if (req.applyNow && live?.conversationId) {
+        if (live.suspension) return { error: "the attempt is suspended for recovery; retry-stage before changing its running runtime", status: 409 };
         const engine = target.effectiveRole.engine;
         const readiness = ports.engineReadiness?.(engine, pipeline.project) ?? "connected";
         if (readiness !== "connected") return { error: `target engine ${readiness}`, status: 409 };

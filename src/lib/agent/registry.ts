@@ -6453,6 +6453,10 @@ export class AgentRegistry {
     return this.mutate((file) => clone(recordMembership(file, conversationId, membership, now())));
   }
 
+  conversationMemberships(conversationId: ViewerConversationId): DurableConversationMembership[] {
+    return this.readKeyed(file => clone(file.memberships[resolveConversationAlias(file, conversationId)] ?? []));
+  }
+
   runIdentityWaveMigration(input: IdentityWaveMigrationInput, validatePreparedState?: () => void): IdentityWaveMigrationResult {
     const snapshot = this.readOnlySnapshot();
     // The durable marker ends this one-time migration. Read it before cloning
@@ -9192,6 +9196,7 @@ export class AgentRegistry {
     targetId: string,
     reconfigureOwner?: { operationId: string; revision: number },
     profile?: Pick<LaunchProfile, "model" | "effort" | "fast" | "serviceTier">,
+    creditGuard?: true,
   ): RegistryConversation {
     return this.mutate((file) => {
       const canonicalId = resolveConversationAlias(file, id);
@@ -9280,6 +9285,7 @@ export class AgentRegistry {
       const phase = migrationReadiness(file, conversation) === "busy" ? "waiting-turn" : "requested";
       queueAbandonedMigrationCleanup(file, conversation, changedAt);
       conversation.migration = conversationMigrationForIntent(conversation, source, intent, phase, changedAt);
+      if (creditGuard) conversation.migration.creditGuard = true;
       adoptFencedDeliveries(file, conversation, replaced, reconfigureOwner ? conversation.reconfigure ?? null : null);
       conversation.updatedAt = changedAt;
       file.conversationRevision[conversation.engine] += 1;
