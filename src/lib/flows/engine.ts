@@ -15,7 +15,7 @@ import { loadPipelines } from "@/lib/pipelines/store";
 import { freshSpecFor, resumeSpecFor } from "@/lib/agent/cli";
 import { accountManager, resolveResumeAccountId } from "@/lib/accounts/manager";
 import { creditGuardBlock } from "@/lib/accounts/creditGuard";
-import { interruptionObligationDirectory, interruptionObligationStore, REVIEWER_CUT_RESOLUTION } from "@/lib/runtime/interruptionObligations";
+import { interruptionObligationDirectory, accountGuardObligationStore, REVIEWER_CUT_RESOLUTION } from "@/lib/runtime/interruptionObligations";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { listCodexAccounts } from "@/lib/accounts/codex";
 import { tierOffers, CodexServiceTierUnavailableError } from "@/lib/accounts/codexServiceTiers";
@@ -1043,7 +1043,7 @@ export function enforceHeadlessAccountCreditGuard(registry: AgentRegistry, block
   const pending = headlessGuardPasses.get(registry);
   if (pending) return pending;
   const pass = withViewerOperation("controller.flows", async () => {
-    const cuts = interruptionObligationStore(interruptionObligationDirectory(registry.filename));
+    const cuts = accountGuardObligationStore(interruptionObligationDirectory(registry.filename));
     const failures: unknown[] = [];
     for (const flow of loadFlowsForTick()) {
       try {
@@ -1060,7 +1060,7 @@ export function enforceHeadlessAccountCreditGuard(registry: AgentRegistry, block
           ? registry.conversation(round.reviewerConversationId as `conversation_${string}`)
           : round.reviewerPath ? registry.conversationForPath(round.reviewerPath) : null;
         const generation = conversation?.generations.at(-1);
-        if (conversation && generation) cuts.record({
+        if (conversation && generation) await cuts.record({
           conversationId: conversation.id, engine: "codex", hostKey: sessionKeyId({ engine: "codex", sessionId: generation.id }),
           path: round.reviewerPath ?? generation.path,
           owner: round.reviewerPid ? { pid: round.reviewerPid, startIdentity: round.reviewerIdentity ?? null } : null,
@@ -1083,9 +1083,17 @@ export function enforceHeadlessAccountCreditGuard(registry: AgentRegistry, block
         await patchFlowRows([flow.id], rows => rows.filter(row => {
           const latest = lastRound(row);
           if (!latest || latest.reviewerBindingId !== round.reviewerBindingId || latest.launchId !== round.launchId
-            || row.state !== "reviewing" && row.state !== "spawning" && row.state !== "paused") return false;
+            || !["reviewing", "spawning"].includes(row.state === "paused" ? row.pausedState ?? "" : row.state)) return false;
           const paused = row.state === "paused";
           const role = reviewerRoleFor(row, latest);
+          const status = headlessReviewStatus(row.id, latest.n, latest, role.engine);
+          const parsed = readFindingsFile(latest) ?? (status?.status === "done" ? parseFindings(status.finalOutput) : null)
+            ?? fallbackReviewFromTranscript(latest, new Map(), role.engine);
+          if (parsed) {
+            applyVerdict(row, latest, parsed);
+            if (paused) { row.pausedState = row.state; row.state = "paused"; }
+            return true;
+          }
           const retries = latest.autoRetryCount ?? 0;
           retryHeadlessRound(row, latest, null, undefined, null);
           latest.autoRetryCount = retries;

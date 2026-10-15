@@ -1,9 +1,10 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, setSystemTime, spyOn, test } from "bun:test";
 
 import {
+  accountGuardObligationStore,
   interruptionContinuationText,
   interruptionObligationStore,
   restartCutProposal,
@@ -11,8 +12,13 @@ import {
 } from "./interruptionObligations";
 
 let directory = "";
-beforeEach(() => { directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-interruption-obligations-")); });
-afterEach(() => { fs.rmSync(directory, { recursive: true, force: true }); });
+beforeEach(() => { setSystemTime(new Date("2026-10-07T00:05:00.000Z")); directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-interruption-obligations-")); });
+afterEach(() => {
+  setSystemTime();
+  fs.rmSync(directory, { recursive: true, force: true });
+  fs.rmSync(`${directory}.account-guard-pending`, { recursive: true, force: true });
+  fs.rmSync(`${directory}.pending.jsonl.write-locks`, { recursive: true, force: true });
+});
 
 const releaseCut: InterruptionObligationInput = {
   conversationId: `conversation_${["00000000", "0000", "4000", "8000", "000000001835"].join("-")}` as `conversation_${string}`,
@@ -242,4 +248,90 @@ test("a fresh import claim keeps a discharge recorded before publication", () =>
   });
   expect(importer.list()).toEqual([{ ...record, state: "discharged", resolution: "the turn already ended" }]);
   expect(observer.list()).toEqual(importer.list());
+});
+
+
+test("the guard pending index backfills legacy cuts, imports the fallback journal and survives restart", async () => {
+  const obligations = path.join(directory, "guard-obligations");
+  const seed = interruptionObligationStore(path.join(directory, "seed"));
+  const owed = seed.record({ ...releaseCut, reason: "account-guard", turnRef: "guard-owed" }).obligation;
+  const submitted = { ...seed.record({ ...releaseCut, reason: "account-guard", turnRef: "guard-submitted" }).obligation,
+    state: "submitted" as const, operationId: "continuation" };
+  const journal = seed.record({ ...releaseCut, reason: "account-guard", turnRef: "guard-journal" }).obligation;
+  fs.mkdirSync(obligations);
+  fs.writeFileSync(path.join(obligations, `${owed.id}.json`), JSON.stringify(owed));
+  fs.writeFileSync(path.join(obligations, `${submitted.id}.json`), JSON.stringify(submitted));
+  fs.writeFileSync(`${obligations}.pending.jsonl`, JSON.stringify(journal) + "\n");
+  const guard = accountGuardObligationStore(obligations);
+  expect((await guard.list()).map(row => row.id).sort()).toEqual([owed.id, submitted.id, journal.id].sort());
+  const replay = await guard.record({ ...releaseCut, reason: "account-guard", turnRef: "guard-owed" });
+  expect(replay.created).toBe(false);
+  await guard.update(owed.id, { state: "delivered", resolvedAt: new Date().toISOString() });
+  // A synchronous peer must maintain the same index after it is initialized.
+  const peer = interruptionObligationStore(obligations);
+  const fresh = peer.record({ ...releaseCut, reason: "account-guard", turnRef: "guard-new" }).obligation;
+  peer.update(submitted.id, { state: "delivered", resolvedAt: new Date().toISOString() });
+  expect((await accountGuardObligationStore(obligations).list()).map(row => row.id).sort()).toEqual([journal.id, fresh.id].sort());
+  peer.withdraw(journal.id);
+  expect((await accountGuardObligationStore(obligations).list()).map(row => row.id)).toEqual([fresh.id]);
+});
+
+test("guard recovery pages bound record reads and eventually visit every pending cut", async () => {
+  const obligations = path.join(directory, "guard-obligations");
+  const guard = accountGuardObligationStore(obligations);
+  const ids: string[] = [];
+  for (let count = 0; count < 130; count++) ids.push((await guard.record({ ...releaseCut,
+    reason: "account-guard", turnRef: `guard-${count}` })).obligation.id);
+  const visited: string[] = [];
+  let after = "";
+  for (;;) {
+    let reads = 0;
+    const read = fs.readFileSync;
+    const spy = spyOn(fs, "readFileSync").mockImplementation(((filename: unknown, ...args: unknown[]) => {
+      if (String(filename).startsWith(obligations + path.sep)) reads++;
+      return Reflect.apply(read, fs, [filename, ...args]);
+    }) as typeof read);
+    const page = await accountGuardObligationStore(obligations).page(after).finally(() => spy.mockRestore());
+    expect(page.length).toBeLessThanOrEqual(64);
+    expect(reads).toBeLessThanOrEqual(64);
+    visited.push(...page.map(row => row.id));
+    if (page.length < 64) break;
+    after = page.at(-1)!.id;
+  }
+  expect(visited).toEqual(ids.sort());
+});
+
+
+test("the guard keeps a refused directory cut durable in the pending journal", async () => {
+  const obligations = path.join(directory, "guard-refused");
+  fs.mkdirSync(obligations, { mode: 0o500 });
+  const guard = accountGuardObligationStore(obligations);
+  const errors = spyOn(console, "error").mockImplementation(() => {});
+  try {
+    const cut = await guard.record({ ...releaseCut, reason: "account-guard", turnRef: "journal-cut" });
+    expect(cut.created).toBe(true);
+    expect(fs.readFileSync(`${obligations}.pending.jsonl`, "utf8")).toContain(cut.obligation.id);
+    expect(await guard.list()).toMatchObject([{ id: cut.obligation.id, state: "owed" }]);
+    fs.chmodSync(obligations, 0o700);
+    const restarted = accountGuardObligationStore(obligations);
+    expect((await restarted.list()).map(row => row.id)).toEqual([cut.obligation.id]);
+    expect((await restarted.record({ ...releaseCut, reason: "account-guard", turnRef: "journal-cut" })).created).toBe(false);
+    await restarted.update(cut.obligation.id, { state: "delivered", resolvedAt: new Date().toISOString() });
+    expect(await restarted.list()).toEqual([]);
+  } finally { fs.chmodSync(obligations, 0o700); errors.mockRestore(); }
+});
+
+test("a crash leaving an index pointer before publication or after settlement owes no extra continuation", async () => {
+  const obligations = path.join(directory, "guard-crash");
+  const guard = accountGuardObligationStore(obligations);
+  const cut = await guard.record({ ...releaseCut, reason: "account-guard", turnRef: "finished-cut" });
+  await guard.update(cut.obligation.id, { state: "delivered", resolvedAt: new Date().toISOString() });
+  const index = `${obligations}.account-guard-pending`;
+  const settledPointer = path.join(index, `${cut.obligation.id}.json`);
+  const missingPointer = path.join(index, "interruption-continuation-missing.json");
+  fs.writeFileSync(settledPointer, JSON.stringify({ id: cut.obligation.id }));
+  fs.writeFileSync(missingPointer, JSON.stringify({ id: "interruption-continuation-missing" }));
+  expect(await accountGuardObligationStore(obligations).list()).toEqual([]);
+  expect(fs.existsSync(settledPointer)).toBe(false);
+  expect(fs.existsSync(missingPointer)).toBe(false);
 });

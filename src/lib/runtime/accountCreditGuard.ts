@@ -1,3 +1,4 @@
+import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { accountManager } from "@/lib/accounts/manager";
 import { conversationProjectKey } from "@/lib/accounts/conversationProject";
 import { creditGuardBlock } from "@/lib/accounts/creditGuard";
@@ -11,7 +12,7 @@ import { activeOrchestratorSeats } from "@/lib/orchestrator/seats";
 import { StructuredSendRefusedError, type EngineHost } from "./engineHost";
 import { delegatusMessageOrigin } from "./agentMessageAuthor";
 import type { StructuredMessageRequest, StructuredMessageResult } from "./structuredMessageDelivery";
-import { interruptionObligationDirectory, interruptionObligationStore, submittedContinuationOutcome, STAGE_CUT_RESOLUTION, REVIEWER_CUT_RESOLUTION } from "./interruptionObligations";
+import { interruptionObligationDirectory, accountGuardObligationStore, submittedContinuationOutcome, STAGE_CUT_RESOLUTION, REVIEWER_CUT_RESOLUTION } from "./interruptionObligations";
 
 function pipelineOwner(conversationId: string, registry?: AgentRegistry) {
   const conversation = registry?.conversation(conversationId as ViewerConversationId);
@@ -40,16 +41,19 @@ export function assertPipelineTurnAllowed(conversationId: string, registry?: Age
   }
 }
 
+const shared = globalThis as typeof globalThis & { __llvAccountGuardCursors?: WeakMap<AgentRegistry, string> };
+const cursors = shared.__llvAccountGuardCursors ??= new WeakMap<AgentRegistry, string>();
+
 /** Stop every locally owned credited turn at the cutoff. The durable cut is
  * written before releasing its host. Ordinary stages retain their controller's
  * retry policy; other conversations keep one continuation behind the existing
  * conversation-scoped migration and delivery receipts. */
-export async function enforceAccountCreditGuard(registry: AgentRegistry,
+async function runAccountCreditGuard(registry: AgentRegistry,
   hosts: readonly { key: SessionKey; host: EngineHost }[],
   stop: (key: SessionKey, host: EngineHost) => Promise<boolean>,
   operatorStopped: (conversationId: string, since: string) => Promise<boolean>,
   resumeCurrent: (request: StructuredMessageRequest) => Promise<StructuredMessageResult | null>): Promise<void> {
-  const store = interruptionObligationStore(interruptionObligationDirectory(registry.filename));
+  const store = accountGuardObligationStore(interruptionObligationDirectory(registry.filename));
   const blockedAccounts = new Set(registry.quotaObservations("codex")
     .filter(row => creditGuardBlock("codex", row.limits)).map(row => row.accountId));
   const headlessStop = blockedAccounts.size ? import("@/lib/flows/engine")
@@ -70,26 +74,27 @@ export async function enforceAccountCreditGuard(registry: AgentRegistry,
     const health = await item.host.health().catch(() => null);
     const turnRef = health?.activeTurnRef ?? entry.structuredHost?.activeTurnRef ?? null;
     if (!turnRef && (health ? health.status !== "active" && health.status !== "attention" : entry.status !== "live")) return;
-    const { obligation: currentCut } = store.record({ conversationId: conversation.id, engine: "codex", hostKey: sessionKeyId(item.key), path: generation.path,
+    const { obligation: currentCut } = await store.record({ conversationId: conversation.id, engine: "codex", hostKey: sessionKeyId(item.key), path: generation.path,
       owner: health?.pid ? { pid: health.pid, startIdentity: health.processStartIdentity } : entry.structuredHost?.process ?? null,
       claimEpoch: entry.claimEpoch, turnRef, boundary: "paid-credit-guard", reason: "account-guard",
       checkpoint: { lastEventKind: null, lastEventAt: Date.now() }, seat: seat ? { project: seat.project, seatEpoch: seat.seatEpoch } : null,
       ...(owner?.stage?.kind === "run" ? { answeredBy: STAGE_CUT_RESOLUTION } : reviewer ? { answeredBy: REVIEWER_CUT_RESOLUTION } : {}) });
-    for (const older of store.list()) {
+    for (const older of await store.list()) {
       if (older.id !== currentCut.id && older.reason === "account-guard" && older.state === "owed" && older.conversationId === conversation.id) {
-        store.update(older.id, { state: "discharged", resolvedAt: new Date().toISOString(), resolution: "a newer active turn owns recovery" });
+        await store.update(older.id, { state: "discharged", resolvedAt: new Date().toISOString(), resolution: "a newer active turn owns recovery" });
       }
     }
     if (!await stop(item.key, item.host)) throw new Error("paid-credit guard could not confirm host termination");
   }), headlessStop]);
   const failures = stops.filter((result): result is PromiseRejectedResult => result.status === "rejected");
   if (failures.length) throw new AggregateError(failures.map(result => result.reason), "paid-credit guard termination remains pending");
-  for (const obligation of store.list()) {
+  const page = await store.page(cursors.get(registry) ?? "");
+  for (const obligation of page) {
     if (obligation.reason !== "account-guard") continue;
     if (obligation.state === "submitted") {
       const outcome = submittedContinuationOutcome(obligation, registry.readOnlySnapshot(), id => registry.canonicalConversationId(id));
       if (outcome) {
-        store.update(obligation.id, { state: outcome.state, resolvedAt: outcome.at ?? new Date().toISOString(), resolution: outcome.resolution });
+        await store.update(obligation.id, { state: outcome.state, resolvedAt: outcome.at ?? new Date().toISOString(), resolution: outcome.resolution });
         continue;
       }
     }
@@ -100,7 +105,7 @@ export async function enforceAccountCreditGuard(registry: AgentRegistry,
     if (obligation.seat && !activeOrchestratorSeats().some(seat => seat.project === obligation.seat!.project
       && seat.seatEpoch === obligation.seat!.seatEpoch && seat.conversationId?.startsWith("conversation_")
       && registry.canonicalConversationId(seat.conversationId as ViewerConversationId) === conversation.id)) {
-      store.update(obligation.id, { state: "discharged", resolvedAt: new Date().toISOString(), resolution: "the orchestrator seat was rotated" });
+      await store.update(obligation.id, { state: "discharged", resolvedAt: new Date().toISOString(), resolution: "the orchestrator seat was rotated" });
       continue;
     }
     const moved = sessionKeyId({ engine: conversation.engine, sessionId: generation.id }) !== obligation.hostKey;
@@ -109,7 +114,7 @@ export async function enforceAccountCreditGuard(registry: AgentRegistry,
     // Each guard reseat starts at the latest generation. The cut and its
     // continuation identity still belong to the original interrupted turn.
     if (moved && (!conversation.migration?.creditGuard || sourceIndex < 0 || migrationSourceIndex < sourceIndex)) {
-      store.update(obligation.id, { state: "discharged", resolvedAt: new Date().toISOString(), resolution: "another runtime selection moved the conversation" });
+      await store.update(obligation.id, { state: "discharged", resolvedAt: new Date().toISOString(), resolution: "another runtime selection moved the conversation" });
       continue;
     }
     const owner = pipelineOwner(conversation.id, registry);
@@ -120,7 +125,7 @@ export async function enforceAccountCreditGuard(registry: AgentRegistry,
     };
     if (!eligible() || conversation.reconfigure?.status === "applying") continue;
     if (await operatorStopped(conversation.id, obligation.recordedAt)) {
-      store.update(obligation.id, { state: "discharged", resolvedAt: new Date().toISOString(), resolution: "operator stopped the conversation after the guard" });
+      await store.update(obligation.id, { state: "discharged", resolvedAt: new Date().toISOString(), resolution: "operator stopped the conversation after the guard" });
       continue;
     }
     // The stop may have failed after writing its cut. Never create a successor
@@ -164,7 +169,7 @@ export async function enforceAccountCreditGuard(registry: AgentRegistry,
     const newerDelivery = Object.values(deliveries.heldDeliveries).some(delivery => delivery.clientMessageId !== obligation.id
       && delivery.state !== "failed" && Date.parse(delivery.createdAt) > Date.parse(obligation.recordedAt));
     if (newerDelivery) {
-      store.update(obligation.id, { state: "discharged", resolvedAt: new Date().toISOString(), resolution: "a newer message continues the conversation" });
+      await store.update(obligation.id, { state: "discharged", resolvedAt: new Date().toISOString(), resolution: "a newer message continues the conversation" });
       requestAccountMigrationTick();
       continue;
     }
@@ -173,7 +178,7 @@ export async function enforceAccountCreditGuard(registry: AgentRegistry,
     if (!moved) {
       const result = await resumeCurrent({ conversationId: conversation.id, path: generation.path,
         clientMessageId: obligation.id, operationId: obligation.id, text, origin, recoveryAuthorityGuard: authorizeTarget });
-      if (result?.ok) store.update(obligation.id, { state: result.outcome === "delivered" ? "delivered" : "submitted",
+      if (result?.ok) await store.update(obligation.id, { state: result.outcome === "delivered" ? "delivered" : "submitted",
         operationId: result.operationId, attempts: obligation.attempts + 1,
         ...(result.outcome === "delivered" ? { resolvedAt: new Date().toISOString(), resolution: "delivered" } : {}) });
       else throw new Error(result?.error ?? "credit-guard continuation could not be admitted");
@@ -183,7 +188,12 @@ export async function enforceAccountCreditGuard(registry: AgentRegistry,
       text,
       obligation.id, "text", [], null, { operationId: obligation.id, kind: "send", policy: "queue", turnId: null,
         origin });
-    store.update(obligation.id, { state: "submitted", operationId: held.command.operationId, attempts: obligation.attempts + 1 });
+    await store.update(obligation.id, { state: "submitted", operationId: held.command.operationId, attempts: obligation.attempts + 1 });
     requestAccountMigrationTick();
   }
+  cursors.set(registry, page.length === 64 ? page.at(-1)!.id : "");
+}
+
+export function enforceAccountCreditGuard(...args: Parameters<typeof runAccountCreditGuard>): Promise<void> {
+  return withViewerOperation("controller.account-credit-guard", () => runAccountCreditGuard(...args));
 }

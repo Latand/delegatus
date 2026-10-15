@@ -6,7 +6,7 @@ import type { HeldDelivery, ViewerConversationId } from "@/lib/accounts/migratio
 import type { DeliveryOperationOwner, RegistryFile } from "@/lib/agent/registry";
 import { killedBackgroundWorkNotice } from "@/lib/pipelines/backgroundTasks";
 import { writeJsonDurably } from "@/lib/state/durableJson";
-import { withFileTransactionSync } from "@/lib/state/fileTransaction";
+import { withFileTransaction, withFileTransactionSync } from "@/lib/state/fileTransaction";
 
 import { VIEWER_RELEASE_INTERRUPTION_OPENING, VIEWER_RESTART_INTERRUPTION_OPENING } from "./recoveryNotices";
 
@@ -265,18 +265,39 @@ function appendDurably(filename: string, line: string): void {
     directory still refuses go back to the live journal. A claim left by an
     import that died midway is taken over once it has sat untouched long
     enough that no import can still be working on it. */
-export function interruptionObligationStore(
+function createInterruptionObligationStore(
   directory: string,
   hooks: {
     /** Runs between reading a claimed journal and deleting it. */
     afterPendingRead?: () => void;
   } = {},
-): InterruptionObligationStore {
+  admitted = false,
+  guardOnly = false,
+) {
   const fileFor = (id: string) => path.join(directory, `${id}.json`);
   const pendingFile = `${directory}.pending.jsonl`;
   const claimPrefix = `${path.basename(pendingFile)}.claim-`;
-  const transaction = <T>(operation: () => T): T =>
-    withFileTransactionSync(pendingFile, "interruption obligation import is busy", operation);
+  let held = admitted;
+  const transaction = <T>(operation: () => T): T => {
+    if (held) return operation();
+    return withFileTransactionSync(pendingFile, "interruption obligation import is busy", () => {
+      held = true;
+      try { return operation(); } finally { held = false; }
+    });
+  };
+  const indexDirectory = accountGuardIndexDirectory(directory);
+  const indexFile = (id: string) => path.join(indexDirectory, `${id}.json`);
+  // Publish a durable pointer before its owed record. A crash can leave an
+  // extra pointer, but cannot hide work whose cut was acknowledged to a host.
+  const prepareIndex = (obligation: InterruptionObligation): void => {
+    if (obligation.reason === "account-guard" && interruptionObligationUnresolved(obligation)
+      && !fs.existsSync(indexFile(obligation.id))) writeJsonDurably(indexFile(obligation.id), { id: obligation.id });
+  };
+  const write = (obligation: InterruptionObligation): void => {
+    prepareIndex(obligation);
+    writeJsonDurably(fileFor(obligation.id), obligation);
+    if (!interruptionObligationUnresolved(obligation)) fs.rmSync(indexFile(obligation.id), { force: true });
+  };
   const readJournal = (filename: string): InterruptionObligation[] => {
     let text: string;
     try {
@@ -350,7 +371,7 @@ export function interruptionObligationStore(
             if (fs.existsSync(fileFor(obligation.id))) continue;
             if (waiting.some((record) => record.id === obligation.id)) continue;
             try {
-              writeJsonDurably(fileFor(obligation.id), obligation);
+              write(obligation);
             } catch (error) {
               console.error("[interruption recovery] pending obligation is not importable yet", { obligation: obligation.id, error });
               waiting.push(obligation);
@@ -377,24 +398,33 @@ export function interruptionObligationStore(
       return null;
     }
   };
-  const list = (): InterruptionObligation[] => {
+  const list = (page?: { after: string; limit: number }): InterruptionObligation[] => {
     importPending();
     return transaction(() => {
       let names: string[];
       try {
-        names = fs.readdirSync(directory);
+        names = fs.readdirSync(guardOnly ? indexDirectory : directory);
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
         names = [];
       }
       const now = Date.now();
       const obligations: InterruptionObligation[] = [];
-      for (const name of names.sort()) {
-        if (!name.startsWith(OBLIGATION_PREFIX) || !name.endsWith(".json")) continue;
+      const pending = [...readPending(), ...activeClaims().flatMap(readJournal)];
+      const candidates = names.filter(name => name.startsWith(OBLIGATION_PREFIX) && name.endsWith(".json")
+        && (!page || name > `${page.after}.json`)).sort();
+      for (const name of page ? candidates.slice(0, page.limit) : candidates) {
         const obligation = read(path.join(directory, name));
-        if (!obligation) continue;
+        if (!obligation) {
+          if (guardOnly && !pending.some(item => `${item.id}.json` === name)) fs.rmSync(path.join(indexDirectory, name), { force: true });
+          continue;
+        }
         const resolvedAt = obligation.resolvedAt ? Date.parse(obligation.resolvedAt) : NaN;
-        if (!interruptionObligationUnresolved(obligation) && now - resolvedAt > RESOLVED_RETENTION_MS) {
+        if (guardOnly && (obligation.reason !== "account-guard" || !interruptionObligationUnresolved(obligation))) {
+          fs.rmSync(path.join(indexDirectory, name), { force: true });
+          continue;
+        }
+        if (!guardOnly && !interruptionObligationUnresolved(obligation) && now - resolvedAt > RESOLVED_RETENTION_MS) {
           fs.rmSync(path.join(directory, name), { force: true });
           continue;
         }
@@ -402,73 +432,78 @@ export function interruptionObligationStore(
       }
       /* A fresh claim is still part of the inventory. Reading it does not
          steal its import, and lets startup withdraw a disproved proposal. */
-      for (const obligation of [...readPending(), ...activeClaims().flatMap(readJournal)]) {
-        if (!obligations.some((existing) => existing.id === obligation.id)) obligations.push(obligation);
+      for (const obligation of pending) {
+        if ((!guardOnly || obligation.reason === "account-guard" && interruptionObligationUnresolved(obligation))
+          && !obligations.some((existing) => existing.id === obligation.id)) obligations.push(obligation);
       }
+      if (page) return obligations.filter(item => item.id > page.after).sort((a, b) => a.id.localeCompare(b.id)).slice(0, page.limit);
       return obligations.sort((left, right) => left.recordedAt.localeCompare(right.recordedAt));
     });
   };
   return {
     list,
-    record(input) {
-      const id = interruptionObligationId(input);
-      /* The id is the cut: a record already under it is this cut's, in
-         whatever state it has reached, and is never written over. */
-      const covering = list().find((existing) => existing.id === id || coversSameCut(existing, input));
-      if (covering) {
-        /* A restart record found standing again after its engine wrote more
-           says when it was last seen: the stage controller counts a cut only
-           when the attempt's newest work precedes the record, and the deploy
-           inventory lists by `recordedAt`. Its state and resolution stay. */
-        const seenAt = input.checkpoint.lastEventAt;
-        if (covering.id === id && restartRecordOfNoSeat(covering) && restartRecordOfNoSeat(input)
-          && seenAt !== null && seenAt > (covering.checkpoint.lastEventAt ?? -Infinity)) {
-          const moved: InterruptionObligation = {
-            ...covering, checkpoint: input.checkpoint, recordedAt: input.recordedAt ?? new Date().toISOString(),
-          };
-          writeJsonDurably(fileFor(id), moved);
-          return { obligation: moved, created: false };
+    record(input: InterruptionObligationInput) {
+      return transaction(() => {
+        const id = interruptionObligationId(input);
+        /* The id is the cut: a record already under it is this cut's, in
+           whatever state it has reached, and is never written over. */
+        const covering = (guardOnly ? read(fileFor(id)) : null) ?? list().find((existing) => existing.id === id || coversSameCut(existing, input));
+        if (covering) {
+          /* A restart record found standing again after its engine wrote more
+             says when it was last seen: the stage controller counts a cut only
+             when the attempt's newest work precedes the record, and the deploy
+             inventory lists by `recordedAt`. Its state and resolution stay. */
+          const seenAt = input.checkpoint.lastEventAt;
+          if (covering.id === id && restartRecordOfNoSeat(covering) && restartRecordOfNoSeat(input)
+            && seenAt !== null && seenAt > (covering.checkpoint.lastEventAt ?? -Infinity)) {
+            const moved: InterruptionObligation = {
+              ...covering, checkpoint: input.checkpoint, recordedAt: input.recordedAt ?? new Date().toISOString(),
+            };
+            write(moved);
+            return { obligation: moved, created: false };
+          }
+          return { obligation: covering, created: false };
         }
-        return { obligation: covering, created: false };
-      }
-      const obligation: InterruptionObligation = {
-        version: 1,
-        id,
-        conversationId: input.conversationId,
-        engine: input.engine,
-        hostKey: input.hostKey,
-        path: input.path,
-        owner: input.owner,
-        claimEpoch: input.claimEpoch,
-        turnRef: input.turnRef,
-        boundary: input.boundary,
-        reason: input.reason,
-        recordedAt: input.recordedAt ?? new Date().toISOString(),
-        checkpoint: input.checkpoint,
-        seat: input.seat,
-        ...(input.stage ? { stage: input.stage } : {}),
-        state: input.answeredBy ? "discharged" : "owed",
-        operationId: null,
-        attempts: 0,
-        resolvedAt: null,
-        resolution: input.answeredBy ?? null,
-      };
-      if (input.answeredBy) obligation.resolvedAt = obligation.recordedAt;
-      try {
-        writeJsonDurably(fileFor(id), obligation);
-      } catch (first) {
+        const obligation: InterruptionObligation = {
+          version: 1,
+          id,
+          conversationId: input.conversationId,
+          engine: input.engine,
+          hostKey: input.hostKey,
+          path: input.path,
+          owner: input.owner,
+          claimEpoch: input.claimEpoch,
+          turnRef: input.turnRef,
+          boundary: input.boundary,
+          reason: input.reason,
+          recordedAt: input.recordedAt ?? new Date().toISOString(),
+          checkpoint: input.checkpoint,
+          seat: input.seat,
+          ...(input.stage ? { stage: input.stage } : {}),
+          state: input.answeredBy ? "discharged" : "owed",
+          operationId: null,
+          attempts: 0,
+          resolvedAt: null,
+          resolution: input.answeredBy ?? null,
+        };
+        if (input.answeredBy) obligation.resolvedAt = obligation.recordedAt;
+        prepareIndex(obligation);
         try {
-          writeJsonDurably(fileFor(id), obligation);
-        } catch (second) {
-          console.error("[interruption recovery] obligation directory refused the record; appending it to the pending journal", {
-            obligation: id, first, second,
-          });
-          appendDurably(pendingFile, `${JSON.stringify(obligation)}\n`);
+          write(obligation);
+        } catch (first) {
+          try {
+            write(obligation);
+          } catch (second) {
+            console.error("[interruption recovery] obligation directory refused the record; appending it to the pending journal", {
+              obligation: id, first, second,
+            });
+            appendDurably(pendingFile, `${JSON.stringify(obligation)}\n`);
+          }
         }
-      }
-      return { obligation, created: true };
+        return { obligation, created: true };
+      });
     },
-    withdraw(id) {
+    withdraw(id: string) {
       try {
         return transaction(() => {
           /* Withdrawal consumes fresh claims too, so an importer paused
@@ -485,6 +520,7 @@ export function interruptionObligationStore(
             fs.rmSync(fileFor(id), { force: true });
             removed = true;
           }
+          fs.rmSync(indexFile(id), { force: true });
           return removed;
         });
       } catch (error) {
@@ -492,15 +528,85 @@ export function interruptionObligationStore(
         return false;
       }
     },
-    update(id, patch) {
+    update(id: string, patch: Parameters<InterruptionObligationStore["update"]>[1]) {
       return transaction(() => {
         const current = read(fileFor(id))
           ?? [...readPending(), ...activeClaims().flatMap(readJournal)].find((pending) => pending.id === id) ?? null;
         if (!current) return null;
         const next = { ...current, ...patch };
-        writeJsonDurably(fileFor(id), next);
+        write(next);
         return next;
       });
+    },
+  };
+}
+
+export function interruptionObligationStore(
+  directory: string,
+  hooks: { afterPendingRead?: () => void } = {},
+): InterruptionObligationStore {
+  return createInterruptionObligationStore(directory, hooks);
+}
+
+function accountGuardIndexDirectory(directory: string): string {
+  return `${directory}.account-guard-pending`;
+}
+
+/** Guard-only asynchronous admission shares the journal fence with release and
+ * startup writers. The persisted pending index survives restarts; settled
+ * history and its retention sweep never enter steady-state guard polls.
+ * Existing installations backfill once through asynchronous directory reads.
+ */
+export function accountGuardObligationStore(directory: string) {
+  const pendingFile = `${directory}.pending.jsonl`;
+  const indexDirectory = accountGuardIndexDirectory(directory);
+  const ready = path.join(indexDirectory, "ready");
+  const store = createInterruptionObligationStore(directory, {}, true, true);
+  const transaction = <T>(operation: () => T) => withFileTransaction(pendingFile, "account guard obligations are busy", operation);
+  const initialize = async () => {
+    if (fs.existsSync(ready)) return;
+    // Import journal fallbacks under the same asynchronously acquired fence.
+    await transaction(() => store.list());
+    let entries: fs.Dir;
+    try { entries = await fs.promises.opendir(directory); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      await transaction(() => writeJsonDurably(ready, { version: 1 }));
+      return;
+    }
+    for await (const entry of entries) {
+      if (!entry.name.startsWith(OBLIGATION_PREFIX) || !entry.name.endsWith(".json")) continue;
+      // Yield between legacy records, and re-read under admission so a peer's
+      // settlement or withdrawal cannot be overwritten by the backfill.
+      await new Promise<void>(resolve => setImmediate(resolve));
+      await transaction(() => {
+        const filename = path.join(directory, entry.name);
+        let obligation: InterruptionObligation;
+        try { obligation = JSON.parse(fs.readFileSync(filename, "utf8")); }
+        catch (error) {
+          if (error instanceof SyntaxError || (error as NodeJS.ErrnoException).code === "ENOENT") return;
+          throw error;
+        }
+        if (isObligation(obligation) && obligation.reason === "account-guard" && interruptionObligationUnresolved(obligation)) {
+          writeJsonDurably(path.join(indexDirectory, `${obligation.id}.json`), { id: obligation.id });
+        }
+      });
+    }
+    await transaction(() => writeJsonDurably(ready, { version: 1 }));
+  };
+  return {
+    async list() { await initialize(); return transaction(() => store.list()); },
+    async page(after: string, limit = 64) {
+      await initialize();
+      return transaction(() => store.list({ after, limit }));
+    },
+    async record(input: InterruptionObligationInput) {
+      if (input.reason !== "account-guard") throw new Error("account guard store requires a guard cut");
+      await initialize();
+      return transaction(() => store.record(input));
+    },
+    async update(id: string, patch: Parameters<InterruptionObligationStore["update"]>[1]) {
+      return transaction(() => store.update(id, patch));
     },
   };
 }

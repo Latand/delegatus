@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { afterAll, afterEach, expect, spyOn, test } from "bun:test";
 import { migrationDeliveryFixture } from "@/test-helpers/migrationDelivery";
 import { agentRegistry } from "@/lib/agent/registry";
@@ -12,6 +12,8 @@ import type { SuccessorProviderPort } from "@/lib/accounts/migration/contracts";
 import { procBackend } from "@/lib/proc";
 import { setCodexFeatureReaderForTest } from "@/lib/agent/codexSpawnPolicy";
 import { setCodexShellPolicyReaderForTest } from "@/lib/git/codexShellPolicy";
+import { outputPathFor, stderrPathFor, stdoutPathFor } from "@/lib/reviewHistory/artifacts";
+import { enforceAccountCreditGuard } from "./accountCreditGuard";
 import { headlessRuns } from "@/lib/agent/headless";
 import { newRound, recordHeadlessLaunch, reserveReviewerSpawn, tickFlows } from "@/lib/flows/engine";
 import { headlessReviewStatus, startHeadlessReview, stopHeadlessReviewAndWait } from "@/lib/flows/exec";
@@ -21,7 +23,7 @@ import type { FileEntry } from "@/lib/types";
 import { registerPipelineTick } from "@/lib/pipelines/controllerSignal";
 import { bindStructuredDeliveryQueue } from "./structuredDeliveryController";
 import { kickStructuredDeliveryQueue } from "./structuredDeliverySignal";
-import { interruptionObligationDirectory, interruptionObligationStore } from "./interruptionObligations";
+import { accountGuardObligationStore, interruptionObligationDirectory, interruptionObligationStore } from "./interruptionObligations";
 
 const restorePipelineTick = registerPipelineTick(async () => {});
 afterAll(restorePipelineTick);
@@ -106,7 +108,9 @@ for (const state of ["owed", "submitted"] as const) for (const loss of ["exhaust
   });
 }
 
-test.each(["owned", "restarted", "paused", "before transcript"] as const)("the credit guard stops an actual %s detached reviewer before retrying its round once", async mode => {
+test.each(["owned", "restarted", "paused", "before transcript", "completed", "completed paused"] as const)("the credit guard stops an actual %s detached reviewer before retrying its round once", async mode => {
+  const completed = mode.startsWith("completed");
+  const paused = mode === "paused" || mode === "completed paused";
   const f = migrationDeliveryFixture();
   const registry = agentRegistry();
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-credit-review-"));
@@ -133,8 +137,8 @@ test.each(["owned", "restarted", "paused", "before transcript"] as const)("the c
   const sha = git(["rev-parse", "HEAD"]);
   const flow = { id: `guard-${mode}`, template: "implement-review-loop", project: "fixture", cwd: root,
     implementerPath: path.join(root, "implementer.jsonl"), roles: { implementer: { engine: "codex", model: null, effort: "high" },
-      reviewer: { engine: "codex", model: null, effort: "high" } }, baseRef: sha, baseMode: "head", mode: "auto", reviewerMode: "headless",
-    roundLimit: 3, state: mode === "paused" ? "paused" : "reviewing", pausedState: mode === "paused" ? "reviewing" : null,
+      reviewer: { engine: "codex", model: null, effort: "high" } }, baseRef: sha, baseMode: "head", mode: completed ? "manual" : "auto", reviewerMode: "headless",
+    roundLimit: 3, state: paused ? "paused" : "reviewing", pausedState: paused ? "reviewing" : null,
     stateDetail: null, rounds: [], createdAt: new Date().toISOString(), closedAt: null } as Flow;
   fs.writeFileSync(flow.implementerPath, "");
   const round = newRound(flow, "button", "keep the review input");
@@ -158,6 +162,14 @@ test.each(["owned", "restarted", "paused", "before transcript"] as const)("the c
       expect(settled.kind).toBe("settled");
       if (settled.kind === "settled") round.reviewerConversationId = settled.conversation.id;
     }
+    if (completed) {
+      expect(await stopHeadlessReviewAndWait(flow.id, 1, round)).toBe(true);
+      fs.writeFileSync(outputPathFor(flow.id, 1), "VERDICT: APPROVE\nExisting review is complete.\n");
+      fs.writeFileSync(stdoutPathFor(flow.id, 1), "completed stdout\n");
+      fs.writeFileSync(stderrPathFor(flow.id, 1), "completed stderr\n");
+      round.reviewerPid = null;
+      round.reviewerIdentity = null;
+    }
     saveFlows([flow]);
     if (mode === "restarted") {
       const run = headlessRuns.get(`${flow.id}:1`)!;
@@ -167,6 +179,7 @@ test.each(["owned", "restarted", "paused", "before transcript"] as const)("the c
     observe(registry, "account-a", 98);
     observe(registry, "account-b", 1);
     const selection = spyOn(accountManager, "resolveProjectSpawn").mockImplementation((engine, request) => {
+      if (completed) return { kind: "exhausted", resetsAt: null, allowedAccountIds: ["account-a", "account-b"] };
       const result = selectProjectAccount({ ...request, engine, accounts: ["account-a", "account-b"].map(id => ({ id, authPresent: true })),
         observations: registry.quotaObservations("codex"), now: Date.now(),
         bindings: [{ engine: "codex", accountId: "account-b", project: "fixture", createdAt: new Date().toISOString() }] });
@@ -175,12 +188,27 @@ test.each(["owned", "restarted", "paused", "before transcript"] as const)("the c
     });
     restoreSelection = () => selection.mockRestore();
     await bindStructuredDeliveryQueue([], { registry, client: f.client, hostlessSettleIntervalMs: 0, watchdogIntervalMs: 0, settlementSweepMs: 0 });
-    expect(headlessReviewStatus(flow.id, 1, round, "codex")?.status).toBe("running");
+    expect(headlessReviewStatus(flow.id, 1, round, "codex")?.status).toBe(completed ? "done" : "running");
     observe(registry, "account-a", 99);
     await Promise.all([kickStructuredDeliveryQueue(), kickStructuredDeliveryQueue()]);
     expect(launched.pid).toBeNumber();
     expect(procBackend.processIdentity(launched.pid!)).not.toBe(launched.identity);
     const stopped = loadFlow(flow.id)!;
+    if (completed) {
+      expect(stopped).toMatchObject({ state: paused ? "paused" : "relay_pending",
+        rounds: [{ verdict: "APPROVE", reviewerPath: transcript, accountId: "account-a", autoRetryCount: 0 }] });
+      if (paused) expect(stopped.pausedState).toBe("relay_pending");
+      for (const [filename, content] of [[outputPathFor(flow.id, 1), "VERDICT: APPROVE\nExisting review is complete.\n"],
+        [stdoutPathFor(flow.id, 1), "completed stdout\n"], [stderrPathFor(flow.id, 1), "completed stderr\n"]]) {
+        expect(fs.readFileSync(filename!, "utf8")).toBe(content!);
+      }
+      const before = Object.keys(registry.readOnlySnapshot().receipts);
+      await tickFlows(entries);
+      await kickStructuredDeliveryQueue();
+      expect(Object.keys(registry.readOnlySnapshot().receipts)).toEqual(before);
+      expect(loadFlow(flow.id)?.rounds[0]?.verdict).toBe("APPROVE");
+      return;
+    }
     expect(stopped).toMatchObject({ cwd: root, state: mode === "paused" ? "paused" : "spawning",
       rounds: [{ n: 1, readyNote: "keep the review input", reviewerPid: null, accountId: null, autoRetryCount: 0 }] });
     expect(fs.readFileSync(transcript, "utf8")).toBe("preserved reviewer transcript\n");
@@ -230,4 +258,109 @@ test.each(["owned", "restarted", "paused", "before transcript"] as const)("the c
     fs.rmSync(root, { recursive: true, force: true });
     await f.cleanup();
   }
+});
+
+
+test.each(["reconciliation", "record", "update"] as const)("guard %s yields while another process owns the obligation journal lock", async operation => {
+  const f = migrationDeliveryFixture();
+  const cuts = accountGuardObligationStore(interruptionObligationDirectory(f.registry.filename));
+  const input = { conversationId: f.conversation.id, engine: "codex" as const, hostKey: `codex:${f.key.sessionId}`,
+    path: f.conversation.generations[0]!.path, owner: null, claimEpoch: 1, turnRef: "contended-cut",
+    boundary: "paid-credit-guard", reason: "account-guard" as const, checkpoint: { lastEventKind: null, lastEventAt: null }, seat: null };
+  const existing = operation === "update" ? await cuts.record(input) : null;
+  await cuts.list();
+  const pendingFile = `${interruptionObligationDirectory(f.registry.filename)}.pending.jsonl`;
+  const child = spawn(process.execPath, ["-e", `
+    import { withFileTransaction } from ${JSON.stringify(path.resolve("src/lib/state/fileTransaction.ts"))};
+    await withFileTransaction(process.argv[1], "fixture busy", async () => {
+      console.log("locked"); await Bun.sleep(700);
+    });
+  `, pendingFile], { env: { ...process.env }, stdio: ["ignore", "pipe", "pipe"] });
+  const exited = new Promise(resolve => child.once("exit", resolve));
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await new Promise<void>((resolve, reject) => {
+      child.stdout!.once("data", () => resolve()); child.once("error", reject);
+      child.once("exit", () => reject(new Error("lock holder exited before readiness")));
+    });
+    let fired = false;
+    timer = setTimeout(() => { fired = true; }, 20);
+    const started = performance.now();
+    if (operation === "record") {
+      const created = await cuts.record(input);
+      expect(created.created).toBe(true);
+      expect((await cuts.record(input)).created).toBe(false);
+      const persisted = JSON.parse(fs.readFileSync(path.join(interruptionObligationDirectory(f.registry.filename), `${created.obligation.id}.json`), "utf8"));
+      expect(persisted).toMatchObject({ id: created.obligation.id, state: "owed" });
+    } else if (operation === "update") {
+      await cuts.update(existing!.obligation.id, { state: "submitted", operationId: "same-continuation" });
+      expect(await accountGuardObligationStore(interruptionObligationDirectory(f.registry.filename)).list())
+        .toMatchObject([{ id: existing!.obligation.id, state: "submitted", operationId: "same-continuation" }]);
+    } else await enforceAccountCreditGuard(f.registry, [], async () => true, async () => false, async () => null);
+    console.info(`[credit guard] contended ${operation} pass ${(performance.now() - started).toFixed(1)} ms, timer progressed: ${fired}`);
+    expect(fired).toBe(true);
+    await exited;
+    expect(child.exitCode).toBe(0);
+  } finally {
+    clearTimeout(timer);
+    if (child.exitCode === null) child.kill();
+    await exited;
+    await f.cleanup();
+  }
+});
+
+test("unchanged guard polls read no settled interruption history", async () => {
+  const f = migrationDeliveryFixture();
+  const directory = interruptionObligationDirectory(f.registry.filename);
+  const store = interruptionObligationStore(directory);
+  const settled = store.record({ conversationId: f.conversation.id, engine: "codex", hostKey: "codex:history",
+    path: f.conversation.generations[0]!.path, owner: null, claimEpoch: null, turnRef: "history", boundary: "restart",
+    reason: "viewer-restart", checkpoint: { lastEventKind: null, lastEventAt: null }, seat: null,
+    answeredBy: "already continued" }).obligation;
+  const poll = () => enforceAccountCreditGuard(f.registry, [], async () => true, async () => false, async () => null);
+  try {
+    // Finish the one-time upgrade backfill before measuring steady polls.
+    await poll();
+    for (let count = 0; count < 2_000; count++) fs.writeFileSync(path.join(directory, `${settled.id}-${count}.json`), JSON.stringify(settled));
+    let reads = 0;
+    const read = fs.readFileSync;
+    const spy = spyOn(fs, "readFileSync").mockImplementation(((filename: unknown, ...args: unknown[]) => {
+      if (String(filename).startsWith(directory + path.sep)) reads++;
+      return Reflect.apply(read, fs, [filename, ...args]);
+    }) as typeof read);
+    try {
+      const times: number[] = [];
+      for (let pass = 0; pass < 3; pass++) {
+        const started = performance.now(); await poll(); times.push(performance.now() - started);
+      }
+      console.info(`[credit guard] 2,001 settled records, reads ${reads}, passes ms ${times.map(ms => ms.toFixed(1)).join(", ")}`);
+      expect(reads).toBe(0);
+    } finally { spy.mockRestore(); }
+  } finally { await f.cleanup(); }
+});
+
+
+test("the guard persists one cut before attempting to stop its source host", async () => {
+  const f = migrationDeliveryFixture();
+  const directory = interruptionObligationDirectory(f.registry.filename);
+  observe(f.registry, "account-a", 99);
+  const health = f.host.health.bind(f.host);
+  f.host.health = async () => ({ ...await health(), status: "active", activeTurnRef: "guarded-turn" });
+  const keys: string[] = [];
+  const stop = async () => {
+    const records = fs.readdirSync(directory).filter(name => name.endsWith(".json"));
+    expect(records).toHaveLength(1);
+    const cut = JSON.parse(fs.readFileSync(path.join(directory, records[0]!), "utf8"));
+    expect(cut).toMatchObject({ reason: "account-guard", state: "owed", turnRef: "guarded-turn" });
+    keys.push(cut.id);
+    // Refusal must retain the durable cut and prevent any continuation.
+    return false;
+  };
+  try {
+    for (let pass = 0; pass < 2; pass++) await expect(enforceAccountCreditGuard(f.registry, [{ key: f.key, host: f.host }], stop,
+      async () => { throw new Error("failed termination cannot recover"); }, async () => { throw new Error("failed termination cannot resume"); }))
+      .rejects.toThrow("termination remains pending");
+    expect(keys).toHaveLength(2);
+    expect(new Set(keys).size).toBe(1);
+  } finally { await f.cleanup(); }
 });
