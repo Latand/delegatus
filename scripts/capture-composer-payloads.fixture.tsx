@@ -1,6 +1,9 @@
-/** Real pane/composer/tray/outbox against a synthetic runtime. No provider calls.
+/** Real pane/composer/tray/outbox; default synthetic runtime, no provider calls.
  * `?runtime=journal` keeps the production send/retry client and reads receipts
- * from the verifier, which serves both routes from the real handlers/journal. */
+ * from the verifier, which serves both routes from the real handlers/journal.
+ * `native-paint=1` also uses the production transcript stream and log bus. */
+import { resetManagerIdentityForTest } from '@/components/voice/managerIdentity';
+import { subscribeLog } from '@/hooks/logBus';
 import { createRoot } from 'react-dom/client';
 import { createElement, useSyncExternalStore } from 'react';
 import { NativeConversationPane } from '@/components/scheme/NativeConversationPane';
@@ -17,6 +20,8 @@ import type { FileEntry } from '@/lib/types';
 import type { RuntimeSnapshot } from '@/lib/runtime/contracts';
 
 const params = new URLSearchParams(location.search);
+const engine = params.get('engine') === 'claude' ? 'claude' : 'codex';
+const nativePaint = params.get('native-paint') === '1';
 const journal = params.get('runtime') === 'journal';
 const CARD = params.get('card') ?? 'conversation_payload_fixture';
 const PATH = params.get('path') ?? '/fixture/payload.jsonl';
@@ -28,8 +33,8 @@ const queueThread = params.get('queue');
 // `?inject=1` also advertises context injection, so the send menu offers Add to context.
 const injectCapable = params.get('inject') === '1';
 const session = {
-  conversationId: CARD, sessionKey: { engine:'codex',sessionId:queueThread ?? 'fixture-thread' },
-  hostKind:'codex-app-server',host:'hosted',turn:queueThread ? 'running' : 'idle',provenance:'structured',
+  conversationId: CARD, sessionKey: { engine,sessionId:queueThread ?? 'fixture-thread' },
+  hostKind:engine === 'claude' ? 'claude-broker' : 'codex-app-server',host:'hosted',turn:queueThread ? 'running' : 'idle',provenance:'structured',
   accountId:'fixture-account',parentConversationId:null,cwd:null,artifactPath:PATH,
   capabilities:{steer:true,structuredAttention:true,nativeQueue:Boolean(queueThread),inject:injectCapable,imageInput:{supported:true,mimes:['image/png']}},
   activeTurnId:null,nativeQueueRevision:0,attentionIds:[],recentReceipts:[],revision:1,
@@ -69,13 +74,13 @@ setTmuxComposerRuntimeDependenciesForTests({
     return {ok:mode === 'delivered',status:mode === 'delivered'?200:409,receipt,error:mode === 'delivered'?undefined:receipt.reason ?? undefined};
   } }),
 });
-setLogFeedDependenciesForTests({useLogTail:()=>({lines:[],linesStart:0,size:0,loading:false,error:null,tickTime:null,paused:false,setPaused(){},clear(){},hasMore:false,loadingOlder:false,loadOlder:async()=>0,prependGen:0})} as never);
+if (!nativePaint) setLogFeedDependenciesForTests({useLogTail:()=>({lines:[],linesStart:0,size:0,loading:false,error:null,tickTime:null,paused:false,setPaused(){},clear(){},hasMore:false,loadingOlder:false,loadOlder:async()=>0,prependGen:0})} as never);
 // Synthetic mode answers the operation retry contract the way the journal does:
 // a leaf that names the attempt it replaces, under a key the server derives.
 const retries: string[] = [];
 window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   const pathname = new URL(input instanceof Request ? input.url : String(input), location.href).pathname;
-  if (journal && (pathname.startsWith('/api/runtime/') || pathname.startsWith('/fixture/'))) return nativeFetch(input, init);
+  if (journal && (pathname.startsWith('/api/runtime/') || pathname.startsWith('/fixture/') || (nativePaint && pathname.startsWith('/api/log')))) return nativeFetch(input, init);
   const operation = /^\/api\/runtime\/operations\/([^/]+)$/.exec(pathname);
   if (operation && init?.method === 'POST') {
     const parent = decodeURIComponent(operation[1]!);
@@ -88,8 +93,8 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   return new Response(JSON.stringify(pathname.includes('/targets')?{targets:{}}:{voices:[],accounts:[],models:[],engines:[],options:[]}),{status:200,headers:{'content-type':'application/json'}});
 }) as typeof fetch;
 setLocale('en');
-const file = {path:PATH,root:'codex-sessions',name:'payload.jsonl',project:'viewer',title:'Attachment recovery',engine:'codex',kind:'session',fmt:'codex',parent:null,mtime:1,size:1,activity:'idle',proc:'running',pid:null,conversationId:CARD,pendingQuestion:null,waitingInput:null,model:'gpt-6-astra',effort:'high'} as FileEntry;
-const host = document.getElementById('app')!;
+const file = {path:PATH,root:engine === 'claude' ? 'claude-projects' : 'codex-sessions',name:'payload.jsonl',project:'viewer',title:nativePaint ? 'Native send latency' : 'Attachment recovery',engine,kind:'session',fmt:engine,parent:null,mtime:nativePaint ? Date.now()/1000 : 1,size:1,activity:'idle',proc:'running',pid:null,conversationId:CARD,pendingQuestion:null,waitingInput:null,model:'gpt-6-astra',effort:'high'} as FileEntry;
+const host = (document.getElementById('app') ?? document.getElementById('root'))!;
 const root = createRoot(host);
 let mount = 0;
 const render = (other = false) => root.render(createElement(NativeConversationPane,{key:++mount,file:other?{...file,path:'/fixture/other.jsonl',conversationId:'conversation_other'}:file,tasks:[],isRoot:false,active:true,place:host,fullWindowPlace:null}));
@@ -125,3 +130,110 @@ Object.assign(window,{payloadFixture:{
   receipts:(next:RuntimeReceipt[])=>publishReceipts(next),
   nextRevision:()=>revisionFloor()+1,
 }});
+
+
+/** Epoch milliseconds in this browser; canonicalFrame is a render opportunity,
+ * after native bytes and outbox retirement, with no compositor timestamp claim. */
+export interface NativePaintReading {
+  text: string;
+  prerequisites: Array<{ kind: "manager" | "bridge"; start: number; end: number }>;
+  click?: number;
+  request?: number;
+  response?: number;
+  key?: string;
+  browserChunk?: number;
+  optimisticFrame?: number;
+  canonicalFrame?: number;
+  canonicalRows?: number;
+  overflowX?: number;
+  visible?: boolean;
+}
+declare global {
+  interface Window {
+    nativePaintAudit?: NativePaintReading;
+    nativePaintReady?: boolean;
+    armNativePaintAudit(text: string, delay: number): void;
+  }
+}
+if (nativePaint) {
+  let delay = 0;
+  let offset = 0;
+  // A second subscriber observes the same real stream through the public bus.
+  // Its offset advances too, so it cannot turn reconnects into full-file reads.
+  subscribeLog({ path: PATH, getOffset: () => offset, onChunk(chunk) {
+    if (!("data" in chunk)) return;
+    offset = chunk.offset;
+    window.nativePaintReady = true;
+    const audit = window.nativePaintAudit;
+    if (audit && !audit.browserChunk && chunk.data.includes(audit.text)) {
+      audit.browserChunk = performance.timeOrigin + performance.now();
+    }
+  } });
+  const now = () => performance.timeOrigin + performance.now();
+  const fixtureFetch = window.fetch;
+  window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const pathname = new URL(input instanceof Request ? input.url : String(input), location.href).pathname;
+    const audit = window.nativePaintAudit;
+    if (audit && (pathname === "/api/orchestrator/seat" || pathname === "/api/bridge")) {
+      const hop = { kind: pathname === "/api/bridge" ? "bridge" as const : "manager" as const, start: now(), end: 0 };
+      audit.prerequisites.push(hop);
+      await new Promise(resolve => setTimeout(resolve, delay));
+      hop.end = now();
+      return Response.json(hop.kind === "bridge" ? { prelude: null } : { exists: false, seat: null });
+    }
+    if (audit && pathname === "/api/runtime/send") {
+      audit.request = now();
+      audit.key = JSON.parse(String(init?.body)).idempotencyKey;
+      const response = await fixtureFetch(input, init);
+      audit.response = now();
+      return response;
+    }
+    return fixtureFetch(input, init);
+  }) as typeof fetch;
+  window.armNativePaintAudit = (text, prerequisiteDelay) => {
+    resetManagerIdentityForTest();
+    delay = prerequisiteDelay;
+    window.nativePaintAudit = { text, prerequisites: [] };
+  };
+  document.addEventListener("click", event => {
+    const audit = window.nativePaintAudit;
+    if (!audit || !(event.target instanceof Element) || !event.target.closest('button[type="submit"]')) return;
+    audit.click = now();
+    let optimisticScheduled = false;
+    let canonicalScheduled = false;
+    const matchingRows = () => [...document.querySelectorAll('[data-message-row], [data-feed-kind="user"]')]
+        // Canonical message rows sit inside a user feed wrapper. Count the
+        // inner row once, while retaining the generic user renderer fallback.
+        .filter(row => !row.querySelector("[data-message-row]") && row.textContent?.includes(audit.text));
+    const canonical = (row: Element | undefined) => row && !row.hasAttribute("data-outbox-entry") && !row.querySelector("[data-outbox-entry]");
+    const tick = () => {
+      const rows = matchingRows();
+      const row = rows[0];
+      if (row && !optimisticScheduled) {
+        optimisticScheduled = true;
+        requestAnimationFrame(() => { audit.optimisticFrame = now(); });
+      }
+      if (canonical(row) && audit.browserChunk && !canonicalScheduled) {
+        canonicalScheduled = true;
+        requestAnimationFrame(() => {
+          const settledRows = matchingRows();
+          const settledRow = settledRows[0];
+          if (!canonical(settledRow)) { canonicalScheduled = false; return; }
+          const box = settledRow.getBoundingClientRect();
+          const clip = settledRow.closest("[data-log-feed-scroller]")?.getBoundingClientRect();
+          const visible = box.width > 0 && box.height > 0 && box.top >= Math.max(0, clip?.top ?? 0)
+            && box.bottom <= Math.min(innerHeight, clip?.bottom ?? innerHeight);
+          // Following the appended row can take another frame. Keep observing
+          // until the canonical row is inside the feed's visible viewport.
+          if (!visible) { canonicalScheduled = false; return; }
+          audit.canonicalFrame = now();
+          audit.canonicalRows = settledRows.length;
+          audit.overflowX = Math.max(0, document.documentElement.scrollWidth - innerWidth);
+          audit.visible = visible;
+        });
+      }
+      if (!audit.canonicalFrame) requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  }, { capture: true });
+}
