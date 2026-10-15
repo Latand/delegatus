@@ -4205,9 +4205,10 @@ test.each(["timeout", "revoked", "obsolete", "ended-after-read", "ended-during-r
           await deliverHeldStructuredMessage({ conversationId: row.conversationId, runtimeConversationId: row.runtimeConversationId,
             path, clientMessageId: messageId, deliveryId: row.id, text: row.text, command: row.command }, {
             enabled: () => true, registry: () => registry, client: () => runtime, kick: () => {},
-            recover: async () => {
+            recover: async request => {
               recoveries++;
               if (scenario === "ended-during-recovery") endDeputy(begun.deputy.askId, { outcome: "timeout", expectedAttempt: 0 });
+              request.authorityGuard?.();
               recordStructuredOwner(registry, conversation);
               resumed = true;
               return { target: null, path: artifactPath, conversationId: conversation.id, spawned: true } as const;
@@ -4221,9 +4222,8 @@ test.each(["timeout", "revoked", "obsolete", "ended-after-read", "ended-during-r
         expect(received).toEqual(["Explain the parallel failure"]);
         expect(registry.pendingDeliveries(conversation.id)).toEqual([]);
       } else {
-        const endedDuringRecovery = scenario === "ended-during-recovery";
-        expect(resumed).toBe(endedDuringRecovery);
-        expect(recoveries).toBe(endedDuringRecovery ? 1 : 0);
+        expect(resumed).toBe(false);
+        expect(recoveries).toBe(scenario === "ended-during-recovery" ? 1 : 0);
         expect(received).toEqual([]);
         expect(registry.readOnlySnapshot().heldDeliveries[held.id]).toMatchObject({ state: "failed", error: expect.any(String) });
       }
