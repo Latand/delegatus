@@ -5,6 +5,7 @@ import { statePath } from "@/lib/configDir";
 import { atomicSecretWrite, readSafeJson, removeSafeFile } from "../sessionStore";
 
 import { validBotToken } from "./contracts";
+import { scrubTelegramDiagnostic } from "./diagnostics";
 
 /**
  * The one module that holds the bot token
@@ -50,7 +51,6 @@ type FetchLike = (input: string, init: RequestInit) => Promise<Response>;
 
 const API_ORIGIN = "https://api.telegram.org";
 const DEFAULT_TIMEOUT_MS = 20_000;
-const DESCRIPTION_MAX = 300;
 
 /** Replaces every occurrence of the token — and its secret half alone — with
     `[token]`, then bounds the text. Telegram's descriptions do not echo the
@@ -59,7 +59,7 @@ export function scrubTokenText(value: string, token: string): string {
   const tail = token.slice(token.indexOf(":") + 1);
   let scrubbed = value.split(token).join("[token]");
   if (tail.length >= 8) scrubbed = scrubbed.split(tail).join("[token]");
-  return scrubbed.length > DESCRIPTION_MAX ? `${scrubbed.slice(0, DESCRIPTION_MAX - 1)}…` : scrubbed;
+  return scrubTelegramDiagnostic(scrubbed);
 }
 
 function failure(kind: BotCallFailureKind, status: number | null = null, description: string | null = null, parameters?: unknown): BotCallResult<never> {

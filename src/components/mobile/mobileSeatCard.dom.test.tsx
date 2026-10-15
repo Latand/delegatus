@@ -37,8 +37,8 @@ Object.assign(globalThis, {
   matches: true, media: query, addEventListener() {}, removeEventListener() {},
 });
 
-const actualRuntimeHooks = await import("@/hooks/useRuntime");
-const actualLogTail = await import("@/hooks/useLogTail");
+const actualRuntimeHooks = { ...await import("@/hooks/useRuntime") };
+const { setLogFeedDependenciesForTests } = await import("../logFeedDependencies");
 mock.module("@/hooks/useRuntime", () => ({
   ...actualRuntimeHooks,
   /* The runtime plane is OFF here, so the seat conversation classifies through
@@ -54,13 +54,13 @@ mock.module("@/hooks/useRuntime", () => ({
   useRuntimeFlow: () => null,
   refreshRuntime: async () => { runtimeRefreshes += 1; return true; },
 }));
-mock.module("@/hooks/useLogTail", () => ({
+const feedDependencies = {
   useLogTail: () => ({
     lines: [], linesStart: 0, size: 0, loading: false, error: null, tickTime: null,
     paused: false, setPaused: () => undefined, clear: () => undefined,
     hasMore: false, loadingOlder: false, loadOlder: async () => 0, prependGen: 0,
   }),
-}));
+};
 
 const { MobileFocusView } = await import("./MobileFocusView");
 const { MobileSeatCard } = await import("./MobileSeatCard");
@@ -105,10 +105,10 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
 const roots = new Set<Root>();
 afterAll(() => {
   mock.module("@/hooks/useRuntime", () => actualRuntimeHooks);
-  mock.module("@/hooks/useLogTail", () => actualLogTail);
   globalThis.fetch = realFetch;
 });
 beforeEach(() => {
+  setLogFeedDependenciesForTests(feedDependencies);
   /* Each test is a tab that has never read this project's seat; the answer is
      cached per project for the session since #1149. */
   resetOrchestratorSeatCacheForTests();
@@ -123,6 +123,7 @@ beforeEach(() => {
 afterEach(() => {
   for (const root of roots) flushSync(() => root.unmount());
   roots.clear();
+  setLogFeedDependenciesForTests(null);
   dom.document.body.replaceChildren();
   dom.sessionStorage.clear();
   dom.localStorage.clear();
