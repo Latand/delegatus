@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, mock, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, expect, mock, test } from "bun:test";
 import { Window } from "happy-dom";
 import { flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
@@ -13,12 +13,15 @@ import recordedTurnEnd from "@/lib/runtime/fixtures/recorded-turn-end.json";
 import { useSwitchboardData } from "./useSwitchboardData";
 import type { EventSourceLike, RuntimeBus } from "./runtimeBus";
 
-const createTestRuntimeBus = (await import("./runtimeBus")).createRuntimeBus;
+const actualRuntimeBus = { ...await import("./runtimeBus") };
+const createTestRuntimeBus = actualRuntimeBus.createRuntimeBus;
+afterAll(() => mock.module("./runtimeBus", () => actualRuntimeBus));
 let testRuntimeBus: RuntimeBus | null = null;
 
 let revisionListener: ((revision: number) => void) | null = null;
 
 mock.module("./runtimeBus", () => ({
+  ...actualRuntimeBus,
   isRuntimeUiEnabled: () => true,
   getRuntimeBus: () => testRuntimeBus ?? ({
     getState: () => ({ connection: "live" }),

@@ -1,0 +1,138 @@
+[
+  {
+    "label": "small-empty-store",
+    "calls": [
+      {
+        "required": null,
+        "conditional": null,
+        "bytes": 34273,
+        "respondedAt": 409.90000009536743
+      },
+      {
+        "required": "1",
+        "conditional": "\"saved\"",
+        "bytes": 34273,
+        "respondedAt": 756.2000000476837
+      }
+    ],
+    "parses": [
+      {
+        "codeUnits": 34271,
+        "ms": 0.09999990463256836
+      },
+      {
+        "codeUnits": 34271,
+        "ms": 0.09999990463256836
+      }
+    ],
+    "firstBoardAt": 550.2000000476837,
+    "firstBoardFromResponseMs": 140.29999995231628,
+    "refined": true,
+    "cards": 16,
+    "sameText": true,
+    "sameGeometry": true
+  },
+  {
+    "label": "small-reload",
+    "calls": [
+      {
+        "required": null,
+        "conditional": "\"saved\"",
+        "bytes": 34273,
+        "respondedAt": 216.29999995231628
+      },
+      {
+        "required": "1",
+        "conditional": "\"saved\"",
+        "bytes": 34273,
+        "respondedAt": 528.7999999523163
+      }
+    ],
+    "parses": [
+      {
+        "codeUnits": 34271,
+        "ms": 0.20000004768371582
+      },
+      {
+        "codeUnits": 34271,
+        "ms": 0.2999999523162842
+      },
+      {
+        "codeUnits": 34271,
+        "ms": 0.20000004768371582
+      }
+    ],
+    "firstBoardAt": 303.40000009536743,
+    "firstBoardFromResponseMs": 87.10000014305115,
+    "refined": true,
+    "cards": 16,
+    "sameText": true,
+    "sameGeometry": true
+  },
+  {
+    "label": "oversized-empty-store",
+    "calls": [
+      {
+        "required": null,
+        "conditional": null,
+        "bytes": 27297262,
+        "respondedAt": 584.8000001907349
+      },
+      {
+        "required": "1",
+        "conditional": "\"saved\"",
+        "bytes": 27297262,
+        "respondedAt": 1251.4000000953674
+      }
+    ],
+    "parses": [
+      {
+        "codeUnits": 27297260,
+        "ms": 8.700000047683716
+      },
+      {
+        "codeUnits": 27297260,
+        "ms": 10.899999856948853
+      }
+    ],
+    "firstBoardAt": 1028.3000001907349,
+    "firstBoardFromResponseMs": 443.5,
+    "refined": true,
+    "cards": 16,
+    "sameText": true,
+    "sameGeometry": true
+  },
+  {
+    "label": "oversized-reload",
+    "calls": [
+      {
+        "required": null,
+        "conditional": null,
+        "bytes": 27297262,
+        "respondedAt": 452.2999999523163
+      },
+      {
+        "required": "1",
+        "conditional": "\"saved\"",
+        "bytes": 27297262,
+        "respondedAt": 1057.7000000476837
+      }
+    ],
+    "parses": [
+      {
+        "codeUnits": 27297260,
+        "ms": 8.699999809265137
+      },
+      {
+        "codeUnits": 27297260,
+        "ms": 5.700000047683716
+      }
+    ],
+    "firstBoardAt": 698.8999998569489,
+    "firstBoardFromResponseMs": 246.59999990463257,
+    "refined": true,
+    "cards": 16,
+    "sameText": true,
+    "sameGeometry": true
+  }
+]

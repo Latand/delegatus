@@ -440,10 +440,16 @@ async function recoverCandidate(
       current.accountId,
       current.project,
     );
-    const assertAccountAuthorized = async (): Promise<void> => {
-      request.admissionGuard?.();
-      await ownership?.authorizeAccount?.(account.accountId ?? null);
+    let admissionGuard = request.admissionGuard;
+    const assertAuthority = () => {
+      assertRecoveryAdmission(request, registry);
       request.authorityGuard?.();
+    };
+    const assertAccountAuthorized = async (): Promise<void> => {
+      admissionGuard?.();
+      await ownership?.authorizeAccount?.(account.accountId ?? null);
+      assertAuthority();
+      admissionGuard?.();
     };
     let begun: SpawnBeginResult;
     try {
@@ -475,6 +481,16 @@ async function recoverCandidate(
       throw error;
     }
     if (begun.kind !== "created") throw new Error("structured recovery reservation is unavailable");
+    const launchId = begun.receipt.launchId;
+    const surface = request.origin?.kind === "agent"
+      ? request.origin.role === "seat-tick" ? "seat-tick" : "agent"
+      : request.origin?.kind === "operator" ? "operator" : "unspecified";
+    console.error(`[structured recovery] reserved ${launchId}; source=${surface}`);
+    const predecessorOperation = registry.readOnlySnapshot().entries[sessionKeyId(current.key)]?.structuredHostOperationId;
+    let claimed = false;
+    let predecessorEpoch = 0;
+    let successorEpoch: number | null = null;
+    let ownsSuccessor = () => false;
     try {
       await assertOwnership();
     } catch (error) {
@@ -500,6 +516,39 @@ async function recoverCandidate(
         registry,
         client,
         authorize: assertAccountAuthorized,
+        resumeAdmission: {
+          beforeClaim: () => {
+            assertAuthority(); admissionGuard?.();
+            predecessorEpoch = registry.readOnlySnapshot().entries[sessionKeyId(current.key)]?.claimEpoch ?? 0;
+          },
+          claimed: claim => {
+            const claimOwner = claim.claimOwner;
+            const claimEpoch = claim.claimEpoch;
+            if (claimEpoch !== predecessorEpoch + 1 || claim.structuredHostOperationId !== predecessorOperation)
+              throw new DeliveryAdmissionRefusedError("structured-recovery-superseded");
+            successorEpoch = claimEpoch;
+            ownsSuccessor = () => !!claimOwner && registry.ownsStructuredHostClaim(current.key, claimOwner, claimEpoch);
+            // The spawn supplies the claim it just acquired, before yielding.
+            // Later checks accept only this reservation and this writer.
+            admissionGuard = () => {
+              assertAuthority();
+              if (!request.authorityGuard) request.admissionGuard?.();
+              const snapshot = registry.readOnlySnapshot();
+              const receipt = snapshot.receipts[launchId];
+              const entry = snapshot.entries[sessionKeyId(current.key)];
+              if (!claimOwner || !receipt || receipt.conversationId !== current.conversationId
+                || receipt.accountId !== account.accountId || receipt.purpose !== "resume-successor"
+                || receipt.state === "failed" || receipt.state === "conflicted"
+                || entry?.claimOwner !== claimOwner || entry.claimEpoch !== claimEpoch
+                || entry.structuredHost?.writerClaimEpoch !== claimEpoch
+                || entry.structuredHostOperationId !== (receipt.key ? launchId : predecessorOperation)) {
+                throw new DeliveryAdmissionRefusedError("structured-recovery-superseded");
+              }
+            };
+            claimed = true;
+            admissionGuard();
+          },
+        },
       });
     } catch (error) {
       // A terminal CLI exit can throw before returning the staged response.
@@ -507,11 +556,17 @@ async function recoverCandidate(
       // unconfirmed cleanup or an unsettled receipt keeps the original retry.
       if (error instanceof DeliveryAdmissionRefusedError) throw error;
       await assertOwnership();
-      await assertAccountAuthorized();
+      // A failed spawn releases its own claim. Classify that terminal receipt
+      // with current authority; its released writer cannot pass the live guard.
+      if (!claimed) admissionGuard?.();
+      await ownership?.authorizeAccount?.(account.accountId ?? null);
+      assertAuthority();
       const snapshot = registry.readOnlySnapshot();
       const receipt = snapshot.receipts[begun.receipt.launchId];
       const entry = snapshot.entries[sessionKeyId(current.key)];
       if ((receipt?.state === "failed" || receipt?.state === "conflicted")
+        && (successorEpoch === null || entry?.claimEpoch === successorEpoch)
+        && (!entry?.structuredHostOperationId || entry.structuredHostOperationId === launchId || entry.structuredHostOperationId === predecessorOperation)
         && !entry?.host && !entry?.claimOwner && !entry?.structuredHost?.process
         && !entry?.pendingAction && !(entry?.structuredTerminationSurvivors?.length)) {
         throw new StructuredResumeUnpublishedError(receipt.error ?? (error instanceof Error ? error.message : "host resume did not publish"));
@@ -530,8 +585,10 @@ async function recoverCandidate(
       await assertOwnership();
       await assertAccountAuthorized();
     } catch (error) {
-      await ownership?.releaseHost(current.key);
-      registry.terminateStructuredHost(current.key);
+      if (ownsSuccessor()) {
+        await ownership?.releaseHost(current.key);
+        if (ownsSuccessor()) registry.terminateStructuredHost(current.key);
+      }
       throw error;
     }
     (dependencies.requestDeliveryDrain ?? requestAccountMigrationTick)();
@@ -540,7 +597,7 @@ async function recoverCandidate(
       path: publishedPath,
       conversationId: current.conversationId,
       spawned: true,
-      ...(request.admissionGuard ? { admissionGuard: request.admissionGuard } : {}),
+      ...(admissionGuard ? { admissionGuard } : {}),
     };
   });
 }
@@ -574,7 +631,10 @@ export async function recoverDeadStructuredConversation(
       request.admissionGuard?.(key);
       curatorGuard();
     };
-    admittedRequest = { ...request, admissionGuard };
+    admittedRequest = { ...request, admissionGuard, authorityGuard: () => {
+      (request.authorityGuard ?? request.admissionGuard)?.();
+      curatorGuard();
+    } };
     admissionGuard();
   }
   assertRestartCutEvidenceDecided(candidate.key);
@@ -582,9 +642,17 @@ export async function recoverDeadStructuredConversation(
     ? `${registry.filename}:${candidate.conversationId}:${dependencies.ownership.operationId}:${dependencies.ownership.revision}`
     : `${registry.filename}:${candidate.conversationId}:${request.operationId ?? "operator"}`;
   const pending = recoveries.get(recoveryKey);
-  if (pending) return pending.then((result: StructuredRecoveryResult | null) => result && admittedRequest.admissionGuard
-    ? { ...result, admissionGuard: admittedRequest.admissionGuard }
-    : result);
+  if (pending) {
+    admittedRequest.admissionGuard?.();
+    if (!admittedRequest.admissionGuard && !admittedRequest.authorityGuard) return pending;
+    return pending.then((result: StructuredRecoveryResult | null) => result && {
+      ...result,
+      admissionGuard: () => {
+        result.admissionGuard?.();
+        (admittedRequest.authorityGuard ?? admittedRequest.admissionGuard)?.();
+      },
+    });
+  }
   if (candidate.hostLive && !dependencies.ownership) return { ...liveHostResult(candidate), ...(admittedRequest.admissionGuard ? { admissionGuard: admittedRequest.admissionGuard } : {}) };
   const recovery = recoverCandidate(admittedRequest, dependencies, registry, candidate);
   recoveries.set(recoveryKey, recovery);
