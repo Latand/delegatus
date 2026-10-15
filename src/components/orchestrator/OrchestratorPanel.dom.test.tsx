@@ -57,8 +57,8 @@ Object.assign(globalThis, {
   matches: false, media: query, addEventListener() {}, removeEventListener() {},
 });
 
-const actualRuntimeHooks = await import("@/hooks/useRuntime");
-const actualLogTail = await import("@/hooks/useLogTail");
+const actualRuntimeHooks = { ...await import("@/hooks/useRuntime") };
+const { setLogFeedDependenciesForTests } = await import("../logFeedDependencies");
 /** Whether the runtime plane is AUTHORITATIVE for this test. Off (the default
     everywhere else here) makes `file.proc` the authority, so a transcript in the
     catalog classifies on its own; on, with no session to resolve, is the plane
@@ -94,14 +94,13 @@ mock.module("@/hooks/useRuntime", () => ({
     read synchronously on mount — which is why a re-seated conversation view
     repaints a transcript this tab has already read (#1149). */
 const tailLines = new Map<string, string[]>();
-mock.module("@/hooks/useLogTail", () => ({
-  ...actualLogTail,
+const feedDependencies = {
   useLogTail: (file: FileEntry | null) => ({
     lines: (file && tailLines.get(file.path)) ?? [], linesStart: 0, size: 0, loading: false, error: null, tickTime: null,
     paused: false, setPaused: () => undefined, clear: () => undefined,
     hasMore: false, loadingOlder: false, loadOlder: async () => 0, prependGen: 0,
   }),
-}));
+};
 
 const { OrchestratorPanel, REPORT_LOG_CHAT_MIN_WIDTH, REPORT_LOG_MIN_WIDTH, REPORT_LOG_SPLIT_WIDTH, UNBOUND_STATUS_RETRY_MS } = await import("./OrchestratorPanel");
 const { SEAT_CONFIRM_TTL_MS, requestOrchestratorDraft } = await import("./draftPrefill");
@@ -302,6 +301,7 @@ const hostedSession = (): RuntimeSessionView => ({
 
 const roots = new Set<Root>();
 beforeEach(() => {
+  setLogFeedDependenciesForTests(feedDependencies);
   /* Both answer caches are this TAB's memory (#1149), so each test starts as a
      tab that has never read a seat. */
   resetOrchestratorSeatCacheForTests();
@@ -331,6 +331,7 @@ afterEach(() => {
   detachCatalog = null;
   for (const root of roots) flushSync(() => root.unmount());
   roots.clear();
+  setLogFeedDependenciesForTests(null);
   dom.document.body.replaceChildren();
   dom.sessionStorage.clear();
   dom.localStorage.clear();
@@ -339,7 +340,6 @@ afterEach(() => {
 });
 afterAll(() => {
   mock.module("@/hooks/useRuntime", () => actualRuntimeHooks);
-  mock.module("@/hooks/useLogTail", () => actualLogTail);
 });
 
 const settle = async () => {
@@ -1359,11 +1359,14 @@ test("a server recommendation is SHOWN, in the server's own words, and rotates n
   expect(host.querySelector('[data-orchestrator-conversation="conversation_orch"]')).not.toBeNull();
 });
 
-test("an estimated context number is marked as one — a guess never reads as a provider count", async () => {
+test("estimated context stays unconfirmed and preserves its source in the tooltip", async () => {
   const host = await mountLive(incumbent({
     context: { tokens: 525_000, limit: 1_000_000, percent: 53, estimated: true, basis: "ESTIMATE: transcript bytes / 4 — no provider-reported usage found", policy: "claude-opus-1m" },
   }));
-  expect(incumbentRow(host)!.textContent).toContain("~53%");
+  const context = incumbentRow(host)!.querySelector('[data-orchestrator-context="unconfirmed"]')!;
+  expect(context.textContent).toBe("unconfirmed");
+  expect(context.getAttribute("title")).toContain("transcript bytes / 4");
+  expect(context.textContent).not.toContain("53%");
 });
 
 test("an estimate at 100% is never the red chip; a provider count there is", async () => {
@@ -1371,14 +1374,15 @@ test("an estimate at 100% is never the red chip; a provider count there is", asy
     const host = await mountLive(incumbent({
       context: { tokens: 1_250_549, limit: 1_000_000, percent: 100, estimated, basis: "", policy: "claude-opus-1m" },
     }));
-    const face = incumbentRow(host)!.querySelector("[data-orchestrator-context] > span")!;
+    const meter = incumbentRow(host)!.querySelector("[data-orchestrator-context]")!;
+    const face = meter.querySelector("span") ?? meter;
     return { text: face.textContent, className: face.className };
   };
 
   const estimate = await chipTone(true);
-  expect(estimate.text).toBe("~100%");
+  expect(estimate.text).toBe("unconfirmed");
   expect(estimate.className).not.toContain("text-danger");
-  expect(estimate.className).toContain("text-warning");
+  expect(estimate.className).toContain("text-muted");
   expect((await chipTone(false)).className).toContain("text-danger");
 });
 
