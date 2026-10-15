@@ -267,6 +267,9 @@ export async function runStateWriterSample(): Promise<void> {
     await Bun.sleep(Math.max(0, scheduledStart + (warmSeconds + seconds) * 1000 - performance.now()));
     const allPendingAtObservedEnd = pending.size;
     await Promise.race([Promise.all(pending), Bun.sleep(35_000)]);
+    const drainedAt = Date.now();
+    const allPendingAfterDrain = pending.size;
+    const pendingAfterDrain = calls.filter(row => row.phase === "measured" && row.completed === undefined).length;
     // Re-query uncertain mutations under their original keys. Settled replies
     // are already evidence; recovery adds no replay burst for those successes.
     // This phase is outside the measurement window and cannot improve its
@@ -312,7 +315,9 @@ export async function runStateWriterSample(): Promise<void> {
     const summary = { clients: count, mode, shared, offered: measured.length, completed: measured.filter(row => row.completed !== undefined).length,
       failed: measured.filter(row => row.ok === false).length,
       pendingAtEnd: measured.length - completedAtEnd, allPendingAtObservedEnd,
-      pendingAfterDrain: measured.filter(row => row.completed === undefined).length, allPendingAfterDrain: pending.size,
+      pendingAfterDrain, allPendingAfterDrain, drainedAt,
+      pendingAfterReconciliation: measured.filter(row => row.completed === undefined).length,
+      allPendingAfterReconciliation: pending.size, reconciledAt: Date.now(),
       completedAtEnd, offeredAfterEnd: measured.filter(row => row.offered >= measuredEnd).length,
       failedAtEnd: measured.filter(row => row.ok === false && row.completed !== undefined && row.completed <= measuredEnd).length,
       reconciliation: { mutations: calls.filter(row => row.name !== "list_tasks").length,

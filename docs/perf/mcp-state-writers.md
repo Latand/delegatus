@@ -717,6 +717,10 @@ the total pending work, including warmup, at the observed boundary and after
 drain. Reconciliation `queried` counts actual retry attempts; `settled` also
 includes replies already known without another request. Older diagnostic
 reports retained total pending work and counted all settled replies as queried.
+Final matrix reports snapshot pending work immediately after the drain and
+again after reconciliation, with both observation times. The earlier complete
+one-client diagnostic computed its after-drain fields after reconciliation;
+all nine samples had zero pending work at both observations.
 
 Exact normalized response and row hashes remain separate from the committed
 history checks. Concurrent writes can settle in different orders and shared-task
