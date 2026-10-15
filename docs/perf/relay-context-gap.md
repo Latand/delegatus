@@ -284,3 +284,35 @@ The committed fingerprint file from that export supplied the gate's known
 values. New-file git whitespace inspection produced no diagnostics; a separate
 line check found no trailing whitespace and confirmed the final newline. The
 checkout-scope check found only the declared report, with HEAD unchanged.
+
+
+## Delegatus implementation, 2026-10-15
+
+Outcomes (2) and (3) use the bot database for immutable outbound custody and
+pending publication work. The sender boundary includes native decision polls,
+operator test posts and sign-in replies. The publication queue restores indexed
+pending work after restart, preserves the original Telegram receipt and checks
+current destination authorization before emitting it. A recovered obligation
+only publishes history; it cannot resend the Telegram message.
+
+The owner context reader joins confirmed publication references to local
+receipts. The reference now carries its topic. Within a verified scope, an
+explicit missing parent or the outstanding local question and its options
+appear before the current owner answer, with origin and ambiguity labels.
+Unknown topics, legacy mappings without topic evidence and competing scopes
+remain unresolved. Existing service history is deduplicated. Selection is
+bounded to 32 receipts, 64 KiB and 30 days, and no performance gain is claimed.
+
+The synthetic restart regression starts separate sender and recovery processes,
+reopens the actual stores and captures the next full owner's launch prompt.
+It covers a question missing from service history, an unthreaded short answer,
+publication recovery and absence of a second Telegram send. Additional cases
+cover topic and target separation, missing explicit parents, ambiguous questions,
+poll custody, fallback wording, immutable receipts, revocation, persisted backoff
+and peer-held SQLite locks with an independent timer.
+
+This change preserves the coordinated Celestia repair. Its relay serialization
+must still carry preserved reply snippets when the parent history row is absent.
+The other installation's sender and historical custody remain unverified; this
+installation cannot reconstruct those records. No historical sender attribution,
+production repair or deployment is claimed.

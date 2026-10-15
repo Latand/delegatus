@@ -1,3 +1,5 @@
+import { Database } from "bun:sqlite";
+import { scopedOutbound } from "./outbound";
 import { expect, test } from "bun:test";
 import fs from "node:fs";
 import path from "node:path";
@@ -73,6 +75,25 @@ test("confirmed parts publish immediately with Telegram ids; pending or failed p
     expect(await service.send({ ...input, clientRequestId: "identity" })).toMatchObject({ alreadySent: false });
     expect(receipts.at(-1)?.botId).toBe("123");
     connectedBot = "123";
+    delete transport.handlers.sendMessage;
+    const fallback = "Fallback question?\n1) Small\n2) Large";
+    transport.script("sendRichMessage", refused(400, "photo rejected"), ok({ message_id: 25, date: 1791724800 }));
+    await service.sendRichMessage({ clientRequestId: "fallback", chat: "owner", message: {
+      markdown: "Original media question", plainText: "Original wording must not survive fallback", images: [{ id: "image", blob: new Blob(["fixture"]) }] },
+      fallbackMarkdown: fallback });
+    expect(receipts.at(-1)?.text).toBe(fallback);
+    const journal = await scopedOutbound(store.filename, "123", "77", null, 1791724800);
+    expect(journal.find(m => m.messageId === 25)?.text).toBe(fallback);
+    expect(journal.find(m => m.messageId === 21)?.origin).toBe("operator");
+    expect(journal.find(m => m.messageId === 22)?.origin).toBe("system");
+    const db = new Database(store.filename);
+    db.exec("CREATE TRIGGER reject_receipt BEFORE INSERT ON relay_outbound WHEN new.message_id=28 BEGIN SELECT RAISE(ABORT, 'fixture refusal'); END"); db.close();
+    transport.script("sendMessage", ok({ message_id: 28, date: 1791724800 }));
+    const custodyFailure = { ...input, clientRequestId: "custody-refusal" };
+    await expect(service.send(custodyFailure)).rejects.toMatchObject({ code: "send_uncertain" });
+    const sentCalls = transport.callsOf("sendMessage").length;
+    await expect(service.send(custodyFailure)).rejects.toMatchObject({ code: "send_uncertain" });
+    expect(transport.callsOf("sendMessage")).toHaveLength(sentCalls);
     const count = receipts.length;
     transport.script("sendMessage", unreachable());
     await expect(service.send({ ...input, clientRequestId: "uncertain" })).rejects.toMatchObject({ code: "send_uncertain" });
