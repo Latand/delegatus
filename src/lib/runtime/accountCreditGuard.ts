@@ -97,12 +97,6 @@ export async function enforceAccountCreditGuard(registry: AgentRegistry,
       store.update(obligation.id, { state: "discharged", resolvedAt: new Date().toISOString(), resolution: "another runtime selection moved the conversation" });
       continue;
     }
-    const deliveries = registry.conversationDeliverySnapshot({ conversationId: conversation.id });
-    if (Object.values(deliveries.heldDeliveries).some(delivery => delivery.clientMessageId !== obligation.id
-      && delivery.state !== "failed" && Date.parse(delivery.createdAt) > Date.parse(obligation.recordedAt))) {
-      store.update(obligation.id, { state: "discharged", resolvedAt: new Date().toISOString(), resolution: "a newer message continued the conversation" });
-      continue;
-    }
     const owner = pipelineOwner(conversation.id, registry);
     const eligible = () => {
       const current = pipelineOwner(conversation.id, registry);
@@ -142,6 +136,14 @@ export async function enforceAccountCreditGuard(registry: AgentRegistry,
     const current = registry.conversation(conversation.id);
     if (current?.generations.at(-1)?.accountId !== target || moved && current.migration?.phase !== "committed") continue;
     authorizeTarget();
+    const deliveries = registry.conversationDeliverySnapshot({ conversationId: conversation.id });
+    const newerDelivery = Object.values(deliveries.heldDeliveries).some(delivery => delivery.clientMessageId !== obligation.id
+      && delivery.state !== "failed" && Date.parse(delivery.createdAt) > Date.parse(obligation.recordedAt));
+    if (newerDelivery) {
+      store.update(obligation.id, { state: "discharged", resolvedAt: new Date().toISOString(), resolution: "a newer message continues the conversation" });
+      requestAccountMigrationTick();
+      continue;
+    }
     const held = registry.holdDelivery(conversation.id,
       "The paid-credit guard stopped your previous turn. Continue the same work from the preserved transcript and checkout; verify interrupted operations before repeating them.",
       obligation.id, "text", [], null, { operationId: obligation.id, kind: "send", policy: "queue", turnId: null,

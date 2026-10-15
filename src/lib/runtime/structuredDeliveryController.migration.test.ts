@@ -33,13 +33,13 @@ function fixture() {
   return f;
 }
 
-test.each(["conversation", "orchestrator", "review implementer", "reviewer", "recovered source"])("a fresh credit crossing stops an active %s and preserves recovery custody", async kind => {
+test.each(["conversation", "orchestrator", "review implementer", "reviewer", "recovered source", "newer message"])("a fresh credit crossing stops an active %s and preserves recovery custody", async kind => {
   const f = fixture();
   let active = true, releases = 0, creates = 0, spare = false;
   const health = f.host.health.bind(f.host);
   f.host.health = async () => ({ ...await health(), status: active ? "active" : "dead", activeTurnRef: active ? "turn-a" : null });
   f.host.release = async () => { active = false; releases++; };
-  if (kind !== "conversation" && kind !== "recovered source") f.registry.rememberMembership(f.conversation.id, {
+  if (["orchestrator", "review implementer", "reviewer"].includes(kind)) f.registry.rememberMembership(f.conversation.id, {
     kind: kind === "orchestrator" ? "orchestrator" : "flow", containerId: "fixture-owner", role: kind === "orchestrator" ? "orchestrator" : kind === "reviewer" ? "reviewer" : "implementer", slot: "review:1",
     stageId: null, stageOrder: null, round: 1, parentConversationId: null });
   const observe = (usedPercent: number) => f.registry.recordQuotaObservation({ engine: "codex", accountId: "account-a",
@@ -94,6 +94,15 @@ test.each(["conversation", "orchestrator", "review implementer", "reviewer", "re
       expect(creates).toBe(0);
       return;
     }
+    if (kind === "newer message") {
+      setSystemTime(Date.now() + 1000);
+      f.registry.holdDelivery(f.conversation.id, "newer operator work", "operator-followup", "text", [], null,
+        { operationId: "operator-followup", kind: "send", policy: "queue", turnId: null });
+    }
+    const writes: string[] = [];
+    const delivery = { deliver: async (input: { path: string; clientMessageId: string }) => {
+      expect(input.path).toBe(successor); writes.push(input.clientMessageId); return "delivered" as const;
+    } };
     spare = true;
     await kickStructuredDeliveryQueue();
     if (kind === "reviewer") {
@@ -103,19 +112,15 @@ test.each(["conversation", "orchestrator", "review implementer", "reviewer", "re
       return;
     }
     expect(creates).toBe(0);
-    await reconcileAccountMigrationCycle(f.registry, { tick: async () => {} }, provider, { deliver: async () => "held" });
+    await reconcileAccountMigrationCycle(f.registry, { tick: async () => {} }, provider, delivery);
     expect(creates).toBe(1);
     expect(f.registry.conversation(f.conversation.id)?.generations.at(-1)).toMatchObject({ accountId: "account-b", path: successor });
-    const writes: string[] = [];
-    const delivery = { deliver: async (input: { path: string; clientMessageId: string }) => {
-      expect(input.path).toBe(successor); writes.push(input.clientMessageId); return "delivered" as const;
-    } };
     await drainHeldDeliveries(f.conversation.id, delivery, f.registry);
     await kickStructuredDeliveryQueue();
     await drainHeldDeliveries(f.conversation.id, delivery, f.registry);
-    expect(writes).toEqual([store.list()[0]!.id]);
+    expect(writes).toEqual([kind === "newer message" ? "operator-followup" : store.list()[0]!.id]);
     expect(creates).toBe(1);
-    expect(store.list()[0]!.state).toBe("delivered");
+    expect(store.list()[0]!.state).toBe(kind === "newer message" ? "discharged" : "delivered");
   } finally { selection.mockRestore(); await f.cleanup(); }
 });
 
