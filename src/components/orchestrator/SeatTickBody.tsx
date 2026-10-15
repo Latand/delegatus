@@ -9,6 +9,13 @@ import type { BoardMaintenanceAnswer } from "@/lib/boardMaintenance/answer";
 import { useLocale, type MessageKey } from "@/lib/i18n";
 import type { SeatTickSettingsAnswer } from "@/lib/monitor/seatTickSettingsAnswer";
 
+import { autonomyActive, type AutonomySetting } from "@/lib/monitor/autonomy";
+const AUTONOMY_HOURS = [8, 12, 24, Infinity];
+type AutonomyView = { state: "off" | "timed" | "unlimited"; until: string | null; startedAt: string | null; episode: AutonomySetting | null };
+function autonomyView(record: SeatTickSettingsAnswer | null): AutonomyView {
+  const episode = record?.autonomy?.episode ?? null;
+  return { state: !autonomyActive(episode, Date.now()) ? "off" : episode?.until ? "timed" : "unlimited", until: episode?.until ?? null, startedAt: episode?.startedAt ?? null, episode };
+}
 import { maintenanceReading, seatTickAge, seatTickLocalTime, seatTickReading, type MaintenanceReading, type SeatTickReading, type StatusSegment } from "./seatTickView";
 import { runtimeForEngine, runtimeForModel, useMaintainerRole, type MaintainerRoleRead, type MaintainerRuntime } from "./useMaintainerRole";
 import type { SeatTickChange, SeatTickSettingsRead } from "./useSeatTickSettings";
@@ -186,6 +193,14 @@ function releaseChangeOf(draft: ReleaseDraft, record: SeatTickSettingsAnswer | n
   return change;
 }
 
+/** (docs/design/full-autonomy-mode.md §2.3): the «Повна автономія»
+    draft. `hours` is a value of the «Тривалість» select: `keep` the stored
+    end, a number of hours from now, or `unlimited`. */
+export interface AutonomyDraft { enabled: boolean; hours: string }
+function autonomyDraftOf(stored: AutonomyView): AutonomyDraft {
+  return stored.state === "off" ? { enabled: false, hours: "8" } : { enabled: true, hours: "keep" };
+}
+
 const sameRuntime = (left: MaintainerRuntime, right: MaintainerRuntime) =>
   left.engine === right.engine && left.model === right.model && left.effort === right.effort;
 
@@ -196,6 +211,9 @@ export interface SeatTickDraftState {
   setDraft: Dispatch<SetStateAction<SeatTickDraft>>;
   autoRotate: AutoRotateDraft;
   setAutoRotate: Dispatch<SetStateAction<AutoRotateDraft>>;
+  autonomy: AutonomyDraft;
+  setAutonomy: Dispatch<SetStateAction<AutonomyDraft>>;
+  storedAutonomy: AutonomyView;
   maintenance: MaintenanceDraft;
   setMaintenance: Dispatch<SetStateAction<MaintenanceDraft>>;
   /** The maintainer's runtime as drafted: the stored one until the operator
@@ -248,6 +266,13 @@ export function useSeatTickDraft(read: SeatTickSettingsRead): SeatTickDraftState
   const [autoAdopted, setAutoAdopted] = useState(() => autoRotateSignatureOf(record));
   const autoSignature = autoRotateSignatureOf(record);
   if (autoSignature !== autoAdopted) { setAutoAdopted(autoSignature); setAutoRotate(autoRotateDraftOf(record)); }
+  const storedAutonomy = autonomyView(record);
+  const [autonomy, setAutonomy] = useState(() => autonomyDraftOf(storedAutonomy));
+  const autonomyRevision = JSON.stringify([storedAutonomy.state, storedAutonomy.until, storedAutonomy.startedAt, storedAutonomy.episode?.updatedAt]);
+  const [autonomyAdopted, setAutonomyAdopted] = useState(autonomyRevision);
+  if (autonomyRevision !== autonomyAdopted) { setAutonomyAdopted(autonomyRevision); setAutonomy(autonomyDraftOf(storedAutonomy)); }
+  const autonomyBase = autonomyDraftOf(storedAutonomy);
+  const autonomyDirty = autonomy.enabled !== autonomyBase.enabled || (autonomy.enabled && autonomy.hours !== autonomyBase.hours);
   const [release, setRelease] = useState(() => releaseDraftOf(record));
   const releaseSignature = JSON.stringify([record?.release?.updatedAt, releaseDraftOf(record)]);
   const [releaseAdopted, setReleaseAdopted] = useState(releaseSignature);
@@ -267,7 +292,7 @@ export function useSeatTickDraft(read: SeatTickSettingsRead): SeatTickDraftState
   const maintenanceDirty = Object.keys(maintenanceChange).length > 0;
   const autoChange = autoRotateChangeOf(autoRotate, record);
   const releaseChange = releaseChangeOf(release, record);
-  const change: SeatTickChange = { ...(Object.keys(releaseChange).length ? { release: releaseChange } : {}), ...tickChange, ...(maintenanceDirty ? { maintenance: maintenanceChange } : {}), ...(Object.keys(autoChange).length ? { autoRotate: autoChange } : {}) };
+  const change: SeatTickChange = { ...(autonomyDirty ? { autonomy: { enabled: autonomy.enabled, ...(autonomy.enabled && autonomy.hours !== "keep" ? { hours: autonomy.hours === "unlimited" ? null : Number(autonomy.hours) } : {}) } } : {}), ...(Object.keys(releaseChange).length ? { release: releaseChange } : {}), ...tickChange, ...(maintenanceDirty ? { maintenance: maintenanceChange } : {}), ...(Object.keys(autoChange).length ? { autoRotate: autoChange } : {}) };
   const requestDirty = Object.keys(change).length > 0;
 
   const save = async () => {
@@ -293,6 +318,9 @@ export function useSeatTickDraft(read: SeatTickSettingsRead): SeatTickDraftState
     setMaintenance,
     autoRotate,
     setAutoRotate,
+    autonomy,
+    setAutonomy,
+    storedAutonomy,
     runtime,
     setRuntime: (next) => {
       setRuntimeError(null);
@@ -301,7 +329,7 @@ export function useSeatTickDraft(read: SeatTickSettingsRead): SeatTickDraftState
     maintainer,
     runtimeError,
     change,
-    dirty: requestDirty || roleDirty,
+    dirty: requestDirty || roleDirty || autonomyDirty,
     saving: read.saving || roleSaving,
     save,
   };
@@ -398,16 +426,18 @@ function Toggle({ on, label, phone, disabled, attr, onToggle }: {
 
 /** A line of status: its dot beside the FIRST line of the text, and an
     optional second line under it. */
-function StatusLine({ tone, headline, attr, children }: {
+function StatusLine({ tone, headline, attr, children, dot }: {
   tone: SeatTickReading["tone"];
   headline: string;
   attr: Record<string, string>;
   children?: ReactNode;
+  /** A dot in a colour of its own, in place of the tone's. */
+  dot?: ReactNode;
 }) {
   return (
     <div className="flex min-w-0 flex-col gap-0.5">
       <p {...attr} className="flex min-w-0 items-start gap-1.5 text-ui text-primary">
-        <SeatTickDot tone={tone} className="mt-[5px]" />
+        {dot ?? <SeatTickDot tone={tone} className="mt-[5px]" />}
         <span className="min-w-0 break-words">{headline}</span>
       </p>
       {children}
@@ -539,6 +569,7 @@ export function SeatTickBody({ project, projectName, read, state, surface, actio
         {read.answer?.journalError ? (
           <p role="status" data-seat-tick-journal-unreadable className="pl-3 text-caption leading-4 text-warning">{t("seatTick.journalUnreadable")}</p>
         ) : null}
+        {state.storedAutonomy.state !== "off" ? <AutonomyStatus stored={state.storedAutonomy} now={now} locale={locale} /> : null}
         {maintenanceView ? (
           <StatusLine tone={maintenanceView.tone} headline={maintenanceView.status.headline} attr={{ "data-seat-tick-maintenance-summary": "", "data-seat-tick-maintenance-state": maintenanceView.state }}>
             <Segments segments={maintenanceView.status.segments} phone={phone} onOpened={onOpenedCard} />
@@ -556,7 +587,7 @@ export function SeatTickBody({ project, projectName, read, state, surface, actio
             phone={phone}
             disabled={state.saving}
             attr={{ "data-seat-tick-enabled": String(draft.enabled) }}
-            onToggle={() => setDraft((previous) => ({ ...previous, enabled: !previous.enabled }))}
+            onToggle={() => { setDraft(previous => ({ ...previous, enabled: !previous.enabled })); if (draft.enabled) state.setAutonomy(previous => ({ ...previous, enabled: false })); }}
           />
         </div>
 
@@ -653,6 +684,9 @@ export function SeatTickBody({ project, projectName, read, state, surface, actio
         ) : null}
       </div>
 
+      {/* FULL AUTONOMY — under the wakes it rides on. */}
+      {record ? <SeatTickAutonomy state={state} row={row} phone={phone} now={now} locale={locale} wakesOn={record?.settings.enabled === true} /> : null}
+
       {/* BOARD MAINTENANCE — its own switch, interval and agent, saved with the rest. */}
       {record && maintenance && maintenanceView ? (
         <SeatTickMaintenance
@@ -679,9 +713,65 @@ export function SeatTickBody({ project, projectName, read, state, surface, actio
       ) : null}
 
       {/* DETAILS — the only place an id, a path or journal text may appear. */}
-      {record ? <SeatTickDetails record={record} lastDelivery={reading.lastDelivery} now={now} locale={locale} phone={phone} /> : null}
+      {record ? <SeatTickDetails record={record} autonomy={state.storedAutonomy} lastDelivery={reading.lastDelivery} now={now} locale={locale} phone={phone} /> : null}
     </div>
   );
+}
+
+/** The status line while an episode stands. Its dot wears
+    the ring's colour (`--tick-3`, the ramp's violet the ring's `--autonomy` names), so the line reads as
+    the same mode the chip shows; green stays the health dot's. Who turned it
+    on is in Details. */
+function AutonomyStatus({ stored, now, locale }: { stored: AutonomyView; now: number; locale: string }) {
+  const { t } = useLocale();
+  const started = seatTickLocalTime(stored.startedAt, now, locale) ?? t("seatTick.unknown");
+  const left = stored.until ? Math.max(0, Date.parse(stored.until) - now) : null;
+  const headline = stored.until && left !== null
+    ? t("seatTick.autonomy.status", {
+      time: seatTickLocalTime(stored.until, now, locale) ?? t("seatTick.unknown"),
+      left: t("seatTick.autonomy.left", { h: Math.floor(left / 3_600_000), m: Math.floor((left % 3_600_000) / 60_000) }),
+    })
+    : t("seatTick.autonomy.statusUnlimited", { time: started });
+  return (
+    <StatusLine tone="ok" headline={headline} attr={{ "data-seat-tick-autonomy-summary": "" }}
+      dot={<span aria-hidden data-seat-tick-dot="autonomy" className="mt-[5px] h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--tick-3)]" />} />
+  );
+}
+
+/** (docs/design/full-autonomy-mode.md §2.3): the section, built
+    from the panel's own Toggle, Select and caption. Turning it on turns the
+    wakes on in the same draft, because the mode works through them; the hint
+    that says so shows only while the stored wakes are off. */
+function SeatTickAutonomy({ state, row, phone, now, locale, wakesOn }: { state: SeatTickDraftState; row: string; phone: boolean; now: number; locale: string; wakesOn: boolean }) {
+  const { t } = useLocale();
+  const { autonomy: draft, setAutonomy: setDraft, storedAutonomy: stored } = state;
+  const unlimited = stored.state === "unlimited";
+  const storedEnd = stored.state === "off" ? null : unlimited ? t("seatTick.autonomy.unlimited") : t("seatTick.autonomy.keep", { time: seatTickLocalTime(stored.until, now, locale) ?? t("seatTick.unknown") });
+  return <div data-seat-tick-autonomy-section className="flex min-w-0 flex-col gap-2 border-t border-border pt-2.5">
+    <div className={`flex min-w-0 items-center gap-2 ${row}`}>
+      <p className="min-w-0 flex-1 text-label font-semibold uppercase tracking-wide text-muted">{t("seatTick.autonomy.head")}</p>
+      <Toggle on={draft.enabled} label={t(draft.enabled ? "seatTick.autonomy.disableAria" : "seatTick.autonomy.enableAria")}
+        phone={phone} disabled={state.saving} attr={{ "data-seat-tick-autonomy-enabled": String(draft.enabled) }}
+        onToggle={() => {
+          const next = !draft.enabled;
+          setDraft(previous => ({ ...previous, enabled: next }));
+          if (next) state.setDraft(previous => (previous.enabled ? previous : { ...previous, enabled: true }));
+        }} />
+    </div>
+    <p data-seat-tick-autonomy-about className="text-caption leading-4 text-secondary">{t("seatTick.autonomy.about")}</p>
+    {draft.enabled ? <label className="flex min-w-0 flex-col gap-1">
+      <span className="text-ui text-primary">{t("seatTick.autonomy.durationLabel")}</span>
+      <Select roomy={phone} data-seat-tick-autonomy-duration value={draft.hours} disabled={state.saving}
+        onChange={event => setDraft(previous => ({ ...previous, hours: event.target.value }))}
+        className={phone ? "h-11 w-full" : "w-full"}>
+        {storedEnd ? <option value="keep">{storedEnd}</option> : null}
+        {AUTONOMY_HOURS.map(hours => hours === Infinity
+          ? unlimited ? null : <option key="unlimited" value="unlimited">{t("seatTick.autonomy.unlimited")}</option>
+          : <option key={hours} value={String(hours)}>{t("seatTick.autonomy.hours", { n: hours })}</option>)}
+      </Select>
+    </label> : null}
+    {draft.enabled && stored.state === "off" && !wakesOn ? <p data-seat-tick-autonomy-wakes className="text-caption leading-4 text-muted">{t("seatTick.autonomy.wakesToo")}</p> : null}
+  </div>;
 }
 
 function SeatTickRelease({ value, state, control, row, phone, now, locale, tickEnabled }: {
@@ -957,8 +1047,9 @@ const ACTORS = {
   unidentified: "seatTick.actor.unidentified",
 } as const;
 
-function SeatTickDetails({ record, lastDelivery, now, locale, phone }: {
+function SeatTickDetails({ record, autonomy, lastDelivery, now, locale, phone }: {
   record: SeatTickSettingsAnswer;
+  autonomy: AutonomyView;
   lastDelivery: string;
   now: number;
   locale: string;
@@ -998,6 +1089,15 @@ function SeatTickDetails({ record, lastDelivery, now, locale, phone }: {
           {t("seatTick.autoRotate.setBy", { who: t(ACTORS[record.autoRotate.setBy.kind]), at: seatTickLocalTime(record.autoRotate.updatedAt, now, locale) ?? t("seatTick.unknown"),
             why: record.autoRotate.why ? `: «${record.autoRotate.why}»` : "" })}
         </p> : null}
+        {autonomy.state !== "off" ? <p data-seat-tick-autonomy-set-by className="min-w-0 break-words text-caption leading-4 text-muted">
+          {t("seatTick.autonomy.setBy", { who: t(ACTORS[autonomy.episode?.setBy.kind ?? "gateway"]), time: seatTickLocalTime(autonomy.episode?.updatedAt ?? null, now, locale) ?? t("seatTick.unknown") })}
+        </p> : null}
+        {[...(record.settings.autonomyHistory ?? []), ...(record.settings.autonomy ? [record.settings.autonomy] : [])].some(episode => episode.decisions.length > 0) ? <div data-seat-tick-autonomy-log className="flex min-w-0 flex-col gap-2">
+          <p className="text-caption font-semibold text-muted">{t("seatTick.autonomy.decisions")}</p>
+          {[...(record.settings.autonomyHistory ?? []), ...(record.settings.autonomy ? [record.settings.autonomy] : [])].flatMap(episode => episode.decisions.map(decision => <div key={`${episode.startedAt}:${decision.id}`} className="min-w-0 break-words text-caption leading-4 text-secondary">
+            <p className="font-semibold text-primary">{decision.decision}</p>{decision.reviewState ? <p className="font-medium text-secondary">{t(`seatTick.autonomy.review.${decision.reviewState}`)}</p> : null}<p>{decision.why}</p><p><span className="font-semibold text-primary">{t("seatTick.autonomy.undo")}:</span> {decision.undo}</p>
+          </div>))}
+        </div> : null}
         {prompt ? (
           <div className="flex min-w-0 flex-col gap-1">
             <p className="text-caption font-semibold text-muted">{t("seatTick.promptHead", { chars: record.monitorPromptLength })}</p>

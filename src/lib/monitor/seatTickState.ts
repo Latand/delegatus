@@ -91,6 +91,8 @@ function normalizeWakeCommit(value: unknown): SeatTickWakeCommit | null {
     announcedMaintenance: conversationIds(raw.announcedMaintenance),
     announcedDeploys: conversationIds(raw.announcedDeploys),
     /* A plan from before #2030 records no note, so the next wake shows it. */
+    ...(typeof raw.autonomyShown === "string" ? { autonomyShown: raw.autonomyShown } : {}),
+    ...(typeof raw.autonomySummaryFor === "string" ? { autonomySummaryFor: raw.autonomySummaryFor } : {}),
     ...(noteRevision(raw.noteShown) === undefined ? {} : { noteShown: noteRevision(raw.noteShown) }),
     /* A plan from before reported stalls records none, so no stall yields. */
     ...(conversationIds(raw.reportedStalls).length > 0 ? { reportedStalls: conversationIds(raw.reportedStalls) } : {}),
@@ -138,6 +140,7 @@ function normalizeOutstandingWake(value: unknown): SeatTickOutstandingWake | nul
   const seatEpoch = raw.seatEpoch;
   const commit = normalizeWakeCommit(raw.commit);
   if (!clientMessageId || !conversationId || !commit || typeof seatEpoch !== "number" || !Number.isSafeInteger(seatEpoch)) return null;
+  const recovery = raw.recovery as SeatTickOutstandingWake["recovery"];
   return {
     clientMessageId,
     conversationId,
@@ -146,6 +149,11 @@ function normalizeOutstandingWake(value: unknown): SeatTickOutstandingWake | nul
     commit,
     ...(typeof raw.text === "string" ? { text: raw.text } : {}),
     ...(isoOrNull(raw.preparedAt) ? { preparedAt: raw.preparedAt as string } : {}),
+    ...(recovery && isoOrNull(recovery.checkedAt) && isoOrNull(recovery.nextRetryAt)
+      && isoOrNull(recovery.deadlineAt) && typeof recovery.reason === "string" ? { recovery: {
+        checkedAt: recovery.checkedAt, lastAttemptAt: isoOrNull(recovery.lastAttemptAt),
+        nextRetryAt: recovery.nextRetryAt, deadlineAt: recovery.deadlineAt, reason: recovery.reason.slice(0, 500),
+      } } : {}),
   };
 }
 
@@ -289,6 +297,8 @@ function normalizeRow(value: unknown, legacy: boolean): SeatTickProjectState {
     announcedDeploys: conversationIds(raw.announcedDeploys).slice(-SEAT_TICK_ANNOUNCED_DEPLOYS_LIMIT),
     /* Absent on every row from before #2030: a seat remembered as having been
        shown no note is shown it. */
+    ...(typeof raw.autonomyShown === "string" ? { autonomyShown: raw.autonomyShown } : {}),
+    ...(typeof raw.autonomySummaryFor === "string" ? { autonomySummaryFor: raw.autonomySummaryFor } : {}),
     ...(noteRevision(raw.noteShown) === undefined ? {} : { noteShown: noteRevision(raw.noteShown) }),
     /* Absent reads as empty: a stall no wake is remembered naming keeps its
        place ahead of the unstarted tasks. */

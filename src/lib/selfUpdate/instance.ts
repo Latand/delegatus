@@ -1,3 +1,4 @@
+import { readRuntimeSnapshot, type RuntimeOwnerSession } from "@/lib/runtime/snapshotReads";
 /* The one self-update service of this web process, wired to the real
    install (#2007). Everything that resolves the state directory runs on the
    first request, never while a module loads (#1905). */
@@ -103,7 +104,7 @@ export function fenceEpoch(writerClaim: string | null | undefined): number | nul
  * unknown.
  */
 export function journalStatement(
-  rows: readonly RuntimeSession[],
+  rows: readonly RuntimeOwnerSession[],
   owner: { entryKey: string | null; writerEpoch: number | null },
 ): "claimed" | "idle" | "unattributed" | null {
   if (owner.writerEpoch === null || owner.entryKey === null) return null;
@@ -130,7 +131,7 @@ export function journalStatement(
     to an earlier writer stays that writer's. An unfamiliar turn under the
     current key can be current work, so it holds until a later own idle/end.
     Missing history supplies no release proof for an answering process. */
-function orderedJournalStatement(rows: readonly RuntimeSession[], owner: RecordedOwner, events: readonly RuntimeEvent[], missingHistory: boolean, engineCursor: number | null, replayCursor: number, ownConversationIds: Set<string>): OwnerReading["journal"] {
+function orderedJournalStatement(rows: readonly RuntimeOwnerSession[], owner: RecordedOwner, events: readonly RuntimeEvent[], missingHistory: boolean, engineCursor: number | null, replayCursor: number, ownConversationIds: Set<string>): OwnerReading["journal"] {
   const statement = journalStatement(rows, owner);
   const turns = new Map<string, number>();
   const turnOwners = new Map<string, { key: string; epoch: number }>();
@@ -392,8 +393,8 @@ export function ownerCensusReader(
        the snapshot omits the owner's conversation or its artifact, a keyed
        read fetches the row the snapshot omits, and it is read together with
        the listed rows: the owner's writer can stand on both. */
-    const byKey = new Map<string, RuntimeSession[]>();
-    const file = (key: string, row: RuntimeSession) => {
+    const byKey = new Map<string, RuntimeOwnerSession[]>();
+    const file = (key: string, row: RuntimeOwnerSession) => {
       const rows = byKey.get(key) ?? [];
       if (!rows.includes(row)) byKey.set(key, [...rows, row]);
     };
@@ -406,10 +407,10 @@ export function ownerCensusReader(
       listedIds.add(index.conversation({ conversationId: row.conversationId }) ?? row.conversationId);
       if (row.artifactPath) listedPaths.add(row.artifactPath);
     }
-    const keyed = new Map<string, Promise<RuntimeSession[]>>();
-    const speaksFor = (key: string) => (row: RuntimeSession) =>
+    const keyed = new Map<string, Promise<RuntimeOwnerSession[]>>();
+    const speaksFor = (key: string) => (row: RuntimeOwnerSession) =>
       (!!row.writerStatus?.sessionKey && rowKeyId(row.writerStatus.sessionKey) === key) || (!!row.sessionKey && rowKeyId(row.sessionKey) === key);
-    const rowsFor = (owner: RecordedOwner): Promise<RuntimeSession[]> => {
+    const rowsFor = (owner: RecordedOwner): Promise<RuntimeOwnerSession[]> => {
       const key = owner.entryKey!;
       if (!keyed.has(key)) keyed.set(key, (async () => {
         const fetched: RuntimeSession[] = [];
@@ -657,7 +658,7 @@ export function productionDeps(env: Readonly<Record<string, string | undefined>>
       runtimeSnapshot: async () => {
         const client = runtimeHostClient();
         if (!client) throw new Error("runtime host is unavailable");
-        return client.snapshot();
+        return readRuntimeSnapshot(client, "owners");
       },
       owners: ownerCensusReader(),
       pipelines: loadPipelinesForList,

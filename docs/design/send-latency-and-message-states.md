@@ -63,6 +63,11 @@ The earlier latency audit was then read from the local branch above after its re
 
 ## 2. Send A: hop table
 
+The original September trace below is retained as history. The
+[October click-to-paint measurements](#isolated-click-to-paint-hops--2026-10-15)
+extend it through browser submit, request, handler, native transcript and feed
+rendering for both engines.
+
 All times are UTC on 2026-09-20. “Unobserved” means no timestamp exists in the inspected evidence; it does not mean zero latency. Rows are ordered by actual evidence time rather than forcing the requested hops into a serial narrative.
 
 | Hop | Timestamp | Measured interval | Source boundary and interpretation |
@@ -87,6 +92,74 @@ All times are UTC on 2026-09-20. “Unobserved” means no timestamp exists in t
 | Browser receives delta; first text paints | Unobserved | Unobserved | `src/lib/runtime/sse.ts:33` → `src/hooks/runtimeBus.ts:144` → `src/components/runtime/runtimeModel.ts:574` → `src/components/LogFeed.tsx:828` |
 
 Journal `occurred_at` and `recorded_at` coincide for these projected events. `projectEngineHostEvent` does not forward an engine arrival timestamp, so equality cannot prove zero upstream delay. `journal.ts:1732` advances the published sequence in the transaction; commit, compaction and waiter notification follow at `:427`. The timestamp does not separately time those operations.
+
+### Isolated click-to-paint hops — 2026-10-15
+
+The [native send audit](../perf/send-click-to-paint.md) records 160 isolated
+sends through the existing conversation browser driver: 20 per engine,
+prerequisite condition and source version. Installed Claude and Codex binaries
+wrote the native transcripts against credential-free loopback providers. The
+table below uses baseline source with immediate prerequisite replies, n=20 per
+engine. Values are p50 / p95 milliseconds; percentiles must not be added.
+
+| Hop | Codex | Claude |
+|---|---:|---:|
+| Click → optimistic-row frame | 29.0 / 32.4 | 28.9 / 33.4 |
+| Click → POST fetch invocation | 17.8 / 21.2 | 15.8 / 29.6 |
+| POST invocation → isolated handler ingress | 1.3 / 1.7 | 1.3 / 2.1 |
+| Handler ingress → queued phase | 9.7 / 13.1 | 8.0 / 12.6 |
+| Queued → first dispatching phase | 4.0 / 6.1 | 3.0 / 5.0 |
+| First dispatching phase → native record timestamp | 26.5 / 38.2 | 6.0 / 8.1 |
+| Click → native record timestamp | 61.1 / 73.6 | 34.9 / 50.2 |
+| Click → raw engine echo | 62.1 / 74.6 | 47.9 / 66.2 |
+| Native record timestamp → server emits transcript chunk | 3.4 / 8.7 | 21.8 / 30.1 |
+| Server chunk → browser log-bus delivery | 0.3 / 0.9 | 0.4 / 0.8 |
+| Browser chunk → canonical-row frame | 23.7 / 32.2 | 33.5 / 39.5 |
+| Click → canonical-row frame | 92.1 / 111.1 | 93.4 / 123.4 |
+
+The canonical-row checkpoint is the next animation-frame callback after the
+matching native user row appears and its local-outbox attributes retire.
+Screenshots confirm visible messages; the checkpoint has roughly one frame of
+scheduling exposure and does not measure the display compositor. Optimistic
+placement precedes native confirmation. The measured stream carries actual
+transcript bytes through `createLogTailEventStream`, `logBus` and the feed.
+The full production dashboard and middleware are outside this fixture.
+
+**Removed wait:** both preparation paths in `TmuxComposer` now start the
+bounded manager-identity lookup before awaiting `drainBridgeTurnStart`.
+Previously Codex awaited the bridge drain before starting that independent
+lookup. Holding each prerequisite response for 500 ms exposed their serial
+dependency. All 20 delayed Codex manager requests began after the bridge
+completed before the change; all 20 began while it was pending after the
+change. The audit's experimental scheduling change is implemented at both
+plain-send and durable attachment preparation sites.
+
+| Engine; delay per prerequisite | Click → request before / after p50 ms | Click → canonical frame before / after p50 ms | Canonical frame before / after p95 ms |
+|---|---:|---:|---:|
+| Codex; 500 ms | 1,014.7 / 517.0 | 1,131.9 / 653.0 | 1,146.3 / 710.9 |
+| Claude; 500 ms | 515.0 / 515.6 | 616.5 / 642.2 | 644.9 / 675.1 |
+| Codex; immediate | 17.8 / 20.8 | 92.1 / 110.9 | 111.1 / 159.8 |
+| Claude; immediate | 15.8 / 21.0 | 93.4 / 125.5 | 123.4 / 181.1 |
+
+The controlled Codex gain is 497.7 ms to request and 478.9 ms to canonical
+frame. Claude skips the bridge drain here and provides the negative control.
+Immediate-response runs became slower later in the experiment; shared CPU
+quota and growing transcripts were present, and that variation was not
+isolated. These measurements establish the largest removable serial wait
+demonstrated in the isolated traces. Existing production logs start after
+these prerequisites and cannot attribute the production long tail to it.
+
+Both results still precede payload assembly and sending. The manager read
+retains its 15-second deadline and failure-to-no-context behavior. At prelude
+assembly, the cached designation must still name this conversation within its
+30-second TTL. If bridge preparation outlasts that window, the turn omits viewer
+context without another lookup. Bridge acknowledgement retirement still finishes
+before the bridge GET, and the new
+batch is acknowledged only after admission. Attachment retention still
+precedes preparation, sealing and `beginAttempt`; replay reuses the sealed
+envelope and original key without either prerequisite. Ordering and
+exactly-once checks live in `TmuxComposer.viewerPrelude.dom.test.tsx`, with
+lost-response recovery in `TmuxComposer.admissionRecovery.dom.test.tsx`.
 
 ### Serial work and removable waits
 

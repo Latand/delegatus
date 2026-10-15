@@ -3,7 +3,9 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { buildFilesResponse } from "@/app/api/files/response";
-import { statePath } from "@/lib/configDir";
+import { writeSummaryBootstrap } from "@/lib/scanner/summaryBootstrap";
+import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
+import { stateDir, statePath } from "@/lib/configDir";
 import { diffFilesBodies } from "@/lib/filesDelta";
 import type { FilesResponseWorkerRequest } from "@/lib/scanner/filesResponseWorker";
 
@@ -78,9 +80,17 @@ async function build(request: FilesResponseWorkerRequest): Promise<Record<string
   const body = await response.text();
   const etag = response.headers.get("etag") ?? "";
   fs.writeFileSync(bodyFile, body, { encoding: "utf8", mode: 0o600 });
+  const url = new URL(request.url);
+  const stateWrites = JSON.parse(body).systemHealth?.storage?.writes ?? { state: "ok", since: null, freeBytes: null };
+  if (url.searchParams.get("view") === "summary" && !url.searchParams.get("path")?.trim()
+    && !new Headers(request.headers).has(VIEWER_SPAWN_CAPABILITY_HEADER)
+    && stateWrites.state === "ok") {
+    try { await writeSummaryBootstrap(stateDir(), body, etag); }
+    catch { console.warn("[board bootstrap] cache write failed; live response remains available"); }
+  }
   return {
     bodyFile,
-    stateWritesJson: JSON.stringify(JSON.parse(body).systemHealth?.storage?.writes ?? { state: "ok", since: null, freeBytes: null }),
+    stateWritesJson: JSON.stringify(stateWrites),
     contentType: response.headers.get("content-type") ?? "application/json",
     etag,
     timing: response.headers.get("server-timing") ?? "",

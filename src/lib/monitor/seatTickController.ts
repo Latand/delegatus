@@ -1,3 +1,5 @@
+import { pendingAutonomyReports, autonomyActive } from "./autonomy";
+import { expireSeatAutonomy, expireSeatSchedule } from "./seatTickSettings";
 import { releaseControllerForSources } from "@/lib/release/production";
 import type { ReleaseController } from "@/lib/release/run";
 import { runSeatAutoRotation, type SeatAutoRotationPorts } from "./seatAutoRotation";
@@ -987,6 +989,9 @@ async function reconcileOutstandingWake(context: {
   refreshWake?: (state: SeatTickProjectState, wake: SeatTickOutstandingWake) => Promise<Pick<SeatTickOutstandingWake, "text" | "commit"> | null>;
   /** Recheck authentication and MCP immediately before a same-key dispatch. */
   mayDispatch?: () => boolean | Promise<boolean>;
+  admissionReason?: () => string | null;
+  attemptReason?: string | null;
+  retryIntervalMs: number;
   /** When the project's tick settings were last written, which a refusal run
       is counted against. Only the re-dispatching reconcile needs it. */
   settingsUpdatedAt?: string | null;
@@ -1020,7 +1025,7 @@ async function reconcileOutstandingWake(context: {
      is not evidence either way: the wake stays outstanding, so the next check
      asks again rather than crediting or discarding it on a failed read. */
   const observation = await observeWake(context.sources, wake);
-  const observed = observation.observed;
+  let observed = observation.observed;
   let reason = observation.reason;
   let settlement: WakeSettlement | null = null;
   let redispatched: string | null = null;
@@ -1107,54 +1112,61 @@ async function reconcileOutstandingWake(context: {
     }
     const held = state.accounting ? new SeatTickAccounting(state.accounting.filename, context.project).readState() : state;
     if (held.outstandingWake?.clientMessageId !== wake.clientMessageId) return held;
-    if (context.mayDispatch && await context.mayDispatch() === false) return state;
-    // The admission read can await transcript evidence. Re-read authority
-    // afterward so a designation during that wait fences the old retry.
-    const authority = context.sources.seatFor(context.project).active;
-    if (!authority || authority.conversationId !== wake.conversationId || authority.seatEpoch !== wake.seatEpoch) return state;
-    const accounting = state.accounting ? new SeatTickAccounting(state.accounting.filename, context.project) : null;
-    if (!accounting) return state;
-    const token = accounting.beginDispatch(wake);
-    state = accounting.readState();
-    if (!token) return state;
-    wake = state.outstandingWake!;
-    let outcome: DeliveryOutcome | null = null;
-    try {
-      outcome = await context.deliver({ pid: null, path: authority.path ?? context.seat?.path ?? "", conversationId: wake.conversationId,
-        clientMessageId: wake.clientMessageId, text: wake.text!, images: [], origin: delegatusMessageOrigin("seat-tick", context.project), policy: "queue" });
-      redispatched = deliveryOutcomeLabel(outcome);
-      redispatchReason = sendRefusalDetail(outcome);
-    } catch (error) {
-      redispatched = "unreturned";
-      redispatchReason = `the transport call did not return: ${redactBounded(error instanceof Error ? error.message : "unknown error", REASON_LIMIT)}`;
-    }
-    if (outcome) {
-      accounting.returnedDispatch(wake.clientMessageId, token, !outcome.ok && !outcome.operationId && outcome.actuation !== "started" && outcome.resend !== "verify-first");
-      state = accounting.readState();
-      if (state.outstandingWake?.clientMessageId !== wake.clientMessageId) return state;
-      wake = state.outstandingWake!;
-    }
-    if (outcome && wakeReached(outcome)) {
-      settlement = { verdict: "landed", outcome: "landed", row: "commit",
-        detail: "a wake the delivery layer had refused without keeping a record was re-dispatched under its original key and reached the seat; the wake stamp and the event cursor move now, on the plan the check that raised it wrote down" };
-    } else if (outcome?.operationId) {
-      /* The layer now holds it: the next check asks that holder. */
-      state = persist({ ...state, outstandingWake: { ...wake, operationId: outcome.operationId } });
-      wake = state.outstandingWake!;
+    const mayDispatch = !context.mayDispatch || await context.mayDispatch();
+    if (!mayDispatch) {
+      redispatched = "admission-closed";
+      redispatchReason = context.admissionReason?.() ?? "recovery admission is closed";
     } else {
-      /* A refusal waiting cannot change, on a dispatch the accounting recorded
-         as refused with nothing actuated: the record holds nothing under this
-         key and the transport reserved nothing, which is the proof of
-         non-actuation that releases a key. Kept instead, the attempt would be
-         re-dispatched into the same refusal every check for its whole age
-         bound and then replaced by a fresh one that meets it again. */
-      const refusal = outcome && wake.dispatch?.state === "refused" ? seatTickPermanentRefusal(outcome) : null;
-      if (refusal) {
-        const run = seatTickNextRefusalRun(state,
-          { seatEpoch: wake.seatEpoch, lastWakeAt: state.lastWakeAt, settingsUpdatedAt: context.settingsUpdatedAt ?? null },
-          refusal, { clientMessageId: wake.clientMessageId, preparedAt: wake.preparedAt! }, context.at);
-        state = { ...state, refusals: run };
-        settlement = { verdict: "dropped", outcome: "refused", row: "clear", detail: seatTickRefusalReleaseDetail(refusal, run) };
+      // The admission read can await transcript evidence. Re-read authority
+      // afterward so a designation during that wait fences the old retry.
+      const authority = context.sources.seatFor(context.project).active;
+      if (!authority || authority.conversationId !== wake.conversationId || authority.seatEpoch !== wake.seatEpoch) return state;
+      const accounting = state.accounting ? new SeatTickAccounting(state.accounting.filename, context.project) : null;
+      if (!accounting) return state;
+      const token = accounting.beginDispatch(wake);
+      state = accounting.readState();
+      if (!token) return state;
+      wake = state.outstandingWake!;
+      let outcome: DeliveryOutcome | null = null;
+      try {
+        outcome = await context.deliver({ pid: null, path: authority.path ?? context.seat?.path ?? "", conversationId: wake.conversationId,
+          clientMessageId: wake.clientMessageId, text: wake.text!, images: [], origin: delegatusMessageOrigin("seat-tick", context.project), policy: "queue" });
+        redispatched = deliveryOutcomeLabel(outcome);
+        redispatchReason = sendRefusalDetail(outcome);
+      } catch (error) {
+        redispatched = "unreturned";
+        redispatchReason = `the transport call did not return: ${redactBounded(error instanceof Error ? error.message : "unknown error", REASON_LIMIT)}`;
+      }
+      if (outcome) {
+        accounting.returnedDispatch(wake.clientMessageId, token, !outcome.ok && !outcome.operationId && outcome.actuation !== "started" && outcome.resend !== "verify-first");
+        state = accounting.readState();
+        if (state.outstandingWake?.clientMessageId !== wake.clientMessageId) return state;
+        wake = state.outstandingWake!;
+      }
+      if (outcome && wakeReached(outcome)) {
+        settlement = { verdict: "landed", outcome: "landed", row: "commit",
+          detail: "a wake the delivery layer had refused without keeping a record was re-dispatched under its original key and reached the seat; the wake stamp and the event cursor move now, on the plan the check that raised it wrote down" };
+      } else if (outcome?.operationId) {
+        /* The layer now holds it: the next check asks that holder. */
+        state = persist({ ...state, outstandingWake: { ...wake, operationId: outcome.operationId } });
+        wake = state.outstandingWake!;
+        // The absence read preceded admission. This operation now owns the wake.
+        observed = "retained";
+      } else {
+        /* A refusal waiting cannot change, on a dispatch the accounting recorded
+           as refused with nothing actuated: the record holds nothing under this
+           key and the transport reserved nothing, which is the proof of
+           non-actuation that releases a key. Kept instead, the attempt would be
+           re-dispatched into the same refusal every check for its whole age
+           bound and then replaced by a fresh one that meets it again. */
+        const refusal = outcome && wake.dispatch?.state === "refused" ? seatTickPermanentRefusal(outcome) : null;
+        if (refusal) {
+          const run = seatTickNextRefusalRun(state,
+            { seatEpoch: wake.seatEpoch, lastWakeAt: state.lastWakeAt, settingsUpdatedAt: context.settingsUpdatedAt ?? null },
+            refusal, { clientMessageId: wake.clientMessageId, preparedAt: wake.preparedAt! }, context.at);
+          state = { ...state, refusals: run };
+          settlement = { verdict: "dropped", outcome: "refused", row: "clear", detail: seatTickRefusalReleaseDetail(refusal, run) };
+        }
       }
     }
   }
@@ -1174,6 +1186,27 @@ async function reconcileOutstandingWake(context: {
       detail: "the delivery record was fenced, but its admitted transport call has not returned; the original attempt remains outstanding until that call is accounted for" };
   }
   const kept = !settlement || settlement.row === "keep";
+  // Recovery diagnostics advance only while retrying this seat's unsent wake.
+  // Retained, uncertain and superseded attempts keep their recorded evidence.
+  const recoveryChecked = kept && !replaced && (redispatched !== null
+    || (wake.dispatch?.state === "refused" && !wake.operationId
+      && (observed === "absent" || observed === "unknown" || observed === "unreadable")));
+  if (recoveryChecked) {
+    state = persist({ ...state, outstandingWake: { ...wake, recovery: {
+      checkedAt: context.at,
+      lastAttemptAt: (redispatched && redispatched !== "admission-closed") || context.attemptReason !== undefined
+        ? context.at : wake.recovery?.lastAttemptAt ?? null,
+      nextRetryAt: new Date(context.now + context.retryIntervalMs).toISOString(),
+      deadlineAt: new Date(preparedAt + context.wakeIntervalMs).toISOString(),
+      reason: redactBounded(redispatchReason || (redispatched ? `dispatch ${redispatched}` : null)
+        || context.attemptReason || reason || observed || "unknown", 500),
+    } } });
+    if (state.outstandingWake?.clientMessageId !== wake.clientMessageId
+      || state.outstandingWake.operationId !== wake.operationId
+      || state.outstandingWake.dispatch?.token !== wake.dispatch?.token
+      || state.outstandingWake.dispatch?.state !== wake.dispatch?.state) return state;
+    wake = state.outstandingWake;
+  }
   /* #1594, #1746. A kept attempt is an obligation, and it is also a fence on
      the next wake — two jobs one field was doing at once. The obligation is
      right and survives; the fence is only sound while the attempt can still
@@ -1210,6 +1243,8 @@ async function reconcileOutstandingWake(context: {
           : " The attempt is retired unresolved on its age bound, never re-sent and crediting nothing: it no longer holds back this project's wakes, and the next check re-derives everything it named.")
         : " The tick keeps the attempt and dispatches no replacement wake for this project until it lands or the delivery record proves it never actuated."
           + keptAttemptExits(observation.evidence, lapsesAt))
+      + ` Arrival deadline: ${new Date(preparedAt + context.wakeIntervalMs).toISOString()}.`
+      + (recoveryChecked ? ` Next check: ${wake.recovery!.nextRetryAt}.` : "")
       + ` Check the seat's conversation for the wake and the delivery record under its client message id ${wake.clientMessageId}`;
     context.unresolved.push({ key: wake.clientMessageId, preparedAt: wake.preparedAt!, detail, fencing: !retired });
   }
@@ -1340,13 +1375,21 @@ export async function runSeatTickCheck(
   }
 }
 
+function needsWorkSources(verdict: SeatTickVerdict): boolean {
+  return verdict.kind === "proactive" || verdict.kind === "wake" && verdict.reasons.some(reason => reason.kind === "autonomy-idle");
+}
+
 function alarmPayload(input: SeatTickCheckInput, verdict: Extract<SeatTickVerdict, { kind: "wake" | "proactive" }>, issues: readonly ProposalIssue[] = [], snapshotAt = new Date(input.now).toISOString()) {
+  const autonomyShown = autonomyActive(input.settings.autonomy, input.now) ? `${input.settings.autonomy!.startedAt}:${input.settings.autonomy!.updatedAt}` : undefined;
   const noteShown = seatTickNoteRevision(input.settings.monitorPrompt);
   const monitorPromptUnchanged = noteShown !== null && input.state.noteShown === noteShown;
   const terminalChildren = input.children.filter((child) => child.status === "terminal").map((child) => child.outcomeId ?? child.conversationId);
   const renderedVerdict = verdict.kind === "wake" ? { ...verdict, items: withChildFinalMessages(verdict.items) } : verdict;
   const payload = verdict.kind === "wake"
     ? seatTickWakePayload({
+      autonomy: input.settings.autonomy,
+      autonomyUnchanged: !!autonomyShown && input.state.autonomyShown === autonomyShown,
+      now: input.now,
       project: input.project,
       workers: input.workers,
       snapshotAt,
@@ -1361,6 +1404,7 @@ function alarmPayload(input: SeatTickCheckInput, verdict: Extract<SeatTickVerdic
       skippedChildren: verdict.skippedChildren,
       unreadableChildren: verdict.unreadableChildren,
       signals: input.signals,
+      issues,
       /* What the check could not read travels with the wake it could still
          raise (#1298), so the seat acts on the rest knowing what is missing
          from it. */
@@ -1391,6 +1435,8 @@ function alarmPayload(input: SeatTickCheckInput, verdict: Extract<SeatTickVerdic
     eventsThrough: input.events.at(-1)?.seq ?? input.state.eventsThrough ?? 0,
     terminalChildren,
     noteShown,
+    ...(autonomyShown ? { autonomyShown } : {}),
+    ...(verdict.kind === "wake" && verdict.reasons.some(reason => reason.kind === "autonomy-ended") ? { autonomySummaryFor: pendingAutonomyReports(input.settings, input.now)[0]?.startedAt } : {}),
     bridgeReports: input.reports?.bridgeReports === true,
     frozenText: text,
   });
@@ -1438,16 +1484,19 @@ async function check(
       return { identity, cleanups };
     } catch { return null; } // Unreadable ownership cannot license recovery.
   };
+  let admissionDetail: string | null = null;
   const admissionFor = async (seat: { conversationId: string; seatEpoch: number; designatedAt?: string | null }, requireDeadHost = false) => {
     const observed = recoveryIdentity(seat.conversationId);
     let identity = observed?.identity ?? null;
     let deadHost = false;
+    let hostVerdict = "MCP available";
     if (requireDeadHost || mcpHealthFor(seat, sources.now()).status === "dead") {
       try {
         const rows = await sources.liveness({ conversationId: seat.conversationId, stallAfterMs: policy.stallAfterMs, limit: 1 });
         deadHost = rows.some(row => row.conversationId === seat.conversationId && row.host?.state === "gone"
           && (row.reason === "host_gone_turn_settled" || row.reason === "host_gone_turn_open"));
-      } catch { /* Unknown liveness never licenses a replacement. */ }
+        hostVerdict = rows.map(row => `${row.host?.state ?? "unknown"}/${row.reason}`).join(", ") || "host evidence absent";
+      } catch { hostVerdict = "host evidence unreadable"; }
     }
     const currentSeat = () => {
       const current = sources.seatFor(canonical).active;
@@ -1472,7 +1521,14 @@ async function check(
         && (!deadHost || identity === null || recoveryIdentity(seat.conversationId)?.identity !== identity))
         throw new DeliveryAdmissionRefusedError("seat-mcp-unavailable");
     };
-    try { guard(); return { guard, authorityGuard: () => { currentSeat(); } }; } catch { return null; }
+    try {
+      guard();
+      admissionDetail = `recovery admitted: ${hostVerdict}`;
+      return { guard, authorityGuard: () => { currentSeat(); } };
+    } catch (error) {
+      admissionDetail = `recovery refused: ${error instanceof DeliveryAdmissionRefusedError ? error.code : "authority unreadable"}; ${hostVerdict}; next check ${new Date(sources.now() + policy.checkIntervalMs).toISOString()}`;
+      return null;
+    }
   };
   let retryAdmission: Awaited<ReturnType<typeof admissionFor>> = null;
   let recoveryDetail: string | null = null;
@@ -1621,25 +1677,33 @@ async function check(
     refreshWake: async (state, wake) => {
       let input = await refreshSeatTickEvidence(await gatherSeatTickInput(canonical, state, policy, sources), sources);
       let issues: readonly ProposalIssue[] = [];
-      if (seatTickDecision(input).verdict.kind === "proactive") {
+      if (needsWorkSources(seatTickDecision(input).verdict)) {
         issues = await (dependencies.proposalIssues ?? defaultProposalIssues)(canonical, sources);
         input = await refreshSeatTickEvidence(input, sources);
       }
       const verdict = seatTickDecision(input).verdict;
       if (!input.seat || input.seat.seatEpoch !== wake.seatEpoch || input.seat.conversationId !== wake.conversationId
         || (verdict.kind !== "wake" && verdict.kind !== "proactive")) return null;
-      return alarmPayload(input, verdict, issues, wake.preparedAt);
+      return alarmPayload(input, verdict, issues);
     },
     mayDispatch: async () => {
-      if ((opened.authIncident && opened.authIncident.recoveredThrough === undefined) || activeDrain()) return false;
+      if ((opened.authIncident && opened.authIncident.recoveredThrough === undefined) || activeDrain()) {
+        admissionDetail = activeDrain() ? "AUTO_UPDATE_DRAIN" : "seat-auth-failed";
+        return false;
+      }
       const seat = await seatInput(canonical, policy, sources);
       if (seat && !seatTurnProgressing(seat)) {
         const outcome = await sources.seatTurnOutcome?.(seat.conversationId) ?? null;
-        if (outcome && openSeatAuthIncident(canonical, seat, outcome, opened.authRecoveredThrough)) return false;
+        if (outcome && openSeatAuthIncident(canonical, seat, outcome, opened.authRecoveredThrough)) {
+          admissionDetail = "seat-auth-failed";
+          return false;
+        }
       }
       retryAdmission = seat?.conversationId ? await admissionFor({ ...seat, conversationId: seat.conversationId }) : null;
       return retryAdmission !== null;
     },
+    admissionReason: () => admissionDetail,
+    retryIntervalMs: policy.checkIntervalMs,
     settingsUpdatedAt: settingsUpdatedAtFor(canonical, sources),
     at: new Date(opening).toISOString(),
     now: opening,
@@ -1667,7 +1731,7 @@ async function check(
   const authDetail = await recoverSeatAuthentication(input, sources, readState, writeState, ensureCard, dependencies.seatAuth ?? {});
   const autoRotateDetail = await runSeatAutoRotation(input, sources, readState, writeState, ensureCard, deliver, dependencies.seatAutoRotation ?? {});
   let proposalIssues: readonly ProposalIssue[] = [];
-  if (seatTickDecision(input).verdict.kind === "proactive") {
+  if (needsWorkSources(seatTickDecision(input).verdict)) {
     proposalIssues = await (dependencies.proposalIssues ?? defaultProposalIssues)(input.project, sources);
     input = await refreshSeatTickEvidence(input, sources);
   }
@@ -1677,7 +1741,10 @@ async function check(
     try {
       ensureCard(input.project, {
         ref: "seat-viewer-mcp-unavailable", kind: "mcp-unavailable",
-        detail: mcpHealth!.detail, state: mcpHealth!.status === "dead" ? "open" : "resolved",
+        detail: mcpHealth!.status === "dead"
+          ? `${mcpHealth!.detail}; ${admissionDetail ?? "host recovery will be checked"}; next check ${new Date(input.now + policy.checkIntervalMs).toISOString()}. Check the seat conversation; rotate the seat if recovery remains unavailable.`
+          : mcpHealth!.detail,
+        state: mcpHealth!.status === "dead" ? "open" : "resolved",
         instance: String(input.seat.seatEpoch),
       }, new Date(input.now).toISOString());
     } catch (error) {
@@ -1702,9 +1769,14 @@ async function check(
      behaviour. What it changes is the RECORD: a row that still says "off"
      beside a tick that is ticking is the kind of disagreement someone reads
      off the board at the worst possible moment. */
+  if (input.settings.autonomy?.endReason === "expired") {
+    try { expireSeatAutonomy(input.project, input.now); }
+    catch (error) { console.error("[seat tick] autonomy expiry could not be persisted", error instanceof Error ? error.name : "unknown"); }
+  }
   if (input.settings.lapsed) {
     try {
-      (dependencies.writeSettings ?? writeSeatTickSettings)(input.project, seatTickSettingsAfterLapse(input.project, input.settings));
+      if (dependencies.writeSettings) dependencies.writeSettings(input.project, seatTickSettingsAfterLapse(input.project, input.settings));
+      else expireSeatSchedule(input.project, input.now, SEAT_TICK_WAKE_INTERVAL_MS);
     } catch (error) {
       console.error("[seat tick] lapsed settings could not be persisted", error instanceof Error ? error.name : "unknown");
     }
@@ -1910,7 +1982,7 @@ async function check(
                reconcile is where a same-key recovery may happen (#1465). */
             state = await reconcileOutstandingWake({ project: input.project, state,
               seat: sources.seatFor(input.project).active ?? null, sources, appendRecord, writeState, unresolved, at, now: input.now,
-              wakeIntervalMs: input.settings.wakeIntervalMs });
+              wakeIntervalMs: input.settings.wakeIntervalMs, retryIntervalMs: policy.checkIntervalMs, attemptReason: sendDetail });
           }
         }
       }
@@ -1945,7 +2017,7 @@ async function check(
     deferred: verdict.kind === "wake" ? verdict.deferred : 0,
     eventsThrough: state.eventsThrough ?? 0,
     delivery,
-    detail: [rollbackDetail, authDetail, autoRotateDetail, recoveryDetail, verdictDetail(verdict), fenceDetail, sendDetail, ...maintenanceDetails].filter((part): part is string => !!part).join("; ") || null,
+    detail: [rollbackDetail, authDetail, autoRotateDetail, recoveryDetail, admissionDetail, verdictDetail(verdict), fenceDetail, sendDetail, ...maintenanceDetails].filter((part): part is string => !!part).join("; ") || null,
   };
   appendRecord(record);
   return record;
@@ -2248,7 +2320,17 @@ export function startSeatTick(ports: {
     /* A check that outran its interval drops the next one rather than stacking
        it. A tick that would land behind the one before it is stale by
        construction, and staleness is the whole reason nothing is queued. */
-    if (tickHost.__llvSeatTickRunning || handoffHeld() || drainHeld()) return;
+    const gate = tickHost.__llvSeatTickRunning ? "sweep-running" : handoffHeld() ? "restart-handoff" : drainHeld() ? "update-drain" : null;
+    if (gate) {
+      const at = new Date().toISOString();
+      const detail = `seat tick held: ${gate}; next check ${new Date(Date.parse(at) + policy.checkIntervalMs).toISOString()}`;
+      log(`[seat tick] ${detail}`);
+      try {
+        (ports.appendRecord ?? appendSeatTickRecord)({ schemaVersion: 1, at, project: "", seatEpoch: null,
+          verdict: "refused", reasons: [], items: 0, deferred: 0, eventsThrough: 0, delivery: null, detail });
+      } catch { /* The service log retains the hold if the journal is unavailable. */ }
+      return;
+    }
     tickHost.__llvSeatTickRunning = true;
     void Promise.resolve(sweep())
       .catch((error) => console.error("[seat tick] sweep failed", error instanceof Error ? error.name : "unknown"))

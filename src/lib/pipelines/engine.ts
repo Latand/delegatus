@@ -1,3 +1,5 @@
+import { pipelineRuntimeReads } from "./runtimeReads";
+import { readRuntimeSnapshot } from "@/lib/runtime/snapshotReads";
 import { pipelinePublishesRemoteBranch, MISSING_DELIVERY_REMOTE, LOCAL_DELIVERY_PUBLISH_REFUSAL } from "./publication";
 import { StateSnapshotChangedError } from "@/lib/state/sqliteStateStore";
 import { controllerSnapshotPorts, StaleControllerFlowError } from "./controllerSnapshot";
@@ -1370,7 +1372,7 @@ export function defaultPipelinePorts(
     panes?: { snapshot?: typeof paneInfo; observation?: typeof panePidMap };
     spawnRecoveryClient?: () => RuntimeHostClient | null } = {},
 ): PipelinePorts {
-  let runtimeSnapshot: ReturnType<NonNullable<ReturnType<typeof runtimeHostClient>>["snapshot"]> | null = null;
+  const runtimeReads = pipelineRuntimeReads();
   const registry = agentRegistry();
   let registrySnapshot: ReturnType<typeof registry.readOnlySnapshot> | null = null;
   let adoptionCandidatesByPipeline: Map<string, PipelineAdoptionCandidate[]> | null = null;
@@ -1575,7 +1577,7 @@ export function defaultPipelinePorts(
       // Null lookup can also mean compaction. Require the original admission
       // in a contiguous retained journal tail through a fixed current cursor,
       // with neither a first-message receipt nor a native turn after it.
-      const snapshot = await client.snapshot();
+      const snapshot = await readRuntimeSnapshot(client, "metadata");
       let after = Math.max(snapshot.retentionFloorSeq, snapshot.snapshotSeq - 4_096);
       let admitted = false;
       let covered = after === snapshot.snapshotSeq;
@@ -1704,19 +1706,17 @@ export function defaultPipelinePorts(
     conversationAgentActive: async (conversationId) => {
       const client = runtimeHostClient();
       if (!client) return null;
-      runtimeSnapshot ??= client.snapshot();
-      let snapshot;
+      let session;
       try {
-        snapshot = await runtimeSnapshot;
+        session = await runtimeReads.session(client, conversationId);
       } catch {
         return null;
       }
-      const session = snapshot.sessions.find((item) => item.conversationId === conversationId);
       if (!session) return null;
       if (["dead", "unhosted", "conflict"].includes(session.host)) {
         /* A host may be adopted again during this controller pass. Do not let
            affirmative death evidence poison later liveness checks in the tick. */
-        runtimeSnapshot = null;
+        runtimeReads.reset();
         return false;
       }
       if (session.turn === "running" || session.turn === "interrupt_requested" || session.attentionIds.length > 0) return true;
@@ -1729,9 +1729,7 @@ export function defaultPipelinePorts(
       const client = runtimeHostClient();
       if (!client) return null;
       try {
-        runtimeSnapshot ??= client.snapshot();
-        const current = await runtimeSnapshot;
-        const session = current.sessions.find((item) => item.conversationId === conversationId);
+        const session = await runtimeReads.session(client, conversationId);
         if (!session || session.attentionIds.length > 0 || session.host === "conflict") return null;
         if (session.host === "dead" || session.host === "unhosted") {
           const conversation = registry.conversation(conversationId as ViewerConversationId);
@@ -1849,9 +1847,8 @@ export function defaultPipelinePorts(
     runtimeHostEpoch: async () => {
       const client = runtimeHostClient();
       if (!client) return null;
-      runtimeSnapshot ??= client.snapshot();
       try {
-        return (await runtimeSnapshot).runtime.hostEpoch;
+        return (await runtimeReads.metadata(client)).runtime.hostEpoch;
       } catch {
         return null;
       }
@@ -12958,8 +12955,6 @@ export async function patchPipeline(
         if (!isEffectiveRole(target.effectiveRole)) return { error: "stage role is not a valid engine/model/effort combination", status: 400 };
         const overrideSizingRefusal = stageSizingRefusal(pipeline.stages.map(item => item.id === target.id ? target : item), graphEditBriefer(actor, pipeline, ports), ports, new Set([target.id]));
         if (overrideSizingRefusal) return { error: overrideSizingRefusal.error, status: 400 };
-        const tierRefusal = stageAccountRefusal([target], pipeline.project, ports);
-        if (tierRefusal) return tierRefusal;
       }
 
       if (req.prompt !== undefined) {
@@ -12996,6 +12991,12 @@ export async function patchPipeline(
           target.account = requested;
         }
       }
+      // Validate the resolved runtime against the account this request leaves
+      // on the stage; clearing the pin checks the project's full allowed pool.
+      if (changesRoleOrRuntime || req.account !== undefined) {
+        const tierRefusal = stageAccountRefusal([target], pipeline.project, ports);
+        if (tierRefusal) return tierRefusal;
+      }
       let runtimeSwitch: PipelineRuntimeSwitch | null = null;
       if (req.applyNow && live?.conversationId) {
         const engine = target.effectiveRole.engine;
@@ -13010,16 +13011,22 @@ export async function patchPipeline(
         const effort = target.effectiveRole.effort ?? generation?.effort;
         if (!model || !effort) return { error: "apply now requires a resolved model and effort; select them explicitly", status: 400 };
         const preferredId = generation?.accountId ?? null;
-        const unavailableIds = usageLimitsOn(live, engine).filter(item => !providerAccountRecovered(pipeline, { ...live, effectiveRole: { ...live.effectiveRole, engine, model } }, item.accountId, item.limitedAt ?? null, item.resetsAt, ports)).map(item => item.accountId);
+        const serviceTier = target.effectiveRole.serviceTier ?? null;
+        const offers = engine === "codex" && serviceTier ? tierOffers(listCodexAccounts(), model, serviceTier) : null;
+        // A pool offering the tier does not prove the preferred account offers it.
+        const unavailableIds = [
+          ...usageLimitsOn(live, engine).filter(item => !providerAccountRecovered(pipeline, { ...live, effectiveRole: { ...live.effectiveRole, engine, model } }, item.accountId, item.limitedAt ?? null, item.resetsAt, ports)).map(item => item.accountId),
+          ...(offers?.lacking ?? []),
+        ];
         let accountId = target.account ?? (allowed(preferredId) ? preferredId : null);
         if (ports.resolveProjectSpawn) {
           const resolution = ports.resolveProjectSpawn(engine, { project: pipeline.project, model, requestedId: target.account, preferredId, unavailableIds });
           if (resolution.kind !== "available" || !allowed(resolution.account.accountId)) return { error: "no allowed target account is available", status: 409 };
           accountId = resolution.account.accountId;
         }
-        if (!allowed(accountId) || unavailableIds.includes(accountId!)) return { error: "no allowed target account is available", status: 409 };
+        if (!allowed(accountId) || unavailableIds.includes(accountId!) || (offers && !offers.offering.includes(accountId!))) return { error: "no allowed target account is available", status: 409 };
         const to = { engine, model, effort,
-          serviceTier: target.effectiveRole.serviceTier ?? null, accountId, accountPinned: !!target.account };
+          serviceTier, accountId, accountPinned: !!target.account };
         const open = openRuntimeSwitch(live);
         if (open) return runtimeTargetsEqual(open.to, to) && open.to.accountPinned === to.accountPinned ? { pipeline, runtimeSwitch: open, replayed: true }
           : { error: "another runtime switch is in progress", status: 409, code: "RUNTIME_SWITCH_IN_PROGRESS" };

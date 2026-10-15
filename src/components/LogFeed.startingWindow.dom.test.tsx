@@ -30,8 +30,8 @@ import { emptyStore } from "@/components/runtime/runtimeModel";
  *    rollout journals twice;
  *  - "working…" carries a running duration (#1397), anchored on the launch
  *    admission while no transcript turn exists and never running backwards
- *    once the later transcript anchor appears, in the footer indicator and in
- *    the header WORKING badge alike.
+ *    once the later transcript anchor appears, in the footer indicator. The
+ *    header keeps its accessible working activity dot (#2783).
  */
 
 const dom = new HappyWindow({ width: 1280, height: 800 });
@@ -74,9 +74,9 @@ Object.assign(globalThis, {
 let tailLines: string[] = [];
 let tailStart = 0;
 
-const actualRuntimeHooks = await import("@/hooks/useRuntime");
-const actualLogTail = await import("@/hooks/useLogTail");
-const actualToolCues = await import("@/hooks/useToolActivityCues");
+const actualRuntimeHooks = { ...await import("@/hooks/useRuntime") };
+const { setLogFeedDependenciesForTests } = await import("./logFeedDependencies");
+const actualToolCues = { ...await import("@/hooks/useToolActivityCues") };
 const inertRuntime = { enabled: false, connection: "offline" as const, resyncedAt: null, store: emptyStore() };
 mock.module("@/hooks/useRuntime", () => ({
   ...actualRuntimeHooks,
@@ -87,8 +87,7 @@ mock.module("@/hooks/useRuntime", () => ({
   useRuntimeReceiptsForArtifact: () => [],
   useRuntimeFlow: () => null,
 }));
-mock.module("@/hooks/useLogTail", () => ({
-  ...actualLogTail,
+const feedDependencies = {
   useLogTail: () => ({
     lines: tailLines,
     linesStart: tailStart,
@@ -104,7 +103,7 @@ mock.module("@/hooks/useLogTail", () => ({
     loadOlder: async () => 0,
     prependGen: 0,
   }),
-}));
+};
 mock.module("@/hooks/useToolActivityCues", () => ({
   ...actualToolCues,
   useToolActivityCues: () => undefined,
@@ -178,6 +177,7 @@ let ticks: Array<() => void> = [];
 
 const roots = new Set<Root>();
 beforeEach(() => {
+  setLogFeedDependenciesForTests(feedDependencies);
   now = T0;
   Date.now = () => now;
   ticks = [];
@@ -197,6 +197,7 @@ beforeEach(() => {
 afterEach(() => {
   for (const root of roots) flushSync(() => root.unmount());
   roots.clear();
+  setLogFeedDependenciesForTests(null);
   dom.document.body.replaceChildren();
   Date.now = originalDateNow;
   globalThis.setInterval = realSetInterval;
@@ -204,7 +205,6 @@ afterEach(() => {
 });
 afterAll(() => {
   mock.module("@/hooks/useRuntime", () => actualRuntimeHooks);
-  mock.module("@/hooks/useLogTail", () => actualLogTail);
   mock.module("@/hooks/useToolActivityCues", () => actualToolCues);
 });
 
@@ -356,8 +356,8 @@ function footerTimer(host: HTMLElement): string | null {
   return host.querySelector('[data-turn-status="running"] [role="timer"]')?.textContent ?? null;
 }
 
-function headerBadge(host: HTMLElement): string | null {
-  return dom.document.querySelector('[data-card-status="running"]')?.textContent ?? null;
+function headerActivity(host: HTMLElement): string | null {
+  return host.querySelector('[data-card-status="running"]')?.getAttribute("aria-label") ?? null;
 }
 
 test("issue 1398: the stage's INTERNAL prompt renders exactly once before and after its transcript record lands", () => {
@@ -404,13 +404,12 @@ test("issue 1397: working… carries the elapsed time from the launch admission 
   now = T0 + 45_000;
 
   /* Reconciling, first message queued, no transcript turn: the footer says
-     working… with a running duration, and so does the header WORKING badge. */
+     working… with a running duration; the header carries the working dot. */
   const { host, root } = render(placeholder(conversationId, launchId));
   const footer = host.querySelector('[data-turn-status="running"]');
   expect(footer?.textContent).toContain("working…");
   expect(footerTimer(host)).toBe("45s");
-  expect(headerBadge(host)).toContain("working");
-  expect(headerBadge(host)).toContain("45s");
+  expect(headerActivity(host)).toBe("working");
 
   /* The first transcript record lands eight seconds after the admission, the
      agent answers within the same poll, and the board flips the placeholder
@@ -424,14 +423,13 @@ test("issue 1397: working… carries the elapsed time from the launch admission 
   expect(host.querySelector("[data-launch-chips]")).toBeNull();
   expect(footerTimer(host)).toBe("1m");
   expect(footerTimer(host)).not.toBe("52s");
-  expect(headerBadge(host)).toContain("1m");
-  expect(headerBadge(host)).not.toContain("52s");
+  expect(headerActivity(host)).toBe("working");
 
   /* Ticking on, still from the admission. */
   now = T0 + 61_000;
   rerender(root, answered(conversationId, launchId));
   expect(footerTimer(host)).toBe("1m 1s");
-  expect(headerBadge(host)).toContain("1m 1s");
+  expect(headerActivity(host)).toBe("working");
 });
 
 test("issue 1397: a poll that still carries the launch chips on the open turn is the same work, and its retirement is no jump either", () => {
@@ -440,7 +438,7 @@ test("issue 1397: a poll that still carries the launch chips on the open turn is
   now = T0 + 45_000;
   const { host, root } = render(placeholder(conversationId, launchId));
   expect(footerTimer(host)).toBe("45s");
-  expect(headerBadge(host)).toContain("45s");
+  expect(headerActivity(host)).toBe("working");
 
   /* The board caught the scanned row before the agent answered: the launch
      still rides it as chips, the open turn starts at the record. */
@@ -449,7 +447,7 @@ test("issue 1397: a poll that still carries the launch chips on the open turn is
   rerender(root, adopted(conversationId, launchId));
   expect(host.querySelector("[data-launch-chips]")).not.toBeNull();
   expect(footerTimer(host)).toBe("53s");
-  expect(headerBadge(host)).toContain("53s");
+  expect(headerActivity(host)).toBe("working");
 
   /* The agent answers and the chips retire, same open turn: still the admission. */
   tailLines = answeredRecords;
@@ -457,7 +455,7 @@ test("issue 1397: a poll that still carries the launch chips on the open turn is
   rerender(root, answered(conversationId, launchId));
   expect(host.querySelector("[data-launch-chips]")).toBeNull();
   expect(footerTimer(host)).toBe("1m");
-  expect(headerBadge(host)).toContain("1m");
+  expect(headerActivity(host)).toBe("working");
 });
 
 test("a seat's mandate in the launch window is Delegatus's collapsed card, never the operator's bubble", () => {

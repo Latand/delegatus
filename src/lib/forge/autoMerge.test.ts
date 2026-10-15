@@ -134,6 +134,7 @@ function harness(options: { setting?: Partial<MergeOnReviewSetting>; required?: 
       return pr.reviewRead ?? (pr.reviews ?? []).map((review) => JSON.stringify({ reviewer: review.user.login, isBot: review.user.type === "Bot", state: review.state })).join("\n");
     }
     if (args[0] === "api" && args[1]?.startsWith(`repos/${REPO}/branches/`)) return JSON.stringify(options.required ?? []);
+    if (args[0] === "api" && /\/issues\/\d+\/comments/.test(args[1] ?? "")) return "";
     if (args[0] === "repo" && args[1] === "view") return JSON.stringify({ squashMergeAllowed: true, mergeCommitAllowed: true, rebaseMergeAllowed: true });
     if (args[0] === "api" && args[1] === "-X" && args[2] === "PUT") {
       const number = Number(/pulls\/(\d+)\/update-branch/.exec(args[3]!)![1]);

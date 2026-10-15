@@ -242,11 +242,16 @@ test("a seat whose stdio Viewer MCP is dead is carded and receives no more tick 
 test.each([
   "cleared", "retained dead claim", "retained during MCP grace", "terminal failure", "unsettled failure",
   "composer after cleanup", "composer during MCP grace", "rotation after cleanup",
+  "composer before claim", "composer before enqueue", "rotation during runtime admission", "drain during runtime admission",
+  "terminal exit after claim",
 ] as const)("a deploy-settled wake runs shared composer recovery with %s", async scenario => {
   const { recoverDeadStructuredConversation } = await import("@/lib/runtime/structuredRecovery");
+  const { spawnStructuredConversation } = await import("@/lib/runtime/structuredSpawn");
+  const { captureProcessIdentity } = await import("@/lib/processIdentity");
+  const { writeDrain, drainFile, releaseDrain } = await import("@/lib/selfUpdate/drain");
   const f = childFixture("composer-deploy-recovery", false, "off");
   setAgentRegistryForTests(f.registry);
-  fs.writeFileSync(f.seat.path!, "");
+  fs.writeFileSync(f.seat.path!, `${JSON.stringify({ type: "user", message: { role: "user", content: "fixture prompt" } })}\n`);
   const key = sessionKeyFromTranscript("claude", f.seat.path!)!;
   const entry = { key, artifactPath: f.seat.path!, cwd: f.cwd, accountId: null,
     launchProfile: emptyLaunchProfile({ cwd: f.cwd, title: "Completed orchestrator" }), status: "dead" as const, host: null,
@@ -265,12 +270,22 @@ test.each([
   const oldDigest = f.registry.seatMcpReceipt(f.seat.conversationId)!.spawnCapabilityDigest;
   f.seed();
   let spawns = 0;
+  let starts = 0;
   const deliveredKeys: string[] = [];
-  const rig = childRig(f, { seatDeployments: [{ conversationId: f.seat.conversationId, deploymentId: "composer-deploy" }],
+  const rig = childRig(f, { settings: { ...defaultSeatTickSettings(f.project), wakeIntervalMinutes: 15 },
+    seatDeployments: [{ conversationId: f.seat.conversationId, deploymentId: "composer-deploy" }],
     deployments: { "composer-deploy": { phase: "succeeded", terminal: true, revision: "abcdef1234" } },
     seatActivity: { conversationId: f.seat.conversationId, host: { state: "gone", kind: "structured", pid: null }, lifecycle: "gone", reason: "host_gone_turn_settled" },
     deliverWith: message => deliverConversationMessage(message, {
-      recover: request => recoverDeadStructuredConversation(request, { registry: f.registry, client: {} as RuntimeHostClient,
+      recover: request => recoverDeadStructuredConversation(request, { registry: f.registry, client: {
+        command: async () => {
+          if (scenario === "rotation during runtime admission") rig.seat = { conversationId: SUCCESSOR, seatEpoch: 8, path: null };
+          if (scenario === "drain during runtime admission") writeDrain(drainFile(), {
+            id: "recovery-drain", target: "a".repeat(40), since: new Date().toISOString(), until: 0, persistent: true,
+          });
+          return {};
+        }, append: async () => ({}), transitionOperation: async () => ({}),
+      } as unknown as RuntimeHostClient,
         transport: () => "structured", park: () => null,
         resolveAccount: () => {
           if (composerRace) f.registry.upsert({ ...entry, claimEpoch: 2, claimOwner: "structured-host:replacement", status: "idle" });
@@ -280,18 +295,38 @@ test.each([
         spawn: async input => {
           expect(f.row().outstandingWake?.clientMessageId).toBe(message.clientMessageId ?? undefined);
           spawns += 1;
+          if (scenario === "composer before claim") f.registry.upsert({ ...entry, claimEpoch: 2, claimOwner: "structured-host:replacement", status: "idle" });
           if (scenario === "terminal failure" || scenario === "unsettled failure") {
             if (scenario === "terminal failure") f.registry.failSpawn(input.receipt.launchId, "No conversation found with session ID");
             throw new Error("No conversation found with session ID");
           }
-          f.registry.rotateSpawnCapabilityForReceipt(input.receipt.launchId);
-          f.registry.setReceiptViewerMcpTransport(input.receipt.launchId, "stdio");
-          f.registry.completeSpawn(input.receipt.launchId, entry);
-          return { ok: true, target: null, path: f.seat.path!, launchId: input.receipt.launchId,
-            conversationId: f.seat.conversationId as never, launched: true, retrySafe: false, initialMessage: "delivered", state: "settled" };
+          return spawnStructuredConversation(input, {
+            startHost: async () => {
+              starts++;
+              if (scenario === "terminal exit after claim") throw new Error("No conversation found with session ID");
+              return { identity: { sessionId: key.sessionId }, release: async () => {} } as never;
+            },
+            bindHost: async (registry, claimedKey, _host, owner, epoch) => {
+              registry.setStructuredHostClaimed(claimedKey, {
+                kind: "claude-broker", endpoint: "stdio:recovered", process: captureProcessIdentity(process.pid),
+                eventCursor: 0, protocolVersion: "v1", writerClaimEpoch: epoch,
+                activeTurnRef: null, pendingAttention: [], activeFlags: [],
+              }, "idle", owner, epoch);
+              return () => {};
+            },
+            publishHost: async (_key, _host, owns) => {
+              expect(await owns!()).toBe(true);
+              return async () => {};
+            },
+            deliverFirst: async () => {},
+          });
         }, requestDeliveryDrain: () => {},
       }),
       enqueueStructured: async request => {
+        if (scenario === "composer before enqueue") {
+          const current = f.registry.readOnlySnapshot().entries[`claude:${key.sessionId}`]!;
+          f.registry.upsert({ ...current, claimEpoch: current.claimEpoch + 1, claimOwner: "structured-host:replacement" });
+        }
         request.admissionGuard?.();
         expect(request.clientMessageId).toBe(message.clientMessageId);
         deliveredKeys.push(request.clientMessageId!);
@@ -317,6 +352,19 @@ test.each([
     return { status: 503, body: { error: "replacement unavailable" } };
   } };
   if (retainedClaim) expect(f.registry.readOnlySnapshot().entries[`claude:${key.sessionId}`]?.structuredHost?.process?.pid).toBe(2_000_000_000);
+  if (scenario === "composer before claim" || scenario === "composer before enqueue"
+    || scenario === "rotation during runtime admission" || scenario === "drain during runtime admission") {
+    try {
+      await runSeatTickCheck(f.project, rig.deps);
+      expect(spawns).toBe(1);
+      expect(starts).toBe(scenario === "composer before enqueue" ? 1 : 0);
+      expect(deliveredKeys).toEqual([]);
+      expect(rotations).toBe(0);
+      expect(f.row().announcedDeploys ?? []).not.toContain("composer-deploy");
+      if (scenario.startsWith("composer")) expect(f.registry.readOnlySnapshot().entries[`claude:${key.sessionId}`]?.claimOwner).toBe("structured-host:replacement");
+    } finally { releaseDrain(drainFile(), "recovery-drain"); }
+    return;
+  }
   if (composerRace || scenario === "rotation after cleanup") {
     await runSeatTickCheck(f.project, rig.deps);
     expect(spawns).toBe(0);
@@ -325,14 +373,14 @@ test.each([
     expect(f.row().announcedDeploys ?? []).not.toContain("composer-deploy");
     return;
   }
-  if (scenario === "terminal failure" || scenario === "unsettled failure") {
+  if (scenario === "terminal failure" || scenario === "unsettled failure" || scenario === "terminal exit after claim") {
     await runSeatTickCheck(f.project, rig.deps);
     const owed = f.row().outstandingWake?.clientMessageId;
     expect(spawns).toBe(1);
-    expect(rotations).toBe(scenario === "terminal failure" ? 1 : 0);
+    expect(rotations).toBe(scenario === "unsettled failure" ? 0 : 1);
     expect(f.row().announcedDeploys ?? []).not.toContain("composer-deploy");
     expect(owed).toBeTruthy();
-    if (scenario === "terminal failure") {
+    if (scenario !== "unsettled failure") {
       expect(f.row().hostRecovery?.state).toBe("failed");
       expect(rig.cards.filter(({ card }) => card.ref === "seat-host-recovery" && card.state === "open")).toHaveLength(1);
       await runSeatTickCheck(f.project, rig.deps);
@@ -347,10 +395,63 @@ test.each([
   expect(f.registry.seatMcpReceipt(f.seat.conversationId)?.viewerMcpTransport).toBe("stdio");
   expect(rig.cards.some(({ card }) => card.kind === "mcp-unavailable" && card.state === "resolved")).toBe(false);
   expect(f.row().announcedDeploys).toEqual(["composer-deploy"]);
+  expect(f.row().lastWakeAt).toBe(new Date(f.now).toISOString());
   await runSeatTickCheck(f.project, rig.deps);
   expect(spawns).toBe(1);
   expect(rotations).toBe(0);
   expect(deliveredKeys).toHaveLength(1);
+});
+
+test.each(["queued", "uncertain", "admission closed"] as const)("an old refused wake after restart remains accounted for with %s", async result => {
+  const f = childFixture("wake-retry-after-restart");
+  setAgentRegistryForTests(f.registry);
+  f.spawn({ title: "Completed worker", turn: "terminal", terminalAt: ago(f, 2) });
+  f.seed();
+  const settings = { ...defaultSeatTickSettings(f.project), wakeIntervalMinutes: 15 };
+  const first = childRig(f, { settings, realWakeState: true,
+    deliverWith: async () => ({ ok: false, outcome: "failed", status: 503, error: "recovery unavailable", admission: "refused" }),
+  });
+  await runSeatTickCheck(f.project, first.deps);
+  const original = f.row().outstandingWake!;
+  expect(original.dispatch?.state).toBe("refused");
+  const next = childRig(f, { settings, now: f.now + (result === "admission closed" ? 15 : 270) * MINUTE, realWakeState: true,
+    deliverWith: async message => {
+      const held = f.registry.holdDelivery(f.seat.conversationId as never, message.text, message.clientMessageId!,
+        "text", [], null, { kind: "send", policy: "queue" });
+      return result === "uncertain"
+        ? { ok: false, outcome: "failed", status: 503, error: "acknowledgement lost", operationId: held.command.operationId, actuation: "started", resend: "verify-first" }
+        : { ok: true, target: null, outcome: "queued", operationId: held.command.operationId };
+    },
+  });
+  if (result === "admission closed") next.deps.mcpHealth = () => ({ status: "dead", detail: "launcher unavailable" });
+  await runSeatTickCheck(f.project, next.deps);
+  expect(next.sent).toHaveLength(result === "admission closed" ? 0 : 1);
+  expect(f.row().outstandingWake?.clientMessageId).toBe(original.clientMessageId);
+  expect(f.row().retiredWakes).toEqual([]);
+  expect(f.acknowledged()).toEqual([]);
+  if (result === "admission closed") {
+    const notice = next.cards.find(({ card }) => card.ref === SEAT_TICK_WAKE_UNRESOLVED_REF && card.state === "open")?.card;
+    expect(notice).toBeDefined();
+    expect(notice!.detail).toContain(`Arrival deadline: ${new Date(f.now + 15 * MINUTE).toISOString()}`);
+    expect(notice!.detail).toContain(`Next check: ${new Date(f.now + 20 * MINUTE).toISOString()}`);
+    expect(notice!.detail).toContain("Check the seat's conversation");
+    expect(f.row().outstandingWake?.recovery).toMatchObject({
+      checkedAt: new Date(f.now + 15 * MINUTE).toISOString(),
+      lastAttemptAt: original.recovery?.lastAttemptAt,
+      nextRetryAt: new Date(f.now + 20 * MINUTE).toISOString(),
+      deadlineAt: new Date(f.now + 15 * MINUTE).toISOString(),
+    });
+    expect(f.row().outstandingWake?.recovery?.reason).toContain("recovery refused");
+    const aged = childRig(f, { settings, now: f.now + 270 * MINUTE, realWakeState: true });
+    aged.deps.mcpHealth = next.deps.mcpHealth;
+    await runSeatTickCheck(f.project, aged.deps);
+    expect(aged.sent).toEqual([]);
+    expect(f.row().outstandingWake).toBeNull();
+    expect(f.row().retiredWakes).toMatchObject([{ wake: { clientMessageId: original.clientMessageId }, reason: "unresolved-age" }]);
+  } else {
+    expect(f.row().outstandingWake?.operationId).toBeTruthy();
+    expect(next.sent[0]!.clientMessageId).toBe(original.clientMessageId);
+  }
 });
 
 test.each(["rotated", "failed"] as const)("a definitively failed dead-seat revival rotates once and leaves a durable %s notice", async state => {
@@ -1784,7 +1885,8 @@ test("a send the layer refused without a record is re-dispatched under its origi
     } });
     const retried = await runSeatTickCheck(fixture.project, next.deps);
     expect(next.sent).toHaveLength(1);
-    expect(next.sent[0]).toMatchObject({ clientMessageId: outstanding.clientMessageId, text: outstanding.text, conversationId: fixture.seat.conversationId });
+    expect(next.sent[0]).toMatchObject({ clientMessageId: outstanding.clientMessageId, conversationId: fixture.seat.conversationId });
+    expect(next.sent[0]!.text).toBe(outstanding.text!.replace(outstanding.preparedAt!, new Date(fixture.now + 5 * MINUTE).toISOString()));
     expect(next.journal[0]).toMatchObject({ verdict: "landed", delivery: { clientMessageId: outstanding.clientMessageId, outcome: "landed" } });
     expect(next.journal[0]!.detail).toContain("re-dispatched under its original key");
     expect(fixture.row()).toMatchObject({ outstandingWake: null, lastWakeAt: new Date(fixture.now + 5 * MINUTE).toISOString() });
@@ -1863,4 +1965,71 @@ test("a refusal the record contradicts keeps the attempt (#1465)", async () => {
   const next = childRig(fixture, { realWakeState: true, now: fixture.now + 5 * MINUTE });
   expect(await runSeatTickCheck(fixture.project, next.deps)).toMatchObject({ delivery: { clientMessageId: record!.delivery!.clientMessageId, outcome: "deferred-outstanding" } });
   expect(next.sent).toEqual([]);
+});
+
+
+test("autonomy overlay is full on the first landed wake, compact later, and full after rotation", async () => {
+  const { applySeatTickSettingsChange } = await import("./seatTickSettings");
+  const applied = applySeatTickSettingsChange(defaultSeatTickSettings(PROJECT), { autonomy: { enabled: true } }, { at: new Date(NOW).toISOString(), actor: { kind: "gateway", conversationId: null, project: null, seatEpoch: null } });
+  if (!applied.ok) throw new Error(applied.error);
+  const options = { pipelines: OPEN_LANE, state: OVERDUE, settings: applied.settings, now: NOW };
+  const rig = harness(options);
+  await runSeatTickCheck(PROJECT, rig.deps);
+  expect(rig.sent[0]!.text).toContain("decide all questions, open forms and variants");
+  expect(rig.written.at(-1)!.autonomyShown).toBe(`${applied.settings.autonomy!.startedAt}:${applied.settings.autonomy!.updatedAt}`);
+  options.now += 61 * MINUTE;
+  await runSeatTickCheck(PROJECT, rig.deps);
+  expect(rig.sent[1]!.text).toContain("rules from episode");
+  expect(rig.sent[1]!.text).not.toContain("decide all questions");
+  rig.seat = { ...rig.seat!, conversationId: SUCCESSOR, seatEpoch: rig.seat!.seatEpoch + 1 };
+  options.now += 61 * MINUTE;
+  await runSeatTickCheck(PROJECT, rig.deps);
+  expect(rig.sent.at(-1)!.text).toContain("decide all questions, open forms and variants");
+});
+
+test("autonomy idle gathers issues and two unchanged landed wakes stop searching", async () => {
+  const { applySeatTickSettingsChange } = await import("./seatTickSettings");
+  const applied = applySeatTickSettingsChange(defaultSeatTickSettings(PROJECT), { autonomy: { enabled: true } }, { at: new Date(NOW).toISOString(), actor: { kind: "gateway", conversationId: null, project: null, seatEpoch: null } });
+  if (!applied.ok) throw new Error(applied.error);
+  const options = { pipelines: [], settings: applied.settings, now: NOW };
+  const rig = harness(options);
+  for (let i = 0; i < 2; i++) {
+    expect(await runSeatTickCheck(PROJECT, rig.deps)).toMatchObject({ verdict: "wake", reasons: ["autonomy-idle"] });
+    expect(rig.sent[i]!.text).toContain("#1245 the native seat tick");
+    options.now += 61 * MINUTE;
+  }
+  expect(await runSeatTickCheck(PROJECT, rig.deps)).toMatchObject({ verdict: "quiet" });
+  expect(rig.sent).toHaveLength(2);
+  expect(rig.cards.some(entry => entry.card.kind === "retry-guard")).toBe(true);
+  options.now += 9 * 60 * MINUTE;
+  const restarted = applySeatTickSettingsChange(options.settings, { autonomy: { enabled: true } }, { at: new Date(options.now).toISOString(), actor: { kind: "gateway", conversationId: null, project: null, seatEpoch: null } });
+  if (!restarted.ok) throw new Error(restarted.error);
+  options.settings = { ...restarted.settings, autonomyHistory: restarted.settings.autonomyHistory?.map(episode => ({ ...episode, reportAt: new Date(options.now).toISOString() })) };
+  for (let i = 0; i < 2; i++) {
+    expect(await runSeatTickCheck(PROJECT, rig.deps)).toMatchObject({ verdict: "wake" });
+    options.now += 61 * MINUTE;
+  }
+  expect(rig.sent).toHaveLength(4);
+  expect(await runSeatTickCheck(PROJECT, rig.deps)).toMatchObject({ verdict: "quiet" });
+});
+
+test("expiry removes the overlay and requests one end report even with wakes switched off", async () => {
+  const { applySeatTickSettingsChange } = await import("./seatTickSettings");
+  const at = new Date(NOW).toISOString();
+  const actor = { kind: "gateway" as const, conversationId: null, project: null, seatEpoch: null };
+  const on = applySeatTickSettingsChange(defaultSeatTickSettings(PROJECT), { autonomy: { enabled: true } }, { at, actor });
+  if (!on.ok) throw new Error(on.error);
+  const off = applySeatTickSettingsChange(on.settings, { enabled: false, reason: "Operator returned" }, { at: new Date(NOW + MINUTE).toISOString(), actor });
+  if (!off.ok) throw new Error(off.error);
+  const options = { pipelines: OPEN_LANE, settings: off.settings, now: NOW + MINUTE };
+  const rig = harness(options);
+  expect(await runSeatTickCheck(PROJECT, rig.deps)).toMatchObject({ verdict: "wake", reasons: ["autonomy-ended"], items: 0 });
+  expect(rig.sent[0]!.text).toContain(`key autonomy:${at}`);
+  expect(rig.sent[0]!.text).not.toContain("Full autonomy until");
+  options.now += MINUTE;
+  expect(await runSeatTickCheck(PROJECT, rig.deps)).toMatchObject({ verdict: "quiet" });
+  expect(rig.sent).toHaveLength(1);
+  options.settings = { ...off.settings, autonomy: { ...off.settings.autonomy!, reportAt: new Date(options.now).toISOString() } };
+  options.now += 61 * MINUTE;
+  expect(await runSeatTickCheck(PROJECT, rig.deps)).toMatchObject({ verdict: "quiet" });
 });
