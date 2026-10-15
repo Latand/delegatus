@@ -6,8 +6,56 @@ import { once } from "node:events";
 import { RuntimeJournal } from "@/runtime-host/journal";
 import { RuntimeHost } from "@/runtime-host/host";
 import { serveRuntimeHost } from "@/runtime-host/socket";
+import { UnixRuntimeHostClient } from "@/lib/runtime/client";
+import { productionDeps } from "@/lib/selfUpdate/instance";
+import { probeQuiet } from "@/lib/selfUpdate/quiet";
+import type { Snapshot } from "@/lib/selfUpdate/types";
 import { defaultPipelinePorts } from "./engine";
 import { publishTitleUpdate } from "@/lib/session/titleEvents";
+
+test.each([false, true])("production activity and owner admission preserve alias rows with an old host: %s", async legacy => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "pipeline-alias-"));
+  const journal = new RuntimeJournal(path.join(root, "runtime.sqlite"));
+  const host = new RuntimeHost(journal);
+  const socketPath = path.join(root, "host.sock");
+  const server = serveRuntimeHost(socketPath, { handle: request => host.handle(legacy && request.method === "snapshot"
+    ? { ...request, params: { voiceBodiesFor: [] } } : request) });
+  const prior = process.env.LLV_RUNTIME_HOST_SOCKET;
+  process.env.LLV_RUNTIME_HOST_SOCKET = socketPath;
+  try {
+    await once(server, "listening");
+    const client = new UnixRuntimeHostClient(socketPath);
+    for (const [firstTurn, lastTurn, active] of [["running", "idle", true], ["idle", "running", null]] as const) {
+      for (const [id, turn] of [["a-legacy-slot", firstTurn], ["published-session", lastTurn]] as const) {
+        journal.append({ scope: { type: "session", id }, kind: "session-status",
+          payload: { conversationId: "published-session", sessionKey: { engine: "codex", sessionId: id },
+            hostKind: "codex-app-server", host: "hosted", turn, attentionIds: [] },
+        });
+      }
+      const full = await client.snapshot();
+      expect(full.sessions.map(row => row.sessionKey.sessionId)).toEqual(["a-legacy-slot", "published-session"]);
+      expect(full.sessions.map(row => row.turn)).toEqual([firstTurn, lastTurn]);
+      expect(await defaultPipelinePorts().conversationAgentActive("published-session")).toBe(active);
+      expect((await client.readSnapshot("activity", ["published-session"])).sessions.map(row => row.turn))
+        .toEqual(full.sessions.map(row => row.turn));
+
+      const quiet = { ...productionDeps().quiet!, pipelines: () => [], flows: () => [], seats: () => [],
+        presence: () => [], registryHealth: () => [], memoryAvailableMb: () => 8_192 };
+      const status = { busy: null, processes: { web: { state: "healthy" }, runtimeHost: { state: "healthy" } } } as Snapshot;
+      const expected = await probeQuiet(status, { ...quiet, runtimeSnapshot: async () => full }, 1_000, true);
+      expect(expected.blockers.unreadable).toBeNull();
+      expect(expected.blockers.turns).toBe(1);
+      const owners = await quiet.runtimeSnapshot();
+      expect(owners.sessions.map(row => [row.sessionKey.sessionId, row.turn]))
+        .toEqual(full.sessions.map(row => [row.sessionKey.sessionId, row.turn]));
+      expect(await probeQuiet(status, quiet, 1_000, true)).toEqual(expected);
+    }
+  } finally {
+    await new Promise<void>(resolve => server.close(() => resolve()));
+    if (prior === undefined) delete process.env.LLV_RUNTIME_HOST_SOCKET; else process.env.LLV_RUNTIME_HOST_SOCKET = prior;
+    journal.close(); fs.rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test("production pipeline ports share narrow evidence and refresh dead evidence after adoption; titles use metadata", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "pipeline-reads-"));

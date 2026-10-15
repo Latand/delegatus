@@ -17,12 +17,23 @@ test("malformed projections remain unreadable, including wrong versions, missing
     { ...metadata, snapshotRead: { version: 2, kind: "metadata" } }, { ...metadata, snapshotRead: { version: 1, kind: "owners" } }]) {
     expect(() => projectSnapshotRead(invalid, "metadata")).toThrow();
   }
-  for (const sessions of [[{ ...session, attentionIds: null }], [session, session], [{ ...session, host: "invalid" }]]) {
+  for (const sessions of [[{ ...session, attentionIds: null }], [{ ...session, host: "invalid" }]]) {
     expect(() => projectSnapshotRead({ ...metadata, sessions }, "activity", [session.conversationId])).toThrow();
   }
   expect(() => projectSnapshotRead({ ...metadata, sessions: [session], snapshotRead: { version: 1, kind: "activity" } }, "activity", ["absent"]))
     .toThrow("scope mismatch");
   expect(() => projectSnapshotRead({ ...metadata, sessions: [session] }, "owners")).toThrow();
+});
+
+test.each([2, 65])("activity preserves %s rows publishing one requested identity in response order", count => {
+  const sessions = Array.from({ length: count }, (_, index) => ({
+    ...session, turn: index === 0 ? "running" : "idle", attentionIds: [`attention-${index}`],
+  }));
+  for (const snapshotRead of [undefined, { version: 1, kind: "activity" }]) {
+    const result = projectSnapshotRead({ ...metadata, sessions, snapshotRead }, "activity", [session.conversationId]);
+    expect(result.sessions).toEqual(sessions);
+    expect(result.sessions).toHaveLength(count);
+  }
 });
 
 test.each(["refusal", "invalid-json", "wrong-id", "truncated", "timeout", "abort"] as const)(

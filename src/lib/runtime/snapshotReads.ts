@@ -74,11 +74,12 @@ export function projectSnapshotRead<K extends RuntimeSnapshotReadKind>(
     }
   }
   if (snapshot.snapshotRead && kind === "activity" && conversationIds !== undefined
-    && (sessions.length > SNAPSHOT_ACTIVITY_LIMIT || sessions.some(session => !ids.has(session.conversationId)))) {
+    && sessions.some(session => !ids.has(session.conversationId))) {
     throw new Error("runtime snapshot read scope mismatch");
   }
+  // Journal scopes can publish the same conversation identity. The request
+  // limit bounds identities; retain every matching row in snapshot order.
   const selected = kind === "activity" && conversationIds !== undefined ? sessions.filter(session => ids.has(session.conversationId)) : sessions;
-  if (new Set(selected.map(session => session.conversationId)).size !== selected.length) throw new Error("runtime snapshot read has duplicate sessions");
   return { ...metadata, sessions: selected.map(session => kind === "activity"
     ? pick(session, SNAPSHOT_ACTIVITY_FIELDS) : pick(session, SNAPSHOT_OWNER_FIELDS)) } as RuntimeSnapshotReads[K];
 }

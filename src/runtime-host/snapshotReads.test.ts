@@ -95,13 +95,21 @@ test("owner projection preserves absent and null custody evidence, writer marks 
   } finally { db.close(); }
 });
 
-test("activity matches the published conversation identity when the journal scope differs", () => {
+test.each([2, SNAPSHOT_ACTIVITY_LIMIT + 1])("narrow reads preserve %s alias and canonical rows with the same published identity", count => {
   const { journal, append } = fixture();
-  append("stored-slot", "hosted", { conversationId: "published-session" });
-  for (const conversationIds of [["published-session"], ["stored-slot"], ["published-session", "stored-slot"]]) {
-    expect(projectSnapshotRead(journal.snapshotRead({ version: 1, kind: "activity", conversationIds }), "activity", conversationIds))
-      .toEqual(projectSnapshotRead(journal.snapshot(), "activity", conversationIds));
+  for (let index = 0; index < count - 1; index++) {
+    append(`alias-${String(index).padStart(3, "0")}`, "hosted", { conversationId: "published-session" });
   }
+  append("published-session", "hosted", { turn: "idle" });
+  const full = journal.snapshot();
+  expect(full.sessions).toHaveLength(count);
+  expect(full.sessions.map(session => session.turn)).toEqual([...Array(count - 1).fill("running"), "idle"]);
+  for (const conversationIds of [undefined, ["published-session"], ["alias-000"], ["published-session", "alias-000"]]) {
+    expect(projectSnapshotRead(journal.snapshotRead({ version: 1, kind: "activity", conversationIds }), "activity", conversationIds))
+      .toEqual(projectSnapshotRead(full, "activity", conversationIds));
+  }
+  expect(projectSnapshotRead(journal.snapshotRead({ version: 1, kind: "owners" }), "owners"))
+    .toEqual(projectSnapshotRead(full, "owners"));
 });
 
 test("activity input is bounded and invalid scope or version refuses before reading", () => {
