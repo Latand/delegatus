@@ -875,6 +875,7 @@ describe("managed install", () => {
     expect(text(section(el, "previous-attempt"))).toContain("First boot loop gate refused");
     expect(text(section(el, "header"))).toContain(NEW.slice(0, 7));
     expect(text(section(el, "header"))).toContain(locale === "uk" ? "ревізія невідома" : "unknown revision");
+    expect(text(section(el, "header"))).not.toContain(locale === "uk" ? "Runtime host працює на" : "Runtime host runs");
     expect(button(el, "retry")).toBeNull();
   });
 

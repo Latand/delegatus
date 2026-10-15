@@ -215,7 +215,7 @@ describe("managed install: an update is one Viewer deployment", () => {
     } finally { service.stop(); }
   });
 
-  test("a newer external success supersedes the failed target without rewriting its receipt or retrying it", async () => {
+  test.each(["2026-10-15T11:28:24Z", "2026-10-15T11:00:00Z"])("a newer external success supersedes the failed target without rewriting its receipt or retrying it (%s)", async createdAt => {
     const { writeManagedRecord, readManagedRecord } = await import("./managed");
     const dir = mkdtempSync(join(root, "external-deployment-"));
     const failedAt = "2026-10-15T11:08:12Z";
@@ -234,10 +234,10 @@ describe("managed install: an update is one Viewer deployment", () => {
       releaseTarget: () => ({ revision: firstSha }), // Pointer is not the process.
       prepareCheckRepo: async () => checkout,
       latestDeployments: async () => { lists++; return { deployments: latest ? [{ deploymentId: "external-success", phase: "succeeded", sha: tipSha, terminal: true,
-        startedAt: "2026-10-15T11:28:24Z", finishedAt: "2026-10-15T11:38:51Z", error: null }] : [], nextCursor: null, hasMore: false }; },
+        startedAt: createdAt, finishedAt: "2026-10-15T11:38:51Z", error: null }] : [], nextCursor: null, hasMore: false }; },
       readDeployment: async id => ({ deploymentId: id, idempotencyKey: "external-key", requestedRevision: tipSha, revision: tipSha,
         phase: "succeeded", terminal: true, candidate: null, previous: null, mcpRuntime: { candidate: null, previous: null, publications: [], health: [] },
-        health: [], error: null, owner: { pid: 1, startIdentity: null }, createdAt: "2026-10-15T11:28:24Z", updatedAt: "2026-10-15T11:38:51Z", revisionNumber: 1 }),
+        health: [], error: null, owner: { pid: 1, startIdentity: null }, createdAt, updatedAt: "2026-10-15T11:38:51Z", revisionNumber: 1 }),
       hostHealth: async () => ({ pid: 4242, generation: { revision: tipSha } }) as never,
       requestDeployment: async request => { requests.push(request); throw new Error("stale retry was dispatched"); },
     });
@@ -261,7 +261,7 @@ describe("managed install: an update is one Viewer deployment", () => {
       try { expect((await restarted.retry("retry-without-ledger")).ok).toBe(false); }
       finally { restarted.stop(); }
       expect(requests).toEqual([]);
-    } finally { service.stop(); }
+    } finally { await service.check(); service.stop(); }
   });
 
   let phase: ViewerDeploymentPhase | null = null;

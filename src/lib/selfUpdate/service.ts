@@ -1946,7 +1946,8 @@ export class SelfUpdateService {
   }
 
   private displayedManaged(): ManagedRecord | null {
-    return this.observedManaged && (!this.managed || Date.parse(this.observedManaged.requestedAt) > Date.parse(this.managed.requestedAt))
+    // The ledger head resolves deployments admitted at the same instant too.
+    return this.observedManaged && (!this.managed || Date.parse(this.observedManaged.requestedAt) >= Date.parse(this.managed.requestedAt))
       ? this.observedManaged : this.managed;
   }
 

@@ -189,8 +189,8 @@ function Header({ s, state, actions, t, locale }: { s: Snapshot; state: ViewStat
   const stale = staleProcesses(s);
   const pairs: ReactNode[] = [];
   if (s.mode === "managed" || web && runtimeHost && web.sha !== runtimeHost.sha) {
-    pairs.push(<Pair key="web" label={t("selfUpdate.label.webRuns")} value={web ? revisionText(web, locale) : t("selfUpdate.label.unknownRevision")} />);
-    pairs.push(<Pair key="host" label={t("selfUpdate.label.hostRuns")} value={runtimeHost ? revisionText(runtimeHost, locale) : t("selfUpdate.label.unknownRevision")} />);
+    pairs.push(<Pair key="web" label={t(web ? "selfUpdate.label.webRuns" : "selfUpdate.process.web")} value={web ? revisionText(web, locale) : t("selfUpdate.label.unknownRevision")} />);
+    pairs.push(<Pair key="host" label={t(runtimeHost ? "selfUpdate.label.hostRuns" : "selfUpdate.process.host")} value={runtimeHost ? revisionText(runtimeHost, locale) : t("selfUpdate.label.unknownRevision")} />);
   } else {
     const running = web ?? runtimeHost;
     pairs.push(<Pair key="running" label={t("selfUpdate.label.running")} value={running ? revisionText(running, locale) : t("selfUpdate.label.nothing")} />);

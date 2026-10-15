@@ -7190,7 +7190,7 @@ async function selfUpdateInstallMain(): Promise<void> {
   const servingWeb = "d".repeat(40);
   const managed: Snapshot = { ...base, mode: "managed", installed: revision(servingWeb), available: revision(newer),
     processes: { web: processView(servingWeb), runtimeHost: processView(old) },
-    serving: { web: revision(servingWeb), runtimeHost: revision(old) }, check: { ...base.check, state: "update-available", relation: "behind" },
+    serving: { web: revision(servingWeb), runtimeHost: revision(old) }, check: { ...base.check, state: "update-available", relation: "behind", behind: 3 },
     auto: idleAuto, update: failed };
   states["managed-failed"] = managed;
   states["managed-rolling-back"] = { ...managed, busy: "update", update: { ...failed, rollback: "running" } };
@@ -7204,6 +7204,7 @@ async function selfUpdateInstallMain(): Promise<void> {
     processes: { web: processView(newer), runtimeHost: processView(newer) },
     check: { ...base.check, state: "up-to-date", relation: "equal" }, previousAttempt: failed,
     update: { ...idleUpdate(MANAGED_STEPS), state: "done", target: newer, targetShort: newer.slice(0, 7),
+      startedAt: "2026-01-02T00:02:00Z", finishedAt: "2026-01-02T00:03:00Z",
       steps: pendingSteps(MANAGED_STEPS).map(step => ({ ...step, state: "done" as const })) } };
   states["managed-unknown-host"] = { ...managed, serving: { web: revision(next), runtimeHost: null },
     processes: { ...managed.processes, runtimeHost: { ...stoppedProcess(), state: "failed", tail: [] } } };
@@ -7340,17 +7341,19 @@ async function selfUpdateInstallMain(): Promise<void> {
         if (!rect || rect.x < 0 || rect.x + rect.width > width) report.failures.push(`${tag}: failed attempt overflows`);
         report.frames[`${tag}-failure`] = { text, rect };
         if (name === "managed-external-success") {
-          await page.waitForRequest(request => new URL(request.url()).pathname === "/api/self-update/events", { timeout: 15_000 });
-          await page.reload();
-          await page.waitForFunction(() => {
-            if (document.querySelector('[data-section="previous-attempt"]')) return true;
-            window.dispatchEvent(new Event("llv:open-self-update"));
-            return false;
-          });
+          await Promise.all([
+            // seedInit uses polling; install the observer before reloading.
+            page.waitForRequest(request => new URL(request.url()).pathname === "/api/self-update", { timeout: 15_000 }),
+            page.reload().then(() => page.waitForFunction(() => {
+              if (document.querySelector('[data-section="previous-attempt"]')) return true;
+              window.dispatchEvent(new Event("llv:open-self-update"));
+              return false;
+            })),
+          ]);
           const previous = page.locator('[data-section="previous-attempt"]');
           await previous.scrollIntoViewIfNeeded();
           if (!(await previous.innerText()).includes(next.slice(0, 7)) || await page.locator('[data-action="retry"]').count())
-            report.failures.push(`${tag}: reconnect or reload restored the stale retry`);
+            report.failures.push(`${tag}: polling or reload restored the stale retry`);
           report.frames[`${tag}-reloaded`] = { previous: await previous.innerText() };
         }
       }
