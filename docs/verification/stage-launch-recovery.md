@@ -54,13 +54,13 @@ including remote actions and manual retry, awaits asynchronous admission.
 
 ## Parallel work
 
-The F1 admission hunks in `registry.ts`, the `launchMembership.ts` source and
-their first three membership regressions match PR #2951. This branch adds peer
-release and deadline coverage. The separate `spawnEvidence` reader in
-`registry.ts` supplies fresh F3 evidence without loading unrelated history.
-Missing historical launches reuse the pass
-projection; existing launches read fresh evidence. Its pipeline adapter preserves
-terminal replay evidence before another membership admission can erase it.
+The final branch merges current main at `f5c684778`, including PR #2951.
+Its shared F1 admission and initial three membership regressions are inherited
+from main. This branch adds peer release and deadline coverage. The separate
+`spawnEvidence` reader in `registry.ts` supplies fresh F3 evidence without
+loading unrelated history. Missing historical launches reuse the pass projection;
+existing launches read fresh evidence. The pipeline adapter preserves terminal
+replay evidence before another membership admission can erase it.
 
 The retry-claim interface and its awaited callers follow the async-admission
 lane. Startup adoption, delivery queues, runtime switching, MCP processes and
