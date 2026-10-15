@@ -295,7 +295,7 @@ test("cached manager context expires at the TTL boundary and follows the current
   expect(isCachedDesignatedManagerConversation(MANAGER, "viewer", () => cachedAt + MANAGER_IDENTITY_TTL_MS)).toBe(false);
   expect(isCachedDesignatedManagerConversation(MANAGER, "viewer", () => cachedAt + MANAGER_IDENTITY_TTL_MS + 1)).toBe(false);
   expect(isCachedDesignatedManagerConversation(MANAGER, "other-project", () => cachedAt)).toBe(false);
-  const successorFetch = (async () => Response.json({ seat: { conversationId: WORKER }, exists: true })) as typeof fetch;
+  const successorFetch = (async () => Response.json({ seat: { conversationId: WORKER }, exists: true })) as unknown as typeof fetch;
   await designatedManagerConversationId("viewer", successorFetch, () => cachedAt + MANAGER_IDENTITY_TTL_MS);
   expect(isCachedDesignatedManagerConversation(MANAGER, "viewer", () => cachedAt + MANAGER_IDENTITY_TTL_MS)).toBe(false);
   expect(isCachedDesignatedManagerConversation(WORKER, "viewer", () => cachedAt + MANAGER_IDENTITY_TTL_MS)).toBe(true);
