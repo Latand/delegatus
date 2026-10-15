@@ -14,6 +14,7 @@ import { rememberRecordBytes } from "./registryRecords";
 import { installPipelineControllerIndex, type PipelineControllerSelection } from "./pipelineControllerIndex";
 import { installPipelineEvidenceIndex, pipelineEvidenceIndexReady } from "./pipelineEvidenceIndex";
 import { databaseFileIdentity, openCurrentDatabase } from "./currentDatabase";
+import { collectionReadCache, rememberCollectionReadCache, type ReadCacheSlot } from "./collectionReadCache";
 import { FileTransactionBusyError } from "./fileTransaction";
 import { isDiskFullError, noteStateCommit, noteStateDiskFull, StateDiskFullError, stateFreeBytes, STATE_DISK_FULL_FLOOR_BYTES } from "./diskFull";
 
@@ -174,6 +175,9 @@ export interface SqliteStateCollectionOptions<T> {
   onIncrementalReadSnapshot?(revision: number): void;
   /** Authority outside SQLite that affects decoding (for example project aliases). */
   decodeAuthority?(): unknown;
+  /** Opt-in version for identical decoders and rejection policies across
+      separately compiled copies of a store. Bump when their semantics change. */
+  readCacheKey?: string;
 }
 
 type CollectionRow = {
@@ -198,7 +202,7 @@ type LeaseRow = {
 };
 
 type CachedRecord<T> = {
-  valueJson: string;
+  sourceBytes: number;
   value: T;
   order: number;
   rowRevision: number;
@@ -210,6 +214,8 @@ interface CollectionCache<T> {
   orderedKeys: readonly string[];
   ordered: readonly T[];
 }
+
+type CollectionReadContext = { identity: string | null; authority: unknown; key?: string };
 
 interface TrackedRoot<T> {
   originalKey: string;
@@ -1107,7 +1113,51 @@ export function stateReadonlyConnectionCountForTests(): number {
 
 export class SqliteStateCollection<T> {
   private readonly readDb: Database;
-  private cache: CollectionCache<T> | null = null;
+  private localCache: CollectionCache<T> | null = null;
+  private cacheSlot?: ReadCacheSlot<CollectionCache<T>>;
+  private cacheIdentity: string | null = null;
+  private cacheAuthority: unknown;
+  private get cache(): CollectionCache<T> | null { return this.cacheSlot ? this.cacheSlot.value : this.localCache; }
+
+  private refreshReadCache(): CollectionReadContext {
+    const identity = databaseFileIdentity(this.filename);
+    const authority = this.options.decodeAuthority?.();
+    if (identity !== this.cacheIdentity || authority !== this.cacheAuthority) {
+      this.localCache = null;
+      this.revisionCache = null;
+      this.cacheIdentity = identity;
+      this.cacheAuthority = authority;
+    }
+    const key = this.options.readCacheKey ? JSON.stringify([path.resolve(this.filename), identity,
+      this.options.collection, this.options.schemaVersion, this.options.readCacheKey, authority]) : undefined;
+    if (key) this.cacheSlot = collectionReadCache(key);
+    return { identity, authority, key };
+  }
+
+  private assertReadContext(context: CollectionReadContext): void {
+    if (databaseFileIdentity(this.filename) !== context.identity || this.options.decodeAuthority?.() !== context.authority) {
+      throw new StateSnapshotChangedError();
+    }
+  }
+
+  /** Publish only after a successful read, under the context that decoded it.
+      Reacquire its verified key in case other readers evicted the slot. */
+  private publishCache(value: CollectionCache<T>, context: CollectionReadContext): readonly T[] {
+    this.assertReadContext(context);
+    if (context.key) {
+      this.cacheSlot = collectionReadCache(context.key);
+      let bytes = 0;
+      for (const row of value.records.values()) bytes += row.sourceBytes;
+      rememberCollectionReadCache(this.cacheSlot, value, bytes);
+    } else this.localCache = value;
+    this.revisionCache = null;
+    return value.ordered;
+  }
+
+  private commitReadCache(value: CollectionCache<T>, context: CollectionReadContext): readonly T[] {
+    this.readDb.exec("COMMIT");
+    return this.publishCache(value, context);
+  }
   private revisionCache: { signature: string; revision: number } | null = null;
   private controllerCache = new Map<string, { revision: number; value: T | null }>();
   private controllerAuthority: unknown;
@@ -1128,6 +1178,7 @@ export class SqliteStateCollection<T> {
   }
 
   revision(): number {
+    this.refreshReadCache();
     const signature = stateDatabaseSignature(this.filename);
     if (this.revisionCache?.signature === signature) return this.revisionCache.revision;
     const revision = this.collectionMeta()?.revision ?? 0;
@@ -1146,7 +1197,7 @@ export class SqliteStateCollection<T> {
 
   async snapshotAsync(): Promise<T[]> {
     const revision = this.revision();
-    const identity = databaseFileIdentity(this.filename);
+    const context = this.refreshReadCache();
     const meta = this.collectionMeta()!;
     if (!this.cache || this.cache.revision > revision || this.cache.revision < meta.change_floor) {
       const records = new Map<string, CachedRecord<T>>();
@@ -1160,14 +1211,15 @@ export class SqliteStateCollection<T> {
         `).all(this.options.collection, order, order, key, 16));
         await mapCooperatively(rows, row => {
           const value = withViewerOperation("pipelines.controller-decode", () => this.decodeRow(row.value_json));
-          if (value !== null) records.set(row.row_key, { value, valueJson: row.value_json, rowRevision: row.row_revision, order: row.row_order });
+          if (value !== null) records.set(row.row_key, { value, sourceBytes: row.value_json.length * 2, rowRevision: row.row_revision, order: row.row_order });
           order = row.row_order; key = row.row_key;
         }, { batchSize: 4, timeBudgetMs: 16 });
         if (rows.length < 16) break;
         await yieldToRuntime();
       }
-      if (this.revision() !== revision || databaseFileIdentity(this.filename) !== identity) throw new StateSnapshotChangedError();
-      this.rememberCache(revision, records);
+      if (this.revision() !== revision) throw new StateSnapshotChangedError();
+      const source = this.publishCache(this.createCache(revision, records), context);
+      return mapCooperatively(source, record => this.options.clone(record), { batchSize: 4, timeBudgetMs: 16 });
     }
     return mapCooperatively(this.loadReadonly(), record => this.options.clone(record), { batchSize: 4, timeBudgetMs: 16 });
   }
@@ -1225,6 +1277,36 @@ export class SqliteStateCollection<T> {
     if (!row) return null;
     const decoded = this.decodeRow(row.value_json);
     return decoded === null ? null : this.options.clone(decoded);
+  }
+
+  /** Cold history never warms the full collection cache. Pages are pinned by
+      one read transaction; a callback may select a bounded subset. */
+  async selectReadonlyAsync(select: (record: T) => boolean, limit: number): Promise<T[]> {
+    const db = connectReadonlyDatabase(this.filename);
+    const authority = this.options.decodeAuthority?.();
+    try {
+      db.exec("BEGIN");
+      const selected: T[] = [];
+      let order = -1, key = "";
+      while (selected.length < limit) {
+        const rows = db.query<CollectionRow, [string, number, number, string, number]>(`
+          SELECT row_key, value_json, row_order, row_revision FROM state_rows
+          WHERE collection = ? AND row_order >= ? AND (row_order > ? OR row_key > ?)
+          ORDER BY row_order, row_key LIMIT ?
+        `).all(this.options.collection, order, order, key, Math.min(16, limit - selected.length));
+        for (const row of rows) {
+          order = row.row_order; key = row.row_key;
+          const decoded = this.decodeRow(row.value_json);
+          if (decoded !== null && select(decoded)) selected.push(this.options.clone(decoded));
+        }
+        if (!rows.length) break;
+        await yieldToRuntime();
+      }
+      if (this.options.decodeAuthority?.() !== authority) throw new StateSnapshotChangedError();
+      db.exec("COMMIT");
+      return selected;
+    } catch (error) { rollbackQuietly(db); throw error; }
+    finally { db.close(); }
   }
 
   /** One read transaction over the change log strictly after `(revision,
@@ -1452,30 +1534,29 @@ export class SqliteStateCollection<T> {
   }
 
   loadReadonly(): readonly T[] {
+    const context = this.refreshReadCache();
     this.readDb.exec("BEGIN");
     try {
       const meta = this.collectionMeta();
       if (!meta) throw new Error(`SQLite state collection disappeared: ${this.options.collection}`);
       const revision = meta.revision;
-      if (this.cache?.revision === revision) {
+      const cache = this.cache;
+      if (cache?.revision === revision) {
         this.readDb.exec("COMMIT");
-        return this.cache.ordered;
+        this.assertReadContext(context);
+        return cache.ordered;
       }
-      if (!this.cache || this.cache.revision > revision || this.cache.revision < meta.change_floor) {
-        const full = this.loadFull(revision);
-        this.readDb.exec("COMMIT");
-        return full;
+      if (!cache || cache.revision > revision || cache.revision < meta.change_floor) {
+        return this.commitReadCache(this.loadFull(revision), context);
       }
 
       const changes = this.readDb.query<{ row_key: string }, [string, number, number]>(`
         SELECT DISTINCT row_key FROM state_changes
         WHERE collection = ? AND revision > ? AND revision <= ?
         ORDER BY revision, row_key
-      `).all(this.options.collection, this.cache.revision, revision);
+      `).all(this.options.collection, cache.revision, revision);
       if (changes.length === 0) {
-        const full = this.loadFull(revision);
-        this.readDb.exec("COMMIT");
-        return full;
+        return this.commitReadCache(this.loadFull(revision), context);
       }
       this.options.onIncrementalReadSnapshot?.(revision);
 
@@ -1490,7 +1571,7 @@ export class SqliteStateCollection<T> {
           FROM state_rows WHERE collection = ? AND row_key IN (${placeholders})
         `).all(...bindings)) rows.set(row.row_key, row);
       }
-      const next = new Map(this.cache.records);
+      const next = new Map(cache.records);
       let orderChanged = false;
       for (const key of changedKeys) {
         const row = rows.get(key);
@@ -1501,24 +1582,23 @@ export class SqliteStateCollection<T> {
         }
         const held = next.get(key);
         if (!held || held.order !== row.row_order) orderChanged = true;
-        if (held?.valueJson === row.value_json) {
+        if (held?.rowRevision === row.row_revision) {
           next.set(key, { ...held, order: row.row_order, rowRevision: row.row_revision });
           continue;
         }
         const decoded = this.decodeRow(row.value_json);
         if (decoded === null) next.delete(key);
         else next.set(key, {
-          valueJson: row.value_json,
+          sourceBytes: row.value_json.length * 2,
           value: decoded,
           order: row.row_order,
           rowRevision: row.row_revision,
         });
       }
       const ordered = orderChanged
-        ? this.rememberCache(revision, next)
-        : this.rememberCacheWithOrder(revision, next, this.cache.orderedKeys);
-      this.readDb.exec("COMMIT");
-      return ordered;
+        ? this.createCache(revision, next)
+        : this.createCacheWithOrder(revision, next, cache.orderedKeys);
+      return this.commitReadCache(ordered, context);
     } catch (error) {
       rollbackQuietly(this.readDb);
       throw error;
@@ -1926,46 +2006,42 @@ export class SqliteStateCollection<T> {
     return records;
   }
 
-  private loadFull(revision: number): readonly T[] {
+  private loadFull(revision: number): CollectionCache<T> {
     const records = new Map<string, CachedRecord<T>>();
     for (const row of this.readDb.query<CollectionRow, [string]>(`
       SELECT row_key, value_json, row_order, row_revision
       FROM state_rows WHERE collection = ? ORDER BY row_order, row_key
-    `).all(this.options.collection)) {
+    `).iterate(this.options.collection)) {
       const decoded = this.decodeRow(row.value_json);
       if (decoded === null) continue;
       records.set(row.row_key, {
-        valueJson: row.value_json,
+        sourceBytes: row.value_json.length * 2,
         value: decoded,
         order: row.row_order,
         rowRevision: row.row_revision,
       });
     }
-    return this.rememberCache(revision, records);
+    return this.createCache(revision, records);
   }
 
-  private rememberCache(revision: number, records: Map<string, CachedRecord<T>>): readonly T[] {
+  private createCache(revision: number, records: Map<string, CachedRecord<T>>): CollectionCache<T> {
     const entries = [...records.entries()]
       .sort((left, right) => left[1].order - right[1].order || left[0].localeCompare(right[0]));
     const orderedKeys = entries.map((entry) => entry[0]);
     const ordered = entries.map((entry) => entry[1].value);
-    this.cache = { revision, records, orderedKeys, ordered };
-    this.revisionCache = null;
-    return ordered;
+    return { revision, records, orderedKeys, ordered };
   }
 
-  private rememberCacheWithOrder(
+  private createCacheWithOrder(
     revision: number,
     records: Map<string, CachedRecord<T>>,
     orderedKeys: readonly string[],
-  ): readonly T[] {
+  ): CollectionCache<T> {
     const ordered = orderedKeys.flatMap((key) => {
       const held = records.get(key);
       return held ? [held.value] : [];
     });
-    this.cache = { revision, records, orderedKeys, ordered };
-    this.revisionCache = null;
-    return ordered;
+    return { revision, records, orderedKeys, ordered };
   }
 
   private invalidateAfterCommit(): void {

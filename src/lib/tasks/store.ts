@@ -350,6 +350,7 @@ function openTaskCollection(database: string): SqliteStateCollection<TaskStateRo
   const held = taskCollections.get(database);
   if (held) return held;
   const collection = new SqliteStateCollection<TaskStateRow>(database, {
+    readCacheKey: "task-v1",
     collection: TASK_COLLECTION,
     schemaVersion: 1,
     busyMessage: TASK_BUSY,
