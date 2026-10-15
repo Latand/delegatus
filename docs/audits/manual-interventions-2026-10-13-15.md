@@ -2,9 +2,9 @@
 
 Audit window: **2026-10-13T00:00:00.000Z through 2026-10-15T06:31:31.000Z**, inclusive. The cutoff was extended once after this audit's runtime switch. Later activity is outside this ledger. Continuation of task `c5ebaa6c` / predecessor `90b8b77d`, after #2702. Source code inspected at `77fc690eac3880cce9507d365d47e5bc0e152354`.
 
-**448 recorded action calls** are listed: 267 control calls in A and 181 supporting calls in B. **290** belong to recovery, defect investigation or corrective authoring classes; **158** are intentional operator steering, ordinary delivery or explicit evidence/access decisions retained for completeness. The count measures tool submissions; incidents and human clicks are separate quantities. The count includes refused requests and repeat submissions. The separate request-key count below helps distinguish repeated transport attempts from new operations.
+**449 recorded action calls** are listed: 267 control calls in A and 182 supporting calls in B. **290** belong to recovery, defect investigation or corrective authoring classes; **159** are intentional operator steering, ordinary delivery or explicit evidence/access decisions retained for completeness. The count measures tool submissions; incidents and human clicks are separate quantities. The count includes refused requests and repeat submissions. The separate request-key count below helps distinguish repeated transport attempts from new operations.
 
-The most consequential observed failures were the stale overnight wake, repeated cross-seat scanner refusals, foreign CPU tickets, account-switch stranding, and recurring CI/publication recovery. Five gaps lack a matching dedicated fix task in the searched inventory: tag-only hook selection, missing visual repair edges, completed lanes without merge records after a setting change, execution-scope OOM recovery, and disposition of provider refusals. No task was created by this audit.
+The most consequential observed failures were the stale overnight wake, repeated cross-seat scanner refusals, foreign CPU tickets, account-switch stranding, and recurring CI/publication recovery. Four gaps lack a matching dedicated fix task in the searched inventory: tag-only hook selection, missing visual repair edges, completed lanes without merge records after a setting change, and disposition of provider refusals. Execution-scope OOM kills recur under the existing recovery task `9a218307` and are recorded as C20. No task was created by this audit.
 
 **Method and coverage**
 
@@ -53,25 +53,25 @@ A class is the primary reason for a call. Shared evidence is cross-referenced wi
 | C07: Native queue timing flakes | 1435f48b | 5 | 7 | 12 | 12 |
 | C08: Other platform and runtime CI flakes | 871b0b2a; 2f564772 | 4 | 5 | 9 | 9 |
 | C09: Privacy self-test/check budgets | 3d0c40c1; 8c3aa77c | 1 | 4 | 5 | 5 |
-| C10: Post-pass publication and PR repair | 53101244; ed9a6b85 | 3 | 10 | 13 | 13 |
+| C10: Post-pass publication and PR repair | 53101244; ed9a6b85 | 3 | 9 | 12 | 12 |
 | C11: Scanner blocks seat-to-seat transport | a9a2224a | 0 | 28 | 28 | 14 |
 | C12: Stale seat wake after deployment | 313561b2 | 0 | 1 | 1 | 1 |
 | C13: Old launch failures announced after deploy | f37bce95 | 0 | 2 | 2 | 2 |
-| C14: Successor branch ownership | 09ee7128; 6935b2a9 | 0 | 4 | 4 | 4 |
+| C14: Successor branch ownership | 09ee7128; 6935b2a9 | 0 | 5 | 5 | 5 |
 | C15: Stored-lesson regex blocks launches | f13b646b | 6 | 5 | 11 | 11 |
 | C16: Implementation/brief authoring and fences | ed9a6b85 | 6 | 42 | 48 | 48 |
 | C17: Uncertain dispatch receipt recovery | 9b4d6c4d | 0 | 8 | 8 | 4 |
 | C18: Deployment control and readiness recovery | 8f38832e; 7ef38fa1 | 5 | 0 | 5 | 4 |
 | C19: Completed/no-PR merge attention | 1e1df51a | 1 | 0 | 1 | 1 |
+| C20: Execution-scope OOM kills resumed by hand | 9a218307 (done 2026-10-10; recurrent cases); related b9820285 / c7706ad2 | 4 | 2 | 6 | 6 |
 | N01: NEW: tag-only hook selection | NEW | 0 | 2 | 2 | 2 |
 | N02: NEW: visual critic without repair edge | NEW; related ed9a6b85 | 6 | 0 | 6 | 6 |
 | N03: NEW: re-enabling merge leaves no merge record | NEW; related f7461289 | 1 | 3 | 4 | 2 |
-| N04: NEW: execution memory cap recovery | NEW; related b9820285 / c7706ad2 | 4 | 2 | 6 | 6 |
-| N05: NEW: provider refusal disposition | NEW; related ed9a6b85 | 2 | 0 | 2 | 2 |
-| D0: Routine operator steering / delivery | Underlying lane task; no defect inferred | 98 | 48 | 146 | 145 |
+| N04: NEW: provider refusal disposition | NEW; related ed9a6b85 | 2 | 0 | 2 | 2 |
+| D0: Routine operator steering / delivery | Underlying lane task; no defect inferred | 98 | 49 | 147 | 146 |
 | D1: Explicit evidence/access decision | Underlying lane task; ed9a6b85 for avoidable brief ambiguity | 11 | 1 | 12 | 12 |
 
-Counts sum to 448. The 158 D0/D1 calls are included in that total. A key can be retried after a refusal, so distinct keys are not a count of durable mutations.
+Counts sum to 449. The 159 D0/D1 calls are included in that total. A key can be retried after a refusal, so distinct keys are not a count of durable mutations.
 
 
 **Top five by operator-visible cost**
@@ -98,20 +98,22 @@ The launch-recovery cost is also substantial: `4e79b392` was reported spawning s
 - **Launch/restart recovery, `93fe5f8a` / `9630f92a`:** old shipped tasks do not prove the current cases fixed. A110/A112 repeat path-pending refusals, A119 rejects retry despite the reported spawning state, and A184 retries `76d76856` after the wake explicitly reported a spawn interrupted before durable launch evidence. A103/A104 show transient busy admission before an accepted retry. The current engine has restart recovery, but these observations identify its remaining cases.
 - **Dead-host close, `6658b62e`:** `1f2824d9` could not close at 13 02:15 or 11:08 because continuation cancellation required an unavailable host. After #2833, both it and duplicate `96ee6724` closed at 14 12:20; duplicate PR #2834 was closed too.
 - **CI/publication:** `1435f48b` covers the native queue's 50 ms assertions, with reported 104 ms and 67.7 ms failures on unrelated work. `871b0b2a` covers macOS login/native succession; `2f564772` retains the other platform/fence audit. `3d0c40c1` covers privacy timing; `53101244` covers competing hook budgets. The seat reports three 14-minute hook timeouts on `443238cf`; this audit did not rerun that timing. Its manual push and publish are B010/A001.
-- **Successor branches:** four detaches are the same workaround already recorded in `09ee7128`; `6935b2a9` separately covers stale logical ownership after a successor passes. These four preventive detaches do not prove that Git would have refused a contemporary unmodified create call. Completed PR #2869's published/refreshed-head mismatch and #2905's red journal check remain C10 post-pass repair, with `c7706ad2` / `25844384` as the underlying implementation work.
+- **Successor branches:** five detaches (B082a, B144, B153, B163, B170) are the same workaround already recorded in `09ee7128`; `6935b2a9` separately covers stale logical ownership after a successor passes. These five preventive detaches do not prove that Git would have refused a contemporary unmodified create call. Completed PR #2869's published/refreshed-head mismatch and #2905's red journal check remain C10 post-pass repair, with `c7706ad2` / `25844384` as the underlying implementation work.
 - **Deployment:** all 19 `deploy_exact_sha` calls are in A, including ordinary deploys. A124/A125 are the same key: a control timeout and its replay. A126's fresh key returned `busy`; that receipt does not establish a second deploy or a successful promotion. A106 requested the already-serving revision to unstick work; it does not by itself prove a restart. Readiness/transport recovery maps provisionally to `8f38832e` / `7ef38fa1`; the exact relationship to their earlier deadline race is unconfirmed. Three pending-CI refusals are ordinary gate enforcement.
+- **Execution-scope OOM, `9a218307`:** C20 holds three resumes (A084, A094, B099), one refused retry (A083), one resume instruction (B065) and one dismissed ask (A139), after kills reported at 13 06:02, 13 13:58 and for the auditor by 14 13:57. The task's automatic retry exists in source; see the paragraph after the gap table for what is and is not established. These calls are not counted as a new gap.
 - **Old notices:** `f37bce95` already tracks the post-deploy old-launch notices. The report describes newly emitted notices about old failures; duplicate arrival was not demonstrated. S5 seq 2690545 confirms issue #2895 published at 14 22:10:38; an older task note saying only “preview” is stale. Forwarding one completed audit from predecessor to successor seat at 15 05:10 was routine handoff, with no claim of lost work.
 - **Uncertain dispatch:** four worker-launch groups each have a first `outcome_unknown` and a same-key repeat (B097/B098, B127/B128, B157/B158, B178/B179). This supports receipt-recovery work under `9b4d6c4d`, without asserting either duplication or loss. Three seat rotations also returned uncertainty, but successor transcripts confirm their continuation; they are D0 controls.
 
-**Five new gaps for the seat to route**
+**Four new gaps for the seat to route**
 
 | Gap | Evidence and existing-task comparison | Root-cause hypothesis / next discriminating check |
 | --- | --- | --- |
 | N01: tag-only hook input | 13 06:54:37 tag creation/push failed with `inspection_error: 1`; 06:54:48 bypass push succeeded (S2 seq 3925923/3933404). The target commit was already published. Project task query `tag` returned no matching tag-push fix. | The pre-push path computes scope from checkout HEAD, merge base, staged/unstaged/untracked files; it does not derive it from pushed tag refs. See [local-gate](../../scripts/local-gate.ts#L657) and [.githooks/pre-push](../../.githooks/pre-push). The code supports this candidate; the input behind the historical inspection error still needs reproduction. Reproduce with an already-published tag target plus an unrelated checkout change and require a correct tag-specific privacy decision without bypass. |
 | N02: terminal visual stages have no repair edge | `e9ded0d4`: add shot-fix, set visual failure edge, retry visual at 14 06:27; `f68fdd29`: same three actions at 07:22 (A113–A118). Memory `m_442e1172618a3fa15b60f1ea` explicitly records the repeated authoring trap. No dedicated matching visual-edge task was found; related authoring umbrella `ed9a6b85` remains. | Graph creation admits a critic without a failure destination, and [routeFailedAttempt](../../src/lib/pipelines/engine.ts#L4122) returns false when it has none. A graph preset or validation rule should require a bounded repair path for workflows expected to repair findings. An intentionally terminal decision-only critic needs an explicit disposition. Test both creation and a real failed critic transition. |
 | N03: completed lane has no merge record after re-enable | `01dac933` retry-merge at 14 20:31:33 was refused; the seat then sent the same merger instruction three times at 20:31:58, 20:32:08 and 20:47:19 (A148; B131/B132/B136). Prior `f7461289` concerns required checks; `1e1df51a` concerns already-landed recognition. Neither describes this missing admission. | [retryMerge](../../src/lib/pipelines/engine.ts#L13189) requires an existing merge record. A lane completed while merge-on-review was off can lack that record when the setting is turned back on. Establish an idempotent admission path for already-completed, eligible PR heads when the setting changes, with normal authorization and required checks. The setting-write itself was not captured as a seat tool call; the seat's state/authorization context is the evidence for the trigger. |
-| N04: OOM during execution needs manual recovery | `14668605` resumed at 13 06:04, `c011d771` resumed at 13 13:59, and auditor `514f039e` was instructed to resume at 14 13:57 and its ask dismissed at 13:58. Six calls in A/B. `b9820285` addresses free memory at spawn; `c7706ad2` addresses host lifetime when a child scope ends. | A live replay or test can exceed an agent scope even after spawn admission passed. The seat reports 4–8 GiB agent scopes and a replay requiring roughly 5 GB; the prescribed recovery was a separate bounded gate scope and serialized work. Confirm the actual cgroup limit and OOM victim for each execution, then make resource failure resumable with preserved receipts and appropriately admitted heavy commands. This audit did not remeasure historical cgroups and cannot establish a common kernel cause from the seat's diagnosis alone. |
-| N05: provider refusal leaves an unclassified parked review | `be292f34`'s review stopped on a provider cybersecurity-policy error; the seat changed reviewer engine and retried at 15 05:04:39/05:04:44 (A161/A162). S5 seq 3795258 contains the provider error; the project `cyber` task query found no matching task. | Preserve a distinct provider-policy-refusal state and route it to an explicit authorized disposition. The desired remedy is accurate classification and human review of allowed scope/provider configuration; automatic policy bypass is not an acceptance criterion. Verify that retries preserve the original refusal and do not present an unreviewed reassignment as success. |
+| N04: provider refusal leaves an unclassified parked review | `be292f34`'s review stopped on a provider cybersecurity-policy error; the seat changed reviewer engine and retried at 15 05:04:39/05:04:44 (A161/A162). S5 seq 3795258 contains the provider error; the project `cyber` task query found no matching task. | Preserve a distinct provider-policy-refusal state and route it to an explicit authorized disposition. The desired remedy is accurate classification and human review of allowed scope/provider configuration; automatic policy bypass is not an acceptance criterion. Verify that retries preserve the original refusal and do not present an unreviewed reassignment as success. |
+
+Execution-scope OOM kills are **already owned**, so they are C20 and no longer a NEW gap: task `9a218307` (created October 1, done October 10, before this window) lists as its third requirement that a stage killed by OOM is reported as such and retried once automatically after memory recovers. Its source mechanism is present at the inspected revision: [retryOutOfMemoryStage](../../src/lib/pipelines/engine.ts#L5031) fails the attempt, records `outOfMemory` and schedules one retry, and [waitForMemory](../../src/lib/pipelines/engine.ts#L5052) holds that retry for up to 30 minutes of memory headroom. The six calls are therefore recurrent or remaining recovery cases under that task, and Done status does not show them fixed. Observed: the seat's wakes already name the kill ("builder was killed out of memory (fix); resume it or close its work", 13 06:04:25 and 13 13:58:58), `14668605` `retry-stage` was refused at 06:04:30 because the attempt was not confirmed stalled, and the seat then resumed the killed conversations by hand (A084, A094, B065) and told the agents to run heavy checks through a separate gate scope. `b9820285` covers free memory at spawn and `c7706ad2` host lifetime when a child scope ends; neither covers a kill during execution. Not established: whether each of these attempts reached the automatic retry. This audit did not read the attempt-level `outOfMemory` / `memoryWait` fields, and `14668605` shows a second fix attempt starting at 13 06:45:47 on a different conversation from the one resumed at 06:04. Discriminating check: read those fields for `14668605`, `c011d771` and `514f039e`; where the automatic retry did not run, attach the case to `9a218307` as a remaining condition (for example a worker ask that is raised while the pipeline still shows the attempt running). The seat's 4–8 GiB scope and roughly 5 GB replay figures are its own diagnosis, not remeasured here.
 
 The tier problem is **already filed**, so it is C04 rather than NEW: `6f50b3bd`, lane `f6dcee6c` by the cutoff. Source inspection confirms the mechanism: [override](../../src/lib/pipelines/engine.ts#L12961) invokes `stageAccountRefusal([target])` before the account replacement block below it; [the validator](../../src/lib/pipelines/engine.ts#L589) narrows candidates to `stage.account`. That explains why add-stage accepted the account/tier pair while override refused it. Five added review stages plus ten edge edits quantify one tier defect across five graphs.
 
@@ -210,8 +212,8 @@ Times below are UTC in October 2026: `DD HH:MM:SS.mmm`. K is a local alias for a
 | A080 | 13 06:02:34.331 | S2:3500620 | 9847371d | override-stage fix (live) | accepted (running) | C16 | K112; G3 |
 | A081 | 13 06:02:36.703 | S2:3510945 | 7b4e0e0c | override-stage fix (live) | accepted (running) | C16 | K113; G3 |
 | A082 | 13 06:02:38.844 | S2:3521270 | ed8b357b | override-stage build (live) | accepted (running) | C16 | K114; G3 |
-| A083 | 13 06:04:29.985 | S2:3645353 | 14668605 | retry-stage fix | refused: stall unconfirmed | N04 | K115 |
-| A084 | 13 06:04:37.206 | S2:3689108 | 8b5ea680 | resume | accepted | N04 | K116 |
+| A083 | 13 06:04:29.985 | S2:3645353 | 14668605 | retry-stage fix | refused: stall unconfirmed | C20 | K115 |
+| A084 | 13 06:04:37.206 | S2:3689108 | 8b5ea680 | resume | accepted | C20 | K116 |
 | A085 | 13 06:24:32.288 | S2:3769177 | ac866f68 | close | accepted (closed) | C02 | K119 |
 | A086 | 13 06:24:33.979 | S2:3773480 | ce4e44b1 | close | accepted (closed) | C02 | K120 |
 | A087 | 13 07:09:35.364 | S2:3979908 | 762633d8 | retry-merge | accepted (completed) | C07 | K127 |
@@ -221,7 +223,7 @@ Times below are UTC in October 2026: `DD HH:MM:SS.mmm`. K is a local alias for a
 | A091 | 13 11:08:59.906 | S2:4285690 | 1f2824d9 | close | refused: host unavailable | C06 | K132 |
 | A092 | 13 11:09:14.512 | S2:4309679 | f275413e | deploy_exact_sha | accepted (accepted) | D0 | K133 |
 | A093 | 13 12:34:33.016 | S2:5024411 | 8478db36 | resolve-decision | accepted (running) | D1 | K136 |
-| A094 | 13 13:59:01.780 | S2:5353441 | c65caf94 | resume | accepted | N04 | K143 |
+| A094 | 13 13:59:01.780 | S2:5353441 | c65caf94 | resume | accepted | C20 | K143 |
 | A095 | 13 15:10:56.403 | S2:5517264 | c011d771 | retry-merge | accepted (completed) | C07 | K149 |
 | A096 | 13 15:22:04.646 | S2:5562276 | 8478db36 | resolve-decision | accepted (running) | D1 | K152 |
 | A097 | 13 15:40:55.721 | S2:5601535 | ef9e6b23 | deploy_exact_sha | accepted (accepted) | D0 | K153 |
@@ -266,7 +268,7 @@ Times below are UTC in October 2026: `DD HH:MM:SS.mmm`. K is a local alias for a
 | A136 | 14 13:11:57.383 | S3:2672353 | 5e4502f0 | retry-stage fix | accepted (running) | C15 | K213 |
 | A137 | 14 13:12:07.771 | S3:2732539 | f696d046 | retry-merge | accepted (completed) | C07 | K214 |
 | A138 | 14 13:47:21.803 | S3:2973029 | 2a019746 | resolve-decision | accepted (running) | D1 | K216 |
-| A139 | 14 13:58:09.712 | S3:3065360 | 514f039e | dismiss_attention | accepted | N04 | K219 |
+| A139 | 14 13:58:09.712 | S3:3065360 | 514f039e | dismiss_attention | accepted | C20 | K219 |
 | A140 | 14 15:58:01.929 | S3:3316390 | 6961f665 | deploy_exact_sha | accepted (accepted) | D0 | K224 |
 | A141 | 14 16:46:25.488 | S4:961471 | 15bdb5f7 | close | accepted (closed) | D0 | K227 |
 | A142 | 14 16:47:54.152 | S4:1114306 | 3050c102 | deploy_exact_sha | accepted (accepted) | D0 | K228 |
@@ -288,8 +290,8 @@ Times below are UTC in October 2026: `DD HH:MM:SS.mmm`. K is a local alias for a
 | A158 | 15 00:02:57.665 | S5:3713181 | aa62b578 | deploy_exact_sha | refused: checks pending | D0 | K300 |
 | A159 | 15 00:04:36.703 | S5:3736699 | aa62b578 | deploy_exact_sha | refused: checks pending | D0 | K303 |
 | A160 | 15 00:24:44.231 | S5:3779203 | 781ecd4c | deploy_exact_sha | accepted (accepted) | D0 | K304 |
-| A161 | 15 05:04:39.621 | S5:3888623 | be292f34 | override-stage review | accepted (needs_decision) | N05 | K306; G2 |
-| A162 | 15 05:04:44.078 | S5:3897448 | be292f34 | retry-stage review | accepted (running) | N05 | K307 |
+| A161 | 15 05:04:39.621 | S5:3888623 | be292f34 | override-stage review | accepted (needs_decision) | N04 | K306; G2 |
+| A162 | 15 05:04:44.078 | S5:3897448 | be292f34 | retry-stage review | accepted (running) | N04 | K307 |
 | A163 | 15 05:05:19.843 | S5:3945454 | f0aa1063 | dismiss_attention | accepted | C19 | K310 |
 | A164 | 15 05:07:16.385 | S5:4058676 | 2e668337 | override-stage diagnose (live) | accepted (running) | D0 | K311; G1 |
 | A165 | 15 05:07:19.286 | S5:4068891 | 2e668337 | override-stage build | accepted (running) | D0 | K312; G2 |
@@ -399,7 +401,7 @@ Times below are UTC in October 2026: `DD HH:MM:SS.mmm`. K is a local alias for a
 
 **B. Supporting actions and corrected submissions**
 
-Shell rows are one command submission even when the command contains several steps. “Command/result recorded” means its exact command and output are available at the cited transcript position; no broader success is inferred. Standalone launch rows record admission, with any later role refusal explained above. Delivery acknowledgements do not prove the recipient read or acted on a message.
+Shell rows are one command submission even when the command contains several steps. Row B082a was added after review and sorts between B082 and B083 by time, so the other B IDs and their cross-references stay stable; its key K179a likewise sorts between K179 and K180. “Command/result recorded” means its exact command and output are available at the cited transcript position; no broader success is inferred. Standalone launch rows record admission, with any later role refusal explained above. Delivery acknowledgements do not prove the recipient read or acted on a message.
 
 | ID | UTC | Source:seq | Target | Action | Receipt / observation | Class | Key / graph |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -467,7 +469,7 @@ Shell rows are one command submission even when the command contains several ste
 | B062 | 13 12:36:08.333 | S2:5150752 | 206eb10a | Relay provisional deadline contract to designer | accepted | D0 | K140 |
 | B063 | 13 13:39:21.802 | S2:5278149 | c011d771 | Cut overbuilt identity matching after three review regressions | accepted | C16 | K141 |
 | B064 | 13 13:54:12.581 | S2:5322897 | other project seat | Cross-seat coordination send | accepted | D0 | K142 |
-| B065 | 13 13:59:07.000 | S2:5358358 | c011d771 | Resume instructions after OOM; serialize heavy checks | accepted | N04 | K144 |
+| B065 | 13 13:59:07.000 | S2:5358358 | c011d771 | Resume instructions after OOM; serialize heavy checks | accepted | C20 | K144 |
 | B066 | 13 14:14:27.608 | S2:5403921 | caller validation | Repair required: seat_tick_settings | refused: text limit | C16 | K145 |
 | B067 | 13 14:14:32.024 | S2:5408732 | caller validation | Correct and resubmit seat_tick_settings | accepted | C16 | K146 |
 | B068 | 13 14:57:42.648 | S2:5446587 | 38415833210 | Rerun failed CI jobs | command/result recorded | C07 | K147 |
@@ -485,6 +487,7 @@ Shell rows are one command submission even when the command contains several ste
 | B080 | 14 04:58:36.242 | S2:6824115 | 38511723617 | Rerun flaky docs PR job | command/result recorded | C07 | K165 |
 | B081 | 14 05:03:24.785 | S2:6957881 | caller validation | Repair required: seat_tick_settings | refused: text limit | C16 | K166 |
 | B082 | 14 05:03:31.270 | S2:6964784 | caller validation | Correct and resubmit seat_tick_settings | accepted | C16 | K167 |
+| B082a | 14 06:47:29.359 | S2:7392805 | 47320f8c | Detach old PR worktree before successor | command/result recorded | C14 | K179a |
 | B083 | 14 06:47:47.507 | S2:7397043 | 81f96637 | Create successor of 47320f8c | accepted (provisioning) | C10 | K180 |
 | B084 | 14 07:15:55.259 | S2:8187985 | caller validation | Repair required: seat_tick_settings | refused: text limit | C16 | K181 |
 | B085 | 14 07:15:59.246 | S2:8193930 | caller validation | Correct and resubmit seat_tick_settings | accepted | C16 | K182 |
@@ -501,7 +504,7 @@ Shell rows are one command submission even when the command contains several ste
 | B096 | 14 12:44:43.587 | S3:2631221 | PR #2849 | Manually merge reviewed matcher fix | command/result recorded | C15 | K209 |
 | B097 | 14 13:22:12.228 | S3:2780586 | delegated work | Spawn verifier: Live check: Fish Audio read-aloud on prod | outcome unknown | C17 | K215 |
 | B098 | 14 13:22:26.576 | S3:2799682 | delegated work | Spawn verifier: Live check: Fish Audio read-aloud on prod | replayed receipt | C17 | K215 |
-| B099 | 14 13:57:21.382 | S3:3009526 | auditor 514f039e | Resume auditor with bounded replay scope | accepted | N04 | K217 |
+| B099 | 14 13:57:21.382 | S3:3009526 | auditor 514f039e | Resume auditor with bounded replay scope | accepted | C20 | K217 |
 | B100 | 14 13:57:36.818 | S3:3041850 | main | Require typecheck on main; read back protection | command/result recorded | D0 | K218 |
 | B101 | 14 14:12:47.893 | S3:3087947 | 5e4502f0 | Correct rendered-evidence method for hidden readers | accepted | C16 | K220 |
 | B102 | 14 14:28:30.374 | S3:3137916 | 2a019746 | Lift obsolete memory-code fence after dependencies landed | accepted | C16 | K221 |
@@ -531,7 +534,7 @@ Shell rows are one command submission even when the command contains several ste
 | B126 | 14 20:13:24.257 | S4:3506990 | delegated work | Spawn merger: Merge #2877 (controller stall fix; operator-approved while auto-merge is off) | accepted (starting) | D0 | K253 |
 | B127 | 14 20:27:32.137 | S4:3550345 | delegated work | Spawn verifier: ElevenLabs v4 Turbo listening test with a designed Delegatus voice vs Fish Jarvis, Fish English, Soniox | outcome unknown | C17 | K254 |
 | B128 | 14 20:27:53.133 | S4:3570912 | delegated work | Spawn verifier: ElevenLabs v4 Turbo listening test with a designed Delegatus voice vs Fish Jarvis, Fish English, Soniox | replayed receipt | C17 | K254 |
-| B129 | 14 20:28:21.564 | S4:3605660 | delegated work | Spawn merger: Merge #2869, #2874, #2880 after #2877 lands (operator-approved while auto-merge is off) | accepted (starting) | C10 | K255 |
+| B129 | 14 20:28:21.564 | S4:3605660 | delegated work | Spawn merger: Merge #2869, #2874, #2880 after #2877 lands (operator-approved while auto-merge is off) | accepted (starting) | D0 | K255 |
 | B130 | 14 20:30:11.282 | S4:3665961 | seat rotation | Rotate seat; successor transcript confirms continuation | outcome unknown | D0 | K256 |
 | B131 | 14 20:31:58.062 | S5:816532 | 01dac933 | Ask separate merger to include completed lane PR | outcome unknown | N03 | K258 |
 | B132 | 14 20:32:08.034 | S5:826449 | 01dac933 | Replay same merger message key | replayed receipt | N03 | K258 |
