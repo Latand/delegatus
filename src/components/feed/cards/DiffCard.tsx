@@ -7,7 +7,7 @@ import { MESSAGE_ACTION } from "../actionStyles";
 import { CopyButton } from "../CopyButton";
 import { tr, type ToolBody } from "../parse";
 import { FileRef } from "./shared";
-import type { DiffLine, FileDiff, Hunk } from "../diff";
+import { headingText, type DiffLine, type FileDiff, type Hunk } from "../diff";
 
 /** Level-1 visible-line budget per file: a compact preview of the first lines
     shown expanded by default; "show all" reveals the capped rest (issue #90). */
@@ -24,48 +24,87 @@ function humanKb(chars: number): string {
   return `${Math.max(1, Math.round(chars / 1024))} kB`;
 }
 
-function flatten(hunks: Hunk[]): { line: DiffLine; header?: string }[] {
-  const out: { line: DiffLine; header?: string }[] = [];
+export type DiffRow = { line: DiffLine; header?: string; /** First row of its hunk. */ start?: boolean };
+
+export function flattenHunks(hunks: Hunk[]): DiffRow[] {
+  const out: DiffRow[] = [];
   for (const hunk of hunks) {
     let first = true;
     for (const line of hunk.lines) {
-      out.push({ line, header: first ? hunk.header : undefined });
+      out.push({ line, header: first ? hunk.header : undefined, start: first });
       first = false;
     }
   }
   return out;
 }
 
-function LineRow({ line }: { line: DiffLine }) {
+function LineRow({ line, prose = false }: { line: DiffLine; prose?: boolean }) {
   const tone =
     line.t === "+"
       ? "bg-diff-add-soft text-diff-add"
       : line.t === "-"
         ? "bg-diff-del-soft text-diff-del"
         : "text-primary";
-  const intralineTone = line.t === "+" ? "bg-diff-add-strong" : "bg-diff-del-strong";
+  /* The wrapping prose rows read as text, so a highlighted word keeps the
+     reader's own ink: the row's add/del ink on the stronger tint is 3.8:1. */
+  const intralineTone = `${line.t === "+" ? "bg-diff-add-strong" : "bg-diff-del-strong"}${prose ? " text-primary" : ""}`;
+  const content = line.intraline
+    ? line.intraline.map((span, index) =>
+        span.changed ? (
+          <span key={index} className={intralineTone}>
+            {span.text}
+          </span>
+        ) : (
+          span.text
+        ),
+      )
+    : line.text || " ";
+  if (prose) {
+    /* Prose rows wrap, so the marker sits in its own column and a wrapped line
+       stays under its own text instead of under the marker. */
+    return (
+      <div className={`flex gap-1.5 px-2 ${tone}`} data-orchestrator-mandate-diff-line={line.t}>
+        <span className="w-[1ch] shrink-0 font-mono">{line.t}</span>
+        <span className="min-w-0 flex-1 whitespace-pre-wrap break-words">{content}</span>
+      </div>
+    );
+  }
   return (
     <div className={`whitespace-pre px-2 ${tone}`}>
       {/* The +/- marker is real text content, so screen readers and copy keep it. */}
       {line.t}
-      {line.intraline
-        ? line.intraline.map((span, index) =>
-            span.changed ? (
-              <span key={index} className={intralineTone}>
-                {span.text}
-              </span>
-            ) : (
-              span.text
-            ),
-          )
-        : line.text || " "}
+      {content}
     </div>
+  );
+}
+
+/** The diff's rows in the feed's own tones and intraline spans. `prose` is the
+    wrapping variant a mandate (paragraphs, not code) is read in: sans, wrapped,
+    hunk captions without the `@@` prefix. */
+export function DiffRows({ rows, prose = false }: { rows: DiffRow[]; prose?: boolean }) {
+  const caption = (text: string) => (
+    <div className={prose ? "break-words px-2 pt-1 text-caption text-muted" : "whitespace-pre px-2 text-muted"}>{text}</div>
+  );
+  return (
+    <>
+      {rows.map(({ line, header, start }, i) => {
+        /* A heading the diff passes through unchanged reads as the same small
+           caption a hunk's own heading does, in prose without its `#` marker. */
+        const heading = prose && line.t === " " ? headingText(line.text) : null;
+        return (
+          <div key={i} className={prose && start && i > 0 ? "mt-1 border-t border-border pt-1" : undefined}>
+            {header ? caption(prose ? (headingText(header) ?? header) : `@@ ${header}`) : null}
+            {heading !== null ? caption(heading) : <LineRow line={line} prose={prose} />}
+          </div>
+        );
+      })}
+    </>
   );
 }
 
 function FileDiffView({ file }: { file: FileDiff }) {
   const [all, setAll] = useState(false);
-  const rows = flatten(file.hunks);
+  const rows = flattenHunks(file.hunks);
   const overflow = rows.length > PREVIEW_LINES;
   const visible = all ? rows : rows.slice(0, PREVIEW_LINES);
   const copyText = file.hunks.flatMap((hunk) => hunk.lines.map((line) => line.t + line.text)).join("\n");
@@ -94,12 +133,7 @@ function FileDiffView({ file }: { file: FileDiff }) {
       ) : rows.length ? (
         <>
           <div className="max-w-full overflow-x-auto py-1 font-mono text-[11.5px] leading-[1.5]">
-            {visible.map(({ line, header }, i) => (
-              <div key={i}>
-                {header ? <div className="whitespace-pre px-2 text-muted">{`@@ ${header}`}</div> : null}
-                <LineRow line={line} />
-              </div>
-            ))}
+            <DiffRows rows={visible} />
           </div>
           {overflow ? (
             <button
