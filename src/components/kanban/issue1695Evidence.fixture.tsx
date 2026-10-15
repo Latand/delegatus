@@ -38,6 +38,7 @@ import { orchestratorWireLayers } from "./SeatActionWires";
 import { applyBoardMutations, type BoardMutationV1 } from "@/lib/board/mutations";
 import { laneNeedKind, laneRouteKey, type AttentionRouteMark } from "@/lib/attention/routeTypes";
 import { setKanbanCardsOpenByDefault } from "./cardOpenDefault";
+import { answerKeysPrototype } from "@/components/keys/keysPrototype";
 import { resolvePipelineLinks, resolveTaskLinks, type CachedPullRequest, type FilesWorkLinks, type ForgeCacheView, type ForgeRepositoryView, type ResolvedWorkLinks } from "@/lib/forge/workLinks";
 import type { Pipeline } from "@/lib/pipelines/types";
 import { ORCHESTRATOR_PROMPT_VERSION, orchestratorMandateForDelivery } from "@/lib/orchestrator/prompt";
@@ -3588,6 +3589,7 @@ const workerAnswer = (project: string | null) => ({
   project: project ? { key: project, value: workerProject, effective: workerProject ?? workerMachine, source: workerSource() } : null,
   running: { here: project ? workerRunning : null, machine: WORKER_SCENE ? 19 : 0 },
 });
+const KEYS_PROTOTYPE = new URLSearchParams(location.search).has("keysVariant");
 const HEADER_ROUTES = ["/api/telemetry", "/api/memory/settings", "/api/asks-you/key", "/api/team"];
 const ROLE_MEMORY = new URLSearchParams(location.search).has("rolememory");
 /* The one request that leaves the page: the evidence server draws task icons from lucide (#2102). */
@@ -3635,6 +3637,8 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   if (SCENARIO === "service-tier" && url.pathname === "/api/roles") return json({ roles: ROLE_DEFAULTS.map(role => ({ ...role, promptPreview: role.promptScaffold, config: { ...role.config, ...(role.id === "reviewer" ? { serviceTier: "ultrafast" } : {}) }, shipped: { config: role.config } })) });
   if (SCENARIO === "memory-settings" && ["/api/telemetry", "/api/memory/settings", "/api/asks-you/key", "/api/asks-you"].includes(url.pathname)) return serverFetch(url.pathname + url.search, init);
   if (HEADER_MENU && HEADER_ROUTES.includes(url.pathname)) return serverFetch(url.pathname + url.search, init);
+  /* PROTOTYPE (docs/design/keys-settings.md): `&keysVariant=` answers the keys section's routes in the page, on placeholders. */
+  if (KEYS_PROTOTYPE && url.pathname.startsWith("/api/keys")) return answerKeysPrototype(url, init);
   /* Role memory (docs/design/role-memory.md §3.1): `&rolememory=1` hands the rules window and the card's lesson line to the driver's real routes. */
   if (ROLE_MEMORY && url.pathname.startsWith("/api/role-memory")) return serverFetch(url.pathname + url.search, init);
   if (url.pathname === "/api/task-icons") return serverFetch(url.pathname + url.search);

@@ -11197,3 +11197,225 @@ describe("stale working status", () => {
     } finally { await browser.close(); server.stop(); fs.rmSync(directory, { recursive: true, force: true }); }
   }, 300_000);
 });
+
+/*
+ * PROTOTYPE frames for «Ключі» (docs/design/keys-settings.md §6), on this
+ * design lane's branch only: the three variants on the real header menu,
+ * phone menu sheet and dialog shell, every state of §6 at 1440 and 390 px,
+ * light and dark, Ukrainian, on placeholder keys the fixture answers itself.
+ *
+ *   LLV_SWIPE_BROWSER_TEST=1 LLV_KEYS_FRAMES=<dir> CHROME_BIN=… bun test \
+ *     src/components/mobile/issue1671Evidence.browser.test.tsx -t "keys settings prototype"
+ */
+describe("keys settings prototype", () => {
+  browserTest("three variants of «Ключі», every state, 1440 and 390, light and dark", async () => {
+    const { IMPORT_SAMPLE } = await import("@/components/keys/keysPrototype");
+    const FRAMES = path.resolve(process.env.LLV_KEYS_FRAMES ?? ".artifacts/keys-settings");
+    const only = process.env.LLV_KEYS_ONLY ? new Set(process.env.LLV_KEYS_ONLY.split(",")) : null;
+    fs.mkdirSync(FRAMES, { recursive: true });
+    /* The Settings page's neighbours answer as on a working install, so only the keys row is new. */
+    const server = await serveEvidenceFixture(path.join(OUT, "keys-settings"), undefined, {
+      "/api/telemetry": { enabled: false, locked: false, noticeDismissed: true },
+      "/api/memory/settings": { enabled: true, reasons: [], keySource: "file", capUsd: 5, spentUsd: 1.214, month: "2026-10",
+        counts: { decisions: 214, delivered: 61, prepared: 69, noCandidates: 48, noMatches: 97, skipped: 12, failed: 5 } },
+      "/api/asks-you/key": { present: true, source: "file" },
+      "/api/team": { mode: "solo" },
+    });
+    const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_BIN, args: ["--no-sandbox", "--disable-dev-shm-usage"] });
+    const readings: Record<string, unknown>[] = [];
+    const failures: string[] = [];
+    const FAKE_OPENROUTER = `sk-or-v1-${"0".repeat(64)}`;
+    const FAKE_ELEVENLABS = `sk_${"1".repeat(48)}`;
+    type State = "settings" | "list" | "env-popover" | "revealed" | "copied" | "menu" | "copied-masked" | "replace-invalid" | "add"
+      | "export" | "export-file" | "import-preview" | "import-done" | "staging" | "member" | "read-failed" | "row-failed";
+    const STATES: State[] = ["settings", "list", "env-popover", "revealed", "copied", "menu", "copied-masked", "replace-invalid", "add",
+      "export", "export-file", "import-preview", "import-done", "staging", "member", "read-failed", "row-failed"];
+    const SCENE: Partial<Record<State, string>> = { staging: "staging", member: "member", "read-failed": "failed", "row-failed": "rowfail" };
+
+    try {
+      for (const variant of [1, 2, 3] as const) for (const theme of ["light", "dark"] as const) for (const width of [1440, 390] as const) {
+        const phone = width === 390;
+        const viewport = phone ? { width: 390, height: 844 } : { width: 1440, height: 900 };
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?keysVariant=${variant}&header=1`, viewport, theme, "uk", "reduce", phone, 2);
+        await context.grantPermissions(["clipboard-read", "clipboard-write"], { origin: server.base.replace(/\/$/, "") });
+        const sectionSurface = variant === 1 ? (phone ? "[data-mobile2-sheet='menu']" : "[data-rail-menu-panel]") : "[data-keys-dialog]";
+        const surface = sectionSurface;
+        const row = (id: string) => page.locator(`${surface} [data-keys-row="${id}"]`).first();
+        const clipboard = () => page.evaluate(() => navigator.clipboard.readText());
+        const tap = async (selector: string) => { const target = page.locator(selector).first(); await target.scrollIntoViewIfNeeded(); await target.click(); };
+
+        const openSection = async (scene: string | undefined, settingsOnly = false) => {
+          await page.goto(`${server.base}?keysVariant=${variant}&header=1${scene ? `&keys=${scene}` : ""}`);
+          await tap(phone ? '[data-mobile2-open="menu"]' : "[data-rail-menu]");
+          await tap(phone ? '[data-mobile2-menu-row="settings"]' : "[data-rail-menu-settings]");
+          const keysRow = phone ? '[data-mobile2-menu-row="keys"]' : "[data-rail-menu-keys]";
+          await page.locator(keysRow).waitFor();
+          await page.waitForFunction((selector) => !document.querySelector(selector)?.textContent?.includes("…"), keysRow);
+          if (settingsOnly) { await page.locator(keysRow).scrollIntoViewIfNeeded(); return; }
+          await tap(keysRow);
+          await page.locator(variant === 1 ? "[data-keys-page]" : "[data-keys-dialog]").waitFor();
+          if (scene === "failed") await page.locator("[data-keys-failed]").waitFor();
+          else await page.locator(`${surface} [data-keys-row]`).first().waitFor();
+        };
+
+        /** Reads the frame's geometry and text, then writes the whole screen and, for a small surface, a crop of it. */
+        const frame = async (state: State, focus?: string) => {
+          const surface = state === "settings" ? (phone ? "[data-mobile2-sheet='menu']" : "[data-rail-menu-panel]") : sectionSurface;
+          /* A pasted text shows from its first line. */
+          await page.evaluate(() => { const box = document.querySelector("[data-keys-import-text]"); if (box) box.scrollTop = 0; });
+          if (focus) await page.locator(focus).first().scrollIntoViewIfNeeded();
+          await page.waitForTimeout(120);
+          const geometry = await page.evaluate(({ surface, phone }) => {
+            const host = document.querySelector<HTMLElement>(surface);
+            if (!host) return null;
+            const box = host.getBoundingClientRect();
+            const truncated: string[] = [];
+            const offscreen: string[] = [];
+            const smallTargets: string[] = [];
+            for (const element of host.querySelectorAll<HTMLElement>("*")) {
+              const own = [...element.childNodes].some((node) => node.nodeType === 3 && node.textContent?.trim());
+              if (own && element.scrollWidth > element.clientWidth + 1 && getComputedStyle(element).overflowX !== "visible") truncated.push(element.textContent!.trim().slice(0, 60));
+            }
+            for (const control of host.querySelectorAll<HTMLElement>("button, input, textarea, [role=button]")) {
+              const r = control.getBoundingClientRect();
+              if (!r.width) continue;
+              if (r.left < box.left - 1 || r.right > box.right + 1) offscreen.push(control.getAttribute("aria-label") ?? control.textContent?.trim().slice(0, 40) ?? control.tagName);
+              if (phone && !control.matches("[data-keys-dot], input[type=radio], input[type=checkbox]") && (r.height < 43.5 || r.width < 43.5) && control.closest("[data-keys-page], [data-keys-import-page], [data-keys-dialog]")) smallTargets.push(`${control.getAttribute("aria-label") ?? control.textContent?.trim().slice(0, 40)} ${Math.round(r.width)}×${Math.round(r.height)}`);
+            }
+            const popover = document.querySelector("[data-keys-pop]")?.closest("[role=tooltip]")?.getBoundingClientRect();
+            const menu = document.querySelector("[data-keys-menu]")?.getBoundingClientRect();
+            const inView = (r?: DOMRect) => r ? r.left >= 0 && r.top >= 0 && r.right <= innerWidth && r.bottom <= innerHeight : null;
+            return {
+              surface: { left: Math.round(box.left), top: Math.round(box.top), width: Math.round(box.width), height: Math.round(box.height) },
+              overflowX: host.scrollWidth - host.clientWidth, truncated, offscreen, smallTargets,
+              popoverInView: inView(popover), menuInView: inView(menu),
+              text: (host.innerText ?? "").replace(/\s+/g, " ").trim(),
+            };
+          }, { surface, phone });
+          const key = `variant-${variant}-${state}-${theme}-${width}`;
+          await page.screenshot({ path: path.join(FRAMES, `${key}.png`) });
+          let crop: string | null = null;
+          if (!phone && (variant === 1 || state === "settings") && geometry) {
+            const s = geometry.surface;
+            const pad = 24;
+            const x = Math.max(0, s.left - pad - 200), y = Math.max(0, s.top - pad);
+            crop = `${key}-crop.png`;
+            await page.screenshot({ path: path.join(FRAMES, crop), clip: { x, y, width: Math.min(1440 - x, s.width + 2 * pad + 400), height: Math.min(900 - y, Math.max(s.height, 420) + 2 * pad + 60) } });
+          }
+          const text = geometry?.text ?? "";
+          /* The list never carries a value: only a reveal or a copy asks for one. */
+          const valueOnScreen = text.includes(FAKE_OPENROUTER) || text.includes(FAKE_ELEVENLABS);
+          readings.push({ key, variant, state, theme, width, file: `${key}.png`, crop, valueOnScreen, pageErrors: [...pageErrors], ...geometry, text: text.slice(0, 900) });
+          if (!geometry) failures.push(`${key}: surface missing`);
+          else {
+            if (geometry.overflowX > 1) failures.push(`${key}: horizontal overflow ${geometry.overflowX}`);
+            if (geometry.offscreen.length) failures.push(`${key}: controls outside the surface ${geometry.offscreen.join(", ")}`);
+            if (geometry.popoverInView === false) failures.push(`${key}: popover off screen`);
+            if (geometry.menuInView === false) failures.push(`${key}: menu off screen`);
+          }
+          if (valueOnScreen !== (state === "revealed")) failures.push(`${key}: value on screen ${valueOnScreen}`);
+        };
+
+        try {
+          for (const state of STATES) {
+            if (only && !only.has(state)) continue;
+            if (state === "export-file" && variant === 1) continue;
+            await openSection(SCENE[state], state === "settings");
+            switch (state) {
+              case "settings": await frame(state, phone ? '[data-mobile2-menu-row="keys"]' : "[data-rail-menu-keys]"); break;
+              case "list": case "staging": case "member": case "read-failed": await frame(state); break;
+              case "env-popover": case "row-failed": {
+                const dot = row(state === "row-failed" ? "soniox" : "openai").locator("[data-keys-dot]");
+                await dot.scrollIntoViewIfNeeded();
+                if (phone) await dot.click(); else await dot.hover();
+                if (!(await page.locator("[data-keys-pop]").waitFor({ timeout: 3000 }).then(() => true, () => false))) {
+                  failures.push(`${variant}-${state}-${theme}-${width}: no popover; expanded=${await dot.getAttribute("aria-expanded")} tooltips=${await page.locator("[role=tooltip]").count()} html=${(await page.locator("[role=tooltip]").first().evaluate((e) => e.outerHTML).catch(() => "none")).slice(0, 300)}`);
+                  continue;
+                }
+                await frame(state);
+                break;
+              }
+              case "revealed":
+                await row("openrouter").locator("[data-keys-eye]").click();
+                await page.locator(`${surface} [data-keys-revealed="openrouter"]`).waitFor();
+                expect(await row("openrouter").locator("[data-keys-eye]").getAttribute("aria-pressed")).toBe("true");
+                await frame(state, `${surface} [data-keys-revealed="openrouter"]`);
+                break;
+              case "copied":
+                await row("elevenlabs").locator("[data-keys-copy]").click();
+                await row("elevenlabs").locator('[data-keys-note="copied"]').waitFor();
+                expect(await clipboard()).toBe(FAKE_ELEVENLABS);
+                await frame(state, `${surface} [data-keys-row="elevenlabs"]`);
+                break;
+              case "menu": case "copied-masked": case "replace-invalid":
+                await row("openrouter").locator("[data-keys-more]").click();
+                await page.locator("[data-keys-menu]").waitFor();
+                if (state === "menu") { await frame(state); break; }
+                if (state === "copied-masked") {
+                  await page.locator('[data-keys-menu-item="masked"]').click();
+                  await row("openrouter").locator('[data-keys-note="masked"]').waitFor();
+                  expect(await clipboard()).toBe(`sk-or-v1-${"•".repeat(8)}0000`);
+                  await frame(state, `${surface} [data-keys-row="openrouter"]`);
+                  break;
+                }
+                await page.locator('[data-keys-menu-item="replace"]').click();
+                await row("openrouter").locator("[data-keys-field] input").fill("sk-or-v1-short");
+                await row("openrouter").locator("[data-keys-save]").click();
+                await row("openrouter").locator('[data-keys-error="invalid"]').waitFor();
+                expect(await row("openrouter").locator("[data-keys-field] input").inputValue()).toBe("");
+                await frame(state, `${surface} [data-keys-row="openrouter"] [data-keys-error]`);
+                break;
+              case "add":
+                await row("soniox").locator("[data-keys-add]").click();
+                await row("soniox").locator("[data-keys-field] input").fill("4".repeat(64));
+                await frame(state, `${surface} [data-keys-row="soniox"] [data-keys-field]`);
+                break;
+              case "export": case "export-file":
+                if (variant === 1) {
+                  await tap("[data-keys-copy-all]");
+                  await page.locator("[data-keys-copied-all]").waitFor();
+                  await frame(state, "[data-keys-copied-all]");
+                } else {
+                  await tap(variant === 2 ? "[data-keys-open-export]" : "[data-keys-open-move]");
+                  await page.locator("[data-keys-export]").waitFor();
+                  if (state === "export-file") {
+                    await page.locator('[data-keys-format="file"]').click();
+                    await page.locator("[data-keys-export-file]").waitFor();
+                    await frame(state);
+                    break;
+                  }
+                  await tap("[data-keys-export-copy]");
+                  await page.locator("[data-keys-export-copied]").waitFor();
+                  await frame(state, variant === 3 && phone ? undefined : "[data-keys-export-copied]");
+                }
+                {
+                  const copied = await clipboard();
+                  expect(copied.split("\n").filter((line) => !line.startsWith("#")).map((line) => line.slice(0, line.indexOf("=")))).toEqual(["OPENROUTER_API_KEY", "OPENAI_API_KEY", "ELEVENLABS_API_KEY"]);
+                }
+                break;
+              case "import-preview": case "import-done":
+                if (variant === 1) await tap("[data-keys-open-import]");
+                else if (variant === 2) await tap("[data-keys-open-import]");
+                else { await tap("[data-keys-open-move]"); await tap('[data-keys-tab="to"]'); }
+                await page.locator("[data-keys-import-text]").fill(IMPORT_SAMPLE);
+                await page.locator("[data-keys-import-preview]").waitFor();
+                expect(await page.locator("[data-keys-import-row]").evaluateAll((rows) => rows.map((element) => `${element.getAttribute("data-keys-import-row")}:${element.getAttribute("data-keys-import-kind")}`)))
+                  .toEqual(["openrouter:replaces", "openai:env", "elevenlabs:invalid", "soniox:new", "telegram:new"]);
+                if (state === "import-preview") { await frame(state, phone ? "[data-keys-import-apply]" : undefined); break; }
+                await tap("[data-keys-import-apply]");
+                await page.locator("[data-keys-import-done]").waitFor();
+                expect(await page.locator("[data-keys-import-text]").inputValue()).toBe("");
+                await frame(state, "[data-keys-import-done]");
+                break;
+            }
+          }
+          if (pageErrors.length) failures.push(`variant ${variant} ${theme} ${width}: ${pageErrors.join("; ")}`);
+        } finally { await context.close(); }
+      }
+    } finally {
+      await browser.close(); server.stop();
+      fs.writeFileSync(path.join(FRAMES, "readings.json"), JSON.stringify({ failures, frames: readings }, null, 2) + "\n");
+    }
+    expect(failures).toEqual([]);
+  }, 3_600_000);
+});

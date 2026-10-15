@@ -53,6 +53,8 @@ import { SelfUpdateHost } from "./selfUpdate/SelfUpdateDialog";
 import { TelemetrySettingsHost } from "./telemetry/TelemetrySettings";
 import { LearnedRulesWindowHost } from "./roleMemory/LearnedRules";
 import { LinkedSettingsHost } from "./links/LinkedSettingsDialog";
+import { KeysDialogHost } from "./keys/KeysSection";
+import { keysVariant } from "./keys/keysPrototype";
 import { ExternalRelaySettingsHost } from "./externalRelay/ExternalRelaySettingsDialog";
 import { VoiceBridgeRelayHost } from "./voice/VoiceBridgeRelayHost";
 import { VoiceComposerHost } from "./voice/VoiceComposerHost";
@@ -1928,6 +1930,8 @@ function ViewerApp() {
       {/* #2007: the Update surface, opened from the menus' "Update" row. */}
       <SelfUpdateHost />
       <LinkedSettingsHost />
+      {/* PROTOTYPE (docs/design/keys-settings.md): Варіанти 2 і 3 open «Ключі» as a dialog. */}
+      <KeysDialogHost variant={keysVariant()} />
       <TelemetrySettingsHost />
       {/* Role memory's rules window, opened from the board's ⋯ and from a stage report's rule line. */}
       <LearnedRulesWindowHost />

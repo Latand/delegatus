@@ -34,8 +34,9 @@ What it asks for, point by point:
 
 ## 1. What exists today
 
-**Settings** is a page of the header ⋯ menu, 360 px wide on the desktop
-(`src/components/headerMenu/HeaderMenu.tsx:176`) and a page of the phone menu
+**Settings** is a page of the header ⋯ menu, a 232 px wide panel on the desktop
+(`src/components/ProjectRail.tsx:526`) whose pages keep within 360 px of height
+(`HeaderMenu.tsx:176`) and a page of the phone menu
 sheet (`HeaderMenu.tsx:345`). Its rows come from
 `src/components/headerMenu/headerMenuModel.ts:44` (desktop) and `:52`
 (phone). One row is a key: **Ключ OpenRouter** (`HeaderMenu.tsx:130`, phone
@@ -238,14 +239,16 @@ import done); staging; read failure. Each at 1440 and 390 px, light and dark.
 The existing key page grows into all keys. Settings → **Ключі** opens a menu
 page with a back row, exactly as **Ключ OpenRouter** does now.
 
-- **1440 px.** The header menu panel stays 360 px, open over the board. Six
-  rows of about 44 px: name and «used by» on two lines at the left, dot, masked
-  tail (`••••0000`), eye, copy, ⋯ as 28 px icon buttons. A revealed value
-  opens under its row in a monospace field that wraps to two lines (an
-  OpenRouter key is about 70 characters, roughly 2 lines at 11.5 px in 328 px).
+- **1440 px.** The header menu panel stays 232 px wide, open over the board.
+  Six rows of about 40 px: the name over the dot and the masked tail
+  (`••••0000`), then eye, copy and ⋯ as 28 px icon buttons; «used by» moves
+  into the dot's popover for lack of width. A revealed value opens under its
+  row in a monospace field that wraps to three lines (an OpenRouter key is
+  about 73 characters, roughly 30 a line at 11 px in 216 px).
   Under the list, a divider and two rows: **Скопіювати всі ключі** and
   **Імпортувати ключі**; import opens a third page with a textarea and the
-  preview list. All within the 360 px rule `header-menu.md` set for every page.
+  preview list. The 360 px height rule of `header-menu.md` holds for the list;
+  a revealed key or an open field passes it.
 - **390 px.** The phone menu sheet's page: rows 56 px with 44 px targets
   (eye, copy, ⋯ = 132 px), masked tail under the name. Transfer rows at the
   bottom; import is a sheet page with the textarea above the keyboard.
@@ -314,7 +317,7 @@ on a server, so the same text serves a machine that takes keys by variable.
 
 | | 1440 px | 390 px |
 |---|---|---|
-| 1 | 360 px menu page over the board; transfer as menu pages | Phone menu sheet page; 44 px targets |
+| 1 | 232 px menu page over the board; transfer as menu pages | Phone menu sheet page; 44 px targets |
 | 2 | 640 px dialog, table with variable names; export/import steps in the dialog | Full-height sheet, two-line rows |
 | 3 | 640 px dialog, «Задано» / «Не задано», one «Перенести» button with two tabs | Full-height sheet, move button in the sticky footer |
 
@@ -369,7 +372,7 @@ one menu item.
 Variant 1 (menu page), 2 (dialog, flat table), 3 (dialog, set first, one move
 button). *Recommended: Variant 1* — the same place and pattern as today's
 OpenRouter key, no new chrome; switch to 2 if the frames show the reveal or
-the import too cramped at 360 px.
+the import too cramped in the 232 px panel.
 
 **Q3. How do keys move to another machine?**
 (a) Copy all as env lines + paste import (M1). (b) Encrypted file with a
@@ -429,3 +432,36 @@ voice companion dialog):**
   `MemoryPage.tsx`, the key routes or the readers cited here (checked
   2026-10-15).
 - Variant numbers print as «Варіант 1», sentence case.
+
+## 14. Prototype (this lane's branch only)
+
+The prototype runs on the product's own header menu, phone menu sheet and
+dialog shell, behind a flag, and is never merged:
+
+- `src/components/keys/keysPrototype.ts`: the six catalog rows on
+  placeholder values (runs of one digit), the scenes, the import parser and an
+  in-page answer for `GET /api/keys` (states and masked values, no value) and
+  `POST /api/keys/<id>/reveal` (one value per press).
+- `src/components/keys/KeysSection.tsx`: the section in its three layouts.
+- `?keysVariant=1|2|3` (or the local flag `llv_keys_prototype`) turns the
+  Settings row **Ключ OpenRouter** into **Ключі**; `&keys=staging|member|failed|rowfail`
+  picks a scene. Without the flag every surface is as on `main`.
+- The frames come from a case in the phone driver,
+  `src/components/mobile/issue1671Evidence.browser.test.tsx`
+  («keys settings prototype»), which writes each variant's 17 states at
+  1440 × 900 and 390 × 844, light and dark, Ukrainian, plus a crop of the
+  232 px panel for Варіант 1 on the desktop, and `readings.json` with each
+  frame's surface box, overflow, truncated text, controls outside the surface,
+  phone targets under 44 px, popover and menu placement, and whether a value
+  was on screen (only in `revealed`). The case checks the clipboard after
+  every copy: the value for copy, the masked form for copy masked, and the
+  three set keys' names for copy-all.
+
+States: `settings`, `list`, `env-popover`, `revealed`, `copied`, `menu`,
+`copied-masked`, `replace-invalid`, `add`, `export`, `export-file` (Варіанти 2
+and 3; Варіант 1 has the clipboard only), `import-preview`, `import-done`,
+`staging`, `member`, `read-failed`, `row-failed`.
+
+What the frames settled that §6 had wrong: the desktop menu panel is 232 px
+wide, so Варіант 1 shows the last four characters and keeps «used by» in the
+dot's popover, and a revealed OpenRouter key wraps to three lines there.

@@ -495,6 +495,8 @@ export function RailHeaderMenu({ project }: { project: string | null }) {
     /* pointerdown, like the QR popover's own dismissal: the QR panel opens
        INSIDE this menu, so a click on it is a click inside and the menu stays. */
     const onDown = (event: PointerEvent) => {
+      /* PROTOTYPE (keys-settings): a row's ⋯ of the keys page is portalled and still inside the menu. */
+      if ((event.target as Element | null)?.closest?.("[data-keep-rail-menu]")) return;
       if (ref.current && !ref.current.contains(event.target as Node)) setOpen(false);
     };
     window.addEventListener("keydown", onKey);

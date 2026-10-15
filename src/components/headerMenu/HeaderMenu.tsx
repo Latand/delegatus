@@ -13,6 +13,8 @@ import { KeepAwakeMenuRow, useKeepAwake } from "@/components/KeepAwakeControl";
 import { LanguageToggle } from "@/components/LanguageToggle";
 import { openLinkedSettings } from "@/components/links/openLinkedSettings";
 import { KeyPanel, KeyStateWord, MemoryPanel, MemoryReadingProvider, MemoryStateWord } from "@/components/memory/MemoryPage";
+import { KeysImportPage, KeysMenuPage, KeysStateWord, openKeysDialog } from "@/components/keys/KeysSection";
+import { keysVariant } from "@/components/keys/keysPrototype";
 import { MobileMenuSheet, type MobileMenuEntry } from "@/components/mobile/MobileMenuSheet";
 import type { MobileNav } from "@/components/mobile/mobileNav";
 import { onboardingMobileMenuEntries } from "@/components/onboarding/menuEntries";
@@ -39,9 +41,11 @@ import { HEADER_LAYOUTS, type HeaderItem } from "./headerMenuModel";
    open a page each; Help and learning opens in place. Every entry calls the
    handler it called before the regrouping. */
 
-type View = "rest" | "settings" | "memory" | "key";
+/* PROTOTYPE (docs/design/keys-settings.md): with `?keysVariant=` the key row
+   becomes «Ключі»; Варіант 1 opens it as a page, 2 and 3 as a dialog. */
+type View = "rest" | "settings" | "memory" | "key" | "keys" | "keysImport";
 /** The page a back row returns to. */
-const PARENT: Record<Exclude<View, "rest">, View> = { settings: "rest", memory: "settings", key: "settings" };
+const PARENT: Record<Exclude<View, "rest">, View> = { settings: "rest", memory: "settings", key: "settings", keys: "settings", keysImport: "keys" };
 type PhoneView = View | "help" | "rules";
 const PHONE_PARENT: Record<Exclude<PhoneView, "rest">, PhoneView> = { ...PARENT, help: "rest", rules: "rest" };
 
@@ -76,6 +80,7 @@ export function HeaderMenuPanel({ project, onClose }: { project: string | null; 
   const { t, locale } = useLocale();
   const [view, setView] = useState<View>("rest");
   const [helpOpen, setHelpOpen] = useState(false);
+  const keys = keysVariant();
   /* Passive: the app's session guard loads the team view once per page. */
   const team = useTeamView({ load: false });
   const teamMe = team?.mode === "team" ? team.me : null;
@@ -128,6 +133,13 @@ export function HeaderMenuPanel({ project, onClose }: { project: string | null; 
           </button>
         );
       case "key":
+        if (keys !== null) return (
+          <button key={item} type="button" data-rail-menu-keys="" className={`${ROW} py-1`} onClick={keys === 1 ? () => open("keys") : act(openKeysDialog)}>
+            <Icon icon={KeyRound} />
+            <TwoLines title={t("keys.title")} state={<KeysStateWord />} />
+            <ChevronRight className="h-4 w-4 shrink-0 text-muted" aria-hidden />
+          </button>
+        );
         return (
           <button key={item} type="button" data-rail-menu-key="" className={`${ROW} py-1`} onClick={() => open("key")}>
             <Icon icon={KeyRound} />
@@ -185,6 +197,16 @@ export function HeaderMenuPanel({ project, onClose }: { project: string | null; 
           <div data-header-menu-page="key">
             {backRow(t("providerKey.label"))}
             <KeyPanel />
+          </div>
+        ) : view === "keys" ? (
+          <div data-header-menu-page="keys">
+            {backRow(t("keys.title"))}
+            <KeysMenuPage onImport={() => open("keysImport")} />
+          </div>
+        ) : view === "keysImport" ? (
+          <div data-header-menu-page="keys-import">
+            {backRow(t("keys.import"))}
+            <KeysImportPage />
           </div>
         ) : (
           <>
@@ -278,6 +300,7 @@ function PhoneMenu({ title, project, nav, create = [], board, rules = [], onClos
   const go = (next: Exclude<PhoneView, "rest">) => setPlace({ view: next, focus: "back" });
   const back = () => { if (view !== "rest") setPlace({ view: PHONE_PARENT[view], focus: view }); };
   const close = onClose;
+  const keys = keysVariant();
   /* The rows the phone has always had for these entries, with their handlers, icons and test ids. */
   const [guide, walk, mapping, dictation] = onboardingMobileMenuEntries(t, close);
   const activity = activityMobileMenuEntry(t, nav);
@@ -321,6 +344,7 @@ function PhoneMenu({ title, project, nav, create = [], board, rules = [], onClos
       case "memory":
         return row("memory", Brain, t("headerMenu.memory"), () => go("memory"), <><MemoryStateWord size="sheet" />{chevron}</>);
       case "key":
+        if (keys !== null) return row("keys", KeyRound, t("keys.title"), keys === 1 ? () => go("keys") : () => { close(); openKeysDialog(); }, <><KeysStateWord size="sheet" />{chevron}</>);
         return row("key", KeyRound, t("providerKey.label"), () => go("key"), <><KeyStateWord size="sheet" />{chevron}</>);
       case "mapping":
         return mapping?.kind === "row" ? { ...mapping, label: t("headerMenu.mapping") } : null;
@@ -345,6 +369,8 @@ function PhoneMenu({ title, project, nav, create = [], board, rules = [], onClos
   if (view === "settings") entries = [backRow(t("headerMenu.settings")), ...settingsItems.flatMap((item) => settingsEntry(item) ?? [])];
   else if (view === "memory") entries = [backRow(t("headerMenu.memory")), { kind: "custom", key: "memory-page", node: <MemoryPanel size="sheet" /> }];
   else if (view === "key") entries = [backRow(t("providerKey.label")), { kind: "custom", key: "key-page", node: <KeyPanel size="sheet" /> }];
+  else if (view === "keys") entries = [backRow(t("keys.title")), { kind: "custom", key: "keys-page", node: <KeysMenuPage size="sheet" onImport={() => go("keysImport")} /> }];
+  else if (view === "keysImport") entries = [backRow(t("keys.import")), { kind: "custom", key: "keys-import-page", node: <KeysImportPage size="sheet" /> }];
   else if (view === "help") entries = [backRow(t("headerMenu.help")), ...helpItems];
   else if (view === "rules") entries = [backRow(t("headerMenu.rules")), ...rules];
   else {
