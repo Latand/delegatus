@@ -1,0 +1,194 @@
+{
+  "surfaces": [
+    {
+      "name": "board-pane-1440",
+      "width": 1440,
+      "height": 900,
+      "phone": false
+    },
+    {
+      "name": "board-pane-phone-390",
+      "width": 390,
+      "height": 844,
+      "phone": true
+    }
+  ],
+  "readings": [
+    {
+      "surface": "board-pane-1440",
+      "lang": "en",
+      "scheme": "light",
+      "moment": "latest-turn",
+      "pane": true,
+      "pills": 0,
+      "draftReads": 0,
+      "fromEnd": 0,
+      "overflowX": 0
+    },
+    {
+      "surface": "board-pane-1440",
+      "lang": "en",
+      "scheme": "light",
+      "moment": "scrolled-away",
+      "pane": true,
+      "pills": 0,
+      "draftReads": 0,
+      "fromEnd": 900,
+      "overflowX": 0
+    },
+    {
+      "surface": "board-pane-1440",
+      "lang": "en",
+      "scheme": "dark",
+      "moment": "latest-turn",
+      "pane": true,
+      "pills": 0,
+      "draftReads": 0,
+      "fromEnd": 0,
+      "overflowX": 0
+    },
+    {
+      "surface": "board-pane-1440",
+      "lang": "en",
+      "scheme": "dark",
+      "moment": "scrolled-away",
+      "pane": true,
+      "pills": 0,
+      "draftReads": 0,
+      "fromEnd": 900,
+      "overflowX": 0
+    },
+    {
+      "surface": "board-pane-1440",
+      "lang": "uk",
+      "scheme": "light",
+      "moment": "latest-turn",
+      "pane": true,
+      "pills": 0,
+      "draftReads": 0,
+      "fromEnd": 0,
+      "overflowX": 0
+    },
+    {
+      "surface": "board-pane-1440",
+      "lang": "uk",
+      "scheme": "light",
+      "moment": "scrolled-away",
+      "pane": true,
+      "pills": 0,
+      "draftReads": 0,
+      "fromEnd": 900,
+      "overflowX": 0
+    },
+    {
+      "surface": "board-pane-1440",
+      "lang": "uk",
+      "scheme": "dark",
+      "moment": "latest-turn",
+      "pane": true,
+      "pills": 0,
+      "draftReads": 0,
+      "fromEnd": 0,
+      "overflowX": 0
+    },
+    {
+      "surface": "board-pane-1440",
+      "lang": "uk",
+      "scheme": "dark",
+      "moment": "scrolled-away",
+      "pane": true,
+      "pills": 0,
+      "draftReads": 0,
+      "fromEnd": 900,
+      "overflowX": 0
+    },
+    {
+      "surface": "board-pane-phone-390",
+      "lang": "en",
+      "scheme": "light",
+      "moment": "latest-turn",
+      "pane": true,
+      "pills": 0,
+      "draftReads": 0,
+      "fromEnd": 0,
+      "overflowX": 0
+    },
+    {
+      "surface": "board-pane-phone-390",
+      "lang": "en",
+      "scheme": "light",
+      "moment": "scrolled-away",
+      "pane": true,
+      "pills": 0,
+      "draftReads": 0,
+      "fromEnd": 1001,
+      "overflowX": 0
+    },
+    {
+      "surface": "board-pane-phone-390",
+      "lang": "en",
+      "scheme": "dark",
+      "moment": "latest-turn",
+      "pane": true,
+      "pills": 0,
+      "draftReads": 0,
+      "fromEnd": 0,
+      "overflowX": 0
+    },
+    {
+      "surface": "board-pane-phone-390",
+      "lang": "en",
+      "scheme": "dark",
+      "moment": "scrolled-away",
+      "pane": true,
+      "pills": 0,
+      "draftReads": 0,
+      "fromEnd": 1001,
+      "overflowX": 0
+    },
+    {
+      "surface": "board-pane-phone-390",
+      "lang": "uk",
+      "scheme": "light",
+      "moment": "latest-turn",
+      "pane": true,
+      "pills": 0,
+      "draftReads": 0,
+      "fromEnd": 0,
+      "overflowX": 0
+    },
+    {
+      "surface": "board-pane-phone-390",
+      "lang": "uk",
+      "scheme": "light",
+      "moment": "scrolled-away",
+      "pane": true,
+      "pills": 0,
+      "draftReads": 0,
+      "fromEnd": 873,
+      "overflowX": 0
+    },
+    {
+      "surface": "board-pane-phone-390",
+      "lang": "uk",
+      "scheme": "dark",
+      "moment": "latest-turn",
+      "pane": true,
+      "pills": 0,
+      "draftReads": 0,
+      "fromEnd": 0,
+      "overflowX": 0
+    },
+    {
+      "surface": "board-pane-phone-390",
+      "lang": "uk",
+      "scheme": "dark",
+      "moment": "scrolled-away",
+      "pane": true,
+      "pills": 0,
+      "draftReads": 0,
+      "fromEnd": 873,
+      "overflowX": 0
+    }
+  ]
+}

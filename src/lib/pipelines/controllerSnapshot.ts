@@ -24,7 +24,7 @@ export function controllerSnapshotPorts<T extends object>(ports: T, assertCurren
       return (...args: unknown[]) => {
         assertCurrent();
         if (property === "createFlow") args[3] = assertCurrent;
-        const result = performanceSpans.sync("controller.port-start", () => Reflect.apply(value, target, args));
+        const result = performanceSpans.sync(/task|note/i.test(String(property)) ? "controller.task-note" : "controller.port-start", () => Reflect.apply(value, target, args));
         if (result && typeof result.then === "function") {
           const name = String(property);
           const category: PerformanceSite = /git|commit|publish|reviewHead|branch/i.test(name) ? "controller.git-wait"

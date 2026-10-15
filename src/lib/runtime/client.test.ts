@@ -10,6 +10,7 @@ import {
   RuntimeHostUnavailableError,
   runtimeHostRequestHealth,
   UnixRuntimeHostClient,
+  withRuntimeRecoveryReads,
 } from "./client";
 
 const SANDBOX = fs.mkdtempSync(path.join(os.tmpdir(), "llv-runtime-client-"));
@@ -68,6 +69,23 @@ test("snapshot forwards its abort signal and settles exactly once on external ab
   const settled = await outcome;
   expect(settled).toBeInstanceOf(RuntimeHostUnavailableError);
   expect((settled as Error).message).toBe("runtime host request cancelled");
+});
+
+test.each(["operation", "session", "effects"] as const)("retiring recovery closes an issued %s read without waiting for its deadline", async kind => {
+  let received!: () => void;
+  const entered = new Promise<void>(resolve => { received = resolve; });
+  let closed!: () => void;
+  const disconnected = new Promise<void>(resolve => { closed = resolve; });
+  const socketPath = serve((_frame, socket) => { socket.once("end", closed); received(); });
+  const controller = new AbortController();
+  const client = withRuntimeRecoveryReads(new UnixRuntimeHostClient(socketPath, 60_000), controller.signal);
+  const read = kind === "operation" ? client.operationStatus("original-operation")
+    : kind === "session" ? client.readSession!({ conversationId: "conversation_recovery" }) : client.effectBatch(["runtime.spawn"]);
+  const outcome = read.then(() => null, error => error);
+  await entered;
+  controller.abort();
+  expect((await outcome).message).toBe("runtime host request cancelled");
+  await disconnected;
 });
 
 test("startup snapshot deadline is caller-local and never sent to the runtime host", async () => {

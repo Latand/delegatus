@@ -20,8 +20,8 @@ import type { SessionTranscriptRecord, TranscriptEntry } from "@/lib/voiceCompan
  */
 
 const LABELS = {
-  en: { title: "Conversation", live: "in progress", ended: "ended", close: "Close", args: "Arguments", result: "Result", toVoice: "Passed to the voice", open: "Show the conversation", empty: "Nothing said yet.", truncated: "Part of the conversation is not kept: the record reached its size limit.", request: "Request to the orchestrator", instruction: "Instruction", steps: "Delivery steps", copyMessage: "Copy message", showDetails: "Show details", hideDetails: "Hide details", reports: { progress: "Progress", result: "Result", question: "Question", blocked: "Blocked" } },
-  uk: { title: "Розмова", live: "триває", ended: "завершено", close: "Закрити", args: "Аргументи", result: "Результат", toVoice: "Передано голосу", open: "Показати розмову", empty: "Ще нічого не сказано.", truncated: "Частина розмови не збереглася: запис досяг межі розміру.", request: "Запит оркестратору", instruction: "Доручення", steps: "Кроки доставки", copyMessage: "Скопіювати повідомлення", showDetails: "Показати подробиці", hideDetails: "Сховати подробиці", reports: { progress: "Хід роботи", result: "Результат", question: "Питання", blocked: "Заблоковано" } },
+  en: { title: "Conversation", live: "in progress", ended: "ended", close: "Close", args: "Arguments", result: "Result", toVoice: "Passed to the voice", open: "Show the conversation", empty: "Nothing said yet.", truncated: "Part of the conversation is not kept: the record reached its size limit.", request: "Request to the orchestrator", instruction: "Instruction", steps: "Delivery steps", copyMessage: "Copy message", showDetails: "Show details", hideDetails: "Hide details", reports: { message: "Message", progress: "Progress", result: "Result", question: "Question", blocked: "Blocked" } },
+  uk: { title: "Розмова", live: "триває", ended: "завершено", close: "Закрити", args: "Аргументи", result: "Результат", toVoice: "Передано голосу", open: "Показати розмову", empty: "Ще нічого не сказано.", truncated: "Частина розмови не збереглася: запис досяг межі розміру.", request: "Запит оркестратору", instruction: "Доручення", steps: "Кроки доставки", copyMessage: "Скопіювати повідомлення", showDetails: "Показати подробиці", hideDetails: "Сховати подробиці", reports: { message: "Повідомлення", progress: "Хід роботи", result: "Результат", question: "Питання", blocked: "Заблоковано" } },
 } as const;
 export const transcriptLabels = (locale: string) => LABELS[locale === "uk" ? "uk" : "en"];
 
@@ -115,11 +115,12 @@ function Disclosure({ summary, children, name, label }: { summary: ReactNode; ch
   );
 }
 
-export function CompanionTranscript({ record, usage = record.usage, left, top, width, height, onClose }: {
+export function CompanionTranscript({ record, usage = record.usage, left, top, width, height, modal = false, onClose }: {
   record: SessionTranscriptRecord;
   usage?: CompanionUsage;
   /* The box, from the companion's own corner. */
   left: number; top: number; width: number; height: number;
+  modal?: boolean;
   onClose: () => void;
 }) {
   const { t, locale } = useLocale();
@@ -231,6 +232,7 @@ export function CompanionTranscript({ record, usage = record.usage, left, top, w
       className="vc-tr"
       data-companion-transcript-view
       role="dialog"
+      aria-modal={modal || undefined}
       aria-label={L.title}
       tabIndex={-1}
       style={{ left, top, width, height }}

@@ -697,48 +697,6 @@ test("a lane the operator paused is not the seat's work: no stall, no interval w
   expect(rig.sent).toHaveLength(0);
 });
 
-test("a chat-filed question owes a bridge question report, and only matching durable report evidence clears it", async () => {
-  const { scopedReportId } = await import("@/lib/bridge/store");
-  const transcript = path.join(SESSIONS, "seat-question.jsonl");
-  const question = "Should the prepared release proceed?";
-  fs.writeFileSync(transcript, JSON.stringify({ type: "message", timestamp: new Date(NOW).toISOString(),
-    message: { role: "assistant", content: [{ type: "text", text: question }] },
-  }) + "\n");
-  const rig = harness({ seat: { conversationId: CONVERSATION, seatEpoch: 7, path: transcript },
-    settings: { ...defaultSeatTickSettings(PROJECT), wakeIntervalMinutes: 10 },
-    state: { lastWakeAt: new Date(NOW).toISOString(), lastProposalAt: new Date(NOW).toISOString() },
-  });
-  const setId = "rsg_chat_question";
-  const key = `ask:${setId}`;
-  const log: import("@/lib/bridge/types").BridgeReportV1[] = [];
-  rig.deps.sources!.reports = { ...reportPort(() => log), suggestions: () => ({ admissions: [], sets: [{
-    conversationId: CONVERSATION, setId, at: new Date(NOW).toISOString(),
-    origin: { kind: "manager", conversationId: CONVERSATION, role: "orchestrator" },
-    replies: [{ label: "Proceed", text: "Proceed with the release" }],
-  }] }) };
-  const fileReport = (reportKey: string, seq: number) => log.push({
-    id: scopedReportId(PROJECT, reportKey), key: reportKey, seq, at: new Date(NOW + 16 * MINUTE).toISOString(),
-    class: "question", body: question, project: PROJECT,
-    origin: { kind: "manager", conversationId: CONVERSATION, role: "orchestrator" },
-  });
-  rig.deps.sources!.now = () => NOW + 15 * MINUTE;
-  await runSeatTickCheck(PROJECT, rig.deps);
-  expect(rig.sent).toHaveLength(1);
-  expect(rig.sent[0]!.text).not.toContain("Ask owed");
-  expect(rig.sent[0]!.text).toContain("Question report owed");
-  expect(rig.sent[0]!.text).toContain(`bridge_report with class: question, key ${key}`);
-  fileReport("ask:rsg_other", 1);
-  rig.deps.sources!.now = () => NOW + 30 * MINUTE;
-  await runSeatTickCheck(PROJECT, rig.deps);
-  expect(rig.sent).toHaveLength(2);
-  expect(rig.written.at(-1)!.asksOwed!.map(ask => ask.key)).toEqual([key]);
-  fileReport(key, 2);
-  rig.deps.sources!.now = () => NOW + 45 * MINUTE;
-  expect((await runSeatTickCheck(PROJECT, rig.deps))!.verdict).toBe("quiet");
-  expect(rig.written.at(-1)!.asksOwed).toEqual([]);
-  expect(rig.sent).toHaveLength(2);
-});
-
 test.each([false, true])("five production-size settlements credit only complete rendered items and deliver the cropped remainder later (held: %s)", async (held) => {
   const ids = Array.from({ length: 5 }, (_, index) => [String(index).padStart(8, "0"), "0000", "4000", "8000", "0".repeat(12)].join("-"));
   const lanes = ids.map(id => ({
@@ -882,10 +840,6 @@ test.each([30, 200])("full report ledgers deliver a complete maintenance settlem
   const reportsOwed = Array.from({ length: 64 }, (_, index) => ({
     key: `lane:owed-${index}:completed`, label: `Genuine settlement ${index} `.padEnd(labelChars, "l"), receivedAt: at,
   }));
-  const asksOwed = Array.from({ length: 16 }, (_, index) => ({
-    key: `ask:rsg_${String(index).padStart(32, "0")}`, setId: `rsg_${String(index).padStart(32, "0")}`,
-    conversationId: CONVERSATION, at,
-  }));
   const attention = parseMaintenanceReport(Array.from({ length: 5 }, (_, index) =>
     `attention: ${String(index).padStart(8, "0")} | ${"Attention ".padEnd(300, "a")} | ${"Option ".padEnd(300, "o")} | ${"Alternative ".padEnd(300, "b")} | waits: start implementation`,
   ).join("\n")).attention;
@@ -898,26 +852,23 @@ test.each([30, 200])("full report ledgers deliver a complete maintenance settlem
   };
   const rig = harness({ seat: { conversationId: CONVERSATION, seatEpoch: 7, path: null, mandate: "Custom older mandate", promptVersion: 20 },
     settings: { ...defaultSeatTickSettings(PROJECT), monitorPrompt: "Standing note ".padEnd(7_622, "n"), reason: "Instructions ".padEnd(500, "i") },
-    state: { reportsOwed, asksOwed },
+    state: { reportsOwed },
   });
   rig.deps.sources!.maintenanceRuns = () => [run];
-  rig.deps.sources!.reports = { ...reportPort(() => []), suggestions: () => ({ admissions: [], sets: [{
-    conversationId: CONVERSATION, setId: asksOwed.at(-1)!.setId, at,
-    origin: { kind: "manager", conversationId: CONVERSATION, role: "orchestrator" },
-    replies: [{ label: "Proceed", text: "Proceed with the prepared work" }],
-  }] }) };
+  rig.deps.sources!.reports = reportPort(() => []);
   for (let round = 0; round < 2; round++) {
     rig.deps.sources!.now = () => NOW + round * 70 * MINUTE;
     await runSeatTickCheck(PROJECT, rig.deps);
     expect(rig.sent.at(-1)!.text.length).toBeLessThanOrEqual(4_000);
     expect(rig.written.at(-1)!.reportsOwed).toEqual(reportsOwed);
-    expect(rig.written.at(-1)!.asksOwed).toEqual(asksOwed);
-    for (const ask of asksOwed) expect(rig.sent.at(-1)!.text).toContain(ask.key);
+    expect(rig.sent.at(-1)!.text).toContain(`key ${reportsOwed[0]!.key} and coversOwed: true`);
   }
   const bullet = `- [maintenance] ${run.taskId} — ${maintenanceItemLabel(run)}`;
   expect(bullet.length).toBeGreaterThan(1_200);
-  if (labelChars === 200) expect(rig.sent.some(message => message.text.includes(`\n${bullet}\n`))).toBe(true);
-  else expect(agendaOf(rig.sent.at(-1)!.text)).toEqual([expect.stringContaining("[summary; seat_tick_settings verbose:true holds the full item]")]);
+  /* Both ledgers leave room for the whole item within the two wakes; the
+     short labels fit it into the first. */
+  expect(rig.sent.some(message => message.text.includes(`\n${bullet}\n`))).toBe(true);
+  if (labelChars === 30) expect(rig.sent[0]!.text).toContain(`\n${bullet}\n`);
   expect(rig.written.at(-1)!.announcedMaintenance).toEqual([run.runId]);
 });
 

@@ -52,6 +52,39 @@ async function longestLoopGap<T>(operation: () => Promise<T> | T): Promise<{ val
   }
 }
 
+test("spawn failure rechecks recovery authority after waiting for a peer writer", async () => {
+  const directory = fs.mkdtempSync(path.join(root, "cancelled-spawn-"));
+  const registry = new AgentRegistry(path.join(directory, "agent-registry.json"), undefined, undefined, { sqliteMode: "sqlite" });
+  const begun = registry.beginSpawnRequest({ engine: "codex", cwd: "/repo", transport: "structured", accountId: null,
+    launchProfile: emptyLaunchProfile({ cwd: "/repo", title: "Cancelled recovery fixture" }) });
+  registry.holdDelivery(begun.receipt.conversationId, "Original instruction", `spawn_${begun.receipt.launchId}`, "text");
+  const before = structuredClone(registry.readOnlySnapshot());
+  const peer = new Database(path.join(directory, "agent-registry.sqlite"));
+  let active = true;
+  let advanced = false;
+  let locked = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    peer.exec("BEGIN IMMEDIATE"); locked = true;
+    const failing = registry.failSpawnOffLoop(begun.receipt.launchId, "Recovery failure", () => {
+      if (!active) throw Error("release retired");
+    });
+    timer = setTimeout(() => {
+      advanced = true; active = false;
+      peer.exec("ROLLBACK"); locked = false;
+    }, 100);
+    await expect(failing).rejects.toThrow("release retired");
+    expect(advanced).toBe(true);
+    const after = registry.readOnlySnapshot();
+    expect(after.receipts).toEqual(before.receipts);
+    expect(after.heldDeliveries).toEqual(before.heldDeliveries);
+  } finally {
+    clearTimeout(timer);
+    if (locked) peer.exec("ROLLBACK");
+    peer.close(); registry.close();
+  }
+});
+
 test("a writer lock held elsewhere is waited out without holding the event loop, and the mutation commits inside the acquisition", async () => {
   const { store: registry, filename } = store("async-wait");
   try {

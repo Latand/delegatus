@@ -9,6 +9,8 @@ export interface PublishedRelayReference {
   messageKey: string;
   chatId: string;
   messageId: number;
+  /** Absent on legacy mappings: it cannot prove a topic. */
+  topicId?: number | null;
 }
 const key = (apiBase: string, targetId: string, messageKey: string) => createHash("sha256").update(JSON.stringify([apiBase, targetId, messageKey])).digest("hex");
 const seed = { collection: "relay_published_references", schemaVersion: 1, migrationId: "relay-published-references-v1", key: (row: PublishedRelayReference) => row.key, loadRecords: (): PublishedRelayReference[] => [] };
@@ -24,7 +26,8 @@ function collection(create = false) {
     decode: raw => {
       const row = raw as Partial<PublishedRelayReference> | null;
       return row && typeof row.key === "string" && typeof row.apiBase === "string" && typeof row.targetId === "string"
-        && typeof row.messageKey === "string" && typeof row.chatId === "string" && Number.isSafeInteger(row.messageId) ? row as PublishedRelayReference : null;
+        && typeof row.messageKey === "string" && typeof row.chatId === "string" && Number.isSafeInteger(row.messageId)
+        && (row.topicId === undefined || row.topicId === null || (Number.isSafeInteger(row.topicId) && row.topicId > 0)) ? row as PublishedRelayReference : null;
     } });
   stores.set(file, opened);
   return opened;
@@ -35,15 +38,16 @@ function collection(create = false) {
 export function recordPublishedRelayReference(apiBase: string, route: string, method: string, outgoing: unknown, status: number, response: unknown): void {
   const match = /^\/targets\/([^/]+)\/messages$/.exec(route);
   if (!match || method !== "POST" || status !== 200) return;
-  const body = outgoing as { chat_id?: number; message_id?: number } | null;
+  const body = outgoing as { chat_id?: number; message_id?: number; message_thread_id?: number } | null;
   const reply = response as { message_key?: string; replayed?: boolean } | null;
   if (!body || !Number.isSafeInteger(body.chat_id) || !body.chat_id || !Number.isSafeInteger(body.message_id) || body.message_id! <= 0
+    || (body.message_thread_id !== undefined && (!Number.isSafeInteger(body.message_thread_id) || body.message_thread_id < 1))
     || !reply || typeof reply.message_key !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(reply.message_key) || typeof reply.replayed !== "boolean") return;
   const targetId = decodeURIComponent(match[1]);
-  const row = { key: key(apiBase, targetId, reply.message_key), apiBase, targetId, messageKey: reply.message_key, chatId: String(body.chat_id), messageId: body.message_id! };
+  const row = { key: key(apiBase, targetId, reply.message_key), apiBase, targetId, messageKey: reply.message_key, chatId: String(body.chat_id), messageId: body.message_id!, topicId: body.message_thread_id ?? null };
   collection(true)!.boundedPatch(2, tx => {
     const held = tx.get(row.key);
-    if (held && (held.chatId !== row.chatId || held.messageId !== row.messageId)) throw new Error("relay publication reference conflict");
+    if (held && (held.chatId !== row.chatId || held.messageId !== row.messageId || (held.topicId !== undefined && held.topicId !== row.topicId))) throw new Error("relay publication reference conflict");
     tx.put(row);
   });
 }

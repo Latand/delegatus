@@ -52,7 +52,7 @@ async function main(): Promise<void> {
   bridge.readBridgeChannel();
   bridge.readBridgeChannel({ project: "seeded-project", seatConversationId: "seeded-seat" });
   /* The operator-facing small stores (#1870 slice 5), read the way
-     `request_attention`, `suggest_replies` and `seat_tick_settings` read them. */
+     `request_attention`, the needs-you read and `seat_tick_settings` read them. */
   const attention = (await import("@/lib/attention/store")).readAttentionFile();
   (await import("@/lib/suggestions/store")).readReplySuggestionsFile();
   (await import("@/lib/monitor/seatTickSettings")).readSeatTickSettingsFile();

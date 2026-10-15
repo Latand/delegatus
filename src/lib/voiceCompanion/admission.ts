@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { BridgeReportV1 } from "@/lib/bridge/types";
 import { canonicalProject } from "@/lib/projects/aliases";
 import { reportHeaderName } from "@/lib/projects/settings";
@@ -11,6 +11,7 @@ import { CompanionTranscriptRecords, type TranscriptEntry } from "./transcriptRe
 import { LIVE_VOICE } from "./sessionConfig";
 import { CompanionStorage, type ReportSpeech, type SessionStarter, type StoredProposal, type StoredSession } from "./storage";
 import { voiceReportText } from "./reportSpeech";
+import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 
 export interface CompanionDeliveryPaths {
   recipient(project: string): Recipient | null;
@@ -125,6 +126,7 @@ export class CompanionAdmission {
   private readonly shown = new Map<string, Set<string>>();
   /** Reports a backend delegation already asked to hear again, per session and delegation. */
   private readonly reread = new Map<string, Set<string>>();
+  private readonly messageReads = new Map<string, Promise<{ status: string; speech: string }>>();
   constructor(readonly storage: CompanionStorage, private readonly paths: CompanionDeliveryPaths, private readonly now = Date.now) {}
   create(options: { project: string; locale: Locale; authority?: "live-model"; startedBy?: SessionStarter }): StoredSession {
     const session: StoredSession = { id: randomUUID(), project: canonicalProject(options.project), locale: options.locale, generation: 1,
@@ -641,6 +643,38 @@ export class CompanionAdmission {
       return events;
     });
   }
+  /** One whole message card per call, with at most one read per delegation. */
+  showMessage(id: string, delegation: string, project: string, message: unknown, aloud: boolean,
+    read: () => Promise<{ status?: string; handle?: string; time?: string | null; text?: string }>): Promise<{ status: string; speech: string }> {
+    const key = JSON.stringify([id, delegation, project, message ?? null]);
+    const previous = this.messageReads.get(key);
+    if (previous) return previous;
+    const result = withViewerOperation("voice.orchestrator-read", async () => {
+      if (aloud && this.reportSpeech(id).length >= REPORT_SPEECH_CAPACITY) return { status: "busy", speech: "The reading queue is full. Try after the current reading finishes." };
+      const found = await read();
+      if (!found.handle || found.text === undefined) return { status: found.status === "stale_handle" ? "stale" : "not_found", speech: "The message is unavailable. Read orchestrator_messages for current handles." };
+      return this.storage.changeAsync(document => {
+        const session = document.sessions[id];
+        if (!session || session.closed) throw new Error("SESSION_CLOSED");
+        const queue = session.reportSpeech ??= [];
+        if (aloud && queue.length >= REPORT_SPEECH_CAPACITY) return { status: "busy", speech: "The reading queue is full. Try after the current reading finishes." };
+        const reportId = `msg-${createHash("sha256").update(JSON.stringify([project, found.handle])).digest("hex").slice(0, 24)}`;
+        const clean = this.cleaner();
+        const text = withoutLocalPaths(clean(found.text!));
+        const exists = this.records.read(id).entries.some(row => row.id === `report-${reportId}`);
+        if (!exists) this.append(session, { type: "orchestrator.report", reportId, project, status: "message", text,
+          at: found.time && Number.isFinite(Date.parse(found.time)) ? Date.parse(found.time) : this.now() }, this.now(), clean);
+        if (aloud && !queue.some(row => row.reportId === reportId)) queue.push({ reportId, project, status: "message", text, kind: "message", at: found.time, handed: 0 });
+        return { status: aloud ? "reading" : "shown", speech: aloud
+          ? "The message is read from its own text after your answer. Say one short sentence introducing it; never restate or summarize it."
+          : "The whole message is shown. Say one short sentence introducing it; never restate or summarize it." };
+      });
+    });
+    this.messageReads.set(key, result);
+    while (this.messageReads.size > 128) this.messageReads.delete(this.messageReads.keys().next().value!);
+    void result.catch(() => { if (this.messageReads.get(key) === result) this.messageReads.delete(key); });
+    return result;
+  }
   /** Owes the voice a report this call relayed, once more, whole: it is read from
    * the report text through the same parts as a new report, never retold by a
    * model. `report` is a report handle, a request handle (its answer, else its
@@ -662,20 +696,21 @@ export class CompanionAdmission {
         this.reread.set(asked, new Set([...this.reread.get(asked) ?? [], found.reportId]));
         while (this.reread.size > 1_024) this.reread.delete(this.reread.keys().next().value!);
       }
-      queue.push({ reportId: found.reportId, project: found.project, status: found.status, text: found.text, handed: 0, reread: true });
+      queue.push({ reportId: found.reportId, project: found.project, status: found.status, text: found.text, handed: 0, reread: true,
+        ...(found.status === "message" ? { kind: "message" as const, at: found.at } : {}) });
       return { status: "reading" as const, report: found.handle };
     });
   }
   /** Every report this call relayed, in order, each with its handle. The
    * transcript keeps them all; the bounded event ring covers a record that
    * reached the transcript's size limit. */
-  private relayedReports(id: string): Array<{ handle: string; reportId: string; status: string; text: string; project: string }> {
-    const rows = new Map<string, { status: string; text: string; project: string }>();
+  private relayedReports(id: string): Array<{ handle: string; reportId: string; status: string; text: string; project: string; at?: string | null }> {
+    const rows = new Map<string, { status: string; text: string; project: string; at?: string | null }>();
     for (const entry of this.records.read(id).entries) {
       const delivery = entry.data.delivery as Delivery | undefined;
       const project = delivery?.recipient.project ?? entry.data.project;
       if (entry.kind === "report" && entry.id.startsWith("report-") && typeof entry.data.text === "string" && typeof entry.data.status === "string" && typeof project === "string")
-        rows.set(entry.id.slice("report-".length), { status: entry.data.status, text: entry.data.text, project: canonicalProject(project) });
+        rows.set(entry.id.slice("report-".length), { status: entry.data.status, text: entry.data.text, project: canonicalProject(project), ...(typeof entry.data.at === "number" && Number.isFinite(entry.data.at) ? { at: new Date(entry.data.at).toISOString() } : {}) });
     }
     for (const event of this.session(id).events) if ((event.type === "orchestrator.answer" || event.type === "orchestrator.report") && !rows.has(event.reportId))
       rows.set(event.reportId, { status: event.status, text: event.text, project: canonicalProject(event.type === "orchestrator.answer" ? event.delivery.recipient.project : event.project) });
@@ -708,5 +743,6 @@ export class CompanionAdmission {
       for (const row of Object.values(session.proposals)) if (row.state === "pending") { row.state = "cancelled"; row.cancelCode = "session_closed"; }
     });
     for (const map of [this.shown, this.reread]) for (const key of map.keys()) if (key.startsWith(`${id}\0`)) map.delete(key);
+    for (const key of this.messageReads.keys()) if (JSON.parse(key)[0] === id) this.messageReads.delete(key);
   }
 }

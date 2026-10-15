@@ -112,10 +112,12 @@ describe("phases → steps", () => {
     let { record } = await requested();
     record = observeDeployment(record, status("candidate-health", T0 + 5_000));
     record = observeDeployment(record, status("rolling-back", T0 + 9_000, { error: "candidate health gate failed: GET / answered 500" }));
+    expect(managedUpdateState(record, T0 + 10_000)).toMatchObject({ rolledBack: false, rollback: "running" });
     record = observeDeployment(record, status("rolled-back", T0 + 12_000, { error: "candidate health gate failed: GET / answered 500" }));
     const update = managedUpdateState(record, T0 + 30_000);
     expect(update.state).toBe("failed");
     expect(update.rolledBack).toBe(true);
+    expect(update.rollback).toBe("done");
     const failed = update.steps.find((step) => step.state === "failed")!;
     expect(failed.name).toBe("health");
     expect(failed.tail).toEqual(["candidate health gate failed: GET / answered 500"]);

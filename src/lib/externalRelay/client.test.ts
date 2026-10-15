@@ -1,4 +1,6 @@
-import { afterEach, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
+import dns from "node:dns/promises";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -317,5 +319,43 @@ test("a confirm that lists no targets reads them once from the service", async (
     expect(targetReads).toBe(1);
   } finally {
     await server.close();
+  }
+});
+
+
+test("publication cancellation settles while DNS is held and late DNS cannot emit", async () => {
+  let release!: (addresses: Array<{ address: string; family: number }>) => void;
+  const held = new Promise<Array<{ address: string; family: number }>>(resolve => { release = resolve; });
+  const lookup = spyOn(dns, "lookup").mockImplementation((() => held) as unknown as typeof dns.lookup);
+  const controller = new AbortController();
+  let prepared = false;
+  try {
+    const pending = relayCall("https://fixture.invalid/v1", "/targets/first/messages", "POST", {}, undefined,
+      { signal: controller.signal, prepareBody: () => { prepared = true; return {}; } });
+    const refused = pending.then(() => null, error => error);
+    controller.abort(new Error("fixture deadline"));
+    expect(await refused).toMatchObject({ message: "fixture deadline" });
+    release([{ address: "127.0.0.1", family: 4 }]);
+    await Promise.resolve();
+    expect(prepared).toBe(false);
+  } finally { release([]); lookup.mockRestore(); }
+});
+
+
+test("confirmed publication waits asynchronously for its reference transaction", async () => {
+  const server = await startTestRelay(() => ({ body: { message_key: "lock_reference", replayed: false } }));
+  const peer = new Database(path.join(state, "state.sqlite"), { create: true });
+  let advanced = false;
+  peer.exec("PRAGMA busy_timeout = 0");
+  peer.exec("BEGIN IMMEDIATE");
+  const timer = setTimeout(() => { advanced = true; peer.exec("ROLLBACK"); }, 20);
+  try {
+    expect((await relayCall(`${server.origin}/v1`, "/targets/first/messages", "POST",
+      { chat_id: 41, message_id: 17, message_thread_id: 7 })).status).toBe(200);
+    expect(advanced).toBe(true);
+  } finally {
+    clearTimeout(timer);
+    if (peer.inTransaction) peer.exec("ROLLBACK");
+    peer.close(); await server.close();
   }
 });

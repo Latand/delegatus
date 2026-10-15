@@ -103,12 +103,15 @@ function resolvedCompose(overrides: Record<string, string> = {}, envFileContents
 }
 
 test("promoted candidate derives its runtime contract from Compose", () => {
-  const args = viewerCandidateDockerArgs(candidate, composeService, {
+  const args = viewerCandidateDockerArgs(candidate, { ...composeService, environment: { ...composeService.environment,
+    LLV_HOT_STATE_RELEASE_REVISION: "old-release", DELEGATUS_HOT_STATE_RELEASE_REVISION: "old-alias-release" } }, {
     runtimeSocket: "/state/runtime-host.sock",
     legacyTmuxExternal: "1",
     tmuxTmpdir: "/run/user/1000/agent-log-viewer",
   });
   const environment = environmentFromArgs(args);
+  expect(environment.LLV_HOT_STATE_RELEASE_REVISION).toBe(candidate.revision);
+  expect(environment.DELEGATUS_HOT_STATE_RELEASE_REVISION).toBe(candidate.revision);
 
   expect(runtimeEventsEnabled(environment as NodeJS.ProcessEnv)).toBe(true);
   expect(runtimeHostSocket(environment as NodeJS.ProcessEnv)).toBe("/state/runtime-host.sock");
@@ -222,6 +225,8 @@ test("actual Viewer Compose keys remain covered by the candidate generator", () 
     ...new Set([
       ...Object.keys(service.environment),
       AGENT_REGISTRY_SQLITE_ENV,
+      "LLV_HOT_STATE_RELEASE_REVISION",
+      "DELEGATUS_HOT_STATE_RELEASE_REVISION",
       "LLV_RUNTIME_EVENTS",
       "LLV_RUNTIME_HOST_SOCKET",
     ]),

@@ -26,6 +26,7 @@ export type StructuredHostStartupPhase =
   | "ready";
 
 export interface StructuredHostStartupProgress {
+  recovery?: { examined: number; total: number; completed: number; deferred: number };
   phase: StructuredHostStartupPhase;
   completedHosts: number;
   totalHosts: number | null;
@@ -60,6 +61,11 @@ function setStatus(
     && (!Number.isSafeInteger(progress.totalHosts)
       || progress.totalHosts < progress.completedHosts)) {
     throw new Error("structured host startup total count is invalid");
+  }
+  if (progress.recovery) {
+    const { examined, total, completed, deferred } = progress.recovery;
+    if (![examined, total, completed, deferred].every(value => Number.isSafeInteger(value) && value >= 0)
+      || examined > total || completed + deferred !== total) throw new Error("spawn recovery progress is invalid");
   }
   const previous = startupStore.__llvStructuredHostStartupProgress;
   const now = new Date().toISOString();

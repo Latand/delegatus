@@ -1064,26 +1064,14 @@ export interface SeatTickReportOwed {
   receivedAt: string;
 }
 
-/** A reply-suggestion set, the seat's marker of an ask, that no question or
-    blocked report under its key has answered (§5.1). */
-export interface SeatTickAskOwed {
-  key: string;
-  setId: string;
-  conversationId: string;
-  /** When the set was offered. */
-  at: string;
-}
-
 /** Owed outcomes one project's row keeps; past it the oldest are dropped and
     counted (§5.1). */
 export const SEAT_TICK_REPORTS_OWED_LIMIT = 64;
-/** Owed asks one project's row keeps. */
-export const SEAT_TICK_ASKS_OWED_LIMIT = 16;
 
 /**
- * What the report log and the reply suggestions say, read once per check
- * (§5.1). Absent on a check whose sources cannot read them, which records and
- * asks for nothing, exactly as with bridge reports off.
+ * What the report log says, read once per check (§5.1). Absent on a check
+ * whose sources cannot read it, which records nothing, exactly as with bridge
+ * reports off.
  */
 export interface SeatTickReportsInput {
   /** The project's Bridge reports setting. Off: nothing is recorded and no
@@ -1101,15 +1089,6 @@ export interface SeatTickReportsInput {
   reportIdsFor: (key: string) => readonly string[];
   /** The newest `coversOwedAt` among the project's manager reports. */
   latestCoversOwedAt: string | null;
-  /** The current reply-suggestion set of each conversation read: the seat's
-      and every conversation named in `asksOwed`. A conversation absent here
-      has no set: the operator answered and it was retired. */
-  suggestionSets: readonly { conversationId: string; setId: string; at: string }[];
-  /** Conversations whose sets were read, present or not. */
-  suggestionConversations: readonly string[];
-  /** Operator messages the suggestions store recorded, for the same
-      conversations. */
-  operatorAdmissions: readonly { conversationId: string; at: string }[];
 }
 
 /** Project tick state; SQLite accounting owns persistence and legacy migration. */
@@ -1282,8 +1261,6 @@ export interface SeatTickProjectState {
   reportFingerprint?: string | null;
   /** The board fingerprint of the previous check. */
   checkFingerprint?: string | null;
-  /** Asks the seat made in its chat with no report under their key. */
-  asksOwed?: SeatTickAskOwed[];
 }
 
 /**

@@ -26,6 +26,7 @@ import { StructuredHostAdoptionCleanupError, type HostState } from "./engineHost
 import { structuredHostsEnabled } from "./flags";
 import { conversationTurnLiveness, type TurnLivenessDependencies } from "./liveness";
 import { restartCutEvidenceHolds } from "./restartCutHold";
+import { registryConversationsForEntryKey } from "@/lib/agent/sqliteRegistryStore";
 import type { StructuredHostTerminationDependencies } from "./structuredHostControl";
 
 export { structuredHostsEnabled };
@@ -547,13 +548,14 @@ export function reconcileDeadStructuredRegistryHosts(
   shouldRetain: StructuredHostAdoptionFilter = (entry) => restartCutEvidenceHolds(sessionKeyId(entry.key)),
 ): void {
   const snapshot = registry.readOnlySnapshot();
-  for (const conversation of Object.values(snapshot.conversations)) {
+  for (const entry of registry.structuredHostEntries()) {
+    if (!entry.structuredHost?.process) continue;
+    const key = entry.key;
+    const conversation = registryConversationsForEntryKey(snapshot, sessionKeyId(key)).find(candidate =>
+      candidate.engine === key.engine && candidate.generations.at(-1)?.id === key.sessionId);
+    if (!conversation) continue;
     if (conversation.turn.state !== "terminal" && !conversation.supersededBy) continue;
-    const generation = conversation.generations.at(-1);
-    if (!generation) continue;
-    const key = { engine: conversation.engine, sessionId: generation.id } as const;
-    const entry = snapshot.entries[sessionKeyId(key)];
-    if (!entry?.structuredHost?.process || shouldRetain(entry)) continue;
+    if (shouldRetain(entry)) continue;
     reconcileDeadStructuredRegistryHost(registry, conversation.id, key);
   }
 }
@@ -718,7 +720,7 @@ export async function demoteSkippedStructuredRegistryHosts(
   admit: <T>(entry: AgentRegistryEntry, mutation: () => T) => Promise<T | undefined> = async (_entry, mutation) => mutation(),
   orphanStop: StructuredOrphanStopDependencies = {},
 ): Promise<void> {
-  const rows = Object.values(registry.readOnlySnapshot().entries).filter((entry) =>
+  const rows = registry.structuredHostEntries().filter((entry) =>
     entry.structuredHost && !shouldAdopt(entry));
   for (const [index, entry] of rows.entries()) {
     if (index > 0 && index % 16 === 0) await new Promise<void>((resolve) => setTimeout(resolve, 0));
@@ -807,7 +809,7 @@ export async function adoptCodexRegistryHosts(
   } = {},
 ): Promise<AdoptedCodexHost[]> {
   if (!structuredHostsEnabled(env)) return [];
-  const rows = Object.values(registry.readOnlySnapshot().entries).filter((entry) =>
+  const rows = registry.structuredHostEntries().filter((entry) =>
     entry.key.engine === "codex"
     && entry.structuredHost?.kind === "codex-app-server"
     && shouldAdopt(entry));
@@ -939,7 +941,7 @@ export async function adoptClaudeRegistryHosts(
   } = {},
 ): Promise<AdoptedClaudeHost[]> {
   if (!structuredHostsEnabled(env)) return [];
-  const rows = Object.values(registry.readOnlySnapshot().entries).filter((entry) =>
+  const rows = registry.structuredHostEntries().filter((entry) =>
     entry.key.engine === "claude"
     && entry.structuredHost?.kind === "claude-broker"
     && shouldAdopt(entry));

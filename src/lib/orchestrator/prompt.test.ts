@@ -82,8 +82,8 @@ test("no prohibition on addressing the operator survives anywhere in the mandate
 
 /* Seats record the mandate version they were spawned on; `get_orchestrator` reports
    this constant as defaultPromptVersion, so an older seat reads as stale without a diff. */
-test("the default mandate is at version 55, and a v54 seat reads as stale", () => {
-  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(55);
+test("the default mandate is at version 56, and a v55 seat reads as stale", () => {
+  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(56);
   /* #1720, and again #1760 — a seat already running keeps the mandate it was
      delivered, so the version bump is the only thing that surfaces a changed
      section until its next spawn, adoption or rotation. #1749 is the change
@@ -126,7 +126,8 @@ test("the default mandate is at version 55, and a v54 seat reads as stale", () =
      waiting and repeated unanswered asks into forms. v55 (the operator's
      variant 4 of docs/design/role-prompts-rewrite.md) leaves the universal
      rules to the role prompt's working rules and holds tasks instead of
-     marking them blocked. */
+     marking them blocked. v56 (the operator, 2026-10-15) retires reply drafts:
+     every ask, the bug report's two included, goes through a decision form. */
   expect(orchestratorMandateStale(30)).toBe(true);
   expect(orchestratorMandateStale(31)).toBe(true);
   expect(orchestratorMandateStale(32)).toBe(true);
@@ -152,7 +153,8 @@ test("the default mandate is at version 55, and a v54 seat reads as stale", () =
   expect(orchestratorMandateStale(52)).toBe(true);
   expect(orchestratorMandateStale(53)).toBe(true);
   expect(orchestratorMandateStale(54)).toBe(true);
-  expect(orchestratorMandateStale(55)).toBe(false);
+  expect(orchestratorMandateStale(55)).toBe(true);
+  expect(orchestratorMandateStale(56)).toBe(false);
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("gives the shape, the outcome rule and what");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain(ORCHESTRATOR_BOARD_REPORT_DIRECTIVE);
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("File what a wake lists, under its keys");
@@ -227,6 +229,8 @@ const PROMPT_FINGERPRINTS: Readonly<Record<number, string>> = {
   54: "d0a97d9a92192e47a48cc4d4e59b60476717ae1ecc78fd252ffd8de2e1bf304e",
   // v55 is variant 4 of docs/design/role-prompts-rewrite.md.
   55: "61412fba0b5617e722a1761a69e3550976315a4615bdda0b5ff841bcdaaac4b4",
+  // v56 retires reply drafts: every ask goes through a decision form.
+  56: "b3d3166f2c01b81db853ccd15e4182c0c88ed9b46be86e52a2ab613b5f32950a",
 };
 
 /* #2187 §4.7, decided D1 = A: the setting governs every automatic merge. Off,
@@ -640,13 +644,14 @@ test("the delivered default carries each directive exactly once, and delivery ad
 /* #2518: both rules, in the default and in whatever mandate a seat holds. */
 test("the mandate asks before a bug report is filed, publishes only an approved preview, and sends another project's work to its seat", () => {
   const section = ORCHESTRATOR_REPORTS_AND_PROJECTS_DIRECTIVE;
-  /* Rule 1: the question comes first, with replies the operator can tap. */
-  expect(section).toContain("When a Delegatus tool misbehaves (an error, tools that contradict each other, a launch refused for a reason that looks wrong), ask the operator, with suggest_replies, whether you may file an issue.");
-  /* The reporter writes, the seat shows the stored text, and nothing but an
-     explicit yes to that text in this conversation publishes it. */
+  /* Rule 1: the question comes first, in a decision form. */
+  expect(section).toContain("When a Delegatus tool misbehaves (an error, tools that contradict each other, a launch refused for a reason that looks wrong), ask the operator in a decision form (publish_prototype_review, no taskId) whether you may file an issue.");
+  /* The reporter writes, the seat shows the stored text, and nothing but the
+     operator's approving option in that text's own form publishes it. */
   expect(section).toContain("spawn_agent role issue-reporter");
-  expect(section).toContain("read its preview back (issue_report show), put that exact title and body in chat and offer its approval reply with suggest_replies");
-  expect(section).toContain("Publish (issue_report publish, the digest) only after the operator sends that reply in this conversation");
+  expect(section).toContain("read its preview back (issue_report show), put that exact title and body in chat and ask in a form whether to publish it, passing the approvalForm show answers unchanged.");
+  expect(section).toContain("Publish (issue_report publish, the digest) only after the operator chooses its approving option");
+  expect(section).not.toContain("suggest_replies");
   expect(section).toContain("A no or an edit returns to the reporter and needs a new yes.");
   expect(section).toContain("Never file one another way.");
   /* Rule 2: seat to seat by default, and what lifts it. */
@@ -1001,9 +1006,14 @@ test("the mandate asks every decision as a form", () => {
     expect(mandate).toContain(ORCHESTRATOR_PROTOTYPE_DIRECTIVE);
     expect(mandate.split("Every operator decision is a form")).toHaveLength(2);
   }
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("Reply drafts. For an open ask that is not a decision, call suggest_replies");
-  /* A plan's yes and a parked stage's question are decisions; the pills and
-     the reports never ask them a second time (decisions 3 and 5). */
+  /* The operator, 2026-10-15: reply drafts are gone, and every ask, a plain
+     question too, is a form that chat and reports only point to. */
+  for (const retired of ["suggest_replies", "Reply drafts", "reply draft"]) expect(ORCHESTRATOR_SYSTEM_PROMPT).not.toContain(retired);
+  expect(ORCHESTRATOR_PROTOTYPE_DIRECTIVE).toContain("Any other question for the operator is a form too.");
+  expect(ORCHESTRATOR_PROTOTYPE_DIRECTIVE).toContain("Chat and reports only point to the form and ask nothing themselves.");
+  expect(ORCHESTRATOR_PROTOTYPE_DIRECTIVE).not.toContain("chat may hold only a one-off ask");
+  /* A plan's yes and a parked stage's question are decisions; the reports
+     never ask them a second time (decisions 3 and 5). */
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("A plan you want a yes to, and a stage's question you cannot settle, are decisions; when a stage parks on such a question, publish its form at once.");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("Every question in a form admits a free-text answer.");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("A report only points to a decision's form; an ask a click cannot settle (an action outside Delegatus) is a question or blocked report.");
@@ -1066,8 +1076,10 @@ Do exactly what the operator asked, where they asked it; anything beyond the lit
 
 /* A seat delivered v54 keeps its stored mandate until it rotates; delivery
    replaces each v54 directive that v55 rewrote by exact match, so the seat
-   reads one current copy and no stale one. The fixture is the v54 default
-   byte for byte: its fingerprint is the one v54 shipped with. */
+   reads one current copy and no stale one, and removes the v54 section on
+   reply drafts the same way, so the seat is never told to ask with them. The
+   fixture is the v54 default byte for byte: its fingerprint is the one v54
+   shipped with. */
 test("delivery replaces every rewritten v54 directive by exact match", () => {
   const v54 = fs.readFileSync(path.join(import.meta.dir, "fixtures/mandate-v54.txt"), "utf8");
   expect(createHash("sha256").update(v54).digest("hex")).toBe(PROMPT_FINGERPRINTS[54]);
@@ -1079,8 +1091,40 @@ test("delivery replaces every rewritten v54 directive by exact match", () => {
     expect(v54).toContain(stale);
     expect(delivered).not.toContain(stale);
   }
+  for (const retired of ["suggest_replies", "Reply drafts"]) expect(v54).toContain(retired);
+  for (const retired of ["suggest_replies", "Reply drafts", "reply draft"]) expect(delivered).not.toContain(retired);
+  /* Removing the section leaves one blank line between its neighbours. */
+  expect(delivered).toContain("Targets are typed by kind (conversation, stage, pipeline, task, draft, region, point) and the tool schema gives each shape and intent.\n\n## Delegatus's clock");
+  expect(delivered).not.toContain("\n\n\n");
   expect(orchestratorMandateForDelivery(delivered)).toBe(delivered);
+  expect(orchestratorMandateWithRoleTable(v54, null)).toBe(orchestratorMandateWithRoleTable(orchestratorMandateWithRoleTable(v54, null), null));
   expect(orchestratorMandateCarriesTickContract({ mandate: v54, promptVersion: 54 })).toBe(true);
+  /* A bespoke section under the same heading keeps its own wording. */
+  const bespoke = "## Reply drafts (suggest_replies)\nOur own wording about replies.";
+  expect(orchestratorMandateForDelivery(`Coordinate.\n\n${bespoke}`)).toContain(bespoke);
+});
+
+/* A seat delivered v55 keeps its stored mandate until it rotates; delivery
+   replaces the two directives v56 rewrote and removes the reply-draft
+   paragraph, each by exact match, so the seat is never told to ask with reply
+   drafts. The fixture is the v55 default byte for byte. */
+test("delivery takes every reply-draft instruction out of a v55 mandate by exact match", () => {
+  const v55 = fs.readFileSync(path.join(import.meta.dir, "fixtures/mandate-v55.txt"), "utf8");
+  expect(createHash("sha256").update(v55).digest("hex")).toBe(PROMPT_FINGERPRINTS[55]);
+  expect(v55).toContain("suggest_replies");
+  const delivered = orchestratorMandateForDelivery(v55);
+  for (const directive of [ORCHESTRATOR_PROTOTYPE_DIRECTIVE, ORCHESTRATOR_BOARD_REPORT_DIRECTIVE, ORCHESTRATOR_REPORTS_AND_PROJECTS_DIRECTIVE]) {
+    expect(delivered.split(directive)).toHaveLength(2);
+  }
+  for (const retired of ["suggest_replies", "Reply drafts", "reply draft"]) expect(delivered).not.toContain(retired);
+  /* Removing the paragraph leaves its neighbours as the current body has them. */
+  expect(delivered).toContain(`${ORCHESTRATOR_PROTOTYPE_DIRECTIVE}\nBridge reports.`);
+  expect(orchestratorMandateForDelivery(delivered)).toBe(delivered);
+  /* With the role table set aside, the delivered v55 mandate is the v56 one. */
+  expect(orchestratorMandateWithRoleTable(v55, null)).toBe(orchestratorMandateWithRoleTable(ORCHESTRATOR_SYSTEM_PROMPT, null));
+  expect(orchestratorMandateCarriesTickContract({ mandate: v55, promptVersion: 55 })).toBe(true);
+  /* A bespoke mandate's own wording about replies survives. */
+  expect(orchestratorMandateForDelivery("Coordinate. Reply drafts: our own wording.")).toContain("Reply drafts: our own wording.");
 });
 
 /* The seat reads every working rule once, in its mandate: the full text beside

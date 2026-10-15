@@ -228,6 +228,8 @@ export function viewerCandidateDockerArgs(
     ...service.environment,
     [AGENT_REGISTRY_SQLITE_ENV]: registryBackendMode,
     PORT: endpoint.port,
+    LLV_HOT_STATE_RELEASE_REVISION: candidate.revision,
+    DELEGATUS_HOT_STATE_RELEASE_REVISION: candidate.revision,
     LLV_RUNTIME_EVENTS: "1",
     LLV_RUNTIME_HOST_SOCKET: overrides.runtimeSocket,
     LLV_LEGACY_TMUX_EXTERNAL: overrides.legacyTmuxExternal,

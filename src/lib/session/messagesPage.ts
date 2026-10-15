@@ -8,6 +8,7 @@ import {
   type NormalizedSessionLine,
   type SessionRecord,
   type SessionRecordKind,
+  type SessionToolCall,
 } from "./reader";
 
 const CHUNK_BYTES = 256 * 1024;
@@ -50,6 +51,8 @@ export interface MessagesPageQuery {
   /** Trusted in-process projection, applied to complete text before clipping. */
   redactText?: (text: string) => string;
   cursor?: MessagesPageCursor | null;
+  /** Total descriptor bytes this call may read, including timestamp/probe reads. */
+  maxScanBytes?: number;
 }
 
 export interface ConversationMessage extends SessionRecord {
@@ -58,6 +61,8 @@ export interface ConversationMessage extends SessionRecord {
   /** Internal, non-serialized evidence retained before redaction and truncation. */
   sourceText?: string;
   sourceId?: string;
+  part?: number;
+  call?: SessionToolCall;
 }
 
 export interface MessagesPage {
@@ -175,14 +180,18 @@ function parsedLine(line: Buffer, engine: SessionEngine): NormalizedSessionLine[
   const row = objectRecord(value);
   if (!row) return [];
   const sourceId = engine === "claude" && typeof row.uuid === "string" ? row.uuid : undefined;
-  return normalizeSessionLine(engine, row).map((candidate) => ({ ...candidate, sourceId }));
+  return normalizeSessionLine(engine, row).map((candidate) => {
+    candidate.sourceId = sourceId;
+    return candidate;
+  });
 }
 
 function newestRecordTimestamp(
   source: MessagesPageSource,
   charge: (bytes: number) => void,
+  allowance: number,
 ): { value: string | null; lines: number } {
-  const start = Math.max(0, source.size - CHUNK_BYTES);
+  const start = Math.max(0, source.size - Math.min(CHUNK_BYTES, allowance));
   const buffer = Buffer.allocUnsafe(source.size - start);
   const read = fs.readSync(source.descriptor, buffer, 0, buffer.length, start);
   charge(read);
@@ -213,6 +222,7 @@ function boundedRecord(
   seq: number,
   maxChars: number,
   redactText?: (text: string) => string,
+  part?: number,
 ): ConversationMessage {
   const redacted = hardenedRedact(redactText ? redactText(normalized.record.text) : normalized.record.text);
   const truncated = redacted.length > maxChars;
@@ -229,6 +239,8 @@ function boundedRecord(
   Object.defineProperties(record, {
     sourceText: { value: normalized.record.text, enumerable: false },
     sourceId: { value: normalized.sourceId, enumerable: false },
+    part: { value: part, enumerable: false },
+    call: { value: normalized.call, enumerable: false },
   });
   return record;
 }
@@ -353,6 +365,7 @@ function boundedPageInteger(value: number, fallback: number, maximum: number): n
 export function readMessagesPage(source: MessagesPageSource, query: MessagesPageQuery): MessagesPage {
   const limit = boundedPageInteger(query.limit, 20, 200);
   const maxChars = boundedPageInteger(query.maxChars, 4_000, 16_000);
+  const scanLimit = boundedPageInteger(query.maxScanBytes ?? MAX_SCAN_BYTES, MAX_SCAN_BYTES, MAX_SCAN_BYTES);
   const since = query.since ? Date.parse(query.since) : null;
   const cursor = query.cursor ?? null;
   if (cursor && cursor.o > source.size) throw new StaleMessagesCursorError();
@@ -365,7 +378,7 @@ export function readMessagesPage(source: MessagesPageSource, query: MessagesPage
   let hasMore = false;
   let next: MessagesPageCursor | null = null;
   const charge = (count: number): void => { bytes += count; };
-  const latest = newestRecordTimestamp(source, charge);
+  const latest = newestRecordTimestamp(source, charge, scanLimit);
   lines += latest.lines;
 
   const isTwin = (candidate: NormalizedSessionLine): boolean => {
@@ -404,7 +417,7 @@ export function readMessagesPage(source: MessagesPageSource, query: MessagesPage
       }
       if (isTwin(candidate)) continue;
       if (!query.kinds.has(candidate.record.kind) || !query.roles.has(candidate.record.role)) continue;
-      records.push(boundedRecord(candidate, offset, maxChars, query.redactText));
+      records.push(boundedRecord(candidate, offset, maxChars, query.redactText, part));
     }
     if (records.length >= limit) {
       hasMore = offset > 0;
@@ -420,8 +433,8 @@ export function readMessagesPage(source: MessagesPageSource, query: MessagesPage
     let probe = Buffer.alloc(0);
     while (probe.indexOf(0x0a) === -1
       && cursor.o + probe.length < source.size
-      && probe.length < MAX_LINE_BYTES) {
-      const length = Math.min(CHUNK_BYTES, source.size - cursor.o - probe.length);
+      && probe.length < MAX_LINE_BYTES && bytes < scanLimit) {
+      const length = Math.min(CHUNK_BYTES, source.size - cursor.o - probe.length, scanLimit - bytes);
       const chunk = Buffer.allocUnsafe(length);
       const read = fs.readSync(source.descriptor, chunk, 0, length, cursor.o + probe.length);
       charge(read);
@@ -429,6 +442,10 @@ export function readMessagesPage(source: MessagesPageSource, query: MessagesPage
       probe = Buffer.concat([probe, chunk.subarray(0, read)]);
     }
     const newline = probe.indexOf(0x0a);
+    // Never parse a partial line when the probe exhausted its allowance.
+    if (newline < 0 && cursor.o + probe.length < source.size) {
+      return { records, cursor, hasMore: true, lastRecordAt: latest.value, scanned: { bytes, lines, capped: true } };
+    }
     const outcome = consumeLine(probe.subarray(0, newline < 0 ? probe.length : newline), cursor.o, cursor.p);
     if (outcome !== "continue") {
       return { records, cursor: next, hasMore, lastRecordAt: latest.value, scanned: { bytes, lines, capped } };
@@ -438,7 +455,7 @@ export function readMessagesPage(source: MessagesPageSource, query: MessagesPage
   let carry = Buffer.alloc(0);
   let stopped = false;
   while (end > 0 && !stopped) {
-    if (bytes >= MAX_SCAN_BYTES) {
+    if (bytes >= scanLimit) {
       capped = true;
       hasMore = true;
       const resumeEnd = Math.min(source.size, end + carry.length + (carry.length ? 1 : 0));
@@ -450,7 +467,7 @@ export function readMessagesPage(source: MessagesPageSource, query: MessagesPage
       next = { o: resumeOffset, p: 0, r: [...recent] };
       break;
     }
-    const allowance = Math.max(1, MAX_SCAN_BYTES - bytes);
+    const allowance = scanLimit - bytes;
     const start = Math.max(0, end - Math.min(CHUNK_BYTES, allowance));
     const buffer = Buffer.allocUnsafe(end - start);
     const read = fs.readSync(source.descriptor, buffer, 0, buffer.length, start);

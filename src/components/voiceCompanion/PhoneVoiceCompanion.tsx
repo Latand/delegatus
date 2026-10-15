@@ -1,17 +1,20 @@
 "use client";
 
-import { AudioLines, EyeOff, Mic, MicOff, PhoneOff } from "lucide-react";
+import { AudioLines, EyeOff, MessageSquare, Mic, MicOff, PhoneOff } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 
 import { LAYER } from "@/components/layers";
+import { useModalLayer } from "@/components/modalLayer";
 import { useMobileNavStore } from "@/components/mobile/mobileNav";
 import { createCompanionStore } from "@/hooks/useVoiceCompanion";
 import { useLocale } from "@/lib/i18n";
 import type { Locale, VoiceCompanionAdapter } from "@/lib/voiceCompanion/contract";
 import { companionErrorMessage } from "@/lib/voiceCompanion/errors";
 import { BUBBLE_MAX_LINES, BUBBLE_MAX_WIDTH, bubbleChars } from "@/lib/voiceCompanion/placement";
+import type { SessionTranscriptRecord } from "@/lib/voiceCompanion/transcriptRecord";
 
 import { CompanionCharacter, type CharacterHandle } from "./CompanionCharacter";
+import { awaitsReport, CompanionTranscript, transcriptLabels, TRANSCRIPT_CSS } from "./CompanionTranscript";
 import { hidePhoneVoice, setPhoneVoiceSide, usePhoneVoice, type PhoneVoiceSide } from "./phoneVoiceStore";
 import { bubblesOf, bubblesOut, NOTICE_LINGER_MS, SETTINGS_FAILURES } from "./VoiceCompanion";
 import { PHONE_VOICE_CSS, VOICE_COMPANION_CSS } from "./voiceCompanionStyles";
@@ -284,6 +287,23 @@ function ClearedPage({ pane, held }: { pane: Pane | null; held: Box[] }) {
 /** A bubble's text with its last two words kept on one line, so the wrap never leaves one word alone at the end. */
 const tied = (text: string) => (text.trim().split(/\s+/u).length > 2 ? text.replace(/\s+(\S+)$/u, " $1") : text);
 
+/** The existing conversation panel, fitted to the phone and owned by the modal stack. */
+function PhoneConversation({ children, onClose }: { children: React.ReactNode; onClose: () => void }) {
+  const panel = useRef<HTMLDivElement>(null);
+  useModalLayer({ containerRef: panel, onClose, manageFocus: false });
+  useEffect(() => {
+    const background: Array<{ node: HTMLElement; inert: boolean }> = [];
+    for (let own: HTMLElement | null = panel.current; own?.parentElement; own = own.parentElement) {
+      for (const sibling of own.parentElement.children) if (sibling !== own && sibling instanceof HTMLElement) {
+        background.push({ node: sibling, inert: sibling.inert }); sibling.inert = true;
+      }
+    }
+    return () => { for (const { node, inert } of background) node.inert = inert; };
+  }, []);
+  return <div ref={panel} className="pvc-conversation" data-phone-voice-conversation tabIndex={-1}
+    onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}>{children}</div>;
+}
+
 export function PhoneVoiceCompanion({ adapter, project, locale: sessionLocale, seat, preflight, onOpenSettings }: {
   adapter: VoiceCompanionAdapter;
   /** The project of the screen on top; null on a view that shows none, where a conversation cannot start. */
@@ -305,6 +325,9 @@ export function PhoneVoiceCompanion({ adapter, project, locale: sessionLocale, s
   const character = useRef<CharacterHandle>(null);
   const shell = useShell(probe, root);
   const [menu, setMenu] = useState(false);
+  const [reading, setReading] = useState(false);
+  const [record, setRecord] = useState<SessionTranscriptRecord | null>(null);
+  const [sessionSeen, setSessionSeen] = useState(false);
   const [starting, setStarting] = useState(false);
   const [muted, setMuted] = useState(false);
   const [drag, setDrag] = useState<{ x: number; y: number } | null>(null);
@@ -319,6 +342,18 @@ export function PhoneVoiceCompanion({ adapter, project, locale: sessionLocale, s
 
   const connected = state.phase !== "offline";
   const live = connected || starting;
+  if (live && !sessionSeen) setSessionSeen(true);
+  const readable = sessionSeen && typeof adapter.transcript === "function";
+  const waitingForReport = record !== null && awaitsReport(record);
+  useEffect(() => {
+    if (!reading || !adapter.transcript) return;
+    let alive = true;
+    const read = () => { void adapter.transcript!().then((next) => { if (alive && next) setRecord(next); }).catch(() => undefined); };
+    read();
+    if (!live && !waitingForReport) return () => { alive = false; };
+    const timer = setInterval(read, 1_500);
+    return () => { alive = false; clearInterval(timer); };
+  }, [reading, adapter, live, waitingForReport]);
   const speechLocale: Locale = sessionLocale ?? (locale === "uk" ? "uk" : "en");
 
   /* The mouth, and how far the playing line's words have come at the nominal pace: one render per new piece. */
@@ -392,6 +427,7 @@ export function PhoneVoiceCompanion({ adapter, project, locale: sessionLocale, s
     setNotice(null);
     setMuted(false);
     setStarting(true);
+    setReading(false); setRecord(null);
     /* A failed start is told by the adapter as an error event; the bubble says it. */
     void store.start({ locale: speechLocale, project }).catch(() => undefined).finally(() => setStarting(false));
   };
@@ -448,6 +484,7 @@ export function PhoneVoiceCompanion({ adapter, project, locale: sessionLocale, s
   /* A live or starting call holds the microphone, so its sign stays above every layer a phone surface paints (the image
      preview, search, full-screen dialogs) and below only the toasts; with no call the head keeps the dock's place. */
   const sheetState = shell.footer !== null ? "full" : sheetOpen ? "open" : undefined;
+  const closeConversation = () => { setReading(false); frameOf(() => root.current?.querySelector<HTMLElement>("[data-phone-voice-head]")?.focus()); };
 
   return (
     <>
@@ -466,10 +503,17 @@ export function PhoneVoiceCompanion({ adapter, project, locale: sessionLocale, s
         data-side={side}
         data-sheet={sheetState}
         data-call-start={callStart ?? undefined}
-        style={{ zIndex: live ? LAYER.overlay + 1 : sheetOpen ? LAYER.sheet + 1 : LAYER.dock, transform: "none", width: 0, height: 0 }}
+        style={{ zIndex: live || reading ? LAYER.overlay + 1 : sheetOpen ? LAYER.sheet + 1 : LAYER.dock, transform: "none", width: 0, height: 0 }}
       >
         <style>{VOICE_COMPANION_CSS}</style>
         <style>{PHONE_VOICE_CSS}</style>
+        <style>{TRANSCRIPT_CSS}{`
+          .pvc-conversation { position: fixed; left: 0; top: 0; width: 100vw; height: 100dvh; pointer-events: auto; background: #0006; }
+          .pvc-conversation .vc-tr { background: var(--color-raised); }
+          .pvc-conversation .vc-tr-close { width: 44px; height: 44px; }
+          .pvc-conversation .vc-tr-copy { min-width: 36px; min-height: 36px; }
+          .pvc-conversation .vc-tr-toggle { min-height: 44px; }
+        `}</style>
         {/* The conversation's feed ends above the band: its tail is aligned on the blank space under its last row, which
             a padding would add to. The board's column keeps the band as room at its end. */}
         {band !== null ? <style>{`html [data-log-feed-scroller] { margin-bottom: ${band}px; } html [data-phone-kanban-column] { padding-bottom: ${band}px; }`}</style> : null}
@@ -528,9 +572,16 @@ export function PhoneVoiceCompanion({ adapter, project, locale: sessionLocale, s
                 <AudioLines size={18} aria-hidden />{t("voiceCompanion.settings.label")}
               </button>
             ) : null}
+            {readable ? <button type="button" role="menuitem" className="pvc-row" data-phone-voice-transcript
+              onClick={() => { setMenu(false); setReading(true); }}><MessageSquare size={18} aria-hidden />{transcriptLabels(locale).title}</button> : null}
             <button type="button" role="menuitem" className="pvc-row" data-phone-voice-hide onClick={hide}><EyeOff size={18} aria-hidden />{t("voiceCompanion.hide")}</button>
           </div>
         ) : null}
+        {reading ? <PhoneConversation onClose={closeConversation}>
+          <CompanionTranscript modal record={record ?? { entries: [], truncated: false }} usage={state.usage ?? undefined}
+            left={EDGE + shell.insetLeft} top={Math.max(EDGE, shell.top + EDGE)} width={shell.width - 2 * EDGE - shell.insetLeft - shell.insetRight}
+            height={Math.max(120, shell.height - Math.max(EDGE, shell.top + EDGE) - EDGE)} onClose={closeConversation} />
+        </PhoneConversation> : null}
         {seat === false && connected ? <span className="vc-sr" role="status">{companionErrorMessage("no_orchestrator", speechLocale)}</span> : null}
       </section>
     </>
