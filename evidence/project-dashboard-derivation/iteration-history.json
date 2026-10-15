@@ -300,6 +300,48 @@
     ]
   },
   {
+    "run": "pd-merged-timed",
+    "disposition": "All six stream windows and equality passed. The outer command received SIGTERM at approximately five minutes while the first catalog baseline was starting. No catalog window completed; recorded stream results are retained. Confirmation runs split each three-pair workload into its own gate invocation.",
+    "windows": [
+      {
+        "tag": "stream-1-before-timed",
+        "utcStart": "2026-10-15T10:12:47.364Z",
+        "utcEnd": "2026-10-15T10:13:20.942Z",
+        "maxDerivationMs": 105.60000038146973
+      },
+      {
+        "tag": "stream-1-after-timed",
+        "utcStart": "2026-10-15T10:13:37.969Z",
+        "utcEnd": "2026-10-15T10:14:11.058Z",
+        "maxDerivationMs": 32.799999475479126
+      },
+      {
+        "tag": "stream-2-after-timed",
+        "utcStart": "2026-10-15T10:14:21.688Z",
+        "utcEnd": "2026-10-15T10:14:53.950Z",
+        "maxDerivationMs": 12.299999952316284
+      },
+      {
+        "tag": "stream-2-before-timed",
+        "utcStart": "2026-10-15T10:15:03.081Z",
+        "utcEnd": "2026-10-15T10:15:35.521Z",
+        "maxDerivationMs": 64.39999985694885
+      },
+      {
+        "tag": "stream-3-before-timed",
+        "utcStart": "2026-10-15T10:15:45.967Z",
+        "utcEnd": "2026-10-15T10:16:18.754Z",
+        "maxDerivationMs": 83.1000006198883
+      },
+      {
+        "tag": "stream-3-after-timed",
+        "utcStart": "2026-10-15T10:16:27.684Z",
+        "utcEnd": "2026-10-15T10:16:59.640Z",
+        "maxDerivationMs": 15.500000476837158
+      }
+    ]
+  },
+  {
     "run": "pd-pilot-indexes",
     "windows": [
       {
@@ -979,6 +1021,143 @@
         "polls": 23,
         "connection": "live",
         "scrollEvents": 33
+      }
+    ]
+  },
+  {
+    "run": "pd-paths-timed",
+    "windows": [
+      {
+        "tag": "stream-1-before-timed",
+        "utcStart": "2026-10-15T09:31:16.016Z",
+        "utcEnd": "2026-10-15T09:31:48.995Z",
+        "maxDerivationMs": 82.10000014305115,
+        "derivationCrossings": 2,
+        "events": 1205,
+        "polls": 0,
+        "connection": "live",
+        "scrollEvents": 113
+      },
+      {
+        "tag": "stream-1-after-timed",
+        "utcStart": "2026-10-15T09:32:01.665Z",
+        "utcEnd": "2026-10-15T09:32:35.580Z",
+        "maxDerivationMs": 18.90000009536743,
+        "derivationCrossings": 0,
+        "events": 1213,
+        "polls": 0,
+        "connection": "live",
+        "scrollEvents": 103
+      },
+      {
+        "tag": "stream-2-after-timed",
+        "utcStart": "2026-10-15T09:32:51.284Z",
+        "utcEnd": "2026-10-15T09:33:25.019Z",
+        "maxDerivationMs": 38.10000038146973,
+        "derivationCrossings": 0,
+        "events": 1217,
+        "polls": 0,
+        "connection": "live",
+        "scrollEvents": 57
+      },
+      {
+        "tag": "stream-2-before-timed",
+        "utcStart": "2026-10-15T09:33:44.111Z",
+        "utcEnd": "2026-10-15T09:34:17.494Z",
+        "maxDerivationMs": 126.60000014305115,
+        "derivationCrossings": 2,
+        "events": 1209,
+        "polls": 0,
+        "connection": "live",
+        "scrollEvents": 72
+      },
+      {
+        "tag": "stream-3-before-timed",
+        "utcStart": "2026-10-15T09:34:31.934Z",
+        "utcEnd": "2026-10-15T09:35:04.945Z",
+        "maxDerivationMs": 85.90000009536743,
+        "derivationCrossings": 2,
+        "events": 1207,
+        "polls": 0,
+        "connection": "live",
+        "scrollEvents": 79
+      },
+      {
+        "tag": "stream-3-after-timed",
+        "utcStart": "2026-10-15T09:35:23.028Z",
+        "utcEnd": "2026-10-15T09:35:56.255Z",
+        "maxDerivationMs": 34.19999980926514,
+        "derivationCrossings": 0,
+        "events": 1214,
+        "polls": 0,
+        "connection": "live",
+        "scrollEvents": 61
+      },
+      {
+        "tag": "catalog-1-before-timed",
+        "utcStart": "2026-10-15T09:36:11.014Z",
+        "utcEnd": "2026-10-15T09:36:45.429Z",
+        "maxDerivationMs": 294.39999985694885,
+        "derivationCrossings": 19,
+        "events": 1225,
+        "polls": 24,
+        "connection": "live",
+        "scrollEvents": 28
+      },
+      {
+        "tag": "catalog-1-after-timed",
+        "utcStart": "2026-10-15T09:37:03.997Z",
+        "utcEnd": "2026-10-15T09:37:39.234Z",
+        "maxDerivationMs": 37.09999942779541,
+        "derivationCrossings": 0,
+        "events": 1220,
+        "polls": 47,
+        "connection": "live",
+        "scrollEvents": 61
+      },
+      {
+        "tag": "catalog-2-after-timed",
+        "utcStart": "2026-10-15T09:37:50.335Z",
+        "utcEnd": "2026-10-15T09:38:26.303Z",
+        "maxDerivationMs": 24.499999523162842,
+        "derivationCrossings": 0,
+        "events": 1203,
+        "polls": 46,
+        "connection": "live",
+        "scrollEvents": 52
+      },
+      {
+        "tag": "catalog-2-before-timed",
+        "utcStart": "2026-10-15T09:38:38.309Z",
+        "utcEnd": "2026-10-15T09:39:12.804Z",
+        "maxDerivationMs": 153.5,
+        "derivationCrossings": 31,
+        "events": 1244,
+        "polls": 44,
+        "connection": "live",
+        "scrollEvents": 56
+      },
+      {
+        "tag": "catalog-3-before-timed",
+        "utcStart": "2026-10-15T09:39:25.151Z",
+        "utcEnd": "2026-10-15T09:39:58.591Z",
+        "maxDerivationMs": 196.79999995231628,
+        "derivationCrossings": 27,
+        "events": 1213,
+        "polls": 42,
+        "connection": "live",
+        "scrollEvents": 47
+      },
+      {
+        "tag": "catalog-3-after-timed",
+        "utcStart": "2026-10-15T09:40:11.969Z",
+        "utcEnd": "2026-10-15T09:40:46.129Z",
+        "maxDerivationMs": 22,
+        "derivationCrossings": 0,
+        "events": 1216,
+        "polls": 47,
+        "connection": "live",
+        "scrollEvents": 61
       }
     ]
   },
@@ -1759,6 +1938,3837 @@
             "memoMs": 54.73500000000058
           }
         ]
+      }
+    ]
+  },
+  {
+    "run": "pd-paths-raw",
+    "disposition": "Passed before merging main; superseded by final paired confirmation.",
+    "windows": [
+      {
+        "tag": "stream-1-before-raw",
+        "utcStart": "2026-10-15T09:41:01.530Z",
+        "utcEnd": "2026-10-15T09:41:34.150Z",
+        "windowMs": 30262.700000047684,
+        "browser": "156.0.8078.4",
+        "cardsBefore": 357,
+        "cardsAfter": 357,
+        "corpus": {
+          "files": 864,
+          "flows": 284,
+          "tasks": 619,
+          "liveIds": [
+            "conversation_search-ver-2",
+            "conversation_upload-ui",
+            "conversation_export-impl",
+            "conversation_attach-verify",
+            "conversation_orchestrator",
+            "conversation_rounds-review"
+          ]
+        },
+        "events": 1208,
+        "receivedAllSessionRevisions": true,
+        "polls": 0,
+        "connection": "live",
+        "scrollEvents": 74,
+        "distinctScrollPositions": 70,
+        "missedGestures": 211,
+        "maxWheelLatenessMs": 102,
+        "allLongTasks": 241,
+        "maxBrowserTaskMs": 457.208,
+        "maxMemoDerivationMs": 0,
+        "memoCrossings": [],
+        "worstMemoTask": {
+          "start": 12665.452999830246,
+          "duration": 139.102,
+          "threadMs": 138.876,
+          "derivationMs": 0,
+          "sites": []
+        },
+        "maxSampledDerivationMs": 68.7599999999984,
+        "maxSampledMemoMs": 68.7599999999984,
+        "maxSampledRenderMs": 75.49199999999473,
+        "sampledTasksWithDerivation": [
+          {
+            "start": 31216.490000009537,
+            "duration": 457.208,
+            "threadMs": 453.776,
+            "derivationMs": 68.7599999999984,
+            "memoMs": 68.7599999999984,
+            "renderMs": 75.49199999999473,
+            "gcMs": 6.385999999994965
+          },
+          {
+            "start": 31798.05499982834,
+            "duration": 359.985,
+            "threadMs": 358.743,
+            "derivationMs": 54.91599999999016,
+            "memoMs": 54.91599999999016,
+            "renderMs": 57.68400012980055,
+            "gcMs": 20.100000000002183
+          }
+        ],
+        "callbackMaximaMs": {},
+        "sampledDerivationCrossings": [
+          {
+            "start": 31216.490000009537,
+            "duration": 457.208,
+            "threadMs": 453.776,
+            "derivationMs": 68.7599999999984,
+            "memoMs": 68.7599999999984,
+            "renderMs": 75.49199999999473,
+            "gcMs": 6.385999999994965
+          },
+          {
+            "start": 31798.05499982834,
+            "duration": 359.985,
+            "threadMs": 358.743,
+            "derivationMs": 54.91599999999016,
+            "memoMs": 54.91599999999016,
+            "renderMs": 57.68400012980055,
+            "gcMs": 20.100000000002183
+          }
+        ],
+        "hostBefore": {
+          "load": [
+            11.89,
+            14.29,
+            14.65
+          ],
+          "groups": [
+            {
+              "quota": "120000 20000",
+              "memory": "8589934592",
+              "throttledUsec": 31429
+            },
+            {
+              "quota": "360000 20000",
+              "memory": "max",
+              "throttledUsec": 11363809
+            },
+            {
+              "quota": "max 100000",
+              "memory": "114462744576",
+              "throttledUsec": 0
+            },
+            {
+              "quota": "max 100000",
+              "memory": "max",
+              "throttledUsec": 0
+            },
+            {
+              "quota": "max 100000",
+              "memory": "max",
+              "throttledUsec": 0
+            },
+            {
+              "quota": "max 100000",
+              "memory": "max",
+              "throttledUsec": 0
+            },
+            {
+              "quota": "max 100000",
+              "memory": "max",
+              "throttledUsec": 0
+            }
+          ]
+        },
+        "hostAfter": {
+          "load": [
+            13.06,
+            14.29,
+            14.64
+          ],
+          "groups": [
+            {
+              "quota": "120000 20000",
+              "memory": "8589934592",
+              "throttledUsec": 120449
+            },
+            {
+              "quota": "360000 20000",
+              "memory": "max",
+              "throttledUsec": 11363809
+            },
+            {
+              "quota": "max 100000",
+              "memory": "114462744576",
+              "throttledUsec": 0
+            },
+            {
+              "quota": "max 100000",
+              "memory": "max",
+              "throttledUsec": 0
+            },
+            {
+              "quota": "max 100000",
+              "memory": "max",
+              "throttledUsec": 0
+            },
+            {
+              "quota": "max 100000",
+              "memory": "max",
+              "throttledUsec": 0
+            },
+            {
+              "quota": "max 100000",
+              "memory": "max",
+              "throttledUsec": 0
+            }
+          ]
+        },
+        "committedCatalog": null,
+        "expectedCatalog": {
+          "size": 2048,
+          "mtime": 1792046449
+        },
+        "pageErrors": []
+      },
+      {
+        "tag": "stream-1-after-raw",
+        "utcStart": "2026-10-15T09:41:49.793Z",
+        "utcEnd": "2026-10-15T09:42:21.959Z",
+        "windowMs": 30083.200000047684,
+        "browser": "156.0.8078.4",
+        "cardsBefore": 357,
+        "cardsAfter": 357,
+        "corpus": {
+          "files": 864,
+          "flows": 284,
+          "tasks": 619,
+          "liveIds": [
+            "conversation_search-ver-2",
+            "conversation_upload-ui",
+            "conversation_export-impl",
+            "conversation_attach-verify",
+            "conversation_orchestrator",
+            "conversation_rounds-review"
+          ]
+        },
+        "events": 1201,
+        "receivedAllSessionRevisions": true,
+        "polls": 0,
+        "connection": "live",
+        "scrollEvents": 83,
+        "distinctScrollPositions": 83,
+        "missedGestures": 206,
+        "maxWheelLatenessMs": 102,
+        "allLongTasks": 225,
+        "maxBrowserTaskMs": 473.269,
+        "maxMemoDerivationMs": 0,
+        "memoCrossings": [],
+        "worstMemoTask": {
+          "start": 14554.375,
+          "duration": 33.44,
+          "threadMs": 33.364,
+          "derivationMs": 0,
+          "sites": []
+        },
+        "maxSampledDerivationMs": 17.988000000001193,
+        "maxSampledMemoMs": 17.988000000001193,
+        "maxSampledRenderMs": 21.24499999999898,
+        "sampledTasksWithDerivation": [
+          {
+            "start": 31624.420000076294,
+            "duration": 240.199,
+            "threadMs": 240.402,
+            "derivationMs": 17.988000000001193,
+            "memoMs": 17.988000000001193,
+            "renderMs": 21.24499999999898,
+            "gcMs": 3.161000000003696
+          }
+        ],
+        "callbackMaximaMs": {},
+        "sampledDerivationCrossings": [],
+        "hostBefore": {
+          "load": [
+            13.24,
+            14.28,
+            14.63
+          ],
+          "groups": [
+            {
+              "quota": "120000 20000",
+              "memory": "8589934592",
+              "throttledUsec": 122926
+            },
+            {
+              "quota": "360000 20000",
+              "memory": "max",
+              "throttledUsec": 11363809
+            },
+            {
+              "quota": "max 100000",
+              "memory": "114462744576",
+              "throttledUsec": 0
+            },
+            {
+              "quota": "max 100000",
+              "memory": "max",
+              "throttledUsec": 0
+            },
+            {
+              "quota": "max 100000",
+              "memory": "max",
+              "throttledUsec": 0
+            },
+            {
+              "quota": "max 100000",
+              "memory": "max",
+              "throttledUsec": 0
+            },
+            {
+              "quota": "max 100000",
+              "memory": "max",
+              "throttledUsec": 0
+            }
+          ]
+        },
+        "hostAfter": {
+          "load": [
+            14.61,
+            14.57,
+            14.72
+          ],
+          "groups": [
+            {
+              "quota": "120000 20000",
+              "memory": "8589934592",
+              "throttledUsec": 169198
+            },
+            {
+              "quota": "360000 20000",
+              "memory": "max",
+              "throttledUsec": 11363809
+            },
+            {
+              "quota": "max 100000",
+              "memory": "114462744576",
+              "throttledUsec": 0
+            },
+            {
+              "quota": "max 100000",
+              "memory": "max",
+              "throttledUsec": 0
+            },
+            {
+              "quota": "max 100000",
+              "memory": "max",
+              "throttledUsec": 0
+            },
+            {
+              "quota": "max 100000",
+              "memory": "max",
+              "throttledUsec": 0
+            },
+            {
+              "quota": "max 100000",
+              "memory": "max",
+              "throttledUsec": 0
+            }
+          ]
+        },
+        "committedCatalog": null,
+        "expectedCatalog": {
+          "size": 2048,
+          "mtime": 1792046496
+        },
+        "pageErrors": []
+      },
+      {
+        "tag": "stream-2-after-raw",
+        "utcStart": "2026-10-15T09:42:31.895Z",
+        "utcEnd": "2026-10-15T09:43:03.897Z",
+        "windowMs": 30174.0,
+        "browser": "156.0.8078.4",
+        "cardsBefore": 357,
+        "cardsAfter": 357,
+        "corpus": {
+          "files": 864,
+          "flows": 284,
+          "tasks": 619,
+          "liveIds": [
+            "conversation_search-ver-2",
+            "conversation_upload-ui",
+            "conversation_export-impl",
+            "conversation_attach-verify",
+            "conversation_orchestrator",
+            "conversation_rounds-review"
+          ]
+        },
+        "events": 1202,
+        "receivedAllSessionRevisions": true,
+        "polls": 0,
+        "connection": "live",
+        "scrollEvents": 133,
+        "distinctScrollPositions": 127,
+        "missedGestures": 137,
+        "maxWheelLatenessMs": 101,
+        "allLongTasks": 216,
+        "maxBrowserTaskMs": 280.703,
+        "maxMemoDerivationMs": 0,
+        "memoCrossings": [],
+        "worstMemoTask": {
+          "start": 9465.53099989891,
+          "duration": 0.114,
+          "threadMs": 0.112,
+          "derivationMs": 0,
+          "sites": []
+        },
+        "maxSampledDerivationMs": 13.622000000003027,
+        "maxSampledMemoMs": 13.622000000003027,
+        "maxSampledRenderMs": 17.004000000000815,
+        "sampledTasksWithDerivation": [
+          {
+            "start": 30950.398999929428,
+            "duration": 280.703,
+            "threadMs": 280.752,
+            "derivationMs": 13.622000000003027,
+            "memoMs": 13.622000000003027,
+            "renderMs": 17.004000000000815,
+            "gcMs": 1.1749999999992724
+          }
+        ],
+        "callbackMaximaMs": {},
+        "sampledDerivationCrossings": [],
+        "hostBefore": {
+          "load": [
+            13.98,
+            14.44,
+            14.67
+          ],
+          "groups": [
+            {
+              "quota": "120000 20000",
+              "memory": "8589934592",
+              "throttledUsec": 169198
+            },
+            {
+              "quota": "360000 20000",
+              "memory": "max",
+              "throttledUsec": 11363809
+            },
+            {
+              "quota": "max 100000",
+              "memory": "114462744576",
+              "throttledUsec": 0
+            },
+            {
+              "quota": "max 100000",
+              "memory": "max",
+              "throttledUsec": 0
+            },
+            {
+              "quota": "max 100000",
+              "memory": "max",
+              "throttledUsec": 0
+            },
+            {
+              "quota": "max 100000",
+              "memory": "max",
+              "throttledUsec": 0
+            },
+            {
+              "quota": "max 100000",
+              "memory": "max",
+              "throttledUsec": 0
+            }
+          ]
+        },
+        "hostAfter": {
+          "load": [
+            12.11,
+            13.93,
+            14.49
+          ],
+          "groups": [
+            {
+              "quota": "120000 20000",
+              "memory": "8589934592",
+              "throttledUsec": 236305
+            },
+            {
+              "quota": "360000 20000",
+              "memory": "max",
+              "throttledUsec": 11363809
+            },
+            {
+              "quota": "max 100000",
+              "memory": "114462744576",
+              "throttledUsec": 0
+            },
+            {
+              "quota": "max 100000",
+              "memory": "max",
+              "throttledUsec": 0
+            },
+            {
+              "quota": "max 100000",
+              "memory": "max",
+              "throttledUsec": 0
+            },
+            {
+              "quota": "max 100000",
+              "memory": "max",
+              "throttledUsec": 0
+            },
+            {
+              "quota": "max 100000",
+              "memory": "max",
+              "throttledUsec": 0
+            }
+          ]
+        },
+        "committedCatalog": null,
+        "expectedCatalog": {
+          "size": 2048,
+          "mtime": 1792046543
+        },
+        "pageErrors": []
+      },
+      {
+        "tag": "stream-2-before-raw",
+        "utcStart": "2026-10-15T09:43:12.614Z",
+        "utcEnd": "2026-10-15T09:43:45.572Z",
+        "windowMs": 30179.099999904633,
+        "browser": "156.0.8078.4",
+        "cardsBefore": 357,
+        "cardsAfter": 357,
+        "corpus": {
+          "files": 864,
+          "flows": 284,
+          "tasks": 619,
+          "liveIds": [
+            "conversation_search-ver-2",
+            "conversation_upload-ui",
+            "conversation_export-impl",
+            "conversation_attach-verify",
+            "conversation_orchestrator",
+            "conversation_rounds-review"
+          ]
+        },
+        "events": 1207,
+        "receivedAllSessionRevisions": true,
+        "polls": 0,
+        "connection": "live",
+        "scrollEvents": 119,
+        "distinctScrollPositions": 109,
+        "missedGestures": 126,
+        "maxWheelLatenessMs": 101,
+        "allLongTasks": 175,
+        "maxBrowserTaskMs": 541.704,
+        "maxMemoDerivationMs": 0,
+        "memoCrossings": [],
+        "worstMemoTask": {
+          "start": 8403.628999948502,
+          "duration": 0.013,
+          "threadMs": 0.011,
+          "derivationMs": 0,
+          "sites": []
+        },
+        "maxSampledDerivationMs": 94.86900000000242,
+        "maxSampledMemoMs": 94.86900000000242,
+        "maxSampledRenderMs": 100.6130000000012,
+        "sampledTasksWithDerivation": [
+          {
+            "start": 30956.480999946594,
+            "duration": 541.704,
+            "threadMs": 539.979,
+            "derivationMs": 94.86900000000242,
+            "memoMs": 94.86900000000242,
+            "renderMs": 100.6130000000012,
+            "gcMs": 10.395000000000437
+          },
+          {
+            "start": 31649.862999916077,
+            "duration": 403.5,
+            "threadMs": 401.493,
+            "derivationMs": 86.99400000001333,
+            "memoMs": 86.99400000001333,
+            "renderMs": 89.49600000001374,
+            "gcMs": 9.818999999999505
+          }
+        ],
+        "callbackMaximaMs": {},
+        "sampledDerivationCrossings": [
+          {
+            "start": 30956.480999946594,
+            "duration": 541.704,
+            "threadMs": 539.979,
+            "derivationMs": 94.86900000000242,
+            "memoMs": 94.86900000000242,
+            "renderMs": 100.6130000000012,
+            "gcMs": 10.395000000000437
+          },
+          {
+            "start": 31649.862999916077,
+            "duration": 403.5,
+            "threadMs": 401.493,
+            "derivationMs": 86.99400000001333,
+            "memoMs": 86.99400000001333,
+            "renderMs": 89.49600000001374,
+            "gcMs": 9.818999999999505
+          }
+        ],
+        "hostBefore": {
+          "load": [
+            11.02,
+            13.63,
+            14.39
+          ],
+          "groups": [
+            {
+              "quota": "120000 20000",
+              "memory": "8589934592",
+              "throttledUsec": 236305
+            },
+            {
+              "quota": "360000 20000",
+              "memory": "max",
+              "throttledUsec": 11363809
+            },
+            {
+              "quota": "max 100000",
+              "memory": "114462744576",
+              "throttledUsec": 0
+            },
+            {
+              "quota": "max 100000",
+              "memory": "max",
+              "throttledUsec": 0
+            },
+            {
+              "quota": "max 100000",
+              "memory": "max",
+              "throttledUsec": 0
+            },
+            {
+              "quota": "max 100000",
+              "memory": "max",
+              "throttledUsec": 0
+            },
+            {
+              "quota": "max 100000",
+              "memory": "max",
+              "throttledUsec": 0
+            }
+          ]
+        },
+        "hostAfter": {
+          "load": [
+            10.71,
+            13.28,
+            14.25
+          ],
+          "groups": [
+            {
+              "quota": "120000 20000",
+              "memory": "8589934592",
+              "throttledUsec": 243978
+            },
+            {
+              "quota": "360000 20000",
+              "memory": "max",
+              "throttledUsec": 11363809
+            },
+            {
+              "quota": "max 100000",
+              "memory": "114462744576",
+              "throttledUsec": 0
+            },
+            {
+              "quota": "max 100000",
+              "memory": "max",
+              "throttledUsec": 0
+            },
+            {
+              "quota": "max 100000",
+              "memory": "max",
+              "throttledUsec": 0
+            },
+            {
+              "quota": "max 100000",
+              "memory": "max",
+              "throttledUsec": 0
+            },
+            {
+              "quota": "max 100000",
+              "memory": "max",
+              "throttledUsec": 0
+            }
+          ]
+        },
+        "committedCatalog": null,
+        "expectedCatalog": {
+          "size": 2048,
+          "mtime": 1792046584
+        },
+        "pageErrors": []
+      },
+      {
+        "tag": "stream-3-before-raw",
+        "utcStart": "2026-10-15T09:44:04.157Z",
+        "utcEnd": "2026-10-15T09:44:37.136Z",
+        "windowMs": 30535.5,
+        "browser": "156.0.8078.4",
+        "cardsBefore": 357,
+        "cardsAfter": 357,
+        "corpus": {
+          "files": 864,
+          "flows": 284,
+          "tasks": 619,
+          "liveIds": [
+            "conversation_search-ver-2",
+            "conversation_upload-ui",
+            "conversation_export-impl",
+            "conversation_attach-verify",
+            "conversation_orchestrator",
+            "conversation_rounds-review"
+          ]
+        },
+        "events": 1212,
+        "receivedAllSessionRevisions": true,
+        "polls": 0,
+        "connection": "live",
+        "scrollEvents": 53,
+        "distinctScrollPositions": 51,
+        "missedGestures": 234,
+        "maxWheelLatenessMs": 102,
+        "allLongTasks": 187,
+        "maxBrowserTaskMs": 1036.007,
+        "maxMemoDerivationMs": 0,
+        "memoCrossings": [],
+        "worstMemoTask": {
+          "start": 17897.085999965668,
+          "duration": 0.008,
+          "threadMs": 0.007,
+          "derivationMs": 0,
+          "sites": []
+        },
+        "maxSampledDerivationMs": 203.47799999998824,
+        "maxSampledMemoMs": 203.47799999998824,
+        "maxSampledRenderMs": 223.1159999999909,
+        "sampledTasksWithDerivation": [
+          {
+            "start": 32464.96799993515,
+            "duration": 1036.007,
+            "threadMs": 1000.514,
+            "derivationMs": 203.47799999998824,
+            "memoMs": 203.47799999998824,
+            "renderMs": 223.1159999999909,
+            "gcMs": 31.95799999999872
+          },
+          {
+            "start": 33685.23000001907,
+            "duration": 593.287,
+            "threadMs": 590.107,
+            "derivationMs": 99.92500000000291,
+            "memoMs": 99.92500000000291,
+            "renderMs": 108.07400000000052,
+            "gcMs": 20.248999999988882
+          }
+        ],
+        "callbackMaximaMs": {},
+        "sampledDerivationCrossings": [
+          {
+            "start": 32464.96799993515,
+            "duration": 1036.007,
+            "threadMs": 1000.514,
+            "derivationMs": 203.47799999998824,
+            "memoMs": 203.47799999998824,
+            "renderMs": 223.1159999999909,
+            "gcMs": 31.95799999999872
+          },
+          {
+            "start": 33685.23000001907,
+            "duration": 593.287,
+            "threadMs": 590.107,
+            "derivationMs": 99.92500000000291,
+            "memoMs": 99.92500000000291,
+            "renderMs": 108.07400000000052,
+            "gcMs": 20.248999999988882
+          }
+        ],
+        "hostBefore": {
+          "load": [
+            13.44,
+            13.73,
+            14.38
+          ],
+          "groups": [
+            {
+              "quota": "120000 20000",
+              "memory": "8589934592",
+              "throttledUsec": 243978
+            },
+            {
+              "quota": "360000 20000",
+              "memory": "max",
+              "throttledUsec": 11363809
+            },
+            {
+              "quota": "max 100000",
+              "memory": "114462744576",
+              "throttledUsec": 0
+            },
+            {
+              "quota": "max 100000",
+              "memory": "max",
+              "throttledUsec": 0
+            },
+            {
+              "quota": "max 100000",
+              "memory": "max",
+              "throttledUsec": 0
+            },
+            {
+              "quota": "max 100000",
+              "memory": "max",
+              "throttledUsec": 0
+            },
+            {
+              "quota": "max 100000",
+              "memory": "max",
+              "throttledUsec": 0
+            }
+          ]
+        },
+        "hostAfter": {
+          "load": [
+            19.01,
+            15.03,
+            14.78
+          ],
+          "groups": [
+            {
+              "quota": "120000 20000",
+              "memory": "8589934592",
+              "throttledUsec": 305788
+            },
+            {
+              "quota": "360000 20000",
+              "memory": "max",
+              "throttledUsec": 11363809
+            },
+            {
+              "quota": "max 100000",
+              "memory": "114462744576",
+              "throttledUsec": 0
+            },
+            {
+              "quota": "max 100000",
+              "memory": "max",
+              "throttledUsec": 0
+            },
+            {
+              "quota": "max 100000",
+              "memory": "max",
+              "throttledUsec": 0
+            },
+            {
+              "quota": "max 100000",
+              "memory": "max",
+              "throttledUsec": 0
+            },
+            {
+              "quota": "max 100000",
+              "memory": "max",
+              "throttledUsec": 0
+            }
+          ]
+        },
+        "committedCatalog": null,
+        "expectedCatalog": {
+          "size": 2048,
+          "mtime": 1792046627
+        },
+        "pageErrors": []
+      },
+      {
+        "tag": "stream-3-after-raw",
+        "utcStart": "2026-10-15T09:44:53.394Z",
+        "utcEnd": "2026-10-15T09:45:27.047Z",
+        "windowMs": 30551.60000014305,
+        "browser": "156.0.8078.4",
+        "cardsBefore": 357,
+        "cardsAfter": 357,
+        "corpus": {
+          "files": 864,
+          "flows": 284,
+          "tasks": 619,
+          "liveIds": [
+            "conversation_search-ver-2",
+            "conversation_upload-ui",
+            "conversation_export-impl",
+            "conversation_attach-verify",
+            "conversation_orchestrator",
+            "conversation_rounds-review"
+          ]
+        },
+        "events": 1221,
+        "receivedAllSessionRevisions": true,
+        "polls": 0,
+        "connection": "live",
+        "scrollEvents": 55,
+        "distinctScrollPositions": 54,
+        "missedGestures": 235,
+        "maxWheelLatenessMs": 101,
+        "allLongTasks": 191,
+        "maxBrowserTaskMs": 780.633,
+        "maxMemoDerivationMs": 0,
+        "memoCrossings": [],
+        "worstMemoTask": {
+          "start": 15528.894000053406,
+          "duration": 0.441,
+          "threadMs": 0.434,
+          "derivationMs": 0,
+          "sites": []
+        },
+        "maxSampledDerivationMs": 38.59099999999671,
+        "maxSampledMemoMs": 38.59099999999671,
+        "maxSampledRenderMs": 47.51899999999296,
+        "sampledTasksWithDerivation": [
+          {
+            "start": 31645.34899997711,
+            "duration": 780.633,
+            "threadMs": 775.537,
+            "derivationMs": 38.59099999999671,
+            "memoMs": 38.59099999999671,
+            "renderMs": 47.51899999999296,
+            "gcMs": 1.8009999999994761
+          }
+        ],
+        "callbackMaximaMs": {},
+        "sampledDerivationCrossings": [],
+        "hostBefore": {
+          "load": [
+            20.05,
+            15.49,
+            14.94
+          ],
+          "groups": [
+            {
+              "quota": "120000 20000",
+              "memory": "8589934592",
+              "throttledUsec": 305788
+            },
+            {
+              "quota": "360000 20000",
+              "memory": "max",
+              "throttledUsec": 11363809
+            },
+            {
+              "quota": "max 100000",
+              "memory": "114462744576",
+              "throttledUsec": 0
+            },
+            {
+              "quota": "max 100000",
+              "memory": "max",
+              "throttledUsec": 0
+            },
+            {
+              "quota": "max 100000",
+              "memory": "max",
+              "throttledUsec": 0
+            },
+            {
+              "quota": "max 100000",
+              "memory": "max",
+              "throttledUsec": 0
+            },
+            {
+              "quota": "max 100000",
+              "memory": "max",
+              "throttledUsec": 0
+            }
+          ]
+        },
+        "hostAfter": {
+          "load": [
+            21.15,
+            16.29,
+            15.23
+          ],
+          "groups": [
+            {
+              "quota": "120000 20000",
+              "memory": "8589934592",
+              "throttledUsec": 333323
+            },
+            {
+              "quota": "360000 20000",
+              "memory": "max",
+              "throttledUsec": 11402179
+            },
+            {
+              "quota": "max 100000",
+              "memory": "114462744576",
+              "throttledUsec": 0
+            },
+            {
+              "quota": "max 100000",
+              "memory": "max",
+              "throttledUsec": 0
+            },
+            {
+              "quota": "max 100000",
+              "memory": "max",
+              "throttledUsec": 0
+            },
+            {
+              "quota": "max 100000",
+              "memory": "max",
+              "throttledUsec": 0
+            },
+            {
+              "quota": "max 100000",
+              "memory": "max",
+              "throttledUsec": 0
+            }
+          ]
+        },
+        "committedCatalog": null,
+        "expectedCatalog": {
+          "size": 2048,
+          "mtime": 1792046678
+        },
+        "pageErrors": []
+      },
+      {
+        "tag": "catalog-1-before-raw",
+        "utcStart": "2026-10-15T09:45:47.580Z",
+        "utcEnd": "2026-10-15T09:46:22.544Z",
+        "windowMs": 31741.599999904633,
+        "browser": "156.0.8078.4",
+        "cardsBefore": 357,
+        "cardsAfter": 357,
+        "corpus": {
+          "files": 864,
+          "flows": 284,
+          "tasks": 619,
+          "liveIds": [
+            "conversation_search-ver-2",
+            "conversation_upload-ui",
+            "conversation_export-impl",
+            "conversation_attach-verify",
+            "conversation_orchestrator",
+            "conversation_rounds-review"
+          ]
+        },
+        "events": 1250,
+        "receivedAllSessionRevisions": true,
+        "polls": 26,
+        "connection": "live",
+        "scrollEvents": 29,
+        "distinctScrollPositions": 17,
+        "missedGestures": 261,
+        "maxWheelLatenessMs": 97,
+        "allLongTasks": 131,
+        "maxBrowserTaskMs": 1103.905,
+        "maxMemoDerivationMs": 0,
+        "memoCrossings": [],
+        "worstMemoTask": {
+          "start": 19876.708999872208,
+          "duration": 0.021,
+          "threadMs": 0.021,
+          "derivationMs": 0,
+          "sites": []
+        },
+        "maxSampledDerivationMs": 253.01400000002104,
+        "maxSampledMemoMs": 253.01400000002104,
+        "maxSampledRenderMs": 264.4860000000226,
+        "sampledTasksWithDerivation": [
+          {
+            "start": 22002.895999908447,
+            "duration": 1103.905,
+            "threadMs": 1099.458,
+            "derivationMs": 176.58200000002398,
+            "memoMs": 176.58200000002398,
+            "renderMs": 187.62700000002224,
+            "gcMs": 34.85099999999147
+          },
+          {
+            "start": 25316.636999845505,
+            "duration": 848.686,
+            "threadMs": 828.349,
+            "derivationMs": 253.01400000002104,
+            "memoMs": 253.01400000002104,
+            "renderMs": 264.4860000000226,
+            "gcMs": 1.0960000000013679
+          },
+          {
+            "start": 27102.02999997139,
+            "duration": 688.374,
+            "threadMs": 687.825,
+            "derivationMs": 135.89799999999377,
+            "memoMs": 135.89799999999377,
+            "renderMs": 142.4069999999956,
+            "gcMs": 6.694999999999709
+          },
+          {
+            "start": 29357.21399998665,
+            "duration": 638.875,
+            "threadMs": 627.201,
+            "derivationMs": 122.96400000000722,
+            "memoMs": 122.96400000000722,
+            "renderMs": 125.06500000000597,
+            "gcMs": 13.180000000003929
+          },
+          {
+            "start": 30991.115999937057,
+            "duration": 859.348,
+            "threadMs": 854.743,
+            "derivationMs": 169.30600000002232,
+            "memoMs": 169.30600000002232,
+            "renderMs": 177.56800000002113,
+            "gcMs": 5.24199999999837
+          },
+          {
+            "start": 32655.148999929428,
+            "duration": 572.801,
+            "threadMs": 569.147,
+            "derivationMs": 107.80500000000393,
+            "memoMs": 107.80500000000393,
+            "renderMs": 112.03199999999924,
+            "gcMs": 2.6379999999990105
+          },
+          {
+            "start": 33852.23799991608,
+            "duration": 760.083,
+            "threadMs": 754.9,
+            "derivationMs": 96.78100000000268,
+            "memoMs": 96.78100000000268,
+            "renderMs": 102.00299999999697,
+            "gcMs": 16.631000000001222
+          },
+          {
+            "start": 34845.0720000267,
+            "duration": 751.156,
+            "threadMs": 743.085,
+            "derivationMs": 138.3240000000078,
+            "memoMs": 138.3240000000078,
+            "renderMs": 158.8640000000014,
+            "gcMs": 19.84700000000157
+          },
+          {
+            "start": 36544.81999993324,
+            "duration": 517.977,
+            "threadMs": 516.192,
+            "derivationMs": 123.71999999999389,
+            "memoMs": 123.71999999999389,
+            "renderMs": 129.44100000000617,
+            "gcMs": 15.887999999991735
+          },
+          {
+            "start": 37938.6970000267,
+            "duration": 643.273,
+            "threadMs": 630.467,
+            "derivationMs": 136.5130000000063,
+            "memoMs": 136.5130000000063,
+            "renderMs": 144.7320000000036,
+            "gcMs": 12.256999999997788
+          },
+          {
+            "start": 39588.44199991226,
+            "duration": 701.031,
+            "threadMs": 688.482,
+            "derivationMs": 130.58600000001024,
+            "memoMs": 130.58600000001024,
+            "renderMs": 136.68900000002031,
+            "gcMs": 13.340999999993073
+          },
+          {
+            "start": 41245.57299995422,
+            "duration": 504.792,
+            "threadMs": 504.566,
+            "derivationMs": 95.02300000000105,
+            "memoMs": 95.02300000000105,
+            "renderMs": 97.61200000000099,
+            "gcMs": 8.89600000000064
+          },
+          {
+            "start": 42381.63400006294,
+            "duration": 588.235,
+            "threadMs": 584.262,
+            "derivationMs": 116.78399999999965,
+            "memoMs": 116.78399999999965,
+            "renderMs": 119.37299999999959,
+            "gcMs": 17.06999999999971
+          },
+          {
+            "start": 44510.39499998093,
+            "duration": 686.273,
+            "threadMs": 683.994,
+            "derivationMs": 157.9699999999866,
+            "memoMs": 157.9699999999866,
+            "renderMs": 163.70199999999022,
+            "gcMs": 3.868000000002212
+          },
+          {
+            "start": 46357.62699985504,
+            "duration": 696.958,
+            "threadMs": 692.138,
+            "derivationMs": 148.87000000003172,
+            "memoMs": 148.87000000003172,
+            "renderMs": 156.316000000028,
+            "gcMs": 30.74099999999453
+          },
+          {
+            "start": 48013.97099995613,
+            "duration": 852.746,
+            "threadMs": 851.301,
+            "derivationMs": 135.41500000001543,
+            "memoMs": 135.41500000001543,
+            "renderMs": 143.84400000001187,
+            "gcMs": 23.07199999999284
+          },
+          {
+            "start": 49978.44499993324,
+            "duration": 791.952,
+            "threadMs": 785.156,
+            "derivationMs": 141.36300000001938,
+            "memoMs": 141.36300000001938,
+            "renderMs": 147.80200000001787,
+            "gcMs": 19.630000000011933
+          }
+        ],
+        "callbackMaximaMs": {},
+        "sampledDerivationCrossings": [
+          {
+            "start": 22002.895999908447,
+            "duration": 1103.905,
+            "threadMs": 1099.458,
+            "derivationMs": 176.58200000002398,
+            "memoMs": 176.58200000002398,
+            "renderMs": 187.62700000002224,
+            "gcMs": 34.85099999999147
+          },
+          {
+            "start": 25316.636999845505,
+            "duration": 848.686,
+            "threadMs": 828.349,
+            "derivationMs": 253.01400000002104,
+            "memoMs": 253.01400000002104,
+            "renderMs": 264.4860000000226,
+            "gcMs": 1.0960000000013679
+          },
+          {
+            "start": 27102.02999997139,
+            "duration": 688.374,
+            "threadMs": 687.825,
+            "derivationMs": 135.89799999999377,
+            "memoMs": 135.89799999999377,
+            "renderMs": 142.4069999999956,
+            "gcMs": 6.694999999999709
+          },
+          {
+            "start": 29357.21399998665,
+            "duration": 638.875,
+            "threadMs": 627.201,
+            "derivationMs": 122.96400000000722,
+            "memoMs": 122.96400000000722,
+            "renderMs": 125.06500000000597,
+            "gcMs": 13.180000000003929
+          },
+          {
+            "start": 30991.115999937057,
+            "duration": 859.348,
+            "threadMs": 854.743,
+            "derivationMs": 169.30600000002232,
+            "memoMs": 169.30600000002232,
+            "renderMs": 177.56800000002113,
+            "gcMs": 5.24199999999837
+          },
+          {
+            "start": 32655.148999929428,
+            "duration": 572.801,
+            "threadMs": 569.147,
+            "derivationMs": 107.80500000000393,
+            "memoMs": 107.80500000000393,
+            "renderMs": 112.03199999999924,
+            "gcMs": 2.6379999999990105
+          },
+          {
+            "start": 33852.23799991608,
+            "duration": 760.083,
+            "threadMs": 754.9,
+            "derivationMs": 96.78100000000268,
+            "memoMs": 96.78100000000268,
+            "renderMs": 102.00299999999697,
+            "gcMs": 16.631000000001222
+          },
+          {
+            "start": 34845.0720000267,
+            "duration": 751.156,
+            "threadMs": 743.085,
+            "derivationMs": 138.3240000000078,
+            "memoMs": 138.3240000000078,
+            "renderMs": 158.8640000000014,
+            "gcMs": 19.84700000000157
+          },
+          {
+            "start": 36544.81999993324,
+            "duration": 517.977,
+            "threadMs": 516.192,
+            "derivationMs": 123.71999999999389,
+            "memoMs": 123.71999999999389,
+            "renderMs": 129.44100000000617,
+            "gcMs": 15.887999999991735
+          },
+          {
+            "start": 37938.6970000267,
+            "duration": 643.273,
+            "threadMs": 630.467,
+            "derivationMs": 136.5130000000063,
+            "memoMs": 136.5130000000063,
+            "renderMs": 144.7320000000036,
+            "gcMs": 12.256999999997788
+          },
+          {
+            "start": 39588.44199991226,
+            "duration": 701.031,
+            "threadMs": 688.482,
+            "derivationMs": 130.58600000001024,
+            "memoMs": 130.58600000001024,
+            "renderMs": 136.68900000002031,
+            "gcMs": 13.340999999993073
+          },
+          {
+            "start": 41245.57299995422,
+            "duration": 504.792,
+            "threadMs": 504.566,
+            "derivationMs": 95.02300000000105,
+            "memoMs": 95.02300000000105,
+            "renderMs": 97.61200000000099,
+            "gcMs": 8.89600000000064
+          },
+          {
+            "start": 42381.63400006294,
+            "duration": 588.235,
+            "threadMs": 584.262,
+            "derivationMs": 116.78399999999965,
+            "memoMs": 116.78399999999965,
+            "renderMs": 119.37299999999959,
+            "gcMs": 17.06999999999971
+          },
+          {
+            "start": 44510.39499998093,
+            "duration": 686.273,
+            "threadMs": 683.994,
+            "derivationMs": 157.9699999999866,
+            "memoMs": 157.9699999999866,
+            "renderMs": 163.70199999999022,
+            "gcMs": 3.868000000002212
+          },
+          {
+            "start": 46357.62699985504,
+            "duration": 696.958,
+            "threadMs": 692.138,
+            "derivationMs": 148.87000000003172,
+            "memoMs": 148.87000000003172,
+            "renderMs": 156.316000000028,
+            "gcMs": 30.74099999999453
+          },
+          {
+            "start": 48013.97099995613,
+            "duration": 852.746,
+            "threadMs": 851.301,
+            "derivationMs": 135.41500000001543,
+            "memoMs": 135.41500000001543,
+            "renderMs": 143.84400000001187,
+            "gcMs": 23.07199999999284
+          },
+          {
+            "start": 49978.44499993324,
+            "duration": 791.952,
+            "threadMs": 785.156,
+            "derivationMs": 141.36300000001938,
+            "memoMs": 141.36300000001938,
+            "renderMs": 147.80200000001787,
+            "gcMs": 19.630000000011933
+          }
+        ],
+        "hostBefore": {
+          "load": [
+            21.47,
+            16.77,
+            15.42
+          ],
+          "groups": [
+            {
+              "quota": "120000 20000",
+              "memory": "8589934592",
+              "throttledUsec": 333323
+            },
+            {
+              "quota": "360000 20000",
+              "memory": "max",
+              "throttledUsec": 11402179
+            },
+            {
+              "quota": "max 100000",
+              "memory": "114462744576",
+              "throttledUsec": 0
+            },
+            {
+              "quota": "max 100000",
+              "memory": "max",
+              "throttledUsec": 0
+            },
+            {
+              "quota": "max 100000",
+              "memory": "max",
+              "throttledUsec": 0
+            },
+            {
+              "quota": "max 100000",
+              "memory": "max",
+              "throttledUsec": 0
+            },
+            {
+              "quota": "max 100000",
+              "memory": "max",
+              "throttledUsec": 0
+            }
+          ]
+        },
+        "hostAfter": {
+          "load": [
+            21.46,
+            17.33,
+            15.66
+          ],
+          "groups": [
+            {
+              "quota": "120000 20000",
+              "memory": "8589934592",
+              "throttledUsec": 368438
+            },
+            {
+              "quota": "360000 20000",
+              "memory": "max",
+              "throttledUsec": 11412614
+            },
+            {
+              "quota": "max 100000",
+              "memory": "114462744576",
+              "throttledUsec": 0
+            },
+            {
+              "quota": "max 100000",
+              "memory": "max",
+              "throttledUsec": 0
+            },
+            {
+              "quota": "max 100000",
+              "memory": "max",
+              "throttledUsec": 0
+            },
+            {
+              "quota": "max 100000",
+              "memory": "max",
+              "throttledUsec": 0
+            },
+            {
+              "quota": "max 100000",
+              "memory": "max",
+              "throttledUsec": 0
+            }
+          ]
+        },
+        "committedCatalog": null,
+        "expectedCatalog": {
+          "size": 2074,
+          "mtime": 1792046754
+        },
+        "pageErrors": []
+      },
+      {
+        "tag": "catalog-1-after-raw",
+        "utcStart": "2026-10-15T09:46:40.068Z",
+        "utcEnd": "2026-10-15T09:47:15.036Z",
+        "windowMs": 30974.799999952316,
+        "browser": "156.0.8078.4",
+        "cardsBefore": 357,
+        "cardsAfter": 357,
+        "corpus": {
+          "files": 864,
+          "flows": 284,
+          "tasks": 619,
+          "liveIds": [
+            "conversation_search-ver-2",
+            "conversation_upload-ui",
+            "conversation_export-impl",
+            "conversation_attach-verify",
+            "conversation_orchestrator",
+            "conversation_rounds-review"
+          ]
+        },
+        "events": 1238,
+        "receivedAllSessionRevisions": true,
+        "polls": 32,
+        "connection": "live",
+        "scrollEvents": 39,
+        "distinctScrollPositions": 37,
+        "missedGestures": 254,
+        "maxWheelLatenessMs": 101,
+        "allLongTasks": 155,
+        "maxBrowserTaskMs": 648.136,
+        "maxMemoDerivationMs": 0,
+        "memoCrossings": [],
+        "worstMemoTask": {
+          "start": 16728.160999774933,
+          "duration": 0.011,
+          "threadMs": 0.01,
+          "derivationMs": 0,
+          "sites": []
+        },
+        "maxSampledDerivationMs": 22.73400000000038,
+        "maxSampledMemoMs": 22.73400000000038,
+        "maxSampledRenderMs": 26.032999999999447,
+        "sampledTasksWithDerivation": [
+          {
+            "start": 18788.979999780655,
+            "duration": 602.492,
+            "threadMs": 593.888,
+            "derivationMs": 22.73400000000038,
+            "memoMs": 22.73400000000038,
+            "renderMs": 26.032999999999447,
+            "gcMs": 10.486000000000786
+          },
+          {
+            "start": 20440.882999897003,
+            "duration": 476.366,
+            "threadMs": 476.152,
+            "derivationMs": 19.09900000000198,
+            "memoMs": 19.09900000000198,
+            "renderMs": 22.843000000000757,
+            "gcMs": 19.16599999999744
+          },
+          {
+            "start": 21989.52299976349,
+            "duration": 424.573,
+            "threadMs": 424.39,
+            "derivationMs": 12.726000000002387,
+            "memoMs": 12.726000000002387,
+            "renderMs": 13.89100000000326,
+            "gcMs": 1.3430000000007567
+          },
+          {
+            "start": 23523.21599984169,
+            "duration": 344.957,
+            "threadMs": 344.76,
+            "derivationMs": 13.27299999999741,
+            "memoMs": 13.27299999999741,
+            "renderMs": 15.802999999999884,
+            "gcMs": 0
+          },
+          {
+            "start": 24609.977999925613,
+            "duration": 552.525,
+            "threadMs": 532.695,
+            "derivationMs": 14.3279999999977,
+            "memoMs": 14.3279999999977,
+            "renderMs": 19.024999999997817,
+            "gcMs": 0.8070000000006985
+          },
+          {
+            "start": 26325.46499991417,
+            "duration": 476.144,
+            "threadMs": 468.355,
+            "derivationMs": 11.81199999999808,
+            "memoMs": 11.81199999999808,
+            "renderMs": 12.68999999999869,
+            "gcMs": 1.25
+          },
+          {
+            "start": 27994.958999872208,
+            "duration": 344.402,
+            "threadMs": 344.382,
+            "derivationMs": 10.044999999998254,
+            "memoMs": 10.044999999998254,
+            "renderMs": 14.836999999999534,
+            "gcMs": 1.0050000000010186
+          },
+          {
+            "start": 28756.695999860764,
+            "duration": 313.241,
+            "threadMs": 313.512,
+            "derivationMs": 11.212999999992462,
+            "memoMs": 11.212999999992462,
+            "renderMs": 13.710999999992055,
+            "gcMs": 1.7229999999981374
+          },
+          {
+            "start": 30032.40699982643,
+            "duration": 420.395,
+            "threadMs": 416.976,
+            "derivationMs": 7.360000000000582,
+            "memoMs": 7.360000000000582,
+            "renderMs": 8.418000000001484,
+            "gcMs": 1.0629999999982829
+          },
+          {
+            "start": 31034.08899998665,
+            "duration": 504.63,
+            "threadMs": 504.25,
+            "derivationMs": 12.502000000000407,
+            "memoMs": 12.502000000000407,
+            "renderMs": 19.838999999999942,
+            "gcMs": 0
+          },
+          {
+            "start": 32141.509999990463,
+            "duration": 373.781,
+            "threadMs": 373.904,
+            "derivationMs": 21.433000000000902,
+            "memoMs": 21.433000000000902,
+            "renderMs": 22.327000000001135,
+            "gcMs": 0
+          },
+          {
+            "start": 33051.45599985123,
+            "duration": 511.314,
+            "threadMs": 509.928,
+            "derivationMs": 12.276999999994587,
+            "memoMs": 12.276999999994587,
+            "renderMs": 13.55399999999645,
+            "gcMs": 14.047999999995227
+          },
+          {
+            "start": 34078.291999816895,
+            "duration": 451.63,
+            "threadMs": 451.484,
+            "derivationMs": 13.570000000006985,
+            "memoMs": 13.570000000006985,
+            "renderMs": 19.489000000008673,
+            "gcMs": 0
+          },
+          {
+            "start": 35471.28999996185,
+            "duration": 470.789,
+            "threadMs": 470.281,
+            "derivationMs": 18.416000000004715,
+            "memoMs": 18.416000000004715,
+            "renderMs": 21.202000000004773,
+            "gcMs": 0
+          },
+          {
+            "start": 36616.38199996948,
+            "duration": 512.962,
+            "threadMs": 503.927,
+            "derivationMs": 8.64100000000326,
+            "memoMs": 8.64100000000326,
+            "renderMs": 10.530000000006112,
+            "gcMs": 0
+          },
+          {
+            "start": 37947.24099993706,
+            "duration": 648.136,
+            "threadMs": 640.571,
+            "derivationMs": 10.561000000001513,
+            "memoMs": 10.561000000001513,
+            "renderMs": 17.135000000002037,
+            "gcMs": 0.9420000000027358
+          },
+          {
+            "start": 39220.236999988556,
+            "duration": 498.804,
+            "threadMs": 493.238,
+            "derivationMs": 17.987999999997555,
+            "memoMs": 17.987999999997555,
+            "renderMs": 19.85399999999936,
+            "gcMs": 11.12000000000262
+          },
+          {
+            "start": 40720.728999853134,
+            "duration": 443.312,
+            "threadMs": 443.367,
+            "derivationMs": 17.965999999985797,
+            "memoMs": 17.965999999985797,
+            "renderMs": 21.815999999991618,
+            "gcMs": 3.75
+          },
+          {
+            "start": 42199.9439997673,
+            "duration": 333.652,
+            "threadMs": 333.805,
+            "derivationMs": 16.05999999999767,
+            "memoMs": 16.05999999999767,
+            "renderMs": 20.977000000006228,
+            "gcMs": 0
+          },
+          {
+            "start": 43576.64299988747,
+            "duration": 551.365,
+            "threadMs": 550.294,
+            "derivationMs": 10.574000000000524,
+            "memoMs": 10.574000000000524,
+            "renderMs": 13.66700000000128,
+            "gcMs": 13.77499999999418
+          },
+          {
+            "start": 44861.61499977112,
+            "duration": 481.757,
+            "threadMs": 482.12,
+            "derivationMs": 11.10000000000582,
+            "memoMs": 11.10000000000582,
+            "renderMs": 14.466999999996915,
+            "gcMs": 2.5430000000051223
+          },
+          {
+            "start": 46450.75699996948,
+            "duration": 626.28,
+            "threadMs": 619.864,
+            "derivationMs": 11.944999999992433,
+            "memoMs": 11.944999999992433,
+            "renderMs": 15.98499999998603,
+            "gcMs": 4.777000000001863
+          }
+        ],
+        "callbackMaximaMs": {},
+        "sampledDerivationCrossings": [],
+        "hostBefore": {
+          "load": [
+            20.65,
+            17.37,
+            15.7
+          ],
+          "groups": [
+            {
+              "quota": "120000 20000",
+              "memory": "8589934592",
+              "throttledUsec": 368438
+            },
+            {
+              "quota": "360000 20000",
+              "memory": "max",
+              "throttledUsec": 11412614
+            },
+            {
+              "quota": "max 100000",
+              "memory": "114462744576",
+              "throttledUsec": 0
+            },
+            {
+              "quota": "max 100000",
+              "memory": "max",
+              "throttledUsec": 0
+            },
+            {
+              "quota": "max 100000",
+              "memory": "max",
+              "throttledUsec": 0
+            },
+            {
+              "quota": "max 100000",
+              "memory": "max",
+              "throttledUsec": 0
+            },
+            {
+              "quota": "max 100000",
+              "memory": "max",
+              "throttledUsec": 0
+            }
+          ]
+        },
+        "hostAfter": {
+          "load": [
+            20.97,
+            17.74,
+            15.88
+          ],
+          "groups": [
+            {
+              "quota": "120000 20000",
+              "memory": "8589934592",
+              "throttledUsec": 380220
+            },
+            {
+              "quota": "360000 20000",
+              "memory": "max",
+              "throttledUsec": 11432438
+            },
+            {
+              "quota": "max 100000",
+              "memory": "114462744576",
+              "throttledUsec": 0
+            },
+            {
+              "quota": "max 100000",
+              "memory": "max",
+              "throttledUsec": 0
+            },
+            {
+              "quota": "max 100000",
+              "memory": "max",
+              "throttledUsec": 0
+            },
+            {
+              "quota": "max 100000",
+              "memory": "max",
+              "throttledUsec": 0
+            },
+            {
+              "quota": "max 100000",
+              "memory": "max",
+              "throttledUsec": 0
+            }
+          ]
+        },
+        "committedCatalog": null,
+        "expectedCatalog": {
+          "size": 2080,
+          "mtime": 1792046816
+        },
+        "pageErrors": []
+      },
+      {
+        "tag": "catalog-2-after-raw",
+        "utcStart": "2026-10-15T09:47:34.135Z",
+        "utcEnd": "2026-10-15T09:48:08.093Z",
+        "windowMs": 30825.0,
+        "browser": "156.0.8078.4",
+        "cardsBefore": 357,
+        "cardsAfter": 357,
+        "corpus": {
+          "files": 864,
+          "flows": 284,
+          "tasks": 619,
+          "liveIds": [
+            "conversation_search-ver-2",
+            "conversation_upload-ui",
+            "conversation_export-impl",
+            "conversation_attach-verify",
+            "conversation_orchestrator",
+            "conversation_rounds-review"
+          ]
+        },
+        "events": 1223,
+        "receivedAllSessionRevisions": true,
+        "polls": 31,
+        "connection": "live",
+        "scrollEvents": 40,
+        "distinctScrollPositions": 22,
+        "missedGestures": 252,
+        "maxWheelLatenessMs": 99,
+        "allLongTasks": 151,
+        "maxBrowserTaskMs": 845.985,
+        "maxMemoDerivationMs": 0,
+        "memoCrossings": [],
+        "worstMemoTask": {
+          "start": 18111.84100008011,
+          "duration": 167.243,
+          "threadMs": 166.842,
+          "derivationMs": 0,
+          "sites": []
+        },
+        "maxSampledDerivationMs": 34.08700000000317,
+        "maxSampledMemoMs": 34.08700000000317,
+        "maxSampledRenderMs": 41.233000000000175,
+        "sampledTasksWithDerivation": [
+          {
+            "start": 20410.355999946594,
+            "duration": 845.985,
+            "threadMs": 837.089,
+            "derivationMs": 34.08700000000317,
+            "memoMs": 34.08700000000317,
+            "renderMs": 41.233000000000175,
+            "gcMs": 6.326000000000931
+          },
+          {
+            "start": 22072.00300002098,
+            "duration": 833.743,
+            "threadMs": 832.756,
+            "derivationMs": 15.828999999994267,
+            "memoMs": 15.828999999994267,
+            "renderMs": 21.14199999999255,
+            "gcMs": 0
+          },
+          {
+            "start": 24635.075000047684,
+            "duration": 738.561,
+            "threadMs": 730.754,
+            "derivationMs": 24.565999999995256,
+            "memoMs": 24.565999999995256,
+            "renderMs": 29.99499999999898,
+            "gcMs": 95.82300000000032
+          },
+          {
+            "start": 26303.4430000782,
+            "duration": 343.954,
+            "threadMs": 343.455,
+            "derivationMs": 19.841999999986,
+            "memoMs": 19.841999999986,
+            "renderMs": 23.892999999985477,
+            "gcMs": 1.25
+          },
+          {
+            "start": 27997.328999996185,
+            "duration": 524.379,
+            "threadMs": 514.585,
+            "derivationMs": 22.80000000000291,
+            "memoMs": 22.80000000000291,
+            "renderMs": 28.871000000002823,
+            "gcMs": 15.379000000004453
+          },
+          {
+            "start": 29594.611000061035,
+            "duration": 486.673,
+            "threadMs": 483.176,
+            "derivationMs": 12.073000000003958,
+            "memoMs": 12.073000000003958,
+            "renderMs": 17.330000000005384,
+            "gcMs": 12.853999999995722
+          },
+          {
+            "start": 30624.359999895096,
+            "duration": 737.629,
+            "threadMs": 725.883,
+            "derivationMs": 15.360000000000582,
+            "memoMs": 15.360000000000582,
+            "renderMs": 21.97400000000198,
+            "gcMs": 2.32300000000032
+          },
+          {
+            "start": 32026.706000089645,
+            "duration": 296.778,
+            "threadMs": 296.738,
+            "derivationMs": 18.162999999996828,
+            "memoMs": 18.162999999996828,
+            "renderMs": 20.370999999995547,
+            "gcMs": 9.976000000002387
+          },
+          {
+            "start": 32647.12599992752,
+            "duration": 266.195,
+            "threadMs": 266.571,
+            "derivationMs": 11.154999999995198,
+            "memoMs": 11.154999999995198,
+            "renderMs": 12.106999999996333,
+            "gcMs": 0
+          },
+          {
+            "start": 34104.2460000515,
+            "duration": 541.785,
+            "threadMs": 540.783,
+            "derivationMs": 9.899999999986903,
+            "memoMs": 9.899999999986903,
+            "renderMs": 14.404999999984284,
+            "gcMs": 0
+          },
+          {
+            "start": 35838.27600002289,
+            "duration": 736.776,
+            "threadMs": 736.319,
+            "derivationMs": 15.850999999987835,
+            "memoMs": 15.850999999987835,
+            "renderMs": 19.39299999998184,
+            "gcMs": 12.161000000000058
+          },
+          {
+            "start": 37915.516999959946,
+            "duration": 711.066,
+            "threadMs": 710.631,
+            "derivationMs": 10.775999999998021,
+            "memoMs": 10.775999999998021,
+            "renderMs": 17.273000000001048,
+            "gcMs": 0.8479999999981374
+          },
+          {
+            "start": 40145.56299996376,
+            "duration": 604.069,
+            "threadMs": 598.717,
+            "derivationMs": 18.38600000000588,
+            "memoMs": 18.38600000000588,
+            "renderMs": 21.189000000005763,
+            "gcMs": 1.5500000000029104
+          },
+          {
+            "start": 41113.08599996567,
+            "duration": 527.902,
+            "threadMs": 523.26,
+            "derivationMs": 6.68399999999383,
+            "memoMs": 6.68399999999383,
+            "renderMs": 11.435999999994237,
+            "gcMs": 14.457000000002154
+          },
+          {
+            "start": 41897.1779999733,
+            "duration": 490.572,
+            "threadMs": 486.793,
+            "derivationMs": 28.1759999999922,
+            "memoMs": 28.1759999999922,
+            "renderMs": 30.992999999994936,
+            "gcMs": 59.3349999999773
+          },
+          {
+            "start": 43163.831000089645,
+            "duration": 294.714,
+            "threadMs": 293.647,
+            "derivationMs": 23.31100000000879,
+            "memoMs": 23.31100000000879,
+            "renderMs": 29.982000000010885,
+            "gcMs": 1.0690000000031432
+          },
+          {
+            "start": 44283.16100001335,
+            "duration": 236.628,
+            "threadMs": 237.03,
+            "derivationMs": 7.144000000007509,
+            "memoMs": 7.144000000007509,
+            "renderMs": 9.43300000000454,
+            "gcMs": 2.338999999999942
+          },
+          {
+            "start": 46090.1970000267,
+            "duration": 475.673,
+            "threadMs": 474.899,
+            "derivationMs": 14.213999999992666,
+            "memoMs": 14.213999999992666,
+            "renderMs": 15.478999999992084,
+            "gcMs": 1.565999999998894
+          },
+          {
+            "start": 48111.28399991989,
+            "duration": 452.979,
+            "threadMs": 453.17,
+            "derivationMs": 10.080000000001746,
+            "memoMs": 10.080000000001746,
+            "renderMs": 12.206000000005588,
+            "gcMs": 1.1259999999965657
+          }
+        ],
+        "callbackMaximaMs": {},
+        "sampledDerivationCrossings": [],
+        "hostBefore": {
+          "load": [
+            20.49,
+            17.84,
+            15.96
+          ],
+          "groups": [
+            {
+              "quota": "120000 20000",
+              "memory": "8589934592",
+              "throttledUsec": 380220
+            },
+            {
+              "quota": "360000 20000",
+              "memory": "max",
+              "throttledUsec": 11438836
+            },
+            {
+              "quota": "max 100000",
+              "memory": "114462744576",
+              "throttledUsec": 0
+            },
+            {
+              "quota": "max 100000",
+              "memory": "max",
+              "throttledUsec": 0
+            },
+            {
+              "quota": "max 100000",
+              "memory": "max",
+              "throttledUsec": 0
+            },
+            {
+              "quota": "max 100000",
+              "memory": "max",
+              "throttledUsec": 0
+            },
+            {
+              "quota": "max 100000",
+              "memory": "max",
+              "throttledUsec": 0
+            }
+          ]
+        },
+        "hostAfter": {
+          "load": [
+            20.81,
+            18.18,
+            16.14
+          ],
+          "groups": [
+            {
+              "quota": "120000 20000",
+              "memory": "8589934592",
+              "throttledUsec": 382029
+            },
+            {
+              "quota": "360000 20000",
+              "memory": "max",
+              "throttledUsec": 11465773
+            },
+            {
+              "quota": "max 100000",
+              "memory": "114462744576",
+              "throttledUsec": 0
+            },
+            {
+              "quota": "max 100000",
+              "memory": "max",
+              "throttledUsec": 0
+            },
+            {
+              "quota": "max 100000",
+              "memory": "max",
+              "throttledUsec": 0
+            },
+            {
+              "quota": "max 100000",
+              "memory": "max",
+              "throttledUsec": 0
+            },
+            {
+              "quota": "max 100000",
+              "memory": "max",
+              "throttledUsec": 0
+            }
+          ]
+        },
+        "committedCatalog": null,
+        "expectedCatalog": {
+          "size": 2079,
+          "mtime": 1792046868
+        },
+        "pageErrors": []
+      },
+      {
+        "tag": "catalog-2-before-raw",
+        "utcStart": "2026-10-15T09:48:23.481Z",
+        "utcEnd": "2026-10-15T09:48:57.134Z",
+        "windowMs": 30562.799999952316,
+        "browser": "156.0.8078.4",
+        "cardsBefore": 357,
+        "cardsAfter": 357,
+        "corpus": {
+          "files": 864,
+          "flows": 284,
+          "tasks": 619,
+          "liveIds": [
+            "conversation_search-ver-2",
+            "conversation_upload-ui",
+            "conversation_export-impl",
+            "conversation_attach-verify",
+            "conversation_orchestrator",
+            "conversation_rounds-review"
+          ]
+        },
+        "events": 1218,
+        "receivedAllSessionRevisions": true,
+        "polls": 51,
+        "connection": "live",
+        "scrollEvents": 65,
+        "distinctScrollPositions": 64,
+        "missedGestures": 226,
+        "maxWheelLatenessMs": 102,
+        "allLongTasks": 181,
+        "maxBrowserTaskMs": 776.26,
+        "maxMemoDerivationMs": 0,
+        "memoCrossings": [],
+        "worstMemoTask": {
+          "start": 14968.529000043869,
+          "duration": 0.009,
+          "threadMs": 0.009,
+          "derivationMs": 0,
+          "sites": []
+        },
+        "maxSampledDerivationMs": 151.18199999998978,
+        "maxSampledMemoMs": 151.18199999998978,
+        "maxSampledRenderMs": 156.95099999999002,
+        "sampledTasksWithDerivation": [
+          {
+            "start": 16414.213000059128,
+            "duration": 475.074,
+            "threadMs": 455.229,
+            "derivationMs": 106.43700000001627,
+            "memoMs": 106.43700000001627,
+            "renderMs": 109.46200000001772,
+            "gcMs": 0
+          },
+          {
+            "start": 17892.762000083923,
+            "duration": 462.979,
+            "threadMs": 434.148,
+            "derivationMs": 100.7870000000039,
+            "memoMs": 100.7870000000039,
+            "renderMs": 113.66900000000169,
+            "gcMs": 13.22899999999936
+          },
+          {
+            "start": 18679.449000120163,
+            "duration": 453.487,
+            "threadMs": 428.865,
+            "derivationMs": 151.18199999998978,
+            "memoMs": 151.18199999998978,
+            "renderMs": 156.95099999999002,
+            "gcMs": 0
+          },
+          {
+            "start": 19900.15800023079,
+            "duration": 299.798,
+            "threadMs": 287.742,
+            "derivationMs": 83.90400000000227,
+            "memoMs": 83.90400000000227,
+            "renderMs": 85.84700000000521,
+            "gcMs": 1.2989999999990687
+          },
+          {
+            "start": 20779.954000234604,
+            "duration": 284.466,
+            "threadMs": 277.236,
+            "derivationMs": 73.65799999999945,
+            "memoMs": 73.65799999999945,
+            "renderMs": 74.1810000000005,
+            "gcMs": 2.7380000000011933
+          },
+          {
+            "start": 21683.965000152588,
+            "duration": 299.253,
+            "threadMs": 299.197,
+            "derivationMs": 67.53000000000247,
+            "memoMs": 67.53000000000247,
+            "renderMs": 71.57600000000093,
+            "gcMs": 11.079000000001543
+          },
+          {
+            "start": 22772.12900018692,
+            "duration": 566.002,
+            "threadMs": 565.899,
+            "derivationMs": 103.94200000001365,
+            "memoMs": 103.94200000001365,
+            "renderMs": 113.1100000000115,
+            "gcMs": 21.197000000000116
+          },
+          {
+            "start": 23820.43800020218,
+            "duration": 387.582,
+            "threadMs": 386.792,
+            "derivationMs": 82.10000000001673,
+            "memoMs": 82.10000000001673,
+            "renderMs": 86.16500000001179,
+            "gcMs": 6.882999999997992
+          },
+          {
+            "start": 24421.511000156403,
+            "duration": 156.225,
+            "threadMs": 155.199,
+            "derivationMs": 0.7109999999993306,
+            "memoMs": 0.7109999999993306,
+            "renderMs": 3.5349999999998545,
+            "gcMs": 0
+          },
+          {
+            "start": 24893.834000110626,
+            "duration": 498.58,
+            "threadMs": 497.847,
+            "derivationMs": 110.1939999999995,
+            "memoMs": 110.1939999999995,
+            "renderMs": 115.86699999999837,
+            "gcMs": 11.21600000000035
+          },
+          {
+            "start": 25951.49800014496,
+            "duration": 776.26,
+            "threadMs": 769.646,
+            "derivationMs": 116.18299999999726,
+            "memoMs": 116.18299999999726,
+            "renderMs": 124.0659999999989,
+            "gcMs": 21.302000000003318
+          },
+          {
+            "start": 27301.338000059128,
+            "duration": 286.908,
+            "threadMs": 285.638,
+            "derivationMs": 92.16000000001077,
+            "memoMs": 92.16000000001077,
+            "renderMs": 97.11500000000888,
+            "gcMs": 12.635000000002037
+          },
+          {
+            "start": 28410.931000232697,
+            "duration": 294.207,
+            "threadMs": 293.739,
+            "derivationMs": 64.083000000006,
+            "memoMs": 64.083000000006,
+            "renderMs": 68.07600000000457,
+            "gcMs": 6.175999999999476
+          },
+          {
+            "start": 28848.739000082016,
+            "duration": 259.952,
+            "threadMs": 259.299,
+            "derivationMs": 69.58799999999974,
+            "memoMs": 69.58799999999974,
+            "renderMs": 72.29100000000108,
+            "gcMs": 7.906999999999243
+          },
+          {
+            "start": 29938.53600001335,
+            "duration": 301.173,
+            "threadMs": 293.611,
+            "derivationMs": 61.57100000000355,
+            "memoMs": 61.57100000000355,
+            "renderMs": 63.55000000000291,
+            "gcMs": 10.81699999999546
+          },
+          {
+            "start": 30439.47400021553,
+            "duration": 319.179,
+            "threadMs": 311.839,
+            "derivationMs": 73.62200000000666,
+            "memoMs": 73.62200000000666,
+            "renderMs": 84.31300000000556,
+            "gcMs": 44.73099999999249
+          },
+          {
+            "start": 31258.017000198364,
+            "duration": 206.747,
+            "threadMs": 206.93,
+            "derivationMs": 66.2799999999952,
+            "memoMs": 66.2799999999952,
+            "renderMs": 70.67999999999665,
+            "gcMs": 4.60399999999936
+          },
+          {
+            "start": 31739.02900004387,
+            "duration": 162.685,
+            "threadMs": 162.647,
+            "derivationMs": 47.76900000000023,
+            "memoMs": 47.76900000000023,
+            "renderMs": 49.60900000000038,
+            "gcMs": 6.005000000001019
+          },
+          {
+            "start": 31946.238000154495,
+            "duration": 179.222,
+            "threadMs": 179.112,
+            "derivationMs": 32.961999999999534,
+            "memoMs": 32.961999999999534,
+            "renderMs": 33.953999999997905,
+            "gcMs": 0
+          },
+          {
+            "start": 32378.424000024796,
+            "duration": 182.779,
+            "threadMs": 182.77,
+            "derivationMs": 56.09600000001228,
+            "memoMs": 56.09600000001228,
+            "renderMs": 56.53900000001158,
+            "gcMs": 1.7779999999984284
+          },
+          {
+            "start": 33061.52600002289,
+            "duration": 183.246,
+            "threadMs": 182.882,
+            "derivationMs": 51.608000000000175,
+            "memoMs": 51.608000000000175,
+            "renderMs": 54.913000000000466,
+            "gcMs": 5.108000000000175
+          },
+          {
+            "start": 33814.614000082016,
+            "duration": 241.544,
+            "threadMs": 241.129,
+            "derivationMs": 53.62900000001537,
+            "memoMs": 53.62900000001537,
+            "renderMs": 55.15600000001723,
+            "gcMs": 6.227000000006228
+          },
+          {
+            "start": 34826.551000118256,
+            "duration": 219.976,
+            "threadMs": 219.521,
+            "derivationMs": 67.61699999998382,
+            "memoMs": 67.61699999998382,
+            "renderMs": 70.05699999998615,
+            "gcMs": 4.282999999995809
+          },
+          {
+            "start": 35790.84200000763,
+            "duration": 216.524,
+            "threadMs": 216.018,
+            "derivationMs": 49.80499999998574,
+            "memoMs": 49.80499999998574,
+            "renderMs": 50.772999999986496,
+            "gcMs": 7.518000000003667
+          },
+          {
+            "start": 36152.02600002289,
+            "duration": 211.059,
+            "threadMs": 211.423,
+            "derivationMs": 48.271999999997206,
+            "memoMs": 48.271999999997206,
+            "renderMs": 51.13199999999779,
+            "gcMs": 0
+          },
+          {
+            "start": 36745.22200012207,
+            "duration": 270.516,
+            "threadMs": 270.706,
+            "derivationMs": 96.30299999998533,
+            "memoMs": 96.30299999998533,
+            "renderMs": 103.12599999998929,
+            "gcMs": 7.811999999998079
+          },
+          {
+            "start": 37750.27900004387,
+            "duration": 342.486,
+            "threadMs": 341.2,
+            "derivationMs": 72.8659999999727,
+            "memoMs": 72.8659999999727,
+            "renderMs": 74.09299999997165,
+            "gcMs": 3.573000000003958
+          },
+          {
+            "start": 38577.13900017738,
+            "duration": 248.695,
+            "threadMs": 248.795,
+            "derivationMs": 84.9520000000266,
+            "memoMs": 84.9520000000266,
+            "renderMs": 85.42600000002858,
+            "gcMs": 6.125999999996566
+          },
+          {
+            "start": 39414.69800019264,
+            "duration": 217.836,
+            "threadMs": 217.549,
+            "derivationMs": 70.61999999998807,
+            "memoMs": 70.61999999998807,
+            "renderMs": 76.2009999999791,
+            "gcMs": 1.3079999999972642
+          },
+          {
+            "start": 40250.516000032425,
+            "duration": 52.614,
+            "threadMs": 52.646,
+            "derivationMs": 40.84900001355709,
+            "memoMs": 40.84900001355709,
+            "renderMs": 45.01900001355534,
+            "gcMs": 6.852000000006228
+          },
+          {
+            "start": 40441.53600001335,
+            "duration": 244.825,
+            "threadMs": 244.785,
+            "derivationMs": 60.46899999999732,
+            "memoMs": 60.46899999999732,
+            "renderMs": 60.46899999999732,
+            "gcMs": 3.2589999999981956
+          },
+          {
+            "start": 41461.0560002327,
+            "duration": 305.659,
+            "threadMs": 305.067,
+            "derivationMs": 91.27099999998609,
+            "memoMs": 91.27099999998609,
+            "renderMs": 93.64899999998306,
+            "gcMs": 11.210999999995693
+          },
+          {
+            "start": 42539.81500005722,
+            "duration": 334.246,
+            "threadMs": 334.112,
+            "derivationMs": 77.8530000000028,
+            "memoMs": 77.8530000000028,
+            "renderMs": 81.12400000000343,
+            "gcMs": 7.572000000000116
+          },
+          {
+            "start": 43501.84100008011,
+            "duration": 431.678,
+            "threadMs": 431.88,
+            "derivationMs": 65.40100000001257,
+            "memoMs": 65.40100000001257,
+            "renderMs": 73.62300000001414,
+            "gcMs": 0
+          },
+          {
+            "start": 44619.021000146866,
+            "duration": 468.146,
+            "threadMs": 466.825,
+            "derivationMs": 62.74099999999453,
+            "memoMs": 62.74099999999453,
+            "renderMs": 65.61999999999534,
+            "gcMs": 13.169000000001688
+          }
+        ],
+        "callbackMaximaMs": {},
+        "sampledDerivationCrossings": [
+          {
+            "start": 16414.213000059128,
+            "duration": 475.074,
+            "threadMs": 455.229,
+            "derivationMs": 106.43700000001627,
+            "memoMs": 106.43700000001627,
+            "renderMs": 109.46200000001772,
+            "gcMs": 0
+          },
+          {
+            "start": 17892.762000083923,
+            "duration": 462.979,
+            "threadMs": 434.148,
+            "derivationMs": 100.7870000000039,
+            "memoMs": 100.7870000000039,
+            "renderMs": 113.66900000000169,
+            "gcMs": 13.22899999999936
+          },
+          {
+            "start": 18679.449000120163,
+            "duration": 453.487,
+            "threadMs": 428.865,
+            "derivationMs": 151.18199999998978,
+            "memoMs": 151.18199999998978,
+            "renderMs": 156.95099999999002,
+            "gcMs": 0
+          },
+          {
+            "start": 19900.15800023079,
+            "duration": 299.798,
+            "threadMs": 287.742,
+            "derivationMs": 83.90400000000227,
+            "memoMs": 83.90400000000227,
+            "renderMs": 85.84700000000521,
+            "gcMs": 1.2989999999990687
+          },
+          {
+            "start": 20779.954000234604,
+            "duration": 284.466,
+            "threadMs": 277.236,
+            "derivationMs": 73.65799999999945,
+            "memoMs": 73.65799999999945,
+            "renderMs": 74.1810000000005,
+            "gcMs": 2.7380000000011933
+          },
+          {
+            "start": 21683.965000152588,
+            "duration": 299.253,
+            "threadMs": 299.197,
+            "derivationMs": 67.53000000000247,
+            "memoMs": 67.53000000000247,
+            "renderMs": 71.57600000000093,
+            "gcMs": 11.079000000001543
+          },
+          {
+            "start": 22772.12900018692,
+            "duration": 566.002,
+            "threadMs": 565.899,
+            "derivationMs": 103.94200000001365,
+            "memoMs": 103.94200000001365,
+            "renderMs": 113.1100000000115,
+            "gcMs": 21.197000000000116
+          },
+          {
+            "start": 23820.43800020218,
+            "duration": 387.582,
+            "threadMs": 386.792,
+            "derivationMs": 82.10000000001673,
+            "memoMs": 82.10000000001673,
+            "renderMs": 86.16500000001179,
+            "gcMs": 6.882999999997992
+          },
+          {
+            "start": 24893.834000110626,
+            "duration": 498.58,
+            "threadMs": 497.847,
+            "derivationMs": 110.1939999999995,
+            "memoMs": 110.1939999999995,
+            "renderMs": 115.86699999999837,
+            "gcMs": 11.21600000000035
+          },
+          {
+            "start": 25951.49800014496,
+            "duration": 776.26,
+            "threadMs": 769.646,
+            "derivationMs": 116.18299999999726,
+            "memoMs": 116.18299999999726,
+            "renderMs": 124.0659999999989,
+            "gcMs": 21.302000000003318
+          },
+          {
+            "start": 27301.338000059128,
+            "duration": 286.908,
+            "threadMs": 285.638,
+            "derivationMs": 92.16000000001077,
+            "memoMs": 92.16000000001077,
+            "renderMs": 97.11500000000888,
+            "gcMs": 12.635000000002037
+          },
+          {
+            "start": 28410.931000232697,
+            "duration": 294.207,
+            "threadMs": 293.739,
+            "derivationMs": 64.083000000006,
+            "memoMs": 64.083000000006,
+            "renderMs": 68.07600000000457,
+            "gcMs": 6.175999999999476
+          },
+          {
+            "start": 28848.739000082016,
+            "duration": 259.952,
+            "threadMs": 259.299,
+            "derivationMs": 69.58799999999974,
+            "memoMs": 69.58799999999974,
+            "renderMs": 72.29100000000108,
+            "gcMs": 7.906999999999243
+          },
+          {
+            "start": 29938.53600001335,
+            "duration": 301.173,
+            "threadMs": 293.611,
+            "derivationMs": 61.57100000000355,
+            "memoMs": 61.57100000000355,
+            "renderMs": 63.55000000000291,
+            "gcMs": 10.81699999999546
+          },
+          {
+            "start": 30439.47400021553,
+            "duration": 319.179,
+            "threadMs": 311.839,
+            "derivationMs": 73.62200000000666,
+            "memoMs": 73.62200000000666,
+            "renderMs": 84.31300000000556,
+            "gcMs": 44.73099999999249
+          },
+          {
+            "start": 31258.017000198364,
+            "duration": 206.747,
+            "threadMs": 206.93,
+            "derivationMs": 66.2799999999952,
+            "memoMs": 66.2799999999952,
+            "renderMs": 70.67999999999665,
+            "gcMs": 4.60399999999936
+          },
+          {
+            "start": 32378.424000024796,
+            "duration": 182.779,
+            "threadMs": 182.77,
+            "derivationMs": 56.09600000001228,
+            "memoMs": 56.09600000001228,
+            "renderMs": 56.53900000001158,
+            "gcMs": 1.7779999999984284
+          },
+          {
+            "start": 33061.52600002289,
+            "duration": 183.246,
+            "threadMs": 182.882,
+            "derivationMs": 51.608000000000175,
+            "memoMs": 51.608000000000175,
+            "renderMs": 54.913000000000466,
+            "gcMs": 5.108000000000175
+          },
+          {
+            "start": 33814.614000082016,
+            "duration": 241.544,
+            "threadMs": 241.129,
+            "derivationMs": 53.62900000001537,
+            "memoMs": 53.62900000001537,
+            "renderMs": 55.15600000001723,
+            "gcMs": 6.227000000006228
+          },
+          {
+            "start": 34826.551000118256,
+            "duration": 219.976,
+            "threadMs": 219.521,
+            "derivationMs": 67.61699999998382,
+            "memoMs": 67.61699999998382,
+            "renderMs": 70.05699999998615,
+            "gcMs": 4.282999999995809
+          },
+          {
+            "start": 36745.22200012207,
+            "duration": 270.516,
+            "threadMs": 270.706,
+            "derivationMs": 96.30299999998533,
+            "memoMs": 96.30299999998533,
+            "renderMs": 103.12599999998929,
+            "gcMs": 7.811999999998079
+          },
+          {
+            "start": 37750.27900004387,
+            "duration": 342.486,
+            "threadMs": 341.2,
+            "derivationMs": 72.8659999999727,
+            "memoMs": 72.8659999999727,
+            "renderMs": 74.09299999997165,
+            "gcMs": 3.573000000003958
+          },
+          {
+            "start": 38577.13900017738,
+            "duration": 248.695,
+            "threadMs": 248.795,
+            "derivationMs": 84.9520000000266,
+            "memoMs": 84.9520000000266,
+            "renderMs": 85.42600000002858,
+            "gcMs": 6.125999999996566
+          },
+          {
+            "start": 39414.69800019264,
+            "duration": 217.836,
+            "threadMs": 217.549,
+            "derivationMs": 70.61999999998807,
+            "memoMs": 70.61999999998807,
+            "renderMs": 76.2009999999791,
+            "gcMs": 1.3079999999972642
+          },
+          {
+            "start": 40441.53600001335,
+            "duration": 244.825,
+            "threadMs": 244.785,
+            "derivationMs": 60.46899999999732,
+            "memoMs": 60.46899999999732,
+            "renderMs": 60.46899999999732,
+            "gcMs": 3.2589999999981956
+          },
+          {
+            "start": 41461.0560002327,
+            "duration": 305.659,
+            "threadMs": 305.067,
+            "derivationMs": 91.27099999998609,
+            "memoMs": 91.27099999998609,
+            "renderMs": 93.64899999998306,
+            "gcMs": 11.210999999995693
+          },
+          {
+            "start": 42539.81500005722,
+            "duration": 334.246,
+            "threadMs": 334.112,
+            "derivationMs": 77.8530000000028,
+            "memoMs": 77.8530000000028,
+            "renderMs": 81.12400000000343,
+            "gcMs": 7.572000000000116
+          },
+          {
+            "start": 43501.84100008011,
+            "duration": 431.678,
+            "threadMs": 431.88,
+            "derivationMs": 65.40100000001257,
+            "memoMs": 65.40100000001257,
+            "renderMs": 73.62300000001414,
+            "gcMs": 0
+          },
+          {
+            "start": 44619.021000146866,
+            "duration": 468.146,
+            "threadMs": 466.825,
+            "derivationMs": 62.74099999999453,
+            "memoMs": 62.74099999999453,
+            "renderMs": 65.61999999999534,
+            "gcMs": 13.169000000001688
+          }
+        ],
+        "hostBefore": {
+          "load": [
+            19.71,
+            18.07,
+            16.14
+          ],
+          "groups": [
+            {
+              "quota": "120000 20000",
+              "memory": "8589934592",
+              "throttledUsec": 382029
+            },
+            {
+              "quota": "360000 20000",
+              "memory": "max",
+              "throttledUsec": 11477095
+            },
+            {
+              "quota": "max 100000",
+              "memory": "114462744576",
+              "throttledUsec": 0
+            },
+            {
+              "quota": "max 100000",
+              "memory": "max",
+              "throttledUsec": 0
+            },
+            {
+              "quota": "max 100000",
+              "memory": "max",
+              "throttledUsec": 0
+            },
+            {
+              "quota": "max 100000",
+              "memory": "max",
+              "throttledUsec": 0
+            },
+            {
+              "quota": "max 100000",
+              "memory": "max",
+              "throttledUsec": 0
+            }
+          ]
+        },
+        "hostAfter": {
+          "load": [
+            16.87,
+            17.55,
+            16.03
+          ],
+          "groups": [
+            {
+              "quota": "120000 20000",
+              "memory": "8589934592",
+              "throttledUsec": 446178
+            },
+            {
+              "quota": "360000 20000",
+              "memory": "max",
+              "throttledUsec": 11477095
+            },
+            {
+              "quota": "max 100000",
+              "memory": "114462744576",
+              "throttledUsec": 0
+            },
+            {
+              "quota": "max 100000",
+              "memory": "max",
+              "throttledUsec": 0
+            },
+            {
+              "quota": "max 100000",
+              "memory": "max",
+              "throttledUsec": 0
+            },
+            {
+              "quota": "max 100000",
+              "memory": "max",
+              "throttledUsec": 0
+            },
+            {
+              "quota": "max 100000",
+              "memory": "max",
+              "throttledUsec": 0
+            }
+          ]
+        },
+        "committedCatalog": null,
+        "expectedCatalog": {
+          "size": 2099,
+          "mtime": 1792046940
+        },
+        "pageErrors": []
+      },
+      {
+        "tag": "catalog-3-before-raw",
+        "utcStart": "2026-10-15T09:49:14.766Z",
+        "utcEnd": "2026-10-15T09:49:47.213Z",
+        "windowMs": 30386.700000047684,
+        "browser": "156.0.8078.4",
+        "cardsBefore": 357,
+        "cardsAfter": 357,
+        "corpus": {
+          "files": 864,
+          "flows": 284,
+          "tasks": 619,
+          "liveIds": [
+            "conversation_search-ver-2",
+            "conversation_upload-ui",
+            "conversation_export-impl",
+            "conversation_attach-verify",
+            "conversation_orchestrator",
+            "conversation_rounds-review"
+          ]
+        },
+        "events": 1210,
+        "receivedAllSessionRevisions": true,
+        "polls": 34,
+        "connection": "live",
+        "scrollEvents": 47,
+        "distinctScrollPositions": 44,
+        "missedGestures": 250,
+        "maxWheelLatenessMs": 101,
+        "allLongTasks": 158,
+        "maxBrowserTaskMs": 1163.462,
+        "maxMemoDerivationMs": 0,
+        "memoCrossings": [],
+        "worstMemoTask": {
+          "start": 16936.497000217438,
+          "duration": 0.031,
+          "threadMs": 0.03,
+          "derivationMs": 0,
+          "sites": []
+        },
+        "maxSampledDerivationMs": 199.99899999998524,
+        "maxSampledMemoMs": 199.99899999998524,
+        "maxSampledRenderMs": 207.9789999999848,
+        "sampledTasksWithDerivation": [
+          {
+            "start": 18990.458000183105,
+            "duration": 972.678,
+            "threadMs": 960.946,
+            "derivationMs": 166.48400000000402,
+            "memoMs": 166.48400000000402,
+            "renderMs": 179.41799999999785,
+            "gcMs": 0.9660000000003492
+          },
+          {
+            "start": 20364.049000263214,
+            "duration": 958.492,
+            "threadMs": 952.397,
+            "derivationMs": 155.23899999998685,
+            "memoMs": 155.23899999998685,
+            "renderMs": 163.75899999998,
+            "gcMs": 10.622999999999593
+          },
+          {
+            "start": 22152.371000289917,
+            "duration": 1163.462,
+            "threadMs": 1147.459,
+            "derivationMs": 133.33200000000215,
+            "memoMs": 133.33200000000215,
+            "renderMs": 141.00500000000102,
+            "gcMs": 37.96600000000035
+          },
+          {
+            "start": 24348.179000139236,
+            "duration": 823.299,
+            "threadMs": 815.156,
+            "derivationMs": 199.99899999998524,
+            "memoMs": 199.99899999998524,
+            "renderMs": 207.9789999999848,
+            "gcMs": 13.762999999995372
+          },
+          {
+            "start": 26435.7570002079,
+            "duration": 759.887,
+            "threadMs": 757.143,
+            "derivationMs": 111.83500000001368,
+            "memoMs": 111.83500000001368,
+            "renderMs": 122.10400000001027,
+            "gcMs": 14.123999999996158
+          },
+          {
+            "start": 27941.78100013733,
+            "duration": 666.793,
+            "threadMs": 664.625,
+            "derivationMs": 92.73499999998967,
+            "memoMs": 92.73499999998967,
+            "renderMs": 100.3059999999823,
+            "gcMs": 9.446999999996478
+          },
+          {
+            "start": 30056.933000087738,
+            "duration": 548.297,
+            "threadMs": 546.621,
+            "derivationMs": 78.51300000000629,
+            "memoMs": 78.51300000000629,
+            "renderMs": 82.99900000001071,
+            "gcMs": 12.372000000003027
+          },
+          {
+            "start": 31343.885000228882,
+            "duration": 387.079,
+            "threadMs": 383.126,
+            "derivationMs": 65.20699999999852,
+            "memoMs": 65.20699999999852,
+            "renderMs": 71.15899999999965,
+            "gcMs": 15.135999999998603
+          },
+          {
+            "start": 31880.109000205994,
+            "duration": 410.319,
+            "threadMs": 409.101,
+            "derivationMs": 90.93799999998373,
+            "memoMs": 90.93799999998373,
+            "renderMs": 92.78199999998469,
+            "gcMs": 11.756000000001222
+          },
+          {
+            "start": 32637.50900030136,
+            "duration": 328.649,
+            "threadMs": 328.601,
+            "derivationMs": 76.06599999999162,
+            "memoMs": 76.06599999999162,
+            "renderMs": 80.83599999999569,
+            "gcMs": 8.895000000004075
+          },
+          {
+            "start": 33869.146000146866,
+            "duration": 458.745,
+            "threadMs": 458.746,
+            "derivationMs": 117.34000000000378,
+            "memoMs": 117.34000000000378,
+            "renderMs": 121.11600000000908,
+            "gcMs": 14.608999999989464
+          },
+          {
+            "start": 35239.00900030136,
+            "duration": 649.527,
+            "threadMs": 642.72,
+            "derivationMs": 111.57799999997951,
+            "memoMs": 111.57799999997951,
+            "renderMs": 114.89499999998225,
+            "gcMs": 10.121000000006461
+          },
+          {
+            "start": 36808.94200015068,
+            "duration": 574.019,
+            "threadMs": 567.574,
+            "derivationMs": 119.0470000000496,
+            "memoMs": 119.0470000000496,
+            "renderMs": 122.84900000005291,
+            "gcMs": 20.012999999991735
+          },
+          {
+            "start": 37968.15600013733,
+            "duration": 388.299,
+            "threadMs": 388.537,
+            "derivationMs": 72.63500000000931,
+            "memoMs": 72.63500000000931,
+            "renderMs": 73.60700000001088,
+            "gcMs": 7.364000000008673
+          },
+          {
+            "start": 39336.24600028992,
+            "duration": 421.877,
+            "threadMs": 421.485,
+            "derivationMs": 104.1559999999954,
+            "memoMs": 104.1559999999954,
+            "renderMs": 108.69899999999325,
+            "gcMs": 9.705999999991036
+          },
+          {
+            "start": 40560.330000162125,
+            "duration": 409.185,
+            "threadMs": 407.829,
+            "derivationMs": 142.92400000001362,
+            "memoMs": 142.92400000001362,
+            "renderMs": 154.93900000002031,
+            "gcMs": 1.1529999999984284
+          },
+          {
+            "start": 41756.53000020981,
+            "duration": 268.559,
+            "threadMs": 268.372,
+            "derivationMs": 73.97700000000623,
+            "memoMs": 73.97700000000623,
+            "renderMs": 76.02500000000146,
+            "gcMs": 6.761000000005879
+          },
+          {
+            "start": 42180.44000029564,
+            "duration": 235.589,
+            "threadMs": 235.074,
+            "derivationMs": 57.117000000027474,
+            "memoMs": 57.117000000027474,
+            "renderMs": 59.48200000002544,
+            "gcMs": 8.479999999995925
+          },
+          {
+            "start": 43257.37100028992,
+            "duration": 634.299,
+            "threadMs": 633.825,
+            "derivationMs": 130.55299999999988,
+            "memoMs": 130.55299999999988,
+            "renderMs": 136.3249999999971,
+            "gcMs": 10.392000000007101
+          },
+          {
+            "start": 44552.69000029564,
+            "duration": 221.317,
+            "threadMs": 220.388,
+            "derivationMs": 76.09199999998964,
+            "memoMs": 76.09199999998964,
+            "renderMs": 78.01099999999133,
+            "gcMs": 10.951999999997497
+          },
+          {
+            "start": 45531.24700021744,
+            "duration": 257.98,
+            "threadMs": 257.953,
+            "derivationMs": 57.41899999997986,
+            "memoMs": 57.41899999997986,
+            "renderMs": 57.41899999997986,
+            "gcMs": 0
+          },
+          {
+            "start": 46470.37700009346,
+            "duration": 207.53,
+            "threadMs": 207.138,
+            "derivationMs": 55.637000000002445,
+            "memoMs": 55.637000000002445,
+            "renderMs": 55.637000000002445,
+            "gcMs": 6.673999999984517
+          }
+        ],
+        "callbackMaximaMs": {},
+        "sampledDerivationCrossings": [
+          {
+            "start": 18990.458000183105,
+            "duration": 972.678,
+            "threadMs": 960.946,
+            "derivationMs": 166.48400000000402,
+            "memoMs": 166.48400000000402,
+            "renderMs": 179.41799999999785,
+            "gcMs": 0.9660000000003492
+          },
+          {
+            "start": 20364.049000263214,
+            "duration": 958.492,
+            "threadMs": 952.397,
+            "derivationMs": 155.23899999998685,
+            "memoMs": 155.23899999998685,
+            "renderMs": 163.75899999998,
+            "gcMs": 10.622999999999593
+          },
+          {
+            "start": 22152.371000289917,
+            "duration": 1163.462,
+            "threadMs": 1147.459,
+            "derivationMs": 133.33200000000215,
+            "memoMs": 133.33200000000215,
+            "renderMs": 141.00500000000102,
+            "gcMs": 37.96600000000035
+          },
+          {
+            "start": 24348.179000139236,
+            "duration": 823.299,
+            "threadMs": 815.156,
+            "derivationMs": 199.99899999998524,
+            "memoMs": 199.99899999998524,
+            "renderMs": 207.9789999999848,
+            "gcMs": 13.762999999995372
+          },
+          {
+            "start": 26435.7570002079,
+            "duration": 759.887,
+            "threadMs": 757.143,
+            "derivationMs": 111.83500000001368,
+            "memoMs": 111.83500000001368,
+            "renderMs": 122.10400000001027,
+            "gcMs": 14.123999999996158
+          },
+          {
+            "start": 27941.78100013733,
+            "duration": 666.793,
+            "threadMs": 664.625,
+            "derivationMs": 92.73499999998967,
+            "memoMs": 92.73499999998967,
+            "renderMs": 100.3059999999823,
+            "gcMs": 9.446999999996478
+          },
+          {
+            "start": 30056.933000087738,
+            "duration": 548.297,
+            "threadMs": 546.621,
+            "derivationMs": 78.51300000000629,
+            "memoMs": 78.51300000000629,
+            "renderMs": 82.99900000001071,
+            "gcMs": 12.372000000003027
+          },
+          {
+            "start": 31343.885000228882,
+            "duration": 387.079,
+            "threadMs": 383.126,
+            "derivationMs": 65.20699999999852,
+            "memoMs": 65.20699999999852,
+            "renderMs": 71.15899999999965,
+            "gcMs": 15.135999999998603
+          },
+          {
+            "start": 31880.109000205994,
+            "duration": 410.319,
+            "threadMs": 409.101,
+            "derivationMs": 90.93799999998373,
+            "memoMs": 90.93799999998373,
+            "renderMs": 92.78199999998469,
+            "gcMs": 11.756000000001222
+          },
+          {
+            "start": 32637.50900030136,
+            "duration": 328.649,
+            "threadMs": 328.601,
+            "derivationMs": 76.06599999999162,
+            "memoMs": 76.06599999999162,
+            "renderMs": 80.83599999999569,
+            "gcMs": 8.895000000004075
+          },
+          {
+            "start": 33869.146000146866,
+            "duration": 458.745,
+            "threadMs": 458.746,
+            "derivationMs": 117.34000000000378,
+            "memoMs": 117.34000000000378,
+            "renderMs": 121.11600000000908,
+            "gcMs": 14.608999999989464
+          },
+          {
+            "start": 35239.00900030136,
+            "duration": 649.527,
+            "threadMs": 642.72,
+            "derivationMs": 111.57799999997951,
+            "memoMs": 111.57799999997951,
+            "renderMs": 114.89499999998225,
+            "gcMs": 10.121000000006461
+          },
+          {
+            "start": 36808.94200015068,
+            "duration": 574.019,
+            "threadMs": 567.574,
+            "derivationMs": 119.0470000000496,
+            "memoMs": 119.0470000000496,
+            "renderMs": 122.84900000005291,
+            "gcMs": 20.012999999991735
+          },
+          {
+            "start": 37968.15600013733,
+            "duration": 388.299,
+            "threadMs": 388.537,
+            "derivationMs": 72.63500000000931,
+            "memoMs": 72.63500000000931,
+            "renderMs": 73.60700000001088,
+            "gcMs": 7.364000000008673
+          },
+          {
+            "start": 39336.24600028992,
+            "duration": 421.877,
+            "threadMs": 421.485,
+            "derivationMs": 104.1559999999954,
+            "memoMs": 104.1559999999954,
+            "renderMs": 108.69899999999325,
+            "gcMs": 9.705999999991036
+          },
+          {
+            "start": 40560.330000162125,
+            "duration": 409.185,
+            "threadMs": 407.829,
+            "derivationMs": 142.92400000001362,
+            "memoMs": 142.92400000001362,
+            "renderMs": 154.93900000002031,
+            "gcMs": 1.1529999999984284
+          },
+          {
+            "start": 41756.53000020981,
+            "duration": 268.559,
+            "threadMs": 268.372,
+            "derivationMs": 73.97700000000623,
+            "memoMs": 73.97700000000623,
+            "renderMs": 76.02500000000146,
+            "gcMs": 6.761000000005879
+          },
+          {
+            "start": 42180.44000029564,
+            "duration": 235.589,
+            "threadMs": 235.074,
+            "derivationMs": 57.117000000027474,
+            "memoMs": 57.117000000027474,
+            "renderMs": 59.48200000002544,
+            "gcMs": 8.479999999995925
+          },
+          {
+            "start": 43257.37100028992,
+            "duration": 634.299,
+            "threadMs": 633.825,
+            "derivationMs": 130.55299999999988,
+            "memoMs": 130.55299999999988,
+            "renderMs": 136.3249999999971,
+            "gcMs": 10.392000000007101
+          },
+          {
+            "start": 44552.69000029564,
+            "duration": 221.317,
+            "threadMs": 220.388,
+            "derivationMs": 76.09199999998964,
+            "memoMs": 76.09199999998964,
+            "renderMs": 78.01099999999133,
+            "gcMs": 10.951999999997497
+          },
+          {
+            "start": 45531.24700021744,
+            "duration": 257.98,
+            "threadMs": 257.953,
+            "derivationMs": 57.41899999997986,
+            "memoMs": 57.41899999997986,
+            "renderMs": 57.41899999997986,
+            "gcMs": 0
+          },
+          {
+            "start": 46470.37700009346,
+            "duration": 207.53,
+            "threadMs": 207.138,
+            "derivationMs": 55.637000000002445,
+            "memoMs": 55.637000000002445,
+            "renderMs": 55.637000000002445,
+            "gcMs": 6.673999999984517
+          }
+        ],
+        "hostBefore": {
+          "load": [
+            17.85,
+            17.71,
+            16.11
+          ],
+          "groups": [
+            {
+              "quota": "120000 20000",
+              "memory": "8589934592",
+              "throttledUsec": 447991
+            },
+            {
+              "quota": "360000 20000",
+              "memory": "max",
+              "throttledUsec": 11477095
+            },
+            {
+              "quota": "max 100000",
+              "memory": "114462744576",
+              "throttledUsec": 0
+            },
+            {
+              "quota": "max 100000",
+              "memory": "max",
+              "throttledUsec": 0
+            },
+            {
+              "quota": "max 100000",
+              "memory": "max",
+              "throttledUsec": 0
+            },
+            {
+              "quota": "max 100000",
+              "memory": "max",
+              "throttledUsec": 0
+            },
+            {
+              "quota": "max 100000",
+              "memory": "max",
+              "throttledUsec": 0
+            }
+          ]
+        },
+        "hostAfter": {
+          "load": [
+            17.01,
+            17.58,
+            16.12
+          ],
+          "groups": [
+            {
+              "quota": "120000 20000",
+              "memory": "8589934592",
+              "throttledUsec": 690372
+            },
+            {
+              "quota": "360000 20000",
+              "memory": "max",
+              "throttledUsec": 11477095
+            },
+            {
+              "quota": "max 100000",
+              "memory": "114462744576",
+              "throttledUsec": 0
+            },
+            {
+              "quota": "max 100000",
+              "memory": "max",
+              "throttledUsec": 0
+            },
+            {
+              "quota": "max 100000",
+              "memory": "max",
+              "throttledUsec": 0
+            },
+            {
+              "quota": "max 100000",
+              "memory": "max",
+              "throttledUsec": 0
+            },
+            {
+              "quota": "max 100000",
+              "memory": "max",
+              "throttledUsec": 0
+            }
+          ]
+        },
+        "committedCatalog": null,
+        "expectedCatalog": {
+          "size": 2082,
+          "mtime": 1792046972
+        },
+        "pageErrors": []
+      },
+      {
+        "tag": "catalog-3-after-raw",
+        "utcStart": "2026-10-15T09:49:59.393Z",
+        "utcEnd": "2026-10-15T09:50:31.680Z",
+        "windowMs": 30324.10000014305,
+        "browser": "156.0.8078.4",
+        "cardsBefore": 357,
+        "cardsAfter": 357,
+        "corpus": {
+          "files": 864,
+          "flows": 284,
+          "tasks": 619,
+          "liveIds": [
+            "conversation_search-ver-2",
+            "conversation_upload-ui",
+            "conversation_export-impl",
+            "conversation_attach-verify",
+            "conversation_orchestrator",
+            "conversation_rounds-review"
+          ]
+        },
+        "events": 1208,
+        "receivedAllSessionRevisions": true,
+        "polls": 60,
+        "connection": "live",
+        "scrollEvents": 91,
+        "distinctScrollPositions": 88,
+        "missedGestures": 194,
+        "maxWheelLatenessMs": 100,
+        "allLongTasks": 191,
+        "maxBrowserTaskMs": 327.829,
+        "maxMemoDerivationMs": 0,
+        "memoCrossings": [],
+        "worstMemoTask": {
+          "start": 11552.121000051498,
+          "duration": 30.006,
+          "threadMs": 29.994,
+          "derivationMs": 0,
+          "sites": []
+        },
+        "maxSampledDerivationMs": 20.01200000000972,
+        "maxSampledMemoMs": 20.01200000000972,
+        "maxSampledRenderMs": 21.805000000007567,
+        "sampledTasksWithDerivation": [
+          {
+            "start": 12859.882999897003,
+            "duration": 301.42,
+            "threadMs": 301.352,
+            "derivationMs": 16.205999999998312,
+            "memoMs": 16.205999999998312,
+            "renderMs": 19.87999999999738,
+            "gcMs": 4.09900000000016
+          },
+          {
+            "start": 13843.726999998093,
+            "duration": 327.829,
+            "threadMs": 325.136,
+            "derivationMs": 10.936999999999898,
+            "memoMs": 10.936999999999898,
+            "renderMs": 13.990999999999985,
+            "gcMs": 1.2099999999991269
+          },
+          {
+            "start": 14676.176000118256,
+            "duration": 171.186,
+            "threadMs": 171.056,
+            "derivationMs": 8.497999999997774,
+            "memoMs": 8.497999999997774,
+            "renderMs": 9.8849999999984,
+            "gcMs": 1.22400000000016
+          },
+          {
+            "start": 15518.65599989891,
+            "duration": 186.215,
+            "threadMs": 186.748,
+            "derivationMs": 8.457000000000335,
+            "memoMs": 8.457000000000335,
+            "renderMs": 10.651000000001659,
+            "gcMs": 1.0360000000000582
+          },
+          {
+            "start": 16593.914999961853,
+            "duration": 196.688,
+            "threadMs": 196.666,
+            "derivationMs": 9.46999999999025,
+            "memoMs": 9.46999999999025,
+            "renderMs": 9.46999999999025,
+            "gcMs": 0
+          },
+          {
+            "start": 17497.875,
+            "duration": 184.976,
+            "threadMs": 184.858,
+            "derivationMs": 6.755000000001019,
+            "memoMs": 6.755000000001019,
+            "renderMs": 8.689000000002125,
+            "gcMs": 6.036000000000058
+          },
+          {
+            "start": 18437.90599989891,
+            "duration": 257.428,
+            "threadMs": 257.855,
+            "derivationMs": 7.081999999994878,
+            "memoMs": 7.081999999994878,
+            "renderMs": 9.546999999995023,
+            "gcMs": 0
+          },
+          {
+            "start": 19584.99699997902,
+            "duration": 190.17,
+            "threadMs": 190.068,
+            "derivationMs": 11.31300000000192,
+            "memoMs": 11.31300000000192,
+            "renderMs": 11.836000000002969,
+            "gcMs": 0
+          },
+          {
+            "start": 20432.61999988556,
+            "duration": 177.278,
+            "threadMs": 177.799,
+            "derivationMs": 9.506000000001222,
+            "memoMs": 9.506000000001222,
+            "renderMs": 11.298999999999069,
+            "gcMs": 0
+          },
+          {
+            "start": 21389.90199995041,
+            "duration": 172.352,
+            "threadMs": 172.38,
+            "derivationMs": 5.749000000003434,
+            "memoMs": 5.749000000003434,
+            "renderMs": 7.544000000005326,
+            "gcMs": 5.684999999997672
+          },
+          {
+            "start": 22363.71399998665,
+            "duration": 176.384,
+            "threadMs": 176.337,
+            "derivationMs": 11.287999999996828,
+            "memoMs": 11.287999999996828,
+            "renderMs": 13.273999999997613,
+            "gcMs": 0
+          },
+          {
+            "start": 22831.572999954224,
+            "duration": 179.1,
+            "threadMs": 178.519,
+            "derivationMs": 7.216000000000349,
+            "memoMs": 7.216000000000349,
+            "renderMs": 9.342000000000553,
+            "gcMs": 4.938999999994849
+          },
+          {
+            "start": 23776.90100002289,
+            "duration": 151.682,
+            "threadMs": 151.657,
+            "derivationMs": 6.58100000000195,
+            "memoMs": 6.58100000000195,
+            "renderMs": 9.048000000002503,
+            "gcMs": 0
+          },
+          {
+            "start": 24173.605000019073,
+            "duration": 168.386,
+            "threadMs": 168.333,
+            "derivationMs": 4.778999999998632,
+            "memoMs": 4.778999999998632,
+            "renderMs": 6.993999999998778,
+            "gcMs": 0
+          },
+          {
+            "start": 24927.486000061035,
+            "duration": 204.351,
+            "threadMs": 204.491,
+            "derivationMs": 7.952000000001135,
+            "memoMs": 7.952000000001135,
+            "renderMs": 7.952000000001135,
+            "gcMs": 6.251000000003842
+          },
+          {
+            "start": 25905.101999998093,
+            "duration": 146.214,
+            "threadMs": 146.255,
+            "derivationMs": 6.524999999994179,
+            "memoMs": 6.524999999994179,
+            "renderMs": 6.524999999994179,
+            "gcMs": 7.243000000002212
+          },
+          {
+            "start": 26722.553999900818,
+            "duration": 187.674,
+            "threadMs": 187.654,
+            "derivationMs": 7.096000000001368,
+            "memoMs": 7.096000000001368,
+            "renderMs": 7.096000000001368,
+            "gcMs": 0
+          },
+          {
+            "start": 27530.31299996376,
+            "duration": 220.016,
+            "threadMs": 220.514,
+            "derivationMs": 8.247999999999593,
+            "memoMs": 8.247999999999593,
+            "renderMs": 8.247999999999593,
+            "gcMs": 0
+          },
+          {
+            "start": 28405.180999994278,
+            "duration": 157.834,
+            "threadMs": 158.473,
+            "derivationMs": 5.860000000000582,
+            "memoMs": 5.860000000000582,
+            "renderMs": 9.632999999997992,
+            "gcMs": 0
+          },
+          {
+            "start": 29238.072999954224,
+            "duration": 175.334,
+            "threadMs": 175.319,
+            "derivationMs": 4.267999999996391,
+            "memoMs": 4.267999999996391,
+            "renderMs": 5.09599999999773,
+            "gcMs": 0.8990000000012515
+          },
+          {
+            "start": 29986.085999965668,
+            "duration": 206.549,
+            "threadMs": 207.089,
+            "derivationMs": 6.706999999998516,
+            "memoMs": 6.706999999998516,
+            "renderMs": 9.011999999998807,
+            "gcMs": 0.5050000000010186
+          },
+          {
+            "start": 30315.69099998474,
+            "duration": 186.968,
+            "threadMs": 186.958,
+            "derivationMs": 7.254999999993743,
+            "memoMs": 7.254999999993743,
+            "renderMs": 9.590999999996711,
+            "gcMs": 0
+          },
+          {
+            "start": 31065.608999967575,
+            "duration": 210.467,
+            "threadMs": 210.374,
+            "derivationMs": 20.01200000000972,
+            "memoMs": 20.01200000000972,
+            "renderMs": 21.805000000007567,
+            "gcMs": 1.0459999999984575
+          },
+          {
+            "start": 32071.138000011444,
+            "duration": 164.189,
+            "threadMs": 164.182,
+            "derivationMs": 6.984999999996944,
+            "memoMs": 6.984999999996944,
+            "renderMs": 9.580999999994674,
+            "gcMs": 0
+          },
+          {
+            "start": 32899.045000076294,
+            "duration": 134.297,
+            "threadMs": 134.279,
+            "derivationMs": 6.190000000002328,
+            "memoMs": 6.190000000002328,
+            "renderMs": 7.501000000003842,
+            "gcMs": 0
+          },
+          {
+            "start": 33742.010999917984,
+            "duration": 159.928,
+            "threadMs": 159.889,
+            "derivationMs": 5.326000000008207,
+            "memoMs": 5.326000000008207,
+            "renderMs": 5.326000000008207,
+            "gcMs": 0
+          },
+          {
+            "start": 34005.32400012016,
+            "duration": 129.732,
+            "threadMs": 130.23,
+            "derivationMs": 5.684999999997672,
+            "memoMs": 5.684999999997672,
+            "renderMs": 6.233000000000175,
+            "gcMs": 0
+          },
+          {
+            "start": 34713.84200000763,
+            "duration": 158.298,
+            "threadMs": 158.267,
+            "derivationMs": 6.830999999998312,
+            "memoMs": 6.830999999998312,
+            "renderMs": 7.754000000000815,
+            "gcMs": 0
+          },
+          {
+            "start": 35582.65300011635,
+            "duration": 175.13,
+            "threadMs": 175.065,
+            "derivationMs": 6.993999999991502,
+            "memoMs": 6.993999999991502,
+            "renderMs": 8.241999999991094,
+            "gcMs": 0
+          },
+          {
+            "start": 36471.99699997902,
+            "duration": 158.435,
+            "threadMs": 159.003,
+            "derivationMs": 7.426999999996042,
+            "memoMs": 7.426999999996042,
+            "renderMs": 7.426999999996042,
+            "gcMs": 1.0319999999992433
+          },
+          {
+            "start": 37590.84200000763,
+            "duration": 219.202,
+            "threadMs": 219.176,
+            "derivationMs": 13.565000000002328,
+            "memoMs": 13.565000000002328,
+            "renderMs": 14.368000000002212,
+            "gcMs": 0
+          },
+          {
+            "start": 38188.86999988556,
+            "duration": 218.923,
+            "threadMs": 218.824,
+            "derivationMs": 9.913000000007742,
+            "memoMs": 9.913000000007742,
+            "renderMs": 11.684000000008382,
+            "gcMs": 0
+          },
+          {
+            "start": 38737.9470000267,
+            "duration": 232.859,
+            "threadMs": 232.795,
+            "derivationMs": 7.188999999998487,
+            "memoMs": 7.188999999998487,
+            "renderMs": 10.237999999997555,
+            "gcMs": 2.8839999999981956
+          },
+          {
+            "start": 39321.66300010681,
+            "duration": 167.209,
+            "threadMs": 167.126,
+            "derivationMs": 0.805000000000291,
+            "memoMs": 0.805000000000291,
+            "renderMs": 2.8700000000026193,
+            "gcMs": 0
+          },
+          {
+            "start": 39608.08699989319,
+            "duration": 150.319,
+            "threadMs": 150.286,
+            "derivationMs": 8.612999999997555,
+            "memoMs": 8.612999999997555,
+            "renderMs": 9.549999999995634,
+            "gcMs": 0
+          },
+          {
+            "start": 40390.579999923706,
+            "duration": 199.793,
+            "threadMs": 199.747,
+            "derivationMs": 3.908999999992375,
+            "memoMs": 3.908999999992375,
+            "renderMs": 5.448999999993248,
+            "gcMs": 6.369999999988067
+          },
+          {
+            "start": 41304.450000047684,
+            "duration": 216.414,
+            "threadMs": 216.331,
+            "derivationMs": 6.940999999998894,
+            "memoMs": 6.940999999998894,
+            "renderMs": 11.002000000007683,
+            "gcMs": 0.919000000001688
+          }
+        ],
+        "callbackMaximaMs": {},
+        "sampledDerivationCrossings": [],
+        "hostBefore": {
+          "load": [
+            15.65,
+            17.26,
+            16.04
+          ],
+          "groups": [
+            {
+              "quota": "120000 20000",
+              "memory": "8589934592",
+              "throttledUsec": 690372
+            },
+            {
+              "quota": "360000 20000",
+              "memory": "max",
+              "throttledUsec": 11477095
+            },
+            {
+              "quota": "max 100000",
+              "memory": "114462744576",
+              "throttledUsec": 0
+            },
+            {
+              "quota": "max 100000",
+              "memory": "max",
+              "throttledUsec": 0
+            },
+            {
+              "quota": "max 100000",
+              "memory": "max",
+              "throttledUsec": 0
+            },
+            {
+              "quota": "max 100000",
+              "memory": "max",
+              "throttledUsec": 0
+            },
+            {
+              "quota": "max 100000",
+              "memory": "max",
+              "throttledUsec": 0
+            }
+          ]
+        },
+        "hostAfter": {
+          "load": [
+            12.59,
+            16.38,
+            15.79
+          ],
+          "groups": [
+            {
+              "quota": "120000 20000",
+              "memory": "8589934592",
+              "throttledUsec": 738772
+            },
+            {
+              "quota": "360000 20000",
+              "memory": "max",
+              "throttledUsec": 11477095
+            },
+            {
+              "quota": "max 100000",
+              "memory": "114462744576",
+              "throttledUsec": 0
+            },
+            {
+              "quota": "max 100000",
+              "memory": "max",
+              "throttledUsec": 0
+            },
+            {
+              "quota": "max 100000",
+              "memory": "max",
+              "throttledUsec": 0
+            },
+            {
+              "quota": "max 100000",
+              "memory": "max",
+              "throttledUsec": 0
+            },
+            {
+              "quota": "max 100000",
+              "memory": "max",
+              "throttledUsec": 0
+            }
+          ]
+        },
+        "committedCatalog": null,
+        "expectedCatalog": {
+          "size": 2108,
+          "mtime": 1792047048
+        },
+        "pageErrors": []
       }
     ]
   }

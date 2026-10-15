@@ -1,5 +1,5 @@
 {
-  "baselineCommit": "45d25ac796d5824713c9fb57d65f57efea61041b",
+  "baselineCommit": "836c8498ef913ad94d1d79c51c8b01d53b30d01b",
   "touchedTestFiles": [
     "src/components/ProjectDashboard.backgroundTaskDock.dom.test.tsx",
     "src/components/ProjectDashboard.catalogFailure.dom.test.tsx",
@@ -41,7 +41,7 @@
   ],
   "touchedComparison": {
     "newFailures": 0,
-    "preexistingFailures": 28,
+    "preexistingFailures": 22,
     "fixed": 0,
     "removedOrSkipped": 0,
     "flaky": 0
@@ -67,14 +67,8 @@
     "src/components/ProjectDashboard.unownedConversations.dom.test.tsx: an engine's own subagent: an attention jump opens the same reader",
     "src/components/ProjectDashboard.unownedConversations.dom.test.tsx: an engine's own subagent: a focus handoff resolves it though no card holds it, opens its reader in the window, and its Return closes it",
     "src/components/ProjectDashboard.unownedConversations.dom.test.tsx: under a standing landing, a card's link to Conversations opens the project's list over the Board",
-    "src/components/Viewer.switching.dom.test.tsx: desktop: an in-app \u00abOpen conversation\u00bb link focuses the target's reader without rebuilding the board",
-    "src/components/Viewer.switching.dom.test.tsx: desktop: a cross-project link switches the project, then focuses \u2014 from the last known catalog",
-    "src/components/Viewer.switching.dom.test.tsx: desktop: a project switch paints the revisited board synchronously and never remounts the dashboard",
-    "src/components/Viewer.switching.dom.test.tsx: desktop: a fresh tail record in one reader leaves the other readers' panes untouched",
-    "src/components/Viewer.switching.dom.test.tsx: desktop: a cold deep link from the URL still resolves a beyond-cap conversation",
-    "src/components/Viewer.switching.dom.test.tsx: phone: A \u2192 B \u2192 A through the board shows A's previous rows synchronously, then the fresh tail lands without a flash",
-    "src/components/Viewer.switching.dom.test.tsx: phone: a bar swipe never walks Recent \u2014 it bumps, and the switcher row is the hop",
-    "src/components/Viewer.switching.dom.test.tsx: phone: switching project through the project sheet paints the revisited board from cache"
+    "src/components/Viewer.switching.dom.test.tsx: desktop: an in-app «Open conversation» link focuses the target's reader without rebuilding the board",
+    "src/components/Viewer.switching.dom.test.tsx: desktop: a fresh tail record in one reader leaves the other readers' panes untouched"
   ],
   "readerMemoization": [
     {
@@ -101,17 +95,20 @@
     "preexistingErrors": 29
   },
   "logs": {
-    "unit-paths.log": "e1041edb19f1bb4c1deade8b0a740138a1656feb19628c1c12d370a21666c5d4",
-    "types-paths.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    "lint-paths.log": "671361afe2aa1b3d7021c8f89d76ae3f798ea11e173934a45b9bbf86184fa797",
-    "touched-final.log": "da7af7fd8751e75f0f451165224e7eb8ec5853e8818777e98091efc766ce3224",
-    "reader-head.log": "2b2016d58346d86d97406ecf7a0e466b9964de3cc2fe7ffff869eee1b73290ab",
-    "reader-base.log": "44e557d056e89b374ea0f534b80b6679a36856afd2a76208bc425b1420542daa",
-    "paths-timed.log": "c47d2432a3a231c87f959c72f64b80dee78aa920fd046b2b9a2d3caa2b21e1fc",
-    "paths-raw.log": "ac8f5e132dae989fcfc4a03bbeeb58706ea928f5531e8c642ee3a680ee2843dd",
-    "browser-regressions.log": "49f4babf5f285ec1e98f55bf0c99be24ab4c55a8d601fd90fe3d202328423196",
-    "browser-baseline-red.log": "328193027c18c62520018be60150ebb3f01d73bc16352fa5998ef3d705af733b",
-    "privacy-final.log": "e968434c852f050df922a65d7a05e8c5a5b06493c7d46c62ad96e396a125111c"
+    "unit-merged.log": "e2f04e1a800ca387e35073dcf78c9e6bec99f5db064967fea56064a40188777f",
+    "types-merged.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "lint-merged.log": "671361afe2aa1b3d7021c8f89d76ae3f798ea11e173934a45b9bbf86184fa797",
+    "touched-merged.log": "4734580c56078576ab15f30f00cf347d356a1b9ce3735b098cec3d0c5b23ba51",
+    "merged-timed.log": "6b8644567df1e4a5aa396e1ad6658482dee908698efb5629c007caac68e847b7",
+    "confirm-stream-timed.log": "f390d04b4139b53b9a4708b4a679a01298b4d378f802f3958d4a9d66a815e9bf",
+    "confirm-catalog-timed.log": "88815d52d482562651c93438220c2dc43b7b0f4f11213c24860e67a2a2952f73",
+    "confirm-stream-raw.log": "f7b143e85288e1a7c5d8aa64f65516734317af49bcaf305df6a2bc185398ec88",
+    "confirm-catalog-raw.log": "4a3ea3484e50222fb298dc03ecee7703b05a33e7dda35fe06a66a1d96cafb5f5",
+    "reader-merged-head.log": "33ee58320d7a9f5817c6703b48c8a00754d55ca47dea1ac8be13ec532b610682",
+    "reader-merged-base.log": "2b074595dff46f09eaae213637b17e184d6d18a4dcb189879f06755bb145ba99",
+    "browser-merged.log": "bbcef984f35530fb83cd848db5a895271ec5852393c358d6c052ef199d7b9763",
+    "browser-baseline-merged.log": "d26f366e5e4fabd12bef529094caf0d2d2333593c191d63f9687878554a8ce5f",
+    "privacy-merged.log": "e968434c852f050df922a65d7a05e8c5a5b06493c7d46c62ad96e396a125111c"
   },
   "existingBrowserCases": {
     "passed": [
@@ -122,8 +119,8 @@
     "preexistingFailures": [
       {
         "case": "kanban board geometry",
-        "baseline": "14 px horizontal overflow at 640 \u00d7 720, light and dark",
-        "candidate": "14 px horizontal overflow at 640 \u00d7 720, light and dark"
+        "baseline": "14 px horizontal overflow at 640 × 720, light and dark",
+        "candidate": "14 px horizontal overflow at 640 × 720, light and dark"
       },
       {
         "case": "conversations opened from cards",
@@ -133,5 +130,15 @@
     ],
     "historicalRecordsPreserved": true
   },
-  "localPrivacy": "pass"
+  "localPrivacy": "pass",
+  "performanceDriver": {
+    "timedEqualityAssertions": 30,
+    "timedStreamingAssertions": 105,
+    "timedCatalogAssertions": 108,
+    "rawStreamingAssertions": 96,
+    "rawCatalogAssertions": 96,
+    "completedWindows": 24,
+    "interruptedPreliminaryInvocation": "retained in iteration-history.json",
+    "attributionAssertions": 1
+  }
 }

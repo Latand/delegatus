@@ -8,7 +8,7 @@ The unit cases compare incremental results with full derivation through edits, d
 
 ## Measurement contract
 
-Baseline: `45d25ac796d5824713c9fb57d65f57efea61041b`, the main revision remeasured by the audit before implementation. The synthetic corpus contains 864 files, 284 flows, 619 tasks and 357 rendered cards. Six live sessions receive 40 transcript events/s in aggregate while the export conversation is open. Chromium 156.0.8078.4 uses CPU ×4, 1440 × 900, dark/en, normal motion and visible desktop scrollbars. The fixture supplies the route's 15-second named heartbeat during startup, and the driver requires a live connection before and after measurement. Each fresh context warms for three seconds, then measures at least 30 seconds with the real board clock running.
+Final paired baseline: `836c8498ef913ad94d1d79c51c8b01d53b30d01b`. The original audit remeasured main `45d25ac796` before implementation. After main gained shared-driver options, this branch merged that revision, preserved both option paths and repeated the complete acceptance series against the updated baseline. The synthetic corpus contains 864 files, 284 flows, 619 tasks and 357 rendered cards. Six live sessions receive 40 transcript events/s in aggregate while the export conversation is open. Chromium 156.0.8078.4 uses CPU ×4, 1440 × 900, dark/en, normal motion and visible desktop scrollbars. The fixture supplies the route's 15-second named heartbeat during startup, and the driver requires a live connection before and after measurement. Each fresh context warms for three seconds, then measures at least 30 seconds with the real board clock running.
 
 Pairs alternate before/after, after/before, before/after. Stream-only and 500 ms catalog-poll stress have separate three-pair series. The catalog stress changes one folded historical worker's size and mtime and dispatches the normal files event. The timed candidate must commit the latest catalog answer. All six session revisions must equal the emitted revision heads, all 357 cards must remain mounted, the reader must show streamed text, and scrolling must change position.
 
@@ -42,17 +42,19 @@ env HOME="$PD_SANDBOX/home" XDG_CONFIG_HOME="$PD_SANDBOX/config" \
   LLV_KANBAN_BROWSER_TEST=1 CHROME_BIN="$CHROME_BIN" \
   PLAYWRIGHT_BROWSERS_PATH="$PLAYWRIGHT_BROWSERS_PATH" \
   DELEGATUS_WORK_SCOPE_CPU_QUOTA=600 LLV_OWNED_RUN_TIMEOUT_MS=1800000 \
-  PD_PAIRS=3 PD_TIMED=1 PD_OUT=.artifacts/project-dashboard-timed \
+  PD_PAIRS=3 PD_TIMED=1 PD_POLL_MS=0 PD_OUT=.artifacts/project-dashboard-timed \
   PD_BASELINE_TIMED="$PD_BASELINE_TIMED" \
   bash "$GATE" bun test src/components/kanban/kanbanBoard.browser.test.tsx \
   --test-name-pattern 'ProjectDashboard derivation'
 ```
 
-Repeat with `PD_TIMED=0`, `PD_BASELINE_RAW`, a separate `PD_OUT`, and the test pattern `ProjectDashboard derivation keeps derivation` for ordinary-source confirmation. Omitting `PD_POLL_MS` runs both stream-only and catalog stress. A candidate-only regression can omit the baseline bundle variables; publication measurements include them.
+Run each workload in a separate invocation: `PD_POLL_MS=0` for streaming alone and `PD_POLL_MS=500` for catalog stress, with a separate `PD_OUT` for each. Repeat both with `PD_TIMED=0`, `PD_BASELINE_RAW`, and the test pattern `ProjectDashboard derivation keeps derivation` for ordinary-source confirmation. Omitting `PD_POLL_MS` runs both workloads in one invocation, which needs a command lifetime above five minutes. A candidate-only regression can omit the baseline bundle variables; publication measurements include them.
 
 An earlier partial series (`pd-static-timed`) stopped when its third baseline context received no scrolling or live reply. The screenshot and revision records showed a reconnect/resnapshot loop: the silent stream stub outlasted the client's 20-second watchdog during a slow mount. The final series uses the same heartbeat repair on both sides; the failed partial series remains in the development record.
 
 A preceding candidate (`pd-folding`) passed direct timings but its raw-source analysis initially counted only named helpers. Inspecting the enclosing render stacks exposed anonymous memo work above 50 ms. That candidate was rejected; the driver now attributes those memo frames and has a synthetic regression for the undercount. The retained development record gives corrected raw results.
+
+The first merged confirmation completed equality and all six stream windows before its outer command received SIGTERM at approximately five minutes, as the first catalog baseline started. The record retains those completed readings. The final four workload invocations each completed independently through the same gate. In the second ordinary-source catalog candidate, shared host load rose from 6.57 to 20.85; the 31.8-second window delivered 1,207 events, executed 20 catalog polls and observed 26 scroll events, with 265 late wheel requests skipped. Its largest browser task was 1,020.4 ms, with 31.2 ms attributed to derivation; its maximum sampled derivation across all tasks was 38.4 ms. These observations remain in the record, and no frame-rate improvement is claimed.
 
 ## Results
 
@@ -60,9 +62,9 @@ All three candidate pairs pass in each series, with zero tasks above 50 ms attri
 
 | Pair | Stream memo ms, before → after | Catalog memo ms, before → after | Stream raw sampled ms, before → after | Catalog raw sampled ms, before → after |
 | --- | ---: | ---: | ---: | ---: |
-| 1 | 82.1 → 18.9 | 294.4 → 37.1 | 68.8 → 18.0 | 253.0 → 22.7 |
-| 2 | 126.6 → 38.1 | 153.5 → 24.5 | 94.9 → 13.6 | 151.2 → 34.1 |
-| 3 | 85.9 → 34.2 | 196.8 → 22.0 | 203.5 → 38.6 | 200.0 → 20.0 |
+| 1 | 51.4 → 12.6 | 89.5 → 27.4 | 98.0 → 17.2 | 76.7 → 10.8 |
+| 2 | 123.3 → 11.0 | 68.4 → 10.8 | 73.6 → 14.4 | 157.8 → 38.4 |
+| 3 | 81.2 → 20.9 | 84.8 → 36.3 | 59.2 → 15.1 | 97.5 → 12.7 |
 
 | Checkpoint | Cards | Retained card identities | Before/after full-output SHA-256 prefix |
 | --- | ---: | ---: | --- |
@@ -76,7 +78,7 @@ Both the complete nine-stage output and rendered card records are byte-equal at 
 
 ## Verification
 
-Validation: 223 focused tests pass (4,484 assertions); TypeScript passes; changed-file lint reports zero introduced errors. The isolated 37-file touched-test comparison reports zero new failures and 28 pre-existing failures, with no tests removed or skipped. The acceptance driver passes 244 timed/equality assertions and 192 ordinary-source assertions.
+Validation: 223 focused tests pass (4,484 assertions); TypeScript passes; changed-file lint reports zero introduced errors. The isolated 37-file touched-test comparison reports zero new failures and 22 pre-existing failures, with no tests removed or skipped. The acceptance driver passes 244 timed/equality/attribution assertions and 192 ordinary-source assertions.
 
 Existing browser coverage: Overview incremental catalog, pipeline graphs/Past attempts, and the cross-project Overview pass. The board geometry case reports the same 14 px horizontal overflow at 640 × 720 in both themes on baseline and candidate; the conversation case reaches the same card-reordering wait timeout on both. Those two failures were replayed independently on the baseline, and historical evidence records were preserved. Local publication privacy passes.
 
