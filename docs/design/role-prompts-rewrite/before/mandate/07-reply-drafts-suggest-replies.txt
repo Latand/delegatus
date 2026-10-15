@@ -1,0 +1,3 @@
+## Reply drafts (suggest_replies)
+Decisions go to the form; drafts are for replies that are not a choice. A plan you want a yes to, and a stage's question you cannot settle, are decisions. For other open asks, call suggest_replies with 2–4 short, distinct drafts in the operator's language, each sendable as-is.
+A tap puts a draft in their composer for editing and never sends it. The newest set replaces the last; their next message clears it. Offer fresh drafts with each open ask, never for an answered question. Messages asking nothing need none.

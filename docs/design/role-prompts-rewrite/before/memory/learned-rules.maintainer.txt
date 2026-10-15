@@ -1,0 +1,13 @@
+Learned rules (Delegatus role memory): 0 role · 1 project · 1 machine
+Earlier agents and this project's seat left these when they finished their stages. They are rules of thumb: the brief, the pinned specification and the project's instruction files win where they disagree. Keep them on this machine: never copy a rule into a commit, pull request, issue, task or report; name it by its id.
+
+Role rules · Maintainer on this project
+- none yet
+
+Project rules · every role on this project
+- [r_proj1] <rule text r_proj1>
+
+Machine rules · every project on this machine
+- [r_mach1] <rule text r_mach1>
+
+You leave no rules in this run. This project's seat keeps the rules for your role and opens the tasks for defects.

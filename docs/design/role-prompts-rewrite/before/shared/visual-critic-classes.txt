@@ -1,0 +1,1 @@
+Ugliness: misalignment, clipping, overlap, cramped or uneven spacing, wrong emphasis, inconsistent colours or sizes, visual noise. Information the operator does not need to see: technical text, ids, paths, counters, debug detail, a fact shown twice. Unclear use: clutter, no clear place to click or no single main action, many identical elements side by side.

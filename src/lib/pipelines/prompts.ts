@@ -1,3 +1,4 @@
+import { DELEGATUS_MECHANICS } from "@/lib/roles/defaults";
 import { memoryKillText, type AgentMemoryKill } from "@/lib/runtime/agentMemoryState";
 import type { EffectivePipelineRole, Pipeline, PipelineDecisionAnswer, PipelineStage } from "./types";
 import { pipelineStageSandbox } from "./stageSandbox";
@@ -27,6 +28,18 @@ export function renderDecisionInput(previousInput: string | null, decision: Pipe
        the pinned specification rendered below it. */
     "Where the answer differs from the brief or the pinned specification, the answer governs. Continue the stage from where the prior attempt stopped and report the final result with stage_report.",
   ].filter(Boolean).join("\n\n");
+}
+
+/** Roles that build or judge prototype frames; a stage with no role runs as a
+    builder. */
+const PROTOTYPE_STAGE_ROLES: readonly (string | null)[] = [null, "builder", "architect", "visual-critic"];
+
+/** A fix stage, by its role and params or by the fail edge that leads to it.
+    The edge reads stored lanes too: their scaffolds are frozen at creation,
+    and the blocked rule below is what they read every launch. */
+function isFixStage(pipeline: Pipeline, stage: PipelineStage): boolean {
+  return (stage.role?.roleId === "builder" && stage.role.params?.mode === "apply-fixes")
+    || pipeline.stages.some((candidate) => candidate.onFail?.to === stage.id);
 }
 
 export function renderStagePrompt(
@@ -97,13 +110,16 @@ export function renderStagePrompt(
     pipeline.spec?.trim() || "No separate pinned specification was supplied.",
     "",
     ...roleContext,
-    "Prototype stages render numbered variants and report their frame directory. A prototype lane is prototype → visual-critic (onFail proto-fix, maxRounds 2, onExhausted advance) → publish. Only its publish stage calls publish_prototype_review after the critic passes or its findings are fixed; omit taskId. Use read_prototype_review to read the operator's choice and exact comment.",
+    ...(PROTOTYPE_STAGE_ROLES.includes(role.roleId)
+      ? ["Prototype stages render numbered variants and report their frame directory. A prototype lane is prototype → visual-critic (onFail proto-fix, maxRounds 2, onExhausted advance) → publish. Only its publish stage calls publish_prototype_review after the critic passes or its findings are fixed; omit taskId. Use read_prototype_review to read the operator's choice and exact comment."]
+      : []),
     access,
     hostAccess,
     ...baseLine,
     ...branchContract,
     ...pipelineDeliveryGuidance(pipeline),
     "Pipeline nesting is forbidden. Never create or start another pipeline from this stage.",
+    DELEGATUS_MECHANICS,
     testGuidance,
     "",
     /* One completion channel, one fallback (#1797): asking for the call AND an
@@ -113,7 +129,9 @@ export function renderStagePrompt(
        One vocabulary (agent-prompt-contract.md §2.1): the markers a brief may
        still ask for are retired here, where every stage reads it last. */
     "Report this stage's completion with the Delegatus MCP tool stage_report: { verdict, findings: [{ severity: P0 | P1 | P2 | P3, text }], summary, blocked?, blockedReason? }. That call is the only way to complete this stage, and it replaces any other ending the brief above asks for (REVIEW_READY, VERDICT: APPROVE, VERDICT: REQUEST_CHANGES, NO FINDINGS): write none of them.",
-    "For a blocked fix stage, return fail with blocked:true and a non-empty blockedReason (at most 2000 characters) in stage_report or the fallback JSON. Set blocked only when you cannot proceed: cannot build, cannot run required checks, or a handed finding is impossible within the specification. Otherwise omit blocked or set it false; the fixer returns pass unless blocked.",
+    ...(isFixStage(pipeline, stage)
+      ? ["For a blocked fix stage, return fail with blocked:true and a non-empty blockedReason (at most 2000 characters) in stage_report or the fallback JSON. Set blocked only when you cannot proceed: cannot build, cannot run required checks, or a handed finding is impossible within the specification. Otherwise omit blocked or set it false; the fixer returns pass unless blocked."]
+      : []),
     "The server resolves your conversation to this stage's attempt and reads the head, the branch's pull request and the declared outputs itself, so claim none of them.",
     "The call records your intent. The stage settles when this turn ends, so you may keep working after it, and calling again before then replaces the report.",
     "Verdicts: pass when the stage's contract is complete; notes that block nothing go in the summary. fail when the work is not done: for a review, one finding per defect the fix stage must address; for any other stage, what stopped it. needs_decision when only the operator can unblock the stage: put the question, what you tried, the options and your recommendation in the summary and attach no findings, because findings on a stage with a fail edge send it to the fix stage.",
