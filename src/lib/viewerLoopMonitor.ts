@@ -31,7 +31,7 @@ export function createLoopLogSink(write = (line: string, done: () => void) => { 
 
 /** Completed operations survive until the next timer: their synchronous work
     can have returned before that timer is allowed to run. */
-export function createViewerLoopMonitor(log?: (line: string) => void, now = () => performance.now()) {
+export function createViewerLoopMonitor(log?: (line: string) => void, now = () => performance.now(), spans = performanceSpans) {
   const sink = createLoopLogSink();
   let writeLog = log ?? sink.enqueue;
   const context = new AsyncLocalStorage<ViewerOperation>();
@@ -58,8 +58,11 @@ export function createViewerLoopMonitor(log?: (line: string) => void, now = () =
         } else named.set(op.name, { name: op.name, durationMs, completed: op.end !== undefined, count: 1 });
       }
       const operations = [...named.values()].sort((a, b) => b.durationMs - a.durationMs).slice(0, 16);
-      const attribution = performanceSpans.snapshot(last);
-      const longest = attribution.records.sort((a, b) => b.maxMs - a.maxMs).slice(0, 64);
+      const attribution = spans.snapshot(last);
+      // Keep measured synchronous blockers when long awaited spans fill the
+      // report. Remaining slots retain awaits/events in duration order.
+      const longest = attribution.records.sort((a, b) =>
+        Number(b.kind === "sync") - Number(a.kind === "sync") || b.maxMs - a.maxMs).slice(0, 64);
       const scheduler = watchdog?.snapshot();
       const window = scheduler?.samples.filter(row => row.utcMs >= Date.now() - (at - last) - 200) ?? [];
       const first = window[0], final = window.at(-1);
@@ -68,7 +71,7 @@ export function createViewerLoopMonitor(log?: (line: string) => void, now = () =
         role: process.env.LLV_STATE_OWNER === "runtime-host" ? "runtime-host" : "viewer",
         ...performanceProcess, revision: performanceProcess.revision ?? (revision && /^[a-f0-9]{7,40}$/.test(revision) ? revision : null), sequence: ++sequence, lastTick: last, tick: at, utc: new Date().toISOString(),
         pendingOperations: active.size, activeDropped, completedDropped, logDropped: sink.dropped(),
-        requests: performanceSpans.requests(),
+        requests: spans.requests(),
         attribution: { pending: attribution.pending, dropped: attribution.dropped, droppedMs: attribution.droppedMs,
           omitted: Math.max(0, attribution.records.length - longest.length),
           slices: longest.map(row => ({ ...row, site: performanceSites[row.site],
@@ -94,10 +97,10 @@ export function createViewerLoopMonitor(log?: (line: string) => void, now = () =
     completed = [];
     if (at - lastSummary >= 60_000) {
       writeLog(`[performance summary] ${JSON.stringify({ ...performanceProcess, role: process.env.LLV_STATE_OWNER === "runtime-host" ? "runtime-host" : "viewer",
-        monotonic: at, utc: new Date().toISOString(), requests: performanceSpans.requests(), logDropped: sink.dropped() })}`);
+        monotonic: at, utc: new Date().toISOString(), requests: spans.requests(), logDropped: sink.dropped() })}`);
       lastSummary = at;
     }
-    performanceSpans.clear();
+    spans.clear();
     activeDropped = completedDropped = 0;
     last = at;
   };
@@ -139,11 +142,11 @@ export function createViewerLoopMonitor(log?: (line: string) => void, now = () =
       if (timer) return;
       last = now();
       watchdog = startLoopWatchdog();
-      performanceSpans.observeSite(watchdog.site);
+      spans.observeSite(watchdog.site);
       const poll = () => { tick(); timer = setTimeout(poll, 10); timer.unref(); };
       timer = setTimeout(poll, 10); timer.unref();
     },
-    stop() { if (timer) clearTimeout(timer); timer = undefined; completed = []; performanceSpans.observeSite(); void watchdog?.stop().catch(() => {}); watchdog = undefined; },
+    stop() { if (timer) clearTimeout(timer); timer = undefined; completed = []; spans.observeSite(); void watchdog?.stop().catch(() => {}); watchdog = undefined; },
   };
 }
 export const viewerLoopMonitor = shared.__delegatusLoopMonitor ??= createViewerLoopMonitor();

@@ -1,7 +1,42 @@
 import { expect, test } from "bun:test";
 import { createPerformanceSpans } from "./performanceSpans";
 import { startLoopWatchdog } from "./loopWatchdog";
-import { createLoopLogSink } from "./viewerLoopMonitor";
+import { createLoopLogSink, createViewerLoopMonitor } from "./viewerLoopMonitor";
+
+test.each([1, 80])("gap reports retain synchronous blockers among longer awaits (%i sync slices)", async (syncCount) => {
+  let at = 0;
+  const recorder = createPerformanceSpans(() => at);
+  let release!: () => void;
+  const latch = new Promise<void>(resolve => { release = resolve; });
+  const waits = Array.from({ length: 80 }, () => recorder.wait("runtime.handler", () => latch));
+  at = 600;
+  const lines: string[] = [];
+  const monitor = createViewerLoopMonitor(line => lines.push(line), () => at, recorder);
+  recorder.sync("registry.snapshot", () => { at += 1100; });
+  for (let i = 1; i < syncCount; i++) recorder.sync("state.json", () => { at += 2; });
+  release();
+  await Promise.all(waits);
+  const recorded = recorder.snapshot();
+  expect(recorded.records.filter(row => row.kind === "await" && row.maxMs > 1100)).toHaveLength(80);
+
+  monitor.tick();
+  expect(lines).toHaveLength(1);
+  expect(lines[0]).toStartWith("[viewer loop-gap] ");
+  const report = JSON.parse(lines[0]!.slice("[viewer loop-gap] ".length));
+  expect(report.operations).toEqual([]);
+  expect(report.gapMs).toBe(1090 + (syncCount - 1) * 2);
+  expect(report.attribution.slices).toHaveLength(64);
+  expect(report.attribution.slices[0]).toMatchObject({
+    kind: "sync", site: "registry.snapshot", start: 600, end: 1700,
+    totalMs: 1100, maxMs: 1100, overlapMs: 1100,
+  });
+  expect(report.attribution.slices.filter((row: { kind: string }) => row.kind === "sync")).toHaveLength(Math.min(syncCount, 64));
+  expect(report.attribution.omitted).toBe(80 + syncCount - 64);
+  expect(report.attribution.pending).toBe(0);
+  expect(report.attribution.dropped).toBe(0);
+  expect(report.attribution.droppedMs).toBe(0);
+  expect(recorder.snapshot().records).toEqual([]);
+});
 
 test("completed sync slices survive and pending awaits have a separate duration", async () => {
   let at = 0;

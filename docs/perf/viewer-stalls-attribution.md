@@ -311,7 +311,9 @@ is never presented as exclusive CPU.
 A 1,024-record ring retains the longest 16 displaced synchronous slices and
 counts overwritten records/duration. Request retention is capped at 256 opaque
 IDs with 16 boundary events each; gap reports include 16 requests and 64 slices,
-with omission counts. RPC IDs connect dispatch, connection, host handling,
+with omission counts. Reports prioritize synchronous slices, ordered by maximum
+duration, then fill remaining slots with awaits/events ordered by duration.
+RPC IDs connect dispatch, connection, host handling,
 commit, serialization, receive/decode and deadline observations across processes.
 Local monotonic clocks and UTC anchors remain separate. Files requests receive
 an ephemeral ID and route class; their final boundary means a Response is ready.
@@ -429,3 +431,48 @@ both serving SHAs and counting all gaps, unknowns, lease holds, busy refusals an
 phase/RPC deadlines. The historical gap and release rule remain unresolved by
 local measurements. This implementation stage neither deploys nor approves the
 release.
+
+### Report truncation correction (2026-10-15)
+
+Review reproduced a lost blocker when 80 completed awaits outlasted a 1,100 ms
+synchronous registry snapshot. Sorting all slices by duration filled the report
+with awaits. The recorder was then cleared. The report now ranks synchronous
+slices first, retaining its 64-slice cap and existing omission/overflow counters.
+The recorder and span-recording paths are unchanged. The monitor factory accepts
+an optional recorder so tests can share one deterministic clock with the monitor.
+
+The emitted-report regression in `src/lib/performanceSpans.test.ts` starts 80
+awaits at time zero, starts the monitor at 600 ms, records the snapshot for
+1,100 ms, completes the awaits, and ticks. It requires the snapshot's site,
+duration and overlap in the emitted JSON, with 64 slices and 17 omissions.
+A second case adds 79 shorter synchronous slices and requires 96 omissions.
+Both cases fail with the previous sort and pass with synchronous priority.
+The full recorder file and the controller-lease and bounded-store test files
+pass together: 23 tests, 118 assertions, zero failures, in isolated state under
+the prescribed owned gate.
+
+A paired synthetic monitor measurement used Bun 1.4.0, the same fake-clock
+fixtures and injected recorder on both sides, changing only the comparator.
+Each round excludes 200 warmups and retains 1,000 ticks; execution order alternates.
+The measured interval includes snapshot, selection, JSON serialization and
+recorder clear. Fixture setup and an independent watchdog are outside it; the
+log callback only counts bytes. These are local report costs, with no production
+load or journal I/O claim. Values below are milliseconds, in round order.
+
+| Fixture / metric | Previous sort | Synchronous priority |
+| --- | --- | --- |
+| 80 awaits + one blocker: median | 0.01619 / 0.01578 / 0.01528 | 0.01452 / 0.01470 / 0.01389 |
+| Same: p95 | 0.02059 / 0.01941 / 0.01908 | 0.01777 / 0.02917 / 0.01722 |
+| Same: maximum | 0.22494 / 0.36293 / 0.17623 | 0.23535 / 0.49873 / 0.16903 |
+| 1,040 retained slices: median | 0.03820 / 0.03808 / 0.03832 | 0.03992 / 0.03933 / 0.03895 |
+| Same: p95 | 0.07500 / 0.05146 / 0.05045 | 0.05638 / 0.07484 / 0.05201 |
+| Same: maximum | 0.49445 / 0.31916 / 0.26810 | 0.45140 / 0.58798 / 0.25208 |
+| Ordinary 10 ms tick: median | 0.000091 / 0.000089 / 0.000089 | 0.000095 / 0.000092 / 0.000093 |
+| Same: p95 | 0.000141 / 0.000132 / 0.000125 | 0.000130 / 0.000137 / 0.000138 |
+| Same: maximum | 0.005182 / 0.004486 / 0.004692 | 0.005028 / 0.003637 / 0.004176 |
+
+The full-ring fixture records 1,100 synchronous 2 ms slices before completing
+the 80 awaits, exercising ring overflow and the 16 displaced sync records.
+Its median report cost increases by 0.00063–0.00172 ms. This narrow comparison
+does not establish the overall telemetry overhead target or attribute historical
+native/GC stalls. The post-deploy observation window remains with the deployer.
