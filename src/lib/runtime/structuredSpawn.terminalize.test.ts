@@ -89,6 +89,110 @@ function stagedStructuredReceipt(store: AgentRegistry, attempt: string) {
 const AGED = () => Date.now() + STALE_STRUCTURED_SPAWN_TIMEOUT_MS + 60_000;
 const originalStateDir = process.env.LLV_STATE_DIR;
 
+for (const cutoff of ["abort", "release"] as const)
+for (const boundary of ["message", "launch", "session", "snapshot", "effect", "effect-page"] as const)
+test(`recovery cancellation at ${boundary} evidence preserves the launch and host (${cutoff})`, async () => {
+  const store = registry();
+  const { receipt, key } = stagedStructuredReceipt(store, `cancel-${boundary}-${cutoff}`);
+  store.holdDelivery(receipt.conversationId, "Original instruction", `spawn_${receipt.launchId}`, "text");
+  const before = structuredClone(store.readOnlySnapshot());
+  const cancellation = new AbortController();
+  let active = true;
+  let entered!: () => void;
+  let resume!: () => void;
+  const reading = new Promise<void>(resolve => { entered = resolve; });
+  const response = new Promise<void>(resolve => { resume = resolve; });
+  const heldRead = async <T>(value: T): Promise<T> => {
+    entered();
+    await response;
+    // Some readers answer after retirement; others reject their aborted RPC.
+    if (cutoff === "abort") throw new Error("runtime host request cancelled");
+    return value;
+  };
+  let effects = 0;
+  let cleanups = 0;
+  const client = {
+    ...DEAD_RUNTIME_CLIENT,
+    operationStatus: async (id: string) => (boundary === "message" && id.startsWith("spawn_message_"))
+      || (boundary === "launch" && id === receipt.launchId) ? heldRead(null) : null,
+    ...(boundary !== "snapshot" ? { readSession: async () => boundary === "session" ? heldRead(null) : null } : {}),
+    snapshot: async () => boundary === "snapshot" ? heldRead({ sessions: [] }) : { sessions: [] },
+    effectBatch: async () => {
+      effects++;
+      if (boundary === "effect") return heldRead([]);
+      if (boundary === "effect-page") return effects === 1
+        ? Array.from({ length: 100 }, (_, i) => ({ eventSeq: i + 1, payload: {} })) : heldRead([]);
+      return [];
+    },
+  } as unknown as RuntimeHostClient;
+  const work = reconcileStructuredSpawnReplay(receipt.launchId, store, client, {
+    now: AGED, signal: cancellation.signal,
+    assertActive: () => { if (!active) throw Error("release retired"); },
+    releaseHost: async () => { cleanups++; return true; },
+    terminateHostProcess: async () => { cleanups++; return true; },
+  }).then(() => null, error => error);
+  try {
+    await Promise.race([reading, work.then(() => { throw Error("recovery ended before evidence read"); })]);
+    if (cutoff === "abort") cancellation.abort(Error("release retired"));
+    else active = false;
+    resume();
+    expect((await work)?.message).toBe("release retired");
+    const after = store.readOnlySnapshot();
+    expect(after.receipts[receipt.launchId]).toEqual(before.receipts[receipt.launchId]);
+    expect(after.heldDeliveries).toEqual(before.heldDeliveries);
+    expect(after.entries[`codex:${key.sessionId}`]).toEqual(before.entries[`codex:${key.sessionId}`]);
+    expect(cleanups).toBe(0);
+    const artifactPath = before.receipts[receipt.launchId]!.artifactPath!;
+    fs.writeFileSync(artifactPath, JSON.stringify({ type: "event_msg", payload: { type: "user_message", message: "Original instruction" } }) + "\n");
+    expect(await reconcileStructuredSpawnReplay(receipt.launchId, store, DEAD_RUNTIME_CLIENT, { now: AGED }))
+      .toMatchObject({ launchId: receipt.launchId, conversationId: receipt.conversationId, state: "completed" });
+  } finally { resume(); await work; store.close(); }
+});
+
+test.each(["abort", "release"] as const)("terminal recovery rechecks %s after a peer-held registry lock", async cutoff => {
+  const store = registry("sqlite");
+  const { receipt, key } = stagedStructuredReceipt(store, `terminal-cancel-${cutoff}`);
+  store.holdDelivery(receipt.conversationId, "Original instruction", `spawn_${receipt.launchId}`, "text");
+  const before = structuredClone(store.readOnlySnapshot());
+  const peer = new Database(path.join(path.dirname(store.filename), "agent-registry.sqlite"));
+  const cancellation = new AbortController();
+  let active = true;
+  let locked = false;
+  let timerAdvanced = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let cleanups = 0;
+  try {
+    const outcome = await reconcileStructuredSpawnReplay(receipt.launchId, store, {
+      ...DEAD_RUNTIME_CLIENT,
+      effectBatch: async () => {
+        peer.exec("BEGIN IMMEDIATE"); locked = true;
+        timer = setTimeout(() => {
+          timerAdvanced = true;
+          if (cutoff === "abort") cancellation.abort(Error("release retired"));
+          else active = false;
+          peer.exec("ROLLBACK"); locked = false;
+        }, 100);
+        return [];
+      },
+    }, {
+      now: AGED, signal: cancellation.signal,
+      assertActive: () => { if (!active) throw Error("release retired"); },
+      releaseHost: async () => { cleanups++; return true; },
+    }).then(() => null, error => error);
+    expect(outcome?.message).toBe("release retired");
+    expect(timerAdvanced).toBe(true);
+    expect(cleanups).toBe(0);
+    const after = store.readOnlySnapshot();
+    expect(after.receipts[receipt.launchId]).toEqual(before.receipts[receipt.launchId]);
+    expect(after.heldDeliveries).toEqual(before.heldDeliveries);
+    expect(after.entries[`codex:${key.sessionId}`]).toEqual(before.entries[`codex:${key.sessionId}`]);
+  } finally {
+    clearTimeout(timer);
+    if (locked) peer.exec("ROLLBACK");
+    peer.close(); store.close();
+  }
+});
+
 afterEach(() => {
   if (originalStateDir === undefined) delete process.env.LLV_STATE_DIR;
   else process.env.LLV_STATE_DIR = originalStateDir;

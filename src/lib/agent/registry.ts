@@ -7230,13 +7230,15 @@ export class AgentRegistry {
    * {@link failSpawn} with the registry lock waited for off the event loop
    * (docs/design/delivery-progress-and-drain.md, C5): the launch's failure and
    * its never-attempted first message's ending stay one transaction, only the
-   * wait for its lock leaves the loop. Refused, nothing changed: the launch
-   * keeps its state and its first message stays held, as a crash just before
-   * the write leaves them, for the stale-launch convergence. Answers false then.
+   * wait for its lock leaves the loop. Recovery's optional authority check
+   * runs after lock admission and before the failure mutation. Refused, nothing
+   * changed: the launch keeps its state and its first message stays held, as a
+   * crash just before the write leaves them, for the stale-launch convergence.
+   * Answers false then.
    */
-  async failSpawnOffLoop(launchId: string, error: string): Promise<boolean> {
+  async failSpawnOffLoop(launchId: string, error: string, assertActive?: () => void): Promise<boolean> {
     const written = await this.whenWriterHeld({ label: "spawn.fail", operationId: `spawn_message_${launchId}` },
-      () => this.failSpawnInFile(launchId, error));
+      () => { assertActive?.(); return this.failSpawnInFile(launchId, error); });
     if (!written.acquired) return false;
     if (written.value.receipt) this.reportFailedLaunch(written.value.receipt);
     return written.value.result;

@@ -330,6 +330,80 @@ test("terminal history with no pending effects needs no runtime snapshot", async
   } finally { f.journal.close(); }
 });
 
+for (const staged of [false, true]) test(`bounded recovery progresses through 350 waiting ${staged ? "staged" : "pre-identity"} launches`, async () => {
+  const f = fixture(0);
+  f.registry.close();
+  const filename = path.join(f.directory, "waiting-registry.json");
+  const seed = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "off" });
+  const begun = seed.beginSpawnRequest({ engine: "codex", cwd: f.directory, transport: "structured", accountId: null,
+    launchProfile: emptyLaunchProfile({ cwd: f.directory, title: "Waiting launch" }) });
+  const seedKey = { engine: "codex" as const, sessionId: "waiting-seed" };
+  if (staged) {
+    seed.stageStructuredSpawn(begun.receipt.launchId, {
+      key: seedKey, artifactPath: path.join(f.directory, "waiting-seed.jsonl"), cwd: f.directory, accountId: null,
+      status: "unhosted", host: null, structuredHost: null, claimEpoch: 0, claimOwner: null, pendingAction: "spawn",
+    });
+    seed.releaseStructuredSpawnAdmissionOwner(begun.receipt.launchId, begun.receipt.admissionOwner!);
+  }
+  const data = structuredClone(seed.readOnlySnapshot());
+  const receipt = data.receipts[begun.receipt.launchId]!;
+  const entry = data.entries[sessionKeyId(seedKey)];
+  const conversation = data.conversations[receipt.conversationId]!;
+  data.receipts = {}; data.entries = {}; data.conversations = {};
+  const receipts: string[] = [];
+  for (let i = 0; i < 350; i++) {
+    const launchId = `waiting_launch_${String(i).padStart(3, "0")}`;
+    const conversationId = `conversation_waiting_${i}` as const;
+    const key = { engine: "codex" as const, sessionId: `waiting-${i}` };
+    const artifactPath = path.join(f.directory, `${key.sessionId}.jsonl`);
+    data.receipts[launchId] = { ...receipt, launchId, conversationId,
+      requestDigest: i.toString(16).padStart(64, "0"),
+      ...(staged ? { key, artifactPath } : {}),
+    };
+    if (conversation) data.conversations[conversationId] = { ...conversation, id: conversationId,
+      generations: conversation.generations.map(generation => ({ ...generation, id: key.sessionId, path: artifactPath })),
+    };
+    if (staged) data.entries[sessionKeyId(key)] = { ...entry!, key, artifactPath };
+    receipts.push(launchId);
+  }
+  seed.close();
+  fs.writeFileSync(filename, JSON.stringify(data));
+  f.registry = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "sqlite" });
+  const before = structuredClone(f.registry.readOnlySnapshot());
+  const visited = new Set<string>();
+  const host = new RuntimeHost(f.journal);
+  const socket = path.join(isolated, "sockets", `waiting-${staged}.sock`);
+  const server = serveRuntimeHost(socket, { handle: async (request, options) => {
+    if (request.method === "operation-status") {
+      visited.add(String(request.params?.operationId));
+      await Bun.sleep(75);
+    }
+    return host.handle(request, options);
+  } });
+  await new Promise<void>(resolve => server.once("listening", resolve));
+  const client = new UnixRuntimeHostClient(socket);
+  try {
+    // Both passes finish even while every identity remains unresolved. The
+    // second pass reaches the suffix the first one's deadline deferred.
+    const durations: number[] = [];
+    for (let pass = 0; pass < 2; pass++) {
+      const started = performance.now();
+      await recoverPendingStructuredSpawns(f.registry, client);
+      durations.push(performance.now() - started);
+      const after = f.registry.readOnlySnapshot();
+      expect(after.receipts).toEqual(before.receipts);
+      expect(after.entries).toEqual(before.entries);
+      expect(after.heldDeliveries).toEqual(before.heldDeliveries);
+    }
+    if (staged) expect(receipts.every(id => visited.has(id))).toBe(true);
+    else expect(visited.size).toBe(0);
+    console.log(JSON.stringify({ waitingRecovery: { staged, receipts: receipts.length, visited: visited.size, durations } }));
+  } finally {
+    await new Promise<void>(resolve => server.close(() => resolve()));
+    f.registry.close(); f.journal.close();
+  }
+}, 90_000);
+
 test("managed update recovery selects the census's unresolved work and preserves every uncertain row", async () => {
   const { buildRegistryPerformanceDataset } = await import("@/lib/agent/registryPerformanceDataset");
   const directory = fs.mkdtempSync(path.join(isolated, "census-"));
@@ -687,7 +761,7 @@ test("the full retained history completes within the promoted serving budget", a
     expect(counts.snapshot ?? 0).toBe(1); // One narrow activity projection, independent of receipt history.
     expect(counts["session-read"]).toBeGreaterThan(0);
     expect(counts.append).toBeGreaterThan(4300);
-    expect(counts["operation-status"]).toBe(174); // Open work only; 672 terminal receipts produce no reads.
+    expect(counts["operation-status"]).toBe(153); // 672 terminal and 21 live-owned pre-identity receipts need no reads.
     expect(structuredStartupStatus()?.state).toBe("ready");
     expect(Object.values(f.registry.readOnlySnapshot().receipts).filter((receipt) => receipt.state === "failed").slice(0, 672)).toEqual(failed);
     const contender = Bun.spawn([process.execPath, path.join(import.meta.dir, "fixtures/startupPipelineContender.ts"), f.directory], {
