@@ -1,3 +1,4 @@
+import { CodexHistory, type CodexHistoryStats } from "./codexHistory";
 import { redactTranscriptText, SENSITIVE_RECORD_KEY, SENSITIVE_RECORD_TEXT } from "./toolRedaction";
 import {
   debugRaw,
@@ -382,7 +383,7 @@ export interface FeedSession {
    * `linesStart`): the session parses only lines it has not seen, drops items
    * whose source lines slid out of the window, and keeps every untouched
    * item's identity so memoized rows skip re-rendering. A window that moved
-   * backwards (prepend, truncation) resets the session and re-parses.
+   * backwards takes a page hand-over where supported; invalidated windows reset.
    */
   feed(lines: string[], start: number, isLive: boolean): FeedSnapshot;
 }
@@ -1501,7 +1502,8 @@ function parseOrchestration(input: string, depth = 0): {
 }
 
 interface StoredEntry {
-  /** Monotonic push counter — the React key; consecutive within `entries`. */
+  /** Stable internal row reference. Quiet joins use consecutive counters;
+      the Codex journal addresses each source emission independently. */
   seq: number;
   /** Initial source line. A later echo can move `src`; crossing that seam
       requires a fresh window parse to preserve one-shot ordering. */
@@ -1573,10 +1575,148 @@ interface FeedSessionInternals {
   parseHead(lines: string[], start: number, from: number, limit: number, budget: number, stops: readonly QuietPoint[], seqBase: number): HeadState | null;
 }
 const sessionInternals = new WeakMap<FeedSession, FeedSessionInternals>();
+function sameHistoryItem(left: unknown, right: unknown): boolean {
+  if (Object.is(left, right)) return true;
+  if (!left || !right || typeof left !== "object" || typeof right !== "object") return false;
+  const a = left as Item, b = right as Item;
+  if (nativeUserRefs.get(a) !== nativeUserRefs.get(b) || rawUserTexts.get(a) !== rawUserTexts.get(b)
+    || assistantEchoTexts.get(a) !== assistantEchoTexts.get(b)
+    || sessionOwnership.get(a as ToolEvent) !== sessionOwnership.get(b as ToolEvent)) return false;
+  const equal = (a: unknown, b: unknown): boolean => {
+    if (Object.is(a, b)) return true;
+    if (!a || !b || typeof a !== "object" || typeof b !== "object") return false;
+    if (Array.isArray(a) || Array.isArray(b)) return Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.every((value, index) => equal(value, b[index]));
+    const keys = Object.keys(a);
+    return keys.length === Object.keys(b).length && keys.every(key => Object.hasOwn(b, key)
+      && equal((a as Record<string, unknown>)[key], (b as Record<string, unknown>)[key]));
+  };
+  return equal(a, b);
+}
+
+const codexDiagnostics = new WeakMap<FeedSession, () => CodexHistoryStats>();
+class CodexHistoryReservedId extends Error {}
+
+/** Work counters and phase timings; no transcript content leaves the parser. */
+export function codexHistoryStats(session: FeedSession): CodexHistoryStats | undefined {
+  return codexDiagnostics.get(session)?.();
+}
+
+/** Other formats retain their quiet-point join. Codex owns an indexed journal
+ * for precisely the loaded window; eviction or a rewrite starts a generation. */
+export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
+  if (cfg.fmt !== "codex") return createReducerSession(cfg);
+  let history = new CodexHistory(sameHistoryItem);
+  let reducer: FeedSession | null = null;
+  let previous: string[] = [];
+  let previousStart = 0;
+  let previousEnd = 0;
+  let parsedLocale = getLocale();
+  const joins = { joined: 0, rebuilt: 0, joinedLines: 0, points: 0 };
+  const resets: Record<string, number> = {};
+  let reservedIds = false;
+  const session: FeedSession = { feed(lines, start, live) {
+    const end = start + lines.length;
+    let reason: string | undefined;
+    const began = performance.now();
+    if (reducer) {
+      if (getLocale() !== parsedLocale) reason = "configuration";
+      else if (end < previousEnd) reason = "truncated";
+      else if (start > previousEnd) reason = "gap";
+      else if (start > previousStart) reason = "evicted";
+      else for (let i = 0; i < previous.length; i += 1) {
+        if (previous[i] !== lines[previousStart - start + i]) { reason = "rewritten"; break; }
+      }
+    }
+    const verifyMs = performance.now() - began;
+    let countedJoin = false;
+    if (!reducer || reason) {
+      reservedIds = false;
+      if (reason) {
+        resets[reason] = (resets[reason] ?? 0) + 1;
+        if (start < previousStart) joins.rebuilt += 1;
+        history = new CodexHistory(sameHistoryItem);
+      }
+      reducer = createReducerSession(cfg, history, start > 0);
+      parsedLocale = getLocale();
+    } else if (start < previousStart && !reservedIds) {
+      joins.joined += 1;
+      countedJoin = true;
+      joins.joinedLines += previousStart - start;
+      history.stats.reusedLines += previous.length;
+    }
+    history.partial(start > 0);
+    history.stats.verifyMs += verifyMs;
+    let result: FeedSnapshot;
+    const wholeReserved = () => {
+      resets["reserved-id"] = (resets["reserved-id"] ?? 0) + 1;
+      history.stats.rawLines += lines.length;
+      const began = performance.now();
+      for (const line of lines) history.stats.rawBytes += new TextEncoder().encode(line).length;
+      const result = createReducerSession(cfg).feed(lines, start, live);
+      history.stats.decodeMs += performance.now() - began;
+      return result;
+    };
+    if (reservedIds && start < previousStart) joins.rebuilt += 1;
+    try { result = reservedIds ? wholeReserved() : reducer.feed(lines, start, live); }
+    catch (error) {
+      if (countedJoin) { joins.joined -= 1; joins.joinedLines -= previousStart - start; }
+      if (!reason && start < previousStart) joins.rebuilt += 1;
+      history = new CodexHistory(sameHistoryItem);
+      if (error instanceof CodexHistoryReservedId) {
+        reservedIds = true;
+        result = wholeReserved();
+      } else {
+        resets.invariant = (resets.invariant ?? 0) + 1;
+        reducer = createReducerSession(cfg, history, start > 0);
+        result = reducer.feed(lines, start, live);
+      }
+    }
+    const copyBegan = performance.now();
+    previous = lines.slice();
+    history.stats.verifyMs += performance.now() - copyBegan;
+    previousStart = start;
+    previousEnd = end;
+    return result;
+  } };
+  codexDiagnostics.set(session, () => ({ ...history.diagnostics(), resets: { ...resets } }));
+  sessionInternals.set(session, { stats: () => ({ ...joins }), parseHead: () => null });
+  return session;
+}
 
 /** Counters for tests and measurements; the feed itself never reads them. */
 export function feedJoinStats(session: FeedSession): FeedJoinStats {
   return sessionInternals.get(session)!.stats();
+}
+
+type CodexUserRefs = { id: string; previous: CodexUserRefs | null; length: number };
+const appendUserRef = (list: CodexUserRefs | null, id: string): CodexUserRefs => ({ id, previous: list, length: (list?.length ?? 0) + 1 });
+function userRefIds(list: CodexUserRefs | null): string[] {
+  const ids: string[] = [];
+  for (let node = list; node; node = node.previous) ids.push(node.id);
+  return ids.reverse();
+}
+
+/** Coarse time buckets select candidates; the original exact predicate below
+ * remains the authority, including legacy synthetic timestamps. A timestamp
+ * may participate in both date and synthetic comparisons. */
+function codexUserBucketKeys(text: string, ts: unknown): { write: string[]; read: string[] } {
+  const stamp = textPart(ts).trim();
+  if (!text.trim() || !stamp) return { write: [], read: [] };
+  const digest = messageTextDigest(text.trim());
+  const exact = JSON.stringify([digest, "exact", stamp]);
+  const write = [exact], read = [exact];
+  const add = (kind: string, prefix: string, bucket: number) => {
+    write.push(JSON.stringify([digest, kind, prefix, bucket]));
+    for (const offset of [-1, 0, 1]) read.push(JSON.stringify([digest, kind, prefix, bucket + offset]));
+  };
+  const date = Date.parse(stamp);
+  if (Number.isFinite(date)) add("date", "", Math.floor(date / 1000));
+  const match = stamp.match(/^(.*?)(\d+)(?:\.(\d+))?$/);
+  if (match) {
+    const value = Number(match[2] + "." + (match[3] ?? "0"));
+    if (Number.isFinite(value)) add("synthetic", match[1], Math.floor(value));
+  }
+  return { write, read: [...new Set(read)] };
 }
 
 interface PendingCodexUser {
@@ -1584,6 +1724,7 @@ interface PendingCodexUser {
   ts: unknown;
   text: string;
   entrySeqs: number[];
+  bucketKeys?: string[];
   structured: boolean;
   /** The delivery identity on the record that opened this row (#1366), when
       it carried one. Two records that name DIFFERENT deliveries are two
@@ -1605,6 +1746,7 @@ interface CodexAssistantRecord {
   sourceId?: string;
   firstSeq: number;
   lastSeq: number;
+  entrySeqs: number[];
 }
 
 function sameCodexTextAtTime(leftTs: unknown, leftText: unknown, rightTs: unknown, rightText: unknown): boolean {
@@ -1641,33 +1783,108 @@ function sameCodexTextAtTime(leftTs: unknown, leftText: unknown, rightTs: unknow
  * a new item object while every other entry keeps its identity — that is what
  * lets memoized FeedItems skip markdown re-render on every tail tick.
  */
-export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
+function createReducerSession(cfg: FeedSessionConfig, history: CodexHistory | null = null, partial = false): FeedSession {
   const { showSvc, lineFilter } = cfg;
+  const normalize = <T,>(kind: string, input: unknown, compute: () => T): T => history ? history.normalize(kind, input, compute) : compute();
+  const readCodexOutput = (input: unknown) => normalize("output", input, () => toolOutput(input));
+  const readCodexUser = (input: unknown) => normalize("user", input, () => normalizeCodexUserContent(input));
   const jsonl = cfg.fmt === "claude" || cfg.fmt === "codex" || cfg.fmt === "openclaw" || cfg.fmt === "copilot";
 
   const entries: StoredEntry[] = [];
-  let conversationCwd = cfg.cwd ?? "";
-  let reasoningBoundary = 0;
-  let reasoningTurnId = "";
-  const reasoningSeqs = new Map<string, number>();
-  const calls = new Map<string, CallRec>();
+  const initialFrontier: {
+    conversationCwd: string;
+    reasoningBoundary: number;
+    reasoningTurnId: string;
+    execWindow: { id: string; remaining: string[]; seen: Set<string> } | null;
+    pendingExecIds: string[];
+    execPairingOverflow: boolean;
+    codexAssistantRecord: CodexAssistantRecord | null;
+    codexCompacted: { src: number } | null;
+    turnStartedAt: number | null;
+    turnHasStart: boolean;
+    turnStartedSrc: number | null;
+    turnOpen: boolean;
+    turnResponseSeq: number | null;
+    turnFailed: boolean;
+    failedResponseSeq: number | null;
+    latestTurnTimestamp: number | null;
+    unstructuredUsers: CodexUserRefs | null;
+  } = {
+    conversationCwd: cfg.cwd ?? "", reasoningBoundary: 0, reasoningTurnId: "",
+    execWindow: null, pendingExecIds: [], execPairingOverflow: false,
+    codexAssistantRecord: null, codexCompacted: null,
+    turnStartedAt: null, turnHasStart: false, turnStartedSrc: null, turnOpen: false,
+    turnResponseSeq: null, turnFailed: false, failedResponseSeq: null,
+    latestTurnTimestamp: null, unstructuredUsers: null,
+  };
+  const frontier = history?.fields("frontier", initialFrontier, {
+    execWindow: value => value && ({ ...value, remaining: value.remaining.slice(), seen: new Set(value.seen) }),
+  }) ?? initialFrontier;
+  const pendingExecMap = history?.map<true>("pending-exec");
+  const pendingExecs = pendingExecMap ? {
+    has: (id: string) => pendingExecMap.has(id),
+    get size() { return frontier.pendingExecIds.length; },
+    add: (id: string) => {
+      if (pendingExecMap.has(id)) return;
+      pendingExecMap.set(id, true);
+      frontier.pendingExecIds = [...frontier.pendingExecIds, id];
+    },
+    delete: (id: string) => {
+      if (!pendingExecMap.has(id)) return false;
+      pendingExecMap.delete(id);
+      frontier.pendingExecIds = frontier.pendingExecIds.filter(key => key !== id);
+      return true;
+    },
+    clear: () => {
+      for (const id of frontier.pendingExecIds) pendingExecMap.delete(id);
+      frontier.pendingExecIds = [];
+    },
+    [Symbol.iterator]: () => frontier.pendingExecIds[Symbol.iterator](),
+  } : new Set<string>();
+  const execResults = history?.map<true>("exec-result");
+  const execChildren = history?.map<true>("exec-child");
+  const setExecWindow = (next: typeof initialFrontier.execWindow) => {
+    const previous = frontier.execWindow;
+    if (previous) {
+      execResults?.delete(previous.id);
+      for (const id of previous.seen) execChildren?.delete(id);
+    }
+    frontier.execWindow = next;
+    if (next) {
+      execResults?.set(next.id, true);
+      for (const id of next.seen) execChildren?.set(id, true);
+    }
+  };
+  const isExecResult = (id: string) => execResults ? execResults.has(id) : frontier.execWindow?.id === id;
+  const isExecChild = (id: string) => execChildren ? execChildren.has(id) : frontier.execWindow?.seen.has(id) === true;
+  const storedRows = history?.map<StoredEntry>("row");
+  const emittedThisRecord: number[] = [];
+  const nextPushSeq = () => history ? history.rowId() : pushSeq;
+
+  const reasoningSeqs = history?.map<number>("reasoning") ?? new Map<string, number>();
+  const calls = history?.map<CallRec>("call", value => value && ({ ...value })) ?? new Map<string, CallRec>();
   // CLI 0.155 emits exec-* concrete operations between a wrapper and its result.
   // No parent ID exists: only one unambiguous interval may claim children.
-  let execWindow: { id: string; remaining: string[]; seen: Set<string> } | null = null;
-  const pendingExecs = new Set<string>();
-  let execPairingOverflow = false;
-  const representedExecs = new Set<string>();
+
+  const representedExecMap = history?.map<true>("represented");
+  const representedExecs = representedExecMap ? {
+    has: (id: string) => representedExecMap.has(id),
+    add: (id: string) => representedExecMap.set(id, true),
+    delete: (id: string) => representedExecMap.delete(id),
+    clear: () => representedExecMap.clear(),
+    [Symbol.iterator]: () => representedExecMap.keys(),
+  } : new Set<string>();
   /* The file a Codex `view_image` call opened, by call id, from its
      `view_image_tool_call` event (#2075). The output's inline picture wins;
      the path is drawn only when the output carried none. */
-  const viewedImagePaths = new Map<string, string>();
+  const viewedImagePaths = history?.map<string>("image") ?? new Map<string, string>();
   /* Copilot writes a picture's bytes once, as a `session.binary_asset` record
      ahead of the tool completion that references it by id (#2075). Bounded:
      the completion follows its asset within a few records. */
   const copilotAssets = new Map<string, { src: number; block: ToolOutputBlock }>();
   const copilotViewPaths = new Map<string, string>();
-  const agentCalls = new Map<string, string>();
-  const sessionOwners = new Map<string, SessionOwner>();
+  const agentCalls = history?.map<string>("agent") ?? new Map<string, string>();
+  const sessionOwners = history?.map<SessionOwner>("session") ?? new Map<string, SessionOwner>();
   const sessionIdentity = (value: unknown): { label?: string; owner: SessionOwner } | undefined => {
     const raw = rawSessionId(value);
     if (raw === undefined) return undefined;
@@ -1686,6 +1903,7 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
   /* Hidden service rows are counted, not stored; per-line counts let the
      total shrink when their source lines slide out of the window. */
   const hiddenSvcBySrc = new Map<number, number>();
+  const hiddenCodexServices = history?.map<number>("service");
   let hiddenServiceCount = 0;
   let pushSeq = 0;
   let curSrc = 0;
@@ -1703,14 +1921,16 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
   /* Dedup/marker state remembers the source line it came from: when that line
      slides out of the window the state clears, matching what a re-parse of
      the shortened window would know. */
-  let codexAssistantRecord: CodexAssistantRecord | null = null;
+
   /* A user turn is recorded as a user response item immediately followed by
      its echo — the legacy user_message event, or since Codex 0.151 the thread
      lifecycle's item_completed UserMessage envelope (#1398). The echo owns the
      logical turn, while this provisional record keeps a live tail visible until
      it arrives and absorbs every further echo of the same message. */
-  let pendingCodexUsers: PendingCodexUser[] = [];
-  let codexCompacted: { src: number } | null = null;
+  const pendingUsersById = history?.map<PendingCodexUser>("user", candidate => candidate && ({ ...candidate, entrySeqs: candidate.entrySeqs.slice() }))
+    ?? new Map<string, PendingCodexUser>();
+  const pendingUserBuckets = history?.map<CodexUserRefs | null>("user-bucket") ?? new Map<string, CodexUserRefs | null>();
+
   /* The provider·model pair the last real OpenClaw assistant record ran on,
      with the source line it came from. A change emits one service row; the
      first pair a window sees is its baseline and announces nothing. */
@@ -1731,15 +1951,11 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
   let prevGroups = new Map<number, CmdGroupItem>();
   let snapshot: FeedSnapshot | null = null;
   let snapshotLive: boolean | null = null;
-  let turnStartedAt: number | null = null;
-  let turnStartedSrc: number | null = null;
-  let turnOpen = false;
-  let turnResponseSeq: number | null = null;
-  let turnFailed = false;
-  let failedResponseSeq: number | null = null;
-  let latestTurnTimestamp: number | null = null;
+  let projectedRevision = -1;
 
-  const entryIndex = (seq: number): number => (entries.length ? seq - entries[0].seq : -1);
+  const entryIndex = (seq: number): number => history ? seq : (entries.length ? seq - entries[0].seq : -1);
+  const entryAt = (idx: number): StoredEntry => storedRows ? storedRows.get(String(idx))! : entries[idx];
+  const hasEntry = (idx: number) => history ? storedRows!.has(String(idx)) : idx >= 0 && idx < entries.length;
 
   /* Join points for older history (see `feed`). A line is recorded when the
      session ends it holding no open turn, text block, echo or call; a later
@@ -1752,6 +1968,7 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
   };
   /** Every rewrite of an existing entry goes through here. */
   const setEntry = (idx: number, next: StoredEntry) => {
+    if (storedRows) { storedRows.set(String(idx), next); snapshot = null; return; }
     if (curSrc > entries[idx].bornSrc) retireQuietFrom(entries[idx].bornSrc);
     entries[idx] = next;
   };
@@ -1772,24 +1989,29 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
     const event = retainSessionOwner({ ...callRec.event, contextTokens: value }, sessionOwnership.get(callRec.event));
     callRec.event = event;
     const idx = entryIndex(callRec.seq);
-    if (idx >= 0 && idx < entries.length && entries[idx].item.kind === "tool") {
-      setEntry(idx, { ...entries[idx], item: event });
+    if (hasEntry(idx) && entryAt(idx).item.kind === "tool") {
+      setEntry(idx, { ...entryAt(idx), item: event });
       snapshot = null;
     }
-  }, (id) => calls.has(id));
+  }, (id) => calls.has(id), history ?? undefined);
+  if (history) ledger.reset(partial);
 
   const push = (item: Item, submissionDedup?: string): number => {
     if (nativeRecordKey && (item.kind === "user" || item.kind === "tmsg")) nativeUserRefs.set(item, nativeRecordKey);
-    entries.push({ seq: pushSeq, bornSrc: curSrc, src: curSrc, reasoningBoundary, item,
-      ...(submissionDedup ? { submissionDedup } : {}), ...(recordDeliveryId ? { deliveryId: recordDeliveryId } : {}) });
+    const seq = nextPushSeq();
+    const entry = { seq, bornSrc: curSrc, src: curSrc, reasoningBoundary: frontier.reasoningBoundary, item,
+      ...(submissionDedup ? { submissionDedup } : {}), ...(recordDeliveryId ? { deliveryId: recordDeliveryId } : {}) };
+    if (storedRows) { storedRows.set(String(seq), entry); history!.emitted(); }
+    else { entries.push(entry); pushSeq += 1; }
+    emittedThisRecord.push(seq);
     snapshot = null;
-    return pushSeq++;
+    return seq;
   };
 
   const setResponseDuration = (seq: number, durationMs: number | undefined) => {
     const idx = entryIndex(seq);
-    if (idx < 0 || idx >= entries.length) return;
-    const entry = entries[idx];
+    if (!hasEntry(idx)) return;
+    const entry = entryAt(idx);
     if (durationMs === undefined) {
       if (entry.responseDurationMs === undefined) return;
       const { responseDurationMs: _removed, ...rest } = entry;
@@ -1801,37 +2023,38 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
   };
 
   const finishTurn = (failed: boolean) => {
-    if (turnOpen && turnStartedAt !== null && turnResponseSeq !== null) {
-      const endedAt = Math.max(latestTurnTimestamp ?? turnStartedAt, turnStartedAt);
-      setResponseDuration(turnResponseSeq, endedAt - turnStartedAt);
-      failedResponseSeq = failed ? turnResponseSeq : null;
+    if (frontier.turnOpen && frontier.turnStartedAt !== null && frontier.turnResponseSeq !== null) {
+      const endedAt = Math.max(frontier.latestTurnTimestamp ?? frontier.turnStartedAt, frontier.turnStartedAt);
+      setResponseDuration(frontier.turnResponseSeq, endedAt - frontier.turnStartedAt);
+      frontier.failedResponseSeq = failed ? frontier.turnResponseSeq : null;
     } else {
-      failedResponseSeq = null;
+      frontier.failedResponseSeq = null;
     }
-    turnOpen = false;
-    turnFailed = failed;
+    frontier.turnOpen = false;
+    frontier.turnFailed = failed;
   };
 
   const beginTurn = (timestampMs: number | null) => {
-    if (!turnOpen || turnStartedAt === null) {
-      turnStartedAt = timestampMs;
-      turnStartedSrc = curSrc;
-      turnResponseSeq = null;
-      turnFailed = false;
-      failedResponseSeq = null;
+    if (!frontier.turnOpen || !frontier.turnHasStart) {
+      frontier.turnStartedAt = timestampMs;
+      frontier.turnHasStart = timestampMs !== null;
+      frontier.turnStartedSrc = curSrc;
+      frontier.turnResponseSeq = null;
+      frontier.turnFailed = false;
+      frontier.failedResponseSeq = null;
     }
-    turnOpen = true;
+    frontier.turnOpen = true;
   };
 
   const recoverFailedTurn = () => {
-    if (!turnFailed) return;
-    if (failedResponseSeq !== null) {
-      setResponseDuration(failedResponseSeq, undefined);
-      turnResponseSeq = failedResponseSeq;
+    if (!frontier.turnFailed) return;
+    if (frontier.failedResponseSeq !== null) {
+      setResponseDuration(frontier.failedResponseSeq, undefined);
+      frontier.turnResponseSeq = frontier.failedResponseSeq;
     }
-    failedResponseSeq = null;
-    turnFailed = false;
-    turnOpen = true;
+    frontier.failedResponseSeq = null;
+    frontier.turnFailed = false;
+    frontier.turnOpen = true;
   };
 
   const pushBlobIfHuge = (text: string, sourceId?: string): boolean => {
@@ -1932,14 +2155,15 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
     ts: unknown,
     text: string,
     sourceId?: string,
-  ): { firstSeq: number; lastSeq: number } | null => {
+  ): { firstSeq: number; lastSeq: number; entrySeqs: number[] } | null => {
     if (!text.trim()) return null;
-    const firstSeq = pushSeq;
-    const remember = (emitted: { firstSeq: number; lastSeq: number }) => {
-      if (turnOpen) turnResponseSeq = emitted.lastSeq;
+    const emittedFrom = emittedThisRecord.length;
+    const firstSeq = nextPushSeq();
+    const remember = (emitted: { firstSeq: number; lastSeq: number; entrySeqs: number[] }) => {
+      if (frontier.turnOpen) frontier.turnResponseSeq = emitted.lastSeq;
       return emitted;
     };
-    if (pushBlobIfHuge(text, sourceId)) return remember({ firstSeq, lastSeq: pushSeq - 1 });
+    if (pushBlobIfHuge(text, sourceId)) return remember({ firstSeq, lastSeq: emittedThisRecord.at(-1)!, entrySeqs: emittedThisRecord.slice(emittedFrom) });
     const engine = feedEngine(cfg.engine);
     if (pushStructured(ts, text, (segment) => push({
       kind: "prose",
@@ -1948,10 +2172,10 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
       engine,
       ...(sourceId ? { sourceId } : {}),
     }), push, sourceId)) {
-      return remember({ firstSeq, lastSeq: pushSeq - 1 });
+      return remember({ firstSeq, lastSeq: emittedThisRecord.at(-1)!, entrySeqs: emittedThisRecord.slice(emittedFrom) });
     }
     push({ kind: "prose", ts, text, engine, ...(sourceId ? { sourceId } : {}) });
-    return remember({ firstSeq, lastSeq: pushSeq - 1 });
+    return remember({ firstSeq, lastSeq: emittedThisRecord.at(-1)!, entrySeqs: emittedThisRecord.slice(emittedFrom) });
   };
   const addCodexAssistant = (
     shape: CodexAssistantShape,
@@ -1960,7 +2184,7 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
     sourceId?: string,
   ) => {
     const normalizedText = text.trim();
-    const candidate = codexAssistantRecord;
+    const candidate = frontier.codexAssistantRecord;
     const sameSource = Boolean(sourceId && candidate?.sourceId === sourceId);
     const sameSourcePrefix = Boolean(
       sameSource && candidate && (normalizedText.startsWith(candidate.text) || candidate.text.startsWith(normalizedText)),
@@ -1975,10 +2199,10 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
       ))
     ) {
       const eventTimestamp = shape === "event-agent" ? ts : candidate.shape === "event-agent" ? candidate.ts : ts;
-      for (let seq = candidate.firstSeq; seq <= candidate.lastSeq; seq += 1) {
+      for (const seq of candidate.entrySeqs) {
         const idx = entryIndex(seq);
-        if (idx < 0 || idx >= entries.length) continue;
-        const entry = entries[idx];
+        if (!hasEntry(idx)) continue;
+        const entry = entryAt(idx);
         const item = entry.item;
         setEntry(idx, {
           ...entry,
@@ -1992,7 +2216,7 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
                 : item,
         });
         const fullText = assistantEchoTexts.get(item);
-        if (fullText !== undefined) assistantEchoTexts.set(entries[idx].item, fullText);
+        if (fullText !== undefined) assistantEchoTexts.set(entryAt(idx).item, fullText);
       }
       /* Current envelopes can finish with the visible answer while the adjacent
          response mirror appends a structured citation block under the same id.
@@ -2001,13 +2225,13 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
         const suffix = normalizedText.slice(candidate.text.length).trim();
         if (suffix) addProse(ts, suffix, sourceId);
       }
-      codexAssistantRecord = null;
+      frontier.codexAssistantRecord = null;
       snapshot = null;
       return;
     }
     const emitted = addProse(ts, text, sourceId);
-    codexAssistantRecord = emitted
-      ? { shape, text: normalizedText, ts, src: curSrc, ...(sourceId ? { sourceId } : {}), firstSeq: emitted.firstSeq, lastSeq: emitted.lastSeq }
+    frontier.codexAssistantRecord = emitted
+      ? { shape, text: normalizedText, ts, src: curSrc, ...(sourceId ? { sourceId } : {}), firstSeq: emitted.firstSeq, lastSeq: emitted.lastSeq, entrySeqs: emitted.entrySeqs }
       : null;
   };
   /* One redaction/cap funnel for every tool event: the summary and chips are
@@ -2028,10 +2252,10 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
   }): ToolEvent => {
     const args = opts.args ?? {};
     const family = familyOf(opts.tool);
-    const diff = opts.diff ?? (family === "edit" || family === "write" ? normalizeEdit(opts.tool, args) : undefined);
-    const s = summarizeTool(opts.tool, args, opts.engine, diff);
+    const diff = opts.diff ?? (family === "edit" || family === "write" ? normalize("edit", [opts.tool, args], () => normalizeEdit(opts.tool, args)) : undefined);
+    const s = normalize("tool-summary", [opts.tool, args, opts.engine, diff], () => summarizeTool(opts.tool, args, opts.engine, diff));
     const body: ToolBody | undefined = diff && diff.files.length ? { type: "diff", files: diff.files, filesTruncated: diff.filesTruncated } : undefined;
-    const command = opts.command !== undefined ? redactSecrets(opts.command).slice(0, COMMAND_MAX) : undefined;
+    const command = opts.command !== undefined ? normalize("command", opts.command, () => redactSecrets(opts.command!).slice(0, COMMAND_MAX)) : undefined;
     const summary = opts.summary !== undefined ? redactSecrets(opts.summary).replace(/\s+/g, " ").trim().slice(0, 160) : s.summary;
     /* A bare poll carries no keystrokes: every `wait`, and a `write_stdin` whose
        `chars` payload is the deliberately empty string (issue #497 / #141). */
@@ -2056,7 +2280,7 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
       outputTruncated: false,
       ...(s.family === "shell" ? (() => {
         const cwd = cwdOf(args, command);
-        return { ...(cwd && cwd !== conversationCwd ? { cwd } : {}), ...(session?.label !== undefined ? { session: session.label } : {}) };
+        return { ...(cwd && cwd !== frontier.conversationCwd ? { cwd } : {}), ...(session?.label !== undefined ? { session: session.label } : {}) };
       })() : {}),
       ...(poll ? { poll: true } : {}),
       /* An edit/write card opens its structured diff inline by default — a
@@ -2085,10 +2309,10 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
     const event: ToolEvent = { ...callRec.event, wakeup };
     callRec.event = event;
     const idx = entryIndex(callRec.seq);
-    if (idx >= 0 && idx < entries.length && entries[idx].item.kind === "tool") {
+    if (hasEntry(idx) && entryAt(idx).item.kind === "tool") {
       /* Supersession is derived from the whole wakeup set, and a joined older
          page recomputes it, so this write does not retire any join point. */
-      entries[idx] = { ...entries[idx], item: event };
+      entries[idx] = { ...entryAt(idx), item: event };
       snapshot = null;
     }
   };
@@ -2131,7 +2355,7 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
   /* A shell command from any engine. `callId` is absent for plain job logs, so
      a synthetic id keeps the row addressable (and the last one attachable). */
   const addShell = (ts: unknown, command: string, callId?: string, tool = "Bash", extraArgs?: Record<string, unknown>): ToolEvent => {
-    const id = callId || "plain-" + pushSeq + "-" + String(ts ?? "");
+    const id = callId || "plain-" + nextPushSeq() + "-" + String(ts ?? "");
     const engine = feedEngine(cfg.engine);
     const event = newToolEvent({ ts, id, tool, args: { ...extraArgs, command }, engine, command });
     const rec = registerCall(event);
@@ -2141,8 +2365,8 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
   /* apply_patch (either the function_call or the custom_tool_call shape) → a
      diff tool event. Registered so a later output record can attach. */
   const addPatch = (ts: unknown, patchText: string, callId?: string): ToolEvent => {
-    const id = callId || "plain-" + pushSeq + "-" + String(ts ?? "");
-    const event = newToolEvent({ ts, id, tool: "apply_patch", args: { input: patchText }, engine: "codex", diff: diffFromApplyPatch(patchText) });
+    const id = callId || "plain-" + nextPushSeq() + "-" + String(ts ?? "");
+    const event = newToolEvent({ ts, id, tool: "apply_patch", args: { input: patchText }, engine: "codex", diff: normalize("patch", patchText, () => diffFromApplyPatch(patchText)) });
     registerCall(event);
     return event;
   };
@@ -2150,8 +2374,8 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
      "exec" shapes). Orchestration records (`functions.exec` driving tools.*)
      get their meaningful outer summary and structured nested children. */
   const emitCustomTool = (ts: unknown, name: string, input: string, callId?: string): ToolEvent => {
-    const id = callId || "plain-" + pushSeq + "-" + String(ts ?? "");
-    const orch = parseOrchestration(input);
+    const id = callId || "plain-" + nextPushSeq() + "-" + String(ts ?? "");
+    const orch = normalize("orchestration", input, () => parseOrchestration(input));
     const methods: string[] = [];
     for (const match of input.slice(0, EXEC_PAIR_SOURCE_MAX).matchAll(new RegExp(ORCH_CALL_RE.source, "g"))) {
       methods.push(match[1]);
@@ -2161,13 +2385,13 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
       // A full set disables pairing until a turn boundary; never guess after
       // dropping an unresolved owner just to admit another wrapper.
       if (pendingExecs.size < ORCH_MAX_CALLS) pendingExecs.add(id);
-      else execPairingOverflow = true;
+      else frontier.execPairingOverflow = true;
     }
-    execWindow = !execPairingOverflow && pendingExecs.size === 1 && pendingExecs.has(id) && methods.length > 0 && methods.length <= ORCH_MAX_CALLS
-      && input.length <= EXEC_PAIR_SOURCE_MAX ? { id, remaining: methods, seen: new Set() } : null;
+    setExecWindow(!frontier.execPairingOverflow && pendingExecs.size === 1 && pendingExecs.has(id) && methods.length > 0 && methods.length <= ORCH_MAX_CALLS
+      && input.length <= EXEC_PAIR_SOURCE_MAX ? { id, remaining: methods, seen: new Set() } : null);
     const direct = orch?.directInteractive;
     const base = newToolEvent({ ts, id, tool: direct?.tool ?? name, args: direct?.args ?? { input }, engine: "codex", diff: orch?.diff });
-    const viewedPaths = viewedImagePathsOf(input.slice(0, EXEC_PAIR_SOURCE_MAX));
+    const viewedPaths = normalize("viewed-paths", input, () => viewedImagePathsOf(input.slice(0, EXEC_PAIR_SOURCE_MAX)));
     const event = orch
       ? retainSessionOwner({ ...base, ...orch.overlay, ...(orch.body ? { orchestration: orch.body } : {}), ...(viewedPaths.length ? { viewedPaths } : {}) }, sessionOwnership.get(base))
       : base;
@@ -2197,7 +2421,7 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
        Strip the contiguous leading block of those lines, decode the payload (real
        newlines, ANSI removed — issue #141), and treat a bare `{}` (a script that
        returned nothing) as no output (issue #90). */
-    const body = cleanOutputText(output, true);
+    const body = normalize("clean-output", output, () => cleanOutputText(output, true));
     const isErr = errFlag === true || (code !== undefined && code !== "0");
     const prev = callRec.event;
     /* An empty codex wait/stdin chunk collapses to "waiting Ns" rather than an
@@ -2218,7 +2442,7 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
     let outputTruncated = prev.outputTruncated;
     if (stdoutBody) {
       const limit = isErr ? OUTPUT_ERR_MAX : OUTPUT_OK_MAX;
-      const combined = (prev.outputPreview + "\n" + redactSecrets(stdoutBody)).trim();
+      const combined = (prev.outputPreview + "\n" + normalize("stdout", stdoutBody, () => redactSecrets(stdoutBody))).trim();
       outputTruncated = prev.outputTruncated || combined.length > limit;
       outputPreview = combined.slice(-limit);
     }
@@ -2244,7 +2468,7 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
     let stderr = prev.stderr;
     let stderrTruncated = prev.stderrTruncated;
     if (stderrBody) {
-      const combined = ((prev.stderr ?? "") + "\n" + redactSecrets(stderrBody)).trim();
+      const combined = ((prev.stderr ?? "") + "\n" + normalize("stderr", stderrBody, () => redactSecrets(stderrBody))).trim();
       stderrTruncated = (prev.stderrTruncated ?? false) || combined.length > OUTPUT_ERR_MAX;
       stderr = combined.slice(-OUTPUT_ERR_MAX);
     }
@@ -2269,7 +2493,7 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
        the call is rejected — mark it failed so it never counts down and never
        keeps the previous valid wakeup superseded (issue #161 review). */
     let wakeup = prev.wakeup;
-    const mcpResult = jsonRecord(body);
+    const mcpResult = normalize("mcp-result", body, () => jsonRecord(body));
     const mcp = prev.mcp
       ? { ...prev.mcp, result: mcpResult ? boundedMcpRecord(mcpResult) : prev.mcp.result }
       : undefined;
@@ -2308,10 +2532,10 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
     }, sessionOwner);
     callRec.event = event;
     const idx = entryIndex(callRec.seq);
-    if (idx >= 0 && idx < entries.length) {
-      const old = entries[idx].item;
+    if (hasEntry(idx)) {
+      const old = entryAt(idx).item;
       if (old.kind === "tool") {
-        setEntry(idx, { ...entries[idx], item: event });
+        setEntry(idx, { ...entryAt(idx), item: event });
         snapshot = null;
       }
     }
@@ -2321,31 +2545,32 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
     /* An operation the open exec window claimed is sized but shows no estimate
        of its own: the outer exec either stays visible and carries the number,
        or is represented by these rows and splits its value over them (§3.4). */
-    if (measure) ledger.result(event.id, measure.chars, measure.rasters, execWindow?.seen.has(event.id) === true);
+    if (measure) ledger.result(event.id, measure.chars, measure.rasters, isExecChild(event.id));
     return event;
   };
   const schemaLoaderCalls = new Set<string>();
   const addOutput = (callId: string | undefined, output: string, err?: boolean, rawSession?: string, resultTs?: unknown, blocks?: ToolOutputBlock[], rasters?: number) => {
     if (!callId || schemaLoaderCalls.has(callId)) return;
     pendingExecs.delete(callId);
-    if (execWindow?.id === callId) {
-      if (!execWindow.remaining.length && execWindow.seen.size && !err && !/^\s*(?:Script (?:running|failed)|\w*Error:)/i.test(output)) {
+    if (isExecResult(callId)) {
+      const window = frontier.execWindow;
+      if (window && !window.remaining.length && window.seen.size && !err && !/^\s*(?:Script (?:running|failed)|\w*Error:)/i.test(output)) {
         representedExecs.add(callId);
-        ledger.represent(callId, [...execWindow.seen]);
+        ledger.represent(callId, [...window.seen]);
         snapshot = null;
       }
-      execWindow = null;
+      setExecWindow(null);
     }
     const tseq = tmsgSeqs.get(callId);
     if (tseq !== undefined) {
       /* The routing echo repeats the whole message body; keep only the delivery state. */
       const idx = entryIndex(tseq);
-      if (idx >= 0 && idx < entries.length) {
-        const old = entries[idx].item;
+      if (hasEntry(idx)) {
+        const old = entryAt(idx).item;
         if (old.kind === "tmsg") {
           const delivery: "ok" | "err" = err || /"success"\s*:\s*false/.test(output) ? "err" : "ok";
           const msgId = output.match(/"msg_id"\s*:\s*"([^"]+)"/)?.[1];
-          setEntry(idx, { ...entries[idx], item: { ...old, delivery, msgId } });
+          setEntry(idx, { ...entryAt(idx), item: { ...old, delivery, msgId } });
           snapshot = null;
         }
       }
@@ -2372,16 +2597,19 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
     const event: ToolEvent = { ...prev, outputBlocks: [...carried, { type: "image", path: picture }] };
     call.event = event;
     const idx = entryIndex(call.seq);
-    if (idx >= 0 && entries[idx]?.item.kind === "tool") {
-      setEntry(idx, { ...entries[idx], item: event });
+    if (idx >= 0 && entryAt(idx)?.item.kind === "tool") {
+      setEntry(idx, { ...entryAt(idx), item: event });
       snapshot = null;
     }
   };
   const addSvc = (text: string) => {
     if (showSvc) push({ kind: "svc", text: text.slice(0, 300) });
     else {
-      hiddenServiceCount += 1;
-      hiddenSvcBySrc.set(curSrc, (hiddenSvcBySrc.get(curSrc) ?? 0) + 1);
+      if (history) hiddenCodexServices!.set(String(curSrc), (hiddenCodexServices!.get(String(curSrc)) ?? 0) + 1);
+      else {
+        hiddenServiceCount += 1;
+        hiddenSvcBySrc.set(curSrc, (hiddenSvcBySrc.get(curSrc) ?? 0) + 1);
+      }
       snapshot = null;
     }
   };
@@ -2396,7 +2624,7 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
     if (sourceId) {
       const seq = reasoningSeqs.get(sourceId);
       const idx = seq === undefined ? -1 : entryIndex(seq);
-      const previous = idx >= 0 ? entries[idx] : undefined;
+      const previous = idx >= 0 ? entryAt(idx) : undefined;
       if (previous?.item.kind === "think") {
         // Track the last echo for window eviction, while bornSrc remains the
         // stable anchor. Sliding across an echo seam reparses the new window.
@@ -2418,12 +2646,12 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
     return true;
   };
   const addRecord = (ts: unknown, recordType: string, value: unknown) => {
-    const detail = transcriptRecordBody(value);
+    const detail = normalize("record-detail", value, () => transcriptRecordBody(value));
     const safeType = redactTranscriptText(recordType).slice(0, ATTACHMENT_TYPE_MAX);
     push({ kind: "record", ts, recordType: safeType || tr("render.record"), summary: transcriptRecordSummary(value, detail.body), ...detail });
   };
   const addThreadItemFallback = (ts: unknown, recordType: string, value: unknown) => {
-    const detail = transcriptRecordBody(value);
+    const detail = normalize("record-detail", value, () => transcriptRecordBody(value));
     const summary = transcriptRecordSummary(value, detail.body);
     const safeType = redactTranscriptText(recordType).slice(0, ATTACHMENT_TYPE_MAX);
     push({
@@ -2464,8 +2692,8 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
     };
     existing.event = next;
     const idx = entryIndex(existing.seq);
-    if (idx >= 0 && entries[idx]?.item.kind === "tool") {
-      setEntry(idx, { ...entries[idx], src: curSrc, item: next });
+    if (idx >= 0 && entryAt(idx)?.item.kind === "tool") {
+      setEntry(idx, { ...entryAt(idx), src: curSrc, item: next });
       snapshot = null;
     }
   };
@@ -2538,7 +2766,7 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
     output?: unknown;
     blocks?: ToolOutputBlock[];
   }): void => {
-    const id = textPart(opts.item.id) || "plain-" + pushSeq + "-" + String(opts.timing.ts ?? "");
+    const id = textPart(opts.item.id) || "plain-" + nextPushSeq() + "-" + String(opts.timing.ts ?? "");
     const status = codexThreadToolStatus(opts.item, opts.lifecycle);
     const base = newToolEvent({
       ts: opts.timing.ts,
@@ -2550,7 +2778,7 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
     });
     upsertCodexThreadTool({ ...base, status, statusLabel: codexThreadStatusLabel(status) });
     if (status !== "run") {
-      const threadOutput = toolOutput(opts.output);
+      const threadOutput = readCodexOutput(opts.output);
       attach(calls.get(id), threadOutput.text, status === "err", undefined, opts.timing.endTs ?? opts.timing.ts, opts.blocks,
         { chars: threadOutput.text.length, rasters: threadOutput.rasters ?? 0 });
     }
@@ -2572,25 +2800,25 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
     assistantShape: CodexAssistantShape,
   ): boolean => {
     const kind = codexThreadItemKind(item.type);
-    const id = textPart(item.id) || "plain-" + pushSeq + "-" + String(timing.ts ?? "");
-    if (execWindow && id.startsWith("exec-") && !execWindow.seen.has(id)) {
+    const id = textPart(item.id) || "plain-" + nextPushSeq() + "-" + String(timing.ts ?? "");
+    if (id.startsWith("exec-") && frontier.execWindow && !frontier.execWindow.seen.has(id)) {
       const method = kind === "commandexecution" ? "exec_command" : kind === "filechange" ? "apply_patch"
         : kind === "mcptoolcall" ? `mcp__${textPart(item.server)}__${textPart(item.tool)}`
         : kind === "extension" && textPart(item.kind).startsWith("web.") ? "web__run" : "";
-      const index = execWindow.remaining.indexOf(method);
-      if (index >= 0) { execWindow.remaining.splice(index, 1); execWindow.seen.add(id); }
-      else if (method) execWindow = null; // extra operations: preserve the wrapper
+      const index = frontier.execWindow.remaining.indexOf(method);
+      if (index >= 0) { frontier.execWindow.remaining.splice(index, 1); frontier.execWindow.seen.add(id); execChildren?.set(id, true); }
+      else if (method) setExecWindow(null); // extra operations: preserve the wrapper
     }
     const toolKind = ["functioncalloutput", "commandexecution", "filechange", "mcptoolcall", "dynamictoolcall", "collabagenttoolcall", "websearch", "imageview", "imagegeneration", "extension"].includes(kind);
     // Use the renderer's tool families for every lifecycle/envelope form.
     // A completion can update an earlier slot without appending a tool row.
-    if (toolKind) reasoningBoundary += 1;
+    if (toolKind) frontier.reasoningBoundary = history ? curSrc + 0.5 : frontier.reasoningBoundary + 1;
     if (lifecycle === "itemdelta" || (lifecycle === "itemstarted" && !toolKind)) {
       addSvc(`${textPart(item.type) || "item"} ${lifecycle}`);
       return true;
     }
     if (kind === "usermessage") {
-      addCodexUserRecord(timing.ts, normalizeCodexUserContent(item.content));
+      addCodexUserRecord(timing.ts, readCodexUser(item.content));
       return true;
     }
     if (kind === "hookprompt") {
@@ -2599,7 +2827,7 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
       return true;
     }
     if (kind === "agentmessage") {
-      const text = normalizeCodexUserContent(item.content).text || textPart(item.text);
+      const text = readCodexUser(item.content).text || textPart(item.text);
       addCodexAssistant(assistantShape, timing.ts, text, id);
       return true;
     }
@@ -2869,14 +3097,28 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
   const updateCodexPendingSource = (pending: PendingCodexUser, src: number) => {
     for (const seq of pending.entrySeqs) {
       const idx = entryIndex(seq);
-      if (idx >= 0 && idx < entries.length) setEntry(idx, { ...entries[idx], src });
+      if (hasEntry(idx)) setEntry(idx, { ...entryAt(idx), src });
     }
     pending.src = src;
     snapshot = null;
   };
   const finalizePendingCodexUsers = () => {
-    const pendingUsers = pendingCodexUsers;
-    pendingCodexUsers = pendingUsers.filter((pending) => pending.structured);
+    const closing = new Set(userRefIds(frontier.unstructuredUsers));
+    const pendingUsers: PendingCodexUser[] = [];
+    const buckets = new Set<string>();
+    for (const id of closing) {
+      const pending = pendingUsersById.get(id);
+      if (!pending) continue;
+      pendingUsers.push(pending);
+      pendingUsersById.delete(id);
+      for (const key of pending.bucketKeys ?? []) buckets.add(key);
+    }
+    for (const key of buckets) {
+      let kept: CodexUserRefs | null = null;
+      for (const id of userRefIds(pendingUserBuckets.get(key) ?? null)) if (!closing.has(id)) kept = appendUserRef(kept, id);
+      pendingUserBuckets.set(key, kept);
+    }
+    frontier.unstructuredUsers = null;
     for (const pending of pendingUsers) {
       /* App-server structured input may persist without an echo. Its
          transcript marker preserves the declared user role while later
@@ -2888,9 +3130,9 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
       let converted = false;
       for (const seq of pending.entrySeqs) {
         const idx = entryIndex(seq);
-        if (idx < 0 || idx >= entries.length) continue;
-        if (entries[idx].item.kind === "user") {
-          setEntry(idx, { ...entries[idx], item: { kind: "sysmsg", label: sysMsgLabel(pending.text), text: pending.text } });
+        if (!hasEntry(idx)) continue;
+        if (entryAt(idx).item.kind === "user") {
+          setEntry(idx, { ...entryAt(idx), item: { kind: "sysmsg", label: sysMsgLabel(pending.text), text: pending.text } });
           snapshot = null;
           converted = true;
           break;
@@ -2918,7 +3160,7 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
   const pendingDedup = (pending: PendingCodexUser): string | undefined => {
     for (const seq of pending.entrySeqs) {
       const idx = entryIndex(seq);
-      const dedup = idx >= 0 ? entries[idx]?.submissionDedup : undefined;
+      const dedup = idx >= 0 ? entryAt(idx)?.submissionDedup : undefined;
       if (dedup) return dedup;
     }
     return undefined;
@@ -2926,7 +3168,7 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
   const reconcileCodexUserEcho = (pending: PendingCodexUser, ts: unknown, decoded: CodexUserContent) => {
     const { cleaned, images } = extractInboxImages(decoded.text);
     if (cleaned) {
-      const previous = pending.entrySeqs.map((seq) => entries[entryIndex(seq)]?.item)
+      const previous = pending.entrySeqs.map((seq) => entryAt(entryIndex(seq))?.item)
         .find((item) => item?.kind === "user" || item?.kind === "tmsg");
       const internal = decoded.origin?.kind === "agent" || (!decoded.origin && previous?.kind === "tmsg" && previous.internal);
       const echoItem: Item = internal
@@ -2940,12 +3182,12 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
       if (metadataRef) echoItem.structuredUserRef = metadataRef;
       const matchSeq = pending.entrySeqs.find((seq) => {
         const idx = entryIndex(seq);
-        const kind = idx >= 0 ? entries[idx]?.item.kind : undefined;
+        const kind = idx >= 0 ? entryAt(idx)?.item.kind : undefined;
         return internal ? kind === "tmsg" : kind === "user";
       });
       if (matchSeq !== undefined) {
         const idx = entryIndex(matchSeq);
-        setEntry(idx, { ...entries[idx], item: echoItem,
+        setEntry(idx, { ...entryAt(idx), item: echoItem,
           ...(decoded.deliveryDedup ? { submissionDedup: decoded.deliveryDedup } : {}) });
       } else {
         pending.entrySeqs.push(push(echoItem, decoded.deliveryDedup ?? pendingDedup(pending)));
@@ -2955,7 +3197,7 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
        repeats the same references and must not paint them again. */
     const illustrated = pending.entrySeqs.some((seq) => {
       const idx = entryIndex(seq);
-      return idx >= 0 && entries[idx]?.item.kind === "inbox-image";
+      return idx >= 0 && entryAt(idx)?.item.kind === "inbox-image";
     });
     if (!illustrated) {
       const dedup = decoded.deliveryDedup ?? pendingDedup(pending);
@@ -2971,15 +3213,23 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
        where both records carry one and they disagree these are two messages
        and each keeps its own row. Where either record carries none, nothing
        has been said and the old test stands. */
-    const pending = pendingCodexUsers.find((candidate) =>
-      !(candidate.dedup && content.deliveryDedup && candidate.dedup !== content.deliveryDedup)
-      && sameCodexTextAtTime(candidate.ts, candidate.text, ts, content.text));
-    if (pending) return reconcileCodexUserEcho(pending, ts, content);
+    const keys = normalize("user-buckets", [content.text, ts], () => codexUserBucketKeys(content.text, ts));
+    const candidates = new Set<string>();
+    for (const key of keys.read) for (const id of userRefIds(pendingUserBuckets.get(key) ?? null)) candidates.add(id);
+    for (const id of [...candidates].sort((a, b) => Number(a) - Number(b))) {
+      const candidate = pendingUsersById.get(id);
+      if (candidate && !(candidate.dedup && content.deliveryDedup && candidate.dedup !== content.deliveryDedup)
+        && sameCodexTextAtTime(candidate.ts, candidate.text, ts, content.text)) return reconcileCodexUserEcho(candidate, ts, content);
+    }
     const emitted = emitCodexUserContent(ts, content);
     if (!emitted.entrySeqs.length && !emitted.text) addSvc("message user");
-    pendingCodexUsers.push(emitted);
+    emitted.bucketKeys = keys.write;
+    const id = String(curSrc);
+    pendingUsersById.set(id, emitted);
+    for (const key of keys.write) pendingUserBuckets.set(key, appendUserRef(pendingUserBuckets.get(key) ?? null, id));
+    if (!emitted.structured) frontier.unstructuredUsers = appendUserRef(frontier.unstructuredUsers, id);
   };
-  const addCodexResponseUser = (ts: unknown, content: unknown) => addCodexUserRecord(ts, normalizeCodexUserContent(content));
+  const addCodexResponseUser = (ts: unknown, content: unknown) => addCodexUserRecord(ts, readCodexUser(content));
   const addCodexEventUser = (ts: unknown, text: string) =>
     addCodexUserRecord(ts, { ...decodeCodexStructuredUserText(text), rawText: text, attachments: [] });
   const addCompact = (ts: unknown, meta?: { trigger?: string; preTokens?: number }) => {
@@ -3005,30 +3255,30 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
   const renderCodex = (obj: Record<string, unknown>) => {
     const p = rec(obj.payload);
     const ts = obj.timestamp;
-    if ((obj.type === "session_meta" || obj.type === "turn_context") && textPart(p.cwd)) conversationCwd = redactSecrets(textPart(p.cwd));
+    if ((obj.type === "session_meta" || obj.type === "turn_context") && textPart(p.cwd)) frontier.conversationCwd = redactSecrets(textPart(p.cwd));
     if (obj.type === "turn_context" || ["task_started", "task_complete", "turn_aborted"].includes(textPart(p.type))) {
-      execWindow = null;
+      setExecWindow(null);
       pendingExecs.clear();
-      execPairingOverflow = false;
+      frontier.execPairingOverflow = false;
     }
-    if (["function_call", "custom_tool_call"].includes(textPart(p.type))) execWindow = null;
+    if (["function_call", "custom_tool_call"].includes(textPart(p.type))) setExecWindow(null);
     // Hidden lifecycle records must still separate adjacent reasoning runs.
     const turnId = textPart(p.turn_id) || textPart(p.turnId);
-    if (turnId && reasoningTurnId && turnId !== reasoningTurnId) reasoningBoundary += 1;
-    if (turnId) reasoningTurnId = turnId;
+    if (turnId && frontier.reasoningTurnId && turnId !== frontier.reasoningTurnId) frontier.reasoningBoundary = history ? curSrc + 0.5 : frontier.reasoningBoundary + 1;
+    if (turnId) frontier.reasoningTurnId = turnId;
     const boundaryType = codexThreadItemKind(p.type);
-    if (obj.type === "turn_context" || obj.type === "compacted") reasoningBoundary += 1;
+    if (obj.type === "turn_context" || obj.type === "compacted") frontier.reasoningBoundary = history ? curSrc + 0.5 : frontier.reasoningBoundary + 1;
     const semanticKind = codexThreadItemKind(rec(p.item).type) || boundaryType;
     // Messages and legacy Responses tools can reconcile into earlier rows.
     // Thread-item tool boundaries are handled by renderCodexThreadItem itself.
     if (["message", "usermessage", "agentmessage", "functioncall", "functioncalloutput", "customtoolcall",
-      "customtoolcalloutput"].includes(semanticKind)) reasoningBoundary += 1;
+      "customtoolcalloutput"].includes(semanticKind)) frontier.reasoningBoundary = history ? curSrc + 0.5 : frontier.reasoningBoundary + 1;
     // These event records describe tool activity even when their display is
     // service-only. Bookkeeping such as token_count does not split a run.
     if (obj.type === "event_msg" && ["mcptoolcallbegin", "mcptoolcallend", "websearchend", "patchapplyend",
-      "commandexecutionoutputdelta", "filechangeoutputdelta", "filechangepatchupdated"].includes(boundaryType)) reasoningBoundary += 1;
+      "commandexecutionoutputdelta", "filechangeoutputdelta", "filechangepatchupdated"].includes(boundaryType)) frontier.reasoningBoundary = history ? curSrc + 0.5 : frontier.reasoningBoundary + 1;
     if (["taskstarted", "taskcomplete", "turnstarted", "turncompleted", "turnaborted", "contextcompacted"].includes(boundaryType)) {
-      reasoningBoundary += 1;
+      frontier.reasoningBoundary = history ? curSrc + 0.5 : frontier.reasoningBoundary + 1;
     }
     if (obj.type === "event_msg") {
       if (p.type === "user_message" && p.message) {
@@ -3044,7 +3294,7 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
       if (codexThreadItemKind(threadItem.type) === "usermessage" && (lifecycle === "itemcompleted" || lifecycle === "itemstarted")) {
         if (lifecycle === "itemstarted") return addSvc(`${textPart(threadItem.type)} ${lifecycle}`);
         ledger.contaminate();
-        return addCodexUserRecord(codexThreadTiming(p, ts).ts, normalizeCodexUserContent(threadItem.content));
+        return addCodexUserRecord(codexThreadTiming(p, ts).ts, readCodexUser(threadItem.content));
       }
       finalizePendingCodexUsers();
       if (["itemstarted", "itemcompleted", "itemdelta"].includes(lifecycle) && textPart(threadItem.type)) {
@@ -3066,17 +3316,17 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
       }
       if (p.type === "context_compacted") {
         ledger.contaminate();
-        if (codexCompacted) return void (codexCompacted = null);
+        if (frontier.codexCompacted) return void (frontier.codexCompacted = null);
         return addCompact(ts);
       }
       if (p.type === "mcp_tool_call_begin") {
         const mcp = viewerMcpInvocation(p.invocation);
         if (!mcp) return addSvc("mcp_tool_call_begin");
-        const id = textPart(p.call_id) || "plain-" + pushSeq + "-" + String(ts ?? "");
+        const id = textPart(p.call_id) || "plain-" + nextPushSeq() + "-" + String(ts ?? "");
         return void registerCall(newToolEvent({ ts, id, tool: `mcp__${mcp.serverName}__${mcp.toolName}`, args: mcp.args, engine: "codex", mcp }));
       }
       if (p.type === "mcp_tool_call_end") {
-        const id = textPart(p.call_id) || "plain-" + pushSeq + "-" + String(ts ?? "");
+        const id = textPart(p.call_id) || "plain-" + nextPushSeq() + "-" + String(ts ?? "");
         const existing = calls.get(id);
         const mcp = viewerMcpInvocation(p.invocation) ?? existing?.event.mcp ?? null;
         if (!mcp) return addSvc("mcp_tool_call_end");
@@ -3087,7 +3337,7 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
           const event = { ...call.event, mcp: { ...call.event.mcp, result: boundedMcpRecord(parsed.result) } };
           call.event = event;
           const idx = entryIndex(call.seq);
-          if (idx >= 0 && entries[idx]?.item.kind === "tool") setEntry(idx, { ...entries[idx], item: event });
+          if (idx >= 0 && entryAt(idx)?.item.kind === "tool") setEntry(idx, { ...entryAt(idx), item: event });
           snapshot = null;
         }
         return;
@@ -3130,7 +3380,7 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
         if (p.role !== "assistant") ledger.contaminate();
         if (p.role === "user") return addCodexResponseUser(ts, p.content);
         finalizePendingCodexUsers();
-        const text = normalizeCodexUserContent(p.content).text;
+        const text = readCodexUser(p.content).text;
         if (!text) return addSvc("message " + textPart(p.role));
         if (p.role === "assistant") {
           return addCodexAssistant("response-assistant", ts, text, textPart(p.id) || undefined);
@@ -3144,7 +3394,7 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
       if (p.type === "function_call") {
         let args: Record<string, unknown> = {};
         try {
-          args = JSON.parse(textPart(p.arguments) || "{}");
+          args = normalize("arguments", p.arguments, () => JSON.parse(textPart(p.arguments) || "{}"));
         } catch {
           args = {};
         }
@@ -3161,7 +3411,7 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
            opaque "session_id" service line (issue #141). summarizeTool owns their
            summary; attach() decodes and collapses their output. */
         if (name === "exec" || name === "functions.exec") return void emitCustomTool(ts, name, textPart(args.input), textPart(p.call_id));
-        const event = newToolEvent({ ts, id: textPart(p.call_id) || "plain-" + pushSeq + "-" + String(ts ?? ""), tool: name, args, engine: "codex" });
+        const event = newToolEvent({ ts, id: textPart(p.call_id) || "plain-" + nextPushSeq() + "-" + String(ts ?? ""), tool: name, args, engine: "codex" });
         if (event.family === "spawn") {
           const task = redactSecrets(taskText(args.message ?? args.prompt));
           event.outputPreview = task.slice(0, COMMAND_MAX);
@@ -3170,8 +3420,8 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
         return void registerCall(event);
       }
       if (p.type === "function_call_output") {
-        const rawSession = toolOutputSession(p.output);
-        const { text: output, blocks, rasters } = toolOutput(p.output);
+        const rawSession = normalize("output-session", p.output, () => toolOutputSession(p.output));
+        const { text: output, blocks, rasters } = readCodexOutput(p.output);
         return addOutput(textPart(p.call_id), output, toolOutputFailed(output), rawSession, ts, blocks, rasters);
       }
       /* Fresh rollouts wrap apply_patch as a "custom_tool_call": `input` is the
@@ -3188,8 +3438,8 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
         return void emitCustomTool(ts, name, input, id);
       }
       if (p.type === "custom_tool_call_output") {
-        const rawSession = toolOutputSession(p.output);
-        const { text: output, blocks, rasters } = toolOutput(p.output);
+        const rawSession = normalize("output-session", p.output, () => toolOutputSession(p.output));
+        const { text: output, blocks, rasters } = readCodexOutput(p.output);
         return addOutput(textPart(p.call_id), output, toolOutputFailed(output), rawSession, ts, blocks, rasters);
       }
       if (p.type === "reasoning" || p.type === "agent_message") return addSvc(textPart(p.type));
@@ -3208,7 +3458,7 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
     }
     if (obj.type === "compacted") {
       ledger.contaminate();
-      codexCompacted = { src: curSrc };
+      frontier.codexCompacted = { src: curSrc };
       return addCompact(ts);
     }
     // Retain the diagnostic payload when shown; count hidden usage as service bookkeeping.
@@ -3347,7 +3597,7 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
         } else if (part.type === "tool_use") {
           const name = textPart(part.name) || "tool";
           const input = rec(part.input);
-          const id = textPart(part.id) || "plain-" + pushSeq + "-" + String(ts ?? "");
+          const id = textPart(part.id) || "plain-" + nextPushSeq() + "-" + String(ts ?? "");
           if (name === "ScheduleWakeup") {
             addWakeup(ts, id, input);
           } else if (isToolSchemaLoader(name)) {
@@ -3441,7 +3691,7 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
       } else if (part.type === "toolCall") {
         const name = textPart(part.name) || "tool";
         const args = rec(part.arguments ?? part.input);
-        const id = textPart(part.id) || "plain-" + pushSeq + "-" + String(ts ?? "");
+        const id = textPart(part.id) || "plain-" + nextPushSeq() + "-" + String(ts ?? "");
         const command = familyOf(name) === "shell" ? textPart(args.command ?? args.cmd) : undefined;
         const lang = familyOf(name) === "read" ? extLang(textPart(args.file_path ?? args.path)) : undefined;
         registerCall(newToolEvent({ ts, id, tool: name, args, engine: "openclaw", command, lang }));
@@ -3603,23 +3853,25 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
       /* A job log only announces the patch — no output record ever carries this
          id. Emit it already-complete (like a statically-parsed nested call) and
          skip registerCall, so it never sits spinning "executing…" forever. */
-      const event = newToolEvent({ ts, id: "plain-" + pushSeq + "-" + String(ts ?? ""), tool: "apply_patch", engine: "codex", summary: rest });
+      const event = newToolEvent({ ts, id: "plain-" + nextPushSeq() + "-" + String(ts ?? ""), tool: "apply_patch", engine: "codex", summary: rest });
       return void push({ ...event, status: "ok", statusLabel: "ok" });
     }
     if (m && !/^(Running|Command|Applying)/.test(rest)) return addProse(ts, rest);
     if (pushBlobIfHuge(line)) return;
     push({ kind: "raw", text: redactSecrets(line), err: /error|failed|traceback|exception/i.test(line) });
   };
-  const consume = (line: string) => {
-    nativeRecordKey = cfg.fmt === "claude" || cfg.fmt === "codex" ? `native:${messageTextDigest(line)}` : undefined;
+  const consume = (line: string, decoded?: { obj: unknown; native: string; malformed?: boolean }) => {
+    emittedThisRecord.length = 0;
+    nativeRecordKey = decoded?.native ?? (cfg.fmt === "claude" || cfg.fmt === "codex" ? `native:${messageTextDigest(line)}` : undefined);
     if (lineFilter && !line.toLowerCase().includes(lineFilter)) {
-      reasoningBoundary += 1;
+      frontier.reasoningBoundary = history ? curSrc + 0.5 : frontier.reasoningBoundary + 1;
       return;
     }
     if (jsonl) {
       let obj: unknown;
       try {
-        obj = JSON.parse(line);
+        if (decoded?.malformed) { addRecord(null, "malformed_record", { source: line }); return; }
+        obj = decoded ? decoded.obj : JSON.parse(line);
       } catch {
         addRecord(null, "malformed_record", { source: line });
         return;
@@ -3628,11 +3880,11 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
         if (obj && typeof obj === "object" && !Array.isArray(obj)) {
           const record = obj as Record<string, unknown>;
           const tracksTurns = cfg.fmt === "claude" || cfg.fmt === "codex";
-          const facts = tracksTurns ? classifyTurnRecord(record, cfg.fmt === "codex") : null;
+          const facts = tracksTurns ? normalize("turn", record, () => classifyTurnRecord(record, cfg.fmt === "codex")) : null;
           if (facts) {
-            latestTurnTimestamp = facts.timestampMs ?? latestTurnTimestamp;
+            if (facts.timestampMs !== null) frontier.latestTurnTimestamp = facts.timestampMs;
             if (facts.starts) beginTurn(facts.timestampMs);
-            else if (facts.assistantRecord && !facts.fails && turnFailed) recoverFailedTurn();
+            else if (facts.assistantRecord && !facts.fails && frontier.turnFailed) recoverFailedTurn();
           }
           if (cfg.fmt === "claude") renderClaude(record);
           else if (cfg.fmt === "openclaw") renderOpenclaw(record);
@@ -3659,14 +3911,14 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
     ledger.reset(start > 0);
     entries.length = 0;
     quiet.length = 0;
-    conversationCwd = cfg.cwd ?? "";
-    reasoningBoundary = 0;
-    reasoningTurnId = "";
+    frontier.conversationCwd = cfg.cwd ?? "";
+    frontier.reasoningBoundary = 0;
+    frontier.reasoningTurnId = "";
     reasoningSeqs.clear();
     calls.clear();
-    execWindow = null;
+    setExecWindow(null);
     pendingExecs.clear();
-    execPairingOverflow = false;
+    frontier.execPairingOverflow = false;
     representedExecs.clear();
     viewedImagePaths.clear();
     copilotAssets.clear();
@@ -3677,50 +3929,42 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
     tmsgKeyBySeq.clear();
     hiddenSvcBySrc.clear();
     hiddenServiceCount = 0;
-    codexAssistantRecord = null;
-    pendingCodexUsers = [];
-    codexCompacted = null;
+    frontier.codexAssistantRecord = null;
+    pendingUserBuckets.clear();
+    pendingUsersById.clear();
+    frontier.unstructuredUsers = null;
+    frontier.codexCompacted = null;
     openclawModel = null;
     openclawModelBoundaries = [];
     plainBlock = null;
     lastPlainCall = null;
     wakeupCalls.length = 0;
     prevGroups = new Map();
-    turnStartedAt = null;
-    turnStartedSrc = null;
-    turnOpen = false;
-    turnResponseSeq = null;
-    turnFailed = false;
-    failedResponseSeq = null;
-    latestTurnTimestamp = null;
+    frontier.turnStartedAt = null;
+    frontier.turnHasStart = false;
+    frontier.turnStartedSrc = null;
+    frontier.turnOpen = false;
+    frontier.turnResponseSeq = null;
+    frontier.turnFailed = false;
+    frontier.failedResponseSeq = null;
+    frontier.latestTurnTimestamp = null;
     snapshot = null;
-    /* pushSeq keeps counting across resets so React keys never collide. */
+    /* The sequential parser keeps counting across resets for fallback IDs. */
   };
 
-
-  /** The signature of the state this line left behind, or null while anything
-      is open that a later line could still change or read.
-
-      A Codex rollout of chained tool calls is open nearly everywhere: the
-      context ledger holds a round until the next response's usage lands, and
-      that usage rewrites rows born before this line, so a point recorded inside
-      the chain would be retired anyway. Over four real rollouts (500 to 1,300
-      lines) the ledger alone blocked 95% or more of the lines, an open turn
-      alone about 0.2%. Such a transcript parses its window whole on every older
-      page, as before the join: the incremental join applies to Claude, Copilot
-      and OpenClaw transcripts, not to Codex rollouts. Joining a Codex rollout
-      needs the ledger, exec and pending-user state handed over, a follow-up. */
+  /** The quiet-point join remains the path for other formats. Codex hands
+      its active state over through source-ordered journal dependencies. */
   const quietSignature = (): string | null => {
-    if (!jsonl || turnOpen || failedResponseSeq !== null || plainBlock || lastPlainCall || pendingCodexUsers.length
-      || codexAssistantRecord || codexCompacted || execWindow || pendingExecs.size || execPairingOverflow
+    if (!jsonl || frontier.turnOpen || frontier.failedResponseSeq !== null || plainBlock || lastPlainCall
+      || frontier.codexAssistantRecord || frontier.codexCompacted || frontier.execWindow || pendingExecs.size || frontier.execPairingOverflow
       || openclawModel || copilotAssets.size) return null;
     const held = ledger.signature();
     if (held === null) return null;
-    return [conversationCwd, reasoningTurnId, turnFailed ? 1 : 0, latestTurnTimestamp ?? "", imageResultId ?? "", held].join("\u0001");
+    return [frontier.conversationCwd, frontier.reasoningTurnId, frontier.turnFailed ? 1 : 0, frontier.latestTurnTimestamp ?? "", imageResultId ?? "", held].join("\u0001");
   };
   const recordQuiet = () => {
     const sig = quietSignature();
-    if (sig !== null) quiet.push({ line: curSrc, sig, boundary: reasoningBoundary });
+    if (sig !== null) quiet.push({ line: curSrc, sig, boundary: frontier.reasoningBoundary });
   };
 
   /** True when no call or outgoing message born before `from` still waits for
@@ -3761,7 +4005,7 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
       const mine = quiet[quiet.length - 1];
       if (stop.line === curSrc && mine?.line === curSrc && mine.sig === stop.sig && settledSince(from)) {
         return { line: curSrc, entries: entries.slice(), quiet: quiet.slice(), calls, wakeupCalls: wakeupCalls.slice(), reasoningSeqs, tmsgSeqs,
-          tmsgKeyBySeq, agentCalls, sessionOwners, viewedImagePaths, copilotViewPaths, representedExecs, schemaLoaderCalls, hiddenSvcBySrc };
+          tmsgKeyBySeq, agentCalls, sessionOwners, viewedImagePaths, copilotViewPaths, representedExecs: new Set(representedExecs), schemaLoaderCalls, hiddenSvcBySrc };
       }
     }
     return null;
@@ -3853,7 +4097,7 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
       that cannot be resumed, so the caller re-parses the window whole. */
   const dropBefore = (start: number): boolean => {
     const crossedEchoSeam = entries.some((entry) => entry.bornSrc < start && entry.src >= start);
-    const crossedOpenTurn = turnOpen && turnStartedSrc !== null && turnStartedSrc < start;
+    const crossedOpenTurn = frontier.turnOpen && frontier.turnStartedSrc !== null && frontier.turnStartedSrc < start;
     const orphaned: string[] = [];
     let staleQuiet = 0;
     while (staleQuiet < quiet.length && quiet[staleQuiet].line < start) staleQuiet += 1;
@@ -3899,9 +4143,9 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
       hiddenSvcBySrc.delete(src);
       snapshot = null;
     }
-    if (codexAssistantRecord && codexAssistantRecord.src < start) codexAssistantRecord = null;
-    pendingCodexUsers = pendingCodexUsers.filter((pending) => pending.src >= start);
-    if (codexCompacted && codexCompacted.src < start) codexCompacted = null;
+    if (frontier.codexAssistantRecord && frontier.codexAssistantRecord.src < start) frontier.codexAssistantRecord = null;
+
+    if (frontier.codexCompacted && frontier.codexCompacted.src < start) frontier.codexCompacted = null;
     if (openclawModel && openclawModel.src < start) openclawModel = null;
     const openclawBoundaryEvicted = openclawModelBoundaries.some((src) => src < start);
     openclawModelBoundaries = openclawModelBoundaries.filter((src) => src >= start);
@@ -3912,7 +4156,7 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
     for (const id of copilotViewPaths.keys()) if (!calls.has(id)) copilotViewPaths.delete(id);
     for (const [assetId, asset] of copilotAssets) if (asset.src < start) copilotAssets.delete(assetId);
     for (const [agent, id] of agentCalls) if (!calls.has(id)) agentCalls.delete(agent);
-    if (execWindow && !calls.has(execWindow.id)) execWindow = null;
+    if (frontier.execWindow && !calls.has(frontier.execWindow.id)) setExecWindow(null);
     /* Drop wakeup calls whose entry slid out of the window; recompute so the
        active/superseded assignment matches a fresh parse of the shortened
        window. */
@@ -4076,6 +4320,48 @@ export function createFeedSession(cfg: FeedSessionConfig): FeedSession {
 
   const feed = (lines: string[], start: number, isLive: boolean): FeedSnapshot => {
     const end = start + lines.length;
+    if (history) {
+      const ingest = (from: number, to: number) => {
+        for (let source = from; source < to; source += 1) {
+          const line = lines[source - start];
+          const began = performance.now();
+          let obj: unknown;
+          let malformed = false;
+          // Malformed lines use the same diagnostic row as a one-shot parse.
+          try { obj = JSON.parse(line); } catch { malformed = true; }
+          // Real IDs in the legacy generated namespace can collide with the
+          // counter of a different window. Preserve the one-shot semantics.
+          const payload = rec(rec(obj).payload);
+          if ([payload.call_id, payload.id, rec(payload.item).id].some(id => /^plain-\d+-/.test(textPart(id)))) throw new CodexHistoryReservedId();
+          const decoded = { obj, native: `native:${messageTextDigest(line)}`, malformed };
+          history.record(source, () => { curSrc = source; consume(line, decoded); });
+          history.stats.rawLines += 1;
+          history.stats.rawBytes += new TextEncoder().encode(line).length;
+          history.stats.decodeMs += performance.now() - began;
+        }
+      };
+      if (consumedEnd === null) ingest(start, end);
+      else {
+        ingest(start, Math.min(lastStart, end));
+        history.settle();
+        ingest(consumedEnd, end);
+      }
+      history.settle();
+      consumedEnd = end;
+      lastStart = start;
+      const began = performance.now();
+      if (!snapshot || snapshotLive !== isLive || projectedRevision !== history.revision) {
+        entries.length = 0;
+        for (const entry of history.rows<StoredEntry>()) entries.push(entry);
+        hiddenServiceCount = 0;
+        for (const count of hiddenCodexServices!.values()) hiddenServiceCount += count;
+        snapshot = buildSnapshot(isLive);
+        snapshotLive = isLive;
+        projectedRevision = history.revision;
+      }
+      history.stats.projectionMs += performance.now() - began;
+      return snapshot;
+    }
     /* Older history prepended to the window this session already parsed: only
        the page and the seam up to a clean point are parsed again. Anything the
        join cannot vouch for falls through to the whole-window parse below. */

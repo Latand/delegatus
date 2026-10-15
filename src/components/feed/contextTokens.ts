@@ -1,3 +1,4 @@
+import type { CodexHistory } from "./codexHistory";
 import { translate, type Locale } from "@/lib/i18n";
 import type { ToolEvent } from "./parse";
 import type { FeedEngine } from "./tools";
@@ -119,11 +120,19 @@ export function contextTokensTitle(t: ContextTokens, scope: "call" | "calls", lo
 
 /* ---------------------------------------------------------------- ledger */
 
+type IdList = { id: string; previous: IdList | null; length: number };
+const appendId = (list: IdList | null, id: string): IdList => ({ id, previous: list, length: (list?.length ?? 0) + 1 });
+function orderedIds(list: IdList | null): string[] {
+  const ids: string[] = [];
+  for (let node = list; node; node = node.previous) ids.push(node.id);
+  return ids.reverse();
+}
+
 type Round = {
   /** Prompt size of the response that issued the round's calls; null when unknown. */
   before: number | null;
   output: number;
-  members: string[];
+  members: IdList | null;
   contaminated: boolean;
   /** The window may have opened inside this response, so its calls are not all known. */
   partial: boolean;
@@ -163,16 +172,22 @@ export function createContextLedger(
   engine: FeedEngine,
   apply: (id: string, value: ContextTokens) => void,
   hasCard: (id: string) => boolean = () => true,
+  history?: CodexHistory,
 ): ContextLedger {
   const ratio = CHARS_PER_TOKEN[engine] ?? CHARS_PER_TOKEN.claude!;
-  const sizes = new Map<string, { chars: number; rasters: number }>();
-  const represented = new Map<string, string[]>();
-  let round: Round | null = null;
-  let pending: string[] = [];
-  let pendingContaminated = false;
-  let pendingHosted = false;
-  let lastTotal: number | undefined;
-  let fresh = false;
+  const sizes = history?.map<{ chars: number; rasters: number }>("size") ?? new Map<string, { chars: number; rasters: number }>();
+  const represented = history?.map<string[]>("representation") ?? new Map<string, string[]>();
+  const initial: {
+    round: Round | null; pending: IdList | null; pendingContaminated: boolean;
+    pendingHosted: boolean; lastTotal: number | undefined; fresh: boolean;
+    currentId: string | null | undefined; sizeOrder: string[];
+  } = { round: null, pending: null, pendingContaminated: false, pendingHosted: false,
+    lastTotal: undefined, fresh: false, currentId: undefined, sizeOrder: [] };
+  const state = history?.fields("ledger", initial, { round: value => value && ({ ...value }) }) ?? initial;
+  const removeSize = (id: string) => {
+    sizes.delete(id);
+    state.sizeOrder = state.sizeOrder.filter(key => key !== id);
+  };
 
   const weight = (id: string): number => {
     const size = sizes.get(id);
@@ -192,8 +207,8 @@ export function createContextLedger(
   };
 
   const resolve = (closing: Round | null, nextPrompt: number | null, hosted = false) => {
-    if (!closing || !closing.members.length) return;
-    const { members } = closing;
+    if (!closing || !closing.members?.length) return;
+    const members = orderedIds(closing.members);
     const growth = closing.before === null || nextPrompt === null ? 0 : nextPrompt - closing.before - closing.output;
     const eligible = !closing.contaminated && !closing.partial && !hosted && growth > 0
       && members.every((id) => sizes.has(id) && hasCard(id));
@@ -204,45 +219,47 @@ export function createContextLedger(
         members.forEach((id, index) => emit(id, { n: shares[index], basis: "shared", round: { total: growth, calls: members.length } }));
       }
     }
-    for (const id of members) if (!represented.has(id)) sizes.delete(id);
+    for (const id of members) if (!represented.has(id)) removeSize(id);
   };
 
-  const open = (prompt: number | null, output: number, members: string[], contaminated: boolean): Round => {
-    const partial = fresh;
-    fresh = false;
+  const open = (prompt: number | null, output: number, members: IdList | null, contaminated: boolean): Round => {
+    const partial = state.fresh;
+    state.fresh = false;
     return { before: prompt, output, members, contaminated, partial };
   };
 
-  let currentId: string | null | undefined;
 
   return {
     claudeResponse(id, prompt, output) {
-      if (round && id !== null && id === currentId) {
-        round.output = Math.max(round.output, output);
+      if (state.round && id !== null && id === state.currentId) {
+        state.round.output = Math.max(state.round.output, output);
         return;
       }
-      resolve(round, prompt);
-      currentId = id;
-      round = open(id === null ? null : prompt, output, [], false);
+      resolve(state.round, prompt);
+      state.currentId = id;
+      state.round = open(id === null ? null : prompt, output, null, false);
     },
     codexUsage(prompt, output, totalTokens) {
-      if (totalTokens !== undefined && totalTokens === lastTotal) return;
-      lastTotal = totalTokens;
-      resolve(round, prompt, pendingHosted);
-      round = open(prompt, output, pending, pendingContaminated);
-      pending = [];
-      pendingContaminated = false;
-      pendingHosted = false;
+      if (totalTokens !== undefined && totalTokens === state.lastTotal) return;
+      state.lastTotal = totalTokens;
+      resolve(state.round, prompt, state.pendingHosted);
+      state.round = open(prompt, output, state.pending, state.pendingContaminated);
+      state.pending = null;
+      state.pendingContaminated = false;
+      state.pendingHosted = false;
     },
     member(id, hosted = false) {
-      if (hosted) pendingHosted = true;
-      if (engine === "codex") pending.push(id);
-      else round?.members.push(id);
+      if (hosted) state.pendingHosted = true;
+      if (engine === "codex") state.pending = appendId(state.pending, id);
+      else if (state.round) state.round.members = appendId(state.round.members, id);
     },
     result(id, chars, rasters, quiet = false) {
       const previous = sizes.get(id);
       sizes.set(id, quiet && previous ? { chars: previous.chars + chars, rasters: previous.rasters + rasters } : { chars, rasters });
-      if (!previous && sizes.size > SIZE_LIMIT) sizes.delete(sizes.keys().next().value!);
+      if (!previous) {
+        state.sizeOrder = [...state.sizeOrder, id];
+        if (state.sizeOrder.length > SIZE_LIMIT) removeSize(state.sizeOrder[0]);
+      }
       if (quiet) return;
       const total = sizes.get(id)!;
       const estimate = estimateContextTokens(engine, total.chars, total.rasters);
@@ -254,8 +271,8 @@ export function createContextLedger(
       if (estimate) emit(id, estimate);
     },
     contaminate() {
-      if (engine === "codex" && pending.length) pendingContaminated = true;
-      else if (round?.members.length) round.contaminated = true;
+      if (engine === "codex" && state.pending?.length) state.pendingContaminated = true;
+      else if (state.round?.members?.length) state.round.contaminated = true;
     },
     represent(outerId, nestedIds) {
       represented.set(outerId, [...nestedIds]);
@@ -263,24 +280,25 @@ export function createContextLedger(
     forget(id) {
       const nested = represented.get(id) ?? [];
       represented.delete(id);
-      sizes.delete(id);
+      removeSize(id);
       return nested;
     },
     signature() {
-      if (pending.length || sizes.size || represented.size || round?.members.length) return null;
-      const held = round ? `${round.before}/${round.output}/${round.contaminated ? 1 : 0}/${round.partial ? 1 : 0}` : "-";
-      return `${fresh ? 1 : 0}|${currentId ?? ""}|${lastTotal ?? ""}|${held}|${pendingContaminated ? 1 : 0}${pendingHosted ? 1 : 0}`;
+      if (state.pending?.length || state.sizeOrder.length || represented.size || state.round?.members?.length) return null;
+      const held = state.round ? `${state.round.before}/${state.round.output}/${state.round.contaminated ? 1 : 0}/${state.round.partial ? 1 : 0}` : "-";
+      return `${state.fresh ? 1 : 0}|${state.currentId ?? ""}|${state.lastTotal ?? ""}|${held}|${state.pendingContaminated ? 1 : 0}${state.pendingHosted ? 1 : 0}`;
     },
     reset(partial) {
       sizes.clear();
+      state.sizeOrder = [];
       represented.clear();
-      round = null;
-      currentId = undefined;
-      pending = [];
-      pendingContaminated = false;
-      pendingHosted = false;
-      lastTotal = undefined;
-      fresh = partial;
+      state.round = null;
+      state.currentId = undefined;
+      state.pending = null;
+      state.pendingContaminated = false;
+      state.pendingHosted = false;
+      state.lastTotal = undefined;
+      state.fresh = partial;
     },
   };
 }
