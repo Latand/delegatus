@@ -1,0 +1,236 @@
+{
+  "inputSha256": [
+    "3afc901582f898f01013ebd2dd91c0e4caa801de3aa431c9f68811272b997af8",
+    "2da069d27d0308250a5402936ab8ad071d38df089acdcc924682f8e024b8aa2e"
+  ],
+  "reports": [
+    {
+      "name": "observed",
+      "fullBytes": 33532499,
+      "fullGzipBytes": 6765197,
+      "deltaBytes": 29325,
+      "deltaGzipBytes": 5721,
+      "samples": [
+        {
+          "serializeHashMs": 207.82518500000015,
+          "v1DiffMs": 253.1452159999999,
+          "baselineBuildMs": 460.97040100000004,
+          "candidateBuildMs": 405.80425499999956,
+          "v1DeltaBytes": 76246
+        },
+        {
+          "serializeHashMs": 175.28143399999954,
+          "v1DiffMs": 205.3219140000001,
+          "baselineBuildMs": 380.60334799999964,
+          "candidateBuildMs": 289.6056630000003,
+          "v1DeltaBytes": 76246
+        },
+        {
+          "serializeHashMs": 189.38252600000033,
+          "v1DiffMs": 258.29371099999935,
+          "baselineBuildMs": 447.6762369999997,
+          "candidateBuildMs": 292.13385800000015,
+          "v1DeltaBytes": 76246
+        },
+        {
+          "serializeHashMs": 209.33070299999963,
+          "v1DiffMs": 238.87058999999954,
+          "baselineBuildMs": 448.20129299999917,
+          "candidateBuildMs": 321.1470960000006,
+          "v1DeltaBytes": 76246
+        },
+        {
+          "serializeHashMs": 199.38500700000077,
+          "v1DiffMs": 238.30912999999964,
+          "baselineBuildMs": 437.6941370000004,
+          "candidateBuildMs": 346.94621200000074,
+          "v1DeltaBytes": 76246
+        },
+        {
+          "serializeHashMs": 186.77288600000065,
+          "v1DiffMs": 233.7909579999996,
+          "baselineBuildMs": 420.56384400000024,
+          "candidateBuildMs": 297.6244979999992,
+          "v1DeltaBytes": 76246
+        },
+        {
+          "serializeHashMs": 159.90252099999998,
+          "v1DiffMs": 208.0274900000004,
+          "baselineBuildMs": 367.9300110000004,
+          "candidateBuildMs": 265.9326139999994,
+          "v1DeltaBytes": 76246
+        }
+      ],
+      "baselineAllocation": {
+        "calls": 16358,
+        "stringBytes": 100152741,
+        "shallowStringBytes": 185025708,
+        "parseBytes": 67061881
+      },
+      "candidateAllocation": {
+        "calls": 3,
+        "stringBytes": 33561830,
+        "shallowStringBytes": 62068959,
+        "parseBytes": 0
+      },
+      "cachedPollAllocation": {
+        "calls": 1,
+        "stringBytes": 95,
+        "shallowStringBytes": 111,
+        "parseBytes": 0
+      }
+    },
+    {
+      "name": "largest-records",
+      "fullBytes": 33532524,
+      "fullGzipBytes": 6765249,
+      "deltaBytes": 14167,
+      "deltaGzipBytes": 6818,
+      "samples": [
+        {
+          "serializeHashMs": 237.6112209999992,
+          "v1DiffMs": 189.96833000000152,
+          "baselineBuildMs": 427.5795510000007,
+          "candidateBuildMs": 251.76423299999988,
+          "v1DeltaBytes": 639843
+        },
+        {
+          "serializeHashMs": 159.85250599999927,
+          "v1DiffMs": 209.56763900000078,
+          "baselineBuildMs": 369.42014500000005,
+          "candidateBuildMs": 235.92473400000017,
+          "v1DeltaBytes": 639843
+        },
+        {
+          "serializeHashMs": 153.66683000000012,
+          "v1DiffMs": 193.603020999999,
+          "baselineBuildMs": 347.2698509999991,
+          "candidateBuildMs": 267.8695050000024,
+          "v1DeltaBytes": 639843
+        },
+        {
+          "serializeHashMs": 160.54284299999927,
+          "v1DiffMs": 200.2183010000008,
+          "baselineBuildMs": 360.76114400000006,
+          "candidateBuildMs": 281.0191029999987,
+          "v1DeltaBytes": 639843
+        },
+        {
+          "serializeHashMs": 187.82179200000246,
+          "v1DiffMs": 214.2945179999988,
+          "baselineBuildMs": 402.11631000000125,
+          "candidateBuildMs": 277.99735800000053,
+          "v1DeltaBytes": 639843
+        },
+        {
+          "serializeHashMs": 159.66425499999968,
+          "v1DiffMs": 245.0257730000012,
+          "baselineBuildMs": 404.6900280000009,
+          "candidateBuildMs": 292.98840500000006,
+          "v1DeltaBytes": 639843
+        },
+        {
+          "serializeHashMs": 177.3949410000023,
+          "v1DiffMs": 195.5363679999973,
+          "baselineBuildMs": 372.9313089999996,
+          "candidateBuildMs": 307.0413580000022,
+          "v1DeltaBytes": 639843
+        }
+      ],
+      "baselineAllocation": {
+        "calls": 16360,
+        "stringBytes": 100722531,
+        "shallowStringBytes": 185871506,
+        "parseBytes": 67064861
+      },
+      "candidateAllocation": {
+        "calls": 3,
+        "stringBytes": 33546697,
+        "shallowStringBytes": 62067115,
+        "parseBytes": 0
+      },
+      "cachedPollAllocation": {
+        "calls": 1,
+        "stringBytes": 95,
+        "shallowStringBytes": 111,
+        "parseBytes": 0
+      }
+    },
+    {
+      "name": "largest-fields",
+      "fullBytes": 33532553,
+      "fullGzipBytes": 6765182,
+      "deltaBytes": 28142,
+      "deltaGzipBytes": 11610,
+      "samples": [
+        {
+          "serializeHashMs": 154.9475130000028,
+          "v1DiffMs": 229.39869299999918,
+          "baselineBuildMs": 384.346206000002,
+          "candidateBuildMs": 231.89691999999923,
+          "v1DeltaBytes": 543913
+        },
+        {
+          "serializeHashMs": 150.34984199999963,
+          "v1DiffMs": 184.39335199999914,
+          "baselineBuildMs": 334.74319399999877,
+          "candidateBuildMs": 229.21317199999976,
+          "v1DeltaBytes": 543913
+        },
+        {
+          "serializeHashMs": 133.32790999999997,
+          "v1DiffMs": 183.43770999999833,
+          "baselineBuildMs": 316.7656199999983,
+          "candidateBuildMs": 264.4071839999997,
+          "v1DeltaBytes": 543913
+        },
+        {
+          "serializeHashMs": 140.07383099999788,
+          "v1DiffMs": 184.4552330000006,
+          "baselineBuildMs": 324.52906399999847,
+          "candidateBuildMs": 260.661329999999,
+          "v1DeltaBytes": 543913
+        },
+        {
+          "serializeHashMs": 208.88061200000084,
+          "v1DiffMs": 233.47736799999984,
+          "baselineBuildMs": 442.3579800000007,
+          "candidateBuildMs": 263.2559280000023,
+          "v1DeltaBytes": 543913
+        },
+        {
+          "serializeHashMs": 157.5139390000004,
+          "v1DiffMs": 190.94631300000037,
+          "baselineBuildMs": 348.46025200000076,
+          "candidateBuildMs": 235.76019599999927,
+          "v1DeltaBytes": 543913
+        },
+        {
+          "serializeHashMs": 180.1272140000001,
+          "v1DiffMs": 178.06152099999963,
+          "baselineBuildMs": 358.1887349999997,
+          "candidateBuildMs": 224.2812759999979,
+          "v1DeltaBytes": 543913
+        }
+      ],
+      "baselineAllocation": {
+        "calls": 16360,
+        "stringBytes": 100626659,
+        "shallowStringBytes": 185675714,
+        "parseBytes": 67064890
+      },
+      "candidateAllocation": {
+        "calls": 3,
+        "stringBytes": 33560701,
+        "shallowStringBytes": 62084179,
+        "parseBytes": 0
+      },
+      "cachedPollAllocation": {
+        "calls": 1,
+        "stringBytes": 95,
+        "shallowStringBytes": 111,
+        "parseBytes": 0
+      }
+    }
+  ]
+}

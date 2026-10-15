@@ -564,3 +564,105 @@ version-tolerant contract and before/after method are recorded. The actual
 browser response mix, full-route allocation profile and rendered equivalence
 remain implementation-validation work; they are not inferred from this
 single request or the isolated cache benchmark.
+
+## Implementation, 2026-10-15
+
+The board negotiates protocol 2 through the `x-llv-board-protocol` request
+header. The response repeats that version and full snapshots contain
+`boardProtocol` and `boardScope`. The existing summary URL, v1 delta and full
+response remain available to older tabs. A new tab accepts a v1 answer after
+rollback. An unknown protocol or invalid chain preserves the last good view
+and makes one legacy refetch; a failed refetch uses the existing failure UI.
+Persisted snapshots retain their protocol/scope markers with the certified
+ETag. Unsupported persisted versions are refused.
+
+`BoardEncoder` owns a JSON-normalized structured base for each retained scope.
+The ETag hashes epoch, scope and exact encoded content. Scope includes the
+summary version, visibility and pin. The existing built stamp supplies the
+scan generation and forward-only sequence. Content-identical builds retain
+their ETag. `BoardDelta` patches object fields and arrays keyed by path, id,
+project, stage id or attempt number. Duplicate identities replace the
+containing array. Compact order ranges, explicit object removals, nulls and
+empty arrays preserve the entire model, including histories and editor text.
+Application validates the complete chain before publication and keeps
+unchanged subtrees by reference. Arbitrary map keys use own data properties.
+
+The worker encodes from projected values before JSON; v2 avoids reading and
+parsing two full bodies, row stringification for comparison, the parent's
+previous-body file, and a full-body parse for storage health. A changed
+projection still serializes one full reset body. Worker retirement or a
+discarded build can require a full reset. A rare write-health overlay also
+uses a full reset. These cases preserve the existing health and lifecycle
+fences. First load and reset remain large.
+
+`BoardHistory` bounds both protocols to 32 scopes, 32 links per scope, 16 links
+per answer, two minutes of retained history and 16 MiB of UTF-8 payloads plus
+cached identity/gzip reservations. Evicting a projection evicts its history.
+The encoder retains at most four structured bases, accounting at most 96 MiB
+of their UTF-8 representation, expiring them on the next encode after two
+minutes; worker idle retirement also releases them. These budgets count
+encoded representations; object-graph heap can be larger. Delta envelopes and their
+compression are shared across tabs. V2 sends a full reset when a chain exceeds
+10% of the full UTF-8 body; v1 keeps its 25% threshold. Chains retain successive
+field changes rather than keeping full historical bodies. Response headers
+report transferred bytes and reset reasons without payload text.
+
+The implementation measurements use the same frozen A/B bodies and Bun
+1.4.0 as the audit, read only from private scratch. They exercise production
+encoding and cache code in isolated processes. Each case has one warmup and
+seven measured samples; equality is asserted outside the timed interval.
+The largest-record case changes the largest pipeline's state and appends to
+the largest task's details. A separate largest-field case appends to the
+largest report's summary and the largest task-details field, selected by
+UTF-8 bytes. No additional production request was made.
+
+The before/after results and raw timing samples are recorded in
+`evidence/board-poll/encoding.json` and `evidence/board-poll/render.json`.
+The encoding table measures full stringify/hash plus the existing v1 diff
+against the complete v2 encode (owned JSON values, stringify/hash and nested
+diff). It excludes unchanged store assembly and worker file transport. Cached
+build timings from a live GET are not used as per-request measurements.
+
+Allocation instrumentation counts all JSON parse input bytes and cumulative
+shallow sizes of JSON string results during those operations. It excludes
+parsed/cloned object graphs, native allocations and GC; RSS is not substituted
+for allocated bytes. A cached answer serializes a 95-byte cache key, with a
+111-byte shallow string estimate, and performs no JSON parsing. Quiet 304s
+carry no body. Route tests additionally drive the
+real GET handler and resident worker against isolated synthetic state;
+the production-size timing boundary is the encoding/client seam. This work
+does not claim a full Viewer startup or a production latency percentile.
+
+The existing kanban browser driver compares full and delta responses after
+three updates at 1440×900 and 390×900, with 18 cards, waiting stages and
+prototype notices. Card identities, order, complete rendered text, counts and
+geometry agree. It captures the board and scrolled desktop cards, and runs
+the frozen production pair through the real Chromium client cache. Frame
+inspection confirms the phone's waiting notices, prototype controls and
+counts, and the desktop's expanded card content. Frames remain local under
+`.artifacts/board-poll`; public evidence contains aggregate readings only.
+
+Focused checks cover nested pipeline history, nonempty flows/workflows and
+seat decisions, additions/removals/reorder, dismissal fields, arbitrary keys,
+malformed/unknown protocols, optimistic overlays, persisted snapshots,
+rollback, worker retirement, scope separation, history eviction, 1/4/8-tab
+gzip reads and 304s. Existing forward-only, hidden-tab, snapshot and failure
+tests remain part of the final validation. Every test invocation uses explicit
+file paths and isolated home/config/temp/state roots through the gate.
+
+### Implementation measurements
+
+| Measurement | Before | After v2 |
+| --- | ---: | ---: |
+| Observed update, decoded transfer (full summary → delta) | 33,532,418 B | 29,325 B |
+| Observed update, gzip transfer (full summary → delta) | 6,765,121 B | 5,721 B |
+| Observed update, existing v1 → v2 delta | 76,259 B | 29,325 B |
+| Largest pipeline/task update, existing v1 → v2 delta | 639,856 B | 14,167 B |
+| Largest report/details field update, existing v1 → v2 delta | 543,926 B | 28,142 B |
+| Server encode + diff, observed update, median | 437.69 ms | 297.62 ms |
+| Server encode + diff, largest-record update, median | 372.93 ms | 278.00 ms |
+| JSON string results per observed build, cumulative shallow estimate | 185,025,708 B | 62,068,959 B |
+| JSON parse input per observed build | 67,061,881 B | 0 B |
+| Chromium client apply, full replacement → delta, median | 608.20 ms | 9.00 ms |
+
+Seven samples per case after one warmup. Raw samples retain the range; timings describe the admitted isolated replay. Full reset bodies add protocol metadata and remain about 33.53 MB.

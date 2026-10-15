@@ -200,14 +200,30 @@ test.skipIf(!process.env.BOARD_POLL_BASE_FILE || !process.env.BOARD_POLL_NEXT_FI
   const bBody = fs.readFileSync(process.env.BOARD_POLL_NEXT_FILE!, "utf8");
   const a = JSON.parse(aBody) as Json;
   const b = JSON.parse(bBody) as Json;
-  const largest = (rows: Json[]) => rows.reduce((best, row) => JSON.stringify(row).length > JSON.stringify(best).length ? row : best);
+  const largest = (rows: Json[]) => rows.reduce((best, row) => Buffer.byteLength(JSON.stringify(row)) > Buffer.byteLength(JSON.stringify(best)) ? row : best);
   const large = structuredClone(b);
   const pipeline = largest(large.pipelines as Json[]);
   pipeline.state = pipeline.state === "running" ? "paused" : "running";
   const task = largest(large.tasks as Json[]);
   task.details = `${task.details ?? ""}\nOne more recorded detail.`;
+  const fields = structuredClone(b);
+  const detailTask = (fields.tasks as Json[]).reduce((best, row) =>
+    Buffer.byteLength(String(row.details ?? "")) > Buffer.byteLength(String(best.details ?? "")) ? row : best);
+  detailTask.details = `${detailTask.details ?? ""}\nOne more recorded detail.`;
+  const reportRows: Json[] = [];
+  const collectReports = (value: unknown): void => {
+    if (!value || typeof value !== "object") return;
+    if (Array.isArray(value)) { value.forEach(collectReports); return; }
+    for (const [key, child] of Object.entries(value)) {
+      if (key === "report" && child && typeof child === "object" && !Array.isArray(child)) reportRows.push(child as Json);
+      collectReports(child);
+    }
+  };
+  collectReports(fields.pipelines);
+  const report = largest(reportRows);
+  report.summary = `${report.summary ?? ""}\nOne more recorded result.`;
   const reports: unknown[] = [];
-  for (const [name, before, after] of [["observed", a, b], ["largest-records", b, large]] as const) {
+  for (const [name, before, after] of [["observed", a, b], ["largest-records", b, large], ["largest-fields", b, fields]] as const) {
     const oldBody = JSON.stringify(before);
     const oldTag = `"${createHash("sha1").update(oldBody).digest("hex")}"`;
     const samples: unknown[] = [];
@@ -248,12 +264,12 @@ test.skipIf(!process.env.BOARD_POLL_BASE_FILE || !process.env.BOARD_POLL_NEXT_FI
       diffFilesBodies(oldBody, body, oldTag, `"${createHash("sha1").update(body).digest("hex")}"`);
     });
     const candidateAllocation = countStrings(() => encoder.encode("global", "replay", after));
-    const next = encoder.encode("global", "replay", before);
+    const next = encoder.encode("global", "replay", after);
     const history = new BoardHistory();
-    history.record("global", base.etag, next.etag + "target", JSON.parse(finalDelta).deltas.map((d: unknown) => JSON.stringify(d)).join(","));
-    const answer = history.answer("global", base.etag, next.etag + "target", Buffer.byteLength(full)).answer!;
+    history.record("global", base.etag, next.etag, JSON.parse(finalDelta).deltas.map((d: unknown) => JSON.stringify(d)).join(","));
+    const answer = history.answer("global", base.etag, next.etag, Buffer.byteLength(full)).answer!;
     expect(answer).toBeDefined();
-    const pollAllocation = countStrings(() => history.answer("global", base.etag, next.etag + "target", Buffer.byteLength(full)));
+    const pollAllocation = countStrings(() => history.answer("global", base.etag, next.etag, Buffer.byteLength(full)));
     const gzip = await gzipBody(finalDelta);
     reports.push({ name, fullBytes: Buffer.byteLength(full), fullGzipBytes: (await gzipBody(full)).length,
       deltaBytes: Buffer.byteLength(finalDelta), deltaGzipBytes: gzip.length, samples, baselineAllocation, candidateAllocation, cachedPollAllocation: pollAllocation });

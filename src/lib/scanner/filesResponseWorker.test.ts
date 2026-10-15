@@ -266,8 +266,6 @@ test("a worker that dies mid-build fails its build and the next one starts a fre
   }
 });
 
-/* #1994: the delta from a scope's previous representation survives the
-   worker being retired between two revisions. */
 test("v2 resident worker emits nested deltas and resets safely after worker retirement", async () => {
   const { applyBoardDelta } = await import("@/lib/boardDelta");
   const stateDir = scratchState();
@@ -293,6 +291,8 @@ test("v2 resident worker emits nested deltas and resets safely after worker reti
   }
 });
 
+/* #1994: the v1 delta from a scope's previous representation survives the
+   worker being retired between two revisions. */
 test("a retired worker still answers the next revision with a delta from its persisted base", async () => {
   const stateDir = scratchState();
   const deltaScope = "a".repeat(40);
