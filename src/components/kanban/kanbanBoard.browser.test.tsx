@@ -31572,6 +31572,21 @@ describe("full autonomy", () => {
           await toggle.scrollIntoViewIfNeeded();
           await seek(page);
           await page.screenshot({ path: path.join(out, `${label}-settings.png`) });
+          // The remaining time moves as one piece: the NBSP-joined tail of the status line never straddles a line break.
+          const tailLines = await page.locator("[data-seat-tick-autonomy-summary]:visible").first().evaluate(node => {
+            const walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT);
+            for (let text = walker.nextNode(); text; text = walker.nextNode()) {
+              const match = /\S+(?:\u00a0\S+)+$/.exec(text.textContent ?? "");
+              if (!match) continue;
+              const range = document.createRange();
+              range.setStart(text, match.index); range.setEnd(text, match.index + match[0].length);
+              return { tail: match[0], tops: new Set([...range.getClientRects()].map(rect => Math.round(rect.top))).size };
+            }
+            return null;
+          });
+          expect(tailLines).not.toBeNull();
+          expect(tailLines!.tail.split("\u00a0").length).toBeGreaterThanOrEqual(3);
+          expect(tailLines!.tops).toBe(1);
           // Escape closes the settings surface, exposing the chip in its actual header.
           await page.keyboard.press("Escape");
           const active = page.locator(`${host} ${control}[data-seat-tick-autonomy=on]:visible`).first();
@@ -31606,6 +31621,13 @@ describe("full autonomy", () => {
           const log = page.locator("[data-seat-tick-autonomy-log]:visible");
           await log.scrollIntoViewIfNeeded();
           expect(await log.textContent()).toContain("Reopen the export-layout form");
+          const setBy = await page.locator("[data-seat-tick-autonomy-set-by]:visible").first().textContent();
+          expect(setBy).toMatch(/ · \S.*$/);
+          if (lang === "uk") expect(setBy).toContain("змінив(ла)");
+          const emphasis = await log.locator("p").evaluateAll(nodes => nodes.map(node => ({ text: node.textContent ?? "", weight: Number(getComputedStyle(node).fontWeight), inner: [...node.querySelectorAll("span")].map(span => Number(getComputedStyle(span).fontWeight)) })));
+          const decisionRow = emphasis.find(entry => entry.text === "Compact export layout");
+          expect(decisionRow?.weight).toBeGreaterThanOrEqual(600);
+          expect(emphasis.find(entry => /^(How to undo|Як повернути):/.test(entry.text))?.inner[0]).toBeGreaterThanOrEqual(600);
           await seek(page);
           await page.screenshot({ path: path.join(out, `${label}-undo.png`) });
           await duration.selectOption("unlimited");

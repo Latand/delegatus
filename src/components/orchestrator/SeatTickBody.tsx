@@ -1095,7 +1095,7 @@ function SeatTickDetails({ record, autonomy, lastDelivery, now, locale, phone }:
         {[...(record.settings.autonomyHistory ?? []), ...(record.settings.autonomy ? [record.settings.autonomy] : [])].some(episode => episode.decisions.length > 0) ? <div data-seat-tick-autonomy-log className="flex min-w-0 flex-col gap-2">
           <p className="text-caption font-semibold text-muted">{t("seatTick.autonomy.decisions")}</p>
           {[...(record.settings.autonomyHistory ?? []), ...(record.settings.autonomy ? [record.settings.autonomy] : [])].flatMap(episode => episode.decisions.map(decision => <div key={`${episode.startedAt}:${decision.id}`} className="min-w-0 break-words text-caption leading-4 text-secondary">
-            <p>{decision.decision}</p>{decision.reviewState ? <p>{t(`seatTick.autonomy.review.${decision.reviewState}`)}</p> : null}<p>{decision.why}</p><p>{t("seatTick.autonomy.undo")}: {decision.undo}</p>
+            <p className="font-semibold text-primary">{decision.decision}</p>{decision.reviewState ? <p className="font-medium text-secondary">{t(`seatTick.autonomy.review.${decision.reviewState}`)}</p> : null}<p>{decision.why}</p><p><span className="font-semibold text-primary">{t("seatTick.autonomy.undo")}:</span> {decision.undo}</p>
           </div>))}
         </div> : null}
         {prompt ? (
