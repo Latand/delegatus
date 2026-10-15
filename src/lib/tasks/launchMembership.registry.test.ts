@@ -5,6 +5,7 @@ import { afterAll, expect, test } from "bun:test";
 
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import type { BoardTask } from "@/lib/tasks/types";
+import type { RuntimeHostClient } from "@/lib/runtime/client";
 
 /**
  * The launch boundary against the real registry and the real task store
@@ -512,7 +513,7 @@ test.each(["explicit", "placeholder"] as const)("a fresh failure of an already s
   expect(readSpawnNoticeTurn(begun.receipt.conversationId, `launch:${begun.receipt.launchId}`)).toBeNull();
 });
 
-test("a synchronous TASK_RUNS_ELSEWHERE refusal is durably silent across repair passes", async () => {
+test.each(["intact", "legacy"] as const)("a saved synchronous TASK_RUNS_ELSEWHERE refusal stays silent with %s reporting state", async reporting => {
   const { queryLifecycleEvents } = await import("@/lib/lifecycle/journal");
   const { readSpawnNoticeTurn } = await import("@/lib/spawnNotice/store");
   const { LaunchMembershipError } = await import("./launchMembership");
@@ -524,23 +525,79 @@ test("a synchronous TASK_RUNS_ELSEWHERE refusal is durably silent across repair 
   fs.writeFileSync(identity, JSON.stringify({ v: 1, installId: self, label: "fixture", publicUrl: null, check: null }));
   try {
     saveTasks([{ ...task("peer-work", "Runs elsewhere"), machine: peer }]);
-    const registry = registryAt("synchronous-peer-refusal");
+    const attempt = `synchronous-peer-refusal-${reporting}`;
+    const registry = registryAt(attempt);
     let refusal: unknown;
     try {
       registry.beginSpawnRequest({ engine: "codex", cwd: stateDir, explicitProject: project, transport: "structured",
-        clientAttemptId: "synchronous-peer-refusal", taskIds: ["peer-work"], launcher: { conversationId: "conversation_fixture_launcher", notify: true },
+        clientAttemptId: attempt, taskIds: ["peer-work"], launcher: { conversationId: "conversation_fixture_launcher", notify: true },
         launchProfile: emptyLaunchProfile({ cwd: stateDir, title: "Runs elsewhere" }) });
     } catch (error) { refusal = error; }
     expect(refusal).toBeInstanceOf(LaunchMembershipError);
     expect((refusal as InstanceType<typeof LaunchMembershipError>).code).toBe("TASK_RUNS_ELSEWHERE");
-    const receipt = registry.spawnReceiptForClientAttempt("synchronous-peer-refusal")!;
+    const receipt = registry.spawnReceiptForClientAttempt(attempt)!;
     expect(receipt.failureAnnouncementSuppressed).toBe(true);
-    const reopened = registryAt("synchronous-peer-refusal");
+    expect(receipt.launcher?.conversationId).toBe("conversation_fixture_launcher");
+    if (reporting === "legacy") {
+      /* The refusal was returned above, but an older registry writer retained
+         only the failed receipt. Missing reports cannot make it a fresh loss. */
+      const raw = JSON.parse(fs.readFileSync(registry.filename, "utf8"));
+      delete raw.receipts[receipt.launchId].failureAnnouncementSuppressed;
+      delete raw.receipts[receipt.launchId].failureReporting;
+      delete raw.receipts[receipt.launchId].failureRepairState;
+      fs.writeFileSync(registry.filename, JSON.stringify(raw));
+    }
+    const reopened = registryAt(attempt);
     await terminalizeStaleStructuredSpawns(reopened, null);
     await terminalizeStaleStructuredSpawns(reopened, null);
-    expect(queryLifecycleEvents({ conversationId: receipt.conversationId, type: "spawn_failed" }).events).toEqual([]);
-    expect(readSpawnNoticeTurn(receipt.conversationId, `launch:${receipt.launchId}`)).toBeNull();
+    expect({ events: queryLifecycleEvents({ conversationId: receipt.conversationId, type: "spawn_failed" }).events.length,
+      notice: readSpawnNoticeTurn(receipt.conversationId, `launch:${receipt.launchId}`) !== null }).toEqual({ events: 0, notice: false });
   } finally { fs.rmSync(identity, { force: true }); }
+});
+
+test.each(["open", "done"] as const)("a recovered structured launch tracks its %s replacement task before a fresh failure", async status => {
+  const settled = status === "done";
+  const { queryLifecycleEvents } = await import("@/lib/lifecycle/journal");
+  const { readSpawnNoticeTurn } = await import("@/lib/spawnNotice/store");
+  const { spawnLossRelevant } = await import("@/lib/spawnNotice/production");
+  const attempt = `recovered-loss-${settled}`;
+  saveTasks([task("deleted-launch-target", "Queued work")]);
+  const registry = registryAt(attempt);
+  const begun = registry.beginSpawnRequest({ engine: "claude", cwd: stateDir, explicitProject: project, transport: "structured",
+    accountId: "account-a", accountPin: true, clientAttemptId: attempt, taskIds: ["deleted-launch-target"],
+    launcher: { conversationId: "conversation_current_launcher", notify: true }, launchProfile: emptyLaunchProfile({ cwd: stateDir, title: "Queued work" }) });
+  if (begun.kind !== "created") throw new Error("expected queued receipt");
+  registry.queuePinnedSpawn(begun.receipt.launchId, { version: 1, retryAt: new Date(Date.now() - 1_000).toISOString(),
+    accountId: "account-a", locale: "en",
+    spec: { engine: "claude", command: "claude", cwd: stateDir, windowName: "queued-pin", launchProfile: emptyLaunchProfile({ cwd: stateDir, title: "Queued work" }) },
+    ["prompt"]: "Continue the queued work", imageRefs: [], parentArtifactPath: null, pipelineSourceConversationId: null,
+  }, "Queued work");
+  if (!begun.receipt.admissionOwner) throw new Error("expected reservation owner");
+  expect(registry.releaseStartingStructuredSpawn(begun.receipt.launchId, begun.receipt.admissionOwner).released).toBe(true);
+  saveTasks([]);
+  const reopened = registryAt(attempt);
+  const tick = await terminalizeStaleStructuredSpawns(reopened, {} as RuntimeHostClient, {
+    resolveSpawnAccount: () => {
+      if (settled) saveTasks(loadTasks().map(row => ({ ...row, status: "done" })));
+      throw new Error("runtime host unavailable after membership recovery");
+    },
+  });
+  expect(tick.terminalized).toContain(begun.receipt.launchId);
+  const replacement = loadTasks()[0]!;
+  expect(replacement.id).not.toBe("deleted-launch-target");
+  expect(replacement.assignments.some(row => row.launchId === begun.receipt.launchId)).toBe(true);
+  const notice = readSpawnNoticeTurn(begun.receipt.conversationId, `launch:${begun.receipt.launchId}`);
+  expect(queryLifecycleEvents({ conversationId: begun.receipt.conversationId, type: "spawn_failed" }).events).toHaveLength(settled ? 0 : 1);
+  if (settled) expect(notice).toBeNull();
+  else {
+    expect(notice?.launcherConversationId).toBe("conversation_current_launcher");
+    expect(spawnLossRelevant(notice!, { receipt: id => reopened.spawnReceipt(id), task: id => loadTasks().find(row => row.id === id) ?? null })).toBe(true);
+  }
+  expect(registryAt(attempt).spawnReceipt(begun.receipt.launchId)?.failureReporting?.taskIds).toEqual([replacement.id]);
+  await terminalizeStaleStructuredSpawns(registryAt(attempt), null);
+  await terminalizeStaleStructuredSpawns(registryAt(attempt), null);
+  expect(queryLifecycleEvents({ conversationId: begun.receipt.conversationId, type: "spawn_failed" }).events).toHaveLength(settled ? 0 : 1);
+  expect(readSpawnNoticeTurn(begun.receipt.conversationId, `launch:${begun.receipt.launchId}`)).toEqual(notice);
 });
 
 test("a fresh failure from a retired seat writes no wake event for its successor", async () => {

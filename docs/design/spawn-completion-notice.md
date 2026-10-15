@@ -331,14 +331,19 @@ Lifecycle events and notice rows retain the failure time on retries. A lost
 notice includes that time and explains that the original key replays the
 failure; it offers no relaunch instruction.
 
-The release owner silently backfills existing failed receipts in pages of at
-most 64 at startup; the reaper continues with its actuation cap. Backfill uses
-the state startup-mutation fence. SQLite selects legacy and pending receipt
-keys through an index over retained current rows, including archived receipt
+Activated startup recovery silently backfills existing failed receipts in pages
+of at most 64; the reaper continues with its actuation cap. Opening a registry
+does no failure backfill. Each page checks the startup-mutation barrier and the
+Viewer's current traffic ownership before writing. SQLite selects legacy and
+pending receipt keys through an index over retained current rows, including archived receipt
 copies; after settlement,
 those receipts leave the repair query. The JSON rollback backend retains its
 existing in-memory registry reads. Task settlement remains owed when its
 write is refused, even when announcements were suppressed.
+
+Recovery persists the task ids from its new membership admission before a
+queued launch executes. Settlement and notice delivery both check those current
+targets, including a replacement for a task deleted while the launch waited.
 
 A lost notice is checked again before delivery and before an uncertain retry.
 An expired failure, a now-settled task, or a rotated launcher is skipped.

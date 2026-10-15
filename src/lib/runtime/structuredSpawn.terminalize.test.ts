@@ -17,6 +17,8 @@ import { writeSeatTickState } from "@/lib/monitor/seatTickState";
 import { appendLifecycleEvents, lifecycleJournalPath, queryLifecycleEvents, readLifecycleJournal } from "@/lib/lifecycle/journal";
 import { pruneSpawnNotices, readSpawnNoticeTurn, settleSpawnNotices } from "@/lib/spawnNotice/store";
 import { LAUNCH_FAILURE_NOTICE_WINDOW_MS } from "@/lib/tasks/launchFailureReporting";
+import { closeStateMutationActivationForTests, openStateMutationActivation, stateMutationRefusal } from "@/lib/state/stateMutationBarrier";
+import { viewerReleaseOwnsTraffic } from "@/lib/viewerReleaseTraffic";
 
 import { RuntimeHostUnavailableError, type RuntimeHostClient } from "./client";
 import {
@@ -302,6 +304,8 @@ test("a bounded silent backfill converges archived historical failures without r
   let receiptReads = 0;
   const reopened = new AgentRegistry(store.filename, undefined, undefined, { sqliteMode: "sqlite",
     onSqliteRowPayloadRead: (collection, count) => { if (collection === "receipts") receiptReads += count; } });
+  expect(Object.values(reopened.snapshot().receipts).filter(row => row.failureAnnouncementSuppressed)).toHaveLength(0);
+  await terminalizeStaleStructuredSpawns(reopened, null, { actuationCap: 64 });
   expect(Object.values(reopened.snapshot().receipts).filter(row => row.failureAnnouncementSuppressed)).toHaveLength(64);
   expect(reopened.archiveInactiveRows(256)).toBeGreaterThan(0);
   const db = new Database(store.filename.replace(/\.json$/, ".sqlite"), { readonly: true });
@@ -346,17 +350,63 @@ test("a reader without the release fence cannot backfill operator-shaped state",
   }
 });
 
-test("a synchronous tmux task admission refusal stays silent after restart", async () => {
-  const store = registry();
-  expect(() => store.beginSpawnRequest({ engine: "codex", cwd: "/repo", transport: "tmux", clientAttemptId: "synchronous-task-refusal",
-    taskIds: ["missing-task"], launcher: { conversationId: "conversation_refused_launcher", notify: true },
-    launchProfile: emptyLaunchProfile({ cwd: "/repo", title: "Refused work" }),
-  })).toThrow("not available");
-  const receipt = Object.values(store.snapshot().receipts)[0]!;
-  const reopened = new AgentRegistry(store.filename, undefined, undefined, { sqliteMode: "off" });
-  await terminalizeStaleStructuredSpawns(reopened, null);
-  expect(queryLifecycleEvents({ conversationId: receipt.conversationId, type: "spawn_failed" }).events).toEqual([]);
-  expect(readSpawnNoticeTurn(receipt.conversationId, `launch:${receipt.launchId}`)).toBeNull();
+test("failure backfill waits for activation and stops when the Viewer loses traffic", async () => {
+  const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-backfill-fence-"));
+  const directory = path.join(sandbox, "config", "delegatus", "state");
+  const previous = { LLV_STATE_DIR: process.env.LLV_STATE_DIR, XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME,
+    LLV_STATE_OWNER: process.env.LLV_STATE_OWNER, PORT: process.env.PORT };
+  try {
+    process.env.LLV_STATE_DIR = directory;
+    const store = new AgentRegistry(path.join(directory, "agent-registry.json"), undefined, undefined, { sqliteMode: "off" });
+    const base = staleStructuredReceipt(store, "fence-seed", { conversationId: "conversation_fence_launcher", notify: true });
+    const raw = JSON.parse(fs.readFileSync(store.filename, "utf8"));
+    raw.receipts = Object.fromEntries(Array.from({ length: 70 }, (_, index) => {
+      const row = { ...raw.receipts[base.launchId], launchId: `fenced-${index}`, clientAttemptId: `fenced-attempt-${index}`,
+        state: "failed", error: "historical refusal" };
+      delete row.failureReporting;
+      return [row.launchId, row];
+    }));
+    fs.writeFileSync(store.filename, JSON.stringify(raw));
+    const target = path.join(directory, "viewer-release.json");
+    fs.writeFileSync(target, JSON.stringify({ endpoint: "http://127.0.0.1:32101" }));
+    process.env.XDG_CONFIG_HOME = path.join(sandbox, "config");
+    delete process.env.LLV_STATE_DIR;
+    process.env.LLV_STATE_OWNER = "viewer";
+    process.env.PORT = "32102";
+    closeStateMutationActivationForTests();
+    expect(viewerReleaseOwnsTraffic()).toBe(false);
+    expect(stateMutationRefusal(directory)).not.toBeNull();
+    const before = JSON.parse(fs.readFileSync(store.filename, "utf8"));
+    const reopened = new AgentRegistry(store.filename, undefined, undefined, { sqliteMode: "off" });
+    expect(JSON.parse(fs.readFileSync(store.filename, "utf8"))).toEqual(before);
+    expect(() => reopened.backfillFailedLaunchReporting()).toThrow();
+    process.env.LLV_STATE_OWNER = "mcp";
+    new AgentRegistry(store.filename, undefined, undefined, { sqliteMode: "off" });
+    expect(JSON.parse(fs.readFileSync(store.filename, "utf8"))).toEqual(before);
+
+    process.env.LLV_STATE_OWNER = "viewer";
+    process.env.PORT = "32101";
+    expect(() => reopened.backfillFailedLaunchReporting()).toThrow();
+    process.env.LLV_STATE_DIR = directory;
+    expect(() => reopened.backfillFailedLaunchReporting()).toThrow("current Viewer release");
+    delete process.env.LLV_STATE_DIR;
+    openStateMutationActivation();
+    await terminalizeStaleStructuredSpawns(reopened, null, { actuationCap: 64 });
+    expect(Object.values(reopened.snapshot().receipts).filter(row => row.failureAnnouncementSuppressed)).toHaveLength(64);
+    const activated = fs.readFileSync(store.filename, "utf8");
+    fs.writeFileSync(target, JSON.stringify({ endpoint: "http://127.0.0.1:32102" }));
+    expect(() => reopened.backfillFailedLaunchReporting()).toThrow("current Viewer release");
+    expect(fs.readFileSync(store.filename, "utf8")).toBe(activated);
+    expect(queryLifecycleEvents({ type: "spawn_failed" }).events.filter(row => row.conversationId === base.conversationId)).toEqual([]);
+    expect(readSpawnNoticeTurn(base.conversationId, `launch:${base.launchId}`)).toBeNull();
+  } finally {
+    closeStateMutationActivationForTests();
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    fs.rmSync(sandbox, { recursive: true, force: true });
+  }
 });
 
 test.each(["off", "sqlite"] as const)("a fresh loss stays handled when both report lookups miss after %s restart", async sqliteMode => {

@@ -34,7 +34,6 @@ import { signalProcessGroup } from "@/lib/processGroup";
 import { hasUserAuthoredMessage } from "@/lib/session/reader";
 import { isCurrentOperatorSeat } from "@/lib/orchestrator/managerAuthoritySources";
 import { buildImagePayload, deleteInboxImages, spawnAgentWithPrompt } from "@/lib/tmux";
-import { admitRecoveredLaunch } from "@/lib/tasks/launchMembership";
 import { hardenedRedact } from "@/lib/view/compactText";
 
 import { ClaudeStreamBrokerHost, type ClaudeStreamBrokerHostOptions } from "./claudeStreamBrokerHost";
@@ -848,7 +847,8 @@ async function actuateQueuedPinnedSpawn(
      that cannot record the membership fails the launch instead of starting an
      agent outside every task. */
   try {
-    admitRecoveredLaunch(admissionClaim.receipt);
+    await registry.deliveryWriteOrBusy({ label: "spawn.membership", operationId: receipt.launchId }, () =>
+      registry.admitRecoveredLaunch(admissionClaim.receipt));
   } catch (error) {
     return failQueuedPinnedSpawn(registry, admissionClaim.receipt, structuredSpawnFailureReason(error));
   }
@@ -1003,7 +1003,11 @@ export async function terminalizeStaleStructuredSpawns(
   const timeoutMs = options.timeoutMs ?? STALE_STRUCTURED_SPAWN_TIMEOUT_MS;
   const actuationCap = options.actuationCap ?? STALE_STRUCTURED_SPAWN_ACTUATION_CAP;
   const reconcile = options.reconcile ?? reconcileStructuredSpawnReplay;
-  await registry.deliveryWrite({ label: "spawn.failure-backfill" }, () => registry.backfillFailedLaunchReporting(actuationCap));
+  options.assertActive?.();
+  await registry.deliveryWrite({ label: "spawn.failure-backfill" }, () => {
+    options.assertActive?.();
+    return registry.backfillFailedLaunchReporting(actuationCap);
+  });
   for (const receipt of registry.failedSpawnReceipts(actuationCap)) {
     options.assertActive?.();
     registry.reportFailedLaunch(receipt, { now: now() });

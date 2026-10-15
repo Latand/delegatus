@@ -13,6 +13,8 @@ import { stagedLaunchRecovery } from "@/lib/runtime/stagedRecovery";
 import { deepFreeze } from "@/lib/deepFreeze";
 import { assertNotOperatorStateUnderTest, assertStateStartupMutation, mayRunStateStartupMutation } from "@/lib/stateOwnership";
 import { hotStateWriterRevision } from "@/lib/state/hotStateAuthority";
+import { assertStateMutationAllowed, stateMutationActivationOpen } from "@/lib/state/stateMutationBarrier";
+import { viewerReleaseOwnsTraffic } from "@/lib/viewerReleaseTraffic";
 import {
   captureProcessIdentity,
   processIdentityMayOwn,
@@ -106,7 +108,7 @@ import { parseMessageOrigin, sameMessageOrigin } from "@/lib/runtime/messageOrig
 import { normalizePendingPermissions, normalizePendingToolUses, type PendingPermissionRequest, type PendingToolUse } from "@/lib/runtime/permissionRequests";
 import type { ProviderRetryEvidence } from "@/lib/runtime/engineHost";
 import { assertStructuredTextEnvelope, parseStructuredImageRefs, structuredContent, type StructuredImageRef } from "@/lib/runtime/structuredContent";
-import { admitReservedLaunch, settleFailedLaunch } from "@/lib/tasks/launchMembership";
+import { admitRecoveredLaunch, admitReservedLaunch, settleFailedLaunch } from "@/lib/tasks/launchMembership";
 import type { LaunchFailureReporting } from "@/lib/tasks/launchFailureReporting";
 
 export type AgentHostStatus = "starting" | "live" | "idle" | "handoff" | "unhosted" | "dead";
@@ -4678,10 +4680,6 @@ export class AgentRegistry {
     if ((backend.source === "environment" || backend.source === "default") && mayRunStartupMaintenance) {
       publishRegistryBackendIdentity(filename, this.sqliteMode, sqliteFilename);
     }
-    if (mayRunStartupMaintenance) {
-      try { this.backfillFailedLaunchReporting(); }
-      catch (error) { console.warn("agent registry failure announcement backfill deferred:", error); }
-    }
   }
 
   /**
@@ -5778,11 +5776,19 @@ export class AgentRegistry {
       The release owner performs the first page at startup and the reaper
       continues it; MCP readers never migrate operator state. */
   backfillFailedLaunchReporting(limit = 64): number {
-    assertStateStartupMutation(path.dirname(this.filename), "failed launch announcement backfill");
+    const assertOwner = () => {
+      assertStateStartupMutation(path.dirname(this.filename), "failed launch announcement backfill");
+      assertStateMutationAllowed(path.dirname(this.filename));
+      if (process.env.LLV_STATE_OWNER === "viewer" && (!stateMutationActivationOpen() || !viewerReleaseOwnsTraffic())) {
+        throw new Error("failed launch announcement backfill requires the current Viewer release");
+      }
+    };
+    assertOwner();
     const keys = this.sqliteStore?.failedLaunchRepairKeys(limit, true)
       ?? Object.values(this.readOnlySnapshot().receipts).filter(row => row.state === "failed" && !row.failureRepairState).slice(0, limit).map(row => row.launchId);
     if (!keys.length) return 0;
     return this.mutate(file => {
+      assertOwner();
       let changed = 0;
       for (const key of keys) {
         const receipt = file.receipts[key];
@@ -6025,17 +6031,27 @@ export class AgentRegistry {
         if (input.transport === "structured") this.failStructuredSpawn(result.receipt.launchId, reason, { announce: false });
         else this.failSpawn(result.receipt.launchId, reason);
       });
-      this.mutate((file) => {
-        const receipt = file.receipts[result.receipt.launchId];
-        if (receipt) {
-          receipt.membershipAdmitted = true;
-          if (receipt.failureReporting && admission.ok) receipt.failureReporting.taskIds = admission.taskIds;
-        }
-      });
-      result.receipt.membershipAdmitted = true;
-      if (result.receipt.failureReporting && admission.ok) result.receipt.failureReporting.taskIds = admission.taskIds;
+      if (admission.ok) this.recordSpawnMembership(result.receipt, admission.taskIds);
     }
     return result;
+  }
+
+  /** Recovery may replace a task deleted while the launch waited. Persist the
+      newly admitted targets before execution or failure reporting can resume. */
+  admitRecoveredLaunch(receipt: SpawnReceipt): void {
+    const admission = admitRecoveredLaunch(receipt);
+    if (admission.ok) this.recordSpawnMembership(receipt, admission.taskIds);
+  }
+
+  private recordSpawnMembership(receipt: SpawnReceipt, taskIds: string[]): void {
+    this.mutate(file => {
+      const row = file.receipts[receipt.launchId];
+      if (!row) throw new Error("admitted launch receipt is unavailable");
+      row.membershipAdmitted = true;
+      if (row.failureReporting) row.failureReporting.taskIds = [...taskIds];
+    });
+    receipt.membershipAdmitted = true;
+    if (receipt.failureReporting) receipt.failureReporting.taskIds = [...taskIds];
   }
 
   /** Terminalize only a reservation whose task membership never committed and
