@@ -1527,7 +1527,7 @@ async function startupAdoptionAttempts(
   return attempts;
 }
 
-test.each(["terminal", "busy"] as const)("startup retains a native callback owner with a %s transcript without a restart nudge", async turn => {
+test.skipIf(process.platform === "win32").each(["terminal", "busy"] as const)("startup retains a native callback owner with a %s transcript without a restart nudge", async turn => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "cb-"));
   fs.chmodSync(directory, 0o700);
   const socket = path.join(directory, "rpc.sock");

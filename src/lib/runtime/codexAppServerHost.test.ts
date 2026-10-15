@@ -6329,7 +6329,7 @@ test("a hard Viewer process restart in the middle of an answer keeps the fsynced
   }
 }, 30_000);
 
-for (const [midAnswer, graceful] of [[false, false], [true, false], [false, true]]) test(`Viewer restart reconnects through the registry to the exact callback owner (mid-answer=${midAnswer}, graceful=${graceful})`, async () => {
+for (const [midAnswer, graceful] of [[false, false], [true, false], [false, true]]) test.skipIf(process.platform === "win32")(`Viewer restart reconnects through the registry to the exact callback owner (mid-answer=${midAnswer}, graceful=${graceful})`, async () => {
   const fixture = path.join(import.meta.dir, "fixtures/codexCallbackProcess.ts");
   // Keep the Unix path below the kernel limit even under the gate's nested roots.
   const socketRoot = fs.mkdtempSync(path.join(os.tmpdir(), "cs-"));
