@@ -29,12 +29,24 @@ export interface SessionReadResult {
 
 export interface NormalizedSessionLine {
   record: SessionRecord;
+  /** Internal tool pairing evidence; page projections never serialize it. */
+  call?: SessionToolCall;
   /** Transcript UUID, used internally to join Claude's durable delivery ledger. */
   sourceId?: string;
   /** Codex writes visible messages as adjacent event and response records.
       Page readers use this provenance to collapse those twins without changing
       readSession's long-standing output. */
   representation?: "event" | "response";
+}
+
+export interface SessionToolCall {
+  id: string;
+  server?: string;
+  tool?: string;
+  input?: Record<string, unknown>;
+  result?: unknown;
+  status?: string;
+  error?: boolean;
 }
 
 function rec(value: unknown): Record<string, unknown> {
@@ -143,7 +155,11 @@ function push(out: SessionReadResult, item: SessionRecord): void {
 
 function normalizeClaudeLine(obj: Record<string, unknown>): NormalizedSessionLine[] {
   const records: NormalizedSessionLine[] = [];
-  const add = (record: SessionRecord): void => { records.push({ record }); };
+  const add = (record: SessionRecord, call?: SessionToolCall): void => {
+    const line: NormalizedSessionLine = { record };
+    if (call) Object.defineProperty(line, "call", { value: call });
+    records.push(line);
+  };
   const ts = tsOf(obj);
   if (nativeCompaction(obj)) {
     add({ kind: "trace", role: "system", ts, name: "compact", text: "Context compacted" });
@@ -158,7 +174,8 @@ function normalizeClaudeLine(obj: Record<string, unknown>): NormalizedSessionLin
     if (hasToolResult(content)) {
       for (const part of contentParts(content)) {
         if (part.type === "tool_result") {
-          add({ kind: "tool_result", role: "tool", ts, text: textFromContent(part.content) || str(part.tool_use_id) });
+          add({ kind: "tool_result", role: "tool", ts, text: textFromContent(part.content) || str(part.tool_use_id) },
+            { id: str(part.tool_use_id), error: part.is_error === true, result: textFromContent(part.content) });
         }
       }
       return records;
@@ -174,9 +191,12 @@ function normalizeClaudeLine(obj: Record<string, unknown>): NormalizedSessionLin
       } else if (part.type === "thinking") {
         add({ kind: "reasoning", role: "assistant", ts, text: str(part.thinking) });
       } else if (part.type === "tool_use") {
-        add({ kind: "tool_call", role: "assistant", ts, name: str(part.name), text: JSON.stringify(rec(part.input)) });
+        const match = /^mcp__(.+?)__(.+)$/u.exec(str(part.name));
+        add({ kind: "tool_call", role: "assistant", ts, name: str(part.name), text: JSON.stringify(rec(part.input)) },
+          { id: str(part.id), ...(match ? { server: match[1], tool: match[2] } : {}), input: rec(part.input) });
       } else if (part.type === "tool_result") {
-        add({ kind: "tool_result", role: "tool", ts, text: textFromContent(part.content) || str(part.tool_use_id) });
+        add({ kind: "tool_result", role: "tool", ts, text: textFromContent(part.content) || str(part.tool_use_id) },
+          { id: str(part.tool_use_id), error: part.is_error === true, result: textFromContent(part.content) });
       }
     }
     return records;
@@ -333,6 +353,13 @@ function normalizeCodexLine(obj: Record<string, unknown>): NormalizedSessionLine
   if (threadItem) {
     if (obj.type === "event_msg" && lifecycle !== "itemcompleted") return records;
     add(codexThreadItemRecord(threadItem, ts), obj.type === "response_item" ? "response" : "event");
+    if (codexThreadItemKind(str(threadItem.type)) === "mcptoolcall") {
+      let input = threadItem.arguments;
+      if (typeof input === "string") { try { input = JSON.parse(input); } catch { input = {}; } }
+      Object.defineProperty(records.at(-1)!, "call", { value: { id: str(threadItem.id), server: str(threadItem.server),
+        tool: str(threadItem.tool), input: rec(input), status: str(threadItem.status), result: threadItem.result,
+        error: !!threadItem.error } satisfies SessionToolCall });
+    }
     return records;
   }
   const message = codexMessageFromPayload(payload);

@@ -101,3 +101,17 @@ test.if(Bun.which(codexBinary) !== null)("the installed Codex accepts exactly th
     expect(accepted.sort()).toEqual([...CODEX_V3_VOICES].sort());
   } finally { child.kill(); await child.exited; fs.rmSync(directory, { recursive: true, force: true }); }
 }, 30000);
+
+
+test("orchestrator message, action and show schemas are identical on API and Codex dynamic tools", async () => {
+  const { COMPANION_TOOLS } = await import("./tools");
+  const thread = codexVoiceThread("/fixture", false);
+  for (const name of ["orchestrator_messages", "orchestrator_actions", "show_orchestrator_message", "list_projects"]) {
+    const api = COMPANION_TOOLS.find(tool => tool.name === name)!;
+    const dynamic = thread.dynamicTools.find(tool => tool.name === name)!;
+    expect(dynamic.inputSchema).toEqual(api.parameters);
+    expect(dynamic.description).toBe(api.description);
+    expect(api.parameters.required).toEqual(Object.keys(api.parameters.properties));
+    expect(api.parameters.additionalProperties).toBe(false);
+  }
+});

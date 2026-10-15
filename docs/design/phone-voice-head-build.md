@@ -386,10 +386,13 @@ other fenced lanes had no published branch yet.
 | 6. Hidden survives reload | `localStorage` store; test 2; driver `menu-hidden` reloads. |
 | 7. Gate lifted only for this; protections kept; desktop unchanged | The table in "Why #2519 gated the phone off"; desktop half of test 1 unchanged; desktop files untouched. |
 
+The 2026-10-15 voice-read requirement adds a Conversation row to the head's popover.
+It opens the existing transcript component for silent messages and action results;
+see [voice orchestrator reads](voice-orchestrator-reads.md). This completes the phone
+transcript panel deferred in the original 2026-10-12 design.
+
 ## Deferred — not currently justified
 
-- **The transcript panel on the phone.** The desktop opens the whole conversation on a tap on the character. Not asked
-  for; on the phone the tap opens the popover. It can be one more popover row opening a sheet later.
 - **Call cards and the delegation card.** The desktop lane shows tool calls and the hand-off with its confirmation. On
   the phone the confirmation is answered by voice (the gate takes a spoken yes or no) and the bubble says the
   question; Send and Cancel rows in the popover are left for a later step if a spoken answer proves unreliable.

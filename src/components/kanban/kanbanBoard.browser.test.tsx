@@ -23413,6 +23413,68 @@ describe("floating voice companion", () => {
      scenario, then frames the companion as the operator finds it (the character focused), the panel at its newest
      line with everything collapsed, one call opened, and a message copied. `LLV_VOICE_COMPANION_ONLY` runs it only
      when it names `transcript` (or is unset). Images go to `<hand-off>/transcript`, never into the tree. */
+  browserTest("whole orchestrator message in the existing lane and conversation panel", async () => {
+    const { sampleOrchestratorMessage } = await import("@/components/voiceCompanion/transcriptSample.fixture");
+    const out = path.join(HANDOFF, "orchestrator-message");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(OUT);
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    const readings: unknown[] = [];
+    try {
+      for (const viewport of SIZES) for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) {
+        const label = `${viewport.width}-${lang}-${scheme}`;
+        const { context, page, pageErrors } = await openVoice(browser, server.base, "&script=short&transcript=1&seatmessage=1", { viewport, scheme, lang, motion: "reduce" });
+        try {
+          for (let notice = 0; notice < 3 && await page.locator("[data-attention-toast-dismiss]").count(); notice++) await page.locator("[data-attention-toast-dismiss]").first().click();
+          await page.locator("[data-companion-talk]").click();
+          await page.waitForFunction(() => (window as unknown as { voiceCompanion: Voice }).voiceCompanion.finished, null, { timeout: 60000 });
+          const card = page.locator('[data-companion-report][data-report-id="voice-whole-message"]');
+          await card.waitFor();
+          const expected = sampleOrchestratorMessage(lang);
+          const title = lang === "uk" ? "Повідомлення" : "Message";
+          expect(await card.locator(".vc-deleg-title").innerText()).toContain(title);
+          expect(await card.locator("[data-companion-answer]").textContent()).toBe(expected);
+          const placement = await readCompanion(page);
+          expect(placement.insideViewport).toBe(true); expect(placement.overlapArea).toBe(0); expect(placement.handleArea).toBe(0);
+          const lane = await card.evaluate(element => {
+            const box = element.getBoundingClientRect(); const host = element.closest("[data-companion-lane]")?.getBoundingClientRect();
+            const answer = element.querySelector<HTMLElement>(".vc-answer")!;
+            return { inside: !!host && box.left >= host.left - 1 && box.right <= host.right + 1 && box.top >= host.top - 1 && box.bottom <= host.bottom + 1,
+              scrolls: answer.scrollHeight > answer.clientHeight, horizontalOverflow: answer.scrollWidth > answer.clientWidth + 1 };
+          });
+          expect(lane.inside).toBe(true); expect(lane.horizontalOverflow).toBe(false);
+          await page.screenshot({ path: path.join(out, `${label}-lane.png`) });
+          await page.locator("[data-voice-companion] [data-grip]").focus(); await page.keyboard.press("Enter");
+          const panel = page.locator("[data-companion-transcript-view]"); await panel.waitFor();
+          const report = panel.locator("[data-transcript-report]").filter({ hasText: title }).last();
+          await report.scrollIntoViewIfNeeded();
+          await report.evaluate(element => {
+            const body = element.closest("[data-transcript-body]")!;
+            body.scrollTop += element.getBoundingClientRect().top - body.getBoundingClientRect().top - 8;
+          });
+          expect(await report.locator(".vc-answer").textContent()).toBe(expected);
+          expect(await report.innerText()).toContain(title);
+          const geometry = await panel.evaluate(element => {
+            const box = element.getBoundingClientRect(); const body = element.querySelector<HTMLElement>("[data-transcript-body]")!;
+            const heading = element.querySelector('[data-report-status="message"] .vc-deleg-title')!.getBoundingClientRect();
+            const clip = body.getBoundingClientRect();
+            return { inside: box.left >= 0 && box.top >= 0 && box.right <= innerWidth && box.bottom <= innerHeight,
+              titleVisible: heading.top >= clip.top && heading.bottom <= clip.bottom,
+              scrolls: body.scrollHeight > body.clientHeight, overflow: body.scrollWidth > body.clientWidth + 1 };
+          });
+          expect(geometry.inside).toBe(true); expect(geometry.titleVisible).toBe(true); expect(geometry.scrolls).toBe(true); expect(geometry.overflow).toBe(false);
+          await page.screenshot({ path: path.join(out, `${label}-panel.png`) });
+          await panel.locator("[data-transcript-body]").evaluate(element => { element.scrollTop = element.scrollHeight; });
+          await page.screenshot({ path: path.join(out, `${label}-panel-end.png`) });
+          expect(pageErrors).toEqual([]);
+          readings.push({ label, bytes: Buffer.byteLength(expected), completeLane: true, completePanel: true, title, lane, panel: geometry,
+            insideViewport: placement.insideViewport, overlapArea: placement.overlapArea, handleArea: placement.handleArea });
+        } finally { await context.close(); }
+      }
+      record("orchestrator-message.json", { driver: DRIVER, synthetic: true, readings });
+    } finally { await browser.close(); server.stop(); }
+  });
+
   browserTest("transcript view: the character opens the whole conversation, calls collapsed, each message copyable, 1440 and 1000, en and uk, light and dark", async () => {
     if (ONLY && !ONLY.includes("transcript")) return;
     const out = path.join(HANDOFF, "transcript");

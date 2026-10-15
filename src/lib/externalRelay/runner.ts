@@ -482,7 +482,9 @@ export async function runClaimedRequest(
     const previousAnswer = ownerMessage ? readAnswerRecord(relay.id, target.id, requestId) : null;
     const replayReviewId = previousAnswer?.profile?.owner && previousAnswer.requester?.key === requester?.key
       && previousAnswer.chatKey === (request.chat?.key ?? null) ? previousAnswer.profile.prototype : undefined;
-    const prototype = ownerMessage ? matchPrototypeAnswer(ownerMessage.text, undefined, replayReviewId) : null;
+    const trigger = request.input.conversation.find(message => message.id === ownerMessage?.messageId);
+    const parent = request.input.conversation.find(message => message.id === trigger?.reply_to && message.author.self);
+    const prototype = ownerMessage ? matchPrototypeAnswer(ownerMessage.text, undefined, replayReviewId, undefined, parent?.text) : null;
     owner = prototype ? ownerMessage : ownerTierFor(target, request);
     if (owner && !prototype) {
       try { owner.bridgeReport = resolveOwnerBridgeContext(request, owner, relay.api_base); }

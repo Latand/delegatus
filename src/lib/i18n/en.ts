@@ -2320,6 +2320,7 @@ export const en = {
   "render.notDelivered": "not delivered",
   "render.voiceDelegatusTag": "voice",
   "render.voiceDelegatusLabel": "From voice Delegatus · requested by you",
+  "voiceCompanion.report.message": "Message",
   "voiceCompanion.report.progress": "Progress",
   "voiceCompanion.report.result": "Result",
   "voiceCompanion.report.question": "Question",

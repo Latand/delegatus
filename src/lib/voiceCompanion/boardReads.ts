@@ -6,16 +6,21 @@ import { byteShort, captionHead, matchRounds, reviewAnswer, selectFrames } from 
 import { cleanStrings, withoutCredentials, withoutLocalPaths } from "./redaction";
 import { READ_SCHEMAS, validToolValue } from "./readSchemas";
 import { normalizedBoardQuery } from "@/lib/mcp/pullRequestQuery";
+import { voiceProjectRows } from "./projectNames";
+import type { SeatMessages } from "./seatTranscript";
 
-export const READ_TOOL_NAMES = ["list_tasks", "get_task", "list_pipelines", "get_pipeline", "agent_activity", "conversation_messages", "orchestrator_messages", "search_transcripts", "read_prototype_review", "view_prototype_frame", "agent_fleet", "get_orchestrator", "list_projects"] as const;
-export interface VoiceProject { project: string; displayName: string; liveSeat: boolean; openTaskCount: number }
+export const READ_TOOL_NAMES = ["list_tasks", "get_task", "list_pipelines", "get_pipeline", "agent_activity", "conversation_messages", "orchestrator_messages", "orchestrator_actions", "search_transcripts", "read_prototype_review", "view_prototype_frame", "agent_fleet", "get_orchestrator", "list_projects"] as const;
+export interface VoiceProject { project: string; displayName: string; liveSeat: boolean; openTaskCount: number; folder?: string }
 export type ReadToolName = typeof READ_TOOL_NAMES[number];
 export const VOICE_IMAGES = Symbol("voice prototype frames");
 export interface BoardReadPaths {
   call(name: string, args: Record<string, unknown>, redactText?: (text: string) => string): Promise<Record<string, unknown>>;
   projectFor(kind: "task" | "pipeline" | "conversation", id: string): Promise<string | null>;
   recipient(project: string): string | null;
-  resolveProject(current: string | null, requested?: string): string;
+  resolveProject(current: string | null, requested?: string, seated?: boolean): string;
+  seatMessages?(project: string, args: Record<string, unknown>, redactText: (text: string) => string): Promise<SeatMessages>;
+  seatActions?(project: string, args: Record<string, unknown>, redactText: (text: string) => string): Promise<SpeechReadResult>;
+  seatReply?(project: string, message: unknown, redactText: (text: string) => string): Promise<{ status?: string; handle?: string; text?: string; time?: string | null }>;
   projects?(): VoiceProject[];
   review(id: string): PrototypeReviewRead;
   prototypeTasks?(project: string, taskId?: string): readonly BoardTask[];
@@ -23,10 +28,12 @@ export interface BoardReadPaths {
 }
 export interface SpeechReadResult {
   status?: string; code?: string; match?: string;
-  speech: string; total?: number; shown?: number; more?: number; nextCursor?: string | null;
+  speech: string; total?: number; shown?: number; more?: number | boolean; nextCursor?: string | null;
   rows?: unknown[]; item?: unknown; truncated: boolean;
   repeated?: true; readSecondsAgo?: number;
   coverage?: Record<string, unknown>;
+  before?: string | null;
+  scanned?: { bytes: number; capped: boolean };
   [VOICE_IMAGES]?: Array<{ mime: string; data: string }>;
 }
 const clean = (value: string) => withoutLocalPaths(hardenedRedact(value).replace(/<!--[^]*?-->/g, ""));
@@ -63,28 +70,36 @@ export class CompanionBoardReads {
   private readonly redactors = new WeakMap<readonly string[], (text: string) => string>();
   constructor(private readonly paths: BoardReadPaths) {}
   projects(): VoiceProject[] { return this.paths.projects?.() ?? []; }
-  resolveProject(current: string | null, requested?: string) { return this.paths.resolveProject(current, requested); }
+  projectRows(current?: string | null, all = false) { return voiceProjectRows(this.projects(), current ? canonicalProject(current) : current, all); }
+  resolveProject(current: string | null, requested?: string, seated = false) { return this.paths.resolveProject(current, requested, seated); }
+  async showMessage(current: string | null, requested: string | undefined, message: unknown, secrets: readonly string[] = NO_SECRETS) {
+    const project = this.resolveProject(current, requested, true);
+    if (!this.paths.seatReply) throw new Error("TOOL_NOT_ALLOWED");
+    return { project, ...await this.paths.seatReply(project, message, text => short(withoutCredentials(text, secrets), 1000000)) };
+  }
   normalize(project: string, name: string, args: Record<string, unknown>): Record<string, unknown> {
     const schema = READ_SCHEMAS[name]; if (!schema) throw new Error("TOOL_NOT_ALLOWED");
     if (Object.keys(args).some(key => !Object.hasOwn(schema,key)) || Object.entries(schema).some(([key,property]) => !validToolValue(property,args[key]))) throw new Error("INVALID_TOOL_ARGUMENTS");
     const values = Object.fromEntries(Object.entries(args).filter(([key,value]) => key !== "project" && key !== "refresh" && value !== null && value !== undefined));
     if ((name === "list_tasks" || name === "list_pipelines") && typeof values.query === "string") values.query = normalizedBoardQuery(values.query);
-    return { ...values, project, ...(name.startsWith("list_") || name.endsWith("messages") ? {limit:values.limit ?? 10} : {}),
+    return { ...values, project, ...(name === "orchestrator_messages" ? { limit: values.limit ?? 6 } : name === "orchestrator_actions" ? { limit: values.limit ?? 15 } : name.startsWith("list_") || name === "conversation_messages" ? {limit:values.limit ?? 10} : {}),
       ...(name === "agent_fleet" ? {limit:values.limit ?? 10} : {}),
       ...(name === "agent_activity" ? {liveOnly:values.liveOnly ?? true,limit:values.limit ?? 10} : {}),
-      ...(name.endsWith("messages") ? {roles:values.roles ?? (name === "orchestrator_messages" ? ["assistant"] : ["user","assistant"])} : {}),
+      ...(name === "conversation_messages" ? {roles:values.roles ?? ["user","assistant"]} : {}),
       ...(name === "search_transcripts" ? {order:values.order ?? "relevance",limit:6} : {}) };
   }
   async call(current: string, name: string, args: Record<string, unknown>): Promise<SpeechReadResult> {
-    if (name === "list_projects") return this.read("", name, this.normalize("", name, args));
-    const project = this.resolveProject(current, typeof args.project === "string" ? args.project : undefined);
+    if (name === "list_projects") return this.read(current, name, this.normalize(current, name, args));
+    const project = this.resolveProject(current, typeof args.project === "string" ? args.project : undefined, name.startsWith("orchestrator_") || name === "get_orchestrator");
     const normalized = this.normalize(project,name,args);
     return this.read(project,name,normalized);
   }
   async read(project: string, name: string, args: Record<string, unknown>, secrets: readonly string[] = NO_SECRETS): Promise<SpeechReadResult> {
     if (name === "list_projects") {
-      const items = cleanStrings(this.projects(), text => clean(withoutCredentials(text, secrets)));
-      return { rows: items, total: items.length, speech: short(`${items.length} projects. ${items.map(row => row.displayName).join(", ")}`, 600), truncated: false };
+      const items = cleanStrings(this.projectRows(project, args.all === true), text => clean(withoutCredentials(text, secrets)));
+      const kept: typeof items = [];
+      for (const row of items) { if (Buffer.byteLength(JSON.stringify([...kept, row])) > 3200) break; kept.push(row); }
+      return { rows: kept, total: items.length, more: kept.length < items.length, speech: short(`${items.length} projects. ${kept.map(row => row.name).join(", ")}`, 600), truncated: kept.length < items.length };
     }
     project = canonicalProject(project);
     const kind = (name === "agent_fleet" && args.pipelineId) || name === "get_pipeline" ? "pipeline" : name === "get_task" || name.includes("prototype") ? "task" : name === "conversation_messages" || (["agent_activity", "agent_fleet"].includes(name) && args.conversationId) ? "conversation" : null;
@@ -128,13 +143,14 @@ export class CompanionBoardReads {
           : `No frame was opened: ${misses}. Nothing was seen. Say that you could not view it and what you asked for, and describe nothing about how it looks.`,
         truncated: false, ...(images.length ? { [VOICE_IMAGES]: images } : {}) };
     }
-    let tool = name;
-    if (name === "orchestrator_messages") {
-      const conversationId = this.paths.recipient(project); if (!conversationId) throw new Error("NO_ORCHESTRATOR");
-      args = {...args,conversationId}; tool = "conversation_messages";
-    }
+    const tool = name;
     let redactText = this.redactors.get(secrets);
     if (!redactText) { redactText = text=>clean(withoutCredentials(text,secrets)); this.redactors.set(secrets,redactText); }
+    if (name === "orchestrator_messages" || name === "orchestrator_actions") {
+      const read = name === "orchestrator_messages" ? this.paths.seatMessages : this.paths.seatActions;
+      if (!read) throw new Error("TOOL_NOT_ALLOWED");
+      return read(project, args, text => short(redactText(text), 1000000));
+    }
     // Mask active credentials before projection cuts fields into speech-sized
     // pieces. Otherwise a cut can leave a fragment that no longer matches.
     const source = cleanStrings(await this.paths.call(tool,{...args,project,compact:true,includeHints:false,
@@ -143,7 +159,7 @@ export class CompanionBoardReads {
     if (name === "list_tasks") return page(source,rows(source.tasks).map(taskRow),"tasks");
     if (name === "list_pipelines") return page(source,rows(source.pipelines).map(pipelineRow),"pipelines");
     if (name === "get_orchestrator") {
-      const seat = object(source.seat); const item = { project, liveSeat: !!seat.conversationId, engine: source.engine ?? null, conversationId: seat.conversationId ?? null };
+      const seat = object(source.seat); const item = { liveSeat: !!seat.conversationId, engine: source.engine ?? null };
       return { item, speech: item.liveSeat ? `The project's orchestrator is designated (${short(item.engine)}).` : "This project has no designated orchestrator.", truncated: false };
     }
     if (name === "get_task") {

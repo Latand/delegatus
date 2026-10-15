@@ -41,6 +41,7 @@ import {
 import { defaultDocumentRoots, DocumentRefusal, loadDocument, normalizeDocumentRoots, readUnderRoots, type DocumentEnvironment } from "./documents";
 import { TelegramBotStore, type BotRow, type ChatRow, type TgChat, type TgUpdate, type TgUser } from "./store";
 import { admitReportReplies, drainReportReplies, productionReportReplyPorts, type ReportReplyPorts } from "./reportReplies";
+import { ReviewPollQueue, type ReviewPollInput } from "./reviewPolls";
 import {
   createBotApiTransport,
   removeBotToken,
@@ -81,6 +82,7 @@ export interface TelegramRichMessage {
   markdown: string;
   plainText?: string;
   images: Array<{ id: string; blob: Blob }>;
+  review?: ReviewPollInput;
 }
 
 export interface TelegramBotDependencies {
@@ -313,6 +315,9 @@ function lookupFailure(result: Extract<BotCallResult, { ok: false }>): TelegramB
 }
 
 export class TelegramBotService {
+  private readonly reviewPolls = new ReviewPollQueue();
+  async waitForReviewPolls(): Promise<void> { await this.reviewPolls.idle(); }
+  hasReviewPollWork(reviewId: string, key: string): boolean { return this.reviewPolls.owns(reviewId, key); }
   private transportCache: BotTransport | null = null;
   private storeCache: TelegramBotStore | null = null;
   private poller: { controller: AbortController; done: Promise<void> } | null = null;
@@ -988,7 +993,11 @@ export class TelegramBotService {
     };
     authorize();
     store.recordLookedUpChat(found.result, null, this.deps.now());
-    return this.sendRich({ ...input, chat: selected.chatId }, { authorize, chat: store.chat(selected.chatId)! });
+    const result = await this.sendRich({ ...input, chat: selected.chatId }, { authorize, chat: store.chat(selected.chatId)! });
+    if (input.message.review && result.messageIds[0]) this.reviewPolls.enqueue({ review: input.message.review,
+      key: input.clientRequestId, chatId: result.chatId, messageId: result.messageIds[0], transport, authorize,
+      publish: (message, text) => this.publishConfirmed(botId, message, result.chatId, null, text) });
+    return result;
   }
 
   /** One prototype message under a durable claim; ambiguous sends retain it. */
