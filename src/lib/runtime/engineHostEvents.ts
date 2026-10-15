@@ -274,7 +274,10 @@ function attentionProjection(engine: RuntimeEngine, event: Extract<RuntimeEvent,
     ...(questionIds.length > 0 ? { questionIds } : {}),
     ...(engine === "codex" && questions.length ? { questionOptions: questions.map(question => {
       const options = record(question).options;
-      return Array.isArray(options) ? options.map(option => String(record(option).label)) : [];
+      return Array.isArray(options) ? options.flatMap(option => {
+        const label = text(record(option).label);
+        return label ? [label] : [];
+      }) : [];
     }) } : {}),
     ...(protocolInput ? { input: protocolInput } : {}),
     ...(event.codexReceipt && !event.codexReceipt.protocolError ? { actions: codexAttentionActions(method, source) } : {}),
