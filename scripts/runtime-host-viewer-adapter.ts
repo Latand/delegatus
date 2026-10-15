@@ -14,6 +14,7 @@ import { appDirIn } from "../bin/appDir.mjs";
 import { probeHeadersFrom } from "../bin/internalService.mjs";
 import { captureProcessIdentity, processIdentityStatus } from "../src/lib/processIdentity";
 import { retireFencedManagedViewer, type ManagedContainerIdentity } from "../src/runtime-host/managedRetirement";
+import { managedNativePreservationArgs } from "../src/runtime-host/managedNativePreservation";
 import { writeJsonDurably } from "../src/lib/state/durableJson";
 
 import type {
@@ -1165,6 +1166,9 @@ async function checkpointHotStateFence(
             return JSON.parse(result) as ManagedContainerIdentity;
           },
           stop: async id => { await command(["docker", "container", "stop", "--time", "5", id], { timeoutMs: 8_000 }); },
+          preserveNativeProcesses: async (owner, id) => {
+            await command(["docker", "exec", "--user", "0", id, ...managedNativePreservationArgs(owner)], { timeoutMs: 5_000 });
+          },
           fenceStands: () => {
             const current = readHotStateAuthority(stateDir);
             return current?.mode === "fencing" && current.epoch === request.epoch && current.releaseRevision === revision

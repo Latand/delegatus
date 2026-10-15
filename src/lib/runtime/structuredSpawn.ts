@@ -27,6 +27,8 @@ import type { SpawnResponse } from "@/lib/agent/spawnResponse";
 import { prepareManagedClaudeSpawnHome, viewerMcpTransportForLaunch } from "@/lib/agent/spawnPolicy";
 import { claudeTranscriptPath } from "@/lib/agent/transcript";
 import { statePath } from "@/lib/configDir";
+import { readHotStateAuthority } from "@/lib/state/hotStateAuthority";
+import { viewerReleaseOwnsTraffic } from "@/lib/viewerReleaseTraffic";
 import { rememberHandoffChild, persistHandoffLineage } from "@/lib/handoffLineage";
 import { en } from "@/lib/i18n/en";
 import { uk } from "@/lib/i18n/uk";
@@ -785,6 +787,8 @@ export interface StructuredSpawnRecoveryOptions {
   signal?: AbortSignal;
   /** Boot leaves terminal reporting to the controller's bounded repair pass. */
   repairFailures?: boolean;
+  /** Startup reconciles receipts; the controller owns full queued host setup. */
+  actuateQueuedSpawns?: boolean;
   reportProgress?: (progress: { examined: number; total: number; completed: number; deferred: number }) => void | Promise<void>;
   assertActive?: () => void;
   now?: () => number;
@@ -828,6 +832,17 @@ async function actuateQueuedPinnedSpawn(
   options: StructuredSpawnRecoveryOptions,
 ): Promise<SpawnReceipt> {
   const queued = queuedPinnedSpawnForReceipt(receipt);
+  const admittedAuthority = readHotStateAuthority(path.dirname(registry.filename));
+  const assertActive = () => {
+    options.signal?.throwIfAborted();
+    options.assertActive?.();
+    const authority = readHotStateAuthority(path.dirname(registry.filename));
+    if (!viewerReleaseOwnsTraffic() || authority?.mode === "fencing"
+      || authority?.epoch !== admittedAuthority?.epoch || authority?.releaseRevision !== admittedAuthority?.releaseRevision) {
+      throw new Error("queued launch lost Viewer release authority");
+    }
+  };
+  assertActive();
   const currentTime = (options.now ?? Date.now)();
   if (!queued || Date.parse(queued.retryAt) > currentTime) return receipt;
   if (!ownerRelaySpawnAuthorized(receipt.clientAttemptId))
@@ -835,14 +850,24 @@ async function actuateQueuedPinnedSpawn(
   let curatorAuthorize: () => void;
   try {
     curatorAuthorize = await curatorReceiptAdmission(receipt, registry, options.curationSources);
+    assertActive();
     curatorAuthorize();
   } catch (error) {
+    assertActive();
     return failQueuedPinnedSpawn(registry, receipt, structuredSpawnFailureReason(error));
   }
   const admissionClaim = receipt.transport === "tmux"
     ? registry.claimTmuxSpawnActuation(receipt.launchId)
     : registry.claimStartingStructuredSpawn(receipt.launchId);
   if (!admissionClaim.claimed || !admissionClaim.receipt.admissionOwner) return admissionClaim.receipt;
+  const releaseIfCancelled = async () => {
+    try { assertActive(); }
+    catch (error) {
+      await registry.deliveryWrite({ label: "spawn.queued-cancel", operationId: receipt.launchId }, () =>
+        registry.releaseSpawnActuation(receipt.launchId, admissionClaim.receipt.admissionOwner!));
+      throw error;
+    }
+  };
   const claimedQueue = queuedPinnedSpawnForReceipt(admissionClaim.receipt);
   if (!claimedQueue) {
     return failQueuedPinnedSpawn(registry, admissionClaim.receipt, "queued pinned spawn lost its durable admission payload");
@@ -856,8 +881,10 @@ async function actuateQueuedPinnedSpawn(
   try {
     await registry.admitRecoveredLaunch(admissionClaim.receipt);
   } catch (error) {
+    await releaseIfCancelled();
     return failQueuedPinnedSpawn(registry, admissionClaim.receipt, structuredSpawnFailureReason(error));
   }
+  await releaseIfCancelled();
   let account: AccountContext;
   let admission: SpawnAccountAdmission;
   try {
@@ -870,10 +897,12 @@ async function actuateQueuedPinnedSpawn(
       ? { kind: "admissible", basis: "current", stale: false, retryAt: null }
       : await (options.resolvePinnedSpawnAdmission ?? resolvePinnedSpawnAdmission)(receipt.engine, account);
   } catch (error) {
+    await releaseIfCancelled();
     try { curatorAuthorize(); }
     catch (curationError) { error = curationError; }
     return failQueuedPinnedSpawn(registry, admissionClaim.receipt, structuredSpawnFailureReason(error));
   }
+  await releaseIfCancelled();
   try { curatorAuthorize(); }
   catch (error) { return failQueuedPinnedSpawn(registry, admissionClaim.receipt, structuredSpawnFailureReason(error)); }
   if (admission.kind === "retry-at") {
@@ -903,6 +932,7 @@ async function actuateQueuedPinnedSpawn(
   let tmuxImagePaths: string[] = [];
   try {
     if (receipt.transport === "tmux") {
+      await releaseIfCancelled();
       curatorAuthorize();
       const images = claimedQueue.imageRefs.length
         ? (() => {
@@ -915,11 +945,13 @@ async function actuateQueuedPinnedSpawn(
         : [];
       const bundle = buildImagePayload(claimedQueue.prompt, images);
       tmuxImagePaths = bundle.imagePaths;
+      assertActive();
       await (options.spawnTmuxAgent ?? spawnAgentWithPrompt)(
         claimedQueue.spec,
         bundle.payload,
         admissionClaim.receipt,
       );
+      assertActive();
       const launched = registry.readOnlySnapshot().receipts[receipt.launchId];
       if (launched?.state === "prompt-delivered" || launched?.state === "host-verified") {
         registry.markSpawnPathPending(receipt.launchId);
@@ -928,6 +960,7 @@ async function actuateQueuedPinnedSpawn(
       if (!client) {
         throw new Error(supervisedRuntimeHostUnavailableReason("structured spawn runtime host"));
       }
+      assertActive();
       response = await (options.spawnStructuredConversation ?? spawnStructuredConversation)({
         engine: receipt.engine,
         receipt: admissionClaim.receipt,
@@ -938,6 +971,7 @@ async function actuateQueuedPinnedSpawn(
         registry,
         client,
         authorize: () => {
+          assertActive();
           if (!ownerRelaySpawnAuthorized(receipt.clientAttemptId))
             throw new Error("owner relay queued launch authorization revoked");
           curatorAuthorize();
@@ -960,6 +994,7 @@ async function actuateQueuedPinnedSpawn(
     }
     throw error;
   }
+  assertActive();
   if (claimedQueue.parentArtifactPath && response?.path) {
     try {
       rememberHandoffChild(response.path, claimedQueue.parentArtifactPath);
@@ -1020,8 +1055,11 @@ export async function terminalizeStaleStructuredSpawns(
       registry.reportFailedLaunch(receipt, { now: now() });
     }
   }
-  await registry.deliveryWrite({ label: "spawn.orphan-hygiene" },() =>
-    registry.terminalizeAbandonedSpawnEntries({ now: now(),timeoutMs,limit: actuationCap }));
+  await registry.deliveryWrite({ label: "spawn.orphan-hygiene" }, () => {
+    options.assertActive?.();
+    options.signal?.throwIfAborted();
+    return registry.terminalizeAbandonedSpawnEntries({ now: now(), timeoutMs, limit: actuationCap });
+  });
   const openReceipts = registry.openSpawnReceipts();
   const snapshot = registry.spawnRecoverySnapshot(openReceipts.map(receipt => receipt.launchId));
   const terminalized: string[] = [];
@@ -1033,6 +1071,7 @@ export async function terminalizeStaleStructuredSpawns(
     if (receipt.state === "completed" || receipt.state === "failed" || receipt.state === "conflicted") continue;
     const queued = queuedPinnedSpawnForReceipt(receipt);
     if (queued) {
+      if (options.actuateQueuedSpawns === false) continue;
       if (Date.parse(queued.retryAt) > now()) continue;
       if (receipt.transport === "structured" && !client) continue;
       examined += 1;
@@ -1356,7 +1395,7 @@ export async function recoverPendingStructuredSpawns(
   await registry.prepareRecoveryIndexes(signal);
   /* Boot reconciliation shares the reaper's bounded contract so placeholders
      admitted by an older process settle before startup replay considers them. */
-  await terminalizeStaleStructuredSpawns(registry, client, { ...options, assertActive, repairFailures: false });
+  await terminalizeStaleStructuredSpawns(registry, client, { ...options, assertActive, repairFailures: false, actuateQueuedSpawns: false });
   assertActive();
   const open = registry.openSpawnReceipts();
   const spawnEffects = new Map<string, Record<string, unknown>>();

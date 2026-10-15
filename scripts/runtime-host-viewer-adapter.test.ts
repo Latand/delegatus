@@ -715,6 +715,8 @@ async function runAction(options: {
       ...process.env,
       PATH: `${bin}:${process.env.PATH ?? ""}`,
       FAKE_DOCKER_LOG: dockerLog,
+      HOME: sandbox,
+      XDG_CONFIG_HOME: path.join(sandbox, "config"),
       LLV_DEPLOYMENT_ADAPTER_PROTOCOL: "1",
       LLV_STATE_DIR: state,
       LLV_VIEWER_PORT: "1",
@@ -2048,6 +2050,7 @@ test.each([false, true])("managed fallback preserves queue keys and a native wor
         return { id, image: release.image, revision: release.revision, managed: "1", running };
       },
       ownsContainer: (current, container) => current.pid === owner.pid && container === id,
+      preserveNativeProcesses: async () => { order.push("preserve"); },
       fenceStands: () => true,
       recordBoundary: async () => {
         order.push("boundary");
@@ -2064,7 +2067,7 @@ test.each([false, true])("managed fallback preserves queue keys and a native wor
         running = false;
       },
     });
-    expect(order).toEqual(ownerExitsAtBoundary ? ["inspect", "boundary", "inspect"] : ["inspect", "boundary", "inspect", "stop", "inspect"]);
+    expect(order).toEqual(ownerExitsAtBoundary ? ["inspect", "preserve", "boundary", "inspect"] : ["inspect", "preserve", "boundary", "inspect", "stop", "inspect"]);
     expect(processIdentityStatus(identity)).toBe("dead");
     expect(processIdentityStatus(workerIdentity)).toBe("alive");
     expect(fs.readFileSync(queue, "utf8")).toBe(original);
@@ -2076,7 +2079,7 @@ test.each([false, true])("managed fallback preserves queue keys and a native wor
   }
 });
 
-test.each(["unknown-owner", "wrong-container", "new-fence", "new-container", "boundary-refused", "stop-refused", "owner-survives"] as const)(
+test.each(["unknown-owner", "wrong-container", "new-fence", "new-container", "preservation-refused", "boundary-refused", "stop-refused", "owner-survives"] as const)(
   "managed fallback refuses %s without claiming a checkpoint", async fault => {
     const { retireFencedManagedViewer } = await import("../src/runtime-host/managedRetirement");
     const id = "a".repeat(64);
@@ -2087,6 +2090,7 @@ test.each(["unknown-owner", "wrong-container", "new-fence", "new-container", "bo
         image: release.image, revision: release.revision, managed: "1", running: stops === 0 }),
       ownerStatus: () => fault === "unknown-owner" ? "unverified" : "alive",
       ownsContainer: () => fault !== "wrong-container",
+      preserveNativeProcesses: async () => { if (fault === "preservation-refused") throw new Error("native preservation refused"); },
       fenceStands: () => !(fault === "new-fence" && boundary),
       recordBoundary: async () => { if (fault === "boundary-refused") throw new Error("boundary refused"); boundary = true; },
       stop: async () => { stops++; if (fault === "stop-refused") throw new Error("stop refused"); },
@@ -2099,7 +2103,7 @@ const managedDockerImage = process.env.LLV_MANAGED_DOCKER_TEST_IMAGE;
 for (const legacyGuard of [false, true]) {
 (managedDockerImage && (!legacyGuard || process.env.LLV_LEGACY_ADAPTER_FIXTURE) ? test : test.skip)(
   legacyGuard ? "a busy candidate's guard lets the actual legacy adapter roll back without stopping a native engine"
-    : "rollback contains a busy managed container and preserves an independent native engine", async () => {
+    : "rollback contains a busy managed container and preserves its candidate-created native engine", async () => {
   const { execFile } = await import("node:child_process");
   const { promisify } = await import("node:util");
   const docker = promisify(execFile);
@@ -2120,8 +2124,7 @@ for (const legacyGuard of [false, true]) {
         ORDER BY collection,row_key`).all().map(row => row.value_json);
     } finally { db.close(); }
   };
-  const native = Bun.spawn([process.execPath, "-e", "setInterval(() => {}, 1000)"], { stdout: "ignore", stderr: "ignore" });
-  const nativeIdentity = captureProcessIdentity(native.pid);
+  let nativeIdentity: ReturnType<typeof captureProcessIdentity> | null = null;
   const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "managed-docker-rollback-"));
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request) {
     if (new URL(request.url).pathname === "/api/runtime/deployments/capabilities/v1") return Response.json({ capability: "viewer-deployments", version: 1, registryBackendMode: "sqlite" });
@@ -2129,28 +2132,42 @@ for (const legacyGuard of [false, true]) {
     return new Response('<script src="/_next/static/app.js"></script>');
   } });
   try {
-    container = (await docker("/usr/bin/docker", ["run", "-d", "--name", name, "--network", "none", "--read-only", "--memory", legacyGuard ? "512m" : "96m", "--cpus", "0.5", "--pid", "host",
+    // Materialize the exact CLI shim installed by the production Dockerfile.
+    const dockerfile = fs.readFileSync(path.join(root, "Dockerfile"), "utf8");
+    const shim = dockerfile.match(/make_nsenter_shim\(\) \{[\s\S]*?<<WRAPPER\n([\s\S]*?)\nWRAPPER/)![1]!
+      .replaceAll("\\$", "$").replaceAll("$host_path", "/usr/bin/sleep");
+    fs.writeFileSync(path.join(sandbox, "native-shim"), shim, { mode: 0o755 });
+    container = (await docker("/usr/bin/docker", ["run", "-d", "--name", name, "--network", "none", "--read-only", "--memory", "512m", "--cpus", "0.5", "--pid", "host", "--privileged",
       "--user", `${process.getuid!()}:${process.getgid!()}`,
       ...(legacyGuard ? ["--restart", "unless-stopped"] : []),
       "--label", "dev.live-log-viewer.managed=1", "--label", `dev.live-log-viewer.revision=${release.revision}`,
-      ...(legacyGuard ? ["--volume", `${root}:${root}:ro`, "--volume", `${process.execPath}:/fixture-bun:ro`,
+      "--env", `HOME=${sandbox}`,
+      "--volume", `${root}:${root}:ro`, "--volume", `${process.execPath}:/fixture-bun:ro`,
         "--volume", `${process.execPath}:/usr/local/bin/bun-container:ro`,
-        "--volume", `${sandbox}:${sandbox}`, "--workdir", root] : []),
-      image, ...(legacyGuard ? ["/fixture-bun", "-e", `
+        "--volume", `${sandbox}:${sandbox}`, "--workdir", root,
+      image, "/fixture-bun", "-e", `
         import fs from "node:fs";
         import { startManagedRetirementGuard } from "./src/lib/state/managedRetirementGuard.ts";
         const directory = ${JSON.stringify(path.join(sandbox, "state"))};
+        const native = Bun.spawn([${JSON.stringify(path.join(sandbox, "native-shim"))}, "120"], { detached: true, stdin: "ignore", stdout: "ignore", stderr: "ignore" });
+        fs.writeFileSync(${JSON.stringify(path.join(sandbox, "native.pid"))}, String(native.pid));
         while (!fs.existsSync(directory + "/configured")) await Bun.sleep(20);
-        await startManagedRetirementGuard(directory, ${JSON.stringify(release.revision)});
+        if (${legacyGuard}) await startManagedRetirementGuard(directory, ${JSON.stringify(release.revision)});
         fs.writeFileSync(directory + "/guard-ready", "ready");
         while (true) {}
-      `] : ["node", "-e", 'process.on("SIGTERM", () => {}); while (true) {}'])], { timeout: 20_000 })).stdout.trim();
+      `], { timeout: 20_000 })).stdout.trim();
     const ownerPid = Number((await docker("/usr/bin/docker", ["inspect", "--format", "{{.State.Pid}}", container])).stdout.trim());
     const owner = captureProcessIdentity(ownerPid);
+    const nativeDeadline = Date.now() + 5_000;
+    while (!fs.existsSync(path.join(sandbox, "native.pid")) && Date.now() < nativeDeadline) await Bun.sleep(20);
+    nativeIdentity = captureProcessIdentity(Number(fs.readFileSync(path.join(sandbox, "native.pid"), "utf8")));
+    expect(processIdentityStatus(nativeIdentity)).toBe("alive");
+    expect(fs.readFileSync(`/proc/${nativeIdentity.pid}/cgroup`, "utf8")).toBe(fs.readFileSync(`/proc/${owner.pid}/cgroup`, "utf8"));
     const candidate = { ...release, container: name, image, hotStateBackend: HOT_STATE_BACKEND };
     const previous = { ...release, revision: "9".repeat(40), container: "fixture-retained-web", image: "fixture:retained", endpoint: `http://127.0.0.1:${server.port}` };
     const result = await runAction({
       sandbox, preserveSandbox: true, action: "rollback", snapshots: [previous.container],
+      environment: { HOME: sandbox, XDG_CONFIG_HOME: path.join(sandbox, "config") },
       adapterPath: legacyGuard ? process.env.LLV_LEGACY_ADAPTER_FIXTURE : process.env.LLV_ADAPTER_UNDER_TEST,
       input: { candidate, previous, previousMcpRuntime: { source: "legacy", revision: previous.revision, releaseId: null, artifactDigest: "9".repeat(64), stagedAt: null } },
       setupState: async state => {
@@ -2170,15 +2187,17 @@ for (const legacyGuard of [false, true]) {
         registry.close();
         retainedBefore = retainedRows(state);
         expect(retainedBefore).toHaveLength(687); // 666 retained + 20 pending + this uncertain message.
-        if (legacyGuard) {
-          fs.writeFileSync(path.join(state, "configured"), "ready");
+        fs.writeFileSync(path.join(state, "configured"), "ready");
+        {
           const deadline = Date.now() + 10_000;
           while (!fs.existsSync(path.join(state, "guard-ready")) && Date.now() < deadline) await Bun.sleep(20);
           expect(fs.existsSync(path.join(state, "guard-ready"))).toBe(true);
-          publishHotStateAuthority(state, "fencing", candidate.revision, { retirementOwner: captureProcessIdentity(process.pid) });
-          await Bun.sleep(8_500);
-          expect(processIdentityStatus(owner)).toBe("alive");
-          publishHotStateAuthority(state, "sqlite", candidate.revision, { activationOwner: owner });
+          if (legacyGuard) {
+            publishHotStateAuthority(state, "fencing", candidate.revision, { retirementOwner: captureProcessIdentity(process.pid) });
+            await Bun.sleep(8_500);
+            expect(processIdentityStatus(owner)).toBe("alive");
+            publishHotStateAuthority(state, "sqlite", candidate.revision, { activationOwner: owner });
+          }
         }
         rollbackStarted = performance.now();
       },
@@ -2186,6 +2205,7 @@ for (const legacyGuard of [false, true]) {
 set -eu
 if [ "$1 $2" = "container inspect" ] && [ "$3" = "--format" ]; then exec /usr/bin/docker "$@"; fi
 if [ "$1 $2" = "container stop" ]; then exec /usr/bin/docker "$@"; fi
+if [ "$1" = exec ]; then exec /usr/bin/docker "$@"; fi
 if [ "$1 $2" = "container inspect" ]; then exit 0; fi
 if [ "$1" = inspect ]; then echo running; exit 0; fi
 if [ "$1" = start ]; then exit 0; fi
@@ -2194,6 +2214,10 @@ exit 1
     });
     console.info(JSON.stringify({ managedRollback: { legacyGuard, adapterMs: performance.now() - rollbackStarted,
       exit: result.code, owner: processIdentityStatus(owner), native: processIdentityStatus(nativeIdentity) } }));
+    if (result.code !== 0) {
+      console.error(result.stderr);
+      console.error((await docker("/usr/bin/docker", ["logs", container!], { timeout: 2_000 })).stderr);
+    }
     expectAdapterSuccess(result);
     expect(result.target).toEqual(previous);
     expect(result.authority?.checkpoint).toBeDefined();
@@ -2209,9 +2233,8 @@ exit 1
     try { expect(Object.values(retained.readOnlySnapshot().heldDeliveries).find(row => row.clientMessageId === "original-message-key")).toMatchObject({ clientMessageId: "original-message-key", text: "Original task remains uncertain", state: "delivery-uncertain" }); }
     finally { retained.close(); }
   } finally {
-    if (container) await docker("/usr/bin/docker", ["container", "rm", "-f", container]);
-    native.kill();
-    await native.exited;
+    if (nativeIdentity && processIdentityStatus(nativeIdentity) === "alive") process.kill(nativeIdentity.pid, "SIGKILL");
+    if (container) await docker("/usr/bin/docker", ["container", "rm", "-f", container], { timeout: 10_000 });
     await server.stop(true);
     fs.rmSync(sandbox, { recursive: true, force: true });
   }

@@ -1122,14 +1122,14 @@ test("the actuation cap bounds one cycle and the remainder converges on the next
   }
 });
 
-function queuedOwnerFixture(transport: "tmux" | "structured", curator?: { id: string; project: string; receiptProject?: string }) {
-  const store = registry();
+function queuedOwnerFixture(transport: "tmux" | "structured", curator?: { id: string; project: string; receiptProject?: string }, attemptId?: string, mode: AgentRegistrySqliteMode = "off") {
+  const store = registry(mode);
   const cwd = path.dirname(store.filename);
   const profile = emptyLaunchProfile({ cwd, title: curator ? "Role memory curation" : "Owner queue fixture",
     ...(curator ? { project: curator.project, role: "curator" as never } : {}) });
   const begun = store.beginSpawnRequest({ engine: "claude", cwd, transport, ownStartingActuation: true, accountPin: true, accountId: "account-a",
     ...(curator ? { role: "curator", explicitProject: curator.receiptProject ?? curator.project } : {}),
-    clientAttemptId: curator?.id ?? `relay-owner-queued-${transport}`, launchProfile: profile });
+    clientAttemptId: attemptId ?? curator?.id ?? `relay-owner-queued-${transport}`, launchProfile: profile });
   if (begun.kind !== "created" || !begun.receipt.admissionOwner) throw Error("queued owner fixture unavailable");
   const prompt = "Owner queue fixture instruction";
   store.queuePinnedSpawn(begun.receipt.launchId, { version: 1, retryAt: new Date(0).toISOString(), accountId: "account-a", locale: "en",
@@ -1138,6 +1138,129 @@ function queuedOwnerFixture(transport: "tmux" | "structured", curator?: { id: st
   store.releaseSpawnActuation(begun.receipt.launchId, begun.receipt.admissionOwner);
   return { store, cwd, receipt: begun.receipt };
 }
+
+test("startup defers due queued host setup and the controller retains the original launch", async () => {
+  const { store, cwd, receipt } = queuedOwnerFixture("structured", undefined, "queued-startup-fixture");
+  const { RuntimeJournal } = await import("../../runtime-host/journal");
+  const journal = new RuntimeJournal(path.join(cwd, "runtime.sqlite"), { structuredHosts: true });
+  const client = { ...DEAD_RUNTIME_CLIENT, snapshot: async () => journal.snapshot() };
+  const before = store.readOnlySnapshot().receipts[receipt.launchId];
+  let launches = 0;
+  let publications = 0;
+  let release!: () => void;
+  const heldSetup = new Promise<void>(resolve => { release = resolve; });
+  const cancellation = new AbortController();
+  let entered!: () => void;
+  const setupEntered = new Promise<void>(resolve => { entered = resolve; });
+  const options = {
+    signal: cancellation.signal,
+    resolveSpawnAccount: () => ({ engine: "claude" as const, accountId: "account-a", kind: "managed" as const, home: cwd, transcriptRoot: cwd, env: { NODE_ENV: "test" as const } }),
+    resolvePinnedSpawnAdmission: async () => ({ kind: "admissible" as const, basis: "current" as const, stale: false, retryAt: null }),
+    spawnStructuredConversation: async (input: Parameters<typeof spawnStructuredConversation>[0]) => {
+      launches++;
+      expect(input.receipt.launchId).toBe(receipt.launchId);
+      await input.authorize?.();
+      entered();
+      await heldSetup;
+      await input.authorize?.();
+      publications++;
+      return { state: "running" } as never;
+    },
+  };
+  let controllerPass: Promise<unknown> | undefined;
+  let startup: Promise<void> | undefined;
+  let startupBound: ReturnType<typeof setTimeout> | undefined;
+  try {
+    startup = recoverPendingStructuredSpawns(store, client, options);
+    await Promise.race([
+      startup,
+      setupEntered.then(() => { throw Error("startup retained full queued host setup"); }),
+      new Promise<never>((_, reject) => {
+        startupBound = setTimeout(() => reject(Error("startup made no progress")), 4_000);
+      }),
+    ]);
+    clearTimeout(startupBound);
+    expect(launches).toBe(0);
+    expect(store.readOnlySnapshot().receipts[receipt.launchId]).toEqual(before);
+    controllerPass = terminalizeStaleStructuredSpawns(store, client, options);
+    await setupEntered;
+    cancellation.abort(Error("retiring Viewer"));
+    release();
+    await controllerPass;
+    expect(launches).toBe(1);
+    expect(publications).toBe(0);
+    expect(store.readOnlySnapshot().receipts[receipt.launchId]).toMatchObject({
+      state: "starting", admissionOwner: null, clientAttemptId: receipt.clientAttemptId,
+      queuedPinnedSpawn: before.queuedPinnedSpawn,
+    });
+  } finally {
+    clearTimeout(startupBound);
+    release();
+    await startup?.catch(() => {});
+    await controllerPass;
+    journal.close(); store.close(); fs.rmSync(cwd, { recursive: true, force: true });
+  }
+}, 10_000);
+
+for (const cutoff of ["abort", "fence", "new-epoch"] as const)
+test.each(["tmux", "structured"] as const)(`cancelled queued %s admission cannot start a new launch (${cutoff})`, async transport => {
+  const { store, cwd, receipt } = queuedOwnerFixture(transport, undefined, `queued-cancellation-${transport}`);
+  const original = store.readOnlySnapshot().receipts[receipt.launchId];
+  const cancellation = new AbortController();
+  let launches = 0;
+  try {
+    await terminalizeStaleStructuredSpawns(store, DEAD_RUNTIME_CLIENT, {
+      signal: cancellation.signal,
+      resolveSpawnAccount: () => ({ engine: "claude", accountId: "account-a", kind: "managed", home: cwd, transcriptRoot: cwd, env: { NODE_ENV: "test" } }),
+      resolvePinnedSpawnAdmission: async () => {
+        if (cutoff === "abort") cancellation.abort(Error("retiring Viewer"));
+        else {
+          const { publishHotStateAuthority } = await import("@/lib/state/hotStateAuthority");
+          publishHotStateAuthority(cwd, cutoff === "fence" ? "fencing" : "sqlite", "a".repeat(40));
+        }
+        return { kind: "admissible", basis: "current", stale: false, retryAt: null };
+      },
+      spawnStructuredConversation: async () => { launches++; throw Error("unexpected launch"); },
+      spawnTmuxAgent: async () => { launches++; throw Error("unexpected launch"); },
+    });
+    expect(launches).toBe(0);
+    expect(store.readOnlySnapshot().receipts[receipt.launchId]).toMatchObject({
+      state: "starting", admissionOwner: null, queuedPinnedSpawn: original.queuedPinnedSpawn,
+      clientAttemptId: receipt.clientAttemptId,
+    });
+  } finally { store.close(); fs.rmSync(cwd, { recursive: true, force: true }); }
+});
+
+test("cancelled queued admission releases its claim asynchronously under a peer registry lock", async () => {
+  const { store, cwd, receipt } = queuedOwnerFixture("structured", undefined, "queued-cancel-lock", "sqlite");
+  const peer = new Database(path.join(cwd, "agent-registry.sqlite"));
+  const cancellation = new AbortController();
+  let locked = false;
+  let timerAdvanced = false;
+  let releaseTimer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await terminalizeStaleStructuredSpawns(store, DEAD_RUNTIME_CLIENT, {
+      signal: cancellation.signal,
+      resolveSpawnAccount: () => ({ engine: "claude", accountId: "account-a", kind: "managed", home: cwd, transcriptRoot: cwd, env: { NODE_ENV: "test" } }),
+      resolvePinnedSpawnAdmission: async () => {
+        peer.exec("BEGIN IMMEDIATE"); locked = true;
+        releaseTimer = setTimeout(() => {
+          timerAdvanced = true;
+          peer.exec("ROLLBACK"); locked = false;
+        }, 100);
+        cancellation.abort(Error("retiring Viewer"));
+        return { kind: "admissible", basis: "current", stale: false, retryAt: null };
+      },
+      spawnStructuredConversation: async () => { throw Error("unexpected launch"); },
+    });
+    expect(timerAdvanced).toBe(true);
+    expect(store.readOnlySnapshot().receipts[receipt.launchId]).toMatchObject({ state: "starting", admissionOwner: null });
+  } finally {
+    clearTimeout(releaseTimer);
+    if (locked) peer.exec("ROLLBACK");
+    peer.close(); store.close(); fs.rmSync(cwd, { recursive: true, force: true });
+  }
+});
 
 test("a newly failed accepted queue retains its reporting obligation until the next pass", async () => {
   const { store, receipt } = queuedOwnerFixture("structured");

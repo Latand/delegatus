@@ -2714,5 +2714,30 @@
     }
   },
   "pairedCandidate": "b59f03ac3",
-  "integratedMain": "d6f3669ed"
+  "integratedMain": "d6f3669ed",
+  "rollbackFixtureHistory": "The original rollback samples used a native worker started outside Docker.",
+  "candidateCreatedNativeRollback": {
+    "date": "2026-10-15",
+    "method": "Candidate Viewer is container init; detached native worker launched through the production Dockerfile namespace shim; equal cgroups verified before retirement; same worker process identity and protected registry rows required afterwards.",
+    "fixture": {
+      "receiptCensus": 10971,
+      "protectedRows": 687
+    },
+    "samples": [
+      {
+        "adapter": "candidate",
+        "adapterMs": 15665.997667999996,
+        "owner": "dead",
+        "native": "alive",
+        "exit": 0
+      },
+      {
+        "adapter": "baseline",
+        "adapterMs": 9169.621885,
+        "owner": "dead",
+        "native": "alive",
+        "exit": 0
+      }
+    ]
+  }
 }

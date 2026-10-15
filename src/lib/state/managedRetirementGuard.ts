@@ -4,6 +4,7 @@ import path from "node:path";
 import { captureProcessIdentity, processIdentityStatus, sameRecordedProcessIdentity, type ProcessIdentity } from "@/lib/processIdentity";
 import { readHotStateAuthority, type HotStateAuthority } from "./hotStateAuthority";
 import { withFileTransactionSync } from "./fileTransaction";
+import { preserveManagedNativeProcesses, resumeRetirementOwner } from "@/runtime-host/managedNativePreservation";
 
 function parentPid(pid: number): number {
   const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
@@ -48,36 +49,39 @@ export async function runManagedRetirementGuard(directory: string, revision: str
     if (!current || !sameFence(current, current)) { fence = null; continue; }
     if (!fence || !sameFence(fence, current)) { fence = current; observedAt = Date.now(); continue; }
     if (Date.now() - observedAt < 8_000) continue;
-    const [{ SqliteAgentRegistryStore }, { normalizeRegistry }] = await Promise.all([
-      import("@/lib/agent/sqliteRegistryStore"), import("@/lib/agent/registry"),
-    ]);
-    const registry = new SqliteAgentRegistryStore(path.join(directory, "agent-registry.sqlite"), {
-      readOnly: true, normalize: normalizeRegistry, initialSnapshot: normalizeRegistry({ version: 2, entries: {}, receipts: {} }),
-    });
-    let evidence;
-    try { evidence = registry.retirementEvidence(`structured-host:${JSON.stringify(owner)}`); }
-    finally { registry.close(); }
-    const boundaryDirectory = path.join(directory, "deployments");
-    fs.mkdirSync(boundaryDirectory, { recursive: true });
-    const filename = path.join(boundaryDirectory, `retirement-${current.epoch}.json`);
-    const temporary = `${filename}.${process.pid}.tmp`;
-    const descriptor = fs.openSync(temporary, "wx", 0o600);
     try {
-      fs.writeFileSync(descriptor, JSON.stringify({ version: 1, at: new Date().toISOString(), epoch: current.epoch,
-        revision, activationOwner: owner, container: { id, cgroup: group }, ...evidence }));
-      fs.fsyncSync(descriptor);
-    } finally { fs.closeSync(descriptor); }
-    fs.renameSync(temporary, filename);
-    const directoryDescriptor = fs.openSync(boundaryDirectory, "r");
-    try { fs.fsyncSync(directoryDescriptor); } finally { fs.closeSync(directoryDescriptor); }
-    const stopped = withFileTransactionSync(path.join(directory, "hot-state-authority.json"), "retirement guard fence is busy", () => {
-      if (!sameFence(current, readHotStateAuthority(directory)) || processIdentityStatus(owner) !== "alive"
-        || cgroup(owner.pid) !== group || parentPid(process.ppid) !== owner.pid) return false;
-      process.kill(owner.pid, "SIGKILL");
-      return true;
-    });
-    if (stopped) return;
-    fence = null;
+      await preserveManagedNativeProcesses(owner);
+      const [{ SqliteAgentRegistryStore }, { normalizeRegistry }] = await Promise.all([
+        import("@/lib/agent/sqliteRegistryStore"), import("@/lib/agent/registry"),
+      ]);
+      const registry = new SqliteAgentRegistryStore(path.join(directory, "agent-registry.sqlite"), {
+        readOnly: true, normalize: normalizeRegistry, initialSnapshot: normalizeRegistry({ version: 2, entries: {}, receipts: {} }),
+      });
+      let evidence;
+      try { evidence = registry.retirementEvidence(`structured-host:${JSON.stringify(owner)}`); }
+      finally { registry.close(); }
+      const boundaryDirectory = path.join(directory, "deployments");
+      fs.mkdirSync(boundaryDirectory, { recursive: true });
+      const filename = path.join(boundaryDirectory, `retirement-${current.epoch}.json`);
+      const temporary = `${filename}.${process.pid}.tmp`;
+      const descriptor = fs.openSync(temporary, "wx", 0o600);
+      try {
+        fs.writeFileSync(descriptor, JSON.stringify({ version: 1, at: new Date().toISOString(), epoch: current.epoch,
+          revision, activationOwner: owner, container: { id, cgroup: group }, ...evidence }));
+        fs.fsyncSync(descriptor);
+      } finally { fs.closeSync(descriptor); }
+      fs.renameSync(temporary, filename);
+      const directoryDescriptor = fs.openSync(boundaryDirectory, "r");
+      try { fs.fsyncSync(directoryDescriptor); } finally { fs.closeSync(directoryDescriptor); }
+      const stopped = withFileTransactionSync(path.join(directory, "hot-state-authority.json"), "retirement guard fence is busy", () => {
+        if (!sameFence(current, readHotStateAuthority(directory)) || processIdentityStatus(owner) !== "alive"
+          || cgroup(owner.pid) !== group || parentPid(process.ppid) !== owner.pid) return false;
+        process.kill(owner.pid, "SIGKILL");
+        return true;
+      });
+      if (stopped) return;
+      fence = null;
+    } finally { resumeRetirementOwner(owner); }
   }
 }
 
