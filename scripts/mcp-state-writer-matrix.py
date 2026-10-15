@@ -325,8 +325,9 @@ def main():
     if git("rev-parse", args.candidate) != git("rev-parse", "HEAD"):
         raise RuntimeError("run the harness from the candidate checkout")
     root = args.output.resolve()
-    if not str(root).startswith("/tmp/"):
-        raise RuntimeError("samples require an explicit temp-root sandbox")
+    scratch = pathlib.Path(tempfile.gettempdir()).resolve()
+    if not root.is_relative_to(scratch) or root == scratch:
+        raise RuntimeError("samples require a directory inside the caller's temporary root")
     root.mkdir(parents=True, exist_ok=True)
     runtime = root / "runtime"
     runtime.mkdir(exist_ok=True)
@@ -428,6 +429,7 @@ def main():
                         env = environment(sample / "controller")
                         env["PATH"] = str(runtime) + os.pathsep + env["PATH"]
                         env.update(MCP_BENCH_OUTPUT=str(sample), MCP_BENCH_SEED=str(seed),
+                                   MCP_BENCH_SCRATCH_ROOT=str(scratch),
                                    MCP_BENCH_CAPABILITIES=str(capabilities), MCP_BENCH_SEED_CHECKSUM=seed_hash,
                                    MCP_SQL_OBSERVER=str(observer), MCP_BENCH_CLIENTS=str(clients),
                                    MCP_BENCH_TRANSPORT=mode, MCP_BENCH_SHARED="1" if shared else "0",

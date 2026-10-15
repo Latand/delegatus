@@ -141,7 +141,10 @@ function census(pids: Set<number>) {
 
 export async function runStateWriterSample(): Promise<void> {
   const root = process.env.MCP_BENCH_OUTPUT!;
-  if (!root?.startsWith("/tmp/") || !process.env.MCP_SQL_OBSERVER) throw new Error("state writer sample requires isolated output and a validated observer");
+  const scratch = process.env.MCP_BENCH_SCRATCH_ROOT ?? "/tmp";
+  const relative = root ? path.relative(scratch, root) : "";
+  if (!path.isAbsolute(scratch) || !relative || relative.startsWith("..") || path.isAbsolute(relative)
+    || !process.env.MCP_SQL_OBSERVER) throw new Error("state writer sample requires isolated output and a validated observer");
   if (!process.env.MCP_BENCH_HOST_NAMESPACE || fs.readlinkSync("/proc/self/ns/pid") === process.env.MCP_BENCH_HOST_NAMESPACE
     || fs.readlinkSync("/proc/self") !== String(process.pid)) throw new Error("fixture needs its own process namespace");
   fs.mkdirSync(root, { recursive: true });
