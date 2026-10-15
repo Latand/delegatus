@@ -426,6 +426,51 @@
       "errors": 0,
       "warnings": 0
     },
-    "privacy": "passed for source, evidence and commits"
+    "privacy": "passed for source, evidence and commits",
+    "prePushBatch": {
+      "headElapsedMs": 552156,
+      "baselineElapsedMs": 291219,
+      "runnerTimeoutFiles": [
+        "src/lib/pipelines/engine.providerBudget.test.ts",
+        "src/lib/pipelines/engine.publication.test.ts"
+      ],
+      "preExistingAssertionFailures": 3,
+      "types": "passed",
+      "eslint": "passed",
+      "privacy": "passed"
+    },
+    "isolatedTimeoutReruns": {
+      "src/lib/pipelines/engine.providerBudget.test.ts": {
+        "pass": 164,
+        "fail": 0,
+        "elapsedSeconds": 324.43
+      },
+      "src/lib/pipelines/engine.publication.test.ts": {
+        "pass": 432,
+        "fail": 0,
+        "elapsedSeconds": 236.4
+      }
+    },
+    "linuxBackend": "passed",
+    "linuxTestsByPath": {
+      "src/lib/proc/memory.test.ts": 17,
+      "src/lib/proc/portable.test.ts": 1,
+      "src/lib/proc/darwinIdentity.test.ts": 3,
+      "src/lib/proc/index.test.ts": 4,
+      "src/lib/proc/windowsSnapshot.test.ts": 14,
+      "src/lib/proc/windowsIdentity.test.ts": 6,
+      "src/lib/proc/windowsCwd.test.ts": 3,
+      "src/lib/proc/windows.test.ts": 16,
+      "src/lib/processGroup.test.ts": 15,
+      "src/lib/platformHome.test.ts": 5,
+      "src/lib/runtime/localEndpoint.test.ts": 5,
+      "src/lib/scanner/describe.test.ts": 50,
+      "src/lib/state/durableJson.test.ts": 1,
+      "src/runtime-host/socket.test.ts": 5,
+      "src/runtime-host/runtimeHostFence.test.ts": 5,
+      "bin/server-runtime.test.ts": 29,
+      "bin/bind-guard.test.ts": 15
+    },
+    "publicationMode": "Documented LLV_SKIP_HOOKS=1 timeout escape after isolated reruns and the stopped Linux checks passed."
   }
 }
