@@ -4,7 +4,7 @@ import { directOperatorActivityAuthority } from "@/lib/agent/operatorAuthority";
 import { refuseAnonymous, teamActor } from "@/lib/team";
 import { parsePrototypeInput, PrototypeError } from "./input";
 import { prototypeCriticGate, criticRefusal } from "./criticGate";
-import { publishPrototype } from "./store";
+import { publishPrototype, withPrototypeState } from "./store";
 import { operatorDecisionRound, operatorDecisions, readPrototypeReviews, readSeatRounds } from "./read";
 import { findSeatRound, loadSeatRounds } from "./seatRounds";
 import { loadTasks } from "@/lib/tasks/store";
@@ -86,11 +86,11 @@ export async function reviewScopePOST(request: NextRequest,world: PrototypeWorld
     if (!body || typeof body !== "object" || !["publish", "read", "resend"].includes(body.mode)) throw new PrototypeError("invalid scope request");
     if (body.taskId !== undefined && (typeof body.taskId !== "string" || !body.taskId)) throw new PrototypeError("invalid taskId");
     if (body.mode === "resend") {
-      const { caller, round } = resendTarget(request, body.reviewId, world);
+      const { caller, round } = await withPrototypeState(() => resendTarget(request, body.reviewId, world));
       if (!caller.conversationId) throw new PrototypeError("caller could not be identified", 403);
       return NextResponse.json({ conversationId: caller.conversationId, taskId: round.taskId, reviewId: round.id });
     }
-    const target = body.mode === "publish" ? publicationTarget(request,body.taskId,world) : readTarget(request,body.taskId,world);
+    const target = await withPrototypeState(() => body.mode === "publish" ? publicationTarget(request,body.taskId,world) : readTarget(request,body.taskId,world));
     if (!target.caller.conversationId) throw new PrototypeError("caller could not be identified",403);
     return NextResponse.json({ conversationId: target.caller.conversationId, taskId: target.taskId },{ headers: { "cache-control": "private, no-store" } });
   } catch (error) { return prototypeFailure(error); }
@@ -118,11 +118,11 @@ export async function publishPOST(request: NextRequest,world: PrototypeWorld = p
   const anonymous = refuseAnonymous(teamActor(request)); if (anonymous) return anonymous;
   try {
     const input = parsePrototypeInput(await request.json());
-    const { caller, stage, taskId, seat } = publicationTarget(request,input.taskId,world);
+    const { caller, stage, taskId, seat } = await withPrototypeState(() => publicationTarget(request,input.taskId,world));
     if (taskId === null && !input.questions?.length) throw new PrototypeError("a decision asked without a task is a form: give it 1–7 questions");
     let critic;
     if (input.variants?.length) {
-      const gate = prototypeCriticGate(stage?.source.pipelineId ? world.pipeline(stage.source.pipelineId) : null, stage?.source.stageId ?? "");
+      const gate = await withPrototypeState(() => prototypeCriticGate(stage?.source.pipelineId ? world.pipeline(stage.source.pipelineId) : null, stage?.source.stageId ?? ""));
       if (!gate.ok) throw new PrototypeError(criticRefusal(gate.missing), 409);
       critic = gate.pass;
     }
