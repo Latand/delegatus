@@ -409,3 +409,90 @@ change was made. The other fenced lanes’ files are untouched. The unavailable
 historical command trace and production CPU attribution remain explicit limits;
 the profile proves the ownership-polling defect with the captured corpus and
 controlled wait, and the follow-up design preserves its decision fences.
+
+## Immediate relief implementation, 2026-10-15
+
+The operator selected the small immutable-reader candidate in
+[#2929](https://github.com/Latand/delegatus/issues/2929#issuecomment-6190242974)
+for immediate delivery. The four-line engine change uses
+`loadPipelinesForList()` for the initial ownership fence, its recurring check,
+and the reader passed to `commitAndAdoptStageBranch`. Both consumers inspect
+records without mutating them. The existing cache validates SQLite revisions,
+database identity and project aliases, refreshes changed rows, and shares its
+decoded data across compiled modules. Its existing limits remain eight slots
+and 256 MiB of UTF-16 source bytes with eviction.
+
+The ownership fields, current-lane/flow checks, 50 ms cancellation timer,
+publication locks and final adoption checks are unchanged. No schema or job
+scheduler is added. The bounded allocation claim in this slice is zero full
+mutable pipeline snapshots during the recurring ownership check, including
+when retained attempt history grows. Constructing and sorting the compact
+ownership tuples still scales with the number of hot lanes. The broader
+dirty-queue/job design above remains follow-up work.
+
+### Paired replay of the delivered change
+
+Three alternating baseline/candidate pairs ran at 11:10:21–11:12:07 UTC, each
+from a clean source export with identical dependency inputs and Bun 1.4.0.
+The candidate export differs in exactly the four engine lines described above.
+The replay reuses E4/E5, the audited `replay.ts` guards and stub responses, fixed
+clock, three-pass sequence, CPU gate and a 10,000 ms delayed stage Git reply.
+Only a final authoritative-row export was added to the driver, identically on
+both sides. Each run has fresh isolated HOME, XDG_CONFIG_HOME, TMPDIR and
+LLV_STATE_DIR, with the control URL on a closed port. Both immutable reference
+checksums still match E4/E5. Current main `f7ba61a3a` has byte-identical engine,
+store, stage-branch and SQLite-state code to the audited baseline.
+
+The first pass includes cold initialization and the deliberate wait. The two
+subsequent passes observe the resulting state. Medians over the three first
+passes are below; the public numeric observations are in
+[`evidence/perf/pipelines-controller-relief.json`](../../evidence/perf/pipelines-controller-relief.json).
+
+| Measurement | Before | Delivered candidate |
+| --- | ---: | ---: |
+| First pass wall time, including 10 s Git wait | 12,509 ms | 11,992 ms |
+| First pass process user CPU | 12,431 ms | 2,900 ms |
+| Main-thread CPU during Git wait | 99.04% | 7.90% |
+| Maximum 10 ms timer delay during Git wait | 133.07 ms | 8.70 ms |
+| Full mutable pipeline snapshots in first pass | 114 | 0 |
+| Pipeline records copied by those snapshots | 30,438 | 0 |
+| Largest synchronous mutable snapshot call | 270.90 ms | 0 calls |
+| Full-pass maximum timer delay, including cold work | 720.43 ms | 702.30 ms |
+| Cold registry snapshot span | 656.51 ms | 671.92 ms |
+| Equal resulting authoritative pipeline records, each pair | 941/941 | 941/941 |
+
+Main-thread CPU uses `/proc/self/task/<pid>/stat` ticks and the measured wait
+window; this machine reports 100 ticks/s. Process user CPU includes all Bun
+threads. The maximum timer delay is a scheduling observation, separate from a
+synchronous span. Every pair has the same three `changed` decisions and equal
+parsed payloads for all 267 hot and 674 archived records, with no guarded
+external action or replay exception. Profiles and unredacted copied records
+remain private. Their artifact root is `pipelines-controller-build-dlc0qmyu`
+under the OS temp root, with `relief-before-N` / `relief-after-N` runs,
+`run_relief_pairs.py`, source hashes and per-run profiles.
+
+The measured wall time still includes the external wait. Cold registry work,
+task-note preparation and the final full returned snapshot remain visible
+costs. These measurements establish incident relief for ownership polling;
+they do not establish a bounded wall time for every controller pass or a
+production improvement. The orchestrator owns the authorized deployment and
+the subsequent 30–60 minute production journal audit under recorded load.
+
+### Regression checks
+
+`engine.watchdogRegression.test.ts` holds the real stage Git executor across
+four independent 50 ms scheduler turns. With zero peers and with 267 peers
+retaining eight attempt outputs each, the baseline takes four mutable
+snapshots per case and fails both zero-copy assertions; the candidate takes
+none and leaves the retained records unchanged. Both revisions pass the peer
+authority-change, progress-only-write and removal cancellation cases. The old
+code therefore reports three passes and two expected failures; the candidate
+reports five passes.
+
+The explicit isolated candidate files `engine.settlement.test.ts` (101 tests),
+`engine.ports.test.ts` (108 tests), `engine.controllerSnapshot.test.ts` (2 tests)
+and the five watchdog regressions cover publication decisions, adoption,
+source/destination claims, protected branches, linked checkouts, pause races,
+restart recovery and stale evidence. Every file runs separately through the
+supplied serving-release gate. Local publication hooks also check types,
+changed-file lint, privacy and all touched engine tests before pushing.
