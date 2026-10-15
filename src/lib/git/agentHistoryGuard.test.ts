@@ -305,3 +305,53 @@ test("renaming and deleting branches preserves foreign commits without rewriting
     expect(f.ok(["rev-parse", "HEAD"])).toBe(before);
   } finally { f.close(); }
 });
+
+
+test.each([false, true])("pre-push preserves the repository hook input and refusal with stage binding=%s", (bound) => {
+  const f = fixture();
+  try {
+    const origin = path.join(f.root, "origin.git");
+    f.ok(["init", "--bare", origin]);
+    f.ok(["remote", "add", "origin", origin]);
+    const hooks = path.join(f.root, ".git", "hooks");
+    fs.mkdirSync(hooks, { recursive: true });
+    fs.writeFileSync(path.join(hooks, "pre-push"),
+      '#!/bin/sh\ncat > push-input\necho "repository publication refused" >&2\nexit 7\n', { mode: 0o700 });
+    if (bound) {
+      const receipt = path.join(f.root, "receipt");
+      fs.mkdirSync(receipt);
+      fs.writeFileSync(path.join(receipt, "base"), f.ok(["rev-parse", "HEAD"]));
+      Object.assign(f.env, agentPublicationIdentityEnv({ ...f.env,
+        LLV_STAGE_GIT_RECEIPT: receipt, LLV_STAGE_GIT_WORKTREE: f.root }));
+    }
+    const head = f.ok(["rev-parse", "HEAD"]);
+    const pushed = f.run(["push", "origin", "HEAD:refs/heads/result"]);
+    expect(pushed.exitCode).not.toBe(0);
+    expect(pushed.stderr.toString()).toContain("repository publication refused");
+    expect(fs.readFileSync(path.join(f.root, "push-input"), "utf8")).toBe(`HEAD ${head} refs/heads/result ${"0".repeat(40)}\n`);
+    expect(f.ok(["--git-dir=" + origin, "for-each-ref", "--format=%(objectname)"])).toBe("");
+  } finally { f.close(); }
+});
+
+
+test("a stage Git binding preserves pushes from an unrelated fixture repository", () => {
+  const f = fixture();
+  try {
+    const receipt = path.join(f.root, "receipt");
+    fs.mkdirSync(receipt);
+    const original = f.ok(["rev-parse", "HEAD"]);
+    fs.writeFileSync(path.join(receipt, "base"), original);
+    Object.assign(f.env, agentPublicationIdentityEnv({ ...f.env,
+      LLV_STAGE_GIT_RECEIPT: receipt, LLV_STAGE_GIT_WORKTREE: f.root }));
+    const other = path.join(f.root, "fixture");
+    const origin = path.join(f.root, "fixture-origin.git");
+    f.ok(["init", "--bare", origin]);
+    f.ok(["init", "-b", "main", other]);
+    f.ok(["-C", other, "commit", "--allow-empty", "-m", "fixture"]);
+    f.ok(["-C", other, "remote", "add", "origin", origin]);
+    const pushed = f.run(["-C", other, "push", "origin", "main"]);
+    expect(pushed.exitCode, pushed.stderr.toString()).toBe(0);
+    expect(fs.existsSync(path.join(receipt, "refused"))).toBe(false);
+    expect(f.ok(["rev-parse", "HEAD"])).toBe(original);
+  } finally { f.close(); }
+});

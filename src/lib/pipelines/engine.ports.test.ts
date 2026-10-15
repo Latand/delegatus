@@ -2184,6 +2184,11 @@ test("pipeline account admission retains reserved custody without parking or con
   }}));
   const client = spyOn(clientModule, "runtimeHostClient").mockReturnValue({} as never);
   const spawn = spyOn(spawnModule, "spawnStructuredConversation").mockResolvedValue({ path: null } as never);
+  const provision = await import("@/lib/workflows/provision");
+  const execute = provision.realExec;
+  const gitHead = spyOn(provision, "realExec").mockImplementation((command, args, ...rest) =>
+    command === "git" && args.join(" ") === "rev-parse HEAD"
+      ? { code: 0, stdout: ORIGIN_MAIN_SHA, stderr: "" } : execute(command, args, ...rest));
   const ports = defaultPipelinePorts();
   const keys: string[] = [];
   h.ports.drainHold = ports.drainHold;
@@ -2212,11 +2217,17 @@ test("pipeline account admission retains reserved custody without parking or con
     drain.releaseDrain(drain.drainFile(), "legacy-admission");
     await tickPipelines([], h.ports);
     expect(spawn).toHaveBeenCalledTimes(1);
+    const launched = spawn.mock.calls[0]![0];
+    expect(launched.account.env.LLV_STAGE_GIT_WORKTREE).toBe(launched.spec.cwd);
+    const receipt = launched.account.env.LLV_STAGE_GIT_RECEIPT!;
+    expect(JSON.parse(fs.readFileSync(path.join(receipt, "start.json"), "utf8"))).toMatchObject({
+      launchId: launched.receipt.launchId, head: ORIGIN_MAIN_SHA, worktree: launched.spec.cwd,
+    });
     expect(keys).toHaveLength(2); expect(keys[1]).toBe(keys[0]);
     expect(Object.values(registry.readOnlySnapshot().receipts)).toHaveLength(1);
   } finally {
     resume?.(); await locking; await ticking;
-    lock?.mockRestore(); resolve.mockRestore(); client.mockRestore(); spawn.mockRestore();
+    lock?.mockRestore(); resolve.mockRestore(); client.mockRestore(); spawn.mockRestore(); gitHead.mockRestore();
     drain.releaseDrain(drain.drainFile(), "legacy-admission"); setAgentRegistryForTests(null);
   }
 });
@@ -2274,4 +2285,282 @@ test.each(["early", "drain-switch-off"] as const)("managed %s admission holds ac
     for (let i = 0; i < 2; i++) await tickPipelines([], h.ports);
     expect(h.spawnInputs).toHaveLength(1);
   } finally { service.stop(); fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+
+async function detachedAttemptFixture(name: string) {
+  const f = await realWorktreeLane(name, [
+    { id: "build", kind: "run", role: { roleId: "builder" }, access: "read-write", prompt: "Build", next: "review" },
+    { id: "review", kind: "run", role: { roleId: "reviewer" }, access: "read-only", prompt: "Review", next: null },
+  ], "remote-branch");
+  const lane = loadPipelines().find(p => p.id === f.id)!;
+  const attempt = lane.runs[0]!.attempts[0]!;
+  attempt.launchId = `launch-${lane.id}`;
+  savePipelines([lane]);
+  const receipt = path.join(process.env.LLV_STATE_DIR!, "pipeline-git-attempts",
+    crypto.createHash("sha256").update(attempt.launchId!).digest("hex"));
+  fs.mkdirSync(receipt, { recursive: true });
+  fs.writeFileSync(path.join(receipt, "base"), f.base);
+  fs.writeFileSync(path.join(receipt, "start.json"), JSON.stringify({ launchId: attempt.launchId,
+    worktree: f.worktree, head: f.base, startedAt: attempt.startedAt }));
+  const { agentPublicationIdentityEnv } = await import("@/lib/git/agentPublicationIdentity");
+  const source = { ...process.env, HOME: f.root, LLV_STAGE_GIT_RECEIPT: receipt, LLV_STAGE_GIT_WORKTREE: f.worktree };
+  const env: NodeJS.ProcessEnv = { ...source, ...agentPublicationIdentityEnv(source),
+    GIT_AUTHOR_DATE: new Date(Date.parse(attempt.startedAt!) + 1000).toISOString(),
+    GIT_COMMITTER_DATE: new Date(Date.parse(attempt.startedAt!) + 1000).toISOString() };
+  const detached = path.join(f.root, "detached");
+  await f.git(f.worktree, "worktree", "add", "--detach", detached, f.base);
+  const run = async (...args: string[]) => {
+    const r = await realExec("git", args, detached, env);
+    expect(r.code, r.stderr).toBe(0);
+    return r.stdout.trim();
+  };
+  const commit = async () => {
+    fs.writeFileSync(path.join(detached, "fix.txt"), "attempt fix\n");
+    await run("add", "fix.txt");
+    await run("commit", "-m", "attempt fix");
+    return await run("rev-parse", "HEAD");
+  };
+  const finish = async () => {
+    f.h.setConversationActive(false);
+    await engineModule.reportStageCompletion({ verdict: "pass" },
+      { kind: "agent", role: "builder", conversationId: "conversation_stage_1" }, f.h.ports);
+    await tickPipelines([finishReported(f.h, "/codex/stage-1.jsonl", "pass", "Fixed")], f.h.ports);
+    return loadPipelines().find(p => p.id === f.id)!;
+  };
+  return { ...f, lane, attempt, receipt, env, detached, run, commit, finish };
+}
+
+test("attempt Git custody adopts a proved detached push before review", async () => {
+  const f = await detachedAttemptFixture("attempt-git-detached");
+  try {
+    const fixed = await f.commit();
+    await f.run("push", "origin", `HEAD:refs/heads/${f.lane.branch}`);
+    expect(await f.git(f.worktree, "rev-parse", "HEAD")).toBe(f.base);
+    const accepted = await f.finish();
+    expect(accepted.lastPassedCommit).toBe(fixed);
+    expect(accepted.runs[0]!.attempts[0]!.report?.provenance.head).toBe(fixed);
+    expect(accepted.cursor?.stageId).toBe("review");
+    expect(await f.git(f.worktree, "rev-parse", "HEAD")).toBe(fixed);
+    expect(await f.git(f.origin, "rev-parse", `refs/heads/${f.lane.branch}`)).toBe(fixed);
+  } finally { savePipelines([]); fs.rmSync(f.root, { recursive: true, force: true }); }
+});
+
+test("attempt Git custody refuses an unproved detached push and fails the stage clearly", async () => {
+  const f = await detachedAttemptFixture("attempt-git-unproved");
+  try {
+    // Same machine author and timestamp, created without this attempt's hooks.
+    const r = await realExec("git", ["commit", "--allow-empty", "-m", "foreign"], f.detached,
+      { ...f.env, GIT_CONFIG_COUNT: "0" });
+    expect(r.code).toBe(0);
+    const refused = await realExec("git", ["push", "origin", `HEAD:refs/heads/${f.lane.branch}`], f.detached, f.env);
+    expect(refused.code).not.toBe(0);
+    expect(refused.stderr).toContain("no proof from this attempt");
+    expect(await f.git(f.origin, "for-each-ref", "--format=%(objectname)", `refs/heads/${f.lane.branch}`)).toBe("");
+    const failed = await f.finish();
+    expect(failed.state).toBe("needs_decision");
+    expect(failed.stateDetail).toContain("stage push refused");
+    expect(failed.lastPassedCommit).toBe(f.base);
+    expect(await f.git(f.worktree, "rev-parse", "HEAD")).toBe(f.base);
+  } finally { savePipelines([]); fs.rmSync(f.root, { recursive: true, force: true }); }
+});
+
+for (const shape of ["foreign", "wrong-attempt", "missing-start", "missing-push", "malformed", "oversized", "mixed", "old", "future", "non-descendant", "remote-race", "remote-after-merge", "local-race", "pause", "claim-race", "dirty", "released"] as const) {
+  test(`attempt Git custody preserves the fences for ${shape}`, async () => {
+    const f = await detachedAttemptFixture(`attempt-git-${shape}`);
+    try {
+      if (shape === "non-descendant") await f.run("checkout", "--orphan", "unrelated");
+      if (shape === "old" || shape === "future") {
+        const stamp = Date.parse(f.attempt.startedAt!) + (shape === "old" ? -60000 : 3600000);
+        f.env.GIT_AUTHOR_DATE = f.env.GIT_COMMITTER_DATE = new Date(stamp).toISOString();
+      }
+      if (shape === "mixed") await f.git(f.detached, "commit", "--allow-empty", "-m", "unproved ancestor");
+      const fixed = await f.commit();
+      // An adversarial writer may bypass its hooks. Settlement still needs all
+      // of the receipts, ancestry and window evidence before changing HEAD.
+      await f.git(f.detached, "push", "origin", `HEAD:refs/heads/${f.lane.branch}`);
+      fs.mkdirSync(path.join(f.receipt, "pushes"), { recursive: true });
+      fs.writeFileSync(path.join(f.receipt, "pushes", fixed), `refs/heads/${f.lane.branch}\n${f.origin}\n`);
+      if (shape === "wrong-attempt") {
+        const file = path.join(f.receipt, "start.json");
+        fs.writeFileSync(file, JSON.stringify({ ...JSON.parse(fs.readFileSync(file, "utf8")), launchId: "another-attempt" }));
+      }
+      if (shape === "missing-start") fs.rmSync(path.join(f.receipt, "start.json"));
+      if (shape === "missing-push") fs.rmSync(path.join(f.receipt, "pushes"), { recursive: true });
+      if (shape === "malformed" || shape === "oversized") fs.writeFileSync(path.join(f.receipt, "start.json"), shape === "malformed" ? "{" : "x".repeat(8193));
+      if (shape === "foreign") fs.rmSync(path.join(f.receipt, "commits", fixed), { force: true });
+      if (shape === "dirty") fs.writeFileSync(path.join(f.worktree, "unsaved.txt"), "unsaved\n");
+      if (shape === "released") {
+        const stored = loadPipelines().find(p => p.id === f.id)!;
+        stored.delivery!.active = false;
+        savePipelines([stored]);
+      }
+      let reads = 0;
+      let raced: string | null = null;
+      const exec = f.h.ports.exec;
+      if (["remote-race", "remote-after-merge", "local-race", "pause", "claim-race"].includes(shape)) f.h.ports.exec = async (command, args, ...rest) => {
+        if (command === "git" && args[0] === "ls-remote" && ++reads === (shape === "remote-after-merge" ? 3 : 2)) {
+          if (shape === "pause" || shape === "claim-race") {
+            raced = shape;
+            const stored = loadPipelines().find(p => p.id === f.id)!;
+            if (shape === "pause") { stored.state = "paused"; stored.pausedState = "running"; savePipelines([stored]); }
+            else savePipelines([stored, { ...structuredClone(stored), id: "racing-owner", state: "running", delivery: undefined }]);
+            return exec(command, args, ...rest);
+          }
+          await f.git(f.detached, "commit", "--allow-empty", "-m", "racing work");
+          raced = await f.git(f.detached, "rev-parse", "HEAD");
+          if (shape === "remote-race" || shape === "remote-after-merge") await f.git(f.detached, "push", "origin", `HEAD:refs/heads/${f.lane.branch}`);
+          else await f.git(f.worktree, "commit", "--allow-empty", "-m", "lane raced");
+        }
+        return exec(command, args, ...rest);
+      };
+      const failed = await f.finish();
+      if (["remote-race", "remote-after-merge", "local-race", "pause", "claim-race"].includes(shape)) expect(raced).not.toBeNull();
+      expect(failed.state).toBe(shape === "pause" ? "paused" : "needs_decision");
+      expect(failed.lastPassedCommit).toBe(f.base);
+      expect(failed.cursor?.stageId).toBe("build");
+      if (!["released", "pause", "claim-race"].includes(shape)) expect(failed.stateDetail).toContain("settling the stage push");
+      if (shape !== "local-race") expect(await f.git(f.worktree, "rev-parse", "HEAD")).toBe(shape === "remote-after-merge" ? fixed : f.base);
+      expect(await f.git(f.origin, "rev-parse", `refs/heads/${f.lane.branch}`)).toBe(raced && (shape === "remote-race" || shape === "remote-after-merge") ? raced : fixed);
+      if (shape === "dirty") expect(fs.readFileSync(path.join(f.worktree, "unsaved.txt"), "utf8")).toBe("unsaved\n");
+    } finally { savePipelines([]); fs.rmSync(f.root, { recursive: true, force: true }); }
+  });
+}
+
+
+test("attempt Git custody replays its durable proof in a new controller process", async () => {
+  const f = await detachedAttemptFixture("attempt-git-restart");
+  try {
+    const fixed = await f.commit();
+    await f.run("push", "origin", `HEAD:refs/heads/${f.lane.branch}`);
+    const script = `
+      const { commitAndAdoptStageBranch } = await import("./src/lib/pipelines/stageBranch");
+      const { realExec } = await import("./src/lib/workflows/provision");
+      const p = JSON.parse(process.env.CUSTODY_FIXTURE);
+      const a = p.runs[0].attempts[0];
+      const result = await commitAndAdoptStageBranch(p, "build", realExec, () => [p], undefined,
+        () => {}, null, undefined, undefined, a, new Date(Date.parse(a.startedAt) + 60000).toISOString());
+      process.stdout.write(JSON.stringify(result));
+    `;
+    const replay = await realExec(process.execPath, ["-e", script], process.cwd(),
+      { CUSTODY_FIXTURE: JSON.stringify(f.lane), LLV_STRUCTURED_HOSTS: "0" }, { timeoutMs: 30000 });
+    expect(replay.code, replay.stderr).toBe(0);
+    expect(JSON.parse(replay.stdout)).toMatchObject({ ok: true, sha: fixed });
+    expect((await f.finish()).lastPassedCommit).toBe(fixed);
+  } finally { savePipelines([]); fs.rmSync(f.root, { recursive: true, force: true }); }
+});
+
+
+test.each([256, 257])("attempt Git custody bounds the proved suffix at 256 commits (%i)", async (count) => {
+  const f = await detachedAttemptFixture(`attempt-git-bound-${count}`);
+  try {
+    for (let n = 0; n < count; n++) await f.run("commit", "--allow-empty", "-m", `attempt change ${n}`);
+    const fixed = await f.run("rev-parse", "HEAD");
+    const pushed = await realExec("git", ["push", "origin", `HEAD:refs/heads/${f.lane.branch}`], f.detached, f.env);
+    expect(pushed.code === 0).toBe(count === 256);
+    const settled = await f.finish();
+    if (count === 256) {
+      expect(settled.lastPassedCommit).toBe(fixed);
+      expect(settled.cursor?.stageId).toBe("review");
+    } else {
+      expect(pushed.stderr).toContain("stage push refused");
+      expect(settled.state).toBe("needs_decision");
+      expect(settled.lastPassedCommit).toBe(f.base);
+      expect(await f.git(f.worktree, "rev-parse", "HEAD")).toBe(f.base);
+    }
+  } finally { savePipelines([]); fs.rmSync(f.root, { recursive: true, force: true }); }
+}, 60000);
+
+
+test("attempt Git custody rechecks activation after preparing the native guard", async () => {
+  const f = await detachedAttemptFixture("attempt-git-activation-recheck");
+  const registry = new AgentRegistry(path.join(process.env.LLV_STATE_DIR!, "guard-activation-registry.json"));
+  setAgentRegistryForTests(registry);
+  const clientModule = await import("@/lib/runtime/client");
+  const spawnModule = await import("@/lib/runtime/structuredSpawn");
+  const resolve = spyOn(accountManager, "resolveProjectSpawn").mockImplementation(() => ({ kind: "available", account: {
+    engine: "codex", accountId: "guard-account", kind: "managed", home: f.root, transcriptRoot: f.root, env: { NODE_ENV: "test" },
+  }}));
+  const client = spyOn(clientModule, "runtimeHostClient").mockReturnValue({} as never);
+  const spawn = spyOn(spawnModule, "spawnStructuredConversation").mockResolvedValue({ path: null } as never);
+  let reservations = 0;
+  let launchId: string | null = null;
+  try {
+    await expect(defaultPipelinePorts().spawnAgent(f.h.spawnInputs[0]!, r => {
+      launchId = r.launchId;
+      if (++reservations === 2) throw new Error("activation paused while Git guard was prepared");
+    })).rejects.toThrow("activation paused while Git guard was prepared");
+    expect(reservations).toBe(2);
+    expect(spawn).not.toHaveBeenCalled();
+    expect(registry.spawnReceipt(launchId!)?.state).toBe("failed");
+  } finally {
+    resolve.mockRestore(); client.mockRestore(); spawn.mockRestore(); setAgentRegistryForTests(null);
+    savePipelines([]); fs.rmSync(f.root, { recursive: true, force: true });
+  }
+});
+
+
+test("attempt Git custody retries an unavailable remote before accepting the stage", async () => {
+  const f = await detachedAttemptFixture("attempt-git-unavailable");
+  try {
+    const fixed = await f.commit();
+    await f.run("push", "origin", `HEAD:refs/heads/${f.lane.branch}`);
+    let available = false;
+    const exec = f.h.ports.exec;
+    f.h.ports.exec = (command, args, ...rest) => command === "git" && args[0] === "ls-remote" && !available
+      ? { code: 128, stdout: "", stderr: "fixture remote unavailable" } : exec(command, args, ...rest);
+    const waiting = await f.finish();
+    expect(waiting.state).toBe("running");
+    expect(waiting.cursor?.state).toBe("committing");
+    expect(waiting.lastPassedCommit).toBe(f.base);
+    expect(waiting.stateDetail).toContain("waiting for the delivery remote");
+    available = true;
+    await tickPipelines([], f.h.ports);
+    const accepted = loadPipelines().find(p => p.id === f.id)!;
+    expect(accepted.lastPassedCommit).toBe(fixed);
+    expect(accepted.cursor?.stageId).toBe("review");
+  } finally { savePipelines([]); fs.rmSync(f.root, { recursive: true, force: true }); }
+});
+
+
+test("attempt Git custody refuses a commit outside its owned scratch scope", async () => {
+  const f = await detachedAttemptFixture("attempt-git-foreign-checkout");
+  try {
+    const scratch = path.join(f.root, "owned-scratch");
+    fs.mkdirSync(scratch);
+    f.env.TMPDIR = scratch;
+    const { agentPublicationIdentityEnv } = await import("@/lib/git/agentPublicationIdentity");
+    Object.assign(f.env, agentPublicationIdentityEnv(f.env));
+    await f.commit();
+    const pushed = await realExec("git", ["push", "origin", `HEAD:refs/heads/${f.lane.branch}`], f.detached, f.env);
+    expect(pushed.code).not.toBe(0);
+    expect(pushed.stderr).toContain("stage push refused");
+    expect((await f.finish()).lastPassedCommit).toBe(f.base);
+  } finally { savePipelines([]); fs.rmSync(f.root, { recursive: true, force: true }); }
+});
+
+
+test("attempt Git custody restores report provenance after an interrupted fast-forward", async () => {
+  const f = await detachedAttemptFixture("attempt-git-report-replay");
+  try {
+    const fixed = await f.commit();
+    await f.run("push", "origin", `HEAD:refs/heads/${f.lane.branch}`);
+    f.h.setConversationActive(false);
+    await engineModule.reportStageCompletion({ verdict: "pass" },
+      { kind: "agent", role: "builder", conversationId: "conversation_stage_1" }, f.h.ports);
+    const stored = loadPipelines().find(p => p.id === f.id)!;
+    const attempt = stored.runs[0]!.attempts[0]!;
+    attempt.state = "committing";
+    attempt.verdict = { status: "pass" };
+    attempt.report!.provenance = { ...attempt.report!.provenance, state: "complete", head: f.base };
+    stored.cursor!.state = "committing";
+    savePipelines([stored]);
+    // The Git effect survived; the controller's final row write did not.
+    await f.git(f.worktree, "merge", "--ff-only", fixed);
+    await tickPipelines([], f.h.ports);
+    const accepted = loadPipelines().find(p => p.id === f.id)!;
+    expect(accepted.lastPassedCommit).toBe(fixed);
+    expect(accepted.runs[0]!.attempts[0]!.report?.provenance.head).toBe(fixed);
+    expect(accepted.cursor?.stageId).toBe("review");
+  } finally { savePipelines([]); fs.rmSync(f.root, { recursive: true, force: true }); }
 });

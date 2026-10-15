@@ -13,6 +13,7 @@ export const performanceSites = [
   "controller.admission", "controller.reconcile", "controller.lane", "controller.ownership", "controller.task-note", "controller.job-wait", "state.checkpoint", "state.lease-commit", "state.lease-release",
   "controller.port-start", "controller.git-wait", "controller.runtime-wait", "controller.store-wait", "controller.other-wait",
   "http.dispatch", "http.response-ready",
+  "pipeline.git-guard-prepare", "pipeline.attempt-push-proof",
 ] as const;
 export type PerformanceSite = typeof performanceSites[number];
 type Slice = { sequence: number; span: number; parent: number; site: number; kind: "sync" | "await" | "event";

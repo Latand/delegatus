@@ -1,3 +1,5 @@
+import { stageAttemptPushRefusal } from "./stageAttemptPush";
+import { prepareStageGitGuard } from "@/lib/git/stageAttemptGuard";
 import { controllerPipelineKeys, controllerAttemptSelected, controllerReferences, controllerCloseBudget, controllerRuns, controllerTickFingerprint, controllerOffWindowGuard, controllerAssignmentAttached, controllerSettledAttempt, withControllerPipelineScope } from "./controllerScope";
 import { startPipelineControllerJob, pipelineControllerJobLanes } from "./controllerJobs";
 import { performanceSpans } from "@/lib/performanceSpans";
@@ -815,13 +817,26 @@ async function spawnPipelineAgent(
     await registry.failStructuredSpawnOffLoop(begun.receipt.launchId, unavailable);
     throw new Error(unavailable);
   }
+  let guardedAccount: typeof account;
+  try {
+    const guard = await performanceSpans.wait("pipeline.git-guard-prepare", () =>
+      prepareStageGitGuard(begun.receipt.launchId, input.cwd, realExec, new Date().toISOString()));
+    guardedAccount = { ...account, env: { ...account.env, ...guard } };
+    // The same reservation callback rechecks durable activation after setup
+    // yielded. A pause or ownership change still prevents native dispatch.
+    await onReserved({ launchId: begun.receipt.launchId, conversationId: begun.receipt.conversationId,
+      accountId: begun.receipt.accountId ?? account.accountId });
+  } catch (error) {
+    await registry.failStructuredSpawnOffLoop(begun.receipt.launchId, "stage Git guard preparation or activation recheck failed before dispatch");
+    throw error;
+  }
   let response: Awaited<ReturnType<typeof spawnStructuredConversation>>;
   try {
     response = await spawnStructuredConversation({
       engine: input.role.engine,
       receipt: begun.receipt,
       spec,
-      account,
+      account: guardedAccount,
       "prompt": message,
       registry,
       client,
@@ -4652,6 +4667,8 @@ async function commitPassedStage(
   if (!(await stageCommitRepairSettled(pipeline, stage, attempt, ports, persist))) return;
   /* Every park after a requested repair keeps the refusal it was about. */
   const parkStage = (reason: string) => park(pipeline, afterCommitRepair(attempt, reason), attempt);
+  const pushRefusal = await stageAttemptPushRefusal(attempt.launchId);
+  if (pushRefusal !== null) { parkStage(pushRefusal); return; }
   const allowCommit = stage.kind === "run" && attempt.effectiveRole.access === "read-write";
   const protectedHead = stage.kind === "run" && !allowCommit ? pipeline.lastPassedCommit : null;
   const repair = attempt.commitRepair;
@@ -4666,7 +4683,7 @@ async function commitPassedStage(
     ? await commitAndAdoptStageBranch(pipeline, stage.id, ports.exec, loadPipelinesForList, attempt.branchAdoption, async (intent) => {
       attempt.branchAdoption = intent;
       await persist();
-    }, ports.stageBranchProtections?.get(pipeline.id), ports.stageCommitReceiptFile, commitControl)
+    }, ports.stageBranchProtections?.get(pipeline.id), ports.stageCommitReceiptFile, commitControl, attempt, ports.now())
     : await commitPipelineStage(pipeline, stage.id, false, ports.exec, attemptStage(stage, attempt).outputs, protectedHead, ports.stageCommitReceiptFile, commitControl);
   if (!result.ok) {
     if (result.commitTimeout) {
@@ -4684,9 +4701,9 @@ async function commitPassedStage(
       return;
     }
     if (result.deferred) {
-      // Keep the durable committing cursor. The next tick repeats the forge
-      // observation outside the mutation lease, then retries this settlement.
-      await persist();
+      // The committing cursor is already durable. The guarded final write
+      // retains a waiting observation; a superseding pause needs no intent
+      // checkpoint for an operation that made no Git change.
       return;
     }
     if (await requestStageCommitRepair(pipeline, stage, attempt, result, ports, persist)) return;
@@ -9612,6 +9629,11 @@ async function reconcileTerminalStageHosts(pipeline: Pipeline, ports: PipelinePo
     else if (result.outcome === "unconfirmed") survivors.push({ ...target, operationId: result.operationId, detail: result.detail });
     else if (result.outcome === "failed" || result.outcome === "unresolved") survivors.push({ ...target, operationId: null, detail: result.error });
   }
+  // Custody and active work can keep the same host here indefinitely. A
+  // probe that made no progress must leave the durable row (and revision)
+  // alone so a parked decision remains actionable.
+  if (prior && liveWork && !attempted && !deferred && !prior.settledAt
+    && settledAttempts.size === (prior?.settledAttempts?.length ?? 0)) return false;
   reap.lastAt = ports.now();
   reap.settledAttempts = [...settledAttempts];
   if (controllerPipelineKeys() && (otherCandidates || prior?.attemptRounds || candidates.some(({ target }) => !controllerAttemptSelected(pipeline.id, target.stageId, target.attempt)))) {

@@ -1,3 +1,4 @@
+import { settleStageAttemptPush } from "./stageAttemptPush";
 import { performanceSpans } from "@/lib/performanceSpans";
 import type { ExecPort } from "@/lib/workflows/provision";
 import { githubRepositoryOfRemote } from "@/lib/forge/workLinks";
@@ -65,6 +66,8 @@ export async function commitAndAdoptStageBranch(
   protection: StageBranchProtection | null | undefined,
   receiptFile?: string,
   control?: StageCommitControl,
+  attempt?: PipelineStageAttempt,
+  now?: string,
 ): Promise<PipelineGitResult> {
   const ownership = stageBranchOwnershipFence(pipelines(), pipeline.id);
   const execute = exec;
@@ -117,6 +120,14 @@ export async function commitAndAdoptStageBranch(
     ? other.branch === name || other.delivery.target.branch === `refs/heads/${name}`
     : other.branch === name && !pipelineTerminal(other));
   if (ownedByOther(source)) return refused("another pipeline owns the stage branch");
+  if (!adoption && attempt && now && (source === pipeline.branch || source === deliveryBranch)) {
+    const pushed = await performanceSpans.wait("pipeline.attempt-push-proof", () => settleStageAttemptPush(pipeline, attempt, exec, now));
+    if (pushed) {
+      if (!pushed.ok && pushed.deferred) pipeline.stateDetail = pushed.error;
+      if (pushed.ok && attempt.report) attempt.report.provenance = { ...attempt.report.provenance, head: pushed.sha };
+      return pushed;
+    }
+  }
   if (!adoption && source === pipeline.branch) return (await commitPipelineStage(pipeline, stageId, true, exec, undefined, undefined, receiptFile, control));
   if (!adoption && source === deliveryBranch) {
     if (!pipeline.delivery?.active || pipeline.delivery.publish !== "enabled" || pipeline.delivery.ownerId !== pipeline.id) return refused("the delivery branch claim was released");

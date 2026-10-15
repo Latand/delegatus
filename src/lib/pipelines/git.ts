@@ -2097,6 +2097,9 @@ async function executePipelinePublication(pipeline: Pipeline, exec: ExecPort, re
        discard work, so the pipeline parks and lets the operator choose. */
     const remoteIsAncestor = (await exec("git", ["merge-base", "--is-ancestor", remoteSha, acceptedSha], pipeline.worktreeDir));
     if (remoteIsAncestor.code === 1) {
+      const localIsAncestor = await exec("git", ["merge-base", "--is-ancestor", acceptedSha, remoteSha], pipeline.worktreeDir);
+      if (localIsAncestor.code === 0) return { ok: false, error: "the remote pipeline branch is ahead of the accepted head without a settled attempt proof; the producing stage must settle its proved push before review, or the additional work needs a fresh review; both tips are preserved" };
+      if (localIsAncestor.code !== 1) return failure("comparing the remote-ahead pipeline revision", localIsAncestor);
       return { ok: false, error: "the local and remote pipeline branches diverged; fetch and merge the remote commits into this worktree, then retry publication; both tips are preserved" };
     }
     if (remoteIsAncestor.code !== 0) return failure("comparing local and remote pipeline revisions", remoteIsAncestor);

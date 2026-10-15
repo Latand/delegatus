@@ -3512,3 +3512,28 @@ test("publication dependency preparation waits for CPU pressure, starts once in 
     restoreTick(); fs.rmSync(box.root, { recursive: true, force: true });
   }
 });
+
+
+test("publication distinguishes an unproved remote-ahead tip from divergent history", async () => {
+  const box = await publishSandbox();
+  try {
+    const shared = await box.commit("shared.txt", "shared\n");
+    expect(await publishPipelineBranch(box.subject, realExec, { acceptedSha: shared })).toMatchObject({ ok: true, sha: shared });
+    const other = path.join(box.root, "external");
+    await git(box.root, "clone", "--branch", box.subject.branch, box.origin, other);
+    await git(other, "config", "user.name", "Fixture");
+    await git(other, "config", "user.email", ["noreply", "example.invalid"].join("@"));
+    await git(other, "config", "commit.gpgSign", "false");
+    await git(other, "commit", "--allow-empty", "-m", "external fix");
+    const tip = await git(other, "rev-parse", "HEAD");
+    await git(other, "push", "origin", box.subject.branch);
+    const refused = await publishPipelineBranch(box.subject, realExec, { acceptedSha: shared });
+    expect(refused.ok).toBe(false);
+    if (refused.ok) throw new Error("unproved remote tip was accepted");
+    expect(refused.error).toContain("remote pipeline branch is ahead");
+    expect(refused.error).toContain("attempt proof");
+    expect(refused.error).not.toContain("diverged");
+    expect(await box.originHead()).toBe(tip);
+    expect(await git(box.subject.worktreeDir, "rev-parse", "HEAD")).toBe(shared);
+  } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
+});

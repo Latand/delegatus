@@ -15,7 +15,7 @@ process.env.LLV_STRUCTURED_HOSTS = "0";
 
 const { tickPipelines, adoptAttempt } = await import("./engine");
 const { registerPipelineTick } = await import("./controllerSignal");
-const { loadPipelines, pipelineIdentity, savePipelines } = await import("./store");
+const { loadPipelines, pipelineIdentity, pipelineRevision, savePipelines } = await import("./store");
 type Pipeline = import("./types").Pipeline;
 type PipelineStageAttempt = import("./types").PipelineStageAttempt;
 type PipelinePorts = import("./engine").PipelinePorts;
@@ -968,3 +968,26 @@ test.each(["readiness", "admission", "socket"] as const)("production socket fixt
   expect(registryState.__llvAgentRegistry ?? null).toBe(originalRegistry);
   process.stdout.write(`socket case completed: production socket fixture cleans up setup failure: ${failure}\n`);
 }, 15_000);
+
+
+test("parked publication custody keeps its revision until a host actually settles", async () => {
+  const h = harness();
+  const record = pipelineRecord({ id: "parked-custody", state: "needs_decision",
+    attempts: [attempt(1, "conversation_parked_builder", true)] });
+  record.cursor = { stageId: "implement", state: "committing", input: null, activatedBy: null };
+  record.stateDetail = "publication refused";
+  record.terminalReap = { rounds: 0, stopped: 0, lastAt: "1970-01-01T00:00:01.000Z", settledAttempts: [], settledAt: null };
+  savePipelines([record]);
+  h.resident.set("conversation_parked_builder", true);
+  const before = pipelineRevision(loadPipelines()[0]!);
+  for (let tick = 0; tick < 3; tick++) {
+    await tickPipelines([], h.ports);
+    expect(pipelineRevision(loadPipelines()[0]!)).toBe(before);
+  }
+  expect(h.stops).toEqual([]);
+  // Losing the resident host is a real state change, even while custody holds.
+  h.resident.set("conversation_parked_builder", false);
+  await tickPipelines([], h.ports);
+  expect(pipelineRevision(loadPipelines()[0]!)).not.toBe(before);
+  expect(loadPipelines()[0]!.terminalReap?.settledAttempts).toEqual(["implement:1"]);
+});
