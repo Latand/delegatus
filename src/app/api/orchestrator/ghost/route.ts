@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 
+import { seatDeputyView } from "@/lib/orchestrator/deputyView";
 import { readDeputies } from "@/lib/orchestrator/deputies";
 import { deputyAskerOf } from "@/lib/orchestrator/deputyAsker";
 import { askOrchestratorInParallel } from "@/lib/orchestrator/deputyCommand";
@@ -35,7 +36,9 @@ export async function POST(req: NextRequest): Promise<NextResponse<Record<string
   const { images, error: imageError } = admitRuntimeImagePayload(body);
   if (imageError) return NextResponse.json({ error: imageError.error, admission: "refused" }, { status: imageError.status });
   try {
-    const result = await askOrchestratorInParallel({
+    const result = await askOrchestratorInParallel(typeof body.retryAskId === "string" ? {
+      retryAskId: body.retryAskId, clientRequestId: typeof body.clientRequestId === "string" ? body.clientRequestId : "",
+    } : {
       seatConversationId: typeof body.seatConversationId === "string" ? body.seatConversationId : undefined,
       project: typeof body.project === "string" ? body.project : "",
       text: typeof body.text === "string" ? body.text : "",
@@ -51,7 +54,7 @@ export async function POST(req: NextRequest): Promise<NextResponse<Record<string
       askId: result.askId,
       conversationId: result.deputyConversationId,
       replayed: result.replayed,
-      deputy: result.deputy,
+      deputy: seatDeputyView(result.deputy),
       ...(result.deliveryUncertain ? { deliveryUncertain: true } : {}),
     });
   } catch (thrown) {

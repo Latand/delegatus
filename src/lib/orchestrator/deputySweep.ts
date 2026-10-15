@@ -1,9 +1,13 @@
+import { withViewerOperation } from "@/lib/viewerLoopMonitor";
+import { tryConversationActuation } from "@/lib/deliveryActuation";
 import { withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import { delegatusMessageOrigin } from "@/lib/runtime/agentMessageAuthor";
 
 import {
+  activateDeputy,
+  recordDeputyDelivery,
   endDeputy,
   readDeputies,
   recordDeputyNote,
@@ -86,6 +90,7 @@ export interface DeputySweepPorts {
   now(): Date;
   deputies(): OrchestratorDeputy[];
   activeSeat(project: string): OrchestratorSeat | null;
+  delivery?(deputy: OrchestratorDeputy): Promise<{ state: "in-flight" | "delivered" | "failed"; reason: string | null } | null>;
   runtime(deputy: OrchestratorDeputy): Promise<DeputyRuntimeFacts | null>;
   /** The deputy's own transcript lines, after the fork prefix. Null when the
       transcript is gone. */
@@ -112,8 +117,8 @@ export function deputySeatNoteRequest(deputy: Pick<OrchestratorDeputy, "seatPath
   };
 }
 
-export function deputyNoteKey(askId: string): string {
-  return `deputy_note_${crypto.createHash("sha256").update(askId).digest("hex").slice(0, 40)}`;
+export function deputyNoteKey(askId: string, attempt = 0): string {
+  return `deputy_note_${crypto.createHash("sha256").update(attempt ? `${askId}:retry:${attempt}` : askId).digest("hex").slice(0, 40)}`;
 }
 
 /** Whether the deputy's own transcript ends on an answer: its last
@@ -144,8 +149,28 @@ export function deputyAnswered(lines: readonly string[]): boolean {
   return false;
 }
 
+/** The canonical answer projection shared by sweep settlement and Retry. */
+export function deputyTerminalAnswer(lines: readonly string[]): {
+  touched: ReturnType<typeof deputyWorkFromLines>["touched"];
+  result: { line: string; finalText: string };
+} {
+  const work = deputyWorkFromLines(lines);
+  const finalText = work.finalText.length > DEPUTY_FINAL_TEXT_LIMIT * 4
+    ? work.finalText.slice(0, DEPUTY_FINAL_TEXT_LIMIT * 4) : work.finalText;
+  return { touched: work.touched, result: { line: deputyResultLine(finalText), finalText } };
+}
+
 /** End one record and tell the seat. Safe to call again: nothing repeats. */
-export async function finishDeputy(deputy: OrchestratorDeputy, outcome: DeputyOutcome, interrupt: boolean, ports: DeputySweepPorts): Promise<OrchestratorDeputy | null> {
+export async function finishDeputy(deputy: OrchestratorDeputy, outcome: DeputyOutcome, interrupt: boolean, ports: DeputySweepPorts, reason?: string | null): Promise<OrchestratorDeputy | null> {
+  const finish = () => finishDeputyNow(deputy, outcome, interrupt, ports, reason);
+  if (!deputy.deputyConversationId) return finish();
+  const attempt = await tryConversationActuation(deputy.deputyConversationId, finish);
+  return attempt.acquired ? attempt.value : null;
+}
+
+async function finishDeputyNow(deputy: OrchestratorDeputy, outcome: DeputyOutcome, interrupt: boolean, ports: DeputySweepPorts, reason?: string | null): Promise<OrchestratorDeputy | null> {
+  const current = ports.deputies().find(row => row.askId === deputy.askId);
+  if (!current || (current.attempt ?? 0) !== (deputy.attempt ?? 0)) return current ?? null;
   const end = ports.end ?? endDeputy;
   const recordNote = ports.recordNote ?? recordDeputyNote;
   if (interrupt) {
@@ -153,18 +178,20 @@ export async function finishDeputy(deputy: OrchestratorDeputy, outcome: DeputyOu
   }
   try { await ports.release(deputy); } catch { /* a host that is already gone needs no release */ }
   const lines = ports.ownLines(deputy) ?? [];
-  const work = deputyWorkFromLines(lines);
-  const finalText = work.finalText.length > DEPUTY_FINAL_TEXT_LIMIT * 4 ? work.finalText.slice(0, DEPUTY_FINAL_TEXT_LIMIT * 4) : work.finalText;
+  const terminal = deputyTerminalAnswer(lines);
+  const finalText = terminal.result.finalText;
   const ended = await withAccountMutationLockAsync(() => end(deputy.askId, {
     outcome,
+    expectedAttempt: deputy.attempt ?? 0,
+    error: reason ?? (outcome === "done" ? null : outcome === "host-died" ? "The parallel host stopped before it answered." : outcome === "timeout" ? "The parallel question reached its time limit." : null),
     now: ports.now(),
-    touched: work.touched,
-    result: { line: deputyResultLine(finalText), finalText },
+    touched: terminal.touched,
+    result: terminal.result,
   }), { caller: "deputy settlement" }) ?? deputy;
   /* A deputy that never started has nothing to report; its refusal already
      reached whoever asked. */
   if (ended.note || !ended.deputyConversationId) return ended;
-  const clientMessageId = deputyNoteKey(deputy.askId);
+  const clientMessageId = deputyNoteKey(deputy.askId, deputy.attempt ?? 0);
   let answer: string;
   try {
     answer = await ports.noteSeat({ deputy: ended, clientMessageId, text: deputySeatNote(ended, finalText) });
@@ -174,19 +201,32 @@ export async function finishDeputy(deputy: OrchestratorDeputy, outcome: DeputyOu
     console.error("[deputy] seat note failed", error instanceof Error ? error.name : "unknown");
     return ended;
   }
-  return await withAccountMutationLockAsync(() => recordNote(deputy.askId, { clientMessageId, sentAt: ports.now().toISOString(), outcome: answer }), { caller: "deputy note" }) ?? ended;
+  return await withAccountMutationLockAsync(() => recordNote(deputy.askId, { clientMessageId, sentAt: ports.now().toISOString(), outcome: answer }, deputy.attempt ?? 0), { caller: "deputy note" }) ?? ended;
 }
 
 /** One pass over every record. Returns whether any deputy is still live. */
 export async function sweepDeputies(ports: DeputySweepPorts): Promise<boolean> {
   let live = false;
-  for (const deputy of ports.deputies()) {
+  for (let deputy of ports.deputies()) {
     if (deputy.state === "ended") {
       /* An ended record whose note never landed is retried here. */
       if (!deputy.note && deputy.outcome && deputy.outcome !== "failed" && deputy.deputyConversationId) {
         await finishDeputy(deputy, deputy.outcome, false, ports);
       }
       continue;
+    }
+    if (deputy.state === "pending" && deputy.deputyConversationId && ports.delivery) {
+      const receipt = await ports.delivery(deputy);
+      if (receipt?.state === "failed") {
+        if (!await finishDeputy(deputy, "failed", false, ports, receipt.reason ?? "The first delivery failed before the parallel self answered.")) live = true;
+        continue;
+      }
+      if (receipt?.state === "delivered") {
+        deputy = await withAccountMutationLockAsync(() => {
+          recordDeputyDelivery(deputy.askId, { operationId: deputy.delivery?.operationId ?? null, outcome: "delivered", reason: null }, deputy.attempt ?? 0);
+          return activateDeputy(deputy.askId, ports.now(), deputy.attempt ?? 0);
+        }, { caller: "deputy first delivery" }) ?? deputy;
+      }
     }
     const nowMs = ports.now().getTime();
     /* A pending record is read too once it has a conversation: its delivery
@@ -207,7 +247,7 @@ export async function sweepDeputies(ports: DeputySweepPorts): Promise<boolean> {
       live = true;
       continue;
     }
-    await finishDeputy(deputy, verdict.outcome, verdict.interrupt, ports);
+    if (!await finishDeputy(deputy, verdict.outcome, verdict.interrupt, ports)) live = true;
   }
   return live;
 }
@@ -280,7 +320,7 @@ export function startDeputySweep(loadPorts: () => Promise<DeputySweepPorts> = pr
     if (sweepState.running) return;
     sweepState.running = true;
     try {
-      const live = await sweepDeputies(await loadPorts());
+      const live = await withViewerOperation("orchestrator.deputy", async () => sweepDeputies(await loadPorts()));
       if (!live && sweepState.timer) {
         clearInterval(sweepState.timer);
         sweepState.timer = null;
@@ -305,19 +345,29 @@ async function productionDeputySweepPorts(): Promise<DeputySweepPorts> {
   ]);
   const action = async (deputy: OrchestratorDeputy, name: "interrupt" | "kill") => {
     if (!deputy.deputyConversationId) return;
-    await applyConversationAction({ conversationId: deputy.deputyConversationId, transcriptPath: deputy.artifactPath ?? "", action: name, operationId: `deputy_${name}_${deputy.askId}` });
+    await applyConversationAction({ conversationId: deputy.deputyConversationId, transcriptPath: deputy.artifactPath ?? "", action: name, operationId: `deputy_${name}_${deputy.askId}_${deputy.attempt ?? 0}` });
   };
   return {
     now: () => new Date(),
     deputies: readDeputies,
     activeSeat: (project) => orchestratorSeatFor(project).active,
+    delivery: async deputy => {
+      const [{ agentRegistry }, { sendReceiptFor }, { deputyMessageKey }] = await Promise.all([
+        import("@/lib/agent/registry"), import("@/lib/runtime/sendSettlement"), import("./deputies"),
+      ]);
+      const registry = agentRegistry();
+      const admission = registry.deliveryAdmissionForKey(deputy.deputyConversationId!, deputyMessageKey(deputy.askId, deputy.attempt ?? 0));
+      if (admission.outcome !== "admitted") return null;
+      const receipt = sendReceiptFor(registry.deliverySnapshotForOperation(admission.operationId), admission.operationId);
+      return receipt ? { state: receipt.state, reason: receipt.reason } : null;
+    },
     runtime: async (deputy) => {
       const client = runtimeHostClient();
       if (!client || !deputy.deputyConversationId) return null;
       const session = await readRuntimeSession(client, { conversationId: deputy.deputyConversationId });
       return session ? { host: session.host, turn: session.turn } : null;
     },
-    ownLines: readDeputyOwnLines,
+    ownLines: deputy => readDeputyOwnLines(deputy.answerFromBytes == null ? deputy : { ...deputy, forkBytes: deputy.answerFromBytes }),
     interrupt: (deputy) => action(deputy, "interrupt"),
     release: (deputy) => action(deputy, "kill"),
     noteSeat: async ({ deputy, clientMessageId, text }) => {

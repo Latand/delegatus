@@ -7,7 +7,7 @@ import { useIsMobile } from "@/hooks/useIsMobile";
 import { useRuntimeSessionForConversation } from "@/hooks/useRuntime";
 import { useLocale, type MessageKey } from "@/lib/i18n";
 import type { McpCallLink } from "@/lib/mcp/presentation";
-import type { SeatDeputyView } from "@/lib/orchestrator/deputyView";
+import { parseSeatDeputyView, type SeatDeputyView } from "@/lib/orchestrator/deputyView";
 
 import { ChevronDown, ChevronRight } from "../icons";
 import { EngineMark } from "../EngineMark";
@@ -140,8 +140,27 @@ function clock(iso: string): string {
   return `${String(at.getHours()).padStart(2, "0")}:${String(at.getMinutes()).padStart(2, "0")}`;
 }
 
-export function DeputyBlock({ deputy, engine = "claude" }: { deputy: SeatDeputyView; engine?: string }) {
+export function DeputyBlock({ deputy: receivedDeputy, engine = "claude" }: { deputy: SeatDeputyView; engine?: string }) {
   const { t } = useLocale();
+  const [retried, setRetried] = useState<SeatDeputyView | null>(null);
+  const deputy = retried?.askId === receivedDeputy.askId && (retried.attempt ?? 0) > (receivedDeputy.attempt ?? 0) ? retried : receivedDeputy;
+  const [retrying, setRetrying] = useState(false);
+  const [retryError, setRetryError] = useState<string | null>(null);
+  const retry = async () => {
+    if (retrying) return;
+    setRetrying(true);
+    setRetryError(null);
+    try {
+      const response = await fetch("/api/orchestrator/ghost", { method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ retryAskId: deputy.askId, clientRequestId: `deputy_retry_${deputy.askId}_${(deputy.attempt ?? 0) + 1}` }) });
+      const body = await response.json();
+      if (!response.ok || body.ok !== true) throw new Error(typeof body.error === "string" ? body.error : t("deputy.retryFailed"));
+      const next = parseSeatDeputyView(body.deputy);
+      if (!next) throw new Error(t("deputy.retryFailed"));
+      setRetried(next);
+    } catch (error) { setRetryError(error instanceof Error ? error.message : t("deputy.retryFailed")); }
+    finally { setRetrying(false); }
+  };
   const phone = useIsMobile();
   const availability = useConversationAvailability();
   const live = deputy.state !== "ended";
@@ -246,6 +265,17 @@ export function DeputyBlock({ deputy, engine = "claude" }: { deputy: SeatDeputyV
           }} />
         )}
       </div>
+
+      {warn ? (
+        <div data-deputy-failure className="my-1 flex min-w-0 flex-wrap items-center gap-2 text-caption text-warning">
+          <p className="min-w-0 flex-1 basis-48 wrap-anywhere">{deputy.error || t(OUTCOME_KEYS[deputy.outcome!])}</p>
+          {deputy.retryable ? <button type="button" data-deputy-retry disabled={retrying} onClick={() => { void retry(); }}
+            className="min-h-11 shrink-0 rounded-control border border-strong px-3 font-semibold text-primary hover:bg-hover disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-accent">
+            {t(retrying ? "deputy.retrying" : "deputy.retry")}
+          </button> : null}
+          {retryError ? <p role="alert" className="basis-full wrap-anywhere">{retryError}</p> : null}
+        </div>
+      ) : null}
 
       {open ? (
         <DeputyCaption

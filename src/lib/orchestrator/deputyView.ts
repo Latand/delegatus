@@ -16,6 +16,9 @@ export interface SeatDeputySender {
 export type SeatDeputyAskOrigin = { kind: "operator" } | { kind: "agent"; role: string | null };
 
 export interface SeatDeputyView {
+  error?: string | null;
+  retryable?: boolean;
+  attempt?: number;
   askId: string;
   seatConversationId: string;
   deputyConversationId: string | null;
@@ -37,9 +40,13 @@ export interface SeatDeputyView {
 /** The view of one record: everything the feed draws, and nothing it does not
     (no request key, no note receipt). */
 export function seatDeputyView(deputy: Omit<SeatDeputyView, "ask"> & {
+  imageRefs?: readonly unknown[];
   ask: Omit<SeatDeputyView["ask"], "origin"> & { origin: { kind: "operator" } | { kind: "agent"; role: string | null } };
 }): SeatDeputyView {
   return {
+    error: deputy.error ?? null,
+    retryable: deputy.retryable ?? (deputy.state === "ended" && deputy.outcome !== "done" && deputy.outcome !== "seat-rotated"),
+    attempt: deputy.attempt ?? 0,
     askId: deputy.askId,
     seatConversationId: deputy.seatConversationId,
     deputyConversationId: deputy.deputyConversationId,
@@ -91,6 +98,9 @@ export function parseSeatDeputyView(value: unknown): SeatDeputyView | null {
   const result = row.result && typeof row.result === "object" ? row.result as Record<string, unknown> : null;
   const count = row.forkRecordCount;
   return {
+    error: text(row.error),
+    retryable: row.retryable === true,
+    attempt: typeof row.attempt === "number" && Number.isSafeInteger(row.attempt) && row.attempt >= 0 ? row.attempt : 0,
     askId,
     seatConversationId,
     deputyConversationId: text(row.deputyConversationId),
