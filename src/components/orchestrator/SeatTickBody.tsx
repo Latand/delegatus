@@ -9,6 +9,7 @@ import type { BoardMaintenanceAnswer } from "@/lib/boardMaintenance/answer";
 import { useLocale, type MessageKey } from "@/lib/i18n";
 import type { SeatTickSettingsAnswer } from "@/lib/monitor/seatTickSettingsAnswer";
 
+import { AUTONOMY_HOURS, saveAutonomyPrototype, useAutonomyPrototype, type AutonomyPrototype } from "./autonomyPrototype";
 import { maintenanceReading, seatTickAge, seatTickLocalTime, seatTickReading, type MaintenanceReading, type SeatTickReading, type StatusSegment } from "./seatTickView";
 import { runtimeForEngine, runtimeForModel, useMaintainerRole, type MaintainerRoleRead, type MaintainerRuntime } from "./useMaintainerRole";
 import type { SeatTickChange, SeatTickSettingsRead } from "./useSeatTickSettings";
@@ -186,6 +187,14 @@ function releaseChangeOf(draft: ReleaseDraft, record: SeatTickSettingsAnswer | n
   return change;
 }
 
+/** PROTOTYPE (docs/design/full-autonomy-mode.md §2.3): the «Повна автономія»
+    draft. `hours` is a value of the «Тривалість» select: `keep` the stored
+    end, a number of hours from now, or `unlimited`. */
+export interface AutonomyDraft { enabled: boolean; hours: string }
+function autonomyDraftOf(stored: AutonomyPrototype): AutonomyDraft {
+  return stored.state === "off" ? { enabled: false, hours: "8" } : { enabled: true, hours: "keep" };
+}
+
 const sameRuntime = (left: MaintainerRuntime, right: MaintainerRuntime) =>
   left.engine === right.engine && left.model === right.model && left.effort === right.effort;
 
@@ -196,6 +205,9 @@ export interface SeatTickDraftState {
   setDraft: Dispatch<SetStateAction<SeatTickDraft>>;
   autoRotate: AutoRotateDraft;
   setAutoRotate: Dispatch<SetStateAction<AutoRotateDraft>>;
+  autonomy: AutonomyDraft;
+  setAutonomy: Dispatch<SetStateAction<AutonomyDraft>>;
+  storedAutonomy: AutonomyPrototype;
   maintenance: MaintenanceDraft;
   setMaintenance: Dispatch<SetStateAction<MaintenanceDraft>>;
   /** The maintainer's runtime as drafted: the stored one until the operator
@@ -248,6 +260,12 @@ export function useSeatTickDraft(read: SeatTickSettingsRead): SeatTickDraftState
   const [autoAdopted, setAutoAdopted] = useState(() => autoRotateSignatureOf(record));
   const autoSignature = autoRotateSignatureOf(record);
   if (autoSignature !== autoAdopted) { setAutoAdopted(autoSignature); setAutoRotate(autoRotateDraftOf(record)); }
+  const storedAutonomy = useAutonomyPrototype();
+  const [autonomy, setAutonomy] = useState(() => autonomyDraftOf(storedAutonomy));
+  const [autonomyAdopted, setAutonomyAdopted] = useState(() => JSON.stringify(storedAutonomy));
+  if (JSON.stringify(storedAutonomy) !== autonomyAdopted) { setAutonomyAdopted(JSON.stringify(storedAutonomy)); setAutonomy(autonomyDraftOf(storedAutonomy)); }
+  const autonomyBase = autonomyDraftOf(storedAutonomy);
+  const autonomyDirty = autonomy.enabled !== autonomyBase.enabled || (autonomy.enabled && autonomy.hours !== autonomyBase.hours);
   const [release, setRelease] = useState(() => releaseDraftOf(record));
   const releaseSignature = JSON.stringify([record?.release?.updatedAt, releaseDraftOf(record)]);
   const [releaseAdopted, setReleaseAdopted] = useState(releaseSignature);
@@ -274,6 +292,7 @@ export function useSeatTickDraft(read: SeatTickSettingsRead): SeatTickDraftState
     if (read.saving || roleSaving) return;
     setRuntimeError(null);
     if (requestDirty) await read.save(change);
+    if (autonomyDirty) saveAutonomyPrototype(autonomy.enabled, autonomy.hours === "keep" ? null : autonomy.hours === "unlimited" ? Infinity : Number(autonomy.hours));
     if (roleDirty && runtimeDraft) {
       setRoleSaving(true);
       const result = await maintainer.save(runtimeDraft);
@@ -293,6 +312,9 @@ export function useSeatTickDraft(read: SeatTickSettingsRead): SeatTickDraftState
     setMaintenance,
     autoRotate,
     setAutoRotate,
+    autonomy,
+    setAutonomy,
+    storedAutonomy,
     runtime,
     setRuntime: (next) => {
       setRuntimeError(null);
@@ -301,7 +323,7 @@ export function useSeatTickDraft(read: SeatTickSettingsRead): SeatTickDraftState
     maintainer,
     runtimeError,
     change,
-    dirty: requestDirty || roleDirty,
+    dirty: requestDirty || roleDirty || autonomyDirty,
     saving: read.saving || roleSaving,
     save,
   };
@@ -539,6 +561,7 @@ export function SeatTickBody({ project, projectName, read, state, surface, actio
         {read.answer?.journalError ? (
           <p role="status" data-seat-tick-journal-unreadable className="pl-3 text-caption leading-4 text-warning">{t("seatTick.journalUnreadable")}</p>
         ) : null}
+        {state.storedAutonomy.state !== "off" ? <AutonomyStatus stored={state.storedAutonomy} now={now} locale={locale} /> : null}
         {maintenanceView ? (
           <StatusLine tone={maintenanceView.tone} headline={maintenanceView.status.headline} attr={{ "data-seat-tick-maintenance-summary": "", "data-seat-tick-maintenance-state": maintenanceView.state }}>
             <Segments segments={maintenanceView.status.segments} phone={phone} onOpened={onOpenedCard} />
@@ -653,6 +676,9 @@ export function SeatTickBody({ project, projectName, read, state, surface, actio
         ) : null}
       </div>
 
+      {/* FULL AUTONOMY (prototype) — under the wakes it rides on. */}
+      <SeatTickAutonomy state={state} row={row} phone={phone} now={now} locale={locale} />
+
       {/* BOARD MAINTENANCE — its own switch, interval and agent, saved with the rest. */}
       {record && maintenance && maintenanceView ? (
         <SeatTickMaintenance
@@ -682,6 +708,59 @@ export function SeatTickBody({ project, projectName, read, state, surface, actio
       {record ? <SeatTickDetails record={record} lastDelivery={reading.lastDelivery} now={now} locale={locale} phone={phone} /> : null}
     </div>
   );
+}
+
+/** PROTOTYPE: the status block's line while an episode stands. */
+function AutonomyStatus({ stored, now, locale }: { stored: AutonomyPrototype; now: number; locale: string }) {
+  const { t } = useLocale();
+  const started = seatTickLocalTime(stored.startedAt, now, locale) ?? t("seatTick.unknown");
+  const left = stored.until ? Math.max(0, Date.parse(stored.until) - now) : null;
+  const headline = stored.until && left !== null
+    ? t("seatTick.autonomy.status", {
+      time: seatTickLocalTime(stored.until, now, locale) ?? t("seatTick.unknown"),
+      left: t("seatTick.autonomy.left", { h: Math.floor(left / 3_600_000), m: Math.floor((left % 3_600_000) / 60_000) }),
+    })
+    : t("seatTick.autonomy.statusUnlimited", { time: started });
+  return (
+    <StatusLine tone="ok" headline={headline} attr={{ "data-seat-tick-autonomy-summary": "" }}>
+      <p data-seat-tick-autonomy-set-by className="pl-3 text-caption leading-4 text-muted">{t("seatTick.autonomy.setBy", { time: started })}</p>
+    </StatusLine>
+  );
+}
+
+/** PROTOTYPE (docs/design/full-autonomy-mode.md §2.3): the section, built
+    from the panel's own Toggle, Select and caption. Turning it on turns the
+    wakes on in the same draft, because the mode works through them. */
+function SeatTickAutonomy({ state, row, phone, now, locale }: { state: SeatTickDraftState; row: string; phone: boolean; now: number; locale: string }) {
+  const { t } = useLocale();
+  const { autonomy: draft, setAutonomy: setDraft, storedAutonomy: stored } = state;
+  const unlimited = stored.state === "unlimited";
+  const storedEnd = stored.state === "off" ? null : unlimited ? t("seatTick.autonomy.unlimited") : t("seatTick.autonomy.keep", { time: seatTickLocalTime(stored.until, now, locale) ?? t("seatTick.unknown") });
+  return <div data-seat-tick-autonomy-section className="flex min-w-0 flex-col gap-2 border-t border-border pt-2.5">
+    <div className={`flex min-w-0 items-center gap-2 ${row}`}>
+      <p className="min-w-0 flex-1 text-label font-semibold uppercase tracking-wide text-muted">{t("seatTick.autonomy.head")}</p>
+      <Toggle on={draft.enabled} label={t(draft.enabled ? "seatTick.autonomy.disableAria" : "seatTick.autonomy.enableAria")}
+        phone={phone} disabled={state.saving} attr={{ "data-seat-tick-autonomy-enabled": String(draft.enabled) }}
+        onToggle={() => {
+          const next = !draft.enabled;
+          setDraft(previous => ({ ...previous, enabled: next }));
+          if (next) state.setDraft(previous => (previous.enabled ? previous : { ...previous, enabled: true }));
+        }} />
+    </div>
+    <p data-seat-tick-autonomy-about className="text-caption leading-4 text-secondary">{t("seatTick.autonomy.about")}</p>
+    {draft.enabled ? <label className="flex min-w-0 flex-col gap-1">
+      <span className="text-ui text-primary">{t("seatTick.autonomy.durationLabel")}</span>
+      <Select roomy={phone} data-seat-tick-autonomy-duration value={draft.hours} disabled={state.saving}
+        onChange={event => setDraft(previous => ({ ...previous, hours: event.target.value }))}
+        className={phone ? "h-11 w-full" : "w-full"}>
+        {storedEnd ? <option value="keep">{storedEnd}</option> : null}
+        {AUTONOMY_HOURS.map(hours => hours === Infinity
+          ? unlimited ? null : <option key="unlimited" value="unlimited">{t("seatTick.autonomy.unlimited")}</option>
+          : <option key={hours} value={String(hours)}>{t("seatTick.autonomy.hours", { n: hours })}</option>)}
+      </Select>
+    </label> : null}
+    {draft.enabled && stored.state === "off" ? <p data-seat-tick-autonomy-wakes className="text-caption leading-4 text-muted">{t("seatTick.autonomy.wakesToo")}</p> : null}
+  </div>;
 }
 
 function SeatTickRelease({ value, state, control, row, phone, now, locale, tickEnabled }: {

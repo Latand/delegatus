@@ -1346,3 +1346,218 @@ browserTest("automatic releases rendered in the shared tick panel, English and U
   } finally { await browser.close(); server.stop(true); }
   fs.writeFileSync(path.join(EVIDENCE, "release.json"), `${JSON.stringify(readings, null, 2)}\n`);
 }, 360_000);
+
+
+/*
+ * PROTOTYPE frames for full autonomy mode (docs/design/full-autonomy-mode.md
+ * §6.2), on this design lane's branch only: the three running borders on the
+ * real switch, and the «Повна автономія» section in the real panel, at 1440
+ * and 390 px, light and dark, Ukrainian.
+ *
+ *   LLV_SEAT_TICK_BROWSER_TEST=1 LLV_AUTONOMY_FRAMES=<dir> bun test \
+ *     src/components/orchestrator/issue1681Evidence.browser.test.tsx -t "full autonomy"
+ *
+ * Motion is read deterministically: every animation on the page is paused
+ * and seeked, so frame N of a sequence is the border at exactly N × step,
+ * whatever the machine's load. The sequences are tiled into one sheet and
+ * encoded as a clip with ffmpeg when it is on PATH.
+ */
+browserTest("full autonomy prototype: three running borders on the tick switch, and the panel section", async () => {
+  const FRAMES = path.resolve(process.env.LLV_AUTONOMY_FRAMES ?? ".artifacts/full-autonomy-prototype");
+  const SEQ = path.join(OUT, "autonomy-seq");
+  fs.mkdirSync(FRAMES, { recursive: true });
+  fs.mkdirSync(SEQ, { recursive: true });
+  const build = await Bun.build({
+    entrypoints: [path.resolve("src/components/orchestrator/issue1681Evidence.fixture.tsx")],
+    target: "browser",
+    plugins: [serverActionBoundary],
+    outdir: path.join(OUT, "bundle-autonomy"),
+    define: { "process.env.NODE_ENV": '"production"', "process.env": "{}" },
+  });
+  if (!build.success) throw new Error(build.logs.join("\n"));
+  const entry = build.outputs.find((output) => output.kind === "entry-point")!.path;
+  const css = await postcss([tailwind()]).process(fs.readFileSync("src/app/globals.css", "utf8"), { from: path.resolve("src/app/globals.css") });
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch(request) {
+      const pathname = new URL(request.url).pathname;
+      if (pathname === "/app.js") return new Response(Bun.file(entry), { headers: { "content-type": "text/javascript" } });
+      if (pathname === "/style.css") return new Response(css.css, { headers: { "content-type": "text/css" } });
+      return new Response(
+        '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/style.css"></head>'
+        + '<body><div id="root" style="height:100dvh;display:flex;flex-direction:column"></div><script type="module" src="/app.js"></script></body></html>',
+        { headers: { "content-type": "text/html" } },
+      );
+    },
+  });
+  const browser = await chromium.launch({ headless: true, args: ["--no-sandbox"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) });
+  const base = `http://127.0.0.1:${server.port}`;
+  const ffmpeg = Bun.which("ffmpeg");
+  /* 01:33 Kyiv on the night of the request: an episode set at 22:45 for 8 h,
+     5 h 12 min left, as the design's own example reads. */
+  const NIGHT = new Date("2026-10-14T22:33:00Z");
+  /* One lap or one cycle of each variant, and the step its sheet is cut at. */
+  const MOTION: Record<1 | 2 | 3, { cycle: number; sheet: number }> = { 1: { cycle: 4000, sheet: 8 }, 2: { cycle: 3200, sheet: 8 }, 3: { cycle: 10000, sheet: 10 } };
+  const FPS = 25;
+  const readings: unknown[] = [];
+
+  const seek = (page: Page, ms: number) => page.evaluate((at) => {
+    for (const animation of document.getAnimations()) { animation.pause(); animation.currentTime = at; }
+  }, ms);
+
+  async function open(variant: 1 | 2 | 3 | 0, theme: "light" | "dark", width: 1440 | 390, reduced: boolean, autonomy: "on" | "off" = "on") {
+    const phone = width === 390;
+    const context = await browser.newContext({
+      viewport: phone ? { width: 390, height: 844 } : { width: 1440, height: 900 },
+      deviceScaleFactor: 2,
+      colorScheme: theme,
+      reducedMotion: reduced ? "reduce" : "no-preference",
+      timezoneId: "Europe/Kyiv",
+      locale: "uk-UA",
+      ...(phone ? { isMobile: true, hasTouch: true } : {}),
+    });
+    const page = await context.newPage();
+    await page.clock.setFixedTime(NIGHT);
+    await page.addInitScript(() => localStorage.setItem("llv_lang", "uk"));
+    const errors: string[] = [];
+    page.on("pageerror", (error) => errors.push(error.message));
+    const state = variant === 0 ? "off" : autonomy;
+    await page.goto(`${base}/?surface=${phone ? "phone" : "desktop"}&dock=${phone ? 0 : 440}&locale=uk&face=default&autonomy=${state}&autonomyVariant=${variant || 1}`);
+    await page.waitForSelector(phone ? "[data-seat-tick-row] [data-seat-tick-chip]" : "[data-seat-tick-chip]");
+    await page.waitForTimeout(500);
+    return { context, page, errors, phone };
+  }
+
+  /** The chip and the row around it, so the border reads in its place. */
+  async function chipClip(page: Page, phone: boolean) {
+    const chip = (await rectOf(page, "[data-seat-tick-chip]"))!;
+    const row = (await rectOf(page, phone ? "[data-seat-tick-row]" : "[data-orchestrator-incumbent]"))!;
+    const pad = 12;
+    const x = Math.max(0, Math.min(chip.x - 150, row.x));
+    const right = Math.min(phone ? 390 : 1440, chip.x + chip.width + pad + 40);
+    return { x, y: Math.max(0, row.y - pad), width: right - x, height: row.height + 2 * pad };
+  }
+
+  try {
+    for (const theme of ["light", "dark"] as const) for (const width of [1440, 390] as const) {
+      /* The switch with the mode off, for comparison. */
+      {
+        const { context, page, errors, phone } = await open(0, theme, width, false);
+        try {
+          expect(await page.getAttribute("[data-seat-tick-chip]", "data-seat-tick-autonomy")).toBe("off");
+          await page.screenshot({ path: path.join(FRAMES, `baseline-off-${theme}-${width}-chip.png`), clip: await chipClip(page, phone) });
+          expect(errors).toEqual([]);
+        } finally { await context.close(); }
+      }
+      for (const variant of [1, 2, 3] as const) {
+        const key = `variant-${variant}-${theme}-${width}`;
+        const { context, page, errors, phone } = await open(variant, theme, width, false);
+        try {
+          const chip = page.locator("[data-seat-tick-chip]");
+          expect(await chip.getAttribute("data-seat-tick-autonomy")).toBe("on");
+          expect(await page.getAttribute("[data-seat-tick-autonomy-ring]", "data-seat-tick-autonomy-ring")).toBe(String(variant));
+          const spoken = await chip.getAttribute("aria-valuetext");
+          expect(spoken).toContain("Повна автономія до 06:45");
+          const clip = await chipClip(page, phone);
+          /* The whole screen, at a moment the border is plainly drawn. */
+          await seek(page, variant === 3 ? 1200 : 1000);
+          await page.screenshot({ path: path.join(FRAMES, `${key}-screen.png`) });
+          /* The sheet: one lap or one cycle, cut into equal steps. */
+          const { cycle, sheet } = MOTION[variant];
+          const seqDir = path.join(SEQ, key);
+          fs.rmSync(seqDir, { recursive: true, force: true });
+          fs.mkdirSync(seqDir, { recursive: true });
+          for (let index = 0; index < sheet; index += 1) {
+            await seek(page, Math.round((cycle * index) / sheet));
+            await page.screenshot({ path: path.join(seqDir, `sheet-${String(index).padStart(2, "0")}.png`), clip });
+          }
+          fs.copyFileSync(path.join(seqDir, "sheet-00.png"), path.join(FRAMES, `${key}-chip.png`));
+          /* The clip: every frame at 25 fps across the cycle, twice. */
+          const frames = Math.round((cycle / 1000) * FPS) * 2;
+          for (let index = 0; index < frames; index += 1) {
+            await seek(page, Math.round((index * 1000) / FPS));
+            await page.screenshot({ path: path.join(seqDir, `clip-${String(index).padStart(4, "0")}.png`), clip });
+          }
+          if (ffmpeg) {
+            const columns = sheet === 10 ? 5 : 4;
+            const tile = Bun.spawnSync([ffmpeg, "-y", "-loglevel", "error", "-framerate", "1", "-i", path.join(seqDir, "sheet-%02d.png"),
+              "-vf", `pad=iw+16:ih+16:8:8:color=0x808080,tile=${columns}x${Math.ceil(sheet / columns)}`, "-frames:v", "1", path.join(FRAMES, `${key}-sequence.png`)]);
+            if (tile.exitCode !== 0) throw new Error(tile.stderr.toString());
+            const video = Bun.spawnSync([ffmpeg, "-y", "-loglevel", "error", "-framerate", String(FPS), "-i", path.join(seqDir, "clip-%04d.png"),
+              "-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-movflags", "+faststart", path.join(FRAMES, `${key}.mp4`)]);
+            if (video.exitCode !== 0) throw new Error(video.stderr.toString());
+          }
+
+          /* The panel with an episode standing: status line, section, the
+             stored end kept in the select. */
+          await page.evaluate(() => { for (const animation of document.getAnimations()) animation.play(); });
+          await chip.click();
+          const host = phone ? '[data-mobile2-sheet="tick"]' : "[data-seat-tick-popover]";
+          await page.waitForSelector(`${host} [data-seat-tick-autonomy-section]`);
+          await page.waitForTimeout(350);
+          const status = await page.locator("[data-seat-tick-autonomy-summary]").innerText();
+          expect(status).toBe("Повна автономія · до 06:45 · лишилось 5 год 12 хв");
+          expect(await page.locator("[data-seat-tick-autonomy-enabled]").getAttribute("aria-checked")).toBe("true");
+          expect(await page.locator("[data-seat-tick-autonomy-duration]").inputValue()).toBe("keep");
+          await page.locator("[data-seat-tick-autonomy-section]").evaluate((element) => element.scrollIntoView({ block: "center" }));
+          await page.waitForTimeout(200);
+          await seek(page, variant === 3 ? 1200 : 1000);
+          const geometry = await page.evaluate((selector) => {
+            const box = document.querySelector(selector)!.getBoundingClientRect();
+            const section = document.querySelector("[data-seat-tick-autonomy-section]")!.getBoundingClientRect();
+            return { overflow: (document.querySelector(selector) as HTMLElement).scrollWidth > (document.querySelector(selector) as HTMLElement).clientWidth,
+              sectionInside: section.left >= box.left - 1 && section.right <= box.right + 1 && section.top >= 0 && section.bottom <= innerHeight };
+          }, host);
+          expect(geometry.overflow).toBe(false);
+          expect(geometry.sectionInside).toBe(true);
+          await page.screenshot({ path: path.join(FRAMES, `${key}-panel.png`) });
+          /* The status block at the top of the same panel. */
+          /* The top of the panel: its scroller back at zero. */
+          await page.locator("[data-seat-tick-status]").evaluate((element) => {
+            for (let parent = element.parentElement; parent; parent = parent.parentElement) {
+              if (parent.scrollHeight > parent.clientHeight && /auto|scroll/.test(getComputedStyle(parent).overflowY)) { parent.scrollTop = 0; break; }
+            }
+          });
+          await page.waitForTimeout(150);
+          await page.screenshot({ path: path.join(FRAMES, `${key}-panel-status.png`) });
+          expect(errors).toEqual([]);
+          readings.push({ key, spoken, status, ...geometry });
+        } finally { await context.close(); }
+
+        /* Turning it on from off: the duration offered at 8 h and Save. */
+        {
+          const off = await open(variant, theme, width, false, "off");
+          try {
+            await off.page.locator("[data-seat-tick-chip]").click();
+            await off.page.waitForSelector("[data-seat-tick-autonomy-enabled]");
+            await off.page.locator("[data-seat-tick-autonomy-enabled]").click();
+            expect(await off.page.locator("[data-seat-tick-autonomy-duration]").inputValue()).toBe("8");
+            await off.page.locator("[data-seat-tick-autonomy-section]").evaluate((element) => element.scrollIntoView({ block: "center" }));
+            await off.page.waitForTimeout(200);
+            expect(await off.page.locator("[data-seat-tick-save]").count()).toBe(1);
+            await off.page.screenshot({ path: path.join(FRAMES, `${key}-panel-turning-on.png`) });
+            await off.page.locator("[data-seat-tick-save]").click();
+            await off.page.waitForTimeout(300);
+            /* Saved: the local flag holds the episode, and the status line shows it. */
+            expect(await off.page.evaluate(() => localStorage.getItem("llv_autonomy_prototype"))).toBe('{"state":"on","variant":' + variant + "}");
+            expect(await off.page.locator("[data-seat-tick-autonomy-summary]").innerText()).toBe("Повна автономія · до 09:33 · лишилось 8 год 0 хв");
+            expect(off.errors).toEqual([]);
+          } finally { await off.context.close(); }
+        }
+
+        /* Reduced motion: one whole, still ring. */
+        {
+          const still = await open(variant, theme, width, true);
+          try {
+            const moving = await still.page.evaluate(() => document.getAnimations().filter((animation) => (animation.effect as KeyframeEffect | null)?.target instanceof SVGElement).length);
+            expect(moving).toBe(0);
+            await still.page.screenshot({ path: path.join(FRAMES, `${key}-reduced.png`), clip: await chipClip(still.page, still.phone) });
+            expect(still.errors).toEqual([]);
+          } finally { await still.context.close(); }
+        }
+      }
+    }
+  } finally { await browser.close(); server.stop(true); }
+  fs.writeFileSync(path.join(FRAMES, "readings.json"), `${JSON.stringify(readings, null, 2)}\n`);
+}, 1_800_000);

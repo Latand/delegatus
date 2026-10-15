@@ -261,6 +261,85 @@ body {
   }
 }
 
+/*
+ * PROTOTYPE (docs/design/full-autonomy-mode.md §6.2): the running border on
+ * the tick switch while full autonomy stands. Drawn by `SeatTickSwitch` as an
+ * SVG pill with `pathLength="100"`, so every number below is a share of the
+ * outline. One colour, the ramp's violet: it is not the health dot's green or
+ * amber, not the attention border's state colour, and not the accent the
+ * thumb wears at the default hour.
+ */
+.seat-tick-autonomy {
+  --autonomy: var(--tick-3);
+  --autonomy-lap: 4s;
+}
+.seat-tick-autonomy rect {
+  fill: none;
+  stroke: var(--autonomy);
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+/* 1 «Змійка» and the snake of 3: three segments that share a head, so the
+   snake thins and fades toward its tail. A segment of length L is the tail's
+   24 minus L ahead of it, which is that share of a lap in time. */
+.seat-tick-autonomy-snake[data-segment="tail"] { stroke-dasharray: 24 76; stroke-opacity: 0.28; animation-delay: 0s; }
+.seat-tick-autonomy-snake[data-segment="body"] { stroke-dasharray: 14 86; stroke-opacity: 0.6; animation-delay: calc(var(--autonomy-lap) * -0.1); }
+.seat-tick-autonomy-snake[data-segment="head"] { stroke-dasharray: 6 94; stroke-opacity: 1; animation-delay: calc(var(--autonomy-lap) * -0.18); }
+[data-seat-tick-autonomy-ring="1"] .seat-tick-autonomy-snake {
+  animation-name: seat-tick-autonomy-crawl;
+  animation-duration: var(--autonomy-lap);
+  animation-timing-function: linear;
+  animation-iteration-count: infinite;
+}
+@keyframes seat-tick-autonomy-crawl {
+  from { stroke-dashoffset: 100; }
+  to { stroke-dashoffset: 0; }
+}
+/* 2 «Біжучий пунктир»: the whole outline in fine dashes that march one
+   dash-and-gap every 1.6 s, slower than the pipeline rail's 0.7 s. */
+.seat-tick-autonomy-dash {
+  stroke-width: 1.5 !important;
+  stroke-dasharray: 2.5 2.5;
+  animation: seat-tick-autonomy-march 1.6s linear infinite;
+}
+@keyframes seat-tick-autonomy-march {
+  from { stroke-dashoffset: 5; }
+  to { stroke-dashoffset: 0; }
+}
+/* 3 «Змійка раз на хвилину»: a faint still ring, and once every 10 s the
+   snake runs one lap at variant 1's speed, a quarter more while it fades. */
+.seat-tick-autonomy-rest {
+  stroke-width: 1.5 !important;
+  stroke-opacity: 0.35;
+}
+[data-seat-tick-autonomy-ring="3"] .seat-tick-autonomy-snake {
+  animation-name: seat-tick-autonomy-once;
+  animation-duration: 10s;
+  animation-timing-function: linear;
+  animation-iteration-count: infinite;
+}
+@keyframes seat-tick-autonomy-once {
+  0% { stroke-dashoffset: 100; opacity: 0; }
+  6% { opacity: 1; }
+  40% { opacity: 1; }
+  50% { stroke-dashoffset: -25; opacity: 0; }
+  100% { stroke-dashoffset: -25; opacity: 0; }
+}
+/* Reduced motion: every variant is one whole, still ring. */
+@media (prefers-reduced-motion: reduce) {
+  .seat-tick-autonomy-snake:not(.seat-tick-autonomy-still),
+  .seat-tick-autonomy-rest {
+    display: none;
+  }
+  .seat-tick-autonomy .seat-tick-autonomy-still {
+    animation: none;
+    stroke-dasharray: none;
+    stroke-opacity: 1;
+    stroke-width: 2 !important;
+    opacity: 1;
+  }
+}
+
 /* Attention border: two soft comets orbiting the card edge in the state's
    color (--pane-glow) — visibly "waiting for you" without stealing focus. */
 @property --pane-angle {

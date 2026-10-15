@@ -5,6 +5,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProp
 
 import { useLocale } from "@/lib/i18n";
 
+import { useAutonomyPrototype, type AutonomyVariant } from "./autonomyPrototype";
 import { SeatTickDot } from "./SeatTickBody";
 import {
   SEAT_TICK_DRAG_SPRING,
@@ -130,6 +131,59 @@ function useThumbMotion(rootRef: RefObject<HTMLElement | null>, target: number, 
   }, []);
 }
 
+/**
+ * PROTOTYPE (docs/design/full-autonomy-mode.md §6.2): the running border
+ * while full autonomy stands. An SVG pill over the track's own 1 px border,
+ * with `pathLength="100"` so a dash is a share of the outline whatever the
+ * pill measures, and its motion is even along the sides and round the ends.
+ *
+ *   1 «Змійка» — a tapered segment (tail, body, head) crawls round, 4 s a lap;
+ *   2 «Біжучий пунктир» — the whole outline dashed, the dashes march slowly;
+ *   3 «Змійка раз на хвилину» — a faint still ring, and every 10 s the snake
+ *     makes one lap and fades.
+ *
+ * Reduced motion draws every variant as one whole, still ring (`globals.css`).
+ */
+function AutonomyRing({ variant }: { variant: AutonomyVariant }) {
+  /* Measured from the track it sits in: its parent, the one element whose
+     border box the ring has to trace, in every host and container query. */
+  const svgRef = useRef<SVGSVGElement>(null);
+  const [box, setBox] = useState<{ w: number; h: number } | null>(null);
+  useLayoutEffect(() => {
+    const track = svgRef.current?.parentElement;
+    if (!track) return;
+    const measure = () => setBox((previous) => (previous && previous.w === track.offsetWidth && previous.h === track.offsetHeight ? previous : { w: track.offsetWidth, h: track.offsetHeight }));
+    measure();
+    if (typeof ResizeObserver !== "function") return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(track);
+    return () => observer.disconnect();
+  }, []);
+  const rect = box ? { x: 1, y: 1, width: box.w - 2, height: box.h - 2, rx: (box.h - 2) / 2, pathLength: 100 } : null;
+  return (
+    <svg
+      ref={svgRef}
+      aria-hidden
+      data-seat-tick-autonomy-ring={variant}
+      className="seat-tick-autonomy pointer-events-none absolute overflow-visible"
+      style={{ left: -1, top: -1 }}
+      width={box?.w ?? 0}
+      height={box?.h ?? 0}
+    >
+      {!rect ? null : variant === 1 || variant === 3 ? (
+        <>
+          {variant === 3 ? <rect {...rect} className="seat-tick-autonomy-rest" /> : null}
+          <rect {...rect} className="seat-tick-autonomy-snake" data-segment="tail" />
+          <rect {...rect} className="seat-tick-autonomy-snake" data-segment="body" />
+          <rect {...rect} className="seat-tick-autonomy-snake seat-tick-autonomy-still" data-segment="head" />
+        </>
+      ) : (
+        <rect {...rect} className="seat-tick-autonomy-dash seat-tick-autonomy-still" />
+      )}
+    </svg>
+  );
+}
+
 export function SeatTickSwitch({ read, reading, now, surface, open, onOpen, onRefused, anchorRef, className = "" }: {
   read: SeatTickSettingsRead;
   reading: SeatTickReading;
@@ -147,6 +201,7 @@ export function SeatTickSwitch({ read, reading, now, surface, open, onOpen, onRe
 }) {
   const { t, locale } = useLocale();
   const ownRef = useRef<HTMLDivElement>(null);
+  const autonomy = useAutonomyPrototype();
   const rootRef = anchorRef ?? ownRef;
   const answer = read.answer;
   const place = answer ? seatTickPlace(answer) : null;
@@ -350,6 +405,13 @@ export function SeatTickSwitch({ read, reading, now, surface, open, onOpen, onRe
     ? value
     : t("seatTick.switch.valueText", { value: until ? t("seatTick.switch.value.until", { value, time: until }) : value, summary: reading.summary });
 
+  const autonomyOn = autonomy.state !== "off";
+  const autonomyTime = autonomy.until ? seatTickLocalTime(autonomy.until, now, locale) : null;
+  const autonomyWords = !autonomyOn ? null
+    : autonomyTime ? t("seatTick.autonomy.chip", { time: autonomyTime }) : t("seatTick.autonomy.chipUnlimited");
+  const spoken = autonomyWords ? `${autonomyWords}. ${valueText}` : valueText;
+  const line = autonomyWords ? `${autonomyWords}\n${reading.line}` : reading.line;
+
   const phone = surface === "mobile";
   const thumb = geometry.thumb + Math.max(0, word.length - 6) * geometry.perChar;
   /* How many stops from the thumb's centre a notch has to be to stand clear of it. */
@@ -364,13 +426,14 @@ export function SeatTickSwitch({ read, reading, now, surface, open, onOpen, onRe
       aria-valuemin={0}
       aria-valuemax={SEAT_TICK_LAST_STOP}
       aria-valuenow={Math.round(target * 100) / 100}
-      aria-valuetext={valueText}
+      aria-valuetext={spoken}
       aria-haspopup="dialog"
       aria-expanded={open}
       aria-busy={read.saving || undefined}
       /* With no record there is no stop to move from, so the control only
          opens the settings and says nothing about a drag. */
-      title={place ? `${reading.line}\n${t("seatTick.switch.hint")}` : reading.line}
+      title={place ? `${line}\n${t("seatTick.switch.hint")}` : line}
+      data-seat-tick-autonomy={autonomyOn ? "on" : "off"}
       data-seat-tick-chip={reading.state}
       data-seat-tick-switch={dragging ? "dragging" : pending !== null ? "pending" : waiting !== null ? "queued" : "rest"}
       data-seat-tick-surface={surface}
@@ -413,6 +476,7 @@ export function SeatTickSwitch({ read, reading, now, surface, open, onOpen, onRe
           <span data-seat-tick-face className="whitespace-nowrap tabular-nums">{word}</span>
           {until ? <Hourglass aria-hidden className={`seat-tick-knob-until ${phone ? "h-3.5 w-3.5" : "h-2.5 w-2.5"} text-secondary`} /> : null}
         </span>
+        {autonomyOn ? <AutonomyRing variant={autonomy.variant} /> : null}
       </span>
       {until ? <Hourglass data-seat-tick-until aria-hidden className={`${phone ? "h-3.5 w-3.5" : "h-3 w-3"} shrink-0 text-secondary`} /> : null}
       <SeatTickDot tone={reading.tone} />
