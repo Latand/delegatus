@@ -9,7 +9,7 @@ import { reboundAssembledMcpGrants } from "./mcpAllowlist";
 import { normalizeRegistry, readOnlyConversationLookupFromSnapshot, type RegistryFile } from "./registry";
 import { buildRegistryPerformanceDataset, scaledRegistryPerformanceShape } from "./registryPerformanceDataset";
 import {
-  archivedOwnersEndedSince, hotRegistryRows, registryConversationsForEntryKey, registryConversationsForPath, registryRowProjection,
+  registryRowsMatching, archivedOwnersEndedSince, hotRegistryRows, registryConversationsForEntryKey, registryConversationsForPath, registryRowProjection,
   SqliteAgentRegistryStore, type RegistryRowProjector,
 } from "./sqliteRegistryStore";
 
@@ -501,4 +501,27 @@ test("another bundle's copy of the store module reads a view through its indexes
   expect(copy.archivedOwnersEndedSince(view, "2099-01-01T00:00:00.000Z")).toEqual([]);
   const projector: RegistryRowProjector<"receipts", string> = { id: "history-test.bundle-copy", collection: "receipts", project: (receipt) => receipt.state };
   expect(copy.registryRowProjection(view, projector)).toEqual(registryRowProjection(view, projector));
+});
+
+
+test("receipt replacement lookups agree across archive, peer replacement and transactional deletion", () => {
+  const { open } = history();
+  const writer = open();
+  const reader = open();
+  const digest = "9".repeat(64);
+  const key = writer.read(file => Object.keys(file.receipts)[0]!);
+  writer.mutate(file => { file.receipts[key]!.requestDigest = digest; }, false);
+  writer.archiveInactive();
+  const select = () => reader.read(file => registryRowsMatching(file, "receipts", "requestDigest", digest).map(row => row.launchId));
+  expect(select()).toEqual([key]);
+  writer.mutate(file => { file.receipts[key]!.requestDigest = "8".repeat(64); }, false);
+  expect(select()).toEqual([]);
+  writer.mutate(file => { file.receipts[key]!.requestDigest = digest; }, false);
+  writer.archiveInactive();
+  expect(select()).toEqual([key]);
+  writer.mutate(file => {
+    delete file.receipts[key];
+    expect(registryRowsMatching(file, "receipts", "requestDigest", digest)).toEqual([]);
+  }, false);
+  expect(select()).toEqual([]);
 });

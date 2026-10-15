@@ -861,8 +861,33 @@ describe("managed install", () => {
   test("a rolled-back deployment says the previous release serves again, and deploys again on request", () => {
     const failedAt = MANAGED_STEPS.map((name, at) => ({ ...pendingSteps(MANAGED_STEPS)[at]!, state: at < 3 ? "done" as const : at === 3 ? "failed" as const : "pending" as const, tail: at === 3 ? ["candidate health gate failed: GET / answered 500"] : [] }));
     const el = render(managed({ ...available(), update: { ...idleUpdate(MANAGED_STEPS), state: "failed", rolledBack: true, target: NEW, targetShort: "a1b2c3d", steps: failedAt, startedAt: new Date(NOW - 90_000).toISOString(), finishedAt: new Date(NOW).toISOString() } }));
-    expect(text(el.querySelector('[data-outcome="failed"]'))).toContain("Deployment stopped at health check after 1 m 30 s and was rolled back: the previous release serves again.");
+    expect(text(el.querySelector('[data-outcome="failed"]'))).toContain("Deployment stopped at health check after 1 m 30 s. Rollback completed; current component revisions are shown above.");
     expect(text(button(el, "retry"))).toBe("Deploy again");
+  });
+
+  test.each(["en", "uk"] as const)("a newer external success keeps the failed attempt and both serving identities (%s)", locale => {
+    setLocale(locale);
+    const previousAttempt = { ...idleUpdate(MANAGED_STEPS), state: "failed" as const, target: OLD, targetShort: OLD.slice(0, 7),
+      steps: pendingSteps(MANAGED_STEPS).map(step => step.name === "health" ? { ...step, state: "failed" as const, failure: { kind: "error" as const, text: "First boot loop gate refused" } } : step) };
+    const el = render(managed({ serving: { web: NEW_REV, runtimeHost: null },
+      previousAttempt, update: { ...idleUpdate(MANAGED_STEPS), state: "done", target: NEW, targetShort: NEW.slice(0, 7) } }));
+    expect(text(section(el, "previous-attempt"))).toContain(OLD.slice(0, 7));
+    expect(text(section(el, "previous-attempt"))).toContain("First boot loop gate refused");
+    expect(text(section(el, "header"))).toContain(NEW.slice(0, 7));
+    expect(text(section(el, "header"))).toContain(locale === "uk" ? "ревізія невідома" : "unknown revision");
+    expect(button(el, "retry")).toBeNull();
+  });
+
+  test("pending rollback retains its failed target beside a newer check", () => {
+    const newer = rev("f7e6ce4".padEnd(40, "1"), "1.2.4");
+    const el = render(managed({ ...available(), available: newer, update: { ...idleUpdate(MANAGED_STEPS), state: "failed",
+      rollback: "running", target: NEW, targetShort: NEW.slice(0, 7),
+      steps: pendingSteps(MANAGED_STEPS).map(step => step.name === "health" ? { ...step, state: "failed", failure: { kind: "error", text: "adoption timed out" } } : step) } }));
+    expect(text(section(el, "update"))).toContain(NEW.slice(0, 7));
+    expect(text(section(el, "update"))).toContain("adoption timed out");
+    expect(text(el.querySelector('[data-outcome="failed"]'))).toContain("Rollback is in progress");
+    expect(text(el.querySelector('[data-outcome="failed"]'))).not.toContain("previous release serves again");
+    expect(text(button(el, "update-checked"))).toContain(newer.short);
   });
 
   test("done means both processes run it", () => {

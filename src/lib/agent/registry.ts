@@ -5538,6 +5538,20 @@ export class AgentRegistry {
     return deepFreeze(structuredClone(readFile(this.filename, this.mcpGrantPolicy)));
   }
 
+  /** Prepare the recovery lookups through asynchronous writer admission. */
+  async prepareRecoveryIndexes(signal?: AbortSignal): Promise<void> {
+    await this.sqliteStore?.prepareRecoveryIndexes(signal);
+  }
+
+  /** Production boot and the candidate gate share the cooperative first view. */
+  async prepareReadOnlySnapshot(signal?: AbortSignal): Promise<RegistryFile> {
+    signal?.throwIfAborted();
+    if (this.sqliteStore && (this.sqliteMode === "read" || this.sqliteMode === "sqlite")) {
+      return (await this.sqliteStore.prepareReadOnlySnapshot(signal)).file;
+    }
+    return this.readOnlySnapshot();
+  }
+
   private readKeyed<T>(reader: (file: RegistryFile) => T): T {
     return performanceSpans.sync("registry.keyed", () => this.sqliteStore && (this.sqliteMode === "read" || this.sqliteMode === "sqlite")
       ? this.sqliteStore.read(reader) : reader(this.readOnlySnapshot()));
@@ -5762,6 +5776,55 @@ export class AgentRegistry {
   openSpawnReceipts(): SpawnReceipt[] {
     return this.readKeyed(file => clone(registryRowsMatching(file,"receipts","state",
       ["starting","pane-bound","host-verified","prompt-delivered","path-pending"])));
+  }
+
+  /** Structured ownership rows, including released rows needed by recovery. */
+  structuredHostEntries(): AgentRegistryEntry[] {
+    const file = this.readOnlySnapshot();
+    return registryRowsMatching(file, "entries", "structuredHost.kind",
+      ["codex-app-server", "claude-broker", "copilot-acp"]).map(entry => clone(entry));
+  }
+
+  diagnosticSpawnAttempt(launchId?: string, conversationId?: string): string | undefined {
+    if (this.sqliteStore && (this.sqliteMode === "read" || this.sqliteMode === "sqlite"))
+      return this.sqliteStore.spawnDiagnosticAttempt(launchId, conversationId);
+    const receipts = Object.values(this.readOnlySnapshot().receipts);
+    const attributed = launchId ? receipts.find(receipt => receipt.launchId === launchId)
+      : conversationId ? receipts.find(receipt => receipt.conversationId === conversationId) : undefined;
+    return (attributed ? [attributed] : receipts).find(receipt => receipt.clientAttemptId?.startsWith("relay-owner-"))?.clientAttemptId ?? undefined;
+  }
+
+  /** One recovery selection, plus only the entries and replacement proofs it
+      can use. Terminal history is selected by live runtime evidence. */
+  spawnRecoverySnapshot(launchIds: readonly string[] = [], runtimeConversations: readonly string[] = []): RegistryFile {
+    return this.readKeyed(file => {
+      const selected = new Map(launchIds.map(id => [id, file.receipts[id]]));
+      for (const id of runtimeConversations) {
+        for (const receipt of registryRowsMatching(file, "receipts", "conversationId", conversationIdentities(file, id as ViewerConversationId))) {
+          if (receipt.state === "failed" && receipt.transport !== "tmux") selected.set(receipt.launchId, receipt);
+        }
+      }
+      const result = normalizeRegistry({ version: 2, entries: {}, receipts: {} });
+      for (const [id, receipt] of selected) {
+        if (!receipt) continue;
+        result.receipts[id] = clone(receipt);
+        if (receipt.key) {
+          const key = sessionKeyId(receipt.key);
+          if (file.entries[key]) result.entries[key] = clone(file.entries[key]!);
+        }
+        for (const candidate of [
+          ...registryRowsMatching(file, "receipts", "supersedes.conversationId", receipt.conversationId),
+          ...(receipt.requestDigest ? registryRowsMatching(file, "receipts", "requestDigest", receipt.requestDigest) : []),
+        ]) result.receipts[candidate.launchId] = clone(candidate);
+        const launcher = receipt.launcher?.conversationId;
+        if (launcher) {
+          const canonical = resolveConversationAlias(file, launcher);
+          if (file.memberships[canonical]) result.memberships[canonical] = clone(file.memberships[canonical]!);
+          if (canonical !== launcher) result.conversationAliases[launcher] = canonical;
+        }
+      }
+      return result;
+    });
   }
 
   /** Only unfinished settlements are controller-active; retained failures do

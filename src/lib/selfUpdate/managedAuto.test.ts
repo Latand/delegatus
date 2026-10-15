@@ -247,7 +247,7 @@ function scenario(enabled = true) {
     prepareCheckRepo: async () => dir,
     targetOnBranch: async () => true,
     hostHealth: async () => ({ pid: 102, generation: { revision: release ?? OLD } }),
-    web: { pid: 101, port: 3000, startedAt: new Date(now).toISOString() },
+    web: { pid: 101, port: 3000, startedAt: new Date(now).toISOString(), get revision() { return release; } },
     green: { read: async () => { greenReads += 1; return { state: green }; } },
     quiet: { runtimeSnapshot: async () => ({ sessions: Array.from({ length: turns }, () => ({ turn: "running", host: "hosted" })) }),
       owners: owners(),

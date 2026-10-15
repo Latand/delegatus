@@ -50,6 +50,11 @@ test("a live or unverifiable activation owner alone can acknowledge its fence; p
     expect(fence.activationOwner).toEqual(owner);
     expect(() => acknowledgeHotStateFence(directory, fence, revisions)).toThrow("live Viewer must acknowledge");
     expect(readHotStateAuthority(directory)?.checkpoint).toBeUndefined();
+    const adapterOwned = publishHotStateAuthority(directory, "fencing", active.releaseRevision, {
+      retirementOwner: captureProcessIdentity(process.pid),
+    });
+    expect(readHotStateAuthority(directory)?.retirementOwner).toEqual(adapterOwned.retirementOwner);
+    expect(() => acknowledgeHotStateFence(directory, adapterOwned, revisions)).toThrow("live Viewer must acknowledge");
     const unknown = publishHotStateAuthority(directory, "fencing", active.releaseRevision, {
       activationOwner: { ...owner, startIdentity: null },
     });
@@ -62,6 +67,15 @@ test("a live or unverifiable activation owner alone can acknowledge its fence; p
     await worker.exited;
     fs.rmSync(directory, { recursive: true, force: true });
   }
+});
+
+test("a retirement guard refuses a process outside its own Viewer ancestry", async () => {
+  const { runManagedRetirementGuard } = await import("./managedRetirementGuard");
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "hot-guard-refusal-"));
+  try {
+    await expect(runManagedRetirementGuard(directory, "a".repeat(40), captureProcessIdentity(process.pid)))
+      .rejects.toThrow("cannot prove its Viewer ancestry");
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
 });
 
 function sampleFlow(id: string, stateDetail: string | null = null): Flow {

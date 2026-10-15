@@ -227,7 +227,7 @@ import { nestProcessTempUnder } from "../src/lib/tempDirs";
 import { createTailscaleStub, STUB_DNS_NAME } from "../src/test-helpers/tailscaleStub";
 
 import { createCaptureDirectory } from "./capture-directory";
-import { idleCheck, idleUpdate, stoppedProcess, type Snapshot } from "../src/lib/selfUpdate/types";
+import { idleCheck, idleUpdate, stoppedProcess, MANAGED_STEPS, pendingSteps, type Snapshot } from "../src/lib/selfUpdate/types";
 
 const repoRoot = path.resolve(import.meta.dir, "..");
 /* The commit the record was captured from. A `git archive` export has no repository, so the caller
@@ -7181,6 +7181,32 @@ async function selfUpdateInstallMain(): Promise<void> {
       update: { ...idleUpdate(), state: "failed", rolledBack: rollback, target: next, targetShort: next.slice(0, 7), startedAt: "2026-01-02T00:00:00Z", finishedAt: "2026-01-02T00:01:00Z",
         steps: [...idleUpdate().steps.map(step => ({ ...step, state: "done" as const })), { name: "switch", state: "failed", startedAt: "2026-01-02T00:00:00Z", durationMs: 60_000, exitCode: null, tail: [], failure: { kind: "error", text: rollback ? "The replacement rolled back to the previous release" : "Runtime host health is unavailable" } }] } };
   }
+  const managedEvidence = process.env.BOARD_CAPTURE_CASE === "managed-update";
+  const failed = { ...idleUpdate(MANAGED_STEPS), state: "failed" as const, target: next, targetShort: next.slice(0, 7),
+    startedAt: "2026-01-02T00:00:00Z", finishedAt: "2026-01-02T00:01:00Z",
+    steps: pendingSteps(MANAGED_STEPS).map(step => step.name === "health" ? { ...step, state: "failed" as const,
+      failure: { kind: "error" as const, text: "adoption 2 of 2 - recovering pending spawns timed out" } } : step) };
+  const newer = "c".repeat(40);
+  const servingWeb = "d".repeat(40);
+  const managed: Snapshot = { ...base, mode: "managed", installed: revision(servingWeb), available: revision(newer),
+    processes: { web: processView(servingWeb), runtimeHost: processView(old) },
+    serving: { web: revision(servingWeb), runtimeHost: revision(old) }, check: { ...base.check, state: "update-available", relation: "behind" },
+    auto: idleAuto, update: failed };
+  states["managed-failed"] = managed;
+  states["managed-rolling-back"] = { ...managed, busy: "update", update: { ...failed, rollback: "running" } };
+  states["managed-rollback-failed"] = { ...managed, update: { ...failed, steps: failed.steps.map(step =>
+    step.state === "failed" ? { ...step, failure: { kind: "error", text: "recovering pending spawns timed out; rollback could not prove owner death" } } : step) } };
+  states["managed-rolled-back"] = { ...managed, installed: revision(old),
+    serving: { web: revision(old), runtimeHost: revision(old) }, processes: { web: processView(old), runtimeHost: processView(old) },
+    update: { ...failed, rolledBack: true, rollback: "done" } };
+  states["managed-external-success"] = { ...managed, available: null, installed: revision(newer),
+    serving: { web: revision(newer), runtimeHost: revision(newer) },
+    processes: { web: processView(newer), runtimeHost: processView(newer) },
+    check: { ...base.check, state: "up-to-date", relation: "equal" }, previousAttempt: failed,
+    update: { ...idleUpdate(MANAGED_STEPS), state: "done", target: newer, targetShort: newer.slice(0, 7),
+      steps: pendingSteps(MANAGED_STEPS).map(step => ({ ...step, state: "done" as const })) } };
+  states["managed-unknown-host"] = { ...managed, serving: { web: revision(next), runtimeHost: null },
+    processes: { ...managed.processes, runtimeHost: { ...stoppedProcess(), state: "failed", tail: [] } } };
   let server: ChildProcess | null = null;
   let browser: Browser | null = null;
   const report: { commit: string; frames: Record<string, unknown>; failures: string[] } = { commit: captureCommit(), frames: {}, failures: [] };
@@ -7192,11 +7218,14 @@ async function selfUpdateInstallMain(): Promise<void> {
     // The isolated install's first-run toast otherwise covers phone choices.
     const telemetry = await fetch(`${baseUrl}/api/telemetry`, { method: "PUT", headers: { "content-type": "application/json", origin: baseUrl }, body: JSON.stringify({ enabled: false, noticeDismissed: true }) });
     if (!telemetry.ok) throw new Error(`dismissing the capture notice answered ${telemetry.status}`);
-    browser = await chromium.launch({ args: ["--no-sandbox", "--disable-dev-shm-usage"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) });
-    for (const width of [1440, 390]) for (const lang of ["en", "uk"] as const) for (const [name, snapshot] of Object.entries(states)) {
+    browser = await chromium.launch({ ignoreDefaultArgs: ["--hide-scrollbars"], args: ["--no-sandbox", "--disable-dev-shm-usage"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) });
+    for (const width of managedEvidence ? [1440, 1000, 390] : [1440, 390]) for (const lang of ["en", "uk"] as const)
+      for (const colorScheme of managedEvidence ? ["light", "dark"] as const : ["light"] as const)
+      for (const [name, snapshot] of Object.entries(states).filter(([name]) => managedEvidence ? name.startsWith("managed-") : !name.startsWith("managed-"))) {
       const localeWrite = await fetch(`${baseUrl}/api/operator/settings`, { method: "PUT", headers: { "content-type": "application/json", origin: baseUrl }, body: JSON.stringify({ locale: lang, source: "chosen" }) });
       if (!localeWrite.ok) throw new Error(`setting ${lang} answered ${localeWrite.status}`);
-      const context = await browser.newContext({ viewport: { width, height: width === 390 ? 844 : 900 }, reducedMotion: "reduce" });
+      const context = await browser.newContext({ viewport: { width, height: width === 390 ? 844 : 900 }, colorScheme, reducedMotion: "reduce",
+        ...(managedEvidence && width === 390 ? { isMobile: true, hasTouch: true } : {}) });
       await context.addInitScript(seedInit);
       await context.addInitScript((language: string) => localStorage.setItem("llv_lang", language), lang);
       const page = await context.newPage();
@@ -7208,7 +7237,18 @@ async function selfUpdateInstallMain(): Promise<void> {
         window.dispatchEvent(new Event("llv:open-self-update"));
         return false;
       }, undefined, { timeout: 60_000 });
-      const tag = `${width}-${lang}-${name}`;
+      const tag = `${width}-${lang}-${name}${managedEvidence ? `-${colorScheme}` : ""}`;
+      if (managedEvidence) {
+        const header = page.locator('[data-section="header"]');
+        await header.scrollIntoViewIfNeeded();
+        const text = await header.innerText();
+        if (!snapshot.serving.web || !text.includes(snapshot.serving.web.short)) report.failures.push(`${tag}: serving web revision is absent`);
+        if (name === "managed-unknown-host" && !text.includes(lang === "uk" ? "ревізія невідома" : "unknown revision")) report.failures.push(`${tag}: unknown host is hidden`);
+        report.frames[`${tag}-header`] = { text };
+        const frame = path.join(OUT_DIR, `${tag}-header.png`);
+        await page.screenshot({ path: frame });
+        if (evidenceDir) { fs.mkdirSync(evidenceDir, { recursive: true }); fs.copyFileSync(frame, path.join(evidenceDir, `${tag}-header.png`)); }
+      }
       const primarySection = snapshot.mode === "unsupported" ? "install-action" : "auto";
       await page.waitForSelector(`[data-section="${primarySection}"]`, { timeout: 30_000 });
       if (snapshot.mode !== "unsupported") {
@@ -7289,6 +7329,30 @@ async function selfUpdateInstallMain(): Promise<void> {
             report.failures.push(`${tag}: partial restart contradicts the installation action`);
         }
         if (name === "install-switch" && !installation.text?.includes(lang === "uk" ? "Замінити" : "Replace")) report.failures.push(`${tag}: switch is missing`);
+      }
+      if (managedEvidence) {
+        const failedSection = page.locator(name === "managed-external-success" ? '[data-section="previous-attempt"]' : '[data-section="update"]');
+        await failedSection.scrollIntoViewIfNeeded();
+        const text = await failedSection.innerText();
+        if (!text.includes(next.slice(0, 7)) || !text.includes("recovering pending spawns")) report.failures.push(`${tag}: failed target or cause is absent`);
+        if (name === "managed-external-success" && await page.locator('[data-action="retry"]').count()) report.failures.push(`${tag}: stale retry remains visible`);
+        const rect = await failedSection.boundingBox();
+        if (!rect || rect.x < 0 || rect.x + rect.width > width) report.failures.push(`${tag}: failed attempt overflows`);
+        report.frames[`${tag}-failure`] = { text, rect };
+        if (name === "managed-external-success") {
+          await page.waitForRequest(request => new URL(request.url()).pathname === "/api/self-update/events", { timeout: 15_000 });
+          await page.reload();
+          await page.waitForFunction(() => {
+            if (document.querySelector('[data-section="previous-attempt"]')) return true;
+            window.dispatchEvent(new Event("llv:open-self-update"));
+            return false;
+          });
+          const previous = page.locator('[data-section="previous-attempt"]');
+          await previous.scrollIntoViewIfNeeded();
+          if (!(await previous.innerText()).includes(next.slice(0, 7)) || await page.locator('[data-action="retry"]').count())
+            report.failures.push(`${tag}: reconnect or reload restored the stale retry`);
+          report.frames[`${tag}-reloaded`] = { previous: await previous.innerText() };
+        }
       }
       const frame = path.join(OUT_DIR, `${tag}.png`);
       await page.screenshot({ path: frame });
@@ -7865,7 +7929,7 @@ else if (process.env.BOARD_CAPTURE_CASE === "twice-switched-link") await twiceSw
 else if (process.env.BOARD_CAPTURE_CASE === "install-ping") await installPingMain();
 else if (process.env.BOARD_CAPTURE_CASE === "header") await headerMain();
 else if (process.env.BOARD_CAPTURE_CASE === "self-update-auto") await selfUpdateAutoMain();
-else if (process.env.BOARD_CAPTURE_CASE === "self-update-install") await selfUpdateInstallMain();
+else if (["self-update-install", "managed-update"].includes(process.env.BOARD_CAPTURE_CASE ?? "")) await selfUpdateInstallMain();
 else if (process.env.BOARD_CAPTURE_CASE === "linking") await linkingMain();
 else if (process.env.BOARD_CAPTURE_CASE === "activity") await activityMain();
 else if (process.env.BOARD_CAPTURE_CASE === "activity-members") await activityMembersMain();

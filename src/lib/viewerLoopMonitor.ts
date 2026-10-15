@@ -3,6 +3,7 @@ import { startLoopWatchdog } from "./loopWatchdog";
 import { AsyncLocalStorage } from "node:async_hooks";
 
 export type ViewerOperation = "pipelines.startup-admission" | "pipelines.mutation" | "pipelines.controller-mutation"
+  | "registry.prepare" | "runtime.spawn-recovery" | "state.rollback-checkpoint"
   | "pipelines.controller-read" | "pipelines.controller-decode" | "pipelines.controller-materialize"
   | "pipelines.controller-checkpoint" | "pipelines.controller-select" | "pipelines.delivery-liveness"
   | "pipelines.evidence" | "pipelines.get" | "files.get" | "files.health" | "controller.scan" | "controller.pipelines" | "controller.flows" | "activity.ingest";

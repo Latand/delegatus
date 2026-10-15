@@ -5,6 +5,8 @@ import path from "node:path";
 // The parent supplies an empty private environment before this module loads.
 const directory = process.argv[2]!;
 try {
+  const initialized = Bun.spawnSync(["git", "init", "--quiet", "--initial-branch=main", directory]);
+  if (initialized.exitCode !== 0) throw new Error("contender fixture repository initialization failed");
   const result = await createPipelineFromRequest({
     task: "Create during historical startup reconciliation",
     repoDir: directory,

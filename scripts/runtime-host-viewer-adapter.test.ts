@@ -42,6 +42,18 @@ import { CANDIDATE_PERFORMANCE_BOUNDS } from "../src/runtime-host/candidatePerfo
 const root = path.resolve(import.meta.dir, "..");
 const adapter = path.join(root, "scripts", "runtime-host-viewer-adapter.ts");
 
+/** Checkpoint workers keep named asynchronous wait diagnostics on stderr.
+    Every other line still fails a successful adapter protocol assertion. */
+function expectAdapterSuccess(result: { code: number; stderr: string }): void {
+  expect(result.code, result.stderr).toBe(0);
+  for (const line of result.stderr.trim().split("\n").filter(Boolean)) {
+    expect(line).toStartWith("[blocking-wait] ");
+    expect(JSON.parse(line.slice("[blocking-wait] ".length))).toMatchObject({
+      site: "state-write-lock", synchronous: false, stateWait: { callSite: "state.mirror.demotion" },
+    });
+  }
+}
+
 function stopRecordedSleep(pidFile: string): void {
   const file = `${pidFile}.identity`;
   if (fs.existsSync(file)) signalFixtureIdentity(JSON.parse(fs.readFileSync(file, "utf8")), "SIGKILL");
@@ -674,7 +686,8 @@ async function runAction(options: {
   snapshots?: string[];
   handoffIntent?: Record<string, unknown>;
   environment?: Record<string, string>;
-  setupState?: (state: string) => void;
+  setupState?: (state: string) => void | Promise<void>;
+  adapterPath?: string;
   observe?: (state: string, child: { exited: Promise<number> }) => Promise<void>;
   sandbox?: string;
   preserveSandbox?: boolean;
@@ -685,7 +698,7 @@ async function runAction(options: {
   const dockerLog = path.join(sandbox, "docker.log");
   fs.mkdirSync(path.join(state, "deployments", "compose"), { recursive: true });
   fs.mkdirSync(bin, { recursive: true });
-  options.setupState?.(state);
+  await options.setupState?.(state);
   if (options.handoffIntent) {
     fs.writeFileSync(path.join(state, "runtime-host-handoff-intent.json"), JSON.stringify(options.handoffIntent));
   }
@@ -696,7 +709,7 @@ async function runAction(options: {
     );
   }
   fs.writeFileSync(path.join(bin, "docker"), options.dockerScript, { mode: 0o755 });
-  const child = Bun.spawn([process.execPath, adapter, options.action], {
+  const child = Bun.spawn([process.execPath, options.adapterPath ?? adapter, options.action], {
     cwd: root,
     env: {
       ...process.env,
@@ -835,7 +848,7 @@ test("SQLite promotion waits for completed runtime activation", async () => {
   });
 
   expect(observedPreparing).toBe(true);
-  expect({ code: result.code, stderr: result.stderr }).toEqual({ code: 0, stderr: "" });
+  expectAdapterSuccess(result);
   expect(result.authority).toMatchObject({
     mode: "sqlite",
     releaseRevision: candidate.revision,
@@ -935,7 +948,7 @@ test("promote succeeds when hot-state activation arrives late but inside the bud
     dockerScript: liveIncumbentDocker,
   });
 
-  expect({ code: result.code, stderr: result.stderr }).toEqual({ code: 0, stderr: "" });
+  expectAdapterSuccess(result);
   expect(result.authority).toMatchObject({
     mode: "sqlite",
     releaseRevision: candidate.revision,
@@ -1001,7 +1014,7 @@ test("promotion from SQLite to a legacy release checkpoints rollback mirrors fir
     dockerScript: "#!/bin/sh\nexit 1\n",
   });
 
-  expect({ code: result.code, stderr: result.stderr }).toEqual({ code: 0, stderr: "" });
+  expectAdapterSuccess(result);
   expect(result.target).toEqual(candidate);
   expect(result.authority).toMatchObject({
     mode: "legacy",
@@ -1467,7 +1480,7 @@ exit 1
 `,
   });
 
-  expect({ code: result.code, stderr: result.stderr }).toEqual({ code: 0, stderr: "" });
+  expectAdapterSuccess(result);
   expect(result.dockerCalls).toContain("logs --tail 40 viewer-candidate");
   expect(JSON.parse(result.stdout)).toMatchObject({
     ok: false,
@@ -1493,7 +1506,7 @@ exit 1
 `,
   });
 
-  expect({ code: result.code, stderr: result.stderr }).toEqual({ code: 0, stderr: "" });
+  expectAdapterSuccess(result);
   expect(result.dockerCalls).toContain("logs --tail 40 viewer-candidate");
   const evidence = JSON.parse(result.stdout) as Record<string, unknown>;
   expect(evidence.detail).toBe("candidate container exited before readiness");
@@ -1516,7 +1529,7 @@ fi
 exit 1
 `,
   });
-  expect({ code: result.code, stderr: result.stderr }).toEqual({ code: 0, stderr: "" });
+  expectAdapterSuccess(result);
   expect(result.dockerCalls).toContain("logs --tail 200 viewer-candidate");
   const lines = JSON.parse(result.stdout) as string[];
   expect(lines).toHaveLength(200);
@@ -1572,7 +1585,7 @@ exit 1
 `,
     });
 
-    expect({ code: result.code, stderr: result.stderr }).toEqual({ code: 0, stderr: "" });
+    expectAdapterSuccess(result);
     expect(result.dockerCalls).toContain("start viewer-rollback");
     expect(probes).toBeGreaterThanOrEqual(3);
     expect(result.target).toEqual(previous);
@@ -1636,7 +1649,7 @@ if [ "$1" = "start" ]; then exit 0; fi
 exit 1
 `,
     });
-    expect({ code: result.code, stderr: result.stderr }).toEqual({ code: 0, stderr: "" });
+    expectAdapterSuccess(result);
     expect(result.target).toEqual(previous);
     expect(result.authority).toMatchObject({
       mode: "legacy",
@@ -1755,7 +1768,7 @@ if [ "$1" = "start" ]; then exit 0; fi
 exit 1
 `,
     });
-    expect({ code: result.code, stderr: result.stderr }).toEqual({ code: 0, stderr: "" });
+    expectAdapterSuccess(result);
     expect(result.target).toEqual(previous);
     expect(result.authority).toMatchObject({ mode: "legacy", releaseRevision: previous.revision });
   } finally {
@@ -1859,7 +1872,7 @@ exit 1
       preserveSandbox: true,
       dockerScript,
     });
-    expect({ code: recovered.code, stderr: recovered.stderr }).toEqual({ code: 0, stderr: "" });
+    expectAdapterSuccess(recovered);
     expect(recovered.target).toEqual(previous);
     expect(recovered.releaseSwitchIntentExists).toBe(false);
     expect(recovered.authority).toMatchObject({
@@ -1931,7 +1944,8 @@ exit 1
     expect(result.code).toBe(1);
     expect(result.stderr).toContain("flows.json");
     expect(result.target).toEqual(candidate);
-    expect(result.authority).toMatchObject({ mode: "sqlite", releaseRevision: candidate.revision });
+    expect(result.authority).toMatchObject({ mode: "fencing", releaseRevision: candidate.revision });
+    expect(result.authority?.checkpoint).toBeUndefined();
   } finally {
     server.stop(true);
   }
@@ -2010,3 +2024,196 @@ exit 1
     fs.rmSync(sandbox, { recursive: true, force: true });
   }
 });
+
+test.each([false, true])("managed fallback preserves queue keys and a native worker (owner exits at boundary=%s)", async ownerExitsAtBoundary => {
+  const { retireFencedManagedViewer } = await import("../src/runtime-host/managedRetirement");
+  const { captureProcessIdentity, processIdentityStatus } = await import("../src/lib/processIdentity");
+  const owner = Bun.spawn([process.execPath, "-e", "setInterval(() => {}, 1000)"], { stdout: "ignore", stderr: "ignore" });
+  const worker = Bun.spawn([process.execPath, "-e", "setInterval(() => {}, 1000)"], { stdout: "ignore", stderr: "ignore" });
+  const identity = captureProcessIdentity(owner.pid);
+  const workerIdentity = captureProcessIdentity(worker.pid);
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "managed-retirement-"));
+  const queue = path.join(directory, "original-queue.json");
+  const original = JSON.stringify({ operationId: "original-message-key", state: "delivery-uncertain", text: "Continue the original task" });
+  fs.writeFileSync(queue, original);
+  const id = "a".repeat(64);
+  let running = true;
+  let boundary = false;
+  const order: string[] = [];
+  try {
+    await retireFencedManagedViewer(release, identity, {
+      inspect: async selected => {
+        expect([release.container, id]).toContain(selected);
+        order.push("inspect");
+        return { id, image: release.image, revision: release.revision, managed: "1", running };
+      },
+      ownsContainer: (current, container) => current.pid === owner.pid && container === id,
+      fenceStands: () => true,
+      recordBoundary: async () => {
+        order.push("boundary");
+        fs.writeFileSync(path.join(directory, "boundary.json"), JSON.stringify({ owner: identity, operationId: "original-message-key" }));
+        boundary = true;
+        if (ownerExitsAtBoundary) { owner.kill(); await owner.exited; running = false; }
+      },
+      stop: async selected => {
+        order.push("stop");
+        expect(boundary).toBe(true);
+        expect(selected).toBe(id);
+        owner.kill();
+        await owner.exited;
+        running = false;
+      },
+    });
+    expect(order).toEqual(ownerExitsAtBoundary ? ["inspect", "boundary", "inspect"] : ["inspect", "boundary", "inspect", "stop", "inspect"]);
+    expect(processIdentityStatus(identity)).toBe("dead");
+    expect(processIdentityStatus(workerIdentity)).toBe("alive");
+    expect(fs.readFileSync(queue, "utf8")).toBe(original);
+  } finally {
+    if (owner.exitCode === null) owner.kill();
+    worker.kill();
+    await Promise.all([owner.exited, worker.exited]);
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test.each(["unknown-owner", "wrong-container", "new-fence", "new-container", "boundary-refused", "stop-refused", "owner-survives"] as const)(
+  "managed fallback refuses %s without claiming a checkpoint", async fault => {
+    const { retireFencedManagedViewer } = await import("../src/runtime-host/managedRetirement");
+    const id = "a".repeat(64);
+    let boundary = false;
+    let stops = 0;
+    await expect(retireFencedManagedViewer(release, { pid: 123, startIdentity: "recorded-owner" }, {
+      inspect: async () => ({ id: fault === "new-container" && boundary ? "b".repeat(64) : id,
+        image: release.image, revision: release.revision, managed: "1", running: stops === 0 }),
+      ownerStatus: () => fault === "unknown-owner" ? "unverified" : "alive",
+      ownsContainer: () => fault !== "wrong-container",
+      fenceStands: () => !(fault === "new-fence" && boundary),
+      recordBoundary: async () => { if (fault === "boundary-refused") throw new Error("boundary refused"); boundary = true; },
+      stop: async () => { stops++; if (fault === "stop-refused") throw new Error("stop refused"); },
+    })).rejects.toThrow();
+    expect(stops).toBe(fault === "stop-refused" || fault === "owner-survives" ? 1 : 0);
+  },
+);
+
+const managedDockerImage = process.env.LLV_MANAGED_DOCKER_TEST_IMAGE;
+for (const legacyGuard of [false, true]) {
+(managedDockerImage && (!legacyGuard || process.env.LLV_LEGACY_ADAPTER_FIXTURE) ? test : test.skip)(
+  legacyGuard ? "a busy candidate's guard lets the actual legacy adapter roll back without stopping a native engine"
+    : "rollback contains a busy managed container and preserves an independent native engine", async () => {
+  const { execFile } = await import("node:child_process");
+  const { promisify } = await import("node:util");
+  const docker = promisify(execFile);
+  const { AgentRegistry } = await import("../src/lib/agent/registry");
+  const { buildRegistryPerformanceDataset } = await import("../src/lib/agent/registryPerformanceDataset");
+  const { Database } = await import("bun:sqlite");
+  const { captureProcessIdentity, processIdentityStatus } = await import("../src/lib/processIdentity");
+  const name = `delegatus-retirement-fixture-${crypto.randomUUID().slice(0, 8)}`;
+  const image = managedDockerImage!;
+  let container: string | null = null;
+  let rollbackStarted = 0;
+  let retainedBefore: string[] = [];
+  const retainedRows = (state: string) => {
+    const db = new Database(path.join(state, "agent-registry.sqlite"), { readonly: true });
+    try {
+      return db.query<{ value_json: string }, []>(`SELECT value_json FROM registry_records
+        WHERE collection='heldDeliveries' OR collection='receipts' AND json_extract(value_json,'$.state')='path-pending'
+        ORDER BY collection,row_key`).all().map(row => row.value_json);
+    } finally { db.close(); }
+  };
+  const native = Bun.spawn([process.execPath, "-e", "setInterval(() => {}, 1000)"], { stdout: "ignore", stderr: "ignore" });
+  const nativeIdentity = captureProcessIdentity(native.pid);
+  const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "managed-docker-rollback-"));
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request) {
+    if (new URL(request.url).pathname === "/api/runtime/deployments/capabilities/v1") return Response.json({ capability: "viewer-deployments", version: 1, registryBackendMode: "sqlite" });
+    if (new URL(request.url).pathname === "/_next/static/app.js") return new Response("self.__viewer=true");
+    return new Response('<script src="/_next/static/app.js"></script>');
+  } });
+  try {
+    container = (await docker("/usr/bin/docker", ["run", "-d", "--name", name, "--network", "none", "--read-only", "--memory", legacyGuard ? "512m" : "96m", "--cpus", "0.5", "--pid", "host",
+      "--user", `${process.getuid!()}:${process.getgid!()}`,
+      ...(legacyGuard ? ["--restart", "unless-stopped"] : []),
+      "--label", "dev.live-log-viewer.managed=1", "--label", `dev.live-log-viewer.revision=${release.revision}`,
+      ...(legacyGuard ? ["--volume", `${root}:${root}:ro`, "--volume", `${process.execPath}:/fixture-bun:ro`,
+        "--volume", `${process.execPath}:/usr/local/bin/bun-container:ro`,
+        "--volume", `${sandbox}:${sandbox}`, "--workdir", root] : []),
+      image, ...(legacyGuard ? ["/fixture-bun", "-e", `
+        import fs from "node:fs";
+        import { startManagedRetirementGuard } from "./src/lib/state/managedRetirementGuard.ts";
+        const directory = ${JSON.stringify(path.join(sandbox, "state"))};
+        while (!fs.existsSync(directory + "/configured")) await Bun.sleep(20);
+        await startManagedRetirementGuard(directory, ${JSON.stringify(release.revision)});
+        fs.writeFileSync(directory + "/guard-ready", "ready");
+        while (true) {}
+      `] : ["node", "-e", 'process.on("SIGTERM", () => {}); while (true) {}'])], { timeout: 20_000 })).stdout.trim();
+    const ownerPid = Number((await docker("/usr/bin/docker", ["inspect", "--format", "{{.State.Pid}}", container])).stdout.trim());
+    const owner = captureProcessIdentity(ownerPid);
+    const candidate = { ...release, container: name, image, hotStateBackend: HOT_STATE_BACKEND };
+    const previous = { ...release, revision: "9".repeat(40), container: "fixture-retained-web", image: "fixture:retained", endpoint: `http://127.0.0.1:${server.port}` };
+    const result = await runAction({
+      sandbox, preserveSandbox: true, action: "rollback", snapshots: [previous.container],
+      adapterPath: legacyGuard ? process.env.LLV_LEGACY_ADAPTER_FIXTURE : process.env.LLV_ADAPTER_UNDER_TEST,
+      input: { candidate, previous, previousMcpRuntime: { source: "legacy", revision: previous.revision, releaseId: null, artifactDigest: "9".repeat(64), stagedAt: null } },
+      setupState: async state => {
+        initializeHotStateFixture(state, candidate);
+        publishHotStateAuthority(state, "sqlite", candidate.revision, { activationOwner: owner });
+        const dataset = buildRegistryPerformanceDataset(state);
+        expect(dataset.receipts.total).toBe(10971);
+        const registry = new AgentRegistry(path.join(state, "agent-registry.json"), undefined, undefined, { sqliteMode: "sqlite" });
+        const conversation = registry.ensureConversation("codex", "/sessions/native-fixture.jsonl", null);
+        const held = registry.holdDelivery(conversation.id, "Original task remains uncertain", "original-message-key");
+        registry.upsert({ key: { engine: "codex", sessionId: conversation.generations.at(-1)!.id },
+          artifactPath: "/sessions/native-fixture.jsonl", cwd: "/repo", accountId: null, launchProfile: conversation.generations.at(-1)!.launchProfile,
+          status: "live", host: null, structuredHost: { kind: "codex-app-server", endpoint: "stdio:fixture", process: nativeIdentity,
+            eventCursor: 1, protocolVersion: null, writerClaimEpoch: 1, activeTurnRef: "original-turn", pendingAttention: [], activeFlags: [] },
+          claimEpoch: 1, claimOwner: `structured-host:${JSON.stringify(owner)}`, pendingAction: null });
+        registry.recordDeliveryOutcome(held.id, "delivery-uncertain", "prior send has no terminal proof");
+        registry.close();
+        retainedBefore = retainedRows(state);
+        expect(retainedBefore).toHaveLength(687); // 666 retained + 20 pending + this uncertain message.
+        if (legacyGuard) {
+          fs.writeFileSync(path.join(state, "configured"), "ready");
+          const deadline = Date.now() + 10_000;
+          while (!fs.existsSync(path.join(state, "guard-ready")) && Date.now() < deadline) await Bun.sleep(20);
+          expect(fs.existsSync(path.join(state, "guard-ready"))).toBe(true);
+          publishHotStateAuthority(state, "fencing", candidate.revision, { retirementOwner: captureProcessIdentity(process.pid) });
+          await Bun.sleep(8_500);
+          expect(processIdentityStatus(owner)).toBe("alive");
+          publishHotStateAuthority(state, "sqlite", candidate.revision, { activationOwner: owner });
+        }
+        rollbackStarted = performance.now();
+      },
+      dockerScript: `#!/bin/sh
+set -eu
+if [ "$1 $2" = "container inspect" ] && [ "$3" = "--format" ]; then exec /usr/bin/docker "$@"; fi
+if [ "$1 $2" = "container stop" ]; then exec /usr/bin/docker "$@"; fi
+if [ "$1 $2" = "container inspect" ]; then exit 0; fi
+if [ "$1" = inspect ]; then echo running; exit 0; fi
+if [ "$1" = start ]; then exit 0; fi
+exit 1
+`,
+    });
+    console.info(JSON.stringify({ managedRollback: { legacyGuard, adapterMs: performance.now() - rollbackStarted,
+      exit: result.code, owner: processIdentityStatus(owner), native: processIdentityStatus(nativeIdentity) } }));
+    expectAdapterSuccess(result);
+    expect(result.target).toEqual(previous);
+    expect(result.authority?.checkpoint).toBeDefined();
+    expect(retainedRows(result.state)).toEqual(retainedBefore);
+    expect(processIdentityStatus(owner)).toBe("dead");
+    expect(processIdentityStatus(nativeIdentity)).toBe("alive");
+    const boundaries = fs.readdirSync(path.join(result.state, "deployments")).filter(file => file.startsWith("retirement-"));
+    expect(boundaries).toHaveLength(1);
+    const boundary = JSON.parse(fs.readFileSync(path.join(result.state, "deployments", boundaries[0]!), "utf8"));
+    expect(boundary.hosts).toHaveLength(1);
+    expect(boundary.deliveries).toMatchObject([{ clientMessageId: "original-message-key", state: "delivery-uncertain" }]);
+    const retained = new AgentRegistry(path.join(result.state, "agent-registry.json"), undefined, undefined, { sqliteMode: "sqlite" });
+    try { expect(Object.values(retained.readOnlySnapshot().heldDeliveries).find(row => row.clientMessageId === "original-message-key")).toMatchObject({ clientMessageId: "original-message-key", text: "Original task remains uncertain", state: "delivery-uncertain" }); }
+    finally { retained.close(); }
+  } finally {
+    if (container) await docker("/usr/bin/docker", ["container", "rm", "-f", container]);
+    native.kill();
+    await native.exited;
+    await server.stop(true);
+    fs.rmSync(sandbox, { recursive: true, force: true });
+  }
+}, 60_000);
+}

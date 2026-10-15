@@ -1,4 +1,5 @@
 import { verifiedCodexSocketOwner } from "./codexSocketTransport";
+import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { operatorDecisionFormsRequired } from "@/lib/orchestrator/operatorDecisionForms";
 import { learnedRulesForLaunchProfile, roleMemoryProfileForIdentity } from "@/lib/memory/roleLaunch";
 import fs from "node:fs";
@@ -1678,6 +1679,7 @@ async function pipelineStartupEvidence(registry: AgentRegistry, available = true
 }
 
 export interface StructuredStartupDependencies {
+  signal?: AbortSignal;
   /** Release retirement stops at awaited phase boundaries. */
   assertActive?: () => void;
   registry?: AgentRegistry;
@@ -1955,9 +1957,12 @@ async function adoptStructuredHostsPass(
   {
     assertActive();
     const deferralSnapshot = registry.readOnlySnapshot();
-    const deferredHostKeys = new Set(Object.values(deferralSnapshot.conversations)
-      .filter((conversation) => pipelineEvidence.deferred.has(resolveConversationAlias(deferralSnapshot, conversation.id)))
-      .flatMap((conversation) => conversation.generations.map((generation) => sessionKeyId({ engine: conversation.engine, sessionId: generation.id }))));
+    const deferredHostKeys = new Set((pipelineEvidence.deferred.size ? Object.keys(deferralSnapshot.conversations) : [])
+      .filter(id => pipelineEvidence.deferred.has(resolveConversationAlias(deferralSnapshot, id as ViewerConversationId)))
+      .flatMap(id => {
+        const conversation = deferralSnapshot.conversations[id]!;
+        return conversation.generations.map(generation => sessionKeyId({ engine: conversation.engine, sessionId: generation.id }));
+      }));
     let orchestratorHostKeys = currentOrchestratorRestartRecoveryHostKeys(
       registry,
       orchestratorRecoveries,
@@ -2041,7 +2046,7 @@ async function adoptStructuredHostsPass(
         && (!evidenceMoved(entry) || (admitHeldPendingWork && eligible.pendingWork(entry)))
         && eligible(entry);
     };
-    const adoptionCandidates = Object.values(registry.readOnlySnapshot().entries).filter((entry) =>
+    const adoptionCandidates = registry.structuredHostEntries().filter((entry) =>
       entry.structuredHost && shouldAdopt(entry));
     /* Nothing is launched that this pass cannot hand to a delivery controller.
        `controllerBoundEarly` is exactly "this pass has a runtime client", and it
@@ -2422,7 +2427,14 @@ async function adoptStructuredHostsPass(
     const fencedReceipts = fencedPendingSpawnReceipts(registry, pipelineEvidence.deferred);
     if (client && fencedReceipts.length === 0) {
       await reportProgress("recovering pending spawns");
-      await recoverPendingStructuredSpawns(registry, client, { assertActive });
+      await withViewerOperation("runtime.spawn-recovery", () => recoverPendingStructuredSpawns(registry, client, {
+        assertActive, signal: dependencies.signal,
+        reportProgress: async recovery => {
+          if (!resumeDeferred) markStructuredHostStartupProgress({ phase: "recovering pending spawns", completedHosts, totalHosts, recovery });
+          await startupTurn();
+          assertActive();
+        },
+      }));
     }
     assertActive();
     adoptedHosts = nextAdoptedHosts;

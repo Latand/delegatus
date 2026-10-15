@@ -1,6 +1,6 @@
 > Operator-authorized request 2026-10-15 ~11:10Z (SSH + API handoff, marker codex-remote-artifact-and-local-update-20261015-v1): the operator's LOCAL desktop managed Docker installation cannot complete its update; the local session handles that machine's recovery itself. This lane owns the product bug investigation and fix, working only in this repository and isolated environments on this machine. No deployment from this lane, no contact with the operator's local installation, no credential or global-update changes; preserve existing performance gates (do not loosen a gate to pass).
 
-Source: originating requirement supplied in the pinned specification, 2026-10-15. This architect stage supplies a read-only diagnosis, fix design and isolated reproduction plan. Implementation and release qualification remain later work.
+Source: originating requirement supplied in the pinned specification, 2026-10-15. The diagnosis below records the initial read-only stage. The implementation and verification section records the subsequent fix on this branch. Historical file:line references remain tied to the audited revision.
 
 Additional source: operator-local evidence relay `local-adoption-census-20261015-v1`, received during this stage. Its new authorized deployment targets the audited main revision; this lane performs no deployment. Its capabilities response remains HTTP 503, startup failed in “recovering pending spawns”, 2/2 hosts, category timeout; phase began at 10:36:56Z and failure was reported at 10:44:38Z. These are supplied observations, without a local CPU trace.
 
@@ -267,7 +267,7 @@ Repeat by explicit file for each touched test, with fresh isolation. Run `bun sc
 
 Keep privacy, types, changed-file lint, touched tests, scoped runtime/native gates and required CI including `bun-runtime`/`runtime-gate`. This stage owes document privacy and whitespace checks; source/build/CI qualification belongs to implementation. No Bun pin change is proposed. No gate threshold, induced-failure control or measured window may be weakened.
 
-There is no product fix in this stage and therefore no before/after fix result. Implementation acceptance requires the same data/limits on baseline and candidate, an actual failing regression on baseline, all relevant green regressions on candidate, and full candidate gate evidence. A future authorized deployment also requires the normal 30–60 minute journal audit with active-agent count and comparable load recorded. That deployment belongs to the installation's authorized recovery/release owner.
+At the end of the diagnosis stage there was no product fix or before/after fix result; the later implementation evidence follows below. Implementation acceptance requires the same data/limits on baseline and candidate, an actual failing regression on baseline, all relevant green regressions on candidate, and full candidate gate evidence. A future authorized deployment also requires the normal 30–60 minute journal audit with active-agent count and comparable load recorded. That deployment belongs to the installation's authorized recovery/release owner.
 
 ## Deferred — not currently justified
 
@@ -279,3 +279,69 @@ There is no product fix in this stage and therefore no before/after fix result. 
 - A claim that this machine reproduced the exact 1048 ms sample, or that the supplied aggregate identifies that desktop sample's dominant function.
 
 The proposed work serves the originating requirement: bounded active adoption, a rollback path independent of a responsive Viewer, less synchronous cold-start work under unchanged gates, and an update view that retains the failed target while identifying both serving components. No operator decision is needed to implement and verify that scope.
+
+
+## Implementation and verification — 2026-10-15
+
+The implementation includes main through `5a8e7de5`, including the watchdog fix (#2933), failed-receipt reporting policy (#2931) and approval callback recovery (#2922). Their controller call sites and reporting policy remain with their original changes. The numeric thresholds in the candidate gate remain unchanged.
+
+A later supplied observation (`local-update-completed-b1fa-20261015-v1`) reports successful external deployment of `b1fa2f91` at 11:38:51Z: web and runtime host agreed, readiness was ready and adoption was 2/2. Its first-boot maximum was 932 ms. Reported startup took about 9m39s, including several minutes recovering pending spawns. That success confirms that the earlier refusal was intermittent. It also supplies the stale-target regression: the dialog still tracked an older failed deployment and offered its older revision to retry. These are operator observations, separate from the paired measurements below.
+
+The supplied startup profile files were verified by their exact local paths. The 462 samples and reported 3.9% direct structured-clone share are an unpaired profile; allocation, JSON parsing and string/GC work account for much of the remaining samples. They do not establish a before/after gain or identify the exact desktop 1048 ms interval.
+
+### Recovery and cold preparation
+
+`recoverPendingStructuredSpawns` selects open receipts, pending runtime effects up to a fixed watermark, and failed receipts supported by current runtime sessions. Keyed reads revalidate each receipt and replacement under its existing recovery fence. It retains a 20 s phase deadline, propagates cancellation to issued socket reads, yields between receipts and publishes examined/completed/deferred counts. Numeric counts do not renew the adapter's stall window. An admitted first message keeps its original durable queue operation while its controller completes transcript delivery. Terminal history repair stays with the bounded reporting/backfill owner from #2931.
+
+Receipt replacement queries use hot and archive indexes and confirm archive versions through their current mappings. Damaged mappings keep the conserving view. Cold registry preparation pins one read transaction on an owned read connection, materializes bounded slices, then applies committed journal deltas. It completes while writers continue committing. The previous full view is released when the prepared reader becomes the snapshot owner.
+
+Receipt replacement and structured-host indexes are installed in separate asynchronously admitted transactions with yields between them. Building receipt indexes together in the constructor still produced 1016–1026 ms cold ticks in an intermediate implementation. Requiring a quiet revision throughout preparation also failed the first full concurrent-writer rehearsal. Both failed controls are retained in the evidence; neither qualifies a release.
+
+The paired probe uses main `5a8e7de5` and this implementation, the same 53,299-row SQLite file, fresh processes, old-schema migration inputs and a real isolated Unix runtime host. Its fixture contains 10,971 receipts with the supplied failure mix, 11,870 conversations, 8428 entries, 14,218 delivery owners, 666 retained deliveries and 20 pending receipts. Recovery time is pinned to the fixture's pending receipt timestamp so fixture aging cannot turn preservation into timeout settlement. No artificial RPC latency is injected. Runs share the machine and its CPU admission queue; unrelated host load is uncontrolled.
+
+| Sample | Baseline recovery | Fixed recovery | Baseline cold-loop max | Fixed cold-loop max |
+| --- | ---: | ---: | ---: | ---: |
+| 1 | 10965 ms | 336 ms | 1172 ms | 383 ms |
+| 2 | 9493 ms | 290 ms | 960 ms | 521 ms |
+| 3 | 11761 ms | 308 ms | 1145 ms | 523 ms |
+
+Baseline recovery made 3589 RPCs per sample: one effect page, 1804 operation reads and 1784 session reads. Fixed recovery made 22: one effect page, one narrow activity snapshot and 20 operation reads. Baseline and fixed recovery each loaded one complete initial view. The counts expose repeated recovery RPCs and keyed authority reads. Every sample preserved all 686 pending/retained records byte for byte. The raw pairs and fixture digest are in [managed-update.json](../../evidence/perf/managed-update.json).
+
+### Rollback ownership
+
+Cooperative retirement aborts startup reads and checkpoints rollback mirrors in the existing leased backup worker. A newer adapter reserves fallback time inside the existing 30 s acknowledgement window, records original host/message identities, reinspects the exact managed container and fence, stops only that container and requires positive owner death before checkpointing. Unknown identity, a changed fence, failed containment or a failed checkpoint keeps the candidate fenced.
+
+The first upgrade still runs the retiring host's older adapter. The new candidate therefore arms a leased retirement guard before activation reads history. This helper verifies its actual Viewer ancestry and kernel cgroup membership. After eight seconds on an unchanged legacy fence, it durably records the selected restart evidence and signals only its own Viewer. It holds the authority transaction for the final identity/fence check and signal. Docker's private cgroup namespace can expose only `/`; equal membership plus the real parent chain still proves the helper's own Viewer. A newer adapter declares `retirementOwner`, which keeps the guard from competing with its Docker stop. The existing positive-death rule controls acknowledgement in both versions.
+
+The Docker regression uses an owned, busy web container, an independent native process and an original uncertain delivery. It executes the actual baseline adapter for the legacy case. It also holds a newer adapter's containment ownership beyond the guard grace period and checks that the web remains alive. Container labels, image/id changes, unreadable owners, fence changes, surviving owners and command refusal are covered by isolated refusal tests. No uncertain receipt is deleted or closed to complete rollback.
+
+The full census rehearsal also exposed a second demotion scan: `recordDemotionInterruption` found its conversation by enumerating the entire archived collection, although its caller had already used the generation index. Two full runs refused the intermediate implementation: incumbent handoff records failed while transcript evidence kept moving, and successor adoption exceeded the existing 15 s bound. A focused regression decoded 366 unrelated conversation payloads when recording one cut. Interruption recording now uses the existing generation index and retains the same current-generation predicate and durable continuation protocol.
+
+The next full run completed adoption in 8.7 s and demotion exited cleanly, but refused a 3.14 s warm projection and a 2.064 s runtime call. Projection tracing then showed small worker steps while the calling release was entering startup. Adoption and dead-host reconciliation still materialized all entry and conversation payloads there. They now select all structured host kinds through hot/archive indexes, including released hosts, and resolve only their current conversations. An empty pipeline deferral set reads no conversation payloads. Per-host claim, process and transcript checks remain in place.
+
+A subsequent source CPU profile identified retained-receipt enumeration inside diagnostic attribution: `spawnDiagnosticErrorForRegistry`, reached while recording demotion, held 1633 of 8087 inclusive samples in one Viewer and 1227 of 6859 in the other. The profile came from a diagnostic run with an induced worker stall. Diagnostic attribution now reads scalar client identities through existing indexes and preserves the same ordinary/owner, unattributed and unreadable privacy decisions. A regression fails on the baseline's complete snapshot load and passes without materializing a receipt payload. Its peer updates also exercise removal of the last owner attribution.
+
+### Update reconciliation
+
+The service observes one compact latest-deployment ledger row with one bounded, shared refresh. A newer external deployment supersedes the displayed attempt while the original failed receipt remains byte-for-byte unchanged in custody/history. Serving web identity comes from the running release, and runtime-host identity comes from live health. Retry rechecks both, the release pointer and the ledger after proving forward ancestry. Unknown, older and unrelated targets are refused. A new external failure can still be retried forward after identical ledger refreshes.
+
+The dialog displays Web and Runtime host independently, keeps the failed target and cause beside a newer check, distinguishes rollback in progress from a verified restore, and retains the previous failed attempt after a newer success. Route and DOM regressions cover English and Ukrainian, unknown component revisions, late checks, stale retry and forward retry. The stale external-success regression fails against the baseline service.
+
+The supplied desktop's complete 300 s adoption timeout and exact 1048 ms sample remain unpaired observations. These isolated reproductions establish the retained-history cost, cold-loop breach, busy-web rollback failure and stale-target regression without assigning every desktop second to those mechanisms. Deployment and its subsequent production pause audit remain with the authorized release owner.
+
+### Full qualification
+
+The final unprofiled production-build gate passed at the complete census with two writers, four live workers and eight Chromium views, under a 1200% CPU scope and 8 GiB memory limit. The raw report and all intermediate refusals remain in the evidence JSON.
+
+| Measurement | Final result | Existing bound |
+| --- | ---: | ---: |
+| First-boot event-loop maximum | 416 ms | 1000 ms |
+| Warm projection maximum | 751 ms | 2000 ms |
+| Runtime RPC p95 / maximum | 4.5 / 415 ms | 250 / 2000 ms |
+| Successor adoption | 2550 ms | 15,000 ms |
+| Browser server boot / warm loop maximum | 622 / 191 ms | 1000 / 500 ms |
+| Preserved workers / pending launches / retained deliveries | 4 / 20 / 666 | All |
+
+Both Docker rollback cases also used the complete retained census. The new adapter restored the prior release in 15.9 s and the actual baseline adapter did so in 9.6 s with the candidate guard. Each preserved all 687 protected rows, including its added uncertain message, and the independent native worker remained alive. The runtime-host rehearsal passed under Bun 1.4.0: succession completed in 512 ms, and both endpoints answered 27/27 callers during the 15 s abandonment window.
+
+Explicit isolated lifecycle, archive, adoption, cancellation and DOM tests passed. The test comparator reproduced an existing checkout-route runner diagnostic and an existing truncated-credential assertion on the baseline; neither is introduced by this change. The local publication privacy gate passed.

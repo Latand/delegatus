@@ -20,6 +20,7 @@ for (const [name, suffix] of Object.entries({ HOME: "home", XDG_CONFIG_HOME: "co
 fs.mkdirSync(path.join(isolated, "sockets"), { mode: 0o700 });
 
 const { AgentRegistry } = await import("@/lib/agent/registry");
+const { sessionKeyId } = await import("@/lib/agent/sessionKey");
 const { emptyLaunchProfile } = await import("@/lib/accounts/migration/contracts");
 const { RuntimeHost } = await import("@/runtime-host/host");
 const { serveRuntimeHost } = await import("@/runtime-host/socket");
@@ -120,6 +121,10 @@ function fixture(failedCount: number, fullHistory = false, historyCount = 8078, 
   const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
   const client = {
     snapshot: async () => journal.snapshot(),
+    readSnapshot: async (kind, conversationIds) => {
+      const { projectSnapshotRead } = await import("./snapshotReads");
+      return projectSnapshotRead(journal.snapshotRead({ version: 1, kind, ...(conversationIds ? { conversationIds } : {}) }), kind, conversationIds);
+    },
     events: async (after) => journal.replay(after),
     append: async (event) => journal.append(event),
     command: async (command) => journal.executeOperation(command),
@@ -262,6 +267,8 @@ test("historical failed launches do not retain startup admission across one full
     effectBatch: async (kinds, after) => {
       if (kinds?.length === 1 && kinds[0] === "runtime.spawn") {
         spawnRecovery = true;
+        signalRecovery();
+        await Bun.sleep(60);
         timeline.push("spawn-recovery");
       } else timeline.push("delivery-signals-or-drain");
       return f.client.effectBatch(kinds, after);
@@ -305,7 +312,7 @@ test("historical failed launches do not retain startup admission across one full
 }, 90_000);
 
 
-test("a failed historical snapshot remains unknown and a later pass retries it", async () => {
+test("terminal history with no pending effects needs no runtime snapshot", async () => {
   const f = fixture(3);
   const before = structuredClone(f.registry.readOnlySnapshot().receipts);
   let reads = 0;
@@ -315,12 +322,92 @@ test("a failed historical snapshot remains unknown and a later pass retries it",
   };
   try {
     await recoverPendingStructuredSpawns(f.registry, unavailable);
-    expect(reads).toBe(2); // Shared historical read plus the registering-session hint.
+    expect(reads).toBe(0);
     expect(f.registry.readOnlySnapshot().receipts).toEqual(before);
     await recoverPendingStructuredSpawns(f.registry, unavailable);
-    expect(reads).toBe(4); // No rejected snapshot survives its pass.
+    expect(reads).toBe(0);
     expect(f.registry.readOnlySnapshot().receipts).toEqual(before);
   } finally { f.journal.close(); }
+});
+
+test("managed update recovery selects the census's unresolved work and preserves every uncertain row", async () => {
+  const { buildRegistryPerformanceDataset } = await import("@/lib/agent/registryPerformanceDataset");
+  const directory = fs.mkdtempSync(path.join(isolated, "census-"));
+  const dataset = buildRegistryPerformanceDataset(directory);
+  expect(dataset.receipts).toEqual({ total: 10971, failedStructured: 892, failedLegacy: 122, conflicted: 133 });
+  let fullLoads = 0;
+  const payloads = new Map<string, number>();
+  const registry = new AgentRegistry(path.join(directory, "agent-registry.json"), undefined, undefined, {
+    sqliteMode: "sqlite", onSqliteSnapshotLoad: () => { fullLoads++; },
+    onSqliteRowPayloadRead: (collection, count) => payloads.set(collection, (payloads.get(collection) ?? 0) + count),
+  });
+  const db = new Database(dataset.filename, { readonly: true });
+  const retained = () => db.query<{ collection: string; row_key: string; value_json: string }, []>(`SELECT collection,row_key,value_json
+    FROM registry_records WHERE collection='heldDeliveries' OR collection='receipts' AND json_extract(value_json,'$.state')='path-pending'
+    ORDER BY collection,row_key`).all();
+  const before = retained();
+  const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
+  const host = new RuntimeHost(journal);
+  const socket = path.join(isolated, "sockets", "census.sock");
+  let reads = 0;
+  const server = serveRuntimeHost(socket, { handle: async (request, options) => {
+    reads++;
+    return host.handle(request, options);
+  } });
+  await new Promise<void>(resolve => server.once("listening", resolve));
+  const client = new UnixRuntimeHostClient(socket);
+  try {
+    const started = performance.now();
+    await recoverPendingStructuredSpawns(registry, client);
+    const recoveryMs = performance.now() - started;
+    expect(retained()).toEqual(before);
+    expect(before.filter(row => row.collection === "receipts")).toHaveLength(20);
+    expect(before.filter(row => row.collection === "heldDeliveries")).toHaveLength(666);
+    console.log(JSON.stringify({ managedUpdateCensus: { rows: dataset.rows, receipts: dataset.receipts, recoveryMs, fullLoads, reads } }));
+    expect(fullLoads).toBe(0);
+    expect(reads).toBeLessThan(100);
+    await registry.prepareReadOnlySnapshot();
+    payloads.clear();
+    expect(registry.structuredHostEntries().map(entry => sessionKeyId(entry.key))).toEqual(dataset.workers.map(worker => worker.key));
+    expect(payloads.get("entries") ?? 0).toBeLessThanOrEqual(dataset.workers.length);
+  } finally {
+    await new Promise<void>(resolve => server.close(() => resolve()));
+    journal.close(); db.close(); registry.close();
+  }
+}, 120_000);
+
+test("recovery abort closes an unanswered real socket and preserves pending work", async () => {
+  const f = fixture(0);
+  const pending = f.registry.beginSpawnRequest({ engine: "codex", cwd: f.directory, transport: "structured", accountId: null,
+    launchProfile: emptyLaunchProfile({ cwd: f.directory, title: "Retained on retirement" }) });
+  const before = JSON.stringify(f.registry.readOnlySnapshot().receipts[pending.receipt.launchId]);
+  const abort = new AbortController();
+  let reached!: () => void;
+  const waiting = new Promise<void>(resolve => { reached = resolve; });
+  const connections = new Set<net.Socket>();
+  const server = net.createServer(socket => {
+    connections.add(socket);
+    socket.on("close", () => connections.delete(socket));
+    socket.on("data", () => reached());
+  });
+  const socket = path.join(isolated, "sockets", "abort-recovery.sock");
+  await new Promise<void>(resolve => server.listen(socket, resolve));
+  const outcome = recoverPendingStructuredSpawns(f.registry, new UnixRuntimeHostClient(socket, 60_000), { signal: abort.signal })
+    .then(() => null, error => error);
+  try {
+    await waiting;
+    abort.abort(new Error("release retired"));
+    expect(await outcome).toBeInstanceOf(Error);
+    await Bun.sleep(20);
+    expect(connections.size).toBe(0);
+    expect(JSON.stringify(f.registry.readOnlySnapshot().receipts[pending.receipt.launchId])).toBe(before);
+  } finally {
+    abort.abort();
+    await outcome;
+    for (const connection of connections) connection.destroy();
+    await new Promise<void>(resolve => server.close(() => resolve()));
+    f.registry.close(); f.journal.close();
+  }
 });
 
 test("startup exposes fallback publication while pipeline admission stays available", async () => {
@@ -387,14 +474,20 @@ test("rollback checkpoint does not wait on startup network publication", async (
   const startup = runStructuredHostStartup(() => adoptStructuredHostsAtStartup({ registry: f.registry, client }), () => {}, { waitUntilReady: true });
   await publishing;
   let replySettled = false;
-  const timer = setTimeout(() => { replySettled = true; released(); }, 50);
+  void response.then(() => { replySettled = true; });
+  let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    await checkpointHotStateRollbackMirrorsForDemotion();
+    await Promise.race([
+      checkpointHotStateRollbackMirrorsForDemotion(),
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error("checkpoint waited on blocked startup publication")), 5_000);
+      }),
+    ]);
     expect(replySettled).toBe(false);
     released();
     await startup;
   } finally {
-    clearTimeout(timer);
+    if (timer) clearTimeout(timer);
     released();
     await startup;
     await bindStructuredDeliveryQueue([], { registry: f.registry, client: null });
@@ -591,10 +684,10 @@ test("the full retained history completes within the promoted serving budget", a
     /* The budget is held by what startup asks the host for, counted below: no
        full snapshot (three seconds each here), and a bounded number of every
        other call. The time is reported above, never asserted (#1761). */
-    expect(counts.snapshot ?? 0).toBe(0);
+    expect(counts.snapshot ?? 0).toBe(1); // One narrow activity projection, independent of receipt history.
     expect(counts["session-read"]).toBeGreaterThan(0);
     expect(counts.append).toBeGreaterThan(4300);
-    expect(counts["operation-status"]).toBe(1518);
+    expect(counts["operation-status"]).toBe(174); // Open work only; 672 terminal receipts produce no reads.
     expect(structuredStartupStatus()?.state).toBe("ready");
     expect(Object.values(f.registry.readOnlySnapshot().receipts).filter((receipt) => receipt.state === "failed").slice(0, 672)).toEqual(failed);
     const contender = Bun.spawn([process.execPath, path.join(import.meta.dir, "fixtures/startupPipelineContender.ts"), f.directory], {

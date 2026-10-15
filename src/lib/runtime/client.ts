@@ -111,6 +111,27 @@ export function isRuntimeHostTransportFailure(error: unknown): boolean {
     && TRANSPORT_FAILURE_MESSAGES.has(error.message);
 }
 
+export interface RuntimeReadOptions { timeoutMs?: number; signal?: AbortSignal }
+
+/** Read cancellation never changes mutation transport semantics. All issued
+    reads close their socket before the release's startup barrier can settle. */
+export function withRuntimeRecoveryReads(client: RuntimeHostClient, signal: AbortSignal): RuntimeHostClient {
+  return new Proxy(client, {
+    get(target, property) {
+      if (property === "snapshot") return (_signal?: AbortSignal, options?: { timeoutMs?: number; voiceBodiesFor?: string[] }) =>
+        target.snapshot(signal, options);
+      if (property === "readSession" && target.readSession) return (identity: RuntimeSessionRead, options?: RuntimeReadOptions) =>
+        target.readSession!(identity, { ...options, signal });
+      if (property === "operationStatus") return (id: string, options?: { currentRetryLeaf?: boolean }) =>
+        target.operationStatus(id, { ...options, signal });
+      if (property === "effectBatch") return (kinds?: readonly string[], after?: number) => target.effectBatch(kinds, after, { signal });
+      if (property === "readSnapshot" && target.readSnapshot) return (kind: RuntimeSnapshotReadKind, ids?: readonly string[]) => target.readSnapshot!(kind, ids, signal);
+      const value = Reflect.get(target, property);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+}
+
 export interface RuntimeHostClient {
   readSnapshot?<K extends RuntimeSnapshotReadKind>(kind: K, conversationIds?: readonly string[], signal?: AbortSignal): Promise<RuntimeSnapshotReads[K]>;
   /** Stable listener identity; reconnecting to the same socket preserves it. */
@@ -120,7 +141,7 @@ export interface RuntimeHostClient {
   /** Canonical proof for an entry whose add operation was compacted (#1664).
       Answers the settled entry; there is no operation receipt to answer. */
   nativeQueueSettleCompacted?(request: NativeQueueCompactedProof): Promise<NativeQueueCompactedSettlement>;
-  readSession?(identity: RuntimeSessionRead, options?: { timeoutMs?: number }): Promise<RuntimeSession | null>;
+  readSession?(identity: RuntimeSessionRead, options?: RuntimeReadOptions): Promise<RuntimeSession | null>;
   filesRevision?(): Promise<number>;
   snapshot(signal?: AbortSignal, options?: { voiceBodiesFor?: string[]; timeoutMs?: number }): Promise<RuntimeSnapshot>;
   /** The same snapshot as the UTF-8 JSON the host encoded, for a caller that
@@ -134,11 +155,11 @@ export interface RuntimeHostClient {
   appendSessionFenced?(event: RuntimeEventInput & { expectedSessionRevision: number }): Promise<unknown>;
   operation(event: RuntimeEventInput): Promise<unknown>;
   command(command: RuntimeOperationCommand): Promise<RuntimeOperationResult>;
-  operationStatus(operationId: string, options?: { currentRetryLeaf?: boolean }): Promise<RuntimeOperationResult | null>;
+  operationStatus(operationId: string, options?: RuntimeReadOptions & { currentRetryLeaf?: boolean }): Promise<RuntimeOperationResult | null>;
   claimDeliveryAction(operationId: string, action: RuntimeDeliveryAction): Promise<RuntimeDeliveryActionClaim>;
   retryOperation(operationId: string, nextIdempotencyKey?: string, options?: RuntimeRetryOptions): Promise<RuntimeOperationResult>;
   producerCursor(producerKind: string, eventKeyPrefix: string): Promise<number>;
-  effectBatch(kinds?: readonly string[], afterEventSeq?: number): Promise<RuntimePendingEffect[]>;
+  effectBatch(kinds?: readonly string[], afterEventSeq?: number, options?: RuntimeReadOptions): Promise<RuntimePendingEffect[]>;
   transitionOperation(
     operationId: string,
     status: Exclude<RuntimeReceiptStatus, "pending">,
@@ -190,10 +211,10 @@ export class UnixRuntimeHostClient implements RuntimeHostClient {
   nativeQueueSettleCompacted(request: NativeQueueCompactedProof): Promise<NativeQueueCompactedSettlement> {
     return this.call("native-queue-settle-compacted", { ...request }) as Promise<NativeQueueCompactedSettlement>;
   }
-  readSession(identity: RuntimeSessionRead, options?: { timeoutMs?: number }): Promise<RuntimeSession | null> {
+  readSession(identity: RuntimeSessionRead, options?: RuntimeReadOptions): Promise<RuntimeSession | null> {
     // Startup can wait for a slow host without changing interactive deadlines
     // or sending the caller's transport policy over the wire.
-    return this.call("session-read", { ...identity }, options?.timeoutMs ?? this.timeoutMs) as Promise<RuntimeSession | null>;
+    return this.call("session-read", { ...identity }, options?.timeoutMs ?? this.timeoutMs, options?.signal) as Promise<RuntimeSession | null>;
   }
   async filesRevision(): Promise<number> {
     try {
@@ -233,11 +254,11 @@ export class UnixRuntimeHostClient implements RuntimeHostClient {
       || command.kind === "kill" && command.providerRecovery;
     return this.call(guarded ? "guarded-command" : "command", { command }) as Promise<RuntimeOperationResult>;
   }
-  operationStatus(operationId: string, options: { currentRetryLeaf?: boolean } = {}): Promise<RuntimeOperationResult | null> {
+  operationStatus(operationId: string, options: RuntimeReadOptions & { currentRetryLeaf?: boolean } = {}): Promise<RuntimeOperationResult | null> {
     return this.call("operation-status", {
       operationId,
       ...(options.currentRetryLeaf ? { currentRetryLeaf: true } : {}),
-    }) as Promise<RuntimeOperationResult | null>;
+    }, options.timeoutMs ?? this.timeoutMs, options.signal) as Promise<RuntimeOperationResult | null>;
   }
   claimDeliveryAction(operationId: string, action: RuntimeDeliveryAction): Promise<RuntimeDeliveryActionClaim> {
     return this.call("operation-delivery-action", { operationId, action }) as Promise<RuntimeDeliveryActionClaim>;
@@ -252,12 +273,12 @@ export class UnixRuntimeHostClient implements RuntimeHostClient {
     }) as Promise<RuntimeOperationResult>;
   }
   producerCursor(producerKind: string, eventKeyPrefix: string): Promise<number> { return this.call("producer-cursor", { producerKind, eventKeyPrefix }) as Promise<number>; }
-  effectBatch(kinds?: readonly string[], afterEventSeq = 0): Promise<RuntimePendingEffect[]> {
+  effectBatch(kinds?: readonly string[], afterEventSeq = 0, options: RuntimeReadOptions = {}): Promise<RuntimePendingEffect[]> {
     const params = {
       ...(kinds ? { kinds: [...kinds] } : {}),
       ...(afterEventSeq !== 0 ? { afterEventSeq } : {}),
     };
-    return this.call("effect-batch", Object.keys(params).length > 0 ? params : undefined) as Promise<RuntimePendingEffect[]>;
+    return this.call("effect-batch", Object.keys(params).length > 0 ? params : undefined, options.timeoutMs ?? this.timeoutMs, options.signal) as Promise<RuntimePendingEffect[]>;
   }
   transitionOperation(
     operationId: string,

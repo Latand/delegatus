@@ -192,7 +192,7 @@ image carries no browser. A revision whose `Dockerfile` has no such stage runs
 the gate in its own image, finds no browser and is refused.
 
 The runner builds a synthetic registry (`registryPerformanceDataset.ts`):
-about 30,000 rows over eight working directories, the newest 2,200 terminal
+53,299 rows over eight working directories, the newest 2,200 terminal
 rows still hot as a bounded archive pass leaves them, large operation-owner
 and receipt payloads, operator roots holding the Telegram grant with
 delegated children claiming it, receipts naming conversations that never
@@ -302,7 +302,7 @@ verdict; it skips the browser, as does a run under an induced fault.
 | Evidence | pending and uncertain deliveries byte-identical and hot; every MCP grant decided the same by writers and the successor | Speed bought by dropping evidence or authority is a regression the latency bounds cannot see. |
 | Stability | every measured answer of every scope carries the rows, conversations and projects of its settled answer from before the first write, and its pinned conversation; no answer is empty | Rows that appear, vanish or change project read as conversations jumping on the board. The history spans eight projects, so the board's ten-project window holds all of it whichever project a write makes the newest. |
 | Browser views | each of eight views: board drawn ≤ 10 s from navigation; `/api/files` p95 ≤ 5 s, max ≤ 10 s; any other ordinary API request ≤ 10 s whether answered, failed or still open, and none answered 5xx or failed; main thread ≤ 1 s before the board drew, p95 ≤ 50 ms and max ≤ 500 ms after; a wheel answered ≤ 500 ms; selection held, no missing-conversation notice, a board answer while the writers ran; ≥ 50 writes, none failed; the serving process's own event loop ≤ 1 s while the views opened, p95 ≤ 50 ms and max ≤ 500 ms while they operated, with ≥ 300 samples, and a run that did not read it is refused | What the operator sees is the page, not the handler. The HTTP bounds above held while the page took 15-19 s to draw: `/api/accounts` enumerated every conversation of the history once per completed account migration, through a lazy reader that stats the database twice per row, and held the server's thread for two thirds of a minute-long run ("What changed" lists the page's other whole-history reads). |
-| Sufficiency | full dataset (≥ 29,000 rows, ≥ 90 % cold); ≥ 50 writes per writer, ≥ 20 keyed reads, ≥ 8 warm builds, ≥ 64 board requests, ≥ 8 compared rounds, ≥ 2 workers, pending and uncertain deliveries present | A run that measured nothing passes nothing. |
+| Sufficiency | full dataset (≥ 53,000 rows, ≥ 90 % cold; ≥ 10,971 receipts with 892 structured failures, 122 legacy failures and 133 conflicts; 20 pending launches and 666 retained deliveries preserved); ≥ 50 writes per writer, ≥ 20 keyed reads, ≥ 8 warm builds, ≥ 64 board requests, ≥ 8 compared rounds, ≥ 2 workers, pending and uncertain deliveries present | A run that measured nothing passes nothing. |
 
 The latency numbers are the bounds the post-incident audit proposed, with the
 first-boot and activation bounds added here. They were kept because the fixed
@@ -355,3 +355,10 @@ server's own answers and the board draws at about ten seconds, at its bound.
 Give the scope room for eight browsers, `LLV_WORK_SCOPE_CPU_QUOTA=1200`, to
 measure the server rather than the quota; the gate's container has no such
 quota.
+
+The managed-update census, added on 2026-10-15, contains 11,870 conversations,
+8,428 entries, 10,971 receipts, 14,218 delivery owners and 666 delivery rows.
+The latency bounds above are unchanged. All pending launch records and all
+retained delivery JSON records are compared across the handover. First-view
+preparation uses the same cooperative registry method as production startup;
+the sampler still starts before registry open, including index migration.

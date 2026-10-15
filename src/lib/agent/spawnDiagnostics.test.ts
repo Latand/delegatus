@@ -200,3 +200,40 @@ test("background diagnostics for an ordinary receipt preserve normal attribution
     expect(logger).toHaveBeenCalledWith("Delivery failed", fields);
   } finally { logger.mockRestore(); registry.close(); fs.rmSync(root, { recursive: true, force: true }); }
 });
+
+test("SQLite background attribution reads scalar identities and follows peer owner changes", async () => {
+  const { buildRegistryPerformanceDataset, scaledRegistryPerformanceShape } = await import("./registryPerformanceDataset");
+  const { normalizeRegistry } = await import("./registry");
+  const { SqliteAgentRegistryStore } = await import("./sqliteRegistryStore");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "indexed-diagnostic-"));
+  const dataset = buildRegistryPerformanceDataset(root, scaledRegistryPerformanceShape(0.04));
+  const peer = new SqliteAgentRegistryStore(dataset.filename, { normalize: normalizeRegistry,
+    initialSnapshot: () => { throw Error("existing census required"); } });
+  let payloads = 0, snapshots = 0;
+  const registry = new AgentRegistry(path.join(root, "agent-registry.json"), undefined, undefined, {
+    sqliteMode: "sqlite", onSqliteRowPayloadRead: (_collection, count) => { payloads += count; },
+    onSqliteSnapshotLoad: () => { snapshots++; },
+  });
+  const logger = spyOn(console, "error").mockImplementation(() => {});
+  const privatePath = path.join(root, "private-transcript.jsonl");
+  try {
+    const ordinary = { operationId: "spawn_message_performance-launch-1", error: new Error("fixture error") };
+    spawnDiagnosticErrorForRegistry(registry, "Delivery failed", ordinary);
+    expect(logger).toHaveBeenLastCalledWith("Delivery failed", ordinary);
+    peer.mutate(file => { file.receipts["performance-launch-0"]!.clientAttemptId = "relay-owner-fixture"; }, false);
+    expect(peer.archiveInactive(10_000)).toBeGreaterThan(0);
+    spawnDiagnosticErrorForRegistry(registry, new Error(privatePath));
+    expect(JSON.stringify(logger.mock.calls.at(-1))).not.toContain(privatePath);
+    spawnDiagnosticErrorForRegistry(registry, "Delivery failed", ordinary);
+    expect(logger).toHaveBeenLastCalledWith("Delivery failed", ordinary);
+    peer.mutate(file => { file.receipts["performance-launch-0"]!.clientAttemptId = "ordinary-fixture"; }, false);
+    const unknown = { error: new Error("no owner receipt remains") };
+    spawnDiagnosticErrorForRegistry(registry, "Controller failed", unknown);
+    expect(logger).toHaveBeenLastCalledWith("Controller failed", unknown);
+    expect(snapshots).toBe(0);
+    expect(payloads).toBe(0);
+  } finally {
+    logger.mockRestore(); registry.close(); peer.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});

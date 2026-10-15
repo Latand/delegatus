@@ -622,7 +622,11 @@ test("startup recovery still terminalizes a dead non-queued ownerless receipt", 
   store.releaseStartingStructuredSpawn(begun.receipt.launchId, begun.receipt.admissionOwner);
 
   const restarted = new AgentRegistry(store.filename, undefined, undefined, { sqliteMode: "off" });
-  await recoverPendingStructuredSpawns(restarted, DEAD_RUNTIME_CLIENT);
+  const { RuntimeJournal } = await import("../../runtime-host/journal");
+  const journal = new RuntimeJournal(path.join(path.dirname(store.filename), "recovery-runtime.sqlite"), { structuredHosts: true });
+  try {
+    await recoverPendingStructuredSpawns(restarted, { ...DEAD_RUNTIME_CLIENT, snapshot: async () => journal.snapshot() });
+  } finally { journal.close(); restarted.close(); }
 
   expect(restarted.snapshot().receipts[begun.receipt.launchId]).toMatchObject({
     state: "failed",
