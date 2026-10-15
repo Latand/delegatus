@@ -39,6 +39,23 @@ function serve(onRequest: (frame: string, socket: net.Socket) => void, socketPat
   return socketPath;
 }
 
+test("files revision reads a scalar and falls back only for an unsupported old host", async () => {
+  for (const mode of ["current", "old", "refused"] as const) {
+    const methods: string[] = [];
+    const socketPath = serve((frame, socket) => {
+      const request = JSON.parse(frame); methods.push(request.method);
+      const result = request.method === "snapshot" ? { filesRevision: 9 } : 9;
+      socket.end(JSON.stringify(mode === "current" || request.method === "snapshot"
+        ? { id: request.id, ok: true, result }
+        : { id: request.id, ok: false, error: mode === "old" ? "runtime request method is unsupported" : "state unavailable" }) + "\n");
+    });
+    const client = new UnixRuntimeHostClient(socketPath);
+    if (mode === "refused") await expect(client.filesRevision()).rejects.toThrow("state unavailable");
+    else expect(await client.filesRevision()).toBe(9);
+    expect(methods).toEqual(mode === "old" ? ["files-revision", "snapshot"] : ["files-revision"]);
+  }
+});
+
 test("snapshot forwards its abort signal and settles exactly once on external abort", async () => {
   const socketPath = serve(() => {
     /* never respond — the abort must settle the request */

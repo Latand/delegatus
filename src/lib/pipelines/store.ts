@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { performanceSpans } from "@/lib/performanceSpans";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import fs from "node:fs";
@@ -8,13 +9,13 @@ import { isDismissedBy } from "@/lib/attention/dismissalTypes";
 import { pipelineHasPullRequest } from "@/lib/forge/resolve";
 import { githubRepositoryOfRemote } from "@/lib/forge/workLinks";
 import { statePath } from "@/lib/configDir";
-import { canonicalProject, projectAliasSnapshot } from "@/lib/projects/aliases";
+import { canonicalProject, projectAliasSnapshot, projectAliasResolver } from "@/lib/projects/aliases";
 import { effortScale } from "@/lib/agent/efforts";
 import { normalizeClaudeLaunchModel } from "@/lib/agent/models";
 import { MAX_SCAFFOLD_LENGTH } from "@/lib/roles/store";
 import { refuseBusyBeforeAdmission } from "@/lib/state/fileTransaction";
 import { jsonArrayRecordBytes, preservedRecordJson, rememberRecordBytes, registryRecordKey, reportRegistryRecord, stringifyRegistryDocument, type RegistryRecordIssue } from "@/lib/state/registryRecords";
-import { initializeStateCollections, readStateCollectionRevisions, visitStateCollectionsRows, readStateCollectionsRows, SqliteStateCollection, type StateBoundedTransaction, type StateCollectionSeed } from "@/lib/state/sqliteStateStore";
+import { initializeStateCollections, readStateCollectionRevisions, stateEvidenceVersion, pipelineEvidenceRevision, readCompactPipelineEvidence, type CompactEvidenceCache, visitStateCollectionsRows, readStateCollectionsRows, SqliteStateCollection, type StateBoundedTransaction, type StateCollectionSeed } from "@/lib/state/sqliteStateStore";
 import type { BoardTask } from "@/lib/tasks/types";
 
 import { MAX_FAIL_EDGE_ROUNDS, MAX_PIPELINE_GRAPH_EDITS, MAX_PIPELINE_STAGE_REPORTS, MAX_PIPELINE_STAGES, MAX_STAGE_OUTPUTS } from "./limits";
@@ -1063,16 +1064,34 @@ export async function selectControllerPipelines(kind: import("@/lib/state/pipeli
   return pipelineStore().pipelineControllerSelection(kind, throughOrder);
 }
 
-type PreparedPipelineEvidence = { pipelines: Pipeline[]; issues: RegistryRecordIssue[]; signature: string };
+export type PipelineStartupOwnership = { id: string; attempts: Array<{ conversationId: string | null; state: string }>;
+  survivors: import("@/lib/processIdentity").ProcessIdentity[] };
+type CompactPipelineEvidence = { key: string; ownership?: PipelineStartupOwnership; issue?: RegistryRecordIssue };
+type PreparedPipelineEvidence = { pipelines: Pipeline[]; ownership?: PipelineStartupOwnership[]; issues: RegistryRecordIssue[]; signature: string };
+let compactEvidence: CompactEvidenceCache<CompactPipelineEvidence> | undefined;
+function startupOwnership(pipeline: Pipeline): PipelineStartupOwnership {
+  const attempts = pipeline.runs.flatMap(run => run.attempts);
+  return { id: pipeline.id,
+    attempts: attempts.map(attempt => ({ conversationId: attempt.conversationId ?? null, state: attempt.state })),
+    survivors: [...attempts, ...(pipeline.closeTeardown?.hosts ?? []).map(host => host.evidence)]
+      .flatMap(host => host.unresolvedTermination?.survivors.map(identity => ({ ...identity })) ?? []),
+  };
+}
 const admittedEvidence = new AsyncLocalStorage<{ current: PreparedPipelineEvidence | null }>();
 const pendingEvidence = new Map<string, Promise<PreparedPipelineEvidence>>();
 const evidenceCollections = ["pipelines", "pipelines_archive"];
+// Only the health result survives a completed read. Historical pipeline bodies
+// still live only for the admissions that need independent mutable copies.
+let healthWitness: { signature: string; version: string; issues: RegistryRecordIssue[] } | undefined;
 
 function evidenceFileIdentity(filename: string): string {
   try { const stat = fs.statSync(filename, { bigint: true }); return `${stat.dev}:${stat.ino}`; }
   catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return "missing"; throw error; }
 }
 function evidenceSignature(): string {
+  return performanceSpans.sync("pipeline.identity", readEvidenceSignature);
+}
+function readEvidenceSignature(): string {
   const filename = stateDatabaseFile();
   const revisions = readStateCollectionRevisions(filename, evidenceCollections);
   const legacy = evidenceCollections.map(collection => {
@@ -1081,26 +1100,51 @@ function evidenceSignature(): string {
     try { const st = fs.statSync(file, { bigint: true }); return `${st.dev}:${st.ino}:${st.size}:${st.mtimeNs}:${st.ctimeNs}`; }
     catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return "missing"; throw error; }
   });
-  return JSON.stringify([filename, evidenceFileIdentity(filename), [...revisions], legacy]);
+  return JSON.stringify([filename, evidenceFileIdentity(filename), [...revisions], legacy, pipelineEvidenceRevision(filename)]);
 }
 
 /** Shared only while a fresh read is in flight. Complete historical payloads
     are released when the last admission using that read finishes. */
-async function preparePipelineEvidence(mode: "startup" | "health" = "startup"): Promise<PreparedPipelineEvidence> {
+async function preparePipelineEvidence(mode: "startup" | "health" | "ownership" = "startup"): Promise<PreparedPipelineEvidence> {
   const signature = evidenceSignature();
   const pendingKey = `${signature}:${mode}`;
-  const existing = pendingEvidence.get(`${signature}:startup`) ?? pendingEvidence.get(pendingKey);
-  if (existing) return existing;
+  const existing = pendingEvidence.get(`${signature}:startup`) ?? (mode !== "startup" ? pendingEvidence.get(`${signature}:ownership`) ?? pendingEvidence.get(`${signature}:health`) : undefined) ?? pendingEvidence.get(pendingKey);
+  if (existing) { performanceSpans.event("pipeline.shared"); return existing; }
   const pending = withViewerOperation("pipelines.evidence", async () => {
     const pipelines: Pipeline[] = [];
     const issues: RegistryRecordIssue[] = [];
+    if (mode !== "startup") {
+      const prepared = await readCompactPipelineEvidence(stateDatabaseFile(), compactEvidence, (record, collection) => {
+        const key = registryRecordKey(record);
+        return performanceSpans.sync("pipeline.validate", () => isPipeline(record))
+          ? { key, ownership: startupOwnership(record as Pipeline) }
+          : { key, issue: pipelineRecordIssue(record, collection) };
+      });
+      if (prepared) {
+        const identities = new Set<string>();
+        const ownership: PipelineStartupOwnership[] = [];
+        for (const { value } of prepared.rows.values()) {
+          if (identities.has(value.key)) throw new PipelineStoreError("pipeline startup records have contradictory identities");
+          identities.add(value.key);
+          if (value.ownership) ownership.push(value.ownership);
+          if (value.issue) issues.push(value.issue);
+        }
+        if (signature !== evidenceSignature()) throw new PipelineStoreError("pipeline evidence changed during preparation");
+        compactEvidence = prepared;
+        return { pipelines, ownership, issues, signature };
+      }
+      compactEvidence = undefined;
+    }
     const identities = new Set<string>();
+    const ownership: PipelineStartupOwnership[] = [];
+    const resolveProject = projectAliasResolver();
     const visit = (record: unknown, collection: string) => {
       const key = registryRecordKey(record);
       if (identities.has(key)) throw new PipelineStoreError("pipeline startup records have contradictory identities");
       identities.add(key);
-      if (isPipeline(record)) {
-        if (mode === "startup") pipelines.push(reviveLoadedPipeline(record));
+      if (performanceSpans.sync("pipeline.validate", () => isPipeline(record))) {
+        if (mode === "startup") pipelines.push(performanceSpans.sync("pipeline.revive", () => reviveLoadedPipeline(record as Pipeline, resolveProject)));
+        else ownership.push(startupOwnership(record as Pipeline));
       } else issues.push(pipelineRecordIssue(record, collection));
     };
     const revisions = await visitStateCollectionsRows(stateDatabaseFile(), evidenceCollections, visit);
@@ -1116,18 +1160,50 @@ async function preparePipelineEvidence(mode: "startup" | "health" = "startup"): 
       }
     }
     if (signature !== evidenceSignature()) throw new PipelineStoreError("pipeline evidence changed during preparation");
-    return { pipelines, issues, signature };
+    return { pipelines, ...(mode === "startup" ? {} : { ownership }), issues, signature };
   });
   pendingEvidence.set(pendingKey, pending);
   try { return await pending; }
   finally { if (pendingEvidence.get(pendingKey) === pending) pendingEvidence.delete(pendingKey); }
 }
 
+export async function loadPipelineOwnershipForStartupAsync(): Promise<PipelineStartupOwnership[]> {
+  const evidence = admittedEvidence.getStore()?.current ?? await preparePipelineEvidence("ownership");
+  return (evidence.ownership ?? evidence.pipelines.map(startupOwnership)).map(row => ({ ...row,
+    attempts: row.attempts.map(attempt => ({ ...attempt })), survivors: row.survivors.map(identity => ({ ...identity })) }));
+}
+
 export async function loadPipelinesForStartupAsync(): Promise<Pipeline[]> {
-  return (admittedEvidence.getStore()?.current ?? await preparePipelineEvidence()).pipelines.map(reviveLoadedPipeline);
+  const evidence = admittedEvidence.getStore()?.current ?? await preparePipelineEvidence();
+  if (evidence.ownership) throw new PipelineStoreError("full pipeline records require full startup admission");
+  const result: Pipeline[] = [];
+  let slice = performance.now();
+  let resolveProject = projectAliasResolver();
+  for (const pipeline of evidence.pipelines) {
+    result.push(performanceSpans.sync("pipeline.copy", () => reviveLoadedPipeline(pipeline, resolveProject), 1));
+    if (performance.now() - slice >= 4) {
+      await performanceSpans.wait("pipeline.yield", () => new Promise<void>(resolve => setTimeout(resolve, 0)));
+      // A project move may have committed while this copy yielded.
+      resolveProject = projectAliasResolver();
+      slice = performance.now();
+    }
+  }
+  return result;
 }
 export async function pipelineRegistryHealthAsync(): Promise<RegistryRecordIssue[]> {
-  return (admittedEvidence.getStore()?.current ?? await preparePipelineEvidence("health")).issues.map(issue => ({ ...issue }));
+  const admitted = admittedEvidence.getStore()?.current;
+  if (admitted) return admitted.issues.map(issue => ({ ...issue }));
+  const signature = evidenceSignature();
+  const version = stateEvidenceVersion(stateDatabaseFile());
+  if (healthWitness?.signature === signature && healthWitness.version === version) {
+    return healthWitness.issues.map(issue => ({ ...issue }));
+  }
+  healthWitness = undefined;
+  const evidence = await preparePipelineEvidence("health");
+  if (evidence.signature === signature && stateEvidenceVersion(stateDatabaseFile()) === version) {
+    healthWitness = { signature, version, issues: evidence.issues.map(issue => ({ ...issue })) };
+  }
+  return evidence.issues.map(issue => ({ ...issue }));
 }
 
 /** Startup needs fresh, complete authority, including cold records. Read both
@@ -1152,7 +1228,11 @@ function readCompletePipelineRecords(): unknown[] {
 
 export function loadPipelinesForStartup(): Pipeline[] {
   const prepared = admittedEvidence.getStore()?.current;
-  if (prepared) return prepared.pipelines.map(reviveLoadedPipeline);
+  if (prepared) {
+    if (prepared.ownership) throw new PipelineStoreError("full pipeline records require full startup admission");
+    const resolveProject = projectAliasResolver();
+    return prepared.pipelines.map(pipeline => performanceSpans.sync("pipeline.copy", () => reviveLoadedPipeline(pipeline, resolveProject), 1));
+  }
   return readCompletePipelineRecords().flatMap((record) => { const decoded = decodePipeline(record); return decoded ? [decoded] : []; });
 }
 
@@ -1207,7 +1287,7 @@ export function planPipelineStateMigration(): {
 /** Fresh per-call copies of every layer a caller may write (pipeline, stage,
     run, attempt, cursor rows), so cached records stay pristine while callers
     receive independently mutable structures. Deep config leaves are shared. */
-function reviveLoadedPipeline(pipeline: Pipeline): Pipeline {
+function reviveLoadedPipeline(pipeline: Pipeline, resolveProject: (project: string) => string = canonicalProject): Pipeline {
   const settledAttempts = pipeline.terminalReap?.settledAttempts
     ?? (pipeline.terminalReap?.settledAt
       ? pipeline.runs.flatMap((run) => run.attempts
@@ -1218,7 +1298,7 @@ function reviveLoadedPipeline(pipeline: Pipeline): Pipeline {
     ...pipeline,
     closeTeardown: pipeline.closeTeardown ? structuredClone(pipeline.closeTeardown) : undefined,
     closeReport: pipeline.closeReport ? structuredClone(pipeline.closeReport) : undefined,
-    project: canonicalProject(pipeline.project),
+    project: resolveProject(pipeline.project),
     taskIds: [...pipeline.taskIds],
     creationIntent: pipeline.creationIntent ? { ...pipeline.creationIntent } : undefined,
     spec: typeof pipeline.spec === "string" ? pipeline.spec : undefined,
@@ -1533,7 +1613,7 @@ export async function withPipelineControllerMutation<T>(
   observeHold?: (heldMs: number) => void,
   explicitOnly = false,
 ): Promise<T> {
-  return withViewerOperation("pipelines.controller-mutation", () => pipelineStore().reconcileSnapshot(mutate, observeHold, explicitOnly));
+  return withViewerOperation("pipelines.controller-mutation", () => performanceSpans.wait(explicitOnly ? "controller.admission" : "controller.reconcile", () => pipelineStore().reconcileSnapshot(mutate, observeHold, explicitOnly)));
 }
 
 /** Short startup state admission under the existing cross-process lease.
@@ -1545,15 +1625,16 @@ export async function withPipelineStartupAdmission<T>(
   admit: (available: boolean) => Promise<T>,
   phase = "startup evidence",
   observeHold?: (heldMs: number) => void,
+  compact = false,
 ): Promise<T> {
   return withViewerOperation("pipelines.startup-admission", async () => {
     let entered = false;
     try {
-      let evidence = await preparePipelineEvidence();
+      let evidence = await preparePipelineEvidence(compact ? "ownership" : "startup");
       const store = pipelineStore();
       // A first migration changes authority. Reread its result before taking
       // the lease; a corrupt legacy source has already refused preparation.
-      if (evidence.signature !== evidenceSignature()) evidence = await preparePipelineEvidence();
+      if (evidence.signature !== evidenceSignature()) evidence = await preparePipelineEvidence(compact ? "ownership" : "startup");
       return await store.admit(() => {
         if (evidence.signature !== evidenceSignature()) throw new PipelineStoreError("pipeline evidence changed before admission");
         entered = true;
@@ -1570,6 +1651,7 @@ export async function withPipelineStartupAdmission<T>(
       });
     } catch (error) {
       if (entered) throw error;
+      performanceSpans.event("pipeline.refused", undefined, 0, true);
       return admit(false);
     }
   });

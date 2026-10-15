@@ -568,8 +568,11 @@ The regression files extend the matrix above through these cases:
 
 Focused checks also run `structuredRecovery.test.ts`,
 `structuredDeliveryController.test.ts`, `structuredControls.test.ts`,
-`engine.recovery.test.ts`, `engine.activation.test.ts` and
-`engine.settlement.test.ts`. Each command names its test file, uses the supplied
+`engine.recovery.test.ts`, `engine.activation.test.ts`,
+`engine.settlement.test.ts`, `resolveDecision.test.ts` and
+`engine.succession.test.ts`. The reset-window fixture has a bounded 30-second
+test budget so its hundreds of controller passes finish before the next
+fixture replaces the isolated store. Each command names its test file, uses the supplied
 owned gate runner and isolated HOME/config/temp/state roots, and points Viewer
 control at a closed loopback port. The native scenarios use the installed
 native executable with a local fixture provider. No production requests or
