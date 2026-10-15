@@ -35,6 +35,9 @@ for (const key of ["HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "LLV_STATE_DIR",
   process.env[key] = path.join(sandbox, key);
   fs.mkdirSync(process.env[key]!, { recursive: true });
 }
+fs.writeFileSync(path.join(process.env.LLV_STATE_DIR!, "project-aliases.json"), JSON.stringify({
+  schemaVersion: 1, aliases: {}, displayNames: { viewer: "Fixture Viewer" },
+}));
 
 const { agentRegistry, setAgentRegistryForTests } = await import("@/lib/agent/registry");
 const route = await import("@/app/api/mcp/route");
@@ -166,7 +169,11 @@ function launchAgent(title: string): Agent {
   return { conversationId: receipt.conversationId, launchId: receipt.launchId, capability: registry.rotateSpawnCapabilityForReceipt(receipt.launchId) };
 }
 
-beforeAll(() => {
+beforeAll(async () => {
+  const { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } = await import("@/lib/orchestrator/seats");
+  const at = "2026-10-01T00:00:00.000Z";
+  beginOrchestratorSeatIntent({ project: "viewer", mandate: "Fixture board", clientRequestId: "http-fixture-seat", mode: "existing", now: at });
+  completeOrchestratorSeatIntent({ project: "viewer", clientRequestId: "http-fixture-seat", conversationId: "conversation_http_fixture_seat", path: null, preparedAuthCredentialBaseline: null, now: at });
   listener = serveViewer(0);
   port = listener.port!;
   origin = `http://127.0.0.1:${port}`;
@@ -207,6 +214,31 @@ function agentClient(agent: Agent): Promise<Client> {
 function payloadOf(result: Awaited<ReturnType<Client["callTool"]>>): Record<string, unknown> {
   return (result.structuredContent ?? {}) as Record<string, unknown>;
 }
+
+test("task HTTP execution preserves protocol validation, exact text, caller receipts and replay", async () => {
+  const client = await agentClient(alice);
+  const details = "First line\nA tab\tand a backslash \\ with Unicode λ";
+  const args = { project: "Fixture Viewer", text: "Task HTTP executor fixture", details, board: "hidden", clientRequestId: "http-task-protocol" };
+  try {
+    const invalid = payloadOf(await client.callTool({ name: "create_task", arguments: { ...args, steps: "invalid" } }));
+    expect(invalid).toMatchObject({ ok: false, code: "TASK_INVALID_FIELD" });
+    const created = payloadOf(await client.callTool({ name: "create_task", arguments: { ...args, full: true } }));
+    expect(created).toMatchObject({ ok: true, task: { text: args.text, details } });
+    expect(payloadOf(await client.callTool({ name: "create_task", arguments: { ...args, full: true } })))
+      .toMatchObject({ ok: true, replayed: true, taskId: created.taskId, revision: created.revision });
+    const other = await agentClient(bob);
+    try {
+      expect(payloadOf(await other.callTool({ name: "create_task", arguments: { ...args, full: true } })))
+        .toMatchObject({ ok: true, replayed: true, taskId: created.taskId, revision: created.revision,
+          task: { statusBy: (created.task as { statusBy: unknown }).statusBy } });
+      expect(payloadOf(await other.callTool({ name: "update_task", arguments: {
+        taskId: created.taskId, note: "Second caller note", clientRequestId: "http-task-note", full: true,
+      } }))).toMatchObject({ ok: true, task: { note: { author: { conversationId: bob.conversationId } } } });
+    } finally { await other.close(); }
+    expect(payloadOf(await client.callTool({ name: "get_task", arguments: { taskId: created.taskId, full: true } })))
+      .toMatchObject({ ok: true, task: { text: args.text, details } });
+  } finally { await client.close(); }
+});
 
 function send(client: Client, clientRequestId: string, to: Agent = bob) {
   return client.callTool({ name: "send_message", arguments: { clientRequestId, conversationId: to.conversationId, text: "hello over http" } });

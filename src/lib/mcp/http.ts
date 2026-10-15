@@ -10,6 +10,7 @@ import {
   createViewerMcpServer,
   MCP_HTTP_CLIENT_ID,
   MCP_TOOL_NAMES,
+  taskExecutorFailure,
   type McpToolName,
   type McpToolService,
 } from "./server";
@@ -222,12 +223,25 @@ export async function handleMcpHttpRequest(request: NextRequest): Promise<Respon
     ? (messages[0].params as { name?: unknown } | undefined)?.name : undefined;
   const tools = typeof requested === "string" && (MCP_TOOL_NAMES as readonly string[]).includes(requested)
     ? [requested as McpToolName] : undefined;
-  const server = createViewerMcpServer(service, tools);
-  const transport = new WebStandardStreamableHTTPServerTransport({
-    sessionIdGenerator: undefined,
-    enableJsonResponse: true,
-  });
+  let server: ReturnType<typeof createViewerMcpServer> | undefined;
   try {
+    const { TASK_EXECUTOR_TOOLS, viewerTaskExecutor } = await import("./taskExecutor");
+    if (!testDependencies && typeof requested === "string" && TASK_EXECUTOR_TOOLS.has(requested)) {
+      try {
+        return await viewerTaskExecutor().callHttpTool(requested, body, request,
+          nativePeer ? { nativePeer } : unidentified ? {} : { capability }, {
+            signal: registered.get(inflightKey(capability, connectionId, messages[0]?.id))?.signal ?? request.signal,
+          });
+      } catch (error) {
+        const args = (messages[0]?.params as { arguments?: unknown } | undefined)?.arguments;
+        const result = taskExecutorFailure(requested, args && typeof args === "object" && !Array.isArray(args) ? args as Record<string, unknown> : {}, error);
+        return Response.json({ jsonrpc: "2.0", id: messages[0]?.id, result: {
+          content: [{ type: "text", text: JSON.stringify(result) }], structuredContent: result, isError: true,
+        } });
+      }
+    }
+    server = createViewerMcpServer(service, tools);
+    const transport = new WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
     await server.connect(transport);
     const response = await transport.handleRequest(request, {
       parsedBody: body,
@@ -249,6 +263,6 @@ export async function handleMcpHttpRequest(request: NextRequest): Promise<Respon
     }
     /* JSON-response mode answers only once every response is ready, so the
        request is complete here and nothing is left to stream. */
-    await server.close().catch(() => undefined);
+    await server?.close().catch(() => undefined);
   }
 }

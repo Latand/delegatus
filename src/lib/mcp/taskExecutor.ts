@@ -11,9 +11,28 @@ export const TASK_EXECUTOR_TOOLS = new Set(["list_tasks", "get_task", "create_ta
 const MAX_PENDING = 64;
 const MAX_INPUT_BYTES = 4 * 1024 * 1024;
 export const TASK_EXECUTOR_FRAME_BYTES = 32 * 1024 * 1024;
-type ExecutorResult = McpToolResult | { conversationId: string | null };
+// The HTTP envelope contains both structuredContent and its escaped text copy.
+export const TASK_EXECUTOR_HTTP_FRAME_BYTES = 4 * TASK_EXECUTOR_FRAME_BYTES;
+export type ExecutorHttpResponse = { status: number; headers: [string, string][]; body: string };
+type ExecutorResult = McpToolResult | { conversationId: string | null } | { http: ExecutorHttpResponse };
 type Pending = { bytes: number; finish: (error?: Error, result?: ExecutorResult) => void; dispose: () => void };
 export type TaskExecutorRequest = { id: number; name: string; args: McpToolArgs; caller: McpHttpCaller; deadlineAt: number; nativeWork?: McpToolCallContext["nativeWork"] };
+
+/** Encode at most 16K UTF-16 units per pull, preserving surrogate pairs.
+ * HTTP backpressure bounds queued bytes; cancellation releases the wire body. */
+export function taskExecutorHttpResponse({ status, headers, body }: ExecutorHttpResponse): Response {
+  const encoder = new TextEncoder();
+  let offset = 0;
+  return new Response(new ReadableStream<Uint8Array>({
+    pull(controller) {
+      let end = Math.min(body.length, offset + 16_384);
+      if (end < body.length && body.charCodeAt(end - 1) >= 0xd800 && body.charCodeAt(end - 1) <= 0xdbff) end--;
+      controller.enqueue(encoder.encode(body.slice(offset, end))); offset = end;
+      if (offset === body.length) { body = ""; controller.close(); }
+    },
+    cancel() { body = ""; },
+  }), { status, headers });
+}
 
 export function taskExecutorLaunch(cwd = process.cwd()) {
   const source = path.join(cwd, "src/lib/mcpTask.worker.ts");
@@ -50,6 +69,17 @@ export class McpTaskExecutor {
     const caller = currentMcpHttpCaller();
     if (!caller || !TASK_EXECUTOR_TOOLS.has(name)) throw new Error("task executor requires an authenticated Viewer call");
     return await this.request(name, args, caller, context) as McpToolResult;
+  }
+
+  async callHttpTool(toolName: string, body: unknown, request: Request, caller: McpHttpCaller, context: McpToolCallContext): Promise<Response> {
+    if (!TASK_EXECUTOR_TOOLS.has(toolName)) throw new Error("unsupported task HTTP tool");
+    const result = await this.request("httpTaskCall", {
+      toolName, body, url: request.url,
+      headers: [...request.headers].filter(([name]) => ["accept", "content-type", "mcp-protocol-version", "mcp-session-id"].includes(name)),
+    }, caller, context);
+    if (!("http" in result) || !result.http || typeof result.http !== "object") throw new Error("invalid task executor HTTP reply");
+    const response = result.http as ExecutorHttpResponse;
+    return taskExecutorHttpResponse(response);
   }
 
   private request(name: string, args: McpToolArgs, caller: McpHttpCaller, context: McpToolCallContext): Promise<ExecutorResult> {
@@ -113,14 +143,16 @@ export class McpTaskExecutor {
       while ((end = buffer.indexOf("\n")) >= 0) {
         const line = buffer.slice(0, end); buffer = buffer.slice(end + 1);
         try {
-          if (Buffer.byteLength(line) + 1 > TASK_EXECUTOR_FRAME_BYTES) throw new Error("task executor frame exceeds its bound");
-          const reply = JSON.parse(line) as { id: number; result?: ExecutorResult; error?: string };
+          const separator = line.indexOf("\t");
+          if (Buffer.byteLength(line) + 1 > (separator < 0 ? TASK_EXECUTOR_FRAME_BYTES : TASK_EXECUTOR_HTTP_FRAME_BYTES)) throw new Error("task executor frame exceeds its bound");
+          const reply = JSON.parse(separator < 0 ? line : line.slice(0, separator)) as { id: number; result?: ExecutorResult; error?: string; http?: Omit<ExecutorHttpResponse, "body"> };
+          if (separator >= 0 && reply.http) reply.result = { http: { ...reply.http, body: line.slice(separator + 1) } };
           const job = this.pending.get(reply.id);
           if (!job || (!reply.result && !reply.error)) throw new Error("invalid task executor reply");
           job.finish(reply.error ? new Error(reply.error) : undefined, reply.result); job.dispose();
         } catch { this.retire(child); return; }
       }
-      if (Buffer.byteLength(buffer) > TASK_EXECUTOR_FRAME_BYTES) { this.retire(child); return; }
+      if (Buffer.byteLength(buffer) > TASK_EXECUTOR_HTTP_FRAME_BYTES) { this.retire(child); return; }
       if (!this.pending.size) {
         this.idle = setTimeout(() => this.retire(child), this.runtime.idleMs ?? 60_000);
         this.idle.unref();

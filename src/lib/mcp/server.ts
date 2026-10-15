@@ -4714,10 +4714,7 @@ export async function createProductionViewerMcpService(hostHealthProbe = false, 
       if (TASK_EXECUTOR_TOOLS.has(name) && currentMcpHttpCaller()) {
         try { return await viewerTaskExecutor().callTool(name, args, context); }
         catch (error) {
-          const mutation = isMutatingMcpTool(name as McpToolName);
-          return failure(name, clientRequestId(args), mutation ? "outcome_unknown" : "tool_failed",
-            error instanceof Error ? error.message : "task executor unavailable", !mutation, false,
-            mutation ? { outcome: "unknown", nextAction: "original-key-lookup" } : {});
+          return taskExecutorFailure(name, args, error);
         }
       }
       inline ??= createProductionViewerMcpService(hostHealthProbe, false, true);
@@ -4739,6 +4736,13 @@ export async function createProductionViewerMcpService(hostHealthProbe = false, 
     viewerMcpToolPolicy(undefined, hostHealthProbe),
     { timings: productionMcpToolTimings, recovery: viewerMcpRecoverableTools() },
   ));
+}
+
+export function taskExecutorFailure(name: string, args: McpToolArgs, error: unknown): McpToolResult {
+  const mutation = isMutatingMcpTool(name as McpToolName);
+  return failure(name, clientRequestId(args), mutation ? "outcome_unknown" : "tool_failed",
+    error instanceof Error ? error.message : "task executor unavailable", !mutation, false,
+    mutation ? { outcome: "unknown", nextAction: "original-key-lookup" } : {});
 }
 
 /** Start one request per timer turn so a burst of synchronous store reads

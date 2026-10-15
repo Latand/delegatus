@@ -7,7 +7,7 @@ import { captureProcessIdentity, processIdentityStatus, type ProcessIdentity } f
 import { stopFixtureIdentity } from "@/lib/testing/fixtureProcess";
 import { ownFixtureChild, reapFixtureChildren } from "./ownedFixtureChildren";
 import { runAsMcpHttpCaller } from "./callerContext";
-import { McpTaskExecutor } from "./taskExecutor";
+import { McpTaskExecutor, taskExecutorHttpResponse } from "./taskExecutor";
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-task-executor-"));
 for (const name of ["HOME", "XDG_CONFIG_HOME", "TMPDIR", "LLV_STATE_DIR", "LLV_CODEX_HOME", "LLV_CLAUDE_HOME"]) {
@@ -36,6 +36,25 @@ afterAll(async () => {
   fs.rmSync(root, { recursive: true, force: true });
 });
 
+test("HTTP reply streaming preserves astral text across chunk boundaries and accepts cancellation", async () => {
+  const body = "x".repeat(16_383) + "🙂" + "λ".repeat(100_000);
+  const response = taskExecutorHttpResponse({ status: 200, headers: [["content-type", "application/json"]], body });
+  const reader = response.body!.getReader();
+  const decoder = new TextDecoder();
+  let decoded = "";
+  for (;;) {
+    const chunk = await reader.read();
+    if (chunk.done) break;
+    expect(chunk.value.length).toBeLessThanOrEqual(65_536);
+    decoded += decoder.decode(chunk.value, { stream: true });
+  }
+  decoded += decoder.decode();
+  expect(decoded).toBe(body);
+  const cancelled = taskExecutorHttpResponse({ status: 200, headers: [], body }).body!.getReader();
+  await cancelled.read(); await cancelled.cancel();
+  expect((await cancelled.read()).done).toBe(true);
+});
+
 test("capability lookup observes external rotation without retaining an authorization cache", async () => {
   const executor = create();
   const token = capabilities[2]!;
@@ -48,6 +67,25 @@ test("capability lookup observes external rotation without retaining an authoriz
   const successor = registry.rotateSpawnCapabilityForReceipt(receipt.launchId);
   expect(await executor.identifyCapability(token)).toBeNull();
   expect(await executor.identifyCapability(successor)).toBe(conversationId);
+});
+
+test("isolated HTTP dispatch preserves the SDK envelope and direct-service receipt replay", async () => {
+  const executor = create();
+  const args = { project: "fixture", text: "HTTP pipe task", details: "Exact text\n\t\\ 🙂", board: "hidden", clientRequestId: "executor-http-wire", full: true };
+  const request = new Request("http://127.0.0.1/api/mcp", { method: "POST", headers: {
+    "content-type": "application/json", accept: "application/json, text/event-stream",
+  } });
+  const response = await executor.callHttpTool("create_task", {
+    jsonrpc: "2.0", id: 7, method: "tools/call", params: { name: "create_task", arguments: args },
+  }, request, { capability }, {});
+  expect(response.status).toBe(200);
+  const wire = await response.json() as { id: number; result: { content: Array<{ text: string }>; structuredContent: Record<string, unknown> } };
+  expect(wire.id).toBe(7);
+  expect(JSON.parse(wire.result.content[0]!.text)).toEqual(wire.result.structuredContent);
+  expect(wire.result.structuredContent).toMatchObject({ ok: true, task: { text: args.text, details: args.details } });
+  expect(await call(executor, "create_task", args)).toMatchObject({
+    ok: true, replayed: true, taskId: wire.result.structuredContent.taskId, revision: wire.result.structuredContent.revision,
+  });
 });
 
 test("isolated task service preserves receipts, identity, revisions and same-key replay across executors", async () => {

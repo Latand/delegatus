@@ -618,8 +618,12 @@ authorization cache. The full tool policy still rechecks caller authority before
 receipt replay and mutation. Protocol servers construct the SDK's AJV validator
 only when elicitation needs it; ordinary tool calls retain their Zod validation.
 
-The shared executor admits 64 calls and 4 MiB of pending input. Replies have a
-32 MiB frame bound and obey pipe backpressure. A cancelled reply retains its
+The shared executor admits 64 calls and 4 MiB of pending input. Direct replies
+have a 32 MiB frame bound; HTTP envelopes have a 128 MiB bound to accommodate
+the SDK's structured answer and escaped text copy. Both obey pipe backpressure.
+The Viewer parses the small HTTP frame header, forwards the serialized body
+and encodes at most 16K UTF-16 units per network pull, keeping surrogate pairs
+intact. A cancelled reply retains its
 slot until settlement; an executor that has not settled cancellation after one
 second is retired before a replacement starts. Sixty seconds idle retires it.
 The existing helper lease ends its process group when its Viewer dies. The
@@ -632,6 +636,21 @@ batches and other protocol methods keep the full catalog. Fixed transport
 schemas are built once. The compiled executor uses the App Router server layer
 because the shared binding graph imports App Router APIs. Production build and
 source/compiled executor tests exercise this entry.
+
+The first complete executor pair (2026-10-15, candidate starting 12:29:31Z,
+main starting 12:35:02Z) still regressed the Viewer loop: p99/max were
+0.642/3.078 ms on main and 0.808/3.343 ms on candidate `57cd5ac06431`.
+Both completed 300/300 measured calls with no failures or pending work and
+no teardown survivors. All 330 responses and all six columns of the final
+rows matched after normalization. The immutable aggregate record is
+[`mcp-state-writers-executor-diagnostic.json`](../../evidence/mcp-state-writers-executor-diagnostic.json).
+It records a failed control, before the final protocol relocation.
+
+Task HTTP protocol dispatch now also runs in the executor, using the same SDK,
+schemas, policy and service. The Viewer retains authentication, cancellation
+namespaces and bounded admission, then forwards the SDK's serialized answer.
+Executor refusal preserves the original unknown-outcome envelope and request
+key. Discovery, unknown methods and other tools retain their existing path.
 
 `scripts/mcp-state-writer-matrix.py` exports the audit, matched main and candidate
 revisions, freezes Bun, Node, dependencies, observer and seed, and runs the

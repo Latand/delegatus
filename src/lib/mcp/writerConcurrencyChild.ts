@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import path from "node:path";
 import { waitForFixtureFile } from "./fixtureBarrier";
 
 import { NextRequest } from "next/server";
@@ -16,6 +17,12 @@ if (process.env.LLV_TASK_EXECUTOR_REPORT_PID) {
 }
 
 if (process.env.LLV_TASK_EXECUTOR_OWNER) {
+  if (process.env.LLV_MCP_TASK_WORKER_BUNDLE) {
+    const { McpTaskExecutor } = await import("./taskExecutor");
+    (globalThis as Record<symbol, unknown>)[Symbol.for("llv.mcp.taskExecutor")] = new McpTaskExecutor({
+      launch: { executable: process.execPath, workerPath: path.resolve(process.env.LLV_MCP_TASK_WORKER_BUNDLE) },
+    });
+  }
   const { createProductionViewerMcpService } = await import("./server");
   const { runAsMcpHttpCaller } = await import("./callerContext");
   const service = await createProductionViewerMcpService();
