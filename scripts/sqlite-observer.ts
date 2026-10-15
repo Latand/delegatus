@@ -10,7 +10,12 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
 const extension = process.env.MCP_SQL_OBSERVER;
 const events = process.env.MCP_SQL_EVENTS;
-if (!extension || !events || !process.env.LLV_STATE_DIR?.startsWith("/tmp/")) {
+const scratch = process.env.MCP_BENCH_SCRATCH_ROOT ?? "/tmp";
+const insideScratch = (filename?: string) => {
+  const relative = filename && path.relative(scratch, filename);
+  return path.isAbsolute(scratch) && !!relative && !relative.startsWith("..") && !path.isAbsolute(relative);
+};
+if (!extension || !insideScratch(events) || !insideScratch(process.env.LLV_STATE_DIR)) {
   throw new Error("SQLite observation requires an explicit isolated fixture root and output");
 }
 const log = fs.openSync(`${events}.js`, "a");
