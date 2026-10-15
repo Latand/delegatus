@@ -33,13 +33,13 @@ function fixture() {
   return f;
 }
 
-test.each(["conversation", "orchestrator", "review implementer", "reviewer"])("a fresh credit crossing stops an active %s and preserves recovery custody", async kind => {
+test.each(["conversation", "orchestrator", "review implementer", "reviewer", "recovered source"])("a fresh credit crossing stops an active %s and preserves recovery custody", async kind => {
   const f = fixture();
   let active = true, releases = 0, creates = 0, spare = false;
   const health = f.host.health.bind(f.host);
   f.host.health = async () => ({ ...await health(), status: active ? "active" : "dead", activeTurnRef: active ? "turn-a" : null });
   f.host.release = async () => { active = false; releases++; };
-  if (kind !== "conversation") f.registry.rememberMembership(f.conversation.id, {
+  if (kind !== "conversation" && kind !== "recovered source") f.registry.rememberMembership(f.conversation.id, {
     kind: kind === "orchestrator" ? "orchestrator" : "flow", containerId: "fixture-owner", role: kind === "orchestrator" ? "orchestrator" : kind === "reviewer" ? "reviewer" : "implementer", slot: "review:1",
     stageId: null, stageOrder: null, round: 1, parentConversationId: null });
   const observe = (usedPercent: number) => f.registry.recordQuotaObservation({ engine: "codex", accountId: "account-a",
@@ -63,7 +63,7 @@ test.each(["conversation", "orchestrator", "review implementer", "reviewer"])("a
   const selection = spyOn(accountManager, "resolveProjectSpawn").mockImplementation((engine, request) => {
     const selected = selectProjectAccount({ ...request, engine, accounts: [{ id: "account-a", authPresent: true }, { id: "account-b", authPresent: true }],
       observations: f.registry.quotaObservations("codex"), bindings: [], now: Date.now() });
-    return spare && selected.kind === "available" ? { kind: "available", account: { engine, accountId: selected.accountId!, kind: "managed",
+    return selected.kind === "available" && (spare || selected.accountId === "account-a") ? { kind: "available", account: { engine, accountId: selected.accountId!, kind: "managed",
       home: f.root, transcriptRoot: f.root, env: { NODE_ENV: "test" } } } : { kind: "exhausted", resetsAt: null, allowedAccountIds: ["account-a", "account-b"] };
   });
   try {
@@ -84,6 +84,16 @@ test.each(["conversation", "orchestrator", "review implementer", "reviewer"])("a
     expect(creates).toBe(0);
     expect(store.list()).toMatchObject([{ reason: "account-guard", state: kind === "reviewer" ? "discharged" : "owed", turnRef: "turn-a" }]);
     expect(fs.existsSync(f.conversation.generations[0]!.path)).toBe(true);
+    if (kind === "recovered source") {
+      observe(1);
+      await kickStructuredDeliveryQueue();
+      const pending = f.registry.pendingDeliveries(f.conversation.id);
+      expect(pending).toHaveLength(1);
+      expect(pending[0]!.generationId).toBe(f.key.sessionId);
+      expect(store.list()[0]!.state).toBe("submitted");
+      expect(creates).toBe(0);
+      return;
+    }
     spare = true;
     await kickStructuredDeliveryQueue();
     if (kind === "reviewer") {

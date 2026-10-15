@@ -120,8 +120,12 @@ export async function enforceAccountCreditGuard(registry: AgentRegistry,
     if (entry && entry.status !== "dead" && entry.status !== "unhosted") continue;
     const project = owner?.pipeline.project ?? conversationProjectKey(conversation.projectOwnership, generation.launchProfile);
     const resolve = accountManager.resolveProjectSpawn.bind(accountManager);
-    const selection = resolve("codex", { project, model: generation.launchProfile.model, requireCapacity: true,
-      ...(moved ? { requestedId: generation.accountId } : { unavailableIds: generation.accountId ? [generation.accountId] : [] }) });
+    const sourceCanResume = !conversation.migration || ["committed", "rolled-back"].includes(conversation.migration.phase);
+    const recoveredSource = !moved && sourceCanResume && generation.accountId && !blockedAccounts.has(generation.accountId)
+      ? resolve("codex", { project, model: generation.launchProfile.model, requireCapacity: true, requestedId: generation.accountId }) : null;
+    const selection = recoveredSource?.kind === "available" ? recoveredSource
+      : resolve("codex", { project, model: generation.launchProfile.model, requireCapacity: true,
+        ...(moved ? { requestedId: generation.accountId } : { unavailableIds: generation.accountId ? [generation.accountId] : [] }) });
     if (selection.kind !== "available" || !selection.account.accountId) continue;
     const target = selection.account.accountId;
     const authorizeTarget = () => {
@@ -130,13 +134,13 @@ export async function enforceAccountCreditGuard(registry: AgentRegistry,
       if (selected.kind !== "available" || selected.account.accountId !== target) throw new Error("paid-credit recovery target is no longer admissible");
     };
     authorizeTarget();
-    if (!moved) {
+    if (!moved && target !== generation.accountId) {
       registry.requestConversationReseat(conversation.id, target, undefined, undefined, true);
       requestAccountMigrationTick();
       continue;
     }
     const current = registry.conversation(conversation.id);
-    if (current?.migration?.phase !== "committed" || current.generations.at(-1)?.accountId !== target) continue;
+    if (current?.generations.at(-1)?.accountId !== target || moved && current.migration?.phase !== "committed") continue;
     authorizeTarget();
     const held = registry.holdDelivery(conversation.id,
       "The paid-credit guard stopped your previous turn. Continue the same work from the preserved transcript and checkout; verify interrupted operations before repeating them.",
