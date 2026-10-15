@@ -1,5 +1,34 @@
 # Send click-to-paint audit — 2026-10-15
 
+Implementation continuation: the scheduling change specified below is now
+applied to both composer preparation sites. The hop table and its measurement
+limits are carried into
+[the send-latency design](../design/send-latency-and-message-states.md#isolated-click-to-paint-hops--2026-10-15).
+The audit narrative and sample rows below preserve the original research
+stage's scope; its “scratch only” and “builder still owns” statements describe
+that stage. The recorded before/after timings come from that experiment.
+
+Builder verification on 2026-10-15: all four held-prerequisite controls failed
+on the original composer because the manager read had not started. With the
+overlap, **68 tests passed** across these explicit paths, run separately through
+the assigned gate with isolated HOME, XDG_CONFIG_HOME, TMPDIR and LLV_STATE_DIR
+and a closed-loopback LLV_VIEWER_CONTROL_URL:
+
+| Test file | Passed |
+|---|---:|
+| `src/components/TmuxComposer.viewerPrelude.dom.test.tsx` | 12 |
+| `src/components/TmuxComposer.queueFirst.dom.test.tsx` | 2 |
+| `src/components/TmuxComposer.admissionRecovery.dom.test.tsx` | 15 |
+| `src/components/composerAdmissionDeadline.test.ts` | 2 |
+| `src/hooks/useBridgeReportRelay.dom.test.tsx` | 37 |
+
+The new cases exercise both prerequisite completion orders, pending bridge
+acknowledgements, ordered sends, retained image bytes, manager timeout, pending
+seat identity and a sealed-envelope retry with the original key. The existing
+recovery cases cover lost answers, remounts and racing retries without another
+send. The bridge suite emitted React act warnings and passed. The local
+privacy gate with committed fingerprints passed; no production send was made.
+
 The largest removable serial dependency demonstrated here is **Codex's bridge drain → manager-identity lookup before POST**. With each prerequisite held for 500 ms, overlapping them reduced median click → request from **1,014.7 to 517.0 ms**, and click → canonical-feed frame from **1,131.9 to 653.0 ms**. The change was tested only in a scratch export. The production long tail remains unattributed to this dependency; existing production records begin after it.
 
 This audit contains **160 measured native sends**: 20 per engine, per prerequisite condition, before and after the experimental change. The installed Codex and Claude executables wrote their own transcripts. Credential-free loopback providers supplied their responses. No production send, external model request, restart, deploy, repository source edit, staging or commit was performed. The only worktree output is this report. The builder still owns implementation and publication.
