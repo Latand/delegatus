@@ -349,6 +349,39 @@ async function deputyDrainFence(
   return undefined;
 }
 
+type DeputyDrainDispatch = { dispatched: RuntimeOperationResult } | { blocked: HeldStructuredMessageOutcome };
+
+async function deputyDrainDispatchFence(
+  request: HeldStructuredMessageRequest,
+  operationId: string,
+  registry: AgentRegistry,
+  dispatch: () => Promise<RuntimeOperationResult>,
+): Promise<DeputyDrainDispatch> {
+  if (!/^deputy_ask_[a-f0-9]{40}$/.test(request.clientMessageId)) {
+    return { dispatched: await dispatch() };
+  }
+  let commandStarted = false;
+  try {
+    return await withViewerOperation("runtime.delivery.deputy-authority", () =>
+      withAccountMutationLockAsync(async () => {
+        if (!deputyDrainAuthorityCurrent(request, operationId, registry)) {
+          return { blocked: {
+            outcome: "rejected",
+            cause: "the parallel question's seat, attempt, or delivery reservation is no longer current",
+          } };
+        }
+        // Keep the same lock seat rotation uses until the runtime host has
+        // durably admitted this command. A check whose lock is released before
+        // this await leaves the question authorized by a stale snapshot.
+        commandStarted = true;
+        return { dispatched: await dispatch() };
+      }, { caller: "deputy held delivery dispatch" }));
+  } catch (error) {
+    if (commandStarted) throw error;
+    return { blocked: heldForRetry("the parallel question's authority is being updated") };
+  }
+}
+
 /**
  * Marks a refusal given before anything was reserved or dispatched (#2020).
  *
@@ -1197,11 +1230,9 @@ async function deliverHeldAttempt(
       policy: "interrupt-active" as const,
     };
     progress.wait("dispatching");
-    const beforeDispatch = await authorityFence();
-    if (beforeDispatch !== undefined) return beforeDispatch;
     if (!ownerFirstPromptAllowed(registry, operationId))
       return await refuseOwnerPrompt() ?? heldForRetry("owner first prompt authorization changed");
-    const result = await client.command({
+    const fenced = await deputyDrainDispatchFence(request, operationId, registry, () => client.command({
       kind: command.kind,
       operationId: command.operationId,
       conversationId: request.runtimeConversationId ?? request.conversationId,
@@ -1218,7 +1249,9 @@ async function deliverHeldAttempt(
       /* #1117: the authorship persisted on the held record survives the
          migration hold — the drained message re-attributes exactly as admitted. */
       ...(command.origin ? { origin: command.origin } : {}),
-    });
+    }));
+    if ("blocked" in fenced) return fenced.blocked;
+    const result = fenced.dispatched;
     if (result.receipt.status === "queued" || result.receipt.status === "pending") progress.admitted();
     try {
       await (dependencies.kick ?? kickStructuredDeliveryQueue)();
