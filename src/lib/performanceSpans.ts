@@ -10,7 +10,7 @@ export const performanceSites = [
   "runtime.collect", "runtime.stringify", "runtime.parse", "runtime.handler", "runtime.commit",
   "rpc.dispatch", "rpc.connect", "rpc.send", "rpc.receive", "rpc.first-byte", "rpc.frame", "rpc.finish", "rpc.deadline",
   "files.scan", "files.key", "files.queue", "files.worker", "files.clone", "files.delta", "files.encode",
-  "controller.admission", "controller.reconcile", "controller.lane", "state.checkpoint", "state.lease-commit", "state.lease-release",
+  "controller.admission", "controller.reconcile", "controller.lane", "controller.ownership", "controller.task-note", "controller.job-wait", "state.checkpoint", "state.lease-commit", "state.lease-release",
   "controller.port-start", "controller.git-wait", "controller.runtime-wait", "controller.store-wait", "controller.other-wait",
   "http.dispatch", "http.response-ready",
 ] as const;

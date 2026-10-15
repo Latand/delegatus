@@ -12,6 +12,7 @@ import { taskMotion } from "@/lib/tasks/motion";
 import type { FileEntry } from "@/lib/types";
 
 import type { StripSurface } from "../agentCapabilities";
+import { diffTextLines } from "../feed/diff";
 import { attentionId } from "../attention";
 import type { IncumbentRotationCause, IncumbentTelegramAction, OrchestratorIncumbent } from "./incumbent";
 
@@ -398,24 +399,71 @@ export function rotateMandateBase(seat: Pick<OrchestratorSeat, "mandate" | "prom
   return orchestratorMandateStale(seat.promptVersion) ? ORCHESTRATOR_SYSTEM_PROMPT : seat.mandate;
 }
 
-/** What the mandate text in a draft IS (#1452): the built-in default, the
-    incumbent's own text — on the current version, on an older one, or
-    bespoke — or the operator's edit. One rule for the dock's summary line and
-    the phone's caption, so both name the text rather than a version it isn't. */
-export function mandateSummaryOf(
-  mandate: string,
-  incumbent: Pick<OrchestratorSeat, "mandate" | "promptVersion"> | null,
-): { key: MessageKey; params: Record<string, number> } {
-  const current = ORCHESTRATOR_PROMPT_VERSION;
-  if (mandate === ORCHESTRATOR_SYSTEM_PROMPT) return { key: "orchPanel.mandateSummary", params: { version: current } };
-  if (incumbent && mandate === incumbent.mandate) {
-    const version = incumbent.promptVersion;
-    if (version === null) return { key: "orchPanel.mandateSummaryIncumbentCustom", params: {} };
-    return orchestratorMandateStale(version)
-      ? { key: "orchPanel.mandateSummaryIncumbentStale", params: { version, current } }
-      : { key: "orchPanel.mandateSummaryIncumbent", params: { version, current } };
-  }
+/** What the mandate text in the create draft IS: the built-in default or the
+    operator's own text. One rule for the dock's summary line and the phone's
+    caption. The rotate drafts say it with `rotateMandateView` instead. */
+export function mandateSummaryOf(mandate: string): { key: MessageKey; params: Record<string, number> } {
+  if (mandate === ORCHESTRATOR_SYSTEM_PROMPT) return { key: "orchPanel.mandateSummary", params: { version: ORCHESTRATOR_PROMPT_VERSION } };
   return { key: "orchPanel.mandateSummaryCustom", params: {} };
+}
+
+/** One end of the rotate dialog's mandate line: a prompt version, the seat's
+    own rules (no version), or the operator's edit. */
+export type MandateEnd = { kind: "version"; version: number } | { kind: "own" } | { kind: "edit" };
+
+/** What the rotate dialog's mandate section shows (#2942): the successor's text
+    against the incumbent's stored mandate, one line, and the button above it.
+    Both rotate drafts read this, so the dock and the phone cannot disagree.
+
+    - `changed`: the posted text differs from `seat.mandate`; the line names both
+      ends and the changed-line counts of the same diff the body draws.
+    - `unchanged`: the posted text IS `seat.mandate`; `label` names what it is.
+    - `slot`: the incumbent's text on offer over a stale default (`keep`), or the
+      way back to that default once it was chosen (`restore-default`). */
+export type RotateMandateView =
+  | { kind: "changed"; from: MandateEnd; to: MandateEnd; added: number; removed: number; slot: "keep" | null; staleVersion: number | null }
+  | { kind: "unchanged"; what: MandateEnd | { kind: "stale"; version: number; current: number }; slot: "restore-default" | null; staleVersion: number | null };
+
+export function rotateMandateView(seat: Pick<OrchestratorSeat, "mandate" | "promptVersion">, mandate: string): RotateMandateView {
+  const current = ORCHESTRATOR_PROMPT_VERSION;
+  const version = seat.promptVersion;
+  const staleVersion = version !== null && orchestratorMandateStale(version) ? version : null;
+  if (mandate === seat.mandate) {
+    if (staleVersion !== null) {
+      return { kind: "unchanged", what: { kind: "stale", version: staleVersion, current }, slot: "restore-default", staleVersion };
+    }
+    return { kind: "unchanged", what: version === null ? { kind: "own" } : { kind: "version", version }, slot: null, staleVersion };
+  }
+  let added = 0;
+  let removed = 0;
+  for (const line of diffTextLines(seat.mandate, mandate)) {
+    if (line.t === "+") added += 1;
+    else if (line.t === "-") removed += 1;
+  }
+  return {
+    kind: "changed",
+    from: version === null ? { kind: "own" } : { kind: "version", version },
+    to: mandate === ORCHESTRATOR_SYSTEM_PROMPT ? { kind: "version", version: current } : { kind: "edit" },
+    added,
+    removed,
+    slot: staleVersion !== null ? "keep" : null,
+    staleVersion,
+  };
+}
+
+/** The mandate line, in the interface language. */
+export function rotateMandateLine(t: TFunction, view: RotateMandateView): string {
+  const end = (value: MandateEnd) =>
+    value.kind === "version" ? t("orchPanel.mandateDiffVersion", { version: value.version })
+      : value.kind === "own" ? t("orchPanel.mandateDiffOwn")
+        : t("orchPanel.mandateDiffEdited");
+  if (view.kind === "changed") {
+    return t("orchPanel.mandateDiffSummary", { from: end(view.from), to: end(view.to), added: view.added, removed: view.removed });
+  }
+  if (view.what.kind === "stale") {
+    return t("orchPanel.mandateUnchangedStale", { version: view.what.version, current: view.what.current });
+  }
+  return t("orchPanel.mandateUnchanged", { label: end(view.what) });
 }
 
 /**

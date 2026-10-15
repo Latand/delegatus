@@ -165,7 +165,11 @@ export class CpuAdmissionQueue {
   /** Only the release owning this pipeline namespace reconciles stage tickets. */
   reconcile(prefix: string, active: ReadonlySet<string>, eligible = active): void {
     this.db.transaction(() => {
-      for (const row of this.db.query<Ticket, []>("SELECT * FROM tickets WHERE owner IS NULL").all()) {
+      const rows = prefix.endsWith(":")
+        ? this.db.query<Ticket, [string, string]>("SELECT * FROM tickets WHERE owner IS NULL AND key >= ? AND key < ?")
+          .all(prefix, `${prefix.slice(0, -1)};`)
+        : this.db.query<Ticket, []>("SELECT * FROM tickets WHERE owner IS NULL").all();
+      for (const row of rows) {
         if (!row.key.startsWith(prefix)) continue;
         if (!active.has(row.key)) this.cancel(row.key);
         else {

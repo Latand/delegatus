@@ -11,7 +11,9 @@ import type { Database as BunDatabase, SQLQueryBindings } from "bun:sqlite";
 import { procBackend } from "@/lib/proc";
 
 import { rememberRecordBytes } from "./registryRecords";
+import { installPipelineControllerSchedule, selectPipelineTickWork, type PipelineTickWork } from "./pipelineControllerSchedule";
 import { installPipelineControllerIndex, type PipelineControllerSelection } from "./pipelineControllerIndex";
+import { installPipelineControllerReferences, pipelineControllerReferencesReady, type PipelineAttemptReference } from "./pipelineControllerReferences";
 import { installPipelineEvidenceIndex, pipelineEvidenceIndexReady } from "./pipelineEvidenceIndex";
 import { databaseFileIdentity, openCurrentDatabase } from "./currentDatabase";
 import { collectionReadCache, rememberCollectionReadCache, type ReadCacheSlot } from "./collectionReadCache";
@@ -382,7 +384,8 @@ function openRawDatabase(filename: string): Database {
           "state_rows_collection_order", "state_rows_controller_active", "state_changes_collection_revision",
           "pipeline_delivery_owner", "pipeline_delivery_history", "pipeline_creation_request", "pipeline_delivery_unclaimed",
           "pipeline_controller_work", "pipeline_controller_work_order", "pipeline_controller_work_insert",
-          "pipeline_controller_work_update", "pipeline_controller_work_delete"].every(name => names.has(name))
+          "pipeline_controller_work_update", "pipeline_controller_work_delete", "pipeline_tick_delete"].every(name => names.has(name))
+          && pipelineControllerReferencesReady(db, names)
           && pipelineEvidenceIndexReady(db)
           && db.query<{ journal_mode: string }, []>("PRAGMA journal_mode").get()?.journal_mode === "wal"
           && db.query<{ name: string }, []>("PRAGMA table_info(state_collections)").all().some(row => row.name === "change_floor")) return db;
@@ -461,6 +464,8 @@ function openRawDatabase(filename: string): Database {
           db.exec("ALTER TABLE state_collections ADD COLUMN change_floor INTEGER NOT NULL DEFAULT 0");
         }
         installPipelineControllerIndex(db, path.dirname(filename));
+        installPipelineControllerSchedule(db, path.dirname(filename));
+        installPipelineControllerReferences(db, path.dirname(filename));
         installPipelineEvidenceIndex(db, path.dirname(filename));
         db.exec("COMMIT");
         secureDatabaseFiles(filename);
@@ -1159,9 +1164,7 @@ export class SqliteStateCollection<T> {
     return this.publishCache(value, context);
   }
   private revisionCache: { signature: string; revision: number } | null = null;
-  private controllerCache = new Map<string, { revision: number; value: T | null }>();
-  private controllerAuthority: unknown;
-  private controllerIdentity: string | null = null;
+  private readonly controllerCacheIdentity = crypto.randomUUID();
 
   constructor(readonly filename: string, private readonly options: SqliteStateCollectionOptions<T>) {
     this.readDb = openDatabase(filename);
@@ -1233,12 +1236,109 @@ export class SqliteStateCollection<T> {
     ).get()!.last;
   }
 
+  pipelineControllerVersion(key: string): string {
+    const row = this.readDb.query<{ row_revision: number; generation: number | null }, [string]>(`
+      SELECT r.row_revision,w.generation FROM state_rows r LEFT JOIN pipeline_tick_work w ON w.row_key=r.row_key
+      WHERE r.collection='pipelines' AND r.row_key=?`).get(key);
+    return `${databaseFileIdentity(this.filename)}:${row?.row_revision ?? "missing"}:${row?.generation ?? "missing"}`;
+  }
+
+  pipelineControllerCandidate(key: string): T | null {
+    const row = this.readDb.query<{ row_revision: number }, [string, string]>(
+      "SELECT row_revision FROM state_rows WHERE collection=? AND row_key=?").get(this.options.collection, key);
+    return row ? this.controllerRow(key, row.row_revision) : null;
+  }
+
+  pipelineTickWork(now: number, excluded: readonly string[], limit = 4): PipelineTickWork[] {
+    return selectPipelineTickWork(this.readDb, now, excluded, limit);
+  }
+
+  pipelineAttemptWindow(key: string, after: number, limit: number): PipelineAttemptReference[] {
+    if (!Number.isInteger(limit) || limit < 1 || limit > 16) throw new Error("invalid controller attempt budget");
+    const tail = this.readDb.query<PipelineAttemptReference, [string, number, number]>(`SELECT * FROM pipeline_attempt_refs
+      WHERE row_key=? AND position>? ORDER BY position LIMIT ?`).all(key, after, limit);
+    if (tail.length < limit) tail.push(...this.readDb.query<PipelineAttemptReference, [string, number, number]>(`SELECT * FROM pipeline_attempt_refs
+      WHERE row_key=? AND position<=? ORDER BY position LIMIT ?`).all(key, after, limit-tail.length));
+    return tail;
+  }
+
+  pipelineOtherTerminalHosts(key: string, selected: readonly number[]): boolean {
+    return Boolean(this.readDb.query(`SELECT 1 FROM pipeline_attempt_refs WHERE row_key=? AND terminal=1 AND firstHost=1
+      AND position NOT IN (SELECT value FROM json_each(?)) LIMIT 1`).get(key,JSON.stringify(selected)));
+  }
+
+  pipelineCurrentReferences(key: string, stage: string): PipelineAttemptReference[] {
+    return this.readDb.query<PipelineAttemptReference, [string, string]>(`SELECT * FROM pipeline_attempt_refs
+      WHERE row_key=? AND stageId=? AND historical=0 ORDER BY position DESC LIMIT 1`).all(key,stage);
+  }
+
+  pipelineOwnerExists(identities: readonly [string, string][], live: boolean): boolean {
+    return identities.some(([kind, identity]) => Boolean(this.readDb.query(`SELECT 1 FROM pipeline_owner_refs
+      WHERE kind=? AND identity=? ${live ? "AND live=1" : ""} LIMIT 1`).get(kind,identity)));
+  }
+
+  pipelineTickReady(now: number, excluded: readonly string[]): boolean {
+    return Boolean(this.readDb.query(`SELECT 1 FROM pipeline_tick_work
+      WHERE (dirty=1 OR due_at<=?) AND row_key NOT IN (SELECT value FROM json_each(?)) LIMIT 1`)
+      .get(now, JSON.stringify(excluded)));
+  }
+
+  async acknowledgePipelineTick(work: PipelineTickWork, cursor: number, dueAt: number): Promise<void> {
+    await stateTransactionAsync(this.filename, "pipelines.controller-schedule", db => {
+      db.query("UPDATE pipeline_tick_work SET attempt_cursor=? WHERE row_key=?").run(cursor, work.row_key);
+      db.query("UPDATE pipeline_tick_work SET dirty=0,due_at=? WHERE row_key=? AND generation=?")
+        .run(dueAt, work.row_key, work.generation);
+      db.query(`DELETE FROM pipeline_tick_work WHERE row_key=? AND generation=? AND NOT EXISTS
+        (SELECT 1 FROM state_rows WHERE collection='pipelines' AND row_key=? AND controller_active=1)
+        AND NOT EXISTS (SELECT 1 FROM pipeline_controller_work WHERE row_key=?)`)
+        .run(work.row_key, work.generation, work.row_key, work.row_key);
+      db.query("UPDATE pipeline_tick_cursor SET row_order=?,row_key=? WHERE id=1").run(work.row_order, work.row_key);
+    });
+  }
+
+  /** Shared with selectors and detached reconciliation, keyed by the SQLite
+      row revision, file identity and decoder authority. Pipeline LRU: 64 rows;
+      other collections: 512 rows. Each slot retains at most 16 MiB. */
+  private controllerRow(key: string, revision: number, db = this.readDb, identity = databaseFileIdentity(this.filename), authority = this.options.decodeAuthority?.()): T | null {
+    const cacheKey = JSON.stringify([this.filename, this.options.collection, "controller-v1", this.options.readCacheKey ?? this.controllerCacheIdentity,
+      identity, authority]);
+    const slot = collectionReadCache<Map<string, { revision: number; value: T | null; bytes: number }>>(cacheKey);
+    const cache = slot.value ?? new Map<string, { revision: number; value: T | null; bytes: number }>();
+    let held = cache.get(key);
+    if (held?.revision !== revision) {
+      const row = db.query<{ value_json: string; row_revision: number }, [string, string]>(
+        "SELECT value_json,row_revision FROM state_rows WHERE collection=? AND row_key=?").get(this.options.collection, key);
+      if (!row || row.row_revision !== revision) throw new StateSnapshotChangedError();
+      const value = withViewerOperation("pipelines.controller-decode", () => this.decodeRow(row.value_json));
+      const freeze = (item: unknown): void => {
+        if (!item || typeof item !== "object" || Object.isFrozen(item)) return;
+        Object.freeze(item);
+        for (const child of Object.values(item)) freeze(child);
+      };
+      performanceSpans.sync("pipeline.shared", () => freeze(value));
+      held = { revision, value, bytes: row.value_json.length * 2 };
+    }
+    cache.delete(key); cache.set(key, held);
+    let bytes = 0;
+    for (const row of cache.values()) bytes += row.bytes;
+    const entries = this.options.collection === "pipelines" ? 64 : 512;
+    while (cache.size > entries || bytes > 16 * 1024 * 1024) {
+      const oldest = cache.keys().next().value!;
+      bytes -= cache.get(oldest)!.bytes; cache.delete(oldest);
+    }
+    rememberCollectionReadCache(slot, cache, bytes);
+    return held.value;
+  }
+
   /** A candidate projection reads only indexed work, preserving collection
       order. A private read transaction pins flags and payloads together while
-      peer writers commit; decoding and per-caller copies yield between batches.
+      peer writers commit; decoding yields between batches. Observation-only
+      hosts/running selectors share immutable candidates; other selectors keep
+      detached copies, limited to the controller's attempt window when scoped.
       Actuation still belongs to the caller's existing admission fences. */
-  async pipelineControllerSelection(kind: PipelineControllerSelection, throughOrder = Number.MAX_SAFE_INTEGER): Promise<T[]> {
+  async pipelineControllerSelection(kind: PipelineControllerSelection, throughOrder = Number.MAX_SAFE_INTEGER, keys?: readonly string[]): Promise<T[]> {
     if (this.options.collection !== "pipelines") throw new Error("pipeline selection requires the pipeline collection");
+    const identity = databaseFileIdentity(this.filename), authority = this.options.decodeAuthority?.();
     const db = connectReadonlyDatabase(this.filename);
     try {
       db.exec("BEGIN");
@@ -1246,21 +1346,25 @@ export class SqliteStateCollection<T> {
       let order = -1, key = "";
       for (;;) {
         const rows = withViewerOperation("pipelines.controller-select", () => db.query<
-          Pick<CollectionRow, "row_key" | "row_order" | "value_json">, [string, number, number, string, number, number]>(`
-          SELECT w.row_key, w.row_order, r.value_json FROM pipeline_controller_work w
+          Pick<CollectionRow, "row_key" | "row_order" | "row_revision">, SQLQueryBindings[]>(`
+          SELECT w.row_key, w.row_order, r.row_revision FROM pipeline_controller_work w
+          ${keys ? "INDEXED BY sqlite_autoindex_pipeline_controller_work_1" : ""}
           JOIN state_rows r ON r.collection = 'pipelines' AND r.row_key = w.row_key
           WHERE w.kind = ? AND w.row_order >= ? AND (w.row_order > ? OR w.row_key > ?) AND w.row_order <= ?
+          ${keys ? "AND w.row_key IN (SELECT value FROM json_each(?))" : ""}
           ORDER BY w.row_order, w.row_key LIMIT ?
-        `).all(kind, order, order, key, throughOrder, 16));
+        `).all(kind, order, order, key, throughOrder, ...(keys ? [JSON.stringify(keys)] : []), 16));
         await mapCooperatively(rows, row => {
-          const decoded = withViewerOperation("pipelines.controller-decode", () => this.decodeRow(row.value_json));
-          if (decoded) records.push(this.options.clone(decoded));
+          const decoded = this.controllerRow(row.row_key, row.row_revision, db, identity, authority);
+          if (decoded) records.push(kind === "hosts" || kind === "running" ? decoded
+            : performanceSpans.sync("pipeline.copy", () => (this.options.cloneController ?? this.options.clone)(decoded)));
           order = row.row_order; key = row.row_key;
         }, { batchSize: 4, timeBudgetMs: 16 });
         if (rows.length < 16) break;
         await yieldToRuntime();
       }
       db.exec("COMMIT");
+      if (databaseFileIdentity(this.filename) !== identity || this.options.decodeAuthority?.() !== authority) throw new StateSnapshotChangedError();
       return records;
     } catch (error) { rollbackQuietly(db); throw error; }
     finally { db.close(); }
@@ -1413,10 +1517,16 @@ export class SqliteStateCollection<T> {
               this.validate(record);
               const key = this.options.key(record);
               this.assertRowWritable(db, key);
+              // Keep the indexed order lookup outside the INSERT program:
+              // SQLite's scalar-subquery form repeatedly initializes the
+              // reference trigger graph even for unrelated collections.
+              const order = db.query<{ value: number }, [string]>(
+                "SELECT COALESCE(MAX(row_order)+1,0) AS value FROM state_rows WHERE collection=?",
+              ).get(this.options.collection)!.value;
               db.query(`INSERT INTO state_rows(collection,row_key,value_json,row_order,row_revision,controller_active)
-                VALUES (?,?,?,(SELECT COALESCE(MAX(row_order)+1,0) FROM state_rows WHERE collection=?),?,?) ON CONFLICT(collection,row_key) DO UPDATE SET
+                VALUES (?,?,?,?,?,?) ON CONFLICT(collection,row_key) DO UPDATE SET
                 value_json=excluded.value_json,row_revision=excluded.row_revision,controller_active=excluded.controller_active`)
-                .run(this.options.collection, key, JSON.stringify(record), this.options.collection, revision, this.options.controllerActive?.(record) === false ? 0 : 1);
+                .run(this.options.collection, key, JSON.stringify(record), order, revision, this.options.controllerActive?.(record) === false ? 0 : 1);
               changed.set(key, "upsert");
             },
             delete: (key) => {
@@ -1795,12 +1905,14 @@ export class SqliteStateCollection<T> {
     controllerOnly = false,
     lockWaitMs?: number,
     observeHold?: (heldMs: number) => void,
+    keys?: readonly string[],
   ): Promise<R> {
     assertSqliteWriteAuthority(this.filename);
     const lease = await this.acquireLease(lockWaitMs);
     const acquiredAt = durableHolds.get(lease)!.start;
     try {
-      const source = controllerOnly ? this.loadControllerReadonly() : this.loadReadonly();
+      const source = keys ? keys.flatMap(key => { const row = this.get(key); return row ? [row] : []; })
+        : controllerOnly ? this.loadControllerReadonly() : this.loadReadonly();
       const session = this.track(source);
       return await operation(session.records, async (records) => {
         await stateTransactionAsync(this.filename, this.options.collection,
@@ -1821,12 +1933,13 @@ export class SqliteStateCollection<T> {
     operation: (records: T[], persist: (records?: readonly T[]) => Promise<void>, assertCurrent: (record: T) => void) => Promise<R> | R,
     observeHold?: (heldMs: number) => void,
     explicitOnly = false,
+    keys?: readonly string[],
   ): Promise<R> {
     assertSqliteWriteAuthority(this.filename);
     const revision = this.revision();
     const identity = databaseFileIdentity(this.filename);
     const expected = new Map<string, number>();
-    const session = this.track(await this.prepareControllerSnapshot(expected), explicitOnly, true);
+    const session = this.track(await this.prepareControllerSnapshot(expected, keys), explicitOnly, true);
     // A synchronous callback may filter all selected rows before its first
     // await. Finish their independent copies in bounded slices beforehand.
     await forEachCooperatively(session.records, () => undefined, { batchSize: 4, timeBudgetMs: 16 });
@@ -1957,39 +2070,27 @@ export class SqliteStateCollection<T> {
   /** Indexed pages contain only selected headers. Unchanged history keeps its
       decoded value; payload reads and decoding yield without holding a lease
       or a read transaction. The outer revision check refuses a mixed snapshot. */
-  private async prepareControllerSnapshot(expected: Map<string, number>): Promise<readonly T[]> {
+  private async prepareControllerSnapshot(expected: Map<string, number>, keys?: readonly string[]): Promise<readonly T[]> {
     const identity = databaseFileIdentity(this.filename);
     const authority = this.options.decodeAuthority?.();
-    if (identity !== this.controllerIdentity || authority !== this.controllerAuthority) this.controllerCache.clear();
-    this.controllerIdentity = identity;
-    this.controllerAuthority = authority;
-    const cache = new Map<string, { revision: number; value: T | null }>();
     const records: T[] = [];
     let order = -1, key = "";
     for (;;) {
       const rows = withViewerOperation("pipelines.controller-read", () => this.readDb.query<
-        Pick<CollectionRow, "row_key" | "row_order" | "row_revision">, [string, number, number, string, number]>(`
+        Pick<CollectionRow, "row_key" | "row_order" | "row_revision">, SQLQueryBindings[]>(`
         SELECT row_key, row_order, row_revision FROM state_rows
+        ${keys ? "INDEXED BY sqlite_autoindex_state_rows_1" : ""}
         WHERE collection = ? AND controller_active = 1 AND row_order >= ?
           AND (row_order > ? OR row_key > ?)
+          ${keys ? "AND row_key IN (SELECT value FROM json_each(?))" : ""}
         ORDER BY row_order, row_key LIMIT ?
-      `).all(this.options.collection, order, order, key, 16));
+      `).all(this.options.collection, order, order, key, ...(keys ? [JSON.stringify(keys)] : []), 16));
       if (!rows.length) break;
       let sliceStarted = performance.now();
       for (let index = 0; index < rows.length; index++) {
         const row = rows[index]!;
-        let held = this.controllerCache.get(row.row_key);
-        if (!held || held.revision !== row.row_revision) {
-          const payload = withViewerOperation("pipelines.controller-read", () => this.readDb.query<
-            Pick<CollectionRow, "value_json" | "row_revision">, [string, string]>(`
-            SELECT value_json, row_revision FROM state_rows WHERE collection = ? AND row_key = ?
-          `).get(this.options.collection, row.row_key));
-          if (!payload || payload.row_revision !== row.row_revision) throw new StateSnapshotChangedError();
-          held = { revision: row.row_revision,
-            value: withViewerOperation("pipelines.controller-decode", () => this.decodeRow(payload.value_json)) };
-        }
-        cache.set(row.row_key, held);
-        if (held.value !== null) { records.push(held.value); expected.set(row.row_key, row.row_revision); }
+        const value = this.controllerRow(row.row_key, row.row_revision);
+        if (value !== null) { records.push(value); expected.set(row.row_key, row.row_revision); }
         order = row.row_order; key = row.row_key;
         if (index + 1 < rows.length && performance.now() - sliceStarted >= 16) {
           await yieldToRuntime(); sliceStarted = performance.now();
@@ -2002,7 +2103,6 @@ export class SqliteStateCollection<T> {
     if (databaseFileIdentity(this.filename) !== identity || this.options.decodeAuthority?.() !== authority) {
       throw new StateSnapshotChangedError();
     }
-    this.controllerCache = cache;
     return records;
   }
 

@@ -30054,6 +30054,335 @@ describe("account chips with the weekly limit left: the launch chooser and the r
   }, 300_000);
 });
 
+describe("rotation dialog: the mandate as a diff", () => {
+  /*
+   * Rendered evidence for docs/design/rotation-mandate-diff.md: the rotate dialog's mandate section over
+   * `issue1695Evidence.fixture.tsx?scenario=seat-head&mandate=changed|unchanged` (the incumbent's stored mandate
+   * comes from rotationMandateFixture.ts, derived from the current default). Four states, A changed and collapsed,
+   * B changed and expanded, C unchanged, D the incumbent's text kept; 390 (phone, touch), 768 and 1440, en and uk, in
+   * light, plus dark for all four at 390 uk and 1440 en.
+   *
+   *   LLV_KANBAN_BROWSER_TEST=1 CHROME_BIN=<chrome> ROTATION_MANDATE_DIFF_OUT=<dir> \
+   *     bash scripts/gate-slot.sh bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "rotation dialog: the mandate as a diff"
+   *
+   * The frames go to `ROTATION_MANDATE_DIFF_OUT`, outside the repository; the readings go to evidence/rotation-mandate-diff.
+   */
+  const OUT = process.env.ROTATION_MANDATE_DIFF_OUT ? path.resolve(process.env.ROTATION_MANDATE_DIFF_OUT) : null;
+  type State = "changed-collapsed" | "changed-expanded" | "unchanged" | "kept";
+  type Shot = { state: State; width: 390 | 768 | 1440; lang: "en" | "uk"; scheme: "light" | "dark" };
+  const STATES: State[] = ["changed-collapsed", "changed-expanded", "unchanged", "kept"];
+  const shots: Shot[] = [];
+  for (const state of STATES) for (const width of [390, 768, 1440] as const) for (const lang of ["en", "uk"] as const) shots.push({ state, width, lang, scheme: "light" });
+  for (const state of STATES) {
+    shots.push({ state, width: 390, lang: "uk", scheme: "dark" });
+    shots.push({ state, width: 1440, lang: "en", scheme: "dark" });
+  }
+
+  /* One reading of the open draft: the defining line, the slot, the diff and the editor, measured from text ranges. */
+  const readDraft = (page: Page, phone: boolean) => page.evaluate((phone) => {
+    const round = (value: number) => Math.round(value * 10) / 10;
+    const draft = document.querySelector<HTMLElement>('[data-orchestrator-draft="rotate"]')!;
+    const scroller = phone ? draft : (draft.firstElementChild as HTMLElement);
+    const footer = phone ? (draft.nextElementSibling as HTMLElement) : (draft.lastElementChild as HTMLElement);
+    const section = document.querySelector<HTMLElement>(phone ? "[data-orchestrator-mandate-state]" : "[data-orchestrator-mandate-details]")!;
+    const line = section.querySelector<HTMLElement>(phone ? "[data-orchestrator-mandate-fold]" : "summary")!;
+    const slotButton = document.querySelector<HTMLElement>("[data-orchestrator-keep-incumbent], [data-orchestrator-restore-default]");
+    const diff = document.querySelector<HTMLElement>("[data-orchestrator-mandate-diff]");
+    const field = document.querySelector<HTMLTextAreaElement>("[data-orchestrator-mandate]");
+    const rows = [...document.querySelectorAll<HTMLElement>("[data-orchestrator-mandate-diff-line]")];
+    const textRects = (element: Element) => {
+      const range = document.createRange();
+      range.selectNodeContents(element);
+      return [...range.getClientRects()].filter((rect) => rect.width > 0 && rect.height > 0);
+    };
+    const union = (rects: DOMRect[]) => rects.length
+      ? { left: Math.min(...rects.map((r) => r.left)), right: Math.max(...rects.map((r) => r.right)), top: Math.min(...rects.map((r) => r.top)), bottom: Math.max(...rects.map((r) => r.bottom)) }
+      : null;
+    const visibleTop = Math.max(scroller.getBoundingClientRect().top, 0);
+    const visibleBottom = Math.min(footer.getBoundingClientRect().top, scroller.getBoundingClientRect().bottom, innerHeight);
+    const whole = (element: Element | null | undefined) => {
+      if (!element) return null;
+      const box = union(textRects(element));
+      return box !== null && box.top >= visibleTop - 0.5 && box.bottom <= visibleBottom + 0.5 && box.left >= -0.5 && box.right <= innerWidth + 0.5;
+    };
+    const boxOf = (element: Element | null | undefined) => {
+      if (!element) return null;
+      const rect = element.getBoundingClientRect();
+      return { left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom, width: rect.width, height: rect.height };
+    };
+    const overlap = (a: ReturnType<typeof boxOf>, b: ReturnType<typeof boxOf>) =>
+      !!a && !!b && Math.min(a.right, b.right) - Math.max(a.left, b.left) > 0.5 && Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top) > 0.5;
+    const cwdLine = section.parentElement!.querySelector<HTMLElement>("p.font-mono") ?? section.querySelector<HTMLElement>("p.font-mono");
+    const launch = document.querySelector<HTMLElement>("[data-orchestrator-launch-choices]");
+    const lineBox = boxOf(line);
+    const named = { slot: boxOf(slotButton), line: lineBox, launch: boxOf(launch), cwd: boxOf(cwdLine) };
+    const overlaps = Object.entries(named).flatMap(([a, boxA], index, all) => all.slice(index + 1).filter(([, boxB]) => overlap(boxA, boxB)).map(([b]) => `${a}/${b}`));
+    /* Contrast: a colour is turned into pixels so any CSS colour syntax reads; a background is the stack of every ancestor's. */
+    const canvas = document.createElement("canvas");
+    canvas.width = canvas.height = 1;
+    const paint = canvas.getContext("2d", { willReadFrequently: true })!;
+    const rgba = (css: string) => {
+      paint.clearRect(0, 0, 1, 1);
+      paint.fillStyle = "#000";
+      paint.fillStyle = css;
+      paint.fillRect(0, 0, 1, 1);
+      const data = paint.getImageData(0, 0, 1, 1).data;
+      return [data[0]!, data[1]!, data[2]!, data[3]! / 255] as const;
+    };
+    const backdrop = (element: Element) => {
+      const stack: (readonly [number, number, number, number])[] = [];
+      for (let node: Element | null = element; node; node = node.parentElement) stack.unshift(rgba(getComputedStyle(node).backgroundColor));
+      let base: [number, number, number] = [255, 255, 255];
+      for (const [r, g, b, a] of stack) base = [r! * a + base[0] * (1 - a), g! * a + base[1] * (1 - a), b! * a + base[2] * (1 - a)];
+      return base;
+    };
+    const lum = ([r, g, b]: number[]) => {
+      const lin = (v: number) => { const s = v / 255; return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4; };
+      return 0.2126 * lin(r!) + 0.7152 * lin(g!) + 0.0722 * lin(b!);
+    };
+    const contrast = (element: Element) => {
+      const ink = rgba(getComputedStyle(element).color);
+      const back = backdrop(element);
+      const mixed = [ink[0] * ink[3] + back[0] * (1 - ink[3]), ink[1] * ink[3] + back[1] * (1 - ink[3]), ink[2] * ink[3] + back[2] * (1 - ink[3])];
+      const [hi, lo] = [lum(mixed), lum(back)].sort((x, y) => y - x);
+      return round((hi! + 0.05) / (lo! + 0.05));
+    };
+    const rowText = (row: Element) => row.lastElementChild as HTMLElement;
+    const kinds = (kind: string) => rows.filter((row) => row.getAttribute("data-orchestrator-mandate-diff-line") === kind);
+    const first = rows[0] ?? null;
+    return {
+      line: { text: line.textContent!.replace(/\s+/g, " ").trim(), whole: whole(line), box: lineBox, chevron: phone ? !!line.querySelector("svg") : getComputedStyle(line).display === "list-item" && getComputedStyle(line).listStyleType !== "none", expanded: line.getAttribute("aria-expanded"), contrast: round(Math.min(...[line, ...[...line.querySelectorAll("span")]].map(contrast))) },
+      state: section.getAttribute("data-orchestrator-mandate-state"),
+      slot: slotButton ? { text: slotButton.textContent!.replace(/\s+/g, " ").trim(), kind: slotButton.hasAttribute("data-orchestrator-keep-incumbent") ? "keep" : "restore", whole: whole(slotButton), box: boxOf(slotButton) } : null,
+      sentence: document.body.innerText.includes(" is based on v") || document.body.innerText.includes("базується на v"),
+      diff: diff ? {
+        added: kinds("+").length, removed: kinds("-").length, context: kinds(" ").length,
+        intraline: diff.querySelectorAll('[class*="diff-add-strong"], [class*="diff-del-strong"]').length,
+        scrollOverflow: diff.scrollWidth > diff.clientWidth + 0.5,
+        rowsInside: rows.every((row) => { const box = union(textRects(rowText(row))); const container = diff.getBoundingClientRect(); return !box || (box.right <= container.right + 0.5 && box.left >= container.left - 0.5); }),
+        firstWhole: first ? whole(first.parentElement) : null,
+        captions: [...diff.querySelectorAll<HTMLElement>(".text-caption")].map((caption) => caption.textContent!),
+        /* A heading never shows its markdown marker on a caption or a context row, and a highlight never ends inside a word. */
+        headingMarkers: [...diff.querySelectorAll<HTMLElement>(".text-caption")].map((caption) => caption.textContent!)
+          .concat(kinds(" ").map((row) => rowText(row).textContent!)).filter((text) => /^#{1,6}\s/.test(text)),
+        splitHighlights: [...diff.querySelectorAll<HTMLElement>('[class*="diff-add-strong"], [class*="diff-del-strong"]')].flatMap((span) => {
+          const word = /[\p{L}\p{N}_]/u;
+          const before = span.previousSibling?.textContent?.slice(-1) ?? "";
+          const after = span.nextSibling?.textContent?.slice(0, 1) ?? "";
+          return word.test(before) || word.test(after) ? [`${before}[${span.textContent}]${after}`] : [];
+        }),
+        contrast: {
+          add: kinds("+").length ? Math.min(...kinds("+").map((row) => contrast(rowText(row)))) : null,
+          del: kinds("-").length ? Math.min(...kinds("-").map((row) => contrast(rowText(row)))) : null,
+          context: kinds(" ").length ? Math.min(...kinds(" ").map((row) => contrast(rowText(row)))) : null,
+          intraline: Math.min(...[...diff.querySelectorAll('[class*="diff-add-strong"], [class*="diff-del-strong"]')].map(contrast), 99),
+        },
+      } : null,
+      editor: field ? { visible: field.getClientRects().length > 0, label: (field.labels?.[0]?.textContent ?? null), labelWhole: whole(field.labels?.[0]), afterDiff: diff ? !!(diff.compareDocumentPosition(field) & Node.DOCUMENT_POSITION_FOLLOWING) : null, after: rows.length ? !!(rows.at(-1)!.compareDocumentPosition(field) & Node.DOCUMENT_POSITION_FOLLOWING) : null } : null,
+      overlaps,
+      pageScroll: document.documentElement.scrollWidth - innerWidth,
+      sections: { scrollerTop: round(scroller.getBoundingClientRect().top), footerTop: round(footer.getBoundingClientRect().top) },
+    };
+  }, phone);
+
+  browserTest("the mandate is one line, a diff behind it when it changed and nothing to open when it did not, in four states", async () => {
+    const work = fs.mkdtempSync(path.join(os.tmpdir(), "rotation-mandate-diff-"));
+    const out = OUT ?? path.join(work, "frames");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(work);
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, unknown>[] = [];
+    const { fixtureIncumbentMandate } = await import("./rotationMandateFixture");
+    const { diffTextLines } = await import("@/components/feed/diff");
+    const { ORCHESTRATOR_PROMPT_VERSION, ORCHESTRATOR_SYSTEM_PROMPT } = await import("@/lib/orchestrator/prompt");
+    const changedSeat = fixtureIncumbentMandate("changed");
+    const rowsOf = diffTextLines(changedSeat.mandate, ORCHESTRATOR_SYSTEM_PROMPT);
+    const added = rowsOf.filter((row) => row.t === "+").length;
+    const removed = rowsOf.filter((row) => row.t === "-").length;
+    try {
+      for (const shot of shots) {
+        const phone = shot.width === 390;
+        const tr = (key: Parameters<typeof translate>[1], params?: Record<string, string | number>) => translate(shot.lang, key, params);
+        const name = `rotation-mandate-${shot.state}-${shot.width}-${shot.lang}-${shot.scheme}`;
+        const kind = shot.state === "unchanged" ? "unchanged" : "changed";
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=seat-head&mandate=${kind}`, { width: shot.width, height: phone ? 844 : 900 }, shot.scheme, shot.lang, "reduce", phone);
+        try {
+          await page.locator("[data-kanban-board] .card[data-id], [data-phone-card], [data-mobile2-open=seat], [data-orchestrator-rotate], [data-orchestrator-draft]").first().waitFor({ state: "attached", timeout: 40_000 });
+          await page.addStyleTag({ content: '[data-attention-toast], [role="tooltip"] { display: none !important; }' });
+          await page.waitForTimeout(400);
+          if (phone) {
+            await page.locator("[data-mobile2-open=seat]").first().click();
+            await page.locator('[data-mobile2-open="rotate"]').first().click();
+            await page.waitForSelector('[data-mobile2-sheet="rotate"] [data-orchestrator-draft="rotate"]', { timeout: 20_000 });
+          } else {
+            await page.locator("[data-orchestrator-rotate]").first().click();
+            await page.waitForSelector("[data-orchestrator-launch-choices]", { timeout: 20_000 });
+          }
+          const lineSelector = phone ? "[data-orchestrator-mandate-fold]" : "[data-orchestrator-mandate-details] > summary";
+          await page.locator(lineSelector).waitFor({ timeout: 10_000 });
+          await page.waitForTimeout(500);
+          const seatMandate = kind === "unchanged" ? ORCHESTRATOR_SYSTEM_PROMPT : changedSeat.mandate;
+          const stale = `v${ORCHESTRATOR_PROMPT_VERSION - 1}`;
+          const summary = tr("orchPanel.mandateDiffSummary", { from: stale, to: `v${ORCHESTRATOR_PROMPT_VERSION}`, added, removed });
+          const unchangedLine = `${tr("orchPanel.mandateUnchanged", { label: `v${ORCHESTRATOR_PROMPT_VERSION}` })} ${tr("orchPanel.mandateEdit")}`;
+          const keptLine = `${tr("orchPanel.mandateUnchangedStale", { version: ORCHESTRATOR_PROMPT_VERSION - 1, current: ORCHESTRATOR_PROMPT_VERSION })} ${tr("orchPanel.mandateEdit")}`;
+
+          if (shot.state === "changed-expanded") {
+            await page.locator(lineSelector).click();
+            await page.locator("[data-orchestrator-mandate-diff-line]").first().waitFor({ timeout: 10_000 });
+            /* The first diff row, whole, on the first screen: bring the section to the top of the draft's scroller. */
+            await page.evaluate((phone) => {
+              const draft = document.querySelector<HTMLElement>('[data-orchestrator-draft="rotate"]')!;
+              const scroller = phone ? draft : (draft.firstElementChild as HTMLElement);
+              /* The keep button above the line travels with it. */
+              const section = document.querySelector<HTMLElement>("[data-orchestrator-mandate-stale]") ?? document.querySelector<HTMLElement>(phone ? "[data-orchestrator-mandate-state]" : "[data-orchestrator-mandate-details]")!;
+              scroller.scrollTop += section.getBoundingClientRect().top - scroller.getBoundingClientRect().top - 8;
+            }, phone);
+          } else if (shot.state === "kept") {
+            await page.locator("[data-orchestrator-keep-incumbent]").click();
+            await page.locator("[data-orchestrator-restore-default]").waitFor({ timeout: 10_000 });
+          }
+          await page.mouse.move(0, 0);
+          await page.waitForTimeout(300);
+          const reading = await readDraft(page, phone);
+
+          /* 1 the defining element is visible text on the first screen. */
+          const expectedLine = shot.state === "unchanged" ? unchangedLine : shot.state === "kept" ? keptLine : summary;
+          expect(reading.line.text, `${name} the line`).toBe(expectedLine);
+          expect(reading.line.whole, `${name} the line whole on the first screen`).toBe(true);
+          expect(reading.state, `${name} section state`).toBe(shot.state === "unchanged" || shot.state === "kept" ? "unchanged" : "changed");
+          expect(reading.sentence, `${name} no stale sentence repeating the versions`).toBe(false);
+          if (shot.state === "kept") {
+            expect(reading.slot?.kind, `${name} slot`).toBe("restore");
+            expect(reading.slot?.text, `${name} slot word`).toContain(tr("orchPanel.restoreDefault"));
+            expect(reading.slot?.whole, `${name} slot whole`).toBe(true);
+          } else if (shot.state === "unchanged") {
+            expect(reading.slot, `${name} nothing to keep or restore`).toBeNull();
+          } else {
+            expect(reading.slot?.kind, `${name} slot`).toBe("keep");
+            expect(reading.slot?.text, `${name} keep button`).toBe(tr("orchPanel.keepIncumbentMandate", { version: ORCHESTRATOR_PROMPT_VERSION - 1 }));
+            expect(reading.slot?.whole, `${name} keep whole`).toBe(true);
+          }
+          /* 3 no overlap, and the page does not scroll sideways. */
+          expect(reading.overlaps, `${name} overlaps`).toEqual([]);
+          expect(reading.pageScroll, `${name} no sideways page scroll`).toBeLessThanOrEqual(0);
+          /* 4 phone targets. */
+          if (phone) {
+            expect(reading.line.box!.height, `${name} line height`).toBeGreaterThanOrEqual(44);
+            expect(reading.line.box!.width, `${name} line width`).toBeGreaterThanOrEqual(44);
+            if (reading.slot) {
+              expect(reading.slot.box!.height, `${name} slot height`).toBeGreaterThanOrEqual(44);
+              expect(reading.slot.box!.width, `${name} slot width`).toBeGreaterThanOrEqual(44);
+            }
+          }
+          expect(reading.line.contrast, `${name} line contrast`).toBeGreaterThanOrEqual(4.5);
+          /* 5 what renders where. */
+          if (shot.state === "changed-expanded") {
+            expect(reading.line.chevron, `${name} chevron`).toBe(true);
+            expect(reading.line.expanded ?? "true", `${name} expanded`).toBe("true");
+            const diff = reading.diff!;
+            expect(diff, `${name} the diff`).not.toBeNull();
+            expect([diff.added, diff.removed], `${name} rendered rows equal the driver's own count`).toEqual([added, removed]);
+            expect(reading.line.text, `${name} the line counts equal the rendered rows`).toContain(`+${diff.added} −${diff.removed}`);
+            expect(diff.intraline, `${name} intraline highlights`).toBeGreaterThanOrEqual(1);
+            expect(diff.splitHighlights, `${name} every highlight covers whole words`).toEqual([]);
+            expect(diff.headingMarkers, `${name} headings carry no markdown marker`).toEqual([]);
+            expect(reading.editor?.label, `${name} the editor is named by a visible label`).toBe(tr("orchPanel.mandate"));
+            expect(diff.scrollOverflow, `${name} no sideways scroll inside the diff`).toBe(false);
+            expect(diff.rowsInside, `${name} every row inside the container`).toBe(true);
+            expect(diff.firstWhole, `${name} the first row and its caption whole`).toBe(true);
+            expect(reading.editor?.visible, `${name} editor`).toBe(true);
+            expect(reading.editor?.after, `${name} the editor follows the last diff row`).toBe(true);
+            for (const [label, value] of Object.entries(diff.contrast)) {
+              if (value !== null) expect(value, `${name} ${label} contrast`).toBeGreaterThanOrEqual(4.5);
+            }
+          } else {
+            expect(reading.editor, `${name} no text box on the first screen`).toBeNull();
+            expect(reading.diff, `${name} no diff rows`).toBeNull();
+            expect(reading.line.chevron, `${name} chevron only where there is a diff`).toBe(shot.state === "changed-collapsed");
+          }
+
+          /* The frame. Desktop clips to the whole dock panel; the phone is the whole viewport. */
+          const file = path.join(out, `${name}.png`);
+          if (phone) {
+            await page.screenshot({ path: file });
+          } else {
+            const panel = (await page.locator("[data-orchestrator-mode]").first().boundingBox())!;
+            const left = Math.max(0, panel.x - 8);
+            const top = Math.max(0, panel.y - 8);
+            const right = Math.min(shot.width, panel.x + panel.width + 8);
+            const bottom = Math.min(900, panel.y + panel.height + 8);
+            await page.screenshot({ path: file, clip: { x: left, y: top, width: right - left, height: bottom - top } });
+          }
+          const frame: Record<string, unknown> = { shot: name, ...reading, viewport: { width: shot.width, height: phone ? 844 : 900 } };
+
+          /* 9 the flows, after the frame: the restore returns the changed line; an edit reads «your edit». */
+          if (shot.state === "kept") {
+            await page.locator("[data-orchestrator-restore-default]").click();
+            await page.locator("[data-orchestrator-keep-incumbent]").waitFor({ timeout: 10_000 });
+            const back = await readDraft(page, phone);
+            expect(back.line.text, `${name} restore returns the changed line`).toBe(summary);
+            await page.locator(lineSelector).click();
+            await page.locator("[data-orchestrator-mandate]").waitFor({ timeout: 10_000 });
+            expect(await page.locator("[data-orchestrator-mandate]").inputValue(), `${name} restore returns the default text exactly`).toBe(ORCHESTRATOR_SYSTEM_PROMPT);
+            frame.restoredLine = back.line.text;
+          } else if (shot.state === "changed-expanded") {
+            /* The editor scrolled into view: its label is whole text on that screen, and a second frame shows it. */
+            await page.evaluate((phone) => {
+              const draft = document.querySelector<HTMLElement>('[data-orchestrator-draft="rotate"]')!;
+              const scroller = phone ? draft : (draft.firstElementChild as HTMLElement);
+              const label = document.querySelector<HTMLTextAreaElement>("[data-orchestrator-mandate]")!.labels![0]!;
+              scroller.scrollTop += label.getBoundingClientRect().top - scroller.getBoundingClientRect().top - 8;
+            }, phone);
+            await page.waitForTimeout(300);
+            const atEditor = await readDraft(page, phone);
+            expect(atEditor.editor?.labelWhole, `${name} the editor's label whole when scrolled to`).toBe(true);
+            expect(atEditor.editor?.label, `${name} the editor's label`).toBe(tr("orchPanel.mandate"));
+            if (phone) await page.screenshot({ path: path.join(out, `${name}-editor.png`) });
+            else {
+              const panel = (await page.locator("[data-orchestrator-mode]").first().boundingBox())!;
+              await page.screenshot({ path: path.join(out, `${name}-editor.png`), clip: { x: Math.max(0, panel.x - 8), y: Math.max(0, panel.y - 8), width: Math.min(shot.width, panel.x + panel.width + 8) - Math.max(0, panel.x - 8), height: Math.min(900, panel.y + panel.height + 8) - Math.max(0, panel.y - 8) } });
+            }
+            frame.atEditor = { label: atEditor.editor?.label, labelWhole: atEditor.editor?.labelWhole };
+            const lines = ORCHESTRATOR_SYSTEM_PROMPT.split("\n");
+            lines[3] = `${lines[3]}x`;
+            const typed = lines.join("\n");
+            await page.locator("[data-orchestrator-mandate]").fill(typed);
+            await page.waitForTimeout(300);
+            const edit = await readDraft(page, phone);
+            const editRows = diffTextLines(changedSeat.mandate, typed);
+            const fromDefault = diffTextLines(ORCHESTRATOR_SYSTEM_PROMPT, typed).filter((row) => row.t !== " ").map((row) => row.t);
+            expect(fromDefault, `${name} one character changes one line against the default`).toEqual(["-", "+"]);
+            expect(edit.line.text, `${name} an edit reads «your edit»`).toBe(tr("orchPanel.mandateDiffSummary", {
+              from: stale, to: tr("orchPanel.mandateDiffEdited"),
+              added: editRows.filter((row) => row.t === "+").length, removed: editRows.filter((row) => row.t === "-").length,
+            }));
+            expect(edit.diff, `${name} the diff stays while typing`).not.toBeNull();
+            frame.editedLine = edit.line.text;
+          } else if (shot.state === "unchanged") {
+            await page.locator(lineSelector).click();
+            await page.locator("[data-orchestrator-mandate]").waitFor({ timeout: 10_000 });
+            const edit = await readDraft(page, phone);
+            expect(edit.diff, `${name} (edit) shows the editor and still no diff`).toBeNull();
+            expect(edit.editor?.visible, `${name} (edit) reaches the editor`).toBe(true);
+            expect(await page.locator("[data-orchestrator-mandate]").inputValue(), `${name} the editor holds the incumbent's text`).toBe(seatMandate);
+            frame.afterEditPress = { diffRows: 0, editor: true };
+          }
+          expect(pageErrors, `${name} page errors`).toEqual([]);
+          readings.push(frame);
+        } finally {
+          await context.close();
+        }
+      }
+      fs.mkdirSync("evidence/rotation-mandate-diff", { recursive: true });
+      fs.writeFileSync("evidence/rotation-mandate-diff/readings.json", JSON.stringify({ added, removed, readings }, null, 2) + "\n");
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+  }, 1_800_000);
+});
+
 describe("role avatars: Delegatus in each role's costume on answers, internal cards and the conversation header", () => {
   /*
    * Rendered evidence for docs/design/role-avatars.md (§10, the build): the real

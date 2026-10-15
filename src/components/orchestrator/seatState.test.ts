@@ -1,9 +1,11 @@
 import { describe, expect, test } from "bun:test";
 
 import { translate } from "@/lib/i18n";
+import { ORCHESTRATOR_PROMPT_VERSION, ORCHESTRATOR_SYSTEM_PROMPT } from "@/lib/orchestrator/prompt";
 import type { OrchestratorSeat } from "@/lib/orchestrator/seats";
 import type { FileEntry } from "@/lib/types";
 
+import { diffTextLines } from "../feed/diff";
 import type { OrchestratorIncumbent } from "./incumbent";
 import {
   classifySeatFailure,
@@ -29,6 +31,8 @@ import {
   type OrchestratorPanelState,
   type OrchestratorSeatStatus,
   type RotationHint,
+  rotateMandateLine,
+  rotateMandateView,
 } from "./seatState";
 
 function seat(overrides: Partial<OrchestratorSeat> = {}): OrchestratorSeat {
@@ -867,4 +871,56 @@ test("panel fallback keeps unknown capacity unknown even for a registered model"
     file: file({ ctx: { usedTokens: 900_000, windowTokens: null, pct: null, source: "unknown", confidence: "unknown", observedAt: "" } }),
   });
   expect(state).toMatchObject({ kind: "live", rotation: null });
+});
+
+describe("rotateMandateView (#2942)", () => {
+  const en = (view: ReturnType<typeof rotateMandateView>) => rotateMandateLine((key, params) => translate("en", key, params), view);
+  const current = ORCHESTRATOR_PROMPT_VERSION;
+  const seatOn = (promptVersion: number | null, mandate = "run it") => ({ mandate, promptVersion });
+
+  test("a stale seat over the default is changed, v3 to the current version, with the keep button in the slot", () => {
+    const view = rotateMandateView(seatOn(3), ORCHESTRATOR_SYSTEM_PROMPT);
+    const rows = diffTextLines("run it", ORCHESTRATOR_SYSTEM_PROMPT);
+    expect(view).toMatchObject({
+      kind: "changed",
+      from: { kind: "version", version: 3 },
+      to: { kind: "version", version: current },
+      added: rows.filter((row) => row.t === "+").length,
+      removed: rows.filter((row) => row.t === "-").length,
+      slot: "keep",
+      staleVersion: 3,
+    });
+    expect(en(view)).toBe(`Mandate v3 → v${current} · lines: +${(view as { added: number }).added} −${(view as { removed: number }).removed}`);
+  });
+
+  test("keeping the incumbent's text on a stale seat is unchanged, names both versions, and offers the way back", () => {
+    const view = rotateMandateView(seatOn(3), "run it");
+    expect(view).toMatchObject({ kind: "unchanged", slot: "restore-default", staleVersion: 3 });
+    expect(en(view)).toBe(`Mandate unchanged (v3; the current default is v${current})`);
+  });
+
+  test("a seat on the current version is unchanged with no slot; bespoke rules say own rules", () => {
+    const onCurrent = rotateMandateView(seatOn(current, "mine"), "mine");
+    expect(onCurrent).toMatchObject({ kind: "unchanged", slot: null, staleVersion: null });
+    expect(en(onCurrent)).toBe(`Mandate unchanged (v${current})`);
+    const bespoke = rotateMandateView(seatOn(null, "my own rules"), "my own rules");
+    expect(bespoke).toMatchObject({ kind: "unchanged", slot: null, staleVersion: null });
+    expect(en(bespoke)).toBe("Mandate unchanged (own rules)");
+  });
+
+  test("an edit reads «your edit», from the incumbent's version or own rules, and keeps the stale slot", () => {
+    const stale = rotateMandateView(seatOn(3), "something else\nrun it");
+    expect(stale).toMatchObject({ kind: "changed", from: { kind: "version", version: 3 }, to: { kind: "edit" }, slot: "keep", added: 1, removed: 0 });
+    expect(en(stale)).toBe("Mandate v3 → your edit · lines: +1 −0");
+    const onLatest = rotateMandateView(seatOn(ORCHESTRATOR_PROMPT_VERSION, "a\nb"), "a\nc");
+    expect(onLatest).toMatchObject({ kind: "changed", from: { kind: "version", version: ORCHESTRATOR_PROMPT_VERSION }, to: { kind: "edit" }, slot: null, added: 1, removed: 1 });
+    expect(en(rotateMandateView(seatOn(null, "a"), "b"))).toBe("Mandate own rules → your edit · lines: +1 −1");
+  });
+
+  test("the line is the same sentence in Ukrainian, with the noun before the numbers", () => {
+    const uk = (view: ReturnType<typeof rotateMandateView>) => rotateMandateLine((key, params) => translate("uk", key, params), view);
+    expect(uk(rotateMandateView(seatOn(3), ORCHESTRATOR_SYSTEM_PROMPT))).toMatch(new RegExp(`^Мандат v3 → v${current} · рядки: \\+\\d+ −\\d+$`));
+    expect(uk(rotateMandateView(seatOn(3), "run it"))).toBe(`Мандат без змін (v3; поточний типовий — v${current})`);
+    expect(uk(rotateMandateView(seatOn(null, "a"), "a"))).toBe("Мандат без змін (власні правила)");
+  });
 });
