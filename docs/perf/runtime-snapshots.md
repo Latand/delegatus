@@ -606,8 +606,8 @@ JSON decoding; `src/runtime-host/host.ts` sends their serialized response.
 
 | Scope | Values retained | Consumers |
 | --- | --- | --- |
-| `metadata` | Schema, published sequence, retention floor, host epoch/health, files revision | Pipeline epoch and retry proof; title publication |
-| `activity` | Metadata plus conversation ID, host/turn axes and attention IDs; optional selection of at most 64 IDs | Pipeline activity and interrupted-turn decisions |
+| `metadata` | Schema, published sequence, retention floor, host epoch/health, files revision | Pipeline retry proof; title publication |
+| `activity` | Metadata plus conversation ID, host/turn axes and attention IDs; optional selection of at most 64 IDs | Pipeline epoch, activity and interrupted-turn decisions |
 | `owners` | Metadata plus conversation ID, session key, artifact path, cwd, host/turn, active turn, revision, writer claim/status and native turn claims | Self-update quiet probes and owner census |
 
 The metadata and selected population share one SQLite read transaction. All
@@ -621,7 +621,7 @@ custody evidence. Full and summary reads use the same selection helper.
 
 Pipeline ports share one pending activity population read for their lifetime,
 preserving the original single population read across all session checks.
-An epoch check reuses it when present and otherwise shares one metadata read.
+An epoch check uses that same observation, including when epoch is asked first.
 Affirmative dead/unhosted/conflict evidence clears those
 reads so a later check can observe adoption during the pass. Absent rows and
 failed reads keep their existing unknown outcomes. Title publication still

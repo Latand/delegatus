@@ -47,7 +47,12 @@ test("production pipeline ports share narrow evidence and refresh dead evidence 
     const metadataOnly = defaultPipelinePorts();
     expect(await metadataOnly.runtimeHostEpoch!()).toBe(journal.snapshot().runtime.hostEpoch);
     expect(await metadataOnly.runtimeHostEpoch!()).toBe(journal.snapshot().runtime.hostEpoch);
-    expect(requests.filter(request => request.kind === "metadata")).toHaveLength(1);
+    expect(requests.filter(request => request.kind === "metadata")).toHaveLength(0);
+    expect(requests.filter(request => request.kind === "activity")).toHaveLength(3);
+    publish("dead");
+    // Epoch-first reads preserve the pass's original activity observation.
+    expect(await metadataOnly.conversationAgentActive("conversation_example")).toBe(true);
+    expect(await defaultPipelinePorts().conversationAgentActive("conversation_example")).toBe(false);
     publish("hosted");
     const idle = defaultPipelinePorts();
     expect(await idle.conversationAgentActive("conversation_example")).toBeNull();
