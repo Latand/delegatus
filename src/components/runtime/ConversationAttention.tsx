@@ -63,12 +63,18 @@ export function questionResolution(attention: RuntimeAttention, optionIndex: num
   return questionsResolution(attention, [[optionIndex]]);
 }
 
-export function questionsResolution(attention: RuntimeAttention, optionIndices: number[][]): unknown {
+export function questionsResolution(attention: RuntimeAttention, optionIndices: number[][], customAnswers: string[] = []): unknown {
   const questions = attention.request.questions
     ?? (attention.request.question ? [attention.request.question] : []);
-  const labels = questions.map((question, questionIndex) => (optionIndices[questionIndex] ?? [])
-    .map((optionIndex) => question.options?.[optionIndex]?.label ?? String(optionIndex + 1)));
   const protocol = attention.request.protocol;
+  if (protocol?.engine === "codex" && protocol.responseRef) return { codexResponse: {
+    requestDigest: protocol.responseRef,
+    answers: questions.map((_, index) => customAnswers[index]
+      ? { custom: customAnswers[index] } : { options: optionIndices[index] ?? [] }),
+  } };
+  const labels = questions.map((question, questionIndex) => customAnswers[questionIndex]
+    ? [customAnswers[questionIndex]!]
+    : (optionIndices[questionIndex] ?? []).map(optionIndex => protocol?.questionOptions?.[questionIndex]?.[optionIndex] ?? question.options?.[optionIndex]?.label ?? String(optionIndex + 1)));
   if (protocol?.engine === "claude") {
     const answers = Object.fromEntries(questions.map((question, index) => [question.prompt, labels[index]!.join(", ")]));
     return { behavior: "allow", updatedInput: { ...(protocol.input ?? {}), answers } };
@@ -131,18 +137,20 @@ export function ConversationAttention({ file }: { file: FileEntry }) {
           key={attention.id}
           attention={attention}
           archived={archived}
-          busy={busyId === attention.id}
-          onApprove={!archived && (attention.kind === "approval" || attention.kind === "permission")
+          busy={busyId === attention.id || attention.state === "resolving"}
+          onAction={!archived && !attention.unowned && attention.request.protocol?.actions
+            ? (response) => void answer(attention, response) : undefined}
+          onApprove={!archived && !attention.unowned && !attention.request.protocol?.actions && (attention.kind === "approval" || attention.kind === "permission")
             ? () => void answer(attention, approvalResolution(attention, true))
             : undefined}
-          onDeny={!archived && (attention.kind === "approval" || attention.kind === "permission")
+          onDeny={!archived && !attention.unowned && !attention.request.protocol?.actions && (attention.kind === "approval" || attention.kind === "permission")
             ? () => void answer(attention, approvalResolution(attention, false))
             : undefined}
-          onAnswerQuestion={!archived && attention.kind === "question"
+          onAnswerQuestion={!archived && !attention.unowned && attention.kind === "question"
             ? (optionIndex) => void answer(attention, questionResolution(attention, optionIndex))
             : undefined}
-          onAnswerQuestions={!archived && attention.kind === "question"
-            ? (optionIndices) => void answer(attention, questionsResolution(attention, optionIndices))
+          onAnswerQuestions={!archived && !attention.unowned && attention.kind === "question"
+            ? (optionIndices, customAnswers) => void answer(attention, questionsResolution(attention, optionIndices, customAnswers))
             : undefined}
           onDismiss={!archived && attention.kind === "question" ? () => dismiss(attention) : undefined}
         />
