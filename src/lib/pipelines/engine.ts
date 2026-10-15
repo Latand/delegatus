@@ -11861,7 +11861,7 @@ function discardDraft(pipeline: Pipeline, ports: PipelinePorts): void {
 
 /** A patch's answer: a mutation result, or the refusal of a stated guard (`STAGE_CHANGED`, or a malformed guard field). */
 export type PipelinePatchResult = Omit<PipelineMutationResult, "code" | "field"> & {
-  code?: PipelineMutationResult["code"] | PipelineGuardErrorCode | WorkLinkErrorCode | "RUNTIME_SWITCH_IN_PROGRESS" | "STAGE_ALREADY_REPORTED" | "ATTEMPT_STARTING" | "RUNTIME_SWITCH_UNAVAILABLE" | "target-account-unavailable";
+  code?: PipelineMutationResult["code"] | PipelineGuardErrorCode | WorkLinkErrorCode | "RUNTIME_SWITCH_IN_PROGRESS" | "STAGE_ALREADY_REPORTED" | "ATTEMPT_STARTING" | "RUNTIME_SWITCH_UNAVAILABLE";
   runtimeSwitch?: PipelineRuntimeSwitch | null;
   appliedNow?: "already-current";
   field?: PipelineMutationResult["field"] | PipelineGuardField;
@@ -13373,7 +13373,7 @@ export async function patchPipeline(
           try { await validateMigrationTargetRoot(migrationTarget ?? accountManager.resolveSpawn(engine, accountId!)); }
           catch (error) {
             const refusal = sanitizeProviderError(error);
-            return { error: refusal.message, code: "target-account-unavailable" as const, status: 409 };
+            return { error: refusal.message, code: "RUNTIME_SWITCH_UNAVAILABLE" as const, status: 409 };
           }
         }
         const seq = (live.runtimeSwitches?.at(-1)?.seq ?? 0) + 1;

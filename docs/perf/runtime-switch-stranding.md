@@ -595,7 +595,7 @@ The provider's refusal of the writable directory remains deliberate.
 
 The engine now runs the provider's directory validation before admitting a
 same-engine account change. A refusal returns 409
-`target-account-unavailable` with directory repair guidance, preserving the
+`RUNTIME_SWITCH_UNAVAILABLE` with directory repair guidance, preserving the
 stage definition, attempt and running source. Admission reads asynchronously
 and creates no directories. The provider repeats validation when it creates
 and verifies a successor, and retains an actionable diagnostic if the target

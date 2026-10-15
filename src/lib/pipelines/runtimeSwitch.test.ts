@@ -2312,13 +2312,13 @@ for (const engine of ["codex", "claude"] as const) for (const scenario of ["succ
       return deliver(input);
     };
     h.ports.runtimeSwitchDelivery = (_id, key) => h.deliveries.get(key) ?? { state: "pending", admitted: false };
-    const request: import("./engine").PatchPipelineRequest = { action: "override-stage", stageId: "plan", account: "target", applyNow: true,
+    const request: import("./types").PatchPipelineRequest = { action: "override-stage", stageId: "plan", account: "target", applyNow: true,
       expectedAttempt: 1, expectedConversationId: conversationId };
     if (scenario === "target-root-0775") {
       const before = loadPipelines();
       const refused = await patchPipeline(lane.id, request, h.ports, { kind: "operator" });
       expect(refused.status).toBe(409);
-      expect(refused.code).toBe("target-account-unavailable");
+      expect(refused.code).toBe("RUNTIME_SWITCH_UNAVAILABLE");
       expect(refused.error).toContain("target transcript directory");
       expect(refused.error).toContain("repair");
       expect(refused.error).not.toContain(targetAccount.home);
