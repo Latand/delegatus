@@ -70,7 +70,7 @@ export type DelegationStage =
   | "failed";
 
 export type OrchestratorAnswer = { reportId: Id; status: "progress" | "result" | "question" | "blocked"; text: string; order: number };
-export type OrchestratorReport = OrchestratorAnswer & { at: number; project: string };
+export type OrchestratorReport = Omit<OrchestratorAnswer, "status"> & { status: OrchestratorAnswer["status"] | "message"; at: number; project: string };
 
 export interface DelegationView {
   notice: "REPLY_PENDING" | "DELIVERY_UNCONFIRMED" | "DELIVERY_FAILED" | `DELIVERY_REFUSED:${string}` | null;
@@ -432,7 +432,7 @@ function reduceCurrent(state: CompanionState, event: CompanionEvent): CompanionS
     }
     case "orchestrator.report": {
       if (!validId(event.reportId) || base.reports.has(event.reportId)) return next({});
-      const report = { reportId: event.reportId, status: event.status, text: bounded(event.text), order: event.seq, at: event.at, project: event.project };
+      const report = { reportId: event.reportId, status: event.status, text: event.status === "message" ? event.text.slice(0, 16000) : bounded(event.text), order: event.seq, at: event.at, project: event.project };
       return next({ reports: new Set(base.reports).add(event.reportId), orchestratorReports: [...base.orchestratorReports, report] });
     }
     case "orchestrator.answer": {

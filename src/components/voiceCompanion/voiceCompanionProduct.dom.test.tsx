@@ -886,6 +886,30 @@ test("false playback stop and restart keep streaming words, bubble nodes, arriva
   expect(document.querySelector('[data-floater="delegation:waiting"]') === waiting).toBe(true);
 });
 
+test("an orchestrator message card in the lane keeps more than 4000 characters and its localized label", async () => {
+  const { VoiceCompanion } = await import("./VoiceCompanion");
+  const { setLocale } = await import("@/lib/i18n");
+  for (const locale of ["en", "uk"] as const) {
+    await act(async () => setLocale(locale));
+    const listeners = new Set<(event: CompanionEvent) => void>(); let seq = 0;
+    const publish = (payload: Payload) => {
+      const event = { ...payload, version: 1, sessionId: "whole-message", generation: 1, seq: ++seq, eventId: `whole-${seq}`, atMs: seq } as CompanionEvent;
+      for (const listener of listeners) listener(event);
+    };
+    const adapter: VoiceCompanionAdapter = { mode: "simulated", subscribe: listener => { listeners.add(listener); return () => listeners.delete(listener); },
+      start: async () => { publish({ type: "session.ready", mode: "simulated" }); }, command: async () => {}, close: async () => {} };
+    await mount(<VoiceCompanion adapter={adapter} project="atlas" locale={locale} />);
+    await click(document.querySelector("[data-companion-talk]"));
+    const text = "Whole message line.\n".repeat(400);
+    await act(async () => { publish({ type: "orchestrator.report", reportId: "whole", status: "message", text, at: 0, project: "atlas" }); await settle(); });
+    const card = document.querySelector("[data-companion-report]")!;
+    expect(card.textContent).toContain(locale === "uk" ? "Повідомлення" : "Message");
+    expect(card.querySelector("[data-companion-answer]")!.textContent).toBe(text);
+    await unmountNow();
+  }
+  await act(async () => setLocale("en"));
+});
+
 
 test("one poll preserves the order of standalone reports and answers to different requests", async () => {
   const { VoiceCompanion } = await import("./VoiceCompanion");

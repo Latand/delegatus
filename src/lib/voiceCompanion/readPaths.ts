@@ -1,9 +1,17 @@
 import { namedProjectDirectory, resolveNamedProject, ProjectNameRefusal } from "@/lib/projects/nameResolution";
-import { constants } from "node:fs";
+import { constants, closeSync, fstatSync } from "node:fs";
+import path from "node:path";
 import fs from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { transcriptSearchPage } from "@/lib/search/transcriptSearchPage";
-import { viewerReadTools, productionDomainDependencies, type ViewerMcpDomainDependencies } from "@/lib/mcp/bindings";
+import { viewerReadTools, productionDomainDependencies, openPinnedTranscript, type ViewerMcpDomainDependencies } from "@/lib/mcp/bindings";
+import { selectedConversationTarget } from "@/lib/mcp/selectedContextTarget";
+import { withViewerOperation } from "@/lib/viewerLoopMonitor";
+import { waitForStateLock } from "@/lib/state/lockWait";
+import { reportHeaderName } from "@/lib/projects/settings";
+import { projectHandle, voiceProjectName, voiceProjectRows } from "./projectNames";
+import { seatMessages, seatActions, newestSeatReply, type SeatActionRead } from "./seatTranscript";
+import type { MessagesPageSource } from "@/lib/session/messagesPage";
 import { boardSelection } from "@/lib/mcp/boardSelection";
 import { budgetPage } from "@/lib/mcp/budgetPage";
 import type { AgentLivenessSources } from "@/lib/lifecycle/liveness";
@@ -42,7 +50,55 @@ export function createCompanionBoardReadPaths(dependencies: { domain?: ViewerMcp
     const selection = domain.taskSelectionSource?.();
     return selection ? selection.read(id) : (domain.listTaskRecords?.() ?? domain.loadTasks()).find(row => row.id === id);
   };
+  const directoryData = () => {
+      const tasks = domain.taskSelectionSource?.();
+      const records = tasks ? [] : (domain.listTaskRecords?.() ?? domain.loadTasks());
+      const counts = tasks ? boardSelection(tasks.filename, "tasks").openTaskCounts(tasks)
+        : [...new Set(records.map(row => row.project))].map(project => ({ project, count: records.filter(row => row.project === project && ["inbox", "assigned", "blocked"].includes(row.status)).length }));
+      const pipelines = domain.pipelineSelectionSource?.();
+      const keys = pipelines ? boardSelection(pipelines.filename, "pipelines").projectKeys(pipelines)
+        : (domain.listPipelineRecords?.() ?? domain.getPipelines().pipelines).map(row => row.project);
+      const directory = namedProjectDirectory(domain, [...counts.map(row => row.project), ...keys]);
+      const totals = new Map<string, number>();
+      for (const row of counts) { const key = directory.canonical(row.project); totals.set(key, (totals.get(key) ?? 0) + row.count); }
+      const folders = new Map(domain.lastCompletedCatalog?.()?.projectCatalog.map(row => [directory.canonical(row.project), row.projectRoot ? path.basename(row.projectRoot) : ""]));
+      const projects = [...directory.labels].map(([project, displayName]) => ({ project, displayName, liveSeat: directory.active.has(project), openTaskCount: totals.get(project) ?? 0, folder: folders.get(project) }))
+        .sort((a, b) => a.displayName.localeCompare(b.displayName) || a.project.localeCompare(b.project));
+      return { directory, projects };
+  };
+  const readSeat = <T>(project: string, read: (source: MessagesPageSource, filename: string) => T): Promise<T> => withViewerOperation("voice.orchestrator-read", () => waitForStateLock("voice.orchestrator-read", () => {
+    const conversationId = orchestratorSeatFor(project).active?.conversationId;
+    if (!conversationId) throw new Error("NO_ORCHESTRATOR");
+    const selected = selectedConversationTarget({ conversationId }, domain.selectedContext ?? productionDomainDependencies.selectedContext!);
+    if (!selected.path || canonicalProject(selected.project ?? "") !== canonicalProject(project)) throw new Error("PROJECT_REFUSED");
+    const pinned = (domain.pinnedTranscript ?? openPinnedTranscript)(selected.path);
+    if (!pinned) throw new Error("TRANSCRIPT_UNAVAILABLE");
+    try {
+      const result = read({ descriptor: pinned.descriptor, size: pinned.stat.size, engine: selected.engine }, selected.path);
+      if (!pinned.sameIdentity()) throw new Error("TRANSCRIPT_UNAVAILABLE");
+      return result;
+    } finally { closeSync(pinned.descriptor); }
+  }));
   return {
+    async seatMessages(project, args, redact) { return readSeat(project, (source, filename) => seatMessages(source, filename, args, redact)); },
+    async seatActions(project, args, redact) {
+      const retained: SeatActionRead = {};
+      let identity: string | undefined;
+      return readSeat(project, (source, filename) => {
+        const stat = fstatSync(source.descriptor);
+        const current = `${filename}:${stat.dev}:${stat.ino}`;
+        if (identity && identity !== current) throw new Error("TRANSCRIPT_UNAVAILABLE");
+        identity = current;
+        // A metadata lock retry reuses the bounded transcript page and every
+        // title already read. It never spends another transcript scan budget.
+        return seatActions(source, filename, args, redact, (kind, id) => {
+          const record = kind === "task" ? task(id) : domain.readPipelineRecord?.(id);
+          if (!record || canonicalProject(record.project) !== canonicalProject(project)) return undefined;
+          return "text" in record ? record.text : record.task;
+        }, retained);
+      });
+    },
+    async seatReply(project, message, redact) { return readSeat(project, (source, filename) => newestSeatReply(source, filename, message, redact)); },
     call: (name, args, redactText = defaultRedactor) => {
       const reads = readsFor(redactText);
       const context = { redactText };
@@ -67,36 +123,32 @@ export function createCompanionBoardReadPaths(dependencies: { domain?: ViewerMcp
       const selected = domain.selectedContext?.selectedConversation().resolve(id);
       return selected?.project ?? null;
     },
-    projects() {
-      const tasks = domain.taskSelectionSource?.();
-      const records = tasks ? [] : (domain.listTaskRecords?.() ?? domain.loadTasks());
-      const counts = tasks ? boardSelection(tasks.filename, "tasks").openTaskCounts(tasks)
-        : [...new Set(records.map(row => row.project))].map(project => ({ project, count: records.filter(row => row.project === project && ["inbox", "assigned", "blocked"].includes(row.status)).length }));
-      const pipelines = domain.pipelineSelectionSource?.();
-      const keys = pipelines ? boardSelection(pipelines.filename, "pipelines").projectKeys(pipelines)
-        : (domain.listPipelineRecords?.() ?? domain.getPipelines().pipelines).map(row => row.project);
-      const directory = namedProjectDirectory(domain, [...counts.map(row => row.project), ...keys]);
-      const totals = new Map<string, number>();
-      for (const row of counts) { const key = directory.canonical(row.project); totals.set(key, (totals.get(key) ?? 0) + row.count); }
-      return [...directory.labels].map(([project, displayName]) => ({ project, displayName, liveSeat: directory.active.has(project), openTaskCount: totals.get(project) ?? 0 }))
-        .sort((a, b) => a.displayName.localeCompare(b.displayName) || a.project.localeCompare(b.project));
-    },
+    projects: () => directoryData().projects,
     recipient: project => orchestratorSeatFor(project).active?.conversationId ?? null,
-    resolveProject(current, requested) {
+    resolveProject(current, requested, seated = false) {
       if (!requested && !current) throw new Error("PROJECT_REQUIRED");
-      const tasks = domain.taskSelectionSource?.();
-      const pipelines = domain.pipelineSelectionSource?.();
-      const keys = [
-        ...(tasks ? boardSelection(tasks.filename, "tasks").projectKeys(tasks) : (domain.listTaskRecords?.() ?? domain.loadTasks()).map(row => row.project)),
-        ...(pipelines ? boardSelection(pipelines.filename, "pipelines").projectKeys(pipelines) : (domain.listPipelineRecords?.() ?? domain.getPipelines().pipelines).map(row => row.project)),
-      ];
-      const directory = namedProjectDirectory(domain, keys);
+      const { directory, projects } = directoryData();
+      const folded = requested?.trim().toLowerCase();
+      const inView = current ? directory.canonical(current) : null;
+      if (inView && directory.labels.has(inView) && (!folded || [directory.labels.get(inView), reportHeaderName(inView, "en"), reportHeaderName(inView, "uk")].some(label => label?.trim().toLowerCase() === folded))) return inView;
+      const handled = projects.filter(row => projectHandle(row.project) === requested);
+      if (handled.length === 1) return handled[0].project;
+      const presented = voiceProjectRows(projects, current, true).filter(row => row.name.trim().toLowerCase() === folded && (!seated || row.orchestrator));
+      if (presented.length === 1) return projects.find(row => projectHandle(row.project) === presented[0].handle)!.project;
+      const named = projects.filter(row => voiceProjectName(row).trim().toLowerCase() === folded);
+      const seats = named.filter(row => row.liveSeat);
+      if (seats.length === 1) return seats[0].project;
+      if (named.length === 1 && (!seated || named[0].liveSeat)) return named[0].project;
       // An omitted name uses the call's bound identity, even if another
       // project's display label happens to spell that key.
       if (!requested && current && directory.labels.has(directory.canonical(current))) return directory.canonical(current);
-      try { return resolveNamedProject(requested ?? current!, directory); }
+      try { return resolveNamedProject(requested ?? current!, directory, seated); }
       catch (error) {
-        if (error instanceof ProjectNameRefusal) throw Object.assign(new Error(error.details.code === "ambiguous_project" ? "PROJECT_AMBIGUOUS" : "PROJECT_REFUSED"), { candidates: error.details.candidateNames });
+        if (error instanceof ProjectNameRefusal) {
+          const candidates = Array.isArray(error.details.candidateNames) ? error.details.candidateNames as Array<{ project: string }> : [];
+          throw Object.assign(new Error(error.details.code === "ambiguous_project" ? "PROJECT_AMBIGUOUS" : "PROJECT_REFUSED"),
+            { candidates: voiceProjectRows(projects, current, true).filter(row => candidates.some(candidate => projectHandle(candidate.project) === row.handle)) });
+        }
         throw error;
       }
     },

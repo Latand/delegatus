@@ -251,7 +251,8 @@ test("project names resolve from the real catalog and ambiguity never widens a v
   expect(()=>reads.resolveProject("stale-context","stale-context")).toThrow("PROJECT_REFUSED");
   expect(await reads.call("project-a", "list_tasks", { query: "unmatched query" })).toMatchObject({ total: 0 });
   replaceConversationCatalog([catalog("project-a","Duplicate"),catalog("project-b","Duplicate")]);
-  expect(()=>reads.resolveProject("project-a","Duplicate")).toThrow("PROJECT_AMBIGUOUS");
+  expect(reads.resolveProject("project-a","Duplicate")).toBe("project-a");
+  expect(()=>reads.resolveProject(null,"Duplicate")).toThrow("PROJECT_AMBIGUOUS");
   replaceConversationCatalog([]);
 });
 
@@ -382,8 +383,8 @@ test("voice reads select the single seated parent when a catalog lookalike share
     expect(await reads.call(project, "list_tasks", { project: " oRiOn WoRkS " })).toMatchObject({ total: 1, rows: [{ handle: "orion-task" }] });
     expect(await reads.call(project, "list_pipelines", { project: "Orion Works" })).toMatchObject({ total: 1 });
     expect(await reads.call(project, "list_tasks", {})).toMatchObject({ total: 1 });
-    expect(await reads.call(project, "get_orchestrator", { project: "Orion Works" })).toMatchObject({ item: { project, liveSeat: true, conversationId: "conversation_orion" } });
-    expect(await reads.call(project, "orchestrator_messages", { project: "Orion Works" })).toMatchObject({ rows: [{ excerpt: "Routing checked" }] });
+    expect(await reads.call(project, "get_orchestrator", { project: "Orion Works" })).toMatchObject({ item: { liveSeat: true } });
+    expect(await reads.call(project, "orchestrator_messages", { project: "Orion Works" })).toMatchObject({ rows: [{ text: "Routing checked" }] });
     expect(reads.projects().find(row => row.project === project)).toMatchObject({ displayName: "Orion Works", liveSeat: true, openTaskCount: 1 });
     const { CompanionAdmission } = await import("./admission");
     const { CompanionStorage } = await import("./storage");
@@ -397,7 +398,7 @@ test("voice reads select the single seated parent when a catalog lookalike share
   } finally { replaceConversationCatalog([]); }
 });
 
-test("an explicit project key collision refuses instead of following a seated project's label", async () => {
+test("the current project stays selected when its visible label also names another seated project", async () => {
   const { replaceConversationCatalog } = await import("@/lib/scanner/conversationCatalog");
   const { persistProjectAliases } = await import("@/lib/projects/aliases");
   const { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } = await import("@/lib/orchestrator/seats");
@@ -412,8 +413,8 @@ test("an explicit project key collision refuses instead of following a seated pr
     placement: "unplaced" as const, assignments: [], createdAt: at, updatedAt: at })));
   const reads = new CompanionBoardReads(createCompanionBoardReadPaths());
   try {
-    expect(() => reads.resolveProject("project-b", "project-b")).toThrow("PROJECT_AMBIGUOUS");
-    await expect(reads.call("project-b", "list_tasks", { project: "project-b" })).rejects.toThrow("PROJECT_AMBIGUOUS");
+    expect(reads.resolveProject("project-b", "project-b")).toBe("project-b");
+    expect(await reads.call("project-b", "list_tasks", { project: "project-b" })).toMatchObject({ rows: [{ handle: "task-project-b" }] });
     const { CompanionAdmission } = await import("./admission");
     const { CompanionStorage } = await import("./storage");
     const { runCompanionTool } = await import("./tools");
@@ -423,9 +424,106 @@ test("an explicit project key collision refuses instead of following a seated pr
       return { project, conversationId: "conversation_project_a", seatEpoch: 1, engine: "claude" };
     }, reports: () => [], send: async () => ({ status: "delivered", operationId: "identity-send" }) });
     const session = admission.create({ project: "project-b", locale: "en", authority: "live-model" });
-    await expect(runCompanionTool({ project: "project-b", sessionId: session.id, callId: "identity-call", delegationId: "identity-turn", admission,
+    expect(await runCompanionTool({ project: "project-b", sessionId: session.id, callId: "identity-call", delegationId: "identity-turn", admission,
       reads, endConversation: () => undefined }, "request_orchestrator_delegation", { project: "project-b", instruction: "Check project B", confirmation_reason: null }))
-      .rejects.toThrow("PROJECT_AMBIGUOUS");
-    expect(recipients).toEqual([]);
+      .toMatchObject({ status: "sent" });
+    expect(recipients).toEqual(["project-b"]);
   } finally { replaceConversationCatalog([]); }
+});
+
+test("a 40 MiB seat with old messages stops within 2 MiB under its named loop operation", async () => {
+  const { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } = await import("@/lib/orchestrator/seats");
+  const { viewerLoopMonitor } = await import("@/lib/viewerLoopMonitor");
+  const filename = path.join(root, "large-seat.jsonl");
+  fs.writeFileSync(filename, JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "Old reply" }] } }) + "\n");
+  const noise = JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", id: "noise", name: "Bash", input: { command: "x".repeat(65536) } }] } }) + "\n";
+  const descriptor = fs.openSync(filename, "a");
+  try { for (let index = 0; index < 640; index++) fs.writeSync(descriptor, noise); } finally { fs.closeSync(descriptor); }
+  const project = "large-seat";
+  beginOrchestratorSeatIntent({ project, mandate: "Own the board", clientRequestId: "large-seat", mode: "spawn", promptVersion: null });
+  completeOrchestratorSeatIntent({ project, clientRequestId: "large-seat", conversationId: "conversation_large", path: filename });
+  let observed: string | undefined;
+  const reads = new CompanionBoardReads(createCompanionBoardReadPaths({ transcript: {
+    selectedContext: { selectedConversation: () => ({ resolve: () => ({ conversationId: "conversation_large", path: filename, project, engine: "claude" }),
+      readTail: () => { throw new Error("No whole transcript reads"); } }), pathAllowed: candidate => candidate === filename },
+    pinnedTranscript: candidate => { observed = viewerLoopMonitor.current(); const descriptor = fs.openSync(candidate, "r");
+      return { descriptor, stat: fs.fstatSync(descriptor), rootName: "claude-projects", root, sameIdentity: () => true }; },
+  } }));
+  const start = performance.now();
+  const result = await reads.call(project, "orchestrator_messages", {});
+  console.info(`bounded seat read: ${Math.round(performance.now() - start)} ms, ${result.scanned?.bytes} bytes`);
+  expect(fs.statSync(filename).size).toBeGreaterThan(40 * 1024 * 1024);
+  expect(observed).toBe("voice.orchestrator-read");
+  expect(result).toMatchObject({ more: true, rows: [], scanned: { capped: true } });
+  expect(result.scanned!.bytes).toBeLessThanOrEqual(2 * 1024 * 1024);
+});
+
+test("action titles use keyed records only, at most thirty, and never another project's title", async () => {
+  const { seatActions } = await import("./seatTranscript");
+  const filename = path.join(root, "actions-titles.jsonl");
+  fs.writeFileSync(filename, Array.from({ length: 40 }, (_, index) => JSON.stringify({ type: "assistant", timestamp: "2026-10-15T12:00:00Z",
+    message: { content: [{ type: "tool_use", id: `action-${index}`, name: "mcp__viewer__update_task", input: { taskId: `task-${index}`, status: "done" } }] } })).join("\n") + "\n");
+  const descriptor = fs.openSync(filename, "r");
+  let lookups = 0;
+  try {
+    const result = seatActions({ descriptor, size: fs.fstatSync(descriptor).size, engine: "claude" }, filename, { limit: 30 }, value => value,
+      (_kind, id) => { lookups++; return `Visible title ${id.split("-").at(-1)}`; });
+    expect(result.rows).toHaveLength(30);
+    expect(lookups).toBeLessThanOrEqual(30);
+    expect(result.rows![0]).toMatchObject({ action: "Updated task «Visible title 39»: done" });
+    expect(JSON.stringify(result)).not.toContain("task-39");
+  } finally { fs.closeSync(descriptor); }
+});
+
+test("the seat read retries a peer-held SQLite lock with an advancing timer and retains the keyed title", async () => {
+  const { Database } = await import("bun:sqlite");
+  const { stateLockAttempt } = await import("@/lib/state/lockWait");
+  const { productionDomainDependencies } = await import("@/lib/mcp/bindings");
+  const { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } = await import("@/lib/orchestrator/seats");
+  const { readLockPeer, threeTimerTicks } = await import("./readLock.fixture");
+  const filename = path.join(root, "title-peer.sqlite"); const transcript = path.join(root, "title-peer.jsonl");
+  const db = new Database(filename, { create: true });
+  db.exec("PRAGMA busy_timeout = 0"); db.exec("CREATE TABLE titles (id TEXT PRIMARY KEY, title TEXT)");
+  db.query("INSERT INTO titles VALUES (?, ?)").run("pipeline_title", "Verified lane title");
+  fs.writeFileSync(transcript, JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", id: "retry", name: "mcp__viewer__pipeline_action", input: { action: "retry-merge", pipelineId: "pipeline_title" } }] } }) + "\n");
+  const project = "peer-title";
+  beginOrchestratorSeatIntent({ project, mandate: "Own the board", clientRequestId: project, mode: "spawn", promptVersion: null });
+  completeOrchestratorSeatIntent({ project, clientRequestId: project, conversationId: "conversation_title_peer", path: transcript });
+  const paths = createCompanionBoardReadPaths({ domain: { ...productionDomainDependencies,
+    readPipelineRecord: id => { const row = stateLockAttempt("voice.test-title", () => db.query<{ title: string }, [string]>("SELECT title FROM titles WHERE id=?").get(id));
+      return row ? buildPipeline({ id, project, task: row.title, repoDir: root, srcPath: null, srcConversationId: null, now: "2026-10-15T12:00:00Z", stages: [] }) : null; },
+  }, transcript: {
+    selectedContext: { selectedConversation: () => ({ resolve: () => ({ conversationId: "conversation_title_peer", path: transcript, project, engine: "claude" }), readTail: () => null }), pathAllowed: candidate => candidate === transcript },
+    pinnedTranscript: candidate => { const descriptor = fs.openSync(candidate, "r"); return { descriptor, stat: fs.fstatSync(descriptor), rootName: "claude-projects", root, sameIdentity: () => true }; },
+  } });
+  const reads = new CompanionBoardReads({ ...paths, resolveProject: () => project });
+  const peer = await readLockPeer(root, filename, "sqlite"); let settled = false;
+  const pending = reads.call(project, "orchestrator_actions", {}).finally(() => { settled = true; });
+  void pending.catch(() => {});
+  try {
+    await threeTimerTicks(); expect(settled).toBe(false);
+    await peer.release();
+    expect(await pending).toMatchObject({ rows: [{ action: "Put lane «Verified lane title» back in the merge queue" }] });
+  } finally { await peer.release(); db.close(); }
+}, 20000);
+
+test("an action continuation metadata retry reuses its page and result overlap without another descriptor byte", async () => {
+  const { seatActions } = await import("./seatTranscript");
+  const filename = path.join(root, "retained-actions.jsonl");
+  fs.writeFileSync(filename, [
+    { type: "assistant", message: { content: [{ type: "tool_use", id: "retained", name: "mcp__viewer__update_task", input: { taskId: "title" } }] } },
+    { type: "user", message: { content: [{ type: "tool_result", tool_use_id: "retained", content: '{"ok":true}' }] } },
+    { type: "assistant", message: { content: [{ type: "tool_use", id: "newer", name: "mcp__viewer__create_pipeline", input: { task: "New lane" } }] } },
+  ].map(row => JSON.stringify(row)).join("\n") + "\n");
+  const descriptor = fs.openSync(filename, "r");
+  const source = { descriptor, size: fs.fstatSync(descriptor).size, engine: "claude" as const };
+  const first = seatActions(source, filename, { limit: 1 }, value => value, () => undefined);
+  const args = { before: first.before };
+  const retained: import("./seatTranscript").SeatActionRead = {};
+  try { expect(() => seatActions(source, filename, args, value => value, () => { throw new Error("metadata busy"); }, retained)).toThrow("metadata busy"); }
+  finally { fs.closeSync(descriptor); }
+  // A second read would fail with EBADF: the retained page is the only source.
+  expect(retained.overlap!.bytes).toBeGreaterThan(0);
+  const result = seatActions(source, filename, args, value => value, () => "Retained title", retained);
+  expect(result.rows).toMatchObject([{ action: "Updated task «Retained title»", outcome: "done" }]);
 });

@@ -27,7 +27,7 @@ import { RulesWindow } from "@/components/roleMemory/LearnedRules";
 import type { AttentionDismissalMark, DismissalTarget } from "@/lib/attention/dismissalTypes";
 import { COMPANION_PROTECT, COMPANION_ROWS, companionReserved, companionShellReady } from "@/components/voiceCompanion/hostSurfaces";
 import { VoiceCompanion } from "@/components/voiceCompanion/VoiceCompanion";
-import { sampleTranscript } from "@/components/voiceCompanion/transcriptSample.fixture";
+import { sampleTranscript, sampleOrchestratorMessage } from "@/components/voiceCompanion/transcriptSample.fixture";
 import type { CompanionEvent, CompanionPlan } from "@/lib/voiceCompanion/contract";
 import { DEMO_IDS, SCENARIO_PLAYBACK_PAUSE, demoAnswer, demoInstruction, isScenario, scenarioScript } from "@/lib/voiceCompanion/scenarios";
 import { createSimulatedCompanion, realClock } from "@/lib/voiceCompanion/simulator";
@@ -4653,7 +4653,14 @@ function voiceCompanionScene() {
       publish({ ...event, type: "playback.stopped", reason: "ended", eventId: `${event.eventId}:pause` });
     }
   });
-  void adapter.finished.then(() => { voice.finished = true; });
+  void adapter.finished.then(() => {
+    if (params.get("seatmessage") === "1") {
+      const last = voice.events.at(-1) as CompanionEvent;
+      publish({ ...last, type: "orchestrator.report", eventId: "whole-orchestrator-message", reportId: "voice-whole-message",
+        status: "message", project: PROJECT, at: Date.parse("2026-10-15T12:00:00Z"), text: sampleOrchestratorMessage(UK ? "uk" : "en") });
+    }
+    voice.finished = true;
+  });
   Object.assign(window, { voiceCompanion: voice });
   let sendLost = params.get("sendlost") === "1";
   const shown: VoiceCompanionAdapter = {
@@ -4666,6 +4673,8 @@ function voiceCompanionScene() {
       const record = sampleTranscript(UK ? "uk" : "en", PROJECT);
       record.entries.push({ id: "standalone-report", kind: "report", atMs: 90_000, order: 100,
         data: { project: PROJECT, projectName: "Atlas", status: "result", text: UK ? "Усі перевірки завершено. Звіт збережено після завершення розмови." : "All checks completed. This report remains saved after the call ended." } });
+      if (params.get("seatmessage") === "1") record.entries.push({ id: "report-voice-whole-message", kind: "report", atMs: 91000, order: 101,
+        data: { project: PROJECT, projectName: "Atlas", status: "message", text: sampleOrchestratorMessage(UK ? "uk" : "en") } });
       return { ...record, usage: VOICE_CODEX ? { backend: "codex" as const, callSeconds: 252, callFinal: true, plan: voicePlan(), planStartPercent: 21 }
         : { callUsd: 0.19, callFinal: true, callIncomplete: false, month: "2026-10", monthUsd: 0.51, monthCapUsd: 20 } };
     } } : {}),
