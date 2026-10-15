@@ -494,7 +494,7 @@ Everything in V2, then compressed:
   characters by trusting the server's refusals
   (`boardMaintenance/guard.ts:68-78`) and drops their enumeration.
 - Every merger sentence beyond the core protocol moves to the project file.
-- Mandate of 13,983 characters (−52%): bulleted sections; rare-path task
+- Mandate of 14,058 characters (−52%): bulleted sections; rare-path task
   binding mechanics, review-edge details, bridge-report rules, attention and
   draft rules move into the descriptions of the tools they govern
   (`v3/tool-descriptions.txt`, verbatim with the target tool).
@@ -519,7 +519,7 @@ needs the most new tests.
 | contradictions fixed | yes | yes | yes |
 | project text moved out | partly (visual critic, test guidance, runtime host) | all 28 sentences | all |
 | 13 roles, one file each | 64,965 (−3%) | 81,831 (+23%) | 48,362 (−27%) |
-| seat (scaffold + mandate) | 28,922 (−3%) | 30,320 (+1%) | 16,512 (−45%) |
+| seat (scaffold + mandate) | 28,922 (−3%) | 30,320 (+1%) | 16,587 (−45%) |
 | reviewer stage, whole layer | −2% | +5% | −26% |
 | moves text to tool descriptions | no | no | yes (`v3/tool-descriptions.txt`) |
 | new behaviour | none | merger asks when no batch procedure exists; hold replaces blocked | V2 plus a "universal" lesson level |
@@ -588,12 +588,12 @@ delivered: body, shared rules or core, fences.
 | role: issue-reporter | 5,967 | 5,967 | 7,283 | 4,315 | +0% | +22% | -28% |
 | role: visual-critic | 5,281 | 4,817 | 6,182 | 4,055 | -9% | +17% | -23% |
 | **13 roles, one file each** | **66,681** | **64,965** | **81,831** | **48,362** | **-3%** | **+23%** | **-27%** |
-| mandate | 29,320 | 28,302 | 26,188 | 13,983 | -3% | -11% | -52% |
+| mandate | 29,320 | 28,302 | 26,188 | 14,058 | -3% | -11% | -52% |
 | stage wrapper (read-only) | 3,709 | 3,761 | 4,485 | 4,078 | +1% | +21% | +10% |
 | stage wrapper (read-write) | 3,713 | 3,765 | 4,489 | 4,082 | +1% | +21% | +10% |
 | memory/learned-rules.stage.txt | 860 | 860 | 843 | 843 | +0% | -2% | -2% |
 | memory/lesson-request.txt | 2,646 | 2,646 | 2,665 | 2,916 | +0% | +1% | +10% |
-| **seat: orchestrator scaffold + mandate** | **29,940** | **28,922** | **30,320** | **16,512** | **-3%** | **+1%** | **-45%** |
+| **seat: orchestrator scaffold + mandate** | **29,940** | **28,922** | **30,320** | **16,587** | **-3%** | **+1%** | **-45%** |
 
 A pipeline stage's whole first-message layer from Delegatus (stage wrapper
 plus role scaffold; the brief and the pinned specification excluded). For V2
@@ -847,7 +847,7 @@ rule still lives or why it no longer applies.
 | M12.15-16 | `orchestrator/prompt.ts:358-383; src/lib/tasks/colorRule.ts:10-24` | D |  | edited (points to create_task's colour rule) | merged into NAME paragraph | bullet 3 |
 | M12.17 | `orchestrator/prompt.ts:358-383; src/lib/tasks/colorRule.ts:10-24` | R | the colour rule repeats create_task's description | dropped (R) | dropped (R) | dropped (R) |
 | M12.18 | `orchestrator/prompt.ts:358-383; src/lib/tasks/colorRule.ts:10-24` | R | text vs details: create_task, update_task and the MCP instructions say it | kept | edited (pointer) | bullet 3 |
-| M12.19 | `orchestrator/prompt.ts:358-383; src/lib/tasks/colorRule.ts:10-24` | R |  | kept | dropped (R: create_task's description) | dropped (R) |
+| M12.19 | `orchestrator/prompt.ts:358-383; src/lib/tasks/colorRule.ts:10-24` | R | details: create_task's description says it | kept | dropped (R: create_task's description) | bullet 3 (shortened) |
 | M12.20 | `orchestrator/prompt.ts:358-383; src/lib/tasks/colorRule.ts:10-24` | D |  | kept | kept | tool desc: create_task |
 | M12.21-25 | `orchestrator/prompt.ts:358-383; src/lib/tasks/colorRule.ts:10-24` | D | binding at reservation | kept | kept | bullet 4 + tool desc: create_pipeline, spawn_agent |
 | M12.26-32 | `orchestrator/prompt.ts:358-383; src/lib/tasks/colorRule.ts:10-24` | D |  | kept | kept | bullet 4 + tool desc: create_pipeline, spawn_agent |
@@ -856,7 +856,7 @@ rule still lives or why it no longer applies.
 | M12.36-38 | `orchestrator/prompt.ts:358-383; src/lib/tasks/colorRule.ts:10-24` | D | placeholder repair | kept | kept | bullet 6 + tool desc: pipeline_action, link_task_to_pipeline |
 | M12.39-42 | `orchestrator/prompt.ts:358-383; src/lib/tasks/colorRule.ts:10-24` | D |  | kept | kept | bullet 7 + tool desc: get_task, pipeline_action |
 | M12.43-44 | `orchestrator/prompt.ts:358-383; src/lib/tasks/colorRule.ts:10-24` | U | no two live claims for one outcome | kept | kept | bullet 8 |
-| M12.45 | `orchestrator/prompt.ts:358-383; src/lib/tasks/colorRule.ts:10-24` | R | 'mark blocked' predates the task hold | kept | edited (hold) | bullet 8 |
+| M12.45 | `orchestrator/prompt.ts:358-383; src/lib/tasks/colorRule.ts:10-24` | R | 'mark blocked' predates the task hold | kept | edited (hold) | bullet 8 (hold) |
 | M12.46 | `orchestrator/prompt.ts:358-383; src/lib/tasks/colorRule.ts:10-24` | U | never close in bulk to tidy | kept | kept | bullet 8 |
 | M12.47-51 | `orchestrator/prompt.ts:358-383; src/lib/tasks/colorRule.ts:10-24` | U | idempotent retries keep their key | kept | kept | bullet 9 (shortened) |
 | M13.1-3 | `orchestrator/prompt.ts:470-484` | D |  | kept | kept | bullet 1 |

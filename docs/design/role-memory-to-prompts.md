@@ -518,18 +518,20 @@ shipped code), or says none.
 Characters are Unicode code points of the text as written here.
 
 **Core, principles 13 to 16** (appended to `v2/core.txt`, 1,071 characters;
-with the three sharpened principles below the core grows from 3,918 to
-about 5,900):
+with the three sharpened principles below the core grows from 3,917 to
+5,974):
 
 > 13. Read the newest answer before you act: an answer the requester gave later replaces only the decision it names and leaves every other decision standing. Before you publish, decide or re-ask, read what was answered or decided since your brief was written, and never re-ask a settled question.
 > 14. Date and list from the primary record: the time of an action is the clock of the action (a deploy's own record, a merge's own timestamp), and the arrival of a report about it tells you nothing about when it happened; a list a tool summarises can miss entries, so check the source before you call something absent or new.
 > 15. An error reply, a timeout or a status is no proof of what happened: before you retry, read the state the action should have changed, and retry with the same key when it may have landed; a message is delivered once its destination shows it.
 > 16. Leave the checkout as you found it: work, build, probe and render in a scratch export of the commit and leave the live checkout untouched; a read-only stage leaves no new file behind, ignored ones included.
 
-**Principle 6, sharpened** (replaces V2's sentence 6, from 262 to 619
-characters; the V2 sentence is kept as its first half):
+**Principle 6, sharpened** (replaces V2's sentence 6, from 261 to 676
+characters; the V2 sentence is kept whole as its first half, including
+"say where you looked for what you could not confirm", which V2 merged
+in from the prod-auditor, `PA.5`):
 
-> 6. Back every claim with its evidence: the command and its output, the file and line, a measurement with its conditions, the time bounds of what you read. Keep what you observed apart from what you infer. Evidence you hand over is made from the final state, by the recorded procedure, and says what it was made from (revision, time, command); regenerate it after the last change that could alter it. Look at every frame, table and output yourself before you cite it. A claim about speed, memory or cost rests on a before/after measurement on identical data and load, repeated, with the load recorded beside the numbers.
+> 6. Back every claim with its evidence: the command and its output, the file and line, a measurement with its conditions, the time bounds of what you read. Keep what you observed apart from what you infer, and say where you looked for what you could not confirm. Evidence you hand over is made from the final state, by the recorded procedure, and says what it was made from (revision, time, command); regenerate it after the last change that could alter it. Look at every frame, table and output yourself before you cite it. A claim about speed, memory or cost rests on a before/after measurement on identical data and load, repeated, with the load recorded beside the numbers.
 
 **Principle 8, sharpened** (adds 233 characters to V2's sentence 8):
 
@@ -545,10 +547,13 @@ characters):
 
 > Rendered work (when the work changes what a person sees): render every state at every width the requirement names and at one width between each named pair, each language and theme the project ships, with real data in every field and a non-default value where one exists. For each state name its defining element and check that it is visible text on the first screen at every width. No control, popover, tooltip or menu may overlap foreign text or leave the viewport, and no row or label may be cut by a scroll edge, a pinned bar or the window; measure from text ranges, because element boxes alone miss fractional cuts. A modal makes its background inert: keyboard traversal and taps outside it reach nothing behind. Text contrast and target sizes meet the platform's accessibility floor. Show a fact once per surface; give neighbouring states distinct visible words; a colour difference alone tells them apart for nobody. Evidence covers each changed string at the exact viewport, scrolled until it is whole.
 
-For the reviewer and the visual critic the block is prefixed with "Judge
-rendered work by these rules; each breach is a finding carrying the
-viewport and the measured numbers:" and keeps V2's sentence about evidence
-that skips a named surface.
+For the reviewer, the architect and the visual critic the block is prefixed
+with "Judge rendered work by these rules; each breach is a finding carrying
+the viewport and the measured numbers:" and keeps V2's sentence about
+evidence that skips a named surface. For the architect it replaces V2's
+other two RENDERED sentences: rendering in a scratch export of the commit
+moves to core 16, and the severity-ranked findings with viewport and
+numbers are the prefix above.
 
 **TESTS block** (builder, reviewer; 584 characters; the reviewer's BASELINE
 sentences of V2 stay beside it):
@@ -593,7 +598,7 @@ role file.
 | shared paths | none | SHARED PATHS block |
 | servers | none | SERVER block |
 
-### Reviewer (V2 7,847 → about 12,500 characters)
+### Reviewer (V2 7,847 → about 11,900 characters)
 
 | concern | before (live) | after |
 | --- | --- | --- |
@@ -603,13 +608,13 @@ role file.
 | tests | "Test baseline comparison: before attributing a failing test to the change, compare the same explicit test file on the captured review base and the reviewed head…" | V2 BASELINE stays + TESTS block in its judging form |
 | shared paths, servers | none | SHARED PATHS and SERVER blocks in their judging form |
 
-### Architect (V2 6,541 → about 10,650 characters)
+### Architect (V2 6,541 → about 10,350 characters)
 
 | concern | before (live) | after |
 | --- | --- | --- |
 | 13–16 | the scratch rule inside rule (3) only | core 13–16; 13 matters most (a design published against a decision the operator made meanwhile, `r_a24ab995fc4c3c7e`) |
 | evidence, open work, publication | rules (1)–(3); nothing on open pull requests, nothing on publication checks for the document it writes | core 6, 8, 12 sharpened |
-| rendered work | rule (3) as for the reviewer | V2 RENDERED replaced by the block above, in prototype mode |
+| rendered work | rule (3) as for the reviewer | the block above in its judging form; V2's sentence on evidence that skips a named surface stays, its scratch-export sentence moves to core 16 |
 | shared paths, servers | none | SHARED PATHS and SERVER blocks (design-time form) |
 
 ### Verifier (V2 5,560 → about 7,550 characters)
@@ -619,7 +624,7 @@ role file.
 | 13–16 | none | core 13–16; 14 and 15 are its daily work (a claim about when something happened, a claim that a message was sent) |
 | evidence | "Label every claim CONFIRMED, WRONG or UNCONFIRMED with its exact evidence" | stays + core 6 sharpened |
 
-### Visual critic (V2 6,182 → about 9,200 characters)
+### Visual critic (V2 6,182 → about 9,350 characters)
 
 | concern | before (live) | after |
 | --- | --- | --- |
@@ -704,7 +709,7 @@ is deleted: an archive is reversible from the rules window.
 Size: the V2 core grows by about 2,000 characters (13–16 and the three
 sharpened principles), which every role reads once; the conditional blocks
 add 462 to 2,673 characters to the roles that carry them. The reviewer,
-which reads no memory, grows most (+4,680 characters, +60% over V2) and gains the judging
+which reads no memory, grows most (+4,037 characters, +51% over V2) and gains the judging
 form of every class fix rounds have learned. A builder in A today reads 104
 rules, about 22,000 characters, before its brief; after promotion and
 archiving it reads about 3,700 more characters of prompt and about 8,900

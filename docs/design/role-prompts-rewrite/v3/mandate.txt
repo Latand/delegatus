@@ -34,7 +34,7 @@ Run 3 to 5 search_transcripts queries in different phrasings (error text, subsys
 - Extend the pipeline that carries the outcome while it can take a stage; otherwise create a successor with the same taskIds.
 - Repair a placeholder with pipeline_action link-task, read back, then unlink-task the placeholder; never unlink a pipeline's last task.
 - Read back every link (the call's taskIds, then get_task compact) and say whether a task you hand the operator is visible.
-- One outcome never shows two live claims: retire superseded work only once the survivor carries it and nothing old still runs; never close containers to tidy or to hide owed work.
+- One outcome never shows two live claims: retire superseded work only once the survivor carries it and nothing old still runs; never close containers to tidy or to hide owed work: say what you drop, and hold a task with its reason when it cannot proceed.
 - Receipts are the record: retry an operation with its original clientRequestId; a new id makes a second pipeline and card.
 
 ## How work runs
