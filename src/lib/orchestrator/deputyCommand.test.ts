@@ -8,6 +8,9 @@ import path from "node:path";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 
 import { beginDeputy, readDeputies } from "./deputies";
+import { readDeputyOwnLines, sweepDeputies } from "./deputySweep";
+import { productionDeputyCommandPorts } from "./deputyCommandPorts";
+import type { RuntimeHostClient } from "@/lib/runtime/client";
 import { askOrchestratorInParallel, deputyDeliveryOrigin, deputyMessageKey, deputySessionId, type DeputyCommandPorts } from "./deputyCommand";
 import type { OrchestratorSeat } from "./seats";
 
@@ -407,4 +410,47 @@ test("parallel C: a task-join refusal ends visibly before host delivery", async 
   expect(await askOrchestratorInParallel(ask, refused.ports)).toMatchObject({ ok: false, code: "launch_failed" });
   expect(readDeputies()[0]).toMatchObject({ state: "ended", outcome: "failed", error: "launch: task membership unavailable", ask: { text: ask.text } });
   expect(refused.calls.delivered).toEqual([]);
+});
+
+
+test("a late completed answer is reconciled before Retry can send the saved question again", async () => {
+  const answer = "The parallel question was answered before the host exited.";
+  const artifactPath = path.join(sandbox, "late-answer.jsonl");
+  const first = ports({ fork: () => {
+    fs.writeFileSync(artifactPath, "");
+    return { path: artifactPath, records: 0, size: 0 };
+  } });
+  expect(await askOrchestratorInParallel(ask, first.ports)).toMatchObject({ ok: true });
+  expect(first.calls.delivered).toHaveLength(1);
+
+  let ownLineReads = 0;
+  await sweepDeputies({
+    now: () => new Date("2026-09-26T12:02:00.000Z"),
+    deputies: readDeputies,
+    activeSeat: () => seat,
+    runtime: async () => {
+      fs.writeFileSync(artifactPath, `${JSON.stringify({ type: "assistant", message: { content: answer } })}\n`);
+      return { host: "dead", turn: "idle" };
+    },
+    ownLines: deputy => ++ownLineReads === 1 ? [] : readDeputyOwnLines(deputy),
+    interrupt: async () => {},
+    release: async () => {},
+    noteSeat: async () => "queued",
+  });
+  expect(readDeputies()[0]).toMatchObject({
+    state: "ended",
+    outcome: "host-died",
+    result: { finalText: answer },
+  });
+
+  const runtime = { readSession: async () => null } as unknown as RuntimeHostClient;
+  const production = productionDeputyCommandPorts({ client: () => runtime });
+  const retry = await askOrchestratorInParallel({ retryAskId: readDeputies()[0]!.askId, clientRequestId: "retry-late-answer" }, {
+    ...first.ports,
+    prepareRetry: production.prepareRetry,
+  });
+
+  expect(retry).toMatchObject({ ok: true, deputy: { state: "ended", outcome: "done", result: { finalText: answer } } });
+  expect(first.calls.delivered).toHaveLength(1);
+  expect(readDeputies()[0]).toMatchObject({ state: "ended", outcome: "done", result: { finalText: answer } });
 });
