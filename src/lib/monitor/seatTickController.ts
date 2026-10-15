@@ -2309,7 +2309,7 @@ export function startSeatTick(ports: {
       log(`[seat tick] ${detail}`);
       try {
         (ports.appendRecord ?? appendSeatTickRecord)({ schemaVersion: 1, at, project: "", seatEpoch: null,
-          verdict: "skipped", reasons: [], items: 0, deferred: 0, eventsThrough: 0, delivery: null, detail });
+          verdict: "refused", reasons: [], items: 0, deferred: 0, eventsThrough: 0, delivery: null, detail });
       } catch { /* The service log retains the hold if the journal is unavailable. */ }
       return;
     }

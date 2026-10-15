@@ -172,15 +172,17 @@ test("automatic drain holds seat sweeps and release resumes the next sweep", asy
   let fire = () => {};
   let sweeps = 0;
   const holds: string[] = [];
+  const journal = path.join(SANDBOX, "timer-holds.ndjson");
   startSeatTick({ drainHeld: () => held, handoffHeld: () => false,
     scheduleInterval: (callback) => { fire = callback; return { unref() {} } as never; },
     sweep: async () => { sweeps++; }, policy: DEFAULT_SEAT_TICK_POLICY, log: () => {},
-    appendRecord: record => { holds.push(record.detail!); },
+    appendRecord: record => { holds.push(record.detail!); appendSeatTickRecord(record, journal); },
   });
   fire();
   expect(sweeps).toBe(0);
   expect(holds).toHaveLength(2);
   expect(holds.every(line => line.includes("update-drain; next check"))).toBe(true);
+  expect(readSeatTickRecords(10, journal).map(record => record.detail)).toEqual(holds);
   held = false;
   fire();
   await Bun.sleep(0);
