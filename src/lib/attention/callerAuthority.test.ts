@@ -93,3 +93,35 @@ test("the ancestry walk stops at the root of the tree, a cycle, and its own boun
      top of the machine on every tool call. */
   expect(processAncestry(1_000, (pid) => pid - 1, 4)).toEqual([1_000, 999, 998, 997]);
 });
+
+
+test("native evidence identifies a scanned worker and the configured root", () => {
+  const native = { ancestry: () => [99, 42], hosted: () => [{ conversationId: "native", role: "worker", pids: [] }],
+    rootConversationId: () => null, nativeCaller: () => ({ kind: "admitted" as const, proof: "fixture-proof", conversationId: "native" }) };
+  expect(attentionCallerAuthority(native)).toEqual({ kind: "worker", conversationId: "native", role: "worker", evidence: "native-session", nativeProof: "fixture-proof" });
+  expect(attentionCallerAuthority({ ...native, rootConversationId: () => "native" })).toEqual({ kind: "root", conversationId: "native", evidence: "native-session", nativeProof: "fixture-proof" });
+});
+
+test("native evidence is never read when a capability names the caller or a managed ancestor matches", () => {
+  const nativeCaller = () => { throw new Error("native evidence must not run"); };
+  const base = { ancestry: () => [99, 42, 41], hosted: () => [{ conversationId: "managed", role: "builder", pids: [41] }],
+    rootConversationId: () => null, nativeCaller };
+  expect(attentionCallerAuthority(base)).toEqual({ kind: "worker", conversationId: "managed", role: "builder" });
+  expect(attentionCallerAuthority({ ...base, ancestry: () => [], capabilityPresented: () => true,
+    capabilityCallerConversationId: () => "credential" })).toEqual({ kind: "worker", conversationId: "credential", role: null });
+});
+
+test("an unresolved capability is never replaced by native evidence, even with hosted PID evidence", () => {
+  for (const pids of [[], [42]]) {
+    expect(attentionCallerAuthority({ ancestry: () => [99, 42], hosted: () => [{ conversationId: "managed", role: null, pids }],
+      rootConversationId: () => null, capabilityPresented: () => true, capabilityCallerConversationId: () => null,
+      nativeCaller: () => { throw new Error("must not consult native"); } })).toMatchObject({ kind: "unidentified", admission: { reason: "capability-unresolved" } });
+  }
+});
+
+
+test("conflicting PID and capability evidence never consults native admission", () => {
+  expect(attentionCallerAuthority({ ancestry: () => [99, 42], hosted: () => [{ conversationId: "managed", role: null, pids: [42] }],
+    rootConversationId: () => null, capabilityPresented: () => true, capabilityCallerConversationId: () => "other",
+    nativeCaller: () => { throw new Error("must not consult native"); } })).toMatchObject({ kind: "unidentified", admission: { reason: "capability-conflict" } });
+});

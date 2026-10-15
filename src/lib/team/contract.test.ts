@@ -76,6 +76,7 @@ describe("the return path after sign-in", () => {
 describe("the seam", () => {
   test("an install without the module answers solo and names nobody", () => {
     expect(nullTeam.teamMode()).toBe("solo");
+    expect(nullTeam.authenticatedOwner({ headers: new Headers(), cookies: { get: () => undefined } }, "41")).toBe(false);
     expect(nullTeam.teamActor({ headers: new Headers(), cookies: { get: () => undefined } })).toEqual({ kind: "operator" });
     expect(nullTeam.refuseAnonymous({ kind: "anonymous" })).toBeNull();
     expect(nullTeam.messageSenders(["a"])).toEqual({});

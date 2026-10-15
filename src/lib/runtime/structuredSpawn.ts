@@ -1164,6 +1164,12 @@ export interface StructuredSpawnInput {
       runtime admission returns, before the host starts, and once the host is
       set up, before it is published, by this call or by its staged probe. */
   authorize?: () => void | Promise<void>;
+  /** Recovery hands its predecessor fence to the writer this spawn acquires.
+      Both callbacks run synchronously beside the claim, before runtime RPC. */
+  resumeAdmission?: {
+    beforeClaim: () => void;
+    claimed: (entry: AgentRegistryEntry) => void;
+  };
 }
 
 function admittedStructuredLaunchInput(input: StructuredSpawnInput): StructuredSpawnInput {
@@ -2411,11 +2417,14 @@ export async function spawnStructuredConversation(
     // The journal can accept spawn before its RPC acknowledgement returns.
     // Publish setup ownership before that await so registering work stays live.
     if (resumeKey && resumeIdentity) {
-      const claimResume = () => input.registry.claimStructuredHost(resumeKey, processIdentity(), {
-        allowUnhosted: true, setupHost: pendingColumns(input.engine),
-        setupEntry: { artifactPath: resumeIdentity.artifactPath, cwd: input.spec.cwd,
-          accountId: input.account.accountId, launchProfile: input.spec.launchProfile },
-      });
+      const claimResume = () => {
+        input.resumeAdmission?.beforeClaim();
+        return input.registry.claimStructuredHost(resumeKey, processIdentity(), {
+          allowUnhosted: true, setupHost: pendingColumns(input.engine),
+          setupEntry: { artifactPath: resumeIdentity.artifactPath, cwd: input.spec.cwd,
+            accountId: input.account.accountId, launchProfile: input.spec.launchProfile },
+        });
+      };
       adoptionClaim = claimResume();
       /* A terminal row over a live engine process refuses the claim (#2790).
          That process has no stream left and would write beside the resumed
@@ -2431,6 +2440,7 @@ export async function spawnStructuredConversation(
         adoptionClaimContended = true;
         throw new Error("structured resume host claim is unavailable");
       }
+      input.resumeAdmission?.claimed(adoptionClaim);
     }
     await withRuntimeAdmissionRetry(() => input.client.command({
       kind: "spawn",
