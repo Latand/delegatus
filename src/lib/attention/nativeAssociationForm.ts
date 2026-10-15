@@ -1,6 +1,8 @@
 import type { NativeAdmissionEvidence } from "./nativeCaller";
 import type { PrototypeDecision, PrototypeQuestion } from "@/lib/prototypeReview/types";
 
+export const NATIVE_ASSOCIATION_AUTHORIZATION_ERROR = "Native association requires authorization from the paired Telegram owner. Sign in through that owner's linked Telegram account and review this session in Decisions, or send an explicit decision through the owner relay. Approval is unavailable without this authorization.";
+
 /** Shared by production and the existing board evidence fixture. */
 export function nativeAssociationForm(evidence: NativeAdmissionEvidence, locale: "en" | "uk") {
   const uk = locale === "uk";
@@ -16,7 +18,9 @@ export function nativeAssociationForm(evidence: NativeAdmissionEvidence, locale:
 
 /** Exact, explicit choices are required; free text and skipped answers grant nothing. */
 export function nativeAssociationDecisionApproves(decision: PrototypeDecision | undefined): boolean {
-  return Boolean(decision?.decidedBy?.kind === "operator" && !decision.skipped && !decision.rejected && !decision.recommendedWithReservation
+  const authorized = decision?.nativeAssociationApproval === "paired-owner" ? decision.decidedBy?.kind === "operator"
+    : decision?.nativeAssociationApproval === "owner-session" && decision.decidedBy?.kind === "member";
+  return Boolean(authorized && decision && !decision.skipped && !decision.rejected && !decision.recommendedWithReservation
     && ["identity", "evidence"].every(id => {
       const answer = decision.answers?.find(answer => answer.questionId === id);
       return answer && !answer.skipped && !answer.other && !answer.customText && answer.options.length === 1 && answer.options[0] === 1;

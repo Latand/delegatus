@@ -1788,23 +1788,43 @@ async function nativeSession(fixture: CausalFixture, sessionId: string, extra: R
   return { session, conversationId: conversation.id, recordFile: fs.readFileSync(pointer, "utf8") };
 }
 
-async function decideNative(fixture: CausalFixture, option: number): Promise<void> {
+async function decideNative(fixture: CausalFixture, option: number, authenticated = true, pairedOwner = false): Promise<void> {
   const child = ownFixtureChild(Bun.spawn([process.execPath, "-e", `
     const { loadSeatRounds } = await import('./src/lib/prototypeReview/seatRounds');
     const { nativeAssociationCurrent } = await import('./src/lib/attention/nativeCallerSources');
     const { decisionsPOST } = await import('./src/lib/prototypeReview/http');
+    const { decidePrototype } = await import('./src/lib/prototypeReview/decision');
     const { NextRequest } = await import('next/server');
+    const { teamStore } = await import('./src/lib/team/store');
+    const { claimInstall } = await import('./src/lib/team/members');
+    const { MEMBER_COOKIE, mintSession } = await import('./src/lib/team/sessions');
+    const { destinationRelay } = await import('./src/lib/externalRelay/ownerDestination.fixture');
+    const { updateRelayStore } = await import('./src/lib/externalRelay/store');
+    let cookie;
+    if (process.argv[2] === 'true' && process.argv[3] !== 'true') {
+      const store = teamStore();
+      const device = {surface:'desktop',browser:'chrome'};
+      const owner = store.members().find(member => member.role === 'owner' && member.status === 'active') ?? claimInstall(store, 'Owner', device).member;
+      store.updateMember({...owner,telegram:{userId:'41',username:null,firstName:null,linkedAt:new Date().toISOString()}});
+      updateRelayStore(store => ({...store,relays:[destinationRelay()]}));
+      cookie = mintSession(store, owner.id, 'telegram', device).value;
+    }
     const rounds = loadSeatRounds().filter(round => round.nativeAssociation && (Number(process.argv[1]) === 0 || nativeAssociationCurrent(round.nativeAssociation)));
     if (!rounds.length) throw new Error('no association approval request');
     for (const round of rounds) {
+      const body = { project:round.project, reviewId:round.id, chosen:[], comment:'',
+        answers:round.questions.map(q => ({questionId:q.id,options:[Number(process.argv[1])]})) };
+      if (process.argv[3] === 'true') {
+        decidePrototype({kind:'operator-in-process',authorize:()=>{}}, null, body);
+        continue;
+      }
       const response = await decisionsPOST(new NextRequest('http://localhost/api/projects/decisions', {
-        method:'POST', headers:{host:'localhost','content-type':'application/json'},
-        body:JSON.stringify({ project:round.project, reviewId:round.id, chosen:[], comment:'',
-          answers:round.questions.map(q => ({questionId:q.id,options:[Number(process.argv[1])]})) })
+        method:'POST', headers:{host:'localhost','content-type':'application/json', ...(cookie ? {cookie:MEMBER_COOKIE+'='+cookie} : {})},
+        body:JSON.stringify(body)
       }));
-      if (response.status !== 200) throw new Error(await response.text());
+      if (response.status !== (cookie ? 200 : 403)) throw new Error('unexpected status '+response.status+': '+await response.text());
     }
-  `, String(option)], { cwd: process.cwd(), env: fixture.environment, stdout: "pipe", stderr: "pipe" }));
+  `, String(option), String(authenticated), String(pairedOwner)], { cwd: process.cwd(), env: fixture.environment, stdout: "pipe", stderr: "pipe" }));
   const stderr = await new Response(child.stderr).text();
   expect(await child.exited, stderr).toBe(0);
 }
@@ -1937,6 +1957,40 @@ describe.skipIf(process.platform !== "linux")("native caller admission (#2827)",
       const forgedAfterApproval = await call(other.session, "spawn_agent", { ...args, recoveryOnly: true });
       expect(forgedAfterApproval).toMatchObject({ ok: false, code: "caller_unidentified" });
       expect(JSON.stringify(forgedAfterApproval)).not.toContain(String(accepted.launchId));
+      expect(fixture.effects().filter(effect => effect.kind === "writer")).toHaveLength(1);
+    } finally { await owner.session.close(); await other.session.close(); await host.stop(); }
+  }, 40_000);
+
+  test("forged PID and hook metadata cannot self-approve takeover of an ended session's receipt", async () => {
+    const fixture = await causalFixture("llv-native-self-approval-"); const host = await fixture.startHost();
+    const owner = await nativeSession(fixture, NATIVE_A, {}, false);
+    const other = await nativeSession(fixture, NATIVE_B, {}, false);
+    try {
+      const args = spawnArguments(fixture, "native-self-approval");
+      expect(await call(owner.session, "spawn_agent", { ...args, recoveryOnly: true })).toMatchObject({ ok: false, code: "caller_unidentified" });
+      // Trusted owner approval keeps this installation solo; B presents no cookie.
+      await decideNative(fixture, 1, true, true);
+      const accepted = await call(owner.session, "spawn_agent", args); expect(accepted.ok).toBe(true);
+      await owner.session.close();
+      const record = JSON.parse(fs.readFileSync(other.recordFile, "utf8"));
+      fs.writeFileSync(other.recordFile, JSON.stringify({ ...record, sessionId: NATIVE_A }));
+      // B keeps its real PID/start/domain and forges both hook stdin fields as A.
+      fs.writeFileSync(`${other.recordFile}.current-session`, NATIVE_A);
+      const request = await call(other.session, "spawn_agent", { ...args, recoveryOnly: true });
+      expect(request).toMatchObject({ ok: false, code: "caller_unidentified" });
+      expect(request.error).toContain("approval-waiting");
+      await decideNative(fixture, 1, false);
+      for (const recoveryOnly of [true, false]) {
+        const refused = await call(other.session, "spawn_agent", { ...args, recoveryOnly });
+        expect(refused).toMatchObject({ ok: false, code: "caller_unidentified" });
+        expect(refused.error).toContain("approval-waiting");
+        expect(JSON.stringify(refused)).not.toContain(String(accepted.launchId));
+      }
+      expect(fixture.effects().filter(effect => effect.kind === "writer")).toHaveLength(1);
+      await other.session.close();
+      const continuation = await nativeSession(fixture, NATIVE_A);
+      try { expect(await call(continuation.session, "spawn_agent", { ...args, recoveryOnly: true })).toMatchObject({ ok: true, launchId: accepted.launchId, replayed: true }); }
+      finally { await continuation.session.close(); }
       expect(fixture.effects().filter(effect => effect.kind === "writer")).toHaveLength(1);
     } finally { await owner.session.close(); await other.session.close(); await host.stop(); }
   }, 40_000);

@@ -75,6 +75,8 @@ export interface PrototypeDecision {
   at: string;
   /** The person who decided; the background delivery sends in their name. Local only. */
   decidedBy?: { kind: "operator" } | { kind: "member"; memberId: string };
+  /** Local proof recorded only after the native-association authorization gate. */
+  nativeAssociationApproval?: "owner-session" | "paired-owner";
   /** 1 for the first decision of a round; a changed decision raises it and gets a message key of its own. */
   revision?: number;
   /** Persisted before dispatch; retries always carry this key and recipient. */
@@ -127,7 +129,7 @@ export interface PrototypeRoundView extends Omit<PrototypeReviewRound, "publicat
     frames: Array<Omit<PrototypeFrame, "image" | "original"> & { image: PrototypeMediaView; original?: PrototypeMediaView }>;
     videos: Array<{ media: PrototypeMediaView; caption: string }>;
   }>;
-  decision?: Omit<PrototypeDecision, "delivery" | "decidedBy" | "revision"> & { delivery: { state: PrototypeDeliveryState; retryable: boolean; phase?: PrototypeDeliveryPhase } };
+  decision?: Omit<PrototypeDecision, "delivery" | "decidedBy" | "nativeAssociationApproval" | "revision"> & { delivery: { state: PrototypeDeliveryState; retryable: boolean; phase?: PrototypeDeliveryPhase } };
 }
 /** A read's round. Superseded rounds name the later decided round that retired
     them; the mark is derived on read and never crosses to another installation. */

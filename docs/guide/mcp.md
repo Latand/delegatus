@@ -92,6 +92,14 @@ working directory, process start time and transcript against your terminal,
 then approve that exact process and generation. The agent repeats its original
 call with the same `clientRequestId`.
 
+Web approval requires signing in through the linked Telegram account of the
+installation's paired owner. An authorized explicit answer through that owner's
+relay also works. Local access, the Viewer access key, a newly claimed owner
+account and a local passkey session cannot approve an association. If paired-owner
+authorization is unavailable, the session stays unidentified. Set up the owner
+pairing and Telegram sign-in before approving it. Approvals saved before this
+authorization requirement need fresh approval.
+
 Approval belongs to that live process and transcript generation. A resumed
 session in a new process needs its own approval before recovering an old key.
 The approved record stays in the existing **Decisions** column. Press

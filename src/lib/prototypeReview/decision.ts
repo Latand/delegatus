@@ -1,4 +1,5 @@
 import { nativeAssociationCurrent } from "@/lib/attention/nativeCallerSources";
+import { NATIVE_ASSOCIATION_AUTHORIZATION_ERROR } from "@/lib/attention/nativeAssociationForm";
 import { NextRequest } from "next/server";
 import { conversationHostPOST } from "@/app/api/conversation-host/handlers";
 import { handleRuntimeRetry } from "@/lib/runtime/http";
@@ -6,7 +7,10 @@ import { journalVerdict, resolveOriginalSend, resolveSendReceipt } from "@/lib/r
 import { agentRegistry } from "@/lib/agent/registry";
 import { runtimeHostClient } from "@/lib/runtime/client";
 import { withFileTransaction } from "@/lib/state/fileTransaction";
-import { teamActor } from "@/lib/team";
+import { authenticatedOwner, teamActor } from "@/lib/team";
+import { directOperatorActivityAuthority } from "@/lib/agent/operatorAuthority";
+import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/capabilityHeader";
+import { ownerReviewDestination } from "@/lib/externalRelay/telegramPublication";
 import { runsElsewhere } from "@/lib/links/linked";
 import { prototypeReviewSummary } from "./model";
 import { PrototypeError, PROTOTYPE_LIMITS } from "./input";
@@ -157,6 +161,16 @@ export function decidePrototype(request: PrototypeDeliveryContext,taskId: string
         throw new PrototypeError("prototype round is no longer waiting", 409);
       }
     }
+    let nativeAssociationApproval: PrototypeDecision["nativeAssociationApproval"];
+    if (round.nativeAssociation) {
+      if (inProcess(request)) nativeAssociationApproval = "paired-owner";
+      else {
+        if (!directOperatorActivityAuthority(request).ok || request.headers.has(VIEWER_SPAWN_CAPABILITY_HEADER) || !authenticatedOwner(request, ownerReviewDestination().chatId)) {
+          throw new PrototypeError(NATIVE_ASSOCIATION_AUTHORIZATION_ERROR, 403);
+        }
+        nativeAssociationApproval = "owner-session";
+      }
+    }
     if ("retry" in input) {
       if (!round.decision) throw new PrototypeError("save a decision before retrying");
       // The operator asked again: the backoff starts over and so does the wait before attention.
@@ -192,8 +206,9 @@ export function decidePrototype(request: PrototypeDeliveryContext,taskId: string
     const prior = round.decision;
     if (prior && prior.comment === input.comment && JSON.stringify(prior.chosen) === JSON.stringify(chosen)
       && JSON.stringify(prior.answers) === JSON.stringify(answers) && prior.skipped === skipped && prior.rejected === input.reject
-      && prior.originalReply === input.originalReply && prior.recommendedWithReservation === input.recommendedWithReservation) return false;
-    if (prior && inProcess(request)) throw new PrototypeError("prototype round is already decided", 409);
+      && prior.originalReply === input.originalReply && prior.recommendedWithReservation === input.recommendedWithReservation
+      && prior.nativeAssociationApproval === nativeAssociationApproval) return false;
+    if (prior && inProcess(request) && !round.nativeAssociation) throw new PrototypeError("prototype round is already decided", 409);
     /* A record written before revisions existed may have been handed over
        without a mark, unless it never had anyone to go to. */
     const handedOver = prior && (prior.revision === undefined ? prior.delivery.state !== "no-orchestrator" : prior.delivery.dispatchedAt !== undefined);
@@ -204,7 +219,7 @@ export function decidePrototype(request: PrototypeDeliveryContext,taskId: string
     if (questionnaire && Buffer.byteLength(text) > MAX_STRUCTURED_TEXT_BYTES) throw new PrototypeError("the answer is too long to send; shorten the comment");
     round.decision = { chosen, ...(ownerReply ? { originalReply: input.originalReply } : {}), ...(input.recommendedWithReservation ? { recommendedWithReservation: true as const } : {}),
       ...(input.reject ? { rejected: true as const } : {}), ...(answers ? { answers } : {}), ...(skipped ? { skipped } : {}), comment: input.comment, at: new Date().toISOString(),
-      decidedBy: decidedBy(request), revision, delivery: {
+      decidedBy: decidedBy(request), ...(nativeAssociationApproval ? { nativeAssociationApproval } : {}), revision, delivery: {
         state: recipient ? "pending" : "no-orchestrator", conversationId: recipient, clientMessageId: messageKey(reviewId, revision), text } };
     return true;
   });

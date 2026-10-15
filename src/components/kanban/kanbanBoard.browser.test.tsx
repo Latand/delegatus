@@ -1,4 +1,5 @@
 import { staleWorkingResponse } from "@/lib/agent/spawnProjection.fixture";
+import { NATIVE_ASSOCIATION_AUTHORIZATION_ERROR } from "@/lib/attention/nativeAssociationForm";
 import { describe, expect } from "bun:test";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
@@ -31400,7 +31401,24 @@ describe("native caller operator association", () => {
               expect(await card.evaluate(node => node.scrollWidth - node.clientWidth)).toBeLessThanOrEqual(1);
               await page.screenshot({ path: path.join(out, `${tag}-evidence.png`) });
               await card.locator('[data-prototype-option="evidence:1"]').click();
+              await page.evaluate(message => {
+                const original = window.fetch; let refused = false;
+                window.fetch = (async (input, init) => {
+                  if (!refused && String(input) === "/api/projects/decisions" && init?.method === "POST") {
+                    refused = true;
+                    return new Response(JSON.stringify({ error: message }), { status: 403, headers: { "content-type": "application/json" } });
+                  }
+                  return original(input, init);
+                }) as typeof window.fetch;
+              }, NATIVE_ASSOCIATION_AUTHORIZATION_ERROR);
               const send = card.locator("[data-decision-send]"); await send.scrollIntoViewIfNeeded(); await send.click();
+              const authorizationAlert = card.locator('[role="alert"]'); await authorizationAlert.waitFor(); await authorizationAlert.scrollIntoViewIfNeeded();
+              const authorizationError = await authorizationAlert.innerText();
+              expect(authorizationError).toContain(NATIVE_ASSOCIATION_AUTHORIZATION_ERROR);
+              expect(await card.evaluate(node => node.scrollWidth - node.clientWidth)).toBeLessThanOrEqual(1);
+              expect(await page.evaluate(() => (window as unknown as { decisionPosts: unknown[] }).decisionPosts.length)).toBe(0);
+              await page.screenshot({ path: path.join(out, `${tag}-authorization-required.png`) });
+              await send.scrollIntoViewIfNeeded(); await send.click();
               await page.waitForFunction(() => (window as unknown as { decisionPosts: unknown[] }).decisionPosts.length === 1);
               const posted = await page.evaluate(() => (window as unknown as { decisionPosts: { answers: unknown[] }[] }).decisionPosts[0]);
               expect(posted.answers).toEqual([{ questionId: "identity", options: [1] }, { questionId: "evidence", options: [1] }]);
@@ -31430,7 +31448,7 @@ describe("native caller operator association", () => {
               expect(revocation.answers).toEqual([{ questionId: "identity", options: [0] }, { questionId: "evidence", options: [0] }]);
               await revoke.waitFor({ state: "detached" });
               await page.screenshot({ path: path.join(out, `${tag}-revoked.png`) });
-              expect(pageErrors).toEqual([]); readings.push({ lang, scheme, width, shown, posted, revocationError, revocation });
+              expect(pageErrors).toEqual([]); readings.push({ lang, scheme, width, shown, authorizationError, posted, revocationError, revocation });
             } catch (error) {
               await page.screenshot({ path: path.join(out, `${lang}-${scheme}-${width}-failed.png`) }).catch(() => {});
               throw error;

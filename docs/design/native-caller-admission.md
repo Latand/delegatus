@@ -20,6 +20,24 @@ default to refusal. The operator explicitly approves the process and verifies
 the displayed session. Skipped questions, custom answers, recommendations and
 answers with reservations never grant identity.
 
+Association decisions require independent owner authentication. HTTP decisions
+require a current, unrevoked Telegram sign-in for an active owner member whose
+linked Telegram identity matches the configured paired owner. A self-claimed
+owner, a local passkey, browser-shaped headers and the Viewer's perimeter access
+key supply no such authorization. A missing or unavailable pairing refuses
+approval. The existing paired-owner relay can also save an explicit decision
+through its in-process authorization guard. Both paths record the verified
+authorization source locally on the decision; caller-supplied fields are ignored.
+The guard runs inside the round mutation for approval, refusal and retry, so
+another decision route cannot bypass it. Other decision forms keep their
+existing authorization rules.
+
+The binding digest is versioned. Rounds saved before this authorization boundary
+remain history and grant no access; the caller requests a fresh round. The
+approval predicate also requires the server-recorded authorization source and
+matching actor kind. An identical authenticated answer can replace a decision
+that lacked that proof.
+
 The caller receives `caller_unidentified` with `approval-waiting` and the
 location of the pending approval. No mutation receipt is claimed and no work
 is dispatched. After approval, it repeats the same request with the original
@@ -109,8 +127,10 @@ Explicit test paths:
 - `src/lib/attention/nativeCallProof.test.ts`: one-use proof, exact input/tool/parent
   scope, session start/end and return-to-generation refusal, and expiry boundaries.
 - `src/lib/attention/nativeAssociation.test.ts`: the existing attention surface,
-  durable operator approval, revocation, agent self-approval refusal, skipped
-  and custom answers, and stale approval refusal.
+  durable authenticated approval, revocation, header-free self-approval refusal,
+  forged browser headers, unproven owner bootstrap, mismatched Telegram identity,
+  missing pairing, expired/revoked sessions, legacy decisions, skipped and custom
+  answers, and stale approval refusal.
 - `src/lib/attention/callerAuthority.test.ts`: hosted and capability precedence,
   conflict refusal, and propagation of the approved generation proof.
 - `src/lib/mcp/server.test.ts`: generation switches across asynchronous binding
@@ -118,7 +138,8 @@ Explicit test paths:
 - `src/lib/mcp/stdio.integration.test.ts`: packaged stdio calls through real
   process records, the operator decision route, production send/spawn handlers,
   lost-response and approved-continuation recovery, the same-user forged UUID
-  attack after the owner exits, the asynchronous record-update window, proof replay,
+  attack after the owner exits, forged hook input followed by header-free
+  self-approval, the asynchronous record-update window, proof replay,
   revocation, duplicate sessions, stale records and owner death through both
   the bundle and packaged wrapper.
 - `src/components/kanban/kanbanBoard.browser.test.tsx`: the existing decision
@@ -145,3 +166,8 @@ refusal on base f746d7f2 and the hosted/capability precedence checks. Review
 then reproduced same-user receipt takeover and a session switch during
 snapshot. The operator decision above governs this revision and both attacks
 are now permanent regression cases.
+
+Review on 2026-10-15 also reproduced header-free self-approval through Decisions
+and receipt takeover using forged PID and hook metadata. The authenticated-owner
+boundary and versioned association binding above supersede that revision's
+anonymous-loopback operator classification for native associations.

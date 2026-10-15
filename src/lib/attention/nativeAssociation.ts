@@ -9,7 +9,9 @@ import type { NativeAdmissionEvidence } from "./nativeCaller";
  * evidence. An amendment to Refuse revokes it; a new generation needs a new round.
  * No caller argument or CLI record can supply approval. */
 export function nativeAssociation(evidence: NativeAdmissionEvidence): { status: "approved" | "waiting" | "refused"; proof: string } {
-  const proof = crypto.createHash("sha256").update(JSON.stringify(evidence)).digest("hex");
+  // Older rounds classified anonymous loopback requests as operator decisions.
+  // A versioned binding requires fresh, authenticated approval of their evidence.
+  const proof = crypto.createHash("sha256").update("operator-authorized-v1:").update(JSON.stringify(evidence)).digest("hex");
   const id = `pr_${proof.slice(0, 32)}`;
   let round = findSeatRound(id);
   if (!round) {

@@ -4,6 +4,7 @@
     "scheme": "light",
     "width": 1440,
     "shown": "Engine: Claude. Cwd: /fixture/worktrees/external-session. Process started: 2026-10-15T09:30:00.000Z. Transcript: /fixture/claude/projects/external-session/transcript.jsonl. PID: 4201. Verify this exact session; a sibling needs its own approval.2Engine: Claude. Cwd: /fixture/worktrees/external-session. Process started: 2026-10-15T09:30:00.000Z. Transcript: /fixture/claude/projects/external-session/transcript.jsonl. PID: 4201. Verify this exact session; a sibling needs its own approval.Evidence does not match recommendedI verified this exact sessionOther — write it belowAlready decided",
+    "authorizationError": "The answer was not saved: Native association requires authorization from the paired Telegram owner. Sign in through that owner's linked Telegram account and review this session in Decisions, or send an explicit decision through the owner relay. Approval is unavailable without this authorization.",
     "posted": {
       "project": "atlas",
       "reviewId": "pr_dddddddddddddddddddddddddddddddd",
@@ -51,6 +52,7 @@
     "scheme": "dark",
     "width": 1440,
     "shown": "Engine: Claude. Cwd: /fixture/worktrees/external-session. Process started: 2026-10-15T09:30:00.000Z. Transcript: /fixture/claude/projects/external-session/transcript.jsonl. PID: 4201. Verify this exact session; a sibling needs its own approval.2Engine: Claude. Cwd: /fixture/worktrees/external-session. Process started: 2026-10-15T09:30:00.000Z. Transcript: /fixture/claude/projects/external-session/transcript.jsonl. PID: 4201. Verify this exact session; a sibling needs its own approval.Evidence does not match recommendedI verified this exact sessionOther — write it belowAlready decided",
+    "authorizationError": "The answer was not saved: Native association requires authorization from the paired Telegram owner. Sign in through that owner's linked Telegram account and review this session in Decisions, or send an explicit decision through the owner relay. Approval is unavailable without this authorization.",
     "posted": {
       "project": "atlas",
       "reviewId": "pr_dddddddddddddddddddddddddddddddd",
@@ -98,6 +100,7 @@
     "scheme": "light",
     "width": 1440,
     "shown": "Рушій: Claude. Робоча тека: /fixture/worktrees/external-session. Початок процесу: 2026-10-15T09:30:00.000Z. Транскрипт: /fixture/claude/projects/external-session/transcript.jsonl. PID: 4201. Перевірте саме цю сесію; сусідня потребує окремого дозволу.2Рушій: Claude. Робоча тека: /fixture/worktrees/external-session. Початок процесу: 2026-10-15T09:30:00.000Z. Транскрипт: /fixture/claude/projects/external-session/transcript.jsonl. PID: 4201. Перевірте саме цю сесію; сусідня потребує окремого дозволу.Дані не збігаються рекомендованоЯ перевірив саме цю сесіюІнше — напишіть нижчеВже вирішено",
+    "authorizationError": "Відповідь не збережено: Native association requires authorization from the paired Telegram owner. Sign in through that owner's linked Telegram account and review this session in Decisions, or send an explicit decision through the owner relay. Approval is unavailable without this authorization.",
     "posted": {
       "project": "atlas",
       "reviewId": "pr_dddddddddddddddddddddddddddddddd",
@@ -145,6 +148,7 @@
     "scheme": "dark",
     "width": 1440,
     "shown": "Рушій: Claude. Робоча тека: /fixture/worktrees/external-session. Початок процесу: 2026-10-15T09:30:00.000Z. Транскрипт: /fixture/claude/projects/external-session/transcript.jsonl. PID: 4201. Перевірте саме цю сесію; сусідня потребує окремого дозволу.2Рушій: Claude. Робоча тека: /fixture/worktrees/external-session. Початок процесу: 2026-10-15T09:30:00.000Z. Транскрипт: /fixture/claude/projects/external-session/transcript.jsonl. PID: 4201. Перевірте саме цю сесію; сусідня потребує окремого дозволу.Дані не збігаються рекомендованоЯ перевірив саме цю сесіюІнше — напишіть нижчеВже вирішено",
+    "authorizationError": "Відповідь не збережено: Native association requires authorization from the paired Telegram owner. Sign in through that owner's linked Telegram account and review this session in Decisions, or send an explicit decision through the owner relay. Approval is unavailable without this authorization.",
     "posted": {
       "project": "atlas",
       "reviewId": "pr_dddddddddddddddddddddddddddddddd",
@@ -192,6 +196,7 @@
     "scheme": "light",
     "width": 390,
     "shown": "Engine: Claude. Cwd: /fixture/worktrees/external-session. Process started: 2026-10-15T09:30:00.000Z. Transcript: /fixture/claude/projects/external-session/transcript.jsonl. PID: 4201. Verify this exact session; a sibling needs its own approval.2Engine: Claude. Cwd: /fixture/worktrees/external-session. Process started: 2026-10-15T09:30:00.000Z. Transcript: /fixture/claude/projects/external-session/transcript.jsonl. PID: 4201. Verify this exact session; a sibling needs its own approval.Evidence does not match recommendedI verified this exact sessionOther — write it belowAlready decided",
+    "authorizationError": "The answer was not saved: Native association requires authorization from the paired Telegram owner. Sign in through that owner's linked Telegram account and review this session in Decisions, or send an explicit decision through the owner relay. Approval is unavailable without this authorization.",
     "posted": {
       "project": "atlas",
       "reviewId": "pr_dddddddddddddddddddddddddddddddd",
@@ -239,6 +244,7 @@
     "scheme": "dark",
     "width": 390,
     "shown": "Engine: Claude. Cwd: /fixture/worktrees/external-session. Process started: 2026-10-15T09:30:00.000Z. Transcript: /fixture/claude/projects/external-session/transcript.jsonl. PID: 4201. Verify this exact session; a sibling needs its own approval.2Engine: Claude. Cwd: /fixture/worktrees/external-session. Process started: 2026-10-15T09:30:00.000Z. Transcript: /fixture/claude/projects/external-session/transcript.jsonl. PID: 4201. Verify this exact session; a sibling needs its own approval.Evidence does not match recommendedI verified this exact sessionOther — write it belowAlready decided",
+    "authorizationError": "The answer was not saved: Native association requires authorization from the paired Telegram owner. Sign in through that owner's linked Telegram account and review this session in Decisions, or send an explicit decision through the owner relay. Approval is unavailable without this authorization.",
     "posted": {
       "project": "atlas",
       "reviewId": "pr_dddddddddddddddddddddddddddddddd",
@@ -286,6 +292,7 @@
     "scheme": "light",
     "width": 390,
     "shown": "Рушій: Claude. Робоча тека: /fixture/worktrees/external-session. Початок процесу: 2026-10-15T09:30:00.000Z. Транскрипт: /fixture/claude/projects/external-session/transcript.jsonl. PID: 4201. Перевірте саме цю сесію; сусідня потребує окремого дозволу.2Рушій: Claude. Робоча тека: /fixture/worktrees/external-session. Початок процесу: 2026-10-15T09:30:00.000Z. Транскрипт: /fixture/claude/projects/external-session/transcript.jsonl. PID: 4201. Перевірте саме цю сесію; сусідня потребує окремого дозволу.Дані не збігаються рекомендованоЯ перевірив саме цю сесіюІнше — напишіть нижчеВже вирішено",
+    "authorizationError": "Відповідь не збережено: Native association requires authorization from the paired Telegram owner. Sign in through that owner's linked Telegram account and review this session in Decisions, or send an explicit decision through the owner relay. Approval is unavailable without this authorization.",
     "posted": {
       "project": "atlas",
       "reviewId": "pr_dddddddddddddddddddddddddddddddd",
@@ -333,6 +340,7 @@
     "scheme": "dark",
     "width": 390,
     "shown": "Рушій: Claude. Робоча тека: /fixture/worktrees/external-session. Початок процесу: 2026-10-15T09:30:00.000Z. Транскрипт: /fixture/claude/projects/external-session/transcript.jsonl. PID: 4201. Перевірте саме цю сесію; сусідня потребує окремого дозволу.2Рушій: Claude. Робоча тека: /fixture/worktrees/external-session. Початок процесу: 2026-10-15T09:30:00.000Z. Транскрипт: /fixture/claude/projects/external-session/transcript.jsonl. PID: 4201. Перевірте саме цю сесію; сусідня потребує окремого дозволу.Дані не збігаються рекомендованоЯ перевірив саме цю сесіюІнше — напишіть нижчеВже вирішено",
+    "authorizationError": "Відповідь не збережено: Native association requires authorization from the paired Telegram owner. Sign in through that owner's linked Telegram account and review this session in Decisions, or send an explicit decision through the owner relay. Approval is unavailable without this authorization.",
     "posted": {
       "project": "atlas",
       "reviewId": "pr_dddddddddddddddddddddddddddddddd",
