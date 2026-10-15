@@ -79,6 +79,12 @@ import { refreshTeamView } from "@/components/team/teamClient";
 
 const SCENARIO = new URLSearchParams(location.search).get("scenario");
 const OVERVIEW_PERFORMANCE = SCENARIO === "overview-performance";
+const COLD_BOARD = SCENARIO === "cold-board";
+let releaseColdBoard!: () => void;
+const coldBoardHold = new Promise<void>(resolve => { releaseColdBoard = resolve; });
+const coldBoardEvidence = { calls: [] as Array<{ required: string | null; conditional: string | null; bytes: number }>, refined: false, release: releaseColdBoard };
+if (COLD_BOARD) Object.assign(window, { coldBoardEvidence });
+
 /* A task another machine runs (docs/design/synced-task-card.md): four tasks owned by the linked stage
    install, one of them with no lane (an older peer), beside the board's own local ones. The page
    answers nothing about them; the driver serves `/api/links/agents` with this install's id, the host
@@ -3794,6 +3800,8 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     });
   }
   if (url.pathname === "/api/files") {
+    if (COLD_BOARD && method === "HEAD") return new Response(null, { status: 204 });
+    if (COLD_BOARD && url.searchParams.get("view") === "storage-health") return json({ state: "ok", since: null, freeBytes: 1024 ** 3, registryIssues: [] });
     launchAdvance();
     /* #1820's first run: an installation with nothing in it at all. */
     /* Nothing is working in the quiet installation: every conversation has
@@ -3842,6 +3850,23 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
         ...(TELEGRAM_STEP || FM_SEAT ? { projectCwds: { [PROJECT]: "/repo/atlas" } } : {}),
       };
     const body = JSON.stringify({ ...scoped, ...(DECISIONS && seatDecisionNotices().length ? { seatDecisions: seatDecisionNotices() } : {}), workflows: [], systemHealth: { tmux: { status: "healthy" }, ...(new URLSearchParams(location.search).has("state-disk-full") ? { storage: { incidents: [], writes: { state: "disk-full", freeBytes: 32 * 1024 * 1024, since: "2026-10-01T12:00:00Z" } } } : {}) }, ...(workLinks ? { workLinks } : {}) });
+    if (COLD_BOARD) {
+      const headers = new Headers(init?.headers);
+      const required = headers.get("x-llv-files-generation");
+      // Carry the real bootstrap contract through the production useFiles
+      // hook. Unknown padding crosses the browser persistence cap while the
+      // visible board remains this fixture's ordinary board.
+      const payload = JSON.stringify({ ...JSON.parse(body), readProjection: "board-summary",
+        ...(new URLSearchParams(location.search).has("oversized") ? { padding: "x".repeat(26 * 1024 * 1024) } : {}) });
+      coldBoardEvidence.calls.push({ required, conditional: headers.get("if-none-match"), bytes: payload.length });
+      if (required) { await coldBoardHold; coldBoardEvidence.refined = true; }
+      return new Response(payload, { headers: {
+        "content-type": "application/json", etag: required ? '"refined"' : '"saved"',
+        "x-llv-files-built": required ? "fixture.1.1" : "fixture.0.0",
+        "x-llv-files-generation": required ? "1" : "0", "x-llv-files-target-generation": "1",
+        "x-llv-files-projection-cache": required ? "miss" : "bootstrap",
+      } });
+    }
     if (evidence.filesDelayMs) await new Promise((resolve) => setTimeout(resolve, evidence.filesDelayMs));
     return new Response(body, { status: 200, headers: { "content-type": "application/json" } });
   }

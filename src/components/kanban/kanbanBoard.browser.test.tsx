@@ -31366,3 +31366,60 @@ describe("independent panel scroll", () => {
     expect(failures).toEqual([]);
   }, 600_000);
 });
+
+
+describe("cold board summary", () => {
+  browserTest("saved and refined boards match through an empty store and document reload", async () => {
+    const out = path.resolve(".artifacts/cold-board-summary");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    const readings: unknown[] = [];
+    try {
+      for (const oversized of [false, true]) {
+        const { context, page, pageErrors } = await openFixture(browser, "about:blank", VIEWPORT, "dark", "en", "reduce");
+        try {
+          await page.addInitScript(() => { Date.now = () => 1_792_041_000_000; });
+          for (const load of ["empty-store", "reload"]) {
+            if (load === "empty-store") await page.goto(`${server.base}?scenario=cold-board&cards=closed${oversized ? "&oversized=1" : ""}`);
+            else await page.reload();
+            await page.locator("[data-kanban-board] .card").first().waitFor({ timeout: 30_000 });
+            await page.waitForFunction(() => (window as unknown as { coldBoardEvidence: { calls: Array<{ required: string | null }> } }).coldBoardEvidence.calls.some(call => call.required === "1"));
+            await page.evaluate(() => { for (const animation of document.getAnimations()) { animation.pause(); animation.currentTime = 0; } });
+            const board = page.locator("[data-kanban-board]");
+            await board.locator('.card[data-id^="task:"]').first().scrollIntoViewIfNeeded();
+            const before = await board.innerText();
+            const geometry = () => page.locator("[data-kanban-board] .card").evaluateAll(cards => cards.map(card => {
+              const box = card.getBoundingClientRect(); return { id: card.getAttribute("data-id"), x: box.x, y: box.y, w: box.width, h: box.height };
+            }));
+            const beforeGeometry = await geometry();
+            const label = `${oversized ? "oversized" : "small"}-${load}`;
+            await page.screenshot({ path: path.join(out, `${label}-saved.png`) });
+            await page.evaluate(() => (window as unknown as { coldBoardEvidence: { release(): void } }).coldBoardEvidence.release());
+            await page.waitForFunction(() => (window as unknown as { coldBoardEvidence: { refined: boolean } }).coldBoardEvidence.refined);
+            await page.waitForTimeout(500);
+            await page.evaluate(() => { for (const animation of document.getAnimations()) { animation.pause(); animation.currentTime = 0; } });
+            expect(await board.innerText()).toBe(before);
+            expect(await geometry()).toEqual(beforeGeometry);
+            await page.screenshot({ path: path.join(out, `${label}-refined.png`) });
+            const reading = await page.evaluate(() => {
+              const { calls, refined } = (window as unknown as { coldBoardEvidence: { calls: Array<{ required: string | null; conditional: string | null; bytes: number }>; refined: boolean } }).coldBoardEvidence;
+              return { calls, refined };
+            });
+            if (load === "reload") expect(!!reading.calls[0]!.conditional).toBe(!oversized);
+            if (load === "empty-store" && !oversized) await page.waitForFunction(async () => {
+              const db = await new Promise<IDBDatabase>((resolve, reject) => { const request = indexedDB.open("delegatus-boot", 1); request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error); });
+              try { return await new Promise<boolean>((resolve, reject) => { const request = db.transaction("snapshot").objectStore("snapshot").get("files"); request.onsuccess = () => resolve(!!request.result); request.onerror = () => reject(request.error); }); }
+              finally { db.close(); }
+            });
+            expect(reading.refined).toBe(true);
+            readings.push({ label, ...reading, cards: beforeGeometry.length, sameText: true, sameGeometry: true });
+          }
+          expect(pageErrors).toEqual([]);
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/cold-board-summary", { recursive: true });
+      fs.writeFileSync("evidence/cold-board-summary/browser.json", JSON.stringify(readings, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 120_000);
+});

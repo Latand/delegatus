@@ -123,6 +123,7 @@ interface ViewerRuntimeActivationSteps {
   startControllers: () => Promise<void>;
   publishHotStateActivation: () => void;
   publishViewerReleaseReady: () => void;
+  prepareBoard?: () => Promise<void>;
 }
 
 export { viewerReleaseOwnsTraffic };
@@ -825,6 +826,7 @@ export async function completeViewerRuntimeActivation(
   await steps.runClaudeLoginRecovery?.();
   await steps.runWorktreeRecovery?.();
   steps.startStructuredHosts?.();
+  await steps.prepareBoard?.();
   await steps.startControllers();
   steps.publishViewerReleaseReady();
 }
@@ -910,6 +912,22 @@ export async function registerViewerRuntime(): Promise<void> {
 
   await installSpawnCapabilityResolverAtStartup();
   await gatePhoneAccessBeforeServing();
+  // Next loads the generated App Route separately from its userland module.
+  // Prepare that wrapper too: on a large build requirePage otherwise spends
+  // another second loading chunks on the first board request. The production
+  // launcher's cwd is the build root, as it is for the projection workers.
+  if (process.env.NODE_ENV === "production") {
+    const compiledRoute = path.join(process.cwd(), ".next/server/app/api/files/route.js");
+    // Keep this native require outside webpack's source dependency graph:
+    // the generated route only exists after that graph has been built.
+    const { createRequire } = await import(/* webpackIgnore: true */ "node:module");
+    createRequire(path.join(process.cwd(), "package.json"))(compiledRoute);
+  }
+  // Every candidate prepares the read-only board path before Next can serve
+  // it. Activation starts after the proxy appoints a release, which is too
+  // late to pay the route's module loading on its first board request.
+  const { prepareBoardSummary } = await import("@/app/api/files/operatorProjection");
+  await prepareBoardSummary();
   const isCurrent = () => viewerReleaseOwnsTraffic();
   const hotStateDirectory = path.dirname(statePath("state.sqlite"));
   const releaseRevision = () => hotStateWriterRevision(hotStateDirectory);
@@ -975,6 +993,11 @@ export async function registerViewerRuntime(): Promise<void> {
             void startup.catch((error) => console.error("[structured hosts] background startup aborted", error));
           }
         : null,
+      prepareBoard: async () => {
+        assertStartupActive();
+        await startupBarrier.run(() => prepareBoardSummary(true));
+        assertStartupActive();
+      },
       startControllers: startCurrentReleaseControllers,
       publishHotStateActivation: () => {
         if (authority) activatedAuthority = markHotStateActivationReady(hotStateDirectory, authority);
