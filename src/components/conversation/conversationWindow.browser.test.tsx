@@ -4802,7 +4802,7 @@ describe("native send paint audit", () => {
     let browser: Browser | null = null;
     try {
       browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"], env: { ...process.env, TMPDIR: directory } });
-      for (const engine of ["codex", "claude"] as const) {
+      for (const engine of ["claude", "codex"] as const) {
         const runtime = engine === "claude"
           ? await startNativeCodexRuntime(path.join(directory, engine), binaries.claude!, { engine })
           : await startNativeCodexRuntime(path.join(directory, engine), binaries.codex!);
@@ -4856,8 +4856,7 @@ describe("native send paint audit", () => {
                   await page.waitForFunction(() => window.nativePaintReady);
                   // The feed must have consumed the preceding native record
                   // before click timing starts in this fresh browser context.
-                  await page.waitForFunction(text => [...document.querySelectorAll('[data-message-row], [data-feed-kind="user"]')]
-                    .some(row => row.textContent?.includes(text)), previousText);
+                  await page.getByText(previousText, { exact: true }).first().waitFor({ state: "visible" });
                   await page.evaluate(({ text, delay }) => window.armNativePaintAudit(text, delay), { text, delay });
                   await page.fill("textarea", text);
                   await page.click('button[type="submit"]');
