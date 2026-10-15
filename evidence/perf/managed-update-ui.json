@@ -1842,7 +1842,8 @@
   "renderedCases": 72,
   "screenshots": 144,
   "fixtureTransport": "polling",
-  "selectedFrames": [
+  "command": "BOARD_CAPTURE_CASE=managed-update bun scripts/capture-board-geometry.ts (isolated home/config/state/temp; Chromium)",
+  "localFrameFiles": [
     "managed-update-ui/1440-en-managed-failed-light.png",
     "managed-update-ui/1000-uk-managed-rolling-back-dark.png",
     "managed-update-ui/1000-en-managed-rollback-failed-light.png",
@@ -1850,6 +1851,5 @@
     "managed-update-ui/390-uk-managed-external-success-dark.png",
     "managed-update-ui/390-uk-managed-unknown-host-dark-header.png",
     "managed-update-ui/1440-en-managed-external-success-light-header.png"
-  ],
-  "command": "BOARD_CAPTURE_CASE=managed-update bun scripts/capture-board-geometry.ts (isolated home/config/state/temp; Chromium)"
+  ]
 }
