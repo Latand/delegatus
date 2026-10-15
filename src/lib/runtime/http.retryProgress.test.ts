@@ -297,6 +297,49 @@ for (const led of [false, true]) test(`terminal retry recovery after reservation
 }, 15_000);
 
 
+test("D4 rotation after retry reservation settles the refused attempt", async () => {
+  const f = fixture();
+  const previousState = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = path.join(f.root, "seat-state");
+  let retries = 0;
+  const successor = f.registry.ensureConversation("codex", path.join(f.root, "successor.jsonl"), null);
+  const designate = (id: string, pathname: string, clientRequestId: string) => {
+    beginOrchestratorSeatIntent({ project: "retry-seat-after-reservation", mandate: "coordinate work", clientRequestId, mode: "existing" });
+    completeOrchestratorSeatIntent({ project: "retry-seat-after-reservation", clientRequestId, conversationId: id, path: pathname });
+  };
+  designate(f.conversation.id, f.conversation.generations.at(-1)!.path, "retry-seat-before-reservation");
+  const rotate = () => designate(successor.id, successor.generations.at(-1)!.path, "retry-seat-after-reservation");
+  f.registry.recordDeliveryOutcome(f.reservation.id, "failed", "not delivered", "lost");
+  f.journal.transitionOperation(f.operationId, "failed", { reason: "not delivered" });
+  const write = f.registry.deliveryWrite.bind(f.registry);
+  let rotated = false;
+  f.registry.deliveryWrite = async (label, mutation, ...rest) => {
+    const result = await write(label, mutation, ...rest);
+    if (!rotated && label.label === "delivery.direct-admission") {
+      rotated = true;
+      rotate();
+    }
+    return result;
+  };
+  const retryOperation = f.client.retryOperation.bind(f.client);
+  f.client.retryOperation = async (...args) => { retries += 1; return retryOperation(...args); };
+  const attemptOperationId = terminalRetryOperationId(f.operationId);
+  try {
+    const response = await f.retry(false);
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ successorConversationId: successor.id });
+    expect(rotated).toBe(true);
+    expect(retries).toBe(0);
+    expect(f.registry.readOnlySnapshot().deliveryOperationOwners[attemptOperationId]).toMatchObject({
+      terminalState: "failed", terminalDisposition: "lost", settledAt: expect.any(String),
+    });
+  } finally {
+    if (previousState === undefined) delete process.env.LLV_STATE_DIR;
+    else process.env.LLV_STATE_DIR = previousState;
+    f.close();
+  }
+});
+
 test.each(["failed", "uncertain", "rotate-during-status", "recovery-wait", "reservation-wait"])("D4 explicit %s retry refuses a rotated seat before recovery or a new attempt", async mode => {
   const f = fixture();
   const previousState = process.env.LLV_STATE_DIR;

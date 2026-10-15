@@ -5881,6 +5881,12 @@ test("D1 records the seat cut before reaping a surviving Claude tool process", a
     engine: "claude", sessionId, status: "live", turn: "busy", activeTurnRef: "tool-turn",
     transcriptRecords: recentClaudeRecords("tool-call"), transcriptSuffix: "\n",
   });
+  projectHostedRestart(journal, "claude", conversation.id, sessionId, directory, artifactPath, "running");
+  const operatorOperationId = "pre-capture-message";
+  const operatorDelivery = registry.holdDelivery(conversation.id, "pre-capture-message", operatorOperationId, "text", [], null,
+    { operationId: operatorOperationId, kind: "send", policy: "queue" });
+  expect(journal.executeOperation({ kind: "send", operationId: operatorOperationId, idempotencyKey: operatorOperationId,
+    conversationId: conversation.id, text: operatorDelivery.text, policy: "queue" }).receipt.status).toBe("queued");
   const native = Bun.spawn([process.execPath, "-e", "setInterval(() => {}, 1000)"], { stdout: "ignore", stderr: "pipe" });
   const nativeIdentity = captureProcessIdentity(native.pid);
   const entry = registry.readOnlySnapshot().entries[`claude:${sessionId}`]!;
@@ -5908,11 +5914,15 @@ test("D1 records the seat cut before reaping a surviving Claude tool process", a
     await adoptStructuredHostsAtStartup(deps);
     expect(reaping.cuts).toEqual([expect.objectContaining({ state: "owed", owner: expect.objectContaining({ pid: native.pid }),
       claimEpoch: 3, seat: { project: seat.project, seatEpoch: 7 }, turnRef: "tool-turn" })]);
-    await waitFor(() => ledger.writes.length === 1);
-    expect(ledger.writes[0]!.text).toContain("Viewer restarted");
+    await waitFor(() => ledger.writes.some(write => write.id === operatorOperationId));
+    expect(ledger.writes.filter(write => write.id === operatorOperationId)).toHaveLength(1);
+    expect(journal.operationResult(operatorOperationId)?.receipt.status).toBe("delivered");
+    expect(journal.snapshot().recentOperations.filter(receipt =>
+      receipt.idempotencyKey.startsWith("interruption-continuation-"))).toHaveLength(0);
     await adoptStructuredHostsAtStartup(deps);
-    expect(ledger.writes).toHaveLength(1);
-    expect(cuts()).toHaveLength(1);
+    expect(ledger.writes.map(write => write.id)).toEqual([operatorOperationId]);
+    expect(cuts()).toEqual([expect.objectContaining({ state: "discharged",
+      resolution: "a newer message already resumed the conversation" })]);
   } finally {
     await bindStructuredDeliveryQueue([], { registry, client: null });
     if (procBackend.pidAlive(native.pid)) native.kill("SIGKILL");

@@ -829,8 +829,6 @@ export async function handleRuntimeRetry(
       if (refusal) throw Object.assign(new DeliveryAdmissionRefusedError("orchestrator-recipient-revoked"),
         { message: refusal.error, status: refusal.status, successorConversationId: refusal.successorConversationId });
     };
-    const refusedRecipient = recipientRefusal();
-    if (refusedRecipient) return NextResponse.json(refusedRecipient, { status: refusedRecipient.status });
     const deliverySnapshot = registry.deliverySnapshotForOperation(previous.operationId);
     if (await confirmedSend(registry.readOnlySnapshot(), previous.operationId)) {
       const confirmed = await resolveSendReceipt(previous.operationId, { registry, client });
@@ -1016,13 +1014,25 @@ export async function handleRuntimeRetry(
        outright ended `lost`, and a new explicit retry reopens it. */
     const presentationOperationId = previous.receipt.presentationOperationId ?? previous.operationId;
     const attemptOperationId = terminalRetryOperationId(previous.operationId);
+    let reservationRefusal: DeliveryAdmissionRefusedError | null = null;
     const preRecorded = await readEvidence(
-      () => dependencies.recordRetryAttempt
-        ? dependencies.recordRetryAttempt(presentationOperationId, attemptOperationId)
-        : recordDeliveryRetryAttempt(retryRegistry, presentationOperationId, attemptOperationId, true, recipientGuard),
+      async () => {
+        if (dependencies.recordRetryAttempt) {
+          return dependencies.recordRetryAttempt(presentationOperationId, attemptOperationId);
+        }
+        try {
+          return await recordDeliveryRetryAttempt(retryRegistry, presentationOperationId, attemptOperationId, true, recipientGuard);
+        } catch (error) {
+          /* The guard runs before the reservation mutation. Preserve that
+             proven refusal; other write failures remain unreadable evidence. */
+          if (!(error instanceof DeliveryAdmissionRefusedError)) throw error;
+          reservationRefusal = error;
+          return false;
+        }
+      },
       RETRY_RECORD_UNAVAILABLE,
     );
-    recipientGuard();
+    if (reservationRefusal) throw reservationRefusal;
     if (!preRecorded.readable || !preRecorded.value) return retryRecordUnavailable(preRecorded);
     const attemptProgress = dependencies.progress === undefined ? ownedDeliveryProgressStore() : dependencies.progress;
     const attemptOwner = retryRegistry.deliverySnapshotForOperation(attemptOperationId).deliveryOperationOwners[attemptOperationId] ?? null;
@@ -1065,6 +1075,7 @@ export async function handleRuntimeRetry(
     };
     let result: Awaited<ReturnType<typeof retry>>;
     try {
+      recipientGuard();
       try {
         result = await retry();
       } catch (error) {

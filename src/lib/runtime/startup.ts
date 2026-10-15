@@ -196,7 +196,11 @@ interface StructuredStartupSignals {
   pendingCodexContinuationConversationIds: ReadonlySet<string>;
   /** Ordered send evidence, including pending and unknown outcomes that
       must settle before an interrupted turn can be continued. */
-  admittedMessages: ReadonlyMap<string, readonly { idempotencyKey: string; at: number; delivered: boolean; pending: boolean }[]>;
+  admittedMessages: ReadonlyMap<string, readonly {
+    idempotencyKey: string;
+    deliveredAt: number | null;
+    pending: boolean;
+  }[]>;
 }
 
 const TRANSCRIPT_REFRESH_CONCURRENCY = 16;
@@ -814,8 +818,8 @@ function interruptionObligationDischarge(
   return newerDelivered ? "a newer message already resumed the conversation" : null;
 }
 
-/** Admission order survives status changes. Pending or ambiguous messages
-    keep the cut owed; only proven arrival answers it. */
+/** Pending and ambiguous sends hold the cut regardless of admission time;
+    only positively timed post-cut delivery discharges it. */
 function newerInterruptionMessages(
   registry: AgentRegistry,
   obligation: InterruptionObligation,
@@ -824,25 +828,36 @@ function newerInterruptionMessages(
 ): { delivered: boolean; pending: boolean }[] {
   const conversationId = registry.canonicalConversationId(obligation.conversationId);
   const recordedAt = Date.parse(obligation.recordedAt);
-  const held = registryRowsMatching(snapshot, "heldDeliveries", "conversationId",
-    conversationIdsResolvingTo(snapshot, conversationId)).filter(delivery =>
-      (delivery.command.kind === "send" || delivery.command.kind === "steer")
-        && delivery.clientMessageId !== obligation.id && Date.parse(delivery.createdAt) > recordedAt);
-  const journal = (messages.get(conversationId) ?? []).filter(message =>
-    message.idempotencyKey !== obligation.id && message.at > recordedAt);
-  const owners = registryRowsMatching(snapshot, "deliveryOperationOwners", "conversationId",
-    conversationIdsResolvingTo(snapshot, conversationId)).filter(owner =>
-      (owner.command.kind === "send" || owner.command.kind === "steer")
-        && owner.clientMessageId !== obligation.id && Date.parse(owner.createdAt) > recordedAt);
-  return [...journal, ...held.map(delivery => ({
-    delivered: delivery.state === "delivered",
-    pending: delivery.state !== "delivered"
-      && !(delivery.state === "failed" && sendReceiptFor(snapshot, delivery.command.operationId)?.resend === "safe"),
-  })), ...owners.map(owner => {
-    const receipt = sendReceiptFor(snapshot, owner.command.operationId);
-    return { delivered: receipt?.state === "delivered",
-      pending: receipt?.state !== "delivered" && receipt?.resend !== "safe" };
-  })];
+  const conversationIds = conversationIdsResolvingTo(snapshot, conversationId);
+  const held = registryRowsMatching(snapshot, "heldDeliveries", "conversationId", conversationIds).filter(delivery =>
+    (delivery.command.kind === "send" || delivery.command.kind === "steer")
+      && delivery.clientMessageId !== obligation.id);
+  const journal = (messages.get(conversationId) ?? []).filter(message => message.idempotencyKey !== obligation.id);
+  const owners = registryRowsMatching(snapshot, "deliveryOperationOwners", "conversationId", conversationIds).filter(owner =>
+    (owner.command.kind === "send" || owner.command.kind === "steer")
+      && owner.clientMessageId !== obligation.id);
+  return [
+    ...journal.map(message => ({
+      delivered: message.deliveredAt !== null && message.deliveredAt > recordedAt,
+      pending: message.pending,
+    })),
+    ...held.map(delivery => {
+      const deliveredAt = delivery.deliveredAt ? Date.parse(delivery.deliveredAt) : NaN;
+      return {
+        delivered: delivery.state === "delivered" && Number.isFinite(deliveredAt) && deliveredAt > recordedAt,
+        pending: delivery.state !== "delivered"
+          && !(delivery.state === "failed" && sendReceiptFor(snapshot, delivery.command.operationId)?.resend === "safe"),
+      };
+    }),
+    ...owners.map(owner => {
+      const receipt = sendReceiptFor(snapshot, owner.command.operationId);
+      const settledAt = owner.settledAt ? Date.parse(owner.settledAt) : NaN;
+      return {
+        delivered: owner.terminalState === "delivered" && Number.isFinite(settledAt) && settledAt > recordedAt,
+        pending: receipt?.state !== "delivered" && receipt?.resend !== "safe",
+      };
+    }),
+  ];
 }
 
 /**
@@ -1444,18 +1459,23 @@ function admittedRuntimeMessages(
   registry: AgentRegistry,
   runtime: Pick<Awaited<ReturnType<RuntimeHostClient["snapshot"]>>, "sessions" | "recentOperations">,
 ): StructuredStartupSignals["admittedMessages"] {
-  const admittedMessages = new Map<string, { idempotencyKey: string; at: number; delivered: boolean; pending: boolean }[]>();
+  const admittedMessages = new Map<string, { idempotencyKey: string; deliveredAt: number | null; pending: boolean }[]>();
   const snapshot = registry.readOnlySnapshot();
   for (const receipt of [...runtime.recentOperations, ...runtime.sessions.flatMap((session) => session.recentReceipts ?? [])]) {
     if (receipt.kind !== "send" && receipt.kind !== "steer") continue;
-    const at = Date.parse(receipt.admittedAt ?? receipt.at);
-    if (!Number.isFinite(at)) continue;
+    /* `at` moves with status; only it can prove the send arrived after the
+       restart cut. `admittedAt` may be much earlier, during Viewer downtime. */
+    const delivered = receipt.status === "delivered";
+    const arrival = delivered ? Date.parse(receipt.at) : NaN;
     const conversationId = canonicalConversationId(registry, receipt.conversationId);
     const messages = admittedMessages.get(conversationId) ?? [];
-    const delivered = receipt.status === "delivered";
     const safeFailure = receipt.status === "rejected" || (receipt.status === "failed"
       && (receipt.resend === "safe" || sendReceiptFor(snapshot, receipt.operationId)?.resend === "safe"));
-    messages.push({ idempotencyKey: receipt.idempotencyKey, at, delivered, pending: !delivered && !safeFailure });
+    messages.push({
+      idempotencyKey: receipt.idempotencyKey,
+      deliveredAt: Number.isFinite(arrival) ? arrival : null,
+      pending: !delivered && !safeFailure,
+    });
     admittedMessages.set(conversationId, messages);
   }
   return admittedMessages;
