@@ -1,3 +1,4 @@
+import { yieldToRuntime } from "@/lib/cooperative";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { accountManager } from "@/lib/accounts/manager";
 import { conversationProjectKey } from "@/lib/accounts/conversationProject";
@@ -90,16 +91,25 @@ async function runAccountCreditGuard(registry: AgentRegistry,
       claimEpoch: entry.claimEpoch, turnRef, boundary: "paid-credit-guard", reason: "account-guard",
       checkpoint: { lastEventKind: null, lastEventAt: Date.now() }, seat: seat ? { project: seat.project, seatEpoch: seat.seatEpoch } : null,
       ...(owner?.stage?.kind === "run" ? { answeredBy: STAGE_CUT_RESOLUTION } : reviewer ? { answeredBy: REVIEWER_CUT_RESOLUTION } : {}) });
-    for (const older of await store.list()) {
-      if (older.id !== currentCut.id && older.reason === "account-guard" && older.state === "owed" && older.conversationId === conversation.id) {
-        await store.update(older.id, { state: "discharged", resolvedAt: new Date().toISOString(), resolution: "a newer active turn owns recovery" });
+    // A native directory cursor can move while older pointers are removed.
+    // Verify an empty cleanup pass before stopping; each read still admits
+    // at most 64 records, and each discharge keeps its ordinary durable row.
+    for (;;) {
+      let discharged = false;
+      for await (const page of store.conversationPages(conversation.id)) for (const older of page) {
+        if (older.id !== currentCut.id && older.reason === "account-guard" && older.state === "owed" && older.conversationId === conversation.id) {
+          await store.update(older.id, { state: "discharged", resolvedAt: new Date().toISOString(), resolution: "a newer active turn owns recovery" });
+          discharged = true;
+          await yieldToRuntime();
+        }
       }
+      if (!discharged) break;
     }
     if (!await stop(item.key, item.host)) throw new Error("paid-credit guard could not confirm host termination");
   }), headlessStop]);
   const failures = stops.filter((result): result is PromiseRejectedResult => result.status === "rejected");
   if (failures.length) throw new AggregateError(failures.map(result => result.reason), "paid-credit guard termination remains pending");
-  const { obligations: page, nextCursor } = await store.page(state.cursor);
+  const { obligations: page, nextCursor } = await store.scanPage();
   for (const obligation of page) {
     if (obligation.reason !== "account-guard") continue;
     if (obligation.state === "submitted") {

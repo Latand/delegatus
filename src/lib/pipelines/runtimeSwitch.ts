@@ -125,17 +125,28 @@ export async function hasRuntimeSwitchKill(client: Pick<RuntimeHostClient, "effe
   }
 }
 
-export function cancelPendingRuntimeSwitch(registry: Pick<AgentRegistry, "conversation" | "withdrawConversationReconfigure" | "cancelConversationSwitch" | "reconfigureOwnedCancellableSwitch" | "releaseSwitchHold">, conversationId: string, operationId: string): void {
+export async function cancelPendingRuntimeSwitch(registry: Pick<AgentRegistry, "deliveryWriteOrBusy" | "conversation" | "withdrawConversationReconfigure" | "cancelConversationSwitch" | "reconfigureOwnedCancellableSwitch" | "releaseSwitchHold">, conversationId: string, operationId: string): Promise<void> {
   const id = conversationId as ViewerConversationId;
-  const withdrawal = registry.withdrawConversationReconfigure(id, operationId);
+  const withdrawal = await registry.deliveryWriteOrBusy({ label: "pipeline.switch-withdraw", operationId },
+    () => registry.withdrawConversationReconfigure(id, operationId));
   if (withdrawal.kind === "claimed") {
     const conversation = withdrawal.conversation;
     if (!conversation.migration || !registry.reconfigureOwnedCancellableSwitch(id)) throw new Error("runtime switch is already applying");
-    registry.cancelConversationSwitch(id, conversation.migration.revision);
+    await registry.deliveryWriteOrBusy({ label: "pipeline.switch-cancel", operationId }, () => {
+      if (!registry.reconfigureOwnedCancellableSwitch(id)) throw new Error("runtime switch is already applying");
+      return registry.cancelConversationSwitch(id, conversation.migration!.revision);
+    });
   } else if (withdrawal.kind === "settled" && withdrawal.conversation.reconfigure?.status !== "failed") {
     throw new Error("runtime switch already settled; reconcile its outcome");
   }
-  registry.releaseSwitchHold(id);
+  await registry.deliveryWriteOrBusy({ label: "pipeline.switch-release", operationId }, () => {
+    const current = registry.conversation(id);
+    if (current?.reconfigure?.operationId !== withdrawal.conversation.reconfigure?.operationId
+      || JSON.stringify(current?.switchHold) !== JSON.stringify(withdrawal.conversation.switchHold)) {
+      throw new RuntimeSwitchSuperseded();
+    }
+    return registry.releaseSwitchHold(id);
+  });
 }
 function clearOldWaits(attempt: PipelineStageAttempt) {
   delete attempt.providerWait; delete attempt.providerRecoveryBudget; delete attempt.severedTurn;

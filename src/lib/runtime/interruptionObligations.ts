@@ -289,17 +289,54 @@ function createInterruptionObligationStore(
   };
   const indexDirectory = accountGuardIndexDirectory(directory);
   const indexFile = (id: string) => path.join(indexDirectory, `${id}.json`);
+  const conversationDirectory = (conversationId: string) => path.join(`${indexDirectory}.conversations`,
+    crypto.createHash("sha256").update(conversationId).digest("hex"));
+  const conversationIndexFile = (obligation: InterruptionObligation) =>
+    path.join(conversationDirectory(obligation.conversationId), `${obligation.id}.json`);
+  const cutIndexFile = (cut: InterruptionObligationInput) => cut.owner ? path.join(`${indexDirectory}.cuts`,
+    `${crypto.createHash("sha256").update(JSON.stringify([cut.conversationId, cut.hostKey,
+      cut.owner.pid, cut.owner.startIdentity, cut.turnRef])).digest("hex")}.json`) : null;
+  const cutPointerId = (filename: string): string | null => {
+    try {
+      const id = JSON.parse(fs.readFileSync(filename, "utf8")).id;
+      return typeof id === "string" && /^interruption-continuation-[0-9a-f]{32}$/.test(id) ? id : null;
+    } catch (error) { if (error instanceof SyntaxError || (error as NodeJS.ErrnoException).code === "ENOENT") return null; throw error; }
+  };
+  const removeCutPointer = (cut: InterruptionObligation) => {
+    const filename = cutIndexFile(cut);
+    if (filename && cutPointerId(filename) === cut.id) fs.rmSync(filename, { force: true });
+  };
+  const indexedCut = (cut: InterruptionObligationInput): InterruptionObligation | null => {
+    const filename = cutIndexFile(cut);
+    if (!filename) return null;
+    const id = cutPointerId(filename);
+    if (!id) return null;
+    const existing = read(fileFor(id)) ?? [...readPending(), ...activeClaims().flatMap(readJournal)].find(item => item.id === id);
+    return existing?.reason === "account-guard" && interruptionObligationUnresolved(existing)
+      && coversSameCut(existing, cut) ? existing : null;
+  };
   // Publish a durable pointer before its owed record. A crash can leave an
   // extra pointer, but cannot hide work whose cut was acknowledged to a host.
   const prepareIndex = (obligation: InterruptionObligation): void => {
-    if (obligation.reason === "account-guard" && interruptionObligationUnresolved(obligation)
-      && !fs.existsSync(indexFile(obligation.id))) writeJsonDurably(indexFile(obligation.id), { id: obligation.id });
+    if (obligation.reason !== "account-guard" || !interruptionObligationUnresolved(obligation)) return;
+    for (const filename of [indexFile(obligation.id), conversationIndexFile(obligation)]) {
+      if (!fs.existsSync(filename)) writeJsonDurably(filename, { id: obligation.id });
+    }
+    const cutFile = cutIndexFile(obligation);
+    if (cutFile && cutPointerId(cutFile) !== obligation.id) {
+      const existing = indexedCut(obligation);
+      if (!existing || existing.recordedAt > obligation.recordedAt) writeJsonDurably(cutFile, { id: obligation.id });
+    }
   };
   const write = (obligation: InterruptionObligation): void => {
     prepareIndex(obligation);
     writeJsonDurably(fileFor(obligation.id), obligation);
     if (obligation.reason === "account-guard") changedGuardObligations(directory);
-    if (!interruptionObligationUnresolved(obligation)) fs.rmSync(indexFile(obligation.id), { force: true });
+    if (!interruptionObligationUnresolved(obligation)) {
+      fs.rmSync(indexFile(obligation.id), { force: true });
+      fs.rmSync(conversationIndexFile(obligation), { force: true });
+      removeCutPointer(obligation);
+    }
   };
   const readJournal = (filename: string): InterruptionObligation[] => {
     let text: string;
@@ -401,12 +438,12 @@ function createInterruptionObligationStore(
       return null;
     }
   };
-  const list = (page?: { after: string; limit: number; nextCursor: string | null }): InterruptionObligation[] => {
+  const list = (page?: { after: string; limit: number; nextCursor: string | null; names?: string[] }): InterruptionObligation[] => {
     importPending();
     return transaction(() => {
       let names: string[];
       try {
-        names = fs.readdirSync(guardOnly ? indexDirectory : directory);
+        names = page?.names ?? fs.readdirSync(guardOnly ? indexDirectory : directory);
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
         names = [];
@@ -416,8 +453,8 @@ function createInterruptionObligationStore(
       const canonicalIds = new Set<string>();
       const pending = [...readPending(), ...activeClaims().flatMap(readJournal)];
       // Include claimed or unimportable journal cuts in the same cursor order.
-      const indexedNames = guardOnly ? [...new Set([...names, ...pending.filter(item => item.reason === "account-guard"
-        && interruptionObligationUnresolved(item)).map(item => `${item.id}.json`)])] : names;
+      const indexedNames = page?.names ?? (guardOnly ? [...new Set([...names, ...pending.filter(item => item.reason === "account-guard"
+        && interruptionObligationUnresolved(item)).map(item => `${item.id}.json`)])] : names);
       const candidates = indexedNames.filter(name => name.startsWith(OBLIGATION_PREFIX) && name.endsWith(".json")
         && (!page || name > `${page.after}.json`)).sort();
       const selected = page ? candidates.slice(0, page.limit) : candidates;
@@ -441,12 +478,15 @@ function createInterruptionObligationStore(
         const resolvedAt = obligation.resolvedAt ? Date.parse(obligation.resolvedAt) : NaN;
         if (guardOnly && (obligation.reason !== "account-guard" || !interruptionObligationUnresolved(obligation))) {
           fs.rmSync(path.join(indexDirectory, name), { force: true });
+          fs.rmSync(conversationIndexFile(obligation), { force: true });
+          removeCutPointer(obligation);
           continue;
         }
         if (!guardOnly && !interruptionObligationUnresolved(obligation) && now - resolvedAt > RESOLVED_RETENTION_MS) {
           fs.rmSync(path.join(directory, name), { force: true });
           continue;
         }
+        if (guardOnly) prepareIndex(obligation);
         obligations.push(obligation);
       }
       /* A fresh claim is still part of the inventory. Reading it does not
@@ -464,12 +504,27 @@ function createInterruptionObligationStore(
   };
   return {
     list,
+    importPending,
+    prepareIndex,
+    conversationPage(conversationId: string, names: string[]) {
+      const records = list({ names, after: "", limit: 64, nextCursor: null });
+      const kept = new Set(records.map(record => `${record.id}.json`));
+      for (const name of names) if (!kept.has(name)) {
+        try { fs.lstatSync(path.join(directory, name)); }
+        catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") fs.rmSync(path.join(conversationDirectory(conversationId), name), { force: true }); }
+      }
+      return records.filter(record => record.conversationId === conversationId);
+    },
+    conversationDirectory,
     record(input: InterruptionObligationInput) {
       return transaction(() => {
         const id = interruptionObligationId(input);
         /* The id is the cut: a record already under it is this cut's, in
            whatever state it has reached, and is never written over. */
-        const covering = (guardOnly ? read(fileFor(id)) : null) ?? list().find((existing) => existing.id === id || coversSameCut(existing, input));
+        const covering = guardOnly
+          ? read(fileFor(id)) ?? indexedCut(input)
+            ?? [...readPending(), ...activeClaims().flatMap(readJournal)].find(existing => existing.id === id)
+          : list().find(existing => existing.id === id || coversSameCut(existing, input));
         if (covering) {
           /* A restart record found standing again after its engine wrote more
              says when it was last seen: the stage controller counts a cut only
@@ -539,7 +594,10 @@ function createInterruptionObligationStore(
           if (kept.length > 0) appendDurably(pendingFile, kept.map((obligation) => `${JSON.stringify(obligation)}\n`).join(""));
           for (const claimed of claims) fs.rmSync(claimed, { force: true });
           let removed = kept.length < pending.length;
+          for (const current of pending) if (current.id === id) { fs.rmSync(conversationIndexFile(current), { force: true }); removeCutPointer(current); }
           if (fs.existsSync(fileFor(id))) {
+            const current = read(fileFor(id));
+            if (current) { fs.rmSync(conversationIndexFile(current), { force: true }); removeCutPointer(current); }
             fs.rmSync(fileFor(id), { force: true });
             removed = true;
           }
@@ -602,14 +660,21 @@ export function accountGuardObligationStore(directory: string) {
     withWaitCorrelation({ label: "account-credit-guard.obligations" }, () =>
       withFileTransaction(pendingFile, "account guard obligations are busy", operation)));
   const initialize = async () => {
-    if (fs.existsSync(ready)) return;
+    let indexed = false;
+    try {
+      const version = JSON.parse(fs.readFileSync(ready, "utf8")).version;
+      if (version === 2) return;
+      indexed = version === 1;
+    } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
     // Import journal fallbacks under the same asynchronously acquired fence.
-    await transaction(() => store.list());
+    await transaction(() => store.importPending());
     let entries: fs.Dir;
-    try { entries = await fs.promises.opendir(directory); }
+    // The existing pending index already excludes settled history. Upgrading
+    // its conversation index never revisits every historical cut.
+    try { entries = await fs.promises.opendir(indexed ? indexDirectory : directory); }
     catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-      await transaction(() => writeJsonDurably(ready, { version: 1 }));
+      await transaction(() => writeJsonDurably(ready, { version: 2 }));
       return;
     }
     for await (const entry of entries) {
@@ -625,14 +690,74 @@ export function accountGuardObligationStore(directory: string) {
           if (error instanceof SyntaxError || (error as NodeJS.ErrnoException).code === "ENOENT") return;
           throw error;
         }
+        if (isObligation(obligation) && obligation.reason === "account-guard") store.prepareIndex(obligation);
         if (isObligation(obligation) && obligation.reason === "account-guard" && interruptionObligationUnresolved(obligation)) {
           writeJsonDurably(path.join(indexDirectory, `${obligation.id}.json`), { id: obligation.id });
         }
       });
     }
-    await transaction(() => writeJsonDurably(ready, { version: 1 }));
+    await transaction(() => writeJsonDurably(ready, { version: 2 }));
+  };
+  // The watchdog keeps one bounded directory cursor across ticks. Reading all
+  // index names on every page would still scale with retained pending work.
+  let scan: fs.Dir | null = null;
+  let expires: ReturnType<typeof setTimeout> | undefined;
+  const closeScan = async () => {
+    const current = scan;
+    scan = null;
+    if (expires) clearTimeout(expires);
+    expires = undefined;
+    await current?.close();
   };
   return {
+    async scanPage() {
+      await initialize();
+      return withViewerOperation("account-credit-guard.store", async () => {
+        if (expires) clearTimeout(expires);
+        try {
+          scan ??= await fs.promises.opendir(indexDirectory, { bufferSize: 64 });
+          const names: string[] = [];
+          let complete = false;
+          for (let visited = 0; visited < 64; visited++) {
+            const entry = await scan.read();
+            if (!entry) { complete = true; break; }
+            if (entry.name.startsWith(OBLIGATION_PREFIX) && entry.name.endsWith(".json")) names.push(entry.name);
+          }
+          const obligations = await transaction(() => store.list({ names, after: "", limit: 64, nextCursor: null }));
+          if (complete) await closeScan();
+          else {
+            // A retired controller leaves no open directory behind. Expiry
+            // restarts a later sweep; durable pending records remain indexed.
+            expires = setTimeout(() => { void closeScan().catch(error => {
+              console.error("[account-credit-guard] pending cursor close failed", error);
+            }); }, 30_000);
+            expires.unref?.();
+          }
+          return { obligations, nextCursor: complete ? null : "pending" };
+        } catch (error) { await closeScan(); throw error; }
+      });
+    },
+    async *conversationPages(conversationId: string) {
+      let entries: fs.Dir;
+      try { entries = await withViewerOperation("account-credit-guard.store", () =>
+        fs.promises.opendir(store.conversationDirectory(conversationId), { bufferSize: 64 })); }
+      catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return; throw error; }
+      try {
+        for (;;) {
+          const { names, complete } = await withViewerOperation("account-credit-guard.store", async () => {
+            const names: string[] = [];
+            for (let visited = 0; visited < 64; visited++) {
+              const entry = await entries.read();
+              if (!entry) return { names, complete: true };
+              if (entry.name.startsWith(OBLIGATION_PREFIX) && entry.name.endsWith(".json")) names.push(entry.name);
+            }
+            return { names, complete: false };
+          });
+          if (names.length) yield await transaction(() => store.conversationPage(conversationId, names));
+          if (complete) break;
+        }
+      } finally { await entries.close(); }
+    },
     async list() { await initialize(); return transaction(() => store.list()); },
     async page(after: string) {
       await initialize();

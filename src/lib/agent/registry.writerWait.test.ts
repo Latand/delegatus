@@ -293,3 +293,25 @@ test("a mutation that throws after changing its draft commits nothing and leaves
     expect(next.acquired && next.value.revision).toBe(before.revision + 1);
   } finally { registry.close(); }
 });
+
+
+test("runtime-switch cancellation reads and releases through real contended registry admissions", async () => {
+  const { cancelPendingRuntimeSwitch } = await import("@/lib/pipelines/runtimeSwitch");
+  const filename = path.join(root, "cancel-runtime.json");
+  const registry = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "sqlite" });
+  const conversation = registry.ensureConversation("codex", "/fixture/cancel-runtime.jsonl", null);
+  resetBlockingWaitsForTests(() => {});
+  const holder = registryLockHolder(filename.replace(/\.json$/, ".sqlite"));
+  try {
+    await holder.hold();
+    await whileRegistryWriterHeld(holder, () => cancelPendingRuntimeSwitch(registry, conversation.id, "switch-one"));
+    await cancelPendingRuntimeSwitch(registry, conversation.id, "switch-one");
+    expect(registry.conversation(conversation.id)?.reconfigureWithdrawals).toEqual([
+      expect.objectContaining({ operationId: "switch-one" }),
+    ]);
+    expect(await registry.deliveryWriteOrBusy({ label: "test.cancellable-read" },
+      () => registry.reconfigureOwnedCancellableSwitch(conversation.id))).toBe(false);
+    expect(blockingWaitDiagnostics().sites["registry-lock"]).toBeUndefined();
+    expect(blockingWaitDiagnostics().sites["registry-revision-retry"]).toBeUndefined();
+  } finally { await holder.close(); registry.close(); }
+});

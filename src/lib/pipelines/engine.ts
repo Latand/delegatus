@@ -1276,14 +1276,17 @@ async function stopStageHostByRecordedIdentity(
       onFirstEffect?.();
     },
     ...(termination.persistCapturedTree ? {} : {
-      persistCapturedTree: (identities: readonly ProcessIdentity[]) => {
-        capture = registry.captureStructuredTerminationSurvivors(probe.key, root, identities, source);
+      persistCapturedTree: async (identities: readonly ProcessIdentity[]) => {
+        capture = await registry.deliveryWriteOrBusy({ label: "pipeline.termination-capture" },
+          () => registry.captureStructuredTerminationSurvivors(probe.key, root, identities, source));
         onCapture?.(capture);
         return capture !== null;
       },
-      withdrawCapturedTree: () => {
-        if (!capture) return;
-        const withdrawn = registry.withdrawStructuredTerminationSurvivors(probe.key, root, capture, source);
+      withdrawCapturedTree: async () => {
+        const captured = capture;
+        if (!captured) return;
+        const withdrawn = await registry.deliveryWriteOrBusy({ label: "pipeline.termination-withdraw" },
+          () => registry.withdrawStructuredTerminationSurvivors(probe.key, root, captured, source));
         if (withdrawn) onCapture?.(null);
       },
     }),
@@ -1926,7 +1929,7 @@ export function defaultPipelinePorts(
       return { state: current && status?.receipt.status === "applied" ? "superseded" : "pending" };
     },
     cancelRuntimeSwitch: async (conversationId, operationId) => {
-      cancelPendingRuntimeSwitch(registry, conversationId, operationId);
+      await cancelPendingRuntimeSwitch(registry, conversationId, operationId);
     },
     retireRuntimeSwitch: async record => {
       const { retireRuntimeSwitchProducers } = await import("./runtimeSwitchRecovery");

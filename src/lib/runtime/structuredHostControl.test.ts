@@ -979,3 +979,52 @@ test.each(["identity", "sleep"])("%s exceptions after TERM retain the captured t
     ],
   });
 });
+
+
+test("termination waits for durable capture and withdrawal, then rechecks changed authority", async () => {
+  let captured!: () => void;
+  const capture = new Promise<void>(resolve => { captured = resolve; });
+  let withdrawn!: () => void;
+  const withdrawal = new Promise<void>(resolve => { withdrawn = resolve; });
+  const effects: string[] = [];
+  let allowed = true;
+  let settled = false;
+  const termination = terminateStructuredHostTree(
+    ref({ pid: 6_060, startIdentity: "6060:start", sessionId: CLAUDE_SESSION }), {
+      processIdentity: pid => `${pid}:start`, pidAlive: () => true, ppidMap: () => new Map(),
+      processGroupId: () => null, protectedPids: () => new Set(),
+      persistCapturedTree: async () => { effects.push("capture-pending"); await capture; effects.push("captured"); return true; },
+      withdrawCapturedTree: async () => { effects.push("withdraw-pending"); await withdrawal; effects.push("withdrawn"); },
+      authorize: () => allowed ? null : { status: 409, error: "authority changed during admission" },
+      terminateOwnedHost: async () => { effects.push("runtime"); return false; },
+      signal: () => { effects.push("signal"); },
+    }).then(value => { settled = true; return value; });
+  try {
+    expect(effects).toEqual(["capture-pending"]);
+    allowed = false; captured();
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(effects).toEqual(["capture-pending", "captured", "withdraw-pending"]);
+    expect(settled).toBe(false);
+    withdrawn();
+    expect(await termination).toMatchObject({ ok: false, error: "authority changed during admission" });
+    expect(effects).toEqual(["capture-pending", "captured", "withdraw-pending", "withdrawn"]);
+  } finally { captured(); withdrawn(); await termination; }
+});
+
+test("an asynchronous capture refusal sends no signal and a rejected capture retains its error", async () => {
+  for (const rejects of [false, true]) {
+    const effects: string[] = [];
+    const result = terminateStructuredHostTree(
+      ref({ pid: 6_060, startIdentity: "6060:start", sessionId: CLAUDE_SESSION }), {
+        processIdentity: pid => `${pid}:start`, pidAlive: () => true, ppidMap: () => new Map(),
+        processGroupId: () => null, protectedPids: () => new Set(),
+        persistCapturedTree: async () => { await new Promise<void>(resolve => setImmediate(resolve));
+          if (rejects) throw new Error("capture storage unavailable"); return false; },
+        terminateOwnedHost: async () => { effects.push("runtime"); return false; },
+        signal: () => { effects.push("signal"); },
+      });
+    if (rejects) await expect(result).rejects.toThrow("capture storage unavailable");
+    else expect(await result).toMatchObject({ ok: false, error: expect.stringContaining("could not be persisted") });
+    expect(effects).toEqual([]);
+  }
+});

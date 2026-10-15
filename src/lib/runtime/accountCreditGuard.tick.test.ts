@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, expect, spyOn, test } from "bun:test";
+import { Database } from "bun:sqlite";
 import { migrationDeliveryFixture } from "@/test-helpers/migrationDelivery";
 import { bindStructuredDeliveryQueue } from "./structuredDeliveryController";
 import { kickStructuredDeliveryQueue } from "./structuredDeliverySignal";
@@ -38,17 +39,21 @@ test("an unchanged tick performs no registry or obligation-store work after its 
   const f = fixture("unchanged");
   try {
     for (let n = 0; n < 128; n++) f.store.record(cut(n));
-    // Two pages and one quiescent tick, regardless of id order.
+    // Drain the initial records and the pending index marker.
     for (let n = 0; n < 3; n++) await f.poll();
     const reads = countReads(f.directory);
+    const sqlQueries = spyOn(Database.prototype, "query");
+    const sqlExec = spyOn(Database.prototype, "exec");
     const quota = spyOn(f.registry, "quotaObservations");
     const snapshot = spyOn(f.registry, "readOnlySnapshot");
     try {
       for (let n = 1; n <= 4; n++) await f.poll(n * 1_000);
       expect(reads.count).toBe(0);
+      expect(sqlQueries).not.toHaveBeenCalled();
+      expect(sqlExec).not.toHaveBeenCalled();
       expect(quota).not.toHaveBeenCalled();
       expect(snapshot).not.toHaveBeenCalled();
-    } finally { reads.restore(); quota.mockRestore(); snapshot.mockRestore(); }
+    } finally { reads.restore(); quota.mockRestore(); snapshot.mockRestore(); sqlQueries.mockRestore(); sqlExec.mockRestore(); }
   } finally { f.registry.close(); }
 });
 
@@ -94,9 +99,6 @@ test("external writes are found by the slow fallback, and a fresh process inspec
       await f.poll(ACCOUNT_GUARD_FALLBACK_MS); expect(reads.count).toBeGreaterThan(0);
     } finally { reads.restore(); }
     const restartSource = `import fs from "node:fs";
-      import { migrationDeliveryFixture } from "@/test-helpers/migrationDelivery";
-import { bindStructuredDeliveryQueue } from "./structuredDeliveryController";
-import { kickStructuredDeliveryQueue } from "./structuredDeliverySignal";
 import { AgentRegistry } from ${JSON.stringify(path.resolve(import.meta.dir, "../agent/registry.ts"))};
       import { enforceAccountCreditGuard } from ${JSON.stringify(path.join(import.meta.dir, "accountCreditGuard.ts"))};
       const registry = new AgentRegistry(process.argv[1], undefined, undefined, {sqliteMode:"sqlite"});

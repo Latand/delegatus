@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import crypto from "node:crypto";
 import path from "node:path";
 const root = process.env.LLV_STATE_DIR;
 if (!root || process.env.NODE_ENV !== "test" || process.env.LLV_STATE_OWNER) {
@@ -7,13 +8,29 @@ if (!root || process.env.NODE_ENV !== "test" || process.env.LLV_STATE_OWNER) {
 fs.mkdirSync(root, { recursive: true, mode: 0o700 });
 if (fs.readdirSync(root).length !== 0) throw new Error("The measurement requires an empty LLV_STATE_DIR");
 // Validate the sandbox before importing any module that can resolve state.
-const { AgentRegistry, normalizeRegistry } = await import("../src/lib/agent/registry");
-const { SqliteAgentRegistryStore } = await import("../src/lib/agent/sqliteRegistryStore");
+const RealDate = Date;
+globalThis.Date = class extends RealDate {
+    constructor(value?: string | number) { super(value ?? "2026-01-01T00:00:00.000Z"); }
+    static now() { return 1_767_225_600_000; }
+} as DateConstructor;
+const { AgentRegistry, setAgentRegistryForTests } = await import("../src/lib/agent/registry");
+const { emptyLaunchProfile } = await import("../src/lib/accounts/migration/contracts");
+const { defaultPipelinePorts } = await import("../src/lib/pipelines/engine");
+const { recordLiveObservation } = await import("../src/lib/accounts/liveLimits");
 const { enforceAccountCreditGuard } = await import("../src/lib/runtime/accountCreditGuard");
 const { interruptionObligationDirectory } = await import("../src/lib/runtime/interruptionObligations");
 const { blockingWaitDiagnostics, resetBlockingWaitsForTests } = await import("../src/lib/blockingWaits");
-const registry = new AgentRegistry(path.join(root, "agent-registry.json"), undefined, undefined, { sqliteMode: "sqlite" });
-const directory = interruptionObligationDirectory(registry.filename);
+let registry!: InstanceType<typeof AgentRegistry>;
+let launches!: string[];
+let directory!: string;
+const uuid = crypto.randomUUID;
+const bytes = crypto.randomBytes;
+let fixtureSequence = 0;
+crypto.randomUUID = () => `00000000-0000-4000-8000-${(++fixtureSequence).toString(16).padStart(12, "0")}`;
+crypto.randomBytes = ((size: number) => Buffer.alloc(size, ++fixtureSequence % 256)) as typeof crypto.randomBytes;
+try {
+registry = new AgentRegistry(path.join(root, "agent-registry.json"), undefined, undefined, { sqliteMode: "sqlite" });
+directory = interruptionObligationDirectory(registry.filename);
 const index = `${directory}.account-guard-pending`;
 fs.mkdirSync(directory, { recursive: true });
 fs.mkdirSync(index, { recursive: true });
@@ -24,8 +41,23 @@ for (let n = 0; n < 128; n++) {
     fs.writeFileSync(path.join(directory, `${id}.json`), JSON.stringify(cut));
     fs.writeFileSync(path.join(index, `${id}.json`), JSON.stringify({ id }));
 }
-const filename = path.join(root, "contended.sqlite");
-const store = new SqliteAgentRegistryStore(filename, { initialSnapshot: normalizeRegistry({ version: 2, entries: {}, receipts: {} }), normalize: normalizeRegistry });
+launches = Array.from({ length: 4 }, (_, n) => {
+    const { receipt } = registry.beginSpawnRequest({ engine: "codex", cwd: "/fixture", transport: "structured", accountId: null,
+        launchProfile: emptyLaunchProfile({ cwd: "/fixture", title: `Fixture ${n}` }) });
+    if (receipt.admissionOwner) registry.releaseStartingStructuredSpawn(receipt.launchId, receipt.admissionOwner);
+    registry.failStructuredSpawn(receipt.launchId, "fixture admission failure", { announce: false });
+    return receipt.launchId;
+});
+} finally {
+    globalThis.Date = RealDate;
+    crypto.randomUUID = uuid;
+    crypto.randomBytes = bytes;
+}
+const fixtureSha256 = crypto.createHash("sha256").update(JSON.stringify(registry.snapshot())).digest("hex");
+fs.writeFileSync(path.join(root, "fixture.json"), JSON.stringify(registry.snapshot()));
+setAgentRegistryForTests(registry);
+const ports = defaultPipelinePorts();
+const filename = registry.filename.replace(/\.json$/, ".sqlite");
 const child = Bun.spawn([process.execPath, "-e", `import { Database } from "bun:sqlite"; const db=new Database(process.argv[1]); for await(const line of Bun.stdin.stream()){ const command=new TextDecoder().decode(line); if(command.includes("exit"))break; db.exec("BEGIN IMMEDIATE"); console.log("locked"); await Bun.sleep(200); db.exec("ROLLBACK"); console.log("free"); } db.close();`, filename], { stdin: "pipe", stdout: "pipe", stderr: "inherit", env: { ...process.env } });
 const reader = child.stdout.getReader();
 let buffer = "";
@@ -50,6 +82,12 @@ if (!Number.isFinite(ticksPerSecond) || ticksPerSecond <= 0)
     throw new Error("could not read Linux clock ticks");
 const cpu = () => { const stat = fs.readFileSync(`/proc/self/task/${process.pid}/stat`, "utf8"); const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" "); return (Number(fields[11]) + Number(fields[12])) * 1000 / ticksPerSecond; };
 let guardStoreCalls = 0, guardMaxSlice = 0, writeMaxSlice = 0;
+const claim = registry.claimFailedSpawnForRetry.bind(registry);
+registry.claimFailedSpawnForRetry = (...args) => {
+    const start = performance.now();
+    try { return claim(...args); }
+    finally { writeMaxSlice = Math.max(writeMaxSlice, performance.now() - start); }
+};
 const original = fs.readFileSync;
 fs.readFileSync = ((...args: Parameters<typeof fs.readFileSync>) => { const start = performance.now(); try {
     return Reflect.apply(original, fs, args);
@@ -74,19 +112,8 @@ try {
         child.stdin.write("hold\n");
         child.stdin.flush();
         await line("locked");
-        const write = () => { const slice = performance.now(); try {
-            return store.mutate(file => { file.importedResumePanes = n % 2 === 0; }, false);
-        }
-        finally {
-            writeMaxSlice = Math.max(writeMaxSlice, performance.now() - slice);
-        } };
-        if (process.env.MEASURE_ASYNC === "1") {
-            const result = await store.withWriter(write);
-            if (!result.acquired)
-                throw Error("write refused");
-        }
-        else
-            write();
+        const outcome = await ports.claimSpawnRetry(launches[n]!, `fixture-claim-${n}`);
+        if (outcome !== "claimed") throw new Error(`unexpected retry admission: ${outcome}`);
         await line("free");
     }
     const tickTimes = [];
@@ -96,9 +123,25 @@ try {
         await enforceAccountCreditGuard(registry, [], async () => true, async () => false, async () => null, { onlyIfChanged: true });
         tickTimes.push(performance.now() - t);
     }
+    let unmigratedCaller: { caller: string; synchronousMs: number; timerAdvancedAtReturn: boolean } | null = null;
+    if (process.env.MEASURE_UNMIGRATED === "1") {
+        child.stdin.write("hold\n"); child.stdin.flush(); await line("locked");
+        let advanced = false;
+        const progress = setTimeout(() => { advanced = true; }, 5);
+        const beforeCall = performance.now();
+        try {
+            recordLiveObservation({ engine: "codex", accountId: "fixture-account", authenticated: true,
+                observedAt: 1_767_225_600_000, provenance: { source: "live", reason: null, staleSince: null },
+                limits: { session: null, weekly: { usedPercent: 1, resetsAt: null }, plan: "pro", capturedAt: 1_767_225_600,
+                    credits: { hasCredits: false, balance: "0", unlimited: false } } }, "managed", { registry });
+            unmigratedCaller = { caller: "accounts.recordLiveObservation", synchronousMs: performance.now() - beforeCall,
+                timerAdvancedAtReturn: advanced };
+        } finally { clearTimeout(progress); }
+        await line("free");
+    }
     await Bun.sleep(10);
     const elapsed = performance.now() - start;
-    console.log(JSON.stringify({ sourceRevision: process.env.MEASURE_SOURCE_REVISION ?? "uncommitted", asyncAdmission: process.env.MEASURE_ASYNC === "1", load: { registryWrites: 4, peerHoldMs: 200, guardTicks: 4, tickMs: 1000, pendingObligations: 128 }, elapsedMs: elapsed, mainThreadCpuMs: cpu() - before, mainThreadCorePercent: 100 * (cpu() - before) / elapsed, maxTimerDelayMs: maxDelay, maxWriteSyncSliceMs: writeMaxSlice, maxGuardFileReadSyncSliceMs: guardMaxSlice, guardStoreReads: guardStoreCalls, guardTickElapsedMs: tickTimes, waits: blockingWaitDiagnostics().sites }));
+    console.log(JSON.stringify({ sourceRevision: process.env.MEASURE_SOURCE_REVISION ?? "uncommitted", asyncAdmission: process.env.MEASURE_ASYNC === "1", fixtureSha256, unmigratedCaller, load: { registryWrites: 4, peerHoldMs: 200, guardTicks: 4, tickMs: 1000, pendingObligations: 128 }, elapsedMs: elapsed, mainThreadCpuMs: cpu() - before, mainThreadCorePercent: 100 * (cpu() - before) / elapsed, maxTimerDelayMs: maxDelay, maxWriteSyncSliceMs: writeMaxSlice, maxGuardFileReadSyncSliceMs: guardMaxSlice, guardStoreReads: guardStoreCalls, guardTickElapsedMs: tickTimes, waits: blockingWaitDiagnostics().sites }));
 }
 finally {
     fs.readFileSync = original;
@@ -107,6 +150,6 @@ finally {
     child.stdin.flush();
     await child.exited;
     reader.releaseLock();
-    store.close();
+    setAgentRegistryForTests(null);
     registry.close();
 }

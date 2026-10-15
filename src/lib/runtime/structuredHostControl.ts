@@ -359,18 +359,18 @@ export interface StructuredHostTerminationDependencies {
   signal?(pid: number, signal: NodeJS.Signals): void;
   /** Persist every verified identity in the captured tree before any runtime
       release or process signal can make a child disappear from observation. */
-  persistCapturedTree?(identities: readonly ProcessIdentity[]): boolean;
+  persistCapturedTree?(identities: readonly ProcessIdentity[]): boolean | Promise<boolean>;
   /** Undo that capture. Called once, and only when the termination was refused
       before its first effect: the runtime released nothing and nothing was
       signalled, so the row owes the capture nothing. */
-  withdrawCapturedTree?(): void;
+  withdrawCapturedTree?(): void | Promise<void>;
   /** Told once, the moment this termination has had an effect: the runtime
       released the host, or the first signal is about to be sent. From here the
       row and the transcript change because of this termination, so a caller
       comparing them against what it observed beforehand stops comparing. */
   onFirstEffect?(): void;
   terminateOwnedHost?(key: SessionKey, expected: ProcessIdentity): Promise<boolean>;
-  retireRegistryEntry?(key: SessionKey, expected: ProcessIdentity, confirmed: readonly ProcessIdentity[]): boolean | void;
+  retireRegistryEntry?(key: SessionKey, expected: ProcessIdentity, confirmed: readonly ProcessIdentity[]): boolean | void | Promise<boolean | void>;
   /** Previously captured descendants whose root may have exited between retries. */
   retainedSurvivors?: readonly ProcessIdentity[];
   protectedPids?(): Set<number>;
@@ -438,7 +438,9 @@ export async function terminateStructuredHostTree(
   const signal = dependencies.signal ?? ((pid: number, value: NodeJS.Signals) => { process.kill(pid, value); });
   const retire = dependencies.retireRegistryEntry
     ?? ((key: SessionKey, expected: ProcessIdentity, confirmed: readonly ProcessIdentity[]) => {
-      return agentRegistry().terminateStructuredHost(key, expected, confirmed);
+      const registry = agentRegistry();
+      return registry.deliveryWriteOrBusy({ label: "termination.retire" },
+        () => registry.terminateStructuredHost(key, expected, confirmed));
     });
   const terminateOwned = dependencies.terminateOwnedHost ?? terminateStructuredDeliveryHost;
   const sleep = dependencies.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
@@ -547,7 +549,7 @@ export async function terminateStructuredHostTree(
      identity set durable before the first effect, so a restart can finish the
      same kill without trying to rediscover reparented children. */
   const capturedIdentities = [...identities.values()];
-  if (dependencies.persistCapturedTree && !dependencies.persistCapturedTree(capturedIdentities)) {
+  if (dependencies.persistCapturedTree && !await dependencies.persistCapturedTree(capturedIdentities)) {
     return {
       ok: false,
       status: 409,
@@ -715,7 +717,7 @@ export async function terminateStructuredHostTree(
     /* The runtime can release its root before detached descendants are gone.
        Retire only after the full captured tree has passed identity checks, and
        require the registry to accept that exact evidence on every path. */
-    if (key && retire(key, expected, [...identities.values()]) === false) {
+    if (key && await retire(key, expected, [...identities.values()]) === false) {
       return { ok: false, status: 409, error: "structured host changed before registry retirement", remaining: [], survivors: [] };
     }
     completed = true;
@@ -731,7 +733,7 @@ export async function terminateStructuredHostTree(
     };
   } finally {
     if (!terminationStarted && !completed) {
-      try { dependencies.withdrawCapturedTree?.(); } catch { /* the capture stays; a retry reads it as retained evidence */ }
+      try { await dependencies.withdrawCapturedTree?.(); } catch { /* the capture stays; a retry reads it as retained evidence */ }
     }
   }
 }

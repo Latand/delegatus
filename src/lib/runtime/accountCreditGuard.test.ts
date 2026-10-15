@@ -388,3 +388,33 @@ test("guard recovery advances past a page of unreadable receipts to reach health
     expect(persisted).toMatchObject({ state: "discharged", resolution: "operator stopped the conversation after the guard" });
   } finally { await f.cleanup(); }
 });
+
+
+test("a guarded stop discharges every older owed cut in bounded pages before its first effect", async () => {
+  const f = migrationDeliveryFixture();
+  const directory = interruptionObligationDirectory(f.registry.filename);
+  const store = accountGuardObligationStore(directory);
+  observe(f.registry, "account-a", 99);
+  const health = f.host.health.bind(f.host);
+  f.host.health = async () => ({ ...await health(), status: "active", activeTurnRef: "current-guard-turn" });
+  const older: string[] = [];
+  const base = { conversationId: f.conversation.id, engine: "codex" as const, hostKey: `codex:${f.key.sessionId}`,
+    path: f.conversation.generations[0]!.path, owner: null, claimEpoch: 1, boundary: "paid-credit-guard",
+    reason: "account-guard" as const, checkpoint: { lastEventKind: null, lastEventAt: null }, seat: null };
+  try {
+    for (let n = 0; n < 130; n++) older.push((await store.record({ ...base, turnRef: `older-${n}` })).obligation.id);
+    const submitted = (await store.record({ ...base, turnRef: "submitted-turn" })).obligation;
+    await store.update(submitted.id, { state: "submitted", operationId: "existing-continuation" });
+    let timerAdvanced = false;
+    const timer = setTimeout(() => { timerAdvanced = true; }, 5);
+    try {
+      await expect(enforceAccountCreditGuard(f.registry, [{ key: f.key, host: f.host }], async () => {
+        for (const id of older) expect(JSON.parse(fs.readFileSync(path.join(directory, `${id}.json`), "utf8")).state).toBe("discharged");
+        expect(JSON.parse(fs.readFileSync(path.join(directory, `${submitted.id}.json`), "utf8")).state).toBe("submitted");
+        expect(timerAdvanced).toBe(true);
+        return false;
+      }, async () => { throw new Error("a refused stop cannot continue"); }, async () => null))
+        .rejects.toThrow("termination remains pending");
+    } finally { clearTimeout(timer); }
+  } finally { await f.cleanup(); }
+});

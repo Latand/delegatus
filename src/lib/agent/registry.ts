@@ -8950,12 +8950,13 @@ export class AgentRegistry {
 
   /** Whether a migration is a switch owned by the conversation's applying reconfigure and still cancellable. */
   reconfigureOwnedCancellableSwitch(id: ViewerConversationId): boolean {
-    const snapshot = this.readOnlySnapshot();
-    const conversation = snapshot.conversations[resolveConversationAlias(snapshot, id)];
-    const migration = conversation?.migration;
-    const owner = conversation?.reconfigure;
-    if (!migration || !owner || owner.status !== "applying" || !CANCELLABLE_SWITCH_PHASES.has(migration.phase)) return false;
-    return snapshot.migrationIntents[migration.intentId]?.requestIds.includes(reconfigureMigrationRequestId(owner)) === true;
+    return this.readKeyed(snapshot => {
+      const conversation = snapshot.conversations[resolveConversationAlias(snapshot, id)];
+      const migration = conversation?.migration;
+      const owner = conversation?.reconfigure;
+      if (!migration || !owner || owner.status !== "applying" || !CANCELLABLE_SWITCH_PHASES.has(migration.phase)) return false;
+      return snapshot.migrationIntents[migration.intentId]?.requestIds.includes(reconfigureMigrationRequestId(owner)) === true;
+    });
   }
 
   canonicalPath(artifactPath: string): string {
