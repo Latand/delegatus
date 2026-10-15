@@ -234,7 +234,8 @@ import { bridgeReportsEnabled, effectiveReportTelegram, mergeOnReviewEnabled, re
 import { refineTask } from "@/lib/tasks/membership";
 import { isoNow } from "@/lib/tasks/helpers";
 import { refuseBusyBeforeAdmission, StoreBusyBeforeAdmissionError } from "@/lib/state/fileTransaction";
-import { loadTasks, loadTasksForList, taskSelectionSource, mutateTasks, mutateTasksFile } from "@/lib/tasks/store";
+import { loadTasks, loadTasksForList, taskSelectionSource, mutateTasks, mutateTasksAsync, mutateTasksFile } from "@/lib/tasks/store";
+import { waitForStateLock } from "@/lib/state/lockWait";
 import { TASK_PRIORITIES, taskPriority, type BoardTask } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 import { collectSnapshot } from "@/lib/view/collect";
@@ -2069,7 +2070,7 @@ async function createBoardTask(args: McpToolArgs, dependencies?: ViewerMcpDomain
   };
   let prior: BoardTask | undefined;
   let matchedFields: string[] | undefined;
-  const result = mutateTasksFile((state) => {
+  const result = await waitForStateLock("mcp.tasks.create", () => mutateTasksFile((state) => {
     let outcome = createTask(state.tasks, input, state.recentCreates, { explicit: true, actor: "agent", noteAuthor: caller?.kind === "manager" ? { kind: "orchestrator", conversationId: caller.conversationId } : { kind: "agent", conversationId: caller?.conversationId ?? null }, conversationId: caller?.conversationId ?? undefined, seatHolding: taskSeatHoldingSnapshot(), ...(dependencies ? { statusActor: pauseResumeActorOf(dependencies) } : {}) });
     // Publish the new owner task and its seat-tick eligibility atomically.
     // Replays and matched findings retain the task's existing status.
@@ -2088,7 +2089,7 @@ async function createBoardTask(args: McpToolArgs, dependencies?: ViewerMcpDomain
       state: outcome.ok && !outcome.replay ? { tasks: outcome.tasks, recentCreates: outcome.recentCreates } : undefined,
       result: outcome,
     };
-  });
+  }), { subject: "tasks" });
   if (!result.ok) throw new McpToolRefusal(result.error, { code: result.code ?? (result.status === 404 ? "TASK_NOT_FOUND" : "TASK_INVALID_FIELD"), field: result.field, status: result.status });
   const fields = result.replay ? [] : matchedFields ?? Object.keys(result.task);
   if (!result.replay) logMaintenanceWrite(maintainer, result.matched ? "update_task" : "create_task", prior, result.task, fields);
@@ -2111,7 +2112,7 @@ async function refineBoardTask(args: McpToolArgs, dependencies: ViewerMcpDomainD
   }
   const taskId = typeof args.taskId === "string" && args.taskId.trim() ? args.taskId.trim() : null;
   const changes: Record<string, string[]> = {};
-  const result = mutateTasks((tasks) => {
+  const result = await mutateTasksAsync((tasks) => {
     const before = new Map(tasks.map(task => [task.id, fieldValues(task)]));
     const outcome = refineTask(tasks, { callerConversationId: caller.conversationId!, taskId, text });
     if (outcome.ok) for (const entry of outcome.refined) {
@@ -2162,7 +2163,7 @@ async function updateBoardTask(args: McpToolArgs, dependencies: ViewerMcpDomainD
       if (!record || record.lifecycle !== "gone" || record.turnState !== "idle" || record.evidenceSource !== "transcript") liveAgent = id ?? transcriptPath ?? "an unconfirmed assignment";
     }
   }
-  const result = mutateTasks((tasks) => {
+  const result = await mutateTasksAsync((tasks) => {
     prior = tasks.find(task => task.id === taskId);
     const pipelines = maintainer ? dependencies.listPipelineRecords?.() ?? dependencies.getPipelines?.().pipelines ?? [] : [];
     const open = pipelines.find(p => p.taskIds?.includes(taskId) && maintenanceLaneIsOpen(p));

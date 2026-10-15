@@ -126,7 +126,7 @@ async function startMcp(environment: Record<string, string>, name: string): Prom
   };
 }
 
-async function viewerBridge(environment: Record<string, string>): Promise<Record<string, string>> {
+async function viewerBridge(environment: Record<string, string>, diagnostics = { text: "" }): Promise<Record<string, string>> {
   const viewer = ownFixtureChild(Bun.spawn([process.execPath, "-e", `
     const { NextRequest } = await import("next/server");
     const { handleMcpHttpRequest } = await import("./src/lib/mcp/http");
@@ -136,10 +136,16 @@ async function viewerBridge(environment: Record<string, string>): Promise<Record
     for await (const chunk of Bun.stdin.stream()) break;
     server.stop(true); process.exit(0);
   `], { cwd: process.cwd(), env: environment, stdin: "pipe", stdout: "pipe", stderr: "pipe" }));
+  const stderr = (async () => {
+    const decoder = new TextDecoder();
+    for await (const chunk of viewer.stderr) diagnostics.text += decoder.decode(chunk, { stream: true });
+    diagnostics.text += decoder.decode();
+  })();
+  void stderr.catch(() => {});
   const reader = viewer.stdout.getReader();
   const answer = await Promise.race([reader.read(), Bun.sleep(5_000).then(() => { throw new Error("fixture Viewer did not start"); })]);
   reader.releaseLock();
-  if (answer.done) throw new Error(await new Response(viewer.stderr).text());
+  if (answer.done) { await stderr; throw new Error(diagnostics.text); }
   return { ...environment, LLV_VIEWER_CONTROL_URL: new TextDecoder().decode(answer.value).trim(),
     // This fixture explicitly selects its own port-0 endpoint.
     LLV_VIEWER_DEPLOY_TARGET: "", LLV_VIEWER_PORT: "" };
@@ -2205,7 +2211,7 @@ describe.skipIf(process.platform !== "linux")("native caller admission (#2827)",
   }, 30_000);
 });
 
-test("packaged MCP writers retain ordered task edits and attribute synchronous state waits", async () => {
+test("packaged MCP writers retain ordered task edits while the Viewer yields on state waits", async () => {
   const sandbox = sandboxDir("llv-mcp-state-contention-");
   const environment = identifiedEnvironment(sandbox);
   const file = path.join(environment.LLV_STATE_DIR!, "tasks.json");
@@ -2216,12 +2222,14 @@ test("packaged MCP writers retain ordered task edits and attribute synchronous s
   }] }));
   const { loadTasksFile } = await import("@/lib/tasks/store");
   loadTasksFile(file);
+  const diagnostics = { text: "" };
+  const forwarded = await viewerBridge(environment, diagnostics);
   const sessions: McpSession[] = [];
   const holder = new Database(path.join(environment.LLV_STATE_DIR!, "state.sqlite"));
   let pending: Promise<unknown> | undefined;
   try {
     for (let writer = 0; writer < 4; writer++) {
-      const session = await startMcp(environment, `state-writer-${writer}`);
+      const session = await startMcp(forwarded, `state-writer-${writer}`);
       sessions.push(session);
       expect((await session.client.callTool({ name: "list_tasks", arguments: { ids: ["shared-task"] } })).isError).not.toBe(true);
     }
@@ -2252,13 +2260,16 @@ test("packaged MCP writers retain ordered task edits and attribute synchronous s
     for (let writer = 0; writer < 4; writer++) {
       expect(lines.filter(line => line.startsWith(`${writer}:`))).toEqual(Array.from({ length: 20 }, (_, sequence) => `${writer}:${sequence}`));
     }
-    const logs = sessions.flatMap(session => session.stderr().split("\n"))
+    const logs = diagnostics.text.split("\n")
       .filter(line => line.startsWith("[blocking-wait] "))
       .map(line => JSON.parse(line.slice("[blocking-wait] ".length)));
-    expect(logs.some(entry => entry.stateWait?.processKind === "mcp" && entry.stateWait.outcome === "waiting")).toBe(true);
-    expect(logs.some(entry => entry.stateWait?.processKind === "mcp" && entry.synchronous
+    // The port-0 Viewer fixture has an embedded entry point. Its process owns
+    // the asynchronous wait; the four packaged adapters own no state locks.
+    expect(logs.some(entry => entry.stateWait?.processKind === "embedded" && entry.stateWait.outcome === "waiting")).toBe(true);
+    expect(logs.some(entry => entry.stateWait?.processKind === "embedded" && !entry.synchronous
       && entry.durationMs > 50 && entry.stateWait.outcome === "success"
-      && entry.stateWait.synchronousSleepMs > 0 && entry.stateWait.callSite.startsWith("state."))).toBe(true);
+      && entry.stateWait.synchronousSleepMs === 0 && entry.stateWait.callSite === "tasks.mutation")).toBe(true);
+    for (const session of sessions) expect(session.stderr()).not.toContain("[blocking-wait]");
   } finally {
     holder.close();
     await pending?.catch(() => {});
