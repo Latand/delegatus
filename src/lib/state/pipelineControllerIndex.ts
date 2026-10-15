@@ -1,5 +1,5 @@
 import type { Database } from "bun:sqlite";
-import { assertStateStartupMutation } from "@/lib/stateOwnership";
+import { mayRunStateStartupMutation } from "@/lib/stateOwnership";
 
 /** These are candidate sets. Callers still apply their original admission
     predicates and revalidate the selected row before writing or acting. */
@@ -39,7 +39,9 @@ export function installPipelineControllerIndex(db: Database, directory: string):
       'pipeline_controller_work_insert', 'pipeline_controller_work_update', 'pipeline_controller_work_delete')
   `).all().map(row => row.name));
   if (objects.size === 5) return;
-  assertStateStartupMutation(directory, "pipeline controller candidate index");
+  // A candidate MCP reader can precede the new Viewer's schema initialization.
+  // Ordinary collection reads do not need this optional controller projection.
+  if (!mayRunStateStartupMutation(directory)) return;
   const installed = objects.has("pipeline_controller_work");
   db.exec(`CREATE TABLE IF NOT EXISTS pipeline_controller_work (
     kind TEXT NOT NULL, row_key TEXT NOT NULL, row_order INTEGER NOT NULL,

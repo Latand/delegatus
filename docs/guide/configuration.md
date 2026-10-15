@@ -30,6 +30,10 @@ command still works and prints a one-line notice.
 | `--new-operator-token` | Rotate the key that authorizes launching agents. |
 | `-v, --version` / `-h, --help` | Print the version / usage. |
 
+The CLI reads the listening port from `-p` or `--port`. It does not read
+`DELEGATUS_PORT` or `LLV_PORT`. The selected port is passed to its control
+clients as `LLV_VIEWER_PORT`.
+
 ## Files
 
 Delegatus keeps everything in `~/.config/delegatus/`, or under

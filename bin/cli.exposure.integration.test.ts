@@ -218,6 +218,7 @@ const server = Bun.serve({
     /* What the launcher handed the Viewer, for the phone-access case. */
     /* Whether the gate is on, never the key itself. */
     if (new URL(request.url).pathname === "/api/access") return Response.json({ tailnetUrl: process.env.LLV_TS_URL ?? null, host: process.env.LLV_TS_HOST ?? null, gated: Boolean(process.env.LLV_TOKEN) });
+    if (new URL(request.url).pathname === "/api/control-port") return Response.json({ port: process.env.LLV_VIEWER_PORT ?? null });
     return new Response("ok");
   },
 });
@@ -663,4 +664,29 @@ test("DELEGATUS_DEBUG=1 keeps Next's startup lines and lets the children print t
   expect(text).toContain(`- Local:         http://127.0.0.1:${port}`);
   expect(text).toContain("child quiet diagnostics: unset");
   expect(text).not.toContain("DELEGATUS_DEBUG=1 —");
+});
+
+
+test("a custom CLI port reaches the Viewer and runtime children with an env-only gate", async () => {
+  const fixture = await checkoutFixture();
+  await mkdir(fixture.env.TMPDIR!, { recursive: true });
+  const key = crypto.randomUUID();
+  fixture.env.LLV_TOKEN = key;
+  const port = await availablePort();
+  const runtime = path.join(path.dirname(path.dirname(fixture.cli)), "dist", "runtime-host.mjs");
+  await writeFile(runtime, (await readFile(runtime, "utf8")) + `
+writeFileSync(path.join(process.env.LLV_STATE_DIR, "runtime-control.json"), JSON.stringify({
+  port: process.env.LLV_VIEWER_PORT ?? null, credentialInherited: process.env.LLV_TOKEN === ${JSON.stringify(key)},
+}));
+`);
+  const child = spawn(process.execPath, ["--bun", fixture.cli, "--no-open", "-p", String(port)], {
+    cwd: path.dirname(path.dirname(fixture.cli)), env: fixture.env, stdio: ["ignore", "pipe", "pipe"],
+  });
+  children.add(child);
+  const output = captureOutput(child);
+  await waitForStatus("127.0.0.1", port, 200);
+  await output.waitFor("Delegatus v", 10_000);
+  expect(await (await fetch(`http://127.0.0.1:${port}/api/access`)).json()).toMatchObject({ gated: true });
+  expect(await (await fetch(`http://127.0.0.1:${port}/api/control-port`)).json()).toEqual({ port: String(port) });
+  expect(JSON.parse(await readFile(path.join(fixture.env.LLV_STATE_DIR!, "runtime-control.json"), "utf8"))).toEqual({ port: String(port), credentialInherited: true });
 });

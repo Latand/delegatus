@@ -5,6 +5,7 @@ import crypto from "node:crypto";
 import { installMemoryHook } from "@/lib/memory/hook";
 import { agentPublicationIdentityEnv } from "@/lib/git/agentPublicationIdentity";
 
+import { viewerControlOrigin, viewerControlToken, VIEWER_CONTROL_TOKEN_ENV } from "@/lib/mcp/controlEndpoint";
 import { statePath } from "@/lib/configDir";
 import { readViewerGatewayConfig, VIEWER_GATEWAY_FILE } from "@/runtime-host/deploymentProxy";
 import { stableMcpRuntimeRoot } from "@/runtime-host/mcpRuntimeRelease";
@@ -17,6 +18,21 @@ import { operatorTelegramClaudeEntry } from "@/lib/runtime/telegramConnectorEnv"
 import { installProcessCleanupHook, PROCESS_CLEANUP_HOOK_PREFIX } from "./processCleanupPolicy";
 
 type JsonObject = Record<string, unknown>;
+
+function normalizeMcpEnvironmentOverrides(overrides: JsonObject): Record<string, string> {
+  const normalized: Record<string, string> = {};
+  for (const [name, value] of Object.entries(overrides)) {
+    if (typeof value === "string" && !name.startsWith("DELEGATUS_")) normalized[name] = value;
+  }
+  // Match bin/envAlias.mjs: the documented prefix wins whenever both forms
+  // are registered, and the child receives only the folded LLV_ spelling.
+  for (const [name, value] of Object.entries(overrides)) {
+    if (typeof value === "string" && name.startsWith("DELEGATUS_") && name.length > "DELEGATUS_".length) {
+      normalized[`LLV_${name.slice("DELEGATUS_".length)}`] = value;
+    }
+  }
+  return normalized;
+}
 
 const MANAGED_HOOK_PREFIX = "LLV_MANAGED_NATIVE_SUBAGENT_DENY=1 ";
 const MANAGED_DIR = ".llv";
@@ -73,7 +89,7 @@ export interface ViewerMcpServerEntry {
  * link pointed at the real Viewer while everything else the agent runs stays
  * in its sandbox.
  */
-export function viewerMcpServerEnv(source: McpEnvironment = process.env): Record<string, string> {
+export function viewerMcpServerEnv(source: McpEnvironment = process.env, overrides: JsonObject = {}): Record<string, string> {
   const configRoot = source.XDG_CONFIG_HOME?.trim() || path.join(os.homedir(), ".config");
   const env: Record<string, string> = {
     XDG_CONFIG_HOME: configRoot,
@@ -84,10 +100,28 @@ export function viewerMcpServerEnv(source: McpEnvironment = process.env): Record
      it would otherwise launch the server without an interpreter to find. Where
      the table is additive — Claude's `.mcp.json` is — these are the values the
      server would have inherited anyway. */
-  for (const name of ["PATH", "HOME", "LLV_VIEWER_DEPLOY_TARGET", "LLV_VIEWER_PORT"] as const) {
+  for (const name of ["PATH", "HOME", "LLV_VIEWER_DEPLOY_TARGET", "LLV_VIEWER_PORT", "LLV_VIEWER_CONTROL_URL"] as const) {
     const value = source[name]?.trim();
     if (value) env[name] = value;
   }
+  // Resolve the inherited credential against the parent endpoint before a
+  // registered server can replace that endpoint.
+  const parentEnvironment = { ...source, ...env };
+  const parentOrigin = viewerControlOrigin(parentEnvironment);
+  const inheritedToken = viewerControlToken(parentEnvironment, parentOrigin);
+  const normalizedOverrides = normalizeMcpEnvironmentOverrides(overrides);
+  for (const [name, value] of Object.entries(normalizedOverrides)) {
+    if (name !== "LLV_TOKEN" && name !== VIEWER_CONTROL_TOKEN_ENV) env[name] = value;
+  }
+  const effective = { ...source, ...env };
+  const childOrigin = viewerControlOrigin(effective);
+  const registeredToken = normalizedOverrides[VIEWER_CONTROL_TOKEN_ENV] ?? normalizedOverrides.LLV_TOKEN;
+  const token = typeof registeredToken === "string"
+    ? viewerControlToken({ [VIEWER_CONTROL_TOKEN_ENV]: registeredToken }, childOrigin)
+    : childOrigin === parentOrigin ? inheritedToken : null;
+  delete env.LLV_TOKEN;
+  delete env[VIEWER_CONTROL_TOKEN_ENV];
+  if (token) env[VIEWER_CONTROL_TOKEN_ENV] = token;
   return env;
 }
 
@@ -338,7 +372,7 @@ function claudeMcpServers(
        itself. A value already written into the definition wins: an operator
        who pinned a state dir there meant it. */
     const pinned = name === "viewer"
-      ? { ...definition, env: { ...viewerMcpServerEnv(), ...record(definition.env) } }
+      ? { ...definition, env: viewerMcpServerEnv(process.env, record(definition.env) ?? {}) }
       : definition;
     return [[name, pinned]];
   }));
