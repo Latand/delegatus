@@ -291,6 +291,15 @@ function headBeforeLocalOutput(pipeline: Pipeline): string | null {
   return typeof baseHead === "string" && /^[0-9a-f]{40}$/i.test(baseHead) && baseHead !== pipeline.lastPassedCommit ? baseHead : null;
 }
 
+/** A terminal declared-output commit can remain local. The same proof admits
+ * its preceding PR head before either open-PR checks or closed-PR receipts. */
+function admitLocalOutputHead(pipeline: Pipeline, merge: PipelineMerge, head: string): void {
+  if (merge.updates.length === 0 && merge.chain.length === 1
+    && merge.chain[0] === pipeline.lastPassedCommit && head === headBeforeLocalOutput(pipeline)) {
+    merge.chain = [head];
+  }
+}
+
 /** Return the exact head the latest successful review judged. Older records
  * may omit the SHA; only those records may use the terminal-head timestamp
  * heuristic. Explicit review evidence always outranks timing. */
@@ -453,17 +462,10 @@ async function stepLane(read: Pipeline, ports: AutoMergePorts): Promise<void> {
   try {
     view = parsePullRequestView(await ports.run(["pr", "view", String(merge.prNumber), "--repo", merge.repository, "--json", PR_FIELDS]));
     if (!view) throw new Error("gh returned no parsable pull request");
+    if (view.state === "OPEN" || view.state === "CLOSED") admitLocalOutputHead(read, merge, view.headRefOid);
     if (view.state === "CLOSED" && merge.chain.includes(view.headRefOid)) {
       const landed = await readBatchLanding(merge.repository, merge.prNumber, view.baseRefName || read.baseBranch, { head: view.headRefOid, repoDir: read.repoDir }, ports.run);
       if (landed) view = { ...view, state: "MERGED", mergeCommit: landed.commit, mergedAt: landed.mergedAt };
-    }
-    /* The final declared-output commit may be local only. Admit exactly the
-       head the read-only stage reported before that commit, including when a
-       previously blocked merge is retried. A PR that has the output commit
-       keeps the usual chain; every other head still blocks. */
-    if (view.state === "OPEN" && merge.updates.length === 0 && merge.chain.length === 1
-      && merge.chain[0] === read.lastPassedCommit && view.headRefOid === headBeforeLocalOutput(read)) {
-      merge.chain = [view.headRefOid];
     }
     const behindReviewedHead = view.state === "OPEN" && view.headRefOid !== merge.chain.at(-1)
       ? (await prHeadBehindReviewedHead(read, view.headRefOid))
@@ -774,6 +776,7 @@ async function reconcileBatchLanding(read: Pipeline, pr: { repository: string; n
   try {
     view = parsePullRequestView(await ports.run(["pr", "view", String(pr.number), "--repo", pr.repository, "--json", PR_FIELDS]));
     if (!view) throw new Error("gh returned no parsable pull request");
+    if (view.state === "CLOSED") admitLocalOutputHead(read, read.merge!, view.headRefOid);
     if (view.state === "CLOSED" && read.merge!.chain.includes(view.headRefOid)) {
       const landed = await readBatchLanding(pr.repository, pr.number, view.baseRefName || read.baseBranch, { head: view.headRefOid, repoDir: read.repoDir }, ports.run);
       if (landed) view = { ...view, state: "MERGED", mergeCommit: landed.commit, mergedAt: landed.mergedAt };
@@ -787,6 +790,7 @@ async function reconcileBatchLanding(read: Pipeline, pr: { repository: string; n
     live.nextReadAt = iso(now + MERGE_POLL_MS);
     if (stopClosedRefresh && view?.state === "CLOSED") block(live, MERGE_REASONS.closed, now);
     if (view?.state !== "MERGED") return;
+    live.chain = read.merge!.chain;
     live.repository = pr.repository;
     live.prNumber = pr.number;
     live.state = "merged";

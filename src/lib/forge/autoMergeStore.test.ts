@@ -329,9 +329,23 @@ test("a human change request persists, and retry-merge waits for that reviewer's
   expect(writes).toBe(1);
 });
 
+function setBatchReviewHead(lane: Pipeline, graph: ReturnType<typeof batchLandingFixture>) {
+  lane.lastPassedCommit = graph.outputHead ?? graph.head;
+  if (!graph.outputHead) return;
+  lane.publishedCommit = graph.head;
+  lane.delivery = {
+    target: { repository: PROJECT, remote: `https://github.com/${REPO}.git`, branch: `refs/heads/${lane.branch}` },
+    disposition: "owner", publish: "disabled", ownerId: lane.id, epoch: 1, active: false, journal: [],
+  };
+  lane.stages[1]!.outputs = ["result.md"];
+  const review = lane.runs[1]!.attempts[0]!;
+  review.completedAt = lane.closedAt;
+  review.outputBaseHead = lane.id.includes("unproved") ? graph.landing : graph.head;
+}
+
 // Archived batch lanes retained CLOSED plus a trusted landing receipt. The
 // individual landing commit precedes the rebased batch's final merge commit.
-for (const kind of ["rebased", "followup", "deletion", "binary", "mode"] as const) for (const initial of ["queued", "blocked", "refreshing"] as const) test(`batch-landed ${kind} closure settles a ${initial} lane without a worker ask`, async () => {
+for (const kind of ["rebased", "nearby-rebase", "offset-rebase", "local-output", "followup", "deletion", "binary", "mode"] as const) for (const initial of ["queued", "blocked", "refreshing"] as const) test(`batch-landed ${kind} closure settles a ${initial} lane without a worker ask`, async () => {
   const stopped = initial !== "queued";
   resetAutoMergeForTests();
   setMergeOnReview(PROJECT, true, "operator", iso(T0 - 7_200_000));
@@ -339,7 +353,7 @@ for (const kind of ["rebased", "followup", "deletion", "binary", "mode"] as cons
   const graph = batchLandingFixture(sandbox, kind);
   lane.repoDir = graph.directory;
   Object.assign(lane, pipelineIdentity(lane.id, lane.task, lane.repoDir));
-  lane.lastPassedCommit = graph.head;
+  setBatchReviewHead(lane, graph);
   const taskId = markedTask(lane);
   savePipelines([lane]);
   let receipt = !stopped;
@@ -376,6 +390,12 @@ for (const kind of ["rebased", "followup", "deletion", "binary", "mode"] as cons
     expect(loadPipelines()[0]!.merge?.state).toBe("blocked");
     expect(laneNeed(loadPipelines()[0]!)?.need.kind).toBe("lane-merge");
     expect(workerAsks(loadPipelines()[0]!)).toHaveLength(1);
+    if (graph.outputHead) {
+      // Replay the chain an older watcher stored before admitting the PR head.
+      const legacy = loadPipelines()[0]!;
+      legacy.merge!.chain = [graph.outputHead];
+      savePipelines([legacy]);
+    }
     await sweepTaskFinishes(ports);
     expect(loadTasks().find((task) => task.id === taskId)?.status).toBe("inbox");
     await sweepAutoMerge(ports);
@@ -403,7 +423,7 @@ for (const kind of ["rebased", "followup", "deletion", "binary", "mode"] as cons
   await sweepAutoMerge(ports);
   await sweepTaskFinishes(ports);
   const landed = loadPipelines()[0]!;
-  expect(landed.merge).toMatchObject({ state: "merged", by: "outside", mergedHead: graph.head, mergeCommit: landing, reason: null, blockedAt: null });
+  expect(landed.merge).toMatchObject({ state: "merged", by: "outside", chain: [graph.head], mergedHead: graph.head, mergeCommit: landing, reason: null, blockedAt: null });
   expect(laneNeed(landed)).toBeNull();
   expect(workerAsks(landed)).toEqual([]);
   expect(loadTasks().find((task) => task.id === taskId)?.status).toBe("done");
@@ -414,7 +434,7 @@ for (const kind of ["rebased", "followup", "deletion", "binary", "mode"] as cons
   expect(loadPipelines()[0]!.taskFinishes).toHaveLength(1);
 });
 
-for (const kind of ["reverted", "new-head", "wrong-sha", "reverted-deletion", "partial-revert", "whitespace", "reverted-binary", "reverted-mode"] as const) for (const initial of ["queued", "blocked"] as const) {
+for (const kind of ["reverted", "new-head", "wrong-sha", "reverted-deletion", "partial-revert", "whitespace", "reverted-binary", "reverted-mode", "wrong-occurrence", "unproved-local-output"] as const) for (const initial of ["queued", "blocked"] as const) {
   test(`landing safety: ${kind} / ${initial}`, async () => {
     resetAutoMergeForTests();
     setMergeOnReview(PROJECT, true, "operator", iso(T0 - 7_200_000));
@@ -422,7 +442,7 @@ for (const kind of ["reverted", "new-head", "wrong-sha", "reverted-deletion", "p
     const lane = completedLane(`landing-${kind}-${initial}`);
     lane.repoDir = graph.directory;
     Object.assign(lane, pipelineIdentity(lane.id, lane.task, lane.repoDir));
-    lane.lastPassedCommit = graph.head;
+    setBatchReviewHead(lane, graph);
     const taskId = markedTask(lane);
     savePipelines([lane]);
     let clock = T0;

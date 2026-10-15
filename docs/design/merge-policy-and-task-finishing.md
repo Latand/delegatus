@@ -441,18 +441,22 @@ queued → checking ─┬─ head in chain, CLEAN/HAS_HOOKS/UNSTABLE, required 
    `Landed on main as <sha> through #N` receipt from a repository collaborator.
    The watcher verifies that the named batch merged into the PR's base, the
    landing SHA is an ancestor of its merge commit, and that commit remains
-   reachable from the base. It also compares the landing's exact patch with
-   the current reviewed PR head's diff from their shared history, then
-   reverse-merges the landing from the current base tree. The resulting diff
-   must reverse the entire patch: a full or partial revert, an older head's
-   receipt, or another lane's SHA keeps the stop. A clean rebase may change
-   the SHA and line positions, while the changed lines, paths, modes and
-   binary payloads must agree. The base tip is pinned during verification and
-   read again before accepting it; a moving base waits for another read.
+   reachable from the base. It replays the reviewed PR head onto the landing's
+   parent using their shared history and requires the resulting tree to equal
+   the landing tree. This preserves the changed occurrence within each file
+   while allowing nearby edits and shifted line positions from a clean rebase.
+   It then reverse-merges the landing from the current base tree. The resulting
+   diff must reverse the entire patch: a full or partial revert, an older
+   head's receipt, or another lane's SHA keeps the stop. Whitespace, paths,
+   modes and binary payloads participate in verification. The base tip is pinned
+   during verification and read again before accepting it; a moving base waits
+   for another read.
    Git reads and object fetches leave the checkout, index and refs untouched.
    It records the individual landing SHA. Existing
    closed-PR stops are rechecked once per minute; a missing or unproved receipt
-   keeps the stop. A failed read never proves a landing.
+   keeps the stop. Queued and stopped lanes both admit the narrowly proved PR
+   head preceding a terminal read-only stage's local declared-output commit,
+   using the same evidence as an open PR. A failed read never proves a landing.
 
 Blocked reasons, each one plain sentence: conflict with the base branch
 (`DIRTY`); a named red check; no checks reported on this head; checks did not

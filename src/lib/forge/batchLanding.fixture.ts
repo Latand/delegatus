@@ -23,8 +23,10 @@ export function batchLandingFixture(root: string, kind = "rebased") {
   const mode = kind.includes("mode");
   const deletion = kind.includes("deletion");
   const lines = Array.from({ length: 20 }, (_, index) => `line ${index}\n`).join("");
-  const before = binary ? Buffer.from([0, 1, 2]) : lines + "disabled\n";
-  const after = binary ? Buffer.from([0, 1, 3]) : lines + "enabled\n";
+  const section = Array.from({ length: 17 }, (_, index) => `${index === 8 ? "disabled" : `section line ${index}`}\n`).join("");
+  const repeated = kind === "wrong-occurrence";
+  const before = binary ? Buffer.from([0, 1, 2]) : repeated ? section.repeat(2) : lines + "disabled\n";
+  const after = binary ? Buffer.from([0, 1, 3]) : repeated ? section.replace("disabled", "enabled") + section : lines + "enabled\n";
   commit("feature", before);
   if (kind === "partial-revert") commit("companion", "disabled\n");
   git("checkout", "-b", "lane");
@@ -42,7 +44,10 @@ export function batchLandingFixture(root: string, kind = "rebased") {
   let head = git("rev-parse", "HEAD");
   git("checkout", "main");
   commit("before", "another lane\n");
-  if (kind === "wrong-sha") commit("unrelated", "different patch\n");
+  if (kind === "nearby-rebase") commit("feature", String(before).replace("line 17", "updated line 17"));
+  if (kind === "offset-rebase") commit("feature", "main inserted a line\n" + before);
+  if (kind === "wrong-occurrence") commit("feature", section + section.replace("disabled", "enabled"));
+  else if (kind === "wrong-sha") commit("unrelated", "different patch\n");
   else git("cherry-pick", head);
   const landing = git("rev-parse", "HEAD");
   const tip = commit("after", "last lane in batch\n");
@@ -55,5 +60,11 @@ export function batchLandingFixture(root: string, kind = "rebased") {
     head = commit("feature", lines + (kind === "whitespace" ? "enabled \n" : "enabled v2\n"));
     git("checkout", "main");
   }
-  return { directory, head, landing, tip, base: git("rev-parse", "HEAD"), git };
+  let outputHead: string | null = null;
+  if (kind.includes("local-output")) {
+    git("checkout", "lane");
+    outputHead = commit("result.md", "Review audit\n");
+    git("checkout", "main");
+  }
+  return { directory, head, outputHead, landing, tip, base: git("rev-parse", "HEAD"), git };
 }
