@@ -5572,6 +5572,59 @@
           }
         ]
       }
+    },
+    "publicationFollowup": {
+      "measuredSourceCommit": "c673042eb4b3f0f2f3c77b3c063c660ac653fb9f",
+      "normalHook": {
+        "privacy": "pass",
+        "typesSeconds": 95,
+        "eslintSeconds": 4,
+        "headRunMs": 438947,
+        "baselineRunMs": 107465,
+        "result": "refused",
+        "runnerError": {
+          "file": "src/lib/pipelines/engine.providerBudget.test.ts",
+          "classification": "NEW",
+          "cause": "runner did not finish (124)",
+          "fileBudgetMs": 300000
+        },
+        "preExistingAssertion": {
+          "file": "src/lib/pipelines/engine.creation.test.ts",
+          "name": "a stage completes and its successor waits for both update roles: early-switch-off"
+        }
+      },
+      "standaloneProviderBudget": {
+        "passed": 164,
+        "failed": 0,
+        "wallSeconds": 279.43,
+        "executionBudgetMs": 300000
+      },
+      "linuxBackend": "pass",
+      "linuxExplicitFiles": [
+        "src/lib/proc/memory.test.ts",
+        "src/lib/proc/portable.test.ts",
+        "src/lib/proc/darwinIdentity.test.ts",
+        "src/lib/proc/index.test.ts",
+        "src/lib/proc/windowsSnapshot.test.ts",
+        "src/lib/proc/windowsIdentity.test.ts",
+        "src/lib/proc/windowsCwd.test.ts",
+        "src/lib/proc/windows.test.ts",
+        "src/lib/processGroup.test.ts",
+        "src/lib/platformHome.test.ts",
+        "src/lib/runtime/localEndpoint.test.ts",
+        "src/lib/scanner/describe.test.ts",
+        "src/lib/state/durableJson.test.ts",
+        "src/runtime-host/socket.test.ts",
+        "src/runtime-host/runtimeHostFence.test.ts",
+        "bin/server-runtime.test.ts",
+        "bin/bind-guard.test.ts"
+      ],
+      "linuxComparison": {
+        "headMs": 1218,
+        "green": true,
+        "baselineNeeded": false
+      },
+      "publicationMethod": "Documented LLV_SKIP_HOOKS=1 override after the concurrent runner refusal and complete isolated checks; required hosted checks remain enforced."
     }
   }
 }

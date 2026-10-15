@@ -538,3 +538,18 @@ isolated HOME, config, temp and state roots and a closed Viewer control URL.
 The full touched files contribute 35 controller-pass and ten bounded-store
 tests. Nonincremental TypeScript and changed-file ESLint pass, with six existing
 warnings. The evidence record lists each file and count.
+
+The normal publication hook passed privacy, types (95 seconds) and lint
+(4 seconds). Its concurrent twenty-nine-file test run reported a new runner
+error after the provider-budget file exceeded the five-minute file budget.
+The hook also reproduced the existing `early-switch-off` creation assertion
+on the merge base. This repeats the concurrent timeout recorded in the earlier
+publication verification above.
+
+The provider-budget file then passed all 164 tests alone in 279.43 seconds,
+under the unchanged five-minute execution budget. The stopped Linux backend
+probe and all seventeen explicit platform files passed independently; their
+comparison had a green head in 1,218 ms and needed no baseline sample. These
+isolated checks support the documented `LLV_SKIP_HOOKS=1` publication override.
+The production source stayed unchanged during these rechecks; required hosted
+checks still judge the published commit.
