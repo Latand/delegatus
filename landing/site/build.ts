@@ -21,7 +21,7 @@ import { costumeSvg } from "@/components/brand/roleCostumes";
 import { taskIconNodes } from "@/lib/tasks/taskIconNodes";
 import { ROLE_FRAME_BOOT_SCRIPT } from "@/lib/roleFrames";
 
-import { copyDemoAudio } from "./audioAssets";
+import { copyDemoAudio, DEMO_LOOP_ASSET_SOURCE, LOOP_ASSET_MODULE } from "./audioAssets";
 
 const here = path.dirname(new URL(import.meta.url).pathname);
 const repo = path.resolve(here, "../..");
@@ -48,6 +48,7 @@ const bundle = await Bun.build({
     name: "server-action-stubs",
     setup(build) {
       build.onLoad({ filter: /\/src\/.*\.tsx?$/ }, (args) => {
+        if (args.path.endsWith(LOOP_ASSET_MODULE)) return { contents: DEMO_LOOP_ASSET_SOURCE, loader: "ts" };
         const source = fs.readFileSync(args.path, "utf8");
         const loader = args.path.endsWith(".tsx") ? "tsx" : "ts";
         if (!SERVER_DIRECTIVE.test(source)) return { contents: source, loader };
