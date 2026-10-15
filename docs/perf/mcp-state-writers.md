@@ -685,7 +685,7 @@ seed with the existing concurrency fixture. Supplying both reuses an archived
 seed and its matching fixture capabilities.
 
 ```sh
-RUN_ROOT="$(mktemp -d /tmp/delegatus-mcp-study.XXXXXXXX)"
+RUN_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/delegatus-mcp-study.XXXXXXXX")"
 OBSERVER="$RUN_ROOT/observer.so"
 bash "$GATE" cc -I "$SQLITE_INCLUDE" -O2 -fPIC -shared scripts/sqlite-observer.c -o "$OBSERVER"
 python3 -B scripts/mcp-state-writer-matrix.py --output "$RUN_ROOT" --gate "$GATE" --observer "$OBSERVER" --baseline "$BASELINE" --candidate HEAD --audit 45d25ac

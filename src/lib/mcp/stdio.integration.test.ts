@@ -62,7 +62,7 @@ function isolatedEnvironment(sandbox: string, extra: Record<string, string> = {}
   const directories = {
     HOME: path.join(sandbox, "home"),
     XDG_CONFIG_HOME: path.join(sandbox, "config"),
-    TMPDIR: path.join(sandbox, "tmp"),
+    TMPDIR: sandbox,
     LLV_STATE_DIR: path.join(sandbox, "state"),
     LLV_CLAUDE_HOME: path.join(sandbox, "claude-home"),
     LLV_CODEX_HOME: path.join(sandbox, "codex-home"),
@@ -2083,7 +2083,13 @@ describe.skipIf(process.platform !== "linux")("native caller admission (#2827)",
     const ready = path.join(sandbox, "hook-ready.json");
     const preload = path.join(sandbox, "hold-hook-input.cjs");
     fs.writeFileSync(preload, `const fs = require('node:fs'); Object.defineProperty(process, 'stdin', { value: { async *[Symbol.asyncIterator]() { fs.writeFileSync(${JSON.stringify(ready)}, JSON.stringify({pid:process.pid,parent:process.ppid})); await new Promise(() => {}); } } });`);
-    const bundled = path.join(process.cwd(), "dist", "mcp-server.mjs");
+    const bundleDirectory = path.join(sandbox, "bundle");
+    const builder = ownFixtureChild(Bun.spawn({ cmd: [process.execPath, path.join(process.cwd(), "scripts", "build-mcp.ts"), bundleDirectory],
+      env: environment, stdin: "ignore", stdout: "ignore", stderr: "pipe" }));
+    const buildErrors = new Response(builder.stderr).text();
+    if (await builder.exited !== 0) throw new Error(await buildErrors);
+    fs.symlinkSync(fs.realpathSync(path.join(process.cwd(), "node_modules")), path.join(bundleDirectory, "node_modules"), "dir");
+    const bundled = path.join(bundleDirectory, "mcp-server.mjs");
     const command = entry === "bundle" ? ["--preload", preload, bundled] : [path.join(process.cwd(), "bin", "mcp-server.mjs")];
     if (entry === "wrapper") {
       // The managed bundle adds only an input barrier around the real entry.
@@ -2095,13 +2101,18 @@ describe.skipIf(process.platform !== "linux")("native caller admission (#2827)",
         mcpRuntime: { source: "managed", releaseId: "hook-owner", revision: "a".repeat(40), artifactDigest: crypto.createHash("sha256").update(source).digest("hex"), stagedAt: new Date().toISOString() } }));
     }
     const parentScript = path.join(sandbox, "native-owner.ts");
-    fs.writeFileSync(parentScript, `const child = Bun.spawn([process.execPath, ...${JSON.stringify(command)}, '--native-caller-hook'], {stdin:'inherit',stdout:'ignore',stderr:'ignore'}); await child.exited;`);
+    fs.writeFileSync(parentScript, `const child = Bun.spawn([process.execPath, ...${JSON.stringify(command)}, '--native-caller-hook'], {stdin:'inherit',stdout:'ignore',stderr:'inherit'}); await child.exited;`);
     const executable = path.join(sandbox, "claude"); fs.symlinkSync(process.execPath, executable);
     const parent = ownFixtureChild(Bun.spawn([executable, parentScript], { cwd: process.cwd(), env: environment, stdin: "pipe", stdout: "ignore", stderr: "pipe" }));
+    const parentErrors = new Response(parent.stderr).text();
     const descendants: { pid: number; identity: string | null }[] = [];
     try {
       const until = Date.now() + 10_000;
-      while (!fs.existsSync(ready)) { if (Date.now() > until || parent.exitCode !== null) throw new Error("hook input barrier not reached"); await Bun.sleep(10); }
+      while (!fs.existsSync(ready)) {
+        if (parent.exitCode !== null) throw new Error(`hook owner exited before its input barrier: ${await parentErrors}`);
+        if (Date.now() > until) throw new Error("hook input barrier not reached");
+        await Bun.sleep(10);
+      }
       const child = JSON.parse(fs.readFileSync(ready, "utf8"));
       if (entry === "bundle") expect(child.parent).toBe(parent.pid);
       else { expect(procBackend.readPpid(child.parent)).toBe(parent.pid); descendants.push({ pid: child.parent, identity: procBackend.processIdentity(child.parent) }); }

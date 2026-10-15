@@ -11,9 +11,10 @@ import { runAsMcpHttpCaller } from "./callerContext";
 import { McpTaskExecutor, TaskExecutorReplies, TASK_EXECUTOR_HTTP_FRAME_BYTES } from "./taskExecutor";
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-task-executor-"));
-for (const name of ["HOME", "XDG_CONFIG_HOME", "TMPDIR", "LLV_STATE_DIR", "LLV_CODEX_HOME", "LLV_CLAUDE_HOME"]) {
+for (const name of ["HOME", "XDG_CONFIG_HOME", "LLV_STATE_DIR", "LLV_CODEX_HOME", "LLV_CLAUDE_HOME"]) {
   process.env[name] = path.join(root, name); fs.mkdirSync(process.env[name]!, { recursive: true });
 }
+process.env.TMPDIR = root;
 process.env.LLV_VIEWER_CONTROL_URL = "http://127.0.0.1:1";
 let capability: string;
 let capabilities: string[];

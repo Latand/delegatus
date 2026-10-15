@@ -31,10 +31,11 @@ const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-mcp-http-"));
 for (const key of Object.keys(process.env)) {
   if (key.startsWith("LLV_") || key.startsWith("NEXT_PUBLIC_")) delete process.env[key];
 }
-for (const key of ["HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "LLV_STATE_DIR", "LLV_CODEX_HOME", "LLV_CLAUDE_HOME", "CODEX_HOME", "CLAUDE_CONFIG_DIR", "TMPDIR"]) {
+for (const key of ["HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "LLV_STATE_DIR", "LLV_CODEX_HOME", "LLV_CLAUDE_HOME", "CODEX_HOME", "CLAUDE_CONFIG_DIR"]) {
   process.env[key] = path.join(sandbox, key);
   fs.mkdirSync(process.env[key]!, { recursive: true });
 }
+process.env.TMPDIR = sandbox;
 fs.writeFileSync(path.join(process.env.LLV_STATE_DIR!, "project-aliases.json"), JSON.stringify({
   schemaVersion: 1, aliases: {}, displayNames: { viewer: "Fixture Viewer" },
 }));
