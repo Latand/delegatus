@@ -16,7 +16,7 @@ import type { FileEntry } from "@/lib/types";
 import { registerPipelineTick } from "./controllerSignal";
 import { PIPELINE_REMOTE_ACTIONS } from "./controllerCapabilities";
 import { procBackend } from "@/lib/proc";
-import { tickPipelines } from "./engine";
+import { tickPipelinesController } from "./controllerPass";
 import { archiveSettledPipelines, loadPipelines } from "./store";
 
 export type FlowPipelineControllerPhase = "pipelines" | "scan" | "flows" | "idle";
@@ -44,6 +44,7 @@ export interface FlowPipelineControllerHeartbeat {
 
 interface TickResult {
   changed: boolean;
+  readyWork?: boolean;
 }
 
 type TimeoutHandle = unknown;
@@ -112,7 +113,7 @@ function productionPorts(): FlowPipelineControllerPorts {
     // Consume the latest completed generation immediately. The shared scan
     // cache starts stale revalidation in the background for the next pass.
     scan: controllerFileScan,
-    tickPipelines,
+    tickPipelines: tickPipelinesController,
     tickFlows,
     handoffHeld: autoHandoffHeld,
     publishHeartbeat: writeFlowPipelineControllerHeartbeat,
@@ -227,7 +228,7 @@ export class FlowPipelineController {
         ? pipelineOutcome.error
         : flowOutcome?.state === "failed" ? flowOutcome.error : null;
       if (failure !== null) throw failure;
-      const changed = (pipelineOutcome.state === "completed" && pipelineOutcome.value.changed)
+      const changed = (pipelineOutcome.state === "completed" && (pipelineOutcome.value.changed || pipelineOutcome.value.readyWork))
         || (flowOutcome?.state === "completed" && flowOutcome.value.changed)
         || (scanOutcome?.state === "completed" && scanOutcome.value.complete);
       if (!changed) break;

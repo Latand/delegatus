@@ -1,0 +1,1086 @@
+{
+  "baselineRevision": "42c77f35eed1ca6b794b397cf5483f238bac3f9d",
+  "runtime": "1.4.0",
+  "referenceSha256": {
+    "state.sqlite": "df05e55a2370fb31368b97a116b5c15ef6fc1cc5b21c462eeb01ef9aa465ae1e",
+    "agent-registry.sqlite": "4667570b61a1161d15a38d82a30b3942d8e946f472e5be6911e52da371bec016"
+  },
+  "driverSha256": "d985234a801f8de993fab887238a6945579b684d21db23bed242790cb8d6f1f2",
+  "candidateSourceSha256": {
+    "src/lib/performanceSpans.ts": "2aba6134b89a35562c4658b9c32226bc1727ac54621e35231e6df640bf534033",
+    "src/lib/pipelines/controller.ts": "69d37f52a3024daaf7056708e2ff8a95ec8aa12c3f9940901ed81d4fa7a182b4",
+    "src/lib/pipelines/controllerSnapshot.ts": "ab829dc175bd0a11bcb2d997c31203ba2bf07b7def5aa1e328a9824670031e03",
+    "src/lib/pipelines/engine.ts": "2f5217607607b2cbc55282dc392ec23dd71128addb1cf90de6af2ced9aa7c707",
+    "src/lib/pipelines/stageBranch.ts": "1e1bf78e5b09fb802d043be12ef38c94b7f3e1a38dbc5fe175c2b55919f8f380",
+    "src/lib/pipelines/stageProvenance.ts": "1fe4fb3375b87439bc8ab71e0d0427ce57d66d6ab0911db0f7b551be64fc683d",
+    "src/lib/pipelines/store.ts": "26e33b1199c81af92cec4bbcc3214579c7619d057714c2ccf81a8ef3c7cf679f",
+    "src/lib/pipelines/types.ts": "1ededdb11a17f74a644d1cf1d4758dbae72e4c59c13e106fe69864e760e6ca2a",
+    "src/lib/runtime/cpuAdmission.ts": "09df3704b3d70d918f61cb1c5c569d76426bca499ab6b9d6f23bb5d6984f0894",
+    "src/lib/state/pipelineControllerIndex.ts": "2680df35dd4165e45fc54fd460e80bf5bf98e1a6ecdafe3e13e3153830b26981",
+    "src/lib/state/sqliteStateStore.ts": "c1619348fdd954feadc76621ebfcc8a11d5219b9ec34e82823666f031f26fc61",
+    "src/lib/viewerLoopMonitor.ts": "54effd8dc6160d050cba3405ad40a15a81d5c966389ae25a391827d32a98e4b8",
+    "scripts/measure-pipeline-controller.ts": "d985234a801f8de993fab887238a6945579b684d21db23bed242790cb8d6f1f2",
+    "src/lib/pipelines/controllerJobs.ts": "6697fe953c554509f55995edde2e85a5bb0d0376e0dc96ff494ded4126509adb",
+    "src/lib/pipelines/controllerPass.ts": "2967e12bb07b63c5cf1ca3f93e1df51a835ec93739bf56a5dc30f3d684d64ad5",
+    "src/lib/pipelines/controllerScope.ts": "7197131b344bc45da234fcd00667c431b3e132dae3d95ef8b419059fcf4a0349",
+    "src/lib/state/pipelineControllerSchedule.ts": "6118914d22206681c3eac82d1f19ff618f97fb93db0e5b246fdb94ceaf9d8fc3"
+  },
+  "method": {
+    "hotRows": 267,
+    "archivedRows": 674,
+    "hotUtf8Bytes": 36917194,
+    "archiveUtf8Bytes": 88008813,
+    "gitWaitMs": 10000,
+    "mainThreadTicksPerSecond": 100,
+    "timerIntervalMs": 10,
+    "drainMs": 20,
+    "candidateLanesPerPhase": 4,
+    "historicalAttemptsPerLane": 16,
+    "coldPhaseBudgetMs": 2000,
+    "warmPhaseBudgetMs": 250,
+    "warmSyncSliceBudgetMs": 50,
+    "warmTimerDelayBudgetMs": 100,
+    "controllerPhaseDeadlineMs": 15000,
+    "coldSeparate": true
+  },
+  "trials": [
+    {
+      "pair": 1,
+      "equality": {
+        "rows": 941,
+        "differentRecords": 0,
+        "differentKeys": []
+      },
+      "baseline": {
+        "commandUtcBounds": [
+          "2026-10-15T15:08:41.532058+00:00",
+          "2026-10-15T15:09:20.441542+00:00"
+        ],
+        "observations": [
+          {
+            "round": 0,
+            "wallMs": 11310.38386,
+            "mainThreadTicks": 191,
+            "rchar": 749671745,
+            "maxSliceMs": 343.87002899999993,
+            "maxSliceSite": "registry.snapshot",
+            "maxTimerGapMs": 482.82219599999917,
+            "ticks": [
+              11287.991971
+            ],
+            "snapshots": 16,
+            "copiedRows": 1840,
+            "decodedRows": 614,
+            "decodedBytes": 75757641,
+            "clonedRows": 859,
+            "clonedBytes": 110803535,
+            "fullReturnedSnapshots": 1,
+            "fullReturnedRows": 267,
+            "maxLeaseHoldMs": 471.73348199999964,
+            "phaseCpuTicks": [
+              191
+            ],
+            "jobSettlementWallMs": 0.015536999999312684,
+            "jobSettlementCpuTicks": 0,
+            "externalChildCpuMs": 0,
+            "waitWindow": {
+              "wallMs": 10000.421399,
+              "mainThreadTicks": 64,
+              "rchar": 25010706,
+              "maxTimerGapMs": 6.961990999999898
+            },
+            "errors": [],
+            "denied": {}
+          },
+          {
+            "round": 1,
+            "wallMs": 205.99321500000042,
+            "mainThreadTicks": 18,
+            "rchar": 15889457,
+            "maxSliceMs": 1.3976499999989755,
+            "maxSliceSite": "controller.port-start",
+            "maxTimerGapMs": 7.701646999999866,
+            "ticks": [
+              185.57061799999974
+            ],
+            "snapshots": 16,
+            "copiedRows": 1840,
+            "decodedRows": 95,
+            "decodedBytes": 11355553,
+            "clonedRows": 373,
+            "clonedBytes": 49692470,
+            "fullReturnedSnapshots": 1,
+            "fullReturnedRows": 267,
+            "maxLeaseHoldMs": 2.574893000000884,
+            "phaseCpuTicks": [
+              18
+            ],
+            "jobSettlementWallMs": 0.010121999999682885,
+            "jobSettlementCpuTicks": 0,
+            "externalChildCpuMs": 0,
+            "waitWindow": null,
+            "errors": [],
+            "denied": {}
+          },
+          {
+            "round": 2,
+            "wallMs": 226.35634499999833,
+            "mainThreadTicks": 20,
+            "rchar": 15889494,
+            "maxSliceMs": 1.3454120000005787,
+            "maxSliceSite": "state.checkpoint",
+            "maxTimerGapMs": 8.827320000000327,
+            "ticks": [
+              206.01919599999928
+            ],
+            "snapshots": 16,
+            "copiedRows": 1840,
+            "decodedRows": 94,
+            "decodedBytes": 11240519,
+            "clonedRows": 373,
+            "clonedBytes": 49692470,
+            "fullReturnedSnapshots": 1,
+            "fullReturnedRows": 267,
+            "maxLeaseHoldMs": 2.351948999999877,
+            "phaseCpuTicks": [
+              20
+            ],
+            "jobSettlementWallMs": 0.011671999998725369,
+            "jobSettlementCpuTicks": 0,
+            "externalChildCpuMs": 0,
+            "waitWindow": null,
+            "errors": [],
+            "denied": {}
+          }
+        ]
+      },
+      "candidate": {
+        "commandUtcBounds": [
+          "2026-10-15T15:09:20.741616+00:00",
+          "2026-10-15T15:09:46.314838+00:00"
+        ],
+        "observations": [
+          {
+            "round": 0,
+            "wallMs": 11594.303958999999,
+            "mainThreadTicks": 228,
+            "rchar": 956422288,
+            "maxSliceMs": 413.293263,
+            "maxSliceSite": "controller.lane",
+            "maxTimerGapMs": 511.4310969999988,
+            "ticks": [
+              661.4292859999999,
+              42.944267999999965,
+              39.78180199999997,
+              46.27899000000002,
+              63.96164500000009,
+              205.73893700000008,
+              51.683483000000024,
+              0.4118479999999636
+            ],
+            "snapshots": 16,
+            "copiedRows": 1840,
+            "decodedRows": 554,
+            "decodedBytes": 71346537,
+            "clonedRows": 298,
+            "clonedBytes": 35182513,
+            "fullReturnedSnapshots": 0,
+            "fullReturnedRows": 0,
+            "maxLeaseHoldMs": 504.6786009999996,
+            "phaseCpuTicks": [
+              65,
+              5,
+              4,
+              4,
+              6,
+              20,
+              5,
+              0
+            ],
+            "jobSettlementWallMs": 10458.336766,
+            "jobSettlementCpuTicks": 118,
+            "externalChildCpuMs": 0,
+            "waitWindow": {
+              "wallMs": 10000.380596,
+              "mainThreadTicks": 73,
+              "rchar": 26183608,
+              "maxTimerGapMs": 10.042575999999826
+            },
+            "errors": [],
+            "denied": {}
+          },
+          {
+            "round": 1,
+            "wallMs": 333.48637099999905,
+            "mainThreadTicks": 29,
+            "rchar": 33103521,
+            "maxSliceMs": 2.2184440000000905,
+            "maxSliceSite": "pipeline.copy",
+            "maxTimerGapMs": 33.571641000000454,
+            "ticks": [
+              64.4917519999999,
+              43.95293099999981,
+              22.573764000000665,
+              43.90615600000092,
+              33.094403000000966,
+              50.629532999999356,
+              52.656731999999465,
+              0.710732999999891
+            ],
+            "snapshots": 16,
+            "copiedRows": 1840,
+            "decodedRows": 57,
+            "decodedBytes": 7633407,
+            "clonedRows": 91,
+            "clonedBytes": 11390425,
+            "fullReturnedSnapshots": 0,
+            "fullReturnedRows": 0,
+            "maxLeaseHoldMs": 3.689248000000589,
+            "phaseCpuTicks": [
+              6,
+              4,
+              2,
+              4,
+              4,
+              4,
+              5,
+              0
+            ],
+            "jobSettlementWallMs": 0.09969400000045425,
+            "jobSettlementCpuTicks": 0,
+            "externalChildCpuMs": 0,
+            "waitWindow": null,
+            "errors": [],
+            "denied": {}
+          },
+          {
+            "round": 2,
+            "wallMs": 327.03681099999994,
+            "mainThreadTicks": 31,
+            "rchar": 33279340,
+            "maxSliceMs": 4.884534999999232,
+            "maxSliceSite": "controller.lane",
+            "maxTimerGapMs": 35.88053299999956,
+            "ticks": [
+              45.04743100000087,
+              46.814336999999796,
+              26.328957000001537,
+              37.650603999998566,
+              39.54883900000095,
+              62.15462699999989,
+              48.23366100000021,
+              0.3182589999996708
+            ],
+            "snapshots": 16,
+            "copiedRows": 1840,
+            "decodedRows": 55,
+            "decodedBytes": 7403339,
+            "clonedRows": 91,
+            "clonedBytes": 11390425,
+            "fullReturnedSnapshots": 0,
+            "fullReturnedRows": 0,
+            "maxLeaseHoldMs": 4.905286999999589,
+            "phaseCpuTicks": [
+              5,
+              5,
+              2,
+              4,
+              3,
+              6,
+              6,
+              0
+            ],
+            "jobSettlementWallMs": 0.04823000000033062,
+            "jobSettlementCpuTicks": 0,
+            "externalChildCpuMs": 0,
+            "waitWindow": null,
+            "errors": [],
+            "denied": {}
+          }
+        ]
+      }
+    },
+    {
+      "pair": 2,
+      "equality": {
+        "rows": 941,
+        "differentRecords": 0,
+        "differentKeys": []
+      },
+      "baseline": {
+        "commandUtcBounds": [
+          "2026-10-15T15:09:59.896241+00:00",
+          "2026-10-15T15:10:13.206815+00:00"
+        ],
+        "observations": [
+          {
+            "round": 0,
+            "wallMs": 11499.139821,
+            "mainThreadTicks": 210,
+            "rchar": 749671680,
+            "maxSliceMs": 449.229335,
+            "maxSliceSite": "registry.snapshot",
+            "maxTimerGapMs": 474.364178,
+            "ticks": [
+              11475.441779
+            ],
+            "snapshots": 16,
+            "copiedRows": 1840,
+            "decodedRows": 614,
+            "decodedBytes": 75757641,
+            "clonedRows": 859,
+            "clonedBytes": 110803535,
+            "fullReturnedSnapshots": 1,
+            "fullReturnedRows": 267,
+            "maxLeaseHoldMs": 455.65240300000005,
+            "phaseCpuTicks": [
+              210
+            ],
+            "jobSettlementWallMs": 0.014681000000564381,
+            "jobSettlementCpuTicks": 0,
+            "externalChildCpuMs": 0,
+            "waitWindow": {
+              "wallMs": 10000.31007,
+              "mainThreadTicks": 64,
+              "rchar": 25010665,
+              "maxTimerGapMs": 6.412142000000131
+            },
+            "errors": [],
+            "denied": {}
+          },
+          {
+            "round": 1,
+            "wallMs": 215.62678600000072,
+            "mainThreadTicks": 19,
+            "rchar": 15890195,
+            "maxSliceMs": 1.438384999999471,
+            "maxSliceSite": "controller.port-start",
+            "maxTimerGapMs": 8.040285999999469,
+            "ticks": [
+              195.19908199999918
+            ],
+            "snapshots": 16,
+            "copiedRows": 1840,
+            "decodedRows": 95,
+            "decodedBytes": 11355553,
+            "clonedRows": 373,
+            "clonedBytes": 49692470,
+            "fullReturnedSnapshots": 1,
+            "fullReturnedRows": 267,
+            "maxLeaseHoldMs": 2.534150999999838,
+            "phaseCpuTicks": [
+              19
+            ],
+            "jobSettlementWallMs": 0.021829999999681604,
+            "jobSettlementCpuTicks": 0,
+            "externalChildCpuMs": 0,
+            "waitWindow": null,
+            "errors": [],
+            "denied": {}
+          },
+          {
+            "round": 2,
+            "wallMs": 200.36779600000045,
+            "mainThreadTicks": 18,
+            "rchar": 15889454,
+            "maxSliceMs": 1.446713000001182,
+            "maxSliceSite": "state.checkpoint",
+            "maxTimerGapMs": 7.383705000000191,
+            "ticks": [
+              180.00186699999904
+            ],
+            "snapshots": 16,
+            "copiedRows": 1840,
+            "decodedRows": 94,
+            "decodedBytes": 11240519,
+            "clonedRows": 373,
+            "clonedBytes": 49692470,
+            "fullReturnedSnapshots": 1,
+            "fullReturnedRows": 267,
+            "maxLeaseHoldMs": 2.5952500000003056,
+            "phaseCpuTicks": [
+              18
+            ],
+            "jobSettlementWallMs": 0.010434000001623644,
+            "jobSettlementCpuTicks": 0,
+            "externalChildCpuMs": 0,
+            "waitWindow": null,
+            "errors": [],
+            "denied": {}
+          }
+        ]
+      },
+      "candidate": {
+        "commandUtcBounds": [
+          "2026-10-15T15:10:13.514828+00:00",
+          "2026-10-15T15:10:39.085114+00:00"
+        ],
+        "observations": [
+          {
+            "round": 0,
+            "wallMs": 11566.362537,
+            "mainThreadTicks": 219,
+            "rchar": 956422321,
+            "maxSliceMs": 426.42234199999996,
+            "maxSliceSite": "controller.lane",
+            "maxTimerGapMs": 494.9706820000001,
+            "ticks": [
+              699.8816549999999,
+              44.52424199999996,
+              31.005269,
+              60.912004000000024,
+              64.74139300000002,
+              250.71062800000004,
+              67.07220400000006,
+              0.42534299999988434
+            ],
+            "snapshots": 16,
+            "copiedRows": 1840,
+            "decodedRows": 554,
+            "decodedBytes": 71346537,
+            "clonedRows": 298,
+            "clonedBytes": 35182513,
+            "fullReturnedSnapshots": 0,
+            "fullReturnedRows": 0,
+            "maxLeaseHoldMs": 389.8920870000002,
+            "phaseCpuTicks": [
+              69,
+              4,
+              3,
+              6,
+              6,
+              25,
+              6,
+              0
+            ],
+            "jobSettlementWallMs": 10322.977786,
+            "jobSettlementCpuTicks": 99,
+            "externalChildCpuMs": 0,
+            "waitWindow": {
+              "wallMs": 10000.302582,
+              "mainThreadTicks": 67,
+              "rchar": 26183642,
+              "maxTimerGapMs": 23.84659499999998
+            },
+            "errors": [],
+            "denied": {}
+          },
+          {
+            "round": 1,
+            "wallMs": 409.17322499999864,
+            "mainThreadTicks": 37,
+            "rchar": 33103760,
+            "maxSliceMs": 4.957786999999371,
+            "maxSliceSite": "state.write-wait",
+            "maxTimerGapMs": 42.36012099999971,
+            "ticks": [
+              99.81114299999899,
+              48.80664599999909,
+              23.29912400000103,
+              32.03483200000119,
+              38.098817000000054,
+              70.12853600000017,
+              73.91135399999985,
+              0.8123410000007425
+            ],
+            "snapshots": 16,
+            "copiedRows": 1840,
+            "decodedRows": 57,
+            "decodedBytes": 7633407,
+            "clonedRows": 91,
+            "clonedBytes": 11390425,
+            "fullReturnedSnapshots": 0,
+            "fullReturnedRows": 0,
+            "maxLeaseHoldMs": 6.051042999999481,
+            "phaseCpuTicks": [
+              10,
+              4,
+              2,
+              4,
+              3,
+              8,
+              6,
+              0
+            ],
+            "jobSettlementWallMs": 0.10813799999959883,
+            "jobSettlementCpuTicks": 0,
+            "externalChildCpuMs": 0,
+            "waitWindow": null,
+            "errors": [],
+            "denied": {}
+          },
+          {
+            "round": 2,
+            "wallMs": 366.18812400000024,
+            "mainThreadTicks": 32,
+            "rchar": 33279622,
+            "maxSliceMs": 5.368371000000479,
+            "maxSliceSite": "state.write-wait",
+            "maxTimerGapMs": 24.49618299999929,
+            "ticks": [
+              57.57506899999862,
+              41.68678800000089,
+              39.01815499999975,
+              43.593950000000405,
+              38.8602690000007,
+              72.2698049999999,
+              51.17268300000069,
+              0.5635709999987739
+            ],
+            "snapshots": 16,
+            "copiedRows": 1840,
+            "decodedRows": 55,
+            "decodedBytes": 7403339,
+            "clonedRows": 91,
+            "clonedBytes": 11390425,
+            "fullReturnedSnapshots": 0,
+            "fullReturnedRows": 0,
+            "maxLeaseHoldMs": 5.680311000000074,
+            "phaseCpuTicks": [
+              6,
+              3,
+              3,
+              5,
+              4,
+              7,
+              4,
+              0
+            ],
+            "jobSettlementWallMs": 0.07049700000061421,
+            "jobSettlementCpuTicks": 0,
+            "externalChildCpuMs": 0,
+            "waitWindow": null,
+            "errors": [],
+            "denied": {}
+          }
+        ]
+      }
+    },
+    {
+      "pair": 3,
+      "equality": {
+        "rows": 941,
+        "differentRecords": 0,
+        "differentKeys": []
+      },
+      "baseline": {
+        "commandUtcBounds": [
+          "2026-10-15T15:10:41.375425+00:00",
+          "2026-10-15T15:11:26.841071+00:00"
+        ],
+        "observations": [
+          {
+            "round": 0,
+            "wallMs": 11678.132672000002,
+            "mainThreadTicks": 219,
+            "rchar": 749671646,
+            "maxSliceMs": 445.1611039999999,
+            "maxSliceSite": "registry.snapshot",
+            "maxTimerGapMs": 503.5532630000016,
+            "ticks": [
+              11655.129729
+            ],
+            "snapshots": 16,
+            "copiedRows": 1840,
+            "decodedRows": 614,
+            "decodedBytes": 75757641,
+            "clonedRows": 859,
+            "clonedBytes": 110803535,
+            "fullReturnedSnapshots": 1,
+            "fullReturnedRows": 267,
+            "maxLeaseHoldMs": 484.9819090000001,
+            "phaseCpuTicks": [
+              219
+            ],
+            "jobSettlementWallMs": 0.01783400000022084,
+            "jobSettlementCpuTicks": 0,
+            "externalChildCpuMs": 0,
+            "waitWindow": {
+              "wallMs": 10000.445914,
+              "mainThreadTicks": 56,
+              "rchar": 25011007,
+              "maxTimerGapMs": 4.666347000000314
+            },
+            "errors": [],
+            "denied": {}
+          },
+          {
+            "round": 1,
+            "wallMs": 235.10320599999977,
+            "mainThreadTicks": 21,
+            "rchar": 15889500,
+            "maxSliceMs": 2.2580090000010387,
+            "maxSliceSite": "state.checkpoint",
+            "maxTimerGapMs": 8.147501999999804,
+            "ticks": [
+              214.75586199999998
+            ],
+            "snapshots": 16,
+            "copiedRows": 1840,
+            "decodedRows": 95,
+            "decodedBytes": 11355553,
+            "clonedRows": 373,
+            "clonedBytes": 49692470,
+            "fullReturnedSnapshots": 1,
+            "fullReturnedRows": 267,
+            "maxLeaseHoldMs": 4.142852999999377,
+            "phaseCpuTicks": [
+              21
+            ],
+            "jobSettlementWallMs": 0.009981999999581603,
+            "jobSettlementCpuTicks": 0,
+            "externalChildCpuMs": 0,
+            "waitWindow": null,
+            "errors": [],
+            "denied": {}
+          },
+          {
+            "round": 2,
+            "wallMs": 258.2443480000002,
+            "mainThreadTicks": 23,
+            "rchar": 15889299,
+            "maxSliceMs": 3.3952229999995325,
+            "maxSliceSite": "controller.port-start",
+            "maxTimerGapMs": 10.105301999999938,
+            "ticks": [
+              237.79703199999858
+            ],
+            "snapshots": 16,
+            "copiedRows": 1840,
+            "decodedRows": 94,
+            "decodedBytes": 11240519,
+            "clonedRows": 373,
+            "clonedBytes": 49692470,
+            "fullReturnedSnapshots": 1,
+            "fullReturnedRows": 267,
+            "maxLeaseHoldMs": 4.012076999999408,
+            "phaseCpuTicks": [
+              23
+            ],
+            "jobSettlementWallMs": 0.014248999999836087,
+            "jobSettlementCpuTicks": 0,
+            "externalChildCpuMs": 0,
+            "waitWindow": null,
+            "errors": [],
+            "denied": {}
+          }
+        ]
+      },
+      "candidate": {
+        "commandUtcBounds": [
+          "2026-10-15T15:11:27.125122+00:00",
+          "2026-10-15T15:11:40.437523+00:00"
+        ],
+        "observations": [
+          {
+            "round": 0,
+            "wallMs": 11464.330439,
+            "mainThreadTicks": 201,
+            "rchar": 956406053,
+            "maxSliceMs": 432.22466899999995,
+            "maxSliceSite": "controller.lane",
+            "maxTimerGapMs": 496.50407800000005,
+            "ticks": [
+              696.868853,
+              42.02148000000011,
+              26.001115000000027,
+              45.079942000000074,
+              58.93919600000004,
+              203.397604,
+              38.144837999999936,
+              2.8949660000000677
+            ],
+            "snapshots": 16,
+            "copiedRows": 1840,
+            "decodedRows": 554,
+            "decodedBytes": 71346537,
+            "clonedRows": 298,
+            "clonedBytes": 35182513,
+            "fullReturnedSnapshots": 0,
+            "fullReturnedRows": 0,
+            "maxLeaseHoldMs": 367.00028999999995,
+            "phaseCpuTicks": [
+              68,
+              5,
+              2,
+              4,
+              6,
+              20,
+              4,
+              0
+            ],
+            "jobSettlementWallMs": 10327.365485,
+            "jobSettlementCpuTicks": 91,
+            "externalChildCpuMs": 0,
+            "waitWindow": {
+              "wallMs": 10000.301556999999,
+              "mainThreadTicks": 59,
+              "rchar": 26167494,
+              "maxTimerGapMs": 8.378152
+            },
+            "errors": [],
+            "denied": {}
+          },
+          {
+            "round": 1,
+            "wallMs": 323.67687300000034,
+            "mainThreadTicks": 28,
+            "rchar": 33103607,
+            "maxSliceMs": 7.362370999999257,
+            "maxSliceSite": "controller.lane",
+            "maxTimerGapMs": 35.445347000000766,
+            "ticks": [
+              52.908934999999474,
+              45.80617800000073,
+              24.008685000000696,
+              31.232766999999512,
+              34.47228200000063,
+              58.95393200000035,
+              54.89775700000064,
+              0.40776999999980035
+            ],
+            "snapshots": 16,
+            "copiedRows": 1840,
+            "decodedRows": 57,
+            "decodedBytes": 7633407,
+            "clonedRows": 91,
+            "clonedBytes": 11390425,
+            "fullReturnedSnapshots": 0,
+            "fullReturnedRows": 0,
+            "maxLeaseHoldMs": 5.463356999998723,
+            "phaseCpuTicks": [
+              4,
+              5,
+              2,
+              3,
+              3,
+              6,
+              5,
+              0
+            ],
+            "jobSettlementWallMs": 0.043938999999227235,
+            "jobSettlementCpuTicks": 0,
+            "externalChildCpuMs": 0,
+            "waitWindow": null,
+            "errors": [],
+            "denied": {}
+          },
+          {
+            "round": 2,
+            "wallMs": 317.93845599999986,
+            "mainThreadTicks": 30,
+            "rchar": 33279235,
+            "maxSliceMs": 2.9315609999994194,
+            "maxSliceSite": "controller.port-start",
+            "maxTimerGapMs": 27.357168999998976,
+            "ticks": [
+              42.78384499999993,
+              37.42064500000015,
+              27.575408999999127,
+              37.89337499999965,
+              37.02381499999865,
+              69.62725599999976,
+              44.08979399999953,
+              0.5431819999994332
+            ],
+            "snapshots": 16,
+            "copiedRows": 1840,
+            "decodedRows": 55,
+            "decodedBytes": 7403339,
+            "clonedRows": 91,
+            "clonedBytes": 11390425,
+            "fullReturnedSnapshots": 0,
+            "fullReturnedRows": 0,
+            "maxLeaseHoldMs": 5.510699000000386,
+            "phaseCpuTicks": [
+              5,
+              4,
+              2,
+              4,
+              3,
+              7,
+              5,
+              0
+            ],
+            "jobSettlementWallMs": 0.1011499999985972,
+            "jobSettlementCpuTicks": 0,
+            "externalChildCpuMs": 0,
+            "waitWindow": null,
+            "errors": [],
+            "denied": {}
+          }
+        ]
+      }
+    }
+  ],
+  "medians": {
+    "baseline": {
+      "cold": {
+        "wallMs": 11499.139821,
+        "mainThreadTicks": 210,
+        "rchar": 749671680,
+        "decodedRows": 614,
+        "decodedBytes": 75757641,
+        "clonedRows": 859,
+        "clonedBytes": 110803535,
+        "maxSliceMs": 445.1611039999999,
+        "maxTimerGapMs": 482.82219599999917,
+        "maxLeaseHoldMs": 471.73348199999964,
+        "jobSettlementWallMs": 0.015536999999312684,
+        "jobSettlementCpuTicks": 0,
+        "maxPhaseMs": 11475.441779,
+        "maxPhaseCpuMs": 2100
+      },
+      "warm": {
+        "wallMs": 220.99156549999952,
+        "mainThreadTicks": 19.5,
+        "rchar": 15889475.5,
+        "decodedRows": 94.5,
+        "decodedBytes": 11298036.0,
+        "clonedRows": 373.0,
+        "clonedBytes": 49692470.0,
+        "maxSliceMs": 1.4425490000003265,
+        "maxTimerGapMs": 8.093893999999636,
+        "maxLeaseHoldMs": 2.585071500000595,
+        "jobSettlementWallMs": 0.011053000000174507,
+        "jobSettlementCpuTicks": 0.0,
+        "maxPhaseMs": 200.60913899999923,
+        "maxPhaseCpuMs": 195.0
+      }
+    },
+    "candidate": {
+      "cold": {
+        "wallMs": 11566.362537,
+        "mainThreadTicks": 219,
+        "rchar": 956422288,
+        "decodedRows": 554,
+        "decodedBytes": 71346537,
+        "clonedRows": 298,
+        "clonedBytes": 35182513,
+        "maxSliceMs": 426.42234199999996,
+        "maxTimerGapMs": 496.50407800000005,
+        "maxLeaseHoldMs": 389.8920870000002,
+        "jobSettlementWallMs": 10327.365485,
+        "jobSettlementCpuTicks": 99,
+        "maxPhaseMs": 696.868853,
+        "maxPhaseCpuMs": 680
+      },
+      "warm": {
+        "wallMs": 330.2615909999995,
+        "mainThreadTicks": 30.5,
+        "rchar": 33191497.5,
+        "decodedRows": 56.0,
+        "decodedBytes": 7518373.0,
+        "clonedRows": 91.0,
+        "clonedBytes": 11390425.0,
+        "maxSliceMs": 4.921160999999302,
+        "maxTimerGapMs": 34.50849400000061,
+        "maxLeaseHoldMs": 5.487027999999555,
+        "jobSettlementWallMs": 0.08509550000053423,
+        "jobSettlementCpuTicks": 0.0,
+        "maxPhaseMs": 67.05950399999983,
+        "maxPhaseCpuMs": 65.0
+      }
+    }
+  },
+  "preliminaryTrials": "Two earlier pairs used the active-row query plan and are excluded from the final table. Both matched all 941 records. One queued follow-up test command was cancelled before execution so heavy checks remained sequential. The expanded boundary suite initially exposed three test-fixture errors: a cross-lane ordering assertion exceeded the per-lane contract and two fixtures omitted stage-run records. Those fixtures were corrected and the three cases passed.",
+  "historyGrowth": [
+    {
+      "retainedPeers": 0,
+      "attemptsPerPeer": 8,
+      "samples": [
+        {
+          "sample": 0,
+          "mode": "legacy",
+          "wallMs": 10.538948000001255,
+          "mainThreadTicks": 2,
+          "rchar": 900692,
+          "maxTimerGapMs": 0.6130840000005264,
+          "copiedRows": 2,
+          "maxSliceMs": 0.11332299999776296
+        },
+        {
+          "sample": 0,
+          "mode": "candidate",
+          "wallMs": 13.054995000002236,
+          "mainThreadTicks": 1,
+          "rchar": 945848,
+          "maxTimerGapMs": 2.9321259999996983,
+          "copiedRows": 2,
+          "maxSliceMs": 0.38579099999697064
+        },
+        {
+          "sample": 1,
+          "mode": "legacy",
+          "wallMs": 10.473988000001555,
+          "mainThreadTicks": 1,
+          "rchar": 892500,
+          "maxTimerGapMs": 0.48576500000126543,
+          "copiedRows": 2,
+          "maxSliceMs": 0.09586299999864423
+        },
+        {
+          "sample": 1,
+          "mode": "candidate",
+          "wallMs": 14.97760500000004,
+          "mainThreadTicks": 2,
+          "rchar": 958174,
+          "maxTimerGapMs": 2.911834999998973,
+          "copiedRows": 2,
+          "maxSliceMs": 0.37278599999990547
+        },
+        {
+          "sample": 2,
+          "mode": "legacy",
+          "wallMs": 11.221207999999024,
+          "mainThreadTicks": 1,
+          "rchar": 892500,
+          "maxTimerGapMs": 1.2383560000016587,
+          "copiedRows": 2,
+          "maxSliceMs": 0.13078000000314205
+        },
+        {
+          "sample": 2,
+          "mode": "candidate",
+          "wallMs": 12.903330000001006,
+          "mainThreadTicks": 1,
+          "rchar": 958174,
+          "maxTimerGapMs": 2.8207690000017465,
+          "copiedRows": 2,
+          "maxSliceMs": 0.3699449999985518
+        }
+      ]
+    },
+    {
+      "retainedPeers": 1000,
+      "attemptsPerPeer": 8,
+      "samples": [
+        {
+          "sample": 0,
+          "mode": "legacy",
+          "wallMs": 160.22764200000165,
+          "mainThreadTicks": 16,
+          "rchar": 50137968,
+          "maxTimerGapMs": 73.41126900000017,
+          "copiedRows": 1002,
+          "maxSliceMs": 1.0418700000009267
+        },
+        {
+          "sample": 0,
+          "mode": "candidate",
+          "wallMs": 13.40126699999746,
+          "mainThreadTicks": 1,
+          "rchar": 999142,
+          "maxTimerGapMs": 3.2703359999977692,
+          "copiedRows": 2,
+          "maxSliceMs": 0.37574900000254274
+        },
+        {
+          "sample": 1,
+          "mode": "legacy",
+          "wallMs": 77.66885800000091,
+          "mainThreadTicks": 8,
+          "rchar": 910640,
+          "maxTimerGapMs": 1.6661090000015975,
+          "copiedRows": 1002,
+          "maxSliceMs": 0.16140400000222144
+        },
+        {
+          "sample": 1,
+          "mode": "candidate",
+          "wallMs": 13.173556999998254,
+          "mainThreadTicks": 1,
+          "rchar": 966374,
+          "maxTimerGapMs": 3.09866300000067,
+          "copiedRows": 2,
+          "maxSliceMs": 0.37855800000033923
+        },
+        {
+          "sample": 2,
+          "mode": "legacy",
+          "wallMs": 96.66477300000042,
+          "mainThreadTicks": 10,
+          "rchar": 910830,
+          "maxTimerGapMs": 2.2188940000014554,
+          "copiedRows": 1002,
+          "maxSliceMs": 2.861322000000655
+        },
+        {
+          "sample": 2,
+          "mode": "candidate",
+          "wallMs": 12.927067000000534,
+          "mainThreadTicks": 1,
+          "rchar": 966378,
+          "maxTimerGapMs": 2.8593799999980547,
+          "copiedRows": 2,
+          "maxSliceMs": 0.3816919999990205
+        }
+      ]
+    }
+  ],
+  "boundaryChecks": {
+    "twentySecondWait": "Real FlowPipelineController returns before 15 s while its one fenced job remains pending across a second poll and a 20 s hold. No shared state lease is held during the wait.",
+    "longHook": "An inherited commit lock descriptor remains owned after phase completion; one commit executes after release.",
+    "restart": "A real local Git push survives the fixture Viewer death, retains its kernel lock, and is reconciled by a successor with one pre-push invocation.",
+    "peerEdits": [
+      "claim",
+      "release",
+      "branch",
+      "repository",
+      "remove",
+      "archive",
+      "progress-only"
+    ],
+    "authorityRefusals": [
+      "same-repository alias",
+      "uncertain common directory"
+    ],
+    "otherScenarios": [
+      "many dirty lanes with per-lane operation order",
+      "fair cursor and conditional dirty acknowledgment",
+      "large attempt window",
+      "paused and completed obligations",
+      "peer-held SQLite writer",
+      "unselected CPU ticket FIFO age",
+      "refused, interrupted and uncertain publication"
+    ]
+  },
+  "localChecks": {
+    "typescript": {
+      "command": "bun node_modules/typescript/bin/tsc --noEmit --incremental false",
+      "exitCode": 0
+    },
+    "focusedTests": {
+      "command": "bun scripts/local-gate-tests.ts --base 42c77f35e <explicit paths>",
+      "files": [
+        "src/lib/pipelines/engine.controllerPass.test.ts",
+        "src/lib/pipelines/engine.controllerSnapshot.test.ts",
+        "src/lib/pipelines/controller.test.ts",
+        "src/lib/pipelines/engine.watchdogRegression.test.ts",
+        "src/lib/pipelines/engine.settlement.test.ts",
+        "src/lib/pipelines/engine.ports.test.ts",
+        "src/lib/pipelines/stageCommitRepair.test.ts",
+        "src/lib/pipelines/stageProvenance.test.ts",
+        "src/lib/pipelines/store.test.ts",
+        "src/lib/state/sqliteStateStore.lifecycle.test.ts",
+        "src/lib/state/sqliteStateStore.bounded.test.ts",
+        "src/lib/state/sqliteStateStore.readCache.test.ts",
+        "src/lib/state/pipelineControllerIndex.owner.test.ts",
+        "src/lib/pipelines/engine.cpuQueue.test.ts",
+        "src/lib/pipelines/engine.cpuAdmissionPolling.test.ts",
+        "src/lib/pipelines/git.test.ts",
+        "src/lib/performanceSpans.test.ts",
+        "src/lib/runtime/cpuAdmission.test.ts",
+        "src/lib/runtime/cpuAdmissionScope.test.ts"
+      ],
+      "headElapsedMs": 157063,
+      "exitCode": 0,
+      "baselineSampleNeeded": false
+    },
+    "selfReview": "Reviewed the final source diff, SQL plans, job and restart custody, scope fences and measurement sources. No unresolved findings.",
+    "privacy": {
+      "command": "bun scripts/privacy-publication-gate.ts --require-known-values --repository <checkout> --paths <23 explicit paths>",
+      "exitCode": 0
+    }
+  }
+}

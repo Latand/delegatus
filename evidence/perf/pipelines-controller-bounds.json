@@ -1,0 +1,658 @@
+{
+  "schemaVersion": 1,
+  "purpose": "scope-decision; no candidate implementation measured",
+  "source": "011a4fe97ff9fe2abae1c7a0c217c888a34ea07b",
+  "sourceExportSha256": "8471cdb918f861af1a304efe725383bf532f23b28db343119bf5544aeb50f911",
+  "boundaryDriverSha256": "0939e9b67054b96dd63f0f3bb058929bf6c4566e1e0cae50fe9ceecadb4edb80",
+  "bun": "1.4.0",
+  "gateRelease": "4b40ba59c993",
+  "referenceSha256": {
+    "state.sqlite": "df05e55a2370fb31368b97a116b5c15ef6fc1cc5b21c462eeb01ef9aa465ae1e",
+    "agent-registry.sqlite": "4667570b61a1161d15a38d82a30b3942d8e946f472e5be6911e52da371bec016"
+  },
+  "clockTicksPerSecond": 100,
+  "phaseDeadlineMs": 15000,
+  "fixedEngineTime": "2026-10-15T10:26:11.383Z",
+  "trials": [
+    {
+      "name": "baseline-10s-1",
+      "requestedGitWaitMs": 10000,
+      "realControllerBoundary": false,
+      "passes": [
+        {
+          "run": 0,
+          "started": "2026-10-15T13:39:54.610Z",
+          "ended": "2026-10-15T13:40:06.316Z",
+          "wallMs": 11685.929331,
+          "mainThreadTicks": 255,
+          "logicalReadBytes": 749669933,
+          "maxTimerGapMs": 547.7086319999999,
+          "changed": true,
+          "returnedRows": 267,
+          "error": null,
+          "blocked": {},
+          "delayWindow": {
+            "startedAt": "2026-10-15T13:39:55.649Z",
+            "maxTimerGapMs": 8.730621000000156,
+            "timerTicks": 981,
+            "wallMs": 10000.31184,
+            "cpu": {
+              "user": 1007838,
+              "system": 212566
+            },
+            "mainThreadTicks": 88,
+            "rchar": 25010443,
+            "readCalls": 6424
+          },
+          "mainThreadCpuMs": 2550.0,
+          "labelledSyncMax": {
+            "site": "sync:registry.snapshot",
+            "ms": 484.13242
+          },
+          "pipelineRows": {
+            "decoded": {
+              "rows": 614,
+              "serializedSourceBytes": 75757641
+            },
+            "cloned": {
+              "rows": 858,
+              "serializedSourceBytes": 110688596
+            }
+          },
+          "hostsSelections": {
+            "count": 4,
+            "totalMs": 60.92957899999999,
+            "maxMs": 20.515397000000007,
+            "rows": 48,
+            "bytes": 0
+          },
+          "fullReturnedSnapshot": {
+            "count": 1,
+            "totalMs": 83.80279999999948,
+            "maxMs": 83.80279999999948,
+            "rows": 267,
+            "bytes": 0
+          },
+          "portsPreparationMs": 183.72610600000007
+        },
+        {
+          "run": 1,
+          "started": "2026-10-15T13:40:06.316Z",
+          "ended": "2026-10-15T13:40:06.593Z",
+          "wallMs": 256.83652299999994,
+          "mainThreadTicks": 24,
+          "logicalReadBytes": 16287183,
+          "maxTimerGapMs": 17.435567999998966,
+          "changed": true,
+          "returnedRows": 267,
+          "error": null,
+          "blocked": {},
+          "delayWindow": null,
+          "mainThreadCpuMs": 240.0,
+          "labelledSyncMax": {
+            "site": "sync:controller.port-start",
+            "ms": 2.9366639999989275
+          },
+          "pipelineRows": {
+            "decoded": {
+              "rows": 95,
+              "serializedSourceBytes": 11355553
+            },
+            "cloned": {
+              "rows": 373,
+              "serializedSourceBytes": 49692470
+            }
+          },
+          "hostsSelections": {
+            "count": 4,
+            "totalMs": 34.205410000000484,
+            "maxMs": 9.676681999999346,
+            "rows": 48,
+            "bytes": 0
+          },
+          "fullReturnedSnapshot": {
+            "count": 1,
+            "totalMs": 80.61943699999938,
+            "maxMs": 80.61943699999938,
+            "rows": 267,
+            "bytes": 0
+          },
+          "portsPreparationMs": 0.084936999999627
+        },
+        {
+          "run": 2,
+          "started": "2026-10-15T13:40:06.594Z",
+          "ended": "2026-10-15T13:40:06.940Z",
+          "wallMs": 326.348516,
+          "mainThreadTicks": 32,
+          "logicalReadBytes": 16266633,
+          "maxTimerGapMs": 11.413966999998593,
+          "changed": true,
+          "returnedRows": 267,
+          "error": null,
+          "blocked": {},
+          "delayWindow": null,
+          "mainThreadCpuMs": 320.0,
+          "labelledSyncMax": {
+            "site": "sync:controller.port-start",
+            "ms": 1.9844600000014907
+          },
+          "pipelineRows": {
+            "decoded": {
+              "rows": 94,
+              "serializedSourceBytes": 11240519
+            },
+            "cloned": {
+              "rows": 373,
+              "serializedSourceBytes": 49692470
+            }
+          },
+          "hostsSelections": {
+            "count": 4,
+            "totalMs": 39.89584399999876,
+            "maxMs": 10.832067999999708,
+            "rows": 48,
+            "bytes": 0
+          },
+          "fullReturnedSnapshot": {
+            "count": 1,
+            "totalMs": 166.79852399999982,
+            "maxMs": 166.79852399999982,
+            "rows": 267,
+            "bytes": 0
+          },
+          "portsPreparationMs": 0.02848699999958626
+        }
+      ]
+    },
+    {
+      "name": "boundary-20s-1",
+      "requestedGitWaitMs": 20000,
+      "realControllerBoundary": true,
+      "passes": [
+        {
+          "run": 0,
+          "started": "2026-10-15T13:41:02.991Z",
+          "ended": "2026-10-15T13:41:24.804Z",
+          "wallMs": 21793.386318,
+          "mainThreadTicks": 337,
+          "logicalReadBytes": 774790847,
+          "maxTimerGapMs": 603.2004720000004,
+          "changed": true,
+          "returnedRows": 267,
+          "error": null,
+          "blocked": {},
+          "delayWindow": {
+            "startedAt": "2026-10-15T13:41:04.055Z",
+            "maxTimerGapMs": 8.136261999999988,
+            "timerTicks": 1964,
+            "wallMs": 20000.32972,
+            "cpu": {
+              "user": 1816155,
+              "system": 380869
+            },
+            "mainThreadTicks": 163,
+            "rchar": 50131265,
+            "readCalls": 12877
+          },
+          "mainThreadCpuMs": 3370.0,
+          "labelledSyncMax": {
+            "site": "sync:registry.snapshot",
+            "ms": 486.69900600000005
+          },
+          "pipelineRows": {
+            "decoded": {
+              "rows": 849,
+              "serializedSourceBytes": 101235651
+            },
+            "cloned": {
+              "rows": 1093,
+              "serializedSourceBytes": 136166606
+            }
+          },
+          "hostsSelections": {
+            "count": 4,
+            "totalMs": 69.41768200000331,
+            "maxMs": 29.812576000000035,
+            "rows": 48,
+            "bytes": 0
+          },
+          "fullReturnedSnapshot": {
+            "count": 1,
+            "totalMs": 118.37619300000006,
+            "maxMs": 118.37619300000006,
+            "rows": 267,
+            "bytes": 0
+          },
+          "controller": {
+            "firstCycleMs": 15004.705210999999,
+            "settledAtCycleReturn": false,
+            "pipelineCalls": 1,
+            "heartbeats": [
+              {
+                "schemaVersion": 1,
+                "controller": "flow-pipeline",
+                "cycle": 1,
+                "pass": 1,
+                "trigger": "replay",
+                "phase": "pipelines",
+                "state": "running",
+                "phaseStartedAt": "2026-10-15T13:41:02.995Z",
+                "updatedAt": "2026-10-15T13:41:02.995Z",
+                "ageMs": 0,
+                "deadlineMs": 15000,
+                "observedMs": 4.057676999999899
+              },
+              {
+                "schemaVersion": 1,
+                "controller": "flow-pipeline",
+                "cycle": 1,
+                "pass": 1,
+                "trigger": "replay",
+                "phase": "pipelines",
+                "state": "timed-out",
+                "phaseStartedAt": "2026-10-15T13:41:02.995Z",
+                "updatedAt": "2026-10-15T13:41:17.995Z",
+                "ageMs": 15000,
+                "deadlineMs": 15000,
+                "observedMs": 15004.407266
+              },
+              {
+                "schemaVersion": 1,
+                "controller": "flow-pipeline",
+                "cycle": 1,
+                "pass": 1,
+                "trigger": "replay",
+                "phase": "scan",
+                "state": "running",
+                "phaseStartedAt": "2026-10-15T13:41:17.995Z",
+                "updatedAt": "2026-10-15T13:41:17.995Z",
+                "ageMs": 0,
+                "deadlineMs": 15000,
+                "observedMs": 15004.439542
+              },
+              {
+                "schemaVersion": 1,
+                "controller": "flow-pipeline",
+                "cycle": 1,
+                "pass": 1,
+                "trigger": "replay",
+                "phase": "scan",
+                "state": "completed",
+                "phaseStartedAt": "2026-10-15T13:41:17.995Z",
+                "updatedAt": "2026-10-15T13:41:17.995Z",
+                "ageMs": 0,
+                "deadlineMs": 15000,
+                "observedMs": 15004.592308
+              },
+              {
+                "schemaVersion": 1,
+                "controller": "flow-pipeline",
+                "cycle": 1,
+                "pass": 1,
+                "trigger": "replay",
+                "phase": "pipelines",
+                "state": "blocked",
+                "phaseStartedAt": "2026-10-15T13:41:02.995Z",
+                "updatedAt": "2026-10-15T13:41:17.995Z",
+                "ageMs": 15000,
+                "deadlineMs": 15000,
+                "observedMs": 15004.626881
+              },
+              {
+                "schemaVersion": 1,
+                "controller": "flow-pipeline",
+                "cycle": 2,
+                "pass": 1,
+                "trigger": "watchdog",
+                "phase": "pipelines",
+                "state": "blocked",
+                "phaseStartedAt": "2026-10-15T13:41:02.995Z",
+                "updatedAt": "2026-10-15T13:41:17.996Z",
+                "ageMs": 15001,
+                "deadlineMs": 15000,
+                "observedMs": 15004.729132999999
+              },
+              {
+                "schemaVersion": 1,
+                "controller": "flow-pipeline",
+                "cycle": 2,
+                "pass": 1,
+                "trigger": "watchdog",
+                "phase": "scan",
+                "state": "running",
+                "phaseStartedAt": "2026-10-15T13:41:17.996Z",
+                "updatedAt": "2026-10-15T13:41:17.996Z",
+                "ageMs": 0,
+                "deadlineMs": 15000,
+                "observedMs": 15004.737314999998
+              },
+              {
+                "schemaVersion": 1,
+                "controller": "flow-pipeline",
+                "cycle": 2,
+                "pass": 1,
+                "trigger": "watchdog",
+                "phase": "scan",
+                "state": "completed",
+                "phaseStartedAt": "2026-10-15T13:41:17.996Z",
+                "updatedAt": "2026-10-15T13:41:17.996Z",
+                "ageMs": 0,
+                "deadlineMs": 15000,
+                "observedMs": 15004.753535
+              },
+              {
+                "schemaVersion": 1,
+                "controller": "flow-pipeline",
+                "cycle": 2,
+                "pass": 1,
+                "trigger": "watchdog",
+                "phase": "pipelines",
+                "state": "blocked",
+                "phaseStartedAt": "2026-10-15T13:41:02.995Z",
+                "updatedAt": "2026-10-15T13:41:17.996Z",
+                "ageMs": 15001,
+                "deadlineMs": 15000,
+                "observedMs": 15004.758393
+              }
+            ],
+            "messages": [
+              "[flow pipeline controller] pipelines phase exceeded its deadline",
+              "[flow pipeline controller] scan-dependent flow phase skipped: still scanning, retry in 5 s",
+              "[flow pipeline controller] scan-dependent flow phase skipped: still scanning, retry in 5 s"
+            ]
+          },
+          "portsPreparationMs": 208.07874500000003
+        },
+        {
+          "run": 1,
+          "started": "2026-10-15T13:41:24.805Z",
+          "ended": "2026-10-15T13:41:25.069Z",
+          "wallMs": 243.15559500000018,
+          "mainThreadTicks": 23,
+          "logicalReadBytes": 16287281,
+          "maxTimerGapMs": 13.941921999998158,
+          "changed": true,
+          "returnedRows": 267,
+          "error": null,
+          "blocked": {},
+          "delayWindow": null,
+          "mainThreadCpuMs": 230.0,
+          "labelledSyncMax": {
+            "site": "sync:state.checkpoint",
+            "ms": 3.0107290000014473
+          },
+          "pipelineRows": {
+            "decoded": {
+              "rows": 95,
+              "serializedSourceBytes": 11355553
+            },
+            "cloned": {
+              "rows": 373,
+              "serializedSourceBytes": 49692470
+            }
+          },
+          "hostsSelections": {
+            "count": 4,
+            "totalMs": 37.06601399999636,
+            "maxMs": 12.487873000001855,
+            "rows": 48,
+            "bytes": 0
+          },
+          "fullReturnedSnapshot": {
+            "count": 1,
+            "totalMs": 89.88073099999747,
+            "maxMs": 89.88073099999747,
+            "rows": 267,
+            "bytes": 0
+          },
+          "controller": {
+            "firstCycleMs": 243.15239400000064,
+            "settledAtCycleReturn": true,
+            "pipelineCalls": 1,
+            "heartbeats": [
+              {
+                "schemaVersion": 1,
+                "controller": "flow-pipeline",
+                "cycle": 1,
+                "pass": 1,
+                "trigger": "replay",
+                "phase": "pipelines",
+                "state": "running",
+                "phaseStartedAt": "2026-10-15T13:41:24.805Z",
+                "updatedAt": "2026-10-15T13:41:24.805Z",
+                "ageMs": 0,
+                "deadlineMs": 15000,
+                "observedMs": 0.16015899999911198
+              },
+              {
+                "schemaVersion": 1,
+                "controller": "flow-pipeline",
+                "cycle": 1,
+                "pass": 1,
+                "trigger": "replay",
+                "phase": "pipelines",
+                "state": "completed",
+                "phaseStartedAt": "2026-10-15T13:41:24.805Z",
+                "updatedAt": "2026-10-15T13:41:25.048Z",
+                "ageMs": 243,
+                "deadlineMs": 15000,
+                "observedMs": 243.03902299999754
+              },
+              {
+                "schemaVersion": 1,
+                "controller": "flow-pipeline",
+                "cycle": 1,
+                "pass": 1,
+                "trigger": "replay",
+                "phase": "scan",
+                "state": "running",
+                "phaseStartedAt": "2026-10-15T13:41:25.048Z",
+                "updatedAt": "2026-10-15T13:41:25.048Z",
+                "ageMs": 0,
+                "deadlineMs": 15000,
+                "observedMs": 243.0513030000002
+              },
+              {
+                "schemaVersion": 1,
+                "controller": "flow-pipeline",
+                "cycle": 1,
+                "pass": 1,
+                "trigger": "replay",
+                "phase": "scan",
+                "state": "completed",
+                "phaseStartedAt": "2026-10-15T13:41:25.048Z",
+                "updatedAt": "2026-10-15T13:41:25.048Z",
+                "ageMs": 0,
+                "deadlineMs": 15000,
+                "observedMs": 243.09558599999946
+              },
+              {
+                "schemaVersion": 1,
+                "controller": "flow-pipeline",
+                "cycle": 1,
+                "pass": 1,
+                "trigger": "replay",
+                "phase": "idle",
+                "state": "idle",
+                "phaseStartedAt": "2026-10-15T13:41:25.048Z",
+                "updatedAt": "2026-10-15T13:41:25.048Z",
+                "ageMs": 0,
+                "deadlineMs": 15000,
+                "observedMs": 243.14300399999775
+              }
+            ],
+            "messages": [
+              "[flow pipeline controller] scan-dependent flow phase skipped: still scanning, retry in 5 s"
+            ]
+          },
+          "portsPreparationMs": 0.1273220000002766
+        },
+        {
+          "run": 2,
+          "started": "2026-10-15T13:41:25.069Z",
+          "ended": "2026-10-15T13:41:25.379Z",
+          "wallMs": 289.95291200000065,
+          "mainThreadTicks": 28,
+          "logicalReadBytes": 16266566,
+          "maxTimerGapMs": 12.659064999999828,
+          "changed": true,
+          "returnedRows": 267,
+          "error": null,
+          "blocked": {},
+          "delayWindow": null,
+          "mainThreadCpuMs": 280.0,
+          "labelledSyncMax": {
+            "site": "sync:controller.port-start",
+            "ms": 3.607915000000503
+          },
+          "pipelineRows": {
+            "decoded": {
+              "rows": 94,
+              "serializedSourceBytes": 11240519
+            },
+            "cloned": {
+              "rows": 373,
+              "serializedSourceBytes": 49692470
+            }
+          },
+          "hostsSelections": {
+            "count": 4,
+            "totalMs": 41.80003200000283,
+            "maxMs": 11.750278999999864,
+            "rows": 48,
+            "bytes": 0
+          },
+          "fullReturnedSnapshot": {
+            "count": 1,
+            "totalMs": 107.94160700000066,
+            "maxMs": 107.94160700000066,
+            "rows": 267,
+            "bytes": 0
+          },
+          "controller": {
+            "firstCycleMs": 289.9487169999993,
+            "settledAtCycleReturn": true,
+            "pipelineCalls": 1,
+            "heartbeats": [
+              {
+                "schemaVersion": 1,
+                "controller": "flow-pipeline",
+                "cycle": 1,
+                "pass": 1,
+                "trigger": "replay",
+                "phase": "pipelines",
+                "state": "running",
+                "phaseStartedAt": "2026-10-15T13:41:25.069Z",
+                "updatedAt": "2026-10-15T13:41:25.069Z",
+                "ageMs": 0,
+                "deadlineMs": 15000,
+                "observedMs": 0.09034099999917089
+              },
+              {
+                "schemaVersion": 1,
+                "controller": "flow-pipeline",
+                "cycle": 1,
+                "pass": 1,
+                "trigger": "replay",
+                "phase": "pipelines",
+                "state": "completed",
+                "phaseStartedAt": "2026-10-15T13:41:25.069Z",
+                "updatedAt": "2026-10-15T13:41:25.359Z",
+                "ageMs": 290,
+                "deadlineMs": 15000,
+                "observedMs": 289.7777619999979
+              },
+              {
+                "schemaVersion": 1,
+                "controller": "flow-pipeline",
+                "cycle": 1,
+                "pass": 1,
+                "trigger": "replay",
+                "phase": "scan",
+                "state": "running",
+                "phaseStartedAt": "2026-10-15T13:41:25.359Z",
+                "updatedAt": "2026-10-15T13:41:25.359Z",
+                "ageMs": 0,
+                "deadlineMs": 15000,
+                "observedMs": 289.8080489999993
+              },
+              {
+                "schemaVersion": 1,
+                "controller": "flow-pipeline",
+                "cycle": 1,
+                "pass": 1,
+                "trigger": "replay",
+                "phase": "scan",
+                "state": "completed",
+                "phaseStartedAt": "2026-10-15T13:41:25.359Z",
+                "updatedAt": "2026-10-15T13:41:25.359Z",
+                "ageMs": 0,
+                "deadlineMs": 15000,
+                "observedMs": 289.9082290000006
+              },
+              {
+                "schemaVersion": 1,
+                "controller": "flow-pipeline",
+                "cycle": 1,
+                "pass": 1,
+                "trigger": "replay",
+                "phase": "idle",
+                "state": "idle",
+                "phaseStartedAt": "2026-10-15T13:41:25.359Z",
+                "updatedAt": "2026-10-15T13:41:25.359Z",
+                "ageMs": 0,
+                "deadlineMs": 15000,
+                "observedMs": 289.93901899999764
+              }
+            ],
+            "messages": [
+              "[flow pipeline controller] scan-dependent flow phase skipped: still scanning, retry in 5 s"
+            ]
+          },
+          "portsPreparationMs": 0.02352699999755714
+        }
+      ]
+    }
+  ],
+  "checks": [
+    {
+      "file": "src/lib/pipelines/controller.test.ts",
+      "pass": 9,
+      "fail": 0,
+      "executionMs": 329,
+      "utcEnd": "2026-10-15T13:42:48.171300Z"
+    },
+    {
+      "file": "src/lib/pipelines/engine.controllerSnapshot.test.ts",
+      "pass": 2,
+      "fail": 0,
+      "executionMs": 2120,
+      "utcEnd": "2026-10-15T13:43:46.751996Z"
+    },
+    {
+      "gate": "local privacy",
+      "paths": [
+        "docs/perf/pipelines-controller-bounds.md",
+        "evidence/perf/pipelines-controller-bounds.json"
+      ],
+      "result": "pass",
+      "utcEnd": "2026-10-15T13:45:17.438968Z"
+    }
+  ],
+  "limitations": [
+    "These diagnostic trials use different imposed waits; they are not a before/after comparison.",
+    "The first pass includes cold initialization. Subsequent passes observe mutated state and are not claimed steady state.",
+    "Only existing labelled synchronous spans are measured; unlabelled copying and preparation remain uncovered.",
+    "Clone byte counts are serialized source bytes associated with decoded objects, not allocation size.",
+    "No live repository, transcript, agent, forge, hook, simultaneous writer or production request was replayed.",
+    "The scope-stop condition was reached before candidate changes, alternating pairs, history-growth and full scenario acceptance tests.",
+    "Port construction is outside pass wall time; instrumentation observes it. CPU/timer readings include a 20 ms post-pass drain."
+  ],
+  "crossDelayAuthoritativeRecords": {
+    "records": 941,
+    "differentRecords": 0
+  },
+  "referencesRechecked": true,
+  "initialDriverSha256": "112679c7ebf58faca2ead0413ce70ec38192c385db3c33d44851e2f02f3ca283"
+}

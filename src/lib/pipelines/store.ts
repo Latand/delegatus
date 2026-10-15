@@ -1,4 +1,5 @@
-import { waitForStateLock } from "@/lib/state/lockWait";
+import { controllerPipelineKeys } from "./controllerScope";
+import { stateLockAttempt, waitForStateLock } from "@/lib/state/lockWait";
 import crypto from "node:crypto";
 import { performanceSpans } from "@/lib/performanceSpans";
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -570,7 +571,9 @@ function isCloseCustody(pipeline: Partial<Pipeline>): boolean {
 function isTerminalReap(value: unknown): value is PipelineTerminalReap {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const reap = value as Partial<PipelineTerminalReap>;
-  return Number.isInteger(reap.rounds) && (reap.rounds as number) >= 0
+  return (reap.attemptRounds === undefined || (reap.attemptRounds !== null && typeof reap.attemptRounds === "object" && !Array.isArray(reap.attemptRounds)
+      && Object.values(reap.attemptRounds).every(round => Number.isInteger(round) && round >= 0)))
+    && Number.isInteger(reap.rounds) && (reap.rounds as number) >= 0
     && Number.isInteger(reap.stopped) && (reap.stopped as number) >= 0
     && typeof reap.lastAt === "string"
     && (reap.settledAttempts === undefined
@@ -1075,7 +1078,23 @@ export function controllerPipelineRowOrder(): number {
 }
 
 export async function selectControllerPipelines(kind: import("@/lib/state/pipelineControllerIndex").PipelineControllerSelection, throughOrder?: number): Promise<Pipeline[]> {
-  return pipelineStore().pipelineControllerSelection(kind, throughOrder);
+  return pipelineStore().pipelineControllerSelection(kind, throughOrder, controllerPipelineKeys());
+}
+
+export async function controllerPipelineVersion(id: string): Promise<string> {
+  return waitForStateLock("pipelines.controller-version", () => stateLockAttempt("pipelines.controller-version", () => pipelineStore().pipelineControllerVersion(id)));
+}
+export async function findControllerPipeline(id: string): Promise<Pipeline | null> {
+  return waitForStateLock("pipelines.controller-candidate", () => stateLockAttempt("pipelines.controller-candidate", () => pipelineStore().pipelineControllerCandidate(id)));
+}
+export async function selectPipelineControllerWork(now: number, excluded: readonly string[]) {
+  return waitForStateLock("pipelines.controller-schedule", () => stateLockAttempt("pipelines.controller-schedule", () => pipelineStore().pipelineTickWork(now, excluded)));
+}
+export async function pipelineControllerReady(now: number, excluded: readonly string[]) {
+  return waitForStateLock("pipelines.controller-schedule", () => stateLockAttempt("pipelines.controller-schedule", () => pipelineStore().pipelineTickReady(now, excluded)));
+}
+export async function acknowledgePipelineControllerWork(work: import("@/lib/state/pipelineControllerSchedule").PipelineTickWork, cursor: number, dueAt: number) {
+  return (await waitForStateLock("pipelines.controller-schedule", pipelineStore)).acknowledgePipelineTick(work, cursor, dueAt);
 }
 
 export type PipelineStartupOwnership = { id: string; attempts: Array<{ conversationId: string | null; state: string }>;
@@ -1392,7 +1411,7 @@ function reviveLoadedPipeline(pipeline: Pipeline, resolveProject: (project: stri
 /** Detach every nested field before a mutable reader or session sees a shared
     decoded record, including configuration and historical attempt evidence. */
 function cloneLoadedPipeline(pipeline: Pipeline, resolveProject: (project: string) => string = canonicalProject): Pipeline {
-  return reviveLoadedPipeline(structuredClone(pipeline), resolveProject);
+  return performanceSpans.sync("pipeline.copy", () => reviveLoadedPipeline(structuredClone(pipeline), resolveProject), 1);
 }
 
 const pipelineStores = new Map<string, {
@@ -1611,7 +1630,9 @@ export async function withPipelineMutation<T>(
   return withViewerOperation("pipelines.mutation", () => refuseBusyBeforeAdmission(async (admitted) => (await waitForStateLock("pipelines.open", pipelineStore, { waitMs: pipelineLockWaitMs() })).mutate((pipelines, persist) => {
     admitted();
     return mutate(pipelines, persist);
-  }, undefined, false, pipelineLockWaitMs(), observeHold)));
+  }, controllerPipelineKeys() ? context => {
+    if (context.structural) throw new Error("controller jobs cannot replace the collection");
+  } : undefined, false, pipelineLockWaitMs(), observeHold, controllerPipelineKeys())));
 }
 
 export async function withPipelineControllerMutation<T>(
@@ -1622,7 +1643,7 @@ export async function withPipelineControllerMutation<T>(
   observeHold?: (heldMs: number) => void,
   explicitOnly = false,
 ): Promise<T> {
-  return withViewerOperation("pipelines.controller-mutation", () => performanceSpans.wait(explicitOnly ? "controller.admission" : "controller.reconcile", async () => (await waitForStateLock("pipelines.open", pipelineStore)).reconcileSnapshot(mutate, observeHold, explicitOnly)));
+  return withViewerOperation("pipelines.controller-mutation", () => performanceSpans.wait(explicitOnly ? "controller.admission" : "controller.reconcile", async () => (await waitForStateLock("pipelines.open", pipelineStore)).reconcileSnapshot(mutate, observeHold, explicitOnly, controllerPipelineKeys())));
 }
 
 /** Short startup state admission under the existing cross-process lease.
@@ -1689,6 +1710,9 @@ export function pipelineDeliveryLookup(query: { requestKey: string } | { reposit
 }
 
 export function unclaimedPipelinePublications(): Pipeline[] {
+  const keys = controllerPipelineKeys();
+  if (keys) return keys.flatMap(key => { const row = findPipelineRecord(key); return row && !row.delivery
+    && row.publication === "remote-branch" && row.state !== "completed" && row.state !== "closed" ? [row] : []; });
   return pipelineStore().unclaimedPipelinePublications();
 }
 
