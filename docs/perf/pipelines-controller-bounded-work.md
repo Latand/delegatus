@@ -240,10 +240,10 @@ calls. The maximum call time bounds its synchronous work from above.
 | References returned per preparation | 16 | 16 |
 | Selected-key serializations across one phase | 80 | 80 |
 | Preparation calls | 1,000 | 1,000 |
-| Total preparation wall time (ms) | 116.81 | 48.08 |
-| Total preparation main-thread CPU (ms) | 110 | 50 |
-| Maximum preparation call wall time (ms) | 7.24 | 0.23 |
-| Whole warmed phase wall time (ms) | 50.84 | 120.93 |
+| Total preparation wall time (ms) | 39.69 | 34.47 |
+| Total preparation main-thread CPU (ms) | 40 | 40 |
+| Maximum preparation call wall time (ms) | 2.67 | 0.15 |
+| Whole warmed phase wall time (ms) | 24.47 | 92.90 |
 
 Whole-phase timings include existing full-lane copying. The indexed preparation
 and reconciliation selections keep their work fixed as that history grows.
@@ -255,41 +255,42 @@ stored row keys as SQL data, including keys containing alias text and quotes.
 
 Three fresh alternating pairs reused the unchanged E4/E5 checksums, the same
 guarded driver, fixed engine time, conservative responses and a ten-second Git
-wait. The candidate includes the merged main source and the backfill repair.
+wait. The candidate includes the merged main source, backfill repair and portable
+JSON iteration for native platform SQLite builds.
 Every source export and trial used isolated roots. All 941 authoritative
 hot/archive payloads match in every pair, with zero refused actuation and zero
 replay errors. Cold initialization and two subsequent sweeps are separate.
 
 | Measurement | Baseline | Fixed candidate |
 | --- | ---: | ---: |
-| Cold largest phase, median (ms) | 11,621.9 | 1,234.6 |
-| Cold largest phase across trials (ms) | 11,697.3 | 1,261.8 |
-| Cold largest per-phase main-thread CPU, median (ms) | 2,360 | 1,220 |
-| Cold complete sweep including job settlement, median (ms) | 11,646 | 12,208 |
-| Cold complete sweep main-thread CPU, median (ms) | 2,360 | 3,030 |
+| Cold largest phase, median (ms) | 11,625.9 | 1,848.9 |
+| Cold largest phase across trials (ms) | 11,637.8 | 1,853.2 |
+| Cold largest per-phase main-thread cpu, median (ms) | 2,360 | 1,810 |
+| Cold complete sweep including job settlement, median (ms) | 11,652 | 12,704 |
+| Cold complete sweep main-thread CPU, median (ms) | 2,360 | 3,400 |
 | Cold pipeline decoded rows, median | 614.0 | 553.0 |
 | Cold pipeline decoded source bytes, median | 75,757,641 | 71,231,598 |
 | Cold pipeline cloned rows, median | 859.0 | 298.0 |
 | Cold pipeline cloned source bytes, median | 110,803,535 | 35,182,513 |
-| Cold pipeline logical read bytes, median | 749,671,644 | 1,045,528,646 |
-| Cold largest labelled synchronous slice, median (ms) | 431.63 | 657.52 |
-| Cold largest labelled slice across trials (ms) | 431.85 | 673.65 |
-| Cold largest timer delay across trials (ms) | 638.75 | 682.58 |
-| Cold largest observed lease hold across trials (ms) | 619.94 | 430.19 |
-| Warm largest phase, median (ms) | 201.8 | 131.3 |
-| Warm largest phase across trials (ms) | 242.9 | 238.2 |
-| Warm largest per-phase main-thread CPU, median (ms) | 200 | 85 |
-| Warm complete sweep including job settlement, median (ms) | 222 | 563 |
-| Warm complete sweep main-thread CPU, median (ms) | 200 | 480 |
+| Cold pipeline logical read bytes, median | 749,671,728 | 1,045,526,886 |
+| Cold largest labelled synchronous slice, median (ms) | 446.83 | 1,076.42 |
+| Cold largest labelled slice across trials (ms) | 449.40 | 1,249.16 |
+| Cold largest timer delay across trials (ms) | 609.09 | 1,255.66 |
+| Cold largest observed lease hold across trials (ms) | 581.74 | 423.60 |
+| Warm largest phase, median (ms) | 263.4 | 65.6 |
+| Warm largest phase across trials (ms) | 420.5 | 134.2 |
+| Warm largest per-phase main-thread cpu, median (ms) | 260 | 70 |
+| Warm complete sweep including job settlement, median (ms) | 284 | 383 |
+| Warm complete sweep main-thread CPU, median (ms) | 260 | 350 |
 | Warm pipeline decoded rows, median | 94.5 | 55.5 |
 | Warm pipeline decoded source bytes, median | 11,298,036 | 7,460,856 |
 | Warm pipeline cloned rows, median | 373.0 | 91.0 |
 | Warm pipeline cloned source bytes, median | 49,692,470 | 11,390,425 |
-| Warm pipeline logical read bytes, median | 15,889,556 | 38,896,998 |
-| Warm largest labelled synchronous slice, median (ms) | 1.72 | 6.45 |
-| Warm largest labelled slice across trials (ms) | 2.26 | 28.58 |
-| Warm largest timer delay across trials (ms) | 11.09 | 123.24 |
-| Warm largest observed lease hold across trials (ms) | 4.24 | 29.54 |
+| Warm pipeline logical read bytes, median | 15,889,416 | 38,895,176 |
+| Warm largest labelled synchronous slice, median (ms) | 2.37 | 2.78 |
+| Warm largest labelled slice across trials (ms) | 48.61 | 8.96 |
+| Warm largest timer delay across trials (ms) | 107.07 | 58.19 |
+| Warm largest observed lease hold across trials (ms) | 6.02 | 7.85 |
 | Whole-hot returned rows per sweep | 267 | 0 |
 
 Complete sweeps use more main-thread CPU, logical reads and wall time. Cold
@@ -298,7 +299,8 @@ measurements establish the improvement within this slice's scope. Raw samples,
 measured source hashes, preparation probes and check coverage are in
 [pipelines-controller-review-fixes.json](../../evidence/perf/pipelines-controller-review-fixes.json).
 
-The fresh integrated checks passed 37 cases across the two affected files.
+The final checks passed 37 cases across the two affected files and eight
+projection tests under Bun 1.3.3 after the SQLite iterator compatibility repair.
 The twenty-file comparison against the merged main commit found zero new
 failures and reproduced nineteen existing assertions. All 432 publication
 cases passed in two disjoint filters (206 and 226), with a fifteen-second

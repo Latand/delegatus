@@ -39,8 +39,9 @@ export function installPipelineControllerReferences(db: Database, directory: str
         OR (json_type(${value},'$.delivery.operation.result.uncertain') IS NOT NULL AND json_type(${value},'$.delivery.operation.result.uncertain')!='false')))
       OR (json_type(${value},'$.delivery.operation.executor') IS NOT NULL AND json_type(${value},'$.delivery.operation.executor.finished') IS NOT 'true')))
       OR ${field("publicationAdmission.state")}='pending' OR ${field("remoteAction.state")}='pending' OR ${field("cursor.state")}='committing')`;
-    const attempts = `FROM controller_source, jsonb_each(CASE WHEN json_type(${value},'$.runs')='array' THEN jsonb_extract(${value},'$.runs') ELSE '[]' END) r,
-      jsonb_each(CASE WHEN json_type(${runValue},'$.attempts')='array' THEN jsonb_extract(${runValue},'$.attempts') ELSE '[]' END) a`;
+    // Native compatibility gates also exercise SQLite builds without jsonb_each.
+    const attempts = `FROM controller_source, json_each(CASE WHEN json_type(${value},'$.runs')='array' THEN jsonb_extract(${value},'$.runs') ELSE '[]' END) r,
+      json_each(CASE WHEN json_type(${runValue},'$.attempts')='array' THEN jsonb_extract(${runValue},'$.attempts') ELSE '[]' END) a`;
     const identities = (source: string, fields: string[]) => `json_each(json_object(${fields.map(name => `'${name}',json_extract(${source},'$.${name}')`).join(",")})) ids`;
     return `
       INSERT INTO pipeline_attempt_refs ${cte}, refs AS MATERIALIZED (
@@ -62,7 +63,7 @@ export function installPipelineControllerReferences(db: Database, directory: str
           CASE WHEN ROW_NUMBER() OVER (PARTITION BY hostIdentity ORDER BY position)=1 AND hostIdentity!='||' THEN 1 ELSE 0 END FROM refs
       ${["unconfirmedHosts","closeReport.unconfirmed","closeReport.pending"].map((field,index) => `UNION ALL
         SELECT ${key},281474976710656+${index}*4294967296+CAST(h.key AS INTEGER),json_extract(${hostValue},'$.stageId'),json_extract(${hostValue},'$.attempt'),-1,-1,1,0,0
-        FROM controller_source, jsonb_each(CASE WHEN json_type(${value},'$.${field}')='array' THEN jsonb_extract(${value},'$.${field}') ELSE '[]' END) h WHERE json_type(${hostValue},'$.stageId')='text' AND json_type(${hostValue},'$.attempt') IN ('integer','real')`).join("\n")};
+        FROM controller_source, json_each(CASE WHEN json_type(${value},'$.${field}')='array' THEN jsonb_extract(${value},'$.${field}') ELSE '[]' END) h WHERE json_type(${hostValue},'$.stageId')='text' AND json_type(${hostValue},'$.attempt') IN ('integer','real')`).join("\n")};
       INSERT INTO pipeline_owner_refs ${cte}
         SELECT ${key},ids.key,ids.value,COALESCE((${publishing}) OR ${field("state")} NOT IN ('completed','closed'),0)
         FROM controller_source, ${identities(value,["srcConversationId","srcPath"])} WHERE ids.value IS NOT NULL AND ids.value!=''
