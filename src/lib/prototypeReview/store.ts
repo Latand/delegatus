@@ -7,6 +7,8 @@ import { sniffAgrees } from "@/lib/artifact/serve";
 import { loadTasks, mutateTasks } from "@/lib/tasks/store";
 import type { BoardTask } from "@/lib/tasks/types";
 import { withFileTransaction } from "@/lib/state/fileTransaction";
+import { waitForStateLock } from "@/lib/state/lockWait";
+import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { admittedSource, expandPrototypeInput, PrototypeError, PROTOTYPE_LIMITS, unreadableSource } from "./input";
 import { openedAt } from "@/lib/artifact/localFile";
 import { findSeatRound, insertSeatRound, loadSeatRounds, mutateSeatRound } from "./seatRounds";
@@ -16,6 +18,10 @@ const MIME: Record<string, PrototypeMedia["mime"]> = {
   ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp", ".mp4": "video/mp4", ".webm": "video/webm",
 };
 export const prototypeRoot = () => statePath("prototype-reviews");
+/** Admission covers only state access; media and network effects run outside it. */
+export function withPrototypeState<T>(work: () => T): Promise<T> {
+  return withViewerOperation("prototype.state", () => waitForStateLock("prototype.state", work));
+}
 /** The lock one round's decision is taken, read back and retried under. */
 export function decisionLock(reviewId: string): string {
   return path.join(prototypeRoot(), `${reviewId}.decision.lock`);
@@ -23,7 +29,7 @@ export function decisionLock(reviewId: string): string {
 const DECISION_LOCK_LEFTOVER = /^(pr_[a-f0-9]{32})\.decision\.lock\.write-locks?$/;
 /** Under the publication lock, retire only directories marked by this store. */
 async function removeOrphanCopies(): Promise<void> {
-  const rounds = [...loadTasks().flatMap(task => task.prototypeReviews ?? []), ...loadSeatRounds()];
+  const rounds = await withPrototypeState(() => [...loadTasks().flatMap(task => task.prototypeReviews ?? []), ...loadSeatRounds()]);
   const live = new Set(rounds.filter(round => !round.mediaRemovedAt).map(round => round.id));
   /* A round keeps its decision after its pictures are retired, so its lock is
      kept for as long as a task holds the round at all. */
@@ -91,16 +97,19 @@ async function copyMedia(raw: string, staging: string): Promise<PrototypeMedia> 
     if (!pinned.isFile() || !await openedAt(handle, real)) throw unreadableSource(raw);
     if (pinned.size > max) throw new PrototypeError(`one ${mime.startsWith("video/") ? "video" : "image"} exceeds ${max} bytes`);
     const buffer = Buffer.alloc(Math.min(max + 1, pinned.size + 1));
+    const hash = crypto.createHash("sha256");
     let size = 0;
     while (size < buffer.length) {
-      const read = await handle.read(buffer, size, buffer.length - size, size);
+      // Bound each synchronous hashing slice, including a maximum-size video.
+      const read = await handle.read(buffer, size, Math.min(256 * 1024, buffer.length - size), size);
       if (!read.bytesRead) break;
+      hash.update(buffer.subarray(size, size + read.bytesRead));
       size += read.bytesRead;
     }
     if (size !== pinned.size || (await handle.stat()).size !== pinned.size || size > max) throw new PrototypeError("media changed while publishing; nothing was published");
     const data = buffer.subarray(0,size);
     if (!sniffPrototype(mime,data.subarray(0,512))) throw new PrototypeError("content does not match the media type",415);
-    const media = { id: crypto.createHash("sha256").update(data).digest("hex"), mime, bytes: size };
+    const media = { id: hash.digest("hex"), mime, bytes: size };
     await fs.writeFile(path.join(staging,mediaFilename(media)), data, { flag: "wx", mode: 0o600, flush: true }).catch(error => {
       if (error.code !== "EEXIST") throw error;
     });
@@ -133,6 +142,9 @@ export function findPrototypeRound(taskId: string | null, reviewId: string): Pro
     A null task is the seat asking without one: the round goes to the seat's
     collection under `seatProject`, and nothing else about it differs. */
 export async function publishPrototype(input: PublishPrototypeInput, taskId: string | null, source: PrototypeReviewRound["source"], seatProject?: string, critic?: PrototypeReviewRound["critic"]): Promise<PrototypeReviewRound> {
+  return withViewerOperation("prototype.publish", () => publishRound(input, taskId, source, seatProject, critic));
+}
+async function publishRound(input: PublishPrototypeInput, taskId: string | null, source: PrototypeReviewRound["source"], seatProject?: string, critic?: PrototypeReviewRound["critic"]): Promise<PrototypeReviewRound> {
   if (taskId === null && !seatProject) throw new PrototypeError("a seat round needs its project");
   const publicationKey = `${source.conversationId ?? "operator"}:${input.clientRequestId}`;
   const inputDigest = crypto.createHash("sha256").update(JSON.stringify(input)).digest("hex");
@@ -142,12 +154,12 @@ export async function publishPrototype(input: PublishPrototypeInput, taskId: str
     if (existing && (existing.inputDigest !== inputDigest || existing.taskId !== taskId)) throw new PrototypeError("publication key already belongs to another payload",409);
     return existing;
   };
-  const held = replay(); if (held) return held;
+  const held = await withPrototypeState(replay); if (held) return held;
   // The resolved task also covers a pipeline publication with no explicit taskId.
   if (taskId !== null && input.questions && input.questions.length < 3) throw new PrototypeError("a task form needs 3–7 questions");
   await fs.mkdir(prototypeRoot(), { recursive: true, mode: 0o700 });
   return withFileTransaction(path.join(prototypeRoot(),"publication.lock"),"prototype publication is busy",async () => {
-    const held = replay(); if (held) return held;
+    const held = await withPrototypeState(replay); if (held) return held;
     await removeOrphanCopies();
     const expanded = await expandPrototypeInput(input);
     const count = (expanded.variants ?? []).reduce((n,v) => n + (v.frames ?? []).reduce((n,f) => n + (f.originalPath ? 2 : 1),0) + (v.videos?.length ?? 0),0);
@@ -163,7 +175,7 @@ export async function publishPrototype(input: PublishPrototypeInput, taskId: str
       round.telegramPost = { key: id, state: "pending", at: round.createdAt };
       let bytes = 0, imageBytes = 0;
       const copy = async (raw: string) => {
-        const media = await copyMedia(raw,staging); bytes += media.bytes;
+        const media = await withViewerOperation("prototype.copy", () => copyMedia(raw,staging)); bytes += media.bytes;
         if (media.mime.startsWith("image/")) imageBytes += media.bytes;
         if (bytes > PROTOTYPE_LIMITS.setBytes || imageBytes > PROTOTYPE_LIMITS.imageSetBytes) throw new PrototypeError("review exceeds 192 MiB total or 48 MiB of images");
         return media;
@@ -188,8 +200,8 @@ export async function publishPrototype(input: PublishPrototypeInput, taskId: str
       // The publication lock owns this id. An earlier interrupted copy has no metadata.
       await fs.rm(roundDirectory(id),{ recursive: true, force: true });
       await fs.rename(staging,roundDirectory(id));
-      if (taskId === null) removed.push(...insertSeatRound(round));
-      else mutateTasks(tasks => {
+      if (taskId === null) removed.push(...await withPrototypeState(() => insertSeatRound(round)));
+      else await withPrototypeState(() => mutateTasks(tasks => {
         const task = tasks.find(t => t.id === taskId);
         if (!task) throw new PrototypeError("task not found",404);
         round.project = task.project;
@@ -227,7 +239,7 @@ export async function publishPrototype(input: PublishPrototypeInput, taskId: str
         task.updatedAt = round.createdAt;
         // Bytes arrive before the metadata commit. A failed commit removes this owned directory.
         return { tasks, result: undefined };
-      });
+      }));
       committed = true;
       for (const old of removed) await fs.rm(roundDirectory(old),{ recursive: true, force: true });
       return round;

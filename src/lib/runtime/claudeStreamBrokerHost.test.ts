@@ -1246,8 +1246,8 @@ describe("ClaudeStreamBrokerHost", () => {
     { policy: "steer-or-queue", pathway: "permission-expired", predecessorOrigin: "agent" },
     ...(["agent", "operator", "absent"] as const).flatMap(predecessorOrigin =>
       (["queue", "steer-or-queue"] as const).flatMap(policy =>
-        (["interrupted", "interrupt-permission"] as const).map(pathway => ({ policy, pathway, predecessorOrigin })))),
-  ] as const)("review: an operator replacement reaches past deferred follow-ups: $policy / $pathway / $predecessorOrigin", async ({ policy, pathway, predecessorOrigin }) => {
+        (["operator-during-turn", "operator-during-permission"] as const).map(pathway => ({ policy, pathway, predecessorOrigin })))),
+  ] as const)("review: an operator send reaches past deferred follow-ups without interrupting: $policy / $pathway / $predecessorOrigin", async ({ policy, pathway, predecessorOrigin }) => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-claude-contained-"));
     const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
     const ledger = new FileClaudeDeliveryLedger(path.join(directory, "deliveries"));
@@ -1352,8 +1352,10 @@ describe("ClaudeStreamBrokerHost", () => {
           result(); await idle();
         }
       }
-      // An explicit interrupt still owns the active turn, and waits for its result.
-      if (pathway.startsWith("interrupt")) {
+      /* An operator's ordinary send goes ahead of the deferred follow-ups, and
+         it waits for the running turn's own result: an interrupt would reach
+         Claude as the operator refusing the tool call that turn is running. */
+      if (pathway.startsWith("operator")) {
         const incumbent = admit("interrupt-incumbent"); await deliver(incumbent);
         const deferredOrigin = predecessorOrigin === "agent" ? { kind: "agent" as const, role: "reviewer" }
           : predecessorOrigin === "operator" ? { kind: "operator" as const } : undefined;
@@ -1365,29 +1367,23 @@ describe("ClaudeStreamBrokerHost", () => {
         const deferredReceipts = deferred.map(command => journal.operationResult(command.operationId)?.receipt);
         expect(deferredReceipts.map(receipt => receipt?.status)).toEqual(["queued", "queued"]);
         const originalDeferredReceipts = structuredClone(deferredReceipts);
-        if (pathway === "interrupt-permission") {
-          child.emitJson({ type: "control_request", request_id: "interrupt-permission",
+        if (pathway === "operator-during-permission") {
+          child.emitJson({ type: "control_request", request_id: "operator-permission",
             request: { subtype: "can_use_tool", tool_name: "Bash", input: { command: "true" } } });
           await Bun.sleep(0);
-          expect((await host.health()).pendingAttention).toContain("interrupt-permission");
+          expect((await host.health()).pendingAttention).toContain("operator-permission");
         }
-        const replacement = admit("interrupt-replacement-image", "interrupt-active");
+        const replacement = admit("operator-replacement-image", "interrupt-active");
         const written = users().length;
         queue = newQueue();
         await queue.drain(); await queue.drain();
-        await wait(() => child.inputs.some(frame => frame.type === "control_request"));
-        const control = child.inputs.find(frame => frame.type === "control_request" && frame.request_id !== "interrupt-permission")!;
-        expect(child.inputs.filter(frame => frame.type === "control_request")).toHaveLength(1);
+        await Bun.sleep(20); await queue.drain();
+        expect(child.inputs.filter(frame => frame.type === "control_request")).toHaveLength(0);
         expect(users()).toHaveLength(written);
+        expect(journal.operationResult(replacement.operationId)?.receipt.status).toBe("queued");
         for (const [index, command] of deferred.entries()) {
           expect(journal.operationResult(command.operationId)?.receipt).toEqual(originalDeferredReceipts[index]);
         }
-        child.emitJson({ type: "control_response", response: { subtype: "success", request_id: control.request_id } });
-        await Bun.sleep(0); await queue.drain();
-        expect(users()).toHaveLength(written);
-        const interruptRequests = child.inputs.filter(frame => frame.type === "control_request"
-          && (frame.request as { subtype?: string })?.subtype === "interrupt");
-        expect(interruptRequests).toHaveLength(1);
         queue = newQueue();
         result(); await idle(); await queue.drain();
         await wait(() => users().length > written);
@@ -1406,8 +1402,8 @@ describe("ClaudeStreamBrokerHost", () => {
           expect(users().filter(frame => JSON.stringify(frame.message).includes(command.text))).toHaveLength(1);
         }
         expect(events.load(host.identity.sessionId).filter(event => event.kind === "turn-ended"
-          && event.turnId === incumbent.operationId)).toEqual([expect.objectContaining({ status: "interrupted" })]);
-        expect(child.inputs.filter(frame => frame.type === "control_request").filter(frame => frame.request_id !== "interrupt-permission")).toHaveLength(1);
+          && event.turnId === incumbent.operationId)).toEqual([expect.objectContaining({ status: "completed" })]);
+        expect(child.inputs.filter(frame => frame.type === "control_request")).toHaveLength(0);
       }
       const controls = child.inputs.filter(frame => frame.type === "control_request").length;
       const subsequent = admit("subsequent-image", "interrupt-active"); await deliver(subsequent); result(); await idle();
@@ -1424,6 +1420,120 @@ describe("ClaudeStreamBrokerHost", () => {
       }
     } finally { await host.release(); journal.close(); fs.rmSync(directory, { recursive: true, force: true }); }
   });
+
+  /* 2026-10-15: extra instructions sent while a Claude turn ran a tool reached
+     the model as "The user doesn't want to proceed with this tool use ... STOP
+     what you are doing", because the composer's default `interrupt-active`
+     send interrupted the turn first. */
+  test.each(["running-tool", "awaiting-permission"] as const)(
+    "an ordinary operator send to a busy Claude turn arrives as the next user message, never an interrupt: %s", async (busy) => {
+      const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-claude-busy-send-"));
+      const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
+      const ledger = new FileClaudeDeliveryLedger(path.join(directory, "deliveries"));
+      const child = new FakeClaude(new RecordingDeliveryLedger());
+      const conversationId = "conversation-busy-send";
+      const events = new MemoryEventStore();
+      const host = await ClaudeStreamBrokerHost.start({
+        cwd: directory, deliveryLedger: ledger, readTranscript: () => [],
+        readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }),
+        spawnProcess: fakeSpawn(child, {}),
+        eventStore: {
+          load: id => events.load(id),
+          append: (id, event) => {
+            events.append(id, event);
+            const projected = projectEngineHostEvent(conversationId, `claude:${id}`, event);
+            if (projected) journal.append(projected);
+          },
+        },
+      });
+      const queue = new StructuredDeliveryQueue({
+        effects: async (kinds?: readonly string[], after?: number) => journal.effectBatch(100, kinds, after),
+        status: async (id: string) => journal.operationResult(id)?.receipt ?? null,
+        hostClaim: async () => "fixture-owner",
+        transition: async (...args: Parameters<RuntimeJournal["transitionOperation"]>) => { journal.transitionOperation(...args); },
+      }, () => host, undefined, undefined, undefined, undefined, undefined, undefined, { passBudgetMs: 20 });
+      const wait = async (done: () => boolean) => {
+        for (let attempt = 0; attempt < 200 && !done(); attempt++) await Bun.sleep(5);
+        expect(done()).toBe(true);
+      };
+      const users = () => child.inputs.filter(frame => frame.type === "user");
+      const controls = () => child.inputs.filter(frame => frame.type === "control_request");
+      const send = (id: string) => {
+        // What the composer's Send posts: no policy chosen, so the default.
+        const command = { kind: "send" as const, operationId: id, idempotencyKey: id, conversationId,
+          text: `input ${id}`, policy: "interrupt-active" as const, origin: { kind: "operator" as const } };
+        journal.executeOperation(command);
+        return command;
+      };
+      const echo = (command: { operationId: string; text: string }) => child.emitJson({ type: "user", isReplay: true,
+        session_id: host.identity.sessionId, uuid: `echo-${command.operationId}`,
+        message: { role: "user", content: [{ type: "text", text: command.text }] } });
+      const result = () => child.emitJson({ type: "result", subtype: "success", session_id: host.identity.sessionId });
+      try {
+        expect(host.sendWaitsForRunningTurn).toBe(true);
+        journal.append({ scope: `session:${conversationId}`, kind: "session-status", payload: {
+          conversationId, sessionKey: { engine: "claude", sessionId: host.identity.sessionId }, hostKind: "claude-broker",
+          host: "hosted", turn: "idle", activeTurnId: null, capabilities: { steer: false, structuredAttention: true },
+        } });
+        const incumbent = send("incumbent");
+        await queue.drain();
+        await wait(() => users().length === 1);
+        echo(incumbent);
+        await wait(() => journal.operationResult(incumbent.operationId)?.receipt.status === "delivered");
+        child.emitJson({ type: "assistant", session_id: host.identity.sessionId, message: { id: "msg-tool", role: "assistant",
+          content: [{ type: "tool_use", id: "toolu-running", name: "Bash", input: { command: "sleep 60" } }] } });
+        if (busy === "awaiting-permission") {
+          child.emitJson({ type: "control_request", request_id: "permission-busy",
+            request: { subtype: "can_use_tool", tool_name: "Bash", input: { command: "sleep 60" }, tool_use_id: "toolu-running" } });
+          await Bun.sleep(0);
+          expect((await host.health()).pendingAttention).toEqual(["permission-busy"]);
+        }
+
+        const extra = send("extra-context");
+        for (let pass = 0; pass < 4; pass++) { await queue.drain(); await Bun.sleep(5); }
+        // The running tool call is left alone: no interrupt, no permission
+        // answer, and nothing written into the turn.
+        expect(controls()).toEqual([]);
+        expect(child.inputs.filter(frame => frame.type === "control_response")).toEqual([]);
+        expect(users()).toHaveLength(1);
+        expect(journal.operationResult(extra.operationId)?.receipt.status).toBe("queued");
+        expect((await host.health()).activeTurnRef).toBe(incumbent.operationId);
+
+        if (busy === "awaiting-permission") {
+          const answer = host.answer("permission-busy", { behavior: "allow" });
+          child.emitJson({ type: "control_response", response: { subtype: "success", request_id: "permission-busy", response: { behavior: "allow" } } });
+          await answer;
+        }
+        child.emitJson({ type: "user", session_id: host.identity.sessionId, message: { role: "user",
+          content: [{ type: "tool_result", tool_use_id: "toolu-running", content: "done", is_error: false }] } });
+        result();
+        await wait(() => events.load(host.identity.sessionId).some(event => event.kind === "turn-ended"));
+        expect(events.load(host.identity.sessionId).filter(event => event.kind === "turn-ended"))
+          .toEqual([expect.objectContaining({ turnId: incumbent.operationId, status: "completed" })]);
+
+        await queue.drain();
+        await wait(() => users().length === 2);
+        expect(users()[1]).toMatchObject({ type: "user", message: { role: "user", content: [{ type: "text", text: extra.text }] } });
+        echo(extra);
+        await wait(() => journal.operationResult(extra.operationId)?.receipt.status === "delivered");
+        expect(journal.operationResult(extra.operationId)?.receipt.turnId).toBe(extra.operationId);
+        expect(controls()).toEqual([]);
+
+        // The Stop control still interrupts the turn the message started.
+        journal.executeOperation({ kind: "interrupt", operationId: "stop", idempotencyKey: "stop", conversationId,
+          turnId: extra.operationId });
+        await queue.drain();
+        await wait(() => controls().length === 1);
+        expect(controls()[0]?.request).toEqual({ subtype: "interrupt" });
+        child.emitJson({ type: "control_response", response: { subtype: "success", request_id: controls()[0]!.request_id } });
+        child.emitJson({ type: "result", subtype: "error_during_execution", session_id: host.identity.sessionId });
+        await wait(() => events.load(host.identity.sessionId).some(event => event.kind === "turn-ended"
+          && event.turnId === extra.operationId));
+        expect(events.load(host.identity.sessionId).filter(event => event.kind === "turn-ended" && event.turnId === extra.operationId))
+          .toEqual([expect.objectContaining({ status: "interrupted" })]);
+        expect(users()).toHaveLength(2);
+      } finally { await host.release(); journal.close(); fs.rmSync(directory, { recursive: true, force: true }); }
+    });
 
   test("a queued input's confirmation budget starts with its own turn", async () => {
     const ledger = new RecordingDeliveryLedger();
