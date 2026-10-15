@@ -5,6 +5,7 @@ import crypto from "node:crypto";
 
 import {
   agentRegistry,
+  readOnlyConversationLookupFromSnapshot,
   DeliveryReservationConflictError,
   REGISTRY_WRITER_BUSY,
   type AgentRegistry,
@@ -16,6 +17,7 @@ import type { AgentEngine } from "@/lib/agent/cli";
 import { deliveryFence } from "@/lib/accounts/migration/coordinator";
 import { requestAccountMigrationTick } from "@/lib/accounts/migration/controllerSignal";
 import { actingOperation, actuationBusy, withConversationActuation, type ActuationLease } from "@/lib/deliveryActuation";
+import { orchestratorRecipientRefusal } from "@/lib/orchestrator/seats";
 import { deputyDeliveryRefusal } from "@/lib/orchestrator/deputies";
 import type { HeldDelivery, HeldDeliveryCommand, ViewerConversationId } from "@/lib/accounts/migration/contracts";
 
@@ -370,7 +372,9 @@ function requiresStructuredHeldCommand(request: HeldStructuredMessageRequest): b
 
 function deliveryFailure(error: unknown): Extract<StructuredMessageResult, { ok: false }> {
   if (error instanceof DeliveryAdmissionRefusedError) return refusedBeforeReservation({
-    ok: false, structured: true, outcome: "failed", error: error.message, code: error.code, status: 409,
+    ok: false, structured: true, outcome: "failed", error: error.message, code: error.code, status: "status" in error && error.status === 503 ? 503 : 409,
+    ...("successorConversationId" in error && typeof error.successorConversationId === "string"
+      ? { successorConversationId: error.successorConversationId } : {}),
   });
   return {
     ok: false,
@@ -1227,6 +1231,28 @@ export async function enqueueStructuredMessage(
   }
   const rawImages = imageAdmission.images;
   const registry = (dependencies.registry ?? agentRegistry)();
+  const recipientSnapshot = registry.conversationDeliverySnapshot(request);
+  const recipientLookup = readOnlyConversationLookupFromSnapshot(recipientSnapshot);
+  const recipient = request.conversationId
+    ? recipientLookup.conversation(request.conversationId as ViewerConversationId)
+    : recipientLookup.conversationForPath(request.path);
+  const recipientKey = request.clientMessageId?.trim();
+  const boundRecipient = recipient && recipientKey
+    && registry.deliveryAdmissionForKey(recipient.id, recipientKey).outcome === "admitted";
+  // This guard also runs inside the reservation transaction. Its registry
+  // identity is captured before admission; the seat store is re-read at use.
+  const recipientRefusal = () => recipient && !boundRecipient
+    ? orchestratorRecipientRefusal(recipient.id, id => recipientLookup.canonicalConversationId(id as ViewerConversationId))
+    : null;
+  const refusedRecipient = recipientRefusal();
+  if (refusedRecipient) return refusedBeforeReservation({ ok: false, structured: true, outcome: "failed", ...refusedRecipient });
+  const callerGuard = request.admissionGuard;
+  request = { ...request, admissionGuard: reconciled => {
+    callerGuard?.(reconciled);
+    const refusal = recipientRefusal();
+    if (refusal) throw Object.assign(new DeliveryAdmissionRefusedError("orchestrator-recipient-revoked"),
+      { message: refusal.error, ...refusal });
+  } };
   const durableOwner = persistedCurrentOwner(request, registry);
   if (durableOwner?.kind === "legacy") {
     return requiresStructuredCommand(request) ? legacyCommandUnavailable() : null;
@@ -1262,6 +1288,8 @@ export async function enqueueStructuredMessage(
     );
   }
   let continuationRecoveredHost = false;
+  const refusedAfterRead = recipientRefusal();
+  if (refusedAfterRead) return refusedBeforeReservation({ ok: false, structured: true, outcome: "failed", ...refusedAfterRead });
   if (dependencies.idleContinuationAllowed) {
     /* Startup leaves pipeline cuts to their controller. Requiring a hosted
        idle fence before recovering that host left restart-cut stages waiting
@@ -1294,6 +1322,7 @@ export async function enqueueStructuredMessage(
         }
         if (!await dependencies.idleContinuationAllowed()) return continuationRefused("stage eligibility changed during host republication");
         if (!session || session.host === "dead" || session.host === "unhosted") {
+          request.admissionGuard?.();
           const recovered = await (dependencies.recover ?? recoverDeadStructuredConversation)({
             path: generation.path, conversationId: owner.conversation.id, origin: request.origin,
           }, { registry, client });

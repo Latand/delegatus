@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { afterAll, expect, spyOn, test } from "bun:test";
+import { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } from "@/lib/orchestrator/seats";
 import { statePath } from "@/lib/configDir";
 
 import { AgentRegistry } from "@/lib/agent/registry";
@@ -4781,4 +4782,73 @@ test.each([
     expect(state.commands).toBe(0);
     expect(Object.values(registry.readOnlySnapshot().heldDeliveries)).toHaveLength(scenario === "unknown-admission" ? 1 : 0);
   } finally { journal.close(); registry.close(); }
+});
+
+
+test.each(["id", "path", "runtime-read", "reservation-wait"])("D4 rotated seat refuses fresh send at %s before reservation or recovery", async (boundary) => {
+  const { registry, conversation } = registryWithConversation();
+  recordStructuredOwner(registry, conversation);
+  const successor = registry.ensureConversation("codex", path.join(sandbox, `successor-${boundary}.jsonl`), null);
+  const project = `delivery-seat-${boundary}`;
+  const designate = (id: string, pathname: string, key: string) => {
+    beginOrchestratorSeatIntent({ project, mandate: "coordinate work", clientRequestId: key, mode: "existing" });
+    completeOrchestratorSeatIntent({ project, clientRequestId: key, conversationId: id, path: pathname });
+  };
+  designate(conversation.id, artifactPath, `seat-old-${boundary}`);
+  const rotate = () => designate(successor.id, successor.generations.at(-1)!.path, `seat-next-${boundary}`);
+  if (boundary === "id" || boundary === "path") rotate();
+  let commands = 0;
+  let recoveries = 0;
+  const hold = registry.holdDeliveryOffLoop.bind(registry);
+  const blocked = spyOn(registry, "holdDeliveryOffLoop").mockImplementation(async (...args) => {
+    if (boundary === "reservation-wait") rotate();
+    return hold(...args);
+  });
+  try {
+    const result = await enqueueStructuredMessage({ path: artifactPath,
+      ...(boundary === "path" ? {} : { conversationId: conversation.id }),
+      text: "fresh seat message", images: [], clientMessageId: `rotated-message-${boundary}`,
+    }, { enabled: () => true, registry: () => registry, progress: null,
+      client: () => ({ readSession: async () => {
+        if (boundary === "runtime-read") rotate();
+        return snapshot(conversation.id).sessions[0];
+      }, command: async () => { commands += 1; throw new Error("retired recipient commanded"); } }) as unknown as RuntimeHostClient,
+      recover: async () => { recoveries += 1; throw new Error("retired recipient recovered"); },
+    });
+    expect(result).toMatchObject({ ok: false, status: 409, successorConversationId: successor.id });
+    expect(registry.readOnlySnapshot().heldDeliveries).toEqual({});
+    expect(registry.conversation(conversation.id)?.supersededBy).toBeNull();
+    expect(commands).toBe(0);
+    expect(recoveries).toBe(0);
+    expect(conversationDeliverabilityFromRecord(registry.readOnlySnapshot(), { conversationId: conversation.id }))
+      .toMatchObject({ deliverable: false, condition: "superseded" });
+  } finally { blocked.mockRestore(); }
+});
+
+
+test("D4 a rotated seat keeps an already bound message and its original operation", async () => {
+  const { registry, conversation } = registryWithConversation();
+  recordStructuredOwner(registry, conversation);
+  const held = registry.holdDelivery(conversation.id, "already accepted", "bound-seat-message", "text", [], null,
+    { operationId: "bound-seat-operation", kind: "send", policy: "queue" });
+  const successor = registry.ensureConversation("codex", path.join(sandbox, "bound-seat-successor.jsonl"), null);
+  for (const [id, pathname, key] of [[conversation.id, artifactPath, "bound-seat-old"],
+    [successor.id, successor.generations.at(-1)!.path, "bound-seat-next"]]) {
+    beginOrchestratorSeatIntent({ project: "bound-seat", mandate: "coordinate work", clientRequestId: key!, mode: "existing" });
+    completeOrchestratorSeatIntent({ project: "bound-seat", clientRequestId: key!, conversationId: id!, path: pathname! });
+  }
+  const runtime = snapshot(conversation.id);
+  let receivedOperation: string | undefined;
+  const result = await enqueueStructuredMessage({ path: artifactPath, conversationId: conversation.id, text: "already accepted",
+    images: [], clientMessageId: "bound-seat-message", operationId: "bound-seat-operation", policy: "queue",
+  }, { enabled: () => true, registry: () => registry, progress: null, kick: () => {},
+    client: () => ({ readSession: async () => runtime.sessions[0], command: async (command: Parameters<RuntimeHostClient["command"]>[0]) => {
+      receivedOperation = command.operationId;
+      return { operationId: command.operationId!, receipt: { operationId: command.operationId!, idempotencyKey: "bound-seat-message",
+        conversationId: conversation.id, kind: "send", status: "queued", revision: 1, at: new Date().toISOString() } };
+    } }) as unknown as RuntimeHostClient,
+  });
+  expect(result).toMatchObject({ ok: true, operationId: "bound-seat-operation" });
+  expect(receivedOperation).toBe("bound-seat-operation");
+  expect(Object.keys(registry.readOnlySnapshot().heldDeliveries)).toEqual([held.id]);
 });

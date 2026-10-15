@@ -1,8 +1,10 @@
 import {
   readOnlyConversationLookupFromSnapshot,
+  resolveConversationAlias,
   type AgentHostStatus,
   type RegistryFile,
 } from "@/lib/agent/registry";
+import { orchestratorRecipientRefusal } from "@/lib/orchestrator/seats";
 import { sessionKeyId } from "@/lib/agent/sessionKey";
 
 export type ConversationDeliverabilityCondition =
@@ -20,6 +22,7 @@ interface ConversationDeliverabilityRecord {
   pendingAction: "spawn" | "resume" | "handoff" | null;
   processRecorded: boolean;
   reason: string;
+  successorConversationId?: string;
 }
 
 export type ConversationDeliverability = ConversationDeliverabilityRecord & (
@@ -38,7 +41,7 @@ export interface ConversationDeliverabilityTarget {
 }
 
 /**
- * Current delivery readiness from the durable registry only. The result never
+ * Current delivery readiness from the durable registry and seat designation. The result never
  * reuses a resume response or a runtime snapshot, so an accepted resume stays
  * `synchronizing` until its current generation records a claimed process.
  */
@@ -67,6 +70,15 @@ export function conversationDeliverabilityFromRecord(
       reason: "the durable registry has no current generation for this conversation",
     };
   }
+  const seatRefusal = orchestratorRecipientRefusal(conversation.id,
+    id => resolveConversationAlias(snapshot, id as `conversation_${string}`));
+  if (seatRefusal) return {
+    conversationId: conversation.id, transcriptPath: generation.path, deliverable: false,
+    condition: seatRefusal.status === 409 ? "superseded" : "unknown", resumeRequired: false,
+    transport: null, hostStatus: null, pendingAction: null, processRecorded: false,
+    reason: seatRefusal.error,
+    ...(seatRefusal.successorConversationId ? { successorConversationId: seatRefusal.successorConversationId } : {}),
+  };
   if (conversation.supersededBy) {
     return {
       conversationId: conversation.id,

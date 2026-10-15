@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { expect, test } from "bun:test";
 import { NextRequest } from "next/server";
+import { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } from "@/lib/orchestrator/seats";
 import { AgentRegistry } from "@/lib/agent/registry";
 import { registryLockHolder } from "@/lib/agent/registryLockHolderFixture";
 import { RuntimeJournal } from "@/runtime-host/journal";
@@ -14,6 +15,7 @@ import { FakeEngineHost, createFakeDeliveryLedger } from "./fixtures/fakeEngineH
 import { handleRuntimeRetry } from "./http";
 import { StructuredDeliveryQueue, type StructuredDeliveryEffect } from "./structuredDeliveryQueue";
 import { deliverHeldStructuredMessage, enqueueStructuredMessage } from "./structuredMessageDelivery";
+import type { StructuredRecoveryRequest } from "./structuredRecovery";
 import { recordDirectWait } from "./recordWait";
 
 function deferred<T>() {
@@ -53,7 +55,7 @@ function fixture() {
   } satisfies Partial<RuntimeHostClient> as RuntimeHostClient;
   let kicks = 0;
   const dependencies = { enabled: () => true, client: () => client, registry: () => registry, progress,
-    kick: () => { kicks += 1; }, recover: async () => ({ conversationId: conversation.id }) as never };
+    kick: () => { kicks += 1; }, recover: async (_request?: StructuredRecoveryRequest) => ({ conversationId: conversation.id }) as never };
   const retry = (uncertain = true) => handleRuntimeRetry(new NextRequest("http://127.0.0.1/api/runtime/retry", {
     method: "POST", headers: { host: "127.0.0.1", "content-type": "application/json" },
     body: JSON.stringify(uncertain ? { action: "retry-uncertain" } : {}),
@@ -293,3 +295,68 @@ for (const led of [false, true]) test(`terminal retry recovery after reservation
     expect(f.ledger.writes).toHaveLength(1);
   } finally { recovered.resolve(); republished.resolve(); await retrying?.catch(() => {}); f.close(); }
 }, 15_000);
+
+
+test.each(["failed", "uncertain", "rotate-during-status", "recovery-wait", "reservation-wait"])("D4 explicit %s retry refuses a rotated seat before recovery or a new attempt", async mode => {
+  const f = fixture();
+  const previousState = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = path.join(f.root, "seat-state");
+  let recoveries = 0;
+  let retries = 0;
+  const successor = f.registry.ensureConversation("codex", path.join(f.root, "successor.jsonl"), null);
+  const designate = (id: string, pathname: string, key: string) => {
+    beginOrchestratorSeatIntent({ project: "retry-seat", mandate: "coordinate work", clientRequestId: key, mode: "existing" });
+    completeOrchestratorSeatIntent({ project: "retry-seat", clientRequestId: key, conversationId: id, path: pathname });
+  };
+  designate(f.conversation.id, f.conversation.generations.at(-1)!.path, "retry-seat-old");
+  const rotate = () => designate(successor.id, successor.generations.at(-1)!.path, "retry-seat-next");
+  if (mode === "uncertain") f.uncertain();
+  else {
+    f.registry.recordDeliveryOutcome(f.reservation.id, "failed", "not delivered", "lost");
+    f.journal.transitionOperation(f.operationId, "failed", { reason: "not delivered" });
+  }
+  if (!["rotate-during-status", "recovery-wait", "reservation-wait"].includes(mode)) rotate();
+  f.dependencies.recover = async request => {
+    recoveries += 1;
+    if (mode === "recovery-wait") { rotate(); request?.admissionGuard?.(); }
+    return { conversationId: f.conversation.id } as never;
+  };
+  const holder = mode === "reservation-wait" ? registryLockHolder(path.join(f.root, "registry.sqlite")) : null;
+  let timerAdvanced = false;
+  const write = f.registry.deliveryWrite.bind(f.registry);
+  f.registry.deliveryWrite = async (label, mutation, ...rest) => {
+    if (holder && label.label === "delivery.direct-admission") {
+      await holder.hold();
+      const pending = write(label, mutation, ...rest);
+      await new Promise<void>(resolve => setTimeout(() => { timerAdvanced = true; resolve(); }, 0));
+      rotate();
+      await holder.release();
+      return pending;
+    }
+    return write(label, mutation, ...rest);
+  };
+  const read = f.client.operationStatus.bind(f.client);
+  f.client.operationStatus = async (...args) => {
+    const result = await read(...args);
+    if (mode === "rotate-during-status") rotate();
+    return result;
+  };
+  const retry = f.client.retryOperation.bind(f.client);
+  f.client.retryOperation = async (...args) => { retries += 1; return retry(...args); };
+  const before = Object.keys(f.registry.readOnlySnapshot().deliveryOperationOwners);
+  try {
+    const response = await f.retry(mode === "uncertain");
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ successorConversationId: successor.id });
+    expect(recoveries).toBe(mode === "recovery-wait" || mode === "reservation-wait" ? 1 : 0);
+    expect(retries).toBe(0);
+    if (mode === "reservation-wait") expect(timerAdvanced).toBe(true);
+    expect(Object.keys(f.registry.readOnlySnapshot().deliveryOperationOwners)).toEqual(before);
+    expect(f.registry.conversation(f.conversation.id)?.supersededBy).toBeNull();
+  } finally {
+    if (previousState === undefined) delete process.env.LLV_STATE_DIR;
+    else process.env.LLV_STATE_DIR = previousState;
+    await holder?.close();
+    f.close();
+  }
+});

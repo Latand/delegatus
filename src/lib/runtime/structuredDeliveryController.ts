@@ -140,7 +140,7 @@ interface ControllerState {
   /* Optional: a controller published by a bundle realm built before #2515
      shares this object and has no such hook. */
   settleHostlessSessions?: (() => Promise<number>) | null;
-  completeActive: ((adopted: readonly StructuredDeliveryHost[], progress?: (phase: StructuredHostStartupPhase) => void, assertActive?: () => void) => Promise<void>) | null;
+  completeActive: ((adopted: readonly StructuredDeliveryHost[], progress?: (phase: StructuredHostStartupPhase) => void, assertActive?: () => void, deferredConversationIds?: ReadonlySet<string>) => Promise<void>) | null;
   stopActive: () => void;
   lastDrainError?: string | null;
   /* Distinguishes "this process hosts the controller and is between
@@ -765,6 +765,7 @@ export async function bindStructuredDeliveryQueue(
   // the remaining hosts. Their original queued operations must wait for those
   // seats instead of attempting competing recovery and terminalizing them.
   let startupPending = dependencies.deferStartupWork === true;
+  let deferredStartupConversations: ReadonlySet<string> = new Set();
   let scheduleAutomaticRetry = () => {};
   let requestDrain = () => {};
   const nativeReconciliations = new Map<string, Promise<void>>();
@@ -896,7 +897,10 @@ export async function bindStructuredDeliveryQueue(
         return !Number.isFinite(accepted) || accepted >= Date.parse(hold.since);
       },
       terminalTurn: (conversationId) => registry.conversation(conversationId as ViewerConversationId)?.turn.state === "terminal",
-      deferTarget: (conversationId) => startupPending && hostResolver(registry, hosts)(conversationId) === null,
+      deferTarget: (conversationId) => (startupPending
+        || (deferredStartupConversations.size > 0
+          && deferredStartupConversations.has(resolveConversationAlias(registry.readOnlySnapshot(), conversationId as ViewerConversationId))))
+        && hostResolver(registry, hosts)(conversationId) === null,
       reconfigureCancelled: (effect) => registry.reconfigureCancelled(effect.conversationId as ViewerConversationId, effect.operationId),
       switchHold: (conversationId) => registry.switchHold(conversationId as ViewerConversationId),
       /* Off the loop (rule c). The hold is written before the switch is
@@ -1944,7 +1948,7 @@ export async function bindStructuredDeliveryQueue(
   };
   const publishedFallbacks = new Map<string, string>();
   let completion = Promise.resolve();
-  const complete = (items: readonly StructuredDeliveryHost[], progress?: (phase: StructuredHostStartupPhase) => void, assertActive: () => void = () => {}) => {
+  const complete = (items: readonly StructuredDeliveryHost[], progress?: (phase: StructuredHostStartupPhase) => void, assertActive: () => void = () => {}, deferredConversationIds: ReadonlySet<string> = new Set()) => {
     /* Each startup phase begins on a turn of its own, so phases that settle
        without I/O do not hold the event loop as one chain (#2761). */
     const phase = async (name: StructuredHostStartupPhase) => {
@@ -1960,7 +1964,7 @@ export async function bindStructuredDeliveryQueue(
       if (stopped || state.activeQueue !== queue) {
         const successor = state.completeActive;
         if (!successor || successor === complete) throw new StructuredDeliveryControllerUnavailableError();
-        await successor(items, progress, assertActive);
+        await successor(items, progress, assertActive, deferredConversationIds);
         return;
       }
       /* A route-recovered structured launch can predate this controller and
@@ -1969,6 +1973,7 @@ export async function bindStructuredDeliveryQueue(
          down controller never gets to mutate the registry. Do this before
          registering hosts so even a registration-triggered drain sees the
          repaired durable state. */
+      deferredStartupConversations = deferredConversationIds;
       registry.repairCompletedStructuredSpawnMarkers();
       await phase("registering structured delivery hosts");
       for (const item of items) await register(item);
@@ -1976,7 +1981,7 @@ export async function bindStructuredDeliveryQueue(
       if (superseded()) {
         const successor = state.completeActive;
         if (!successor || successor === complete) throw new StructuredDeliveryControllerUnavailableError();
-        await successor(items, progress, assertActive);
+        await successor(items, progress, assertActive, deferredConversationIds);
         return;
       }
       const startupSnapshot = registry.readOnlySnapshot();
@@ -2013,7 +2018,7 @@ export async function bindStructuredDeliveryQueue(
       if (superseded()) {
         const successor = state.completeActive;
         if (!successor || successor === complete) throw new StructuredDeliveryControllerUnavailableError();
-        await successor(items, progress, assertActive);
+        await successor(items, progress, assertActive, deferredConversationIds);
         return;
       }
       await phase("reconciling terminal delivery receipts");
@@ -2177,9 +2182,10 @@ export async function completeStructuredDeliveryQueueStartup(
   adopted: readonly StructuredDeliveryHost[],
   progress?: (phase: StructuredHostStartupPhase) => void,
   assertActive?: () => void,
+  deferredConversationIds?: ReadonlySet<string>,
 ): Promise<void> {
   if (!state.completeActive) throw new StructuredDeliveryControllerUnavailableError();
-  await state.completeActive(adopted, progress, assertActive);
+  await state.completeActive(adopted, progress, assertActive, deferredConversationIds);
 }
 
 export async function republishStructuredDeliveryHost(key: SessionKey): Promise<boolean> {

@@ -5869,3 +5869,180 @@ test("a repeated startup retry leaves the record the queue leads as it stands be
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
+
+
+test("D1 records the seat cut before reaping a surviving Claude tool process", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-seat-before-reap-"));
+  const registry = new AgentRegistry(path.join(directory, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
+  const sessionId = ["f2000000", "0000", "4000", "8000", "000000000001"].join("-");
+  const key = { engine: "claude" as const, sessionId };
+  const { artifactPath, conversation } = addStructuredRestartConversation(registry, directory, {
+    engine: "claude", sessionId, status: "live", turn: "busy", activeTurnRef: "tool-turn",
+    transcriptRecords: recentClaudeRecords("tool-call"), transcriptSuffix: "\n",
+  });
+  const native = Bun.spawn([process.execPath, "-e", "setInterval(() => {}, 1000)"], { stdout: "ignore", stderr: "pipe" });
+  const nativeIdentity = captureProcessIdentity(native.pid);
+  const entry = registry.readOnlySnapshot().entries[`claude:${sessionId}`]!;
+  registry.upsert({ ...entry, claimOwner: `structured-host:${JSON.stringify({ pid: 2_000_000_001, startIdentity: "dead-viewer" })}`,
+    structuredHost: { ...entry.structuredHost!, process: nativeIdentity } });
+  const seat = { project: "pre-reap-seat", state: "active", conversationId: conversation.id, path: artifactPath, seatEpoch: 7 } as OrchestratorSeat;
+  const cuts = () => interruptionObligationStore(interruptionObligationDirectory(registry.filename)).list();
+  const ledger = createFakeDeliveryLedger();
+  const host = Object.assign(new FakeEngineHost(ledger), { onStateChange: () => () => {}, setWriterFence: () => {}, onEvent: () => () => {} });
+  const reaping: { cuts: ReturnType<typeof cuts> | null } = { cuts: null };
+  const deps: StructuredStartupDependencies = {
+    registry, client: runtimeJournalClient(journal), orchestratorSeats: () => [seat],
+    adopt: async () => [], resolveClaudeOwner: () => null,
+    adoptClaude: (store, optionsFor, env, shouldAdopt, processed, hooks) => adoptClaudeRegistryHosts(store, optionsFor,
+      { ...env, NODE_ENV: "test", LLV_STRUCTURED_HOSTS: "1" }, shouldAdopt, processed, {
+        ...hooks,
+        orphanStop: { signal: (identity, signal) => {
+          reaping.cuts ??= cuts();
+          process.kill(identity, signal);
+        } },
+        adoptHost: async () => host as never,
+      }),
+  };
+  try {
+    await adoptStructuredHostsAtStartup(deps);
+    expect(reaping.cuts).toEqual([expect.objectContaining({ state: "owed", owner: expect.objectContaining({ pid: native.pid }),
+      claimEpoch: 3, seat: { project: seat.project, seatEpoch: 7 }, turnRef: "tool-turn" })]);
+    await waitFor(() => ledger.writes.length === 1);
+    expect(ledger.writes[0]!.text).toContain("Viewer restarted");
+    await adoptStructuredHostsAtStartup(deps);
+    expect(ledger.writes).toHaveLength(1);
+    expect(cuts()).toHaveLength(1);
+  } finally {
+    await bindStructuredDeliveryQueue([], { registry, client: null });
+    if (procBackend.pidAlive(native.pid)) native.kill("SIGKILL");
+    await native.exited;
+    journal.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+
+test.each(["queued", "delivering", "uncertain", "failed-unknown", "failed", "delivered"] as const)(
+  "D2 newer %s send settles the cut only with delivery evidence", async (status) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-seat-pending-cut-"));
+  const filename = path.join(directory, "registry.json");
+  let registry = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "off" });
+  const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
+  const sessionId = ["f2000000", "0000", "4000", "8000", "000000000002"].join("-");
+  const { artifactPath, conversation } = addStructuredRestartConversation(registry, directory, {
+    engine: "claude", sessionId, status: status === "failed" ? "dead" : "live", turn: "busy", activeTurnRef: "cut-turn",
+    transcriptRecords: recentClaudeRecords("tool-call"), transcriptSuffix: "\n",
+  });
+  const seat = { project: "pending-cut-seat", state: "active", conversationId: conversation.id, path: artifactPath, seatEpoch: 8 } as OrchestratorSeat;
+  const store = interruptionObligationStore(interruptionObligationDirectory(filename));
+  const { obligation } = store.record({ conversationId: conversation.id, engine: "claude", hostKey: `claude:${sessionId}`,
+    path: artifactPath, owner: null, claimEpoch: 3, turnRef: "cut-turn", boundary: "release-cut", reason: "viewer-release",
+    recordedAt: new Date(Date.now() - 2_000).toISOString(), checkpoint: { lastEventKind: "tool-call", lastEventAt: Date.now() - 60_000 },
+    seat: { project: seat.project, seatEpoch: 8 } });
+  projectHostedRestart(journal, "claude", conversation.id, sessionId, directory, artifactPath);
+  const operationId = "newer-seat-message";
+  const newer = registry.holdDelivery(conversation.id, "operator follow-up", operationId, "text", [], null, { operationId, kind: "send", policy: "queue" });
+  journal.executeOperation({ kind: "send", operationId, idempotencyKey: operationId,
+    conversationId: conversation.id, text: "operator follow-up", policy: "queue" });
+  if (status !== "queued") journal.transitionOperation(operationId, "delivering");
+  if (status === "failed-unknown") journal.transitionOperation(operationId, "failed", { reason: "socket closed after dispatch" });
+  if (status === "uncertain") journal.transitionOperation(operationId, "uncertain", { reason: "delivery acknowledgement lost" });
+  if (status === "failed") {
+    journal.transitionOperation(operationId, "failed", { reason: "fenced before execution" });
+    registry.recordDeliveryOutcome(newer.id, "failed", "fenced before execution", "lost");
+  }
+  if (status === "delivered") journal.transitionOperation(operationId, "delivered", { turnId: "newer-turn" });
+  const ledger = createFakeDeliveryLedger();
+  const host = Object.assign(new FakeEngineHost(ledger), { onStateChange: () => () => {} });
+  let allowHost = status === "failed" || status === "delivered";
+  const scheduled: Array<() => void> = [];
+  const boot = () => adoptStructuredHostsAtStartup({ registry, client: runtimeJournalClient(journal),
+    interruptions: store, orchestratorSeats: () => [seat], schedule: callback => { scheduled.push(callback); return { unref() {} }; },
+    adopt: async () => [], adoptClaude: async (_store, _optionsFor, _env, shouldAdopt = () => true) => {
+      const entry = registry.readOnlySnapshot().entries[`claude:${sessionId}`]!;
+      if (!allowHost || !shouldAdopt(entry)) return [];
+      registry.upsert({ ...entry, status: "idle" });
+      return [{ key: { engine: "claude", sessionId }, host: host as never }];
+    },
+  });
+  try {
+    await boot();
+    if (status === "delivered") {
+      expect(store.list().find(item => item.id === obligation.id)?.state).toBe("discharged");
+      expect(ledger.writes.filter(item => item.id !== operationId)).toHaveLength(0);
+    } else if (status === "failed") {
+      await waitFor(() => ledger.writes.some(item => item.id !== operationId));
+      expect(store.list().find(item => item.id === obligation.id)?.state).not.toBe("discharged");
+    } else {
+      expect(store.list().find(item => item.id === obligation.id)?.state).toBe("owed");
+      // A fresh registry models another Viewer boot; admission alone must
+      // still leave the original durable obligation and key intact.
+      await bindStructuredDeliveryQueue([], { registry, client: null });
+      registry = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "off" });
+      await boot();
+      expect(store.list().find(item => item.id === obligation.id)?.state).toBe("owed");
+      expect(ledger.writes.filter(item => item.id !== operationId)).toHaveLength(0);
+      if (status !== "uncertain" && status !== "failed-unknown") {
+        journal.transitionOperation(operationId, "failed", { reason: "fenced before execution" });
+        registry.recordDeliveryOutcome(newer.id, "failed", "fenced before execution", "lost");
+        allowHost = true;
+        scheduled.at(-1)!();
+        await waitFor(() => ledger.writes.some(item => item.id !== operationId), 2_000);
+        await boot();
+        expect(ledger.writes.filter(item => item.id !== operationId)).toHaveLength(1);
+        expect(store.list().find(item => item.id === obligation.id)?.operationId).toBe(ledger.writes.find(item => item.id !== operationId)!.id);
+      }
+    }
+  } finally {
+    await bindStructuredDeliveryQueue([], { registry, client: null });
+    journal.close(); fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+
+test.each(["live-owner", "unknown-owner", "rotated-seat", "new-claim", "superseded-generation"])(
+  "D1 an open Claude seat with %s evidence cannot create a stale cut", async boundary => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-seat-cut-fences-"));
+  const registry = new AgentRegistry(path.join(directory, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
+  const sessionId = ["f2000000", "0000", "4000", "8000", "000000000003"].join("-");
+  const { artifactPath, conversation } = addStructuredRestartConversation(registry, directory, {
+    engine: "claude", sessionId, status: "live", turn: "busy", activeTurnRef: "open-tool-turn",
+    transcriptRecords: recentClaudeRecords("tool-call"), transcriptSuffix: "\n",
+  });
+  const owner = boundary === "live-owner" ? captureProcessIdentity(process.pid)
+    : boundary === "unknown-owner" ? { pid: process.pid, startIdentity: null }
+    : { pid: 2_000_000_001, startIdentity: "dead-viewer" };
+  const entry = registry.readOnlySnapshot().entries[`claude:${sessionId}`]!;
+  registry.upsert({ ...entry, claimOwner: `structured-host:${JSON.stringify(owner)}`,
+    structuredHost: { ...entry.structuredHost!, process: captureProcessIdentity(process.pid) } });
+  const seat = { project: "cut-fence-seat", state: "active", conversationId: conversation.id, path: artifactPath, seatEpoch: 9 } as OrchestratorSeat;
+  const { readTranscriptEvidence } = await import("./liveness");
+  let read = false;
+  try {
+    await adoptStructuredHostsAtStartup({ registry, client: runtimeJournalClient(journal),
+      orchestratorSeats: () => [seat], adopt: async () => [], adoptClaude: async () => [],
+      liveness: { readTranscript: async (...args) => {
+        const evidence = await readTranscriptEvidence(...args);
+        if (!read) {
+          read = true;
+          if (boundary === "rotated-seat") seat.seatEpoch += 1;
+          if (boundary === "new-claim") registry.upsert({ ...registry.readOnlySnapshot().entries[`claude:${sessionId}`]!, claimEpoch: 4 });
+          if (boundary === "superseded-generation") {
+            const successor = registry.ensureConversation("claude", path.join(directory, "successor-generation.jsonl"), null);
+            registry.upsert({ ...registry.readOnlySnapshot().entries[`claude:${sessionId}`]!, status: "dead",
+              structuredHost: { ...entry.structuredHost!, process: null } });
+            registry.recordSupersedence(conversation.id, successor.id, "recovery-spawn");
+          }
+        }
+        return evidence;
+      } },
+    });
+    expect(read).toBe(true);
+    expect(interruptionObligationStore(interruptionObligationDirectory(registry.filename)).list()).toEqual([]);
+  } finally {
+    await bindStructuredDeliveryQueue([], { registry, client: null });
+    journal.close(); fs.rmSync(directory, { recursive: true, force: true });
+  }
+});

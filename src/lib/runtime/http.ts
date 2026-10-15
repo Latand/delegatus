@@ -6,8 +6,10 @@ import { admissionRecordStanding, recordAdmissionWait, recordDirectWait, recordR
 import { NextRequest, NextResponse } from "next/server";
 import crypto from "node:crypto";
 
+import { DeliveryAdmissionRefusedError, type DeliveryAdmissionGuard } from "@/lib/deliveryAdmission";
+import { orchestratorRecipientRefusal } from "@/lib/orchestrator/seats";
 import { recordOperatorRequest } from "@/lib/activity/requestLedger";
-import { agentRegistry, RETRY_ATTEMPT_ID_OWNED_ELSEWHERE, type AgentRegistry } from "@/lib/agent/registry";
+import { agentRegistry, resolveConversationAlias, RETRY_ATTEMPT_ID_OWNED_ELSEWHERE, type AgentRegistry } from "@/lib/agent/registry";
 import { withConversationActuation } from "@/lib/deliveryActuation";
 import { structuredAttachmentOutcome, type AttachmentDeliveryOutcome } from "@/lib/attachmentRetention";
 import type { InboxFileUpload, StagedInboxFiles } from "@/lib/inboxFiles";
@@ -98,9 +100,13 @@ async function recordDeliveryRetryAttempt(
   previousOperationId: string,
   retryOperationId: string,
   reopenLost = false,
+  admissionGuard?: DeliveryAdmissionGuard,
 ): Promise<boolean> {
   const written = await registry.deliveryWrite({ label: "delivery.direct-admission", operationId: retryOperationId },
-    () => registry.recordDirectAdmission({ operationId: retryOperationId, retryOf: previousOperationId, ...(reopenLost ? { reopenLost: true } : {}) }));
+    () => {
+      admissionGuard?.();
+      return registry.recordDirectAdmission({ operationId: retryOperationId, retryOf: previousOperationId, ...(reopenLost ? { reopenLost: true } : {}) });
+    });
   return written.acquired && written.value !== null;
 }
 
@@ -384,6 +390,7 @@ async function dispatchRuntimeCommand(
               ? { delivery: "refused" satisfies AttachmentDeliveryOutcome } : {}),
             ...(admitted.code ? { code: admitted.code } : {}),
             ...(admitted.seatConversationId ? { seatConversationId: admitted.seatConversationId } : {}),
+            ...(admitted.successorConversationId ? { successorConversationId: admitted.successorConversationId } : {}),
             ...(admitted.operationId ? { operationId: admitted.operationId } : {}),
             ...(admitted.receipt ? { receipt: admitted.receipt } : {}),
           }, { status: admitted.status });
@@ -814,6 +821,16 @@ export async function handleRuntimeRetry(
       }, { status: 409 });
     }
     const registry = (dependencies.registry ?? agentRegistry)();
+    const recipientSnapshot = registry.conversationDeliverySnapshot({ conversationId: previous.receipt.conversationId });
+    const recipientRefusal = () => orchestratorRecipientRefusal(previous!.receipt.conversationId,
+      id => resolveConversationAlias(recipientSnapshot, id as `conversation_${string}`));
+    const recipientGuard = () => {
+      const refusal = recipientRefusal();
+      if (refusal) throw Object.assign(new DeliveryAdmissionRefusedError("orchestrator-recipient-revoked"),
+        { message: refusal.error, status: refusal.status, successorConversationId: refusal.successorConversationId });
+    };
+    const refusedRecipient = recipientRefusal();
+    if (refusedRecipient) return NextResponse.json(refusedRecipient, { status: refusedRecipient.status });
     const deliverySnapshot = registry.deliverySnapshotForOperation(previous.operationId);
     if (await confirmedSend(registry.readOnlySnapshot(), previous.operationId)) {
       const confirmed = await resolveSendReceipt(previous.operationId, { registry, client });
@@ -888,10 +905,11 @@ export async function handleRuntimeRetry(
           dependencies.kick();
           return NextResponse.json({ operationId, receipt: runtimePresentationReceipt(current.receipt) }, { status: 202 });
         }
+        recipientGuard();
         const claim = await client.claimDeliveryAction(operationId, "retry");
         if (claim.winner !== "retry") return NextResponse.json({ error: `runtime delivery ${claim.winner} already won; retry refused` }, { status: 409 });
         const rearmed = await registry.deliveryWrite({ label: "delivery.rearm", operationId },
-          () => registry.rearmUncertainDeliveryForOperation(operationId));
+          () => { recipientGuard(); return registry.rearmUncertainDeliveryForOperation(operationId); });
         if (!rearmed.acquired) return NextResponse.json({ error: "the delivery record's write lock is busy; nothing was re-armed", retryable: true }, { status: 503 });
         if (!rearmed.value) return NextResponse.json({ error: "runtime operation has no delivery reservation" }, { status: 409 });
         const { reservation, rearmed: newAuthorization } = rearmed.value;
@@ -922,6 +940,8 @@ export async function handleRuntimeRetry(
               return NextResponse.json({ error: "delivery reservation ownership changed before retry admission", retryable: true }, { status: 503 });
             }
           }
+          const refusal = recipientRefusal();
+          if (refusal) return NextResponse.json(refusal, { status: refusal.status });
           result = current.receipt.status !== "pending" && current.receipt.status !== "queued"
             ? await client.retryOperation(operationId) : current;
         } catch (error) {
@@ -972,9 +992,11 @@ export async function handleRuntimeRetry(
     }
     nextIdempotencyKey ??= terminalRetryIdempotencyKey(previous.operationId);
     const recover = dependencies.recover ?? recoverDeadStructuredConversation;
+    const refusedBeforeRecovery = recipientRefusal();
+    if (refusedBeforeRecovery) return NextResponse.json(refusedBeforeRecovery, { status: refusedBeforeRecovery.status });
     const recovered = await recover(
-      { path: "", conversationId: previous.receipt.conversationId },
-      { client },
+      { path: "", conversationId: previous.receipt.conversationId, admissionGuard: recipientGuard },
+      { client, registry },
     );
     if (!recovered || recovered.conversationId !== previous.receipt.conversationId) {
       return NextResponse.json({
@@ -982,7 +1004,11 @@ export async function handleRuntimeRetry(
         retryable: true,
       }, { status: 503 });
     }
+    const refusedAfterRecovery = recipientRefusal();
+    if (refusedAfterRecovery) return NextResponse.json(refusedAfterRecovery, { status: refusedAfterRecovery.status });
     await dependencies.republish?.(previous.receipt.conversationId);
+    const refusedAfterRepublish = recipientRefusal();
+    if (refusedAfterRepublish) return NextResponse.json(refusedAfterRepublish, { status: refusedAfterRepublish.status });
     /* A2: the attempt's row and its record exist BEFORE the retry command
        leaves the process, under the id the journal gives the attempt. A lost
        reply then leaves an attempt the settlement can end and the record can
@@ -993,9 +1019,10 @@ export async function handleRuntimeRetry(
     const preRecorded = await readEvidence(
       () => dependencies.recordRetryAttempt
         ? dependencies.recordRetryAttempt(presentationOperationId, attemptOperationId)
-        : recordDeliveryRetryAttempt(retryRegistry, presentationOperationId, attemptOperationId, true),
+        : recordDeliveryRetryAttempt(retryRegistry, presentationOperationId, attemptOperationId, true, recipientGuard),
       RETRY_RECORD_UNAVAILABLE,
     );
+    recipientGuard();
     if (!preRecorded.readable || !preRecorded.value) return retryRecordUnavailable(preRecorded);
     const attemptProgress = dependencies.progress === undefined ? ownedDeliveryProgressStore() : dependencies.progress;
     const attemptOwner = retryRegistry.deliverySnapshotForOperation(attemptOperationId).deliveryOperationOwners[attemptOperationId] ?? null;
@@ -1030,9 +1057,12 @@ export async function handleRuntimeRetry(
       timer.unref?.();
       try { return await work(); } finally { clearTimeout(timer); }
     };
-    const retry = () => client.retryOperation(previous.operationId, nextIdempotencyKey, {
-      requireHostedConversationId: previous.receipt.conversationId,
-    });
+    const retry = () => {
+      recipientGuard();
+      return client.retryOperation(previous.operationId, nextIdempotencyKey, {
+        requireHostedConversationId: previous.receipt.conversationId,
+      });
+    };
     let result: Awaited<ReturnType<typeof retry>>;
     try {
       try {
@@ -1041,7 +1071,7 @@ export async function handleRuntimeRetry(
         if (!(error instanceof Error)
           || error.message !== "structured recovery ownership changed before retry admission") throw error;
         const converged = await step("recovering-host", "recovering the host before retry admission", () => recover(
-          { path: "", conversationId: previous.receipt.conversationId }, { client },
+          { path: "", conversationId: previous.receipt.conversationId, admissionGuard: recipientGuard }, { client, registry },
         ));
         if (!converged || converged.conversationId !== previous.receipt.conversationId) {
           throw new Error("structured recovery ownership is unavailable");
@@ -1051,7 +1081,7 @@ export async function handleRuntimeRetry(
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      if (attemptOwner && definitiveRuntimeRefusal(error)) {
+      if (attemptOwner && (definitiveRuntimeRefusal(error) || error instanceof DeliveryAdmissionRefusedError)) {
         /* The journal refused it: nothing was admitted under the attempt's id. */
         await retryRegistry.deliveryWrite({ label: "delivery.settle", operationId: attemptOperationId },
           () => retryRegistry.settleDirectAdmission(attemptOperationId, "failed", message, "lost"));
@@ -1106,11 +1136,15 @@ export async function handleRuntimeRetry(
   } catch (error) {
     const message = error instanceof Error ? error.message : "runtime operation retry failed";
     let status = 503;
-    if (error instanceof RuntimeHostUnavailableError && error.code === "idempotency-conflict") status = 409;
+    if (error instanceof DeliveryAdmissionRefusedError) status = "status" in error && error.status === 503 ? 503 : 409;
+    else if (error instanceof RuntimeHostUnavailableError && error.code === "idempotency-conflict") status = 409;
     else if (/unknown/.test(message)) status = 404;
     else if (/only failed|terminal failed|fresh idempotency|does not support|runtime delivery (?:discard|retry) already won/.test(message)) status = 409;
     const retryable = message === "structured recovery ownership changed before retry admission";
-    return NextResponse.json({ error: message, ...(retryable ? { retryable: true } : {}) }, { status });
+    return NextResponse.json({ error: message, ...(retryable ? { retryable: true } : {}),
+      ...(error instanceof DeliveryAdmissionRefusedError && "successorConversationId" in error
+        ? { successorConversationId: error.successorConversationId } : {}),
+    }, { status });
   }
 }
 

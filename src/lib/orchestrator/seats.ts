@@ -1305,6 +1305,13 @@ export function revokedOrchestratorSeatConversationsOrUnknown(
 ): ReadonlySet<string> | null {
   const file = readOrchestratorSeatFileOrNull();
   if (file === null) return null;
+  return revokedOrchestratorSeatConversationsIn(file, resolveAlias);
+}
+
+function revokedOrchestratorSeatConversationsIn(
+  file: OrchestratorSeatFile,
+  resolveAlias: (conversationId: string) => string,
+): ReadonlySet<string> {
   const seatedAt = new Map<string, number>();
   const seatedBy = (seat: OrchestratorSeat): void => {
     if (!seat.conversationId) return;
@@ -1330,4 +1337,25 @@ export function revokedOrchestratorSeatConversationsOrUnknown(
     if (revocation.seatEpoch >= (seatedAt.get(id) ?? 0)) revoked.add(id);
   }
   return revoked;
+}
+
+/** Recipient admission follows designation authority while historical
+    conversations and their already admitted operations keep their identity. */
+export function orchestratorRecipientRefusal(
+  conversationId: string,
+  resolveAlias: (conversationId: string) => string = id => id,
+): { status: 409 | 503; error: string; successorConversationId?: string } | null {
+  const file = readOrchestratorSeatFileOrNull();
+  if (!file) return { status: 503, error: "orchestrator seat authority is unavailable" };
+  const id = resolveAlias(conversationId);
+  if (!revokedOrchestratorSeatConversationsIn(file, resolveAlias).has(id)) return null;
+  const revocation = file.revocations.filter(row => resolveAlias(row.conversationId) === id)
+    .sort((left, right) => right.seatEpoch - left.seatEpoch)[0]!;
+  const successor = file.seats[revocation.project]?.conversationId ?? revocation.successorConversationId;
+  const successorConversationId = successor ? resolveAlias(successor) : undefined;
+  return { status: 409, error: successorConversationId
+    ? `orchestrator seat was rotated; send to ${successorConversationId}`
+    : "orchestrator seat was revoked; designate a successor before sending",
+    ...(successorConversationId ? { successorConversationId } : {}),
+  };
 }
