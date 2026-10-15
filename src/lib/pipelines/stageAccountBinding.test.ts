@@ -10,8 +10,8 @@ import { afterAll, beforeEach, expect, spyOn, test } from "bun:test";
 const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-stage-account-binding-"));
 process.env.LLV_STATE_DIR = path.join(sandbox, "state");
 process.env.LLV_STRUCTURED_HOSTS = "0";
-/* The account catalog the real resolution reads is derived from HOME, and the
-   one test below that does NOT stub the resolution must read this sandbox. */
+/* The account catalog the real resolution reads is derived from HOME, so
+   every selector in this file must read this sandbox. */
 process.env.HOME = path.join(sandbox, "home");
 fs.mkdirSync(process.env.LLV_STATE_DIR, { recursive: true });
 fs.mkdirSync(process.env.HOME, { recursive: true });
@@ -19,10 +19,16 @@ afterAll(() => fs.rmSync(sandbox, { recursive: true, force: true }));
 
 const { accountManager } = await import("@/lib/accounts/manager");
 const { createPipelineFromRequest, defaultPipelinePorts, patchPipeline } = await import("./engine");
-const { savePipelines } = await import("./store");
+const { loadPipelines, savePipelines } = await import("./store");
+const { stageDigest } = await import("./stageDigest");
+const { registerPipelineTick } = await import("./controllerSignal");
 const { BINDINGS_SOURCE } = await import("@/lib/accounts/accountsStore");
 const { clearAccountFixture, seedAccountSource } = await import("@/lib/accounts/accountsStoreFixture");
 type PipelinePorts = import("./engine").PipelinePorts;
+
+// Accepted live overrides must not start a controller with production ports.
+const unregisterTick = registerPipelineTick(async () => {});
+afterAll(unregisterTick);
 
 const ATLAS = "project-atlas";
 const RESERVED = "acct-reserved";
@@ -30,9 +36,17 @@ const SPARE = "acct-spare";
 const REPO = path.join(sandbox, "repo");
 fs.mkdirSync(REPO, { recursive: true });
 
+const fixtureExec: PipelinePorts["exec"] = (command, args) => {
+  if (command === "git" && args[0] === "remote" && args[1] === "get-url") {
+    return { code: 2, stdout: "", stderr: "No such remote" };
+  }
+  throw new Error(`unexpected fixture command: ${command} ${args.join(" ")}`);
+};
+
 function portsAllowing(allowed: string[] | null): PipelinePorts {
   return {
     ...defaultPipelinePorts(),
+    exec: fixtureExec,
     preflightRepo: () => ({ ok: true, repoDir: REPO, gitCommonDir: path.join(REPO, ".git"), worktreeParent: sandbox }),
     projectForCwd: () => ATLAS,
     allowedAccountIds: () => allowed,
@@ -52,6 +66,7 @@ const ALLOWED_BY_PROJECT: Record<string, string[]> = { [ATLAS]: [RESERVED], [NEB
 function portsAcross(): PipelinePorts {
   return {
     ...defaultPipelinePorts(),
+    exec: fixtureExec,
     preflightRepo: (repoDir: string) => ({ ok: true, repoDir, gitCommonDir: path.join(repoDir, ".git"), worktreeParent: sandbox }),
     projectForCwd: (cwd: string) => PROJECT_BY_REPO[cwd] ?? ATLAS,
     allowedAccountIds: (project: string) => ALLOWED_BY_PROJECT[project] ?? null,
@@ -75,6 +90,7 @@ function draft(account?: string | null) {
 
 beforeEach(() => {
   savePipelines([]);
+  clearAccountFixture(BINDINGS_SOURCE);
 });
 
 test("a stage may name an account the project allows", async () => {
@@ -138,6 +154,134 @@ test("override-stage pins an allowed account, refuses a forbidden one and clears
   const cleared = await patchPipeline(id, { action: "override-stage", stageId: "build", account: null }, portsAllowing([RESERVED]));
   expect(cleared.error).toBeUndefined();
   expect(cleared.pipeline?.stages[0]?.account).toBeUndefined();
+});
+
+async function tierOverrideFixture() {
+  const { createManagedCodexAccount } = await import("@/lib/accounts/codex");
+  const accountA = createManagedCodexAccount("account A");
+  const accountB = createManagedCodexAccount("account B");
+  for (const account of [accountA, accountB]) {
+    fs.writeFileSync(path.join(account.home, "auth.json"), "{}");
+    fs.writeFileSync(path.join(account.home, "models_cache.json"), JSON.stringify({
+      models: [{ slug: "gpt-6.1-sol", service_tiers: [{ id: "priority" }, ...(account.id === accountB.id ? [{ id: "ultrafast" }] : [])] }],
+    }));
+  }
+  const ports = portsAllowing([accountA.id, accountB.id]);
+  ports.engineReadiness = () => "connected";
+  ports.conversationGeneration = () => null;
+  seedAccountSource(BINDINGS_SOURCE, {
+    schemaVersion: 1,
+    bindings: [accountA, accountB].map(account => ({ engine: "codex", accountId: account.id, project: ATLAS, createdAt: ports.now() })),
+  });
+  const created = await createPipelineFromRequest({
+    ...draft(accountA.id),
+    stages: [{ ...draft(accountA.id).stages[0]!, engine: "codex", model: "gpt-6.1-sol", effort: "high", serviceTier: "priority" }],
+  }, ports, { allowOperatorDraftWithoutLineage: true });
+  if (!created.pipeline) throw new Error(`draft was not created: ${created.error}`);
+  const pipeline = created.pipeline;
+  const stage = pipeline.stages[0]!;
+  const now = ports.now();
+  // Seed a bound structured attempt without launching an agent or runtime host.
+  pipeline.state = "running";
+  pipeline.cursor = { stageId: stage.id, state: "running", input: null, activatedBy: null };
+  pipeline.runs[0]!.attempts = [{
+    n: 1, state: "running", effectiveRole: structuredClone(stage.effectiveRole),
+    definition: { boundAt: now, stageDigest: stageDigest(stage), prompt: stage.prompt, account: accountA.id, role: null, sandbox: null, outputs: null },
+    launchId: "tier-override-launch", conversationId: "tier-override-conversation", sessionId: "tier-override-session",
+    agentPath: path.join(sandbox, "tier-override.jsonl"), paneId: null, accountId: accountA.id,
+    usageLimitedAccounts: [], flowId: null, expectedReviewHeadSha: null, reviewHeadSha: null,
+    startedAt: now, completedAt: null, input: null, activatedBy: null, output: null, verdict: null, error: null,
+  }];
+  savePipelines([pipeline]);
+  return { id: pipeline.id, ports, accountA, accountB };
+}
+
+test.each([["next attempt", undefined], ["apply now", true]] as const)("override-stage validates the tier against the requested account (%s)", async (_mode, applyNow) => {
+  const { id, ports, accountA, accountB } = await tierOverrideFixture();
+  const result = await patchPipeline(id, {
+    action: "override-stage", stageId: "build", account: accountB.id, serviceTier: "ultrafast", applyNow,
+  }, ports);
+  expect(result.error).toBeUndefined();
+  const stored = loadPipelines()[0]!;
+  expect(stored.stages[0]).toMatchObject({ account: accountB.id, serviceTier: "ultrafast", effectiveRole: { serviceTier: "ultrafast" } });
+  expect(stored.runs[0]!.attempts[0]).toMatchObject({ accountId: accountA.id, effectiveRole: { serviceTier: "priority" } });
+  if (applyNow) expect(result.runtimeSwitch).toMatchObject({ phase: "requested", to: { accountId: accountB.id, accountPinned: true, serviceTier: "ultrafast" } });
+  else expect(result.runtimeSwitch).toBeUndefined();
+});
+
+test.each([["next attempt", undefined], ["apply now", true]] as const)("override-stage tier-only changes keep the existing account pin (%s)", async (_mode, applyNow) => {
+  const { id, ports } = await tierOverrideFixture();
+  const before = structuredClone(loadPipelines()[0]);
+  const result = await patchPipeline(id, {
+    action: "override-stage", stageId: "build", serviceTier: "ultrafast", applyNow,
+  }, ports);
+  expect(result.status).toBe(400);
+  expect(result.error).toContain("no account in this project's pool offers serviceTier ultrafast; offered: priority");
+  expect(loadPipelines()[0]).toEqual(before);
+});
+
+test.each([["next attempt", undefined], ["apply now", true]] as const)("override-stage clearing the pin validates the tier against the project pool (%s)", async (_mode, applyNow) => {
+  const { id, ports, accountA, accountB } = await tierOverrideFixture();
+  const request = { action: "override-stage" as const, stageId: "build", account: null, serviceTier: "ultrafast", applyNow };
+  const before = structuredClone(loadPipelines()[0]);
+  ports.allowedAccountIds = () => [accountA.id];
+  const refused = await patchPipeline(id, request, ports);
+  expect(refused.status).toBe(400);
+  expect(refused.error).toContain("offered: priority");
+  expect(loadPipelines()[0]).toEqual(before);
+
+  ports.allowedAccountIds = () => [accountA.id, accountB.id];
+  const accepted = await patchPipeline(id, request, ports);
+  expect(accepted.error).toBeUndefined();
+  const stored = loadPipelines()[0]!;
+  expect(stored.stages[0]?.account).toBeUndefined();
+  expect(stored.stages[0]).toMatchObject({ serviceTier: "ultrafast", effectiveRole: { serviceTier: "ultrafast" } });
+  if (applyNow) expect(accepted.runtimeSwitch).toMatchObject({ phase: "requested", to: { accountId: accountB.id, accountPinned: false, serviceTier: "ultrafast" } });
+  else expect(accepted.runtimeSwitch).toBeUndefined();
+});
+
+test("clearing a live pin selects an account offering the requested tier through the real selector", async () => {
+  const { id, ports, accountA, accountB } = await tierOverrideFixture();
+  const preferred = ports.resolveProjectSpawn!("codex", { project: ATLAS, model: "gpt-6.1-sol", preferredId: accountA.id });
+  expect(preferred.kind === "available" && preferred.account.accountId).toBe(accountA.id);
+
+  const result = await patchPipeline(id, {
+    action: "override-stage", stageId: "build", account: null, serviceTier: "ultrafast", applyNow: true,
+  }, ports);
+  expect(result.error).toBeUndefined();
+  expect(result.runtimeSwitch?.to).toMatchObject({ accountId: accountB.id, accountPinned: false, serviceTier: "ultrafast" });
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.runtimeSwitches?.[0]?.to).toEqual(result.runtimeSwitch!.to);
+});
+
+test.each(["unsupported", "unknown", "absent"] as const)("live tier validation refuses an unsafe selector result (%s)", async selection => {
+  const { id, ports, accountA } = await tierOverrideFixture();
+  const before = structuredClone(loadPipelines()[0]);
+  const account = accountManager.resolveSpawn("codex", accountA.id);
+  ports.resolveProjectSpawn = selection === "absent" ? undefined
+    : () => ({ kind: "available", account: { ...account, accountId: selection === "unknown" ? "unknown-account" : accountA.id } });
+  // The unknown result is allowed by the pool port but has no catalog evidence.
+  if (selection === "unknown") ports.allowedAccountIds = () => null;
+  const result = await patchPipeline(id, {
+    action: "override-stage", stageId: "build", account: null, serviceTier: "ultrafast", applyNow: true,
+  }, ports);
+  expect(result.status).toBe(409);
+  expect(result.runtimeSwitch).toBeUndefined();
+  expect(loadPipelines()[0]).toEqual(before);
+});
+
+test.each([["next attempt", undefined], ["apply now", true]] as const)("account-only overrides validate the retained explicit tier (%s)", async (_mode, applyNow) => {
+  const { id, ports, accountA, accountB } = await tierOverrideFixture();
+  const configured = await patchPipeline(id, {
+    action: "override-stage", stageId: "build", account: accountB.id, serviceTier: "ultrafast",
+  }, ports);
+  expect(configured.error).toBeUndefined();
+  const before = structuredClone(loadPipelines()[0]);
+  const result = await patchPipeline(id, {
+    action: "override-stage", stageId: "build", account: accountA.id, applyNow,
+  }, ports);
+  expect(result.status).toBe(400);
+  expect(result.error).toContain("offered: priority");
+  expect(loadPipelines()[0]).toEqual(before);
 });
 
 test("add-stage refuses a stage whose account the project forbids", async () => {
@@ -275,9 +419,8 @@ test("every allowed account out of capacity is reported as capacity, not solved 
 });
 
 test("a damaged binding record parks the stage instead of launching it on any account", async () => {
-  /* The one test here that runs the REAL project resolution: the record on
-     disk is what decides, and a record that cannot be read must refuse the
-     launch rather than answer "this project is unbound" and hand the stage
+  /* The real project resolution reads the record on disk. An unreadable record
+     must refuse the launch rather than answer "this project is unbound" and hand the stage
      whichever account the engine happens to be pointing at. */
   seedAccountSource(BINDINGS_SOURCE, { schemaVersion: 1, bindings: [{ engine: "claude" }] });
   const reservations: unknown[] = [];
@@ -302,6 +445,7 @@ test("a damaged binding record answers create and override with the same conflic
      binding route give, and one repair clears all of them. */
   const realPorts: PipelinePorts = {
     ...defaultPipelinePorts(),
+    exec: fixtureExec,
     preflightRepo: () => ({ ok: true, repoDir: REPO, gitCommonDir: path.join(REPO, ".git"), worktreeParent: sandbox }),
     projectForCwd: () => ATLAS,
   };

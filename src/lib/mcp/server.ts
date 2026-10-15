@@ -1,3 +1,5 @@
+import { runWithNativeCallProof } from "@/lib/attention/nativeCallProof";
+import { nativeAdmissionMessage, type NativeCallerRefusal } from "@/lib/attention/nativeCaller";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -289,6 +291,8 @@ export interface McpToolCallContext {
       a recoverable mutation's single dispatch; the binding reads its downstream
       idempotency key from here rather than deriving one of its own. */
   binding?: McpRequestBinding;
+  /** Revalidate this invocation's native generation at the transport boundary. */
+  assertCaller?: () => void;
   /** Persist a newly created orchestrator recipient before its first send. */
   bindCreatedTarget?: (identity: string) => Promise<void>;
   /** #1490: written by the transport the moment the request may be on the
@@ -605,6 +609,10 @@ export interface McpRequestCaller {
   project: string | null;
   /** Server-derived predecessor seats that the current caller may recover. */
   predecessors?: string[];
+  /** Refusal diagnostics only; unidentified callers never persist a binding. */
+  admission?: NativeCallerRefusal;
+  /** This call's approved generation; older receipts retain conversation ownership. */
+  nativeProof?: string;
 }
 
 export interface McpRequestTarget {
@@ -666,7 +674,8 @@ export type ReceiptClaim =
   | { kind: "conflict"; record?: McpReceiptRecord };
 
 export interface McpReceiptStore {
-  claim(key: string, digest: string, retention: ReceiptRetention, binding?: McpRequestBinding): ReceiptClaim | Promise<ReceiptClaim>;
+  /** beforeClaim runs synchronously under the store lock, before any row is created. */
+  claim(key: string, digest: string, retention: ReceiptRetention, binding?: McpRequestBinding, beforeClaim?: () => void): ReceiptClaim | Promise<ReceiptClaim>;
   complete(key: string, digest: string, result: McpToolResult, retention: ReceiptRetention): void | Promise<void>;
   /** Drop an unsettled claim so its `clientRequestId` can be used again
       (#1766). Only a claim this call still holds — same digest, no result
@@ -750,7 +759,8 @@ function receiptSettlement(
 export class MemoryMcpReceiptStore implements McpRecoveryReceiptStore {
   private readonly receipts = new Map<string, Receipt>();
 
-  claim(key: string, digest: string, _retention?: ReceiptRetention, binding?: McpRequestBinding): ReceiptClaim {
+  claim(key: string, digest: string, _retention?: ReceiptRetention, binding?: McpRequestBinding, beforeClaim?: () => void): ReceiptClaim {
+    beforeClaim?.();
     const receipt = this.receipts.get(key);
     if (!receipt) {
       this.receipts.set(key, { digest, ...(binding ? { binding, stage: "claimed" } : {}) });
@@ -930,6 +940,7 @@ export function validRequestBinding(value: unknown, toolName?: McpToolName, requ
   const { caller, target, owner } = value;
   if (!isRecord(caller) || !["root", "worker", "unidentified"].includes(String(caller.kind))
     || !nullableString(caller.conversationId) || !nullableString(caller.project)
+    || (caller.nativeProof !== undefined && (typeof caller.nativeProof !== "string" || !caller.nativeProof || caller.nativeProof.length > 128))
     || (caller.predecessors !== undefined
       && (!Array.isArray(caller.predecessors)
         || caller.predecessors.length > 32
@@ -1606,8 +1617,9 @@ function writeReceiptFile(filePath: string, state: ReceiptFile): void {
 export class FileMcpReceiptStore implements McpRecoveryReceiptStore {
   constructor(private readonly filePath: string) {}
 
-  async claim(key: string, digest: string, retention: ReceiptRetention, binding?: McpRequestBinding): Promise<ReceiptClaim> {
+  async claim(key: string, digest: string, retention: ReceiptRetention, binding?: McpRequestBinding, beforeClaim?: () => void): Promise<ReceiptClaim> {
     return withFileLock(this.filePath, () => {
+      beforeClaim?.();
       const state = readReceiptFile(this.filePath);
       const receipt = state.mutationReceipts[key] ?? state.readReceipts[key];
       if (receipt) {
@@ -1774,9 +1786,10 @@ export class SqliteMcpReceiptStore implements McpRecoveryReceiptStore {
     this.secureFiles();
   }
 
-  claim(key: string, digest: string, retention: ReceiptRetention, binding?: McpRequestBinding): ReceiptClaim {
+  claim(key: string, digest: string, retention: ReceiptRetention, binding?: McpRequestBinding, beforeClaim?: () => void): ReceiptClaim {
     this.db.exec("BEGIN IMMEDIATE");
     try {
+      beforeClaim?.();
       const now = this.now();
       this.pruneBoundedReceipts(now);
       const receipt = this.selectRow(key);
@@ -2361,6 +2374,8 @@ export interface McpRecoverableTool {
   /** Authenticate recovery without resolving a mutable target name. Existing
       receipts supply their own target; absent receipts still run bind before admission. */
   bindForRecovery?(args: McpToolArgs): McpRequestBindingInput | Promise<McpRequestBindingInput>;
+  /** Synchronous native session fence before claim, dispatch or disclosure. */
+  currentCaller?(): McpRequestCaller;
   /** Read-only: what the downstream durable records say about this binding.
       Must never dispatch, enqueue, retry, withdraw or spawn. */
   recover(binding: McpRequestBinding, options: { legacy: boolean; context?: McpToolCallContext; args?: McpToolArgs }): Promise<McpRecoveryEvidence>;
@@ -2531,9 +2546,17 @@ export function createMcpToolService(
 ): McpToolService {
   const inFlight = new Map<string, { digest: string; result: Promise<McpToolResult> }>();
   return {
-    async callTool(toolName, args, context = {}) {
+    callTool: async function callTool(toolName: string, args: McpToolArgs, context: McpToolCallContext = {}): Promise<McpToolResult> {
       if (!(MCP_TOOL_NAMES as readonly string[]).includes(toolName)) {
         return failure(toolName, clientRequestId(args), "unknown_tool", `Unknown viewer tool: ${toolName}`, false);
+      }
+      if (args && typeof args === "object" && "nativeCallerProof" in args) {
+        const { nativeCallerProof, ...logicalArgs } = args;
+        if (nativeCallerProof !== undefined && (typeof nativeCallerProof !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(nativeCallerProof))) {
+          return failure(toolName, clientRequestId(args), "invalid_request", "nativeCallerProof must be a hook-generated proof; do not invent or copy it", false);
+        }
+        return runWithNativeCallProof(typeof nativeCallerProof === "string" ? nativeCallerProof : undefined, toolName, logicalArgs,
+          () => callTool(toolName, logicalArgs, context));
       }
       const typedTool = toolName as McpToolName;
       const normalized = normalizeBoundedMcpNumerics(typedTool, args);
@@ -2672,6 +2695,7 @@ export function createMcpToolService(
         return finish(replayed, "replay");
       }
       let outcome: McpTimingOutcome = "failure";
+      let revalidateNative: () => McpToolResult | null = () => null;
       let unfinishedAgeMs: number | undefined;
       const recoverableCall = async (tool: McpRecoverableTool, store: McpRecoveryReceiptStore): Promise<McpToolResult> => {
         /* Authority first, before the store is read: who is calling decides
@@ -2708,8 +2732,24 @@ export function createMcpToolService(
            exists, so it discloses nothing. */
         if (!identifiedCaller(binding.caller)) {
           outcome = "failure";
-          return failure(typedTool, requestId, "caller_unidentified", CALLER_UNIDENTIFIED, false, false);
+          return failure(typedTool, requestId, "caller_unidentified", `${CALLER_UNIDENTIFIED}. ${nativeAdmissionMessage(binding.caller.admission)}`, binding.caller.admission?.retryable ?? false, false);
         }
+        const invocationProof = binding.caller.nativeProof;
+        const sessionRefusal = (): McpToolResult | null => {
+          if (!invocationProof) return null;
+          let current: McpRequestCaller | undefined;
+          try { current = tool.currentCaller?.(); } catch { /* Unavailable evidence grants no identity. */ }
+          if (current && identifiedCaller(current) && current.conversationId === binding.caller.conversationId
+            && current.nativeProof === invocationProof) return null;
+          return failure(typedTool, requestId, "caller_unidentified", nativeAdmissionMessage(current?.admission ?? { reason: "session-changed", retryable: false }), false, false);
+        };
+        const assertSession = () => {
+          const refusal = sessionRefusal();
+          if (refusal && !refusal.ok) throw new McpToolRefusal(refusal.error, { code: "caller_unidentified", retryable: false });
+        };
+        revalidateNative = sessionRefusal;
+        const initialSessionRefusal = sessionRefusal();
+        if (initialSessionRefusal) return initialSessionRefusal;
         const notPermitted = () => {
           outcome = "failure";
           return failure(typedTool, requestId, "recovery_not_permitted", RECOVERY_NOT_PERMITTED, false, true);
@@ -2755,6 +2795,7 @@ export function createMcpToolService(
           replayed: boolean,
           original?: McpToolResult | null,
         ): Promise<McpToolResult> => {
+          const refusal = sessionRefusal(); if (refusal) return refusal;
           // Read again after the evidence lookup: another process may have
           // settled the operation while this read was pending or unavailable.
           let current: McpReceiptRecord | null;
@@ -2802,6 +2843,7 @@ export function createMcpToolService(
           return stored === answer ? answer : { ...stored, replayed: true };
         };
         const recoverRecord = async (record: McpReceiptRecord): Promise<McpToolResult> => {
+          const refusal = sessionRefusal(); if (refusal) return refusal;
           const recorded = record.binding;
           if (!recorded) {
             /* A legacy row: claimed before bindings existed, so ownership has
@@ -2904,6 +2946,7 @@ export function createMcpToolService(
             try {
               const fresh = await tool.bind(digestArgs);
               if (!identifiedCaller(fresh.caller) || !sameCaller(binding.caller, fresh.caller, typedTool)) return notPermitted();
+              if (invocationProof && fresh.caller.nativeProof !== invocationProof) return failure(typedTool, requestId, "caller_unidentified", nativeAdmissionMessage({ reason: "session-changed", retryable: false }), false, false);
               binding = { ...binding, ...fresh };
             } catch (error) {
               return failure(typedTool, requestId,
@@ -2952,10 +2995,12 @@ export function createMcpToolService(
             }, false);
           }
         }
+        const beforeClaim = sessionRefusal(); if (beforeClaim) return beforeClaim;
         let claim: ReceiptClaim;
         try {
-          claim = await store.claim(key, digest, retention, binding);
+          claim = await store.claim(key, digest, retention, binding, invocationProof ? assertSession : undefined);
         } catch (cause) {
+          const refusal = sessionRefusal(); if (refusal) return refusal;
           return unreadableReceipt(cause, false);
         }
         phaseDurations.claim = performance.now() - claimStartedAt;
@@ -2971,6 +3016,11 @@ export function createMcpToolService(
           if (record) return recoverRecord(record);
           outcome = "failure";
           return recoveryAnswer(typedTool, requestId, { outcome: "unknown", evidence: "mcp-receipt", reason: "the receipt store could not be read consistently", ids: {} }, true);
+        }
+        const beforeDispatch = sessionRefusal();
+        if (beforeDispatch) {
+          try { await store.fenceUndispatched(key, digest, beforeDispatch); } catch { /* No dispatch; the live session is still refused. */ }
+          return beforeDispatch;
         }
         /* The fence before the one dispatch. Failing here means another
            process closed the attempt between the claim and now. */
@@ -2999,6 +3049,7 @@ export function createMcpToolService(
         const dispatch: McpDispatchTracker = { attempted: false };
         try {
           const payload = await bindings[typedTool](effectiveArgs, { ...context, binding, dispatch,
+            assertCaller: assertSession,
             bindCreatedTarget: async (identity) => {
               if (!store.bindCreatedTarget || !await store.bindCreatedTarget(key, digest, binding, identity)) {
                 throw new McpDispatchUncertainError("the created orchestrator recipient could not be durably bound; no message was dispatched");
@@ -3245,7 +3296,8 @@ export function createMcpToolService(
       })();
       inFlight.set(key, { digest, result });
       try {
-        return finish(await result, outcome, unfinishedAgeMs);
+        const answered = await result;
+        return finish(revalidateNative() ?? answered, outcome, unfinishedAgeMs);
       } finally {
         if (inFlight.get(key)?.result === result) inFlight.delete(key);
       }
@@ -3468,7 +3520,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
   ].join(" "),
   telegram_bot_send: [
     "Post a message through the operator's Telegram bot into a chat the operator allowlisted — for example a report into a team group. `chat` accepts its alias, chat id, @username or t.me chat/topic link. A topic link supplies `topicId` unless one is given explicitly.",
-    "`format` is plain (default) or html (Telegram's HTML subset: b, i, u, s, code, pre, a, blockquote, tg-spoiler). Plain text over 4096 characters is split into up to 4 messages; html over 4096 is refused. `replyToMessageId` replies to a message in that chat, `topicId` posts into a forum topic, `silent` sends without a notification.",
+    "`format` is plain (default) or html (Telegram's HTML subset: b, i, u, s, code, pre, a, blockquote, tg-spoiler). Plain text over 4096 characters is split into up to 4 messages; html over 4096 characters after entity parsing is refused. `replyToMessageId` replies to a message in that chat, `topicId` posts into a forum topic, `silent` sends without a notification.",
     "The post is attributed in Delegatus to your conversation, resolved server-side. A chat outside the allowlist is refused before anything is sent (chat_not_allowed, bot_not_in_chat, chat_unknown, bot_not_connected); Telegram's own refusals come back as forbidden (blocked, removed, or a user who never wrote to the bot), format_invalid, or rate_limited with retryAfterSeconds.",
     "A refusal answers ok:false with the bot's code as `code` and `retryable` saying whether a retry under a NEW clientRequestId may help (true only for rate_limited, network_failed, timed_out, telegram_failed); send_partial adds `details.sentMessageIds`.",
     "Idempotent by clientRequestId: a repeat answers the first post's message ids; a repeat of a send that never finished, or one whose connection was cut or timed out, answers send_uncertain (not retryable) instead of posting twice.",
@@ -4441,7 +4493,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
   telegram_bot_send: z.object({
     clientRequestId: clientRequestIdSchema,
     chat: z.string().trim().min(1).describe("The chat's alias, id, @username or t.me chat/topic link."),
-    text: z.string().min(1).describe("The message. Plain text up to 16384 characters (split into up to 4 messages); html up to 4096."),
+    text: z.string().min(1).describe("The message. Plain text up to 16384 characters (split into up to 4 messages); html up to 4096 characters after entity parsing."),
     format: z.enum(["plain", "html"]).optional().describe("plain (default) or html: Telegram's HTML subset."),
     replyToMessageId: z.number().int().positive().optional().describe("Reply to this message in the same chat. Sent anyway if it no longer exists."),
     topicId: z.number().int().positive().optional().describe("Forum topic (message_thread_id) to post into."),
@@ -4511,6 +4563,10 @@ export function viewerMcpInstructions(locale?: "en" | "uk" | null): string {
 }
 
 const VIEWER_MCP_BASE_INSTRUCTIONS = "This server is Delegatus, registered under the MCP key `viewer`, so its tools are named mcp__viewer__*. List tasks newest-first with status sets, openOnly, ids or query and follow nextCursor. Lists are compact by default; full:true retrieves complete records; get_pipeline is compact by default. Use get_task/get_flow for complete records. Writes acknowledge changedFields and revision. Use seat_tick_settings verbose:true to read the complete monitor note. Use clientRequestId on mutations; pure reads may omit it for a fresh observation. Static readMore hints require includeHints:true or full:true. Reuse it only when replaying the same logical operation. Launch admission names new tasks before the agent starts, using the supplied title and a concise launcher brief or a short title derived from the prompt. Refinement is optional: for a legacy placeholder, update_task with refine: { text } supplies a short human title (3–10 words) on the first line and at most two concise sentences. Read-only roles skip refinement. A refine that answers TASK_NOT_FOUND means your conversation holds no task; carry on. Keep an existing meaningful title; the reply says already-named when one exists. Reuse the same text on retry. A task's text is for the human who reviews the board, and refine writes only that; agent-facing context (the prompt, the working notes, the ids, the rules, the state) belongs in the separate details field of create_task and update_task, condensed, which the card shows behind one collapsed Details row. Use agent_fleet first for compact counts by engine, model, effort and account; request detail or filters only when needed. Read the board through these tools rather than curl: list_pipelines with state `open` and compact: true for the open lanes, get_pipeline with stageId for one stage's conclusion, deployment_status and agent_activity with compact: true, and account_limits for each account's usage windows.";
+
+// The hook supplies this transport proof automatically. It is never part of
+// the logical arguments, their digest, downstream payload or durable answer.
+for (const name of MCP_TOOL_NAMES) TOOL_INPUT_SCHEMAS[name] = TOOL_INPUT_SCHEMAS[name].extend({ nativeCallerProof: z.string().regex(/^[A-Za-z0-9_-]{43}$/).optional().describe("Injected by the synchronous Delegatus Claude hook. Omit in ordinary arguments; never invent or copy a proof.") });
 
 export function createViewerMcpServer(service: McpToolService): McpServer {
   const server = new McpServer({ name: MCP_SERVER_NAME, version: "1.0.0" }, {

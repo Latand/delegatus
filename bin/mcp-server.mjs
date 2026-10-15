@@ -25,6 +25,7 @@ import { installedRelease, isGitCheckout, selfUpdatePaths } from "./self-update-
 
 process.env.LLV_STATE_OWNER = "mcp";
 
+const nativeHookMode = process.argv.includes("--native-caller-hook");
 const packageRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const stateDir = process.env.LLV_STATE_DIR || join(appDirIn(process.env.XDG_CONFIG_HOME || join(homedir(), ".config")), "state");
 const targetFile = process.env.LLV_VIEWER_DEPLOY_TARGET || join(stateDir, "viewer-release.json");
@@ -37,7 +38,7 @@ const selfUpdatePointer = selfUpdateConfig
     }).releasePointer
   : null;
 const capability = process.env.LLV_SPAWN_CAPABILITY;
-const heartbeatPath = /^[A-Za-z0-9_-]{43}$/.test(capability || "")
+const heartbeatPath = !nativeHookMode && /^[A-Za-z0-9_-]{43}$/.test(capability || "")
   ? join(stateDir, "mcp-runtime", "sessions", `${createHash("sha256").update(capability).digest("hex")}.json`)
   : null;
 const startedAt = new Date().toISOString();
@@ -427,6 +428,17 @@ function ensureChild() {
     start(selected);
   }
   return null;
+}
+if (nativeHookMode) {
+  const selected = selectedRuntime();
+  const env = { ...process.env };
+  if (selected.revision) env.LLV_HOT_STATE_RELEASE_REVISION = selected.revision;
+  const hook = spawn(bunRuntime, [selected.entry, "--native-caller-hook"], viewerChildProcessOptions({ cwd: selected.root, env, stdio: "inherit" }));
+  const owned = { timer: null }; ownedChildren.set(hook, owned);
+  for (const signal of ["SIGINT", "SIGTERM"]) process.on(signal, () => stopChild(hook, signal));
+  const code = await new Promise(resolve => { hook.once("error", () => resolve(1)); hook.once("exit", code => resolve(code ?? 1)); });
+  if (owned.timer) clearTimeout(owned.timer); ownedChildren.delete(hook);
+  process.exit(code);
 }
 const input = createInterface({ input: process.stdin }).on("line", (line) => {
   if (closing) return;

@@ -1,3 +1,4 @@
+import { performanceSpans } from "@/lib/performanceSpans";
 import { runtimeIdleKillMatches } from "@/lib/runtime/contracts";
 import { parseSnapshotReadRequest, SNAPSHOT_ACTIVITY_FIELDS, SNAPSHOT_OWNER_FIELDS, type RuntimeSnapshotMetadata } from "@/lib/runtime/snapshotReads";
 import { measureBlocking } from "@/lib/blockingWaits";
@@ -1455,6 +1456,9 @@ export class RuntimeJournal {
     }
   }
 
+  /** The materialization counter needs no session population projection. */
+  filesRevision(): number { return Number(this.meta("files_revision")); }
+
   /** Serialized snapshot, rebuilt when the database changes or the next
       retained terminal edge reaches its age boundary. Concurrent snapshot
       consumers otherwise stack full O(state) rebuilds on the event loop until
@@ -1477,8 +1481,8 @@ export class RuntimeJournal {
     /* Collection and serialization are measured apart: the two have different
        fixes, and a cache hit above costs neither. */
     this.snapshotRebuilds += 1;
-    const snapshot = measureBlocking("snapshot-collect", "runtime-journal", () => this.snapshotAt(now, voiceBodiesFor));
-    const json = measureBlocking("snapshot-serialize", "runtime-journal", () => JSON.stringify(snapshot));
+    const snapshot = measureBlocking("snapshot-collect", "runtime-journal", () => performanceSpans.sync("runtime.collect", () => this.snapshotAt(now, voiceBodiesFor)));
+    const json = measureBlocking("snapshot-serialize", "runtime-journal", () => performanceSpans.sync("runtime.stringify", () => JSON.stringify(snapshot)));
     if (voiceBodiesFor === undefined || voiceBodiesFor.length === 0)
       this.snapshotCaches.set(scope, { changes, expiresAt: this.snapshotEdgeExpiry(now), json });
     return json;

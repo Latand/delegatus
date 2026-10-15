@@ -25,6 +25,18 @@ import { existingTeamStore } from "./store";
 
 type ActorRequest = Pick<NextRequest, "headers" | "cookies">;
 
+/** Telegram sign-in proves the session belongs to the independently paired owner.
+ * A local install claim or a newly enrolled passkey supplies no such proof. */
+export function authenticatedOwner(req: ActorRequest, telegramUserId: string | undefined): boolean {
+  if (!telegramUserId) return false;
+  try {
+    const live = requestSession(req);
+    return live?.session.method === "telegram" && live.member.role === "owner" && live.member.telegram?.userId === telegramUserId;
+  } catch {
+    return false;
+  }
+}
+
 export function teamActor(req: ActorRequest): TeamActor {
   const conversationId = callerConversationId(req);
   if (conversationId) return { kind: "agent", conversationId };

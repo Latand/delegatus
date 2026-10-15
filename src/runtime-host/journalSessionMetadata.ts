@@ -16,7 +16,18 @@ export class SessionHostMetadata {
 
   constructor(private readonly db: Database) {}
 
-  start(): void { this.schedule(0); }
+  start(): void {
+    // A completed installation needs no writer transaction or timer turn.
+    // Incomplete and unknown versions retain the bounded backfill/fallback.
+    const read = this.db.query<{ value: string }, [string]>("SELECT value FROM journal_meta WHERE key = ?");
+    if (read.get("session_host_metadata_schema_version")?.value === "1"
+      && read.get("session_host_metadata_ready")?.value === "1") {
+      this.ready = true;
+      this.initialized = true;
+      return;
+    }
+    this.schedule(0);
+  }
   close(): void { clearTimeout(this.timer); }
 
   private schedule(delay: number): void {

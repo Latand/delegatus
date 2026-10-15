@@ -34,6 +34,7 @@ const SECONDARY = "inline-flex h-8 shrink-0 items-center justify-center gap-1.5 
 export const decisionClock = (at: string, locale: string) => new Intl.DateTimeFormat(locale === "uk" ? "uk-UA" : "en-GB", { hour: "2-digit", minute: "2-digit" }).format(new Date(at));
 
 function source(t: TFunction, decision: OperatorDecisionView): string {
+  if (decision.nativeAssociationState) return t("decisions.fromNative");
   return decision.taskId === null ? t("decisions.fromSeat") : t("decisions.fromTask", { title: decision.taskTitle ?? decision.taskId });
 }
 
@@ -227,26 +228,28 @@ export function DecisionCard({ decision, narrow = false, columns = 1, onAnswer, 
     time of the answer and whether the seat has it. A message that did not
     reach the seat offers to send it again from here: a seat's own question has
     no task card and no review window to retry from (§2.4). */
-export function DecisionRecord({ decision, onRetry, retrying = false, retryError = null }: {
+export function DecisionRecord({ decision, onRetry, retrying = false, retryError = null, onRevoke, revokeError = null }: {
   decision: OperatorDecisionView;
   /** Sends the saved message again; absent where the record cannot. */
   onRetry?: () => void;
   retrying?: boolean;
   retryError?: string | null;
+  onRevoke?: () => Promise<boolean>;
+  revokeError?: string | null;
 }) {
   const { t, locale } = useLocale();
   const made = decision.decision;
   if (!made) return null;
   const state = made.delivery.state;
-  const retry = onRetry && made.delivery.retryable && state !== "pending" && state !== "sent";
-  const tone = state === "sent" ? "bg-success-soft text-success" : state === "pending" ? "bg-sunken text-secondary" : "bg-warning-soft text-warning";
+  const retry = !decision.nativeAssociationState && onRetry && made.delivery.retryable && state !== "pending" && state !== "sent";
+  const tone = decision.nativeAssociationState === "approved" || state === "sent" ? "bg-success-soft text-success" : state === "pending" ? "bg-sunken text-secondary" : "bg-warning-soft text-warning";
   return (
     <section data-decision-card="answered" data-decision-review={decision.id} aria-label={t("decisions.recordAria", { title: decision.title })} className="min-w-0 rounded-surface border border-border bg-card">
       <header className="flex min-w-0 items-center gap-1.5 px-3 py-2">
         <CircleCheck className="h-4 w-4 shrink-0 text-success" aria-hidden />
         <span className="shrink-0 text-ui font-semibold text-primary">{t("decisions.answeredAt", { time: decisionClock(made.at, locale) })}</span>
         <span className="min-w-0 flex-1 truncate text-label text-muted">· {decision.title}</span>
-        <span data-decision-delivery={state} className={`shrink-0 rounded-full px-1.5 py-0.5 text-caption font-semibold ${tone}`}>{t(`decisions.state.${state}`)}</span>
+        <span data-decision-delivery={state} className={`shrink-0 rounded-full px-1.5 py-0.5 text-caption font-semibold ${tone}`}>{t(decision.nativeAssociationState === "approved" ? "decisions.accessApproved" : decision.nativeAssociationState === "refused" ? "decisions.accessRefused" : `decisions.state.${state}`)}</span>
       </header>
       {made.rejected ? <p data-decision-rejected="" className="m-0 px-3 pb-2.5 text-ui font-semibold text-warning">{t("proto.rejected")}</p> : null}
       {decision.questions?.length ? (
@@ -268,7 +271,9 @@ export function DecisionRecord({ decision, onRetry, retrying = false, retryError
       ) : null}
       {made.comment ? <p data-decision-record-comment="" className="m-0 whitespace-pre-wrap break-words px-3 pb-2.5 text-ui text-primary">{made.comment}</p> : null}
       <footer className="flex min-w-0 flex-col gap-2 px-3 pb-2.5">
-        <PrototypeTelegramActions key={decision.id} round={decision} disabled={retrying} />
+        {decision.nativeAssociationState === "approved" && onRevoke ? <button type="button" data-native-association-revoke="" className={`${SECONDARY} min-h-11`} onClick={() => void onRevoke()}>{t("decisions.revokeAccess")}</button> : null}
+        {revokeError ? <p role="alert" className="m-0 min-w-0 text-label font-semibold text-danger">{t("decisions.revokeFailed", { error: revokeError })}</p> : null}
+        {!decision.nativeAssociationState ? <PrototypeTelegramActions key={decision.id} round={decision} disabled={retrying} /> : null}
         {retry ? (
           <button type="button" data-decision-retry="" className={SECONDARY} disabled={retrying} onClick={onRetry}>
             {retrying ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden /> : <RotateCw className="h-3.5 w-3.5" aria-hidden />}

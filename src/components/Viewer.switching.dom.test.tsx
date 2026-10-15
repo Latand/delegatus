@@ -18,7 +18,7 @@
  * The table is printed at the end so the same file produces the before and
  * after rows of the PR profile.
  */
-import { afterAll, afterEach, beforeEach, expect, jest, mock, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, expect, jest, test } from "bun:test";
 import { Window } from "happy-dom";
 
 import { installActEnv } from "@/test-helpers/actEnv";
@@ -29,10 +29,11 @@ import { en } from "@/lib/i18n/en";
 import type { FileEntry, LogChunk } from "@/lib/types";
 import type { BoardProjectStateV1 } from "@/lib/view/types";
 import { MOBILE_LAYOUT_QUERY } from "@/lib/attention/eligibility";
-import { setKanbanCardsOpenByDefault } from "@/components/kanban/cardOpenDefault";
+import { kanbanCardsOpenByDefault, setKanbanCardsOpenByDefault } from "@/components/kanban/cardOpenDefault";
 
 /* Cards start closed (docs/design/calm-task-cards-build.md §6.1); this suite reads
    what an open card holds, so its cards start open. */
+const previousCardsOpenByDefault = kanbanCardsOpenByDefault();
 setKanbanCardsOpenByDefault(true);
 
 installActEnv();
@@ -78,12 +79,19 @@ Object.assign(globalThis, {
     disconnect() {}
   },
   /* Every pane is on screen: BranchPane pauses the feed of a pane its observer
-     has not reported visible, so the double answers "intersecting" at once. */
+     has not reported visible. Deliver the target after observe returns, as the
+     browser does, so the observer has registered its callback first. */
   IntersectionObserver: class {
-    constructor(private readonly callback: (entries: Array<{ isIntersecting: boolean }>) => void) {}
-    observe() { this.callback([{ isIntersecting: true }]); }
-    unobserve() {}
-    disconnect() {}
+    private targets = new Set<Element>();
+    constructor(private readonly callback: (entries: Array<{ target: Element; isIntersecting: boolean }>) => void) {}
+    observe(target: Element) {
+      this.targets.add(target);
+      queueMicrotask(() => {
+        if (this.targets.has(target)) this.callback([{ target, isIntersecting: true }]);
+      });
+    }
+    unobserve(target: Element) { this.targets.delete(target); }
+    disconnect() { this.targets.clear(); }
     takeRecords() { return []; }
   },
   requestAnimationFrame: (cb: FrameRequestCallback) => setTimeout(() => cb(0), 0) as unknown as number,
@@ -104,17 +112,7 @@ elementPrototype.getBoundingClientRect = function (this: HTMLElement) {
   return realRect.call(this);
 };
 
-mock.module("@/hooks/runtimeBus", () => ({
-  SNAPSHOT_URL: "/api/runtime/snapshot",
-  STREAM_URL: "/api/runtime/stream",
-  STREAM_RECONNECTED_EVENT: "llv:stream-reconnected",
-  isRuntimeUiEnabled: () => false,
-  getRuntimeBus: () => ({
-    getState: () => ({ connection: "offline" }),
-    subscribe: () => () => {},
-    subscribeFilesRevision: () => () => {},
-  }),
-}));
+const { setRuntimeUiEnabledForTests } = await import("@/hooks/runtimeBus");
 
 const { act } = await import("react");
 const { createRoot } = await import("react-dom/client");
@@ -205,12 +203,17 @@ function seededBoard(manual: string[]): BoardProjectStateV1 {
 }
 
 const requests: string[] = [];
+const presenceRequests: string[] = [];
 const delayed = <T,>(value: T): Promise<T> => new Promise((resolve) => setTimeout(() => resolve(value), RTT_MS));
 
 globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
   const url = String(input);
-  requests.push(url);
   const method = (init?.method ?? "GET").toUpperCase();
+  if (url.startsWith("/api/files") && method === "HEAD") {
+    presenceRequests.push(url);
+    return delayed(new Response(null, { status: 200 }));
+  }
+  requests.push(url);
   if (url.startsWith("/api/files")) {
     const pin = new URL(url, "http://localhost").searchParams.get("path") ?? "";
     const files = pin === GAMMA.conversationId || pin === GAMMA.path ? [...allFiles(), fileEntryFor(GAMMA)] : allFiles();
@@ -375,6 +378,7 @@ afterAll(() => {
   const body = rows.map((row) => `| ${row.surface} | ${row.step} | ${row.virtualMs} | ${row.workMs} | ${row.renders} |`).join("\n");
   console.log(`\n#1432 switching profile (bun DOM, fake timers)\n${header}\n${body}\n`);
   probe.uninstall();
+  setKanbanCardsOpenByDefault(previousCardsOpenByDefault);
 });
 
 /* ── harness ────────────────────────────────────────────────────────────── */
@@ -382,6 +386,7 @@ afterAll(() => {
 let mounted: { unmount: () => void } | null = null;
 
 beforeEach(() => {
+  setRuntimeUiEnabledForTests(false);
   jest.useFakeTimers();
   mobile = false;
   seedTranscripts();
@@ -389,6 +394,7 @@ beforeEach(() => {
   pipelines = [];
   appended = 0;
   requests.length = 0;
+  presenceRequests.length = 0;
   FakeEventSource.open = [];
   FakeEventSource.connects = 0;
   boards = {
@@ -425,6 +431,7 @@ afterEach(() => {
      listeners left. */
   jest.advanceTimersByTime(50);
   jest.useRealTimers();
+  setRuntimeUiEnabledForTests(null);
 });
 
 async function mountViewer(project: string): Promise<HTMLElement> {
@@ -461,8 +468,8 @@ const feedRows = (host: HTMLElement, path: string) => pane(host, path)?.querySel
 const tailLines = (scope: Element | null) => Number(scope?.querySelector("[data-tail-line-count]")?.getAttribute("data-tail-line-count") ?? "0");
 const skeleton = (host: HTMLElement) => host.querySelector('[role="status"][aria-busy="true"]') !== null;
 const railButton = (host: HTMLElement, label: string) =>
-  Array.from(host.querySelectorAll("button")).find((button) => (button.textContent ?? "").trim().startsWith(label)) as HTMLButtonElement | undefined;
-const currentRail = (host: HTMLElement) => (host.querySelector('button[aria-current="page"]')?.textContent ?? "").trim();
+  host.querySelector<HTMLButtonElement>(`[data-rail-project="${label}"]`)!;
+const currentRail = (host: HTMLElement) => host.querySelector('[data-rail-project][aria-current="page"]')?.getAttribute("data-rail-project") ?? "";
 
 function dispatch(target: EventTarget, event: unknown): boolean {
   return target.dispatchEvent(event as Event);
@@ -616,7 +623,8 @@ test("desktop: a project switch paints the revisited board synchronously and nev
   const revisit = probe.snapshot();
   record("desktop", "project switch (revisit) → rail highlight", railBack);
   record("desktop", "project switch (revisit) → readers painted from cache", revisitPaint, `skeleton ${sawSkeleton ? "shown" : "never"}; dashboard mounts +${revisit.mounts.ProjectDashboardView ?? 0}; KanbanReader mounts ${revisit.mounts.KanbanReader ?? 0}; LogFeed renders ${revisit.renders.LogFeed ?? 0}`);
-  /* A fresh catalog does not gate any of this: the files feed is global. */
+  /* The global catalog stays cached; per-project HEAD heartbeats only report
+     board presence (#2372) and carry no catalog body. */
   const catalogRequests = requests.filter((url) => url.startsWith("/api/files")).length;
 
   expect(railFirst.virtualMs).toBe(0);
@@ -626,6 +634,9 @@ test("desktop: a project switch paints the revisited board synchronously and nev
   expect(sawSkeleton).toBe(false);
   expect(revisitPaint.virtualMs).toBe(0);
   expect(catalogRequests).toBe(1);
+  expect(presenceRequests).toEqual([
+    "/api/files?project=alpha", "/api/files?project=beta", "/api/files?project=alpha",
+  ]);
 });
 
 test("desktop: moving the focus between readers re-renders only the readers whose focus changed", async () => {
