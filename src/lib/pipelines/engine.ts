@@ -649,15 +649,16 @@ export function pipelineClaudePermissionMode(
   return sandbox === "full" ? "bypassPermissions" : "auto";
 }
 
-function parentIdentity(parentPath: string | null): {
+async function parentIdentity(parentPath: string | null): Promise<{
   conversationId: ViewerConversationId | null;
   sessionKey: ReturnType<typeof sessionKeyFromTranscript>;
-} {
+}> {
   if (!parentPath) return { conversationId: null, sessionKey: null };
   const engine = engineForTranscript(parentPath);
   if (!engine) return { conversationId: null, sessionKey: null };
   const registry = agentRegistry();
-  const conversation = registry.conversationForPath(parentPath) ?? registry.ensureConversation(engine, parentPath, null);
+  const conversation = registry.conversationForPath(parentPath) ?? await registry.deliveryWriteOrBusy({ label: "pipeline.parent" },
+    () => registry.ensureConversation(engine, parentPath, null));
   return { conversationId: conversation.id, sessionKey: sessionKeyFromTranscript(engine, parentPath) };
 }
 
@@ -702,7 +703,7 @@ async function spawnPipelineAgent(
       serviceTier ? `serviceTier ${serviceTier} offered by: ${candidates.filter(account => offers?.offering.includes(account.id)).map(account => account.label).join(", ")}` : undefined);
   }
   const account = resolution.account;
-  const parent = parentIdentity(input.parentPath);
+  const parent = await parentIdentity(input.parentPath);
   const { access, sandbox } = input.runtimeProfile;
   if (access !== input.role.access) {
     throw new Error("pipeline stage runtime access does not match its effective role");
@@ -1284,14 +1285,17 @@ async function stopStageHostByRecordedIdentity(
       onFirstEffect?.();
     },
     ...(termination.persistCapturedTree ? {} : {
-      persistCapturedTree: (identities: readonly ProcessIdentity[]) => {
-        capture = registry.captureStructuredTerminationSurvivors(probe.key, root, identities, source);
+      persistCapturedTree: async (identities: readonly ProcessIdentity[]) => {
+        capture = await registry.deliveryWriteOrBusy({ label: "pipeline.termination-capture" },
+          () => registry.captureStructuredTerminationSurvivors(probe.key, root, identities, source));
         onCapture?.(capture);
         return capture !== null;
       },
-      withdrawCapturedTree: () => {
-        if (!capture) return;
-        const withdrawn = registry.withdrawStructuredTerminationSurvivors(probe.key, root, capture, source);
+      withdrawCapturedTree: async () => {
+        const captured = capture;
+        if (!captured) return;
+        const withdrawn = await registry.deliveryWriteOrBusy({ label: "pipeline.termination-withdraw" },
+          () => registry.withdrawStructuredTerminationSurvivors(probe.key, root, captured, source));
         if (withdrawn) onCapture?.(null);
       },
     }),
@@ -1971,7 +1975,7 @@ export function defaultPipelinePorts(
       return { state: current && status?.receipt.status === "applied" ? "superseded" : "pending" };
     },
     cancelRuntimeSwitch: async (conversationId, operationId) => {
-      cancelPendingRuntimeSwitch(registry, conversationId, operationId);
+      await cancelPendingRuntimeSwitch(registry, conversationId, operationId);
     },
     retireRuntimeSwitch: async record => {
       const { retireRuntimeSwitchProducers } = await import("./runtimeSwitchRecovery");
@@ -2018,7 +2022,7 @@ export function defaultPipelinePorts(
           () => registry.retryConversationMigration(id, migration.revision));
         if (!retried.acquired) throw new Error(REGISTRY_WRITER_BUSY);
       } else {
-        registry.requestConversationReseat(id, targetAccountId);
+        await registry.deliveryWriteOrBusy({ label: "pipeline.reseat" }, () => registry.requestConversationReseat(id, targetAccountId));
       }
       requestAccountMigrationTick();
       invalidateRegistryProjection();

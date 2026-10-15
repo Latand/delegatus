@@ -4548,6 +4548,11 @@ export class AgentRegistry {
   private readonly sqliteStore: SqliteAgentRegistryStore | null;
   /** Synchronous writer admission lends its JSON claim to the mutation. */
   private admittedJsonWriter: RegistryLockClaim | null = null;
+  private creditGuardRevision = 0;
+
+  /** Local commits and host notifications invalidate the guard without reading storage. */
+  accountCreditGuardRevision(): number { return this.creditGuardRevision; }
+  invalidateAccountCreditGuard(): void { this.creditGuardRevision += 1; }
   private readonly beforeDualWriteMutationReplace: (() => void) | undefined;
   private readOnlyCache: { signature: string; snapshot: RegistryFile } | null = null;
   private readonly mirrorCheckpointMs: number;
@@ -4619,6 +4624,7 @@ export class AgentRegistry {
       verifyImport: (source, imported) => verifyRegistryImport(source, imported, storage.onRegistryImportVerify),
       normalize: (value, mode) => normalizeRegistry(value, storage.mcpGrantPolicy, mode),
       mcpGrantPolicy: storage.mcpGrantPolicy,
+      onCreditGuardChange: () => this.invalidateAccountCreditGuard(),
       onWriterWait: (duration) => {
         this.recordMetric(this.writerWaits, duration);
         storage.onSqliteWriterWait?.(duration);
@@ -5401,6 +5407,7 @@ export class AgentRegistry {
       if (changed) {
         const payload = sqlite ? serializeRegistry(file, sqlite.revision + 1) : currentPayload;
         writeAtomicPayload(this.filename, payload);
+        this.invalidateAccountCreditGuard();
       }
       if (sqlite && !changed) this.assertSqliteParity();
       if (sqlite && changed) {
@@ -5445,8 +5452,8 @@ export class AgentRegistry {
    * that transaction, so the wait and the write cannot be separated by another
    * writer. `{ acquired: false }` means the lock stayed held past the deadline
    * and nothing ran; the refusal is logged with the operation it was for, and
-   * the caller defers. `operation` must go straight to its mutation, with no
-   * snapshot read before it. Stores without a SQLite writer run it at once.
+   * the caller defers. `operation` stays synchronous; keyed reads before its
+   * mutation share the admitted transaction. Stores without a SQLite writer run it at once.
    */
   private async whenWriterHeld<T>(
     correlation: { label: string; operationId?: string | null },
@@ -5473,7 +5480,7 @@ export class AgentRegistry {
    * One registry write on a delivery path, with the write lock waited for off
    * the event loop and correlated with the operation it is made for
    * (docs/design/delivery-progress-and-drain.md, rule c). `write` makes exactly
-   * one registry mutation and reads no snapshot before it. `{ acquired: false }`
+   * one registry mutation; its keyed reads share the admitted transaction. `{ acquired: false }`
    * means nothing was written; each caller states what a refusal leaves.
    */
   async deliveryWrite<T>(
@@ -8999,12 +9006,13 @@ export class AgentRegistry {
 
   /** Whether a migration is a switch owned by the conversation's applying reconfigure and still cancellable. */
   reconfigureOwnedCancellableSwitch(id: ViewerConversationId): boolean {
-    const snapshot = this.readOnlySnapshot();
-    const conversation = snapshot.conversations[resolveConversationAlias(snapshot, id)];
-    const migration = conversation?.migration;
-    const owner = conversation?.reconfigure;
-    if (!migration || !owner || owner.status !== "applying" || !CANCELLABLE_SWITCH_PHASES.has(migration.phase)) return false;
-    return snapshot.migrationIntents[migration.intentId]?.requestIds.includes(reconfigureMigrationRequestId(owner)) === true;
+    return this.readKeyed(snapshot => {
+      const conversation = snapshot.conversations[resolveConversationAlias(snapshot, id)];
+      const migration = conversation?.migration;
+      const owner = conversation?.reconfigure;
+      if (!migration || !owner || owner.status !== "applying" || !CANCELLABLE_SWITCH_PHASES.has(migration.phase)) return false;
+      return snapshot.migrationIntents[migration.intentId]?.requestIds.includes(reconfigureMigrationRequestId(owner)) === true;
+    });
   }
 
   canonicalPath(artifactPath: string): string {
