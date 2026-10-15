@@ -50,6 +50,8 @@ export class McpTaskExecutor {
       // Reserve before waiting for an old guardian to close.
       return await new Promise<McpToolResult>((resolve, reject) => {
         let settled = false;
+        let dispatched: ChildProcess | undefined;
+        let cancellationTimer: ReturnType<typeof setTimeout> | undefined;
         const finish: Pending["finish"] = (error, result) => {
           if (settled) return;
           settled = true;
@@ -57,12 +59,17 @@ export class McpTaskExecutor {
         };
         const cancel = () => {
           finish(new Error("task executor reply was cancelled or timed out; look up the original request key"));
-          if (this.child) leasedHelperInput(this.child).write(JSON.stringify({ cancel: id }) + "\n");
+          if (dispatched && this.child === dispatched) {
+            leasedHelperInput(dispatched).write(JSON.stringify({ cancel: id }) + "\n");
+            cancellationTimer ??= setTimeout(() => {
+              if (this.pending.has(id)) this.retire(dispatched!, "did not settle cancellation");
+            }, 1_000);
+          }
         };
         const timer = setTimeout(cancel, Math.max(1, deadlineAt - Date.now()));
         context.signal?.addEventListener("abort", cancel, { once: true });
         const pending: Pending = { bytes, finish, dispose: () => {
-          clearTimeout(timer); context.signal?.removeEventListener("abort", cancel);
+          clearTimeout(timer); clearTimeout(cancellationTimer); context.signal?.removeEventListener("abort", cancel);
           this.pending.delete(id); this.inputBytes -= bytes;
         } };
         this.pending.set(id, pending); this.inputBytes += bytes;
@@ -70,6 +77,7 @@ export class McpTaskExecutor {
           if (settled) { pending.dispose(); return; }
           clearTimeout(this.idle);
           const child = this.child ?? this.start();
+          dispatched = child;
           leasedHelperInput(child).write(frame, error => { if (error) this.retire(child); });
         }).catch(error => { finish(error); pending.dispose(); });
       });
@@ -88,37 +96,38 @@ export class McpTaskExecutor {
     child.stdout!.on("data", (chunk: string) => {
       if (this.child !== child) return;
       buffer += chunk;
-      if (Buffer.byteLength(buffer) > TASK_EXECUTOR_FRAME_BYTES) { this.retire(child); return; }
       let end: number;
       while ((end = buffer.indexOf("\n")) >= 0) {
         const line = buffer.slice(0, end); buffer = buffer.slice(end + 1);
         try {
+          if (Buffer.byteLength(line) + 1 > TASK_EXECUTOR_FRAME_BYTES) throw new Error("task executor frame exceeds its bound");
           const reply = JSON.parse(line) as { id: number; result?: McpToolResult; error?: string };
           const job = this.pending.get(reply.id);
           if (!job || (!reply.result && !reply.error)) throw new Error("invalid task executor reply");
           job.finish(reply.error ? new Error(reply.error) : undefined, reply.result); job.dispose();
         } catch { this.retire(child); return; }
       }
+      if (Buffer.byteLength(buffer) > TASK_EXECUTOR_FRAME_BYTES) { this.retire(child); return; }
       if (!this.pending.size) {
         this.idle = setTimeout(() => this.retire(child), this.runtime.idleMs ?? 60_000);
         this.idle.unref();
       }
     });
     leasedHelperInput(child).on("error", () => this.retire(child));
-    child.once("error", () => this.retire(child));
-    child.once("close", () => this.retire(child));
+    child.once("error", () => this.retire(child, "could not start"));
+    child.once("close", (code, signal) => this.retire(child, `exited (${signal ?? code})`));
     unrefLeasedHelper(child);
     return child;
   }
 
-  private retire(child: ChildProcess): void {
+  private retire(child: ChildProcess, reason = "stopped"): void {
     if (this.child !== child) return;
     this.child = null; clearTimeout(this.idle);
     this.closing = child.exitCode !== null || child.signalCode !== null ? Promise.resolve()
       : new Promise(resolve => child.once("close", () => resolve()));
     endLeasedHelper(child);
     for (const job of this.pending.values()) {
-      job.finish(new Error("task executor stopped before its reply; look up the original request key")); job.dispose();
+      job.finish(new Error(`task executor ${reason} before its reply; look up the original request key`)); job.dispose();
     }
   }
 

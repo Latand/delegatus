@@ -4,7 +4,14 @@ import { waitForFixtureFile } from "./fixtureBarrier";
 import { NextRequest } from "next/server";
 
 if (process.env.LLV_TASK_EXECUTOR_STALL) {
+  if (process.env.LLV_WRITER_READY) fs.writeFileSync(process.env.LLV_WRITER_READY, String(process.pid));
   process.stdin.resume();
+  await new Promise(() => {});
+}
+
+if (process.env.LLV_TASK_EXECUTOR_REPORT_PID) {
+  fs.writeFileSync(process.env.LLV_WRITER_READY!, String(process.pid));
+  await import("../mcpTask.worker");
   await new Promise(() => {});
 }
 
@@ -51,9 +58,11 @@ if (process.env.LLV_WRITER_OBSERVER_CONTROL) {
   } else if (mode === "overhead") {
     const db = new Database(filename);
     db.exec("PRAGMA journal_mode=WAL");
-    const insert = db.query("INSERT INTO sample VALUES (?)");
+    db.exec("CREATE TABLE state_rows(collection TEXT,row_key TEXT,value_json TEXT,row_order INTEGER,row_revision INTEGER,controller_active INTEGER,PRIMARY KEY(collection,row_key))");
+    const insert = db.query("INSERT INTO state_rows VALUES ('observer',?,?,?,1,1)");
+    const value = JSON.stringify({ project: "fixture", text: "Fixture task", details: "x".repeat(500), status: "inbox", assignments: [] });
     const started = performance.now();
-    for (let n = 0; n < 1000; n++) insert.run(n);
+    for (let n = 0; n < 1000; n++) insert.run(String(n), value, n);
     console.log(JSON.stringify({ iterations: 1000, elapsedMs: performance.now() - started }));
     db.close();
   } else if (mode === "lock") {

@@ -18,13 +18,16 @@ test.skipIf(!process.env.MCP_SQL_OBSERVER)("native SQL observer reconciles handl
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-sql-observer-control-"));
   sandboxes.push(root);
   const database = path.join(root, "control.sqlite");
+  let overheadSample = 0;
   const run = (mode: string, observed = true, holdMs = 600) => {
-    const events = path.join(root, `${mode}.ndjson`);
+    const suffix = mode === "overhead" ? `-${++overheadSample}` : "";
+    const events = path.join(root, `${mode}${suffix}.ndjson`);
     const ready = path.join(root, `${mode}.ready`);
     const child = ownFixtureChild(Bun.spawn({
       cmd: [process.execPath, ...(observed ? ["--preload", path.resolve("scripts/sqlite-observer.ts")] : []), path.join(import.meta.dir, "writerConcurrencyChild.ts")],
       env: { ...process.env, LLV_STATE_DIR: root, MCP_SQL_OBSERVER: observed ? process.env.MCP_SQL_OBSERVER : undefined, MCP_SQL_EVENTS: observed ? events : undefined, LLV_WRITER_OBSERVER_CONTROL: mode,
-        LLV_WRITER_DATABASE: database, LLV_WRITER_READY: ready, LLV_WRITER_HOLD_MS: String(holdMs) },
+        LLV_WRITER_DATABASE: mode === "overhead" ? path.join(root, `overhead-${overheadSample}.sqlite`) : database,
+        LLV_WRITER_READY: ready, LLV_WRITER_HOLD_MS: String(holdMs) },
       stdout: "pipe", stderr: "pipe",
     }));
     const stderr = new Response(child.stderr).text();
@@ -76,7 +79,8 @@ test.skipIf(!process.env.MCP_SQL_OBSERVER)("native SQL observer reconciles handl
   const overhead: Array<{ observed: boolean; iterations: number; elapsedMs: number }> = [];
   for (let repeat = 0; repeat < 3; repeat++) for (const observed of repeat % 2 ? [true, false] : [false, true]) {
     const sample = run("overhead", observed);
-    await sample.done();
+    const events = await sample.done();
+    if (observed) expect(count(events, "domain-statement")).toBe(1000);
     overhead.push({ observed, ...JSON.parse((await sample.stdout).trim()) });
   }
   console.log(`SQL observer controls ${JSON.stringify({ overhead })}`);

@@ -16,6 +16,8 @@ typedef struct {
   sqlite3_int64 changes;
   char *name;
   int kinds;
+  void *active_statement;
+  int row_profiled;
   char collection[128];
 } Connection;
 static FILE *output;
@@ -88,6 +90,8 @@ static int trace(unsigned type, void *argument, void *statement, void *detail) {
   Connection *c = argument;
   if (type == SQLITE_TRACE_STMT) {
     running = c;
+    c->active_statement = statement;
+    c->row_profiled = 0;
     const char *sql = trim(sqlite3_sql(statement));
     if (collection_key[0]) snprintf(c->collection, sizeof(c->collection), "%s", collection_key);
     if (!sqlite3_stmt_readonly(statement)) {
@@ -111,6 +115,20 @@ static int trace(unsigned type, void *argument, void *statement, void *detail) {
       c->explicit_transaction = 1;
       c->changes = sqlite3_total_changes64(c->db);
       event(c, "begin", 1, NULL);
+    }
+    /* Synthetic rows only. Save successful row statements before the commit
+     * marker so teardown can reconcile effects even when a caller lost its
+     * reply. Rolled-back transactions are discarded by the report. */
+    if (c->active_statement == statement && !c->row_profiled
+        && (code == SQLITE_OK || code == SQLITE_DONE || code == SQLITE_ROW)
+        && sqlite3_changes64(c->db) > 0
+        && (!sqlite3_strnicmp(sql, "INSERT INTO state_rows", 22)
+            || !sqlite3_strnicmp(sql, "UPDATE state_rows", 17)
+            || !sqlite3_strnicmp(sql, "DELETE FROM state_rows", 22))) {
+      char *expanded = sqlite3_expanded_sql(statement);
+      event(c, "domain-statement", sqlite3_changes64(c->db), expanded);
+      sqlite3_free(expanded);
+      c->row_profiled = 1;
     }
     /* A failed commit invokes rollback_hook, clearing pending. An explicit
      * empty transaction has no commit hook; its autocommit transition counts. */

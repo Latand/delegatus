@@ -25,6 +25,7 @@ export async function stateWriterReport(root: string) {
   const viewer = read<{ pid: number }>(root, "viewer.ready").pid;
   const servers = new Set<number>();
   const executors = new Set<number>();
+  const registeredProcesses = new Set<string>();
   const role = (pid: number) => pid === viewer ? "viewer" : executors.has(pid) ? "executor" : servers.has(pid) ? "adapter" : "launcher";
   const phase = (at: number) => at < bounds.coldEnd ? "cold" : at < bounds.warmEnd ? "warm" : at < bounds.measuredEnd ? "measured" : "drain";
   const measured = (event: Event) => phase(event.atMs) === "measured";
@@ -33,6 +34,7 @@ export async function stateWriterReport(root: string) {
   let busyResults = 0, applicationWaitMs = 0, heldLeaseRefusals = 0, leaseSqlRefusals = 0, leaseRetryWaitMs = 0, failedOpens = 0;
   const leaseAcquisitionMs: number[] = [];
   for await (const event of stream<Event>(root, "sql.ndjson.js")) {
+    if (event.event === "process") registeredProcesses.add(`${event.pid}:${(event as Event & { identity: string }).identity}`);
     if (event.event === "process" && event.pid !== viewer) servers.add(event.pid);
     if (event.event === "task-executor-process") executors.add(event.pid);
     const call = `${event.pid}:${event.call}`;
@@ -156,7 +158,10 @@ export async function stateWriterReport(root: string) {
       leaseHoldMs: distribution(holds), unreleasedLeases: leases.size, staleLeaseRemovals, unobservedLeaseRemovals,
     },
     processes: {
-      peak: max(census.map(row => row.processes.length)), births: new Set(census.flatMap(row => row.processes.map(p => `${p.pid}:${p.start}`))).size, survivors: teardown.length,
+      peak: max(census.map(row => row.processes.length)),
+      births: new Set([...registeredProcesses, ...census.flatMap(row => row.processes.map(p => `${p.pid}:${p.start}`))]).size,
+      censusBirths: new Set(census.flatMap(row => row.processes.map(p => `${p.pid}:${p.start}`))).size,
+      runtimeRegistrations: registeredProcesses.size, survivors: teardown.length,
       peakMainDescriptors: max(census.map(row => sum(row.processes.map(p => p.main)))),
       peakAdapterDescriptors: max(census.map(row => sum(row.processes.filter(p => role(p.pid) === "adapter").map(p => p.main)))),
       peakWalDescriptors: max(census.map(row => sum(row.processes.map(p => p.wal)))),

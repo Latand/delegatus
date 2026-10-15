@@ -131,15 +131,21 @@ globalThis.setTimeout = ((callback: (...args: unknown[]) => void, ms?: number, .
 observe("process", { identity: fs.readFileSync(`/proc/${process.pid}/stat`, "utf8").split(") ")[1]!.split(" ")[19] });
 if (process.env.MCP_BENCH_TASK_EXECUTOR === "1") {
   observe("task-executor-process");
-  const caller = await import("../src/lib/mcp/callerContext");
-  const run = caller.runAsMcpHttpCaller;
+  const server = await import("../src/lib/mcp/server");
+  const create = server.createProductionViewerMcpService;
   let sequence = 0;
-  mock.module("../src/lib/mcp/callerContext", () => ({ ...caller,
-    runAsMcpHttpCaller: <T>(identity: import("../src/lib/mcp/callerContext").McpHttpCaller, operation: () => T): T =>
-      run(identity, () => context.run({ call: `executor-${++sequence}` }, () => {
-        observe("call-start");
-        return Promise.resolve().then(operation).finally(() => observe("call-end")) as T;
-      })),
+  mock.module("../src/lib/mcp/server", () => ({ ...server,
+    createProductionViewerMcpService: async (...args: Parameters<typeof create>) => {
+      const service = await create(...args);
+      const observed: import("../src/lib/mcp/server").McpToolService = { callTool(name, args, callContext) {
+        return context.run({ call: `${name}:${args.clientRequestId ?? `read-${++sequence}`}` }, async () => {
+          observe("call-start");
+          try { return await service.callTool(name, args, callContext); }
+          finally { observe("call-end"); }
+        });
+      } };
+      return observed;
+    },
   }));
 }
 if (process.env.MCP_BENCH_LEASES === "1") await observeLeases();

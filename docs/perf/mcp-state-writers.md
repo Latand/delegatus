@@ -600,3 +600,64 @@ leave the measured product implementation unchanged.
 The local privacy gate passed for the changed paths, commits, aggregate evidence
 and draft PR text. Final publication-gate and hosted check results belong to the
 PR record.
+
+
+### Executor and protocol setup for the acceptance matrix
+
+Task tools now run in one Viewer-owned executor through a private pipe. The
+executor runs the existing full service: policy, caller resolution, durable MCP
+receipts, task revisions and task/tombstone commits stay together. The Viewer
+sends the authenticated capability or native peer, original arguments and key,
+native-work metadata, deadline and cancellation. Other tools retain their
+existing service. The executor uses the `mcp` owner token with an explicit state
+directory and performs no independent startup migration.
+
+The shared executor admits 64 calls and 4 MiB of pending input. Replies have a
+32 MiB frame bound and obey pipe backpressure. A cancelled reply retains its
+slot until settlement; an executor that has not settled cancellation after one
+second is retired before a replacement starts. Sixty seconds idle retires it.
+The existing helper lease ends its process group when its Viewer dies. The
+Viewer loop monitor labels the wait `mcp.tasks.executor`.
+
+Moving the service alone left protocol setup on the Viewer: every stateless
+POST registered the complete tool catalog and rebuilt task transport schemas.
+Single known-tool POSTs now register that tool; discovery, unknown names,
+batches and other protocol methods keep the full catalog. Fixed transport
+schemas are built once. The compiled executor uses the App Router server layer
+because the shared binding graph imports App Router APIs. Production build and
+source/compiled executor tests exercise this entry.
+
+`scripts/mcp-state-writer-matrix.py` exports the audit, matched main and candidate
+revisions, freezes Bun, Node, dependencies, observer and seed, and runs the
+existing benchmark through one owned admission per sample. The default is all
+1/19/37-client load points, three alternating repetitions, independent and
+shared tasks under stdio and native HTTP. Optional `--clients`, `--modes`,
+`--sides` and `--repeats` select diagnostic subsets. A completed report can be
+resumed; a partial sample stays on disk and refuses replacement.
+
+The native observer records successful row statements with transaction and call
+identity. The comparer replays committed statements into an in-memory copy of
+the seed and requires its complete final rows to match the post-teardown
+snapshot. Collection revisions order concurrent commits. Original-key queries,
+final MCP receipts and this row history reconcile lost replies. Protocol
+failures remain failures in the measured counters. An unknown reply remains in
+the response record even when the history proves its final effect. Direct
+normalized hashes retain numeric SQL revisions; concurrent revision ordering,
+shared-task guard outcomes and the 100-entry create-receipt cap are also checked
+against each sample's committed history.
+
+Run from a clean candidate checkout with its dependencies installed. `GATE`
+names the supplied owned runner; `SQLITE_INCLUDE` names the directory containing
+`sqlite3ext.h`. Omitting `--seed` and `--capabilities` generates a fresh synthetic
+seed with the existing concurrency fixture. Supplying both reuses an archived
+seed and its matching fixture capabilities.
+
+```sh
+RUN_ROOT="$(mktemp -d /tmp/delegatus-mcp-study.XXXXXXXX)"
+OBSERVER="$RUN_ROOT/observer.so"
+bash "$GATE" cc -I "$SQLITE_INCLUDE" -O2 -fPIC -shared scripts/sqlite-observer.c -o "$OBSERVER"
+python3 -B scripts/mcp-state-writer-matrix.py --output "$RUN_ROOT" --gate "$GATE" --observer "$OBSERVER" --baseline "$BASELINE" --candidate HEAD --audit 45d25ac
+python3 -B scripts/mcp-state-writer-matrix.py --compare "$RUN_ROOT"
+```
+
+The complete alternating matrix is required before performance acceptance.

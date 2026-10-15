@@ -238,8 +238,7 @@ export async function runStateWriterSample(): Promise<void> {
     const pendingAtEnd = pending.size;
     await Promise.race([Promise.all(pending), Bun.sleep(35_000)]);
     // Re-query uncertain mutations under their original keys. Settled replies
-    // are already evidence; replaying old successes after bounded receipt
-    // retention would create a second workload during final-state collection.
+    // are already evidence; recovery adds no replay burst for those successes.
     // This phase is outside the measurement window and cannot improve its
     // completed/failed counters. Save the returned disposition verbatim.
     const reconciliationDeadline = Date.now() + 300_000;
@@ -305,6 +304,10 @@ export async function runStateWriterSample(): Promise<void> {
       try {
         fs.writeFileSync(path.join(root, "final-rows.json"), JSON.stringify(db.query("SELECT collection,row_key,value_json,row_revision FROM state_rows ORDER BY collection,row_key").all()));
       } finally { db.close(); }
+      const receipts = new Database(path.join(env.LLV_STATE_DIR!, "mcp-receipts.sqlite"), { readonly: true });
+      try {
+        fs.writeFileSync(path.join(root, "final-receipts.json"), JSON.stringify(receipts.query("SELECT receipt_key,result_json FROM mcp_receipts ORDER BY receipt_key").all()));
+      } finally { receipts.close(); }
     }
   }
 }

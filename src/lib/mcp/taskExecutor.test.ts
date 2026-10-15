@@ -2,6 +2,7 @@ import { afterAll, beforeAll, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { createHash } from "node:crypto";
 import { captureProcessIdentity, processIdentityStatus, type ProcessIdentity } from "@/lib/processIdentity";
 import { stopFixtureIdentity } from "@/lib/testing/fixtureProcess";
 import { ownFixtureChild, reapFixtureChildren } from "./ownedFixtureChildren";
@@ -14,14 +15,20 @@ for (const name of ["HOME", "XDG_CONFIG_HOME", "TMPDIR", "LLV_STATE_DIR", "LLV_C
 }
 process.env.LLV_VIEWER_CONTROL_URL = "http://127.0.0.1:1";
 let capability: string;
+let capabilities: string[];
 const executors: McpTaskExecutor[] = [];
-const create = () => { const executor = new McpTaskExecutor(); executors.push(executor); return executor; };
+const create = () => {
+  const executor = new McpTaskExecutor(process.env.LLV_MCP_TASK_WORKER_BUNDLE
+    ? { launch: { executable: process.execPath, workerPath: path.resolve(process.env.LLV_MCP_TASK_WORKER_BUNDLE) } } : {});
+  executors.push(executor); return executor;
+};
 const call = (executor: McpTaskExecutor, name: string, args: Record<string, unknown>, context = {}) =>
   runAsMcpHttpCaller({ capability }, () => executor.callTool(name, args, context));
 beforeAll(async () => {
   process.env.MCP_BENCH_READY = path.join(root, "capabilities.json");
   await (await import("../../../scripts/mcp-state-writer-benchmark")).stateWriterChild("seed");
-  capability = JSON.parse(fs.readFileSync(process.env.MCP_BENCH_READY, "utf8"))[0];
+  capabilities = JSON.parse(fs.readFileSync(process.env.MCP_BENCH_READY, "utf8"));
+  capability = capabilities[0]!;
 });
 afterAll(async () => {
   await Promise.all(executors.map(executor => executor.close()));
@@ -68,15 +75,64 @@ test("caller cancellation does not claim that the original mutation never ran", 
   expect(result.ok).toBe(true);
 });
 
+test("concurrent callers keep their own server-derived note attribution across the pipe", async () => {
+  const executor = create();
+  const { agentRegistry } = await import("@/lib/agent/registry");
+  const expected = capabilities.slice(0, 2).map(token => {
+    const id = agentRegistry().conversationIdForSpawnCapabilityDigest(createHash("sha256").update(token).digest("hex"));
+    if (!id) throw new Error("fixture caller has no conversation");
+    return id;
+  });
+  expect(expected[0]).not.toBe(expected[1]);
+  const results = await Promise.all(capabilities.slice(0, 2).map((token, n) =>
+    runAsMcpHttpCaller({ capability: token }, async () => {
+      const created = await executor.callTool("create_task", {
+        project: "fixture", text: `Attributed task ${n}`, board: "hidden", clientRequestId: `attributed-${n}`,
+      });
+      if (!created.ok) throw new Error(JSON.stringify(created));
+      return executor.callTool("update_task", { taskId: created.taskId, note: `Caller ${n}`, clientRequestId: `attributed-note-${n}`, full: true });
+    })));
+  for (let n = 0; n < results.length; n++) {
+    const result = results[n]!;
+    if (!result.ok) throw new Error(JSON.stringify(result));
+    expect((result.task as { note: { author: { conversationId: string } } }).note.author.conversationId).toBe(expected[n]);
+  }
+});
+
 test("timed-out replies retain admission until the executor settles or closes", async () => {
+  const ready = path.join(root, "stalled-worker.pid");
   const executor = new McpTaskExecutor({ launch: { executable: process.execPath, workerPath: path.join(import.meta.dir, "writerConcurrencyChild.ts") },
-    env: { LLV_TASK_EXECUTOR_STALL: "1" } });
+    env: { LLV_TASK_EXECUTOR_STALL: "1", LLV_WRITER_READY: ready } });
   executors.push(executor);
   const deadlineAt = Date.now() + 100;
   const pending = Array.from({ length: 64 }, (_, n) => call(executor, "update_task", { taskId: "held", clientRequestId: `held-${n}` }, { deadlineAt }));
   const outcomes = await Promise.allSettled(pending);
   expect(outcomes.every(result => result.status === "rejected")).toBe(true);
   await expect(call(executor, "list_tasks", {})).rejects.toThrow("admission is full");
+  const deadline = Date.now() + 3_000;
+  while (!fs.existsSync(ready) && Date.now() < deadline) await Bun.sleep(10);
+  const identity = captureProcessIdentity(Number(fs.readFileSync(ready, "utf8")));
+  while (identity && processIdentityStatus(identity) === "alive" && Date.now() < deadline) await Bun.sleep(10);
+  if (identity) expect(processIdentityStatus(identity)).not.toBe("alive");
+  await expect(call(executor, "list_tasks", {}, { deadlineAt: Date.now() + 10 })).rejects.toThrow("timed out");
+  await executor.close();
+});
+
+test("idle retirement closes the real executor before the next request starts one", async () => {
+  const ready = path.join(root, "idle-worker.pid");
+  const executor = new McpTaskExecutor({ idleMs: 10,
+    launch: { executable: process.execPath, workerPath: path.join(import.meta.dir, "writerConcurrencyChild.ts") },
+    env: { LLV_TASK_EXECUTOR_REPORT_PID: "1", LLV_WRITER_READY: ready } });
+  executors.push(executor);
+  const pending = call(executor, "list_tasks", { project: "fixture", limit: 1 });
+  void pending.catch(() => {});
+  const readyDeadline = Date.now() + 5_000;
+  while (!fs.existsSync(ready) && Date.now() < readyDeadline) await Bun.sleep(10);
+  const identity = captureProcessIdentity(Number(fs.readFileSync(ready, "utf8")))!;
+  expect((await pending).ok).toBe(true);
+  const shutdown = Date.now() + 3_000;
+  while (processIdentityStatus(identity) === "alive" && Date.now() < shutdown) await Bun.sleep(10);
+  expect(processIdentityStatus(identity)).not.toBe("alive");
   await executor.close();
 });
 

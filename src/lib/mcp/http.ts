@@ -9,6 +9,8 @@ import {
   createProductionViewerMcpService,
   createViewerMcpServer,
   MCP_HTTP_CLIENT_ID,
+  MCP_TOOL_NAMES,
+  type McpToolName,
   type McpToolService,
 } from "./server";
 
@@ -217,7 +219,14 @@ export async function handleMcpHttpRequest(request: NextRequest): Promise<Respon
   request.signal.addEventListener("abort", abandon, { once: true });
   if (request.signal.aborted) abandon();
 
-  const server = createViewerMcpServer(service);
+  // A stateless single-tool POST cannot observe registrations for other tools.
+  // Discovery, batches, unknown names and other protocol methods keep the full
+  // catalog and the SDK's existing error behavior.
+  const requested = messages.length === 1 && messages[0]?.method === "tools/call"
+    ? (messages[0].params as { name?: unknown } | undefined)?.name : undefined;
+  const tools = typeof requested === "string" && (MCP_TOOL_NAMES as readonly string[]).includes(requested)
+    ? [requested as McpToolName] : undefined;
+  const server = createViewerMcpServer(service, tools);
   const transport = new WebStandardStreamableHTTPServerTransport({
     sessionIdGenerator: undefined,
     enableJsonResponse: true,

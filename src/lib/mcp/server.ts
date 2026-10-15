@@ -4573,23 +4573,27 @@ const VIEWER_MCP_BASE_INSTRUCTIONS = "This server is Delegatus, registered under
 // the logical arguments, their digest, downstream payload or durable answer.
 for (const name of MCP_TOOL_NAMES) TOOL_INPUT_SCHEMAS[name] = TOOL_INPUT_SCHEMAS[name].extend({ nativeCallerProof: z.string().regex(/^[A-Za-z0-9_-]{43}$/).optional().describe("Injected by the synchronous Delegatus Claude hook. Omit in ordinary arguments; never invent or copy a proof.") });
 
-export function createViewerMcpServer(service: McpToolService): McpServer {
+// Build fixed protocol schemas once beside the tool definitions.
+// Invalid optional task fields still reach the strict
+// task validation callback below before a receipt can be acquired.
+const TOOL_TRANSPORT_SCHEMAS = Object.fromEntries(MCP_TOOL_NAMES.map(toolName => {
+  const schema = TOOL_INPUT_SCHEMAS[toolName];
+  return [toolName, toolName === "create_task" || toolName === "update_task" ? schema.extend(Object.fromEntries(
+    Object.entries(schema.shape).filter(([, fieldSchema]) => fieldSchema.isOptional())
+      .map(([field, fieldSchema]) => [field, fieldSchema.catch((context: { input: unknown } | undefined) => context?.input)]),
+  )) : schema];
+})) as typeof TOOL_INPUT_SCHEMAS;
+
+export function createViewerMcpServer(service: McpToolService, tools: readonly McpToolName[] = MCP_TOOL_NAMES): McpServer {
   const server = new McpServer({ name: MCP_SERVER_NAME, version: "1.0.0" }, {
     instructions: viewerMcpInstructions(),
   });
-  for (const toolName of MCP_TOOL_NAMES) {
+  for (const toolName of tools) {
     const taskMutation = toolName === "create_task" || toolName === "update_task";
     const schema = TOOL_INPUT_SCHEMAS[toolName];
-    // The SDK's default validation error has no retryability or field envelope.
-    // Preserve the published input shape, but carry invalid optional task fields through
-    // to our strict validation below, before dispatch or receipt acquisition.
-    const inputSchema = taskMutation ? schema.extend(Object.fromEntries(
-      Object.entries(schema.shape).filter(([, fieldSchema]) => fieldSchema.isOptional())
-        .map(([field, fieldSchema]) => [field, fieldSchema.catch((context: { input: unknown } | undefined) => context?.input)]),
-    )) : schema;
     server.registerTool(toolName, {
       description: TOOL_DESCRIPTIONS[toolName],
-      inputSchema,
+      inputSchema: TOOL_TRANSPORT_SCHEMAS[toolName],
     }, async (args, extra) => {
       if (taskMutation) {
         const parsed = schema.safeParse(args);
