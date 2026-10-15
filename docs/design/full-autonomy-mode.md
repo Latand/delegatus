@@ -223,7 +223,9 @@ export interface AutonomySetting {
 `applySeatTickSettingsChange` refuses `autonomy.enabled: true` while
 `enabled` is false, and turning wakes off while the mode is on ends the
 episode (`endReason: "turned-off"`). The panel shows both moves in the draft
-before Save: switching autonomy on also flips «Пробудження оркестратора» on.
+before Save: switching autonomy on also flips «Пробудження оркестратора» on,
+and only then, while the stored wakes are off, the section says so under the
+duration («Разом з нею вмикаються пробудження оркестратора.»).
 
 **Who may change it.**
 
@@ -252,8 +254,10 @@ built only from what the panel already uses:
 
 The status block gets one more `StatusLine` while an episode stands:
 «Повна автономія · до 06:45 · лишилось 5 год 12 хв» (unlimited: «Повна
-автономія · без терміну · з 22:45»). Details gains «Увімкнув: оператор,
-22:45». The phone sheet gets the same section from the same body, with its
+автономія · без терміну · з 22:45»). Its dot wears the ring's colour
+(`--tick-3`), so the line and the chip read as the same mode; green stays the
+health dot's. Details gains «Повну автономію увімкнув оператор 14 жовт.,
+22:45»; the status block shows nothing more for the mode. The phone sheet gets the same section from the same body, with its
 44 px targets.
 
 Placing it under the wakes keeps the order
@@ -460,8 +464,10 @@ row above the seat composer (dock and kanban seat) and on the phone's tick
 row; motion shown as frame sequences or short clips; each with its
 reduced-motion still.
 
-1. **«Змійка»** — one short segment, about a fifth of the outline, crawls
-   around the pill at constant speed, about 4 s a lap, continuously. Drawn as
+1. **«Змійка»** — one short segment, about a quarter of the outline, crawls
+   around the pill at constant speed, about 4 s a lap, continuously. It fades
+   evenly from a full-opacity head to a transparent tail, 2 px wide
+   throughout, the way the attention comets fade. Drawn as
    an SVG rounded rect with `pathLength="100"` and an animated
    `stroke-dashoffset` (the `loop-dash` idiom), so its speed is even along
    the straight sides and the ends. A conic gradient from the centre (the
@@ -471,8 +477,8 @@ reduced-motion still.
    dashes march slowly in one direction (`loop-dash`, a slower period than
    the pipeline rail's 0.7 s). Reads as «running» without a moving head;
    the calmest of the three.
-3. **«Змійка раз на хвилину»** — the outline is a faint still ring; once
-   every ~10 s the variant-1 snake makes a single lap and fades. Answers
+3. **«Змійка раз на 10 с»** — the outline is a faint still ring; once
+   every 10 s the variant-1 snake makes a single lap and fades. Answers
    «с какой-то периодичностью» literally; quietest between laps.
 
 Not proposed: reusing `.pane-attention`'s two comets as is. That motion
@@ -541,7 +547,7 @@ Each with options; the first option is the recommendation.
   picture the quote draws («как змейка, которая ползёт», «постоянно»), even
   speed, noticeable and calm.
 - 2 «Біжучий пунктир» — dashes march along the whole outline.
-- 3 «Змійка раз на хвилину» — one lap every ~10 s, a still ring between.
+- 3 «Змійка раз на 10 с» — one lap every 10 s, a still ring between.
 
 **Q2. Which decisions does the seat take on its own?**
 - **Everything outside the §5 list, including forms already open and design

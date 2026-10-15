@@ -5346,7 +5346,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "seatTick.autonomy.status": "Повна автономія · до {time} · лишилось {left}",
   "seatTick.autonomy.statusUnlimited": "Повна автономія · без терміну · з {time}",
   "seatTick.autonomy.left": "{h} год {m} хв",
-  "seatTick.autonomy.setBy": "Увімкнув оператор о {time}",
+  "seatTick.autonomy.setBy": "Повну автономію увімкнув оператор {time}",
   "seatTick.autonomy.chip": "Повна автономія до {time}",
   "seatTick.autonomy.chipUnlimited": "Повна автономія без терміну",
   "seatTick.autoRotate.head": "Автоматична ротація",

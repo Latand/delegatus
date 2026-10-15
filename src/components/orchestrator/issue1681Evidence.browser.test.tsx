@@ -1406,7 +1406,7 @@ browserTest("full autonomy prototype: three running borders on the tick switch, 
     for (const animation of document.getAnimations()) { animation.pause(); animation.currentTime = at; }
   }, ms);
 
-  async function open(variant: 1 | 2 | 3 | 0, theme: "light" | "dark", width: 1440 | 390, reduced: boolean, autonomy: "on" | "off" = "on") {
+  async function open(variant: 1 | 2 | 3 | 0, theme: "light" | "dark", width: 1440 | 390, reduced: boolean, autonomy: "on" | "off" = "on", tick: "on" | "off" = "on") {
     const phone = width === 390;
     const context = await browser.newContext({
       viewport: phone ? { width: 390, height: 844 } : { width: 1440, height: 900 },
@@ -1423,7 +1423,7 @@ browserTest("full autonomy prototype: three running borders on the tick switch, 
     const errors: string[] = [];
     page.on("pageerror", (error) => errors.push(error.message));
     const state = variant === 0 ? "off" : autonomy;
-    await page.goto(`${base}/?surface=${phone ? "phone" : "desktop"}&dock=${phone ? 0 : 440}&locale=uk&face=default&autonomy=${state}&autonomyVariant=${variant || 1}`);
+    await page.goto(`${base}/?surface=${phone ? "phone" : "desktop"}&dock=${phone ? 0 : 440}&locale=uk&face=default&autonomy=${state}&autonomyVariant=${variant || 1}${tick === "off" ? "&tick=off" : ""}`);
     await page.waitForSelector(phone ? "[data-seat-tick-row] [data-seat-tick-chip]" : "[data-seat-tick-chip]");
     await page.waitForTimeout(500);
     return { context, page, errors, phone };
@@ -1492,6 +1492,8 @@ browserTest("full autonomy prototype: three running borders on the tick switch, 
           /* The panel with an episode standing: status line, section, the
              stored end kept in the select. */
           await page.evaluate(() => { for (const animation of document.getAnimations()) animation.play(); });
+          /* The ring's colour, read while the chip shows: the phone's sheet covers it. */
+          const ring = await page.evaluate(() => getComputedStyle(document.querySelector("[data-seat-tick-autonomy-ring] rect")!).stroke);
           await chip.click();
           const host = phone ? '[data-mobile2-sheet="tick"]' : "[data-seat-tick-popover]";
           await page.waitForSelector(`${host} [data-seat-tick-autonomy-section]`);
@@ -1520,9 +1522,15 @@ browserTest("full autonomy prototype: three running borders on the tick switch, 
             }
           });
           await page.waitForTimeout(150);
+          /* The mode's line and nothing more: who turned it on waits in the
+             closed Details, and the line's dot wears the ring's colour. */
+          expect(await page.locator("[data-seat-tick-autonomy-set-by]").count()).toBe(1);
+          expect(await page.locator("[data-seat-tick-autonomy-set-by]").isVisible()).toBe(false);
+          const colours = { ring, dot: await page.locator('[data-seat-tick-dot="autonomy"]').evaluate((element) => getComputedStyle(element).backgroundColor) };
+          expect(colours.dot).toBe(colours.ring);
           await page.screenshot({ path: path.join(FRAMES, `${key}-panel-status.png`) });
           expect(errors).toEqual([]);
-          readings.push({ key, spoken, status, ...geometry });
+          readings.push({ key, spoken, status, ...geometry, ...colours });
         } finally { await context.close(); }
 
         /* Turning it on from off: the duration offered at 8 h and Save. */
@@ -1536,12 +1544,32 @@ browserTest("full autonomy prototype: three running borders on the tick switch, 
             await off.page.locator("[data-seat-tick-autonomy-section]").evaluate((element) => element.scrollIntoView({ block: "center" }));
             await off.page.waitForTimeout(200);
             expect(await off.page.locator("[data-seat-tick-save]").count()).toBe(1);
+            /* The wakes are already on, so no hint says they will be. */
+            expect(await off.page.locator("[data-seat-tick-autonomy-wakes]").count()).toBe(0);
             await off.page.screenshot({ path: path.join(FRAMES, `${key}-panel-turning-on.png`) });
             await off.page.locator("[data-seat-tick-save]").click();
             await off.page.waitForTimeout(300);
             /* Saved: the local flag holds the episode, and the status line shows it. */
             expect(await off.page.evaluate(() => localStorage.getItem("llv_autonomy_prototype"))).toBe('{"state":"on","variant":' + variant + "}");
             expect(await off.page.locator("[data-seat-tick-autonomy-summary]").innerText()).toBe("Повна автономія · до 09:33 · лишилось 8 год 0 хв");
+            expect(off.errors).toEqual([]);
+          } finally { await off.context.close(); }
+        }
+
+        /* Turning it on while the wakes are off: the hint says the wakes
+           come on with it, and the wakes' own switch is already flipped. */
+        {
+          const off = await open(variant, theme, width, false, "off", "off");
+          try {
+            await off.page.locator("[data-seat-tick-chip]").click();
+            await off.page.waitForSelector("[data-seat-tick-autonomy-enabled]");
+            expect(await off.page.locator("[data-seat-tick-autonomy-wakes]").count()).toBe(0);
+            await off.page.locator("[data-seat-tick-autonomy-enabled]").click();
+            await off.page.waitForSelector("[data-seat-tick-autonomy-wakes]");
+            expect(await off.page.locator("[data-seat-tick-autonomy-wakes]").innerText()).toBe("Разом з нею вмикаються пробудження оркестратора.");
+            await off.page.locator("[data-seat-tick-autonomy-section]").evaluate((element) => element.scrollIntoView({ block: "center" }));
+            await off.page.waitForTimeout(200);
+            await off.page.screenshot({ path: path.join(FRAMES, `${key}-panel-turning-on-wakes-off.png`) });
             expect(off.errors).toEqual([]);
           } finally { await off.context.close(); }
         }

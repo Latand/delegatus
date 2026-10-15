@@ -5440,7 +5440,7 @@ export const en = {
   "seatTick.autonomy.status": "Full autonomy · until {time} · {left} left",
   "seatTick.autonomy.statusUnlimited": "Full autonomy · no end · since {time}",
   "seatTick.autonomy.left": "{h} h {m} min",
-  "seatTick.autonomy.setBy": "Turned on by the operator at {time}",
+  "seatTick.autonomy.setBy": "Full autonomy turned on by the operator {time}",
   "seatTick.autonomy.chip": "Full autonomy until {time}",
   "seatTick.autonomy.chipUnlimited": "Full autonomy, no end",
   "seatTick.autoRotate.head": "Auto-rotation",

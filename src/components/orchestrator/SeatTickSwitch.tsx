@@ -137,9 +137,10 @@ function useThumbMotion(rootRef: RefObject<HTMLElement | null>, target: number, 
  * with `pathLength="100"` so a dash is a share of the outline whatever the
  * pill measures, and its motion is even along the sides and round the ends.
  *
- *   1 «Змійка» — a tapered segment (tail, body, head) crawls round, 4 s a lap;
+ *   1 «Змійка» — a segment that fades from its head to its tail crawls
+ *     round, 4 s a lap;
  *   2 «Біжучий пунктир» — the whole outline dashed, the dashes march slowly;
- *   3 «Змійка раз на хвилину» — a faint still ring, and every 10 s the snake
+ *   3 «Змійка раз на 10 с» — a faint still ring, and every 10 s the snake
  *     makes one lap and fades.
  *
  * Reduced motion draws every variant as one whole, still ring (`globals.css`).
@@ -173,9 +174,10 @@ function AutonomyRing({ variant }: { variant: AutonomyVariant }) {
       {!rect ? null : variant === 1 || variant === 3 ? (
         <>
           {variant === 3 ? <rect {...rect} className="seat-tick-autonomy-rest" /> : null}
-          <rect {...rect} className="seat-tick-autonomy-snake" data-segment="tail" />
-          <rect {...rect} className="seat-tick-autonomy-snake" data-segment="body" />
-          <rect {...rect} className="seat-tick-autonomy-snake seat-tick-autonomy-still" data-segment="head" />
+          <g className="seat-tick-autonomy-snakes">
+            {SNAKE.map((layer, index) => <rect key={index} {...rect} className="seat-tick-autonomy-snake" style={layer.style} />)}
+          </g>
+          <rect {...rect} className="seat-tick-autonomy-still seat-tick-autonomy-solid" />
         </>
       ) : (
         <rect {...rect} className="seat-tick-autonomy-dash seat-tick-autonomy-still" />
@@ -183,6 +185,21 @@ function AutonomyRing({ variant }: { variant: AutonomyVariant }) {
     </svg>
   );
 }
+
+/* The snake is SNAKE_LAYERS strokes that share a head, each at
+   SNAKE_ALPHA opacity: layer k is SNAKE_LENGTH × (1 − α)^k long, so where n
+   layers overlap the stroke reads 1 − (1 − α)^n and the opacity falls about
+   evenly from the head (≈0.96) to nothing at the tail, in steps of at most α.
+   A gradient cannot follow an SVG outline, and butted segments leave seams
+   at their joins; overlapping ones leave none. A layer of length L starts
+   SNAKE_LENGTH − L ahead of the longest, which is that share of a lap. */
+const SNAKE_LENGTH = 24;
+const SNAKE_LAYERS = 40;
+const SNAKE_ALPHA = 0.08;
+const SNAKE = Array.from({ length: SNAKE_LAYERS }, (_, index) => {
+  const length = SNAKE_LENGTH * (1 - SNAKE_ALPHA) ** index;
+  return { length, style: { strokeDasharray: `${length.toFixed(3)} ${(100 - length).toFixed(3)}`, animationDelay: `calc(var(--autonomy-lap) * ${(-(SNAKE_LENGTH - length) / 100).toFixed(4)})` } };
+});
 
 export function SeatTickSwitch({ read, reading, now, surface, open, onOpen, onRefused, anchorRef, className = "" }: {
   read: SeatTickSettingsRead;
