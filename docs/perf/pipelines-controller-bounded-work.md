@@ -245,10 +245,9 @@ calls. The maximum call time bounds its synchronous work from above.
 | Maximum preparation call wall time (ms) | 2.67 | 0.15 |
 | Whole warmed phase wall time (ms) | 24.47 | 92.90 |
 
-Whole-phase timings include existing full-lane copying. The indexed preparation
-and reconciliation selections keep their work fixed as that history grows.
-Ordinary metadata updates leave the reference projections untouched; changes to
-ownership or attempt fields rebuild their references atomically. Backfill treats
+These earlier measurements still included full-lane copying. The production
+safety review below addresses that remaining phase cost and the reference
+trigger that rebuilt retained attempts during output edits. Backfill treats
 stored row keys as SQL data, including keys containing alias text and quotes.
 
 ### Paired replay after integration
@@ -312,3 +311,126 @@ HOME/config/temp/state roots and a closed-port control URL. The documented
 publication override avoids repeating the known concurrent-runner timeout
 after these isolated checks. Deployment and production verification belong
 to the authorized deployment stage.
+
+
+### Production safety review fixes, 2026-10-15
+
+Output edits now compare a compact projection of the fields that affect
+ownership and attempt selection. A matching projection performs zero reference
+writes. SQL materializes each run and attempt before extracting its fields;
+changes to ownership still refresh the references within the authoritative
+writer transaction. The new projection is installed and backfilled under the
+existing startup fence, including an upgrade from the earlier trigger schema.
+Older peers continue to maintain it through their ordinary row writes.
+
+A terminal batch that follows a settled reap starts with zero failed stops.
+An unfinished batch keeps its recorded counts. The regression retains eighteen
+terminal attempts, leaves the first settled, and gives the other seventeen
+hosts temporary stop failures. Each receives five stop attempts across bounded
+windows, including four phases in a fresh process, before becoming unconfirmed.
+The same regression on the reviewed revision makes hosts unconfirmed after
+one failed stop.
+
+Mutable controller rows copy attempt slots and settled-attempt keys when
+accessed. Idle reaping consults cached settled keys before materializing a new
+batch. Serialization and checkpoints retain the complete lane. Guard and
+membership indexes belong to
+the immutable decoded revision and follow it through the shared bounded cache.
+Off-window activation or survivor evidence refuses progress; selected mutable
+attempts are checked directly. Current-attempt lookup and provenance use the
+selected references. Fallback task binding uses indexed identities with the
+existing conversation, launch and legacy-path precedence. Unclaimed publication
+selection reads cached candidates through async state admission.
+
+The complete warmed-phase probe includes copying, activation and survivor
+guards, fallback task preparation, provenance selection, all reconciliation
+loops and the controller acknowledgment. It holds one paused lane and sixteen
+selected references fixed while retaining 32 or 4,096 attempts and the same
+number of settled-attempt keys. Separate checks
+cover off-window activation and survivor protection, task identity precedence,
+discarded mutable copies and complete checkpoints. A peer-held writer check
+covers the controller reads and acknowledgment while an independent timer runs.
+
+The byte counter in the shared replay driver now includes individual attempt
+copies and the serialized header of a lazy row. Complete pipeline roots and
+partial attempt copies have separate counts; their bytes share one total.
+Both revisions use the same driver. Cold initialization remains separate from
+the two warm sweeps. Three fresh alternating E4/E5 pairs use the unchanged
+reference checksums, captured engine time, external responses and ten-second
+Git wait. Their numeric results and focused write/growth samples follow in the
+production-safety evidence record. These measurements concern the Viewer and
+its controller; deployment and the calm production window remain separate work.
+
+
+E4/E5 uses baseline `011a4fe97` and compares every authoritative hot/archive
+payload after each pair: 941 of 941 match in all three pairs. Synthetic write
+and retry comparisons use the reviewed revision `a677ae046`.
+
+| Measurement | Baseline | Fixed candidate |
+| --- | ---: | ---: |
+| Cold largest phase, median (ms) | 11,307.8 | 1,045.61 |
+| Cold largest phase across trials (ms) | 11,493.65 | 1,077.43 |
+| Cold largest per-phase main-thread CPU, median (ms) | 1,870 | 1,020 |
+| Cold complete sweep including jobs, median (ms) | 11,333.71 | 11,918.48 |
+| Cold complete sweep main-thread CPU, median (ms) | 1,870 | 2,420 |
+| Cold decoded rows, median | 614 | 526 |
+| Cold decoded source bytes, median | 75,757,641 | 67,767,804 |
+| Cold cloned pipeline roots, median | 859 | 271 |
+| Cold cloned roots and attempt bytes, median | 110,803,535 | 31,716,153 |
+| Cold logical read bytes, median | 749,671,743 | 1,041,564,892 |
+| Cold maximum labelled slice across trials (ms) | 490 | 562.78 |
+| Cold maximum timer delay across trials (ms) | 510.5 | 566.91 |
+| Cold maximum lease hold across trials (ms) | 493.32 | 388.95 |
+| Warm largest phase, median (ms) | 194.89 | 69.78 |
+| Warm largest phase across trials (ms) | 227.76 | 121.42 |
+| Warm largest per-phase main-thread CPU, median (ms) | 190 | 65 |
+| Warm complete sweep including jobs, median (ms) | 215.3 | 390.67 |
+| Warm complete sweep main-thread CPU, median (ms) | 190 | 345 |
+| Warm decoded rows, median | 94.5 | 28.5 |
+| Warm decoded source bytes, median | 11,298,036 | 3,996,967 |
+| Warm cloned pipeline roots, median | 373 | 64 |
+| Warm cloned roots and attempt bytes, median | 49,692,470 | 7,923,970 |
+| Warm logical read bytes, median | 15,889,733.5 | 36,351,189.5 |
+| Warm maximum labelled slice across trials (ms) | 2.25 | 4.94 |
+| Warm maximum timer delay across trials (ms) | 9.89 | 50.74 |
+| Warm maximum lease hold across trials (ms) | 4.22 | 9.84 |
+| Whole-hot returned rows per sweep | 267 | 0 |
+
+The candidate additionally copies 66 individual attempts per sweep (1,192,467
+serialized bytes in the median warm sweep), included in its byte total.
+Complete sweeps still use more CPU and logical reads than the original engine.
+The largest awaited phases and retained-attempt copying fall within the stated
+fixture budgets. Cold startup remains visible in the synchronous-slice and
+timer measurements.
+
+| Retained attempts | Reviewed output write, median (ms) | Fixed output write, median (ms) | Fixed controller checkpoint lease (ms) |
+| --- | ---: | ---: | ---: |
+| 32 | 1.06 | 0.56 | 15.64 |
+| 1,024 | 184.77 | 11.73 | 70.75 |
+| 4,096 | 3669.89 | 41.66 | 255.33 |
+
+The output write is identical raw SQL on both revisions. The fixed projection
+also checks zero reference inserts during these edits and verifies an ownership
+change and rollback through independent connections. The larger engine
+fixture reproduced a 12,849 ms mutation lease on the reviewed revision.
+
+| Retained attempts and settled keys | Attempt visits per phase | Attempt copies per phase | Median phase wall (ms) | Maximum labelled slice (ms) | Maximum timer delay (ms) |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 32 | 112 | 16 | 24.99 | 1.42 | 19.20 |
+| 4,096 | 112 | 16 | 31.09 | 2.90 | 19.35 |
+
+Thirty warmed phases per size retain distinct terminal host identities and a
+settled key for every attempt. The focused checks pass 110 cases across six
+explicit files, with the recovery file filtered to task binding. TypeScript,
+changed-file ESLint and local publication privacy passed.
+All commands use the supplied CPU gate and isolated HOME, config, temp and
+state roots with a closed Viewer control URL. Existing ESLint warnings are
+unchanged. The numeric record includes every replay sample and the work counts:
+[pipelines-controller-production-safety-fixes.json](../../evidence/perf/pipelines-controller-production-safety-fixes.json).
+
+An optional expanded run on the reviewed revision completed the 32-attempt
+sample and was cancelled during setup of the 4,096-attempt case, after about 151 s
+in the owned run. Its partial samples are retained in the numeric
+record. The two ordinary regressions failed independently on that revision;
+the identical SQL write comparison completed at every size. The candidate's
+expanded fixture completes all thirty phases at both sizes.

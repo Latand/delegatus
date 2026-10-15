@@ -1,4 +1,4 @@
-import { controllerPipelineKeys } from "./controllerScope";
+import { controllerPipelineKeys, controllerReferences, inheritControllerGuards } from "./controllerScope";
 import { stateLockAttempt, waitForStateLock } from "@/lib/state/lockWait";
 import crypto from "node:crypto";
 import { performanceSpans } from "@/lib/performanceSpans";
@@ -1436,6 +1436,56 @@ function cloneLoadedPipeline(pipeline: Pipeline, resolveProject: (project: strin
   return performanceSpans.sync("pipeline.copy", () => reviveLoadedPipeline(structuredClone(pipeline), resolveProject), 1);
 }
 
+/** Array slots detach on access. Length, direct lookup and append stay bounded;
+ * enumeration/serialization still sees the complete authoritative history. */
+function lazyControllerArray<T>(source: T[]): T[] {
+  const target: typeof source = [];
+  target.length = source.length;
+  let inheritedLength = source.length;
+  const deleted = new Set<string>();
+  const index = (key: string | symbol) => typeof key === "string" && /^(0|[1-9][0-9]*)$/.test(key) ? Number(key) : -1;
+  const copyAt = (array: typeof source, key: string | symbol) => {
+    const n = index(key);
+    if (n >= 0 && n < inheritedLength && n < array.length && !Object.hasOwn(array, key) && !deleted.has(String(key))) {
+      array[n] = performanceSpans.sync("pipeline.copy", () => structuredClone(source[n]!));
+    }
+  };
+  return new Proxy(target, {
+    get(array, key, receiver) {
+      copyAt(array,key);
+      return Reflect.get(array, key, receiver);
+    },
+    has: (array, key) => Reflect.has(array, key) || (index(key) >= 0 && index(key) < Math.min(inheritedLength,array.length) && !deleted.has(String(key))),
+    set(array, key, value) {
+      if (key === "length") inheritedLength = Math.min(inheritedLength, Number(value));
+      deleted.delete(String(key));
+      return Reflect.set(array, key, value);
+    },
+    deleteProperty(array, key) { deleted.add(String(key)); return Reflect.deleteProperty(array,key); },
+    ownKeys(array) {
+      const keys = new Set(Reflect.ownKeys(array));
+      for (let n = 0; n < Math.min(inheritedLength,array.length); n++) if (!deleted.has(String(n))) keys.add(String(n));
+      return [...keys];
+    },
+    getOwnPropertyDescriptor(array, key) {
+      copyAt(array,key);
+      return Reflect.getOwnPropertyDescriptor(array,key);
+    },
+  });
+}
+
+function cloneControllerPipeline(pipeline: Pipeline): Pipeline {
+  if (!controllerReferences(pipeline.id)) return cloneLoadedPipeline(pipeline);
+  return performanceSpans.sync("pipeline.copy", () => {
+    const copy: Pipeline = structuredClone({ ...pipeline, runs: [],
+      terminalReap: pipeline.terminalReap ? { ...pipeline.terminalReap, settledAttempts: [] } : undefined });
+    copy.runs = pipeline.runs.map(run => ({ ...run, attempts: lazyControllerArray(run.attempts) }));
+    if (pipeline.terminalReap) copy.terminalReap!.settledAttempts = lazyControllerArray(pipeline.terminalReap.settledAttempts);
+    inheritControllerGuards(pipeline,copy);
+    return copy;
+  }, 1);
+}
+
 const pipelineStores = new Map<string, {
   active: SqliteStateCollection<Pipeline>;
   archive: SqliteStateCollection<Pipeline>;
@@ -1543,7 +1593,7 @@ function stores(): { active: SqliteStateCollection<Pipeline>; archive: SqliteSta
     decode: decodePipeline,
     preserveRejectedRecords: true,
     clone: cloneLoadedPipeline,
-    cloneController: cloneLoadedPipeline,
+    cloneController: cloneControllerPipeline,
     decodeAuthority: () => JSON.stringify(projectAliasSnapshot()),
     decodeError: (error: unknown) => error instanceof PipelineStoreError
       ? error
@@ -1732,10 +1782,18 @@ export function pipelineDeliveryLookup(query: { requestKey: string } | { reposit
 }
 
 export function unclaimedPipelinePublications(): Pipeline[] {
-  const keys = controllerPipelineKeys();
-  if (keys) return keys.flatMap(key => { const row = findPipelineRecord(key); return row && !row.delivery
-    && row.publication === "remote-branch" && row.state !== "completed" && row.state !== "closed" ? [row] : []; });
   return pipelineStore().unclaimedPipelinePublications();
+}
+
+export async function controllerUnclaimedPublications(): Promise<Pipeline[]> {
+  const keys = controllerPipelineKeys();
+  if (!keys) return unclaimedPipelinePublications();
+  const rows: Pipeline[] = [];
+  for (const key of keys) {
+    const row = await findControllerPipeline(key);
+    if (row && !row.delivery && row.publication === "remote-branch" && row.state !== "completed" && row.state !== "closed") rows.push(row);
+  }
+  return rows;
 }
 
 export function withDeliveryMutation<R>(operation: (tx: StateBoundedTransaction<Pipeline>) => R): R {

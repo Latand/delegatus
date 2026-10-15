@@ -1,8 +1,8 @@
-import { expect, test, harness, create, BUILD_ONLY, loadPipelines, savePipelines, tickPipelines, pipelineIdentity, publishHarness, Database, path, fs, spawn, realWorktreeLane, stopFixtureProcess, defaultPipelinePorts, crypto, registerPipelineTick } from "./engine.fixture";
+import { expect, test, harness, create, BUILD_ONLY, loadPipelines, savePipelines, tickPipelines, pipelineIdentity, publishHarness, Database, path, fs, spawn, realWorktreeLane, stopFixtureProcess, defaultPipelinePorts, crypto, registerPipelineTick, reserveActivationOnly } from "./engine.fixture";
 import { FlowPipelineController, type FlowPipelineControllerHeartbeat } from "./controller";
 import { tickPipelinesController } from "./controllerPass";
 import { pipelineControllerJobLanes, settlePipelineControllerJobs, startPipelineControllerJob, takePipelineControllerJobChanges } from "./controllerJobs";
-import { controllerAttemptWindow, controllerOtherTerminalHosts, controllerHostHasLiveWork, controllerFlowAttached, acknowledgePipelineControllerWork, archiveSettledPipelines, controllerPipelineVersion, findControllerPipeline, pipelineControllerReady, selectControllerPipelines, selectPipelineControllerWork, withPipelineMutation } from "./store";
+import { controllerAttemptWindow, controllerOtherTerminalHosts, controllerHostHasLiveWork, controllerFlowAttached, acknowledgePipelineControllerWork, archiveSettledPipelines, controllerPipelineVersion, findControllerPipeline, pipelineControllerReady, selectControllerPipelines, selectPipelineControllerWork, withPipelineMutation, withPipelineControllerMutation, controllerUnclaimedPublications } from "./store";
 import { SqliteStateCollection } from "@/lib/state/sqliteStateStore";
 import { spyOn } from "bun:test";
 import { performanceSpans, performanceSites } from "@/lib/performanceSpans";
@@ -402,6 +402,7 @@ test("a peer-held SQLite writer yields while a schedule acknowledgment waits", a
     expect(await controllerOtherTerminalHosts(item!.row_key, [])).toBe(true);
     expect(await controllerHostHasLiveWork({ stageId: "build", attempt: 1, conversationId: null, agentPath: null, paneId: "missing" })).toBe(false);
     expect(await controllerFlowAttached("missing")).toBe(false);
+    expect(await withControllerPipelineScope([item!.row_key],() => controllerUnclaimedPublications())).toEqual([]);
     await new Promise(resolve => setTimeout(resolve, 50));
     expect(timers).toBeGreaterThan(3);
     expect(finished).toBe(false);
@@ -582,41 +583,194 @@ test.each([0,1000])("resident terminal hosts and stale flow cleanup use indexed 
   } finally { loads.mockRestore(); }
 });
 
-test("attempt preparation reads at most sixteen references as one lane grows", async () => {
+test("complete warmed phases keep attempt visits and copies bounded as one lane grows", async () => {
   const { h, lane } = await committing();
   lane.state = "paused"; lane.cursor = null;
   const original = lane.runs[0]!.attempts[0]!;
   for (const history of [32,4096]) {
     lane.runs[0]!.attempts = Array.from({ length: history }, (_, index) => ({ ...structuredClone(original), n: index + 1,
       historical: true, state: "failed", verdict: { status: "fail" }, completedAt: h.ports.now(),
-      conversationId: null, agentPath: null, paneId: null, launchId: null }));
+      conversationId: `retained-${index}`, agentPath: `retained-path-${index}`, paneId: null, launchId: null }));
+    lane.terminalReap = { rounds:1,stopped:history,lastAt:h.ports.now(),settledAt:h.ports.now(),
+      settledAttempts:Array.from({ length:history },(_,n) => `build:${n+1}`) };
     savePipelines([lane]); await tickPipelinesController([], h.ports);
-    let keys = 0;
-    const stringify = JSON.stringify;
-    JSON.stringify = ((value, ...args) => {
-      if (Array.isArray(value) && value[0] === lane.id && typeof value[2] === "number") keys++;
-      return Reflect.apply(stringify, JSON, [value, ...args]);
-    }) as typeof JSON.stringify;
-    const start = performance.now();
-    try { await tickPipelinesController([], h.ports); } finally { JSON.stringify = stringify; }
-    expect(keys).toBeLessThanOrEqual(128);
-    const window = await controllerAttemptWindow(lane.id, -1, "");
-    expect(window.window).toHaveLength(16);
-    if (process.env.LLV_CONTROLLER_FIX_EVIDENCE) {
-      const wallMs = performance.now()-start;
+    const samples = [];
+    for (let sample = 0; sample < (process.env.LLV_CONTROLLER_FIX_EVIDENCE ? 30 : 3); sample++) {
+      let visits = 0, copies = 0, maxSliceMs = 0, timerDelayMs = 0;
+      const isAttempts = (value: unknown[]) => value.length > 0 && value[0] && typeof value[0] === "object" && "n" in value[0] && "effectiveRole" in value[0];
+      const iterator = Array.prototype[Symbol.iterator];
+      Array.prototype[Symbol.iterator] = function* () {
+        const count = isAttempts(this);
+        for (const value of iterator.call(this)) { if (count) visits++; yield value; }
+        return undefined;
+      };
+      const some = Array.prototype.some;
+      Array.prototype.some = function (predicate, thisArg) {
+        const count = isAttempts(this);
+        return some.call(this, (value, index, array) => { if (count) visits++; return predicate.call(thisArg,value,index,array); });
+      };
+      const clone = globalThis.structuredClone;
+      globalThis.structuredClone = (value, options) => {
+        if (value && typeof value === "object") {
+          if ("runs" in value) { copies += (value as unknown as typeof lane).runs.reduce((n,run) => n+run.attempts.length,0); }
+          else if ("n" in value && "effectiveRole" in value) { copies++; }
+        }
+        return clone(value,options);
+      };
+      const sync = performanceSpans.sync;
+      performanceSpans.sync = ((site,work,rows,bytes) => {
+        const at = performance.now();
+        try { return sync.call(performanceSpans,site,work,rows,bytes); }
+        finally { maxSliceMs = Math.max(maxSliceMs,performance.now()-at); }
+      }) as typeof sync;
       const threadTicks = () => {
+        if (process.platform !== "linux") return 0;
         const fields = fs.readFileSync(`/proc/self/task/${process.pid}/stat`,"utf8").split(") ")[1]!.split(" ");
         return Number(fields[11])+Number(fields[12]);
       };
-      const before = threadTicks(), prepStart = performance.now();
-      let maxPreparationMs = 0;
-      for (let sample = 0; sample < 1000; sample++) {
-        const at = performance.now(); await controllerAttemptWindow(lane.id,16,"");
-        maxPreparationMs = Math.max(maxPreparationMs,performance.now()-at);
+      const before = threadTicks(), at = performance.now();
+      let last = at;
+      const timer = setInterval(() => { const now = performance.now(); timerDelayMs = Math.max(timerDelayMs,now-last-2); last = now; },2);
+      try { await tickPipelinesController([],h.ports); await new Promise(resolve => setImmediate(resolve)); }
+      finally {
+        clearInterval(timer); performanceSpans.sync = sync; globalThis.structuredClone = clone;
+        Array.prototype.some = some; Array.prototype[Symbol.iterator] = iterator;
       }
-      fs.appendFileSync(process.env.LLV_CONTROLLER_FIX_EVIDENCE, JSON.stringify({ history, keys, wallMs,
-        preparationSamples: 1000, preparationWallMs: performance.now()-prepStart,
-        preparationMainThreadMs: (threadTicks()-before)*10, maxPreparationMs }) + "\n");
+      samples.push({ visits, copies, wallMs: performance.now()-at, mainThreadMs: (threadTicks()-before)*10, maxSliceMs, timerDelayMs });
+      expect(visits).toBeLessThanOrEqual(256);
+      expect(copies).toBeLessThanOrEqual(128);
+    }
+    if (process.env.LLV_CONTROLLER_FIX_EVIDENCE) fs.appendFileSync(process.env.LLV_CONTROLLER_FIX_EVIDENCE,JSON.stringify({ history, samples })+"\n");
+  }
+},30_000);
+
+test("new terminal batches retain five failed-stop opportunities across windows and restart", async () => {
+  const { h, lane } = await committing();
+  lane.state = "paused"; lane.cursor = null;
+  const original = lane.runs[0]!.attempts[0]!;
+  lane.runs[0]!.attempts = Array.from({ length: 18 },(_,index) => ({ ...structuredClone(original), n: index+1,
+    historical: true, state: "failed", verdict: { status: "fail" }, completedAt: h.ports.now(),
+    conversationId: `terminal-${index}`, agentPath: `terminal-path-${index}`, paneId: null, launchId: null }));
+  lane.terminalReap = { rounds: 4, stopped: 1, settledAt: h.ports.now(), lastAt: h.ports.now(), settledAttempts: ["build:1"] };
+  savePipelines([lane]);
+  const stops = new Map<number,number>();
+  h.ports.stageHostResident = async () => true;
+  h.ports.conversationAgentActive = async () => false;
+  h.ports.stopStageAgent = async target => { stops.set(target.attempt,(stops.get(target.attempt) ?? 0)+1); return { outcome: "failed", error: "temporary stop failure" }; };
+  for (let phase = 0; phase < 12; phase++) {
+    await tickPipelinesController([],h.ports);
+    const stored = loadPipelines()[0]!;
+    for (const host of stored.unconfirmedHosts ?? []) expect(stops.get(host.attempt)).toBe(5);
+    // Reopen the production store between windows. The controller's retry
+    // custody must be sufficient without anything held by the prior pass.
+    if (phase === 1) {
+      const { spawnSync } = await import("node:child_process");
+      const log = path.join(process.env.LLV_STATE_DIR!,"restarted-reap.log");
+      const result = spawnSync(process.execPath,[path.resolve("src/lib/pipelines/fixtures/controllerJobResume.ts")],{
+        env: { ...process.env,LLV_CONTROLLER_REAP_LOG: log },encoding:"utf8",timeout: 15_000 });
+      expect(result.status).toBe(0);
+      for (const attempt of fs.readFileSync(log,"utf8").trim().split("\n").map(Number)) stops.set(attempt,(stops.get(attempt) ?? 0)+1);
     }
   }
-}, 30_000);
+  expect(stops.size).toBe(17);
+  expect([...stops.values()]).toEqual(Array(17).fill(5));
+  expect(loadPipelines()[0]!.unconfirmedHosts).toHaveLength(17);
+});
+
+test("off-window survivor evidence prevents a fresh activation until a peer clears it", async () => {
+  const { captureProcessIdentity } = await import("@/lib/processIdentity");
+  const h = harness();
+  await create(h.ports,BUILD_ONLY as never);
+  await tickPipelines([],h.ports); await tickPipelines([],h.ports);
+  const lane = loadPipelines()[0]!, original = lane.runs[0]!.attempts[0]!;
+  lane.state = "running"; lane.cursor!.state = "pending";
+  const history = Array.from({ length: 65 },(_,n) => ({ ...structuredClone(original),n: n+1,historical: true,
+    state: "failed" as const,verdict: { status: "fail" as const },completedAt: h.ports.now(),
+    conversationId: null,agentPath: null,paneId: null,launchId: null }));
+  history[64]!.unresolvedTermination = { recordedAt: h.ports.now(),error: "unverified descendant",survivors: [captureProcessIdentity(process.pid)!] };
+  lane.runs[0]!.attempts = [...history,{ ...original,n: 66,state: "pending",conversationId: null,agentPath: null,paneId: null,launchId: null }];
+  savePipelines([lane]);
+  let spawns = 0;
+  const spawnAgent = h.ports.spawnAgent;
+  h.ports.spawnAgent = async (...args) => { spawns++; return spawnAgent(...args); };
+  await tickPipelinesController([],h.ports);
+  expect(spawns).toBe(0);
+  expect(loadPipelines()[0]!.runs[0]!.attempts.at(-1)!.state).toBe("pending");
+  const peer = loadPipelines(); delete peer[0]!.runs[0]!.attempts[64]!.unresolvedTermination; savePipelines(peer);
+  await tickPipelinesController([],h.ports);
+  expect(spawns).toBe(1);
+});
+
+test("lazy controller copies isolate discarded edits and checkpoint the whole retained lane", async () => {
+  const { h,lane } = await committing();
+  lane.state = "paused"; lane.cursor = null;
+  const original = lane.runs[0]!.attempts[0]!;
+  const samples: { history: number;wallMs: number;holdMs: number }[] = [];
+  for (const history of [32,1024,4096]) {
+    lane.runs[0]!.attempts = Array.from({ length: history },(_,n) => ({ ...structuredClone(original),n:n+1,historical:true,
+      conversationId:null,agentPath:null,paneId:null,launchId:null,state:"failed",verdict:{status:"fail"},completedAt:h.ports.now() }));
+    savePipelines([lane]);
+    const refs = new Map([[lane.id,(await controllerAttemptWindow(lane.id,-1,"")).window]]);
+    await withControllerPipelineScope([lane.id],async () => {
+      await withPipelineControllerMutation(rows => { rows[0]!.runs[0]!.attempts[0]!.output = "discarded"; },undefined,true);
+      expect((await findControllerPipeline(lane.id))!.runs[0]!.attempts[0]!.output).toBe(original.output);
+      let holdMs = 0;
+      const start = performance.now();
+      await withPipelineControllerMutation(async (rows,persist) => {
+        rows[0]!.runs[0]!.attempts[0]!.output = "checkpointed";
+        await persist([rows[0]!]);
+      },ms => { holdMs = Math.max(holdMs,ms); },true);
+      samples.push({ history,wallMs:performance.now()-start,holdMs });
+    },undefined,refs);
+    const stored = loadPipelines()[0]!;
+    expect(stored.runs[0]!.attempts).toHaveLength(history);
+    expect(stored.runs[0]!.attempts[0]!.output).toBe("checkpointed");
+    expect(stored.runs[0]!.attempts.at(-1)!.output).toBe(original.output);
+  }
+  if (process.env.LLV_CONTROLLER_WRITE_EVIDENCE) fs.appendFileSync(process.env.LLV_CONTROLLER_WRITE_EVIDENCE,JSON.stringify({ checkpoints:samples })+"\n");
+},30_000);
+
+test("an off-window activation keeps its custody while the current attempt waits", async () => {
+  const h = await reserveActivationOnly();
+  const lane = loadPipelines()[0]!, original = lane.runs[0]!.attempts[0]!;
+  const history = Array.from({ length: 65 },(_,n) => {
+    const attempt = { ...structuredClone(original),n:n+1,historical:true,state:"failed" as const,
+      verdict:{status:"fail" as const},completedAt:h.ports.now() };
+    delete attempt.activation;
+    return attempt;
+  });
+  history[64]!.activation = structuredClone(original.activation!);
+  const current = { ...structuredClone(original),n:66,state:"pending" as const };
+  delete current.activation;
+  lane.runs[0]!.attempts = [...history,current];
+  savePipelines([lane]);
+  let spawns = 0;
+  h.ports.spawnAgent = async () => { spawns++; throw new Error("the off-window activation still owns custody"); };
+  await tickPipelinesController([],h.ports);
+  expect(spawns).toBe(0);
+  expect(loadPipelines()[0]!.runs[0]!.attempts[64]!.activation?.id).toBe(original.activation!.id);
+});
+
+test("indexed fallback membership preserves off-window conversation, launch and path precedence", async () => {
+  const { adoptPipelineFallbackTask } = await import("./engine");
+  const { lane } = await committing();
+  const original = lane.runs[0]!.attempts[0]!;
+  for (const identity of [
+    { conversationId:"older-conversation",launchId:"older-launch",agentPath:"older-path" },
+    { conversationId:null,launchId:"older-launch",agentPath:"older-path" },
+    { conversationId:null,launchId:null,agentPath:"older-path" },
+  ]) {
+    lane.runs[0]!.attempts = [...Array.from({ length:64 },(_,n) => ({ ...structuredClone(original),n:n+1,
+      conversationId:null,launchId:null,agentPath:null })),{ ...structuredClone(original),n:65,...identity }];
+    for (const conversationId of [null,"older-conversation","other-conversation"]) for (const launchId of [null,"older-launch","other-launch"]) {
+      const tasks = [{ id:"inherited-task",project:lane.project,assignments:[{ state:"linked",conversationId,launchId,path:"older-path" }] }];
+      const expected = structuredClone(lane); expected.taskIds = [];
+      const bound = adoptPipelineFallbackTask(expected,tasks as never);
+      const candidate = structuredClone(lane); candidate.taskIds = [];
+      await withControllerPipelineScope([lane.id],async () => {
+        expect(adoptPipelineFallbackTask(candidate,tasks as never)).toBe(bound);
+        expect(candidate.taskIds).toEqual(expected.taskIds);
+      },undefined,new Map([[lane.id,[]]]));
+    }
+  }
+});

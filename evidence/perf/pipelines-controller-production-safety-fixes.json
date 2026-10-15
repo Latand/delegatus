@@ -1,0 +1,1743 @@
+{
+  "method": "Three alternating E4/E5 pairs, separate source exports, identical guarded driver, isolated state, fixed engine time, 10 s Git delay; cold initialization and two warm sweeps reported separately. Byte totals include complete roots, lazy row headers and individual attempt copies. CPU is Viewer main-thread CPU, at 100 ticks/s. Timer observations include instrument overhead.",
+  "baseline": "011a4fe97ff9fe2abae1c7a0c217c888a34ea07b",
+  "reviewedCandidate": "a677ae046",
+  "candidateParent": "a677ae04631d4da76e492d83c777b3558d1bb4ff",
+  "sourceFileSha256": {
+    "scripts/measure-pipeline-controller.ts": "b71eaa5dcb006bf8b5e8ab8c628e69e72a149964690a3c01981b29598cb01388",
+    "src/lib/pipelines/controllerScope.ts": "b2658ca42625e2b310abe6c2eef3e7c420d8e65de86cbd6152d5f05bcc37024d",
+    "src/lib/pipelines/engine.controllerPass.test.ts": "07e48f64db5d618fce2d234c107b8786abdbd1ae5e761036170c22c28469dc5f",
+    "src/lib/pipelines/engine.ts": "7d446292e3ddf6a3f55042260e5929b730e850ee4e7b71d3c1646fa32b003c9e",
+    "src/lib/pipelines/fixtures/controllerJobResume.ts": "f3ff91cc77840813f57691110449a5c8518b9cb6634becc9b347ea5868b6df03",
+    "src/lib/pipelines/stageProvenance.ts": "2ad952bbaa2c116bdc1710dfc4756a323982bb4b08d4a27486402817afadffff",
+    "src/lib/pipelines/store.ts": "8af5326a14ae690dc0d1f86e912408feff0777e994a482fd97e0f605390fb153",
+    "src/lib/state/pipelineControllerReferences.ts": "1fa59dd65775cc2f7c702ecf14ded0b193fc509216d5fa227909eda7522f2445",
+    "src/lib/state/sqliteStateStore.bounded.test.ts": "3fff5a0114388582ab1c3839a1dc06cba9fd791ac2428636937d5b22dfb69379"
+  },
+  "inputSha256": {
+    "state.sqlite": "df05e55a2370fb31368b97a116b5c15ef6fc1cc5b21c462eeb01ef9aa465ae1e",
+    "agent-registry.sqlite": "4667570b61a1161d15a38d82a30b3942d8e946f472e5be6911e52da371bec016"
+  },
+  "summary": {
+    "before": {
+      "cold": {
+        "wallMs": 11333.712259,
+        "rchar": 749671743,
+        "maxSliceMs": 357.782768,
+        "maxTimerGapMs": 506.00759800000014,
+        "decodedRows": 614,
+        "decodedBytes": 75757641,
+        "clonedRows": 859,
+        "clonedBytes": 110803535,
+        "clonedAttempts": 0,
+        "clonedAttemptBytes": 0,
+        "fullReturnedRows": 267,
+        "maxLeaseHoldMs": 461.739114,
+        "largestPhaseMs": 11307.8048,
+        "maximumPhaseMs": 11493.649711999999,
+        "largestPhaseMainThreadMs": 1870,
+        "maximumSliceMs": 489.99878799999993,
+        "maximumTimerGapMs": 510.49832000000004,
+        "maximumLeaseHoldMs": 493.3173289999995,
+        "mainThreadMs": 1870
+      },
+      "warm": {
+        "wallMs": 215.29740700000002,
+        "rchar": 15889733.5,
+        "maxSliceMs": 1.4584495000008246,
+        "maxTimerGapMs": 7.597640500000125,
+        "decodedRows": 94.5,
+        "decodedBytes": 11298036.0,
+        "clonedRows": 373.0,
+        "clonedBytes": 49692470.0,
+        "clonedAttempts": 0.0,
+        "clonedAttemptBytes": 0.0,
+        "fullReturnedRows": 267.0,
+        "maxLeaseHoldMs": 2.608404500000688,
+        "largestPhaseMs": 194.8892420000002,
+        "maximumPhaseMs": 227.76112699999976,
+        "largestPhaseMainThreadMs": 190.0,
+        "maximumSliceMs": 2.2458179999994172,
+        "maximumTimerGapMs": 9.890972999999576,
+        "maximumLeaseHoldMs": 4.2203389999995125,
+        "mainThreadMs": 190.0
+      }
+    },
+    "after": {
+      "cold": {
+        "wallMs": 11918.484272,
+        "rchar": 1041564892,
+        "maxSliceMs": 543.9599109999999,
+        "maxTimerGapMs": 551.485158,
+        "decodedRows": 526,
+        "decodedBytes": 67767804,
+        "clonedRows": 271,
+        "clonedBytes": 31716153,
+        "clonedAttempts": 66,
+        "clonedAttemptBytes": 1192421,
+        "fullReturnedRows": 0,
+        "maxLeaseHoldMs": 352.51705500000025,
+        "largestPhaseMs": 1045.6108590000001,
+        "maximumPhaseMs": 1077.431233,
+        "largestPhaseMainThreadMs": 1020,
+        "maximumSliceMs": 562.782334,
+        "maximumTimerGapMs": 566.91383,
+        "maximumLeaseHoldMs": 388.95319500000005,
+        "mainThreadMs": 2420
+      },
+      "warm": {
+        "wallMs": 390.6690440000002,
+        "rchar": 36351189.5,
+        "maxSliceMs": 4.282036499999776,
+        "maxTimerGapMs": 33.711396000000605,
+        "decodedRows": 28.5,
+        "decodedBytes": 3996967.0,
+        "clonedRows": 64.0,
+        "clonedBytes": 7923970.0,
+        "clonedAttempts": 66.0,
+        "clonedAttemptBytes": 1192467.0,
+        "fullReturnedRows": 0.0,
+        "maxLeaseHoldMs": 6.686667499999203,
+        "largestPhaseMs": 69.78440750000027,
+        "maximumPhaseMs": 121.41720700000042,
+        "largestPhaseMainThreadMs": 65.0,
+        "maximumSliceMs": 4.9445230000001175,
+        "maximumTimerGapMs": 50.744354000000385,
+        "maximumLeaseHoldMs": 9.838976000000912,
+        "mainThreadMs": 345.0
+      }
+    }
+  },
+  "pairs": [
+    {
+      "pair": 1,
+      "records": 941,
+      "equal": true
+    },
+    {
+      "pair": 2,
+      "records": 941,
+      "equal": true
+    },
+    {
+      "pair": 3,
+      "records": 941,
+      "equal": true
+    }
+  ],
+  "raw": {
+    "before": [
+      [
+        {
+          "round": 0,
+          "wallMs": 11517.452796000001,
+          "mainThreadTicks": 203,
+          "rchar": 749671846,
+          "maxSliceMs": 489.99878799999993,
+          "maxSliceSite": "registry.snapshot",
+          "maxTimerGapMs": 510.49832000000004,
+          "ticks": [
+            11493.649711999999
+          ],
+          "snapshots": 16,
+          "copiedRows": 1840,
+          "decodedRows": 614,
+          "decodedBytes": 75757641,
+          "clonedRows": 859,
+          "clonedBytes": 110803535,
+          "clonedAttempts": 0,
+          "clonedAttemptBytes": 0,
+          "fullReturnedSnapshots": 1,
+          "fullReturnedRows": 267,
+          "maxLeaseHoldMs": 458.04625599999963,
+          "phaseCpuTicks": [
+            203
+          ],
+          "jobSettlementWallMs": 0.017431000000215136,
+          "jobSettlementCpuTicks": 0,
+          "externalChildCpuMs": 0,
+          "waitWindow": {
+            "wallMs": 10000.293555,
+            "mainThreadTicks": 55,
+            "rchar": 25011162,
+            "maxTimerGapMs": 5.136649000000034
+          },
+          "errors": [],
+          "denied": {}
+        },
+        {
+          "round": 1,
+          "wallMs": 216.2767469999999,
+          "mainThreadTicks": 19,
+          "rchar": 15890157,
+          "maxSliceMs": 1.4166820000009466,
+          "maxSliceSite": "controller.port-start",
+          "maxTimerGapMs": 6.880094000000099,
+          "ticks": [
+            195.8521720000008
+          ],
+          "snapshots": 16,
+          "copiedRows": 1840,
+          "decodedRows": 95,
+          "decodedBytes": 11355553,
+          "clonedRows": 373,
+          "clonedBytes": 49692470,
+          "clonedAttempts": 0,
+          "clonedAttemptBytes": 0,
+          "fullReturnedSnapshots": 1,
+          "fullReturnedRows": 267,
+          "maxLeaseHoldMs": 2.5882959999999002,
+          "phaseCpuTicks": [
+            19
+          ],
+          "jobSettlementWallMs": 0.010801000000355998,
+          "jobSettlementCpuTicks": 0,
+          "externalChildCpuMs": 0,
+          "waitWindow": null,
+          "errors": [],
+          "denied": {}
+        },
+        {
+          "round": 2,
+          "wallMs": 216.35353600000053,
+          "mainThreadTicks": 19,
+          "rchar": 15889734,
+          "maxSliceMs": 1.4854860000014014,
+          "maxSliceSite": "state.checkpoint",
+          "maxTimerGapMs": 7.623429999999644,
+          "ticks": [
+            196.06704999999965
+          ],
+          "snapshots": 16,
+          "copiedRows": 1840,
+          "decodedRows": 94,
+          "decodedBytes": 11240519,
+          "clonedRows": 373,
+          "clonedBytes": 49692470,
+          "clonedAttempts": 0,
+          "clonedAttemptBytes": 0,
+          "fullReturnedSnapshots": 1,
+          "fullReturnedRows": 267,
+          "maxLeaseHoldMs": 2.6095580000001064,
+          "phaseCpuTicks": [
+            19
+          ],
+          "jobSettlementWallMs": 0.010422000001199194,
+          "jobSettlementCpuTicks": 0,
+          "externalChildCpuMs": 0,
+          "waitWindow": null,
+          "errors": [],
+          "denied": {}
+        }
+      ],
+      [
+        {
+          "round": 0,
+          "wallMs": 11333.712259,
+          "mainThreadTicks": 185,
+          "rchar": 749671494,
+          "maxSliceMs": 357.782768,
+          "maxSliceSite": "registry.snapshot",
+          "maxTimerGapMs": 506.00759800000014,
+          "ticks": [
+            11307.8048
+          ],
+          "snapshots": 16,
+          "copiedRows": 1840,
+          "decodedRows": 614,
+          "decodedBytes": 75757641,
+          "clonedRows": 859,
+          "clonedBytes": 110803535,
+          "clonedAttempts": 0,
+          "clonedAttemptBytes": 0,
+          "fullReturnedSnapshots": 1,
+          "fullReturnedRows": 267,
+          "maxLeaseHoldMs": 493.3173289999995,
+          "phaseCpuTicks": [
+            185
+          ],
+          "jobSettlementWallMs": 0.01747399999840127,
+          "jobSettlementCpuTicks": 0,
+          "externalChildCpuMs": 0,
+          "waitWindow": {
+            "wallMs": 10000.291400999999,
+            "mainThreadTicks": 56,
+            "rchar": 25010781,
+            "maxTimerGapMs": 5.991880000000037
+          },
+          "errors": [],
+          "denied": {}
+        },
+        {
+          "round": 1,
+          "wallMs": 211.1045239999985,
+          "mainThreadTicks": 19,
+          "rchar": 15889465,
+          "maxSliceMs": 1.3778480000000854,
+          "maxSliceSite": "state.checkpoint",
+          "maxTimerGapMs": 7.571851000000606,
+          "ticks": [
+            190.80080799999996
+          ],
+          "snapshots": 16,
+          "copiedRows": 1840,
+          "decodedRows": 95,
+          "decodedBytes": 11355553,
+          "clonedRows": 373,
+          "clonedBytes": 49692470,
+          "clonedAttempts": 0,
+          "clonedAttemptBytes": 0,
+          "fullReturnedSnapshots": 1,
+          "fullReturnedRows": 267,
+          "maxLeaseHoldMs": 2.778773000000001,
+          "phaseCpuTicks": [
+            19
+          ],
+          "jobSettlementWallMs": 0.009809000001041568,
+          "jobSettlementCpuTicks": 0,
+          "externalChildCpuMs": 0,
+          "waitWindow": null,
+          "errors": [],
+          "denied": {}
+        },
+        {
+          "round": 2,
+          "wallMs": 248.05507500000022,
+          "mainThreadTicks": 22,
+          "rchar": 15889733,
+          "maxSliceMs": 1.6936260000002221,
+          "maxSliceSite": "state.write-wait",
+          "maxTimerGapMs": 9.890972999999576,
+          "ticks": [
+            227.76112699999976
+          ],
+          "snapshots": 16,
+          "copiedRows": 1840,
+          "decodedRows": 94,
+          "decodedBytes": 11240519,
+          "clonedRows": 373,
+          "clonedBytes": 49692470,
+          "clonedAttempts": 0,
+          "clonedAttemptBytes": 0,
+          "fullReturnedSnapshots": 1,
+          "fullReturnedRows": 267,
+          "maxLeaseHoldMs": 2.60725100000127,
+          "phaseCpuTicks": [
+            22
+          ],
+          "jobSettlementWallMs": 0.012516999999206746,
+          "jobSettlementCpuTicks": 0,
+          "externalChildCpuMs": 0,
+          "waitWindow": null,
+          "errors": [],
+          "denied": {}
+        }
+      ],
+      [
+        {
+          "round": 0,
+          "wallMs": 11317.994633,
+          "mainThreadTicks": 187,
+          "rchar": 749671743,
+          "maxSliceMs": 340.850392,
+          "maxSliceSite": "registry.snapshot",
+          "maxTimerGapMs": 487.45882600000004,
+          "ticks": [
+            11295.662113
+          ],
+          "snapshots": 16,
+          "copiedRows": 1840,
+          "decodedRows": 614,
+          "decodedBytes": 75757641,
+          "clonedRows": 859,
+          "clonedBytes": 110803535,
+          "clonedAttempts": 0,
+          "clonedAttemptBytes": 0,
+          "fullReturnedSnapshots": 1,
+          "fullReturnedRows": 267,
+          "maxLeaseHoldMs": 461.739114,
+          "phaseCpuTicks": [
+            187
+          ],
+          "jobSettlementWallMs": 0.016530999999304186,
+          "jobSettlementCpuTicks": 0,
+          "externalChildCpuMs": 0,
+          "waitWindow": {
+            "wallMs": 10000.390287999999,
+            "mainThreadTicks": 62,
+            "rchar": 25010826,
+            "maxTimerGapMs": 6.659302000000025
+          },
+          "errors": [],
+          "denied": {}
+        },
+        {
+          "round": 1,
+          "wallMs": 211.32730899999842,
+          "mainThreadTicks": 19,
+          "rchar": 15889749,
+          "maxSliceMs": 2.2458179999994172,
+          "maxSliceSite": "state.checkpoint",
+          "maxTimerGapMs": 6.460973999999624,
+          "ticks": [
+            191.02090300000054
+          ],
+          "snapshots": 16,
+          "copiedRows": 1840,
+          "decodedRows": 95,
+          "decodedBytes": 11355553,
+          "clonedRows": 373,
+          "clonedBytes": 49692470,
+          "clonedAttempts": 0,
+          "clonedAttemptBytes": 0,
+          "fullReturnedSnapshots": 1,
+          "fullReturnedRows": 267,
+          "maxLeaseHoldMs": 4.2203389999995125,
+          "phaseCpuTicks": [
+            19
+          ],
+          "jobSettlementWallMs": 0.010698000000047614,
+          "jobSettlementCpuTicks": 0,
+          "externalChildCpuMs": 0,
+          "waitWindow": null,
+          "errors": [],
+          "denied": {}
+        },
+        {
+          "round": 2,
+          "wallMs": 214.31806700000016,
+          "mainThreadTicks": 19,
+          "rchar": 15889358,
+          "maxSliceMs": 1.4314130000002478,
+          "maxSliceSite": "state.checkpoint",
+          "maxTimerGapMs": 8.431529999999839,
+          "ticks": [
+            193.9263119999996
+          ],
+          "snapshots": 16,
+          "copiedRows": 1840,
+          "decodedRows": 94,
+          "decodedBytes": 11240519,
+          "clonedRows": 373,
+          "clonedBytes": 49692470,
+          "clonedAttempts": 0,
+          "clonedAttemptBytes": 0,
+          "fullReturnedSnapshots": 1,
+          "fullReturnedRows": 267,
+          "maxLeaseHoldMs": 2.570262000001094,
+          "phaseCpuTicks": [
+            18
+          ],
+          "jobSettlementWallMs": 0.011591000000407803,
+          "jobSettlementCpuTicks": 0,
+          "externalChildCpuMs": 0,
+          "waitWindow": null,
+          "errors": [],
+          "denied": {}
+        }
+      ]
+    ],
+    "after": [
+      [
+        {
+          "round": 0,
+          "wallMs": 11964.410025000001,
+          "mainThreadTicks": 258,
+          "rchar": 1041564612,
+          "maxSliceMs": 543.9599109999999,
+          "maxSliceSite": "state.write-wait",
+          "maxTimerGapMs": 551.485158,
+          "ticks": [
+            1045.6108590000001,
+            59.358469000000014,
+            35.85202600000002,
+            60.70008599999983,
+            61.917266000000154,
+            288.09986100000015,
+            70.0048690000001,
+            0.369801999999936
+          ],
+          "snapshots": 16,
+          "copiedRows": 1840,
+          "decodedRows": 526,
+          "decodedBytes": 67767804,
+          "clonedRows": 271,
+          "clonedBytes": 31716153,
+          "clonedAttempts": 66,
+          "clonedAttemptBytes": 1192421,
+          "fullReturnedSnapshots": 0,
+          "fullReturnedRows": 0,
+          "maxLeaseHoldMs": 388.95319500000005,
+          "phaseCpuTicks": [
+            102,
+            7,
+            3,
+            6,
+            5,
+            30,
+            6,
+            0
+          ],
+          "jobSettlementWallMs": 10317.432186,
+          "jobSettlementCpuTicks": 97,
+          "externalChildCpuMs": 0,
+          "waitWindow": {
+            "wallMs": 10000.209128,
+            "mainThreadTicks": 65,
+            "rchar": 27184869,
+            "maxTimerGapMs": 19.922824999999875
+          },
+          "errors": [],
+          "denied": {}
+        },
+        {
+          "round": 1,
+          "wallMs": 493.2639670000008,
+          "mainThreadTicks": 47,
+          "rchar": 36247180,
+          "maxSliceMs": 4.329256999999416,
+          "maxSliceSite": "state.checkpoint",
+          "maxTimerGapMs": 50.744354000000385,
+          "ticks": [
+            121.41720700000042,
+            55.55075399999987,
+            39.13363799999934,
+            58.367732000000615,
+            58.781590000000506,
+            64.19269799999893,
+            74.43068299999868,
+            0.29784399999880407
+          ],
+          "snapshots": 16,
+          "copiedRows": 1840,
+          "decodedRows": 29,
+          "decodedBytes": 4054484,
+          "clonedRows": 64,
+          "clonedBytes": 7923970,
+          "clonedAttempts": 66,
+          "clonedAttemptBytes": 1192467,
+          "fullReturnedSnapshots": 0,
+          "fullReturnedRows": 0,
+          "maxLeaseHoldMs": 9.23193800000081,
+          "phaseCpuTicks": [
+            13,
+            5,
+            3,
+            6,
+            6,
+            6,
+            8,
+            0
+          ],
+          "jobSettlementWallMs": 0.04266500000085216,
+          "jobSettlementCpuTicks": 0,
+          "externalChildCpuMs": 0,
+          "waitWindow": null,
+          "errors": [],
+          "denied": {}
+        },
+        {
+          "round": 2,
+          "wallMs": 421.35713100000066,
+          "mainThreadTicks": 39,
+          "rchar": 36455199,
+          "maxSliceMs": 4.9445230000001175,
+          "maxSliceSite": "state.checkpoint",
+          "maxTimerGapMs": 37.68056700000125,
+          "ticks": [
+            52.23027000000002,
+            54.91712500000176,
+            38.278723000001264,
+            60.81417599999986,
+            50.40561600000001,
+            79.56271299999935,
+            63.971661000001404,
+            0.37107099999957427
+          ],
+          "snapshots": 16,
+          "copiedRows": 1840,
+          "decodedRows": 28,
+          "decodedBytes": 3939450,
+          "clonedRows": 64,
+          "clonedBytes": 7923970,
+          "clonedAttempts": 66,
+          "clonedAttemptBytes": 1192467,
+          "fullReturnedSnapshots": 0,
+          "fullReturnedRows": 0,
+          "maxLeaseHoldMs": 9.838976000000912,
+          "phaseCpuTicks": [
+            5,
+            6,
+            3,
+            6,
+            4,
+            8,
+            7,
+            0
+          ],
+          "jobSettlementWallMs": 0.03882599999997183,
+          "jobSettlementCpuTicks": 0,
+          "externalChildCpuMs": 0,
+          "waitWindow": null,
+          "errors": [],
+          "denied": {}
+        }
+      ],
+      [
+        {
+          "round": 0,
+          "wallMs": 11918.484272,
+          "mainThreadTicks": 242,
+          "rchar": 1041564892,
+          "maxSliceMs": 562.782334,
+          "maxSliceSite": "state.write-wait",
+          "maxTimerGapMs": 566.91383,
+          "ticks": [
+            1077.431233,
+            53.221017000000074,
+            57.69186100000002,
+            58.88020499999993,
+            73.50029299999983,
+            244.9807440000002,
+            53.28182200000015,
+            0.4012569999999869
+          ],
+          "snapshots": 16,
+          "copiedRows": 1840,
+          "decodedRows": 526,
+          "decodedBytes": 67767804,
+          "clonedRows": 271,
+          "clonedBytes": 31716153,
+          "clonedAttempts": 66,
+          "clonedAttemptBytes": 1192421,
+          "fullReturnedSnapshots": 0,
+          "fullReturnedRows": 0,
+          "maxLeaseHoldMs": 331.0758019999994,
+          "phaseCpuTicks": [
+            105,
+            5,
+            6,
+            6,
+            6,
+            25,
+            5,
+            0
+          ],
+          "jobSettlementWallMs": 10276.056279,
+          "jobSettlementCpuTicks": 83,
+          "externalChildCpuMs": 0,
+          "waitWindow": {
+            "wallMs": 10000.286970000001,
+            "mainThreadTicks": 56,
+            "rchar": 27185162,
+            "maxTimerGapMs": 15.438377000000173
+          },
+          "errors": [],
+          "denied": {}
+        },
+        {
+          "round": 1,
+          "wallMs": 347.3112149999997,
+          "mainThreadTicks": 32,
+          "rchar": 36247039,
+          "maxSliceMs": 4.214819999999236,
+          "maxSliceSite": "state.write-wait",
+          "maxTimerGapMs": 29.80786100000114,
+          "ticks": [
+            58.1788030000007,
+            50.643041999999696,
+            34.658961000001,
+            42.59621799999877,
+            41.70673800000077,
+            47.455024999999296,
+            50.94559400000071,
+            0.3529839999991964
+          ],
+          "snapshots": 16,
+          "copiedRows": 1840,
+          "decodedRows": 29,
+          "decodedBytes": 4054484,
+          "clonedRows": 64,
+          "clonedBytes": 7923970,
+          "clonedAttempts": 66,
+          "clonedAttemptBytes": 1192467,
+          "fullReturnedSnapshots": 0,
+          "fullReturnedRows": 0,
+          "maxLeaseHoldMs": 4.926207999998951,
+          "phaseCpuTicks": [
+            6,
+            4,
+            3,
+            4,
+            5,
+            4,
+            5,
+            0
+          ],
+          "jobSettlementWallMs": 0.04197000000021944,
+          "jobSettlementCpuTicks": 0,
+          "externalChildCpuMs": 0,
+          "waitWindow": null,
+          "errors": [],
+          "denied": {}
+        },
+        {
+          "round": 2,
+          "wallMs": 348.352492,
+          "mainThreadTicks": 32,
+          "rchar": 36455480,
+          "maxSliceMs": 4.234816000000137,
+          "maxSliceSite": "pipeline.copy",
+          "maxTimerGapMs": 25.120161999999254,
+          "ticks": [
+            47.36734400000023,
+            42.75542399999904,
+            31.605501000000004,
+            49.38532699999996,
+            46.32407899999998,
+            59.735455,
+            47.91663199999857,
+            0.34712299999955576
+          ],
+          "snapshots": 16,
+          "copiedRows": 1840,
+          "decodedRows": 28,
+          "decodedBytes": 3939450,
+          "clonedRows": 64,
+          "clonedBytes": 7923970,
+          "clonedAttempts": 66,
+          "clonedAttemptBytes": 1192467,
+          "fullReturnedSnapshots": 0,
+          "fullReturnedRows": 0,
+          "maxLeaseHoldMs": 5.2132780000010825,
+          "phaseCpuTicks": [
+            4,
+            5,
+            3,
+            5,
+            5,
+            5,
+            4,
+            0
+          ],
+          "jobSettlementWallMs": 0.04046299999936309,
+          "jobSettlementCpuTicks": 0,
+          "externalChildCpuMs": 0,
+          "waitWindow": null,
+          "errors": [],
+          "denied": {}
+        }
+      ],
+      [
+        {
+          "round": 0,
+          "wallMs": 11806.199026,
+          "mainThreadTicks": 230,
+          "rchar": 1041564927,
+          "maxSliceMs": 521.424918,
+          "maxSliceSite": "state.write-wait",
+          "maxTimerGapMs": 524.348823,
+          "ticks": [
+            1001.5581439999999,
+            50.06306900000004,
+            36.74471000000017,
+            56.647649,
+            62.9473559999999,
+            221.05050299999994,
+            54.82372499999997,
+            0.37858299999993505
+          ],
+          "snapshots": 16,
+          "copiedRows": 1840,
+          "decodedRows": 526,
+          "decodedBytes": 67767804,
+          "clonedRows": 271,
+          "clonedBytes": 31716153,
+          "clonedAttempts": 66,
+          "clonedAttemptBytes": 1192421,
+          "fullReturnedSnapshots": 0,
+          "fullReturnedRows": 0,
+          "maxLeaseHoldMs": 352.51705500000025,
+          "phaseCpuTicks": [
+            98,
+            4,
+            4,
+            5,
+            7,
+            22,
+            5,
+            0
+          ],
+          "jobSettlementWallMs": 10298.329926,
+          "jobSettlementCpuTicks": 84,
+          "externalChildCpuMs": 0,
+          "waitWindow": {
+            "wallMs": 10000.335658,
+            "mainThreadTicks": 55,
+            "rchar": 27185060,
+            "maxTimerGapMs": 15.991526999999905
+          },
+          "errors": [],
+          "denied": {}
+        },
+        {
+          "round": 1,
+          "wallMs": 414.685786,
+          "mainThreadTicks": 36,
+          "rchar": 36247161,
+          "maxSliceMs": 4.812922000000981,
+          "maxSliceSite": "state.write-wait",
+          "maxTimerGapMs": 37.61493100000007,
+          "ticks": [
+            95.53254199999901,
+            52.57865700000002,
+            38.64762399999927,
+            48.61116700000093,
+            45.69999599999937,
+            52.95094400000016,
+            59.43142699999953,
+            0.32639500000004773
+          ],
+          "snapshots": 16,
+          "copiedRows": 1840,
+          "decodedRows": 29,
+          "decodedBytes": 4054484,
+          "clonedRows": 64,
+          "clonedBytes": 7923970,
+          "clonedAttempts": 66,
+          "clonedAttemptBytes": 1192467,
+          "fullReturnedSnapshots": 0,
+          "fullReturnedRows": 0,
+          "maxLeaseHoldMs": 6.786367999999129,
+          "phaseCpuTicks": [
+            7,
+            5,
+            4,
+            5,
+            4,
+            5,
+            6,
+            0
+          ],
+          "jobSettlementWallMs": 0.0399120000001858,
+          "jobSettlementCpuTicks": 0,
+          "externalChildCpuMs": 0,
+          "waitWindow": null,
+          "errors": [],
+          "denied": {}
+        },
+        {
+          "round": 2,
+          "wallMs": 366.6523020000004,
+          "mainThreadTicks": 33,
+          "rchar": 36455420,
+          "maxSliceMs": 2.9678839999996853,
+          "maxSliceSite": "state.checkpoint",
+          "maxTimerGapMs": 28.460745000000315,
+          "ticks": [
+            47.76551699999982,
+            48.81698899999901,
+            35.58694300000025,
+            49.986699000000954,
+            44.11543499999971,
+            60.00610200000119,
+            59.16130200000043,
+            0.3906680000000051
+          ],
+          "snapshots": 16,
+          "copiedRows": 1840,
+          "decodedRows": 28,
+          "decodedBytes": 3939450,
+          "clonedRows": 64,
+          "clonedBytes": 7923970,
+          "clonedAttempts": 66,
+          "clonedAttemptBytes": 1192467,
+          "fullReturnedSnapshots": 0,
+          "fullReturnedRows": 0,
+          "maxLeaseHoldMs": 6.586966999999277,
+          "phaseCpuTicks": [
+            4,
+            5,
+            3,
+            5,
+            4,
+            6,
+            6,
+            0
+          ],
+          "jobSettlementWallMs": 0.03696999999920081,
+          "jobSettlementCpuTicks": 0,
+          "externalChildCpuMs": 0,
+          "waitWindow": null,
+          "errors": [],
+          "denied": {}
+        }
+      ]
+    ]
+  },
+  "outputWriteProbe": {
+    "reviewed": [
+      {
+        "history": 32,
+        "insertMs": 8.420910999999997,
+        "outputMs": [
+          2.5140679999999946,
+          1.0643030000000024,
+          0.9320760000000021
+        ]
+      },
+      {
+        "history": 1024,
+        "insertMs": 195.15384,
+        "outputMs": [
+          184.770066,
+          185.26735199999996,
+          181.54662499999995
+        ]
+      },
+      {
+        "history": 4096,
+        "insertMs": 3885.913158,
+        "outputMs": [
+          3529.6097959999997,
+          3669.890680999999,
+          3778.2420760000005
+        ]
+      }
+    ],
+    "fixed": [
+      {
+        "history": 32,
+        "insertMs": 9.145548999999999,
+        "outputMs": [
+          2.137636999999998,
+          0.5589070000000049,
+          0.5139110000000002
+        ]
+      },
+      {
+        "history": 1024,
+        "insertMs": 48.315409,
+        "outputMs": [
+          16.024494000000004,
+          10.744927000000004,
+          11.729377999999997
+        ]
+      },
+      {
+        "history": 4096,
+        "insertMs": 320.06516,
+        "outputMs": [
+          44.15025399999996,
+          41.663140000000055,
+          41.47181499999999
+        ]
+      }
+    ],
+    "fixture": "Same raw SQL output update on the same synthetic retained attempts. Three writes per size. The full production-shaped growth fixture also reproduced a 12,849 ms mutation lease on the reviewed candidate."
+  },
+  "warmedGrowth": [
+    {
+      "history": 32,
+      "samples": [
+        {
+          "visits": 112,
+          "copies": 16,
+          "wallMs": 27.4776669999992,
+          "mainThreadMs": 30,
+          "maxSliceMs": 1.1806120000001101,
+          "timerDelayMs": 14.971282999998948
+        },
+        {
+          "visits": 112,
+          "copies": 16,
+          "wallMs": 27.68843399999605,
+          "mainThreadMs": 30,
+          "maxSliceMs": 1.1303419999967446,
+          "timerDelayMs": 15.517315999997663
+        },
+        {
+          "visits": 112,
+          "copies": 16,
+          "wallMs": 26.97410300000047,
+          "mainThreadMs": 20,
+          "maxSliceMs": 1.1351250000006985,
+          "timerDelayMs": 14.134930000000168
+        },
+        {
+          "visits": 112,
+          "copies": 16,
+          "wallMs": 25.034464000003936,
+          "mainThreadMs": 30,
+          "maxSliceMs": 1.1008240000010119,
+          "timerDelayMs": 13.44701100000384
+        },
+        {
+          "visits": 112,
+          "copies": 16,
+          "wallMs": 24.820530999997573,
+          "mainThreadMs": 20,
+          "maxSliceMs": 1.1085609999936423,
+          "timerDelayMs": 13.473737000000256
+        },
+        {
+          "visits": 112,
+          "copies": 16,
+          "wallMs": 24.764643999995315,
+          "mainThreadMs": 30,
+          "maxSliceMs": 1.0586610000027576,
+          "timerDelayMs": 13.14323599999625
+        },
+        {
+          "visits": 112,
+          "copies": 16,
+          "wallMs": 25.72468200000003,
+          "mainThreadMs": 30,
+          "maxSliceMs": 1.09198699999979,
+          "timerDelayMs": 13.699720999997226
+        },
+        {
+          "visits": 112,
+          "copies": 16,
+          "wallMs": 25.57705200000055,
+          "mainThreadMs": 20,
+          "maxSliceMs": 1.0636519999970915,
+          "timerDelayMs": 13.79903600000398
+        },
+        {
+          "visits": 112,
+          "copies": 16,
+          "wallMs": 25.745850999999675,
+          "mainThreadMs": 20,
+          "maxSliceMs": 1.0297040000004927,
+          "timerDelayMs": 13.764529000000039
+        },
+        {
+          "visits": 112,
+          "copies": 16,
+          "wallMs": 25.15808900000411,
+          "mainThreadMs": 30,
+          "maxSliceMs": 1.118212000001222,
+          "timerDelayMs": 13.592179000006581
+        },
+        {
+          "visits": 112,
+          "copies": 16,
+          "wallMs": 25.030869000001985,
+          "mainThreadMs": 20,
+          "maxSliceMs": 1.0675550000014482,
+          "timerDelayMs": 13.35656200000085
+        },
+        {
+          "visits": 112,
+          "copies": 16,
+          "wallMs": 24.223917000002984,
+          "mainThreadMs": 30,
+          "maxSliceMs": 1.0340399999986403,
+          "timerDelayMs": 12.844908999999461
+        },
+        {
+          "visits": 112,
+          "copies": 16,
+          "wallMs": 25.596968999998353,
+          "mainThreadMs": 20,
+          "maxSliceMs": 1.0261249999966822,
+          "timerDelayMs": 13.93696899999486
+        },
+        {
+          "visits": 112,
+          "copies": 16,
+          "wallMs": 26.374177000005147,
+          "mainThreadMs": 30,
+          "maxSliceMs": 1.0479279999999562,
+          "timerDelayMs": 13.525172000001476
+        },
+        {
+          "visits": 112,
+          "copies": 16,
+          "wallMs": 24.9902379999985,
+          "mainThreadMs": 20,
+          "maxSliceMs": 1.0311890000011772,
+          "timerDelayMs": 13.54113900000084
+        },
+        {
+          "visits": 112,
+          "copies": 16,
+          "wallMs": 23.706670999999915,
+          "mainThreadMs": 20,
+          "maxSliceMs": 1.0436079999999492,
+          "timerDelayMs": 12.821020000003045
+        },
+        {
+          "visits": 112,
+          "copies": 16,
+          "wallMs": 23.73878299999342,
+          "mainThreadMs": 40,
+          "maxSliceMs": 1.0199180000054184,
+          "timerDelayMs": 12.817412999997032
+        },
+        {
+          "visits": 112,
+          "copies": 16,
+          "wallMs": 25.398630999996385,
+          "mainThreadMs": 20,
+          "maxSliceMs": 1.022994999999355,
+          "timerDelayMs": 13.155890000001818
+        },
+        {
+          "visits": 112,
+          "copies": 16,
+          "wallMs": 24.17219599999953,
+          "mainThreadMs": 20,
+          "maxSliceMs": 1.0163180000017746,
+          "timerDelayMs": 13.193653000002087
+        },
+        {
+          "visits": 112,
+          "copies": 16,
+          "wallMs": 23.505036000002292,
+          "mainThreadMs": 20,
+          "maxSliceMs": 0.991611000004923,
+          "timerDelayMs": 12.649191000004066
+        },
+        {
+          "visits": 112,
+          "copies": 16,
+          "wallMs": 23.121369000000414,
+          "mainThreadMs": 20,
+          "maxSliceMs": 0.970048000002862,
+          "timerDelayMs": 12.367505000001984
+        },
+        {
+          "visits": 112,
+          "copies": 16,
+          "wallMs": 23.78629699999874,
+          "mainThreadMs": 30,
+          "maxSliceMs": 0.9962939999968512,
+          "timerDelayMs": 13.013627999993332
+        },
+        {
+          "visits": 112,
+          "copies": 16,
+          "wallMs": 25.37841599999956,
+          "mainThreadMs": 30,
+          "maxSliceMs": 1.4181680000037886,
+          "timerDelayMs": 12.844409999997879
+        },
+        {
+          "visits": 112,
+          "copies": 16,
+          "wallMs": 24.24646099999518,
+          "mainThreadMs": 20,
+          "maxSliceMs": 1.0859080000009271,
+          "timerDelayMs": 13.08750599999621
+        },
+        {
+          "visits": 112,
+          "copies": 16,
+          "wallMs": 23.755598000003374,
+          "mainThreadMs": 30,
+          "maxSliceMs": 0.9889720000064699,
+          "timerDelayMs": 12.757769000003464
+        },
+        {
+          "visits": 112,
+          "copies": 16,
+          "wallMs": 23.664652999999817,
+          "mainThreadMs": 20,
+          "maxSliceMs": 1.0324200000031851,
+          "timerDelayMs": 12.712969000000157
+        },
+        {
+          "visits": 112,
+          "copies": 16,
+          "wallMs": 31.622037000001,
+          "mainThreadMs": 30,
+          "maxSliceMs": 1.4045419999965816,
+          "timerDelayMs": 19.1976880000002
+        },
+        {
+          "visits": 112,
+          "copies": 16,
+          "wallMs": 23.89857800000027,
+          "mainThreadMs": 20,
+          "maxSliceMs": 1.0181109999975888,
+          "timerDelayMs": 12.782867000001715
+        },
+        {
+          "visits": 112,
+          "copies": 16,
+          "wallMs": 23.91297499999928,
+          "mainThreadMs": 20,
+          "maxSliceMs": 1.0221779999992577,
+          "timerDelayMs": 12.82508300000336
+        },
+        {
+          "visits": 112,
+          "copies": 16,
+          "wallMs": 24.985961999998835,
+          "mainThreadMs": 30,
+          "maxSliceMs": 1.0244050000037532,
+          "timerDelayMs": 13.773371000002953
+        }
+      ]
+    },
+    {
+      "history": 4096,
+      "samples": [
+        {
+          "visits": 112,
+          "copies": 16,
+          "wallMs": 29.569212999995216,
+          "mainThreadMs": 20,
+          "maxSliceMs": 2.0366740000026766,
+          "timerDelayMs": 14.64109799999278
+        },
+        {
+          "visits": 112,
+          "copies": 16,
+          "wallMs": 28.98785399999906,
+          "mainThreadMs": 40,
+          "maxSliceMs": 1.9800450000038836,
+          "timerDelayMs": 14.275359999999637
+        },
+        {
+          "visits": 112,
+          "copies": 16,
+          "wallMs": 30.28867000000173,
+          "mainThreadMs": 20,
+          "maxSliceMs": 1.7786819999964791,
+          "timerDelayMs": 15.588157999998657
+        },
+        {
+          "visits": 112,
+          "copies": 16,
+          "wallMs": 29.621993000000657,
+          "mainThreadMs": 30,
+          "maxSliceMs": 1.6859140000015032,
+          "timerDelayMs": 14.361401000001933
+        },
+        {
+          "visits": 112,
+          "copies": 16,
+          "wallMs": 29.80441299999802,
+          "mainThreadMs": 30,
+          "maxSliceMs": 1.8978520000018761,
+          "timerDelayMs": 14.892259000000195
+        },
+        {
+          "visits": 112,
+          "copies": 16,
+          "wallMs": 30.886139000002004,
+          "mainThreadMs": 30,
+          "maxSliceMs": 1.6496199999965029,
+          "timerDelayMs": 17.406307999997807
+        },
+        {
+          "visits": 112,
+          "copies": 16,
+          "wallMs": 30.01796800000011,
+          "mainThreadMs": 40,
+          "maxSliceMs": 1.927239999997255,
+          "timerDelayMs": 14.480439999999362
+        },
+        {
+          "visits": 112,
+          "copies": 16,
+          "wallMs": 31.454349999999977,
+          "mainThreadMs": 20,
+          "maxSliceMs": 2.2683299999989686,
+          "timerDelayMs": 15.733851000004506
+        },
+        {
+          "visits": 112,
+          "copies": 16,
+          "wallMs": 29.498325000000477,
+          "mainThreadMs": 30,
+          "maxSliceMs": 1.750582000000577,
+          "timerDelayMs": 14.421957000005932
+        },
+        {
+          "visits": 112,
+          "copies": 16,
+          "wallMs": 29.671549999999115,
+          "mainThreadMs": 30,
+          "maxSliceMs": 1.7551519999979064,
+          "timerDelayMs": 14.662322000003769
+        },
+        {
+          "visits": 112,
+          "copies": 16,
+          "wallMs": 32.22136000000319,
+          "mainThreadMs": 40,
+          "maxSliceMs": 2.29174200000125,
+          "timerDelayMs": 16.336245999998937
+        },
+        {
+          "visits": 112,
+          "copies": 16,
+          "wallMs": 31.18186400000559,
+          "mainThreadMs": 30,
+          "maxSliceMs": 2.0400449999942794,
+          "timerDelayMs": 15.839822000001732
+        },
+        {
+          "visits": 112,
+          "copies": 16,
+          "wallMs": 29.83770099999674,
+          "mainThreadMs": 20,
+          "maxSliceMs": 2.0018739999941317,
+          "timerDelayMs": 14.672989999999118
+        },
+        {
+          "visits": 112,
+          "copies": 16,
+          "wallMs": 31.004141000004893,
+          "mainThreadMs": 40,
+          "maxSliceMs": 2.235019999992801,
+          "timerDelayMs": 15.612759999996342
+        },
+        {
+          "visits": 112,
+          "copies": 16,
+          "wallMs": 29.766035000000556,
+          "mainThreadMs": 20,
+          "maxSliceMs": 1.690521999997145,
+          "timerDelayMs": 14.649669999998878
+        },
+        {
+          "visits": 112,
+          "copies": 16,
+          "wallMs": 28.75766800000565,
+          "mainThreadMs": 30,
+          "maxSliceMs": 1.7228099999992992,
+          "timerDelayMs": 14.31883999999991
+        },
+        {
+          "visits": 112,
+          "copies": 16,
+          "wallMs": 29.36127399999532,
+          "mainThreadMs": 30,
+          "maxSliceMs": 1.665329000003112,
+          "timerDelayMs": 16.333703999996942
+        },
+        {
+          "visits": 112,
+          "copies": 16,
+          "wallMs": 30.028720000002068,
+          "mainThreadMs": 40,
+          "maxSliceMs": 1.758892999998352,
+          "timerDelayMs": 14.998188999998092
+        },
+        {
+          "visits": 112,
+          "copies": 16,
+          "wallMs": 31.76592299999902,
+          "mainThreadMs": 30,
+          "maxSliceMs": 1.7700019999974757,
+          "timerDelayMs": 14.804118000000017
+        },
+        {
+          "visits": 112,
+          "copies": 16,
+          "wallMs": 41.82510799999727,
+          "mainThreadMs": 40,
+          "maxSliceMs": 2.0767829999967944,
+          "timerDelayMs": 19.346770000003744
+        },
+        {
+          "visits": 112,
+          "copies": 16,
+          "wallMs": 33.29251700000168,
+          "mainThreadMs": 30,
+          "maxSliceMs": 2.90275400000246,
+          "timerDelayMs": 16.121343999999226
+        },
+        {
+          "visits": 112,
+          "copies": 16,
+          "wallMs": 32.85924299999897,
+          "mainThreadMs": 40,
+          "maxSliceMs": 1.9021429999993416,
+          "timerDelayMs": 16.793524000000616
+        },
+        {
+          "visits": 112,
+          "copies": 16,
+          "wallMs": 33.79810700000235,
+          "mainThreadMs": 20,
+          "maxSliceMs": 2.035948000004282,
+          "timerDelayMs": 16.609448000002885
+        },
+        {
+          "visits": 112,
+          "copies": 16,
+          "wallMs": 33.84614000000147,
+          "mainThreadMs": 40,
+          "maxSliceMs": 2.1110239999979967,
+          "timerDelayMs": 16.861990999997943
+        },
+        {
+          "visits": 112,
+          "copies": 16,
+          "wallMs": 33.36184000000503,
+          "mainThreadMs": 30,
+          "maxSliceMs": 1.9666330000036396,
+          "timerDelayMs": 17.000291000003926
+        },
+        {
+          "visits": 112,
+          "copies": 16,
+          "wallMs": 34.70881000000372,
+          "mainThreadMs": 40,
+          "maxSliceMs": 2.143145000001823,
+          "timerDelayMs": 17.23917399999482
+        },
+        {
+          "visits": 112,
+          "copies": 16,
+          "wallMs": 33.25780600000144,
+          "mainThreadMs": 30,
+          "maxSliceMs": 2.12256399999751,
+          "timerDelayMs": 16.916777000005823
+        },
+        {
+          "visits": 112,
+          "copies": 16,
+          "wallMs": 33.50308000000223,
+          "mainThreadMs": 30,
+          "maxSliceMs": 2.1471759999985807,
+          "timerDelayMs": 16.412308999999368
+        },
+        {
+          "visits": 112,
+          "copies": 16,
+          "wallMs": 34.34281500000361,
+          "mainThreadMs": 30,
+          "maxSliceMs": 2.200213000003714,
+          "timerDelayMs": 17.86544299999514
+        },
+        {
+          "visits": 112,
+          "copies": 16,
+          "wallMs": 34.23287999999593,
+          "mainThreadMs": 40,
+          "maxSliceMs": 2.346133999999438,
+          "timerDelayMs": 17.233103999999003
+        }
+      ]
+    }
+  ],
+  "checkpoints": [
+    {
+      "checkpoints": [
+        {
+          "history": 32,
+          "wallMs": 19.104386999999406,
+          "holdMs": 15.641336000000592
+        },
+        {
+          "history": 1024,
+          "wallMs": 72.93460599999526,
+          "holdMs": 70.74963099999877
+        },
+        {
+          "history": 4096,
+          "wallMs": 258.7054599999974,
+          "holdMs": 255.32557400000223
+        }
+      ]
+    }
+  ],
+  "regressions": {
+    "reviewedCandidate": "Both new retry and whole-phase regressions failed; 8,272 attempt visits at 4,096 attempts; a new host became unconfirmed after one failed stop.",
+    "fixed": "Each new terminal host receives five failed-stop opportunities across bounded windows and a real process restart; off-window activation and survivor guards remain protective. Growth also retains a settled key for every attempt."
+  },
+  "checks": [
+    {
+      "file": "src/lib/pipelines/engine.controllerPass.test.ts",
+      "passing": 34,
+      "filter": null
+    },
+    {
+      "file": "src/lib/pipelines/terminalReap.test.ts",
+      "passing": 56,
+      "filter": null
+    },
+    {
+      "file": "src/lib/state/sqliteStateStore.bounded.test.ts",
+      "passing": 9,
+      "filter": null
+    },
+    {
+      "file": "src/lib/pipelines/stageProvenance.test.ts",
+      "passing": 9,
+      "filter": null
+    },
+    {
+      "file": "src/lib/state/pipelineControllerIndex.owner.test.ts",
+      "passing": 1,
+      "filter": null
+    },
+    {
+      "file": "src/lib/pipelines/engine.recovery.test.ts",
+      "passing": 1,
+      "filter": "fallback|membership|inherited"
+    }
+  ],
+  "referencesRechecked": true,
+  "optionalExpandedReviewedGrowth": {
+    "status": "cancelled during large-lane setup",
+    "ownerIdentityVerified": true,
+    "completedSizes": [
+      {
+        "history": 32,
+        "samples": [
+          {
+            "visits": 144,
+            "copies": 64,
+            "wallMs": 24.596329000000026,
+            "mainThreadMs": 20,
+            "maxSliceMs": 1.048813999999993,
+            "timerDelayMs": 13.678577000000018
+          },
+          {
+            "visits": 144,
+            "copies": 64,
+            "wallMs": 24.114880000000028,
+            "mainThreadMs": 20,
+            "maxSliceMs": 0.9808689999999842,
+            "timerDelayMs": 13.140072999999973
+          },
+          {
+            "visits": 144,
+            "copies": 64,
+            "wallMs": 23.698315000000093,
+            "mainThreadMs": 30,
+            "maxSliceMs": 0.972819999999956,
+            "timerDelayMs": 12.947740000000067
+          },
+          {
+            "visits": 144,
+            "copies": 64,
+            "wallMs": 26.368041000000062,
+            "mainThreadMs": 20,
+            "maxSliceMs": 0.9418739999999843,
+            "timerDelayMs": 15.611272999999983
+          },
+          {
+            "visits": 144,
+            "copies": 64,
+            "wallMs": 23.594922999999994,
+            "mainThreadMs": 30,
+            "maxSliceMs": 0.9855909999999994,
+            "timerDelayMs": 13.068480999999906
+          },
+          {
+            "visits": 144,
+            "copies": 64,
+            "wallMs": 23.073287999999934,
+            "mainThreadMs": 20,
+            "maxSliceMs": 0.9464360000000624,
+            "timerDelayMs": 12.67061000000001
+          },
+          {
+            "visits": 144,
+            "copies": 64,
+            "wallMs": 23.530965000000037,
+            "mainThreadMs": 20,
+            "maxSliceMs": 0.9463010000000622,
+            "timerDelayMs": 12.570857000000046
+          },
+          {
+            "visits": 144,
+            "copies": 64,
+            "wallMs": 28.112195000000042,
+            "mainThreadMs": 30,
+            "maxSliceMs": 1.5725840000000062,
+            "timerDelayMs": 15.315466000000015
+          },
+          {
+            "visits": 144,
+            "copies": 64,
+            "wallMs": 23.08103499999993,
+            "mainThreadMs": 20,
+            "maxSliceMs": 0.9312769999999091,
+            "timerDelayMs": 12.263291999999979
+          },
+          {
+            "visits": 144,
+            "copies": 64,
+            "wallMs": 23.426391999999964,
+            "mainThreadMs": 30,
+            "maxSliceMs": 0.9882219999999506,
+            "timerDelayMs": 12.665309999999977
+          },
+          {
+            "visits": 144,
+            "copies": 64,
+            "wallMs": 22.784320999999977,
+            "mainThreadMs": 20,
+            "maxSliceMs": 0.9626950000000534,
+            "timerDelayMs": 12.281832000000009
+          },
+          {
+            "visits": 144,
+            "copies": 64,
+            "wallMs": 23.611916000000065,
+            "mainThreadMs": 30,
+            "maxSliceMs": 0.9460530000000063,
+            "timerDelayMs": 12.903437000000054
+          },
+          {
+            "visits": 144,
+            "copies": 64,
+            "wallMs": 23.188392999999905,
+            "mainThreadMs": 20,
+            "maxSliceMs": 0.941506000000004,
+            "timerDelayMs": 12.618955999999912
+          },
+          {
+            "visits": 144,
+            "copies": 64,
+            "wallMs": 23.422378999999978,
+            "mainThreadMs": 20,
+            "maxSliceMs": 0.9713530000000219,
+            "timerDelayMs": 12.673760000000016
+          },
+          {
+            "visits": 144,
+            "copies": 64,
+            "wallMs": 25.23099000000002,
+            "mainThreadMs": 20,
+            "maxSliceMs": 0.9709369999999353,
+            "timerDelayMs": 12.683471000000054
+          },
+          {
+            "visits": 144,
+            "copies": 64,
+            "wallMs": 23.449932999999987,
+            "mainThreadMs": 30,
+            "maxSliceMs": 1.006797000000006,
+            "timerDelayMs": 12.934399999999982
+          },
+          {
+            "visits": 144,
+            "copies": 64,
+            "wallMs": 22.994249999999965,
+            "mainThreadMs": 30,
+            "maxSliceMs": 0.9653030000000626,
+            "timerDelayMs": 12.585888999999952
+          },
+          {
+            "visits": 144,
+            "copies": 64,
+            "wallMs": 23.22099700000001,
+            "mainThreadMs": 10,
+            "maxSliceMs": 0.9572309999999788,
+            "timerDelayMs": 12.540182999999956
+          },
+          {
+            "visits": 144,
+            "copies": 64,
+            "wallMs": 23.609305999999947,
+            "mainThreadMs": 30,
+            "maxSliceMs": 0.9671069999999418,
+            "timerDelayMs": 12.31774699999994
+          },
+          {
+            "visits": 144,
+            "copies": 64,
+            "wallMs": 22.706731999999988,
+            "mainThreadMs": 20,
+            "maxSliceMs": 0.9814629999999624,
+            "timerDelayMs": 12.254933000000051
+          },
+          {
+            "visits": 144,
+            "copies": 64,
+            "wallMs": 23.31024000000002,
+            "mainThreadMs": 20,
+            "maxSliceMs": 0.9490670000000136,
+            "timerDelayMs": 12.347630999999978
+          },
+          {
+            "visits": 144,
+            "copies": 64,
+            "wallMs": 23.85587099999998,
+            "mainThreadMs": 20,
+            "maxSliceMs": 1.0280810000000429,
+            "timerDelayMs": 13.202073000000041
+          },
+          {
+            "visits": 144,
+            "copies": 64,
+            "wallMs": 22.820371000000023,
+            "mainThreadMs": 20,
+            "maxSliceMs": 0.9696169999999711,
+            "timerDelayMs": 12.243736000000013
+          },
+          {
+            "visits": 144,
+            "copies": 64,
+            "wallMs": 24.857021999999915,
+            "mainThreadMs": 30,
+            "maxSliceMs": 0.9537109999999984,
+            "timerDelayMs": 12.172088999999914
+          },
+          {
+            "visits": 144,
+            "copies": 64,
+            "wallMs": 26.138070999999854,
+            "mainThreadMs": 30,
+            "maxSliceMs": 1.5930130000001554,
+            "timerDelayMs": 13.807389999999941
+          },
+          {
+            "visits": 144,
+            "copies": 64,
+            "wallMs": 22.72272399999997,
+            "mainThreadMs": 30,
+            "maxSliceMs": 0.9171069999999872,
+            "timerDelayMs": 12.116925000000037
+          },
+          {
+            "visits": 144,
+            "copies": 64,
+            "wallMs": 24.362914000000046,
+            "mainThreadMs": 20,
+            "maxSliceMs": 0.9753479999999399,
+            "timerDelayMs": 12.726822999999968
+          },
+          {
+            "visits": 144,
+            "copies": 64,
+            "wallMs": 22.571066999999857,
+            "mainThreadMs": 20,
+            "maxSliceMs": 0.9422570000001542,
+            "timerDelayMs": 12.264437000000044
+          },
+          {
+            "visits": 144,
+            "copies": 64,
+            "wallMs": 23.001955999999836,
+            "mainThreadMs": 20,
+            "maxSliceMs": 0.918337000000065,
+            "timerDelayMs": 12.689601000000039
+          },
+          {
+            "visits": 144,
+            "copies": 64,
+            "wallMs": 22.717281000000185,
+            "mainThreadMs": 20,
+            "maxSliceMs": 0.9194569999999658,
+            "timerDelayMs": 12.161111000000119
+          }
+        ]
+      }
+    ],
+    "note": "The two ordinary red regressions and the identical SQL output-write measurements completed independently. This optional variant adds settled keys and distinct retained host identities; its 4,096-attempt setup did not finish.",
+    "elapsedMsEstimate": 150708,
+    "elapsedMethod": "Recorded runner start ticks against kernel boot time; rounded estimate includes setup and the completed small sample."
+  }
+}

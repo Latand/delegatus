@@ -21,6 +21,16 @@ ports.stopStagePane = async () => { throw new Error("recovery fixture cannot sig
 ports.spawnAgent = async () => { throw new Error("recovery fixture cannot spawn an agent"); };
 ports.structuredDeliveryPublication = () => "unbound";
 const closeLog = process.env.LLV_CONTROLLER_CLOSE_LOG;
+const reapLog = process.env.LLV_CONTROLLER_REAP_LOG;
+if (reapLog) {
+  if (!reapLog.startsWith(`${process.env.LLV_STATE_DIR}/`)) throw new Error("reap fixture log must stay in isolated state");
+  ports.stageHostResident = async () => true;
+  ports.conversationAgentActive = async () => false;
+  ports.stopStageAgent = async target => {
+    fs.appendFileSync(reapLog, `${target.attempt}\n`);
+    return { outcome: "failed", error: "temporary stop failure" };
+  };
+}
 if (closeLog) {
   if (!closeLog.startsWith(`${process.env.LLV_STATE_DIR}/`)) throw new Error("close fixture log must stay in isolated state");
   ports.invalidateProviderContinuation = async id => {

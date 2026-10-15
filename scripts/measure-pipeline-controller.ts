@@ -44,6 +44,7 @@ const { performanceSpans } = await import("../src/lib/performanceSpans");
 let maxSliceMs = 0, maxSliceSite = "", snapshots = 0, copiedRows = 0;
 let maxLeaseHoldMs = 0;
 let decodedRows = 0, decodedBytes = 0, clonedRows = 0, clonedBytes = 0, fullReturnedSnapshots = 0, fullReturnedRows = 0;
+let clonedAttempts = 0, clonedAttemptBytes = 0;
 const sync = performanceSpans.sync.bind(performanceSpans);
 performanceSpans.sync = ((site, work, rows, bytes) => {
   const start = performance.now();
@@ -69,9 +70,14 @@ let decodingBytes = 0;
 globalThis.structuredClone = (value, options) => {
   const result = nativeClone(value, options);
   if (value && typeof value === "object" && "stages" in value && "runs" in value && "repoDir" in value) {
-    const bytes = bytesByValue.get(value) ?? decodingBytes;
+    const bytes = bytesByValue.get(value) ?? (decodingBytes || Buffer.byteLength(JSON.stringify(value)));
     clonedRows++; clonedBytes += bytes;
     if (result && typeof result === "object") bytesByValue.set(result, bytes);
+  } else if (value && typeof value === "object" && "n" in value && "effectiveRole" in value) {
+    // Lazy controller rows detach individual attempts. Include those pieces
+    // in the byte total, with separate counts from complete pipeline roots.
+    const bytes = Buffer.byteLength(JSON.stringify(value));
+    clonedAttempts++; clonedAttemptBytes += bytes; clonedBytes += bytes;
   }
   return result;
 };
@@ -154,6 +160,7 @@ console.log("PREPARED", new Date().toISOString());
 const mode = process.env.AUDIT_MODE ?? "legacy";
 for (let round = 0; round < 3; round++) {
   maxSliceMs = snapshots = copiedRows = decodedRows = decodedBytes = clonedRows = clonedBytes = fullReturnedSnapshots = fullReturnedRows = 0; maxSliceSite = ""; maxLeaseHoldMs = 0;
+  clonedAttempts = clonedAttemptBytes = 0;
   const start = performance.now(), cpu = threadCounters();
   let maxTimerGapMs = 0;
   lastTimer = start;
@@ -207,7 +214,7 @@ for (let round = 0; round < 3; round++) {
   const after = threadCounters();
   observations.push({ round, wallMs: performance.now() - start, mainThreadTicks: after.ticks - cpu.ticks,
     rchar: after.rchar - cpu.rchar, maxSliceMs, maxSliceSite, maxTimerGapMs, ticks, snapshots, copiedRows,
-    decodedRows, decodedBytes, clonedRows, clonedBytes, fullReturnedSnapshots, fullReturnedRows, maxLeaseHoldMs, phaseCpuTicks, jobSettlementWallMs, jobSettlementCpuTicks, externalChildCpuMs: 0,
+    decodedRows, decodedBytes, clonedRows, clonedBytes, clonedAttempts, clonedAttemptBytes, fullReturnedSnapshots, fullReturnedRows, maxLeaseHoldMs, phaseCpuTicks, jobSettlementWallMs, jobSettlementCpuTicks, externalChildCpuMs: 0,
     waitWindow: round === 0 ? waitWindow : null, errors, denied: { ...denied } });
   fs.writeFileSync(path.join(root, "result.json"), JSON.stringify(observations, null, 2));
   console.log(JSON.stringify({ ...observations.at(-1), ticks: { count: ticks.length, maxMs: Math.max(...ticks) } }));

@@ -295,3 +295,46 @@ test("indexed host and flow owners match custody predicates and follow old-write
     peer.close();
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
+
+test("output-only old-writer edits leave compact references intact as retained history grows", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "controller-reference-writes-"));
+  type Lane = { key: string; state: string; runs: { stageId: string; attempts: { n: number; conversationId: string; output: string; state: string; completedAt: string }[] }[] };
+  const options = { collection: "pipelines", schemaVersion: 1, busyMessage: "busy", key: (row: Lane) => row.key,
+    decode: (raw: unknown) => raw as Lane, clone: (row: Lane) => structuredClone(row) };
+  try {
+    const filename = path.join(dir,"state.sqlite");
+    initializeStateCollections(filename,[{ ...options,migrationId: "writes",loadRecords: () => [] }]);
+    const store = new SqliteStateCollection(filename,options), peer = new Database(filename);
+    try {
+      peer.exec("CREATE TABLE ref_write_probe(n INTEGER)");
+      for (const table of ["pipeline_attempt_refs","pipeline_owner_refs"]) peer.exec(`CREATE TRIGGER probe_${table} AFTER INSERT ON ${table} BEGIN INSERT INTO ref_write_probe VALUES(1); END`);
+      const samples = [];
+      for (const history of [32,1024,4096]) {
+        const row: Lane = { key: "large-lane",state: "paused",runs: [{ stageId: "build",attempts: Array.from({ length: history },(_,index) => ({ n: index+1,
+          conversationId: `host-${index}`,state: "failed",completedAt: "done",output: "retained output ".repeat(32) })) }] };
+        store.boundedPatch(1,tx => tx.put(row));
+        peer.exec("DELETE FROM ref_write_probe");
+        const outputMs = [];
+        for (let sample = 0; sample < 3; sample++) {
+          const start = performance.now();
+          peer.query("UPDATE state_rows SET value_json=json_set(value_json,'$.runs[0].attempts[0].output',?) WHERE collection='pipelines' AND row_key='large-lane'").run(`new output ${sample}`);
+          outputMs.push(performance.now()-start);
+        }
+        expect(peer.query("SELECT count(*) AS n FROM ref_write_probe").get()).toEqual({ n: 0 });
+        expect(store.pipelineOwnerExists([["conversationId",`host-${history-1}`]],false)).toBe(true);
+        // A real ownership change remains atomic, including rollback and an
+        // older writer that updates only the JSON payload.
+        const start = performance.now();
+        peer.exec("BEGIN IMMEDIATE");
+        peer.query("UPDATE state_rows SET value_json=json_set(value_json,'$.runs[0].attempts[0].conversationId','replacement') WHERE collection='pipelines' AND row_key='large-lane'").run();
+        expect(peer.query("SELECT 1 FROM pipeline_owner_refs WHERE identity='replacement'").get()).not.toBeNull();
+        expect(store.pipelineOwnerExists([["conversationId","replacement"]],false)).toBe(false);
+        peer.exec("ROLLBACK");
+        const ownershipMs = performance.now()-start;
+        expect(store.pipelineOwnerExists([["conversationId","host-0"]],false)).toBe(true);
+        samples.push({ history,outputMs,ownershipMs });
+      }
+      if (process.env.LLV_CONTROLLER_WRITE_EVIDENCE) fs.appendFileSync(process.env.LLV_CONTROLLER_WRITE_EVIDENCE,JSON.stringify(samples)+"\n");
+    } finally { peer.close(); }
+  } finally { fs.rmSync(dir,{ recursive: true,force: true }); }
+},30_000);
