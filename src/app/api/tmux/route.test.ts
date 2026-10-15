@@ -306,8 +306,8 @@ test("/api/tmux excludes authenticated monitor and MCP producers while one brows
   ]);
 });
 
-test("#1202 the operator's own message retires that conversation's reply drafts, with no pane mounted anywhere", async () => {
-  const { readReplySuggestions, recordReplySuggestions } = await import("@/lib/suggestions/store");
+test("the operator's own message records its admission, with no pane mounted anywhere", async () => {
+  const { readReplySuggestionsFile } = await import("@/lib/suggestions/store");
   const { setCallerConversationResolverForTests } = await import("@/lib/agent/operatorAuthority");
   const { VIEWER_SPAWN_CAPABILITY_HEADER } = await import("@/lib/agent/spawnPolicy");
   const conversationId = "conversation_asked_something";
@@ -316,22 +316,17 @@ test("#1202 the operator's own message retires that conversation's reply drafts,
      route already resolves for operator activity — no second lookup scheme. */
   completedFiles = [{ path: PATHNAME, conversationId }];
   delivery = async () => ({ ok: true, outcome: "delivered-to-live", target: "agents:4.0" });
-  const offer = () => recordReplySuggestions({
-    conversationId,
-    replies: [{ label: "hold", text: "Hold. Explain the rollback first." }],
-    origin: { kind: "manager", conversationId, role: "orchestrator" },
-  });
+  const admitted = () => readReplySuggestionsFile().admissions.filter((entry) => entry.conversationId === conversationId);
   setCallerConversationResolverForTests(() => "conversation_agent");
   try {
-    offer();
-    /* An agent's send through this same route is traffic, not an answer. */
+    /* An agent's send through this same route is traffic, not the operator's. */
     const agent = await POST(post({
       path: PATHNAME,
       text: "worker status",
       clientMessageId: "agent-send-one",
     }, { [VIEWER_SPAWN_CAPABILITY_HEADER]: "d".repeat(43) }));
     expect(agent.status).toBe(200);
-    expect(readReplySuggestions(conversationId)).not.toBeNull();
+    expect(admitted()).toEqual([]);
 
     const operator = await POST(post({
       path: PATHNAME,
@@ -339,40 +334,28 @@ test("#1202 the operator's own message retires that conversation's reply drafts,
       clientMessageId: "operator-send-one",
     }));
     expect(operator.status).toBe(200);
-    expect(readReplySuggestions(conversationId)).toBeNull();
+    expect(admitted().map((entry) => entry.key)).toEqual(["operator-send-one"]);
   } finally {
     setCallerConversationResolverForTests(null);
     completedFiles = previousFiles;
   }
 });
 
-test("#1202 a message re-delivered under its own client id spares drafts offered since it was admitted", async () => {
-  const { readReplySuggestions, recordReplySuggestions } = await import("@/lib/suggestions/store");
+test("a message re-delivered under its own client id keeps its first admission", async () => {
+  const { readReplySuggestionsFile } = await import("@/lib/suggestions/store");
   const conversationId = "conversation_asked_then_retried";
   const previousFiles = completedFiles;
   completedFiles = [{ path: PATHNAME, conversationId }];
   delivery = async () => ({ ok: true, outcome: "delivered-to-live", target: "agents:4.0" });
-  const offer = (label: string) => recordReplySuggestions({
-    conversationId,
-    replies: [{ label, text: `${label}.` }],
-    origin: { kind: "manager", conversationId, role: "orchestrator" },
-  });
+  const admitted = () => readReplySuggestionsFile().admissions.filter((entry) => entry.conversationId === conversationId);
   const send = () => POST(post({ path: PATHNAME, text: "hold then", clientMessageId: "operator-retried-send" }));
   try {
-    offer("hold");
     expect((await send()).status).toBe(200);
-    expect(readReplySuggestions(conversationId)).toBeNull();
-    /* The record's clock has millisecond resolution and the route stamps the
-       admission itself, so the next offer has to land in a later millisecond
-       for "offered since" to mean anything. */
+    const first = admitted();
+    expect(first).toHaveLength(1);
     await new Promise((resolve) => setTimeout(resolve, 10));
-
-    /* The manager asked something else while the client was still retrying the
-       delivery it already had accepted. The retry answers the OLD question, so
-       the drafts under the new one have to survive it. */
-    const offeredSince = offer("ship it");
     expect((await send()).status).toBe(200);
-    expect(readReplySuggestions(conversationId)?.setId).toBe(offeredSince.set.setId);
+    expect(admitted()).toEqual(first);
   } finally {
     completedFiles = previousFiles;
   }

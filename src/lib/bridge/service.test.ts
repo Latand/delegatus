@@ -17,7 +17,7 @@ import {
   recordBridgeDirectiveAnswer,
   recordManagerReport as recordBridgeReport,
 } from "./service";
-import { retireReplySuggestionsOnOperatorMessage } from "@/lib/suggestions/store";
+import { recordOperatorMessageAdmission } from "@/lib/suggestions/store";
 
 import { appendBridgeReports, drainBridgeReports, openBridgeChannel, readBridgeChannel, readBridgeReportLog, resolveBridgeAsks } from "./store";
 import type { BridgeReportInput } from "./types";
@@ -336,9 +336,9 @@ test("an operator message to the seat after a question answers it", () => {
   recordManagerReport({ key: "lane-9-question", class: "question", at: NOW.toISOString(), body: "which base?" });
   expect(bridgeAsksForSeats({ now: NOW }).size).toBe(1);
   /* Before the question: no answer. */
-  retireReplySuggestionsOnOperatorMessage(SCOPE.seatConversationId, new Date(NOW.getTime() - 60_000), "message-before");
+  recordOperatorMessageAdmission(SCOPE.seatConversationId, new Date(NOW.getTime() - 60_000), "message-before");
   expect(bridgeAsksForSeats({ now: NOW }).size).toBe(1);
-  retireReplySuggestionsOnOperatorMessage(SCOPE.seatConversationId, new Date(NOW.getTime() + 60_000), "message-after");
+  recordOperatorMessageAdmission(SCOPE.seatConversationId, new Date(NOW.getTime() + 60_000), "message-after");
   expect(bridgeAsksForSeats({ now: NOW }).size).toBe(0);
 });
 

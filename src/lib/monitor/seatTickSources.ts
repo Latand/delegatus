@@ -36,15 +36,12 @@ import { readAuto, type AutoState } from "@/lib/selfUpdate/auto";
 import { readJsonCache } from "@/lib/state/durableJson";
 import { pageFromEvents, readLifecycleJournal } from "@/lib/lifecycle/journal";
 import { refreshLifecycleJournal } from "@/lib/lifecycle/projector";
-import { resolvedQuestionAnswers } from "@/lib/bridge/asks";
 import { appendBridgeReports, readBridgeReportLog, scopedReportId } from "@/lib/bridge/store";
 import { recordDeploySnapshots } from "@/lib/bridge/taskChanges";
-import type { BridgeReportV1, BridgeResolvedAskV1 } from "@/lib/bridge/types";
+import type { BridgeReportV1 } from "@/lib/bridge/types";
 import { operatorLocale } from "@/lib/operator/settings";
 import { bridgeReportsEnabled } from "@/lib/projects/settings";
 import { viewerRepositoryProjects } from "@/lib/projects/viewerRepository";
-import { readReplySuggestionsFile } from "@/lib/suggestions/store";
-import type { ReplySuggestionsFileV1 } from "@/lib/suggestions/types";
 import viewerPackageManifest from "../../../package.json";
 import type { AgentLivenessRecord } from "@/lib/lifecycle/liveness";
 import { orchestratorMandateCarriesTickContract } from "@/lib/orchestrator/prompt";
@@ -552,17 +549,13 @@ export interface SeatTickSources {
       paged, so stage events reach `lane-event` (docs/design/orchestrator-reports.md
       §1.9). Absent: the journal is read as it stands. */
   refreshLifecycle?: (pipelines: readonly Pipeline[]) => void;
-  /** The report log, the project's Bridge reports setting, the operator's
-      language and the reply-suggestion store (§5.1). Absent: the check keeps
-      no report ledger, as with bridge reports off. */
+  /** The report log, the project's Bridge reports setting and the operator's
+      language (§5.1). Absent: the check keeps no report ledger, as with bridge
+      reports off. */
   reports?: {
     log: () => readonly BridgeReportV1[];
-    /** The decision requests the operator resolved (a tick in the report log
-        or «Dismiss» on the needs-you row). Absent: none. */
-    resolved?: () => readonly BridgeResolvedAskV1[];
     enabled: (project: string) => boolean;
     operatorLocale: () => "en" | "uk" | null;
-    suggestions: () => Pick<ReplySuggestionsFileV1, "sets" | "admissions">;
   };
   /** Snapshots of the board's task statuses at each settled deploy, taken in
       the controller pass before the decision (§3.8). Absent: none taken. */
@@ -751,10 +744,8 @@ export function defaultSeatTickSources(): SeatTickSources {
     },
     reports: {
       log: () => readBridgeReportLog().reports,
-      resolved: () => readBridgeReportLog().resolvedAsks ?? [],
       enabled: (project) => bridgeReportsEnabled(project),
       operatorLocale: () => operatorLocale(),
-      suggestions: () => readReplySuggestionsFile(),
     },
     recordDeploySnapshots: (project) => {
       if (!viewerOwnProjectKeys().includes(project)) return;
@@ -800,17 +791,10 @@ export function viewerOwnProjectKeys(): string[] {
 }
 
 /**
- * The report log and the asks as one check reads them (§5.1): the project's
- * manager reports, the ids they discharge, and the current suggestion set and
- * operator messages of the seat's conversation and of every conversation an
- * owed ask names, so an ask a predecessor left is still read after a rotation.
+ * The report log as one check reads it (§5.1): the project's manager reports
+ * and the ids they discharge.
  */
-function reportsInput(
-  project: string,
-  seat: SeatTickSeatInput | null,
-  state: SeatTickProjectState,
-  sources: SeatTickSources,
-): SeatTickReportsInput | undefined {
+function reportsInput(project: string, sources: SeatTickSources): SeatTickReportsInput | undefined {
   const port = sources.reports;
   if (!port) return undefined;
   try {
@@ -829,13 +813,6 @@ function reportsInput(
       if (!lastReportAt || Date.parse(report.at) > Date.parse(lastReportAt)) lastReportAt = report.at;
       if (report.coversOwedAt && (!latestCoversOwedAt || Date.parse(report.coversOwedAt) > Date.parse(latestCoversOwedAt))) latestCoversOwedAt = report.coversOwedAt;
     }
-    const conversations = [...new Set([...(seat ? [seat.conversationId] : []), ...(state.asksOwed ?? []).map((ask) => ask.conversationId)])];
-    const suggestions = port.suggestions();
-    const read = new Set(conversations);
-    /* A question the operator resolved is a question they answered: it
-       counts as an operator message in the seat it was asked from, at the
-       moment it was resolved. */
-    const admissions = [...suggestions.admissions, ...resolvedQuestionAnswers(manager, port.resolved?.() ?? [])];
     return {
       bridgeReports: port.enabled(project),
       operatorLocale: port.operatorLocale(),
@@ -843,13 +820,10 @@ function reportsInput(
       reportedIds: [...reportedIds],
       reportIdsFor: (key) => filedUnder.map((filed) => scopedReportId(filed, key)),
       latestCoversOwedAt,
-      suggestionSets: suggestions.sets.filter((set) => read.has(set.conversationId)).map((set) => ({ conversationId: set.conversationId, setId: set.setId, at: set.at })),
-      suggestionConversations: conversations,
-      operatorAdmissions: admissions.filter((admission) => read.has(admission.conversationId)).map((admission) => ({ conversationId: admission.conversationId, at: admission.at })),
     };
   } catch {
-    /* An unreadable log or store keeps no ledger this check: nothing is
-       discharged or recorded from evidence that could not be read. */
+    /* An unreadable log keeps no ledger this check: nothing is discharged or
+       recorded from evidence that could not be read. */
     return undefined;
   }
 }
@@ -2522,7 +2496,7 @@ export async function gatherSeatTickInput(
     policy,
     settings,
     ...(() => {
-      const reports = reportsInput(canonical, seat, state, sources);
+      const reports = reportsInput(canonical, sources);
       return reports ? { reports } : {};
     })(),
   };

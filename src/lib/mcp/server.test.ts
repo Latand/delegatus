@@ -1927,7 +1927,6 @@ describe("MCP tool service", () => {
         "agent_activity",
         "lifecycle_events",
         "request_attention",
-        "suggest_replies",
         "publish_prototype_review",
         "resend_prototype_review_telegram",
         "read_prototype_review",
@@ -1965,8 +1964,11 @@ describe("MCP tool service", () => {
       expect(spawnSchema?.properties).toHaveProperty("mcpServers");
       const createOrchestratorSchema = listed.tools.find((tool) => tool.name === "create_orchestrator")?.inputSchema;
       expect(createOrchestratorSchema?.properties).toHaveProperty("conversationId");
-      const suggestRepliesSchema = listed.tools.find((tool) => tool.name === "suggest_replies")?.inputSchema;
-      expect(suggestRepliesSchema?.properties).not.toHaveProperty("replaces");
+      /* Reply-draft pills are gone: every operator ask is a decision form, and
+         the route the pills read their drafts from is gone with the tool. */
+      expect(listed.tools.map((tool) => tool.name)).not.toContain("suggest_replies");
+      expect(fs.existsSync(path.join(import.meta.dir, "../../app/api/log/suggestions"))).toBe(false);
+      expect(fs.existsSync(path.join(import.meta.dir, "../../app/api/log/route.ts"))).toBe(true);
       /* #878: rotation must reach effort parity with create, or a successor
          silently boots at the default reasoning level. */
       const rotateOrchestratorSchema = listed.tools.find((tool) => tool.name === "rotate_orchestrator")?.inputSchema;
