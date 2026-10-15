@@ -1630,8 +1630,8 @@ test("kill boundary lookup includes later pages and fails closed on a stalled cu
 test("cancellation cannot claim success when withdrawal loses to a queue claim", async () => {
   const { cancelPendingRuntimeSwitch } = await import("./runtimeSwitch");
   let released = false;
-  const registry = { conversation: () => ({}), withdrawConversationReconfigure: () => ({ kind: "claimed", conversation: {} }), releaseSwitchHold: () => { released = true; } };
-  expect(() => cancelPendingRuntimeSwitch(registry as never, STAGE_CONVERSATION, "switch-one")).toThrow("already applying");
+  const registry = { deliveryWriteOrBusy: async (_correlation: unknown, write: () => unknown) => write(), conversation: () => ({}), withdrawConversationReconfigure: () => ({ kind: "claimed", conversation: {} }), releaseSwitchHold: () => { released = true; } };
+  await expect(cancelPendingRuntimeSwitch(registry as never, STAGE_CONVERSATION, "switch-one")).rejects.toThrow("already applying");
   expect(released).toBe(false);
 });
 
@@ -2359,3 +2359,86 @@ for (const engine of ["codex", "claude"] as const) for (const scenario of ["succ
     }
   });
 }
+
+
+test("runtime-switch cancellation awaits each admission and keeps its original revision fence", async () => {
+  const { cancelPendingRuntimeSwitch } = await import("./runtimeSwitch");
+  for (const changed of [false, true]) {
+    const effects: string[] = [];
+    let revision = 7;
+    const registry = {
+      deliveryWriteOrBusy: async (correlation: { label: string }, write: () => unknown) => {
+        effects.push(`wait:${correlation.label}`);
+        await new Promise<void>(resolve => setImmediate(resolve));
+        if (changed && correlation.label === "pipeline.switch-cancel") revision++;
+        return write();
+      },
+      conversation: () => ({ migration: { revision } }),
+      withdrawConversationReconfigure: () => {
+        effects.push("withdraw"); return { kind: "claimed", conversation: { migration: { revision } } };
+      },
+      reconfigureOwnedCancellableSwitch: () => true,
+      cancelConversationSwitch: (_id: string, expected: number) => {
+        effects.push(`cancel:${expected}`);
+        if (expected !== revision) throw new Error("migration revision is stale");
+      },
+      releaseSwitchHold: () => { effects.push("release"); },
+    };
+    const result = cancelPendingRuntimeSwitch(registry as never, STAGE_CONVERSATION, "switch-one");
+    expect(effects).toEqual(["wait:pipeline.switch-withdraw"]);
+    if (changed) await expect(result).rejects.toThrow("revision is stale");
+    else await result;
+    expect(effects).toEqual([
+      "wait:pipeline.switch-withdraw", "withdraw", "wait:pipeline.switch-cancel", "cancel:7",
+      ...changed ? [] : ["wait:pipeline.switch-release", "release"],
+    ]);
+  }
+});
+
+test("runtime-switch cancellation preserves settled failures and an admission failure releases nothing", async () => {
+  const { cancelPendingRuntimeSwitch } = await import("./runtimeSwitch");
+  for (const kind of ["refused", "settled", "failed", "missing"] as const) {
+    const effects: string[] = [];
+    const registry = {
+      deliveryWriteOrBusy: async (_correlation: unknown, write: () => unknown) => {
+        if (kind === "refused") throw new Error("writer deadline");
+        return write();
+      },
+      conversation: () => ({}),
+      withdrawConversationReconfigure: () => kind === "missing" ? { kind: "withdrawn", conversation: {} }
+        : { kind: "settled", conversation: { reconfigure: { status: kind === "failed" ? "failed" : "applied" } } },
+      releaseSwitchHold: () => { effects.push("release"); },
+    };
+    const result = cancelPendingRuntimeSwitch(registry as never, STAGE_CONVERSATION, "switch-one");
+    if (kind === "refused" || kind === "settled") {
+      await expect(result).rejects.toThrow(kind === "refused" ? "writer deadline" : "already settled");
+      expect(effects).toEqual([]);
+    } else {
+      await result; expect(effects).toEqual(["release"]);
+    }
+  }
+});
+
+
+test("a newer runtime selection or failed-switch hold appearing during release keeps its custody", async () => {
+  const { cancelPendingRuntimeSwitch } = await import("./runtimeSwitch");
+  for (const change of ["selection", "hold"] as const) {
+    let current = { reconfigure: { operationId: "switch-one", status: "cancelled" }, switchHold: null as unknown };
+    let released = false;
+    const registry = {
+      conversation: () => current,
+      withdrawConversationReconfigure: () => ({ kind: "replayed", conversation: structuredClone(current) }),
+      deliveryWriteOrBusy: async (correlation: { label: string }, write: () => unknown) => {
+        await new Promise<void>(resolve => setImmediate(resolve));
+        if (correlation.label === "pipeline.switch-release") current = change === "selection"
+          ? { ...current, reconfigure: { operationId: "switch-two", status: "applying" } }
+          : { ...current, switchHold: { reason: "a newer failed switch" } };
+        return write();
+      },
+      releaseSwitchHold: () => { released = true; },
+    };
+    await expect(cancelPendingRuntimeSwitch(registry as never, STAGE_CONVERSATION, "switch-one"))
+      .rejects.toThrow("runtime switch changed");
+    expect(released).toBe(false);
+  }
+});

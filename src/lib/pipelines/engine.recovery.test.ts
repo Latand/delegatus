@@ -631,7 +631,7 @@ test("a pipeline spawn that finds no runtime host fails its own receipt before i
       conversationId: reservation.conversationId,
       error: "pipeline structured runtime host is unavailable; start agent-log-viewer through its CLI and check the CLI log for the host startup failure",
     });
-    expect(ports.claimSpawnRetry(reservation.launchId, "pipeline-no-host:build:claim")).toBe("claimed");
+    expect(await ports.claimSpawnRetry(reservation.launchId, "pipeline-no-host:build:claim")).toBe("claimed");
   } finally {
     resolveSpawn.mockRestore();
     setAgentRegistryForTests(null);

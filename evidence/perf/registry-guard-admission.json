@@ -1,0 +1,511 @@
+{
+  "schemaVersion": 2,
+  "measuredAt": "2026-10-15T23:10:00.713328Z",
+  "baseRevision": "05f90f84db4ec8e60736491d8e3df3dc5e1f47e2",
+  "candidateSourceSha256": "bd17131fe07efc41edad835950c0ada67526deb359f83c950461b2eba5bdd52a",
+  "sourceFiles": [
+    "scripts/measure-registry-guard.ts",
+    "src/lib/agent/registry.ts",
+    "src/lib/agent/registry.writerWait.test.ts",
+    "src/lib/agent/sqliteRegistryStore.ts",
+    "src/lib/blockingWaits.ts",
+    "src/lib/pipelines/engine.recovery.test.ts",
+    "src/lib/pipelines/engine.ts",
+    "src/lib/pipelines/runtimeSwitch.test.ts",
+    "src/lib/pipelines/runtimeSwitch.ts",
+    "src/lib/runtime/accountCreditGuard.test.ts",
+    "src/lib/runtime/accountCreditGuard.tick.test.ts",
+    "src/lib/runtime/accountCreditGuard.ts",
+    "src/lib/runtime/interruptionObligations.test.ts",
+    "src/lib/runtime/interruptionObligations.ts",
+    "src/lib/runtime/structuredDeliveryController.ts",
+    "src/lib/runtime/structuredHostControl.test.ts",
+    "src/lib/runtime/structuredHostControl.ts",
+    "src/lib/state/fileTransaction.ts",
+    "src/lib/state/fileTransaction.wait.test.ts",
+    "src/lib/viewerLoopMonitor.ts"
+  ],
+  "fingerprintMethod": "SHA-256 of each sorted path, NUL, bytes, NUL",
+  "runtime": "Bun 1.4.0 on Linux",
+  "cpuMeasurement": "Linux main-thread utime + stime; CLK_TCK=100",
+  "order": [
+    "baseline 1",
+    "candidate 1",
+    "baseline 2",
+    "candidate 2",
+    "baseline 3",
+    "candidate 3"
+  ],
+  "warmupCalls": 3,
+  "rows": [
+    {
+      "sourceRevision": "05f90f84db4ec8e60736491d8e3df3dc5e1f47e2",
+      "asyncAdmission": false,
+      "fixtureSha256": "0477541854e3a2c0bab28a6aee16ef88bd5802d7de5e680d7a76f0b02623f91a",
+      "unmigratedCaller": null,
+      "load": {
+        "registryWrites": 4,
+        "peerHoldMs": 200,
+        "guardTicks": 4,
+        "tickMs": 1000,
+        "pendingObligations": 128
+      },
+      "elapsedMs": 4839.574904,
+      "mainThreadCpuMs": 40,
+      "mainThreadCorePercent": 0.8265188739395116,
+      "maxTimerDelayMs": 198.82961699999998,
+      "maxWriteSyncSliceMs": 203.45057900000006,
+      "maxGuardFileReadSyncSliceMs": 0.026616999999987456,
+      "guardStoreReads": 272,
+      "guardTickElapsedMs": [
+        2.790788000000248,
+        2.5903480000001764,
+        3.3583750000007058,
+        3.0322150000001784
+      ],
+      "waits": {
+        "registry-lock": {
+          "count": 4,
+          "synchronousCount": 4,
+          "totalMs": 806.7,
+          "maxMs": 201.9,
+          "p95Ms": 201.9
+        }
+      }
+    },
+    {
+      "sourceRevision": "bd17131fe07efc41edad835950c0ada67526deb359f83c950461b2eba5bdd52a",
+      "asyncAdmission": true,
+      "fixtureSha256": "0477541854e3a2c0bab28a6aee16ef88bd5802d7de5e680d7a76f0b02623f91a",
+      "unmigratedCaller": null,
+      "load": {
+        "registryWrites": 4,
+        "peerHoldMs": 200,
+        "guardTicks": 4,
+        "tickMs": 1000,
+        "pendingObligations": 128
+      },
+      "elapsedMs": 4830.740261,
+      "mainThreadCpuMs": 60,
+      "mainThreadCorePercent": 1.2420456650173848,
+      "maxTimerDelayMs": 2.572730999999976,
+      "maxWriteSyncSliceMs": 2.689100999999937,
+      "maxGuardFileReadSyncSliceMs": 0,
+      "guardStoreReads": 0,
+      "guardTickElapsedMs": [
+        0.05584399999997913,
+        0.03805599999986953,
+        0.050164000000222586,
+        0.04984000000058586
+      ],
+      "waits": {
+        "registry-lock-async": {
+          "count": 4,
+          "synchronousCount": 0,
+          "totalMs": 809.2,
+          "maxMs": 204.2,
+          "p95Ms": 204.2
+        }
+      }
+    },
+    {
+      "sourceRevision": "05f90f84db4ec8e60736491d8e3df3dc5e1f47e2",
+      "asyncAdmission": false,
+      "fixtureSha256": "0477541854e3a2c0bab28a6aee16ef88bd5802d7de5e680d7a76f0b02623f91a",
+      "unmigratedCaller": null,
+      "load": {
+        "registryWrites": 4,
+        "peerHoldMs": 200,
+        "guardTicks": 4,
+        "tickMs": 1000,
+        "pendingObligations": 128
+      },
+      "elapsedMs": 4837.5803639999995,
+      "mainThreadCpuMs": 60,
+      "mainThreadCorePercent": 1.2402894729461078,
+      "maxTimerDelayMs": 198.32658300000003,
+      "maxWriteSyncSliceMs": 203.05581099999995,
+      "maxGuardFileReadSyncSliceMs": 0.02668900000026042,
+      "guardStoreReads": 272,
+      "guardTickElapsedMs": [
+        3.5714129999996658,
+        2.5263770000001387,
+        2.5844569999999294,
+        3.0983329999999114
+      ],
+      "waits": {
+        "registry-lock": {
+          "count": 4,
+          "synchronousCount": 4,
+          "totalMs": 802,
+          "maxMs": 200.7,
+          "p95Ms": 200.7
+        }
+      }
+    },
+    {
+      "sourceRevision": "bd17131fe07efc41edad835950c0ada67526deb359f83c950461b2eba5bdd52a",
+      "asyncAdmission": true,
+      "fixtureSha256": "0477541854e3a2c0bab28a6aee16ef88bd5802d7de5e680d7a76f0b02623f91a",
+      "unmigratedCaller": null,
+      "load": {
+        "registryWrites": 4,
+        "peerHoldMs": 200,
+        "guardTicks": 4,
+        "tickMs": 1000,
+        "pendingObligations": 128
+      },
+      "elapsedMs": 4825.986813,
+      "mainThreadCpuMs": 50,
+      "mainThreadCorePercent": 1.0360575347059076,
+      "maxTimerDelayMs": 2.3559649999999692,
+      "maxWriteSyncSliceMs": 1.6790980000000673,
+      "maxGuardFileReadSyncSliceMs": 0,
+      "guardStoreReads": 0,
+      "guardTickElapsedMs": [
+        0.07372099999975035,
+        0.05204300000013973,
+        0.042101000000002387,
+        0.05149600000004284
+      ],
+      "waits": {
+        "registry-lock-async": {
+          "count": 4,
+          "synchronousCount": 0,
+          "totalMs": 807.6,
+          "maxMs": 204.5,
+          "p95Ms": 204.5
+        }
+      }
+    },
+    {
+      "sourceRevision": "05f90f84db4ec8e60736491d8e3df3dc5e1f47e2",
+      "asyncAdmission": false,
+      "fixtureSha256": "0477541854e3a2c0bab28a6aee16ef88bd5802d7de5e680d7a76f0b02623f91a",
+      "unmigratedCaller": null,
+      "load": {
+        "registryWrites": 4,
+        "peerHoldMs": 200,
+        "guardTicks": 4,
+        "tickMs": 1000,
+        "pendingObligations": 128
+      },
+      "elapsedMs": 4840.554706999999,
+      "mainThreadCpuMs": 60,
+      "mainThreadCorePercent": 1.2395273606397443,
+      "maxTimerDelayMs": 198.76676199999997,
+      "maxWriteSyncSliceMs": 203.65855999999997,
+      "maxGuardFileReadSyncSliceMs": 0.029998999999861553,
+      "guardStoreReads": 272,
+      "guardTickElapsedMs": [
+        4.061342999999852,
+        2.793564999999944,
+        2.707774999999856,
+        5.289169000000584
+      ],
+      "waits": {
+        "registry-lock": {
+          "count": 4,
+          "synchronousCount": 4,
+          "totalMs": 803,
+          "maxMs": 201.6,
+          "p95Ms": 201.6
+        }
+      }
+    },
+    {
+      "sourceRevision": "bd17131fe07efc41edad835950c0ada67526deb359f83c950461b2eba5bdd52a",
+      "asyncAdmission": true,
+      "fixtureSha256": "0477541854e3a2c0bab28a6aee16ef88bd5802d7de5e680d7a76f0b02623f91a",
+      "unmigratedCaller": null,
+      "load": {
+        "registryWrites": 4,
+        "peerHoldMs": 200,
+        "guardTicks": 4,
+        "tickMs": 1000,
+        "pendingObligations": 128
+      },
+      "elapsedMs": 4830.474426,
+      "mainThreadCpuMs": 60,
+      "mainThreadCorePercent": 1.2421140183881392,
+      "maxTimerDelayMs": 2.000699000000054,
+      "maxWriteSyncSliceMs": 2.1162919999999303,
+      "maxGuardFileReadSyncSliceMs": 0,
+      "guardStoreReads": 0,
+      "guardTickElapsedMs": [
+        0.05634299999974246,
+        0.03360399999974106,
+        0.04085899999972753,
+        0.04022699999950419
+      ],
+      "waits": {
+        "registry-lock-async": {
+          "count": 4,
+          "synchronousCount": 0,
+          "totalMs": 811,
+          "maxMs": 205.1,
+          "p95Ms": 205.1
+        }
+      }
+    }
+  ],
+  "gateWrapperRevision": "fe18cb41d73481f6b4e4bd105b708cb03e2d3b05",
+  "fixtureSha256": "0477541854e3a2c0bab28a6aee16ef88bd5802d7de5e680d7a76f0b02623f91a",
+  "unmigratedCallerControl": {
+    "baseline": {
+      "sourceRevision": "05f90f84db4ec8e60736491d8e3df3dc5e1f47e2",
+      "asyncAdmission": false,
+      "fixtureSha256": "0477541854e3a2c0bab28a6aee16ef88bd5802d7de5e680d7a76f0b02623f91a",
+      "unmigratedCaller": {
+        "caller": "accounts.recordLiveObservation",
+        "synchronousMs": 201.8912790000004,
+        "timerAdvancedAtReturn": false
+      },
+      "load": {
+        "registryWrites": 4,
+        "peerHoldMs": 200,
+        "guardTicks": 4,
+        "tickMs": 1000,
+        "pendingObligations": 128
+      },
+      "elapsedMs": 5042.085747,
+      "mainThreadCpuMs": 70,
+      "mainThreadCorePercent": 1.3883143506960276,
+      "maxTimerDelayMs": 202.04348500000003,
+      "maxWriteSyncSliceMs": 202.48697499999992,
+      "maxGuardFileReadSyncSliceMs": 0.02426999999988766,
+      "guardStoreReads": 272,
+      "guardTickElapsedMs": [
+        3.0842459999998937,
+        2.706112000000303,
+        2.7380389999998442,
+        5.449556999999913
+      ],
+      "waits": {
+        "registry-lock": {
+          "count": 5,
+          "synchronousCount": 5,
+          "totalMs": 997.9,
+          "maxMs": 200.6,
+          "p95Ms": 200.6
+        }
+      }
+    },
+    "candidate": {
+      "sourceRevision": "bd17131fe07efc41edad835950c0ada67526deb359f83c950461b2eba5bdd52a",
+      "asyncAdmission": true,
+      "fixtureSha256": "0477541854e3a2c0bab28a6aee16ef88bd5802d7de5e680d7a76f0b02623f91a",
+      "unmigratedCaller": {
+        "caller": "accounts.recordLiveObservation",
+        "synchronousMs": 202.4383740000003,
+        "timerAdvancedAtReturn": false
+      },
+      "load": {
+        "registryWrites": 4,
+        "peerHoldMs": 200,
+        "guardTicks": 4,
+        "tickMs": 1000,
+        "pendingObligations": 128
+      },
+      "elapsedMs": 5030.805907999999,
+      "mainThreadCpuMs": 50,
+      "mainThreadCorePercent": 0.9938765461114268,
+      "maxTimerDelayMs": 201.65109500000017,
+      "maxWriteSyncSliceMs": 2.205898999999931,
+      "maxGuardFileReadSyncSliceMs": 0,
+      "guardStoreReads": 0,
+      "guardTickElapsedMs": [
+        0.05800700000008874,
+        0.043008999999983644,
+        0.046112999999422755,
+        0.049874999999701686
+      ],
+      "waits": {
+        "registry-lock-async": {
+          "count": 4,
+          "synchronousCount": 0,
+          "totalMs": 808.1,
+          "maxMs": 203.9,
+          "p95Ms": 203.9
+        },
+        "registry-lock": {
+          "count": 1,
+          "synchronousCount": 1,
+          "totalMs": 199.4,
+          "maxMs": 199.4,
+          "p95Ms": 199.4
+        }
+      }
+    }
+  },
+  "verification": {
+    "isolatedEnvironment": [
+      "HOME",
+      "XDG_CONFIG_HOME",
+      "TMPDIR",
+      "LLV_STATE_DIR"
+    ],
+    "viewerControlUrl": "closed loopback port",
+    "testsByPath": {
+      "src/lib/agent/registry.writerWait.test.ts": 10,
+      "src/lib/runtime/accountCreditGuard.tick.test.ts": 5,
+      "src/lib/runtime/accountCreditGuard.test.ts": 17,
+      "src/lib/runtime/interruptionObligations.test.ts": 24,
+      "src/lib/state/fileTransaction.wait.test.ts": 2,
+      "src/lib/agent/sqliteRegistryStore.readOnlyView.test.ts": 22,
+      "src/lib/pipelines/engine.ports.test.ts": 106,
+      "src/lib/pipelines/engine.recovery.test.ts": 103,
+      "src/lib/pipelines/engine.creation.test.ts": 96,
+      "src/lib/pipelines/engine.publication.test.ts": 432,
+      "src/lib/pipelines/runtimeSwitch.test.ts": 156,
+      "src/lib/runtime/structuredHostControl.test.ts": 37,
+      "src/lib/pipelines/engine.controllerPass.test.ts": 35
+    },
+    "preExistingFailures": [
+      "src/lib/pipelines/engine.ports.test.ts: managed early admission holds actual pipeline launches across recovery until terminal status",
+      "src/lib/pipelines/engine.ports.test.ts: managed drain-switch-off admission holds actual pipeline launches across recovery until terminal status",
+      "src/lib/pipelines/engine.creation.test.ts: a stage completes and its successor waits for both update roles: early-switch-off"
+    ],
+    "types": "passed",
+    "eslint": {
+      "errors": 0,
+      "existingWarnings": 9
+    },
+    "runtimeHostRehearsal": {
+      "checkedAt": "2026-10-15T20:46:45.437Z",
+      "runtime": "Bun 1.4.0",
+      "successionMs": 505,
+      "windowMs": 15000,
+      "listener": {
+        "answered": 27,
+        "total": 27
+      },
+      "socket": {
+        "answered": 27,
+        "total": 27
+      },
+      "ok": true
+    },
+    "behavioralBaselineRevision": "14e3199375a2ca4d1a3646eef52fc231794c7915",
+    "privacy": "passed for source, evidence and draft PR text",
+    "scope": "Initial implementation checks before review; final fix checks are recorded in fixVerification."
+  },
+  "fixVerification": {
+    "reviewedRevision": "3563a13445138fb472a765b2e0fbd41b2e7cdcaf",
+    "testsByPath": {
+      "src/lib/runtime/accountCreditGuard.test.ts": 29,
+      "src/lib/runtime/accountCreditGuard.tick.test.ts": 7,
+      "src/lib/runtime/interruptionObligations.test.ts": 25,
+      "src/lib/runtime/structuredRecovery.test.ts": 27,
+      "src/lib/runtime/structuredMessageDelivery.accountReseat.test.ts": 32
+    },
+    "isolation": [
+      "HOME",
+      "XDG_CONFIG_HOME",
+      "TMPDIR",
+      "LLV_STATE_DIR"
+    ],
+    "viewerControlUrl": "closed loopback port",
+    "regressionControls": {
+      "custodyRaceBefore": {
+        "pass": 0,
+        "fail": 12
+      },
+      "pageRetryBefore": {
+        "pass": 0,
+        "fail": 2
+      },
+      "stopAssertionFaults": {
+        "ordering": "1 fail",
+        "submitted receipt": "1 fail",
+        "event-loop progress": "1 fail"
+      }
+    },
+    "types": "passed",
+    "eslint": {
+      "errors": 0,
+      "warnings": 0
+    },
+    "privacy": "passed for source, evidence and commits",
+    "prePushBatch": {
+      "headElapsedMs": 552156,
+      "baselineElapsedMs": 291219,
+      "runnerTimeoutFiles": [
+        "src/lib/pipelines/engine.providerBudget.test.ts",
+        "src/lib/pipelines/engine.publication.test.ts"
+      ],
+      "preExistingAssertionFailures": 3,
+      "types": "passed",
+      "eslint": "passed",
+      "privacy": "passed"
+    },
+    "isolatedTimeoutReruns": {
+      "src/lib/pipelines/engine.providerBudget.test.ts": {
+        "pass": 164,
+        "fail": 0,
+        "elapsedSeconds": 324.43
+      },
+      "src/lib/pipelines/engine.publication.test.ts": {
+        "pass": 432,
+        "fail": 0,
+        "elapsedSeconds": 236.4
+      }
+    },
+    "linuxBackend": "passed",
+    "linuxTestsByPath": {
+      "src/lib/proc/memory.test.ts": 17,
+      "src/lib/proc/portable.test.ts": 1,
+      "src/lib/proc/darwinIdentity.test.ts": 3,
+      "src/lib/proc/index.test.ts": 4,
+      "src/lib/proc/windowsSnapshot.test.ts": 14,
+      "src/lib/proc/windowsIdentity.test.ts": 6,
+      "src/lib/proc/windowsCwd.test.ts": 3,
+      "src/lib/proc/windows.test.ts": 16,
+      "src/lib/processGroup.test.ts": 15,
+      "src/lib/platformHome.test.ts": 5,
+      "src/lib/runtime/localEndpoint.test.ts": 5,
+      "src/lib/scanner/describe.test.ts": 50,
+      "src/lib/state/durableJson.test.ts": 1,
+      "src/runtime-host/socket.test.ts": 5,
+      "src/runtime-host/runtimeHostFence.test.ts": 5,
+      "bin/server-runtime.test.ts": 29,
+      "bin/bind-guard.test.ts": 15
+    },
+    "publicationMode": "Documented LLV_SKIP_HOOKS=1 timeout escape after isolated reruns and the stopped Linux checks passed.",
+    "scope": "Previous custody and retry fix round; the retirement fix is recorded in retirementFixVerification."
+  },
+  "retirementFixVerification": {
+    "reviewedRevision": "4e988e0196ce8eadf1dbd71d267d1ade6fdaf617",
+    "testsByPath": {
+      "src/lib/runtime/structuredHostControl.test.ts": 47,
+      "src/lib/runtime/structuredHostRetirement.test.ts": 59,
+      "src/app/api/runtime/hosts/route.test.ts": 11,
+      "src/lib/agent/registry.writerWait.test.ts": 10,
+      "src/lib/runtime/accountCreditGuard.test.ts": 29,
+      "src/lib/runtime/accountCreditGuard.tick.test.ts": 7
+    },
+    "regressionOnReviewedSource": {
+      "passed": 0,
+      "failed": 10,
+      "runnerErrors": 0,
+      "selection": "already-exited"
+    },
+    "behavior": "Both already-exited branches remain pending while admission is held; async false returns 409, rejection preserves its exact error, and success follows durable SQLite retirement. Retained and empty survivor sets are covered. A fresh connection sees the committed retirement.",
+    "types": "passed",
+    "eslint": {
+      "errors": 0,
+      "warnings": 0
+    },
+    "isolation": [
+      "HOME",
+      "XDG_CONFIG_HOME",
+      "TMPDIR",
+      "LLV_STATE_DIR"
+    ],
+    "viewerControlUrl": "closed loopback port",
+    "testCommand": "bash \"$GATE_WRAPPER\" bun test <explicit path>",
+    "typeCommand": "bash \"$GATE_WRAPPER\" bun node_modules/typescript/bin/tsc --noEmit --incremental false",
+    "lintCommand": "bash \"$GATE_WRAPPER\" bun node_modules/eslint/bin/eslint.js src/lib/runtime/structuredHostControl.ts src/lib/runtime/structuredHostControl.test.ts",
+    "publicationMode": "Existing documented timeout escape after focused checks; all checks for this fix run from isolated source exports."
+  }
+}

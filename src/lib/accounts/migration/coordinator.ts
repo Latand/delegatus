@@ -1429,7 +1429,7 @@ export async function reconcileMigrations(
       const latest = registry.readOnlySnapshot();
       const current = latest.conversations[conversation.id] ?? conversation;
       if (registry.pendingDeliveries(conversation.id).some((item) =>
-        (item.state === "assigned" && deliveryHasDurableClaimOwner(latest, current, item))
+        (item.state === "assigned" && (item.recoveryIntent === "reclaimed-host" || deliveryHasDurableClaimOwner(latest, current, item)))
         || (item.state === "delivery-uncertain" && delivery.reconcileUncertain))) {
         await drainHeldDeliveries(conversation.id, delivery, registry);
       }

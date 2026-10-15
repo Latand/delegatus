@@ -4124,6 +4124,219 @@ test("a live deputy takes the Viewer's own interruption continuation and nothing
   }
 });
 
+
+test.each(["timeout", "revoked", "obsolete", "ended-after-read", "ended-during-recovery", "pending"] as const)(
+  "a reclaimed-host drain fences a deputy's %s attempt before recovery or send",
+  async scenario => {
+    const { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent, orchestratorSeatFor } = await import("@/lib/orchestrator/seats");
+    const { beginDeputy, deputyMessageKey, endDeputy, readDeputies, recordDeputyFork, retryDeputy } = await import("@/lib/orchestrator/deputies");
+    const { sweepDeputies } = await import("@/lib/orchestrator/deputySweep");
+    const previousStateDir = process.env.LLV_STATE_DIR;
+    process.env.LLV_STATE_DIR = fs.mkdtempSync(path.join(sandbox, `deputy-drain-${scenario}-`));
+    const { registry, conversation } = registryWithConversation();
+    try {
+      const project = `deputy-drain-${scenario}`;
+      const seatPath = `/sessions/${scenario}-seat.jsonl`;
+      const activateSeat = (id: string, key: string, transcript: string) => {
+        beginOrchestratorSeatIntent({ project, mandate: "coordinate work", clientRequestId: key, mode: "existing",
+          now: "2026-10-15T20:00:00.000Z" });
+        completeOrchestratorSeatIntent({ project, clientRequestId: key, conversationId: id, path: transcript,
+          now: "2026-10-15T20:00:00.000Z" });
+      };
+      activateSeat("conversation_seat", "seat-first", seatPath);
+      const seat = orchestratorSeatFor(project).active!;
+      const startedAt = scenario === "timeout" ? new Date(Date.now() - 60 * 60_000) : new Date();
+      const begun = beginDeputy({ project, seatConversationId: seat.conversationId!, seatEpoch: seat.seatEpoch,
+        seatPath, clientRequestId: `ask-${scenario}`, ask: { text: "Explain the parallel failure", images: 0, sender: null }, now: startedAt });
+      if (begun.kind !== "begun") throw new Error("the deputy fixture did not begin");
+      recordDeputyFork(begun.deputy.askId, { deputyConversationId: conversation.id, artifactPath, forkRecordCount: 0 });
+      recordStructuredOwner(registry, conversation);
+      const generation = conversation.generations.at(-1)!;
+      const registryKey = `${conversation.engine}:${generation.id}`;
+      const owner = registry.readOnlySnapshot().entries[registryKey]!;
+      registry.upsert({ ...owner, status: "dead", claimOwner: null,
+        structuredHost: owner.structuredHost ? { ...owner.structuredHost, process: null } : null });
+      const clientMessageId = deputyMessageKey(begun.deputy.askId, 0);
+      const held = registry.holdDelivery(conversation.id, "Explain the parallel failure", clientMessageId, "text", [], null,
+        { origin: { kind: "operator" } }, { recoveryIntent: "reclaimed-host" });
+      expect(held).toMatchObject({ state: "assigned", attempts: 0, recoveryIntent: "reclaimed-host" });
+
+      if (scenario === "timeout") {
+        let cleanupAttempts = 0;
+        await sweepDeputies({
+          now: () => new Date(),
+          deputies: readDeputies,
+          activeSeat: key => orchestratorSeatFor(key).active,
+          runtime: async () => null,
+          ownLines: () => [],
+          interrupt: async () => { cleanupAttempts++; throw new Error("runtime host is offline"); },
+          release: async () => { cleanupAttempts++; throw new Error("runtime host is offline"); },
+          noteSeat: async () => "queued",
+        });
+        expect(readDeputies()[0]).toMatchObject({ state: "ended", outcome: "timeout" });
+        expect(cleanupAttempts).toBe(2);
+      } else if (scenario === "revoked") {
+        activateSeat("conversation_replacement", "seat-replacement", "/sessions/replacement-seat.jsonl");
+      } else if (scenario === "obsolete") {
+        endDeputy(begun.deputy.askId, { outcome: "timeout", expectedAttempt: 0 });
+        expect(retryDeputy(begun.deputy.askId, "retry-current-attempt", 0)).toMatchObject({ state: "pending", attempt: 1 });
+      }
+
+      let resumed = false;
+      let recoveries = 0;
+      const received: string[] = [];
+      const runtime = {
+        readSession: sessionReader(async () => {
+          if (scenario === "ended-after-read") endDeputy(begun.deputy.askId, { outcome: "timeout", expectedAttempt: 0 });
+          return resumed ? snapshot(conversation.id) : { ...snapshot(conversation.id), sessions: [] };
+        }),
+        operationStatus: async (operationId: string) => ({ operationId, replayed: false, receipt: { operationId,
+          idempotencyKey: clientMessageId, conversationId: conversation.id, kind: "send", status: "delivered", queuePosition: null,
+          at: "2026-10-15T20:36:20.000Z", revision: 1 } }),
+        command: async (command: { operationId: string; idempotencyKey: string; text: string }) => {
+          received.push(command.text);
+          return { operationId: command.operationId, replayed: false, receipt: { operationId: command.operationId,
+            idempotencyKey: command.idempotencyKey, conversationId: conversation.id, kind: "send", status: "delivered", queuePosition: null,
+            at: "2026-10-15T20:36:20.000Z", revision: 1 } };
+        },
+      } as unknown as RuntimeHostClient;
+      const delivery = {
+        deliver: async ({ delivery: row, path, clientMessageId: messageId }: { delivery: HeldDelivery; path: string; clientMessageId: string }) =>
+          await deliverHeldStructuredMessage({ conversationId: row.conversationId, runtimeConversationId: row.runtimeConversationId,
+            path, clientMessageId: messageId, deliveryId: row.id, text: row.text, command: row.command }, {
+            enabled: () => true, registry: () => registry, client: () => runtime, kick: () => {},
+            recover: async request => {
+              recoveries++;
+              if (scenario === "ended-during-recovery") endDeputy(begun.deputy.askId, { outcome: "timeout", expectedAttempt: 0 });
+              request.authorityGuard?.();
+              recordStructuredOwner(registry, conversation);
+              resumed = true;
+              return { target: null, path: artifactPath, conversationId: conversation.id, spawned: true } as const;
+            },
+          }) ?? "delivery-uncertain",
+      };
+      for (let pass = 0; pass < 3; pass++) await reconcileMigrations({} as never, delivery, registry);
+
+      if (scenario === "pending") {
+        expect(recoveries).toBe(1);
+        expect(received).toEqual(["Explain the parallel failure"]);
+        expect(registry.pendingDeliveries(conversation.id)).toEqual([]);
+      } else {
+        expect(resumed).toBe(false);
+        expect(recoveries).toBe(scenario === "ended-during-recovery" ? 1 : 0);
+        expect(received).toEqual([]);
+        expect(registry.readOnlySnapshot().heldDeliveries[held.id]).toMatchObject({ state: "failed", error: expect.any(String) });
+      }
+    } finally {
+      registry.close();
+      if (previousStateDir === undefined) delete process.env.LLV_STATE_DIR;
+      else process.env.LLV_STATE_DIR = previousStateDir;
+    }
+  },
+);
+
+test("revoked-after-final-fence: queued seat rotation never dispatches under revoked authority", async () => {
+  const { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent, orchestratorSeatFor } = await import("@/lib/orchestrator/seats");
+  const { beginDeputy, deputyMessageKey, recordDeputyFork } = await import("@/lib/orchestrator/deputies");
+  const { withAccountMutationLockAsync } = await import("@/lib/accounts/accountMutation");
+  const previousStateDir = process.env.LLV_STATE_DIR;
+  const fixedNow = Date.parse("2026-10-15T20:00:00.000Z");
+  const clock = spyOn(Date, "now").mockReturnValue(fixedNow);
+  const testStateDir = fs.mkdtempSync(path.join(sandbox, "deputy-final-fence-"));
+  process.env.LLV_STATE_DIR = testStateDir;
+  const { registry, conversation } = registryWithConversation();
+  let rotation: Promise<void> | undefined;
+  try {
+    const project = "deputy-final-fence";
+    const activateSeat = (id: string, key: string, transcript: string) => {
+      beginOrchestratorSeatIntent({ project, mandate: "coordinate work", clientRequestId: key, mode: "existing",
+        now: "2026-10-15T20:00:00.000Z" });
+      completeOrchestratorSeatIntent({ project, clientRequestId: key, conversationId: id, path: transcript,
+        now: "2026-10-15T20:00:00.000Z" });
+    };
+    activateSeat("conversation_seat", "seat-first", "/sessions/seat.jsonl");
+    const seat = orchestratorSeatFor(project).active!;
+    const begun = beginDeputy({ project, seatConversationId: seat.conversationId!, seatEpoch: seat.seatEpoch,
+      seatPath: seat.path, clientRequestId: "ask-final-fence",
+      ask: { text: "Explain the parallel failure", images: 0, sender: null },
+      now: new Date(fixedNow), askId: "deputy_final_fence" });
+    if (begun.kind !== "begun") throw new Error("the deputy fixture did not begin");
+    recordDeputyFork(begun.deputy.askId, { deputyConversationId: conversation.id, artifactPath, forkRecordCount: 0 });
+    recordStructuredOwner(registry, conversation);
+    const generation = conversation.generations.at(-1)!;
+    const registryKey = conversation.engine + ":" + generation.id;
+    const owner = registry.readOnlySnapshot().entries[registryKey]!;
+    registry.upsert({ ...owner, status: "dead", claimOwner: null,
+      structuredHost: owner.structuredHost ? { ...owner.structuredHost, process: null } : null });
+    const clientMessageId = deputyMessageKey(begun.deputy.askId, 0);
+    const held = registry.holdDelivery(conversation.id, "Explain the parallel failure", clientMessageId, "text", [], null,
+      { origin: { kind: "operator" } }, { recoveryIntent: "reclaimed-host" });
+    expect(held).toMatchObject({ state: "assigned", attempts: 0, recoveryIntent: "reclaimed-host" });
+
+    const progress = new DeliveryProgressStore(null);
+    const originalNote = progress.note.bind(progress);
+    spyOn(progress, "note").mockImplementation((operationId, targetConversationId, note) => {
+      originalNote(operationId, targetConversationId, note);
+      if (note.waitReason !== "dispatching" || rotation) return;
+      rotation = new Promise<void>((resolve, reject) => {
+        queueMicrotask(() => {
+          void withAccountMutationLockAsync(() => {
+            activateSeat("conversation_replacement", "seat-replacement", "/sessions/replacement-seat.jsonl");
+          }, { caller: "test seat rotation" }).then(resolve, reject);
+        });
+      });
+    });
+
+    let resumed = false;
+    const received: string[] = [];
+    const seatAtDispatch: (string | null)[] = [];
+    const runtime = {
+      readSession: sessionReader(async () => resumed ? snapshot(conversation.id) : { ...snapshot(conversation.id), sessions: [] }),
+      operationStatus: async (operationId: string) => ({ operationId, replayed: false, receipt: { operationId,
+        idempotencyKey: clientMessageId, conversationId: conversation.id, kind: "send", status: "delivered", queuePosition: null,
+        at: "2026-10-15T20:36:20.000Z", revision: 1 } }),
+      command: async (command: { operationId: string; idempotencyKey: string; text: string }) => {
+        seatAtDispatch.push(orchestratorSeatFor(project).active?.conversationId ?? null);
+        received.push(command.text);
+        return { operationId: command.operationId, replayed: false, receipt: { operationId: command.operationId,
+          idempotencyKey: command.idempotencyKey, conversationId: conversation.id, kind: "send", status: "delivered", queuePosition: null,
+          at: "2026-10-15T20:36:20.000Z", revision: 1 } };
+      },
+    } as unknown as RuntimeHostClient;
+    const delivery = {
+      deliver: async ({ delivery: row, path, clientMessageId: messageId }: { delivery: HeldDelivery; path: string; clientMessageId: string }) =>
+        await deliverHeldStructuredMessage({ conversationId: row.conversationId, runtimeConversationId: row.runtimeConversationId,
+          path, clientMessageId: messageId, deliveryId: row.id, text: row.text, command: row.command }, {
+          enabled: () => true, registry: () => registry, client: () => runtime, kick: () => {}, progress,
+          recover: async request => {
+            request.authorityGuard?.();
+            recordStructuredOwner(registry, conversation);
+            resumed = true;
+            return { target: null, path: artifactPath, conversationId: conversation.id, spawned: true } as const;
+          },
+        }) ?? "delivery-uncertain",
+    };
+    for (let pass = 0; pass < 3; pass++) await reconcileMigrations({} as never, delivery, registry);
+    await rotation;
+    expect(orchestratorSeatFor(project).active?.conversationId).toBe("conversation_replacement");
+    expect(received.length).toBeLessThanOrEqual(1);
+    expect(seatAtDispatch).toEqual(received.map(() => "conversation_seat"));
+    if (received.length) {
+      expect(received).toEqual(["Explain the parallel failure"]);
+      expect(registry.pendingDeliveries(conversation.id)).toEqual([]);
+    } else {
+      expect(registry.readOnlySnapshot().heldDeliveries[held.id]).toMatchObject({ state: "failed", error: expect.any(String) });
+    }
+  } finally {
+    if (rotation) await rotation;
+    clock.mockRestore();
+    registry.close();
+    fs.rmSync(testStateDir, { recursive: true, force: true });
+    if (previousStateDir === undefined) delete process.env.LLV_STATE_DIR;
+    else process.env.LLV_STATE_DIR = previousStateDir;
+  }
+});
+
 test("a dead-host resume that throws leaves the accepted send recorded as awaiting-host with its deadline", async () => {
   /* docs/design/delivery-progress-and-drain.md, P4: the reservation exists
      before the resume, so the send is accepted, and its record says what it
@@ -4781,4 +4994,43 @@ test.each([
     expect(state.commands).toBe(0);
     expect(Object.values(registry.readOnlySnapshot().heldDeliveries)).toHaveLength(scenario === "unknown-admission" ? 1 : 0);
   } finally { journal.close(); registry.close(); }
+});
+
+
+test("parallel B: a hostless fork's saved first question reaches the resumed host through the normal drain", async () => {
+  const { registry, conversation } = registryWithConversation("default", "claude");
+  let resumed = false;
+  const received: string[] = [];
+  const runtime = {
+    readSession: sessionReader(async () => resumed ? snapshot(conversation.id, "claude") : { ...snapshot(conversation.id, "claude"), sessions: [] }),
+    operationStatus: async (operationId: string) => ({ operationId, replayed: false, receipt: { operationId,
+      idempotencyKey: "fork-first-question", conversationId: conversation.id, kind: "send", status: "delivered", queuePosition: null,
+      at: "2026-10-15T20:36:20.000Z", revision: 1 } }),
+    command: async (command: { operationId: string; idempotencyKey: string; text: string }) => {
+      received.push(command.text);
+      return { operationId: command.operationId, replayed: false, receipt: { operationId: command.operationId,
+        idempotencyKey: command.idempotencyKey, conversationId: conversation.id, kind: "send", status: "delivered", queuePosition: null,
+        at: "2026-10-15T20:36:20.000Z", revision: 1 } };
+    },
+  } as unknown as RuntimeHostClient;
+  const initial = await enqueueStructuredMessage({ path: artifactPath, conversationId: conversation.id,
+    clientMessageId: "fork-first-question", text: "Explain the new failure" }, {
+    enabled: () => true, registry: () => registry, client: () => runtime, kick: () => {},
+    recover: async () => { throw new Error("task membership temporarily busy"); },
+  });
+  expect(initial).toMatchObject({ ok: true, outcome: "held" });
+  const reopened = new AgentRegistry(registry.filename);
+  const port = { deliver: async ({ delivery, path, clientMessageId }: { delivery: HeldDelivery; path: string; clientMessageId: string }) =>
+    await deliverHeldStructuredMessage({ conversationId: delivery.conversationId, runtimeConversationId: delivery.runtimeConversationId,
+      path, clientMessageId, deliveryId: delivery.id, text: delivery.text, command: delivery.command }, {
+      enabled: () => true, registry: () => reopened, client: () => runtime, kick: () => {},
+      recover: async () => { recordStructuredOwner(reopened, conversation); resumed = true;
+        return { target: null, path: artifactPath, conversationId: conversation.id, spawned: true }; },
+    }) ?? "delivery-uncertain" };
+  for (let pass = 0; pass < 3; pass++) await reconcileMigrations({} as never, port, reopened);
+  expect(resumed).toBe(true);
+  expect(received).toEqual(["Explain the new failure"]);
+  expect(reopened.pendingDeliveries(conversation.id)).toEqual([]);
+  await reconcileMigrations({} as never, port, reopened);
+  expect(received).toHaveLength(1);
 });

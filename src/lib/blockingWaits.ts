@@ -17,6 +17,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
  */
 
 export type BlockingWaitSite =
+  | "file-transaction"
   | "registry-lock"
   | "registry-revision-retry"
   | "registry-lock-async"
@@ -123,7 +124,7 @@ export function recordBlockingWait(input: {
   };
   samples.push(sample);
   if (samples.length > SAMPLE_LIMIT) samples.splice(0, samples.length - SAMPLE_LIMIT);
-  if (sample.durationMs >= (sample.site === "state-write-lock" || sample.site === "state-lease" ? 50 : BLOCKING_WAIT_LOG_MS) || (sample.site === "state-write-lock" && sample.refused)) {
+  if (sample.durationMs >= (sample.site === "state-write-lock" || sample.site === "state-lease" || sample.site === "file-transaction" ? 50 : BLOCKING_WAIT_LOG_MS) || (sample.site === "state-write-lock" && sample.refused)) {
     try { logSink(`[blocking-wait] ${JSON.stringify(sample)}`); }
     catch { /* a log that cannot be written never fails the caller */ }
   }
