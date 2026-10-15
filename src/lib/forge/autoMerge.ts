@@ -454,7 +454,7 @@ async function stepLane(read: Pipeline, ports: AutoMergePorts): Promise<void> {
     view = parsePullRequestView(await ports.run(["pr", "view", String(merge.prNumber), "--repo", merge.repository, "--json", PR_FIELDS]));
     if (!view) throw new Error("gh returned no parsable pull request");
     if (view.state === "CLOSED" && merge.chain.includes(view.headRefOid)) {
-      const landed = await readBatchLanding(merge.repository, merge.prNumber, view.baseRefName || read.baseBranch, ports.run);
+      const landed = await readBatchLanding(merge.repository, merge.prNumber, view.baseRefName || read.baseBranch, { head: view.headRefOid, repoDir: read.repoDir }, ports.run);
       if (landed) view = { ...view, state: "MERGED", mergeCommit: landed.commit, mergedAt: landed.mergedAt };
     }
     /* The final declared-output commit may be local only. Admit exactly the
@@ -775,7 +775,7 @@ async function reconcileBatchLanding(read: Pipeline, pr: { repository: string; n
     view = parsePullRequestView(await ports.run(["pr", "view", String(pr.number), "--repo", pr.repository, "--json", PR_FIELDS]));
     if (!view) throw new Error("gh returned no parsable pull request");
     if (view.state === "CLOSED" && read.merge!.chain.includes(view.headRefOid)) {
-      const landed = await readBatchLanding(pr.repository, pr.number, view.baseRefName || read.baseBranch, ports.run);
+      const landed = await readBatchLanding(pr.repository, pr.number, view.baseRefName || read.baseBranch, { head: view.headRefOid, repoDir: read.repoDir }, ports.run);
       if (landed) view = { ...view, state: "MERGED", mergeCommit: landed.commit, mergedAt: landed.mergedAt };
     }
   } catch (error) {
