@@ -879,7 +879,22 @@ export class SqliteAgentRegistryStore {
       `);
       if (options.allowArchiveMigration !== false) {
         assertStateStartupMutation(path.dirname(filename),"agent registry archive schema");
-        db.transaction(() => installRegistryArchive(db)).immediate();
+        db.transaction(() => {
+          installRegistryArchive(db);
+          // Older normalizers omit this field. Keep active namespace authority
+          // until a current writer has proved and recorded its retirement.
+          db.exec(`CREATE TRIGGER IF NOT EXISTS registry_signal_domain_update BEFORE UPDATE ON registry_rows
+            WHEN OLD.collection='entries'
+              AND json_type(OLD.value_json,'$.structuredHost.signalDomain')='object'
+              AND COALESCE(json_extract(OLD.value_json,'$.structuredHost.signalDomain.retired'),0)!=1
+              AND COALESCE(json_type(NEW.value_json,'$.structuredHost.signalDomain'),'missing')!='object'
+            BEGIN SELECT RAISE(ABORT,'agent signal domain metadata requires a current reader'); END`);
+          db.exec(`CREATE TRIGGER IF NOT EXISTS registry_signal_domain_delete BEFORE DELETE ON registry_rows
+            WHEN OLD.collection='entries'
+              AND json_type(OLD.value_json,'$.structuredHost.signalDomain')='object'
+              AND COALESCE(json_extract(OLD.value_json,'$.structuredHost.signalDomain.retired'),0)!=1
+            BEGIN SELECT RAISE(ABORT,'agent signal domain metadata requires a current reader'); END`);
+        }).immediate();
       }
       return db;
     }, { reopened: (db) => this.onDatabaseReopened(db) });

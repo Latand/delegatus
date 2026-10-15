@@ -31,6 +31,11 @@ test.each(["vitest", "delegatus", "missing"])("assembled test guidance uses inst
   pipeline.worktreeDir = worktree;
   try {
     if (kind === "missing") process.chdir(root);
+    if (kind === "missing") {
+      await expect(composeStageInput(pipeline, stage, stage.effectiveRole, "", worktree,
+        async () => ({ code: 1, stdout: "", stderr: "not a Git repository" }))).rejects.toThrow("tooling must support agent signal namespaces");
+      return;
+    }
     const prompt = await composeStageInput(pipeline, stage, stage.effectiveRole, "", worktree,
       async () => ({ code: 1, stdout: "", stderr: "not a Git repository" }));
     expect(prompt).toContain("project's test command");
@@ -38,12 +43,7 @@ test.each(["vitest", "delegatus", "missing"])("assembled test guidance uses inst
     expect(prompt).not.toContain("bun test");
     expect(prompt).toContain("explicit path");
     expect(prompt).toContain("isolated HOME, XDG_CONFIG_HOME, TMPDIR and LLV_STATE_DIR");
-    if (kind === "missing") {
-      expect(prompt).toContain("Gate wrapper unavailable");
-      expect(prompt).toContain("one at a time directly");
-      expect(prompt).not.toContain("never bypass it");
-      expect(prompt).not.toContain("bash scripts/gate-slot.sh");
-    } else {
+    {
       const wrapper = fs.realpathSync(path.join(toolingCwd, "scripts", "gate-slot.sh"));
       expect(prompt).toContain(wrapper);
       expect(path.isAbsolute(wrapper)).toBe(true);

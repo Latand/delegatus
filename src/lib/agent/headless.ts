@@ -1,3 +1,4 @@
+import { signalDomain, signalAgentDomain, spawnHeadlessSignalSandbox, headlessFixtureTransport } from "@/lib/runtime/agentSignalSandbox";
 import { AgentMemoryCell, planAgentMemory, wrapAgentCommand } from "@/lib/runtime/agentMemory";
 import { planAgentCpu } from "@/lib/runtime/cpuPlacement";
 import { agentRegistry } from "./registry";
@@ -235,6 +236,19 @@ export function killOwnedRun(run: LiveRun): void {
   const pid = run.child.pid;
   if (!pid || run.terminationStarted) return;
   run.terminationStarted = true;
+  let domain: ReturnType<typeof signalDomain>;
+  try { domain = signalDomain(run.child); }
+  catch (error) {
+    console.error("headless signal sandbox receipt refused during cleanup", error);
+    if (processMatches(pid, run.identity)) run.child.kill("SIGKILL");
+    return;
+  }
+  if (domain) {
+    signalAgentDomain(run.child, "SIGTERM");
+    const timer = setTimeout(() => signalAgentDomain(run.child, "SIGKILL"), 3_000);
+    timer.unref();
+    return;
+  }
   terminateHeadlessReviewerGroup(pid, null, {
     ownedByLiveHandle: true,
     leaderExited: run.exit !== null,
@@ -407,14 +421,21 @@ export function launchDetached(input: {
   try {
     // Reviews, relays and digests run unattended: they are work.
     const plan = planAgentMemory({ engine: "headless", sessionKey: input.key, liveAgents: Object.values(agentRegistry().readOnlySnapshot().entries).filter((entry) => entry.structuredHost && entry.status !== "dead" && entry.status !== "unhosted").length + 1, cpu: planAgentCpu("work") });
-    const wrapped = wrapAgentCommand(plan, input.runtime?.command ?? input.built.command, input.built.args);
     const memoryCell = plan ? new AgentMemoryCell(plan) : null;
-    child = spawn(wrapped.command, wrapped.args, {
+    const fixture = headlessFixtureTransport();
+    const start = ((command: string, args: string[], options: Parameters<typeof spawn>[2]) => {
+      const wrapped = wrapAgentCommand(plan, command, args);
+      return (fixture ?? spawn)(wrapped.command, wrapped.args, options);
+    }) as typeof spawn;
+    const launchOptions = {
       cwd: input.cwd,
       env: input.built.env,
       detached: true,
       stdio: [input.built.stdin === null ? "ignore" : "pipe", stdoutFd, stderrFd],
-    });
+    } satisfies import("node:child_process").SpawnOptions;
+    const command = input.runtime?.command ?? input.built.command;
+    child = fixture ? start(command, input.built.args, launchOptions)
+      : spawnHeadlessSignalSandbox(command, input.built.args, launchOptions, start, plan && (plan.mechanism === "scope" || plan.cpu) ? plan.unit : null);
     if (child.pid) memoryCell?.attach(child.pid, child);
     child.once("close", () => memoryCell?.close());
     child.once("error", () => memoryCell?.close());

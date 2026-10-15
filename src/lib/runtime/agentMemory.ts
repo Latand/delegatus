@@ -66,7 +66,7 @@ export function wrapAgentCommand(plan: AgentMemoryPlan | null, command: string, 
   const systemdVersion = Math.min(plan.systemdVersion, plan.cpu?.systemdVersion ?? Infinity);
   return { command: "systemd-run", args: ["--user", "--scope", "--quiet", "--collect",
     ...(systemdVersion >= 254 ? ["--expand-environment=no"] : []),
-    `--unit=${plan.unit}`, `--slice=${plan.cpu?.slice ?? plan.slice}`, "--description=Delegatus agent",
+    `--unit=${plan.unit}`, `--slice=${plan.cpu?.slice ?? plan.slice}`, "--description=Delegatus agent", "-p", "Delegate=yes",
     ...(plan.mechanism === "scope" ? ["-p", `MemoryMax=${plan.limitBytes}`, "-p", "MemorySwapMax=0", "-p", "OOMPolicy=continue"] : []),
     ...(plan.cpu ? cpuScopeProperties(plan.cpu) : []),
     ...(plan.viewerUnit ? ["-p", `BindsTo=${plan.viewerUnit}`, "-p", `After=${plan.viewerUnit}`] : []), "--", ...scored] };
@@ -336,7 +336,8 @@ export class AgentMemoryCell {
       if (!watchdogTimer) { watchdogTimer = setInterval(() => tickAgentMemoryWatchdogs(), 2_000); watchdogTimer.unref(); }
       return;
     }
-    const group = this.ports.cgroupForPid?.(pid) ?? read(`/proc/${pid}/cgroup`).split("\n").find((line) => line.startsWith("0::"))?.slice(3);
+    let group = this.ports.cgroupForPid?.(pid) ?? read(`/proc/${pid}/cgroup`).split("\n").find((line) => line.startsWith("0::"))?.slice(3);
+    if (group?.endsWith(`/${this.plan.unit}/agent`)) group = path.dirname(group);
     // Never observe the inherited Viewer cgroup while systemd-run is still entering the scope.
     if (!group || path.basename(group) !== this.plan.unit) return;
     this.pid = pid;

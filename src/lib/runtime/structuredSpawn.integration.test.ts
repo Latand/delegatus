@@ -6542,14 +6542,20 @@ describe.each(["http", "stdio"] as const)("a Claude spawn born on a non-routed a
         "prompt": "start on the account the pool chose",
         registry,
         client,
-      }, drainMode === "after-staging" ? {
+      }, {
+        // This executable is a protocol fixture. The signal suite separately
+        // qualifies the default native boundary without an inherited gate lease.
+        startHost: async (input, capability) => {
+          const { defaultStartHost } = await import("./structuredSpawn");
+          return defaultStartHost(input, capability, { claude: { spawnProcess: (command, args, options) => spawn(command, args, { ...options, stdio: ["pipe", "pipe", "pipe"] }) } });
+        },
         /* The production publication, with the switch landing in the window
            between staging and the first message. */
         publishHost: (key, host, ownsOperation) => {
-          commitDrain();
+          if (drainMode === "after-staging") commitDrain();
           return publishStructuredDeliveryHost({ key, host }, ownsOperation);
         },
-      } : {});
+      });
 
       const receipt = registry.snapshot().receipts[begun.receipt.launchId]!;
       const sessionId = receipt.key!.sessionId;

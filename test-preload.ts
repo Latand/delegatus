@@ -7,6 +7,8 @@ import { claimProcessTempRoot, TEST_RUN_TEMP_PREFIX } from "./src/lib/tempDirs";
 import { beginCodexFeatureFixture } from "./src/lib/agent/codexSpawnPolicyTestFixtures";
 import { beginTestChildOwnership } from "./src/lib/testing/testChildren";
 import { captureProcessIdentity } from "./src/lib/processIdentity";
+import { spawn } from "node:child_process";
+import { setHeadlessSpawnForTests } from "./src/lib/runtime/agentSignalSandbox";
 
 // Each Linux test runner needs its own kernel-owned tree. A nested runner must
 // not share its parent's lifetime: a short-lived intermediate can detach a
@@ -31,6 +33,7 @@ Object.assign(process.env, { NODE_ENV: "test" });
 // implements MCP enumeration or Codex is absent from PATH. Native policy tests
 // opt into the real reader for each test and restore this default afterwards.
 beginCodexFeatureFixture();
+setHeadlessSpawnForTests(spawn);
 
 /*
  * One temp root for the whole test process, removed when the run ends (#1957).

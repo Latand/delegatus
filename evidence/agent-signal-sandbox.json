@@ -1,0 +1,153 @@
+{
+  "measuredOn": "2026-10-15",
+  "environment": {
+    "kernel": "Linux 6.8.0-139-generic x86_64",
+    "runtime": "Bun 1.4.0",
+    "systemd": 255,
+    "bubblewrap": "0.9.0"
+  },
+  "isolation": "Every workload ran through the installed owned runner with isolated home, config, temporary and state roots. Queue time is excluded.",
+  "performance": [
+    {
+      "engine": "codex",
+      "profile": "full",
+      "samplesPerMode": 30,
+      "cpuPercent": 200,
+      "memoryBytes": 2147483648,
+      "baseline": {
+        "medianMs": 533.854,
+        "p95Ms": 888.674
+      },
+      "protected": {
+        "medianMs": 652.958,
+        "p95Ms": 787.234
+      },
+      "addedMedianMs": 119.104,
+      "idleHelperRssMedianKiB": 19056
+    },
+    {
+      "engine": "codex",
+      "profile": "restricted",
+      "samplesPerMode": 30,
+      "cpuPercent": 200,
+      "memoryBytes": 2147483648,
+      "baseline": {
+        "medianMs": 524.176,
+        "p95Ms": 775.52
+      },
+      "protected": {
+        "medianMs": 638.531,
+        "p95Ms": 758.1
+      },
+      "addedMedianMs": 114.355,
+      "idleHelperRssMedianKiB": 19068
+    },
+    {
+      "engine": "codex",
+      "profile": "read-only",
+      "samplesPerMode": 30,
+      "cpuPercent": 200,
+      "memoryBytes": 2147483648,
+      "baseline": {
+        "medianMs": 487.69,
+        "p95Ms": 741.792
+      },
+      "protected": {
+        "medianMs": 611.825,
+        "p95Ms": 1298.164
+      },
+      "addedMedianMs": 124.135,
+      "idleHelperRssMedianKiB": 19092
+    },
+    {
+      "workload": "gate bundle plus CPU admission tests",
+      "samplesPerMode": 3,
+      "baselineMedianMs": 607.894,
+      "protectedMedianMs": 663.887,
+      "slowdownPercent": 9.211
+    },
+    {
+      "workload": "four parallel protected gates",
+      "slots": 2,
+      "completed": 4,
+      "maximumActive": 2,
+      "wallMs": 15649.967
+    },
+    {
+      "engine": "claude",
+      "profile": "full",
+      "samplesPerMode": 30,
+      "cpuPercent": 200,
+      "memoryBytes": 2147483648,
+      "baseline": {
+        "medianMs": 891.009,
+        "p95Ms": 1137.99
+      },
+      "protected": {
+        "medianMs": 1023.195,
+        "p95Ms": 1192.683
+      },
+      "addedMedianMs": 132.186,
+      "idleHelperRssMedianKiB": 19048
+    },
+    {
+      "engine": "claude",
+      "profile": "restricted",
+      "samplesPerMode": 30,
+      "cpuPercent": 200,
+      "memoryBytes": 2147483648,
+      "baseline": {
+        "medianMs": 852.913,
+        "p95Ms": 1071.376
+      },
+      "protected": {
+        "medianMs": 912.201,
+        "p95Ms": 1201.065
+      },
+      "addedMedianMs": 59.289,
+      "idleHelperRssMedianKiB": 19056
+    },
+    {
+      "engine": "claude",
+      "profile": "read-only",
+      "samplesPerMode": 30,
+      "cpuPercent": 200,
+      "memoryBytes": 2147483648,
+      "baseline": {
+        "medianMs": 933.605,
+        "p95Ms": 1185.695
+      },
+      "protected": {
+        "medianMs": 1025.07,
+        "p95Ms": 1298.808
+      },
+      "addedMedianMs": 91.464,
+      "idleHelperRssMedianKiB": 19048
+    },
+    {
+      "workload": "full TypeScript check",
+      "samplesPerMode": 1,
+      "baselineMedianMs": 138830.083,
+      "protectedMedianMs": 133639.492,
+      "slowdownPercent": -3.739
+    }
+  ],
+  "performanceInterpretation": [
+    "Launch samples alternate baseline and protected mode, with the same engine, profile and resource limits; 30 samples per mode for every engine/profile.",
+    "Added launch medians of 59–132 ms exceed the proposed 50 ms investigation threshold. The shared launcher adds two Python startups, delegation, Bubblewrap setup and readiness checks before native execution.",
+    "The short gate workload shows 9.211% overhead. One full TypeScript pair showed no sustained slowdown; a single pair does not establish a speedup or a statistical performance bound.",
+    "Protection remains enabled in every protected sample. Native model responses use loopback providers."
+  ],
+  "historicalRollback": {
+    "oldRevision": "77fc690eac3880cce9507d365d47e5bc0e152354",
+    "oldMethodsRefused": [
+      "setStructuredHost",
+      "upsert",
+      "claimStructuredHost",
+      "terminateStructuredHost",
+      "markUnhosted"
+    ],
+    "currentAuthorityRetained": true,
+    "livingSupervisorRetirementRefused": true
+  }
+}

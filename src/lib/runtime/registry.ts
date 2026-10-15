@@ -25,6 +25,8 @@ import { StructuredHostAdoptionCleanupError, type HostState } from "./engineHost
 import { structuredHostsEnabled } from "./flags";
 import { conversationTurnLiveness, type TurnLivenessDependencies } from "./liveness";
 import { restartCutEvidenceHolds } from "./restartCutHold";
+import { verifiedSignalDomainProcesses } from "./agentSignalSandbox";
+import { isDeepStrictEqual } from "node:util";
 import type { StructuredHostTerminationDependencies } from "./structuredHostControl";
 
 export { structuredHostsEnabled };
@@ -52,17 +54,23 @@ function registryStatus(state: HostState): AgentHostStatus {
   return "dead";
 }
 
+function registryProcess(state: HostState): ProcessIdentity | null {
+  if (state.signalDomain && (state.pid !== null || state.signalDomain.retired !== true)) return { ...state.signalDomain.native };
+  return state.pid === null ? null : captureProcessIdentity(state.pid, undefined, state.processStartIdentity);
+}
+
 export function codexHostColumns(state: HostState, writerClaimEpoch: number): StructuredHostColumns {
   return {
     kind: "codex-app-server",
     endpoint: state.endpoint,
-    process: state.pid === null ? null : captureProcessIdentity(state.pid, undefined, state.processStartIdentity),
+    process: registryProcess(state),
     eventCursor: state.eventCursor,
     protocolVersion: state.protocolVersion,
     writerClaimEpoch,
     activeTurnRef: state.activeTurnRef,
     pendingAttention: state.pendingAttention,
     ...(state.memory ? { memory: state.memory } : {}),
+    ...(state.signalDomain ? { signalDomain: state.signalDomain } : {}),
     activeFlags: state.activeFlags,
   };
 }
@@ -71,7 +79,7 @@ export function claudeHostColumns(state: HostState, writerClaimEpoch: number): S
   return {
     kind: "claude-broker",
     endpoint: state.endpoint,
-    process: state.pid === null ? null : captureProcessIdentity(state.pid, undefined, state.processStartIdentity),
+    process: registryProcess(state),
     eventCursor: state.eventCursor,
     protocolVersion: state.protocolVersion,
     writerClaimEpoch,
@@ -81,6 +89,7 @@ export function claudeHostColumns(state: HostState, writerClaimEpoch: number): S
     ...(state.pendingToolUses?.length ? { pendingToolUses: state.pendingToolUses } : {}),
     ...(state.providerRetry ? { providerRetry: state.providerRetry } : {}),
     ...(state.memory ? { memory: state.memory } : {}),
+    ...(state.signalDomain ? { signalDomain: state.signalDomain } : {}),
     ...(state.ended ? { ended: state.ended } : {}),
     activeFlags: state.activeFlags,
   };
@@ -90,13 +99,14 @@ export function copilotHostColumns(state: HostState, writerClaimEpoch: number): 
   return {
     kind: "copilot-acp",
     endpoint: state.endpoint,
-    process: state.pid === null ? null : captureProcessIdentity(state.pid, undefined, state.processStartIdentity),
+    process: registryProcess(state),
     eventCursor: state.eventCursor,
     protocolVersion: state.protocolVersion,
     writerClaimEpoch,
     activeTurnRef: state.activeTurnRef,
     pendingAttention: state.pendingAttention,
     ...(state.memory ? { memory: state.memory } : {}),
+    ...(state.signalDomain ? { signalDomain: state.signalDomain } : {}),
     activeFlags: state.activeFlags,
   };
 }
@@ -156,6 +166,7 @@ function sameMaterialHostState(left: HostState, right: HostState): boolean {
     && left.endpoint === right.endpoint
     && left.pid === right.pid
     && left.processStartIdentity === right.processStartIdentity
+    && isDeepStrictEqual(left.signalDomain, right.signalDomain)
     && left.protocolVersion === right.protocolVersion
     && left.activeTurnRef === right.activeTurnRef
     && sameStrings(left.pendingAttention, right.pendingAttention)
@@ -619,6 +630,9 @@ async function endRecordedStructuredTree(
   if (engine !== "claude" && engine !== "codex" && engine !== "copilot") return false;
   const { terminateStructuredHostTree } = await import("./structuredHostControl");
   const root: ProcessIdentity = { pid: processIdentity.pid, startIdentity, bootEpoch };
+  const recordedDomain = registry.readOnlySnapshot().entries[sessionKeyId(key)]?.structuredHost?.signalDomain;
+  const domainProcesses = recordedDomain ? verifiedSignalDomainProcesses(recordedDomain) : [];
+  if (!domainProcesses || (recordedDomain && !sameRecordedProcessIdentity(recordedDomain.native, root))) return false;
   let capture: StructuredTerminationCapture | null = null;
   const authorize = (): { status: 409; error: string } | null => {
     const current = registry.readOnlySnapshot().entries[sessionKeyId(key)];
@@ -633,7 +647,7 @@ async function endRecordedStructuredTree(
     kind: "structured", pid: root.pid, startIdentity, bootEpoch, engine, sessionId: key.sessionId, conversationId: null,
     seat: null, turnBusy: null, owned: false, lastActiveAt: null,
   }, {
-    retainedSurvivors: registry.readOnlySnapshot().entries[sessionKeyId(key)]?.structuredTerminationSurvivors ?? [],
+    retainedSurvivors: [...registry.readOnlySnapshot().entries[sessionKeyId(key)]?.structuredTerminationSurvivors ?? [], ...domainProcesses],
     authorize,
     /* No runtime holds this tree: an orphan's claim owner is gone, and a
        host stop's own child has already exited. */

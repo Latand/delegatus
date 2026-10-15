@@ -276,3 +276,109 @@ The design covers current structured hosts, state sandboxing, scopes and both re
 - Changes to MCP writer transport/lifetime or account-switch retirement policy owned by the named lanes.
 - Non-Linux signal enforcement and paid qualification of additional native engines.
 - Retrofitting or restarting live conversations, changing global CLI settings, or adding a new user-facing sandbox configuration system.
+
+## Implementation, 2026-10-15
+
+`src/lib/runtime/agentSignalSandbox.ts` is the shared managed launch adapter.
+`bin/agent-signal-sandbox.py` enters the delegated invocation scope, moves its
+supervisors into an `agent` leaf, installs the namespace mounts and proves
+readiness before native execution. Structured hosts additionally verify the
+reported identities before acknowledging exec. File-backed headless callers
+keep their synchronous handle API: the trusted launcher proves readiness
+before the engine can read its buffered prompt.
+
+The receipt records the outer supervisor, Bubblewrap monitor, namespace init
+and native process separately. Structured `HostState.pid` remains the native
+host PID. Both registry writers and normalization retain the complete domain.
+An orphan's existing authorized termination ladder also retains the verified
+supervisors and init. Native exit, supervisor death and forced init death each
+end the namespace's detached descendants. A missing domain on an older host
+continues to identify a legacy process.
+
+`scripts/gate-slot.sh` selects the local namespace runner using a marker that
+`signalSandboxContext.ts` verifies against kernel mounts, PID/start identities,
+ancestry and cgroup membership. Native tool sandboxes may create further
+namespaces; their parent chain must still reach this invocation's recorded
+init. Queue ownership uses host PIDs through the read-only original proc mount.
+Normal process and signal readers continue to use private `/proc`.
+
+Native filesystem sandboxes keep `/sys` read-only. The launch profile also
+binds the invocation's cgroup subtree below its temporary directory; the
+context verifier compares its device and inode with the original subtree.
+Gate writes use this alias. The original cgroup-relative paths remain readable
+at `/sys/fs/cgroup`. The exec barrier is a FIFO, avoiding the socket-backed
+extra-stdio pipe that restricted Codex refused.
+
+Each gate creates a bounded cgroup root with its workload in `work`. Nested
+gates are descendants of that root, so outer cancellation includes every nested
+workload. Supervisors and independent deadline guardians stay outside their
+workload leaf. Open directory descriptors retain the cgroup identity through
+renames. CPU/memory limits are read back before a blocked worker is released to
+exec. Unverified or cross-user-namespace inherited leases refuse execution.
+
+The tmux agent command uses an in-namespace PTY and forwards resize signals to
+its PTY adapter. Its separate scope copies the pane scope's effective CPU,
+memory and task limits and stays in the same slice. The outer pane shell
+remains outside the writable invocation subtree. Generic command windows
+retain their existing shell behavior. The npm package bundles the namespace-aware gate scripts under
+`dist/gate`; source releases use `scripts`. Both use one installed-tooling
+capability check. Incomplete tooling refuses stage composition and managed
+launches. Linux is the qualified target; other platforms report managed
+launches as unavailable.
+
+The focused test files are `agentSignalSandbox.test.ts`,
+`agentSignalSandbox.integration.test.ts`, `agentSignalSandbox.native.test.ts`,
+`agentSignalSandbox.terminal.test.ts` and
+`sandboxGateRunner.integration.test.ts`, beside the runtime adapter.
+Kernel/delegation tests opt in with `LLV_SIGNAL_SANDBOX_KERNEL_TEST=1`; native
+tests opt in with `LLV_SIGNAL_SANDBOX_NATIVE_TEST=1` and explicit
+`LLV_CODEX_BINARY` / `LLV_CLAUDE_BINARY` paths. They copy the Codex credential
+into an isolated home; Claude uses a loopback Messages API, including its
+non-streaming classifier response. Native hooks remain enabled while raw
+syscalls exercise the kernel signal boundary. The native file also runs both
+engines through the file-backed headless launch path.
+
+SQLite update/delete triggers preserve active domain metadata against older
+normalizers. Current writers retain a retired record only after all four birth
+identities are proven dead. Retired records may be replaced or removed. The
+SQLite primary backend enforces the rollback guard; the deprecated JSON
+backend retains fields in current writers and requires a current release for
+protected-domain adoption. The guard does not make old JSON writers aware of
+new fields.
+
+### Implementation measurements
+
+The recorded measurements are in `evidence/agent-signal-sandbox.json`.
+Each native launch row contains 30 baseline and 30 protected samples, alternated
+under the same 200% CPU and 2 GiB memory limits. Times include native startup
+and protocol readiness; model responses use loopback providers.
+
+| Engine / profile | Baseline median / p95, ms | Protected median / p95, ms | Added median, ms |
+| --- | --- | --- | --- |
+| Codex full | 533.9 / 888.7 | 653.0 / 787.2 | 119.1 |
+| Codex restricted | 524.2 / 775.5 | 638.5 / 758.1 | 114.4 |
+| Codex read-only | 487.7 / 741.8 | 611.8 / 1298.2 | 124.1 |
+| Claude full | 891.0 / 1138.0 | 1023.2 / 1192.7 | 132.2 |
+| Claude restricted | 852.9 / 1071.4 | 912.2 / 1201.1 | 59.3 |
+| Claude read-only | 933.6 / 1185.7 | 1025.1 / 1298.8 | 91.5 |
+
+The added launch medians exceed the proposed 50 ms investigation threshold.
+Inspection of the protected startup path identifies two Python interpreter
+starts, delegated-scope setup, Bubblewrap and the kernel readiness handshake.
+These measurements include that complete path and do not isolate each cost.
+Median idle helper RSS was 19,048–19,092 KiB across the six profiles.
+
+The short representative workload (gate bundling plus CPU admission tests,
+three samples per mode) took 607.9 ms baseline and 663.9 ms protected, a 9.2%
+increase. A full TypeScript check under matching 200% CPU and 8 GiB limits took
+138.8 s baseline and 133.6 s protected. This single sustained pair showed no
+slowdown; it does not establish a speedup or a statistical performance bound.
+Four parallel protected gates with two slots completed all four jobs and
+observed exactly two active workloads at most. Protection remained enabled.
+
+The rollback replay loaded the complete historical registry and SQLite store
+from the inspected baseline against the same file written by the current
+release. Its `setStructuredHost`, `upsert`, `claimStructuredHost`,
+`terminateStructuredHost` and `markUnhosted` writes all refused to discard an
+active domain. The current reader retained every identity and refused
+retirement while its recorded supervisor was still alive.
