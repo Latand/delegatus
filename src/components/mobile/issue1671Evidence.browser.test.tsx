@@ -10961,7 +10961,7 @@ describe("phone orchestrator reads", () => {
           expect(geometry.background).toMatch(/^rgb\(/);
           expect(geometry.opacity).toBe("1");
           const body = panel.locator("[data-transcript-body]");
-          await body.evaluate(node => { node.scrollTop = node.querySelector<HTMLElement>("[data-kind=report]")!.offsetTop - node.offsetTop; });
+          await body.evaluate(node => { const scroller = node as HTMLElement; scroller.scrollTop = scroller.querySelector<HTMLElement>("[data-kind=report]")!.offsetTop - scroller.offsetTop; });
           const prefix = `${size.width}x${size.height}-${lang}-${scheme}`;
           await page.screenshot({ path: path.join(out, `${prefix}-message-start.png`) });
           await panel.locator("[data-transcript-report] .vc-tr-copy").tap();
