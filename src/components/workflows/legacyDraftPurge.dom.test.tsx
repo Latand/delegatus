@@ -166,7 +166,7 @@ const agentControl = (): { disabled: boolean; dispatchEvent: (event: Event) => b
 const expandCards = async () => {
   if (!(await waitFor(() => dom.document.querySelector(".card") !== null))) return false;
   for (const button of dom.document.querySelectorAll('.card .fold[aria-expanded="false"]')) {
-    flushSync(() => button.dispatchEvent(new dom.MouseEvent("click", { bubbles: true }) as unknown as Event));
+    flushSync(() => button.dispatchEvent(new dom.MouseEvent("click", { bubbles: true })));
   }
   return true;
 };
