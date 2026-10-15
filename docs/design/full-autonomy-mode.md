@@ -155,6 +155,12 @@ They run by explicit path with isolated state through the project gate.
 
 The existing `kanbanBoard.browser.test.tsx` driver owns the full-autonomy
 case: 1440 and 390 pixels, light and dark, both application locales, saved
-settings, undo log, exact sought motion phases and reduced motion. Frames
-stay outside tracked files and are referenced in the PR. No new capture
+settings, undo log, exact sought motion phases and reduced motion. The desktop
+matrix includes the board header and the production `OrchestratorDock` at
+440 and 360 pixels wide, mounted through the shared fixture's `dockWidth`
+parameter. Every host records visibility, ancestor clipping, obstruction and
+ring/track position and size in off, active, reduced-motion and ended states.
+The dock also has full-host frames for off, active and reduced motion.
+`evidence/full-autonomy.json` records the measurements and frame names.
+Frames stay outside tracked files and are referenced in the PR. No new capture
 driver or global mandate version is introduced.

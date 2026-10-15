@@ -31463,7 +31463,7 @@ describe("native caller operator association", () => {
 });
 
 describe("full autonomy", () => {
-  browserTest("full autonomy: saved setting, snake, static motion and undo log at 1440 and 390", async () => {
+  browserTest("full autonomy: board, desktop dock and phone saved setting, snake, static motion and undo log", async () => {
     const out = path.resolve(process.env.LLV_AUTONOMY_FRAMES ?? ".artifacts/full-autonomy");
     fs.mkdirSync(out, { recursive: true });
     const { defaultSeatTickSettings, applySeatTickSettingsChange, writeSeatTickSettings } = await import("@/lib/monitor/seatTickSettings");
@@ -31506,22 +31506,59 @@ describe("full autonomy", () => {
       }
     }, time);
     try {
-      for (const width of [1440, 390]) for (const scheme of ["light", "dark"] as const) for (const lang of ["uk", "en"] as const) {
+      for (const surface of ["board", "dock-440", "dock-360", "phone"] as const) for (const scheme of ["light", "dark"] as const) for (const lang of ["uk", "en"] as const) {
         row = defaultSeatTickSettings("atlas");
-        const phone = width === 390;
-        const label = `${width}-${scheme}-${lang}`;
-        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=seat-head&tick=driver`, { width, height: phone ? 844 : 900 }, scheme, lang, "no-preference", phone);
+        const phone = surface === "phone";
+        const dockWidth = surface === "dock-440" ? 440 : surface === "dock-360" ? 360 : null;
+        const width = phone ? 390 : 1440;
+        const host = phone ? '[data-mobile2-sheet="seat"]' : dockWidth ? "[data-orchestrator-dock]" : "[data-kanban-seat]:not(.side)";
+        const label = `${width}-${scheme}-${lang}${dockWidth ? `-${surface}` : ""}`;
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=seat-head&tick=driver${dockWidth ? `&dockWidth=${dockWidth}` : ""}`, { width, height: phone ? 844 : 900 }, scheme, lang, "no-preference", phone);
         try {
           await page.evaluate(value => document.documentElement.setAttribute("data-role-frame", value), DEFAULT_ROLE_FRAME);
           const toastDismiss = page.locator("[data-attention-toast-dismiss]");
           await toastDismiss.waitFor({ timeout: 2000 }).catch(error => { if (error.name !== "TimeoutError") throw error; });
           if (await toastDismiss.isVisible()) await toastDismiss.click();
           if (phone) await page.locator("[data-mobile2-open=seat]").first().click();
-          const chip = page.locator(`${control}:visible`).first();
+          await page.locator(host).waitFor();
+          const chip = page.locator(`${host} ${control}:visible`).first();
+          const measure = async () => {
+            const geometry = await chip.evaluate((node, selector) => {
+              const rect = (element: Element) => {
+                const { x, y, width, height } = element.getBoundingClientRect();
+                return { x, y, width, height };
+              };
+              const track = node.querySelector("[data-seat-tick-track]")!;
+              const ring = node.querySelector("[data-seat-tick-autonomy-ring]");
+              const bounds = track.getBoundingClientRect();
+              const clippedBy: string[] = [];
+              for (let ancestor: Element | null = track; ancestor; ancestor = ancestor.parentElement) {
+                const style = getComputedStyle(ancestor), clip = ancestor.getBoundingClientRect();
+                if ((/(hidden|clip|auto|scroll)/.test(style.overflowX) && (bounds.left < clip.left - 1 || bounds.right > clip.right + 1))
+                  || (/(hidden|clip|auto|scroll)/.test(style.overflowY) && (bounds.top < clip.top - 1 || bounds.bottom > clip.bottom + 1))) clippedBy.push(ancestor.tagName + "." + ancestor.className);
+              }
+              return {
+                host: selector, hostBounds: rect(node.closest(selector)!), track: rect(track), ring: ring ? rect(ring) : null,
+                clippedBy, visible: bounds.width > 0 && bounds.height > 0 && bounds.left >= 0 && bounds.right <= innerWidth && bounds.top >= 0 && bounds.bottom <= innerHeight,
+                uncovered: [[.1, .5], [.5, .5], [.9, .5]].every(([x, y]) => node.contains(document.elementFromPoint(bounds.x + bounds.width * x!, bounds.y + bounds.height * y!))),
+              };
+            }, host);
+            expect(geometry.visible).toBe(true);
+            expect(geometry.uncovered).toBe(true);
+            expect(geometry.clippedBy).toEqual([]);
+            if (dockWidth) expect(Math.abs(geometry.hostBounds.width - dockWidth)).toBeLessThan(1);
+            if (geometry.ring) for (const dimension of ["x", "y", "width", "height"] as const) {
+              expect(Math.abs(geometry.ring[dimension] - geometry.track[dimension])).toBeLessThan(1);
+            }
+            return geometry;
+          };
           await chip.waitFor();
           expect(await chip.getAttribute("data-seat-tick-autonomy")).toBe("off");
           await seek(page);
+          const off = await measure();
+          expect(off.ring).toBeNull();
           await page.screenshot({ path: path.join(out, `${label}-off.png`) });
+          if (dockWidth) await page.locator(host).screenshot({ path: path.join(out, `${label}-host-off.png`) });
           await chip.locator("[data-seat-tick-thumb]").click();
           const toggle = page.locator("[data-seat-tick-autonomy-enabled]:visible");
           await toggle.scrollIntoViewIfNeeded();
@@ -31537,18 +31574,19 @@ describe("full autonomy", () => {
           await page.screenshot({ path: path.join(out, `${label}-settings.png`) });
           // Escape closes the settings surface, exposing the chip in its actual header.
           await page.keyboard.press("Escape");
-          const active = page.locator(`${control}[data-seat-tick-autonomy=on]:visible`).first();
+          const active = page.locator(`${host} ${control}[data-seat-tick-autonomy=on]:visible`).first();
           await active.waitFor();
+          const phases = [];
           for (const phase of [0, 1000, 2000, 3000]) {
             await seek(page, phase);
-            expect(await active.evaluate(node => {
-              const box = node.getBoundingClientRect();
-              return node.contains(document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2));
-            })).toBe(true);
+            const geometry = await measure();
+            expect(geometry.ring).not.toBeNull();
+            phases.push({ phase, ...geometry });
             await active.screenshot({ path: path.join(out, `${label}-snake-${phase}.png`) });
           }
           await seek(page);
           await page.screenshot({ path: path.join(out, `${label}-on.png`) });
+          if (dockWidth) await page.locator(host).screenshot({ path: path.join(out, `${label}-host-on.png`) });
           const ring = await active.locator("[data-seat-tick-autonomy-ring]").boundingBox();
           const track = await active.locator("[data-seat-tick-track]").boundingBox();
           expect(ring).not.toBeNull(); expect(track).not.toBeNull();
@@ -31558,7 +31596,10 @@ describe("full autonomy", () => {
           await seek(page);
           expect(await active.locator(".seat-tick-autonomy-solid").evaluate(node => getComputedStyle(node).display)).toBe("inline");
           expect(await active.locator(".seat-tick-autonomy-snake").first().evaluate(node => getComputedStyle(node).animationName)).toBe("none");
+          const reduced = await measure();
+          expect(reduced.ring).not.toBeNull();
           await page.screenshot({ path: path.join(out, `${label}-reduced.png`) });
+          if (dockWidth) await page.locator(host).screenshot({ path: path.join(out, `${label}-host-reduced.png`) });
           await active.locator("[data-seat-tick-thumb]").click();
           const details = page.locator("[data-seat-tick-details]:visible");
           await details.locator("summary").click();
@@ -31578,11 +31619,14 @@ describe("full autonomy", () => {
           await page.screenshot({ path: path.join(out, `${label}-unlimited-status.png`) });
           await toggle.click();
           await page.locator("[data-seat-tick-save]:visible").click();
-          await page.waitForFunction(() => !document.querySelector('[data-seat-tick-autonomy="on"]'));
+          await page.waitForFunction(selector => !document.querySelector(`${selector} [data-seat-tick-autonomy="on"]`), host);
           await toggle.scrollIntoViewIfNeeded();
           await seek(page);
           await page.screenshot({ path: path.join(out, `${label}-ended.png`) });
-          readings.push({ width, scheme, lang, ring, track, pageErrors });
+          await page.keyboard.press("Escape");
+          const ended = await measure();
+          expect(ended.ring).toBeNull();
+          readings.push({ surface, host, width, scheme, lang, ring, track, off, phases, reduced, ended, pageErrors });
           expect(pageErrors).toEqual([]);
         } catch (error) {
           await seek(page);

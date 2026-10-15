@@ -17,6 +17,7 @@ import { ROLE_VARIANT_DEFAULTS } from "@/lib/roles/paramConfig";
 import { RuntimePill } from "@/components/RuntimePill";
 import { ResourcesFooter } from "@/components/ResourcesFooter";
 import { createRoot } from "react-dom/client";
+import { OrchestratorDock } from "@/components/orchestrator/OrchestratorDock";
 import { RulesWindow } from "@/components/roleMemory/LearnedRules";
 import type { AttentionDismissalMark, DismissalTarget } from "@/lib/attention/dismissalTypes";
 import { COMPANION_PROTECT, COMPANION_ROWS, companionReserved, companionShellReady } from "@/components/voiceCompanion/hostSurfaces";
@@ -4549,7 +4550,15 @@ function voiceCompanionScene() {
 }
 if (HEADER_MENU && new URLSearchParams(location.search).has("member")) void refreshTeamView();
 const diskDensity = new URLSearchParams(location.search).get("disk-density");
-createRoot(document.getElementById("root")!).render(SCENARIO === "memory-profile" ? <RulesWindow project="garden" onClose={() => {}} /> : VOICE ? voiceCompanionScene() : diskDensity ? (
+// Mount the production dock beside the Viewer for shared desktop-host cases.
+const dockWidth = new URLSearchParams(location.search).get("dockWidth");
+if (dockWidth === "440" || dockWidth === "360") localStorage.setItem(`llvOrchestratorPanelWidth:${PROJECT}`, dockWidth);
+createRoot(document.getElementById("root")!).render(dockWidth === "440" || dockWidth === "360" ? (
+  <div className="flex h-full min-h-0">
+    <OrchestratorDock project={PROJECT} projectName="Atlas" files={files} onClose={() => {}} />
+    <div className="min-w-0 flex-1"><Viewer /></div>
+  </div>
+) : SCENARIO === "memory-profile" ? <RulesWindow project="garden" onClose={() => {}} /> : VOICE ? voiceCompanionScene() : diskDensity ? (
   <div className="bg-panel" style={{ width: diskDensity === "full" ? "100%" : 248, marginTop: "auto" }}>
     <ResourcesFooter density={diskDensity === "full" ? "full" : diskDensity === "detail" ? "detail" : "line"} />
   </div>
