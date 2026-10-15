@@ -429,7 +429,7 @@ test("a late completed answer is reconciled before Retry can send the saved ques
     deputies: readDeputies,
     activeSeat: () => seat,
     runtime: async () => {
-      fs.writeFileSync(artifactPath, `${JSON.stringify({ type: "assistant", message: { content: answer } })}\n`);
+      fs.writeFileSync(artifactPath, `${JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: answer }] } })}\n`);
       return { host: "dead", turn: "idle" };
     },
     ownLines: deputy => ++ownLineReads === 1 ? [] : readDeputyOwnLines(deputy),
