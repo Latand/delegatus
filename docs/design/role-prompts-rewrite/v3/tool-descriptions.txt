@@ -1,0 +1,57 @@
+Variant 3 only: mandate sentences that move to the description of the tool
+they govern, read where the seat uses the tool. Each entry is the current
+mandate wording, unchanged, with the tool it joins. Entries marked "already
+there" need no addition: the description carries the same rule today.
+
+create_pipeline
+- Delegatus binds an agent to its task when the launch is reserved, from what the CALL carried. Without taskIds, a pipeline adopts its first stage's inherited tasks, or one placeholder if there is no owner.
+- Pass taskIds: ["<board task id>"] in the SAME call as stages and autoStart. Every launch of that pipeline — each stage, retry and fail branch — then joins that task, since each launch reads it off the pipeline. Adding it after the pipeline exists comes too late for the stages that already started.
+- A pipeline's reviewer and fix stages join its task like every other stage; pass nothing more.
+- An id naming no task refuses the launch before any agent starts; create_pipeline refuses a task belonging to another project after project aliases are resolved.
+- Stages form a graph; array order is presentation. Shape: {id (unique, URL-safe), kind: "run", prompt, next: <stage id> | null, onFail?: {to, maxRounds?, onExhausted?: "advance" | "stop-after-fix" | "park"}, outputs?: [repository-relative paths], role: {roleId, params?}}. Runtime overrides (engine, model, effort, access) belong on the stage. next defaults to null.
+- src is your transcript path; a draft that pins baseBranch must also pass baseRef, a SHA you resolve. (baseRef: already there.)
+- A started pipeline's graph is fixed; when it cannot take another stage, create the successor pipeline with the SAME taskIds, so one card carries both.
+- Create a draft (autoStart: false) only when the operator explicitly asks for a draft or to review the plan first in that request; report the draft id and wait for the operator to press Start on the board. The request may come in your own conversation or through the gateway; both channels carry the same authority.
+
+spawn_agent
+- Pass taskId: "<board task id>" beside the prompt and the title on EVERY spawn, reviewers included: an explicit id wins over inheritance, and a reviewer with a parent otherwise joins your seat's card too. (explicit id wins: already there.)
+- A spawn without a task joins the cards of its parent and of the work it reviews, or gets a placeholder card when neither holds one; spawn_agent sets a parent only when the call names one.
+- An id naming no task refuses the launch before any agent starts; spawn_agent refuses a task belonging to another project after project aliases are resolved.
+- The agent ends with a Verdict line in the words pass, fail and needs_decision.
+
+pipeline_action
+- add-stage preserves edges; after:<stageId> splices that stage's pass edge; index sets display order. (already there)
+- link-task / unlink-task repair: if a pipeline carries an unwanted placeholder, repair in order: link-task with the outcome's task, read it back, then unlink-task the placeholder id that was there before, so later stages join only the outcome's task; stages already admitted stay on the placeholder card. Never unlink a pipeline's LAST task: with none left it re-adopts the task its attempts hold on the next controller tick. A link writes no assignment, so a repaired pipeline's task shows its first one when the NEXT stage launches.
+- Review edges: advance (default) runs exactly N reviews and the fix of the N-th review, then completes next:null; checks and merge setting govern merging. It creates no terminal re-check and no budget follow-up task. continue-review cannot add rounds; traversed budgets cannot grow. Nonterminal gates follow their pass edge with findings. Another gate's fail loop permits a fresh handoff; rounds stay cumulative. stop-after-fix waits in needs_review after the fix. park stops before the fix. (Replaces the description's current "a terminal gate re-checks once and completes only on pass, otherwise parks", which contradicts the engine: engine.fixture.ts says the current advance policy never creates that cursor.)
+- finishesTask: for a task split into slices, mark only the lane of the last slice, or mark none and move the task yourself. Either way the task waits for every other started lane on it to end, and a task the operator reopens stays open.
+
+link_task_to_pipeline
+- It records one assignment and leaves the pipeline's task list alone, so it repairs no placeholder binding.
+
+list_tasks / get_task / list_pipelines
+- list_pipelines with ids and includeClosed: true reads many pipelines at once; get_pipeline with stageId reads one stage. A compact task row's "#N open" can be stale: read the pull request's state on the forge.
+- Omit status filters when looking for an existing outcome so blocked and finished work remain reachable. Follow nextCursor while hasMore is true. For routine monitoring use openOnly:true or a status set.
+- get_task compact:true shows pipelineIds, which hold a link the moment it lands. A task can hold a launch and still draw no band on the board, so when you hand the operator a task id, say whether it is visible to them.
+
+create_task / update_task
+- A role name, a stage id, a prompt excerpt and "Untitled task" are all unusable as titles. (already there)
+- A write replaces details whole, so read it with get_task before you change it.
+- Never leave the naming to the agent you launch: read-only reviewers, verifiers and architects are told not to mutate state, and a launch that dies before its first turn names nothing.
+
+request_attention
+- request_attention moves the operator's one active Delegatus view to a card and verifies it landed; they keep a one-action Return. (already there)
+- Move them when: you just spawned or resumed a worker for something they asked for (focus that conversation as you say it is running); a review verdict, merge or deploy lands (focus the card it landed on); a lane blocks on THEM (focus the surface that is blocking, and ask in the same breath).
+- Do not move them for polling, routine status, your own bookkeeping, or twice for the same event. One move per real outcome; reason is one operator-safe sentence about why to look, never the card's contents. NO_ACTIVE_VIEW means nobody is at the desk — that is normal, not a failure to retry in a loop.
+
+suggest_replies
+- A tap puts a draft in their composer for editing and never sends it. (already there) The newest set replaces the last; their next message clears it. Offer fresh drafts with each open ask, never for an answered question.
+
+bridge_report
+- Off: file no bridge reports at all; the call would store nothing and answer that reports are off, so put what matters in your chat replies instead.
+- Verdicts inside a lane are not owed. Rule and seat outcomes, daily digests and maintenance are completed reports with task and lane ids and #PR. Report only final agent non-delivery.
+- A report only points to a decision's form; an ask a click cannot settle (an action outside Delegatus) is a question or blocked report.
+- Keep your latest inProgress, queued and decision items true: say when you stop the tick or wait on the operator, and when nothing runs.
+- Classes: status, completed / failed (a deploy or lane settled), blocked (you need a decision), review_verdict (optional), question (the gateway asks the user and replies).
+
+publish_prototype_review
+- Hide prototypes via dismiss_attention; undo in history. (dismiss_attention: already there)

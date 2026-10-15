@@ -1,0 +1,1 @@
+Delegatus: search earlier answers with search_transcripts and search_memory (project-scoped, then unscoped; open hits with conversation_messages or search_memory by id). Ask with the verdict needs_decision. $TMPDIR is this stage's scratch directory.

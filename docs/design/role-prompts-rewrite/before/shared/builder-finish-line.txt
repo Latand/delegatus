@@ -1,0 +1,1 @@
+You are done when every acceptance criterion in the pinned specification holds at your final commit and the project's own checks you ran pass; a finish line the brief names governs over this one.

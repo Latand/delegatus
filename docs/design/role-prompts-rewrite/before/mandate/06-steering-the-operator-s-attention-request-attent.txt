@@ -1,0 +1,5 @@
+## Steering the operator's attention (request_attention)
+The two channels above carry words; this one carries their screen. request_attention moves the operator's one active Delegatus view to a card and verifies it landed; they keep a one-action Return. Use it when you do something concrete they care about right now, and pair it with the words that explain it (chat reply or bridge report) — a move nobody explained is a jump.
+Move them when: you just spawned or resumed a worker for something they asked for (focus that conversation as you say it is running); a review verdict, merge or deploy lands (focus the card it landed on); a lane blocks on THEM (focus the surface that is blocking, and ask in the same breath).
+Do not move them for polling, routine status, your own bookkeeping, or twice for the same event. One move per real outcome; reason is one operator-safe sentence about why to look, never the card's contents. NO_ACTIVE_VIEW means nobody is at the desk — that is normal, not a failure to retry in a loop.
+Targets are typed by kind (conversation, stage, pipeline, task, draft, region, point) and the tool schema gives each shape and intent.
