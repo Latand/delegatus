@@ -5296,3 +5296,62 @@ describe("native send paint audit", () => {
     }
   }, 360_000);
 });
+
+
+describe("parallel question failure and retry", () => {
+  browserTest("the saved question, reason and Retry remain visible on phone and desktop", async () => {
+    const out = path.resolve(".artifacts/parallel-question");
+    fs.mkdirSync(out, { recursive: true });
+    const served = await serveEvidenceFixture(out, FIXTURE);
+    // Chromium's singleton socket has a Unix path-length bound. The directory
+    // handle keeps its temporary files in this test's isolated scratch root.
+    const chromeTmp = fs.mkdtempSync(path.join(os.tmpdir(), "parallel-chrome-"));
+    const chromeDir = fs.openSync(chromeTmp, "r");
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"],
+      env: { ...process.env, TMPDIR: process.platform === "linux" ? `/proc/${process.pid}/fd/${chromeDir}` : chromeTmp } });
+    const readings: unknown[] = [];
+    try {
+      for (const width of [390, 1280]) for (const scheme of ["light", "dark"] as const) for (const lang of ["en", "uk"] as const) {
+        const { page, context, pageErrors } = await openFixture(browser, `${served.base}?case=parallel-failure&lang=${lang}`, { width, height: 900 }, scheme, lang, "reduce", width === 390);
+        try {
+          let calls = 0;
+          await page.route("**/api/orchestrator/ghost", async route => {
+            if (route.request().method() !== "POST") return route.fulfill({ json: { lines: [], missing: false } });
+            const body = route.request().postDataJSON();
+            expect(body).toEqual({ retryAskId: "deputy_failure", clientRequestId: "deputy_retry_deputy_failure_1" });
+            calls++;
+            if (calls === 1) return route.fulfill({ status: 409, json: { error: lang === "uk" ? "Попереднє надсилання ще перевіряється." : "The previous delivery is still being checked." } });
+            return route.fulfill({ json: { ok: true, deputy: { askId: "deputy_failure", seatConversationId: "conversation_seat", deputyConversationId: "conversation_parallel",
+              ask: { text: lang === "uk" ? "Поясни причину збою в паралельному запитанні та перевір, чи збереглося вкладення." : "Explain why the parallel question failed and check whether the attachment was preserved.", images: 1, sender: null, origin: { kind: "operator" } },
+              state: "pending", startedAt: "2026-10-15T20:36:13.000Z", outcome: null, attempt: 1, touched: {}, result: null } } });
+          });
+          const retry = page.locator("[data-deputy-retry]");
+          await retry.waitFor();
+          const inspect = async (state: string) => {
+            const reading = await page.evaluate(() => {
+              const bounds = (selector: string) => { const element = document.querySelector(selector); if (!element) return null; const r = element.getBoundingClientRect(); return { x: r.x, y: r.y, right: r.right, bottom: r.bottom, text: element.textContent }; };
+              return { question: bounds("[data-deputy-head]"), reason: bounds("[data-deputy-failure]"), retry: bounds("[data-deputy-retry]"),
+                alert: bounds("[role=alert]"), overflow: document.documentElement.scrollWidth - innerWidth, width: innerWidth };
+            });
+            expect(reading.overflow).toBe(0);
+            for (const box of [reading.question, reading.reason, reading.retry].filter(Boolean)) {
+              expect(box!.x).toBeGreaterThanOrEqual(0); expect(box!.right).toBeLessThanOrEqual(width); expect(box!.bottom).toBeLessThanOrEqual(900);
+            }
+            readings.push({ width, scheme, lang, state, ...reading });
+            await page.screenshot({ path: path.join(out, `${width}-${scheme}-${lang}-${state}.png`) });
+          };
+          await inspect("failed");
+          await retry.click();
+          await page.locator("[role=alert]").waitFor();
+          await inspect("retry-refused");
+          await retry.click();
+          await page.locator('[data-deputy-state="pending"]').waitFor();
+          await inspect("starting");
+          expect(calls).toBe(2); expect(pageErrors).toEqual([]);
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/parallel-question", { recursive: true });
+      fs.writeFileSync("evidence/parallel-question/readings.json", JSON.stringify(readings, null, 2) + "\n");
+    } finally { await browser.close(); served.stop(); fs.closeSync(chromeDir); fs.rmSync(chromeTmp, { recursive: true, force: true }); }
+  }, 60_000);
+});

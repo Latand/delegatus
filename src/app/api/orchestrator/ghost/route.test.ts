@@ -83,3 +83,24 @@ test("the voice gateway and the operator's browser are admitted and reach the co
     expect(await response.json()).toMatchObject({ code: "seat_not_found" });
   }
 });
+
+
+test("a worker retry is refused before the saved question can be read", async () => {
+  const response = await POST(new NextRequest("http://127.0.0.1/api/orchestrator/ghost", {
+    method: "POST", headers: { host: "127.0.0.1", "content-type": "application/json",
+      [VIEWER_SPAWN_CAPABILITY_HEADER]: WORKER_CAPABILITY, ...internalServiceHeaders("mcp") },
+    body: JSON.stringify({ retryAskId: "deputy-private", clientRequestId: "retry-worker" }),
+  }));
+  expect(response.status).toBe(403);
+  expect(await response.json()).toMatchObject({ code: "asker_refused" });
+  expect(readDeputies()).toEqual([]);
+});
+
+test("a cross-origin retry is refused before mutation", async () => {
+  const response = await POST(new NextRequest("http://127.0.0.1/api/orchestrator/ghost", {
+    method: "POST", headers: { host: "127.0.0.1", origin: "https://foreign.example", "content-type": "application/json" },
+    body: JSON.stringify({ retryAskId: "deputy-private", clientRequestId: "retry-origin" }),
+  }));
+  expect(response.status).toBe(403);
+  expect(readDeputies()).toEqual([]);
+});

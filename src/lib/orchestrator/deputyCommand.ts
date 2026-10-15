@@ -1,12 +1,20 @@
+import { statePath } from "@/lib/configDir";
+import { StateLockDeferredError, waitForStateLock } from "@/lib/state/lockWait";
+import { RuntimeImageStore, RuntimeImageWriterBusyError } from "@/lib/runtime/runtimeImageStore";
+import { tryConversationActuation } from "@/lib/deliveryActuation";
+import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
 import crypto from "node:crypto";
 import path from "node:path";
 
 import type { LaunchProfile } from "@/lib/accounts/migration/contracts";
 import { messageOriginRole, type MessageOrigin } from "@/lib/runtime/messageOrigin";
+import type { StructuredImageRef } from "@/lib/runtime/structuredContent";
 import type { RuntimeImageUpload } from "@/lib/runtime/runtimeImageStore";
 
 import {
+  recordDeputyDelivery,
+  retryDeputy,
   activateDeputy,
   beginDeputy,
   deputyMessageKey,
@@ -58,6 +66,8 @@ export type AskInParallelResult =
   }
   | { ok: false; code: AskInParallelRefusal; error: string; status: number; askId?: string; admission?: "refused" };
 
+export interface RetryDeputyInput { retryAskId: string; clientRequestId: string }
+
 export interface AskInParallelInput {
   project: string;
   seatConversationId?: string;
@@ -86,7 +96,9 @@ export interface DeputyCommandPorts {
   registerConversation(input: { artifactPath: string; accountId: string | null; launchProfile: Partial<LaunchProfile> }): string;
   joinSeatTask(input: { project: string; seatConversationId: string; seatPath: string | null; deputyConversationId: string; artifactPath: string; accountId: string | null }): void;
   workContext(project: string): DeputyWorkContext;
-  deliver(input: { conversationId: string; path: string; clientMessageId: string; text: string; images: RuntimeImageUpload[]; origin: DeputyAskOrigin }): Promise<{ ok: true } | { ok: false; error: string; uncertain?: true }>;
+  deliver(input: { conversationId: string; path: string; clientMessageId: string; text: string; images: RuntimeImageUpload[]; origin: DeputyAskOrigin }): Promise<{ ok: true; outcome?: string; operationId?: string } | { ok: false; error: string; operationId?: string; uncertain?: true }>;
+  imageRefsForRetry?(deputy: OrchestratorDeputy): StructuredImageRef[];
+  prepareRetry?(deputy: OrchestratorDeputy, guard: () => void): Promise<{ ok: true } | { ok: false; error: string }>;
   /** Starts the end sweep in this process (idempotent). */
   watch(): void;
   /** The store; injectable so the command is testable without a state dir. */
@@ -96,6 +108,8 @@ export interface DeputyCommandPorts {
     recordFork: typeof recordDeputyFork;
     activate: typeof activateDeputy;
     end: typeof endDeputy;
+    recordDelivery?: typeof recordDeputyDelivery;
+    retry?: typeof retryDeputy;
   };
 }
 
@@ -112,6 +126,8 @@ export function deputySessionId(askId: string): string {
 export { deputyMessageKey };
 
 const defaultStore = {
+  recordDelivery: recordDeputyDelivery,
+  retry: retryDeputy,
   read: readDeputies,
   begin: beginDeputy,
   recordFork: recordDeputyFork,
@@ -141,25 +157,87 @@ function asksInFlight(): Map<string, Promise<AskInParallelResult>> {
   return holder[IN_FLIGHT_KEY] ??= new Map();
 }
 
-export function askOrchestratorInParallel(input: AskInParallelInput, ports: DeputyCommandPorts): Promise<AskInParallelResult> {
+export function askOrchestratorInParallel(input: AskInParallelInput | RetryDeputyInput, ports: DeputyCommandPorts): Promise<AskInParallelResult> {
   const key = typeof input.clientRequestId === "string" ? input.clientRequestId.trim().slice(0, 128) : "";
-  if (!key) return askOnce(input, ports);
+  const run = () => withViewerOperation("orchestrator.deputy", () => "retryAskId" in input ? retryOnce(input, ports) : askOnce(input, ports));
+  if (!key) return run();
   const inFlight = asksInFlight();
   const running = inFlight.get(key);
   if (running) return running.then((result) => result.ok ? { ...result, replayed: true } : result);
-  const started = askOnce(input, ports).finally(() => {
+  const started = run().finally(() => {
     if (inFlight.get(key) === started) inFlight.delete(key);
   });
   inFlight.set(key, started);
   return started;
 }
 
+async function deputyImages<T>(operation: (store: RuntimeImageStore) => T): Promise<T> {
+  return waitForStateLock("deputy.images", () => {
+    try { return operation(new RuntimeImageStore(statePath("runtime-images"), { writerLockWaitMs: 0 })); }
+    catch (error) { if (error instanceof RuntimeImageWriterBusyError) throw new StateLockDeferredError("deputy.images", "lease"); throw error; }
+  });
+}
+
+async function retryOnce(input: RetryDeputyInput, ports: DeputyCommandPorts): Promise<AskInParallelResult> {
+  const store = ports.store ?? defaultStore;
+  input = { retryAskId: input.retryAskId, clientRequestId: typeof input.clientRequestId === "string" ? input.clientRequestId.trim().slice(0, 128) : "" };
+  const previous = store.read().find(row => row.askId === input.retryAskId);
+  const fail = (error: string) => refusal("launch_failed", error, 409, input.retryAskId);
+  if (!previous || !input.clientRequestId?.trim()) return fail("the saved parallel question is unavailable");
+  const sameSeat = () => {
+    const seat = ports.activeSeat(previous.project);
+    return seat?.conversationId === previous.seatConversationId && seat.seatEpoch === previous.seatEpoch;
+  };
+  if (!sameSeat()) return fail("the orchestrator seat changed; send the question to its current seat");
+  if (previous.retryRequestId !== input.clientRequestId) {
+    if (previous.state !== "ended" || previous.outcome === "done" || previous.outcome === "seat-rotated") return fail("this parallel question is not awaiting retry");
+    const imageRefs = previous.ask.images === (previous.imageRefs?.length ?? 0)
+      ? previous.imageRefs ?? [] : ports.imageRefsForRetry?.(previous) ?? [];
+    if (previous.ask.images !== imageRefs.length) return fail("the saved attachment is unavailable; attach it again");
+    try { if (imageRefs.length) await deputyImages(store => imageRefs.map(ref => store.read(ref))); }
+    catch { return fail("the saved attachment could not be read; the question is kept here"); }
+    if (!ports.prepareRetry) return fail("the previous delivery cannot be checked");
+    // Refuse a concurrent actuator instead of waiting behind its host read.
+    const prepare = async () => {
+      const guard = () => {
+        const current = store.read().find(row => row.askId === previous.askId);
+        if (!sameSeat() || !current || current.state !== "ended" || (current.attempt ?? 0) !== (previous.attempt ?? 0)) {
+          throw new Error("the parallel question changed while checking its previous delivery");
+        }
+      };
+      guard();
+      const settled = await ports.prepareRetry!(previous, guard);
+      if (!settled.ok) return settled;
+      let answerFromBytes: number | undefined;
+      if (previous.artifactPath) {
+        const fs = await import("node:fs");
+        try { answerFromBytes = fs.statSync(previous.artifactPath).size; } catch { /* A fork that never wrote has no prefix. */ }
+      }
+      const reopened = await withAccountMutationLockAsync(() => sameSeat()
+        ? (store.retry ?? retryDeputy)(previous.askId, input.clientRequestId, previous.attempt ?? 0, ports.now(), answerFromBytes, imageRefs) : null,
+      { caller: "deputy retry" });
+      return reopened ? { ok: true as const } : { ok: false as const, error: "the parallel question changed while retrying" };
+    };
+    const attempt = previous.deputyConversationId ? await tryConversationActuation(previous.deputyConversationId, prepare)
+      : { acquired: true as const, value: await prepare() };
+    if (!attempt.acquired) return fail("the previous delivery is still being checked; retry shortly");
+    if (!attempt.value.ok) return fail(attempt.value.error);
+  }
+  return askOnce({ project: previous.project, seatConversationId: previous.seatConversationId,
+    text: previous.ask.text, clientRequestId: previous.clientRequestId }, ports);
+}
+
 async function askOnce(input: AskInParallelInput, ports: DeputyCommandPorts): Promise<AskInParallelResult> {
   const store = ports.store ?? defaultStore;
-  const text = typeof input.text === "string" ? input.text.trim() : "";
-  const images = input.images ?? [];
+  let text = typeof input.text === "string" ? input.text.trim() : "";
+  let images = input.images ?? [];
   const clientRequestId = typeof input.clientRequestId === "string" ? input.clientRequestId.trim().slice(0, 128) : "";
   const replay = clientRequestId ? store.read().find((deputy) => deputy.clientRequestId === clientRequestId) ?? null : null;
+  if (replay) {
+    text = replay.ask.text;
+    if (replay.ask.images !== (replay.imageRefs?.length ?? 0)) return refusal("launch_failed", "the saved attachment is unavailable; attach it again", 409, replay.askId);
+    images = replay.ask.images ? await deputyImages(store => (replay.imageRefs ?? []).map(ref => ({ mime: ref.mime, base64: store.read(ref).toString("base64") }))) : [];
+  }
   // A replay can already own a fork or delivery. Only a fresh ask refused
   // before begin supplies affirmative evidence that it admitted no work.
   const refuseAdmission = (code: AskInParallelRefusal, error: string, status: number, askId?: string) =>
@@ -195,6 +273,7 @@ async function askOnce(input: AskInParallelInput, ports: DeputyCommandPorts): Pr
     if (!busy) {
       return refuseAdmission("seat_not_busy", "the orchestrator is not working on anything now; send the message to it directly", 409);
     }
+    const imageRefs = images.length ? await deputyImages(store => store.putMany(images)) : [];
     /* Step 2. */
     const begun = await withAccountMutationLockAsync(() => {
       // Admission may have queued behind a rotation; recheck the same epoch.
@@ -206,6 +285,7 @@ async function askOnce(input: AskInParallelInput, ports: DeputyCommandPorts): Pr
         seatEpoch: seat.seatEpoch,
         seatPath: seat.path ?? generation.path,
         clientRequestId,
+        imageRefs,
         ask: { text, images: images.length, sender: input.sender ?? null, origin: input.origin ?? { kind: "operator" } },
         now: ports.now(),
       });
@@ -230,7 +310,7 @@ async function askOnce(input: AskInParallelInput, ports: DeputyCommandPorts): Pr
     const sourceSessionId = path.basename(generation.path, ".jsonl");
     const sessionId = deputySessionId(deputy.askId);
     if (!CLAUDE_SESSION_ID.test(sourceSessionId)) {
-      await withAccountMutationLockAsync(() => store.end(deputy.askId, { outcome: "failed", error: "fork: the seat's transcript has no Claude session id", now: ports.now() }), { caller: "deputy end" });
+      await withAccountMutationLockAsync(() => store.end(deputy.askId, { outcome: "failed", expectedAttempt: deputy.attempt ?? 0, error: "fork: the seat's transcript has no Claude session id", now: ports.now() }), { caller: "deputy end" });
       return refusal("fork_failed", "the seat's transcript cannot be forked", 409, deputy.askId);
     }
     let forked: { path: string; records: number | null; size?: number };
@@ -244,11 +324,11 @@ async function askOnce(input: AskInParallelInput, ports: DeputyCommandPorts): Pr
       });
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
-      await withAccountMutationLockAsync(() => store.end(deputy.askId, { outcome: "failed", error: `fork: ${reason}`, now: ports.now() }), { caller: "deputy end" });
+      await withAccountMutationLockAsync(() => store.end(deputy.askId, { outcome: "failed", expectedAttempt: deputy.attempt ?? 0, error: `fork: ${reason}`, now: ports.now() }), { caller: "deputy end" });
       return refusal("fork_failed", `the seat's transcript could not be forked: ${reason}`, 409, deputy.askId);
     }
     if (forked.records === null) {
-      await withAccountMutationLockAsync(() => store.end(deputy.askId, { outcome: "failed", error: "fork: the copy did not report its length", now: ports.now() }), { caller: "deputy end" });
+      await withAccountMutationLockAsync(() => store.end(deputy.askId, { outcome: "failed", expectedAttempt: deputy.attempt ?? 0, error: "fork: the copy did not report its length", now: ports.now() }), { caller: "deputy end" });
       return refusal("fork_failed", "the seat's transcript could not be forked", 409, deputy.askId);
     }
     const launchProfile: Partial<LaunchProfile> = {
@@ -275,16 +355,29 @@ async function askOnce(input: AskInParallelInput, ports: DeputyCommandPorts): Pr
 
   /* Steps 4 and 5: one delivery, keyed by the record, resumes the fork. */
   if (deputy.state === "pending") {
+    const deliveryAttempt = deputy.attempt ?? 0;
     const delivered = await ports.deliver({
       conversationId: deputy.deputyConversationId!,
       path: deputy.artifactPath!,
-      clientMessageId: deputyMessageKey(deputy.askId),
+      clientMessageId: deputyMessageKey(deputy.askId, deputy.attempt ?? 0),
       text: deputyMessage({ ask: deputy.ask.text, seatConversationId: deputy.seatConversationId, context: ports.workContext(project) }),
       images,
       /* The record's origin, so a replay delivers under the author the first
          request was admitted as. */
       origin: deputy.ask.origin,
     });
+    deputy = await withAccountMutationLockAsync(() => (store.recordDelivery ?? recordDeputyDelivery)(deputy.askId, {
+      operationId: delivered.operationId ?? null, outcome: delivered.ok ? delivered.outcome ?? "delivered" : delivered.uncertain ? "uncertain" : "failed",
+      reason: delivered.ok ? null : delivered.error,
+    }, deliveryAttempt), { caller: "deputy delivery" }) ?? deputy;
+    if ((deputy.attempt ?? 0) !== deliveryAttempt || deputy.state !== "pending") {
+      ports.watch();
+      return { ok: true, askId: deputy.askId, deputyConversationId: deputy.deputyConversationId!, replayed, deputy };
+    }
+    if (delivered.ok && delivered.outcome && !["delivered", "delivered-to-live", "resumed"].includes(delivered.outcome)) {
+      ports.watch();
+      return { ok: true, askId: deputy.askId, deputyConversationId: deputy.deputyConversationId!, replayed, deputy };
+    }
     if (!delivered.ok && delivered.uncertain) {
       /* The runtime may be running the ask. Ending the record here would take
          the ghost's authority away while it works and leave its host to no
@@ -295,11 +388,11 @@ async function askOnce(input: AskInParallelInput, ports: DeputyCommandPorts): Pr
       return { ok: true, askId: deputy.askId, deputyConversationId: deputy.deputyConversationId!, replayed, deputy, deliveryUncertain: true };
     }
     if (!delivered.ok) {
-      await withAccountMutationLockAsync(() => store.end(deputy.askId, { outcome: "failed", error: `launch: ${delivered.error}`, now: ports.now() }), { caller: "deputy end" });
+      await withAccountMutationLockAsync(() => store.end(deputy.askId, { outcome: "failed", expectedAttempt: deputy.attempt ?? 0, error: `launch: ${delivered.error}`, now: ports.now() }), { caller: "deputy end" });
       return refusal("launch_failed", `the parallel self could not start: ${delivered.error}`, 409, deputy.askId);
     }
     /* Step 6. */
-    deputy = await withAccountMutationLockAsync(() => store.activate(deputy.askId, ports.now()), { caller: "deputy commit" }) ?? deputy;
+    deputy = await withAccountMutationLockAsync(() => store.activate(deputy.askId, ports.now(), deliveryAttempt), { caller: "deputy commit" }) ?? deputy;
   }
   ports.watch();
   return { ok: true, askId: deputy.askId, deputyConversationId: deputy.deputyConversationId!, replayed, deputy };

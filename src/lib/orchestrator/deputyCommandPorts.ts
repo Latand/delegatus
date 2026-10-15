@@ -1,7 +1,11 @@
+import { runtimeHostClient, readRuntimeSession } from "@/lib/runtime/client";
+import { resolveSendReceipt } from "@/lib/runtime/sendSettlement";
+import { applyConversationAction } from "@/lib/conversation/actions";
+import { deputyMessageKey } from "./deputies";
 import path from "node:path";
 
 import { forkClaudeHistory, HistorySecurityError } from "@/lib/accounts/migration/safeHistoryCopy";
-import { agentRegistry } from "@/lib/agent/registry";
+import { agentRegistry, type AgentRegistry } from "@/lib/agent/registry";
 import { loadPipelinesForList } from "@/lib/pipelines/store";
 import { enqueueStructuredMessage } from "@/lib/runtime/structuredMessageDelivery";
 import { agentMessageOrigin } from "@/lib/runtime/agentMessageAuthor";
@@ -21,8 +25,8 @@ const FORK_ATTEMPTS = 3;
 const OPEN_LANE_STATES = new Set(["provisioning", "running", "needs_decision", "needs_review", "paused"]);
 const RECENT_TASK_MS = 10 * 60_000;
 
-export function productionDeputyCommandPorts(): DeputyCommandPorts {
-  const registry = agentRegistry();
+export function productionDeputyCommandPorts(dependencies: { registry?: AgentRegistry; client?: typeof runtimeHostClient } = {}): DeputyCommandPorts {
+  const registry = dependencies.registry ?? agentRegistry();
   return {
     now: () => new Date(),
     activeSeat: (project) => orchestratorSeatFor(project).active,
@@ -92,8 +96,40 @@ export function productionDeputyCommandPorts(): DeputyCommandPorts {
           : deputyDeliveryOrigin(origin),
       });
       if (!result) return { ok: false, error: "structured delivery is unavailable" };
-      if (result.ok) return { ok: true };
-      return { ok: false, error: result.error, ...(result.transportUncertain ? { uncertain: true as const } : {}) };
+      if (result.ok) return { ok: true, outcome: result.outcome, operationId: result.operationId };
+      return { ok: false, error: result.error, operationId: result.operationId, ...(result.transportUncertain ? { uncertain: true as const } : {}) };
+    },
+    imageRefsForRetry: deputy => {
+      if (!deputy.deputyConversationId) return [];
+      const admission = registry.deliveryAdmissionForKey(deputy.deputyConversationId, deputyMessageKey(deputy.askId, deputy.attempt ?? 0));
+      if (admission.outcome !== "admitted") return [];
+      return registry.deliverySnapshotForOperation(admission.operationId).heldDeliveries[admission.deliveryId]?.runtimeImages ?? [];
+    },
+    prepareRetry: async (deputy, guard) => {
+      guard();
+      if (!deputy.deputyConversationId) return { ok: true };
+      const client = (dependencies.client ?? runtimeHostClient)();
+      if (!client) return { ok: false, error: "the runtime host is unavailable; the previous delivery cannot be checked" };
+      const session = await readRuntimeSession(client, { conversationId: deputy.deputyConversationId });
+      guard();
+      if (session && !["dead", "unhosted"].includes(session.host)) {
+        const stopped = await applyConversationAction({ conversationId: deputy.deputyConversationId,
+          transcriptPath: deputy.artifactPath ?? "", action: "kill", operationId: `deputy_retry_stop_${deputy.askId}_${deputy.attempt ?? 0}` });
+        guard();
+        if (stopped.status !== 200) return { ok: false, error: "the previous parallel host could not be stopped" };
+        const remaining = await readRuntimeSession(client, { conversationId: deputy.deputyConversationId });
+        guard();
+        if (remaining && !["dead", "unhosted"].includes(remaining.host)) return { ok: false, error: "the previous parallel host is still stopping" };
+      }
+      const admitted = registry.deliveryAdmissionForKey(deputy.deputyConversationId, deputyMessageKey(deputy.askId, deputy.attempt ?? 0));
+      if (admitted.outcome === "not-executed") return { ok: true };
+      if (admitted.outcome !== "admitted") return { ok: false, error: "the previous delivery outcome could not be verified" };
+      const receipt = await resolveSendReceipt(admitted.operationId, { registry, client, windowMs: 0 });
+      guard();
+      if (!receipt || receipt.state === "in-flight" || receipt.resend === "verify-first") {
+        return { ok: false, error: receipt?.reason ?? "the previous delivery is still being checked" };
+      }
+      return { ok: true };
     },
     watch: () => startDeputySweep(),
   };

@@ -1,0 +1,650 @@
+[
+  {
+    "width": 390,
+    "scheme": "light",
+    "lang": "en",
+    "state": "failed",
+    "question": {
+      "x": 12,
+      "y": 20,
+      "right": 378,
+      "bottom": 159.25,
+      "text": "→parallel selfExplain why the parallel question failed and check whether the attachment was preserved."
+    },
+    "reason": {
+      "x": 12,
+      "y": 171.25,
+      "right": 378,
+      "bottom": 215.25,
+      "text": "Task membership could not be recorded: storage admission timed out.Retry"
+    },
+    "retry": {
+      "x": 326.421875,
+      "y": 171.25,
+      "right": 378,
+      "bottom": 215.25,
+      "text": "Retry"
+    },
+    "alert": null,
+    "overflow": 0
+  },
+  {
+    "width": 390,
+    "scheme": "light",
+    "lang": "en",
+    "state": "retry-refused",
+    "question": {
+      "x": 12,
+      "y": 20,
+      "right": 378,
+      "bottom": 159.25,
+      "text": "→parallel selfExplain why the parallel question failed and check whether the attachment was preserved."
+    },
+    "reason": {
+      "x": 12,
+      "y": 171.25,
+      "right": 378,
+      "bottom": 238.25,
+      "text": "Task membership could not be recorded: storage admission timed out.RetryThe previous delivery is still being checked."
+    },
+    "retry": {
+      "x": 326.421875,
+      "y": 171.25,
+      "right": 378,
+      "bottom": 215.25,
+      "text": "Retry"
+    },
+    "alert": {
+      "x": 12,
+      "y": 223.25,
+      "right": 378,
+      "bottom": 238.25,
+      "text": "The previous delivery is still being checked."
+    },
+    "overflow": 0
+  },
+  {
+    "width": 390,
+    "scheme": "light",
+    "lang": "en",
+    "state": "starting",
+    "question": {
+      "x": 12,
+      "y": 20,
+      "right": 378,
+      "bottom": 159.25,
+      "text": "→parallel selfExplain why the parallel question failed and check whether the attachment was preserved."
+    },
+    "reason": null,
+    "retry": null,
+    "alert": null,
+    "overflow": 0
+  },
+  {
+    "width": 390,
+    "scheme": "light",
+    "lang": "uk",
+    "state": "failed",
+    "question": {
+      "x": 12,
+      "y": 20,
+      "right": 378,
+      "bottom": 159.25,
+      "text": "→паралельне яПоясни причину збою в паралельному запитанні та перевір, чи збереглося вкладення."
+    },
+    "reason": {
+      "x": 12,
+      "y": 171.25,
+      "right": 378,
+      "bottom": 215.25,
+      "text": "Не вдалося записати належність до задачі: перевищено час очікування сховища.Повторити"
+    },
+    "retry": {
+      "x": 298.5,
+      "y": 171.25,
+      "right": 378,
+      "bottom": 215.25,
+      "text": "Повторити"
+    },
+    "alert": null,
+    "overflow": 0
+  },
+  {
+    "width": 390,
+    "scheme": "light",
+    "lang": "uk",
+    "state": "retry-refused",
+    "question": {
+      "x": 12,
+      "y": 20,
+      "right": 378,
+      "bottom": 159.25,
+      "text": "→паралельне яПоясни причину збою в паралельному запитанні та перевір, чи збереглося вкладення."
+    },
+    "reason": {
+      "x": 12,
+      "y": 171.25,
+      "right": 378,
+      "bottom": 238.25,
+      "text": "Не вдалося записати належність до задачі: перевищено час очікування сховища.ПовторитиПопереднє надсилання ще перевіряється."
+    },
+    "retry": {
+      "x": 298.5,
+      "y": 171.25,
+      "right": 378,
+      "bottom": 215.25,
+      "text": "Повторити"
+    },
+    "alert": {
+      "x": 12,
+      "y": 223.25,
+      "right": 378,
+      "bottom": 238.25,
+      "text": "Попереднє надсилання ще перевіряється."
+    },
+    "overflow": 0
+  },
+  {
+    "width": 390,
+    "scheme": "light",
+    "lang": "uk",
+    "state": "starting",
+    "question": {
+      "x": 12,
+      "y": 20,
+      "right": 378,
+      "bottom": 159.25,
+      "text": "→паралельне яПоясни причину збою в паралельному запитанні та перевір, чи збереглося вкладення."
+    },
+    "reason": null,
+    "retry": null,
+    "alert": null,
+    "overflow": 0
+  },
+  {
+    "width": 390,
+    "scheme": "dark",
+    "lang": "en",
+    "state": "failed",
+    "question": {
+      "x": 12,
+      "y": 20,
+      "right": 378,
+      "bottom": 159.25,
+      "text": "→parallel selfExplain why the parallel question failed and check whether the attachment was preserved."
+    },
+    "reason": {
+      "x": 12,
+      "y": 171.25,
+      "right": 378,
+      "bottom": 215.25,
+      "text": "Task membership could not be recorded: storage admission timed out.Retry"
+    },
+    "retry": {
+      "x": 326.421875,
+      "y": 171.25,
+      "right": 378,
+      "bottom": 215.25,
+      "text": "Retry"
+    },
+    "alert": null,
+    "overflow": 0
+  },
+  {
+    "width": 390,
+    "scheme": "dark",
+    "lang": "en",
+    "state": "retry-refused",
+    "question": {
+      "x": 12,
+      "y": 20,
+      "right": 378,
+      "bottom": 159.25,
+      "text": "→parallel selfExplain why the parallel question failed and check whether the attachment was preserved."
+    },
+    "reason": {
+      "x": 12,
+      "y": 171.25,
+      "right": 378,
+      "bottom": 238.25,
+      "text": "Task membership could not be recorded: storage admission timed out.RetryThe previous delivery is still being checked."
+    },
+    "retry": {
+      "x": 326.421875,
+      "y": 171.25,
+      "right": 378,
+      "bottom": 215.25,
+      "text": "Retry"
+    },
+    "alert": {
+      "x": 12,
+      "y": 223.25,
+      "right": 378,
+      "bottom": 238.25,
+      "text": "The previous delivery is still being checked."
+    },
+    "overflow": 0
+  },
+  {
+    "width": 390,
+    "scheme": "dark",
+    "lang": "en",
+    "state": "starting",
+    "question": {
+      "x": 12,
+      "y": 20,
+      "right": 378,
+      "bottom": 159.25,
+      "text": "→parallel selfExplain why the parallel question failed and check whether the attachment was preserved."
+    },
+    "reason": null,
+    "retry": null,
+    "alert": null,
+    "overflow": 0
+  },
+  {
+    "width": 390,
+    "scheme": "dark",
+    "lang": "uk",
+    "state": "failed",
+    "question": {
+      "x": 12,
+      "y": 20,
+      "right": 378,
+      "bottom": 159.25,
+      "text": "→паралельне яПоясни причину збою в паралельному запитанні та перевір, чи збереглося вкладення."
+    },
+    "reason": {
+      "x": 12,
+      "y": 171.25,
+      "right": 378,
+      "bottom": 215.25,
+      "text": "Не вдалося записати належність до задачі: перевищено час очікування сховища.Повторити"
+    },
+    "retry": {
+      "x": 298.5,
+      "y": 171.25,
+      "right": 378,
+      "bottom": 215.25,
+      "text": "Повторити"
+    },
+    "alert": null,
+    "overflow": 0
+  },
+  {
+    "width": 390,
+    "scheme": "dark",
+    "lang": "uk",
+    "state": "retry-refused",
+    "question": {
+      "x": 12,
+      "y": 20,
+      "right": 378,
+      "bottom": 159.25,
+      "text": "→паралельне яПоясни причину збою в паралельному запитанні та перевір, чи збереглося вкладення."
+    },
+    "reason": {
+      "x": 12,
+      "y": 171.25,
+      "right": 378,
+      "bottom": 238.25,
+      "text": "Не вдалося записати належність до задачі: перевищено час очікування сховища.ПовторитиПопереднє надсилання ще перевіряється."
+    },
+    "retry": {
+      "x": 298.5,
+      "y": 171.25,
+      "right": 378,
+      "bottom": 215.25,
+      "text": "Повторити"
+    },
+    "alert": {
+      "x": 12,
+      "y": 223.25,
+      "right": 378,
+      "bottom": 238.25,
+      "text": "Попереднє надсилання ще перевіряється."
+    },
+    "overflow": 0
+  },
+  {
+    "width": 390,
+    "scheme": "dark",
+    "lang": "uk",
+    "state": "starting",
+    "question": {
+      "x": 12,
+      "y": 20,
+      "right": 378,
+      "bottom": 159.25,
+      "text": "→паралельне яПоясни причину збою в паралельному запитанні та перевір, чи збереглося вкладення."
+    },
+    "reason": null,
+    "retry": null,
+    "alert": null,
+    "overflow": 0
+  },
+  {
+    "width": 1280,
+    "scheme": "light",
+    "lang": "en",
+    "state": "failed",
+    "question": {
+      "x": 291.140625,
+      "y": 20,
+      "right": 988.84375,
+      "bottom": 112,
+      "text": "→parallel selfExplain why the parallel question failed and check whether the attachment was preserved."
+    },
+    "reason": {
+      "x": 291.140625,
+      "y": 124,
+      "right": 988.84375,
+      "bottom": 168,
+      "text": "Task membership could not be recorded: storage admission timed out.Retry"
+    },
+    "retry": {
+      "x": 937.265625,
+      "y": 124,
+      "right": 988.84375,
+      "bottom": 168,
+      "text": "Retry"
+    },
+    "alert": null,
+    "overflow": 0
+  },
+  {
+    "width": 1280,
+    "scheme": "light",
+    "lang": "en",
+    "state": "retry-refused",
+    "question": {
+      "x": 291.140625,
+      "y": 20,
+      "right": 988.84375,
+      "bottom": 112,
+      "text": "→parallel selfExplain why the parallel question failed and check whether the attachment was preserved."
+    },
+    "reason": {
+      "x": 291.140625,
+      "y": 124,
+      "right": 988.84375,
+      "bottom": 191,
+      "text": "Task membership could not be recorded: storage admission timed out.RetryThe previous delivery is still being checked."
+    },
+    "retry": {
+      "x": 937.265625,
+      "y": 124,
+      "right": 988.84375,
+      "bottom": 168,
+      "text": "Retry"
+    },
+    "alert": {
+      "x": 291.140625,
+      "y": 176,
+      "right": 988.84375,
+      "bottom": 191,
+      "text": "The previous delivery is still being checked."
+    },
+    "overflow": 0
+  },
+  {
+    "width": 1280,
+    "scheme": "light",
+    "lang": "en",
+    "state": "starting",
+    "question": {
+      "x": 291.140625,
+      "y": 20,
+      "right": 988.84375,
+      "bottom": 112,
+      "text": "→parallel selfExplain why the parallel question failed and check whether the attachment was preserved."
+    },
+    "reason": null,
+    "retry": null,
+    "alert": null,
+    "overflow": 0
+  },
+  {
+    "width": 1280,
+    "scheme": "light",
+    "lang": "uk",
+    "state": "failed",
+    "question": {
+      "x": 287.609375,
+      "y": 20,
+      "right": 992.390625,
+      "bottom": 112,
+      "text": "→паралельне яПоясни причину збою в паралельному запитанні та перевір, чи збереглося вкладення."
+    },
+    "reason": {
+      "x": 287.609375,
+      "y": 124,
+      "right": 992.390625,
+      "bottom": 168,
+      "text": "Не вдалося записати належність до задачі: перевищено час очікування сховища.Повторити"
+    },
+    "retry": {
+      "x": 912.890625,
+      "y": 124,
+      "right": 992.390625,
+      "bottom": 168,
+      "text": "Повторити"
+    },
+    "alert": null,
+    "overflow": 0
+  },
+  {
+    "width": 1280,
+    "scheme": "light",
+    "lang": "uk",
+    "state": "retry-refused",
+    "question": {
+      "x": 287.609375,
+      "y": 20,
+      "right": 992.390625,
+      "bottom": 112,
+      "text": "→паралельне яПоясни причину збою в паралельному запитанні та перевір, чи збереглося вкладення."
+    },
+    "reason": {
+      "x": 287.609375,
+      "y": 124,
+      "right": 992.390625,
+      "bottom": 191,
+      "text": "Не вдалося записати належність до задачі: перевищено час очікування сховища.ПовторитиПопереднє надсилання ще перевіряється."
+    },
+    "retry": {
+      "x": 912.890625,
+      "y": 124,
+      "right": 992.390625,
+      "bottom": 168,
+      "text": "Повторити"
+    },
+    "alert": {
+      "x": 287.609375,
+      "y": 176,
+      "right": 992.390625,
+      "bottom": 191,
+      "text": "Попереднє надсилання ще перевіряється."
+    },
+    "overflow": 0
+  },
+  {
+    "width": 1280,
+    "scheme": "light",
+    "lang": "uk",
+    "state": "starting",
+    "question": {
+      "x": 287.609375,
+      "y": 20,
+      "right": 992.390625,
+      "bottom": 112,
+      "text": "→паралельне яПоясни причину збою в паралельному запитанні та перевір, чи збереглося вкладення."
+    },
+    "reason": null,
+    "retry": null,
+    "alert": null,
+    "overflow": 0
+  },
+  {
+    "width": 1280,
+    "scheme": "dark",
+    "lang": "en",
+    "state": "failed",
+    "question": {
+      "x": 291.140625,
+      "y": 20,
+      "right": 988.84375,
+      "bottom": 112,
+      "text": "→parallel selfExplain why the parallel question failed and check whether the attachment was preserved."
+    },
+    "reason": {
+      "x": 291.140625,
+      "y": 124,
+      "right": 988.84375,
+      "bottom": 168,
+      "text": "Task membership could not be recorded: storage admission timed out.Retry"
+    },
+    "retry": {
+      "x": 937.265625,
+      "y": 124,
+      "right": 988.84375,
+      "bottom": 168,
+      "text": "Retry"
+    },
+    "alert": null,
+    "overflow": 0
+  },
+  {
+    "width": 1280,
+    "scheme": "dark",
+    "lang": "en",
+    "state": "retry-refused",
+    "question": {
+      "x": 291.140625,
+      "y": 20,
+      "right": 988.84375,
+      "bottom": 112,
+      "text": "→parallel selfExplain why the parallel question failed and check whether the attachment was preserved."
+    },
+    "reason": {
+      "x": 291.140625,
+      "y": 124,
+      "right": 988.84375,
+      "bottom": 191,
+      "text": "Task membership could not be recorded: storage admission timed out.RetryThe previous delivery is still being checked."
+    },
+    "retry": {
+      "x": 937.265625,
+      "y": 124,
+      "right": 988.84375,
+      "bottom": 168,
+      "text": "Retry"
+    },
+    "alert": {
+      "x": 291.140625,
+      "y": 176,
+      "right": 988.84375,
+      "bottom": 191,
+      "text": "The previous delivery is still being checked."
+    },
+    "overflow": 0
+  },
+  {
+    "width": 1280,
+    "scheme": "dark",
+    "lang": "en",
+    "state": "starting",
+    "question": {
+      "x": 291.140625,
+      "y": 20,
+      "right": 988.84375,
+      "bottom": 112,
+      "text": "→parallel selfExplain why the parallel question failed and check whether the attachment was preserved."
+    },
+    "reason": null,
+    "retry": null,
+    "alert": null,
+    "overflow": 0
+  },
+  {
+    "width": 1280,
+    "scheme": "dark",
+    "lang": "uk",
+    "state": "failed",
+    "question": {
+      "x": 287.609375,
+      "y": 20,
+      "right": 992.390625,
+      "bottom": 112,
+      "text": "→паралельне яПоясни причину збою в паралельному запитанні та перевір, чи збереглося вкладення."
+    },
+    "reason": {
+      "x": 287.609375,
+      "y": 124,
+      "right": 992.390625,
+      "bottom": 168,
+      "text": "Не вдалося записати належність до задачі: перевищено час очікування сховища.Повторити"
+    },
+    "retry": {
+      "x": 912.890625,
+      "y": 124,
+      "right": 992.390625,
+      "bottom": 168,
+      "text": "Повторити"
+    },
+    "alert": null,
+    "overflow": 0
+  },
+  {
+    "width": 1280,
+    "scheme": "dark",
+    "lang": "uk",
+    "state": "retry-refused",
+    "question": {
+      "x": 287.609375,
+      "y": 20,
+      "right": 992.390625,
+      "bottom": 112,
+      "text": "→паралельне яПоясни причину збою в паралельному запитанні та перевір, чи збереглося вкладення."
+    },
+    "reason": {
+      "x": 287.609375,
+      "y": 124,
+      "right": 992.390625,
+      "bottom": 191,
+      "text": "Не вдалося записати належність до задачі: перевищено час очікування сховища.ПовторитиПопереднє надсилання ще перевіряється."
+    },
+    "retry": {
+      "x": 912.890625,
+      "y": 124,
+      "right": 992.390625,
+      "bottom": 168,
+      "text": "Повторити"
+    },
+    "alert": {
+      "x": 287.609375,
+      "y": 176,
+      "right": 992.390625,
+      "bottom": 191,
+      "text": "Попереднє надсилання ще перевіряється."
+    },
+    "overflow": 0
+  },
+  {
+    "width": 1280,
+    "scheme": "dark",
+    "lang": "uk",
+    "state": "starting",
+    "question": {
+      "x": 287.609375,
+      "y": 20,
+      "right": 992.390625,
+      "bottom": 112,
+      "text": "→паралельне яПоясни причину збою в паралельному запитанні та перевір, чи збереглося вкладення."
+    },
+    "reason": null,
+    "retry": null,
+    "alert": null,
+    "overflow": 0
+  }
+]

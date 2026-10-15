@@ -323,3 +323,16 @@ for (const scenario of ["local-queued", "local-held"] as const) {
     } finally { await Promise.all(neighbors); for (const holder of holders) await holder.close(); }
   });
 }
+
+
+test("parallel C: failed first delivery ends beside the question with its actual reason", async () => {
+  const deputy = forkedDeputy();
+  const ports: DeputySweepPorts = {
+    now: () => new Date(START + 4_000), deputies: readDeputies, activeSeat: () => seat,
+    runtime: async () => ({ host: "dead", turn: "unknown" }), ownLines: () => [],
+    interrupt: async () => {}, release: async () => {}, noteSeat: async () => "queued",
+    delivery: async () => ({ state: "failed", reason: "Task membership admission timed out" }),
+  } as DeputySweepPorts;
+  await sweepDeputies(ports);
+  expect(readDeputies()[0]).toMatchObject({ state: "ended", outcome: "failed", error: "Task membership admission timed out", ask: { text: "file a task" } });
+});

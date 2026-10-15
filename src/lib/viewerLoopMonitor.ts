@@ -2,7 +2,7 @@ import { performanceSpans, performanceSites, performanceProcess } from "./perfor
 import { startLoopWatchdog } from "./loopWatchdog";
 import { AsyncLocalStorage } from "node:async_hooks";
 
-export type ViewerOperation = "voice.orchestrator-read" | "telegram.review-polls" | "accounts.migration-target" | "pipelines.startup-admission" | "pipelines.mutation" | "pipelines.controller-mutation"
+export type ViewerOperation = "orchestrator.deputy" | "voice.orchestrator-read" | "telegram.review-polls" | "accounts.migration-target" | "pipelines.startup-admission" | "pipelines.mutation" | "pipelines.controller-mutation"
   | "registry.prepare" | "runtime.spawn-recovery" | "state.rollback-checkpoint"
   | "pipelines.controller-read" | "pipelines.controller-decode" | "pipelines.controller-materialize"
   | "pipelines.controller-checkpoint" | "pipelines.controller-select" | "pipelines.delivery-liveness"

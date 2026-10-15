@@ -4782,3 +4782,42 @@ test.each([
     expect(Object.values(registry.readOnlySnapshot().heldDeliveries)).toHaveLength(scenario === "unknown-admission" ? 1 : 0);
   } finally { journal.close(); registry.close(); }
 });
+
+
+test("parallel B: a hostless fork's saved first question reaches the resumed host through the normal drain", async () => {
+  const { registry, conversation } = registryWithConversation("default", "claude");
+  let resumed = false;
+  const received: string[] = [];
+  const runtime = {
+    readSession: sessionReader(async () => resumed ? snapshot(conversation.id, "claude") : { ...snapshot(conversation.id, "claude"), sessions: [] }),
+    operationStatus: async (operationId: string) => ({ operationId, replayed: false, receipt: { operationId,
+      idempotencyKey: "fork-first-question", conversationId: conversation.id, kind: "send", status: "delivered", queuePosition: null,
+      at: "2026-10-15T20:36:20.000Z", revision: 1 } }),
+    command: async (command: { operationId: string; idempotencyKey: string; text: string }) => {
+      received.push(command.text);
+      return { operationId: command.operationId, replayed: false, receipt: { operationId: command.operationId,
+        idempotencyKey: command.idempotencyKey, conversationId: conversation.id, kind: "send", status: "delivered", queuePosition: null,
+        at: "2026-10-15T20:36:20.000Z", revision: 1 } };
+    },
+  } as unknown as RuntimeHostClient;
+  const initial = await enqueueStructuredMessage({ path: artifactPath, conversationId: conversation.id,
+    clientMessageId: "fork-first-question", text: "Explain the new failure" }, {
+    enabled: () => true, registry: () => registry, client: () => runtime, kick: () => {},
+    recover: async () => { throw new Error("task membership temporarily busy"); },
+  });
+  expect(initial).toMatchObject({ ok: true, outcome: "held" });
+  const reopened = new AgentRegistry(registry.filename);
+  const port = { deliver: async ({ delivery, path, clientMessageId }: { delivery: HeldDelivery; path: string; clientMessageId: string }) =>
+    await deliverHeldStructuredMessage({ conversationId: delivery.conversationId, runtimeConversationId: delivery.runtimeConversationId,
+      path, clientMessageId, deliveryId: delivery.id, text: delivery.text, command: delivery.command }, {
+      enabled: () => true, registry: () => reopened, client: () => runtime, kick: () => {},
+      recover: async () => { recordStructuredOwner(reopened, conversation); resumed = true;
+        return { target: null, path: artifactPath, conversationId: conversation.id, spawned: true }; },
+    }) ?? "delivery-uncertain" };
+  for (let pass = 0; pass < 3; pass++) await reconcileMigrations({} as never, port, reopened);
+  expect(resumed).toBe(true);
+  expect(received).toEqual(["Explain the new failure"]);
+  expect(reopened.pendingDeliveries(conversation.id)).toEqual([]);
+  await reconcileMigrations({} as never, port, reopened);
+  expect(received).toHaveLength(1);
+});

@@ -1,3 +1,5 @@
+import { AccountCommitBusyError } from "@/lib/accounts/accountMutationContext";
+import { stateLockDeferral } from "@/lib/state/lockWait";
 import { appendLifecycleEvents } from "@/lib/lifecycle/journal";
 import { operatorSafeSummary } from "@/lib/lifecycle/vocabulary";
 import { canonicalProject } from "@/lib/projects/aliases";
@@ -188,6 +190,7 @@ export function admitReservedLaunch(
     const input: MembershipInput = { ...launchMembershipInput(launch, receipt, ports.pipelineContext, ports.projectForCwd, ports.seatIdentity), admit: launchAdmission };
     result = ports.commit(input);
   } catch (error) {
+    if (error instanceof AccountCommitBusyError || stateLockDeferral(error)) throw error;
     const code = error && typeof error === "object" && "code" in error ? error.code : null;
     const message = error instanceof Error ? error.message : String(error);
     if (code === "SQLITE_BUSY" || /\bSQLITE_BUSY\b|database is (?:locked|busy)/i.test(message)) {
