@@ -1,4 +1,5 @@
 import { runtimeIdleKillMatches } from "@/lib/runtime/contracts";
+import { parseSnapshotReadRequest, SNAPSHOT_ACTIVITY_FIELDS, SNAPSHOT_OWNER_FIELDS, type RuntimeSnapshotMetadata } from "@/lib/runtime/snapshotReads";
 import { measureBlocking } from "@/lib/blockingWaits";
 import { processIdentityProvenDead, sameRecordedProcessIdentity } from "@/lib/processIdentity";
 import { SessionHostMetadata, SESSION_HOST_ACTIVE_FROM, SESSION_HOST_INACTIVE_FROM, SESSION_HOST_TERMINAL, SESSION_HOST_EXPIRY } from "./journalSessionMetadata";
@@ -1328,6 +1329,57 @@ export class RuntimeJournal {
       this.compactIfNeeded();
       this.notifyWaiters();
       return { operationId, receipt: committed, replayed: false };
+    } catch (error) {
+      try { this.db.exec("ROLLBACK"); } catch { /* transaction already closed */ }
+      throw error;
+    }
+  }
+
+  /** One transaction binds the population, sequence, floor and epoch. Narrow
+      fields leave SQLite without materializing retained text in either process. */
+  snapshotReadJson(input: unknown): string {
+    const request = parseSnapshotReadRequest(input);
+    // Activity and ownership each have one population scope. Cache their encoded bodies using the
+    // journal's write witness plus peer commits observed by this connection;
+    // keyed activity reads never grow a cache by ID.
+    const key = `snapshot-read:${request.kind}`;
+    const cacheable = request.kind === "owners" || request.kind === "activity" && request.conversationIds === undefined;
+    const changes = this.totalChanges()
+      + this.db.query<{ data_version: number }, []>("PRAGMA data_version").get()!.data_version;
+    const cached = cacheable ? this.snapshotCaches.get(key) : undefined;
+    if (cached?.changes === changes) return cached.json;
+    const json = JSON.stringify(this.snapshotRead(request));
+    if (cacheable) this.snapshotCaches.set(key, { changes, expiresAt: null, json });
+    return json;
+  }
+
+  /** Selection and metadata are read in one SQLite transaction. */
+  snapshotRead(input: unknown): RuntimeSnapshotMetadata & { snapshotRead: ReturnType<typeof parseSnapshotReadRequest>; sessions?: unknown[] } {
+    const request = parseSnapshotReadRequest(input);
+    this.db.exec("BEGIN");
+    try {
+      const metadata: RuntimeSnapshotMetadata = {
+        schemaVersion: RUNTIME_SCHEMA_VERSION,
+        snapshotSeq: Number(this.meta("published_seq")),
+        retentionFloorSeq: Number(this.meta("anchor_seq")),
+        runtime: { hostEpoch: Number(this.meta("host_epoch")), health: this.meta("health") },
+        filesRevision: Number(this.meta("files_revision")),
+      };
+      const result = { ...metadata, snapshotRead: { version: request.version, kind: request.kind } };
+      if (request.kind === "metadata") {
+        this.db.exec("COMMIT");
+        return result;
+      }
+      const fields = request.kind === "activity" ? SNAPSHOT_ACTIVITY_FIELDS : SNAPSHOT_OWNER_FIELDS;
+      // json_each preserves absence versus explicit null, including the legacy
+      // native-custody marker. The allowlist is code-owned, never request SQL.
+      const projection = `(SELECT json_group_object(key, CASE WHEN type IN ('object', 'array') THEN json(value) ELSE value END)
+        FROM json_each(state_json) WHERE key IN (${fields.map(field => "'" + field + "'").join(",")})) AS state_json`;
+      const sessions = this.snapshotSessionRows(projection, [], request.conversationIds)
+        .map(row => JSON.parse(row.state_json) as { conversationId: string })
+        .sort((left, right) => left.conversationId.localeCompare(right.conversationId));
+      this.db.exec("COMMIT");
+      return { ...result, sessions };
     } catch (error) {
       try { this.db.exec("ROLLBACK"); } catch { /* transaction already closed */ }
       throw error;
@@ -3071,39 +3123,38 @@ export class RuntimeJournal {
           FROM json_each(delivery.value, '$.responses') AS response), '[]'))))
         FROM json_each(state_json, '$.voiceDeliveries') AS delivery), '[]')),
       '$.voiceDeliverySnapshotRevision', json_extract(state_json, '$.revision')) END AS state_json`;
-    const selected = voiceBodiesFor?.[0] ?? "";
-    if (this.sessionHostMetadata.ready) {
-      const parameters = voiceBodiesFor === undefined ? [] : [selected];
-      const active = this.db.query<{ state_json: string }, (string | number)[]>(
-        `SELECT ${projection} ${SESSION_HOST_ACTIVE_FROM}`,
-      ).all(...parameters);
-      const inactive = this.db.query<{ state_json: string }, (string | number)[]>(
-        `SELECT ${projection} ${SESSION_HOST_INACTIVE_FROM}`,
-      ).all(...parameters, RUNTIME_SNAPSHOT_INACTIVE_SESSION_LIMIT);
-      return [...active, ...inactive].map(row => JSON.parse(row.state_json) as RuntimeSession)
-        .sort((left, right) => left.conversationId.localeCompare(right.conversationId));
-    }
-    const active = this.db.query<{ state_json: string }, (string | number)[]>(`
-      SELECT ${projection}
-      FROM entities
-      WHERE kind = ?
-        AND (
-          json_extract(state_json, '$.host') IS NULL
-          OR json_extract(state_json, '$.host') NOT IN (?, ?)
-        )
-      ORDER BY id
-    `).all(...(voiceBodiesFor === undefined ? [] : [selected]), "session", "dead", "unhosted");
-    const inactive = this.db.query<{ state_json: string }, (string | number)[]>(`
-      SELECT ${projection}
-      FROM entities
-      WHERE kind = ?
-        AND json_extract(state_json, '$.host') IN (?, ?)
-      ORDER BY checkpoint_seq DESC, id DESC
-      LIMIT ?
-    `).all(...(voiceBodiesFor === undefined ? [] : [selected]), "session", "dead", "unhosted", RUNTIME_SNAPSHOT_INACTIVE_SESSION_LIMIT);
-    return [...active, ...inactive]
-      .map((row) => JSON.parse(row.state_json) as RuntimeSession)
+    return this.snapshotSessionRows(projection, voiceBodiesFor === undefined ? [] : [voiceBodiesFor[0] ?? ""])
+      .map(row => JSON.parse(row.state_json) as RuntimeSession)
       .sort((left, right) => left.conversationId.localeCompare(right.conversationId));
+  }
+
+  /** Every snapshot scope uses the same selected identities. Apply a requested
+      subset after the inactive LIMIT so old inactive rows remain absent. */
+  private snapshotSessionRows(projection: string, parameters: (string | number)[], conversationIds?: readonly string[]): { state_json: string }[] {
+    if (conversationIds?.length === 0) return [];
+    const active = this.sessionHostMetadata.ready
+      ? SESSION_HOST_ACTIVE_FROM
+      : `FROM entities WHERE kind = 'session' AND
+          (json_extract(state_json, '$.host') IS NULL OR json_extract(state_json, '$.host') NOT IN ('dead', 'unhosted')) ORDER BY id`;
+    const inactive = this.sessionHostMetadata.ready
+      ? SESSION_HOST_INACTIVE_FROM
+      : `FROM entities WHERE kind = 'session' AND json_extract(state_json, '$.host') IN ('dead', 'unhosted')
+          ORDER BY checkpoint_seq DESC, id DESC LIMIT ?`;
+    // Population reads keep the direct query shape: an extra selected-ID join
+    // adds work without narrowing their output.
+    if (conversationIds === undefined) {
+      return [
+        ...this.db.query<{ state_json: string }, (string | number)[]>(`SELECT ${projection} ${active}`).all(...parameters),
+        ...this.db.query<{ state_json: string }, (string | number)[]>(`SELECT ${projection} ${inactive}`)
+          .all(...parameters, RUNTIME_SNAPSHOT_INACTIVE_SESSION_LIMIT),
+      ];
+    }
+    return this.db.query<{ state_json: string }, (string | number)[]>(`
+      WITH selected AS (SELECT id FROM (SELECT entities.id ${active}) UNION ALL SELECT id FROM (SELECT entities.id ${inactive}))
+      SELECT ${projection} FROM selected
+      CROSS JOIN entities ON entities.kind = 'session' AND entities.id = selected.id
+      WHERE json_extract(entities.state_json, '$.conversationId') IN (${conversationIds.map(() => "?").join(",")})
+    `).all(RUNTIME_SNAPSHOT_INACTIVE_SESSION_LIMIT, ...parameters, ...conversationIds);
   }
 
   private snapshotEdgeValues(now: number): RuntimeEdge[] {

@@ -1,4 +1,4 @@
-# Runtime snapshot audit
+# Runtime snapshot audit and implementation
 
 2026-10-15. Read-only production investigation; source is main at
 `45d25ac796d5824713c9fb57d65f57efea61041b`. All file:line references below
@@ -6,9 +6,9 @@ refer to that commit unless explicitly marked as a proposed change.
 
 The request is to find every full runtime snapshot reader, measure the cost
 on a read-only copy, and specify a reduction that preserves caller behavior.
-This document contains an audit and isolated payload experiments. No product
-implementation, production configuration, deployment, or release approval is
-part of this result.
+The audit sections below record the original investigation and payload
+experiments. The implementation and paired replay are recorded at the end.
+Production configuration, deployment and release approval remain separate.
 
 The strongest first change is to replace population reads by the values their
 callers consume. The copied journal produces an **8,914,925-byte full body**
@@ -594,3 +594,197 @@ or runtime-host promotion rehearsal was run for this documentation stage.
 The read-only backup and raw experiment records remain private for the
 candidate's identical-data replay; their scratch location is in the stage
 handover, outside this publication artifact.
+
+## Implementation: narrow internal reads (2026-10-15)
+
+The candidate implements the first two steps above. The internal readers in
+the table now ask for metadata, session activity, or restart ownership evidence
+through `snapshotRead: { version: 1, kind, conversationIds? }` on the existing
+snapshot RPC. `src/lib/runtime/snapshotReads.ts` defines and validates the
+contract. `src/runtime-host/journal.ts` selects the fields in SQLite before
+JSON decoding; `src/runtime-host/host.ts` sends their serialized response.
+
+| Scope | Values retained | Consumers |
+| --- | --- | --- |
+| `metadata` | Schema, published sequence, retention floor, host epoch/health, files revision | Pipeline epoch and retry proof; title publication |
+| `activity` | Metadata plus conversation ID, host/turn axes and attention IDs; optional selection of at most 64 IDs | Pipeline activity and interrupted-turn decisions |
+| `owners` | Metadata plus conversation ID, session key, artifact path, cwd, host/turn, active turn, revision, writer claim/status and native turn claims | Self-update quiet probes and owner census |
+
+The metadata and selected population share one SQLite read transaction. All
+scopes preserve the full snapshot's selected population: active sessions plus
+the same newest 128 inactive sessions. Filtering requested IDs happens after
+that limit and matches the published `conversationId`, including stored rows
+whose journal scope has a different ID. An old inactive session omitted by
+the full snapshot stays absent; owner census keeps its existing later keyed
+reads for missing ownership records. Optional fields preserve absence and explicit null, including native
+custody evidence. Full and summary reads use the same selection helper.
+
+Pipeline ports share one pending activity population read for their lifetime,
+preserving the original single population read across all session checks.
+An epoch check reuses it when present and otherwise shares one metadata read.
+Affirmative dead/unhosted/conflict evidence clears those
+reads so a later check can observe adoption during the pass. Absent rows and
+failed reads keep their existing unknown outcomes. Title publication still
+appends the same title and files-revision events in the same order.
+
+The host caches one encoded population per activity/owner scope, invalidated
+by its own journal write witness and SQLite's peer-commit `data_version`.
+Optional selected activity reads retain no cache by ID. Metadata reads query
+only journal metadata. A test commits a
+peer write between metadata reads to verify the cursor, floor, epoch and
+population cannot come from different transactions.
+
+Compatibility uses the existing method: an older host ignores `snapshotRead`
+and returns its voice-summary snapshot, which the client projects locally.
+Each response carries its own shape/version; there is no capability cache to
+survive a host switch. A refusal, timeout, abort, malformed frame or invalid
+projection stays a failed read and never requests a second full population.
+Older clients still receive their existing full or voice-summary response
+from the new host. The socket's connection error handling is unchanged.
+
+PR #2905 merged during this implementation. Its files-revision RPC and timing
+spans occupy separate hunks and remain intact; files invalidation uses that
+scalar after integration. Title publication uses this bounded metadata read.
+The state database lock, heap and MCP writer lanes' implementation files were
+inspected and left unchanged by this lane. Browser snapshot forwarding,
+voice hydration and browser delta/cursor work remain at their existing
+contracts. No worker or long-lived decoded population cache is introduced.
+The inventoried embedder fallbacks without keyed reads and the legacy
+deployment-list fallback still read full populations. Existing modern
+clients already take their keyed paths; old hosts retain the compatibility
+cost until upgraded.
+
+### Paired replay method
+
+`scripts/benchmark-runtime-snapshots.ts` takes the audit's single read-only
+backup, a `git archive` export of audited main, and a new private output
+directory. It verifies the backup hash before and after, makes a separate
+working copy for each variant, and loads the actual baseline and candidate
+journal and client classes. The journal constructor is bypassed using the
+audit harness above; its companion metadata coverage is checked before use.
+The clock, source rows, SQL mutations and request schedule are identical.
+
+Collection timings cover metadata unavailable/ready, warm caches, one and 64
+changed rows, and 500 additional retained dead rows. Every stage compares the
+caller-visible values with a fresh full snapshot and with the other variant.
+Full snapshot cold rebuilds alternate on the original immutable backup after
+both collection campaigns, to check the shared selection refactor. Collection
+numbers include SQL selection, decoding the selected
+projection and serialization. They exclude socket transfer and Viewer parsing.
+
+The transport replay runs a child socket server with frozen bodies produced
+by those journal methods. Each variant uses its actual client. There are
+three paired rounds, alternating before/after, with six bursts of eight reads
+at 0, 10, 20, 30, 40 and 50 seconds in a 60-second window: four activity,
+three metadata and one owner read per burst. Warmup is excluded. The main
+process records the existing synchronous parse span and a 5 ms timer's
+lateness. RPC wall time includes decoding, framing and projection validation.
+All children close through their owned stdin channel and are awaited.
+
+This is an offered load of 48 independent reads/minute. It measures transport
+and parsing separately from database collection, excludes production caller
+frequency and pipeline read coalescing, and makes no production GC or
+18-second-stall attribution. The oracle also checks the unchanged full
+snapshot, including browser/voice fields. Browser actions themselves are
+outside this internal-read replay. Raw payloads and database copies remain
+private; only aggregate measurements are published.
+
+
+### Candidate before/after results
+
+The final paired replay finished at 2026-10-15T06:15:54.819Z under Bun 1.4.0,
+with 58 matching oracle comparisons and an unchanged backup checksum. Each
+arm completed all 144 measured requests. Counts below exclude warmup and
+use the fixed 48 reads/minute offered load; the three round values stay
+separate. There were no measured request failures or cancellations.
+
+| Metric, three rounds | Before | After |
+| --- | ---: | ---: |
+| Raw snapshot RPC bytes/minute | 360,223,800 | 6,215,088 |
+| Main-thread parse total, ms/minute | 1060.1 / 1021.1 / 1176.8 | 13.6 / 15.8 / 15 |
+| Parse p95, ms | 32.6 / 32.9 / 39.2 | 1.5 / 1.9 / 1.8 |
+| Maximum 5 ms timer lateness, ms | 61.75 / 78.5 / 59.87 | 1.89 / 9.06 / 4.29 |
+| Timer gaps ≥50 ms per minute | 1 / 2 / 1 | 0 / 0 / 0 |
+| RPC p95, ms | 487.46 / 450.6 / 563.63 | 7.36 / 8.96 / 9.49 |
+
+Raw frame traffic falls **98.27%**. The three candidate parse totals are
+**13.6–15.8 ms/minute**, compared with **1,021.1–1,176.8 ms/minute** before.
+The body sizes are 184 bytes for metadata, 98,786 bytes for all 830 sessions'
+activity fields, and 639,624 bytes for ownership evidence. Baseline metadata
+uses its 5,154,049-byte voice summary; activity and ownership use the
+8,914,925-byte full body. Framing adds 66 bytes per reply in both variants.
+The 5 ms timer reports scheduling lateness, including machine contention;
+its gaps are not attributed exclusively to parsing.
+
+The collection table gives the median sum of metadata, activity and owner
+reads in that order over three repetitions. Baseline ownership reuses the
+full body just built for activity; candidate activity and ownership have
+separate encoded caches. Clearing caches precedes every non-cached sample.
+
+| Journal state | Before collection + encoding, ms | After collection + encoding, ms |
+| --- | ---: | ---: |
+| Metadata unavailable | 2606.73 | 1235.14 |
+| Metadata ready, cold caches | 408.00 | 145.94 |
+| Metadata ready, warm caches | 0.06 | 0.19 |
+| One session changed | 478.90 | 125.83 |
+| 64 sessions changed | 447.33 | 102.37 |
+| 500 more retained dead rows | 464.29 | 116.70 |
+
+Full-snapshot controls return the same 8,914,925 bytes and hash on both sides.
+Their three cold rebuilds took 201.49 / 293.55 / 216.13 ms before and
+303.71 / 281.01 / 202.29 ms after. The final code retains the original direct
+population query shape; these noisy samples establish no full-read speedup.
+The first candidate added a redundant selected-ID join for every population
+read; the final code uses that join only for explicitly selected IDs.
+The final activity population is shared across all pipeline session checks,
+matching the old pass reuse while preserving published identity semantics.
+
+The measurement process had no cgroup CPU quota and a 5.5 GiB memory ceiling;
+the shared ancestor ceiling was approximately 106.6 GiB. Other work remained
+active. CPU and heap deltas are retained in the private report and are not
+used as GC or retained-heap evidence.
+
+Reproduce with the same private backup and baseline export under isolated
+state and the supplied gate:
+
+```sh
+bash "$GATE" bun scripts/benchmark-runtime-snapshots.ts \
+  "$BACKUP" "$BASELINE_TREE" "$NEW_PRIVATE_OUTPUT"
+```
+
+The output directory must be new. It holds private payloads and database
+copies as well as `report.json`; only aggregate results belong in publication.
+
+### Verification and operational boundary
+
+Behavioral coverage includes every narrow scope against the full snapshot,
+the inactive history cap, a published conversation ID differing from its
+journal key, metadata readiness, ownership fields and legacy absent/null
+custody, local and peer cache invalidation, and a peer commit inside a read.
+Real socket tests cover old/new response shapes, malformed frames and
+projections, split UTF-8, cancellation, timeout and single-request refusal.
+Production pipeline ports verify shared activity/epoch reads, same-pass
+adoption after death, unknown/unavailable evidence and title event order.
+The ownership decision matrix exercises the new owner projection through
+`ownerCensusReader` and quiet admission. Pipeline snapshot fixtures supply the
+complete current envelope and use the valid `hosted` axis.
+
+The final focused run passed 24 tests across `snapshotReads.test.ts` in the
+host and client, `journalSnapshotBounds.test.ts`, `journal.sessionRead.test.ts`
+and `pipelines/runtimeReads.test.ts`. The final Bun 1.4.0 host rehearsal
+completed succession in 519 ms: both the stable listener and runtime socket
+answered 27/27 requests, each with 13 abandoned callers, over 15 seconds.
+
+All checks use explicit test paths and isolated HOME, XDG_CONFIG_HOME,
+TMPDIR and LLV_STATE_DIR with `LLV_VIEWER_CONTROL_URL=http://127.0.0.1:1`.
+Heavy checks use the supplied owned gate. The runtime-host rehearsal starts
+private generations and listeners, with no request to the serving host.
+Types, changed-source lint, whitespace and the local privacy gate are required
+before publication; hosted runtime/Bun checks judge the proposed integration.
+
+The initial regression comparison found two existing failures in
+`src/lib/selfUpdate/quietFallback.test.ts`, for an earlier generation's live
+busy turn after a successor settles, both visible and behind the history cap.
+They reproduced on the audited baseline. Their assertions remain unchanged.
+The release's calm 30-minute production window is assessed after an approved
+deployment and is not claimed by this isolated implementation.

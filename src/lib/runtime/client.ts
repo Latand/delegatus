@@ -10,6 +10,7 @@ import type { RuntimeDeliveryAction, RuntimeDeliveryActionClaim, RuntimeEventInp
 import { RUNTIME_RPC_DEADLINE_MS, RUNTIME_SNAPSHOT_DEADLINE_MS, VIEWER_DEPLOYMENT_DEADLINE_MS } from "./deadlines";
 import { runtimeHostSocket } from "./flags";
 import { recordBlockingWait } from "@/lib/blockingWaits";
+import { parseSnapshotReadRequest, projectSnapshotRead, type RuntimeSnapshotReadKind, type RuntimeSnapshotReads } from "./snapshotReads";
 
 // The snapshot frame carries every hosted session, and a hosted session keeps
 // its liveTurn text until its host dies — idle hosts never retire (#747), so
@@ -110,6 +111,7 @@ export function isRuntimeHostTransportFailure(error: unknown): boolean {
 }
 
 export interface RuntimeHostClient {
+  readSnapshot?<K extends RuntimeSnapshotReadKind>(kind: K, conversationIds?: readonly string[], signal?: AbortSignal): Promise<RuntimeSnapshotReads[K]>;
   /** Stable listener identity; reconnecting to the same socket preserves it. */
   startupGeneration?(): Promise<string | null>;
   nativeQueueRead?(conversationId: string): Promise<NativeQueueRecord[]>;
@@ -265,6 +267,11 @@ export class UnixRuntimeHostClient implements RuntimeHostClient {
     return this.call("viewer-deployment-find", { idempotencyKey }, this.deploymentTimeoutMs) as Promise<ViewerDeploymentStatus | null>;
   }
   runtimeHostHealth(): Promise<RuntimeHostHealth> { return this.call("runtime-host-health") as Promise<RuntimeHostHealth>; }
+  async readSnapshot<K extends RuntimeSnapshotReadKind>(kind: K, conversationIds?: readonly string[], signal?: AbortSignal): Promise<RuntimeSnapshotReads[K]> {
+    const snapshotRead = parseSnapshotReadRequest({ version: 1, kind, ...(conversationIds ? { conversationIds } : {}) });
+    const result = await this.call("snapshot", { snapshotRead, voiceBodiesFor: [] }, this.snapshotTimeoutMs, signal);
+    return projectSnapshotRead(result, kind, conversationIds);
+  }
   startupGeneration(): Promise<string | null> { return this.deploymentListGeneration(); }
   private async deploymentListGeneration(): Promise<string | null> {
     try {

@@ -139,6 +139,9 @@ export class RuntimeHost {
 
   async handle(request: RuntimeSocketRequest, options: { signal?: AbortSignal } = {}): Promise<RuntimeSocketResponse> {
     try {
+      if (request.method === "snapshot" && request.params?.snapshotRead !== undefined) {
+        return { id: request.id, ok: true, result: new PreserializedJson(this.journal.snapshotReadJson(request.params.snapshotRead)) };
+      }
       let result: unknown;
       if (request.method === "runtime-host-health") {
         if (!this.runtimeHostHealth) throw new Error("runtime-host startup evidence is unavailable");
