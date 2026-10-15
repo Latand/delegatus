@@ -9,21 +9,59 @@ callable tool index. The private-loop test feeds stored review text and a
 copied answer through the real Telegram sender and relay runner, recording the
 same decision as the web review.
 
-`externalRelay/publish.ts` sends confirmed Telegram text using the pairing
-credential and relay version 1. It preserves the body through four bounded
-attempts, waits the supplied 429 delay, and shares a queue per pairing. A 404
-holds that target for five minutes; a 403 holds that target/chat for five
-minutes. Unicode and encoded JSON limits are enforced together with a visible
-truncation marker. Telegram send completion does not await publication.
+The shared Telegram bot service commits each confirmed send to
+`telegram/bot.sqlite` before reporting send completion. The `relay_outbound`
+row contains its bot, chat, topic, Telegram message ID/date, readable text,
+reply identity, origin, conversation attribution and send group. The same row
+holds its pending publication obligation, frozen to the selected pairing,
+target and owner without a credential. Ordinary text, partial text sends,
+media captions, documents, rich reviews, native decision polls, operator test
+posts and sign-in replies use this boundary. Rich fallbacks retain their actual
+fallback wording. Operator and system origins remain distinct from the assistant.
+The existing agent-message view keeps its previous attribution behavior.
 
-The sender exposes its confirmed-message publication hook for ordinary text,
-rich reviews and media captions. The review renderer supplies plain text with
-variant descriptions, frame captions, questions, recommendations and copied
-answer lines. Successful parts of a partial text send, operator test posts and
-sign-in replies also publish their confirmed text with the bot identity retained
-from before the Telegram operation. Uncertain sends have no confirmed receipt
-to publish. Edits and deletions are
-outside this protocol.
+The production queue admits at most 16 indexed pending rows per tick. It runs
+asynchronously after sends and startup, with one shared bot-service owner,
+five-second transport deadlines including DNS, persistent exponential backoff and persistent
+429 cooldowns. A 404 holds the target for five minutes; a 403 holds its chat
+for five minutes. Before replay and again after DNS, the emission guard checks
+the connected bot, pairing, target, owner and posting policy. Revocation leaves
+the obligation pending. The idempotent service endpoint receives the original
+Telegram identity and text after a restart. Recovery never sends to Telegram.
+Uncertain Telegram sends retain their original send claim without inventing a
+receipt. A publication-target lookup failure before the first Telegram call
+settles text, photo, album and document claims with zero sent IDs, so the
+original request key can retry. Completed sends replay their receipt even
+when that lookup is unavailable. Posts made without a selected pairing remain
+locally recorded and unrouted; a later pairing cannot adopt them automatically.
+
+Unicode and encoded JSON publication limits retain a visible truncation marker.
+The full confirmed text remains local. Confirmed service mappings also retain
+the topic; legacy mappings without that field cannot prove a topic. Publication
+acceptance, local Telegram delivery and relay completion acceptance remain
+separate records. Relay final answers delivered by Celestia keep their existing
+answer archive and completion acknowledgement; Celestia owns their Telegram
+receipts. Edits and deletions remain outside this protocol.
+
+Fresh owner prompts can recover up to 32 local receipts and 64 KiB of text in
+the preceding 30 days. A confirmed publication identity in the current turn
+must prove the bot, pairing, target, chat and topic. An explicit parent has
+priority even when its service-history row is missing; replies to any part
+recover that parent's send group within the same bounds. Otherwise the latest
+question group and recent local context since the preceding owner turn appear
+before the unthreaded answer, with their full options and source attribution.
+Repeated request IDs reuse their persisted owner-turn cutoff.
+Receipts in the cutoff's Telegram second remain eligible:
+second precision cannot establish their order against that owner turn.
+A selected question retains its preceding parts across the cutoff.
+Existing service rows retain their identities and appear once, with complete
+receipt text and origin restored when publication was truncated.
+Competing question groups remain ambiguous and grant no authority. An opaque
+chat key or owner ID alone cannot supply a topic; an unknown or conflicting
+scope continues to require clarification. Settled and unrouted old receipts are pruned in
+batches of at most 64 on sends and publication settlement; pending publication custody survives retention expiry.
+All new database waits use asynchronous admission and zero SQLite busy waits,
+with named loop-monitor operations. No performance improvement is claimed.
 
 ## Operator-selected destination
 
