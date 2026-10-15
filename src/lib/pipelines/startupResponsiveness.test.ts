@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { buildPipeline, loadPipelinesForStartup, pipelineRegistryHealth, pipelineRegistryHealthAsync, savePipelines, withPipelineMutation, withPipelineStartupAdmission } from "./store";
+import { buildPipeline, loadPipelinesForStartup, loadPipelinesForStartupAsync, loadPipelineOwnershipForStartupAsync, pipelineRegistryHealth, pipelineRegistryHealthAsync, savePipelines, withPipelineMutation, withPipelineStartupAdmission } from "./store";
 import { createViewerLoopMonitor, withViewerOperation } from "@/lib/viewerLoopMonitor";
 
 const original = process.env.LLV_STATE_DIR;
@@ -92,7 +92,7 @@ test("durable hold measurement includes time before the first await continuation
   } finally { console.warn = warn; }
 });
 
-test("a foreign commit and a new owner invalidate prepared evidence before admission", async () => {
+test.each([false, true])("a foreign commit and a new owner invalidate prepared evidence before admission (compact=%s)", async compact => {
   const { row } = fixture();
   let release!: () => void, entered!: () => void;
   const ready = new Promise<void>(resolve => { entered = resolve; });
@@ -103,16 +103,16 @@ test("a foreign commit and a new owner invalidate prepared evidence before admis
     persist([...records, newOwner]);
   });
   await ready;
-  const reader = withPipelineStartupAdmission(async available => available);
+  const reader = withPipelineStartupAdmission(async available => available, undefined, undefined, compact);
   try { await new Promise(resolve => setTimeout(resolve, 40)); }
   finally { release(); }
   await writer;
   expect(await reader).toBeFalse();
   expect(await withPipelineStartupAdmission(async available => {
     expect(available).toBeTrue();
-    expect(loadPipelinesForStartup().map(record => record.id)).toContain("new-owner");
+    expect((compact ? await loadPipelineOwnershipForStartupAsync() : loadPipelinesForStartup()).map(record => record.id)).toContain("new-owner");
     return true;
-  })).toBeTrue();
+  }, undefined, undefined, compact)).toBeTrue();
 });
 
 test.each(["pipelines", "pipelines_archive"])("fresh asynchronous evidence refuses corrupt %s and preserves unknown owners", async collection => {
@@ -203,4 +203,67 @@ test("zero-wait admission permits a free lease and refuses a queued callback", a
   } finally {
     if (waitMs === undefined) delete process.env.LLV_PIPELINE_LOCK_WAIT_MS; else process.env.LLV_PIPELINE_LOCK_WAIT_MS = waitMs;
   }
+});
+
+test("a warm health witness observes direct writes with unchanged revisions and database replacement", async () => {
+  const { root, row } = fixture();
+  expect(await pipelineRegistryHealthAsync()).toEqual([]);
+  expect(await pipelineRegistryHealthAsync()).toEqual([]);
+  const filename = path.join(root, "state.sqlite");
+  const db = new Database(filename);
+  try {
+    db.query("UPDATE state_rows SET value_json=? WHERE collection='pipelines'").run(JSON.stringify({ ...row, state: "future-owner" }));
+    expect(await pipelineRegistryHealthAsync()).toMatchObject([{ reason: "unknown-but-preserved" }]);
+    const result = await pipelineRegistryHealthAsync();
+    result.length = 0;
+    expect(await pipelineRegistryHealthAsync()).toHaveLength(1);
+    db.query("UPDATE state_rows SET value_json='{broken' WHERE collection='pipelines'").run();
+    await expect(pipelineRegistryHealthAsync()).rejects.toThrow("corrupt pipelines SQLite row");
+  } finally { db.close(); }
+  // The new file can have the same collection revision and data_version.
+  const replacement = path.join(root, "replacement.sqlite");
+  const copy = new Database(replacement);
+  try {
+    copy.exec("CREATE TABLE state_collections(collection TEXT PRIMARY KEY, revision INTEGER)");
+    copy.exec("CREATE TABLE state_rows(collection TEXT, row_key TEXT, row_order INTEGER, value_json TEXT)");
+    copy.exec("INSERT INTO state_collections VALUES ('pipelines',1),('pipelines_archive',1)");
+  } finally { copy.close(); }
+  fs.renameSync(filename, path.join(root, "retired.sqlite"));
+  for (const suffix of ["-wal", "-shm"]) {
+    if (fs.existsSync(filename + suffix)) fs.renameSync(filename + suffix, path.join(root, "retired.sqlite" + suffix));
+  }
+  fs.renameSync(replacement, filename);
+  expect(await pipelineRegistryHealthAsync()).toEqual([]);
+});
+
+test("asynchronous evidence copies preserve nested isolation and batch project aliases", async () => {
+  const { root, row } = fixture();
+  fs.writeFileSync(path.join(root, "project-aliases.json"), JSON.stringify({ schemaVersion: 1, aliases: { synthetic: "canonical" }, displayNames: {} }));
+  const [first, second] = await Promise.all([loadPipelinesForStartupAsync(), loadPipelinesForStartupAsync()]);
+  expect(first).toEqual(second);
+  expect(first[0]!.project).toBe("canonical");
+  first[0]!.stages[0]!.prompt = "independent";
+  first[0]!.taskIds.push("local");
+  expect(second[0]!.stages[0]!.prompt).toBe(row.stages[0]!.prompt);
+  expect(second[0]!.taskIds).toEqual([]);
+});
+
+test("compact ownership preserves unknown owners, duplicate detection and independent copies", async () => {
+  const { root, row } = fixture();
+  const first = await loadPipelineOwnershipForStartupAsync();
+  first[0]!.attempts.push({ conversationId: "conversation_synthetic", state: "passed" });
+  expect((await loadPipelineOwnershipForStartupAsync())[0]!.attempts).toEqual([]);
+  const db = new Database(path.join(root, "state.sqlite"));
+  try {
+    db.query("UPDATE state_rows SET value_json=? WHERE collection='pipelines'").run(JSON.stringify({ ...row, state: "future-owner" }));
+    expect(await withPipelineStartupAdmission(async available => {
+      expect(available).toBe(true);
+      expect(await loadPipelineOwnershipForStartupAsync()).toEqual([]);
+      expect(await pipelineRegistryHealthAsync()).toMatchObject([{ id: row.id, reason: "unknown-but-preserved" }]);
+      return true;
+    }, undefined, undefined, true)).toBe(true);
+    db.query("INSERT INTO state_rows(collection,row_key,value_json,row_order,row_revision,controller_active) VALUES('pipelines_archive','duplicate',?,0,1,0)").run(JSON.stringify(row));
+    expect(await withPipelineStartupAdmission(async available => available, undefined, undefined, true)).toBe(false);
+    await expect(pipelineRegistryHealthAsync()).rejects.toThrow("contradictory identities");
+  } finally { db.close(); }
 });

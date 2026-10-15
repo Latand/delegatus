@@ -1,8 +1,16 @@
-# Cold board startup audit
+# Cold board startup
 
-Measured 2026-10-15, against main `45d25ac796d5824713c9fb57d65f57efea61041b`.
-This is a read-only investigation and a proposed implementation method. No
-application change or before/after acceptance result is included.
+The implemented restart path returns the first board bytes in
+**9.608–13.402 ms**, down from **14.215–15.427 seconds** in three paired cold
+runs on the same captured data. Complete raw bodies arrive in **27.614–43.682
+ms** after the request. This uses a previously completed summary and prepares
+the route before traffic; process creation through first data takes
+**3.610–3.751 seconds**. The measured implementation and its limits are in
+[Implementation and validation](#implementation-and-validation).
+
+The original audit below measured main
+`45d25ac796d5824713c9fb57d65f57efea61041b` on 2026-10-15. That stage made no
+application changes.
 
 The first substantive board response is `GET /api/files?view=summary`.
 On the captured production data, three fresh processes with empty board caches
@@ -206,8 +214,8 @@ margin.
 
 The next requests in C1/C2/C3 had TTFB **93.251 / 235.135 / 203.158 ms** and
 complete-body times **111.530 / 272.442 / 229.937 ms**. They followed response
-parsing in the driver and a 150 ms wait. These are warm controls, not an “after”
-implementation result or a claim that deferred initialization has fully settled.
+parsing in the driver and a 150 ms wait. These warm controls measure repeat requests. Deferred initialization may still
+be running during them.
 
 ### Projection worker detail
 
@@ -383,11 +391,181 @@ store and a later document reload, using the eventual agreed cache contract.
 The available read access answered the investigation questions. Remaining
 acceptance evidence is work for the implementation: the integrated summary
 bootstrap, real release-handover timing, browser behavior and three paired
-candidate runs. This audit changes only this report and leaves production,
-repository code, the index and commit history unchanged.
+candidate runs. The audit stage changed only this report and left production, application
+code, the index and commit history unchanged.
 
 Report validation: the local privacy gate passed with committed known-value
 fingerprints and this file selected explicitly. `git diff --no-index --check
 /dev/null docs/perf/cold-board-start.md` passed. No application test files were
 changed; no test suite was run against production or the pipeline worktree.
 The production build and isolated probes above ran only in the scratch export.
+
+
+## Implementation and validation
+
+The projection worker now persists a completed, healthy operator summary in
+`board-summary-bootstrap.bin`. One atomic replacement binds a versioned scope
+manifest, the exact JSON body and its gzip representation. The manifest contains
+the body ETag, lengths and a gzip checksum. Raw and compressed sections are each
+bounded at 256 MiB; the manifest is bounded at 4 KiB. An incompatible summary
+schema requires a version increment in `summaryBootstrap.ts`.
+
+Viewer registration loads the generated App Route, awaits its lazy userland
+module, and validates saved bytes before serving. The installed Next 16.3.8
+`AppRouteRouteModule.ensureUserland()` is necessary here: requiring the generated
+wrapper alone left module evaluation on the first request. Native
+`createRequire` is obtained through an ignored dynamic import so webpack retains
+the runtime lookup of the generated route. Both the compiled route and the
+ordinary source module share the same process-global bootstrap slot.
+
+The first unpinned operator summary can return those bytes before a scan starts.
+It carries the new process epoch, generation zero, target generation one and the
+existing stale marker. It supplies a full 200 response even when the client
+provides an old conditional base. Agent, full, pinned and explicit revision or
+generation reads retain their normal paths. A current write-health failure
+refuses the saved answer. The existing storage-health poll remains independent.
+
+The HTTP adapter schedules one refinement with Next's `after()`, after response
+completion. The ordinary projection cache takes over and releases the saved
+byte copies. A failed refinement leaves the saved response available and allows
+a later request to retry. The client continues using its existing generation
+completion chain. No browser persistence cap or poll contract changes.
+
+Body decoding, serialization and compression run in the projection worker. The
+Viewer validates hashes through asynchronous 256 KiB reads, without decoding or
+reserializing the full body. Delivery streams the validated bytes in 256 KiB
+chunks and yields between writes, allowing queued Viewer work to run during a
+large transfer. The regression holds refinement and checks independent queued
+work while consuming a 4 MiB saved response; the single-buffer response failed
+that assertion. A missing, truncated, corrupt or incompatible file
+uses the normal build path. Activation prepares that path under the release
+fence before publishing release readiness. A deployment's first cache fill can
+still take the full construction time after proxy appointment; the fast restart
+path requires a compatible artifact from a previous completed build.
+
+### Repeated production-build replay
+
+The implementation comparison uses main
+`0ce86fd1a182be224828562ae4650da295e235b8` and this change on top of it. Main's
+request tracing and other landed work are present on both sides. Both builds use
+Bun 1.4.0, Next 16.3.8 and the same dependency lock. The reference databases and
+transcript copy are the captured data described above. Each run receives a new
+writable state clone, while the reference databases and transcript roots remain
+read-only. Network and PID namespaces isolate every Viewer and its children.
+
+Each fresh process starts with no scan snapshot, response cache or in-memory
+projection. Both sides receive the same compatible summary artifact, produced
+by the candidate's real projection worker; baseline ignores it. OS page caches
+remain warm. Runs alternate baseline and candidate. Each receives the existing
+deployment page and capability health probes before its first board request;
+neither probe requests the board. The table reports that preparation separately.
+The Next listener banner precedes request-handler readiness and is insufficient
+as a traffic handover boundary.
+
+The raw and browser-gzip sequences each read the first summary, wait for
+generation one, and repeat the completed read. Runtime activation is deferred
+for these repeated samples. A separate proxy handover below enables activation
+and verifies the successor's persisted readiness record.
+
+| Cold run | Before TTFB | After TTFB | Before complete body | After complete body | Before preparation | After preparation |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 14,876.960 ms | 13.402 ms | 14,917.947 ms | 43.682 ms | 2,566.586 ms | 3,615.110 ms |
+| 2 | 15,427.138 ms | 9.608 ms | 15,457.216 ms | 27.614 ms | 2,940.056 ms | 3,723.125 ms |
+| 3 | 14,214.512 ms | 12.795 ms | 14,257.090 ms | 34.885 ms | 2,477.280 ms | 3,575.080 ms |
+
+Each raw body contains 33,384,460 bytes: 669 files, 1,703 tasks, 234 pipelines,
+zero flows and ten catalog projects. The isolated PID namespace changes two
+process-derived file entries relative to the historical audit; both sides of
+this final comparison have the same population. Candidate process creation to
+complete first body takes 3.610–3.751 seconds, including preparation. These
+results establish the first-request target after preparation. They do not
+establish a one-second process-creation-to-render target.
+
+| Additional cold gzip run | TTFB | Complete body | Wire bytes | Largest Viewer timer lateness during first body |
+| --- | ---: | ---: | ---: | ---: |
+| 1 | 6.959 ms | 94.501 ms | 6,741,074 | 17.846 ms |
+| 2 | 10.446 ms | 116.575 ms | 6,741,074 | 25.127 ms |
+| 3 | 12.697 ms | 94.581 ms | 6,741,074 | 15.926 ms |
+
+The first raw response's largest ten-millisecond-timer lateness was
+26.464 / 27.163 / 31.518 ms on the candidate and
+378.129 / 202.156 / 192.480 ms on baseline. The measurement includes timer
+samples whose delayed interval overlaps response completion. The new delivery
+path stayed below 50 ms in all six candidate samples. Subsequent refinement
+still exercises existing Viewer work: its largest raw-run lateness was
+193.923 / 201.893 / 159.726 ms. CPU profiles on both sides locate the largest
+shared scan-phase holds in SQLite `loadFull`/`decodeRow` and `patchSync` work.
+This change moves that existing work after first data; it does not remove it.
+Timer lateness includes scheduling delay and is not an exact CPU-hold duration.
+
+Generation-one responses completed 12.669–17.111 seconds after the first raw
+request. Across all ten repeated runs, canonical first and refined bodies have
+the same SHA-256, `4473ec6809c589a2be06a1b9096ae248d6f9379eee5dc3f09708ba5b5460a23d`.
+The comparison excludes only `systemHealth.storage.writes.freeBytes`, which is
+a live filesystem measurement, and preserves every board value and array order.
+Current write failures are checked before serving saved bytes and covered by a
+route regression. A separate cold run without the artifact returned through
+the ordinary path: 13,153.159 ms TTFB and 13,192.973 ms complete body.
+
+The replay ran under a three-CPU, 12 GiB command budget. No cgroup OOM or memory
+limit events occurred. Per-run quota and throttling deltas, source hashes,
+body hashes and timings are in
+[`server.json`](../../evidence/cold-board-summary/server.json). The reference
+database hashes were checked again after the replay. Raw bodies, profiles and
+copied state remain private.
+
+### Active handover and browser refinement
+
+An additional rehearsal starts predecessor and successor Viewers, prepares
+their real routes, then appoints each through the existing deployment proxy.
+Activation is enabled, with real persisted authority and release-readiness
+checks. Controllers operate only inside copied state and isolated network/PID
+namespaces; external agent executables are stubs. Both appointments reach
+release readiness. The successor's first gzip request returns its first byte
+17.251 ms after the request, 17.263 ms after appointment, and completes in
+132.426 ms. Its release-ready record appears 8,502.146 ms after appointment.
+This exercises the actual serving path during activation. The runtime-host
+source has no PR delta. Its separate two-generation rehearsal under Bun 1.4.0
+also passed succession, rollback and both retained endpoints.
+
+The existing kanban browser driver now exercises the actual `useFiles` consumer
+with saved generation zero followed by held generation one. Four cases cover
+an empty browser store and reload, each below and above the 24 MiB persistence
+cap. The small reload sends its saved conditional base; the oversized reload
+has no persisted base. All cases request generation one and preserve all
+sixteen cards' text and geometry after refinement. Saved and refined frames
+were captured, and representative pairs were visually inspected.
+
+This browser fixture uses sixteen cards and padding to exercise the byte cap.
+Its first-card frame follows the response by 87–444 ms; padded JSON decoding
+takes 5.7–10.9 ms. These measurements describe the fixture. Production-size
+server timing is recorded separately above. Browser measurements are in
+[`browser.json`](../../evidence/cold-board-summary/browser.json).
+
+### Verification record
+
+Focused tests use explicit paths through the owned gate runner, with fresh
+`HOME`, `XDG_CONFIG_HOME`, `TMPDIR` and `LLV_STATE_DIR` under the OS temp root
+and `LLV_VIEWER_CONTROL_URL` on a closed loopback port.
+
+- `summaryBootstrap.test.ts`, `route.test.ts` and `instrumentation.test.ts`:
+  194 passed, including corruption, representation boundaries, current write
+  health, generation membership changes, failure retry, held readiness and
+  response scheduling. The chunked-delivery regression failed with the original
+  single-buffer response and passed after the change.
+- `filesResponseWorker.test.ts`: 12 passed, including real worker persistence
+  and exclusion of full and agent representations.
+- `useFiles.test.ts`: 30 passed. The browser driver's selected cold-summary
+  case passed 24 assertions across four loads.
+- Production build, TypeScript, changed-file lint, whitespace and the local
+  privacy gate passed. The runtime-host rehearsal passed under the pinned Bun.
+- The related, unchanged `scanCache.catalogFreshness.test.tsx` has a timing
+  flake in its 150 ms fixture. The project comparator sampled baseline and
+  branch: baseline 3 pass / 1 fail, branch 2 pass / 2 fail, zero new failures.
+
+Final repeated replay, missing-cache replay and active handover all completed
+the owned runner's cleanup checks. No recorded outer sandbox PID remained.
+Earlier calibration runs are retained privately and excluded from the final
+tables; they exposed the lazy App Route load and whole-buffer delivery costs
+that the final implementation and regressions address. Production state and
+services were unchanged.

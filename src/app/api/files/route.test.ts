@@ -4363,6 +4363,19 @@ async function seedSummaryBootstrap(): Promise<string> {
   return body;
 }
 
+test("a large saved summary yields to queued work while its body is consumed", async () => {
+  const saved = JSON.parse(await seedSummaryBootstrap());
+  const body = JSON.stringify({ ...saved, padding: "x".repeat(4 * 1024 * 1024) });
+  await writeSummaryBootstrap(stateDir, body, `"${createHash("sha1").update(body).digest("hex")}"`);
+  const response = await GET(new Request("http://127.0.0.1/api/files?view=summary"), () => undefined);
+  let progressed = false;
+  const checkpoint = setImmediate(() => { progressed = true; });
+  try {
+    expect(await response.text()).toBe(body);
+    expect(progressed).toBe(true);
+  } finally { clearImmediate(checkpoint); }
+});
+
 test("cold summary returns saved bytes while one held scan refines concurrent reads", async () => {
   const saved = await seedSummaryBootstrap();
   let release!: () => void;
@@ -4425,11 +4438,12 @@ test("bootstrap gzip is the same full representation even with an old conditiona
   await GET(new Request("http://127.0.0.1/api/files?view=summary", { headers: { "x-llv-files-generation": "1" } }));
 });
 
-for (const headers of [
+const bootstrapRequiredHeaders: Record<string, string>[] = [
   { [VIEWER_SPAWN_CAPABILITY_HEADER]: "fixture-agent" },
   { "x-llv-files-revision": "1" },
   { "x-llv-files-generation": "1" },
-]) {
+];
+for (const headers of bootstrapRequiredHeaders) {
   test(`bootstrap respects ${Object.keys(headers)[0]}`, async () => {
     await seedSummaryBootstrap();
     const response = await GET(new Request("http://127.0.0.1/api/files?view=summary", { headers }));

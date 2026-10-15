@@ -921,7 +921,11 @@ export async function registerViewerRuntime(): Promise<void> {
     // Keep this native require outside webpack's source dependency graph:
     // the generated route only exists after that graph has been built.
     const { createRequire } = await import(/* webpackIgnore: true */ "node:module");
-    createRequire(path.join(process.cwd(), "package.json"))(compiledRoute);
+    const compiled = createRequire(path.join(process.cwd(), "package.json"))(compiledRoute) as {
+      routeModule: { ensureUserland(): Promise<void> };
+    };
+    // Next 16 loads App Route userland lazily, even after requirePage returns.
+    await compiled.routeModule.ensureUserland();
   }
   // Every candidate prepares the read-only board path before Next can serve
   // it. Activation starts after the proxy appoints a release, which is too
