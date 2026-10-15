@@ -179,7 +179,7 @@ async function tierOverrideFixture() {
   const now = ports.now();
   // Seed a bound structured attempt without launching an agent or runtime host.
   pipeline.state = "running";
-  pipeline.cursor = { stageId: stage.id, state: "running" };
+  pipeline.cursor = { stageId: stage.id, state: "running", input: null, activatedBy: null };
   pipeline.runs[0]!.attempts = [{
     n: 1, state: "running", effectiveRole: structuredClone(stage.effectiveRole),
     definition: { boundAt: now, stageDigest: stageDigest(stage), prompt: stage.prompt, account: accountA.id, role: null, sandbox: null, outputs: null },
