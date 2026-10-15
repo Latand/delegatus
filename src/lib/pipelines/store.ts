@@ -1370,7 +1370,6 @@ function reviveLoadedPipeline(pipeline: Pipeline, resolveProject: (project: stri
   };
 }
 
-let projectionCache: { signature: string; pipelines: Pipeline[] } | null = null;
 const pipelineStores = new Map<string, {
   active: SqliteStateCollection<Pipeline>;
   archive: SqliteStateCollection<Pipeline>;
@@ -1471,6 +1470,7 @@ function stores(): { active: SqliteStateCollection<Pipeline>; archive: SqliteSta
   if (held) return held;
   initializeStateCollections(filename, pipelineStateCollectionSeeds());
   const common = {
+    readCacheKey: JSON.stringify(["pipeline-v1", PIPELINE_ROLE_IDS]),
     schemaVersion: PIPELINES_SCHEMA_VERSION,
     busyMessage: "pipeline state is busy",
     key: (pipeline: Pipeline) => pipeline.id,
@@ -1514,21 +1514,10 @@ function archiveStore(): SqliteStateCollection<Pipeline> {
   return stores().archive;
 }
 
-function pipelinesFileSignature(): string {
-  return pipelineStore().signature();
-}
-
-/** The validated pipeline projection keeps the signature cache introduced for
-    the JSON store. SQLite collection revisions invalidate it across processes.
-    The records are the cache itself — only the exported readers below decide
-    what a caller may do with them. */
-function cachedPipelines(): Pipeline[] {
-  const before = pipelinesFileSignature();
-  if (projectionCache?.signature === before) return projectionCache.pipelines;
-  const pipelines = [...pipelineStore().loadReadonly()];
-  const after = pipelinesFileSignature();
-  if (before === after) projectionCache = { signature: after, pipelines };
-  return pipelines;
+/** SQLite revisions, database identity and project aliases validate the shared
+    read cache. The exported reader decides whether to copy its records. */
+function cachedPipelines(): readonly Pipeline[] {
+  return pipelineStore().loadReadonly();
 }
 
 /** Read-only load for request-path projections (issue #798): no lease, and the
@@ -1791,6 +1780,10 @@ const SETTLED_PIPELINE_ARCHIVE_AFTER_MS = 3 * 24 * 60 * 60 * 1000;
     the active collection. */
 export function loadArchivedPipelines(): Pipeline[] {
   return archiveStore().snapshot();
+}
+
+export function selectArchivedPipelines(select: (pipeline: Pipeline) => boolean, limit: number): Promise<Pipeline[]> {
+  return archiveStore().selectReadonlyAsync(select, limit);
 }
 
 function pipelineSettledForArchive(pipeline: Pipeline, nowMs: number): boolean {
