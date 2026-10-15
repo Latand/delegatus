@@ -37,7 +37,7 @@ test("all declarations execute through one allowlist, parameter schema and proje
     fleet: async () => ({ summary: { agents: { live: 1, running: 1 }, byEngine: { claude: [1, 1] } }, agents: [] }) });
   const context = { project: "fixture", sessionId: session.id, callId: "call-a", delegationId: "delegation-a", admission, reads, endConversation: () => { ended = true; } };
   const args: Record<string, Record<string, unknown>> = { list_tasks: {}, get_task: { taskId: "task-a" }, list_pipelines: {}, get_pipeline: { pipelineId: "pipeline-a" },
-    agent_activity: {}, agent_fleet: {}, get_orchestrator: {}, list_projects: {}, conversation_messages: { conversationId: "conversation_a" }, orchestrator_messages:{},search_transcripts:{query:"plan"},read_prototype_review:{taskId:"task-a"},view_prototype_frame:{taskId:"task-a",variants:[1]}, relay_owner_history: { action: "groups" }, orchestrator_reports: {}, reread_orchestrator_report: { report: null }, request_orchestrator_delegation: { instruction: "Review it", confirmation_reason: null },
+    agent_activity: {}, agent_fleet: {}, get_orchestrator: {}, list_projects: {}, conversation_messages: { conversationId: "conversation_a" }, orchestrator_messages:{},orchestrator_actions:{},show_orchestrator_message:{message:null,read_aloud:false},search_transcripts:{query:"plan"},read_prototype_review:{taskId:"task-a"},view_prototype_frame:{taskId:"task-a",variants:[1]}, relay_owner_history: { action: "groups" }, orchestrator_reports: {}, reread_orchestrator_report: { report: null }, request_orchestrator_delegation: { instruction: "Review it", confirmation_reason: null },
     resolve_orchestrator_confirmation: { decision: "send" }, end_conversation: {} };
   expect(COMPANION_TOOLS.map(row => row.name)).toEqual(COMPANION_TOOL_REGISTRY.map(row => row.name));
   for (const tool of COMPANION_TOOL_REGISTRY) {
@@ -245,4 +245,25 @@ test("before a send, each backend turn sees once what already waits for a report
   expect(await call("c10", "turn-6", { instruction: "То що з ревʼю?", pending_request: "r1" }, undefined, 6))
     .toMatchObject({ status: "answered", request: "r1", report: { text: "Ревʼю пройшло обидва раунди." } });
   expect(sent).toHaveLength(3);
+});
+
+
+test("orchestrator reads expose bounded continuation and every mutating tool has an action policy", async () => {
+  const { MUTATING_MCP_TOOL_NAMES } = await import("@/lib/mcp/server");
+  const { ACTION_LINES, NOT_SEAT_ACTIONS } = await import("./seatTranscript");
+  for (const name of MUTATING_MCP_TOOL_NAMES) expect(name in ACTION_LINES || NOT_SEAT_ACTIONS.has(name), name).toBe(true);
+  for (const name of ["orchestrator_messages", "orchestrator_actions", "show_orchestrator_message", "list_projects"]) {
+    const tool = COMPANION_TOOLS.find(tool => tool.name === name)!;
+    expect(tool.strict).toBe(true);
+    expect(tool.parameters.additionalProperties).toBe(false);
+    expect(tool.parameters.required).toEqual(Object.keys(tool.parameters.properties));
+  }
+  const properties = COMPANION_TOOLS.find(tool => tool.name === "orchestrator_messages")!.parameters.properties;
+  expect(Object.keys(properties).sort()).toEqual(["project", "message", "offset", "at", "before", "limit", "refresh"].sort());
+  for (const name of ["seat_tick_settings", "account_project_binding", "role_presets", "auto_updates", "curate_rules"]) {
+    expect(ACTION_LINES[name]({}, () => "")).toBeNull();
+  }
+  expect(ACTION_LINES.account_project_binding({action:"list"}, () => "")).toBeNull();
+  expect(ACTION_LINES.curate_rules({action:"read"}, () => "")).toBeNull();
+  expect(ACTION_LINES.pipeline_action({action:"preview-legacy-review"}, () => "")).toBeNull();
 });

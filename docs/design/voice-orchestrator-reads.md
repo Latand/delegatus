@@ -1,6 +1,6 @@
 # Voice reads the orchestrator's messages and actions
 
-Status: design, 2026-10-15. Base: `main` at `011a4fe97`. Code anchors below are
+Status: implemented, 2026-10-15. Design base: `main` at `011a4fe97`. Code anchors below are
 `file:line` on that commit.
 
 ## Originating requirement
@@ -585,6 +585,18 @@ card inside the lane, no overlap, the panel scrolls. The phone shows nothing new
 optional case in the "phone voice head" block of
 `src/components/mobile/issue1671Evidence.browser.test.tsx` can show the bubble while a
 message is read aloud.
+
+## Implementation evidence
+
+The voice boundary regression reproduces the October 12 failure on the design
+base and reads the second latest reply whole on the implementation. Focused tests
+also cover Unicode continuation, stable handles after appends, prompt labels,
+Claude and Codex actions, project names, credential masking, showing and speech.
+The 40 MiB fixture reads at most 2 MiB under `voice.orchestrator-read`.
+Rendered measurements are kept in
+[`evidence/voice-companion/orchestrator-message.json`](../../evidence/voice-companion/orchestrator-message.json),
+produced by the existing kanban browser driver at 1440 and 1000 pixels in both
+languages and themes. The lane and panel retain the complete message text.
 
 ## Deferred — not currently justified
 

@@ -32,8 +32,8 @@ test("the Live configuration exposes the explicit read allowlist and the delegat
   expect(LIVE_API_VERSION).toBe("v1/live");
   expect(LIVE_MODEL).toBe("gpt-live-1");
   expect(COMPANION_TOOLS.map(tool => tool.name)).toEqual([
-    "list_tasks", "get_task", "list_pipelines", "get_pipeline", "agent_activity", "conversation_messages", "orchestrator_messages", "search_transcripts", "read_prototype_review", "view_prototype_frame",
-    "agent_fleet", "get_orchestrator", "list_projects", "relay_owner_history", "orchestrator_reports", "reread_orchestrator_report", "request_orchestrator_delegation", "resolve_orchestrator_confirmation", "end_conversation",
+    "list_tasks", "get_task", "list_pipelines", "get_pipeline", "agent_activity", "conversation_messages", "orchestrator_messages", "orchestrator_actions", "search_transcripts", "read_prototype_review", "view_prototype_frame",
+    "agent_fleet", "get_orchestrator", "list_projects", "show_orchestrator_message", "relay_owner_history", "orchestrator_reports", "reread_orchestrator_report", "request_orchestrator_delegation", "resolve_orchestrator_confirmation", "end_conversation",
   ]);
   for (const locale of ["en", "uk"] as const) {
     const config = liveSessionConfiguration(locale);
@@ -160,4 +160,10 @@ test("both native voice transports receive the shared speech language restrictio
     expect(liveSessionConfiguration(locale).instructions).toContain("Speech recognition languages: uk, ru, en.");
     expect(codexVoiceStart("fixture", locale, "v=0").prompt).toContain("Speech recognition languages: uk, ru, en.");
   }
+});
+
+
+test("project ambiguity instructions never ask the operator for an internal key", () => {
+  expect(BACKEND_INSTRUCTIONS).not.toContain("display name and key");
+  expect(BACKEND_INSTRUCTIONS).toContain("never speak a handle");
 });

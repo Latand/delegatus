@@ -24,6 +24,9 @@ export function fixtureBoardReads(input: {
     async projectFor(kind,id) {if(kind === "task")return taskRows.find(row=>row.id===id)?.project??null;if(kind === "pipeline")return pipelineRows.find(row=>row.id===id)?.project??null;
       return (await input.activity("fixture")).find(row=>row.conversationId===id)?.project??null;},
     recipient:()=>"conversation_a",
+    seatMessages: async () => ({ rows: (await input.messages("conversation_a")).filter(row => row.role === "assistant").map((row,index) => ({ handle: `m${index}.0.000000`, text: row.text, time: null, after: "other", bytes: Buffer.byteLength(row.text) })), shown: 0, more: false, before: null, speech: "Orchestrator messages", truncated: false }),
+    seatActions: async () => ({ rows: [], shown: 0, more: false, before: null, speech: "0 actions", truncated: false }),
+    seatReply: async () => ({ status: "not_found" }),
     review:id=>paths.review(id),
     frame:async()=>({mime:"image/png",data:"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII="}),
     call:async(name,args,redactText)=>name==="search_transcripts" ? {items:[],total:0,nextCursor:null,projectScope:{resolved:args.project}} : name==="agent_fleet" ? await (input.fleet?.() ?? Promise.resolve({summary:{agents:{live:0,running:0},byEngine:{}},agents:[]})) : name==="agent_activity" ? {conversations:(await input.activity(String(args.project))).filter(row=>row.project===args.project),count:(await input.activity(String(args.project))).filter(row=>row.project===args.project).length}

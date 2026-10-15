@@ -44,6 +44,261 @@ const said = (delta: string, at: number, speaker: "input" | "output" = "input") 
 const spoken = (f: ReturnType<typeof fixture>) => f.provider.commands.filter(row => row.type === "session.commentary.append");
 const large = { input_tokens: 1_050_000, input_tokens_details: { cached_tokens: 0 }, output_tokens: 512 };
 
+async function seatVoiceFixture(lines: unknown[], engine: "claude" | "codex" = "claude", credential = "synthetic-credential") {
+  const { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } = await import("@/lib/orchestrator/seats");
+  const { productionDomainDependencies } = await import("@/lib/mcp/bindings");
+  const { createCompanionBoardReadPaths } = await import("./readPaths");
+  const { CompanionBoardReads } = await import("./boardReads");
+  const project = "voice-seat";
+  const filename = path.join(root, `seat-${engine}.jsonl`);
+  fs.writeFileSync(filename, lines.map(line => JSON.stringify(line)).join("\n") + "\n");
+  beginOrchestratorSeatIntent({ project, mandate: "Own this board", clientRequestId: "voice-seat", mode: "spawn", promptVersion: null });
+  completeOrchestratorSeatIntent({ project, clientRequestId: "voice-seat", conversationId: "conversation_voice_seat", path: filename });
+  const paths = createCompanionBoardReadPaths({ domain: { ...productionDomainDependencies, taskSelectionSource: undefined,
+    pipelineSelectionSource: undefined, listTaskRecords: () => [], listPipelineRecords: () => [],
+  }, transcript: {
+    selectedContext: { selectedConversation: () => ({ resolve: id => id === "conversation_voice_seat" ? { conversationId: id, engine, path: filename, project } : null,
+      readTail: () => { throw new Error("No whole transcript read"); } }), pathAllowed: candidate => candidate === filename },
+    pinnedTranscript: candidate => { expect(candidate).toBe(filename); const descriptor = fs.openSync(candidate, "r");
+      return { descriptor, stat: fs.fstatSync(descriptor), rootName: "claude-projects", root, sameIdentity: () => true }; },
+  } });
+  const f = fixture(credential);
+  const reads = new CompanionBoardReads(paths);
+  const service = new CompanionLiveSessions(f.storage, f.admission, reads, f.provider, { key: () => credential, timers: false });
+  const s = await service.start({ project, locale: "en", sdp: "v=0" });
+  let turn = 0;
+  return { ...f, reads, service, s, filename, async tool(name: string, args: Record<string, unknown> = {}) {
+    const id = `seat-read-${++turn}`;
+    f.provider.responder = calling(functionCall(id, name, args));
+    f.provider.replay(s.providerId, delegationCreated(id, turn * 1000));
+    await service.drain(s.sessionId);
+    return JSON.parse(String(f.provider.requests.at(-1)!.input.filter(item => item.type === "function_call_output").at(-1)!.output));
+  } };
+}
+const seatLine = (role: "user" | "assistant", text: string, second: number) => ({ type: role,
+  timestamp: `2026-10-12T06:37:${String(second).padStart(2, "0")}.000Z`, message: { role, content: [{ type: "text", text }] } });
+
+test("October 12: the second latest orchestrator message is whole in one voice tool round and older handles survive appends", async () => {
+  const reply = "Перевірка повідомлення.\n".repeat(80);
+  const f = await seatVoiceFixture([seatLine("user", "Earlier question", 0), seatLine("assistant", "Earlier answer", 1),
+    seatLine("user", "[Voice Delegatus reply: read the answer]", 2), seatLine("assistant", "One short note", 3),
+    seatLine("assistant", reply, 4), seatLine("assistant", "Reply options below the message.", 5)]);
+  try {
+    const result = await f.tool("orchestrator_messages", { project: null, message: null, offset: null, at: null, before: null, limit: null, refresh: null });
+    expect(result.rows[1]).toMatchObject({ text: reply, after: "voice" });
+    expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThanOrEqual(16000);
+    expect(f.provider.requests).toHaveLength(2);
+    fs.appendFileSync(f.filename, [seatLine("user", "Seat tick — check progress", 6), seatLine("assistant", "Wake bulletin", 7)].map(line => JSON.stringify(line)).join("\n") + "\n");
+    const older = await f.tool("orchestrator_messages", { before: result.rows[2].handle });
+    expect(older.rows.map((row: { text: string }) => row.text)).toEqual(["Earlier answer"]);
+  } finally { await f.service.close(f.s.sessionId); }
+});
+
+test("voice reads a long Unicode message in two calls and targets stable handles or times", async () => {
+  const long = ("Їжак 🎙 перевіряє рядок.\n".repeat(400));
+  expect(Buffer.byteLength(long)).toBeGreaterThan(12000);
+  expect(Buffer.byteLength(long)).toBeLessThan(24000);
+  const f = await seatVoiceFixture([seatLine("user", "Typed request", 0), seatLine("assistant", "Earlier reply", 1), seatLine("assistant", long, 3)]);
+  try {
+    const first = await f.tool("orchestrator_messages");
+    const row = first.rows[0];
+    expect(row.text.endsWith("\n")).toBe(true);
+    expect(row.text).not.toContain("\uFFFD");
+    expect(Buffer.byteLength(row.text)).toBeLessThanOrEqual(12000);
+    const second = await f.tool("orchestrator_messages", { message: row.rest.message, offset: row.rest.offset });
+    expect(second.item.next).toBeNull();
+    expect(row.text + second.item.text).toBe(long);
+    const timed = await f.tool("orchestrator_messages", { at: "2026-10-12T06:37:02Z" });
+    expect(timed.item.text).toBe("Earlier reply");
+    const exact = await f.tool("orchestrator_messages", { message: timed.item.handle });
+    expect(exact.item.text).toBe("Earlier reply");
+    const stale = row.handle.replace(/[0-9a-f]{6}$/u, "000000");
+    expect(await f.tool("orchestrator_messages", { message: stale })).toMatchObject({ status: "stale_handle" });
+    const invalid = row.handle.replace(/^m([^.]+)/u, (_whole: string, seq: string) => `m${(parseInt(seq, 36) + 1).toString(36)}`);
+    expect(await f.tool("orchestrator_messages", { message: invalid })).toMatchObject({ status: "not_found" });
+    for (const value of [first, second, timed, exact]) expect(Buffer.byteLength(JSON.stringify(value))).toBeLessThanOrEqual(16000);
+  } finally { await f.service.close(f.s.sessionId); }
+});
+
+test("voice labels the opening prompts and Codex commentary and final replies match Claude", async () => {
+  const { relayMessageText } = await import("@/lib/orchestrator/relayText");
+  const { prototypeTask } = await import("./prototypeRead.fixture");
+  const { prototypeDecisionText } = await import("@/lib/prototypeReview/decision");
+  const { composeSpawnNotice } = await import("@/lib/spawnNotice/sweep");
+  const task = prototypeTask();
+  const producer = fixture(); const request = producer.admission.create({ project: "fixture", locale: "en", authority: "live-model" });
+  await producer.admission.delegate(request.id, "voice-envelope", "voice-envelope", "Read the answer");
+  const voiceText = Object.values(producer.admission.session(request.id).proposals)[0].text!;
+  const form = prototypeDecisionText(task, { ...task.prototypeReviews![0], questions: [] }, { chosen: [1], comment: "Use the first", answers: [] });
+  const notice = composeSpawnNotice({ child: "conversation_worker", title: "Checks", final: { text: "All checks pass", error: null }, turns: [{ kind: "turn", childConversationId: "conversation_worker", turnId: "worker-turn", launcherConversationId: "conversation_seat", outcome: "completed", startedAt: null, endedAt: "2026-10-15T12:00:00Z", state: "pending", reason: null, recipientConversationId: null, clientMessageId: null, operationId: null, settledAt: null }] });
+  const prompts = ["Seat tick — progress", voiceText, form, relayMessageText("Please inspect the lane", "Another project"), notice, "Typed question"];
+  for (const engine of ["claude", "codex"] as const) {
+    fs.rmSync(path.join(root, "state"), { recursive: true, force: true });
+    const lines = prompts.flatMap<unknown>((prompt, index) => engine === "claude"
+      ? [seatLine("user", prompt, index * 2), seatLine("assistant", `Answer ${index}`, index * 2 + 1)]
+      : [{ type: "response_item", timestamp: seatLine("user", "", index * 2).timestamp, payload: { type: "message", role: "user", content: [{ type: "input_text", text: prompt }] } },
+        { type: "response_item", timestamp: seatLine("assistant", "", index * 2 + 1).timestamp, payload: { type: "agentMessage", phase: index % 2 ? "final_answer" : "commentary", text: `Answer ${index}` } }]);
+    const f = await seatVoiceFixture(lines, engine);
+    try {
+      const result = await f.tool("orchestrator_messages", { limit: 12 });
+      expect(result.rows.map((row: { text: string; after: string }) => [row.text, row.after])).toEqual([
+        ["Answer 5", "other"], ["Answer 4", "agent"], ["Answer 3", "relay"], ["Answer 2", "form"], ["Answer 1", "voice"], ["Answer 0", "wake"]]);
+      expect(new Set(result.rows.map((row: { handle: string }) => row.handle)).size).toBe(6);
+    } finally { await f.service.close(f.s.sessionId); }
+  }
+});
+
+test("showing the newest reply keeps its whole turn on one card, speaks every line and supports silent show and reread", async () => {
+  const reply = Array.from({ length: 35 }, (_, index) => `**Fact ${index + 1}:** the release check passed on every platform with recorded results.`).join("\n");
+  const f = await seatVoiceFixture([seatLine("user", "[Voice Delegatus reply: whole answer]", 0), seatLine("assistant", "Opening note", 1),
+    seatLine("assistant", reply, 2), seatLine("assistant", "Closing note", 3), seatLine("user", "Seat tick — new work has not answered yet", 4)]);
+  try {
+    const result = await f.tool("show_orchestrator_message", { message: null, read_aloud: true });
+    expect(result.status).toBe("reading");
+    const events = f.admission.events(f.s.sessionId, 0).filter(row => row.type === "orchestrator.report");
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ status: "message", text: `Opening note\n\n${reply}\n\nClosing note` });
+    const entries = f.service.transcriptRecord(f.s.sessionId).entries.filter(row => row.kind === "report");
+    expect(entries).toHaveLength(1);
+    expect(entries[0].data.text).toBe(`Opening note\n\n${reply}\n\nClosing note`);
+    const speech = f.provider.commands.filter(row => row.type === "session.commentary.append").map(row => String(row.content));
+    for (const part of speech) expect(Buffer.byteLength(part)).toBeLessThanOrEqual(500);
+    const joined = speech.join("\n");
+    expect(joined).not.toContain("**");
+    let previous = -1;
+    for (const line of ["Opening note", ...reply.split("\n").map(line => line.replaceAll("**", "")), "Closing note"]) {
+      const at = joined.indexOf(line); expect(at).toBeGreaterThan(previous); previous = at;
+    }
+    const count = f.provider.commands.length;
+    expect(await f.tool("show_orchestrator_message", { message: null, read_aloud: false })).toMatchObject({ status: "shown" });
+    expect(f.admission.events(f.s.sessionId, 0).filter(row => row.type === "orchestrator.report")).toHaveLength(1);
+    expect(f.provider.commands.slice(count).filter(row => row.type === "session.commentary.append" && !row.delegation_id)).toHaveLength(0);
+    expect(await f.tool("reread_orchestrator_report", { report: null })).toMatchObject({ status: "reading" });
+    expect(f.provider.commands.slice(count).filter(row => row.type === "session.commentary.append" && !row.delegation_id).map(row => row.content).join("\n")).toContain("Fact 35:");
+  } finally { await f.service.close(f.s.sessionId); }
+});
+
+test("the panel tool record keeps a 15000 character read whole", async () => {
+  const f = fixture();
+  const service = new CompanionLiveSessions(f.storage, f.admission, f.reads, f.provider, { key: () => "synthetic-credential", timers: false });
+  const s = await service.start({ project: "fixture", locale: "en", sdp: "v=0" });
+  const original = { speech: "One message", rows: [{ text: "a".repeat(15000) }], truncated: false };
+  const read = spyOn(f.reads, "read").mockResolvedValue(original);
+  try {
+    f.provider.responder = calling(functionCall("whole-panel", "orchestrator_messages", {}));
+    f.provider.replay(s.providerId, delegationCreated("whole-panel", 100)); await service.drain(s.sessionId);
+    const entry = service.transcriptRecord(s.sessionId).entries.find(row => row.kind === "tool")!;
+    expect(JSON.parse(String(entry.data.result))).toEqual(original);
+  } finally { read.mockRestore(); await service.close(s.sessionId); }
+});
+
+test("voice actions pair real Claude results and Codex MCP items, exclude reads and shell, and page by stable call position", async () => {
+  const call = (id: string, tool: string, input: Record<string, unknown>, second: number) => ({ ...seatLine("assistant", "", second),
+    message: { content: [{ type: "tool_use", id, name: tool, input }] } });
+  const result = (id: string, value: unknown, second: number) => ({ ...seatLine("user", "", second),
+    message: { content: [{ type: "tool_result", tool_use_id: id, content: JSON.stringify(value) }] } });
+  const f = await seatVoiceFixture([
+    call("start", "mcp__viewer__create_pipeline", { task: "Ship the parser" }, 0), result("start", { ok: true }, 1),
+    call("merge", "mcp__delegatus__pipeline_action", { pipelineId: "lane-fixture", action: "retry-merge" }, 2), result("merge", { ok: true }, 3),
+    call("task", "mcp__viewer__update_task", { taskId: "task-fixture", status: "done" }, 4), result("task", { ok: false, code: "REFUSED" }, 5),
+    call("deploy", "mcp__viewer__deploy_exact_sha", { sha: "0123456789abcdef" }, 6), result("deploy", { ok: true }, 7),
+    call("read", "mcp__viewer__list_tasks", {}, 8), result("read", { ok: true }, 9),
+    call("bash", "Bash", { command: "status" }, 10), result("bash", {}, 11),
+    call("settings", "mcp__viewer__account_project_binding", { action: "list" }, 12), result("settings", {}, 13),
+    call("pending", "mcp__viewer__bridge_report", { summary: "Checks finished" }, 14),
+  ]);
+  try {
+    const actions = await f.tool("orchestrator_actions");
+    expect(actions.rows.map((row: { outcome: string }) => row.outcome)).toEqual(["running", "done", "failed", "done", "done"]);
+    expect(actions.rows[0].action).toContain("Checks finished");
+    expect(actions.rows[3].action).toContain("merge queue");
+    expect(Buffer.byteLength(JSON.stringify(actions))).toBeLessThanOrEqual(6000);
+    const first = await f.tool("orchestrator_actions", { limit: 2 });
+    const older = await f.tool("orchestrator_actions", { before: first.before });
+    expect(older.rows).toEqual(actions.rows.slice(2));
+    const since = await f.tool("orchestrator_actions", { since: "2026-10-12T06:37:06Z" });
+    expect(since.rows).toHaveLength(2);
+  } finally { await f.service.close(f.s.sessionId); }
+  fs.rmSync(path.join(root, "state"), { recursive: true, force: true });
+  const codex = await seatVoiceFixture(["completed", "failed"].map((status, index) => ({ type: "response_item", timestamp: seatLine("assistant", "", index).timestamp,
+    payload: { type: "McpToolCall", id: `codex-${index}`, server: "viewer", tool: "create_pipeline", arguments: { task: `Lane ${index}` }, status, result: { content: [{ type: "text", text: JSON.stringify({ ok: status === "completed" }) }] } } })), "codex");
+  try {
+    const actions = await codex.tool("orchestrator_actions");
+    expect(actions.rows).toMatchObject([{ action: "Started lane «Lane 1»", outcome: "failed" }, { action: "Started lane «Lane 0»", outcome: "done" }]);
+  } finally { await codex.service.close(codex.s.sessionId); }
+});
+
+test("whole orchestrator reads and speech mask credentials before the byte cutoff and across newlines", async () => {
+  const key = ["Zr9QvB", "voice", "private", "0123456789abcdef"].join("-");
+  const text = "ї".repeat(5997) + key + " tail\n" + key.slice(0, 6) + "\n" + key.slice(6) + " safe end";
+  const f = await seatVoiceFixture([seatLine("user", "Read it whole", 0), seatLine("assistant", text, 1)], "claude", key);
+  try {
+    const result = await f.tool("orchestrator_messages");
+    expect(result.rows[0].rest).toBeDefined();
+    const next = await f.tool("orchestrator_messages", { message: result.rows[0].rest.message, offset: result.rows[0].rest.offset });
+    expect(result.rows[0].text + next.item.text).toContain("[redacted] tail\n[redacted] safe end");
+    await f.tool("show_orchestrator_message", { message: result.rows[0].handle, read_aloud: true });
+    const { withoutSeparators } = await import("./redaction");
+    for (const surface of [JSON.stringify(f.provider.requests), JSON.stringify(f.admission.events(f.s.sessionId, 0)),
+      JSON.stringify(f.service.transcriptRecord(f.s.sessionId)), JSON.stringify(f.provider.commands)]) {
+      expect(withoutSeparators(surface)).not.toContain(key.slice(0, 6));
+      expect(withoutSeparators(surface)).not.toContain(key);
+    }
+  } finally { await f.service.close(f.s.sessionId); }
+});
+
+test("voice project labels select the seated project over a legacy key, handles select one namesake and no internal key reaches the model", async () => {
+  const { persistProjectAliases } = await import("@/lib/projects/aliases");
+  const { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } = await import("@/lib/orchestrator/seats");
+  const { createCompanionBoardReadPaths } = await import("./readPaths");
+  const { productionDomainDependencies } = await import("@/lib/mcp/bindings");
+  const { CompanionBoardReads } = await import("./boardReads");
+  const a = `repo-${"1".repeat(32)}`, b = `repo-${"2".repeat(32)}`, unnamed = `repo-${"3".repeat(32)}`;
+  persistProjectAliases([{ source: "old-orion", target: a, displayName: "Orion Works" }, { source: "old-beta", target: b, displayName: "Beta" }]);
+  for (const project of [a, b, unnamed]) {
+    beginOrchestratorSeatIntent({ project, mandate: "Own the board", clientRequestId: project, mode: "spawn", promptVersion: null });
+    completeOrchestratorSeatIntent({ project, clientRequestId: project, conversationId: `conversation_${project}`, path: null });
+  }
+  const tasks = [a, b, "Orion Works"].map((project, index) => ({ id: `name-task-${index}`, project, text: `Task ${index}`, status: "inbox" }));
+  const reads = new CompanionBoardReads(createCompanionBoardReadPaths({ domain: { ...productionDomainDependencies, taskSelectionSource: undefined, pipelineSelectionSource: undefined,
+    listTaskRecords: () => tasks as import("@/lib/tasks/types").BoardTask[], listPipelineRecords: () => [] } }));
+  const f = fixture(); const service = new CompanionLiveSessions(f.storage, f.admission, reads, f.provider, { key: () => "synthetic-credential", timers: false });
+  const s = await service.start({ project: a, locale: "en", sdp: "v=0" }); let turn = 0;
+  const read = async (name: string, args: Record<string, unknown>) => {
+    const id = `name-read-${++turn}`; f.provider.responder = calling(functionCall(id, name, args));
+    f.provider.replay(s.providerId, delegationCreated(id, turn * 1000)); await service.drain(s.sessionId);
+    return JSON.parse(String(f.provider.requests.at(-1)!.input.find(item => item.type === "function_call_output")!.output));
+  };
+  try {
+    expect(await read("list_tasks", { project: "Orion Works" })).toMatchObject({ rows: [{ handle: "name-task-0" }] });
+    await service.context(s.sessionId, b);
+    expect(await read("list_tasks", { project: "Orion Works", refresh: true })).toMatchObject({ rows: [{ handle: "name-task-0" }] });
+    const list = await read("list_projects", {});
+    expect(list.rows.map((row: { name: string }) => row.name)).toEqual(["Beta", "Orion Works", "Unnamed project"]);
+    expect(list.rows[0].inView).toBe(true);
+    expect(await read("list_tasks", { project: list.rows[1].handle })).toMatchObject({ rows: [{ handle: "name-task-0" }] });
+    await service.context(s.sessionId, unnamed);
+    expect(await read("list_tasks", { project: "Unnamed project" })).toMatchObject({ total: 0 });
+    expect(await read("list_tasks", { project: "Проєкт без назви" })).toMatchObject({ total: 0 });
+    for (const surface of [JSON.stringify(list), JSON.stringify(f.provider.requests), JSON.stringify(f.provider.sessions), JSON.stringify(f.provider.commands)])
+      expect(surface).not.toMatch(/\b(?:repo|dir)-[0-9a-f]{16,}\b/u);
+  } finally { await service.close(s.sessionId); }
+});
+
+test("show deduplicates within a delegation before reading and refuses a full speech queue without a partial card", async () => {
+  const f = fixture(); const session = f.admission.create({ project: "fixture", locale: "en", authority: "live-model" });
+  let reads = 0;
+  const read = async () => { reads++; return { handle: "m1.0.123456", text: "The complete message", time: "2026-10-15T12:00:00Z" }; };
+  const args = [session.id, "same-turn", "fixture", null, true, read] as const;
+  const [first, second] = await Promise.all([f.admission.showMessage(...args), f.admission.showMessage(...args)]);
+  expect([first.status, second.status, reads]).toEqual(["reading", "reading", 1]);
+  expect(f.admission.events(session.id, 0).filter(row => row.type === "orchestrator.report")).toHaveLength(1);
+  f.storage.change(document => { document.sessions[session.id].reportSpeech = Array.from({ length: 64 }, (_, index) => ({ reportId: `queued-${index}`, project: "fixture", status: "result", text: "Queued", handed: 0 })); });
+  expect(await f.admission.showMessage(session.id, "busy-turn", "fixture", null, true, read)).toMatchObject({ status: "busy" });
+  expect(reads).toBe(1);
+  expect(f.admission.events(session.id, 0).filter(row => row.type === "orchestrator.report")).toHaveLength(1);
+});
+
 test("real voice scope refusals explain that nothing was read and PR cache follows the project in view", async () => {
   const { replaceConversationCatalog } = await import("@/lib/scanner/conversationCatalog");
   const { productionDomainDependencies } = await import("@/lib/mcp/bindings");
@@ -74,6 +329,7 @@ test("real voice scope refusals explain that nothing was read and PR cache follo
     await service.context(s.sessionId, "board-b");
     expect(await read({ query: "2800" })).toMatchObject({ total: 1, rows: [{ handle: "task-board-b" }] });
     expect(dispatched).toBe(2);
+    await service.context(s.sessionId, null);
     for (const [project, code] of [["Unknown", "PROJECT_REFUSED"], ["Duplicate", "PROJECT_AMBIGUOUS"]]) {
       const answer = await read({ project, query: "PR 2800" });
       expect(answer).toMatchObject({ status: "refused", code });
@@ -1549,6 +1805,11 @@ test("current-view context updates the same provider call and a named project ta
   const { productionDomainDependencies } = await import("@/lib/mcp/bindings");
   const { createCompanionBoardReadPaths } = await import("./readPaths");
   const { CompanionBoardReads } = await import("./boardReads");
+  const { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } = await import("@/lib/orchestrator/seats");
+  for (const project of ["project-0", "project-1"]) {
+    beginOrchestratorSeatIntent({ project, mandate: "Own the board", clientRequestId: project, mode: "spawn", promptVersion: null });
+    completeOrchestratorSeatIntent({ project, clientRequestId: project, conversationId: `conversation_${project}`, path: null });
+  }
   const at = "2026-10-10T12:00:00.000Z";
   const taskFile = path.join(root, "context-store", "tasks.json");
   replaceConversationCatalog(["Alpha","Beta"].map((projectName,index)=>({path:path.join(root,`${index}.jsonl`),root:"claude-projects" as const,name:"fixture",project:`project-${index}`,projectName,title:"Fixture",firstPrompt:"",engine:"claude" as const,kind:"session",fmt:"claude" as const,mtime:0,size:0})));
@@ -1946,20 +2207,20 @@ test("voice start supplies the project directory and the cheap read refreshes it
   const service = new CompanionLiveSessions(f.storage, f.admission, reads, f.provider, { key: () => "synthetic-credential", timers: false });
   const session = await service.start({ project: "orion", locale: "en", sdp: "v=0" });
   try {
-    expect(f.provider.sessions[0].memory).toContain('"displayName":"Orion Works"');
-    expect(f.provider.sessions[0].memory).toContain('"openTaskCount":1');
-    f.provider.responder = calling(functionCall("directory-read", "list_projects", {}));
+    expect(f.provider.sessions[0].memory ?? "").not.toContain('"project":"orion"');
+
+    f.provider.responder = calling(functionCall("directory-read", "list_projects", { all: true }));
     f.provider.replay(session.providerId, delegationCreated("directory-delegation", 100));
     await service.drain(session.sessionId);
     const output = f.provider.requests.at(-1)!.input.filter(item => item.type === "function_call_output").at(-1)!;
-    expect(JSON.parse(output.output as string)).toMatchObject({ rows: [{ project: "orion", displayName: "Orion Works", liveSeat: false, openTaskCount: 1 }] });
+    expect(JSON.parse(output.output as string)).toMatchObject({ rows: [{ name: "Orion Works", orchestrator: false, openTasks: 1 }] });
     tasks.push({ id: "orion-next", project: "orion", text: "Next", status: "assigned" });
     await service.context(session.sessionId, null);
-    f.provider.responder = calling(functionCall("directory-refresh", "list_projects", { refresh: true }));
+    f.provider.responder = calling(functionCall("directory-refresh", "list_projects", { all: true, refresh: true }));
     f.provider.replay(session.providerId, delegationCreated("directory-refresh-delegation", 200));
     await service.drain(session.sessionId);
     const refreshed = f.provider.requests.at(-1)!.input.filter(item => item.type === "function_call_output").at(-1)!;
-    expect(JSON.parse(refreshed.output as string)).toMatchObject({ rows: [{ project: "orion", openTaskCount: 2 }] });
+    expect(JSON.parse(refreshed.output as string)).toMatchObject({ rows: [{ name: "Orion Works", openTasks: 2 }] });
   } finally { await service.close(session.sessionId); }
 });
 
@@ -1975,17 +2236,18 @@ test("voice names both designated candidates on a genuine ambiguity and reads no
     beginOrchestratorSeatIntent({ project, mandate: "Own the board", clientRequestId: project, mode: "spawn", promptVersion: null });
     completeOrchestratorSeatIntent({ project, clientRequestId: project, conversationId: `conversation_${project}`, path: null });
   }
-  const paths = createCompanionBoardReadPaths(); let read = 0;
+  const { productionDomainDependencies } = await import("@/lib/mcp/bindings");
+  const paths = createCompanionBoardReadPaths({ domain: { ...productionDomainDependencies, taskSelectionSource: undefined, pipelineSelectionSource: undefined, listTaskRecords: () => [], listPipelineRecords: () => [] } }); let read = 0;
   const reads = new CompanionBoardReads({ ...paths, call: async (...args) => { read++; return paths.call(...args); } });
   const service = new CompanionLiveSessions(f.storage, f.admission, reads, f.provider, { key: () => "synthetic-credential", timers: false });
-  const session = await service.start({ project: "orion-first", locale: "en", sdp: "v=0" });
+  const session = await service.start({ project: "unrelated", locale: "en", sdp: "v=0" });
   try {
     f.provider.responder = calling(functionCall("ambiguity-read", "list_tasks", { project: "orion works" }));
     f.provider.replay(session.providerId, delegationCreated("ambiguity", 100));
     await service.drain(session.sessionId);
     const result = JSON.parse(f.provider.requests.at(-1)!.input.filter(item => item.type === "function_call_output").at(-1)!.output as string);
     expect(result).toMatchObject({ status: "refused", code: "PROJECT_AMBIGUOUS", candidates: [
-      { project: "orion-first", name: "Orion Works" }, { project: "orion-second", name: "ORION WORKS" },
+      { handle: expect.stringMatching(/^p[0-9a-f]{8}$/), name: "Orion Works (orchestrator 1)" }, { handle: expect.stringMatching(/^p[0-9a-f]{8}$/), name: "ORION WORKS (orchestrator 2)" },
     ] });
     expect(result.speech).toContain("Ask which project"); expect(read).toBe(0);
   } finally { await service.close(session.sessionId); }

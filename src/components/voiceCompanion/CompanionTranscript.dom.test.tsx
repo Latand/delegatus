@@ -35,6 +35,24 @@ async function open(onClose = () => {}) {
   await act(async () => settle());
   return { view: host.querySelector<HTMLElement>("[data-companion-transcript-view]")!, record };
 }
+
+test("an orchestrator message keeps its complete text and localized label on the existing panel card", async () => {
+  const { setLocale } = await import("@/lib/i18n");
+  for (const locale of ["en", "uk"] as const) {
+    await act(async () => setLocale(locale));
+    const { record } = await open();
+    const text = "Whole message line.\n".repeat(400);
+    record.entries.push({ id: "report-message", kind: "report", atMs: 100000, order: 999, data: { status: "message", projectName: "Atlas", text } });
+    await act(async () => mounted!.root.render(<CompanionTranscript record={{ ...record, entries: [...record.entries] }} left={0} top={0} width={360} height={560} onClose={() => {}} />));
+    const card = mounted!.host.querySelector("[data-transcript-report]")!;
+    expect(card.textContent).toContain(locale === "uk" ? "Повідомлення" : "Message");
+    expect(card.querySelector(".vc-answer")!.textContent).toBe(text);
+    await click(card.querySelector("button"));
+    expect(written.at(-1)).toBe(text);
+    await act(async () => mounted!.root.unmount()); mounted!.host.remove(); mounted = null;
+  }
+  await act(async () => setLocale("en"));
+});
 const click = async (element: Element | null | undefined) => {
   expect(element).toBeTruthy();
   await act(async () => (element as HTMLElement).click());
