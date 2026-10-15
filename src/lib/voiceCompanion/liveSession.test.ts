@@ -116,6 +116,8 @@ test("voice reads a long Unicode message in two calls and targets stable handles
     expect(await f.tool("orchestrator_messages", { message: stale })).toMatchObject({ status: "stale_handle" });
     const invalid = row.handle.replace(/^m([^.]+)/u, (_whole: string, seq: string) => `m${(parseInt(seq, 36) + 1).toString(36)}`);
     expect(await f.tool("orchestrator_messages", { message: invalid })).toMatchObject({ status: "not_found" });
+    expect(await f.tool("orchestrator_messages", { before: invalid })).toMatchObject({ status: "not_found" });
+    expect(await f.tool("orchestrator_messages", { before: row.handle.replace(/\.\d+\./u, ".999.") })).toMatchObject({ status: "not_found" });
     for (const value of [first, second, timed, exact]) expect(Buffer.byteLength(JSON.stringify(value))).toBeLessThanOrEqual(16000);
   } finally { await f.service.close(f.s.sessionId); }
 });
@@ -146,6 +148,19 @@ test("voice labels the opening prompts and Codex commentary and final replies ma
       expect(new Set(result.rows.map((row: { handle: string }) => row.handle)).size).toBe(6);
     } finally { await f.service.close(f.s.sessionId); }
   }
+});
+
+test("an early line break followed by one long Unicode line still takes only two reads", async () => {
+  const text = "Короткий вступ.\n" + "ї🎙".repeat(3300);
+  const f = await seatVoiceFixture([seatLine("assistant", text, 0)]);
+  try {
+    const first = await f.tool("orchestrator_messages");
+    const rest = first.rows[0].rest;
+    const second = await f.tool("orchestrator_messages", { message: rest.message, offset: rest.offset });
+    expect(second.item.next).toBeNull();
+    expect(first.rows[0].text + second.item.text).toBe(text);
+    expect(f.provider.requests).toHaveLength(4);
+  } finally { await f.service.close(f.s.sessionId); }
 });
 
 test("showing the newest reply keeps its whole turn on one card, speaks every line and supports silent show and reread", async () => {
@@ -216,6 +231,8 @@ test("voice actions pair real Claude results and Codex MCP items, exclude reads 
     const first = await f.tool("orchestrator_actions", { limit: 2 });
     const older = await f.tool("orchestrator_actions", { before: first.before });
     expect(older.rows).toEqual(actions.rows.slice(2));
+    const invalid = first.before.replace(/^m([^.]+)/u, (_whole: string, seq: string) => `m${(parseInt(seq, 36) + 1).toString(36)}`);
+    expect(await f.tool("orchestrator_actions", { before: invalid })).toMatchObject({ status: "not_found" });
     const since = await f.tool("orchestrator_actions", { since: "2026-10-12T06:37:06Z" });
     expect(since.rows).toHaveLength(2);
   } finally { await f.service.close(f.s.sessionId); }

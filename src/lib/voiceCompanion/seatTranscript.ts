@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { readSync } from "node:fs";
 import { readMessagesPage, type ConversationMessage, type MessagesPage, type MessagesPageCursor, type MessagesPageSource } from "@/lib/session/messagesPage";
 import type { SessionToolCall } from "@/lib/session/reader";
 import { isViewerMcpServer } from "@/lib/mcp/presentation";
@@ -21,6 +22,19 @@ function position(filename: string, value: unknown): { seq: number; part: number
   const seq = parseInt(match[1], 36), part = Number(match[2]);
   return Number.isSafeInteger(seq) && Number.isSafeInteger(part) ? { seq, part } : null;
 }
+/** A client handle must name an exact record, including on an older-page request. */
+function anchor(source: MessagesPageSource, pos: { seq: number; part: number }, kind: "message" | "tool_call", redactText: (text: string) => string) {
+  let bytes = 0;
+  if (pos.seq > 0) {
+    const boundary = Buffer.alloc(1);
+    bytes = readSync(source.descriptor, boundary, 0, 1, pos.seq - 1);
+    if (bytes !== 1 || boundary[0] !== 0x0a) return { row: null, bytes };
+  }
+  const page = readMessagesPage(source, { kinds: new Set([kind]), roles: new Set(["assistant"]), limit: 1, maxChars: 16000,
+    cursor: { o: pos.seq, p: pos.part + 1, r: [] }, maxScanBytes: SEAT_SCAN_BYTES - bytes, redactText });
+  const row = page.records[0];
+  return { row: row?.seq === pos.seq && row.part === pos.part ? row : null, bytes: bytes + page.scanned.bytes };
+}
 export function turnAfter(text: string): string {
   if (text.startsWith("Seat tick — ")) return "wake";
   if (/\[Voice Delegatus (?:wrote this request|reply:)/u.test(text)) return "voice";
@@ -36,7 +50,11 @@ function chunk(text: string, offset = 0, room = TEXT_BYTES) {
   while (start > 0 && start < bytes.length && (bytes[start] & 0xc0) === 0x80) start--;
   let end = Math.min(bytes.length, start + Math.max(0, room));
   while (end > start && end < bytes.length && (bytes[end] & 0xc0) === 0x80) end--;
-  if (end < bytes.length) { const newline = bytes.lastIndexOf(0x0a, end - 1); if (newline >= start) end = newline + 1; }
+  if (end < bytes.length) {
+    const newline = bytes.lastIndexOf(0x0a, end - 1);
+    // An early line break must not turn a two-chunk message into three calls.
+    if (newline >= start && (bytes.length - start > 2 * TEXT_BYTES || bytes.length - newline - 1 <= TEXT_BYTES)) end = newline + 1;
+  }
   return { offset: start, text: bytes.subarray(start, end).toString("utf8"), next: end < bytes.length ? end : null, bytes: bytes.length };
 }
 export interface SeatMessage { handle: string; time: string | null; after: string; bytes: number; text: string; rest?: { message: string; offset: number } }
@@ -61,6 +79,11 @@ export function seatMessages(source: MessagesPageSource, filename: string, args:
   if (at !== null && !Number.isFinite(at)) throw new Error("INVALID_TOOL_ARGUMENTS");
   let cursor: MessagesPageCursor | null = pos ? { o: pos.seq, p: pos.part + (args.message ? 1 : 0), r: [] } : null;
   let spent = 0, more = false, capped = false;
+  if (pos) {
+    const checked = anchor(source, pos, "message", redactText);
+    if (!checked.row || checked.bytes >= SEAT_SCAN_BYTES) return missing("not_found");
+    spent = checked.bytes;
+  }
   const records: ConversationMessage[] = [];
   do {
     const page = readMessagesPage(source, { kinds: new Set(["message"]), roles: new Set(["assistant", "user"]),
@@ -116,9 +139,7 @@ export function newestSeatReply(source: MessagesPageSource, filename: string, me
     if (pos === "stale_handle") return { status: pos };
     if (!pos || typeof pos === "string") return { status: "not_found" };
     if (pos.seq >= source.size) return { status: "not_found" };
-    const page = readMessagesPage(source, { kinds: new Set(["message"]), roles: new Set(["assistant"]), limit: 1,
-      maxChars: 16000, cursor: { o: pos.seq, p: pos.part + 1, r: [] }, maxScanBytes: SEAT_SCAN_BYTES, redactText });
-    const row = page.records[0];
+    const row = anchor(source, pos, "message", redactText).row;
     return row?.seq === pos.seq && row.part === pos.part ? { handle: String(message), time: time(row.ts), text: row.text } : { status: "not_found" };
   }
   const page = readMessagesPage(source, { kinds: new Set(["message"]), roles: new Set(["assistant", "user"]),
@@ -185,7 +206,7 @@ export const ACTION_LINES: Record<string, ActionLine> = {
   ask_orchestrator_in_parallel: () => "Asked a parallel orchestrator",
 };
 export const NOT_SEAT_ACTIONS = new Set(["lifecycle_events", "agent_activity", "stage_report", "backfill_worktree_projects"]);
-export interface SeatActionRead { page?: MessagesPage; titles?: Map<string, string> }
+export interface SeatActionRead { page?: MessagesPage; titles?: Map<string, string>; anchorBytes?: number }
 
 function failed(value: unknown): boolean {
   if (typeof value === "string") { try { return failed(JSON.parse(value)); } catch { return false; } }
@@ -199,9 +220,14 @@ export function seatActions(source: MessagesPageSource, filename: string, args: 
   if (pos === "stale_handle") return missing(pos);
   if (args.before && (!pos || pos.seq >= source.size)) return missing("not_found");
   if (args.since && !Number.isFinite(Date.parse(String(args.since)))) throw new Error("INVALID_TOOL_ARGUMENTS");
+  if (pos && !retained.page) {
+    const checked = anchor(source, pos, "tool_call", redactText);
+    if (!checked.row || checked.bytes >= SEAT_SCAN_BYTES) return missing("not_found");
+    retained.anchorBytes = checked.bytes;
+  }
   const page = retained.page ??= readMessagesPage(source, { kinds: new Set(["tool_call", "tool_result"]), roles: new Set(["assistant", "tool"]), limit: 120,
     maxChars: 16000, since: typeof args.since === "string" ? args.since : undefined,
-    cursor: pos ? { o: pos.seq, p: pos.part, r: [] } : null, maxScanBytes: SEAT_SCAN_BYTES, redactText });
+    cursor: pos ? { o: pos.seq, p: pos.part, r: [] } : null, maxScanBytes: SEAT_SCAN_BYTES - (retained.anchorBytes ?? 0), redactText });
   const results = new Map<string, SessionToolCall>();
   for (const row of page.records) if (row.kind === "tool_result" && row.call?.id) results.set(row.call.id, row.call);
   const titles = retained.titles ??= new Map<string, string>();
@@ -232,5 +258,5 @@ export function seatActions(source: MessagesPageSource, filename: string, args: 
   }
   return { rows, shown: rows.length, more, before, truncated: page.scanned.capped,
     speech: byteShort(`${rows.length} orchestrator actions: ${rows.filter(row => row.outcome === "done").length} done, ${rows.filter(row => row.outcome === "failed").length} failed, ${rows.filter(row => row.outcome === "running").length} running. ${rows.slice(0, 2).map(row => row.action).join(". ")}`, 600),
-    scanned: { bytes: page.scanned.bytes, capped: page.scanned.capped } };
+    scanned: { bytes: page.scanned.bytes + (retained.anchorBytes ?? 0), capped: page.scanned.capped } };
 }

@@ -237,7 +237,8 @@ join loads the registry snapshot. Neither is needed here.
   optional `maxScanBytes` on `MessagesPageQuery`, default unchanged at 16 MiB). The
   assistant rows are kept newest first while their text totals at most **12,000 bytes**
   and their count is at most `limit`. The row that crosses the budget is cut at a line
-  end (a lone row larger than the budget is cut too) and carries
+  end where the rest fits the next chunk, otherwise at a UTF-8 boundary (a lone
+  row larger than the budget is cut too) and carries
   `rest: {message, offset}`. The answer's `before` is the oldest returned handle;
   `more: true` when the page or the budget left messages out.
 - **Older page** (`before`): the same, from the cursor `{o: seq, p: part, r: []}`: the
@@ -247,7 +248,7 @@ join loads the registry snapshot. Neither is needed here.
   from `{o: seq, p: part + 1}`. Records carry their part index non-enumerably (as
   `sourceId` does), and the answer is accepted only when its `seq` and part match the
   handle; anything else is `not_found`. The answer is the record's text from `offset`
-  (moved back to a UTF-8 boundary), up to 12,000 bytes cut at a line end, with `next` (an
+  (moved back to a UTF-8 boundary), up to 12,000 bytes with the same line-end preference, with `next` (an
   offset or null) and `bytes` (the whole length).
 - **By time** (`at`): pages of 20 assistant records from the newest until a record has
   `ts ≤ at`, with the same 2 MiB total scan. Otherwise `not_found`, with the answer
