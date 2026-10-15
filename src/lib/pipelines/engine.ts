@@ -132,7 +132,7 @@ import { pipelineStageRuntimeProfile, pipelineStageSandbox, type PipelineStageRu
 import { pipelineValidationError, type PipelineValidationViolation } from "./validation";
 import { firstRunsElsewhere, TASK_RUNS_ELSEWHERE } from "@/lib/links/linked";
 import { pipelineHostHasLiveWork } from "./hostRetirement";
-import { pipelineArtifactsDir, pipelineRevision, assignPipelineDelivery, createPipelineWithDelivery, deliveryJournal, deliveryOwnerError, pipelineDeliveryLookup, takeoverPipelineDelivery, unclaimedPipelinePublications, withDeliveryMutationAsync, buildPipeline, findPipelineRecord, isEffectiveRole, loadPipelines, loadPipelinesAsync, selectControllerPipelines, controllerPipelineRowOrder, pipelineGraphError, pipelineIdentity, pipelineTaskLinkError, PipelineStoreError, withPipelineControllerMutation, withPipelineMutation } from "./store";
+import { pipelineArtifactsDir, pipelineRevision, assignPipelineDelivery, createPipelineWithDelivery, deliveryJournal, deliveryOwnerError, pipelineDeliveryLookup, takeoverPipelineDelivery, unclaimedPipelinePublications, withDeliveryMutationAsync, buildPipeline, findPipelineRecord, isEffectiveRole, loadPipelines, loadPipelinesForList, loadPipelinesAsync, selectControllerPipelines, controllerPipelineRowOrder, pipelineGraphError, pipelineIdentity, pipelineTaskLinkError, PipelineStoreError, withPipelineControllerMutation, withPipelineMutation } from "./store";
 import { admitQueuedPipelineCreations, queuePipelineCreation } from "./creationQueue";
 import { projectIdentityFromRemote, localRepositoryProjectId } from "@/lib/projects/identity";
 import { mergeOnReviewEnabled } from "@/lib/projects/settings";
@@ -4628,7 +4628,7 @@ async function commitPassedStage(
     },
   } : undefined;
   let result = allowCommit
-    ? await commitAndAdoptStageBranch(pipeline, stage.id, ports.exec, loadPipelines, attempt.branchAdoption, async (intent) => {
+    ? await commitAndAdoptStageBranch(pipeline, stage.id, ports.exec, loadPipelinesForList, attempt.branchAdoption, async (intent) => {
       attempt.branchAdoption = intent;
       await persist();
     }, ports.stageBranchProtections?.get(pipeline.id), ports.stageCommitReceiptFile, commitControl)
@@ -9895,10 +9895,10 @@ export async function settlePendingStageGit(ports: PipelinePorts = defaultPipeli
     if (preview.cursor?.state !== "committing" && !approved) continue;
     let fingerprint = JSON.stringify(preview);
     const flowFingerprint = JSON.stringify(flow);
-    const ownershipFence = stageBranchOwnershipFence(loadPipelines(), preview.id);
+    const ownershipFence = stageBranchOwnershipFence(loadPipelinesForList(), preview.id);
     const matches = (current: Pipeline | null) => JSON.stringify(current) === fingerprint
       && (!attempt.flowId || JSON.stringify(ports.getFlow(attempt.flowId)) === flowFingerprint)
-      && stageBranchOwnershipFence(loadPipelines(), preview.id) === ownershipFence;
+      && stageBranchOwnershipFence(loadPipelinesForList(), preview.id) === ownershipFence;
     const lock = path.join(pipelineArtifactsDir(preview.id), "remote-action.lock");
     let descriptor: number | null;
     try {

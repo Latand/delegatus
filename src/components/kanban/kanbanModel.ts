@@ -14,16 +14,18 @@ import { mobileRowState, nowFragment, type MobileRowState, type MobileRowStateKe
 import { latestAttempt, stageAttempts, type StageChipState } from "@/components/pipelines/pipelineModel";
 import { deckKey } from "@/components/scheme/agentLinks";
 import type { TaskBand } from "@/components/scheme/taskBands";
-import type { TaskWorkflowProjection } from "@/components/tasks/taskWorkflowModel";
+import { sameFileExceptSizeAndMtime, taskWorkflowMembershipKey, type TaskWorkflow, type TaskWorkflowProjection } from "@/components/tasks/taskWorkflowModel";
 import { workingSince } from "@/components/workingSince";
 import { isWorkingAgent, workingAgentCount } from "@/components/workingAgents";
+import { turnIsRunning } from "@/components/turnDuration";
 import { DONE_TASK_BOARD_RETENTION_MS, taskShowsOnBoard } from "@/lib/tasks/boardVisibility";
 import { laneMovedAt } from "@/lib/pipelines/laneMovement";
 import { bandHoldsMembers } from "@/components/scheme/taskBands";
 
 import { pastAttempts, type PastAttempt, type WorkingConversations } from "./pipelineGraph";
 import { summarizePipeline, type KanbanLoop, type KanbanPipeline, type KanbanStageChip } from "./pipelineSummary";
-import { placeholderTitle } from "./placeholderTitle";
+import { awaitsName, placeholderTitle } from "./placeholderTitle";
+import { reuseKanbanModel, structurallyEqual } from "./reuseKanbanModel";
 
 export { summarizePipeline };
 export type { KanbanLoop, KanbanPipeline, KanbanStageChip };
@@ -471,9 +473,25 @@ interface CachedCard {
   dependencies: readonly unknown[];
   card: KanbanCard;
 }
+interface CachedVisibility { dependencies: readonly unknown[]; visible: boolean }
+interface CachedMembership { dependencies: readonly unknown[]; value: ReturnType<typeof bandMembership> }
+interface CachedPipelineSummary { flows: KanbanModelInput["flows"]; working: Set<string>; value: KanbanPipeline }
+interface ModelCache {
+  previous: Map<string, CachedCard>;
+  next: Map<string, CachedCard>;
+  visibility: Map<string, CachedVisibility>;
+  nextVisibility: Map<string, CachedVisibility>;
+  indexes: ReturnType<typeof modelIndexes>;
+  membership: Map<string, CachedMembership>;
+  nextMembership: Map<string, CachedMembership>;
+  summaries: Map<Pipeline, CachedPipelineSummary>;
+  nextSummaries: Map<Pipeline, CachedPipelineSummary>;
+}
 
 function sameValues(a: readonly unknown[], b: readonly unknown[]): boolean {
-  return a.length === b.length && a.every((value, i) => value === b[i]);
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+  return true;
 }
 
 function sameFields(a: object, b: object): boolean {
@@ -482,6 +500,7 @@ function sameFields(a: object, b: object): boolean {
 }
 
 function sameBand(a: TaskBand, b: TaskBand): boolean {
+  if (a === b) return true;
   return sameFields({ ...a, members: null, mirrors: null, groups: null }, { ...b, members: null, mirrors: null, groups: null })
     && sameValues(a.groups, b.groups)
     && a.members.length === b.members.length && a.members.every((member, i) => sameFields(member, b.members[i]))
@@ -492,10 +511,51 @@ function sameBand(a: TaskBand, b: TaskBand): boolean {
  * a task, or a task leaving the board, removes its cached derivation too. */
 export function createKanbanModel(): (input: KanbanModelInput) => KanbanModel {
   let previous = new Map<string, CachedCard>();
-  return input => {
+  let visibility = new Map<string, CachedVisibility>();
+  let membership = new Map<string, CachedMembership>();
+  let summaries = new Map<Pipeline, CachedPipelineSummary>();
+  let last: { input: KanbanModelInput; model: KanbanModel } | undefined;
+  let indexed: { inputs: unknown[]; files: KanbanModelInput["files"]; value: ReturnType<typeof modelIndexes> } | undefined;
+  return function projectKanbanModel(input) {
+    if (last) {
+      const { files: beforeFiles, projection: beforeProjection, ...before } = last.input;
+      const { files, projection, ...current } = input;
+      // Visible payloads come from bands, failed placeholders from workflow
+      // references. A hidden transcript's byte/mtime refresh affects this
+      // model only if it changes working evidence. Time and every other input
+      // retain their normal invalidation, including the full task clock.
+      if (sameFields(before, current) && taskWorkflowMembershipKey(beforeProjection) === taskWorkflowMembershipKey(projection)
+        && beforeFiles && files && beforeFiles.length === files.length
+        && files.every((file, i) => file === beforeFiles[i] || (!file.spawn && !file.path.startsWith("spawn:")
+          && sameFileExceptSizeAndMtime(beforeFiles[i], file) && isWorkingAgent(beforeFiles[i], input.now) === isWorkingAgent(file, input.now)))) {
+        last = { input, model: last.model };
+        return last.model;
+      }
+    }
     const next = new Map<string, CachedCard>();
-    const model = deriveKanbanModel(input, { previous, next });
+    const nextVisibility = new Map<string, CachedVisibility>();
+    const nextMembership = new Map<string, CachedMembership>();
+    const nextSummaries = new Map<Pipeline, CachedPipelineSummary>();
+    const indexInputs = [input.tasks, input.pipelines, input.flows, input.bands];
+    // These indexes read identity, membership and lastAgentWorkAt. Byte count
+    // and mtime affect none of them; working state below still reads fresh files.
+    const sameFiles = indexed && (indexed.files === input.files || (indexed.files && input.files
+      && indexed.files.length === input.files.length && input.files.every((file, i) => sameFileExceptSizeAndMtime(indexed!.files![i], file))));
+    const indexes = indexed && sameFiles && sameValues(indexed.inputs, indexInputs) ? indexed.value : modelIndexes(input);
+    indexed = { inputs: indexInputs, files: input.files, value: indexes };
+    const model = reuseKanbanModel(last?.model ?? null, deriveKanbanModel(input, { previous, next, visibility, nextVisibility, indexes: indexed.value, membership, nextMembership, summaries, nextSummaries }));
+    // The reconciler can keep an older equal card. Cache that exact object so
+    // a later clock tick can reuse it without comparing its whole tree again.
+    const retained = new Map([...Object.values(model.columns).flatMap(column => column.cards), ...model.unlinked, ...model.hiddenGroups].map(card => [card.id, card]));
+    for (const [id, entry] of next) {
+      const card = retained.get(id);
+      if (card && card !== entry.card) next.set(id, { ...entry, card });
+    }
     previous = next;
+    visibility = nextVisibility;
+    membership = nextMembership;
+    summaries = nextSummaries;
+    last = { input, model };
     return model;
   };
 }
@@ -504,10 +564,18 @@ export function buildKanbanModel(input: KanbanModelInput): KanbanModel {
   return deriveKanbanModel(input);
 }
 
-function deriveKanbanModel(input: KanbanModelInput, cache?: { previous: Map<string, CachedCard>; next: Map<string, CachedCard> }): KanbanModel {
-  const { bands, tasks, pipelines, projection, statusOverrides, cardFilter, reasonFilter, now } = input;
+/** Immutable membership indexes and historical work do not read the board clock. */
+function modelIndexes(input: KanbanModelInput) {
+  const { bands, tasks, pipelines } = input;
   const knownConversations = new Set<string>();
   const workByIdentity = new Map<string, number>();
+  // Running-turn eligibility is independent of the clock. Keep positions so
+  // metadata refreshes still supply fresh files to the activity predicates.
+  const workingCandidates: number[] = [];
+  for (let i = 0; i < (input.files?.length ?? 0); i += 1) {
+    const file = input.files![i];
+    if (file.proc !== "killed" && turnIsRunning(file)) workingCandidates.push(i);
+  }
   for (const file of input.files ?? []) {
     knownConversations.add(file.path);
     const at = file.lastAgentWorkAt;
@@ -533,7 +601,6 @@ function deriveKanbanModel(input: KanbanModelInput, cache?: { previous: Map<stri
     reviewerWorkByFlow.set(flow, latest);
     return latest;
   };
-  const query = input.query ?? "";
   const tasksById = new Map(tasks.map(task => [task.id, task]));
   const pipelineById = new Map(pipelines.map((pipeline) => [pipeline.id, pipeline] as const));
   const flowsById = new Map((input.flows ?? []).map((flow) => [flow.id, flow] as const));
@@ -564,9 +631,66 @@ function deriveKanbanModel(input: KanbanModelInput, cache?: { previous: Map<stri
       }
     }
   }
-  const workingStageConversations = workingStageConversationsOf(stageByPath, input.files ?? [], now);
-  const workflowByTask = new Map(projection.tasks.map((workflow) => [workflow.task.id, workflow] as const));
   const bandTitle = new Map(bands.map((band) => [band.id, band.title] as const));
+
+  return { knownConversations, workByIdentity, reviewerWorkAt, tasksById, pipelineById, flowsById, flowsByDeck,
+    pipelineWorkAt, stageByPath, bandTitle, workingCandidates };
+}
+
+/** Static membership survives clock ticks and unrelated transcript payloads. */
+function bandMembership(band: TaskBand, workflow: TaskWorkflow | undefined, seat: KanbanModelInput["seat"], pipelineById: ReadonlyMap<string, Pipeline>) {
+  const task = band.task;
+  const seatFile = (file: FileEntry) => isSeatConversation(seat, file);
+  const cardPipelines = new Map<string, Pipeline>();
+  if (band.pipeline) cardPipelines.set(band.pipeline.id, band.pipeline);
+  for (const groupKey of band.groups) {
+    const match = /^group::pipeline::(.+)$/.exec(groupKey);
+    const pipeline = match ? pipelineById.get(match[1]!) : undefined;
+    if (pipeline) cardPipelines.set(pipeline.id, pipeline);
+  }
+  for (const execution of workflow?.executions ?? []) {
+    if (execution.basis === "explicit") cardPipelines.set(execution.pipeline.id, pipelineById.get(execution.pipeline.id) ?? execution.pipeline);
+  }
+  const nodes = band.members.filter((member) => member.kind === "node" && member.file && !seatFile(member.file));
+  const memberNodes = nodes.filter(member => !failedLaunchPlaceholder(member.file!));
+  const holdsSeat = Boolean(task && seat && seatAssignment(task.assignments, seat));
+  const activePipeline = [...cardPipelines.values()].some(pipeline => ACTIVE_PIPELINE_STATES.has(pipeline.state));
+  const laneMovedMs = Math.max(0, ...[...cardPipelines.values()].map(laneMovedAt).filter(Number.isFinite));
+  // Retention is checked separately on every tick. A named task with delivered
+  // transcript assignments, no holds/steps and no launch receipt has no other
+  // task deadline. Its time-dependent content is its members' working/attention
+  // state and its pipeline attempts' working evidence (keyed below).
+  // Everything else keeps the full clock key. Drafts always rebuild because
+  // a reader can move their card later in this pass.
+  const memberClock = !band.members.some(member => member.kind === "draft" || member.file?.spawn)
+    && (!task || (!task.hold && !task.steps?.length && !awaitsName(task)
+      && task.assignments.every(assignment => assignment.state === "delivered" && assignment.path && !assignment.path.startsWith("spawn:"))
+      && !workflow?.references.some(reference => reference.file?.spawn || reference.file?.path.startsWith("spawn:"))));
+  // The fields below cover the clock-dependent branches of mobileRowState,
+  // conversationNeed and isWorkingAgent. Elapsed seconds are rendered by the
+  // member component and are absent from KanbanMember. Quiet history needs no
+  // new row/attention objects just to prove that those fields are unchanged.
+  const staticMembers = nodes.every(({ file }) => file && !file.agentActivity
+    && file.activity !== "stalled" && !file.bridgeAsk && !file.bridgeAsks?.length
+    && !file.stuckDelivery && !file.memoryKill && !file.attentionDismissal?.cleared);
+  return { cardPipelines, nodes, memberNodes, holdsSeat, activePipeline, laneMovedMs, memberClock, staticMembers };
+}
+
+function deriveKanbanModel(input: KanbanModelInput, cache?: ModelCache): KanbanModel {
+  const { bands, tasks, pipelines, statusOverrides, cardFilter, reasonFilter, now } = input;
+  const { knownConversations, workByIdentity, reviewerWorkAt, tasksById, pipelineById, flowsById, flowsByDeck,
+    pipelineWorkAt, stageByPath, bandTitle, workingCandidates } = cache?.indexes ?? modelIndexes(input);
+  const workingFiles = workingCandidates.map(index => input.files![index]);
+  const workingStageConversations = workingStageConversationsOf(stageByPath, workingFiles, now);
+  const pipelineSummary = (pipeline: Pipeline) => {
+    const previous = cache?.summaries.get(pipeline);
+    const summary = previous && previous.flows === input.flows && structurallyEqual(previous.working, workingStageConversations) ? previous
+      : { flows: input.flows, working: workingStageConversations, value: summarizePipeline(pipeline, flowsById, workingStageConversations) };
+    cache?.nextSummaries.set(pipeline, summary);
+    return summary.value;
+  };
+  const query = input.query ?? "";
+  const workflowByTask = new Map(input.projection.tasks.map(workflow => [workflow.task.id, workflow]));
 
   /* Seat conversations draw no tile (#1841): the seat panel is their home. */
   const seatFile = (file: FileEntry) => isSeatConversation(input.seat, file);
@@ -574,24 +698,55 @@ function deriveKanbanModel(input: KanbanModelInput, cache?: { previous: Map<stri
   const cards: KanbanCard[] = bands.flatMap((band): KanbanCard[] => {
     const task = band.task;
     const workflow = task ? workflowByTask.get(task.id) : undefined;
-    const cardPipelines = new Map<string, Pipeline>();
-    if (band.pipeline) cardPipelines.set(band.pipeline.id, band.pipeline);
-    for (const groupKey of band.groups) {
-      const match = /^group::pipeline::(.+)$/.exec(groupKey);
-      const pipeline = match ? pipelineById.get(match[1]!) : undefined;
-      if (pipeline) cardPipelines.set(pipeline.id, pipeline);
-    }
-    for (const execution of workflow?.executions ?? []) {
-      if (execution.basis === "explicit") cardPipelines.set(execution.pipeline.id, pipelineById.get(execution.pipeline.id) ?? execution.pipeline);
+    const membershipInputs = [band, workflow, input.seat, pipelines];
+    const previousMembership = cache?.membership.get(band.id);
+    const membership = previousMembership && sameValues(previousMembership.dependencies, membershipInputs) ? previousMembership
+      : { dependencies: membershipInputs, value: bandMembership(band, workflow, input.seat, pipelineById) };
+    cache?.nextMembership.set(band.id, membership);
+    const { cardPipelines, nodes, memberNodes, holdsSeat, activePipeline, laneMovedMs, memberClock, staticMembers } = membership.value;
+    const overridden = task ? statusOverrides?.get(task.id) : undefined;
+    /* A draft becomes an Assigned task when launched. */
+    const status: TaskStatus = overridden ?? task?.status ?? (!memberNodes.length && band.members.some(member => member.kind === "draft") ? "assigned" : "inbox");
+    const laneWorkedRecently = activePipeline || laneMovedMs >= now * 1000 - DONE_TASK_BOARD_RETENTION_MS;
+    // Visibility needs membership and lane facts, all available before card
+    // construction. Hidden empty tasks still enter offBoard below, without
+    // building reference histories and summaries on every clock tick.
+    if (task) {
+      // taskShowsOnBoard reads the clock only at completion + retention; its
+      // resurfacing checks read the immutable membership/seat/lane inputs.
+      // Optimistically completing a task starts its window at this tick.
+      const expired = status === "done" && task.status === "done"
+        && now * 1000 > Date.parse(task.doneAt ?? task.updatedAt) + DONE_TASK_BOARD_RETENTION_MS;
+      const dependencies = [band, task, status, input.seat, pipelines, holdsSeat, laneWorkedRecently, expired];
+      const previous = cache?.visibility.get(band.id);
+      const visibility = previous && sameValues(previous.dependencies, dependencies) ? previous : {
+        dependencies,
+        visible: taskShowsOnBoard(status === task.status ? task : { ...task, status, ...(status === "done" ? { doneAt: new Date(now * 1000).toISOString() } : {}) }, bandHoldsMembers(band) || (laneWorkedRecently && !task.boardChoice), {
+          now: now * 1000, holdsSeat, seat: input.seat,
+          members: memberNodes.map(member => member.file!), pipelines,
+        }),
+      };
+      cache?.nextVisibility.set(band.id, visibility);
+      if (!visibility.visible) return [];
     }
     const holdTarget = task?.hold?.kind === "task" ? tasksById.get(task.hold.ref ?? "") : undefined;
-    const dependencies: unknown[] = [task, workflow, now, input.seat, task ? statusOverrides?.get(task.id) : undefined, holdTarget];
-    if (cache && task) {
+    let clockKey: unknown = memberClock ? staticMembers ? null : nodes.map(member => {
+      const row = memberOf(member.key, member.file!, stageByPath, now);
+      return [row.state, row.activity, row.needsYou, row.need, row.working, row.latest, conversationNeed(member.file!, now)];
+    }) : now;
+    const previousClock = cache?.previous.get(band.id)?.dependencies[2];
+    if (memberClock && structurallyEqual(previousClock, clockKey)) clockKey = previousClock;
+    const cacheable = Boolean(task) || memberClock;
+    const dependencies: unknown[] = [task, workflow, clockKey, input.seat, task ? statusOverrides?.get(task.id) : undefined, holdTarget];
+    if (cache && cacheable) {
       // Resolve the external facts the card reads, including work by historical
       // reviewers outside its visible members and a competing stage owner.
       for (const member of band.members) {
         const stage = member.file ? stageByPath.get(member.file.path) : undefined;
         dependencies.push(stage?.pipeline, stage?.stage, reviewerWorkAt(flowsByDeck.get(member.key)));
+      }
+      if (memberClock) for (const member of [...band.members, ...band.mirrors]) {
+        if (member.file) dependencies.push(workByIdentity.get(member.file.path), member.file.conversationId ? workByIdentity.get(member.file.conversationId) : undefined);
       }
       dependencies.push(reviewerWorkAt(band.flow));
       for (const mirror of band.mirrors) dependencies.push(bandTitle.get(mirror.primaryBandId));
@@ -612,15 +767,16 @@ function deriveKanbanModel(input: KanbanModelInput, cache?: { previous: Map<stri
       const previous = cache.previous.get(band.id);
       if (previous && sameBand(previous.band, band) && sameValues(previous.dependencies, dependencies)) {
         cache.next.set(band.id, previous);
+        for (const pipeline of cardPipelines.values()) {
+          const summary = cache.summaries.get(pipeline);
+          if (summary) cache.nextSummaries.set(pipeline, summary);
+        }
         return [previous.card];
       }
     }
-    const nodes = band.members.filter((member) => member.kind === "node" && member.file && !seatFile(member.file));
     /* A launch placeholder whose launch failed is no conversation: it is
        listed as a failed launch, which opens its launch view with Retry. */
-    const members = nodes
-      .filter((member) => !failedLaunchPlaceholder(member.file!))
-      .map((member) => memberOf(member.key, member.file!, stageByPath, now));
+    const members = memberNodes.map((member) => memberOf(member.key, member.file!, stageByPath, now));
     const failedLaunches = nodes.filter((member) => failedLaunchPlaceholder(member.file!)).map((member) => member.file!);
     const mirrors = band.mirrors.filter((mirror) => !seatFile(mirror.file)).map((mirror) => ({
       key: mirror.key,
@@ -752,7 +908,7 @@ function deriveKanbanModel(input: KanbanModelInput, cache?: { previous: Map<stri
     /* Newest agent work first; a pipeline with no recorded work sorts last. */
     const summaries = [...cardPipelines.values()]
       .sort((a, b) => pipelineWorkAt(b) - pipelineWorkAt(a) || a.id.localeCompare(b.id))
-      .map((pipeline) => summarizePipeline(pipeline, flowsById, workingStageConversations));
+      .map(pipelineSummary);
     const provisioning = summaries.filter((summary) => summary.pipeline.state === "provisioning").length;
     /* Why the card needs the operator, and what someone cleared. A lane
        dismissed on either surface asks nothing here either: `laneNeed` reads
@@ -776,26 +932,9 @@ function deriveKanbanModel(input: KanbanModelInput, cache?: { previous: Map<stri
       ? Math.max(0, ...inFlight, ...members.filter((member) => member.working).map((member) => memberStartMs(member.file)))
       : null;
     const needsYou = reasons.length > 0 || prototypeWaitsOnOperator(task?.prototypeReview);
-    const activePipeline = summaries.some((summary) => ACTIVE_PIPELINE_STATES.has(summary.pipeline.state));
-    const overridden = task ? statusOverrides?.get(task.id) : undefined;
-    /* A card holding only an agent draft is where its launch will land: the task
-       the launch writes is Assigned, so the draft stands there and the launched
-       card takes the place the draft held, in the column it was drawn in. */
-    const status: TaskStatus = overridden ?? task?.status ?? (!members.length && band.members.some((member) => member.kind === "draft") ? "assigned" : "inbox");
     const hide: GroupHideState = task
       ? groupHideState(task, { members: members.map((member) => member.file), pipelines: summaries.map((summary) => summary.pipeline), seat: input.seat })
       : { hidden: false, resurfaced: null };
-    const holdsSeat = Boolean(task && input.seat && seatAssignment(task.assignments, input.seat));
-    /* The board flag governs an EMPTY band. Lane work that is live or moved
-       within the retention span counts as the band holding something, as a
-       resolved conversation does. An explicit choice still hides it, and a
-       group hide keeps the card in the hidden groups, never in a column. */
-    const laneMovedMs = Math.max(0, ...summaries.map((summary) => laneMovedAt(summary.pipeline)).filter(Number.isFinite));
-    const laneWorkedRecently = activePipeline || laneMovedMs >= now * 1000 - DONE_TASK_BOARD_RETENTION_MS;
-    if (task && !taskShowsOnBoard({ ...task, status, ...(status === "done" && task.status !== "done" ? { doneAt: new Date(now * 1000).toISOString() } : {}) }, bandHoldsMembers(band) || (laneWorkedRecently && !task.boardChoice), {
-      now: now * 1000, holdsSeat, seat: input.seat,
-      members: members.map((member) => member.file), pipelines,
-    })) return [];
     const stepProjection = deriveTaskSteps(task?.steps, summaries.map(summary => summary.pipeline), now * 1000);
     const color = task?.color && (TASK_COLORS as readonly string[]).includes(task.color) ? task.color : null;
     /* A placeholder no agent will name any more borrows its conversation's
@@ -879,7 +1018,7 @@ function deriveKanbanModel(input: KanbanModelInput, cache?: { previous: Map<stri
       hide,
       holdsSeat,
     };
-    if (cache && task) cache.next.set(band.id, { band, dependencies, card });
+    if (cache && cacheable) cache.next.set(band.id, { band, dependencies, card });
     return [card];
   });
 
@@ -940,7 +1079,7 @@ function deriveKanbanModel(input: KanbanModelInput, cache?: { previous: Map<stri
          the same files: a hidden group's agents and the seat keep working, and
          the header says so. A decision the operator hid is not counted as
          waiting on them. */
-      working: workingAgentCount(input.files ?? [], now),
+      working: workingAgentCount(workingFiles, now),
       needsYou: cards.filter((card) => card.motion.key === "needs-you" && !card.hide.hidden).length,
     },
   };

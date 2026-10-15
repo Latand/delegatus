@@ -7,7 +7,9 @@ import { writeSummaryBootstrap } from "@/lib/scanner/summaryBootstrap";
 import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
 import { stateDir, statePath } from "@/lib/configDir";
 import { diffFilesBodies } from "@/lib/filesDelta";
+import { BoardEncoder } from "@/lib/boardEncoding";
 import type { FilesResponseWorkerRequest } from "@/lib/scanner/filesResponseWorker";
+import type { StateWriteHealth } from "@/lib/state/diskFull";
 
 /** One request frame. A whole snapshot can ride inline, so the bound is large. */
 const FRAME_MAX_BYTES = 8 * 1024 * 1024;
@@ -34,6 +36,7 @@ function workerRequest(value: unknown): FilesResponseWorkerRequest | null {
     || !Array.isArray(value.headers)
     || (value.snapshotFile !== undefined && typeof value.snapshotFile !== "string")
     || (value.deltaScope !== undefined && (typeof value.deltaScope !== "string" || !/^[0-9a-f]{40}$/.test(value.deltaScope)))
+    || (value.boardEpoch !== undefined && (typeof value.boardEpoch !== "string" || !value.boardEpoch || !value.deltaScope))
     || (value.deltaFrom !== undefined && (!record(value.deltaFrom)
       || typeof value.deltaFrom.bodyFile !== "string" || typeof value.deltaFrom.etag !== "string"
       || !/^"[0-9a-f]{40}"$/.test(value.deltaFrom.etag)))
@@ -67,12 +70,29 @@ function snapshotFor(request: FilesResponseWorkerRequest): {
     : { snapshot };
 }
 
+const boardEncoder = new BoardEncoder();
+
 async function build(request: FilesResponseWorkerRequest): Promise<Record<string, string>> {
   const { snapshot, read } = snapshotFor(request);
+  const certified = request.deltaFrom;
+  let encoded: ReturnType<BoardEncoder["encode"]> | undefined;
   const response = await buildFilesResponse(new Request(request.url, {
     headers: new Headers(request.headers),
   }), {
     listFilesWithProjectCatalog: async () => snapshot,
+    ...(request.boardEpoch && request.deltaScope ? { encode: (data: import("@/lib/types").FilesResponse) => {
+      encoded = boardEncoder.encode(request.deltaScope!, request.boardEpoch!, data as unknown as Record<string, unknown>, Date.now(),
+        certified ? {
+          etag: certified.etag,
+          readBody: () => {
+            if (path.dirname(path.resolve(certified.bodyFile)) !== path.resolve(statePath("files-response-results"))) {
+              throw new Error("files response worker received an invalid delta base path");
+            }
+            return fs.readFileSync(certified.bodyFile, "utf8");
+          },
+        } : undefined);
+      return encoded;
+    } } : {}),
   });
   const resultDirectory = statePath("files-response-results");
   fs.mkdirSync(resultDirectory, { recursive: true, mode: 0o700 });
@@ -80,12 +100,19 @@ async function build(request: FilesResponseWorkerRequest): Promise<Record<string
   const body = await response.text();
   const etag = response.headers.get("etag") ?? "";
   fs.writeFileSync(bodyFile, body, { encoding: "utf8", mode: 0o600 });
+  let boardDelta: Record<string, string> = {};
+  if (encoded?.delta) {
+    const deltaFile = path.join(resultDirectory, `${process.pid}-${crypto.randomUUID()}.delta.json`);
+    fs.writeFileSync(deltaFile, encoded.delta.body, { encoding: "utf8", mode: 0o600 });
+    boardDelta = { deltaFile, deltaBase: encoded.delta.base };
+  }
   const url = new URL(request.url);
-  const stateWrites = JSON.parse(body).systemHealth?.storage?.writes ?? { state: "ok", since: null, freeBytes: null };
+  const stateWrites = ((encoded ? encoded.stateWrites : JSON.parse(body).systemHealth?.storage?.writes) as StateWriteHealth | undefined)
+    ?? { state: "ok", since: null, freeBytes: null };
   if (url.searchParams.get("view") === "summary" && !url.searchParams.get("path")?.trim()
     && !new Headers(request.headers).has(VIEWER_SPAWN_CAPABILITY_HEADER)
     && stateWrites.state === "ok") {
-    try { await writeSummaryBootstrap(stateDir(), body, etag); }
+    try { await writeSummaryBootstrap(stateDir(), body, etag, encoded ? { scope: request.deltaScope!, epoch: request.boardEpoch! } : undefined); }
     catch { console.warn("[board bootstrap] cache write failed; live response remains available"); }
   }
   return {
@@ -95,7 +122,7 @@ async function build(request: FilesResponseWorkerRequest): Promise<Record<string
     etag,
     timing: response.headers.get("server-timing") ?? "",
     ...read,
-    ...(request.deltaScope ? deltaFromBase(resultDirectory, request.deltaScope, body, etag, request.deltaFrom) : {}),
+    ...(request.boardEpoch ? boardDelta : request.deltaScope ? deltaFromBase(resultDirectory, request.deltaScope, body, etag, request.deltaFrom) : {}),
   };
 }
 

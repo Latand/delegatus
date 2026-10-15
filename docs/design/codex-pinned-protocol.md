@@ -56,32 +56,72 @@ reader; transport or permission faults keep canonical history fail-closed.
 Injection has no read-only discovery method, so its pin admits the operation
 and a real method-not-found response retires the capability.
 
-## Approval router boundary and remaining work
+## Durable approvals and questions
 
-This is the permitted first slice of #302. Exact method names classify
-command, patch, permission, question, elicitation, dynamic-tool, auth,
-attestation and time requests. Generated request and response types define the
-handler interfaces. Every user answer passes the method's response codec before
-stdin is written, including amendment decisions and multi-question answers.
-Unsupported requests reject raw JSON answers. Restored approvals retain the
-existing unowned state and cannot be answered by a new process generation.
+The host validates every server request against the selected schema before it
+exposes answer controls. Answers also pass the response schema and the request's
+constraints: offered command decisions and amendments, exact question IDs and
+option labels, and permission grants within the requested paths and network
+capabilities. Questions retain their custom-answer and secret-input flags.
+Malformed or unsupported requests remain visible with their answer controls
+unavailable.
 
-The rest of #302 remains a separate delivery:
+The host ledger retains complete requests. Journal projections carry a request
+digest and indexed selections instead of copying full option labels, permission
+scopes or policy amendments into answer controls. The callback owner expands
+each selection against that request before validating and dispatching the native
+response. Display text is clipped; the response retains every selected value.
+Dispatch receipts retain both the native response digest and, when used, the
+selection digest so confirmed retries survive journal and host recovery.
+If the question or action structure itself exceeds the projection budget,
+the operator sees a pending callback with answer controls unavailable; an
+incomplete set of controls cannot submit a partial answer. Later host events
+continue through the journal.
 
-1. Bind the typed handler interfaces to full ingress parameter decoding and
-   each attention action, including request-specific constraints such as the
-   offered decision set, question IDs and permission scope.
-2. Persist `threadId`, `turnId`, `itemId`, method, typed request ID and optional
-   `approvalId` as the durable request identity. Persist answer dispatch and
-   server resolution as separate receipts.
-3. Reconnect to a surviving app-server, deduplicate replay by that durable
-   identity, and restore the original attention ownership. A fresh process
-   cannot inherit the previous process's callback just by reusing an RPC ID.
-4. After process loss and `thread/resume`, record an explicit recovery outcome
-   for each unresolved callback. Preserve uncertain deliveries honestly.
-5. Cover server resolution before/after an answer, duplicate delivery,
-   timeout, automatic resolution and late notifications with durable receipts
-   and one terminal transition.
+A request receipt retains the process generation, thread, turn, item, method,
+typed RPC ID and optional approval ID. String and numeric IDs remain distinct.
+The attention ID incorporates that identity, so concurrent processes using the
+same RPC ID cannot collide in the shared journal.
+The request digest detects a conflicting replay. Answer dispatch is fsynced to
+the event ledger before the response is written. A separate server-resolution
+receipt closes the attention. A concurrent identical answer joins its existing
+waiter; a different answer is refused. A confirmed identical retry returns the
+existing result. Automatic server resolution never manufactures an answer
+receipt, and a late replay cannot reopen a terminal attention.
 
-The present change preserves the existing restart behavior; it makes no claim
-that those durable replay requirements are implemented.
+On all three reviewed pins, Unix hosts launch the app-server with its native private Unix
+WebSocket listener. Its socket directory lives under the Viewer's home, which
+is shared with host CLI processes in the container installation. Directory and
+socket permissions, UID, PID, kernel start token and boot epoch are checked
+before and after connection. Codex 0.162.1's advertised symlink is resolved to
+its digest-named socket in the recorded process's mount namespace; the target
+directory and socket receive the same permission and owner checks. A successor
+uses the process's retained protocol pin and claims the exact recorded listener
+only after the previous writer has relinquished ownership or is proven gone.
+A normal Viewer demotion drops the connection while keeping the app-server;
+startup also reconnects after a hard Viewer exit. It preserves the surviving
+process's MCP credential and thread policy. A failed reconnect handshake closes
+its connection and releases the writer claim, keeping the original process
+available for another attempt. `thread/resume` replays pending
+callbacks, restoring their original attention identity. Reusing an RPC ID in a
+new process does not transfer callback ownership.
+
+Windows retains its stdio transport. A runtime
+host restart keeps a surviving Viewer's callback owner; replacing a stdio
+app-server ends its callbacks. Requests retained from an older release have the
+same limitation. The operator sees `callback-unavailable` for an unresolved
+request whose callback cannot be recovered. An answer with a dispatch receipt
+and no server-resolution receipt is `delivery-uncertain`, including after a
+process dies or a timeout expires. It is never dispatched again. A subsequent
+resolution notification from the verified original generation can still close
+that attention. Replayed dispatches without resolution receipts immediately
+retain a durable uncertainty outcome, including when replay precedes the
+resume reply. These outcomes retain the original request and its receipts.
+
+The event ledger and runtime journal have separate restart regressions. The
+process fixtures kill a Viewer with a pending request and after an answer has
+been consumed, then reopen the same durable ledger. Native transport coverage
+uses an isolated Codex app-server and a credential-free local Responses fixture
+to verify callback replay and resolution. The shared browser driver covers
+permission scopes, custom questions and recovery messages at phone and desktop
+widths in both interface languages.

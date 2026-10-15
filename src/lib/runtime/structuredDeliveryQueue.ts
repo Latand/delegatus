@@ -12,7 +12,7 @@ import type { RuntimeRetirementClaim, RuntimeTransitionOptions, RuntimeInjection
 import { captureProcessIdentity, processIdentityProvenDead, sameRecordedProcessIdentity } from "@/lib/processIdentity";
 import { evidenceAgrees, readEvidence, readOptionalEvidence, type Evidence } from "./evidence";
 import type { CompactCapableHost, DeliveryReceipt, EngineHost, FirstDispatchEvidence, HostState, QueueEntry, RuntimeInjectOutcome, RuntimeSteerOutcome } from "./engineHost";
-import { hostSupportsCompact, hostSupportsInject, StructuredCompactError, StructuredInjectError, StructuredSendRefusedError } from "./engineHost";
+import { hostSupportsCompact, hostSupportsInject, StructuredAnswerError, StructuredCompactError, StructuredInjectError, StructuredSendRefusedError } from "./engineHost";
 import {
   parseStructuredImageRefs,
   structuredContent,
@@ -3181,6 +3181,10 @@ export class StructuredDeliveryQueue {
       return { blocked: false, terminated: false };
     } catch (error) {
       const reason = failureReason(error);
+      if (effect.kind === "answer" && error instanceof StructuredAnswerError) {
+        await this.transitionUnlessSettled(effect.operationId, error.outcome === "uncertain" ? "uncertain" : "failed", { reason });
+        return { blocked: false, terminated: false };
+      }
       /* The control was issued and threw. `queued` here says it never reached
          the engine and hands it to a later pass to issue AGAIN, which is only
          honest where the host is read to be gone — a departed host answered

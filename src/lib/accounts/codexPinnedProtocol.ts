@@ -114,6 +114,12 @@ export class CodexPinnedProtocol {
     this.validate(method, "result", { $ref: params.replace(/Params$/, "Response") }, result);
   }
 
+  assertServerRequest(method: string, params: unknown): void {
+    const shape = propertySchema(methodSchema(this.pin.schema, "ServerRequest", method), "params");
+    if (!shape) this.unsupported(method, "server request");
+    this.validate(method, "server-params", shape, params);
+  }
+
   private validate(method: string, path: string, shape: Schema, value: unknown, source = this.pin.schema): void {
     const key = `${this.version}:${method}:${path}`;
     let validator = validators.get(key);

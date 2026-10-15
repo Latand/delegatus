@@ -62,6 +62,8 @@ import { readStorageIncidents } from "@/lib/state/durability";
 import { filesResponseDependencies } from "./dependencies";
 
 interface FilesRouteDependencies {
+  /** Transport encoding runs on the owned projected values, before JSON. */
+  encode?: (data: FilesResponse) => { body: string; etag: string };
   listFilesWithProjectCatalog: (
     selectedProject: string | undefined,
     pinnedPath: string | undefined,
@@ -1000,7 +1002,7 @@ export async function buildFilesResponse(request: Request, dependencies: FilesRo
   const summary = new URL(request.url).searchParams.get("view") === "summary"
     ? filesReadSummary(projected.flows, pipelines) : null;
   const agentRead = request.headers.has(VIEWER_SPAWN_CAPABILITY_HEADER);
-  const body = JSON.stringify({
+  const data = {
     files: projected.files,
     ...(responsePinOverlayPaths.size ? { pinOverlayPaths: [...responsePinOverlayPaths] } : {}),
     projectCatalog: effectiveProjectCatalog,
@@ -1029,12 +1031,10 @@ export async function buildFilesResponse(request: Request, dependencies: FilesRo
     conversationAliases: registrySnapshot.conversationAliases,
     ...(Object.keys(launchProjection.routes).length ? { launchRoutes: launchProjection.routes } : {}),
     ...(pipelinesError ? { pipelinesError } : {}),
-  } satisfies FilesResponse);
-  /* The client re-polls every 10 s and this ~410 KB payload is usually
-     identical between polls; a strong ETag over the exact bytes lets an
-     unchanged response come back as a bodyless 304. force-dynamic still holds
-     — the body is recomputed every request, only its transfer is skipped. */
-  const etag = `"${createHash("sha1").update(body).digest("hex")}"`;
+  } satisfies FilesResponse;
+  const encoded = dependencies.encode?.(data);
+  const body = encoded?.body ?? JSON.stringify(data);
+  const etag = encoded?.etag ?? `"${createHash("sha1").update(body).digest("hex")}"`;
   markTiming("files-json");
   const responseHeaders = { ETag: etag, "server-timing": timings.join(", ") };
   if (request.headers.get("if-none-match") === etag) {

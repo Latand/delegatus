@@ -1,3 +1,4 @@
+import { verifiedCodexSocketOwner } from "./codexSocketTransport";
 import { operatorDecisionFormsRequired } from "@/lib/orchestrator/operatorDecisionForms";
 import { learnedRulesForLaunchProfile, roleMemoryProfileForIdentity } from "@/lib/memory/roleLaunch";
 import fs from "node:fs";
@@ -20,6 +21,7 @@ import { loadPipelineOwnershipForStartupAsync, pipelineRegistryHealthAsync, with
 import {
   adoptClaudeRegistryHosts,
   adoptCodexRegistryHosts,
+  detachCodexHostForViewerRestart,
   demoteSkippedStructuredRegistryHosts,
   reconcileDeadStructuredRegistryHosts,
   type AdoptedClaudeHost,
@@ -286,6 +288,8 @@ async function orchestratorRestartRecoveryTargets(
     /* A pane-hosted seat is somebody else's transport; only a structured seat
        has a host this Viewer severed by restarting. */
     if (!entry?.structuredHost || entry.host !== null) continue;
+    // A surviving native callback owner keeps its turn across this restart.
+    if (entry.structuredHost.process && verifiedCodexSocketOwner({ endpoint: entry.structuredHost.endpoint, process: entry.structuredHost.process })) continue;
     const liveness = await conversationTurnLiveness(registry, conversationId, { ...dependencies, snapshot });
     if (liveness?.state !== "severed" || liveness.turn !== "busy") continue;
     /* One line per seat this boot decided to resume, carrying the evidence it
@@ -553,6 +557,7 @@ async function restartCutTargets(
        given is still a predecessor. An idle row is a Claude turn that ended. */
     if (!entry?.structuredHost || entry.host !== null) continue;
     const live = entry.status === "live";
+    if (entry.structuredHost.process && verifiedCodexSocketOwner({ endpoint: entry.structuredHost.endpoint, process: entry.structuredHost.process })) continue;
     if (!live && !(entry.status === "idle" && conversation.engine === "claude")) continue;
     const claimant = entry.claimOwner ? structuredClaimIdentity(entry.claimOwner) : null;
     if (claimant && sameRecordedProcessIdentity(self, claimant)) continue;
@@ -1056,6 +1061,7 @@ function interruptedCodexConversations(
     if (conversation.engine !== "codex" || !generation) return [];
     const key = { engine: "codex" as const, sessionId: generation.id };
     const entry = snapshot.entries[sessionKeyId(key)];
+    if (entry?.structuredHost?.process && verifiedCodexSocketOwner({ endpoint: entry.structuredHost.endpoint, process: entry.structuredHost.process })) return [];
     /* A continuation is a paid turn spent telling a seat to resume something.
        When this boot could not read the transcript at all, the word on the row
        is the only thing left saying there is anything to resume — and it is
@@ -1570,6 +1576,8 @@ async function structuredStartupAdoptionFilter(
     }
     const conversationId = registry.canonicalConversationId(conversation.id);
     if (pendingWork(entry)) return true;
+    if (!settledStageConversationIds.has(conversationId) && entry.structuredHost?.pendingAttention.length
+      && entry.structuredHost.process && verifiedCodexSocketOwner({ endpoint: entry.structuredHost.endpoint, process: entry.structuredHost.process })) return true;
     if (conversation.turn.state === "terminal") return false;
     /* A stage attempt the pipeline has already settled has no controller
        left to drive it: no verdict will be accepted and no next stage will
@@ -2076,7 +2084,9 @@ async function adoptStructuredHostsPass(
         }
         const current = registry.readOnlySnapshot().entries[sessionKeyId(entry.key)];
         if (!current || !shouldAdopt(current)) return null;
-        return registry.claimStructuredHost(entry.key, owner, { allowUnhosted: true });
+        const socketOwner = current.structuredHost?.process && verifiedCodexSocketOwner({ endpoint: current.structuredHost.endpoint, process: current.structuredHost.process })
+          ? { endpoint: current.structuredHost.endpoint, process: current.structuredHost.process } : undefined;
+        return registry.claimStructuredHost(entry.key, owner, { allowUnhosted: true, reconnectCodex: socketOwner });
       }, "claiming startup host");
     const codexCandidateCount = adoptionCandidates.filter((entry) => entry.key.engine === "codex").length;
     const claudeCandidateCount = adoptionCandidates.length - codexCandidateCount;
@@ -2130,6 +2140,11 @@ async function adoptStructuredHostsPass(
           Boolean(seatMembership && seatMembership.containerId === memoryProject),
         ) ?? undefined;
         const owner = resolveCodexOwner(entry);
+        // The surviving process retains its original MCP capability and launch
+        // policy. Rotating its token would strand every tool call after adoption.
+        if (entry.structuredHost?.process && verifiedCodexSocketOwner({ endpoint: entry.structuredHost.endpoint, process: entry.structuredHost.process })) {
+          return { cwd: entry.cwd, codexHome: owner?.home, memoryCell, env: startupEnvironment };
+        }
         const capability = registry.rotateSpawnCapabilityForPath(entry.artifactPath);
         const access = materializeStructuredHostAccess(
           structuredHostAccessPolicy(launchProfile),
@@ -2635,6 +2650,7 @@ export async function releaseUnpublishedStartupHostsForDemotion(
     .filter((item) => !hasStructuredDeliveryHost(item.key));
   const released = new Set<string>();
   const outcomes = await Promise.allSettled(unpublished.map(async ({ key, host }) => {
+    if (await detachCodexHostForViewerRestart(registry, key, host)) { released.add(sessionKeyId(key)); return; }
     const state = await host.health();
     try {
       if (!await handOverHostForDemotion(registry, key, state, options, () => host.health())) return;

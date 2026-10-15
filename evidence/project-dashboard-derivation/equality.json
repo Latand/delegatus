@@ -1,0 +1,156 @@
+{
+  "steps": [
+    "initial",
+    "clock",
+    "size-mtime",
+    "task-status",
+    "long-resume"
+  ],
+  "identities": {
+    "before": [
+      {
+        "step": "initial",
+        "cards": 357,
+        "unchanged": 0,
+        "changed": [],
+        "sha256": "6b60cf362e664a8c27e2823deef65ec4c5ae637d4c8c735dca3273519f9c7ad6"
+      },
+      {
+        "step": "clock",
+        "cards": 357,
+        "unchanged": 357,
+        "changed": [],
+        "sha256": "6b60cf362e664a8c27e2823deef65ec4c5ae637d4c8c735dca3273519f9c7ad6"
+      },
+      {
+        "step": "size-mtime",
+        "cards": 357,
+        "unchanged": 357,
+        "changed": [],
+        "sha256": "8961c3d9976049e07655bdca81d40517e5e6668fc2e6df2143c76eb99fd19075"
+      },
+      {
+        "step": "task-status",
+        "cards": 357,
+        "unchanged": 356,
+        "changed": [
+          "task:t-export"
+        ],
+        "sha256": "1540e9a58d377abbd0ed2776513a1dd8ba69fc9ff919b2c607428ee2ba199441"
+      },
+      {
+        "step": "long-resume",
+        "cards": 293,
+        "unchanged": 293,
+        "changed": [],
+        "sha256": "8e35c4f60da69d47790526090d968a5c8ad52397c6db9e44ec0c6c5d941bf0dd"
+      }
+    ],
+    "after": [
+      {
+        "step": "initial",
+        "cards": 357,
+        "unchanged": 0,
+        "changed": [],
+        "sha256": "6b60cf362e664a8c27e2823deef65ec4c5ae637d4c8c735dca3273519f9c7ad6"
+      },
+      {
+        "step": "clock",
+        "cards": 357,
+        "unchanged": 357,
+        "changed": [],
+        "sha256": "6b60cf362e664a8c27e2823deef65ec4c5ae637d4c8c735dca3273519f9c7ad6"
+      },
+      {
+        "step": "size-mtime",
+        "cards": 357,
+        "unchanged": 357,
+        "changed": [],
+        "sha256": "8961c3d9976049e07655bdca81d40517e5e6668fc2e6df2143c76eb99fd19075"
+      },
+      {
+        "step": "task-status",
+        "cards": 357,
+        "unchanged": 356,
+        "changed": [
+          "task:t-export"
+        ],
+        "sha256": "1540e9a58d377abbd0ed2776513a1dd8ba69fc9ff919b2c607428ee2ba199441"
+      },
+      {
+        "step": "long-resume",
+        "cards": 293,
+        "unchanged": 293,
+        "changed": [],
+        "sha256": "8e35c4f60da69d47790526090d968a5c8ad52397c6db9e44ec0c6c5d941bf0dd"
+      }
+    ]
+  },
+  "comparisons": [
+    {
+      "step": "initial",
+      "projection": {
+        "byteEqual": true,
+        "bytes": 5320680,
+        "sha256": "6b60cf362e664a8c27e2823deef65ec4c5ae637d4c8c735dca3273519f9c7ad6"
+      },
+      "dom": {
+        "byteEqual": true,
+        "bytes": 42307,
+        "sha256": "687506ad30a84c7c018fff040aec76398178eb94c3cd373e86e568849143ad9c"
+      }
+    },
+    {
+      "step": "clock",
+      "projection": {
+        "byteEqual": true,
+        "bytes": 5320680,
+        "sha256": "6b60cf362e664a8c27e2823deef65ec4c5ae637d4c8c735dca3273519f9c7ad6"
+      },
+      "dom": {
+        "byteEqual": true,
+        "bytes": 42308,
+        "sha256": "01442618c5d2fc8c31c3c9a77b2a4f24d456a6f9102774b65816e069bdaa6886"
+      }
+    },
+    {
+      "step": "size-mtime",
+      "projection": {
+        "byteEqual": true,
+        "bytes": 5320680,
+        "sha256": "8961c3d9976049e07655bdca81d40517e5e6668fc2e6df2143c76eb99fd19075"
+      },
+      "dom": {
+        "byteEqual": true,
+        "bytes": 42308,
+        "sha256": "01442618c5d2fc8c31c3c9a77b2a4f24d456a6f9102774b65816e069bdaa6886"
+      }
+    },
+    {
+      "step": "task-status",
+      "projection": {
+        "byteEqual": true,
+        "bytes": 5320673,
+        "sha256": "1540e9a58d377abbd0ed2776513a1dd8ba69fc9ff919b2c607428ee2ba199441"
+      },
+      "dom": {
+        "byteEqual": true,
+        "bytes": 42693,
+        "sha256": "e4b42f5798dc9373e132cde1b5d42ba08ecf1865481878814b68b510c30c85c6"
+      }
+    },
+    {
+      "step": "long-resume",
+      "projection": {
+        "byteEqual": true,
+        "bytes": 4748936,
+        "sha256": "8e35c4f60da69d47790526090d968a5c8ad52397c6db9e44ec0c6c5d941bf0dd"
+      },
+      "dom": {
+        "byteEqual": true,
+        "bytes": 34508,
+        "sha256": "d729ef0d91651fb10e01be06298b22f6848cd73702cf015ab0271e057c87c14c"
+      }
+    }
+  ]
+}

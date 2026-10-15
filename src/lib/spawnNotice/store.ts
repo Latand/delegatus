@@ -24,7 +24,9 @@ export type SpawnNoticeSkip =
   /** The launcher was a seat since retired, and its project holds none now. */
   | "no-seat"
   /** The recipient resolved to the child itself. */
-  | "self";
+  | "self"
+  /** A lost launch is old, already answered, or its task has settled. */
+  | "loss-handled";
 
 export interface LostSpawnNotice {
   launchId: string;

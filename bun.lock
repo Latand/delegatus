@@ -18,6 +18,7 @@
         "react": "19.2.8",
         "react-dom": "19.2.8",
         "sharp": "0.35.5",
+        "ws": "8.21.0",
         "zod": "4.4.3",
       },
       "devDependencies": {
@@ -28,6 +29,7 @@
         "@types/qrcode": "^1.5.6",
         "@types/react": "^19",
         "@types/react-dom": "^19",
+        "@types/ws": "8.18.1",
         "ajv": "8.20.0",
         "ajv-formats": "3.0.1",
         "eslint": "^10",

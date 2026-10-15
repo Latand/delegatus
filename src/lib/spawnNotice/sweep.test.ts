@@ -17,7 +17,7 @@ const {
   SPAWN_NOTICE_COALESCE_MS, SPAWN_NOTICE_FINAL_MESSAGE_BYTES, SPAWN_NOTICE_MAX_ATTEMPTS,
 } = await import("./sweep");
 const { recordSpawnTurnEnded } = await import("@/lib/runtime/serverConsumers");
-const { spawnNoticeRecipient, transcriptErrorFromRecords } = await import("./production");
+const { spawnLossRelevant, spawnNoticeRecipient, transcriptErrorFromRecords } = await import("./production");
 type Ports = import("./sweep").SpawnNoticeSweepPorts;
 type Request = import("./sweep").SpawnNoticeDeliveryRequest;
 type Answer = import("./sweep").SpawnNoticeDeliveryAnswer;
@@ -433,7 +433,7 @@ test("a lost launch sends its reason and task moves once even with a busy child 
   } });
   const { ports, sent, busy, answers } = harness([child], {
     finalMessage: () => { throw new Error("a lost launch has no final message to read"); },
-    recipient: () => ({ kind: "deliver", conversationId: "conversation_fixture_current_seat", path: "/sessions/current-seat.jsonl" }),
+    recipient: () => ({ kind: "deliver", conversationId: LAUNCHER, path: `/sessions/${LAUNCHER}.jsonl` }),
   });
   busy.add(child);
   answers.push({ ok: false, error: "delivery unknown", uncertain: true });
@@ -443,10 +443,53 @@ test("a lost launch sends its reason and task moves once even with a busy child 
   expect(sent[0]!.text).toContain("Launch lost-fixture failed: no rollout found for thread id");
   expect(sent[0]!.text).toContain("Task task-loss: launch row failed, assigned → assigned");
   expect(sent[0]!.text).toContain("original key replays this failure");
-  expect(sent[0]!.conversationId).toBe("conversation_fixture_current_seat");
+  expect(sent[0]!.conversationId).toBe(LAUNCHER);
   await sweepSpawnNotices(ports);
   expect(sent).toHaveLength(2);
   expect(sent[1]).toEqual(sent[0]);
   await sweepSpawnNotices(ports);
   expect(sent).toHaveLength(2);
+});
+
+test.each(["initial", "retry"])("a lost launch never follows a rotated seat on %s delivery", async phase => {
+  const child = nextChild();
+  obligation(child, "launch:rotated", { outcome: "lost" });
+  let rotated = phase === "initial";
+  const { ports, sent, answers } = harness([child], { recipient: () => ({ kind: "deliver", conversationId: rotated ? "conversation_successor" : LAUNCHER, path: "/sessions/seat.jsonl" }) });
+  if (phase === "retry") {
+    answers.push({ ok: false, error: "connection closed", uncertain: true });
+    await sweepSpawnNotices(ports);
+    rotated = true;
+  }
+  const before = sent.length;
+  await sweepSpawnNotices(ports);
+  expect(sent).toHaveLength(before);
+  expect(store.readSpawnNoticeTurn(child, "launch:rotated")?.state).toBe("skipped");
+});
+
+test("a delayed lost notice records the failure time and offers no relaunch", async () => {
+  const child = nextChild();
+  obligation(child, "launch:old", { outcome: "lost", endedAt: new Date(T0 - 24 * 60 * 60_000).toISOString() });
+  const { ports, sent } = harness([child]);
+  const row = store.readSpawnNoticeTurn(child, "launch:old")!;
+  const text = composeSpawnNotice({ child, title: "Old work", turns: [row], final: { text: null, error: null } });
+  expect(text).toContain(row.endedAt);
+  expect(text).not.toContain("Relaunch");
+  await sweepSpawnNotices(ports);
+  expect(sent).toEqual([]);
+  expect(store.readSpawnNoticeTurn(child, "launch:old")?.state).toBe("skipped");
+});
+
+test.each(["legacy", "refused", "settled", "deleted", "current"] as const)("delivery rechecks a %s launch against its admitted task", async state => {
+  const child = nextChild();
+  obligation(child, "launch:recheck", { outcome: "lost", lost: { launchId: "recheck", title: "Check work", reason: "host lost", tasks: [] } });
+  const { ports, sent } = harness([child], { lossRelevant: row => spawnLossRelevant(row, {
+    receipt: () => ({ rejection: null,
+      ...(state === "refused" ? { failureAnnouncementSuppressed: true as const } : {}),
+      ...(state === "legacy" ? {} : { failureReporting: { failedAt: row.endedAt, lifecycle: true, notice: true, task: true, taskIds: ["work"] } }) }),
+    task: () => state === "deleted" ? null : { status: state === "settled" ? "done" : "inbox" },
+  }) });
+  await sweepSpawnNotices(ports);
+  expect(sent).toHaveLength(state === "current" ? 1 : 0);
+  expect(store.readSpawnNoticeTurn(child, "launch:recheck")?.state).toBe(state === "current" ? "sent" : "skipped");
 });
