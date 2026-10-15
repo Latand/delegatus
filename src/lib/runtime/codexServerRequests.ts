@@ -73,6 +73,9 @@ export function decodeCodexServerRequest(protocol: CodexPinnedProtocol, id: stri
     if (ids.length === 0 || ids.some(id => !id.trim()) || new Set(ids).size !== ids.length) {
       throw new Error("Codex question IDs must be nonempty and unique");
     }
+    if (request.params.questions.some(question => !question.question.trim())) {
+      throw new Error("Codex question prompts must be nonempty");
+    }
   }
   return request;
 }

@@ -68,6 +68,14 @@ describe.each(["0.154.0", "0.159.0", "0.162.1"])("Codex %s request boundary", ve
     expect(() => decodeCodexServerRequest(protocol, 1, question, { ...questions, questions: [questions.questions[0], questions.questions[0]] })).toThrow("unique");
   });
 
+  test.each(["", " \t\n"])("refuses a blank prompt %j before projection can drop its question", blank => {
+    const params = { ...questions, questions: [
+      { ...questions.questions[0]!, question: blank },
+      questions.questions[1]!,
+    ] };
+    expect(() => decodeCodexServerRequest(protocol, 1, question, params)).toThrow("question prompts must be nonempty");
+  });
+
   test("grants only requested permission scopes", () => {
     const permissions = { network: { enabled: true }, fileSystem: { read: ["/workspace/input"], write: ["/workspace/output"] } };
     const params = { ...approval, command: undefined, cwd: "/workspace", permissions };
