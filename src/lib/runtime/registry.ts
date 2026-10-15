@@ -6,6 +6,7 @@ import type {
   RegistryConversation,
   RegistryFile,
   StructuredHostColumns,
+  StructuredTerminationCapture,
 } from "@/lib/agent/registry";
 import { adoptionRefusal } from "@/lib/links/adoptionGuard";
 import { sessionKeyId, type SessionKey } from "@/lib/agent/sessionKey";
@@ -14,6 +15,7 @@ import {
   processIdentityMayOwn,
   processIdentityProvenDead,
   processIdentityStatus,
+  sameRecordedProcessIdentity,
 } from "@/lib/processIdentity";
 
 import { CodexAppServerHost, type CodexAppServerHostOptions } from "./codexAppServerHost";
@@ -23,6 +25,7 @@ import { StructuredHostAdoptionCleanupError, type HostState } from "./engineHost
 import { structuredHostsEnabled } from "./flags";
 import { conversationTurnLiveness, type TurnLivenessDependencies } from "./liveness";
 import { restartCutEvidenceHolds } from "./restartCutHold";
+import type { StructuredHostTerminationDependencies } from "./structuredHostControl";
 
 export { structuredHostsEnabled };
 
@@ -78,6 +81,7 @@ export function claudeHostColumns(state: HostState, writerClaimEpoch: number): S
     ...(state.pendingToolUses?.length ? { pendingToolUses: state.pendingToolUses } : {}),
     ...(state.providerRetry ? { providerRetry: state.providerRetry } : {}),
     ...(state.memory ? { memory: state.memory } : {}),
+    ...(state.ended ? { ended: state.ended } : {}),
     activeFlags: state.activeFlags,
   };
 }
@@ -118,6 +122,10 @@ export async function persistCodexHost(
 
 export interface StructuredHostPersistenceOptions {
   cursorDebounceMs?: number;
+  /** Termination ladder seams for the tree a host stop captured (#2790). */
+  terminationStop?: StructuredOrphanStopDependencies;
+  /** How long a captured tree that outlived its ladder waits before the next one. */
+  terminationRetryMs?: number;
 }
 
 interface ObservableStructuredHost {
@@ -125,7 +133,11 @@ interface ObservableStructuredHost {
   release(): Promise<void>;
   setWriterFence(check: () => boolean): void;
   onStateChange(listener: (state: HostState) => void): () => void;
+  setTerminationCapture?(listener: ((root: number, tree: readonly ProcessIdentity[]) => boolean) | null): void;
 }
+
+const DEFAULT_TERMINATION_RETRY_MS = 5_000;
+const HOST_STOP_SOURCE = "structured-host-stop";
 
 export const DEFAULT_CURSOR_DEBOUNCE_MS = 30_000;
 
@@ -165,6 +177,10 @@ async function bindStructuredHostPersistence(
 ): Promise<() => void> {
   host.setWriterFence(() => registry.ownsStructuredHostClaim(key, claimOwner, writerClaimEpoch));
   let lastPersistedState: HostState;
+  /* Whether the tree holding the row is the one this host's own stop
+     captured. Another stop's capture is that stop's to finish, so this
+     binding gives its terminal write up to it; its own it finishes itself. */
+  let ownCapture = false;
   const persist = (state: HostState, terminal = false): AgentRegistryEntry => {
     const columns = columnsFromState(state, writerClaimEpoch);
     const persisted = registry.setStructuredHostClaimed(
@@ -180,7 +196,7 @@ async function bindStructuredHostPersistence(
     if (!persisted) {
       /* Two refusals share one null. A captured termination tree holds the row
          while this writer still owns it; a lost claim means another writer does. */
-      if (!terminal && registry.structuredHostWriteHeldByTermination(key, claimOwner, writerClaimEpoch)) {
+      if ((!terminal || ownCapture) && registry.structuredHostWriteHeldByTermination(key, claimOwner, writerClaimEpoch)) {
         throw new StructuredHostWriteHeld();
       }
       throw new Error("structured host writer claim is stale");
@@ -204,6 +220,38 @@ async function bindStructuredHostPersistence(
   let pendingState: HostState | null = null;
   let cursorTimer: ReturnType<typeof setTimeout> | null = null;
   let unsubscribe = () => {};
+  /* A host stop signals its child's process group, and a tool that left the
+     group keeps writing in the worktree after the child exits (#2790). The
+     tree the host read before its first signal is captured onto the row, and
+     the terminal write that releases this claim waits until the shared ladder
+     proves every captured process gone. Until then the row keeps its root,
+     its capture and this claim, so no successor can claim it. */
+  let heldTerminal: HostState | null = null;
+  let settling = false;
+  let settleTimer: ReturnType<typeof setTimeout> | null = null;
+  const terminationRetryMs = Number.isFinite(options.terminationRetryMs)
+    ? Math.max(0, options.terminationRetryMs!)
+    : DEFAULT_TERMINATION_RETRY_MS;
+  /* The host signals nothing until this answers true (#2790). A row that
+     still records the host's child takes the tree whoever holds its claim:
+     the capture is what refuses a successor once the child is gone. Only a
+     row that records another process has no place for it, and there the stop
+     goes ahead as it always did. A capture the registry refused answers
+     false, so the child keeps running and keeps its own fence. */
+  host.setTerminationCapture?.((rootPid, tree) => {
+    const entry = registry.readOnlySnapshot().entries[sessionKeyId(key)];
+    const root = entry?.structuredHost?.process ?? null;
+    if (!entry || !root || root.pid !== rootPid) return true;
+    if (!root.startIdentity || !root.bootEpoch) return false;
+    const prior = (entry.structuredTerminationSurvivors?.length ?? 0) > 0;
+    const capture = registry.captureStructuredTerminationSurvivors(key, root, tree, HOST_STOP_SOURCE);
+    if (!capture) return false;
+    /* Another stop's capture is that stop's to finish, unless this one named
+       a process it had not. */
+    if (!failed && entry.claimOwner === claimOwner && entry.claimEpoch === writerClaimEpoch
+      && (!prior || capture.added.length > 0)) ownCapture = true;
+    return true;
+  });
 
   const clearCursorTimer = () => {
     if (cursorTimer === null) return;
@@ -223,7 +271,9 @@ async function bindStructuredHostPersistence(
     clearCursorTimer();
     unsubscribe();
     releaseClaim();
-    void host.release();
+    /* A release that could not record its child's tree sends nothing and
+       says so; the child keeps its own fence, so nothing here awaits it. */
+    void host.release().catch(() => undefined);
   };
   const persistPending = () => {
     const state = pendingState;
@@ -255,8 +305,51 @@ async function bindStructuredHostPersistence(
     }, cursorDebounceMs);
     cursorTimer.unref?.();
   };
+  const settleHeldTerminal = () => {
+    if (settling || failed || heldTerminal === null) return;
+    settling = true;
+    void endHostStopCapture(registry, key, claimOwner, writerClaimEpoch, options.terminationStop)
+      .catch(() => "retry" as const)
+      .then((outcome) => {
+        settling = false;
+        const state = heldTerminal;
+        if (failed || state === null) return;
+        if (outcome === "lost") {
+          heldTerminal = null;
+          fail();
+          return;
+        }
+        if (outcome === "settled") {
+          try {
+            persist(state, true);
+            heldTerminal = null;
+            claimReleased = true;
+            stopped = true;
+            unsubscribe();
+            return;
+          } catch (error) {
+            if (!(error instanceof StructuredHostWriteHeld)) {
+              heldTerminal = null;
+              fail();
+              return;
+            }
+          }
+        }
+        settleTimer = setTimeout(() => {
+          settleTimer = null;
+          settleHeldTerminal();
+        }, terminationRetryMs);
+        settleTimer.unref?.();
+      });
+  };
   const stop = () => {
     if (stopped) return;
+    /* The held terminal write releases the claim once the tree is gone. */
+    if (heldTerminal !== null) {
+      stopped = true;
+      unsubscribe();
+      return;
+    }
     try {
       persistPending();
     } catch (error) {
@@ -275,6 +368,10 @@ async function bindStructuredHostPersistence(
   unsubscribe = host.onStateChange((state) => {
     if (failed || stopped) return;
     const terminal = state.status === "unhosted" || (state.status === "dead" && state.pid === null);
+    if (heldTerminal !== null) {
+      if (terminal) heldTerminal = structuredClone(state);
+      return;
+    }
     if (!terminal && sameMaterialHostState(lastPersistedState, state)) {
       pendingState = structuredClone(state);
       schedulePending();
@@ -291,6 +388,11 @@ async function bindStructuredHostPersistence(
       }
     } catch (error) {
       if (error instanceof StructuredHostWriteHeld) {
+        if (terminal) {
+          heldTerminal = structuredClone(state);
+          settleHeldTerminal();
+          return;
+        }
         pendingState = structuredClone(state);
         schedulePending();
         return;
@@ -300,6 +402,30 @@ async function bindStructuredHostPersistence(
   });
   if (stopped) unsubscribe();
   return stop;
+}
+
+/** Ends what a host stop captured on its own row, once the host's child is
+    gone: `settled` when no capture remains, `retry` while one still may run,
+    and `lost` when the row or the claim moved on and the capture is no
+    longer this binding's to finish. */
+async function endHostStopCapture(
+  registry: AgentRegistry,
+  key: SessionKey,
+  claimOwner: string,
+  claimEpoch: number,
+  dependencies: StructuredOrphanStopDependencies = {},
+): Promise<"settled" | "retry" | "lost"> {
+  const ours = (entry: AgentRegistryEntry | undefined, root: ProcessIdentity) => Boolean(entry)
+    && entry!.structuredHost?.process != null
+    && sameRecordedProcessIdentity(entry!.structuredHost.process, root)
+    && (entry!.claimOwner === null || (entry!.claimOwner === claimOwner && entry!.claimEpoch === claimEpoch));
+  const entry = registry.readOnlySnapshot().entries[sessionKeyId(key)];
+  const root = entry?.structuredHost?.process ?? null;
+  if (!entry || !root || !ours(entry, root)) return "lost";
+  if ((entry.structuredTerminationSurvivors?.length ?? 0) === 0) return "settled";
+  if (await endRecordedStructuredTree(registry, key, root, HOST_STOP_SOURCE,
+    (current) => ours(current, root), dependencies)) return "settled";
+  return ours(registry.readOnlySnapshot().entries[sessionKeyId(key)], root) ? "retry" : "lost";
 }
 
 export async function bindCodexHostPersistence(
@@ -451,12 +577,104 @@ async function terminateVerifiedProcess(processIdentity: ProcessIdentity): Promi
   return waitForVerifiedProcessExit(processIdentity, ORPHAN_KILL_GRACE_MS);
 }
 
+/** Ends an orphaned engine process and every process it started, fenced on
+    the identity the row records, and true only once all of them are proven
+    gone (#2790). Signalling the recorded pid alone let a detached shell or
+    tool the engine started outlive it, still writing in the worktree, while
+    a successor claimed the session beside it; once its parent had exited no
+    later walk could find it. So the tree is captured onto the row before the
+    first signal and ended through the same ladder an operator kill uses.
+    Whatever outlives that ladder stays captured on the row, which refuses
+    every claim, so no successor starts and no identity is dropped until a
+    later stop confirms each one gone. */
 async function terminateVerifiedStructuredOrphan(
+  registry: AgentRegistry,
+  key: SessionKey,
   processIdentity: ProcessIdentity,
   claimOwner: string | null,
+  dependencies: StructuredOrphanStopDependencies = {},
 ): Promise<boolean> {
   if (claimOwnerBlocksOrphanReap(claimOwner)) return false;
-  return terminateVerifiedProcess(processIdentity);
+  return endRecordedStructuredTree(registry, key, processIdentity, "structured-orphan-stop",
+    (current) => !claimOwnerBlocksOrphanReap(current?.claimOwner ?? null), dependencies);
+}
+
+/** Ends the process a row records and every process captured beside it,
+    through the shared identity-fenced ladder, and true only once each is
+    proven gone. `mayEnd` is asked again before every signal, against the row
+    as it is then: a claim taken or the row rebound while the ladder waited
+    means the tree is no longer this stop's to end. Whatever outlives the
+    ladder stays captured on the row. */
+async function endRecordedStructuredTree(
+  registry: AgentRegistry,
+  key: SessionKey,
+  processIdentity: ProcessIdentity,
+  source: string,
+  mayEnd: (current: AgentRegistryEntry | undefined) => boolean,
+  dependencies: StructuredOrphanStopDependencies,
+): Promise<boolean> {
+  const { startIdentity, bootEpoch } = processIdentity;
+  if (!startIdentity || !bootEpoch) return false;
+  const engine = key.engine;
+  if (engine !== "claude" && engine !== "codex" && engine !== "copilot") return false;
+  const { terminateStructuredHostTree } = await import("./structuredHostControl");
+  const root: ProcessIdentity = { pid: processIdentity.pid, startIdentity, bootEpoch };
+  let capture: StructuredTerminationCapture | null = null;
+  const authorize = (): { status: 409; error: string } | null => {
+    const current = registry.readOnlySnapshot().entries[sessionKeyId(key)];
+    const recorded = current?.structuredHost?.process ?? null;
+    if (!current || !recorded || !sameRecordedProcessIdentity(recorded, root)) {
+      return { status: 409, error: "the row no longer records this process" };
+    }
+    if (!mayEnd(current)) return { status: 409, error: "a live writer claim owns this process" };
+    return null;
+  };
+  const outcome = await terminateStructuredHostTree({
+    kind: "structured", pid: root.pid, startIdentity, bootEpoch, engine, sessionId: key.sessionId, conversationId: null,
+    seat: null, turnBusy: null, owned: false, lastActiveAt: null,
+  }, {
+    retainedSurvivors: registry.readOnlySnapshot().entries[sessionKeyId(key)]?.structuredTerminationSurvivors ?? [],
+    authorize,
+    /* No runtime holds this tree: an orphan's claim owner is gone, and a
+       host stop's own child has already exited. */
+    terminateOwnedHost: async () => false,
+    persistCapturedTree: (identities) => {
+      capture = registry.captureStructuredTerminationSurvivors(key, root, identities, source);
+      return capture !== null;
+    },
+    withdrawCapturedTree: () => {
+      if (capture) registry.withdrawStructuredTerminationSurvivors(key, root, capture, source);
+    },
+    retireRegistryEntry: (target, expected, confirmed) =>
+      registry.settleStructuredTerminationSurvivors(target, expected, confirmed, source),
+    ...dependencies,
+  });
+  if (outcome.ok) return true;
+  if (outcome.terminationStarted && outcome.survivors.length > 0) {
+    registry.recordStructuredTerminationSurvivors(key, root, outcome.survivors);
+  }
+  return false;
+}
+
+/** Test seams for the termination ladder an orphan stop runs. */
+export type StructuredOrphanStopDependencies = Pick<StructuredHostTerminationDependencies,
+  "signal" | "sleep" | "graceMs" | "deadlineMs" | "protectedPids">;
+
+/** Stops the engine process a terminal row still records, and everything it
+    started, once no live writer claim owns that row, so a claim refused over
+    it can be asked again (#2790). The row says its stream is gone: nothing
+    can deliver to that process, and a successor started beside it would be a
+    second writer in its worktree. True only when every captured process is
+    proven gone; survivors stay on the row and refuse the claim. */
+export async function stopTerminalStructuredOrphan(
+  registry: AgentRegistry,
+  key: SessionKey,
+  dependencies: StructuredOrphanStopDependencies = {},
+): Promise<boolean> {
+  const entry = registry.readOnlySnapshot().entries[sessionKeyId(key)];
+  const orphan = entry?.structuredHost?.process ?? null;
+  if (!entry || !orphan || (entry.status !== "dead" && entry.status !== "unhosted")) return false;
+  return terminateVerifiedStructuredOrphan(registry, key, orphan, entry.claimOwner ?? null, dependencies);
 }
 
 /**
@@ -497,6 +715,7 @@ export async function demoteSkippedStructuredRegistryHosts(
   registry: AgentRegistry,
   shouldAdopt: StructuredHostAdoptionFilter,
   admit: <T>(entry: AgentRegistryEntry, mutation: () => T) => Promise<T | undefined> = async (_entry, mutation) => mutation(),
+  orphanStop: StructuredOrphanStopDependencies = {},
 ): Promise<void> {
   const rows = Object.values(registry.readOnlySnapshot().entries).filter((entry) =>
     entry.structuredHost && !shouldAdopt(entry));
@@ -536,7 +755,7 @@ export async function demoteSkippedStructuredRegistryHosts(
             ? current.structuredHost.process
             : null;
           if (orphan && current && !shouldAdopt(current)
-            && await terminateVerifiedStructuredOrphan(orphan, current.claimOwner ?? null)) {
+            && await terminateVerifiedStructuredOrphan(registry, entry.key, orphan, current.claimOwner ?? null, orphanStop)) {
             claimed = await admit(entry, () => registry.claimStructuredHost(entry.key, owner, {
               allowUnhosted: true,
               reclaimUnverifiedOwner: true,
@@ -582,6 +801,8 @@ export async function adoptCodexRegistryHosts(
     claimHost?: (entry: AgentRegistryEntry, owner: ProcessIdentity) => Promise<AgentRegistryEntry | null>;
     /** The ownership check before `adopt`; production resolves the tasks. */
     admit?: (entry: AgentRegistryEntry, snapshot: RegistryFile) => { error: string } | null;
+    /** Termination ladder seams for an orphan stopped before adoption (#2790). */
+    orphanStop?: StructuredOrphanStopDependencies;
   } = {},
 ): Promise<AdoptedCodexHost[]> {
   if (!structuredHostsEnabled(env)) return [];
@@ -606,7 +827,7 @@ export async function adoptCodexRegistryHosts(
           if (orphan
             && current
             && shouldAdopt(current)
-            && await terminateVerifiedStructuredOrphan(orphan, current.claimOwner ?? null)) {
+            && await terminateVerifiedStructuredOrphan(registry, entry.key, orphan, current.claimOwner ?? null, dependencies.orphanStop)) {
             const retry = registry.readOnlySnapshot().entries[sessionKeyId(entry.key)];
             if (!retry?.structuredHost || !shouldAdopt(retry)) return;
             claimed = (dependencies.claimHost ? await dependencies.claimHost(entry, owner) : registry.claimStructuredHost(entry.key, owner, { allowUnhosted: true }));
@@ -700,6 +921,8 @@ export async function adoptClaudeRegistryHosts(
     claimHost?: (entry: AgentRegistryEntry, owner: ProcessIdentity) => Promise<AgentRegistryEntry | null>;
     /** The ownership check before `adopt`; production resolves the tasks. */
     admit?: (entry: AgentRegistryEntry, snapshot: RegistryFile) => { error: string } | null;
+    /** Termination ladder seams for an orphan stopped before adoption (#2790). */
+    orphanStop?: StructuredOrphanStopDependencies;
   } = {},
 ): Promise<AdoptedClaudeHost[]> {
   if (!structuredHostsEnabled(env)) return [];
@@ -724,7 +947,7 @@ export async function adoptClaudeRegistryHosts(
           if (orphan
             && current
             && shouldAdopt(current)
-            && await terminateVerifiedStructuredOrphan(orphan, current.claimOwner ?? null)) {
+            && await terminateVerifiedStructuredOrphan(registry, entry.key, orphan, current.claimOwner ?? null, dependencies.orphanStop)) {
             const retry = registry.readOnlySnapshot().entries[sessionKeyId(entry.key)];
             if (!retry?.structuredHost || !shouldAdopt(retry)) return;
             claimed = (dependencies.claimHost ? await dependencies.claimHost(entry, owner) : registry.claimStructuredHost(entry.key, owner, { allowUnhosted: true }));

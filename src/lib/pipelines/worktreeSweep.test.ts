@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -9,7 +10,7 @@ import { openHostTempRoots, stageHostNamespace } from "@/lib/state/hostTempViews
 
 import { globalCache } from "@/lib/scanner/caches";
 import { projectForCwd, recordWorktreeResolution } from "@/lib/scanner/describe";
-import { scanProcesses, type ProcessScan } from "@/lib/tempSweep";
+import { inspectTree, scanProcesses, type ProcessScan } from "@/lib/tempSweep";
 import type { FileEntry, RootKey } from "@/lib/types";
 
 import { readForgeCache, resetForgeCacheForTests, type ForgeCacheFile } from "@/lib/forge/cache";
@@ -118,6 +119,10 @@ function ports(overrides: Partial<WorktreeSweepPorts> & { prs?: MergedPullReques
   const { prs = [], ...rest } = overrides;
   return {
     mode: "on",
+    // Existing Git fixtures model already quiet trees through the stat port.
+    inspect: (dir, settings) => inspectTree(dir, { ...settings, stat: file => {
+      const stat = fs.lstatSync(file); stat.mtimeMs = 1; stat.ctimeMs = 1; return stat;
+    } }),
     git: async (args, cwd) => {
       if (args[0] === "ls-remote") {
         const target = args.at(-1)!;
@@ -2306,7 +2311,7 @@ async function killedSweeper(root: string, dir: string, tip: string, phase: stri
       return link(...args);
     };
     let listings = 0;
-    await sweepMergedWorktrees({ mode: "on", git: async (args, cwd) => {
+    await sweepMergedWorktrees({ mode: "on", now: () => Date.now() + 2 * 86400000, git: async (args, cwd) => {
       if (args[0] === "worktree" && args[1] === "list" && ++listings === 2) die();
       return realGit(args, cwd);
     }, ...(phase === "held-host" ? { accessiblePath: file => "/proc/self/root" + file } : {}),
@@ -2531,4 +2536,114 @@ for (const proof of ["base", "remote-ref"]) for (const timestamp of ["closedAt",
   expect(report.kept[0]!.firstSettledAt).toBe(new Date(RETAIN_NOW).toISOString());
   expect(fs.existsSync(dir)).toBe(true);
   git(["commit", "--allow-empty", "-q", "-m", "locks released on retention hold"], dir);
+});
+
+
+test("a merged checkout with a recent deep write waits for the quiet floor", async () => {
+  const root = repository();
+  const { dir, tip } = lane(root, path.join(caseDir, "quiet-floor"), "topic/quiet-floor");
+  const report = await sweepMergedWorktrees(ports({ repositories: [root], prs: [merged(301, "topic/quiet-floor", tip)], inspect: (directory, options) => inspectTree(directory, { ...options, stat: file => {
+    const stat = fs.lstatSync(file);
+    if (!file.endsWith("index.js")) { stat.mtimeMs = 1; stat.ctimeMs = 1; }
+    return stat;
+  } }) }));
+  expect(report.kept).toContainEqual(expect.objectContaining({ path: dir, reason: "recent-writes" }));
+  expect(fs.existsSync(dir)).toBeTrue();
+});
+
+test("a mount point under a merged checkout keeps it as mount-boundary", async () => {
+  const root = repository();
+  const { dir, tip } = lane(root, path.join(caseDir, "mount-floor"), "topic/mount-floor");
+  const report = await sweepMergedWorktrees(ports({ repositories: [root], prs: [merged(302, "topic/mount-floor", tip)], mountPoints: target => [path.join(target, "node_modules")] }));
+  expect(report.kept).toContainEqual(expect.objectContaining({ path: dir, reason: "mount-boundary" }));
+  expect(fs.existsSync(path.join(dir, "node_modules"))).toBeTrue();
+});
+
+
+test.each(["fresh", "mount"])("a build cache with %s activity is not trimmed", async kind => {
+  const root = repository(); const dir = path.join(path.dirname(root), `${path.basename(root)}-pipeline-trim-quiet`);
+  lane(root, dir, "topic/trim-quiet");
+  const owner = pipeline({ id: "trim-quiet", repoDir: root, worktreeDir: dir, branch: "topic/trim-quiet" });
+  fs.appendFileSync(path.join(dir, ".gitignore"), ".next/\n");
+  const cache = path.join(dir, ".next"); fs.mkdirSync(cache); fs.writeFileSync(path.join(cache, "output"), "fresh");
+  const report = await sweepMergedWorktrees(ports({ pipelines: [owner],
+    ...(kind === "fresh" ? { inspect: inspectTree } : { mountPoints: (target: string) => [path.join(target, "mount")] }) }));
+  expect(report.trimmed).toEqual([]); expect(fs.existsSync(path.join(cache, "output"))).toBeTrue();
+  expect(report.kept).toContainEqual(expect.objectContaining({ path: cache, reason: kind === "fresh" ? "recent-writes" : "mount-boundary" }));
+});
+
+test.each(["deletions", "untracked", "new-head", "holder", "late-file"])("an interrupted removal resumes only for pure deletions: %s", async kind => {
+  const root = repository(); const { dir, tip } = lane(root, path.join(caseDir, "interrupted"), "topic/interrupted");
+  const options = ports({ repositories: [root], prs: [merged(303, "topic/interrupted", tip)] });
+  const intents = path.join(process.env.LLV_STATE_DIR!, "worktree-sweep-removals"); fs.mkdirSync(intents, { recursive: true });
+  fs.writeFileSync(path.join(intents, createHash("sha256").update(dir).digest("hex") + ".json"), JSON.stringify({ path: dir, root, head: tip, preservation: "merged-pr", at: new Date().toISOString() }));
+  fs.unlinkSync(path.join(dir, "README.md"));
+  if (kind === "untracked") fs.writeFileSync(path.join(dir, "unique.txt"), "keep");
+  if (kind === "new-head") { git(["checkout", "--", "README.md"], dir); git(["commit", "--allow-empty", "-qm", "new tip"], dir); }
+  if (kind === "holder") options.conversationCwds = () => [dir];
+  if (kind === "late-file") {
+    const run = options.git;
+    options.git = async (args, cwd) => {
+      if (args[0] === "checkout-index") fs.writeFileSync(path.join(dir, "README.md"), "unique writer bytes\n");
+      return run(args, cwd);
+    };
+  }
+  const report = await sweepMergedWorktrees(options);
+  expect(fs.existsSync(dir)).toBe(kind !== "deletions");
+  expect(report.removed).toHaveLength(kind === "deletions" ? 1 : 0);
+  if (kind === "late-file") expect(fs.readFileSync(path.join(dir, "README.md"), "utf8")).toBe("unique writer bytes\n");
+});
+
+test("an untracked file written at the resumed Git removal boundary survives", async () => {
+  const root = repository(); const { dir, tip } = lane(root, path.join(caseDir, "interrupted-late-write"), "topic/interrupted-late-write");
+  const options = ports({ repositories: [root], prs: [merged(304, "topic/interrupted-late-write", tip)] });
+  const intents = path.join(process.env.LLV_STATE_DIR!, "worktree-sweep-removals"); fs.mkdirSync(intents, { recursive: true });
+  fs.writeFileSync(path.join(intents, createHash("sha256").update(dir).digest("hex") + ".json"), JSON.stringify({ path: dir, root, head: tip, preservation: "merged-pr", at: new Date().toISOString() }));
+  fs.unlinkSync(path.join(dir, "README.md"));
+  const git = options.git;
+  options.git = async (args, cwd) => {
+    if (args[0] === "worktree" && args[1] === "remove") fs.writeFileSync(path.join(dir, "late-unique.txt"), "keep");
+    return git(args, cwd);
+  };
+  const report = await sweepMergedWorktrees(options);
+  expect(report.removed).toEqual([]);
+  expect(fs.existsSync(dir)).toBeTrue();
+  expect(fs.readFileSync(path.join(dir, "late-unique.txt"), "utf8")).toBe("keep");
+});
+
+test("an interrupted trim leaves a trash name the next sweep finishes", async () => {
+  const root = repository(); const dir = path.join(path.dirname(root), `${path.basename(root)}-pipeline-trim-crash`);
+  lane(root, dir, "topic/trim-crash");
+  const owner = pipeline({ id: "trim-crash", repoDir: root, worktreeDir: dir, branch: "topic/trim-crash" });
+  fs.appendFileSync(path.join(dir, ".gitignore"), ".next/\n");
+  const cache = path.join(dir, ".next"); fs.mkdirSync(cache); fs.writeFileSync(path.join(cache, "output"), "disposable");
+  const options = ports({ pipelines: [owner] });
+  const interrupted = await sweepMergedWorktrees({ ...options, removeTree: async () => { throw new Error("interrupted"); } });
+  expect(interrupted.errors.length).toBeGreaterThan(0); expect(fs.existsSync(cache)).toBeFalse();
+  expect(fs.readdirSync(dir).some(name => name.startsWith(".delegatus-trash-"))).toBeTrue();
+  const mounted = await sweepMergedWorktrees({ ...options, mountPoints: target => target === dir ? [path.join(dir, ".next")] : [] });
+  expect(mounted.errors).toEqual([]);
+  expect(fs.readdirSync(dir).some(name => name.startsWith(".delegatus-trash-"))).toBeTrue();
+  const resumed = await sweepMergedWorktrees(options);
+  expect(resumed.errors).toEqual([]);
+  expect(fs.readdirSync(dir).some(name => name.startsWith(".delegatus-trash-"))).toBeFalse();
+});
+
+test("stale worktree cache trim tolerates only the quarantine root's real rename ctime", async () => {
+  const root = repository(); const dir = path.join(path.dirname(root), `${path.basename(root)}-pipeline-trim-ctime`);
+  lane(root, dir, "topic/trim-ctime");
+  const owner = pipeline({ id: "trim-ctime", state: "closed", repoDir: root, worktreeDir: dir, branch: "topic/trim-ctime",
+    closedAt: new Date(Date.now() - FINISHED_WORKTREE_RETENTION_MS - 2 * 24 * 60 * 60 * 1000).toISOString() });
+  fs.appendFileSync(path.join(dir, ".gitignore"), ".next/\n");
+  const cache = path.join(dir, ".next"); fs.mkdirSync(cache); fs.writeFileSync(path.join(cache, "output"), "stale cache");
+  const old = new Date(Date.now() - 10 * 24 * 60 * 60 * 1000);
+  for (const target of [cache, path.join(cache, "output")]) fs.utimesSync(target, old, old);
+  const report = await sweepMergedWorktrees(ports({ pipelines: [owner], now: Date.now,
+    inspect: (target, settings) => inspectTree(target, { ...settings, stat: file => {
+      const stat = fs.lstatSync(file);
+      if (file !== target || !path.basename(target).startsWith(".delegatus-trash-")) stat.ctimeMs = stat.mtimeMs;
+      return stat;
+    } }) }));
+  expect(report.trimmed).toContainEqual(expect.objectContaining({ path: cache }));
+  expect(fs.existsSync(cache)).toBeFalse();
 });

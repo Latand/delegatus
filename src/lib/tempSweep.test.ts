@@ -13,7 +13,10 @@ import {
   startTempSweep,
   stopTempSweep,
   sweepRoots,
-  sweepStaleTempDirs,
+  sweepStaleTempDirs as realSweep,
+  inspectTree,
+  mountPointsUnder,
+  type TempSweepOptions,
   tempSweepMaxAgeMs,
   tempSweepStatus,
   writableRoots,
@@ -50,11 +53,19 @@ function aged(root: string, name: string, ageMs: number): string {
   fs.writeFileSync(path.join(directory, "node_modules", "pkg", "index.js"), "x".repeat(8192));
   fs.writeFileSync(path.join(directory, "file.txt"), "export");
   const when = new Date(Date.now() - ageMs);
-  for (const entry of [path.join(directory, "file.txt"), path.join(directory, "node_modules", "pkg"), path.join(directory, "node_modules"), directory]) {
+  for (const entry of [path.join(directory, "node_modules", "pkg", "index.js"), path.join(directory, "file.txt"), path.join(directory, "node_modules", "pkg"), path.join(directory, "node_modules"), directory]) {
     fs.utimesSync(entry, when, when);
   }
   return directory;
 }
+
+// Legacy fixtures use utimes; the stat port dates their ctimes equally.
+// New freshness cases below call realSweep with actual kernel timestamps.
+const sweepStaleTempDirs = (options: TempSweepOptions) => realSweep({
+  inspect: (directory, settings) => inspectTree(directory, { ...settings, threshold: Infinity, stat: file => {
+    const stat = fs.lstatSync(file); stat.ctimeMs = stat.mtimeMs; return stat;
+  } }), ...options,
+});
 
 async function started(child: ChildProcess): Promise<ChildProcess> {
   children.push(child);
@@ -81,7 +92,7 @@ test("owned names are llv-* and three legacy test prefixes; shared roots and for
 test("the threshold defaults to 24 h, reads hours from the environment, and 0 turns the sweep off", () => {
   expect(tempSweepMaxAgeMs({})).toBe(DAY);
   expect(tempSweepMaxAgeMs({ LLV_TEMP_SWEEP_MAX_AGE_HOURS: " " })).toBe(DAY);
-  expect(tempSweepMaxAgeMs({ LLV_TEMP_SWEEP_MAX_AGE_HOURS: "6" })).toBe(6 * HOUR);
+  expect(tempSweepMaxAgeMs({ LLV_TEMP_SWEEP_MAX_AGE_HOURS: "6" })).toBe(DAY);
   expect(tempSweepMaxAgeMs({ LLV_TEMP_SWEEP_MAX_AGE_HOURS: "0" })).toBeNull();
   expect(tempSweepMaxAgeMs({ LLV_TEMP_SWEEP_MAX_AGE_HOURS: "soon" })).toBe(DAY);
 });
@@ -429,7 +440,7 @@ test.each(["container", "inside-checkout", "aliased-container"])("a protected pi
     aged(temp, "llv-review-export", 3 * DAY);
   }
   const old = new Date(Date.now() - 3 * DAY);
-  for (const entry of [checkout, log, container]) fs.utimesSync(entry, old, old);
+  for (const entry of [path.join(checkout, "source.txt"), checkout, log, container]) fs.utimesSync(entry, old, old);
   const owned = layout === "aliased-container" ? path.join(root, "checkout-alias") : checkout;
   if (owned !== checkout) fs.symlinkSync(checkout, owned, "dir");
   const report = await sweepStaleTempDirs({ maxAgeMs: DAY, roots: [{ path: temp, via: "" }],
@@ -510,7 +521,7 @@ test.skipIf(process.platform !== "linux").each(["cwd", "file"])("production temp
     return result;
   }) as typeof fs.promises.readdir);
   try {
-    const report = (await runTempSweep({ NODE_ENV: "test", LLV_TEMP_SWEEP_MAX_AGE_HOURS: "24" }, { roots: [{ path: root, via: "" }] }))!;
+    const report = (await runTempSweep({ NODE_ENV: "test", LLV_TEMP_SWEEP_MAX_AGE_HOURS: "24" }, { roots: [{ path: root, via: "" }], now: () => Date.now() + 2 * DAY }))!;
     expect(injected).toBeTrue();
     expect(report.removed).toEqual([]);
     expect(report.kept.inUse).toBe(1);
@@ -539,11 +550,13 @@ for (const recycled of [false, true]) test.skipIf(process.platform !== "linux")(
     String(file) === "/proc/1/ns/mnt" ? namespace : Reflect.apply(readlink, fs, [file, ...args])) as typeof readlink)];
   const map = (file: fs.PathLike) => typeof file === "string" && (file === "/proc/1/root" || file.startsWith("/proc/1/root/"))
     ? host + file.slice("/proc/1/root".length) : file;
-  for (const method of ["statSync", "lstatSync", "realpathSync", "readdirSync", "readFileSync", "existsSync", "rmSync"] as const) {
+  for (const method of ["statSync", "lstatSync", "realpathSync", "readdirSync", "readFileSync", "existsSync", "rmSync", "openSync", "unlinkSync", "mkdirSync"] as const) {
     const original = fs[method];
     patches.push(spyOn(fs, method).mockImplementation(((file: fs.PathLike, ...args: unknown[]) =>
       Reflect.apply(original, fs, [map(file), ...args])) as typeof original));
   }
+  const rename = fs.renameSync;
+  patches.push(spyOn(fs, "renameSync").mockImplementation(((from: fs.PathLike, to: fs.PathLike) => rename(map(from), map(to))) as typeof rename));
   for (const method of ["stat", "readdir", "lstat", "rm"] as const) {
     const original = fs.promises[method];
     patches.push(spyOn(fs.promises, method).mockImplementation((async (file: fs.PathLike, ...args: unknown[]) => {
@@ -554,7 +567,7 @@ for (const recycled of [false, true]) test.skipIf(process.platform !== "linux")(
   }
   try {
     const report = (await runTempSweep({ NODE_ENV: "test", LLV_DOCKER_NSENTER_SHIMS: "1", LLV_TEMP_SWEEP_MAX_AGE_HOURS: "24" },
-      { roots: [{ path: canonical, via: "" }], scan: { ownNamespace: "mnt:[container]", processes: [] } }))!;
+      { roots: [{ path: canonical, via: "" }], now: () => Date.now() + 2 * DAY, mountPoints: () => [], scan: { ownNamespace: "mnt:[container]", processes: [] } }))!;
     expect(fs.existsSync(stale)).toBe(recycled);
     if (recycled) { expect(changed).toBe(true); expect(report.removed).toEqual([]); }
     else {
@@ -592,7 +605,7 @@ test("an empty .git marker a cache writes is not a checkout, and its stale root 
   fs.mkdirSync(cache, { recursive: true });
   fs.writeFileSync(path.join(cache, ".git"), "");
   const when = new Date(Date.now() - 3 * DAY);
-  for (const entry of [cache, path.join(directory, "tmp/uvcache"), path.join(directory, "tmp"), directory]) fs.utimesSync(entry, when, when);
+  for (const entry of [path.join(cache, ".git"), cache, path.join(directory, "tmp/uvcache"), path.join(directory, "tmp"), directory]) fs.utimesSync(entry, when, when);
   const report = await sweepStaleTempDirs({ roots: [{ path: root, via: "" }], scan: { ownNamespace: null, processes: [] }, worktrees: [], maxAgeMs: DAY });
   expect(report.removed.map((removal) => path.basename(removal.path))).toEqual(["llv-stage-cache"]);
   expect(fs.existsSync(directory)).toBe(false);
@@ -665,4 +678,213 @@ test("overlapping temp roots partition retained allocations", async () => {
   expect(report.held?.find(row => row.path === child)?.bytes).toBeGreaterThanOrEqual(256 * 1024);
   expect(tempSweepStatus(report)?.heldBytes).toEqual(tempSweepStatus(single)?.heldBytes);
   expect(fs.existsSync(child)).toBe(true);
+});
+
+const noProcesses: ProcessScan = { ownNamespace: null, processes: [] };
+function boundedFixture() {
+  const root = tempRoot();
+  const directory = aged(root, "llv-bounded", 2 * DAY);
+  const options: TempSweepOptions = { roots: [{ path: root, via: "" }], scan: noProcesses, maxAgeMs: DAY };
+  return { root, directory, options };
+}
+
+test("a stale-looking tree with a fresh deep write is young", async () => {
+  const { directory, options } = boundedFixture();
+  fs.writeFileSync(path.join(directory, "node_modules/pkg/index.js"), "fresh");
+  const report = await sweepStaleTempDirs(options);
+  expect(fs.existsSync(directory)).toBeTrue();
+  expect(report.kept.young).toBe(1);
+});
+
+test("a restored mtime with a fresh ctime is young", async () => {
+  const { directory, options } = boundedFixture();
+  const file = path.join(directory, "node_modules/pkg/index.js");
+  fs.writeFileSync(file, "restored");
+  fs.utimesSync(file, 1, 1);
+  expect((await realSweep({ ...options, inspect: (dir, settings) => inspectTree(dir, { ...settings, stat: target => {
+    const stat = fs.lstatSync(target); if (target !== file) stat.ctimeMs = stat.mtimeMs; return stat;
+  } }) })).kept.young).toBe(1);
+  expect(fs.existsSync(file)).toBeTrue();
+});
+
+test("a stale scratch tree survives its own quarantine rename ctime", async () => {
+  const { directory, options } = boundedFixture();
+  const inspect = (target: string, settings: Parameters<typeof inspectTree>[1]) => inspectTree(target, { ...settings, stat: file => {
+    const stat = fs.lstatSync(file);
+    if (file !== target || !path.basename(target).startsWith(".delegatus-trash-")) stat.ctimeMs = stat.mtimeMs;
+    return stat;
+  } });
+  const report = await realSweep({ ...options, inspect });
+  expect(report.removed).toHaveLength(1);
+  expect(fs.existsSync(directory)).toBeFalse();
+});
+
+test("hard-linked dependency ctimes do not keep a stale tree", async () => {
+  const { root, directory, options } = boundedFixture();
+  const file = path.join(directory, "node_modules/pkg/index.js");
+  fs.linkSync(file, path.join(root, "link"));
+  const report = await realSweep({ ...options, inspect: (dir, settings) => inspectTree(dir, { ...settings, stat: target => {
+    const stat = fs.lstatSync(target);
+    if (stat.isDirectory() || stat.nlink === 1) stat.ctimeMs = stat.mtimeMs;
+    return stat;
+  } }) });
+  expect(report.removed).toHaveLength(1);
+  expect(fs.existsSync(path.join(root, "link"))).toBeTrue();
+});
+
+test.each(["entry-limit", "unreadable-tree", "mount-boundary", "changed-during-inspection"] as const)("a %s inspection holds its tree", async reason => {
+  const { directory, options } = boundedFixture();
+  const report = await realSweep({ ...options, inspect: (dir, settings) => {
+    if (reason === "entry-limit") return inspectTree(dir, { ...settings, threshold: Infinity, limit: 2 });
+    if (reason === "mount-boundary") return inspectTree(dir, { ...settings, mounts: [path.join(dir, "node_modules")] });
+    return inspectTree(dir, { ...settings, threshold: Infinity, stat: target => {
+      if (target.endsWith("index.js")) throw Object.assign(new Error("fixture"), { code: reason === "unreadable-tree" ? "EACCES" : "ENOENT" });
+      return fs.lstatSync(target);
+    } });
+  } });
+  expect(report.held?.[0]?.reason).toBe(reason);
+  expect(fs.existsSync(directory)).toBeTrue();
+});
+
+test("a device boundary is held and mountinfo octal escapes are decoded", () => {
+  const { directory } = boundedFixture();
+  const result = inspectTree(directory, { threshold: Infinity, stat: file => {
+    const stat = fs.lstatSync(file);
+    if (file.endsWith("pkg")) stat.dev += 1;
+    return stat;
+  } });
+  expect(result.hold).toBe("mount-boundary");
+  expect(mountPointsUnder("/example space", "", () => "1 2 0:3 / /example\\040space/child rw - ext4 disk rw")).toEqual(["/example space/child"]);
+});
+
+test("a .delegatus-keep file pins a stale tree", async () => {
+  const { directory, options } = boundedFixture();
+  fs.writeFileSync(path.join(directory, ".delegatus-keep"), "");
+  const report = await sweepStaleTempDirs(options);
+  expect(report.held?.[0]?.reason).toBe("pinned");
+  expect(fs.existsSync(directory)).toBeTrue();
+});
+
+test("a starting conversation's cwd keeps a stale tree", async () => {
+  const { directory, options } = boundedFixture();
+  const report = await sweepStaleTempDirs({ ...options, conversationCwds: () => [path.join(directory, "node_modules/pkg")] });
+  expect(report.kept.inUse).toBe(1);
+  expect(fs.existsSync(directory)).toBeTrue();
+});
+
+test("the full freshness walk runs again right before removal", async () => {
+  const { directory, options } = boundedFixture();
+  let reads = 0;
+  const report = await sweepStaleTempDirs({ ...options, currentScan: () => {
+    if (++reads === 2) fs.writeFileSync(path.join(directory, "node_modules/pkg/index.js"), "late write");
+    return noProcesses;
+  } });
+  expect(report.kept.young).toBe(1);
+  expect(fs.existsSync(directory)).toBeTrue();
+});
+
+test("a holder found after the rename restores the tree", async () => {
+  const { root, directory, options } = boundedFixture();
+  const report = await sweepStaleTempDirs({ ...options, currentScan: () => {
+    const trash = fs.readdirSync(root).find(name => name.startsWith(".delegatus-trash-"));
+    return trash ? { ownNamespace: null, processes: [{ pid: 42, namespace: null, stamped: false, paths: [path.join(root, trash)] }] } : noProcesses;
+  } });
+  expect(report.kept.inUse).toBe(1);
+  expect(fs.existsSync(directory)).toBeTrue();
+});
+
+test("dry-run reports what it would remove and renames nothing", async () => {
+  const { directory, options } = boundedFixture();
+  const report = await sweepStaleTempDirs({ ...options, mode: "dry-run" });
+  expect(report.removed).toHaveLength(1);
+  expect(fs.existsSync(directory)).toBeTrue();
+});
+
+test("an interrupted removal leaves only a trash name, finished next sweep", async () => {
+  const { root, directory, options } = boundedFixture();
+  const report = await sweepStaleTempDirs({ ...options, remove: async () => { throw new Error("interrupted"); } });
+  expect(report.errors).toHaveLength(1);
+  expect(fs.existsSync(directory)).toBeFalse();
+  expect(fs.readdirSync(root).some(name => name.startsWith(".delegatus-trash-"))).toBeTrue();
+  const resumed = await sweepStaleTempDirs(options);
+  expect(resumed.trashFinished).toBe(1);
+  expect(fs.readdirSync(root)).toEqual([]);
+});
+
+test.each(["fresh-write", "pin", "git-metadata", "worktree-owner", "entry-limit", "post-scan-new", "post-scan-change"])("trash replay preserves new or uncertain content: %s", async kind => {
+  const { root, directory, options } = boundedFixture();
+  const interrupted = await realSweep({ ...options, now: () => Date.now() + 2 * DAY, remove: async () => { throw new Error("interrupted"); } });
+  expect(interrupted.errors).toHaveLength(1);
+  const trash = path.join(root, fs.readdirSync(root).find(name => name.startsWith(".delegatus-trash-"))!);
+  if (kind === "fresh-write") fs.writeFileSync(path.join(trash, "unique.txt"), "new operator data");
+  if (kind === "pin") fs.writeFileSync(path.join(trash, ".delegatus-keep"), "");
+  if (kind === "git-metadata") fs.mkdirSync(path.join(trash, ".git"));
+  if (kind === "worktree-owner") options.currentWorktrees = () => [directory];
+  if (kind === "post-scan-new" || kind === "post-scan-change") {
+    let changed = false;
+    options.currentScan = () => {
+      const currentTrash = fs.readdirSync(root).find(name => name.startsWith(".delegatus-trash-"));
+      if (currentTrash && !changed) {
+        changed = true;
+        const target = path.join(root, currentTrash, kind === "post-scan-new" ? "scan-created.txt" : "file.txt");
+        fs.writeFileSync(target, kind === "post-scan-new" ? "new scan data" : "changed scan data");
+      }
+      return noProcesses;
+    };
+  }
+  if (kind === "entry-limit") options.inspect = (candidate, settings) => candidate === trash
+    ? { newestMs: 0, entries: 200_001, hold: "entry-limit" } : inspectTree(candidate, { ...settings, threshold: Infinity });
+  const resumed = await realSweep({ ...options, now: () => Date.now() + 2 * DAY });
+  expect(resumed.trashFinished).toBe(0);
+  expect(fs.existsSync(directory) || fs.existsSync(trash)).toBeTrue();
+  const preservedRoot = fs.existsSync(directory) ? directory : trash;
+  const preservedFile = kind === "fresh-write" ? "unique.txt" : kind === "pin" ? ".delegatus-keep"
+    : kind === "git-metadata" ? ".git" : kind === "post-scan-new" ? "scan-created.txt" : "file.txt";
+  expect(fs.existsSync(path.join(preservedRoot, preservedFile))).toBeTrue();
+  if (kind === "post-scan-change") expect(fs.readFileSync(path.join(preservedRoot, "file.txt"), "utf8")).toBe("changed scan data");
+});
+
+test("a fresh file created after the post-rename inspection is preserved", async () => {
+  const { root, directory, options } = boundedFixture(); let created = false;
+  options.currentScan = () => {
+    const name = fs.readdirSync(root).find(entry => entry.startsWith(".delegatus-trash-"));
+    if (name && !created) { created = true; fs.writeFileSync(path.join(root, name, "late-unique.txt"), "keep"); }
+    return noProcesses;
+  };
+  const report = await realSweep({ ...options, now: () => Date.now() + 2 * DAY });
+  expect(created).toBeTrue();
+  expect(fs.existsSync(directory)).toBeTrue();
+  expect(fs.readFileSync(path.join(directory, "late-unique.txt"), "utf8")).toBe("keep");
+  expect(report.removed).toEqual([]);
+});
+
+
+test("a symlink inside a removed tree is unlinked and its target survives", async () => {
+  const { root, directory, options } = boundedFixture();
+  const outside = path.join(root, "foreign"); fs.mkdirSync(outside); fs.writeFileSync(path.join(outside, "keep"), "fresh outside");
+  fs.symlinkSync(outside, path.join(directory, "outside"));
+  const report = await realSweep({ ...options, now: () => Date.now() + 2 * DAY });
+  expect(report.removed).toHaveLength(1); expect(fs.existsSync(directory)).toBeFalse();
+  expect(fs.readFileSync(path.join(outside, "keep"), "utf8")).toBe("fresh outside");
+});
+
+test.each(["argv", "maps"])("a process reference through %s keeps a stale tree", async kind => {
+  const { directory, options } = boundedFixture();
+  if (kind === "argv") {
+    await started(spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)", path.join(directory, "future-script")], { stdio: "ignore", env: { PATH: process.env.PATH, NODE_ENV: "test" } }));
+    options.currentScan = scanProcesses;
+  } else options.scan = { ownNamespace: null, processes: [{ pid: 42, namespace: null, stamped: false, paths: [path.join(directory, "mapped.so")] }] };
+  const report = await sweepStaleTempDirs(options);
+  expect(report.kept.inUse).toBe(1); expect(fs.existsSync(directory)).toBeTrue();
+});
+
+
+test.skipIf(process.platform !== "linux")("a post-rename holder through a proc root alias restores the temp tree", async () => {
+  const { root, directory, options } = boundedFixture();
+  const report = await sweepStaleTempDirs({ ...options, roots: [{ path: root, via: "/proc/self/root" }], currentScan: () => {
+    const trash = fs.readdirSync(root).find(name => name.startsWith(".delegatus-trash-"));
+    return trash ? { ownNamespace: null, processes: [{ pid: 42, namespace: null, stamped: false, paths: [path.join(root, trash)] }] } : noProcesses;
+  } });
+  expect(report.removed).toEqual([]); expect(report.kept.inUse).toBe(1);
+  expect(fs.existsSync(directory)).toBeTrue();
 });

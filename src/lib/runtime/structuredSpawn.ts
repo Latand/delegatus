@@ -47,7 +47,7 @@ import { StructuredHostAdoptionCleanupError, StructuredSessionMaterializationErr
 import type { MessageOrigin } from "./messageOrigin";
 import { agentMessageOrigin, delegatusMessageOrigin } from "./agentMessageAuthor";
 import { isStructuredHostKind, runtimeHostKindForEngine, runtimeSettingsCapability, runtimeSteerCapability, type RuntimeOperationResult, type RuntimeSession, type RuntimeSnapshot } from "./contracts";
-import { bindClaudeHostPersistence, bindCodexHostPersistence, bindCopilotHostPersistence } from "./registry";
+import { bindClaudeHostPersistence, bindCodexHostPersistence, bindCopilotHostPersistence, stopTerminalStructuredOrphan, type StructuredOrphanStopDependencies } from "./registry";
 import { CopilotAcpHost, type CopilotAcpHostOptions } from "./copilotAcpHost";
 import { publishStructuredDeliveryHost, releaseStructuredDeliveryHost, structuredDeliveryLastError, structuredDeliveryHostForConversation, retainUnpublishedStructuredLaunchHost, StructuredDeliveryControllerUnavailableError } from "./structuredDeliveryController";
 import { enqueueStructuredMessage } from "./structuredMessageDelivery";
@@ -1326,6 +1326,8 @@ export interface StructuredSpawnDependencies {
   durableSetupTimeoutMs?: number;
   now?(): number;
   sleep?(ms: number): Promise<void>;
+  /** Termination ladder seams for the orphan a resume stops (#2790). */
+  orphanStop?: StructuredOrphanStopDependencies;
 }
 
 /** Why a queued launch from a previous generation must not be replayed, or
@@ -2409,11 +2411,22 @@ export async function spawnStructuredConversation(
     // The journal can accept spawn before its RPC acknowledgement returns.
     // Publish setup ownership before that await so registering work stays live.
     if (resumeKey && resumeIdentity) {
-      adoptionClaim = input.registry.claimStructuredHost(resumeKey, processIdentity(), {
+      const claimResume = () => input.registry.claimStructuredHost(resumeKey, processIdentity(), {
         allowUnhosted: true, setupHost: pendingColumns(input.engine),
         setupEntry: { artifactPath: resumeIdentity.artifactPath, cwd: input.spec.cwd,
           accountId: input.account.accountId, launchProfile: input.spec.launchProfile },
       });
+      adoptionClaim = claimResume();
+      /* A terminal row over a live engine process refuses the claim (#2790).
+         That process has no stream left and would write beside the resumed
+         one, so it and every process it started are stopped by their
+         recorded identities and the claim asked once more. A live writer
+         claim still keeps it, and a survivor stays captured on the row. */
+      if (!adoptionClaim?.claimOwner
+        && await stopTerminalStructuredOrphan(input.registry, resumeKey, dependencies.orphanStop)) {
+        assertResumeSurvivorsRetired();
+        adoptionClaim = claimResume();
+      }
       if (!adoptionClaim?.claimOwner) {
         adoptionClaimContended = true;
         throw new Error("structured resume host claim is unavailable");
