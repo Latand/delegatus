@@ -4760,6 +4760,235 @@ describe("automatic long-text attachment", () => {
   }, 900_000);
 });
 
+/* Numeric parser work is timed separately from React/layout in this existing
+   conversation driver. An optional private manifest supplies frozen rollouts;
+   only hashes, counts and timings are written to the public evidence. */
+describe("Codex history paging", () => {
+  browserTest("Codex history paging: paired parser measurements and full/paged equality", async () => {
+    const { codexHistoryCorpus } = await import("../feed/__fixtures__/codexHistory");
+    const { createHash } = await import("node:crypto");
+    const out = path.resolve(".artifacts/codex-history");
+    fs.mkdirSync(out, { recursive: true });
+    const revision = Bun.spawnSync(["git", "rev-parse", `${process.env.LLV_HISTORY_BASE ?? "origin/main"}^{commit}`]);
+    if (revision.exitCode !== 0) throw new Error("cannot resolve parser baseline");
+    const base = revision.stdout.toString().trim();
+    const sources = new Map<string, string>();
+    for (const name of ["parse", "contextTokens"]) {
+      const result = Bun.spawnSync(["git", "show", `${base}:src/components/feed/${name}.ts`]);
+      if (result.exitCode !== 0) throw new Error(`cannot read parser baseline: ${name}`);
+      sources.set(path.resolve(`src/components/feed/${name}.ts`), result.stdout.toString());
+    }
+    const build = async (baseline: boolean) => {
+      const result = await Bun.build({
+        entrypoints: ["history-probe"], target: "browser", format: "iife", minify: true,
+        define: { "process.env.NODE_ENV": JSON.stringify("production") },
+        plugins: [{ name: "history-probe", setup(builder) {
+          builder.onResolve({ filter: /^history-probe$/ }, () => ({ path: "history-probe", namespace: "history-probe" }));
+          builder.onLoad({ filter: /.*/, namespace: "history-probe" }, () => ({ loader: "ts", resolveDir: process.cwd(), contents: `
+            import * as parser from ${JSON.stringify(path.resolve("src/components/feed/parse.ts"))};
+            import {comparableHistory, realHistoryIds} from ${JSON.stringify(path.resolve("src/components/feed/__fixtures__/codexHistoryComparison.ts"))};
+            globalThis.${baseline ? "historyBefore" : "historyAfter"} = {...parser, ids: realHistoryIds, shape: s => comparableHistory(s, parser, globalThis.historyRealIds)};
+          ` }));
+          if (baseline) builder.onLoad({ filter: /[/\\]feed[/\\](?:parse|contextTokens)\.ts$/ }, args => {
+            const contents = sources.get(args.path);
+            return contents ? { contents, loader: "ts" } : undefined;
+          });
+        } }],
+      });
+      if (!result.success) throw new Error(result.logs.join("\n"));
+      return result.outputs[0].text();
+    };
+    const bundles = [await build(true), await build(false)];
+    const candidate = Bun.spawnSync(["git", "rev-parse", "HEAD"]).stdout.toString().trim();
+    const sourceHashes = ["src/components/feed/parse.ts", "src/components/feed/contextTokens.ts", "src/components/feed/codexHistory.ts", "src/components/feed/__fixtures__/codexHistoryComparison.ts", "src/components/conversation/conversationWindow.browser.test.tsx"].map(file => ({ path: file, sha256: createHash("sha256").update(fs.readFileSync(file)).digest("hex") }));
+    const manifest = process.env.LLV_CODEX_HISTORY_MANIFEST
+      ? JSON.parse(fs.readFileSync(process.env.LLV_CODEX_HISTORY_MANIFEST, "utf8")) as { label: string; source: string; sha256: string }[]
+      : [533, 866, 1112, 1277, 3146].map((length, index) => ({ label: String.fromCharCode(65 + index), lines: codexHistoryCorpus(length, 16000) }));
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    const readings: unknown[] = [];
+    try {
+      const context = await browser.newContext();
+      const page = await context.newPage();
+      for (const content of bundles) await page.addScriptTag({ content });
+      const cdp = await context.newCDPSession(page);
+      for (const fixture of manifest) {
+        const bytes = "source" in fixture ? fs.readFileSync(fixture.source) : Buffer.from(fixture.lines.join("\n") + "\n");
+        const sha256 = createHash("sha256").update(bytes).digest("hex");
+        if ("sha256" in fixture) expect(sha256).toBe(fixture.sha256);
+        const lines = bytes.toString("utf8").trimEnd().split("\n");
+        await page.evaluate(lines => {
+          const g = globalThis as unknown as { historyLines: string[]; historyRealIds: Set<string>; historyAfter: { ids(lines: string[]): Set<string> } };
+          g.historyLines = lines; g.historyRealIds = g.historyAfter.ids(lines);
+        }, lines);
+        for (const rate of [1, 4]) for (const partition of ["300-lines", "4-MiB"]) {
+          await cdp.send("Emulation.setCPUThrottlingRate", { rate });
+          for (let repeat = -1; repeat < 3; repeat += 1) {
+            const pages = await page.evaluate(async ({ reverse, partition }) => {
+              type Probe = typeof import("../feed/parse") & { shape: (snapshot: unknown) => unknown };
+              const g = globalThis as unknown as { historyBefore: Probe; historyAfter: Probe; historyLines: string[] };
+              const cfg = { engine: "codex", fmt: "codex", showSvc: false, lineFilter: "" } as const;
+              const probes = [g.historyBefore, g.historyAfter];
+              const sessions = probes.map(p => p.createFeedSession(cfg));
+              const lines = g.historyLines;
+              const sizes = partition === "4-MiB" ? lines.map(line => new TextEncoder().encode(line).length + 1) : [];
+              const older = (end: number): number => {
+                if (partition === "300-lines") return Math.max(0, end - 300);
+                let start = end, bytes = 0;
+                while (start > 0 && (bytes + sizes[start - 1] <= 4 * 1024 * 1024 || start === end)) bytes += sizes[--start];
+                return start;
+              };
+              let start = older(lines.length);
+              sessions.forEach(s => s.feed(lines.slice(start), start, false));
+              const tasks: { start: number; duration: number }[] = [];
+              const observer = new PerformanceObserver(list => tasks.push(...list.getEntries().map(e => ({ start: e.startTime, duration: e.duration }))));
+              observer.observe({ type: "longtask" });
+              const wait = () => new Promise(resolve => setTimeout(resolve, 20));
+              const rows = [];
+              while (start > 0) {
+                const old = start; start = older(start);
+                const window = lines.slice(start);
+                const samples: unknown[] = [], snapshots: unknown[] = [];
+                for (const index of reverse ? [1, 0] : [0, 1]) {
+                  const stats = probes[index].codexHistoryStats?.(sessions[index]);
+                  await wait();
+                  const t = performance.now();
+                  snapshots[index] = sessions[index].feed(window, start, false);
+                  const end = performance.now();
+                  await wait();
+                  const after = probes[index].codexHistoryStats?.(sessions[index]);
+                  const delta = after && stats ? Object.fromEntries(["rawLines", "rawBytes", "effectChecks", "effectVisits", "rowPatches", "decodeMs", "replayMs", "verifyMs", "projectionMs"].map(key => [key, after[key as keyof typeof after] as number - (stats[key as keyof typeof stats] as number)])) : null;
+                  samples[index] = { ms: end - t, longTasks: tasks.filter(e => e.start < end && e.start + e.duration > t).map(e => e.duration), delta,
+                    joins: probes[index].feedJoinStats(sessions[index]), retained: after ? { effects: after.effects, slots: after.slots, versions: after.versions, frontier: after.frontier, checkpointBytes: after.checkpointBytes, resets: after.resets, replayByDependency: after.replayByDependency } : null };
+                }
+                const equal = JSON.stringify(probes[0].shape(snapshots[0])) === JSON.stringify(probes[1].shape(snapshots[1]));
+                rows.push({ start, incoming: old - start, window: window.length, before: samples[0], after: samples[1], equal });
+                await wait();
+              }
+              observer.disconnect();
+              return rows;
+            }, { reverse: repeat % 2 === 1, partition });
+            expect(pages.every(row => row.equal)).toBe(true);
+            if (repeat >= 0) {
+              readings.push({ fixture: fixture.label, lines: lines.length, bytes: bytes.length, sha256, rate, partition, repeat, pages });
+              fs.mkdirSync("evidence/codex-history", { recursive: true });
+              fs.writeFileSync("evidence/codex-history/parser.json", JSON.stringify({ base, candidate, sourceHashes, browser: browser.version(), readings }, null, 2) + "\n");
+            }
+          }
+        }
+      }
+      await context.close();
+      // Retention is sampled separately, after timing, in one fresh page per
+      // implementation. Raw input is loaded before the empty-page reading.
+      const memory = [];
+      for (const fixture of manifest) for (const index of [0, 1]) {
+        const isolated = await browser.newContext();
+        try {
+          const page = await isolated.newPage();
+          await page.addScriptTag({ content: bundles[index] });
+          const bytes = "source" in fixture ? fs.readFileSync(fixture.source) : Buffer.from(fixture.lines.join("\n") + "\n");
+          await page.evaluate(lines => { (globalThis as unknown as { historyLines: string[] }).historyLines = lines; }, bytes.toString("utf8").trimEnd().split("\n"));
+          const client = await isolated.newCDPSession(page);
+          await client.send("HeapProfiler.collectGarbage");
+          const before = await client.send("Runtime.getHeapUsage");
+          const counts = await page.evaluate(({ index }) => {
+            type Parser = typeof import("../feed/parse");
+            const g = globalThis as unknown as { historyBefore: Parser; historyAfter: Parser; historyLines: string[]; retainedHistory: import("../feed/parse").FeedSession };
+            const parser = index ? g.historyAfter : g.historyBefore;
+            const session = parser.createFeedSession({ engine: "codex", fmt: "codex", showSvc: false, lineFilter: "" });
+            const lines = g.historyLines;
+            let start = Math.max(0, lines.length - 300);
+            session.feed(lines.slice(start), start, false);
+            while (start > 0) { start = Math.max(0, start - 300); session.feed(lines.slice(start), start, false); }
+            g.retainedHistory = session;
+            return parser.codexHistoryStats?.(session) ?? null;
+          }, { index });
+          await client.send("HeapProfiler.collectGarbage");
+          const after = await client.send("Runtime.getHeapUsage");
+          memory.push({ fixture: fixture.label, implementation: index ? "after" : "before", emptyBytes: before.usedSize, retainedBytes: after.usedSize, sessionDeltaBytes: after.usedSize - before.usedSize,
+            counts: counts ? { effects: counts.effects, slots: counts.slots, versions: counts.versions, frontier: counts.frontier, checkpointBytes: counts.checkpointBytes } : null });
+        } finally { await isolated.close(); }
+      }
+      fs.writeFileSync("evidence/codex-history/memory.json", JSON.stringify({ base, candidate, sourceHashes, memory }, null, 2) + "\n");
+    } finally { await browser.close(); }
+  }, 600_000);
+});
+
+describe("Codex history paging rendered parity", () => {
+  browserTest("Codex history paging: desktop and phone preserve rows, open calls and the scroll anchor", async () => {
+    const out = path.resolve(".artifacts/codex-history/rendered"); fs.mkdirSync(out, { recursive: true });
+    const served = await serveEvidenceFixture(out, FIXTURE);
+    const readings = [];
+    try {
+      for (const width of [1440, 390]) {
+        const browser = await chromium.launch({ ...LAUNCH, ...(width === 1440 ? { ignoreDefaultArgs: ["--hide-scrollbars"] } : {}) });
+        try { for (const locale of ["en", "uk"] as const) {
+        const viewport = { width, height: width === 390 ? 844 : 900 };
+        const suffix = `case=codex-history&records=1277&page=300&window=300&latency=0&lang=${locale}`;
+        const { page, context, pageErrors } = await openFixture(browser, `${served.base}?${suffix}`, viewport, "dark", locale, "reduce", width === 390);
+        try {
+          await page.locator('[data-evidence-case="codex-history"] [data-feed-key]').first().waitFor();
+          await page.waitForFunction(() => document.querySelector('[data-log-feed-scroller]')?.getAttribute("data-tail-lines-start") !== null);
+          await page.evaluate(() => { for (const animation of document.getAnimations()) { animation.pause(); animation.currentTime = 0; } });
+          await page.screenshot({ path: path.join(out, `tail-${width}-${locale}.png`) });
+          const openKey = await page.evaluate(() => {
+            const total = (window as unknown as { llvHistory: { total(): number } }).llvHistory.total();
+            const key = `row:${total - 1}:0`;
+            document.querySelector(`[data-feed-key="${key}"]`)?.setAttribute("data-original-open-call", "true");
+            return key;
+          });
+          const top = () => page.locator(`[data-feed-key="${openKey}"]`).evaluate(node => node.getBoundingClientRect().top);
+          const beforeY = await top();
+          const olderStart = await page.evaluate(async () => {
+            const control = (window as unknown as { llvHistory: { loadOlder(): Promise<number>; start(): number } }).llvHistory;
+            await control.loadOlder(); return control.start();
+          });
+          await page.waitForFunction(start => Number(document.querySelector('[data-log-feed-scroller]')?.getAttribute("data-tail-lines-start")) === start, olderStart);
+          await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+          const drift = Math.abs(await top() - beforeY);
+          expect(drift).toBeLessThan(2);
+          expect(await page.locator(`[data-feed-key="${openKey}"][data-original-open-call]`).count()).toBe(1);
+          while (await page.evaluate(() => (window as unknown as { llvHistory: { start(): number } }).llvHistory.start()) > 0) {
+            await page.evaluate(() => (window as unknown as { llvHistory: { loadOlder(): Promise<number> } }).llvHistory.loadOlder());
+            await page.waitForTimeout(30);
+          }
+          const reveal = async () => {
+            for (let i = 0; i < 100; i += 1) {
+              await page.locator('[data-log-feed-scroller]').focus();
+              await page.keyboard.press("Home");
+              await page.waitForTimeout(20);
+              if (await page.getByText(translate(locale, "feed.startOfConvo"), { exact: true }).isVisible()
+                && await page.locator('[data-log-feed-scroller]').evaluate(node => node.scrollTop < 2)) return;
+            }
+            throw new Error("history start was not revealed");
+          };
+          await reveal();
+          const pagedRows = await page.locator('[data-feed-key]').evaluateAll(nodes => nodes.map(node => ({ key: node.getAttribute("data-feed-key"), kind: node.getAttribute("data-feed-kind"), text: node.textContent })));
+          expect(await page.locator(`[data-feed-key="${openKey}"][data-original-open-call]`).count()).toBe(1);
+          await page.screenshot({ path: path.join(out, `start-${width}-${locale}.png`) });
+          expect(await page.locator('[data-user-bubble]').filter({ hasText: "Inspect the fixture" }).count()).toBe(1);
+          const group = page.locator('[data-feed-kind="cmd-group"]').last();
+          await group.locator('[data-tool-row="group"]').first().click();
+          await group.evaluate(node => node.scrollIntoView({ block: "start" }));
+          expect(await group.innerText()).toContain("second");
+          await page.evaluate(() => { for (const animation of document.getAnimations()) { animation.pause(); animation.currentTime = 0; } });
+          await page.screenshot({ path: path.join(out, `seam-expanded-${width}-${locale}.png`) });
+          expect(pageErrors).toEqual([]);
+          await page.goto(`${served.base}?${suffix}&window=100000`);
+          await page.locator('[data-feed-key]').first().waitFor();
+          await reveal();
+          const fullRows = await page.locator('[data-feed-key]').evaluateAll(nodes => nodes.map(node => ({ key: node.getAttribute("data-feed-key"), kind: node.getAttribute("data-feed-kind"), text: node.textContent })));
+          expect(pagedRows).toEqual(fullRows);
+          expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+          readings.push({ width, locale, rows: pagedRows.length, equality: true, anchorDrift: drift, openCallRetained: true, expandedOutput: true });
+        } finally { await context.close(); }
+        } } finally { await browser.close(); }
+      }
+      fs.mkdirSync("evidence/codex-history", { recursive: true });
+      fs.writeFileSync("evidence/codex-history/rendered.json", JSON.stringify(readings, null, 2) + "\n");
+    } finally { served.stop(); }
+  }, 240_000);
+});
+
 describe("native send paint audit", () => {
   // Explicit native opt-in: an ordinary browser run needs no installed engines.
   const nativeTest = browserCase(process.env.LLV_NATIVE_SEND_PAINT_TEST === "1");
