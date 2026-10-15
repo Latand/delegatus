@@ -1,16 +1,15 @@
 "use client";
 
 import { Check, ChevronRight, ClipboardPaste, Copy, Eye, EyeOff, MoreHorizontal, X } from "lucide-react";
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 
 import { copyText } from "@/components/feed/CopyButton";
 import { Z } from "@/components/layers";
-import { TooltipBubble } from "@/components/TooltipBubble";
 import { useCoarsePointer } from "@/hooks/useCoarsePointer";
 import { useLocale } from "@/lib/i18n";
 
-import { KEY_CATALOG, maskedTail, previewImport, type ImportPreview, type KeyEntry, type KeyId, type KeysAnswer, type KeysVariant } from "./keysPrototype";
+import { KEY_CATALOG, maskedTail, maskImportText, previewImport, type ImportPreview, type KeyEntry, type KeyId, type KeysAnswer, type KeysVariant } from "./keysPrototype";
 
 /*
  * PROTOTYPE for docs/design/keys-settings.md §4–§7, this lane's branch only.
@@ -98,49 +97,86 @@ const DOT: Record<KeyEntry["source"], string> = {
   failed: "bg-warning",
 };
 
-/** The row's status: a dot whose short popover says where the value comes from. */
-function StatusDot({ entry }: { entry: KeyEntry }) {
+const dotWords = (t: ReturnType<typeof useLocale>["t"], entry: KeyEntry) => entry.source === "file" ? t("keys.state.file")
+  : entry.source === "env" ? t("keys.state.env", { variable: entry.variable })
+  : entry.source === "failed" ? t("keys.state.failedHint")
+  : t("keys.state.missing");
+
+/*
+ * The row's status: a dot whose short popover says where the value comes
+ * from. The popover opens in the row's flow, under the line with the dot: a
+ * floating bubble spilled out of the 232 px menu panel and covered the next
+ * row's name and buttons, or the row's own field in the dialog.
+ */
+function useDot() {
+  const [open, setOpenState] = useState(false);
+  const id = useId();
+  /* The state as the next event sees it, before React renders; a mouse click pins the note until a press elsewhere. */
+  const now = useRef(false);
+  const pinned = useRef(false);
+  const setOpen = useCallback((next: boolean) => { now.current = next; if (!next) pinned.current = false; setOpenState(next); }, []);
+  /* A mouse may cross from the dot to the note, and the centred dialog moves up as the note opens: leaving closes after a beat unless the pointer is on either. */
+  const leave = useRef<number | null>(null);
+  const hoverIn = useCallback(() => { if (leave.current !== null) window.clearTimeout(leave.current); leave.current = null; setOpen(true); }, [setOpen]);
+  const hoverOut = useCallback(() => { if (leave.current !== null) window.clearTimeout(leave.current); leave.current = window.setTimeout(() => { leave.current = null; if (!pinned.current) setOpen(false); }, 150); }, [setOpen]);
+  useEffect(() => () => { if (leave.current !== null) window.clearTimeout(leave.current); }, []);
+  const pin = useCallback(() => { setOpen(true); pinned.current = true; }, [setOpen]);
+  const isOpen = useCallback(() => now.current, []);
+  return { open, setOpen, id, hoverIn, hoverOut, pin, isOpen };
+}
+
+function StatusDot({ entry, dot }: { entry: KeyEntry; dot: ReturnType<typeof useDot> }) {
   const { t } = useLocale();
   const ref = useRef<HTMLSpanElement>(null);
-  const [open, setOpen] = useState(false);
+  const { open, setOpen } = dot;
   /* A tap focuses before it clicks: the click answers the state the press found, so a tap opens. */
   const openAtPress = useRef(false);
-  const words = entry.source === "file" ? t("keys.state.file")
-    : entry.source === "env" ? t("keys.state.env", { variable: entry.variable })
-    : entry.source === "failed" ? t("keys.state.failedHint")
-    : t("keys.state.missing");
+  const pressType = useRef("");
   useEffect(() => {
     if (!open) return;
     const away = (event: PointerEvent) => { if (!ref.current?.contains(event.target as Node)) setOpen(false); };
     document.addEventListener("pointerdown", away, true);
     return () => document.removeEventListener("pointerdown", away, true);
-  }, [open]);
+  }, [open, setOpen]);
   return (
     <span
       ref={ref}
       role="button"
       tabIndex={0}
       data-keys-dot={entry.source}
-      aria-label={t("keys.dotAria", { name: keyName(t, entry.id), state: words })}
+      aria-label={t("keys.dotAria", { name: keyName(t, entry.id), state: dotWords(t, entry) })}
       aria-expanded={open}
+      aria-describedby={open ? dot.id : undefined}
       className={`relative inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full ${FOCUS} before:absolute before:-inset-1.5 before:content-['']`}
-      onPointerEnter={(event) => { if (event.pointerType === "mouse") setOpen(true); }}
-      onPointerLeave={(event) => { if (event.pointerType === "mouse") setOpen(false); }}
+      onPointerEnter={(event) => { if (event.pointerType === "mouse") dot.hoverIn(); }}
+      onPointerLeave={(event) => { if (event.pointerType === "mouse") dot.hoverOut(); }}
       onFocus={() => setOpen(true)}
       onBlur={() => setOpen(false)}
-      onPointerDown={() => { openAtPress.current = open; }}
-      onClick={(event) => { event.stopPropagation(); setOpen(!openAtPress.current); }}
+      onPointerDown={(event) => { openAtPress.current = dot.isOpen(); pressType.current = event.pointerType; }}
+      onClick={(event) => {
+        event.stopPropagation();
+        if (pressType.current === "mouse") dot.pin(); else setOpen(!openAtPress.current);
+      }}
       onKeyDown={(event) => {
         if (event.key === "Escape") { event.stopPropagation(); setOpen(false); }
-        else if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setOpen((value) => !value); }
+        else if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setOpen(!dot.isOpen()); }
       }}
     >
       <span aria-hidden className={`h-[7px] w-[7px] rounded-full ${DOT[entry.source]}`} />
-      {open ? (
-        <TooltipBubble anchorRef={ref} side="bottom" align="left" className="max-w-[260px] whitespace-normal rounded-control border border-border bg-raised px-2.5 py-1.5 text-label leading-4 text-primary shadow-2">
-          <span data-keys-pop={entry.source}>{words}</span>
-        </TooltipBubble>
-      ) : null}
+    </span>
+  );
+}
+
+/** The dot's popover, in the row under the line it belongs to. */
+function DotNote({ entry, dot, className = "" }: { entry: KeyEntry; dot: ReturnType<typeof useDot>; className?: string }) {
+  const { t } = useLocale();
+  if (!dot.open) return null;
+  return (
+    <span role="tooltip" id={dot.id}
+      onPointerEnter={(event) => { if (event.pointerType === "mouse") dot.hoverIn(); }}
+      onPointerLeave={(event) => { if (event.pointerType === "mouse") dot.hoverOut(); }}
+      className={`block rounded-control border border-border bg-raised px-2.5 py-1.5 text-label leading-4 text-primary shadow-1 ${className}`}>
+      <span data-keys-pop={entry.source}>{dotWords(t, entry)}</span>
     </span>
   );
 }
@@ -163,8 +199,12 @@ function IconButton({ label, onClick, pressed, children, data, coarse }: {
   );
 }
 
-/** The ⋯ of a row: portalled above the menu, sheet or dialog it opens from. */
-function RowMenu({ anchor, items, onClose }: { anchor: HTMLElement; items: { label: string; run: () => void; data: string }[]; onClose: () => void }) {
+/**
+ * The ⋯ of a row: portalled above the sheet or dialog it opens from. In the
+ * 232 px menu panel it opens in the row's flow instead: floating there, it
+ * covered the next two rows and left torn names and icons around its edges.
+ */
+function RowMenu({ anchor, items, onClose, inline = false }: { anchor: HTMLElement; items: { label: string; run: () => void; data: string }[]; onClose: () => void; inline?: boolean }) {
   const ref = useRef<HTMLDivElement>(null);
   const coarse = useCoarsePointer();
   const box = anchor.getBoundingClientRect();
@@ -176,20 +216,22 @@ function RowMenu({ anchor, items, onClose }: { anchor: HTMLElement; items: { lab
     ref.current?.querySelector<HTMLElement>("[role=menuitem]")?.focus();
     return () => { document.removeEventListener("pointerdown", away, true); document.removeEventListener("keydown", key, true); };
   }, [anchor, onClose]);
-  const width = 200;
-  const left = Math.max(8, Math.min(box.right - width, window.innerWidth - width - 8));
+  /* Under its ⋯, right edges aligned, as wide as its longest item. */
+  const right = Math.max(8, window.innerWidth - box.right);
   const below = box.bottom + 4;
   const top = below + items.length * (coarse ? 44 : 30) + 12 > window.innerHeight ? box.top - 4 - items.length * (coarse ? 44 : 30) - 8 : below;
+  const list = items.map((item) => (
+    <button key={item.data} type="button" role="menuitem" data-keys-menu-item={item.data}
+      className={`flex w-full items-center whitespace-nowrap rounded-control px-2 text-left font-semibold text-primary hover:bg-sunken ${FOCUS} ${coarse ? "min-h-11 text-body" : "min-h-[30px] text-[12px]"}`}
+      onClick={() => { onClose(); item.run(); }}>
+      {item.label}
+    </button>
+  ));
+  if (inline) return <div ref={ref} role="menu" data-keys-menu="" data-keep-rail-menu="" className="rounded-control border border-border bg-raised p-1 shadow-1">{list}</div>;
   return createPortal(
-    <div ref={ref} role="menu" data-keys-menu="" data-keep-rail-menu="" style={{ left, top, width }}
-      className={`fixed ${Z.overlay} rounded-surface border border-border bg-raised p-1 shadow-2`}>
-      {items.map((item) => (
-        <button key={item.data} type="button" role="menuitem" data-keys-menu-item={item.data}
-          className={`flex w-full items-center rounded-control px-2 text-left font-semibold text-primary hover:bg-sunken ${FOCUS} ${coarse ? "min-h-11 text-body" : "min-h-[30px] text-[12px]"}`}
-          onClick={() => { onClose(); item.run(); }}>
-          {item.label}
-        </button>
-      ))}
+    <div ref={ref} role="menu" data-keys-menu="" data-keep-rail-menu="" style={{ right, top, maxWidth: window.innerWidth - right - 8 }}
+      className={`fixed ${Z.overlay} w-max rounded-surface border border-border bg-raised p-1 shadow-2`}>
+      {list}
     </div>,
     document.body,
   );
@@ -215,20 +257,19 @@ function ValueField({ entry, layout, onDone }: { entry: KeyEntry; layout: Layout
   };
   return (
     <div data-keys-field={entry.id} className="flex w-full flex-col gap-1">
-      <form className="flex w-full gap-1" onSubmit={(event) => { event.preventDefault(); void save(); }}>
+      {/* In the 232 px panel the field takes the whole line and its buttons go under it. */}
+      <form className={`flex w-full gap-1 ${layout === "menu" ? "flex-wrap items-center" : ""}`} onSubmit={(event) => { event.preventDefault(); void save(); }}>
         <input ref={input} type="password" autoComplete="off" spellCheck={false} maxLength={4096} aria-label={t("keys.fieldAria", { name })}
           placeholder={KEY_CATALOG[entry.id].prefix ? `${KEY_CATALOG[entry.id].prefix}…` : undefined}
           onChange={(event) => { setHas(Boolean(event.target.value.trim())); setError(null); }}
           onKeyDown={(event) => { if (event.key === "Escape") { event.stopPropagation(); onDone(false); } }}
-          className={`${control} min-w-0 flex-1 rounded-control border bg-canvas px-2 font-mono text-primary placeholder:text-muted ${FOCUS} ${error ? "border-danger" : "border-border"}`} />
+          className={`${control} min-w-0 flex-1 ${layout === "menu" ? "basis-full" : ""} rounded-control border bg-canvas px-2 font-mono text-primary placeholder:text-muted ${FOCUS} ${error ? "border-danger" : "border-border"}`} />
         <button type="submit" disabled={!has} data-keys-save=""
           className={`${control} shrink-0 whitespace-nowrap rounded-control border border-border bg-card px-2.5 font-semibold text-primary hover:bg-sunken disabled:opacity-45 ${FOCUS}`}>{t("keys.save")}</button>
-      </form>
-      <div className="flex items-start gap-2">
-        {error ? <p role="alert" data-keys-error={error} className={`min-w-0 flex-1 leading-snug text-danger ${coarse ? "text-label" : "text-[11px]"}`}>{error === "invalid" ? t("keys.invalid", { name }) : t("providerKey.failed")}</p> : <span className="flex-1" />}
         <button type="button" data-keys-cancel="" onClick={() => onDone(false)}
-          className={`shrink-0 font-semibold text-secondary underline underline-offset-2 hover:text-primary ${FOCUS} ${coarse ? "min-h-11 text-label" : "text-[11px]"}`}>{t("keys.cancel")}</button>
-      </div>
+          className={`shrink-0 whitespace-nowrap px-1 font-semibold text-secondary underline underline-offset-2 hover:text-primary ${FOCUS} ${coarse ? "min-h-11 text-label" : layout === "menu" ? "text-[11px]" : "text-label"}`}>{t("keys.cancel")}</button>
+      </form>
+      {error ? <p role="alert" data-keys-error={error} className={`w-full leading-snug text-danger ${coarse ? "text-label" : "text-[11px]"}`}>{error === "invalid" ? t("keys.invalid", { name }) : t("providerKey.failed")}</p> : null}
     </div>
   );
 }
@@ -267,6 +308,7 @@ function KeyRow({ entry, layout, staging, owner, grouped = false }: { entry: Key
   const coarse = useCoarsePointer();
   const name = keyName(t, entry.id);
   const actions = useRowActions(entry);
+  const dot = useDot();
   const [menuAnchor, setMenuAnchor] = useState<HTMLElement | null>(null);
   const menu = menuAnchor !== null;
   const set = isSet(entry);
@@ -304,14 +346,14 @@ function KeyRow({ entry, layout, staging, owner, grouped = false }: { entry: Key
   ) : null;
   const stateWords = entry.source === "missing" ? t("keys.state.missing") : entry.source === "failed" ? t(layout === "menu" ? "keys.state.failedShort" : "keys.state.failed") : null;
   const field = actions.editing ? <ValueField entry={entry} layout={layout} onDone={(saved) => { actions.setEditing(false); if (saved) actions.flash({ kind: "saved", text: t("keys.savedNote", { name }) }); }} /> : null;
-  const portal = menuAnchor ? <RowMenu anchor={menuAnchor} items={menuItems} onClose={() => setMenuAnchor(null)} /> : null;
+  const portal = menuAnchor ? <RowMenu anchor={menuAnchor} items={menuItems} onClose={() => setMenuAnchor(null)} inline={layout === "menu"} /> : null;
 
   if (layout !== "dialog") {
     /* Варіант 1: name over the dot and the masked tail, the three icons at the right. */
     const sheet = layout === "sheet";
     const second = noteLine ?? (
       <span className="inline-flex min-w-0 items-center gap-1.5">
-        <StatusDot entry={entry} />
+        <StatusDot entry={entry} dot={dot} />
         {stateWords ? <span className={entry.source === "failed" ? "truncate text-warning" : "truncate"}>{stateWords}</span>
           : owner ? <span className="truncate"><span className="font-mono">{maskedTail(entry.masked ?? "")}</span>{entry.source === "env" && sheet ? ` · ${t("keys.state.envShort")}` : ""}</span>
           : <span className="truncate">{entry.source === "env" ? t("keys.state.envShort") : t("keys.state.file")}</span>}
@@ -326,6 +368,8 @@ function KeyRow({ entry, layout, staging, owner, grouped = false }: { entry: Key
           </span>
           {icons}{addButton}
         </div>
+        {layout === "menu" ? portal : null}
+        <DotNote entry={entry} dot={dot} />
         {actions.value !== null ? (
           <div data-keys-revealed={entry.id} className="flex flex-col gap-0.5">
             <code className={`block select-all break-all rounded-control border border-border bg-sunken font-mono text-primary ${sheet ? "px-3 py-2 text-ui leading-5" : "px-2 py-1 text-[11px] leading-[15px]"}`}>{actions.value}</code>
@@ -333,13 +377,15 @@ function KeyRow({ entry, layout, staging, owner, grouped = false }: { entry: Key
           </div>
         ) : null}
         {field}
-        {portal}
+        {layout === "menu" ? null : portal}
       </div>
     );
   }
 
-  /* In Варіант 3's «Не задано» group the heading already says it: Add stands on the name's line. */
-  const oneLine = grouped && entry.source === "missing" && !coarse && addButton !== null;
+  /* In Варіант 3's «Не задано» and «Не читається» groups the heading already says it: the button stands on the name's line. */
+  const oneLine = grouped && !set && !coarse && addButton !== null;
+  /* On the phone an unset key is three short lines (name, what uses it, the variable) with its button at the right, as in Варіант 1. */
+  const phoneUnset = coarse && owner && !set;
   /* Варіанти 2 і 3: name, what uses it and the variable on the first line, a field with the eye inside on the second. */
   const fieldBox = !set || !owner ? (
     <span data-keys-value={entry.id} className={`min-w-0 flex-1 ${entry.source === "failed" ? "text-warning" : "text-muted"} ${coarse ? "text-body" : "text-ui"}`}>
@@ -361,22 +407,41 @@ function KeyRow({ entry, layout, staging, owner, grouped = false }: { entry: Key
       ) : null}
     </div>
   );
+  const variableLine = phoneUnset ? (
+    <span className="text-label text-muted">
+      {grouped ? null : <span className={entry.source === "failed" ? "text-warning" : ""}>{stateWords} · </span>}
+      <span className="font-mono text-[10.5px]">{entry.variable}</span>
+    </span>
+  ) : <span className="font-mono text-[10.5px] text-muted">{entry.variable}</span>;
   return (
     <div data-keys-row={entry.id} data-keys-source={entry.source} className={`flex flex-col border-b border-border last:border-b-0 ${coarse ? "gap-2 py-3" : "gap-1.5 py-2.5"}`}>
+      {phoneUnset ? (
+        <div className="flex min-w-0 items-center gap-2">
+          <span className="mt-0.5 self-start"><StatusDot entry={entry} dot={dot} /></span>
+          <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+            <span className="truncate text-body font-semibold leading-5 text-primary">{name}</span>
+            <span className="truncate text-label leading-4 text-muted">{t(`keys.for.${entry.id}`)}</span>
+            {variableLine}
+          </span>
+          {addButton}
+        </div>
+      ) : (
       <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5">
-        <StatusDot entry={entry} />
+        <StatusDot entry={entry} dot={dot} />
         <span className={`shrink-0 font-semibold text-primary ${coarse ? "text-body" : "text-ui"}`}>{name}</span>
         <span className={`min-w-0 flex-1 truncate text-muted ${coarse ? "basis-full pl-6 text-label" : "text-label"}`}>{t(`keys.for.${entry.id}`)}</span>
         {coarse ? null : <span className="shrink-0 font-mono text-[10.5px] text-muted">{entry.variable}</span>}
         {oneLine ? <span className="ml-1 shrink-0">{addButton}</span> : null}
       </div>
-      {oneLine ? null : (
+      )}
+      <DotNote entry={entry} dot={dot} className={coarse ? "" : "ml-6"} />
+      {oneLine || phoneUnset ? null : (
         <div className={`flex items-center gap-1 ${coarse ? "" : "pl-6"}`}>
           {fieldBox}
           {icons}{addButton}
         </div>
       )}
-      {coarse ? <span className="font-mono text-[10.5px] text-muted">{entry.variable}</span> : null}
+      {coarse && !phoneUnset ? variableLine : null}
       {noteLine ? <span className={`text-label ${coarse ? "" : "pl-6"}`}>{noteLine}</span> : null}
       {field ? <div className={coarse ? "" : "pl-6"}>{field}</div> : null}
       {portal}
@@ -448,7 +513,10 @@ function ExportPanel({ answer, coarse, allowFile }: { answer: KeysAnswer; coarse
             <code className={`min-w-0 flex-1 break-all font-mono ${text} tracking-wide text-primary`}>ABCD-EFGH-JKLM-NPQR-STUV-WXYZ</code>
             <IconButton coarse={coarse} label={t("common.copy")} onClick={() => void copyText("ABCD-EFGH-JKLM-NPQR-STUV-WXYZ")} data={{ "data-keys-passphrase-copy": "" }}><Copy className="h-3.5 w-3.5" aria-hidden /></IconButton>
           </div>
-          <button type="button" disabled={!count} className={`${primary} self-start`}>{t("keys.export.download", { file: "delegatus-keys-2026-10-15.dlgkeys" })}</button>
+          <div className="flex flex-col items-start gap-1">
+            <button type="button" disabled={!count} className={primary}>{t("keys.export.download")}</button>
+            <span className={`font-mono ${small} text-muted`}>delegatus-keys-2026-10-15.dlgkeys</span>
+          </div>
         </div>
       )}
     </div>
@@ -480,21 +548,38 @@ function ImportPanel({ answer, layout, onApplied }: { answer: KeysAnswer; layout
   return (
     <div data-keys-import="" className={`flex flex-col ${menu ? "gap-1.5" : "gap-3"}`}>
       <p className={`${menu ? "text-[11px] leading-snug" : coarse ? "text-body" : "text-ui"} text-muted`}>{t("keys.import.hint")}</p>
-      <textarea value={text} aria-label={t("keys.import.aria")} spellCheck={false} autoComplete="off" rows={menu ? 4 : 5} data-keys-import-text=""
-        onChange={(event) => { setText(event.target.value); setDone(null); }} placeholder="OPENROUTER_API_KEY=sk-or-v1-…"
-        className={`w-full resize-none rounded-control border border-border bg-canvas font-mono text-primary placeholder:text-muted ${FOCUS} ${menu ? "px-2 py-1 text-[10.5px] leading-[14px] [overflow-wrap:anywhere]" : "px-3 py-2 text-[11.5px] leading-4"}`} />
+      {/* Once pasted, the lines show with their values masked, in the small mono of the list: the phone's 16 px input floor made the field the largest text on the screen. */}
+      {preview ? (
+        <div className="flex flex-col gap-1">
+          <div data-keys-import-masked="" role="group" aria-label={t("keys.import.aria")}
+            className={`flex flex-col rounded-control border border-border bg-sunken font-mono text-secondary ${menu ? "px-2 py-1 text-[10.5px] leading-[14px]" : "px-3 py-2 text-[11.5px] leading-4"}`}>
+            {maskImportText(text).map((line, index) => <span key={index} className={`block min-h-[1lh] ${line.startsWith("#") ? "truncate whitespace-pre" : "break-all"}`}>{line}</span>)}
+          </div>
+          <div className={`flex items-center justify-between gap-2 ${size}`}>
+            <span className="text-muted">{t("keys.import.maskedNote")}</span>
+            <button type="button" data-keys-import-again="" onClick={() => { setText(""); setDone(null); window.setTimeout(() => document.querySelector<HTMLTextAreaElement>("[data-keys-import-text]")?.focus(), 0); }}
+              className={`shrink-0 font-semibold text-secondary underline underline-offset-2 hover:text-primary ${FOCUS} ${coarse ? "min-h-11" : ""}`}>{t("keys.import.again")}</button>
+          </div>
+        </div>
+      ) : (
+        <textarea value={text} aria-label={t("keys.import.aria")} spellCheck={false} autoComplete="off" rows={menu ? 4 : 5} data-keys-import-text=""
+          onChange={(event) => { setText(event.target.value); setDone(null); }} placeholder="OPENROUTER_API_KEY=sk-or-v1-…"
+          className={`w-full resize-none rounded-control border border-border bg-canvas font-mono text-primary placeholder:text-muted ${FOCUS} ${menu ? "px-2 py-1 text-[10.5px] leading-[14px] [overflow-wrap:anywhere]" : "px-3 py-2 text-[11.5px] leading-4"}`} />
+      )}
       {preview ? (
         <div data-keys-import-preview="" className="flex flex-col">
           {preview.rows.map((row) => (
             <div key={row.id} data-keys-import-row={row.id} data-keys-import-kind={row.kind} className={`flex flex-wrap items-baseline gap-x-2 border-b border-border py-1 last:border-b-0 ${menu ? "" : "min-h-8"}`}>
               <span className={`shrink-0 font-semibold text-primary ${nameSize}`}>{keyName(t, row.id)}</span>
               {"masked" in row ? <span className={`shrink-0 font-mono text-secondary ${size}`}>{maskedTail(row.masked)}</span> : null}
-              <span className={`min-w-0 flex-1 text-right font-medium ${VERDICT[row.kind]} ${size}`}>
-                {row.kind === "replaces" ? t("keys.import.replaces", { was: maskedTail(row.was) }) : t(`keys.import.${row.kind}`)}
+              {/* In the 232 px panel the verdict takes its own line under the name. */}
+              <span className={`min-w-0 font-medium ${VERDICT[row.kind]} ${size} ${menu ? "basis-full" : "flex-1 text-right"}`}>
+                {row.kind === "replaces" ? t("keys.import.replaces", { was: maskedTail(row.was) }) : t(row.kind === "env" && menu ? "keys.import.envShort" : `keys.import.${row.kind}`)}
               </span>
             </div>
           ))}
           {preview.unknown.length ? <p data-keys-import-unknown="" className={`pt-1 text-muted ${size}`}>{t("keys.import.unknown", { names: preview.unknown.join(", ") })}</p> : null}
+          {preview.unparsed.length ? <p data-keys-import-unparsed="" className={`pt-1 text-muted ${size}`}>{t("keys.import.unparsed", { lines: preview.unparsed.join(", ") })}</p> : null}
           {preview.rows.some((row) => row.id === "telegram" && (row.kind === "new" || row.kind === "replaces")) ? (
             <p data-keys-import-bot="" className={`mt-1.5 rounded-control bg-warning-soft text-warning ${menu ? "px-2 py-1 text-[11px] leading-snug" : "px-3 py-2 text-label"}`}>{t("keys.import.bot")}</p>
           ) : null}
@@ -581,7 +666,7 @@ export function KeysMenuPage({ size = "menu", onImport }: { size?: "menu" | "she
 export function KeysImportPage({ size = "menu" }: { size?: "menu" | "sheet" }) {
   const { answer } = useKeys();
   return (
-    <div data-keys-import-page="" className={size === "sheet" ? "px-4 pb-4 pt-1" : "px-2 pb-1.5"}>
+    <div data-keys-import-page="" className={`font-normal ${size === "sheet" ? "px-4 pb-4 pt-1" : "px-2 pb-1.5"}`}>
       {answer ? <ImportPanel answer={answer} layout={size === "sheet" ? "sheet" : "menu"} /> : null}
     </div>
   );
@@ -605,7 +690,8 @@ export function KeysDialog({ variant, onClose }: { variant: Exclude<KeysVariant,
     return () => window.removeEventListener("keydown", key);
   }, [onClose]);
   const set = answer?.keys.filter(isSet) ?? [];
-  const unset = answer?.keys.filter((entry) => !isSet(entry)) ?? [];
+  const unreadable = answer?.keys.filter((entry) => entry.source === "failed") ?? [];
+  const unset = answer?.keys.filter((entry) => entry.source === "missing") ?? [];
   const canMove = Boolean(answer?.owner);
   const secondary = `rounded-control border border-border bg-card px-4 font-semibold text-primary hover:bg-sunken disabled:opacity-50 ${FOCUS} ${coarse ? "min-h-11 flex-1 text-body" : "h-9 text-ui"}`;
   const primary = `rounded-control bg-brand px-4 font-semibold text-on-brand disabled:opacity-50 ${FOCUS} ${coarse ? "min-h-11 flex-1 text-body" : "h-9 text-ui"}`;
@@ -637,6 +723,7 @@ export function KeysDialog({ variant, onClose }: { variant: Exclude<KeysVariant,
     : variant === 3 ? (
       <div className="flex flex-col gap-5">
         {group(t("keys.groupSet"), set, "set")}
+        {group(t("keys.groupFailed"), unreadable, "failed")}
         {group(t("keys.groupUnset"), unset, "unset")}
       </div>
     ) : <div data-keys-list="" className="flex flex-col">{rows(answer.keys)}</div>;
@@ -651,9 +738,10 @@ export function KeysDialog({ variant, onClose }: { variant: Exclude<KeysVariant,
   ) : canMove ? <button type="button" data-keys-open-move="" className={primary} onClick={() => { setTab("from"); setStep("move"); }}>{t("keys.move")}</button> : null;
 
   return (
-    <div className={`fixed inset-0 ${Z.modal} flex items-center justify-center bg-black/40 p-0 sm:p-8`} onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+    /* Anchored at the top: a note or field opening in a row grows the dialog downwards and leaves the row under the pointer. */
+    <div className={`fixed inset-0 ${Z.modal} flex items-start justify-center bg-black/40 p-0 sm:px-8 sm:pb-8 sm:pt-[12vh]`} onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
       <section ref={dialog} tabIndex={-1} role="dialog" aria-modal="true" aria-label={t("keys.title")} data-keys-dialog="" data-keys-variant={variant} data-keys-step={step}
-        className="flex h-full w-full max-w-[640px] flex-col overflow-hidden bg-canvas shadow-2 outline-none sm:h-auto sm:max-h-[90vh] sm:rounded-[12px] sm:border sm:border-border">
+        className="flex h-full w-full max-w-[640px] flex-col overflow-hidden bg-canvas shadow-2 outline-none sm:h-auto sm:max-h-[80vh] sm:rounded-[12px] sm:border sm:border-border">
         <header className="flex min-h-14 shrink-0 items-center gap-2 border-b border-border pl-4 pr-1.5 sm:pl-6">
           {step !== "list" ? (
             <button type="button" data-keys-back="" aria-label={t("keys.backToList")} title={t("keys.backToList")} onClick={() => setStep("list")}

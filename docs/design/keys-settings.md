@@ -301,7 +301,10 @@ Same dialog shell as 2, ordered for the move.
 Import, whatever the source:
 
 1. Parse known names only (`OPENROUTER_API_KEY`, …, `export NAME=value`,
-   quoted values); unknown lines are listed as «Невідомі — пропущено».
+   quoted values); unknown lines are listed as «Невідомі — пропущено» by
+   name, and a line with no `NAME=` by its number, never its text. Once
+   pasted, the field shows the lines with every value masked to its last
+   four characters, with «Вставити інше» to paste again.
 2. Preview each key as **Новий**, **Замінить збережений** (with both masked
    tails), **Пропущено: задано змінною на цій машині**, or **Невірний формат**.
 3. **Застосувати** writes each through the catalog writer; the Telegram token
@@ -465,3 +468,13 @@ and 3; Варіант 1 has the clipboard only), `import-preview`, `import-done`
 What the frames settled that §6 had wrong: the desktop menu panel is 232 px
 wide, so Варіант 1 shows the last four characters and keeps «used by» in the
 dot's popover, and a revealed OpenRouter key wraps to three lines there.
+
+What the first critic round changed: the dot's popover opens in the row's
+flow under the dot's line, because a floating one ran past the 232 px panel
+and covered the next row's buttons, or its own row's field in the dialog. The
+⋯ menu is right-aligned under its button and as wide as its longest item.
+The pasted import text shows masked in the list's small mono, since the
+phone's 16 px input floor made the field the largest text on screen. On the
+phone an unset row is three short lines, with «Додати» on the name's line.
+Варіант 3 lists an unreadable key in its own group «Не читається», and the
+file export's button reads «Завантажити файл» over the file name.

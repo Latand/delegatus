@@ -173,17 +173,20 @@ export interface ImportPreview {
   rows: ImportRow[];
   /** Names of lines that are no key of the section, never their values. */
   unknown: string[];
+  /** Numbers of lines with no NAME=, which may be a bare key: never their text. */
+  unparsed: number[];
 }
 
 export function previewImport(text: string, current: KeyEntry[]): ImportPreview {
   const byVariable = new Map(KEY_ORDER.map((id) => [KEY_CATALOG[id].variable, id] as const));
   const rows: ImportRow[] = [];
   const unknown: string[] = [];
-  for (const raw of text.split(/\r?\n/)) {
+  const unparsed: number[] = [];
+  for (const [index, raw] of text.split(/\r?\n/).entries()) {
     const line = raw.trim().replace(/^export\s+/, "");
     if (!line || line.startsWith("#")) continue;
     const eq = line.indexOf("=");
-    if (eq <= 0) { unknown.push(line.slice(0, 24)); continue; }
+    if (eq <= 0) { unparsed.push(index + 1); continue; }
     const name = line.slice(0, eq).trim();
     const value = line.slice(eq + 1).trim().replace(/^(["'])(.*)\1$/, "$2");
     const id = byVariable.get(name);
@@ -197,5 +200,17 @@ export function previewImport(text: string, current: KeyEntry[]): ImportPreview 
     else rows.push({ id, kind: "new", masked, value });
   }
   rows.sort((a, b) => KEY_ORDER.indexOf(a.id) - KEY_ORDER.indexOf(b.id));
-  return { rows, unknown };
+  return { rows, unknown, unparsed };
+}
+
+/** The pasted lines as the panel shows them: comments and names kept (without `export`), every value down to «••••» and its last four characters. */
+export function maskImportText(text: string): string[] {
+  return text.replace(/\s+$/, "").split(/\r?\n/).map((raw) => {
+    const line = raw.trim();
+    if (!line || line.startsWith("#")) return line;
+    const match = /^(?:export\s+)?([^=\s]+)\s*=\s*(.*)$/.exec(line);
+    const value = (match ? match[2] : line).replace(/^(["'])(.*)\1$/, "$2");
+    const masked = value.length > 8 ? `••••${value.slice(-4)}` : "••••";
+    return match ? `${match[1]}=${masked}` : masked;
+  });
 }

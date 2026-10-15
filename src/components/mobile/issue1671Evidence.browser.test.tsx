@@ -11224,7 +11224,6 @@ describe("keys settings prototype", () => {
     const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_BIN, args: ["--no-sandbox", "--disable-dev-shm-usage"] });
     const readings: Record<string, unknown>[] = [];
     const failures: string[] = [];
-    const FAKE_OPENROUTER = `sk-or-v1-${"0".repeat(64)}`;
     const FAKE_ELEVENLABS = `sk_${"1".repeat(48)}`;
     type State = "settings" | "list" | "env-popover" | "revealed" | "copied" | "menu" | "copied-masked" | "replace-invalid" | "add"
       | "export" | "export-file" | "import-preview" | "import-done" | "staging" | "member" | "read-failed" | "row-failed";
@@ -11285,15 +11284,20 @@ describe("keys settings prototype", () => {
             const popover = document.querySelector("[data-keys-pop]")?.closest("[role=tooltip]")?.getBoundingClientRect();
             const menu = document.querySelector("[data-keys-menu]")?.getBoundingClientRect();
             const inView = (r?: DOMRect) => r ? r.left >= 0 && r.top >= 0 && r.right <= innerWidth && r.bottom <= innerHeight : null;
+            const inSurface = (r?: DOMRect) => r ? r.left >= box.left - 1 && r.right <= box.right + 1 && r.top >= box.top - 1 && r.bottom <= box.bottom + 1 : null;
+            /* What a field holds is on screen too, though innerText leaves it out. */
+            const fieldText = [...host.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>("textarea, input:not([type=password])")].map((field) => field.value).join(" ");
             return {
               surface: { left: Math.round(box.left), top: Math.round(box.top), width: Math.round(box.width), height: Math.round(box.height) },
               overflowX: host.scrollWidth - host.clientWidth, truncated, offscreen, smallTargets,
-              popoverInView: inView(popover), menuInView: inView(menu),
-              text: (host.innerText ?? "").replace(/\s+/g, " ").trim(),
+              popoverInView: inView(popover), menuInView: inView(menu), popoverInSurface: inSurface(popover), menuInSurface: inSurface(menu),
+              text: (host.innerText ?? "").replace(/\s+/g, " ").trim(), fieldText,
             };
           }, { surface, phone });
           const key = `variant-${variant}-${state}-${theme}-${width}`;
           await page.screenshot({ path: path.join(FRAMES, `${key}.png`) });
+          /* A popover that closed under the pointer between the reading and the picture is missing from the frame. */
+          if ((state === "env-popover" || state === "row-failed") && !(await page.locator("[data-keys-pop]").count())) failures.push(`${key}: popover closed before the screenshot`);
           let crop: string | null = null;
           if (!phone && (variant === 1 || state === "settings") && geometry) {
             const s = geometry.surface;
@@ -11303,8 +11307,8 @@ describe("keys settings prototype", () => {
             await page.screenshot({ path: path.join(FRAMES, crop), clip: { x, y, width: Math.min(1440 - x, s.width + 2 * pad + 400), height: Math.min(900 - y, Math.max(s.height, 420) + 2 * pad + 60) } });
           }
           const text = geometry?.text ?? "";
-          /* The list never carries a value: only a reveal or a copy asks for one. */
-          const valueOnScreen = text.includes(FAKE_OPENROUTER) || text.includes(FAKE_ELEVENLABS);
+          /* The list never carries a value: only a reveal or a copy asks for one. Every placeholder is a run of one digit, the pasted ones included. */
+          const valueOnScreen = /([0-9])\1{15}/.test(`${text} ${geometry?.fieldText ?? ""}`);
           readings.push({ key, variant, state, theme, width, file: `${key}.png`, crop, valueOnScreen, pageErrors: [...pageErrors], ...geometry, text: text.slice(0, 900) });
           if (!geometry) failures.push(`${key}: surface missing`);
           else {
@@ -11312,6 +11316,9 @@ describe("keys settings prototype", () => {
             if (geometry.offscreen.length) failures.push(`${key}: controls outside the surface ${geometry.offscreen.join(", ")}`);
             if (geometry.popoverInView === false) failures.push(`${key}: popover off screen`);
             if (geometry.menuInView === false) failures.push(`${key}: menu off screen`);
+            if (geometry.popoverInSurface === false) failures.push(`${key}: popover outside the surface`);
+            if ((state === "env-popover" || state === "row-failed") && geometry.popoverInView !== true) failures.push(`${key}: popover closed in the frame`);
+            if (geometry.menuInSurface === false) failures.push(`${key}: menu outside the surface`);
           }
           if (valueOnScreen !== (state === "revealed")) failures.push(`${key}: value on screen ${valueOnScreen}`);
         };
