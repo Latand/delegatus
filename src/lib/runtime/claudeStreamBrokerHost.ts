@@ -647,6 +647,11 @@ export class ClaudeStreamBrokerHost implements EngineHost {
   // before one result, or combine them into a replay with one canonical UUID;
   // native batching cannot currently preserve our per-input receipt identity.
   readonly supportsQueuedSend = false;
+  // Claude Code answers an interrupt during a tool call by rejecting that tool
+  // use ("The user doesn't want to proceed with this tool use. ... STOP what
+  // you are doing"), so an ordinary message that interrupted would reach the
+  // model as a refusal. It waits for the turn; the Stop control still interrupts.
+  readonly sendWaitsForRunningTurn = true;
   readonly identity: ClaudeSessionIdentity;
 
   private readonly child: ChildProcessWithoutNullStreams;

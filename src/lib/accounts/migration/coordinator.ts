@@ -38,6 +38,7 @@ import { isStructuredDeliveryControllerUnavailable } from "@/lib/runtime/structu
 import { SEND_SETTLEMENT_WINDOW_MS } from "@/lib/runtime/sendSettlement";
 
 import { ADVANCEMENT_LEASE_MS, HELD_DRAIN_PASS_BUDGET_MS, requestAccountMigrationTick } from "./controllerSignal";
+import { conversationProjectKey } from "@/lib/accounts/conversationProject";
 import { migrationLane, startMigrationLane, withAdvancementPermit } from "./lanes";
 import {
   emptyLaunchProfile,
@@ -946,6 +947,22 @@ export async function advanceConversationMigration(
   if (engine === "copilot") throw new Error("account migration does not cover Copilot conversations");
   if (reconfigureOwnsMigration(conversation, options.reconfigureOperationId)) return conversation;
   let migration = conversation.migration;
+  if (migration.creditGuard) {
+    const priorTargetCheck = options.authorizeTarget;
+    options = { ...options, authorizeTarget: async () => {
+      await priorTargetCheck?.();
+      const current = registry.conversation(conversationId);
+      const source = current?.generations.find(generation => generation.id === migration.sourceGenerationId);
+      if (!current || !source) throw new Error("paid-credit recovery source is unavailable");
+      const selection = accountManager.resolveProjectSpawn(engine, {
+        project: conversationProjectKey(current.projectOwnership, source.launchProfile),
+        model: source.launchProfile.model, requestedId: migration.targetId, requireCapacity: true,
+      });
+      if (selection.kind !== "available" || selection.account.accountId !== migration.targetId) {
+        throw new Error("paid-credit recovery target is no longer admissible");
+      }
+    } };
+  }
   /* Every write that advances the switch waits for the lock off the loop and
      is correlated with the switch's operation (rule c). One the lock refused
      wrote nothing: the switch keeps its phase at its revision and the next

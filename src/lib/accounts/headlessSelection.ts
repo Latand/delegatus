@@ -1,5 +1,6 @@
 import { gatingWindows } from "./migration/quotaPolicy";
 import type { DurableQuotaObservation } from "./migration/contracts";
+import { creditGuardBlock } from "./creditGuard";
 
 const FRESH_QUOTA_MS = 5 * 60 * 1_000;
 
@@ -18,6 +19,8 @@ type Capacity =
 
 function capacity(observation: DurableQuotaObservation | undefined, now: number, model?: string | null): Capacity {
   if (!observation) return { kind: "unknown" };
+  const guarded = creditGuardBlock(observation.engine, observation.limits);
+  if (guarded) return { kind: "exhausted", ...guarded };
   const observedAt = Date.parse(observation.observedAt);
   const authCheckedAt = Date.parse(observation.authCheckedAt);
   if (!Number.isFinite(observedAt) || !Number.isFinite(authCheckedAt) || now < observedAt || now < authCheckedAt) {
@@ -74,7 +77,8 @@ function capacity(observation: DurableQuotaObservation | undefined, now: number,
 /**
  * Selects an authenticated account for an unattended spawn. Confirmed fresh
  * headroom wins, then an account whose quota is unknown. Exhaustion is only
- * reported when every authenticated account has a fresh zero-capacity sample.
+ * reported when every authenticated account has a fresh zero-capacity sample
+ * or is held by the paid-credit guard.
  */
 export function selectHeadlessAccount(
   accounts: SelectableAccount[],

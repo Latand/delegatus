@@ -284,6 +284,14 @@ jobs:
       - name: Load and serve the build under the pinned Bun
         run: bun scripts/verify-viewer-runtime.ts
 
+      # The Codex socket transport as the compiled Viewer runs it: taken out of
+      # a built route's module graph, launched against a stub app-server on a
+      # private unix socket, and made to round-trip a masked frame above ws's
+      # 48-byte `bufferutil` cut-over. Bundled ws threw `b.mask is not a
+      # function` there in production while every check above stayed green.
+      - name: Round-trip a Codex socket frame through the built Viewer
+        run: bun scripts/verify-viewer-runtime.ts --codex-socket
+
       # The other process. Two runtime-host generations under the same
       # interpreter, one singleton-fence succession driven to completion, and
       # both endpoints held through a bounded observation window while half the

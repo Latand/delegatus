@@ -172,6 +172,8 @@ export async function stopHeadlessReviewAndWait(
 ): Promise<boolean> {
   const key = runKey(flowId, round);
   const run = runs.get(key);
+  if (run && (persisted.reviewerPid != null && persisted.reviewerPid !== run.child.pid
+    || persisted.reviewerIdentity && persisted.reviewerIdentity !== run.identity)) return false;
   const pid = run?.child.pid ?? persisted.reviewerPid ?? null;
   const identity = run?.identity ?? persisted.reviewerIdentity ?? null;
   if (!pid) {

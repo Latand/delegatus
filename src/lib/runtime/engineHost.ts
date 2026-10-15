@@ -173,6 +173,11 @@ export interface EngineHost {
       message as the next one (Copilot's ACP has no steer). Absent keeps the
       host's own steer handling, or the `unsupported-steering` refusal. */
   readonly steerFallback?: "interrupt";
+  /** An `interrupt-active` send never cuts a turn that is running or awaiting
+      an answer: the delivery queue holds it until the turn ends and then
+      starts the next turn with it. Only an explicit interrupt stops the turn.
+      Absent keeps the replacement: the running turn is interrupted first. */
+  readonly sendWaitsForRunningTurn?: boolean;
   attach(afterSeq: number): AsyncIterable<RuntimeEvent>;
   send(entry: QueueEntry, firstDispatch?: FirstDispatchEvidence, authorizeDispatch?: () => void): Promise<DeliveryReceipt>;
   /** Acknowledges the write before waiting for input to land in the running turn. */

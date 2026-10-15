@@ -19,6 +19,7 @@ import { accountPark, type AccountPark } from "./accountPark";
 import { runtimeHostClient, type RuntimeHostClient } from "./client";
 import { reconcileDeadStructuredRegistryHost } from "./registry";
 import { restartCutEvidenceHolds } from "./restartCutHold";
+import { assertPipelineTurnAllowed } from "./accountCreditGuard";
 import { StructuredRecoveryContendedError } from "./structuredRecoveryContention";
 import { stagedLaunchRecovery } from "./stagedRecovery";
 import {
@@ -389,6 +390,7 @@ async function recoverCandidate(
     const retired = runtimeSwitchRetirementReason(candidate.conversationId, registry);
     if (retired) throw new Error(retired);
     if (ownership && !await ownership.owns()) throw new StructuredRecoverySupersededError();
+    assertPipelineTurnAllowed(candidate.conversationId, registry);
   };
   const owner = (dependencies.processIdentity ?? (() => captureProcessIdentity(process.pid)))();
   return registry.withOperationLock(candidate.key, owner, async () => {

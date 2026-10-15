@@ -585,6 +585,10 @@ export class McpUnadmittedRefusal extends McpToolRefusal {
   }
 }
 
+/** Publication owns an idempotent Viewer operation that may outlive this wait.
+    Keep its receipt open so the original key can recover the round. */
+export class McpPrototypePublicationPendingError extends Error {}
+
 export type McpToolResult = McpToolSuccess | McpToolFailure;
 
 /**
@@ -3188,7 +3192,11 @@ export function createMcpToolService(
           unfinishedAgeMs = claim.unfinishedAgeMs;
           return failure(toolName, requestId, "call_interrupted", "The previous MCP process ended before this call completed", true, true);
         }
-        if (claim.kind === "replay") {
+        // Earlier clients settled transport timeouts as retryable failures.
+        // The Viewer publication lock and payload digest make recovery safe.
+        const retryPrototypePublication = typedTool === "publish_prototype_review"
+          && claim.kind === "replay" && !claim.result.ok && claim.result.retryable;
+        if (claim.kind === "replay" && !retryPrototypePublication) {
           const replayStartedAt = performance.now();
           const replayed = { ...claim.result, replayed: true };
           phaseDurations.replay = performance.now() - replayStartedAt;
@@ -3216,6 +3224,11 @@ export function createMcpToolService(
             : context.signal?.aborted
               ? "cancelled"
               : "failure";
+          if (typedTool === "publish_prototype_review" && error instanceof McpPrototypePublicationPendingError) {
+            return failure(typedTool, requestId, "publication_in_progress",
+              `${error.message}; publication may still be running. Retry with the same clientRequestId to obtain its reviewId`,
+              true, false, { outcome: "unknown", nextAction: "retry-same-key" });
+          }
           const taskCode = (typedTool === "create_task" || typedTool === "update_task")
             && error instanceof McpToolRefusal && typeof error.details.code === "string"
             && (error.details.code.startsWith("TASK_") || error.details.code.startsWith("maintainer_")) ? error.details.code : null;

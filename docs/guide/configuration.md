@@ -73,6 +73,10 @@ Of the variables ending in `_API_KEY`, only `ANTHROPIC_API_KEY`,
 - `DELEGATUS_AGENT_MEMORY_MAX` — per-agent ceiling, e.g. `24G`, capped at the shared agent budget. GB means GiB.
 - `DELEGATUS_AGENT_MEMORY_RESERVE` — RAM reserved for the OS and Delegatus, e.g. `24G`; default is 15% rounded up to GiB, at least 4 GiB.
 
+**Codex paid credits**
+
+- `DELEGATUS_CODEX_CREDIT_GUARD_USED_PERCENT` — stop using a Codex account that holds paid credits when a session or weekly window reaches this percentage (default `99`). Accepts numbers greater than `0` and less than `100`; invalid values use `99`. The guard applies to each account's reported balance, including pinned launches and queued turns. A stale guarded reading stays blocked until a fresh reading establishes headroom.
+
 **Language and diagnostics**
 
 - `DELEGATUS_LANG` — `en` or `uk`: the language of CLI messages.
