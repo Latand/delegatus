@@ -327,6 +327,8 @@ The service observes one compact latest-deployment ledger row with one bounded, 
 
 The dialog displays Web and Runtime host independently, keeps the failed target and cause beside a newer check, distinguishes rollback in progress from a verified restore, and retains the previous failed attempt after a newer success. Route and DOM regressions cover English and Ukrainian, unknown component revisions, late checks, stale retry and forward retry. The stale external-success regression fails against the baseline service.
 
+Serving identities retain complete commit ids; process-status revisions keep the short form the existing UI helpers compare. The regression passes a real service snapshot through the same completion-copy helper: matching healthy processes report agreement. A completed deployment with an unconfirmed component reports completion separately from the currently observed revisions.
+
 The supplied desktop's complete 300 s adoption timeout and exact 1048 ms sample remain unpaired observations. These isolated reproductions establish the retained-history cost, cold-loop breach, busy-web rollback failure and stale-target regression without assigning every desktop second to those mechanisms. Deployment and its subsequent production pause audit remain with the authorized release owner.
 
 ### Full qualification
@@ -346,4 +348,4 @@ Both Docker rollback cases also used the complete retained census. The new adapt
 
 Explicit isolated lifecycle, archive, adoption, cancellation and DOM tests passed. The test comparator reproduced an existing checkout-route runner diagnostic and an existing truncated-credential assertion on the baseline; neither is introduced by this change. The local publication privacy gate passed.
 
-The existing `scripts/capture-board-geometry.ts` driver has a `managed-update` case: six states at 390, 1000 and 1440 pixels in English and Ukrainian, in both themes. It checks component identities, unknown revisions, failed targets and causes, control geometry, and preservation of failed history without a stale retry after polling and reload. The shared browser fixture uses polling. Its 72 cases and 144 frames are recorded in [managed-update-ui.json](../../evidence/perf/managed-update-ui.json). Raw frames stay local under the repository's existing evidence ignore policy.
+The existing `scripts/capture-board-geometry.ts` driver has a `managed-update` case: seven states at 390, 1000 and 1440 pixels in English and Ukrainian, in both themes. It checks component identities, unknown revisions, failed targets and causes, control geometry, and preservation of failed history without a stale retry after polling and reload. The shared browser fixture uses polling. Its 84 cases and 168 frames are recorded in [managed-update-ui.json](../../evidence/perf/managed-update-ui.json). Raw frames stay local under the repository's existing evidence ignore policy.

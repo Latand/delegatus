@@ -189,7 +189,7 @@
  * with neither archived row drawn beside it, at 1440 × 900 in en and uk.
  *
  * With BOARD_CAPTURE_CASE=registry-history it opens the board over the
- * candidate performance gate's synthetic registry, about 30,000 rows of
+ * candidate performance gate's synthetic registry, 53,299 rows of
  * retained history (#2761), in eight real browser views that each pin their
  * own conversation, while two writer processes keep writing grant-bearing
  * rows. From navigation, every view must draw its board within ten seconds,

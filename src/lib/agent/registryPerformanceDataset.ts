@@ -10,8 +10,8 @@ import { SqliteAgentRegistryStore } from "./sqliteRegistryStore";
 /**
  * A synthetic registry shaped like a long-running installation (#2761).
  *
- * The counts and payload sizes follow the registry that timed out the files
- * projection after #2714: about 30,000 rows of which more than nine in ten are
+ * The retained counts follow the managed-update census: 53,299 rows. The
+ * archive shape and payload sizes follow the earlier #2714 incident: most are
  * cold history, large operation-owner and receipt payloads, delegated launches
  * whose MCP grants depend on other rows, and attestors that are missing or
  * disagree. Nothing in it comes from a real installation; every identity is

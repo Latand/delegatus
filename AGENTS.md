@@ -220,7 +220,7 @@ PRs build only when image install, build or runtime inputs change.
 (`src/runtime-host/candidatePerformanceRun.ts`, bounds and reasons in
 `docs/design/candidate-performance-gate.md`) in another throwaway container,
 from the `candidate-gate` image (the candidate plus Chromium, never served):
-a synthetic registry of about 30,000 rows of retained history, two Viewer
+a synthetic registry of 53,299 rows of retained history, two Viewer
 releases as their own processes, live workers handed from one to the other
 through the real demotion and startup adoption, two concurrent writers, eight
 board scopes, and then eight Chromium views of the candidate's own production
