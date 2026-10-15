@@ -17,7 +17,7 @@ export interface CodexRequestReceipt {
   receivedAt: string;
   requestDigest: string;
   protocolError?: string;
-  dispatch?: { digest: string; at: string };
+  dispatch?: { digest: string; at: string; selectionDigest?: string };
   serverResolution?: { at: string; outcome: "answered" | "server-resolved" };
   recovery?: { at: string; outcome: "delivery-uncertain" | "callback-unavailable"; reason: "timeout" | "process-lost" | "resumed-without-callback" };
 }
@@ -30,6 +30,11 @@ function canonical(value: unknown): unknown {
 
 export function codexRequestDigest(value: unknown): string {
   return createHash("sha256").update(JSON.stringify(canonical(value))).digest("hex");
+}
+
+export function codexAnswerMatchesDispatch(receipt: CodexRequestReceipt, value: unknown): boolean {
+  const digest = codexRequestDigest(value);
+  return receipt.dispatch?.digest === digest || receipt.dispatch?.selectionDigest === digest;
 }
 
 export function codexRequestIdentity(generation: string, method: string, requestId: string | number, params: Record<string, unknown>): CodexRequestIdentity {
@@ -56,7 +61,8 @@ export function validCodexRequestReceipt(value: unknown): value is CodexRequestR
     && [identity.threadId, identity.turnId, identity.itemId, identity.approvalId].every(optionalId)
     && timestamp(receipt.receivedAt) && digest(receipt.requestDigest)
     && (receipt.protocolError === undefined || typeof receipt.protocolError === "string")
-    && (receipt.dispatch === undefined || !!receipt.dispatch && digest(receipt.dispatch.digest) && timestamp(receipt.dispatch.at))
+    && (receipt.dispatch === undefined || !!receipt.dispatch && digest(receipt.dispatch.digest) && timestamp(receipt.dispatch.at)
+      && (receipt.dispatch.selectionDigest === undefined || digest(receipt.dispatch.selectionDigest)))
     && (receipt.serverResolution === undefined || !!receipt.serverResolution && timestamp(receipt.serverResolution.at)
       && (receipt.serverResolution.outcome === "server-resolved" || receipt.serverResolution.outcome === "answered" && !!receipt.dispatch))
     && (receipt.recovery === undefined || !!receipt.recovery && timestamp(receipt.recovery.at)

@@ -42,6 +42,26 @@
     },
     {
       "width": 390,
+      "lang": "en",
+      "scenario": "long-label",
+      "frame": "390-en-long-label.png",
+      "geometry": {
+        "width": 390,
+        "client": 390
+      }
+    },
+    {
+      "width": 390,
+      "lang": "en",
+      "scenario": "large-permissions",
+      "frame": "390-en-large-permissions.png",
+      "geometry": {
+        "width": 390,
+        "client": 390
+      }
+    },
+    {
+      "width": 390,
       "lang": "uk",
       "scenario": "permissions",
       "frame": "390-uk-permissions.png",
@@ -75,6 +95,26 @@
       "lang": "uk",
       "scenario": "unavailable",
       "frame": "390-uk-unavailable.png",
+      "geometry": {
+        "width": 390,
+        "client": 390
+      }
+    },
+    {
+      "width": 390,
+      "lang": "uk",
+      "scenario": "long-label",
+      "frame": "390-uk-long-label.png",
+      "geometry": {
+        "width": 390,
+        "client": 390
+      }
+    },
+    {
+      "width": 390,
+      "lang": "uk",
+      "scenario": "large-permissions",
+      "frame": "390-uk-large-permissions.png",
       "geometry": {
         "width": 390,
         "client": 390
@@ -122,6 +162,26 @@
     },
     {
       "width": 1280,
+      "lang": "en",
+      "scenario": "long-label",
+      "frame": "1280-en-long-label.png",
+      "geometry": {
+        "width": 672,
+        "client": 1280
+      }
+    },
+    {
+      "width": 1280,
+      "lang": "en",
+      "scenario": "large-permissions",
+      "frame": "1280-en-large-permissions.png",
+      "geometry": {
+        "width": 672,
+        "client": 1280
+      }
+    },
+    {
+      "width": 1280,
       "lang": "uk",
       "scenario": "permissions",
       "frame": "1280-uk-permissions.png",
@@ -155,6 +215,26 @@
       "lang": "uk",
       "scenario": "unavailable",
       "frame": "1280-uk-unavailable.png",
+      "geometry": {
+        "width": 672,
+        "client": 1280
+      }
+    },
+    {
+      "width": 1280,
+      "lang": "uk",
+      "scenario": "long-label",
+      "frame": "1280-uk-long-label.png",
+      "geometry": {
+        "width": 672,
+        "client": 1280
+      }
+    },
+    {
+      "width": 1280,
+      "lang": "uk",
+      "scenario": "large-permissions",
+      "frame": "1280-uk-large-permissions.png",
       "geometry": {
         "width": 672,
         "client": 1280

@@ -13,7 +13,7 @@ import fs from "node:fs";
 import { structuredHostsEnabled } from "@/lib/runtime/flags";
 import { Database } from "bun:sqlite";
 
-import { codexRequestDigest, sameCodexRequest } from "@/lib/runtime/codexRequestReceipt";
+import { codexAnswerMatchesDispatch, sameCodexRequest } from "@/lib/runtime/codexRequestReceipt";
 import {
   RUNTIME_SCHEMA_VERSION,
   compactViewerDeploymentError, parseViewerDeploymentListCursor, viewerDeploymentListCursor, viewerDeploymentListLimit,
@@ -2491,7 +2491,7 @@ export class RuntimeJournal {
       } else if (attention.state !== "open") {
         const confirmed = attention.codexReceipt
           ? attention.codexReceipt.serverResolution?.outcome === "answered"
-            && attention.codexReceipt.dispatch?.digest === codexRequestDigest(command.resolution)
+            && codexAnswerMatchesDispatch(attention.codexReceipt, command.resolution)
           : attention.state === "resolved";
         status = confirmed ? "answered" : "rejected";
         reason = confirmed ? null : attention.state === "resolving" ? "attention-resolving" : "attention-no-longer-answerable";

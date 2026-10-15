@@ -1,5 +1,6 @@
 import { isNonblockingCodexQuestion } from "./codexAttention";
-import { codexAttentionActions } from "./codexAttentionActions";
+import { projectCodexAttentionActions } from "./codexAttentionActions";
+import { codexRequestDigest } from "./codexRequestReceipt";
 import { codexServerRequestKind } from "./codexServerRequests";
 import { RUNTIME_EVENT_PAYLOAD_LIMIT_BYTES, runtimeHostKindForEngine, type RuntimeAttentionKind, type RuntimeAttentionRequest, type RuntimeEngine, type RuntimeEventInput } from "./contracts";
 import type { RuntimeEvent } from "./engineHost";
@@ -270,17 +271,11 @@ function attentionProjection(engine: RuntimeEngine, event: Extract<RuntimeEvent,
   request.protocol = {
     engine,
     method,
-    ...(text(firstQuestion.id) ? { questionId: text(firstQuestion.id)! } : {}),
-    ...(questionIds.length > 0 ? { questionIds } : {}),
-    ...(engine === "codex" && questions.length ? { questionOptions: questions.map(question => {
-      const options = record(question).options;
-      return Array.isArray(options) ? options.flatMap(option => {
-        const label = text(record(option).label);
-        return label ? [label] : [];
-      }) : [];
-    }) } : {}),
+    ...(engine !== "codex" && text(firstQuestion.id) ? { questionId: text(firstQuestion.id)! } : {}),
+    ...(engine !== "codex" && questionIds.length > 0 ? { questionIds } : {}),
+    ...(engine === "codex" ? { responseRef: event.codexReceipt?.requestDigest ?? codexRequestDigest(source) } : {}),
     ...(protocolInput ? { input: protocolInput } : {}),
-    ...(event.codexReceipt && !event.codexReceipt.protocolError ? { actions: codexAttentionActions(method, source) } : {}),
+    ...(event.codexReceipt && !event.codexReceipt.protocolError ? { actions: projectCodexAttentionActions(method, source, event.codexReceipt.requestDigest) } : {}),
   };
   return {
     kind,
@@ -444,23 +439,26 @@ export function projectEngineHostEvent(
   }
   if (event.kind === "attention") {
     const projected = attentionProjection(engine, event);
-    return {
-      ...base,
-      kind: "attention",
-      payload: {
-        id: event.id,
-        conversationId,
-        kind: projected.kind,
-        state: event.codexReceipt?.dispatch && !event.codexReceipt.recovery ? "resolving" : "open",
-        unowned: record(event.attention).unowned === true || !!event.codexReceipt?.recovery || !!event.codexReceipt?.protocolError,
-        createdAt: event.codexReceipt?.receivedAt ?? new Date().toISOString(),
-        ...(event.codexReceipt ? { codexReceipt: event.codexReceipt } : {}),
-        request: projected.request,
-        turnId: projected.turnId,
-        isBlocking: projected.isBlocking,
-        ...(projected.autoResolutionMs !== undefined ? { autoResolutionMs: projected.autoResolutionMs } : {}),
-      },
+    const payload = {
+      id: event.id,
+      conversationId,
+      kind: projected.kind,
+      state: event.codexReceipt?.dispatch && !event.codexReceipt.recovery ? "resolving" : "open",
+      unowned: record(event.attention).unowned === true || !!event.codexReceipt?.recovery || !!event.codexReceipt?.protocolError,
+      createdAt: event.codexReceipt?.receivedAt ?? new Date().toISOString(),
+      ...(event.codexReceipt ? { codexReceipt: event.codexReceipt } : {}),
+      request: projected.request,
+      turnId: projected.turnId,
+      isBlocking: projected.isBlocking,
+      ...(projected.autoResolutionMs !== undefined ? { autoResolutionMs: projected.autoResolutionMs } : {}),
     };
+    // Many questions or policy choices can overflow even after text clipping.
+    // Withhold incomplete answer controls; retain the full callback in its ledger.
+    if (engine === "codex" && Buffer.byteLength(JSON.stringify(payload)) > RUNTIME_EVENT_PAYLOAD_LIMIT_BYTES) {
+      payload.request = { detail: "Codex request exceeds the display budget. Its callback remains pending; answer controls are unavailable." };
+      payload.unowned = true;
+    }
+    return { ...base, kind: "attention", payload };
   }
   if (event.kind === "attention-resolved") {
     /* `attentionId` is the field every reducer keys on (the journal's own

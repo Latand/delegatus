@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import { CodexPinnedProtocol } from "@/lib/accounts/codexPinnedProtocol";
-import { decodeCodexServerRequest, encodeCodexServerResponse } from "@/lib/runtime/codexServerRequests";
+import { decodeCodexServerRequest, encodeCodexServerResponse, resolveCodexAttentionResponse } from "@/lib/runtime/codexServerRequests";
 import { projectEngineHostEvent } from "@/lib/runtime/engineHostEvents";
 
 import type { RuntimeAttention } from "./runtimeModel";
@@ -100,8 +100,10 @@ describe.each(["0.154.0", "0.159.0", "0.162.1"])("Codex %s projected question re
 
     for (const [index, label] of ["Keep", longLabel, "Later"].entries()) {
       const resolution = questionResolution(request, index);
-      expect(resolution).toEqual({ answers: { choice: { answers: [label] } } });
-      expect(encodeCodexServerResponse(protocol, method, resolution, decoded.params)).toEqual(resolution);
+      expect(JSON.stringify(resolution)).not.toContain(longLabel);
+      const expanded = resolveCodexAttentionResponse(method, decoded.params, resolution, request.request.protocol!.responseRef!);
+      expect(expanded).toEqual({ answers: { choice: { answers: [label] } } });
+      expect(encodeCodexServerResponse(protocol, method, expanded, decoded.params)).toEqual(expanded);
     }
   });
 });

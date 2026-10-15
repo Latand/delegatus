@@ -1,7 +1,7 @@
 import { codexAttentionActions } from "./codexAttentionActions";
 import { describe, expect, test } from "bun:test";
 import { CodexPinnedProtocol } from "@/lib/accounts/codexPinnedProtocol";
-import { decodeCodexServerRequest, encodeCodexServerResponse } from "./codexServerRequests";
+import { decodeCodexServerRequest, encodeCodexServerResponse, resolveCodexAttentionResponse } from "./codexServerRequests";
 
 const command = "item/commandExecution/requestApproval";
 const permission = "item/permissions/requestApproval";
@@ -99,5 +99,27 @@ describe.each(["0.154.0", "0.159.0", "0.162.1"])("Codex %s request boundary", ve
     expect(() => encodeCodexServerResponse(protocol, permission, { permissions, scope: "forever" }, params)).toThrow("result");
     expect(() => encodeCodexServerResponse(protocol, permission, { permissions: { fileSystem: { read: null, write: ["/"] } }, scope: "turn" }, params)).toThrow("exceeds");
     expect(() => encodeCodexServerResponse(protocol, permission, { permissions: { network: { enabled: true } }, scope: "session" }, { ...params, permissions: {} })).toThrow("exceeds");
+  });
+
+  test("compact references retain exact values and refuse forged or incomplete selections", () => {
+    const digest = "request-digest";
+    const reference = (selection: Record<string, unknown>) => ({ codexResponse: { requestDigest: digest, ...selection } });
+    const params = { ...identity, startedAtMs: 1, cwd: "/workspace", permissions: { fileSystem: { read: Array.from({ length: 110 }, (_, i) => `/workspace/${"p".repeat(70)}${i}`) } } };
+    for (const [actionIndex, scope] of ["turn", "session"].entries()) {
+      const expanded = resolveCodexAttentionResponse(permission, params, reference({ actionIndex }), digest);
+      expect(expanded).toEqual({ permissions: params.permissions, scope });
+      expect(encodeCodexServerResponse(protocol, permission, expanded, params)).toEqual(expanded);
+    }
+    const selection = reference({ answers: [{ options: [0] }, { custom: "  full custom text  " }] });
+    const expanded = resolveCodexAttentionResponse(question, questions, selection, digest);
+    expect(expanded).toEqual({ answers: { first: { answers: ["A"] }, second: { answers: ["  full custom text  "] } } });
+    expect(encodeCodexServerResponse(protocol, question, expanded, questions)).toEqual(expanded);
+    expect(() => resolveCodexAttentionResponse(permission, params, reference({ actionIndex: 0 }), "other-request")).toThrow("does not match");
+    for (const actionIndex of [-1, 0.5, 3]) expect(() => resolveCodexAttentionResponse(permission, params, reference({ actionIndex }), digest)).toThrow("not offered");
+    for (const answers of [[], [{ options: [9] }, { custom: "x" }], [{ options: [-1] }, { custom: "x" }], [{ options: [0], custom: "x" }, { custom: "x" }]]) {
+      expect(() => resolveCodexAttentionResponse(question, questions, reference({ answers }), digest)).toThrow();
+    }
+    const forbidden = resolveCodexAttentionResponse(question, questions, reference({ answers: [{ custom: "not offered" }, { custom: "x" }] }), digest);
+    expect(() => encodeCodexServerResponse(protocol, question, forbidden, questions)).toThrow("not offered");
   });
 });

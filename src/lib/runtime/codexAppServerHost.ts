@@ -12,8 +12,8 @@ import { basename } from "node:path";
 import { isNonblockingCodexQuestion } from "./codexAttention";
 import { CodexPinnedProtocol, installedCodexVersion } from "@/lib/accounts/codexPinnedProtocol";
 import { parseAppServerMessage } from "@/lib/accounts/codexAppServerProtocol";
-import { decodeCodexServerRequest, encodeCodexServerResponse } from "./codexServerRequests";
-import { codexRequestDigest, codexRequestIdentity, sameCodexRequest, type CodexRequestReceipt } from "./codexRequestReceipt";
+import { decodeCodexServerRequest, encodeCodexServerResponse, resolveCodexAttentionResponse } from "./codexServerRequests";
+import { codexAnswerMatchesDispatch, codexRequestDigest, codexRequestIdentity, sameCodexRequest, type CodexRequestReceipt } from "./codexRequestReceipt";
 import { normalizeCodexProtocolReceipt } from "./codexProtocolReceipt";
 import { assertCatalogOffersTier, codexTurnProfile } from "./codexTurnProfile";
 import { StringDecoder } from "node:string_decoder";
@@ -2973,24 +2973,27 @@ export class CodexAppServerHost implements EngineHost {
     const attention = this.attentions.get(attentionRef);
     const receipt = this.callbackReceipts.get(attentionRef);
     if (receipt?.serverResolution) {
-      if (receipt.serverResolution.outcome === "answered" && receipt.dispatch?.digest === codexRequestDigest(value)) return;
+      if (receipt.serverResolution.outcome === "answered" && codexAnswerMatchesDispatch(receipt, value)) return;
       throw new Error("Codex request is already resolved; this answer was not delivered");
     }
     if (attention?.origin === "restored") throw new StructuredAnswerError("attention belongs to a previous host generation; answer ownership is unavailable", receipt?.dispatch ? "uncertain" : "unavailable");
     if (!attention) throw new Error("attention request is missing or already answered");
     if (receipt?.protocolError) throw new Error(receipt.protocolError);
-    const digest = codexRequestDigest(value);
-    if (receipt?.dispatch) {
-      if (receipt.dispatch.digest !== digest) throw new Error("Codex request is already awaiting confirmation with a different answer");
-      if (attention.answer) return attention.answer.promise;
-      throw new StructuredAnswerError("Codex answer delivery is uncertain; it will not be delivered again", "uncertain");
-    }
     let result: unknown;
-    try { result = encodeCodexServerResponse(this.protocol, attention.method, value, attention.params); }
-    catch (error) {
+    let digest: string;
+    try {
+      result = resolveCodexAttentionResponse(attention.method, attention.params, value, receipt?.requestDigest ?? "");
+      digest = codexRequestDigest(result);
+      if (receipt?.dispatch) {
+        if (receipt.dispatch.digest !== digest) throw new Error("Codex request is already awaiting confirmation with a different answer");
+        if (attention.answer) return attention.answer.promise;
+        throw new StructuredAnswerError("Codex answer delivery is uncertain; it will not be delivered again", "uncertain");
+      }
+      result = encodeCodexServerResponse(this.protocol, attention.method, result, attention.params);
+    } catch (error) {
       // Admission may already show resolving. Restore the still-owned request
       // after refusing its value, so the operator can correct that answer.
-      this.persistAttention(attentionRef, attention);
+      if (!receipt?.dispatch) this.persistAttention(attentionRef, attention);
       throw error;
     }
     let settle!: Pick<PendingAnswer, "resolve" | "reject">;
@@ -3007,7 +3010,8 @@ export class CodexAppServerHost implements EngineHost {
     attention.answer = { ...settle, promise, timer };
     try {
       if (!attention.receipt) throw new Error("Codex callback has no durable identity");
-      attention.receipt = { ...attention.receipt, dispatch: { digest, at: new Date().toISOString() } };
+      attention.receipt = { ...attention.receipt, dispatch: { digest, at: new Date().toISOString(),
+        ...(result !== value ? { selectionDigest: codexRequestDigest(value) } : {}) } };
       this.persistAttention(attentionRef, attention);
       if (this.ledgerFailed || this.dead || !this.writerFenceAllowsActuation()) throw new Error("Codex answer dispatch could not be recorded under the current owner");
       this.write({ jsonrpc: "2.0", id: attention.rpcId, result });

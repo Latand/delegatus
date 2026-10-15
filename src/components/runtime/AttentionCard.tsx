@@ -204,7 +204,7 @@ export function AttentionCard({ attention, onApprove, onDeny, onAction, onAnswer
                 }}
               >
                 <span className="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded border border-border bg-card text-[10px] font-bold">{index + 1}</span>
-                <span className="min-w-0">
+                <span className="min-w-0 [overflow-wrap:anywhere]">
                   <span className="block text-[13px] font-bold">{option.label}</span>
                   {option.description ? <span className="block text-[12px] text-muted">{option.description}</span> : null}
                 </span>

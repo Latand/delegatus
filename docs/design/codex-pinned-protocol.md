@@ -66,6 +66,18 @@ capabilities. Questions retain their custom-answer and secret-input flags.
 Malformed or unsupported requests remain visible with their answer controls
 unavailable.
 
+The host ledger retains complete requests. Journal projections carry a request
+digest and indexed selections instead of copying full option labels, permission
+scopes or policy amendments into answer controls. The callback owner expands
+each selection against that request before validating and dispatching the native
+response. Display text is clipped; the response retains every selected value.
+Dispatch receipts retain both the native response digest and, when used, the
+selection digest so confirmed retries survive journal and host recovery.
+If the question or action structure itself exceeds the projection budget,
+the operator sees a pending callback with answer controls unavailable; an
+incomplete set of controls cannot submit a partial answer. Later host events
+continue through the journal.
+
 A request receipt retains the process generation, thread, turn, item, method,
 typed RPC ID and optional approval ID. String and numeric IDs remain distinct.
 The attention ID incorporates that identity, so concurrent processes using the

@@ -1,5 +1,6 @@
 import { AttentionCard } from "@/components/runtime/AttentionCard";
-import { codexAttentionActions } from "@/lib/runtime/codexAttentionActions";
+import { codexAttentionActions, projectCodexAttentionActions } from "@/lib/runtime/codexAttentionActions";
+import { questionsResolution } from "@/components/runtime/ConversationAttention";
 import type { RuntimeAttention } from "@/components/runtime/runtimeModel";
 import { useState } from "react";
 import { nativeAssociationForm } from "@/lib/attention/nativeAssociationForm";
@@ -4614,8 +4615,20 @@ function CodexCallbacksScene() {
       recovery: { at: "2026-10-15T00:01:00Z", outcome: scenario === "uncertain" ? "delivery-uncertain" : "callback-unavailable", reason: "process-lost" },
     } } : {}),
   };
+  if (scenario === "long-label") {
+    row.kind = "question";
+    row.request = { question: { prompt: L("Choose the retained value", "Виберіть збережене значення"), options: [{ label: `${"x".repeat(256)}…` }] },
+      protocol: { engine: "codex", method: "item/tool/requestUserInput", responseRef: "a".repeat(64) } };
+  } else if (scenario === "large-permissions") {
+    row.request = { title: L("Allow the requested file access?", "Дозволити запитаний доступ до файлів?"),
+      protocol: { engine: "codex", method: "item/permissions/requestApproval",
+        actions: projectCodexAttentionActions("item/permissions/requestApproval", { permissions: { fileSystem: {
+          read: Array.from({ length: 110 }, (_, i) => `/workspace/${"p".repeat(70)}${i}`),
+        } } }, "a".repeat(64)) } };
+  }
   return <main className="w-full max-w-2xl p-4" data-codex-callback>
-    <AttentionCard attention={row} onAction={setAnswer} onAnswerQuestions={(selected, custom) => setAnswer({ selected, custom })} />
+    <AttentionCard attention={row} onAction={setAnswer} onAnswerQuestion={index => setAnswer(questionsResolution(row, [[index]]))}
+      onAnswerQuestions={(selected, custom) => setAnswer({ selected, custom })} />
     <output data-callback-answer className="block break-all text-primary">{answer ? JSON.stringify(answer) : ""}</output>
   </main>;
 }

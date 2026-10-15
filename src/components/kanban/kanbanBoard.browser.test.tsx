@@ -31533,7 +31533,7 @@ describe("Codex durable callback actions", () => {
     const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
     const records: unknown[] = [];
     try {
-      for (const width of [390, 1280]) for (const lang of ["en", "uk"]) for (const scenario of ["permissions", "question", "uncertain", "unavailable"]) {
+      for (const width of [390, 1280]) for (const lang of ["en", "uk"]) for (const scenario of ["permissions", "question", "uncertain", "unavailable", "long-label", "large-permissions"]) {
         const page = await browser.newPage({ viewport: { width, height: 900 } });
         await page.addInitScript(language => localStorage.setItem("llv_lang", language), lang);
         await page.goto(`${server.base}/?scenario=codex-callbacks&callback=${scenario}`);
@@ -31547,6 +31547,15 @@ describe("Codex durable callback actions", () => {
           await inputs.nth(0).fill("Custom region"); await inputs.nth(1).fill("Release note");
           await card.getByRole("button", { name: translate(lang as "en" | "uk", "runtime.attention.answer"), exact: true }).click();
           expect(await page.locator("[data-callback-answer]").textContent()).toContain("Custom region");
+        } else if (scenario === "long-label" || scenario === "large-permissions") {
+          const controls = card.locator("button");
+          const response = scenario === "long-label" ? { answers: [{ options: [0] }] } : { actionIndex: 1 };
+          expect(await card.textContent()).toContain("…");
+          if (scenario === "long-label") await controls.first().click();
+          else await card.getByRole("button", { name: translate(lang as "en" | "uk", "runtime.attention.action.grantSession") }).click();
+          expect(JSON.parse((await page.locator("[data-callback-answer]").textContent())!)).toEqual({
+            codexResponse: { requestDigest: "a".repeat(64), ...response },
+          });
         } else {
           expect(await card.locator("button,input").count()).toBe(0);
           expect(await card.textContent()).toContain(translate(lang as "en" | "uk", scenario === "uncertain" ? "runtime.attention.unconfirmed" : "runtime.attention.unavailable"));

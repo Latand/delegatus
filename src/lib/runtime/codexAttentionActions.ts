@@ -5,6 +5,15 @@ export interface CodexAttentionAction {
   detail?: string;
 }
 
+/** Serializable display controls; native response values stay with the owner. */
+export function projectCodexAttentionActions(method: string, params: Record<string, unknown>, requestDigest: string): CodexAttentionAction[] {
+  return codexAttentionActions(method, params).map((action, actionIndex) => ({
+    kind: action.kind,
+    response: { codexResponse: { requestDigest, actionIndex } },
+    ...(action.detail ? { detail: action.detail.length <= 256 ? action.detail : `${action.detail.slice(0, 256)}…` } : {}),
+  }));
+}
+
 export function codexAttentionActions(method: string, params: Record<string, unknown>): CodexAttentionAction[] {
   if (method === "item/commandExecution/requestApproval" || method === "item/fileChange/requestApproval") {
     const decisions = Array.isArray(params.availableDecisions) ? params.availableDecisions : [

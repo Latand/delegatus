@@ -12,6 +12,7 @@ import type { CurrentTimeReadResponse } from "@/lib/accounts/protocol/0.162.1/ty
 import type { ApplyPatchApprovalResponse } from "@/lib/accounts/protocol/0.162.1/types/ApplyPatchApprovalResponse";
 import type { ExecCommandApprovalResponse } from "@/lib/accounts/protocol/0.162.1/types/ExecCommandApprovalResponse";
 import { isDeepStrictEqual } from "node:util";
+import { codexAttentionActions } from "./codexAttentionActions";
 
 export type CodexServerRequestMethod = ServerRequest["method"];
 export type CodexServerResponses = {
@@ -86,6 +87,38 @@ export function decodeCodexServerRequest(protocol: CodexPinnedProtocol, id: stri
 
 function object(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+/** Expand a journal-sized selection against the full request retained by its
+ * callback owner. Display clipping never changes a native response value. */
+export function resolveCodexAttentionResponse(method: string, params: Record<string, unknown>, value: unknown, requestDigest: string): unknown {
+  if (!Object.hasOwn(object(value), "codexResponse")) return value;
+  const selection = object(object(value).codexResponse);
+  if (Object.keys(object(value)).length !== 1 || selection.requestDigest !== requestDigest) throw new Error("Codex answer reference does not match this request");
+  if (Object.hasOwn(selection, "actionIndex") && Object.keys(selection).length === 2) {
+    const index = selection.actionIndex;
+    const actions = codexAttentionActions(method, params);
+    if (!Number.isSafeInteger(index) || (index as number) < 0 || !actions[index as number]) throw new Error("Codex action was not offered");
+    return actions[index as number]!.response;
+  }
+  if (method !== "item/tool/requestUserInput" || Object.keys(selection).length !== 2 || !Array.isArray(selection.answers)
+    || !Array.isArray(params.questions) || selection.answers.length !== params.questions.length) throw new Error("Codex answer reference must cover every question");
+  const answers = selection.answers;
+  return { answers: Object.fromEntries(params.questions.map((raw, index) => {
+    const question = object(raw);
+    const answer = object(answers[index]);
+    let labels: string[];
+    if (typeof answer.custom === "string" && Object.keys(answer).length === 1) labels = [answer.custom];
+    else if (Array.isArray(answer.options) && Object.keys(answer).length === 1) {
+      // The projection removes blank labels; use that same sequence here.
+      const options = Array.isArray(question.options) ? question.options.map(object).filter(option => typeof option.label === "string" && option.label.trim()) : [];
+      labels = answer.options.map(index => {
+        if (!Number.isSafeInteger(index) || index < 0 || !options[index]) throw new Error("Codex question option was not offered");
+        return options[index]!.label as string;
+      });
+    } else throw new Error("Codex question selection is invalid");
+    return [question.id, { answers: labels }];
+  })) };
 }
 
 /** A grant may retain or remove offered entries. It cannot add a path, access

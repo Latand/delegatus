@@ -223,6 +223,8 @@ export interface RuntimeAttentionRequest {
     questionId?: string;
     questionIds?: string[];
     questionOptions?: string[][];
+    /** Digest of the full host-owned request used to expand indexed answers. */
+    responseRef?: string;
     input?: Record<string, unknown>;
     actions?: import("./codexAttentionActions").CodexAttentionAction[];
   };

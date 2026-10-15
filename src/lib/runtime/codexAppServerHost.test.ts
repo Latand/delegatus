@@ -22,9 +22,16 @@ import { decodeCodexStructuredUserText } from "./codexStructuredUserText";
 import type { SelectedContextRef } from "@/lib/selection/selectedContext";
 
 import { FileRuntimeEventStore, type RuntimeEventStore } from "./eventStore";
+import { projectEngineHostEvent } from "./engineHostEvents";
 import type { HostState, RuntimeEvent } from "./engineHost";
 import { appendRuntimeLiveTurnDelta, runtimeLiveTurnItems, type RuntimeLiveTurn } from "./liveTurn";
-import { adoptCodexRegistryHosts, bindCodexHostPersistence, persistCodexHost, startCodexStructuredHost, structuredHostsEnabled } from "./registry";
+import { adoptCodexRegistryHosts, bindCodexHostPersistence, codexHostColumns, persistCodexHost, startCodexStructuredHost, structuredHostsEnabled } from "./registry";
+import { RuntimeJournal } from "@/runtime-host/journal";
+import type { RuntimeHostClient } from "./client";
+import { bindStructuredDeliveryQueue } from "./structuredDeliveryController";
+import { kickStructuredDeliveryQueue } from "./structuredDeliverySignal";
+import { questionsResolution } from "@/components/runtime/ConversationAttention";
+import type { RuntimeAttention } from "@/components/runtime/runtimeModel";
 import { STRUCTURED_IMAGE_CAPABILITY, structuredContent, type StructuredImageRef } from "./structuredContent";
 import { materializeStructuredHostAccess, READ_ONLY_STAGE_PERMISSION_PROFILE } from "./structuredSpawn";
 import { parseCodexFeatures, setCodexFeatureReaderForTest } from "@/lib/agent/codexSpawnPolicy";
@@ -6142,6 +6149,111 @@ describe("durable Codex callbacks", () => {
   const method = "item/commandExecution/requestApproval";
   const response = { decision: "accept" };
   const rows = (store: RuntimeEventStore, thread: string) => store.load(thread).filter(event => event.kind === "attention" || event.kind === "attention-resolved");
+
+  for (const scenario of ["long-label", "permission-scope", "policy-amendment"] as const) test(`oversized ${scenario} survives controller journal restart, answers exactly and allows the turn to end`, async () => {
+    const thread = randomUUID();
+    const server = new FakeAppServer(thread);
+    const store = new FileRuntimeEventStore(metadataState);
+    const host = await CodexAppServerHost.start({ cwd: "/repo", eventStore: store, spawnProcess: fakeSpawn(server) });
+    const registry = new AgentRegistry(path.join(metadataState, "registry.json"));
+    const artifactPath = path.join(metadataState, `${thread}.jsonl`);
+    const key = { engine: "codex" as const, sessionId: thread };
+    const conversation = registry.ensureConversation("codex", artifactPath, "default");
+    registry.upsert({ key, artifactPath, cwd: "/repo", accountId: "default", status: "live", host: null,
+      claimEpoch: 0, claimOwner: null, pendingAction: null, structuredHost: { ...codexHostColumns(await host.health(), 0), process: null } });
+    const filename = path.join(metadataState, "runtime.sqlite");
+    let journal = new RuntimeJournal(filename, { structuredHosts: true });
+    const client = {
+      snapshot: async () => journal.snapshot(), readSession: async identity => journal.readSession(identity),
+      events: async after => journal.replay(after), append: async event => journal.append(event),
+      command: async command => journal.executeOperation(command), operationStatus: async id => journal.operationResult(id),
+      producerCursor: async (kind, prefix) => journal.producerCursor(kind, prefix),
+      effectBatch: async (kinds, after) => journal.effectBatch(100, kinds, after),
+      transitionOperation: async (id, status, details) => journal.transitionOperation(id, status, details),
+    } as RuntimeHostClient;
+    const label = "x".repeat(17_000);
+    const paths = Array.from({ length: 110 }, (_, i) => `/workspace/${"p".repeat(70)}${i}`);
+    const amendment = ["echo", "\\\n\"".repeat(6_000)];
+    const method = scenario === "long-label" ? "item/tool/requestUserInput"
+      : scenario === "permission-scope" ? "item/permissions/requestApproval" : "item/commandExecution/requestApproval";
+    const params = scenario === "long-label" ? { questions: [{ id: "choice", question: "Choose a value", isOther: false,
+      options: [{ label: " ", description: "Hidden" }, { label, description: "Full value retained" }] }] }
+      : scenario === "permission-scope" ? { cwd: "/workspace", environmentId: null, reason: null, permissions: { fileSystem: { read: paths } } }
+        : { availableDecisions: [{ acceptWithExecpolicyAmendment: { execpolicy_amendment: amendment } }] };
+    const expected = scenario === "long-label" ? { answers: { choice: { answers: [label] } } }
+      : scenario === "permission-scope" ? { permissions: { fileSystem: { read: paths } }, scope: "session" }
+        : { decision: { acceptWithExecpolicyAmendment: { execpolicy_amendment: amendment } } };
+    const attention = () => journal.snapshot().attentions.find(row => row.conversationId === conversation.id)!;
+    try {
+      await bindStructuredDeliveryQueue([{ key, host }], { registry, client });
+      server.request("large-request", method, params);
+      await waitForCondition(() => !!attention(), "oversized request did not reach the journal");
+      expect(attention().unowned).toBe(false);
+      expect(attention().state).toBe("open");
+      if (scenario === "long-label") expect(attention().request.question?.options).toMatchObject([{ label: expect.stringContaining("…") }]);
+      else expect(attention().request.protocol?.actions?.[0]?.detail).toEndWith("…");
+      const id = attention().id;
+      // Restart the journal/controller while the callback owner survives.
+      await bindStructuredDeliveryQueue([], { registry, client: null });
+      journal.close();
+      journal = new RuntimeJournal(filename, { structuredHosts: true });
+      await bindStructuredDeliveryQueue([{ key, host }], { registry, client });
+      const restored = attention();
+      expect(restored.id).toBe(id);
+      const resolution = scenario === "long-label" ? questionsResolution(restored as RuntimeAttention, [[0]])
+        : restored.request.protocol!.actions![scenario === "permission-scope" ? 1 : 0]!.response;
+      expect(Buffer.byteLength(JSON.stringify(resolution))).toBeLessThan(256);
+      const command = { kind: "answer" as const, conversationId: conversation.id, attentionId: id, resolution,
+        operationId: "large-answer", idempotencyKey: "large-answer" };
+      expect(journal.executeOperation(command).receipt.status).toBe("pending");
+      await kickStructuredDeliveryQueue();
+      await waitForCondition(() => {
+        const receipt = journal.operationResult("large-answer")?.receipt;
+        if (receipt?.status === "failed" || receipt?.status === "rejected") throw new Error(`answer ${receipt.status}: ${receipt.reason}`);
+        return receipt?.status === "answered";
+      }, "large answer was not confirmed");
+      const writes = () => server.requests.filter(message => message.id === "large-request" && "result" in message);
+      expect(writes()).toHaveLength(1);
+      expect(writes()[0]!.result).toEqual(expected);
+      await host.answer(id, resolution);
+      await host.answer(id, expected);
+      expect(writes()).toHaveLength(1);
+      expect(journal.executeOperation({ ...command, operationId: "confirmed-retry", idempotencyKey: "confirmed-retry" }).receipt.status).toBe("answered");
+      server.notify("turn/completed", { threadId: thread, turn: { id: "turn-1", status: "completed" } });
+      await waitForCondition(() => journal.replay(0).events.some(event => event.kind === "turn-ended"), "turn end was blocked by the request");
+      for (const event of journal.replay(0).events.filter(event => event.kind === "attention")) {
+        expect(Buffer.byteLength(JSON.stringify(event.payload))).toBeLessThanOrEqual(16 * 1024);
+      }
+      await bindStructuredDeliveryQueue([], { registry, client: null });
+      journal.close();
+      journal = new RuntimeJournal(filename, { structuredHosts: true });
+      // A fresh journal replays the full host ledger, including the original
+      // oversized request and dispatch, as startup after projection loss does.
+      const replayJournal = new RuntimeJournal(path.join(metadataState, "replay.sqlite"), { structuredHosts: true });
+      try {
+        for (const event of new FileRuntimeEventStore(metadataState).load(thread)) {
+          const projection = projectEngineHostEvent(conversation.id, `codex:${thread}`, event);
+          if (projection) replayJournal.append(projection);
+        }
+        expect(replayJournal.snapshot().attentions.find(row => row.id === id)?.state).toBe("resolved");
+        expect(replayJournal.replay(0).events.some(event => event.kind === "turn-ended")).toBe(true);
+      } finally { replayJournal.close(); }
+      expect(journal.executeOperation({ ...command, operationId: "restart-retry", idempotencyKey: "restart-retry" }).receipt.status).toBe("answered");
+      expect(writes()).toHaveLength(1);
+      await host.release();
+      const successor = new FakeAppServer(thread);
+      const replacement = await CodexAppServerHost.adopt(thread, { cwd: "/repo", eventStore: new FileRuntimeEventStore(metadataState), spawnProcess: fakeSpawn(successor) });
+      try {
+        await replacement.answer(id, resolution);
+        await replacement.answer(id, expected);
+        expect(successor.requests.filter(message => message.id === "large-request")).toHaveLength(0);
+      } finally { await replacement.release(); }
+    } finally {
+      await bindStructuredDeliveryQueue([], { registry, client: null });
+      await host.release();
+      journal.close();
+    }
+  }, 15_000);
 
   test("concurrent callback owners cannot alias the same RPC ID in the shared journal", async () => {
     const servers = [new FakeAppServer("callback-a"), new FakeAppServer("callback-b")];

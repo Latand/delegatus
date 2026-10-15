@@ -192,6 +192,7 @@ export interface AttentionRequest {
     questionId?: string;
     questionIds?: string[];
     questionOptions?: string[][];
+    responseRef?: string;
     input?: Record<string, unknown>;
     actions?: import("@/lib/runtime/codexAttentionActions").CodexAttentionAction[];
   };

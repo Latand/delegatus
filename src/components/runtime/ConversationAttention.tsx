@@ -67,6 +67,11 @@ export function questionsResolution(attention: RuntimeAttention, optionIndices: 
   const questions = attention.request.questions
     ?? (attention.request.question ? [attention.request.question] : []);
   const protocol = attention.request.protocol;
+  if (protocol?.engine === "codex" && protocol.responseRef) return { codexResponse: {
+    requestDigest: protocol.responseRef,
+    answers: questions.map((_, index) => customAnswers[index]
+      ? { custom: customAnswers[index] } : { options: optionIndices[index] ?? [] }),
+  } };
   const labels = questions.map((question, questionIndex) => customAnswers[questionIndex]
     ? [customAnswers[questionIndex]!]
     : (optionIndices[questionIndex] ?? []).map(optionIndex => protocol?.questionOptions?.[questionIndex]?.[optionIndex] ?? question.options?.[optionIndex]?.label ?? String(optionIndex + 1)));
