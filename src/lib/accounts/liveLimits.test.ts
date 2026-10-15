@@ -8,12 +8,58 @@ const previousState = process.env.LLV_STATE_DIR;
 process.env.LLV_STATE_DIR = path.join(root, "state");
 const { createManagedClaudeAccount } = await import("./claude");
 const { agentRegistry } = await import("@/lib/agent/registry");
-const { refreshAccountLimits } = await import("./liveLimits");
+const { refreshAccountLimits, recordLiveObservation, exhaustionNeedsLiveRead } = await import("./liveLimits");
 const { readClaudeAccountLimits, cachedLimitsProvenance } = await import("@/lib/limits");
 const { QuotaController, claudeQuotaObservation, durableQuotaObservation } = await import("./migration/quotaController");
 const { realClaudeLoginPorts } = await import("./claudeLogin");
 const { accountProjection } = await import("./accountProjection");
 type QuotaProbePort = import("./migration/quotaController").QuotaProbePort;
+
+test.each(["session", "weekly"] as const)("operator refresh retains each blocked %s window until it is positively cleared", async blocked => {
+  const { selectHeadlessAccount } = await import("./headlessSelection");
+  const now = Date.now();
+  const registry = agentRegistry();
+  const observation = { engine: "codex" as const, accountId: `account-${blocked}`, authenticated: true, observedAt: now,
+    provenance: { source: "live" as const, reason: null, staleSince: null }, limits: {
+      session: { usedPercent: 99, resetsAt: Math.floor(now / 1000) - 1 },
+      weekly: { usedPercent: 99, resetsAt: Math.floor(now / 1000) - 1 }, plan: "pro", capturedAt: now / 1000,
+      credits: { hasCredits: true, balance: "10", unlimited: false } } };
+  const selection = () => selectHeadlessAccount([{ id: observation.accountId, authPresent: true }],
+    registry.quotaObservations("codex"), observation.accountId, [], now).kind;
+  recordLiveObservation(observation, "managed", { registry });
+  for (const limits of [null, { ...observation.limits, credits: undefined, session: null, weekly: null },
+    { ...observation.limits, credits: undefined, session: { usedPercent: 1, resetsAt: null }, weekly: { usedPercent: 1, resetsAt: null }, [blocked]: null }]) {
+    recordLiveObservation({ ...observation, limits }, "managed", { registry });
+    expect(selection()).toBe("exhausted");
+  }
+  const cleared = { ...observation.limits, credits: undefined, session: { usedPercent: 1, resetsAt: null }, weekly: { usedPercent: 1, resetsAt: null } };
+  recordLiveObservation({ ...observation, limits: cleared, provenance: { source: "cache", reason: null, staleSince: null } }, "managed", { registry });
+  expect(selection()).toBe("exhausted");
+  recordLiveObservation({ ...observation, observedAt: now - 1000, limits: cleared }, "managed", { registry });
+  expect(selection()).toBe("exhausted");
+  recordLiveObservation({ ...observation, limits: cleared }, "managed", { registry });
+  expect(selection()).toBe("available");
+  recordLiveObservation(observation, "managed", { registry });
+  recordLiveObservation({ ...observation, limits: { ...cleared, credits: { hasCredits: false, balance: "0", unlimited: false }, session: null, weekly: null } }, "managed", { registry });
+  expect(selection()).toBe("available");
+});
+
+test("paid metadata survives a window-only read; a proved reset restores admission", () => {
+  const now = Date.now();
+  const registry = agentRegistry();
+  const observation = { engine: "codex" as const, accountId: "account-a", authenticated: true, authCheckedAt: now, observedAt: now,
+    provenance: { source: "live" as const, reason: null, staleSince: null }, limits: {
+      session: null, weekly: { usedPercent: 99, resetsAt: now / 1000 - 1 }, plan: "pro", capturedAt: now / 1000,
+      credits: { hasCredits: true, balance: "10", unlimited: false } } };
+  const first = recordLiveObservation(observation, "managed", { registry });
+  expect(exhaustionNeedsLiveRead(first, now)).toBe(true);
+  const next = recordLiveObservation({ ...observation, limits: { ...observation.limits, credits: undefined,
+    weekly: { usedPercent: 1, resetsAt: now / 1000 + 3600 } } }, "managed", { registry });
+  expect(next.limits?.credits?.hasCredits).toBe(true);
+  expect(exhaustionNeedsLiveRead(next, now)).toBe(false);
+  expect(recordLiveObservation({ ...observation, limits: { ...observation.limits,
+    credits: { hasCredits: false, balance: "0", unlimited: false } } }, "managed", { registry }).limits?.credits?.hasCredits).toBe(false);
+});
 
 afterAll(() => {
   if (previousState === undefined) delete process.env.LLV_STATE_DIR;

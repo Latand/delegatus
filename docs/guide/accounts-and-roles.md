@@ -25,6 +25,18 @@ login.
   to another allowed account of the same engine. When none has room, the
   stage waits and carries on once an allowed account has room or is signed in
   again.
+- **Paid Codex credits.** Accounts reporting a paid balance stop accepting turns
+  at 99% usage by default. The pipeline controller stops a running stage on a
+  guarded account or one removed from the project's binding. It keeps the
+  checkout and resumes the work in a linked successor attempt on an allowed
+  account. With no available account, the host stays stopped while the
+  controller checks for capacity. The percentage is [configurable](configuration.md#environment-variables).
+  Protection uses the provider's observed usage; quota reads run periodically.
+- **Retry after a limit or removal.** Retry-stage can accept an attempt whose
+  account is exhausted or no longer allowed, even while the old turn or a
+  delivery is still pending. Replacement waits for confirmed termination and
+  delivery settlement. A stop that cannot be confirmed remains visible and
+  is retried using its original operation key.
 
 ![Claude accounts with their five-hour, weekly and per-model limits](../media/readme/accounts.svg)
 

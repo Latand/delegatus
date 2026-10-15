@@ -5789,7 +5789,7 @@ export class AgentRegistry {
     if (this.sqliteStore && (this.sqliteMode === "read" || this.sqliteMode === "sqlite"))
       return this.sqliteStore.spawnDiagnosticAttempt(launchId, conversationId);
     const receipts = Object.values(this.readOnlySnapshot().receipts);
-    const attributed = launchId ? receipts.find(receipt => receipt.launchId === launchId)
+    const attributed = launchId !== undefined ? receipts.find(receipt => receipt.launchId === launchId)
       : conversationId ? receipts.find(receipt => receipt.conversationId === conversationId) : undefined;
     return (attributed ? [attributed] : receipts).find(receipt => receipt.clientAttemptId?.startsWith("relay-owner-"))?.clientAttemptId ?? undefined;
   }
@@ -6608,6 +6608,10 @@ export class AgentRegistry {
 
   rememberMembership(conversationId: ViewerConversationId, membership: DurableMembershipInput): DurableConversationMembership {
     return this.mutate((file) => clone(recordMembership(file, conversationId, membership, now())));
+  }
+
+  conversationMemberships(conversationId: ViewerConversationId): DurableConversationMembership[] {
+    return this.readKeyed(file => clone(file.memberships[resolveConversationAlias(file, conversationId)] ?? []));
   }
 
   runIdentityWaveMigration(input: IdentityWaveMigrationInput, validatePreparedState?: () => void): IdentityWaveMigrationResult {
@@ -9360,6 +9364,7 @@ export class AgentRegistry {
     targetId: string,
     reconfigureOwner?: { operationId: string; revision: number },
     profile?: Pick<LaunchProfile, "model" | "effort" | "fast" | "serviceTier">,
+    creditGuard?: true,
   ): RegistryConversation {
     return this.mutate((file) => {
       const canonicalId = resolveConversationAlias(file, id);
@@ -9448,6 +9453,7 @@ export class AgentRegistry {
       const phase = migrationReadiness(file, conversation) === "busy" ? "waiting-turn" : "requested";
       queueAbandonedMigrationCleanup(file, conversation, changedAt);
       conversation.migration = conversationMigrationForIntent(conversation, source, intent, phase, changedAt);
+      if (creditGuard) conversation.migration.creditGuard = true;
       adoptFencedDeliveries(file, conversation, replaced, reconfigureOwner ? conversation.reconfigure ?? null : null);
       conversation.updatedAt = changedAt;
       file.conversationRevision[conversation.engine] += 1;

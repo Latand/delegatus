@@ -23,6 +23,9 @@ const { reviewerPrompt } = await import("./prompts");
 const { outputPathFor, stdoutPathFor } = await import("./store");
 const { registerPipelineTick } = await import("../pipelines/controllerSignal");
 
+// Detached fixture exits wake a local stub throughout this isolated test file.
+registerPipelineTick(async () => {});
+
 afterAll(async () => {
   for (const child of sleepers) await stopFixtureProcess(child);
   restorePolicyReader();

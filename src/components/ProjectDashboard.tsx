@@ -35,19 +35,20 @@ import { seatOnlyTask, type SeatRefs } from "@/lib/tasks/groupHide";
 import { useOrchestratorIncumbent } from "./orchestrator/useOrchestratorIncumbent";
 import { planBoardConvergence, planClose } from "./projectBoardMutations";
 import { reviewerCloseMutations } from "./reviewerAutoClose";
-import { directReviewFlows, isDirectReviewFlow } from "./flows/directReviewGroups";
-import { claimedReviewerDescendantPaths, foldClaimedReviewers, isActiveFlow, resolveFlowMemberPaths } from "./flows/flowModel";
+import { isDirectReviewFlow } from "./flows/directReviewGroups";
+import { claimedReviewerDescendantPaths, isActiveFlow, resolveFlowMemberPaths } from "./flows/flowModel";
 import { compactPipelineArtifactPaths, compactPipelineLayoutFlows, createDraftPipeline, excludeCompactPipelineArtifacts, patchPipeline, pipelineFullPanePaths, pipelinesForProject, replaceCompactPipelineEphemeral, resolvePipelineMemberPaths, type PipelineTemplate } from "./pipelines/pipelineModel";
 import { PipelineTemplatePicker } from "./pipelines/PipelineTemplatePicker";
-import { buildSchemeLayout } from "./scheme/layout";
+import { createProjectDashboardDerivation } from "./projectDashboardDerivation";
 import { buildSubagentTrays, subagentTraySignature } from "./scheme/subagentTray";
 import type { SubagentTrayApi } from "./scheme/SubagentTrayView";
 import { conversationIdentity, currentConversationFile, formatConversationHash, isLaunchPlaceholder } from "@/lib/accounts/identity";
 import { recordFocusNavigation } from "@/lib/navigation/focusHistory";
 import { collapsibleWorkerFiles, conversationSeenKey, finishedLaneOutcomePaths, pipelineCursorStagePaths, protectedReviewerNodes } from "./scheme/workerCollapse";
-import { launchHistoryClaimPaths, launchHistoryFor, pipelineRetryTarget, retryPipelineLaunch } from "./launchHistoryModel";
+import { transcriptClaimResolver } from "./transcriptClaims";
+import { launchHistoryClaimPaths, pipelineRetryTarget, retryPipelineLaunch } from "./launchHistoryModel";
 import { isPlacedTask } from "./scheme/taskGeometry";
-import { loadExpandedTasks, partitionTaskStacks, persistExpandedTasks } from "./scheme/taskStacks";
+import { loadExpandedTasks, persistExpandedTasks } from "./scheme/taskStacks";
 import { clearWorkflowDraftStorage } from "./workflows/WorkflowDraftPane";
 import { dropLegacyWorkflowDrafts, isWorkflowDraftId } from "./workflows/workflowModel";
 import { pushTaskToast, TaskToastHost } from "./tasks/taskToast";
@@ -81,7 +82,6 @@ import { FeedSkeleton, KanbanSkeleton, PhoneKanbanSkeleton, TitleSkeleton } from
 import { Switchboard } from "./Switchboard";
 import {
   buildArchiveBranchGroups,
-  buildBranchGroups,
   collapsedTrees,
   draftWorkingDirectory,
   isChildConversation,
@@ -96,7 +96,6 @@ import {
   residualItems,
   schemeAgeHorizonSeconds,
 } from "./projectModel";
-import { boundFlowExpansions } from "./scheme/placementHorizon";
 import { ArchiveRestore } from "./icons";
 import { ArchiveProjectButton, DeleteProjectButton } from "./ProjectTrash";
 import { AsksYouRow } from "./AsksYouRow";
@@ -441,8 +440,13 @@ function ProjectDashboardView({
      detached standalone card (#325/#353). Canonicalize member paths to current
      generations ONCE at this data boundary so every consumer below agrees.
      PATCH-backed actions key on flow/pipeline ids and are unaffected. */
-  const flows = useMemo(() => resolveFlowMemberPaths(rawFlows, files), [rawFlows, files]);
-  const pipelines = useMemo(() => resolvePipelineMemberPaths(rawPipelines, files), [rawPipelines, files]);
+  /* Equal answers retain identity within this mounted project. */
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- Retire the cache when this dashboard changes project.
+  const derive = useMemo(() => createProjectDashboardDerivation(), [project]);
+  const relationshipFiles = useMemo(() => derive.relationshipFiles(files), [derive, files]);
+  const resolveClaimPath = useMemo(() => transcriptClaimResolver(relationshipFiles), [relationshipFiles]);
+  const flows = useMemo(() => resolveFlowMemberPaths(rawFlows, relationshipFiles), [rawFlows, relationshipFiles]);
+  const pipelines = useMemo(() => resolvePipelineMemberPaths(rawPipelines, relationshipFiles), [rawPipelines, relationshipFiles]);
   const highlightTimer = useRef<number | null>(null);
   const pendingFocusRef = useRef<string | null>(null);
   /* Automatic focus is one-shot and edge-triggered: see `focusRequestEdge`. The
@@ -490,8 +494,8 @@ function ProjectDashboardView({
   /* Conversation auto-collapse (#112/#1158): genuine user placements, manual
      expansions, and favorites pin a card against collapse. */
   const pinnedPaths = useMemo(
-    () => new Set([...board.explicitManual, ...prefs.expanded, ...favoriteRows.map((row) => row.file.path)]),
-    [board.explicitManual, prefs.expanded, favoriteRows],
+    () => derive.pinnedPaths([...board.explicitManual, ...prefs.expanded, ...favoriteRows.map((row) => row.file.path)]),
+    [derive, board.explicitManual, prefs.expanded, favoriteRows],
   );
   /* Durable acknowledgements (#1244): when the operator last opened each
      conversation, in epoch seconds. A finished lane holds its outcome card
@@ -551,11 +555,6 @@ function ProjectDashboardView({
      preference — the operator's saved view returns with one tap on the
      Схема/Список control, which is what clears this. */
   const [openedConversation, setOpenedConversation] = useState<string | null>(null);
-  /* Wall clock for the worker auto-collapse idle window (issue #112). Starts at
-     0 so the server render and first client render agree (no hydration skew);
-     the first tick lands the real time, and reviewer verdicts collapse without
-     waiting on the clock at all. */
-  const [nowMs, setNowMs] = useState(0);
   /* Runtime receipts bridge the scan interval: a queued send immediately keeps
      its target on the board, then the next files poll carries the new turn. */
   const activeDeliverySignature = useRuntimeSelector(
@@ -587,16 +586,14 @@ function ProjectDashboardView({
     setReadingPaths((held) => (held.length === paths.length && held.every((path, index) => path === paths[index]) ? held : paths));
   }, []);
   const protectedCollapsePaths = useMemo(() => {
-    const paths = pipelineCursorStagePaths(pipelines, files);
+    const paths = pipelineCursorStagePaths(pipelines, relationshipFiles);
     for (const path of readingPaths) paths.add(path);
     return paths;
-  }, [pipelines, files, readingPaths]);
-  /* The subagent-tray projection measures transcript freshness and attention
-     TTLs against `mtime`, which is SECONDS. It takes the seconds clock
-     straight from the shared hook rather than a conversion of `nowMs` — the
-     unit is then carried by the type (`EpochSeconds`), so a millisecond clock
-     cannot reach it by an edit that reads plausibly (issue #669). */
+  }, [pipelines, relationshipFiles, readingPaths]);
+  /* Both units share one snapshot. Server rendering and hydration use zero;
+     subsequent client snapshots carry the clock's full millisecond precision. */
   const nowSeconds = useNowSeconds(BOARD_CLOCK_MS);
+  const nowMs = nowSeconds * 1000;
   const projectCwdFallbacks = useMemo(() => [
     ...pipelines.filter((pipeline) => pipeline.project === project).map((pipeline) => pipeline.repoDir),
     ...workflows.filter((workflow) => workflow.project === project).map((workflow) => workflow.repoDir),
@@ -608,14 +605,6 @@ function ProjectDashboardView({
   );
   const initialDraftCwd = resolvedDraftCwd || "/";
   const initialDraftCwdVerified = Boolean(resolvedDraftCwd);
-
-  useEffect(() => {
-    const tick = () => setNowMs(Date.now());
-    tick();
-    const id = window.setInterval(tick, BOARD_CLOCK_MS);
-    return () => window.clearInterval(id);
-  }, []);
-
   useEffect(() => {
     if (!loaded) return;
     let cancelled = false;
@@ -710,7 +699,7 @@ function ProjectDashboardView({
      `deckFlows` is what the deck grammar consumes (folding, layout, worker
      collapse); every PATCH-backed control surface keeps the real `flows`. */
   const directReviewGroups = useMemo(
-    () => directReviewFlows({
+    () => derive.directReviews({
       files,
       flows,
       tasks,
@@ -725,7 +714,7 @@ function ProjectDashboardView({
       activeDeliveryConversationIds,
       seenAt,
     }),
-    [files, flows, tasks, conversationAliases, nowMs, pipelines, pipelinesError, pinnedPaths, protectedCollapsePaths, activeDeliveryConversationIds, seenAt],
+    [derive, files, flows, tasks, conversationAliases, nowMs, pipelines, pipelinesError, pinnedPaths, protectedCollapsePaths, activeDeliveryConversationIds, seenAt],
   );
   const deckFlows = useMemo(
     () => (directReviewGroups.length ? [...flows, ...directReviewGroups] : flows),
@@ -740,15 +729,15 @@ function ProjectDashboardView({
      review-history stack row (the off-board form). */
   /* Reviewer transcripts of active flows live inside their round decks:
      they never build their own groups, quiet trees or residual chips. */
-  const expandedFlowConversations = useMemo(() => {
+  const activeExpansionFlows = useMemo(() => deckFlows.filter(isActiveFlow), [deckFlows]);
+  const flowExpansionPaths = useMemo(() => {
     /* Only ACTIVE flows expand their subtree into scheme nodes. A closed flow's
        reviewer is still claimed (folded off the board) via the full flows list,
        but promoting its idle reviewer descendants would re-open the whole
        implementer→reviewer→subtask tree as an active group — a closed flow must
        stay quiet history. So gate expansion on active ownership. */
-    const activeFlows = deckFlows.filter(isActiveFlow);
-    const paths = claimedReviewerDescendantPaths(files, activeFlows);
-    for (const flow of activeFlows) {
+    const paths = claimedReviewerDescendantPaths(relationshipFiles, activeExpansionFlows);
+    for (const flow of activeExpansionFlows) {
       /* A direct group whose rounds are ALL terminal is compact history: it must
          never force a quiet reviewed conversation back onto the board just to
          host its deck. Its deck still renders whenever the reviewed conversation
@@ -756,11 +745,14 @@ function ProjectDashboardView({
       if (isDirectReviewFlow(flow) && flow.state !== "reviewing") continue;
       paths.add(flow.implementerPath);
     }
+    return paths;
+  }, [relationshipFiles, activeExpansionFlows]);
+  const expandedFlowConversations = useMemo(() => {
     /* These expansions are the board's, not the operator's, so they follow the
        placement age horizon like every other automatic card (the operator's own
        `prefs.expanded` are merged below and never bounded). */
-    return boundFlowExpansions(paths, { flows: activeFlows, files, now: nowSeconds, ageHorizonSeconds: schemeAgeHorizonSeconds() });
-  }, [files, deckFlows, nowSeconds]);
+    return derive.flowExpansions(flowExpansionPaths, { flows: activeExpansionFlows, files, now: nowSeconds, ageHorizonSeconds: schemeAgeHorizonSeconds() });
+  }, [derive, flowExpansionPaths, activeExpansionFlows, files, nowSeconds]);
   /* Flow-driven expansions plus the ones the user opened by hand from a
      collapsed view: a connected conversation the user expanded renders as a
      node wired below its parent, just like an active-group child. */
@@ -788,21 +780,21 @@ function ProjectDashboardView({
     [pipelines, deckFlows],
   );
   const groupFiles = useMemo(
-    () => foldClaimedReviewers(files, compactLayoutFlows, protectedStagePaths),
-    [files, compactLayoutFlows, protectedStagePaths],
+    () => derive.groupFiles(files, compactLayoutFlows, protectedStagePaths),
+    [derive, files, compactLayoutFlows, protectedStagePaths],
   );
   /* Earlier retries and superseded bindings live in the stage's compact
      history. The latest attempt of every launched stage stays in the scene. */
   const compactPipelinePaths = useMemo(
-    () => compactPipelineArtifactPaths(pipelines, deckFlows, files),
-    [pipelines, deckFlows, files],
+    () => compactPipelineArtifactPaths(pipelines, deckFlows, relationshipFiles),
+    [pipelines, deckFlows, relationshipFiles],
   );
   /* One card per FINISHED lane — the agent that finished it — held on the board
      until its outcome has been opened (#1244). A lane the operator closed is
      already dismissed and holds nothing. */
   const outcomePaths = useMemo(
-    () => finishedLaneOutcomePaths(pipelinesError ? [] : pipelines, deckFlows, files),
-    [pipelines, pipelinesError, deckFlows, files],
+    () => finishedLaneOutcomePaths(pipelinesError ? [] : pipelines, deckFlows, relationshipFiles),
+    [pipelines, pipelinesError, deckFlows, relationshipFiles],
   );
   /* Collapse-eligible conversations, derived BEFORE layout so their
      quiet full columns are removed from the scheme rather than left as
@@ -812,6 +804,7 @@ function ProjectDashboardView({
   const collapsibleWorkers = useMemo(
     () => collapsibleWorkerFiles({
       files,
+      resolveClaimPath,
       project,
       flows: deckFlows,
       pipelines: pipelinesError ? undefined : pipelines,
@@ -821,12 +814,12 @@ function ProjectDashboardView({
       outcomePaths,
       seenAt,
     }),
-    [files, project, deckFlows, pipelines, pipelinesError, pinnedPaths, protectedCollapsePaths, activeDeliveryConversationIds, outcomePaths, seenAt],
+    [files, resolveClaimPath, project, deckFlows, pipelines, pipelinesError, pinnedPaths, protectedCollapsePaths, activeDeliveryConversationIds, outcomePaths, seenAt],
   );
-  const collapsedPaths = useMemo(() => new Set(collapsibleWorkers.map((file) => file.path)), [collapsibleWorkers]);
+  const collapsedPaths = useMemo(() => derive.collapsedPaths(collapsibleWorkers), [derive, collapsibleWorkers]);
   const keepExpandedPaths = useMemo(
-    () => new Set(files.filter((file) => !collapsedPaths.has(file.path)).map((file) => file.path)),
-    [files, collapsedPaths],
+    () => derive.keepExpandedPaths(files, collapsedPaths),
+    [derive, files, collapsedPaths],
   );
   const filesByPath = useMemo(() => new Map(files.map((file) => [file.path, file] as const)), [files]);
   /* Terminal spawn receipts past the recent horizon (compact launch history):
@@ -836,19 +829,14 @@ function ProjectDashboardView({
      only placeholder paths are CLAIMED off the scene: a failed launch whose
      record rides on a real scanned transcript path must never hide that
      conversation — the shelf row stays, the card renders. */
-  const launchHistory = useMemo(() => launchHistoryFor(files, project, nowMs), [files, project, nowMs]);
+  const launchHistory = useMemo(() => derive.launchHistory(files, project, nowMs), [derive, files, project, nowMs]);
   const launchHistoryPaths = useMemo(() => launchHistoryClaimPaths(launchHistory), [launchHistory]);
   /* The board layout's file set with collapsed workers removed. Kept separate
      from `groupFiles` so board-membership reconciliation still sees the full
      catalog and never retires a collapsed worker's durable placement. */
   const sceneFiles = useMemo(
-    () => (collapsedPaths.size || launchHistoryPaths.size || compactPipelinePaths.size
-      ? excludeCompactPipelineArtifacts(
-        groupFiles.filter((file) => !collapsedPaths.has(file.path) && !launchHistoryPaths.has(file.path)),
-        compactPipelinePaths,
-      )
-      : groupFiles),
-    [groupFiles, collapsedPaths, launchHistoryPaths, compactPipelinePaths],
+    () => derive.sceneFiles(groupFiles, collapsedPaths, launchHistoryPaths, compactPipelinePaths),
+    [derive, groupFiles, collapsedPaths, launchHistoryPaths, compactPipelinePaths],
   );
   /* Engine-native subagent tray projection (#142 S2). A first placement pass
      learns which parent cards actually render (host eligibility) — a child
@@ -856,8 +844,8 @@ function ProjectDashboardView({
      the projection partitions each engine child into a promoted node or a
      folded tray row. The final group build consumes that single authority. */
   const baseGroups = useMemo(
-    () => buildBranchGroups(sceneFiles, project, { expandedConversationPaths: expandedConversations, keepExpandedPaths, now: nowSeconds }),
-    [sceneFiles, project, expandedConversations, keepExpandedPaths, nowSeconds],
+    () => derive.baseGroups(sceneFiles, project, { expandedConversationPaths: expandedConversations, keepExpandedPaths, now: nowSeconds }),
+    [derive, sceneFiles, project, expandedConversations, keepExpandedPaths, nowSeconds],
   );
   const engineProjectionRef = useRef<{ signature: string; projection: ReturnType<typeof buildSubagentTrays> } | null>(null);
   const engineProjection = useMemo(() => {
@@ -897,14 +885,14 @@ function ProjectDashboardView({
   }, [baseGroups, prefs.hidden, prefs.manual, board.prefs.foldedEngineChildIds, board.prefs.expandedEngineTrayParentIds, filesByPath, project, files, compactPipelinePaths, collapsedPaths, launchHistoryPaths, pinnedPaths, nowSeconds]);
   const groups = useMemo(
     () => (engineProjection.promotedPaths.size || engineProjection.foldedPaths.size
-      ? buildBranchGroups(sceneFiles, project, {
+      ? derive.groups(sceneFiles, project, {
         expandedConversationPaths: expandedConversations,
         enginePlacement: { promotedEnginePaths: engineProjection.promotedPaths, foldedEnginePaths: engineProjection.foldedPaths },
         keepExpandedPaths,
         now: nowSeconds,
       })
       : baseGroups),
-    [sceneFiles, project, expandedConversations, engineProjection, keepExpandedPaths, baseGroups, nowSeconds],
+    [derive, sceneFiles, project, expandedConversations, engineProjection, keepExpandedPaths, baseGroups, nowSeconds],
   );
   const activeRoots = useMemo(() => new Set(groups.map((group) => group.key)), [groups]);
   const cards = useMemo(() => collapsedTrees(sceneFiles, project, activeRoots), [sceneFiles, project, activeRoots]);
@@ -986,8 +974,8 @@ function ProjectDashboardView({
   };
   const [focusedTaskId, setFocusedTaskId] = useState<string | null>(null);
   const taskPartition = useMemo(
-    () => partitionTaskStacks(projectTasks.filter(isPlacedTask), { files, nowMs, focusedTaskId, expandedIds: expandedTasks }),
-    [projectTasks, files, nowMs, focusedTaskId, expandedTasks],
+    () => derive.taskPartition(projectTasks.filter(isPlacedTask), { files, nowMs, focusedTaskId, expandedIds: expandedTasks }),
+    [derive, projectTasks, files, nowMs, focusedTaskId, expandedTasks],
   );
   const stackedTaskIds = useMemo(
     () => new Set(taskPartition.stacks.flatMap((stack) => stack.items.map((item) => item.id))),
@@ -1676,7 +1664,7 @@ function ProjectDashboardView({
   );
   /* Active pipelines keep the scheme available before the first transcript;
      SchemeBoard anchors their world-space PipelineGroups beside linked tasks. */
-  const activePipelines = useMemo(() => pipelinesForProject(pipelines, project, files), [pipelines, project, files]);
+  const activePipelines = useMemo(() => pipelinesForProject(pipelines, project, relationshipFiles), [pipelines, project, relationshipFiles]);
   const visibleDrafts = useMemo(() => drafts.filter((id) => !pendingRestoredHandoffs.has(id)), [drafts, pendingRestoredHandoffs]);
   const hasNodes =
     visibleGroups.length > 0 || schemeManual.length > 0 || visibleDrafts.length > 0 || projectTasks.length > 0 || activePipelines.length > 0;
@@ -1721,14 +1709,13 @@ function ProjectDashboardView({
   const layoutDrafts = hasNodes ? visibleDrafts : EMPTY_DRAFTS;
   const layoutTasks = useMemo(() => (hasNodes ? boardTasks : EMPTY_TASKS).filter(isPlacedTask), [hasNodes, boardTasks]);
   const pipelineLayout = useMemo(
-    () => buildSchemeLayout(layoutGroups, layoutManual, files, compactLayoutFlows, layoutDrafts, pipelines, activePipelines, favoriteIdSet, isolatedCompactHistoryPaths, layoutTasks, new Set(), { now: nowSeconds }),
-    [layoutGroups, layoutManual, files, compactLayoutFlows, layoutDrafts, pipelines, activePipelines, favoriteIdSet, isolatedCompactHistoryPaths, layoutTasks, nowSeconds],
+    () => derive.layout(layoutGroups, layoutManual, files, compactLayoutFlows, layoutDrafts, pipelines, activePipelines, favoriteIdSet, isolatedCompactHistoryPaths, layoutTasks, new Set(), { now: nowSeconds }),
+    [derive, layoutGroups, layoutManual, files, compactLayoutFlows, layoutDrafts, pipelines, activePipelines, favoriteIdSet, isolatedCompactHistoryPaths, layoutTasks, nowSeconds],
   );
   /* The board's placed conversation windows, in layout order — the fallback the
      non-scheme publisher below reports as visible when the history list has no
-     rows of its own (#771 requirement a). Carried as a newline-joined signature
-     rather than a fresh array so the effect's dependency compares BY VALUE:
-     `pipelineLayout` is derived inline and has a new identity every render. */
+     rows of its own (#771 requirement a). The newline-joined signature keeps
+     that effect stable when file payloads change without moving any window. */
   const boardWindowSignature = pipelineLayout.nodes.map((node) => node.file.path).join("\n");
   const listAvailable = catalogKnown || historyRows.length > 0;
   /* A landing from the resolver outranks the saved preference for as long as it

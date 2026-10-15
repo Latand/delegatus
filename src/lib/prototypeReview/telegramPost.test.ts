@@ -88,7 +88,12 @@ test("stored media honors 50 slides, variant coverage, WebP, invalid dimensions 
   const image = { id: createHash("sha256").update(bytes).digest("hex"), mime: "image/webp" as const, bytes: bytes.length };
   await fs.writeFile(storedMediaPath(await fs.realpath(prototypeRoot()), round.id, image), bytes);
   for (const variant of round.variants) variant.frames = Array.from({ length: 25 }, (_, i) => ({ image, caption: `Frame ${i}` }));
-  const slides = await prototypeSlides(round);
+  const read = spyOn(fs, "readFile");
+  let slides;
+  try {
+    slides = await prototypeSlides(round);
+    expect(read).toHaveBeenCalledTimes(50);
+  } finally { read.mockRestore(); }
   expect(slides).toHaveLength(50);
   expect(slides.slice(0, 3).map(s => s.caption[0])).toEqual(["1", "2", "3"]);
   expect(slides[0]!.blob.type).toBe("image/webp");

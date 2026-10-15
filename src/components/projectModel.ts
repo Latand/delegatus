@@ -848,9 +848,9 @@ function collectDescendants(
   file: FileEntry | null,
   files: FileEntry[],
   include: (child: FileEntry) => boolean,
+  kids = kidsIndex(files),
 ): DescendantRow[] {
   if (!file) return [];
-  const kids = kidsIndex(files);
   const out: DescendantRow[] = [];
   const seen = new Set<string>([file.path]);
   const walk = (parent: FileEntry, depth: number) => {
@@ -869,13 +869,13 @@ function collectDescendants(
 }
 
 /** Depth-first subtree of a node: children stay under their parent, siblings ordered by state then recency. */
-export function descendantsOf(file: FileEntry | null, files: FileEntry[]): DescendantRow[] {
-  return collectDescendants(file, files, () => true);
+export function descendantsOf(file: FileEntry | null, files: FileEntry[], kids?: ReturnType<typeof kidsIndex>): DescendantRow[] {
+  return collectDescendants(file, files, () => true, kids);
 }
 
 /** Descendants owned by the root's project, stopping traversal at every foreign boundary. */
-export function projectDescendantsOf(file: FileEntry | null, files: FileEntry[]): DescendantRow[] {
+export function projectDescendantsOf(file: FileEntry | null, files: FileEntry[], kids?: ReturnType<typeof kidsIndex>): DescendantRow[] {
   if (!file) return [];
   const project = projectKey(file);
-  return collectDescendants(file, files, (child) => projectKey(child) === project);
+  return collectDescendants(file, files, (child) => projectKey(child) === project, kids);
 }

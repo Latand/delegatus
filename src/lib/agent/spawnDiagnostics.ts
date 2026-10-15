@@ -69,7 +69,7 @@ export function spawnDiagnosticErrorForRegistry(registry: (Pick<AgentRegistry, "
     if (registry.diagnosticSpawnAttempt) ownerAttempt = registry.diagnosticSpawnAttempt(launchId, conversationId);
     else {
       const receipts = Object.values(registry.readOnlySnapshot().receipts);
-      const attributed = launchId ? receipts.find(receipt => receipt.launchId === launchId)
+      const attributed = launchId !== undefined ? receipts.find(receipt => receipt.launchId === launchId)
         : conversationId ? receipts.find(receipt => receipt.conversationId === conversationId) : undefined;
       ownerAttempt = (attributed ? [attributed] : receipts)
         .find(receipt => receipt.clientAttemptId?.startsWith("relay-owner-"))?.clientAttemptId ?? undefined;

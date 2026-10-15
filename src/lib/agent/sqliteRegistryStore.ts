@@ -2374,7 +2374,7 @@ export class SqliteAgentRegistryStore {
         : `SELECT json_extract(r.value_json,'$.clientAttemptId') AS attempt FROM ${this.recordsSource} r
             WHERE r.collection='receipts' AND ${predicate("r")} ${ordered ? "ORDER BY r.row_order" : ""} LIMIT 1`)
         .get(...values, ...(mapped ? values : []));
-      const attributed = launchId ? first(alias => `${alias}.row_key=?`, [launchId])
+      const attributed = launchId !== undefined ? first(alias => `${alias}.row_key=?`, [launchId])
         : conversationId ? first(alias => `json_extract(${alias}.value_json,'$.conversationId')=?`, [conversationId]) : undefined;
       const owner = attributed ?? first(alias => `json_extract(${alias}.value_json,'$.clientAttemptId')>=?
         AND json_extract(${alias}.value_json,'$.clientAttemptId')<?`, ["relay-owner-", "relay-owner."], false);

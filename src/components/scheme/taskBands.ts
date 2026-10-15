@@ -161,6 +161,11 @@ export function buildTaskBands(base: SchemeLayout, sources: BandSources): TaskBa
   const nodeByKey = new Map(base.nodes.map((node) => [node.file.path, node] as const));
   const slotKeys = new Set(base.slots.map((slot) => slot.key));
   const deckKeys = new Set(base.decks.map((deck) => deck.key));
+  const decksByFlow = new Map<string, string[]>();
+  for (const deck of base.decks) {
+    const keys = decksByFlow.get(deck.flow.id) ?? [];
+    keys.push(deck.key); decksByFlow.set(deck.flow.id, keys);
+  }
   const draftKeys = new Set(base.drafts.map((draft) => draft.key));
   const stacksByParent = new Map<string, string[]>();
   for (const stack of base.stacks) {
@@ -323,7 +328,7 @@ export function buildTaskBands(base: SchemeLayout, sources: BandSources): TaskBa
     own(band, group);
     for (const key of group.members) admit(band, key);
     if (implementer) admit(band, implementer.file.path);
-    for (const deck of base.decks) if (flow && deck.flow.id === flow.id) admit(band, deck.key);
+    if (flow) for (const key of decksByFlow.get(flow.id) ?? []) admit(band, key);
     admitDrafts(band);
   }
   for (const pipeline of projection.unlinkedPipelines) {

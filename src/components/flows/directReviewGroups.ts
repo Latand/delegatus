@@ -84,8 +84,9 @@ export interface DirectReviewGroupsInput {
 const EMPTY_PATHS: ReadonlySet<string> = new Set();
 
 export function directReviewFlows(input: DirectReviewGroupsInput): Flow[] {
-  const visible = withoutArchivedPredecessors([...input.files]);
   const groups = groupDirectReviewers(input);
+  if (!groups.length) return [];
+  const visible = withoutArchivedPredecessors([...input.files]);
   const nowMs = input.nowMs ?? Date.now();
   const idleMs = input.idleMs === undefined ? workerCollapseIdleMs() : input.idleMs;
   const expansionContext = collapseContext({

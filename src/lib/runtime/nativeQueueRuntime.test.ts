@@ -7,6 +7,7 @@ import { RuntimeJournal } from "@/runtime-host/journal";
 import { AgentRegistry } from "@/lib/agent/registry";
 import { NativeCodexQueue, NativeQueueProtocolRefusal, type NativeQueuedSubmission } from "./nativeCodexQueue";
 import { NativeQueueExecutor } from "./nativeQueueExecutor";
+import { StructuredSendRefusedError } from "./engineHost";
 import type { EngineHost } from "./engineHost";
 import { RuntimeHostUnavailableError, type RuntimeHostClient } from "./client";
 import type { NativeQueueCommand, NativeQueueProof, NativeQueueRecord } from "./nativeQueueContracts";
@@ -114,6 +115,33 @@ function fixture(journal = makeJournal()) {
         turnId: "canonical-turn", itemId: "canonical-item", input: entry.versions.at(-1)!.input! };
     } };
 }
+
+test.each(["add", "start", "update", "send-now"] as const)("native %s checks account admission after the prepared journal write", async action => {
+  const f = fixture();
+  try {
+    const seed = command("seed");
+    if (action !== "add") { f.journal.executeOperation(seed); await f.executor.execute(seed); }
+    if (action === "start") f.idle();
+    const c = command("guarded", action === "add" ? {} : action === "start" ? { action, turnId: null }
+      : { action, entryId: seed.operationId, expectedRevision: 1, ...(action === "send-now" ? { turnId: "active-a" } : {}) });
+    let guarded = false;
+    const transition = f.client.nativeQueueTransition!.bind(f.client);
+    f.client.nativeQueueTransition = async (id, change) => {
+      if (id === c.operationId && change.phase === "prepared") guarded = true;
+      return transition(id, change);
+    };
+    const executor = new NativeQueueExecutor({ client: f.client, resolveHost: () => f.host, binding: () => binding,
+      authorizeDispatch: () => { if (guarded) throw new StructuredSendRefusedError("paid-credit guard"); } });
+    const before = f.calls.length;
+    f.journal.executeOperation(c); await executor.execute(c);
+    expect(f.calls).toHaveLength(before);
+    expect(f.journal.operationResult(c.operationId)?.receipt).toMatchObject({ status: "failed", reason: "paid-credit guard" });
+    guarded = false;
+    const peer = command("after-reset");
+    f.journal.executeOperation(peer); await executor.execute(peer);
+    expect(f.calls.at(-1)).toBe("thread/queue/add");
+  } finally { f.journal.close(); }
+});
 
 test("native add keeps Viewer/client/native IDs distinct; duplicate Viewer admission never adds twice", async () => {
   const f = fixture();

@@ -35,6 +35,14 @@ const nextConfig: NextConfig = {
   },
   webpack(config, { isServer, nextRuntime }) {
     if (isServer && nextRuntime === "nodejs") {
+      // Bundled, ws's optional `bufferutil` peer resolves to an empty module,
+      // so every client frame of 48 bytes or more threw `b.mask is not a
+      // function` and the Codex socket transport could not write. Required at
+      // runtime, Bun serves its own `ws` and Node the installed package, which
+      // masks in JavaScript when `bufferutil` is absent. A CommonJS external
+      // keeps the importing modules synchronous; `serverExternalPackages`
+      // emits `import("ws")` and turns every importer into an async module.
+      config.externals = [...[config.externals ?? []].flat(), { ws: "commonjs ws" }];
       const originalEntry = config.entry;
       config.entry = async () => ({
         ...(typeof originalEntry === "function" ? await originalEntry() : originalEntry),

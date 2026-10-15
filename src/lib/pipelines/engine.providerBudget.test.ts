@@ -239,8 +239,12 @@ for (const engine of ["claude", "codex"] as const) {
     if (activity === "reply-before") records.push(engine === "claude" ? { type: "user", timestamp: f.h.ports.now(), message: { content: "Continue reviewing" } }
       : { type: "event_msg", timestamp: f.h.ports.now(), payload: { type: "user_message", message: "Continue reviewing" } });
     if (activity === "control-before") {
-      await patchPipeline(loadPipelines()[0]!.id, { action: "pause" }, f.h.ports);
-      await patchPipeline(loadPipelines()[0]!.id, { action: "resume" }, f.h.ports);
+      // Restore a control from before pause interrupted active hosts. Its
+      // historical continuation remains evidence for the next cut's boundary.
+      const prior = loadPipelines()[0]!;
+      prior.pausedAt = prior.resumedAt = f.h.ports.now();
+      prior.controlGeneration = "legacy-control-before-cut";
+      savePipelines([prior]);
     }
     if (activity === "large-work") {
       const work = { type: "queue-operation", timestamp: f.h.ports.now(), padding: "x".repeat(1100) };
@@ -336,8 +340,12 @@ for (const engine of ["claude", "codex"] as const) {
       if (activity !== "same-tick" && activity !== "operator-refused") { f.h.setConversationActive(true); f.advance(10_000); await tickPipelines([], { ...f.h.ports }); }
       if (activity === "harness-control") {
         f.advance(Date.parse("2026-10-05T20:00:00Z") - f.now());
-        await patchPipeline(loadPipelines()[0]!.id, { action: "pause" }, f.h.ports);
-        await patchPipeline(loadPipelines()[0]!.id, { action: "resume" }, f.h.ports);
+        // Restore the historical control boundary: current pause stops this
+        // active host, so only older records can continue its next quota cut.
+        const prior = loadPipelines()[0]!;
+        prior.pausedAt = prior.resumedAt = f.h.ports.now();
+        prior.controlGeneration = "legacy-harness-control-before-cut";
+        savePipelines([prior]);
       }
       if (activity === "busy-operator" && engine === "codex") records.push({ type: "response_item", timestamp: at(), payload: { type: "function_call_output", call_id: "chain-call", output: "ok" } });
       if (activity !== "operator-refused") f.advance(Date.parse("2026-10-05T21:30:00Z") - f.now()); else f.advance(500);
@@ -358,7 +366,7 @@ for (const engine of ["claude", "codex"] as const) {
       expect({ sends: f.sends.length, state: loadPipelines()[0]!.state, detail: loadPipelines()[0]!.stateDetail?.split("\n")[0] ?? null })
         .toMatchObject(owed ? { sends: 1, state: "running" } : activity === "reply-after" ? { sends: 0 } : { sends: 0, state: "needs_decision" });
       expect(f.h.spawnInputs).toHaveLength(1);
-    });
+    }, 30_000);
   }
 }
 
@@ -497,6 +505,7 @@ for (const engine of ["claude", "codex"] as const) {
       f.advance(60_000);
       reset = CHAIN_RESET["2am"];
       k.notice("2am", reset);
+      f.h.setConversationActive(false); // The provider ended the native turn at this limit.
       if (activity.startsWith("pause") || activity === "three" || activity === "three-ticked") {
         f.advance(300);
         await patchPipeline(loadPipelines()[0]!.id, { action: "pause" }, f.h.ports);

@@ -1,5 +1,8 @@
 import { detachCodexHostForViewerRestart } from "./registry";
 import { spawnDiagnosticErrorForRegistry } from "@/lib/agent/spawnDiagnostics";
+import { creditGuardBlock } from "@/lib/accounts/creditGuard";
+import { assertPipelineTurnAllowed, enforceAccountCreditGuard } from "./accountCreditGuard";
+import { hasRuntimeSwitchKill } from "@/lib/pipelines/runtimeSwitch";
 import { runtimeSwitchRetirementReason } from "@/lib/pipelines/runtimeSwitchFence";
 import { ownerRelaySpawnAuthorized } from "@/lib/externalRelay/ownerAuthority";
 import { loadPipelinesForRetirement } from "@/lib/pipelines/store";
@@ -766,8 +769,17 @@ export async function bindStructuredDeliveryQueue(
   let requestDrain = () => {};
   const nativeReconciliations = new Map<string, Promise<void>>();
   const nativeRetries = new Map<string, RetryBackoff>();
+  const authorizeAccountDispatch = (conversationId: string) => {
+    assertPipelineTurnAllowed(conversationId, registry);
+    const conversation = registry.conversation(conversationId as ViewerConversationId);
+    if (conversation?.engine !== "codex") return;
+    const accountId = conversation.generations.at(-1)?.accountId;
+    const observation = registry.quotaObservations("codex").find(item => item.accountId === accountId);
+    if (creditGuardBlock("codex", observation?.limits)) throw new StructuredSendRefusedError("Codex paid-credit guard reached; continue on an allowed account with capacity");
+  };
   const nativeQueueExecutor = new NativeQueueExecutor({
     client,
+    authorizeDispatch: authorizeAccountDispatch,
     resolveHost: hostResolver(registry, hosts),
     /* Off the loop, a hand-off's own row included (C3, A8). */
     settled: async (entry) => { await settleNativeQueueEntry(registry, entry, progressStore); },
@@ -954,7 +966,8 @@ export async function bindStructuredDeliveryQueue(
         return !ownerRelaySpawnAuthorized(receipt?.clientAttemptId) || sendIsSettled(snapshot, operationId);
       },
       diagnosticError: (...args: unknown[]) => spawnDiagnosticErrorForRegistry(registry, ...args),
-      authorizeDispatch: (operationId: string) => {
+      authorizeDispatch: (operationId: string, conversationId: string) => {
+        authorizeAccountDispatch(conversationId);
         if (!operationId.startsWith("spawn_message_")) return;
         const receipt = registry.readOnlySnapshot().receipts[operationId.slice("spawn_message_".length)];
         if (!ownerRelaySpawnAuthorized(receipt?.clientAttemptId))
@@ -1274,6 +1287,21 @@ export async function bindStructuredDeliveryQueue(
   let settlementSweepTimer: ReturnType<typeof setInterval> | null = null;
   let drainBackoffMs = DELIVERY_DRAIN_COALESCE_MS;
   let stopped = false;
+  let guarding: Promise<void> | null = null;
+  const enforceGuard = () => guarding ??= enforceAccountCreditGuard(registry,
+    [...hosts].map(([id, host]) => ({ key: registrations.get(id)!.key, host })),
+    async (key, host) => hosts.get(sessionKeyId(key)) === host
+      && (await state.terminateActiveHost?.(key) ?? false),
+    (id, since) => hasRuntimeSwitchKill(client, id, since, [], true), async request => {
+      const { enqueueStructuredMessage } = await import("./structuredMessageDelivery");
+      const authorize = () => {
+        if (stopped || state.activeQueue !== queue) throw new StructuredSendRefusedError("delivery controller changed during credit-guard recovery");
+      };
+      const authorizeRecovery = () => { authorize(); request.recoveryAuthorityGuard?.(); };
+      return enqueueStructuredMessage({ ...request, admissionGuard: authorize, recoveryAuthorityGuard: authorizeRecovery }, { enabled: () => true,
+        registry: () => registry, client: () => client, recover: dependencies.recover, kick: requestDrain,
+        authorizeDispatch: authorizeRecovery, interruptionContinuation: true });
+    }).finally(() => { guarding = null; });
   const scheduleDrain = (delayMs = DELIVERY_DRAIN_COALESCE_MS): boolean => {
     if (stopped || drainTimer) return false;
     drainTimer = setTimeout(() => {
@@ -1287,6 +1315,7 @@ export async function bindStructuredDeliveryQueue(
   const drainWithRetry = async (afterAdmission = false): Promise<void> => {
     if (stopped) return;
     try {
+      if (!startupPending) await enforceGuard();
       if (afterAdmission) await queue.drainAfterAdmission();
       else await queue.drain();
       drainBackoffMs = DELIVERY_DRAIN_COALESCE_MS;
@@ -2021,6 +2050,7 @@ export async function bindStructuredDeliveryQueue(
          wakes only writes records; an unregistered host's target stays
          deferred by the drain, which notes `startup` on its records. */
       if (stopped || state.activeQueue !== queue) return;
+      void enforceGuard().catch(error => controllerDiagnosticError("[structured delivery] paid-credit guard retry pending", error));
       void queue.tick().catch((error) => {
         controllerDiagnosticError("[structured delivery] watchdog failed", { error: error instanceof Error ? error.message : String(error) });
       });

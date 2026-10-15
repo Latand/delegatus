@@ -30,6 +30,7 @@ import { ACCOUNT_MIGRATION_PASS_INTERVAL_MS, registerAccountMigrationTick } from
 import type { SuccessorProviderPort } from "./contracts";
 import { RegisteredSuccessorProvider } from "./provider";
 import { QuotaController } from "./quotaController";
+import { kickStructuredDeliveryQueue } from "@/lib/runtime/structuredDeliverySignal";
 
 const INITIAL_INVENTORY_DELAY_MS = 1_000;
 const INVENTORY_WORKER_RESTART_MS = 1_000;
@@ -55,6 +56,7 @@ export async function reconcileAccountMigrationCycle(
       reconcileMigrations(provider, delivery, registry),
     ]);
     const failures = outcomes.filter((outcome): outcome is PromiseRejectedResult => outcome.status === "rejected");
+    await kickStructuredDeliveryQueue();
     // A busy peer must not hide another peer's failure.
     const failure = failures.find(outcome => !reconciliationWriterBusy(outcome.reason)) ?? failures[0];
     if (failure) throw failure.reason;

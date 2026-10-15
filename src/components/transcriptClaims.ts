@@ -35,6 +35,8 @@ export type TranscriptClaimResolver = (recordedPath: string) => string;
 
 export const IDENTITY_CLAIM_RESOLVER: TranscriptClaimResolver = (recordedPath) => recordedPath;
 
+const resolvers = new WeakMap<readonly { path: string }[], { paths: string[]; resolve: TranscriptClaimResolver }>();
+
 /** Root-relative tail identifying a transcript across root spellings: the
     containing directory plus the file name. Both engines put a UUID in the file
     name, so the pair is an identity everywhere the corpus is not ambiguous. */
@@ -44,9 +46,12 @@ function claimTail(pathname: string): string {
 
 /**
  * A resolver anchored on the projected corpus. Pure, allocation-bounded by the
- * file set, and safe to rebuild per render.
+ * file set. Fold, protection and layout share the same lookup for one corpus;
+ * the path check also detects a caller replacing rows in an existing array.
  */
 export function transcriptClaimResolver(files: readonly { path: string }[]): TranscriptClaimResolver {
+  const previous = resolvers.get(files);
+  if (previous && previous.paths.length === files.length && files.every((file, index) => file.path === previous.paths[index])) return previous.resolve;
   const corpus = new Set<string>();
   for (const file of files) corpus.add(file.path);
   /* A tail claimed by more than one transcript resolves to nothing: `null` marks
@@ -57,10 +62,12 @@ export function transcriptClaimResolver(files: readonly { path: string }[]): Tra
     if (!byTail.has(tail)) byTail.set(tail, path);
     else if (byTail.get(tail) !== path) byTail.set(tail, null);
   }
-  return (recordedPath) => {
+  const resolve = (recordedPath: string) => {
     if (!recordedPath || corpus.has(recordedPath)) return recordedPath;
     return byTail.get(claimTail(recordedPath)) ?? recordedPath;
   };
+  resolvers.set(files, { paths: files.map(file => file.path), resolve });
+  return resolve;
 }
 
 /** Resolves a whole claim set, keeping both spellings so either still matches —

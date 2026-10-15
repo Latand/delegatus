@@ -739,6 +739,10 @@ describe("claims across recorded path spellings (#943 follow-up)", () => {
     const files = corpus(finished, running);
     expect(collapsibleWorkerFiles({ files, project: "demo", flows, pinnedPaths: new Set() }).map((file) => file.path))
       .toEqual([finished.path]);
+    const fresh = files.map(file => ({ ...file, size: file.size + 1, mtime: file.mtime + 1 }));
+    const resolved = collapsibleWorkerFiles({ files: fresh, project: "demo", flows, pinnedPaths: new Set(), resolveClaimPath: transcriptClaimResolver(files) });
+    expect(resolved).toEqual(collapsibleWorkerFiles({ files: fresh, project: "demo", flows, pinnedPaths: new Set() }));
+    expect(resolved[0]).toBe(fresh.find(file => file.path === finished.path)!);
   });
 
   test("an unresolvable record claims nothing", () => {

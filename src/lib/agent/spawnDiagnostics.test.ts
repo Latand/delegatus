@@ -218,11 +218,14 @@ test("SQLite background attribution reads scalar identities and follows peer own
   const privatePath = path.join(root, "private-transcript.jsonl");
   try {
     const ordinary = { operationId: "spawn_message_performance-launch-1", error: new Error("fixture error") };
+    const ordinaryConversation = peer.read(file => file.receipts["performance-launch-1"]!.conversationId);
     spawnDiagnosticErrorForRegistry(registry, "Delivery failed", ordinary);
     expect(logger).toHaveBeenLastCalledWith("Delivery failed", ordinary);
     peer.mutate(file => { file.receipts["performance-launch-0"]!.clientAttemptId = "relay-owner-fixture"; }, false);
     expect(peer.archiveInactive(10_000)).toBeGreaterThan(0);
     spawnDiagnosticErrorForRegistry(registry, new Error(privatePath));
+    expect(JSON.stringify(logger.mock.calls.at(-1))).not.toContain(privatePath);
+    spawnDiagnosticErrorForRegistry(registry, { operationId: "spawn_message_", conversationId: ordinaryConversation, error: new Error(privatePath) });
     expect(JSON.stringify(logger.mock.calls.at(-1))).not.toContain(privatePath);
     spawnDiagnosticErrorForRegistry(registry, "Delivery failed", ordinary);
     expect(logger).toHaveBeenLastCalledWith("Delivery failed", ordinary);

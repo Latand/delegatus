@@ -184,6 +184,8 @@ export interface NativeGeneration {
 
 export interface ConversationMigration {
   intentId: string;
+  /** Automatic paid-credit recovery keeps its project/capacity fence on replay. */
+  creditGuard?: true;
   /** This conversation's migration start, preserved through phase transitions.
       Older records fall back to the intent's creation time. */
   startedAt?: string;

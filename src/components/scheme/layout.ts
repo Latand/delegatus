@@ -436,7 +436,7 @@ export function buildSchemeLayout(
     const keys = new Set<string>();
     const own = groupKeyOfPath.get(root.path);
     if (own) keys.add(own);
-    for (const row of descendantsOf(root, files)) {
+    for (const row of descendantsOf(root, files, kids)) {
       const key = groupKeyOfPath.get(row.file.path);
       if (key) keys.add(key);
     }
@@ -1009,7 +1009,7 @@ export function buildSchemeLayout(
   const placeManual = (file: FileEntry, bandTop: number) => {
     const descendants = isolatedManualPaths.has(file.path)
       ? []
-      : projectDescendantsOf(file, files)
+      : projectDescendantsOf(file, files, kids)
         .map((row) => row.file)
         .filter((entry) => !claimed.has(entry.path));
     const quiet = descendants.filter((entry) => isChildConversation(entry));

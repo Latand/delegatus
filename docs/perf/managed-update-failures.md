@@ -283,7 +283,7 @@ The proposed work serves the originating requirement: bounded active adoption, a
 
 ## Implementation and verification — 2026-10-15
 
-The implementation includes main through `5a8e7de5`, including the watchdog fix (#2933), failed-receipt reporting policy (#2931) and approval callback recovery (#2922). Their controller call sites and reporting policy remain with their original changes. The numeric thresholds in the candidate gate remain unchanged.
+The implementation includes main through `d6f3669e`, including the watchdog fix (#2933), failed-receipt reporting policy (#2931) and approval callback recovery (#2922). Their controller call sites and reporting policy remain with their original changes. The numeric thresholds in the candidate gate remain unchanged.
 
 A later supplied observation (`local-update-completed-b1fa-20261015-v1`) reports successful external deployment of `b1fa2f91` at 11:38:51Z: web and runtime host agreed, readiness was ready and adoption was 2/2. Its first-boot maximum was 932 ms. Reported startup took about 9m39s, including several minutes recovering pending spawns. That success confirms that the earlier refusal was intermittent. It also supplies the stale-target regression: the dialog still tracked an older failed deployment and offered its older revision to retry. These are operator observations, separate from the paired measurements below.
 
@@ -297,7 +297,7 @@ Receipt replacement queries use hot and archive indexes and confirm archive vers
 
 Receipt replacement and structured-host indexes are installed in separate asynchronously admitted transactions with yields between them. Building receipt indexes together in the constructor still produced 1016–1026 ms cold ticks in an intermediate implementation. Requiring a quiet revision throughout preparation also failed the first full concurrent-writer rehearsal. Both failed controls are retained in the evidence; neither qualifies a release.
 
-The paired probe uses main `5a8e7de5` and this implementation, the same 53,299-row SQLite file, fresh processes, old-schema migration inputs and a real isolated Unix runtime host. Its fixture contains 10,971 receipts with the supplied failure mix, 11,870 conversations, 8428 entries, 14,218 delivery owners, 666 retained deliveries and 20 pending receipts. Recovery time is pinned to the fixture's pending receipt timestamp so fixture aging cannot turn preservation into timeout settlement. No artificial RPC latency is injected. Runs share the machine and its CPU admission queue; unrelated host load is uncontrolled.
+The paired probe uses main `5a8e7de5` and implementation `b59f03ac3`, the same 53,299-row SQLite file, fresh processes, old-schema migration inputs and a real isolated Unix runtime host. Its fixture contains 10,971 receipts with the supplied failure mix, 11,870 conversations, 8428 entries, 14,218 delivery owners, 666 retained deliveries and 20 pending receipts. Recovery time is pinned to the fixture's pending receipt timestamp so fixture aging cannot turn preservation into timeout settlement. No artificial RPC latency is injected. Runs share the machine and its CPU admission queue; unrelated host load is uncontrolled.
 
 | Sample | Baseline recovery | Fixed recovery | Baseline cold-loop max | Fixed cold-loop max |
 | --- | ---: | ---: | ---: | ---: |
@@ -335,11 +335,11 @@ The final unprofiled production-build gate passed at the complete census with tw
 
 | Measurement | Final result | Existing bound |
 | --- | ---: | ---: |
-| First-boot event-loop maximum | 416 ms | 1000 ms |
-| Warm projection maximum | 751 ms | 2000 ms |
-| Runtime RPC p95 / maximum | 4.5 / 415 ms | 250 / 2000 ms |
-| Successor adoption | 2550 ms | 15,000 ms |
-| Browser server boot / warm loop maximum | 622 / 191 ms | 1000 / 500 ms |
+| First-boot event-loop maximum | 367 ms | 1000 ms |
+| Warm projection maximum | 761 ms | 2000 ms |
+| Runtime RPC p95 / maximum | 14.5 / 1469 ms | 250 / 2000 ms |
+| Successor adoption | 1800 ms | 15,000 ms |
+| Browser server boot / warm loop maximum | 715 / 146 ms | 1000 / 500 ms |
 | Preserved workers / pending launches / retained deliveries | 4 / 20 / 666 | All |
 
 Both Docker rollback cases also used the complete retained census. The new adapter restored the prior release in 15.9 s and the actual baseline adapter did so in 9.6 s with the candidate guard. Each preserved all 687 protected rows, including its added uncertain message, and the independent native worker remained alive. The runtime-host rehearsal passed under Bun 1.4.0: succession completed in 512 ms, and both endpoints answered 27/27 callers during the 15 s abandonment window.

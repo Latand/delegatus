@@ -1842,6 +1842,244 @@
       },
       "breaches": [],
       "ok": true
+    },
+    {
+      "scopeCpuPercent": 1200,
+      "memoryMax": "8G",
+      "integratedMain": "d6f3669ed",
+      "checkedAt": "2026-10-15T14:52:39.374Z",
+      "runtime": "bun 1.4.0",
+      "bounds": {
+        "firstBoot": {
+          "registryOpenMs": 2000,
+          "firstSnapshotMs": 2000,
+          "firstUsableMs": 10000,
+          "eventLoopMaxMs": 1000
+        },
+        "activation": {
+          "durationMs": 15000,
+          "eventLoopMaxMs": 1500
+        },
+        "grantWrite": {
+          "p95Ms": 350,
+          "maxMs": 500
+        },
+        "eventLoop": {
+          "p95Ms": 50,
+          "maxMs": 500
+        },
+        "projectionWorker": {
+          "coldMs": 8000,
+          "warmP95Ms": 1000,
+          "warmMaxMs": 2000
+        },
+        "scopeRequests": {
+          "p95Ms": 5000,
+          "maxMs": 10000,
+          "maxQueueDepth": 8
+        },
+        "handover": {
+          "successorReadyMs": 15000,
+          "adoptionMs": 15000,
+          "workerProgressGapMs": 20000
+        },
+        "runtimeRpc": {
+          "p95Ms": 250,
+          "maxMs": 2000
+        },
+        "browser": {
+          "readyMs": 10000,
+          "filesP95Ms": 5000,
+          "filesMaxMs": 10000,
+          "apiMaxMs": 10000,
+          "bootLagMaxMs": 1000,
+          "lagP95Ms": 50,
+          "lagMaxMs": 500,
+          "inputMs": 500,
+          "serverBootLoopMaxMs": 1000,
+          "serverLoopP95Ms": 50,
+          "serverLoopMaxMs": 500
+        }
+      },
+      "measurements": {
+        "dataset": {
+          "scale": 1,
+          "rows": 53299,
+          "coldRows": 51099,
+          "payloadBytes": 216998648,
+          "transcripts": 320,
+          "seedMs": 12599,
+          "receipts": {
+            "total": 10971,
+            "failedStructured": 892,
+            "failedLegacy": 122,
+            "conflicted": 133
+          }
+        },
+        "firstBoot": {
+          "registryOpenMs": 345,
+          "firstSnapshotMs": 1041,
+          "coldProjectionMs": 4541,
+          "firstUsableMs": 6114,
+          "eventLoopMaxMs": 367,
+          "coldBuild": {
+            "sequence": 1,
+            "buildMs": 2075.4
+          }
+        },
+        "activation": {
+          "incumbentMs": 3260,
+          "successorMs": 3127,
+          "eventLoopMaxMs": 387
+        },
+        "grantWrites": {
+          "count": 309,
+          "p50Ms": 2.8,
+          "p95Ms": 4.8,
+          "maxMs": 27.9,
+          "mismatches": 0,
+          "failures": 0
+        },
+        "externalWrites": {
+          "count": 488,
+          "p50Ms": 2.6,
+          "p95Ms": 4.4,
+          "maxMs": 27.1,
+          "mismatches": 0,
+          "failures": 0
+        },
+        "keyedOperationReads": {
+          "count": 130,
+          "p50Ms": 0.7,
+          "p95Ms": 1.1,
+          "maxMs": 4.2
+        },
+        "eventLoop": {
+          "p95Ms": 2.8,
+          "maxMs": 102.4
+        },
+        "projection": {
+          "warmBuilds": {
+            "count": 126,
+            "p50Ms": 250.3,
+            "p95Ms": 446.9,
+            "maxMs": 760.7
+          },
+          "queueWait": {
+            "count": 128,
+            "p50Ms": 1170.9,
+            "p95Ms": 2221.9,
+            "maxMs": 2562.1
+          }
+        },
+        "scopeRequests": {
+          "count": 184,
+          "p50Ms": 127.5,
+          "p95Ms": 1455.6,
+          "maxMs": 2461.5,
+          "scopes": 8,
+          "failures": 0,
+          "maxQueueDepth": 8,
+          "refused": 0,
+          "expired": 0
+        },
+        "worker": {
+          "spawns": 1,
+          "timeoutRetirements": 0,
+          "pidStable": true
+        },
+        "stability": {
+          "rounds": 21,
+          "responses": 168,
+          "emptyResponses": 0,
+          "missingRows": 0,
+          "extraRows": 0,
+          "reattributedRows": 0,
+          "missingPins": 0
+        },
+        "handover": {
+          "successor": {
+            "completed": true,
+            "exitCode": 0,
+            "signal": null,
+            "readyMs": 7045,
+            "registryOpenMs": 67,
+            "snapshotMs": 1084,
+            "firstProjectionMs": 3188,
+            "archived": 250,
+            "grantMismatches": 0,
+            "adoptionMs": 1800,
+            "adopted": 4
+          },
+          "switched": true,
+          "demotionExitCode": 0,
+          "servingRelease": "successor",
+          "serving": {
+            "requests": 104,
+            "failures": 0
+          }
+        },
+        "workers": {
+          "count": 4,
+          "rehosted": 4,
+          "answering": 4,
+          "progressGapMaxMs": 2790,
+          "lostProgress": 0,
+          "repeatedProgress": 0,
+          "failedPings": 0
+        },
+        "sqliteBusy": 0,
+        "runtimeTimeouts": 0,
+        "runtimeRpc": {
+          "requests": 447,
+          "p95Ms": 14.5,
+          "maxMs": 1469,
+          "timeouts": 0,
+          "failures": 0,
+          "hostAlive": true
+        },
+        "deliveryEvidence": {
+          "pending": 16,
+          "uncertain": 8,
+          "retained": 666,
+          "pendingLaunches": 20,
+          "preserved": true
+        },
+        "browser": {
+          "views": 8,
+          "writes": {
+            "count": 964,
+            "p95Ms": 4,
+            "maxMs": 33,
+            "failures": 0
+          },
+          "readyMaxMs": 3015,
+          "filesP95Ms": 1201,
+          "filesMaxMs": 1201,
+          "filesErrors": 0,
+          "viewsWithoutAnswerDuringWrites": 0,
+          "apiMaxMs": 1358,
+          "apiMaxRoute": "/api/resources",
+          "apiErrors": 0,
+          "apiFirstError": null,
+          "apiUnfinished": 2,
+          "bootLagMaxMs": 147,
+          "lagP95Ms": 0,
+          "lagMaxMs": 42,
+          "inputMaxMs": 60,
+          "inputsMin": 2,
+          "selectionsLost": 0,
+          "staleNotices": 0,
+          "server": {
+            "samples": 2368,
+            "bootMaxMs": 715.1,
+            "p95Ms": 4.4,
+            "maxMs": 146.1
+          }
+        }
+      },
+      "breaches": [],
+      "ok": true
     }
   ],
   "intermediatePaired": [
@@ -2474,5 +2712,7 @@
       "samples": 6859,
       "diagnosticAttributionInclusive": 1227
     }
-  }
+  },
+  "pairedCandidate": "b59f03ac3",
+  "integratedMain": "d6f3669ed"
 }

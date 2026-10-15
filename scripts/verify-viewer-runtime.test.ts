@@ -12,6 +12,7 @@ import {
   REQUIRED_SERVER_RUNTIME,
   missingRequiredModules,
   servedRuntimeModules,
+  verifyBuiltCodexSocket,
   verifyViewerRuntime,
 } from "./verify-viewer-runtime";
 
@@ -96,6 +97,19 @@ test("verification of a directory with no build fails, and says that is what hap
   expect(report.modules.probed).toBe(0);
   expect(report.served).toBeNull();
 });
+
+test("the Codex socket probe fails on a build that does not carry the transport, and names the Viewer", async () => {
+  const root = fixtureRoot(["package.json", path.join(BUILT_SERVER_DIR, "chunks", "1.js")]);
+  fs.writeFileSync(path.join(root, "package.json"), "{}");
+  fs.symlinkSync(import.meta.dir, path.join(root, "scripts"), "dir");
+
+  const report = await verifyBuiltCodexSocket(root);
+
+  expect(report.ok).toBe(false);
+  expect(report.process).toContain("Viewer");
+  expect(report.detail).toContain("carries the Codex socket transport");
+  expect(report.evidence).toBeUndefined();
+}, 30_000);
 
 test.skipIf(process.platform !== "linux").each(["normal", "slow stop", "failed stop", "direct CLI"])("verification with %s reaps its served process and detached worker before reporting success", async mode => {
   const root = fixtureRoot([
