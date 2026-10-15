@@ -221,6 +221,11 @@ function isRuntimeSwitches(value: unknown): boolean {
     && typeof item.to.accountId === "string" && typeof item.to.accountPinned === "boolean"
     && ["cutAt", "continuedAt", "settledAt"].every(key => item[key] === undefined || typeof item[key] === "string" && Number.isFinite(Date.parse(item[key])))
     && (item.reconfigureNoop === undefined || typeof item.reconfigureNoop === "boolean")
+    && (item.retry === undefined || item.retry && typeof item.retry.reason === "string" && item.retry.reason.length <= 2000
+      && typeof item.retry.requestedAt === "string" && Number.isFinite(Date.parse(item.retry.requestedAt))
+      && (item.retry.completedAt === undefined || typeof item.retry.completedAt === "string" && Number.isFinite(Date.parse(item.retry.completedAt)))
+      && (item.retry.operatorStoppedAt === undefined || typeof item.retry.operatorStoppedAt === "string" && Number.isFinite(Date.parse(item.retry.operatorStoppedAt)))
+      && (item.retry.pendingReason === undefined || typeof item.retry.pendingReason === "string" && item.retry.pendingReason.length <= 2000))
     && (item.rollback === undefined || typeof item.rollback === "boolean")
     && (item.continuationKey === undefined || typeof item.continuationKey === "string")
     && (item.continuationDispatch === undefined || typeof item.continuationDispatch.key === "string"
