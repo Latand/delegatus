@@ -3,7 +3,8 @@ import crypto from "node:crypto";
 import sharp from "sharp";
 import { loadTasks } from "@/lib/tasks/store";
 import { telegramBotService, TelegramBotError, type TelegramRichMessage } from "@/lib/telegram/bot/service";
-import { prototypeRoot, storedMediaPath, findPrototypeRound, mutatePrototypeRound } from "./store";
+import { prototypeRoot, storedMediaPath, findPrototypeRound, mutatePrototypeRound, withPrototypeState } from "./store";
+import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import path from "node:path";
 import { withFileTransaction } from "@/lib/state/fileTransaction";
 import { ownerReviewDestination } from "@/lib/externalRelay/telegramPublication";
@@ -52,18 +53,24 @@ export async function prototypeSlides(round: PrototypeReviewRound): Promise<Prot
   let root: string;
   try { root = await fs.realpath(prototypeRoot()); } catch { return []; }
   const variants = [...round.variants].sort((a, b) => a.number - b.number);
-  const groups: PrototypeSlide[][] = [];
-  for (const variant of variants) {
-    const slides: PrototypeSlide[] = [];
-    for (const [index, frame] of variant.frames.entries()) {
+  const groups = variants.map(variant => ({ variant, next: 0, slides: [] as PrototypeSlide[] }));
+  let count = 0;
+  const fill = async (group: typeof groups[number], limit: number) => {
+    const { variant, slides } = group;
+    while (group.next < variant.frames.length && count < 50 && slides.length < limit) {
+      const index = group.next++;
+      const frame = variant.frames[index]!;
       const blob = await frameBlob(root, round.id, frame);
-      if (blob) slides.push({ id: `v${variant.number}f${index + 1}`, variantNumber: variant.number, caption: `${variant.number} · ${variant.name} — ${frame.caption}`, blob });
-      if (slides.length === 50) break;
+      if (blob) { slides.push({ id: `v${variant.number}f${index + 1}`, variantNumber: variant.number, caption: `${variant.number} · ${variant.name} — ${frame.caption}`, blob }); count++; }
     }
-    groups.push(slides);
-  }
-  if (groups.reduce((n, g) => n + g.length, 0) <= 50) return groups.flat();
-  return [...groups.flatMap(g => g.slice(0, 1)), ...groups.flatMap(g => g.slice(1))].slice(0, 50);
+  };
+  // Reserve variant coverage before filling the preview. Decode and retain at
+  // most 50 valid frames, even when the full review contains 240 files.
+  for (const group of groups) await fill(group, 1);
+  for (const group of groups) await fill(group, 50);
+  const slides = groups.map(g => g.slides);
+  if (round.variants.reduce((n, v) => n + v.frames.length, 0) <= 50) return slides.flat();
+  return [...slides.flatMap(g => g.slice(0, 1)), ...slides.flatMap(g => g.slice(1))];
 }
 async function frameBlob(root: string, reviewId: string, frame: PrototypeFrame): Promise<Blob | null> {
   try {
@@ -95,7 +102,7 @@ export function renderPrototypeTelegram(round: PrototypeReviewRound, slides: rea
     const options = question.options.map((option, j) => `${String.fromCharCode(97 + j)}) ${attribute(option.label.replace(/\s+/g, " "))}${option.recommended ? " ✅" : ""}`);
     lines.push(`<p>${[heading, ...options, ...(question.other ? ["+ Інше — у коментарі"] : [])].join("<br>")}</p>`, "");
   }
-  lines.push("---", `Як відповісти: надішліть клону ${prototypeReference(round)} і відповідь своїми словами, або скористайтеся кнопкою. Застереження до рекомендованих відповідей теж збережуться. Повне рев’ю — у Delegatus.`, "");
+  lines.push("---", `Як відповісти: дайте текстовий reply на цей пост або його опитування: 1b, 2a; 1: b; рекомендовані; або відповідь своїми словами. Рішення записує лише текстовий reply власника. Голоси показують думки учасників. Можна також надіслати клону ${prototypeReference(round)} і відповідь, або скористатися кнопкою. Застереження до рекомендованих відповідей теж збережуться. Повне рев’ю — у Delegatus.`, "");
   const button = (label: string, text: string, recommended = false) => `<tg-button type="copy_text"${recommended ? ' style="success"' : ""} text="${attribute(text)}">${label}</tg-button>`;
   if (round.questions?.length) lines.push('<tg-button-row align="center">', button("Скопіювати рекомендовані", prototypeCopyLine(round), true), "</tg-button-row>");
   const variants = [...round.variants].sort((a, b) => a.number - b.number);
@@ -110,29 +117,33 @@ export function renderPrototypeTelegram(round: PrototypeReviewRound, slides: rea
       ...question.options.map((o, j) => `${String.fromCharCode(97 + j)}) ${o.label}${o.recommended ? " ✅" : ""}`),
       ...(question.other ? ["+ Інше — у коментарі"] : []), "");
   }
-  plain.push(`Надішліть клону ${prototypeReference(round)} і відповідь своїми словами, або скопійований рядок. Застереження теж збережуться. Повне рев’ю — у Delegatus.`);
+  plain.push(`Дайте текстовий reply на цей пост або його опитування: 1b, 2a; 1: b; рекомендовані; або відповідь своїми словами. Рішення записує лише текстовий reply власника. Голоси показують думки учасників. Можна також надіслати клону ${prototypeReference(round)} і відповідь, або скопійований рядок. Застереження теж збережуться. Повне рев’ю — у Delegatus.`);
   if (round.questions?.length) plain.push(`Скопіювати рекомендовані: ${prototypeCopyLine(round)}`);
   for (const variant of variants) plain.push(`Варіант ${variant.number}: ${prototypeCopyLine(round, variant.number)}`);
-  return { markdown: lines.join("\n"), plainText: plain.join("\n"), images: slides.map(({ id, blob }) => ({ id, blob })) };
+  return { markdown: lines.join("\n"), plainText: plain.join("\n"), images: slides.map(({ id, blob }) => ({ id, blob })),
+    review: { id: round.id, taskId: round.taskId, questions: round.questions ?? [] } };
 }
 
 export async function postPrototypeReviewToTelegram(round: PrototypeReviewRound, key = round.id): Promise<PrototypeTelegramPost | undefined> {
+  return withViewerOperation("prototype.telegram", () => postRound(round, key));
+}
+async function postRound(round: PrototypeReviewRound, key: string): Promise<PrototypeTelegramPost | undefined> {
   return withFileTransaction(path.join(prototypeRoot(), `${round.id}.telegram.lock`), "Telegram review post is busy", async () => {
-    const current = findPrototypeRound(round.taskId, round.id);
+    const current = await withPrototypeState(() => findPrototypeRound(round.taskId, round.id));
     if (!current) return undefined;
     if (key === round.id && current.telegramPost && current.telegramPost.key !== key) return current.telegramPost;
     if (round.telegramPost?.state === "pending" && round.telegramPost.key === key && current.telegramPost?.key !== key) return current.telegramPost;
     // A durable pending claim survives a stopped process. The bot's journal
     // reconciles it under this same key without issuing a duplicate send.
     if (current.telegramPost?.key === key && current.telegramPost.state !== "pending") return current.telegramPost;
-    const record = (state: PrototypeTelegramPost["state"], reason?: string) => {
+    const record = async (state: PrototypeTelegramPost["state"], reason?: string) => {
       const post = { key, state, at: new Date().toISOString(), ...(reason ? { reason } : {}) };
-      mutatePrototypeRound(round.taskId, round.id, held => { held.telegramPost = post; });
+      await withPrototypeState(() => mutatePrototypeRound(round.taskId, round.id, held => { held.telegramPost = post; }));
       return post;
     };
-    record("pending");
+    await record("pending");
     try {
-      const task = loadTasks().find(t => t.id === round.taskId);
+      const task = await withPrototypeState(() => loadTasks().find(t => t.id === round.taskId));
       const slides = await prototypeSlides(current);
       const fallback = withReviewLink(renderPrototypeTelegram(current, [], task?.text), current, 0);
       const result = await telegramBotService().sendOwnerReview({ clientRequestId: key,

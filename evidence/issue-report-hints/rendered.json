@@ -10,64 +10,48 @@
       "below": "Everything below this line stays in this chat."
     },
     "order": [
-      4,
       5,
       6,
-      20,
+      7,
       21,
       22,
-      24,
-      30,
-      78
+      23,
+      25,
+      31,
+      79
     ],
-    "closing": "The approving reply files exactly the title and body above as a public issue in the Delegatus repository, readable by anyone. Hints do not prevent this.",
+    "closing": "Approving it in the decision form files exactly the title and body above as a public issue in the Delegatus repository, readable by anyone. Hints do not prevent this.",
     "hintLines": 11,
     "dotted": "a port · body, line 8: 203.0.113.22:8898",
-    "replies": [
-      "Yes, publish as a public issue",
-      "No, do not publish",
-      "Edit the text…"
-    ],
+    "pills": 0,
     "resting": {
-      "placement": "inline",
-      "row": {
-        "left": 337,
+      "pills": 0,
+      "pointer": {
+        "left": 373,
         "right": 991,
-        "top": 575.5625,
-        "bottom": 601.5
-      },
-      "approve": {
-        "left": 337,
-        "right": 514.28125,
-        "top": 575.5625,
-        "bottom": 601.5
+        "top": 602.5625,
+        "bottom": 634.5625
       },
       "composer": {
         "left": 348,
-        "right": 876,
-        "top": 657,
-        "bottom": 683
+        "right": 838,
+        "top": 656,
+        "bottom": 684
       }
     },
     "top": {
-      "placement": "floating",
-      "row": {
-        "left": 455.109375,
-        "right": 872.890625,
-        "top": 514.0625,
-        "bottom": 554
-      },
-      "approve": {
-        "left": 462.109375,
-        "right": 639.390625,
-        "top": 521.0625,
-        "bottom": 547
+      "pills": 0,
+      "pointer": {
+        "left": 373,
+        "right": 991,
+        "top": 1204.5625,
+        "bottom": 1236.5625
       },
       "composer": {
         "left": 348,
-        "right": 876,
-        "top": 657,
-        "bottom": 683
+        "right": 838,
+        "top": 656,
+        "bottom": 684
       }
     },
     "geometry": {
@@ -77,9 +61,22 @@
       "textRight": 927.015625
     },
     "approval": {
-      "field": "Yes, publish report aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-      "sent": 0,
-      "draftsLeft": 3
+      "label": "Yes, publish report aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa recommended",
+      "posted": {
+        "project": "atlas",
+        "reviewId": "pr_ffffffffffffffffffffffffffffffff",
+        "chosen": [],
+        "comment": "",
+        "answers": [
+          {
+            "questionId": "publish-report",
+            "options": [
+              0
+            ]
+          }
+        ]
+      },
+      "pills": 0
     },
     "pageErrors": []
   },
@@ -104,27 +101,17 @@
       31,
       79
     ],
-    "closing": "The approving reply files exactly the title and body above as a public issue in the Delegatus repository, readable by anyone. Hints do not prevent this.",
+    "closing": "Approving it in the decision form files exactly the title and body above as a public issue in the Delegatus repository, readable by anyone. Hints do not prevent this.",
     "hintLines": 11,
     "dotted": "a port · body, line 8: 203.0.113.22:8898",
-    "replies": [
-      "Yes, publish as a public issue",
-      "No, do not publish",
-      "Edit the text…"
-    ],
+    "pills": 0,
     "resting": {
-      "placement": "inline",
-      "row": {
+      "pills": 0,
+      "pointer": {
         "left": 13,
         "right": 377,
-        "top": 669.75,
-        "bottom": 713.75
-      },
-      "approve": {
-        "left": 13,
-        "right": 210.40625,
-        "top": 669.75,
-        "bottom": 713.75
+        "top": 673.5,
+        "bottom": 717.5
       },
       "composer": {
         "left": 20,
@@ -134,18 +121,12 @@
       }
     },
     "top": {
-      "placement": "floating",
-      "row": {
-        "left": 9,
-        "right": 381,
-        "top": 624.25,
-        "bottom": 670.25
-      },
-      "approve": {
-        "left": 16,
-        "right": 213.40625,
-        "top": 625.25,
-        "bottom": 669.25
+      "pills": 0,
+      "pointer": {
+        "left": 13,
+        "right": 377,
+        "top": 1835.5,
+        "bottom": 1879.5
       },
       "composer": {
         "left": 20,
@@ -161,9 +142,22 @@
       "textRight": 382.40625
     },
     "approval": {
-      "field": "Yes, publish report aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-      "sent": 0,
-      "draftsLeft": 3
+      "label": "Yes, publish report aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa recommended",
+      "posted": {
+        "project": "atlas",
+        "reviewId": "pr_ffffffffffffffffffffffffffffffff",
+        "chosen": [],
+        "comment": "",
+        "answers": [
+          {
+            "questionId": "publish-report",
+            "options": [
+              0
+            ]
+          }
+        ]
+      },
+      "pills": 0
     },
     "pageErrors": []
   },
@@ -178,64 +172,48 @@
       "below": "Everything below this line stays in this chat."
     },
     "order": [
-      4,
       5,
       6,
-      20,
+      7,
       21,
       22,
-      24,
-      30,
-      78
+      23,
+      25,
+      31,
+      79
     ],
-    "closing": "The approving reply files exactly the title and body above as a public issue in the Delegatus repository, readable by anyone. Hints do not prevent this.",
+    "closing": "Approving it in the decision form files exactly the title and body above as a public issue in the Delegatus repository, readable by anyone. Hints do not prevent this.",
     "hintLines": 11,
     "dotted": "a port · body, line 8: 203.0.113.22:8898",
-    "replies": [
-      "Yes, publish as a public issue",
-      "No, do not publish",
-      "Edit the text…"
-    ],
+    "pills": 0,
     "resting": {
-      "placement": "inline",
-      "row": {
-        "left": 337,
+      "pills": 0,
+      "pointer": {
+        "left": 373,
         "right": 991,
-        "top": 575.5625,
-        "bottom": 601.5
-      },
-      "approve": {
-        "left": 337,
-        "right": 514.28125,
-        "top": 575.5625,
-        "bottom": 601.5
+        "top": 602.5625,
+        "bottom": 634.5625
       },
       "composer": {
         "left": 348,
-        "right": 876,
-        "top": 657,
-        "bottom": 683
+        "right": 838,
+        "top": 656,
+        "bottom": 684
       }
     },
     "top": {
-      "placement": "floating",
-      "row": {
-        "left": 455.109375,
-        "right": 872.890625,
-        "top": 514.0625,
-        "bottom": 554
-      },
-      "approve": {
-        "left": 462.109375,
-        "right": 639.390625,
-        "top": 521.0625,
-        "bottom": 547
+      "pills": 0,
+      "pointer": {
+        "left": 373,
+        "right": 991,
+        "top": 1204.5625,
+        "bottom": 1236.5625
       },
       "composer": {
         "left": 348,
-        "right": 876,
-        "top": 657,
-        "bottom": 683
+        "right": 838,
+        "top": 656,
+        "bottom": 684
       }
     },
     "geometry": {
@@ -268,27 +246,17 @@
       31,
       79
     ],
-    "closing": "The approving reply files exactly the title and body above as a public issue in the Delegatus repository, readable by anyone. Hints do not prevent this.",
+    "closing": "Approving it in the decision form files exactly the title and body above as a public issue in the Delegatus repository, readable by anyone. Hints do not prevent this.",
     "hintLines": 11,
     "dotted": "a port · body, line 8: 203.0.113.22:8898",
-    "replies": [
-      "Yes, publish as a public issue",
-      "No, do not publish",
-      "Edit the text…"
-    ],
+    "pills": 0,
     "resting": {
-      "placement": "inline",
-      "row": {
+      "pills": 0,
+      "pointer": {
         "left": 13,
         "right": 377,
-        "top": 669.75,
-        "bottom": 713.75
-      },
-      "approve": {
-        "left": 13,
-        "right": 210.40625,
-        "top": 669.75,
-        "bottom": 713.75
+        "top": 673.5,
+        "bottom": 717.5
       },
       "composer": {
         "left": 20,
@@ -298,18 +266,12 @@
       }
     },
     "top": {
-      "placement": "floating",
-      "row": {
-        "left": 9,
-        "right": 381,
-        "top": 624.25,
-        "bottom": 670.25
-      },
-      "approve": {
-        "left": 16,
-        "right": 213.40625,
-        "top": 625.25,
-        "bottom": 669.25
+      "pills": 0,
+      "pointer": {
+        "left": 13,
+        "right": 377,
+        "top": 1835.5,
+        "bottom": 1879.5
       },
       "composer": {
         "left": 20,
@@ -338,64 +300,48 @@
       "below": "Усе нижче цього рядка лишається в цьому чаті."
     },
     "order": [
-      4,
       5,
       6,
-      20,
+      7,
       21,
       22,
-      24,
-      30,
-      78
+      23,
+      25,
+      31,
+      79
     ],
-    "closing": "Схвальна відповідь створить із назви й тексту вище, без жодних змін, публічний issue в репозиторії Delegatus, який може прочитати будь-хто. Підказки цьому не перешкоджають.",
+    "closing": "Схвалення у формі рішення створить із назви й тексту вище, без жодних змін, публічний issue в репозиторії Delegatus, який може прочитати будь-хто. Підказки цьому не перешкоджають.",
     "hintLines": 11,
     "dotted": "порт · текст, рядок 8: 203.0.113.22:8898",
-    "replies": [
-      "Так, публікуй як публічний issue",
-      "Ні, не публікуй",
-      "Зміни текст…"
-    ],
+    "pills": 0,
     "resting": {
-      "placement": "inline",
-      "row": {
-        "left": 337,
+      "pills": 0,
+      "pointer": {
+        "left": 373,
         "right": 991,
-        "top": 576.25,
-        "bottom": 602.1875
-      },
-      "approve": {
-        "left": 337,
-        "right": 536,
-        "top": 576.25,
-        "bottom": 602.1875
+        "top": 603.09375,
+        "bottom": 635.09375
       },
       "composer": {
         "left": 348,
-        "right": 876,
-        "top": 657,
-        "bottom": 683
+        "right": 838,
+        "top": 656,
+        "bottom": 684
       }
     },
     "top": {
-      "placement": "floating",
-      "row": {
-        "left": 452.203125,
-        "right": 875.78125,
-        "top": 514.0625,
-        "bottom": 554
-      },
-      "approve": {
-        "left": 459.203125,
-        "right": 658.203125,
-        "top": 521.0625,
-        "bottom": 547
+      "pills": 0,
+      "pointer": {
+        "left": 373,
+        "right": 991,
+        "top": 1261.09375,
+        "bottom": 1293.09375
       },
       "composer": {
         "left": 348,
-        "right": 876,
-        "top": 657,
-        "bottom": 683
+        "right": 838,
+        "top": 656,
+        "bottom": 684
       }
     },
     "geometry": {
@@ -405,9 +351,22 @@
       "textRight": 929.8125
     },
     "approval": {
-      "field": "Так, публікуй звіт aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-      "sent": 0,
-      "draftsLeft": 3
+      "label": "Так, публікуй звіт aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa рекомендовано",
+      "posted": {
+        "project": "atlas",
+        "reviewId": "pr_ffffffffffffffffffffffffffffffff",
+        "chosen": [],
+        "comment": "",
+        "answers": [
+          {
+            "questionId": "publish-report",
+            "options": [
+              0
+            ]
+          }
+        ]
+      },
+      "pills": 0
     },
     "pageErrors": []
   },
@@ -432,27 +391,17 @@
       31,
       79
     ],
-    "closing": "Схвальна відповідь створить із назви й тексту вище, без жодних змін, публічний issue в репозиторії Delegatus, який може прочитати будь-хто. Підказки цьому не перешкоджають.",
+    "closing": "Схвалення у формі рішення створить із назви й тексту вище, без жодних змін, публічний issue в репозиторії Delegatus, який може прочитати будь-хто. Підказки цьому не перешкоджають.",
     "hintLines": 11,
     "dotted": "порт · текст, рядок 8: 203.0.113.22:8898",
-    "replies": [
-      "Так, публікуй як публічний issue",
-      "Ні, не публікуй",
-      "Зміни текст…"
-    ],
+    "pills": 0,
     "resting": {
-      "placement": "inline",
-      "row": {
+      "pills": 0,
+      "pointer": {
         "left": 13,
         "right": 377,
-        "top": 670.25,
-        "bottom": 714.25
-      },
-      "approve": {
-        "left": 13,
-        "right": 234.09375,
-        "top": 670.25,
-        "bottom": 714.25
+        "top": 691.25,
+        "bottom": 735.25
       },
       "composer": {
         "left": 20,
@@ -462,18 +411,12 @@
       }
     },
     "top": {
-      "placement": "floating",
-      "row": {
-        "left": 9,
-        "right": 381,
-        "top": 624.25,
-        "bottom": 670.25
-      },
-      "approve": {
-        "left": 16,
-        "right": 237.09375,
-        "top": 625.25,
-        "bottom": 669.25
+      "pills": 0,
+      "pointer": {
+        "left": 13,
+        "right": 377,
+        "top": 1858.25,
+        "bottom": 1902.25
       },
       "composer": {
         "left": 20,
@@ -489,9 +432,22 @@
       "textRight": 379.4375
     },
     "approval": {
-      "field": "Так, публікуй звіт aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-      "sent": 0,
-      "draftsLeft": 3
+      "label": "Так, публікуй звіт aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa рекомендовано",
+      "posted": {
+        "project": "atlas",
+        "reviewId": "pr_ffffffffffffffffffffffffffffffff",
+        "chosen": [],
+        "comment": "",
+        "answers": [
+          {
+            "questionId": "publish-report",
+            "options": [
+              0
+            ]
+          }
+        ]
+      },
+      "pills": 0
     },
     "pageErrors": []
   },
@@ -506,64 +462,48 @@
       "below": "Усе нижче цього рядка лишається в цьому чаті."
     },
     "order": [
-      4,
       5,
       6,
-      20,
+      7,
       21,
       22,
-      24,
-      30,
-      78
+      23,
+      25,
+      31,
+      79
     ],
-    "closing": "Схвальна відповідь створить із назви й тексту вище, без жодних змін, публічний issue в репозиторії Delegatus, який може прочитати будь-хто. Підказки цьому не перешкоджають.",
+    "closing": "Схвалення у формі рішення створить із назви й тексту вище, без жодних змін, публічний issue в репозиторії Delegatus, який може прочитати будь-хто. Підказки цьому не перешкоджають.",
     "hintLines": 11,
     "dotted": "порт · текст, рядок 8: 203.0.113.22:8898",
-    "replies": [
-      "Так, публікуй як публічний issue",
-      "Ні, не публікуй",
-      "Зміни текст…"
-    ],
+    "pills": 0,
     "resting": {
-      "placement": "inline",
-      "row": {
-        "left": 337,
+      "pills": 0,
+      "pointer": {
+        "left": 373,
         "right": 991,
-        "top": 576.25,
-        "bottom": 602.1875
-      },
-      "approve": {
-        "left": 337,
-        "right": 536,
-        "top": 576.25,
-        "bottom": 602.1875
+        "top": 603.09375,
+        "bottom": 635.09375
       },
       "composer": {
         "left": 348,
-        "right": 876,
-        "top": 657,
-        "bottom": 683
+        "right": 838,
+        "top": 656,
+        "bottom": 684
       }
     },
     "top": {
-      "placement": "floating",
-      "row": {
-        "left": 452.203125,
-        "right": 875.78125,
-        "top": 514.0625,
-        "bottom": 554
-      },
-      "approve": {
-        "left": 459.203125,
-        "right": 658.203125,
-        "top": 521.0625,
-        "bottom": 547
+      "pills": 0,
+      "pointer": {
+        "left": 373,
+        "right": 991,
+        "top": 1261.09375,
+        "bottom": 1293.09375
       },
       "composer": {
         "left": 348,
-        "right": 876,
-        "top": 657,
-        "bottom": 683
+        "right": 838,
+        "top": 656,
+        "bottom": 684
       }
     },
     "geometry": {
@@ -596,27 +536,17 @@
       31,
       79
     ],
-    "closing": "Схвальна відповідь створить із назви й тексту вище, без жодних змін, публічний issue в репозиторії Delegatus, який може прочитати будь-хто. Підказки цьому не перешкоджають.",
+    "closing": "Схвалення у формі рішення створить із назви й тексту вище, без жодних змін, публічний issue в репозиторії Delegatus, який може прочитати будь-хто. Підказки цьому не перешкоджають.",
     "hintLines": 11,
     "dotted": "порт · текст, рядок 8: 203.0.113.22:8898",
-    "replies": [
-      "Так, публікуй як публічний issue",
-      "Ні, не публікуй",
-      "Зміни текст…"
-    ],
+    "pills": 0,
     "resting": {
-      "placement": "inline",
-      "row": {
+      "pills": 0,
+      "pointer": {
         "left": 13,
         "right": 377,
-        "top": 670.25,
-        "bottom": 714.25
-      },
-      "approve": {
-        "left": 13,
-        "right": 234.09375,
-        "top": 670.25,
-        "bottom": 714.25
+        "top": 691.25,
+        "bottom": 735.25
       },
       "composer": {
         "left": 20,
@@ -626,18 +556,12 @@
       }
     },
     "top": {
-      "placement": "floating",
-      "row": {
-        "left": 9,
-        "right": 381,
-        "top": 624.25,
-        "bottom": 670.25
-      },
-      "approve": {
-        "left": 16,
-        "right": 237.09375,
-        "top": 625.25,
-        "bottom": 669.25
+      "pills": 0,
+      "pointer": {
+        "left": 13,
+        "right": 377,
+        "top": 1858.25,
+        "bottom": 1902.25
       },
       "composer": {
         "left": 20,
@@ -666,64 +590,48 @@
       "below": "Everything below this line stays in this chat."
     },
     "order": [
-      4,
       5,
       6,
-      12,
+      7,
       13,
       14,
-      16,
-      22,
-      25
+      15,
+      17,
+      23,
+      26
     ],
-    "closing": "The approving reply files exactly the title and body above as a public issue in the Delegatus repository, readable by anyone. Hints do not prevent this.",
+    "closing": "Approving it in the decision form files exactly the title and body above as a public issue in the Delegatus repository, readable by anyone. Hints do not prevent this.",
     "hintLines": 0,
     "dotted": null,
-    "replies": [
-      "Yes, publish as a public issue",
-      "No, do not publish",
-      "Edit the text…"
-    ],
+    "pills": 0,
     "resting": {
-      "placement": "inline",
-      "row": {
-        "left": 337,
+      "pills": 0,
+      "pointer": {
+        "left": 373,
         "right": 991,
-        "top": 575.625,
-        "bottom": 601.5625
-      },
-      "approve": {
-        "left": 337,
-        "right": 514.28125,
-        "top": 575.625,
-        "bottom": 601.5625
+        "top": 602.625,
+        "bottom": 634.625
       },
       "composer": {
         "left": 348,
-        "right": 876,
-        "top": 657,
-        "bottom": 683
+        "right": 838,
+        "top": 656,
+        "bottom": 684
       }
     },
     "top": {
-      "placement": "floating",
-      "row": {
-        "left": 455.109375,
-        "right": 872.890625,
-        "top": 514.0625,
-        "bottom": 554
-      },
-      "approve": {
-        "left": 462.109375,
-        "right": 639.390625,
-        "top": 521.0625,
-        "bottom": 547
+      "pills": 0,
+      "pointer": {
+        "left": 373,
+        "right": 991,
+        "top": 700.625,
+        "bottom": 732.625
       },
       "composer": {
         "left": 348,
-        "right": 876,
-        "top": 657,
-        "bottom": 683
+        "right": 838,
+        "top": 656,
+        "bottom": 684
       }
     },
     "geometry": {
@@ -756,27 +664,17 @@
       23,
       26
     ],
-    "closing": "The approving reply files exactly the title and body above as a public issue in the Delegatus repository, readable by anyone. Hints do not prevent this.",
+    "closing": "Approving it in the decision form files exactly the title and body above as a public issue in the Delegatus repository, readable by anyone. Hints do not prevent this.",
     "hintLines": 0,
     "dotted": null,
-    "replies": [
-      "Yes, publish as a public issue",
-      "No, do not publish",
-      "Edit the text…"
-    ],
+    "pills": 0,
     "resting": {
-      "placement": "inline",
-      "row": {
+      "pills": 0,
+      "pointer": {
         "left": 13,
         "right": 377,
-        "top": 658.25,
-        "bottom": 702.25
-      },
-      "approve": {
-        "left": 13,
-        "right": 210.40625,
-        "top": 658.25,
-        "bottom": 702.25
+        "top": 674,
+        "bottom": 718
       },
       "composer": {
         "left": 20,
@@ -786,18 +684,12 @@
       }
     },
     "top": {
-      "placement": "floating",
-      "row": {
-        "left": 9,
-        "right": 381,
-        "top": 624.25,
-        "bottom": 670.25
-      },
-      "approve": {
-        "left": 16,
-        "right": 213.40625,
-        "top": 625.25,
-        "bottom": 669.25
+      "pills": 0,
+      "pointer": {
+        "left": 13,
+        "right": 377,
+        "top": 981,
+        "bottom": 1025
       },
       "composer": {
         "left": 20,
@@ -826,64 +718,48 @@
       "below": "Everything below this line stays in this chat."
     },
     "order": [
-      4,
       5,
       6,
-      12,
+      7,
       13,
       14,
-      16,
-      22,
-      25
+      15,
+      17,
+      23,
+      26
     ],
-    "closing": "The approving reply files exactly the title and body above as a public issue in the Delegatus repository, readable by anyone. Hints do not prevent this.",
+    "closing": "Approving it in the decision form files exactly the title and body above as a public issue in the Delegatus repository, readable by anyone. Hints do not prevent this.",
     "hintLines": 0,
     "dotted": null,
-    "replies": [
-      "Yes, publish as a public issue",
-      "No, do not publish",
-      "Edit the text…"
-    ],
+    "pills": 0,
     "resting": {
-      "placement": "inline",
-      "row": {
-        "left": 337,
+      "pills": 0,
+      "pointer": {
+        "left": 373,
         "right": 991,
-        "top": 575.625,
-        "bottom": 601.5625
-      },
-      "approve": {
-        "left": 337,
-        "right": 514.28125,
-        "top": 575.625,
-        "bottom": 601.5625
+        "top": 602.625,
+        "bottom": 634.625
       },
       "composer": {
         "left": 348,
-        "right": 876,
-        "top": 657,
-        "bottom": 683
+        "right": 838,
+        "top": 656,
+        "bottom": 684
       }
     },
     "top": {
-      "placement": "floating",
-      "row": {
-        "left": 455.109375,
-        "right": 872.890625,
-        "top": 514.0625,
-        "bottom": 554
-      },
-      "approve": {
-        "left": 462.109375,
-        "right": 639.390625,
-        "top": 521.0625,
-        "bottom": 547
+      "pills": 0,
+      "pointer": {
+        "left": 373,
+        "right": 991,
+        "top": 700.625,
+        "bottom": 732.625
       },
       "composer": {
         "left": 348,
-        "right": 876,
-        "top": 657,
-        "bottom": 683
+        "right": 838,
+        "top": 656,
+        "bottom": 684
       }
     },
     "geometry": {
@@ -916,27 +792,17 @@
       23,
       26
     ],
-    "closing": "The approving reply files exactly the title and body above as a public issue in the Delegatus repository, readable by anyone. Hints do not prevent this.",
+    "closing": "Approving it in the decision form files exactly the title and body above as a public issue in the Delegatus repository, readable by anyone. Hints do not prevent this.",
     "hintLines": 0,
     "dotted": null,
-    "replies": [
-      "Yes, publish as a public issue",
-      "No, do not publish",
-      "Edit the text…"
-    ],
+    "pills": 0,
     "resting": {
-      "placement": "inline",
-      "row": {
+      "pills": 0,
+      "pointer": {
         "left": 13,
         "right": 377,
-        "top": 658.25,
-        "bottom": 702.25
-      },
-      "approve": {
-        "left": 13,
-        "right": 210.40625,
-        "top": 658.25,
-        "bottom": 702.25
+        "top": 674,
+        "bottom": 718
       },
       "composer": {
         "left": 20,
@@ -946,18 +812,12 @@
       }
     },
     "top": {
-      "placement": "floating",
-      "row": {
-        "left": 9,
-        "right": 381,
-        "top": 624.25,
-        "bottom": 670.25
-      },
-      "approve": {
-        "left": 16,
-        "right": 213.40625,
-        "top": 625.25,
-        "bottom": 669.25
+      "pills": 0,
+      "pointer": {
+        "left": 13,
+        "right": 377,
+        "top": 981,
+        "bottom": 1025
       },
       "composer": {
         "left": 20,
@@ -986,71 +846,55 @@
       "below": "Усе нижче цього рядка лишається в цьому чаті."
     },
     "order": [
-      4,
       5,
       6,
-      12,
+      7,
       13,
       14,
-      16,
-      22,
-      25
+      15,
+      17,
+      23,
+      26
     ],
-    "closing": "Схвальна відповідь створить із назви й тексту вище, без жодних змін, публічний issue в репозиторії Delegatus, який може прочитати будь-хто. Підказки цьому не перешкоджають.",
+    "closing": "Схвалення у формі рішення створить із назви й тексту вище, без жодних змін, публічний issue в репозиторії Delegatus, який може прочитати будь-хто. Підказки цьому не перешкоджають.",
     "hintLines": 0,
     "dotted": null,
-    "replies": [
-      "Так, публікуй як публічний issue",
-      "Ні, не публікуй",
-      "Зміни текст…"
-    ],
+    "pills": 0,
     "resting": {
-      "placement": "inline",
-      "row": {
-        "left": 337,
+      "pills": 0,
+      "pointer": {
+        "left": 373,
         "right": 991,
-        "top": 575.625,
-        "bottom": 601.5625
-      },
-      "approve": {
-        "left": 337,
-        "right": 536,
-        "top": 575.625,
-        "bottom": 601.5625
+        "top": 603.46875,
+        "bottom": 635.46875
       },
       "composer": {
         "left": 348,
-        "right": 876,
-        "top": 657,
-        "bottom": 683
+        "right": 838,
+        "top": 656,
+        "bottom": 684
       }
     },
     "top": {
-      "placement": "floating",
-      "row": {
-        "left": 452.203125,
-        "right": 875.78125,
-        "top": 514.0625,
-        "bottom": 554
-      },
-      "approve": {
-        "left": 459.203125,
-        "right": 658.203125,
-        "top": 521.0625,
-        "bottom": 547
+      "pills": 0,
+      "pointer": {
+        "left": 373,
+        "right": 991,
+        "top": 719.46875,
+        "bottom": 751.46875
       },
       "composer": {
         "left": 348,
-        "right": 876,
-        "top": 657,
-        "bottom": 683
+        "right": 838,
+        "top": 656,
+        "bottom": 684
       }
     },
     "geometry": {
       "left": 373,
       "right": 928.890625,
       "textLeft": 373,
-      "textRight": 916.046875
+      "textRight": 912.46875
     },
     "approval": null,
     "pageErrors": []
@@ -1076,27 +920,17 @@
       23,
       26
     ],
-    "closing": "Схвальна відповідь створить із назви й тексту вище, без жодних змін, публічний issue в репозиторії Delegatus, який може прочитати будь-хто. Підказки цьому не перешкоджають.",
+    "closing": "Схвалення у формі рішення створить із назви й тексту вище, без жодних змін, публічний issue в репозиторії Delegatus, який може прочитати будь-хто. Підказки цьому не перешкоджають.",
     "hintLines": 0,
     "dotted": null,
-    "replies": [
-      "Так, публікуй як публічний issue",
-      "Ні, не публікуй",
-      "Зміни текст…"
-    ],
+    "pills": 0,
     "resting": {
-      "placement": "inline",
-      "row": {
+      "pills": 0,
+      "pointer": {
         "left": 13,
         "right": 377,
-        "top": 658,
-        "bottom": 702
-      },
-      "approve": {
-        "left": 13,
-        "right": 234.09375,
-        "top": 658,
-        "bottom": 702
+        "top": 674,
+        "bottom": 718
       },
       "composer": {
         "left": 20,
@@ -1106,18 +940,12 @@
       }
     },
     "top": {
-      "placement": "floating",
-      "row": {
-        "left": 9,
-        "right": 381,
-        "top": 624.25,
-        "bottom": 670.25
-      },
-      "approve": {
-        "left": 16,
-        "right": 237.09375,
-        "top": 625.25,
-        "bottom": 669.25
+      "pills": 0,
+      "pointer": {
+        "left": 13,
+        "right": 377,
+        "top": 981,
+        "bottom": 1025
       },
       "composer": {
         "left": 20,
@@ -1146,71 +974,55 @@
       "below": "Усе нижче цього рядка лишається в цьому чаті."
     },
     "order": [
-      4,
       5,
       6,
-      12,
+      7,
       13,
       14,
-      16,
-      22,
-      25
+      15,
+      17,
+      23,
+      26
     ],
-    "closing": "Схвальна відповідь створить із назви й тексту вище, без жодних змін, публічний issue в репозиторії Delegatus, який може прочитати будь-хто. Підказки цьому не перешкоджають.",
+    "closing": "Схвалення у формі рішення створить із назви й тексту вище, без жодних змін, публічний issue в репозиторії Delegatus, який може прочитати будь-хто. Підказки цьому не перешкоджають.",
     "hintLines": 0,
     "dotted": null,
-    "replies": [
-      "Так, публікуй як публічний issue",
-      "Ні, не публікуй",
-      "Зміни текст…"
-    ],
+    "pills": 0,
     "resting": {
-      "placement": "inline",
-      "row": {
-        "left": 337,
+      "pills": 0,
+      "pointer": {
+        "left": 373,
         "right": 991,
-        "top": 575.625,
-        "bottom": 601.5625
-      },
-      "approve": {
-        "left": 337,
-        "right": 536,
-        "top": 575.625,
-        "bottom": 601.5625
+        "top": 603.46875,
+        "bottom": 635.46875
       },
       "composer": {
         "left": 348,
-        "right": 876,
-        "top": 657,
-        "bottom": 683
+        "right": 838,
+        "top": 656,
+        "bottom": 684
       }
     },
     "top": {
-      "placement": "floating",
-      "row": {
-        "left": 452.203125,
-        "right": 875.78125,
-        "top": 514.0625,
-        "bottom": 554
-      },
-      "approve": {
-        "left": 459.203125,
-        "right": 658.203125,
-        "top": 521.0625,
-        "bottom": 547
+      "pills": 0,
+      "pointer": {
+        "left": 373,
+        "right": 991,
+        "top": 719.46875,
+        "bottom": 751.46875
       },
       "composer": {
         "left": 348,
-        "right": 876,
-        "top": 657,
-        "bottom": 683
+        "right": 838,
+        "top": 656,
+        "bottom": 684
       }
     },
     "geometry": {
       "left": 373,
       "right": 928.890625,
       "textLeft": 373,
-      "textRight": 916.046875
+      "textRight": 912.46875
     },
     "approval": null,
     "pageErrors": []
@@ -1236,27 +1048,17 @@
       23,
       26
     ],
-    "closing": "Схвальна відповідь створить із назви й тексту вище, без жодних змін, публічний issue в репозиторії Delegatus, який може прочитати будь-хто. Підказки цьому не перешкоджають.",
+    "closing": "Схвалення у формі рішення створить із назви й тексту вище, без жодних змін, публічний issue в репозиторії Delegatus, який може прочитати будь-хто. Підказки цьому не перешкоджають.",
     "hintLines": 0,
     "dotted": null,
-    "replies": [
-      "Так, публікуй як публічний issue",
-      "Ні, не публікуй",
-      "Зміни текст…"
-    ],
+    "pills": 0,
     "resting": {
-      "placement": "inline",
-      "row": {
+      "pills": 0,
+      "pointer": {
         "left": 13,
         "right": 377,
-        "top": 658,
-        "bottom": 702
-      },
-      "approve": {
-        "left": 13,
-        "right": 234.09375,
-        "top": 658,
-        "bottom": 702
+        "top": 674,
+        "bottom": 718
       },
       "composer": {
         "left": 20,
@@ -1266,18 +1068,12 @@
       }
     },
     "top": {
-      "placement": "floating",
-      "row": {
-        "left": 9,
-        "right": 381,
-        "top": 624.25,
-        "bottom": 670.25
-      },
-      "approve": {
-        "left": 16,
-        "right": 237.09375,
-        "top": 625.25,
-        "bottom": 669.25
+      "pills": 0,
+      "pointer": {
+        "left": 13,
+        "right": 377,
+        "top": 981,
+        "bottom": 1025
       },
       "composer": {
         "left": 20,
@@ -1306,64 +1102,48 @@
       "below": "Everything below this line stays in this chat."
     },
     "order": [
-      4,
       5,
       6,
-      46,
+      7,
       47,
       48,
-      50,
-      56,
-      62
+      49,
+      51,
+      57,
+      63
     ],
-    "closing": "The approving reply files exactly the title and body above as a public issue in the Delegatus repository, readable by anyone. Hints do not prevent this.",
+    "closing": "Approving it in the decision form files exactly the title and body above as a public issue in the Delegatus repository, readable by anyone. Hints do not prevent this.",
     "hintLines": 1,
     "dotted": null,
-    "replies": [
-      "Yes, publish as a public issue",
-      "No, do not publish",
-      "Edit the text…"
-    ],
+    "pills": 0,
     "resting": {
-      "placement": "inline",
-      "row": {
-        "left": 337,
+      "pills": 0,
+      "pointer": {
+        "left": 373,
         "right": 991,
-        "top": 575.84375,
-        "bottom": 601.78125
-      },
-      "approve": {
-        "left": 337,
-        "right": 514.28125,
-        "top": 575.84375,
-        "bottom": 601.78125
+        "top": 602.84375,
+        "bottom": 634.84375
       },
       "composer": {
         "left": 348,
-        "right": 876,
-        "top": 657,
-        "bottom": 683
+        "right": 838,
+        "top": 656,
+        "bottom": 684
       }
     },
     "top": {
-      "placement": "floating",
-      "row": {
-        "left": 455.109375,
-        "right": 872.890625,
-        "top": 514.0625,
-        "bottom": 554
-      },
-      "approve": {
-        "left": 462.109375,
-        "right": 639.390625,
-        "top": 521.0625,
-        "bottom": 547
+      "pills": 0,
+      "pointer": {
+        "left": 373,
+        "right": 991,
+        "top": 1776.84375,
+        "bottom": 1808.84375
       },
       "composer": {
         "left": 348,
-        "right": 876,
-        "top": 657,
-        "bottom": 683
+        "right": 838,
+        "top": 656,
+        "bottom": 684
       }
     },
     "geometry": {
@@ -1396,27 +1176,17 @@
       57,
       63
     ],
-    "closing": "The approving reply files exactly the title and body above as a public issue in the Delegatus repository, readable by anyone. Hints do not prevent this.",
+    "closing": "Approving it in the decision form files exactly the title and body above as a public issue in the Delegatus repository, readable by anyone. Hints do not prevent this.",
     "hintLines": 1,
     "dotted": null,
-    "replies": [
-      "Yes, publish as a public issue",
-      "No, do not publish",
-      "Edit the text…"
-    ],
+    "pills": 0,
     "resting": {
-      "placement": "inline",
-      "row": {
+      "pills": 0,
+      "pointer": {
         "left": 13,
         "right": 377,
-        "top": 654.21875,
-        "bottom": 698.21875
-      },
-      "approve": {
-        "left": 13,
-        "right": 210.40625,
-        "top": 654.21875,
-        "bottom": 698.21875
+        "top": 673.96875,
+        "bottom": 717.96875
       },
       "composer": {
         "left": 20,
@@ -1426,18 +1196,12 @@
       }
     },
     "top": {
-      "placement": "floating",
-      "row": {
-        "left": 9,
-        "right": 381,
-        "top": 624.25,
-        "bottom": 670.25
-      },
-      "approve": {
-        "left": 16,
-        "right": 213.40625,
-        "top": 625.25,
-        "bottom": 669.25
+      "pills": 0,
+      "pointer": {
+        "left": 13,
+        "right": 377,
+        "top": 2591.96875,
+        "bottom": 2635.96875
       },
       "composer": {
         "left": 20,
@@ -1466,64 +1230,48 @@
       "below": "Everything below this line stays in this chat."
     },
     "order": [
-      4,
       5,
       6,
-      46,
+      7,
       47,
       48,
-      50,
-      56,
-      62
+      49,
+      51,
+      57,
+      63
     ],
-    "closing": "The approving reply files exactly the title and body above as a public issue in the Delegatus repository, readable by anyone. Hints do not prevent this.",
+    "closing": "Approving it in the decision form files exactly the title and body above as a public issue in the Delegatus repository, readable by anyone. Hints do not prevent this.",
     "hintLines": 1,
     "dotted": null,
-    "replies": [
-      "Yes, publish as a public issue",
-      "No, do not publish",
-      "Edit the text…"
-    ],
+    "pills": 0,
     "resting": {
-      "placement": "inline",
-      "row": {
-        "left": 337,
+      "pills": 0,
+      "pointer": {
+        "left": 373,
         "right": 991,
-        "top": 575.84375,
-        "bottom": 601.78125
-      },
-      "approve": {
-        "left": 337,
-        "right": 514.28125,
-        "top": 575.84375,
-        "bottom": 601.78125
+        "top": 602.84375,
+        "bottom": 634.84375
       },
       "composer": {
         "left": 348,
-        "right": 876,
-        "top": 657,
-        "bottom": 683
+        "right": 838,
+        "top": 656,
+        "bottom": 684
       }
     },
     "top": {
-      "placement": "floating",
-      "row": {
-        "left": 455.109375,
-        "right": 872.890625,
-        "top": 514.0625,
-        "bottom": 554
-      },
-      "approve": {
-        "left": 462.109375,
-        "right": 639.390625,
-        "top": 521.0625,
-        "bottom": 547
+      "pills": 0,
+      "pointer": {
+        "left": 373,
+        "right": 991,
+        "top": 1776.84375,
+        "bottom": 1808.84375
       },
       "composer": {
         "left": 348,
-        "right": 876,
-        "top": 657,
-        "bottom": 683
+        "right": 838,
+        "top": 656,
+        "bottom": 684
       }
     },
     "geometry": {
@@ -1556,27 +1304,17 @@
       57,
       63
     ],
-    "closing": "The approving reply files exactly the title and body above as a public issue in the Delegatus repository, readable by anyone. Hints do not prevent this.",
+    "closing": "Approving it in the decision form files exactly the title and body above as a public issue in the Delegatus repository, readable by anyone. Hints do not prevent this.",
     "hintLines": 1,
     "dotted": null,
-    "replies": [
-      "Yes, publish as a public issue",
-      "No, do not publish",
-      "Edit the text…"
-    ],
+    "pills": 0,
     "resting": {
-      "placement": "inline",
-      "row": {
+      "pills": 0,
+      "pointer": {
         "left": 13,
         "right": 377,
-        "top": 654.21875,
-        "bottom": 698.21875
-      },
-      "approve": {
-        "left": 13,
-        "right": 210.40625,
-        "top": 654.21875,
-        "bottom": 698.21875
+        "top": 673.96875,
+        "bottom": 717.96875
       },
       "composer": {
         "left": 20,
@@ -1586,18 +1324,12 @@
       }
     },
     "top": {
-      "placement": "floating",
-      "row": {
-        "left": 9,
-        "right": 381,
-        "top": 624.25,
-        "bottom": 670.25
-      },
-      "approve": {
-        "left": 16,
-        "right": 213.40625,
-        "top": 625.25,
-        "bottom": 669.25
+      "pills": 0,
+      "pointer": {
+        "left": 13,
+        "right": 377,
+        "top": 2591.96875,
+        "bottom": 2635.96875
       },
       "composer": {
         "left": 20,
@@ -1626,71 +1358,55 @@
       "below": "Усе нижче цього рядка лишається в цьому чаті."
     },
     "order": [
-      4,
       5,
       6,
-      46,
+      7,
       47,
       48,
-      50,
-      56,
-      62
+      49,
+      51,
+      57,
+      63
     ],
-    "closing": "Схвальна відповідь створить із назви й тексту вище, без жодних змін, публічний issue в репозиторії Delegatus, який може прочитати будь-хто. Підказки цьому не перешкоджають.",
+    "closing": "Схвалення у формі рішення створить із назви й тексту вище, без жодних змін, публічний issue в репозиторії Delegatus, який може прочитати будь-хто. Підказки цьому не перешкоджають.",
     "hintLines": 1,
     "dotted": null,
-    "replies": [
-      "Так, публікуй як публічний issue",
-      "Ні, не публікуй",
-      "Зміни текст…"
-    ],
+    "pills": 0,
     "resting": {
-      "placement": "inline",
-      "row": {
-        "left": 337,
+      "pills": 0,
+      "pointer": {
+        "left": 373,
         "right": 991,
-        "top": 575.84375,
-        "bottom": 601.78125
-      },
-      "approve": {
-        "left": 337,
-        "right": 536,
-        "top": 575.84375,
-        "bottom": 601.78125
+        "top": 602.6875,
+        "bottom": 634.6875
       },
       "composer": {
         "left": 348,
-        "right": 876,
-        "top": 657,
-        "bottom": 683
+        "right": 838,
+        "top": 656,
+        "bottom": 684
       }
     },
     "top": {
-      "placement": "floating",
-      "row": {
-        "left": 452.203125,
-        "right": 875.78125,
-        "top": 514.0625,
-        "bottom": 554
-      },
-      "approve": {
-        "left": 459.203125,
-        "right": 658.203125,
-        "top": 521.0625,
-        "bottom": 547
+      "pills": 0,
+      "pointer": {
+        "left": 373,
+        "right": 991,
+        "top": 1795.6875,
+        "bottom": 1827.6875
       },
       "composer": {
         "left": 348,
-        "right": 876,
-        "top": 657,
-        "bottom": 683
+        "right": 838,
+        "top": 656,
+        "bottom": 684
       }
     },
     "geometry": {
       "left": 373,
       "right": 928.890625,
       "textLeft": 373,
-      "textRight": 916.046875
+      "textRight": 912.46875
     },
     "approval": null,
     "pageErrors": []
@@ -1716,27 +1432,17 @@
       57,
       63
     ],
-    "closing": "Схвальна відповідь створить із назви й тексту вище, без жодних змін, публічний issue в репозиторії Delegatus, який може прочитати будь-хто. Підказки цьому не перешкоджають.",
+    "closing": "Схвалення у формі рішення створить із назви й тексту вище, без жодних змін, публічний issue в репозиторії Delegatus, який може прочитати будь-хто. Підказки цьому не перешкоджають.",
     "hintLines": 1,
     "dotted": null,
-    "replies": [
-      "Так, публікуй як публічний issue",
-      "Ні, не публікуй",
-      "Зміни текст…"
-    ],
+    "pills": 0,
     "resting": {
-      "placement": "inline",
-      "row": {
+      "pills": 0,
+      "pointer": {
         "left": 13,
         "right": 377,
-        "top": 666.96875,
-        "bottom": 710.96875
-      },
-      "approve": {
-        "left": 13,
-        "right": 234.09375,
-        "top": 666.96875,
-        "bottom": 710.96875
+        "top": 673.96875,
+        "bottom": 717.96875
       },
       "composer": {
         "left": 20,
@@ -1746,18 +1452,12 @@
       }
     },
     "top": {
-      "placement": "floating",
-      "row": {
-        "left": 9,
-        "right": 381,
-        "top": 624.25,
-        "bottom": 670.25
-      },
-      "approve": {
-        "left": 16,
-        "right": 237.09375,
-        "top": 625.25,
-        "bottom": 669.25
+      "pills": 0,
+      "pointer": {
+        "left": 13,
+        "right": 377,
+        "top": 2591.96875,
+        "bottom": 2635.96875
       },
       "composer": {
         "left": 20,
@@ -1786,71 +1486,55 @@
       "below": "Усе нижче цього рядка лишається в цьому чаті."
     },
     "order": [
-      4,
       5,
       6,
-      46,
+      7,
       47,
       48,
-      50,
-      56,
-      62
+      49,
+      51,
+      57,
+      63
     ],
-    "closing": "Схвальна відповідь створить із назви й тексту вище, без жодних змін, публічний issue в репозиторії Delegatus, який може прочитати будь-хто. Підказки цьому не перешкоджають.",
+    "closing": "Схвалення у формі рішення створить із назви й тексту вище, без жодних змін, публічний issue в репозиторії Delegatus, який може прочитати будь-хто. Підказки цьому не перешкоджають.",
     "hintLines": 1,
     "dotted": null,
-    "replies": [
-      "Так, публікуй як публічний issue",
-      "Ні, не публікуй",
-      "Зміни текст…"
-    ],
+    "pills": 0,
     "resting": {
-      "placement": "inline",
-      "row": {
-        "left": 337,
+      "pills": 0,
+      "pointer": {
+        "left": 373,
         "right": 991,
-        "top": 575.84375,
-        "bottom": 601.78125
-      },
-      "approve": {
-        "left": 337,
-        "right": 536,
-        "top": 575.84375,
-        "bottom": 601.78125
+        "top": 602.6875,
+        "bottom": 634.6875
       },
       "composer": {
         "left": 348,
-        "right": 876,
-        "top": 657,
-        "bottom": 683
+        "right": 838,
+        "top": 656,
+        "bottom": 684
       }
     },
     "top": {
-      "placement": "floating",
-      "row": {
-        "left": 452.203125,
-        "right": 875.78125,
-        "top": 514.0625,
-        "bottom": 554
-      },
-      "approve": {
-        "left": 459.203125,
-        "right": 658.203125,
-        "top": 521.0625,
-        "bottom": 547
+      "pills": 0,
+      "pointer": {
+        "left": 373,
+        "right": 991,
+        "top": 1795.6875,
+        "bottom": 1827.6875
       },
       "composer": {
         "left": 348,
-        "right": 876,
-        "top": 657,
-        "bottom": 683
+        "right": 838,
+        "top": 656,
+        "bottom": 684
       }
     },
     "geometry": {
       "left": 373,
       "right": 928.890625,
       "textLeft": 373,
-      "textRight": 916.046875
+      "textRight": 912.46875
     },
     "approval": null,
     "pageErrors": []
@@ -1876,27 +1560,17 @@
       57,
       63
     ],
-    "closing": "Схвальна відповідь створить із назви й тексту вище, без жодних змін, публічний issue в репозиторії Delegatus, який може прочитати будь-хто. Підказки цьому не перешкоджають.",
+    "closing": "Схвалення у формі рішення створить із назви й тексту вище, без жодних змін, публічний issue в репозиторії Delegatus, який може прочитати будь-хто. Підказки цьому не перешкоджають.",
     "hintLines": 1,
     "dotted": null,
-    "replies": [
-      "Так, публікуй як публічний issue",
-      "Ні, не публікуй",
-      "Зміни текст…"
-    ],
+    "pills": 0,
     "resting": {
-      "placement": "inline",
-      "row": {
+      "pills": 0,
+      "pointer": {
         "left": 13,
         "right": 377,
-        "top": 666.96875,
-        "bottom": 710.96875
-      },
-      "approve": {
-        "left": 13,
-        "right": 234.09375,
-        "top": 666.96875,
-        "bottom": 710.96875
+        "top": 673.96875,
+        "bottom": 717.96875
       },
       "composer": {
         "left": 20,
@@ -1906,18 +1580,12 @@
       }
     },
     "top": {
-      "placement": "floating",
-      "row": {
-        "left": 9,
-        "right": 381,
-        "top": 624.25,
-        "bottom": 670.25
-      },
-      "approve": {
-        "left": 16,
-        "right": 237.09375,
-        "top": 625.25,
-        "bottom": 669.25
+      "pills": 0,
+      "pointer": {
+        "left": 13,
+        "right": 377,
+        "top": 2591.96875,
+        "bottom": 2635.96875
       },
       "composer": {
         "left": 20,
@@ -1946,71 +1614,55 @@
       "below": "Everything below this line stays in this chat."
     },
     "order": [
-      4,
       5,
       6,
-      12,
+      7,
       13,
       14,
-      17,
-      19,
-      22
+      15,
+      18,
+      20,
+      23
     ],
-    "closing": "The approving reply files exactly the title and body above as a public issue in the Delegatus repository, readable by anyone. Hints do not prevent this.",
+    "closing": "Approving it in the decision form files exactly the title and body above as a public issue in the Delegatus repository, readable by anyone. Hints do not prevent this.",
     "hintLines": 0,
     "dotted": null,
-    "replies": [
-      "Yes, publish as a public issue",
-      "No, do not publish",
-      "Edit the text…"
-    ],
+    "pills": 0,
     "resting": {
-      "placement": "inline",
-      "row": {
-        "left": 337,
+      "pills": 0,
+      "pointer": {
+        "left": 373,
         "right": 991,
-        "top": 576.25,
-        "bottom": 602.1875
-      },
-      "approve": {
-        "left": 337,
-        "right": 514.28125,
-        "top": 576.25,
-        "bottom": 602.1875
+        "top": 603.25,
+        "bottom": 635.25
       },
       "composer": {
         "left": 348,
-        "right": 876,
-        "top": 657,
-        "bottom": 683
+        "right": 838,
+        "top": 656,
+        "bottom": 684
       }
     },
     "top": {
-      "placement": "floating",
-      "row": {
-        "left": 455.109375,
-        "right": 872.890625,
-        "top": 514.0625,
-        "bottom": 554
-      },
-      "approve": {
-        "left": 462.109375,
-        "right": 639.390625,
-        "top": 521.0625,
-        "bottom": 547
+      "pills": 0,
+      "pointer": {
+        "left": 373,
+        "right": 991,
+        "top": 625.25,
+        "bottom": 657.25
       },
       "composer": {
         "left": 348,
-        "right": 876,
-        "top": 657,
-        "bottom": 683
+        "right": 838,
+        "top": 656,
+        "bottom": 684
       }
     },
     "geometry": {
       "left": 373,
       "right": 928.890625,
       "textLeft": 373,
-      "textRight": 901.28125
+      "textRight": 909.21875
     },
     "approval": null,
     "pageErrors": []
@@ -2036,27 +1688,17 @@
       20,
       23
     ],
-    "closing": "The approving reply files exactly the title and body above as a public issue in the Delegatus repository, readable by anyone. Hints do not prevent this.",
+    "closing": "Approving it in the decision form files exactly the title and body above as a public issue in the Delegatus repository, readable by anyone. Hints do not prevent this.",
     "hintLines": 0,
     "dotted": null,
-    "replies": [
-      "Yes, publish as a public issue",
-      "No, do not publish",
-      "Edit the text…"
-    ],
+    "pills": 0,
     "resting": {
-      "placement": "inline",
-      "row": {
+      "pills": 0,
+      "pointer": {
         "left": 13,
         "right": 377,
-        "top": 657.5,
-        "bottom": 701.5
-      },
-      "approve": {
-        "left": 13,
-        "right": 210.40625,
-        "top": 657.5,
-        "bottom": 701.5
+        "top": 680.25,
+        "bottom": 724.25
       },
       "composer": {
         "left": 20,
@@ -2066,18 +1708,12 @@
       }
     },
     "top": {
-      "placement": "floating",
-      "row": {
-        "left": 9,
-        "right": 381,
-        "top": 624.25,
-        "bottom": 670.25
-      },
-      "approve": {
-        "left": 16,
-        "right": 213.40625,
-        "top": 625.25,
-        "bottom": 669.25
+      "pills": 0,
+      "pointer": {
+        "left": 13,
+        "right": 377,
+        "top": 872.25,
+        "bottom": 916.25
       },
       "composer": {
         "left": 20,
@@ -2106,71 +1742,55 @@
       "below": "Everything below this line stays in this chat."
     },
     "order": [
-      4,
       5,
       6,
-      12,
+      7,
       13,
       14,
-      17,
-      19,
-      22
+      15,
+      18,
+      20,
+      23
     ],
-    "closing": "The approving reply files exactly the title and body above as a public issue in the Delegatus repository, readable by anyone. Hints do not prevent this.",
+    "closing": "Approving it in the decision form files exactly the title and body above as a public issue in the Delegatus repository, readable by anyone. Hints do not prevent this.",
     "hintLines": 0,
     "dotted": null,
-    "replies": [
-      "Yes, publish as a public issue",
-      "No, do not publish",
-      "Edit the text…"
-    ],
+    "pills": 0,
     "resting": {
-      "placement": "inline",
-      "row": {
-        "left": 337,
+      "pills": 0,
+      "pointer": {
+        "left": 373,
         "right": 991,
-        "top": 576.25,
-        "bottom": 602.1875
-      },
-      "approve": {
-        "left": 337,
-        "right": 514.28125,
-        "top": 576.25,
-        "bottom": 602.1875
+        "top": 603.25,
+        "bottom": 635.25
       },
       "composer": {
         "left": 348,
-        "right": 876,
-        "top": 657,
-        "bottom": 683
+        "right": 838,
+        "top": 656,
+        "bottom": 684
       }
     },
     "top": {
-      "placement": "floating",
-      "row": {
-        "left": 455.109375,
-        "right": 872.890625,
-        "top": 514.0625,
-        "bottom": 554
-      },
-      "approve": {
-        "left": 462.109375,
-        "right": 639.390625,
-        "top": 521.0625,
-        "bottom": 547
+      "pills": 0,
+      "pointer": {
+        "left": 373,
+        "right": 991,
+        "top": 625.25,
+        "bottom": 657.25
       },
       "composer": {
         "left": 348,
-        "right": 876,
-        "top": 657,
-        "bottom": 683
+        "right": 838,
+        "top": 656,
+        "bottom": 684
       }
     },
     "geometry": {
       "left": 373,
       "right": 928.890625,
       "textLeft": 373,
-      "textRight": 901.28125
+      "textRight": 909.21875
     },
     "approval": null,
     "pageErrors": []
@@ -2196,27 +1816,17 @@
       20,
       23
     ],
-    "closing": "The approving reply files exactly the title and body above as a public issue in the Delegatus repository, readable by anyone. Hints do not prevent this.",
+    "closing": "Approving it in the decision form files exactly the title and body above as a public issue in the Delegatus repository, readable by anyone. Hints do not prevent this.",
     "hintLines": 0,
     "dotted": null,
-    "replies": [
-      "Yes, publish as a public issue",
-      "No, do not publish",
-      "Edit the text…"
-    ],
+    "pills": 0,
     "resting": {
-      "placement": "inline",
-      "row": {
+      "pills": 0,
+      "pointer": {
         "left": 13,
         "right": 377,
-        "top": 657.5,
-        "bottom": 701.5
-      },
-      "approve": {
-        "left": 13,
-        "right": 210.40625,
-        "top": 657.5,
-        "bottom": 701.5
+        "top": 680.25,
+        "bottom": 724.25
       },
       "composer": {
         "left": 20,
@@ -2226,18 +1836,12 @@
       }
     },
     "top": {
-      "placement": "floating",
-      "row": {
-        "left": 9,
-        "right": 381,
-        "top": 624.25,
-        "bottom": 670.25
-      },
-      "approve": {
-        "left": 16,
-        "right": 213.40625,
-        "top": 625.25,
-        "bottom": 669.25
+      "pills": 0,
+      "pointer": {
+        "left": 13,
+        "right": 377,
+        "top": 872.25,
+        "bottom": 916.25
       },
       "composer": {
         "left": 20,
@@ -2266,64 +1870,48 @@
       "below": "Усе нижче цього рядка лишається в цьому чаті."
     },
     "order": [
-      4,
       5,
       6,
-      12,
+      7,
       13,
       14,
-      17,
-      19,
-      22
+      15,
+      18,
+      20,
+      23
     ],
-    "closing": "Схвальна відповідь створить із назви й тексту вище, без жодних змін, публічний issue в репозиторії Delegatus, який може прочитати будь-хто. Підказки цьому не перешкоджають.",
+    "closing": "Схвалення у формі рішення створить із назви й тексту вище, без жодних змін, публічний issue в репозиторії Delegatus, який може прочитати будь-хто. Підказки цьому не перешкоджають.",
     "hintLines": 0,
     "dotted": null,
-    "replies": [
-      "Так, публікуй як публічний issue",
-      "Ні, не публікуй",
-      "Зміни текст…"
-    ],
+    "pills": 0,
     "resting": {
-      "placement": "inline",
-      "row": {
-        "left": 337,
+      "pills": 0,
+      "pointer": {
+        "left": 373,
         "right": 991,
-        "top": 576.25,
-        "bottom": 602.1875
-      },
-      "approve": {
-        "left": 337,
-        "right": 536,
-        "top": 576.25,
-        "bottom": 602.1875
+        "top": 603.09375,
+        "bottom": 635.09375
       },
       "composer": {
         "left": 348,
-        "right": 876,
-        "top": 657,
-        "bottom": 683
+        "right": 838,
+        "top": 656,
+        "bottom": 684
       }
     },
     "top": {
-      "placement": "floating",
-      "row": {
-        "left": 452.203125,
-        "right": 875.78125,
-        "top": 514.0625,
-        "bottom": 554
-      },
-      "approve": {
-        "left": 459.203125,
-        "right": 658.203125,
-        "top": 521.0625,
-        "bottom": 547
+      "pills": 0,
+      "pointer": {
+        "left": 373,
+        "right": 991,
+        "top": 644.09375,
+        "bottom": 676.09375
       },
       "composer": {
         "left": 348,
-        "right": 876,
-        "top": 657,
-        "bottom": 683
+        "right": 838,
+        "top": 656,
+        "bottom": 684
       }
     },
     "geometry": {
@@ -2356,27 +1944,17 @@
       20,
       23
     ],
-    "closing": "Схвальна відповідь створить із назви й тексту вище, без жодних змін, публічний issue в репозиторії Delegatus, який може прочитати будь-хто. Підказки цьому не перешкоджають.",
+    "closing": "Схвалення у формі рішення створить із назви й тексту вище, без жодних змін, публічний issue в репозиторії Delegatus, який може прочитати будь-хто. Підказки цьому не перешкоджають.",
     "hintLines": 0,
     "dotted": null,
-    "replies": [
-      "Так, публікуй як публічний issue",
-      "Ні, не публікуй",
-      "Зміни текст…"
-    ],
+    "pills": 0,
     "resting": {
-      "placement": "inline",
-      "row": {
+      "pills": 0,
+      "pointer": {
         "left": 13,
         "right": 377,
-        "top": 658.25,
-        "bottom": 702.25
-      },
-      "approve": {
-        "left": 13,
-        "right": 234.09375,
-        "top": 658.25,
-        "bottom": 702.25
+        "top": 680.25,
+        "bottom": 724.25
       },
       "composer": {
         "left": 20,
@@ -2386,18 +1964,12 @@
       }
     },
     "top": {
-      "placement": "floating",
-      "row": {
-        "left": 9,
-        "right": 381,
-        "top": 624.25,
-        "bottom": 670.25
-      },
-      "approve": {
-        "left": 16,
-        "right": 237.09375,
-        "top": 625.25,
-        "bottom": 669.25
+      "pills": 0,
+      "pointer": {
+        "left": 13,
+        "right": 377,
+        "top": 872.25,
+        "bottom": 916.25
       },
       "composer": {
         "left": 20,
@@ -2426,64 +1998,48 @@
       "below": "Усе нижче цього рядка лишається в цьому чаті."
     },
     "order": [
-      4,
       5,
       6,
-      12,
+      7,
       13,
       14,
-      17,
-      19,
-      22
+      15,
+      18,
+      20,
+      23
     ],
-    "closing": "Схвальна відповідь створить із назви й тексту вище, без жодних змін, публічний issue в репозиторії Delegatus, який може прочитати будь-хто. Підказки цьому не перешкоджають.",
+    "closing": "Схвалення у формі рішення створить із назви й тексту вище, без жодних змін, публічний issue в репозиторії Delegatus, який може прочитати будь-хто. Підказки цьому не перешкоджають.",
     "hintLines": 0,
     "dotted": null,
-    "replies": [
-      "Так, публікуй як публічний issue",
-      "Ні, не публікуй",
-      "Зміни текст…"
-    ],
+    "pills": 0,
     "resting": {
-      "placement": "inline",
-      "row": {
-        "left": 337,
+      "pills": 0,
+      "pointer": {
+        "left": 373,
         "right": 991,
-        "top": 576.25,
-        "bottom": 602.1875
-      },
-      "approve": {
-        "left": 337,
-        "right": 536,
-        "top": 576.25,
-        "bottom": 602.1875
+        "top": 603.09375,
+        "bottom": 635.09375
       },
       "composer": {
         "left": 348,
-        "right": 876,
-        "top": 657,
-        "bottom": 683
+        "right": 838,
+        "top": 656,
+        "bottom": 684
       }
     },
     "top": {
-      "placement": "floating",
-      "row": {
-        "left": 452.203125,
-        "right": 875.78125,
-        "top": 514.0625,
-        "bottom": 554
-      },
-      "approve": {
-        "left": 459.203125,
-        "right": 658.203125,
-        "top": 521.0625,
-        "bottom": 547
+      "pills": 0,
+      "pointer": {
+        "left": 373,
+        "right": 991,
+        "top": 644.09375,
+        "bottom": 676.09375
       },
       "composer": {
         "left": 348,
-        "right": 876,
-        "top": 657,
-        "bottom": 683
+        "right": 838,
+        "top": 656,
+        "bottom": 684
       }
     },
     "geometry": {
@@ -2516,27 +2072,17 @@
       20,
       23
     ],
-    "closing": "Схвальна відповідь створить із назви й тексту вище, без жодних змін, публічний issue в репозиторії Delegatus, який може прочитати будь-хто. Підказки цьому не перешкоджають.",
+    "closing": "Схвалення у формі рішення створить із назви й тексту вище, без жодних змін, публічний issue в репозиторії Delegatus, який може прочитати будь-хто. Підказки цьому не перешкоджають.",
     "hintLines": 0,
     "dotted": null,
-    "replies": [
-      "Так, публікуй як публічний issue",
-      "Ні, не публікуй",
-      "Зміни текст…"
-    ],
+    "pills": 0,
     "resting": {
-      "placement": "inline",
-      "row": {
+      "pills": 0,
+      "pointer": {
         "left": 13,
         "right": 377,
-        "top": 658.25,
-        "bottom": 702.25
-      },
-      "approve": {
-        "left": 13,
-        "right": 234.09375,
-        "top": 658.25,
-        "bottom": 702.25
+        "top": 680.25,
+        "bottom": 724.25
       },
       "composer": {
         "left": 20,
@@ -2546,18 +2092,12 @@
       }
     },
     "top": {
-      "placement": "floating",
-      "row": {
-        "left": 9,
-        "right": 381,
-        "top": 624.25,
-        "bottom": 670.25
-      },
-      "approve": {
-        "left": 16,
-        "right": 237.09375,
-        "top": 625.25,
-        "bottom": 669.25
+      "pills": 0,
+      "pointer": {
+        "left": 13,
+        "right": 377,
+        "top": 872.25,
+        "bottom": 916.25
       },
       "composer": {
         "left": 20,

@@ -21,7 +21,7 @@ const handle: ToolProperty = { type: "string", minLength: 1, maxLength: 128 };
 const messages = { roles: optionalSet(["user", "assistant"]), since: optionalText(40), cursor, limit };
 const boardQuery = { ...optionalText(120), description: "Text query or whole PR reference (2800, #2800, PR 2800, pull request 2800). PR references match stored associations and linked tasks. Finished work is included unless status or state filters exclude it." };
 export const READ_SCHEMAS: Record<string, Record<string, ToolProperty>> = {
-  list_projects: {},
+  list_projects: { all: { type: ["boolean", "null"] } },
   get_orchestrator: { project },
   list_tasks: { project, statuses: optionalSet(["inbox", "assigned", "blocked", "done"]), openOnly: { type: ["boolean", "null"] },
     query: boardQuery, ids: optionalSet(), cursor, limit },
@@ -33,7 +33,9 @@ export const READ_SCHEMAS: Record<string, Record<string, ToolProperty>> = {
     state: { type: ["string", "null"], enum: ["running", "waiting", "stalled", "limitWait", "throttled", "permission", null] }, cursor, limit },
   agent_activity: { project, liveOnly: { type: ["boolean", "null"] }, conversationId: optionalText(128), cursor, limit },
   conversation_messages: { project, conversationId: handle, ...messages },
-  orchestrator_messages: { project, ...messages },
+  orchestrator_messages: { project, message: optionalText(40), offset: { type: ["integer", "null"], minimum: 0, maximum: 1000000 },
+    at: optionalText(40), before: optionalText(40), limit: { ...limit, maximum: 12 } },
+  orchestrator_actions: { project, since: optionalText(40), before: optionalText(40), limit: { ...limit, maximum: 30 } },
   search_transcripts: { project, query: { type: "string", minLength: 1, maxLength: 200 }, order: { type: ["string", "null"], enum: ["relevance", "newest", null] }, cursor },
   read_prototype_review: { project, taskId: optionalText(128), reviewId: optionalText(128), query: optionalText(120) },
   view_prototype_frame: { project, taskId: optionalText(128), reviewId: optionalText(128), query: optionalText(120),

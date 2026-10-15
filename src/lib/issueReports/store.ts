@@ -35,8 +35,11 @@ export const ISSUE_REPORT_DIGEST = /^[0-9a-f]{64}$/;
 export interface IssueReportPublication {
   /** The seat that published. */
   by: string;
-  /** The operator's approving message, as the seat's transcript recorded it. */
+  /** The option the operator chose to approve it. A publication recorded
+      before approvals were decision forms holds their approving message. */
   approval: string;
+  /** The decision form that approved it; absent on those older records. */
+  reviewId?: string;
   approvedAt: string;
   startedAt: string;
   publishedAt?: string;
@@ -119,6 +122,7 @@ function publicationOf(digest: string, directory: string): IssueReportPublicatio
   const word = (key: string) => (typeof parsed[key] === "string" ? parsed[key] as string : "");
   return {
     by: word("by"), approval: word("approval"), approvedAt: word("approvedAt"), startedAt: word("startedAt"),
+    ...(word("reviewId") ? { reviewId: word("reviewId") } : {}),
     ...(word("publishedAt") ? { publishedAt: word("publishedAt") } : {}),
     ...(word("issueUrl") ? { issueUrl: word("issueUrl") } : {}),
   };

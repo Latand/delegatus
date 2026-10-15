@@ -23,7 +23,7 @@ const restores: Array<() => void> = [];
 const services: bot.TelegramBotService[] = [];
 afterEach(async () => {
   for (const restore of restores.splice(0)) restore();
-  for (const service of services.splice(0)) await service.remove();
+  for (const service of services.splice(0)) { await service.waitForReviewPolls(); await service.remove(); }
   for (const root of roots.splice(0)) await fs.rm(root, { recursive: true, force: true });
 });
 async function connected() {
@@ -33,7 +33,7 @@ async function connected() {
   let token: string | null = null;
   const service = new bot.TelegramBotService({ ...bot.productionTelegramBotDependencies(), openStore: () => store,
     removeStoreFiles: () => {}, transportFor: () => transport, saveToken: t => { token = t; }, removeToken: () => { token = null; },
-    withStoredToken: consume => token ? consume(token, "42") : null });
+    withStoredToken: consume => token ? consume(token, "42") : null, publishMessage: () => {} });
   services.push(service);
   transport.script("getMe", ok({ id: 42, is_bot: true, first_name: "Fixture" }));
   await service.connect(fakeBotToken()); await service.stopPoller();
@@ -88,7 +88,12 @@ test("stored media honors 50 slides, variant coverage, WebP, invalid dimensions 
   const image = { id: createHash("sha256").update(bytes).digest("hex"), mime: "image/webp" as const, bytes: bytes.length };
   await fs.writeFile(storedMediaPath(await fs.realpath(prototypeRoot()), round.id, image), bytes);
   for (const variant of round.variants) variant.frames = Array.from({ length: 25 }, (_, i) => ({ image, caption: `Frame ${i}` }));
-  const slides = await prototypeSlides(round);
+  const read = spyOn(fs, "readFile");
+  let slides;
+  try {
+    slides = await prototypeSlides(round);
+    expect(read).toHaveBeenCalledTimes(50);
+  } finally { read.mockRestore(); }
   expect(slides).toHaveLength(50);
   expect(slides.slice(0, 3).map(s => s.caption[0])).toEqual(["1", "2", "3"]);
   expect(slides[0]!.blob.type).toBe("image/webp");

@@ -269,11 +269,15 @@ test("indexed host and flow owners match custody predicates and follow old-write
     const encoded = peer.query<{ value_json: string }, []>("SELECT value_json FROM state_rows WHERE collection='pipelines' AND row_key='owner'").get()!.value_json;
     peer.query("UPDATE state_rows SET value_json=? WHERE collection='pipelines' AND row_key='owner'").run(encoded.replace('"n":1','"n":1.0'));
     expect(store.pipelineAttemptWindow("owner",0,16).map(ref => ref.n)).toEqual([1]);
+    const quotedKey = "peer-a.value-r.value-h.value-'quote";
+    store.boundedPatch(1, tx => tx.put({ ...store.get("owner")!, key: quotedKey }));
     for (const name of ["pipeline_refs_insert","pipeline_refs_update","pipeline_refs_delete"]) peer.exec(`DROP TRIGGER ${name}`);
     peer.exec("DROP TABLE pipeline_attempt_refs"); peer.exec("DROP TABLE pipeline_owner_refs");
     const reopened = new SqliteStateCollection(filename, options);
     expect(reopened.pipelineOwnerExists([["flow","flow"]],false)).toBe(true);
     expect(reopened.pipelineAttemptWindow("owner",-1,16)).toHaveLength(1);
+    expect(reopened.pipelineAttemptWindow(quotedKey,-1,16)).toHaveLength(1);
+    peer.query("DELETE FROM state_rows WHERE collection='pipelines' AND row_key=?").run(quotedKey);
     peer.exec("CREATE TABLE ref_write_probe(n INTEGER)");
     peer.exec("CREATE TRIGGER ref_write_probe AFTER INSERT ON pipeline_owner_refs BEGIN INSERT INTO ref_write_probe VALUES(1); END");
     peer.query("UPDATE state_rows SET value_json=json_set(value_json,'$.stateDetail','ordinary metadata') WHERE collection='pipelines' AND row_key='owner'").run();

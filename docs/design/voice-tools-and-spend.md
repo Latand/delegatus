@@ -174,8 +174,15 @@ on the server.
 | `get_pipeline` | `pipelineId`, `stageId` (nullable) | `getPipeline`; with `stageId` one stage's conclusion | title, state, each stage's role and latest verdict; with a stage, its verdict, up to five severity-bearing findings and the summary cut to 600 |
 | `agent_activity` | `liveOnly` (default true), `conversationId`, `cursor`, `limit` (1–10) | `agentActivity` with a dependency set whose `refreshLifecycleJournal` writes nothing | handle, title, lifecycle, turn state, coverage and continuation |
 | `conversation_messages` | `conversationId` (a handle from a read), `roles` (`user`, `assistant`), `since`, `cursor`, `limit` (1–10) | `conversationMessages {kinds:["message"], maxChars:320}`; refused unless the conversation's catalog project is the call's | speaker, time, excerpt ≤ 320 |
-| `orchestrator_messages` | `roles` (default `assistant`), `since`, `cursor`, `limit` (1–10) | `conversationMessages` on `orchestratorSeatFor(project).active.conversationId`, bound by the server | speaker, time, excerpt ≤ 320 |
+| `orchestrator_messages` | `message`, `offset`, `at`, `before`, `limit` (1–12, default 6) | Direct pinned seat transcript read, scan ≤ 2 MiB | whole assistant messages, stable handles, turn labels and continuation; text ≤ 12,000 bytes, JSON ≤ 16,000 bytes |
 | `search_transcripts` | `query` (1–200 chars), `order` (`relevance`, `newest`), `cursor` | `searchTranscripts {project, limit: 6}` | handle (the conversation id when the catalog knows it), title, time, fragment ≤ 200 |
+
+Update, 2026-10-15: the original orchestrator read accepted roles/since/cursor and
+returned 320-byte excerpts. [Voice orchestrator reads](voice-orchestrator-reads.md)
+replaces that contract with whole messages and stable handles, adds
+`orchestrator_actions` and `show_orchestrator_message`, and lists seated projects
+by human names and short handles. Conversation cursors continue toward older
+messages. The orchestrator reads use the separate budgets in that design.
 
 `list_conversations` is left out: titles are reachable through
 `search_transcripts` and live agents through `agent_activity`.
@@ -206,7 +213,7 @@ project's tasks by status, newest first.").
 Every string passes `short()` (`boardReads.ts:19-21`: secret redaction, local
 paths out, ids replaced by "[reference]" inside text) before it leaves the
 server. A row is at most about 300 bytes and a page at most 10 rows, so a whole
-answer stays under 4,000 bytes; the caller follows `nextCursor` with the same
+ordinary board answer stays under 4,000 bytes; the caller follows `nextCursor` with the same
 filters. What reaches the ear is still the backend's summary, at most three
 sentences (`BACKEND_INSTRUCTIONS`, `sessionConfig.ts:45`), cut by `speakable`
 to 500 bytes (`liveSession.ts:42-60`).

@@ -230,79 +230,83 @@ read runs beside a peer-held writer lock.
 
 ### Attempt preparation with fixed selected work
 
-The latest warmed scale probe keeps one paused lane and a sixteen-reference
-window. Each preparation sample invokes the production indexed window/current
-lookup. CPU uses the main thread's ten-millisecond accounting ticks over one
-thousand calls. The maximum call time bounds its synchronous work from above.
+The integrated scale probe keeps one paused lane and a sixteen-reference
+window. Each sample invokes the production indexed window/current lookup.
+CPU uses the main thread's ten-millisecond accounting ticks over one thousand
+calls. The maximum call time bounds its synchronous work from above.
 
 | Measurement | 32 retained attempts | 4,096 retained attempts |
 | --- | ---: | ---: |
 | References returned per preparation | 16 | 16 |
 | Selected-key serializations across one phase | 80 | 80 |
 | Preparation calls | 1,000 | 1,000 |
-| Total preparation wall time | 37.84 ms | 32.12 ms |
-| Total preparation main-thread CPU | 40 ms | 30 ms |
-| Maximum preparation call wall time | 1.86 ms | 0.24 ms |
-| Whole warmed phase wall time | 25.80 ms | 87.55 ms |
+| Total preparation wall time (ms) | 116.81 | 48.08 |
+| Total preparation main-thread CPU (ms) | 110 | 50 |
+| Maximum preparation call wall time (ms) | 7.24 | 0.23 |
+| Whole warmed phase wall time (ms) | 50.84 | 120.93 |
 
 Whole-phase timings include existing full-lane copying. The indexed preparation
 and reconciliation selections keep their work fixed as that history grows.
 Ordinary metadata updates leave the reference projections untouched; changes to
-ownership or attempt fields rebuild their references atomically.
+ownership or attempt fields rebuild their references atomically. Backfill treats
+stored row keys as SQL data, including keys containing alias text and quotes.
 
+### Paired replay after integration
 
-### Paired replay after the fixes
-
-Three alternating pairs reused the unchanged E4/E5 checksums, the same guarded
-driver, fixed engine time, conservative responses and a ten-second Git wait.
-Each source export and trial had isolated roots. All 941 authoritative
-hot/archive payloads match in every pair. Every trial records zero refused
-actuation and zero replay errors. Candidate phases stayed within the two-second
-cold and 250-millisecond warm fixture budgets. Its largest warm labelled slice
-was 6.23 ms and largest warm timer delay was 57.75 ms.
+Three fresh alternating pairs reused the unchanged E4/E5 checksums, the same
+guarded driver, fixed engine time, conservative responses and a ten-second Git
+wait. The candidate includes the merged main source and the backfill repair.
+Every source export and trial used isolated roots. All 941 authoritative
+hot/archive payloads match in every pair, with zero refused actuation and zero
+replay errors. Cold initialization and two subsequent sweeps are separate.
 
 | Measurement | Baseline | Fixed candidate |
 | --- | ---: | ---: |
-| Largest cold phase, median (ms) | 11,652 | 1,417 |
-| Largest warm phase, median (ms) | 288.0 | 80.7 |
-| Largest cold phase across trials (ms) | 12,207 | 1,896 |
-| Largest warm phase across trials (ms) | 360.7 | 93.1 |
-| Largest cold per-phase main-thread CPU, median (ms) | 2,340 | 1,380 |
-| Largest warm per-phase main-thread CPU, median (ms) | 275 | 80 |
-| Complete cold sweep including job settlement, median (ms) | 11,676 | 12,645 |
-| Complete warm sweep including job settlement, median (ms) | 308 | 419 |
-| Complete cold sweep main-thread CPU, median (ms) | 2,350 | 3,290 |
-| Complete warm sweep main-thread CPU, median (ms) | 275 | 390 |
-| Cold pipeline decoded rows, median | 614 | 553 |
+| Cold largest phase, median (ms) | 11,621.9 | 1,234.6 |
+| Cold largest phase across trials (ms) | 11,697.3 | 1,261.8 |
+| Cold largest per-phase main-thread CPU, median (ms) | 2,360 | 1,220 |
+| Cold complete sweep including job settlement, median (ms) | 11,646 | 12,208 |
+| Cold complete sweep main-thread CPU, median (ms) | 2,360 | 3,030 |
+| Cold pipeline decoded rows, median | 614.0 | 553.0 |
 | Cold pipeline decoded source bytes, median | 75,757,641 | 71,231,598 |
-| Cold pipeline cloned rows, median | 859 | 298 |
+| Cold pipeline cloned rows, median | 859.0 | 298.0 |
 | Cold pipeline cloned source bytes, median | 110,803,535 | 35,182,513 |
-| Cold pipeline logical read bytes, median | 749,671,688 | 1,045,528,937 |
+| Cold pipeline logical read bytes, median | 749,671,644 | 1,045,528,646 |
+| Cold largest labelled synchronous slice, median (ms) | 431.63 | 657.52 |
+| Cold largest labelled slice across trials (ms) | 431.85 | 673.65 |
+| Cold largest timer delay across trials (ms) | 638.75 | 682.58 |
+| Cold largest observed lease hold across trials (ms) | 619.94 | 430.19 |
+| Warm largest phase, median (ms) | 201.8 | 131.3 |
+| Warm largest phase across trials (ms) | 242.9 | 238.2 |
+| Warm largest per-phase main-thread CPU, median (ms) | 200 | 85 |
+| Warm complete sweep including job settlement, median (ms) | 222 | 563 |
+| Warm complete sweep main-thread CPU, median (ms) | 200 | 480 |
 | Warm pipeline decoded rows, median | 94.5 | 55.5 |
 | Warm pipeline decoded source bytes, median | 11,298,036 | 7,460,856 |
-| Warm pipeline cloned rows, median | 373 | 91 |
+| Warm pipeline cloned rows, median | 373.0 | 91.0 |
 | Warm pipeline cloned source bytes, median | 49,692,470 | 11,390,425 |
-| Warm pipeline logical read bytes, median | 15,889,533 | 38,896,858 |
+| Warm pipeline logical read bytes, median | 15,889,556 | 38,896,998 |
+| Warm largest labelled synchronous slice, median (ms) | 1.72 | 6.45 |
+| Warm largest labelled slice across trials (ms) | 2.26 | 28.58 |
+| Warm largest timer delay across trials (ms) | 11.09 | 123.24 |
+| Warm largest observed lease hold across trials (ms) | 4.24 | 29.54 |
 | Whole-hot returned rows per sweep | 267 | 0 |
-| Cold largest labelled synchronous slice, median (ms) | 423.69 | 726.91 |
-| Warm largest labelled synchronous slice across trials (ms) | 3.42 | 6.23 |
-| Warm maximum timer delay across trials (ms) | 19.72 | 57.75 |
-| Cold largest observed lease hold across trials (ms) | 724.00 | 458.10 |
-| Warm largest observed lease hold across trials (ms) | 6.35 | 11.37 |
 
 Complete sweeps use more main-thread CPU, logical reads and wall time. Cold
 projection initialization remains visible. The phase and materialization
-measurements establish the improvement within this slice's scope. The raw
-samples, measured source hashes, preparation probe and check coverage are in
+measurements establish the improvement within this slice's scope. Raw samples,
+measured source hashes, preparation probes and check coverage are in
 [pipelines-controller-review-fixes.json](../../evidence/perf/pipelines-controller-review-fixes.json).
 
-The final two affected test files passed in 38.4 seconds. The publication suite
-passed all 432 cases in two disjoint filters (206 and 226 cases), with a
-15-second per-test timeout and the existing five-minute execution guard on each
-run. Its unfiltered invocation exceeded the file guard, and earlier default
-five-second successor cases timed out. The 23-file comparison also recorded
-19 baseline-reproduced assertions and one flaky assertion. The Linux backend and seventeen explicit platform
-files passed, as did TypeScript and changed-file lint. All commands used private
-HOME/config/temp/state roots and a closed-port control URL. No runtime-host
-product source changed. The local privacy gate passed over the PR range and
-every changed path.
+The fresh integrated checks passed 37 cases across the two affected files.
+The twenty-file comparison against the merged main commit found zero new
+failures and reproduced nineteen existing assertions. All 432 publication
+cases passed in two disjoint filters (206 and 226), with a fifteen-second
+per-test timeout and a five-minute execution guard for each group. Earlier
+unfiltered runs exceeded that file guard. The Linux backend and seventeen
+explicit platform files, TypeScript with incremental output disabled,
+changed-file lint and the local privacy gate passed. Checks used isolated
+HOME/config/temp/state roots and a closed-port control URL. The documented
+publication override avoids repeating the known concurrent-runner timeout
+after these isolated checks. Deployment and production verification belong
+to the authorized deployment stage.

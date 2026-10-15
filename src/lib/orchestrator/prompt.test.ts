@@ -7,8 +7,10 @@ import { expect, test } from "bun:test";
 
 import { FOCUS_TARGET_KINDS } from "@/lib/attention/targets";
 import { BRIDGE_REPORT_CLASSES } from "@/lib/bridge/types";
-import { ROLE_DEFAULTS } from "@/lib/roles/defaults";
+import { PROCESS_CLEANUP_MARKER, ROLE_DEFAULTS, WORKING_RULES, WORKING_RULES_SHORT } from "@/lib/roles/defaults";
+import { launchOverheadBytes } from "./handoffDigest";
 import { loadRoleDefinitionsOrDefaults, loadRoleRegistrySnapshot, saveRoleMapping } from "@/lib/roles/store";
+import { resolveSpawnRole, roleSpawnPrompt } from "@/lib/roles/registry";
 import type { RegistryRoleDefinitions, RoleDefinition } from "@/lib/roles/types";
 import { MAX_STRUCTURED_TEXT_BYTES } from "@/lib/runtime/structuredContent";
 import { renderTaskColorRule, TASK_COLOR_RULE } from "@/lib/tasks/colorRule";
@@ -80,8 +82,8 @@ test("no prohibition on addressing the operator survives anywhere in the mandate
 
 /* Seats record the mandate version they were spawned on; `get_orchestrator` reports
    this constant as defaultPromptVersion, so an older seat reads as stale without a diff. */
-test("the default mandate is at version 54, and a v53 seat reads as stale", () => {
-  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(54);
+test("the default mandate is at version 56, and a v55 seat reads as stale", () => {
+  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(56);
   /* #1720, and again #1760 — a seat already running keeps the mandate it was
      delivered, so the version bump is the only thing that surfaces a changed
      section until its next spawn, adoption or rotation. #1749 is the change
@@ -121,7 +123,11 @@ test("the default mandate is at version 54, and a v53 seat reads as stale", () =
      retains the reviewed branch's refreshing fence alongside those rules. v52
      combines them with automatic release control and incident holds. v53
      adds the machine-wide worker limit while retaining those rules. v54 puts
-     waiting and repeated unanswered asks into forms. */
+     waiting and repeated unanswered asks into forms. v55 (the operator's
+     variant 4 of docs/design/role-prompts-rewrite.md) leaves the universal
+     rules to the role prompt's working rules and holds tasks instead of
+     marking them blocked. v56 (the operator, 2026-10-15) retires reply drafts:
+     every ask, the bug report's two included, goes through a decision form. */
   expect(orchestratorMandateStale(30)).toBe(true);
   expect(orchestratorMandateStale(31)).toBe(true);
   expect(orchestratorMandateStale(32)).toBe(true);
@@ -146,7 +152,9 @@ test("the default mandate is at version 54, and a v53 seat reads as stale", () =
   expect(orchestratorMandateStale(51)).toBe(true);
   expect(orchestratorMandateStale(52)).toBe(true);
   expect(orchestratorMandateStale(53)).toBe(true);
-  expect(orchestratorMandateStale(54)).toBe(false);
+  expect(orchestratorMandateStale(54)).toBe(true);
+  expect(orchestratorMandateStale(55)).toBe(true);
+  expect(orchestratorMandateStale(56)).toBe(false);
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("gives the shape, the outcome rule and what");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain(ORCHESTRATOR_BOARD_REPORT_DIRECTIVE);
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("File what a wake lists, under its keys");
@@ -160,7 +168,7 @@ test("the default mandate is at version 54, and a v53 seat reads as stale", () =
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("registered under the key `viewer`");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).not.toContain("the viewer's built-in Manager");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).not.toContain("act on the items it lists and nothing else");
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("AGENT CONTEXT GOES IN details");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("The text is for the human and agent context goes in details, as create_task's description says");
 });
 
 /**
@@ -219,6 +227,10 @@ const PROMPT_FINGERPRINTS: Readonly<Record<number, string>> = {
   53: "28e34e893a3677250f71ccad3a56a58f0c5188a34e9eb6f9812910b465e1f5d6",
   // v54 keeps waiting and repeated unanswered asks in forms.
   54: "d0a97d9a92192e47a48cc4d4e59b60476717ae1ecc78fd252ffd8de2e1bf304e",
+  // v55 is variant 4 of docs/design/role-prompts-rewrite.md.
+  55: "61412fba0b5617e722a1761a69e3550976315a4615bdda0b5ff841bcdaaac4b4",
+  // v56 retires reply drafts: every ask goes through a decision form.
+  56: "b3d3166f2c01b81db853ccd15e4182c0c88ed9b46be86e52a2ab613b5f32950a",
 };
 
 /* #2187 §4.7, decided D1 = A: the setting governs every automatic merge. Off,
@@ -236,7 +248,7 @@ test("the merge bar follows the project's merge setting, and the mandate says wh
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("Batch 2+ ready, authorized PRs (N@reviewedHead): merger run stage or spawn_agent");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("needs-review → independent git show --remerge-diff review, then next batch");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("culprit → lane finding");
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("Set finishesTask: true on create_pipeline (or pipeline_action link-task with finishes: true) when this lane's PR delivers the whole task.");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("Finishing a task: set finishesTask: true on create_pipeline (or pipeline_action link-task with finishes: true) when this lane's PR delivers the whole task.");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("For a task split into slices, mark only the lane of the last slice, or mark none and move the task yourself.");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("it waits for every other started lane on the task to end");
 });
@@ -246,7 +258,7 @@ test("the merge bar follows the project's merge setting, and the mandate says wh
    operator turns releases on for that project. */
 test("the mandate opens without issue numbers, greets in plain words and runs releases only when turned on", () => {
   const opening = ORCHESTRATOR_SYSTEM_PROMPT.split("\n")[0]!;
-  expect(opening).toBe("You are this project's orchestrator in Delegatus — the agent that owns its board and runs its work through Delegatus's MCP tools (registered under the key `viewer`). You never act outside them.");
+  expect(opening).toBe("You are this project's orchestrator in Delegatus — the agent that owns its board and runs its work through Delegatus's MCP tools (registered under the key `viewer`). You never act outside them: no direct process or runtime manipulation. The working rules below apply to you as to every agent; the rest of this mandate adds what a seat does.");
   expect(opening).not.toMatch(/#\d/);
   expect(ORCHESTRATOR_INITIAL_STATUS_DIRECTIVE).toContain(`Ready in {project}.\n${CURRENT_GREETING_OFFER}`);
   expect(ORCHESTRATOR_INITIAL_STATUS_DIRECTIVE).not.toContain("lanes");
@@ -305,7 +317,8 @@ const CLAUSE_IN_MANDATE: readonly [string, string][] = [
   /* v30 dropped list_flows: the seat composes no review flows. */
   [SHIPPED_TICK_CONTRACT[0]!, "then make ONE bounded pass over this project's whole board and act on what stands still: list_pipelines for lanes completed, parked or failed to spawn, the open pull requests their finished lanes left, agent_activity with liveOnly for live and stalled agents, and open tasks with nothing running."],
   [SHIPPED_TICK_CONTRACT[1]!, "Record every outcome on the board card or the pipeline, not only in this conversation."],
-  [SHIPPED_TICK_CONTRACT[2]!, "mark its task blocked with the reason: that is the stop, and the only one."],
+  /* v55 holds the task where it used to mark it blocked. */
+  [SHIPPED_TICK_CONTRACT[2]!, "set its task's hold with the reason: that is the stop, and the only one."],
   [SHIPPED_TICK_CONTRACT[3]!, "So do not schedule yourself"],
   [SHIPPED_TICK_CONTRACT[4]!, "seat_tick_settings turns the tick off or on, or changes how often it wakes you, per project, with a reason shown on the board."],
   [SHIPPED_TICK_CONTRACT[5]!, "Never wait on the operator inside a wake's turn."],
@@ -404,14 +417,14 @@ test("no transport named tmux survives in the mandate", () => {
   expect(ORCHESTRATOR_SYSTEM_PROMPT.toLowerCase()).not.toContain("tmux");
 });
 
-/* #1245 v11 — the Viewer owns the clock. Named tool by tool: "do not
-   self-schedule" alone left CronCreate looking like a different thing from
-   ScheduleWakeup, and CronCreate is what the measured seat actually used.
-   CronDelete is how a seat already holding one drops it. */
-test("the clock section names every scheduling tool a seat could reach for", () => {
-  for (const tool of ["ScheduleWakeup", "CronCreate", "Monitor", "CronDelete"]) {
-    expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain(tool);
-  }
+/* #1245 v11 — Delegatus owns the clock. "Do not self-schedule" alone left a
+   cron job looking like a different thing from a wakeup, so the section names
+   each kind of schedule; v55 names them by kind, since the tools differ per
+   engine, and says how a seat already holding one drops it. */
+test("the clock section names every kind of schedule a seat could reach for, by no engine's tool name", () => {
+  expect(ORCHESTRATOR_VIEWER_CLOCK_DIRECTIVE).toContain("arm no wakeup, cron job or monitor loop your engine offers, for self-monitoring or for polling the board");
+  expect(ORCHESTRATOR_VIEWER_CLOCK_DIRECTIVE).toContain("If you hold one now, delete every recurring job you created in this turn and arm no replacement");
+  for (const tool of ["ScheduleWakeup", "CronCreate", "CronDelete", "CronList"]) expect(ORCHESTRATOR_SYSTEM_PROMPT).not.toContain(tool);
 });
 
 test("the playbook reference is no longer pinned to this checkout", () => {
@@ -484,11 +497,11 @@ test("the current default already contains the clock directive", () => {
    The tool schema now owns their shapes; the mandate names every supported
    kind and directs the seat back to that schema. */
 test("the mandate names every attention target and uses the tool schema for shapes", () => {
-  const namedKinds = ORCHESTRATOR_SYSTEM_PROMPT.match(/Targets are typed by kind \(([^)]+)\)/)?.[1]?.split(", ");
-  /* v30: a review-flow round is no target a seat creates any more; the tool
-     keeps the kind until the flow removal takes it. */
-  expect(namedKinds?.sort()).toEqual(FOCUS_TARGET_KINDS.filter((kind) => kind !== "flowRound").sort());
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("the tool schema gives each shape");
+  /* v55 leaves the list of kinds to the schema too, so it cannot drift from
+     FOCUS_TARGET_KINDS; the kinds the seat is told to focus are still named. */
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("The tool schema gives each target kind's shape.");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).not.toMatch(/Targets are typed by kind/);
+  for (const kind of ["conversation", "stage", "pipeline", "task"]) expect(FOCUS_TARGET_KINDS).toContain(kind as never);
   expect(ORCHESTRATOR_SYSTEM_PROMPT).not.toContain("The shapes, verbatim:");
   /* The sentinel the tool answers with when there is nothing to move. */
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("NO_ACTIVE_VIEW");
@@ -557,15 +570,14 @@ test("no retired task-binding claim survives in the ownership directive", () => 
 
 /* The task-creation section carries the colour and icon rule as the rule
    module renders it, so the mandate cannot teach a rule create_task does not. */
-test("the task-creation section tells the manager to pass icon and color by the one rule", () => {
-  const section = ORCHESTRATOR_TASK_OWNERSHIP_DIRECTIVE.slice(ORCHESTRATOR_TASK_OWNERSHIP_DIRECTIVE.indexOf("NAME AND DESCRIBE IT AT CREATION."));
-  expect(section).toContain("Pass icon and color on every create_task");
-  expect(section).toContain("when a task you touch has no colour, give it one with update_task");
-  expect(section).toContain(renderTaskColorRule());
-  for (const { color, icons } of TASK_COLOR_RULE) {
-    expect(section).toContain(`${color} = `);
-    for (const icon of icons) expect(section).toContain(icon);
-  }
+test("the task-creation section tells the manager to pass icon and color by the one rule create_task carries", () => {
+  const section = ORCHESTRATOR_TASK_OWNERSHIP_DIRECTIVE.slice(ORCHESTRATOR_TASK_OWNERSHIP_DIRECTIVE.indexOf("NAME, DESCRIBE AND COLOUR IT AT CREATION."));
+  expect(section).toContain("Pass icon and color on every create_task by the colour rule in its description, and give a task you touch that has no colour one by the same rule.");
+  /* v55: the rule lives once, in create_task's description, so the mandate
+     cannot teach a rule create_task does not. */
+  expect(section).not.toContain(renderTaskColorRule());
+  for (const { color } of TASK_COLOR_RULE) expect(section).not.toContain(`${color} = `);
+  expect(fs.readFileSync(path.join(import.meta.dir, "../mcp/server.ts"), "utf8")).toContain("renderTaskColorRule(),");
 });
 
 /* Delivery, on exactly the terms the clock handover established: the seats that
@@ -632,13 +644,14 @@ test("the delivered default carries each directive exactly once, and delivery ad
 /* #2518: both rules, in the default and in whatever mandate a seat holds. */
 test("the mandate asks before a bug report is filed, publishes only an approved preview, and sends another project's work to its seat", () => {
   const section = ORCHESTRATOR_REPORTS_AND_PROJECTS_DIRECTIVE;
-  /* Rule 1: the question comes first, with replies the operator can tap. */
-  expect(section).toContain("When a Delegatus tool misbehaves (an error, tools that contradict each other, a launch refused for a reason that looks wrong), ask the operator, with suggest_replies, whether you may file an issue.");
-  /* The reporter writes, the seat shows the stored text, and nothing but an
-     explicit yes to that text in this conversation publishes it. */
+  /* Rule 1: the question comes first, in a decision form. */
+  expect(section).toContain("When a Delegatus tool misbehaves (an error, tools that contradict each other, a launch refused for a reason that looks wrong), ask the operator in a decision form (publish_prototype_review, no taskId) whether you may file an issue.");
+  /* The reporter writes, the seat shows the stored text, and nothing but the
+     operator's approving option in that text's own form publishes it. */
   expect(section).toContain("spawn_agent role issue-reporter");
-  expect(section).toContain("read its preview back (issue_report show), put that exact title and body in chat and offer its approval reply with suggest_replies");
-  expect(section).toContain("Publish (issue_report publish, the digest) only after the operator sends that reply in this conversation");
+  expect(section).toContain("read its preview back (issue_report show), put that exact title and body in chat and ask in a form whether to publish it, passing the approvalForm show answers unchanged.");
+  expect(section).toContain("Publish (issue_report publish, the digest) only after the operator chooses its approving option");
+  expect(section).not.toContain("suggest_replies");
   expect(section).toContain("A no or an edit returns to the reporter and needs a new yes.");
   expect(section).toContain("Never file one another way.");
   /* Rule 2: seat to seat by default, and what lifts it. */
@@ -830,7 +843,11 @@ test("the role table keeps the delivered default inside the structured envelope"
      and the pointer to the rule for a report's `outcome` 18 more.
      The scaffold is 750 bytes, and
      handoffDigest.test.ts still finds a full history section beside it. */
-  expect(Buffer.byteLength(delivered)).toBeLessThan(MAX_STRUCTURED_TEXT_BYTES - 2_600);
+  /* v55 carries the working rules in their short form (WORKING_RULES_SHORT)
+     and the seat's scaffold gave 534 bytes back (750 → 216): scaffold and
+     delivered default together leave a rotation's history the room v54 left. */
+  expect(Buffer.byteLength(delivered)).toBeLessThan(MAX_STRUCTURED_TEXT_BYTES - 2_150);
+  expect(Buffer.byteLength(delivered) + launchOverheadBytes("spawn", { mode: "standard" })).toBeLessThan(MAX_STRUCTURED_TEXT_BYTES - 1_950);
 });
 
 /* docs/design/model-sizing-tiers.md §4: the seat sizes every lane, reads each
@@ -854,13 +871,13 @@ test("the role table tells the seat to size lanes, lists every variant and names
   expect(table).toContain("normal: rows, effort low or medium");
   expect(table).toContain("design (options, architecture, proposals, design issues): architect first");
   /* The Sonnet 5.5 / Opus 5.5 table (docs/design/model-sizing-tiers.md §7). */
-  expect(table).toContain("- Sonnet 5.5 for well-scoped build, fix, docs, verification, repeated work. Opus 5.5 for design, orchestration, judgment-heavy or long-horizon lanes (engine redesigns, deploy/runtime host, accounts/migration, security, cross-cutting refactors), hardest problems. Review backend on Codex, frontend on Opus.");
+  expect(table).toContain("- Sonnet 5.5 for well-scoped build, fix, docs, verification, repeated work. Opus 5.5 for design, orchestration, judgment-heavy or long-horizon lanes (engine redesigns, deploys and the project's critical runtime, accounts/migration, security, cross-cutting refactors), hardest problems. Review backend on Codex, frontend on Opus.");
   expect(table).toContain("- size=trivial and a hand-set Sonnet builder need a brief from a large model (Opus, Fable, large Codex). Sonnet never orchestrates, architects or reviews above size=trivial.");
-  expect(table).toContain("- UI lane: Opus read-only brief stage (files, states, 390px and desktop, what not to touch), builder domain=frontend, Opus review-loop, then a visual-critic stage last.");
-  /* §3 (a): the fix stage's params select its row. */
-  expect(table).toContain("- Fix stages (apply-fixes): fix findings/discoveries in spec; add checks.");
-  expect(table).toContain("Never self-grade; fix discoveries and note out-of-spec");
-  expect(table).toContain("Fail only with blocked:true and blockedReason");
+  expect(table).toContain("- UI lane: Opus read-only brief stage (files, states, 390px and desktop, what not to touch), builder domain=frontend, an Opus reviewer stage with its fix stage, then a visual-critic stage last.");
+  /* The fix stage's rules are its scaffold's and the stage wrapper's; the
+     table no longer repeats them (role-prompts-rewrite.md §2.4). */
+  expect(table).not.toContain("- Fix stages (apply-fixes):");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("A fix stage's self-fail without blocked:true and with a new head proceeds to review as reviewer notes; a fail with no new head parks.");
   /* Fixers repair discoveries within the spec; reviewers grade the result. */
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("proceeds to review as reviewer notes");
   expect(table).toContain("README, docs, public text: builder domain=docs.");
@@ -926,9 +943,10 @@ test("the seat's personality is proactive inside accepted work, and every line a
 /* A v29 seat's stored clock section is replaced by exact match, so its board
    pass stops listing review flows; a reworded section stays its author's. */
 test("delivery replaces the clock section a v29 mandate carries", () => {
-  const v29Section = shippedClockSection(ORCHESTRATOR_VIEWER_CLOCK_DIRECTIVE.split("\n").slice(4).join("\n")
+  const v29Section = shippedClockSection(ORCHESTRATOR_VIEWER_CLOCK_DIRECTIVE.split("\n").slice(3).join("\n")
     .replace(" Your drive to keep going works inside a turn: take every owed step before it ends.", "")
-    .replace("their finished lanes left, agent_activity", "their finished lanes left, list_flows, agent_activity"));
+    .replace("their finished lanes left, agent_activity", "their finished lanes left, list_flows, agent_activity")
+    .replace("set its task's hold with the reason", "mark its task blocked with the reason"));
   expect(v29Section).toContain("list_flows");
   const delivered = orchestratorMandateForDelivery(`Run the widgets project.\n\n${v29Section}`);
   expect(delivered).not.toContain("list_flows");
@@ -962,7 +980,7 @@ test("the delivered mandate names no Viewer, and the v29 clock heading still mar
 });
 
 test("the mandate chooses an explicit review budget from consequences and probability", () => {
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("Choose review rounds from risk = consequences × probability: low risk 1; normal risk 2; high risk (data loss, security, production, runtime host, migrations) 3. The default is 3. More than 3 only when the operator asks; state the reason in the brief.");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("Choose review rounds from risk = consequences × probability: low risk 1; normal risk 2; high risk (data loss, security, production, the project's critical runtime, migrations) 3. The default is 3. More than 3 only when the operator asks; state the reason in the brief.");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).not.toContain("unlimited");
 });
 
@@ -979,21 +997,25 @@ test("agent-facing review skills agree with the mandate's risk budget", () => {
 });
 
 test("the versioned mandate asks for a current status note in the operator's language", () => {
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("update_task note");
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("waiting on whom/what");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("Keep each task current: an update_task note whenever the situation changes (why it is parked, what or whom it waits for, what runs now), brief and in plain operator language.");
 });
 
 
 test("the mandate asks every decision as a form", () => {
   for (const mandate of [ORCHESTRATOR_SYSTEM_PROMPT, orchestratorMandateForDelivery("Coordinate the project.")]) {
     expect(mandate).toContain(ORCHESTRATOR_PROTOTYPE_DIRECTIVE);
-    expect(mandate.split("Prototype review:")).toHaveLength(2);
+    expect(mandate.split("Every operator decision is a form")).toHaveLength(2);
   }
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("Decisions go to the form; drafts are for replies that are not a choice.");
-  /* A plan's yes and a parked stage's question are decisions; the pills and
-     the reports never ask them a second time (decisions 3 and 5). */
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("A plan you want a yes to, and a stage's question you cannot settle, are decisions.");
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("When a stage parks on such a question, ask the operator at once in a form.");
+  /* The operator, 2026-10-15: reply drafts are gone, and every ask, a plain
+     question too, is a form that chat and reports only point to. */
+  for (const retired of ["suggest_replies", "Reply drafts", "reply draft"]) expect(ORCHESTRATOR_SYSTEM_PROMPT).not.toContain(retired);
+  expect(ORCHESTRATOR_PROTOTYPE_DIRECTIVE).toContain("Any other question for the operator is a form too.");
+  expect(ORCHESTRATOR_PROTOTYPE_DIRECTIVE).toContain("Chat and reports only point to the form and ask nothing themselves.");
+  expect(ORCHESTRATOR_PROTOTYPE_DIRECTIVE).not.toContain("chat may hold only a one-off ask");
+  /* A plan's yes and a parked stage's question are decisions; the reports
+     never ask them a second time (decisions 3 and 5). */
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("A plan you want a yes to, and a stage's question you cannot settle, are decisions; when a stage parks on such a question, publish its form at once.");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("Every question in a form admits a free-text answer.");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("A report only points to a decision's form; an ask a click cannot settle (an action outside Delegatus) is a question or blocked report.");
   for (const contradiction of ["proposes a plan you want a yes to", "with suggested replies", "Every ask to the operator is also a question or blocked report", "the plain yes"]) {
     expect(ORCHESTRATOR_SYSTEM_PROMPT).not.toContain(contradiction);
@@ -1036,4 +1058,113 @@ test("the board walk clears only rows that ask nothing and replaces the shipped 
 
 test("the role table names the gated prototype lane", () => {
   expect(orchestratorRoleTable(ROLE_DEFAULTS)).toContain("Prototype lane: prototype → critic → proto-fix (2 rounds) → publish");
+});
+
+/* The operator, 2026-10-15 (variant 4 of docs/design/role-prompts-rewrite.md):
+   the seat's "Who you are" stays word for word as v54 shipped it, and the
+   lessons seats learned about the literal request follow it as its own section. */
+test("the seat's Who you are section is kept word for word and the literal-request rules follow it", () => {
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain(`## Who you are
+Warm and friendly, a good friend on this project who likes to tease a little; keep it light, and drop it when something broke or the operator is under pressure. Mirror how the operator talks: language, register, brevity, and their casual words when they use them. You are hard-working and want to keep going: keep work moving and take the next owed step unasked. Proactive covers accepted work (what the operator asked for, the tasks on this board, every step they need) and proposing next work. Its boundary: never start work nobody asked for, or change what the operator owns (settings, branches, checkouts, accounts, their own agents) without asking.
+
+## Doing what was asked
+Do exactly what the operator asked, where they asked it; anything beyond the literal request is a proposal offered in chat and acted on only after their yes.`);
+  const v54 = fs.readFileSync(path.join(import.meta.dir, "fixtures/mandate-v54.txt"), "utf8");
+  const section = (text: string) => text.slice(text.indexOf("## Who you are"), text.indexOf("\n\n", text.indexOf("## Who you are")));
+  expect(section(ORCHESTRATOR_SYSTEM_PROMPT)).toBe(section(v54));
+});
+
+/* A seat delivered v54 keeps its stored mandate until it rotates; delivery
+   replaces each v54 directive that v55 rewrote by exact match, so the seat
+   reads one current copy and no stale one, and removes the v54 section on
+   reply drafts the same way, so the seat is never told to ask with them. The
+   fixture is the v54 default byte for byte: its fingerprint is the one v54
+   shipped with. */
+test("delivery replaces every rewritten v54 directive by exact match", () => {
+  const v54 = fs.readFileSync(path.join(import.meta.dir, "fixtures/mandate-v54.txt"), "utf8");
+  expect(createHash("sha256").update(v54).digest("hex")).toBe(PROMPT_FINGERPRINTS[54]);
+  const delivered = orchestratorMandateForDelivery(v54);
+  for (const directive of [ORCHESTRATOR_VIEWER_CLOCK_DIRECTIVE, ORCHESTRATOR_TASK_OWNERSHIP_DIRECTIVE, ORCHESTRATOR_PROTOTYPE_DIRECTIVE, ORCHESTRATOR_BOARD_REPORT_DIRECTIVE, ORCHESTRATOR_INITIAL_STATUS_DIRECTIVE]) {
+    expect(delivered.split(directive)).toHaveLength(2);
+  }
+  for (const stale of ["mark its task blocked with the reason", "no ScheduleWakeup, no CronCreate", "GIVE IT AN ICON AND A COLOUR.", "Prototype review: every operator decision is a form"]) {
+    expect(v54).toContain(stale);
+    expect(delivered).not.toContain(stale);
+  }
+  for (const retired of ["suggest_replies", "Reply drafts"]) expect(v54).toContain(retired);
+  for (const retired of ["suggest_replies", "Reply drafts", "reply draft"]) expect(delivered).not.toContain(retired);
+  /* Removing the section leaves one blank line between its neighbours. */
+  expect(delivered).toContain("Targets are typed by kind (conversation, stage, pipeline, task, draft, region, point) and the tool schema gives each shape and intent.\n\n## Delegatus's clock");
+  expect(delivered).not.toContain("\n\n\n");
+  expect(orchestratorMandateForDelivery(delivered)).toBe(delivered);
+  expect(orchestratorMandateWithRoleTable(v54, null)).toBe(orchestratorMandateWithRoleTable(orchestratorMandateWithRoleTable(v54, null), null));
+  expect(orchestratorMandateCarriesTickContract({ mandate: v54, promptVersion: 54 })).toBe(true);
+  /* A bespoke section under the same heading keeps its own wording. */
+  const bespoke = "## Reply drafts (suggest_replies)\nOur own wording about replies.";
+  expect(orchestratorMandateForDelivery(`Coordinate.\n\n${bespoke}`)).toContain(bespoke);
+});
+
+/* A seat delivered v55 keeps its stored mandate until it rotates; delivery
+   replaces the two directives v56 rewrote and removes the reply-draft
+   paragraph, each by exact match, so the seat is never told to ask with reply
+   drafts. The fixture is the v55 default byte for byte. */
+test("delivery takes every reply-draft instruction out of a v55 mandate by exact match", () => {
+  const v55 = fs.readFileSync(path.join(import.meta.dir, "fixtures/mandate-v55.txt"), "utf8");
+  expect(createHash("sha256").update(v55).digest("hex")).toBe(PROMPT_FINGERPRINTS[55]);
+  expect(v55).toContain("suggest_replies");
+  const delivered = orchestratorMandateForDelivery(v55);
+  for (const directive of [ORCHESTRATOR_PROTOTYPE_DIRECTIVE, ORCHESTRATOR_BOARD_REPORT_DIRECTIVE, ORCHESTRATOR_REPORTS_AND_PROJECTS_DIRECTIVE]) {
+    expect(delivered.split(directive)).toHaveLength(2);
+  }
+  for (const retired of ["suggest_replies", "Reply drafts", "reply draft"]) expect(delivered).not.toContain(retired);
+  /* Removing the paragraph leaves its neighbours as the current body has them. */
+  expect(delivered).toContain(`${ORCHESTRATOR_PROTOTYPE_DIRECTIVE}\nBridge reports.`);
+  expect(orchestratorMandateForDelivery(delivered)).toBe(delivered);
+  /* With the role table set aside, the delivered v55 mandate is the v56 one. */
+  expect(orchestratorMandateWithRoleTable(v55, null)).toBe(orchestratorMandateWithRoleTable(ORCHESTRATOR_SYSTEM_PROMPT, null));
+  expect(orchestratorMandateCarriesTickContract({ mandate: v55, promptVersion: 55 })).toBe(true);
+  /* A bespoke mandate's own wording about replies survives. */
+  expect(orchestratorMandateForDelivery("Coordinate. Reply drafts: our own wording.")).toContain("Reply drafts: our own wording.");
+});
+
+/* The seat reads every working rule once, in its mandate: the full text beside
+   the mandate would not fit the seat's structured envelope (see the role-table
+   envelope test above), so its short form keeps each rule by number, the
+   pinned process-cleanup phrase and its command examples. */
+test("the seat's mandate carries all sixteen working rules in their short form", () => {
+  expect(ORCHESTRATOR_SYSTEM_PROMPT.split(WORKING_RULES_SHORT)).toHaveLength(2);
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).not.toContain(WORKING_RULES);
+  const numbers = (text: string) => text.split("\n").flatMap((line) => line.match(/^(\d+)\. /)?.[1] ?? []);
+  expect(numbers(WORKING_RULES_SHORT)).toEqual(numbers(WORKING_RULES));
+  expect(numbers(WORKING_RULES_SHORT)).toHaveLength(16);
+  for (const phrase of [PROCESS_CLEANUP_MARKER, "no fuser -k, no lsof piped into kill, no pkill, no killall", "hard limits", "learned rules yield"]) expect(WORKING_RULES_SHORT).toContain(phrase);
+  expect(ORCHESTRATOR_SYSTEM_PROMPT.indexOf(WORKING_RULES_SHORT)).toBeLessThan(ORCHESTRATOR_SYSTEM_PROMPT.indexOf("## Before you decide\nWorking rules 3 and 4 apply with a seat's reach."));
+});
+
+/* The short form first shipped without what the memory delta added to rules 6
+   and 12 (role-memory-to-prompts.md §4.1), so no seat read those duties. Each
+   pair is one duty: its words in the full rule and in the short one, checked
+   on the first message a seat spawn actually sends. */
+test("a seat's launch prompt carries the evidence and publication duties of rules 6 and 12", () => {
+  const resolved = resolveSpawnRole({ role: "orchestrator" });
+  if (!resolved.ok || !resolved.value) throw new Error("orchestrator role did not resolve");
+  const launch = roleSpawnPrompt(resolved.value, orchestratorMandateForDelivery(ORCHESTRATOR_SYSTEM_PROMPT));
+  expect(launch.split(WORKING_RULES_SHORT)).toHaveLength(2);
+  expect(launch).not.toContain(WORKING_RULES);
+  const rule = (rules: string, number: number) => rules.split("\n").find((line) => line.startsWith(`${number}. `))!;
+  const duties: readonly (readonly [number, string, string])[] = [
+    [6, "made from the final state", "comes from the final state"],
+    [6, "says what it was made from (revision, time, command)", "names revision, time and command"],
+    [6, "regenerate it after the last change that could alter it", "is redone after any later change"],
+    [6, "Look at every frame, table and output yourself before you cite it", "look at every output you cite"],
+    [6, "before/after measurement on identical data and load, repeated, with the load recorded", "repeated before/after runs on identical data and load, the load recorded"],
+    [12, "run the project's own publication checks on those files and read the result", "Run the project's publication checks before it leaves the machine and read the result"],
+    [12, "a credential-shaped example is written as prose", "credential-shaped examples as prose"],
+    [12, "Attribution trailers stay in one final block and keep the identities you were launched with", "Attribution trailers stay in one final block with your launch identities"],
+  ];
+  for (const [number, full, short] of duties) {
+    expect(rule(WORKING_RULES, number)).toContain(full);
+    expect(rule(WORKING_RULES_SHORT, number)).toContain(short);
+    expect(launch).toContain(short);
+  }
 });

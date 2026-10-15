@@ -53,6 +53,14 @@ const TEXT = {
 
 const json = (value: unknown) => JSON.stringify(value, null, 2);
 
+export function sampleOrchestratorMessage(locale: Locale): string {
+  const lines: string[] = [];
+  for (let index = 1; new TextEncoder().encode(lines.join("\n")).length < 3000; index++) lines.push(locale === "uk"
+    ? `Рядок ${index}: перевірки релізу завершено, результати збережено. Наступний крок — перегляд змін.`
+    : `Line ${index}: the release checks completed and their results were saved. The next step is reviewing the changes.`);
+  return lines.join("\n");
+}
+
 /** Fragments of a line spoken from `start` to `end`, with the pauses a real reply has at sentence ends. */
 function fragments(text: string, start: number, end: number): Array<[number, number]> {
   const words = text.split(/\s+/u).length;

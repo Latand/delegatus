@@ -12,12 +12,10 @@ import {
   SEAT_TICK_ANNOUNCED_DEPLOYS_LIMIT,
   SEAT_TICK_ANNOUNCED_MAINTENANCE_LIMIT,
   SEAT_TICK_REPORTED_STALLS_LIMIT,
-  SEAT_TICK_ASKS_OWED_LIMIT,
   SEAT_TICK_CHILDREN_SHOWN_LIMIT,
   SEAT_TICK_REPORTS_OWED_LIMIT,
   SEAT_TICK_WAKE_REASON_KINDS,
   type SeatTickActivity,
-  type SeatTickAskOwed,
   type SeatTickReportOwed,
   type SeatTickCard,
   type SeatTickCheckInput,
@@ -1160,8 +1158,8 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
      a conclusion a quiet check is as entitled to as a wake. */
   /* The report ledger (docs/design/orchestrator-reports.md §5.1) is kept on
      every check that reaches here, the tick switched off included: owed
-     outcomes discharge when their report lands, asks are recorded and
-     retired, and the digest remembers the board it last saw reported. */
+     outcomes discharge when their report lands, and the digest remembers the
+     board it last saw reported. */
   const base: SeatTickProjectState = reportLedger(input, {
     ...unchanged,
     seatEpoch: input.seat.seatEpoch,
@@ -1512,8 +1510,8 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
   // agenda retry guard cannot discharge it. Reminders keep the configured floor.
   if (seatTickWakeDue(input.state.lastWakeAt, input.now, input.settings.wakeIntervalMs)
     && reasons.length === 0 && input.reports?.bridgeReports
-    && ((observed.reportsOwed?.length ?? 0) > 0 || (observed.asksOwed?.length ?? 0) > 0)) {
-    reasons.push({ kind: "interval", detail: "bridge outcome or question reports remain owed" });
+    && (observed.reportsOwed?.length ?? 0) > 0) {
+    reasons.push({ kind: "interval", detail: "bridge outcome reports remain owed" });
   }
 
   /* What this check could not read, said once on the board and on every wake
@@ -1624,8 +1622,6 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
 
 /* ── The report ledger (docs/design/orchestrator-reports.md §5.1) ─────────── */
 
-const ASK_OWED_AFTER_MS = 10 * MINUTE_MS;
-
 /** The board half of a change fingerprint: what the digest compares. */
 function boardFingerprint(fingerprint: string): string {
   return fingerprint.split(".")[0] ?? fingerprint;
@@ -1638,18 +1634,11 @@ function instant(value: string | null | undefined): number {
 
 /**
  * One check's bookkeeping of what the report log owes. Pure: it reads the
- * report log and the suggestion store as the gather saw them.
+ * report log as the gather saw it.
  *
  * - An owed outcome is discharged by a report under its own key or naming it
  *   in `covers`, and by a `coversOwed` report filed at or after the moment
  *   its wake reached the seat. Nothing else clears it.
- * - An ask is the seat's current suggestion set, owed once it is ten minutes
- *   old with no operator message since. It is discharged by a report under
- *   `ask:<setId>`, by its set being retired (the operator answered), or by an
- *   operator message in that conversation at or after the ask; a question the
- *   operator resolved in the report log counts as such a message, at the
- *   moment it was resolved (`seatTickSources` folds it in). A set replaced
- *   by a newer one with no message between stays owed.
  * - The digest remembers the fingerprint of the check BEFORE the newest report
  *   was seen, so a board change between that check and the report still
  *   counts as unreported.
@@ -1663,24 +1652,6 @@ function reportLedger(input: SeatTickCheckInput, state: SeatTickProjectState): S
   const owed = (state.reportsOwed ?? []).filter((entry) => !reported(entry.key)
     && !(Number.isFinite(coveredThrough) && coveredThrough >= instant(entry.receivedAt)));
 
-  const sets = new Map(reports.suggestionSets.map((set) => [set.conversationId, set] as const));
-  const read = new Set(reports.suggestionConversations);
-  const answeredSince = (conversationId: string, since: string) => reports.operatorAdmissions
-    .some((admission) => admission.conversationId === conversationId && instant(admission.at) >= instant(since));
-  const asks: SeatTickAskOwed[] = (state.asksOwed ?? []).filter((entry) => {
-    if (reported(entry.key)) return false;
-    if (read.has(entry.conversationId) && !sets.has(entry.conversationId)) return false;
-    return !answeredSince(entry.conversationId, entry.at);
-  });
-  const current = input.seat ? sets.get(input.seat.conversationId) : undefined;
-  if (current && reports.bridgeReports && !asks.some((entry) => entry.setId === current.setId)) {
-    const key = `ask:${current.setId}`;
-    const old = input.now - instant(current.at) >= ASK_OWED_AFTER_MS;
-    if (old && !reported(key) && !answeredSince(current.conversationId, current.at)) {
-      asks.push({ key, setId: current.setId, conversationId: current.conversationId, at: current.at });
-    }
-  }
-
   let reportSeenAt = state.reportSeenAt ?? null;
   let reportFingerprint = state.reportFingerprint ?? null;
   if (reports.lastReportAt && (!reportSeenAt || instant(reports.lastReportAt) > instant(reportSeenAt))) {
@@ -1690,7 +1661,6 @@ function reportLedger(input: SeatTickCheckInput, state: SeatTickProjectState): S
   return {
     ...state,
     reportsOwed: owed,
-    asksOwed: asks.slice(-SEAT_TICK_ASKS_OWED_LIMIT),
     reportSeenAt,
     reportFingerprint,
     checkFingerprint: boardFingerprint(input.changeFingerprint),
@@ -1748,8 +1718,7 @@ function clock(instant: string): string {
 /**
  * The lines a wake carries about the report log (§5.1), in its reserved tail:
  * the reports owed (this wake's outcomes and every earlier one still owed),
- * "nothing is running" when the last lane settled, each ask owed, and the
- * digest when an interval wake finds the board moved with no report for a
+ * "nothing is running" when the last lane settled, and the digest when an interval wake finds the board moved with no report for a
  * whole interval. None while bridge reports are off.
  */
 export function seatTickReportLines(
@@ -1760,8 +1729,6 @@ export function seatTickReportLines(
 ): string[] {
   const reports = input.reports;
   if (!reports?.bridgeReports) return [];
-  const asks = state.asksOwed ?? [];
-  const compactLedger = !!input.workers && asks.length > 1;
   const language = reports.operatorLocale ? `, in ${LANGUAGE_NAME[reports.operatorLocale]}` : "";
   const lines: string[] = [];
   const owed: { key: string; label: string }[] = [...(state.reportsOwed ?? [])];
@@ -1776,21 +1743,10 @@ export function seatTickReportLines(
     const named = compact ? `${owed.length} outcome(s)` : labels;
     const more = !compact && owed.length > OWED_NAMED_LIMIT ? `, and ${owed.length - OWED_NAMED_LIMIT} more` : "";
     const dropped = state.reportsOwedDropped ? ` (${state.reportsOwedDropped} older owed outcome(s) no longer listed)` : "";
-    lines.push(compactLedger
-      ? `Report owed${language}: ${named}${more}${dropped}. File key ${owed[0]!.key}, coversOwed: true, before turn ends.`
-      : `Report owed${language}, before this turn ends: ${named}${more}${dropped}. File one report with key ${owed[0]!.key} and coversOwed: true.`);
+    lines.push(`Report owed${language}, before this turn ends: ${named}${more}${dropped}. File one report with key ${owed[0]!.key} and coversOwed: true.`);
     if (!input.pipelines.some(isOpenLane) && owed.some((entry) => entry.key.startsWith("lane:"))) {
-      lines.push(compactLedger ? `Report ${input.workers!.running} running workers.` : "Nothing is running now: the report says so.");
+      lines.push("Nothing is running now: the report says so.");
     }
-  }
-  if (asks.length && autonomyActive(input.settings.autonomy, input.now)) {
-    lines.push(`Owed choices: decide within the autonomy rules, log why and undo. Resolve existing reports with bridge_report class: status, matching keys: ${asks.map(ask => ask.key).join(", ")}. Forbidden choices still wait for the operator.`);
-  } else if (asks.length > 1) {
-    // Keep all durable keys visible without repeating the same bridge action
-    // sixteen times in the reserved tail of a bounded wake.
-    lines.push(`${compactLedger ? "Question reports owed: bridge_report class: question; question in decision section; keys: " : "Question reports owed: file bridge_report with class: question, the question in the decision section, and each matching key: "}${asks.map(ask => ask.key).join(", ")}.`);
-  } else for (const ask of asks) {
-    lines.push(`Question report owed: the question offered at ${clock(ask.at)} has no matching bridge report. File bridge_report with class: question, key ${ask.key} and the question in the decision section.`);
   }
   const lastReport = instant(reports.lastReportAt);
   const quietForInterval = !Number.isFinite(lastReport) || input.now - lastReport >= input.settings.wakeIntervalMs;

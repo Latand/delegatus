@@ -44,9 +44,6 @@ import { TASK_STEPS_LIMIT } from "@/lib/tasks/steps";
 import { TASK_COLORS, TASK_PRIORITIES } from "@/lib/tasks/types";
 import { BOT_MESSAGES_LIMIT, BOT_MESSAGES_MAX_CHARS, TELEGRAM_BOT_LIMITS } from "@/lib/telegram/bot/contracts";
 import {
-  MAX_REPLY_LABEL_CHARS, MAX_REPLY_SUGGESTIONS, MAX_REPLY_TEXT_BYTES, MIN_REPLY_SUGGESTIONS,
-} from "@/lib/suggestions/types";
-import {
   MAX_SCOPE_PATHS, MAX_SNAPSHOT_CHARS_PER_CONVERSATION, MAX_SNAPSHOT_LAST_MESSAGES, MAX_SNAPSHOT_STRING_LENGTH,
   MIN_SNAPSHOT_STRING_LENGTH, VIEW_RESOLUTIONS, VIEW_SCOPE_KINDS,
 } from "@/lib/view/types";
@@ -93,7 +90,6 @@ export const MCP_TOOL_NAMES = [
   "agent_activity",
   "lifecycle_events",
   "request_attention",
-  "suggest_replies",
   "publish_prototype_review",
   "resend_prototype_review_telegram",
   "read_prototype_review",
@@ -154,11 +150,6 @@ export const MUTATING_MCP_TOOL_NAMES = new Set<McpToolName>([
      is classified the same way rather than looking read-only by name. */
   "agent_activity",
   "request_attention",
-  /* Writes the conversation's current reply-draft set, which the operator's
-     composer reads. The record outlives this process, so a replayed
-     clientRequestId must answer from the receipt rather than re-offer drafts
-     under a question the operator has since answered. */
-  "suggest_replies",
   "publish_prototype_review",
   "resend_prototype_review_telegram",
   /* Clears a needs-you flag the operator is shown, durably and attributed. A
@@ -262,13 +253,6 @@ const INTERRUPTED_RECOVERABLE_TOOLS: ReadonlySet<McpToolName> = new Set<McpToolN
      payload under the same key is refused by the digest check above. */
   "publish_prototype_review",
   "resend_prototype_review_telegram",
-  /* Deliberately NOT here: `suggest_replies`. Its write is idempotent over the
-     record, but the record is retired by something outside the call — the
-     operator's own answer — so re-running an interrupted write would put the
-     drafts back under a question they have already answered. A disposable
-     draft is exactly the thing not worth resurrecting: the interrupted call
-     answers `call_interrupted`, and the seat offers a fresh set if it still
-     wants one. */
 ]);
 
 function interruptedCallIsRecoverable(toolName: McpToolName, args: McpToolArgs): boolean {
@@ -584,6 +568,10 @@ export class McpUnadmittedRefusal extends McpToolRefusal {
     this.name = "McpUnadmittedRefusal";
   }
 }
+
+/** Publication owns an idempotent Viewer operation that may outlive this wait.
+    Keep its receipt open so the original key can recover the round. */
+export class McpPrototypePublicationPendingError extends Error {}
 
 export type McpToolResult = McpToolSuccess | McpToolFailure;
 
@@ -3188,7 +3176,11 @@ export function createMcpToolService(
           unfinishedAgeMs = claim.unfinishedAgeMs;
           return failure(toolName, requestId, "call_interrupted", "The previous MCP process ended before this call completed", true, true);
         }
-        if (claim.kind === "replay") {
+        // Earlier clients settled transport timeouts as retryable failures.
+        // The Viewer publication lock and payload digest make recovery safe.
+        const retryPrototypePublication = typedTool === "publish_prototype_review"
+          && claim.kind === "replay" && !claim.result.ok && claim.result.retryable;
+        if (claim.kind === "replay" && !retryPrototypePublication) {
           const replayStartedAt = performance.now();
           const replayed = { ...claim.result, replayed: true };
           phaseDurations.replay = performance.now() - replayStartedAt;
@@ -3216,6 +3208,11 @@ export function createMcpToolService(
             : context.signal?.aborted
               ? "cancelled"
               : "failure";
+          if (typedTool === "publish_prototype_review" && error instanceof McpPrototypePublicationPendingError) {
+            return failure(typedTool, requestId, "publication_in_progress",
+              `${error.message}; publication may still be running. Retry with the same clientRequestId to obtain its reviewId`,
+              true, false, { outcome: "unknown", nextAction: "retry-same-key" });
+          }
           const taskCode = (typedTool === "create_task" || typedTool === "update_task")
             && error instanceof McpToolRefusal && typeof error.details.code === "string"
             && (error.details.code.startsWith("TASK_") || error.details.code.startsWith("maintainer_")) ? error.details.code : null;
@@ -3440,12 +3437,6 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
     "A conversation target takes either its durable conversationId (resolved server-side to that conversation's current transcript, and the form to prefer because it survives resume and migration) or that transcript's path.",
     "A draft target also needs the top-level project argument; region and point accept intent \"show\" only. A rejected target names the kind it read and the fields that kind expects.",
   ].join(" "),
-  suggest_replies: [
-    "Offer the operator ready-made replies to your own message: 1\u20136 short drafts that render as pills under your latest turn in the dock and the board's conversation pane. Tapping one drops its text into their composer for editing \u2014 Delegatus never sends it, and nothing here decides anything.",
-    "Call it after every message that asks the operator something or proposes a course of action, with 2\u20134 short, distinct drafts written in the operator's own language. The set REPLACES whatever you offered last for that conversation, and the operator's next message clears it.",
-    "Authority is the same as request_attention's, and for the same reason \u2014 this writes into the surface they are answering in: the operator's own session or a designated orchestrator seat. A worker or unidentified caller is refused (SUGGEST_REPLIES_NOT_PERMITTED) with nothing recorded.",
-    "The drafts always land under your OWN message: conversationId defaults to your conversation, and naming any other one is refused. To offer drafts elsewhere, ask that conversation's own session to offer them.",
-  ].join(" "),
   publish_prototype_review: "questions (3–7 on a task, 1–7 without one): {id, text, options: 2–6 {label, recommended?} with exactly one recommended, multiple?, other?}; a review may carry questions without variants. Publish a prototype review on a TASK. Variants require a lane visual-critic pass or a passed fix after its last fail; use prototype → critic → proto-fix (2 rounds) → publish, whose publish stage calls this tool. A refusal names the missing evidence; retry after it is resolved with a new clientRequestId. In a pipeline omit taskId: the server binds your stage to its pipeline's task. Outside a pipeline supply taskId in your own project. A seat may omit taskId: the form (questions required) then lives in its conversation and the «Рішення» column. Short form: title, dir, variants [{number:1..9,name,description}]; immediate files use variant-N or vN, viewport width, en/uk and caption in their filenames. Matching -original and -changed suffixes form before/after pairs. Full form: variants with frames [{path,originalPath?,caption,width?,lang?}] and videos [{path,caption}]. Every variant needs a short name, one or two lines about its character and differences, and media. Delegatus copies PNG/JPEG/WebP and MP4/WebM to local state. The paired owner also receives a rich Telegram carousel with up to 50 image previews; a definite Telegram limit refusal uses a smaller preview and a link to the full review. Failed or unconfirmed posts carry telegramPost state and a reason on the review and in the seat wake. Bounds: 9 variants, 240 files including originals, 4 MiB/image, 64 MiB/video, 48 MiB images and 192 MiB total. Read roots match the image viewer: home/worktrees, stage scratch and evidence roots (normally /var/tmp); unreadable sources refuse the whole review with a copy instruction. Same clientRequestId replays the original publication. The operator opens the task review, chooses one variant or a combination and comments; read_prototype_review returns the saved decision and history.",
   resend_prototype_review_telegram: "Resend a saved round to the paired owner as a rich Telegram carousel by reviewId. Only the caller’s project is readable, as with read_prototype_review. The same clientRequestId sends once; a new key intentionally sends another copy. The answer includes durable telegramPost state and a reason code on failure or uncertainty. This does not choose a variant or send the operator’s answer to the seat.",
   read_prototype_review: "Rounds carry questions; decision.answers holds option indexes per question id; decision.skipped:true means the operator took the recommendations, and an answer's skipped:true (no options) means the operator set that question aside as already decided or no longer relevant: do not ask it again. Read a task's prototype reviews, newest waiting round, chosen variant numbers, exact operator comment, time and delivery state. Only the newest round can wait; an undecided round a later decision retired stays in the history with supersededBy naming that decided round. Pipeline callers may omit taskId; a seat that omits it reads its own taskless questions; other callers supply it. Only your own project is readable. Media URLs are installation-local and absent where copies are unavailable. This tool makes no choice and sends no message.",
@@ -3510,8 +3501,8 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
     "A Delegatus bug report on its way to Delegatus's own public repository: preview, show, publish. Nothing is filed without the digest of a preview the operator approved.",
     "action hints takes title and body and returns advisory hints (class, matched span, title/body, lines, and written/decoded reading), without storing text. Run it, then re-read the whole text yourself: hints may be false alarms and a clean result proves nothing. Remove or rewrite identifying content and operator quotes. Detector matches never refuse preview, storage or publication.",
     "action preview takes title, body and your privacyJudgment (assessment, removed, harmlessHints with reasons, uncertainties), stores the exact text with that judgment and remaining hints, and answers its digest. Known-name source failures appear as hintWarnings and leave the agent to review the text. Any identified session may preview.",
-    "action show takes digest and answers the stored title and body exactly, with privacyJudgment, remaining hints and hintWarnings, and a chat-ready previewText in the operator's interface language that marks where the published text starts and ends and lists them after it. To an orchestrator seat it also answers approvalReplies, the reply in English and Ukrainian that approves this exact text, and approvalReplyDrafts, the same reply with a label that fits suggest_replies. Put previewText in the existing chat as it is, then offer that draft with suggest_replies beside a no and an edit. The operator decides last and may approve a text that has hints.",
-    "action publish takes `digest` and files the stored text as one issue. Nothing the caller says is an approval: the server reads the seat's own conversation, and publishes when the operator's last message since the seat read the preview back contains the approving reply with this whole digest in either language, ignoring case and surrounding whitespace or punctuation (`issue_report_approval_required` otherwise, and nothing is sent). The reply may be part of a longer message with other answers or questions; one message may approve several previews, each by its own digest. Only operator-authored messages count; an agent message, relay or seat tick never approves. An explicit refusal of the same report overrides its approving reply. A free-form yes without the digest does not approve it. Only an orchestrator seat that has read the preview back with show may publish; a digest that names no stored preview, or a preview whose text no longer matches its digest, is refused. A changed title or body is a new preview with a new digest and its own approving reply. One digest is filed once, whoever calls: a publication whose outcome nobody recorded answers `issue_report_outcome_unknown` until the issue is found, and only a refusal that provably came before the write (`issue_report_publish_failed`) may be repeated. The answer carries `issueUrl`.",
+    "action show takes digest and answers the stored title and body exactly, with privacyJudgment, remaining hints and hintWarnings, and a chat-ready previewText in the operator's interface language that marks where the published text starts and ends and lists them after it. To an orchestrator seat it also answers approvalForm, the decision form that asks the operator to approve this exact text: its first option names the whole digest. Put previewText in the existing chat as it is, then ask with publish_prototype_review without taskId, passing approvalForm's title and questions unchanged. The operator decides last and may approve a text that has hints.",
+    "action publish takes `digest` and files the stored text as one issue. Nothing the caller says is an approval: the server reads the newest approval form of this preview the seat asked after reading it back, and publishes when a person (the operator or a team member) chose its approving option (`issue_report_approval_required` with `reason` no_form, not_answered or not_an_approval otherwise, and nothing is sent). A form taken on its recommendations, a set-aside question, «Other», a custom note or an agent's decision never approves. An amended answer counts as it now stands. Only an orchestrator seat that has read the preview back with show may publish; a digest that names no stored preview, or a preview whose text no longer matches its digest, is refused. A changed title or body is a new preview with a new digest and its own approval form. One digest is filed once, whoever calls: a publication whose outcome nobody recorded answers `issue_report_outcome_unknown` until the issue is found, and only a refusal that provably came before the write (`issue_report_publish_failed`) may be repeated. The answer carries `issueUrl`.",
     "In a repository this installation declared as an App repository the issue is filed as the Delegatus GitHub App and is refused when that credential is unavailable; no person's credentials are used instead. Idempotent by clientRequestId, and a preview that was published answers its issue again instead of filing a second.",
   ].join(" "),
   telegram_bot_chats: [
@@ -3572,15 +3563,6 @@ const conversationArchiveTargetSchema = z.object({
 }).strict().refine((target) => Boolean(target.conversationId || target.transcriptPath), {
   message: "conversationId or transcriptPath is required",
 });
-/* #1202: one reply draft. `label` is what the pill says, `text` is what lands
-   in the composer, and the object is closed because a third field would be a
-   caller inventing semantics the renderer does not have. */
-const replyDraftSchema = z.object({
-  label: z.string().min(1).max(MAX_REPLY_LABEL_CHARS)
-    .describe("What the pill says \u2014 a few words the operator reads at a glance."),
-  text: z.string().min(1)
-    .describe(`The draft itself, in the operator's language. Lands in their composer, editable, never sent by Delegatus. At most ${MAX_REPLY_TEXT_BYTES} bytes.`),
-}).strict();
 const entityIdSchema = z.string().min(1);
 const snapshotStringSchema = z.string()
   .min(MIN_SNAPSHOT_STRING_LENGTH)
@@ -4301,13 +4283,6 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     zoom: z.enum(["inspect", "situate"]).optional(),
     contextLabel: z.string().optional().describe("Named in the spoken sentence but never navigated to."),
     project: z.string().optional().describe("Required only for a target the server cannot attribute on its own (a board draft)."),
-  }).passthrough(),
-  suggest_replies: z.object({
-    clientRequestId: clientRequestIdSchema,
-    conversationId: z.string().min(1).optional()
-      .describe("Durable conversation whose composer these drafts belong under. Defaults to the calling conversation, and must BE it \u2014 another conversation is refused."),
-    replies: z.array(replyDraftSchema).min(MIN_REPLY_SUGGESTIONS).max(MAX_REPLY_SUGGESTIONS)
-      .describe(`${MIN_REPLY_SUGGESTIONS}\u2013${MAX_REPLY_SUGGESTIONS} drafts, ordered as the operator should read them. Two to four distinct ones is the usual shape.`),
   }).passthrough(),
   dismiss_attention: z.object({
     clientRequestId: clientRequestIdSchema,

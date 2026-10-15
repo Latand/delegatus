@@ -21,6 +21,9 @@ export function installPipelineControllerReferences(db: Database, directory: str
   db.exec("UPDATE pipeline_tick_work SET attempt_cursor=0");
   const populate = (source: string, key: string) => {
     const value = "controller_source.payload";
+    const attemptValue = "(CASE WHEN a.type='object' THEN a.value ELSE '{}' END)";
+    const runValue = "(CASE WHEN r.type='object' THEN r.value ELSE '{}' END)";
+    const hostValue = "(CASE WHEN h.type='object' THEN h.value ELSE '{}' END)";
     const cte = `WITH controller_source AS MATERIALIZED (SELECT jsonb(${source}) AS payload)`;
     const field = (name: string) => `json_extract(${value},'$.${name}')`;
     const op = field("delivery.operation");
@@ -37,42 +40,39 @@ export function installPipelineControllerReferences(db: Database, directory: str
       OR (json_type(${value},'$.delivery.operation.executor') IS NOT NULL AND json_type(${value},'$.delivery.operation.executor.finished') IS NOT 'true')))
       OR ${field("publicationAdmission.state")}='pending' OR ${field("remoteAction.state")}='pending' OR ${field("cursor.state")}='committing')`;
     const attempts = `FROM controller_source, jsonb_each(CASE WHEN json_type(${value},'$.runs')='array' THEN jsonb_extract(${value},'$.runs') ELSE '[]' END) r,
-      jsonb_each(CASE WHEN json_type(r.value,'$.attempts')='array' THEN jsonb_extract(r.value,'$.attempts') ELSE '[]' END) a`;
+      jsonb_each(CASE WHEN json_type(${runValue},'$.attempts')='array' THEN jsonb_extract(${runValue},'$.attempts') ELSE '[]' END) a`;
     const identities = (source: string, fields: string[]) => `json_each(json_object(${fields.map(name => `'${name}',json_extract(${source},'$.${name}')`).join(",")})) ids`;
     return `
       INSERT INTO pipeline_attempt_refs ${cte}, refs AS MATERIALIZED (
         SELECT CAST(r.key AS INTEGER)*4294967296+CAST(a.key AS INTEGER)+1 AS position,
-          json_extract(r.value,'$.stageId') AS stageId,json_extract(a.value,'$.n') AS n,r.key AS run,a.key AS attempt,
-          COALESCE(json_extract(a.value,'$.historical'),0) AS historical,
-          CASE WHEN (json_extract(a.value,'$.verdict') IS NOT NULL OR COALESCE(json_extract(a.value,'$.completedAt'),'')!='')
-            AND (COALESCE(json_extract(a.value,'$.conversationId'),'')='' OR json_extract(a.value,'$.conversationId') IS NOT ${field("srcConversationId")})
-            AND (COALESCE(json_extract(a.value,'$.agentPath'),'')='' OR json_extract(a.value,'$.agentPath') IS NOT ${field("srcPath")})
+          json_extract(${runValue},'$.stageId') AS stageId,json_extract(${attemptValue},'$.n') AS n,r.key AS run,a.key AS attempt,
+          COALESCE(json_extract(${attemptValue},'$.historical'),0) AS historical,
+          CASE WHEN (json_extract(${attemptValue},'$.verdict') IS NOT NULL OR COALESCE(json_extract(${attemptValue},'$.completedAt'),'')!='')
+            AND (COALESCE(json_extract(${attemptValue},'$.conversationId'),'')='' OR json_extract(${attemptValue},'$.conversationId') IS NOT ${field("srcConversationId")})
+            AND (COALESCE(json_extract(${attemptValue},'$.agentPath'),'')='' OR json_extract(${attemptValue},'$.agentPath') IS NOT ${field("srcPath")})
             AND NOT (COALESCE(${field("terminalReap.settledAt")},'')!='' AND ${field("terminalReap.settledAttempts")} IS NULL)
             AND NOT EXISTS (SELECT 1 FROM json_each(${value},'$.terminalReap.settledAttempts') settled
-              WHERE settled.value=json_extract(r.value,'$.stageId')||':'||CAST(json_extract(a.value,'$.n') AS INTEGER))
+              WHERE settled.value=json_extract(${runValue},'$.stageId')||':'||CAST(json_extract(${attemptValue},'$.n') AS INTEGER))
             AND NOT EXISTS (SELECT 1 FROM json_each(${value},'$.unconfirmedHosts') h
-              WHERE json_extract(h.value,'$.stageId')=json_extract(r.value,'$.stageId') AND json_extract(h.value,'$.attempt')=json_extract(a.value,'$.n'))
+              WHERE json_extract(${hostValue},'$.stageId')=json_extract(${runValue},'$.stageId') AND json_extract(${hostValue},'$.attempt')=json_extract(${attemptValue},'$.n'))
             THEN 1 ELSE 0 END AS terminal,
-          COALESCE(json_extract(a.value,'$.conversationId'),'')||'|'||COALESCE(json_extract(a.value,'$.agentPath'),'')||'|'||COALESCE(json_extract(a.value,'$.paneId'),'') AS hostIdentity
-        ${attempts} WHERE json_type(r.value,'$.stageId')='text' AND json_type(a.value,'$.n') IN ('integer','real'))
+          COALESCE(json_extract(${attemptValue},'$.conversationId'),'')||'|'||COALESCE(json_extract(${attemptValue},'$.agentPath'),'')||'|'||COALESCE(json_extract(${attemptValue},'$.paneId'),'') AS hostIdentity
+        ${attempts} WHERE json_type(${runValue},'$.stageId')='text' AND json_type(${attemptValue},'$.n') IN ('integer','real'))
         SELECT ${key},position,stageId,n,run,attempt,historical,terminal,
           CASE WHEN ROW_NUMBER() OVER (PARTITION BY hostIdentity ORDER BY position)=1 AND hostIdentity!='||' THEN 1 ELSE 0 END FROM refs
       ${["unconfirmedHosts","closeReport.unconfirmed","closeReport.pending"].map((field,index) => `UNION ALL
-        SELECT ${key},281474976710656+${index}*4294967296+CAST(h.key AS INTEGER),json_extract(h.value,'$.stageId'),json_extract(h.value,'$.attempt'),-1,-1,1,0,0
-        FROM controller_source, jsonb_each(CASE WHEN json_type(${value},'$.${field}')='array' THEN jsonb_extract(${value},'$.${field}') ELSE '[]' END) h WHERE json_type(h.value,'$.stageId')='text' AND json_type(h.value,'$.attempt') IN ('integer','real')`).join("\n")};
+        SELECT ${key},281474976710656+${index}*4294967296+CAST(h.key AS INTEGER),json_extract(${hostValue},'$.stageId'),json_extract(${hostValue},'$.attempt'),-1,-1,1,0,0
+        FROM controller_source, jsonb_each(CASE WHEN json_type(${value},'$.${field}')='array' THEN jsonb_extract(${value},'$.${field}') ELSE '[]' END) h WHERE json_type(${hostValue},'$.stageId')='text' AND json_type(${hostValue},'$.attempt') IN ('integer','real')`).join("\n")};
       INSERT INTO pipeline_owner_refs ${cte}
         SELECT ${key},ids.key,ids.value,COALESCE((${publishing}) OR ${field("state")} NOT IN ('completed','closed'),0)
         FROM controller_source, ${identities(value,["srcConversationId","srcPath"])} WHERE ids.value IS NOT NULL AND ids.value!=''
       UNION ALL
-        SELECT ${key},ids.key,ids.value,COALESCE((${publishing}) OR json_extract(a.value,'$.state') IN ('pending','spawning','running','reviewing','committing')
-          OR (json_extract(a.value,'$.verdict') IS NULL AND COALESCE(json_extract(a.value,'$.completedAt'),'')='')
-          OR (json_extract(a.value,'$.activation') IS NOT NULL AND json_extract(a.value,'$.activation.phase') IS NOT 'settled'),0)
-        ${attempts}, ${identities("a.value",["conversationId","agentPath","paneId","launchId","sessionId"])} WHERE ids.value IS NOT NULL AND ids.value!=''
+        SELECT ${key},ids.key,ids.value,COALESCE((${publishing}) OR json_extract(${attemptValue},'$.state') IN ('pending','spawning','running','reviewing','committing')
+          OR (json_extract(${attemptValue},'$.verdict') IS NULL AND COALESCE(json_extract(${attemptValue},'$.completedAt'),'')='')
+          OR (json_extract(${attemptValue},'$.activation') IS NOT NULL AND json_extract(${attemptValue},'$.activation.phase') IS NOT 'settled'),0)
+        ${attempts}, ${identities(attemptValue,["conversationId","agentPath","paneId","launchId","sessionId"])} WHERE ids.value IS NOT NULL AND ids.value!=''
       UNION ALL
-        SELECT ${key},'flow',json_extract(a.value,'$.flowId'),0 ${attempts} WHERE json_extract(a.value,'$.flowId') IS NOT NULL ON CONFLICT DO NOTHING;`
-      .replaceAll("a.value", "(CASE WHEN a.type='object' THEN a.value ELSE '{}' END)")
-      .replaceAll("r.value", "(CASE WHEN r.type='object' THEN r.value ELSE '{}' END)")
-      .replaceAll("h.value", "(CASE WHEN h.type='object' THEN h.value ELSE '{}' END)");
+        SELECT ${key},'flow',json_extract(${attemptValue},'$.flowId'),0 ${attempts} WHERE json_extract(${attemptValue},'$.flowId') IS NOT NULL ON CONFLICT DO NOTHING;`;
   };
   const clear = (key: string, guard = "1") => `DELETE FROM pipeline_attempt_refs WHERE row_key=${key} AND (${guard}); DELETE FROM pipeline_owner_refs WHERE row_key=${key} AND (${guard});`;
   db.exec(`CREATE TRIGGER pipeline_refs_insert AFTER INSERT ON state_rows WHEN NEW.collection='pipelines' AND json_valid(NEW.value_json) BEGIN ${populate("NEW.value_json","NEW.row_key")} END`);

@@ -6,7 +6,7 @@ test("every delivered seat mandate asks operator decisions through a durable for
   for (const input of [ORCHESTRATOR_SYSTEM_PROMPT, "Coordinate this project.", "Prototype review: our own wording."]) {
     const mandate = orchestratorMandateForDelivery(input);
     for (const rule of [
-      "every operator decision",
+      "Every operator decision",
       "publish_prototype_review",
       "taskId for a task (3–7 questions)",
       "omit it without a task (1–7)",
@@ -15,9 +15,10 @@ test("every delivered seat mandate asks operator decisions through a durable for
       "variants optional",
       "Chat and reports only point to the form",
       "Never use engine built-in ask tools",
-      "chat may hold only a one-off ask needed now",
-      "an ask you wait on across wakes or repeat unanswered is a form",
+      "Any other question for the operator is a form too.",
+      "Chat and reports only point to the form and ask nothing themselves.",
     ]) expect(mandate).toContain(rule);
+    for (const retired of ["suggest_replies", "Reply drafts", "chat may hold only a one-off ask"]) expect(mandate).not.toContain(retired);
     expect(orchestratorMandateForDelivery(mandate)).toBe(mandate);
   }
 });
