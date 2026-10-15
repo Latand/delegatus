@@ -1,3 +1,8 @@
+import { AttentionCard } from "@/components/runtime/AttentionCard";
+import { codexAttentionActions, projectCodexAttentionActions } from "@/lib/runtime/codexAttentionActions";
+import { questionsResolution } from "@/components/runtime/ConversationAttention";
+import type { RuntimeAttention } from "@/components/runtime/runtimeModel";
+import { useState } from "react";
 import { nativeAssociationForm } from "@/lib/attention/nativeAssociationForm";
 import { issueReportApprovalDrafts } from "@/lib/issueReports/approvalReply";
 import { issueReportPreviewText } from "@/lib/issueReports/previewText";
@@ -4690,6 +4695,44 @@ function voiceCompanionScene() {
     </>
   );
 }
+function CodexCallbacksScene() {
+  const [answer, setAnswer] = useState<unknown>(null);
+  const scenario = new URLSearchParams(location.search).get("callback") ?? "permissions";
+  const unowned = scenario === "uncertain" || scenario === "unavailable";
+  const row: RuntimeAttention = {
+    id: "callback", conversationId: "callback-thread", kind: scenario === "question" ? "question" : "permission",
+    state: "open", unowned, createdAt: "2026-10-15T00:00:00Z",
+    request: scenario === "question" ? { questions: [
+      { prompt: L("Choose a deployment region", "Виберіть регіон розгортання"), header: L("Region", "Регіон"), isOther: true, options: [{ label: "Europe" }, { label: "Asia" }] },
+      { prompt: L("Enter the release note", "Введіть примітку до випуску"), isOther: true },
+    ] } : { title: L("Allow the requested network access?", "Дозволити запитаний доступ до мережі?"),
+      detail: unowned ? "Recovery outcome" : undefined,
+      protocol: { engine: "codex", method: "item/permissions/requestApproval", actions: codexAttentionActions("item/permissions/requestApproval", { permissions: { network: { enabled: true } } }) },
+    },
+    ...(unowned ? { codexReceipt: {
+      identity: { generation: "fixture", threadId: "thread", turnId: "turn", itemId: "item", method: "item/permissions/requestApproval", requestId: 1, approvalId: null },
+      requestDigest: "a".repeat(64), receivedAt: "2026-10-15T00:00:00Z",
+      recovery: { at: "2026-10-15T00:01:00Z", outcome: scenario === "uncertain" ? "delivery-uncertain" : "callback-unavailable", reason: "process-lost" },
+    } } : {}),
+  };
+  if (scenario === "long-label") {
+    row.kind = "question";
+    row.request = { question: { prompt: L("Choose the retained value", "Виберіть збережене значення"), options: [{ label: `${"x".repeat(256)}…` }] },
+      protocol: { engine: "codex", method: "item/tool/requestUserInput", responseRef: "a".repeat(64) } };
+  } else if (scenario === "large-permissions") {
+    row.request = { title: L("Allow the requested file access?", "Дозволити запитаний доступ до файлів?"),
+      protocol: { engine: "codex", method: "item/permissions/requestApproval",
+        actions: projectCodexAttentionActions("item/permissions/requestApproval", { permissions: { fileSystem: {
+          read: Array.from({ length: 110 }, (_, i) => `/workspace/${"p".repeat(70)}${i}`),
+        } } }, "a".repeat(64)) } };
+  }
+  return <main className="w-full max-w-2xl p-4" data-codex-callback>
+    <AttentionCard attention={row} onAction={setAnswer} onAnswerQuestion={index => setAnswer(questionsResolution(row, [[index]]))}
+      onAnswerQuestions={(selected, custom) => setAnswer({ selected, custom })} />
+    <output data-callback-answer className="block break-all text-primary">{answer ? JSON.stringify(answer) : ""}</output>
+  </main>;
+}
+
 if (HEADER_MENU && new URLSearchParams(location.search).has("member")) void refreshTeamView();
 const diskDensity = new URLSearchParams(location.search).get("disk-density");
 // Mount the production dock beside the Viewer for shared desktop-host cases.
@@ -4700,7 +4743,7 @@ createRoot(document.getElementById("root")!).render(dockWidth === "440" || dockW
     <OrchestratorDock project={PROJECT} projectName="Atlas" files={files} onClose={() => {}} />
     <div className="min-w-0 flex-1"><Viewer /></div>
   </div>
-) : SCENARIO === "memory-profile" ? <RulesWindow project="garden" onClose={() => {}} /> : VOICE ? voiceCompanionScene() : diskDensity ? (
+) : SCENARIO === "codex-callbacks" ? <CodexCallbacksScene /> : SCENARIO === "memory-profile" ? <RulesWindow project="garden" onClose={() => {}} /> : VOICE ? voiceCompanionScene() : diskDensity ? (
   <div className="bg-panel" style={{ width: diskDensity === "full" ? "100%" : 248, marginTop: "auto" }}>
     <ResourcesFooter density={diskDensity === "full" ? "full" : diskDensity === "detail" ? "detail" : "line"} />
   </div>
