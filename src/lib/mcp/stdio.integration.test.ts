@@ -2204,3 +2204,64 @@ describe.skipIf(process.platform !== "linux")("native caller admission (#2827)",
     } finally { await native.session.close(); await host.stop(); }
   }, 30_000);
 });
+
+test("packaged MCP writers retain ordered task edits and attribute synchronous state waits", async () => {
+  const sandbox = sandboxDir("llv-mcp-state-contention-");
+  const environment = identifiedEnvironment(sandbox);
+  const file = path.join(environment.LLV_STATE_DIR!, "tasks.json");
+  fs.writeFileSync(file, JSON.stringify({ tasks: [{
+    id: "shared-task", project: "fixture", status: "inbox", text: "Concurrent task edits",
+    details: "start", placement: "unplaced", assignments: [],
+    createdAt: "2026-10-01T00:00:00.000Z", updatedAt: "2026-10-01T00:00:00.000Z",
+  }] }));
+  const { loadTasksFile } = await import("@/lib/tasks/store");
+  loadTasksFile(file);
+  const sessions: McpSession[] = [];
+  const holder = new Database(path.join(environment.LLV_STATE_DIR!, "state.sqlite"));
+  let pending: Promise<unknown> | undefined;
+  try {
+    for (let writer = 0; writer < 4; writer++) {
+      const session = await startMcp(environment, `state-writer-${writer}`);
+      sessions.push(session);
+      expect((await session.client.callTool({ name: "list_tasks", arguments: { ids: ["shared-task"] } })).isError).not.toBe(true);
+    }
+    holder.exec("BEGIN IMMEDIATE");
+    let acknowledged = 0;
+    const edits = sessions.map(async (session, writer) => {
+      for (let sequence = 0; sequence < 20; sequence++) {
+        const call = { name: "update_task", arguments: {
+          clientRequestId: `edit-${writer}-${sequence}`, taskId: "shared-task", appendLine: `${writer}:${sequence}`,
+        } };
+        const result = await session.client.callTool(call);
+        expect(result.isError).not.toBe(true);
+        acknowledged++;
+        // Replaying a committed request must not append the same line twice.
+        if (sequence === 0) expect((await session.client.callTool(call)).isError).not.toBe(true);
+      }
+    });
+    pending = Promise.all(edits);
+    void pending.catch(() => {});
+    await Bun.sleep(250);
+    expect(acknowledged).toBe(0);
+    expect(loadTasksFile(file).tasks[0]!.details).toBe("start");
+    holder.exec("COMMIT");
+    await pending;
+    const lines = loadTasksFile(file).tasks[0]!.details!.split("\n").slice(1);
+    expect(lines).toHaveLength(80);
+    expect(new Set(lines).size).toBe(80);
+    for (let writer = 0; writer < 4; writer++) {
+      expect(lines.filter(line => line.startsWith(`${writer}:`))).toEqual(Array.from({ length: 20 }, (_, sequence) => `${writer}:${sequence}`));
+    }
+    const logs = sessions.flatMap(session => session.stderr().split("\n"))
+      .filter(line => line.startsWith("[blocking-wait] "))
+      .map(line => JSON.parse(line.slice("[blocking-wait] ".length)));
+    expect(logs.some(entry => entry.stateWait?.processKind === "mcp" && entry.stateWait.outcome === "waiting")).toBe(true);
+    expect(logs.some(entry => entry.stateWait?.processKind === "mcp" && entry.synchronous
+      && entry.durationMs > 50 && entry.stateWait.outcome === "success"
+      && entry.stateWait.synchronousSleepMs > 0 && entry.stateWait.callSite.startsWith("state."))).toBe(true);
+  } finally {
+    holder.close();
+    await pending?.catch(() => {});
+    await Promise.all(sessions.map(session => session.close()));
+  }
+}, 60_000);

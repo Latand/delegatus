@@ -519,8 +519,8 @@ export async function reconcileFileControllers(entries: FileEntry[]): Promise<vo
      the controller path, never from a request. */
   try {
     await withPipelineMutation((pipelines, persist) =>
-      withFlowSnapshot((flows) => {
-        if (reconcileEmbeddedReviewFlows(pipelines, flows)) persist();
+      withFlowSnapshot(async (flows) => {
+        if (reconcileEmbeddedReviewFlows(pipelines, flows)) await persist();
       }));
   } catch (error) {
     console.error("[pipelines] skipping embedded review flow reconcile", error);

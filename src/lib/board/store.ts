@@ -1,3 +1,4 @@
+import { stateDatabaseBusy as isBusyError, stateLockAttempt, StateLockDeferredError } from "@/lib/state/lockWait";
 import fs from "node:fs";
 
 import { statePath } from "@/lib/configDir";
@@ -169,40 +170,9 @@ function isBoardRow(value: unknown): value is BoardRow {
   return typeof row.project === "string" && row.project.length > 0 && projectState(row.state);
 }
 
-/* The shared import reader opens read-only with `busy_timeout = 0` and runs
-   its SELECT once (sqliteStateStore.ts), so a writer holding the file lock
-   makes the import-marker probe below raise SQLITE_BUSY on the first touch of
-   the board in a process. The board.json store queued on its own write lock
-   and never dropped that write, so the probe retries on the same bounded
-   schedule the collection's own writes use, in application code, with the
-   connection's timeout left at zero. */
-const BOARD_BUSY_ATTEMPTS = 6_000;
-const BOARD_BUSY_WAIT_MS = 5;
-const BOARD_BUSY_SLEEP = new Int32Array(new SharedArrayBuffer(4));
-let boardBusyAttemptsForTests: number | null = null;
-
-/** Test seam: bounds the probe's retry so a lock nobody releases fails fast. */
-export function setBoardBusyRetryForTests(attempts: number | null): void {
-  boardBusyAttemptsForTests = attempts;
-}
-
-function isBusyError(error: unknown): boolean {
-  return /database is (?:locked|busy)|SQLITE_BUSY/i.test(error instanceof Error ? error.message : String(error));
-}
-
+// A first-touch marker probe follows the collection admission policy.
 function readBoardImportMarker(database: string): StateImportRecord | null {
-  const attempts = boardBusyAttemptsForTests ?? BOARD_BUSY_ATTEMPTS;
-  let busy: unknown = null;
-  for (let attempt = 0; attempt < attempts; attempt += 1) {
-    try {
-      return readStateImport(database, BOARD_COLLECTION);
-    } catch (error) {
-      if (!isBusyError(error)) throw error;
-      busy = error;
-      Atomics.wait(BOARD_BUSY_SLEEP, 0, 0, BOARD_BUSY_WAIT_MS);
-    }
-  }
-  throw new BoardStoreError(BOARD_BUSY, { cause: busy });
+  return stateLockAttempt("state.marker.board", () => readStateImport(database, BOARD_COLLECTION), BOARD_COLLECTION);
 }
 
 const boardCollections = new Map<string, SqliteStateCollection<BoardRow>>();
@@ -382,7 +352,7 @@ function asBoardStoreError<R>(operation: () => R): R {
     return operation();
   } catch (error) {
     if (error instanceof BoardStoreError) throw error;
-    if (error instanceof FileTransactionBusyError) throw new BoardStoreError(error.message, { cause: error });
+    if (error instanceof FileTransactionBusyError) throw new BoardStoreError(error instanceof StateLockDeferredError ? BOARD_BUSY : error.message, { cause: error });
     /* A SQLITE_BUSY that escaped the collection is that same failure wearing
        another class: the board route answers the store's documented error for
        it, never a raw SQLiteError the caller cannot classify. */

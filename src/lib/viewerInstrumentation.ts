@@ -20,7 +20,7 @@ import {
   type HotStateAuthority,
   type HotStateCheckpoint,
 } from "@/lib/state/hotStateAuthority";
-import { initializeStateCollections, markStateSqliteCutoverReady } from "@/lib/state/sqliteStateStore";
+import { initializeStateCollectionsAsync as initializeStateCollections, markStateSqliteCutoverReady } from "@/lib/state/sqliteStateStore";
 import { openStateMutationActivation } from "@/lib/state/stateMutationBarrier";
 import { markStructuredHostStartupFailed, markStructuredHostStartupReady } from "@/lib/runtime/startupStatus";
 import { StructuredRuntimeRequirementError } from "@/lib/proc/darwinIdentity";
@@ -350,7 +350,7 @@ export async function initializeHotStateStoresAtStartup(
     import("@/lib/pipelines/store"),
     import("@/lib/workflows/store"),
   ]);
-  initializeStateCollections(statePath("state.sqlite"), [
+  await initializeStateCollections(statePath("state.sqlite"), [
     flows.flowStateCollectionSeed(),
     ...pipelines.pipelineStateCollectionSeeds(),
     workflows.workflowStateCollectionSeed(),

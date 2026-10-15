@@ -1,3 +1,4 @@
+import { waitForStateLock } from "@/lib/state/lockWait";
 import fs from "node:fs";
 
 import { boardFor, importLegacyBoard, mutateBoard, setBoardWriteHookForTests } from "./store";
@@ -14,7 +15,7 @@ function waitFor(filename: string): void {
 
 if (mode === "import") {
   if (gate) waitFor(gate);
-  const outcome = importLegacyBoard(filePath, { reconcile: true });
+  const outcome = await waitForStateLock("board.import", () => importLegacyBoard(filePath, { reconcile: true }));
   console.log(JSON.stringify({ state: outcome.state, digest: outcome.record.rowDigest, rows: outcome.record.rowCount }));
 } else if (mode === "restore") {
   // Each pass adds one path to this process's own project, so two children
@@ -22,8 +23,8 @@ if (mode === "import") {
   if (gate) waitFor(gate);
   const project = `proj-${process.pid}`;
   for (let index = 0; index < Number(arg); index += 1) {
-    const board = boardFor(project, filePath);
-    const written = mutateBoard(project, board.revision, [{ kind: "restore", path: `/p-${index}`, placement: "manual" }], filePath);
+    const board = await waitForStateLock("board.open", () => boardFor(project, filePath));
+    const written = await waitForStateLock("board.mutate", () => mutateBoard(project, board.revision, [{ kind: "restore", path: `/p-${index}`, placement: "manual" }], filePath));
     if (!written.ok) throw new Error(`board write refused at ${index}`);
   }
   console.log(JSON.stringify({ manual: boardFor(project, filePath).prefs.manual.length }));

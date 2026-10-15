@@ -15,7 +15,12 @@ test("release template validates; capture and one-round visual and code reviews 
   expect(stages.at(-1)?.prompt).toContain("verify-remote means the remote tag already matches, so perform read-only verification and issue no push");
   expect(resolvePipelineRole({ role: { roleId: "deployer" } }, "run").error).toContain("not allowed");
 });
-test("each release asks again; standing approval is limited to the recorded release switch", () => {
-  for (let i = 0; i < 2; i++) expect(releaseStages({ cut: "one", lastTag: "v1.0.0", changes: [], askBeforePublish: true }).at(-1)?.prompt).toContain("Ask before every tag");
+test("each release reads current autonomy and asks when the effective approval gate is on", () => {
+  for (let i = 0; i < 2; i++) {
+    const prompt = releaseStages({ cut: "one", lastTag: "v1.0.0", changes: [], askBeforePublish: true }).at(-1)?.prompt;
+    expect(prompt).toContain("When effectiveAskBeforePublish is true, ask before every tag");
+    expect(prompt).toContain("Re-read autonomy immediately before any tag push: expiry or off restores askBeforePublish");
+    expect(prompt).toContain("releases enabled and the gap, change-count and hold gates satisfied");
+  }
   expect(releaseStages({ cut: "one", lastTag: "v1.0.0", changes: [], askBeforePublish: false, approval: "operator switched asking off" }).at(-1)?.prompt).toContain("operator switched asking off");
 });

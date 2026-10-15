@@ -3463,6 +3463,7 @@ test("a plain seat_tick_settings read of a fenced, paused project with a note st
 
   const read = await bindings.seat_tick_settings({ clientRequestId: "tick-size-read" }) as Record<string, unknown>;
   expect(Buffer.byteLength(JSON.stringify(read))).toBeLessThan(1_700);
+  expect(read.autonomy).toEqual({ active: false });
   expect(read).toMatchObject({ effective: { enabled: false, reason }, monitorPromptLength: 544, fence: { clientMessageId: key } });
   /* Each fact once: the reason is the effective one, the defaults and the
      fence sentence are the verbose read's. */

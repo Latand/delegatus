@@ -174,6 +174,16 @@ test("a full question-report ledger stays within the wake bound and names every 
   expect(text.length).toBeLessThanOrEqual(4_000);
   for (const ask of asks) expect(text).toContain(ask.key);
   expect(text).toContain("Do not schedule yourself.");
+  const autonomous = seatTickWakeMessage({ project: PROJECT, snapshotAt: iso(T0), reasons: wake.reasons, items: wake.items,
+    deferred: wake.deferred, signals: [], reportLines: wake.reportLines,
+    monitorPrompt: "Standing note ".padEnd(7_622, "n"), operatorInstructions: "Instructions ".padEnd(500, "i"),
+    workers: { limit: 4, source: "project", machine: 4, running: 1 }, now: T0,
+    autonomy: { enabled: true, startedAt: iso(T0), until: iso(T0 + 8 * 60 * MINUTE), endedAt: null, endReason: null, updatedAt: iso(T0), setBy: { kind: "gateway", project: null, conversationId: null, seatEpoch: null }, why: null, decisions: [] },
+  });
+  expect(autonomous.length).toBeLessThanOrEqual(4_000);
+  expect(autonomous).toContain("decide all questions");
+  for (const ask of asks) expect(autonomous).toContain(ask.key);
+  expect(autonomous).toContain("Do not schedule yourself.");
 });
 
 test("a wake with a deploy and a lane owes one report naming both, in the operator's language, keyed by the first", () => {
