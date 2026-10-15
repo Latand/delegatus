@@ -1,9 +1,13 @@
 import { ownFixtureTree, stopFixtureTree } from "@/lib/testing/fixtureProcess";
 import { spawn, type ChildProcess } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 
 import { afterEach, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
 
-import type { ProcessIdentity, RegistryFile } from "@/lib/agent/registry";
+import { AgentRegistry, setAgentRegistryForTests, type ProcessIdentity, type RegistryFile } from "@/lib/agent/registry";
 import type { SessionKey } from "@/lib/agent/sessionKey";
 import { procBackend } from "@/lib/proc";
 import { systemBootEpoch } from "@/lib/processIdentity";
@@ -449,6 +453,120 @@ test("a host that already exited retires its row without signalling anything", a
   expect(signalled).toEqual([]);
   expect(retired).toEqual([{ engine: "claude", sessionId: CLAUDE_SESSION }]);
 });
+
+for (const retained of [false, true]) {
+  const survivors: ProcessIdentity[] = retained
+    ? [{ pid: 424_243, startIdentity: "424243:start", bootEpoch: BOOT_EPOCH }]
+    : [];
+  for (const result of ["success", "refusal", "rejection"] as const) {
+    test(`already-exited termination awaits ${result} from retirement (retained=${retained})`, async () => {
+      const failure = new Error("retirement writer unavailable");
+      let resolve!: (value: boolean) => void;
+      let reject!: (error: Error) => void;
+      const retirement = new Promise<boolean>((yes, no) => { resolve = yes; reject = no; });
+      // Collect a rejection even when broken code drops the returned promise.
+      void retirement.catch(() => {});
+      const calls: unknown[] = [];
+      const signals: number[] = [];
+      let settled = false;
+      const termination = terminateStructuredHostTree(
+        ref({ pid: 424_242, startIdentity: "424242:start", sessionId: CLAUDE_SESSION }), {
+          processIdentity: () => null, pidAlive: () => false, protectedPids: () => new Set(),
+          retainedSurvivors: survivors,
+          signal: pid => { signals.push(pid); },
+          retireRegistryEntry: (...args) => { calls.push(args); return retirement; },
+        });
+      const observed = termination.then(
+        value => { settled = true; return { value }; },
+        error => { settled = true; return { error }; },
+      );
+      try {
+        // An independent timer advances while durable admission is held.
+        await new Promise<void>(done => setTimeout(done, 0));
+        expect(settled).toBe(false);
+        expect(calls).toEqual([[
+          { engine: "claude", sessionId: CLAUDE_SESSION },
+          { pid: 424_242, startIdentity: "424242:start", bootEpoch: BOOT_EPOCH },
+          survivors,
+        ]]);
+        if (result === "rejection") reject(failure);
+        else resolve(result === "success");
+        const outcome = await observed;
+        if (result === "rejection") expect("error" in outcome && outcome.error).toBe(failure);
+        else if (result === "refusal") expect(outcome).toEqual({ value: {
+          ok: false, status: 409, error: "structured host changed before registry retirement", remaining: [], survivors: [],
+        } });
+        else expect(outcome).toEqual({ value: { ok: true, via: "already-exited", pids: survivors.map(identity => identity.pid) } });
+        expect(signals).toEqual([]);
+      } finally { resolve(true); await observed; }
+    });
+  }
+
+  for (const present of [false, true]) {
+    test(`already-exited default retirement waits for SQLite and persists its result (retained=${retained}, present=${present})`, async () => {
+      const directory = fs.mkdtempSync(path.join(os.tmpdir(), "exited-retirement-"));
+      const filename = path.join(directory, "registry.json");
+      const registry = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "sqlite" });
+      const key = { engine: "claude", sessionId: CLAUDE_SESSION } as const;
+      const keyId = `claude:${CLAUDE_SESSION}`;
+      const root = { pid: 424_242, startIdentity: "424242:start", bootEpoch: BOOT_EPOCH };
+      if (present) {
+        registry.upsert(snapshot({ entries: { [keyId]: entry({
+          structuredHost: { kind: "claude-broker", endpoint: "stdio", process: root },
+        }) } }).entries[keyId]!);
+        if (retained) expect(registry.recordStructuredTerminationSurvivors(key, root, survivors)).toBe(true);
+      }
+      let retirement: Promise<unknown> | undefined;
+      const write = registry.deliveryWriteOrBusy.bind(registry);
+      registry.deliveryWriteOrBusy = <T>(correlation: { label: string; operationId?: string | null }, mutation: () => T): Promise<T> => {
+        const pending = write(correlation, mutation);
+        retirement = pending;
+        void pending.catch(() => {});
+        return pending;
+      };
+      setAgentRegistryForTests(registry);
+      const peer = new Database(path.join(directory, "registry.sqlite"));
+      let locked = false;
+      let closed = false;
+      let settled = false;
+      let observed: Promise<unknown> | undefined;
+      try {
+        peer.exec("BEGIN IMMEDIATE"); locked = true;
+        const termination = terminateStructuredHostTree(ref({ ...root, sessionId: CLAUDE_SESSION }), {
+          processIdentity: () => null, pidAlive: () => false, protectedPids: () => new Set(),
+          retainedSurvivors: survivors,
+        });
+        observed = termination.then(
+          value => { settled = true; return { value }; },
+          error => { settled = true; return { error }; },
+        );
+        await new Promise<void>(done => setTimeout(done, 0));
+        expect(settled).toBe(false);
+        if (present) expect(registry.readOnlySnapshot().entries[keyId]?.structuredHost?.process).toEqual(root);
+        peer.exec("ROLLBACK"); locked = false;
+        if (present) expect(await termination).toEqual({ ok: true, via: "already-exited", pids: survivors.map(identity => identity.pid) });
+        else expect(await termination).toEqual({
+          ok: false, status: 409, error: "structured host changed before registry retirement", remaining: [], survivors: [],
+        });
+        registry.close(); closed = true;
+        const reopened = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "sqlite" });
+        try {
+          const row = reopened.readOnlySnapshot().entries[keyId];
+          if (present) expect(row).toMatchObject({ status: "dead", structuredHost: null, structuredTerminationSurvivors: [] });
+          else expect(row).toBeUndefined();
+        } finally { reopened.close(); }
+      } finally {
+        if (locked) peer.exec("ROLLBACK");
+        await observed;
+        await retirement?.catch(() => {});
+        peer.close();
+        if (!closed) registry.close();
+        setAgentRegistryForTests(null);
+        fs.rmSync(directory, { recursive: true, force: true });
+      }
+    });
+  }
+}
 
 test("a root-dead retry refuses a replacement at a retained survivor pid", async () => {
   const replacementPid = 5_501;

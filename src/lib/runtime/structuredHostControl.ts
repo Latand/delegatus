@@ -465,7 +465,7 @@ export async function terminateStructuredHostTree(
   if (initialStatus === "dead" && !alive(pid)) {
     const retained = dependencies.retainedSurvivors ?? [];
     if (retained.length === 0) {
-      if (key && retire(key, expected, []) === false) {
+      if (key && await retire(key, expected, []) === false) {
         return { ok: false, status: 409, error: "structured host changed before registry retirement", remaining: [], survivors: [] };
       }
       return { ok: true, via: "already-exited", pids: [] };
@@ -475,7 +475,7 @@ export async function terminateStructuredHostTree(
       catch { return true; }
     });
     if (stillUnresolved.length === 0) {
-      if (key && retire(key, expected, retained) === false) {
+      if (key && await retire(key, expected, retained) === false) {
         return { ok: false, status: 409, error: "structured host changed before registry retirement", remaining: [], survivors: [] };
       }
       return { ok: true, via: "already-exited", pids: retained.map(identity => identity.pid) };
