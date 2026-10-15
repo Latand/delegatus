@@ -59,13 +59,29 @@ export async function resolveOwnerOutboundContext(request: ExternalRelayRequest,
   }
   const previousOwner = request.input.conversation.filter(m => m.id !== trigger.id && !m.author.self
     && m.author.key === trigger.author.key && Date.parse(m.sent_at) < Date.parse(trigger.sent_at))
-    .reduce((latest, m) => Math.max(latest, Date.parse(m.sent_at) / 1000), -Infinity);
+    .reduce((latest, m) => Math.max(latest, Math.floor(Date.parse(m.sent_at) / 1000)), -Infinity);
   const savedCutoff = await ports.cutoff?.(JSON.stringify([relay.id, request.target_id, botId, scope.chatId, scope.topicId]), request.request_id, before) ?? 0;
-  const open = rows.filter(m => isOutboundQuestion(m) && m.date > Math.max(previousOwner, savedCutoff));
+  // Telegram dates have second precision. Equality cannot prove a receipt
+  // preceded the last owner turn, so keep that second conservatively.
+  const cutoff = Math.max(previousOwner, savedCutoff);
+  const open = rows.filter(m => isOutboundQuestion(m) && m.date >= cutoff);
   const groups = new Set(open.map(m => m.sendKey));
-  const selected = explicit ? rows.filter(m => m.messageId === explicit.messageId) : rows.filter(m => m.date > Math.max(previousOwner, savedCutoff));
+  const parent = explicit ? rows.find(m => m.messageId === explicit.messageId) : undefined;
+  const selected = explicit ? rows.filter(m => parent && m.sendKey === parent.sendKey)
+    : rows.filter(m => m.date >= cutoff || groups.has(m.sendKey));
   if (trigger.reply_to && !explicit) return null;
   if (!selected.length) return null;
+  if (explicit) {
+    // Sibling parts may already have service-history identities. Verify those
+    // mappings too, without letting another question replace the explicit one.
+    for (const message of request.input.conversation) {
+      if (references.some(r => r.id === message.id)) continue;
+      const reference = await ports.reference(message.id);
+      if (reference && reference.apiBase === scope.apiBase && reference.targetId === scope.targetId
+        && reference.chatId === scope.chatId && reference.topicId === scope.topicId
+        && selected.some(m => m.messageId === reference.messageId)) references.push({ id: message.id, reference });
+    }
+  }
   const mapped = new Map(references.map(({ id, reference }) => [reference.messageId, id]));
   const ids = new Set(request.input.conversation.map(m => m.id));
   const origins: OwnerOutboundContext["origins"] = {};
@@ -77,7 +93,7 @@ export async function resolveOwnerOutboundContext(request: ExternalRelayRequest,
     while (!mapped.has(row.messageId) && ids.has(id)) id += "_local";
     ids.add(id);
     origins[id] = row.origin;
-    if (explicit || open.includes(row)) questionIds.push(id);
+    if (explicit || groups.has(row.sendKey)) questionIds.push(id);
     const existing = request.input.conversation.find(m => m.id === id);
     const self = ["agent", "review", "poll"].includes(row.origin);
     const message: Message = { id, author: self && existing ? { ...existing.author, self: true }

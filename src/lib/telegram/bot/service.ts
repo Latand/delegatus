@@ -41,7 +41,7 @@ import {
 import { defaultDocumentRoots, DocumentRefusal, loadDocument, normalizeDocumentRoots, readUnderRoots, type DocumentEnvironment } from "./documents";
 import { TelegramBotStore, type BotRow, type ChatRow, type TgChat, type TgUpdate, type TgUser } from "./store";
 import { admitReportReplies, drainReportReplies, productionReportReplyPorts, type ReportReplyPorts } from "./reportReplies";
-import { outboundPostingAllowed, recordOutbound, type OutboundMessage, type PublicationTarget } from "./outbound";
+import { outboundPostingAllowed, recordOutbound, releaseUnsentClaim, type OutboundMessage, type PublicationTarget } from "./outbound";
 import { OutboundPublication } from "./outboundPublication";
 import { ReviewPollQueue, type ReviewPollInput } from "./reviewPolls";
 import {
@@ -337,6 +337,17 @@ export class TelegramBotService {
     conversationId: string | null = null, replyToMessageId: number | null = null) {
     return { target: botId ? this.deps.publicationTarget?.(botId) ?? null : null,
       origin, sendKey, conversationId, replyToMessageId };
+  }
+  /** A lookup refusal occurs before transport and releases the claimed key
+   * for retry. Uncertain transport outcomes retain their pending claim. */
+  private async publicationForClaim(botId: string | null, callerKey: string, clientRequestId: string,
+    conversationId: string | null, replyToMessageId: number | null) {
+    try {
+      return this.publicationMetadata(botId, "agent", `${callerKey}:${clientRequestId}`, conversationId, replyToMessageId);
+    } catch (error) {
+      await releaseUnsentClaim(this.store().filename, callerKey, clientRequestId);
+      throw error;
+    }
   }
   private async publishConfirmed(botId: string | null, message: TgSent, chatId: string, topicId: number | null, text: string,
     metadata: Pick<OutboundMessage, "target" | "origin" | "sendKey" | "conversationId" | "replyToMessageId">): Promise<void> {
@@ -950,7 +961,7 @@ export class TelegramBotService {
     let chatId = chat.chatId;
     let migrated = false;
     const botId = this.storedBotId();
-    const publication = this.publicationMetadata(botId, "agent", `${sendCallerKey}:${clientRequestId}`, input.conversationId, replyTo);
+    const publication = await this.publicationForClaim(botId, sendCallerKey, clientRequestId, input.conversationId, replyTo);
     const sent: Array<{ messageId: number; date: number; text: string; replyToMessageId: number | null; topicId: number | null }> = [];
     for (let index = 0; index < parts.length; index += 1) {
       const text = parts[index]!;
@@ -1214,7 +1225,7 @@ export class TelegramBotService {
         ...Object.fromEntries(images.map((image, index) => [`photo${index}`, image.blob])),
       };
     let chatId = chat.chatId;
-    const publication = this.publicationMetadata(botId, "agent", `${sendCallerKey}:${sendRequestId}`, input.conversationId, replyTo);
+    const publication = await this.publicationForClaim(botId, sendCallerKey, sendRequestId, input.conversationId, replyTo);
     let result = await transport.call<TgSent | TgSent[]>(method, params);
     if (!result.ok && result.migrateToChatId) {
       store.migrateChat(chatId, result.migrateToChatId);
@@ -1301,7 +1312,7 @@ export class TelegramBotService {
       ...(input.silent === true ? { disable_notification: true } : {}),
     };
     let chatId = chat.chatId;
-    const publication = this.publicationMetadata(botId, "agent", `${callerKey}:${clientRequestId}`, input.conversationId, replyTo);
+    const publication = await this.publicationForClaim(botId, callerKey, clientRequestId, input.conversationId, replyTo);
     let result = await transport.call<TgSent>("sendDocument", params);
     if (!result.ok && result.migrateToChatId) {
       store.migrateChat(chatId, result.migrateToChatId);

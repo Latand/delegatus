@@ -41,6 +41,7 @@ test("new journal reads and writes yield to a peer lock while an independent tim
       () => recordOutbound(f.filename, { ...message, messageId: 19 }),
       () => pendingOutbound(f.filename, 0),
       () => scopedOutbound(f.filename, "42", "41", 7, message.date),
+      () => scopedOutbound(f.filename, "42", "41", 7, message.date, message.messageId),
       () => settleOutbound(f.filename, row, false, 1),
       () => ownerQuestionCutoff(f.filename, "scope", "request", message.date),
       () => holdPublications(f.filename, message, 300000),
@@ -61,7 +62,7 @@ test("new journal reads and writes yield to a peer lock while an independent tim
 test("context reads are scoped, bounded and retain Unicode and complete options", async () => {
   const f = fixture();
   try {
-    for (let i = 1; i <= 40; i++) await recordOutbound(f.filename, { ...message, messageId: i, text: `Question ${i}?\n1) 😀 Small\n2) Large` });
+    for (let i = 1; i <= 40; i++) await recordOutbound(f.filename, { ...message, sendKey: `question-${i}`, messageId: i, text: `Question ${i}?\n1) 😀 Small\n2) Large` });
     for (const other of [{ botId: "43" }, { chatId: "99" }, { topicId: 8 }]) await recordOutbound(f.filename, { ...message, ...other, messageId: 99 });
     const rows = await scopedOutbound(f.filename, "42", "41", 7, message.date);
     expect(rows).toHaveLength(32); expect(rows[0]!.messageId).toBe(9); expect(rows.at(-1)!.messageId).toBe(40);
@@ -72,6 +73,28 @@ test("context reads are scoped, bounded and retain Unicode and complete options"
     const bounded = await scopedOutbound(f.filename, "42", "41", 7, message.date);
     expect(bounded.some(m => m.messageId === 100)).toBe(false);
     expect(Buffer.byteLength(JSON.stringify(bounded))).toBeLessThan(131072);
+  } finally { f.cleanup(); }
+});
+
+test("explicit parents recover their bounded complete send group behind unrelated reports", async () => {
+  const f = fixture();
+  try {
+    await recordOutbound(f.filename, message);
+    await recordOutbound(f.filename, { ...message, messageId: 19, date: message.date + 1, text: "3) Remaining option" });
+    for (let i = 0; i < 40; i++) await recordOutbound(f.filename, { ...message, messageId: 100 + i,
+      sendKey: `other-${i}`, text: "Other question?", date: message.date + i + 2 });
+    for (const parent of [18, 19]) {
+      const rows = await scopedOutbound(f.filename, "42", "41", 7, message.date + 100, parent);
+      expect(rows.map(m => m.messageId)).toEqual([18, 19]);
+      expect(rows.map(m => m.text)).toEqual([message.text, "3) Remaining option"]);
+    }
+    expect(await scopedOutbound(f.filename, "42", "41", 8, message.date + 100, 18)).toEqual([]);
+    expect(await scopedOutbound(f.filename, "42", "41", 7, message.date + 100, 999)).toEqual([]);
+    for (let i = 20; i < 60; i++) await recordOutbound(f.filename, { ...message, messageId: i, text: "x".repeat(4000) });
+    const bounded = await scopedOutbound(f.filename, "42", "41", 7, message.date + 100, 18);
+    expect(bounded.some(m => m.messageId === 18)).toBe(true);
+    expect(bounded.length).toBeLessThanOrEqual(32);
+    expect(bounded.reduce((bytes, m) => bytes + Buffer.byteLength(m.text), 0)).toBeLessThanOrEqual(65536);
   } finally { f.cleanup(); }
 });
 

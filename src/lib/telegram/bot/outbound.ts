@@ -84,6 +84,16 @@ export async function recordOutbound(filename: string, message: OutboundMessage)
         message.replyToMessageId, message.topicId, message.conversationId, message.conversationId ? 0 : 1);
   });
 }
+
+/** Only a pre-transport failure may release a pending send with no receipts.
+ * Use the journal's zero-wait connection and async admission for this write. */
+export async function releaseUnsentClaim(filename: string, callerKey: string, clientRequestId: string): Promise<void> {
+  await outboundState(filename, true, db => {
+    db.query("UPDATE sends SET state='failed', error_code='publication_unavailable' WHERE caller_key=? AND client_request_id=? AND state='pending' AND message_ids='[]'")
+      .run(callerKey, clientRequestId);
+  });
+}
+
 export async function pendingOutbound(filename: string, now: number): Promise<OutboundRow[]> {
   if (!fs.existsSync(filename)) return [];
   return outboundState(filename, false, db => exists(db) ? db.query<{ key: string; value_json: string; attempts: number }, [number]>(
@@ -98,8 +108,9 @@ export async function settleOutbound(filename: string, row: OutboundRow, publish
   });
 }
 
-/** Only a confirmed publication reference may supply the scope. At most 32
- * receipts and 64 KiB of text leave this read, regardless of retained history. */
+/** Only a confirmed publication reference may supply the scope. An exact
+ * parent reserves its send group. At most 32 receipts and 64 KiB of text
+ * leave this read, regardless of retained history. */
 export async function scopedOutbound(filename: string, botId: string, chatId: string, topicId: number | null,
   before: number, messageId?: number): Promise<OutboundMessage[]> {
   if (!fs.existsSync(filename)) return [];
@@ -107,16 +118,16 @@ export async function scopedOutbound(filename: string, botId: string, chatId: st
     if (!exists(db)) return [];
     const value = "CASE WHEN length(CAST(value_json AS BLOB)) <= 131072 THEN value_json ELSE NULL END AS value_json";
     const rows = messageId === undefined
-      ? db.query<{ value_json: string | null }, [string, string, number | null, number, number]>(`SELECT ${value} FROM relay_outbound
+      ? db.query<{ value_json: string | null; send_key: string }, [string, string, number | null, number, number]>(`SELECT ${value}, send_key FROM relay_outbound
         WHERE bot_id=? AND chat_id=? AND topic_id IS ? AND date<=? AND date>=?
         ORDER BY date DESC, message_id DESC LIMIT 32`).all(botId, chatId, topicId, before, before - 30 * 86400)
-      : db.query<{ value_json: string | null }, [string, number | null, number, number]>(`SELECT ${value} FROM relay_outbound
+      : db.query<{ value_json: string | null; send_key: string }, [string, number | null, number, number]>(`SELECT ${value}, send_key FROM relay_outbound
         WHERE key=? AND topic_id IS ? AND date<=? AND date>=?`).all(JSON.stringify([botId, chatId, messageId]), topicId, before, before - 30 * 86400);
     // Reserve the latest question's send group before filling the rest from
     // recent history. Report traffic cannot evict its numbered options.
     const questions = messageId === undefined ? db.query<{ send_key: string }, [string, string, number | null, number, number]>(`SELECT send_key FROM relay_outbound
       WHERE bot_id=? AND chat_id=? AND topic_id IS ? AND is_question=1 AND date<=? AND date>=?
-      ORDER BY date DESC, message_id DESC LIMIT 32`).all(botId, chatId, topicId, before, before - 30 * 86400) : [];
+      ORDER BY date DESC, message_id DESC LIMIT 32`).all(botId, chatId, topicId, before, before - 30 * 86400) : rows;
     const groups = [...new Set(questions.map(row => row.send_key))].slice(0, 2).map(sendKey =>
       db.query<{ value_json: string | null }, [string, string, number | null, string, number, number]>(`SELECT ${value} FROM relay_outbound
         WHERE bot_id=? AND chat_id=? AND topic_id IS ? AND send_key=? AND date<=? AND date>=?
@@ -127,7 +138,7 @@ export async function scopedOutbound(filename: string, botId: string, chatId: st
     let bytes = 0;
     const seen = new Set<number>();
     const result: OutboundMessage[] = [];
-    for (const row of [...group, ...rows]) {
+    for (const row of messageId === undefined ? [...group, ...rows] : [...rows, ...group]) {
       if (row.value_json === null) continue;
       const message = JSON.parse(row.value_json) as OutboundMessage;
       if (seen.has(message.messageId)) continue;

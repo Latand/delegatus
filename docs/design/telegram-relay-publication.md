@@ -29,8 +29,11 @@ the connected bot, pairing, target, owner and posting policy. Revocation leaves
 the obligation pending. The idempotent service endpoint receives the original
 Telegram identity and text after a restart. Recovery never sends to Telegram.
 Uncertain Telegram sends retain their original send claim without inventing a
-receipt. Posts made without a selected pairing remain locally recorded and
-unrouted; a later pairing cannot adopt them automatically.
+receipt. A publication-target lookup failure before the first Telegram call
+settles text, photo, album and document claims with zero sent IDs, so the
+original request key can retry. Completed sends replay their receipt even
+when that lookup is unavailable. Posts made without a selected pairing remain
+locally recorded and unrouted; a later pairing cannot adopt them automatically.
 
 Unicode and encoded JSON publication limits retain a visible truncation marker.
 The full confirmed text remains local. Confirmed service mappings also retain
@@ -43,10 +46,15 @@ receipts. Edits and deletions remain outside this protocol.
 Fresh owner prompts can recover up to 32 local receipts and 64 KiB of text in
 the preceding 30 days. A confirmed publication identity in the current turn
 must prove the bot, pairing, target, chat and topic. An explicit parent has
-priority even when its service-history row is missing. Otherwise the latest question group and recent local context
-since the preceding owner turn appear before the unthreaded answer, with their
-full options and source attribution. Repeated request IDs reuse their persisted
-owner-turn cutoff. Existing service rows retain their identities and appear once, with complete
+priority even when its service-history row is missing; replies to any part
+recover that parent's send group within the same bounds. Otherwise the latest
+question group and recent local context since the preceding owner turn appear
+before the unthreaded answer, with their full options and source attribution.
+Repeated request IDs reuse their persisted owner-turn cutoff.
+Receipts in the cutoff's Telegram second remain eligible:
+second precision cannot establish their order against that owner turn.
+A selected question retains its preceding parts across the cutoff.
+Existing service rows retain their identities and appear once, with complete
 receipt text and origin restored when publication was truncated.
 Competing question groups remain ambiguous and grant no authority. An opaque
 chat key or owner ID alone cannot supply a topic; an unknown or conflicting
