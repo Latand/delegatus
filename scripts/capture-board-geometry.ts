@@ -7249,7 +7249,9 @@ async function selfUpdateInstallMain(): Promise<void> {
         const text = await header.innerText();
         if (!snapshot.serving.web || !text.includes(snapshot.serving.web.short)) report.failures.push(`${tag}: serving web revision is absent`);
         if (!snapshot.serving.runtimeHost && !text.includes(lang === "uk" ? "ревізія невідома" : "unknown revision")) report.failures.push(`${tag}: unknown host is hidden`);
-        if (externalSuccess && !snapshot.serving.runtimeHost && !(await page.locator('[data-outcome="done"]').innerText()).includes(messages[lang]["selfUpdate.applied.managedUnconfirmed"]))
+        const unconfirmed = messages[lang]["selfUpdate.applied.managedUnconfirmed"];
+        if (externalSuccess && !snapshot.serving.runtimeHost && (typeof unconfirmed !== "string"
+          || !(await page.locator('[data-outcome="done"]').innerText()).includes(unconfirmed)))
           report.failures.push(`${tag}: completion claims an unconfirmed host revision`);
         report.frames[`${tag}-header`] = { text };
         const frame = path.join(OUT_DIR, `${tag}-header.png`);
