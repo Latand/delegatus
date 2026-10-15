@@ -239,8 +239,12 @@ for (const engine of ["claude", "codex"] as const) {
     if (activity === "reply-before") records.push(engine === "claude" ? { type: "user", timestamp: f.h.ports.now(), message: { content: "Continue reviewing" } }
       : { type: "event_msg", timestamp: f.h.ports.now(), payload: { type: "user_message", message: "Continue reviewing" } });
     if (activity === "control-before") {
-      await patchPipeline(loadPipelines()[0]!.id, { action: "pause" }, f.h.ports);
-      await patchPipeline(loadPipelines()[0]!.id, { action: "resume" }, f.h.ports);
+      // Restore a control from before pause interrupted active hosts. Its
+      // historical continuation remains evidence for the next cut's boundary.
+      const prior = loadPipelines()[0]!;
+      prior.pausedAt = prior.resumedAt = f.h.ports.now();
+      prior.controlGeneration = "legacy-control-before-cut";
+      savePipelines([prior]);
     }
     if (activity === "large-work") {
       const work = { type: "queue-operation", timestamp: f.h.ports.now(), padding: "x".repeat(1100) };
@@ -358,7 +362,7 @@ for (const engine of ["claude", "codex"] as const) {
       expect({ sends: f.sends.length, state: loadPipelines()[0]!.state, detail: loadPipelines()[0]!.stateDetail?.split("\n")[0] ?? null })
         .toMatchObject(owed ? { sends: 1, state: "running" } : activity === "reply-after" ? { sends: 0 } : { sends: 0, state: "needs_decision" });
       expect(f.h.spawnInputs).toHaveLength(1);
-    });
+    }, 30_000);
   }
 }
 
@@ -497,6 +501,7 @@ for (const engine of ["claude", "codex"] as const) {
       f.advance(60_000);
       reset = CHAIN_RESET["2am"];
       k.notice("2am", reset);
+      f.h.setConversationActive(false); // The provider ended the native turn at this limit.
       if (activity.startsWith("pause") || activity === "three" || activity === "three-ticked") {
         f.advance(300);
         await patchPipeline(loadPipelines()[0]!.id, { action: "pause" }, f.h.ports);

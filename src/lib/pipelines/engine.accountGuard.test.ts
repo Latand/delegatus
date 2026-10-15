@@ -1,4 +1,4 @@
-import { expect, test, harness, create, tickPipelines, loadPipelines, savePipelines, patchPipeline, providerRecoveryHarness, LIMITED_ACCOUNT } from "./engine.fixture";
+import { expect, test, harness, create, tickPipelines, loadPipelines, savePipelines, patchPipeline, providerRecoveryHarness, LIMITED_ACCOUNT, PASS_TEXT } from "./engine.fixture";
 import { selectProjectAccount } from "@/lib/accounts/projectSelection";
 import { selectHeadlessAccount } from "@/lib/accounts/headlessSelection";
 import type { DurableQuotaObservation } from "@/lib/accounts/migration/contracts";
@@ -69,6 +69,17 @@ test("pause stops a running turn; restart keeps it stopped; resume continues on 
   await patchPipeline(f.lane.id, { action: "resume" }, f.h.ports);
   await tickPipelines([], { ...f.h.ports });
   expect(f.current().runs[0]!.attempts[1]!.accountId).toBe("account-b");
+});
+
+test("an aborted turn cannot settle an older assistant verdict during account recovery", async () => {
+  const f = await fixture();
+  f.allow(["account-b"]);
+  const now = Date.parse(f.h.ports.now());
+  f.h.durableTurns.set(f.attempt.agentPath!, { turn: "terminal", message: { ts: now + 1, text: PASS_TEXT },
+    terminalProviderMessage: { ts: now + 2, text: "aborted", errorClass: "turn_aborted" } });
+  await tickPipelines([], f.h.ports);
+  expect(f.current().runs[0]!.attempts[1]!.accountId).toBe("account-b");
+  expect(f.current().runs[0]!.attempts[0]!.verdict).toBeNull();
 });
 
 test.each(["binding", "credit"])("retry-stage admits %s evacuation while delivery settles and preserves the checkout", async kind => {

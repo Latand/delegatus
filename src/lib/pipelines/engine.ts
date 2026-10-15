@@ -6528,7 +6528,10 @@ async function stopSuspendedStage(pipeline: Pipeline, stage: PipelineStage, atte
   const suspension = attempt.suspension!;
   persist();
   let continuationError: unknown;
-  try { if (attempt.conversationId) await ports.invalidateProviderContinuation?.(attempt.conversationId); }
+  try {
+    const alreadyWithdrawn = attempt.providerWait?.retryCancelled && attempt.error === PROVIDER_RETRY_CANCELLED_BY_PAUSE;
+    if (attempt.conversationId && !alreadyWithdrawn) await ports.invalidateProviderContinuation?.(attempt.conversationId);
+  }
   catch (error) { continuationError = error; }
   if (!suspension.stoppedAt) {
     try {
@@ -6592,7 +6595,7 @@ async function reconcileStageAccountGuard(pipeline: Pipeline, stage: PipelineSta
   const durable = attempt.agentPath ? await ports.durableTurnEvidence(attempt.effectiveRole.engine, attempt.agentPath,
     undefined, attemptEvidenceFloor(attempt)) : null;
   if (await settleOnRecordedReport(pipeline, stage, attempt, ports, persist, durable)) return true;
-  if (durable?.turn === "terminal" && durable.message && durable.message.ts > unixMs(attemptEvidenceFloor(attempt))) {
+  if (durable?.turn === "terminal" && !durable.terminalProviderMessage && durable.message && durable.message.ts > unixMs(attemptEvidenceFloor(attempt))) {
     const parsed = parsePipelineStageVerdict(durable.message.text);
     if (parsed) { await settleStageVerdict(pipeline, stage, attempt, parsed, ports, persist); return true; }
   }
@@ -12738,9 +12741,17 @@ export async function patchPipeline(
         if (flow && flow.state !== "paused" && flow.state !== "closed") ports.patchFlow(flow.id, "pause", undefined, actor);
       }
       if (pipeline.state === "paused" && stage?.kind === "run" && attempt?.state === "running" && !attempt.report) {
-        attempt.suspension ??= { reason: "pause", detail: "pipeline paused", requestedAt: pipeline.pausedAt ?? ports.now() };
         persist();
-        await stopSuspendedStage(pipeline, stage, attempt, ports, persist);
+        // A terminal turn may still be waiting for its verdict or reset. Pause
+        // retains that evidence; only a working or unproven host needs a stop.
+        let working = true;
+        try { working = (attempt.paneId ? await ports.paneAgentAlive(attempt.paneId)
+          : attempt.conversationId ? await ports.conversationAgentActive(attempt.conversationId) : null) !== false; }
+        catch { /* Unknown liveness still requires confirmed termination. */ }
+        if (working || attempt.suspension) {
+          attempt.suspension ??= { reason: "pause", detail: "pipeline paused", requestedAt: pipeline.pausedAt ?? ports.now() };
+          await stopSuspendedStage(pipeline, stage, attempt, ports, persist);
+        }
       }
     } else if (req.action === "resume") {
       if (pipeline.state !== "paused") return { error: "pipeline is not paused", status: 409 };
@@ -12792,7 +12803,7 @@ export async function patchPipeline(
       if (stage && attempt && openRuntimeSwitch(attempt)) {
         return { error: "the runtime switch for this attempt is still unresolved; wait for its continuation and runtime outcome before retrying", status: 409 };
       }
-      if (stage && attempt && !attempt.report && !attempt.verdict && ["running", "needs_decision"].includes(pipeline.state)
+      if (stage?.kind === "run" && attempt && !attempt.report && !attempt.verdict && ["running", "needs_decision"].includes(pipeline.state)
         && (attempt.suspension || stageAccountBlocked(pipeline, attempt, ports))) {
         if (attempt.suspension?.operatorStoppedAt) {
           attempt.suspension.requestedAt = ports.now();
