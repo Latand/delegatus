@@ -2,7 +2,6 @@
 
 import { Check, ChevronRight, ClipboardPaste, Copy, Eye, EyeOff, MoreHorizontal, X } from "lucide-react";
 import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
-import { createPortal } from "react-dom";
 
 import { copyText } from "@/components/feed/CopyButton";
 import { Z } from "@/components/layers";
@@ -92,7 +91,7 @@ export function KeysStateWord({ size = "menu" }: { size?: "menu" | "sheet" }) {
 
 const DOT: Record<KeyEntry["source"], string> = {
   file: "bg-success",
-  env: "bg-info",
+  env: "bg-accent",
   missing: "bg-transparent shadow-[inset_0_0_0_1.5px_var(--color-muted)]",
   failed: "bg-warning",
 };
@@ -200,14 +199,14 @@ function IconButton({ label, onClick, pressed, children, data, coarse }: {
 }
 
 /**
- * The ⋯ of a row: portalled above the sheet or dialog it opens from. In the
- * 232 px menu panel it opens in the row's flow instead: floating there, it
- * covered the next two rows and left torn names and icons around its edges.
+ * The ⋯ of a row opens in the row's flow, under the ⋯: floating above the
+ * list, it ended over the next row and left torn names and icons around its
+ * edges. In the 232 px menu panel it takes the row's width; elsewhere it keeps
+ * to the right and is as wide as its longest item.
  */
-function RowMenu({ anchor, items, onClose, inline = false }: { anchor: HTMLElement; items: { label: string; run: () => void; data: string }[]; onClose: () => void; inline?: boolean }) {
+function RowMenu({ anchor, items, onClose, full }: { anchor: HTMLElement; items: { label: string; run: () => void; data: string }[]; onClose: () => void; full: boolean }) {
   const ref = useRef<HTMLDivElement>(null);
   const coarse = useCoarsePointer();
-  const box = anchor.getBoundingClientRect();
   useEffect(() => {
     const away = (event: PointerEvent) => { if (!ref.current?.contains(event.target as Node) && !anchor.contains(event.target as Node)) onClose(); };
     const key = (event: KeyboardEvent) => { if (event.key === "Escape") { event.stopPropagation(); onClose(); anchor.focus(); } };
@@ -216,24 +215,16 @@ function RowMenu({ anchor, items, onClose, inline = false }: { anchor: HTMLEleme
     ref.current?.querySelector<HTMLElement>("[role=menuitem]")?.focus();
     return () => { document.removeEventListener("pointerdown", away, true); document.removeEventListener("keydown", key, true); };
   }, [anchor, onClose]);
-  /* Under its ⋯, right edges aligned, as wide as its longest item. */
-  const right = Math.max(8, window.innerWidth - box.right);
-  const below = box.bottom + 4;
-  const top = below + items.length * (coarse ? 44 : 30) + 12 > window.innerHeight ? box.top - 4 - items.length * (coarse ? 44 : 30) - 8 : below;
-  const list = items.map((item) => (
-    <button key={item.data} type="button" role="menuitem" data-keys-menu-item={item.data}
-      className={`flex w-full items-center whitespace-nowrap rounded-control px-2 text-left font-semibold text-primary hover:bg-sunken ${FOCUS} ${coarse ? "min-h-11 text-body" : "min-h-[30px] text-[12px]"}`}
-      onClick={() => { onClose(); item.run(); }}>
-      {item.label}
-    </button>
-  ));
-  if (inline) return <div ref={ref} role="menu" data-keys-menu="" data-keep-rail-menu="" className="rounded-control border border-border bg-raised p-1 shadow-1">{list}</div>;
-  return createPortal(
-    <div ref={ref} role="menu" data-keys-menu="" data-keep-rail-menu="" style={{ right, top, maxWidth: window.innerWidth - right - 8 }}
-      className={`fixed ${Z.overlay} w-max rounded-surface border border-border bg-raised p-1 shadow-2`}>
-      {list}
-    </div>,
-    document.body,
+  return (
+    <div ref={ref} role="menu" data-keys-menu="" data-keep-rail-menu="" className={`rounded-control border border-border bg-raised p-1 shadow-1 ${full ? "" : "w-max self-end"}`}>
+      {items.map((item) => (
+        <button key={item.data} type="button" role="menuitem" data-keys-menu-item={item.data}
+          className={`flex w-full items-center whitespace-nowrap rounded-control px-2 text-left font-semibold text-primary hover:bg-sunken ${FOCUS} ${coarse ? "min-h-11 text-body" : "min-h-[30px] text-[12px]"}`}
+          onClick={() => { onClose(); item.run(); }}>
+          {item.label}
+        </button>
+      ))}
+    </div>
   );
 }
 
@@ -346,7 +337,7 @@ function KeyRow({ entry, layout, staging, owner, grouped = false }: { entry: Key
   ) : null;
   const stateWords = entry.source === "missing" ? t("keys.state.missing") : entry.source === "failed" ? t(layout === "menu" ? "keys.state.failedShort" : "keys.state.failed") : null;
   const field = actions.editing ? <ValueField entry={entry} layout={layout} onDone={(saved) => { actions.setEditing(false); if (saved) actions.flash({ kind: "saved", text: t("keys.savedNote", { name }) }); }} /> : null;
-  const portal = menuAnchor ? <RowMenu anchor={menuAnchor} items={menuItems} onClose={() => setMenuAnchor(null)} inline={layout === "menu"} /> : null;
+  const menuBox = menuAnchor ? <RowMenu anchor={menuAnchor} items={menuItems} onClose={() => setMenuAnchor(null)} full={layout === "menu"} /> : null;
 
   if (layout !== "dialog") {
     /* Варіант 1: name over the dot and the masked tail, the three icons at the right. */
@@ -356,19 +347,20 @@ function KeyRow({ entry, layout, staging, owner, grouped = false }: { entry: Key
         <StatusDot entry={entry} dot={dot} />
         {stateWords ? <span className={entry.source === "failed" ? "truncate text-warning" : "truncate"}>{stateWords}</span>
           : owner ? <span className="truncate"><span className="font-mono">{maskedTail(entry.masked ?? "")}</span>{entry.source === "env" && sheet ? ` · ${t("keys.state.envShort")}` : ""}</span>
-          : <span className="truncate">{entry.source === "env" ? t("keys.state.envShort") : t("keys.state.file")}</span>}
+          : <span className="truncate">{entry.source === "env" ? t("keys.state.envSource") : t("keys.state.file")}</span>}
       </span>
     );
     return (
       <div data-keys-row={entry.id} data-keys-source={entry.source} className={`flex flex-col ${sheet ? "gap-2 px-4 py-2" : "gap-1 rounded-control px-2 py-1"}`}>
         <div className={`flex items-center gap-1 ${sheet ? "min-h-11" : "min-h-[34px]"}`}>
           <span className="flex min-w-0 flex-1 flex-col gap-px">
-            <span className={`truncate font-semibold text-primary ${sheet ? "text-body leading-5" : "text-[12px] leading-4"}`}>{name}</span>
+            <span className={`truncate font-semibold text-primary ${sheet ? "text-body leading-5" : "text-[12px] leading-4"}`}>{name}{/* The 232 px panel has no room after the masked tail: an env key says so after its name. */}
+              {entry.source === "env" && owner && !sheet ? <span data-keys-env-tail="" className="text-[11px] font-medium text-muted">{` · ${t("keys.state.envShort")}`}</span> : null}</span>
             <span className={`flex min-w-0 font-medium text-muted ${sheet ? "text-label leading-4" : "text-[11px] leading-[14px]"}`}>{second}</span>
           </span>
           {icons}{addButton}
         </div>
-        {layout === "menu" ? portal : null}
+        {menuBox}
         <DotNote entry={entry} dot={dot} />
         {actions.value !== null ? (
           <div data-keys-revealed={entry.id} className="flex flex-col gap-0.5">
@@ -377,7 +369,6 @@ function KeyRow({ entry, layout, staging, owner, grouped = false }: { entry: Key
           </div>
         ) : null}
         {field}
-        {layout === "menu" ? null : portal}
       </div>
     );
   }
@@ -407,12 +398,16 @@ function KeyRow({ entry, layout, staging, owner, grouped = false }: { entry: Key
       ) : null}
     </div>
   );
+  /* An env key says so on its row, beside the variable that sets it: the dot's hue alone told it from a key saved here only on hover. */
+  const variable = (
+    <span className="font-mono text-[10.5px]">{entry.variable}{entry.source === "env" && owner ? <span data-keys-env-tail="" className="font-sans text-label font-medium">{` · ${t("keys.state.envShort")}`}</span> : null}</span>
+  );
   const variableLine = phoneUnset ? (
     <span className="text-label text-muted">
       {grouped ? null : <span className={entry.source === "failed" ? "text-warning" : ""}>{stateWords} · </span>}
-      <span className="font-mono text-[10.5px]">{entry.variable}</span>
+      {variable}
     </span>
-  ) : <span className="font-mono text-[10.5px] text-muted">{entry.variable}</span>;
+  ) : <span className="text-muted">{variable}</span>;
   return (
     <div data-keys-row={entry.id} data-keys-source={entry.source} className={`flex flex-col border-b border-border last:border-b-0 ${coarse ? "gap-2 py-3" : "gap-1.5 py-2.5"}`}>
       {phoneUnset ? (
@@ -430,7 +425,7 @@ function KeyRow({ entry, layout, staging, owner, grouped = false }: { entry: Key
         <StatusDot entry={entry} dot={dot} />
         <span className={`shrink-0 font-semibold text-primary ${coarse ? "text-body" : "text-ui"}`}>{name}</span>
         <span className={`min-w-0 flex-1 truncate text-muted ${coarse ? "basis-full pl-6 text-label" : "text-label"}`}>{t(`keys.for.${entry.id}`)}</span>
-        {coarse ? null : <span className="shrink-0 font-mono text-[10.5px] text-muted">{entry.variable}</span>}
+        {coarse ? null : <span className="shrink-0 text-muted">{variable}</span>}
         {oneLine ? <span className="ml-1 shrink-0">{addButton}</span> : null}
       </div>
       )}
@@ -441,10 +436,10 @@ function KeyRow({ entry, layout, staging, owner, grouped = false }: { entry: Key
           {icons}{addButton}
         </div>
       )}
+      {menuBox}
       {coarse && !phoneUnset ? variableLine : null}
       {noteLine ? <span className={`text-label ${coarse ? "" : "pl-6"}`}>{noteLine}</span> : null}
       {field ? <div className={coarse ? "" : "pl-6"}>{field}</div> : null}
-      {portal}
     </div>
   );
 }
@@ -553,7 +548,7 @@ function ImportPanel({ answer, layout, onApplied }: { answer: KeysAnswer; layout
         <div className="flex flex-col gap-1">
           <div data-keys-import-masked="" role="group" aria-label={t("keys.import.aria")}
             className={`flex flex-col rounded-control border border-border bg-sunken font-mono text-secondary ${menu ? "px-2 py-1 text-[10.5px] leading-[14px]" : "px-3 py-2 text-[11.5px] leading-4"}`}>
-            {maskImportText(text).map((line, index) => <span key={index} className={`block min-h-[1lh] ${line.startsWith("#") ? "truncate whitespace-pre" : "break-all"}`}>{line}</span>)}
+            {maskImportText(text).map((line, index) => <span key={index} className={`block min-h-[1lh] ${line.startsWith("#") ? "whitespace-pre-wrap [overflow-wrap:anywhere]" : "break-all"}`}>{line}</span>)}
           </div>
           <div className={`flex items-center justify-between gap-2 ${size}`}>
             <span className="text-muted">{t("keys.import.maskedNote")}</span>

@@ -169,8 +169,11 @@ Each key row shows:
   читання вголос»);
 - a **status dot** with a short popover (never a pill):
   - green — «Збережено тут» (`file`);
-  - neutral blue — «Задано змінною OPENROUTER_API_KEY; змінюється там»
-    (`env`), with the docker note when the install runs in the image;
+  - accent indigo (`--color-accent`; the `info` token is teal and too close
+    to green) — «Задано змінною OPENROUTER_API_KEY; змінюється там»
+    (`env`), with the docker note when the install runs in the image; the
+    row also says «· зі змінної» after the masked value or the variable
+    name, so the source reads without the popover;
   - hollow grey — «Не задано»;
   - amber — «Не вдалося прочитати» (the reader threw; today's
     `providerKey.failed` case);
@@ -478,3 +481,14 @@ phone's 16 px input floor made the field the largest text on screen. On the
 phone an unset row is three short lines, with «Додати» on the name's line.
 Варіант 3 lists an unreadable key in its own group «Не читається», and the
 file export's button reads «Завантажити файл» over the file name.
+
+What the second critic round changed: the `env` dot uses the accent, and
+every variant's `env` row says «· зі змінної» (Варіант 1 after the name in
+the 232 px panel and after the masked tail on the phone, Варіанти 2 and 3
+after the variable name), so it reads as set by a variable without hovering.
+The ⋯ menu opens in the row in every variant, right-aligned under its button
+(the panel's at the row's width), so no edge of it lands on the next row's
+icons. A member sees «Задано змінною» as the state word in every variant.
+The pasted header line wraps instead of ending in an ellipsis. The driver
+fails a frame whose menu overlaps another row's control, whose `env` row
+does not name a variable, or whose pasted header is cut.

@@ -11282,7 +11282,16 @@ describe("keys settings prototype", () => {
               if (phone && !control.matches("[data-keys-dot], input[type=radio], input[type=checkbox]") && (r.height < 43.5 || r.width < 43.5) && control.closest("[data-keys-page], [data-keys-import-page], [data-keys-dialog]")) smallTargets.push(`${control.getAttribute("aria-label") ?? control.textContent?.trim().slice(0, 40)} ${Math.round(r.width)}×${Math.round(r.height)}`);
             }
             const popover = document.querySelector("[data-keys-pop]")?.closest("[role=tooltip]")?.getBoundingClientRect();
-            const menu = document.querySelector("[data-keys-menu]")?.getBoundingClientRect();
+            const menuNode = document.querySelector("[data-keys-menu]");
+            const menu = menuNode?.getBoundingClientRect();
+            /* A menu edge over another row's control leaves torn icons in the frame. */
+            const menuCovers = menu ? [...host.querySelectorAll<HTMLElement>("[data-keys-row] button, [data-keys-row] [role=button]")]
+              .filter((control) => !menuNode!.contains(control) && control.closest("[data-keys-row]") !== menuNode!.closest("[data-keys-row]"))
+              .filter((control) => { const r = control.getBoundingClientRect(); return r.width > 0 && r.left < menu.right && r.right > menu.left && r.top < menu.bottom && r.bottom > menu.top; })
+              .map((control) => control.getAttribute("aria-label") ?? control.tagName) : [];
+            /* A key set by a variable says so on its row, without its popover. */
+            const envRow = host.querySelector<HTMLElement>('[data-keys-row][data-keys-source="env"]');
+            const envRowText = envRow ? [...envRow.childNodes].filter((node) => !(node instanceof HTMLElement && node.matches("[role=tooltip], [data-keys-menu]"))).map((node) => (node as HTMLElement).innerText ?? node.textContent ?? "").join(" ").replace(/\s+/g, " ").trim() : null;
             const inView = (r?: DOMRect) => r ? r.left >= 0 && r.top >= 0 && r.right <= innerWidth && r.bottom <= innerHeight : null;
             const inSurface = (r?: DOMRect) => r ? r.left >= box.left - 1 && r.right <= box.right + 1 && r.top >= box.top - 1 && r.bottom <= box.bottom + 1 : null;
             /* What a field holds is on screen too, though innerText leaves it out. */
@@ -11290,7 +11299,7 @@ describe("keys settings prototype", () => {
             return {
               surface: { left: Math.round(box.left), top: Math.round(box.top), width: Math.round(box.width), height: Math.round(box.height) },
               overflowX: host.scrollWidth - host.clientWidth, truncated, offscreen, smallTargets,
-              popoverInView: inView(popover), menuInView: inView(menu), popoverInSurface: inSurface(popover), menuInSurface: inSurface(menu),
+              popoverInView: inView(popover), menuInView: inView(menu), popoverInSurface: inSurface(popover), menuInSurface: inSurface(menu), menuCovers, envRowText,
               text: (host.innerText ?? "").replace(/\s+/g, " ").trim(), fieldText,
             };
           }, { surface, phone });
@@ -11319,6 +11328,9 @@ describe("keys settings prototype", () => {
             if (geometry.popoverInSurface === false) failures.push(`${key}: popover outside the surface`);
             if ((state === "env-popover" || state === "row-failed") && geometry.popoverInView !== true) failures.push(`${key}: popover closed in the frame`);
             if (geometry.menuInSurface === false) failures.push(`${key}: menu outside the surface`);
+            if (geometry.menuCovers.length) failures.push(`${key}: menu covers ${geometry.menuCovers.join(", ")}`);
+            if (geometry.envRowText !== null && !/змінн/.test(geometry.envRowText)) failures.push(`${key}: the env row does not say it is set by a variable: ${geometry.envRowText}`);
+            if (geometry.truncated.some((line) => line.startsWith("# "))) failures.push(`${key}: the pasted header is cut`);
           }
           if (valueOnScreen !== (state === "revealed")) failures.push(`${key}: value on screen ${valueOnScreen}`);
         };
