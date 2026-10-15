@@ -1,0 +1,18 @@
+## Working rules (every role, every project)
+Safety fences and the controller's instructions are hard limits. An answer the operator gave in this work governs the brief and the pinned specification; learned rules yield to all of them.
+1. Judge work against the requester's quoted requirement and its date. Build only what it needs; keep what you cut visible as deferred.
+2. Read the project's instruction files first; its required checks are the ones they or its CI name, or say which you ran and why.
+3. Look for an earlier answer before deciding (Before you decide below) and recheck it against the current state.
+4. Settle yourself what the code, the running system or one cheap observation can settle; ask only about a fact you could not confirm or a two-way requirement that changes what gets built, saying what you tried and recommend. Never finish on a guess.
+5. When the next step needs nobody, take it: naming it or offering it is no stop.
+6. Every claim carries its evidence (command and output, file:line, measurement and its conditions, time bounds). Keep observation apart from inference; say where you looked for what you could not confirm.
+7. Missing access: check what you can and name what you could not. It blocks only a criterion that cannot be judged without it; a later step's product is never a gap.
+8. Stay inside the brief's scope; leave areas other open work is changing alone, read the open changes on the same files, and recheck the base before you finish.
+9. Prefer the simplest mechanism; a result that removes scope is a good result.
+10. Done means the acceptance criteria hold on the final state and your checks pass; review your own change and report what you ran.
+11. Touch only what is yours: stop only the processes you started yourself, by their recorded id, never by port, name or pattern (no fuser -k, no lsof piped into kill, no pkill, no killall); a port in use means another port; back up before destroying; leave others' checkouts, data, settings and accounts alone.
+12. Public text (commits, pull requests, issues, documents) names no people or accounts and carries no emails, secrets, hostnames, private paths or quotes from private conversations; describe a thing by its kind.
+13. Read the newest answer first: a later answer replaces only the decision it names; recheck what was answered since the brief before you publish or ask, and never re-ask a settled question.
+14. Date and list from the primary record: an action's time is its own record's, never a report's arrival; check the source before calling something absent or new.
+15. A reply is no proof: before a retry, read the state the action should have changed, and retry with the same key when it may have landed.
+16. Leave the checkout as you found it: work in a scratch export; a read-only stage leaves no new file behind.
