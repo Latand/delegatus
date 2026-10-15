@@ -64,7 +64,7 @@ test("an older role validator reads and writes healthy lanes beside the newer me
   expect(older.loadPipelines().map((row) => row.id)).toEqual(["healthy"]);
   expect(older.loadPipelinesForList().map((row) => row.id)).toEqual(["healthy"]);
   expect(older.loadPipelinesForStartup().map((row) => row.id)).toEqual(["healthy"]);
-  await older.withPipelineMutation((rows, persist) => { rows[0]!.stateDetail = "stage report persisted"; persist(); });
+  await older.withPipelineMutation(async (rows, persist) => { rows[0]!.stateDetail = "stage report persisted"; await persist(); });
   expect(older.loadPipelines()[0]!.stateDetail).toBe("stage report persisted");
 }));
 
@@ -84,7 +84,7 @@ test("a release before the visual critic keeps older-role lanes and preserves a 
   expect(older.isEffectiveRole(critic.stages[0]!.effectiveRole)).toBe(false);
   expect(older.isEffectiveRole(fixture("merge", true).stages[0]!.effectiveRole)).toBe(true);
   expect(older.loadPipelines().map((row) => row.id)).toEqual(["healthy", "merge"]);
-  await older.withPipelineMutation((rows, persist) => { rows[1]!.stateDetail = "older write"; persist(); });
+  await older.withPipelineMutation(async (rows, persist) => { rows[1]!.stateDetail = "older write"; await persist(); });
   expect(storedBytes(root, "critic")).toBe(bytes);
   expect(loadPipelines().map((row) => [row.id, row.stateDetail ?? null])).toEqual([["healthy", null], ["merge", "older write"], ["critic", null]]);
   expect(findPipelineRecord("critic")!.stages[0]!.effectiveRole).toMatchObject({ roleId: "visual-critic", access: "read-only" });
@@ -102,7 +102,7 @@ test("replacement, bounded writes and rollback mirrors preserve the newer record
   insertRaw(root, "future", bytes);
   const older = await olderStore(root);
   older.savePipelines(older.loadPipelines());
-  await older.withPipelineMutation((rows, persist) => { rows[0]!.stateDetail = "changed"; persist(rows); });
+  await older.withPipelineMutation(async (rows, persist) => { rows[0]!.stateDetail = "changed"; await persist(rows); });
   older.withDeliveryMutation((tx) => { const row = tx.get("healthy")!; row.stateDetail = "bounded"; tx.put(row); });
   expect(() => older.savePipelines([fixture("future")])).toThrow("preserved");
   expect(() => older.withDeliveryMutation((tx) => tx.delete("future"))).toThrow("preserved");
@@ -122,7 +122,7 @@ test("an older release imports a newer legacy record intact and the upgraded con
   fs.writeFileSync(path.join(root, "pipelines.json"), `{"schemaVersion":${PIPELINES_SCHEMA_VERSION},"pipelines":[${JSON.stringify(fixture("healthy"))},${bytes}]}`);
   const older = await olderStore(root);
   expect(older.loadPipelines().map((row) => row.id)).toEqual(["healthy"]);
-  await older.withPipelineControllerMutation((rows, persist) => { expect(rows.map((row) => row.id)).toEqual(["healthy"]); persist(); });
+  await older.withPipelineControllerMutation(async (rows, persist) => { expect(rows.map((row) => row.id)).toEqual(["healthy"]); await persist(); });
   older.checkpointPipelineRollbackMirrorsForDemotion();
   expect(storedBytes(root, "future")).toBe(bytes);
   expect(fs.readFileSync(path.join(root, "pipelines.json"), "utf8")).toContain(bytes);
@@ -167,7 +167,7 @@ test("unparseable SQLite rows and legacy JSON still abort reads and writes", asy
   await isolated(async (legacy) => {
     fs.writeFileSync(path.join(legacy, "pipelines.json"), "{broken");
     expect(() => loadPipelines()).toThrow();
-    await expect(withPipelineMutation((_, persist) => persist())).rejects.toThrow();
+    await expect(withPipelineMutation(async (_, persist) => await persist())).rejects.toThrow();
     expect(fs.readFileSync(path.join(legacy, "pipelines.json"), "utf8")).toBe("{broken");
   });
 }));

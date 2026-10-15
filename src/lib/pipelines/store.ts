@@ -1,3 +1,4 @@
+import { waitForStateLock } from "@/lib/state/lockWait";
 import crypto from "node:crypto";
 import { performanceSpans } from "@/lib/performanceSpans";
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -220,6 +221,11 @@ function isRuntimeSwitches(value: unknown): boolean {
     && typeof item.to.accountId === "string" && typeof item.to.accountPinned === "boolean"
     && ["cutAt", "continuedAt", "settledAt"].every(key => item[key] === undefined || typeof item[key] === "string" && Number.isFinite(Date.parse(item[key])))
     && (item.reconfigureNoop === undefined || typeof item.reconfigureNoop === "boolean")
+    && (item.retry === undefined || item.retry && typeof item.retry.reason === "string" && item.retry.reason.length <= 2000
+      && typeof item.retry.requestedAt === "string" && Number.isFinite(Date.parse(item.retry.requestedAt))
+      && (item.retry.completedAt === undefined || typeof item.retry.completedAt === "string" && Number.isFinite(Date.parse(item.retry.completedAt)))
+      && (item.retry.operatorStoppedAt === undefined || typeof item.retry.operatorStoppedAt === "string" && Number.isFinite(Date.parse(item.retry.operatorStoppedAt)))
+      && (item.retry.pendingReason === undefined || typeof item.retry.pendingReason === "string" && item.retry.pendingReason.length <= 2000))
     && (item.rollback === undefined || typeof item.rollback === "boolean")
     && (item.continuationKey === undefined || typeof item.continuationKey === "string")
     && (item.continuationDispatch === undefined || typeof item.continuationDispatch.key === "string"
@@ -1175,7 +1181,7 @@ export async function loadPipelinesForStartupAsync(): Promise<Pipeline[]> {
   let slice = performance.now();
   let resolveProject = projectAliasResolver();
   for (const pipeline of evidence.pipelines) {
-    result.push(performanceSpans.sync("pipeline.copy", () => reviveLoadedPipeline(pipeline, resolveProject), 1));
+    result.push(performanceSpans.sync("pipeline.copy", () => cloneLoadedPipeline(pipeline, resolveProject), 1));
     if (performance.now() - slice >= 4) {
       await performanceSpans.wait("pipeline.yield", () => new Promise<void>(resolve => setTimeout(resolve, 0)));
       // A project move may have committed while this copy yielded.
@@ -1226,7 +1232,7 @@ export function loadPipelinesForStartup(): Pipeline[] {
   if (prepared) {
     if (prepared.ownership) throw new PipelineStoreError("full pipeline records require full startup admission");
     const resolveProject = projectAliasResolver();
-    return prepared.pipelines.map(pipeline => performanceSpans.sync("pipeline.copy", () => reviveLoadedPipeline(pipeline, resolveProject), 1));
+    return prepared.pipelines.map(pipeline => performanceSpans.sync("pipeline.copy", () => cloneLoadedPipeline(pipeline, resolveProject), 1));
   }
   return readCompletePipelineRecords().flatMap((record) => { const decoded = decodePipeline(record); return decoded ? [decoded] : []; });
 }
@@ -1279,9 +1285,8 @@ export function planPipelineStateMigration(): {
   };
 }
 
-/** Fresh per-call copies of every layer a caller may write (pipeline, stage,
-    run, attempt, cursor rows), so cached records stay pristine while callers
-    receive independently mutable structures. Deep config leaves are shared. */
+/** Normalize defaults and project identity on decoded records. Nested config
+    can retain input references; shared records need cloneLoadedPipeline. */
 function reviveLoadedPipeline(pipeline: Pipeline, resolveProject: (project: string) => string = canonicalProject): Pipeline {
   const settledAttempts = pipeline.terminalReap?.settledAttempts
     ?? (pipeline.terminalReap?.settledAt
@@ -1370,7 +1375,12 @@ function reviveLoadedPipeline(pipeline: Pipeline, resolveProject: (project: stri
   };
 }
 
-let projectionCache: { signature: string; pipelines: Pipeline[] } | null = null;
+/** Detach every nested field before a mutable reader or session sees a shared
+    decoded record, including configuration and historical attempt evidence. */
+function cloneLoadedPipeline(pipeline: Pipeline, resolveProject: (project: string) => string = canonicalProject): Pipeline {
+  return reviveLoadedPipeline(structuredClone(pipeline), resolveProject);
+}
+
 const pipelineStores = new Map<string, {
   active: SqliteStateCollection<Pipeline>;
   archive: SqliteStateCollection<Pipeline>;
@@ -1471,13 +1481,14 @@ function stores(): { active: SqliteStateCollection<Pipeline>; archive: SqliteSta
   if (held) return held;
   initializeStateCollections(filename, pipelineStateCollectionSeeds());
   const common = {
+    readCacheKey: JSON.stringify(["pipeline-v1", PIPELINE_ROLE_IDS]),
     schemaVersion: PIPELINES_SCHEMA_VERSION,
     busyMessage: "pipeline state is busy",
     key: (pipeline: Pipeline) => pipeline.id,
     decode: decodePipeline,
     preserveRejectedRecords: true,
-    clone: reviveLoadedPipeline,
-    cloneController: (pipeline: Pipeline) => reviveLoadedPipeline(structuredClone(pipeline)),
+    clone: cloneLoadedPipeline,
+    cloneController: cloneLoadedPipeline,
     decodeAuthority: () => JSON.stringify(projectAliasSnapshot()),
     decodeError: (error: unknown) => error instanceof PipelineStoreError
       ? error
@@ -1514,21 +1525,10 @@ function archiveStore(): SqliteStateCollection<Pipeline> {
   return stores().archive;
 }
 
-function pipelinesFileSignature(): string {
-  return pipelineStore().signature();
-}
-
-/** The validated pipeline projection keeps the signature cache introduced for
-    the JSON store. SQLite collection revisions invalidate it across processes.
-    The records are the cache itself — only the exported readers below decide
-    what a caller may do with them. */
-function cachedPipelines(): Pipeline[] {
-  const before = pipelinesFileSignature();
-  if (projectionCache?.signature === before) return projectionCache.pipelines;
-  const pipelines = [...pipelineStore().loadReadonly()];
-  const after = pipelinesFileSignature();
-  if (before === after) projectionCache = { signature: after, pipelines };
-  return pipelines;
+/** SQLite revisions, database identity and project aliases validate the shared
+    read cache. The exported reader decides whether to copy its records. */
+function cachedPipelines(): readonly Pipeline[] {
+  return pipelineStore().loadReadonly();
 }
 
 /** Read-only load for request-path projections (issue #798): no lease, and the
@@ -1537,7 +1537,7 @@ function cachedPipelines(): Pipeline[] {
     pass `loadPipelines` uses, so a projection overlay can never write into the
     cache. */
 export function loadPipelinesForProjection(): Pipeline[] {
-  return cachedPipelines().map((pipeline) => withDeliveryPublicationDetail(reviveLoadedPipeline(pipeline)));
+  return cachedPipelines().map((pipeline) => withDeliveryPublicationDetail(cloneLoadedPipeline(pipeline)));
 }
 
 /** Reuse the lane card's existing publication/detail slot. Never persist this
@@ -1552,7 +1552,7 @@ export function withDeliveryPublicationDetail(pipeline: Pipeline): Pipeline {
 
 /** The registry read behind bounded list projections (issue #863).
  *
- * Deliberately skips the per-caller `reviveLoadedPipeline` pass that every other
+ * Deliberately skips the per-caller `cloneLoadedPipeline` pass that every other
  * reader pays: a list page filters and slices these records and then copies only
  * the handful of scalars a row needs, so materializing mutable copies of 500
  * pipelines' nested stage/attempt history — for rows that are about to be
@@ -1589,12 +1589,12 @@ export function pipelineLockWaitMs(): number {
  * releases are retried in the background. */
 export async function withPipelineMutation<T>(
   mutate: (pipelines: Pipeline[], persist: {
-    (): void;
-    (records: readonly Pipeline[]): void;
+    (): Promise<void>;
+    (records: readonly Pipeline[]): Promise<void>;
   }) => Promise<T> | T,
   observeHold?: (heldMs: number) => void,
 ): Promise<T> {
-  return withViewerOperation("pipelines.mutation", () => refuseBusyBeforeAdmission((admitted) => pipelineStore().mutate((pipelines, persist) => {
+  return withViewerOperation("pipelines.mutation", () => refuseBusyBeforeAdmission(async (admitted) => (await waitForStateLock("pipelines.open", pipelineStore, { waitMs: pipelineLockWaitMs() })).mutate((pipelines, persist) => {
     admitted();
     return mutate(pipelines, persist);
   }, undefined, false, pipelineLockWaitMs(), observeHold)));
@@ -1602,13 +1602,13 @@ export async function withPipelineMutation<T>(
 
 export async function withPipelineControllerMutation<T>(
   mutate: (pipelines: Pipeline[], persist: {
-    (): void;
-    (records: readonly Pipeline[]): void;
+    (): Promise<void>;
+    (records: readonly Pipeline[]): Promise<void>;
   }, assertCurrent: (pipeline: Pipeline) => void) => Promise<T> | T,
   observeHold?: (heldMs: number) => void,
   explicitOnly = false,
 ): Promise<T> {
-  return withViewerOperation("pipelines.controller-mutation", () => performanceSpans.wait(explicitOnly ? "controller.admission" : "controller.reconcile", () => pipelineStore().reconcileSnapshot(mutate, observeHold, explicitOnly)));
+  return withViewerOperation("pipelines.controller-mutation", () => performanceSpans.wait(explicitOnly ? "controller.admission" : "controller.reconcile", async () => (await waitForStateLock("pipelines.open", pipelineStore)).reconcileSnapshot(mutate, observeHold, explicitOnly)));
 }
 
 /** Short startup state admission under the existing cross-process lease.
@@ -1626,7 +1626,7 @@ export async function withPipelineStartupAdmission<T>(
     let entered = false;
     try {
       let evidence = await preparePipelineEvidence(compact ? "ownership" : "startup");
-      const store = pipelineStore();
+      const store = await waitForStateLock("pipelines.open", pipelineStore, { waitMs: pipelineLockWaitMs() });
       // A first migration changes authority. Reread its result before taking
       // the lease; a corrupt legacy source has already refused preparation.
       if (evidence.signature !== evidenceSignature()) evidence = await preparePipelineEvidence(compact ? "ownership" : "startup");
@@ -1683,7 +1683,7 @@ export function withDeliveryMutation<R>(operation: (tx: StateBoundedTransaction<
 }
 
 export async function withDeliveryMutationAsync<R>(operation: (tx: StateBoundedTransaction<Pipeline>) => R, limit = 16): Promise<R> {
-  return refuseBusyBeforeAdmission((admitted) => pipelineStore().boundedPatchAsync(limit, (tx) => {
+  return refuseBusyBeforeAdmission(async (admitted) => (await waitForStateLock("pipelines.open", pipelineStore, { waitMs: pipelineLockWaitMs() })).boundedPatchAsync(limit, (tx) => {
     admitted();
     return operation(tx);
   }, pipelineLockWaitMs()));
@@ -1791,6 +1791,10 @@ const SETTLED_PIPELINE_ARCHIVE_AFTER_MS = 3 * 24 * 60 * 60 * 1000;
     the active collection. */
 export function loadArchivedPipelines(): Pipeline[] {
   return archiveStore().snapshot();
+}
+
+export function selectArchivedPipelines(select: (pipeline: Pipeline) => boolean, limit: number): Promise<Pipeline[]> {
+  return archiveStore().selectReadonlyAsync(select, limit);
 }
 
 function pipelineSettledForArchive(pipeline: Pipeline, nowMs: number): boolean {

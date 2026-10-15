@@ -3156,6 +3156,21 @@ test("dispatch authorization is rechecked after the delivering journal wait", as
   expect(statuses).toContain("failed");
 });
 
+for (const cut of ["before drain", "during journal write", "before resend"] as const) test(`runtime switch retirement prevents continuation delivery: ${cut}`, async () => {
+  let retired = cut === "before drain", sends = 0;
+  const statuses: string[] = [];
+  const queue = new StructuredDeliveryQueue({
+    effects: async () => [{ id: "effect:switch-retry", kind: "runtime.send", eventSeq: 1,
+      payload: { kind: "send", operationId: "switch-retry", conversationId: "conversation-one", text: "Continue stage", policy: "queue" } }],
+    status: async () => ({ status: "queued", revision: 1 }), hostClaim: async () => "owner:1",
+    conversationRetired: () => retired ? "runtime switch retry withdrew execution authority" : null,
+    transition: async (_id, status) => { statuses.push(status); if (cut === "during journal write" && status === "delivering") retired = true; },
+  }, () => host(async () => { sends++; retired = true; throw Error("thread/read timed out"); }));
+  await queue.drain();
+  expect(sends).toBe(cut === "before resend" ? 1 : 0);
+  expect(statuses).toContain("failed");
+});
+
 test("dispatch authorization is rechecked before a thread-read resend", async () => {
   let allowed = true, sends = 0;
   const statuses: string[] = [];

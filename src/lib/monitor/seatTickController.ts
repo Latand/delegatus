@@ -1,3 +1,5 @@
+import { pendingAutonomyReports, autonomyActive } from "./autonomy";
+import { expireSeatAutonomy, expireSeatSchedule } from "./seatTickSettings";
 import { releaseControllerForSources } from "@/lib/release/production";
 import type { ReleaseController } from "@/lib/release/run";
 import { runSeatAutoRotation, type SeatAutoRotationPorts } from "./seatAutoRotation";
@@ -1373,13 +1375,21 @@ export async function runSeatTickCheck(
   }
 }
 
+function needsWorkSources(verdict: SeatTickVerdict): boolean {
+  return verdict.kind === "proactive" || verdict.kind === "wake" && verdict.reasons.some(reason => reason.kind === "autonomy-idle");
+}
+
 function alarmPayload(input: SeatTickCheckInput, verdict: Extract<SeatTickVerdict, { kind: "wake" | "proactive" }>, issues: readonly ProposalIssue[] = [], snapshotAt = new Date(input.now).toISOString()) {
+  const autonomyShown = autonomyActive(input.settings.autonomy, input.now) ? `${input.settings.autonomy!.startedAt}:${input.settings.autonomy!.updatedAt}` : undefined;
   const noteShown = seatTickNoteRevision(input.settings.monitorPrompt);
   const monitorPromptUnchanged = noteShown !== null && input.state.noteShown === noteShown;
   const terminalChildren = input.children.filter((child) => child.status === "terminal").map((child) => child.outcomeId ?? child.conversationId);
   const renderedVerdict = verdict.kind === "wake" ? { ...verdict, items: withChildFinalMessages(verdict.items) } : verdict;
   const payload = verdict.kind === "wake"
     ? seatTickWakePayload({
+      autonomy: input.settings.autonomy,
+      autonomyUnchanged: !!autonomyShown && input.state.autonomyShown === autonomyShown,
+      now: input.now,
       project: input.project,
       workers: input.workers,
       snapshotAt,
@@ -1394,6 +1404,7 @@ function alarmPayload(input: SeatTickCheckInput, verdict: Extract<SeatTickVerdic
       skippedChildren: verdict.skippedChildren,
       unreadableChildren: verdict.unreadableChildren,
       signals: input.signals,
+      issues,
       /* What the check could not read travels with the wake it could still
          raise (#1298), so the seat acts on the rest knowing what is missing
          from it. */
@@ -1424,6 +1435,8 @@ function alarmPayload(input: SeatTickCheckInput, verdict: Extract<SeatTickVerdic
     eventsThrough: input.events.at(-1)?.seq ?? input.state.eventsThrough ?? 0,
     terminalChildren,
     noteShown,
+    ...(autonomyShown ? { autonomyShown } : {}),
+    ...(verdict.kind === "wake" && verdict.reasons.some(reason => reason.kind === "autonomy-ended") ? { autonomySummaryFor: pendingAutonomyReports(input.settings, input.now)[0]?.startedAt } : {}),
     bridgeReports: input.reports?.bridgeReports === true,
     frozenText: text,
   });
@@ -1664,7 +1677,7 @@ async function check(
     refreshWake: async (state, wake) => {
       let input = await refreshSeatTickEvidence(await gatherSeatTickInput(canonical, state, policy, sources), sources);
       let issues: readonly ProposalIssue[] = [];
-      if (seatTickDecision(input).verdict.kind === "proactive") {
+      if (needsWorkSources(seatTickDecision(input).verdict)) {
         issues = await (dependencies.proposalIssues ?? defaultProposalIssues)(canonical, sources);
         input = await refreshSeatTickEvidence(input, sources);
       }
@@ -1718,7 +1731,7 @@ async function check(
   const authDetail = await recoverSeatAuthentication(input, sources, readState, writeState, ensureCard, dependencies.seatAuth ?? {});
   const autoRotateDetail = await runSeatAutoRotation(input, sources, readState, writeState, ensureCard, deliver, dependencies.seatAutoRotation ?? {});
   let proposalIssues: readonly ProposalIssue[] = [];
-  if (seatTickDecision(input).verdict.kind === "proactive") {
+  if (needsWorkSources(seatTickDecision(input).verdict)) {
     proposalIssues = await (dependencies.proposalIssues ?? defaultProposalIssues)(input.project, sources);
     input = await refreshSeatTickEvidence(input, sources);
   }
@@ -1756,9 +1769,14 @@ async function check(
      behaviour. What it changes is the RECORD: a row that still says "off"
      beside a tick that is ticking is the kind of disagreement someone reads
      off the board at the worst possible moment. */
+  if (input.settings.autonomy?.endReason === "expired") {
+    try { expireSeatAutonomy(input.project, input.now); }
+    catch (error) { console.error("[seat tick] autonomy expiry could not be persisted", error instanceof Error ? error.name : "unknown"); }
+  }
   if (input.settings.lapsed) {
     try {
-      (dependencies.writeSettings ?? writeSeatTickSettings)(input.project, seatTickSettingsAfterLapse(input.project, input.settings));
+      if (dependencies.writeSettings) dependencies.writeSettings(input.project, seatTickSettingsAfterLapse(input.project, input.settings));
+      else expireSeatSchedule(input.project, input.now, SEAT_TICK_WAKE_INTERVAL_MS);
     } catch (error) {
       console.error("[seat tick] lapsed settings could not be persisted", error instanceof Error ? error.name : "unknown");
     }

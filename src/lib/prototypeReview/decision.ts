@@ -1,3 +1,4 @@
+import { canonicalOrchestratorProject } from "@/lib/orchestrator/seats";
 import { nativeAssociationCurrent } from "@/lib/attention/nativeCallerSources";
 import { NATIVE_ASSOCIATION_AUTHORIZATION_ERROR } from "@/lib/attention/nativeAssociationForm";
 import { NextRequest } from "next/server";
@@ -21,27 +22,27 @@ import type { DecidePrototypeInput, PrototypeDecision, PrototypeDeliveryState, P
 import { prototypeWorld, type PrototypeWorld } from "./world";
 import { prototypeTextLength } from "./textLength";
 
-export type PrototypeDeliveryContext = NextRequest | { kind: "operator-in-process"; authorize: () => void };
-const inProcess = (request: PrototypeDeliveryContext): request is Extract<PrototypeDeliveryContext, { kind: string }> => "kind" in request && request.kind === "operator-in-process";
+export type PrototypeDeliveryContext = NextRequest | { kind: "operator-in-process"; authorize: () => void } | { kind: "autonomous-seat"; conversationId: string; project: string; authorize: () => void };
+const inProcess = (request: PrototypeDeliveryContext): request is Extract<PrototypeDeliveryContext, { kind: string }> => "kind" in request && (request.kind === "operator-in-process" || request.kind === "autonomous-seat");
 
 /** The persisted delivery text: retries use these exact bytes. A changed
     decision whose earlier message may already have reached the seat says it
     replaces that one. */
 export function prototypeDecisionText(task: { id: string; text: string } | null, round: PrototypeReviewRound,
-  decision: Pick<PrototypeDecision, "chosen" | "comment" | "answers" | "skipped" | "rejected" | "recommendedWithReservation">, amends?: { at: string }): string {
+  decision: Pick<PrototypeDecision, "chosen" | "comment" | "answers" | "skipped" | "rejected" | "recommendedWithReservation">, amends?: { at: string }, actor: "operator" | "seat" = "operator"): string {
   const amendment = amends ? ` (amended)\nThis replaces the decision of ${amends.at} on the same round.` : "";
   const header = task && round.taskId !== null ? `Prototype review decision${amendment}\nTask: ${task.id} — ${task.text.split("\n")[0]}`
-    : `Operator decision${amendment}\nAsked: ${round.title}, ${round.createdAt.slice(11,16)} UTC`;
+    : `${actor === "seat" ? "Seat" : "Operator"} decision${amendment}\nAsked: ${round.title}, ${round.createdAt.slice(11,16)} UTC`;
   const chosen = round.variants.filter(v => decision.chosen.includes(v.number)).map(v => `${v.number} — ${v.name}`).join(", ");
   const rejection = `Rejected: none of the variants fits. Publish a new prototype round${round.taskId === null ? "" : " on this task"} that applies the corrections below; build no variant of this round.`;
   const footer = `\n\n${decision.rejected ? "Corrections" : "Comment"}:\n${decision.comment}\n\nEnd of prototype review decision.`;
   if (!round.questions?.length) return decision.rejected ? `${header}\nRound: ${round.title}\n${rejection}${footer}` : `${header}\nChosen: ${chosen}${footer}`;
   const answers = round.questions.map((q, i) => {
     const answer = decision.answers!.find(a => a.questionId === q.id)!;
-    if (answer.skipped) return `${i + 1}. ${q.text}${q.multiple ? " (several allowed)" : ""}\n   Skipped by the operator: already decided or no longer relevant — do not ask again.`;
+    if (answer.skipped) return `${i + 1}. ${q.text}${q.multiple ? " (several allowed)" : ""}\n   Skipped by the ${actor}: already decided or no longer relevant — do not ask again.`;
     const selected = answer.options.map(index => `   ${String.fromCharCode(97 + index)}) ${q.options[index]!.label}${q.options[index]!.recommended ? " (recommended)" : ""}`);
     if (answer.other && !answer.customText) selected.push("   Other: see the comment");
-    if (answer.customText) selected.push(`   Owner's custom note:\n${answer.customText}`);
+    if (answer.customText) selected.push(`   ${actor === "seat" ? "Seat's" : "Owner's"} custom note:\n${answer.customText}`);
     return `${i + 1}. ${q.text}${q.multiple ? " (several allowed)" : ""}\n${selected.join("\n")}`;
   }).join("\n");
   return `${header}\nRound: ${round.title}\n\nAnswers:${decision.recommendedWithReservation ? " recommended with reservation; resolve the owner's open point below." : decision.skipped ? " skipped, use your recommendations." : ""}\n${answers}${decision.rejected ? `\n\n${rejection}` : round.variants.length ? `\n\nChosen: ${chosen || "none"}` : ""}${footer}`;
@@ -82,7 +83,7 @@ export const prototypeDelivery: PrototypeDelivery = {
     const delivery = decision.delivery;
     let operationId = delivery.operationId;
     if (!operationId) {
-      const original = await resolveOriginalSend({ conversationId: delivery.conversationId!, clientMessageId: delivery.clientMessageId, text: delivery.text, origin: { kind: "operator" } });
+      const original = await resolveOriginalSend({ conversationId: delivery.conversationId!, clientMessageId: delivery.clientMessageId, text: delivery.text, origin: decision.decidedBy?.kind === "agent" ? { kind: "agent", conversationId: decision.decidedBy.conversationId } : { kind: "operator" } });
       if (original.kind === "absent") {
         // The admission ledger also remembers compacted keys. Absence in the
         // active rows alone cannot authorize another send after retention.
@@ -137,7 +138,7 @@ export async function refreshPrototypeDelivery(taskId: string | null,reviewId: s
 
 const messageKey = (reviewId: string, revision: number) => revision === 1 ? `prototype-decision:${reviewId}` : `prototype-decision:${reviewId}:${revision}`;
 function decidedBy(request: PrototypeDeliveryContext): NonNullable<PrototypeDecision["decidedBy"]> {
-  if (inProcess(request)) return { kind: "operator" };
+  if (inProcess(request)) return request.kind === "autonomous-seat" ? { kind: "agent", conversationId: request.conversationId } : { kind: "operator" };
   const actor = teamActor(request);
   return actor.kind === "member" ? { kind: "member", memberId: actor.memberId } : { kind: "operator" };
 }
@@ -157,6 +158,7 @@ export function decidePrototype(request: PrototypeDeliveryContext,taskId: string
   return mutatePrototypeRound(taskId,reviewId,(round,task) => {
     if (inProcess(request)) {
       request.authorize();
+      if (request.kind === "autonomous-seat" && (round.nativeAssociation || canonicalOrchestratorProject(task?.project ?? round.project ?? "") !== request.project)) throw new PrototypeError("autonomy cannot decide this form", 403);
       if (task && (runsElsewhere(task) || (!round.decision && prototypeReviewSummary(task.prototypeReviews ?? [])?.waitingReviewId !== round.id))) {
         throw new PrototypeError("prototype round is no longer waiting", 409);
       }
@@ -192,7 +194,7 @@ export function decidePrototype(request: PrototypeDeliveryContext,taskId: string
     if (questionnaire ? (input.skip === true ? input.answers !== undefined : input.answers === undefined)
       : input.skip !== undefined || input.answers !== undefined) throw new PrototypeError("provide answers or skip for a questionnaire only");
     let answers: PrototypeDecision["answers"];
-    try { if (questionnaire) answers = input.skip ? recommendedAnswers(round.questions!) : normalizePrototypeAnswers(round.questions!, input.answers, input.comment, ownerReply); }
+    try { if (questionnaire) answers = input.skip ? recommendedAnswers(round.questions!) : normalizePrototypeAnswers(round.questions!, input.answers, input.comment, ownerReply, ownerReply || inProcess(request) && request.kind === "autonomous-seat"); }
     catch (error) { throw new PrototypeError((error as Error).message); }
     const skipped = input.skip ? true : undefined;
     const chosen = [...input.chosen].sort((a,b) => a-b);
@@ -214,7 +216,9 @@ export function decidePrototype(request: PrototypeDeliveryContext,taskId: string
     const handedOver = prior && (prior.revision === undefined ? prior.delivery.state !== "no-orchestrator" : prior.delivery.dispatchedAt !== undefined);
     const revision = prior ? (prior.revision ?? 1) + 1 : 1;
     const recipient = world.orchestrator(task?.project ?? round.project);
-    const completeText = prototypeDecisionText(task, round, { chosen, comment: input.comment, answers, skipped, rejected: input.reject, recommendedWithReservation: input.recommendedWithReservation }, handedOver ? { at: prior.at } : undefined);
+    const autonomous = inProcess(request) && request.kind === "autonomous-seat";
+    let completeText = prototypeDecisionText(task, round, { chosen, comment: input.comment, answers, skipped, rejected: input.reject, recommendedWithReservation: input.recommendedWithReservation }, handedOver ? { at: prior.at } : undefined, autonomous ? "seat" : "operator");
+    if (autonomous) completeText = `Autonomous seat decision. The operator can amend this form to undo.\n${completeText}`;
     const text = ownerReply ? ownerDeliveryText(completeText, round) : completeText;
     if (questionnaire && Buffer.byteLength(text) > MAX_STRUCTURED_TEXT_BYTES) throw new PrototypeError("the answer is too long to send; shorten the comment");
     round.decision = { chosen, ...(ownerReply ? { originalReply: input.originalReply } : {}), ...(input.recommendedWithReservation ? { recommendedWithReservation: true as const } : {}),

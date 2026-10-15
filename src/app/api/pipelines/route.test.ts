@@ -1,4 +1,4 @@
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, expect, test, spyOn } from "bun:test";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -23,6 +23,37 @@ const { registerPipelineTick } = await import("@/lib/pipelines/controllerSignal"
 const collectionRequest = (query = "") => new NextRequest(`http://127.0.0.1/api/pipelines${query}`);
 const CURRENT_HEAD = execFileSync("git", ["rev-parse", "HEAD"], { cwd: process.cwd(), encoding: "utf8" }).trim();
 agentRegistry().ensureConversation("codex", creatorPath, null);
+
+test("pipeline responses preserve full JSON and serialize only rows requested by the reader", async () => {
+  const { buildPipeline, loadPipelines, savePipelines } = await import("@/lib/pipelines/store");
+  const previous = loadPipelines();
+  const records = ["one", "two", "three"].map(id => buildPipeline({ id, task: `Unicode \"${id}\"\nрядок 😀`,
+    project: "fixture", repoDir: "/repo", stages: [{ id: "build", kind: "run", prompt: "full prompt", next: null,
+      effectiveRole: { roleId: null, engine: "codex", model: "gpt-6.1-sol", effort: "high", access: "read-write", promptScaffold: null } }],
+    srcPath: null, srcConversationId: null, now: "2026-10-01T00:00:00.000Z" }));
+  try {
+    savePipelines(records);
+    const expected = loadPipelines();
+    expect(await (await GET(collectionRequest())).json()).toEqual({ pipelines: expected });
+    const stringify = spyOn(JSON, "stringify");
+    try {
+      const response = await GET(collectionRequest());
+      const encodedRows = () => stringify.mock.calls.filter(([value]) => records.some(r => r.id === (value as { id?: string })?.id)).length;
+      expect(encodedRows()).toBe(0);
+      const reader = response.body!.getReader();
+      expect(new TextDecoder().decode((await reader.read()).value)).toBe('{"pipelines":[');
+      expect(encodedRows()).toBe(0);
+      const first = new TextDecoder().decode((await reader.read()).value);
+      expect(JSON.parse(first)).toEqual(expected[0]);
+      expect(encodedRows()).toBe(1);
+      await reader.cancel();
+      await Bun.sleep(10);
+      expect(encodedRows()).toBe(1);
+    } finally { stringify.mockRestore(); }
+    savePipelines([]);
+    expect(await (await GET(collectionRequest())).text()).toBe('{"pipelines":[]}');
+  } finally { savePipelines(previous); }
+});
 
 afterAll(() => {
   if (previousStateDir === undefined) delete process.env.LLV_STATE_DIR;

@@ -23,7 +23,7 @@ import type { RuntimeEngine as FlowEngine } from "@/lib/agent/runtimeConfig";
 
 import { latestOperationalStageAttempt } from "./attemptSelection";
 import { failEdgeExhaustion, failEdgeMaxRounds, pipelineReviewSummary, type PipelineReviewSummary } from "./failEdgeBudget";
-import { loadArchivedPipelines, loadPipelinesForList, withDeliveryPublicationDetail } from "./store";
+import { selectArchivedPipelines, loadPipelinesForList, withDeliveryPublicationDetail } from "./store";
 import type {
   Pipeline,
   PipelineAccess,
@@ -181,6 +181,18 @@ export function selectPipelineListRecords(
     if (selected.length >= limit) break;
   }
   return selected;
+}
+
+/** Select hot rows first, then read only enough cold history to fill the page. */
+export async function loadPipelineListRecords(filter: PipelineListFilter, checkpoint: () => void = () => {}): Promise<readonly Pipeline[]> {
+  checkpoint();
+  const hot = selectPipelineListRecords(loadPipelinesForList(), filter);
+  const remaining = boundedLimit(filter.limit) - hot.length;
+  if (!filter.includeClosed || remaining <= 0) return hot;
+  const archive = await selectArchivedPipelines(
+    pipeline => { checkpoint(); return selectPipelineListRecords([pipeline], filter).length > 0; }, remaining,
+  );
+  return [...hot, ...archive];
 }
 
 function attemptRow(attempt: PipelineStageAttempt | null): PipelineListAttempt | null {
@@ -354,14 +366,10 @@ async function projectPipelineRows<Row>(
 ): Promise<Row[]> {
   const checkpoint = options.checkpoint ?? (() => {});
   checkpoint();
-  const hot = (options.source ?? loadPipelinesForList)();
-  /* Settled records live in the cold archive; only a closed-inclusive list
-     pays for reading them. */
-  const records = filter.includeClosed === true && !options.source
-    ? [...hot, ...loadArchivedPipelines()]
-    : hot;
+  const selected = options.source
+    ? selectPipelineListRecords(options.source(), filter)
+    : await loadPipelineListRecords(filter, checkpoint);
   checkpoint();
-  const selected = selectPipelineListRecords(records, filter);
   const rows: Row[] = [];
   for (const pipeline of selected) {
     if (rows.length > 0 && rows.length % YIELD_EVERY_ROWS === 0) {

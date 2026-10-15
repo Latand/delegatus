@@ -1,15 +1,16 @@
+import { waitForStateLock } from "./lockWait";
 import fs from "node:fs";
 
-import { loadFlows, saveFlows } from "@/lib/flows/store";
+import { loadFlows, saveFlowsAsync as saveFlows } from "@/lib/flows/store";
 
 const [resultFile, action = "read"] = process.argv.slice(2);
 if (!resultFile) throw new Error("hot-state authority child result path is required");
 
 try {
-  const flows = loadFlows();
+  const flows = await waitForStateLock("flows.open", loadFlows);
   if (action === "write" && flows[0]) {
     flows[0].stateDetail = "late-portless-write";
-    saveFlows(flows);
+    await saveFlows(flows);
   }
   fs.writeFileSync(resultFile, JSON.stringify({
     ok: true,

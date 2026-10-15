@@ -138,12 +138,12 @@ test("reconciliation avoids inactive revisions and warm decoding while yielding 
       } finally { serialization.mockRestore(); }
     } finally { clearInterval(timer); census.mockRestore(); }
     // Detached writes and ordinary implicit checkpoints retain their contract.
-    await store.reconcileSnapshot((records, persist, assertCurrent) => {
+    await store.reconcileSnapshot(async (records, persist, assertCurrent) => {
       records[0]!.value = 500;
-      persist();
+      await persist();
       assertCurrent(records[0]!);
       records[1]!.value = 600;
-      persist([records[1]!]);
+      await persist([records[1]!]);
     });
     expect(store.get("row-0")?.value).toBe(500);
     expect(store.get("row-1")?.value).toBe(600);
@@ -153,7 +153,7 @@ test("reconciliation avoids inactive revisions and warm decoding while yielding 
       peer.boundedPatch(2, tx => { const row = tx.get(stale.key)!; tx.put({ ...row, value: 700 }); });
       expect(() => assertCurrent(stale)).toThrow(StateSnapshotChangedError);
       stale.value = 800;
-      persist([stale]);
+      await persist([stale]);
     })).rejects.toThrow(StateSnapshotChangedError);
     expect(store.get("row-0")?.value).toBe(700);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }

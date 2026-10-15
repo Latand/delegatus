@@ -35,6 +35,7 @@ export interface BlockingWaitCorrelation {
 }
 
 export interface BlockingWaitSample {
+  stateWait?: { callSite: string; reason: string; outcome: string; attempts: number; maxSliceMs: number; backoffMs: number; synchronousSleepMs: number; pid: number; processKind: string; release: string | null };
   site: BlockingWaitSite;
   /** `LLV_STATE_OWNER` of this process, or `unowned`. */
   role: string;
@@ -104,11 +105,13 @@ export function recordBlockingWait(input: {
   subject?: string | null;
   correlation?: BlockingWaitCorrelation | null;
   refused?: boolean;
+  stateWait?: BlockingWaitSample["stateWait"];
 }): void {
   if (!Number.isFinite(input.durationMs) || (input.durationMs <= 0 && !input.refused)) return;
   const context = input.correlation ?? currentWaitCorrelation();
   const sample: BlockingWaitSample = {
     site: input.site,
+    ...(input.stateWait ? { stateWait: input.stateWait } : {}),
     role: blockingWaitRole(),
     durationMs: round(input.durationMs),
     synchronous: input.synchronous,
@@ -120,7 +123,7 @@ export function recordBlockingWait(input: {
   };
   samples.push(sample);
   if (samples.length > SAMPLE_LIMIT) samples.splice(0, samples.length - SAMPLE_LIMIT);
-  if (sample.durationMs >= BLOCKING_WAIT_LOG_MS || (sample.site === "state-write-lock" && sample.refused)) {
+  if (sample.durationMs >= (sample.site === "state-write-lock" || sample.site === "state-lease" ? 50 : BLOCKING_WAIT_LOG_MS) || (sample.site === "state-write-lock" && sample.refused)) {
     try { logSink(`[blocking-wait] ${JSON.stringify(sample)}`); }
     catch { /* a log that cannot be written never fails the caller */ }
   }

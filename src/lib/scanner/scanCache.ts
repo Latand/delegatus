@@ -119,6 +119,7 @@ const FILE_SCAN_PERSISTENCE_DIAGNOSTIC_MS = 60_000;
 let lastFileScanPersistenceDiagnosticAt = Number.NEGATIVE_INFINITY;
 const fileScanCacheStore = globalThis as typeof globalThis & {
   __llvFilesRouteScans?: Map<string, unknown>;
+  __llvFilesBootstrapEpoch?: string;
 };
 
 function fileScanCache(): Map<string, unknown> {
@@ -130,6 +131,14 @@ let fileScanEpochs = 0;
 function newFileScanEpoch(): string {
   fileScanEpochs += 1;
   return `${Date.now().toString(36)}${fileScanEpochs.toString(36)}`;
+}
+
+/** Reserve the new counter's identity without reading or priming a scan. A
+ * persisted board predates generation one, including if a scan is in flight. */
+export function fileScanBootstrapEpoch(): string {
+  const slot = fileScanCache().get("") as FileScanCacheSlot | undefined;
+  if (slot?.schemaVersion === FILE_SCAN_CACHE_SCHEMA_VERSION && slot.epoch) return slot.epoch;
+  return fileScanCacheStore.__llvFilesBootstrapEpoch ??= newFileScanEpoch();
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -828,7 +837,7 @@ function globalFileScanSlot(): FileScanCacheSlot {
     if (snapshot) primePersistedFileDerivations(snapshot);
     const slot: FileScanCacheSlot = {
       schemaVersion: FILE_SCAN_CACHE_SCHEMA_VERSION,
-      epoch: newFileScanEpoch(),
+      epoch: fileScanBootstrapEpoch(),
       snapshot,
       snapshotGeneration: 0,
       requestedGeneration: 0,
@@ -1170,6 +1179,7 @@ export function resetFilesRouteCacheForTests(): void {
     refresh?.controller?.abort(scanAbortError());
   }
   cache.clear();
+  fileScanCacheStore.__llvFilesBootstrapEpoch = undefined;
   /* The coordinator's single-generation lease lives on globalThis alongside
      this cache. A test that leaves a gated scan unfinished would otherwise
      wedge every later test's generations behind it. */
