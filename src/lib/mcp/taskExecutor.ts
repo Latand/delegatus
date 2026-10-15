@@ -40,7 +40,9 @@ export class McpTaskExecutor {
 
   async identifyCapability(capability: string, context: McpToolCallContext = {}): Promise<string | null> {
     const result = await this.request("identifyCapability", {}, { capability }, context);
-    if (!("conversationId" in result)) throw new Error("invalid task executor identity reply");
+    if (!("conversationId" in result) || (result.conversationId !== null && typeof result.conversationId !== "string")) {
+      throw new Error("invalid task executor identity reply");
+    }
     return result.conversationId;
   }
 
