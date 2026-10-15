@@ -2,7 +2,6 @@ import type { DismissedBy } from "@/lib/attention/dismissalTypes";
 import type { BridgeAsk, FileEntry } from "@/lib/types";
 
 import {
-  type BridgeResolvedAskV1,
   bridgeReportOriginLabel,
   isBridgeDecisionRequestClass,
   BRIDGE_ASK_TTL_SECONDS,
@@ -213,24 +212,4 @@ export function overlayBridgeAsks(
     file.bridgeAsks = [...open];
     file.bridgeAsk = open.at(-1)!;
   }
-}
-
-/**
- * The operator's resolutions as the seat tick reads them (§5.1): a question
- * the operator resolved is a question they answered, so it counts as an
- * operator message in the seat it was asked from, at the moment it was
- * resolved. Only the operator's own resolutions count, and only of the rows
- * handed in (the project's manager reports).
- */
-export function resolvedQuestionAnswers(
-  reports: readonly BridgeReportV1[],
-  resolved: readonly BridgeResolvedAskV1[],
-): { conversationId: string; at: string }[] {
-  const bySeq = new Map(reports.map((report) => [report.seq, report] as const));
-  return resolved.flatMap((entry) => {
-    const report = bySeq.get(entry.seq);
-    return report?.targetSeatConversationId && entry.by.kind === "operator" && isBridgeDecisionRequestClass(report.class)
-      ? [{ conversationId: report.targetSeatConversationId, at: entry.at }]
-      : [];
-  });
 }

@@ -41,7 +41,7 @@ the data. These reads need Delegatus running. See
 
 One line per area:
 
-- **Conversations.** Read, search, message and steer agents: `list_conversations`, `get_conversation`, `conversation_messages`, `search_transcripts`, `search_memory`, `send_message`, `message_receipt`, `conversation_deliverability`, `conversation_action`, `spawn_agent`, `suggest_replies`.
+- **Conversations.** Read, search, message and steer agents: `list_conversations`, `get_conversation`, `conversation_messages`, `search_transcripts`, `search_memory`, `send_message`, `message_receipt`, `conversation_deliverability`, `conversation_action`, `spawn_agent`.
 - **Board and tasks.** `board_snapshot`, `create_task`, `list_tasks`, `get_task`, `update_task`. `publish_prototype_review`, `read_prototype_review` and `resend_prototype_review_telegram` post numbered variants for you to choose from and read your choice back.
 - **Pipelines.** `create_pipeline`, `list_pipelines`, `get_pipeline`, `pipeline_action`, `link_task_to_pipeline`. A stage agent calls `stage_report` for its verdict and `leave_lesson` for the rule it leaves; `curate_rules` is the curator's.
 - **Review flows.** `list_flows`, `get_flow`, `flow_action`.
@@ -70,9 +70,12 @@ candidates, and an unknown one with the closest matches.
 When an orchestrator hits a Delegatus failure, it asks you first. An
 `issue-reporter` then writes the report and checks its privacy. The
 orchestrator shows you the exact title and body in chat, and you decide last,
-even when the privacy hints are not clean. You approve by replying in the
-conversation itself. Your reply names the whole text it approves, so a reply
-for an earlier wording does not carry over, and one preview is filed once.
+even when the privacy hints are not clean. It then asks in a decision form,
+under the preview and in the **Decisions** tab. The approving option names the
+whole text it approves, so an approval of an earlier wording does not carry
+over. Only your own choice of that option publishes: taking the form's
+recommendations, **Other** or a decision the orchestrator made on its own does
+not. One preview is filed once.
 
 ## Moving your view and clearing a flag
 

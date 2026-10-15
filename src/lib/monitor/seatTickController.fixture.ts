@@ -1284,7 +1284,6 @@ function reportPort(log: () => import("@/lib/bridge/types").BridgeReportV1[]) {
     log,
     enabled: () => true,
     operatorLocale: () => "uk" as const,
-    suggestions: () => ({ sets: [], admissions: [] }),
   };
 }
 

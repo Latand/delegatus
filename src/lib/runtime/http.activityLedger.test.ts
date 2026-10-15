@@ -47,7 +47,7 @@ function dependencies(enqueued: unknown[]): RuntimeHttpDependencies {
       enqueued.push(input);
       return { ok: false, status: 409, error: "fixture host refused" } as never;
     },
-    retireReplySuggestions: () => ({ cleared: false, pending: false }),
+    recordOperatorAdmission: () => false,
   };
 }
 

@@ -9,13 +9,13 @@ import type { FileEntry } from "@/lib/types";
 import { emptyStore } from "@/components/runtime/runtimeModel";
 
 /**
- * #1202 where the operator actually meets the drafts: the conversation feed.
+ * The conversation feed's follow scroll, and the pills it no longer has.
  *
- * The orchestrator dock and the board's conversation pane are the same shell —
- * both compose `LogFeed` over `TmuxComposer` — so this asserts the placement
- * contract on the feed itself: the pills sit inside the scroller under the
- * latest turn while that turn is what the operator is looking at, and move to
- * the pinned row above the composer once the magnet is released. Never both.
+ * The orchestrator dock and the board's conversation pane are the same shell:
+ * both compose `LogFeed` over `TmuxComposer`. Reply-draft pills used to sit
+ * under the latest turn and pin above the composer (#1202); every ask now goes
+ * through a decision form, so neither place renders a pill and nothing reads
+ * drafts. The rest asserts how follow holds and releases.
  */
 
 const dom = new HappyWindow({ width: 1280, height: 800 });
@@ -64,37 +64,20 @@ Object.assign(globalThis, {
 const CONVERSATION_ID = "conversation_seat_1202";
 const AT = (second: number) => `2026-08-26T10:00:${String(second).padStart(2, "0")}.000Z`;
 
-/* One ask from the manager, as the tail reads it: the operator's request, the
-   answer, and the question the drafts belong under. */
+/* One ask from the manager, as the tail reads it: the operator's request and
+   the question that once carried reply drafts under it. */
 const TRANSCRIPT = [
   { type: "user", uuid: "uuid-ask", timestamp: AT(0), message: { role: "user", content: [{ type: "text", text: "How does the merge look?" }] } },
   { type: "assistant", uuid: "uuid-answer", timestamp: AT(1), message: { role: "assistant", content: [{ type: "text", text: "Both reviews passed. Merge now, or hold for the deploy window?" }] } },
 ].map((line) => JSON.stringify(line));
 
-const drafts = [
-  { label: "merge now", text: "Merge it now." },
-  { label: "hold for the window", text: "Hold for the deploy window." },
-];
-
-const served = {
-  set: {
-    conversationId: CONVERSATION_ID,
-    setId: "rsg_feed",
-    at: AT(2),
-    origin: { kind: "manager", conversationId: CONVERSATION_ID, role: "orchestrator" },
-    replies: drafts,
-  },
-};
-
+/* Every URL the pane reaches for. Each is absent here: a 404 is what each of
+   those readers already handles (no delivery evidence, no tmux targets, no
+   speech backends), so nothing else renders. */
+const requested: string[] = [];
 const previousFetch = globalThis.fetch;
 globalThis.fetch = (async (input: unknown) => {
-  const url = String(input);
-  if (url.startsWith("/api/log/suggestions")) {
-    return { ok: true, status: 200, json: async () => served } as Response;
-  }
-  /* Everything else the pane may reach for is simply absent here — a 404 is
-     what each of those readers already handles (no delivery evidence, no tmux
-     targets, no speech backends), so nothing else renders. */
+  requested.push(String(input));
   return { ok: false, status: 404, json: async () => ({}) } as Response;
 }) as typeof fetch;
 
@@ -294,55 +277,17 @@ async function settle(host: HTMLElement, selector: string, timeoutMs = 4_000): P
   }
 }
 
-test("the drafts render inside the feed, under the latest turn, while the operator is watching it", async () => {
-  const host = render(true);
-  await settle(host, '[data-reply-suggestions="inline"]');
-
-  const row = host.querySelector('[data-reply-suggestions="inline"]')!;
-  expect([...row.querySelectorAll("[data-reply-suggestion]")].map((pill) => pill.textContent))
-    .toEqual(drafts.map((draft) => draft.label));
-  /* Inside the transcript scroller, after the last transcript row: the drafts
-     answer the turn they are sitting under. */
-  const scroller = host.querySelector("[data-log-feed-scroller]")!;
-  expect(scroller.contains(row)).toBe(true);
-  const lastRow = [...host.querySelectorAll("[data-feed-key]")].at(-1)!;
-  expect(lastRow.compareDocumentPosition(row) & 4 /* DOCUMENT_POSITION_FOLLOWING */).toBeTruthy();
-  /* One offer, one place. */
-  expect(host.querySelectorAll('[data-reply-suggestions="floating"]')).toHaveLength(0);
-});
-
-test("with the magnet released the drafts pin above the composer instead of staying off-screen", async () => {
-  const host = render(false);
-  await settle(host, '[data-reply-suggestions="floating"]');
-
-  const row = host.querySelector('[data-reply-suggestions="floating"]')!;
-  expect(row.querySelectorAll("[data-reply-suggestion]")).toHaveLength(drafts.length);
-  /* Outside the scroller — it rides the pane, not the transcript — and the
-     inline copy is gone rather than doubled. */
-  expect(host.querySelector("[data-log-feed-scroller]")!.contains(row)).toBe(false);
-  expect(host.querySelectorAll('[data-reply-suggestions="inline"]')).toHaveLength(0);
-});
-
-test("a floating pill row with no vertical range forwards vertical wheel movement to the feed", async () => {
-  const host = render(false);
-  await settle(host, '[data-reply-suggestions="floating"]');
-
-  const row = host.querySelector('[data-reply-suggestions="floating"]') as HTMLElement;
-  const scroller = host.querySelector("[data-log-feed-scroller]") as HTMLElement;
-  setScrollerGeometry(row, 40, 40, 0);
-  setScrollerGeometry(scroller, 1_000, 200, 600);
-
-  flushSync(() => {
-    row.dispatchEvent(new dom.WheelEvent("wheel", { bubbles: true, cancelable: true, deltaY: -120 }) as unknown as Event);
-  });
-
-  expect(scroller.scrollTop).toBe(480);
-
-  setScrollerGeometry(row, 100, 40, 20);
-  flushSync(() => {
-    row.dispatchEvent(new dom.WheelEvent("wheel", { bubbles: true, cancelable: true, deltaY: -20 }) as unknown as Event);
-  });
-  expect(scroller.scrollTop).toBe(480);
+test.each([true, false])("no reply-draft pill renders under the latest turn or above the composer (follow %p), and nothing reads drafts", async (follow) => {
+  requested.length = 0;
+  const host = render(follow);
+  await settle(host, "[data-feed-key]");
+  const rows = [...host.querySelectorAll("[data-feed-key]")];
+  expect(rows.map((row) => row.textContent).join("\n")).toContain("Merge now, or hold for the deploy window?");
+  /* A few more turns of the event loop, where the pills' read used to land. */
+  for (let turn = 0; turn < 10; turn += 1) await new Promise((resolve) => setTimeout(resolve, 5));
+  expect(host.querySelectorAll("[data-reply-suggestions], [data-reply-suggestion]")).toHaveLength(0);
+  expect(host.querySelector('[aria-label="Suggested replies — tap one to put it in the composer"]')).toBeNull();
+  expect(requested.filter((url) => url.includes("/api/log/suggestions"))).toEqual([]);
 });
 
 test("an upward wheel survives a concurrent glue and releases the scroll magnet on the first gesture", () => {

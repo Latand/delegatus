@@ -12,7 +12,7 @@ import { withConversationActuation } from "@/lib/deliveryActuation";
 import { structuredAttachmentOutcome, type AttachmentDeliveryOutcome } from "@/lib/attachmentRetention";
 import type { InboxFileUpload, StagedInboxFiles } from "@/lib/inboxFiles";
 import { operatorBrowserRequest } from "@/lib/agent/operatorAuthority";
-import { retireReplySuggestionsOnOperatorMessage } from "@/lib/suggestions/store";
+import { recordOperatorMessageAdmission } from "@/lib/suggestions/store";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import { claimMessageAuthor, recordConversationEvent, refuseAnonymous, settleMessageAuthor, teamActor, type PriorSubmission } from "@/lib/team";
 import { agentMessageOrigin } from "./agentMessageAuthor";
@@ -44,8 +44,8 @@ export interface RuntimeHttpDependencies {
 
   /** The activity dashboard's request ledger; never throws. */
   recordOperatorRequest?: typeof recordOperatorRequest;
-  /** #1202: retires the conversation's reply drafts when the operator answers. */
-  retireReplySuggestions?: typeof retireReplySuggestionsOnOperatorMessage;
+  /** Records when the operator's message was first admitted; never throws. */
+  recordOperatorAdmission?: typeof recordOperatorMessageAdmission;
   kick?(): void | Promise<void>;
 }
 
@@ -57,7 +57,7 @@ const DEFAULT_DEPENDENCIES: RuntimeHttpDependencies = {
   enqueue: enqueueStructuredMessage,
 
   recordOperatorRequest,
-  retireReplySuggestions: retireReplySuggestionsOnOperatorMessage,
+  recordOperatorAdmission: recordOperatorMessageAdmission,
   kick: kickStructuredDeliveryQueue,
 };
 
@@ -334,17 +334,14 @@ async function dispatchRuntimeCommand(
         priorSubmission: () => priorSubmission(dependencies, command.conversationId, command.idempotencyKey),
       })
       : null;
-    /* #1202: the operator's own message retires the reply drafts offered under
-       the question it answers. Done in the path that accepts the message, so a
-       closed dock or a second device changes nothing, and compared against the
-       moment of acceptance, so a set offered while this request was in flight
-       survives it. */
+    /* The operator's own message is remembered at the moment it was accepted
+       (Needs-you and the bridge read "the operator wrote here since"), in the
+       path that accepts it, so a closed dock or a second device changes
+       nothing. */
     if ((command.kind === "send" || command.kind === "steer" || command.kind === "inject") && byOperator) {
       /* Keyed by the command's own idempotency key, so a re-delivery of the
-         same message clears against its first admission rather than against
-         the clock of the retry — which would retire drafts offered in
-         between, under a question this message never answered. */
-      (dependencies.retireReplySuggestions ?? retireReplySuggestionsOnOperatorMessage)(
+         same message keeps its first admission. */
+      (dependencies.recordOperatorAdmission ?? recordOperatorMessageAdmission)(
         command.conversationId,
         new Date(),
         command.idempotencyKey,

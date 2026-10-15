@@ -206,7 +206,9 @@ export function decidePrototype(request: PrototypeDeliveryContext,taskId: string
       throw new PrototypeError("This native session changed or ended. Nothing was approved; ask the live session to request a new association.", 409);
     }
     const prior = round.decision;
-    if (prior && prior.comment === input.comment && JSON.stringify(prior.chosen) === JSON.stringify(chosen)
+    /* The same answers from someone else are a decision of their own: a person
+       who confirms what an agent chose becomes the one who decided it. */
+    if (prior && JSON.stringify(prior.decidedBy ?? { kind: "operator" }) === JSON.stringify(decidedBy(request)) && prior.comment === input.comment && JSON.stringify(prior.chosen) === JSON.stringify(chosen)
       && JSON.stringify(prior.answers) === JSON.stringify(answers) && prior.skipped === skipped && prior.rejected === input.reject
       && prior.originalReply === input.originalReply && prior.recommendedWithReservation === input.recommendedWithReservation
       && prior.nativeAssociationApproval === nativeAssociationApproval) return false;

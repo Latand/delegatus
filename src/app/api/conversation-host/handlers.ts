@@ -33,7 +33,7 @@ import { reconfigurationFromBody } from "@/lib/agent/reconfigure";
 import { listFiles } from "@/lib/scanner";
 import { pathAllowed } from "@/lib/scanner/roots";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
-import { retireReplySuggestionsOnOperatorMessage } from "@/lib/suggestions/store";
+import { recordOperatorMessageAdmission } from "@/lib/suggestions/store";
 import { API_CLIENT_ORIGIN, parseMessageOrigin } from "@/lib/runtime/messageOrigin";
 import { claimMessageAuthor, recordConversationEvent, refuseAnonymous, settleMessageAuthor, teamActor, type MessageAuthorClaim } from "@/lib/team";
 import { teamMode } from "@/lib/team/sessions";
@@ -532,16 +532,13 @@ export async function conversationHostPOST(req: NextRequest, options?: { actor: 
     }
     return NextResponse.json({ error: "direct operator activity could not be recorded" }, { status: 503 });
   }
-  /* #1202: the operator answered, so the drafts offered under the question are
-     over — retired HERE, in the path that accepts their message, rather than by
-     a pane that may be closed, unmounted or on another device. An agent's send
-     through this same route is not an answer and leaves the set standing. */
+  /* The operator's message is remembered at the moment this path accepted it,
+     whether or not a pane is mounted to notice. An agent's send through this
+     same route is not the operator's. The client's own message id rides
+     along: a delivery retried under the key it already used keeps its first
+     admission. */
   if (operatorAction.byOperator) {
-    /* The client's own message id rides along: a delivery retried under the
-       key it already used answers the question that was standing the FIRST
-       time it was accepted, so the record clears against that moment and
-       leaves whatever has been offered since alone. */
-    retireReplySuggestionsOnOperatorMessage(operatorAction.conversationId, acceptedAt, clientMessageId);
+    recordOperatorMessageAdmission(operatorAction.conversationId, acceptedAt, clientMessageId);
   }
   const authoredConversation = operatorAction.conversationId || conversationId || null;
   const revokedActor = actorRejection();

@@ -47,7 +47,9 @@ The operator answered the prototype review round «Рішення формою �
 2. **Decisions without a task** live in the orchestrator conversation and in
    «Чекають на вас»; the seat does not create a board card for each.
 3. **Reply pills** (`suggest_replies`) stay only for replies that are not a
-   choice; every decision is a form.
+   choice; every decision is a form. *2026-10-15: the operator withdrew the
+   pills as well: `suggest_replies` and every pill are removed, and every ask,
+   the issue-report approval included, goes through a form.*
 4. **The column shows every open decision of the project**, the seat's forms
    and the prototype rounds lanes publish, with their thumbnails.
 5. **Questions agents cannot resolve** reach the operator through the seat, in

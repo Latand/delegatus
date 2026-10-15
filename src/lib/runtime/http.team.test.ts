@@ -52,7 +52,7 @@ function dependencies(enqueued: unknown[], host: HostAnswer = "admit", known: re
         ? { ok: true, structured: true, target: null, outcome: "held", operationId: `op_${enqueued.length}` }
         : { ok: false, structured: true, outcome: "failed", status: 409, error: "fixture host refused" }) as never;
     },
-    retireReplySuggestions: () => ({ cleared: false, pending: false }),
+    recordOperatorAdmission: () => false,
   };
 }
 

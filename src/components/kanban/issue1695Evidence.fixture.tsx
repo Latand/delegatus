@@ -4,7 +4,7 @@ import { questionsResolution } from "@/components/runtime/ConversationAttention"
 import type { RuntimeAttention } from "@/components/runtime/runtimeModel";
 import { useState } from "react";
 import { nativeAssociationForm } from "@/lib/attention/nativeAssociationForm";
-import { issueReportApprovalDrafts } from "@/lib/issueReports/approvalReply";
+import { issueReportApprovalForm } from "@/lib/issueReports/approvalForm";
 import { issueReportPreviewText } from "@/lib/issueReports/previewText";
 import type { IssueReportFinding } from "@/lib/issueReports/scrub";
 import { enqueueOutbox, OUTBOX_LIMIT, readOutbox, seedLaunchOutbox, updateOutbox } from "@/components/conversation/outbox";
@@ -140,6 +140,11 @@ const AGENT_REPORT = SCENARIO === "agent-report";
    text several screens tall and `legacy` a preview stored without a judgment. */
 const REPORT_PREVIEW = AGENT_REPORT ? new URLSearchParams(location.search).get("report-preview") : null;
 const REPORT_PREVIEW_DIGEST = "a".repeat(64);
+const REPORT_PREVIEW_TITLE = REPORT_PREVIEW === "long"
+  ? "Delegatus refuses a requested launch on the second project while nothing holds it, and the refusal names a holder that finished long before the request"
+  : "Delegatus refuses a requested launch";
+/* The decision form the seat asks after reading the preview back: the tool's own approval form. */
+const REPORT_FORM_ID = `pr_${"f".repeat(32)}`;
 const reportPreviewLanguage = () => (localStorage.getItem("llv_lang") === "uk" ? "uk" : "en");
 const STAGES = SCENARIO === "stages" || ACCOUNTS || AGENT_REPORT;
 /* The pipeline block in variant B (#2072 slice 3, docs/design/desktop-flat-cards.md §9):
@@ -2562,9 +2567,7 @@ function transcriptOf(pathname: string): string {
         expected,
       ].join("\n"),
     };
-    const title = REPORT_PREVIEW === "long"
-      ? "Delegatus refuses a requested launch on the second project while nothing holds it, and the refusal names a holder that finished long before the request"
-      : "Delegatus refuses a requested launch";
+    const title = REPORT_PREVIEW_TITLE;
     const body = bodies[REPORT_PREVIEW] ?? `## Symptom\n${symptom}\n\n${expected}`;
     const judgment = REPORT_PREVIEW === "many" ? {
       assessment: "I reviewed the whole text. Several details still identify a machine and one line quotes the operator; I am returning it so you can see what remains.",
@@ -2605,7 +2608,14 @@ function transcriptOf(pathname: string): string {
         hintWarnings: REPORT_PREVIEW === "many" ? ["Known-name hints are unavailable; review names and identities yourself."] : [],
       }),
     }, reportPreviewLanguage());
-    return `${[asked(120, "Prepare a report for me to review."), said(60, preview)].join("\n")}\n`;
+    const form = seatRounds.find((round) => round.id === REPORT_FORM_ID)!;
+    const result = (secondsAgo: number, id: string, answer: Record<string, unknown>) => line(secondsAgo, { type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content: [{ type: "text", text: JSON.stringify(answer, null, 2) }] }] } });
+    return `${[
+      asked(120, "Prepare a report for me to review."),
+      said(60, preview),
+      line(40, { type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: "toolu_report_form", name: "mcp__viewer__publish_prototype_review", input: { clientRequestId: "report-approval", title: form.title, questions: form.questions } }] } }),
+      result(39, "toolu_report_form", { reviewId: form.id, taskId: null, project: PROJECT, title: form.title, variants: 0, questions: form.questions!.length, frames: 0, videos: 0 }),
+    ].join("\n")}\n`;
   }
   if (AGENT_REPORT && file === orchestrator) {
     return `${[
@@ -3403,6 +3413,11 @@ if (DECISIONS) {
   protoPublish();
   Object.assign(window, { decisionPosts });
 }
+if (REPORT_PREVIEW) {
+  seatRounds.push({ id: REPORT_FORM_ID, taskId: null, project: PROJECT, createdAt: iso(40), source: { conversationId: orchestrator.conversationId ?? null }, variants: [],
+    ...issueReportApprovalForm({ digest: REPORT_PREVIEW_DIGEST, title: REPORT_PREVIEW_TITLE }, reportPreviewLanguage()) });
+  Object.assign(window, { decisionPosts });
+}
 /* What the Viewer answers for the column: each task's waiting round with its task, then the seat's open questions. */
 function fixtureDecisions() {
   const fromTasks = Object.entries(protoRounds).flatMap(([taskId, rounds]) => {
@@ -3787,7 +3802,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       return json({ ok: true, at, by, undo: !!body.undo, dismissed: [target], alreadyClear: [], changed: [] });
     }
   }
-  if ((DECISIONS || PROTO) && url.pathname === "/api/projects/decisions") {
+  if ((DECISIONS || PROTO || REPORT_PREVIEW) && url.pathname === "/api/projects/decisions") {
     if (method === "POST") {
       const body = JSON.parse(String(init?.body)) as { reviewId: string; answers?: PrototypeAnswer[]; comment?: string; chosen?: number[]; reject?: true };
       decisionPosts.push(body);
@@ -3978,7 +3993,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
            folder it had before Confirm, since a seat read keyed on another folder answers from its own older cache. */
         ...(TELEGRAM_STEP || FM_SEAT ? { projectCwds: { [PROJECT]: "/repo/atlas" } } : {}),
       };
-    const body = JSON.stringify({ ...scoped, ...(DECISIONS && seatDecisionNotices().length ? { seatDecisions: seatDecisionNotices() } : {}), workflows: [], systemHealth: { tmux: { status: "healthy" }, ...(new URLSearchParams(location.search).has("state-disk-full") ? { storage: { incidents: [], writes: { state: "disk-full", freeBytes: 32 * 1024 * 1024, since: "2026-10-01T12:00:00Z" } } } : {}) }, ...(workLinks ? { workLinks } : {}) });
+    const body = JSON.stringify({ ...scoped, ...((DECISIONS || REPORT_PREVIEW) && seatDecisionNotices().length ? { seatDecisions: seatDecisionNotices() } : {}), workflows: [], systemHealth: { tmux: { status: "healthy" }, ...(new URLSearchParams(location.search).has("state-disk-full") ? { storage: { incidents: [], writes: { state: "disk-full", freeBytes: 32 * 1024 * 1024, since: "2026-10-01T12:00:00Z" } } } : {}) }, ...(workLinks ? { workLinks } : {}) });
     if (COLD_BOARD) {
       const headers = new Headers(init?.headers);
       const required = headers.get("x-llv-files-generation");
@@ -4450,20 +4465,6 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
         { ...relay, textDigest: messageTextDigest(demoInstruction(UK ? "uk" : "en")), deliveredAt: iso(40) },
       ],
     });
-  }
-  if (REPORT_PREVIEW && url.pathname === "/api/log/suggestions") {
-    /* The set the seat offers after reading the preview back: the tool's own approving draft beside a no and an edit. */
-    const uk = reportPreviewLanguage() === "uk";
-    const offered = url.searchParams.get("conversationId") === orchestrator.conversationId;
-    return json({ set: offered ? {
-      conversationId: orchestrator.conversationId, setId: "rsg_report_preview", at: iso(30),
-      origin: { kind: "manager", conversationId: orchestrator.conversationId, role: "orchestrator" },
-      replies: [
-        issueReportApprovalDrafts(REPORT_PREVIEW_DIGEST)[reportPreviewLanguage()],
-        uk ? { label: "Ні, не публікуй", text: "Ні, не публікуй цей звіт." } : { label: "No, do not publish", text: "No, do not publish this report." },
-        uk ? { label: "Зміни текст…", text: "Зміни текст: " } : { label: "Edit the text…", text: "Edit the text: " },
-      ],
-    } : null });
   }
   if (url.pathname === "/api/log") return json({ data: "", start: 0, offset: 0, size: 0 });
   if (url.pathname === "/api/conversations") return json({ items: files, total: files.length, nextCursor: null });

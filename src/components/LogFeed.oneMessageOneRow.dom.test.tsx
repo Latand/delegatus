@@ -1399,7 +1399,7 @@ test("an unconfirmed context row offers only Check status", async () => {
   host.remove();
 });
 
-test.each(["wheel", "touch"])("forwarded suggestion %s releases an own-message landing", async (gesture) => {
+test.each(["wheel", "touch"])("a reader's %s on the feed releases an own-message landing", async (gesture) => {
   const host = document.createElement("div");
   const mount = document.createElement("div");
   document.body.append(host, mount);
@@ -1429,18 +1429,19 @@ test.each(["wheel", "touch"])("forwarded suggestion %s releases an own-message l
     await settle(() => scroller.dispatchEvent(new dom.Event("scroll", { bubbles: true }) as unknown as Event));
     await settle(() => mount.querySelector<HTMLButtonElement>('[data-own-step-control="previous"]')!.click());
     expect(scroller.scrollTop).toBe(1000);
-    const overlay = scroller.previousElementSibling as HTMLElement;
-    expect(overlay.className).toContain("pointer-events-none");
+    /* The gesture lands on the feed itself, and the browser moves it. */
     await act(async () => {
       if (gesture === "wheel") {
-        overlay.dispatchEvent(new dom.WheelEvent("wheel", { deltaY: -150, bubbles: true }) as unknown as Event);
+        scroller.dispatchEvent(new dom.WheelEvent("wheel", { deltaY: -150, bubbles: true }) as unknown as Event);
       } else {
         for (const [type, clientY] of [["touchstart", 200], ["touchmove", 350]] as const) {
           const event = new dom.Event(type, { bubbles: true });
           Object.defineProperty(event, "touches", { value: [{ clientX: 100, clientY }] });
-          overlay.dispatchEvent(event as unknown as Event);
+          scroller.dispatchEvent(event as unknown as Event);
         }
       }
+      scroller.scrollTop = 850;
+      scroller.dispatchEvent(new dom.Event("scroll", { bubbles: true }) as unknown as Event);
       expect(scroller.scrollTop).toBe(850);
       await new Promise((resolve) => setTimeout(resolve, 100));
       expect(scroller.scrollTop).toBe(850);
