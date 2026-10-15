@@ -3,7 +3,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { codexFixture, discover, endingOf, fetchMain, gateTemporaryRoot, isolatedEnvironment, NATIVE_GROUP, NoVerdict, pinnedBunVersion, plan, pushDeadline, requiresMediaTools, runPushPair, runSteps, type PlanEnvironment, type PushDeadline, type Step } from "./local-gate";
+import { codexFixture, createGateSandbox, discover, endingOf, fetchMain, gateTemporaryRoot, isolatedEnvironment, NATIVE_GROUP, NoVerdict, pinnedBunVersion, plan, pushDeadline, requiresMediaTools, runPushPair, runSteps, type PlanEnvironment, type PushDeadline, type Step } from "./local-gate";
 import { nativeBatches } from "./verify-native-codex-runtime";
 import { captureProcessIdentity, processIdentityStatus, type ProcessIdentity } from "../src/lib/processIdentity";
 import { stopFixtureIdentity } from "../src/lib/testing/fixtureProcess";
@@ -799,3 +799,42 @@ for (const slow of ["privacy", "checks"] as const) test(`a ${slow} deadline pres
   expect(endingOf("pre-push", error)).toMatchObject({ code: 75 });
   expect(endingOf("pre-push", error).line).toContain(`"${missing.name}" was still running`);
 }, 15000);
+
+
+for (const code of ["EROFS", "EACCES", "ENOENT"]) {
+  test(`controller gate creation falls back from an unavailable /var/tmp (${code}) without using inherited scratch`, () => {
+    const original = process.env.TMPDIR;
+    const calls: string[] = [];
+    try {
+      process.env.TMPDIR = "/operator-installation/state/scratch";
+      const created = createGateSandbox("linux", prefix => {
+        calls.push(prefix);
+        if (calls.length === 1) throw Object.assign(new Error("unavailable preferred root"), { code });
+        return `${prefix}fixture`;
+      });
+      expect(calls).toEqual([path.join("/var/tmp", "delegatus-local-gate-"), path.join("/tmp", "delegatus-local-gate-")]);
+      expect(created).toBe(`${calls[1]}fixture`);
+    } finally {
+      if (original === undefined) delete process.env.TMPDIR; else process.env.TMPDIR = original;
+    }
+  });
+}
+
+test("gate creation preserves unrelated filesystem failures and a refused fallback", () => {
+  for (const code of ["EIO", "ENOSPC"]) {
+    const error = Object.assign(new Error("storage failure"), { code });
+    let calls = 0;
+    expect(() => createGateSandbox("linux", () => { calls++; throw error; })).toThrow(error);
+    expect(calls).toBe(1);
+  }
+  const fallback = Object.assign(new Error("fallback denied"), { code: "EACCES" });
+  let calls = 0;
+  expect(() => createGateSandbox("linux", () => {
+    if (++calls === 1) throw Object.assign(new Error("read-only preferred root"), { code: "EROFS" });
+    throw fallback;
+  })).toThrow(fallback);
+  expect(calls).toBe(2);
+  calls = 0;
+  expect(() => createGateSandbox("win32", () => { calls++; throw fallback; })).toThrow(fallback);
+  expect(calls).toBe(1);
+});
