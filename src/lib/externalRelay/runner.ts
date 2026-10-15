@@ -1,3 +1,6 @@
+import { waitForStateLock } from "@/lib/state/lockWait";
+import { withViewerOperation } from "@/lib/viewerLoopMonitor";
+import { resolveOwnerOutboundContext } from "./ownerOutboundContext";
 import { capacityWaiters, olderCapacityWaiter, enterRelayHold, leaveRelayHold, releasingRelayHolds, type RelayHoldCause } from "./hold";
 import { relayRequestDeadline } from "./deadline";
 import { ownerRelayAuthorized } from "./ownerAuthority";
@@ -487,6 +490,9 @@ export async function runClaimedRequest(
     const prototype = ownerMessage ? matchPrototypeAnswer(ownerMessage.text, undefined, replayReviewId, undefined, parent?.text) : null;
     owner = prototype ? ownerMessage : ownerTierFor(target, request);
     if (owner && !prototype) {
+      try { owner.localContext = await withViewerOperation("telegram.outbound-state", () =>
+        waitForStateLock("relay.owner-context", () => resolveOwnerOutboundContext(request, owner!, relay), { waitMs: 5000 })); }
+      catch { owner.localContext = null; }
       try { owner.bridgeReport = resolveOwnerBridgeContext(request, owner, relay.api_base); }
       catch { owner.bridgeReport = null; }
     }

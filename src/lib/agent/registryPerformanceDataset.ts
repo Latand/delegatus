@@ -10,8 +10,8 @@ import { SqliteAgentRegistryStore } from "./sqliteRegistryStore";
 /**
  * A synthetic registry shaped like a long-running installation (#2761).
  *
- * The counts and payload sizes follow the registry that timed out the files
- * projection after #2714: about 30,000 rows of which more than nine in ten are
+ * The retained counts follow the managed-update census: 53,299 rows. The
+ * archive shape and payload sizes follow the earlier #2714 incident: most are
  * cold history, large operation-owner and receipt payloads, delegated launches
  * whose MCP grants depend on other rows, and attestors that are missing or
  * disagree. Nothing in it comes from a real installation; every identity is
@@ -51,13 +51,13 @@ export interface RegistryPerformanceDatasetShape {
   projects: number;
 }
 
-/** The production-like default: 30,356 rows. */
+/** Retained census used for managed-update qualification. */
 export const REGISTRY_PERFORMANCE_SHAPE: RegistryPerformanceDatasetShape = Object.freeze({
-  conversations: 4_700,
-  entries: 3_800,
-  receipts: 3_870,
-  heldDeliveries: 4_280,
-  deliveryOperationOwners: 6_240,
+  conversations: 11_870,
+  entries: 8_428,
+  receipts: 10_971,
+  heldDeliveries: 666,
+  deliveryOperationOwners: 14_218,
   lineageEdges: 4_240,
   memberships: 3_170,
   migrationIntents: 40,
@@ -66,7 +66,7 @@ export const REGISTRY_PERFORMANCE_SHAPE: RegistryPerformanceDatasetShape = Objec
   grantEvery: 50,
   pendingDeliveries: 16,
   uncertainDeliveries: 8,
-  outstandingReceipts: 12,
+  outstandingReceipts: 20,
   workers: 4,
   transcripts: 320,
   projects: 8,
@@ -98,6 +98,7 @@ export function scaledRegistryPerformanceShape(factor: number): RegistryPerforma
 }
 
 export interface RegistryPerformanceDataset {
+  receipts: { total: number; failedStructured: number; failedLegacy: number; conflicted: number };
   filename: string;
   shape: RegistryPerformanceDatasetShape;
   rows: number;
@@ -272,11 +273,12 @@ export function buildRegistryPerformanceDataset(
       launchId,
       conversationId: absent ? conversationId(count + index) : conversationId(target),
       clientAttemptId: `performance-attempt-${index}`,
-      requestDigest: "d".repeat(64),
+      requestDigest: index.toString(16).padStart(64, "0"),
       spawnCapabilityDigest: null,
       key: { engine: "codex", sessionId: uuid(target) },
       artifactPath: transcriptOf(target),
-      state: outstanding ? "path-pending" : index % 17 === 0 ? "failed" : "completed",
+      state: outstanding ? "path-pending" : index < Math.round(shape.receipts * 1014 / 10971) ? "failed"
+        : index < Math.round(shape.receipts * 1147 / 10971) ? "conflicted" : "completed",
       agentRole: isRoot(target) ? "orchestrator" : "builder",
       delegationDepth: isRoot(target) ? 0 : 1,
       parentConversationId: isRoot(target) ? null : conversationId(contradicted ? rootOf(target) + every : rootOf(target)),
@@ -288,8 +290,8 @@ export function buildRegistryPerformanceDataset(
         parentConversationId: isRoot(target) ? null : conversationId(rootOf(target)),
       },
       launchDisplay: { prompt: "synthetic launch prompt ".repeat(200), echo: "synthetic launch", images: 0 },
-      transport: "structured",
-      createdAt: new Date(seededAt - launchAge(shape.receipts - 1 - index)).toISOString(),
+      transport: index < Math.round(shape.receipts * 122 / 10971) ? "tmux" : "structured",
+      createdAt: new Date(outstanding ? seededAt : seededAt - launchAge(shape.receipts - 1 - index)).toISOString(),
       artifactLifecycle: outstanding ? "pending" : "materialized",
     };
   }
@@ -336,12 +338,16 @@ export function buildRegistryPerformanceDataset(
         : {}),
     };
   }
-  for (let index = 0; index < shape.lineageEdges; index++) {
-    const child = index % count;
-    if (isRoot(child)) continue;
+  const ordinaryEdges = Array.from({ length: shape.lineageEdges }, (_, index) => index % count)
+    .filter(child => !isRoot(child) && child % 19 !== 0);
+  // The census has more entries than edges. Keep the original edge count,
+  // with current owners represented so their writes still exercise grants.
+  const edgeChildren = [...new Set([...activeIndexes, ...outstandingIndexes, ...ordinaryEdges]
+    .map(index => index % count).filter(child => !isRoot(child) && child % 19 !== 0))]
+    .slice(0, new Set(ordinaryEdges).size);
+  for (const child of edgeChildren) {
     const key = conversationId(child);
     /* Every nineteenth child has no edge at all: its receipt is the only attestor. */
-    if (index % 19 === 0) continue;
     file.lineageEdges[key] = {
       childConversationId: key,
       parentConversationId: conversationId(rootOf(child)),
@@ -376,7 +382,7 @@ export function buildRegistryPerformanceDataset(
     const entry = file.entries[key]!;
     grantSubjects.push({ collection: "entries", key, servers: [...(entry.launchProfile?.mcpServers ?? ["viewer"])] });
   }
-  for (const index of outstandingIndexes) {
+  for (const index of new Set([...outstandingIndexes, ...activeIndexes].filter(index => index < shape.receipts))) {
     const launchId = `performance-launch-${index}`;
     grantSubjects.push({ collection: "receipts", key: launchId, servers: [...file.receipts[launchId]!.launchProfile.mcpServers] });
   }
@@ -431,6 +437,11 @@ export function buildRegistryPerformanceDataset(
       "SELECT COUNT(*) AS rows, SUM(LENGTH(value_json)) AS bytes FROM registry_records").get()!;
     const cold = db.query<{ rows: number }, []>("SELECT COUNT(*) AS rows FROM registry_cold").get()!;
     return {
+      receipts: db.query<{ total: number; failedStructured: number; failedLegacy: number; conflicted: number }, []>(`SELECT COUNT(*) AS total,
+        SUM(json_extract(value_json,'$.state')='failed' AND json_extract(value_json,'$.transport')='structured') AS failedStructured,
+        SUM(json_extract(value_json,'$.state')='failed' AND json_extract(value_json,'$.transport')='tmux') AS failedLegacy,
+        SUM(json_extract(value_json,'$.state')='conflicted') AS conflicted
+        FROM registry_records WHERE collection='receipts'`).get()!,
       filename,
       shape,
       rows: total.rows,

@@ -2255,7 +2255,7 @@ export async function recordDemotionInterruption(
   const snapshot = registry.readOnlySnapshot();
   const hostKey = sessionKeyId(key);
   const entry = snapshot.entries[hostKey];
-  const conversation = Object.values(snapshot.conversations).find((candidate) =>
+  const conversation = registryConversationsForEntryKey(snapshot, hostKey).find((candidate) =>
     candidate.engine === key.engine && candidate.generations.at(-1)?.id === key.sessionId);
   if (!entry || !conversation || conversation.supersededBy) return true;
   /* Interruption obligations re-drive Claude and Codex turns a release cut;

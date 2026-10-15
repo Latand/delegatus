@@ -829,6 +829,8 @@ export type PipelineCreationIntent = {
     attempt is settled independently, so an idle host can be retired while the
     rest of its pipeline runs or waits for a decision. */
 export type PipelineTerminalReap = {
+  /** Retry custody for a controller batch spread over bounded attempt windows. */
+  attemptRounds?: Record<string, number>;
   /** Sweeps in the current unsettled batch that dispatched at least one kill,
       or were cut off by the budget. Reset when a later attempt becomes eligible. */
   rounds: number;

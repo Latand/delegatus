@@ -1,3 +1,4 @@
+import { performanceSpans } from "@/lib/performanceSpans";
 import type { ExecPort } from "@/lib/workflows/provision";
 import { githubRepositoryOfRemote } from "@/lib/forge/workLinks";
 import path from "node:path";
@@ -12,11 +13,11 @@ export type StageBranchProtection = { branch: string; head: string; error: strin
 /** Other lanes can acquire branch claims while this lane is outside its lease.
     Ignore their turn progress, but fence every change to repository/branch authority. */
 export function stageBranchOwnershipFence(pipelines: readonly Pipeline[], ownerId: string): string {
-  return JSON.stringify(pipelines.filter((pipeline) => pipeline.id !== ownerId).map((pipeline) => [
+  return performanceSpans.sync("controller.ownership", () => JSON.stringify(pipelines.filter((pipeline) => pipeline.id !== ownerId).map((pipeline) => [
     pipeline.id, pipeline.repoDir, pipeline.worktreeDir, pipeline.branch,
     pipeline.delivery?.target, pipeline.delivery?.active, pipeline.delivery?.ownerId,
     pipeline.delivery?.epoch, pipeline.delivery?.publish, pipelineTerminal(pipeline),
-  ]).sort((a, b) => String(a[0]).localeCompare(String(b[0]))));
+  ]).sort((a, b) => String(a[0]).localeCompare(String(b[0])))));
 }
 
 /** Forge reads run before the controller mutation. Pin the observation to the

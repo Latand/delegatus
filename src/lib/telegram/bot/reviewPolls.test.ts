@@ -26,6 +26,7 @@ import { prototypeRoot } from "@/lib/prototypeReview/store";
 import type { TelegramPublishReceipt } from "@/lib/externalRelay/publish";
 import * as bot from "./service";
 import { FakeBotTransport, fakeBotToken, ok, refused, unreachable } from "./fakeTransport";
+import { scopedOutbound } from "./outbound";
 import { TelegramBotStore } from "./store";
 import { reconcileReviewPolls, reviewPollPayload } from "./reviewPolls";
 
@@ -50,25 +51,30 @@ async function connected(key = "poll-boundary") {
   transport.script("getMe", ok({ id: 42, is_bot: true, first_name: "Fixture" }));
   await service.connect(fakeBotToken()); await service.stopPoller();
   transport.handlers.getChat = () => ok({ id: 41, type: "private", first_name: "Owner" });
-  transport.handlers.sendRichMessage = () => ok({ message_id: 10, date: 1791724800 });
-  let messageId = 10;
-  transport.handlers.sendPoll = () => ok({ message_id: ++messageId, date: 1791724801 });
+  let messageId = 9;
+  const nextMessageId = () => ++messageId;
+  transport.handlers.sendRichMessage = () => ok({ message_id: nextMessageId(), date: 1791724800 });
+  transport.handlers.sendPoll = () => ok({ message_id: nextMessageId(), date: 1791724801 });
   updateRelayStore(s => ({ ...s, relays: [destinationRelay()] }));
   const round = telegramRound(key);
   saveTasks([telegramTask([round])]);
   await fs.mkdir(prototypeRoot(), { recursive: true });
-  return { round, service, transport, published };
+  return { round, service, transport, published, filename: store.filename, nextMessageId };
 }
 const saved = () => loadTasks()[0]!.prototypeReviews![0]!;
 
 test("form with media posts native polls with stable letters, marks, multiple answers and custom hint; captures Bot API payload", async () => {
-  const { round, service, transport } = await connected();
+  const { round, service, transport, published, filename } = await connected();
   const taskBefore = loadTasks()[0]!;
   await service.sendOwnerReview({ clientRequestId: round.id, message: renderPrototypeTelegram(round,
     [{ id: "v1f1", variantNumber: 1, caption: "1 · Compact", blob: new Blob(["fixture photo"], { type: "image/png" }) }], "Review layout") });
   await service.waitForReviewPolls();
   const polls = transport.callsOf("sendPoll");
   expect(polls).toHaveLength(3);
+  const journal = await scopedOutbound(filename, "42", "41", null, 1791724802);
+  expect(journal.filter(m => m.origin === "poll")).toHaveLength(3);
+  expect(journal.filter(m => m.origin === "poll").map(m => m.replyToMessageId)).toEqual([10, 10, 10]);
+  expect(journal.map(m => m.text)).toEqual(published.map(m => m.text));
   for (const [index, call] of polls.entries()) {
     expect(call.params).toMatchObject({ chat_id: 41, reply_parameters: { message_id: 10 }, type: "regular", is_anonymous: true,
       allows_multiple_answers: index === 1, shuffle_options: false,
@@ -270,13 +276,12 @@ test("recovery accounts for jobs lost before the first claim in batches of sixte
 });
 
 test("recovery waits for the active sender and preserves its confirmed outcomes", async () => {
-  const { round, service, transport } = await connected("active-recovery");
+  const { round, service, transport, nextMessageId } = await connected("active-recovery");
   let entered!: () => void, release!: () => void;
   const sending = new Promise<void>(resolve => { entered = resolve; });
   const held = new Promise<void>(resolve => { release = resolve; });
   cleanups.push(release);
-  let messageId = 10;
-  transport.handlers.sendPoll = async () => { entered(); await held; return ok({ message_id: ++messageId, date: 1791724801 }); };
+  transport.handlers.sendPoll = async () => { entered(); await held; return ok({ message_id: nextMessageId(), date: 1791724801 }); };
   await postPrototypeReviewToTelegram(round);
   await sending;
   let settled = false;
@@ -291,14 +296,13 @@ test("recovery waits for the active sender and preserves its confirmed outcomes"
 });
 
 test("the sweep leaves live queued poll jobs with their current owner", async () => {
-  const { round, service, transport } = await connected("queue-owner");
+  const { round, service, transport, nextMessageId } = await connected("queue-owner");
   let entered!: () => void, release!: () => void;
   const sending = new Promise<void>(resolve => { entered = resolve; });
   const held = new Promise<void>(resolve => { release = resolve; });
   cleanups.push(release);
   cleanups.push(resetPrototypeDeliveryWorkerForTests);
-  let messageId = 10;
-  transport.handlers.sendPoll = async () => { entered(); await held; return ok({ message_id: ++messageId, date: 1791724801 }); };
+  transport.handlers.sendPoll = async () => { entered(); await held; return ok({ message_id: nextMessageId(), date: 1791724801 }); };
   await postPrototypeReviewToTelegram(round);
   await sending;
   const queued = telegramRound("queued-polls");
@@ -344,13 +348,12 @@ test.each(["task", "seat"])("%s poll scheduling yields to a peer state lock whil
 });
 
 test("a refused schedule write keeps later jobs behind the active sender", async () => {
-  const { round, service, transport } = await connected("schedule-error-owner");
+  const { round, service, transport, nextMessageId } = await connected("schedule-error-owner");
   let entered!: () => void, release!: () => void;
   const sending = new Promise<void>(resolve => { entered = resolve; });
   const held = new Promise<void>(resolve => { release = resolve; });
   cleanups.push(release);
-  let messageId = 10;
-  transport.handlers.sendPoll = async () => { entered(); await held; return ok({ message_id: ++messageId, date: 1791724801 }); };
+  transport.handlers.sendPoll = async () => { entered(); await held; return ok({ message_id: nextMessageId(), date: 1791724801 }); };
   await postPrototypeReviewToTelegram(round);
   await sending;
   const refused = telegramRound("schedule-error"), queued = telegramRound("after-schedule-error");

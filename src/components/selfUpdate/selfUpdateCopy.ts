@@ -118,9 +118,10 @@ export function appliedCopy(s: Snapshot, short: string, t: TFunction): string {
   const web = runs(s.processes.web);
   const host = runs(s.processes.runtimeHost);
   if (s.mode === "managed") {
-    return host || !s.processes.runtimeHost.revision
-      ? t("selfUpdate.applied.both")
-      : t("selfUpdate.applied.managedHostBehind", { host: s.processes.runtimeHost.revision });
+    if (web && host) return t("selfUpdate.applied.both");
+    if (web && s.processes.runtimeHost.state === "healthy" && s.processes.runtimeHost.revision)
+      return t("selfUpdate.applied.managedHostBehind", { host: s.processes.runtimeHost.revision });
+    return t("selfUpdate.applied.managedUnconfirmed");
   }
   if (wholeInstallationPending(s)) return t(s.action ? "selfUpdate.applied.action" : "selfUpdate.applied.installation");
   if (web && host && s.update.steps.some(step => step.name === "switch" && step.state === "done")) return t("selfUpdate.applied.installationDone");

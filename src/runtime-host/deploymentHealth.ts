@@ -120,6 +120,7 @@ export interface ViewerStructuredHostStartupProgress {
   completedHosts: number;
   totalHosts: number | null;
   failureCategory?: string | null;
+  recovery?: { examined: number; total: number; completed: number; deferred: number };
 }
 
 export function viewerDeploymentStructuredHostStartup(
@@ -145,9 +146,14 @@ export function viewerDeploymentStructuredHostStartup(
       || (totalHosts !== null
         && (!Number.isSafeInteger(totalHosts)
           || (totalHosts as number) < (completedHosts as number)))) return null;
+    const recovery = candidate.recovery as ViewerStructuredHostStartupProgress["recovery"];
+    if (recovery !== undefined && (!recovery || ![recovery.examined, recovery.total, recovery.completed, recovery.deferred]
+      .every(value => Number.isSafeInteger(value) && value >= 0) || recovery.examined > recovery.total
+      || recovery.completed + recovery.deferred !== recovery.total)) return null;
     return {
       state,
       phase,
+      ...(recovery ? { recovery: { examined: recovery.examined, total: recovery.total, completed: recovery.completed, deferred: recovery.deferred } } : {}),
       completedHosts: completedHosts as number,
       totalHosts: totalHosts as number | null,
       ...(typeof candidate.failureCategory === "string" && /^[a-z-]{1,40}$/.test(candidate.failureCategory)

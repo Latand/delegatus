@@ -844,12 +844,15 @@ export function backupsDue(stateDirectory: string, lastRevisions: ReadonlyMap<st
 export interface BackupWorkerRequest {
   stateDirectory: string;
   lastRevisions: [string, string][];
-  operation?: "activation";
+  operation?: "activation" | "checkpoint" | "retirement-guard";
+  revision?: string;
+  owner?: import("@/lib/processIdentity").ProcessIdentity;
 }
 
 export interface BackupWorkerResponse {
   outcomes: [string, BackupOutcome][];
   incidents?: StorageIncident[];
+  checkpoint?: import("./hotStateAuthority").HotStateCheckpoint["revisions"];
 }
 
 /** The worker's side: one pass over the request, answered as one JSON line. */
@@ -900,9 +903,17 @@ export async function checkStateDatabasesInWorker(stateDirectory: string): Promi
   return response.incidents;
 }
 
+/** Rollback mirrors can contain retained history. Their encoding and fsync
+    run in the leased worker while the Viewer remains able to acknowledge. */
+export async function checkpointHotStateRollbackMirrorsInWorker(stateDirectory: string, timeoutMs = 10_000) {
+  const response = await runDurabilityWorker({ stateDirectory, lastRevisions: [], operation: "checkpoint" }, { timeoutMs });
+  if (!response.checkpoint) throw new Error("the checkpoint worker returned no revisions");
+  return response.checkpoint;
+}
+
 async function runDurabilityWorker(
   request: BackupWorkerRequest,
-  options: { launch?: { executable: string; workerPath: string } } = {},
+  options: { launch?: { executable: string; workerPath: string }; timeoutMs?: number } = {},
 ): Promise<BackupWorkerResponse> {
   const { stateDirectory } = request;
   const launch = options.launch ?? stateBackupWorkerLaunch();
@@ -914,7 +925,7 @@ async function runDurabilityWorker(
     command: useNice ? "/usr/bin/nice" : launch.executable,
     args: [...(useNice ? ["-n", "10", launch.executable] : []), launch.workerPath],
     cwd: process.cwd(),
-    env: process.env,
+    env: { ...process.env, LLV_STATE_DIR: stateDirectory },
   }, stateDirectory, { input: true, stdout: "pipe", stderr: "inherit", followRelease: false });
   const input = leasedHelperInput(child);
   const response = await new Promise<BackupWorkerResponse>((resolve, reject) => {
@@ -925,7 +936,7 @@ async function runDurabilityWorker(
       endLeasedHelper(child);
       // Activation may open stores next; wait for the guardian to reap the
       // worker before reporting its timeout, so recovery cannot race imports.
-    }, BACKUP_WORKER_TIMEOUT_MS);
+    }, options.timeoutMs ?? BACKUP_WORKER_TIMEOUT_MS);
     timeout.unref?.();
     child.stdout!.setEncoding("utf8");
     child.stdout!.on("data", (chunk: string) => { output += chunk; });
@@ -937,7 +948,7 @@ async function runDurabilityWorker(
     child.once("close", (code, signal) => {
       clearTimeout(timeout);
       try {
-        if (timedOut) throw new Error(`the backup worker ran past ${BACKUP_WORKER_TIMEOUT_MS} ms and was stopped`);
+        if (timedOut) throw new Error(`the backup worker ran past ${options.timeoutMs ?? BACKUP_WORKER_TIMEOUT_MS} ms and was stopped`);
         if (code !== 0) throw new Error(`the backup worker exited with ${code ?? signal}`);
         resolve(JSON.parse(output.trim().split("\n").at(-1) ?? "") as BackupWorkerResponse);
       } catch (error) {

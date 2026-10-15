@@ -8,7 +8,8 @@ export function passingCandidatePerformanceMeasurements(): CandidatePerformanceM
 }
 
 const PASSING: CandidatePerformanceMeasurements = {
-  dataset: { scale: 1, rows: 30_036, coldRows: 27_836, payloadBytes: 94_000_000, transcripts: 320, seedMs: 7_000 },
+  dataset: { scale: 1, rows: 53_299, coldRows: 51_099, payloadBytes: 214_600_000, transcripts: 320, seedMs: 7_000,
+    receipts: { total: 10_971, failedStructured: 892, failedLegacy: 122, conflicted: 133 } },
   firstBoot: { registryOpenMs: 80, firstSnapshotMs: 600, coldProjectionMs: 4_200, firstUsableMs: 4_900, eventLoopMaxMs: 600, coldBuild: { sequence: 1, buildMs: 2_500 } },
   activation: { incumbentMs: 4_300, successorMs: 4_800, eventLoopMaxMs: 900 },
   grantWrites: { count: 60, p50Ms: 5, p95Ms: 9, maxMs: 30, mismatches: 0, failures: 0 },
@@ -33,7 +34,7 @@ const PASSING: CandidatePerformanceMeasurements = {
   sqliteBusy: 0,
   runtimeTimeouts: 0,
   runtimeRpc: { requests: 600, p95Ms: 4, maxMs: 120, timeouts: 0, failures: 0, hostAlive: true },
-  deliveryEvidence: { pending: 16, uncertain: 8, preserved: true },
+  deliveryEvidence: { pending: 16, uncertain: 8, retained: 666, pendingLaunches: 20, preserved: true },
   browser: {
     views: 8,
     writes: { count: 900, p95Ms: 4, maxMs: 60, failures: 0 },

@@ -28,6 +28,14 @@ const predicates = (value: string) => {
     provenance: attempt(`json_extract(attempt.value, '$.report.provenance.state') = 'pending'`),
   };
 };
+export function pipelineControllerObligationSql(value: string): string {
+  return `CASE WHEN NOT json_valid(${value}) THEN 1 ELSE (
+    json_extract(${value},'$.state') NOT IN ('closed','completed')
+    OR json_array_length(${value},'$.unconfirmedHosts')>0
+    OR (json_extract(${value},'$.state')='completed' AND json_extract(${value},'$.terminalReap.settledAt') IS NULL)
+    OR (${Object.values(predicates(value)).join(" OR ")})
+  ) END`;
+}
 export type PipelineControllerSelection = keyof ReturnType<typeof predicates>;
 
 /** Install and backfill under the caller's initialization transaction. Row

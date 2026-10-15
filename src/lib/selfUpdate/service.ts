@@ -34,7 +34,7 @@ import { memAvailableMb, releaseBuilt } from "./steps";
 import { isRuntimeHostTransportFailure } from "@/lib/runtime/client";
 
 import type { RuntimeHostHealth } from "@/lib/runtime/client";
-import type { ViewerDeploymentReceipt, ViewerDeploymentRequest, ViewerDeploymentStatus } from "@/lib/runtime/contracts";
+import type { ViewerDeploymentList, ViewerDeploymentReceipt, ViewerDeploymentRequest, ViewerDeploymentStatus } from "@/lib/runtime/contracts";
 
 import { applyCheck, initialCheck, type CheckSlice } from "./checkState";
 import { CheckError, ensureCommit, targetOnCurrentBranch, type CheckInput, type CheckOutcome } from "./git";
@@ -112,6 +112,8 @@ export interface ServiceDeps {
   hostHealth(): Promise<RuntimeHostHealth | null>;
   requestDeployment(body: ViewerDeploymentRequest): Promise<ViewerDeploymentReceipt>;
   readDeployment(deploymentId: string): Promise<ViewerDeploymentStatus | null>;
+  /** One compact ledger head, including deployments admitted outside the dialog. */
+  latestDeployments?(): Promise<ViewerDeploymentList>;
   /** Read-only idempotency lookup. Unlike replaying a request, this never
       admits a deployment when the key is absent. */
   findDeploymentByIdempotencyKey(idempotencyKey: string): Promise<ViewerDeploymentStatus | null>;
@@ -120,7 +122,7 @@ export interface ServiceDeps {
   /** Fresh remote ancestry, including force-rewritten main. */
   targetOnBranch?(repo: string, target: string): Promise<boolean>;
   buildEnv(scratchRoot: string): Record<string, string>;
-  web: { pid: number; port: number | null; startedAt: string };
+  web: { pid: number; port: number | null; startedAt: string; revision?: string | null };
   green?: GreenReader;
   quiet?: QuietPorts;
   /** The synchronous registry reads of an observational reading, from outside
@@ -194,6 +196,14 @@ export class SelfUpdateService {
   private runnerRecord: string | null = null;
   private managed: ManagedRecord | null;
   private managedNeedsSave = false;
+  private observedManaged: ManagedRecord | null = null;
+  private managedRefresh: Promise<void> | null = null;
+  private ledgerReadAt = -Infinity;
+  private comparisonEpoch = 0;
+  private servingIdentity: string | null = null;
+  private recheckPending = false;
+  private comparisonRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+  private stopped = false;
   private decision: { value: ModeDecision; at: number } | null = null;
   private pendingRestart: PendingManualRestart | null = null;
   private readonly described = new Map<string, Revision>();
@@ -1314,6 +1324,10 @@ export class SelfUpdateService {
 
   check(): Promise<void> {
     if (this.checking) return this.checking;
+    if (this.comparisonRefreshTimer) clearTimeout(this.comparisonRefreshTimer);
+    this.comparisonRefreshTimer = null;
+    const epoch = this.comparisonEpoch;
+    this.recheckPending = false;
     this.slice = { ...this.slice, check: { ...this.slice.check, state: "checking" } };
     this.changes.emit();
     this.checking = (async () => {
@@ -1336,7 +1350,7 @@ export class SelfUpdateService {
         const outcome: CheckOutcome = input
           ? await this.deps.check(input)
           : { ok: false, error: "This install cannot check for updates", code: "cannot-check", installed: null };
-        this.slice = applyCheck(this.slice, outcome, new Date(this.deps.now()), this.auto.enabled ? 15 : this.deps.pollMinutes);
+        if (epoch === this.comparisonEpoch) this.slice = applyCheck(this.slice, outcome, new Date(this.deps.now()), this.auto.enabled ? 15 : this.deps.pollMinutes);
       } catch (error) {
         const failed: CheckOutcome = {
           ok: false,
@@ -1344,13 +1358,14 @@ export class SelfUpdateService {
           ...(error instanceof CheckError ? { code: error.code } : {}),
           installed: null,
         };
-        this.slice = applyCheck(this.slice, failed, new Date(this.deps.now()), this.auto.enabled ? 15 : this.deps.pollMinutes);
+        if (epoch === this.comparisonEpoch) this.slice = applyCheck(this.slice, failed, new Date(this.deps.now()), this.auto.enabled ? 15 : this.deps.pollMinutes);
       } finally {
         this.checking = null;
         this.undescribable.clear();
         this.schedulePoll();
         this.saveNow();
         this.changes.emit();
+        if (this.recheckPending && !this.stopped) void this.check();
         if (this.auto.enabled) void this.autoTick();
       }
     })();
@@ -1364,9 +1379,9 @@ export class SelfUpdateService {
       return { repo: decision.record.checkout, remote, branch, installed };
     }
     if (decision.mode === "managed") {
-      const target = this.deps.releaseTarget();
-      if (!target) throw new CheckError("no-release-target", "The Viewer release target is not readable, so the installed revision is unknown");
-      return { repo: await this.deps.prepareCheckRepo(), remote, branch, installed: target.revision, fetchInstalled: true };
+      const revision = this.deps.web.revision;
+      if (!revision) throw new CheckError("no-release-target", "The serving Viewer revision is unknown");
+      return { repo: await this.deps.prepareCheckRepo(), remote, branch, installed: revision, fetchInstalled: true };
     }
     return null;
   }
@@ -1493,8 +1508,26 @@ export class SelfUpdateService {
       return { ok: true };
     }
     if (decision.mode === "managed") {
-      const record = this.managed;
+      await this.refreshManaged(true);
+      const record = this.displayedManaged();
       if (!record || managedActive(record) || record.phase === "succeeded") return refuse(409, "not-failed", "Only a failed deployment can be retried");
+      // Prove forward ancestry immediately before admission. Unknown ancestry
+      // (including an unfetched object) cannot authorize an older deployment.
+      const serving = this.deps.web.revision;
+      if (!serving) return refuse(409, "deployment-refused", "The serving Viewer revision is unknown; run a check first");
+      const pointer = this.deps.releaseTarget()?.revision ?? null;
+      const host = await this.deps.hostHealth();
+      if (!host?.generation?.revision) return refuse(409, "deployment-refused", "The serving runtime host revision is unknown; run a check first");
+      const repo = await this.deps.prepareCheckRepo();
+      for (const revision of new Set([serving, host?.generation?.revision, pointer].filter((value): value is string => Boolean(value)))) {
+        const ancestry = await runGit(["merge-base", "--is-ancestor", revision, record.target], repo);
+        if (ancestry.code !== 0) return refuse(409, "deployment-refused", "The failed target is older than or unrelated to a serving component; run a check first");
+      }
+      await this.refreshManaged(true);
+      const currentHost = await this.deps.hostHealth();
+      if (JSON.stringify(record) !== JSON.stringify(this.displayedManaged()) || serving !== this.deps.web.revision
+        || host.generation.revision !== currentHost?.generation?.revision
+        || pointer !== (this.deps.releaseTarget()?.revision ?? null)) return busy("update");
       const described = this.described.get(record.target);
       return this.deploy(described ?? { version: record.targetVersion ?? "", sha: record.target, short: record.targetShort, date: "" }, clientKey);
     }
@@ -1912,8 +1945,56 @@ export class SelfUpdateService {
     return { ...UNKNOWN_REVISION, short };
   }
 
-  /** Reads the deployment once more while it is active. */
-  async refreshManaged(): Promise<void> {
+  private displayedManaged(): ManagedRecord | null {
+    // The ledger head resolves deployments admitted at the same instant too.
+    return this.observedManaged && (!this.managed || Date.parse(this.observedManaged.requestedAt) >= Date.parse(this.managed.requestedAt))
+      ? this.observedManaged : this.managed;
+  }
+
+  private invalidateComparison(): void {
+    this.comparisonEpoch += 1;
+    this.recheckPending = true;
+    if (!this.stopped && !this.checking && !this.comparisonRefreshTimer) {
+      this.comparisonRefreshTimer = setTimeout(() => {
+        this.comparisonRefreshTimer = null;
+        void this.check();
+      }, 0);
+      this.comparisonRefreshTimer.unref?.();
+    }
+  }
+
+  /** Single flight, bounded ledger observation; custody remains in managed.json. */
+  refreshManaged(force = false): Promise<void> {
+    if (this.managedRefresh) return this.managedRefresh;
+    const work = this.refreshManagedOnce(force).finally(() => { this.managedRefresh = null; });
+    this.managedRefresh = work;
+    return work;
+  }
+
+  private async refreshManagedOnce(force: boolean): Promise<void> {
+    if (this.deps.latestDeployments && (force || this.deps.now() - this.ledgerReadAt >= DEPLOYMENT_WATCH_MS)) {
+      this.ledgerReadAt = this.deps.now();
+      try {
+        const head = (await this.deps.latestDeployments()).deployments[0];
+        const id = head?.deploymentId;
+        if (id && id !== this.managed?.deploymentId) {
+          const status = await this.deps.readDeployment(id);
+          if (status && (!this.observedManaged || Date.parse(status.createdAt) >= Date.parse(this.observedManaged.requestedAt))) {
+            const before = this.displayedManaged();
+            this.observedManaged = observeDeployment({
+              deploymentId: id, idempotencyKey: status.idempotencyKey, target: status.revision,
+              targetShort: shortSha(status.revision), targetVersion: null, requestedAt: status.createdAt,
+              observed: {}, lastStep: null, finishedAt: null, phase: null, error: null, servingProgress: null,
+            }, status);
+            const after = this.displayedManaged();
+            if (after?.deploymentId !== before?.deploymentId || after?.phase !== before?.phase) {
+              this.changes.emit();
+              if (after && !managedActive(after)) this.invalidateComparison();
+            }
+          }
+        }
+      } catch { /* A host handover leaves the last observation intact. */ }
+    }
     if (!managedActive(this.managed)) {
       if (this.managedNeedsSave) this.saveManaged();
       return;
@@ -1925,7 +2006,7 @@ export class SelfUpdateService {
         this.managed = next;
         this.managedNeedsSave = true;
         this.changes.emit();
-        if (!managedActive(next) && next.phase === "succeeded") void this.check();
+        if (!managedActive(next)) this.invalidateComparison();
       }
     } catch {
       /* The web process is replaced mid-deployment; the next one reads on. */
@@ -2156,14 +2237,14 @@ export class SelfUpdateService {
 
   private async managedPart(now: number): Promise<Omit<Snapshot, "mode" | "unsupportedReason" | "available" | "check" | "meta">> {
     await this.refreshManaged();
-    let target: { revision: string } | null = null;
-    try { target = this.deps.releaseTarget(); } catch { target = null; }
     let repo: string | null = null;
     try { repo = await this.deps.prepareCheckRepo(); } catch { repo = null; }
-    const installed = target
-      ? (repo ? await this.describe(repo, target.revision) : { ...UNKNOWN_REVISION, sha: target.revision, short: shortSha(target.revision) })
-      : (this.slice.installed ?? UNKNOWN_REVISION);
-    const update = this.managed ? managedUpdateState(this.managed, now) : idleUpdate(MANAGED_STEPS);
+    const webRevision = this.deps.web.revision;
+    const installed = webRevision
+      ? (repo ? await this.describe(repo, webRevision) : { ...UNKNOWN_REVISION, sha: webRevision, short: shortSha(webRevision) })
+      : UNKNOWN_REVISION;
+    const displayed = this.displayedManaged();
+    const update = displayed ? managedUpdateState(displayed, now) : idleUpdate(MANAGED_STEPS);
     const running = (name: string) => update.state === "running" && update.steps.some((step) => step.name === name && step.state === "running");
     const at = new Date(now).toISOString();
 
@@ -2175,32 +2256,46 @@ export class SelfUpdateService {
       startedAt: this.deps.web.startedAt,
       lastHealthAt: at,
       lastHealthOk: true,
-      revision: installed.short || null,
+      revision: this.deps.web.revision ? shortSha(this.deps.web.revision) : null,
       tail: [],
     };
     let host: ProcessView;
+    let hostRevision: string | null = null;
     try {
       const health = await this.deps.hostHealth();
-      const revision = health?.generation?.revision ? shortSha(health.generation.revision) : null;
+      hostRevision = health?.generation?.revision ?? null;
+      const revision = hostRevision ? shortSha(hostRevision) : null;
       host = health
         ? { ...stoppedProcess(), state: running("handoff") ? "starting" : "healthy", pid: health.pid, lastHealthAt: at, lastHealthOk: true, revision, tail: [] }
         : { ...stoppedProcess(), state: "failed", error: { kind: "no-answer" }, tail: [] };
     } catch (error) {
       host = { ...stoppedProcess(), state: running("handoff") ? "starting" : "failed", lastHealthAt: at, lastHealthOk: false, error: { kind: "message", text: error instanceof Error ? error.message : String(error) }, tail: [] };
     }
+    const identity = JSON.stringify([this.deps.web.revision ?? null, hostRevision]);
+    if (this.deps.web.revision && hostRevision && this.servingIdentity !== identity) {
+      const changed = this.servingIdentity !== null || Boolean(this.slice.installed && this.slice.installed.sha !== this.deps.web.revision);
+      this.servingIdentity = identity;
+      if (changed) this.invalidateComparison();
+    }
+    const observedRevision = (sha: string | null | undefined) => sha
+      ? repo ? this.describe(repo, sha) : Promise.resolve({ ...UNKNOWN_REVISION, sha, short: shortSha(sha) }) : Promise.resolve(null);
     return {
       installed,
       serving: {
-        web: target ? installed : null,
-        runtimeHost: host.revision ? await this.describeShort(repo, host.revision) : null,
+        web: await observedRevision(this.deps.web.revision),
+        runtimeHost: await observedRevision(hostRevision),
       },
       update,
+      ...(displayed !== this.managed && this.managed ? { previousAttempt: managedUpdateState(this.managed, now) } : {}),
       processes: { web, runtimeHost: host },
-      busy: managedActive(this.managed) ? "update" : null,
+      busy: managedActive(displayed) ? "update" : null,
     };
   }
 
   stop(): void {
+    this.stopped = true;
+    if (this.comparisonRefreshTimer) clearTimeout(this.comparisonRefreshTimer);
+    this.comparisonRefreshTimer = null;
     if (this.autoTimer) clearInterval(this.autoTimer);
     this.autoTimer = null;
     if (this.deploymentWatch) clearInterval(this.deploymentWatch);

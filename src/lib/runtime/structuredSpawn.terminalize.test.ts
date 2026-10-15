@@ -89,6 +89,110 @@ function stagedStructuredReceipt(store: AgentRegistry, attempt: string) {
 const AGED = () => Date.now() + STALE_STRUCTURED_SPAWN_TIMEOUT_MS + 60_000;
 const originalStateDir = process.env.LLV_STATE_DIR;
 
+for (const cutoff of ["abort", "release"] as const)
+for (const boundary of ["message", "launch", "session", "snapshot", "effect", "effect-page"] as const)
+test(`recovery cancellation at ${boundary} evidence preserves the launch and host (${cutoff})`, async () => {
+  const store = registry();
+  const { receipt, key } = stagedStructuredReceipt(store, `cancel-${boundary}-${cutoff}`);
+  store.holdDelivery(receipt.conversationId, "Original instruction", `spawn_${receipt.launchId}`, "text");
+  const before = structuredClone(store.readOnlySnapshot());
+  const cancellation = new AbortController();
+  let active = true;
+  let entered!: () => void;
+  let resume!: () => void;
+  const reading = new Promise<void>(resolve => { entered = resolve; });
+  const response = new Promise<void>(resolve => { resume = resolve; });
+  const heldRead = async <T>(value: T): Promise<T> => {
+    entered();
+    await response;
+    // Some readers answer after retirement; others reject their aborted RPC.
+    if (cutoff === "abort") throw new Error("runtime host request cancelled");
+    return value;
+  };
+  let effects = 0;
+  let cleanups = 0;
+  const client = {
+    ...DEAD_RUNTIME_CLIENT,
+    operationStatus: async (id: string) => (boundary === "message" && id.startsWith("spawn_message_"))
+      || (boundary === "launch" && id === receipt.launchId) ? heldRead(null) : null,
+    ...(boundary !== "snapshot" ? { readSession: async () => boundary === "session" ? heldRead(null) : null } : {}),
+    snapshot: async () => boundary === "snapshot" ? heldRead({ sessions: [] }) : { sessions: [] },
+    effectBatch: async () => {
+      effects++;
+      if (boundary === "effect") return heldRead([]);
+      if (boundary === "effect-page") return effects === 1
+        ? Array.from({ length: 100 }, (_, i) => ({ eventSeq: i + 1, payload: {} })) : heldRead([]);
+      return [];
+    },
+  } as unknown as RuntimeHostClient;
+  const work = reconcileStructuredSpawnReplay(receipt.launchId, store, client, {
+    now: AGED, signal: cancellation.signal,
+    assertActive: () => { if (!active) throw Error("release retired"); },
+    releaseHost: async () => { cleanups++; return true; },
+    terminateHostProcess: async () => { cleanups++; return true; },
+  }).then(() => null, error => error);
+  try {
+    await Promise.race([reading, work.then(() => { throw Error("recovery ended before evidence read"); })]);
+    if (cutoff === "abort") cancellation.abort(Error("release retired"));
+    else active = false;
+    resume();
+    expect((await work)?.message).toBe("release retired");
+    const after = store.readOnlySnapshot();
+    expect(after.receipts[receipt.launchId]).toEqual(before.receipts[receipt.launchId]);
+    expect(after.heldDeliveries).toEqual(before.heldDeliveries);
+    expect(after.entries[`codex:${key.sessionId}`]).toEqual(before.entries[`codex:${key.sessionId}`]);
+    expect(cleanups).toBe(0);
+    const artifactPath = before.receipts[receipt.launchId]!.artifactPath!;
+    fs.writeFileSync(artifactPath, JSON.stringify({ type: "event_msg", payload: { type: "user_message", message: "Original instruction" } }) + "\n");
+    expect(await reconcileStructuredSpawnReplay(receipt.launchId, store, DEAD_RUNTIME_CLIENT, { now: AGED }))
+      .toMatchObject({ launchId: receipt.launchId, conversationId: receipt.conversationId, state: "completed" });
+  } finally { resume(); await work; store.close(); }
+});
+
+test.each(["abort", "release"] as const)("terminal recovery rechecks %s after a peer-held registry lock", async cutoff => {
+  const store = registry("sqlite");
+  const { receipt, key } = stagedStructuredReceipt(store, `terminal-cancel-${cutoff}`);
+  store.holdDelivery(receipt.conversationId, "Original instruction", `spawn_${receipt.launchId}`, "text");
+  const before = structuredClone(store.readOnlySnapshot());
+  const peer = new Database(path.join(path.dirname(store.filename), "agent-registry.sqlite"));
+  const cancellation = new AbortController();
+  let active = true;
+  let locked = false;
+  let timerAdvanced = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let cleanups = 0;
+  try {
+    const outcome = await reconcileStructuredSpawnReplay(receipt.launchId, store, {
+      ...DEAD_RUNTIME_CLIENT,
+      effectBatch: async () => {
+        peer.exec("BEGIN IMMEDIATE"); locked = true;
+        timer = setTimeout(() => {
+          timerAdvanced = true;
+          if (cutoff === "abort") cancellation.abort(Error("release retired"));
+          else active = false;
+          peer.exec("ROLLBACK"); locked = false;
+        }, 100);
+        return [];
+      },
+    }, {
+      now: AGED, signal: cancellation.signal,
+      assertActive: () => { if (!active) throw Error("release retired"); },
+      releaseHost: async () => { cleanups++; return true; },
+    }).then(() => null, error => error);
+    expect(outcome?.message).toBe("release retired");
+    expect(timerAdvanced).toBe(true);
+    expect(cleanups).toBe(0);
+    const after = store.readOnlySnapshot();
+    expect(after.receipts[receipt.launchId]).toEqual(before.receipts[receipt.launchId]);
+    expect(after.heldDeliveries).toEqual(before.heldDeliveries);
+    expect(after.entries[`codex:${key.sessionId}`]).toEqual(before.entries[`codex:${key.sessionId}`]);
+  } finally {
+    clearTimeout(timer);
+    if (locked) peer.exec("ROLLBACK");
+    peer.close(); store.close();
+  }
+});
+
 afterEach(() => {
   if (originalStateDir === undefined) delete process.env.LLV_STATE_DIR;
   else process.env.LLV_STATE_DIR = originalStateDir;
@@ -622,7 +726,11 @@ test("startup recovery still terminalizes a dead non-queued ownerless receipt", 
   store.releaseStartingStructuredSpawn(begun.receipt.launchId, begun.receipt.admissionOwner);
 
   const restarted = new AgentRegistry(store.filename, undefined, undefined, { sqliteMode: "off" });
-  await recoverPendingStructuredSpawns(restarted, DEAD_RUNTIME_CLIENT);
+  const { RuntimeJournal } = await import("../../runtime-host/journal");
+  const journal = new RuntimeJournal(path.join(path.dirname(store.filename), "recovery-runtime.sqlite"), { structuredHosts: true });
+  try {
+    await recoverPendingStructuredSpawns(restarted, { ...DEAD_RUNTIME_CLIENT, snapshot: async () => journal.snapshot() });
+  } finally { journal.close(); restarted.close(); }
 
   expect(restarted.snapshot().receipts[begun.receipt.launchId]).toMatchObject({
     state: "failed",
@@ -1118,14 +1226,14 @@ test("the actuation cap bounds one cycle and the remainder converges on the next
   }
 });
 
-function queuedOwnerFixture(transport: "tmux" | "structured", curator?: { id: string; project: string; receiptProject?: string }) {
-  const store = registry();
+function queuedOwnerFixture(transport: "tmux" | "structured", curator?: { id: string; project: string; receiptProject?: string }, attemptId?: string, mode: AgentRegistrySqliteMode = "off") {
+  const store = registry(mode);
   const cwd = path.dirname(store.filename);
   const profile = emptyLaunchProfile({ cwd, title: curator ? "Role memory curation" : "Owner queue fixture",
     ...(curator ? { project: curator.project, role: "curator" as never } : {}) });
   const begun = store.beginSpawnRequest({ engine: "claude", cwd, transport, ownStartingActuation: true, accountPin: true, accountId: "account-a",
     ...(curator ? { role: "curator", explicitProject: curator.receiptProject ?? curator.project } : {}),
-    clientAttemptId: curator?.id ?? `relay-owner-queued-${transport}`, launchProfile: profile });
+    clientAttemptId: attemptId ?? curator?.id ?? `relay-owner-queued-${transport}`, launchProfile: profile });
   if (begun.kind !== "created" || !begun.receipt.admissionOwner) throw Error("queued owner fixture unavailable");
   const prompt = "Owner queue fixture instruction";
   store.queuePinnedSpawn(begun.receipt.launchId, { version: 1, retryAt: new Date(0).toISOString(), accountId: "account-a", locale: "en",
@@ -1134,6 +1242,129 @@ function queuedOwnerFixture(transport: "tmux" | "structured", curator?: { id: st
   store.releaseSpawnActuation(begun.receipt.launchId, begun.receipt.admissionOwner);
   return { store, cwd, receipt: begun.receipt };
 }
+
+test("startup defers due queued host setup and the controller retains the original launch", async () => {
+  const { store, cwd, receipt } = queuedOwnerFixture("structured", undefined, "queued-startup-fixture");
+  const { RuntimeJournal } = await import("../../runtime-host/journal");
+  const journal = new RuntimeJournal(path.join(cwd, "runtime.sqlite"), { structuredHosts: true });
+  const client = { ...DEAD_RUNTIME_CLIENT, snapshot: async () => journal.snapshot() };
+  const before = store.readOnlySnapshot().receipts[receipt.launchId];
+  let launches = 0;
+  let publications = 0;
+  let release!: () => void;
+  const heldSetup = new Promise<void>(resolve => { release = resolve; });
+  const cancellation = new AbortController();
+  let entered!: () => void;
+  const setupEntered = new Promise<void>(resolve => { entered = resolve; });
+  const options = {
+    signal: cancellation.signal,
+    resolveSpawnAccount: () => ({ engine: "claude" as const, accountId: "account-a", kind: "managed" as const, home: cwd, transcriptRoot: cwd, env: { NODE_ENV: "test" as const } }),
+    resolvePinnedSpawnAdmission: async () => ({ kind: "admissible" as const, basis: "current" as const, stale: false, retryAt: null }),
+    spawnStructuredConversation: async (input: Parameters<typeof spawnStructuredConversation>[0]) => {
+      launches++;
+      expect(input.receipt.launchId).toBe(receipt.launchId);
+      await input.authorize?.();
+      entered();
+      await heldSetup;
+      await input.authorize?.();
+      publications++;
+      return { state: "running" } as never;
+    },
+  };
+  let controllerPass: Promise<unknown> | undefined;
+  let startup: Promise<void> | undefined;
+  let startupBound: ReturnType<typeof setTimeout> | undefined;
+  try {
+    startup = recoverPendingStructuredSpawns(store, client, options);
+    await Promise.race([
+      startup,
+      setupEntered.then(() => { throw Error("startup retained full queued host setup"); }),
+      new Promise<never>((_, reject) => {
+        startupBound = setTimeout(() => reject(Error("startup made no progress")), 4_000);
+      }),
+    ]);
+    clearTimeout(startupBound);
+    expect(launches).toBe(0);
+    expect(store.readOnlySnapshot().receipts[receipt.launchId]).toEqual(before);
+    controllerPass = terminalizeStaleStructuredSpawns(store, client, options);
+    await setupEntered;
+    cancellation.abort(Error("retiring Viewer"));
+    release();
+    await controllerPass;
+    expect(launches).toBe(1);
+    expect(publications).toBe(0);
+    expect(store.readOnlySnapshot().receipts[receipt.launchId]).toMatchObject({
+      state: "starting", admissionOwner: null, clientAttemptId: receipt.clientAttemptId,
+      queuedPinnedSpawn: before.queuedPinnedSpawn,
+    });
+  } finally {
+    clearTimeout(startupBound);
+    release();
+    await startup?.catch(() => {});
+    await controllerPass;
+    journal.close(); store.close(); fs.rmSync(cwd, { recursive: true, force: true });
+  }
+}, 10_000);
+
+for (const cutoff of ["abort", "fence", "new-epoch"] as const)
+test.each(["tmux", "structured"] as const)(`cancelled queued %s admission cannot start a new launch (${cutoff})`, async transport => {
+  const { store, cwd, receipt } = queuedOwnerFixture(transport, undefined, `queued-cancellation-${transport}`);
+  const original = store.readOnlySnapshot().receipts[receipt.launchId];
+  const cancellation = new AbortController();
+  let launches = 0;
+  try {
+    await terminalizeStaleStructuredSpawns(store, DEAD_RUNTIME_CLIENT, {
+      signal: cancellation.signal,
+      resolveSpawnAccount: () => ({ engine: "claude", accountId: "account-a", kind: "managed", home: cwd, transcriptRoot: cwd, env: { NODE_ENV: "test" } }),
+      resolvePinnedSpawnAdmission: async () => {
+        if (cutoff === "abort") cancellation.abort(Error("retiring Viewer"));
+        else {
+          const { publishHotStateAuthority } = await import("@/lib/state/hotStateAuthority");
+          publishHotStateAuthority(cwd, cutoff === "fence" ? "fencing" : "sqlite", "a".repeat(40));
+        }
+        return { kind: "admissible", basis: "current", stale: false, retryAt: null };
+      },
+      spawnStructuredConversation: async () => { launches++; throw Error("unexpected launch"); },
+      spawnTmuxAgent: async () => { launches++; throw Error("unexpected launch"); },
+    });
+    expect(launches).toBe(0);
+    expect(store.readOnlySnapshot().receipts[receipt.launchId]).toMatchObject({
+      state: "starting", admissionOwner: null, queuedPinnedSpawn: original.queuedPinnedSpawn,
+      clientAttemptId: receipt.clientAttemptId,
+    });
+  } finally { store.close(); fs.rmSync(cwd, { recursive: true, force: true }); }
+});
+
+test("cancelled queued admission releases its claim asynchronously under a peer registry lock", async () => {
+  const { store, cwd, receipt } = queuedOwnerFixture("structured", undefined, "queued-cancel-lock", "sqlite");
+  const peer = new Database(path.join(cwd, "agent-registry.sqlite"));
+  const cancellation = new AbortController();
+  let locked = false;
+  let timerAdvanced = false;
+  let releaseTimer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await terminalizeStaleStructuredSpawns(store, DEAD_RUNTIME_CLIENT, {
+      signal: cancellation.signal,
+      resolveSpawnAccount: () => ({ engine: "claude", accountId: "account-a", kind: "managed", home: cwd, transcriptRoot: cwd, env: { NODE_ENV: "test" } }),
+      resolvePinnedSpawnAdmission: async () => {
+        peer.exec("BEGIN IMMEDIATE"); locked = true;
+        releaseTimer = setTimeout(() => {
+          timerAdvanced = true;
+          peer.exec("ROLLBACK"); locked = false;
+        }, 100);
+        cancellation.abort(Error("retiring Viewer"));
+        return { kind: "admissible", basis: "current", stale: false, retryAt: null };
+      },
+      spawnStructuredConversation: async () => { throw Error("unexpected launch"); },
+    });
+    expect(timerAdvanced).toBe(true);
+    expect(store.readOnlySnapshot().receipts[receipt.launchId]).toMatchObject({ state: "starting", admissionOwner: null });
+  } finally {
+    clearTimeout(releaseTimer);
+    if (locked) peer.exec("ROLLBACK");
+    peer.close(); store.close(); fs.rmSync(cwd, { recursive: true, force: true });
+  }
+});
 
 test("a newly failed accepted queue retains its reporting obligation until the next pass", async () => {
   const { store, receipt } = queuedOwnerFixture("structured");

@@ -1,3 +1,4 @@
+import { controllerAttemptSelected, controllerRuns } from "./controllerScope";
 import type { ExecPort } from "@/lib/workflows/provision";
 import crypto from "node:crypto";
 
@@ -103,7 +104,8 @@ export async function collectStageProvenance(
 /** Pending intent is durable. Observation is attached only to the same report
     sequence and conversation, including when its turn has already settled. */
 export async function settlePendingStageProvenance(ports: Pick<import("./engine").PipelinePorts, "exec" | "now">): Promise<void> {
-  for (const pipeline of await selectControllerPipelines("provenance")) for (const run of pipeline.runs) for (const attempt of run.attempts) {
+  for (const pipeline of await selectControllerPipelines("provenance")) for (const run of controllerRuns(pipeline)) for (const attempt of run.attempts) {
+    if (!controllerAttemptSelected(pipeline.id, run.stageId, attempt.n)) continue;
     const report = attempt.report;
     if (report?.provenance.state !== "pending") continue;
     const abort = new AbortController();

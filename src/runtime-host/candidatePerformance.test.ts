@@ -19,7 +19,8 @@ const latency = (p95Ms: number, maxMs = p95Ms) => ({ count: 20, p50Ms: p95Ms / 2
 
 function healthy(): CandidatePerformanceMeasurements {
   return {
-    dataset: { scale: 1, rows: 30_036, coldRows: 27_836, payloadBytes: 94_000_000, transcripts: 320, seedMs: 7_000 },
+    dataset: { scale: 1, rows: 53_299, coldRows: 51_099, payloadBytes: 214_000_000, transcripts: 320, seedMs: 7_000,
+      receipts: { total: 10_971, failedStructured: 892, failedLegacy: 122, conflicted: 133 } },
     firstBoot: { registryOpenMs: 80, firstSnapshotMs: 550, coldProjectionMs: 4_200, firstUsableMs: 4_900, eventLoopMaxMs: 600, coldBuild: { sequence: 1, buildMs: 4_000 } },
     activation: { incumbentMs: 4_300, successorMs: 4_800, eventLoopMaxMs: 900 },
     grantWrites: { ...latency(7, 40), count: 300, mismatches: 0, failures: 0 },
@@ -44,7 +45,7 @@ function healthy(): CandidatePerformanceMeasurements {
     sqliteBusy: 0,
     runtimeTimeouts: 0,
     runtimeRpc: { requests: 600, p95Ms: 4, maxMs: 120, timeouts: 0, failures: 0, hostAlive: true },
-    deliveryEvidence: { pending: 16, uncertain: 8, preserved: true },
+    deliveryEvidence: { pending: 16, uncertain: 8, retained: 666, pendingLaunches: 20, preserved: true },
     browser: healthyBrowser(),
   };
 }
@@ -75,6 +76,22 @@ function report(measurements: CandidatePerformanceMeasurements | null, extra: Pa
 
 test("measurements inside every bound pass", () => {
   expect(candidatePerformanceBreaches(healthy())).toEqual([]);
+});
+
+test("the reported 1048 ms first boot is still refused by the unchanged gate", () => {
+  const measured = healthy();
+  measured.firstBoot.eventLoopMaxMs = 1048;
+  expect(candidatePerformanceBreaches(measured)).toEqual(["Viewer event-loop delay during first boot 1048ms exceeds 1000ms"]);
+});
+
+test("inflated row totals cannot hide a small retained launch and delivery fixture", () => {
+  const measured = healthy();
+  measured.dataset.receipts.total = 4;
+  measured.deliveryEvidence.retained = 16;
+  measured.deliveryEvidence.pendingLaunches = 0;
+  expect(candidatePerformanceBreaches(measured)).toEqual([
+    "retained receipts: measured 4, at least 10971 required", "retained deliveries: measured 16, at least 666 required", "pending launch receipts: measured 0, at least 20 required",
+  ]);
 });
 
 test("each bound names its breach with the measured value", () => {
@@ -117,7 +134,7 @@ test("each bound names its breach with the measured value", () => {
     "longest live-worker progress gap 25000ms exceeds 20000ms",
     "3 SQLITE_BUSY failure(s)",
     "1 runtime timeout(s)",
-    "pending or uncertain delivery evidence changed",
+    "retained launch or delivery evidence changed",
   ]);
 });
 
@@ -182,7 +199,7 @@ test("a run that measured too little, or at a reduced scale, is not a verdict", 
   measured.workers = { ...measured.workers, count: 0, rehosted: 0, answering: 0 };
   expect(candidatePerformanceBreaches(measured)).toEqual([
     "measured at scale 0.1; only the full dataset is a verdict",
-    "registry rows: measured 3000, at least 29000 required",
+    "registry rows: measured 3000, at least 53000 required",
     "board rounds compared: measured 2, at least 8 required",
     "9 board answers compared over 2 rounds of 8 scopes",
     "live workers: measured 0, at least 2 required",
