@@ -361,6 +361,8 @@ export type PipelineRuntimeSwitch = {
   cutAt?: string; continuedAt?: string; settledAt?: string; outcome?: string;
   rollback?: boolean;
   reconfigureNoop?: boolean;
+  /** Withdraws this attempt's execution authority before any teardown. */
+  retry?: { requestedAt: string; reason: string; completedAt?: string; pendingReason?: string; operatorStoppedAt?: string };
   continuationKey?: string;
   continuationDispatch?: { key: string; at: string };
   launch?: { clientAttemptId: string; launchId: string | null; conversationId: string | null };

@@ -1141,5 +1141,18 @@ test("runtime-switch state survives store reopening and malformed targets are re
   const record = { id: "runtime-switch-store:build:1:1", seq: 1, requestedAt: "2026-10-02T10:00:00.000Z", actor: { kind: "operator" as const }, mode: "fork" as const, phase: "requested" as const, from: { ...seat, conversationId: "conversation_store", launchId: "launch-store", sessionId: "session-store", agentPath: "/sessions/store.jsonl" }, to: { ...seat, accountId: "account-b", accountPinned: false } };
   pipeline.runs[0]!.attempts.push({ n: 1, state: "running", effectiveRole: structuredClone(pipeline.stages[0]!.effectiveRole), launchId: "launch-store", conversationId: "conversation_store", sessionId: "session-store", agentPath: "/sessions/store.jsonl", paneId: null, flowId: null, startedAt: record.requestedAt, completedAt: null, input: "brief", activatedBy: null, output: null, verdict: null, error: null, runtimeSwitches: [record] });
   savePipelines([pipeline]); expect(loadPipelines()[0]?.runs[0]?.attempts[0]?.runtimeSwitches).toEqual([record]);
+  const retryRecord: import("./types").PipelineRuntimeSwitch = { ...record, retry: {
+    requestedAt: record.requestedAt, reason: "source host is gone", pendingReason: "waiting for source termination",
+    operatorStoppedAt: record.requestedAt,
+  } };
+  pipeline.runs[0]!.attempts[0]!.runtimeSwitches = [retryRecord];
+  savePipelines([pipeline]); expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.runtimeSwitches).toEqual([retryRecord]);
+  for (const invalid of [{ requestedAt: "invalid" }, { completedAt: "invalid" }, { operatorStoppedAt: "invalid" },
+    { reason: "x".repeat(2001) }, { pendingReason: 12 }]) {
+    const malformed = structuredClone(pipeline);
+    Object.assign(malformed.runs[0]!.attempts[0]!.runtimeSwitches![0]!.retry!, invalid);
+    expect(() => savePipelines([malformed])).toThrow("malformed pipeline record");
+  }
+  pipeline.runs[0]!.attempts[0]!.runtimeSwitches = [record];
   record.to.model = 123 as never; expect(() => savePipelines([pipeline])).toThrow("malformed pipeline record"); expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.runtimeSwitches![0]!.to.model).toBe("gpt-6.1-sol");
 }));

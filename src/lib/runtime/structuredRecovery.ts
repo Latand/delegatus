@@ -28,6 +28,7 @@ import {
   spawnStructuredConversation,
 } from "./structuredSpawn";
 import { spawnTransport } from "./spawnTransport";
+import { runtimeSwitchRetirementReason } from "@/lib/pipelines/runtimeSwitchFence";
 
 export interface StructuredRecoveryRequest {
   /** Fresh autonomous seat authority, re-read after recovery's lock waits. */
@@ -263,6 +264,9 @@ const recoveryStore = globalThis as typeof globalThis & {
   __llvStructuredRecovery?: Map<string, Promise<StructuredRecoveryResult | null>>;
 };
 const recoveries = recoveryStore.__llvStructuredRecovery ??= new Map();
+export function structuredRecoveryPending(conversationId: string): boolean {
+  return [...recoveries.keys()].some(key => key.includes(`:${conversationId}:`));
+}
 
 function candidateFor(
   registry: AgentRegistry,
@@ -382,6 +386,8 @@ async function recoverCandidate(
 ): Promise<StructuredRecoveryResult | null> {
   const ownership = dependencies.ownership;
   const assertOwnership = async (): Promise<void> => {
+    const retired = runtimeSwitchRetirementReason(candidate.conversationId, registry);
+    if (retired) throw new Error(retired);
     if (ownership && !await ownership.owns()) throw new StructuredRecoverySupersededError();
   };
   const owner = (dependencies.processIdentity ?? (() => captureProcessIdentity(process.pid)))();
@@ -441,8 +447,12 @@ async function recoverCandidate(
       current.project,
     );
     const assertAccountAuthorized = async (): Promise<void> => {
+      const retired = runtimeSwitchRetirementReason(current.conversationId, registry);
+      if (retired) throw new Error(retired);
       request.admissionGuard?.();
       await ownership?.authorizeAccount?.(account.accountId ?? null);
+      const currentRetirement = runtimeSwitchRetirementReason(current.conversationId, registry);
+      if (currentRetirement) throw new Error(currentRetirement);
       request.authorityGuard?.();
     };
     let begun: SpawnBeginResult;
@@ -463,6 +473,8 @@ async function recoverCandidate(
           // Recheck authority after both authorization and writer admission.
           assertRecoveryAdmission(request, registry);
           request.authorityGuard?.();
+          const retired = runtimeSwitchRetirementReason(current.conversationId, registry);
+          if (retired) throw new Error(retired);
           request.admissionGuard?.();
         });
     } catch (error) {
@@ -561,6 +573,8 @@ export async function recoverDeadStructuredConversation(
     dependencies.park ?? defaultParkResolver,
   );
   if (!candidate) return null;
+  const retired = runtimeSwitchRetirementReason(candidate.conversationId, registry);
+  if (retired) throw new Error(retired);
   let admittedRequest = request;
   const admissionSnapshot = registry.readOnlySnapshot();
   if (conversationAgentRole(admissionSnapshot, candidate.conversationId) === "curator") {

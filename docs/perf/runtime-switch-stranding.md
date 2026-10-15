@@ -521,3 +521,60 @@ pass. Whitespace: no findings (`--no-index` returns 1 for the new-file diff).
 Numbered source references were checked against file lengths. Final main
 remains the pinned SHA; only this document is present in worktree status, with
 no ignored artifacts. Validation completed in the 05:28–05:31Z window.
+
+## Implementation and regression coverage — 2026-10-15
+
+The preceding sections record the diagnosis against its pinned revision.
+The implementation adds durable `runtimeSwitch.retry` intent. Retry admission
+stores the original reason, settles the attempt with a mechanical
+`needs_decision` verdict and completion time, and withdraws the old attempt's
+dispatch and reporting authority. Cleanup records its own pending reason.
+Repeated requests replay that intent and retain the existing operation keys.
+
+Dead and usage-limited sources enter this recovery on the next eligible
+controller pass, including eligible already-parked attempts. Live sources
+retain managed continuation. An ongoing handoff expects its source to have
+stopped and keeps reconciling its reserved successor.
+
+`runtimeSwitchRecovery.ts` withdraws unclaimed reconfigures through the registry
+writer and waits for applying migrations, pending successor cleanup and host
+recovery reservations. Delivery and host recovery read the durable retirement
+fence before dispatch, after authorization waits and before resends. The
+controller stops the recorded source and handoff successor, checks surviving
+process identities and rereads producer retirement before allocation. Missing
+proof leaves retry accepted with the specific cleanup obligation visible.
+
+The cleanup completion and next-attempt allocation commit together under the
+pipeline mutation lease. The next attempt binds the selected runtime, keeps
+the stage input and transcript reference, and uses ordinary launch admission.
+Checkout, branch, HEAD, index and working files stay in place. Pause, close,
+changed stage identity and a newer kill withdraw cleanup's authority; a later
+explicit retry can authorize replacement after that kill. A report accepted
+before retirement survives a concurrent failed runtime read.
+
+The regression files extend the matrix above through these cases:
+
+| File | Verified cases |
+| --- | --- |
+| `src/lib/pipelines/runtimeSwitch.test.ts` | Both Claude and Codex: dead/absent source, live/dead usage wait, known/unknown reset, running/parked admission. Real Git fixtures compare branch, HEAD, staged content, modified bytes and binary untracked content across recovery. Exactly one fresh attempt launches on the selected account/model/effort/tier. |
+| Same switch suite | Legacy requested/cutting/switching/continuing/failed/superseded/committed parks; pending cleanup across engine reload; double retry and override; stale expectations; late report; pause/close/kill; authorization loss; recorded live child; late producer reservation. A reopened registry retains reconfigure withdrawal and rejects recovery of the retired conversation, including retirement during an authorization wait. |
+| Same switch suite, retained cases | Proven and uncertain continuation failure, rollback, missing delivery/generation/native-start witnesses, reserved and missing handoff receipts, failed launches, account revocation, lost acknowledgements and continuation evidence boundaries. The seven old retry-refusal expectations now assert accepted retry plus no premature replacement. |
+| `src/lib/runtime/structuredDeliveryQueue.test.ts` | Retirement before drain, during journal write and before resend prevents old continuation dispatch. Existing control and delivery behavior remains covered. |
+| `src/lib/accounts/migration/provider.test.ts` | Both engines reject an owned `0775` transcript root inside an owned `0700` home before reserving any successor. Directory modes remain unchanged. |
+| `src/lib/pipelines/store.test.ts` | Legacy records and retry intent round-trip; invalid dates and oversized or malformed reasons are refused. |
+| `src/lib/runtime/nativeQueueHost.integration.test.ts` | Real Codex idle and active runtime-switch scenarios from the earlier fix: interrupt, canonical queue dispatch, preserved input and cold recovery. |
+
+Focused checks also run `structuredRecovery.test.ts`,
+`structuredDeliveryController.test.ts`, `structuredControls.test.ts`,
+`engine.recovery.test.ts`, `engine.activation.test.ts` and
+`engine.settlement.test.ts`. Each command names its test file, uses the supplied
+owned gate runner and isolated HOME/config/temp/state roots, and points Viewer
+control at a closed loopback port. The native scenarios use the installed
+native executable with a local fixture provider. No production requests or
+paid model calls are part of these checks.
+
+The runtime-host source and Bun pin are unchanged. The implementation uses the
+existing identity-based stop path; it adds no listener or connection handler.
+The affected production process is the Viewer. Publication runs the local
+privacy, type, lint and touched-test gates; CI exercises the required runtime
+checks against the proposed revision.
