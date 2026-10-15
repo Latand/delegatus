@@ -122,6 +122,7 @@ function harness(options: { setting?: Partial<MergeOnReviewSetting>; required?: 
         })),
       });
     }
+    if (args[0] === "api" && /\/issues\/\d+\/comments/.test(args[1] ?? "")) return "";
     if (args[0] === "api" && /\/pulls\/\d+\/reviews/.test(args[1] ?? "")) return "";
     if (args[0] === "api" && args[1]?.startsWith(`repos/${REPO}/branches/`)) return args.at(-1) === ".commit.sha" ? baseTip : JSON.stringify(options.required ?? []);
     if (args[0] === "repo" && args[1] === "view") return JSON.stringify({ squashMergeAllowed: true, mergeCommitAllowed: true, rebaseMergeAllowed: true });
@@ -520,6 +521,7 @@ test.each(["merged", "closed"] as const)("forge cache %s settles a refreshing pa
   const h = harness({ lanes: [finished()], prs: [conflicting()] });
   await h.sweep();
   h.setCached(state);
+  h.prs.get(11)!.state = state.toUpperCase();
   await h.sweep();
   expect(h.merge("finished")).toMatchObject(state === "merged" ? { state: "merged", by: "outside" } : { state: "blocked", reason: MERGE_REASONS.closed });
   expect(h.creates).toHaveLength(1);

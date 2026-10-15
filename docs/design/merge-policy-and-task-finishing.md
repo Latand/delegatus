@@ -437,6 +437,13 @@ queued → checking ─┬─ head in chain, CLEAN/HAS_HOOKS/UNSTABLE, required 
    the order the seat enforces by hand today. A blocked lane leaves the queue.
 6. **Merged elsewhere**: when the forge sweep or a read sees the PR `MERGED`,
    whoever merged it, the record becomes `merged` with `by: "outside"`.
+   Since 2026-10-15, a closed PR also qualifies through the batch merger's
+   `Landed on main as <sha> through #N` receipt from a repository collaborator.
+   The watcher verifies that the named batch merged into the PR's base, the
+   landing SHA is an ancestor of its merge commit, and that commit remains
+   reachable from the base. It records the individual landing SHA. Existing
+   closed-PR stops are rechecked once per minute; a missing or unproved receipt
+   keeps the stop. A failed read never proves a landing.
 
 Blocked reasons, each one plain sentence: conflict with the base branch
 (`DIRTY`); a named red check; no checks reported on this head; checks did not
@@ -525,10 +532,12 @@ A marked pipeline finishes its tasks when:
 |---|---|---|
 | off | any | the lane is `completed` (the PR stays open) |
 | on | no, exact base/head equality proves no commits | the lane is `completed` |
+| on | no, executed stages are read-only or a later output settlement proves writers left the accepted head at the base | the lane is `completed`, including controller-committed declared outputs |
+| on | no, its terminal passed attempt published a prototype decision form at the final head | the lane is `completed` |
 | on | no, commits remain or the base is unproved | waits for its PR to be opened or attached and merged |
 | on | yes | the lane is `completed` **and** `merge.state` is `merged` (by the runner or anyone) |
 
-A completed reviewed lane with changes and no uniquely linked PR records a
+A completed reviewed implementation lane with changes and no uniquely linked PR records a
 blocked merge with `prNumber: null` and the reason to open or attach its PR.
 The existing merge attention and retry action expose that wait. A retry with
 no PR returns to the block without calling GitHub; after a PR is attached,
@@ -536,6 +545,10 @@ the retry resolves its number and uses the usual reviewed-head and green-check
 gates. Missing or symbolic legacy bases cannot prove that a lane is unchanged.
 An existing merge record retains its PR identity when the usual lookup loses
 it, so the task still waits for that PR to merge.
+Lanes proved to need no PR skip queue admission, and the watcher removes their
+older missing-PR stops. A prototype form must belong to this lane's latest
+terminal passed attempt; a form from another lane or an earlier attempt does
+not establish completion. A linked PR always keeps its merge requirement.
 The board-maintenance report keeps tasks with unsettled merge records out of
 its recommendations to close finished work, even when no open PR is found.
 
