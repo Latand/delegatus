@@ -159,8 +159,18 @@ test("apply now admits a durable switch on the same running attempt", async () =
   expect(attempt.runtimeSwitches).toHaveLength(1);
 });
 
+function switchAccount(engine: "claude" | "codex", accountId: string): import("@/lib/accounts/contracts").AccountContext {
+  const home = path.join(process.env.LLV_STATE_DIR!, "switch-accounts", engine, accountId);
+  const transcriptRoot = path.join(home, engine === "codex" ? "sessions" : "projects");
+  fs.mkdirSync(transcriptRoot, { recursive: true, mode: 0o700 });
+  fs.chmodSync(home, 0o700); fs.chmodSync(transcriptRoot, 0o700);
+  return { engine, accountId, kind: "managed", home, transcriptRoot, env: { NODE_ENV: "test" } };
+}
+
 function switchHarness() {
   const h = harness();
+  h.ports.resolveProjectSpawn = (engine, request) => ({ kind: "available",
+    account: switchAccount(engine as "claude" | "codex", request.requestedId ?? request.preferredId ?? "default") });
   const operations = new Map<string, string>();
   const deliveries = new Map<string, { state: "delivered" | "failed" | "pending"; at: string }>();
   let outcome: "pending" | "applied" | "failed" | "superseded" = "applied";
@@ -1587,7 +1597,7 @@ test("switch admission uses project selection with continuity and known exhauste
   const state = loadPipelines(); state[0]!.runs[0]!.attempts[0]!.usageLimitedAccounts = [{ engine: "claude", accountId: "default", limitedAt: h.wallClock(), resetsAt: null }]; savePipelines(state);
   h.ports.allowedAccountIds = () => ["default", "account-b"];
   const selections: unknown[] = [];
-  h.ports.resolveProjectSpawn = (_engine, request) => { selections.push(request); return { kind: "available", account: { accountId: "account-b" } } as never; };
+  h.ports.resolveProjectSpawn = (engine, request) => { selections.push(request); return { kind: "available", account: switchAccount(engine as "claude" | "codex", "account-b") }; };
   const answer = await patchPipeline(pipeline.id, { action: "override-stage", stageId: "plan", model: "opus", applyNow: true }, h.ports);
   expect(selections).toMatchObject([{ project: "viewer", preferredId: "default", unavailableIds: ["default"] }]);
   expect(answer.runtimeSwitch?.to.accountId).toBe("account-b");
@@ -1956,7 +1966,7 @@ test("a predecessor report preflight cannot cross a committed same-engine switch
 test("target account revocation during interrupt fences reconfigure and continuation", async () => {
   const h = switchHarness(); let allowed = ["default", "target"];
   h.ports.allowedAccountIds = () => allowed;
-  h.ports.resolveProjectSpawn = () => ({ kind: "available", account: { accountId: "target" } } as never);
+  h.ports.resolveProjectSpawn = () => ({ kind: "available", account: switchAccount("claude", "target") });
   await requestSwitch(h, { account: "target" });
   const control = h.ports.runtimeSwitchControl!;
   h.ports.runtimeSwitchControl = async (...args) => { const result = await control(...args); if (args[2] === "interrupt") allowed = ["default"]; return result; };
@@ -2170,34 +2180,182 @@ test("the executor's fence reads the switch record and the project's allowed acc
   const { pipelineSwitchFence, switchOperationKey } = await import("./runtimeSwitchFence");
   const { bindAccountToProject, unbindAccountFromProject } = await import("@/lib/accounts/projectBindings");
   const h = switchHarness();
-  h.ports.resolveProjectSpawn = undefined;
-  expect(bindAccountToProject("claude", "default", "viewer").ok).toBe(true);
-  expect(bindAccountToProject("claude", "target", "viewer").ok).toBe(true);
-  const requested = await requestSwitch(h, { account: "target" });
-  expect(requested.error).toBeUndefined();
-  const record = requested.runtimeSwitch!;
-  expect(record.to.accountId).toBe("target");
-  const operationId = switchOperationKey(record, "reconfigure");
+  const { accountManager } = await import("@/lib/accounts/manager");
+  const resolve = spyOn(accountManager, "resolveSpawn").mockImplementation((engine, id) => switchAccount(engine as "claude" | "codex", id ?? "default"));
+  try {
+    h.ports.resolveProjectSpawn = undefined;
+    expect(bindAccountToProject("claude", "default", "viewer").ok).toBe(true);
+    expect(bindAccountToProject("claude", "target", "viewer").ok).toBe(true);
+    const requested = await requestSwitch(h, { account: "target" });
+    expect(requested.error).toBeUndefined();
+    const record = requested.runtimeSwitch!;
+    expect(record.to.accountId).toBe("target");
+    const operationId = switchOperationKey(record, "reconfigure");
 
-  expect(pipelineSwitchFence("switch-of-a-conversation")).toBeNull();
-  const fence = pipelineSwitchFence(operationId)!;
-  expect(fence.serviceTier).toBeUndefined();
-  expect(() => fence.authorize()).not.toThrow();
-  /* Revoked after admission: the fence taken earlier answers for now, and so does one read after a restart. */
-  expect(unbindAccountFromProject("claude", "target", "viewer").ok).toBe(true);
-  expect(() => fence.authorize()).toThrow("target account is no longer allowed on this project");
-  expect(() => pipelineSwitchFence(operationId)!.authorize()).toThrow("target account is no longer allowed on this project");
-  expect(bindAccountToProject("claude", "target", "viewer").ok).toBe(true);
-  expect(() => fence.authorize()).not.toThrow();
-  /* Asked about the account a host would start on, the source included. */
-  expect(() => fence.authorize("default")).not.toThrow();
-  expect(unbindAccountFromProject("claude", "default", "viewer").ok).toBe(true);
-  expect(() => fence.authorize("default")).toThrow("account is no longer allowed on this project");
-  expect(() => fence.authorize(null)).toThrow("no longer allowed");
-  expect(() => fence.authorize()).not.toThrow();
-  expect(bindAccountToProject("claude", "default", "viewer").ok).toBe(true);
-  /* A switch whose record is gone authorizes nothing. */
-  expect(() => pipelineSwitchFence(switchOperationKey({ id: "p-gone:plan:1:1" }, "reconfigure"))!.authorize()).toThrow("no longer allowed");
-  expect(unbindAccountFromProject("claude", "target", "viewer").ok).toBe(true);
-  expect(unbindAccountFromProject("claude", "default", "viewer").ok).toBe(true);
+    expect(pipelineSwitchFence("switch-of-a-conversation")).toBeNull();
+    const fence = pipelineSwitchFence(operationId)!;
+    expect(fence.serviceTier).toBeUndefined();
+    expect(() => fence.authorize()).not.toThrow();
+    /* Revoked after admission: the fence taken earlier answers for now, and so does one read after a restart. */
+    expect(unbindAccountFromProject("claude", "target", "viewer").ok).toBe(true);
+    expect(() => fence.authorize()).toThrow("target account is no longer allowed on this project");
+    expect(() => pipelineSwitchFence(operationId)!.authorize()).toThrow("target account is no longer allowed on this project");
+    expect(bindAccountToProject("claude", "target", "viewer").ok).toBe(true);
+    expect(() => fence.authorize()).not.toThrow();
+    /* Asked about the account a host would start on, the source included. */
+    expect(() => fence.authorize("default")).not.toThrow();
+    expect(unbindAccountFromProject("claude", "default", "viewer").ok).toBe(true);
+    expect(() => fence.authorize("default")).toThrow("account is no longer allowed on this project");
+    expect(() => fence.authorize(null)).toThrow("no longer allowed");
+    expect(() => fence.authorize()).not.toThrow();
+    expect(bindAccountToProject("claude", "default", "viewer").ok).toBe(true);
+    /* A switch whose record is gone authorizes nothing. */
+    expect(() => pipelineSwitchFence(switchOperationKey({ id: "p-gone:plan:1:1" }, "reconfigure"))!.authorize()).toThrow("no longer allowed");
+    expect(unbindAccountFromProject("claude", "target", "viewer").ok).toBe(true);
+    expect(unbindAccountFromProject("claude", "default", "viewer").ok).toBe(true);
+  } finally { resolve.mockRestore(); }
 });
+
+// Real migration and history-copy paths; only native CLI/auth/host ports are stubbed.
+const { AgentRegistry } = await import("@/lib/agent/registry");
+const { emptyLaunchProfile } = await import("@/lib/accounts/migration/contracts");
+const { applyStructuredReconfigure } = await import("@/lib/runtime/structuredReconfigure");
+const { advanceConversationMigration } = await import("@/lib/accounts/migration/coordinator");
+
+for (const engine of ["codex", "claude"] as const) for (const scenario of ["success", "target-root-0775", "target-root-changed", "continuation-refusal"] as const) {
+  test(`account-only applyNow through engine and reconfigure: ${engine} ${scenario}`, async () => {
+    const h = switchHarness();
+    const model = engine === "codex" ? "gpt-6-astra" : "opus";
+    h.ports.roleLookup = () => ({ engine, model, effort: "high", access: "read-only", promptScaffold: "Stage guidance" });
+    const lane = await runningStage(h);
+    const registry = new AgentRegistry(path.join(process.env.LLV_STATE_DIR!, `${engine}-${scenario}-registry.json`));
+    const account = (id: string) => {
+      const home = path.join(process.env.LLV_STATE_DIR!, `${engine}-${scenario}`, id);
+      const transcriptRoot = path.join(home, engine === "codex" ? "sessions" : "projects");
+      fs.mkdirSync(transcriptRoot, { recursive: true, mode: 0o700 });
+      fs.chmodSync(home, 0o700); fs.chmodSync(transcriptRoot, 0o700);
+      return { engine, accountId: id, kind: "managed" as const, home, transcriptRoot, env: { ...process.env } };
+    };
+    const source = account("default"), targetAccount = account("target");
+    if (scenario === "target-root-0775") fs.chmodSync(targetAccount.transcriptRoot, 0o775);
+    const sourceId = crypto.randomUUID();
+    const transcript = path.join(source.transcriptRoot, `${engine === "codex" ? "rollout-" : ""}${sourceId}.jsonl`);
+    const codexMeta = (id: string, parent?: string) => JSON.stringify({ type: "session_meta", timestamp: h.ports.now(), payload: { id, ...(parent ? { forked_from_id: parent } : {}), cwd: lane.worktreeDir } }) + "\n";
+    const history = engine === "codex" ? codexMeta(sourceId) + JSON.stringify({ type: "event_msg", timestamp: h.ports.now(), payload: { type: "task_complete" } }) + "\n"
+      : [ { type: "user", sessionId: sourceId, cwd: lane.worktreeDir, message: { role: "user", content: "Fixture question" } },
+          { type: "assistant", sessionId: sourceId, message: { role: "assistant", content: [{ type: "text", text: "Fixture answer" }] } },
+          { type: "result", timestamp: h.ports.now(), subtype: "success" } ].map(item => JSON.stringify(item)).join("\n") + "\n";
+    fs.writeFileSync(transcript, history, { mode: 0o600 });
+    registry.reconcileConversations([{ engine, path: transcript, accountId: "default",
+      launchProfile: emptyLaunchProfile({ cwd: lane.worktreeDir, model, effort: "high", title: "Account boundary fixture" }),
+      turn: { state: "idle", source: "empty", terminalAt: null }, observedAt: h.ports.now() }]);
+    const conversationId = registry.conversationForPath(transcript)!.id;
+    const rows = loadPipelines();
+    Object.assign(rows[0]!.runs[0]!.attempts[0]!, { conversationId, agentPath: transcript });
+    savePipelines(rows);
+    h.ports.pathForConversation = () => registry.conversation(conversationId)!.generations.at(-1)!.path;
+    h.ports.conversationIdForPath = () => conversationId;
+    h.ports.allowedAccountIds = () => ["default", "target"];
+    h.ports.resolveProjectSpawn = (_engine, request) => ({ kind: "available", account: request.requestedId === "target" ? targetAccount : source });
+    h.ports.conversationGeneration = () => {
+      const g = registry.conversation(conversationId)!.generations.at(-1)!;
+      return { engine, model: g.launchProfile.model, effort: g.launchProfile.effort, serviceTier: null, accountId: g.accountId, sessionId: g.id, agentPath: g.path };
+    };
+    const sourceGeneration = h.ports.conversationGeneration(conversationId);
+    const controls: string[] = [];
+    let providerCreates = 0;
+    const { RegisteredSuccessorProvider } = await import("@/lib/accounts/migration/provider");
+    const realProvider = new RegisteredSuccessorProvider({
+      registry, accounts: { resolveSpawn: () => targetAccount, resolveTranscriptOwner: () => source },
+      startCodex: async home => ({
+        async readAccount() { return { account: { type: "chatgpt" }, requiresOpenaiAuth: true }; },
+        async forkThread(id: string) {
+          expect(home).toBe(source.home);
+          const forkId = crypto.randomUUID(); const forkPath = path.join(source.transcriptRoot, `rollout-${forkId}.jsonl`);
+          fs.writeFileSync(forkPath, codexMeta(forkId, id), { mode: 0o600 });
+          return { id: forkId, path: forkPath };
+        },
+        async resumeThread(id: string, options: { path: string }) { expect(home).toBe(targetAccount.home); return { id, path: options.path }; },
+        async readThread(id: string) { return { id, path: null }; },
+        async setThreadName() {}, async setThreadGoal() {}, close() {},
+      }) as never,
+      claudeStatus: async () => ({ loggedIn: true }),
+      publishCodexHost: async () => async () => {}, publishClaudeHost: async () => async () => {},
+      journalRoot: path.join(process.env.LLV_STATE_DIR!, `${engine}-${scenario}-operations`),
+      claudeJournalRoot: path.join(process.env.LLV_STATE_DIR!, `${engine}-${scenario}-claude-operations`), now: h.ports.now,
+    });
+    const provider = {
+      create: async (input: Parameters<import("@/lib/accounts/migration/contracts").SuccessorProviderPort["create"]>[0]) => { providerCreates++; return realProvider.create(input); },
+      verify: realProvider.verify.bind(realProvider), publishHost: realProvider.publishHost.bind(realProvider), cleanup: realProvider.cleanup.bind(realProvider),
+    } as import("@/lib/accounts/migration/contracts").SuccessorProviderPort;
+    h.ports.runtimeSwitchControl = async (_id, _path, action, key, target) => {
+      controls.push(action);
+      if (action !== "reconfigure") return;
+      try {
+        await applyStructuredReconfigure({ kind: "reconfigure", operationId: key, conversationId, model: target!.model!, effort: target!.effort!, fast: false,
+          accountId: target!.accountId!, eventSeq: 1 }, {
+          registry, validateAccount: async () => {}, resolveAccount: () => ({}) as never, releaseHost: async () => true,
+          migrate: (id, _account, store, ownsOperation, reconfigureOperationId, authorizeTarget) =>
+            advanceConversationMigration(id, store, provider, { ownsOperation, reconfigureOperationId, authorizeTarget }),
+        });
+      } catch (error) { expect(String(error)).toContain("target transcript directory failed safety checks"); }
+    };
+    h.ports.runtimeSwitchOutcome = async () => {
+      const r = registry.conversation(conversationId)!.reconfigure!;
+      return { state: r.status === "applying" ? "pending" : r.status === "applied" ? "applied" : "failed", error: r.error ?? undefined };
+    };
+    const deliver = h.ports.resumeSeveredTurn!;
+    h.ports.resumeSeveredTurn = async input => {
+      if (scenario === "continuation-refusal") {
+        input.onRefused?.("fixture continuation refused", "refused"); return false;
+      }
+      return deliver(input);
+    };
+    h.ports.runtimeSwitchDelivery = (_id, key) => h.deliveries.get(key) ?? { state: "pending", admitted: false };
+    const request: import("./engine").PatchPipelineRequest = { action: "override-stage", stageId: "plan", account: "target", applyNow: true,
+      expectedAttempt: 1, expectedConversationId: conversationId };
+    if (scenario === "target-root-0775") {
+      const before = loadPipelines();
+      const refused = await patchPipeline(lane.id, request, h.ports, { kind: "operator" });
+      expect(refused.status).toBe(409);
+      expect(refused.code).toBe("target-account-unavailable");
+      expect(refused.error).toContain("target transcript directory");
+      expect(refused.error).toContain("repair");
+      expect(refused.error).not.toContain(targetAccount.home);
+      expect(loadPipelines()).toEqual(before);
+      expect(controls).toEqual([]);
+      expect(h.continuations).toEqual([]);
+      expect(providerCreates).toBe(0);
+      expect(h.ports.conversationGeneration(conversationId)).toEqual(sourceGeneration);
+      // Repairing the target makes the same attempt switchable without a stage retry.
+      fs.chmodSync(targetAccount.transcriptRoot, 0o700);
+    }
+    const requested = await patchPipeline(lane.id, request, h.ports, { kind: "operator" });
+    expect(requested.error).toBeUndefined();
+    expect(requested.runtimeSwitch).toMatchObject({ mode: "fork", to: { accountId: "target", model } });
+    if (scenario === "target-root-changed") fs.chmodSync(targetAccount.transcriptRoot, 0o775);
+    await tickPipelines([], h.ports); await tickPipelines([], h.ports);
+    const after = loadPipelines()[0]!;
+    const attempt = after.runs[0]!.attempts[0]!;
+    const record = attempt.runtimeSwitches![0]!;
+    expect(after.worktreeDir).toBe(lane.worktreeDir); expect(after.branch).toBe(lane.branch);
+    expect(after.runs[0]!.attempts).toHaveLength(1); expect(attempt.n).toBe(1);
+    if (scenario === "target-root-changed") {
+      expect(record.phase).toBe("rolled-back");
+      expect(record.outcome).toContain("target transcript directory");
+      expect(after.state).toBe("running");
+      expect(attempt.accountId).toBe("default");
+      expect(fs.statSync(targetAccount.transcriptRoot).mode & 0o777).toBe(0o775);
+    } else if (scenario !== "continuation-refusal") {
+      expect(record.phase).toBe("committed"); expect(attempt.accountId).toBe("target");
+      expect(attempt.conversationId).toBe(conversationId); expect(attempt.launchId).toBe("launch-1");
+      expect(h.ports.conversationGeneration(conversationId)!.sessionId).not.toBe(sourceGeneration!.sessionId);
+      expect(h.continuations).toHaveLength(1); expect(providerCreates).toBe(1);
+    } else {
+      expect(after.state).toBe("needs_decision"); expect(attempt.verdict?.status).toBe("needs_decision");
+      h.ports.spawnReceipt = id => ({ state: "completed", launchId: id }) as never;
+      const retry = await patchPipeline(lane.id, { action: "retry-stage", expectedStageId: "plan", expectedAttempt: 1 }, h.ports);
+      expect(retry.error).toBeUndefined(); expect(retry.pipeline).toBeDefined();
+    }
+  });
+}

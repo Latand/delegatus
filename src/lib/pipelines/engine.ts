@@ -24,7 +24,9 @@ import { withConversationActuation } from "@/lib/deliveryActuation";
 import { tierOffers, CodexServiceTierUnavailableError } from "@/lib/accounts/codexServiceTiers";
 import { listCodexAccounts } from "@/lib/accounts/codex";
 import { accountManager, AccountAuthenticationRequiredError, ProjectAccountRefusedError, resolveProjectSpawnAfterLiveRead } from "@/lib/accounts/manager";
-import type { ProjectSpawnResolution } from "@/lib/accounts/contracts";
+import { validateMigrationTargetRoot } from "@/lib/accounts/migration/targetRoot";
+import { sanitizeProviderError } from "@/lib/accounts/migration/safeHistoryCopy";
+import type { AccountContext, ProjectSpawnResolution } from "@/lib/accounts/contracts";
 import { selectHeadlessAccount } from "@/lib/accounts/headlessSelection";
 import { AccountProjectBindingsUnreadableError, allowedAccountIdsForProject } from "@/lib/accounts/projectBindings";
 import {
@@ -11859,7 +11861,7 @@ function discardDraft(pipeline: Pipeline, ports: PipelinePorts): void {
 
 /** A patch's answer: a mutation result, or the refusal of a stated guard (`STAGE_CHANGED`, or a malformed guard field). */
 export type PipelinePatchResult = Omit<PipelineMutationResult, "code" | "field"> & {
-  code?: PipelineMutationResult["code"] | PipelineGuardErrorCode | WorkLinkErrorCode | "RUNTIME_SWITCH_IN_PROGRESS" | "STAGE_ALREADY_REPORTED" | "ATTEMPT_STARTING" | "RUNTIME_SWITCH_UNAVAILABLE";
+  code?: PipelineMutationResult["code"] | PipelineGuardErrorCode | WorkLinkErrorCode | "RUNTIME_SWITCH_IN_PROGRESS" | "STAGE_ALREADY_REPORTED" | "ATTEMPT_STARTING" | "RUNTIME_SWITCH_UNAVAILABLE" | "target-account-unavailable";
   runtimeSwitch?: PipelineRuntimeSwitch | null;
   appliedNow?: "already-current";
   field?: PipelineMutationResult["field"] | PipelineGuardField;
@@ -13336,11 +13338,13 @@ export async function patchPipeline(
           ...usageLimitsOn(live, engine).filter(item => !providerAccountRecovered(pipeline, { ...live, effectiveRole: { ...live.effectiveRole, engine, model } }, item.accountId, item.limitedAt ?? null, item.resetsAt, ports)).map(item => item.accountId),
           ...(offers?.lacking ?? []),
         ];
+        let migrationTarget: AccountContext | undefined;
         let accountId = target.account ?? (allowed(preferredId) ? preferredId : null);
         if (ports.resolveProjectSpawn) {
           const resolution = ports.resolveProjectSpawn(engine, { project: pipeline.project, model, requestedId: target.account, preferredId, unavailableIds });
           if (resolution.kind !== "available" || !allowed(resolution.account.accountId)) return { error: "no allowed target account is available", status: 409 };
           accountId = resolution.account.accountId;
+          migrationTarget = resolution.account;
         }
         if (!allowed(accountId) || unavailableIds.includes(accountId!) || (offers && !offers.offering.includes(accountId!))) return { error: "no allowed target account is available", status: 409 };
         const to = { engine, model, effort,
@@ -13362,6 +13366,15 @@ export async function patchPipeline(
           }
           await persist();
           return { pipeline, ...(graphEdit ? { graphEdit } : {}), runtimeSwitch: null, appliedNow: "already-current" };
+        }
+        // A same-engine account move uses the migration provider. Refuse its
+        // known directory hazards before recording a switch or cutting the turn.
+        if (engine === live.effectiveRole.engine && accountId !== (nativeGeneration ?? currentRuntimeSeat(live)).accountId) {
+          try { await validateMigrationTargetRoot(migrationTarget ?? accountManager.resolveSpawn(engine, accountId!)); }
+          catch (error) {
+            const refusal = sanitizeProviderError(error);
+            return { error: refusal.message, code: "target-account-unavailable" as const, status: 409 };
+          }
         }
         const seq = (live.runtimeSwitches?.at(-1)?.seq ?? 0) + 1;
         runtimeSwitch = { id: `${pipeline.id}:${target.id}:${live.n}:${seq}`, seq, requestedAt: ports.now(), actor: actor!,

@@ -583,3 +583,50 @@ existing identity-based stop path; it adds no listener or connection handler.
 The affected production process is the Viewer. Publication runs the local
 privacy, type, lint and touched-test gates; CI exercises the required runtime
 checks against the proposed revision.
+
+
+## 2026-10-15: directory validation before account-switch admission
+
+A separate conditional failure remained after the retry recovery above. An
+owned target home at `0700` with a transcript directory at `0775` passed
+`applyNow` admission. The provider rejected the directory after interruption,
+and its plain error became “successor provider failed a recoverable preflight.”
+The provider's refusal of the writable directory remains deliberate.
+
+The engine now runs the provider's directory validation before admitting a
+same-engine account change. A refusal returns 409
+`target-account-unavailable` with directory repair guidance, preserving the
+stage definition, attempt and running source. Admission reads asynchronously
+and creates no directories. The provider repeats validation when it creates
+and verifies a successor, and retains an actionable diagnostic if the target
+changes after admission. Shared Claude transcript storage keeps its existing
+exception; ownership, symlink and group/other-write checks remain in force.
+
+The regression uses the real pipeline engine, structured reconfigure,
+migration coordinator, registry and history-copy code. Native CLI, account
+authentication and host publication ports are stubbed. Both engines run the
+same cases, with isolated home/config/temp/state roots and Viewer control
+pointed at a closed loopback port.
+
+| Case | Main `011a4fe97` | Changed code |
+| --- | --- | --- |
+| Target home `0700`, transcript directory `0775` | Both tests fail: expected 409, received an accepted request | Both refuse before any interrupt, provider creation or continuation; the persisted pipeline is identical |
+| Directory repaired to `0700` after refusal | — | The repeated request commits account B on attempt 1, preserving conversation, launch, worktree and branch |
+| Target directory starts at `0700` | Verifier's controls commit | Both commit on account B |
+| Directory changes to `0775` after admission | — | Both roll back, retain the directory repair reason and continue on account A; permissions remain unchanged |
+| Continuation explicitly refused | Verifier's controls accept stage retry | Both park with a decision and accept stage retry |
+
+The two refusal regressions were also red on starting base `46103d517`.
+The baseline comparison copies only the updated switch test into an export
+of main; no production source is replaced. The regression selection is:
+
+```sh
+bash scripts/gate-slot.sh bun test src/lib/pipelines/runtimeSwitch.test.ts --test-name-pattern target-root-0775
+```
+
+The full switch suite passes 153 tests. Explicit-path checks also pass all
+49 provider tests, 18 history-copy tests and 11 target-directory tests. The
+latter cover read-only admission of an absent directory, private creation,
+permissions, symlinks, non-directories, invalid locations and shared Claude
+storage. These results establish this conditional failure and its recovery;
+attribution of every earlier live observation remains unconfirmed.
