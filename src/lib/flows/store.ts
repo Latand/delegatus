@@ -496,6 +496,24 @@ export function patchFlowRows(
   });
 }
 
+/** Keyed controller writes wait for the shared state lease off the loop. */
+export async function patchFlowRowsAsync(
+  flowIds: Iterable<string>,
+  prepare: (current: Flow[]) => readonly Flow[],
+): Promise<void> {
+  const ids = [...new Set(flowIds)];
+  if (!ids.length) return;
+  await flowStore().boundedPatchAsync(ids.length * 2, tx => {
+    const current = ids.flatMap(id => {
+      const flow = tx.get(id);
+      return flow ? [flow] : [];
+    });
+    const records = prepare(current);
+    prepareFlowRevisions(records);
+    for (const record of records) tx.put(record);
+  });
+}
+
 /** Re-read and mutate flow state under the process-shared SQLite lease. */
 export async function withFlowMutation<T>(mutate: (flows: Flow[], persist: () => void) => T): Promise<T> {
   return await flowStore().mutate(mutate, ({ dirtyRecords }) => prepareFlowRevisions(dirtyRecords));

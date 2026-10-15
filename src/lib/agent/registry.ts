@@ -7594,6 +7594,17 @@ export class AgentRegistry {
    */
   endHostlessSpawn(launchId: string): boolean {
     if (!this.hostlessSpawnMarker(this.readOnlySnapshot(), launchId)) return false;
+    return this.endHostlessSpawnMutation(launchId);
+  }
+
+  /** A controller can retire a confirmed dead reviewer without a synchronous
+      wait, checking its marker inside the admitted registry mutation. */
+  async endHostlessSpawnOffLoop(launchId: string): Promise<boolean> {
+    return this.deliveryWriteOrBusy({ label: "flow.credit-guard-marker", operationId: launchId },
+      () => this.endHostlessSpawnMutation(launchId));
+  }
+
+  private endHostlessSpawnMutation(launchId: string): boolean {
     return this.mutate((file) => {
       const entry = this.hostlessSpawnMarker(file, launchId);
       if (!entry) return false;
