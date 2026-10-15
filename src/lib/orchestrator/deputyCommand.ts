@@ -98,7 +98,9 @@ export interface DeputyCommandPorts {
   workContext(project: string): DeputyWorkContext;
   deliver(input: { conversationId: string; path: string; clientMessageId: string; text: string; images: RuntimeImageUpload[]; origin: DeputyAskOrigin }): Promise<{ ok: true; outcome?: string; operationId?: string } | { ok: false; error: string; operationId?: string; uncertain?: true }>;
   imageRefsForRetry?(deputy: OrchestratorDeputy): StructuredImageRef[];
-  prepareRetry?(deputy: OrchestratorDeputy, guard: () => void): Promise<{ ok: true } | { ok: false; error: string }>;
+  prepareRetry?(deputy: OrchestratorDeputy, guard: () => void): Promise<{ ok: true; completed?: OrchestratorDeputy } | { ok: false; error: string }>;
+  /** Recheck a fork's transcript at the serialized retry commit boundary. */
+  reconcileRetryAnswer?(deputy: OrchestratorDeputy): OrchestratorDeputy | null;
   /** Starts the end sweep in this process (idempotent). */
   watch(): void;
   /** The store; injectable so the command is testable without a state dir. */
@@ -208,20 +210,39 @@ async function retryOnce(input: RetryDeputyInput, ports: DeputyCommandPorts): Pr
       guard();
       const settled = await ports.prepareRetry!(previous, guard);
       if (!settled.ok) return settled;
+      if (settled.completed) return { ok: true as const, completed: settled.completed };
       let answerFromBytes: number | undefined;
       if (previous.artifactPath) {
         const fs = await import("node:fs");
         try { answerFromBytes = fs.statSync(previous.artifactPath).size; } catch { /* A fork that never wrote has no prefix. */ }
       }
-      const reopened = await withAccountMutationLockAsync(() => sameSeat()
-        ? (store.retry ?? retryDeputy)(previous.askId, input.clientRequestId, previous.attempt ?? 0, ports.now(), answerFromBytes, imageRefs) : null,
+      const reopened = await withAccountMutationLockAsync(() => {
+        if (!sameSeat()) return { kind: "changed" as const };
+        const current = store.read().find(row => row.askId === previous.askId);
+        if (!current || current.state !== "ended" || (current.attempt ?? 0) !== (previous.attempt ?? 0)) {
+          return { kind: "changed" as const };
+        }
+        const completed = ports.reconcileRetryAnswer?.(current);
+        if (completed) return { kind: "completed" as const, deputy: completed };
+        const retried = (store.retry ?? retryDeputy)(previous.askId, input.clientRequestId,
+          previous.attempt ?? 0, ports.now(), answerFromBytes, imageRefs);
+        return retried ? { kind: "reopened" as const } : { kind: "changed" as const };
+      },
       { caller: "deputy retry" });
-      return reopened ? { ok: true as const } : { ok: false as const, error: "the parallel question changed while retrying" };
+      return reopened.kind === "completed"
+        ? { ok: true as const, completed: reopened.deputy }
+        : reopened.kind === "reopened" ? { ok: true as const }
+          : { ok: false as const, error: "the parallel question changed while retrying" };
     };
     const attempt = previous.deputyConversationId ? await tryConversationActuation(previous.deputyConversationId, prepare)
       : { acquired: true as const, value: await prepare() };
     if (!attempt.acquired) return fail("the previous delivery is still being checked; retry shortly");
     if (!attempt.value.ok) return fail(attempt.value.error);
+    if (attempt.value.completed) {
+      ports.watch();
+      const completed = attempt.value.completed;
+      return { ok: true, askId: completed.askId, deputyConversationId: completed.deputyConversationId!, replayed: true, deputy: completed };
+    }
   }
   return askOnce({ project: previous.project, seatConversationId: previous.seatConversationId,
     text: previous.ask.text, clientRequestId: previous.clientRequestId }, ports);

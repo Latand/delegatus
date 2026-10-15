@@ -1,9 +1,10 @@
 import { waitForStateLock } from "@/lib/state/lockWait";
+import { withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
 import { runtimeHostClient, readRuntimeSession } from "@/lib/runtime/client";
 import { readEvidenceWithin } from "@/lib/runtime/evidence";
 import { resolveSendReceipt } from "@/lib/runtime/sendSettlement";
 import { applyConversationAction } from "@/lib/conversation/actions";
-import { deputyMessageKey, productionDeputyPrincipal } from "./deputies";
+import { deputyMessageKey, productionDeputyPrincipal, reconcileDeputyAnswer } from "./deputies";
 import path from "node:path";
 
 import { forkClaudeHistory, HistorySecurityError } from "@/lib/accounts/migration/safeHistoryCopy";
@@ -16,7 +17,8 @@ import { loadTasks } from "@/lib/tasks/store";
 import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
 
 import { deputyDeliveryOrigin, type DeputyCommandPorts } from "./deputyCommand";
-import { startDeputySweep } from "./deputySweep";
+import type { OrchestratorDeputy } from "./deputies";
+import { deputyAnswered, deputyTerminalAnswer, readDeputyOwnLines, startDeputySweep } from "./deputySweep";
 import { readDeputySeatBusy } from "./deputySeatBusy";
 import { canonicalOrchestratorProject, orchestratorSeatFor } from "./seats";
 
@@ -29,6 +31,19 @@ const RECENT_TASK_MS = 10 * 60_000;
 
 export function productionDeputyCommandPorts(dependencies: { registry?: AgentRegistry; client?: typeof runtimeHostClient } = {}): DeputyCommandPorts {
   const registry = dependencies.registry ?? agentRegistry();
+  const reconcileCompletedAnswer = (deputy: OrchestratorDeputy): OrchestratorDeputy | null => {
+    if (!deputy.deputyConversationId || !deputy.artifactPath) return null;
+    const lines = readDeputyOwnLines(deputy);
+    if (!lines || !deputyAnswered(lines)) return null;
+    const answer = deputyTerminalAnswer(lines);
+    if (!answer.result.finalText.trim()) return null;
+    return reconcileDeputyAnswer(deputy.askId, deputy.attempt ?? 0, answer);
+  };
+  const reconcileCompletedAnswerUnderLock = (deputy: OrchestratorDeputy, guard: () => void) =>
+    withAccountMutationLockAsync(() => {
+      guard();
+      return reconcileCompletedAnswer(deputy);
+    }, { caller: "deputy retry answer" });
   return {
     now: () => new Date(),
     activeSeat: (project) => orchestratorSeatFor(project).active,
@@ -111,13 +126,18 @@ export function productionDeputyCommandPorts(dependencies: { registry?: AgentReg
       if (admission.outcome !== "admitted") return [];
       return registry.deliverySnapshotForOperation(admission.operationId).heldDeliveries[admission.deliveryId]?.runtimeImages ?? [];
     },
+    reconcileRetryAnswer: reconcileCompletedAnswer,
     prepareRetry: async (deputy, guard) => {
       guard();
+      const alreadyCompleted = await reconcileCompletedAnswerUnderLock(deputy, guard);
+      if (alreadyCompleted) return { ok: true, completed: alreadyCompleted };
       if (!deputy.deputyConversationId) return { ok: true };
       const client = (dependencies.client ?? runtimeHostClient)();
       if (!client) return { ok: false, error: "the runtime host is unavailable; the previous delivery cannot be checked" };
       const session = await readRuntimeSession(client, { conversationId: deputy.deputyConversationId });
       guard();
+      const answeredAfterRead = await reconcileCompletedAnswerUnderLock(deputy, guard);
+      if (answeredAfterRead) return { ok: true, completed: answeredAfterRead };
       if (session && !["dead", "unhosted"].includes(session.host)) {
         const stopped = await applyConversationAction({ conversationId: deputy.deputyConversationId,
           transcriptPath: deputy.artifactPath ?? "", action: "kill", operationId: `deputy_retry_stop_${deputy.askId}_${deputy.attempt ?? 0}` });
@@ -125,6 +145,8 @@ export function productionDeputyCommandPorts(dependencies: { registry?: AgentReg
         if (stopped.status !== 200) return { ok: false, error: "the previous parallel host could not be stopped" };
         const remaining = await readRuntimeSession(client, { conversationId: deputy.deputyConversationId });
         guard();
+        const answeredWhileStopping = await reconcileCompletedAnswerUnderLock(deputy, guard);
+        if (answeredWhileStopping) return { ok: true, completed: answeredWhileStopping };
         if (remaining && !["dead", "unhosted"].includes(remaining.host)) return { ok: false, error: "the previous parallel host is still stopping" };
       }
       const admitted = registry.deliveryAdmissionForKey(deputy.deputyConversationId, deputyMessageKey(deputy.askId, deputy.attempt ?? 0));
@@ -133,6 +155,8 @@ export function productionDeputyCommandPorts(dependencies: { registry?: AgentReg
       const journal = await readEvidenceWithin(() => client.operationStatus(admitted.operationId), 1_000,
         "the previous delivery journal could not be read");
       guard();
+      const answeredAfterJournal = await reconcileCompletedAnswerUnderLock(deputy, guard);
+      if (answeredAfterJournal) return { ok: true, completed: answeredAfterJournal };
       if (journal.readable && journal.value === null) {
         // No journal command exists. End only a reservation whose claim still
         // proves that no delivery attempt began, inside the admitted writer.
@@ -146,6 +170,8 @@ export function productionDeputyCommandPorts(dependencies: { registry?: AgentReg
       }
       const receipt = await resolveSendReceipt(admitted.operationId, { registry, client, windowMs: 0 });
       guard();
+      const answeredAfterReceipt = await reconcileCompletedAnswerUnderLock(deputy, guard);
+      if (answeredAfterReceipt) return { ok: true, completed: answeredAfterReceipt };
       if (!receipt || receipt.state === "in-flight" || receipt.resend === "verify-first") {
         return { ok: false, error: receipt?.reason ?? "the previous delivery is still being checked" };
       }

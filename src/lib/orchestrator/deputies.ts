@@ -407,6 +407,27 @@ export function retryDeputy(askId: string, requestId: string, expectedAttempt: n
   });
 }
 
+/** Preserve a terminal answer discovered after a sweep ended the attempt. */
+export function reconcileDeputyAnswer(
+  askId: string,
+  expectedAttempt: number,
+  answer: { touched: DeputyTouched; result: DeputyResult },
+): OrchestratorDeputy | null {
+  return mutateDeputies(file => {
+    const index = file.deputies.findIndex(row => row.askId === askId);
+    if (index < 0) return { value: null, changed: false };
+    const deputy = file.deputies[index]!;
+    if (deputy.state !== "ended" || (deputy.attempt ?? 0) !== expectedAttempt
+      || deputy.outcome === "done" || deputy.outcome === "seat-rotated") {
+      return { value: null, changed: false };
+    }
+    const completed = { ...deputy, outcome: "done" as const, touched: answer.touched,
+      result: answer.result, error: null };
+    file.deputies[index] = completed;
+    return { value: completed, changed: true };
+  });
+}
+
 export function activateDeputy(askId: string, now = new Date(), expectedAttempt?: number): OrchestratorDeputy | null {
   return updateDeputy(askId, (deputy) => deputy.state !== "pending" || (expectedAttempt !== undefined && expectedAttempt !== (deputy.attempt ?? 0)) ? null : { ...deputy, state: "active", activatedAt: now.toISOString() });
 }

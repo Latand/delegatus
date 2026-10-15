@@ -149,6 +149,17 @@ export function deputyAnswered(lines: readonly string[]): boolean {
   return false;
 }
 
+/** The canonical answer projection shared by sweep settlement and Retry. */
+export function deputyTerminalAnswer(lines: readonly string[]): {
+  touched: ReturnType<typeof deputyWorkFromLines>["touched"];
+  result: { line: string; finalText: string };
+} {
+  const work = deputyWorkFromLines(lines);
+  const finalText = work.finalText.length > DEPUTY_FINAL_TEXT_LIMIT * 4
+    ? work.finalText.slice(0, DEPUTY_FINAL_TEXT_LIMIT * 4) : work.finalText;
+  return { touched: work.touched, result: { line: deputyResultLine(finalText), finalText } };
+}
+
 /** End one record and tell the seat. Safe to call again: nothing repeats. */
 export async function finishDeputy(deputy: OrchestratorDeputy, outcome: DeputyOutcome, interrupt: boolean, ports: DeputySweepPorts, reason?: string | null): Promise<OrchestratorDeputy | null> {
   const finish = () => finishDeputyNow(deputy, outcome, interrupt, ports, reason);
@@ -167,15 +178,15 @@ async function finishDeputyNow(deputy: OrchestratorDeputy, outcome: DeputyOutcom
   }
   try { await ports.release(deputy); } catch { /* a host that is already gone needs no release */ }
   const lines = ports.ownLines(deputy) ?? [];
-  const work = deputyWorkFromLines(lines);
-  const finalText = work.finalText.length > DEPUTY_FINAL_TEXT_LIMIT * 4 ? work.finalText.slice(0, DEPUTY_FINAL_TEXT_LIMIT * 4) : work.finalText;
+  const answer = deputyTerminalAnswer(lines);
+  const finalText = answer.result.finalText;
   const ended = await withAccountMutationLockAsync(() => end(deputy.askId, {
     outcome,
     expectedAttempt: deputy.attempt ?? 0,
     error: reason ?? (outcome === "done" ? null : outcome === "host-died" ? "The parallel host stopped before it answered." : outcome === "timeout" ? "The parallel question reached its time limit." : null),
     now: ports.now(),
-    touched: work.touched,
-    result: { line: deputyResultLine(finalText), finalText },
+    touched: answer.touched,
+    result: answer.result,
   }), { caller: "deputy settlement" }) ?? deputy;
   /* A deputy that never started has nothing to report; its refusal already
      reached whoever asked. */
