@@ -150,8 +150,11 @@ demonstrated in the isolated traces. Existing production logs start after
 these prerequisites and cannot attribute the production long tail to it.
 
 Both results still precede payload assembly and sending. The manager read
-retains its 15-second deadline and failure-to-no-context behavior. Bridge
-acknowledgement retirement still finishes before the bridge GET, and the new
+retains its 15-second deadline and failure-to-no-context behavior. At prelude
+assembly, the cached designation must still name this conversation within its
+30-second TTL. If bridge preparation outlasts that window, the turn omits viewer
+context without another lookup. Bridge acknowledgement retirement still finishes
+before the bridge GET, and the new
 batch is acknowledged only after admission. Attachment retention still
 precedes preparation, sealing and `beginAttempt`; replay reuses the sealed
 envelope and original key without either prerequisite. Ordering and

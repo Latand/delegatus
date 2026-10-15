@@ -143,7 +143,7 @@ import {
 } from "@/lib/bridge/pendingAcknowledgements";
 
 import { VoiceFloatButton } from "./voice/VoiceFloatButton";
-import { isDesignatedManagerConversation } from "./voice/managerIdentity";
+import { isCachedDesignatedManagerConversation, isDesignatedManagerConversation } from "./voice/managerIdentity";
 import { viewerContextPrelude } from "./voice/viewerContextPrelude";
 import { useSeatParallelBusy } from "./orchestrator/useSeatParallelBusy";
 import { publishSeatDeputy, useSeatProjectFor } from "./orchestrator/seatDeputies";
@@ -3604,7 +3604,7 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
           isDesignatedManagerConversation(cardId, submittedFile.project), admissionTiming.admissionDeadlineMs,
         ).catch(() => false);
         const bridge = await drainBridgeTurnStart();
-        const prelude = await managerRead
+        const prelude = (await managerRead) && isCachedDesignatedManagerConversation(cardId, submittedFile.project)
           ? viewerContextPrelude({ path: submittedFile.path, project: submittedFile.project }) : "";
         const taskLines = taskReferencePrelude(selectedContext.tasks);
         const composed = [taskLines, prelude, requestedText].filter(Boolean).join("\n");
@@ -3917,9 +3917,9 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
        queried per dispatch and cached. */
     // This optional read precedes admission. A lost seat response must not hold
     // the local wire fence forever; an unconfirmed designation adds no context.
-    const viewerPrelude = !(await managerRead)
-      ? ""
-      : viewerContextPrelude({ path: file.path, project: file.project });
+    const viewerPrelude = (await managerRead) && isCachedDesignatedManagerConversation(cardId, file.project)
+      ? viewerContextPrelude({ path: file.path, project: file.project })
+      : "";
     const composedText = [taskReferencePrelude(selectedContext?.tasks), viewerPrelude, requestedText].filter(Boolean).join("\n");
     const payloadText = durable?.envelope?.body.text as string | undefined ?? replayGeneration?.text
       ?? (bridgeTurn?.text ? `${bridgeTurn.text}\n\n${composedText}` : composedText);

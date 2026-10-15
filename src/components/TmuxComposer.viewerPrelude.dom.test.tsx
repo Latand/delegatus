@@ -12,7 +12,7 @@
  * identically-capable worker gets none. Restore the capability gate and the worker
  * case goes red.
  */
-import { afterAll, afterEach, beforeEach, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { act } from "react";
 import { installActEnv } from "@/test-helpers/actEnv";
 import { Window } from "happy-dom";
@@ -77,7 +77,7 @@ function structuredView(conversationId: string): RuntimeSessionView {
 
 import { appendComposerDraft, TmuxComposer } from "./TmuxComposer";
 const { readOutbox, resetOutboxForTests, retryOutbox } = await import("./conversation/outbox");
-const { resetManagerIdentityForTest } = await import("./voice/managerIdentity");
+const { designatedManagerConversationId, isCachedDesignatedManagerConversation, MANAGER_IDENTITY_TTL_MS, resetManagerIdentityForTest } = await import("./voice/managerIdentity");
 const { viewBus } = await import("@/hooks/viewPresenceBus");
 
 const realFetch = globalThis.fetch;
@@ -249,8 +249,8 @@ async function settle(action: () => void = () => {}): Promise<void> {
 }
 
 async function until(condition: () => boolean): Promise<void> {
-  const deadline = Date.now() + 2_000;
-  while (!condition() && Date.now() < deadline) await settle();
+  const deadline = performance.now() + 2_000;
+  while (!condition() && performance.now() < deadline) await settle();
   expect(condition()).toBe(true);
 }
 
@@ -286,6 +286,20 @@ const deliveredAnswer = (body: SendBody) => Response.json({ ok: true, operationI
   operationId: `operation-${body.idempotencyKey}`, conversationId: body.conversationId, idempotencyKey: body.idempotencyKey,
   kind: "send", status: "delivered", text: body.text, at: new Date().toISOString(), revision: 1,
 } });
+
+test("cached manager context expires at the TTL boundary and follows the current designation", async () => {
+  const cachedAt = 1_000;
+  expect(isCachedDesignatedManagerConversation(MANAGER, "viewer", () => cachedAt)).toBe(false);
+  await designatedManagerConversationId("viewer", fetch, () => cachedAt);
+  expect(isCachedDesignatedManagerConversation(MANAGER, " viewer ", () => cachedAt + MANAGER_IDENTITY_TTL_MS - 1)).toBe(true);
+  expect(isCachedDesignatedManagerConversation(MANAGER, "viewer", () => cachedAt + MANAGER_IDENTITY_TTL_MS)).toBe(false);
+  expect(isCachedDesignatedManagerConversation(MANAGER, "viewer", () => cachedAt + MANAGER_IDENTITY_TTL_MS + 1)).toBe(false);
+  expect(isCachedDesignatedManagerConversation(MANAGER, "other-project", () => cachedAt)).toBe(false);
+  const successorFetch = (async () => Response.json({ seat: { conversationId: WORKER }, exists: true })) as typeof fetch;
+  await designatedManagerConversationId("viewer", successorFetch, () => cachedAt + MANAGER_IDENTITY_TTL_MS);
+  expect(isCachedDesignatedManagerConversation(MANAGER, "viewer", () => cachedAt + MANAGER_IDENTITY_TTL_MS)).toBe(false);
+  expect(isCachedDesignatedManagerConversation(WORKER, "viewer", () => cachedAt + MANAGER_IDENTITY_TTL_MS)).toBe(true);
+});
 
 /** Real composer, bridge drain, storage and runtime HTTP client; only HTTP answers are held. */
 function holdPreparation() {
@@ -333,6 +347,83 @@ function holdPreparation() {
 }
 
 for (const attachment of [false, true]) {
+  for (const preparation of ["warm cache", "cold lookup with acknowledgements"] as const) {
+    test(`seat rotation during bridge preparation omits expired manager context (${attachment ? "attachment" : "text"}, ${preparation})`, async () => {
+      const composer = await preparedComposer(attachment);
+      let now = Date.now();
+      const clock = spyOn(Date, "now").mockImplementation(() => now);
+      const fallback = globalThis.fetch;
+      const bridge = deferred<Response>();
+      const acknowledgements = Array.from({ length: 5 }, () => deferred<Response>());
+      const ackCalls: string[] = [];
+      const sends: SendBody[] = [];
+      let seat = MANAGER;
+      let seatReads = 0;
+      let bridgeReads = 0;
+      globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
+        const url = String(input);
+        if (url === "/api/orchestrator/seat?project=viewer") {
+          seatReads += 1;
+          return Response.json({ seat: { conversationId: seat }, exists: true });
+        }
+        if (url.startsWith("/api/bridge?")) {
+          bridgeReads += 1;
+          return bridge.promise;
+        }
+        if (url === "/api/bridge") {
+          const { ackToken } = JSON.parse(String(init?.body));
+          ackCalls.push(ackToken);
+          return acknowledgements[Number(ackToken.split("-").at(-1))]!.promise;
+        }
+        if (url === "/api/runtime/send") {
+          const body = JSON.parse(String(init?.body)) as SendBody;
+          sends.push(body);
+          return deliveredAnswer(body);
+        }
+        return fallback(input as RequestInfo, init);
+      }) as typeof fetch;
+      try {
+        if (preparation === "warm cache") {
+          expect(await designatedManagerConversationId("viewer")).toBe(MANAGER);
+          now += MANAGER_IDENTITY_TTL_MS - 1_000;
+        } else {
+          for (let index = 0; index < acknowledgements.length; index += 1) {
+            rememberBridgeAcknowledgement(`earlier-turn-${index}`, `previous-${index}`);
+          }
+        }
+        await settle(composer.submit);
+        await until(() => seatReads === 1);
+        seat = WORKER;
+        if (preparation === "warm cache") {
+          await until(() => bridgeReads === 1);
+          now += 2_000;
+        } else {
+          for (let index = 0; index < acknowledgements.length; index += 1) {
+            await until(() => ackCalls.length === index + 1);
+            expect(ackCalls[index]).toBe(`previous-${index}`);
+            expect(sends).toHaveLength(0);
+            // Each acknowledgement finishes within its 8 s deadline, while
+            // their cumulative wait expires the initial manager lookup.
+            now += 7_000;
+            await settle(() => acknowledgements[index]!.resolve(Response.json({ ok: true })));
+          }
+        }
+        expect(sends).toHaveLength(0);
+        await settle(() => bridge.resolve(Response.json({ prelude: null })));
+        await until(() => sends.length === 1 && readOutbox(MANAGER)[0]?.state === "delivered");
+        expect(sends[0]!.text).toBe("first authored turn");
+        expect(sends[0]!.images).toHaveLength(attachment ? 1 : 0);
+        expect(sends[0]!.idempotencyKey).toBe(readOutbox(MANAGER)[0]!.id);
+        expect(pendingBridgeAcknowledgements()).toEqual([]);
+      } finally {
+        clock.mockRestore();
+        bridge.resolve(Response.json({ prelude: null }));
+        for (const acknowledgement of acknowledgements) acknowledgement.resolve(Response.json({ ok: true }));
+        await settle();
+      }
+    });
+  }
+
   for (const first of ["seat", "bridge"] as const) {
     test(`manager lookup overlaps bridge drain; both gate one ordered send (${attachment ? "attachment" : "text"}, ${first} first)`, async () => {
       const composer = await preparedComposer(attachment);
