@@ -1,11 +1,17 @@
+import fs from "node:fs";
+import path from "node:path";
+
 import { expect, test } from "bun:test";
 
-import { BUILDER_FINISH_LINE, FIX_ROUND_FINISH_LINE, ISSUE_REPORT_SCRUB_RULE, PROCESS_CLEANUP_MARKER, VISUAL_CRITIC_CLASSES, VISUAL_CRITIC_UNFRAMED } from "./defaults";
+import { BUILDER_FINISH_LINE, EARLIER_ANSWERS_MECHANICS, FIX_ROUND_FINISH_LINE, ISSUE_REPORT_SCRUB_RULE, PROCESS_CLEANUP_MARKER, RENDERED_RULES, VISUAL_CRITIC_CLASSES, VISUAL_CRITIC_UNFRAMED, WORKING_RULES } from "./defaults";
 import { defaultRoleParameterValue } from "./parameters";
 import { variantForParams } from "./paramConfig";
+import type { RoleParamValues } from "./types";
 import { ORCHESTRATOR_TASK_OWNERSHIP_HEADING } from "@/lib/orchestrator/prompt";
 
-import { APPLY_FIXES_GUIDANCE, listRoles, resolveRole, resolveSpawnRole, roleFenceBlock, roleScaffoldBody, roleSpawnPrompt, SPAWN_COMPLETION } from "./registry";
+import { APPLY_FIXES_GUIDANCE, FRONTEND_GUIDANCE, listRoles, resolveRole, resolveSpawnRole, roleFenceBlock, roleScaffoldBody, roleSpawnPrompt, SPAWN_COMPLETION } from "./registry";
+
+const repository = path.resolve(import.meta.dir, "../../..");
 
 test("merger resolves a required reviewed-PR list with a read-write, non-nesting profile", () => {
   expect(resolveRole("merger", {})).toMatchObject({ ok: false, error: "missing required role parameter: prs" });
@@ -17,19 +23,23 @@ test("merger resolves a required reviewed-PR list with a read-write, non-nesting
   expect(role.value.definition.capabilities).toEqual([]);
   expect(role.value.prompt).toContain("12@abcdef1,13@1234567");
   expect(role.value.prompt).toContain("Never judge your own resolution");
-  expect(role.value.prompt).toContain("An outstanding human CHANGES_REQUESTED blocks every merge");
-  expect(role.value.prompt).toContain("A re-request or COMMENTED review does not clear it");
-  expect(role.value.prompt).toContain("Ignore GitHub bot and agent reviews");
+  expect(role.value.prompt).toContain("A human reviewer's outstanding request for changes blocks every merge until that reviewer approves or dismisses it");
+  expect(role.value.prompt).toContain("a re-request or a comment leaves it standing, and bot and agent reviews do not count");
+  expect(role.value.prompt).toContain("read reviewDecision and each human reviewer's latest decisive review from the paginated reviews endpoint");
   // The rule a seat once had to rule on is the default: main's own red never
-  // stops a batch, foreign detectors are skipped, gates run one at a time.
+  // stops a batch, and gates run one at a time.
   expect(role.value.prompt).toContain("produces on native main are pre-existing and never stop the batch");
-  expect(role.value.prompt).toContain("A detector of a PR outside the candidate is skipped with a note");
   expect(role.value.prompt).toContain("drops only the PR whose removal clears it");
-  expect(role.value.prompt).toContain("runs every gate command one at a time");
-  expect(role.value.prompt).toContain("follow the assembled gate guidance for checks you run yourself, using the project's own commands");
-  expect(role.value.prompt).not.toContain("scripts/gate-slot.sh");
-  expect(role.value.prompt).toContain("Full browser campaigns are opt-in (gate --browser)");
-  expect(role.value.prompt).not.toContain("/var/tmp/llv-gate");
+  expect(role.value.prompt).toContain("Run heavy checks one at a time.");
+  /* The operator, 2026-10-15: a project that names no batch procedure gets a
+     plain squash of each exact reviewed head with the launched identity. */
+  expect(role.value.prompt).toContain("Merge through the batch procedure the project's instruction files name; when the project names none, merge each listed pull request at its reviewed head with the plain exact-head squash and the launched identity, and say so in your report.");
+  expect(role.value.prompt).toContain("A rebase of a branch that a lane still continues drops accepted commits: merge the base into it instead.");
+  expect(role.value.prompt).not.toContain("finish with needs_decision and say so");
+  /* This repository's procedure is its own: CONTRIBUTING.md names it. */
+  for (const named of ["scripts/merge-batch.ts", "gate --browser", "touchedTests", "scripts/gate-slot.sh", "/var/tmp/llv-gate"]) expect(role.value.prompt).not.toContain(named);
+  const contributing = fs.readFileSync(path.join(repository, "CONTRIBUTING.md"), "utf8");
+  for (const named of ["## Batch landing", "`scripts/merge-batch.ts`", "A detector of a PR outside the candidate is\nskipped with a note", "(`gate --browser`)", "follow the assembled gate guidance for checks you run yourself"]) expect(contributing).toContain(named);
 });
 
 test("maintainer preserves review and release ownership and treats retired seats as history", () => {
@@ -126,7 +136,7 @@ test("builder parameters select the cheap fixer and the frontend implementation 
 
   const frontend = resolveRole("builder", { mode: "plain", domain: "frontend" });
   expect(frontend).toMatchObject({ ok: true, value: { config: { engine: "claude", model: "claude-sonnet-5-5", effort: "high" } } });
-  expect(frontend.ok && frontend.value.prompt).toContain("UI/frontend implementation guidance");
+  expect(frontend.ok && frontend.value.prompt).toContain(`${FRONTEND_GUIDANCE}\n${RENDERED_RULES}`);
   expect(frontend.ok && frontend.value.prompt).toContain("add no new colour, font, pill or card shape");
 });
 
@@ -159,9 +169,10 @@ test("the reviewer scaffold runs the project's own checks, and a cross-engine in
   });
 });
 
-/* #1428 — pipeline stages inherit the role scaffold, so one sentence here reaches
-   every builder, reviewer and architect stage without each spec restating it. */
-test("builder, reviewer and architect scaffolds send the seat to search prior conversations first", () => {
+/* #1428 — every agent looks for an earlier answer first. The working rules
+   say so without naming a tool; the launch path names Delegatus's tools: the
+   spawn line here, the stage wrapper for a pipeline stage. */
+test("builder, reviewer and architect scaffolds send the agent to earlier answers first, and the spawn line names the tools", () => {
   const resolved = [
     resolveRole("builder", { mode: "plain" }),
     resolveRole("reviewer", { diffSource: "origin/main...HEAD", lens: "all" }),
@@ -169,9 +180,11 @@ test("builder, reviewer and architect scaffolds send the seat to search prior co
   ];
   for (const role of resolved) {
     if (!role.ok) throw new Error(role.error);
-    expect(role.value.prompt).toContain("search_transcripts");
-    expect(role.value.prompt).toContain("conversation_messages");
+    expect(role.value.prompt).toContain("3. Look for an earlier answer first:");
+    expect(role.value.prompt).not.toContain("search_transcripts");
   }
+  expect(SPAWN_COMPLETION).toContain(EARLIER_ANSWERS_MECHANICS);
+  for (const tool of ["search_transcripts", "search_memory", "conversation_messages"]) expect(EARLIER_ANSWERS_MECHANICS).toContain(tool);
 });
 
 /* #1770 — a stage cleaned up its probe servers by port and killed an unrelated
@@ -185,7 +198,11 @@ test("every registry role scaffold carries the process-cleanup rule", () => {
        a role whose required params are unset (a stage resolves them to registry
        defaults) is covered the same way a spawn is. */
     const params = Object.fromEntries(definition.parameters.map((parameter) => [parameter.key, defaultRoleParameterValue(parameter)]));
-    const rendered = roleScaffoldBody(definition, params);
+    /* An orchestrator reads the rules after its scaffold: whole without a
+       mandate, in short form inside a seat's mandate (prompt.test.ts). */
+    const rendered = definition.id === "orchestrator"
+      ? roleSpawnPrompt({ role: "orchestrator", scaffold: roleScaffoldBody(definition, params) }, "Coordinate the lanes.")
+      : roleScaffoldBody(definition, params);
     expect(rendered).toContain(PROCESS_CLEANUP_MARKER);
     expect(rendered).toContain("pkill");
     expect(rendered).toContain("port 0");
@@ -292,7 +309,7 @@ test("the small-change and docs variants ship their runtime, and only builder an
   expect(resolveRole("builder", { size: "normal" })).toMatchObject({ ok: true, value: { config: { engine: "codex", model: "gpt-6.1-sol", effort: "high" } } });
   /* A trivial UI tweak keeps the frontend scaffold guidance, which is keyed on domain. */
   const trivialFrontend = resolveRole("builder", { size: "trivial", domain: "frontend" });
-  expect(trivialFrontend.ok && trivialFrontend.value.prompt).toContain("UI/frontend implementation guidance");
+  expect(trivialFrontend.ok && trivialFrontend.value.prompt).toContain(FRONTEND_GUIDANCE);
   for (const role of ["architect", "orchestrator", "verifier"]) {
     const resolved = resolveRole(role, { size: "trivial", claims: "x" });
     expect(resolved.ok).toBe(false);
@@ -329,22 +346,30 @@ test("an empty optional parameter drops its labelled line", () => {
    stage wrapper or the spawn line states the one way to end. */
 const STACK_SPECIFIC = [/\btsc\b/, /bunx/, /TypeScript/, /blue\/green/i, /external-worker/, /conveyor/i, /8898/, /Ukrainian/, /review flow/i, /file ownership/, /read wrapper/];
 
-test("every role scaffold carries the shared rules and names no stack or retired marker", () => {
+/* This repository's own files, scripts and settings, which moved to its
+   instruction files (role-prompts-rewrite.md §2.3): a shipped role reads the
+   same on any project. */
+const PROJECT_SPECIFIC = [/src\/components\//, /scripts\//, /deploy-checkout/, /merge-batch/, /\ben and uk\b/, /LLV_[A-Z_]+/, /runtime host/i, /Змерджено|Розгорнуто/, /\bgh,/];
+
+test("every role scaffold carries the working rules once and names no stack, project file or retired marker", () => {
   for (const definition of listRoles()) {
-    const body = roleScaffoldBody(definition, { mode: definition.id === "builder" ? "apply-fixes" : "", domain: "frontend" }) + roleFenceBlock(definition);
-    for (const pattern of STACK_SPECIFIC) expect(body).not.toMatch(pattern);
-    // Match complete completion markers while allowing GitHub review-state enums.
-    expect(body).not.toMatch(/\b(?:REVIEW_READY|VERDICT|NO FINDINGS|APPROVE|COMMENT)\b/);
-    expect(body).toContain(PROCESS_CLEANUP_MARKER);
-    if (definition.id === "orchestrator") continue;
-    expect(body).toContain("search_transcripts");
-    expect(body).toContain("finish with needs_decision");
-    expect(body).toContain("When a check needs access this session lacks");
-    /* Review of #2301 (C3): a criterion that cannot be judged is needs_decision
-       whoever holds the access, as human in the loop says for a rate limit. */
-    expect(body).toContain("cannot be judged without it, whoever could supply the access");
-    expect(body).not.toContain("and the operator can supply it");
-    expect(body).toContain("The project's own rules govern the work");
+    for (const params of [{ mode: definition.id === "builder" ? "apply-fixes" : "", domain: "frontend" }, { mode: definition.id === "builder" ? "prototype" : "" }] as RoleParamValues[]) {
+      const scaffold = roleScaffoldBody(definition, params) + roleFenceBlock(definition);
+      const body = definition.id === "orchestrator" ? roleSpawnPrompt({ role: "orchestrator", scaffold }, "Coordinate the lanes.") : scaffold;
+      for (const pattern of [...STACK_SPECIFIC, ...PROJECT_SPECIFIC]) expect(body).not.toMatch(pattern);
+      // Match complete completion markers while allowing GitHub review-state enums.
+      expect(body).not.toMatch(/\b(?:REVIEW_READY|VERDICT|NO FINDINGS|APPROVE|COMMENT)\b/);
+      expect(body).toContain(PROCESS_CLEANUP_MARKER);
+      /* One core for every role and the seat: the shared rules it replaced
+         used to be five sentences each role carried in its own words. */
+      expect(body.split(WORKING_RULES)).toHaveLength(2);
+      /* Review of #2301 (C3): a criterion that cannot be judged blocks the
+         result whoever holds the access, as human in the loop says for a rate limit. */
+      expect(body).toContain("It blocks your result only when a finding or an acceptance criterion cannot be judged without it, whoever could supply the access");
+      expect(body).not.toContain("and the operator can supply it");
+      expect(body).toContain("2. Follow the project's own rules:");
+      expect(body).not.toContain("Process cleanup:");
+    }
   }
 });
 
@@ -353,7 +378,7 @@ test("every role scaffold carries the shared rules and names no stack or retired
 test("the verifier names a verdict for every combination of claim labels", () => {
   const verifier = resolveRole("verifier", { claims: "the export keeps every row" });
   if (!verifier.ok) throw new Error(verifier.error);
-  expect(verifier.value.prompt).toContain("the verdict is fail when any claim is WRONG (each one a finding), needs_decision when none is WRONG and any is UNCONFIRMED, and pass only when every claim is CONFIRMED.");
+  expect(verifier.value.prompt).toContain("the verdict is fail when any claim is WRONG (each one a finding), needs_decision when none is WRONG and any is UNCONFIRMED, and pass only when every claim is CONFIRMED; a needs_decision lists the unconfirmed claims and what would settle them.");
 });
 
 /* Review of #2301: a deployer's stop for approval is needs_decision, so the ask
@@ -374,7 +399,7 @@ test("a builder fix round carries the apply-fixes guidance", () => {
   const plain = resolveRole("builder", { mode: "plain" });
   if (!fix.ok || !plain.ok) throw new Error("builder did not resolve");
   expect(fix.value.prompt).toContain(APPLY_FIXES_GUIDANCE);
-  expect(plain.value.prompt).not.toContain("Apply-fixes guidance");
+  expect(plain.value.prompt).not.toContain("Fix round:");
   /* Review of #2301: one finish line, scoped to the findings; the reviewer
      judges the lane against the pinned specification. */
   expect(fix.value.prompt.split("You are done when")).toHaveLength(2);
@@ -387,12 +412,13 @@ test.each(["general", "frontend", "docs"])("%s fixers repair their own discoveri
   const fix = resolveRole("builder", { mode: "apply-fixes", domain });
   if (!fix.ok) throw new Error("builder did not resolve");
   expect(fix.value.prompt).toContain("Fix every handed finding and anything you notice yourself within the pinned specification");
-  expect(fix.value.prompt).toContain("Do not grade your own work");
-  expect(fix.value.prompt).toContain("Return fail only when you are blocked");
-  expect(fix.value.prompt).toContain("Set blocked:true only when you cannot proceed");
-  expect(fix.value.prompt).toContain("blockedReason");
+  expect(fix.value.prompt).toContain("so do not grade your own work");
+  expect(fix.value.prompt).toContain("an issue you found yourself is never a reason to fail: fix it or note it");
+  /* The blocked fields are the stage wrapper's, which every fix stage reads
+     at every launch, stored lanes included (pipelines/prompts.test.ts). */
+  expect(fix.value.prompt).toContain("Your verdict is pass unless you are blocked, as the stage contract below defines it.");
   expect(fix.value.prompt).not.toContain("using Blocked: in the summary");
-  expect(fix.value.prompt).toContain("Notes");
+  expect(fix.value.prompt).toContain("goes under Notes");
   expect(fix.value.prompt).not.toContain("Review your own diff before you finish");
   expect(fix.value.prompt).not.toContain("finish with fail so the orchestrator can re-plan");
 });
@@ -408,7 +434,7 @@ test("a role spawn ends with the verdict line, and a seat or a role-less spawn d
   expect(roleSpawnPrompt({ role: "orchestrator", scaffold: "Scaffold." }, mandate)).toBe(`Scaffold.\n\n${mandate}`);
   const child = roleSpawnPrompt({ role: "orchestrator", scaffold: "Scaffold." }, "Coordinate the migration lanes.");
   expect(child).toContain("search_transcripts");
-  expect(child).toContain("finish with needs_decision");
+  expect(child).toContain("the worker limit each wake and get_orchestrator state");
   expect(child).not.toContain(SPAWN_COMPLETION);
   expect(roleSpawnPrompt(null, "Just this.")).toBe("Just this.");
   expect(SPAWN_COMPLETION).toContain("Verdict: pass, Verdict: fail or Verdict: needs_decision");
@@ -452,17 +478,25 @@ test("the visual-critic preset is read-only on Opus and judges only rendered fra
   expect(text).toStartWith("You are a Visual-critic.");
   expect(text).toContain("Do not review code, tests or architecture.");
   expect(text).toContain(VISUAL_CRITIC_CLASSES);
+  /* The drivers are the project's: its instruction files name them (for
+     Delegatus, AGENTS.md), and the critic runs them in the isolated state they describe. */
+  const agents = fs.readFileSync(path.join(repository, "AGENTS.md"), "utf8");
   for (const surface of [
     "src/components/kanban/kanbanBoard.browser.test.tsx",
     "src/components/conversation/conversationWindow.browser.test.tsx",
     "src/components/mobile/issue1671Evidence.browser.test.tsx",
     "scripts/capture-board-geometry.ts",
-  ]) expect(text).toContain(surface);
-  for (const frame of ["1440x900", "1000x700", "390 px", "en and uk", "light and dark", "an export of the head", "isolated state"]) expect(text).toContain(frame);
+  ]) {
+    expect(text).not.toContain(surface);
+    expect(agents).toContain(surface);
+  }
+  expect(agents).toContain("This product ships in en and uk,\nlight and dark.");
+  for (const frame of ["1440x900", "1000x700", "390 px", "every language and theme the project ships", "an export of the head", "as its instruction files name them and in the isolated state they describe"]) expect(text).toContain(frame);
+  expect(text).toContain(`Judge rendered work by the rules below; each breach is a finding carrying the viewport and the measured numbers. ${RENDERED_RULES}`);
   for (const kind of ["misalignment", "clipping", "overlap", "cramped or uneven spacing", "wrong emphasis", "inconsistent colours or sizes", "visual noise", "ids", "paths", "counters", "debug detail"]) expect(VISUAL_CRITIC_CLASSES).toContain(kind);
   expect(text).toContain("each naming the frames it shows in");
   expect(text).toContain("Verdict: pass when you find nothing");
-  expect(text).toContain("Close every browser you start, by the PID you recorded");
+  expect(text).toContain("11. Touch only what is yours: stop only the processes you started yourself, each by the identifier you recorded at its start");
   expect(text).toContain("Every finding names the frames it shows in");
 });
 

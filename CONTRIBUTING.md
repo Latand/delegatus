@@ -181,6 +181,51 @@ does not hold and is refused by GitHub itself. Nothing here changes git or
 `gh` configuration on disk, so a person's own terminal behaves as before. The
 shims are POSIX shell; on Windows a launched agent keeps the environment it had.
 
+## Batch landing
+
+The shipped Merger lands reviewed pull requests through the batch procedure a
+project's instruction files name. This repository's procedure is
+`scripts/merge-batch.ts`. Install frozen dependencies in the caller checkout,
+then use the script: build with the pairs, gate, then land. The script owns a
+temporary batch worktree and records its run in `$TMPDIR/merge-batch.json`;
+inspect that record and its report. The script runs every gate command one at
+a time; follow the assembled gate guidance for checks you run yourself, using
+the project's own commands. After the batch lands, run `resolve N` for each
+deferred PR, resolve its conflicts in the recorded worktree, stage only those
+resolutions and run `resolve N` again to gate and fast-forward its branch.
+
+Every tuple change voids the entire validation: restart every gate, native test
+inventory, reviewed detector snapshots and fresh native-main baseline; carry no
+corpus, samples, pass list or detector selection as evidence. Rebuild the
+touched-path union from the candidate diff and every input PR's immutable
+reviewed patch base and head, including withheld, moved and deferred PRs. Use
+`touchedTests` to select changed tests and adjacent `.test.ts`/`.test.tsx` files
+in the native candidate and the reviewed tree of each PR in the candidate, and
+rediscover restored native files. A detector of a PR outside the candidate is
+skipped with a note. Full browser campaigns are opt-in (`gate --browser`): each
+UI PR ran its own browser checks in review. Unrelated repository tests are
+outside this gate. Deduplicate identical file versions only within that
+validation.
+
+Failures, errors and between-test errors that a test file produces on native
+main are pre-existing and never stop the batch; a file main cannot complete is
+compared on the cases both sides completed. Candidate-only files and assertions
+have no baseline evidence. New failures need three subsequent file
+observations, including identities first seen during confirmation, within six
+total rounds. A passing observation permits intermittency; missing or skipped
+assertions provide no passing evidence. Removal probes preserve the detector
+being judged and install their own dependencies. Clearing omissions name the
+culprit or integration: needs both. The exception is a stale reviewed detector:
+a PR's copy of a test file its patch never changed, which main changed after its
+base; the script defers only that PR with the main commit and file, and
+`resolve N` merges main into it after landing. A case that passes on main and
+breaks on the candidate, a new between-test error included, drops only the PR
+whose removal clears it; the script rebuilds and lands the rest. Record
+attribution in an append-only log with its establishing tuple, failing
+identities, confirmations and removal evidence; retain and print it after every
+main refresh. A PR the batch landed is closed with a "Landed on main as <sha>
+through #B" comment.
+
 ## Review exports
 
 From the lane, run `bun scripts/review-export.ts <reviewed-commit>` with the

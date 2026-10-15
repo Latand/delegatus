@@ -57,7 +57,7 @@ export const pipelineRoleLookup: PipelineRoleLookup = (roleId, params, project =
      dropped it, weakening the Opus scaffold. Fences stay separate so a near-limit
      body can be trimmed to the store cap without ever cutting a fence. */
   /* A pipeline stage never carries the seat mandate, so an orchestrator stage
-     gets the shared rules its scaffold leaves to the mandate. */
+     reads the working rules and the worker rule after its scaffold. */
   const body = definition.id === "orchestrator"
     ? `${roleScaffoldBody(definition, parameters, project, true)}\n\n${ORCHESTRATOR_WITHOUT_MANDATE_RULES}`
     : roleScaffoldBody(definition, parameters, project);

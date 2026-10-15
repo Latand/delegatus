@@ -1305,7 +1305,8 @@ test("a merger stage resolves through production role lookup during pipeline nor
       model: "gpt-6.1-sol",
       effort: "high",
       access: "read-write",
-      promptScaffold: expect.stringContaining("scripts/merge-batch.ts"),
+      /* The batch procedure is the project's own; Delegatus names it in CONTRIBUTING.md. */
+      promptScaffold: expect.stringContaining("Merge through the batch procedure the project's instruction files name"),
     },
   });
 });

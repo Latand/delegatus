@@ -3,7 +3,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { resolveRole } from "@/lib/roles/registry";
+import { ORCHESTRATOR_WITHOUT_MANDATE_RULES, ROLE_DEFAULTS, WORKING_RULES } from "@/lib/roles/defaults";
+import { FRONTEND_GUIDANCE, resolveRole } from "@/lib/roles/registry";
+import { ROLE_VARIANT_IDS } from "@/lib/roles/types";
+import { VARIANT_PARAMS } from "@/lib/roles/paramConfig";
 import { MAX_SCAFFOLD_LENGTH, saveRoleOverrides } from "@/lib/roles/store";
 import { setMachineWorkerLimit, setProjectWorkerLimit } from "@/lib/operator/workerLimit";
 
@@ -228,12 +231,29 @@ test("operator role params substitute into the resolved prompt scaffold", () => 
 });
 
 /* Review of #2301: a pipeline stage never carries the seat mandate, so an
-   orchestrator stage gets the shared rules its scaffold leaves to it. */
-test("an orchestrator pipeline stage carries the shared rules", () => {
+   orchestrator stage gets the worker rule the mandate would give it; the
+   working rules are its scaffold's, and the stage wrapper names the tools. */
+test("an orchestrator pipeline stage carries the working rules and the worker limit", () => {
   const scaffold = pipelineRoleLookup("orchestrator", { mode: "standard" })?.promptScaffold ?? "";
-  expect(scaffold).toContain("search_transcripts");
-  expect(scaffold).toContain("finish with needs_decision");
-  expect(scaffold).toContain("The project's own rules govern the work");
+  expect(scaffold.split(WORKING_RULES)).toHaveLength(2);
+  expect(scaffold).toBe(`You are the Orchestrator. Mode: standard.\n\n${ORCHESTRATOR_WITHOUT_MANDATE_RULES}\n\nSafety fences:\n- Act on Delegatus only through its MCP tools, launching with your own transcript as src lineage.\n- Workers start in fresh, empty sessions; never fork one.`);
+  expect(ORCHESTRATOR_WITHOUT_MANDATE_RULES).toEndWith("each running lane and each live spawned agent counts as one.");
+});
+
+/* A stage stores its scaffold at the store cap (MAX_SCAFFOLD_LENGTH), and an
+   older release refuses to load a longer one, so every shipped role and
+   variant fits whole, with room for the parameter values a seat passes; a
+   cut would drop the end of the working rules. */
+test("every shipped role and variant scaffold fits the stage cap untruncated", () => {
+  const variants = Object.values(ROLE_VARIANT_IDS).flat().map((variant) => VARIANT_PARAMS[variant]);
+  for (const definition of ROLE_DEFAULTS) {
+    for (const params of [{}, { mode: "prototype" }, { mode: "apply-fixes", domain: "frontend" }, ...variants]) {
+      const scaffold = pipelineRoleLookup(definition.id, params as Record<string, string>)?.promptScaffold ?? "";
+      if (definition.id === "maintainer") continue; // not a pipeline role
+      expect(scaffold).toContain("16. Leave the checkout as you found it");
+      expect(MAX_SCAFFOLD_LENGTH - scaffold.length).toBeGreaterThan(200);
+    }
+  }
 });
 
 test("pipeline role lookup ignores the retired orchestrator maxWorkers parameter", () => {
@@ -262,10 +282,10 @@ test("Builder domain=frontend keeps the canonical frontend scaffold guidance (pa
   expect(canonical.ok).toBe(true);
   /* The pipeline lookup must carry the same frontend guidance the spawn path
      emits; a hand-rolled substitution would silently drop it. */
-  expect(pipeline?.promptScaffold).toContain("UI/frontend implementation guidance");
+  expect(pipeline?.promptScaffold).toContain(FRONTEND_GUIDANCE);
   if (canonical.ok) expect(pipeline?.promptScaffold).toBe(canonical.value.prompt);
   /* Without domain=frontend the guidance is absent, so the two selections differ. */
-  expect(pipelineRoleLookup("builder", {})?.promptScaffold).not.toContain("UI/frontend implementation guidance");
+  expect(pipelineRoleLookup("builder", {})?.promptScaffold).not.toContain(FRONTEND_GUIDANCE);
 });
 
 test("codex model overrides use the curated launch catalog at create time", () => {

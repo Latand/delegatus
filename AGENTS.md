@@ -140,6 +140,11 @@ broad sweep, point the run at an isolated state directory first and say so; do
 not sweep the live one. The same applies to any command that enumerates and acts
 on runtime processes — `pgrep -f <pattern>` matches your own command line too.
 
+The shipped role prompts tell a stage agent to isolate "any state-directory
+variable the project's instruction files name". Here that is `LLV_STATE_DIR`:
+besides HOME, XDG_CONFIG_HOME and TMPDIR, isolate `LLV_STATE_DIR` for every
+test run.
+
 ## This repository is public — publication surfaces carry no identities
 
 Docs, issues, PR bodies, commit messages, fixtures, and test data are public the
@@ -251,6 +256,9 @@ Three consequences worth keeping:
   the generations it starts.
 <!-- END:runtime-host-verification -->
 
+The runtime host is this repository's critical runtime: changes to it, to
+deploys and to the Bun pin are high risk and take three review rounds.
+
 # Host deploy command and team authentication
 
 `scripts/rebuild.sh [full-commit-sha]` uses `scripts/rebuild-http.ts` for both
@@ -260,6 +268,15 @@ creates no key, sends no member cookie or agent identity, validates and pins a
 resolved loopback address, and refuses redirects. Keep secrets inside that
 process and out of arguments and output. Tests run the real command against an
 isolated port-0 server; never use a live installation for a regression test.
+
+A Deployer working on a Delegatus checkout install reads `docs/deploy-checkout.md`
+and runs the committed `scripts/deploy-checkout.py` procedure with its private
+plan: preflight first, then its detached start after approval; it writes no
+replacement switch script. After the restart it reads
+`deploy-verdicts/latest-<install-id>.json` and the named run's `verdict.json`.
+A restart submission error or an exited old PID is an observation to reconcile;
+the final serving identities and protected work are judged from the
+procedure's verdict.
 
 # Rendered evidence: call the driver that exists, do not write a new one
 
@@ -280,6 +297,15 @@ an issue adds a case to it:
 The committed `evidence/**/*.json` files are the record and stay, including the
 ones whose driver is gone. Do not name a new file after your issue number; a
 driver whose only caller is the issue that wrote it is dead the day it merges.
+
+A visual critic frames product screens through the kanban board driver
+(`src/components/kanban/kanbanBoard.browser.test.tsx`), the conversation-window
+driver (`src/components/conversation/conversationWindow.browser.test.tsx`), the
+phone driver (`src/components/mobile/issue1671Evidence.browser.test.tsx`) and the
+board geometry capture (`scripts/capture-board-geometry.ts`). Run them in
+isolated state: a private HOME, TMPDIR and state directory, the Viewer control
+URL on a closed port, a short Chrome TMPDIR. This product ships in en and uk,
+light and dark.
 
 # Only a declared owner resolves the operator's state directory
 
