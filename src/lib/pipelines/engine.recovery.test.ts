@@ -631,7 +631,7 @@ test("a pipeline spawn that finds no runtime host fails its own receipt before i
       conversationId: reservation.conversationId,
       error: "pipeline structured runtime host is unavailable; start agent-log-viewer through its CLI and check the CLI log for the host startup failure",
     });
-    expect(ports.claimSpawnRetry(reservation.launchId, "pipeline-no-host:build:claim")).toBe("claimed");
+    expect(await ports.claimSpawnRetry(reservation.launchId, "pipeline-no-host:build:claim")).toBe("claimed");
   } finally {
     resolveSpawn.mockRestore();
     setAgentRegistryForTests(null);
@@ -2317,10 +2317,14 @@ test("activation drain keeps account and real structured adapter RPC waits outsi
   } finally { releaseAccount(); releaseRpc(); await ticking; delete process.env.LLV_PIPELINE_ACTIVATION_DRAIN; }
 });
 
-test.each([false, true])("activation drain recovers the original registry launch after a process exits before binding under hold=%s", async (held) => {
+test.each([
+  { held: false, failed: false, collide: false }, { held: true, failed: false, collide: false },
+  { held: false, failed: true, collide: false }, { held: true, failed: true, collide: false },
+  { held: false, failed: true, collide: true },
+])("activation drain recovers the original registry launch after a process exits before binding: %j", async ({ held, failed, collide }) => {
   const h = await reserveActivationOnly();
-  const registryPath = path.join(process.env.LLV_STATE_DIR!, `activation-crash-registry-${held}.json`);
-  const marker = path.join(process.env.LLV_STATE_DIR!, `activation-crash-launch-${held}`);
+  const registryPath = path.join(process.env.LLV_STATE_DIR!, `activation-crash-registry-${held}-${failed}-${collide}.json`);
+  const marker = path.join(process.env.LLV_STATE_DIR!, `activation-crash-launch-${held}-${failed}-${collide}`);
   const child = Bun.spawn([process.execPath, "-e", `
     import fs from "node:fs";
     const { AgentRegistry, setAgentRegistryForTests } = await import("./src/lib/agent/registry.ts");
@@ -2332,6 +2336,19 @@ test.each([false, true])("activation drain recovers the original registry launch
       engine, accountId: "test", kind: "managed", home: process.env.HOME,
       transcriptRoot: process.env.HOME, env: { NODE_ENV: "test" },
     }});
+    if (process.env.LLV_TEST_FAILURE === "1") {
+      const { productionLaunchMembershipPorts } = await import("./src/lib/tasks/launchMembership.ts");
+      productionLaunchMembershipPorts.commit = () => { throw new Error("state writer is busy during account commit"); };
+      const begin = registry.beginSpawnRequestAsync.bind(registry);
+      registry.beginSpawnRequestAsync = async (...args) => {
+        try { return await begin(...args); }
+        catch {
+          const receipt = registry.spawnReceiptForClientAttempt(args[0].clientAttemptId);
+          fs.writeFileSync(process.env.LLV_TEST_MARKER, receipt.launchId);
+          process.exit(0);
+        }
+      };
+    }
     const ports = defaultPipelinePorts();
     const spawn = ports.spawnAgent;
     await drainStageActivations({ ...ports, structuredDeliveryPublication: () => "ready",
@@ -2341,7 +2358,7 @@ test.each([false, true])("activation drain recovers the original registry launch
       }),
     });
     process.exit(2);
-  `], { cwd: process.cwd(), env: { ...process.env, LLV_TEST_REGISTRY: registryPath, LLV_TEST_MARKER: marker }, stdout: "pipe", stderr: "pipe" });
+  `], { cwd: process.cwd(), env: { ...process.env, LLV_TEST_REGISTRY: registryPath, LLV_TEST_MARKER: marker, LLV_TEST_FAILURE: failed ? "1" : "0" }, stdout: "pipe", stderr: "pipe" });
   expect(await child.exited).toBe(0);
   const launch = fs.readFileSync(marker, "utf8");
   const before = loadPipelines()[0]!.runs[0]!.attempts[0]!;
@@ -2356,9 +2373,14 @@ test.each([false, true])("activation drain recovers the original registry launch
     const drain = await import("@/lib/selfUpdate/drain");
     if (held) drain.writeDrain(drain.drainFile(), { id: "submitted-recovery", target: "a".repeat(40), since: new Date().toISOString(), until: 0, persistent: true });
     const ports = defaultPipelinePorts();
-    await engineModule.drainStageActivations({ ...h.ports, drainHold: ports.drainHold, spawnAgent: ports.spawnAgent, spawnReceipt: ports.spawnReceipt });
+    if (collide) registry.claimFailedSpawnForRetry(launch, "manual-retry");
+    await engineModule.drainStageActivations({ ...h.ports, drainHold: ports.drainHold, spawnAgent: ports.spawnAgent, spawnReceipt: ports.spawnReceipt, claimSpawnRetry: ports.claimSpawnRetry });
     const recovered = loadPipelines()[0]!.runs[0]!.attempts[0]!;
-    expect(recovered).toMatchObject({ n: 1, launchId: launch, spawnCalls: 1, state: "needs_decision" });
+    expect(recovered).toMatchObject({ n: 1, launchId: failed && !collide ? null : launch, spawnCalls: 1, state: collide ? "needs_decision" : failed ? "pending" : "spawning" });
+    if (failed) {
+      expect(registry.spawnReceipt(launch)?.retryClaim?.claimId).toBe(collide ? "manual-retry" : `${loadPipelines()[0]!.id}:plan:${launch}`);
+      expect(registry.spawnReceipt(launch)?.membershipAdmitted).toBe(false);
+    }
     expect(recovered.activation).toBeUndefined();
     expect(Object.values(registry.readOnlySnapshot().receipts)).toHaveLength(1);
   } finally {
@@ -2504,4 +2526,236 @@ test.each(["absent", "transcript", "live-host", "different-path", "verdict"] as 
     expect(f.starts()).toBe(1);
     expect(f.messages()).toBe(0);
   } finally { setAgentRegistryForTests(null); await host.end(); }
+});
+
+
+async function failedMembershipReplay() {
+  const h = await reserveActivationOnly();
+  const pending = loadPipelines()[0]!;
+  const attempt = pending.runs[0]!.attempts[0]!;
+  attempt.spawnCalls = 1;
+  attempt.activation!.phase = "reserving";
+  delete attempt.activation!.owner;
+  savePipelines([pending]);
+  const originalSpawn = h.ports.spawnAgent;
+  const receipt = { ...failedReceipt("launch-membership", "conversation_membership", "task membership could not be recorded: state writer is busy during account commit"), neverBegan: true };
+  let replayed = false;
+  h.ports.spawnAgent = async (input, reserved) => {
+    if (replayed) return originalSpawn(input, reserved);
+    replayed = true;
+    await reserved(receipt);
+    return receipt;
+  };
+  h.ports.spawnReceipt = id => id === receipt.launchId ? receipt : null;
+  const claims: string[] = [];
+  h.ports.claimSpawnRetry = (_id, claim) => { claims.push(claim); return "claimed"; };
+  return { h, receipt, claims, pending, attempt };
+}
+
+test("a replayed membership failure retries the same attempt without losing input or checkout", async () => {
+  const f = await failedMembershipReplay();
+  await engineModule.drainStageActivations(f.h.ports);
+  const pipeline = loadPipelines()[0]!;
+  const attempt = pipeline.runs[0]!.attempts[0]!;
+  expect(attempt).toMatchObject({ n: 1, state: "pending", spawnCalls: 1, launchId: null });
+  expect(pipeline.state).toBe("running");
+  expect(pipeline.worktreeDir).toBe(f.pending.worktreeDir);
+  expect(attempt.input).toBe(f.attempt.input);
+  expect(f.claims).toEqual([`${pipeline.id}:plan:${f.receipt.launchId}`]);
+  expect(attempt.retiredLaunches).toMatchObject([{ launchId: f.receipt.launchId, error: f.receipt.error }]);
+  f.h.ports.now = () => new Date(Date.parse(attempt.controllerWait!.retryAfter) + 1).toISOString();
+  await tickPipelines([], f.h.ports);
+  expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(1);
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]).toMatchObject({ n: 1, state: "running", spawnCalls: 2 });
+  expect(f.h.spawnInputs).toHaveLength(1);
+});
+
+test.each(["native", "operation-conflict", "generation-conflict", "generation-switch", "completion-switch", "stale-turn", "absent"] as const)("an incomplete replay without an envelope reconciles original evidence: %s", async mode => {
+  const f = await stagedRecoveryHarness("uncertain", { nativeTranscript: true });
+  await tickPipelines([], f.h.ports);
+  const launch = f.launchId();
+  f.registry.preserveSpawnArtifactOwnership(launch, "");
+  const receipt = f.registry.readOnlySnapshot().receipts[launch]!;
+  const pathname = receipt.artifactPath!;
+  const pipelines = loadPipelines();
+  const attempt = pipelines[0]!.runs[0]!.attempts[0]!;
+  pipelines[0]!.state = "needs_decision";
+  pipelines[0]!.stateDetail = "stage spawn is unresolved; inspect the original receipt before retrying";
+  attempt.state = "needs_decision";
+  attempt.error = pipelines[0]!.stateDetail;
+  savePipelines(pipelines);
+  let generationMatches = mode !== "generation-conflict";
+  f.h.ports.sourcePathAllowed = p => p === pathname;
+  f.h.ports.durableTurnEvidence = async () => {
+    if (mode === "generation-switch") generationMatches = false;
+    return mode === "absent" ? null : { turn: "busy", message: null,
+      lastRecordAt: mode === "stale-turn" ? Date.parse(attempt.startedAt!) - 1 : Date.parse(f.h.ports.now()) };
+  };
+  const lookup = f.client.operationStatus.bind(f.client);
+  f.client.operationStatus = async id => {
+    const result = await lookup(id);
+    if (id !== `spawn_message_${launch}` || mode === "native") return result;
+    if (mode === "completion-switch") { generationMatches = false; return result; }
+    if (mode === "operation-conflict") return result && { ...result, receipt: { ...result.receipt, conversationId: "conversation_wrong" } };
+    return null;
+  };
+  setAgentRegistryForTests(f.registry);
+  try {
+    const ports = defaultPipelinePorts({ spawnRecoveryClient: () => f.client });
+    f.h.ports.recoverStagedLaunch = ports.recoverStagedLaunch;
+    f.h.ports.spawnReceipt = id => {
+      const row = defaultPipelinePorts().spawnReceipt(id);
+      return row && { ...row, currentGeneration: generationMatches && row.currentGeneration };
+    };
+    await f.wake();
+    expect(new Set(f.lookups)).toEqual(new Set([launch, `spawn_message_${launch}`]));
+    if (mode === "native") {
+      expect(loadPipelines()[0]!.state).toBe("running");
+      expect(f.attempt()).toMatchObject({ n: 1, state: "running", launchId: launch, agentPath: pathname, spawnCalls: 1 });
+    } else if (mode.includes("conflict") || mode.endsWith("switch")) {
+      expect(loadPipelines()[0]!.state).toBe("needs_decision");
+      expect(loadPipelines()[0]!.stateDetail).toContain(mode === "operation-conflict" ? "runtime operation identity conflicts" : "current registry generation");
+    } else {
+      expect(f.attempt().state).toBe("spawning");
+      f.advance(601_000);
+      await f.wake();
+      expect(loadPipelines()[0]!.state).toBe("needs_decision");
+      expect(loadPipelines()[0]!.stateDetail).toContain("original launch");
+    }
+    expect(f.attempt().launchId).toBe(launch);
+    expect(f.attempt().retiredLaunches).toBeUndefined();
+    expect(f.starts()).toBe(1);
+    expect(f.messages()).toBe(1);
+  } finally { setAgentRegistryForTests(null); }
+});
+
+
+test("two activation controllers claim one pre-host retry and reserve one successor", async () => {
+  const f = await failedMembershipReplay();
+  let enter!: () => void, release!: () => void;
+  const entered = new Promise<void>(r => { enter = r; });
+  const gate = new Promise<void>(r => { release = r; });
+  const claim = f.h.ports.claimSpawnRetry;
+  f.h.ports.claimSpawnRetry = async (...args) => { enter(); await gate; return claim(...args); };
+  const first = engineModule.drainStageActivations(f.h.ports);
+  try {
+    await entered;
+    const peer = Bun.spawn([process.execPath, "-e", `
+      const { defaultPipelinePorts, drainStageActivations } = await import("./src/lib/pipelines/engine.ts");
+      await drainStageActivations({ ...defaultPipelinePorts(), spawnAgent: async () => { throw new Error("unexpected peer dispatch"); } });
+      process.exit(0);
+    `], { cwd: process.cwd(), env: { ...process.env }, stdout: "pipe", stderr: "pipe" });
+    const [code, errors] = await Promise.all([peer.exited, new Response(peer.stderr).text()]);
+    expect({ code, errors }).toMatchObject({ code: 0 });
+    await engineModule.drainStageActivations({ ...f.h.ports });
+    expect(f.claims).toHaveLength(0);
+    release(); await first;
+    const attempt = loadPipelines()[0]!.runs[0]!.attempts[0]!;
+    expect(f.claims).toHaveLength(1);
+    f.h.ports.now = () => new Date(Date.parse(attempt.controllerWait!.retryAfter) + 1).toISOString();
+    await Promise.all([tickPipelines([], f.h.ports), tickPipelines([], { ...f.h.ports })]);
+    expect(f.h.spawnInputs).toHaveLength(1);
+    expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(1);
+  } finally { release(); await first; }
+});
+
+test.each(["completion", "manual-claim", "proof-withdrawn"] as const)("a pre-host retry rechecks the receipt after async claim: %s", async mode => {
+  const f = await failedMembershipReplay();
+  f.h.ports.claimSpawnRetry = async () => {
+    if (mode === "manual-claim") return "conflict";
+    if (mode === "completion") {
+      Object.assign(f.receipt, { state: "completed", neverBegan: false, transcript: "/codex/stage-1.jsonl", sessionId: "session-original" });
+      return "settled";
+    }
+    f.receipt.neverBegan = false;
+    return "claimed";
+  };
+  await engineModule.drainStageActivations(f.h.ports);
+  expect(f.h.spawnInputs).toHaveLength(0);
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.retiredLaunches).toBeUndefined();
+  if (mode === "completion") {
+    await tickPipelines([], f.h.ports);
+    expect(loadPipelines()[0]!.runs[0]!.attempts[0]).toMatchObject({ n: 1, state: "running", launchId: f.receipt.launchId });
+  } else expect(loadPipelines()[0]!.stateDetail).toContain(f.receipt.error!);
+});
+
+test("a legacy unresolved membership failure is retried without manual action", async () => {
+  const f = await failedMembershipReplay();
+  const pipeline = loadPipelines()[0]!;
+  const attempt = pipeline.runs[0]!.attempts[0]!;
+  delete attempt.activation;
+  Object.assign(attempt, { state: "needs_decision", launchId: f.receipt.launchId, conversationId: f.receipt.conversationId,
+    error: "stage spawn is unresolved; inspect the original receipt before retrying" });
+  pipeline.state = "needs_decision";
+  pipeline.stateDetail = attempt.error;
+  savePipelines([pipeline]);
+  const now = f.h.ports.now();
+  f.h.ports.now = () => now;
+  await tickPipelines([], f.h.ports);
+  expect(loadPipelines()[0]).toMatchObject({ state: "running", cursor: { state: "pending" } });
+  expect(f.claims).toHaveLength(1);
+  expect(f.h.spawnInputs).toHaveLength(0);
+  expect(loadPipelines()[0]!.stateDetail).toContain("stage spawn deferred: task membership could not be recorded");
+});
+
+test("a pre-host retry budget survives an actual controller restart", async () => {
+  const f = await failedMembershipReplay();
+  const pipeline = loadPipelines()[0]!;
+  const attempt = pipeline.runs[0]!.attempts[0]!;
+  delete attempt.activation;
+  Object.assign(attempt, { state: "needs_decision", launchId: f.receipt.launchId, conversationId: f.receipt.conversationId,
+    error: "stage spawn is unresolved; inspect the original receipt before retrying",
+    controllerWait: { startedAt: f.h.ports.now(), retryAfter: f.h.ports.now(), rounds: 3, budgetMs: 600_000, retryMaxMs: 60_000 } });
+  pipeline.state = "needs_decision"; pipeline.stateDetail = attempt.error;
+  savePipelines([pipeline]);
+  const clock = Date.parse(attempt.controllerWait!.startedAt) + 601_000;
+  const child = Bun.spawn([process.execPath, "-e", `
+    const { defaultPipelinePorts, tickPipelines } = await import("./src/lib/pipelines/engine.ts");
+    const { loadPipelines } = await import("./src/lib/pipelines/store.ts");
+    const receipt = JSON.parse(process.env.LLV_TEST_RECEIPT);
+    let spawns = 0;
+    await tickPipelines([], { ...defaultPipelinePorts(),
+      now: () => new Date(Number(process.env.LLV_TEST_CLOCK)).toISOString(),
+      exec: async () => ({ code: 0, stdout: "", stderr: "" }),
+      worktreePresent: () => true, sourcePathAllowed: () => false,
+      spawnReceipt: () => receipt, claimSpawnRetry: async () => "claimed",
+      scheduleTick: () => {}, spawnAgent: async () => { spawns++; throw new Error("unexpected spawn"); },
+    });
+    const attempt = loadPipelines()[0].runs[0].attempts[0];
+    process.stdout.write(JSON.stringify({ spawns, state: attempt.state, error: attempt.error, wait: attempt.controllerWait, spawnCalls: attempt.spawnCalls }));
+  `], { cwd: process.cwd(), env: { ...process.env, LLV_TEST_RECEIPT: JSON.stringify(f.receipt), LLV_TEST_CLOCK: String(clock) }, stdout: "pipe", stderr: "pipe" });
+  const [output, errors, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+  expect({ code, errors }).toMatchObject({ code: 0 });
+  const result = JSON.parse(output);
+  expect(result).toMatchObject({ spawns: 0, state: "needs_decision", spawnCalls: 1, wait: { startedAt: attempt.controllerWait!.startedAt, rounds: 3 } });
+  expect(result.error).toContain("failed after 3 retries");
+  expect(result.error).toContain("task membership could not be recorded");
+});
+
+
+test.each([false, true])("envelope recovery yields to a peer writer and rechecks eligibility (revoked: %s)", async revoked => {
+  const { Database } = await import("bun:sqlite");
+  const f = await stagedRecoveryHarness("uncertain", { nativeTranscript: true });
+  await tickPipelines([], f.h.ports);
+  f.registry.preserveSpawnArtifactOwnership(f.launchId(), "");
+  const registry = new AgentRegistry(f.registry.filename, undefined, undefined, { sqliteMode: "sqlite" });
+  const peer = new Database(registry.filename.replace(/\.json$/, ".sqlite"));
+  let locked = false, allowed = true, progress = 0;
+  setAgentRegistryForTests(registry);
+  const timer = setInterval(() => {
+    if (!locked) return;
+    progress++;
+    if (progress === 3) { allowed = !revoked; peer.exec("ROLLBACK"); locked = false; }
+  }, 5);
+  try {
+    peer.exec("BEGIN IMMEDIATE"); locked = true;
+    await defaultPipelinePorts({ spawnRecoveryClient: () => f.client }).recoverStagedLaunch!(f.launchId(), () => allowed);
+    expect(progress).toBeGreaterThan(0);
+    if (revoked) {
+      expect(registry.spawnReceipt(f.launchId())?.error).toBe("");
+      expect(f.lookups).toHaveLength(0);
+    } else expect(registry.spawnReceipt(f.launchId())?.error).toStartWith("structured launch recovery: ");
+    expect(f.starts()).toBe(1);
+    expect(f.messages()).toBe(1);
+  } finally { clearInterval(timer); if (locked) peer.exec("ROLLBACK"); peer.close(); registry.close(); setAgentRegistryForTests(null); }
 });

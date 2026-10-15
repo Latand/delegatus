@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 
 import { ensureTaskMembership, type MembershipInput, type MembershipResult } from "./membership";
 import { admitRecoveredLaunch, admitReservedLaunch, LaunchMembershipError, launchMembershipInput, productionLaunchMembershipPorts, type LaunchMembershipPorts } from "./launchMembership";
@@ -272,5 +272,132 @@ test("a launch that resolves to a task another linked machine runs is refused wi
   } finally {
     if (prior === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = prior;
     fs.rmSync(state, { recursive: true, force: true });
+  }
+});
+
+
+test("parallel A: account-commit contention preserves the reservation for membership retry", async () => {
+  const { AccountCommitBusyError } = await import("@/lib/accounts/accountMutationContext");
+  const failures: string[] = [];
+  expect(() => admitReservedLaunch({ engine: "claude", cwd: "/repo", purpose: "resume-successor" }, receipt,
+    reason => failures.push(reason), ports(() => { throw new AccountCommitBusyError("state writer is busy during account commit"); })))
+    .toThrow(AccountCommitBusyError);
+  expect(failures).toEqual([]);
+});
+
+test("parallel A: async membership retries the same uncorrelated resume reservation outside leases", async () => {
+  const { AgentRegistry } = await import("@/lib/agent/registry");
+  const { AccountCommitBusyError, accountMutationHeld } = await import("@/lib/accounts/accountMutationContext");
+  const fs = await import("node:fs");
+  const path = await import("node:path");
+  const os = await import("node:os");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "parallel-membership-"));
+  const registry = new AgentRegistry(path.join(root, "registry.json"));
+  let attempts = 0;
+  let progressed = false;
+  const reservations: string[] = [];
+  const commit = spyOn(productionLaunchMembershipPorts, "commit").mockImplementation(input => {
+    attempts++;
+    reservations.push(input.identity.launchId!);
+    if (attempts === 1) {
+      setTimeout(() => { progressed = !accountMutationHeld(); }, 0);
+      throw new AccountCommitBusyError("state writer is busy during account commit");
+    }
+    return { ok: true, tasks: [], taskIds: ["seat-task"], created: [], changed: false };
+  });
+  try {
+    const result = await registry.beginSpawnRequestAsync({ engine: "claude", cwd: "/repo", transport: "structured",
+      launchProfile: { title: "Parallel membership fixture" }, purpose: "resume-successor", conversationId: "conversation_fork", origin: { kind: "successor" } });
+    expect(result.kind).toBe("created");
+    expect(attempts).toBe(2);
+    expect(new Set(reservations).size).toBe(1);
+    expect(progressed).toBe(true);
+    const rows = Object.values(registry.readOnlySnapshot().receipts);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ state: "starting", membershipAdmitted: true, key: null });
+  } finally { commit.mockRestore(); fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+
+test("parallel A: a peer-held task database yields the loop and rechecks authority before admission", async () => {
+  const { Database } = await import("bun:sqlite");
+  const { AgentRegistry } = await import("@/lib/agent/registry");
+  const { statePath } = await import("@/lib/configDir");
+  const { loadTasks } = await import("./store");
+  const fs = await import("node:fs");
+  const path = await import("node:path");
+  const os = await import("node:os");
+  loadTasks();
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "parallel-peer-"));
+  const registry = new AgentRegistry(path.join(directory, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const peer = new Database(statePath("state.sqlite"));
+  const original = productionLaunchMembershipPorts.commit;
+  let locked = false, revoked = false, progressed = false;
+  let attempts = 0;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const commit = spyOn(productionLaunchMembershipPorts, "commit").mockImplementation(input => {
+    attempts++;
+    if (attempts === 1) {
+      peer.exec("BEGIN IMMEDIATE"); locked = true;
+      timer = setTimeout(() => { progressed = true; revoked = true; peer.exec("ROLLBACK"); locked = false; }, 25);
+    }
+    return original(input);
+  });
+  try {
+    await expect(registry.beginSpawnRequestAsync({ engine: "claude", cwd: "/repo", transport: "structured",
+      launchProfile: { title: "Peer writer fixture" }, purpose: "resume-successor", origin: { kind: "successor" } },
+    () => { if (revoked) throw new Error("authority was revoked"); })).rejects.toThrow("authority was revoked");
+    expect(progressed).toBe(true);
+    expect(attempts).toBeGreaterThan(0);
+    const rows = Object.values(registry.readOnlySnapshot().receipts);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ state: "starting", membershipAdmitted: false, key: null });
+  } finally {
+    clearTimeout(timer); if (locked) peer.exec("ROLLBACK"); peer.close(); registry.close(); commit.mockRestore();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+
+test.each(["released", "deadline"] as const)("launch admission: a real task writer preserves one reservation through %s", async outcome => {
+  const { Database } = await import("bun:sqlite");
+  const { AgentRegistry } = await import("@/lib/agent/registry");
+  const { statePath } = await import("@/lib/configDir");
+  const { loadTasks } = await import("./store");
+  const fs = await import("node:fs");
+  const path = await import("node:path");
+  const os = await import("node:os");
+  loadTasks();
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "launch-peer-"));
+  const registry = new AgentRegistry(path.join(directory, "registry.json"), undefined, undefined,
+    { sqliteMode: "off", sqliteWriterDeadlineMs: outcome === "deadline" ? 40 : 2_000 });
+  const peer = new Database(statePath("state.sqlite"));
+  let locked = false, progress = 0;
+  const input = { engine: "codex" as const, cwd: "/repo", transport: "structured" as const,
+    clientAttemptId: "membership-retry", launchProfile: { title: "Task writer recovery" }, purpose: "resume-successor" as const,
+    origin: { kind: "successor" as const } };
+  // This clock is independent of admission's promise and account context.
+  const timer = setInterval(() => {
+    if (!locked) return;
+    progress++;
+    if (outcome === "released" && progress === 3) { peer.exec("ROLLBACK"); locked = false; }
+  }, 5);
+  try {
+    peer.exec("BEGIN IMMEDIATE"); locked = true;
+    const admission = registry.beginSpawnRequestAsync(input);
+    if (outcome === "deadline") {
+      await expect(admission).rejects.toThrow("state admission timed out");
+      expect(registry.spawnReceiptForClientAttempt(input.clientAttemptId)).toMatchObject({ state: "starting", membershipAdmitted: false });
+      peer.exec("ROLLBACK"); locked = false;
+    } else expect((await admission).kind).toBe("created");
+    expect(progress).toBeGreaterThan(0);
+    const before = registry.spawnReceiptForClientAttempt(input.clientAttemptId)!;
+    expect((await registry.beginSpawnRequestAsync(input)).kind).toBe("replay");
+    const rows = Object.values(registry.readOnlySnapshot().receipts);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ launchId: before.launchId, state: "starting", membershipAdmitted: true, key: null });
+  } finally {
+    clearInterval(timer); if (locked) peer.exec("ROLLBACK"); peer.close(); registry.close();
+    fs.rmSync(directory, { recursive: true, force: true });
   }
 });

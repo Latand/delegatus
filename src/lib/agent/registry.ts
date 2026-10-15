@@ -1,3 +1,4 @@
+import { StateLockDeferredError, waitForStateLock } from "@/lib/state/lockWait";
 import { performanceSpans } from "@/lib/performanceSpans";
 import { normalizeHostMemory, type HostMemoryState } from "@/lib/runtime/agentMemoryState";
 import { normalizeHostEndCause, type HostEndCause } from "@/lib/runtime/hostEndCause";
@@ -23,7 +24,7 @@ import {
   type ProcessIdentity,
 } from "@/lib/processIdentity";
 import { durableSemanticTitle, firstMeaningfulPromptLine, SPAWN_TITLE_REQUIRED_ERROR } from "@/lib/title";
-import { ACCOUNT_MUTATION_ADMISSION_WAIT_MS, withAccountMutationLock, withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
+import { ACCOUNT_MUTATION_ADMISSION_WAIT_MS, AccountMutationBusyError, withAccountMutationLock, withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
 import { accountMutationHeld } from "@/lib/accounts/accountMutationContext";
 import { readRetiredAccountIds, retiredAccountIds } from "@/lib/accounts/accountsStore";
 import { conversationProjectKey } from "@/lib/accounts/conversationProject";
@@ -6017,9 +6018,33 @@ export class AgentRegistry {
   /** Bounded, non-blocking admission for request and controller paths. */
   async beginSpawnRequestAsync(input: SpawnRequest, guard?: () => void): Promise<SpawnBeginResult> {
     const caller = input.purpose === "resume-successor" ? "resume" : "spawn";
-    const written = await this.accountMutationWrite(`${caller} admission`, () => this.beginSpawnRequest(input), guard);
+    const deadline = performance.now() + (this.writerDeadlineMs ?? 2_000);
+    const remaining = () => Math.max(0, deadline - performance.now());
+    const written = await this.accountMutationWrite(`${caller} admission`, () => this.reserveSpawnRequest(input), guard, { waitMs: remaining() });
     if (!written.acquired) throw new RegistryWriterBusyError(`${caller} admission`);
-    return written.value;
+    const result = written.value;
+    if (result.kind === "created" || result.kind === "replay") {
+      // Reservation is durable. Retry only its idempotent prerequisite, with
+      // no registry writer held while the task store takes its own writer.
+      const admission = await waitForStateLock(`${caller}.membership`, async () => {
+        try {
+          return await withAccountMutationLockAsync(() => {
+            guard?.();
+            return this.admitSpawnMembership(input, result);
+          }, { caller: `${caller} membership`, waitMs: remaining() });
+        } catch (error) {
+          if (error instanceof AccountMutationBusyError) throw new StateLockDeferredError(`${caller}.membership`);
+          throw error;
+        }
+      }, { waitMs: remaining(), subject: result.receipt.launchId });
+      if (admission.ok) {
+        const recorded = await this.accountMutationWrite(`${caller} membership record`, () => {
+          this.recordSpawnMembership(result.receipt, admission.taskIds);
+        }, guard, { waitMs: remaining() });
+        if (!recorded.acquired) throw new RegistryWriterBusyError(`${caller} membership record`);
+      }
+    }
+    return result;
   }
 
   /** Acquire each writer without waiting while the other is held. A failed
@@ -6062,8 +6087,8 @@ export class AgentRegistry {
     }
   }
 
-  beginSpawnRequest(input: SpawnRequest): SpawnBeginResult {
-    const result = withAccountMutationLock(() => {
+  private reserveSpawnRequest(input: SpawnRequest): SpawnBeginResult {
+    return withAccountMutationLock(() => {
       if ((input.engine === "claude" || input.engine === "codex") && input.accountId && input.accountId !== "default") {
         /* The registry moved into state.sqlite (#1870, slice 7); its retired
            list is read through the store rather than by parsing the file. */
@@ -6082,6 +6107,18 @@ export class AgentRegistry {
       }
       return result;
     });
+  }
+
+  private admitSpawnMembership(input: SpawnRequest, result: Extract<SpawnBeginResult, { kind: "created" | "replay" }>) {
+    return admitReservedLaunch(input, result.receipt, (reason) => {
+      if (result.kind !== "created") return;
+      if (input.transport === "structured") this.failStructuredSpawn(result.receipt.launchId, reason, { announce: false });
+      else this.failSpawn(result.receipt.launchId, reason);
+    });
+  }
+
+  beginSpawnRequest(input: SpawnRequest): SpawnBeginResult {
+    const result = this.reserveSpawnRequest(input);
     /* Canonical task membership (#1586): the receipt is the last shared step
        before any launch path actuates, and every caller has passed its own
        admission checks to get here. Membership is committed with the reserved
@@ -6089,11 +6126,7 @@ export class AgentRegistry {
        fresh receipt and aborts the launch. A replay converges on the first
        admission's task. */
     if (result.kind === "created" || result.kind === "replay") {
-      const admission = admitReservedLaunch(input, result.receipt, (reason) => {
-        if (result.kind !== "created") return;
-        if (input.transport === "structured") this.failStructuredSpawn(result.receipt.launchId, reason, { announce: false });
-        else this.failSpawn(result.receipt.launchId, reason);
-      });
+      const admission = this.admitSpawnMembership(input, result);
       if (admission.ok) this.recordSpawnMembership(result.receipt, admission.taskIds);
     }
     return result;
