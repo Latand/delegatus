@@ -1,4 +1,4 @@
-import { afterAll, afterEach, expect, mock, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, expect, mock, test } from "bun:test";
 import fs from "node:fs";
 import path from "node:path";
 import { Window as HappyWindow } from "happy-dom";
@@ -41,6 +41,8 @@ function bindDomGlobals() {
     localStorage: dom.localStorage,
     ResizeObserver: TestResizeObserver,
     IntersectionObserver: undefined,
+    requestAnimationFrame: dom.requestAnimationFrame.bind(dom),
+    cancelAnimationFrame: dom.cancelAnimationFrame.bind(dom),
   });
 }
 bindDomGlobals();
@@ -56,8 +58,8 @@ let mobile = false;
   removeEventListener() {},
 });
 
-const actualRuntimeHooks = await import("@/hooks/useRuntime");
-const actualLogTail = await import("@/hooks/useLogTail");
+const actualRuntimeHooks = { ...await import("@/hooks/useRuntime") };
+const { setLogFeedDependenciesForTests } = await import("./logFeedDependencies");
 const inertRuntime = { enabled: false, connection: "offline" as const, resyncedAt: null, store: emptyStore() };
 mock.module("@/hooks/useRuntime", () => ({
   ...actualRuntimeHooks,
@@ -68,13 +70,13 @@ mock.module("@/hooks/useRuntime", () => ({
   useRuntimeReceiptsForArtifact: () => [],
   useRuntimeFlow: () => null,
 }));
-mock.module("@/hooks/useLogTail", () => ({
+const feedDependencies = {
   useLogTail: () => ({
     lines: [], linesStart: 0, size: 0, loading: false, error: null, tickTime: null,
     paused: false, setPaused: () => undefined, clear: () => undefined,
     hasMore: false, loadingOlder: false, loadOlder: async () => 0, prependGen: 0,
   }),
-}));
+};
 
 const { BranchPane } = await import("./BranchPane");
 const { SwitchCard } = await import("./SwitchCard");
@@ -82,13 +84,14 @@ const { NodesLayer } = await import("./scheme/nodes");
 const { MobileFocusView } = await import("./mobile/MobileFocusView");
 
 const roots = new Set<Root>();
+beforeEach(() => setLogFeedDependenciesForTests(feedDependencies));
 afterAll(() => {
   mock.module("@/hooks/useRuntime", () => actualRuntimeHooks);
-  mock.module("@/hooks/useLogTail", () => actualLogTail);
 });
 afterEach(() => {
   for (const root of roots) flushSync(() => root.unmount());
   roots.clear();
+  setLogFeedDependenciesForTests(null);
   mobile = false;
   dom.document.body.replaceChildren();
   dom.sessionStorage.clear();
@@ -163,7 +166,7 @@ test("narrow scheme node (360px): the in-node pane keeps the bars in-flow with n
         files={[entry]}
         interactive
         lite={false}
-        dormant
+        dormant={false}
         selected={null}
         multi={new Set()}
         session={false}
