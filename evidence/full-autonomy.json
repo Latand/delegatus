@@ -1,0 +1,3230 @@
+{
+  "driver": "src/components/kanban/kanbanBoard.browser.test.tsx",
+  "case": "full autonomy",
+  "prototype": "226235e2e47c2782ea345a00c29ef4367aab7e95",
+  "framesRoot": ".artifacts/full-autonomy-dock-check/frames",
+  "widths": [
+    1440,
+    390
+  ],
+  "themes": [
+    "light",
+    "dark"
+  ],
+  "locales": [
+    "uk",
+    "en"
+  ],
+  "states": [
+    "off",
+    "draft",
+    "settings",
+    "on",
+    "reduced",
+    "undo",
+    "unlimited",
+    "unlimited-status",
+    "ended"
+  ],
+  "snakePhasesMs": [
+    0,
+    1000,
+    2000,
+    3000
+  ],
+  "captures": [
+    {
+      "surface": "board",
+      "host": "[data-kanban-seat]:not(.side)",
+      "width": 1440,
+      "scheme": "light",
+      "lang": "uk",
+      "ring": {
+        "x": 1027.3125,
+        "y": 103,
+        "width": 112,
+        "height": 24
+      },
+      "track": {
+        "x": 1027.3125,
+        "y": 103,
+        "width": 112,
+        "height": 24
+      },
+      "off": {
+        "host": "[data-kanban-seat]:not(.side)",
+        "hostBounds": {
+          "x": 316.5,
+          "y": 60,
+          "width": 1040,
+          "height": 675
+        },
+        "track": {
+          "x": 1027.3125,
+          "y": 103,
+          "width": 112,
+          "height": 24
+        },
+        "ring": null,
+        "clippedBy": [],
+        "visible": true,
+        "uncovered": true
+      },
+      "phases": [
+        {
+          "phase": 0,
+          "host": "[data-kanban-seat]:not(.side)",
+          "hostBounds": {
+            "x": 316.5,
+            "y": 60,
+            "width": 1040,
+            "height": 675
+          },
+          "track": {
+            "x": 1027.3125,
+            "y": 103,
+            "width": 112,
+            "height": 24
+          },
+          "ring": {
+            "x": 1027.3125,
+            "y": 103,
+            "width": 112,
+            "height": 24
+          },
+          "clippedBy": [],
+          "visible": true,
+          "uncovered": true
+        },
+        {
+          "phase": 1000,
+          "host": "[data-kanban-seat]:not(.side)",
+          "hostBounds": {
+            "x": 316.5,
+            "y": 60,
+            "width": 1040,
+            "height": 675
+          },
+          "track": {
+            "x": 1027.3125,
+            "y": 103,
+            "width": 112,
+            "height": 24
+          },
+          "ring": {
+            "x": 1027.3125,
+            "y": 103,
+            "width": 112,
+            "height": 24
+          },
+          "clippedBy": [],
+          "visible": true,
+          "uncovered": true
+        },
+        {
+          "phase": 2000,
+          "host": "[data-kanban-seat]:not(.side)",
+          "hostBounds": {
+            "x": 316.5,
+            "y": 60,
+            "width": 1040,
+            "height": 675
+          },
+          "track": {
+            "x": 1027.3125,
+            "y": 103,
+            "width": 112,
+            "height": 24
+          },
+          "ring": {
+            "x": 1027.3125,
+            "y": 103,
+            "width": 112,
+            "height": 24
+          },
+          "clippedBy": [],
+          "visible": true,
+          "uncovered": true
+        },
+        {
+          "phase": 3000,
+          "host": "[data-kanban-seat]:not(.side)",
+          "hostBounds": {
+            "x": 316.5,
+            "y": 60,
+            "width": 1040,
+            "height": 675
+          },
+          "track": {
+            "x": 1027.3125,
+            "y": 103,
+            "width": 112,
+            "height": 24
+          },
+          "ring": {
+            "x": 1027.3125,
+            "y": 103,
+            "width": 112,
+            "height": 24
+          },
+          "clippedBy": [],
+          "visible": true,
+          "uncovered": true
+        }
+      ],
+      "reduced": {
+        "host": "[data-kanban-seat]:not(.side)",
+        "hostBounds": {
+          "x": 316.5,
+          "y": 60,
+          "width": 1040,
+          "height": 675
+        },
+        "track": {
+          "x": 1027.3125,
+          "y": 103,
+          "width": 112,
+          "height": 24
+        },
+        "ring": {
+          "x": 1027.3125,
+          "y": 103,
+          "width": 112,
+          "height": 24
+        },
+        "clippedBy": [],
+        "visible": true,
+        "uncovered": true
+      },
+      "ended": {
+        "host": "[data-kanban-seat]:not(.side)",
+        "hostBounds": {
+          "x": 316.5,
+          "y": 60,
+          "width": 1040,
+          "height": 675
+        },
+        "track": {
+          "x": 1027.3125,
+          "y": 103,
+          "width": 112,
+          "height": 24
+        },
+        "ring": null,
+        "clippedBy": [],
+        "visible": true,
+        "uncovered": true
+      },
+      "pageErrors": []
+    },
+    {
+      "surface": "board",
+      "host": "[data-kanban-seat]:not(.side)",
+      "width": 1440,
+      "scheme": "light",
+      "lang": "en",
+      "ring": {
+        "x": 1069.65625,
+        "y": 103,
+        "width": 112,
+        "height": 24
+      },
+      "track": {
+        "x": 1069.65625,
+        "y": 103,
+        "width": 112,
+        "height": 24
+      },
+      "off": {
+        "host": "[data-kanban-seat]:not(.side)",
+        "hostBounds": {
+          "x": 316.5,
+          "y": 60,
+          "width": 1040,
+          "height": 675
+        },
+        "track": {
+          "x": 1069.65625,
+          "y": 103,
+          "width": 112,
+          "height": 24
+        },
+        "ring": null,
+        "clippedBy": [],
+        "visible": true,
+        "uncovered": true
+      },
+      "phases": [
+        {
+          "phase": 0,
+          "host": "[data-kanban-seat]:not(.side)",
+          "hostBounds": {
+            "x": 316.5,
+            "y": 60,
+            "width": 1040,
+            "height": 675
+          },
+          "track": {
+            "x": 1069.65625,
+            "y": 103,
+            "width": 112,
+            "height": 24
+          },
+          "ring": {
+            "x": 1069.65625,
+            "y": 103,
+            "width": 112,
+            "height": 24
+          },
+          "clippedBy": [],
+          "visible": true,
+          "uncovered": true
+        },
+        {
+          "phase": 1000,
+          "host": "[data-kanban-seat]:not(.side)",
+          "hostBounds": {
+            "x": 316.5,
+            "y": 60,
+            "width": 1040,
+            "height": 675
+          },
+          "track": {
+            "x": 1069.65625,
+            "y": 103,
+            "width": 112,
+            "height": 24
+          },
+          "ring": {
+            "x": 1069.65625,
+            "y": 103,
+            "width": 112,
+            "height": 24
+          },
+          "clippedBy": [],
+          "visible": true,
+          "uncovered": true
+        },
+        {
+          "phase": 2000,
+          "host": "[data-kanban-seat]:not(.side)",
+          "hostBounds": {
+            "x": 316.5,
+            "y": 60,
+            "width": 1040,
+            "height": 675
+          },
+          "track": {
+            "x": 1069.65625,
+            "y": 103,
+            "width": 112,
+            "height": 24
+          },
+          "ring": {
+            "x": 1069.65625,
+            "y": 103,
+            "width": 112,
+            "height": 24
+          },
+          "clippedBy": [],
+          "visible": true,
+          "uncovered": true
+        },
+        {
+          "phase": 3000,
+          "host": "[data-kanban-seat]:not(.side)",
+          "hostBounds": {
+            "x": 316.5,
+            "y": 60,
+            "width": 1040,
+            "height": 675
+          },
+          "track": {
+            "x": 1069.65625,
+            "y": 103,
+            "width": 112,
+            "height": 24
+          },
+          "ring": {
+            "x": 1069.65625,
+            "y": 103,
+            "width": 112,
+            "height": 24
+          },
+          "clippedBy": [],
+          "visible": true,
+          "uncovered": true
+        }
+      ],
+      "reduced": {
+        "host": "[data-kanban-seat]:not(.side)",
+        "hostBounds": {
+          "x": 316.5,
+          "y": 60,
+          "width": 1040,
+          "height": 675
+        },
+        "track": {
+          "x": 1069.65625,
+          "y": 103,
+          "width": 112,
+          "height": 24
+        },
+        "ring": {
+          "x": 1069.65625,
+          "y": 103,
+          "width": 112,
+          "height": 24
+        },
+        "clippedBy": [],
+        "visible": true,
+        "uncovered": true
+      },
+      "ended": {
+        "host": "[data-kanban-seat]:not(.side)",
+        "hostBounds": {
+          "x": 316.5,
+          "y": 60,
+          "width": 1040,
+          "height": 675
+        },
+        "track": {
+          "x": 1069.65625,
+          "y": 103,
+          "width": 112,
+          "height": 24
+        },
+        "ring": null,
+        "clippedBy": [],
+        "visible": true,
+        "uncovered": true
+      },
+      "pageErrors": []
+    },
+    {
+      "surface": "board",
+      "host": "[data-kanban-seat]:not(.side)",
+      "width": 1440,
+      "scheme": "dark",
+      "lang": "uk",
+      "ring": {
+        "x": 1027.3125,
+        "y": 103,
+        "width": 112,
+        "height": 24
+      },
+      "track": {
+        "x": 1027.3125,
+        "y": 103,
+        "width": 112,
+        "height": 24
+      },
+      "off": {
+        "host": "[data-kanban-seat]:not(.side)",
+        "hostBounds": {
+          "x": 316.5,
+          "y": 60,
+          "width": 1040,
+          "height": 675
+        },
+        "track": {
+          "x": 1027.3125,
+          "y": 103,
+          "width": 112,
+          "height": 24
+        },
+        "ring": null,
+        "clippedBy": [],
+        "visible": true,
+        "uncovered": true
+      },
+      "phases": [
+        {
+          "phase": 0,
+          "host": "[data-kanban-seat]:not(.side)",
+          "hostBounds": {
+            "x": 316.5,
+            "y": 60,
+            "width": 1040,
+            "height": 675
+          },
+          "track": {
+            "x": 1027.3125,
+            "y": 103,
+            "width": 112,
+            "height": 24
+          },
+          "ring": {
+            "x": 1027.3125,
+            "y": 103,
+            "width": 112,
+            "height": 24
+          },
+          "clippedBy": [],
+          "visible": true,
+          "uncovered": true
+        },
+        {
+          "phase": 1000,
+          "host": "[data-kanban-seat]:not(.side)",
+          "hostBounds": {
+            "x": 316.5,
+            "y": 60,
+            "width": 1040,
+            "height": 675
+          },
+          "track": {
+            "x": 1027.3125,
+            "y": 103,
+            "width": 112,
+            "height": 24
+          },
+          "ring": {
+            "x": 1027.3125,
+            "y": 103,
+            "width": 112,
+            "height": 24
+          },
+          "clippedBy": [],
+          "visible": true,
+          "uncovered": true
+        },
+        {
+          "phase": 2000,
+          "host": "[data-kanban-seat]:not(.side)",
+          "hostBounds": {
+            "x": 316.5,
+            "y": 60,
+            "width": 1040,
+            "height": 675
+          },
+          "track": {
+            "x": 1027.3125,
+            "y": 103,
+            "width": 112,
+            "height": 24
+          },
+          "ring": {
+            "x": 1027.3125,
+            "y": 103,
+            "width": 112,
+            "height": 24
+          },
+          "clippedBy": [],
+          "visible": true,
+          "uncovered": true
+        },
+        {
+          "phase": 3000,
+          "host": "[data-kanban-seat]:not(.side)",
+          "hostBounds": {
+            "x": 316.5,
+            "y": 60,
+            "width": 1040,
+            "height": 675
+          },
+          "track": {
+            "x": 1027.3125,
+            "y": 103,
+            "width": 112,
+            "height": 24
+          },
+          "ring": {
+            "x": 1027.3125,
+            "y": 103,
+            "width": 112,
+            "height": 24
+          },
+          "clippedBy": [],
+          "visible": true,
+          "uncovered": true
+        }
+      ],
+      "reduced": {
+        "host": "[data-kanban-seat]:not(.side)",
+        "hostBounds": {
+          "x": 316.5,
+          "y": 60,
+          "width": 1040,
+          "height": 675
+        },
+        "track": {
+          "x": 1027.3125,
+          "y": 103,
+          "width": 112,
+          "height": 24
+        },
+        "ring": {
+          "x": 1027.3125,
+          "y": 103,
+          "width": 112,
+          "height": 24
+        },
+        "clippedBy": [],
+        "visible": true,
+        "uncovered": true
+      },
+      "ended": {
+        "host": "[data-kanban-seat]:not(.side)",
+        "hostBounds": {
+          "x": 316.5,
+          "y": 60,
+          "width": 1040,
+          "height": 675
+        },
+        "track": {
+          "x": 1027.3125,
+          "y": 103,
+          "width": 112,
+          "height": 24
+        },
+        "ring": null,
+        "clippedBy": [],
+        "visible": true,
+        "uncovered": true
+      },
+      "pageErrors": []
+    },
+    {
+      "surface": "board",
+      "host": "[data-kanban-seat]:not(.side)",
+      "width": 1440,
+      "scheme": "dark",
+      "lang": "en",
+      "ring": {
+        "x": 1069.65625,
+        "y": 103,
+        "width": 112,
+        "height": 24
+      },
+      "track": {
+        "x": 1069.65625,
+        "y": 103,
+        "width": 112,
+        "height": 24
+      },
+      "off": {
+        "host": "[data-kanban-seat]:not(.side)",
+        "hostBounds": {
+          "x": 316.5,
+          "y": 60,
+          "width": 1040,
+          "height": 675
+        },
+        "track": {
+          "x": 1069.65625,
+          "y": 103,
+          "width": 112,
+          "height": 24
+        },
+        "ring": null,
+        "clippedBy": [],
+        "visible": true,
+        "uncovered": true
+      },
+      "phases": [
+        {
+          "phase": 0,
+          "host": "[data-kanban-seat]:not(.side)",
+          "hostBounds": {
+            "x": 316.5,
+            "y": 60,
+            "width": 1040,
+            "height": 675
+          },
+          "track": {
+            "x": 1069.65625,
+            "y": 103,
+            "width": 112,
+            "height": 24
+          },
+          "ring": {
+            "x": 1069.65625,
+            "y": 103,
+            "width": 112,
+            "height": 24
+          },
+          "clippedBy": [],
+          "visible": true,
+          "uncovered": true
+        },
+        {
+          "phase": 1000,
+          "host": "[data-kanban-seat]:not(.side)",
+          "hostBounds": {
+            "x": 316.5,
+            "y": 60,
+            "width": 1040,
+            "height": 675
+          },
+          "track": {
+            "x": 1069.65625,
+            "y": 103,
+            "width": 112,
+            "height": 24
+          },
+          "ring": {
+            "x": 1069.65625,
+            "y": 103,
+            "width": 112,
+            "height": 24
+          },
+          "clippedBy": [],
+          "visible": true,
+          "uncovered": true
+        },
+        {
+          "phase": 2000,
+          "host": "[data-kanban-seat]:not(.side)",
+          "hostBounds": {
+            "x": 316.5,
+            "y": 60,
+            "width": 1040,
+            "height": 675
+          },
+          "track": {
+            "x": 1069.65625,
+            "y": 103,
+            "width": 112,
+            "height": 24
+          },
+          "ring": {
+            "x": 1069.65625,
+            "y": 103,
+            "width": 112,
+            "height": 24
+          },
+          "clippedBy": [],
+          "visible": true,
+          "uncovered": true
+        },
+        {
+          "phase": 3000,
+          "host": "[data-kanban-seat]:not(.side)",
+          "hostBounds": {
+            "x": 316.5,
+            "y": 60,
+            "width": 1040,
+            "height": 675
+          },
+          "track": {
+            "x": 1069.65625,
+            "y": 103,
+            "width": 112,
+            "height": 24
+          },
+          "ring": {
+            "x": 1069.65625,
+            "y": 103,
+            "width": 112,
+            "height": 24
+          },
+          "clippedBy": [],
+          "visible": true,
+          "uncovered": true
+        }
+      ],
+      "reduced": {
+        "host": "[data-kanban-seat]:not(.side)",
+        "hostBounds": {
+          "x": 316.5,
+          "y": 60,
+          "width": 1040,
+          "height": 675
+        },
+        "track": {
+          "x": 1069.65625,
+          "y": 103,
+          "width": 112,
+          "height": 24
+        },
+        "ring": {
+          "x": 1069.65625,
+          "y": 103,
+          "width": 112,
+          "height": 24
+        },
+        "clippedBy": [],
+        "visible": true,
+        "uncovered": true
+      },
+      "ended": {
+        "host": "[data-kanban-seat]:not(.side)",
+        "hostBounds": {
+          "x": 316.5,
+          "y": 60,
+          "width": 1040,
+          "height": 675
+        },
+        "track": {
+          "x": 1069.65625,
+          "y": 103,
+          "width": 112,
+          "height": 24
+        },
+        "ring": null,
+        "clippedBy": [],
+        "visible": true,
+        "uncovered": true
+      },
+      "pageErrors": []
+    },
+    {
+      "surface": "dock-440",
+      "host": "[data-orchestrator-dock]",
+      "width": 1440,
+      "scheme": "light",
+      "lang": "uk",
+      "ring": {
+        "x": 215.765625,
+        "y": 93,
+        "width": 112,
+        "height": 24
+      },
+      "track": {
+        "x": 215.765625,
+        "y": 93,
+        "width": 112,
+        "height": 24
+      },
+      "off": {
+        "host": "[data-orchestrator-dock]",
+        "hostBounds": {
+          "x": 0,
+          "y": 0,
+          "width": 440,
+          "height": 900
+        },
+        "track": {
+          "x": 215.765625,
+          "y": 93,
+          "width": 112,
+          "height": 24
+        },
+        "ring": null,
+        "clippedBy": [],
+        "visible": true,
+        "uncovered": true
+      },
+      "phases": [
+        {
+          "phase": 0,
+          "host": "[data-orchestrator-dock]",
+          "hostBounds": {
+            "x": 0,
+            "y": 0,
+            "width": 440,
+            "height": 900
+          },
+          "track": {
+            "x": 215.765625,
+            "y": 93,
+            "width": 112,
+            "height": 24
+          },
+          "ring": {
+            "x": 215.765625,
+            "y": 93,
+            "width": 112,
+            "height": 24
+          },
+          "clippedBy": [],
+          "visible": true,
+          "uncovered": true
+        },
+        {
+          "phase": 1000,
+          "host": "[data-orchestrator-dock]",
+          "hostBounds": {
+            "x": 0,
+            "y": 0,
+            "width": 440,
+            "height": 900
+          },
+          "track": {
+            "x": 215.765625,
+            "y": 93,
+            "width": 112,
+            "height": 24
+          },
+          "ring": {
+            "x": 215.765625,
+            "y": 93,
+            "width": 112,
+            "height": 24
+          },
+          "clippedBy": [],
+          "visible": true,
+          "uncovered": true
+        },
+        {
+          "phase": 2000,
+          "host": "[data-orchestrator-dock]",
+          "hostBounds": {
+            "x": 0,
+            "y": 0,
+            "width": 440,
+            "height": 900
+          },
+          "track": {
+            "x": 215.765625,
+            "y": 93,
+            "width": 112,
+            "height": 24
+          },
+          "ring": {
+            "x": 215.765625,
+            "y": 93,
+            "width": 112,
+            "height": 24
+          },
+          "clippedBy": [],
+          "visible": true,
+          "uncovered": true
+        },
+        {
+          "phase": 3000,
+          "host": "[data-orchestrator-dock]",
+          "hostBounds": {
+            "x": 0,
+            "y": 0,
+            "width": 440,
+            "height": 900
+          },
+          "track": {
+            "x": 215.765625,
+            "y": 93,
+            "width": 112,
+            "height": 24
+          },
+          "ring": {
+            "x": 215.765625,
+            "y": 93,
+            "width": 112,
+            "height": 24
+          },
+          "clippedBy": [],
+          "visible": true,
+          "uncovered": true
+        }
+      ],
+      "reduced": {
+        "host": "[data-orchestrator-dock]",
+        "hostBounds": {
+          "x": 0,
+          "y": 0,
+          "width": 440,
+          "height": 900
+        },
+        "track": {
+          "x": 215.765625,
+          "y": 93,
+          "width": 112,
+          "height": 24
+        },
+        "ring": {
+          "x": 215.765625,
+          "y": 93,
+          "width": 112,
+          "height": 24
+        },
+        "clippedBy": [],
+        "visible": true,
+        "uncovered": true
+      },
+      "ended": {
+        "host": "[data-orchestrator-dock]",
+        "hostBounds": {
+          "x": 0,
+          "y": 0,
+          "width": 440,
+          "height": 900
+        },
+        "track": {
+          "x": 215.765625,
+          "y": 93,
+          "width": 112,
+          "height": 24
+        },
+        "ring": null,
+        "clippedBy": [],
+        "visible": true,
+        "uncovered": true
+      },
+      "pageErrors": []
+    },
+    {
+      "surface": "dock-440",
+      "host": "[data-orchestrator-dock]",
+      "width": 1440,
+      "scheme": "light",
+      "lang": "en",
+      "ring": {
+        "x": 229.875,
+        "y": 93,
+        "width": 112,
+        "height": 24
+      },
+      "track": {
+        "x": 229.875,
+        "y": 93,
+        "width": 112,
+        "height": 24
+      },
+      "off": {
+        "host": "[data-orchestrator-dock]",
+        "hostBounds": {
+          "x": 0,
+          "y": 0,
+          "width": 440,
+          "height": 900
+        },
+        "track": {
+          "x": 229.875,
+          "y": 93,
+          "width": 112,
+          "height": 24
+        },
+        "ring": null,
+        "clippedBy": [],
+        "visible": true,
+        "uncovered": true
+      },
+      "phases": [
+        {
+          "phase": 0,
+          "host": "[data-orchestrator-dock]",
+          "hostBounds": {
+            "x": 0,
+            "y": 0,
+            "width": 440,
+            "height": 900
+          },
+          "track": {
+            "x": 229.875,
+            "y": 93,
+            "width": 112,
+            "height": 24
+          },
+          "ring": {
+            "x": 229.875,
+            "y": 93,
+            "width": 112,
+            "height": 24
+          },
+          "clippedBy": [],
+          "visible": true,
+          "uncovered": true
+        },
+        {
+          "phase": 1000,
+          "host": "[data-orchestrator-dock]",
+          "hostBounds": {
+            "x": 0,
+            "y": 0,
+            "width": 440,
+            "height": 900
+          },
+          "track": {
+            "x": 229.875,
+            "y": 93,
+            "width": 112,
+            "height": 24
+          },
+          "ring": {
+            "x": 229.875,
+            "y": 93,
+            "width": 112,
+            "height": 24
+          },
+          "clippedBy": [],
+          "visible": true,
+          "uncovered": true
+        },
+        {
+          "phase": 2000,
+          "host": "[data-orchestrator-dock]",
+          "hostBounds": {
+            "x": 0,
+            "y": 0,
+            "width": 440,
+            "height": 900
+          },
+          "track": {
+            "x": 229.875,
+            "y": 93,
+            "width": 112,
+            "height": 24
+          },
+          "ring": {
+            "x": 229.875,
+            "y": 93,
+            "width": 112,
+            "height": 24
+          },
+          "clippedBy": [],
+          "visible": true,
+          "uncovered": true
+        },
+        {
+          "phase": 3000,
+          "host": "[data-orchestrator-dock]",
+          "hostBounds": {
+            "x": 0,
+            "y": 0,
+            "width": 440,
+            "height": 900
+          },
+          "track": {
+            "x": 229.875,
+            "y": 93,
+            "width": 112,
+            "height": 24
+          },
+          "ring": {
+            "x": 229.875,
+            "y": 93,
+            "width": 112,
+            "height": 24
+          },
+          "clippedBy": [],
+          "visible": true,
+          "uncovered": true
+        }
+      ],
+      "reduced": {
+        "host": "[data-orchestrator-dock]",
+        "hostBounds": {
+          "x": 0,
+          "y": 0,
+          "width": 440,
+          "height": 900
+        },
+        "track": {
+          "x": 229.875,
+          "y": 93,
+          "width": 112,
+          "height": 24
+        },
+        "ring": {
+          "x": 229.875,
+          "y": 93,
+          "width": 112,
+          "height": 24
+        },
+        "clippedBy": [],
+        "visible": true,
+        "uncovered": true
+      },
+      "ended": {
+        "host": "[data-orchestrator-dock]",
+        "hostBounds": {
+          "x": 0,
+          "y": 0,
+          "width": 440,
+          "height": 900
+        },
+        "track": {
+          "x": 229.875,
+          "y": 93,
+          "width": 112,
+          "height": 24
+        },
+        "ring": null,
+        "clippedBy": [],
+        "visible": true,
+        "uncovered": true
+      },
+      "pageErrors": []
+    },
+    {
+      "surface": "dock-440",
+      "host": "[data-orchestrator-dock]",
+      "width": 1440,
+      "scheme": "dark",
+      "lang": "uk",
+      "ring": {
+        "x": 215.765625,
+        "y": 93,
+        "width": 112,
+        "height": 24
+      },
+      "track": {
+        "x": 215.765625,
+        "y": 93,
+        "width": 112,
+        "height": 24
+      },
+      "off": {
+        "host": "[data-orchestrator-dock]",
+        "hostBounds": {
+          "x": 0,
+          "y": 0,
+          "width": 440,
+          "height": 900
+        },
+        "track": {
+          "x": 215.765625,
+          "y": 93,
+          "width": 112,
+          "height": 24
+        },
+        "ring": null,
+        "clippedBy": [],
+        "visible": true,
+        "uncovered": true
+      },
+      "phases": [
+        {
+          "phase": 0,
+          "host": "[data-orchestrator-dock]",
+          "hostBounds": {
+            "x": 0,
+            "y": 0,
+            "width": 440,
+            "height": 900
+          },
+          "track": {
+            "x": 215.765625,
+            "y": 93,
+            "width": 112,
+            "height": 24
+          },
+          "ring": {
+            "x": 215.765625,
+            "y": 93,
+            "width": 112,
+            "height": 24
+          },
+          "clippedBy": [],
+          "visible": true,
+          "uncovered": true
+        },
+        {
+          "phase": 1000,
+          "host": "[data-orchestrator-dock]",
+          "hostBounds": {
+            "x": 0,
+            "y": 0,
+            "width": 440,
+            "height": 900
+          },
+          "track": {
+            "x": 215.765625,
+            "y": 93,
+            "width": 112,
+            "height": 24
+          },
+          "ring": {
+            "x": 215.765625,
+            "y": 93,
+            "width": 112,
+            "height": 24
+          },
+          "clippedBy": [],
+          "visible": true,
+          "uncovered": true
+        },
+        {
+          "phase": 2000,
+          "host": "[data-orchestrator-dock]",
+          "hostBounds": {
+            "x": 0,
+            "y": 0,
+            "width": 440,
+            "height": 900
+          },
+          "track": {
+            "x": 215.765625,
+            "y": 93,
+            "width": 112,
+            "height": 24
+          },
+          "ring": {
+            "x": 215.765625,
+            "y": 93,
+            "width": 112,
+            "height": 24
+          },
+          "clippedBy": [],
+          "visible": true,
+          "uncovered": true
+        },
+        {
+          "phase": 3000,
+          "host": "[data-orchestrator-dock]",
+          "hostBounds": {
+            "x": 0,
+            "y": 0,
+            "width": 440,
+            "height": 900
+          },
+          "track": {
+            "x": 215.765625,
+            "y": 93,
+            "width": 112,
+            "height": 24
+          },
+          "ring": {
+            "x": 215.765625,
+            "y": 93,
+            "width": 112,
+            "height": 24
+          },
+          "clippedBy": [],
+          "visible": true,
+          "uncovered": true
+        }
+      ],
+      "reduced": {
+        "host": "[data-orchestrator-dock]",
+        "hostBounds": {
+          "x": 0,
+          "y": 0,
+          "width": 440,
+          "height": 900
+        },
+        "track": {
+          "x": 215.765625,
+          "y": 93,
+          "width": 112,
+          "height": 24
+        },
+        "ring": {
+          "x": 215.765625,
+          "y": 93,
+          "width": 112,
+          "height": 24
+        },
+        "clippedBy": [],
+        "visible": true,
+        "uncovered": true
+      },
+      "ended": {
+        "host": "[data-orchestrator-dock]",
+        "hostBounds": {
+          "x": 0,
+          "y": 0,
+          "width": 440,
+          "height": 900
+        },
+        "track": {
+          "x": 215.765625,
+          "y": 93,
+          "width": 112,
+          "height": 24
+        },
+        "ring": null,
+        "clippedBy": [],
+        "visible": true,
+        "uncovered": true
+      },
+      "pageErrors": []
+    },
+    {
+      "surface": "dock-440",
+      "host": "[data-orchestrator-dock]",
+      "width": 1440,
+      "scheme": "dark",
+      "lang": "en",
+      "ring": {
+        "x": 229.875,
+        "y": 93,
+        "width": 112,
+        "height": 24
+      },
+      "track": {
+        "x": 229.875,
+        "y": 93,
+        "width": 112,
+        "height": 24
+      },
+      "off": {
+        "host": "[data-orchestrator-dock]",
+        "hostBounds": {
+          "x": 0,
+          "y": 0,
+          "width": 440,
+          "height": 900
+        },
+        "track": {
+          "x": 229.875,
+          "y": 93,
+          "width": 112,
+          "height": 24
+        },
+        "ring": null,
+        "clippedBy": [],
+        "visible": true,
+        "uncovered": true
+      },
+      "phases": [
+        {
+          "phase": 0,
+          "host": "[data-orchestrator-dock]",
+          "hostBounds": {
+            "x": 0,
+            "y": 0,
+            "width": 440,
+            "height": 900
+          },
+          "track": {
+            "x": 229.875,
+            "y": 93,
+            "width": 112,
+            "height": 24
+          },
+          "ring": {
+            "x": 229.875,
+            "y": 93,
+            "width": 112,
+            "height": 24
+          },
+          "clippedBy": [],
+          "visible": true,
+          "uncovered": true
+        },
+        {
+          "phase": 1000,
+          "host": "[data-orchestrator-dock]",
+          "hostBounds": {
+            "x": 0,
+            "y": 0,
+            "width": 440,
+            "height": 900
+          },
+          "track": {
+            "x": 229.875,
+            "y": 93,
+            "width": 112,
+            "height": 24
+          },
+          "ring": {
+            "x": 229.875,
+            "y": 93,
+            "width": 112,
+            "height": 24
+          },
+          "clippedBy": [],
+          "visible": true,
+          "uncovered": true
+        },
+        {
+          "phase": 2000,
+          "host": "[data-orchestrator-dock]",
+          "hostBounds": {
+            "x": 0,
+            "y": 0,
+            "width": 440,
+            "height": 900
+          },
+          "track": {
+            "x": 229.875,
+            "y": 93,
+            "width": 112,
+            "height": 24
+          },
+          "ring": {
+            "x": 229.875,
+            "y": 93,
+            "width": 112,
+            "height": 24
+          },
+          "clippedBy": [],
+          "visible": true,
+          "uncovered": true
+        },
+        {
+          "phase": 3000,
+          "host": "[data-orchestrator-dock]",
+          "hostBounds": {
+            "x": 0,
+            "y": 0,
+            "width": 440,
+            "height": 900
+          },
+          "track": {
+            "x": 229.875,
+            "y": 93,
+            "width": 112,
+            "height": 24
+          },
+          "ring": {
+            "x": 229.875,
+            "y": 93,
+            "width": 112,
+            "height": 24
+          },
+          "clippedBy": [],
+          "visible": true,
+          "uncovered": true
+        }
+      ],
+      "reduced": {
+        "host": "[data-orchestrator-dock]",
+        "hostBounds": {
+          "x": 0,
+          "y": 0,
+          "width": 440,
+          "height": 900
+        },
+        "track": {
+          "x": 229.875,
+          "y": 93,
+          "width": 112,
+          "height": 24
+        },
+        "ring": {
+          "x": 229.875,
+          "y": 93,
+          "width": 112,
+          "height": 24
+        },
+        "clippedBy": [],
+        "visible": true,
+        "uncovered": true
+      },
+      "ended": {
+        "host": "[data-orchestrator-dock]",
+        "hostBounds": {
+          "x": 0,
+          "y": 0,
+          "width": 440,
+          "height": 900
+        },
+        "track": {
+          "x": 229.875,
+          "y": 93,
+          "width": 112,
+          "height": 24
+        },
+        "ring": null,
+        "clippedBy": [],
+        "visible": true,
+        "uncovered": true
+      },
+      "pageErrors": []
+    },
+    {
+      "surface": "dock-360",
+      "host": "[data-orchestrator-dock]",
+      "width": 1440,
+      "scheme": "light",
+      "lang": "uk",
+      "ring": {
+        "x": 193.765625,
+        "y": 93,
+        "width": 54,
+        "height": 24
+      },
+      "track": {
+        "x": 193.765625,
+        "y": 93,
+        "width": 54,
+        "height": 24
+      },
+      "off": {
+        "host": "[data-orchestrator-dock]",
+        "hostBounds": {
+          "x": 0,
+          "y": 0,
+          "width": 360,
+          "height": 900
+        },
+        "track": {
+          "x": 193.765625,
+          "y": 93,
+          "width": 54,
+          "height": 24
+        },
+        "ring": null,
+        "clippedBy": [],
+        "visible": true,
+        "uncovered": true
+      },
+      "phases": [
+        {
+          "phase": 0,
+          "host": "[data-orchestrator-dock]",
+          "hostBounds": {
+            "x": 0,
+            "y": 0,
+            "width": 360,
+            "height": 900
+          },
+          "track": {
+            "x": 193.765625,
+            "y": 93,
+            "width": 54,
+            "height": 24
+          },
+          "ring": {
+            "x": 193.765625,
+            "y": 93,
+            "width": 54,
+            "height": 24
+          },
+          "clippedBy": [],
+          "visible": true,
+          "uncovered": true
+        },
+        {
+          "phase": 1000,
+          "host": "[data-orchestrator-dock]",
+          "hostBounds": {
+            "x": 0,
+            "y": 0,
+            "width": 360,
+            "height": 900
+          },
+          "track": {
+            "x": 193.765625,
+            "y": 93,
+            "width": 54,
+            "height": 24
+          },
+          "ring": {
+            "x": 193.765625,
+            "y": 93,
+            "width": 54,
+            "height": 24
+          },
+          "clippedBy": [],
+          "visible": true,
+          "uncovered": true
+        },
+        {
+          "phase": 2000,
+          "host": "[data-orchestrator-dock]",
+          "hostBounds": {
+            "x": 0,
+            "y": 0,
+            "width": 360,
+            "height": 900
+          },
+          "track": {
+            "x": 193.765625,
+            "y": 93,
+            "width": 54,
+            "height": 24
+          },
+          "ring": {
+            "x": 193.765625,
+            "y": 93,
+            "width": 54,
+            "height": 24
+          },
+          "clippedBy": [],
+          "visible": true,
+          "uncovered": true
+        },
+        {
+          "phase": 3000,
+          "host": "[data-orchestrator-dock]",
+          "hostBounds": {
+            "x": 0,
+            "y": 0,
+            "width": 360,
+            "height": 900
+          },
+          "track": {
+            "x": 193.765625,
+            "y": 93,
+            "width": 54,
+            "height": 24
+          },
+          "ring": {
+            "x": 193.765625,
+            "y": 93,
+            "width": 54,
+            "height": 24
+          },
+          "clippedBy": [],
+          "visible": true,
+          "uncovered": true
+        }
+      ],
+      "reduced": {
+        "host": "[data-orchestrator-dock]",
+        "hostBounds": {
+          "x": 0,
+          "y": 0,
+          "width": 360,
+          "height": 900
+        },
+        "track": {
+          "x": 193.765625,
+          "y": 93,
+          "width": 54,
+          "height": 24
+        },
+        "ring": {
+          "x": 193.765625,
+          "y": 93,
+          "width": 54,
+          "height": 24
+        },
+        "clippedBy": [],
+        "visible": true,
+        "uncovered": true
+      },
+      "ended": {
+        "host": "[data-orchestrator-dock]",
+        "hostBounds": {
+          "x": 0,
+          "y": 0,
+          "width": 360,
+          "height": 900
+        },
+        "track": {
+          "x": 193.765625,
+          "y": 93,
+          "width": 54,
+          "height": 24
+        },
+        "ring": null,
+        "clippedBy": [],
+        "visible": true,
+        "uncovered": true
+      },
+      "pageErrors": []
+    },
+    {
+      "surface": "dock-360",
+      "host": "[data-orchestrator-dock]",
+      "width": 1440,
+      "scheme": "light",
+      "lang": "en",
+      "ring": {
+        "x": 207.875,
+        "y": 93,
+        "width": 54,
+        "height": 24
+      },
+      "track": {
+        "x": 207.875,
+        "y": 93,
+        "width": 54,
+        "height": 24
+      },
+      "off": {
+        "host": "[data-orchestrator-dock]",
+        "hostBounds": {
+          "x": 0,
+          "y": 0,
+          "width": 360,
+          "height": 900
+        },
+        "track": {
+          "x": 207.875,
+          "y": 93,
+          "width": 54,
+          "height": 24
+        },
+        "ring": null,
+        "clippedBy": [],
+        "visible": true,
+        "uncovered": true
+      },
+      "phases": [
+        {
+          "phase": 0,
+          "host": "[data-orchestrator-dock]",
+          "hostBounds": {
+            "x": 0,
+            "y": 0,
+            "width": 360,
+            "height": 900
+          },
+          "track": {
+            "x": 207.875,
+            "y": 93,
+            "width": 54,
+            "height": 24
+          },
+          "ring": {
+            "x": 207.875,
+            "y": 93,
+            "width": 54,
+            "height": 24
+          },
+          "clippedBy": [],
+          "visible": true,
+          "uncovered": true
+        },
+        {
+          "phase": 1000,
+          "host": "[data-orchestrator-dock]",
+          "hostBounds": {
+            "x": 0,
+            "y": 0,
+            "width": 360,
+            "height": 900
+          },
+          "track": {
+            "x": 207.875,
+            "y": 93,
+            "width": 54,
+            "height": 24
+          },
+          "ring": {
+            "x": 207.875,
+            "y": 93,
+            "width": 54,
+            "height": 24
+          },
+          "clippedBy": [],
+          "visible": true,
+          "uncovered": true
+        },
+        {
+          "phase": 2000,
+          "host": "[data-orchestrator-dock]",
+          "hostBounds": {
+            "x": 0,
+            "y": 0,
+            "width": 360,
+            "height": 900
+          },
+          "track": {
+            "x": 207.875,
+            "y": 93,
+            "width": 54,
+            "height": 24
+          },
+          "ring": {
+            "x": 207.875,
+            "y": 93,
+            "width": 54,
+            "height": 24
+          },
+          "clippedBy": [],
+          "visible": true,
+          "uncovered": true
+        },
+        {
+          "phase": 3000,
+          "host": "[data-orchestrator-dock]",
+          "hostBounds": {
+            "x": 0,
+            "y": 0,
+            "width": 360,
+            "height": 900
+          },
+          "track": {
+            "x": 207.875,
+            "y": 93,
+            "width": 54,
+            "height": 24
+          },
+          "ring": {
+            "x": 207.875,
+            "y": 93,
+            "width": 54,
+            "height": 24
+          },
+          "clippedBy": [],
+          "visible": true,
+          "uncovered": true
+        }
+      ],
+      "reduced": {
+        "host": "[data-orchestrator-dock]",
+        "hostBounds": {
+          "x": 0,
+          "y": 0,
+          "width": 360,
+          "height": 900
+        },
+        "track": {
+          "x": 207.875,
+          "y": 93,
+          "width": 54,
+          "height": 24
+        },
+        "ring": {
+          "x": 207.875,
+          "y": 93,
+          "width": 54,
+          "height": 24
+        },
+        "clippedBy": [],
+        "visible": true,
+        "uncovered": true
+      },
+      "ended": {
+        "host": "[data-orchestrator-dock]",
+        "hostBounds": {
+          "x": 0,
+          "y": 0,
+          "width": 360,
+          "height": 900
+        },
+        "track": {
+          "x": 207.875,
+          "y": 93,
+          "width": 54,
+          "height": 24
+        },
+        "ring": null,
+        "clippedBy": [],
+        "visible": true,
+        "uncovered": true
+      },
+      "pageErrors": []
+    },
+    {
+      "surface": "dock-360",
+      "host": "[data-orchestrator-dock]",
+      "width": 1440,
+      "scheme": "dark",
+      "lang": "uk",
+      "ring": {
+        "x": 193.765625,
+        "y": 93,
+        "width": 54,
+        "height": 24
+      },
+      "track": {
+        "x": 193.765625,
+        "y": 93,
+        "width": 54,
+        "height": 24
+      },
+      "off": {
+        "host": "[data-orchestrator-dock]",
+        "hostBounds": {
+          "x": 0,
+          "y": 0,
+          "width": 360,
+          "height": 900
+        },
+        "track": {
+          "x": 193.765625,
+          "y": 93,
+          "width": 54,
+          "height": 24
+        },
+        "ring": null,
+        "clippedBy": [],
+        "visible": true,
+        "uncovered": true
+      },
+      "phases": [
+        {
+          "phase": 0,
+          "host": "[data-orchestrator-dock]",
+          "hostBounds": {
+            "x": 0,
+            "y": 0,
+            "width": 360,
+            "height": 900
+          },
+          "track": {
+            "x": 193.765625,
+            "y": 93,
+            "width": 54,
+            "height": 24
+          },
+          "ring": {
+            "x": 193.765625,
+            "y": 93,
+            "width": 54,
+            "height": 24
+          },
+          "clippedBy": [],
+          "visible": true,
+          "uncovered": true
+        },
+        {
+          "phase": 1000,
+          "host": "[data-orchestrator-dock]",
+          "hostBounds": {
+            "x": 0,
+            "y": 0,
+            "width": 360,
+            "height": 900
+          },
+          "track": {
+            "x": 193.765625,
+            "y": 93,
+            "width": 54,
+            "height": 24
+          },
+          "ring": {
+            "x": 193.765625,
+            "y": 93,
+            "width": 54,
+            "height": 24
+          },
+          "clippedBy": [],
+          "visible": true,
+          "uncovered": true
+        },
+        {
+          "phase": 2000,
+          "host": "[data-orchestrator-dock]",
+          "hostBounds": {
+            "x": 0,
+            "y": 0,
+            "width": 360,
+            "height": 900
+          },
+          "track": {
+            "x": 193.765625,
+            "y": 93,
+            "width": 54,
+            "height": 24
+          },
+          "ring": {
+            "x": 193.765625,
+            "y": 93,
+            "width": 54,
+            "height": 24
+          },
+          "clippedBy": [],
+          "visible": true,
+          "uncovered": true
+        },
+        {
+          "phase": 3000,
+          "host": "[data-orchestrator-dock]",
+          "hostBounds": {
+            "x": 0,
+            "y": 0,
+            "width": 360,
+            "height": 900
+          },
+          "track": {
+            "x": 193.765625,
+            "y": 93,
+            "width": 54,
+            "height": 24
+          },
+          "ring": {
+            "x": 193.765625,
+            "y": 93,
+            "width": 54,
+            "height": 24
+          },
+          "clippedBy": [],
+          "visible": true,
+          "uncovered": true
+        }
+      ],
+      "reduced": {
+        "host": "[data-orchestrator-dock]",
+        "hostBounds": {
+          "x": 0,
+          "y": 0,
+          "width": 360,
+          "height": 900
+        },
+        "track": {
+          "x": 193.765625,
+          "y": 93,
+          "width": 54,
+          "height": 24
+        },
+        "ring": {
+          "x": 193.765625,
+          "y": 93,
+          "width": 54,
+          "height": 24
+        },
+        "clippedBy": [],
+        "visible": true,
+        "uncovered": true
+      },
+      "ended": {
+        "host": "[data-orchestrator-dock]",
+        "hostBounds": {
+          "x": 0,
+          "y": 0,
+          "width": 360,
+          "height": 900
+        },
+        "track": {
+          "x": 193.765625,
+          "y": 93,
+          "width": 54,
+          "height": 24
+        },
+        "ring": null,
+        "clippedBy": [],
+        "visible": true,
+        "uncovered": true
+      },
+      "pageErrors": []
+    },
+    {
+      "surface": "dock-360",
+      "host": "[data-orchestrator-dock]",
+      "width": 1440,
+      "scheme": "dark",
+      "lang": "en",
+      "ring": {
+        "x": 207.875,
+        "y": 93,
+        "width": 54,
+        "height": 24
+      },
+      "track": {
+        "x": 207.875,
+        "y": 93,
+        "width": 54,
+        "height": 24
+      },
+      "off": {
+        "host": "[data-orchestrator-dock]",
+        "hostBounds": {
+          "x": 0,
+          "y": 0,
+          "width": 360,
+          "height": 900
+        },
+        "track": {
+          "x": 207.875,
+          "y": 93,
+          "width": 54,
+          "height": 24
+        },
+        "ring": null,
+        "clippedBy": [],
+        "visible": true,
+        "uncovered": true
+      },
+      "phases": [
+        {
+          "phase": 0,
+          "host": "[data-orchestrator-dock]",
+          "hostBounds": {
+            "x": 0,
+            "y": 0,
+            "width": 360,
+            "height": 900
+          },
+          "track": {
+            "x": 207.875,
+            "y": 93,
+            "width": 54,
+            "height": 24
+          },
+          "ring": {
+            "x": 207.875,
+            "y": 93,
+            "width": 54,
+            "height": 24
+          },
+          "clippedBy": [],
+          "visible": true,
+          "uncovered": true
+        },
+        {
+          "phase": 1000,
+          "host": "[data-orchestrator-dock]",
+          "hostBounds": {
+            "x": 0,
+            "y": 0,
+            "width": 360,
+            "height": 900
+          },
+          "track": {
+            "x": 207.875,
+            "y": 93,
+            "width": 54,
+            "height": 24
+          },
+          "ring": {
+            "x": 207.875,
+            "y": 93,
+            "width": 54,
+            "height": 24
+          },
+          "clippedBy": [],
+          "visible": true,
+          "uncovered": true
+        },
+        {
+          "phase": 2000,
+          "host": "[data-orchestrator-dock]",
+          "hostBounds": {
+            "x": 0,
+            "y": 0,
+            "width": 360,
+            "height": 900
+          },
+          "track": {
+            "x": 207.875,
+            "y": 93,
+            "width": 54,
+            "height": 24
+          },
+          "ring": {
+            "x": 207.875,
+            "y": 93,
+            "width": 54,
+            "height": 24
+          },
+          "clippedBy": [],
+          "visible": true,
+          "uncovered": true
+        },
+        {
+          "phase": 3000,
+          "host": "[data-orchestrator-dock]",
+          "hostBounds": {
+            "x": 0,
+            "y": 0,
+            "width": 360,
+            "height": 900
+          },
+          "track": {
+            "x": 207.875,
+            "y": 93,
+            "width": 54,
+            "height": 24
+          },
+          "ring": {
+            "x": 207.875,
+            "y": 93,
+            "width": 54,
+            "height": 24
+          },
+          "clippedBy": [],
+          "visible": true,
+          "uncovered": true
+        }
+      ],
+      "reduced": {
+        "host": "[data-orchestrator-dock]",
+        "hostBounds": {
+          "x": 0,
+          "y": 0,
+          "width": 360,
+          "height": 900
+        },
+        "track": {
+          "x": 207.875,
+          "y": 93,
+          "width": 54,
+          "height": 24
+        },
+        "ring": {
+          "x": 207.875,
+          "y": 93,
+          "width": 54,
+          "height": 24
+        },
+        "clippedBy": [],
+        "visible": true,
+        "uncovered": true
+      },
+      "ended": {
+        "host": "[data-orchestrator-dock]",
+        "hostBounds": {
+          "x": 0,
+          "y": 0,
+          "width": 360,
+          "height": 900
+        },
+        "track": {
+          "x": 207.875,
+          "y": 93,
+          "width": 54,
+          "height": 24
+        },
+        "ring": null,
+        "clippedBy": [],
+        "visible": true,
+        "uncovered": true
+      },
+      "pageErrors": []
+    },
+    {
+      "surface": "phone",
+      "host": "[data-mobile2-sheet=\"seat\"]",
+      "width": 390,
+      "scheme": "light",
+      "lang": "uk",
+      "ring": {
+        "x": 222,
+        "y": 467.5,
+        "width": 124,
+        "height": 36
+      },
+      "track": {
+        "x": 222,
+        "y": 467.5,
+        "width": 124,
+        "height": 36
+      },
+      "off": {
+        "host": "[data-mobile2-sheet=\"seat\"]",
+        "hostBounds": {
+          "x": 0,
+          "y": 280.5,
+          "width": 390,
+          "height": 563.5
+        },
+        "track": {
+          "x": 222,
+          "y": 467.5,
+          "width": 124,
+          "height": 36
+        },
+        "ring": null,
+        "clippedBy": [],
+        "visible": true,
+        "uncovered": true
+      },
+      "phases": [
+        {
+          "phase": 0,
+          "host": "[data-mobile2-sheet=\"seat\"]",
+          "hostBounds": {
+            "x": 0,
+            "y": 280.5,
+            "width": 390,
+            "height": 563.5
+          },
+          "track": {
+            "x": 222,
+            "y": 467.5,
+            "width": 124,
+            "height": 36
+          },
+          "ring": {
+            "x": 222,
+            "y": 467.5,
+            "width": 124,
+            "height": 36
+          },
+          "clippedBy": [],
+          "visible": true,
+          "uncovered": true
+        },
+        {
+          "phase": 1000,
+          "host": "[data-mobile2-sheet=\"seat\"]",
+          "hostBounds": {
+            "x": 0,
+            "y": 280.5,
+            "width": 390,
+            "height": 563.5
+          },
+          "track": {
+            "x": 222,
+            "y": 467.5,
+            "width": 124,
+            "height": 36
+          },
+          "ring": {
+            "x": 222,
+            "y": 467.5,
+            "width": 124,
+            "height": 36
+          },
+          "clippedBy": [],
+          "visible": true,
+          "uncovered": true
+        },
+        {
+          "phase": 2000,
+          "host": "[data-mobile2-sheet=\"seat\"]",
+          "hostBounds": {
+            "x": 0,
+            "y": 280.5,
+            "width": 390,
+            "height": 563.5
+          },
+          "track": {
+            "x": 222,
+            "y": 467.5,
+            "width": 124,
+            "height": 36
+          },
+          "ring": {
+            "x": 222,
+            "y": 467.5,
+            "width": 124,
+            "height": 36
+          },
+          "clippedBy": [],
+          "visible": true,
+          "uncovered": true
+        },
+        {
+          "phase": 3000,
+          "host": "[data-mobile2-sheet=\"seat\"]",
+          "hostBounds": {
+            "x": 0,
+            "y": 280.5,
+            "width": 390,
+            "height": 563.5
+          },
+          "track": {
+            "x": 222,
+            "y": 467.5,
+            "width": 124,
+            "height": 36
+          },
+          "ring": {
+            "x": 222,
+            "y": 467.5,
+            "width": 124,
+            "height": 36
+          },
+          "clippedBy": [],
+          "visible": true,
+          "uncovered": true
+        }
+      ],
+      "reduced": {
+        "host": "[data-mobile2-sheet=\"seat\"]",
+        "hostBounds": {
+          "x": 0,
+          "y": 280.5,
+          "width": 390,
+          "height": 563.5
+        },
+        "track": {
+          "x": 222,
+          "y": 467.5,
+          "width": 124,
+          "height": 36
+        },
+        "ring": {
+          "x": 222,
+          "y": 467.5,
+          "width": 124,
+          "height": 36
+        },
+        "clippedBy": [],
+        "visible": true,
+        "uncovered": true
+      },
+      "ended": {
+        "host": "[data-mobile2-sheet=\"seat\"]",
+        "hostBounds": {
+          "x": 0,
+          "y": 280.5,
+          "width": 390,
+          "height": 563.5
+        },
+        "track": {
+          "x": 222,
+          "y": 467.5,
+          "width": 124,
+          "height": 36
+        },
+        "ring": null,
+        "clippedBy": [],
+        "visible": true,
+        "uncovered": true
+      },
+      "pageErrors": []
+    },
+    {
+      "surface": "phone",
+      "host": "[data-mobile2-sheet=\"seat\"]",
+      "width": 390,
+      "scheme": "light",
+      "lang": "en",
+      "ring": {
+        "x": 222,
+        "y": 467.5,
+        "width": 124,
+        "height": 36
+      },
+      "track": {
+        "x": 222,
+        "y": 467.5,
+        "width": 124,
+        "height": 36
+      },
+      "off": {
+        "host": "[data-mobile2-sheet=\"seat\"]",
+        "hostBounds": {
+          "x": 0,
+          "y": 280.5,
+          "width": 390,
+          "height": 563.5
+        },
+        "track": {
+          "x": 222,
+          "y": 467.5,
+          "width": 124,
+          "height": 36
+        },
+        "ring": null,
+        "clippedBy": [],
+        "visible": true,
+        "uncovered": true
+      },
+      "phases": [
+        {
+          "phase": 0,
+          "host": "[data-mobile2-sheet=\"seat\"]",
+          "hostBounds": {
+            "x": 0,
+            "y": 280.5,
+            "width": 390,
+            "height": 563.5
+          },
+          "track": {
+            "x": 222,
+            "y": 467.5,
+            "width": 124,
+            "height": 36
+          },
+          "ring": {
+            "x": 222,
+            "y": 467.5,
+            "width": 124,
+            "height": 36
+          },
+          "clippedBy": [],
+          "visible": true,
+          "uncovered": true
+        },
+        {
+          "phase": 1000,
+          "host": "[data-mobile2-sheet=\"seat\"]",
+          "hostBounds": {
+            "x": 0,
+            "y": 280.5,
+            "width": 390,
+            "height": 563.5
+          },
+          "track": {
+            "x": 222,
+            "y": 467.5,
+            "width": 124,
+            "height": 36
+          },
+          "ring": {
+            "x": 222,
+            "y": 467.5,
+            "width": 124,
+            "height": 36
+          },
+          "clippedBy": [],
+          "visible": true,
+          "uncovered": true
+        },
+        {
+          "phase": 2000,
+          "host": "[data-mobile2-sheet=\"seat\"]",
+          "hostBounds": {
+            "x": 0,
+            "y": 280.5,
+            "width": 390,
+            "height": 563.5
+          },
+          "track": {
+            "x": 222,
+            "y": 467.5,
+            "width": 124,
+            "height": 36
+          },
+          "ring": {
+            "x": 222,
+            "y": 467.5,
+            "width": 124,
+            "height": 36
+          },
+          "clippedBy": [],
+          "visible": true,
+          "uncovered": true
+        },
+        {
+          "phase": 3000,
+          "host": "[data-mobile2-sheet=\"seat\"]",
+          "hostBounds": {
+            "x": 0,
+            "y": 280.5,
+            "width": 390,
+            "height": 563.5
+          },
+          "track": {
+            "x": 222,
+            "y": 467.5,
+            "width": 124,
+            "height": 36
+          },
+          "ring": {
+            "x": 222,
+            "y": 467.5,
+            "width": 124,
+            "height": 36
+          },
+          "clippedBy": [],
+          "visible": true,
+          "uncovered": true
+        }
+      ],
+      "reduced": {
+        "host": "[data-mobile2-sheet=\"seat\"]",
+        "hostBounds": {
+          "x": 0,
+          "y": 280.5,
+          "width": 390,
+          "height": 563.5
+        },
+        "track": {
+          "x": 222,
+          "y": 467.5,
+          "width": 124,
+          "height": 36
+        },
+        "ring": {
+          "x": 222,
+          "y": 467.5,
+          "width": 124,
+          "height": 36
+        },
+        "clippedBy": [],
+        "visible": true,
+        "uncovered": true
+      },
+      "ended": {
+        "host": "[data-mobile2-sheet=\"seat\"]",
+        "hostBounds": {
+          "x": 0,
+          "y": 280.5,
+          "width": 390,
+          "height": 563.5
+        },
+        "track": {
+          "x": 222,
+          "y": 467.5,
+          "width": 124,
+          "height": 36
+        },
+        "ring": null,
+        "clippedBy": [],
+        "visible": true,
+        "uncovered": true
+      },
+      "pageErrors": []
+    },
+    {
+      "surface": "phone",
+      "host": "[data-mobile2-sheet=\"seat\"]",
+      "width": 390,
+      "scheme": "dark",
+      "lang": "uk",
+      "ring": {
+        "x": 222,
+        "y": 467.5,
+        "width": 124,
+        "height": 36
+      },
+      "track": {
+        "x": 222,
+        "y": 467.5,
+        "width": 124,
+        "height": 36
+      },
+      "off": {
+        "host": "[data-mobile2-sheet=\"seat\"]",
+        "hostBounds": {
+          "x": 0,
+          "y": 280.5,
+          "width": 390,
+          "height": 563.5
+        },
+        "track": {
+          "x": 222,
+          "y": 467.5,
+          "width": 124,
+          "height": 36
+        },
+        "ring": null,
+        "clippedBy": [],
+        "visible": true,
+        "uncovered": true
+      },
+      "phases": [
+        {
+          "phase": 0,
+          "host": "[data-mobile2-sheet=\"seat\"]",
+          "hostBounds": {
+            "x": 0,
+            "y": 280.5,
+            "width": 390,
+            "height": 563.5
+          },
+          "track": {
+            "x": 222,
+            "y": 467.5,
+            "width": 124,
+            "height": 36
+          },
+          "ring": {
+            "x": 222,
+            "y": 467.5,
+            "width": 124,
+            "height": 36
+          },
+          "clippedBy": [],
+          "visible": true,
+          "uncovered": true
+        },
+        {
+          "phase": 1000,
+          "host": "[data-mobile2-sheet=\"seat\"]",
+          "hostBounds": {
+            "x": 0,
+            "y": 280.5,
+            "width": 390,
+            "height": 563.5
+          },
+          "track": {
+            "x": 222,
+            "y": 467.5,
+            "width": 124,
+            "height": 36
+          },
+          "ring": {
+            "x": 222,
+            "y": 467.5,
+            "width": 124,
+            "height": 36
+          },
+          "clippedBy": [],
+          "visible": true,
+          "uncovered": true
+        },
+        {
+          "phase": 2000,
+          "host": "[data-mobile2-sheet=\"seat\"]",
+          "hostBounds": {
+            "x": 0,
+            "y": 280.5,
+            "width": 390,
+            "height": 563.5
+          },
+          "track": {
+            "x": 222,
+            "y": 467.5,
+            "width": 124,
+            "height": 36
+          },
+          "ring": {
+            "x": 222,
+            "y": 467.5,
+            "width": 124,
+            "height": 36
+          },
+          "clippedBy": [],
+          "visible": true,
+          "uncovered": true
+        },
+        {
+          "phase": 3000,
+          "host": "[data-mobile2-sheet=\"seat\"]",
+          "hostBounds": {
+            "x": 0,
+            "y": 280.5,
+            "width": 390,
+            "height": 563.5
+          },
+          "track": {
+            "x": 222,
+            "y": 467.5,
+            "width": 124,
+            "height": 36
+          },
+          "ring": {
+            "x": 222,
+            "y": 467.5,
+            "width": 124,
+            "height": 36
+          },
+          "clippedBy": [],
+          "visible": true,
+          "uncovered": true
+        }
+      ],
+      "reduced": {
+        "host": "[data-mobile2-sheet=\"seat\"]",
+        "hostBounds": {
+          "x": 0,
+          "y": 280.5,
+          "width": 390,
+          "height": 563.5
+        },
+        "track": {
+          "x": 222,
+          "y": 467.5,
+          "width": 124,
+          "height": 36
+        },
+        "ring": {
+          "x": 222,
+          "y": 467.5,
+          "width": 124,
+          "height": 36
+        },
+        "clippedBy": [],
+        "visible": true,
+        "uncovered": true
+      },
+      "ended": {
+        "host": "[data-mobile2-sheet=\"seat\"]",
+        "hostBounds": {
+          "x": 0,
+          "y": 280.5,
+          "width": 390,
+          "height": 563.5
+        },
+        "track": {
+          "x": 222,
+          "y": 467.5,
+          "width": 124,
+          "height": 36
+        },
+        "ring": null,
+        "clippedBy": [],
+        "visible": true,
+        "uncovered": true
+      },
+      "pageErrors": []
+    },
+    {
+      "surface": "phone",
+      "host": "[data-mobile2-sheet=\"seat\"]",
+      "width": 390,
+      "scheme": "dark",
+      "lang": "en",
+      "ring": {
+        "x": 222,
+        "y": 467.5,
+        "width": 124,
+        "height": 36
+      },
+      "track": {
+        "x": 222,
+        "y": 467.5,
+        "width": 124,
+        "height": 36
+      },
+      "off": {
+        "host": "[data-mobile2-sheet=\"seat\"]",
+        "hostBounds": {
+          "x": 0,
+          "y": 280.5,
+          "width": 390,
+          "height": 563.5
+        },
+        "track": {
+          "x": 222,
+          "y": 467.5,
+          "width": 124,
+          "height": 36
+        },
+        "ring": null,
+        "clippedBy": [],
+        "visible": true,
+        "uncovered": true
+      },
+      "phases": [
+        {
+          "phase": 0,
+          "host": "[data-mobile2-sheet=\"seat\"]",
+          "hostBounds": {
+            "x": 0,
+            "y": 280.5,
+            "width": 390,
+            "height": 563.5
+          },
+          "track": {
+            "x": 222,
+            "y": 467.5,
+            "width": 124,
+            "height": 36
+          },
+          "ring": {
+            "x": 222,
+            "y": 467.5,
+            "width": 124,
+            "height": 36
+          },
+          "clippedBy": [],
+          "visible": true,
+          "uncovered": true
+        },
+        {
+          "phase": 1000,
+          "host": "[data-mobile2-sheet=\"seat\"]",
+          "hostBounds": {
+            "x": 0,
+            "y": 280.5,
+            "width": 390,
+            "height": 563.5
+          },
+          "track": {
+            "x": 222,
+            "y": 467.5,
+            "width": 124,
+            "height": 36
+          },
+          "ring": {
+            "x": 222,
+            "y": 467.5,
+            "width": 124,
+            "height": 36
+          },
+          "clippedBy": [],
+          "visible": true,
+          "uncovered": true
+        },
+        {
+          "phase": 2000,
+          "host": "[data-mobile2-sheet=\"seat\"]",
+          "hostBounds": {
+            "x": 0,
+            "y": 280.5,
+            "width": 390,
+            "height": 563.5
+          },
+          "track": {
+            "x": 222,
+            "y": 467.5,
+            "width": 124,
+            "height": 36
+          },
+          "ring": {
+            "x": 222,
+            "y": 467.5,
+            "width": 124,
+            "height": 36
+          },
+          "clippedBy": [],
+          "visible": true,
+          "uncovered": true
+        },
+        {
+          "phase": 3000,
+          "host": "[data-mobile2-sheet=\"seat\"]",
+          "hostBounds": {
+            "x": 0,
+            "y": 280.5,
+            "width": 390,
+            "height": 563.5
+          },
+          "track": {
+            "x": 222,
+            "y": 467.5,
+            "width": 124,
+            "height": 36
+          },
+          "ring": {
+            "x": 222,
+            "y": 467.5,
+            "width": 124,
+            "height": 36
+          },
+          "clippedBy": [],
+          "visible": true,
+          "uncovered": true
+        }
+      ],
+      "reduced": {
+        "host": "[data-mobile2-sheet=\"seat\"]",
+        "hostBounds": {
+          "x": 0,
+          "y": 280.5,
+          "width": 390,
+          "height": 563.5
+        },
+        "track": {
+          "x": 222,
+          "y": 467.5,
+          "width": 124,
+          "height": 36
+        },
+        "ring": {
+          "x": 222,
+          "y": 467.5,
+          "width": 124,
+          "height": 36
+        },
+        "clippedBy": [],
+        "visible": true,
+        "uncovered": true
+      },
+      "ended": {
+        "host": "[data-mobile2-sheet=\"seat\"]",
+        "hostBounds": {
+          "x": 0,
+          "y": 280.5,
+          "width": 390,
+          "height": 563.5
+        },
+        "track": {
+          "x": 222,
+          "y": 467.5,
+          "width": 124,
+          "height": 36
+        },
+        "ring": null,
+        "clippedBy": [],
+        "visible": true,
+        "uncovered": true
+      },
+      "pageErrors": []
+    }
+  ],
+  "frames": [
+    "1440-dark-en-dock-360-draft.png",
+    "1440-dark-en-dock-360-ended.png",
+    "1440-dark-en-dock-360-host-off.png",
+    "1440-dark-en-dock-360-host-on.png",
+    "1440-dark-en-dock-360-host-reduced.png",
+    "1440-dark-en-dock-360-off.png",
+    "1440-dark-en-dock-360-on.png",
+    "1440-dark-en-dock-360-reduced.png",
+    "1440-dark-en-dock-360-settings.png",
+    "1440-dark-en-dock-360-snake-0.png",
+    "1440-dark-en-dock-360-snake-1000.png",
+    "1440-dark-en-dock-360-snake-2000.png",
+    "1440-dark-en-dock-360-snake-3000.png",
+    "1440-dark-en-dock-360-undo.png",
+    "1440-dark-en-dock-360-unlimited-status.png",
+    "1440-dark-en-dock-360-unlimited.png",
+    "1440-dark-en-dock-440-draft.png",
+    "1440-dark-en-dock-440-ended.png",
+    "1440-dark-en-dock-440-host-off.png",
+    "1440-dark-en-dock-440-host-on.png",
+    "1440-dark-en-dock-440-host-reduced.png",
+    "1440-dark-en-dock-440-off.png",
+    "1440-dark-en-dock-440-on.png",
+    "1440-dark-en-dock-440-reduced.png",
+    "1440-dark-en-dock-440-settings.png",
+    "1440-dark-en-dock-440-snake-0.png",
+    "1440-dark-en-dock-440-snake-1000.png",
+    "1440-dark-en-dock-440-snake-2000.png",
+    "1440-dark-en-dock-440-snake-3000.png",
+    "1440-dark-en-dock-440-undo.png",
+    "1440-dark-en-dock-440-unlimited-status.png",
+    "1440-dark-en-dock-440-unlimited.png",
+    "1440-dark-en-draft.png",
+    "1440-dark-en-ended.png",
+    "1440-dark-en-off.png",
+    "1440-dark-en-on.png",
+    "1440-dark-en-reduced.png",
+    "1440-dark-en-settings.png",
+    "1440-dark-en-snake-0.png",
+    "1440-dark-en-snake-1000.png",
+    "1440-dark-en-snake-2000.png",
+    "1440-dark-en-snake-3000.png",
+    "1440-dark-en-undo.png",
+    "1440-dark-en-unlimited-status.png",
+    "1440-dark-en-unlimited.png",
+    "1440-dark-uk-dock-360-draft.png",
+    "1440-dark-uk-dock-360-ended.png",
+    "1440-dark-uk-dock-360-host-off.png",
+    "1440-dark-uk-dock-360-host-on.png",
+    "1440-dark-uk-dock-360-host-reduced.png",
+    "1440-dark-uk-dock-360-off.png",
+    "1440-dark-uk-dock-360-on.png",
+    "1440-dark-uk-dock-360-reduced.png",
+    "1440-dark-uk-dock-360-settings.png",
+    "1440-dark-uk-dock-360-snake-0.png",
+    "1440-dark-uk-dock-360-snake-1000.png",
+    "1440-dark-uk-dock-360-snake-2000.png",
+    "1440-dark-uk-dock-360-snake-3000.png",
+    "1440-dark-uk-dock-360-undo.png",
+    "1440-dark-uk-dock-360-unlimited-status.png",
+    "1440-dark-uk-dock-360-unlimited.png",
+    "1440-dark-uk-dock-440-draft.png",
+    "1440-dark-uk-dock-440-ended.png",
+    "1440-dark-uk-dock-440-host-off.png",
+    "1440-dark-uk-dock-440-host-on.png",
+    "1440-dark-uk-dock-440-host-reduced.png",
+    "1440-dark-uk-dock-440-off.png",
+    "1440-dark-uk-dock-440-on.png",
+    "1440-dark-uk-dock-440-reduced.png",
+    "1440-dark-uk-dock-440-settings.png",
+    "1440-dark-uk-dock-440-snake-0.png",
+    "1440-dark-uk-dock-440-snake-1000.png",
+    "1440-dark-uk-dock-440-snake-2000.png",
+    "1440-dark-uk-dock-440-snake-3000.png",
+    "1440-dark-uk-dock-440-undo.png",
+    "1440-dark-uk-dock-440-unlimited-status.png",
+    "1440-dark-uk-dock-440-unlimited.png",
+    "1440-dark-uk-draft.png",
+    "1440-dark-uk-ended.png",
+    "1440-dark-uk-off.png",
+    "1440-dark-uk-on.png",
+    "1440-dark-uk-reduced.png",
+    "1440-dark-uk-settings.png",
+    "1440-dark-uk-snake-0.png",
+    "1440-dark-uk-snake-1000.png",
+    "1440-dark-uk-snake-2000.png",
+    "1440-dark-uk-snake-3000.png",
+    "1440-dark-uk-undo.png",
+    "1440-dark-uk-unlimited-status.png",
+    "1440-dark-uk-unlimited.png",
+    "1440-light-en-dock-360-draft.png",
+    "1440-light-en-dock-360-ended.png",
+    "1440-light-en-dock-360-host-off.png",
+    "1440-light-en-dock-360-host-on.png",
+    "1440-light-en-dock-360-host-reduced.png",
+    "1440-light-en-dock-360-off.png",
+    "1440-light-en-dock-360-on.png",
+    "1440-light-en-dock-360-reduced.png",
+    "1440-light-en-dock-360-settings.png",
+    "1440-light-en-dock-360-snake-0.png",
+    "1440-light-en-dock-360-snake-1000.png",
+    "1440-light-en-dock-360-snake-2000.png",
+    "1440-light-en-dock-360-snake-3000.png",
+    "1440-light-en-dock-360-undo.png",
+    "1440-light-en-dock-360-unlimited-status.png",
+    "1440-light-en-dock-360-unlimited.png",
+    "1440-light-en-dock-440-draft.png",
+    "1440-light-en-dock-440-ended.png",
+    "1440-light-en-dock-440-host-off.png",
+    "1440-light-en-dock-440-host-on.png",
+    "1440-light-en-dock-440-host-reduced.png",
+    "1440-light-en-dock-440-off.png",
+    "1440-light-en-dock-440-on.png",
+    "1440-light-en-dock-440-reduced.png",
+    "1440-light-en-dock-440-settings.png",
+    "1440-light-en-dock-440-snake-0.png",
+    "1440-light-en-dock-440-snake-1000.png",
+    "1440-light-en-dock-440-snake-2000.png",
+    "1440-light-en-dock-440-snake-3000.png",
+    "1440-light-en-dock-440-undo.png",
+    "1440-light-en-dock-440-unlimited-status.png",
+    "1440-light-en-dock-440-unlimited.png",
+    "1440-light-en-draft.png",
+    "1440-light-en-ended.png",
+    "1440-light-en-off.png",
+    "1440-light-en-on.png",
+    "1440-light-en-reduced.png",
+    "1440-light-en-settings.png",
+    "1440-light-en-snake-0.png",
+    "1440-light-en-snake-1000.png",
+    "1440-light-en-snake-2000.png",
+    "1440-light-en-snake-3000.png",
+    "1440-light-en-undo.png",
+    "1440-light-en-unlimited-status.png",
+    "1440-light-en-unlimited.png",
+    "1440-light-uk-dock-360-draft.png",
+    "1440-light-uk-dock-360-ended.png",
+    "1440-light-uk-dock-360-host-off.png",
+    "1440-light-uk-dock-360-host-on.png",
+    "1440-light-uk-dock-360-host-reduced.png",
+    "1440-light-uk-dock-360-off.png",
+    "1440-light-uk-dock-360-on.png",
+    "1440-light-uk-dock-360-reduced.png",
+    "1440-light-uk-dock-360-settings.png",
+    "1440-light-uk-dock-360-snake-0.png",
+    "1440-light-uk-dock-360-snake-1000.png",
+    "1440-light-uk-dock-360-snake-2000.png",
+    "1440-light-uk-dock-360-snake-3000.png",
+    "1440-light-uk-dock-360-undo.png",
+    "1440-light-uk-dock-360-unlimited-status.png",
+    "1440-light-uk-dock-360-unlimited.png",
+    "1440-light-uk-dock-440-draft.png",
+    "1440-light-uk-dock-440-ended.png",
+    "1440-light-uk-dock-440-host-off.png",
+    "1440-light-uk-dock-440-host-on.png",
+    "1440-light-uk-dock-440-host-reduced.png",
+    "1440-light-uk-dock-440-off.png",
+    "1440-light-uk-dock-440-on.png",
+    "1440-light-uk-dock-440-reduced.png",
+    "1440-light-uk-dock-440-settings.png",
+    "1440-light-uk-dock-440-snake-0.png",
+    "1440-light-uk-dock-440-snake-1000.png",
+    "1440-light-uk-dock-440-snake-2000.png",
+    "1440-light-uk-dock-440-snake-3000.png",
+    "1440-light-uk-dock-440-undo.png",
+    "1440-light-uk-dock-440-unlimited-status.png",
+    "1440-light-uk-dock-440-unlimited.png",
+    "1440-light-uk-draft.png",
+    "1440-light-uk-ended.png",
+    "1440-light-uk-off.png",
+    "1440-light-uk-on.png",
+    "1440-light-uk-reduced.png",
+    "1440-light-uk-settings.png",
+    "1440-light-uk-snake-0.png",
+    "1440-light-uk-snake-1000.png",
+    "1440-light-uk-snake-2000.png",
+    "1440-light-uk-snake-3000.png",
+    "1440-light-uk-undo.png",
+    "1440-light-uk-unlimited-status.png",
+    "1440-light-uk-unlimited.png",
+    "390-dark-en-draft.png",
+    "390-dark-en-ended.png",
+    "390-dark-en-off.png",
+    "390-dark-en-on.png",
+    "390-dark-en-reduced.png",
+    "390-dark-en-settings.png",
+    "390-dark-en-snake-0.png",
+    "390-dark-en-snake-1000.png",
+    "390-dark-en-snake-2000.png",
+    "390-dark-en-snake-3000.png",
+    "390-dark-en-undo.png",
+    "390-dark-en-unlimited-status.png",
+    "390-dark-en-unlimited.png",
+    "390-dark-uk-draft.png",
+    "390-dark-uk-ended.png",
+    "390-dark-uk-off.png",
+    "390-dark-uk-on.png",
+    "390-dark-uk-reduced.png",
+    "390-dark-uk-settings.png",
+    "390-dark-uk-snake-0.png",
+    "390-dark-uk-snake-1000.png",
+    "390-dark-uk-snake-2000.png",
+    "390-dark-uk-snake-3000.png",
+    "390-dark-uk-undo.png",
+    "390-dark-uk-unlimited-status.png",
+    "390-dark-uk-unlimited.png",
+    "390-light-en-draft.png",
+    "390-light-en-ended.png",
+    "390-light-en-off.png",
+    "390-light-en-on.png",
+    "390-light-en-reduced.png",
+    "390-light-en-settings.png",
+    "390-light-en-snake-0.png",
+    "390-light-en-snake-1000.png",
+    "390-light-en-snake-2000.png",
+    "390-light-en-snake-3000.png",
+    "390-light-en-undo.png",
+    "390-light-en-unlimited-status.png",
+    "390-light-en-unlimited.png",
+    "390-light-uk-draft.png",
+    "390-light-uk-ended.png",
+    "390-light-uk-off.png",
+    "390-light-uk-on.png",
+    "390-light-uk-reduced.png",
+    "390-light-uk-settings.png",
+    "390-light-uk-snake-0.png",
+    "390-light-uk-snake-1000.png",
+    "390-light-uk-snake-2000.png",
+    "390-light-uk-snake-3000.png",
+    "390-light-uk-undo.png",
+    "390-light-uk-unlimited-status.png",
+    "390-light-uk-unlimited.png"
+  ],
+  "inspection": [
+    "Viewed original frames and comparison sheets for both widths, themes and application locales.",
+    "Saved and unlimited settings, undo instructions and all three form-settlement statuses remain readable in the scrolling panel.",
+    "The snake follows the measured chip outline at all four sought phases; enlarged crops show a smooth tail without visible seams.",
+    "Reduced motion shows a static violet outline. Off and ended frames show no autonomy ring.",
+    "2026-10-15: Viewed all eight dock host crops in off, active and reduced-motion states, plus the full 1440px page frames in light Ukrainian at 360px and dark English at 440px.",
+    "Viewed all four sought phases for every dock width, theme and locale at 3x. The moving segment stays aligned with the rounded track, with no visible clipping or seams; reduced motion draws the full static outline.",
+    "The 440px dock retains the 112x24 cadence track; the 360px dock uses the 54x24 knob track. Both are visible and unobstructed, with matching ring position and size. Off and ended measurements have no ring."
+  ],
+  "hosts": {
+    "board": "[data-kanban-seat]:not(.side)",
+    "dock-440": "[data-orchestrator-dock]",
+    "dock-360": "[data-orchestrator-dock]",
+    "phone": "[data-mobile2-sheet=\"seat\"]"
+  }
+}

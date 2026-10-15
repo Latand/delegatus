@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
+import { scrubTelegramDiagnostic } from "@/lib/telegram/bot/diagnostics";
 import { statePath } from "@/lib/configDir";
 import { writeJsonDurably } from "@/lib/state/durableJson";
 import { FileTransactionBusyError, withFileTransactionSync } from "@/lib/state/fileTransaction";
@@ -232,6 +233,7 @@ function normalizeTelegram(value: unknown): BridgeReportTelegram | undefined {
     state: raw.state,
     ...(Array.isArray(raw.messageIds) ? { messageIds: raw.messageIds.filter((id): id is number => Number.isInteger(id)) } : {}),
     ...(typeof raw.code === "string" ? { code: raw.code } : {}),
+    ...(typeof raw.message === "string" ? { message: scrubTelegramDiagnostic(raw.message) } : {}),
     attempts: Number.isInteger(raw.attempts) && (raw.attempts as number) >= 0 ? raw.attempts as number : 0,
     at: raw.at,
   };
@@ -942,17 +944,18 @@ export function appendBridgeReports(
  */
 export function recordBridgeReportTelegram(
   id: string,
-  outcome: { state: BridgeReportTelegramState; messageIds?: readonly number[]; code?: string | null; at: string; attempted?: boolean },
+  outcome: { state: BridgeReportTelegramState; messageIds?: readonly number[]; code?: string | null; message?: string; at: string; attempted?: boolean },
 ): BridgeReportV1 | null {
   return mutateLog((file) => {
     const report = file.reports.find((candidate) => candidate.id === id);
     if (!report?.telegram) return { result: null, changed: false };
-    const { code: _previous, ...held } = report.telegram;
+    const { code: _previous, message: _previousMessage, ...held } = report.telegram;
     report.telegram = {
       ...held,
       state: outcome.state,
       ...(outcome.messageIds?.length ? { messageIds: [...outcome.messageIds] } : held.messageIds ? { messageIds: held.messageIds } : {}),
       ...(outcome.code ? { code: outcome.code } : {}),
+      ...(outcome.message ? { message: scrubTelegramDiagnostic(outcome.message) } : {}),
       attempts: held.attempts + (outcome.attempted === false ? 0 : 1),
       at: outcome.at,
     };

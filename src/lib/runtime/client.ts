@@ -1,3 +1,4 @@
+import { performanceSpans } from "@/lib/performanceSpans";
 import type { NativeQueueCompactedProof, NativeQueueCompactedSettlement, NativeQueueRecord, NativeQueueTransition } from "./nativeQueueContracts";
 import net from "node:net";
 import fs from "node:fs";
@@ -10,6 +11,7 @@ import type { RuntimeDeliveryAction, RuntimeDeliveryActionClaim, RuntimeEventInp
 import { RUNTIME_RPC_DEADLINE_MS, RUNTIME_SNAPSHOT_DEADLINE_MS, VIEWER_DEPLOYMENT_DEADLINE_MS } from "./deadlines";
 import { runtimeHostSocket } from "./flags";
 import { recordBlockingWait } from "@/lib/blockingWaits";
+import { parseSnapshotReadRequest, projectSnapshotRead, type RuntimeSnapshotReadKind, type RuntimeSnapshotReads } from "./snapshotReads";
 
 // The snapshot frame carries every hosted session, and a hosted session keeps
 // its liveTurn text until its host dies — idle hosts never retire (#747), so
@@ -110,6 +112,7 @@ export function isRuntimeHostTransportFailure(error: unknown): boolean {
 }
 
 export interface RuntimeHostClient {
+  readSnapshot?<K extends RuntimeSnapshotReadKind>(kind: K, conversationIds?: readonly string[], signal?: AbortSignal): Promise<RuntimeSnapshotReads[K]>;
   /** Stable listener identity; reconnecting to the same socket preserves it. */
   startupGeneration?(): Promise<string | null>;
   nativeQueueRead?(conversationId: string): Promise<NativeQueueRecord[]>;
@@ -118,6 +121,7 @@ export interface RuntimeHostClient {
       Answers the settled entry; there is no operation receipt to answer. */
   nativeQueueSettleCompacted?(request: NativeQueueCompactedProof): Promise<NativeQueueCompactedSettlement>;
   readSession?(identity: RuntimeSessionRead, options?: { timeoutMs?: number }): Promise<RuntimeSession | null>;
+  filesRevision?(): Promise<number>;
   snapshot(signal?: AbortSignal, options?: { voiceBodiesFor?: string[]; timeoutMs?: number }): Promise<RuntimeSnapshot>;
   /** The same snapshot as the UTF-8 JSON the host encoded, for a caller that
       only forwards it. Optional: a client without it answers `snapshot`. */
@@ -190,6 +194,21 @@ export class UnixRuntimeHostClient implements RuntimeHostClient {
     // Startup can wait for a slow host without changing interactive deadlines
     // or sending the caller's transport policy over the wire.
     return this.call("session-read", { ...identity }, options?.timeoutMs ?? this.timeoutMs) as Promise<RuntimeSession | null>;
+  }
+  async filesRevision(): Promise<number> {
+    try {
+      const revision = await this.call("files-revision");
+      if (typeof revision !== "number" || !Number.isSafeInteger(revision) || revision < 0) {
+        throw new RuntimeHostUnavailableError("runtime host returned invalid files revision");
+      }
+      return revision;
+    }
+    catch (error) {
+      // A previous host has no scalar method. A timeout or any other refusal
+      // remains a refusal; it never starts another population request.
+      if (!(error instanceof RuntimeHostUnavailableError) || error.message !== "runtime request method is unsupported") throw error;
+      return (await this.snapshot(undefined, { voiceBodiesFor: [] })).filesRevision;
+    }
   }
   snapshot(signal?: AbortSignal, options?: { voiceBodiesFor?: string[]; timeoutMs?: number }): Promise<RuntimeSnapshot> {
     // The deadline belongs to this caller, never to the wire protocol.
@@ -265,6 +284,11 @@ export class UnixRuntimeHostClient implements RuntimeHostClient {
     return this.call("viewer-deployment-find", { idempotencyKey }, this.deploymentTimeoutMs) as Promise<ViewerDeploymentStatus | null>;
   }
   runtimeHostHealth(): Promise<RuntimeHostHealth> { return this.call("runtime-host-health") as Promise<RuntimeHostHealth>; }
+  async readSnapshot<K extends RuntimeSnapshotReadKind>(kind: K, conversationIds?: readonly string[], signal?: AbortSignal): Promise<RuntimeSnapshotReads[K]> {
+    const snapshotRead = parseSnapshotReadRequest({ version: 1, kind, ...(conversationIds ? { conversationIds } : {}) });
+    const result = await this.call("snapshot", { snapshotRead, voiceBodiesFor: [] }, this.snapshotTimeoutMs, signal);
+    return projectSnapshotRead(result, kind, conversationIds);
+  }
   startupGeneration(): Promise<string | null> { return this.deploymentListGeneration(); }
   private async deploymentListGeneration(): Promise<string | null> {
     try {
@@ -323,6 +347,8 @@ export class UnixRuntimeHostClient implements RuntimeHostClient {
   private call(method: RuntimeSocketRequest["method"], params?: Record<string, unknown>, timeoutMs = this.timeoutMs, signal?: AbortSignal, encoded = false): Promise<unknown> {
     return new Promise((resolve, reject) => {
       const request: RuntimeSocketRequest = { id: crypto.randomUUID(), method, ...(params ? { params } : {}) };
+      performanceSpans.request(request.id, method, timeoutMs);
+      performanceSpans.event("rpc.dispatch", request.id);
       const socket = net.createConnection(this.socketPath);
       // Decode across chunk boundaries; a split multibyte character belongs
       // to the same session response and must survive a large frame intact.
@@ -335,12 +361,14 @@ export class UnixRuntimeHostClient implements RuntimeHostClient {
       let settled = false;
       const timer = setTimeout(() => {
         const elapsedMs = performance.now() - startedAt;
+        performanceSpans.event("rpc.deadline", request.id, 0, true);
         console.error(`[runtime host] request timed out method=${method} elapsedMs=${Math.max(0, Math.round(elapsedMs))}`);
         finish(new RuntimeHostUnavailableError("runtime host request timed out"), undefined, true, elapsedMs);
       }, timeoutMs);
       const finish = (error?: Error, result?: unknown, timeout = false, elapsedMs = performance.now() - startedAt, cancelled = false) => {
         if (settled) return;
         settled = true;
+        performanceSpans.event("rpc.finish", request.id, frameBytes, Boolean(error));
         clearTimeout(timer);
         signal?.removeEventListener("abort", onAbort);
         socket.destroy();
@@ -359,6 +387,10 @@ export class UnixRuntimeHostClient implements RuntimeHostClient {
       signal?.addEventListener("abort", onAbort, { once: true });
       socket.once("error", () => finish(new RuntimeHostUnavailableError("runtime host is unavailable")));
       socket.on("data", (chunk: Buffer | string) => {
+        if (firstByteAt === null) {
+          firstByteAt = method === "snapshot" ? performance.now() : 0;
+          performanceSpans.event("rpc.first-byte", request.id);
+        }
         if (encoded) {
           const bytes = chunk as Buffer;
           chunks.push(bytes);
@@ -399,7 +431,8 @@ export class UnixRuntimeHostClient implements RuntimeHostClient {
         const newline = frame.length - text.length + newlineInChunk;
         try {
           const parseStartedAt = method === "snapshot" ? performance.now() : 0;
-          const response = JSON.parse(frame.slice(0, newline)) as RuntimeSocketResponse;
+          performanceSpans.event("rpc.frame", request.id, frameBytes);
+          const response = performanceSpans.correlate(request.id, () => performanceSpans.sync("runtime.parse", () => JSON.parse(frame.slice(0, newline)), 0, frameBytes)) as RuntimeSocketResponse;
           if (method === "snapshot") {
             /* Transfer is first byte to the frame's end; the host's own
                collection and serialization are recorded where they run. */
@@ -412,7 +445,11 @@ export class UnixRuntimeHostClient implements RuntimeHostClient {
           finish(new RuntimeHostUnavailableError("runtime host returned invalid JSON"));
         }
       });
-      socket.once("connect", () => socket.write(JSON.stringify(request) + "\n"));
+      socket.once("connect", () => {
+        performanceSpans.event("rpc.connect", request.id);
+        socket.write(JSON.stringify(request) + "\n");
+        performanceSpans.event("rpc.send", request.id);
+      });
     });
   }
 }

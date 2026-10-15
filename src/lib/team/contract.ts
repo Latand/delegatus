@@ -172,6 +172,8 @@ export interface MessageAuthorClaim {
 export interface TeamModule {
   teamMode(): TeamMode;
   teamActor(req: RequestHeaders): TeamActor;
+  /** A live Telegram sign-in matching the independently paired owner. */
+  authenticatedOwner(req: RequestHeaders, telegramUserId: string | undefined): boolean;
   /** Whether the access key must be kept from this caller: on a team install, anyone but the owner, agents and Viewer services. */
   accessKeyWithheld(req: RequestHeaders): boolean;
   /** The 401 a human write gets in team mode without a session, or null. */
@@ -207,6 +209,7 @@ export interface TeamModule {
 export const nullTeam: TeamModule = {
   teamMode: () => "solo",
   teamActor: () => ({ kind: "operator" }),
+  authenticatedOwner: () => false,
   accessKeyWithheld: () => false,
   refuseAnonymous: () => null,
   recordTeamEvent: () => {},

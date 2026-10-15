@@ -303,7 +303,7 @@ test("a runtime-host transport failure after reservation retries the same attemp
     spawnCalls += 1;
     clientAttemptIds.push(input.clientAttemptId);
     if (spawnCalls === 1) {
-      onReserved({ launchId: "launch-host-1", conversationId: "conversation_host_1" });
+      await onReserved({ launchId: "launch-host-1", conversationId: "conversation_host_1" });
       receipts.set("launch-host-1", failedReceipt("launch-host-1", "conversation_host_1", HOST_UNAVAILABLE));
       throw new Error(HOST_UNAVAILABLE);
     }
@@ -369,7 +369,7 @@ test.each([
   let spawnCalls = 0;
   h.ports.spawnAgent = async (_input, onReserved) => {
     spawnCalls += 1;
-    onReserved({ launchId: "launch-host-unknown", conversationId: "conversation_host_unknown" });
+    await onReserved({ launchId: "launch-host-unknown", conversationId: "conversation_host_unknown" });
     throw new Error(HOST_UNAVAILABLE);
   };
   h.ports.spawnReceipt = () => receipt;
@@ -404,7 +404,7 @@ test("runtime-host retries are bounded and park with the wait they spent (#1678)
   let spawnCalls = 0;
   h.ports.spawnAgent = async (_input, onReserved) => {
     spawnCalls += 1;
-    onReserved({ launchId: `launch-host-${spawnCalls}`, conversationId: `conversation_host_${spawnCalls}` });
+    await onReserved({ launchId: `launch-host-${spawnCalls}`, conversationId: `conversation_host_${spawnCalls}` });
     throw new Error(HOST_UNAVAILABLE);
   };
   h.ports.spawnReceipt = (launchId) => failedReceipt(launchId, launchId.replace("launch-host-", "conversation_host_"), HOST_UNAVAILABLE);
@@ -454,7 +454,7 @@ test("a busy account mutation after reservation retries once its receipt has fai
   h.ports.spawnAgent = async (input, onReserved) => {
     spawnCalls += 1;
     if (spawnCalls === 1) {
-      onReserved({ launchId: "launch-busy-1", conversationId: "conversation_busy_1" });
+      await onReserved({ launchId: "launch-busy-1", conversationId: "conversation_busy_1" });
       throw new AccountMutationBusyError("account mutation is busy in this process; retry shortly");
     }
     return baseSpawn(input, onReserved);
@@ -725,7 +725,7 @@ test("an unverified first delivery retries when the stage transcript was never c
   h.ports.spawnAgent = async (input, onReserved) => {
     spawnCalls += 1;
     if (spawnCalls === 1) {
-      onReserved({ launchId: "launch-unverified", conversationId: "conversation_unverified" });
+      await onReserved({ launchId: "launch-unverified", conversationId: "conversation_unverified" });
       throw new Error(UNVERIFIED_DELIVERY);
     }
     return baseSpawn(input, onReserved);
@@ -784,7 +784,7 @@ test("an unverified first delivery never sends a second prompt where the stage t
   let spawnCalls = 0;
   h.ports.spawnAgent = async (_input, onReserved) => {
     spawnCalls += 1;
-    onReserved({ launchId: "launch-unverified-live", conversationId: "conversation_unverified_live" });
+    await onReserved({ launchId: "launch-unverified-live", conversationId: "conversation_unverified_live" });
     throw new Error(UNVERIFIED_DELIVERY);
   };
   h.ports.spawnReceipt = (launchId) => ({
@@ -851,7 +851,7 @@ test("a failed receipt that settles before its retry claim parks instead of re-d
   let spawnCalls = 0;
   h.ports.spawnAgent = async (_input, onReserved) => {
     spawnCalls += 1;
-    onReserved({ launchId: "launch-host-settled", conversationId: "conversation_host_settled" });
+    await onReserved({ launchId: "launch-host-settled", conversationId: "conversation_host_settled" });
     throw new Error(HOST_UNAVAILABLE);
   };
   h.ports.spawnReceipt = () => failedReceipt("launch-host-settled", "conversation_host_settled", HOST_UNAVAILABLE);
@@ -1121,7 +1121,7 @@ test("a failed receipt that staged a session still retries a read-only stage (#1
   h.ports.spawnAgent = async (input, onReserved) => {
     spawnCalls += 1;
     if (spawnCalls === 1) {
-      onReserved({ launchId: "launch-staged-ro", conversationId: "conversation_staged_ro" });
+      await onReserved({ launchId: "launch-staged-ro", conversationId: "conversation_staged_ro" });
       throw new Error(HOST_UNAVAILABLE);
     }
     return baseSpawn(input, onReserved);
@@ -1236,7 +1236,7 @@ test("a busy lock a minute into a runtime-host wait keeps the host's ten-minute 
   h.ports.spawnAgent = async (input, onReserved) => {
     spawnCalls += 1;
     if (spawnCalls <= 7) {
-      onReserved({ launchId: `launch-host-${spawnCalls}`, conversationId: `conversation_host_${spawnCalls}` });
+      await onReserved({ launchId: `launch-host-${spawnCalls}`, conversationId: `conversation_host_${spawnCalls}` });
       throw new Error(HOST_UNAVAILABLE);
     }
     if (spawnCalls === 8) throw new AccountMutationBusyError("account mutation is busy in this process; retry shortly");
@@ -1355,7 +1355,7 @@ test("a retry after an in-activation handshake retry never reuses a client attem
     clientAttemptIds.push(input.clientAttemptId);
     if (spawnCalls === 1) throw new Error("structured initial message was not acknowledged");
     if (spawnCalls === 2) {
-      onReserved({ launchId: "launch-host-2", conversationId: "conversation_host_2" });
+      await onReserved({ launchId: "launch-host-2", conversationId: "conversation_host_2" });
       throw new Error(HOST_UNAVAILABLE);
     }
     return baseSpawn(input, onReserved);
@@ -1417,7 +1417,7 @@ test("a spawn call is counted before it is made, so a restart that interrupts it
     countedBeforeCall.push(loadPipelines()[0]!.runs[0]!.attempts[0]!.spawnCalls);
     if (spawnCalls === 1) throw new Error("structured initial message was not acknowledged");
     if (spawnCalls === 2) {
-      onReserved({ launchId: "launch-host-2", conversationId: "conversation_host_2" });
+      await onReserved({ launchId: "launch-host-2", conversationId: "conversation_host_2" });
       throw new Error(HOST_UNAVAILABLE);
     }
     return baseSpawn(input, onReserved);
@@ -2076,7 +2076,7 @@ test("concurrent controllers probe outside the lease and reject a cancelled atte
   await started;
   const second = tickPipelines([], { ...f.h.ports });
   const { withPipelineMutation } = await import("./store");
-  await withPipelineMutation((pipelines, persist) => { pipelines[0]!.state = "paused"; persist(); });
+  await withPipelineMutation(async (pipelines, persist) => { pipelines[0]!.state = "paused"; await persist(); });
   release();
   await Promise.all([first, second]);
   expect(loadPipelines()[0]!.state).toBe("paused");

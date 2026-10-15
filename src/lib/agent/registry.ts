@@ -1,3 +1,4 @@
+import { performanceSpans } from "@/lib/performanceSpans";
 import { normalizeHostMemory, type HostMemoryState } from "@/lib/runtime/agentMemoryState";
 import { normalizeHostEndCause, type HostEndCause } from "@/lib/runtime/hostEndCause";
 import { recordBlockingWait, withWaitCorrelation, type BlockingWaitCorrelation } from "@/lib/blockingWaits";
@@ -5515,8 +5516,8 @@ export class AgentRegistry {
   }
 
   private readKeyed<T>(reader: (file: RegistryFile) => T): T {
-    return this.sqliteStore && (this.sqliteMode === "read" || this.sqliteMode === "sqlite")
-      ? this.sqliteStore.read(reader) : reader(this.readOnlySnapshot());
+    return performanceSpans.sync("registry.keyed", () => this.sqliteStore && (this.sqliteMode === "read" || this.sqliteMode === "sqlite")
+      ? this.sqliteStore.read(reader) : reader(this.readOnlySnapshot()));
   }
 
   /** A detached delivery view for one conversation, including historical aliases. */
@@ -7770,18 +7771,22 @@ export class AgentRegistry {
   /** Why a claimed write was refused: true when the caller still owns the
       writer fence and only a captured termination tree holds the row. */
   structuredHostWriteHeldByTermination(key: SessionKey, claimOwner: string, claimEpoch: number): boolean {
-    const entry = this.readOnlySnapshot().entries[sessionKeyId(key)];
-    return entry?.claimOwner === claimOwner
+    return this.readKeyed(file => {
+      const entry = file.entries[sessionKeyId(key)];
+      return entry?.claimOwner === claimOwner
       && entry.claimEpoch === claimEpoch
       && entry.structuredHost?.writerClaimEpoch === claimEpoch
       && (entry.structuredTerminationSurvivors?.length ?? 0) > 0;
+    });
   }
 
   ownsStructuredHostClaim(key: SessionKey, claimOwner: string, claimEpoch: number): boolean {
-    const entry = this.readOnlySnapshot().entries[sessionKeyId(key)];
-    return entry?.claimOwner === claimOwner
+    return this.readKeyed(file => {
+      const entry = file.entries[sessionKeyId(key)];
+      return entry?.claimOwner === claimOwner
       && entry.claimEpoch === claimEpoch
       && entry.structuredHost?.writerClaimEpoch === claimEpoch;
+    });
   }
 
   /** Atomically claims a stale structured row and advances its writer fence.
@@ -9618,11 +9623,11 @@ export class AgentRegistry {
   }
 
   autoBalancePolicy(engine: AgentEngine): AutoBalancePolicy {
-    return clone(this.readOnlySnapshot().autoBalance[engine]);
+    return this.readKeyed(file => clone(file.autoBalance[engine]));
   }
 
   quotaObservations(engine: AgentEngine): DurableQuotaObservation[] {
-    return clone(Object.values(this.readOnlySnapshot().quotaObservations[engine]));
+    return this.readKeyed(file => clone(Object.values(file.quotaObservations[engine])));
   }
 
   /** Records one account's live reading outside the controller's evaluation

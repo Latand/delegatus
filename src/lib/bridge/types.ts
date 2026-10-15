@@ -218,7 +218,7 @@ export interface BridgeReportV1 {
   outcome?: BridgeReportOutcome;
 }
 
-export const BRIDGE_REPORT_OUTCOME_KINDS = ["incident", "publication"] as const;
+export const BRIDGE_REPORT_OUTCOME_KINDS = ["incident", "publication", "autonomy"] as const;
 export type BridgeReportOutcomeKind = typeof BRIDGE_REPORT_OUTCOME_KINDS[number];
 
 export interface BridgeReportOutcome {
@@ -236,12 +236,14 @@ export interface BridgeReportTelegram {
   /** The bot chat's alias the project chose. */
   chat: string;
   topicId?: number;
-  /** Telegram HTML, at most 4 096 characters, re-sent byte for byte on a retry. */
+  /** Telegram HTML, at most 4 096 characters after entity parsing, re-sent byte for byte on a retry. */
   html: string;
   state: BridgeReportTelegramState;
   messageIds?: number[];
   /** The bot service's error code for a failed or uncertain send. */
   code?: string;
+  /** Scrubbed failure reason, retained for replays. */
+  message?: string;
   /** Sends attempted, the first included. */
   attempts: number;
   at: string;

@@ -1,3 +1,5 @@
+import { runWithNativeCallProof } from "@/lib/attention/nativeCallProof";
+import { nativeAdmissionMessage, type NativeCallerRefusal } from "@/lib/attention/nativeCaller";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -289,6 +291,8 @@ export interface McpToolCallContext {
       a recoverable mutation's single dispatch; the binding reads its downstream
       idempotency key from here rather than deriving one of its own. */
   binding?: McpRequestBinding;
+  /** Revalidate this invocation's native generation at the transport boundary. */
+  assertCaller?: () => void;
   /** Persist a newly created orchestrator recipient before its first send. */
   bindCreatedTarget?: (identity: string) => Promise<void>;
   /** #1490: written by the transport the moment the request may be on the
@@ -605,6 +609,10 @@ export interface McpRequestCaller {
   project: string | null;
   /** Server-derived predecessor seats that the current caller may recover. */
   predecessors?: string[];
+  /** Refusal diagnostics only; unidentified callers never persist a binding. */
+  admission?: NativeCallerRefusal;
+  /** This call's approved generation; older receipts retain conversation ownership. */
+  nativeProof?: string;
 }
 
 export interface McpRequestTarget {
@@ -666,7 +674,8 @@ export type ReceiptClaim =
   | { kind: "conflict"; record?: McpReceiptRecord };
 
 export interface McpReceiptStore {
-  claim(key: string, digest: string, retention: ReceiptRetention, binding?: McpRequestBinding): ReceiptClaim | Promise<ReceiptClaim>;
+  /** beforeClaim runs synchronously under the store lock, before any row is created. */
+  claim(key: string, digest: string, retention: ReceiptRetention, binding?: McpRequestBinding, beforeClaim?: () => void): ReceiptClaim | Promise<ReceiptClaim>;
   complete(key: string, digest: string, result: McpToolResult, retention: ReceiptRetention): void | Promise<void>;
   /** Drop an unsettled claim so its `clientRequestId` can be used again
       (#1766). Only a claim this call still holds — same digest, no result
@@ -750,7 +759,8 @@ function receiptSettlement(
 export class MemoryMcpReceiptStore implements McpRecoveryReceiptStore {
   private readonly receipts = new Map<string, Receipt>();
 
-  claim(key: string, digest: string, _retention?: ReceiptRetention, binding?: McpRequestBinding): ReceiptClaim {
+  claim(key: string, digest: string, _retention?: ReceiptRetention, binding?: McpRequestBinding, beforeClaim?: () => void): ReceiptClaim {
+    beforeClaim?.();
     const receipt = this.receipts.get(key);
     if (!receipt) {
       this.receipts.set(key, { digest, ...(binding ? { binding, stage: "claimed" } : {}) });
@@ -930,6 +940,7 @@ export function validRequestBinding(value: unknown, toolName?: McpToolName, requ
   const { caller, target, owner } = value;
   if (!isRecord(caller) || !["root", "worker", "unidentified"].includes(String(caller.kind))
     || !nullableString(caller.conversationId) || !nullableString(caller.project)
+    || (caller.nativeProof !== undefined && (typeof caller.nativeProof !== "string" || !caller.nativeProof || caller.nativeProof.length > 128))
     || (caller.predecessors !== undefined
       && (!Array.isArray(caller.predecessors)
         || caller.predecessors.length > 32
@@ -1606,8 +1617,9 @@ function writeReceiptFile(filePath: string, state: ReceiptFile): void {
 export class FileMcpReceiptStore implements McpRecoveryReceiptStore {
   constructor(private readonly filePath: string) {}
 
-  async claim(key: string, digest: string, retention: ReceiptRetention, binding?: McpRequestBinding): Promise<ReceiptClaim> {
+  async claim(key: string, digest: string, retention: ReceiptRetention, binding?: McpRequestBinding, beforeClaim?: () => void): Promise<ReceiptClaim> {
     return withFileLock(this.filePath, () => {
+      beforeClaim?.();
       const state = readReceiptFile(this.filePath);
       const receipt = state.mutationReceipts[key] ?? state.readReceipts[key];
       if (receipt) {
@@ -1774,9 +1786,10 @@ export class SqliteMcpReceiptStore implements McpRecoveryReceiptStore {
     this.secureFiles();
   }
 
-  claim(key: string, digest: string, retention: ReceiptRetention, binding?: McpRequestBinding): ReceiptClaim {
+  claim(key: string, digest: string, retention: ReceiptRetention, binding?: McpRequestBinding, beforeClaim?: () => void): ReceiptClaim {
     this.db.exec("BEGIN IMMEDIATE");
     try {
+      beforeClaim?.();
       const now = this.now();
       this.pruneBoundedReceipts(now);
       const receipt = this.selectRow(key);
@@ -2361,6 +2374,8 @@ export interface McpRecoverableTool {
   /** Authenticate recovery without resolving a mutable target name. Existing
       receipts supply their own target; absent receipts still run bind before admission. */
   bindForRecovery?(args: McpToolArgs): McpRequestBindingInput | Promise<McpRequestBindingInput>;
+  /** Synchronous native session fence before claim, dispatch or disclosure. */
+  currentCaller?(): McpRequestCaller;
   /** Read-only: what the downstream durable records say about this binding.
       Must never dispatch, enqueue, retry, withdraw or spawn. */
   recover(binding: McpRequestBinding, options: { legacy: boolean; context?: McpToolCallContext; args?: McpToolArgs }): Promise<McpRecoveryEvidence>;
@@ -2531,9 +2546,17 @@ export function createMcpToolService(
 ): McpToolService {
   const inFlight = new Map<string, { digest: string; result: Promise<McpToolResult> }>();
   return {
-    async callTool(toolName, args, context = {}) {
+    callTool: async function callTool(toolName: string, args: McpToolArgs, context: McpToolCallContext = {}): Promise<McpToolResult> {
       if (!(MCP_TOOL_NAMES as readonly string[]).includes(toolName)) {
         return failure(toolName, clientRequestId(args), "unknown_tool", `Unknown viewer tool: ${toolName}`, false);
+      }
+      if (args && typeof args === "object" && "nativeCallerProof" in args) {
+        const { nativeCallerProof, ...logicalArgs } = args;
+        if (nativeCallerProof !== undefined && (typeof nativeCallerProof !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(nativeCallerProof))) {
+          return failure(toolName, clientRequestId(args), "invalid_request", "nativeCallerProof must be a hook-generated proof; do not invent or copy it", false);
+        }
+        return runWithNativeCallProof(typeof nativeCallerProof === "string" ? nativeCallerProof : undefined, toolName, logicalArgs,
+          () => callTool(toolName, logicalArgs, context));
       }
       const typedTool = toolName as McpToolName;
       const normalized = normalizeBoundedMcpNumerics(typedTool, args);
@@ -2672,6 +2695,7 @@ export function createMcpToolService(
         return finish(replayed, "replay");
       }
       let outcome: McpTimingOutcome = "failure";
+      let revalidateNative: () => McpToolResult | null = () => null;
       let unfinishedAgeMs: number | undefined;
       const recoverableCall = async (tool: McpRecoverableTool, store: McpRecoveryReceiptStore): Promise<McpToolResult> => {
         /* Authority first, before the store is read: who is calling decides
@@ -2708,8 +2732,24 @@ export function createMcpToolService(
            exists, so it discloses nothing. */
         if (!identifiedCaller(binding.caller)) {
           outcome = "failure";
-          return failure(typedTool, requestId, "caller_unidentified", CALLER_UNIDENTIFIED, false, false);
+          return failure(typedTool, requestId, "caller_unidentified", `${CALLER_UNIDENTIFIED}. ${nativeAdmissionMessage(binding.caller.admission)}`, binding.caller.admission?.retryable ?? false, false);
         }
+        const invocationProof = binding.caller.nativeProof;
+        const sessionRefusal = (): McpToolResult | null => {
+          if (!invocationProof) return null;
+          let current: McpRequestCaller | undefined;
+          try { current = tool.currentCaller?.(); } catch { /* Unavailable evidence grants no identity. */ }
+          if (current && identifiedCaller(current) && current.conversationId === binding.caller.conversationId
+            && current.nativeProof === invocationProof) return null;
+          return failure(typedTool, requestId, "caller_unidentified", nativeAdmissionMessage(current?.admission ?? { reason: "session-changed", retryable: false }), false, false);
+        };
+        const assertSession = () => {
+          const refusal = sessionRefusal();
+          if (refusal && !refusal.ok) throw new McpToolRefusal(refusal.error, { code: "caller_unidentified", retryable: false });
+        };
+        revalidateNative = sessionRefusal;
+        const initialSessionRefusal = sessionRefusal();
+        if (initialSessionRefusal) return initialSessionRefusal;
         const notPermitted = () => {
           outcome = "failure";
           return failure(typedTool, requestId, "recovery_not_permitted", RECOVERY_NOT_PERMITTED, false, true);
@@ -2755,6 +2795,7 @@ export function createMcpToolService(
           replayed: boolean,
           original?: McpToolResult | null,
         ): Promise<McpToolResult> => {
+          const refusal = sessionRefusal(); if (refusal) return refusal;
           // Read again after the evidence lookup: another process may have
           // settled the operation while this read was pending or unavailable.
           let current: McpReceiptRecord | null;
@@ -2802,6 +2843,7 @@ export function createMcpToolService(
           return stored === answer ? answer : { ...stored, replayed: true };
         };
         const recoverRecord = async (record: McpReceiptRecord): Promise<McpToolResult> => {
+          const refusal = sessionRefusal(); if (refusal) return refusal;
           const recorded = record.binding;
           if (!recorded) {
             /* A legacy row: claimed before bindings existed, so ownership has
@@ -2904,6 +2946,7 @@ export function createMcpToolService(
             try {
               const fresh = await tool.bind(digestArgs);
               if (!identifiedCaller(fresh.caller) || !sameCaller(binding.caller, fresh.caller, typedTool)) return notPermitted();
+              if (invocationProof && fresh.caller.nativeProof !== invocationProof) return failure(typedTool, requestId, "caller_unidentified", nativeAdmissionMessage({ reason: "session-changed", retryable: false }), false, false);
               binding = { ...binding, ...fresh };
             } catch (error) {
               return failure(typedTool, requestId,
@@ -2952,10 +2995,12 @@ export function createMcpToolService(
             }, false);
           }
         }
+        const beforeClaim = sessionRefusal(); if (beforeClaim) return beforeClaim;
         let claim: ReceiptClaim;
         try {
-          claim = await store.claim(key, digest, retention, binding);
+          claim = await store.claim(key, digest, retention, binding, invocationProof ? assertSession : undefined);
         } catch (cause) {
+          const refusal = sessionRefusal(); if (refusal) return refusal;
           return unreadableReceipt(cause, false);
         }
         phaseDurations.claim = performance.now() - claimStartedAt;
@@ -2971,6 +3016,11 @@ export function createMcpToolService(
           if (record) return recoverRecord(record);
           outcome = "failure";
           return recoveryAnswer(typedTool, requestId, { outcome: "unknown", evidence: "mcp-receipt", reason: "the receipt store could not be read consistently", ids: {} }, true);
+        }
+        const beforeDispatch = sessionRefusal();
+        if (beforeDispatch) {
+          try { await store.fenceUndispatched(key, digest, beforeDispatch); } catch { /* No dispatch; the live session is still refused. */ }
+          return beforeDispatch;
         }
         /* The fence before the one dispatch. Failing here means another
            process closed the attempt between the claim and now. */
@@ -2999,6 +3049,7 @@ export function createMcpToolService(
         const dispatch: McpDispatchTracker = { attempted: false };
         try {
           const payload = await bindings[typedTool](effectiveArgs, { ...context, binding, dispatch,
+            assertCaller: assertSession,
             bindCreatedTarget: async (identity) => {
               if (!store.bindCreatedTarget || !await store.bindCreatedTarget(key, digest, binding, identity)) {
                 throw new McpDispatchUncertainError("the created orchestrator recipient could not be durably bound; no message was dispatched");
@@ -3245,7 +3296,8 @@ export function createMcpToolService(
       })();
       inFlight.set(key, { digest, result });
       try {
-        return finish(await result, outcome, unfinishedAgeMs);
+        const answered = await result;
+        return finish(revalidateNative() ?? answered, outcome, unfinishedAgeMs);
       } finally {
         if (inFlight.get(key)?.result === result) inFlight.delete(key);
       }
@@ -3420,10 +3472,11 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
   ].join(" "),
   ask_orchestrator_in_parallel: "While the project's orchestrator seat is busy with a turn, start its parallel self for one side ask: a fork of the seat's conversation that answers this one message with the seat's authority (no deploy, no rotation), shows live in the seat's own feed, and queues a note to the seat when it ends. For the voice gateway (the operator's root session) relaying the operator; any other agent is refused with asker_refused and sends to the orchestrator instead. Claude seats only; refused with seat_not_busy when the seat is idle (send to it directly then) and with deputy_limit while another parallel self is running. Idempotent by clientRequestId.",
   seat_tick_settings: [
+    "Full autonomy is off by default. Only the operator enables or extends it; this project's seat may shorten or turn it off with why. Read autonomy.active and release.effectiveAskBeforePublish immediately before acting. Log decisions with autonomyDecision including why and undo; verbose:true reads the rules, episodes and log. An ended episode owes one status report with outcome autonomy and its episode key, including when wakes or bridge reports are off.",
     "maintenance reads or changes the board maintenance timer and reads its run records; verbose adds the previous run log.",
     "Read — and change — one project's seat tick: whether Delegatus wakes that project's seat at all, how often, and what your own monitor prompt tells the wake to look at.",
     "Called with no change fields it is a read. `project` defaults to your own, and naming another project's is allowed rather than refused; the answer says which of the two you did, and the record, the board card and the tick's journal all carry who changed whose tick.",
-    "`enabled: false` stops every wake for that project until someone turns it back on — indefinitely, if that is the decision. `wakeIntervalMinutes` sets how often a wake may be sent (null restores the default hour); the tick cannot wake more often than it checks, so a value under the check interval simply means every check. `untilMinutes` is an optional expiry after which the setting lapses back to the default — omit it and the setting stands until it is changed.",
+    "`enabled: false` stops work wakes for that project (an ended autonomy episode still owes its report) until someone turns it back on — indefinitely, if that is the decision. `wakeIntervalMinutes` sets how often a wake may be sent (null restores the default hour); the tick cannot wake more often than it checks, so a value under the check interval simply means every check. `untilMinutes` is an optional expiry after which the setting lapses back to the default — omit it and the setting stands until it is changed.",
     "`reason` is the tick panel’s instruction field: what to do next and when to stop. The seat receives its full text labelled as operator instructions on every scheduler-fired wake, alongside its own `monitorPrompt` and derived items. It also explains the cadence on the board card and is required whenever the settings leave the default. It can be set at the default cadence. Instructions over 500 characters are refused without storing a shortened version. Restoring the schedule and `untilMinutes` expiry preserve both fields; `reason: null` explicitly clears the instructions when the schedule is at its defaults. Restoring the default needs no new reason.",
     "`monitorPrompt` is your own additional prompt for this project's monitor, in your own words: it is appended to every later scheduler-fired wake beside the reasons and items the tick derives, never replacing them or the contract. Send a new `monitorPrompt` to replace it and `monitorPrompt: null` to clear it; to change one line, send `replaceLine`, `removeLine` or `appendLine` instead of the whole note. It is redacted before it is stored and refused, never cut, when it is over the limit the error names. A write answers only `{changed, revision, changedFields, monitorPromptLength}` (plus `project` and `scope` when it changed another project's tick). A read carries `monitorPromptLength`, and `verbose: true` returns the stored note once, as `monitorPrompt`. A wake shows the note only when it changed since the last wake the seat received, and then as a marked preview of a long note. It changes what a wake says and never whether or when one is sent, so a prompt on its own needs no reason and leaves the project on the default tick — and `untilMinutes` expires the on/off and cadence setting, not the prompt.",
     "A project nobody has configured runs on the defaults, which are exactly the behaviour the tick has always had.",
@@ -3468,7 +3521,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
   ].join(" "),
   telegram_bot_send: [
     "Post a message through the operator's Telegram bot into a chat the operator allowlisted — for example a report into a team group. `chat` accepts its alias, chat id, @username or t.me chat/topic link. A topic link supplies `topicId` unless one is given explicitly.",
-    "`format` is plain (default) or html (Telegram's HTML subset: b, i, u, s, code, pre, a, blockquote, tg-spoiler). Plain text over 4096 characters is split into up to 4 messages; html over 4096 is refused. `replyToMessageId` replies to a message in that chat, `topicId` posts into a forum topic, `silent` sends without a notification.",
+    "`format` is plain (default) or html (Telegram's HTML subset: b, i, u, s, code, pre, a, blockquote, tg-spoiler). Plain text over 4096 characters is split into up to 4 messages; html over 4096 characters after entity parsing is refused. `replyToMessageId` replies to a message in that chat, `topicId` posts into a forum topic, `silent` sends without a notification.",
     "The post is attributed in Delegatus to your conversation, resolved server-side. A chat outside the allowlist is refused before anything is sent (chat_not_allowed, bot_not_in_chat, chat_unknown, bot_not_connected); Telegram's own refusals come back as forbidden (blocked, removed, or a user who never wrote to the bot), format_invalid, or rate_limited with retryAfterSeconds.",
     "A refusal answers ok:false with the bot's code as `code` and `retryable` saying whether a retry under a NEW clientRequestId may help (true only for rate_limited, network_failed, timed_out, telegram_failed); send_partial adds `details.sentMessageIds`.",
     "Idempotent by clientRequestId: a repeat answers the first post's message ids; a repeat of a send that never finished, or one whose connection was cut or timed out, answers send_uncertain (not retryable) instead of posting twice.",
@@ -4297,7 +4350,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     coversOwed: z.boolean().optional().describe("true settles every outcome the seat tick owed whose wake reached you before this report."),
     body: z.string().optional().describe("Older free-text form, filed as one in-progress item per line. Prefer summary and sections."),
     correlatesDirective: z.string().optional().describe("clientRequestId of the directive this answers."),
-    outcome: z.enum(["incident", "publication"]).optional().describe("Orchestrator only: incident when the report tells of something that went wrong and was handled (a lane stuck and restarted, lanes paused by the credit guard, a step done by hand); publication when something was published outside Delegatus's own deploy (the landing site, a release tag). The operator acknowledges it in the Waiting-for-you panel; body and Telegram copy are unchanged."),
+    outcome: z.enum(["incident", "publication", "autonomy"]).optional().describe("Orchestrator only: autonomy for an ended episode appears in Done, uses its autonomy:<startedAt> key and returns chatText to repeat exactly in the seat conversation; incident when the report tells of something that went wrong and was handled (a lane stuck and restarted, lanes paused by the credit guard, a step done by hand); publication when something was published outside Delegatus's own deploy (the landing site, a release tag). Incident and publication outcomes retain their existing acknowledgement flow; body and Telegram copy are unchanged."),
     answersDirective: z.boolean().optional().describe("With correlatesDirective: true when this report answers that request in full, false for progress, a partial answer or a question back."),
   }).passthrough(),
   bridge_directive: z.object({
@@ -4360,6 +4413,10 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
       .describe("Project whose allowed set to read or change. Defaults to your own on a list; required to add or remove."),
   }).passthrough(),
   seat_tick_settings: z.object({
+    autonomy: z.object({ enabled: z.boolean().optional(), hours: z.number().nullable().optional(), why: z.string().max(500).nullable().optional() }).optional()
+      .describe("Full autonomy: operator enables/extends, default 8 hours, null unlimited. The seat may only shorten or turn off, with why. Other agents are refused. Wakes must be on."),
+    autonomyDecision: z.object({ startedAt: z.string(), id: z.string().min(1).max(2000), decision: z.string().min(1).max(2000), why: z.string().min(1).max(2000), undo: z.string().min(1).max(2000), taskId: z.string().optional(), review: z.object({ reviewId: z.string(), chosen: z.array(z.number()), comment: z.string(), skip: z.literal(true).optional(), reject: z.literal(true).optional(), answers: z.array(z.object({ questionId: z.string(), options: z.array(z.number()), other: z.boolean().optional(), customText: z.string().optional(), skipped: z.literal(true).optional() })).optional() }).optional() }).optional()
+      .describe("The active project's seat records every autonomous decision with its reason and concrete undo path. startedAt binds the episode; id makes retries idempotent. review optionally settles an open form (taskId omitted for a seat form); native caller approvals remain operator-only. Read verbose:true for the full log."),
     release: z.object({ enabled: z.boolean().optional(), askBeforePublish: z.boolean().optional(), minChanges: z.union([z.number(), z.string()]).nullable().optional(), minGapHours: z.union([z.number(), z.string()]).nullable().optional(), why: z.string().nullable().optional(), requestNow: z.boolean().optional(), taskId: z.string().optional(), hold: z.string().nullable().optional() }).optional()
       .describe("Automatic releases: off until enabled, 30 visible changes, 12-hour gap, six-hour production soak and screenshots every time. why is required from agents. requestNow skips amount/gap but keeps every blocker; hold names an incident, null clears it. Only the project seat or operator may turn askBeforePublish off, quoting the operator request. Read release status here."),
     problemId: z.string().trim().min(1).max(128).optional().describe("Read the full local problem report named by a wake, including after delivery. Undo or replacement returns null for the old identity."),
@@ -4441,7 +4498,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
   telegram_bot_send: z.object({
     clientRequestId: clientRequestIdSchema,
     chat: z.string().trim().min(1).describe("The chat's alias, id, @username or t.me chat/topic link."),
-    text: z.string().min(1).describe("The message. Plain text up to 16384 characters (split into up to 4 messages); html up to 4096."),
+    text: z.string().min(1).describe("The message. Plain text up to 16384 characters (split into up to 4 messages); html up to 4096 characters after entity parsing."),
     format: z.enum(["plain", "html"]).optional().describe("plain (default) or html: Telegram's HTML subset."),
     replyToMessageId: z.number().int().positive().optional().describe("Reply to this message in the same chat. Sent anyway if it no longer exists."),
     topicId: z.number().int().positive().optional().describe("Forum topic (message_thread_id) to post into."),
@@ -4511,6 +4568,10 @@ export function viewerMcpInstructions(locale?: "en" | "uk" | null): string {
 }
 
 const VIEWER_MCP_BASE_INSTRUCTIONS = "This server is Delegatus, registered under the MCP key `viewer`, so its tools are named mcp__viewer__*. List tasks newest-first with status sets, openOnly, ids or query and follow nextCursor. Lists are compact by default; full:true retrieves complete records; get_pipeline is compact by default. Use get_task/get_flow for complete records. Writes acknowledge changedFields and revision. Use seat_tick_settings verbose:true to read the complete monitor note. Use clientRequestId on mutations; pure reads may omit it for a fresh observation. Static readMore hints require includeHints:true or full:true. Reuse it only when replaying the same logical operation. Launch admission names new tasks before the agent starts, using the supplied title and a concise launcher brief or a short title derived from the prompt. Refinement is optional: for a legacy placeholder, update_task with refine: { text } supplies a short human title (3–10 words) on the first line and at most two concise sentences. Read-only roles skip refinement. A refine that answers TASK_NOT_FOUND means your conversation holds no task; carry on. Keep an existing meaningful title; the reply says already-named when one exists. Reuse the same text on retry. A task's text is for the human who reviews the board, and refine writes only that; agent-facing context (the prompt, the working notes, the ids, the rules, the state) belongs in the separate details field of create_task and update_task, condensed, which the card shows behind one collapsed Details row. Use agent_fleet first for compact counts by engine, model, effort and account; request detail or filters only when needed. Read the board through these tools rather than curl: list_pipelines with state `open` and compact: true for the open lanes, get_pipeline with stageId for one stage's conclusion, deployment_status and agent_activity with compact: true, and account_limits for each account's usage windows.";
+
+// The hook supplies this transport proof automatically. It is never part of
+// the logical arguments, their digest, downstream payload or durable answer.
+for (const name of MCP_TOOL_NAMES) TOOL_INPUT_SCHEMAS[name] = TOOL_INPUT_SCHEMAS[name].extend({ nativeCallerProof: z.string().regex(/^[A-Za-z0-9_-]{43}$/).optional().describe("Injected by the synchronous Delegatus Claude hook. Omit in ordinary arguments; never invent or copy a proof.") });
 
 export function createViewerMcpServer(service: McpToolService): McpServer {
   const server = new McpServer({ name: MCP_SERVER_NAME, version: "1.0.0" }, {

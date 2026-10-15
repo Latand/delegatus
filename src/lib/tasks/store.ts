@@ -1,3 +1,4 @@
+import { waitForStateLock } from "@/lib/state/lockWait";
 import fs from "node:fs";
 import { readFindingKey, reconcileOpenFindings, validStoredFinding } from "./finding";
 import path from "node:path";
@@ -347,6 +348,7 @@ function openTaskCollection(database: string): SqliteStateCollection<TaskStateRo
   const held = taskCollections.get(database);
   if (held) return held;
   const collection = new SqliteStateCollection<TaskStateRow>(database, {
+    readCacheKey: "task-v1",
     collection: TASK_COLLECTION,
     schemaVersion: 1,
     busyMessage: TASK_BUSY,
@@ -788,4 +790,8 @@ export function taskFeedSource(filePath = TASKS_FILE) {
     }),
     parse: (valueJson: string) => coerceTask(JSON.parse(valueJson)),
   };
+}
+
+export function mutateTasksAsync<R>(mutate: (tasks: BoardTask[]) => { tasks: BoardTask[] | undefined; result: R }, filePath = TASKS_FILE): Promise<R> {
+  return waitForStateLock("tasks.mutation", () => mutateTasks(mutate, filePath), { subject: "tasks" });
 }

@@ -1087,7 +1087,7 @@ test("a retried attempt whose predecessor never reserved a conversation records 
   h.ports.spawnAgent = async (input, onReserved) => {
     h.calls.push(`spawn:${input.clientAttemptId}:supersedes=${input.supersedes ?? "none"}`);
     if (input.clientAttemptId.endsWith("_1")) throw new Error("spawn transport unavailable");
-    onReserved({ launchId: "launch-late", conversationId: "conversation_stage_late" });
+    await onReserved({ launchId: "launch-late", conversationId: "conversation_stage_late" });
     return { launchId: "launch-late", conversationId: "conversation_stage_late", sessionId: "session-late", transcript: "/codex/stage-late.jsonl", paneId: "%9" };
   };
   await tickPipelines([], h.ports);

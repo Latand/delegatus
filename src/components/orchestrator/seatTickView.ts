@@ -58,6 +58,8 @@ const REASONS: Record<SeatTickWakeReasonKind, MessageKey> = {
   "lane-event": "seatTick.reason.laneEvent",
   "unmerged-pr": "seatTick.reason.unmergedPr",
   stalled: "seatTick.reason.stalled",
+  "autonomy-idle": "seatTick.reason.autonomyIdle",
+  "autonomy-ended": "seatTick.reason.autonomyEnded",
   "unstarted-task": "seatTick.reason.unstartedTask",
   interval: "seatTick.reason.interval",
   "child-terminal": "seatTick.reason.childTerminal",

@@ -1,3 +1,4 @@
+import { nativeAssociationForm } from "@/lib/attention/nativeAssociationForm";
 import { issueReportApprovalDrafts } from "@/lib/issueReports/approvalReply";
 import { issueReportPreviewText } from "@/lib/issueReports/previewText";
 import type { IssueReportFinding } from "@/lib/issueReports/scrub";
@@ -16,6 +17,7 @@ import { ROLE_VARIANT_DEFAULTS } from "@/lib/roles/paramConfig";
 import { RuntimePill } from "@/components/RuntimePill";
 import { ResourcesFooter } from "@/components/ResourcesFooter";
 import { createRoot } from "react-dom/client";
+import { OrchestratorDock } from "@/components/orchestrator/OrchestratorDock";
 import { RulesWindow } from "@/components/roleMemory/LearnedRules";
 import type { AttentionDismissalMark, DismissalTarget } from "@/lib/attention/dismissalTypes";
 import { COMPANION_PROTECT, COMPANION_ROWS, companionReserved, companionShellReady } from "@/components/voiceCompanion/hostSurfaces";
@@ -80,6 +82,27 @@ import { refreshTeamView } from "@/components/team/teamClient";
 const SCENARIO = new URLSearchParams(location.search).get("scenario");
 const PROJECT_DERIVATION = SCENARIO === "project-derivation";
 const OVERVIEW_PERFORMANCE = SCENARIO === "overview-performance";
+const COLD_BOARD = SCENARIO === "cold-board";
+let releaseColdBoard!: () => void;
+const coldBoardHold = new Promise<void>(resolve => { releaseColdBoard = resolve; });
+const coldBoardEvidence = { calls: [] as Array<{ required: string | null; conditional: string | null; bytes: number; respondedAt?: number }>,
+  parses: [] as Array<{ codeUnits: number; ms: number }>, firstBoardAt: 0, refined: false, release: releaseColdBoard };
+if (COLD_BOARD) {
+  Object.assign(window, { coldBoardEvidence });
+  const parse = JSON.parse;
+  JSON.parse = (...args: Parameters<typeof JSON.parse>) => {
+    const started = performance.now();
+    const value = parse(...args);
+    if (value?.readProjection === "board-summary") coldBoardEvidence.parses.push({ codeUnits: args[0].length, ms: performance.now() - started });
+    return value;
+  };
+  const boardFrame = () => {
+    if (document.querySelector('[data-kanban-board] .card[data-id^="task:"]')) coldBoardEvidence.firstBoardAt = performance.now();
+    else requestAnimationFrame(boardFrame);
+  };
+  requestAnimationFrame(boardFrame);
+}
+
 /* A task another machine runs (docs/design/synced-task-card.md): four tasks owned by the linked stage
    install, one of them with no lane (an older peer), beside the board's own local ones. The page
    answers nothing about them; the driver serves `/api/links/agents` with this install's id, the host
@@ -3303,6 +3326,13 @@ if (DECISIONS) {
     held.title = L("Where to pin the «Done» list and when to deploy it after the merge, for every instance of the project", "Де закріпити список «Готово» і коли деплоїти його після мержу, на кожній інстанції проєкту");
     held.questions![1]!.options[0] = { label: L("Right after the merge, once main is green and the checks on the merged commit have passed", "Одразу після мержу, щойно main зелений і перевірки на змерженому коміті пройшли"), recommended: true };
   }
+  if (DECISIONS === "native-association") {
+    const form = nativeAssociationForm({ home: "/fixture/claude", pid: 4201, processIdentity: "4201:100", domain: "fixture",
+      sessionId: "fixture-session", transcript: "/fixture/claude/projects/external-session/transcript.jsonl", recordIdentity: { pid: 4201, sessionId: "fixture-session", procStart: "100", pidDomain: "fixture", startedAt: 1, kind: "interactive" },
+      generationProof: "fixture-writer", conversationId: "conversation_external", cwd: "/fixture/worktrees/external-session", startedAt: Date.UTC(2026, 9, 15, 9, 30) }, UK ? "uk" : "en");
+    Object.assign(seatRounds[0]!, form, { source: { conversationId: null }, nativeAssociationState: "pending" });
+    seatRounds.splice(1); delete protoRounds["t-search"];
+  }
   if (DECISIONS === "answered") {
     const held = seatRounds[0]!;
     held.decision = { chosen: [], answers: [{ questionId: "place", options: [0] }, { questionId: "deploy", options: [0] }], comment: "", at: iso(MIN), delivery: { state: "sent", retryable: false } };
@@ -3317,7 +3347,7 @@ function fixtureDecisions() {
     const held = tasks.find((entry) => entry.id === taskId);
     return waiting && !waiting.decision && !protoHidden.has(waiting.id) && held ? [{ ...waiting, taskTitle: held.text.split("\n")[0] }] : [];
   });
-  return [...fromTasks, ...seatRounds.filter((round) => !round.decision)].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  return [...fromTasks, ...seatRounds.filter((round) => !round.decision || (round.nativeAssociationState && round.decision.answers?.every(answer => answer.options[0] === 1)))].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
 }
 const seatDecisionNotices = () => seatRounds.filter((round) => !round.decision).map((round) => ({ id: `prototype:${round.id}`, project: PROJECT, taskId: null, reviewId: round.id, title: round.title, asks: "questions" as const, createdAt: round.createdAt, target: { kind: "seat-decision" as const, project: PROJECT, reviewId: round.id } }));
 type FixtureAlbumItem = { id: string; src: string; name: string | null; ts: number; via: "read" | "named" | "pasted"; source: { key: string; conversationId: string | null; path: string; stage?: { pipelineId: string; stageId: string; attempt: number; round?: number } }; isNew: boolean };
@@ -3702,6 +3732,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       if (!held) return json({ error: "review not found" }, 404);
       held.decision = { ...(body.reject ? { rejected: true as const } : {}), chosen: body.chosen ?? [], answers: body.answers, comment: body.comment ?? "", at: new Date().toISOString(), delivery: { state: "sent", retryable: false } };
       protoPublish();
+      if (held.nativeAssociationState) held.nativeAssociationState = body.answers?.every((answer: { options: number[] }) => answer.options[0] === 1) ? "approved" : "refused";
       return json({ project: PROJECT, decisions: fixtureDecisions() });
     }
     const review = url.searchParams.get("review");
@@ -3835,6 +3866,8 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     });
   }
   if (url.pathname === "/api/files") {
+    if (COLD_BOARD && method === "HEAD") return new Response(null, { status: 204 });
+    if (COLD_BOARD && url.searchParams.get("view") === "storage-health") return json({ state: "ok", since: null, freeBytes: 1024 ** 3, registryIssues: [] });
     launchAdvance();
     /* #1820's first run: an installation with nothing in it at all. */
     /* Nothing is working in the quiet installation: every conversation has
@@ -3883,6 +3916,25 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
         ...(TELEGRAM_STEP || FM_SEAT ? { projectCwds: { [PROJECT]: "/repo/atlas" } } : {}),
       };
     const body = JSON.stringify({ ...scoped, ...(DECISIONS && seatDecisionNotices().length ? { seatDecisions: seatDecisionNotices() } : {}), workflows: [], systemHealth: { tmux: { status: "healthy" }, ...(new URLSearchParams(location.search).has("state-disk-full") ? { storage: { incidents: [], writes: { state: "disk-full", freeBytes: 32 * 1024 * 1024, since: "2026-10-01T12:00:00Z" } } } : {}) }, ...(workLinks ? { workLinks } : {}) });
+    if (COLD_BOARD) {
+      const headers = new Headers(init?.headers);
+      const required = headers.get("x-llv-files-generation");
+      // Carry the real bootstrap contract through the production useFiles
+      // hook. Unknown padding crosses the browser persistence cap while the
+      // visible board remains this fixture's ordinary board.
+      const payload = JSON.stringify({ ...JSON.parse(body), readProjection: "board-summary",
+        ...(new URLSearchParams(location.search).has("oversized") ? { padding: "x".repeat(26 * 1024 * 1024) } : {}) });
+      const call = { required, conditional: headers.get("if-none-match"), bytes: new TextEncoder().encode(payload).byteLength, respondedAt: 0 };
+      coldBoardEvidence.calls.push(call);
+      if (required) { await coldBoardHold; coldBoardEvidence.refined = true; }
+      call.respondedAt = performance.now();
+      return new Response(payload, { headers: {
+        "content-type": "application/json", etag: required ? '"refined"' : '"saved"',
+        "x-llv-files-built": required ? "fixture.1.1" : "fixture.0.0",
+        "x-llv-files-generation": required ? "1" : "0", "x-llv-files-target-generation": "1",
+        "x-llv-files-projection-cache": required ? "miss" : "bootstrap",
+      } });
+    }
     if (evidence.filesDelayMs) await new Promise((resolve) => setTimeout(resolve, evidence.filesDelayMs));
     return new Response(body, { status: 200, headers: { "content-type": "application/json" } });
   }
@@ -4581,7 +4633,15 @@ function voiceCompanionScene() {
 }
 if (HEADER_MENU && new URLSearchParams(location.search).has("member")) void refreshTeamView();
 const diskDensity = new URLSearchParams(location.search).get("disk-density");
-createRoot(document.getElementById("root")!).render(SCENARIO === "memory-profile" ? <RulesWindow project="garden" onClose={() => {}} /> : VOICE ? voiceCompanionScene() : diskDensity ? (
+// Mount the production dock beside the Viewer for shared desktop-host cases.
+const dockWidth = new URLSearchParams(location.search).get("dockWidth");
+if (dockWidth === "440" || dockWidth === "360") localStorage.setItem(`llvOrchestratorPanelWidth:${PROJECT}`, dockWidth);
+createRoot(document.getElementById("root")!).render(dockWidth === "440" || dockWidth === "360" ? (
+  <div className="flex h-full min-h-0">
+    <OrchestratorDock project={PROJECT} projectName="Atlas" files={files} onClose={() => {}} />
+    <div className="min-w-0 flex-1"><Viewer /></div>
+  </div>
+) : SCENARIO === "memory-profile" ? <RulesWindow project="garden" onClose={() => {}} /> : VOICE ? voiceCompanionScene() : diskDensity ? (
   <div className="bg-panel" style={{ width: diskDensity === "full" ? "100%" : 248, marginTop: "auto" }}>
     <ResourcesFooter density={diskDensity === "full" ? "full" : diskDensity === "detail" ? "detail" : "line"} />
   </div>

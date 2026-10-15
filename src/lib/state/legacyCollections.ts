@@ -1,3 +1,4 @@
+import { waitForStateLock } from "./lockWait";
 import { stateDir, statePath } from "@/lib/configDir";
 
 import type { LegacyImportOutcome } from "./legacyImport";
@@ -91,7 +92,7 @@ export async function ensureLegacyCollectionsImported(
   const outcomes = new Map<string, LegacyImportOutcome | Error>();
   for (const entry of LEGACY_COLLECTIONS) {
     try {
-      outcomes.set(entry.collection, await entry.importAtActivation());
+      outcomes.set(entry.collection, await waitForStateLock("state.import.activation", () => entry.importAtActivation(), { subject: entry.collection }));
     } catch (error) {
       log(`[state import] ${entry.collection} import failed`, error);
       outcomes.set(entry.collection, error instanceof Error ? error : new Error(String(error)));
@@ -102,7 +103,7 @@ export async function ensureLegacyCollectionsImported(
 
 /** Write each moved store's legacy file for a rollback release that predates it. */
 export async function checkpointLegacyCollectionMirrorsForDemotion(): Promise<void> {
-  for (const entry of LEGACY_COLLECTIONS) await entry.checkpointMirrorForDemotion();
+  for (const entry of LEGACY_COLLECTIONS) await waitForStateLock("state.mirror.demotion", () => entry.checkpointMirrorForDemotion(), { subject: entry.collection });
   // Recovery augments the map, aliases and journal; the board above already
   // mirrors its migrated rows. The preceding release needs all four together.
   await (await import("@/lib/projects/worktreeRecoveryStore")).checkpointWorktreeRecoveryForDemotion();

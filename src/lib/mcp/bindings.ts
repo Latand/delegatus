@@ -1,3 +1,8 @@
+import { decidePrototype } from "@/lib/prototypeReview/decision";
+import { deliverPrototypeDecision } from "@/lib/prototypeReview/deliveryWorker";
+import { findPrototypeRound } from "@/lib/prototypeReview/store";
+import { autonomyActive, autonomyMandate, autonomyReportKey, pendingAutonomyReports } from "@/lib/monitor/autonomy";
+import { changeSeatTickSettings, markAutonomyReported, markAutonomyDecisionReview } from "@/lib/monitor/seatTickSettings";
 import { pipelinePublishesRemoteBranch } from "@/lib/pipelines/publication";
 import { namedProjectDirectory, resolveNamedProject, ProjectNameRefusal } from "@/lib/projects/nameResolution";
 import { releaseStatus } from "@/lib/release/answer";
@@ -50,6 +55,9 @@ import {
 import { agentRegistry, readOnlyConversationLookupFromSnapshot } from "@/lib/agent/registry";
 import { DeliveryAdmissionRefusedError } from "@/lib/deliveryAdmission";
 import { ENGINE_MODELS, validateLaunchModel } from "@/lib/agent/models";
+import { nativeCallerSources } from "@/lib/attention/nativeCallerSources";
+import { nativeCallerRefusal, resolveNativeCaller } from "@/lib/attention/nativeCaller";
+import { sameRecordedProcessIdentity, systemBootEpoch, type ProcessIdentityProbe } from "@/lib/processIdentity";
 import { procBackend } from "@/lib/proc";
 import { ensureOperatorSpawnCapability } from "@/lib/agent/operatorCapability";
 import { VIEWER_AUTONOMOUS_SPAWN_HEADER } from "@/lib/agent/capabilityHeader";
@@ -403,6 +411,7 @@ async function requestViewerControl(
   let lastFailure = "connection failed";
   while (Date.now() < expiresAt) {
     if (context.signal?.aborted) throw context.signal.reason;
+    if (init.method === "POST") context.assertCaller?.();
     attempts += 1;
     const remainingMs = Math.max(1, expiresAt - Date.now());
     const attempt = deadlineSignal(Math.min(CONTROL_ATTEMPT_TIMEOUT_MS, remainingMs), {
@@ -613,8 +622,10 @@ async function dispatchViewerControl(
   };
   /* From here on the request may be on the wire: the service reads this to
      tell a failure that happened BEFORE any dispatch from one after it. */
+  context.assertCaller?.();
   if (context.dispatch) context.dispatch.attempted = true;
   while (true) {
+    context.assertCaller?.();
     attempt = deadlineSignal(Math.min(CONTROL_ATTEMPT_TIMEOUT_MS, Math.max(1, expiresAt - Date.now())), {
       signal: context.signal,
       reason: "Viewer control dispatch timed out",
@@ -1029,6 +1040,7 @@ export interface CallerAttribution {
       §4): `conversationId` is then the SEAT's, so every surface treats the call
       as the seat's, and this keeps the deputy's own id for the audit trail. */
   via?: { deputy: string };
+  native?: true;
 }
 
 /** Fold the caller authority with "is this the designated orchestrator" into
@@ -1042,16 +1054,17 @@ export function callerAttributionFrom(
   isManagerConversation: (conversationId: string) => boolean,
   deputySeatOf?: (conversationId: string) => string | null,
 ): CallerAttribution {
-  if (authority.kind === "root") return { kind: "gateway", conversationId: authority.conversationId, role: null };
+  const native = authority.kind !== "unidentified" && authority.evidence === "native-session" ? { native: true as const } : {};
+  if (authority.kind === "root") return { kind: "gateway", conversationId: authority.conversationId, role: null, ...native };
   if (authority.kind === "unidentified") return { kind: "unidentified", conversationId: null, role: null };
   if (isManagerConversation(authority.conversationId)) {
-    return { kind: "manager", conversationId: authority.conversationId, role: authority.role };
+    return { kind: "manager", conversationId: authority.conversationId, role: authority.role, ...native };
   }
   const seat = deputySeatOf?.(authority.conversationId) ?? null;
   if (seat && isManagerConversation(seat)) {
-    return { kind: "manager", conversationId: seat, role: authority.role, via: { deputy: authority.conversationId } };
+    return { kind: "manager", conversationId: seat, role: authority.role, via: { deputy: authority.conversationId }, ...native };
   }
-  return { kind: "agent", conversationId: authority.conversationId, role: authority.role };
+  return { kind: "agent", conversationId: authority.conversationId, role: authority.role, ...native };
 }
 
 function attributionOf(dependencies: Pick<ViewerMcpDomainDependencies, "callerAttribution" | "attentionAuthority">): CallerAttribution {
@@ -1141,6 +1154,7 @@ function rootSessionSource(): RootSessionSource {
  */
 export function hostedConversationsFromSnapshot(
   snapshot: Pick<RegistrySnapshot, "conversations" | "entries">,
+  probe?: ProcessIdentityProbe,
 ): { conversationId: string; role: string | null; pids: number[] }[] {
   const owners = new Map<string, { id: string; role: string | null }>();
   const hosted = new Map<string, { conversationId: string; role: string | null; pids: number[] }>();
@@ -1152,8 +1166,14 @@ export function hostedConversationsFromSnapshot(
   for (const entry of Object.values(snapshot.entries)) {
     const owner = owners.get(entry.artifactPath);
     if (!owner) continue;
-    const pids = [entry.host?.agent?.pid, entry.structuredHost?.process?.pid]
-      .filter((pid): pid is number => typeof pid === "number" && pid > 0);
+    const pids = [entry.host?.agent, entry.structuredHost?.process]
+      .filter((host) => {
+        if (!host || typeof host.pid !== "number" || host.pid <= 0) return false;
+        if (!probe) return true;
+        const startIdentity = probe.processIdentity(host.pid);
+        return host.startIdentity != null && startIdentity != null && probe.pidAlive(host.pid)
+          && sameRecordedProcessIdentity({ pid: host.pid, startIdentity, bootEpoch: probe.bootEpoch() }, host);
+      }).map((host) => host!.pid);
     hosted.get(owner.id)!.pids.push(...pids);
   }
   return [...hosted.values()];
@@ -1193,7 +1213,18 @@ function attentionCallerSources(): AttentionCallerSources {
        as it does for a stdio agent whose host pids were never recorded. */
     ancestry: httpCaller ? () => [] : () => processAncestry(process.pid, (pid) => procBackend.readPpid(pid)),
     rootConversationId: () => liveRootSession(rootSessionSource())?.conversationId ?? null,
-    hosted: () => hostedConversationsFromSnapshot(agentRegistry().readOnlySnapshot()),
+    hosted: () => hostedConversationsFromSnapshot(agentRegistry().readOnlySnapshot(), {
+      pidAlive: (pid) => procBackend.pidAlive(pid) && !procBackend.processExited(pid),
+      processIdentity: (pid) => procBackend.processIdentity(pid),
+      bootEpoch: systemBootEpoch,
+    }),
+    capabilityPresented: () => callerCapability() !== undefined,
+    nativeCaller: () => {
+      if (httpCaller) return nativeCallerRefusal("no-claude-ancestor");
+      if (procBackend.name !== "linux") return nativeCallerRefusal("platform-unverified");
+      try { return resolveNativeCaller(nativeCallerSources(() => agentRegistry().readOnlySnapshot())); }
+      catch { return nativeCallerRefusal("session-record-invalid"); }
+    },
     capabilityCallerConversationId: capabilityConversationResolver(
       callerCapability(),
       (digest) => agentRegistry().conversationIdForSpawnCapabilityDigest(digest),
@@ -2250,6 +2281,7 @@ async function createPipeline(args: McpToolArgs, context?: McpToolCallContext, d
   refuseCrossProjectFromSeat("create_pipeline", () => (text(args.repoDir) ? projectForCwd(text(args.repoDir)) : null), args, dependencies);
   const request = withoutKeys(args, ["clientRequestId", "recoveryOnly", "crossProjectRequest"]);
   if (request.src === undefined && dependencies) request.src = inferredPipelineSource(dependencies);
+  context?.assertCaller?.();
   if (context?.dispatch) context.dispatch.attempted = true;
   /* Every MCP caller is an agent; the sizing rules judge the attributed
      conversation, and the create's `src` creator when attribution names none. */
@@ -3534,7 +3566,8 @@ async function bridgeReport(
     : [];
   const coversOwed = args.coversOwed === true;
   const outcomeKind = args.outcome === undefined || args.outcome === null ? null : text(args.outcome);
-  if (outcomeKind !== null && !isBridgeReportOutcomeKind(outcomeKind)) throw new Error("outcome must be incident or publication");
+  if (outcomeKind !== null && !isBridgeReportOutcomeKind(outcomeKind)) throw new Error("outcome must be incident, publication or autonomy");
+  if (key.startsWith("autonomy:") && outcomeKind !== "autonomy") throw new Error("autonomy report keys require outcome autonomy");
 
   const origin = attributionOf(dependencies);
   /* Folded through the project aliases once, here: the seat tick reads the log
@@ -3542,9 +3575,14 @@ async function bridgeReport(
      still carries the old one as its conversation's project. */
   const callerProject = dependencies.callerProject ? dependencies.callerProject() : productionCallerProject();
   const project = callerProject ? canonicalOrchestratorProject(callerProject) : null;
+  const autonomyEpisode = outcomeKind === "autonomy" && project && origin.kind === "manager"
+    ? pendingAutonomyReports(readSeatTickSettings(project), Date.now()).find(episode => autonomyReportKey(episode) === key) : null;
+  if (outcomeKind === "autonomy" && (origin.kind !== "manager" || reportClass !== "status" || (!autonomyEpisode && !(project && findBridgeReport(scopedReportId(project, key))?.outcome?.kind === "autonomy")))) {
+    throw new Error("autonomy report must name an ended episode owed by this project's seat");
+  }
   /* #2146: the operator turned this project's reports off. An answer, not an
      error: the caller did nothing wrong, and nothing is stored. */
-  if (project && !bridgeReportsEnabled(project)) {
+  if (project && !bridgeReportsEnabled(project) && outcomeKind !== "autonomy") {
     return { recorded: false, replayed: false, bridgeReports: false, message: "bridge reports are off for this project" };
   }
   const seats = dependencies.authorizedSeats?.()
@@ -3567,6 +3605,8 @@ async function bridgeReport(
   const existing = findBridgeReport(reportId)
     ?? (callerProject && callerProject !== project ? findBridgeReport(scopedReportId(callerProject, key)) : null);
   if (existing) {
+    if (outcomeKind === "autonomy" && existing.outcome?.kind !== "autonomy") throw new Error("autonomy report key is occupied by another report");
+    if (autonomyEpisode && project) markAutonomyReported(project, autonomyEpisode.startedAt, existing.at);
     const telegram = existing.telegram && existing.telegram.state === "failed" && existing.origin?.kind === "manager"
       && origin.kind === "manager" && isRetryableReportSend(existing.telegram.code)
       && project !== null && effectiveReportTelegram(project)?.chat === existing.telegram.chat
@@ -3578,6 +3618,7 @@ async function bridgeReport(
     return {
       recorded: false,
       alreadyRecorded: true,
+      ...(outcomeKind === "autonomy" ? { chatText: existing.body, nextAction: "Repeat chatText exactly in the seat conversation." } : {}),
       seq: existing.seq,
       reportId: existing.id,
       destinations: reportDestinations(existing.seq, telegram),
@@ -3595,7 +3636,7 @@ async function bridgeReport(
   if (outcomeKind !== null && origin.kind !== "manager") warnings.push("outcome was ignored: only the project's orchestrator marks an outcome.");
   if (origin.kind === "manager") {
     /* Only a chat the operator chose for the project is posted to (§5.6). */
-    const destination = project ? effectiveReportTelegram(project) : null;
+    const destination = project && bridgeReportsEnabled(project) ? effectiveReportTelegram(project) : null;
     const deployKey = [key, ...covers].find((entry) => entry.startsWith("deploy:")) ?? null;
     const tasks = deployKey && project ? deployReportTaskChanges(project, deployKey, dependencies) : null;
     if (deployKey && project && !tasks) warnings.push("No task changes are listed: this deploy has no board snapshot to compare, because it settled before snapshots existed or aged out.");
@@ -3670,7 +3711,12 @@ async function bridgeReport(
 
   /* A replay under the same key appends nothing, and says so rather than pretending
      to have delivered a second report. */
-  if (!appended) return { recorded: false, alreadyRecorded: true };
+  if (!appended) {
+    const winner = findBridgeReport(reportId);
+    if (autonomyEpisode && project && winner) markAutonomyReported(project, autonomyEpisode.startedAt, winner.at);
+    return { recorded: false, alreadyRecorded: true, ...(outcomeKind === "autonomy" && winner ? { chatText: winner.body, nextAction: "Repeat chatText exactly in the seat conversation." } : {}) };
+  }
+  if (autonomyEpisode && project) markAutonomyReported(project, autonomyEpisode.startedAt, appended.at);
   const telegram = appended.telegram
     ? await postReportTelegram(appended.id, appended.telegram.chat, appended.telegram.html, appended.telegram.topicId, `bridge-report:${appended.id}`, dependencies, control)
     : null;
@@ -3679,6 +3725,7 @@ async function bridgeReport(
     replayed: false,
     seq: appended.seq,
     reportId: appended.id,
+    ...(outcomeKind === "autonomy" ? { chatText: appended.body, nextAction: "Repeat chatText exactly in the seat conversation." } : {}),
     warnings,
     destinations: reportDestinations(appended.seq, telegram),
   };
@@ -3708,6 +3755,7 @@ function reportDestinations(seq: number, telegram: BridgeReportTelegram | null):
           state: telegram.state,
           ...(telegram.messageIds?.length ? { messageIds: telegram.messageIds } : {}),
           ...(telegram.code ? { code: telegram.code, retryable: isRetryableReportSend(telegram.code) } : {}),
+          ...(telegram.message ? { message: telegram.message } : {}),
         },
       }
       : {}),
@@ -3746,7 +3794,7 @@ async function postReportTelegram(
   const at = new Date().toISOString();
   return recordBridgeReportTelegram(reportId, outcome.ok
     ? { state: "sent", messageIds: outcome.messageIds, at }
-    : { state: outcome.code === "send_uncertain" ? "uncertain" : "failed", code: outcome.code, at })?.telegram ?? null;
+    : { state: outcome.code === "send_uncertain" ? "uncertain" : "failed", code: outcome.code, message: outcome.message ?? `Telegram report send failed (${outcome.code})`, at })?.telegram ?? null;
 }
 
 export interface ReportTelegramSend {
@@ -4070,7 +4118,7 @@ export function mcpSpawnLauncher(dependencies?: Pick<ViewerMcpDomainDependencies
   if (!dependencies) return null;
   try {
     const attribution = attributionOf(dependencies);
-    if (attribution.kind !== "agent" && attribution.kind !== "manager") return null;
+    if (attribution.native || (attribution.kind !== "agent" && attribution.kind !== "manager")) return null;
     const conversationId = attribution.via?.deputy ?? attribution.conversationId;
     return conversationId?.startsWith("conversation_") ? conversationId : null;
   } catch {
@@ -4457,6 +4505,8 @@ async function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDo
   const current = readSettings(project);
 
   const change: SeatTickSettingsChange = {};
+  if (args.autonomy !== undefined) change.autonomy = args.autonomy as SeatTickSettingsChange["autonomy"];
+  if (args.autonomyDecision !== undefined) change.autonomyDecision = args.autonomyDecision as SeatTickSettingsChange["autonomyDecision"];
   if (args.release !== undefined) change.release = args.release as SeatTickSettingsChange["release"];
   if (args.autoRotate !== undefined) change.autoRotate = args.autoRotate as SeatTickSettingsChange["autoRotate"];
   if (args.maintenance !== undefined) change.maintenance = args.maintenance as SeatTickSettingsChange["maintenance"];
@@ -4497,11 +4547,33 @@ async function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDo
       seatEpoch: own === project ? orchestratorSeatFor(project).active?.seatEpoch ?? null : null,
       ...(attribution.via ? { via: attribution.via } : {}),
     };
-    const applied = applySeatTickSettingsChange(current, change, { at: new Date().toISOString(), actor });
+    const review = change.autonomyDecision?.review;
+    if (review) {
+      const round = findPrototypeRound(change.autonomyDecision?.taskId ?? null, review.reviewId);
+      if (!round || round.nativeAssociation || canonicalOrchestratorProject(round.project || project) !== project) throw new Error("autonomy cannot decide this form");
+    }
+    const applied = dependencies.writeTickSettings || dependencies.readTickSettings
+      ? applySeatTickSettingsChange(current, change, { at: new Date().toISOString(), actor })
+      : changeSeatTickSettings(project, change, { at: new Date().toISOString(), actor });
     if (!applied.ok) throw new Error(applied.error);
     if (change.release) releaseControlChange(project, change.release, actor, applied.settings.updatedAt!);
-    writeSettings(project, applied.settings);
-    settings = applied.settings;
+    if (dependencies.writeTickSettings || dependencies.readTickSettings) writeSettings(project, applied.settings);
+    if (review) {
+      const taskId = change.autonomyDecision?.taskId ?? null;
+      const authorize = () => {
+        const active = readSettings(project).autonomy;
+        if (actor.kind !== "manager" || actor.project !== project || !actor.conversationId || !autonomyActive(active, Date.now()) || active?.startedAt !== change.autonomyDecision?.startedAt) throw new Error("autonomy episode ended before this decision");
+      };
+      try {
+        decidePrototype({ kind: "autonomous-seat", project, conversationId: actor.conversationId!, authorize }, taskId, review);
+      } catch (error) {
+        markAutonomyDecisionReview(project, change.autonomyDecision!.startedAt, change.autonomyDecision!.id, "refused");
+        throw error;
+      }
+      markAutonomyDecisionReview(project, change.autonomyDecision!.startedAt, change.autonomyDecision!.id, "decided");
+      deliverPrototypeDecision(taskId, review.reviewId);
+    }
+    settings = review ? readSettings(project) : applied.settings;
     maintenanceNotes = applied.notes;
     changed = true;
   }
@@ -4520,6 +4592,8 @@ async function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDo
   delete settingsWithoutPrompt.maintenance;
   delete settingsWithoutPrompt.autoRotate;
   delete settingsWithoutPrompt.release;
+  delete settingsWithoutPrompt.autonomy;
+  delete settingsWithoutPrompt.autonomyHistory;
   /* #2030: a write is acknowledged, never read back. The caller holds what it
      sent; the revision and the stored length are what it needs to know the row
      took it. A change to another project's tick still says so out loud. */
@@ -4567,7 +4641,7 @@ async function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDo
     /* A full read names nothing it left out (#2030). */
     ...(echoPrompt ? {} : {
       omittedFieldCount: 1,
-      readMore: "seat_tick_settings with verbose:true or full:true reads the complete stored note and settings.",
+      readMore: "seat_tick_settings verbose:true reads the full record.",
     }),
     effective: {
       enabled: effective.enabled,
@@ -4579,7 +4653,10 @@ async function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDo
     /* What a project that has never been configured runs on, so a caller can
        see what it is restoring before it restores it. */
     ...(verbose ? { defaults: seatTickScheduleDefaults(project) } : {}),
-    release: { ...RELEASE_DEFAULTS, ...settings.release, status: releaseStatus(project) },
+    autonomy: settings.autonomy || settings.autonomyHistory?.length || verbose ? { active: autonomyActive(settings.autonomy, now), until: settings.autonomy?.until ?? null, startedAt: settings.autonomy?.startedAt ?? null,
+      decisionCount: settings.autonomy?.decisions.length ?? 0, pendingReports: pendingAutonomyReports(settings, now).map(autonomyReportKey),
+      ...(verbose ? { mandate: autonomyMandate(settings.autonomy, now).join("\n").trim(), episode: effective.autonomy, history: settings.autonomyHistory ?? [] } : {}) } : { active: false },
+    release: { ...RELEASE_DEFAULTS, ...settings.release, effectiveAskBeforePublish: (settings.release?.askBeforePublish ?? true) && !autonomyActive(settings.autonomy, now), status: releaseStatus(project) },
     autoRotate: { enabled: settings.autoRotate?.enabled ?? false, thresholdPercent: settings.autoRotate?.thresholdPercent ?? 50,
       ...(verbose ? { setBy: settings.autoRotate?.setBy ?? null, updatedAt: settings.autoRotate?.updatedAt ?? null, why: settings.autoRotate?.why ?? null } : {}),
       ...autoRotationFailureAnswer(project) },
@@ -7301,7 +7378,7 @@ function recoveryCaller(dependencies: Partial<Pick<ViewerMcpDomainDependencies, 
   } catch {
     return unidentified;
   }
-  if (authority.kind === "unidentified") return unidentified;
+  if (authority.kind === "unidentified") return { ...unidentified, ...(authority.admission ? { admission: authority.admission } : {}) };
   if (authority.conversationId === null) return { kind: authority.kind, conversationId: null, project: null };
   let project: string | null;
   try {
@@ -7323,6 +7400,7 @@ function recoveryCaller(dependencies: Partial<Pick<ViewerMcpDomainDependencies, 
   return {
     kind: authority.kind,
     conversationId: authority.conversationId,
+    ...(authority.nativeProof ? { nativeProof: authority.nativeProof } : {}),
     project,
     ...(predecessors.length ? { predecessors } : {}),
   };
@@ -7725,6 +7803,7 @@ export function viewerMcpRecoverableTools(
 ): Partial<Record<McpToolName, McpRecoverableTool>> {
   return {
     create_pipeline: {
+      currentCaller: () => recoveryCaller(domainDependencies),
       bindForRecovery: (args) => launchRecoveryBinding(args, domainDependencies, "repoDir"),
       bind: async (args) => {
         args = await namedLaunchProject(args, domainDependencies, "repoDir");
@@ -7744,6 +7823,7 @@ export function viewerMcpRecoverableTools(
     },
     spawn_agent: {
       bind: (args) => bindSpawn(args, domainDependencies),
+      currentCaller: () => recoveryCaller(domainDependencies),
       bindForRecovery: (args) => launchRecoveryBinding(args, domainDependencies, "cwd"),
       authorizeClaim: (args, binding) => {
         requireMcpDeployerCaller(args, binding.target.project, domainDependencies);
@@ -7752,11 +7832,13 @@ export function viewerMcpRecoverableTools(
       recover: (binding, options) => recoverSpawn(binding, options.legacy, domainDependencies, options.args, options.context),
     },
     send_message_to_orchestrator: {
+      currentCaller: () => recoveryCaller(domainDependencies),
       bind: (args) => bindOrchestratorSend(args, domainDependencies),
       bindForRecovery: (args) => bindOrchestratorSend(args, domainDependencies, true),
       recover: (binding, options) => recoverSend(binding, options.legacy, domainDependencies, options.args),
     },
     send_message: {
+      currentCaller: () => recoveryCaller(domainDependencies),
       bind: (args) => bindSend(args, domainDependencies),
       recover: (binding, options) => recoverSend(binding, options.legacy, domainDependencies, options.args),
     },

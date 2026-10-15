@@ -1,4 +1,4 @@
-import { afterAll, afterEach, expect, test } from "bun:test";
+import { afterAll, afterEach, describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import crypto from "node:crypto";
 import net from "node:net";
@@ -11,6 +11,7 @@ import path from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 
+import { procBackend } from "@/lib/proc";
 import { Database } from "bun:sqlite";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -99,6 +100,7 @@ interface McpSession {
   transport: StdioClientTransport;
   stderr(): string;
   close(): Promise<void>;
+  nativeHook?(tool: string, args: Record<string, unknown>): Promise<string>;
 }
 
 async function startMcp(environment: Record<string, string>, name: string): Promise<McpSession> {
@@ -763,7 +765,8 @@ function spawnArguments(fixture: CausalFixture, clientRequestId: string, extra: 
 }
 
 async function call(session: McpSession, name: "send_message" | "spawn_agent", args: Record<string, unknown>) {
-  const result = await session.client.callTool({ name, arguments: args });
+  const input = session.nativeHook ? { ...args, nativeCallerProof: await session.nativeHook(name, args) } : args;
+  const result = await session.client.callTool({ name, arguments: input });
   return result.structuredContent as Record<string, unknown> & { details?: Record<string, unknown> };
 }
 
@@ -1636,7 +1639,7 @@ for (const tool of ["send_message", "spawn_agent"] as const) {
       other = await fixture.mcp({ caller: "other" });
       for (const recoveryOnly of [true, false]) {
         const result = await call(other, tool, { ...args, recoveryOnly });
-        expect(result).toMatchObject({ ok: false, code: "outcome_unknown", details: { nextAction: "original-key-lookup" } });
+        expect(result).toMatchObject({ ok: false, code: "outcome_unknown", details: { nextAction: tool === "spawn_agent" ? "correct-request" : "original-key-lookup" } });
         const id = tool === "send_message" ? first.operationId : first.launchId;
         expect(JSON.stringify(result)).not.toContain(String(id));
       }
@@ -1707,3 +1710,546 @@ for (const tool of ["send_message", "spawn_agent"] as const) {
     }
   }, 40_000);
 }
+
+
+/* A native Claude-shaped parent writes its own kernel-bound record and runs
+   the packaged stdio server. No installed CLI or external session is used. */
+async function nativeSession(fixture: CausalFixture, sessionId: string, extra: Record<string, string> = {}, approve = true) {
+  const home = fixture.environment.LLV_CLAUDE_HOME!;
+  const transcript = path.join(home, "projects", "native", `${sessionId}.jsonl`);
+  fs.mkdirSync(path.dirname(transcript), { recursive: true });
+  fs.writeFileSync(transcript, "");
+  const profile = emptyLaunchProfile({ cwd: fixture.sandbox, role: "worker" });
+  fixture.registry.reconcileConversations([{ engine: "claude", path: transcript,
+    accountId: "main", launchProfile: profile, observedAt: new Date().toISOString(),
+    turn: { state: "idle", source: "assistant", terminalAt: null } }]);
+  const conversation = Object.values(fixture.registryFile().conversations).find((row) => row.generations.some((generation) => generation.id === sessionId))!;
+  expect(conversation).toBeDefined();
+  expect(Object.values(fixture.registryFile().entries).filter((entry) => entry.artifactPath === transcript)).toHaveLength(0);
+  const executable = path.join(fixture.sandbox, "claude");
+  if (!fs.existsSync(executable)) fs.symlinkSync(process.execPath, executable);
+  const launcher = path.join(fixture.sandbox, "native-parent.ts");
+  fs.writeFileSync(launcher, `
+    import fs from "node:fs";
+    import path from "node:path";
+    const home = process.env.CLAUDE_CONFIG_DIR;
+    const token = fs.readFileSync('/proc/self/stat', 'utf8').split(')').slice(1).join(')').trim().split(/\\s+/)[19];
+    fs.mkdirSync(path.join(home, 'sessions'), {recursive: true});
+    const file = path.join(home, 'sessions', process.pid + '.json');
+    fs.writeFileSync(file, JSON.stringify({pid:process.pid, sessionId:process.argv[2], kind:'interactive', procStart:token,
+      pidDomain:'linux:' + fs.readFileSync('/etc/machine-id','utf8').trim() + ':' + fs.readlinkSync('/proc/self/ns/pid'), startedAt:Date.now()}));
+    fs.writeFileSync(process.argv[3], file);
+    const started = Bun.spawn([process.execPath, process.argv[4], '--native-caller-hook'], {stdin:'pipe',stdout:'ignore',stderr:'ignore'});
+    started.stdin.write(JSON.stringify({hook_event_name:'SessionStart',session_id:process.argv[2],transcript_path:process.argv[5]})); started.stdin.end();
+    if (await started.exited !== 0) process.exit(1);
+    let processing = false;
+    setInterval(async () => {
+      const request = file + '.hook-request'; const response = file + '.hook-response';
+      if (processing || !fs.existsSync(request)) return; processing = true;
+      try {
+        const payload = JSON.parse(fs.readFileSync(request, 'utf8')); fs.unlinkSync(request);
+        const sid = fs.existsSync(file + '.current-session') ? fs.readFileSync(file + '.current-session', 'utf8') : process.argv[2];
+        const hook = Bun.spawn([process.execPath, process.argv[4], '--native-caller-hook'], { stdin:'pipe', stdout:'pipe', stderr:'pipe' });
+        hook.stdin.write(JSON.stringify({ session_id:sid, transcript_path:path.join(home,'projects','native',sid+'.jsonl'), hook_event_name:'PreToolUse', ...payload })); hook.stdin.end();
+        const answer = await new Response(hook.stdout).text(); const exit = await hook.exited;
+        fs.writeFileSync(response, answer || JSON.stringify({exit}));
+      } catch { fs.writeFileSync(response, '{}'); } finally { processing = false; }
+    }, 5);
+    const child = Bun.spawn([process.execPath, process.argv[4]], {stdin:'inherit', stdout:'inherit', stderr:'inherit'});
+    const code = await child.exited;
+    fs.rmSync(file, {force:true});
+    process.exit(code);
+  `);
+  const pointer = path.join(fixture.sandbox, `native-${sessionId}.pointer`);
+  const transport = new OwnedStdioClientTransport({ command: executable,
+    args: [launcher, sessionId, pointer, path.join(process.cwd(), "bin", "mcp-server.mjs"), transcript], cwd: fixture.sandbox,
+    env: { ...fixture.environment, CLAUDE_CONFIG_DIR: home,
+      LLV_VIEWER_CONTROL_URL: `http://127.0.0.1:${Number(fs.readFileSync(path.join(fixture.sandbox, "host.port"), "utf8"))}`, ...extra }, stderr: "pipe" });
+  let stderr = ""; transport.stderr?.on("data", (chunk) => { stderr += String(chunk); });
+  const client = new Client({ name: "native-caller-proof", version: "1" });
+  try { await client.connect(transport); } catch (error) { await transport.close(); throw new Error(`${error}: ${stderr}`); }
+  const session: McpSession = { client, transport, stderr: () => stderr, close: async () => { await client.close(); await transport.close(); } };
+  const recordFile = fs.readFileSync(pointer, "utf8");
+  const hookEvent = async (payload: Record<string, unknown>) => {
+    const response = `${recordFile}.hook-response`;
+    fs.rmSync(response, { force: true });
+    fs.writeFileSync(`${recordFile}.hook-request`, JSON.stringify(payload));
+    const until = Date.now() + 10_000;
+    while (!fs.existsSync(response)) { if (Date.now() > until) throw new Error("native hook did not answer"); await Bun.sleep(5); }
+    return JSON.parse(fs.readFileSync(response, "utf8"));
+  };
+  session.nativeHook = async (tool, args) => {
+    const output = await hookEvent({ tool_name: `mcp__viewer__${tool}`, tool_input: args });
+    const proof = output.hookSpecificOutput?.updatedInput?.nativeCallerProof;
+    if (typeof proof !== "string") throw new Error("native hook refused fixture input");
+    return proof;
+  };
+  if (extra.LLV_SPAWN_CAPABILITY !== undefined) delete session.nativeHook;
+  if (approve) {
+    try { await approveNative(fixture, session); } catch (error) { await session.close(); throw error; }
+  }
+  return { session, conversationId: conversation.id, recordFile: fs.readFileSync(pointer, "utf8"),
+    lifecycle: async (source: string) => { expect(await hookEvent({ hook_event_name: "SessionStart", source })).toEqual({ exit: 0 }); } };
+}
+
+async function decideNative(fixture: CausalFixture, option: number, authenticated = true, pairedOwner = false): Promise<void> {
+  const child = ownFixtureChild(Bun.spawn([process.execPath, "-e", `
+    const { loadSeatRounds } = await import('./src/lib/prototypeReview/seatRounds');
+    const { nativeAssociationCurrent } = await import('./src/lib/attention/nativeCallerSources');
+    const { decisionsPOST } = await import('./src/lib/prototypeReview/http');
+    const { decidePrototype } = await import('./src/lib/prototypeReview/decision');
+    const { NextRequest } = await import('next/server');
+    const { teamStore } = await import('./src/lib/team/store');
+    const { claimInstall } = await import('./src/lib/team/members');
+    const { MEMBER_COOKIE, mintSession } = await import('./src/lib/team/sessions');
+    const { destinationRelay } = await import('./src/lib/externalRelay/ownerDestination.fixture');
+    const { updateRelayStore } = await import('./src/lib/externalRelay/store');
+    let cookie;
+    if (process.argv[2] === 'true' && process.argv[3] !== 'true') {
+      const store = teamStore();
+      const device = {surface:'desktop',browser:'chrome'};
+      const owner = store.members().find(member => member.role === 'owner' && member.status === 'active') ?? claimInstall(store, 'Owner', device).member;
+      store.updateMember({...owner,telegram:{userId:'41',username:null,firstName:null,linkedAt:new Date().toISOString()}});
+      updateRelayStore(store => ({...store,relays:[destinationRelay()]}));
+      cookie = mintSession(store, owner.id, 'telegram', device).value;
+    }
+    const rounds = loadSeatRounds().filter(round => round.nativeAssociation && (Number(process.argv[1]) === 0 || nativeAssociationCurrent(round.nativeAssociation)));
+    if (!rounds.length) throw new Error('no association approval request');
+    for (const round of rounds) {
+      const body = { project:round.project, reviewId:round.id, chosen:[], comment:'',
+        answers:round.questions.map(q => ({questionId:q.id,options:[Number(process.argv[1])]})) };
+      if (process.argv[3] === 'true') {
+        decidePrototype({kind:'operator-in-process',authorize:()=>{}}, null, body);
+        continue;
+      }
+      const response = await decisionsPOST(new NextRequest('http://localhost/api/projects/decisions', {
+        method:'POST', headers:{host:'localhost','content-type':'application/json', ...(cookie ? {cookie:MEMBER_COOKIE+'='+cookie} : {})},
+        body:JSON.stringify(body)
+      }));
+      if (response.status !== (cookie ? 200 : 403)) throw new Error('unexpected status '+response.status+': '+await response.text());
+    }
+  `, String(option), String(authenticated), String(pairedOwner)], { cwd: process.cwd(), env: fixture.environment, stdout: "pipe", stderr: "pipe" }));
+  const stderr = await new Response(child.stderr).text();
+  expect(await child.exited, stderr).toBe(0);
+}
+
+async function approveNative(fixture: CausalFixture, session: McpSession): Promise<void> {
+  const refused = await call(session, "spawn_agent", { ...spawnArguments(fixture, "native-approval-probe"), recoveryOnly: true });
+  expect(refused).toMatchObject({ ok: false, code: "caller_unidentified" });
+  expect(refused.error).toContain("approval-waiting");
+  expect(refused.error).toContain("Waiting for you");
+  const receiptFile = path.join(fixture.state, "mcp-receipts.sqlite");
+  if (fs.existsSync(receiptFile)) {
+    const db = new Database(receiptFile, { readonly: true });
+    try { expect(db.query<{ count: number }, []>("SELECT count(*) AS count FROM mcp_receipts WHERE receipt_key LIKE '%native-approval-probe%'").get()?.count).toBe(0); }
+    finally { db.close(); }
+  }
+  await decideNative(fixture, 1);
+}
+
+// Deterministic synthetic UUIDs, assembled to avoid publishing apparent session identifiers.
+const NATIVE_A = ["aaaaaaaa", "aaaa", "4aaa", "8aaa", "aaaaaaaaaaaa"].join("-");
+const NATIVE_B = ["bbbbbbbb", "bbbb", "4bbb", "8bbb", "bbbbbbbbbbbb"].join("-");
+
+describe.skipIf(process.platform !== "linux")("native caller admission (#2827)", () => {
+  test("REGRESSION #2827: a scanned external session with no host can mutate and recover", async () => {
+    const fixture = await causalFixture("llv-native-regression-"); const host = await fixture.startHost();
+    const native = await nativeSession(fixture, NATIVE_A, {}, false);
+    try {
+      const args = spawnArguments(fixture, "native-regression");
+      await approveNative(fixture, native.session);
+      const result = await call(native.session, "spawn_agent", args);
+      expect(result).toMatchObject({ ok: true });
+      expect(await call(native.session, "spawn_agent", { ...args, recoveryOnly: true })).toMatchObject({ ok: true, launchId: result.launchId, replayed: true });
+      expect(fixture.effects().filter((effect) => effect.kind === "writer")).toHaveLength(1);
+    } finally { await native.session.close(); await host.stop(); }
+  }, 30_000);
+
+  test("presence updates and compact preserve approval for mutations and original-key recovery", async () => {
+    const fixture = await causalFixture("llv-native-lifetime-"); const host = await fixture.startHost();
+    const native = await nativeSession(fixture, NATIVE_A, {}, false);
+    try {
+      const args = spawnArguments(fixture, "native-lifetime");
+      const pending = await call(native.session, "spawn_agent", args);
+      expect(pending.error).toContain("approval-waiting");
+      const record = JSON.parse(fs.readFileSync(native.recordFile, "utf8"));
+      const presence = (status: string) => fs.writeFileSync(native.recordFile, JSON.stringify({ ...record, status, statusUpdatedAt: Date.now(), updatedAt: Date.now() }));
+      presence("idle");
+      await decideNative(fixture, 1);
+      presence("busy");
+      const accepted = await call(native.session, "spawn_agent", args);
+      expect(accepted).toMatchObject({ ok: true });
+      for (const status of ["waiting", "idle", "busy"]) {
+        presence(status);
+        await native.lifecycle("compact");
+        expect(await call(native.session, "spawn_agent", { ...args, recoveryOnly: true })).toMatchObject({ ok: true, replayed: true, launchId: accepted.launchId });
+      }
+      expect(await call(native.session, "send_message", sendArguments(fixture, "native-after-compact"))).toMatchObject({ ok: true });
+      expect(fixture.effects().filter(effect => effect.kind === "writer")).toHaveLength(1);
+      for (const source of ["startup", "clear"]) {
+        await native.lifecycle(source);
+        const refused = await call(native.session, "spawn_agent", { ...args, recoveryOnly: true });
+        expect(refused).toMatchObject({ ok: false, code: "caller_unidentified" });
+        expect(refused.error).toContain("approval-waiting");
+        expect(JSON.stringify(refused)).not.toContain(String(accepted.launchId));
+        await decideNative(fixture, 1);
+        expect(await call(native.session, "spawn_agent", { ...args, recoveryOnly: true })).toMatchObject({ ok: true, replayed: true, launchId: accepted.launchId });
+      }
+      expect(fixture.effects().filter(effect => effect.kind === "writer")).toHaveLength(1);
+    } finally { await native.session.close(); await host.stop(); }
+  }, 40_000);
+
+  test("an admitted external session launches, loses the response and recovers under the same key", async () => {
+    const fixture = await causalFixture("llv-native-spawn-");
+    let host = await fixture.startHost();
+    let native = await nativeSession(fixture, NATIVE_A);
+    const conversationId = native.conversationId;
+    const args = spawnArguments(fixture, "native-lost-spawn");
+    try {
+      fixture.control({ mode: "lose" });
+      let answer: Awaited<ReturnType<typeof call>> | undefined;
+      const original = call(native.session, "spawn_agent", args).then((result) => { answer = result; return result; });
+      const deadline = Date.now() + 10_000;
+      while (!answer && !fixture.effects().some((effect) => effect.kind === "writer") && Date.now() < deadline) await Bun.sleep(5);
+      // Base returns caller_unidentified before dispatch; no pending barrier is left on failure.
+      if (answer) expect(answer).toMatchObject({ ok: true });
+      await fixture.marker("accepted");
+      const writers = fixture.effects().filter((effect) => effect.kind === "writer");
+      expect(writers).toHaveLength(1);
+      await host.kill();
+      expect(await original).toMatchObject({ ok: true, launchId: writers[0]!.launchId });
+      fixture.control({ mode: "respond" }); host = await fixture.startHost();
+      expect(await call(native.session, "spawn_agent", { ...args, recoveryOnly: true })).toMatchObject({ ok: true, replayed: true, launchId: writers[0]!.launchId });
+      const record = JSON.parse(fs.readFileSync(native.recordFile, "utf8"));
+      await native.session.close();
+      native = await nativeSession(fixture, NATIVE_A);
+      expect(JSON.parse(fs.readFileSync(native.recordFile, "utf8")).pid).not.toBe(record.pid);
+      expect(await call(native.session, "spawn_agent", { ...args, recoveryOnly: true })).toMatchObject({ ok: true, replayed: true, launchId: writers[0]!.launchId });
+      const db = new Database(path.join(fixture.state, "mcp-receipts.sqlite"), { readonly: true });
+      try {
+        const rows = db.query<{ binding_json: string }, []>("SELECT binding_json FROM mcp_receipts WHERE binding_json IS NOT NULL").all();
+        expect(rows).toHaveLength(1);
+        expect(JSON.parse(rows[0]!.binding_json).caller).toMatchObject({ kind: "worker", conversationId });
+      } finally { db.close(); }
+      const receipts = Object.values(fixture.registryFile().receipts).filter((receipt) => receipt.clientAttemptId === downstream("spawn_agent", "native-lost-spawn"));
+      expect(receipts).toHaveLength(1); expect(receipts[0]!.launcher ?? null).toBeNull();
+      expect(fixture.effects().filter((effect) => effect.kind === "writer")).toHaveLength(1);
+    } finally { await native.session.close(); await host.stop(); }
+  }, 40_000);
+
+  test("send_message is attributed to the native caller and caller arguments cannot replace it", async () => {
+    const fixture = await causalFixture("llv-native-send-"); const host = await fixture.startHost();
+    const native = await nativeSession(fixture, NATIVE_A);
+    try {
+      fixture.control({ mode: "respond", sendEffect: "deliver" });
+      expect(await call(native.session, "send_message", sendArguments(fixture, "native-send", { callerConversationId: "conversation_spoof", callerProject: "spoof" }))).toMatchObject({ ok: true });
+      expect(fixture.effects().find((effect) => effect.kind === "recipient")?.origin).toMatchObject({ kind: "agent", conversationId: native.conversationId });
+    } finally { await native.session.close(); await host.stop(); }
+  }, 30_000);
+
+  test("another native session cannot read or reuse the key and a vanished record cannot recover", async () => {
+    const fixture = await causalFixture("llv-native-replay-"); const host = await fixture.startHost();
+    const owner = await nativeSession(fixture, NATIVE_A); const other = await nativeSession(fixture, NATIVE_B);
+    const args = spawnArguments(fixture, "native-private-key");
+    try {
+      fixture.control({ mode: "respond" });
+      const accepted = await call(owner.session, "spawn_agent", args); expect(accepted.ok).toBe(true);
+      for (const recoveryOnly of [true, false]) {
+        const refused = await call(other.session, "spawn_agent", { ...args, recoveryOnly });
+        expect(refused).toMatchObject({ ok: false, code: "recovery_not_permitted" });
+        expect(JSON.stringify(refused)).not.toContain(String(accepted.launchId));
+      }
+      fs.unlinkSync(owner.recordFile);
+      const refused = await call(owner.session, "spawn_agent", { ...args, recoveryOnly: true });
+      expect(refused).toMatchObject({ ok: false, code: "caller_unidentified" });
+      expect(JSON.stringify(refused)).not.toContain(String(accepted.launchId));
+      expect(fixture.effects().filter((effect) => effect.kind === "writer")).toHaveLength(1);
+    } finally { await owner.session.close(); await other.session.close(); await host.stop(); }
+  }, 30_000);
+
+  test("same-user sibling forging an ended session cannot recover its receipt", async () => {
+    const fixture = await causalFixture("llv-native-forgery-"); const host = await fixture.startHost();
+    const owner = await nativeSession(fixture, NATIVE_A);
+    const other = await nativeSession(fixture, NATIVE_B, {}, false);
+    try {
+      const args = spawnArguments(fixture, "native-forgery");
+      const accepted = await call(owner.session, "spawn_agent", args); expect(accepted.ok).toBe(true);
+      await owner.session.close();
+      const record = JSON.parse(fs.readFileSync(other.recordFile, "utf8"));
+      fs.writeFileSync(other.recordFile, JSON.stringify({ ...record, sessionId: NATIVE_A }));
+      for (const recoveryOnly of [true, false]) {
+        const result = await call(other.session, "spawn_agent", { ...args, recoveryOnly });
+        expect(result).toMatchObject({ ok: false, code: "caller_unidentified" });
+        expect(result.error).toContain("session-proof-unavailable");
+        expect(JSON.stringify(result)).not.toContain(String(accepted.launchId));
+      }
+      expect(fixture.effects().filter(effect => effect.kind === "writer")).toHaveLength(1);
+      const continuation = await nativeSession(fixture, NATIVE_A);
+      try { expect(await call(continuation.session, "spawn_agent", { ...args, recoveryOnly: true })).toMatchObject({ ok: true, launchId: accepted.launchId, replayed: true }); }
+      finally { await continuation.session.close(); }
+      fs.writeFileSync(other.recordFile, JSON.stringify(record));
+      await approveNative(fixture, other.session);
+      expect(await call(other.session, "spawn_agent", { ...args, recoveryOnly: true })).toMatchObject({ ok: false, code: "recovery_not_permitted" });
+      // Approval of B's own generation cannot be used to impersonate A either.
+      fs.writeFileSync(other.recordFile, JSON.stringify({ ...record, sessionId: NATIVE_A }));
+      const forgedAfterApproval = await call(other.session, "spawn_agent", { ...args, recoveryOnly: true });
+      expect(forgedAfterApproval).toMatchObject({ ok: false, code: "caller_unidentified" });
+      expect(JSON.stringify(forgedAfterApproval)).not.toContain(String(accepted.launchId));
+      expect(fixture.effects().filter(effect => effect.kind === "writer")).toHaveLength(1);
+    } finally { await owner.session.close(); await other.session.close(); await host.stop(); }
+  }, 40_000);
+
+  test("forged PID and hook metadata cannot self-approve takeover of an ended session's receipt", async () => {
+    const fixture = await causalFixture("llv-native-self-approval-"); const host = await fixture.startHost();
+    const owner = await nativeSession(fixture, NATIVE_A, {}, false);
+    const other = await nativeSession(fixture, NATIVE_B, {}, false);
+    try {
+      const args = spawnArguments(fixture, "native-self-approval");
+      expect(await call(owner.session, "spawn_agent", { ...args, recoveryOnly: true })).toMatchObject({ ok: false, code: "caller_unidentified" });
+      // Trusted owner approval keeps this installation solo; B presents no cookie.
+      await decideNative(fixture, 1, true, true);
+      const accepted = await call(owner.session, "spawn_agent", args); expect(accepted.ok).toBe(true);
+      await owner.session.close();
+      const record = JSON.parse(fs.readFileSync(other.recordFile, "utf8"));
+      fs.writeFileSync(other.recordFile, JSON.stringify({ ...record, sessionId: NATIVE_A }));
+      // B keeps its real PID/start/domain and forges both hook stdin fields as A.
+      fs.writeFileSync(`${other.recordFile}.current-session`, NATIVE_A);
+      const request = await call(other.session, "spawn_agent", { ...args, recoveryOnly: true });
+      expect(request).toMatchObject({ ok: false, code: "caller_unidentified" });
+      expect(request.error).toContain("approval-waiting");
+      await decideNative(fixture, 1, false);
+      for (const recoveryOnly of [true, false]) {
+        const refused = await call(other.session, "spawn_agent", { ...args, recoveryOnly });
+        expect(refused).toMatchObject({ ok: false, code: "caller_unidentified" });
+        expect(refused.error).toContain("approval-waiting");
+        expect(JSON.stringify(refused)).not.toContain(String(accepted.launchId));
+      }
+      expect(fixture.effects().filter(effect => effect.kind === "writer")).toHaveLength(1);
+      await other.session.close();
+      const continuation = await nativeSession(fixture, NATIVE_A);
+      try { expect(await call(continuation.session, "spawn_agent", { ...args, recoveryOnly: true })).toMatchObject({ ok: true, launchId: accepted.launchId, replayed: true }); }
+      finally { await continuation.session.close(); }
+      expect(fixture.effects().filter(effect => effect.kind === "writer")).toHaveLength(1);
+    } finally { await owner.session.close(); await other.session.close(); await host.stop(); }
+  }, 40_000);
+
+  test("a session switch before the CLI record update refuses the old identity", async () => {
+    const fixture = await causalFixture("llv-native-async-switch-"); const host = await fixture.startHost();
+    const native = await nativeSession(fixture, NATIVE_A);
+    try {
+      const args = spawnArguments(fixture, "native-before-switch");
+      const accepted = await call(native.session, "spawn_agent", args); expect(accepted.ok).toBe(true);
+      const recordBefore = fs.readFileSync(native.recordFile, "utf8");
+      const transcript = path.join(fixture.environment.LLV_CLAUDE_HOME!, "projects", "native", `${NATIVE_B}.jsonl`);
+      fs.writeFileSync(transcript, "");
+      fixture.registry.reconcileConversations([{ engine: "claude", path: transcript, accountId: "main", launchProfile: emptyLaunchProfile({ cwd: fixture.sandbox, role: "worker" }), observedAt: new Date().toISOString(), turn: { state: "idle", source: "assistant", terminalAt: null } }]);
+      fs.writeFileSync(`${native.recordFile}.current-session`, NATIVE_B);
+      const refused = await call(native.session, "spawn_agent", { ...args, recoveryOnly: true });
+      expect(fs.readFileSync(native.recordFile, "utf8")).toBe(recordBefore);
+      expect(refused).toMatchObject({ ok: false, code: "caller_unidentified" });
+      expect(JSON.stringify(refused)).not.toContain(String(accepted.launchId));
+      expect(fixture.effects().filter(effect => effect.kind === "writer")).toHaveLength(1);
+    } finally { await native.session.close(); await host.stop(); }
+  }, 30_000);
+
+  for (const entry of ["bundle", "wrapper"] as const) test(`the native hook ${entry} stops after Claude owner death while input remains pending`, async () => {
+    const sandbox = sandboxDir("llv-native-hook-owner-");
+    const environment = isolatedEnvironment(sandbox);
+    const ready = path.join(sandbox, "hook-ready.json");
+    const preload = path.join(sandbox, "hold-hook-input.cjs");
+    fs.writeFileSync(preload, `const fs = require('node:fs'); Object.defineProperty(process, 'stdin', { value: { async *[Symbol.asyncIterator]() { fs.writeFileSync(${JSON.stringify(ready)}, JSON.stringify({pid:process.pid,parent:process.ppid})); await new Promise(() => {}); } } });`);
+    const bundled = path.join(process.cwd(), "dist", "mcp-server.mjs");
+    const command = entry === "bundle" ? ["--preload", preload, bundled] : [path.join(process.cwd(), "bin", "mcp-server.mjs")];
+    if (entry === "wrapper") {
+      // The managed bundle adds only an input barrier around the real entry.
+      const release = path.join(environment.LLV_STATE_DIR!, "mcp-runtime", "releases", "hook-owner");
+      fs.mkdirSync(path.join(release, "dist"), { recursive: true });
+      const source = `import ${JSON.stringify(preload)}; await import(${JSON.stringify(bundled)});`;
+      fs.writeFileSync(path.join(release, "dist", "mcp-server.mjs"), source);
+      fs.writeFileSync(path.join(environment.LLV_STATE_DIR!, "viewer-release.json"), JSON.stringify({ image: "fixture", container: "fixture", endpoint: "http://127.0.0.1:1", revision: "a".repeat(40),
+        mcpRuntime: { source: "managed", releaseId: "hook-owner", revision: "a".repeat(40), artifactDigest: crypto.createHash("sha256").update(source).digest("hex"), stagedAt: new Date().toISOString() } }));
+    }
+    const parentScript = path.join(sandbox, "native-owner.ts");
+    fs.writeFileSync(parentScript, `const child = Bun.spawn([process.execPath, ...${JSON.stringify(command)}, '--native-caller-hook'], {stdin:'inherit',stdout:'ignore',stderr:'ignore'}); await child.exited;`);
+    const executable = path.join(sandbox, "claude"); fs.symlinkSync(process.execPath, executable);
+    const parent = ownFixtureChild(Bun.spawn([executable, parentScript], { cwd: process.cwd(), env: environment, stdin: "pipe", stdout: "ignore", stderr: "pipe" }));
+    const descendants: { pid: number; identity: string | null }[] = [];
+    try {
+      const until = Date.now() + 10_000;
+      while (!fs.existsSync(ready)) { if (Date.now() > until || parent.exitCode !== null) throw new Error("hook input barrier not reached"); await Bun.sleep(10); }
+      const child = JSON.parse(fs.readFileSync(ready, "utf8"));
+      if (entry === "bundle") expect(child.parent).toBe(parent.pid);
+      else { expect(procBackend.readPpid(child.parent)).toBe(parent.pid); descendants.push({ pid: child.parent, identity: procBackend.processIdentity(child.parent) }); }
+      descendants.push({ pid: child.pid, identity: procBackend.processIdentity(child.pid) });
+      parent.kill(9); await parent.exited;
+      const deadline = Date.now() + 5_000;
+      const alive = ({ pid, identity }: { pid: number; identity: string | null }) => identity !== null && procBackend.processIdentity(pid) === identity && !procBackend.processExited(pid);
+      while (descendants.some(alive) && Date.now() < deadline) await Bun.sleep(10);
+      expect(descendants.filter(alive)).toEqual([]);
+    } finally {
+      parent.stdin?.end(); if (parent.exitCode === null) parent.kill(9);
+      for (const { pid, identity } of descendants) if (identity && procBackend.processIdentity(pid) === identity && !procBackend.processExited(pid)) process.kill(pid, "SIGKILL");
+      await parent.exited;
+    }
+  }, 20_000);
+
+  test("missing and replayed native hook proof cannot claim or recover a receipt", async () => {
+    const fixture = await causalFixture("llv-native-hook-replay-"); const host = await fixture.startHost();
+    const native = await nativeSession(fixture, NATIVE_A);
+    try {
+      const args = spawnArguments(fixture, "native-proof-replay");
+      const token = await native.session.nativeHook!("spawn_agent", args);
+      const first = await native.session.client.callTool({ name: "spawn_agent", arguments: { ...args, nativeCallerProof: token } });
+      const accepted = first.structuredContent as Record<string, unknown>; expect(accepted.ok).toBe(true);
+      for (const [proof, recoveryOnly] of [[undefined, true], [token, false]] as const) {
+        const result = await native.session.client.callTool({ name: "spawn_agent", arguments: { ...args, ...(recoveryOnly ? { recoveryOnly } : {}), ...(proof ? { nativeCallerProof: proof } : {}) } });
+        const refused = result.structuredContent as Record<string, unknown>;
+        expect(refused).toMatchObject({ ok: false, code: "caller_unidentified" });
+        expect(JSON.stringify(refused)).not.toContain(String(accepted.launchId));
+      }
+      expect(await call(native.session, "spawn_agent", { ...args, recoveryOnly: true })).toMatchObject({ ok: true, replayed: true, launchId: accepted.launchId });
+      expect(fixture.effects().filter(effect => effect.kind === "writer")).toHaveLength(1);
+    } finally { await native.session.close(); await host.stop(); }
+  }, 30_000);
+
+  test("revoked association refuses original-key recovery without disclosure", async () => {
+    const fixture = await causalFixture("llv-native-revoked-"); const host = await fixture.startHost();
+    const native = await nativeSession(fixture, NATIVE_A);
+    try {
+      const args = spawnArguments(fixture, "native-revoked");
+      const accepted = await call(native.session, "spawn_agent", args); expect(accepted.ok).toBe(true);
+      await decideNative(fixture, 0);
+      const refused = await call(native.session, "spawn_agent", { ...args, recoveryOnly: true });
+      expect(refused).toMatchObject({ ok: false, code: "caller_unidentified" });
+      expect(refused.error).toContain("approval-refused");
+      expect(JSON.stringify(refused)).not.toContain(String(accepted.launchId));
+      expect(fixture.effects().filter(effect => effect.kind === "writer")).toHaveLength(1);
+    } finally { await native.session.close(); await host.stop(); }
+  }, 30_000);
+
+  test("two live native parents holding the same session are refused until one exits", async () => {
+    const fixture = await causalFixture("llv-native-duplicate-"); const host = await fixture.startHost();
+    const owner = await nativeSession(fixture, NATIVE_A); const duplicate = await nativeSession(fixture, NATIVE_A, {}, false);
+    try {
+      for (const native of [owner, duplicate]) {
+        const result = await call(native.session, "spawn_agent", spawnArguments(fixture, "native-duplicate"));
+        expect(result).toMatchObject({ ok: false, code: "caller_unidentified" });
+        expect(result.error).toContain("session-held-twice");
+      }
+      expect(fixture.effects()).toHaveLength(0);
+      await duplicate.session.close();
+      // A leftover dead PID record has no authority over the surviving parent.
+      const home = fixture.environment.LLV_CLAUDE_HOME!;
+      fs.writeFileSync(path.join(home, "sessions", "99999998.json"), JSON.stringify({
+        ...JSON.parse(fs.readFileSync(owner.recordFile, "utf8")), pid: 99999998,
+      }));
+      expect(await call(owner.session, "spawn_agent", spawnArguments(fixture, "native-duplicate"))).toMatchObject({ ok: true });
+      expect(fixture.effects().filter((effect) => effect.kind === "writer")).toHaveLength(1);
+    } finally { await owner.session.close(); await duplicate.session.close(); await host.stop(); }
+  }, 30_000);
+
+  test("stale records refuse mutations and dispatch nothing", async () => {
+    const fixture = await causalFixture("llv-native-stale-"); const host = await fixture.startHost();
+    const native = await nativeSession(fixture, NATIVE_A);
+    try {
+      const record = JSON.parse(fs.readFileSync(native.recordFile, "utf8"));
+      for (const [change, reason] of [[{ procStart: String(Number(record.procStart) + 1) }, "process-identity-mismatch"], [{ startedAt: 0 }, "record-predates-process"]] as const) {
+        fs.writeFileSync(native.recordFile, JSON.stringify({ ...record, ...change }));
+        for (const tool of ["spawn_agent", "send_message"] as const) {
+          const args = tool === "spawn_agent" ? spawnArguments(fixture, `stale-${reason}`) : sendArguments(fixture, `stale-${reason}`);
+          const refused = await call(native.session, tool, args);
+          expect(refused).toMatchObject({ ok: false, code: "caller_unidentified", retryable: false });
+          expect(refused.error).toContain(reason); expect(refused.error).toContain("open the conversation in Delegatus");
+          expect(refused.details).toBeUndefined();
+        }
+      }
+      expect(fixture.effects()).toHaveLength(0);
+    } finally { await native.session.close(); await host.stop(); }
+  }, 30_000);
+
+  test("an unknown or malformed capability refuses native admission", async () => {
+    const fixture = await causalFixture("llv-native-capability-"); const host = await fixture.startHost();
+    try {
+      for (const capability of ["Z".repeat(43), "bad", ""]) {
+        const native = await nativeSession(fixture, NATIVE_A, { LLV_SPAWN_CAPABILITY: capability }, false);
+        try {
+          const refused = await call(native.session, "spawn_agent", spawnArguments(fixture, "native-unknown-capability"));
+          expect(refused).toMatchObject({ ok: false, code: "caller_unidentified" });
+          expect(refused.error).toContain("capability-unresolved");
+        } finally { await native.session.close(); }
+      }
+      expect(fixture.effects()).toHaveLength(0);
+    } finally { await host.stop(); }
+  }, 40_000);
+
+  test("create_orchestrator reaches its route without caller_unidentified on a native session", async () => {
+    const fixture = await causalFixture("llv-native-seat-"); const host = await fixture.startHost();
+    const native = await nativeSession(fixture, NATIVE_A);
+    try {
+      const result = await native.session.client.callTool({ name: "create_orchestrator", arguments: { clientRequestId: "native-seat-probe", project: fixture.sandbox } });
+      expect(result.structuredContent).toBeDefined();
+      expect((result.structuredContent as Record<string, unknown>).code).not.toBe("caller_unidentified");
+    } finally { await native.session.close(); await host.stop(); }
+  }, 30_000);
+});
+
+test("packaged MCP writers retain ordered task edits and attribute synchronous state waits", async () => {
+  const sandbox = sandboxDir("llv-mcp-state-contention-");
+  const environment = identifiedEnvironment(sandbox);
+  const file = path.join(environment.LLV_STATE_DIR!, "tasks.json");
+  fs.writeFileSync(file, JSON.stringify({ tasks: [{
+    id: "shared-task", project: "fixture", status: "inbox", text: "Concurrent task edits",
+    details: "start", placement: "unplaced", assignments: [],
+    createdAt: "2026-10-01T00:00:00.000Z", updatedAt: "2026-10-01T00:00:00.000Z",
+  }] }));
+  const { loadTasksFile } = await import("@/lib/tasks/store");
+  loadTasksFile(file);
+  const sessions: McpSession[] = [];
+  const holder = new Database(path.join(environment.LLV_STATE_DIR!, "state.sqlite"));
+  let pending: Promise<unknown> | undefined;
+  try {
+    for (let writer = 0; writer < 4; writer++) {
+      const session = await startMcp(environment, `state-writer-${writer}`);
+      sessions.push(session);
+      expect((await session.client.callTool({ name: "list_tasks", arguments: { ids: ["shared-task"] } })).isError).not.toBe(true);
+    }
+    holder.exec("BEGIN IMMEDIATE");
+    let acknowledged = 0;
+    const edits = sessions.map(async (session, writer) => {
+      for (let sequence = 0; sequence < 20; sequence++) {
+        const call = { name: "update_task", arguments: {
+          clientRequestId: `edit-${writer}-${sequence}`, taskId: "shared-task", appendLine: `${writer}:${sequence}`,
+        } };
+        const result = await session.client.callTool(call);
+        expect(result.isError).not.toBe(true);
+        acknowledged++;
+        // Replaying a committed request must not append the same line twice.
+        if (sequence === 0) expect((await session.client.callTool(call)).isError).not.toBe(true);
+      }
+    });
+    pending = Promise.all(edits);
+    void pending.catch(() => {});
+    await Bun.sleep(250);
+    expect(acknowledged).toBe(0);
+    expect(loadTasksFile(file).tasks[0]!.details).toBe("start");
+    holder.exec("COMMIT");
+    await pending;
+    const lines = loadTasksFile(file).tasks[0]!.details!.split("\n").slice(1);
+    expect(lines).toHaveLength(80);
+    expect(new Set(lines).size).toBe(80);
+    for (let writer = 0; writer < 4; writer++) {
+      expect(lines.filter(line => line.startsWith(`${writer}:`))).toEqual(Array.from({ length: 20 }, (_, sequence) => `${writer}:${sequence}`));
+    }
+    const logs = sessions.flatMap(session => session.stderr().split("\n"))
+      .filter(line => line.startsWith("[blocking-wait] "))
+      .map(line => JSON.parse(line.slice("[blocking-wait] ".length)));
+    expect(logs.some(entry => entry.stateWait?.processKind === "mcp" && entry.stateWait.outcome === "waiting")).toBe(true);
+    expect(logs.some(entry => entry.stateWait?.processKind === "mcp" && entry.synchronous
+      && entry.durationMs > 50 && entry.stateWait.outcome === "success"
+      && entry.stateWait.synchronousSleepMs > 0 && entry.stateWait.callSite.startsWith("state."))).toBe(true);
+  } finally {
+    holder.close();
+    await pending?.catch(() => {});
+    await Promise.all(sessions.map(session => session.close()));
+  }
+}, 60_000);

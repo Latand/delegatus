@@ -406,3 +406,23 @@ test("the inline card submits a skipped question and its feed record reads Skipp
   const record = await render(<DecisionRecord decision={seatDecision({ decision: { chosen: [], answers, comment: "", at: "2026-10-11T14:46:00.000Z", delivery: { state: "sent", retryable: false } } })} />);
   expect(record.querySelector('[data-decision-record-skipped="why"]')?.textContent).toBe("Skipped");
 });
+
+for (const touch of [false, true]) test(`a native association can be revoked in the existing ${touch ? "phone" : "desktop"} decision list and retries a refused write`, async () => {
+  const active = seatDecision({ nativeAssociationState: "approved", title: "Approve external Claude session", source: { conversationId: null },
+    questions: ["identity", "evidence"].map(id => ({ id, text: id, options: [{ label: "Refuse", recommended: true }, { label: "Approve" }] })),
+    decision: { chosen: [], answers: ["identity", "evidence"].map(questionId => ({ questionId, options: [1] })), comment: "", at: "2026-10-15T09:00:00Z", delivery: { state: "no-orchestrator", retryable: true } } });
+  const posts: unknown[] = []; let refuse = true;
+  globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
+    posts.push(JSON.parse(String(init?.body)));
+    return new Response(JSON.stringify(refuse ? { error: "association store busy" } : { project: "project-a", decisions: [] }), { status: refuse ? 409 : 200 });
+  }) as typeof fetch;
+  const host = await render(<DecisionList project="project-a" touch={touch} initial={[active]} />);
+  expect(host.textContent).toContain("Access approved"); expect(host.textContent).not.toContain("waiting for an orchestrator");
+  await click(host.querySelector("[data-native-association-revoke]"));
+  expect(host.querySelector('[role="alert"]')?.textContent).toContain("association store busy");
+  expect(host.querySelector("[data-native-association-revoke]")).not.toBeNull();
+  refuse = false; await click(host.querySelector("[data-native-association-revoke]"));
+  expect(host.querySelector("[data-native-association-revoke]")).toBeNull();
+  const expected = { project: "project-a", reviewId: SEAT, chosen: [], comment: "", answers: [{ questionId: "identity", options: [0] }, { questionId: "evidence", options: [0] }] };
+  expect(posts).toEqual([expected, expected]);
+});

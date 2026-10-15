@@ -1,9 +1,10 @@
+import type { RuntimeOwnerSession } from "@/lib/runtime/snapshotReads";
 /* Restart admission is read afresh for each role, including after web swaps. */
 import { projectInfoFromCwd } from "@/lib/scanner/describe";
 import { DEFAULT_STALL_AFTER_MS, evaluateActivityLiveness, STARTING_GRACE_MS } from "@/lib/lifecycle/liveness";
 import type { AgentActivityFacts } from "@/lib/lifecycle/agentActivity";
 import type { OwnerReference, OwnerRole } from "@/lib/lifecycle/owners";
-import type { RuntimeSession, RuntimeSnapshot } from "@/lib/runtime/contracts";
+import type { RuntimeSession } from "@/lib/runtime/contracts";
 import type { Pipeline } from "@/lib/pipelines/types";
 import type { RegistryFile } from "@/lib/agent/registry";
 import { admittedRecords } from "../../../bin/self-update-supervisor.mjs";
@@ -157,11 +158,11 @@ export interface QuietPorts {
   admissionStarts?(): readonly string[];
   /** Synchronous durable admission/start evidence; changing it invalidates an awaited probe. */
   dispatchVersion?(): string;
-  runtimeSnapshot(): Promise<Pick<RuntimeSnapshot, "sessions">>;
+  runtimeSnapshot(): Promise<{ sessions: RuntimeOwnerSession[] }>;
   /** Every recorded owner with its own evidence. `probe` is one object per
       probe, so a reader can share what it loads across one probe and no
       further. A reading that throws holds admission through `unreadable`. */
-  owners?(sessions: readonly RuntimeSession[], probe: object, read?: OwnerRead): Promise<OwnerCensusReading>;
+  owners?(sessions: readonly RuntimeOwnerSession[], probe: object, read?: OwnerRead): Promise<OwnerCensusReading>;
   pipelines(): readonly Pipeline[];
   flows?(): readonly Flow[];
   presence(now: number): readonly StoredViewSession[];

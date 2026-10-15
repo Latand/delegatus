@@ -110,7 +110,7 @@ export async function serveEvidenceFixture(
   outDir: string,
   entryFixture = "src/components/kanban/issue1695Evidence.fixture.tsx",
   responses: Record<string, unknown> = {},
-  options: { derivationTiming?: boolean } = {},
+  options: { derivationTiming?: boolean; serialComposerPrerequisites?: boolean } = {},
 ): Promise<{ base: string; stop: () => void }> {
   /* Bundled in a separate process: inside the `bun test` process,
      `Bun.build` resolves the `@/` alias for some module graphs and not for
@@ -119,6 +119,7 @@ export async function serveEvidenceFixture(
   const bundle = path.join(outDir, "bundle");
   const build = Bun.spawnSync([
     process.execPath, path.resolve("src/components/kanban/buildEvidenceFixture.ts"), path.resolve(entryFixture), bundle,
+    ...(options.serialComposerPrerequisites ? ["--serial-composer-prerequisites"] : []),
   ], { stdout: "pipe", stderr: "pipe", env: { ...process.env, LLV_DERIVATION_TIMING: options.derivationTiming ? "1" : "0" } });
   if (build.exitCode !== 0) throw new Error(`fixture bundle failed: ${build.stderr.toString()}${build.stdout.toString()}`);
   const entry = path.join(bundle, `${path.basename(entryFixture).replace(/\.tsx?$/, "")}.js`);

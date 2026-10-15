@@ -882,7 +882,7 @@ test("a saved wait behind an idle restored host recovers despite settings replay
   f.h.ports.stopInterruptedStageAgent = async () => { stops++; return { outcome: "stopped" }; };
   f.advance(IDLE_TURN_QUIET_MS + 3000);
   await withRuntimeSnapshot({ runtime: { hostEpoch: 7 }, sessions: [
-    { conversationId: loadPipelines()[0]!.runs[0]!.attempts[0]!.conversationId, host: "alive", turn: "idle", attentionIds: [] },
+    { conversationId: loadPipelines()[0]!.runs[0]!.attempts[0]!.conversationId, host: "hosted", turn: "idle", attentionIds: [] },
   ] }, async () => {
     const production = defaultPipelinePorts();
     const ports = { ...f.h.ports, conversationAgentActive: production.conversationAgentActive,

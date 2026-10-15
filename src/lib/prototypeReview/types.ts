@@ -74,7 +74,9 @@ export interface PrototypeDecision {
   comment: string;
   at: string;
   /** The person who decided; the background delivery sends in their name. Local only. */
-  decidedBy?: { kind: "operator" } | { kind: "member"; memberId: string };
+  decidedBy?: { kind: "operator" } | { kind: "member"; memberId: string } | { kind: "agent"; conversationId: string };
+  /** Local proof recorded only after the native-association authorization gate. */
+  nativeAssociationApproval?: "owner-session" | "paired-owner";
   /** 1 for the first decision of a round; a changed decision raises it and gets a message key of its own. */
   revision?: number;
   /** Persisted before dispatch; retries always carry this key and recipient. */
@@ -94,6 +96,8 @@ export interface PrototypeDecision {
 export interface PrototypeReviewRound {
   id: string;
   title: string;
+  /** Local operator association evidence; never supplied by publication input. */
+  nativeAssociation?: import("@/lib/attention/nativeCaller").NativeAdmissionEvidence;
   /** Null for a round the project's orchestrator published without a task
       (docs/design/operator-decision-forms.md §2.2). */
   taskId: string | null;
@@ -118,12 +122,14 @@ export interface PrototypeTelegramPost {
   reason?: string;
 }
 export interface PrototypeMediaView extends PrototypeMedia { available: boolean; url: string | null }
-export interface PrototypeRoundView extends Omit<PrototypeReviewRound, "publicationKey" | "inputDigest" | "critic" | "decision" | "variants"> {
+export interface PrototypeRoundView extends Omit<PrototypeReviewRound, "publicationKey" | "inputDigest" | "critic" | "nativeAssociation" | "decision" | "variants"> {
+  /** Enables revocation in the existing Decisions column; contains no kernel proof. */
+  nativeAssociationState?: "pending" | "approved" | "refused";
   variants: Array<Omit<PrototypeVariant, "frames" | "videos"> & {
     frames: Array<Omit<PrototypeFrame, "image" | "original"> & { image: PrototypeMediaView; original?: PrototypeMediaView }>;
     videos: Array<{ media: PrototypeMediaView; caption: string }>;
   }>;
-  decision?: Omit<PrototypeDecision, "delivery" | "decidedBy" | "revision"> & { delivery: { state: PrototypeDeliveryState; retryable: boolean; phase?: PrototypeDeliveryPhase } };
+  decision?: Omit<PrototypeDecision, "delivery" | "decidedBy" | "nativeAssociationApproval" | "revision"> & { delivery: { state: PrototypeDeliveryState; retryable: boolean; phase?: PrototypeDeliveryPhase } };
 }
 /** A read's round. Superseded rounds name the later decided round that retired
     them; the mark is derived on read and never crosses to another installation. */
