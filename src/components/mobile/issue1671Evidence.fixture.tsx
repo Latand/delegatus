@@ -173,11 +173,11 @@ const VOICE_SCENE = new URLSearchParams(location.search).get("voice");
 const VOICE_LONG = new URLSearchParams(location.search).has("voice-long");
 const phoneVoice = { starts: [] as string[], projects: [] as Array<string | null>, closes: 0, sessionRequests: 0 };
 Object.assign(window, { phoneVoice });
-if (VOICE_SCENE === "sim") {
+if (VOICE_SCENE === "sim" || VOICE_SCENE === "reads") {
   const uk = localStorage.getItem("llv_lang") === "uk";
   setVoiceCompanionAdapterForTests((): VoiceCompanionAdapter => {
     const simulated = createSimulatedCompanion({
-      clock: realClock(), script: scenarioScript("long", uk ? "uk" : "en"),
+      clock: realClock(), script: VOICE_SCENE === "reads" ? [] : scenarioScript("long", uk ? "uk" : "en"),
       recipient: { project: "atlas", conversationId: "conversation_orchestrator", seatEpoch: 1, engine: "claude" },
     });
     return {
@@ -187,6 +187,7 @@ if (VOICE_SCENE === "sim") {
       subscribe: (emit) => simulated.subscribe(emit),
       command: (command) => simulated.command(command),
       close: () => { phoneVoice.closes += 1; return simulated.close(); },
+      ...(VOICE_SCENE === "reads" ? { transcript: async () => (await serverFetch("/evidence/voice-transcript")).json() } : {}),
     };
   });
 }

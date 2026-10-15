@@ -1,0 +1,222 @@
+{
+  "driver": "src/components/mobile/issue1671Evidence.browser.test.tsx",
+  "frames": ".artifacts/voice-companion/orchestrator-phone",
+  "readings": [
+    {
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "lang": "uk",
+      "scheme": "light",
+      "geometry": {
+        "x": 8,
+        "y": 60,
+        "right": 382,
+        "bottom": 836,
+        "width": 374,
+        "height": 776,
+        "sideways": 0,
+        "background": "rgb(255, 253, 250)",
+        "opacity": "1",
+        "headInert": true
+      },
+      "textLength": 3606,
+      "completeText": true,
+      "copied": true,
+      "actions": 3,
+      "endedReadable": true,
+      "focusContained": true,
+      "errors": []
+    },
+    {
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "lang": "uk",
+      "scheme": "dark",
+      "geometry": {
+        "x": 8,
+        "y": 60,
+        "right": 382,
+        "bottom": 836,
+        "width": 374,
+        "height": 776,
+        "sideways": 0,
+        "background": "rgb(32, 35, 44)",
+        "opacity": "1",
+        "headInert": true
+      },
+      "textLength": 3606,
+      "completeText": true,
+      "copied": true,
+      "actions": 3,
+      "endedReadable": true,
+      "focusContained": true,
+      "errors": []
+    },
+    {
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "lang": "en",
+      "scheme": "light",
+      "geometry": {
+        "x": 8,
+        "y": 60,
+        "right": 382,
+        "bottom": 836,
+        "width": 374,
+        "height": 776,
+        "sideways": 0,
+        "background": "rgb(255, 253, 250)",
+        "opacity": "1",
+        "headInert": true
+      },
+      "textLength": 3254,
+      "completeText": true,
+      "copied": true,
+      "actions": 3,
+      "endedReadable": true,
+      "focusContained": true,
+      "errors": []
+    },
+    {
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "lang": "en",
+      "scheme": "dark",
+      "geometry": {
+        "x": 8,
+        "y": 60,
+        "right": 382,
+        "bottom": 836,
+        "width": 374,
+        "height": 776,
+        "sideways": 0,
+        "background": "rgb(32, 35, 44)",
+        "opacity": "1",
+        "headInert": true
+      },
+      "textLength": 3254,
+      "completeText": true,
+      "copied": true,
+      "actions": 3,
+      "endedReadable": true,
+      "focusContained": true,
+      "errors": []
+    },
+    {
+      "viewport": {
+        "width": 375,
+        "height": 667
+      },
+      "lang": "uk",
+      "scheme": "light",
+      "geometry": {
+        "x": 8,
+        "y": 60,
+        "right": 367,
+        "bottom": 659,
+        "width": 359,
+        "height": 599,
+        "sideways": 0,
+        "background": "rgb(255, 253, 250)",
+        "opacity": "1",
+        "headInert": true
+      },
+      "textLength": 3606,
+      "completeText": true,
+      "copied": true,
+      "actions": 3,
+      "endedReadable": true,
+      "focusContained": true,
+      "errors": []
+    },
+    {
+      "viewport": {
+        "width": 375,
+        "height": 667
+      },
+      "lang": "uk",
+      "scheme": "dark",
+      "geometry": {
+        "x": 8,
+        "y": 60,
+        "right": 367,
+        "bottom": 659,
+        "width": 359,
+        "height": 599,
+        "sideways": 0,
+        "background": "rgb(32, 35, 44)",
+        "opacity": "1",
+        "headInert": true
+      },
+      "textLength": 3606,
+      "completeText": true,
+      "copied": true,
+      "actions": 3,
+      "endedReadable": true,
+      "focusContained": true,
+      "errors": []
+    },
+    {
+      "viewport": {
+        "width": 375,
+        "height": 667
+      },
+      "lang": "en",
+      "scheme": "light",
+      "geometry": {
+        "x": 8,
+        "y": 60,
+        "right": 367,
+        "bottom": 659,
+        "width": 359,
+        "height": 599,
+        "sideways": 0,
+        "background": "rgb(255, 253, 250)",
+        "opacity": "1",
+        "headInert": true
+      },
+      "textLength": 3254,
+      "completeText": true,
+      "copied": true,
+      "actions": 3,
+      "endedReadable": true,
+      "focusContained": true,
+      "errors": []
+    },
+    {
+      "viewport": {
+        "width": 375,
+        "height": 667
+      },
+      "lang": "en",
+      "scheme": "dark",
+      "geometry": {
+        "x": 8,
+        "y": 60,
+        "right": 367,
+        "bottom": 659,
+        "width": 359,
+        "height": 599,
+        "sideways": 0,
+        "background": "rgb(32, 35, 44)",
+        "opacity": "1",
+        "headInert": true
+      },
+      "textLength": 3254,
+      "completeText": true,
+      "copied": true,
+      "actions": 3,
+      "endedReadable": true,
+      "focusContained": true,
+      "errors": []
+    }
+  ]
+}

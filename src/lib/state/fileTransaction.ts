@@ -200,7 +200,10 @@ export async function withFileTransaction<T>(filePath: string, busyMessage: stri
         continue;
       }
       try {
-        return await operation();
+        const result = operation();
+        // A synchronous commit releases before another in-process synchronous
+        // writer can run. Only an asynchronous body holds across a microtask.
+        return result && typeof (result as Promise<T>).then === "function" ? await result : result;
       } finally {
         release(ticket, descriptor);
       }

@@ -2264,6 +2264,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "render.notDelivered": "не доставлено",
   "render.voiceDelegatusTag": "голос",
   "render.voiceDelegatusLabel": "Від голосового Delegatus · на ваше прохання",
+  "voiceCompanion.report.message": "Повідомлення",
   "voiceCompanion.report.progress": "Перебіг",
   "voiceCompanion.report.result": "Результат",
   "voiceCompanion.report.question": "Питання",
