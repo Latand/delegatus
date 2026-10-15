@@ -61,6 +61,18 @@ test("a row survives the write and reads back whole", () => {
   expect(readSeatTickState("other", file)).toMatchObject(emptySeatTickState());
 });
 
+test("wake recovery deadlines and retry evidence survive legacy import and reopening", () => {
+  const file = path.join(SANDBOX, "recovery-deadline.json");
+  const recovery = { checkedAt: "2026-10-15T00:38:00.000Z", lastAttemptAt: "2026-10-15T00:33:00.000Z",
+    nextRetryAt: "2026-10-15T00:43:00.000Z", deadlineAt: "2026-10-15T00:48:00.000Z", reason: "host evidence unreadable" };
+  fs.writeFileSync(file, JSON.stringify({ version: 2, projects: { viewer: {
+    ...row, outstandingWake: { ...row.outstandingWake, recovery },
+  } } }));
+  expect(readSeatTickState("viewer", file).outstandingWake?.recovery).toEqual(recovery);
+  writeSeatTickState("viewer", readSeatTickState("viewer", file), file);
+  expect(readSeatTickState("viewer", file).outstandingWake?.recovery).toEqual(recovery);
+});
+
 test("persisted reported stalls keep every still-active conversation past the former 64-item cap", () => {
   const file = path.join(SANDBOX, "active-stall-ledger.json");
   const reportedStalls = Array.from({ length: 100 }, (_, index) => `conversation_${index}@2026-10-12T05:00:00.000Z`);

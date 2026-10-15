@@ -137,6 +137,9 @@ function decodeAccountingRow(raw: unknown): AccountingRow | null {
           || (wake.commit.reportedStalls !== undefined
             && (!Array.isArray(wake.commit.reportedStalls) || !wake.commit.reportedStalls.every(string)))
           || (wake.preparedAt !== undefined && !string(wake.preparedAt))) return false;
+        if (wake.recovery && (!string(wake.recovery.checkedAt) || !nullableString(wake.recovery.lastAttemptAt)
+          || !string(wake.recovery.nextRetryAt) || !string(wake.recovery.deadlineAt)
+          || !string(wake.recovery.reason) || wake.recovery.reason.length > 500)) return false;
         return wake.dispatch === undefined || (!!wake.dispatch && string(wake.dispatch.token)
           && ["active", "refused", "returned"].includes(wake.dispatch.state));
       };
@@ -686,10 +689,9 @@ export class SeatTickAccounting {
   /**
    * Move the outstanding attempt to the retired slot (#1594).
    *
-   * The attempt is taken from the ROW rather than from `expected`, so a
-   * dispatch state another transaction recorded between the read and here
-   * travels with it. Nothing else about it changes: same key, same payload,
-   * same landing plan. What changes is that it no longer fences the next wake.
+   * The operation and dispatch must still match the observation that allowed
+   * retirement. The attempt keeps its key, payload and landing plan.
+   * It no longer fences the next wake.
    *
    * Refused when the row moved on to another attempt. At the retention bound
    * it makes room instead of refusing (#1746, #1602): the oldest entry whose
@@ -711,7 +713,9 @@ export class SeatTickAccounting {
   ): { retired: boolean; evicted: string | null } {
     return this.mutate((tx, row) => {
       const wake = row.state.outstandingWake;
-      if (!wake || wake.clientMessageId !== expected.clientMessageId) return { retired: false, evicted: null };
+      if (!wake || wake.clientMessageId !== expected.clientMessageId
+        || wake.operationId !== expected.operationId || wake.dispatch?.token !== expected.dispatch?.token
+        || wake.dispatch?.state !== expected.dispatch?.state) return { retired: false, evicted: null };
       let retired = row.state.retiredWakes ?? [];
       let evicted: string | null = null;
       if (retired.length >= SEAT_TICK_RETIRED_WAKE_LIMIT) {
