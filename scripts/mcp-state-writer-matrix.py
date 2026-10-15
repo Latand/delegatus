@@ -36,6 +36,10 @@ def git(*args):
 def environment(root):
     env = {k: v for k, v in os.environ.items() if not k.startswith(
         ("LLV_", "DELEGATUS_", "MCP_SQL_", "MCP_BENCH_", "NEXT_PUBLIC_", "TMUX"))}
+    # The runner validates this inherited lease against its live kernel lock.
+    # Nested samples still receive their own owned runner and resource quota.
+    if "LLV_GATE_SLOT_LEASE" in os.environ:
+        env["LLV_GATE_SLOT_LEASE"] = os.environ["LLV_GATE_SLOT_LEASE"]
     for key in ["HOME", "XDG_CONFIG_HOME", "TMPDIR", "LLV_STATE_DIR", "LLV_CODEX_HOME",
                 "LLV_CLAUDE_HOME", "COPILOT_HOME", "OPENCLAW_STATE_DIR", "GH_CONFIG_DIR", "TMUX_TMPDIR"]:
         folder = root / key
