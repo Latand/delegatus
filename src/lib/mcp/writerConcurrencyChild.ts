@@ -151,6 +151,26 @@ if (process.env.LLV_WRITER_INITIALIZED && process.env.LLV_WRITER_BEGIN) {
    after the committed rows are read; JSON is only the initial import. */
 if (kind === "task") {
   const { SqliteStateCollection } = await import("@/lib/state/sqliteStateStore");
+  if (process.env.LLV_WRITER_NO_PROCESS_IDENTITY === "1") {
+    // Hold the aged lease before patchSync opens its SQL transaction. A peer
+    // must refuse this live lease even when SQLite itself is available.
+    const prototype = SqliteStateCollection.prototype as unknown as {
+      options: { collection: string };
+      tryAcquireLease(db: import("bun:sqlite").Database, token: string): boolean;
+    };
+    const acquire = prototype.tryAcquireLease;
+    prototype.tryAcquireLease = function (db, token) {
+      const acquired = acquire.call(this, db, token);
+      if (acquired && this.options.collection === "tasks") {
+        db.query("UPDATE state_leases SET acquired_at = ? WHERE collection = 'tasks' AND owner_token = ?")
+          .run(Date.now() - 60_000, token);
+        holdAfterRead();
+      } else if (!acquired && this.options.collection === "tasks") {
+        fs.writeFileSync(`${readyPath}.waiting`, "lease refused\n");
+      }
+      return acquired;
+    };
+  }
   const patchSync = SqliteStateCollection.prototype.patchSync;
   SqliteStateCollection.prototype.patchSync = function gatedPatchSync(this: InstanceType<typeof SqliteStateCollection>, prepare) {
     return patchSync.call(this, () => {

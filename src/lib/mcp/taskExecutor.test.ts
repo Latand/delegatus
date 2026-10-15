@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -30,8 +30,10 @@ beforeAll(async () => {
   capabilities = JSON.parse(fs.readFileSync(process.env.MCP_BENCH_READY, "utf8"));
   capability = capabilities[0]!;
 });
+afterEach(async () => {
+  await Promise.all(executors.splice(0).map(executor => executor.close()));
+});
 afterAll(async () => {
-  await Promise.all(executors.map(executor => executor.close()));
   await reapFixtureChildren();
   fs.rmSync(root, { recursive: true, force: true });
 });

@@ -143,6 +143,8 @@ export async function stateWriterReport(root: string) {
   const max = (values: number[]) => Math.max(0, ...values);
   return {
     ...summary,
+    runtime: fs.existsSync(path.join(root, "runtime.json"))
+      ? read<{ bunVersion: string; quotaHierarchyLeafFirst: Record<string, string>[] }>(root, "runtime.json") : null,
     unfinishedViewerCallsAtTeardown: [...unfinished.values()].filter(event => event.pid === viewer).length,
     unfinishedExecutorCallsAtTeardown: [...unfinished.values()].filter(event => executors.has(event.pid)).length,
     unfinishedAdapterCallsAtTeardown: [...unfinished.values()].filter(event => event.pid !== viewer && !executors.has(event.pid)).length,

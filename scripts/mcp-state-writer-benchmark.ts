@@ -145,6 +145,16 @@ export async function runStateWriterSample(): Promise<void> {
   if (!process.env.MCP_BENCH_HOST_NAMESPACE || fs.readlinkSync("/proc/self/ns/pid") === process.env.MCP_BENCH_HOST_NAMESPACE
     || fs.readlinkSync("/proc/self") !== String(process.pid)) throw new Error("fixture needs its own process namespace");
   fs.mkdirSync(root, { recursive: true });
+  const group = fs.readFileSync("/proc/self/cgroup", "utf8").split("\n").find(line => line.startsWith("0::"))?.slice(3);
+  if (!group) throw new Error("fixture needs readable cgroup quota evidence");
+  const quotaHierarchyLeafFirst: Record<string, string>[] = [];
+  for (let directory = path.join("/sys/fs/cgroup", group); directory.startsWith("/sys/fs/cgroup"); directory = path.dirname(directory)) {
+    quotaHierarchyLeafFirst.push(Object.fromEntries(["cpu.max", "memory.max", "cpuset.cpus.effective"].flatMap(name => {
+      const filename = path.join(directory, name);
+      return fs.existsSync(filename) ? [[name, fs.readFileSync(filename, "utf8").trim()]] : [];
+    })));
+  }
+  fs.writeFileSync(path.join(root, "runtime.json"), JSON.stringify({ bunVersion: Bun.version, quotaHierarchyLeafFirst }));
   const env = environment(path.join(root, "sandbox"));
   fs.cpSync(process.env.MCP_BENCH_SEED!, env.LLV_STATE_DIR!, { recursive: true });
   const capabilities = JSON.parse(fs.readFileSync(process.env.MCP_BENCH_CAPABILITIES!, "utf8")) as string[];

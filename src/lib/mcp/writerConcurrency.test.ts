@@ -342,19 +342,24 @@ test("an aged live writer without process identity retains the transaction until
 
   const first = spawnWriter("http");
   await waitFor(first.ready);
-  /* The first writer holds the tasks collection lease (#1870). Age it well
-     past the old file lock's 30 s staleness window: a live owner keeps it. */
+  /* The fixture ages its lease before opening the SQL transaction, leaving
+     SQLite free so the peer must check the live owner rather than a SQL lock. */
   const { Database } = process.getBuiltinModule("bun:sqlite") as typeof import("bun:sqlite");
   const db = new Database(path.join(sandbox, "state.sqlite"));
   try {
-    const held = db.query("UPDATE state_leases SET acquired_at = ? WHERE collection = 'tasks'").run(Date.now() - 60_000);
-    expect(held.changes).toBe(1);
+    const held = db.query<{ acquired_at: number; owner_start_identity: string | null }, []>(
+      "SELECT acquired_at, owner_start_identity FROM state_leases WHERE collection = 'tasks'",
+    ).get();
+    expect(held?.acquired_at).toBeLessThanOrEqual(Date.now() - 59_000);
+    expect(held?.owner_start_identity).toBeNull();
+    db.exec("BEGIN IMMEDIATE");
+    db.exec("ROLLBACK");
   } finally {
     db.close();
   }
 
   const second = spawnWriter("mcp");
-  await Bun.sleep(300);
+  await waitFor(`${second.ready}.waiting`);
   const enteredBeforeRelease = fs.existsSync(second.ready);
   fs.writeFileSync(first.release, "release\n", "utf8");
   if (!enteredBeforeRelease) await waitFor(second.ready);
