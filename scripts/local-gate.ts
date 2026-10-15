@@ -186,6 +186,22 @@ export function gateTemporaryRoot(platform: NodeJS.Platform = process.platform):
   return platform === "win32" ? tmpdir() : "/var/tmp";
 }
 
+/** The Viewer deliberately mounts /var/tmp read-only. Its controller-owned
+ * Git hooks can use /tmp instead, without inheriting an operator scratch root.
+ * Attempt creation directly so a permission or mount change cannot race a probe.
+ */
+export function createGateSandbox(
+  platform: NodeJS.Platform = process.platform,
+  create: (prefix: string) => string = mkdtempSync,
+): string {
+  try {
+    return create(path.join(gateTemporaryRoot(platform), "delegatus-local-gate-"));
+  } catch (error) {
+    if (platform === "win32" || !["EROFS", "EACCES", "ENOENT"].includes((error as NodeJS.ErrnoException)?.code ?? "")) throw error;
+    return create(path.join("/tmp", "delegatus-local-gate-"));
+  }
+}
+
 /** Everything that might resolve state, including build imports, is sandboxed. */
 export function isolatedEnvironment(root: string, inherited: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const env = { ...inherited };
@@ -671,7 +687,7 @@ async function main(mode: Mode, admitted = false): Promise<void> {
   // Installed on first use, inside the step that needs it and by its deadline.
   let runtime: Promise<string> | undefined;
   const fixtures = new Map<string, Promise<string>>();
-  const sandbox = mkdtempSync(path.join(gateTemporaryRoot(), "delegatus-local-gate-"));
+  const sandbox = createGateSandbox();
   try {
     const isolated = isolatedEnvironment(sandbox, process.env);
     const privacyEnv = {
