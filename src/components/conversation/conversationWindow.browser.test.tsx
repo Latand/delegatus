@@ -4797,7 +4797,7 @@ describe("Codex history paging", () => {
     };
     const bundles = [await build(true), await build(false)];
     const candidate = Bun.spawnSync(["git", "rev-parse", "HEAD"]).stdout.toString().trim();
-    const sourceHashes = ["src/components/feed/parse.ts", "src/components/feed/contextTokens.ts", "src/components/feed/codexHistory.ts"].map(file => ({ path: file, sha256: createHash("sha256").update(fs.readFileSync(file)).digest("hex") }));
+    const sourceHashes = ["src/components/feed/parse.ts", "src/components/feed/contextTokens.ts", "src/components/feed/codexHistory.ts", "src/components/feed/__fixtures__/codexHistoryComparison.ts", "src/components/conversation/conversationWindow.browser.test.tsx"].map(file => ({ path: file, sha256: createHash("sha256").update(fs.readFileSync(file)).digest("hex") }));
     const manifest = process.env.LLV_CODEX_HISTORY_MANIFEST
       ? JSON.parse(fs.readFileSync(process.env.LLV_CODEX_HISTORY_MANIFEST, "utf8")) as { label: string; source: string; sha256: string }[]
       : [533, 866, 1112, 1277, 3146].map((length, index) => ({ label: String.fromCharCode(65 + index), lines: codexHistoryCorpus(length, 16000) }));
@@ -4874,6 +4874,38 @@ describe("Codex history paging", () => {
         }
       }
       await context.close();
+      // Retention is sampled separately, after timing, in one fresh page per
+      // implementation. Raw input is loaded before the empty-page reading.
+      const memory = [];
+      for (const fixture of manifest) for (const index of [0, 1]) {
+        const isolated = await browser.newContext();
+        try {
+          const page = await isolated.newPage();
+          await page.addScriptTag({ content: bundles[index] });
+          const bytes = "source" in fixture ? fs.readFileSync(fixture.source) : Buffer.from(fixture.lines.join("\n") + "\n");
+          await page.evaluate(lines => { (globalThis as unknown as { historyLines: string[] }).historyLines = lines; }, bytes.toString("utf8").trimEnd().split("\n"));
+          const client = await isolated.newCDPSession(page);
+          await client.send("HeapProfiler.collectGarbage");
+          const before = await client.send("Runtime.getHeapUsage");
+          const counts = await page.evaluate(({ index }) => {
+            type Parser = typeof import("../feed/parse");
+            const g = globalThis as unknown as { historyBefore: Parser; historyAfter: Parser; historyLines: string[]; retainedHistory: import("../feed/parse").FeedSession };
+            const parser = index ? g.historyAfter : g.historyBefore;
+            const session = parser.createFeedSession({ engine: "codex", fmt: "codex", showSvc: false, lineFilter: "" });
+            const lines = g.historyLines;
+            let start = Math.max(0, lines.length - 300);
+            session.feed(lines.slice(start), start, false);
+            while (start > 0) { start = Math.max(0, start - 300); session.feed(lines.slice(start), start, false); }
+            g.retainedHistory = session;
+            return parser.codexHistoryStats?.(session) ?? null;
+          }, { index });
+          await client.send("HeapProfiler.collectGarbage");
+          const after = await client.send("Runtime.getHeapUsage");
+          memory.push({ fixture: fixture.label, implementation: index ? "after" : "before", emptyBytes: before.usedSize, retainedBytes: after.usedSize, sessionDeltaBytes: after.usedSize - before.usedSize,
+            counts: counts ? { effects: counts.effects, slots: counts.slots, versions: counts.versions, frontier: counts.frontier, checkpointBytes: counts.checkpointBytes } : null });
+        } finally { await isolated.close(); }
+      }
+      fs.writeFileSync("evidence/codex-history/memory.json", JSON.stringify({ base, candidate, sourceHashes, memory }, null, 2) + "\n");
     } finally { await browser.close(); }
   }, 600_000);
 });
