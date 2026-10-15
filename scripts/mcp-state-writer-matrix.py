@@ -413,6 +413,14 @@ def main():
                 for side in (args.sides if repeat % 2 == 0 else list(reversed(args.sides))):
                     sample = root / f"{side}-{clients}-{mode}-{'shared' if shared else 'independent'}-{repeat + 1}"
                     target, manifest = exports[side]
+                    if (sample / "report.json").exists():
+                        recorded = json.loads((sample / "manifest.json").read_text())
+                        bounds = json.loads((sample / "boundaries.json").read_text())
+                        expected = {"clients": clients, "mode": mode, "shared": shared,
+                                    "warmSeconds": 1 if args.smoke else 30,
+                                    "seconds": 10 if args.smoke else 300}
+                        if recorded.get("smoke") != args.smoke or any(bounds.get(key) != value for key, value in expected.items()):
+                            raise RuntimeError("resume cannot mix smoke and acceptance windows or replace sample parameters")
                     if not (sample / "report.json").exists():
                         if sample.exists():
                             raise RuntimeError(f"partial sample retained: {sample.name}; choose a new output directory")
