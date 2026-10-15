@@ -506,7 +506,8 @@ one whole item at a time:
 Every removal is a whole item, counted in that section's "і ще N" line, so no
 item is ever cut mid-text. The Telegram copy is rendered from the same cut
 report, so it lists exactly the items the bridge copy lists. Its own bound
-(4 096 characters for HTML) is never reached from a 1 900-byte report.
+counts 4 096 characters after entity parsing. Escaped HTML can be longer
+than that while the displayed report stays within the bound.
 
 ### 3.3 Keys and dedupe
 
@@ -875,7 +876,7 @@ In `bridgeReport` (`src/lib/mcp/bindings.ts:2565`) and its schema
   the section limits and the byte budget of §3.2, whole items only; and return
   the cut report. `renderPlain(cut)` is stored as the row's `body`, and
   `renderTelegram(cut)` (§5.5), the group's copy, is stored on the same row
-  (`telegram.html`, at most 4 096 characters) when the project has a chat.
+  (`telegram.html`, at most 4 096 characters after entity parsing) when the project has a chat.
   Both are rendered once, at append, from the same cut; nothing re-renders a
   stored report. The header name, time zone
   and locale come from §5.6 and §4.2; headings and kind words live in the
@@ -979,6 +980,9 @@ Both answers are tested at the tool; the ask line is tested at the tick.
     `{emoji} <b>{heading}</b>` and its `• item` lines, sections separated by a
     blank line.
   - Every item and the summary is HTML-escaped before any tag is added.
+    The shared report budget trims whole items before rendering. HTML escaping
+    can expand the stored payload beyond 4 096 characters; the sender counts
+    displayed text after parsing entities, preserving all sections in the cut.
   - No links and no URLs, because GitHub link previews were what made the long
     posts spammy: no `<a>` tag is ever emitted, the scrubber has already
     removed URLs and domains, and a number the forge cache knows as one of
@@ -998,7 +1002,11 @@ Both answers are tested at the tool; the ask line is tested at the tick.
   `clientRequestId: "bridge-report:<reportId>"`. Every report is sent
   silently. The text sent is the row's stored `telegram.html` (§5.2). The
   outcome is recorded on the row with a new store function,
-  `recordBridgeReportTelegram(id, { chat, state, messageIds?, code?, at })`.
+  `recordBridgeReportTelegram(id, { state, messageIds?, code?, message?, at })`.
+  Failed sends retain the sender's explanation as `destinations.telegram.message`,
+  including Telegram's description when it answered. Tokens, handles and numeric
+  identities are scrubbed before the reason is bounded to 300 characters. Both
+  receipt replays and report-key replays retain it; a successful retry clears it.
 - **Failure and retry**: a retryable code (`rate_limited`, `network_failed`,
   `timed_out`, `telegram_failed`) leaves `state: "failed"`, and calling
   `bridge_report` again with the same key, still a replay for the log, re-sends

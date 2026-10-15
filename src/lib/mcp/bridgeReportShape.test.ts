@@ -16,11 +16,15 @@ process.env.LLV_STATE_DIR = path.join(SANDBOX, "state");
 
 const { appendBridgeReports, readBridgeReportLog, resetBridgeCollectionsForTests, scopedReportId } = await import("@/lib/bridge/store");
 const { persistProjectAliases, resetProjectAliasesForTests } = await import("@/lib/projects/aliases");
+const { persistedBridgeReportRowsText } = await import("@/lib/bridge/storeFixture");
 const { recordDeploySnapshot, resetTaskChangeCollectionsForTests } = await import("@/lib/bridge/taskChanges");
 const { resetProjectSettingsForTests, setBridgeReports, setReportTelegram } = await import("@/lib/projects/settings");
 const { TelegramBotError, TelegramBotService, productionTelegramBotDependencies } = await import("@/lib/telegram/bot/service");
 const { FakeBotTransport, fakeBotToken, ok, refused, unreachable } = await import("@/lib/telegram/bot/fakeTransport");
-const { viewerMcpBindings } = await import("./bindings");
+const { createBotApiTransport } = await import("@/lib/telegram/bot/transport");
+const { telegramBotFailure } = await import("@/lib/telegram/bot/http");
+const { decodeHTML } = await import("entities");
+const { productionViewerControlDependencies, viewerMcpBindings } = await import("./bindings");
 const { createMcpToolService, MemoryMcpReceiptStore } = await import("./server");
 
 import type { BoardTask } from "@/lib/tasks/types";
@@ -40,6 +44,8 @@ const NOW = new Date("2026-09-25T18:45:00Z");
 const deploymentId = (head: string) => [head, "0000", "4000", "8000", "0".repeat(12)].join("-");
 
 let transport: InstanceType<typeof FakeBotTransport>;
+let wireTransport: ReturnType<typeof createBotApiTransport> | null = null;
+let wireControl = false;
 let bot: InstanceType<typeof TelegramBotService>;
 let locale: "en" | "uk" | null = "en";
 let tasks: BoardTask[] = [];
@@ -47,7 +53,7 @@ let tasks: BoardTask[] = [];
 function newBot() {
   return new TelegramBotService({
     ...productionTelegramBotDependencies(),
-    transportFor: () => transport,
+    transportFor: () => wireTransport ?? transport,
     now: () => NOW,
     sleep: async () => {},
     conversationTitle: () => null,
@@ -80,7 +86,7 @@ async function sendThroughBot(input: ReportTelegramSend) {
     const answer = await bot.send({ conversationId: MANAGER.conversationId, clientRequestId: input.clientRequestId, chat: input.chat, text: input.html, topicId: input.topicId, format: "html", silent: true });
     return { ok: true as const, messageIds: answer.messageIds };
   } catch (error) {
-    if (error instanceof TelegramBotError) return { ok: false as const, code: error.code };
+    if (error instanceof TelegramBotError) return { ok: false as const, code: error.code, message: error.message };
     throw error;
   }
 }
@@ -97,14 +103,14 @@ const BOT_CONTROL = {
 };
 
 function serviceAs(attribution: CallerAttribution, project = PROJECT, seatProject = project) {
-  const bindings = viewerMcpBindings(undefined, BOT_CONTROL, {
+  const bindings = viewerMcpBindings(undefined, wireControl ? productionViewerControlDependencies(true) : BOT_CONTROL, {
     callerAttribution: () => attribution,
     callerProject: () => project,
     authorizedSeats: () => [{ conversationId: MANAGER.conversationId!, path: null, project: seatProject }],
     operatorLocale: () => locale,
     operatorTimeZone: () => "Europe/Kyiv",
     publicDenyList: () => ({ accounts: ["account-b"], people: ["Person Bee"], local: [], projects: [{ repository: "someone/other-repo", names: ["other-repo"] }] }),
-    sendReportTelegram: sendThroughBot,
+    ...(wireControl ? {} : { sendReportTelegram: sendThroughBot }),
     listTaskRecords: () => tasks,
     loadTasks: () => tasks,
   } as never);
@@ -117,7 +123,7 @@ type ReportAnswer = McpToolResult & {
   seq?: number;
   reportId?: string;
   warnings?: string[];
-  destinations?: { bridge: { seq: number }; telegram?: { chat: string; state: string; messageIds?: number[]; code?: string; retryable?: boolean } };
+  destinations?: { bridge: { seq: number }; telegram?: { chat: string; state: string; messageIds?: number[]; code?: string; retryable?: boolean; message?: string } };
   code?: string;
   error?: string;
 };
@@ -591,4 +597,171 @@ test("a chat the operator chose stays the destination once agents may no longer 
   const refused = await file({ key: "chosen-2", summary: "Two lanes running." });
   expect(refused.destinations!.telegram).toMatchObject({ chat: "design-lounge", state: "failed", code: "chat_not_allowed" });
   expect(transport.callsOf("sendMessage")).toHaveLength(1);
+});
+
+/** Exercise the Bot API envelope, bot service, Viewer error response and MCP
+ * dispatch together. The only HTTP listener is this private Viewer stub. */
+async function withWireBot(run: (sends: Record<string, unknown>[], reject: (status: number | null, description?: string) => void) => Promise<void>) {
+  const sends: Record<string, unknown>[] = [];
+  let refusal: { status: number; description: string } | null = null;
+  wireTransport = createBotApiTransport(fakeBotToken(), async (url, init) => {
+    const method = url.slice(url.lastIndexOf("/") + 1);
+    const params = JSON.parse(String(init.body));
+    if (method !== "sendMessage") {
+      const result = await transport.call(method, params, { signal: init.signal ?? undefined });
+      if (!result.ok) return Response.json({ ok: false, error_code: result.status, description: result.description }, { status: result.status ?? 503 });
+      return Response.json({ ok: true, result: result.result });
+    }
+    sends.push(params);
+    if (refusal) return Response.json({ ok: false, error_code: refusal.status, description: refusal.description }, { status: refusal.status });
+    // Only the report renderer's supported HTML is accepted; check nesting
+    // before decoding so escaped user text cannot become markup.
+    const stack: string[] = [];
+    let invalid = false;
+    const plain = String(params.text).replace(/<[^>]*>/g, (tag) => {
+      if (tag === "<b>") stack.push("b");
+      else if (tag === "<blockquote expandable>") stack.push("blockquote");
+      else if (tag === "</b>" || tag === "</blockquote>") invalid ||= stack.pop() !== tag.slice(2, -1);
+      else invalid = true;
+      return "";
+    });
+    invalid ||= stack.length > 0 || /[<>]|&(?!(?:amp|lt|gt|quot);)/.test(plain);
+    const decoded = decodeHTML(plain);
+    if (invalid || decoded.length > 4096) return Response.json({ ok: false, error_code: 400, description: invalid ? "Bad Request: can't parse entities" : "Bad Request: message is too long" }, { status: 400 });
+    return Response.json({ ok: true, result: { message_id: sends.length, date: 100, chat: TEAM, text: decoded } });
+  });
+  bot = newBot();
+  const oldUrl = process.env.LLV_VIEWER_CONTROL_URL;
+  const viewer = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(req) {
+    try {
+      const body = await req.json();
+      return Response.json(await bot.send({ ...body, conversationId: MANAGER.conversationId }));
+    } catch (error) { return telegramBotFailure(error); }
+  } });
+  process.env.LLV_VIEWER_CONTROL_URL = `http://127.0.0.1:${viewer.port}`;
+  wireControl = true;
+  try {
+    await connectTeamChat();
+    setReportTelegram(PROJECT, { chat: "team-reports", name: "Delegatus" }, "operator");
+    await run(sends, (status, description) => { refusal = status === null ? null : { status, description: description! }; });
+  } finally {
+    await bot.stopPoller();
+    await viewer.stop(true);
+    wireTransport = null;
+    wireControl = false;
+    if (oldUrl === undefined) delete process.env.LLV_VIEWER_CONTROL_URL;
+    else process.env.LLV_VIEWER_CONTROL_URL = oldUrl;
+  }
+}
+
+for (const language of ["en", "uk"] as const) {
+  for (const count of [2, 3]) {
+    for (const fill of ["w", "&", "<", "😀"]) {
+      test(`Bot API delivers ${count} decisions with maximum sections and lengths (${language}, ${fill})`, async () => {
+        locale = language;
+        await withWireBot(async (sends) => {
+          setReportTelegram(PROJECT, { chat: "team-reports", name: "Report ".padEnd(60, "r") }, "operator");
+          const item = (prefix: string) => (prefix + fill.repeat(Math.floor((200 - prefix.length) / fill.length))).padEnd(200, "w");
+          const decisions = Array.from({ length: count }, (_, i) => item(`Decision ${i + 1}: `));
+          // Keep the complete report within its separate 8 KiB relay bound.
+          const other = (prefix: string) => fill === "😀" ? prefix.padEnd(200, "w") : item(prefix);
+          const sections = { prod: Array(6).fill(other("Prod: ")), merged: Array(6).fill(other("Merged: ")), inProgress: Array(6).fill(other("Progress: ")), queued: Array(4).fill(other("Next: ")), decision: decisions };
+          const answer = await file({ key: "maximum-report", summary: fill.repeat(120).slice(0, 120), sections });
+          expect(answer.destinations?.telegram).toMatchObject({ state: "sent" });
+          expect(sends).toHaveLength(1);
+          expect(sends[0]).toMatchObject({ parse_mode: "HTML", disable_notification: true });
+          const html = String(sends[0]!.text);
+          const decoded = decodeHTML(html.replace(/<[^>]*>/g, ""));
+          for (const decision of decisions) expect(decoded).toContain(decision);
+          expect(decoded.length).toBeLessThanOrEqual(4096);
+          expect(html).toContain("<blockquote expandable>");
+          const row = readBridgeReportLog().reports[0]!;
+          const items = row.body.split("\n").filter((line) => line.startsWith("• "));
+          for (const line of items) expect(decoded).toContain(line);
+          expect(await file({ key: "maximum-report", summary: "Replay" })).toMatchObject({ alreadyRecorded: true });
+          expect(sends).toHaveLength(1);
+        });
+      });
+    }
+  }
+}
+
+test("Bot API 400 description survives storage and both replays with tokens and identities scrubbed", async () => {
+  await withWireBot(async (sends, reject) => {
+    const userId = String(TEAM.id).slice(1);
+    const handle = "@" + ["fixture", "person"].join("_");
+    const token = fakeBotToken();
+    reject(400, `Bad Request: can't parse entities at byte offset 73; chat_id=${TEAM.id}; user_id=${userId}; ${handle}; ${token}; ${token.split(":")[1]}`);
+    const args = { clientRequestId: "wire-error", key: "wire-error", class: "question", summary: "Two questions", sections: { decision: ["First question?", "Second question?"] } };
+    const service = serviceAs(MANAGER);
+    const first = await service.callTool("bridge_report", args) as ReportAnswer;
+    expect(first.destinations?.telegram).toMatchObject({ state: "failed", code: "format_invalid", retryable: false });
+    expect(first.destinations?.telegram?.message).toContain("Bad Request: can't parse entities at byte offset 73");
+    const serialized = JSON.stringify(first) + persistedBridgeReportRowsText();
+    for (const privateValue of [String(TEAM.id), userId, handle, token, token.split(":")[1]!]) expect(serialized).not.toContain(privateValue);
+    expect(await service.callTool("bridge_report", args)).toMatchObject({ replayed: true, destinations: first.destinations });
+    resetBridgeCollectionsForTests();
+    const replay = await file({ key: "wire-error", summary: "Replay" });
+    expect(replay.destinations?.telegram).toEqual(first.destinations?.telegram);
+    expect(readBridgeReportLog().reports[0]!.telegram).toMatchObject({ message: first.destinations!.telegram!.message });
+    expect(sends).toHaveLength(1);
+  });
+});
+
+test("retryable Bot API failures keep the latest cause and a successful replay clears it", async () => {
+  await withWireBot(async (sends, reject) => {
+    reject(500, "Internal Server Error: temporary send failure");
+    const args = { key: "wire-retry", summary: "Two questions", sections: { decision: ["First question?", "Second question?"] } };
+    const first = await file(args);
+    expect(first.destinations?.telegram?.message).toContain("Internal Server Error: temporary send failure");
+    expect(first.destinations?.telegram).toMatchObject({ state: "failed", code: "telegram_failed", retryable: true });
+    reject(500, "Internal Server Error: retry refused");
+    const retry = await file({ ...args, summary: "Ignored on replay" });
+    expect(retry.destinations?.telegram?.message).toContain("Internal Server Error: retry refused");
+    expect(sends).toHaveLength(2);
+    expect(sends[1]!.text).toBe(sends[0]!.text);
+    reject(null);
+    const sent = await file(args);
+    expect(sent.destinations?.telegram).toMatchObject({ state: "sent" });
+    expect(sent.destinations?.telegram).not.toHaveProperty("message");
+    resetBridgeCollectionsForTests();
+    expect(readBridgeReportLog().reports[0]!.telegram).not.toHaveProperty("message");
+    expect(sends).toHaveLength(3);
+    expect(sends[2]!.text).toBe(sends[0]!.text);
+  });
+});
+
+for (const [status, description, code] of [
+  [400, "Bad Request: message is too long", "bad_request"],
+  [401, "Unauthorized: token revoked", "token_rejected"],
+  [403, "Forbidden: bot was kicked", "forbidden"],
+  [429, "Too Many Requests: retry later", "rate_limited"],
+] as const) {
+  test(`Bot API ${status} exposes its reason in the report destination`, async () => {
+    await withWireBot(async (_sends, reject) => {
+      reject(status, description);
+      const answer = await file({ key: "wire-refused", summary: "Report" });
+      expect(answer.destinations?.telegram).toMatchObject({ state: "failed", code });
+      expect(answer.destinations?.telegram?.message).toContain(description);
+    });
+  });
+}
+
+
+test("a maximum deploy report delivers its task section beside three decisions", async () => {
+  await withWireBot(async (sends) => {
+    const title = "Task ".padEnd(90, "w");
+    tasks = Array.from({ length: 24 }, (_, i) => task(`t${i}`, "inbox", `${i} ${title}`));
+    recordDeploySnapshot(PROJECT, { deploymentId: deploymentId("d0000001"), revision: "a".repeat(40), phase: "succeeded", terminal: true, updatedAt: "2026-09-25T16:20:00Z" }, tasks);
+    tasks = tasks.map((value, i) => ({ ...value, status: (["done", "blocked", "assigned"] as const)[i % 3]! }));
+    tasks.push(...Array.from({ length: 8 }, (_, i) => task(`new${i}`, "inbox", title)));
+    recordDeploySnapshot(PROJECT, { deploymentId: deploymentId("d0000002"), revision: "b".repeat(40), phase: "succeeded", terminal: true, updatedAt: NOW.toISOString() }, tasks);
+    const decisions = Array.from({ length: 3 }, (_, i) => `Decision ${i}: `.padEnd(200, "&"));
+    const answer = await file({ key: "deploy:bbbbbbbb:succeeded", class: "completed", summary: "Release ".padEnd(120, "w"), sections: { prod: Array(6).fill("Prod".padEnd(200, "w")), merged: Array(6).fill("Merged".padEnd(200, "w")), inProgress: Array(6).fill("Progress".padEnd(200, "w")), queued: Array(4).fill("Next".padEnd(200, "w")), decision: decisions } });
+    expect(answer.destinations?.telegram).toMatchObject({ state: "sent" });
+    const decoded = decodeHTML(String(sends[0]!.text).replace(/<[^>]*>/g, ""));
+    expect(decoded).toContain("Tasks since the previous deploy");
+    for (const decision of decisions) expect(decoded).toContain(decision);
+    for (const line of readBridgeReportLog().reports[0]!.body.split("\n").filter((line) => line.startsWith("• "))) expect(decoded).toContain(line);
+  });
 });

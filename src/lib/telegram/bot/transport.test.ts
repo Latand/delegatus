@@ -173,3 +173,17 @@ test("the token file is owner-only, read back only through a callback, and a sym
 test("the bot's token file never collides with the personal account's files", () => {
   expect(path.basename(telegramBotTokenPath())).toBe("bot-token.json");
 });
+
+test("failure descriptions redact identities before the length bound while preserving the cause", async () => {
+  const chatId = -(10 ** 12 + 101);
+  const handle = "@" + ["fixture", "person"].join("_");
+  const description = `Bad Request: chat not found; chat_id=${chatId}; user_id=7; bot_id=${TOKEN.split(":")[0]}; ${handle}; ${TOKEN}; ${TOKEN_TAIL}; ${"x".repeat(400)}`;
+  const transport = createBotApiTransport(TOKEN, async () => jsonResponse({ ok: false, error_code: 400, description }, 400));
+  const result = await transport.call("sendMessage", {});
+  expect(result.ok).toBe(false);
+  if (result.ok) throw new Error("expected refusal");
+  expect(result.description).toStartWith("Bad Request: chat not found");
+  expect(result.description).toHaveLength(300);
+  expect(result.description).toContain("user_id=[id]");
+  for (const value of [String(chatId), handle, TOKEN, TOKEN_TAIL, TOKEN.split(":")[0]!]) expect(result.description).not.toContain(value);
+});

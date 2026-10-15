@@ -203,10 +203,14 @@ function postRefusal(chat: ChatRow): { code: TelegramBotErrorCode; reason: strin
  * character boundaries. HTML is never split, because a split can cut a tag.
  */
 export function splitMessageText(text: string, format: "plain" | "html"): string[] {
-  if (text.length <= BOT_TEXT_PART_CHARS) return [text];
   if (format === "html") {
-    throw new TelegramBotError("text_too_long", `HTML text is limited to ${BOT_TEXT_PART_CHARS} characters; send plain text or split it`);
+    // Telegram applies its limit after parsing entities. Markup and escaped
+    // characters do not consume that budget; Telegram still validates HTML.
+    const displayed = decodeHTML(text.replace(/<[^>]*>/g, ""));
+    if (displayed.length <= BOT_TEXT_PART_CHARS) return [text];
+    throw new TelegramBotError("text_too_long", `HTML text is limited to ${BOT_TEXT_PART_CHARS} characters after entity parsing; send plain text or split it`);
   }
+  if (text.length <= BOT_TEXT_PART_CHARS) return [text];
   if (text.length > BOT_TEXT_PART_CHARS * BOT_TEXT_MAX_PARTS) {
     throw new TelegramBotError("text_too_long", `text is limited to ${BOT_TEXT_PART_CHARS * BOT_TEXT_MAX_PARTS} characters (${BOT_TEXT_MAX_PARTS} messages of ${BOT_TEXT_PART_CHARS}); shorten it`);
   }
@@ -237,7 +241,7 @@ function sendFailure(result: Extract<BotCallResult, { ok: false }>, chat: ChatRo
   if (result.status === 429) {
     return new TelegramBotError("rate_limited", `Telegram is rate-limiting this bot; retry after ${result.retryAfterSeconds ?? 1} s${detail}`, { retryAfterSeconds: result.retryAfterSeconds ?? 1 });
   }
-  if (result.status === 401 || result.status === 404) return new TelegramBotError("token_rejected", "Telegram rejected the bot token; the operator must paste a new one in the Telegram panel");
+  if (result.status === 401 || result.status === 404) return new TelegramBotError("token_rejected", `Telegram rejected the bot token; the operator must paste a new one in the Telegram panel${detail}`);
   if (result.status === 403) {
     return new TelegramBotError("forbidden", `Telegram refused the post to ${chat.title}: the bot was blocked or removed, lacks the right to post, or the user never wrote to it${detail}`);
   }
