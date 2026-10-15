@@ -1,3 +1,5 @@
+import { nativeAssociationDecisionApproves } from "@/lib/attention/nativeAssociationForm";
+import { nativeAssociationCurrent } from "@/lib/attention/nativeCallerSources";
 import fs from "node:fs";
 import { attentionDismissalIndex, type AttentionDismissalV1 } from "@/lib/attention/dismissals";
 import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
@@ -116,7 +118,10 @@ export function operatorDecisions(project: string, tasks: readonly BoardTask[] =
     const waiting = read.waitingReviewId ? read.rounds.find(round => round.id === read.waitingReviewId) : undefined;
     return waiting ? [{ ...waiting, taskTitle: firstLineTitle(task.text) }] : [];
   });
-  const fromSeat = readSeatRounds(key).rounds.filter(round => !round.decision);
+  // Approved live associations stay reachable for revocation in this column.
+  // Only undecided rounds contribute to Waiting for you and its badge.
+  const fromSeat = localRoundViews(loadSeatRounds(key).filter(round => !round.decision
+    || (round.nativeAssociation && nativeAssociationDecisionApproves(round.decision) && nativeAssociationCurrent(round.nativeAssociation))), null);
   return { project: key, decisions: [...fromTasks, ...fromSeat].sort((a, b) => a.createdAt.localeCompare(b.createdAt)) };
 }
 

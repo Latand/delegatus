@@ -1,3 +1,4 @@
+import { performanceSpans } from "@/lib/performanceSpans";
 import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
@@ -75,9 +76,10 @@ export function serveRuntimeHost(socketPath: string, host: RuntimeHostSocketHand
       if (socket.destroyed || socket.writableEnded || !socket.writable) return;
       // A preserialized result (the snapshot) splices into the frame verbatim,
       // so its megabytes are not re-stringified once per connection.
-      const frame = response.ok && response.result instanceof PreserializedJson
+      const frame = performanceSpans.correlate(response.id, () => performanceSpans.sync("runtime.stringify", () => response.ok && response.result instanceof PreserializedJson
         ? `{"id":${JSON.stringify(response.id)},"ok":true,"result":${response.result.json}}`
-        : JSON.stringify(response);
+        : JSON.stringify(response)));
+      performanceSpans.event("rpc.send", response.id, Buffer.byteLength(frame));
       socket.end(frame + "\n");
     };
     socket.on("data", (chunk) => {
@@ -93,6 +95,8 @@ export function serveRuntimeHost(socketPath: string, host: RuntimeHostSocketHand
       try {
         const request = JSON.parse(frame) as RuntimeSocketRequest;
         if (!request.id || !request.method) throw new Error("runtime request is malformed");
+        performanceSpans.request(request.id, request.method);
+        performanceSpans.event("rpc.receive", request.id);
         if (request.method === "viewer-deployment-request") socket.setTimeout(deploymentTimeoutMs);
         const failure = (): RuntimeSocketResponse => ({ id: request.id, ok: false, error: "runtime request failed" });
         if (request.method === "wait") {
@@ -101,7 +105,7 @@ export function serveRuntimeHost(socketPath: string, host: RuntimeHostSocketHand
             return;
           }
           activeWaitConnections += 1;
-          void host.handle(request, { signal: abort.signal })
+          void performanceSpans.correlate(request.id, () => performanceSpans.wait("runtime.handler", () => host.handle(request, { signal: abort.signal })))
             .then(settle, () => settle(failure()))
             .finally(() => { activeWaitConnections -= 1; });
           return;
@@ -109,7 +113,7 @@ export function serveRuntimeHost(socketPath: string, host: RuntimeHostSocketHand
         /* Every request carries the connection signal, so a disconnected
            caller stops read-only work early; mutating journal operations
            ignore the signal and still complete idempotently. */
-        void host.handle(request, { signal: abort.signal }).then(settle, () => settle(failure()));
+        void performanceSpans.correlate(request.id, () => performanceSpans.wait("runtime.handler", () => host.handle(request, { signal: abort.signal }))).then(settle, () => settle(failure()));
       } catch {
         settle({ id: "unknown", ok: false, error: "runtime request is malformed" });
       }

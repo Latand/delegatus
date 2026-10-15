@@ -9,7 +9,7 @@ import { usePrototypeNoticesFor } from "@/components/prototypeReview/prototypeRe
 import { useLocale } from "@/lib/i18n";
 import type { OperatorDecisionView } from "@/lib/prototypeReview/types";
 
-import { DecisionCard, DecisionRow } from "./DecisionCard";
+import { DecisionCard, DecisionRecord, DecisionRow } from "./DecisionCard";
 import { useOperatorDecisions } from "./useOperatorDecisions";
 
 /*
@@ -79,7 +79,11 @@ export function DecisionList({ project, active = true, focus, touch = false, ini
     body = <p data-decision-list-empty="" className="m-0 px-1 py-2 text-body text-muted">{t("decisions.empty")}</p>;
   } else {
     body = decisions.map((decision) => decision.id === expanded?.id
-      ? <DecisionCard key={decision.id} decision={decision} narrow={narrow} columns={columns} onAnswer={read.answer} error={read.error?.reviewId === decision.id ? read.error.message : null} />
+      ? decision.decision && decision.nativeAssociationState === "approved"
+        ? <DecisionRecord key={decision.id} decision={decision} onRevoke={() => read.answer(decision.id, { chosen: [], comment: "",
+          answers: (decision.questions ?? []).map(question => ({ questionId: question.id, options: [0] })) })}
+          revokeError={read.error?.reviewId === decision.id ? read.error.message : null} />
+        : <DecisionCard key={decision.id} decision={decision} narrow={narrow} columns={columns} onAnswer={read.answer} error={read.error?.reviewId === decision.id ? read.error.message : null} />
       : <DecisionRow key={decision.id} decision={decision} onOpen={() => setPicked(decision.id)} />);
   }
   return (

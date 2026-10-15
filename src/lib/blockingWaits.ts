@@ -21,6 +21,7 @@ export type BlockingWaitSite =
   | "registry-revision-retry"
   | "registry-lock-async"
   | "state-lease"
+  | "state-write-lock"
   | "snapshot-collect"
   | "snapshot-serialize"
   | "snapshot-transfer"
@@ -119,7 +120,7 @@ export function recordBlockingWait(input: {
   };
   samples.push(sample);
   if (samples.length > SAMPLE_LIMIT) samples.splice(0, samples.length - SAMPLE_LIMIT);
-  if (sample.durationMs >= BLOCKING_WAIT_LOG_MS) {
+  if (sample.durationMs >= BLOCKING_WAIT_LOG_MS || (sample.site === "state-write-lock" && sample.refused)) {
     try { logSink(`[blocking-wait] ${JSON.stringify(sample)}`); }
     catch { /* a log that cannot be written never fails the caller */ }
   }
