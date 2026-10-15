@@ -111,20 +111,33 @@ export function seatMessages(source: MessagesPageSource, filename: string, args:
   const rows: SeatMessage[] = [];
   let room = TEXT_BYTES;
   const limit = Number(args.limit ?? 6);
-  for (const row of assistants) {
+  // Reserve a first chunk for older replies before newer ones spend the page.
+  // Each supported reply (up to two text allowances) then has at most one
+  // allowance left for its own continuation, even when it is second on the page.
+  const candidates: Array<{ row: ConversationMessage; minimum: number }> = [];
+  let reserved = 0;
+  for (const row of assistants.slice(0, limit)) {
+    const firstCharacterBytes = Buffer.byteLength(String.fromCodePoint(row.text.codePointAt(0) ?? 0));
+    const minimum = Math.min(TEXT_BYTES, Math.max(firstCharacterBytes, Buffer.byteLength(row.text) - TEXT_BYTES));
+    if (reserved + minimum > TEXT_BYTES) break;
+    candidates.push({ row, minimum }); reserved += minimum;
+  }
+  if (candidates.length < assistants.length) more = true;
+  for (const { row, minimum } of candidates) {
+    reserved -= minimum;
     if (rows.length >= limit || room <= 0) { more = true; break; }
     const id = handle(filename, row);
-    let piece = chunk(row.text, 0, room);
+    let piece = chunk(row.text, 0, room - reserved);
     const base = { handle: id, time: time(row.ts), after: labels.get(row) ?? "other", bytes: piece.bytes };
     const projected = (): SeatMessage => ({ ...base, text: piece.text, ...(piece.next !== null ? { rest: { message: id, offset: piece.next } } : {}) });
-    let rowRoom = room;
+    let rowRoom = room - reserved;
     while (jsonBytes([...rows, projected()]) > 14000 && rowRoom > 0) {
       rowRoom = Math.max(0, Math.min(rowRoom, Buffer.byteLength(piece.text)) - 512);
       piece = chunk(row.text, 0, rowRoom);
     }
     if (!piece.text || jsonBytes([...rows, projected()]) > 14000) { more = true; break; }
     rows.push(projected()); room -= Buffer.byteLength(piece.text);
-    if (piece.next !== null) { more = true; break; }
+    if (piece.next !== null) more = true;
   }
   const newest = rows[0];
   return { rows, shown: rows.length, more, before: rows.at(-1)?.handle ?? null,
@@ -208,6 +221,10 @@ export const ACTION_LINES: Record<string, ActionLine> = {
 export const NOT_SEAT_ACTIONS = new Set(["lifecycle_events", "agent_activity", "stage_report", "backfill_worktree_projects"]);
 export interface SeatActionRead { page?: MessagesPage; titles?: Map<string, string>; anchorBytes?: number }
 
+// Scan positions advance past pages containing only results or read-only calls,
+// including a scan exhausted inside a line.
+const actionCursor = (filename: string, cursor: MessagesPageCursor) => `a${cursor.o.toString(36)}.${cursor.p}.${fingerprint(filename)}`;
+
 function failed(value: unknown): boolean {
   if (typeof value === "string") { try { return failed(JSON.parse(value)); } catch { return false; } }
   const row = object(value);
@@ -216,11 +233,12 @@ function failed(value: unknown): boolean {
 }
 export function seatActions(source: MessagesPageSource, filename: string, args: Record<string, unknown>, redactText: (text: string) => string,
   lookup: (kind: "task" | "pipeline", id: string) => string | undefined, retained: SeatActionRead = {}) {
-  const pos = args.before ? position(filename, args.before) : null;
+  const scanCursor = typeof args.before === "string" && args.before.startsWith("a");
+  const pos = args.before ? position(filename, scanCursor ? `m${String(args.before).slice(1)}` : args.before) : null;
   if (pos === "stale_handle") return missing(pos);
   if (args.before && (!pos || pos.seq >= source.size)) return missing("not_found");
   if (args.since && !Number.isFinite(Date.parse(String(args.since)))) throw new Error("INVALID_TOOL_ARGUMENTS");
-  if (pos && !retained.page) {
+  if (pos && !scanCursor && !retained.page) {
     const checked = anchor(source, pos, "tool_call", redactText);
     if (!checked.row || checked.bytes >= SEAT_SCAN_BYTES) return missing("not_found");
     retained.anchorBytes = checked.bytes;
@@ -238,7 +256,7 @@ export function seatActions(source: MessagesPageSource, filename: string, args: 
     return quoted(titles.get(key));
   };
   const rows: Array<{ time: string | null; action: string; outcome: "done" | "failed" | "running" }> = [];
-  const seen = new Set<string>(); let before: string | null = null, more = page.hasMore;
+  const seen = new Set<string>(); let before: string | null = null, more = page.hasMore, stopped = false;
   for (const row of page.records) {
     const call = row.call;
     if (row.kind !== "tool_call" || !call?.server || !isViewerMcpServer(call.server) || !call.tool || !Object.hasOwn(ACTION_LINES, call.tool) || seen.has(call.id)) continue;
@@ -253,9 +271,10 @@ export function seatActions(source: MessagesPageSource, filename: string, args: 
     const outcome = call.status === "failed" || call.error || failed(call.result) || result?.error || failed(result?.result) ? "failed"
       : call.status === "completed" || result ? "done" : "running";
     const item = { time: time(row.ts), action: byteShort(redactText(line).replace(/[\u0000-\u001f\u007f]/gu, " "), 160), outcome } as const;
-    if (rows.length >= Number(args.limit ?? 15) || jsonBytes([...rows, item]) > 4800) { more = true; break; }
+    if (rows.length >= Number(args.limit ?? 15) || jsonBytes([...rows, item]) > 4800) { more = true; stopped = true; break; }
     rows.push(item); before = handle(filename, row);
   }
+  if (!stopped && page.cursor) before = actionCursor(filename, page.cursor);
   return { rows, shown: rows.length, more, before, truncated: page.scanned.capped,
     speech: byteShort(`${rows.length} orchestrator actions: ${rows.filter(row => row.outcome === "done").length} done, ${rows.filter(row => row.outcome === "failed").length} failed, ${rows.filter(row => row.outcome === "running").length} running. ${rows.slice(0, 2).map(row => row.action).join(". ")}`, 600),
     scanned: { bytes: page.scanned.bytes + (retained.anchorBytes ?? 0), capped: page.scanned.capped } };

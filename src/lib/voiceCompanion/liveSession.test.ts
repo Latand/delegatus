@@ -163,6 +163,56 @@ test("an early line break followed by one long Unicode line still takes only two
   } finally { await f.service.close(f.s.sessionId); }
 });
 
+test("a long second reply reserves enough of the page to finish in its next voice read", async () => {
+  const target = "ї".repeat(10000), newest = "n".repeat(8000);
+  const f = await seatVoiceFixture([seatLine("assistant", target, 0), seatLine("assistant", newest, 1)]);
+  try {
+    const first = await f.tool("orchestrator_messages");
+    expect(first.rows).toHaveLength(2);
+    const row = first.rows[1];
+    const second = await f.tool("orchestrator_messages", { message: row.rest.message, offset: row.rest.offset });
+    expect(second.item.next).toBeNull();
+    expect(row.text + second.item.text).toBe(target);
+    const newerRest = first.rows[0].rest;
+    const newer = await f.tool("orchestrator_messages", { message: newerRest.message, offset: newerRest.offset });
+    expect(newer.item.next).toBeNull();
+    expect(first.rows[0].text + newer.item.text).toBe(newest);
+    for (const answer of [first, second, newer]) {
+      expect(Buffer.byteLength(JSON.stringify(answer))).toBeLessThanOrEqual(16000);
+      expect(Buffer.byteLength(answer.item?.text ?? answer.rows.map((row: { text: string }) => row.text).join(""))).toBeLessThanOrEqual(12000);
+    }
+  } finally { await f.service.close(f.s.sessionId); }
+});
+
+test.each([80, 160])("voice action pages advance through %i read-only calls without skipping or duplicating mutations", async (noise) => {
+  const calls = Array.from({ length: noise + 2 }, (_, index) => {
+    const mutation = index === 0 || index === 161;
+    return [
+      { type: "assistant", message: { content: [{ type: "tool_use", id: `noise-${index}`, name: `mcp__viewer__${mutation ? "create_pipeline" : "list_tasks"}`, input: mutation ? { task: `Lane ${index}` } : {} }] } },
+      { type: "user", message: { content: [{ type: "tool_result", tool_use_id: `noise-${index}`, content: '{"ok":true}' }] } },
+    ];
+  }).flat();
+  const f = await seatVoiceFixture(calls);
+  try {
+    const actions: unknown[] = [];
+    let before: string | null = null;
+    let empty = false;
+    for (let count = 0; count < 5; count++) {
+      const page = await f.tool("orchestrator_actions", { before, limit: 1 });
+      actions.push(...page.rows);
+      expect(page.scanned.bytes).toBeLessThanOrEqual(2 * 1024 * 1024);
+      expect(Buffer.byteLength(JSON.stringify(page))).toBeLessThanOrEqual(6000);
+      if (!page.more) break;
+      empty ||= page.rows.length === 0;
+      expect(page.before).not.toBeNull();
+      expect(page.before).not.toBe(before);
+      before = page.before;
+    }
+    expect(empty).toBe(true);
+    expect(actions).toEqual((noise === 160 ? [161, 0] : [0]).map(index => ({ time: null, action: `Started lane «Lane ${index}»`, outcome: "done" })));
+  } finally { await f.service.close(f.s.sessionId); }
+});
+
 test("showing the newest reply keeps its whole turn on one card, speaks every line and supports silent show and reread", async () => {
   const reply = Array.from({ length: 35 }, (_, index) => `**Fact ${index + 1}:** the release check passed on every platform with recorded results.`).join("\n");
   const f = await seatVoiceFixture([seatLine("user", "[Voice Delegatus reply: whole answer]", 0), seatLine("assistant", "Opening note", 1),

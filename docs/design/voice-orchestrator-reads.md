@@ -46,16 +46,12 @@ call's transcript record; one expletive left out as […]):
 | «показывать пользователю», «корректно показывает» (gateway wording) | 4 | Existing surfaces only: the whole read stays in the companion's conversation panel, and a message read aloud also appears as the card reports already use. |
 | (performance rules) | 5 | Every read has a byte budget, a 2 MiB scan cap and no whole-transcript scan. |
 
-**"Show" reads two ways, and the operator's own words settle it.** The gateway wrote
-«показывать пользователю» (show the user). The operator said «чтобы он тебе выдал, и ты
-увидел это» (so that it hands it to you and *you* see it). The pinned specification
-also says to reuse existing surfaces and add no new chrome unless the design proves
-one is needed. Read together, the voice must get the whole text, and whatever it reads
-or reads aloud must be visible on a surface that already exists. On the desktop that
-is the conversation panel and the lane's card. On the phone it is the head's bubble,
-which shows the words as they are spoken. Nothing in the request asks to read a long
-message silently on the phone, so a phone panel stays under "Deferred" (the phone head
-design already deferred it, `docs/design/phone-voice-head-build.md:391`).
+**Display on desktop and phone.** Whatever the voice reads stays in the existing
+Conversation panel, including silent shows and separate action tool results. On desktop,
+the character opens it. On phone, the head's menu has a Conversation row after a call
+starts; it opens the same component fitted to the viewport. The panel scrolls and copies
+complete messages, keeps the call running, and stays available after the call ends.
+The phone's short speech bubble continues to follow playback.
 
 ## What happens on `main` today
 
@@ -236,9 +232,11 @@ join loads the registry snapshot. Neither is needed here.
   records, roles user and assistant, `maxChars` 16,000, scan capped at **2 MiB** (new
   optional `maxScanBytes` on `MessagesPageQuery`, default unchanged at 16 MiB). The
   assistant rows are kept newest first while their text totals at most **12,000 bytes**
-  and their count is at most `limit`. The row that crosses the budget is cut at a line
-  end where the rest fits the next chunk, otherwise at a UTF-8 boundary (a lone
-  row larger than the budget is cut too) and carries
+  and their count is at most `limit`. Before allocating text, reserve the minimum first
+  chunk each admitted reply needs so at most 12,000 bytes remain for its continuation.
+  A newer reply can also have a continuation when this reserves room for an older long
+  reply. Cuts prefer a line end where the rest fits the next chunk, otherwise a UTF-8
+  boundary. Each partial row carries
   `rest: {message, offset}`. The answer's `before` is the oldest returned handle;
   `more: true` when the page or the budget left messages out.
 - **Older page** (`before`): the same, from the cursor `{o: seq, p: part, r: []}`: the
@@ -267,9 +265,9 @@ Text passes the same cleaning as today (`hardenedRedact`, credentials, local pat
 `speech` is at most 600 bytes: how many messages, the newest one's time and `after`, and
 its first 200 bytes.
 
-**The two-call bound.** A message up to 12,000 bytes comes back whole in the first call.
+**The two-call bound.** A single message up to 12,000 bytes comes back whole in the first call.
 That covers every message measured above: the largest is 4,970 bytes, and the
-2026-10-12 reply was 3,890. A message up to 24,000 bytes needs two calls (`rest` →
+2026-10-12 reply was 3,890. Each admitted message up to 24,000 bytes needs at most two calls (`rest` →
 `message` + `offset`). The reader's 16,000-character record cap (up to about 32 KB of
 Cyrillic) is the hard end, flagged `truncated`.
 
@@ -340,8 +338,12 @@ Lane and task titles come from keyed reads already in `readPaths`
 per answer, memoized per answer, a missing record keeps the id-free wording. Lines are
 English data for the backend, which speaks in the operator's language.
 
-**Parameters:** `project`, `since` (ISO, ≤40, null), `before` (`m…` handle of the oldest
-row from a previous answer, null), `limit` (1–30, null → 15), `refresh`.
+**Parameters:** `project`, `since` (ISO, ≤40, null), `before` (opaque continuation
+from the previous answer, null), `limit` (1–30, null → 15), `refresh`.
+
+Continuation follows the scanned records, including read-only calls and results that
+produce no visible action. An empty page with `more: true` retains that scan position
+in `before`, so the next bounded read reaches older actions.
 
 **Answer** (asserted ≤ 6,000 bytes): `{ speech, shown, more, before, rows: [{ time,
 action, outcome }] }`. `speech` (≤ 600 bytes) counts by kind: "12 actions since 12:30:
@@ -598,14 +600,13 @@ Rendered measurements are kept in
 [`evidence/voice-companion/orchestrator-message.json`](../../evidence/voice-companion/orchestrator-message.json),
 produced by the existing kanban browser driver at 1440 and 1000 pixels in both
 languages and themes. The lane and panel retain the complete message text.
+The phone cases in the existing mobile driver cover a silent long message, its start
+and end, separate actions, copying, focus containment, closing, and reopening after the
+call ends at 390×844 and 375×667 in both languages and themes. Their measurements are
+in `evidence/voice-companion/orchestrator-phone.json`.
 
 ## Deferred — not currently justified
 
-- **A phone panel or sheet with the call's conversation.** The operator asked that the
-  voice see the text, and the phone head design deferred the panel
-  (`phone-voice-head-build.md:391`). Reading aloud shows the words in the existing
-  bubble. Add it if the operator asks to read long messages silently on the phone; it
-  would be one popover row opening the existing panel in a sheet, prototyped first.
 - **Actions as a card or read aloud.** The backend says them in the operator's
   language. The whole list stays in the panel.
 - **Whole-text reads of other conversations.** `conversation_messages` keeps 320-byte

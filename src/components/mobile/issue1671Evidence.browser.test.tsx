@@ -10909,6 +10909,102 @@ describe("phone voice head", () => {
   }, 900_000);
 });
 
+describe("phone orchestrator reads", () => {
+  browserTest("the existing conversation shows a silent long message and separate actions at phone widths", async () => {
+    const out = path.resolve(".artifacts/voice-companion/orchestrator-phone");
+    fs.mkdirSync(out, { recursive: true });
+    const { base, stop } = await serveFixture();
+    const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_BIN, args: ["--no-sandbox", "--disable-dev-shm-usage"] });
+    const readings: unknown[] = [];
+    try {
+      for (const size of [{ width: 390, height: 844 }, { width: 375, height: 667 }]) for (const lang of ["uk", "en"]) for (const scheme of ["light", "dark"] as const) {
+        console.info(`phone orchestrator reads: ${size.width}×${size.height} ${lang} ${scheme}`);
+        const context = await browser.newContext({ viewport: size, hasTouch: true, isMobile: true, colorScheme: scheme, permissions: ["clipboard-read", "clipboard-write"] });
+        try {
+          await context.addInitScript((language) => localStorage.setItem("llv_lang", language), lang);
+          const page = await context.newPage();
+          const errors: string[] = [];
+          page.on("pageerror", error => errors.push(error.message));
+          const text = Array.from({ length: 32 }, (_, index) => lang === "uk"
+            ? `Рядок ${index + 1}. Перевірка випуску завершена. Усі результати збережено, наступне повідомлення можна прочитати повністю.`
+            : `Line ${index + 1}. The release check finished. All results are saved, and the next message can be read in full.`).join("\n");
+          const actions = lang === "uk" ? ["Створено задачу «Перевірити пошук»", "Запущено перевірку «Пошук»", "Розгорнуто випуск"]
+            : ["Created task «Check search»", "Started lane «Search»", "Deployed release"];
+          let ended = false;
+          const entries = [
+            { id: "show", kind: "tool", atMs: 1000, order: 0, data: { callId: "show", name: "show_orchestrator_message", status: "done", arguments: '{"read_aloud":false}', result: '{"status":"shown"}' } },
+            { id: "message", kind: "report", atMs: 1100, order: 1, data: { text, projectName: "Atlas", status: "message" } },
+            { id: "actions", kind: "tool", atMs: 1200, order: 2, data: { callId: "actions", name: "orchestrator_actions", status: "done", arguments: "{}", result: JSON.stringify({ shown: 3, rows: actions.map(action => ({ action, outcome: "done" })) }, null, 2) } },
+          ];
+          await page.route("**/evidence/voice-transcript", route => route.fulfill({ json: { entries: ended ? [...entries, { id: "end", kind: "session_end", atMs: 2000, order: 3, data: {} }] : entries, truncated: false } }));
+          await page.goto(`${base}/?voice=reads&voice-long=1&seatnoise=ii&runtime=structured#c=conversation_running`);
+          const head = page.locator("[data-phone-voice-head]");
+          await head.waitFor(); await page.locator("[data-mobile-message=agent]").first().waitFor(); await pause(page, 900);
+          await head.tap(); await page.locator("[data-phone-voice-talk]").tap();
+          await page.waitForFunction(() => document.querySelector("[data-phone-voice]")?.getAttribute("data-phase") !== "offline");
+          await head.tap(); await page.locator("[data-phone-voice-transcript]").tap();
+          const panel = page.locator("[data-companion-transcript-view]");
+          await panel.locator("[data-transcript-report]").waitFor();
+          // Capture the settled panel: an entrance frame still shows the page through it.
+          await page.evaluate(() => { for (const animation of document.getAnimations()) { animation.pause(); const end = animation.effect?.getComputedTiming().endTime; animation.currentTime = typeof end === "number" && Number.isFinite(end) ? end : 0; } });
+          expect(await panel.getAttribute("aria-modal")).toBe("true");
+          expect(await panel.locator(".vc-answer").textContent()).toBe(text);
+          expect(await page.locator("[data-phone-voice-bubble]").count()).toBe(0);
+          const geometry = await panel.evaluate(node => {
+            const r = node.getBoundingClientRect();
+            return { x: r.x, y: r.y, right: r.right, bottom: r.bottom, width: r.width, height: r.height, sideways: node.scrollWidth - node.clientWidth,
+              background: getComputedStyle(node).backgroundColor, opacity: getComputedStyle(node).opacity, headInert: document.querySelector("[data-phone-voice-head]")?.closest("[inert]") !== null };
+          });
+          expect(geometry.x).toBeGreaterThanOrEqual(0); expect(geometry.y).toBeGreaterThanOrEqual(0);
+          expect(geometry.right).toBeLessThanOrEqual(size.width); expect(geometry.bottom).toBeLessThanOrEqual(size.height);
+          expect(geometry.sideways).toBeLessThanOrEqual(1); expect(geometry.headInert).toBe(true);
+          expect(geometry.background).toMatch(/^rgb\(/);
+          expect(geometry.opacity).toBe("1");
+          const body = panel.locator("[data-transcript-body]");
+          await body.evaluate(node => { node.scrollTop = node.querySelector<HTMLElement>("[data-kind=report]")!.offsetTop - node.offsetTop; });
+          const prefix = `${size.width}x${size.height}-${lang}-${scheme}`;
+          await page.screenshot({ path: path.join(out, `${prefix}-message-start.png`) });
+          await panel.locator("[data-transcript-report] .vc-tr-copy").tap();
+          expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(text);
+          await body.evaluate(node => { node.scrollTop = node.scrollHeight; });
+          await page.screenshot({ path: path.join(out, `${prefix}-message-end.png`) });
+          const action = panel.locator('[data-transcript-call="orchestrator_actions"]');
+          await action.locator("button").tap();
+          await action.scrollIntoViewIfNeeded();
+          const result = await action.locator(".vc-tr-pre").last().textContent();
+          for (const line of actions) expect(result).toContain(line);
+          expect(await action.locator(".vc-answer").count()).toBe(0);
+          await page.screenshot({ path: path.join(out, `${prefix}-actions.png`) });
+          const close = panel.locator("[data-transcript-close]");
+          await close.focus(); await page.keyboard.press("Shift+Tab");
+          expect(await panel.evaluate(node => node.contains(document.activeElement))).toBe(true);
+          await page.keyboard.press("Tab");
+          expect(await close.evaluate(node => node === document.activeElement)).toBe(true);
+          expect(await page.locator("[data-phone-voice]").getAttribute("data-phase")).not.toBe("offline");
+          await close.tap(); await panel.waitFor({ state: "detached" });
+          await page.waitForFunction(() => document.activeElement?.hasAttribute("data-phone-voice-head"));
+          await head.tap(); await page.locator("[data-phone-voice-end]").tap(); ended = true;
+          await page.waitForFunction(() => document.querySelector("[data-phone-voice]")?.getAttribute("data-phase") === "offline");
+          await head.tap(); await page.locator("[data-phone-voice-transcript]").tap();
+          await panel.locator("[data-transcript-report]").waitFor();
+          await page.waitForFunction(label => document.querySelector(".pvc-conversation .vc-tr-sub")?.textContent?.includes(label), lang === "uk" ? "завершено" : "ended");
+          expect(await panel.locator(".vc-answer").textContent()).toBe(text);
+          expect(await panel.locator(".vc-tr-sub").textContent()).toContain(lang === "uk" ? "завершено" : "ended");
+          await page.keyboard.press("Escape"); await panel.waitFor({ state: "detached" });
+          await head.tap(); await page.locator("[data-phone-voice-transcript]").tap();
+          await panel.waitFor();
+          await page.locator("[data-phone-voice-conversation]").tap({ position: { x: 2, y: size.height - 2 } });
+          await panel.waitFor({ state: "detached" });
+          expect(errors).toEqual([]);
+          readings.push({ viewport: size, lang, scheme, geometry, textLength: text.length, completeText: true, copied: true, actions: 3, endedReadable: true, focusContained: true, errors });
+        } finally { await context.close(); }
+      }
+    } finally { await browser.close(); stop(); }
+    fs.mkdirSync("evidence/voice-companion", { recursive: true });
+    fs.writeFileSync("evidence/voice-companion/orchestrator-phone.json", JSON.stringify({ driver: "src/components/mobile/issue1671Evidence.browser.test.tsx", frames: ".artifacts/voice-companion/orchestrator-phone", readings }, null, 2) + "\n");
+  }, 180_000);
+});
+
 describe("seat recovery failure history", () => {
   browserTest("healthy seats clear stale failures and the phone dates a current failure", async () => {
     const out = path.resolve(".artifacts/seat-recovery"); fs.mkdirSync(out, { recursive: true });

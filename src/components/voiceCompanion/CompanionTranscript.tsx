@@ -115,11 +115,12 @@ function Disclosure({ summary, children, name, label }: { summary: ReactNode; ch
   );
 }
 
-export function CompanionTranscript({ record, usage = record.usage, left, top, width, height, onClose }: {
+export function CompanionTranscript({ record, usage = record.usage, left, top, width, height, modal = false, onClose }: {
   record: SessionTranscriptRecord;
   usage?: CompanionUsage;
   /* The box, from the companion's own corner. */
   left: number; top: number; width: number; height: number;
+  modal?: boolean;
   onClose: () => void;
 }) {
   const { t, locale } = useLocale();
@@ -231,6 +232,7 @@ export function CompanionTranscript({ record, usage = record.usage, left, top, w
       className="vc-tr"
       data-companion-transcript-view
       role="dialog"
+      aria-modal={modal || undefined}
       aria-label={L.title}
       tabIndex={-1}
       style={{ left, top, width, height }}
