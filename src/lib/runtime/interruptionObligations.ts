@@ -416,7 +416,15 @@ function createInterruptionObligationStore(
       for (const name of page ? candidates.slice(0, page.limit) : candidates) {
         const obligation = read(path.join(directory, name));
         if (!obligation) {
-          if (guardOnly && !pending.some(item => `${item.id}.json` === name)) fs.rmSync(path.join(indexDirectory, name), { force: true });
+          if (guardOnly && !pending.some(item => `${item.id}.json` === name)) {
+            // A failed read can be temporary. Only a proven absent canonical
+            // file makes this a pointer left before publication.
+            try { fs.lstatSync(path.join(directory, name)); }
+            catch (error) {
+              if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+              fs.rmSync(path.join(indexDirectory, name), { force: true });
+            }
+          }
           continue;
         }
         const resolvedAt = obligation.resolvedAt ? Date.parse(obligation.resolvedAt) : NaN;

@@ -11,6 +11,7 @@ import {
   type InterruptionObligationInput,
 } from "./interruptionObligations";
 
+const permissionRefusals = process.platform !== "win32" && process.getuid?.() !== 0;
 let directory = "";
 beforeEach(() => { setSystemTime(new Date("2026-10-07T00:05:00.000Z")); directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-interruption-obligations-")); });
 afterEach(() => {
@@ -302,7 +303,7 @@ test("guard recovery pages bound record reads and eventually visit every pending
 });
 
 
-test("the guard keeps a refused directory cut durable in the pending journal", async () => {
+test.skipIf(!permissionRefusals)("the guard keeps a refused directory cut durable in the pending journal", async () => {
   const obligations = path.join(directory, "guard-refused");
   fs.mkdirSync(obligations, { mode: 0o500 });
   const guard = accountGuardObligationStore(obligations);
@@ -334,4 +335,22 @@ test("a crash leaving an index pointer before publication or after settlement ow
   expect(await accountGuardObligationStore(obligations).list()).toEqual([]);
   expect(fs.existsSync(settledPointer)).toBe(false);
   expect(fs.existsSync(missingPointer)).toBe(false);
+});
+
+
+test.each(permissionRefusals ? ["permissions", "partial contents"] : ["partial contents"])("a guard cut stays indexed across temporary unreadability from %s", async failure => {
+  const obligations = path.join(directory, "guard-unreadable");
+  const guard = accountGuardObligationStore(obligations);
+  const cut = await guard.record({ ...releaseCut, reason: "account-guard", turnRef: "temporarily-unreadable" });
+  const filename = path.join(obligations, `${cut.obligation.id}.json`);
+  const original = fs.readFileSync(filename, "utf8");
+  if (failure === "permissions") fs.chmodSync(filename, 0o000);
+  else fs.writeFileSync(filename, "{");
+  const errors = spyOn(console, "error").mockImplementation(() => {});
+  try {
+    expect(await guard.list()).toEqual([]);
+    fs.chmodSync(filename, 0o600);
+    fs.writeFileSync(filename, original);
+    expect((await accountGuardObligationStore(obligations).list()).map(row => row.id)).toEqual([cut.obligation.id]);
+  } finally { fs.chmodSync(filename, 0o600); errors.mockRestore(); }
 });
