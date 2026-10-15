@@ -110,10 +110,7 @@ function severedStage(
   fs.mkdirSync(worktreeDir, { recursive: true });
   const registry = new AgentRegistry(path.join(directory, "agent-registry.json"), undefined, undefined, { sqliteMode: "off" });
   const child = options.hostProcess ? null : Bun.spawn(["sleep", "300"], { stdout: "ignore", stderr: "ignore" });
-  const hostProcess = options.hostProcess ?? {
-    pid: child!.pid,
-    startIdentity: procBackend.processIdentity(child!.pid)!,
-  };
+  const hostProcess = options.hostProcess ?? captureProcessIdentity(child!.pid);
   if (!hostProcess.startIdentity) throw new Error("the fixture host has no start identity to fence on");
   const sessionId = crypto.randomUUID();
   const transcript = path.join(directory, `${sessionId}.jsonl`);
@@ -170,7 +167,8 @@ function severedStage(
     launchId: begun.receipt.launchId,
     key: { engine: "claude" as const, sessionId },
     conversationId: settled.conversation.id,
-    child: { pid: hostProcess.pid, kill: () => { try { child?.kill("SIGKILL"); } catch { /* gone */ } } },
+    child: { pid: hostProcess.pid, exited: child?.exited ?? Promise.resolve(0),
+      kill: () => { try { child?.kill("SIGKILL"); } catch { /* gone */ } } },
   };
 }
 
@@ -194,13 +192,16 @@ function stagePorts(
   const ports: PipelinePorts = {
     ...defaults,
     engineReadiness: () => "connected",
+    cpuPressureHold: () => null,
+    cpuAdmissionReconcile: () => {},
+    cpuAdmissionSuspend: () => {},
     now: () => new Date(Date.now() + wallClockOffsetMs).toISOString(),
     exec: (rawCommand, rawArgs) => {
       const args = rawCommand === "timeout" ? rawArgs.slice(rawArgs.indexOf("git") + 1) : rawArgs;
       if (args[0] === "rev-parse" && args[1] === "--git-dir") return { code: 0, stdout: ".git\n", stderr: "" };
       if (args[0] === "rev-parse") return { code: 0, stdout: `${STAGE_HEAD}\n`, stderr: "" };
       if (args[0] === "branch") return { code: 0, stdout: "pipeline/severed-stage\n", stderr: "" };
-      if (args[0] === "remote") return { code: 1, stdout: "", stderr: "no origin\n" };
+      if (args[0] === "remote") return { code: 2, stdout: "", stderr: "error: No such remote 'origin'\n" };
       if (args[0] === "ls-remote") return { code: 0, stdout: `${STAGE_HEAD}\trefs/heads/pipeline/severed-stage\n`, stderr: "" };
       return { code: 0, stdout: "", stderr: "" };
     },
@@ -350,6 +351,7 @@ test("a CPU-flat stage autonomously retires its exact child before one replaceme
     });
   } finally {
     stage.child.kill();
+    await stage.child.exited;
     await bindStructuredDeliveryQueue([], { registry: stage.registry, client: null });
     journal.close();
   }
@@ -448,6 +450,7 @@ test("a live severed stage host is killed, retired, and its stage retried once, 
     expect(resumed.runs[0]!.attempts[1]).toMatchObject({ n: 2, launchId: "replacement-1" });
   } finally {
     stage.child.kill();
+    await stage.child.exited;
     await bindStructuredDeliveryQueue([], { registry: stage.registry, client: null });
     journal.close();
   }
@@ -836,6 +839,6 @@ test("a new attempt does not launch while a process captured from the earlier at
   } finally {
     stage.child.kill();
     try { captured.kill("SIGKILL"); } catch { /* gone */ }
-    await Promise.race([captured.exited, Bun.sleep(2_000)]);
+    await Promise.all([stage.child.exited, captured.exited]);
   }
 }, 30_000);
