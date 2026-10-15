@@ -771,6 +771,44 @@ test("a transcript question after a completed switch keeps ordinary decision adm
   expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(2);
 });
 
+for (const question of ["transcript", "stage_report"] as const) test(`ordinary retry after completed switch honors deferred runtime and account: ${question}`, async () => {
+  const h = switchHarness(); await requestSwitch(h);
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.runtimeSwitches?.[0]?.phase).toBe("committed");
+  h.ports.spawnReceipt = id => id === "launch-1" ? { state: "completed", launchId: id, conversationId: STAGE_CONVERSATION,
+    sessionId: "session-1", transcript: STAGE_TRANSCRIPT, paneId: null, accountId: "default" } : null;
+  const sourceGeneration = h.ports.conversationGeneration!;
+  h.ports.conversationGeneration = id => id === STAGE_CONVERSATION ? sourceGeneration(id) : null;
+  h.advance(2000);
+  h.ports.conversationAgentActive = async () => false;
+  h.setTurn({ turn: "terminal", message: { text: 'Which format?\n```json\n{"status":"needs_decision","findings":[]}\n```', ts: h.wallClock() } });
+  if (question === "stage_report") {
+    const report = await reportStageCompletion({ verdict: "needs_decision", findings: [], summary: "Which format?" },
+      { kind: "agent", conversationId: STAGE_CONVERSATION, role: "builder" }, h.ports);
+    expect(report.error).toBeUndefined();
+  }
+  await tickPipelines([], h.ports);
+  const settled = loadPipelines()[0]!;
+  expect(settled.runs[0]!.attempts[0]).toMatchObject({ state: "needs_decision", verdict: { status: "needs_decision" } });
+  expect(!!settled.runs[0]!.attempts[0]!.report).toBe(question === "stage_report");
+  const override = await patchPipeline(settled.id, { action: "override-stage", stageId: "plan", model: "sonnet", account: "retry-target" }, h.ports);
+  expect(override.error).toBeUndefined();
+  const retry = await patchPipeline(settled.id, { action: "retry-stage", expectedStageId: "plan", expectedAttempt: 1 }, h.ports);
+  expect(retry.error).toBeUndefined();
+  h.ports.conversationAgentActive = async () => true;
+  h.setTurn({ turn: "busy", message: null, lastRecordAt: h.wallClock() });
+  await tickPipelines([], h.ports); await tickPipelines([], h.ports);
+  const lane = loadPipelines()[0]!;
+  const attempts = lane.runs[0]!.attempts;
+  expect(attempts).toHaveLength(2);
+  expect(attempts[1]).toMatchObject({ n: 2, state: "running", effectiveRole: { model: "sonnet" },
+    definition: { account: "retry-target" }, accountId: "retry-target" });
+  expect(h.spawnInputs[1]).toMatchObject({ cwd: settled.worktreeDir, requestedAccountId: "retry-target", role: { model: "sonnet" } });
+  expect(attempts[0]!.runtimeSwitches?.[0]?.retry).toBeUndefined();
+  expect(lane.branch).toBe(settled.branch);
+  expect(h.continuations).toHaveLength(1);
+});
+
 test("a mechanical switch park requires retry retirement before a decision continuation", async () => {
   const { pipelineRevision } = await import("./store");
   const h = switchHarness(); await requestSwitch(h);

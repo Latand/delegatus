@@ -12775,8 +12775,7 @@ export async function patchPipeline(
       }
       const elsewhere = pipelineTasksRunElsewhere(pipeline.taskIds, loadTasks());
       if (elsewhere) return elsewhere;
-      const switchRetry = attempt && (pendingRuntimeSwitchRetry(attempt) ?? openRuntimeSwitch(attempt)
-        ?? (attempt.state === "needs_decision" || attempt.runtimeSwitches?.at(-1)?.phase === "failed" ? attempt.runtimeSwitches?.at(-1) : undefined));
+      const switchRetry = attempt && recoverableRuntimeSwitch(attempt);
       if (stage && attempt && switchRetry && ["running", "needs_decision"].includes(pipeline.state)) {
         if (attempt.report) return { error: "stage already reported", status: 409 };
         const replayed = !!switchRetry.retry;
