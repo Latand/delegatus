@@ -364,3 +364,27 @@ test("the guard persists one cut before attempting to stop its source host", asy
     expect(new Set(keys).size).toBe(1);
   } finally { await f.cleanup(); }
 });
+
+
+test("guard recovery advances past a page of unreadable receipts to reach healthy work", async () => {
+  const f = migrationDeliveryFixture();
+  const directory = interruptionObligationDirectory(f.registry.filename);
+  const cuts = accountGuardObligationStore(directory);
+  try {
+    const cut = (await cuts.record({ conversationId: f.conversation.id, engine: "codex", hostKey: `codex:${f.key.sessionId}`,
+      path: f.conversation.generations[0]!.path, owner: null, claimEpoch: 1, turnRef: "healthy-cut",
+      boundary: "paid-credit-guard", reason: "account-guard", checkpoint: { lastEventKind: null, lastEventAt: null }, seat: null })).obligation;
+    for (let count = 0; count < 65; count++) {
+      const id = `interruption-continuation-${count.toString(16).padStart(32, "0")}`;
+      expect(id < cut.id).toBe(true);
+      fs.writeFileSync(path.join(directory, `${id}.json`), "{}");
+      fs.writeFileSync(path.join(`${directory}.account-guard-pending`, `${id}.json`), JSON.stringify({ id }));
+    }
+    let visited = 0;
+    for (let pass = 0; pass < 3; pass++) await enforceAccountCreditGuard(f.registry, [], async () => true,
+      async () => { visited++; return true; }, async () => { throw new Error("operator stop cannot resume"); });
+    expect(visited).toBe(1);
+    const persisted = JSON.parse(fs.readFileSync(path.join(directory, `${cut.id}.json`), "utf8"));
+    expect(persisted).toMatchObject({ state: "discharged", resolution: "operator stopped the conversation after the guard" });
+  } finally { await f.cleanup(); }
+});

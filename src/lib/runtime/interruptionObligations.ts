@@ -398,7 +398,7 @@ function createInterruptionObligationStore(
       return null;
     }
   };
-  const list = (page?: { after: string; limit: number }): InterruptionObligation[] => {
+  const list = (page?: { after: string; limit: number; nextCursor: string | null }): InterruptionObligation[] => {
     importPending();
     return transaction(() => {
       let names: string[];
@@ -410,10 +410,17 @@ function createInterruptionObligationStore(
       }
       const now = Date.now();
       const obligations: InterruptionObligation[] = [];
+      const canonicalIds = new Set<string>();
       const pending = [...readPending(), ...activeClaims().flatMap(readJournal)];
-      const candidates = names.filter(name => name.startsWith(OBLIGATION_PREFIX) && name.endsWith(".json")
+      // Include claimed or unimportable journal cuts in the same cursor order.
+      const indexedNames = guardOnly ? [...new Set([...names, ...pending.filter(item => item.reason === "account-guard"
+        && interruptionObligationUnresolved(item)).map(item => `${item.id}.json`)])] : names;
+      const candidates = indexedNames.filter(name => name.startsWith(OBLIGATION_PREFIX) && name.endsWith(".json")
         && (!page || name > `${page.after}.json`)).sort();
-      for (const name of page ? candidates.slice(0, page.limit) : candidates) {
+      const selected = page ? candidates.slice(0, page.limit) : candidates;
+      // Advance over inspected keys even when a record is temporarily unreadable.
+      if (page) page.nextCursor = candidates.length > selected.length ? selected.at(-1)!.slice(0, -5) : null;
+      for (const name of selected) {
         const obligation = read(path.join(directory, name));
         if (!obligation) {
           if (guardOnly && !pending.some(item => `${item.id}.json` === name)) {
@@ -427,6 +434,7 @@ function createInterruptionObligationStore(
           }
           continue;
         }
+        canonicalIds.add(obligation.id);
         const resolvedAt = obligation.resolvedAt ? Date.parse(obligation.resolvedAt) : NaN;
         if (guardOnly && (obligation.reason !== "account-guard" || !interruptionObligationUnresolved(obligation))) {
           fs.rmSync(path.join(indexDirectory, name), { force: true });
@@ -439,9 +447,12 @@ function createInterruptionObligationStore(
         obligations.push(obligation);
       }
       /* A fresh claim is still part of the inventory. Reading it does not
-         steal its import, and lets startup withdraw a disproved proposal. */
+         steal its import, and lets startup withdraw a disproved proposal.
+         A canonical record wins even when it has already settled. */
       for (const obligation of pending) {
         if ((!guardOnly || obligation.reason === "account-guard" && interruptionObligationUnresolved(obligation))
+          && (!page || selected.includes(`${obligation.id}.json`))
+          && !canonicalIds.has(obligation.id)
           && !obligations.some((existing) => existing.id === obligation.id)) obligations.push(obligation);
       }
       if (page) return obligations.filter(item => item.id > page.after).sort((a, b) => a.id.localeCompare(b.id)).slice(0, page.limit);
@@ -604,9 +615,13 @@ export function accountGuardObligationStore(directory: string) {
   };
   return {
     async list() { await initialize(); return transaction(() => store.list()); },
-    async page(after: string, limit = 64) {
+    async page(after: string) {
       await initialize();
-      return transaction(() => store.list({ after, limit }));
+      return transaction(() => {
+        const page = { after, limit: 64, nextCursor: null as string | null };
+        const obligations = store.list(page);
+        return { obligations, nextCursor: page.nextCursor };
+      });
     },
     async record(input: InterruptionObligationInput) {
       if (input.reason !== "account-guard") throw new Error("account guard store requires a guard cut");

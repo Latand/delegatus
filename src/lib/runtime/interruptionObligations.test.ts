@@ -292,12 +292,12 @@ test("guard recovery pages bound record reads and eventually visit every pending
       if (String(filename).startsWith(obligations + path.sep)) reads++;
       return Reflect.apply(read, fs, [filename, ...args]);
     }) as typeof read);
-    const page = await accountGuardObligationStore(obligations).page(after).finally(() => spy.mockRestore());
+    const { obligations: page, nextCursor } = await accountGuardObligationStore(obligations).page(after).finally(() => spy.mockRestore());
     expect(page.length).toBeLessThanOrEqual(64);
     expect(reads).toBeLessThanOrEqual(64);
     visited.push(...page.map(row => row.id));
-    if (page.length < 64) break;
-    after = page.at(-1)!.id;
+    if (!nextCursor) break;
+    after = nextCursor;
   }
   expect(visited).toEqual(ids.sort());
 });
@@ -353,4 +353,15 @@ test.each(permissionRefusals ? ["permissions", "partial contents"] : ["partial c
     fs.writeFileSync(filename, original);
     expect((await accountGuardObligationStore(obligations).list()).map(row => row.id)).toEqual([cut.obligation.id]);
   } finally { fs.chmodSync(filename, 0o600); errors.mockRestore(); }
+});
+
+
+test("a settled guard receipt takes precedence over its older copy in a fresh import claim", async () => {
+  const obligations = path.join(directory, "guard-claim");
+  const guard = accountGuardObligationStore(obligations);
+  const cut = (await guard.record({ ...releaseCut, reason: "account-guard", turnRef: "claimed-cut" })).obligation;
+  fs.writeFileSync(`${obligations}.pending.jsonl.claim-fixture`, JSON.stringify(cut) + "\n");
+  await guard.update(cut.id, { state: "delivered", resolvedAt: new Date().toISOString() });
+  expect(await accountGuardObligationStore(obligations).list()).toEqual([]);
+  expect((await accountGuardObligationStore(obligations).page("")).obligations).toEqual([]);
 });

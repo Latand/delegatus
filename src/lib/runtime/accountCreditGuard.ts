@@ -88,7 +88,7 @@ async function runAccountCreditGuard(registry: AgentRegistry,
   }), headlessStop]);
   const failures = stops.filter((result): result is PromiseRejectedResult => result.status === "rejected");
   if (failures.length) throw new AggregateError(failures.map(result => result.reason), "paid-credit guard termination remains pending");
-  const page = await store.page(cursors.get(registry) ?? "");
+  const { obligations: page, nextCursor } = await store.page(cursors.get(registry) ?? "");
   for (const obligation of page) {
     if (obligation.reason !== "account-guard") continue;
     if (obligation.state === "submitted") {
@@ -191,7 +191,7 @@ async function runAccountCreditGuard(registry: AgentRegistry,
     await store.update(obligation.id, { state: "submitted", operationId: held.command.operationId, attempts: obligation.attempts + 1 });
     requestAccountMigrationTick();
   }
-  cursors.set(registry, page.length === 64 ? page.at(-1)!.id : "");
+  cursors.set(registry, nextCursor ?? "");
 }
 
 export function enforceAccountCreditGuard(...args: Parameters<typeof runAccountCreditGuard>): Promise<void> {
