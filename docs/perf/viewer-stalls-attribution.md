@@ -250,3 +250,182 @@ bun scripts/privacy-publication-gate.ts --repository "$WORKTREE" \
 The path-scoped privacy gate passed at **23:35:13.524–23:35:13.990**.
 
 No source/runtime pin changed; types, broad runtime/native suites and CI publication gates were not run for this document-only stage. They remain required for a later implementation/publication. The runtime-host rehearsal would additionally be required for a Bun pin change.
+
+
+## Implementation follow-up
+
+The following section records the implementation stage. Sections A–F above
+remain the dated investigation and proposed contract. The historical 17.840 s
+gap still has no causal stack. Production last observed by this lane was
+`61799bbcc819cde4e4e312d96c418182fd0cb74e`; these changes have not been deployed.
+
+### Changes and correctness boundaries
+
+Health polls now retain a compact validation witness. SQLite triggers track
+pipeline row changes independently of collection revisions and retained change
+journals. A read-only transaction checks row versions, decodes changed bodies,
+and yields between batches. Trigger loss, a replacement database, unknown
+records, duplicate identities and corrupt JSON invalidate or refuse the read.
+The health shortcut additionally observes SQLite `data_version` on a dedicated
+read-only connection. The schema installation follows state ownership rules;
+an older store without the index uses the complete reader.
+
+Structured-host admission uses a detached ownership projection containing every
+attempt's conversation/state and unresolved process survivor. It checks the
+same evidence signature under the existing lease. Unknown records remain in
+health evidence and continue fencing adoption. The full startup API retains
+independent copies, batches project-alias resolution and yields during copying.
+It refuses use inside compact admission, where full bodies are unavailable.
+
+Four synchronous SQLite writer retries now allow six 5 ms sleeps, then surface
+the existing busy refusal. The transaction rolls back and a later attempt can
+retry. This bounds deliberate sleep to 30 ms per loop; SQL execution and OS
+scheduling can add elapsed time. Collection lease deadlines and asynchronous
+lease retry policy are unchanged. Failed writer waits emit `[blocking-wait]`
+even below the ordinary slow-operation threshold.
+
+Claim ownership, termination fences, quota observations and auto-balance policy
+use keyed registry reads. Existing grant checks, replacement detection and
+journal invalidation remain in that reader. Broad cold snapshot construction
+still incurs synchronous SQL work; it is instrumented and remains a measured
+limitation.
+
+A `files-revision` RPC supplies the scalar materialization counter without
+collecting, serializing, transferring or parsing a runtime population snapshot.
+Only the old host's exact unsupported-method reply permits snapshot fallback;
+timeouts and other refusals propagate. Revision publication keeps its existing
+serialization. Runtime-journal startup recognizes a durable, completed metadata
+version immediately. Incomplete or unfamiliar versions retain backfill and the
+authoritative fallback reader.
+
+### Attribution delivered
+
+The Viewer and runtime host now retain bounded synchronous slices separately
+from awaited spans. Static sites cover pipeline decoding/validation/copy,
+evidence identity, writer sleep, lease commits, controller checkpoints and port
+wait categories, registry snapshots/headers/claims/keyed reads, runtime snapshot
+collection/encoding/decoding, and files projection stages. Slice records retain
+parent IDs, outcomes, row/byte counts and delayed-tick overlap. Nested duration
+is never presented as exclusive CPU.
+
+A 1,024-record ring retains the longest 16 displaced synchronous slices and
+counts overwritten records/duration. Request retention is capped at 256 opaque
+IDs with 16 boundary events each; gap reports include 16 requests and 64 slices,
+with omission counts. RPC IDs connect dispatch, connection, host handling,
+commit, serialization, receive/decode and deadline observations across processes.
+Local monotonic clocks and UTC anchors remain separate. Files requests receive
+an ephemeral ID and route class; their final boundary means a Response is ready.
+Framework network completion and a files worker's internal execution are outside
+this instrumentation's coverage.
+
+An independent worker samples Linux main-thread scheduler and I/O counters,
+ancestor throttle indicators and the current synchronous site every 100 ms in a
+60-second shared ring. Counter unavailability and sampler lateness are explicit.
+A throttle indicator can overlap scheduler delay. Gap-triggered logging has a
+two-entry asynchronous queue and a 64 KiB record limit, with dropped-log counts.
+A bounded once-per-minute request summary preserves cross-process observations
+when only the peer stalls.
+
+Coverage remains `partial`, with `unknown-runtime-or-native` for unwrapped or
+unsupported native work. Watchdog CPU measurements do not establish GC causality.
+The worker's sampled site identifies observed execution only. A cold registry
+read can still block the loop; pending health work is recorded separately.
+
+### Paired replay
+
+The baseline is this branch's starting code, `bc31d26c1`, whose performance paths
+match `92406b7b`. Both variants use the three immutable backup hashes in section
+E, fresh writable derivatives, isolated HOME/config/temp/state, closed control
+endpoint and private PID/network namespaces. The final replay uses the same
+source-independent data and arrival schedule on each side. Initialization is
+recorded separately before the 32-admission/eight-health/one-controller burst.
+Each successful ownership result contains 898 records and has SHA-256
+`af23e6a6f24c48b283b4323673ed9ffc16253c5acc1dc56f866a6091f51b760a`.
+The four keyed registry results also agree byte-for-byte. Runtime controls retain
+813 sessions; the full serialization control retains 8,864,802 bytes.
+
+The initial paired run is retained privately, including 32 refused candidate
+admissions in its first burst when schema initialization invalidated prepared
+evidence. Moving initialization outside the timed burst on both variants gives
+the successful comparison below. An initial keyed probe selected JSON/SQLite
+parity mode without a JSON backup and failed before timing; its corrected probe
+uses SQLite authority. Those failed attempts are excluded from successful
+latency comparisons.
+
+All times are milliseconds. Slash-separated values retain each round in order; controls marked n=1 have one observation. These are the final paired runs at 00:13–00:14 UTC.
+
+| Phase | Before ms | After ms | Scope / outcome |
+| --- | --- | --- | --- |
+| SQL payload fetch (n=1) | 113.45 | 190.83 | 898 records; no errors |
+| SQL + JSON (n=1) | 344.98 | 444.28 | 898 records; no errors |
+| SQL + JSON + validation (n=1) | 372.67 | 510.95 | 898 records; no errors |
+| SQL + JSON + validation + revival (n=1) | 418.21 | 529.02 | 898 records; no errors |
+| Cold health (n=1) | 355.69 | 404.64 | 898 records; no errors |
+| Warm health (n=2) | 381.02 / 376.69 | 1.38 / 1.45 | zero issues |
+| Health after one changed row | 380.29 / 442.95 / 444.52 | 6.86 / 7.43 / 8.23 | zero issues |
+| Full startup copy | 529.68 / 499.74 / 496.81 | 529.11 / 555.69 / 453.17 | 898 independent records |
+| Full startup admission | 517.15 / 497.47 / 494.22 | 449.24 / 423.83 / 414.35 | 898 records; no refusals |
+| Controller preparation | 12.10 / 5.40 / 4.29 | 13.53 / 3.74 / 3.61 | 16 rows; no-op callback |
+| 32 ownership admissions + eight health + controller | 1,432.94 / 1,578.42 / 1,533.30 | 649.21 / 198.48 / 171.23 | all callbacks completed; zero refusals/errors |
+| Same ownership burst + three cold registry readers | 2,702.63 / 2,703.20 / 2,800.32 | 1,405.04 / 1,329.82 / 1,327.17 | all callbacks completed; zero refusals/errors |
+| Full-body burst control | 1,498.34 / 1,380.33 / 1,522.65 | 1,466.19 / 1,369.81 / 1,357.54 | all callbacks completed; zero refusals/errors |
+| Full-body burst + cold registry control | 3,117.14 / 2,635.82 / 2,794.74 | 2,365.44 / 2,837.68 / 2,464.22 | all callbacks completed; zero refusals/errors |
+| Four keyed registry reads | 355.22 / 328.22 / 325.89 | 2.27 / 1.86 / 1.02 | identical results; snapshot loads 1 → 0 |
+| Immediate runtime collection | 987.15 / 982.62 / 977.40 | 197.44 / 193.40 / 142.36 | 813 sessions; 8,864,802 bytes |
+| Full snapshot serialization | 21.82 / 22.25 / 20.79 | 26.20 / 23.95 / 32.01 | 813 sessions; 8,864,802 bytes |
+| Full snapshot parsing | 10.33 / 16.17 / 10.54 | 10.46 / 10.51 / 14.54 | 813 sessions; 8,864,802 bytes |
+| Ready runtime collection | 222.33 / 152.34 / 170.46 | 196.44 / 185.21 / 198.67 | after 50 ms metadata opportunity |
+| Runtime JSON rebuild / cache hit | 1,238.41 / 0.04 | 178.89 / 0.03 | same full body |
+| Materialization revision RPC | 337.62 / 49.18 / 53.48 | 5.21 / 0.65 / 0.39 | same scalar; reply 5,303,262 → 72 bytes |
+| 700 ms writer contention attempt | 703.61 / 702.43 / 701.66 | 33.69 / 32.48 / 33.42 | before waits; after refuses without mutation |
+| Writer retry after release | 0.91 / 2.07 / 1.15 | 2.10 / 1.33 / 2.02 | success; one retained fixture row on both sides |
+
+Telemetry on/off uses the same ownership burst and fresh derivatives. Each cell is median / nearest-rank p95 over three rounds; with n=3 the latter is the maximum. Process CPU includes helper threads.
+
+| Load / metric | Off | On |
+| --- | --- | --- |
+| Ownership burst: Wall ms | 242.33 / 639.13 | 224.96 / 761.26 |
+| Ownership burst: CPU ms | 224.69 / 652.75 | 200.52 / 795.00 |
+| Ownership burst: Maximum timer lateness ms | 39.06 / 56.79 | 42.28 / 50.35 |
+| With cold readers: Wall ms | 1,396.90 / 1,435.15 | 1,426.07 / 1,539.40 |
+| With cold readers: CPU ms | 1,523.12 / 1,540.36 | 1,530.39 / 1,745.79 |
+| With cold readers: Maximum timer lateness ms | 431.47 / 441.38 | 442.43 / 454.06 |
+
+Median mixed-load CPU increased 0.48%; its nearest-rank p95 increased 13.34%. The small sample and variation do not establish a consistent <1% overhead bound. Median throughput is 4.13 → 4.45 ownership bursts/s, and 0.716 → 0.701 bursts/s with cold readers. These measurements include watchdog and span recording together.
+
+The full-history control still has 333–530 ms cold-reader timer delays. Earlier paired trials retained a slower candidate full-history burst (3.16–3.49 s versus 2.23–2.39 s); the final ranges overlap. Warm health, compact ownership and keyed calls provide the repeatable component improvements. The cold-health and raw SQL controls do not show an improvement.
+
+Runtime snapshots agree after replacing only `serverTime` with a fixed value: normalized SHA-256 `b6b81afb51d31e5a85c58bf2bdba21a8f9d2a461921ed107d6cdeba46eb9f149`. The GC control under Bun 1.4.0 emitted collection start/end and duration text with `BUN_JSC_logGC=1`; it did not establish a bounded, clock-correlated always-on collector. A private `bun:jsc.startSamplingProfiler(directory)` probe under the same pinned runtime crashed immediately with a segmentation fault, before its timed CPU work. The probe used its own output directory and no production state. The shell reported exit 137; the runtime crash report recorded about 31 MiB peak RSS, so this is not evidence of a large-heap GC pause. There is no verified bounded native sample stream here. These facilities remain private diagnostic controls; unknown native coverage is retained.
+
+The gate provides three CPU equivalents and 8 GiB to this work, beneath an
+18-CPU shared ancestor. Co-tenant load, JIT and page-cache variation remain
+uncontrolled. These are component and controlled concurrency measurements;
+there is no recorded production arrival trace or production HTTP latency claim.
+A no-op controller preparation does not exercise every controller effect.
+
+### Verification and release handover
+
+Twenty-one test files ran by explicit path with fresh isolated roots through the prescribed
+owned gate: 580 passed, five pre-existing test failures matched the baseline,
+and 3,956 assertions ran. Typechecking and the local privacy gate passed. New coverage checks row-cache freshness and corruption, ownership
+copy isolation/refusal, scalar RPC compatibility, completed metadata readiness,
+writer contention/retry, tracer overflow and independent watchdog progress.
+
+The runtime-host rehearsal passed under pinned Bun 1.4.0: succession 506 ms,
+27/27 stable-listener responses and 27/27 runtime-socket responses over 15 s,
+including 13 abandoned callers per endpoint. No production listener or state
+was used. Lint reports no errors and one existing unused-variable warning.
+
+Three assertions in `src/lib/runtime/startup.test.ts` and two in
+`src/lib/runtime/startupFinalization.integration.test.ts` fail identically on
+the unchanged baseline. The latter fixtures attempt pipeline creation in a
+directory with no Git repository. Their complete branch logs and matching
+baseline samples are retained. Initial lifecycle runs also retained failures
+from incompatible replay environment overrides; corrected runs use normal test
+settings inside the same isolation boundaries.
+
+The owning deployer must collect a new 30-minute window after deployment, naming
+both serving SHAs and counting all gaps, unknowns, lease holds, busy refusals and
+phase/RPC deadlines. The historical gap and release rule remain unresolved by
+local measurements. This implementation stage neither deploys nor approves the
+release.
