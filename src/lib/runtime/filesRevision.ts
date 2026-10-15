@@ -19,9 +19,9 @@ export function filesRevisionEvent(currentFilesRevision: number): RuntimeEventIn
  */
 export function publishFilesRevision(client: RuntimeHostClient): Promise<void> {
   const publication = publicationQueue.catch(() => undefined).then(async () => {
-    // Only the revision is read, so the voice bodies stay in the journal.
-    const snapshot = await client.snapshot(undefined, { voiceBodiesFor: [] });
-    await client.append(filesRevisionEvent(snapshot.filesRevision));
+    const revision = client.filesRevision ? await client.filesRevision()
+      : (await client.snapshot(undefined, { voiceBodiesFor: [] })).filesRevision;
+    await client.append(filesRevisionEvent(revision));
   });
   publicationQueue = publication;
   return publication;

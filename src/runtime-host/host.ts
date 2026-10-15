@@ -1,3 +1,4 @@
+import { performanceSpans } from "@/lib/performanceSpans";
 import { canonicalNativeQueueProof, type NativeQueueCompactedProof, type NativeQueueTransition } from "@/lib/runtime/nativeQueueContracts";
 import { isStructuredHostKind, parseRuntimeScope, RUNTIME_RECEIPT_STATUSES, RuntimeIdempotencyConflictError, type RuntimeEvent, type RuntimeEventInput, type RuntimeOperationCommand, type RuntimeOperationReceipt, type RuntimeReceiptStatus, type RuntimeSocketRequest, type RuntimeSocketResponse, type RuntimeTransitionDetails } from "@/lib/runtime/contracts";
 import { structuredHostsEnabled } from "@/lib/runtime/flags";
@@ -143,7 +144,8 @@ export class RuntimeHost {
       if (request.method === "runtime-host-health") {
         if (!this.runtimeHostHealth) throw new Error("runtime-host startup evidence is unavailable");
         result = this.runtimeHostHealth();
-      } else if (request.method === "snapshot") result = new PreserializedJson(this.journal.snapshotJson(Array.isArray(request.params?.voiceBodiesFor)
+      } else if (request.method === "files-revision") result = this.journal.filesRevision();
+      else if (request.method === "snapshot") result = new PreserializedJson(this.journal.snapshotJson(Array.isArray(request.params?.voiceBodiesFor)
         ? request.params.voiceBodiesFor.filter((id): id is string => typeof id === "string").slice(0, 1)
         : undefined));
       else if (request.method === "session-read") result = this.journal.readSession({
@@ -164,7 +166,7 @@ export class RuntimeHost {
           throw new Error("a fenced session append requires a session-status event and its observed revision");
         }
         const publishedBefore = this.journal.publishedSeq();
-        const appended = this.journal.append(event);
+        const appended = performanceSpans.sync("runtime.commit", () => this.journal.append(event));
         const newlyPublished = appended.seq > publishedBefore;
         if (newlyPublished && appended.kind === "turn-ended") {
           try { this.signalFlowPipelineProgress?.(); }

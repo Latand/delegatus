@@ -135,6 +135,12 @@ for (const appDir of APP_DIRS) describe(`an entry point that owns the operator's
     ["the source entry", ["src/lib/mcp/entry.ts"]],
     ["the published bundle", [MCP_BUNDLE]],
   ] as const) {
+    test.skipIf(process.platform !== "linux")(`native hook mode in ${label} claims state before importing its graph`, () => {
+      const result = runEntryPoint([...command, "--native-caller-hook"]);
+      expectNoRefusal(result);
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("native caller hook needs its Claude parent");
+    });
     test(`the Viewer MCP server starts from ${label} and keeps its receipts in the operator's state directory`, () => {
       const result = runEntryPoint([...command]);
 

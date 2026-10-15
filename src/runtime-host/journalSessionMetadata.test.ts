@@ -151,6 +151,39 @@ function finish(migration: SessionHostMetadata) {
   expect(migration.ready).toBe(true);
 }
 
+test("a completed metadata installation is ready synchronously on reopen", () => {
+  const db = smallLegacy();
+  try {
+    const initial = new SessionHostMetadata(db);
+    finish(initial);
+    const reopened = new SessionHostMetadata(db);
+    const changes = db.query("SELECT total_changes() AS n").get();
+    reopened.start();
+    try {
+      expect(reopened.ready).toBe(true);
+      expect(db.query("SELECT total_changes() AS n").get()).toEqual(changes);
+      invariant(db);
+    } finally { reopened.close(); }
+  } finally { db.close(); }
+});
+
+test("incomplete and unknown metadata versions retain the authoritative fallback", () => {
+  for (const complete of [false, true]) {
+    const db = smallLegacy();
+    try {
+      const initial = new SessionHostMetadata(db);
+      initial.step();
+      if (complete) {
+        finish(initial);
+        db.query("UPDATE journal_meta SET value='future' WHERE key='session_host_metadata_schema_version'").run();
+      }
+      const reopened = new SessionHostMetadata(db);
+      reopened.start();
+      try { expect(reopened.ready).toBe(false); } finally { reopened.close(); }
+    } finally { db.close(); }
+  }
+});
+
 test("migration commits bounded batches, resumes after reopen and rolls back a failed batch", () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-session-migrate-"));
   const filename = path.join(directory, "journal.sqlite");

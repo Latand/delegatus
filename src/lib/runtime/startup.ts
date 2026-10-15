@@ -15,7 +15,7 @@ import { activeOrchestratorSeats, type OrchestratorSeat } from "@/lib/orchestrat
 import { captureProcessIdentity, processIdentityMayOwn, processIdentityStatus, sameRecordedProcessIdentity } from "@/lib/processIdentity";
 import { assertDarwinStructuredRuntime } from "@/lib/proc/darwinIdentity";
 import { readStableTailRecords, type StableTailRead } from "@/lib/scanner/activity";
-import { loadPipelinesForStartupAsync, pipelineRegistryHealthAsync, withPipelineStartupAdmission } from "@/lib/pipelines/store";
+import { loadPipelineOwnershipForStartupAsync, pipelineRegistryHealthAsync, withPipelineStartupAdmission } from "@/lib/pipelines/store";
 
 import {
   adoptClaudeRegistryHosts,
@@ -1628,7 +1628,7 @@ async function pipelineStartupEvidence(registry: AgentRegistry, available = true
   let preservedIds: Set<string>;
   try {
     if (!available) throw new Error("pipeline admission authority is unavailable");
-    pipelines = await loadPipelinesForStartupAsync();
+    pipelines = await loadPipelineOwnershipForStartupAsync();
     preservedIds = new Set((await pipelineRegistryHealthAsync()).map((issue) => issue.id));
   } catch (error) {
     console.error("[structured hosts] pipeline registry unreadable; deferring pipeline adoption", {
@@ -1648,10 +1648,7 @@ async function pipelineStartupEvidence(registry: AgentRegistry, available = true
     }
   }
   for (const pipeline of pipelines) {
-    const attempts = pipeline.runs.flatMap((run) => run.attempts);
-    const evidence = [...attempts, ...(pipeline.closeTeardown?.hosts ?? []).map((host) => host.evidence)];
-    const blocked = evidence.some((host) => host.unresolvedTermination?.survivors
-      .some((identity) => processIdentityStatus(identity) !== "dead"));
+    const blocked = pipeline.survivors.some(identity => processIdentityStatus(identity) !== "dead");
     // Reviewer synchronization can move survivors off the current attempt
     // into frozen close custody. Either record fences every pipeline writer.
     // Memberships also retain conversations absent from an older attempt row.
@@ -1662,15 +1659,11 @@ async function pipelineStartupEvidence(registry: AgentRegistry, available = true
         }
       }
     }
-    for (const run of pipeline.runs) {
-      for (const attempt of run.attempts) {
-        if (!attempt.conversationId?.startsWith("conversation_")) continue;
-        const id = registry.canonicalConversationId(attempt.conversationId as ViewerConversationId);
-        if (SETTLED_STAGE_ATTEMPT_STATES.has(attempt.state)) settled.add(id);
-        if (blocked) {
-          deferred.add(id);
-        }
-      }
+    for (const attempt of pipeline.attempts) {
+      if (!attempt.conversationId?.startsWith("conversation_")) continue;
+      const id = registry.canonicalConversationId(attempt.conversationId as ViewerConversationId);
+      if (SETTLED_STAGE_ATTEMPT_STATES.has(attempt.state)) settled.add(id);
+      if (blocked) deferred.add(id);
     }
   }
   return { settled, deferred };
@@ -1839,7 +1832,7 @@ async function adoptStructuredHostsPass(
 ): Promise<AdoptedStructuredHost[]> {
   const assertActive = dependencies.assertActive ?? (() => {});
   const admitState = <T>(admit: (available: boolean) => Promise<T>, phase = "startup evidence") =>
-    withPipelineStartupAdmission(admit, phase, dependencies.observeLeaseHold);
+    withPipelineStartupAdmission(admit, phase, dependencies.observeLeaseHold, true);
   assertActive();
   assertDarwinStructuredRuntime();
   const registry = dependencies.registry ?? agentRegistry();
