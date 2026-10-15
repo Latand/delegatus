@@ -707,8 +707,15 @@ the median of the three loop maxima with each control. Both candidate medians
 must be no higher. Publish every repetition, including individual maxima,
 failed responses and pending calls. An incomplete loop window, surviving
 fixture process, connection imbalance, adapter database access or unreconciled
-mutation prevents acceptance. Recovering a timed-out operation keeps its
+mutation prevents acceptance. A call offered after the scheduled window also
+invalidates that sample. Recovering a timed-out operation keeps its
 original measured failure and latency.
+
+The resumed reports scope pending counts to measured calls. They also retain
+the total pending work, including warmup, at the observed boundary and after
+drain. Reconciliation `queried` counts actual retry attempts; `settled` also
+includes replies already known without another request. Older diagnostic
+reports retained total pending work and counted all settled replies as queried.
 
 Exact normalized response and row hashes remain separate from the committed
 history checks. Concurrent writes can settle in different orders and shared-task

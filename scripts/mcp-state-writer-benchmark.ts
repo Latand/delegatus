@@ -245,7 +245,7 @@ export async function runStateWriterSample(): Promise<void> {
       }
     }
     await Bun.sleep(Math.max(0, scheduledStart + (warmSeconds + seconds) * 1000 - performance.now()));
-    const pendingAtEnd = pending.size;
+    const allPendingAtObservedEnd = pending.size;
     await Promise.race([Promise.all(pending), Bun.sleep(35_000)]);
     // Re-query uncertain mutations under their original keys. Settled replies
     // are already evidence; recovery adds no replay burst for those successes.
@@ -259,9 +259,11 @@ export async function runStateWriterSample(): Promise<void> {
       row.reconciled = row.result; return false;
     });
     let recoveryIndex = 0;
+    let recoveryAttempts = 0;
     const recover = async () => { for (;;) {
       const row = uncertain[recoveryIndex++];
       if (!row || Date.now() >= reconciliationDeadline) return;
+      recoveryAttempts++;
       try {
         if (mode === "stdio") {
           const response = await clients[row.client]!.client.callTool({ name: row.name, arguments: row.args }, undefined,
@@ -283,15 +285,19 @@ export async function runStateWriterSample(): Promise<void> {
     const rows = db.query<{ collection: string; row_key: string; value_json: string; row_revision: number }, []>("SELECT collection,row_key,value_json,row_revision FROM state_rows ORDER BY collection,row_key").all(); db.close();
     fs.writeFileSync(path.join(root, "rows.json"), JSON.stringify(rows));
     const measured = calls.filter(row => row.phase === "measured");
+    const measuredEnd = wallStart + (warmSeconds + seconds) * 1000;
+    const completedAtEnd = measured.filter(row => row.completed !== undefined && row.completed <= measuredEnd).length;
     const latencies = measured.flatMap(row => row.latency === undefined ? [] : [row.latency]).sort((a, b) => a - b);
     const percentile = (p: number) => latencies[Math.max(0, Math.ceil(latencies.length * p) - 1)];
     const summary = { clients: count, mode, shared, offered: measured.length, completed: measured.filter(row => row.completed !== undefined).length,
-      failed: measured.filter(row => row.ok === false).length, pendingAtEnd, pendingAfterDrain: pending.size,
-      completedAtEnd: measured.filter(row => row.completed !== undefined && row.completed <= wallStart + (warmSeconds + seconds) * 1000).length,
-      failedAtEnd: measured.filter(row => row.ok === false && row.completed !== undefined && row.completed <= wallStart + (warmSeconds + seconds) * 1000).length,
+      failed: measured.filter(row => row.ok === false).length,
+      pendingAtEnd: measured.length - completedAtEnd, allPendingAtObservedEnd,
+      pendingAfterDrain: measured.filter(row => row.completed === undefined).length, allPendingAfterDrain: pending.size,
+      completedAtEnd, offeredAfterEnd: measured.filter(row => row.offered >= measuredEnd).length,
+      failedAtEnd: measured.filter(row => row.ok === false && row.completed !== undefined && row.completed <= measuredEnd).length,
       reconciliation: { mutations: calls.filter(row => row.name !== "list_tasks").length,
         uncertainReplies: uncertain.length,
-        queried: calls.filter(row => row.reconciled !== undefined).length,
+        queried: recoveryAttempts, settled: calls.filter(row => row.reconciled !== undefined).length,
         successful: calls.filter(row => (row.reconciled as { ok?: boolean } | undefined)?.ok === true).length,
         unknown: calls.filter(row => row.name !== "list_tasks" && (!row.reconciled || (row.reconciled as { code?: string; transportError?: string }).transportError
           || ["outcome_unknown", "request_in_progress"].includes((row.reconciled as { code?: string }).code ?? ""))).length },
