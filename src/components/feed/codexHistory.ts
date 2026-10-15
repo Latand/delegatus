@@ -9,6 +9,14 @@ type Version = {
 };
 type Slot = { family: Family; key: string; root: Version | null; initial: Version; last: Version; count: number; clone: (value: never) => unknown };
 
+/** Immutable membership shared by ledger rounds and pending user references. */
+export class HistoryIds {
+  readonly length: number;
+  constructor(readonly id: string, readonly previous: HistoryIds | null) {
+    this.length = (previous?.length ?? 0) + 1;
+  }
+}
+
 function version(at: number, value: unknown): Version {
   let priority = at | 0;
   priority = Math.imul(priority ^ (priority >>> 16), 0x45d9f3b);
@@ -54,27 +62,14 @@ type Effect = {
   normalized: Map<string, { input: unknown; value: unknown }>;
 };
 
-function equal(a: unknown, b: unknown, itemEqual: (a: unknown, b: unknown) => boolean): boolean {
-  if (Object.is(a, b)) return true;
-  if (!a || !b || typeof a !== "object" || typeof b !== "object") return false;
-  if (a instanceof Set || b instanceof Set) {
-    if (!(a instanceof Set && b instanceof Set) || a.size !== b.size) return false;
-    const right = [...b];
-    return [...a].every((value, index) => Object.is(value, right[index]));
-  }
-  if (Array.isArray(a) || Array.isArray(b)) return Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.every((v, i) => equal(v, b[i], itemEqual));
-  const ak = Object.keys(a), bk = Object.keys(b);
-  return ak.length === bk.length && ak.every(k => Object.hasOwn(b, k) && (k === "item" || k === "event"
-    ? itemEqual((a as Record<string, unknown>)[k], (b as Record<string, unknown>)[k])
-    : equal((a as Record<string, unknown>)[k], (b as Record<string, unknown>)[k], itemEqual)));
-}
-
 export interface CodexHistoryStats {
   rawLines: number;
   rawBytes: number;
   reusedLines: number;
   effectVisits: number;
   effectChecks: number;
+  /** Scalar/object comparisons, including every visited persistent-list pair. */
+  comparisonSteps: number;
   rowPatches: number;
   decodeMs: number;
   replayMs: number;
@@ -92,7 +87,50 @@ export interface CodexHistoryStats {
 
 export class CodexHistory {
   constructor(private readonly itemEqual: (a: unknown, b: unknown) => boolean = Object.is) {}
-  private same(a: unknown, b: unknown): boolean { return equal(a, b, this.itemEqual); }
+  private idComparisons = new WeakMap<HistoryIds, WeakMap<HistoryIds, boolean>>();
+
+  private sameIds(a: HistoryIds, b: HistoryIds): boolean {
+    if (a.length !== b.length) return false;
+    const path: [HistoryIds, HistoryIds][] = [];
+    let left: HistoryIds | null = a, right: HistoryIds | null = b;
+    let same = true;
+    while (left && right && left !== right) {
+      this.stats.comparisonSteps += 1;
+      const cached = this.idComparisons.get(left)?.get(right);
+      if (cached !== undefined) { same = cached; break; }
+      path.push([left, right]);
+      if (left.id !== right.id) { same = false; break; }
+      left = left.previous; right = right.previous;
+    }
+    // Replayed prefixes share their predecessors' exact verdict, including
+    // unequal segments. Length checks alone cannot bound equal-length edits.
+    for (const [left, right] of path) {
+      let forward = this.idComparisons.get(left);
+      if (!forward) this.idComparisons.set(left, forward = new WeakMap());
+      forward.set(right, same);
+      let reverse = this.idComparisons.get(right);
+      if (!reverse) this.idComparisons.set(right, reverse = new WeakMap());
+      reverse.set(left, same);
+    }
+    return same;
+  }
+
+  private same(a: unknown, b: unknown): boolean {
+    this.stats.comparisonSteps += 1;
+    if (Object.is(a, b)) return true;
+    if (!a || !b || typeof a !== "object" || typeof b !== "object") return false;
+    if (a instanceof HistoryIds || b instanceof HistoryIds) return a instanceof HistoryIds && b instanceof HistoryIds && this.sameIds(a, b);
+    if (a instanceof Set || b instanceof Set) {
+      if (!(a instanceof Set && b instanceof Set) || a.size !== b.size) return false;
+      const right = [...b];
+      return [...a].every((value, index) => Object.is(value, right[index]));
+    }
+    if (Array.isArray(a) || Array.isArray(b)) return Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.every((v, i) => this.same(v, b[i]));
+    const ak = Object.keys(a), bk = Object.keys(b);
+    return ak.length === bk.length && ak.every(k => Object.hasOwn(b, k) && (k === "item" || k === "event"
+      ? this.itemEqual((a as Record<string, unknown>)[k], (b as Record<string, unknown>)[k])
+      : this.same((a as Record<string, unknown>)[k], (b as Record<string, unknown>)[k])));
+  }
   private slots = new Map<Family, Map<string, Slot>>();
   private effects = new Map<number, Effect>();
   private effectRoot: Version | null = null;
@@ -105,7 +143,7 @@ export class CodexHistory {
   private normalizationOrdinals = new Map<string, number>();
   revision = 0;
   readonly stats: Omit<CodexHistoryStats, "effects" | "slots" | "versions" | "checkpointBytes" | "frontier"> = {
-    rawLines: 0, rawBytes: 0, reusedLines: 0, effectVisits: 0, effectChecks: 0, rowPatches: 0,
+    rawLines: 0, rawBytes: 0, reusedLines: 0, effectVisits: 0, effectChecks: 0, comparisonSteps: 0, rowPatches: 0,
     decodeMs: 0, replayMs: 0, verifyMs: 0, projectionMs: 0, resets: {}, replayByDependency: {},
   };
 
@@ -339,6 +377,7 @@ export class CodexHistory {
       this.stats.replayByDependency[family] = (this.stats.replayByDependency[family] ?? 0) + 1;
       this.apply(first);
     }
+    this.idComparisons = new WeakMap();
     this.stats.replayMs += performance.now() - began;
   }
 

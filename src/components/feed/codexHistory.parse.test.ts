@@ -112,6 +112,44 @@ describe("Codex history hand-over", () => {
     expect(visits(400)).toBe(small);
   });
 
+  test("missing usage keeps comparison work linear across a long pending ledger and many pages", () => {
+    const work = (count: number, page: number) => {
+      const lines = Array.from({ length: count }, (_, n) => historyRecord("response_item", {
+        type: "function_call", name: "exec_command", call_id: `pending-${n}`, arguments: '{"cmd":"echo fixture"}',
+      }));
+      const session = createFeedSession(config);
+      let start = count - 1;
+      session.feed(lines.slice(start), start, false);
+      let steps = 0, affected = 0;
+      while (start > 0) {
+        const previous = start;
+        start = Math.max(0, start - page);
+        const window = lines.slice(start);
+        const before = codexHistoryStats(session)!;
+        const snapshot = session.feed(window, start, false);
+        const after = codexHistoryStats(session)!;
+        const visits = after.effectVisits - before.effectVisits;
+        const comparisons = after.comparisonSteps - before.comparisonSteps;
+        expect(after.rawLines - before.rawLines).toBe(previous - start);
+        expect(after.resets).toEqual({});
+        expect(after.frontier.pendingMembers).toBe(window.length);
+        expect(visits).toBe(count - previous);
+        expect(comparisons).toBeLessThanOrEqual(100 * (previous - start + visits));
+        // These records have explicit IDs and no interactive-session owners;
+        // compare the complete snapshots without the helper's all-pairs matrix.
+        expect(snapshot).toEqual(createFeedSession(config).feed(window, start, false));
+        steps += comparisons;
+        affected += previous - start + visits;
+      }
+      expect(feedJoinStats(session).rebuilt).toBe(0);
+      return { steps, affected };
+    };
+    // The last prepend exactly reproduces loading lines.slice(1), then lines.
+    for (const count of [1000, 3000, 6000]) work(count, count - 2);
+    const small = work(300, 30), large = work(3000, 300);
+    expect(large.steps / large.affected).toBeLessThanOrEqual(2 * small.steps / small.affected);
+  });
+
   test("many pending structured users in other time buckets add no reconciliation work", () => {
     const work = (count: number) => {
       const message = (n: number) => historyRecord("response_item", { type: "message", role: "user", content: [{ type: "input_text", text: "<!-- llv:structured-user -->\nRepeated request" }] }, n);

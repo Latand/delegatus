@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { CodexHistory } from "./codexHistory";
+import { CodexHistory, HistoryIds } from "./codexHistory";
 import { createContextLedger, type ContextTokens } from "./contextTokens";
 
 test("an older write invalidates a reader at the next write, and retracts its old contribution", () => {
@@ -25,6 +25,51 @@ test("an initial-state replacement retains the old read value until reconciliati
   history.partial(false);
   history.settle();
   expect(rows.get("partial")).toBe(false);
+});
+
+test("persistent IDs compare deep equal, changed and shared lists without recursion", () => {
+  const list = (first: string, length: number) => {
+    let ids = new HistoryIds(first, null);
+    for (let n = 1; n < length; n += 1) ids = new HistoryIds(String(n), ids);
+    return ids;
+  };
+  const compare = (before: HistoryIds | null, after: HistoryIds | null, changed: boolean) => {
+    const history = new CodexHistory();
+    const state = history.fields("ledger", { pending: before });
+    let reads = 0;
+    history.record(10, () => { void state.pending; reads += 1; });
+    const steps = history.stats.comparisonSteps;
+    history.record(0, () => { state.pending = after; });
+    history.settle();
+    expect(reads).toBe(changed ? 2 : 1);
+    return history.stats.comparisonSteps - steps;
+  };
+  const original = list("first", 30000);
+  expect(compare(original, original, false)).toBeLessThan(10);
+  expect(compare(original, list("first", 30000), false)).toBeLessThan(30010);
+  expect(compare(original, list("changed", 30000), true)).toBeLessThan(30010);
+  expect(compare(original, new HistoryIds(original.id, original.previous), false)).toBeLessThan(10);
+  expect(compare(original, new HistoryIds(original.id, original), true)).toBeLessThan(10);
+  compare(original, null, true);
+  compare(null, original, true);
+});
+
+test("equal-length replay reuses the exact comparison of each persistent segment", () => {
+  const history = new CodexHistory();
+  const state = history.fields("ledger", { pending: new HistoryIds("old", null) });
+  const count = 6000;
+  for (let at = 1; at <= count; at += 1) history.record(at, () => {
+    state.pending = new HistoryIds(`member-${at}`, state.pending);
+  });
+  const before = history.stats.comparisonSteps;
+  history.record(0, () => { state.pending = new HistoryIds("changed", null); });
+  history.settle();
+  expect(history.stats.effectVisits).toBe(count);
+  expect(history.stats.comparisonSteps - before).toBeLessThan(20 * count);
+  expect(state.pending.length).toBe(count + 1);
+  let first = state.pending;
+  while (first.previous) first = first.previous;
+  expect(first.id).toBe("changed");
 });
 
 test("source indexes and pending-effect ordering agree with fresh reduction over shuffled prepends", () => {

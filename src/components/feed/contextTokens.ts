@@ -1,4 +1,4 @@
-import type { CodexHistory } from "./codexHistory";
+import { HistoryIds, type CodexHistory } from "./codexHistory";
 import { translate, type Locale } from "@/lib/i18n";
 import type { ToolEvent } from "./parse";
 import type { FeedEngine } from "./tools";
@@ -120,8 +120,8 @@ export function contextTokensTitle(t: ContextTokens, scope: "call" | "calls", lo
 
 /* ---------------------------------------------------------------- ledger */
 
-type IdList = { id: string; previous: IdList | null; length: number };
-const appendId = (list: IdList | null, id: string): IdList => ({ id, previous: list, length: (list?.length ?? 0) + 1 });
+type IdList = HistoryIds;
+const appendId = (list: IdList | null, id: string): IdList => new HistoryIds(id, list);
 function orderedIds(list: IdList | null): string[] {
   const ids: string[] = [];
   for (let node = list; node; node = node.previous) ids.push(node.id);

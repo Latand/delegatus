@@ -1,4 +1,4 @@
-import { CodexHistory, type CodexHistoryStats } from "./codexHistory";
+import { CodexHistory, HistoryIds, type CodexHistoryStats } from "./codexHistory";
 import { redactTranscriptText, SENSITIVE_RECORD_KEY, SENSITIVE_RECORD_TEXT } from "./toolRedaction";
 import {
   debugRaw,
@@ -1688,8 +1688,8 @@ export function feedJoinStats(session: FeedSession): FeedJoinStats {
   return sessionInternals.get(session)!.stats();
 }
 
-type CodexUserRefs = { id: string; previous: CodexUserRefs | null; length: number };
-const appendUserRef = (list: CodexUserRefs | null, id: string): CodexUserRefs => ({ id, previous: list, length: (list?.length ?? 0) + 1 });
+type CodexUserRefs = HistoryIds;
+const appendUserRef = (list: CodexUserRefs | null, id: string): CodexUserRefs => new HistoryIds(id, list);
 function userRefIds(list: CodexUserRefs | null): string[] {
   const ids: string[] = [];
   for (let node = list; node; node = node.previous) ids.push(node.id);

@@ -14,6 +14,16 @@ Every feed verifies the retained raw strings, including interior lines. Rewrites
 
 `codexHistoryStats` separates new raw lines/bytes, reused lines, dependency checks, replayed effects, row writes, live-frontier size, retained versions, serialized frontier bytes and reset reasons. It times decoding/reduction, replay, raw verification and projection separately. Raw verification and flat snapshot projection remain proportional to the loaded window.
 
+### Missing usage and long member lists
+
+Review found a quadratic comparison hidden by the effect-visit counts. With no `token_count`, prepending a call changes every retained pending-member prefix. Generic object equality traversed each prefix's `previous` chain before checking its length. The 1,000-call regression recorded 2,020,978 comparison steps and failed its 100,000-step bound before the fix.
+
+Ledger members and pending user references now use one immutable list type. Equality rejects different lengths immediately, traverses equal-length lists iteratively, and stops at a shared predecessor or a previously compared segment pair. Both equal and unequal segment verdicts are cached until reconciliation finishes. This also bounds replay after an equal-length prefix changes. Comparison uses exact IDs and lengths; it needs no hash. The segment cache is discarded after each settlement.
+
+`comparisonSteps` counts generic equality calls and each persistent-list pair visited. The regression in `codexHistory.parse.test.ts` uses 1,000, 3,000 and 6,000 distinct calls, all timestamped `2026-09-01T10:00:00.000Z`, with arguments `{"cmd":"echo fixture"}` and no usage records. It includes loading `lines.slice(1)` at coordinate 1 followed by `lines` at 0, plus ten-page walks at two scales. Every page requires complete snapshot equality with a fresh parse, incoming-only decoding, zero resets, one replay per affected retained call, and at most 100 comparison steps per incoming record or replayed effect. These explicit-ID calls have no interactive-session ownership; the regression compares snapshots directly to avoid the small-fixture helper's all-pairs ownership matrix.
+
+The journal tests separately cover 30,000-node equal, changed and shared lists, length differences, null boundaries, and a 6,000-effect replay that changes the oldest ID while preserving every prefix length. The latter requires fewer than 20 comparison steps per affected effect.
+
 ## Reproduction
 
 The paired numerical case lives in the existing `conversationWindow.browser.test.tsx` driver. It bundles the baseline parser and ledger from the pinned commit, bundles the candidate, and alternates their execution order in Chromium. Both run on identical immutable inputs. Each CPU rate and partition has one warm-up and three measured walks. The timer surrounds `session.feed`; transport, slicing, comparison, React, layout and paint occur outside it. A `PerformanceObserver` records main-thread tasks longer than 50 ms that overlap the synchronous feed call. Blocking time sums `max(0, duration - 50)`.
