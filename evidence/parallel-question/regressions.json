@@ -1,0 +1,311 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-10-15T21:28:30.118899+00:00",
+  "sourceRevision": "e970208c88de7a681c8b2ff3cbf2f257b1765f1d",
+  "baselineRevision": "05f90f84db4ec8e60736491d8e3df3dc5e1f47e2",
+  "runner": "controller-provided gate-slot.sh",
+  "isolation": [
+    "HOME",
+    "XDG_CONFIG_HOME",
+    "TMPDIR",
+    "LLV_STATE_DIR"
+  ],
+  "engineTransport": "simulated",
+  "productionRuntimeWrites": false,
+  "regressions": [
+    {
+      "file": "src/components/conversation/DeputyBlock.dom.test.tsx",
+      "test": "parallel C: a failed ask keeps its question, shows the reason and retries with one action",
+      "main": "fail",
+      "candidate": "pass"
+    },
+    {
+      "file": "src/components/conversation/conversationWindow.browser.test.tsx",
+      "test": "parallel question failure and retry > the saved question, reason and Retry remain visible on phone and desktop",
+      "main": "fail",
+      "candidate": "pass"
+    },
+    {
+      "file": "src/lib/accounts/migration/coordinator.test.ts",
+      "test": "parallel B: the normal drain delivers a hostless reclaimed first send after restart",
+      "main": "fail",
+      "candidate": "pass"
+    },
+    {
+      "file": "src/lib/orchestrator/deputyCommand.test.ts",
+      "test": "parallel C: a legacy image ask recovers its envelope from the original delivery",
+      "main": "fail",
+      "candidate": "pass"
+    },
+    {
+      "file": "src/lib/orchestrator/deputyCommand.test.ts",
+      "test": "parallel C: a task-join refusal ends visibly before host delivery",
+      "main": "fail",
+      "candidate": "pass"
+    },
+    {
+      "file": "src/lib/orchestrator/deputyCommand.test.ts",
+      "test": "parallel C: an unsettled earlier operation refuses retry and keeps the saved ask",
+      "main": "fail",
+      "candidate": "pass"
+    },
+    {
+      "file": "src/lib/orchestrator/deputyCommand.test.ts",
+      "test": "parallel C: held first delivery is pending and retains its operation",
+      "main": "fail",
+      "candidate": "pass"
+    },
+    {
+      "file": "src/lib/orchestrator/deputyCommand.test.ts",
+      "test": "parallel C: image publication waits asynchronously and saved refs survive collection",
+      "main": "fail",
+      "candidate": "pass"
+    },
+    {
+      "file": "src/lib/orchestrator/deputyCommand.test.ts",
+      "test": "parallel C: retry rechecks a seat rotation after settlement and sends nothing",
+      "main": "fail",
+      "candidate": "pass"
+    },
+    {
+      "file": "src/lib/orchestrator/deputyCommand.test.ts",
+      "test": "parallel C: retry restores the saved text and image after a failed first delivery",
+      "main": "fail",
+      "candidate": "pass"
+    },
+    {
+      "file": "src/lib/orchestrator/deputyCommandPorts.test.ts",
+      "test": "parallel C: retry settles the prior delivering journal operation before another message",
+      "main": "fail",
+      "candidate": "pass"
+    },
+    {
+      "file": "src/lib/orchestrator/deputyCommandPorts.test.ts",
+      "test": "parallel C: retry settles the prior queued journal operation before another message",
+      "main": "fail",
+      "candidate": "pass"
+    },
+    {
+      "file": "src/lib/orchestrator/deputyCommandPorts.test.ts",
+      "test": "parallel C: retry settles the prior raced-claim journal operation before another message",
+      "main": "fail",
+      "candidate": "pass"
+    },
+    {
+      "file": "src/lib/orchestrator/deputyCommandPorts.test.ts",
+      "test": "parallel C: retry settles the prior unattempted journal operation before another message",
+      "main": "fail",
+      "candidate": "pass"
+    },
+    {
+      "file": "src/lib/orchestrator/deputyCommandPorts.test.ts",
+      "test": "parallel C: retry settles the prior unreachable journal operation before another message",
+      "main": "fail",
+      "candidate": "pass"
+    },
+    {
+      "file": "src/lib/orchestrator/deputyCommandPorts.test.ts",
+      "test": "parallel C: retry's cancellation yields to a peer writer and rechecks the seat fence",
+      "main": "fail",
+      "candidate": "pass"
+    },
+    {
+      "file": "src/lib/orchestrator/deputySweep.test.ts",
+      "test": "parallel C: failed first delivery ends beside the question with its actual reason",
+      "main": "fail",
+      "candidate": "pass"
+    },
+    {
+      "file": "src/lib/runtime/structuredMessageDelivery.test.ts",
+      "test": "parallel B: a hostless fork's saved first question reaches the resumed host through the normal drain",
+      "main": "fail",
+      "candidate": "pass"
+    },
+    {
+      "file": "src/lib/tasks/launchMembership.test.ts",
+      "test": "parallel A: a peer-held task database yields the loop and rechecks authority before admission",
+      "main": "fail",
+      "candidate": "pass"
+    },
+    {
+      "file": "src/lib/tasks/launchMembership.test.ts",
+      "test": "parallel A: account-commit contention preserves the reservation for membership retry",
+      "main": "fail",
+      "candidate": "pass"
+    },
+    {
+      "file": "src/lib/tasks/launchMembership.test.ts",
+      "test": "parallel A: async membership retries the same uncorrelated resume reservation outside leases",
+      "main": "fail",
+      "candidate": "pass"
+    }
+  ],
+  "checks": [
+    {
+      "command": [
+        "bun",
+        "test",
+        "src/lib/tasks/launchMembership.test.ts",
+        "src/lib/accounts/migration/coordinator.test.ts",
+        "src/lib/runtime/structuredMessageDelivery.test.ts"
+      ],
+      "pass": 279,
+      "fail": 0
+    },
+    {
+      "command": [
+        "bun",
+        "test",
+        "src/lib/orchestrator/deputyCommand.test.ts",
+        "src/lib/orchestrator/deputyCommandPorts.test.ts",
+        "src/lib/orchestrator/deputySweep.test.ts"
+      ],
+      "pass": 43,
+      "fail": 0
+    },
+    {
+      "command": [
+        "bun",
+        "test",
+        "src/components/conversation/DeputyBlock.dom.test.tsx",
+        "src/app/api/orchestrator/ghost/route.test.ts",
+        "src/lib/orchestrator/deputies.test.ts"
+      ],
+      "pass": 28,
+      "fail": 0
+    },
+    {
+      "command": [
+        "bun",
+        "test",
+        "src/lib/runtime/structuredRecovery.test.ts",
+        "src/lib/runtime/runtimeImageStore.test.ts",
+        "src/lib/agent/registry.writerWait.test.ts"
+      ],
+      "pass": 66,
+      "fail": 0
+    }
+  ],
+  "types": {
+    "command": [
+      "bun",
+      "node_modules/typescript/bin/tsc",
+      "--noEmit"
+    ],
+    "exitCode": 0
+  },
+  "browser": {
+    "command": [
+      "bun",
+      "test",
+      "src/components/conversation/conversationWindow.browser.test.tsx",
+      "-t",
+      "parallel question failure"
+    ],
+    "env": {
+      "LLV_CONVERSATION_BROWSER_TEST": "1",
+      "CHROME_BIN": "installed Chromium"
+    },
+    "pass": 1,
+    "fail": 0,
+    "frames": [
+      {
+        "path": ".artifacts/parallel-question/1280-dark-en-failed.png",
+        "sha256": "9e24791399d7f09efa6a708ac1899820d452ddee1ecf7177034949cfd50c211d"
+      },
+      {
+        "path": ".artifacts/parallel-question/1280-dark-en-retry-refused.png",
+        "sha256": "2c69af3a916342349bb16f5efbaf8d53dbc444a1e81bd50b596e9243d6020687"
+      },
+      {
+        "path": ".artifacts/parallel-question/1280-dark-en-starting.png",
+        "sha256": "522fc1779180d67355f1ed04c628cedabb17865fc0a234d3b83f871f73d2ced7"
+      },
+      {
+        "path": ".artifacts/parallel-question/1280-dark-uk-failed.png",
+        "sha256": "4000cdafa1196bc4b781fc49648f86d880f9c6c5f9a097aa6bc481d8b488cfd8"
+      },
+      {
+        "path": ".artifacts/parallel-question/1280-dark-uk-retry-refused.png",
+        "sha256": "a139bfe5c3c93a59c45b30d333e4027bb34a91924dcee9f5893a20b3c079378b"
+      },
+      {
+        "path": ".artifacts/parallel-question/1280-dark-uk-starting.png",
+        "sha256": "8235db98db8ba1884d4cf6cb65fd3bc1a433907684472be9a978faf6a0754751"
+      },
+      {
+        "path": ".artifacts/parallel-question/1280-light-en-failed.png",
+        "sha256": "d1e084b936e0e03081c81e656557f3abfa0f57d8982e185e1b6e222c7e961258"
+      },
+      {
+        "path": ".artifacts/parallel-question/1280-light-en-retry-refused.png",
+        "sha256": "d1c0f18f6bbf3a379498a1b75062eb82403ccc0df440042cc05d4755f449c72f"
+      },
+      {
+        "path": ".artifacts/parallel-question/1280-light-en-starting.png",
+        "sha256": "3fe96d2a55512f199a41f724be7057ebb0bf7f4a8625462382941f1c730aeab0"
+      },
+      {
+        "path": ".artifacts/parallel-question/1280-light-uk-failed.png",
+        "sha256": "8889d9e2d49eada750c507899c361a00271e08547c39d8739353c9c166abca77"
+      },
+      {
+        "path": ".artifacts/parallel-question/1280-light-uk-retry-refused.png",
+        "sha256": "48fe428775dd1ba740270e9253dd47aded48ff9c16fbf636737ef32105866ccd"
+      },
+      {
+        "path": ".artifacts/parallel-question/1280-light-uk-starting.png",
+        "sha256": "1edbe3dc5b143289470f06cb15226682b44b1470b64ad25fcc3aeb4bf6f20014"
+      },
+      {
+        "path": ".artifacts/parallel-question/390-dark-en-failed.png",
+        "sha256": "6934bbcab145227450306255758175de0fafd9350c754406de72014bd32b62d1"
+      },
+      {
+        "path": ".artifacts/parallel-question/390-dark-en-retry-refused.png",
+        "sha256": "36d38b817aa5be3a03c7cdfd66a298a137b86638d4728302b655630a28c54ce9"
+      },
+      {
+        "path": ".artifacts/parallel-question/390-dark-en-starting.png",
+        "sha256": "cdc399ad4dc29f4cf3ed4af79548f47eb9c6448567ac1953d4f1a68a7ca0b487"
+      },
+      {
+        "path": ".artifacts/parallel-question/390-dark-uk-failed.png",
+        "sha256": "c6ce8028e963accb05d23884a6faa0a763374acf991ab2dea0535d70c00449eb"
+      },
+      {
+        "path": ".artifacts/parallel-question/390-dark-uk-retry-refused.png",
+        "sha256": "9d5fdacb9b43b7b1768c9e66c0ec22e6f53f2ab6f5ccc17e3b6684d0a2e75d75"
+      },
+      {
+        "path": ".artifacts/parallel-question/390-dark-uk-starting.png",
+        "sha256": "9ba377a98b65a3e911b86c8b6fc975cead1f7bcc6a819916d590a4a3dc95ff3f"
+      },
+      {
+        "path": ".artifacts/parallel-question/390-light-en-failed.png",
+        "sha256": "1163ff1c0bcd486045c54416505f9cc8114f3c716f52e36689d0b1417955e7f3"
+      },
+      {
+        "path": ".artifacts/parallel-question/390-light-en-retry-refused.png",
+        "sha256": "94ba705d0e15838bc3f08b9cae8a03bedecf997d4a9c3b299efd27f0a46c2fce"
+      },
+      {
+        "path": ".artifacts/parallel-question/390-light-en-starting.png",
+        "sha256": "44a50f2cbfbb034422ebe188b9cd8ceddcf19ad9065ba94ba64e179d0f386294"
+      },
+      {
+        "path": ".artifacts/parallel-question/390-light-uk-failed.png",
+        "sha256": "6e3777d359d88c6c29302e4caca135700d8236d0f7d6334fe602bb5466133db4"
+      },
+      {
+        "path": ".artifacts/parallel-question/390-light-uk-retry-refused.png",
+        "sha256": "41461a274e22245648bfd11a9a5104caf498843ac4b5dc95b317f8ddff307047"
+      },
+      {
+        "path": ".artifacts/parallel-question/390-light-uk-starting.png",
+        "sha256": "7e91f747fd2287cd6c76b81b05a4cf4e008b2c03c9b2d0d4b236d1f2013d8c72"
+      }
+    ],
+    "inspection": "All 24 frames were visually inspected. Final captures match those bytes."
+  }
+}

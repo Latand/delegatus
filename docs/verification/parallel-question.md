@@ -21,7 +21,9 @@ rows and delivery progress, plus the service journal for
 
 A held first message stays pending until delivery is confirmed. Its failure
 ends with the actual delivery reason instead of being inferred as a dead host.
-Retry keeps the fork's history and original author. It checks the current seat
+Retry keeps the fork's history and original author. A reservation with zero
+attempts and no journal operation is cancelled under the registry writer before
+the next attempt; a claim that arrives during that read prevents the cancellation. It checks the current seat
 and epoch, refuses concurrent actuation and unverified earlier delivery, and
 preserves the question on refusal. An older record can recover its attachment
 references from the original delivery reservation. Missing attachment bytes
@@ -54,11 +56,12 @@ Set CHROME_BIN to an installed Chromium binary for the browser command.
 The existing conversation-window driver renders 390 × 900 and 1280 × 900,
 English and Ukrainian, light and dark. It captures failure, retry refusal and
 accepted retry, checks geometry and the exact retry request, and records
-`evidence/parallel-question/readings.json`. Frames are generated under
+`evidence/parallel-question/readings.json`. The command results and source revision
+are in `evidence/parallel-question/regressions.json`. Frames are generated under
 `.artifacts/parallel-question/`. The driver keeps Chromium's temporary directory
 inside the isolated scratch root through a short directory-handle path on Linux.
 
-Regression evidence is recorded against main `14e319937` and the candidate
+Regression evidence is recorded against main `05f90f84d` and the candidate
 source. The checks use simulated engine transport and private journals; they do
 not call a paid model or exercise the operator's running installation. No
 performance improvement is claimed. Runtime-host source and the Bun pin are

@@ -1,6 +1,5 @@
 [
   {
-    "width": 390,
     "scheme": "light",
     "lang": "en",
     "state": "failed",
@@ -26,10 +25,10 @@
       "text": "Retry"
     },
     "alert": null,
-    "overflow": 0
+    "overflow": 0,
+    "width": 390
   },
   {
-    "width": 390,
     "scheme": "light",
     "lang": "en",
     "state": "retry-refused",
@@ -61,10 +60,10 @@
       "bottom": 238.25,
       "text": "The previous delivery is still being checked."
     },
-    "overflow": 0
+    "overflow": 0,
+    "width": 390
   },
   {
-    "width": 390,
     "scheme": "light",
     "lang": "en",
     "state": "starting",
@@ -78,10 +77,10 @@
     "reason": null,
     "retry": null,
     "alert": null,
-    "overflow": 0
+    "overflow": 0,
+    "width": 390
   },
   {
-    "width": 390,
     "scheme": "light",
     "lang": "uk",
     "state": "failed",
@@ -107,10 +106,10 @@
       "text": "Повторити"
     },
     "alert": null,
-    "overflow": 0
+    "overflow": 0,
+    "width": 390
   },
   {
-    "width": 390,
     "scheme": "light",
     "lang": "uk",
     "state": "retry-refused",
@@ -142,10 +141,10 @@
       "bottom": 238.25,
       "text": "Попереднє надсилання ще перевіряється."
     },
-    "overflow": 0
+    "overflow": 0,
+    "width": 390
   },
   {
-    "width": 390,
     "scheme": "light",
     "lang": "uk",
     "state": "starting",
@@ -159,10 +158,10 @@
     "reason": null,
     "retry": null,
     "alert": null,
-    "overflow": 0
+    "overflow": 0,
+    "width": 390
   },
   {
-    "width": 390,
     "scheme": "dark",
     "lang": "en",
     "state": "failed",
@@ -188,10 +187,10 @@
       "text": "Retry"
     },
     "alert": null,
-    "overflow": 0
+    "overflow": 0,
+    "width": 390
   },
   {
-    "width": 390,
     "scheme": "dark",
     "lang": "en",
     "state": "retry-refused",
@@ -223,10 +222,10 @@
       "bottom": 238.25,
       "text": "The previous delivery is still being checked."
     },
-    "overflow": 0
+    "overflow": 0,
+    "width": 390
   },
   {
-    "width": 390,
     "scheme": "dark",
     "lang": "en",
     "state": "starting",
@@ -240,10 +239,10 @@
     "reason": null,
     "retry": null,
     "alert": null,
-    "overflow": 0
+    "overflow": 0,
+    "width": 390
   },
   {
-    "width": 390,
     "scheme": "dark",
     "lang": "uk",
     "state": "failed",
@@ -269,10 +268,10 @@
       "text": "Повторити"
     },
     "alert": null,
-    "overflow": 0
+    "overflow": 0,
+    "width": 390
   },
   {
-    "width": 390,
     "scheme": "dark",
     "lang": "uk",
     "state": "retry-refused",
@@ -304,10 +303,10 @@
       "bottom": 238.25,
       "text": "Попереднє надсилання ще перевіряється."
     },
-    "overflow": 0
+    "overflow": 0,
+    "width": 390
   },
   {
-    "width": 390,
     "scheme": "dark",
     "lang": "uk",
     "state": "starting",
@@ -321,10 +320,10 @@
     "reason": null,
     "retry": null,
     "alert": null,
-    "overflow": 0
+    "overflow": 0,
+    "width": 390
   },
   {
-    "width": 1280,
     "scheme": "light",
     "lang": "en",
     "state": "failed",
@@ -350,10 +349,10 @@
       "text": "Retry"
     },
     "alert": null,
-    "overflow": 0
+    "overflow": 0,
+    "width": 1280
   },
   {
-    "width": 1280,
     "scheme": "light",
     "lang": "en",
     "state": "retry-refused",
@@ -385,10 +384,10 @@
       "bottom": 191,
       "text": "The previous delivery is still being checked."
     },
-    "overflow": 0
+    "overflow": 0,
+    "width": 1280
   },
   {
-    "width": 1280,
     "scheme": "light",
     "lang": "en",
     "state": "starting",
@@ -402,10 +401,10 @@
     "reason": null,
     "retry": null,
     "alert": null,
-    "overflow": 0
+    "overflow": 0,
+    "width": 1280
   },
   {
-    "width": 1280,
     "scheme": "light",
     "lang": "uk",
     "state": "failed",
@@ -431,10 +430,10 @@
       "text": "Повторити"
     },
     "alert": null,
-    "overflow": 0
+    "overflow": 0,
+    "width": 1280
   },
   {
-    "width": 1280,
     "scheme": "light",
     "lang": "uk",
     "state": "retry-refused",
@@ -466,10 +465,10 @@
       "bottom": 191,
       "text": "Попереднє надсилання ще перевіряється."
     },
-    "overflow": 0
+    "overflow": 0,
+    "width": 1280
   },
   {
-    "width": 1280,
     "scheme": "light",
     "lang": "uk",
     "state": "starting",
@@ -483,10 +482,10 @@
     "reason": null,
     "retry": null,
     "alert": null,
-    "overflow": 0
+    "overflow": 0,
+    "width": 1280
   },
   {
-    "width": 1280,
     "scheme": "dark",
     "lang": "en",
     "state": "failed",
@@ -512,10 +511,10 @@
       "text": "Retry"
     },
     "alert": null,
-    "overflow": 0
+    "overflow": 0,
+    "width": 1280
   },
   {
-    "width": 1280,
     "scheme": "dark",
     "lang": "en",
     "state": "retry-refused",
@@ -547,10 +546,10 @@
       "bottom": 191,
       "text": "The previous delivery is still being checked."
     },
-    "overflow": 0
+    "overflow": 0,
+    "width": 1280
   },
   {
-    "width": 1280,
     "scheme": "dark",
     "lang": "en",
     "state": "starting",
@@ -564,10 +563,10 @@
     "reason": null,
     "retry": null,
     "alert": null,
-    "overflow": 0
+    "overflow": 0,
+    "width": 1280
   },
   {
-    "width": 1280,
     "scheme": "dark",
     "lang": "uk",
     "state": "failed",
@@ -593,10 +592,10 @@
       "text": "Повторити"
     },
     "alert": null,
-    "overflow": 0
+    "overflow": 0,
+    "width": 1280
   },
   {
-    "width": 1280,
     "scheme": "dark",
     "lang": "uk",
     "state": "retry-refused",
@@ -628,10 +627,10 @@
       "bottom": 191,
       "text": "Попереднє надсилання ще перевіряється."
     },
-    "overflow": 0
+    "overflow": 0,
+    "width": 1280
   },
   {
-    "width": 1280,
     "scheme": "dark",
     "lang": "uk",
     "state": "starting",
@@ -645,6 +644,7 @@
     "reason": null,
     "retry": null,
     "alert": null,
-    "overflow": 0
+    "overflow": 0,
+    "width": 1280
   }
 ]
