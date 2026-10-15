@@ -4856,7 +4856,7 @@ describe("native send paint audit", () => {
                   await page.waitForFunction(() => window.nativePaintReady);
                   // The feed must have consumed the preceding native record
                   // before click timing starts in this fresh browser context.
-                  await page.waitForFunction(text => [...document.querySelectorAll('[data-feed-kind="user"]')]
+                  await page.waitForFunction(text => [...document.querySelectorAll('[data-message-row], [data-feed-kind="user"]')]
                     .some(row => row.textContent?.includes(text)), previousText);
                   await page.evaluate(({ text, delay }) => window.armNativePaintAudit(text, delay), { text, delay });
                   await page.fill("textarea", text);
@@ -4921,7 +4921,9 @@ describe("native send paint audit", () => {
                   persist();
                 } catch (error) {
                   await page.screenshot({ path: path.join(runOut, "failure.png") }).catch(() => {});
-                  fs.writeFileSync(path.join(runOut, "failure.json"), JSON.stringify(await page.evaluate(() => window.nativePaintAudit).catch(() => null), null, 2));
+                  fs.writeFileSync(path.join(runOut, "failure.json"), JSON.stringify({
+                    error: String(error), audit: await page.evaluate(() => window.nativePaintAudit ?? null).catch(() => null),
+                  }, null, 2));
                   throw error;
                 } finally { await context.close(); }
               }
