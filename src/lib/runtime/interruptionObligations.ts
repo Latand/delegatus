@@ -1,3 +1,5 @@
+import { withViewerOperation } from "@/lib/viewerLoopMonitor";
+import { withWaitCorrelation } from "@/lib/blockingWaits";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -296,6 +298,7 @@ function createInterruptionObligationStore(
   const write = (obligation: InterruptionObligation): void => {
     prepareIndex(obligation);
     writeJsonDurably(fileFor(obligation.id), obligation);
+    if (obligation.reason === "account-guard") changedGuardObligations(directory);
     if (!interruptionObligationUnresolved(obligation)) fs.rmSync(indexFile(obligation.id), { force: true });
   };
   const readJournal = (filename: string): InterruptionObligation[] => {
@@ -517,6 +520,7 @@ function createInterruptionObligationStore(
               obligation: id, first, second,
             });
             appendDurably(pendingFile, `${JSON.stringify(obligation)}\n`);
+            if (obligation.reason === "account-guard") changedGuardObligations(directory);
           }
         }
         return { obligation, created: true };
@@ -540,6 +544,7 @@ function createInterruptionObligationStore(
             removed = true;
           }
           fs.rmSync(indexFile(id), { force: true });
+          if (removed) changedGuardObligations(directory);
           return removed;
         });
       } catch (error) {
@@ -553,6 +558,7 @@ function createInterruptionObligationStore(
           ?? [...readPending(), ...activeClaims().flatMap(readJournal)].find((pending) => pending.id === id) ?? null;
         if (!current) return null;
         const next = { ...current, ...patch };
+        if (JSON.stringify(current) === JSON.stringify(next)) return current;
         write(next);
         return next;
       });
@@ -565,6 +571,17 @@ export function interruptionObligationStore(
   hooks: { afterPendingRead?: () => void } = {},
 ): InterruptionObligationStore {
   return createInterruptionObligationStore(directory, hooks);
+}
+
+const revisionOwner = process as typeof process & { __llvGuardObligationRevisions?: Map<string, number>; __llvGuardObligationSequence?: number };
+const guardRevisions = revisionOwner.__llvGuardObligationRevisions ??= new Map<string, number>();
+const GUARD_REVISION_LIMIT = 128;
+export function accountGuardObligationRevision(directory: string): number { return guardRevisions.get(directory) ?? 0; }
+function changedGuardObligations(directory: string): void {
+  const revision = revisionOwner.__llvGuardObligationSequence = (revisionOwner.__llvGuardObligationSequence ?? 0) + 1;
+  guardRevisions.delete(directory);
+  guardRevisions.set(directory, revision);
+  if (guardRevisions.size > GUARD_REVISION_LIMIT) guardRevisions.delete(guardRevisions.keys().next().value!);
 }
 
 function accountGuardIndexDirectory(directory: string): string {
@@ -581,7 +598,9 @@ export function accountGuardObligationStore(directory: string) {
   const indexDirectory = accountGuardIndexDirectory(directory);
   const ready = path.join(indexDirectory, "ready");
   const store = createInterruptionObligationStore(directory, {}, true, true);
-  const transaction = <T>(operation: () => T) => withFileTransaction(pendingFile, "account guard obligations are busy", operation);
+  const transaction = <T>(operation: () => T) => withViewerOperation("account-credit-guard.store", () =>
+    withWaitCorrelation({ label: "account-credit-guard.obligations" }, () =>
+      withFileTransaction(pendingFile, "account guard obligations are busy", operation)));
   const initialize = async () => {
     if (fs.existsSync(ready)) return;
     // Import journal fallbacks under the same asynchronously acquired fence.

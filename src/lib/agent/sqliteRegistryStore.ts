@@ -590,6 +590,8 @@ export interface SqliteRegistryStoreOptions {
       bound cannot tell an origin reset from itself (issue #739). */
   mcpGrantPolicy?: McpGrantPolicy;
   onWriterWait?(durationMs: number): void;
+  /** A committed change to quota, host, conversation or delivery evidence. */
+  onCreditGuardChange?(): void;
   onSnapshotLoad?(): void;
   onRowPayloadRead?(collection: RowCollection, count: number): void;
   onRowPayloadParse?(collection: RowCollection, count: number): void;
@@ -690,6 +692,7 @@ export class SqliteAgentRegistryStore {
   private readonly db: BunDatabase;
   private readonly normalize: (value: unknown, mode?: { deferStoredGrantDecision: true }) => RegistryFile;
   private readonly normalizePartial: (value: unknown) => RegistryFile;
+  private readonly onCreditGuardChange: (() => void) | undefined;
   private readonly onWriterWait: ((durationMs: number) => void) | undefined;
   private readonly maxMutationAttempts: number;
   private readonly writerClock: () => number;
@@ -818,6 +821,7 @@ export class SqliteAgentRegistryStore {
     this.normalize = options.normalize;
     this.normalizePartial = (value) => options.normalize(value, { deferStoredGrantDecision: true });
     this.onWriterWait = options.onWriterWait;
+    this.onCreditGuardChange = options.onCreditGuardChange;
     this.maxMutationAttempts = options.maxMutationAttempts ?? 2;
     if (!Number.isInteger(this.maxMutationAttempts) || this.maxMutationAttempts < 1) {
       throw new RangeError("maxMutationAttempts must be a positive integer");
@@ -2178,14 +2182,15 @@ export class SqliteAgentRegistryStore {
 
   /** The callback must finish inside the transaction; no lazy object escapes. */
   read<T>(reader: (file: RegistryFile) => T): T {
-    this.db.exec("BEGIN");
+    const admitted = this.writerHeld;
+    if (!admitted) this.db.exec("BEGIN");
     try {
       if (this.changesReady) this.refreshColdKeys();
       const result = reader(this.loadLazyInTransaction(true, true, true).file);
-      this.db.exec("COMMIT");
+      if (!admitted) this.db.exec("COMMIT");
       return result;
     } catch (error) {
-      try { this.db.exec("ROLLBACK"); } catch { /* already closed */ }
+      try { if (!admitted) this.db.exec("ROLLBACK"); } catch { /* already closed */ }
       throw error;
     }
   }
@@ -2671,6 +2676,9 @@ export class SqliteAgentRegistryStore {
         this.updateCachesAfterCommit(current.file, changes, revision, stamps);
         this.rememberRevision(revision);
       }
+      const guardChanged = changes.meta.has("quotaObservations") || [...changes.rows.keys(), ...changes.order]
+        .some(collection => ["entries", "conversations", "conversationAliases", "heldDeliveries", "deliveryOperationOwners", "memberships"].includes(collection));
+      if (guardChanged) this.onCreditGuardChange?.();
       if (includeSnapshot) {
         const committed = this.snapshot();
         return { result, file: committed.file, revision: committed.revision };
@@ -2700,8 +2708,8 @@ export class SqliteAgentRegistryStore {
    * commits inside that transaction, so no writer can pass between the wait
    * and the write and the mutation cannot lose its revision.
    *
-   * `operation` must go straight to its mutation: a snapshot read inside it
-   * would open a second transaction.
+   * `operation` stays synchronous. Keyed reads before its mutation
+   * share this transaction; the mutation reads the admitted revision.
    */
   async withWriter<T>(
     operation: () => T,

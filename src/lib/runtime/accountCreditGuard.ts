@@ -12,7 +12,7 @@ import { activeOrchestratorSeats } from "@/lib/orchestrator/seats";
 import { StructuredSendRefusedError, type EngineHost } from "./engineHost";
 import { delegatusMessageOrigin } from "./agentMessageAuthor";
 import type { StructuredMessageRequest, StructuredMessageResult } from "./structuredMessageDelivery";
-import { interruptionObligationDirectory, accountGuardObligationStore, submittedContinuationOutcome, STAGE_CUT_RESOLUTION, REVIEWER_CUT_RESOLUTION } from "./interruptionObligations";
+import { interruptionObligationDirectory, accountGuardObligationRevision, accountGuardObligationStore, submittedContinuationOutcome, STAGE_CUT_RESOLUTION, REVIEWER_CUT_RESOLUTION } from "./interruptionObligations";
 
 function pipelineOwner(conversationId: string, registry?: AgentRegistry) {
   const conversation = registry?.conversation(conversationId as ViewerConversationId);
@@ -41,8 +41,18 @@ export function assertPipelineTurnAllowed(conversationId: string, registry?: Age
   }
 }
 
-const shared = globalThis as typeof globalThis & { __llvAccountGuardCursors?: WeakMap<AgentRegistry, string> };
-const cursors = shared.__llvAccountGuardCursors ??= new WeakMap<AgentRegistry, string>();
+interface GuardPassState {
+  registryRevision: number;
+  obligationRevision: number;
+  hosts: unknown;
+  fallbackAt: number;
+  cursor: string;
+  store: ReturnType<typeof accountGuardObligationStore>;
+  running?: Promise<void>;
+}
+const shared = process as typeof process & { __llvAccountGuardPasses?: WeakMap<AgentRegistry, GuardPassState> };
+const passes = shared.__llvAccountGuardPasses ??= new WeakMap<AgentRegistry, GuardPassState>();
+export const ACCOUNT_GUARD_FALLBACK_MS = 30_000;
 
 /** Stop every locally owned credited turn at the cutoff. The durable cut is
  * written before releasing its host. Ordinary stages retain their controller's
@@ -53,7 +63,8 @@ async function runAccountCreditGuard(registry: AgentRegistry,
   stop: (key: SessionKey, host: EngineHost) => Promise<boolean>,
   operatorStopped: (conversationId: string, since: string) => Promise<boolean>,
   resumeCurrent: (request: StructuredMessageRequest) => Promise<StructuredMessageResult | null>): Promise<void> {
-  const store = accountGuardObligationStore(interruptionObligationDirectory(registry.filename));
+  const state = passes.get(registry)!;
+  const store = state.store;
   const blockedAccounts = new Set(registry.quotaObservations("codex")
     .filter(row => creditGuardBlock("codex", row.limits)).map(row => row.accountId));
   const headlessStop = blockedAccounts.size ? import("@/lib/flows/engine")
@@ -88,7 +99,7 @@ async function runAccountCreditGuard(registry: AgentRegistry,
   }), headlessStop]);
   const failures = stops.filter((result): result is PromiseRejectedResult => result.status === "rejected");
   if (failures.length) throw new AggregateError(failures.map(result => result.reason), "paid-credit guard termination remains pending");
-  const { obligations: page, nextCursor } = await store.page(cursors.get(registry) ?? "");
+  const { obligations: page, nextCursor } = await store.page(state.cursor);
   for (const obligation of page) {
     if (obligation.reason !== "account-guard") continue;
     if (obligation.state === "submitted") {
@@ -157,7 +168,10 @@ async function runAccountCreditGuard(registry: AgentRegistry,
     };
     authorizeTarget();
     if (target !== generation.accountId) {
-      registry.requestConversationReseat(conversation.id, target, undefined, undefined, true);
+      await registry.deliveryWriteOrBusy({ label: "account-credit-guard.reseat", operationId: obligation.id }, () => {
+        authorizeTarget();
+        return registry.requestConversationReseat(conversation.id, target, undefined, undefined, true);
+      });
       requestAccountMigrationTick();
       continue;
     }
@@ -184,16 +198,47 @@ async function runAccountCreditGuard(registry: AgentRegistry,
       else throw new Error(result?.error ?? "credit-guard continuation could not be admitted");
       continue;
     }
-    const held = registry.holdDelivery(conversation.id,
+    const held = await registry.deliveryWriteOrBusy({ label: "account-credit-guard.continue", operationId: obligation.id }, () => {
+      authorizeTarget();
+      return registry.holdDelivery(conversation.id,
       text,
       obligation.id, "text", [], null, { operationId: obligation.id, kind: "send", policy: "queue", turnId: null,
         origin });
+    });
     await store.update(obligation.id, { state: "submitted", operationId: held.command.operationId, attempts: obligation.attempts + 1 });
     requestAccountMigrationTick();
   }
-  cursors.set(registry, nextCursor ?? "");
+  state.cursor = nextCursor ?? "";
 }
 
-export function enforceAccountCreditGuard(...args: Parameters<typeof runAccountCreditGuard>): Promise<void> {
-  return withViewerOperation("controller.account-credit-guard", () => runAccountCreditGuard(...args));
+type GuardHosts = Parameters<typeof runAccountCreditGuard>[1];
+export function enforceAccountCreditGuard(registry: AgentRegistry, hosts: GuardHosts | (() => GuardHosts),
+  stop: Parameters<typeof runAccountCreditGuard>[2], operatorStopped: Parameters<typeof runAccountCreditGuard>[3],
+  resumeCurrent: Parameters<typeof runAccountCreditGuard>[4], options: { onlyIfChanged?: boolean; now?: number } = {}): Promise<void> {
+  let state = passes.get(registry);
+  const directory = interruptionObligationDirectory(registry.filename);
+  if (!state) {
+    state = { registryRevision: -1, obligationRevision: -1, hosts: null, fallbackAt: 0, cursor: "",
+      store: accountGuardObligationStore(directory) };
+    passes.set(registry, state);
+  }
+  if (state.running) return state.running;
+  const registryRevision = registry.accountCreditGuardRevision();
+  const obligationRevision = accountGuardObligationRevision(directory);
+  const hostToken = Array.isArray(hosts) && hosts.length === 0 ? null : hosts;
+  const now = options.now ?? performance.now();
+  if (options.onlyIfChanged && !state.cursor && state.registryRevision === registryRevision && state.obligationRevision === obligationRevision
+    && state.hosts === hostToken && now < state.fallbackAt) return Promise.resolve();
+  const current = state;
+  const work = withViewerOperation("controller.account-credit-guard", () =>
+    runAccountCreditGuard(registry, typeof hosts === "function" ? hosts() : hosts, stop, operatorStopped, resumeCurrent));
+  current.running = work.then(() => {
+    // Remember the revision that was actually inspected. Changes during any
+    // await stay dirty, including a cut or receipt this pass wrote itself.
+    current.registryRevision = registryRevision;
+    current.obligationRevision = obligationRevision;
+    current.hosts = hostToken;
+    current.fallbackAt = now + ACCOUNT_GUARD_FALLBACK_MS;
+  }).finally(() => { current.running = undefined; });
+  return current.running;
 }

@@ -212,3 +212,51 @@ test("measured: the synchronous acquisition holds the caller's loop for the whol
     registry.close();
   }
 });
+
+
+test("admitted reads share the writer transaction and a failing mutation releases it without a partial write", async () => {
+  const filename = path.join(root, "admitted-read.json");
+  const registry = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "sqlite" });
+  const holder = new Database(filename.replace(/\.json$/, ".sqlite"));
+  const probe = loopProgressProbe();
+  try {
+    holder.exec("PRAGMA busy_timeout = 0");
+    holder.exec("BEGIN IMMEDIATE");
+    probe.arm(() => { holder.exec("ROLLBACK"); });
+    const result = await probe.run(() => registry.deliveryWriteOrBusy({ label: "pipeline.parent" }, () => {
+      expect(registry.conversationForPath("/sessions/admitted.jsonl")).toBeNull();
+      return registry.ensureConversation("codex", "/sessions/admitted.jsonl", null);
+    }));
+    expect(result.id).toBeDefined();
+    const first = result.id;
+    const replay = await registry.deliveryWriteOrBusy({ label: "pipeline.parent" }, () =>
+      registry.ensureConversation("codex", "/sessions/admitted.jsonl", null));
+    expect(replay.id).toBe(first);
+    await expect(registry.deliveryWriteOrBusy({ label: "pipeline.parent" }, () => {
+      registry.conversation(first);
+      throw new Error("admission cancelled");
+    })).rejects.toThrow("admission cancelled");
+    holder.exec("BEGIN IMMEDIATE");
+    holder.exec("ROLLBACK");
+    expect(registry.conversationForPath("/sessions/admitted.jsonl")?.id).toBe(first);
+  } finally { holder.close(); registry.close(); }
+});
+
+
+test("a mutation that throws after changing its draft commits nothing and leaves the next writer usable", async () => {
+  const { store: registry } = store("admitted-rollback");
+  try {
+    const before = registry.snapshot();
+    await expect(registry.withWriter(() => registry.mutate(file => {
+      file.conversationAliases.conversation_refused = Object.keys(file.conversations)[0] as `conversation_${string}`;
+      throw new Error("mutation refused");
+    }, false))).rejects.toThrow("mutation refused");
+    const after = registry.snapshot();
+    expect(after.revision).toBe(before.revision);
+    expect(after.file.conversationAliases.conversation_refused).toBeUndefined();
+    const next = await registry.withWriter(() => registry.mutate(file => {
+      file.conversationAliases.conversation_accepted = Object.keys(file.conversations)[0] as `conversation_${string}`;
+    }, false));
+    expect(next.acquired && next.value.revision).toBe(before.revision + 1);
+  } finally { registry.close(); }
+});
