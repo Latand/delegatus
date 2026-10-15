@@ -346,3 +346,178 @@ Documentation-only stage: no source, configuration or runtime change and no new 
 At **05:21:06.615–05:21:07.790Z**, the local privacy gate passed with exit 0. The command was `bun "$SCRATCH/scripts/privacy-publication-gate.ts" --repository "$WORKTREE" --require-known-values --paths docs/perf/mcp-state-writers.md`, run from a fresh `git archive HEAD` export under `/tmp`, with isolated HOME/config/temp/state and the export's committed fingerprint file. No dependencies were installed. At **05:22:19Z**, a direct Python read of the new file found zero trailing-whitespace lines and 19 rows in each server table; `git status --short --untracked-files=all --ignored` showed only this declared output. `git diff --check` was also clean; the direct file check covers the untracked document that Git's diff does not include. The rerun at **05:23:11.783–05:23:12.044Z** also passed. Final continuation checks are recorded below.
 
 At **05:32:38.134–05:32:38.320Z**, the same privacy command passed with exit 0 after the accepted-boundary and exact-SQL-method edits, from another fresh scratch export with isolated HOME/config/cache/temp/state and a disabled production control target. The complete check ran **05:32:37.639–05:32:38.347Z** using `rtk proxy python3 -B -`: it exported HEAD, ran the gate, directly checked the untracked Markdown for trailing whitespace and final newline, and reconciled both 19-row process tables and the 107 total / 97 RW main-DB descriptor counts. `git diff --check` passed; `git status --short --untracked-files=all --ignored` listed only `docs/perf/mcp-state-writers.md`. The script removed only its own recorded scratch directory. The document remains uncommitted for engine collection.
+
+## Implementation and isolated rehearsal (2026-10-15)
+
+The implementation routes ordinary stdio calls through the Viewer's full MCP
+service before importing local policy, bindings or receipt storage. The adapter
+has at most 32 calls in flight and opens no application SQLite database. It
+forwards arguments, the original request key, native-work metadata, cancellation
+and the remaining deadline. A transport failure during a mutation returns an
+unknown outcome and original-key recovery instructions. The admitted candidate
+health probe retains its existing local service.
+
+New managed launches prefer HTTP after the existing capability and endpoint
+admission checks. Existing Codex command registrations retain stdio; their
+launch receipts record the host's effective transport. The installer removes
+managed Codex registrations by default so new threads can supply their admitted
+transport. Explicit stdio and operator-owned registrations remain supported.
+
+Linux native calls prove their socket peer to the Viewer with SO_PEERCRED and a
+per-call nonce/body challenge. The listener uses the Linux abstract socket
+namespace: the host and Viewer container share network and PID namespaces,
+while their temporary filesystems differ. The Viewer checks the peer's UID and
+PID/start/boot identity, then applies the existing native session proof and
+operator approval checks. An HTTP caller never inherits an ambient Viewer
+capability. Other platforms retain unidentified caller authority through the
+existing authenticated MCP service marker.
+
+The launcher watches the invoking agent's identity. On Linux, its Bun child
+arms a kernel parent-death signal before application imports and rechecks the
+launcher identity to close the startup race. The same mechanism covers the
+normal adapter and native hook. Real tests hard-kill both owners and launchers
+while another process retains stdin; launcher-death cases also stop the child
+before killing its launcher. The Linux fixture budget is three seconds. Other
+platforms retain EOF, signal and parent-change handling; this rehearsal makes
+no kernel containment claim for them.
+
+The first long comparison exposed request bursts starving Viewer timers. The
+follow-up implementation starts one MCP request per timer turn while allowing
+awaited operations to remain concurrent. Caller context survives the wait.
+Ordinary task edits avoid a maintenance-only pipeline scan. Each synchronous
+task page reads pipeline links from one refreshed selection generation; a later
+page refreshes again and observes deletions and reassignment. Task decoding and
+commit preparation reuse the existing project-alias resolver within each
+synchronous row pass; a later pass refreshes its alias snapshot. These changes
+leave the Viewer database lock implementation and the snapshot, heap and board
+polling lanes untouched.
+
+### Measurement implementation
+
+The existing `scripts/mcp-call-cost-benchmark.ts` entry accepts
+`--state-writer-sample` and `--state-writer-report`. Its fixture code is in
+`scripts/mcp-state-writer-benchmark.ts`, reached by the existing
+`src/lib/mcp/writerConcurrencyChild.ts`. A private PID namespace contains the
+real launcher, source MCP entry and real Viewer MCP service. Each sample copies
+one isolated seed and uses a port-0 Viewer. No provider CLI is invoked.
+
+The seed has 1,000 workload tasks, 37 launch-membership tasks, 900 inert pipeline
+records and 100 task tombstones. The two task groups belong to separate
+projects. Thirty-seven workload cards are shown; the remaining workload cards
+and new creates are hidden. The schedule offers one call per client per second:
+six task-list calls, three updates and one create in each ten-second cycle.
+A shared-task mode supplies expected project and revision guards. HTTP is a
+separate transport mode. Raw call results, final rows, process census and SQL
+events remain in each isolated sample directory.
+
+`scripts/sqlite-observer.ts` loads `scripts/sqlite-observer.c` into every fixture
+SQLite connection. The native extension observes commit/rollback hooks, actual
+connection destruction and the existing VFS sleep implementation. It preserves
+the runtime's busy policy and reports successful waits as well as refusals.
+JavaScript instrumentation records failed opens, BUSY/LOCKED exceptions,
+application waits and durable lease attempts. Observer output is external to
+the measured databases. Explicit closes and handles reclaimed by process exit
+are separate; in-memory index transactions and receipt transactions have their
+own database totals. The report streams raw SQL events to bound analysis memory.
+
+Observer controls cover replacement opens, readonly handles, explicit, empty
+and autocommit transactions, rollback, a successful SQLite wait, a refusal and
+a durable lease held across an awaited delay. The controls also run three
+alternating enabled/disabled overhead pairs. A Viewer that cannot emit its
+final loop sample has incomplete loop coverage; the report retains that fact
+instead of reporting its last earlier histogram as a complete window.
+
+### Verification record
+
+The explicit isolated test runs have passed the packaged MCP suite (50 tests),
+forwarding suite (12), Claude broker suite (122) and structured-spawn integration
+suite (141). The launcher suite passed 25 tests with one platform skip, including
+eight owner/launcher hard-death cases under Node and Bun. The observed owner
+shutdowns were at most 1.32 seconds; stopped-child launcher-death cases were at
+most 150 ms. Earlier isolated runs also passed transport selection, installation,
+Codex configuration, Copilot configuration, HTTP cancellation, state ownership
+and concurrent-writer/observer controls. Task list-view, SQLite persistence,
+legacy persistence, revision and linked-task suites passed after alias batching.
+TypeScript and the MCP bundle build passed before the final request-burst
+changes; the final publication checks are recorded in the pull request. The
+local path-scoped privacy gate passed before the final evidence update.
+
+The repository-wide child census currently fails two assertions on both the
+branch and its matched main export. The branch adds ownership rows for its new
+fixture entry points. The historical missing rows and signal sites are retained
+in the comparison logs.
+
+### Diagnostic before/after results
+
+**Performance acceptance is not met.** These are single diagnostic samples,
+with 30 seconds warmup and 300 seconds measured load, using Bun 1.4.0 and the
+same cloned synthetic seed. The matched baseline is the main implementation
+merged at `df5d675c1` (main parent `77fc690ea`). The candidate is the working-tree
+implementation described above, before publication; these samples do not attest
+a later main merge or constitute the three-repeat matrix. Seed checksum:
+`9991cbf2821d4057e636b16630152b120c96819cf5ee03fbf983b3ca99726e23`.
+
+| Metric | 1 client before | 1 client after | 37 clients before | 37 clients after |
+|---|---:|---:|---:|---:|
+| Offered / completed responses | 300 / 300 | 300 / 300 | 11,100 / 11,100 | 11,100 / 11,100 |
+| Successful / failed responses | 300 / 0 | 300 / 0 | 1,069 / 10,031 | 10,236 / 864 |
+| Pending at window end / after drain | 0 / 0 | 0 / 0 | 811 / 0 | 1,032 / 0 |
+| Peak processes, including Viewer | 3 | 3 | 75 | 75 |
+| Process births / teardown survivors | 3 / 0 | 3 / 0 | 410 / 0 | 75 / 0 |
+| Peak adapter main-DB descriptors | 5 | 0 | 191 | 0 |
+| Peak total main-DB descriptors | 5 | 5 | 191 | 5 |
+| Measured state.sqlite connection opens | 10,260 | 1,440 | 112,409 | 42,303 |
+| Measured state.sqlite commits | 480 | 480 | 3,479 | 13,404 |
+| SQLite BUSY/LOCKED results | 0 | 0 | 299,968 | 0 |
+| Held collection-lease refusals | 0 | 0 | 184,922 | 0 |
+| Measured SQLite busy-handler wait, ms | 0 | 0 | 9,819.0 | 0 |
+| Application synchronous retry wait, ms | 0 | 0 | 4,397,659.5 | 0 |
+| Calls with observed SQL contention / 10,000 responses | 0 | 0 | 999.1 | 0 |
+| Call latency p50 / p95 / p99 / max, ms | 44.8 / 84.8 / 98.7 / 117.7 | 29.3 / 71.0 / 81.9 / 141.6 | 13,412.9 / 40,338.2 / 50,967.8 / 56,983.0 | 18,663.7 / 30,017.9 / 30,032.0 / 30,080.3 |
+| Viewer loop p50 / p95 / p99 / max, ms | 0.073 / 0.096 / 0.833 / 5.594 | 0.077 / 0.156 / 6.558 / 117.621 | 2.554 / 30.081 / 66.421 / 270.017 | 9.535 / 83.231 / 154.010 / 382.036 |
+
+Both transports in this table are stdio. Forwarding therefore retains the
+launcher/server pair while eliminating adapter database opens entirely. The
+HTTP default's process reduction is covered by launch configuration tests; its
+separate full-load comparison remains outstanding. State commits cover the
+shared database across processes and exclude registry, receipt and in-memory
+index commits. More successful mutations account for the higher 37-client
+candidate commit count. Wait totals sum concurrent processes; they can exceed
+wall-clock duration. SQL contention frequency excludes independent held-lease
+refusals, listed separately.
+
+All four loop windows emitted their end sample. The 37-client candidate reset
+its histogram 140 ms late; that boundary skew remains part of the diagnostic
+record. Its failed responses were unknown-outcome timeouts, requiring original
+key recovery. Client drain reached zero and the final observer recorded no
+unfinished Viewer calls. The one-client run removes the contention explanation:
+forwarding moves synchronous task work onto the Viewer and increases its loop
+maximum even at one call per second. Profiling found task decoding and commit
+preparation among those synchronous costs. The fenced Viewer lock layer was
+left unchanged.
+
+The one-client pair's 330 responses, including warmup, and 2,103 final durable
+rows matched. Normalization maps generated create IDs through their original
+request keys, revision tokens through the mutation that returned them, and
+sample timestamps to one marker. It retains every stored numeric row revision,
+all field content, task-create receipts and tombstones. The normalized final-row
+SHA-256 is `bec216252d9f39f9fe068fd1d23d9898fd4bcb58087376a418df7ce481c6ddcc`;
+normalized response SHA-256 is
+`962fa796d9bd94894e6000fec0b682cab3338958a01dd9a17b03a6ae1a2077c2`.
+This equivalence result applies to that pair alone.
+
+Earlier failed 37-client variants remain part of the record:
+
+| Diagnostic candidate | Successful / failed responses | Viewer loop result |
+|---|---:|---|
+| Initial forwarding | 1,467 / 9,633 | Incomplete: 253.830 seconds of tail missing; last observed maximum 28,765.8 ms |
+| Dispatch turns and batched page links | 2,771 / 8,329 | Complete window; maximum 530.974 ms |
+| Additional alias batching, table above | 10,236 / 864 | Complete window; maximum 382.036 ms |
+
+The original audit revision, three alternating repeats at 1/19/37 clients,
+shared-task load, HTTP mode, and final-state reconciliation under timed-out
+calls remain outstanding. The loop regression must be resolved before those
+runs can establish acceptance. The earlier diagnostic exports were updated
+between variants and do not provide an immutable source manifest for each
+variant. A final accepted comparison must export committed revisions and save
+the source, observer, runtime and quota identities with every sample.

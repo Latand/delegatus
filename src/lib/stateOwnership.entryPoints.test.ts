@@ -141,7 +141,7 @@ for (const appDir of APP_DIRS) describe(`an entry point that owns the operator's
       expect(result.status).toBe(1);
       expect(result.stderr).toContain("native caller hook needs its Claude parent");
     });
-    test(`the Viewer MCP server starts from ${label} and keeps its receipts in the operator's state directory`, () => {
+    test(`the Viewer MCP server starts from ${label} with its state claim and a stateless Linux transport`, () => {
       const result = runEntryPoint([...command]);
 
       expectNoRefusal(result);
@@ -154,9 +154,8 @@ for (const appDir of APP_DIRS) describe(`an entry point that owns the operator's
          belongs to the helper's own file: started as the MCP server it must
          not read this process's arguments as a credential request. */
       expect(result.stderr).not.toContain("token|gh|git-credential");
-      /* And it resolved the operator's directory rather than a throw-away
-         one: this is where its receipts live. */
-      expect(fs.existsSync(path.join(STATE_DIRECTORY, "mcp-receipts.sqlite"))).toBeTrue();
+      /* Adapters forward before constructing the local receipt store. */
+      expect(fs.existsSync(path.join(STATE_DIRECTORY, "mcp-receipts.sqlite"))).toBe(false);
       /* An MCP server is no startup-mutation owner: it neither creates the
          other name nor makes the link. */
       expect(fs.existsSync(OTHER_APP_DIR)).toBeFalse();

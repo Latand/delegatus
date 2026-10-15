@@ -4600,7 +4600,9 @@ export function createViewerMcpServer(service: McpToolService): McpServer {
          capability the route authenticated; it runs as that caller so every
          resolver reads the request's identity rather than this process's. */
       const httpCaller = mcpHttpCallerFromAuthInfo((extra as { authInfo?: unknown }).authInfo);
-      const timeoutMs = 30_000;
+      const forwardedDeadline = ((extra as { _meta?: Record<string, unknown> })._meta)?.["delegatus/deadlineAt"];
+      const timeoutMs = typeof forwardedDeadline === "number" && Number.isFinite(forwardedDeadline)
+        ? Math.max(0, Math.min(30_000, forwardedDeadline - Date.now())) : 30_000;
       const deadline = deadlineSignal(timeoutMs, {
         /* Over stdio a client's cancel reaches `extra.signal`. Over the
            stateless HTTP endpoint it arrives on a later POST, to another
@@ -4624,7 +4626,7 @@ export function createViewerMcpServer(service: McpToolService): McpServer {
              conversation last pointed at. */
           nativeWork: nativeWorkFromRequestMeta((extra as { _meta?: unknown })._meta),
         });
-        const result = await (httpCaller ? runAsMcpHttpCaller({ capability: httpCaller.capability }, call) : call());
+        const result = await (httpCaller ? runAsMcpHttpCaller(httpCaller, call) : call());
         return {
           content: [{ type: "text" as const, text: JSON.stringify(result) }],
           structuredContent: result,
@@ -4645,11 +4647,11 @@ export const MCP_HTTP_CLIENT_ID = "llv-spawn-capability";
     for a request that did not come through it (every stdio call). */
 function mcpHttpCallerFromAuthInfo(authInfo: unknown): (McpHttpCaller & { cancelSignal: (requestId: unknown) => AbortSignal | null }) | null {
   if (!authInfo || typeof authInfo !== "object") return null;
-  const { clientId, token, extra } = authInfo as { clientId?: unknown; token?: unknown; extra?: { cancelSignal?: unknown } };
+  const { clientId, token, extra } = authInfo as { clientId?: unknown; token?: unknown; extra?: { cancelSignal?: unknown; nativePeer?: McpHttpCaller["nativePeer"]; unidentified?: boolean } };
   if (clientId !== MCP_HTTP_CLIENT_ID || typeof token !== "string" || !token) return null;
   const lookup = typeof extra?.cancelSignal === "function" ? extra.cancelSignal as (requestId: unknown) => unknown : null;
   return {
-    capability: token,
+    ...(extra?.nativePeer ? { nativePeer: extra.nativePeer } : extra?.unidentified ? {} : { capability: token }),
     cancelSignal: (requestId) => {
       const signal = lookup?.(requestId);
       return signal instanceof AbortSignal ? signal : null;
@@ -4658,34 +4660,32 @@ function mcpHttpCallerFromAuthInfo(authInfo: unknown): (McpHttpCaller & { cancel
 }
 
 /**
- * The production tool service: bindings, the shared SQLite receipt store every
- * Viewer MCP server writes (so a clientRequestId replays the same way whichever
- * process or transport it arrives on), the per-call policy, and recovery.
+ * The Viewer owns production bindings, durable receipts, policy and recovery.
+ * Forwarded stdio calls use that same service and original request key.
  */
-export async function createProductionViewerMcpService(hostHealthProbe = false, stdioReads = false): Promise<McpToolService> {
-  /* Only a launched agent can delegate its identity. Candidate probes and
-     legacy clients identified by ancestry keep their existing local surface.
-     The Viewer's HTTP service must never delegate back to itself. */
-  if (stdioReads && !hostHealthProbe && /^[A-Za-z0-9_-]{43}$/.test(process.env.LLV_SPAWN_CAPABILITY ?? "")) {
-    const { VIEWER_LARGE_READS, readFromViewer } = await import("./largeReads");
-    let local: Promise<McpToolService> | null = null;
+export async function createProductionViewerMcpService(hostHealthProbe = false, stdio = false): Promise<McpToolService> {
+  /* Forward before importing policy, bindings or receipts. The Viewer owns
+     one service and rechecks authority before disclosing a saved result.
+     Linux native clients prove their process through a per-call Unix peer
+     challenge. The admitted host probe keeps its local candidate service. */
+  if (stdio && !hostHealthProbe) {
+    const { callViewerMcp } = await import("./largeReads");
+    let active = 0;
     return {
       async callTool(toolName, args, context = {}) {
-        if (VIEWER_LARGE_READS.has(toolName as McpToolName)) {
-          try { return await readFromViewer(toolName as McpToolName, args, context); }
-          catch (error) {
-            return failure(toolName, typeof args.clientRequestId === "string" ? args.clientRequestId : null,
-              "tool_failed", error instanceof Error ? error.message : "Viewer MCP read failed", true);
-          }
-        }
-        if (!local) {
-          const created = createProductionViewerMcpService(hostHealthProbe);
-          local = created;
-          created.catch(() => {
-            if (local === created) local = null;
-          });
-        }
-        return (await local).callTool(toolName, args, context);
+        if (active >= 32) return failure(toolName, typeof args.clientRequestId === "string" ? args.clientRequestId : null,
+          "tool_failed", "The MCP adapter has 32 calls in progress; retry with the original request key.", true);
+        active++;
+        try { return await callViewerMcp(toolName as McpToolName, args, context); }
+        catch (error) {
+          // Once fetch starts, a lost reply cannot establish whether a write
+          // committed. Only the shared service may resolve the original key.
+          const mutation = isMutatingMcpTool(toolName as McpToolName);
+          return failure(toolName, typeof args.clientRequestId === "string" ? args.clientRequestId : null,
+            mutation ? "outcome_unknown" : "tool_failed",
+            error instanceof Error ? error.message : "Viewer MCP request failed", !mutation, false,
+            mutation ? { outcome: "unknown", nextAction: "original-key-lookup" } : {});
+        } finally { active--; }
       },
     };
   }
@@ -4696,14 +4696,44 @@ export async function createProductionViewerMcpService(hostHealthProbe = false, 
     viewerMcpToolPolicy,
   } = await import("./bindings");
   const controlDependencies = productionViewerControlDependencies(hostHealthProbe);
-  return createMcpToolService(
+  return withMcpDispatchTurns(createMcpToolService(
     viewerMcpBindings(undefined, controlDependencies),
     new SqliteMcpReceiptStore(statePath("mcp-receipts.sqlite"), {
       legacyFilePath: statePath("mcp-receipts.json"),
     }),
     viewerMcpToolPolicy(undefined, hostHealthProbe),
     { timings: productionMcpToolTimings, recovery: viewerMcpRecoverableTools() },
-  );
+  ));
+}
+
+/** Start one request per timer turn so a burst of synchronous store reads
+ * leaves the Viewer time to service sockets, cancellation and loop probes.
+ * Awaited operations remain concurrent; no transaction or request key is
+ * combined. Awaiting in the caller preserves its AsyncLocalStorage identity. */
+export function withMcpDispatchTurns(service: McpToolService): McpToolService {
+  const waiting: Array<() => void> = [];
+  let scheduled = false;
+  const next = () => {
+    const resume = waiting.shift();
+    if (!resume) { scheduled = false; return; }
+    setTimeout(() => { resume(); next(); }, 0);
+  };
+  return { async callTool(name, args, context) {
+    await new Promise<void>(resolve => {
+      waiting.push(resolve);
+      if (!scheduled) { scheduled = true; next(); }
+    });
+    if (context?.signal?.aborted || (context?.deadlineAt !== undefined && context.deadlineAt <= Date.now())) {
+      // This queued invocation has entered no policy or receipt code. A prior
+      // invocation under the same key may still have committed, so cancellation
+      // cannot establish that the logical mutation was never executed.
+      const mutation = isMutatingMcpTool(name as McpToolName);
+      return failure(name, clientRequestId(args), mutation ? "outcome_unknown" : "tool_failed",
+        "The MCP request ended while waiting for a dispatch turn.", !mutation, false,
+        mutation ? { outcome: "unknown", nextAction: "original-key-lookup" } : {});
+    }
+    return service.callTool(name, args, context);
+  } };
 }
 
 export async function startViewerMcpServer(): Promise<void> {

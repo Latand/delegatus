@@ -37,8 +37,35 @@ for (const key of ["HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "LLV_STATE_DIR",
 
 const { agentRegistry, setAgentRegistryForTests } = await import("@/lib/agent/registry");
 const route = await import("@/app/api/mcp/route");
-const { createMcpToolService, createViewerMcpServer, MemoryMcpReceiptStore, SqliteMcpReceiptStore } = await import("./server");
+const { createMcpToolService, createViewerMcpServer, MemoryMcpReceiptStore, SqliteMcpReceiptStore, withMcpDispatchTurns } = await import("./server");
 const { productionViewerControlDependencies, sendDownstreamKey, viewerMcpBindings, viewerMcpRecoverableTools, viewerMcpToolPolicy } = await import("./bindings");
+
+test("MCP dispatch yields to timers, preserves each caller and keeps awaited operations concurrent", async () => {
+  const { runAsMcpHttpCaller, currentMcpHttpCaller } = await import("./callerContext");
+  let release!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; });
+  let timerRan = false;
+  const timer = setTimeout(() => { timerRan = true; }, 0);
+  const observed: Array<string | undefined> = [];
+  const service = withMcpDispatchTurns({ async callTool(toolName, args) {
+    observed.push(currentMcpHttpCaller()?.capability);
+    if (args.clientRequestId === "held") await held;
+    return { ok: true, toolName: toolName as import("./server").McpToolName, clientRequestId: String(args.clientRequestId), replayed: false };
+  } });
+  const first = runAsMcpHttpCaller({ capability: "fixture-first" }, () => service.callTool("list_tasks", { clientRequestId: "held" }));
+  try {
+    const second = await runAsMcpHttpCaller({ capability: "fixture-second" }, () => service.callTool("list_tasks", { clientRequestId: "free" }));
+    expect(second.ok).toBe(true);
+    expect(timerRan).toBe(true);
+    expect(observed).toEqual(["fixture-first", "fixture-second"]);
+  } finally { clearTimeout(timer); release(); await first; }
+  const cancelled = new AbortController(); cancelled.abort();
+  const refused = await service.callTool("create_task", { clientRequestId: "original-key" }, { signal: cancelled.signal });
+  expect(refused).toMatchObject({ ok: false, code: "outcome_unknown", details: { nextAction: "original-key-lookup" } });
+  expect(observed).toHaveLength(2);
+  expect((await service.callTool("create_task", { clientRequestId: "original-key" })).ok).toBe(true);
+  expect(observed).toHaveLength(3);
+});
 
 interface Delivery {
   capability: string | null;
@@ -163,6 +190,25 @@ function payloadOf(result: Awaited<ReturnType<Client["callTool"]>>): Record<stri
 function send(client: Client, clientRequestId: string, to: Agent = bob) {
   return client.callTool({ name: "send_message", arguments: { clientRequestId, conversationId: to.conversationId, text: "hello over http" } });
 }
+
+test("an authenticated compatibility adapter keeps unidentified authority and cannot borrow a launch identity", async () => {
+  const { internalServiceHeaders } = await import("@/lib/agent/callerClaims");
+  const headers = { ...internalServiceHeaders("mcp"), "x-delegatus-mcp-unattributed": "1" };
+  await expect(httpClient({ "x-delegatus-mcp-unattributed": "1" })).rejects.toThrow();
+  await expect(httpClient({ ...headers, "x-llv-spawn-capability": "unknown" })).rejects.toThrow();
+  const client = await httpClient(headers);
+  const previous = process.env.LLV_SPAWN_CAPABILITY;
+  process.env.LLV_SPAWN_CAPABILITY = alice.capability;
+  try {
+    expect(payloadOf(await client.callTool({ name: "list_tasks", arguments: { ids: ["absent"] } }))).toMatchObject({ ok: true });
+    expect(payloadOf(await send(client, "compatibility-unidentified"))).toMatchObject({ ok: false, code: "caller_unidentified" });
+    expect(deliveries).toHaveLength(0);
+  } finally {
+    await client.close();
+    if (previous === undefined) delete process.env.LLV_SPAWN_CAPABILITY;
+    else process.env.LLV_SPAWN_CAPABILITY = previous;
+  }
+});
 
 async function inMemoryAgentClient() {
   process.env.LLV_SPAWN_CAPABILITY = alice.capability;

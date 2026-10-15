@@ -52,7 +52,7 @@ import { DeliveryAdmissionRefusedError } from "@/lib/deliveryAdmission";
 import { ENGINE_MODELS, validateLaunchModel } from "@/lib/agent/models";
 import { nativeCallerSources } from "@/lib/attention/nativeCallerSources";
 import { nativeCallerRefusal, resolveNativeCaller } from "@/lib/attention/nativeCaller";
-import { sameRecordedProcessIdentity, systemBootEpoch, type ProcessIdentityProbe } from "@/lib/processIdentity";
+import { processIdentityStatus, sameRecordedProcessIdentity, systemBootEpoch, type ProcessIdentityProbe } from "@/lib/processIdentity";
 import { procBackend } from "@/lib/proc";
 import { ensureOperatorSpawnCapability } from "@/lib/agent/operatorCapability";
 import { VIEWER_AUTONOMOUS_SPAWN_HEADER } from "@/lib/agent/capabilityHeader";
@@ -1197,7 +1197,8 @@ const productionCanonicalSeatConversationId = seatIdentityResolver(
     request presented (see `./callerContext`), else the one this stdio process
     inherited from the agent that launched it. */
 function callerCapability(): string | undefined {
-  return currentMcpHttpCaller()?.capability ?? process.env[VIEWER_SPAWN_CAPABILITY_ENV];
+  const caller = currentMcpHttpCaller();
+  return caller ? caller.capability : process.env[VIEWER_SPAWN_CAPABILITY_ENV];
 }
 
 function attentionCallerSources(): AttentionCallerSources {
@@ -1206,7 +1207,9 @@ function attentionCallerSources(): AttentionCallerSources {
     /* An HTTP call is served from the Viewer's own process, whose ancestry
        leads to no agent host; the capability alone names that caller, exactly
        as it does for a stdio agent whose host pids were never recorded. */
-    ancestry: httpCaller ? () => [] : () => processAncestry(process.pid, (pid) => procBackend.readPpid(pid)),
+    ancestry: httpCaller ? () => httpCaller.nativePeer && processIdentityStatus(httpCaller.nativePeer) === "alive"
+      ? processAncestry(httpCaller.nativePeer.pid, (pid) => procBackend.readPpid(pid)) : []
+      : () => processAncestry(process.pid, (pid) => procBackend.readPpid(pid)),
     rootConversationId: () => liveRootSession(rootSessionSource())?.conversationId ?? null,
     hosted: () => hostedConversationsFromSnapshot(agentRegistry().readOnlySnapshot(), {
       pidAlive: (pid) => procBackend.pidAlive(pid) && !procBackend.processExited(pid),
@@ -1215,9 +1218,9 @@ function attentionCallerSources(): AttentionCallerSources {
     }),
     capabilityPresented: () => callerCapability() !== undefined,
     nativeCaller: () => {
-      if (httpCaller) return nativeCallerRefusal("no-claude-ancestor");
+      if (httpCaller && (!httpCaller.nativePeer || processIdentityStatus(httpCaller.nativePeer) !== "alive")) return nativeCallerRefusal("no-claude-ancestor");
       if (procBackend.name !== "linux") return nativeCallerRefusal("platform-unverified");
-      try { return resolveNativeCaller(nativeCallerSources(() => agentRegistry().readOnlySnapshot())); }
+      try { return resolveNativeCaller(nativeCallerSources(() => agentRegistry().readOnlySnapshot(), httpCaller?.nativePeer?.pid)); }
       catch { return nativeCallerRefusal("session-record-invalid"); }
     },
     capabilityCallerConversationId: capabilityConversationResolver(
@@ -2156,7 +2159,7 @@ async function updateBoardTask(args: McpToolArgs, dependencies: ViewerMcpDomainD
   }
   const result = mutateTasks((tasks) => {
     prior = tasks.find(task => task.id === taskId);
-    const pipelines = dependencies.listPipelineRecords?.() ?? dependencies.getPipelines?.().pipelines ?? [];
+    const pipelines = maintainer ? dependencies.listPipelineRecords?.() ?? dependencies.getPipelines?.().pipelines ?? [] : [];
     const open = pipelines.find(p => p.taskIds?.includes(taskId) && maintenanceLaneIsOpen(p));
     if (maintainer && closingOrHiding && prior?.assignments.some(a => !checkedAssignments.has(assignmentKey(a)))) liveAgent = "a new assignment whose liveness has not been checked";
     const retiredSeat = !!maintainer && closingOrHiding && !!prior && !!dependencies.registrySnapshot && retiredSeatTask(prior, dependencies.registrySnapshot());
@@ -5639,9 +5642,9 @@ async function listPipelines(
     ...answerHint(args, "Pass nextCursor as cursor with the same filters and a fresh clientRequestId. full:true or get_pipeline with full:true reads complete records; compact:false returns the previous board-card projection.") });
 }
 
-function taskWithLinks(task: import("@/lib/tasks/types").BoardTask, dependencies: ViewerMcpDomainDependencies): TaskPipelineReadModel {
-  const source = dependencies.pipelineSelectionSource?.();
-  const pipelineIds = source ? boardSelection(source.filename, "pipelines").links(task.id)
+function taskWithLinks(task: import("@/lib/tasks/types").BoardTask, dependencies: ViewerMcpDomainDependencies, links?: (task: string) => string[]): TaskPipelineReadModel {
+  const source = links ? null : dependencies.pipelineSelectionSource?.();
+  const pipelineIds = links ? links(task.id) : source ? boardSelection(source.filename, "pipelines").links(task.id)
     : (dependencies.listPipelineRecords?.() ?? dependencies.getPipelines().pipelines).filter(pipeline => pipeline.taskIds?.includes(task.id)).map(pipeline => pipeline.id);
   return { ...taskWithoutPrototypeDetails(task), pipelineIds };
 }
@@ -5694,8 +5697,10 @@ function listTasks(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies,
     const task = projectReadText(source, context);
     return args.full === true ? withOwnership(task) : args.compact === false ? withOwnership(listTaskRow(task)) : compactTask(task);
   };
-  const page = source ? boardSelection(source.filename, "tasks").page(source, scope, args.cursor,
-    Math.max(1, Math.min(200, integer(args.limit, 100))), task => project(taskWithLinks(task, dependencies)))
+  const selectionPage = (links?: (task: string) => string[]) => boardSelection(source!.filename, "tasks").page(source!, scope, args.cursor,
+    Math.max(1, Math.min(200, integer(args.limit, 100))), task => project(taskWithLinks(task, dependencies, links)));
+  const pipelineSource = source ? dependencies.pipelineSelectionSource?.() : null;
+  const page = source ? pipelineSource ? boardSelection(pipelineSource.filename, "pipelines").withLinks(selectionPage) : selectionPage()
     : listPage(taskReadModel(dependencies), {
     scope, cursor: args.cursor, limit: Math.max(1, Math.min(200, integer(args.limit, 100))),
     identity: task => ({ id: task.id, time: task.updatedAt ?? "" }),

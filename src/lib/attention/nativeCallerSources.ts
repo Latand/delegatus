@@ -47,7 +47,7 @@ function realpath(file: string): string | null {
   try { return fs.realpathSync(file); } catch { return null; }
 }
 
-export function nativeCallerSources(snapshot: () => Pick<RegistrySnapshot, "conversations" | "entries">): NativeCallerSources {
+export function nativeCallerSources(snapshot: () => Pick<RegistrySnapshot, "conversations" | "entries">, peerPid = process.pid): NativeCallerSources {
   // Per-resolution snapshots; a later tool call rereads both accounts and records.
   const accounts = listClaudeAccounts();
   const bootTime = (): number | null => {
@@ -56,7 +56,7 @@ export function nativeCallerSources(snapshot: () => Pick<RegistrySnapshot, "conv
   };
   return {
     platform: procBackend.name,
-    ancestry: () => processAncestry(process.pid, (pid) => procBackend.readPpid(pid)),
+    ancestry: () => processAncestry(peerPid, (pid) => procBackend.readPpid(pid)),
     isClaude: (pid) => {
       const argv = procBackend.readArgv(pid);
       return argvEngine(argv) === "claude" && !isHelperArgv(argv);

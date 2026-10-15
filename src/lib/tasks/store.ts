@@ -6,7 +6,7 @@ import { isTaskNote } from "./note";
 
 import { statePath } from "@/lib/configDir";
 import { deepFreeze } from "@/lib/deepFreeze";
-import { canonicalProject, projectAliasSnapshot } from "@/lib/projects/aliases";
+import { canonicalProject, projectAliasResolver, projectAliasSnapshot } from "@/lib/projects/aliases";
 import { FileTransactionBusyError } from "@/lib/state/fileTransaction";
 import { assertNotOperatorStateUnderTest } from "@/lib/stateOwnership";
 import {
@@ -41,8 +41,9 @@ export const TASKS_FILE = statePath("tasks.json");
 // omitted placement/revision. Response coercion must not migrate other rows.
 const persistedRows = new WeakMap<BoardTask, unknown>();
 function committedRows(tasks: BoardTask[], before: ReturnType<typeof snapshotTasks>, replacements: boolean, sync?: { write: TaskSyncWrite; groups: ReadonlyMap<string, GroupSnapshot> }): unknown[] {
+  const canonical = projectAliasResolver();
   for (const task of tasks) {
-    task.project = canonicalProject(task.project);
+    task.project = canonical(task.project);
     const prior = before.get(task.id);
     const completed = withTaskCompletion(task, prior ? { ...task, status: prior.status } : task);
     Object.assign(task, completed);
@@ -182,7 +183,7 @@ function validAttachments(value: unknown): boolean {
  * A pinned row with no usable position is downgraded to `unplaced` so the board
  * never tries to render a positionless card. Returns null for unusable rows.
  */
-function coerceTask(value: unknown): BoardTask | null {
+function coerceTask(value: unknown, canonical = canonicalProject): BoardTask | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const raw = value as Partial<BoardTask>;
   const structural =
@@ -211,7 +212,7 @@ function coerceTask(value: unknown): BoardTask | null {
   const task: BoardTask = {
     ...raw,
     id: raw.id!,
-    project: canonicalProject(raw.project!),
+    project: canonical(raw.project!),
     status: raw.status!,
     hold: storedTaskHold(raw.hold),
     ...(steps ? { steps } : {}),
@@ -305,8 +306,9 @@ function stateRows(tasksRows: unknown[], recentCreates: RecentCreate[], migratio
 function stateFromBody(raw: TasksFile | undefined): TasksFileState {
   if (raw === undefined) return { tasks: [], recentCreates: [], migrations: {} };
   if (!raw || !Array.isArray(raw.tasks)) throw new Error("invalid persisted task state");
+  const canonical = projectAliasResolver();
   const decoded = raw.tasks.map(value => {
-    const task = coerceTask(value);
+    const task = coerceTask(value, canonical);
     if (!task) throw new Error("invalid persisted task row");
     persistedRows.set(task, value);
     return task;

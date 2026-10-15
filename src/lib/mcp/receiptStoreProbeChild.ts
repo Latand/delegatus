@@ -230,6 +230,10 @@ async function runHttpHost(configPath: string): Promise<void> {
     port: config.port ?? 0,
     fetch: async (request) => {
       const url = new URL(request.url);
+      if (url.pathname === "/api/mcp") {
+        const { handleMcpHttpRequest } = await import("./http");
+        return handleMcpHttpRequest(new NextRequest(request));
+      }
       const current = control();
       if (current.mode === "hold-before") {
         marker("reached");
@@ -290,6 +294,7 @@ async function runHttpHost(configPath: string): Promise<void> {
       return answer;
     },
   });
+  process.env.LLV_VIEWER_CONTROL_URL = `http://127.0.0.1:${server.port}`;
   fs.writeFileSync(config.portFile, String(server.port));
   await new Promise<never>(() => {});
 }

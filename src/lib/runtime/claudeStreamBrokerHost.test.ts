@@ -440,7 +440,7 @@ describe("ClaudeStreamBrokerHost", () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "llv-claude-structured-http-"));
     fs.writeFileSync(path.join(home, ".claude.json"), JSON.stringify({ mcpServers: { viewer: { type: "stdio", command: "viewer-mcp" } } }));
     const previous = { transport: process.env.LLV_MCP_TRANSPORT, token: process.env.LLV_TOKEN };
-    process.env.LLV_MCP_TRANSPORT = "http";
+    delete process.env.LLV_MCP_TRANSPORT;
     delete process.env.LLV_TOKEN;
     const viewerEntry = async (env: Record<string, string>, resume: boolean) => {
       const captured: { args?: string[]; options?: SpawnOptionsWithoutStdio } = {};
