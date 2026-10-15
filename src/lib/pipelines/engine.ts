@@ -1564,6 +1564,9 @@ export function defaultPipelinePorts(
     scheduleTick: schedulePipelineTick,
     spawnReceiptState: (launchId) => registry.snapshotSpawns([launchId])[launchId]?.state ?? null,
     spawnReceipt: (launchId) => {
+      // Historical missing launches share the pass projection. Existing launches
+      // need fresh evidence because a transcript probe may have yielded.
+      if (!snapshot().receipts[launchId]) return null;
       const evidence = registry.spawnEvidence(launchId);
       const receipt = evidence.receipt;
       if (!receipt) return null;

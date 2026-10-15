@@ -1,5 +1,5 @@
 {
-  "recordedAt": "2026-10-15T22:50:15.742602+00:00",
+  "recordedAt": "2026-10-15T23:08:19.112571+00:00",
   "mainRevision": "5bd026c067e562af075ce25d838482a3c8b00a3f",
   "runtime": "Bun 1.4.0 (34cbb9a40)",
   "isolation": [
@@ -11,7 +11,7 @@
   "runner": "installed scripts/gate-slot.sh",
   "candidateSha256": {
     "src/lib/agent/registry.ts": "802bc1b020f164274a3a12ed5e54a2a06e5b33efbd9ad951a4872155e3403a1d",
-    "src/lib/pipelines/engine.ts": "21896c75d45fb3bbf9c45541bde17b23b78c0735e9b373c639ba17126b26028c",
+    "src/lib/pipelines/engine.ts": "2164c7e0fb8a4f42ef011fd6ae5f2e5a972be5a5a1587b6947629603e4c0a8b5",
     "src/lib/pipelines/engine.recovery.test.ts": "d8e0d36c0a3ee5c65d2266f88da0c14cffd90a725d814b7604ea181481122e56",
     "src/lib/pipelines/engine.creation.test.ts": "0f9edf7fd558eb370ec21d66c5b59ed3c2f666b0c7599e5a621ca3513fbd3cca",
     "src/lib/tasks/launchMembership.ts": "509a5e6e24612b392d6d2ce638c34f40b3e51bf97fdf1ca817f6cb914d7935b7",
@@ -82,7 +82,7 @@
       "command": "bun test src/lib/pipelines/engine.recovery.test.ts",
       "pass": 126,
       "fail": 0,
-      "summary": "Ran 126 tests across 1 file. [37.02s]",
+      "summary": "Ran 126 tests across 1 file. [35.67s]",
       "failingCases": []
     },
     {
@@ -102,6 +102,17 @@
       "fail": 0,
       "summary": "Ran 32 tests across 1 file. [10.27s]",
       "failingCases": []
+    },
+    {
+      "source": "candidate",
+      "command": "bun test src/lib/pipelines/engine.ports.test.ts",
+      "pass": 106,
+      "fail": 2,
+      "summary": "Ran 108 tests across 1 file. [59.42s]",
+      "failingCases": [
+        "(fail) managed early admission holds actual pipeline launches across recovery until terminal status",
+        "(fail) managed drain-switch-off admission holds actual pipeline launches across recovery until terminal status"
+      ]
     }
   ],
   "typecheck": {
@@ -122,7 +133,7 @@
     ],
     "identicalRegion": "src/lib/agent/registry.ts: beginSpawnRequestAsync through before beginSpawnRequestInFile; separate F3 spawnEvidence reader added"
   },
-  "baselineNote": "The creation early-switch failure is present on main. The bare-reservation failure on main is the intended regression. No whole runtime directory sweep was run.",
+  "baselineNote": "The creation early-switch failure and two ports admission failures are present on main. Publication sampling also reproduced the provider-budget timeout on main. The bare-reservation failure on main is the intended regression. No whole runtime directory sweep was run.",
   "publicationControl": {
     "note": "The initial hook refused an obsolete bare-reservation expectation, now updated. It also stopped a provider-budget file at its five-minute deadline. Serial controls passed on both sources; both exceeded that deadline. The candidate control preceded the final keyed F3 reader and is a timeout control only.",
     "main": {
@@ -141,5 +152,26 @@
       "summary": "Ran 164 tests across 1 file. [371.49s]",
       "failingCases": []
     }
+  },
+  "projectionControl": {
+    "main": {
+      "source": "main",
+      "command": "bun test src/lib/pipelines/engine.ports.test.ts -t 'reuse one registry parse'",
+      "pass": 1,
+      "fail": 0,
+      "summary": "Ran 1 test across 1 file. [260.00ms]",
+      "failingCases": []
+    },
+    "beforeCorrection": {
+      "source": "earlier candidate",
+      "command": "bun test src/lib/pipelines/engine.ports.test.ts -t 'reuse one registry parse'",
+      "pass": 0,
+      "fail": 1,
+      "summary": "Ran 1 test across 1 file. [294.00ms]",
+      "failingCases": [
+        "(fail) default pipeline projections reuse one registry parse across the historical backlog"
+      ]
+    },
+    "correction": "Missing historical launches reuse the pass projection; existing launches obtain fresh keyed evidence."
   }
 }

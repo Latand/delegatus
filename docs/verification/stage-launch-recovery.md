@@ -29,8 +29,7 @@ filenames remain valid. Receipt, generation and native-entry evidence is read
 fresh in one keyed transaction after awaited transcript reads. The regression
 reuses one ports instance and changes the real registry during that await.
 Conflicting operation identities or a changed generation name the conflict.
-A spent observation budget retains the
-original identities and names the missing evidence. The success regression
+A spent observation budget retains the original identities and names the missing evidence. The success regression
 requires one host start, one first prompt and the same stage attempt.
 
 The new envelope write waits through registry asynchronous admission, rechecks
@@ -57,9 +56,9 @@ including remote actions and manual retry, awaits asynchronous admission.
 The F1 admission hunks in `registry.ts`, the `launchMembership.ts` source and
 their first three membership regressions match PR #2951. This branch adds peer
 release and deadline coverage. The separate `spawnEvidence` reader in
-`registry.ts` supplies fresh F3 evidence without loading unrelated history. Its pipeline adapter also preserves
-terminal replay evidence
-before another membership admission can erase it.
+`registry.ts` supplies fresh F3 evidence without loading unrelated history. Missing historical launches reuse the pass
+projection; existing launches read fresh evidence. Its pipeline adapter preserves
+terminal replay evidence before another membership admission can erase it.
 
 The retry-claim interface and its awaited callers follow the async-admission
 lane. Startup adoption, delivery queues, runtime switching, MCP processes and
@@ -76,6 +75,7 @@ bun test src/lib/tasks/launchMembership.test.ts
 bun test src/lib/pipelines/engine.recovery.test.ts
 bun test src/lib/pipelines/engine.creation.test.ts
 bun test src/lib/pipelines/spawnRestartRecovery.test.ts
+bun test src/lib/pipelines/engine.ports.test.ts
 ./node_modules/.bin/tsc --noEmit --incremental false
 ```
 
