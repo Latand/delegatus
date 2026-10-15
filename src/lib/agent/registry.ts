@@ -107,6 +107,7 @@ import { normalizePendingPermissions, normalizePendingToolUses, type PendingPerm
 import type { ProviderRetryEvidence } from "@/lib/runtime/engineHost";
 import { assertStructuredTextEnvelope, parseStructuredImageRefs, structuredContent, type StructuredImageRef } from "@/lib/runtime/structuredContent";
 import { admitReservedLaunch, settleFailedLaunch } from "@/lib/tasks/launchMembership";
+import type { LaunchFailureReporting } from "@/lib/tasks/launchFailureReporting";
 
 export type AgentHostStatus = "starting" | "live" | "idle" | "handoff" | "unhosted" | "dead";
 
@@ -318,6 +319,9 @@ export interface SpawnReceipt {
   /** A caller already received a pre-acceptance refusal. Keep its reporting
       policy with the failed receipt so recovery cannot announce lost work. */
   failureAnnouncementSuppressed?: true;
+  /** Absent on reservations made before receipt-owned failure reporting. */
+  failureReporting?: LaunchFailureReporting;
+  failureRepairState?: "pending" | "handled";
   /** False only while a newly reserved receipt is waiting for task membership.
       Missing on legacy receipts means their historical admission is complete. */
   membershipAdmitted?: boolean;
@@ -2740,7 +2744,16 @@ function failInitialSpawnReceiptForDelivery(file: RegistryFile, delivery: HeldDe
   if (!receipt || ["completed", "failed", "conflicted"].includes(receipt.state)) return;
   receipt.state = "failed";
   receipt.error = delivery.error ?? "initial prompt delivery failed";
+  markFailedLaunchReporting(receipt);
   receipt.admissionOwner = null;
+}
+
+function markFailedLaunchReporting(receipt: SpawnReceipt, announce = true): void {
+  const reporting = receipt.failureReporting;
+  if (!reporting || !receipt.membershipAdmitted || receipt.rejection || !announce) receipt.failureAnnouncementSuppressed = true;
+  receipt.failureReporting = { ...reporting, failedAt: reporting?.failedAt ?? now(), lifecycle: reporting?.lifecycle ?? false,
+    notice: reporting?.notice ?? false, task: reporting?.task ?? false };
+  receipt.failureRepairState = "pending";
 }
 
 /** Converge terminal launch and initial-delivery state in both directions.
@@ -3949,6 +3962,14 @@ function normalizeReceipt(value: SpawnReceipt, policy?: McpGrantPolicy): SpawnRe
     launcher: normalizeSpawnLauncher(value.launcher),
     rejection: normalizeSpawnRejection(value.rejection),
     ...(value.failureAnnouncementSuppressed === true ? { failureAnnouncementSuppressed: true as const } : {}),
+    ...(value.failureReporting && typeof value.failureReporting === "object" ? { failureReporting: {
+      failedAt: typeof value.failureReporting.failedAt === "string" ? value.failureReporting.failedAt : null,
+      lifecycle: value.failureReporting.lifecycle === true,
+      notice: value.failureReporting.notice === true,
+      task: value.failureReporting.task === true,
+      ...(Array.isArray(value.failureReporting.taskIds) ? { taskIds: value.failureReporting.taskIds.filter((id): id is string => typeof id === "string") } : {}),
+    } } : {}),
+    ...(value.failureRepairState === "pending" || value.failureRepairState === "handled" ? { failureRepairState: value.failureRepairState } : {}),
     membershipAdmitted: value.membershipAdmitted === false ? false : true,
     launchProfile: receiptLaunchProfile(value, policy),
     explicitProject: validExplicitProject(value.explicitProject),
@@ -4657,6 +4678,7 @@ export class AgentRegistry {
     if ((backend.source === "environment" || backend.source === "default") && mayRunStartupMaintenance) {
       publishRegistryBackendIdentity(filename, this.sqliteMode, sqliteFilename);
     }
+    if (mayRunStartupMaintenance) this.backfillFailedLaunchReporting();
   }
 
   /**
@@ -5717,6 +5739,10 @@ export class AgentRegistry {
     });
   }
 
+  spawnReceipt(launchId: string): SpawnReceipt | null {
+    return this.readKeyed(file => clone(file.receipts[launchId] ?? null));
+  }
+
   conversationIdForSpawnCapabilityDigest(digest: string): ViewerConversationId | null {
     if (!/^[0-9a-f]{64}$/.test(digest)) return null;
     return this.readKeyed(file => {
@@ -5737,21 +5763,59 @@ export class AgentRegistry {
       ["starting","pane-bound","host-verified","prompt-delivered","path-pending"])));
   }
 
-  /** Failed receipts remain available for idempotent reporting recovery. */
-  failedSpawnReceipts(): SpawnReceipt[] {
-    return this.readKeyed(file => registryRowsMatching(file, "receipts", "state", "failed")
-      .sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt))
-      .map(clone));
+  /** Only unfinished settlements are controller-active; retained failures do
+      not enter the reaper's report lookups again. */
+  failedSpawnReceipts(limit = 64): SpawnReceipt[] {
+    const keys = this.sqliteStore?.failedLaunchRepairKeys(limit, false);
+    return this.readKeyed(file => (keys ? keys.map(key => file.receipts[key]!).filter(Boolean)
+      : Object.values(file.receipts).filter(row => row.state === "failed" && row.failureRepairState === "pending").slice(0, limit)).map(clone));
   }
 
-  private reportFailedLaunch(receipt: SpawnReceipt, options: { announce?: boolean } = {}): void {
+  /** A bounded, restartable backfill. Old failures have no announcement debt.
+      The release owner performs the first page at startup and the reaper
+      continues it; MCP readers never migrate operator state. */
+  backfillFailedLaunchReporting(limit = 64): number {
+    assertStateStartupMutation(path.dirname(this.filename), "failed launch announcement backfill");
+    const keys = this.sqliteStore?.failedLaunchRepairKeys(limit, true)
+      ?? Object.values(this.readOnlySnapshot().receipts).filter(row => row.state === "failed" && !row.failureRepairState).slice(0, limit).map(row => row.launchId);
+    if (!keys.length) return 0;
+    return this.mutate(file => {
+      let changed = 0;
+      for (const key of keys) {
+        const receipt = file.receipts[key];
+        if (!receipt || receipt.state !== "failed" || receipt.failureRepairState) continue;
+        receipt.failureAnnouncementSuppressed = true;
+        receipt.failureReporting = { failedAt: null, lifecycle: true, notice: true, task: false };
+        receipt.failureRepairState = "pending";
+        changed++;
+      }
+      return changed;
+    });
+  }
+
+  reportFailedLaunch(receipt: SpawnReceipt, options: { announce?: boolean; now?: number } = {}): void {
     const launcherId = receipt.launcher?.conversationId;
     const file = this.readOnlySnapshot();
     const canonical = launcherId ? resolveConversationAlias(file, launcherId) : null;
     const launcherProject = canonical
       ? file.memberships[canonical]?.find(membership => membership.kind === "orchestrator")?.containerId
       : undefined;
-    settleFailedLaunch(receipt, undefined, { ...options, launcherProject });
+    settleFailedLaunch(receipt, undefined, { ...options,
+      ...(canonical && file.conversations[canonical]?.supersededBy ? { announce: false } : {}),
+      launcherProject, onProgress: progress => {
+        this.deliveryWriteNow({ label: "spawn.failure-report", operationId: receipt.launchId }, () => this.mutate(current => {
+          const row = current.receipts[receipt.launchId];
+          if (!row || row.state !== "failed" || row.failureRepairState === "handled") return;
+          const held = row.failureReporting;
+          row.failureReporting = { ...held, failedAt: held?.failedAt ?? null,
+            lifecycle: progress.lifecycle || held?.lifecycle === true,
+            notice: progress.notice || held?.notice === true,
+            task: progress.task || held?.task === true };
+          if (progress.suppressed) row.failureAnnouncementSuppressed = true;
+          if (row.failureReporting.lifecycle && row.failureReporting.notice && row.failureReporting.task) row.failureRepairState = "handled";
+        }));
+      },
+    });
   }
 
   terminalizeAbandonedSpawnEntries(options: { now: number; timeoutMs: number; limit: number }): string[] {
@@ -5953,16 +6017,20 @@ export class AgentRegistry {
        fresh receipt and aborts the launch. A replay converges on the first
        admission's task. */
     if (result.kind === "created" || result.kind === "replay") {
-      admitReservedLaunch(input, result.receipt, (reason) => {
+      const admission = admitReservedLaunch(input, result.receipt, (reason) => {
         if (result.kind !== "created") return;
         if (input.transport === "structured") this.failStructuredSpawn(result.receipt.launchId, reason, { announce: false });
         else this.failSpawn(result.receipt.launchId, reason);
       });
       this.mutate((file) => {
         const receipt = file.receipts[result.receipt.launchId];
-        if (receipt) receipt.membershipAdmitted = true;
+        if (receipt) {
+          receipt.membershipAdmitted = true;
+          if (receipt.failureReporting && admission.ok) receipt.failureReporting.taskIds = admission.taskIds;
+        }
       });
       result.receipt.membershipAdmitted = true;
+      if (result.receipt.failureReporting && admission.ok) result.receipt.failureReporting.taskIds = admission.taskIds;
     }
     return result;
   }
@@ -5975,6 +6043,7 @@ export class AgentRegistry {
       if (!receipt || receipt.membershipAdmitted !== false || receipt.state !== "starting" || receipt.key || receipt.pane) return false;
       receipt.state = "failed";
       receipt.error = reason;
+      markFailedLaunchReporting(receipt, false);
       receipt.admissionOwner = null;
       terminalizeFailedSpawnDeliveriesInFile(file, receipt.launchId);
       return true;
@@ -6238,6 +6307,8 @@ export class AgentRegistry {
         delegationDepth: childDepth,
         rejection,
         membershipAdmitted: false,
+        failureReporting: { failedAt: rejection ? createdAt : null, lifecycle: false, notice: false, task: false },
+        ...(rejection ? { failureAnnouncementSuppressed: true as const, failureRepairState: "handled" as const } : {}),
         launchProfile: profile,
         explicitProject,
         launchDisplay: normalizeLaunchDisplay(input.launchDisplay),
@@ -7182,6 +7253,7 @@ export class AgentRegistry {
       }
       receipt.state = receipt.pane ? "conflicted" : "failed";
       receipt.error = error;
+      if (receipt.state === "failed") markFailedLaunchReporting(receipt);
       if (receipt.state === "conflicted") receipt.verifiedHost = null;
       if ((receipt.state === "failed" || receipt.state === "conflicted") && receipt.queuedPinnedSpawn) {
         receipt.launchProfile = emptyLaunchProfile(
@@ -7291,7 +7363,7 @@ export class AgentRegistry {
       }
       receipt.state = "failed";
       receipt.error = error;
-      if (options.announce === false) receipt.failureAnnouncementSuppressed = true;
+      markFailedLaunchReporting(receipt, options.announce !== false);
       if (receipt.queuedPinnedSpawn) {
         receipt.launchProfile = emptyLaunchProfile(
           receipt.queuedPinnedSpawn.spec.launchProfile,

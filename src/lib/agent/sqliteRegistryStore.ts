@@ -1072,7 +1072,25 @@ export class SqliteAgentRegistryStore {
     this.generationIdentitiesReady = this.generationIdentitiesInstalled(this.db);
     this.secureFiles();
     this.importFirstBoot(options.initialSnapshot, options.verifyImport);
+    if (options.allowArchiveMigration !== false) {
+      assertStateStartupMutation(path.dirname(filename), "failed launch repair indexes");
+      for (const table of this.changesReady ? ["registry_rows", "registry_archive"] : ["registry_rows"]) {
+        this.db.run(`CREATE INDEX IF NOT EXISTS ${table}_failure_repair ON ${table}(collection,
+          json_extract(value_json,'$.state'),json_extract(value_json,'$.failureRepairState'),row_order)`);
+      }
+    }
     if (this.changesReady) this.refreshColdKeys();
+  }
+
+  /** Indexed keys only, including cold history. Payload reads are bounded by
+      the caller's page, and a quiet pass reads no receipt payloads. */
+  failedLaunchRepairKeys(limit: number, legacy: boolean): string[] {
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 256) throw new RangeError("invalid failure repair page size");
+    return performanceSpans.sync("registry.keyed", () => this.db.query<{ row_key: string }, [number]>(
+      `SELECT row_key FROM ${this.recordsSource} WHERE collection='receipts'
+       AND json_extract(value_json,'$.state')='failed'
+       AND json_extract(value_json,'$.failureRepairState') ${legacy ? "IS NULL" : "='pending'"}
+       ORDER BY row_order LIMIT ?`).all(limit).map(row => row.row_key));
   }
 
   /** Runs a read the caller's storage metrics must not count: the import's

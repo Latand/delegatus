@@ -315,6 +315,42 @@ Where the build differs from the text above, and why:
   quarantine. A store that stays busy now holds the orchestration queue
   behind it; the host logs each held event once.
 
+## Launch failures before the first turn (#2895)
+
+Failure reporting has its own receipt state, separate from completion notices.
+A reservation written with this protocol records the failure time when it
+fails, then tracks task settlement, lifecycle reporting and notice creation
+independently. The reaper reads a bounded page of unfinished settlements.
+Deleting or pruning a notice or lifecycle row never reopens a completed
+receipt. A refused write remains pending for a later pass.
+
+Only a failure within ten minutes of its recorded failure time can create a
+report. Pre-acceptance refusals returned to the caller, tasks already done,
+reservations from before this protocol, and superseded launchers stay silent.
+Lifecycle events and notice rows retain the failure time on retries. A lost
+notice includes that time and explains that the original key replays the
+failure; it offers no relaunch instruction.
+
+The release owner silently backfills existing failed receipts in pages of at
+most 64 at startup; the reaper continues with its actuation cap. Backfill uses
+the state startup-mutation fence. SQLite selects legacy and pending receipt
+keys through indexes on both hot and archived history; after settlement,
+those receipts leave the repair query. The JSON rollback backend retains its
+existing in-memory registry reads. Task settlement remains owed when its
+write is refused, even when announcements were suppressed.
+
+A lost notice is checked again before delivery and before an uncertain retry.
+An expired failure, a now-settled task, or a rotated launcher is skipped.
+Completion notices keep their existing retired-seat routing. Old processes
+that cannot preserve receipt reporting fields require another silent
+backfill after upgrade.
+
+The regressions live in `structuredSpawn.terminalize.test.ts`,
+`launchMembership.registry.test.ts` and `spawnNotice/sweep.test.ts`: historical
+failures without report rows, synchronous admission refusals, reconnect and
+retention replay, fresh loss, refused writes, age boundaries, settled tasks,
+seat rotation, and bounded backfill across archived receipts.
+
 ## Deferred — not currently justified
 
 - **Notices for tmux children.** They emit no journal `turn-ended`, so they

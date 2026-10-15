@@ -34,9 +34,7 @@ import { signalProcessGroup } from "@/lib/processGroup";
 import { hasUserAuthoredMessage } from "@/lib/session/reader";
 import { isCurrentOperatorSeat } from "@/lib/orchestrator/managerAuthoritySources";
 import { buildImagePayload, deleteInboxImages, spawnAgentWithPrompt } from "@/lib/tmux";
-import { admitRecoveredLaunch, failedLaunchTaskSettlementPending, settleFailedLaunch } from "@/lib/tasks/launchMembership";
-import { hasLifecycleEventKey } from "@/lib/lifecycle/journal";
-import { readSpawnNoticeTurn } from "@/lib/spawnNotice/store";
+import { admitRecoveredLaunch } from "@/lib/tasks/launchMembership";
 import { hardenedRedact } from "@/lib/view/compactText";
 
 import { ClaudeStreamBrokerHost, type ClaudeStreamBrokerHostOptions } from "./claudeStreamBrokerHost";
@@ -1005,48 +1003,10 @@ export async function terminalizeStaleStructuredSpawns(
   const timeoutMs = options.timeoutMs ?? STALE_STRUCTURED_SPAWN_TIMEOUT_MS;
   const actuationCap = options.actuationCap ?? STALE_STRUCTURED_SPAWN_ACTUATION_CAP;
   const reconcile = options.reconcile ?? reconcileStructuredSpawnReplay;
-  const recoverySnapshot = registry.readOnlySnapshot();
-  /* A terminal receipt can outlive a refused task, notice or lifecycle write.
-     Re-run each pending obligation on the bounded reaper so a transient store
-     refusal cannot leave the launcher's report or task assignment unfinished. */
-  let repairs = 0;
-  for (const receipt of registry.failedSpawnReceipts()) {
-    if (repairs >= actuationCap) break;
-    if (receipt.purpose !== "launch" || receipt.artifactLifecycle !== "pending") continue;
-    const reportsEligible = !receipt.rejection && !receipt.failureAnnouncementSuppressed
-      && Boolean(receipt.launcher && receipt.launcher.conversationId !== receipt.conversationId);
-    let taskSettlementPending = false;
-    let lookupFailed = false;
-    let lifecyclePending = false;
-    let noticePending = false;
-    if (reportsEligible) {
-      try {
-        lifecyclePending = !hasLifecycleEventKey(`spawn:${receipt.launchId}:failed`);
-        noticePending = !readSpawnNoticeTurn(receipt.conversationId, `launch:${receipt.launchId}`);
-      } catch (error) {
-        lookupFailed = true;
-        spawnDiagnosticErrorFor(receipt.clientAttemptId, "[reaper] failed launch report lookup refused", {
-          launchId: receipt.launchId,
-          error,
-        });
-      }
-    }
-    try {
-      taskSettlementPending = failedLaunchTaskSettlementPending(receipt);
-    } catch (error) {
-      lookupFailed = true;
-      spawnDiagnosticErrorFor(receipt.clientAttemptId, "[reaper] failed launch task lookup refused", {
-        launchId: receipt.launchId,
-        error,
-      });
-    }
-    if (!lookupFailed && !taskSettlementPending && !lifecyclePending && !noticePending) continue;
-    repairs += 1;
+  await registry.deliveryWrite({ label: "spawn.failure-backfill" }, () => registry.backfillFailedLaunchReporting(actuationCap));
+  for (const receipt of registry.failedSpawnReceipts(actuationCap)) {
     options.assertActive?.();
-    settleFailedLaunch(receipt, undefined, {
-      announce: reportsEligible,
-      launcherProject: launcherProjectFromRegistry(recoverySnapshot, receipt.launcher?.conversationId),
-    });
+    registry.reportFailedLaunch(receipt, { now: now() });
   }
   await registry.deliveryWrite({ label: "spawn.orphan-hygiene" },() =>
     registry.terminalizeAbandonedSpawnEntries({ now: now(),timeoutMs,limit: actuationCap }));
@@ -1141,13 +1101,6 @@ export async function terminalizeStaleStructuredSpawns(
     }
   }
   return { examined, terminalized, recovered };
-}
-
-function launcherProjectFromRegistry(file: RegistryFile, conversationId: ViewerConversationId | undefined): string | undefined {
-  if (!conversationId) return undefined;
-  const canonical = resolveConversationAlias(file, conversationId);
-  const seat = (file.memberships[canonical] ?? []).find((membership) => membership.kind === "orchestrator");
-  return seat?.containerId;
 }
 
 export interface StructuredSpawnInput {

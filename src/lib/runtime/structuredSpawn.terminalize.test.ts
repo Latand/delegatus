@@ -13,7 +13,8 @@ import { defaultSeatTickSources } from "@/lib/monitor/seatTickSources";
 import { emptySeatTickState } from "@/lib/monitor/types";
 import { writeSeatTickState } from "@/lib/monitor/seatTickState";
 import { appendLifecycleEvents, lifecycleJournalPath, queryLifecycleEvents, readLifecycleJournal } from "@/lib/lifecycle/journal";
-import { readSpawnNoticeTurn } from "@/lib/spawnNotice/store";
+import { pruneSpawnNotices, readSpawnNoticeTurn, settleSpawnNotices } from "@/lib/spawnNotice/store";
+import { LAUNCH_FAILURE_NOTICE_WINDOW_MS } from "@/lib/tasks/launchFailureReporting";
 
 import { RuntimeHostUnavailableError, type RuntimeHostClient } from "./client";
 import {
@@ -247,6 +248,124 @@ test.each(["off", "sqlite"] as const)("a refused pre-acceptance launch stays sil
 
   expect(queryLifecycleEvents({ type: "spawn_failed" }).events.filter(event => event.conversationId === receipt.conversationId)).toEqual([]);
   expect(readSpawnNoticeTurn(receipt.conversationId, `launch:${receipt.launchId}`)).toBeNull();
+});
+
+test("an old failed receipt with no report rows stays silent on restart and repeated passes", async () => {
+  const store = registry();
+  const receipt = staleStructuredReceipt(store, "historical-unreported", { conversationId: "conversation_old_launcher", notify: true });
+  const raw = JSON.parse(fs.readFileSync(store.filename, "utf8"));
+  Object.assign(raw.receipts[receipt.launchId], { state: "failed", error: "runtime host request timed out", createdAt: "2026-10-01T12:00:00.000Z" });
+  fs.writeFileSync(store.filename, JSON.stringify(raw));
+  const reopened = new AgentRegistry(store.filename, undefined, undefined, { sqliteMode: "off" });
+  await terminalizeStaleStructuredSpawns(reopened, null);
+  await terminalizeStaleStructuredSpawns(reopened, null);
+  expect(queryLifecycleEvents({ conversationId: receipt.conversationId, type: "spawn_failed" }).events).toEqual([]);
+  expect(readSpawnNoticeTurn(receipt.conversationId, `launch:${receipt.launchId}`)).toBeNull();
+  expect(reopened.snapshot().receipts[receipt.launchId]?.failureAnnouncementSuppressed).toBe(true);
+});
+
+test.each(["fresh", "boundary", "expired"] as const)("a current receipt with a %s failure uses the failure time and age bound", async age => {
+  const store = registry();
+  const receipt = staleStructuredReceipt(store, `failure-age-${age}`, { conversationId: "conversation_age_launcher", notify: true });
+  const now = Date.now();
+  const failedAt = new Date(now - (age === "fresh" ? 1_000 : LAUNCH_FAILURE_NOTICE_WINDOW_MS + (age === "expired" ? 1 : 0))).toISOString();
+  const raw = JSON.parse(fs.readFileSync(store.filename, "utf8"));
+  Object.assign(raw.receipts[receipt.launchId], { state: "failed", error: "host lost", failureRepairState: "pending",
+    failureReporting: { failedAt, lifecycle: false, notice: false, task: false } });
+  fs.writeFileSync(store.filename, JSON.stringify(raw));
+  const reopened = new AgentRegistry(store.filename, undefined, undefined, { sqliteMode: "off" });
+  await terminalizeStaleStructuredSpawns(reopened, null, { now: () => now });
+  const events = queryLifecycleEvents({ conversationId: receipt.conversationId, type: "spawn_failed" }).events;
+  const notice = readSpawnNoticeTurn(receipt.conversationId, `launch:${receipt.launchId}`);
+  expect(events).toHaveLength(age === "expired" ? 0 : 1);
+  if (age === "expired") expect(notice).toBeNull();
+  else {
+    expect(events[0]?.at).toBe(failedAt);
+    expect(notice?.endedAt).toBe(failedAt);
+  }
+  expect(reopened.spawnReceipt(receipt.launchId)?.failureRepairState).toBe("handled");
+});
+
+test("a bounded silent backfill converges archived historical failures without reporting", async () => {
+  const store = registry();
+  const base = staleStructuredReceipt(store, "backfill-seed", { conversationId: "conversation_backfill_launcher", notify: true });
+  const raw = JSON.parse(fs.readFileSync(store.filename, "utf8"));
+  raw.receipts = Object.fromEntries(Array.from({ length: 140 }, (_, index) => {
+    const row = { ...raw.receipts[base.launchId], launchId: `historical-${index}`, clientAttemptId: `old-${index}`,
+      state: "failed", createdAt: "2026-10-01T12:00:00.000Z", error: "old refusal" };
+    delete row.failureReporting;
+    return [row.launchId, row];
+  }));
+  fs.writeFileSync(store.filename, JSON.stringify(raw));
+  let receiptReads = 0;
+  const reopened = new AgentRegistry(store.filename, undefined, undefined, { sqliteMode: "sqlite",
+    onSqliteRowPayloadRead: (collection, count) => { if (collection === "receipts") receiptReads += count; } });
+  expect(Object.values(reopened.snapshot().receipts).filter(row => row.failureAnnouncementSuppressed)).toHaveLength(64);
+  expect(reopened.archiveInactiveRows(256)).toBeGreaterThan(0);
+  expect(reopened.backfillFailedLaunchReporting(3)).toBe(3);
+  expect(reopened.failedSpawnReceipts(2)).toHaveLength(2);
+  for (let pass = 0; pass < 5; pass++) await terminalizeStaleStructuredSpawns(reopened, null);
+  expect(reopened.backfillFailedLaunchReporting(3)).toBe(0);
+  expect(Object.values(reopened.snapshot().receipts).filter(row => row.failureRepairState === "handled")).toHaveLength(140);
+  receiptReads = 0;
+  for (let pass = 0; pass < 3; pass++) {
+    expect(reopened.backfillFailedLaunchReporting(3)).toBe(0);
+    expect(reopened.failedSpawnReceipts(2)).toEqual([]);
+  }
+  expect(receiptReads).toBe(0);
+  expect(queryLifecycleEvents({ conversationId: base.conversationId, type: "spawn_failed" }).events).toEqual([]);
+  expect(readSpawnNoticeTurn(base.conversationId, `launch:${base.launchId}`)).toBeNull();
+});
+
+test("a reader without the release fence cannot backfill operator-shaped state", () => {
+  const store = registry();
+  const previousHome = process.env.HOME;
+  const previousOwner = process.env.LLV_STATE_OWNER;
+  const operatorHome = path.join(path.parse(os.tmpdir()).root, "fixture-operator");
+  try {
+    process.env.HOME = operatorHome;
+    process.env.LLV_STATE_OWNER = "mcp";
+    Object.defineProperty(store, "filename", { value: path.join(operatorHome, ".config", "delegatus", "state", "agent-registry.json") });
+    expect(() => store.backfillFailedLaunchReporting()).toThrow("failed launch announcement backfill");
+  } finally {
+    if (previousHome === undefined) delete process.env.HOME;
+    else process.env.HOME = previousHome;
+    if (previousOwner === undefined) delete process.env.LLV_STATE_OWNER;
+    else process.env.LLV_STATE_OWNER = previousOwner;
+  }
+});
+
+test("a synchronous tmux task admission refusal stays silent after restart", async () => {
+  const store = registry();
+  expect(() => store.beginSpawnRequest({ engine: "codex", cwd: "/repo", transport: "tmux", clientAttemptId: "synchronous-task-refusal",
+    taskIds: ["missing-task"], launcher: { conversationId: "conversation_refused_launcher", notify: true },
+    launchProfile: emptyLaunchProfile({ cwd: "/repo", title: "Refused work" }),
+  })).toThrow("not available");
+  const receipt = Object.values(store.snapshot().receipts)[0]!;
+  const reopened = new AgentRegistry(store.filename, undefined, undefined, { sqliteMode: "off" });
+  await terminalizeStaleStructuredSpawns(reopened, null);
+  expect(queryLifecycleEvents({ conversationId: receipt.conversationId, type: "spawn_failed" }).events).toEqual([]);
+  expect(readSpawnNoticeTurn(receipt.conversationId, `launch:${receipt.launchId}`)).toBeNull();
+});
+
+test.each(["off", "sqlite"] as const)("a fresh loss stays handled when both report lookups miss after %s restart", async sqliteMode => {
+  const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-report-reconnect-"));
+  process.env.LLV_STATE_DIR = path.join(sandbox, "state");
+  const store = registry(sqliteMode);
+  const receipt = staleStructuredReceipt(store, "reconnect-repass", { conversationId: "conversation_current_launcher", notify: true });
+  expect(store.failStructuredSpawn(receipt.launchId, "accepted launch lost").claimed).toBe(true);
+  expect(queryLifecycleEvents({ conversationId: receipt.conversationId, type: "spawn_failed" }).events).toHaveLength(1);
+  const turn = `launch:${receipt.launchId}`;
+  expect(readSpawnNoticeTurn(receipt.conversationId, turn)).not.toBeNull();
+  settleSpawnNotices(receipt.conversationId, [turn], { state: "sent", recipientConversationId: "conversation_current_launcher", clientMessageId: "notice-fixture", operationId: null }, new Date().toISOString());
+  pruneSpawnNotices(new Date(Date.now() + 1_000).toISOString());
+  fs.rmSync(lifecycleJournalPath(), { force: true });
+  expect(readSpawnNoticeTurn(receipt.conversationId, turn)).toBeNull();
+  const reopened = new AgentRegistry(store.filename, undefined, undefined, { sqliteMode });
+  await terminalizeStaleStructuredSpawns(reopened, null);
+  await terminalizeStaleStructuredSpawns(reopened, null);
+  expect(queryLifecycleEvents({ conversationId: receipt.conversationId, type: "spawn_failed" }).events).toEqual([]);
+  expect(readSpawnNoticeTurn(receipt.conversationId, turn)).toBeNull();
 });
 
 test.each(["off", "sqlite"] as const)("a reported failure does not emit another wake after journal retention and %s registry restart", async sqliteMode => {

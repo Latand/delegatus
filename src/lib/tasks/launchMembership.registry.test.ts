@@ -421,9 +421,11 @@ test.each(["journal", "notice"] as const)("a failed receipt repairs its refused 
   if (begun.kind !== "created") throw new Error("expected launch");
   registry.rememberMembership("conversation_fixture_launcher", { kind: "orchestrator", containerId: "launcher-project",
     role: "orchestrator", slot: "seat", stageId: null, stageOrder: null, round: null, parentConversationId: null });
-  const failedFile = JSON.parse(fs.readFileSync(registry.filename, "utf8")) as { receipts: Record<string, { state: string; error: string | null }> };
+  const failedFile = JSON.parse(fs.readFileSync(registry.filename, "utf8"));
   failedFile.receipts[begun.receipt.launchId]!.state = "failed";
   failedFile.receipts[begun.receipt.launchId]!.error = "host vanished";
+  failedFile.receipts[begun.receipt.launchId]!.failureRepairState = "pending";
+  failedFile.receipts[begun.receipt.launchId]!.failureReporting.failedAt = new Date().toISOString();
   fs.writeFileSync(registry.filename, JSON.stringify(failedFile));
   const failOnce = () => { throw new Error("temporary transaction refusal"); };
   settleFailedLaunch(registry.snapshot().receipts[begun.receipt.launchId]!, undefined, {
@@ -479,7 +481,6 @@ test("a failed receipt retries its task settlement after lifecycle and notice re
 
 test("a failed child in another project writes its wake event into the launching seat's project", async () => {
   const { queryLifecycleEvents } = await import("@/lib/lifecycle/journal");
-  const { settleFailedLaunch } = await import("./launchMembership");
   const registry = registryAt("cross-project-report");
   saveTasks([task("cross-project-task", "Work in another project")]);
   const begun = registry.beginSpawnRequest({ engine: "codex", cwd: stateDir, explicitProject: "child-project",
@@ -489,9 +490,75 @@ test("a failed child in another project writes its wake event into the launching
   if (begun.kind !== "created") throw new Error("expected launch");
   registry.rememberMembership("conversation_fixture_launcher", { kind: "orchestrator", containerId: "launcher-project",
     role: "orchestrator", slot: "seat", stageId: null, stageOrder: null, round: null, parentConversationId: null });
-  registry.failStructuredSpawn(begun.receipt.launchId, "host vanished", { announce: false });
-  settleFailedLaunch(registry.snapshot().receipts[begun.receipt.launchId]!, undefined, { launcherProject: "launcher-project" });
+  registry.failStructuredSpawn(begun.receipt.launchId, "host vanished");
   expect(queryLifecycleEvents({ project: "launcher-project", conversationId: begun.receipt.conversationId, type: "spawn_failed" }).events)
     .toEqual([expect.objectContaining({ conversationId: begun.receipt.conversationId })]);
   expect(queryLifecycleEvents({ project: "child-project", conversationId: begun.receipt.conversationId, type: "spawn_failed" }).events).toEqual([]);
+});
+
+test.each(["explicit", "placeholder"] as const)("a fresh failure of an already settled %s task never wakes the launcher", async target => {
+  const { queryLifecycleEvents } = await import("@/lib/lifecycle/journal");
+  const { readSpawnNoticeTurn } = await import("@/lib/spawnNotice/store");
+  saveTasks([task("settled-work", "Finished work")]);
+  const registry = registryAt(`settled-${target}`);
+  const begun = registry.beginSpawnRequest({ engine: "codex", cwd: stateDir, explicitProject: project, transport: "structured",
+    clientAttemptId: `settled-${target}`, ...(target === "explicit" ? { taskIds: ["settled-work"] } : {}),
+    launcher: { conversationId: "conversation_fixture_launcher", notify: true }, launchProfile: emptyLaunchProfile({ cwd: stateDir, title: "Finished work" }) });
+  if (begun.kind !== "created") throw new Error("expected launch");
+  saveTasks(loadTasks().map(row => ({ ...row, status: "done" })));
+  registry.failStructuredSpawn(begun.receipt.launchId, "host vanished");
+  await terminalizeStaleStructuredSpawns(registryAt(`settled-${target}`), null);
+  expect(queryLifecycleEvents({ conversationId: begun.receipt.conversationId, type: "spawn_failed" }).events).toEqual([]);
+  expect(readSpawnNoticeTurn(begun.receipt.conversationId, `launch:${begun.receipt.launchId}`)).toBeNull();
+});
+
+test("a synchronous TASK_RUNS_ELSEWHERE refusal is durably silent across repair passes", async () => {
+  const { queryLifecycleEvents } = await import("@/lib/lifecycle/journal");
+  const { readSpawnNoticeTurn } = await import("@/lib/spawnNotice/store");
+  const { LaunchMembershipError } = await import("./launchMembership");
+  const links = path.join(stateDir, "links");
+  fs.mkdirSync(links, { recursive: true });
+  const self = ["0a0a0a0a", "1111", "4111", "8111", "111111111111"].join("-");
+  const peer = ["0b0b0b0b", "2222", "4222", "8222", "222222222222"].join("-");
+  const identity = path.join(links, "self.json");
+  fs.writeFileSync(identity, JSON.stringify({ v: 1, installId: self, label: "fixture", publicUrl: null, check: null }));
+  try {
+    saveTasks([{ ...task("peer-work", "Runs elsewhere"), machine: peer }]);
+    const registry = registryAt("synchronous-peer-refusal");
+    let refusal: unknown;
+    try {
+      registry.beginSpawnRequest({ engine: "codex", cwd: stateDir, explicitProject: project, transport: "structured",
+        clientAttemptId: "synchronous-peer-refusal", taskIds: ["peer-work"], launcher: { conversationId: "conversation_fixture_launcher", notify: true },
+        launchProfile: emptyLaunchProfile({ cwd: stateDir, title: "Runs elsewhere" }) });
+    } catch (error) { refusal = error; }
+    expect(refusal).toBeInstanceOf(LaunchMembershipError);
+    expect((refusal as InstanceType<typeof LaunchMembershipError>).code).toBe("TASK_RUNS_ELSEWHERE");
+    const receipt = registry.spawnReceiptForClientAttempt("synchronous-peer-refusal")!;
+    expect(receipt.failureAnnouncementSuppressed).toBe(true);
+    const reopened = registryAt("synchronous-peer-refusal");
+    await terminalizeStaleStructuredSpawns(reopened, null);
+    await terminalizeStaleStructuredSpawns(reopened, null);
+    expect(queryLifecycleEvents({ conversationId: receipt.conversationId, type: "spawn_failed" }).events).toEqual([]);
+    expect(readSpawnNoticeTurn(receipt.conversationId, `launch:${receipt.launchId}`)).toBeNull();
+  } finally { fs.rmSync(identity, { force: true }); }
+});
+
+test("a fresh failure from a retired seat writes no wake event for its successor", async () => {
+  const { queryLifecycleEvents } = await import("@/lib/lifecycle/journal");
+  const { readSpawnNoticeTurn } = await import("@/lib/spawnNotice/store");
+  const { ORCHESTRATOR_SEATS_SCHEMA_VERSION } = await import("@/lib/orchestrator/seats");
+  const seatsFile = path.join(stateDir, "orchestrator-seats.json");
+  const registry = registryAt("retired-launcher");
+  const begun = registry.beginSpawnRequest({ engine: "codex", cwd: stateDir, explicitProject: project, transport: "structured",
+    clientAttemptId: "retired-launcher", launcher: { conversationId: "conversation_retired_seat", notify: true },
+    launchProfile: emptyLaunchProfile({ cwd: stateDir, title: "Retired launcher work" }) });
+  if (begun.kind !== "created") throw new Error("expected launch");
+  fs.writeFileSync(seatsFile, JSON.stringify({ schemaVersion: ORCHESTRATOR_SEATS_SCHEMA_VERSION, seats: {},
+    revocations: [{ project, conversationId: "conversation_retired_seat", seatEpoch: 1, revokedAt: new Date().toISOString(), successorConversationId: "conversation_current_seat" }] }));
+  try {
+    registry.failStructuredSpawn(begun.receipt.launchId, "host vanished");
+    await terminalizeStaleStructuredSpawns(registryAt("retired-launcher"), null);
+    expect(queryLifecycleEvents({ conversationId: begun.receipt.conversationId, type: "spawn_failed" }).events).toEqual([]);
+    expect(readSpawnNoticeTurn(begun.receipt.conversationId, `launch:${begun.receipt.launchId}`)).toBeNull();
+  } finally { fs.rmSync(seatsFile, { force: true }); }
 });
