@@ -1,3 +1,4 @@
+import { performanceSpans } from "@/lib/performanceSpans";
 import fs from "node:fs";
 import crypto from "node:crypto";
 import path from "node:path";
@@ -1173,6 +1174,10 @@ export class SqliteAgentRegistryStore {
   }
 
   readOnlySnapshot(): SqliteRegistrySnapshot {
+    return performanceSpans.sync("registry.snapshot", () => this.readOnlySnapshotMeasured());
+  }
+
+  private readOnlySnapshotMeasured(): SqliteRegistrySnapshot {
     const revision = this.revision();
     /* The revision alone cannot say the rows are the ones cached: a commit that
        rewrites a row without advancing it would leave the decision over the old
@@ -1602,6 +1607,10 @@ export class SqliteAgentRegistryStore {
       their attestors then reuses these small claims without rereading every
       archived payload. Retired versions leave the store's projection cache. */
   private rememberColdProjections(headers: readonly { collection: RowCollection; archive_id: number }[]): void {
+    performanceSpans.sync("registry.claims", () => this.rememberColdProjectionsMeasured(headers), headers.length);
+  }
+
+  private rememberColdProjectionsMeasured(headers: readonly { collection: RowCollection; archive_id: number }[]): void {
     const active = new Set(headers.filter(header => READER_GRANT_COLLECTIONS.has(header.collection) || header.collection === "heldDeliveries").map(header => header.archive_id));
     for (const id of this.coldRowProjections.keys()) if (!active.has(id)) this.coldRowProjections.delete(id);
     for (const id of this.coldGrantDecisions.keys()) if (!active.has(id)) this.forgetColdGrant(id);
@@ -1789,8 +1798,8 @@ export class SqliteAgentRegistryStore {
       : this.changesReady ? JSON.stringify(this.db.query<{ count: number; total: number; largest: number }, []>(
         "SELECT COUNT(*) AS count,COALESCE(SUM(archive_id),0) AS total,COALESCE(MAX(archive_id),0) AS largest FROM registry_cold").get()) : "";
     const cache = prior?.signature === signature ? prior : null;
-    const headers = cache ? cache.headers : this.changesReady ? this.db.query<{ collection: RowCollection; row_key: string; archive_id: number }, []>(
-      "SELECT c.collection,c.row_key,c.archive_id FROM registry_cold c JOIN registry_archive a ON a.id=c.archive_id ORDER BY a.row_order").all() : [];
+    const headers = cache ? cache.headers : this.changesReady ? performanceSpans.sync("registry.headers", () => this.db.query<{ collection: RowCollection; row_key: string; archive_id: number }, []>(
+      "SELECT c.collection,c.row_key,c.archive_id FROM registry_cold c JOIN registry_archive a ON a.id=c.archive_id ORDER BY a.row_order").all()) : [];
     if (!cache) this.rememberColdProjections(headers);
     const coldGrantChangeId = this.refreshColdGrantDecisions(snapshot.stamp);
     /* The archive's mapping changes rarely and commits often: what is derived
