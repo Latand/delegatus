@@ -306,6 +306,29 @@ function heldForRetry(cause: string, waitReason: DeliveryWaitReason = "awaiting-
   return { outcome: "held", cause, waitReason };
 }
 
+function deputyDrainAuthorityCurrent(
+  request: HeldStructuredMessageRequest,
+  operationId: string,
+  registry: AgentRegistry,
+): boolean {
+  const keyedAttempt = /^deputy_ask_[a-f0-9]{40}$/.test(request.clientMessageId);
+  const file = readDeputyFileOrNull();
+  if (!file) return !keyedAttempt;
+  const named = deputyNamingIn(file, { conversationId: request.conversationId, path: request.path });
+  if (!named) return !keyedAttempt;
+  const deputy = named.deputy;
+  if (!deputy || deputy.state !== "pending"
+    || deputy.deputyConversationId !== request.conversationId
+    || !deputy.artifactPath || path.resolve(deputy.artifactPath) !== path.resolve(request.path)
+    || request.clientMessageId !== deputyMessageKey(deputy.askId, deputy.attempt ?? 0)) return false;
+  const principal = productionDeputyPrincipal(request.conversationId);
+  if (!principal || principal.askId !== deputy.askId || principal.seatConversationId !== deputy.seatConversationId
+    || principal.seatEpoch !== deputy.seatEpoch) return false;
+  const admission = registry.deliveryAdmissionForKey(request.conversationId, request.clientMessageId);
+  return admission.outcome === "admitted" && admission.deliveryId === request.deliveryId
+    && admission.operationId === operationId;
+}
+
 async function deputyDrainFence(
   request: HeldStructuredMessageRequest,
   operationId: string,
@@ -314,22 +337,7 @@ async function deputyDrainFence(
   let verdict: "allowed" | "rejected" | "busy";
   try {
     verdict = await withViewerOperation("runtime.delivery.deputy-authority", () => withAccountMutationLockAsync(() => {
-      const file = readDeputyFileOrNull();
-      if (!file) return /^deputy_ask_[a-f0-9]{40}$/.test(request.clientMessageId) ? "rejected" : "allowed";
-      const named = deputyNamingIn(file, { conversationId: request.conversationId, path: request.path });
-      if (!named) return /^deputy_ask_[a-f0-9]{40}$/.test(request.clientMessageId) ? "rejected" : "allowed";
-      const deputy = named.deputy;
-      if (!deputy || deputy.state !== "pending"
-        || deputy.deputyConversationId !== request.conversationId
-        || !deputy.artifactPath || path.resolve(deputy.artifactPath) !== path.resolve(request.path)
-        || request.clientMessageId !== deputyMessageKey(deputy.askId, deputy.attempt ?? 0)) return "rejected";
-      const principal = productionDeputyPrincipal(request.conversationId);
-      if (!principal || principal.askId !== deputy.askId || principal.seatConversationId !== deputy.seatConversationId
-        || principal.seatEpoch !== deputy.seatEpoch) return "rejected";
-      const admission = registry.deliveryAdmissionForKey(request.conversationId, request.clientMessageId);
-      if (admission.outcome !== "admitted" || admission.deliveryId !== request.deliveryId
-        || admission.operationId !== operationId) return "rejected";
-      return "allowed";
+      return deputyDrainAuthorityCurrent(request, operationId, registry) ? "allowed" : "rejected";
     }, { caller: "deputy held delivery authority" }));
   } catch {
     verdict = "busy";
@@ -1127,6 +1135,11 @@ async function deliverHeldAttempt(
         conversationId: request.conversationId,
         origin: request.command?.origin,
         operationId: request.command?.operationId ?? request.deliveryId,
+        authorityGuard: () => {
+          if (!deputyDrainAuthorityCurrent(request, operationId, registry)) {
+            throw new DeliveryAdmissionRefusedError("deputy-delivery-authority-changed");
+          }
+        },
       }, {
         registry,
         client,
