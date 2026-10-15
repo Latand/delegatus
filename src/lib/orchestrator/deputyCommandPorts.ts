@@ -1,5 +1,6 @@
 import { waitForStateLock } from "@/lib/state/lockWait";
 import { runtimeHostClient, readRuntimeSession } from "@/lib/runtime/client";
+import { readEvidenceWithin } from "@/lib/runtime/evidence";
 import { resolveSendReceipt } from "@/lib/runtime/sendSettlement";
 import { applyConversationAction } from "@/lib/conversation/actions";
 import { deputyMessageKey, productionDeputyPrincipal } from "./deputies";
@@ -129,6 +130,20 @@ export function productionDeputyCommandPorts(dependencies: { registry?: AgentReg
       const admitted = registry.deliveryAdmissionForKey(deputy.deputyConversationId, deputyMessageKey(deputy.askId, deputy.attempt ?? 0));
       if (admitted.outcome === "not-executed") return { ok: true };
       if (admitted.outcome !== "admitted") return { ok: false, error: "the previous delivery outcome could not be verified" };
+      const journal = await readEvidenceWithin(() => client.operationStatus(admitted.operationId), 1_000,
+        "the previous delivery journal could not be read");
+      guard();
+      if (journal.readable && journal.value === null) {
+        // No journal command exists. End only a reservation whose claim still
+        // proves that no delivery attempt began, inside the admitted writer.
+        const ended = await registry.deliveryWrite({ label: "deputy.retry-unclaimed", operationId: admitted.operationId }, () => {
+          guard();
+          const row = registry.deliverySnapshotForOperation(admitted.operationId).heldDeliveries[admitted.deliveryId];
+          return row?.state === "assigned" && row.attempts === 0
+            ? registry.terminalizeHeldDelivery(row.id, "parallel question stopped before its first delivery") : null;
+        });
+        if (!ended.acquired) return { ok: false, error: "the previous delivery could not be settled while its writer is busy" };
+      }
       const receipt = await resolveSendReceipt(admitted.operationId, { registry, client, windowMs: 0 });
       guard();
       if (!receipt || receipt.state === "in-flight" || receipt.resend === "verify-first") {
