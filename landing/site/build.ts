@@ -21,6 +21,8 @@ import { costumeSvg } from "@/components/brand/roleCostumes";
 import { taskIconNodes } from "@/lib/tasks/taskIconNodes";
 import { ROLE_FRAME_BOOT_SCRIPT } from "@/lib/roleFrames";
 
+import { copyDemoAudio } from "./audioAssets";
+
 const here = path.dirname(new URL(import.meta.url).pathname);
 const repo = path.resolve(here, "../..");
 const dist = path.join(here, "dist");
@@ -97,5 +99,9 @@ for (const file of ["index.html", "styles.css", "copy.js", "boardDemo.js", "masc
    from the product's own drawing, so it follows the product on every build. */
 fs.writeFileSync(path.join(dist, "brand/role-orchestrator.svg"), costumeSvg("orchestrator"));
 
+/* The sounds the demo's Viewer requests at the site root. Without them every
+   request answers 404 and the browser console fills with errors. */
+const audio = copyDemoAudio(repo, dist);
+
 const size = (file: string) => `${Math.round(fs.statSync(path.join(dist, file)).size / 1024)} KB`;
-console.log(`landing/site/dist: demo.js ${size("demo/demo.js")}, viewer.css ${size("demo/viewer.css")}`);
+console.log(`landing/site/dist: demo.js ${size("demo/demo.js")}, viewer.css ${size("demo/viewer.css")}, ${audio.length} audio files`);

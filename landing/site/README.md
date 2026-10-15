@@ -91,6 +91,7 @@ position comes back. PNGs go to `/tmp/landing-fullscreen-renders/`.
 | `demo/world.ts` | the invented harbor-api world at each step, in both languages |
 | `demo/taskIcons.json` | the lucide drawings of the demo's task icons, written by the build |
 | `build.ts` | bundles the demo, compiles the product stylesheet, assembles `dist/` |
+| `audioAssets.ts` | the cue files and music bed the demo's Viewer requests at the site root, copied from `public/audio/` into `dist/audio/`; the build fails when one is missing |
 | `capture.ts` | the render driver |
 
 ## Worker configuration and publication
