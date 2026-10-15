@@ -1035,7 +1035,6 @@ export const en = {
   "composer.outboxFull": "Message queue is full: every entry is still unresolved. Retry, recover or remove one first; your draft is kept.",
   "composer.runtimePill": "Model and reasoning — applies to your next message",
   // Reply drafts the manager offers under its own message (#1202)
-  "composer.suggestedReplies": "Suggested replies — tap one to put it in the composer",
   "composer.reasoningGroup": "Reasoning",
   "composer.modelGroup": "Model",
   "composer.speedGroup": "Speed",

@@ -1,4 +1,4 @@
-import type { IssueReportLanguage } from "./approvalReply";
+import type { IssueReportLanguage } from "./approvalForm";
 import type { IssueReportFinding } from "./scrub";
 import type { IssueReportPreview } from "./store";
 
@@ -18,7 +18,7 @@ const COPY = {
     none: "None found. A clean result proves nothing; read the whole text.",
     inTitle: "title", line: "body, line", lines: "body, lines", decoded: "decoded form",
     warning: "Warning",
-    closing: "The approving reply files exactly the title and body above as a public issue in the Delegatus repository, readable by anyone. Hints do not prevent this.",
+    closing: "Approving it in the decision form files exactly the title and body above as a public issue in the Delegatus repository, readable by anyone. Hints do not prevent this.",
   },
   uk: {
     heading: "ПОПЕРЕДНІЙ ПЕРЕГЛЯД", digest: "Дайджест",
@@ -31,7 +31,7 @@ const COPY = {
     none: "Нічого не знайдено. Чистий результат нічого не доводить; прочитайте весь текст.",
     inTitle: "назва", line: "текст, рядок", lines: "текст, рядки", decoded: "розкодований вигляд",
     warning: "Попередження",
-    closing: "Схвальна відповідь створить із назви й тексту вище, без жодних змін, публічний issue в репозиторії Delegatus, який може прочитати будь-хто. Підказки цьому не перешкоджають.",
+    closing: "Схвалення у формі рішення створить із назви й тексту вище, без жодних змін, публічний issue в репозиторії Delegatus, який може прочитати будь-хто. Підказки цьому не перешкоджають.",
   },
 } as const;
 

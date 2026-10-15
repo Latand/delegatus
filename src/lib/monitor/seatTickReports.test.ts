@@ -1,7 +1,5 @@
 import { expect, test } from "bun:test";
 
-import { resolvedQuestionAnswers } from "@/lib/bridge/asks";
-import type { BridgeReportV1 } from "@/lib/bridge/types";
 
 import { DEFAULT_SEAT_TICK_POLICY, SEAT_TICK_WAKE_INTERVAL_MS, seatTickDecision, seatTickWakeCommit, seatTickWakeCommitPlan } from "./seatTick";
 import { defaultSeatTickSettings, effectiveSeatTickSettings, type SeatTickSettings } from "./seatTickSettings";
@@ -23,8 +21,8 @@ import {
 
 /*
  * The report ledger the seat tick keeps (docs/design/orchestrator-reports.md
- * §5.1): outcomes owed until a report lands, asks owed until reported or
- * answered, and a digest when the board moved with no report for an interval.
+ * §5.1): outcomes owed until a report lands, and a digest when the board
+ * moved with no report for an interval.
  * Every title is invented; the times of the replayed day are the real ones.
  */
 
@@ -48,9 +46,6 @@ function reports(over: Partial<SeatTickReportsInput> = {}): SeatTickReportsInput
     reportedIds: [],
     reportIdsFor: (key) => [idFor(key)],
     latestCoversOwedAt: null,
-    suggestionSets: [],
-    suggestionConversations: [SEAT_A],
-    operatorAdmissions: [],
     ...over,
   };
 }
@@ -128,43 +123,13 @@ test("delivered agendas leave debt-only reminders at the configured interval unt
   expect(cleared.verdict.kind).toBe("quiet");
 });
 
-test("a newly aged question debt wakes after agenda delivery, repeats until answered or reported, and then falls silent", () => {
-  const agenda = { pipelines: OPEN, changeFingerprint: "unchanged.pr" };
-  const first = landed(input(agenda)).state;
-  agenda.pipelines = []; // Recurring live-work reminders have their own cadence test.
-  const suggestion = { conversationId: SEAT_A, setId: "rsg_after_agenda", at: iso(T0 + MINUTE) };
-  let state = first;
-  for (let round = 1; round <= DEFAULT_SEAT_TICK_POLICY.retryGuard + 2; round++) {
-    const reminder = landed(input({ ...agenda, state, now: T0 + round * 70 * MINUTE,
-      reports: reports({ suggestionSets: [suggestion] }),
-    }));
-    expect(reminder.wake.items).toEqual([]);
-    expect(reminder.wake.reportLines!.join("\n")).toContain(`key ask:${suggestion.setId}`);
-    state = reminder.state;
-  }
-  for (const evidence of [
-    { reportedIds: [idFor(`ask:${suggestion.setId}`)] },
-    { operatorAdmissions: [{ conversationId: SEAT_A, at: iso(T0 + 400 * MINUTE) }] },
-    { suggestionSets: [] },
-  ]) {
-    const cleared = seatTickDecision(input({ ...agenda, state, now: T0 + 500 * MINUTE,
-      reports: reports({ suggestionSets: [suggestion], ...evidence }),
-    }));
-    expect(cleared.state.asksOwed).toEqual([]);
-    expect(cleared.verdict.kind).toBe("quiet");
-  }
-});
-
-test("a full question-report ledger stays within the wake bound and names every matching key", () => {
-  const asks = Array.from({ length: 16 }, (_, index) => ({ key: `ask:rsg_${String(index).padStart(24, "0")}`,
-    setId: `rsg_${String(index).padStart(24, "0")}`, conversationId: SEAT_A, at: iso(T0),
-  }));
+test("a full owed-outcome ledger stays within the wake bound and names the key that settles it", () => {
   const reportsOwed = Array.from({ length: 64 }, (_, index) => ({ key: `lane:${attempt(String(index).padStart(8, "0"))}:completed`,
     label: `lane ${String(index).padStart(8, "0")} completed`, receivedAt: iso(T0),
   }));
-  const check = input({ state: { ...emptySeatTickState(), seatEpoch: 7, asksOwed: asks, reportsOwed },
+  const check = input({ state: { ...emptySeatTickState(), seatEpoch: 7, reportsOwed },
     pipelines: Array.from({ length: 5 }, (_, index) => ({ ...OPEN[0]!, id: attempt(String(index).padStart(8, "0")), title: "Open lane title ".padEnd(119, "t") })),
-    reports: reports({ suggestionConversations: [] }),
+    reports: reports(),
   });
   const wake = wakeOf(seatTickDecision(check));
   const text = seatTickWakeMessage({ project: PROJECT, snapshotAt: iso(T0), reasons: wake.reasons, items: wake.items,
@@ -172,7 +137,7 @@ test("a full question-report ledger stays within the wake bound and names every 
     monitorPrompt: "Standing note ".padEnd(7_622, "n"), operatorInstructions: "Instructions ".padEnd(500, "i"),
   });
   expect(text.length).toBeLessThanOrEqual(4_000);
-  for (const ask of asks) expect(text).toContain(ask.key);
+  expect(text).toContain(`key ${reportsOwed[0]!.key} and coversOwed: true`);
   expect(text).toContain("Do not schedule yourself.");
   const autonomous = seatTickWakeMessage({ project: PROJECT, snapshotAt: iso(T0), reasons: wake.reasons, items: wake.items,
     deferred: wake.deferred, signals: [], reportLines: wake.reportLines,
@@ -182,7 +147,7 @@ test("a full question-report ledger stays within the wake bound and names every 
   });
   expect(autonomous.length).toBeLessThanOrEqual(4_000);
   expect(autonomous).toContain("decide all questions");
-  for (const ask of asks) expect(autonomous).toContain(ask.key);
+  expect(autonomous).toContain(`key ${reportsOwed[0]!.key} and coversOwed: true`);
   expect(autonomous).toContain("Do not schedule yourself.");
 });
 
@@ -220,7 +185,7 @@ test("a report under the deploy's key clears the deploy only; the next wake stil
 
 test("an unrelated report, or a refused one that stored nothing, clears nothing", () => {
   const first = landed(input({ settledDeploys: [deployed(SHA_A)] })).state;
-  const next = seatTickDecision(input({ now: T0 + 5 * MINUTE, state: first, reports: reports({ reportedIds: [idFor("ask:rsg_other")], lastReportAt: iso(T0 + MINUTE) }) }));
+  const next = seatTickDecision(input({ now: T0 + 5 * MINUTE, state: first, reports: reports({ reportedIds: [idFor("digest:unrelated")], lastReportAt: iso(T0 + MINUTE) }) }));
   expect(next.state.reportsOwed!.map((entry) => entry.key)).toEqual(["deploy:aaaaaaaa:succeeded"]);
 });
 
@@ -292,80 +257,7 @@ test("the owed list is bounded: past 64 the oldest go and the wake says how many
   expect(wake.reportLines![0]).toContain("and 57 more (3 older owed outcome(s) no longer listed)");
 });
 
-/* ── Asks ─────────────────────────────────────────────────────────────── */
-
-const setAt = (setId: string, at: number, conversationId = SEAT_A) => ({ conversationId, setId, at: iso(at) });
-
-test("an ask is owed ten minutes after it was offered with no answer, under its own set's key, until a report under that key lands", () => {
-  const offered = setAt("rsg_first", T0);
-  const early = seatTickDecision(input({ now: T0 + 5 * MINUTE, reports: reports({ suggestionSets: [offered] }) }));
-  expect(early.state.asksOwed).toEqual([]);
-  const owed = seatTickDecision(input({ now: T0 + 11 * MINUTE, state: early.state, reports: reports({ suggestionSets: [offered] }) }));
-  expect(owed.state.asksOwed).toEqual([{ key: "ask:rsg_first", setId: "rsg_first", conversationId: SEAT_A, at: iso(T0) }]);
-
-  const woken = landed(input({ now: T0 + 70 * MINUTE, state: owed.state, settledDeploys: [deployed(SHA_A, T0 + 70 * MINUTE)], reports: reports({ suggestionSets: [offered] }) }));
-  expect(woken.wake.reportLines).toContain("Question report owed: the question offered at 12:00 UTC has no matching bridge report. File bridge_report with class: question, key ask:rsg_first and the question in the decision section.");
-
-  const reported = seatTickDecision(input({ now: T0 + 75 * MINUTE, state: woken.state, reports: reports({ suggestionSets: [offered], reportedIds: [idFor("ask:rsg_first")] }) }));
-  expect(reported.state.asksOwed).toEqual([]);
-});
-
-test("suggest, report, suggest on one subject: the first report clears only the first ask, and the second stays owed until its own report", () => {
-  const first = setAt("rsg_one", T0);
-  let state = seatTickDecision(input({ now: T0 + 11 * MINUTE, reports: reports({ suggestionSets: [first] }) })).state;
-  state = seatTickDecision(input({ now: T0 + 15 * MINUTE, state, reports: reports({ suggestionSets: [first], reportedIds: [idFor("ask:rsg_one")] }) })).state;
-  expect(state.asksOwed).toEqual([]);
-  const second = setAt("rsg_two", T0 + 16 * MINUTE);
-  state = seatTickDecision(input({ now: T0 + 30 * MINUTE, state, reports: reports({ suggestionSets: [second], reportedIds: [idFor("ask:rsg_one")] }) })).state;
-  expect(state.asksOwed!.map((ask) => ask.key)).toEqual(["ask:rsg_two"]);
-  state = seatTickDecision(input({ now: T0 + 35 * MINUTE, state, reports: reports({ suggestionSets: [second], reportedIds: [idFor("ask:rsg_one")] }) })).state;
-  expect(state.asksOwed!.map((ask) => ask.key)).toEqual(["ask:rsg_two"]);
-});
-
-test("an answered ask is cleared: its set retired by the operator's message", () => {
-  const offered = setAt("rsg_answered", T0);
-  const owed = seatTickDecision(input({ now: T0 + 11 * MINUTE, reports: reports({ suggestionSets: [offered] }) })).state;
-  expect(owed.asksOwed).toHaveLength(1);
-  const answered = seatTickDecision(input({ now: T0 + 20 * MINUTE, state: owed, reports: reports({ suggestionSets: [] }) })).state;
-  expect(answered.asksOwed).toEqual([]);
-});
-
-test("answered, then re-offered: set A appended at 13:15, the operator answers at 13:40, set B at 13:42, and the 13:45 check clears ask:A", () => {
-  const at = (clock: string) => Date.parse(`2026-09-25T${clock}:00.000Z`);
-  const a = setAt("rsg_a", at("13:00"));
-  const b = setAt("rsg_b", at("13:42"));
-  let state = seatTickDecision(input({ now: at("13:15"), reports: reports({ suggestionSets: [a] }) })).state;
-  expect(state.asksOwed!.map((ask) => ask.key)).toEqual(["ask:rsg_a"]);
-  state = seatTickDecision(input({
-    now: at("13:45"), state,
-    reports: reports({ suggestionSets: [b], operatorAdmissions: [{ conversationId: SEAT_A, at: iso(at("13:40")) }] }),
-  })).state;
-  expect(state.asksOwed).toEqual([]);
-});
-
-test("re-offered without an answer: ask:A stays owed, and B is owed once it is ten minutes old", () => {
-  const a = setAt("rsg_a", T0);
-  const b = setAt("rsg_b", T0 + 20 * MINUTE);
-  let state = seatTickDecision(input({ now: T0 + 15 * MINUTE, reports: reports({ suggestionSets: [a] }) })).state;
-  state = seatTickDecision(input({ now: T0 + 25 * MINUTE, state, reports: reports({ suggestionSets: [b] }) })).state;
-  expect(state.asksOwed!.map((ask) => ask.key)).toEqual(["ask:rsg_a"]);
-  state = seatTickDecision(input({ now: T0 + 30 * MINUTE, state, reports: reports({ suggestionSets: [b] }) })).state;
-  expect(state.asksOwed!.map((ask) => ask.key)).toEqual(["ask:rsg_a", "ask:rsg_b"]);
-});
-
-test("an ask left by seat A stays owed after the seat rotates to B, read from A's conversation, and clears when its report lands", () => {
-  const a = setAt("rsg_left", T0);
-  const owed = seatTickDecision(input({ now: T0 + 11 * MINUTE, reports: reports({ suggestionSets: [a] }) })).state;
-  const successor = seatTickStateForEpoch(owed, 8);
-  expect(successor.asksOwed!.map((ask) => ask.key)).toEqual(["ask:rsg_left"]);
-  const seatB = { conversationId: SEAT_B, seatEpoch: 8, path: null, designatedAt: null, turn: "idle" as const, activity: null };
-  const kept = seatTickDecision(input({ now: T0 + 20 * MINUTE, seat: seatB, state: successor, reports: reports({ suggestionSets: [a], suggestionConversations: [SEAT_B, SEAT_A] }) })).state;
-  expect(kept.asksOwed!.map((ask) => ask.key)).toEqual(["ask:rsg_left"]);
-  const cleared = seatTickDecision(input({ now: T0 + 25 * MINUTE, seat: seatB, state: kept, reports: reports({ suggestionSets: [a], suggestionConversations: [SEAT_B, SEAT_A], reportedIds: [idFor("ask:rsg_left")] }) })).state;
-  expect(cleared.asksOwed).toEqual([]);
-});
-
-test("owed outcomes survive a rotation and a tick switched off, and asks are still recorded while it is off", () => {
+test("owed outcomes survive a rotation and a tick switched off", () => {
   const first = landed(input({ settledDeploys: [deployed(SHA_A)] })).state;
   const rotated = seatTickStateForEpoch(first, 8);
   expect(rotated.reportsOwed!.map((entry) => entry.key)).toEqual(["deploy:aaaaaaaa:succeeded"]);
@@ -374,11 +266,10 @@ test("owed outcomes survive a rotation and a tick switched off, and asks are sti
     seat: { conversationId: SEAT_A, seatEpoch: 8, path: null, designatedAt: null, turn: "idle", activity: null },
     state: rotated,
     settings: settings({ enabled: false, reason: "quiet night" }, T0 + 15 * MINUTE),
-    reports: reports({ suggestionSets: [setAt("rsg_off", T0)] }),
+    reports: reports(),
   }));
   expect(off.verdict.kind).toBe("quiet");
   expect(off.state.reportsOwed!.map((entry) => entry.key)).toEqual(["deploy:aaaaaaaa:succeeded"]);
-  expect(off.state.asksOwed!.map((ask) => ask.key)).toEqual(["ask:rsg_off"]);
 });
 
 /* ── The digest ─────────────────────────────────────────────────────────── */
@@ -414,8 +305,7 @@ test("no digest on an unchanged board after a digest; a digest when the board mo
  *
  * Shaped after the full Kyiv day of 2026-09-25 (§6.7): 21 outcome wakes
  * carrying 16 deploy and 35 lane outcomes, 77 review-verdict events, 6
- * interval wakes, the day's 4 reply-suggestion sets and 4 operator messages at
- * their real times, the day's 11 real report times, and a 30-minute interval.
+ * interval wakes, the day's 11 real report times, and a 30-minute interval.
  * Before the change, the seat followed 5 of its 15 outcome wakes and none of
  * its 5 interval wakes with a report. The replay counts what the tick asks
  * for; whether seats comply shows in the log afterwards.
@@ -431,18 +321,11 @@ const OUTCOME_WAKES = [
 const INTERVAL_WAKES = [utc("03:15"), utc("06:15"), utc("14:30"), utc("16:40"), utc("19:00"), utc("20:35")];
 /* The wakes whose delivery answered `queued` and were credited one check later. */
 const QUEUED = new Set([utc("07:00"), utc("12:00"), utc("17:35")]);
-const ASK_SETS = [
-  { setId: "rsg_000000000000000000001546", at: utc("15:46") },
-  { setId: "rsg_000000000000000000001656", at: utc("16:56") },
-  { setId: "rsg_000000000000000000001811", at: utc("18:11") },
-  { setId: "rsg_000000000000000000001927", at: utc("19:27") },
-];
-const OPERATOR_MESSAGES = [utc("13:10"), utc("15:48"), utc("18:35"), utc("19:31")];
 /* The 11 reports the seats filed that day, Kyiv 00:23 to 23:52. */
 const REAL_REPORTS = ["21:23", "07:12", "08:07", "09:37", "11:20", "15:46", "16:21", "19:33", "19:47", "20:20", "20:52"]
   .map((clock, index) => (index === 0 ? utc(clock, "2026-09-24") : utc(clock)));
 
-interface DayOutcome { owedLines: string[]; askLines: string[]; digestLines: string[]; wakes: number; filed: number; everOwed: string[]; finalOwed: string[]; maxOwed: number; verdictKeys: number }
+interface DayOutcome { owedLines: string[]; digestLines: string[]; wakes: number; filed: number; everOwed: string[]; finalOwed: string[]; maxOwed: number; verdictKeys: number }
 
 function replayDay(seatReports: boolean): DayOutcome {
   const lanes = Array.from({ length: 35 }, (_, index) => `pipeline_${String(index).padStart(2, "0")}`);
@@ -455,20 +338,11 @@ function replayDay(seatReports: boolean): DayOutcome {
   let verdicts = 77;
 
   const log: { id: string; at: number; coversOwed: boolean }[] = seatReports ? [] : REAL_REPORTS.map((at, index) => ({ id: `real-${index}`, at, coversOwed: false }));
-  let current: { setId: string; at: number } | null = null;
-  const admissions: number[] = [];
   let state: SeatTickProjectState = { ...emptySeatTickState(), seatEpoch: 7, lastProposalAt: iso(DAY_START) };
   let pending: { plan: NonNullable<ReturnType<typeof seatTickWakeCommitPlan>>; sentAt: number } | null = null;
-  const result: DayOutcome = { owedLines: [], askLines: [], digestLines: [], wakes: 0, filed: 0, everOwed: [], finalOwed: [], maxOwed: 0, verdictKeys: 0 };
+  const result: DayOutcome = { owedLines: [], digestLines: [], wakes: 0, filed: 0, everOwed: [], finalOwed: [], maxOwed: 0, verdictKeys: 0 };
 
   for (let now = DAY_START; now < DAY_START + 24 * 60 * MINUTE; now += 5 * MINUTE) {
-    for (const set of ASK_SETS) if (set.at <= now && set.at > now - 5 * MINUTE) current = { setId: set.setId, at: set.at };
-    for (const message of OPERATOR_MESSAGES) {
-      if (message <= now && message > now - 5 * MINUTE) {
-        admissions.push(message);
-        if (current && current.at <= message) current = null;
-      }
-    }
     if (pending) {
       state = seatTickWakeCommit(state, pending.plan, now, iso(pending.sentAt));
       pending = null;
@@ -501,8 +375,6 @@ function replayDay(seatReports: boolean): DayOutcome {
         lastReportAt: reportState.length ? iso(Math.max(...reportState.map((entry) => entry.at))) : null,
         reportedIds: reportState.map((entry) => entry.id),
         latestCoversOwedAt: reportState.some((entry) => entry.coversOwed) ? iso(Math.max(...reportState.filter((entry) => entry.coversOwed).map((entry) => entry.at))) : null,
-        suggestionSets: current ? [{ conversationId: SEAT_A, setId: current.setId, at: iso(current.at) }] : [],
-        operatorAdmissions: admissions.map((at) => ({ conversationId: SEAT_A, at: iso(at) })),
       }),
     });
     const decision = seatTickDecision(check);
@@ -516,7 +388,6 @@ function replayDay(seatReports: boolean): DayOutcome {
     result.verdictKeys += (plan.reportsOwed ?? []).filter((owed) => owed.key.startsWith("verdict:")).length;
     for (const line of wake.reportLines ?? []) {
       if (line.startsWith("Report owed")) result.owedLines.push(line);
-      if (line.startsWith("Question report owed") || line.startsWith("Question reports owed")) result.askLines.push(`${iso(now).slice(11, 16)} ${line}`);
       if (line.startsWith("Digest due")) result.digestLines.push(line);
       const key = /key (\S+?)(?: and|\)|$)/.exec(line)?.[1];
       if (seatReports && key) {
@@ -546,17 +417,13 @@ test("the replayed day: one report asked per outcome wake, each settled by one c
   expect(day.digestLines.length).toBeLessThanOrEqual(6);
   /* Before and after, on the same day: the seats filed 11 reports and
      followed 5 of the 15 outcome wakes of the day seat with one; a seat that
-     files what the tick asks for files 27 — 21 outcome reports, 5 interval digests and
-     1 question. */
-  expect({ owed: day.owedLines.length, digests: day.digestLines.length, asks: day.askLines.length, filed: day.filed }).toEqual({ owed: 21, digests: 5, asks: 1, filed: 27 });
+     files what the tick asks for files 26 — 21 outcome reports and 5 interval
+     digests. */
+  expect({ owed: day.owedLines.length, digests: day.digestLines.length, filed: day.filed }).toEqual({ owed: 21, digests: 5, filed: 26 });
   expect(REAL_REPORTS).toHaveLength(11);
-  /* The one ask the day left unanswered for more than ten minutes is asked
-     once, and reported. */
-  expect(day.askLines).toHaveLength(1);
-  expect(day.askLines[0]).toStartWith("17:10 Question report owed: the question offered at 16:56 UTC");
 });
 
-test("the replayed day with no report filed: every owed key is asked for in each later wake, the list never passes 64, and unanswered question reports keep their keys", () => {
+test("the replayed day with no report filed: every owed key is asked for in each later wake, and the list never passes 64", () => {
   const day = replayDay(false);
   /* Every wake from the first outcome on carries the owed line: the 21
      outcome wakes plus debt reminders; delivered agendas stay deduped. */
@@ -574,34 +441,5 @@ test("the replayed day with no report filed: every owed key is asked for in each
   expect(before).toBe(16 + 35);
   expect(day.finalOwed).toHaveLength(16 + 35);
   expect(day.maxOwed).toBeLessThanOrEqual(SEAT_TICK_REPORTS_OWED_LIMIT);
-  /* Reminders continue every thirty minutes, including the second set once
-     it ages. The operator's 18:35 answer clears both on the next check. */
-  expect(day.askLines).toEqual([
-    ["17:30", "16:56", "rsg_000000000000000000001656"],
-    ["18:00", "16:56", "rsg_000000000000000000001656"],
-  ].map(([wake, offered, set]) => `${wake} Question report owed: the question offered at ${offered} UTC has no matching bridge report. File bridge_report with class: question, key ask:${set} and the question in the decision section.`).concat([
-    "18:30 Question reports owed: file bridge_report with class: question, the question in the decision section, and each matching key: ask:rsg_000000000000000000001656, ask:rsg_000000000000000000001811.",
-  ]));
   expect(day.digestLines.length).toBeLessThanOrEqual(6);
-});
-
-test("a question the operator resolved in the report log counts as their answer: the ask owed from before it is cleared", () => {
-  const at = (clock: string) => Date.parse(`2026-09-25T${clock}:00.000Z`);
-  const a = setAt("rsg_a", at("13:00"));
-  let state = seatTickDecision(input({ now: at("13:15"), reports: reports({ suggestionSets: [a] }) })).state;
-  expect(state.asksOwed!.map((ask) => ask.key)).toEqual(["ask:rsg_a"]);
-
-  const question: BridgeReportV1 = { seq: 41, id: "rpt_41", key: "q-41", at: iso(at("13:05")), class: "question", project: PROJECT, targetSeatConversationId: SEAT_A, body: "Keep 25 MB?" };
-  const status: BridgeReportV1 = { ...question, seq: 42, id: "rpt_42", key: "s-42", class: "status" };
-  const operator = { kind: "operator" as const, surface: "desktop" as const };
-  const answers = resolvedQuestionAnswers([question, status], [
-    { seq: 41, at: iso(at("13:40")), by: operator },
-    /* Not a question, and not the operator's: neither answers anything. */
-    { seq: 42, at: iso(at("13:41")), by: operator },
-    { seq: 41, at: iso(at("13:42")), by: { kind: "manager", conversationId: SEAT_A, role: null } },
-  ]);
-  expect(answers).toEqual([{ conversationId: SEAT_A, at: iso(at("13:40")) }]);
-
-  state = seatTickDecision(input({ now: at("13:45"), state, reports: reports({ suggestionSets: [a], operatorAdmissions: answers }) })).state;
-  expect(state.asksOwed).toEqual([]);
 });

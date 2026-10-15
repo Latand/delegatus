@@ -116,7 +116,7 @@ import { seatIdentityResolver } from "@/lib/bridge/seatIdentity";
 import { BRIDGE_REPORT_COMPLETE_MAX_BYTES, isBridgeReportClass, isBridgeReportOutcomeKind, type BridgeReportCompleteV1, type BridgeReportOutcome, type BridgeReportTelegram, type CanonicalSeatConversationId } from "@/lib/bridge/types";
 import { bridgeReportComplete, findBridgeReport, recordBridgeReportTelegram, scopedReportId } from "@/lib/bridge/store";
 import { EMPTY_DENY_LIST, type PublicDenyList } from "@/lib/bridge/publicSafe";
-import { issueReportApproval, issueReportApprovalDrafts, issueReportApprovalReplies, operatorMessagesOf, type OperatorMessage } from "@/lib/issueReports/approval";
+import { issueReportApprovalForm, issueReportApprovalReplies, issueReportDecisionApproves, issueReportFormLanguage } from "@/lib/issueReports/approvalForm";
 import { delegatusIssueRepository, issueReportFinder, issueReportPublisher, type IssueReportFinder, type IssueReportPublisher } from "@/lib/issueReports/publish";
 import { issueReportPreviewText } from "@/lib/issueReports/previewText";
 import { ISSUE_REPORT_MAX_BODY_CHARS, ISSUE_REPORT_MAX_TITLE_CHARS, scrubIssueReport } from "@/lib/issueReports/scrub";
@@ -222,8 +222,6 @@ import {
 } from "@/lib/session/messagesPage";
 import { resolveProjectAttribution } from "@/lib/session/projectResolution";
 import { overlaySessionTitles } from "@/lib/session/titleProjection";
-import { recordReplySuggestions } from "@/lib/suggestions/store";
-import { ReplySuggestionValidationError } from "@/lib/suggestions/types";
 import { linkedContext, withOwnership } from "@/lib/links/linked";
 import { applyAssignmentPatches, createTask, patchTask, type CreateTaskInput, type PatchTaskInput } from "@/lib/tasks/commands";
 import { taskSeatHoldingSnapshot } from "@/lib/tasks/seatHolding";
@@ -294,7 +292,7 @@ import {
   type VoiceUtteranceLookup,
   type VoiceWorkLookupIdentity,
 } from "./selectedContextTarget";
-import { mcpCallerIdentity, mcpToolPolicy, mcpToolNeedsCallerIdentity, permitAttentionDismissal, permitNeedsYouRead, permitAttentionHandoff, permitReplySuggestions, type ManagerTarget, type McpToolPolicy } from "./toolAllowlist";
+import { mcpCallerIdentity, mcpToolPolicy, mcpToolNeedsCallerIdentity, permitAttentionDismissal, permitNeedsYouRead, permitAttentionHandoff, type ManagerTarget, type McpToolPolicy } from "./toolAllowlist";
 
 const PIPELINE_CONTROLLER_ACTIONS = new Set<PipelineAction>(["set-delivery-remote", "start", "resume", "retry-stage", "skip-stage", "resolve-decision", "continue-review", "accept-head", "retry-merge"]);
 /* Writes whose clientRequestId is their durable receipt key, attributed to the caller. */
@@ -959,10 +957,6 @@ export interface ViewerMcpDomainDependencies {
   issueReportRepository?(): string | null;
   /** #2518: where previews are stored. Absent means the state directory. */
   issueReportsDir?(): string;
-  /** #2518: what the operator wrote in one conversation, oldest first. Absent
-      means production, which reads the conversation's own transcript and
-      counts a message only on Delegatus's evidence of who wrote it. */
-  operatorMessages?(conversationId: string): Promise<readonly OperatorMessage[]>;
   /** #2518: looks for an issue that already carries a report's exact text,
       for a publication whose outcome nobody recorded. Absent means production. */
   issueReportFinder?: IssueReportFinder;
@@ -1980,14 +1974,13 @@ async function issueReportTool(args: McpToolArgs, control: ViewerControlDependen
     );
   }
   const seat = caller.kind === "manager" && !caller.via ? caller.conversationId : null;
-  const approvalReplies = issueReportApprovalReplies(digest);
   if (action === "show") {
     if (!stored.hints) Object.assign(stored, await collectHints(stored));
     if (!seat) return view(stored);
     return {
       ...view({ ...(markIssueReportShown(digest, seat, { directory }) ?? stored), hints: stored.hints, hintWarnings: stored.hintWarnings }),
-      approvalReplies, approvalReplyDrafts: issueReportApprovalDrafts(digest),
-      next: "Put previewText in chat exactly as it is: it marks where the published text starts and ends, and carries privacyJudgment, the remaining hints and hintWarnings after it. The operator may approve text with hints. Then suggest_replies with the approvalReplyDrafts entry in the operator's language (its label and its text, unchanged) as the yes, beside a no and an edit. Publication is admitted when the operator's last message here, sent after this reading, contains the approving reply with its whole digest in either language, ignoring case and surrounding whitespace or punctuation. The reply may be part of a longer message; one message may approve several previews. An explicit refusal of the same report overrides its approving reply. A free-form yes without the digest does not approve it.",
+      approvalForm: issueReportApprovalForm(stored, previewLanguage),
+      next: "Put previewText in chat exactly as it is: it marks where the published text starts and ends, and carries privacyJudgment, the remaining hints and hintWarnings after it. The operator may approve text with hints. Then ask with publish_prototype_review, omitting taskId, passing approvalForm's title and questions unchanged. Publish after the operator answers: publication reads the newest such form you published after this reading and needs its first option, the one naming this whole digest, chosen by a person. A form taken on its recommendations, a set-aside question, «Other», a custom note or an agent's decision does not approve it.",
     };
   }
   if (action !== "publish") throw refuse("action is hints, preview, show or publish", "issue_report_invalid", { field: "action" });
@@ -2017,27 +2010,35 @@ async function issueReportTool(args: McpToolArgs, control: ViewerControlDependen
   if (!shownAt) {
     throw refuse("read this preview back with action show and show the operator that exact text before you publish it", "issue_report_not_shown", { status: 409 });
   }
-  /* Keep approval validation and the synchronous claim together, with no
-     asynchronous work between them. Hints never govern publication. */
-  const messages = await (dependencies.operatorMessages
-    ? dependencies.operatorMessages(seat)
-    : operatorMessagesOf(seat, dependencies.registrySnapshot()));
-  const approval = issueReportApproval(messages, digest, Date.parse(shownAt));
-  if (!approval.approved) {
-    const explanation = approval.reason === "no_operator_message" ? {
-      en: "The operator has not answered since you read this preview back, so nothing was published. Put the exact title and body in chat and offer the approving reply with suggest_replies.",
-      uk: "Оператор ще не відповів після показу цього звіту, тому нічого не опубліковано. Покажіть точні заголовок і текст у чаті та запропонуйте відповідь для схвалення через suggest_replies.",
-    } : {
-      en: `Nothing was published. To approve this preview, send “${approvalReplies.en}” or its Ukrainian equivalent after reading the preview. The approving reply may be part of a longer message, and one message may approve several previews. An explicit refusal of the same report overrides approval. A free-form yes without the digest does not approve it.`,
-      uk: `Нічого не опубліковано. Щоб схвалити цей звіт, після його перегляду надішліть «${approvalReplies.uk}» або англійський відповідник. Відповідь для схвалення може бути частиною довшого повідомлення, і одне повідомлення може схвалювати кілька звітів. Явна відмова щодо цього самого звіту скасовує схвалення. Довільне «так» без digest не схвалює звіт.`,
-    };
-    throw refuse(
-      explanation[previewLanguage],
-      "issue_report_approval_required", { status: 403, reason: approval.reason, approvalReplies },
-    );
+  /* The operator's answer is the newest approval form of this preview the seat
+     asked after reading it back. Hints never govern publication, and nothing
+     asynchronous runs between this check and the claim. */
+  const form = loadSeatRounds()
+    .filter((round) => round.taskId === null && round.source.conversationId === seat
+      && Date.parse(round.createdAt) >= Date.parse(shownAt) && issueReportFormLanguage(round, stored) !== null)
+    .at(-1);
+  const approved = form?.decision && issueReportDecisionApproves(form.decision) ? form.decision : null;
+  if (!form || !approved) {
+    const reason = !form ? "no_form" : !form.decision ? "not_answered" : "not_an_approval";
+    const label = issueReportApprovalReplies(digest)[previewLanguage];
+    const explanation = {
+      no_form: {
+        en: "Nothing was published: you have not asked the operator in a decision form since you read this preview back. Call publish_prototype_review without taskId, with approvalForm from show unchanged, and publish after they answer.",
+        uk: "Нічого не опубліковано: після показу цього звіту ви не питали оператора у формі рішення. Викличте publish_prototype_review без taskId, передавши approvalForm із show без змін, і публікуйте після відповіді.",
+      },
+      not_answered: {
+        en: `Nothing was published: the operator has not answered decision form ${form?.id} yet.`,
+        uk: `Нічого не опубліковано: оператор ще не відповів на форму рішення ${form?.id}.`,
+      },
+      not_an_approval: {
+        en: `Nothing was published: the answer to decision form ${form?.id} does not approve this report. Only the option «${label}», chosen by a person, approves it; a form taken on its recommendations, «Other», a custom note or an agent's decision does not.`,
+        uk: `Нічого не опубліковано: відповідь на форму рішення ${form?.id} не схвалює цей звіт. Схвалює лише варіант «${label}», обраний людиною; рекомендації за замовчуванням, «Інше», власна примітка чи рішення агента не схвалюють.`,
+      },
+    }[reason];
+    throw refuse(explanation[previewLanguage], "issue_report_approval_required", { status: 403, reason, ...(form ? { reviewId: form.id } : {}) });
   }
   const claim: IssueReportPublication = {
-    by: seat, approval: approval.message.text, approvedAt: new Date(approval.message.at).toISOString(), startedAt: new Date().toISOString(),
+    by: seat, approval: form.questions![0]!.options[0]!.label, reviewId: form.id, approvedAt: approved.at, startedAt: new Date().toISOString(),
   };
   /* The claim is the one moment a preview turns into a publication. Of any
      number of seats and processes publishing one digest, one creates it. */
@@ -4703,10 +4704,8 @@ function seatTickReportAsk(project: string, dependencies: ViewerMcpDomainDepende
     return {};
   }
   const owed = (state.reportsOwed ?? []).map((entry) => entry.key);
-  const asks = (state.asksOwed ?? []).map((entry) => entry.key);
   return {
     reportsOwed: owed,
-    ...(asks.length > 0 ? { askOwed: asks } : {}),
     reportReminder: "Nothing will ask you for reports while the tick is off or slowed. File a report now: what you are waiting on (a question or blocked report when it is the operator), and the owed outcomes above.",
   };
 }
@@ -7253,86 +7252,6 @@ async function dismissAttentionTool(args: McpToolArgs, dependencies: ViewerMcpDo
 }
 
 /**
- * Reply drafts for the operator (#1202) — the manager handing them the
- * sentences its own turn expects, instead of a question they have to type an
- * answer to from scratch.
- *
- * Everything durable about a set is decided here rather than by the caller:
- * WHO offered it (server attribution, the same chain the attention record and
- * the bridge log's origin trust), WHICH conversation it belongs under (the
- * caller's own — a named one has to BE the caller's own), and WHETHER it may
- * be offered at all. The set replaces the conversation's previous one; the
- * operator's next message is what clears it.
- */
-function suggestReplies(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): McpToolPayload {
-  /* The authority gate, BEFORE anything is written or even resolved: this puts
-     words in front of the operator inside the surface they answer in, so only
-     their own session and a validated designated seat may do it. A refused
-     caller writes nothing and learns nothing. */
-  const authority = dependencies.attentionAuthority();
-  const seats = dependencies.authorizedSeats?.() ?? authorizedManagerSeats(productionManagerAuthoritySources());
-  const canonical = dependencies.canonicalSeatConversationId ?? productionCanonicalSeatConversationId;
-  /* Identity AND target in one verdict: drafts are offered under the caller's
-     OWN message, so naming another conversation is refused here — for a seat
-     and for the root session alike, because a set written into somebody else's
-     pane answers a question its own surface never asked. */
-  const named = text(args.conversationId);
-  const admission = permitReplySuggestions(authority, seats, named || null, canonical);
-  if (!admission.allowed) {
-    throw new McpToolRefusal(admission.error, { code: "SUGGEST_REPLIES_NOT_PERMITTED", refusedAs: admission.refusedAs });
-  }
-
-  /* The gate above already resolved the validated seats, which is exactly the
-     evidence the manager label needs — so the origin folds them in rather than
-     resolving designation a second time. */
-  const origin = dependencies.callerAttribution?.()
-    ?? callerAttributionFrom(authority, (conversationId) => seats.some((seat) => seat.conversationId === conversationId));
-  const target = named || origin.conversationId || "";
-  if (!target) {
-    throw new Error("conversationId is required: this caller has no conversation of its own to offer drafts in");
-  }
-  /* Keyed by what the registry calls this conversation NOW: the pane reads its
-     drafts under the canonical id, so a set filed under a pre-migration alias
-     would be written where nothing looks for it. */
-  const conversationId = canonical(target);
-
-  try {
-    const recorded = recordReplySuggestions({
-      conversationId,
-      replies: args.replies,
-      origin: { kind: origin.kind, conversationId: origin.conversationId, role: origin.role },
-      /* Derived from the call, so an interrupted run re-offering the same set
-         converges on the same record instead of minting a twin. */
-      operationKey: mcpOperationId("suggest_replies", requestId(args)),
-    });
-    /* An ask made only in the chat is lost to an operator who is away
-       (docs/design/orchestrator-reports.md §5.4): the seat tick owes a
-       question report for it, and the answer says so at the moment of asking. */
-    const seatProject = origin.kind === "manager"
-      ? seats.find((seat) => seat.conversationId === origin.conversationId)?.project ?? null
-      : null;
-    return {
-      recorded: true,
-      conversationId,
-      setId: recorded.set.setId,
-      at: recorded.set.at,
-      replies: recorded.set.replies.length,
-      replaced: recorded.replaced,
-      ...(seatProject && bridgeReportsEnabled(seatProject)
-        ? { reminder: `If the operator is away, they learn this ask only from a question report: file one with key ask:${recorded.set.setId} and the ask in the decision section.` }
-        : {}),
-    };
-  } catch (error) {
-    /* A refused set names the rule it broke and leaves the previous one
-       standing — the caller can fix the draft and offer again. */
-    if (error instanceof ReplySuggestionValidationError) {
-      throw new McpToolRefusal(error.message, { code: error.code });
-    }
-    throw error;
-  }
-}
-
-/**
  * #691 §6 — the live per-identity fence.
  *
  * Built from the same evidence `request_attention` already trusts: this process's
@@ -7979,7 +7898,6 @@ export function viewerMcpBindings(
     agent_activity: (args, context) => budgeted("agent_activity", args, 24_000, () => reads.agent_activity(args, context)),
     lifecycle_events: (args, context) => lifecycleEvents(args, viewerControlForCall(controlDependencies, context), domainDependencies),
     request_attention: (args, context) => requestAttention(args, domainDependencies, context),
-    suggest_replies: (args) => Promise.resolve(suggestReplies(args, domainDependencies)),
     publish_prototype_review: Object.assign((args: McpToolArgs,context?: McpToolCallContext) => {
       const capability = callerCapability();
       if (!capability) throw new Error("prototype publication requires an identified caller");
