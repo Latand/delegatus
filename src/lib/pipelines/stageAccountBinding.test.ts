@@ -10,8 +10,8 @@ import { afterAll, beforeEach, expect, spyOn, test } from "bun:test";
 const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-stage-account-binding-"));
 process.env.LLV_STATE_DIR = path.join(sandbox, "state");
 process.env.LLV_STRUCTURED_HOSTS = "0";
-/* The account catalog the real resolution reads is derived from HOME, and the
-   one test below that does NOT stub the resolution must read this sandbox. */
+/* The account catalog the real resolution reads is derived from HOME, so
+   every selector in this file must read this sandbox. */
 process.env.HOME = path.join(sandbox, "home");
 fs.mkdirSync(process.env.LLV_STATE_DIR, { recursive: true });
 fs.mkdirSync(process.env.HOME, { recursive: true });
@@ -90,6 +90,7 @@ function draft(account?: string | null) {
 
 beforeEach(() => {
   savePipelines([]);
+  clearAccountFixture(BINDINGS_SOURCE);
 });
 
 test("a stage may name an account the project allows", async () => {
@@ -168,7 +169,10 @@ async function tierOverrideFixture() {
   const ports = portsAllowing([accountA.id, accountB.id]);
   ports.engineReadiness = () => "connected";
   ports.conversationGeneration = () => null;
-  ports.resolveProjectSpawn = () => ({ kind: "available", account: accountManager.resolveSpawn("codex", accountB.id) });
+  seedAccountSource(BINDINGS_SOURCE, {
+    schemaVersion: 1,
+    bindings: [accountA, accountB].map(account => ({ engine: "codex", accountId: account.id, project: ATLAS, createdAt: ports.now() })),
+  });
   const created = await createPipelineFromRequest({
     ...draft(accountA.id),
     stages: [{ ...draft(accountA.id).stages[0]!, engine: "codex", model: "gpt-6.1-sol", effort: "high", serviceTier: "priority" }],
@@ -234,6 +238,50 @@ test.each([["next attempt", undefined], ["apply now", true]] as const)("override
   expect(stored.stages[0]).toMatchObject({ serviceTier: "ultrafast", effectiveRole: { serviceTier: "ultrafast" } });
   if (applyNow) expect(accepted.runtimeSwitch).toMatchObject({ phase: "requested", to: { accountId: accountB.id, accountPinned: false, serviceTier: "ultrafast" } });
   else expect(accepted.runtimeSwitch).toBeUndefined();
+});
+
+test("clearing a live pin selects an account offering the requested tier through the real selector", async () => {
+  const { id, ports, accountA, accountB } = await tierOverrideFixture();
+  const preferred = ports.resolveProjectSpawn!("codex", { project: ATLAS, model: "gpt-6.1-sol", preferredId: accountA.id });
+  expect(preferred.kind === "available" && preferred.account.accountId).toBe(accountA.id);
+
+  const result = await patchPipeline(id, {
+    action: "override-stage", stageId: "build", account: null, serviceTier: "ultrafast", applyNow: true,
+  }, ports);
+  expect(result.error).toBeUndefined();
+  expect(result.runtimeSwitch?.to).toMatchObject({ accountId: accountB.id, accountPinned: false, serviceTier: "ultrafast" });
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.runtimeSwitches?.[0]?.to).toEqual(result.runtimeSwitch!.to);
+});
+
+test.each(["unsupported", "unknown", "absent"] as const)("live tier validation refuses an unsafe selector result (%s)", async selection => {
+  const { id, ports, accountA } = await tierOverrideFixture();
+  const before = structuredClone(loadPipelines()[0]);
+  const account = accountManager.resolveSpawn("codex", accountA.id);
+  ports.resolveProjectSpawn = selection === "absent" ? undefined
+    : () => ({ kind: "available", account: { ...account, accountId: selection === "unknown" ? "unknown-account" : accountA.id } });
+  // The unknown result is allowed by the pool port but has no catalog evidence.
+  if (selection === "unknown") ports.allowedAccountIds = () => null;
+  const result = await patchPipeline(id, {
+    action: "override-stage", stageId: "build", account: null, serviceTier: "ultrafast", applyNow: true,
+  }, ports);
+  expect(result.status).toBe(409);
+  expect(result.runtimeSwitch).toBeUndefined();
+  expect(loadPipelines()[0]).toEqual(before);
+});
+
+test.each([["next attempt", undefined], ["apply now", true]] as const)("account-only overrides validate the retained explicit tier (%s)", async (_mode, applyNow) => {
+  const { id, ports, accountA, accountB } = await tierOverrideFixture();
+  const configured = await patchPipeline(id, {
+    action: "override-stage", stageId: "build", account: accountB.id, serviceTier: "ultrafast",
+  }, ports);
+  expect(configured.error).toBeUndefined();
+  const before = structuredClone(loadPipelines()[0]);
+  const result = await patchPipeline(id, {
+    action: "override-stage", stageId: "build", account: accountA.id, applyNow,
+  }, ports);
+  expect(result.status).toBe(400);
+  expect(result.error).toContain("offered: priority");
+  expect(loadPipelines()[0]).toEqual(before);
 });
 
 test("add-stage refuses a stage whose account the project forbids", async () => {
@@ -371,9 +419,8 @@ test("every allowed account out of capacity is reported as capacity, not solved 
 });
 
 test("a damaged binding record parks the stage instead of launching it on any account", async () => {
-  /* The one test here that runs the REAL project resolution: the record on
-     disk is what decides, and a record that cannot be read must refuse the
-     launch rather than answer "this project is unbound" and hand the stage
+  /* The real project resolution reads the record on disk. An unreadable record
+     must refuse the launch rather than answer "this project is unbound" and hand the stage
      whichever account the engine happens to be pointing at. */
   seedAccountSource(BINDINGS_SOURCE, { schemaVersion: 1, bindings: [{ engine: "claude" }] });
   const reservations: unknown[] = [];
