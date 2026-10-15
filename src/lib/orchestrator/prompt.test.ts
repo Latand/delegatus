@@ -10,6 +10,7 @@ import { BRIDGE_REPORT_CLASSES } from "@/lib/bridge/types";
 import { PROCESS_CLEANUP_MARKER, ROLE_DEFAULTS, WORKING_RULES, WORKING_RULES_SHORT } from "@/lib/roles/defaults";
 import { launchOverheadBytes } from "./handoffDigest";
 import { loadRoleDefinitionsOrDefaults, loadRoleRegistrySnapshot, saveRoleMapping } from "@/lib/roles/store";
+import { resolveSpawnRole, roleSpawnPrompt } from "@/lib/roles/registry";
 import type { RegistryRoleDefinitions, RoleDefinition } from "@/lib/roles/types";
 import { MAX_STRUCTURED_TEXT_BYTES } from "@/lib/runtime/structuredContent";
 import { renderTaskColorRule, TASK_COLOR_RULE } from "@/lib/tasks/colorRule";
@@ -225,7 +226,7 @@ const PROMPT_FINGERPRINTS: Readonly<Record<number, string>> = {
   // v54 keeps waiting and repeated unanswered asks in forms.
   54: "d0a97d9a92192e47a48cc4d4e59b60476717ae1ecc78fd252ffd8de2e1bf304e",
   // v55 is variant 4 of docs/design/role-prompts-rewrite.md.
-  55: "375ae5b81997556916aff51b0db0408b9ba3e372aa0e12c585de8340f987f6c6",
+  55: "61412fba0b5617e722a1761a69e3550976315a4615bdda0b5ff841bcdaaac4b4",
 };
 
 /* #2187 §4.7, decided D1 = A: the setting governs every automatic merge. Off,
@@ -1094,4 +1095,32 @@ test("the seat's mandate carries all sixteen working rules in their short form",
   expect(numbers(WORKING_RULES_SHORT)).toHaveLength(16);
   for (const phrase of [PROCESS_CLEANUP_MARKER, "no fuser -k, no lsof piped into kill, no pkill, no killall", "hard limits", "learned rules yield"]) expect(WORKING_RULES_SHORT).toContain(phrase);
   expect(ORCHESTRATOR_SYSTEM_PROMPT.indexOf(WORKING_RULES_SHORT)).toBeLessThan(ORCHESTRATOR_SYSTEM_PROMPT.indexOf("## Before you decide\nWorking rules 3 and 4 apply with a seat's reach."));
+});
+
+/* The short form first shipped without what the memory delta added to rules 6
+   and 12 (role-memory-to-prompts.md §4.1), so no seat read those duties. Each
+   pair is one duty: its words in the full rule and in the short one, checked
+   on the first message a seat spawn actually sends. */
+test("a seat's launch prompt carries the evidence and publication duties of rules 6 and 12", () => {
+  const resolved = resolveSpawnRole({ role: "orchestrator" });
+  if (!resolved.ok || !resolved.value) throw new Error("orchestrator role did not resolve");
+  const launch = roleSpawnPrompt(resolved.value, orchestratorMandateForDelivery(ORCHESTRATOR_SYSTEM_PROMPT));
+  expect(launch.split(WORKING_RULES_SHORT)).toHaveLength(2);
+  expect(launch).not.toContain(WORKING_RULES);
+  const rule = (rules: string, number: number) => rules.split("\n").find((line) => line.startsWith(`${number}. `))!;
+  const duties: readonly (readonly [number, string, string])[] = [
+    [6, "made from the final state", "comes from the final state"],
+    [6, "says what it was made from (revision, time, command)", "names revision, time and command"],
+    [6, "regenerate it after the last change that could alter it", "is redone after any later change"],
+    [6, "Look at every frame, table and output yourself before you cite it", "look at every output you cite"],
+    [6, "before/after measurement on identical data and load, repeated, with the load recorded", "repeated before/after runs on identical data and load, the load recorded"],
+    [12, "run the project's own publication checks on those files and read the result", "Run the project's publication checks before it leaves the machine and read the result"],
+    [12, "a credential-shaped example is written as prose", "credential-shaped examples as prose"],
+    [12, "Attribution trailers stay in one final block and keep the identities you were launched with", "Attribution trailers stay in one final block with your launch identities"],
+  ];
+  for (const [number, full, short] of duties) {
+    expect(rule(WORKING_RULES, number)).toContain(full);
+    expect(rule(WORKING_RULES_SHORT, number)).toContain(short);
+    expect(launch).toContain(short);
+  }
 });

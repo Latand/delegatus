@@ -41,8 +41,15 @@ rule and changes only where or how long it is said.
   could no longer be respawned if the scaffold grew. So the orchestrator
   scaffold stays as small as it shipped (213 characters), and the seat reads
   all sixteen principles in a short form (`core.seat.txt`) inside its mandate,
-  before "Before you decide". Seat scaffold and delivered mandate together
-  are 30,031 bytes, the room v54 left (30,007). An orchestrator stage or child
+  before "Before you decide". The short form keeps what the memory delta added
+  to principles 6 and 12 (evidence from the final state with its revision,
+  regenerated after a change and looked at before it is cited; repeated
+  before/after measurements on identical load; publication checks before
+  text leaves the machine; one attribution block). It pays for them with
+  shorter wording elsewhere and two details of "Before you decide" that the
+  search tool's own description carries (what is indexed, and the line a
+  hit's byte offset pins). Seat scaffold and delivered mandate together
+  are 30,037 bytes as sent, the room v54 left (30,007). An orchestrator stage or child
   reads the full working rules after its scaffold (`orchestrator.stage.txt`).
 - **Who you are.** Kept word for word as v54 shipped it, so the two
   sentences variant 2 had folded into its rewritten version stay where they
