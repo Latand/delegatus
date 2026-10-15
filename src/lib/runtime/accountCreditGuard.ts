@@ -68,11 +68,16 @@ export async function enforceAccountCreditGuard(registry: AgentRegistry,
     const health = await item.host.health().catch(() => null);
     const turnRef = health?.activeTurnRef ?? entry.structuredHost?.activeTurnRef ?? null;
     if (!turnRef && (health ? health.status !== "active" && health.status !== "attention" : entry.status !== "live")) return;
-    if (!store.list().some(cut => cut.reason === "account-guard" && cut.state === "owed" && cut.conversationId === conversation.id)) store.record({ conversationId: conversation.id, engine: "codex", hostKey: sessionKeyId(item.key), path: generation.path,
+    const { obligation: currentCut } = store.record({ conversationId: conversation.id, engine: "codex", hostKey: sessionKeyId(item.key), path: generation.path,
       owner: health?.pid ? { pid: health.pid, startIdentity: health.processStartIdentity } : entry.structuredHost?.process ?? null,
       claimEpoch: entry.claimEpoch, turnRef, boundary: "paid-credit-guard", reason: "account-guard",
       checkpoint: { lastEventKind: null, lastEventAt: Date.now() }, seat: seat ? { project: seat.project, seatEpoch: seat.seatEpoch } : null,
       ...(owner?.stage?.kind === "run" ? { answeredBy: STAGE_CUT_RESOLUTION } : reviewer ? { answeredBy: REVIEWER_CUT_RESOLUTION } : {}) });
+    for (const older of store.list()) {
+      if (older.id !== currentCut.id && older.reason === "account-guard" && older.state === "owed" && older.conversationId === conversation.id) {
+        store.update(older.id, { state: "discharged", resolvedAt: new Date().toISOString(), resolution: "a newer active turn owns recovery" });
+      }
+    }
     if (!await stop(item.key, item.host)) throw new Error("paid-credit guard could not confirm host termination");
   }));
   const failures = stops.filter((result): result is PromiseRejectedResult => result.status === "rejected");

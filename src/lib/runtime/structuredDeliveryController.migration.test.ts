@@ -158,6 +158,31 @@ test("a persisted guard migration rechecks capacity before creating its successo
   } finally { selection.mockRestore(); reopened.close(); await f.cleanup(); }
 });
 
+test("a new active turn replaces an older owed cut before its host is stopped", async () => {
+  const f = fixture();
+  const store = interruptionObligationStore(interruptionObligationDirectory(f.registry.filename));
+  store.record({ conversationId: f.conversation.id, engine: "codex", hostKey: `codex:${f.key.sessionId}`,
+    path: f.conversation.generations[0]!.path, owner: { pid: 1, startIdentity: "fake:1" }, claimEpoch: 1,
+    turnRef: "older-turn", boundary: "paid-credit-guard", reason: "account-guard", checkpoint: { lastEventKind: null, lastEventAt: Date.now() }, seat: null });
+  f.registry.recordQuotaObservation({ engine: "codex", accountId: "account-a", authenticated: true, authCheckedAt: new Date().toISOString(),
+    observedAt: new Date().toISOString(), bootId: "fixture", provenance: { source: "live", reason: null, staleSince: null },
+    limits: { session: null, weekly: { usedPercent: 99, resetsAt: null }, plan: "pro", capturedAt: Date.now() / 1000,
+      credits: { hasCredits: true, balance: "10", unlimited: false } } });
+  let active = true;
+  const health = f.host.health.bind(f.host);
+  f.host.health = async () => ({ ...await health(), status: active ? "active" : "dead", activeTurnRef: active ? "current-turn" : null });
+  f.host.release = async () => { active = false; };
+  const selection = spyOn(accountManager, "resolveProjectSpawn").mockReturnValue({ kind: "exhausted", resetsAt: null, allowedAccountIds: ["account-a"] });
+  try {
+    await bindStructuredDeliveryQueue([{ key: f.key, host: f.host }], { registry: f.registry, client: f.client,
+      hostlessSettleIntervalMs: 0, watchdogIntervalMs: 0, settlementSweepMs: 0 });
+    await kickStructuredDeliveryQueue();
+    expect(active).toBe(false);
+    expect(store.list().find(cut => cut.turnRef === "older-turn")?.state).toBe("discharged");
+    expect(store.list().filter(cut => cut.state === "owed")).toMatchObject([{ turnRef: "current-turn" }]);
+  } finally { selection.mockRestore(); await f.cleanup(); }
+});
+
 test.each(["before dispatch", "during journal transition"])("paid-credit guard refuses a queued Codex turn %s", async phase => {
   const f = fixture();
   const observe = (usedPercent: number) => f.registry.recordQuotaObservation({ engine: "codex", accountId: "account-a",
