@@ -822,8 +822,15 @@ export async function handleRuntimeRetry(
     }
     const registry = (dependencies.registry ?? agentRegistry)();
     const recipientSnapshot = registry.conversationDeliverySnapshot({ conversationId: previous.receipt.conversationId });
+    const canonicalRecipientId = resolveConversationAlias(recipientSnapshot,
+      previous.receipt.conversationId as `conversation_${string}`);
+    const recipientEngine = recipientSnapshot.conversations[canonicalRecipientId]?.engine;
+    const recipientAliasRevision = recipientEngine
+      ? recipientSnapshot.conversationRevision[recipientEngine]
+      : undefined;
     const recipientRefusal = () => orchestratorRecipientRefusal(previous!.receipt.conversationId,
-      id => resolveConversationAlias(recipientSnapshot, id as `conversation_${string}`));
+      id => resolveConversationAlias(recipientSnapshot, id as `conversation_${string}`),
+      recipientAliasRevision);
     const recipientGuard = () => {
       const refusal = recipientRefusal();
       if (refusal) throw Object.assign(new DeliveryAdmissionRefusedError("orchestrator-recipient-revoked"),
@@ -916,6 +923,10 @@ export async function handleRuntimeRetry(
           return settled ? NextResponse.json({ operationId, receipt: runtimeReceiptForSend(settled), send: settled })
             : NextResponse.json({ error: "delivery outcome is already resolved" }, { status: 409 });
         }
+        const progressBeforeRearm = (() => {
+          try { return progress?.get(operationId) ?? null; }
+          catch { return null; }
+        })();
         const standing = admissionRecordStanding(progress, operationId, (record) => record.executorId === null);
         const reopened = newAuthorization
           ? recordRearm(progress, registry, reservation, { reason: "checking", detail: "re-arming the delivery in the runtime journal", nextWakeMs: STRUCTURED_DELIVERY_TIMING.retryMs })
@@ -939,7 +950,13 @@ export async function handleRuntimeRetry(
             }
           }
           const refusal = recipientRefusal();
-          if (refusal) return NextResponse.json(refusal, { status: refusal.status });
+          if (refusal) {
+            if (progressBeforeRearm?.terminal?.state === "uncertain"
+              && stillOwnsRecord(progress, operationId, reopened)) {
+              progress?.settle?.(operationId, "uncertain", progressBeforeRearm.terminal.reason);
+            }
+            return NextResponse.json(refusal, { status: refusal.status });
+          }
           result = current.receipt.status !== "pending" && current.receipt.status !== "queued"
             ? await client.retryOperation(operationId) : current;
         } catch (error) {

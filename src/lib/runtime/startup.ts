@@ -229,6 +229,8 @@ interface OrchestratorRestartRecoveryTarget {
   /** The process the registry recorded as owning the severed turn, and its
       turn: with the evidence below, the identity of the cut (#1835). */
   owner: ProcessIdentity | null;
+  claimOwner: string | null;
+  endpoint: string;
   turnRef: string | null;
   claimEpoch: number;
   severed: SeveredTurnEvidence;
@@ -343,12 +345,45 @@ async function orchestratorRestartRecoveryTargets(
       seatEpoch: seat.seatEpoch,
       hostKey,
       owner: entry.structuredHost.process ? { ...entry.structuredHost.process } : null,
+      claimOwner: entry.claimOwner,
+      endpoint: entry.structuredHost.endpoint,
       turnRef: entry.structuredHost.activeTurnRef ?? null,
       claimEpoch: entry.claimEpoch,
       severed: { kind: liveness.lastEvent.kind, at: liveness.lastEvent.at, reason: liveness.reason },
     });
   }
   return targets;
+}
+
+/** Recheck the captured ownership fences immediately before writing its durable
+    restart obligation. Transcript reads for later seats may have awaited while
+    this target was held in memory. */
+function orchestratorRestartRecoveryCaptureIsCurrent(
+  registry: AgentRegistry,
+  target: OrchestratorRestartRecoveryTarget,
+  seats: readonly OrchestratorSeat[],
+  snapshot: RegistryFile,
+): boolean {
+  const seat = seats.find((candidate) => candidate.project === target.project);
+  if (!seat || seat.state !== "active" || seat.seatEpoch !== target.seatEpoch
+    || !seat.conversationId?.startsWith("conversation_")
+    || registry.canonicalConversationId(seat.conversationId as ViewerConversationId) !== target.conversationId) return false;
+  const conversation = snapshot.conversations[target.conversationId];
+  const generation = conversation?.generations.at(-1);
+  if (!conversation || conversation.supersededBy || !generation || generation.path !== target.path
+    || sessionKeyId({ engine: conversation.engine, sessionId: generation.id }) !== target.hostKey) return false;
+  const entry = snapshot.entries[target.hostKey];
+  const currentOwner = entry?.structuredHost?.process ?? null;
+  const sameOwner = target.owner === null
+    ? currentOwner === null
+    : currentOwner !== null && sameRecordedProcessIdentity(currentOwner, target.owner);
+  return Boolean(entry?.structuredHost
+    && entry.host === null
+    && entry.claimEpoch === target.claimEpoch
+    && entry.claimOwner === target.claimOwner
+    && entry.structuredHost.endpoint === target.endpoint
+    && sameOwner
+    && (entry.status === "live" || entry.status === "idle"));
 }
 
 /**
@@ -1465,7 +1500,9 @@ function admittedRuntimeMessages(
     if (receipt.kind !== "send" && receipt.kind !== "steer") continue;
     /* `at` moves with status; only it can prove the send arrived after the
        restart cut. `admittedAt` may be much earlier, during Viewer downtime. */
-    const delivered = receipt.status === "delivered";
+    const delivered = receipt.status === "delivered"
+      || receipt.status === "turn-started"
+      || receipt.status === "steered";
     const arrival = delivered ? Date.parse(receipt.at) : NaN;
     const conversationId = canonicalConversationId(registry, receipt.conversationId);
     const messages = admittedMessages.get(conversationId) ?? [];
@@ -1943,19 +1980,27 @@ async function adoptStructuredHostsPass(
   const orchestratorSeats = dependencies.orchestratorSeats ?? activeOrchestratorSeats;
   /* Capture hosted seat ownership before any awaited startup work can refresh
      a terminal transcript or reconcile away the predecessor host wrapper. */
-  const orchestratorRecoveries = mergeOrchestratorRestartRecoveries(
-    startupPasses.get(registry)?.recoveries ?? [],
-    await orchestratorRestartRecoveryTargets(
-      registry,
-      orchestratorSeats(),
-      registry.readOnlySnapshot(),
-      dependencies.liveness ?? {},
-      orchestratorSeats,
-    ),
-  );
-  const orchestratorRecoveriesByHostKey = orchestratorRestartRecoveriesByHostKey(orchestratorRecoveries);
   const interruptions = dependencies.interruptions
     ?? interruptionObligationStore(interruptionObligationDirectory(registry.filename));
+  const capturedOrchestratorRecoveries = await orchestratorRestartRecoveryTargets(
+    registry,
+    orchestratorSeats(),
+    registry.readOnlySnapshot(),
+    dependencies.liveness ?? {},
+    orchestratorSeats,
+  );
+  /* Revalidate every capture after the final awaited transcript read and
+     immediately before the durable writes. No later seat's I/O may leave an
+     earlier seat's stale claim recorded as owed. */
+  const recoveryBoundarySnapshot = registry.readOnlySnapshot();
+  const recoveryBoundarySeats = orchestratorSeats();
+  const orchestratorRecoveries = mergeOrchestratorRestartRecoveries(
+    startupPasses.get(registry)?.recoveries ?? [],
+    capturedOrchestratorRecoveries,
+  ).filter((target) => orchestratorRestartRecoveryCaptureIsCurrent(
+    registry, target, recoveryBoundarySeats, recoveryBoundarySnapshot,
+  ));
+  const orchestratorRecoveriesByHostKey = orchestratorRestartRecoveriesByHostKey(orchestratorRecoveries);
   recordOrchestratorRestartObligations(interruptions, orchestratorRecoveries);
   /* Every pass asks the rows in its scope before it adopts, demotes or nudges
      any of them; a decision belongs to the pass that made it. A continuation

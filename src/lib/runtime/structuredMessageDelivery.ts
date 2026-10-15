@@ -1242,7 +1242,9 @@ export async function enqueueStructuredMessage(
   // This guard also runs inside the reservation transaction. Its registry
   // identity is captured before admission; the seat store is re-read at use.
   const recipientRefusal = () => recipient && !boundRecipient
-    ? orchestratorRecipientRefusal(recipient.id, id => recipientLookup.canonicalConversationId(id as ViewerConversationId))
+    ? orchestratorRecipientRefusal(recipient.id,
+      id => recipientLookup.canonicalConversationId(id as ViewerConversationId),
+      recipientSnapshot.conversationRevision[recipient.engine])
     : null;
   const refusedRecipient = recipientRefusal();
   if (refusedRecipient) return refusedBeforeReservation({ ok: false, structured: true, outcome: "failed", ...refusedRecipient });

@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import * as authCredentials from "@/lib/accounts/seatAuthCredentials";
+import { AgentRegistry } from "@/lib/agent/registry";
+import { conversationDeliverabilityFromRecord } from "@/lib/conversation/deliverability";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -762,4 +764,89 @@ test("a revoked seat still counts as held once nothing is seated (#2170)", () =>
     ...file,
     revocations: [{ project: "proj-a", conversationId: "conversation_old", seatEpoch: 1, revokedAt: AT }],
   }, "proj-a")).toBe(true);
+});
+
+test("REVIEW recipient authority lookup reuses a bounded recipient decision and invalidates on seat change", () => {
+  const registry = new AgentRegistry(path.join(sandbox, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const conversation = registry.ensureConversation("codex", path.join(sandbox, "recipient.jsonl"), "default");
+  const snapshot = registry.conversationDeliverySnapshot({ conversationId: conversation.id });
+  expect(snapshot.conversationRevision.codex).toBe(registry.readOnlySnapshot().conversationRevision.codex);
+  const seatsPath = path.join(sandbox, "orchestrator-seats.json");
+  fs.writeFileSync(seatsPath, JSON.stringify({
+    schemaVersion: 1,
+    nextSeatEpoch: 10001,
+    seats: {},
+    pending: {},
+    revocations: Array.from({ length: 10_000 }, (_, index) => ({
+      project: `historic-${index}`,
+      conversationId: `conversation_historic_${index}`,
+      seatEpoch: index + 1,
+      revokedAt: AT,
+      successorConversationId: null,
+    })),
+    history: [],
+    rollbacks: {},
+  }), "utf8");
+
+  const readSpy = spyOn(fs, "readFileSync");
+  try {
+    for (let index = 0; index < 20; index += 1) {
+      expect(conversationDeliverabilityFromRecord(snapshot, { conversationId: conversation.id }).condition).toBe("reclaimed");
+    }
+    const readsAfterWarmup = readSpy.mock.calls.filter(([filePath]) => filePath === seatsPath).length;
+    expect(readsAfterWarmup).toBe(1);
+
+    fs.writeFileSync(seatsPath, JSON.stringify({
+      schemaVersion: 1,
+      nextSeatEpoch: 2,
+      seats: {},
+      pending: {},
+      revocations: [{
+        project: "recipient-project",
+        conversationId: conversation.id,
+        seatEpoch: 1,
+        revokedAt: AT,
+        successorConversationId: "conversation_successor",
+      }],
+      history: [],
+      rollbacks: {},
+    }), "utf8");
+
+    expect(conversationDeliverabilityFromRecord(snapshot, { conversationId: conversation.id })).toMatchObject({
+      condition: "superseded",
+      successorConversationId: "conversation_successor",
+    });
+    const readsAfterRotation = readSpy.mock.calls.filter(([filePath]) => filePath === seatsPath).length;
+    expect(readsAfterRotation).toBe(2);
+
+    fs.writeFileSync(seatsPath, JSON.stringify({
+      schemaVersion: 1,
+      nextSeatEpoch: 2,
+      seats: {},
+      pending: {},
+      revocations: [{
+        project: "recipient-project",
+        conversationId: "conversation_alias_target",
+        seatEpoch: 1,
+        revokedAt: AT,
+        successorConversationId: "conversation_successor",
+      }],
+      history: [],
+      rollbacks: {},
+    }), "utf8");
+    expect(conversationDeliverabilityFromRecord(snapshot, { conversationId: conversation.id }).condition).toBe("reclaimed");
+
+    const aliasedSnapshot = structuredClone(snapshot);
+    aliasedSnapshot.conversationAliases.conversation_alias_target = conversation.id;
+    aliasedSnapshot.conversationRevision.codex += 1;
+    expect(conversationDeliverabilityFromRecord(aliasedSnapshot, { conversationId: conversation.id })).toMatchObject({
+      condition: "superseded",
+      successorConversationId: "conversation_successor",
+    });
+    const readsAfterAliasRevision = readSpy.mock.calls.filter(([filePath]) => filePath === seatsPath).length;
+    expect(readsAfterAliasRevision).toBe(4);
+  } finally {
+    readSpy.mockRestore();
+    registry.close();
+  }
 });

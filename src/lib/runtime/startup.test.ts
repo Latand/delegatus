@@ -5933,8 +5933,8 @@ test("D1 records the seat cut before reaping a surviving Claude tool process", a
 });
 
 
-test.each(["queued", "delivering", "uncertain", "failed-unknown", "failed", "delivered"] as const)(
-  "D2 newer %s send settles the cut only with delivery evidence", async (status) => {
+test.each(["queued", "delivering", "uncertain", "failed-unknown", "failed", "delivered", "turn-started", "steered"] as const)(
+  "REVIEW D2 newer %s send settles the cut only with delivery evidence", async (status) => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-seat-pending-cut-"));
   const filename = path.join(directory, "registry.json");
   let registry = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "off" });
@@ -5963,9 +5963,10 @@ test.each(["queued", "delivering", "uncertain", "failed-unknown", "failed", "del
     registry.recordDeliveryOutcome(newer.id, "failed", "fenced before execution", "lost");
   }
   if (status === "delivered") journal.transitionOperation(operationId, "delivered", { turnId: "newer-turn" });
+  if (status === "turn-started" || status === "steered") journal.completeOperation(operationId, status, { turnId: "newer-turn" });
   const ledger = createFakeDeliveryLedger();
   const host = Object.assign(new FakeEngineHost(ledger), { onStateChange: () => () => {} });
-  let allowHost = status === "failed" || status === "delivered";
+  let allowHost = status === "failed" || status === "delivered" || status === "turn-started" || status === "steered";
   const scheduled: Array<() => void> = [];
   const boot = () => adoptStructuredHostsAtStartup({ registry, client: runtimeJournalClient(journal),
     interruptions: store, orchestratorSeats: () => [seat], schedule: callback => { scheduled.push(callback); return { unref() {} }; },
@@ -5978,7 +5979,7 @@ test.each(["queued", "delivering", "uncertain", "failed-unknown", "failed", "del
   });
   try {
     await boot();
-    if (status === "delivered") {
+    if (status === "delivered" || status === "turn-started" || status === "steered") {
       expect(store.list().find(item => item.id === obligation.id)?.state).toBe("discharged");
       expect(ledger.writes.filter(item => item.id !== operationId)).toHaveLength(0);
     } else if (status === "failed") {
@@ -6054,5 +6055,85 @@ test.each(["live-owner", "unknown-owner", "rotated-seat", "new-claim", "supersed
   } finally {
     await bindStructuredDeliveryQueue([], { registry, client: null });
     journal.close(); fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("REVIEW D1 stale owner capture is discarded before its durable write", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-seat-stale-durable-cut-"));
+  const previousState = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = path.join(directory, "state");
+  const registryPath = path.join(directory, "registry.json");
+  let registry = new AgentRegistry(registryPath, undefined, undefined, { sqliteMode: "off" });
+  const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
+  const sessionA = ["f2000000", "0000", "4000", "8000", "000000000004"].join("-");
+  const sessionB = ["f2000000", "0000", "4000", "8000", "000000000005"].join("-");
+  const native = Bun.spawn([process.execPath, "-e", "setInterval(() => {}, 1000)"], { stdout: "ignore", stderr: "pipe" });
+  const nativeIdentity = captureProcessIdentity(native.pid);
+  const a = addStructuredRestartConversation(registry, directory, {
+    engine: "claude", sessionId: sessionA, status: "live", turn: "busy", activeTurnRef: "stale-capture-a",
+    transcriptRecords: recentClaudeRecords("tool-call"), transcriptSuffix: "\n",
+  });
+  const b = addStructuredRestartConversation(registry, directory, {
+    engine: "claude", sessionId: sessionB, status: "live", turn: "terminal", activeTurnRef: null,
+    transcriptRecords: recentClaudeRecords("end-turn"), transcriptSuffix: "\n",
+  });
+  for (const sessionId of [sessionA, sessionB]) {
+    const entry = registry.readOnlySnapshot().entries[`claude:${sessionId}`]!;
+    registry.upsert({ ...entry, claimOwner: `structured-host:${JSON.stringify({ pid: 2_000_000_001, startIdentity: "old-viewer" })}`,
+      ...(sessionId === sessionA ? { structuredHost: { ...entry.structuredHost!, process: nativeIdentity } } : {}) });
+  }
+  const seats = [
+    { project: "seat-a", state: "active", conversationId: a.conversation.id, path: a.artifactPath, seatEpoch: 10 },
+    { project: "seat-b", state: "active", conversationId: b.conversation.id, path: b.artifactPath, seatEpoch: 11 },
+  ] as OrchestratorSeat[];
+  const store = interruptionObligationStore(interruptionObligationDirectory(registryPath));
+  const { readTranscriptEvidence } = await import("./liveness");
+  let transcriptReads = 0;
+  const dependencies = {
+    registry,
+    client: runtimeClient(journal),
+    orchestratorSeats: () => seats,
+    adopt: async () => [],
+    adoptClaude: async () => [],
+    liveness: {
+      readTranscript: async (...args: Parameters<typeof readTranscriptEvidence>) => {
+        const evidence = await readTranscriptEvidence(...args);
+        transcriptReads += 1;
+        if (transcriptReads === 2) {
+          const current = registry.readOnlySnapshot().entries[`claude:${sessionA}`]!;
+          registry.upsert({ ...current, claimEpoch: current.claimEpoch + 1,
+            claimOwner: `structured-host:${JSON.stringify(captureProcessIdentity(process.pid))}` });
+        }
+        return evidence;
+      },
+    },
+  } satisfies Partial<StructuredStartupDependencies> as StructuredStartupDependencies;
+  try {
+    await adoptStructuredHostsAtStartup(dependencies);
+    expect(transcriptReads).toBe(2);
+    expect(store.list().filter(item => item.conversationId === a.conversation.id)).toEqual([]);
+
+    fs.writeFileSync(a.artifactPath, recentClaudeRecords("end-turn").map(record => JSON.stringify(record)).join("\n") + "\n");
+    await bindStructuredDeliveryQueue([], { registry, client: null });
+    registry.close();
+    registry = new AgentRegistry(registryPath, undefined, undefined, { sqliteMode: "off" });
+    await adoptStructuredHostsAtStartup({
+      registry,
+      client: runtimeClient(journal),
+      orchestratorSeats: () => seats,
+      adopt: async () => [],
+      adoptClaude: async () => [],
+    });
+    expect(store.list().filter(item => item.conversationId === a.conversation.id)).toEqual([]);
+    expect(journal.snapshot().recentOperations.filter(receipt => receipt.idempotencyKey.startsWith("interruption-continuation-"))).toEqual([]);
+  } finally {
+    await bindStructuredDeliveryQueue([], { registry, client: null });
+    if (procBackend.pidAlive(native.pid)) native.kill("SIGKILL");
+    await native.exited;
+    journal.close();
+    registry.close();
+    if (previousState === undefined) delete process.env.LLV_STATE_DIR;
+    else process.env.LLV_STATE_DIR = previousState;
+    fs.rmSync(directory, { recursive: true, force: true });
   }
 });

@@ -71,7 +71,8 @@ export function conversationDeliverabilityFromRecord(
     };
   }
   const seatRefusal = orchestratorRecipientRefusal(conversation.id,
-    id => resolveConversationAlias(snapshot, id as `conversation_${string}`));
+    id => resolveConversationAlias(snapshot, id as `conversation_${string}`),
+    snapshot.conversationRevision[conversation.engine]);
   if (seatRefusal) return {
     conversationId: conversation.id, transcriptPath: generation.path, deliverable: false,
     condition: seatRefusal.status === 409 ? "superseded" : "unknown", resumeRequired: false,

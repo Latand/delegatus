@@ -205,6 +205,38 @@ interface OrchestratorSeatFile {
 
 const seatsFile = () => statePath("orchestrator-seats.json");
 
+type RecipientRefusal = { status: 409 | 503; error: string; successorConversationId?: string } | null;
+
+const RECIPIENT_REFUSAL_CACHE_LIMIT = 256;
+const recipientRefusalCacheProperty = "__delegatusOrchestratorRecipientRefusalCacheV1__" as const;
+type RecipientRefusalCache = Map<string, RecipientRefusal>;
+const identityConversationAlias = (id: string): string => id;
+
+function recipientRefusalCache(): RecipientRefusalCache {
+  const globalCache = globalThis as typeof globalThis & { [recipientRefusalCacheProperty]?: RecipientRefusalCache };
+  return globalCache[recipientRefusalCacheProperty] ??= new Map();
+}
+
+function seatFileRevision(filePath: string): string | null {
+  try {
+    const stat = fs.statSync(filePath, { bigint: true });
+    return `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException | null)?.code === "ENOENT") return "missing";
+    return null;
+  }
+}
+
+function rememberRecipientRefusal(cache: RecipientRefusalCache, key: string, value: RecipientRefusal): void {
+  cache.delete(key);
+  cache.set(key, value);
+  while (cache.size > RECIPIENT_REFUSAL_CACHE_LIMIT) {
+    const oldest = cache.keys().next().value;
+    if (oldest === undefined) break;
+    cache.delete(oldest);
+  }
+}
+
 /** One durable namespace for named projects and their repository identities. */
 export function canonicalOrchestratorProject(project: string): string {
   return canonicalProject(project.trim());
@@ -1343,19 +1375,46 @@ function revokedOrchestratorSeatConversationsIn(
     conversations and their already admitted operations keep their identity. */
 export function orchestratorRecipientRefusal(
   conversationId: string,
-  resolveAlias: (conversationId: string) => string = id => id,
-): { status: 409 | 503; error: string; successorConversationId?: string } | null {
+  resolveAlias: (conversationId: string) => string = identityConversationAlias,
+  aliasRevision?: number,
+): RecipientRefusal {
+  const filePath = seatsFile();
+  const id = resolveAlias(conversationId);
+  const canCache = resolveAlias === identityConversationAlias || Number.isSafeInteger(aliasRevision);
+  const cache = recipientRefusalCache();
+  let cacheKey: string | null = null;
+  let revision: string | null = null;
+  if (canCache) {
+    revision = seatFileRevision(filePath);
+    if (revision === null) return { status: 503, error: "orchestrator seat authority is unavailable" };
+    cacheKey = `${filePath}\0${revision}\0${aliasRevision ?? "identity"}\0${id}`;
+    if (cache.has(cacheKey)) {
+      const cached = cache.get(cacheKey)!;
+      rememberRecipientRefusal(cache, cacheKey, cached);
+      return cached;
+    }
+  }
+
   const file = readOrchestratorSeatFileOrNull();
   if (!file) return { status: 503, error: "orchestrator seat authority is unavailable" };
-  const id = resolveAlias(conversationId);
-  if (!revokedOrchestratorSeatConversationsIn(file, resolveAlias).has(id)) return null;
-  const revocation = file.revocations.filter(row => resolveAlias(row.conversationId) === id)
-    .sort((left, right) => right.seatEpoch - left.seatEpoch)[0]!;
-  const successor = file.seats[revocation.project]?.conversationId ?? revocation.successorConversationId;
-  const successorConversationId = successor ? resolveAlias(successor) : undefined;
-  return { status: 409, error: successorConversationId
-    ? `orchestrator seat was rotated; send to ${successorConversationId}`
-    : "orchestrator seat was revoked; designate a successor before sending",
-    ...(successorConversationId ? { successorConversationId } : {}),
-  };
+  let refusal: RecipientRefusal = null;
+  if (revokedOrchestratorSeatConversationsIn(file, resolveAlias).has(id)) {
+    const revocation = file.revocations.filter(row => resolveAlias(row.conversationId) === id)
+      .sort((left, right) => right.seatEpoch - left.seatEpoch)[0]!;
+    const successor = file.seats[revocation.project]?.conversationId ?? revocation.successorConversationId;
+    const successorConversationId = successor ? resolveAlias(successor) : undefined;
+    refusal = { status: 409, error: successorConversationId
+      ? `orchestrator seat was rotated; send to ${successorConversationId}`
+      : "orchestrator seat was revoked; designate a successor before sending",
+      ...(successorConversationId ? { successorConversationId } : {}),
+    };
+  }
+  if (cacheKey && revision !== null) {
+    /* A seat rotation between the initial stat and the read makes this
+       snapshot unfit for admission. Refuse and let the caller retry against
+       the new file revision. */
+    if (seatFileRevision(filePath) !== revision) return { status: 503, error: "orchestrator seat authority changed during lookup" };
+    rememberRecipientRefusal(cache, cacheKey, refusal);
+  }
+  return refusal;
 }

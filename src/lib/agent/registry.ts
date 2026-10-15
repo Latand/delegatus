@@ -5580,6 +5580,7 @@ export class AgentRegistry {
       }
       if (conversation) {
         result.conversations[id] = clone(conversation);
+        result.conversationRevision[conversation.engine] = file.conversationRevision[conversation.engine];
         const generation = conversation.generations.at(-1);
         if (generation) {
           const key = `${conversation.engine}:${generation.id}`;

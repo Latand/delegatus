@@ -403,3 +403,49 @@ test.each(["failed", "uncertain", "rotate-during-status", "recovery-wait", "rese
     f.close();
   }
 });
+
+test("REVIEW refusal during uncertain rearm keeps the original unknown outcome terminal", async () => {
+  const f = fixture();
+  const previousState = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = path.join(f.root, "seat-state");
+  const successor = f.registry.ensureConversation("codex", path.join(f.root, "successor.jsonl"), null);
+  const designate = (id: string, pathname: string, key: string) => {
+    beginOrchestratorSeatIntent({ project: "retry-seat", mandate: "coordinate work", clientRequestId: key, mode: "existing" });
+    completeOrchestratorSeatIntent({ project: "retry-seat", clientRequestId: key, conversationId: id, path: pathname });
+  };
+  designate(f.conversation.id, f.conversation.generations.at(-1)!.path, "retry-seat-old");
+  const rotate = () => designate(successor.id, successor.generations.at(-1)!.path, "retry-seat-next");
+  f.uncertain();
+  const original = structuredClone(f.progress.get(f.operationId)!);
+  const deliveryBefore = f.registry.deliverySnapshotForOperation(f.operationId);
+  const retryOperation = f.client.retryOperation.bind(f.client);
+  let retries = 0;
+  f.client.retryOperation = async (...args) => { retries += 1; return retryOperation(...args); };
+  const beginAttempt = f.registry.beginDeliveryAttemptOffLoop.bind(f.registry);
+  f.registry.beginDeliveryAttemptOffLoop = async (...args) => {
+    const claim = await beginAttempt(...args);
+    rotate();
+    return claim;
+  };
+  try {
+    const response = await f.retry();
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ successorConversationId: successor.id });
+    expect(retries).toBe(0);
+    expect(f.progress.get(f.operationId)).toMatchObject({
+      operationId: original.operationId,
+      conversationId: original.conversationId,
+      originalKey: original.originalKey,
+      terminal: { state: "uncertain", reason: "acknowledgement lost" },
+    });
+    expect(f.progress.open().some(record => record.operationId === f.operationId)).toBe(false);
+    expect(f.journal.operationResult(f.operationId)?.receipt).toMatchObject({ status: "uncertain", reason: "acknowledgement lost" });
+    const deliveryAfter = f.registry.deliverySnapshotForOperation(f.operationId);
+    expect(deliveryAfter.deliveryOperationOwners[f.operationId]?.deliveryId)
+      .toBe(deliveryBefore.deliveryOperationOwners[f.operationId]?.deliveryId);
+  } finally {
+    if (previousState === undefined) delete process.env.LLV_STATE_DIR;
+    else process.env.LLV_STATE_DIR = previousState;
+    f.close();
+  }
+});
