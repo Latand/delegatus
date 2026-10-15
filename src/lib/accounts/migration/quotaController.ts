@@ -330,6 +330,9 @@ export class QuotaController {
         // Another read may have committed while this one waited for its provider.
         if (previous && Date.parse(previous.authCheckedAt) > now) continue;
         const observation = result.observation;
+        if (engine === "codex" && observation?.limits && !observation.limits.credits && previous?.limits?.credits) {
+          observation.limits = { ...observation.limits, credits: previous.limits.credits };
+        }
         const providerWithUnknownLimits = engine === "claude" && "provider" in account && Boolean(account.provider);
         if (!observation || (observation.authenticated && (!observation.limits && engine !== "copilot" && !providerWithUnknownLimits
           || (previous?.limits && Date.parse(previous.observedAt) > observation.observedAt)))) {

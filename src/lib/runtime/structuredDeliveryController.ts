@@ -1,4 +1,5 @@
 import { spawnDiagnosticErrorForRegistry } from "@/lib/agent/spawnDiagnostics";
+import { creditGuardBlock } from "@/lib/accounts/creditGuard";
 import { ownerRelaySpawnAuthorized } from "@/lib/externalRelay/ownerAuthority";
 import { loadPipelinesForRetirement } from "@/lib/pipelines/store";
 import { pipelineHostHasLiveWork, providerRecoveryAttempt, providerRecoveryTurnProven } from "@/lib/pipelines/hostRetirement";
@@ -764,8 +765,16 @@ export async function bindStructuredDeliveryQueue(
   let requestDrain = () => {};
   const nativeReconciliations = new Map<string, Promise<void>>();
   const nativeRetries = new Map<string, RetryBackoff>();
+  const authorizeAccountDispatch = (conversationId: string) => {
+    const conversation = registry.conversation(conversationId as ViewerConversationId);
+    if (conversation?.engine !== "codex") return;
+    const accountId = conversation.generations.at(-1)?.accountId;
+    const observation = registry.quotaObservations("codex").find(item => item.accountId === accountId);
+    if (creditGuardBlock("codex", observation?.limits)) throw new StructuredSendRefusedError("Codex paid-credit guard reached; continue on an allowed account with capacity");
+  };
   const nativeQueueExecutor = new NativeQueueExecutor({
     client,
+    authorizeDispatch: authorizeAccountDispatch,
     resolveHost: hostResolver(registry, hosts),
     /* Off the loop, a hand-off's own row included (C3, A8). */
     settled: async (entry) => { await settleNativeQueueEntry(registry, entry, progressStore); },
@@ -952,7 +961,8 @@ export async function bindStructuredDeliveryQueue(
         return !ownerRelaySpawnAuthorized(receipt?.clientAttemptId) || sendIsSettled(snapshot, operationId);
       },
       diagnosticError: (...args: unknown[]) => spawnDiagnosticErrorForRegistry(registry, ...args),
-      authorizeDispatch: (operationId: string) => {
+      authorizeDispatch: (operationId: string, conversationId: string) => {
+        authorizeAccountDispatch(conversationId);
         if (!operationId.startsWith("spawn_message_")) return;
         const receipt = registry.readOnlySnapshot().receipts[operationId.slice("spawn_message_".length)];
         if (!ownerRelaySpawnAuthorized(receipt?.clientAttemptId))

@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { creditGuardBlock, creditGuardUsedPercent } from "./creditGuard";
 
 import type { ClaudeAccount } from "@/lib/accounts/claude";
 import type { CodexAccount } from "@/lib/accounts/codex";
@@ -28,7 +29,7 @@ import { forgetCachedLimits } from "@/lib/limits";
 export type LiveReadPhase = "operator-refresh" | "reset-credit-redeem" | "spawn-admission" | "login-complete";
 
 export interface LiveLimitsDeps {
-  registry?: Pick<AgentRegistry, "recordQuotaObservation">;
+  registry?: Pick<AgentRegistry, "recordQuotaObservation"> & Partial<Pick<AgentRegistry, "quotaObservations">>;
   probe?: QuotaProbePort;
   now?: number;
   timeoutMs?: number;
@@ -53,6 +54,10 @@ export function recordLiveObservation(
   deps: LiveLimitsDeps = {},
 ): DurableQuotaObservation {
   const registry = deps.registry ?? agentRegistry();
+  if (observation.engine === "codex" && observation.limits && !observation.limits.credits) {
+    const credits = registry.quotaObservations?.("codex").find(item => item.accountId === observation.accountId)?.limits?.credits;
+    if (credits) observation = { ...observation, limits: { ...observation.limits, credits } };
+  }
   const durable = durableQuotaObservation(observation, LIVE_READ_BOOT_ID);
   registry.recordQuotaObservation(durable);
   if (observation.engine === "codex") forgetCachedLimits(observation.engine, observation.accountId);
@@ -114,8 +119,9 @@ export function exhaustionNeedsLiveRead(
   model?: string | null,
 ): boolean {
   if (!observation?.authenticated || !observation.limits) return false;
+  const threshold = creditGuardBlock(observation.engine, observation.limits) ? creditGuardUsedPercent() : 100;
   const exhausted = gatingWindows(observation.engine, observation.limits, model)
-    .flatMap((entry) => entry.value && entry.value.usedPercent >= 100 ? [entry.value] : []);
+    .flatMap((entry) => entry.value && entry.value.usedPercent >= threshold ? [entry.value] : []);
   if (!exhausted.length) return false;
   if (observation.provenance.source !== "live") return true;
   const nowSeconds = Math.floor(now / 1_000);

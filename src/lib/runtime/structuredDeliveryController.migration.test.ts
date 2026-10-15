@@ -28,6 +28,35 @@ function fixture() {
   return f;
 }
 
+test.each(["before dispatch", "during journal transition"])("paid-credit guard refuses a queued Codex turn %s", async phase => {
+  const f = fixture();
+  const observe = (usedPercent: number) => f.registry.recordQuotaObservation({ engine: "codex", accountId: "account-a",
+    authenticated: true, authCheckedAt: new Date().toISOString(), observedAt: new Date().toISOString(), bootId: "fixture",
+    provenance: { source: "live", reason: null, staleSince: null }, limits: { session: null,
+      weekly: { usedPercent, resetsAt: Math.floor(Date.now() / 1000) + 86400 }, plan: "pro", capturedAt: Date.now() / 1000,
+      credits: { hasCredits: true, balance: "10", unlimited: false } } });
+  observe(phase === "before dispatch" ? 99 : 98);
+  const transition = f.client.transitionOperation.bind(f.client);
+  f.client.transitionOperation = async (...args) => {
+    if (phase === "during journal transition" && args[0] === "guarded-send" && args[1] === "delivering") observe(99);
+    return transition(...args);
+  };
+  try {
+    await bindStructuredDeliveryQueue([{ key: f.key, host: f.host }], { registry: f.registry, client: f.client,
+      hostlessSettleIntervalMs: 0, watchdogIntervalMs: 0, settlementSweepMs: 0 });
+    f.journal.executeOperation({ kind: "send", operationId: "guarded-send", idempotencyKey: "guarded-send",
+      conversationId: f.conversation.id, text: "continue", policy: "queue" });
+    await kickStructuredDeliveryQueue();
+    expect(f.host.ledger.writes).toHaveLength(0);
+    expect(f.journal.operationResult("guarded-send")?.receipt).toMatchObject({ status: "failed", reason: expect.stringContaining("paid-credit guard") });
+    observe(1);
+    f.journal.executeOperation({ kind: "send", operationId: "after-reset", idempotencyKey: "after-reset",
+      conversationId: f.conversation.id, text: "continue", policy: "queue" });
+    await kickStructuredDeliveryQueue();
+    expect(f.host.ledger.writes).toHaveLength(1);
+  } finally { await f.cleanup(); }
+});
+
 test("a production drain settles a native entry solely through canonical reconciliation (#1674)", async () => {
   const f = fixture();
   const binding = { threadId: f.key.sessionId, accountId: "account-a" };

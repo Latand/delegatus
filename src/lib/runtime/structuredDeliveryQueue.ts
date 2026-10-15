@@ -100,7 +100,7 @@ export interface StructuredDeliveryQueuePort {
       which is exactly when it has to be honoured. */
   settled?(operationId: string): boolean | Promise<boolean>;
   /** Synchronous live cutoff at the engine call, after all journal/health waits. */
-  authorizeDispatch?(operationId: string): void;
+  authorizeDispatch?(operationId: string, conversationId: string): void;
   /** Durable caller attribution for background queue diagnostics. */
   diagnosticError?(...args: unknown[]): void;
   /** The writer claim that currently owns this conversation's structured host —
@@ -2147,8 +2147,8 @@ export class StructuredDeliveryQueue {
         // later queued retry must establish its own canonical evidence.
         this.firstDispatches.delete(effect.operationId);
         if (steersIntoTurn && host.steer) {
-          this.port.authorizeDispatch?.(effect.operationId);
-          const outcome = await host.steer(entry, firstDispatch, () => this.port.authorizeDispatch?.(effect.operationId));
+          this.port.authorizeDispatch?.(effect.operationId, effect.conversationId);
+          const outcome = await host.steer(entry, firstDispatch, () => this.port.authorizeDispatch?.(effect.operationId, effect.conversationId));
           const settling = this.settleObservedSteer(effect, outcome).finally(() => {
             this.activeSteers.delete(effect.operationId);
             this.retrySoon();
@@ -2160,7 +2160,7 @@ export class StructuredDeliveryQueue {
           void settling.catch(() => undefined);
           continue;
         }
-        const receiving = sendWithReadRetry(host, entry, firstDispatch, () => this.port.authorizeDispatch?.(effect.operationId));
+        const receiving = sendWithReadRetry(host, entry, firstDispatch, () => this.port.authorizeDispatch?.(effect.operationId, effect.conversationId));
         if (queuesDuringTurn && !shouldInterrupt && !steersIntoTurn) {
           /* The engine confirms a queued input only when its own turn starts,
              which may wait on an answer to this conversation's attention. The

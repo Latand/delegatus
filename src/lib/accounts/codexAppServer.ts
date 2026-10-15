@@ -3,6 +3,7 @@ import { spawn } from "node:child_process";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { findAgentBinary } from "../../../bin/agent-binaries.mjs";
 import { CodexPinnedProtocol, installedCodexVersion } from "./codexPinnedProtocol";
+import { paidCredits } from "./creditGuard";
 
 import {
   CodexAppServerProtocolError,
@@ -72,6 +73,7 @@ export interface AppServerRateLimitWindow {
 }
 
 export interface AppServerRateLimits {
+  credits?: import("./creditGuard").PaidCredits;
   primary: AppServerRateLimitWindow | null;
   secondary: AppServerRateLimitWindow | null;
   planType: string | null;
@@ -378,6 +380,7 @@ export class CodexAppServerClient {
         primary: optionalWindow(snapshot.primary, "account/rateLimits/read"),
         secondary: optionalWindow(snapshot.secondary, "account/rateLimits/read"),
         planType: typeof snapshot.planType === "string" ? snapshot.planType : null,
+        ...(paidCredits(snapshot.credits) ? { credits: paidCredits(snapshot.credits) } : {}),
       },
       resetCredits: optionalResetCredits(response.rateLimitResetCredits),
       ...(typeof snapshot.rateLimitReachedType === "string" || snapshot.rateLimitReachedType === null

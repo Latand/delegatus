@@ -609,6 +609,21 @@ test("account/rateLimits/read says whether the limit is reached even when every 
   client.close();
 });
 
+test("account/rateLimits/read retains paid balance separately from reset credits", async () => {
+  const { start } = clientWith((fake, message) => {
+    if (message.method === "initialize") fake.respond(requestId(message), {});
+    if (message.method === "account/rateLimits/read") fake.respond(requestId(message), {
+      rateLimits: { primary: { usedPercent: 99 }, credits: { hasCredits: true, balance: "12.50", unlimited: false } },
+      rateLimitResetCredits: { availableCount: 1 },
+    });
+  });
+  const client = await start();
+  try {
+    expect(await client.readRateLimits()).toMatchObject({ rateLimits: { credits: { hasCredits: true, balance: "12.50", unlimited: false } },
+      resetCredits: { availableCount: 1 } });
+  } finally { client.close(); }
+});
+
 test("a count-only or malformed reset-credit summary degrades to count-only or null, never a throw", async () => {
   let shape: unknown = { availableCount: 2, credits: null };
   const { start } = clientWith((fake, message) => {

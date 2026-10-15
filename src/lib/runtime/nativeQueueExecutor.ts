@@ -35,6 +35,8 @@ export interface NativeQueueExecutorPort {
   client: RuntimeHostClient;
   resolveHost(conversationId: string): EngineHost | null;
   binding(conversationId: string): NativeQueueBinding | null;
+  /** Synchronous account admission after journal/health waits. Cleanup stays available. */
+  authorizeDispatch?(conversationId: string): void;
   /** Registry evidence of a succession from this predecessor's generation chain. */
   succession?(conversationId: string, binding: NativeQueueBinding, admittedAt?: string):
     | { status: "pending" }
@@ -146,6 +148,7 @@ export class NativeQueueExecutor {
       await transition({ phase: "prepared", input, ...(rebinding ? { binding } : {}) });
       prepared = true;
       if (!owns()) throw new StructuredSendRefusedError("native queue writer changed before actuation");
+      if (command.action !== "delete" && command.action !== "reorder") this.port.authorizeDispatch?.(command.conversationId);
       actuated = true;
       if (command.action === "add") {
         const ack = await native.queue.add(entry!.clientUserMessageId, input);
@@ -191,6 +194,7 @@ export class NativeQueueExecutor {
         }
         await transition({ phase: "withdrawn" });
         if (!owns()) throw new StructuredSendRefusedError("native queue writer changed after withdrawal");
+        this.port.authorizeDispatch?.(command.conversationId);
         const result = await native.sendWithdrawn({ ...entry!, state: "withdrawn" }, command.turnId!);
         await transition({ phase: "acknowledged", turnId: result.turnId });
       }

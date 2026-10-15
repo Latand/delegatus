@@ -707,6 +707,8 @@ export function tierOfWindowKey(key: string): string | null {
 
 /** Plan rate limits of one engine, returned by GET /api/limits. */
 export interface EngineLimits {
+  /** Codex paid-credit balance, independent of usage-limit reset credits. */
+  credits?: import("./accounts/creditGuard").PaidCredits;
   session: LimitWindow | null;
   weekly: LimitWindow | null;
   /** Every model-tier weekly the provider meters for this account (issues

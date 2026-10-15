@@ -314,6 +314,31 @@ test("a failed home records a closed code while the controller sweeps later home
   }
 });
 
+test("paid credits survive window-only and failed periodic reads and accept an explicit removal", async () => {
+  const registry = new AgentRegistry(path.join(QUOTA_SANDBOX, "paid-credits.json"));
+  const account: CodexAccount = { id: "account-a", label: "Account A", kind: "managed", home: QUOTA_SANDBOX,
+    sessionsDir: QUOTA_SANDBOX, authPresent: true, loginPane: null, createdAt: 1 };
+  let credits: { hasCredits: boolean; balance: string; unlimited: boolean } | undefined = { hasCredits: true, balance: "10", unlimited: false };
+  let fail = false;
+  const controller = new QuotaController(registry, { list: () => [account], active: () => account.id,
+    async probe(engine, candidate, now) {
+      if (fail) throw Error("offline");
+      return { engine, accountId: candidate.id, authenticated: true, authCheckedAt: now, observedAt: now,
+        provenance: { source: "live", reason: null, staleSince: null }, limits: { session: null,
+          weekly: { usedPercent: 99, resetsAt: now / 1000 + 86400 }, plan: "pro", capturedAt: now / 1000, credits } };
+    } });
+  await controller.tick("codex");
+  credits = undefined;
+  await controller.tick("codex");
+  expect(registry.quotaObservations("codex")[0]?.limits?.credits?.hasCredits).toBe(true);
+  fail = true;
+  await controller.tick("codex");
+  expect(registry.quotaObservations("codex")[0]?.limits?.credits?.hasCredits).toBe(true);
+  fail = false; credits = { hasCredits: false, balance: "0", unlimited: false };
+  await controller.tick("codex");
+  expect(registry.quotaObservations("codex")[0]?.limits?.credits?.hasCredits).toBe(false);
+});
+
 test("the controller records the probe's reset credits and carries them through a failed tick (#1373)", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-quota-reset-credits-"));
   try {

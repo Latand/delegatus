@@ -1071,6 +1071,22 @@ function providerStoreFixture(): Pipeline {
   return lane;
 }
 
+test("suspension custody round-trips independently and rejects malformed stop evidence", async () => isolatedDelivery(() => {
+  const lane = providerStoreFixture();
+  const suspension = { reason: "account" as const, detail: "account left binding", requestedAt: "2026-10-15T00:00:00Z",
+    stoppedAt: "2026-10-15T00:00:01Z", operatorStoppedAt: "2026-10-15T00:00:02Z" };
+  lane.runs[0]!.attempts[0]!.suspension = suspension;
+  savePipelines([lane]);
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.suspension).toEqual(suspension);
+  loadPipelines()[0]!.runs[0]!.attempts[0]!.suspension!.detail = "mutated read";
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.suspension!.detail).toBe(suspension.detail);
+  for (const bad of [{}, { ...suspension, reason: "unknown" }, { ...suspension, stoppedAt: "invalid" },
+    { ...suspension, requestedAt: null }, { ...suspension, operatorStoppedAt: 123 }]) {
+    lane.runs[0]!.attempts[0]!.suspension = bad as never;
+    expect(() => savePipelines([lane])).toThrow("malformed pipeline record");
+  }
+}));
+
 test("malformed provider waits and histories are rejected at the persistence boundary", async () => isolatedDelivery(() => {
   for (const bad of [{}, { condition: {} }, { ...providerStoreFixture().runs[0]!.attempts[0]!.providerWait, resumeAt: "invalid" },
     { ...providerStoreFixture().runs[0]!.attempts[0]!.providerWait, capacityProbes: -1 },
