@@ -57,15 +57,16 @@ function mutate<T>(pid: number, change: (row: NativeGeneration | null) => { row:
   });
 }
 /** Only the hook entry calls this with a kernel-derived ancestor. No protocol
- * argument can supply the PID. Every lifecycle start creates a fresh generation. */
-export function recordNativeHook(pid: number, sessionId: string, transcript: string, event: "SessionStart" | "SessionEnd" | "PreToolUse", tool = "", args: Record<string, unknown> = {}): { generation: string; token?: string } {
+ * argument can supply the PID. Compaction retains the current generation when
+ * its process, session and transcript are unchanged. */
+export function recordNativeHook(pid: number, sessionId: string, transcript: string, event: "SessionStart" | "SessionEnd" | "PreToolUse", tool = "", args: Record<string, unknown> = {}, source?: string): { generation: string; token?: string } {
   const pinned = identity(pid);
   if (!pinned || !procBackend.pidAlive(pid) || procBackend.processExited(pid) || !procBackend.processIdentity(pid) || !systemBootEpoch()) throw new Error("native parent unavailable");
   return mutate(pid, held => {
     if (event === "SessionEnd" && (!held || held.identity !== pinned || held.sessionId !== sessionId || held.transcript !== transcript || held.ended)) {
       return { row: null, value: { generation: held?.generation ?? "" } };
     }
-    const fresh = !held || held.identity !== pinned || held.ended || held.sessionId !== sessionId || held.transcript !== transcript || event === "SessionStart";
+    const fresh = !held || held.identity !== pinned || held.ended || held.sessionId !== sessionId || held.transcript !== transcript || (event === "SessionStart" && source !== "compact");
     const row: NativeGeneration = fresh ? { identity: pinned, sessionId, transcript, generation: crypto.randomBytes(32).toString("hex"), ended: false, proofs: [] } : held!;
     if (event === "SessionEnd") { row.ended = true; row.proofs = []; }
     let token: string | undefined;

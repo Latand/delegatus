@@ -1751,8 +1751,8 @@ async function nativeSession(fixture: CausalFixture, sessionId: string, extra: R
         const sid = fs.existsSync(file + '.current-session') ? fs.readFileSync(file + '.current-session', 'utf8') : process.argv[2];
         const hook = Bun.spawn([process.execPath, process.argv[4], '--native-caller-hook'], { stdin:'pipe', stdout:'pipe', stderr:'pipe' });
         hook.stdin.write(JSON.stringify({ session_id:sid, transcript_path:path.join(home,'projects','native',sid+'.jsonl'), hook_event_name:'PreToolUse', ...payload })); hook.stdin.end();
-        const answer = await new Response(hook.stdout).text(); await hook.exited;
-        fs.writeFileSync(response, answer || '{}');
+        const answer = await new Response(hook.stdout).text(); const exit = await hook.exited;
+        fs.writeFileSync(response, answer || JSON.stringify({exit}));
       } catch { fs.writeFileSync(response, '{}'); } finally { processing = false; }
     }, 5);
     const child = Bun.spawn([process.execPath, process.argv[4]], {stdin:'inherit', stdout:'inherit', stderr:'inherit'});
@@ -1770,13 +1770,16 @@ async function nativeSession(fixture: CausalFixture, sessionId: string, extra: R
   try { await client.connect(transport); } catch (error) { await transport.close(); throw new Error(`${error}: ${stderr}`); }
   const session: McpSession = { client, transport, stderr: () => stderr, close: async () => { await client.close(); await transport.close(); } };
   const recordFile = fs.readFileSync(pointer, "utf8");
-  session.nativeHook = async (tool, args) => {
+  const hookEvent = async (payload: Record<string, unknown>) => {
     const response = `${recordFile}.hook-response`;
     fs.rmSync(response, { force: true });
-    fs.writeFileSync(`${recordFile}.hook-request`, JSON.stringify({ tool_name: `mcp__viewer__${tool}`, tool_input: args }));
+    fs.writeFileSync(`${recordFile}.hook-request`, JSON.stringify(payload));
     const until = Date.now() + 10_000;
     while (!fs.existsSync(response)) { if (Date.now() > until) throw new Error("native hook did not answer"); await Bun.sleep(5); }
-    const output = JSON.parse(fs.readFileSync(response, "utf8"));
+    return JSON.parse(fs.readFileSync(response, "utf8"));
+  };
+  session.nativeHook = async (tool, args) => {
+    const output = await hookEvent({ tool_name: `mcp__viewer__${tool}`, tool_input: args });
     const proof = output.hookSpecificOutput?.updatedInput?.nativeCallerProof;
     if (typeof proof !== "string") throw new Error("native hook refused fixture input");
     return proof;
@@ -1785,7 +1788,8 @@ async function nativeSession(fixture: CausalFixture, sessionId: string, extra: R
   if (approve) {
     try { await approveNative(fixture, session); } catch (error) { await session.close(); throw error; }
   }
-  return { session, conversationId: conversation.id, recordFile: fs.readFileSync(pointer, "utf8") };
+  return { session, conversationId: conversation.id, recordFile: fs.readFileSync(pointer, "utf8"),
+    lifecycle: async (source: string) => { expect(await hookEvent({ hook_event_name: "SessionStart", source })).toEqual({ exit: 0 }); } };
 }
 
 async function decideNative(fixture: CausalFixture, option: number, authenticated = true, pairedOwner = false): Promise<void> {
@@ -1860,6 +1864,40 @@ describe.skipIf(process.platform !== "linux")("native caller admission (#2827)",
       expect(fixture.effects().filter((effect) => effect.kind === "writer")).toHaveLength(1);
     } finally { await native.session.close(); await host.stop(); }
   }, 30_000);
+
+  test("presence updates and compact preserve approval for mutations and original-key recovery", async () => {
+    const fixture = await causalFixture("llv-native-lifetime-"); const host = await fixture.startHost();
+    const native = await nativeSession(fixture, NATIVE_A, {}, false);
+    try {
+      const args = spawnArguments(fixture, "native-lifetime");
+      const pending = await call(native.session, "spawn_agent", args);
+      expect(pending.error).toContain("approval-waiting");
+      const record = JSON.parse(fs.readFileSync(native.recordFile, "utf8"));
+      const presence = (status: string) => fs.writeFileSync(native.recordFile, JSON.stringify({ ...record, status, statusUpdatedAt: Date.now(), updatedAt: Date.now() }));
+      presence("idle");
+      await decideNative(fixture, 1);
+      presence("busy");
+      const accepted = await call(native.session, "spawn_agent", args);
+      expect(accepted).toMatchObject({ ok: true });
+      for (const status of ["waiting", "idle", "busy"]) {
+        presence(status);
+        await native.lifecycle("compact");
+        expect(await call(native.session, "spawn_agent", { ...args, recoveryOnly: true })).toMatchObject({ ok: true, replayed: true, launchId: accepted.launchId });
+      }
+      expect(await call(native.session, "send_message", sendArguments(fixture, "native-after-compact"))).toMatchObject({ ok: true });
+      expect(fixture.effects().filter(effect => effect.kind === "writer")).toHaveLength(1);
+      for (const source of ["startup", "clear"]) {
+        await native.lifecycle(source);
+        const refused = await call(native.session, "spawn_agent", { ...args, recoveryOnly: true });
+        expect(refused).toMatchObject({ ok: false, code: "caller_unidentified" });
+        expect(refused.error).toContain("approval-waiting");
+        expect(JSON.stringify(refused)).not.toContain(String(accepted.launchId));
+        await decideNative(fixture, 1);
+        expect(await call(native.session, "spawn_agent", { ...args, recoveryOnly: true })).toMatchObject({ ok: true, replayed: true, launchId: accepted.launchId });
+      }
+      expect(fixture.effects().filter(effect => effect.kind === "writer")).toHaveLength(1);
+    } finally { await native.session.close(); await host.stop(); }
+  }, 40_000);
 
   test("an admitted external session launches, loses the response and recovers under the same key", async () => {
     const fixture = await causalFixture("llv-native-spawn-");

@@ -203,10 +203,10 @@ test("a record rewrite during snapshot refuses the old session before requesting
   refused(f.sources, "session-changed"); expect(approved).toBe(false);
 });
 
-test("a changed record revision or hook generation proof refuses the approved generation", () => {
+test("stable identity or hook generation changes refuse the approved generation", () => {
   for (const seam of ["record", "writer"] as const) {
     const f = fixture(); let reads = 0;
-    if (seam === "record") f.sources.record = () => ({ kind: "record", value: f.record, revision: ++reads === 1 ? "record-1" : "record-2" });
+    if (seam === "record") f.sources.record = () => ({ kind: "record", value: { ...f.record, startedAt: ++reads === 1 ? f.record.startedAt : f.record.startedAt + 1 }, revision: "record" });
     else f.sources.generationProof = () => ++reads === 1 ? "writer-1" : "writer-2";
     refused(f.sources, "session-changed");
   }
@@ -230,4 +230,11 @@ test("the production record reader detects a session rewrite during snapshot", (
 
 test("a new hook generation with an old asynchronously updated record stays refused", () => {
   refused(fixture({ generationProof: () => null }).sources, "session-proof-unavailable");
+});
+
+test("presence changes during registry and approval reads preserve stable session identity", () => {
+  const f = fixture(); let reads = 0;
+  f.sources.record = () => ({ kind: "record", value: { ...f.record, status: ++reads === 1 ? "busy" : "idle", updatedAt: reads }, revision: `revision-${reads}` });
+  expect(resolveNativeCaller(f.sources)).toEqual({ kind: "admitted", conversationId: "conversation_native", proof: "approved-1" });
+  expect(reads).toBe(3);
 });

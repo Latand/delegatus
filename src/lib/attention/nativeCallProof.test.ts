@@ -78,3 +78,33 @@ nativeTest("a writable sibling session claim cannot replace the hook-observed se
   expect(nativeSessionObserved(process.pid, B)).toBe(true);
   expect(nativeSessionObserved(process.pid, A)).toBe(false);
 });
+
+nativeTest("compact keeps the current generation and single-use call proof", () => {
+  const first = recordNativeHook(process.pid, A, transcript(A), "PreToolUse", "spawn_agent", args);
+  const compact = recordNativeHook(process.pid, A, transcript(A), "SessionStart", "", {}, "compact");
+  expect(compact.generation).toBe(first.generation);
+  expect(nativeGenerationCurrent(process.pid, A, transcript(A), first.generation)).toBe(true);
+  expect(runWithNativeCallProof(first.token, "spawn_agent", args, () => nativeTranscriptCallProof(process.pid, transcript(A)))).toBe(first.generation);
+  expect(runWithNativeCallProof(first.token, "spawn_agent", args, () => nativeTranscriptCallProof(process.pid, transcript(A)))).toBeNull();
+});
+
+for (const source of ["startup", "resume", "clear", "fork", undefined, "unknown"]) {
+  nativeTest(`SessionStart source ${source} starts a fresh generation`, () => {
+    const first = recordNativeHook(process.pid, A, transcript(A), "PreToolUse", "spawn_agent", args);
+    const next = recordNativeHook(process.pid, A, transcript(A), "SessionStart", "", {}, source);
+    expect(next.generation).not.toBe(first.generation);
+    expect(nativeGenerationCurrent(process.pid, A, transcript(A), first.generation)).toBe(false);
+    expect(runWithNativeCallProof(first.token, "spawn_agent", args, () => nativeTranscriptCallProof(process.pid, transcript(A)))).toBeNull();
+  });
+}
+
+nativeTest("compact cannot revive an ended generation or carry approval to a different session or transcript", () => {
+  const first = recordNativeHook(process.pid, A, transcript(A), "SessionStart");
+  const moved = recordNativeHook(process.pid, A, `/other/${A}.jsonl`, "SessionStart", "", {}, "compact");
+  expect(moved.generation).not.toBe(first.generation);
+  const switched = recordNativeHook(process.pid, B, transcript(B), "SessionStart", "", {}, "compact");
+  expect(switched.generation).not.toBe(moved.generation);
+  recordNativeHook(process.pid, B, transcript(B), "SessionEnd");
+  const restarted = recordNativeHook(process.pid, B, transcript(B), "SessionStart", "", {}, "compact");
+  expect(restarted.generation).not.toBe(switched.generation);
+});

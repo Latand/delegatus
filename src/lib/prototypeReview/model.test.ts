@@ -95,7 +95,7 @@ test("rejection survives summary and metadata while critic provenance stays loca
 
 test("native association kernel and record proof stays outside round presentation metadata", () => {
   const held = round("native", "Approve external Claude", "2026-10-15T09:00:00Z", false);
-  held.nativeAssociation = { home: "/fixture/claude", pid: 42, processIdentity: "42:100", domain: "fixture", sessionId: "fixture", transcript: "/fixture/transcript.jsonl", recordRevision: "private-record-proof", generationProof: "private-writer-proof", conversationId: "conversation_native", cwd: "/fixture/project", startedAt: 1 };
+  held.nativeAssociation = { home: "/fixture/claude", pid: 42, processIdentity: "42:100", domain: "fixture", sessionId: "fixture", transcript: "/fixture/transcript.jsonl", recordIdentity: { pid: 42, sessionId: "fixture", procStart: "100", pidDomain: "private-record-proof", startedAt: 1, kind: "interactive" }, generationProof: "private-writer-proof", conversationId: "conversation_native", cwd: "/fixture/project", startedAt: 1 };
   const view = prototypeRoundMetadata(held);
   expect(view).not.toHaveProperty("nativeAssociation");
   expect(JSON.stringify(view)).not.toContain("private-record-proof"); expect(JSON.stringify(view)).not.toContain("private-writer-proof");

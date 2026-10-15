@@ -20,7 +20,7 @@ export interface NativeSessionRecord {
 }
 export interface NativeAdmissionEvidence {
   home: string; pid: number; processIdentity: string; domain: string; sessionId: string; transcript: string;
-  recordRevision: string; generationProof: string; conversationId: string; cwd: string; startedAt: number;
+  recordIdentity: NativeSessionRecord; generationProof: string; conversationId: string; cwd: string; startedAt: number;
 }
 export type NativeRecordRead = { kind: "record"; value: unknown; revision?: string } | { kind: "missing" | "invalid" };
 export interface NativeCallerSources {
@@ -56,7 +56,9 @@ export function nativeSessionRecord(value: unknown, pid: number): NativeSessionR
     || typeof record.procStart !== "string" || !/^\d+$/.test(record.procStart)
     || typeof record.pidDomain !== "string" || typeof record.kind !== "string"
     || typeof record.startedAt !== "number" || !Number.isFinite(record.startedAt)) return null;
-  return record as unknown as NativeSessionRecord;
+  // Keep presence updates outside the identity used for rechecks and approval.
+  return { pid, sessionId: record.sessionId, procStart: record.procStart, pidDomain: record.pidDomain,
+    startedAt: record.startedAt, kind: record.kind };
 }
 
 /** Every call revalidates the nearest native parent and its approved generation. */
@@ -119,18 +121,17 @@ export function resolveNativeCaller(sources: NativeCallerSources): NativeCallerV
     if (!generationProof) return refuse("session-proof-unavailable");
     const stableSession = () => {
       const next = sources.record(realHome, pid);
-      return next.kind === "record" && next.revision === read.revision
-        && JSON.stringify(nativeSessionRecord(next.value, pid)) === recordBytes
+      return next.kind === "record" && JSON.stringify(nativeSessionRecord(next.value, pid)) === recordBytes
         && sources.generationProof(pid, transcript) === generationProof;
     };
     // Recheck the session as well as its process after the registry read.
     if (!stableSession()) return refuse("session-changed");
     const cwd = sources.cwd(pid);
-    if (!cwd || !read.revision) return refuse("session-proof-unavailable");
+    if (!cwd) return refuse("session-proof-unavailable");
     let association: ReturnType<NativeCallerSources["association"]>;
     try {
       association = sources.association({ home: realHome, pid, processIdentity: expected, domain, sessionId: record.sessionId,
-        transcript, recordRevision: read.revision, generationProof, conversationId: conversation.id, cwd, startedAt: start });
+        transcript, recordIdentity: record, generationProof, conversationId: conversation.id, cwd, startedAt: start });
     } catch { return refuse("approval-unavailable"); }
     if (!stableSession()) return refuse("session-changed");
     if (sources.identity(pid) !== expected || !sources.ancestry().slice(1).includes(pid)) return refuse("process-identity-mismatch");

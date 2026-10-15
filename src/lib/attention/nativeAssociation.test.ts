@@ -22,7 +22,7 @@ import { recordNativeHook } from "./nativeCallProof";
 import { nativeAssociation } from "./nativeAssociation";
 import { nativeAssociationDecisionApproves } from "./nativeAssociationForm";
 import { nativeAssociationCurrent, readNativeSessionRecord } from "./nativeCallerSources";
-import type { NativeAdmissionEvidence } from "./nativeCaller";
+import { nativeSessionRecord, type NativeAdmissionEvidence } from "./nativeCaller";
 
 const nativeTest = test.skipIf(process.platform !== "linux");
 
@@ -39,7 +39,7 @@ beforeEach(() => {
   const domain = `linux:${fs.readFileSync("/etc/machine-id", "utf8").trim()}:${fs.readlinkSync("/proc/self/ns/pid")}`;
   fs.writeFileSync(path.join(home, "sessions", `${process.pid}.json`), JSON.stringify({ pid: process.pid, sessionId, procStart: processIdentity.split(":")[1], pidDomain: domain, kind: "interactive", startedAt: Date.now() }));
   const read = readNativeSessionRecord(home, process.pid); if (read.kind !== "record") throw new Error("fixture record");
-  evidence = { home, pid: process.pid, processIdentity, domain, sessionId, transcript, recordRevision: read.revision!, generationProof: recordNativeHook(process.pid, sessionId, transcript, "SessionStart").generation, conversationId: "conversation_native", cwd: root, startedAt: Date.now() };
+  evidence = { home, pid: process.pid, processIdentity, domain, sessionId, transcript, recordIdentity: nativeSessionRecord(read.value, process.pid)!, generationProof: recordNativeHook(process.pid, sessionId, transcript, "SessionStart").generation, conversationId: "conversation_native", cwd: root, startedAt: Date.now() };
 });
 afterEach(() => {
   closeAgentRegistryForTests();
@@ -205,15 +205,48 @@ nativeTest("skipping a decision or using a custom answer never approves identity
   expect(nativeAssociation(evidence).status).toBe("refused");
 });
 
-nativeTest("a stale record or ended process cannot be approved and a new revision needs a new decision", async () => {
+nativeTest("presence updates between request, owner approval and retry retain one approved association", async () => {
+  const pending = nativeAssociation(evidence);
+  const file = path.join(evidence.home, "sessions", `${evidence.pid}.json`);
+  const record = JSON.parse(fs.readFileSync(file, "utf8"));
+  for (const status of ["idle", "waiting", "busy"]) {
+    fs.writeFileSync(file, JSON.stringify({ ...record, status, waitingFor: status === "waiting" ? "user" : null,
+      statusUpdatedAt: Date.now(), updatedAt: Date.now() }));
+    expect(nativeAssociationCurrent(evidence)).toBe(true);
+    if (status === "idle") expect((await decideAsOwner([1])).status).toBe(200);
+    const read = readNativeSessionRecord(evidence.home, evidence.pid); if (read.kind !== "record") throw new Error("record");
+    const fresh = { ...evidence, recordIdentity: nativeSessionRecord(read.value, evidence.pid)! };
+    expect(nativeAssociation(fresh)).toEqual({ status: "approved", proof: pending.proof });
+  }
+  expect(loadSeatRounds()).toHaveLength(1);
+});
+
+for (const field of ["pid", "sessionId", "procStart", "pidDomain", "startedAt", "kind"] as const) {
+  nativeTest(`a changed ${field} cannot be approved`, async () => {
+    nativeAssociation(evidence);
+    const file = path.join(evidence.home, "sessions", `${evidence.pid}.json`);
+    const record = JSON.parse(fs.readFileSync(file, "utf8"));
+    const changed = { pid: evidence.pid + 1, sessionId: ["77777777", "7777", "4777", "8777", "777777777777"].join("-"),
+      procStart: "0", pidDomain: "linux:other:pidns", startedAt: record.startedAt + 1, kind: "bg" };
+    fs.writeFileSync(file, JSON.stringify({ ...record, [field]: changed[field] }));
+    expect(nativeAssociationCurrent(evidence)).toBe(false);
+    expect((await decideAsOwner([1])).status).toBe(409);
+    expect(nativeAssociation(evidence).status).toBe("waiting");
+  });
+}
+
+nativeTest("compaction retains approval and startup or clear ends it", async () => {
+  const signedIn = owner();
   nativeAssociation(evidence);
-  const record = path.join(evidence.home, "sessions", `${evidence.pid}.json`);
-  fs.writeFileSync(record, fs.readFileSync(record));
-  expect(nativeAssociationCurrent(evidence)).toBe(false);
-  expect((await decideAsOwner([1])).status).toBe(409);
-  expect(nativeAssociation(evidence).status).toBe("waiting");
-  const read = readNativeSessionRecord(evidence.home, evidence.pid); if (read.kind !== "record") throw new Error("record");
-  expect(nativeAssociation({ ...evidence, recordRevision: read.revision! }).status).toBe("waiting");
-  expect(loadSeatRounds()).toHaveLength(2);
+  expect((await decideAsOwner([1], {}, signedIn.cookie)).status).toBe(200);
+  const compact = recordNativeHook(evidence.pid, evidence.sessionId, evidence.transcript, "SessionStart", "", {}, "compact");
+  expect(compact.generation).toBe(evidence.generationProof);
+  expect(nativeAssociationCurrent(evidence)).toBe(true);
+  expect(nativeAssociation(evidence).status).toBe("approved");
+  for (const source of ["startup", "clear"]) {
+    recordNativeHook(evidence.pid, evidence.sessionId, evidence.transcript, "SessionStart", "", {}, source);
+    expect(nativeAssociationCurrent(evidence)).toBe(false);
+    expect((await decideAsOwner([1], {}, signedIn.cookie)).status).toBe(409);
+  }
   expect(nativeAssociationCurrent({ ...evidence, processIdentity: `${process.pid}:0` })).toBe(false);
 });

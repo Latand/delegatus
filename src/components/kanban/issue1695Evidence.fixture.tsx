@@ -3265,7 +3265,7 @@ if (DECISIONS) {
   }
   if (DECISIONS === "native-association") {
     const form = nativeAssociationForm({ home: "/fixture/claude", pid: 4201, processIdentity: "4201:100", domain: "fixture",
-      sessionId: "fixture-session", transcript: "/fixture/claude/projects/external-session/transcript.jsonl", recordRevision: "fixture-record",
+      sessionId: "fixture-session", transcript: "/fixture/claude/projects/external-session/transcript.jsonl", recordIdentity: { pid: 4201, sessionId: "fixture-session", procStart: "100", pidDomain: "fixture", startedAt: 1, kind: "interactive" },
       generationProof: "fixture-writer", conversationId: "conversation_external", cwd: "/fixture/worktrees/external-session", startedAt: Date.UTC(2026, 9, 15, 9, 30) }, UK ? "uk" : "en");
     Object.assign(seatRounds[0]!, form, { source: { conversationId: null }, nativeAssociationState: "pending" });
     seatRounds.splice(1); delete protoRounds["t-search"];

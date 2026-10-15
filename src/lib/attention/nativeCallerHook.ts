@@ -38,7 +38,7 @@ async function handleNativeCallerHook(owned: () => boolean): Promise<void> {
   const transcript = path.join(fs.realpathSync(path.dirname(input.transcript_path)), path.basename(input.transcript_path));
   const relative = path.relative(root, transcript);
   if (path.isAbsolute(relative) || relative === ".." || relative.startsWith(`..${path.sep}`) || path.basename(transcript) !== `${input.session_id}.jsonl`) throw new Error("native hook transcript is outside its account");
-  if (event !== "PreToolUse") { recordNativeHook(pid, input.session_id, transcript, event as "SessionStart" | "SessionEnd"); return; }
+  if (event !== "PreToolUse") { recordNativeHook(pid, input.session_id, transcript, event as "SessionStart" | "SessionEnd", "", {}, typeof input.source === "string" ? input.source : undefined); return; }
   if (typeof input.tool_name !== "string" || !/^mcp__viewer__[a-z_]+$/.test(input.tool_name) || !input.tool_input || typeof input.tool_input !== "object" || Array.isArray(input.tool_input)) throw new Error("invalid native MCP hook input");
   const args = input.tool_input as Record<string, unknown>;
   const { token } = recordNativeHook(pid, input.session_id, transcript, "PreToolUse", input.tool_name.slice("mcp__viewer__".length), args);

@@ -117,7 +117,8 @@ export function nativeAssociationCurrent(evidence: import("./nativeCaller").Nati
     || procBackend.processIdentity(evidence.pid) !== evidence.processIdentity) return false;
   const read = readNativeSessionRecord(evidence.home, evidence.pid);
   const record = read.kind === "record" ? nativeSessionRecord(read.value, evidence.pid) : null;
-  if (read.kind !== "record" || !record || read.revision !== evidence.recordRevision || record.sessionId !== evidence.sessionId
+  if (read.kind !== "record" || !record || JSON.stringify(record) !== JSON.stringify(evidence.recordIdentity)
+    || `${record.pid}:${record.procStart}` !== evidence.processIdentity || record.sessionId !== evidence.sessionId
     || record.pidDomain !== evidence.domain) return false;
   return nativeGenerationCurrent(evidence.pid, evidence.sessionId, evidence.transcript, evidence.generationProof);
 }
