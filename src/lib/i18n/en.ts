@@ -5971,6 +5971,7 @@ export const en = {
   "selfUpdate.applied.host": "The runtime host runs it; restart web to run it there too.",
   "selfUpdate.applied.none": "The running processes still serve the previous release. Restart web, then the runtime host, to run it.",
   "selfUpdate.applied.managedHostBehind": "Web runs it; the runtime host still runs {host}.",
+  "selfUpdate.applied.managedUnconfirmed": "Deployment completed; current component revisions are shown above.",
   "selfUpdate.update.failed": "Update stopped at {step} after {duration}. The running processes were not touched; the build happens in its own release directory.",
   "selfUpdate.update.failedApply": "Update stopped at {step} after {duration}.",
   "selfUpdate.update.rolledBackApply": "Update stopped at {step} after {duration} and rolled back. The previous release serves again.",

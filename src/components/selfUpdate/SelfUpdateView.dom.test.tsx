@@ -879,6 +879,17 @@ describe("managed install", () => {
     expect(button(el, "retry")).toBeNull();
   });
 
+  test.each(["en", "uk"] as const)("a completed deployment leaves an unknown host revision unconfirmed (%s)", locale => {
+    setLocale(locale);
+    const el = render(managed({ installed: NEW_REV, serving: { web: NEW_REV, runtimeHost: null },
+      processes: { web: proc("web", { revision: NEW.slice(0, 7) }), runtimeHost: proc("runtimeHost", { state: "failed", revision: null }) },
+      update: { ...idleUpdate(MANAGED_STEPS), state: "done", target: NEW, targetShort: NEW.slice(0, 7) } }));
+    expect(text(el.querySelector('[data-outcome="done"]'))).toContain(locale === "uk"
+      ? "Поточні ревізії компонентів показано вище." : "current component revisions are shown above.");
+    expect(text(el.querySelector('[data-outcome="done"]'))).not.toContain(locale === "uk"
+      ? "Тепер на ній працюють і веб, і runtime host." : "Web and the runtime host now run it.");
+  });
+
   test("pending rollback retains its failed target beside a newer check", () => {
     const newer = rev("f7e6ce4".padEnd(40, "1"), "1.2.4");
     const el = render(managed({ ...available(), available: newer, update: { ...idleUpdate(MANAGED_STEPS), state: "failed",

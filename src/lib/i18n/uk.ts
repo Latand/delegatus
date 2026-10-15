@@ -5875,6 +5875,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "selfUpdate.applied.host": "Runtime host уже на ній; перезапустіть веб, щоб і він перейшов.",
   "selfUpdate.applied.none": "Запущені процеси досі обслуговують попередній реліз. Перезапустіть веб, потім runtime host, щоб перейти на неї.",
   "selfUpdate.applied.managedHostBehind": "Веб уже на ній; runtime host досі на {host}.",
+  "selfUpdate.applied.managedUnconfirmed": "Розгортання завершено. Поточні ревізії компонентів показано вище.",
   "selfUpdate.update.failed": "Оновлення зупинилося на кроці «{step}» через {duration}. Запущені процеси не зачеплено: збірка йде в окремій теці релізу.",
   "selfUpdate.update.failedApply": "Оновлення зупинилося на кроці «{step}» через {duration}.",
   "selfUpdate.update.rolledBackApply": "Оновлення зупинилося на кроці «{step}» через {duration}. Після відкату знову працює попередній реліз.",

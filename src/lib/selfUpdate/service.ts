@@ -2260,17 +2260,19 @@ export class SelfUpdateService {
       tail: [],
     };
     let host: ProcessView;
+    let hostRevision: string | null = null;
     try {
       const health = await this.deps.hostHealth();
-      const revision = health?.generation?.revision ?? null;
+      hostRevision = health?.generation?.revision ?? null;
+      const revision = hostRevision ? shortSha(hostRevision) : null;
       host = health
         ? { ...stoppedProcess(), state: running("handoff") ? "starting" : "healthy", pid: health.pid, lastHealthAt: at, lastHealthOk: true, revision, tail: [] }
         : { ...stoppedProcess(), state: "failed", error: { kind: "no-answer" }, tail: [] };
     } catch (error) {
       host = { ...stoppedProcess(), state: running("handoff") ? "starting" : "failed", lastHealthAt: at, lastHealthOk: false, error: { kind: "message", text: error instanceof Error ? error.message : String(error) }, tail: [] };
     }
-    const identity = JSON.stringify([this.deps.web.revision ?? null, host.revision]);
-    if (this.deps.web.revision && host.revision && this.servingIdentity !== identity) {
+    const identity = JSON.stringify([this.deps.web.revision ?? null, hostRevision]);
+    if (this.deps.web.revision && hostRevision && this.servingIdentity !== identity) {
       const changed = this.servingIdentity !== null || Boolean(this.slice.installed && this.slice.installed.sha !== this.deps.web.revision);
       this.servingIdentity = identity;
       if (changed) this.invalidateComparison();
@@ -2281,7 +2283,7 @@ export class SelfUpdateService {
       installed,
       serving: {
         web: await observedRevision(this.deps.web.revision),
-        runtimeHost: await observedRevision(host.revision),
+        runtimeHost: await observedRevision(hostRevision),
       },
       update,
       ...(displayed !== this.managed && this.managed ? { previousAttempt: managedUpdateState(this.managed, now) } : {}),

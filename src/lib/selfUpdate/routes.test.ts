@@ -249,6 +249,9 @@ describe("managed install: an update is one Viewer deployment", () => {
       expect(s.serving.web?.sha).toBe(tipSha);
       expect(s.installed.sha).toBe(tipSha);
       expect(s.serving.runtimeHost?.sha).toBe(tipSha);
+      const { staleProcesses, appliedCopy } = await import("@/components/selfUpdate/selfUpdateCopy");
+      expect(staleProcesses(s)).toEqual({ web: false, host: false });
+      expect(appliedCopy(s, tipSha.slice(0, 7), key => key)).toBe("selfUpdate.applied.both");
       await service.snapshot();
       expect(lists).toBe(1);
       expect((await service.retry("retry-stale")).ok).toBe(false);
@@ -311,7 +314,7 @@ describe("managed install: an update is one Viewer deployment", () => {
     expect(s.installed.sha).toBe(firstSha);
     expect(s.available?.sha).toBe(tipSha);
     expect(s.check.delta?.summary.groups).toEqual([{ type: "Fixed", items: ["The header says what runs (#7)"], more: 0 }]);
-    expect(s.processes.runtimeHost).toMatchObject({ state: "healthy", pid: 4242, revision: firstSha });
+    expect(s.processes.runtimeHost).toMatchObject({ state: "healthy", pid: 4242, revision: firstSha.slice(0, 7) });
 
     const managedRestart = await postRestart(post("/restart", { role: "web" }));
     expect(managedRestart.status).toBe(409);
@@ -348,6 +351,7 @@ describe("managed install: an update is one Viewer deployment", () => {
     expect(s.update.state).toBe("done");
     expect(s.busy).toBeNull();
     expect(s.update.steps.every((step) => step.state === "done")).toBe(true);
+    await service.check();
   });
 
   test("a newer external failed target can be retried forward after two identical ledger observations", async () => {

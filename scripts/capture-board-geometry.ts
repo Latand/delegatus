@@ -7206,6 +7206,9 @@ async function selfUpdateInstallMain(): Promise<void> {
     update: { ...idleUpdate(MANAGED_STEPS), state: "done", target: newer, targetShort: newer.slice(0, 7),
       startedAt: "2026-01-02T00:02:00Z", finishedAt: "2026-01-02T00:03:00Z",
       steps: pendingSteps(MANAGED_STEPS).map(step => ({ ...step, state: "done" as const })) } };
+  states["managed-external-success-unknown-host"] = { ...states["managed-external-success"]!,
+    serving: { web: revision(newer), runtimeHost: null },
+    processes: { web: processView(newer), runtimeHost: { ...stoppedProcess(), state: "failed", tail: [] } } };
   states["managed-unknown-host"] = { ...managed, serving: { web: revision(next), runtimeHost: null },
     processes: { ...managed.processes, runtimeHost: { ...stoppedProcess(), state: "failed", tail: [] } } };
   let server: ChildProcess | null = null;
@@ -7239,12 +7242,15 @@ async function selfUpdateInstallMain(): Promise<void> {
         return false;
       }, undefined, { timeout: 60_000 });
       const tag = `${width}-${lang}-${name}${managedEvidence ? `-${colorScheme}` : ""}`;
+      const externalSuccess = snapshot.update.state === "done" && snapshot.previousAttempt?.state === "failed";
       if (managedEvidence) {
         const header = page.locator('[data-section="header"]');
         await header.scrollIntoViewIfNeeded();
         const text = await header.innerText();
         if (!snapshot.serving.web || !text.includes(snapshot.serving.web.short)) report.failures.push(`${tag}: serving web revision is absent`);
-        if (name === "managed-unknown-host" && !text.includes(lang === "uk" ? "ревізія невідома" : "unknown revision")) report.failures.push(`${tag}: unknown host is hidden`);
+        if (!snapshot.serving.runtimeHost && !text.includes(lang === "uk" ? "ревізія невідома" : "unknown revision")) report.failures.push(`${tag}: unknown host is hidden`);
+        if (externalSuccess && !snapshot.serving.runtimeHost && !(await page.locator('[data-outcome="done"]').innerText()).includes(messages[lang]["selfUpdate.applied.managedUnconfirmed"]))
+          report.failures.push(`${tag}: completion claims an unconfirmed host revision`);
         report.frames[`${tag}-header`] = { text };
         const frame = path.join(OUT_DIR, `${tag}-header.png`);
         await page.screenshot({ path: frame });
@@ -7332,15 +7338,15 @@ async function selfUpdateInstallMain(): Promise<void> {
         if (name === "install-switch" && !installation.text?.includes(lang === "uk" ? "Замінити" : "Replace")) report.failures.push(`${tag}: switch is missing`);
       }
       if (managedEvidence) {
-        const failedSection = page.locator(name === "managed-external-success" ? '[data-section="previous-attempt"]' : '[data-section="update"]');
+        const failedSection = page.locator(externalSuccess ? '[data-section="previous-attempt"]' : '[data-section="update"]');
         await failedSection.scrollIntoViewIfNeeded();
         const text = await failedSection.innerText();
         if (!text.includes(next.slice(0, 7)) || !text.includes("recovering pending spawns")) report.failures.push(`${tag}: failed target or cause is absent`);
-        if (name === "managed-external-success" && await page.locator('[data-action="retry"]').count()) report.failures.push(`${tag}: stale retry remains visible`);
+        if (externalSuccess && await page.locator('[data-action="retry"]').count()) report.failures.push(`${tag}: stale retry remains visible`);
         const rect = await failedSection.boundingBox();
         if (!rect || rect.x < 0 || rect.x + rect.width > width) report.failures.push(`${tag}: failed attempt overflows`);
         report.frames[`${tag}-failure`] = { text, rect };
-        if (name === "managed-external-success") {
+        if (externalSuccess) {
           await Promise.all([
             // seedInit uses polling; install the observer before reloading.
             page.waitForRequest(request => new URL(request.url()).pathname === "/api/self-update", { timeout: 15_000 }),
