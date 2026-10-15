@@ -962,6 +962,14 @@ export interface SeatTickOutstandingWake {
       A returned refusal can be released on fenced absence. Active or legacy
       attempts cannot: a caller may still reserve the original key. */
   dispatch?: { token: string; state: "active" | "refused" | "returned" };
+  /** Recovery progress survives a Viewer restart even while send admission is closed. */
+  recovery?: {
+    checkedAt: string;
+    lastAttemptAt: string | null;
+    nextRetryAt: string;
+    deadlineAt: string;
+    reason: string;
+  };
 }
 
 /**

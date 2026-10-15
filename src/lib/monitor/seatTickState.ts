@@ -140,6 +140,7 @@ function normalizeOutstandingWake(value: unknown): SeatTickOutstandingWake | nul
   const seatEpoch = raw.seatEpoch;
   const commit = normalizeWakeCommit(raw.commit);
   if (!clientMessageId || !conversationId || !commit || typeof seatEpoch !== "number" || !Number.isSafeInteger(seatEpoch)) return null;
+  const recovery = raw.recovery as SeatTickOutstandingWake["recovery"];
   return {
     clientMessageId,
     conversationId,
@@ -148,6 +149,11 @@ function normalizeOutstandingWake(value: unknown): SeatTickOutstandingWake | nul
     commit,
     ...(typeof raw.text === "string" ? { text: raw.text } : {}),
     ...(isoOrNull(raw.preparedAt) ? { preparedAt: raw.preparedAt as string } : {}),
+    ...(recovery && isoOrNull(recovery.checkedAt) && isoOrNull(recovery.nextRetryAt)
+      && isoOrNull(recovery.deadlineAt) && typeof recovery.reason === "string" ? { recovery: {
+        checkedAt: recovery.checkedAt, lastAttemptAt: isoOrNull(recovery.lastAttemptAt),
+        nextRetryAt: recovery.nextRetryAt, deadlineAt: recovery.deadlineAt, reason: recovery.reason.slice(0, 500),
+      } } : {}),
   };
 }
 

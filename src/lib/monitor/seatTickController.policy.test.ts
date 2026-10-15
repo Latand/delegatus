@@ -242,11 +242,16 @@ test("a seat whose stdio Viewer MCP is dead is carded and receives no more tick 
 test.each([
   "cleared", "retained dead claim", "retained during MCP grace", "terminal failure", "unsettled failure",
   "composer after cleanup", "composer during MCP grace", "rotation after cleanup",
+  "composer before claim", "composer before enqueue", "rotation during runtime admission", "drain during runtime admission",
+  "terminal exit after claim",
 ] as const)("a deploy-settled wake runs shared composer recovery with %s", async scenario => {
   const { recoverDeadStructuredConversation } = await import("@/lib/runtime/structuredRecovery");
+  const { spawnStructuredConversation } = await import("@/lib/runtime/structuredSpawn");
+  const { captureProcessIdentity } = await import("@/lib/processIdentity");
+  const { writeDrain, drainFile, releaseDrain } = await import("@/lib/selfUpdate/drain");
   const f = childFixture("composer-deploy-recovery", false, "off");
   setAgentRegistryForTests(f.registry);
-  fs.writeFileSync(f.seat.path!, "");
+  fs.writeFileSync(f.seat.path!, `${JSON.stringify({ type: "user", message: { role: "user", content: "fixture prompt" } })}\n`);
   const key = sessionKeyFromTranscript("claude", f.seat.path!)!;
   const entry = { key, artifactPath: f.seat.path!, cwd: f.cwd, accountId: null,
     launchProfile: emptyLaunchProfile({ cwd: f.cwd, title: "Completed orchestrator" }), status: "dead" as const, host: null,
@@ -265,12 +270,22 @@ test.each([
   const oldDigest = f.registry.seatMcpReceipt(f.seat.conversationId)!.spawnCapabilityDigest;
   f.seed();
   let spawns = 0;
+  let starts = 0;
   const deliveredKeys: string[] = [];
-  const rig = childRig(f, { seatDeployments: [{ conversationId: f.seat.conversationId, deploymentId: "composer-deploy" }],
+  const rig = childRig(f, { settings: { ...defaultSeatTickSettings(f.project), wakeIntervalMinutes: 15 },
+    seatDeployments: [{ conversationId: f.seat.conversationId, deploymentId: "composer-deploy" }],
     deployments: { "composer-deploy": { phase: "succeeded", terminal: true, revision: "abcdef1234" } },
     seatActivity: { conversationId: f.seat.conversationId, host: { state: "gone", kind: "structured", pid: null }, lifecycle: "gone", reason: "host_gone_turn_settled" },
     deliverWith: message => deliverConversationMessage(message, {
-      recover: request => recoverDeadStructuredConversation(request, { registry: f.registry, client: {} as RuntimeHostClient,
+      recover: request => recoverDeadStructuredConversation(request, { registry: f.registry, client: {
+        command: async () => {
+          if (scenario === "rotation during runtime admission") rig.seat = { conversationId: SUCCESSOR, seatEpoch: 8, path: null };
+          if (scenario === "drain during runtime admission") writeDrain(drainFile(), {
+            id: "recovery-drain", target: "a".repeat(40), since: new Date().toISOString(), until: 0, persistent: true,
+          });
+          return {};
+        }, append: async () => ({}), transitionOperation: async () => ({}),
+      } as unknown as RuntimeHostClient,
         transport: () => "structured", park: () => null,
         resolveAccount: () => {
           if (composerRace) f.registry.upsert({ ...entry, claimEpoch: 2, claimOwner: "structured-host:replacement", status: "idle" });
@@ -280,18 +295,38 @@ test.each([
         spawn: async input => {
           expect(f.row().outstandingWake?.clientMessageId).toBe(message.clientMessageId ?? undefined);
           spawns += 1;
+          if (scenario === "composer before claim") f.registry.upsert({ ...entry, claimEpoch: 2, claimOwner: "structured-host:replacement", status: "idle" });
           if (scenario === "terminal failure" || scenario === "unsettled failure") {
             if (scenario === "terminal failure") f.registry.failSpawn(input.receipt.launchId, "No conversation found with session ID");
             throw new Error("No conversation found with session ID");
           }
-          f.registry.rotateSpawnCapabilityForReceipt(input.receipt.launchId);
-          f.registry.setReceiptViewerMcpTransport(input.receipt.launchId, "stdio");
-          f.registry.completeSpawn(input.receipt.launchId, entry);
-          return { ok: true, target: null, path: f.seat.path!, launchId: input.receipt.launchId,
-            conversationId: f.seat.conversationId as never, launched: true, retrySafe: false, initialMessage: "delivered", state: "settled" };
+          return spawnStructuredConversation(input, {
+            startHost: async () => {
+              starts++;
+              if (scenario === "terminal exit after claim") throw new Error("No conversation found with session ID");
+              return { identity: { sessionId: key.sessionId }, release: async () => {} } as never;
+            },
+            bindHost: async (registry, claimedKey, _host, owner, epoch) => {
+              registry.setStructuredHostClaimed(claimedKey, {
+                kind: "claude-broker", endpoint: "stdio:recovered", process: captureProcessIdentity(process.pid),
+                eventCursor: 0, protocolVersion: "v1", writerClaimEpoch: epoch,
+                activeTurnRef: null, pendingAttention: [], activeFlags: [],
+              }, "idle", owner, epoch);
+              return () => {};
+            },
+            publishHost: async (_key, _host, owns) => {
+              expect(await owns!()).toBe(true);
+              return async () => {};
+            },
+            deliverFirst: async () => {},
+          });
         }, requestDeliveryDrain: () => {},
       }),
       enqueueStructured: async request => {
+        if (scenario === "composer before enqueue") {
+          const current = f.registry.readOnlySnapshot().entries[`claude:${key.sessionId}`]!;
+          f.registry.upsert({ ...current, claimEpoch: current.claimEpoch + 1, claimOwner: "structured-host:replacement" });
+        }
         request.admissionGuard?.();
         expect(request.clientMessageId).toBe(message.clientMessageId);
         deliveredKeys.push(request.clientMessageId!);
@@ -317,6 +352,19 @@ test.each([
     return { status: 503, body: { error: "replacement unavailable" } };
   } };
   if (retainedClaim) expect(f.registry.readOnlySnapshot().entries[`claude:${key.sessionId}`]?.structuredHost?.process?.pid).toBe(2_000_000_000);
+  if (scenario === "composer before claim" || scenario === "composer before enqueue"
+    || scenario === "rotation during runtime admission" || scenario === "drain during runtime admission") {
+    try {
+      await runSeatTickCheck(f.project, rig.deps);
+      expect(spawns).toBe(1);
+      expect(starts).toBe(scenario === "composer before enqueue" ? 1 : 0);
+      expect(deliveredKeys).toEqual([]);
+      expect(rotations).toBe(0);
+      expect(f.row().announcedDeploys ?? []).not.toContain("composer-deploy");
+      if (scenario.startsWith("composer")) expect(f.registry.readOnlySnapshot().entries[`claude:${key.sessionId}`]?.claimOwner).toBe("structured-host:replacement");
+    } finally { releaseDrain(drainFile(), "recovery-drain"); }
+    return;
+  }
   if (composerRace || scenario === "rotation after cleanup") {
     await runSeatTickCheck(f.project, rig.deps);
     expect(spawns).toBe(0);
@@ -325,14 +373,14 @@ test.each([
     expect(f.row().announcedDeploys ?? []).not.toContain("composer-deploy");
     return;
   }
-  if (scenario === "terminal failure" || scenario === "unsettled failure") {
+  if (scenario === "terminal failure" || scenario === "unsettled failure" || scenario === "terminal exit after claim") {
     await runSeatTickCheck(f.project, rig.deps);
     const owed = f.row().outstandingWake?.clientMessageId;
     expect(spawns).toBe(1);
-    expect(rotations).toBe(scenario === "terminal failure" ? 1 : 0);
+    expect(rotations).toBe(scenario === "unsettled failure" ? 0 : 1);
     expect(f.row().announcedDeploys ?? []).not.toContain("composer-deploy");
     expect(owed).toBeTruthy();
-    if (scenario === "terminal failure") {
+    if (scenario !== "unsettled failure") {
       expect(f.row().hostRecovery?.state).toBe("failed");
       expect(rig.cards.filter(({ card }) => card.ref === "seat-host-recovery" && card.state === "open")).toHaveLength(1);
       await runSeatTickCheck(f.project, rig.deps);
@@ -347,10 +395,63 @@ test.each([
   expect(f.registry.seatMcpReceipt(f.seat.conversationId)?.viewerMcpTransport).toBe("stdio");
   expect(rig.cards.some(({ card }) => card.kind === "mcp-unavailable" && card.state === "resolved")).toBe(false);
   expect(f.row().announcedDeploys).toEqual(["composer-deploy"]);
+  expect(f.row().lastWakeAt).toBe(new Date(f.now).toISOString());
   await runSeatTickCheck(f.project, rig.deps);
   expect(spawns).toBe(1);
   expect(rotations).toBe(0);
   expect(deliveredKeys).toHaveLength(1);
+});
+
+test.each(["queued", "uncertain", "admission closed"] as const)("an old refused wake after restart remains accounted for with %s", async result => {
+  const f = childFixture("wake-retry-after-restart");
+  setAgentRegistryForTests(f.registry);
+  f.spawn({ title: "Completed worker", turn: "terminal", terminalAt: ago(f, 2) });
+  f.seed();
+  const settings = { ...defaultSeatTickSettings(f.project), wakeIntervalMinutes: 15 };
+  const first = childRig(f, { settings, realWakeState: true,
+    deliverWith: async () => ({ ok: false, outcome: "failed", status: 503, error: "recovery unavailable", admission: "refused" }),
+  });
+  await runSeatTickCheck(f.project, first.deps);
+  const original = f.row().outstandingWake!;
+  expect(original.dispatch?.state).toBe("refused");
+  const next = childRig(f, { settings, now: f.now + (result === "admission closed" ? 15 : 270) * MINUTE, realWakeState: true,
+    deliverWith: async message => {
+      const held = f.registry.holdDelivery(f.seat.conversationId as never, message.text, message.clientMessageId!,
+        "text", [], null, { kind: "send", policy: "queue" });
+      return result === "uncertain"
+        ? { ok: false, outcome: "failed", status: 503, error: "acknowledgement lost", operationId: held.command.operationId, actuation: "started", resend: "verify-first" }
+        : { ok: true, target: null, outcome: "queued", operationId: held.command.operationId };
+    },
+  });
+  if (result === "admission closed") next.deps.mcpHealth = () => ({ status: "dead", detail: "launcher unavailable" });
+  await runSeatTickCheck(f.project, next.deps);
+  expect(next.sent).toHaveLength(result === "admission closed" ? 0 : 1);
+  expect(f.row().outstandingWake?.clientMessageId).toBe(original.clientMessageId);
+  expect(f.row().retiredWakes).toEqual([]);
+  expect(f.acknowledged()).toEqual([]);
+  if (result === "admission closed") {
+    const notice = next.cards.find(({ card }) => card.ref === SEAT_TICK_WAKE_UNRESOLVED_REF && card.state === "open")?.card;
+    expect(notice).toBeDefined();
+    expect(notice!.detail).toContain(`Arrival deadline: ${new Date(f.now + 15 * MINUTE).toISOString()}`);
+    expect(notice!.detail).toContain(`Next check: ${new Date(f.now + 20 * MINUTE).toISOString()}`);
+    expect(notice!.detail).toContain("Check the seat's conversation");
+    expect(f.row().outstandingWake?.recovery).toMatchObject({
+      checkedAt: new Date(f.now + 15 * MINUTE).toISOString(),
+      lastAttemptAt: original.recovery?.lastAttemptAt,
+      nextRetryAt: new Date(f.now + 20 * MINUTE).toISOString(),
+      deadlineAt: new Date(f.now + 15 * MINUTE).toISOString(),
+    });
+    expect(f.row().outstandingWake?.recovery?.reason).toContain("recovery refused");
+    const aged = childRig(f, { settings, now: f.now + 270 * MINUTE, realWakeState: true });
+    aged.deps.mcpHealth = next.deps.mcpHealth;
+    await runSeatTickCheck(f.project, aged.deps);
+    expect(aged.sent).toEqual([]);
+    expect(f.row().outstandingWake).toBeNull();
+    expect(f.row().retiredWakes).toMatchObject([{ wake: { clientMessageId: original.clientMessageId }, reason: "unresolved-age" }]);
+  } else {
+    expect(f.row().outstandingWake?.operationId).toBeTruthy();
+    expect(next.sent[0]!.clientMessageId).toBe(original.clientMessageId);
+  }
 });
 
 test.each(["rotated", "failed"] as const)("a definitively failed dead-seat revival rotates once and leaves a durable %s notice", async state => {
@@ -1784,7 +1885,8 @@ test("a send the layer refused without a record is re-dispatched under its origi
     } });
     const retried = await runSeatTickCheck(fixture.project, next.deps);
     expect(next.sent).toHaveLength(1);
-    expect(next.sent[0]).toMatchObject({ clientMessageId: outstanding.clientMessageId, text: outstanding.text, conversationId: fixture.seat.conversationId });
+    expect(next.sent[0]).toMatchObject({ clientMessageId: outstanding.clientMessageId, conversationId: fixture.seat.conversationId });
+    expect(next.sent[0]!.text).toBe(outstanding.text!.replace(outstanding.preparedAt!, new Date(fixture.now + 5 * MINUTE).toISOString()));
     expect(next.journal[0]).toMatchObject({ verdict: "landed", delivery: { clientMessageId: outstanding.clientMessageId, outcome: "landed" } });
     expect(next.journal[0]!.detail).toContain("re-dispatched under its original key");
     expect(fixture.row()).toMatchObject({ outstandingWake: null, lastWakeAt: new Date(fixture.now + 5 * MINUTE).toISOString() });
