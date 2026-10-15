@@ -1,8 +1,9 @@
 import { staleWorkingResponse } from "@/lib/agent/spawnProjection.fixture";
 import { BoardEncoder } from "@/lib/boardEncoding";
 import { NATIVE_ASSOCIATION_AUTHORIZATION_ERROR } from "@/lib/attention/nativeAssociationForm";
-import { describe, expect } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -83,6 +84,299 @@ const VIEWPORT = { width: 1440, height: 900 } as const;
 type Scheme = "light" | "dark";
 
 const card = (id: string) => `[data-kanban-board] .card[data-id="task:${id}"]`;
+
+type DerivationSpan = { name: string; start: number; end: number; changed: string[] };
+type DerivationTrace = { name: string; ph: string; ts: number; dur?: number; tdur?: number; pid: number; tid: number };
+type ProjectPerformanceWindow = Window & {
+  __pdRecording: boolean; __pdRows: DerivationSpan[]; __pdLong: { start: number; duration: number }[];
+  __pdCapture: boolean; __pdOutputs: Record<string, unknown>;
+  projectCorpus: { files: number; flows: number; tasks: number; liveIds: string[] };
+  projectSessions(): { id: string; revision: number }[];
+  projectConnection(): string;
+  projectCatalogHead(): { size: number; mtime: number };
+  __pdCatalogHead?: { size: number; mtime: number };
+  projectPoll(): void; runtimeEmit(event: unknown): void;
+  pdStop(): { start: number; end: number; events: number; polls: number; scroll: number[]; heads: Record<string, number> };
+};
+
+function derivationTasks(trace: DerivationTrace[], rows: DerivationSpan[]) {
+  const start = trace.find(event => event.name === "pd-window-start")!;
+  const end = trace.find(event => event.name === "pd-window-end")!;
+  if (!start || !end) throw new Error("incomplete derivation trace");
+  const origin = start.ts / 1000;
+  // Span times are relative to navigation; the window's mark aligns them to
+  // the trace clock. The driver supplies a synthetic zero-duration start row.
+  const offset = origin - rows.find(row => row.name === "window-start")!.start;
+  return trace.filter(event => event.pid === start.pid && event.tid === start.tid && event.ph === "X"
+    && /(?:^|::)RunTask$/.test(event.name) && event.ts >= start.ts && event.ts < end.ts).map(task => {
+    const lo = task.ts / 1000 - offset, hi = lo + (task.dur ?? 0) / 1000;
+    const spans = rows.filter(row => row.end > lo && row.start < hi && row.name !== "window-start" && !row.name.endsWith(":render"));
+    let until = lo, ms = 0;
+    for (const row of [...spans].sort((a, b) => a.start - b.start)) {
+      const a = Math.max(lo, row.start), b = Math.min(hi, row.end);
+      ms += Math.max(0, b - Math.max(a, until)); until = Math.max(until, b);
+    }
+    return { start: lo, duration: (task.dur ?? 0) / 1000, threadMs: (task.tdur ?? 0) / 1000, derivationMs: ms, sites: spans.map(row => row.name) };
+  });
+}
+
+function derivationHostSample() {
+  const groups: Array<{ quota: string; memory: string; throttledUsec: number }> = [];
+  try {
+    let dir = path.join("/sys/fs/cgroup", fs.readFileSync("/proc/self/cgroup", "utf8").trim().split("::")[1]);
+    while (dir.startsWith("/sys/fs/cgroup")) {
+      if (fs.existsSync(path.join(dir, "cpu.max"))) groups.push({ quota: fs.readFileSync(path.join(dir, "cpu.max"), "utf8").trim(), memory: fs.readFileSync(path.join(dir, "memory.max"), "utf8").trim(),
+        throttledUsec: Number(/throttled_usec (\d+)/.exec(fs.readFileSync(path.join(dir, "cpu.stat"), "utf8"))?.[1] ?? 0) });
+      dir = path.dirname(dir);
+    }
+  } catch { /* Non-Linux captures retain the browser's timing evidence. */ }
+  return { load: os.loadavg(), groups };
+}
+
+type DerivationProfile = { startTime: number; nodes: Array<{ id: number; callFrame: { functionName: string }; children?: number[] }>; samples?: number[]; timeDeltas?: number[] };
+function sampledDerivation(profile: DerivationProfile, trace: DerivationTrace[], startMs: number, tasks: ReturnType<typeof derivationTasks>) {
+  const mark = trace.find(event => event.name === "pd-window-start")!;
+  const offset = mark.ts / 1000 - startMs;
+  const nodes = new Map(profile.nodes.map(node => [node.id, node]));
+  const parent = new Map(profile.nodes.flatMap(node => (node.children ?? []).map(id => [id, node.id] as const)));
+  const chains = new Map(profile.nodes.map(node => {
+    const names = new Set<string>(); let id: number | undefined = node.id;
+    while (id !== undefined) { names.add(nodes.get(id)!.callFrame.functionName); id = parent.get(id); }
+    return [node.id, names];
+  }));
+  let at = profile.startTime / 1000 - offset;
+  const samples = (profile.samples ?? []).map((id, index) => {
+    const lo = at; at += (profile.timeDeltas?.[index] ?? 0) / 1000;
+    return { lo, hi: at, names: chains.get(id)! };
+  });
+  const functions = ["buildSchemeLayout", "buildBranchGroups", "directReviewFlows", "boundFlowExpansions", "launchHistoryFor", "buildSubagentTrays", "buildTaskBands", "deriveKanbanModel", "reuseKanbanModel", "modelIndexes", "projectKanbanModel", "projectWorkflows", "projectBands", "projectBranchGroups", "projectStableResult", "projectFoldedFiles", "sameLayoutFiles"];
+  return tasks.filter(task => task.duration > 50).map(task => {
+    let derivationMs = 0, memoMs = 0, renderMs = 0, gcMs = 0;
+    for (const sample of samples) {
+      const ms = Math.max(0, Math.min(task.start + task.duration, sample.hi) - Math.max(task.start, sample.lo));
+      const render = sample.names.has("ProjectDashboardView") || sample.names.has("KanbanBoard");
+      const memo = render && (sample.names.has("updateMemo") || sample.names.has("mountMemo"));
+      if (memo || functions.some(name => sample.names.has(name))) derivationMs += ms;
+      if (memo) memoMs += ms;
+      if (render) renderMs += ms;
+      if (sample.names.has("(garbage collector)")) gcMs += ms;
+    }
+    return { start: task.start, duration: task.duration, threadMs: task.threadMs, derivationMs, memoMs, renderMs, gcMs };
+  });
+}
+
+// Full project-board remainder of #2218. Both bundles use this same fixture;
+// PD_BASELINE_{RAW,TIMED} point to builds of the recorded main commit.
+describe("ProjectDashboard derivation", () => {
+  test("attributes anonymous memo factories to their board render without double counting", () => {
+    const profile: DerivationProfile = { startTime: 0, nodes: [
+      { id: 1, callFrame: { functionName: "ProjectDashboardView" }, children: [2] },
+      { id: 2, callFrame: { functionName: "updateMemo" }, children: [3, 4] },
+      { id: 3, callFrame: { functionName: "" } },
+      { id: 4, callFrame: { functionName: "projectWorkflows" } },
+      { id: 5, callFrame: { functionName: "OtherComponent" }, children: [6] },
+      { id: 6, callFrame: { functionName: "mountMemo" } },
+      { id: 7, callFrame: { functionName: "KanbanBoard" }, children: [8] },
+      { id: 8, callFrame: { functionName: "mountMemo" } },
+    ], samples: [3, 4, 6, 8], timeDeltas: [40000, 20000, 70000, 10000] };
+    const trace = [{ name: "pd-window-start", ph: "I", ts: 0, pid: 1, tid: 1 }];
+    const tasks = [{ start: 0, duration: 140, threadMs: 140, derivationMs: 0, sites: [] }];
+    expect(sampledDerivation(profile, trace, 0, tasks)[0]).toMatchObject({ derivationMs: 70, memoMs: 70, renderMs: 70, gcMs: 0 });
+  });
+  browserTest("preserves complete derived output at identical times and after catalog edits", async () => {
+    const out = path.resolve(process.env.PD_OUT ?? ".artifacts/project-dashboard-derivation", "equality");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out, undefined, {}, { derivationTiming: true });
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    const baseline = process.env.PD_BASELINE_TIMED;
+    const snapshots: Record<string, string[]> = {};
+    const drawn: Record<string, string[]> = {};
+    const identities: Record<string, unknown[]> = {};
+    const epoch = Date.UTC(2026, 9, 15, 0);
+    const steps = ["initial", "clock", "size-mtime", "task-status", "long-resume"];
+    try {
+      for (const variant of baseline ? ["before", "after"] : ["after"]) {
+        const { context, page, pageErrors } = await openFixture(browser, "about:blank", VIEWPORT, "dark", "en", "no-preference");
+        snapshots[variant] = []; drawn[variant] = []; identities[variant] = [];
+        try {
+          if (variant === "before") await page.route("**/app.js", route => route.fulfill({ path: baseline!, contentType: "text/javascript" }));
+          // Fixed wall time is confined to this correctness case. The performance
+          // case below keeps the product's real clock and timers running.
+          await page.clock.install({ time: epoch });
+          await page.clock.pauseAt(epoch);
+          await page.addInitScript(() => { (window as unknown as ProjectPerformanceWindow).__pdCapture = true; });
+          await page.goto(`${server.base}?scenario=project-derivation&streaming=1`);
+          await page.clock.runFor(1000);
+          await page.locator(card("t-export")).waitFor();
+          await page.locator(`${card("t-export")} .tile[data-member="/repo/export-impl.jsonl"]`).click();
+          await page.clock.runFor(500);
+          for (const step of steps) {
+            if (step === "clock") await page.clock.fastForward(30000);
+            if (step === "size-mtime") { await page.evaluate(() => (window as unknown as ProjectPerformanceWindow).projectPoll()); await page.clock.runFor(500); }
+            if (step === "task-status") {
+              await page.evaluate(() => (window as unknown as { evidence: { setTaskStatus(id: string, status: string): void } }).evidence.setTaskStatus("t-export", "blocked"));
+              await page.clock.runFor(500);
+            }
+            if (step === "long-resume") await page.clock.fastForward(72 * 3600000);
+            await page.clock.runFor(100);
+            const sample = await page.evaluate(() => {
+              const w = window as unknown as ProjectPerformanceWindow & { __pdPreviousCards?: Map<string, unknown> };
+              const output = w.__pdOutputs;
+              const model = output["KanbanBoard.tsx:model"] as import("./kanbanModel").KanbanModel;
+              const cards = [...Object.values(model.columns).flatMap(c => c.cards), ...model.unlinked, ...model.hiddenGroups];
+              const unchanged = cards.filter(c => w.__pdPreviousCards?.get(c.id) === c).map(c => c.id);
+              const changed = cards.filter(c => w.__pdPreviousCards?.has(c.id) && w.__pdPreviousCards.get(c.id) !== c).map(c => c.id);
+              w.__pdPreviousCards = new Map(cards.map(c => [c.id, c]));
+              const names = ["ProjectDashboard.tsx:directReviewGroups", "ProjectDashboard.tsx:expandedFlowConversations", "ProjectDashboard.tsx:launchHistory",
+                "ProjectDashboard.tsx:baseGroups", "ProjectDashboard.tsx:groups", "ProjectDashboard.tsx:pipelineLayout",
+                "useBands.ts:projection", "useBands.ts:bands", "KanbanBoard.tsx:model"];
+              const serialize = (value: unknown) => JSON.stringify(value, (_, v) => v instanceof Map ? { map: [...v] } : v instanceof Set ? { set: [...v] } : v);
+              return { serialized: serialize(Object.fromEntries(names.map(name => [name, output[name]]))), missing: names.filter(name => output[name] === undefined),
+                unchanged, changed, cardCount: cards.length, drawn: [...document.querySelectorAll<HTMLElement>("[data-kanban-board] .card[data-id]")].map(el => ({ id: el.dataset.id, column: el.closest<HTMLElement>(".column")?.dataset.status, text: el.innerText })) };
+            });
+            expect(sample.missing).toEqual([]);
+            if (step === "initial") expect(sample.cardCount).toBe(357);
+            if (step === "clock" || step === "size-mtime") expect(sample.unchanged.length).toBe(357);
+            if (step === "task-status") expect(sample.changed).toContain("task:t-export");
+            snapshots[variant].push(sample.serialized);
+            drawn[variant].push(JSON.stringify(sample.drawn));
+            identities[variant].push({ step, cards: sample.cardCount, unchanged: sample.unchanged.length, changed: sample.changed,
+              sha256: createHash("sha256").update(sample.serialized).digest("hex") });
+            fs.writeFileSync(path.join(out, `${variant}-${step}.json`), sample.serialized);
+            fs.writeFileSync(path.join(out, `${variant}-${step}-drawn.json`), JSON.stringify(sample.drawn, null, 2));
+          }
+          expect(pageErrors).toEqual([]);
+        } finally { await context.close(); }
+      }
+      fs.writeFileSync(path.join(out, "summary.json"), JSON.stringify({ steps, identities }, null, 2));
+      if (baseline) for (let i = 0; i < steps.length; i++) {
+        expect(snapshots.after[i]).toBe(snapshots.before[i]);
+        expect(drawn.after[i]).toBe(drawn.before[i]);
+      }
+    } finally { await browser.close(); server.stop(); }
+  }, 180000);
+
+  browserTest("keeps derivation below 50 ms while 357 cards stream and the open conversation scrolls", async () => {
+    const out = path.resolve(process.env.PD_OUT ?? ".artifacts/project-dashboard-derivation");
+    fs.mkdirSync(out, { recursive: true });
+    const timed = process.env.PD_TIMED !== "0";
+    const server = await serveEvidenceFixture(out, undefined, {}, { derivationTiming: timed });
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    const readings: unknown[] = [];
+    try {
+      for (const pollMs of (process.env.PD_POLL_MS ? [Number(process.env.PD_POLL_MS)] : [0, 500])) {
+        for (let pair = 1; pair <= Number(process.env.PD_PAIRS ?? 3); pair++) {
+          const baseline = timed ? process.env.PD_BASELINE_TIMED : process.env.PD_BASELINE_RAW;
+          for (const variant of baseline ? (pair % 2 ? ["before", "after"] : ["after", "before"]) : ["after"]) {
+            const tag = `${pollMs ? "catalog" : "stream"}-${pair}-${variant}-${timed ? "timed" : "raw"}`;
+            console.log("PD_START", tag, new Date().toISOString());
+            const { context, page, pageErrors } = await openFixture(browser, "about:blank", VIEWPORT, "dark", "en", "no-preference");
+            try {
+              if (variant === "before") await page.route("**/app.js", route => route.fulfill({ path: baseline!, contentType: "text/javascript" }));
+              await page.addInitScript(() => {
+                const w = window as unknown as ProjectPerformanceWindow;
+                w.__pdRows = []; w.__pdLong = []; w.__pdRecording = false;
+                new PerformanceObserver(list => {
+                  for (const entry of list.getEntries()) if (w.__pdRecording) w.__pdLong.push({ start: entry.startTime, duration: entry.duration });
+                }).observe({ type: "longtask", buffered: true });
+              });
+              const cdp = await context.newCDPSession(page);
+              await cdp.send("Emulation.setCPUThrottlingRate", { rate: 4 });
+              await page.goto(`${server.base}?scenario=project-derivation&streaming=1`);
+              await page.locator(`${card("t-export")} .tile[data-member="/repo/export-impl.jsonl"]`).click({ timeout: 30000 });
+              await page.locator("[data-agent-window-frame]").waitFor();
+              await page.waitForTimeout(3000);
+              await page.waitForFunction(() => (window as unknown as ProjectPerformanceWindow).projectConnection() === "live");
+              const before = await page.evaluate(() => ({ corpus: (window as unknown as ProjectPerformanceWindow).projectCorpus, sessions: (window as unknown as ProjectPerformanceWindow).projectSessions(), cards: document.querySelectorAll("[data-kanban-board] .card[data-id]").length }));
+              const scroll = page.locator('[data-agent-window] [data-log-feed-scroller]').first();
+              const box = await scroll.boundingBox(); if (!box) throw Error("missing conversation scroller");
+              await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+              const trace: DerivationTrace[] = [];
+              cdp.on("Tracing.dataCollected", event => trace.push(...event.value as unknown as DerivationTrace[]));
+              await cdp.send("Profiler.enable"); await cdp.send("Profiler.setSamplingInterval", { interval: 1000 }); await cdp.send("Profiler.start");
+              await cdp.send("Tracing.start", { categories: "toplevel,devtools.timeline,blink.user_timing,v8", transferMode: "ReportEvents" });
+              const utcStart = new Date().toISOString();
+              const hostBefore = derivationHostSample();
+              await page.evaluate(pollMs => {
+                const w = window as unknown as ProjectPerformanceWindow;
+                const start = performance.now(); performance.mark("pd-window-start", { startTime: start });
+                w.__pdRecording = true; w.__pdRows = [{ name: "window-start", start, end: start, changed: [] }]; w.__pdLong = [];
+                let events = 0, polls = 0, seq = 1000;
+                const heads = Object.fromEntries(w.projectSessions().map(s => [s.id, s.revision]));
+                const scroll: number[] = [];
+                const el = document.querySelector<HTMLElement>('[data-agent-window] [data-log-feed-scroller]')!;
+                const onScroll = () => scroll.push(el.scrollTop); el.addEventListener("scroll", onScroll, { passive: true });
+                const stream = setInterval(() => {
+                  const due = Math.floor((performance.now() - start) * 40 / 1000);
+                  while (events < due) {
+                    const id = w.projectCorpus.liveIds[events % w.projectCorpus.liveIds.length];
+                    const revision = heads[id] = (heads[id] ?? 1) + 1;
+                    w.runtimeEmit({ schemaVersion: 1, seq: ++seq, eventId: `profile-${seq}`, scope: { type: "session", id }, revision, kind: "delta", occurredAt: new Date().toISOString(),
+                      payload: { conversationId: id, turnId: "turn-1", text: `streamed fragment ${events} of the reply, a sentence long enough to count `.repeat(2) } });
+                    events++;
+                  }
+                }, 4);
+                const poll = pollMs ? setInterval(() => { w.projectPoll(); polls++; }, pollMs) : 0;
+                w.pdStop = () => {
+                  clearInterval(stream); clearInterval(poll); el.removeEventListener("scroll", onScroll);
+                  const end = performance.now(); performance.mark("pd-window-end", { startTime: end });
+                  return { start, end, events, polls, scroll, heads };
+                };
+              }, pollMs);
+              const started = Date.now(), lateness: number[] = [], missedGestures: number[] = [];
+              for (let wheel = 0; wheel < 300; wheel++) {
+                const target = started + wheel * 100;
+                if (Date.now() > target + 100) { missedGestures.push(wheel); continue; }
+                await page.waitForTimeout(Math.max(0, target - Date.now()));
+                lateness.push(Math.max(0, Date.now() - target));
+                await page.mouse.wheel(0, Math.floor(wheel / 30) % 2 ? -100 : 100);
+              }
+              await page.waitForTimeout(Math.max(0, started + 30000 - Date.now()));
+              const windowSample = await page.evaluate(() => (window as unknown as ProjectPerformanceWindow).pdStop());
+              if (timed && variant === "after" && pollMs) await page.waitForFunction(() => {
+                const w = window as unknown as ProjectPerformanceWindow;
+                return w.__pdCatalogHead?.size === w.projectCatalogHead().size;
+              }, undefined, { timeout: 5000 });
+              await page.waitForTimeout(150);
+              const sample = await page.evaluate(() => {
+                const w = window as unknown as ProjectPerformanceWindow; w.__pdRecording = false;
+                return { rows: w.__pdRows, longTasks: w.__pdLong, sessions: w.projectSessions(), connection: w.projectConnection(), committedCatalog: w.__pdCatalogHead, expectedCatalog: w.projectCatalogHead?.(), text: document.querySelector("[data-agent-window]")?.textContent?.slice(-1000), cards: document.querySelectorAll("[data-kanban-board] .card[data-id]").length };
+              });
+              const { profile } = await cdp.send("Profiler.stop");
+              const done = new Promise<void>(resolve => cdp.once("Tracing.tracingComplete", () => resolve())); await cdp.send("Tracing.end"); await done;
+              const tasks = derivationTasks(trace, sample.rows);
+              const sampled = sampledDerivation(profile, trace, windowSample.start, tasks);
+              const maxDerivationMs = Math.max(0, ...tasks.map(task => task.derivationMs));
+              const result = { tag, utcStart, utcEnd: new Date().toISOString(), browser: browser.version(), hostBefore, hostAfter: derivationHostSample(), before, ...windowSample, ...sample, tasks, sampled, maxDerivationMs, missedGestures, missedWheelDeadlines: lateness.filter(ms => ms > 100).length, maxWheelLatenessMs: Math.max(...lateness), pageErrors };
+              fs.writeFileSync(path.join(out, `${tag}.json`), JSON.stringify(result, null, 2));
+              fs.writeFileSync(path.join(out, `${tag}-trace.json`), JSON.stringify(trace));
+              fs.writeFileSync(path.join(out, `${tag}.cpuprofile`), JSON.stringify(profile));
+              await page.screenshot({ path: path.join(out, `${tag}.png`) });
+              readings.push(result); fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify(readings, null, 2));
+              console.log("PD_RESULT", JSON.stringify({ tag, maxDerivationMs, longTasks: sample.longTasks.length, events: windowSample.events, polls: windowSample.polls, scroll: windowSample.scroll.length }));
+              expect(before.cards).toBe(357); expect(sample.cards).toBe(357);
+              expect(sample.connection).toBe("live");
+              expect(before.corpus).toMatchObject({ files: 864, flows: 284, tasks: 619 });
+              expect(windowSample.end - windowSample.start).toBeGreaterThanOrEqual(30000);
+              expect(windowSample.events).toBeGreaterThan(1100); expect(new Set(windowSample.scroll).size).toBeGreaterThan(5);
+              for (const id of before.corpus.liveIds) expect(sample.sessions.find(s => s.id === id)?.revision).toBe(windowSample.heads[id]);
+              expect(sample.text).toContain("streamed fragment"); expect(pageErrors).toEqual([]);
+              if (timed) {
+                expect(tasks.length).toBeGreaterThan(0);
+                expect(sample.rows.filter(row => row.name === "ProjectDashboard.tsx:baseGroups").length).toBeGreaterThan(0);
+                if (variant === "after" && pollMs) expect(sample.committedCatalog).toEqual(sample.expectedCatalog);
+                if (variant === "after") expect(maxDerivationMs).toBeLessThanOrEqual(50);
+              } else if (variant === "after") {
+                expect(profile.samples!.length).toBeGreaterThan(0);
+                expect(Math.max(0, ...sampled.map(task => task.derivationMs))).toBeLessThanOrEqual(50);
+              }
+            } finally { await context.close(); }
+          }
+        }
+      }
+    } finally { await browser.close(); server.stop(); }
+  }, 900000);
+});
 
 describe("board poll delta equivalence", () => {
   browserTest("full and delta feeds render the same desktop and phone board after updates", async () => {
@@ -31598,6 +31892,54 @@ describe("native caller operator association", () => {
       fs.writeFileSync("evidence/native-association/decisions.json", JSON.stringify(readings, null, 2) + "\n");
     } finally { served.stop(); }
   }, 300_000);
+});
+
+describe("Codex durable callback actions", () => {
+  browserTest("offered scopes, custom questions and recovery outcomes render on phone and desktop", async () => {
+    const out = path.resolve(".artifacts/codex-callbacks"); fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    const records: unknown[] = [];
+    try {
+      for (const width of [390, 1280]) for (const lang of ["en", "uk"]) for (const scenario of ["permissions", "question", "uncertain", "unavailable", "long-label", "large-permissions"]) {
+        const page = await browser.newPage({ viewport: { width, height: 900 } });
+        await page.addInitScript(language => localStorage.setItem("llv_lang", language), lang);
+        await page.goto(`${server.base}/?scenario=codex-callbacks&callback=${scenario}`);
+        const card = page.locator("[data-codex-callback]");
+        await card.waitFor();
+        if (scenario === "permissions") {
+          await card.getByRole("button", { name: translate(lang as "en" | "uk", "runtime.attention.action.grantSession") }).click();
+          expect(await page.locator("[data-callback-answer]").textContent()).toContain('"scope":"session"');
+        } else if (scenario === "question") {
+          const inputs = card.locator("input");
+          await inputs.nth(0).fill("Custom region"); await inputs.nth(1).fill("Release note");
+          await card.getByRole("button", { name: translate(lang as "en" | "uk", "runtime.attention.answer"), exact: true }).click();
+          expect(await page.locator("[data-callback-answer]").textContent()).toContain("Custom region");
+        } else if (scenario === "long-label" || scenario === "large-permissions") {
+          const controls = card.locator("button");
+          const response = scenario === "long-label" ? { answers: [{ options: [0] }] } : { actionIndex: 1 };
+          expect(await card.textContent()).toContain("…");
+          if (scenario === "long-label") await controls.first().click();
+          else await card.getByRole("button", { name: translate(lang as "en" | "uk", "runtime.attention.action.grantSession") }).click();
+          expect(JSON.parse((await page.locator("[data-callback-answer]").textContent())!)).toEqual({
+            codexResponse: { requestDigest: "a".repeat(64), ...response },
+          });
+        } else {
+          expect(await card.locator("button,input").count()).toBe(0);
+          expect(await card.textContent()).toContain(translate(lang as "en" | "uk", scenario === "uncertain" ? "runtime.attention.unconfirmed" : "runtime.attention.unavailable"));
+          expect(await card.textContent()).toContain(translate(lang as "en" | "uk", scenario === "uncertain" ? "runtime.attention.deliveryUncertain" : "runtime.attention.callbackUnavailable"));
+        }
+        const geometry = await card.evaluate(element => ({ width: element.scrollWidth, client: document.documentElement.clientWidth }));
+        expect(geometry.width).toBeLessThanOrEqual(geometry.client);
+        const frame = `${width}-${lang}-${scenario}.png`;
+        await page.screenshot({ path: path.join(out, frame), fullPage: true });
+        records.push({ width, lang, scenario, frame, geometry });
+        await page.close();
+      }
+      fs.mkdirSync("evidence/codex-callbacks", { recursive: true });
+      fs.writeFileSync("evidence/codex-callbacks/controls.json", JSON.stringify({ records }, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 180_000);
 });
 
 describe("full autonomy", () => {

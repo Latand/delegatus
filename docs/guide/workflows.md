@@ -141,7 +141,7 @@ use **Pipeline actions** in the card's ⋯:
 
 - **Retry {stage}** runs the named stage again, for example "Retry Build";
 - **Skip {stage}** moves past it;
-- **Pause** stops the pipeline after its current stage, and **Resume**
+- **Pause** stops the running stage's host and retains its checkout. **Resume**
   continues it;
 - **Accept as is** takes the fixed head when a pipeline waits after its last
   review fix;

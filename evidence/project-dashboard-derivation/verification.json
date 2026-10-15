@@ -1,0 +1,144 @@
+{
+  "baselineCommit": "836c8498ef913ad94d1d79c51c8b01d53b30d01b",
+  "touchedTestFiles": [
+    "src/components/ProjectDashboard.backgroundTaskDock.dom.test.tsx",
+    "src/components/ProjectDashboard.catalogFailure.dom.test.tsx",
+    "src/components/ProjectDashboard.empty.dom.test.tsx",
+    "src/components/ProjectDashboard.flash.dom.test.tsx",
+    "src/components/ProjectDashboard.headerBar.dom.test.tsx",
+    "src/components/ProjectDashboard.inlineCatalog.dom.test.tsx",
+    "src/components/ProjectDashboard.launchClaim.dom.test.tsx",
+    "src/components/ProjectDashboard.loadingStates.dom.test.tsx",
+    "src/components/ProjectDashboard.looseReader.dom.test.tsx",
+    "src/components/ProjectDashboard.mobileLaunchFocus.dom.test.tsx",
+    "src/components/ProjectDashboard.pipelineNavigation.dom.test.tsx",
+    "src/components/ProjectDashboard.searchLanding.dom.test.tsx",
+    "src/components/ProjectDashboard.seatTasks.dom.test.tsx",
+    "src/components/ProjectDashboard.selection.dom.test.tsx",
+    "src/components/ProjectDashboard.shelf.dom.test.tsx",
+    "src/components/ProjectDashboard.test.ts",
+    "src/components/ProjectDashboard.unownedConversations.dom.test.tsx",
+    "src/components/ProjectDashboard.viewSwitch.dom.test.tsx",
+    "src/components/projectModel.test.ts",
+    "src/components/projectDashboardDerivation.test.ts",
+    "src/components/scheme/layout.test.ts",
+    "src/components/scheme/layout.lineage.test.ts",
+    "src/components/scheme/placementHorizon.test.ts",
+    "src/components/scheme/workerCollapse.test.ts",
+    "src/components/scheme/taskBands.test.ts",
+    "src/components/flows/directReviewGroups.test.ts",
+    "src/components/flows/flowModel.test.ts",
+    "src/components/launchHistoryModel.test.ts",
+    "src/components/tasks/taskWorkflowModel.test.ts",
+    "src/components/kanban/kanbanModel.test.ts",
+    "src/components/kanban/reuseKanbanModel.test.ts",
+    "src/components/kanban/overviewBands.test.ts",
+    "src/hooks/useNowSeconds.dom.test.tsx",
+    "src/components/Viewer.switching.dom.test.tsx",
+    "src/components/workingAgents.test.ts",
+    "src/components/turnDuration.test.ts",
+    "src/components/scheme/taskStacks.test.ts"
+  ],
+  "touchedComparison": {
+    "newFailures": 0,
+    "preexistingFailures": 22,
+    "fixed": 0,
+    "removedOrSkipped": 0,
+    "flaky": 0
+  },
+  "preexistingAssertions": [
+    "src/components/ProjectDashboard.launchClaim.dom.test.tsx: a failed-delivery launch record on a scanned transcript path never hides the conversation",
+    "src/components/ProjectDashboard.launchClaim.dom.test.tsx: a pathless terminal receipt is still shelved and never becomes a board card",
+    "src/components/ProjectDashboard.looseReader.dom.test.tsx: a switch to a project the Board is already showing files for leaves the reader behind, and it is not back on return",
+    "src/components/ProjectDashboard.looseReader.dom.test.tsx: an attention jump to a conversation a card holds brings it into the same window, never into its card",
+    "src/components/ProjectDashboard.looseReader.dom.test.tsx: a `#c=` landing on a conversation a card holds brings it into the same window, never into its card",
+    "src/components/ProjectDashboard.looseReader.dom.test.tsx: another conversation no card holds comes into the window after the first, which stays in its list",
+    "src/components/ProjectDashboard.looseReader.dom.test.tsx: a focus handoff `show` to a card does not report arrival under the window, and leaves the window",
+    "src/components/ProjectDashboard.looseReader.dom.test.tsx: a focus handoff `open` to a card does not report arrival under the window, and brings the conversation into it",
+    "src/components/ProjectDashboard.looseReader.dom.test.tsx: a pipeline link on this project leaves the window and focuses the card that holds the pipeline",
+    "src/components/ProjectDashboard.looseReader.dom.test.tsx: a pipeline link to another project switches to it with no window, and focuses the card that holds the pipeline there",
+    "src/components/ProjectDashboard.unownedConversations.dom.test.tsx: an active flow's reviewer round: on no card, and a catalog landing opens its transcript and composer on the Board, with nothing written",
+    "src/components/ProjectDashboard.unownedConversations.dom.test.tsx: an active flow's reviewer round: an attention jump opens the same reader",
+    "src/components/ProjectDashboard.unownedConversations.dom.test.tsx: an active flow's reviewer round: a focus handoff resolves it though no card holds it, opens its reader in the window, and its Return closes it",
+    "src/components/ProjectDashboard.unownedConversations.dom.test.tsx: a collapsed worker: on no card, and a catalog landing opens its transcript and composer on the Board, with nothing written",
+    "src/components/ProjectDashboard.unownedConversations.dom.test.tsx: a collapsed worker: an attention jump opens the same reader",
+    "src/components/ProjectDashboard.unownedConversations.dom.test.tsx: a collapsed worker: a focus handoff resolves it though no card holds it, opens its reader in the window, and its Return closes it",
+    "src/components/ProjectDashboard.unownedConversations.dom.test.tsx: an engine's own subagent: on no card, and a catalog landing opens its transcript and composer on the Board, with nothing written",
+    "src/components/ProjectDashboard.unownedConversations.dom.test.tsx: an engine's own subagent: an attention jump opens the same reader",
+    "src/components/ProjectDashboard.unownedConversations.dom.test.tsx: an engine's own subagent: a focus handoff resolves it though no card holds it, opens its reader in the window, and its Return closes it",
+    "src/components/ProjectDashboard.unownedConversations.dom.test.tsx: under a standing landing, a card's link to Conversations opens the project's list over the Board",
+    "src/components/Viewer.switching.dom.test.tsx: desktop: an in-app «Open conversation» link focuses the target's reader without rebuilding the board",
+    "src/components/Viewer.switching.dom.test.tsx: desktop: a fresh tail record in one reader leaves the other readers' panes untouched"
+  ],
+  "readerMemoization": [
+    {
+      "case": "in-app focus",
+      "expected": 0,
+      "baseline": 6,
+      "candidate": 6
+    },
+    {
+      "case": "fresh tail",
+      "expected": 0,
+      "baseline": 3,
+      "candidate": 3
+    }
+  ],
+  "focusedUnits": {
+    "files": 9,
+    "passed": 223,
+    "assertions": 4484
+  },
+  "typecheck": "pass",
+  "changedFileLint": {
+    "introducedErrors": 0,
+    "preexistingErrors": 29
+  },
+  "logs": {
+    "unit-merged.log": "e2f04e1a800ca387e35073dcf78c9e6bec99f5db064967fea56064a40188777f",
+    "types-merged.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "lint-merged.log": "671361afe2aa1b3d7021c8f89d76ae3f798ea11e173934a45b9bbf86184fa797",
+    "touched-merged.log": "4734580c56078576ab15f30f00cf347d356a1b9ce3735b098cec3d0c5b23ba51",
+    "merged-timed.log": "6b8644567df1e4a5aa396e1ad6658482dee908698efb5629c007caac68e847b7",
+    "confirm-stream-timed.log": "f390d04b4139b53b9a4708b4a679a01298b4d378f802f3958d4a9d66a815e9bf",
+    "confirm-catalog-timed.log": "88815d52d482562651c93438220c2dc43b7b0f4f11213c24860e67a2a2952f73",
+    "confirm-stream-raw.log": "f7b143e85288e1a7c5d8aa64f65516734317af49bcaf305df6a2bc185398ec88",
+    "confirm-catalog-raw.log": "4a3ea3484e50222fb298dc03ecee7703b05a33e7dda35fe06a66a1d96cafb5f5",
+    "reader-merged-head.log": "33ee58320d7a9f5817c6703b48c8a00754d55ca47dea1ac8be13ec532b610682",
+    "reader-merged-base.log": "2b074595dff46f09eaae213637b17e184d6d18a4dcb189879f06755bb145ba99",
+    "browser-merged.log": "bbcef984f35530fb83cd848db5a895271ec5852393c358d6c052ef199d7b9763",
+    "browser-baseline-merged.log": "d26f366e5e4fabd12bef529094caf0d2d2333593c191d63f9687878554a8ce5f",
+    "privacy-merged.log": "e968434c852f050df922a65d7a05e8c5a5b06493c7d46c62ad96e396a125111c"
+  },
+  "existingBrowserCases": {
+    "passed": [
+      "Overview incremental catalog",
+      "pipeline graphs and Past attempts",
+      "cross-project Overview"
+    ],
+    "preexistingFailures": [
+      {
+        "case": "kanban board geometry",
+        "baseline": "14 px horizontal overflow at 640 × 720, light and dark",
+        "candidate": "14 px horizontal overflow at 640 × 720, light and dark"
+      },
+      {
+        "case": "conversations opened from cards",
+        "baseline": "card-reordering wait timeout",
+        "candidate": "card-reordering wait timeout"
+      }
+    ],
+    "historicalRecordsPreserved": true
+  },
+  "localPrivacy": "pass",
+  "performanceDriver": {
+    "timedEqualityAssertions": 30,
+    "timedStreamingAssertions": 105,
+    "timedCatalogAssertions": 108,
+    "rawStreamingAssertions": 96,
+    "rawCatalogAssertions": 96,
+    "completedWindows": 24,
+    "interruptedPreliminaryInvocation": "retained in iteration-history.json",
+    "attributionAssertions": 1
+  }
+}

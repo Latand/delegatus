@@ -476,6 +476,8 @@ export interface PipelinePorts {
   /** Durable launch ownership fallback for attempts written before accountId. */
   accountForTranscript?(engine: FlowEngine, transcriptPath: string): { accountId: string; label: string } | null;
   accountLabel?(engine: FlowEngine, accountId: string): string;
+  /** The same capacity classifier used for admission, including the paid-credit guard. */
+  accountExhausted?(engine: FlowEngine, accountId: string, model: string | null): boolean;
   now(): string;
 }
 
@@ -1091,7 +1093,7 @@ export async function stopPipelineStageAgent(
        ladder, or a replayed terminal kill on an already-dead host. */
     const receiptStatus = body.receipt?.status ?? null;
     if (probes.onlyIfIdle && receiptStatus && KILL_REFUSED_STATES.has(receiptStatus)) return { outcome: "deferred" };
-    if (!receiptStatus || KILL_DELIVERED_STATES.has(receiptStatus)) return { outcome: "stopped" };
+    if ((!receiptStatus || KILL_DELIVERED_STATES.has(receiptStatus)) && !resident()) return { outcome: "stopped" };
 
     const operationId = body.operationId ?? null;
     const client = probes.client === undefined ? runtimeHostClient() : probes.client;
@@ -1104,7 +1106,7 @@ export async function stopPipelineStageAgent(
       if (operationId && client) {
         const durable = await client.operationStatus(operationId).catch(() => null);
         const status = durable?.receipt.status ?? null;
-        if (status && KILL_DELIVERED_STATES.has(status)) return { outcome: "stopped" };
+        if (status && KILL_DELIVERED_STATES.has(status) && !resident()) return { outcome: "stopped" };
         if (status && KILL_REFUSED_STATES.has(status)) {
           if (probes.onlyIfIdle) return { outcome: "deferred" };
           return {
@@ -1470,6 +1472,8 @@ export function defaultPipelinePorts(
     allowedAccountIds: (project, engine) => allowedAccountIdsForProject(project, engine),
     engineReadiness: (engine, project) => engineReadiness(engine, project),
     resolveProjectSpawn: (engine, request) => accountManager.resolveProjectSpawn(engine, request),
+    accountExhausted: (engine, accountId, model) => selectHeadlessAccount([{ id: accountId, authPresent: true }],
+      registry.quotaObservations(engine), accountId, [], Date.now(), model).kind === "exhausted",
     accountForTranscript: (engine, transcriptPath) => {
       const owner = accountManager.resolveTranscriptOwner(engine, transcriptPath);
       if (!owner) return null;
@@ -2795,7 +2799,7 @@ async function recoverProviderCut(
       : newerExternalProviderPrompt(attempt, latest) ? "newer external stage activity was recorded"
       : latest.turn !== "terminal" ? `stage turn is ${latest.turn}`
       : latest.terminalProviderMessage?.ts !== cutTs ? "terminal provider record no longer matches the cut"
-      : null;
+      : stageAccountBlocked(pipeline, attempt, ports);
     return continuationRefusal === null;
   };
   let delivered: boolean;
@@ -6624,6 +6628,141 @@ export async function drainRuntimeSwitches(ports: PipelinePorts): Promise<boolea
   return changed;
 }
 
+function stageAccountBlocked(pipeline: Pipeline, attempt: PipelineStageAttempt, ports: PipelinePorts): string | null {
+  const engine = attempt.effectiveRole.engine;
+  const accountId = attempt.accountId ?? attempt.providerWait?.accountId ?? (attempt.agentPath ? ports.accountForTranscript?.(engine, attempt.agentPath)?.accountId : null);
+  if (!accountId) return null;
+  if (ports.accountExhausted?.(engine, accountId, attempt.effectiveRole.model)) return "the stage account reached its usage or paid-credit guard";
+  const pool = ports.allowedAccountIds?.(pipeline.project, engine);
+  if (pool && !pool.includes(accountId)) return "the stage account left the project binding";
+  return null;
+}
+
+function suspensionStopKey(pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt): string {
+  return `stage-suspend-${pipeline.id}-${stage.id}-${attempt.n}-${Date.parse(attempt.suspension!.requestedAt)}-${attempt.suspension!.stopRevision ?? 0}`;
+}
+
+/** Persist the stop before contacting the runtime. Replays use the same key and
+ * retain custody until termination and pending delivery settlement are proven. */
+async function stopSuspendedStage(pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt,
+  ports: PipelinePorts, persist: () => void | Promise<void>): Promise<boolean> {
+  const suspension = attempt.suspension!;
+  // A settled stop receipt belongs to its old host. A later pass must obtain
+  // a fresh stop, including when a resume raced delivery settlement.
+  if (suspension.stoppedAt) {
+    suspension.stopRevision = (suspension.stopRevision ?? 0) + 1;
+    delete suspension.stoppedAt;
+  }
+  await persist();
+  let continuationError: unknown;
+  try {
+    const alreadyWithdrawn = attempt.providerWait?.retryCancelled && attempt.error === PROVIDER_RETRY_CANCELLED_BY_PAUSE;
+    if (attempt.conversationId && !alreadyWithdrawn) await ports.invalidateProviderContinuation?.(attempt.conversationId);
+  }
+  catch (error) { continuationError = error; }
+  if (!suspension.stoppedAt) {
+    try {
+      const target = { stageId: stage.id, attempt: attempt.n, launchId: attempt.launchId,
+        conversationId: attempt.conversationId, agentPath: attempt.agentPath, paneId: attempt.paneId };
+      let stopped = await ports.stopStageAgent(target,
+      { automatic: true, operationId: suspensionStopKey(pipeline, stage, attempt),
+        recordedSurvivors: attempt.unresolvedTermination?.survivors });
+      if (stopped.outcome === "not-running" && target.paneId) {
+        const pane = await ports.stopStagePane(target);
+        stopped = pane.outcome === "unknown" ? { outcome: "failed", error: pane.detail } : pane;
+      }
+      if (stopped.outcome !== "stopped" && stopped.outcome !== "not-running") {
+        if (stopped.outcome === "unresolved") rememberUnresolvedTermination(attempt, stopped, ports.now());
+        pipeline.stateDetail = `${suspension.detail}; waiting for host termination: ${"error" in stopped ? stopped.error : stopped.outcome}`;
+        await persist(); ports.scheduleTick?.(1_000); return false;
+      }
+      suspension.stoppedAt = ports.now();
+      await persist();
+    } catch (error) {
+      pipeline.stateDetail = `${suspension.detail}; stop pending: ${redactBounded(String(error), 300)}`;
+      await persist(); ports.scheduleTick?.(1_000); return false;
+    }
+  }
+  if (continuationError) {
+    pipeline.stateDetail = `${suspension.detail}; host stopped, waiting to withdraw queued continuation: ${redactBounded(String(continuationError), 300)}`;
+    await persist(); ports.scheduleTick?.(1_000); return false;
+  }
+  if (pipelineSurvivorRefusal(pipeline) || attempt.conversationId && ports.conversationDeliveryOutstanding?.(attempt.conversationId)) {
+    pipeline.stateDetail = `${suspension.detail}; host stopped, waiting for pending delivery settlement`;
+    await persist(); ports.scheduleTick?.(1_000); return false;
+  }
+  return true;
+}
+
+async function reconcileStageAccountGuard(pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt,
+  ports: PipelinePorts, persist: () => void | Promise<void>): Promise<boolean> {
+  if (stage.kind !== "run" || attempt.report || attempt.verdict || openRuntimeSwitch(attempt)
+    || !["running", "needs_decision"].includes(attempt.state)) return false;
+  let blocked: string | null;
+  try { blocked = stageAccountBlocked(pipeline, attempt, ports); }
+  catch { return !!attempt.suspension; } // An unreadable binding cannot authorize a successor.
+  if (!attempt.suspension && !blocked) return false;
+  attempt.suspension ??= { reason: "account", detail: blocked!, requestedAt: ports.now() };
+  if (!await stopSuspendedStage(pipeline, stage, attempt, ports, persist)) return true;
+  if (pipeline.state === "paused" || attempt.report) return true;
+  if (attempt.conversationId && ports.conversationOperatorStopped) {
+    try {
+      if (attempt.suspension.operatorStoppedAt || await ports.conversationOperatorStopped(attempt.conversationId, attempt.suspension.requestedAt,
+        [suspensionStopKey(pipeline, stage, attempt)])) {
+        attempt.suspension.operatorStoppedAt ??= ports.now();
+        pipeline.stateDetail = "stage stopped by operator after suspension; retry-stage to authorize a replacement";
+        await persist(); return true;
+      }
+    } catch (error) {
+      pipeline.stateDetail = `waiting for operator stop evidence: ${redactBounded(String(error), 300)}`;
+      await persist(); ports.scheduleTick?.(1_000); return true;
+    }
+  }
+  // Stop evidence does not consume a report that became durable during the stop.
+  const durable = attempt.agentPath ? await ports.durableTurnEvidence(attempt.effectiveRole.engine, attempt.agentPath,
+    undefined, attemptEvidenceFloor(attempt)) : null;
+  if (await settleOnRecordedReport(pipeline, stage, attempt, ports, persist, durable)) return true;
+  if (durable?.turn === "terminal" && !durable.terminalProviderMessage && durable.message && durable.message.ts > unixMs(attemptEvidenceFloor(attempt))) {
+    const parsed = parsePipelineStageVerdict(durable.message.text);
+    if (parsed) { await settleStageVerdict(pipeline, stage, attempt, parsed, ports, persist); return true; }
+  }
+  let resolution: ProjectSpawnResolution;
+  try {
+    resolution = (ports.resolveProjectSpawn ?? accountManager.resolveProjectSpawn.bind(accountManager))(attempt.effectiveRole.engine,
+      { project: pipeline.project, model: attempt.effectiveRole.model, preferredId: attempt.accountId,
+        unavailableIds: blocked && attempt.accountId ? [attempt.accountId] : [] });
+  } catch (error) {
+    pipeline.stateDetail = `${attempt.suspension.detail}; waiting for account selection: ${redactBounded(String(error), 300)}`;
+    await persist(); ports.scheduleTick?.(30_000); return true;
+  }
+  const target = resolution.kind === "available" ? resolution.account.accountId : null;
+  let targetBlocked = true;
+  try { targetBlocked = !target || Boolean(stageAccountBlocked(pipeline, { ...attempt, accountId: target }, ports)); }
+  catch { /* Retain stop custody until the binding can be read. */ }
+  if (!target || targetBlocked) {
+    pipeline.stateDetail = `${attempt.suspension.detail}; host stopped; waiting for an allowed account with capacity`;
+    await persist(); ports.scheduleTick?.(30_000); return true;
+  }
+  const oldDefinition = attemptStage(stage, attempt);
+  // Transcript and operator-evidence reads above yielded custody. Reconfirm
+  // the current host immediately before allocating a replacement.
+  if (!await stopSuspendedStage(pipeline, stage, attempt, ports, persist)) return true;
+  try {
+    if (stageAccountBlocked(pipeline, { ...attempt, accountId: target }, ports)) return true;
+  } catch { return true; }
+  attempt.state = "failed"; attempt.completedAt = ports.now(); attempt.error = attempt.suspension.detail;
+  resetStageForRetry(pipeline, stage);
+  const next = newAttempt(pipeline, stage)!;
+  next.input = attempt.input;
+  next.activatedBy = attempt.activatedBy ? { ...attempt.activatedBy } : null;
+  next.restartContext = { previousAttempt: attempt.n, transcriptPath: attempt.agentPath };
+  next.accountId = target;
+  bindAttemptDefinition({ ...oldDefinition, account: target }, next, ports);
+  pipeline.stateDetail = "continuing the stopped stage on an allowed account; keeping the current worktree";
+  await persist(); ports.scheduleTick?.(0);
+  return true;
+}
+
 async function tickRunStage(
   pipeline: Pipeline,
   stage: PipelineStage,
@@ -6839,7 +6978,7 @@ async function tickRunStage(
         cwd: pipeline.worktreeDir,
         project: pipeline.project,
         requestedAccountId: bound.account ?? providerTargetAccountOn(attempt, attempt.effectiveRole.engine) ?? null,
-        requireAccountCapacity: Boolean(providerTargetAccountOn(attempt, attempt.effectiveRole.engine)),
+        requireAccountCapacity: Boolean(providerTargetAccountOn(attempt, attempt.effectiveRole.engine) || priorAttempt?.suspension),
         unavailableAccountIds: [...new Set(usageLimitsOn(attempt, attempt.effectiveRole.engine)
           .filter((limited) => !providerAccountRecovered(pipeline, attempt, limited.accountId, limited.limitedAt ?? null, limited.resetsAt, ports))
           .map((limited) => limited.accountId).concat(((attempt.providerRecoveryBudget?.engine ?? attempt.effectiveRole.engine) === attempt.effectiveRole.engine
@@ -10141,14 +10280,21 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
           changed = true;
         }
         if (pipeline.runs.some((run) => run.attempts.some((attempt) => attempt.activation))) return;
-        let pipelineChanged = false;
+        let pipelineChanged = rebindPipelineAttemptPaths(pipeline, lanePorts);
+        const guardedStage = currentStage(pipeline);
+        const guardedAttempt = guardedStage && currentAttempt(pipeline, guardedStage.id);
+        if (guardedStage && guardedAttempt && !pipeline.closedAt && !pipeline.hiddenAt
+          && ["running", "paused", "needs_decision"].includes(pipeline.state)
+          && await reconcileStageAccountGuard(pipeline, guardedStage, guardedAttempt, lanePorts, persistPipeline)) {
+          changed = true;
+          return;
+        }
         for (const run of pipeline.runs) for (const attempt of run.attempts) {
           pipelineChanged = await settleAbandonedLaunch(pipeline, attempt, lanePorts) || pipelineChanged;
         }
         pipelineChanged = reconcilePipelineEmbeddedFlows(pipeline, lanePorts) || pipelineChanged;
         pipelineChanged = reconcilePendingPipelineAdoptions(pipeline, lanePorts) || pipelineChanged;
         pipelineChanged = await reconcileHistoricalAttempts(pipeline, entries, lanePorts) || pipelineChanged;
-        pipelineChanged = rebindPipelineAttemptPaths(pipeline, lanePorts) || pipelineChanged;
         pipelineChanged = reconcileTerminalReviewPending(pipeline) || pipelineChanged;
         pipelineChanged = reconcileDefaultAdvanceBudgetPark(pipeline, lanePorts) || pipelineChanged;
         // Evidence above may be synchronized while a stop remains unresolved.
@@ -12732,12 +12878,30 @@ export async function patchPipeline(
         pipeline.stateDetail = pauseResumeDetail("paused", actor);
         if (flow && flow.state !== "paused" && flow.state !== "closed") ports.patchFlow(flow.id, "pause", undefined, actor);
       }
+      if (pipeline.state === "paused" && stage?.kind === "run" && attempt?.state === "running" && !attempt.report) {
+        await persist();
+        // A terminal turn may still be waiting for its verdict or reset. Pause
+        // retains that evidence; only a working or unproven host needs a stop.
+        let working = true;
+        try { working = (attempt.paneId ? await ports.paneAgentAlive(attempt.paneId)
+          : attempt.conversationId ? await ports.conversationAgentActive(attempt.conversationId) : null) !== false; }
+        catch { /* Unknown liveness still requires confirmed termination. */ }
+        if (working || attempt.suspension) {
+          attempt.suspension ??= { reason: "pause", detail: "pipeline paused", requestedAt: pipeline.pausedAt ?? ports.now() };
+          await stopSuspendedStage(pipeline, stage, attempt, ports, persist);
+        }
+      }
     } else if (req.action === "resume") {
       if (pipeline.state !== "paused") return { error: "pipeline is not paused", status: 409 };
       pipeline.state = pipeline.pausedState ?? "running";
       pipeline.pausedState = null;
       pipeline.resumedAt = ports.now();
       pipeline.controlGeneration = crypto.randomUUID();
+      if (attempt?.suspension) {
+        attempt.suspension.requestedAt = pipeline.resumedAt;
+        delete attempt.suspension.stoppedAt;
+        delete attempt.suspension.operatorStoppedAt;
+      }
       /* #1938: a resumed needs_review lane still names its unreviewed head. */
       pipeline.stateDetail = (pipeline.state === "needs_review" || pipeline.state === "needs_decision" && currentTerminalReviewPending(pipeline)) && pipeline.reviewPending
         ? reviewPendingDetail(pipeline.reviewPending)
@@ -12787,6 +12951,17 @@ export async function patchPipeline(
       }
       const survivorRefusal = pipelineSurvivorRefusal(pipeline);
       if (survivorRefusal) return survivorRefusal;
+      if (stage?.kind === "run" && attempt && !attempt.report && !attempt.verdict && ["running", "needs_decision"].includes(pipeline.state)
+        && (attempt.suspension || stageAccountBlocked(pipeline, attempt, ports))) {
+        if (attempt.suspension?.operatorStoppedAt) {
+          attempt.suspension.requestedAt = ports.now();
+          delete attempt.suspension.stoppedAt;
+          delete attempt.suspension.operatorStoppedAt;
+        }
+        await reconcileStageAccountGuard(pipeline, stage, attempt, ports, persist);
+        await persist(); requestPipelineTick();
+        return { pipeline };
+      }
       if (pipeline.state === "needs_decision" && stage && attempt?.restartRecovery && !attempt.verdict) {
         if (deployCutHoldsAttempt(deployCutOf(attempt, ports), ports)
           || (attempt.conversationId && ports.conversationDeliveryOutstanding?.(attempt.conversationId))) {
@@ -13141,6 +13316,7 @@ export async function patchPipeline(
       }
       let runtimeSwitch: PipelineRuntimeSwitch | null = null;
       if (req.applyNow && live?.conversationId) {
+        if (live.suspension) return { error: "the attempt is suspended for recovery; retry-stage before changing its running runtime", status: 409 };
         const engine = target.effectiveRole.engine;
         const readiness = ports.engineReadiness?.(engine, pipeline.project) ?? "connected";
         if (readiness !== "connected") return { error: `target engine ${readiness}`, status: 409 };

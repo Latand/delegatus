@@ -236,6 +236,18 @@ function isRuntimeSwitches(value: unknown): boolean {
       && item.handoff.bytes === Buffer.byteLength(item.handoff.prompt) && item.handoff.bytes <= 32000));
 }
 
+function isStageSuspension(value: unknown): boolean {
+  if (value === undefined) return true;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const suspension = value as Record<string, unknown>;
+  const dated = (time: unknown) => typeof time === "string" && Number.isFinite(Date.parse(time));
+  return (suspension.reason === "pause" || suspension.reason === "account") && typeof suspension.detail === "string"
+    && dated(suspension.requestedAt)
+    && (suspension.stoppedAt === undefined || dated(suspension.stoppedAt))
+    && (suspension.stopRevision === undefined || Number.isSafeInteger(suspension.stopRevision) && (suspension.stopRevision as number) >= 0)
+    && (suspension.operatorStoppedAt === undefined || dated(suspension.operatorStoppedAt));
+}
+
 function isAttempt(value: unknown, index: number): boolean {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const attempt = value as Record<string, unknown>;
@@ -314,6 +326,7 @@ function isAttempt(value: unknown, index: number): boolean {
     (attempt.reviewedHead === undefined || isNullableString(attempt.reviewedHead)) &&
     isVerdictRecovery(attempt.verdictRecovery) &&
     isRuntimeSwitches(attempt.runtimeSwitches) &&
+    isStageSuspension(attempt.suspension) &&
     (attempt.runtimeEvidenceSince === undefined || typeof attempt.runtimeEvidenceSince === "string" && Number.isFinite(Date.parse(attempt.runtimeEvidenceSince))) &&
     (attempt.runtimeAccountPin === undefined || isNullableString(attempt.runtimeAccountPin)) &&
     isAttemptDefinition(attempt.definition) &&
@@ -1334,6 +1347,7 @@ function reviveLoadedPipeline(pipeline: Pipeline, resolveProject: (project: stri
       attempts: Array.isArray(run.attempts)
         ? run.attempts.map((attempt) => ({
             ...attempt,
+            ...(attempt.suspension ? { suspension: { ...attempt.suspension } } : {}),
             ...(attempt.runtimeSwitches ? { runtimeSwitches: structuredClone(attempt.runtimeSwitches) } : {}),
             launchId: attempt.launchId ?? null,
             conversationId: attempt.conversationId ?? null,

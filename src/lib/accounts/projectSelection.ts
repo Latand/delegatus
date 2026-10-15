@@ -1,4 +1,5 @@
 import { selectHeadlessAccount } from "./headlessSelection";
+import { creditGuardBlock } from "./creditGuard";
 import type { DurableQuotaObservation } from "./migration/contracts";
 import {
   allowedAccountIdsForProject,
@@ -143,7 +144,8 @@ export interface ProjectAccountSelectionInput {
    *   was already running outside the pool.
    *
    * Capacity is consulted for an automatic recovery target with `requireCapacity`;
-   * other named choices preserve their historical admission; authentication is decided further in, by the engine's own health
+   * the paid-credit guard applies to every choice. Other named choices preserve
+   * their historical admission; authentication is decided further in, by the engine's own health
    * pass; and an id nobody named still draws from the pool only.
    */
   requestedChoice?: "explicit" | "fenced";
@@ -188,6 +190,9 @@ export interface ProjectAccountSelectionInput {
 export function selectProjectAccount(input: ProjectAccountSelectionInput): ProjectAccountSelection {
   const allowed = input.engine === "copilot" ? null : allowedAccountIdsForProject(input.project, input.engine, input.bindings);
   const requestedId = input.requestedId?.trim() || null;
+  const guarded = (id: string) => creditGuardBlock(input.engine, input.observations.find(item => item.accountId === id)?.limits);
+  const requestedGuard = requestedId && guarded(requestedId);
+  if (requestedGuard) return { kind: "exhausted", ...requestedGuard, allowedAccountIds: [requestedId!] };
   if (requestedId && allowed !== null && !allowed.includes(requestedId)) {
     /* A control someone exercised is a capability, not a request the record
        gets to veto, so it resolves. The crossing is NOT reported back through
@@ -200,7 +205,7 @@ export function selectProjectAccount(input: ProjectAccountSelectionInput): Proje
   }
   if (requestedId && !input.requireCapacity) return { kind: "available", accountId: requestedId };
   const unavailable = new Set(input.unavailableIds ?? []);
-  if (!requestedId && allowed === null && unavailable.size === 0 && (input.unbound ?? "engine-default") === "engine-default") {
+  if (!requestedId && allowed === null && unavailable.size === 0 && !input.accounts.some(account => guarded(account.id)) && (input.unbound ?? "engine-default") === "engine-default") {
     return { kind: "available", accountId: input.preferredId?.trim() || null };
   }
   const permitted = allowed === null
@@ -261,6 +266,8 @@ export interface AutomaticAccountTargetInput {
 export function admitAutomaticAccountTarget(input: AutomaticAccountTargetInput): ProjectAccountSelection {
   const allowed = allowedAccountIdsForProject(input.project, input.engine, input.bindings);
   const targetId = input.targetId.trim();
+  const guarded = creditGuardBlock(input.engine, input.observations.find(item => item.accountId === targetId)?.limits);
+  if (guarded) return { kind: "exhausted", ...guarded, allowedAccountIds: allowed ?? [targetId] };
   if (allowed === null) {
     /* An UNBOUND project, which is every project until somebody configures one.
        Nobody drew a boundary here, so nothing is fenced and — exactly as in

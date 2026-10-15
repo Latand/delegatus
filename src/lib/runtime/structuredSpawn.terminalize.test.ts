@@ -1,9 +1,11 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { Database } from "bun:sqlite";
 import { afterEach, expect, spyOn, test } from "bun:test";
 
 import { AgentRegistry, type AgentRegistrySqliteMode, type SpawnLauncher } from "@/lib/agent/registry";
+import { failedLaunchRepairQuery } from "@/lib/agent/sqliteRegistryStore";
 import { spawnResponseForReceipt } from "@/lib/agent/spawnResponse";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { claimPass, patchPass, readPass } from "@/lib/memory/curation/store";
@@ -13,7 +15,10 @@ import { defaultSeatTickSources } from "@/lib/monitor/seatTickSources";
 import { emptySeatTickState } from "@/lib/monitor/types";
 import { writeSeatTickState } from "@/lib/monitor/seatTickState";
 import { appendLifecycleEvents, lifecycleJournalPath, queryLifecycleEvents, readLifecycleJournal } from "@/lib/lifecycle/journal";
-import { readSpawnNoticeTurn } from "@/lib/spawnNotice/store";
+import { pruneSpawnNotices, readSpawnNoticeTurn, settleSpawnNotices } from "@/lib/spawnNotice/store";
+import { LAUNCH_FAILURE_NOTICE_WINDOW_MS } from "@/lib/tasks/launchFailureReporting";
+import { closeStateMutationActivationForTests, openStateMutationActivation, stateMutationRefusal } from "@/lib/state/stateMutationBarrier";
+import { viewerReleaseOwnsTraffic } from "@/lib/viewerReleaseTraffic";
 
 import { RuntimeHostUnavailableError, type RuntimeHostClient } from "./client";
 import {
@@ -247,6 +252,181 @@ test.each(["off", "sqlite"] as const)("a refused pre-acceptance launch stays sil
 
   expect(queryLifecycleEvents({ type: "spawn_failed" }).events.filter(event => event.conversationId === receipt.conversationId)).toEqual([]);
   expect(readSpawnNoticeTurn(receipt.conversationId, `launch:${receipt.launchId}`)).toBeNull();
+});
+
+test("an old failed receipt with no report rows stays silent on restart and repeated passes", async () => {
+  const store = registry();
+  const receipt = staleStructuredReceipt(store, "historical-unreported", { conversationId: "conversation_old_launcher", notify: true });
+  const raw = JSON.parse(fs.readFileSync(store.filename, "utf8"));
+  Object.assign(raw.receipts[receipt.launchId], { state: "failed", error: "runtime host request timed out", createdAt: "2026-10-01T12:00:00.000Z" });
+  fs.writeFileSync(store.filename, JSON.stringify(raw));
+  const reopened = new AgentRegistry(store.filename, undefined, undefined, { sqliteMode: "off" });
+  await terminalizeStaleStructuredSpawns(reopened, null);
+  await terminalizeStaleStructuredSpawns(reopened, null);
+  expect(queryLifecycleEvents({ conversationId: receipt.conversationId, type: "spawn_failed" }).events).toEqual([]);
+  expect(readSpawnNoticeTurn(receipt.conversationId, `launch:${receipt.launchId}`)).toBeNull();
+  expect(reopened.snapshot().receipts[receipt.launchId]?.failureAnnouncementSuppressed).toBe(true);
+});
+
+test.each(["fresh", "boundary", "expired"] as const)("a current receipt with a %s failure uses the failure time and age bound", async age => {
+  const store = registry();
+  const receipt = staleStructuredReceipt(store, `failure-age-${age}`, { conversationId: "conversation_age_launcher", notify: true });
+  const now = Date.now();
+  const failedAt = new Date(now - (age === "fresh" ? 1_000 : LAUNCH_FAILURE_NOTICE_WINDOW_MS + (age === "expired" ? 1 : 0))).toISOString();
+  const raw = JSON.parse(fs.readFileSync(store.filename, "utf8"));
+  Object.assign(raw.receipts[receipt.launchId], { state: "failed", error: "host lost", failureRepairState: "pending",
+    failureReporting: { failedAt, lifecycle: false, notice: false, task: false } });
+  fs.writeFileSync(store.filename, JSON.stringify(raw));
+  const reopened = new AgentRegistry(store.filename, undefined, undefined, { sqliteMode: "off" });
+  await terminalizeStaleStructuredSpawns(reopened, null, { now: () => now });
+  const events = queryLifecycleEvents({ conversationId: receipt.conversationId, type: "spawn_failed" }).events;
+  const notice = readSpawnNoticeTurn(receipt.conversationId, `launch:${receipt.launchId}`);
+  expect(events).toHaveLength(age === "expired" ? 0 : 1);
+  if (age === "expired") expect(notice).toBeNull();
+  else {
+    expect(events[0]?.at).toBe(failedAt);
+    expect(notice?.endedAt).toBe(failedAt);
+  }
+  expect(reopened.spawnReceipt(receipt.launchId)?.failureRepairState).toBe("handled");
+});
+
+test("a bounded silent backfill converges archived historical failures without reporting", async () => {
+  const store = registry();
+  const base = staleStructuredReceipt(store, "backfill-seed", { conversationId: "conversation_backfill_launcher", notify: true });
+  const raw = JSON.parse(fs.readFileSync(store.filename, "utf8"));
+  raw.receipts = Object.fromEntries(Array.from({ length: 140 }, (_, index) => {
+    const row = { ...raw.receipts[base.launchId], launchId: `historical-${index}`, clientAttemptId: `old-${index}`,
+      state: "failed", createdAt: "2026-10-01T12:00:00.000Z", error: "old refusal" };
+    delete row.failureReporting;
+    return [row.launchId, row];
+  }));
+  fs.writeFileSync(store.filename, JSON.stringify(raw));
+  let receiptReads = 0;
+  const reopened = new AgentRegistry(store.filename, undefined, undefined, { sqliteMode: "sqlite",
+    onSqliteRowPayloadRead: (collection, count) => { if (collection === "receipts") receiptReads += count; } });
+  expect(Object.values(reopened.snapshot().receipts).filter(row => row.failureAnnouncementSuppressed)).toHaveLength(0);
+  await terminalizeStaleStructuredSpawns(reopened, null, { actuationCap: 64 });
+  expect(Object.values(reopened.snapshot().receipts).filter(row => row.failureAnnouncementSuppressed)).toHaveLength(64);
+  expect(reopened.archiveInactiveRows(256)).toBeGreaterThan(0);
+  const db = new Database(store.filename.replace(/\.json$/, ".sqlite"), { readonly: true });
+  try {
+    for (const legacy of [true, false]) {
+      const plan = db.query<{ detail: string }, [number]>(`EXPLAIN QUERY PLAN ${failedLaunchRepairQuery(legacy)}`).all(3).map(row => row.detail).join("\n");
+      expect(plan).toContain("USING INDEX registry_rows_failure_repair");
+      expect(plan).not.toContain("USE TEMP B-TREE");
+      expect(plan).not.toContain("SCAN");
+    }
+  } finally { db.close(); }
+  expect(reopened.backfillFailedLaunchReporting(3)).toBe(3);
+  expect(reopened.failedSpawnReceipts(2)).toHaveLength(2);
+  for (let pass = 0; pass < 5; pass++) await terminalizeStaleStructuredSpawns(reopened, null);
+  expect(reopened.backfillFailedLaunchReporting(3)).toBe(0);
+  expect(Object.values(reopened.snapshot().receipts).filter(row => row.failureRepairState === "handled")).toHaveLength(140);
+  receiptReads = 0;
+  for (let pass = 0; pass < 3; pass++) {
+    expect(reopened.backfillFailedLaunchReporting(3)).toBe(0);
+    expect(reopened.failedSpawnReceipts(2)).toEqual([]);
+  }
+  expect(receiptReads).toBe(0);
+  expect(queryLifecycleEvents({ conversationId: base.conversationId, type: "spawn_failed" }).events).toEqual([]);
+  expect(readSpawnNoticeTurn(base.conversationId, `launch:${base.launchId}`)).toBeNull();
+});
+
+test("a reader without the release fence cannot backfill operator-shaped state", () => {
+  const store = registry();
+  const previousHome = process.env.HOME;
+  const previousOwner = process.env.LLV_STATE_OWNER;
+  const operatorHome = path.join(path.parse(os.tmpdir()).root, "fixture-operator");
+  try {
+    process.env.HOME = operatorHome;
+    process.env.LLV_STATE_OWNER = "mcp";
+    Object.defineProperty(store, "filename", { value: path.join(operatorHome, ".config", "delegatus", "state", "agent-registry.json") });
+    expect(() => store.backfillFailedLaunchReporting()).toThrow("failed launch announcement backfill");
+  } finally {
+    if (previousHome === undefined) delete process.env.HOME;
+    else process.env.HOME = previousHome;
+    if (previousOwner === undefined) delete process.env.LLV_STATE_OWNER;
+    else process.env.LLV_STATE_OWNER = previousOwner;
+  }
+});
+
+test("failure backfill waits for activation and stops when the Viewer loses traffic", async () => {
+  const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-backfill-fence-"));
+  const directory = path.join(sandbox, "config", "delegatus", "state");
+  const previous = { LLV_STATE_DIR: process.env.LLV_STATE_DIR, XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME,
+    LLV_STATE_OWNER: process.env.LLV_STATE_OWNER, PORT: process.env.PORT };
+  try {
+    process.env.LLV_STATE_DIR = directory;
+    const store = new AgentRegistry(path.join(directory, "agent-registry.json"), undefined, undefined, { sqliteMode: "off" });
+    const base = staleStructuredReceipt(store, "fence-seed", { conversationId: "conversation_fence_launcher", notify: true });
+    const raw = JSON.parse(fs.readFileSync(store.filename, "utf8"));
+    raw.receipts = Object.fromEntries(Array.from({ length: 70 }, (_, index) => {
+      const row = { ...raw.receipts[base.launchId], launchId: `fenced-${index}`, clientAttemptId: `fenced-attempt-${index}`,
+        state: "failed", error: "historical refusal" };
+      delete row.failureReporting;
+      return [row.launchId, row];
+    }));
+    fs.writeFileSync(store.filename, JSON.stringify(raw));
+    const target = path.join(directory, "viewer-release.json");
+    fs.writeFileSync(target, JSON.stringify({ endpoint: "http://127.0.0.1:32101" }));
+    process.env.XDG_CONFIG_HOME = path.join(sandbox, "config");
+    delete process.env.LLV_STATE_DIR;
+    process.env.LLV_STATE_OWNER = "viewer";
+    process.env.PORT = "32102";
+    closeStateMutationActivationForTests();
+    expect(viewerReleaseOwnsTraffic()).toBe(false);
+    expect(stateMutationRefusal(directory)).not.toBeNull();
+    const before = JSON.parse(fs.readFileSync(store.filename, "utf8"));
+    const reopened = new AgentRegistry(store.filename, undefined, undefined, { sqliteMode: "off" });
+    expect(JSON.parse(fs.readFileSync(store.filename, "utf8"))).toEqual(before);
+    expect(() => reopened.backfillFailedLaunchReporting()).toThrow();
+    process.env.LLV_STATE_OWNER = "mcp";
+    new AgentRegistry(store.filename, undefined, undefined, { sqliteMode: "off" });
+    expect(JSON.parse(fs.readFileSync(store.filename, "utf8"))).toEqual(before);
+
+    process.env.LLV_STATE_OWNER = "viewer";
+    process.env.PORT = "32101";
+    expect(() => reopened.backfillFailedLaunchReporting()).toThrow();
+    process.env.LLV_STATE_DIR = directory;
+    expect(() => reopened.backfillFailedLaunchReporting()).toThrow("current Viewer release");
+    delete process.env.LLV_STATE_DIR;
+    openStateMutationActivation();
+    await terminalizeStaleStructuredSpawns(reopened, null, { actuationCap: 64 });
+    expect(Object.values(reopened.snapshot().receipts).filter(row => row.failureAnnouncementSuppressed)).toHaveLength(64);
+    const activated = fs.readFileSync(store.filename, "utf8");
+    fs.writeFileSync(target, JSON.stringify({ endpoint: "http://127.0.0.1:32102" }));
+    expect(() => reopened.backfillFailedLaunchReporting()).toThrow("current Viewer release");
+    expect(fs.readFileSync(store.filename, "utf8")).toBe(activated);
+    expect(queryLifecycleEvents({ type: "spawn_failed" }).events.filter(row => row.conversationId === base.conversationId)).toEqual([]);
+    expect(readSpawnNoticeTurn(base.conversationId, `launch:${base.launchId}`)).toBeNull();
+  } finally {
+    closeStateMutationActivationForTests();
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    fs.rmSync(sandbox, { recursive: true, force: true });
+  }
+});
+
+test.each(["off", "sqlite"] as const)("a fresh loss stays handled when both report lookups miss after %s restart", async sqliteMode => {
+  const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-report-reconnect-"));
+  process.env.LLV_STATE_DIR = path.join(sandbox, "state");
+  const store = registry(sqliteMode);
+  const receipt = staleStructuredReceipt(store, "reconnect-repass", { conversationId: "conversation_current_launcher", notify: true });
+  expect(store.failStructuredSpawn(receipt.launchId, "accepted launch lost").claimed).toBe(true);
+  expect(queryLifecycleEvents({ conversationId: receipt.conversationId, type: "spawn_failed" }).events).toHaveLength(1);
+  const turn = `launch:${receipt.launchId}`;
+  expect(readSpawnNoticeTurn(receipt.conversationId, turn)).not.toBeNull();
+  settleSpawnNotices(receipt.conversationId, [turn], { state: "sent", recipientConversationId: "conversation_current_launcher", clientMessageId: "notice-fixture", operationId: null }, new Date().toISOString());
+  pruneSpawnNotices(new Date(Date.now() + 1_000).toISOString());
+  fs.rmSync(lifecycleJournalPath(), { force: true });
+  expect(readSpawnNoticeTurn(receipt.conversationId, turn)).toBeNull();
+  const reopened = new AgentRegistry(store.filename, undefined, undefined, { sqliteMode });
+  await terminalizeStaleStructuredSpawns(reopened, null);
+  await terminalizeStaleStructuredSpawns(reopened, null);
+  expect(queryLifecycleEvents({ conversationId: receipt.conversationId, type: "spawn_failed" }).events).toEqual([]);
+  expect(readSpawnNoticeTurn(receipt.conversationId, turn)).toBeNull();
 });
 
 test.each(["off", "sqlite"] as const)("a reported failure does not emit another wake after journal retention and %s registry restart", async sqliteMode => {
@@ -954,6 +1134,19 @@ function queuedOwnerFixture(transport: "tmux" | "structured", curator?: { id: st
   store.releaseSpawnActuation(begun.receipt.launchId, begun.receipt.admissionOwner);
   return { store, cwd, receipt: begun.receipt };
 }
+
+test("a newly failed accepted queue retains its reporting obligation until the next pass", async () => {
+  const { store, receipt } = queuedOwnerFixture("structured");
+  const raw = JSON.parse(fs.readFileSync(store.filename, "utf8"));
+  raw.receipts[receipt.launchId].launcher = { conversationId: "conversation_queue_launcher", notify: true };
+  fs.writeFileSync(store.filename, JSON.stringify(raw));
+  expect(await store.retireQueuedSpawnOffLoop(receipt.launchId, "accepted queue lost its owner")).toBe(true);
+  const reopened = new AgentRegistry(store.filename, undefined, undefined, { sqliteMode: "off" });
+  await terminalizeStaleStructuredSpawns(reopened, null);
+  await terminalizeStaleStructuredSpawns(reopened, null);
+  expect(queryLifecycleEvents({ conversationId: receipt.conversationId, type: "spawn_failed" }).events).toHaveLength(1);
+  expect(readSpawnNoticeTurn(receipt.conversationId, `launch:${receipt.launchId}`)?.outcome).toBe("lost");
+});
 
 function claimedCurator(project: string) {
   const scope = roleScope(project, "builder");

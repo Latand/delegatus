@@ -2162,7 +2162,7 @@ test("a Claude stage retains the source account's confirmed reset when no allowe
   }
 });
 
-test("a waiting Claude stage continues its original conversation after that account's capacity returns", async () => {
+test("a removed waiting account stays stopped and starts a linked attempt when allowed capacity returns", async () => {
   const h = harness();
   const pipeline = await create(h.ports, [{ ...usageLimitStage()[0], engine: "claude", model: "fable" }] as never);
   await tickPipelines([], h.ports);
@@ -2177,6 +2177,10 @@ test("a waiting Claude stage continues its original conversation after that acco
   let allowed = [LIMITED_ACCOUNT];
   h.ports.allowedAccountIds = () => allowed;
   h.ports.claudeAccountRecovered = () => recovered;
+  h.ports.resolveProjectSpawn = () => recovered && allowed.includes(LIMITED_ACCOUNT)
+    ? { kind: "available", account: { engine: "claude", accountId: LIMITED_ACCOUNT, kind: "managed",
+      home: "/account", transcriptRoot: "/account/sessions", env: { NODE_ENV: "test" } } }
+    : { kind: "exhausted", resetsAt: null, allowedAccountIds: allowed };
   const continuations: string[] = [];
   const cohorts: Array<string | undefined> = [];
   h.ports.resumeSeveredTurn = async (input) => { continuations.push(input.conversationId); cohorts.push(input.cohortAt); return true; };
@@ -2191,12 +2195,14 @@ test("a waiting Claude stage continues its original conversation after that acco
   await tickPipelines([], h.ports);
   const resumed = loadPipelines()[0]!;
   expect(resumed.state).toBe("running");
-  expect(resumed.runs[0]!.attempts).toHaveLength(1);
-  expect(resumed.runs[0]!.attempts[0]).toMatchObject({ conversationId: attempt.conversationId, state: "running" });
-  expect(continuations).toEqual([attempt.conversationId!]);
-  // The continuation belongs to the attempt's cohort under an update drain.
-  expect(attempt.startedAt).toBeTruthy();
-  expect(cohorts).toEqual([attempt.startedAt!]);
+  expect(resumed.runs[0]!.attempts).toHaveLength(2);
+  expect(resumed.runs[0]!.attempts[0]).toMatchObject({ conversationId: attempt.conversationId, state: "failed",
+    suspension: { stoppedAt: expect.any(String) } });
+  expect(resumed.runs[0]!.attempts[1]).toMatchObject({ accountId: LIMITED_ACCOUNT,
+    restartContext: { previousAttempt: 1, transcriptPath: attempt.agentPath }, input: attempt.input });
+  expect(resumed.worktreeDir).toBe(running.worktreeDir);
+  expect(continuations).toEqual([]);
+  expect(cohorts).toEqual([]);
 });
 
 test("a Claude account without a known new reset stays excluded within the native cut chain", async () => {

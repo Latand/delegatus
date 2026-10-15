@@ -2,7 +2,7 @@ import fs from "node:fs";
 
 import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
 import { conversationProjectKey } from "@/lib/accounts/conversationProject";
-import { agentRegistry } from "@/lib/agent/registry";
+import { agentRegistry, type SpawnReceipt } from "@/lib/agent/registry";
 import { boardFor } from "@/lib/board/store";
 import { deliverConversationMessage } from "@/lib/delivery";
 import { readOrchestratorSeatFileOrNull } from "@/lib/orchestrator/seats";
@@ -12,6 +12,7 @@ import { tailRecords } from "@/lib/scanner/activity";
 import { recordValue, recordsValue, stringValue } from "@/lib/scanner/json";
 import { lastAssistantMessageFromRecords } from "@/lib/scanner/lastAssistantMessage";
 import { hardenedRedact } from "@/lib/view/compactText";
+import { taskSelectionSource } from "@/lib/tasks/store";
 
 import {
   pendingSpawnNotices,
@@ -19,6 +20,7 @@ import {
   readSpawnNoticeChild,
   recordSpawnNoticeAttempt,
   settleSpawnNotices,
+  type SpawnNoticeTurn,
 } from "./store";
 import {
   sweepSpawnNotices,
@@ -31,6 +33,24 @@ const TITLE_LIMIT = 200;
 const ERROR_LIMIT = 500;
 const PRUNE_INTERVAL_MS = 60 * 60 * 1_000;
 const RETENTION_MS = 14 * 24 * 60 * 60 * 1_000;
+
+/** Recheck the receipt and its admitted task ids just before a lost notice
+    could resume its launcher, including a retry of a retained attempt. */
+export function spawnLossRelevant(row: SpawnNoticeTurn, ports: {
+  receipt(id: string): Pick<SpawnReceipt, "failureReporting" | "failureAnnouncementSuppressed" | "rejection"> | null;
+  task(id: string): { status: string } | null;
+} = {
+  receipt: id => agentRegistry().spawnReceipt(id),
+  task: id => taskSelectionSource()?.read(id) ?? null,
+}): boolean {
+  const launchId = row.lost?.launchId;
+  const receipt = launchId ? ports.receipt(launchId) : null;
+  if (!receipt?.failureReporting?.failedAt || receipt.failureAnnouncementSuppressed || receipt.rejection) return false;
+  return !(receipt.failureReporting.taskIds ?? row.lost?.tasks.map(move => move.taskId) ?? []).some(taskId => {
+    const task = ports.task(taskId);
+    return !task || task.status === "done";
+  });
+}
 
 /**
  * Who a notice goes to (spawn-completion-notice §3.3). A retired seat's notice
@@ -158,6 +178,7 @@ function productionPorts(): SpawnNoticeSweepPorts {
       }
     },
     recipient: (launcher) => spawnNoticeRecipient(launcher),
+    lossRelevant: row => spawnLossRelevant(row),
     finalMessage: spawnNoticeFinalMessage,
     origin: (child) => agentMessageOrigin(agentRegistry().conversationDeliverySnapshot({ conversationId: child }), child),
     recordAttempt: recordSpawnNoticeAttempt,

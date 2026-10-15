@@ -26,6 +26,16 @@ const SNAPSHOT_SPAWN_ALIAS_LIMIT = 64;
 const SNAPSHOT_TITLE_CONVERSATION_LIMIT = 2_000;
 const SNAPSHOT_TITLE_OWNED_PATH_LIMIT = 128;
 
+/** Archive storage retains each current row in registry_rows for older
+    readers. Selecting its keys here avoids sorting every candidate through
+    the UNION view, or revisiting obsolete immutable archive versions. */
+export function failedLaunchRepairQuery(legacy: boolean): string {
+  return `SELECT row_key FROM registry_rows WHERE collection='receipts'
+    AND json_extract(value_json,'$.state')='failed'
+    AND json_extract(value_json,'$.failureRepairState') ${legacy ? "IS NULL" : "='pending'"}
+    ORDER BY row_order LIMIT ?`;
+}
+
 const ROW_COLLECTIONS = [
   "entries",
   "receipts",
@@ -1072,7 +1082,20 @@ export class SqliteAgentRegistryStore {
     this.generationIdentitiesReady = this.generationIdentitiesInstalled(this.db);
     this.secureFiles();
     this.importFirstBoot(options.initialSnapshot, options.verifyImport);
+    if (options.allowArchiveMigration !== false) {
+      assertStateStartupMutation(path.dirname(filename), "failed launch repair indexes");
+      this.db.run(`CREATE INDEX IF NOT EXISTS registry_rows_failure_repair ON registry_rows(collection,
+        json_extract(value_json,'$.state'),json_extract(value_json,'$.failureRepairState'),row_order)`);
+    }
     if (this.changesReady) this.refreshColdKeys();
+  }
+
+  /** Indexed keys only, including cold history. Payload reads are bounded by
+      the caller's page, and a quiet pass reads no receipt payloads. */
+  failedLaunchRepairKeys(limit: number, legacy: boolean): string[] {
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 256) throw new RangeError("invalid failure repair page size");
+    return performanceSpans.sync("registry.keyed", () => this.db.query<{ row_key: string }, [number]>(
+      failedLaunchRepairQuery(legacy)).all(limit).map(row => row.row_key));
   }
 
   /** Runs a read the caller's storage metrics must not count: the import's

@@ -95,3 +95,25 @@ test("with no editor focused, the attention card still takes initial focus for k
     host.remove();
   }
 });
+
+test("typed Codex actions send only offered responses and become inert when ownership is lost", () => {
+  setLocale("en");
+  const host = document.createElement("div"); document.body.append(host);
+  const root = createRoot(host);
+  const sent: unknown[] = [];
+  const row = attention({ request: { protocol: { engine: "codex", method: "item/permissions/requestApproval", actions: [
+    { kind: "grantTurn", response: { permissions: { network: { enabled: true } }, scope: "turn" } },
+    { kind: "decline", response: { permissions: {}, scope: "turn" } },
+  ] } } });
+  try {
+    flushSync(() => root.render(<AttentionCard attention={row} onAction={value => sent.push(value)} />));
+    const buttons = [...host.querySelectorAll("button")];
+    expect(buttons).toHaveLength(2);
+    flushSync(() => (buttons[0] as HTMLButtonElement).click());
+    expect(sent).toEqual([{ permissions: { network: { enabled: true } }, scope: "turn" }]);
+    flushSync(() => root.render(<AttentionCard attention={{ ...row, unowned: true }} onAction={value => sent.push(value)} onApprove={() => sent.push("invalid")} />));
+    expect(host.querySelectorAll("button")).toHaveLength(0);
+    host.firstElementChild!.dispatchEvent(new dom.KeyboardEvent("keydown", { key: "Enter", bubbles: true }) as unknown as Event);
+    expect(sent).toHaveLength(1);
+  } finally { flushSync(() => root.unmount()); host.remove(); }
+});

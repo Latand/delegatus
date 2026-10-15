@@ -1,3 +1,8 @@
+import { AttentionCard } from "@/components/runtime/AttentionCard";
+import { codexAttentionActions, projectCodexAttentionActions } from "@/lib/runtime/codexAttentionActions";
+import { questionsResolution } from "@/components/runtime/ConversationAttention";
+import type { RuntimeAttention } from "@/components/runtime/runtimeModel";
+import { useState } from "react";
 import { nativeAssociationForm } from "@/lib/attention/nativeAssociationForm";
 import { issueReportApprovalDrafts } from "@/lib/issueReports/approvalReply";
 import { issueReportPreviewText } from "@/lib/issueReports/previewText";
@@ -82,6 +87,7 @@ import { refreshTeamView } from "@/components/team/teamClient";
  */
 
 const SCENARIO = new URLSearchParams(location.search).get("scenario");
+const PROJECT_DERIVATION = SCENARIO === "project-derivation";
 const OVERVIEW_PERFORMANCE = SCENARIO === "overview-performance";
 const COLD_BOARD = SCENARIO === "cold-board";
 let releaseColdBoard!: () => void;
@@ -148,7 +154,7 @@ const DRAG_BOARD = SCENARIO === "drag-board";
    owning some of its lanes. */
 const ARROWS = SCENARIO === "orchestrator-arrows";
 const CPU_QUEUE = SCENARIO === "cpu-queue" || SCENARIO === "cpu-queue-stalled";
-const PIPELINES = SCENARIO === "pipelines" || STAGES || FLAT || SYNCED || DRAG_BOARD || ARROWS || CPU_QUEUE;
+const PIPELINES = PROJECT_DERIVATION || SCENARIO === "pipelines" || STAGES || FLAT || SYNCED || DRAG_BOARD || ARROWS || CPU_QUEUE;
 /* #1846: `&runtime=structured` answers the runtime snapshot with one structured session, for the running
    verify conversation, so its composer's runtime pill and the board's account chip both draw. */
 /* The seat-noise scenario (docs/design/seat-panel-noise.md) seats the orchestrator on a structured host too,
@@ -1778,6 +1784,14 @@ const mixedFailed = UNSTARTED ? add(conversation("mixed-failed", L("Replay the m
     state: "failed", initialMessage: "failed", retrySafe: true, error: "account limit reached: the weekly window resets in 3 days" },
 })) : null;
 
+// The historical project corpus also used by the derivation audit.
+if (PROJECT_DERIVATION) for (let i = 0; i < 280; i++) {
+  const builder = add(conversation(`history-builder-${i}`, `Historical work ${i}`));
+  const reviewers = [0, 1].map(j => add(conversation(`history-review-${i}-${j}`, `Historical review ${i}`)));
+  const flow = reviewFlow(`history-flow-${i}`, builder, reviewers[1], ["REQUEST_CHANGES", "REQUEST_CHANGES", "REQUEST_CHANGES", "APPROVE"], 100000);
+  flow.state = "closed";
+  flows.push(flow);
+}
 let revision = 1;
 function task(id: string, status: TaskStatus, title: string, description: string, updatedAgo: number, members: FileEntry[] = [], over: Partial<BoardTask> = {}): BoardTask {
   return {
@@ -2325,6 +2339,10 @@ if (ICONS) {
     const icon = stored[tasks[index]!.id];
     if (icon) tasks[index] = { ...tasks[index]!, icon } as BoardTask;
   }
+}
+if (PROJECT_DERIVATION) for (let i = 0; i < 600; i++) {
+  tasks.push(task(`history-task-${i}`, "done", `Historical task ${i}`, "Synthetic acceptance notes. ".repeat(12), 100000,
+    i < 60 ? [files.find(f => f.name === `history-builder-${i}.jsonl`)!] : [], i < 60 ? {} : { board: "hidden" }));
 }
 if (EDITING) {
   const at = (id: string) => tasks.findIndex((entry) => entry.id === id);
@@ -2986,6 +3004,16 @@ const evidence = {
   },
 };
 Object.assign(window, { evidence });
+if (PROJECT_DERIVATION) Object.assign(window, {
+  projectCorpus: { files: files.length, flows: flows.length, tasks: tasks.length, liveIds: files.filter(f => f.activity === "live").map(f => f.conversationId) },
+  projectPoll: () => {
+    files[0] = { ...files[0], mtime: files[0].mtime + 1, size: files[0].size + 1 };
+    window.dispatchEvent(new Event("llv:files-changed"));
+  },
+  projectCatalogHead: () => ({ size: files[0].size, mtime: files[0].mtime }),
+  projectSessions: () => Object.values(getRuntimeBus().getState().store.sessions).map(s => ({ id: s.conversationId, revision: s.revision })),
+  projectConnection: () => getRuntimeBus().getState().connection,
+});
 
 /* Streams stay silent, except the log stream, which reports it cannot connect
    so the feeds read their transcripts through the polled route below. */
@@ -3002,12 +3030,30 @@ class QuietEventSource {
 class StreamEventSource extends QuietEventSource {
   onmessage: ((event: { data: string }) => void) | null = null;
   onopen: (() => void) | null = null;
+  private heartbeats = new Set<(event: { data: string }) => void>();
+  private heartbeatTimer: number | undefined;
   constructor(url: string | URL) {
     super(url);
     if (String(url).startsWith("/api/runtime/stream")) {
       openStream(this);
       setTimeout(() => this.onopen?.(), 0);
+      // The real runtime route sends a named heartbeat every 15 seconds while
+      // quiet. A slow CPU-throttled mount can outlast the client's 20-second
+      // watchdog before the driver starts streaming its measured events.
+      if (PROJECT_DERIVATION) this.heartbeatTimer = window.setInterval(() => {
+        for (const listener of this.heartbeats) listener({ data: "{}" });
+      }, 15_000);
     }
+  }
+  addEventListener(type?: string, listener?: (event: { data: string }) => void) {
+    if (type === "heartbeat" && listener) this.heartbeats.add(listener);
+  }
+  removeEventListener(type?: string, listener?: (event: { data: string }) => void) {
+    if (type === "heartbeat" && listener) this.heartbeats.delete(listener);
+  }
+  close() {
+    window.clearInterval(this.heartbeatTimer);
+    this.heartbeats.clear();
   }
 }
 let streamSource: StreamEventSource | null = null;
@@ -4649,6 +4695,44 @@ function voiceCompanionScene() {
     </>
   );
 }
+function CodexCallbacksScene() {
+  const [answer, setAnswer] = useState<unknown>(null);
+  const scenario = new URLSearchParams(location.search).get("callback") ?? "permissions";
+  const unowned = scenario === "uncertain" || scenario === "unavailable";
+  const row: RuntimeAttention = {
+    id: "callback", conversationId: "callback-thread", kind: scenario === "question" ? "question" : "permission",
+    state: "open", unowned, createdAt: "2026-10-15T00:00:00Z",
+    request: scenario === "question" ? { questions: [
+      { prompt: L("Choose a deployment region", "Виберіть регіон розгортання"), header: L("Region", "Регіон"), isOther: true, options: [{ label: "Europe" }, { label: "Asia" }] },
+      { prompt: L("Enter the release note", "Введіть примітку до випуску"), isOther: true },
+    ] } : { title: L("Allow the requested network access?", "Дозволити запитаний доступ до мережі?"),
+      detail: unowned ? "Recovery outcome" : undefined,
+      protocol: { engine: "codex", method: "item/permissions/requestApproval", actions: codexAttentionActions("item/permissions/requestApproval", { permissions: { network: { enabled: true } } }) },
+    },
+    ...(unowned ? { codexReceipt: {
+      identity: { generation: "fixture", threadId: "thread", turnId: "turn", itemId: "item", method: "item/permissions/requestApproval", requestId: 1, approvalId: null },
+      requestDigest: "a".repeat(64), receivedAt: "2026-10-15T00:00:00Z",
+      recovery: { at: "2026-10-15T00:01:00Z", outcome: scenario === "uncertain" ? "delivery-uncertain" : "callback-unavailable", reason: "process-lost" },
+    } } : {}),
+  };
+  if (scenario === "long-label") {
+    row.kind = "question";
+    row.request = { question: { prompt: L("Choose the retained value", "Виберіть збережене значення"), options: [{ label: `${"x".repeat(256)}…` }] },
+      protocol: { engine: "codex", method: "item/tool/requestUserInput", responseRef: "a".repeat(64) } };
+  } else if (scenario === "large-permissions") {
+    row.request = { title: L("Allow the requested file access?", "Дозволити запитаний доступ до файлів?"),
+      protocol: { engine: "codex", method: "item/permissions/requestApproval",
+        actions: projectCodexAttentionActions("item/permissions/requestApproval", { permissions: { fileSystem: {
+          read: Array.from({ length: 110 }, (_, i) => `/workspace/${"p".repeat(70)}${i}`),
+        } } }, "a".repeat(64)) } };
+  }
+  return <main className="w-full max-w-2xl p-4" data-codex-callback>
+    <AttentionCard attention={row} onAction={setAnswer} onAnswerQuestion={index => setAnswer(questionsResolution(row, [[index]]))}
+      onAnswerQuestions={(selected, custom) => setAnswer({ selected, custom })} />
+    <output data-callback-answer className="block break-all text-primary">{answer ? JSON.stringify(answer) : ""}</output>
+  </main>;
+}
+
 if (HEADER_MENU && new URLSearchParams(location.search).has("member")) void refreshTeamView();
 const diskDensity = new URLSearchParams(location.search).get("disk-density");
 // Mount the production dock beside the Viewer for shared desktop-host cases.
@@ -4659,7 +4743,7 @@ createRoot(document.getElementById("root")!).render(dockWidth === "440" || dockW
     <OrchestratorDock project={PROJECT} projectName="Atlas" files={files} onClose={() => {}} />
     <div className="min-w-0 flex-1"><Viewer /></div>
   </div>
-) : SCENARIO === "memory-profile" ? <RulesWindow project="garden" onClose={() => {}} /> : VOICE ? voiceCompanionScene() : diskDensity ? (
+) : SCENARIO === "codex-callbacks" ? <CodexCallbacksScene /> : SCENARIO === "memory-profile" ? <RulesWindow project="garden" onClose={() => {}} /> : VOICE ? voiceCompanionScene() : diskDensity ? (
   <div className="bg-panel" style={{ width: diskDensity === "full" ? "100%" : 248, marginTop: "auto" }}>
     <ResourcesFooter density={diskDensity === "full" ? "full" : diskDensity === "detail" ? "detail" : "line"} />
   </div>

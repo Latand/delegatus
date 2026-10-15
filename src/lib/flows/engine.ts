@@ -14,6 +14,9 @@ import { BACKGROUND_TASK_WAIT_DETAIL_PREFIX, stepBackgroundWait } from "@/lib/pi
 import { loadPipelines } from "@/lib/pipelines/store";
 import { freshSpecFor, resumeSpecFor } from "@/lib/agent/cli";
 import { accountManager, resolveResumeAccountId } from "@/lib/accounts/manager";
+import { creditGuardBlock } from "@/lib/accounts/creditGuard";
+import { interruptionObligationDirectory, accountGuardObligationStore, REVIEWER_CUT_RESOLUTION } from "@/lib/runtime/interruptionObligations";
+import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { listCodexAccounts } from "@/lib/accounts/codex";
 import { tierOffers, CodexServiceTierUnavailableError } from "@/lib/accounts/codexServiceTiers";
 import { allowedAccountIdsForProject, projectAccountRefusalDetail } from "@/lib/accounts/projectBindings";
@@ -41,6 +44,7 @@ import {
   forgetHeadlessReview,
   headlessReviewStatus,
   startHeadlessReview,
+  stopHeadlessReviewAndWait,
   type HeadlessReviewLaunch,
 } from "./exec";
 import { resolveCleanFlowHead, resolveFlowRemoteHead } from "./git";
@@ -53,7 +57,7 @@ import {
   type ParsedFindings,
 } from "./findings";
 import { relayPrompt, reviewerPrompt } from "./prompts";
-import { atomicWriteText, findingsPathFor, loadFlows, loadFlowsForTick, loadPresets, patchFlowRowsAsync as patchFlowRows, saveFlows } from "./store";
+import { atomicWriteText, findingsPathFor, loadFlow, loadFlows, loadFlowsForTick, loadPresets, patchFlowRowsAsync as patchFlowRows, saveFlows } from "./store";
 import type { Flow, FlowPreset, FlowState, RelayDeliveryTransport, RoleConfig, Round } from "./types";
 import { chooseHeadlessReviewer, rateLimitStateDetail } from "./reviewerPolicy";
 
@@ -67,6 +71,7 @@ const store = globalThis as unknown as {
   __llvFlowTick?: boolean;
   __llvHostlessReviewerMarkersRepaired?: boolean;
   __llvFlowRelayLeases?: Map<string, Promise<void>>;
+  __llvHeadlessCreditGuardPasses?: WeakMap<AgentRegistry, Promise<void>>;
 };
 const relayStartedThisProcess = new Set<string>();
 const relayLeases = store.__llvFlowRelayLeases ??= new Map<string, Promise<void>>();
@@ -790,7 +795,7 @@ function withoutPreferredReviewerTier(role: RoleConfig): RoleConfig {
 
 /* Freeze the role actually admitted on the selected account for this round. */
 function prepareReviewerLaunch(flow: Flow, round: Round): PreparedReviewerLaunch {
-  let role = round.accountId || round.providerRetryCount ? reviewerRoleFor(flow, round) : flow.roles.reviewer;
+  let role = round.accountId || round.providerRetryCount || round.providerLimitWait ? reviewerRoleFor(flow, round) : flow.roles.reviewer;
   const required = role.serviceTierSource !== "role-default";
   let lacking: string[] = [];
   if (role.serviceTier) {
@@ -957,8 +962,8 @@ export function recordHeadlessLaunch(round: Round, launched: HeadlessReviewLaunc
 /** #2020: a headless reviewer that is gone stops fencing its conversation.
     Its row otherwise stays `starting` with a publication marker for good, and
     every message to the finished reviewer is refused as synchronizing. */
-function endHeadlessReviewerMarker(round: Round): void {
-  if (round.launchId) agentRegistry().endHostlessSpawn(round.launchId);
+function endHeadlessReviewerMarker(round: Round, registry: AgentRegistry = agentRegistry()): void {
+  if (round.launchId) registry.endHostlessSpawn(round.launchId);
 }
 
 /** Proof that a round's recorded reviewer process is gone: its pid vanished
@@ -985,10 +990,10 @@ function headlessReviewerMayRun(flows: readonly Flow[], launchId: string): boole
   return false;
 }
 
-function retryHeadlessRound(flow: Flow, round: Round, providerLabel: string | null = null, resumeAt?: number): void {
+function retryHeadlessRound(flow: Flow, round: Round, providerLabel: string | null = null, resumeAt?: number, registry: AgentRegistry | null = agentRegistry()): void {
   const provider = providerLabel !== null;
   forgetHeadlessReview(flow.id, round.n, round);
-  endHeadlessReviewerMarker(round);
+  if (registry) endHeadlessReviewerMarker(round, registry);
   clearHeadlessReviewArtifacts(flow.id, round.n);
   Object.assign(round, {
     reviewerPath: null,
@@ -1028,6 +1033,83 @@ function retryHeadlessRound(flow: Flow, round: Round, providerLabel: string | nu
     return;
   }
   flow.stateDetail = `reviewer produced no verdict; retrying automatically (${round.autoRetryCount}/${MAX_HEADLESS_NO_VERDICT_RETRIES})`;
+}
+
+const headlessGuardPasses = store.__llvHeadlessCreditGuardPasses ??= new WeakMap<AgentRegistry, Promise<void>>();
+
+/** Detached reviewers have no structured host. Their flow owns termination
+ * and retry, including across a Viewer restart with only a persisted PID. */
+export function enforceHeadlessAccountCreditGuard(registry: AgentRegistry, blockedAccounts: ReadonlySet<string>): Promise<void> {
+  const pending = headlessGuardPasses.get(registry);
+  if (pending) return pending;
+  const pass = withViewerOperation("controller.flows", async () => {
+    const cuts = accountGuardObligationStore(interruptionObligationDirectory(registry.filename));
+    const failures: unknown[] = [];
+    for (const flow of loadFlowsForTick()) {
+      try {
+        const round = lastRound(flow);
+        if (flow.reviewerMode !== "headless" || !round?.spawnStartedAt || !round.accountId
+          || !["reviewing", "spawning"].includes(flow.state === "paused" ? flow.pausedState ?? "" : flow.state)
+          || !round.reviewerPid && !round.reviewerPath
+          || reviewerRoleFor(flow, round).engine !== "codex" || !blockedAccounts.has(round.accountId)) continue;
+        const current = loadFlow(flow.id);
+        const currentRound = current && lastRound(current);
+        if (!currentRound || currentRound.reviewerBindingId !== round.reviewerBindingId
+          || currentRound.launchId !== round.launchId) continue;
+        const conversation = round.reviewerConversationId?.startsWith("conversation_")
+          ? registry.conversation(round.reviewerConversationId as `conversation_${string}`)
+          : round.reviewerPath ? registry.conversationForPath(round.reviewerPath) : null;
+        const generation = conversation?.generations.at(-1);
+        if (conversation && generation) await cuts.record({
+          conversationId: conversation.id, engine: "codex", hostKey: sessionKeyId({ engine: "codex", sessionId: generation.id }),
+          path: round.reviewerPath ?? generation.path,
+          owner: round.reviewerPid ? { pid: round.reviewerPid, startIdentity: round.reviewerIdentity ?? null } : null,
+          claimEpoch: null, turnRef: round.launchId ?? round.reviewerBindingId ?? null,
+          boundary: "paid-credit-guard", reason: "account-guard", checkpoint: { lastEventKind: null, lastEventAt: Date.now() },
+          seat: null, answeredBy: REVIEWER_CUT_RESOLUTION,
+        });
+        if (!await stopHeadlessReviewAndWait(flow.id, round.n, round)) {
+          throw new Error("paid-credit guard could not confirm reviewer termination");
+        }
+        if (round.launchId) {
+          const receipt = registry.readOnlySnapshot().receipts[round.launchId];
+          if (receipt && ["starting", "path-pending"].includes(receipt.state)) {
+            await registry.failSpawnOffLoop(receipt.launchId, "paid-credit guard stopped reviewer before transcript attribution");
+          }
+          await waitForStateLock("flows.creditGuardMarker", () => endHeadlessReviewerMarker(round, registry), { subject: "flows" });
+        }
+        // A concurrent pause/close or retry owns its new state. Only the stopped
+        // binding may be reset, and a paused round remains paused.
+        await patchFlowRows([flow.id], rows => rows.filter(row => {
+          const latest = lastRound(row);
+          if (!latest || latest.reviewerBindingId !== round.reviewerBindingId || latest.launchId !== round.launchId
+            || !["reviewing", "spawning"].includes(row.state === "paused" ? row.pausedState ?? "" : row.state)) return false;
+          const paused = row.state === "paused";
+          const role = reviewerRoleFor(row, latest);
+          const status = headlessReviewStatus(row.id, latest.n, latest, role.engine);
+          const parsed = readFindingsFile(latest) ?? (status?.status === "done" ? parseFindings(status.finalOutput) : null)
+            ?? fallbackReviewFromTranscript(latest, new Map(), role.engine);
+          if (parsed) {
+            applyVerdict(row, latest, parsed);
+            if (paused) { row.pausedState = row.state; row.state = "paused"; }
+            return true;
+          }
+          const retries = latest.autoRetryCount ?? 0;
+          retryHeadlessRound(row, latest, null, undefined, null);
+          latest.autoRetryCount = retries;
+          latest.reviewerRole = { ...role };
+          latest.providerLimitWait = { resetsAt: null, startedAt: isoNow(), capacityProbes: 0 };
+          if (paused) { row.state = "paused"; row.pausedState = "spawning"; }
+          row.stateDetail = "paid-credit guard stopped reviewer; waiting to relaunch on an allowed account";
+          return true;
+        }));
+      } catch (error) { failures.push(error); }
+    }
+    if (failures.length) throw new AggregateError(failures, "paid-credit reviewer termination remains pending");
+  });
+  headlessGuardPasses.set(registry, pass);
+  void pass.then(() => { headlessGuardPasses.delete(registry); }, () => { headlessGuardPasses.delete(registry); });
+  return pass;
 }
 
 /**
@@ -1741,6 +1823,14 @@ export async function tickFlows(entries: FileEntry[]): Promise<TickResult> {
     return { flows, changed: false };
   }
   store.__llvFlowTick = true;
+  try {
+    const registry = agentRegistry();
+    const blocked = new Set(registry.quotaObservations("codex").filter(row => creditGuardBlock("codex", row.limits)).map(row => row.accountId));
+    if (blocked.size) await enforceHeadlessAccountCreditGuard(registry, blocked);
+  } catch (error) {
+    store.__llvFlowTick = false;
+    throw error;
+  }
   const flows = cloneFlows(loadFlowsForTick());
   const base = flowTickBase(flows);
   if (!store.__llvHostlessReviewerMarkersRepaired) {
