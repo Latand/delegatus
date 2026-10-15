@@ -847,8 +847,7 @@ async function actuateQueuedPinnedSpawn(
      that cannot record the membership fails the launch instead of starting an
      agent outside every task. */
   try {
-    await registry.deliveryWriteOrBusy({ label: "spawn.membership", operationId: receipt.launchId }, () =>
-      registry.admitRecoveredLaunch(admissionClaim.receipt));
+    await registry.admitRecoveredLaunch(admissionClaim.receipt);
   } catch (error) {
     return failQueuedPinnedSpawn(registry, admissionClaim.receipt, structuredSpawnFailureReason(error));
   }

@@ -6038,9 +6038,10 @@ export class AgentRegistry {
 
   /** Recovery may replace a task deleted while the launch waited. Persist the
       newly admitted targets before execution or failure reporting can resume. */
-  admitRecoveredLaunch(receipt: SpawnReceipt): void {
+  async admitRecoveredLaunch(receipt: SpawnReceipt): Promise<void> {
     const admission = admitRecoveredLaunch(receipt);
-    if (admission.ok) this.recordSpawnMembership(receipt, admission.taskIds);
+    if (admission.ok) await this.deliveryWriteOrBusy({ label: "spawn.membership", operationId: receipt.launchId }, () =>
+      this.recordSpawnMembership(receipt, admission.taskIds));
   }
 
   private recordSpawnMembership(receipt: SpawnReceipt, taskIds: string[]): void {

@@ -555,14 +555,17 @@ test.each(["intact", "legacy"] as const)("a saved synchronous TASK_RUNS_ELSEWHER
   } finally { fs.rmSync(identity, { force: true }); }
 });
 
-test.each(["open", "done"] as const)("a recovered structured launch tracks its %s replacement task before a fresh failure", async status => {
+test.each([["off", "open"], ["off", "done"], ["sqlite", "open"], ["sqlite", "done"]] as const)("a recovered structured launch tracks its %s/%s replacement task before a fresh failure", async (mode, status) => {
   const settled = status === "done";
   const { queryLifecycleEvents } = await import("@/lib/lifecycle/journal");
   const { readSpawnNoticeTurn } = await import("@/lib/spawnNotice/store");
   const { spawnLossRelevant } = await import("@/lib/spawnNotice/production");
-  const attempt = `recovered-loss-${settled}`;
+  const attempt = `recovered-loss-${mode}-${status}`;
+  const reopen = () => mode === "sqlite"
+    ? new AgentRegistry(path.join(stateDir, "agents.json"), undefined, undefined, { sqliteMode: "sqlite", sqliteFilename: path.join(stateDir, "state.sqlite") })
+    : registryAt(attempt);
   saveTasks([task("deleted-launch-target", "Queued work")]);
-  const registry = registryAt(attempt);
+  const registry = reopen();
   const begun = registry.beginSpawnRequest({ engine: "claude", cwd: stateDir, explicitProject: project, transport: "structured",
     accountId: "account-a", accountPin: true, clientAttemptId: attempt, taskIds: ["deleted-launch-target"],
     launcher: { conversationId: "conversation_current_launcher", notify: true }, launchProfile: emptyLaunchProfile({ cwd: stateDir, title: "Queued work" }) });
@@ -575,7 +578,7 @@ test.each(["open", "done"] as const)("a recovered structured launch tracks its %
   if (!begun.receipt.admissionOwner) throw new Error("expected reservation owner");
   expect(registry.releaseStartingStructuredSpawn(begun.receipt.launchId, begun.receipt.admissionOwner).released).toBe(true);
   saveTasks([]);
-  const reopened = registryAt(attempt);
+  const reopened = reopen();
   const tick = await terminalizeStaleStructuredSpawns(reopened, {} as RuntimeHostClient, {
     resolveSpawnAccount: () => {
       if (settled) saveTasks(loadTasks().map(row => ({ ...row, status: "done" })));
@@ -593,9 +596,9 @@ test.each(["open", "done"] as const)("a recovered structured launch tracks its %
     expect(notice?.launcherConversationId).toBe("conversation_current_launcher");
     expect(spawnLossRelevant(notice!, { receipt: id => reopened.spawnReceipt(id), task: id => loadTasks().find(row => row.id === id) ?? null })).toBe(true);
   }
-  expect(registryAt(attempt).spawnReceipt(begun.receipt.launchId)?.failureReporting?.taskIds).toEqual([replacement.id]);
-  await terminalizeStaleStructuredSpawns(registryAt(attempt), null);
-  await terminalizeStaleStructuredSpawns(registryAt(attempt), null);
+  expect(reopen().spawnReceipt(begun.receipt.launchId)?.failureReporting?.taskIds).toEqual([replacement.id]);
+  await terminalizeStaleStructuredSpawns(reopen(), null);
+  await terminalizeStaleStructuredSpawns(reopen(), null);
   expect(queryLifecycleEvents({ conversationId: begun.receipt.conversationId, type: "spawn_failed" }).events).toHaveLength(settled ? 0 : 1);
   expect(readSpawnNoticeTurn(begun.receipt.conversationId, `launch:${begun.receipt.launchId}`)).toEqual(notice);
 });
