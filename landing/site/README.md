@@ -91,6 +91,7 @@ position comes back. PNGs go to `/tmp/landing-fullscreen-renders/`.
 | `demo/world.ts` | the invented harbor-api world at each step, in both languages |
 | `demo/taskIcons.json` | the lucide drawings of the demo's task icons, written by the build |
 | `build.ts` | bundles the demo, compiles the product stylesheet, assembles `dist/` |
+| `audioAssets.ts` | the cue files the demo's Viewer requests at the site root, copied from `public/audio/cues/` into `dist/audio/cues/`; the build fails when one is missing. The 5 MB music bed is left out: the demo bundle loads a loop-asset module with no asset, so the sound menu omits the loop controls |
 | `capture.ts` | the render driver |
 
 ## Worker configuration and publication

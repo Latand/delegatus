@@ -21,6 +21,8 @@ import { costumeSvg } from "@/components/brand/roleCostumes";
 import { taskIconNodes } from "@/lib/tasks/taskIconNodes";
 import { ROLE_FRAME_BOOT_SCRIPT } from "@/lib/roleFrames";
 
+import { copyDemoAudio, DEMO_LOOP_ASSET_SOURCE, LOOP_ASSET_MODULE } from "./audioAssets";
+
 const here = path.dirname(new URL(import.meta.url).pathname);
 const repo = path.resolve(here, "../..");
 const dist = path.join(here, "dist");
@@ -46,6 +48,7 @@ const bundle = await Bun.build({
     name: "server-action-stubs",
     setup(build) {
       build.onLoad({ filter: /\/src\/.*\.tsx?$/ }, (args) => {
+        if (args.path.endsWith(LOOP_ASSET_MODULE)) return { contents: DEMO_LOOP_ASSET_SOURCE, loader: "ts" };
         const source = fs.readFileSync(args.path, "utf8");
         const loader = args.path.endsWith(".tsx") ? "tsx" : "ts";
         if (!SERVER_DIRECTIVE.test(source)) return { contents: source, loader };
@@ -97,5 +100,9 @@ for (const file of ["index.html", "styles.css", "copy.js", "boardDemo.js", "masc
    from the product's own drawing, so it follows the product on every build. */
 fs.writeFileSync(path.join(dist, "brand/role-orchestrator.svg"), costumeSvg("orchestrator"));
 
+/* The sounds the demo's Viewer requests at the site root. Without them every
+   request answers 404 and the browser console fills with errors. */
+const audio = copyDemoAudio(repo, dist);
+
 const size = (file: string) => `${Math.round(fs.statSync(path.join(dist, file)).size / 1024)} KB`;
-console.log(`landing/site/dist: demo.js ${size("demo/demo.js")}, viewer.css ${size("demo/viewer.css")}`);
+console.log(`landing/site/dist: demo.js ${size("demo/demo.js")}, viewer.css ${size("demo/viewer.css")}, ${audio.length} audio files`);
