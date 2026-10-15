@@ -138,8 +138,15 @@ async function viewerBridge(environment: Record<string, string>, diagnostics = {
   `], { cwd: process.cwd(), env: environment, stdin: "pipe", stdout: "pipe", stderr: "pipe" }));
   const stderr = (async () => {
     const decoder = new TextDecoder();
-    for await (const chunk of viewer.stderr) diagnostics.text += decoder.decode(chunk, { stream: true });
-    diagnostics.text += decoder.decode();
+    const reader = viewer.stderr.getReader();
+    try {
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        diagnostics.text += decoder.decode(value, { stream: true });
+      }
+      diagnostics.text += decoder.decode();
+    } finally { reader.releaseLock(); }
   })();
   void stderr.catch(() => {});
   const reader = viewer.stdout.getReader();
@@ -2224,6 +2231,11 @@ test("packaged MCP writers retain ordered task edits while the Viewer yields on 
   loadTasksFile(file);
   const diagnostics = { text: "" };
   const forwarded = await viewerBridge(environment, diagnostics);
+  const waits = (): import("@/lib/blockingWaits").BlockingWaitSample[] => diagnostics.text.split("\n").slice(0, -1)
+    .filter(line => line.startsWith("[blocking-wait] "))
+    .map(line => JSON.parse(line.slice("[blocking-wait] ".length)));
+  const taskWait = (entry: import("@/lib/blockingWaits").BlockingWaitSample) => entry.subject === "tasks"
+    && entry.stateWait?.processKind === "embedded" && entry.stateWait.callSite === "state.lease.sqlite";
   const sessions: McpSession[] = [];
   const holder = new Database(path.join(environment.LLV_STATE_DIR!, "state.sqlite"));
   let pending: Promise<unknown> | undefined;
@@ -2249,7 +2261,11 @@ test("packaged MCP writers retain ordered task edits while the Viewer yields on 
     });
     pending = Promise.all(edits);
     void pending.catch(() => {});
-    await Bun.sleep(250);
+    const waitDeadline = Date.now() + 5_000;
+    while (!waits().some(entry => taskWait(entry) && entry.stateWait?.outcome === "waiting") && Date.now() < waitDeadline) await Bun.sleep(10);
+    expect(waits().filter(taskWait)).toEqual(expect.arrayContaining([expect.objectContaining({
+      synchronous: false, stateWait: expect.objectContaining({ outcome: "waiting", synchronousSleepMs: 0 }),
+    })]));
     expect(acknowledged).toBe(0);
     expect(loadTasksFile(file).tasks[0]!.details).toBe("start");
     holder.exec("COMMIT");
@@ -2260,15 +2276,12 @@ test("packaged MCP writers retain ordered task edits while the Viewer yields on 
     for (let writer = 0; writer < 4; writer++) {
       expect(lines.filter(line => line.startsWith(`${writer}:`))).toEqual(Array.from({ length: 20 }, (_, sequence) => `${writer}:${sequence}`));
     }
-    const logs = diagnostics.text.split("\n")
-      .filter(line => line.startsWith("[blocking-wait] "))
-      .map(line => JSON.parse(line.slice("[blocking-wait] ".length)));
     // The port-0 Viewer fixture has an embedded entry point. Its process owns
-    // the asynchronous wait; the four packaged adapters own no state locks.
-    expect(logs.some(entry => entry.stateWait?.processKind === "embedded" && entry.stateWait.outcome === "waiting")).toBe(true);
-    expect(logs.some(entry => entry.stateWait?.processKind === "embedded" && !entry.synchronous
-      && entry.durationMs > 50 && entry.stateWait.outcome === "success"
-      && entry.stateWait.synchronousSleepMs === 0 && entry.stateWait.callSite === "tasks.mutation")).toBe(true);
+    // the asynchronous wait; the logger names the deferred SQLite lease site.
+    // The four packaged adapters own no state locks.
+    expect(waits().filter(taskWait)).toEqual(expect.arrayContaining([expect.objectContaining({
+      synchronous: false, stateWait: expect.objectContaining({ outcome: "success", synchronousSleepMs: 0 }),
+    })]));
     for (const session of sessions) expect(session.stderr()).not.toContain("[blocking-wait]");
   } finally {
     holder.close();

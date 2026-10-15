@@ -521,3 +521,82 @@ runs can establish acceptance. The earlier diagnostic exports were updated
 between variants and do not provide an immutable source manifest for each
 variant. A final accepted comparison must export committed revisions and save
 the source, observer, runtime and quota identities with every sample.
+
+### Resumed comparison on merged main
+
+The interrupted candidate at `4f66016bd` never wrote a summary or final rows.
+Its last loop observation missed 172.147 seconds of the scheduled window; that
+sample remains incomplete. It is excluded from the following comparison.
+
+Fresh immutable exports compare main `8f2db43e573e446bc9079d8da648b79040f8b8f7`
+with candidate `a8dd7b1b49df9ba2340c53e507192d916921dd8c`, which merges that
+main revision. Both include the landed lock-wait, snapshot and heap changes.
+The same observer and harness ran against the same seed described above, under
+Bun 1.4.0, a three-core CPU quota and an 8 GiB memory cap. Each used one stdio
+client, 30 seconds warmup and 300 seconds measurement. The complete aggregate,
+source/archive/observer/runtime hashes, per-process connection lifetimes, cold
+and warm phase counters, and row/response checksums are in
+[`evidence/mcp-state-writers.json`](../../evidence/mcp-state-writers.json).
+
+| Metric | Before | After |
+|---|---:|---:|
+| Offered / completed / successful measured calls | 300 / 300 / 300 | 300 / 300 / 300 |
+| Failed / pending at end / pending after drain | 0 / 0 / 0 | 0 / 0 / 0 |
+| Peak processes including Viewer / teardown survivors | 3 / 0 | 3 / 0 |
+| Peak adapter state.sqlite descriptors | 5 | 0 |
+| Peak total state.sqlite descriptors / after teardown | 5 / 0 | 5 / 0 |
+| Measured state.sqlite opens / explicit closes | 10,260 / 10,260 | 1,440 / 1,440 |
+| Measured state.sqlite commits / commits per second | 570 / 1.90 | 480 / 1.60 |
+| Measured state.sqlite opens per second | 34.20 | 4.80 |
+| SQLite BUSY/LOCKED results / held-lease refusals | 0 / 0 | 0 / 0 |
+| SQL contention calls per 10,000 completed calls | 0 | 0 |
+| SQLite busy wait / application synchronous wait, ms | 0 / 0 | 0 / 0 |
+| Call latency p50 / p95 / p99 / max, ms | 44.867 / 96.499 / 122.425 / 205.487 | 22.656 / 52.265 / 64.837 / 81.359 |
+| Viewer loop p50 / p95 / p99 / max, ms | 0.075 / 0.155 / 1.005 / 5.042 | 0.075 / 0.174 / 4.063 / 68.555 |
+| Viewer measured CPU, seconds | 2.711 | 12.852 |
+| Total sampled process CPU, ticks (lower bound) | 2,149 | 1,483 |
+| Peak sampled total RSS, pages | 105,154 | 85,747 |
+
+The candidate opened no adapter database of any kind. Its Viewer retained the
+shared connections. Both loop windows completed; their reset delays were 1 ms
+and 0 ms respectively. The 90 fewer state commits are the baseline's empty
+pipeline transactions during ordinary task edits: task commits remained 480
+on each side, with 660 observed changed rows each. Registry, MCP receipts and
+in-memory index transactions remain separately accounted in the JSON artifact.
+All explicit-close, process-exit and surviving-handle balances reconcile.
+
+All 330 responses including warmup and all 2,103 final durable rows matched
+after the previously declared timestamp/generated-ID normalization. Numeric
+row revisions, task-create receipts and tombstones were retained. The final-row
+SHA-256 is `823120f2466be96ec02cdc2acb8c91fc3d00ea278b8c2db717831ddeb2fc3b54`;
+the response SHA-256 is
+`05f6b520ab8bfa5d625e42b223a8da1918261c85a0300fe373a1a4b1abd30cb6`.
+
+**Performance acceptance still fails.** The lower call latency and connection
+count coexist with a Viewer loop regression at a load with no SQL contention.
+`mutateTasksAsync` yields while waiting for admission, then calls synchronous
+`mutateTasks`; `writeTaskState`, `stateFromBody` and `committedRows` still decode
+and prepare the task collection on the Viewer thread. Timer-turn dispatch
+cannot interrupt an individual synchronous mutation. The SQLite lock layer,
+heap, snapshot and board-poll implementations remain untouched by this lane.
+The original-audit comparison, three alternating repeats at 1/19/37 clients,
+shared-task and HTTP load modes, and timed-out-call final-state reconciliation
+remain outstanding. This evidence supports a draft PR with the performance
+defect recorded; it does not satisfy the complete acceptance matrix.
+
+Recovery verification rebuilt the MCP bundle and passed the launcher suite
+(25 tests, one native-CLI skip), forwarding (12), HTTP (13), and TypeScript.
+All eight Node/Bun owner/launcher hard-death cases passed again; the slowest
+whole owner-death case took 1.28 seconds. The packaged suite passed 50 cases
+and exposed a stale assertion in its new contention case: the wait logger
+records `state.lease.sqlite` after deferral, while the assertion expected the
+outer `tasks.mutation` label. The repaired test waits for the actual in-flight
+SQLite wait before releasing its blocker, requires asynchronous completion,
+and preserves all 80 ordered edits and same-key replays. It passed three fresh
+isolated repetitions. The diagnostic reader now uses an explicit stream reader
+accepted by the project's TypeScript configuration. These fixture-only changes
+leave the measured product implementation unchanged.
+
+The local privacy gate passed for the changed paths, commits, aggregate evidence
+and draft PR text. Final publication-gate and hosted check results belong to the
+PR record.
