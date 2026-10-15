@@ -6411,7 +6411,7 @@ export async function drainRuntimeSwitches(ports: PipelinePorts): Promise<boolea
             await checkpoint();
             const ignored = ["interrupt", "stop", "stop-launch", "retry-stop-0", "retry-stop-1"].map(action => switchOperationKey(record, action));
             for (const id of new Set([record.from.conversationId, record.launch?.conversationId].filter((id): id is string => !!id))) {
-              if (await ports.runtimeSwitchKilled?.(id, record.retry!.requestedAt, ignored)) {
+              if (await ports.conversationOperatorStopped?.(id, record.retry!.requestedAt, ignored)) {
                 record.retry!.operatorStoppedAt ??= ports.now();
                 throw new Error("operator kill after retry request; request retry again to authorize a replacement");
               }
@@ -8931,6 +8931,8 @@ async function reconcileExhaustedVerdictRecovery(
   const attempt = currentAttempt(pipeline, stage.id);
   const recovery = attempt?.verdictRecovery;
   if (!attempt?.agentPath || recovery?.state !== "exhausted") return false;
+  // Retry permanently withdrew this attempt's verdict authority, including recovery.
+  if (attempt.runtimeSwitches?.some(record => record.retry)) return false;
 
   const durable = await ports.durableTurnEvidence(attempt.effectiveRole.engine, attempt.agentPath);
   const message = durable?.turn === "terminal" ? durable.message : null;

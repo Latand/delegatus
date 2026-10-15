@@ -344,12 +344,133 @@ test("retry is accepted with a recorded live survivor and waits until that child
   } finally { if (child.exitCode === null && child.signalCode === null) child.kill(); await exited; }
 });
 
+for (const operatorKill of [false, true]) test(`automatic terminal reap preserves retry authority (later operator kill=${operatorKill})`, async () => {
+  const { RuntimeJournal } = await import("@/runtime-host/journal");
+  const { hasRuntimeSwitchKill } = await import("./runtimeSwitch");
+  const h = switchHarness();
+  const pipeline = await runningStage(h);
+  const journal = new RuntimeJournal(path.join(process.env.LLV_STATE_DIR!, `retry-reap-${operatorKill}.sqlite`), { structuredHosts: true, now: h.wallClock });
+  const sessionKey = { engine: "claude" as const, sessionId: "retry-reap-session" };
+  const client = { effectBatch: async (kinds, cursor) => journal.effectBatch(100, kinds, cursor), operationStatus: async id => journal.operationResult(id) } as import("@/lib/runtime/client").RuntimeHostClient;
+  let resident = true;
+  let cleanupPending = true;
+  let reaps = 0;
+  h.ports.runtimeSwitchKilled = (id, since, ignored) => hasRuntimeSwitchKill(client, id, since, ignored);
+  h.ports.conversationOperatorStopped = (id, since, ignored) => hasRuntimeSwitchKill(client, id, since, ignored, true);
+  h.ports.stageHostResident = async target => resident && target.conversationId === STAGE_CONVERSATION;
+  h.ports.conversationAgentActive = async () => false;
+  h.setTurn({ turn: "idle", message: null, lastRecordAt: h.wallClock() });
+  h.ports.retireRuntimeSwitch = async () => cleanupPending ? "continuation retirement pending" : null;
+  h.ports.stopStageAgent = async (target, options) => {
+    if (!resident) return { outcome: "not-running" };
+    expect(options?.onlyIfIdle).toBe(true);
+    const operationId = `terminal-reap-${++reaps}`;
+    journal.executeOperation({ kind: "kill", operationId, idempotencyKey: operationId, conversationId: target.conversationId!, sessionKey,
+      origin: { kind: "agent", role: "pipeline" } });
+    journal.transitionOperation(operationId, "delivered");
+    resident = false;
+    return { outcome: "stopped" };
+  };
+  try {
+    const rows = loadPipelines();
+    rows[0]!.runs[0]!.attempts[0]!.providerWait = {
+      condition: { kind: "usage_limit", scope: "usage", resetLabel: null, label: "usage limit" },
+      text: "quota exhausted", accountId: "default", tries: 0, turnTs: h.wallClock(), startedAt: h.ports.now(),
+      resumeAt: new Date(h.wallClock() + 86400000).toISOString(), resetsAt: null,
+    };
+    savePipelines(rows);
+    expect((await patchPipeline(pipeline.id, { action: "override-stage", stageId: "plan", account: "target", model: "opus", applyNow: true }, h.ports)).error).toBeUndefined();
+    await tickPipelines([], h.ports);
+    const intent = loadPipelines()[0]!.runs[0]!.attempts[0]!.runtimeSwitches![0]!.retry!;
+    expect(intent.pendingReason).toContain("retirement pending");
+    h.advance(1000);
+    await tickPipelines([], h.ports);
+    expect(reaps).toBe(1);
+    expect(await h.ports.runtimeSwitchKilled(STAGE_CONVERSATION, intent.requestedAt)).toBe(true);
+    expect(await h.ports.conversationOperatorStopped(STAGE_CONVERSATION, intent.requestedAt)).toBe(false);
+    const pending = loadPipelines()[0]!.runs[0]!.attempts[0]!.runtimeSwitches![0]!.retry!;
+    expect(pending.operatorStoppedAt).toBeUndefined();
+    expect(pending.pendingReason).toContain("retirement pending");
+    expect(h.spawnCount()).toBe(1);
+
+    const restarted = await import(`./engine?retry-reap=${crypto.randomUUID()}`) as typeof import("./engine");
+    cleanupPending = false;
+    if (operatorKill) {
+      h.advance(1000);
+      journal.executeOperation({ kind: "kill", operationId: "later-operator-kill", idempotencyKey: "later-operator-kill", conversationId: STAGE_CONVERSATION, sessionKey, origin: { kind: "operator" } });
+      journal.transitionOperation("later-operator-kill", "failed");
+      await restarted.tickPipelines([], h.ports);
+      const stopped = loadPipelines()[0]!.runs[0]!.attempts[0]!.runtimeSwitches![0]!.retry!;
+      expect(stopped.operatorStoppedAt).toBe(h.ports.now());
+      expect(stopped.pendingReason).toContain("operator kill after retry");
+      expect(stopped.completedAt).toBeUndefined();
+      expect(h.spawnCount()).toBe(1);
+      h.advance(1000);
+      expect((await restarted.patchPipeline(pipeline.id, { action: "retry-stage", expectedStageId: "plan", expectedAttempt: 1 }, h.ports)).error).toBeUndefined();
+    }
+    await restarted.tickPipelines([], h.ports);
+    await restarted.tickPipelines([], h.ports);
+    await restarted.tickPipelines([], h.ports);
+    const lane = loadPipelines()[0]!;
+    expect(lane.runs[0]!.attempts).toHaveLength(2);
+    expect(lane.runs[0]!.attempts[0]!.runtimeSwitches![0]!.retry?.completedAt).toBeDefined();
+    expect(lane.runs[0]!.attempts[1]).toMatchObject({ n: 2, state: "running", accountId: "target", effectiveRole: { model: "opus" } });
+    expect(h.spawnCount()).toBe(2);
+    expect(h.spawnInputs[1]).toMatchObject({ cwd: pipeline.worktreeDir, requestedAccountId: "target" });
+    expect(lane.branch).toBe(pipeline.branch);
+  } finally { journal.close(); }
+});
+
+for (const status of ["pass", "fail"] as const) test(`retired attempt cannot settle through exhausted verdict recovery: ${status}`, async () => {
+  const h = switchHarness();
+  const pipeline = await runningStage(h);
+  h.ports.conversationAgentActive = async () => false;
+  h.ports.conversationTurnInterrupted = async () => "dead";
+  const rows = loadPipelines();
+  const old = rows[0]!.runs[0]!.attempts[0]!;
+  old.state = "needs_decision"; old.completedAt = h.ports.now();
+  old.error = "stage verdict recovery exhausted after 3 checks";
+  old.verdictRecovery = { state: "exhausted", checks: 3, maxChecks: 3, startedAt: h.ports.now(), lastCheckedAt: h.ports.now(), nextCheckAt: null, reason: "canonical turn unavailable", messageTs: null };
+  rows[0]!.state = "needs_decision"; rows[0]!.stateDetail = old.error;
+  savePipelines(rows);
+  h.ports.retireRuntimeSwitch = async () => "continuation retirement pending";
+  expect((await patchPipeline(pipeline.id, { action: "override-stage", stageId: "plan", account: "target", model: "opus", applyNow: true }, h.ports)).error).toBeUndefined();
+  await tickPipelines([], h.ports);
+  const retired = loadPipelines()[0]!;
+  const before = retired.runs[0]!.attempts[0]!;
+  expect(before.runtimeSwitches![0]!.retry?.pendingReason).toContain("retirement pending");
+  h.advance(1000);
+  h.setTurn({ turn: "terminal", message: { text: '```json\n' + JSON.stringify({ status, findings: [] }) + '\n```', ts: h.wallClock() }, lastRecordAt: h.wallClock() });
+  const restarted = await import(`./engine?retry-verdict=${crypto.randomUUID()}`) as typeof import("./engine");
+  await restarted.tickPipelines([], h.ports);
+  const waiting = loadPipelines()[0]!;
+  expect(waiting.state).toBe("needs_decision");
+  expect(waiting.cursor).toEqual(retired.cursor);
+  expect(waiting.runs[0]!.attempts[0]!.verdict).toEqual(before.verdict);
+  expect(waiting.runs[0]!.attempts[0]!.verdictRecovery).toEqual(before.verdictRecovery);
+  expect(waiting.runs[0]!.attempts[0]!.runtimeSwitches![0]!.retry?.completedAt).toBeUndefined();
+  expect(h.spawnCount()).toBe(1);
+  h.ports.retireRuntimeSwitch = async () => null;
+  // Only the retired source carries that late verdict; the successor starts a new turn.
+  const readSource = h.ports.durableTurnEvidence;
+  h.ports.durableTurnEvidence = async (...args) => h.spawnCount() === 1 ? readSource(...args) : { turn: "busy", message: null, lastRecordAt: h.wallClock() };
+  await restarted.tickPipelines([], h.ports);
+  await restarted.tickPipelines([], h.ports);
+  await restarted.tickPipelines([], h.ports);
+  const lane = loadPipelines()[0]!;
+  expect(lane.runs[0]!.attempts).toHaveLength(2);
+  expect(lane.runs[0]!.attempts[0]!.verdict).toEqual(before.verdict);
+  expect(lane.runs[0]!.attempts[0]!.runtimeSwitches![0]!.retry?.completedAt).toBeDefined();
+  expect(lane.runs[0]!.attempts[1]).toMatchObject({ n: 2, state: "running", accountId: "target", effectiveRole: { model: "opus" } });
+  expect(h.spawnCount()).toBe(2);
+});
+
 test("a kill during retry cleanup wins until a later explicit retry", async () => {
   const h = switchHarness(); const chosen = await requestSwitch(h);
   const request = { action: "retry-stage", expectedStageId: "plan", expectedAttempt: 1 } as const;
   await patchPipeline(chosen.pipeline!.id, request, h.ports);
   let killedAt: string | null = null;
-  h.ports.runtimeSwitchKilled = async (_id, since) => !!killedAt && killedAt >= since;
+  h.ports.conversationOperatorStopped = async (_id, since) => !!killedAt && killedAt >= since;
   h.ports.stopStageAgent = async () => { killedAt ??= h.ports.now(); return { outcome: "not-running" }; };
   await tickPipelines([], h.ports);
   expect(h.spawnCount()).toBe(1);
