@@ -43,13 +43,15 @@ function bindDomGlobals() {
     localStorage: dom.localStorage,
     ResizeObserver: TestResizeObserver,
     IntersectionObserver: undefined,
+    requestAnimationFrame: dom.requestAnimationFrame.bind(dom),
+    cancelAnimationFrame: dom.cancelAnimationFrame.bind(dom),
   });
 }
 
 bindDomGlobals();
 
-const actualRuntimeHooks = await import("@/hooks/useRuntime");
-const actualLogTail = await import("@/hooks/useLogTail");
+const actualRuntimeHooks = { ...await import("@/hooks/useRuntime") };
+const { setLogFeedDependenciesForTests } = await import("../logFeedDependencies");
 const inertRuntime = { enabled: false, connection: "offline" as const, resyncedAt: null, store: emptyStore() };
 mock.module("@/hooks/useRuntime", () => ({
   ...actualRuntimeHooks,
@@ -62,7 +64,7 @@ mock.module("@/hooks/useRuntime", () => ({
 
 const tails = new Map<string, string[]>();
 const tailStarts = new Map<string, number>();
-mock.module("@/hooks/useLogTail", () => ({
+const feedDependencies = {
   useLogTail: (entry: FileEntry | null) => ({
     lines: entry ? (tails.get(entry.path) ?? []) : [],
     linesStart: entry ? (tailStarts.get(entry.path) ?? 0) : 0,
@@ -78,23 +80,26 @@ mock.module("@/hooks/useLogTail", () => ({
     loadOlder: async () => 0,
     prependGen: 0,
   }),
-}));
+};
 
 const { NodesLayer } = await import("./nodes");
 
 const roots = new Set<Root>();
 const realNow = Date.now;
 
-beforeEach(bindDomGlobals);
+beforeEach(() => {
+  bindDomGlobals();
+  setLogFeedDependenciesForTests(feedDependencies);
+});
 
 afterAll(() => {
   mock.module("@/hooks/useRuntime", () => actualRuntimeHooks);
-  mock.module("@/hooks/useLogTail", () => actualLogTail);
 });
 
 afterEach(() => {
   for (const root of roots) flushSync(() => root.unmount());
   roots.clear();
+  setLogFeedDependenciesForTests(null);
   resizeCallbacks.clear();
   tails.clear();
   tailStarts.clear();
@@ -203,7 +208,7 @@ function renderLayer(root: Root, next: SchemeLayout, options: { lite?: boolean; 
         files={next.nodes.map((item) => item.file)}
         interactive
         lite={options.lite ?? false}
-        dormant={options.dormant ?? true}
+        dormant={options.dormant ?? false}
         selected={options.selected ?? null}
         multi={new Set()}
         session={false}
@@ -348,6 +353,7 @@ test("an anchored production feed survives overtakes and a short remount window"
   expect(readerHost?.textContent).toContain("Reader anchor");
 
   now += 1_000;
+  flushSync(() => scroller.dispatchEvent(new dom.WheelEvent("wheel", { deltaY: -400, bubbles: true }) as unknown as Event));
   geometry.setTop(400);
   flushSync(() => scroller.dispatchEvent(new dom.Event("scroll", { bubbles: true }) as unknown as Event));
   expect(geometry.fromBottom()).toBe(400);

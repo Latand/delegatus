@@ -1,3 +1,4 @@
+import { readRuntimeSnapshot } from "@/lib/runtime/snapshotReads";
 import { runtimeHostClient } from "@/lib/runtime/client";
 import type { RuntimeEventInput } from "@/lib/runtime/contracts";
 
@@ -39,8 +40,8 @@ export async function publishTitleUpdate(identity: string, cleared: boolean): Pr
   const client = runtimeHostClient();
   if (!client) return;
   try {
-    // Only the revision is read, so the voice bodies stay in the journal.
-    const snapshot = await client.snapshot(undefined, { voiceBodiesFor: [] });
+    // Title publication needs only the materialization counter.
+    const snapshot = await readRuntimeSnapshot(client, "metadata");
     for (const event of titleUpdateEvents(identity, cleared, snapshot.filesRevision)) {
       await client.append(event);
     }

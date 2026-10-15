@@ -3755,6 +3755,7 @@ function reportDestinations(seq: number, telegram: BridgeReportTelegram | null):
           state: telegram.state,
           ...(telegram.messageIds?.length ? { messageIds: telegram.messageIds } : {}),
           ...(telegram.code ? { code: telegram.code, retryable: isRetryableReportSend(telegram.code) } : {}),
+          ...(telegram.message ? { message: telegram.message } : {}),
         },
       }
       : {}),
@@ -3793,7 +3794,7 @@ async function postReportTelegram(
   const at = new Date().toISOString();
   return recordBridgeReportTelegram(reportId, outcome.ok
     ? { state: "sent", messageIds: outcome.messageIds, at }
-    : { state: outcome.code === "send_uncertain" ? "uncertain" : "failed", code: outcome.code, at })?.telegram ?? null;
+    : { state: outcome.code === "send_uncertain" ? "uncertain" : "failed", code: outcome.code, message: outcome.message ?? `Telegram report send failed (${outcome.code})`, at })?.telegram ?? null;
 }
 
 export interface ReportTelegramSend {

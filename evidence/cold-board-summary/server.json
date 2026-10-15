@@ -1,0 +1,1206 @@
+{
+  "baseline": "0ce86fd1a182be224828562ae4650da295e235b8",
+  "runtime": "Bun 1.4.0 / Next 16.3.8",
+  "summaryArtifactSha256": "cc6c1535a4b3fed91519622cdc5125d076c7d416147b6c8f3f58a26952bd9cea",
+  "canonicalComparisonExcludes": [
+    "systemHealth.storage.writes.freeBytes"
+  ],
+  "sourceSha256": {
+    "src/app/api/files/operatorProjection.ts": "54d32a5f0ecd2c021330b355f663f6404f8bbd0ebc4cedc461b6200f8e99a8d4",
+    "src/app/api/files/route.ts": "61dd9c2f8a2463388f1dff02a522757d8573aae72528597aecfdefacad2898fa",
+    "src/lib/filesResponse.worker.ts": "2d772c874f1b83044567f7a37ecae90f6ace1a6d410c4c3661781c6a63978c91",
+    "src/lib/scanner/scanCache.ts": "c4c72241ecf5e2f3b4bb8b5e67b84f54e0cc4a5c41ad961e31363803316b6aac",
+    "src/lib/scanner/summaryBootstrap.ts": "b998b7ccb370e93104224296aa6628a3a27ab12efd0101a154e0983e8acb1b16",
+    "src/lib/viewerInstrumentation.ts": "bfcfa76f708e9d7575b1d9ceea5af69093d960ded5d10207900079faed53f345"
+  },
+  "runs": [
+    {
+      "run": "before-delivery1",
+      "processStartUtc": "2026-10-15T07:13:43.105395+00:00",
+      "preparationMs": 2566.586494445801,
+      "ttfbMs": 14876.960000000001,
+      "bodyMs": 14917.947,
+      "processToBodyMs": 17484.533494445797,
+      "wireBytes": 33384460,
+      "counts": {
+        "files": 669,
+        "tasks": 1703,
+        "pipelines": 234,
+        "flows": 0,
+        "projectCatalog": 10
+      },
+      "bodySha256": "2a01740853cd778a593f2aa2d59f08d05af41fc2480e72feefa431d66a86f9ba",
+      "canonicalSha256": "4473ec6809c589a2be06a1b9096ae248d6f9379eee5dc3f09708ba5b5460a23d",
+      "refinedCanonicalSha256": "4473ec6809c589a2be06a1b9096ae248d6f9379eee5dc3f09708ba5b5460a23d",
+      "refinementCompletedMs": 15774.349451065063,
+      "bootstrap": false,
+      "firstBodyTimerMaxMs": 378.1292089999988,
+      "firstBodyTimerSamples": 1171,
+      "laterTimerMaxMs": 103.34625999999844,
+      "limits": [
+        {
+          "cpuMax": "60000 20000",
+          "memoryMax": "12884901888",
+          "throttledMs": 219.753,
+          "memoryEventsDelta": {
+            "low": 0,
+            "high": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0,
+            "oom_group_kill": 0
+          }
+        },
+        {
+          "cpuMax": "360000 20000",
+          "memoryMax": "max",
+          "throttledMs": 0.0,
+          "memoryEventsDelta": {
+            "low": 0,
+            "high": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0,
+            "oom_group_kill": 0
+          }
+        },
+        {
+          "cpuMax": "max 100000",
+          "memoryMax": "114462744576",
+          "throttledMs": 0.0,
+          "memoryEventsDelta": {
+            "low": 0,
+            "high": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0,
+            "oom_group_kill": 0
+          }
+        },
+        {
+          "cpuMax": "max 100000",
+          "memoryMax": "max",
+          "throttledMs": 0.0,
+          "memoryEventsDelta": {
+            "low": 0,
+            "high": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0,
+            "oom_group_kill": 0
+          }
+        },
+        {
+          "cpuMax": "max 100000",
+          "memoryMax": "max",
+          "throttledMs": 0.0,
+          "memoryEventsDelta": {
+            "low": 0,
+            "high": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0,
+            "oom_group_kill": 0
+          }
+        },
+        {
+          "cpuMax": "max 100000",
+          "memoryMax": "max",
+          "throttledMs": 0.0,
+          "memoryEventsDelta": {
+            "low": 0,
+            "high": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0,
+            "oom_group_kill": 0
+          }
+        },
+        {
+          "cpuMax": "max 100000",
+          "memoryMax": "max",
+          "throttledMs": 0.0,
+          "memoryEventsDelta": {
+            "low": 0,
+            "high": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0,
+            "oom_group_kill": 0
+          }
+        }
+      ]
+    },
+    {
+      "run": "after-delivery1",
+      "processStartUtc": "2026-10-15T07:14:08.623739+00:00",
+      "preparationMs": 3615.110397338867,
+      "ttfbMs": 13.402000000000001,
+      "bodyMs": 43.682,
+      "processToBodyMs": 3658.792397338867,
+      "wireBytes": 33384460,
+      "counts": {
+        "files": 669,
+        "tasks": 1703,
+        "pipelines": 234,
+        "flows": 0,
+        "projectCatalog": 10
+      },
+      "bodySha256": "6222f1fd4541a431034a7c340ba079674929457b7bf2f73f4b80e40fa7cc0149",
+      "canonicalSha256": "4473ec6809c589a2be06a1b9096ae248d6f9379eee5dc3f09708ba5b5460a23d",
+      "refinedCanonicalSha256": "4473ec6809c589a2be06a1b9096ae248d6f9379eee5dc3f09708ba5b5460a23d",
+      "refinementCompletedMs": 17111.138105392456,
+      "bootstrap": true,
+      "firstBodyTimerMaxMs": 26.463827000000038,
+      "firstBodyTimerSamples": 4,
+      "laterTimerMaxMs": 193.92275399999926,
+      "limits": [
+        {
+          "cpuMax": "60000 20000",
+          "memoryMax": "12884901888",
+          "throttledMs": 0.0,
+          "memoryEventsDelta": {
+            "low": 0,
+            "high": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0,
+            "oom_group_kill": 0
+          }
+        },
+        {
+          "cpuMax": "360000 20000",
+          "memoryMax": "max",
+          "throttledMs": 0.0,
+          "memoryEventsDelta": {
+            "low": 0,
+            "high": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0,
+            "oom_group_kill": 0
+          }
+        },
+        {
+          "cpuMax": "max 100000",
+          "memoryMax": "114462744576",
+          "throttledMs": 0.0,
+          "memoryEventsDelta": {
+            "low": 0,
+            "high": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0,
+            "oom_group_kill": 0
+          }
+        },
+        {
+          "cpuMax": "max 100000",
+          "memoryMax": "max",
+          "throttledMs": 0.0,
+          "memoryEventsDelta": {
+            "low": 0,
+            "high": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0,
+            "oom_group_kill": 0
+          }
+        },
+        {
+          "cpuMax": "max 100000",
+          "memoryMax": "max",
+          "throttledMs": 0.0,
+          "memoryEventsDelta": {
+            "low": 0,
+            "high": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0,
+            "oom_group_kill": 0
+          }
+        },
+        {
+          "cpuMax": "max 100000",
+          "memoryMax": "max",
+          "throttledMs": 0.0,
+          "memoryEventsDelta": {
+            "low": 0,
+            "high": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0,
+            "oom_group_kill": 0
+          }
+        },
+        {
+          "cpuMax": "max 100000",
+          "memoryMax": "max",
+          "throttledMs": 0.0,
+          "memoryEventsDelta": {
+            "low": 0,
+            "high": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0,
+            "oom_group_kill": 0
+          }
+        }
+      ]
+    },
+    {
+      "run": "before-delivery2",
+      "processStartUtc": "2026-10-15T07:14:36.801628+00:00",
+      "preparationMs": 2940.056085586548,
+      "ttfbMs": 15427.137999999999,
+      "bodyMs": 15457.216,
+      "processToBodyMs": 18397.272085586552,
+      "wireBytes": 33384460,
+      "counts": {
+        "files": 669,
+        "tasks": 1703,
+        "pipelines": 234,
+        "flows": 0,
+        "projectCatalog": 10
+      },
+      "bodySha256": "a2404e0e0ab299c7156c715bfcf360a02d2c74c4a340173a3198679f153fdbb3",
+      "canonicalSha256": "4473ec6809c589a2be06a1b9096ae248d6f9379eee5dc3f09708ba5b5460a23d",
+      "refinedCanonicalSha256": "4473ec6809c589a2be06a1b9096ae248d6f9379eee5dc3f09708ba5b5460a23d",
+      "refinementCompletedMs": 16292.020082473755,
+      "bootstrap": false,
+      "firstBodyTimerMaxMs": 202.15649499999972,
+      "firstBodyTimerSamples": 1259,
+      "laterTimerMaxMs": 110.56719599999997,
+      "limits": [
+        {
+          "cpuMax": "60000 20000",
+          "memoryMax": "12884901888",
+          "throttledMs": 234.569,
+          "memoryEventsDelta": {
+            "low": 0,
+            "high": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0,
+            "oom_group_kill": 0
+          }
+        },
+        {
+          "cpuMax": "360000 20000",
+          "memoryMax": "max",
+          "throttledMs": 0.0,
+          "memoryEventsDelta": {
+            "low": 0,
+            "high": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0,
+            "oom_group_kill": 0
+          }
+        },
+        {
+          "cpuMax": "max 100000",
+          "memoryMax": "114462744576",
+          "throttledMs": 0.0,
+          "memoryEventsDelta": {
+            "low": 0,
+            "high": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0,
+            "oom_group_kill": 0
+          }
+        },
+        {
+          "cpuMax": "max 100000",
+          "memoryMax": "max",
+          "throttledMs": 0.0,
+          "memoryEventsDelta": {
+            "low": 0,
+            "high": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0,
+            "oom_group_kill": 0
+          }
+        },
+        {
+          "cpuMax": "max 100000",
+          "memoryMax": "max",
+          "throttledMs": 0.0,
+          "memoryEventsDelta": {
+            "low": 0,
+            "high": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0,
+            "oom_group_kill": 0
+          }
+        },
+        {
+          "cpuMax": "max 100000",
+          "memoryMax": "max",
+          "throttledMs": 0.0,
+          "memoryEventsDelta": {
+            "low": 0,
+            "high": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0,
+            "oom_group_kill": 0
+          }
+        },
+        {
+          "cpuMax": "max 100000",
+          "memoryMax": "max",
+          "throttledMs": 0.0,
+          "memoryEventsDelta": {
+            "low": 0,
+            "high": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0,
+            "oom_group_kill": 0
+          }
+        }
+      ]
+    },
+    {
+      "run": "after-delivery2",
+      "processStartUtc": "2026-10-15T07:15:03.687397+00:00",
+      "preparationMs": 3723.125457763672,
+      "ttfbMs": 9.608,
+      "bodyMs": 27.614,
+      "processToBodyMs": 3750.7394577636715,
+      "wireBytes": 33384460,
+      "counts": {
+        "files": 669,
+        "tasks": 1703,
+        "pipelines": 234,
+        "flows": 0,
+        "projectCatalog": 10
+      },
+      "bodySha256": "6222f1fd4541a431034a7c340ba079674929457b7bf2f73f4b80e40fa7cc0149",
+      "canonicalSha256": "4473ec6809c589a2be06a1b9096ae248d6f9379eee5dc3f09708ba5b5460a23d",
+      "refinedCanonicalSha256": "4473ec6809c589a2be06a1b9096ae248d6f9379eee5dc3f09708ba5b5460a23d",
+      "refinementCompletedMs": 16753.211975097656,
+      "bootstrap": true,
+      "firstBodyTimerMaxMs": 27.16298400000005,
+      "firstBodyTimerSamples": 4,
+      "laterTimerMaxMs": 201.89286600000014,
+      "limits": [
+        {
+          "cpuMax": "60000 20000",
+          "memoryMax": "12884901888",
+          "throttledMs": 0.0,
+          "memoryEventsDelta": {
+            "low": 0,
+            "high": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0,
+            "oom_group_kill": 0
+          }
+        },
+        {
+          "cpuMax": "360000 20000",
+          "memoryMax": "max",
+          "throttledMs": 0.0,
+          "memoryEventsDelta": {
+            "low": 0,
+            "high": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0,
+            "oom_group_kill": 0
+          }
+        },
+        {
+          "cpuMax": "max 100000",
+          "memoryMax": "114462744576",
+          "throttledMs": 0.0,
+          "memoryEventsDelta": {
+            "low": 0,
+            "high": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0,
+            "oom_group_kill": 0
+          }
+        },
+        {
+          "cpuMax": "max 100000",
+          "memoryMax": "max",
+          "throttledMs": 0.0,
+          "memoryEventsDelta": {
+            "low": 0,
+            "high": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0,
+            "oom_group_kill": 0
+          }
+        },
+        {
+          "cpuMax": "max 100000",
+          "memoryMax": "max",
+          "throttledMs": 0.0,
+          "memoryEventsDelta": {
+            "low": 0,
+            "high": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0,
+            "oom_group_kill": 0
+          }
+        },
+        {
+          "cpuMax": "max 100000",
+          "memoryMax": "max",
+          "throttledMs": 0.0,
+          "memoryEventsDelta": {
+            "low": 0,
+            "high": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0,
+            "oom_group_kill": 0
+          }
+        },
+        {
+          "cpuMax": "max 100000",
+          "memoryMax": "max",
+          "throttledMs": 0.0,
+          "memoryEventsDelta": {
+            "low": 0,
+            "high": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0,
+            "oom_group_kill": 0
+          }
+        }
+      ]
+    },
+    {
+      "run": "before-delivery3",
+      "processStartUtc": "2026-10-15T07:15:31.565611+00:00",
+      "preparationMs": 2477.2799015045166,
+      "ttfbMs": 14214.511999999999,
+      "bodyMs": 14257.09,
+      "processToBodyMs": 16734.369901504513,
+      "wireBytes": 33384460,
+      "counts": {
+        "files": 669,
+        "tasks": 1703,
+        "pipelines": 234,
+        "flows": 0,
+        "projectCatalog": 10
+      },
+      "bodySha256": "ded88a6a4bd3175aedb846128126a7d053fcad0f552311488eddf427de1e0316",
+      "canonicalSha256": "4473ec6809c589a2be06a1b9096ae248d6f9379eee5dc3f09708ba5b5460a23d",
+      "refinedCanonicalSha256": "4473ec6809c589a2be06a1b9096ae248d6f9379eee5dc3f09708ba5b5460a23d",
+      "refinementCompletedMs": 15167.021989822388,
+      "bootstrap": false,
+      "firstBodyTimerMaxMs": 192.4797299999991,
+      "firstBodyTimerSamples": 1130,
+      "laterTimerMaxMs": 83.91236799999751,
+      "limits": [
+        {
+          "cpuMax": "60000 20000",
+          "memoryMax": "12884901888",
+          "throttledMs": 281.426,
+          "memoryEventsDelta": {
+            "low": 0,
+            "high": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0,
+            "oom_group_kill": 0
+          }
+        },
+        {
+          "cpuMax": "360000 20000",
+          "memoryMax": "max",
+          "throttledMs": 0.0,
+          "memoryEventsDelta": {
+            "low": 0,
+            "high": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0,
+            "oom_group_kill": 0
+          }
+        },
+        {
+          "cpuMax": "max 100000",
+          "memoryMax": "114462744576",
+          "throttledMs": 0.0,
+          "memoryEventsDelta": {
+            "low": 0,
+            "high": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0,
+            "oom_group_kill": 0
+          }
+        },
+        {
+          "cpuMax": "max 100000",
+          "memoryMax": "max",
+          "throttledMs": 0.0,
+          "memoryEventsDelta": {
+            "low": 0,
+            "high": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0,
+            "oom_group_kill": 0
+          }
+        },
+        {
+          "cpuMax": "max 100000",
+          "memoryMax": "max",
+          "throttledMs": 0.0,
+          "memoryEventsDelta": {
+            "low": 0,
+            "high": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0,
+            "oom_group_kill": 0
+          }
+        },
+        {
+          "cpuMax": "max 100000",
+          "memoryMax": "max",
+          "throttledMs": 0.0,
+          "memoryEventsDelta": {
+            "low": 0,
+            "high": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0,
+            "oom_group_kill": 0
+          }
+        },
+        {
+          "cpuMax": "max 100000",
+          "memoryMax": "max",
+          "throttledMs": 0.0,
+          "memoryEventsDelta": {
+            "low": 0,
+            "high": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0,
+            "oom_group_kill": 0
+          }
+        }
+      ]
+    },
+    {
+      "run": "after-delivery3",
+      "processStartUtc": "2026-10-15T07:15:56.334589+00:00",
+      "preparationMs": 3575.080394744873,
+      "ttfbMs": 12.795000000000002,
+      "bodyMs": 34.885,
+      "processToBodyMs": 3609.9653947448733,
+      "wireBytes": 33384460,
+      "counts": {
+        "files": 669,
+        "tasks": 1703,
+        "pipelines": 234,
+        "flows": 0,
+        "projectCatalog": 10
+      },
+      "bodySha256": "6222f1fd4541a431034a7c340ba079674929457b7bf2f73f4b80e40fa7cc0149",
+      "canonicalSha256": "4473ec6809c589a2be06a1b9096ae248d6f9379eee5dc3f09708ba5b5460a23d",
+      "refinedCanonicalSha256": "4473ec6809c589a2be06a1b9096ae248d6f9379eee5dc3f09708ba5b5460a23d",
+      "refinementCompletedMs": 12668.527603149414,
+      "bootstrap": true,
+      "firstBodyTimerMaxMs": 31.517927999999756,
+      "firstBodyTimerSamples": 4,
+      "laterTimerMaxMs": 159.72559799999908,
+      "limits": [
+        {
+          "cpuMax": "60000 20000",
+          "memoryMax": "12884901888",
+          "throttledMs": 0.0,
+          "memoryEventsDelta": {
+            "low": 0,
+            "high": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0,
+            "oom_group_kill": 0
+          }
+        },
+        {
+          "cpuMax": "360000 20000",
+          "memoryMax": "max",
+          "throttledMs": 0.0,
+          "memoryEventsDelta": {
+            "low": 0,
+            "high": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0,
+            "oom_group_kill": 0
+          }
+        },
+        {
+          "cpuMax": "max 100000",
+          "memoryMax": "114462744576",
+          "throttledMs": 0.0,
+          "memoryEventsDelta": {
+            "low": 0,
+            "high": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0,
+            "oom_group_kill": 0
+          }
+        },
+        {
+          "cpuMax": "max 100000",
+          "memoryMax": "max",
+          "throttledMs": 0.0,
+          "memoryEventsDelta": {
+            "low": 0,
+            "high": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0,
+            "oom_group_kill": 0
+          }
+        },
+        {
+          "cpuMax": "max 100000",
+          "memoryMax": "max",
+          "throttledMs": 0.0,
+          "memoryEventsDelta": {
+            "low": 0,
+            "high": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0,
+            "oom_group_kill": 0
+          }
+        },
+        {
+          "cpuMax": "max 100000",
+          "memoryMax": "max",
+          "throttledMs": 0.0,
+          "memoryEventsDelta": {
+            "low": 0,
+            "high": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0,
+            "oom_group_kill": 0
+          }
+        },
+        {
+          "cpuMax": "max 100000",
+          "memoryMax": "max",
+          "throttledMs": 0.0,
+          "memoryEventsDelta": {
+            "low": 0,
+            "high": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0,
+            "oom_group_kill": 0
+          }
+        }
+      ]
+    },
+    {
+      "run": "after-delivery-gzip1",
+      "processStartUtc": "2026-10-15T07:16:19.604503+00:00",
+      "preparationMs": 2538.705825805664,
+      "ttfbMs": 6.959,
+      "bodyMs": 94.501,
+      "processToBodyMs": 2633.2068258056643,
+      "wireBytes": 6741074,
+      "counts": {
+        "files": 669,
+        "tasks": 1703,
+        "pipelines": 234,
+        "flows": 0,
+        "projectCatalog": 10
+      },
+      "bodySha256": "6222f1fd4541a431034a7c340ba079674929457b7bf2f73f4b80e40fa7cc0149",
+      "canonicalSha256": "4473ec6809c589a2be06a1b9096ae248d6f9379eee5dc3f09708ba5b5460a23d",
+      "refinedCanonicalSha256": "4473ec6809c589a2be06a1b9096ae248d6f9379eee5dc3f09708ba5b5460a23d",
+      "refinementCompletedMs": 16515.68841934204,
+      "bootstrap": true,
+      "firstBodyTimerMaxMs": 17.84614899999997,
+      "firstBodyTimerSamples": 8,
+      "laterTimerMaxMs": 287.41522299999997,
+      "limits": [
+        {
+          "cpuMax": "60000 20000",
+          "memoryMax": "12884901888",
+          "throttledMs": 30.179,
+          "memoryEventsDelta": {
+            "low": 0,
+            "high": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0,
+            "oom_group_kill": 0
+          }
+        },
+        {
+          "cpuMax": "360000 20000",
+          "memoryMax": "max",
+          "throttledMs": 0.0,
+          "memoryEventsDelta": {
+            "low": 0,
+            "high": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0,
+            "oom_group_kill": 0
+          }
+        },
+        {
+          "cpuMax": "max 100000",
+          "memoryMax": "114462744576",
+          "throttledMs": 0.0,
+          "memoryEventsDelta": {
+            "low": 0,
+            "high": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0,
+            "oom_group_kill": 0
+          }
+        },
+        {
+          "cpuMax": "max 100000",
+          "memoryMax": "max",
+          "throttledMs": 0.0,
+          "memoryEventsDelta": {
+            "low": 0,
+            "high": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0,
+            "oom_group_kill": 0
+          }
+        },
+        {
+          "cpuMax": "max 100000",
+          "memoryMax": "max",
+          "throttledMs": 0.0,
+          "memoryEventsDelta": {
+            "low": 0,
+            "high": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0,
+            "oom_group_kill": 0
+          }
+        },
+        {
+          "cpuMax": "max 100000",
+          "memoryMax": "max",
+          "throttledMs": 0.0,
+          "memoryEventsDelta": {
+            "low": 0,
+            "high": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0,
+            "oom_group_kill": 0
+          }
+        },
+        {
+          "cpuMax": "max 100000",
+          "memoryMax": "max",
+          "throttledMs": 0.0,
+          "memoryEventsDelta": {
+            "low": 0,
+            "high": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0,
+            "oom_group_kill": 0
+          }
+        }
+      ]
+    },
+    {
+      "run": "after-delivery-gzip2",
+      "processStartUtc": "2026-10-15T07:16:45.960073+00:00",
+      "preparationMs": 3469.6197509765625,
+      "ttfbMs": 10.446,
+      "bodyMs": 116.575,
+      "processToBodyMs": 3586.194750976563,
+      "wireBytes": 6741074,
+      "counts": {
+        "files": 669,
+        "tasks": 1703,
+        "pipelines": 234,
+        "flows": 0,
+        "projectCatalog": 10
+      },
+      "bodySha256": "6222f1fd4541a431034a7c340ba079674929457b7bf2f73f4b80e40fa7cc0149",
+      "canonicalSha256": "4473ec6809c589a2be06a1b9096ae248d6f9379eee5dc3f09708ba5b5460a23d",
+      "refinedCanonicalSha256": "4473ec6809c589a2be06a1b9096ae248d6f9379eee5dc3f09708ba5b5460a23d",
+      "refinementCompletedMs": 17072.533130645752,
+      "bootstrap": true,
+      "firstBodyTimerMaxMs": 25.126952999999958,
+      "firstBodyTimerSamples": 9,
+      "laterTimerMaxMs": 213.8414730000004,
+      "limits": [
+        {
+          "cpuMax": "60000 20000",
+          "memoryMax": "12884901888",
+          "throttledMs": 8.549,
+          "memoryEventsDelta": {
+            "low": 0,
+            "high": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0,
+            "oom_group_kill": 0
+          }
+        },
+        {
+          "cpuMax": "360000 20000",
+          "memoryMax": "max",
+          "throttledMs": 0.0,
+          "memoryEventsDelta": {
+            "low": 0,
+            "high": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0,
+            "oom_group_kill": 0
+          }
+        },
+        {
+          "cpuMax": "max 100000",
+          "memoryMax": "114462744576",
+          "throttledMs": 0.0,
+          "memoryEventsDelta": {
+            "low": 0,
+            "high": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0,
+            "oom_group_kill": 0
+          }
+        },
+        {
+          "cpuMax": "max 100000",
+          "memoryMax": "max",
+          "throttledMs": 0.0,
+          "memoryEventsDelta": {
+            "low": 0,
+            "high": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0,
+            "oom_group_kill": 0
+          }
+        },
+        {
+          "cpuMax": "max 100000",
+          "memoryMax": "max",
+          "throttledMs": 0.0,
+          "memoryEventsDelta": {
+            "low": 0,
+            "high": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0,
+            "oom_group_kill": 0
+          }
+        },
+        {
+          "cpuMax": "max 100000",
+          "memoryMax": "max",
+          "throttledMs": 0.0,
+          "memoryEventsDelta": {
+            "low": 0,
+            "high": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0,
+            "oom_group_kill": 0
+          }
+        },
+        {
+          "cpuMax": "max 100000",
+          "memoryMax": "max",
+          "throttledMs": 0.0,
+          "memoryEventsDelta": {
+            "low": 0,
+            "high": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0,
+            "oom_group_kill": 0
+          }
+        }
+      ]
+    },
+    {
+      "run": "after-delivery-gzip3",
+      "processStartUtc": "2026-10-15T07:17:13.943971+00:00",
+      "preparationMs": 3837.968111038208,
+      "ttfbMs": 12.697,
+      "bodyMs": 94.581,
+      "processToBodyMs": 3932.5491110382077,
+      "wireBytes": 6741074,
+      "counts": {
+        "files": 669,
+        "tasks": 1703,
+        "pipelines": 234,
+        "flows": 0,
+        "projectCatalog": 10
+      },
+      "bodySha256": "6222f1fd4541a431034a7c340ba079674929457b7bf2f73f4b80e40fa7cc0149",
+      "canonicalSha256": "4473ec6809c589a2be06a1b9096ae248d6f9379eee5dc3f09708ba5b5460a23d",
+      "refinedCanonicalSha256": "4473ec6809c589a2be06a1b9096ae248d6f9379eee5dc3f09708ba5b5460a23d",
+      "refinementCompletedMs": 15181.44154548645,
+      "bootstrap": true,
+      "firstBodyTimerMaxMs": 15.925720000000183,
+      "firstBodyTimerSamples": 7,
+      "laterTimerMaxMs": 170.01363200000014,
+      "limits": [
+        {
+          "cpuMax": "60000 20000",
+          "memoryMax": "12884901888",
+          "throttledMs": 12.236,
+          "memoryEventsDelta": {
+            "low": 0,
+            "high": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0,
+            "oom_group_kill": 0
+          }
+        },
+        {
+          "cpuMax": "360000 20000",
+          "memoryMax": "max",
+          "throttledMs": 0.0,
+          "memoryEventsDelta": {
+            "low": 0,
+            "high": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0,
+            "oom_group_kill": 0
+          }
+        },
+        {
+          "cpuMax": "max 100000",
+          "memoryMax": "114462744576",
+          "throttledMs": 0.0,
+          "memoryEventsDelta": {
+            "low": 0,
+            "high": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0,
+            "oom_group_kill": 0
+          }
+        },
+        {
+          "cpuMax": "max 100000",
+          "memoryMax": "max",
+          "throttledMs": 0.0,
+          "memoryEventsDelta": {
+            "low": 0,
+            "high": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0,
+            "oom_group_kill": 0
+          }
+        },
+        {
+          "cpuMax": "max 100000",
+          "memoryMax": "max",
+          "throttledMs": 0.0,
+          "memoryEventsDelta": {
+            "low": 0,
+            "high": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0,
+            "oom_group_kill": 0
+          }
+        },
+        {
+          "cpuMax": "max 100000",
+          "memoryMax": "max",
+          "throttledMs": 0.0,
+          "memoryEventsDelta": {
+            "low": 0,
+            "high": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0,
+            "oom_group_kill": 0
+          }
+        },
+        {
+          "cpuMax": "max 100000",
+          "memoryMax": "max",
+          "throttledMs": 0.0,
+          "memoryEventsDelta": {
+            "low": 0,
+            "high": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0,
+            "oom_group_kill": 0
+          }
+        }
+      ]
+    },
+    {
+      "run": "after-delivery-missing",
+      "processStartUtc": "2026-10-15T07:18:27.948193+00:00",
+      "preparationMs": 3345.6714153289795,
+      "ttfbMs": 13153.159,
+      "bodyMs": 13192.973,
+      "processToBodyMs": 16538.64441532898,
+      "wireBytes": 33384460,
+      "counts": {
+        "files": 669,
+        "tasks": 1703,
+        "pipelines": 234,
+        "flows": 0,
+        "projectCatalog": 10
+      },
+      "bodySha256": "e51f88eb193ba07be47702bb60a32cbc7566d89a52c1aabe896eb2acdba5deae",
+      "canonicalSha256": "4473ec6809c589a2be06a1b9096ae248d6f9379eee5dc3f09708ba5b5460a23d",
+      "refinedCanonicalSha256": "4473ec6809c589a2be06a1b9096ae248d6f9379eee5dc3f09708ba5b5460a23d",
+      "refinementCompletedMs": 14108.467817306519,
+      "bootstrap": false,
+      "firstBodyTimerMaxMs": 191.69230199999947,
+      "firstBodyTimerSamples": 1105,
+      "laterTimerMaxMs": 75.10307900000043,
+      "limits": [
+        {
+          "cpuMax": "60000 20000",
+          "memoryMax": "12884901888",
+          "throttledMs": 302.806,
+          "memoryEventsDelta": {
+            "low": 0,
+            "high": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0,
+            "oom_group_kill": 0
+          }
+        },
+        {
+          "cpuMax": "360000 20000",
+          "memoryMax": "max",
+          "throttledMs": 0.0,
+          "memoryEventsDelta": {
+            "low": 0,
+            "high": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0,
+            "oom_group_kill": 0
+          }
+        },
+        {
+          "cpuMax": "max 100000",
+          "memoryMax": "114462744576",
+          "throttledMs": 0.0,
+          "memoryEventsDelta": {
+            "low": 0,
+            "high": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0,
+            "oom_group_kill": 0
+          }
+        },
+        {
+          "cpuMax": "max 100000",
+          "memoryMax": "max",
+          "throttledMs": 0.0,
+          "memoryEventsDelta": {
+            "low": 0,
+            "high": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0,
+            "oom_group_kill": 0
+          }
+        },
+        {
+          "cpuMax": "max 100000",
+          "memoryMax": "max",
+          "throttledMs": 0.0,
+          "memoryEventsDelta": {
+            "low": 0,
+            "high": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0,
+            "oom_group_kill": 0
+          }
+        },
+        {
+          "cpuMax": "max 100000",
+          "memoryMax": "max",
+          "throttledMs": 0.0,
+          "memoryEventsDelta": {
+            "low": 0,
+            "high": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0,
+            "oom_group_kill": 0
+          }
+        },
+        {
+          "cpuMax": "max 100000",
+          "memoryMax": "max",
+          "throttledMs": 0.0,
+          "memoryEventsDelta": {
+            "low": 0,
+            "high": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0,
+            "oom_group_kill": 0
+          }
+        }
+      ]
+    }
+  ],
+  "handover": {
+    "prior": {
+      "ttfbMs": 22574.071,
+      "bodyMs": 22682.903,
+      "appointmentToFirstByteMs": 28076.646397491455,
+      "appointmentToReadyMs": 5502.560138702393,
+      "releaseReady": true,
+      "bootstrap": false
+    },
+    "next": {
+      "ttfbMs": 17.250999999999998,
+      "bodyMs": 132.426,
+      "appointmentToFirstByteMs": 17.26339776611328,
+      "appointmentToReadyMs": 8502.146005630493,
+      "releaseReady": true,
+      "bootstrap": true
+    }
+  }
+}

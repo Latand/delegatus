@@ -87,6 +87,19 @@ export async function isDesignatedManagerConversation(
   return await designatedManagerConversationId(project, fetchFn, now) === conversationId;
 }
 
+/** Recheck a resolved designation after other dispatch prerequisites finish.
+ * Expired or changed cache entries grant no context; this never starts a read.
+ */
+export function isCachedDesignatedManagerConversation(
+  conversationId: string,
+  project: string,
+  now: () => number = Date.now,
+): boolean {
+  const cached = cachedByProject.get(project.trim());
+  return conversationId.startsWith("conversation_") && cached?.conversationId === conversationId
+    && now() - cached.cachedAt < MANAGER_IDENTITY_TTL_MS;
+}
+
 /** Tests only. */
 export function resetManagerIdentityForTest(): void {
   cachedByProject.clear();

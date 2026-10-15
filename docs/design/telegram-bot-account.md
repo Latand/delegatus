@@ -434,8 +434,8 @@ answer: { chat: string, chatId: string, messageIds: number[], sentAt: string,
   line, then character boundaries into at most 4 parts (16 384 characters), sent
   in order. Only the first part carries `replyToMessageId`; every part carries
   `topicId`. Longer text is refused with `text_too_long`. HTML over
-  4 096 is refused with `text_too_long` ("send plain or split it"), because a
-  split can cut a tag.
+  4 096 characters after entity parsing is refused with `text_too_long`
+  ("send plain or split it"), because a split can cut a tag.
 - **Telegram's own refusals** map to codes, with the sanitized description in
   the error text: 400 entity-parse → `format_invalid`; 403 → `forbidden` (the
   bot was blocked, removed, or never messaged by that user; this is where "a
