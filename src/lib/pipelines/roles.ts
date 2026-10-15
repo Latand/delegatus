@@ -29,6 +29,11 @@ export type PipelineRoleDefaults = {
   serviceTier?: string;
   access?: "read-only" | "read-write";
   promptScaffold?: string | null;
+  /** The supplied text parameter values push the scaffold past the stage cap,
+      which the role's defaults fit: the text parameters to shorten and by
+      how many characters in total. Resolution refuses such a stage, because
+      the cut would drop the end of the role's rules. */
+  parameterOverflow?: { keys: string[]; characters: number };
 };
 
 /** Adapter seam for #35. The role registry can register its resolver at startup.
@@ -57,11 +62,21 @@ export const pipelineRoleLookup: PipelineRoleLookup = (roleId, params, project =
      dropped it, weakening the Opus scaffold. Fences stay separate so a near-limit
      body can be trimmed to the store cap without ever cutting a fence. */
   /* A pipeline stage never carries the seat mandate, so an orchestrator stage
-     gets the shared rules its scaffold leaves to the mandate. */
-  const body = definition.id === "orchestrator"
-    ? `${roleScaffoldBody(definition, parameters, project, true)}\n\n${ORCHESTRATOR_WITHOUT_MANDATE_RULES}`
-    : roleScaffoldBody(definition, parameters, project);
+     reads the working rules and the worker rule after its scaffold. */
+  const render = (values: typeof parameters) => definition.id === "orchestrator"
+    ? `${roleScaffoldBody(definition, values, project, true)}\n\n${ORCHESTRATOR_WITHOUT_MANDATE_RULES}`
+    : roleScaffoldBody(definition, values, project);
+  const body = render(parameters);
   const fences = roleFenceBlock(definition);
+  const budget = MAX_SCAFFOLD_LENGTH - fences.length;
+  /* The trim stays for an operator override stored near the cap. A cut that
+     only the supplied text values cause is reported instead, so the stage is
+     refused before its scaffold is stored without the end of its rules. */
+  const supplied = definition.parameters.filter((parameter) => parameter.kind === "text" && parameters[parameter.key] !== defaultRoleParameterValue(parameter));
+  const parameterOverflow = body.length > budget && supplied.length > 0
+    && render({ ...parameters, ...Object.fromEntries(supplied.map((parameter) => [parameter.key, defaultRoleParameterValue(parameter)])) }).length <= budget
+    ? { keys: supplied.map((parameter) => parameter.key), characters: body.length - budget }
+    : undefined;
   return {
     /* Parameter-aware runtime: Builder domain=frontend → its frontend row, a
        fix round (mode=apply-fixes) → the fix row its domain and size select,
@@ -69,7 +84,8 @@ export const pipelineRoleLookup: PipelineRoleLookup = (roleId, params, project =
        back to the base config. */
     ...configForParams(definition, parameters),
     access: definition.capabilities.includes("read-only") ? "read-only" : "read-write",
-    promptScaffold: `${body.slice(0, MAX_SCAFFOLD_LENGTH - fences.length)}${fences}`,
+    promptScaffold: `${body.slice(0, budget)}${fences}`,
+    ...(parameterOverflow ? { parameterOverflow } : {}),
   };
 };
 
@@ -129,6 +145,10 @@ export function resolvePipelineRole(
   if (!builder) return { error: "Builder role is unavailable in the role registry" };
   const roleId = rawRoleId ? rawRoleId as PipelineRoleId : null;
   const registered = roleId ? registry?.(roleId, roleParams, project) ?? null : null;
+  if (registered?.parameterOverflow) {
+    const { keys, characters } = registered.parameterOverflow;
+    return { error: `role ${roleId} parameter ${keys.join(", ")} makes its scaffold ${characters} characters longer than the ${MAX_SCAFFOLD_LENGTH} a stage stores, which would cut the end of its rules; shorten ${keys.length === 1 ? "it" : "them"} by at least ${characters} characters` };
+  }
   const value = (override: unknown, fallback: string | null | undefined): string | null => {
     if (override === null) return null;
     if (typeof override === "string") return override.trim() || null;

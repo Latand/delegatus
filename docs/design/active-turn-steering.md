@@ -44,7 +44,7 @@ queue" and "steer-if-active" returned nothing. The closest record is
 | 6 | Deputy end note | `src/lib/orchestrator/deputySweep.ts:103-114`, enqueued at `:323` | `queue` | Same as 4. |
 | 7 | Seat-tick wake | `src/lib/monitor/seatTickController.ts:1044-1045`, `:1555-1556` | `queue` | Same as 4. The tick sends a wake only to a seat whose turn is not progressing (`src/lib/monitor/seatTick.ts:1100`). |
 | 8 | Continuation of a turn a release cut | `src/lib/runtime/startup.ts:686-694` | `queue` with `turnId: null` | Same as 4, fenced to an idle thread. |
-| — | Operator composer, for contrast | `src/components/TmuxComposer.tsx:4215-4227` | Default `interrupt-active`; the Steer action sends `steer-if-active` | Unchanged by this design. The default interrupt is the operator's stated preference for their own messages (#1629). |
+| — | Operator composer, for contrast | `src/components/TmuxComposer.tsx:4215-4227` | Default `interrupt-active`; the Steer action sends `steer-if-active` | Unchanged by this design. The default interrupt is the operator's stated preference for their own messages (#1629). Since 2026-10-15 a Claude broker declares `sendWaitsForRunningTurn`, so the same send waits for its running turn and starts the next one: Claude Code reads an interrupt during a tool call as the operator rejecting that call (`docs/verification/claude-busy-send-no-interrupt.md`). |
 
 One document says otherwise: `docs/design/spawn-completion-notice.md:147-148`
 states that `send_message` queues. The code above interrupts.

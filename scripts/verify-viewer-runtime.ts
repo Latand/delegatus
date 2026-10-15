@@ -37,11 +37,11 @@ import { createRequire } from "node:module";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
-import { stopFixtureProcess } from "../src/lib/testing/fixtureProcess";
+import { stopFixtureIdentity, stopFixtureProcess } from "../src/lib/testing/fixtureProcess";
 import { captureProcessIdentity } from "../src/lib/processIdentity";
 import { candidatePerformanceDetail, parseCandidatePerformanceReport } from "../src/runtime-host/candidatePerformance";
 
-const USAGE = "usage: bun scripts/verify-viewer-runtime.ts [--load-modules | --performance [--scale <0..1>]]";
+const USAGE = "usage: bun scripts/verify-viewer-runtime.ts [--load-modules | --codex-socket | --performance [--scale <0..1>]]";
 
 /** The module whose load failure answered 500 on every route (#1248). */
 export const REQUIRED_SERVER_RUNTIME = "app-page.runtime.prod.js";
@@ -131,11 +131,11 @@ function firstLine(error: unknown): string {
 export function loadServedRuntimeModules(root: string): ViewerModuleFailure[] {
   const require = createRequire(path.join(root, "package.json"));
   const failures: ViewerModuleFailure[] = [];
-  for (const module of servedRuntimeModules(root)) {
+  for (const file of servedRuntimeModules(root)) {
     try {
-      require(path.join(root, module));
+      require(path.join(root, file));
     } catch (error) {
-      failures.push({ module, error: firstLine(error) });
+      failures.push({ module: file, error: firstLine(error) });
     }
   }
   return failures;
@@ -226,6 +226,165 @@ async function probeModules(root: string, sandbox: string): Promise<{ failures: 
   }
   const line = output.slice(marker + MODULE_REPORT_PREFIX.length).split("\n")[0] ?? "";
   return { failures: JSON.parse(line) as ViewerModuleFailure[], log: log() };
+}
+
+/* The Codex socket transport (#2922) runs inside the Viewer's compiled
+ * Next server. Bundled there, ws resolved its optional `bufferutil` peer to an
+ * empty module, and every client frame of 48 bytes or more threw `b.mask is
+ * not a function`. Unit tests import ws unbundled, and the module loads and
+ * GET / above write no frame, so production found it first. This probe takes
+ * the transport out of the served build itself and round-trips one masked
+ * frame through it to a stub app-server on a private unix socket. */
+
+/** A string only the Codex socket transport's module carries; it finds the
+ *  transport's compiled module in the build. */
+export const CODEX_SOCKET_MARKER = "Codex callback connection is closed";
+const CODEX_SOCKET_REPORT_PREFIX = "[viewer runtime] codex-socket ";
+const CODEX_SOCKET_BUDGET_MS = 60_000;
+/** Above ws's 48-byte cut-over, where a client frame is masked through `bufferutil`. */
+const CODEX_SOCKET_FRAME_BYTES = 1_024;
+const CODEX_SOCKET_REPLY_MS = 10_000;
+/** The transport refuses a socket directory longer than this (its sun_path budget). */
+const CODEX_SOCKET_ROOT_BYTES = 72;
+
+/** A stub Codex app-server: listens where `--listen unix://…` says and echoes. */
+const CODEX_STUB_SERVER = `
+const file = process.argv[process.argv.indexOf("--listen") + 1].replace(/^unix:\\/\\//, "");
+Bun.serve({
+  unix: file,
+  fetch(request, server) { return server.upgrade(request) ? undefined : new Response("upgrade required", { status: 426 }); },
+  websocket: { message(socket, message) { socket.send(message); } },
+});
+require("node:fs").chmodSync(file, 0o600);
+`;
+
+export interface CodexSocketEvidence {
+  /** The compiled route entry whose module graph supplied the transport. */
+  entry: string;
+  /** The transport's webpack module id inside that graph. */
+  module: string;
+  frameBytes: number;
+  roundTripMs: number;
+}
+
+interface CodexTransportLike {
+  readonly pid: number;
+  readonly stdin: NodeJS.WritableStream & { write(chunk: string, callback: (error?: Error | null) => void): boolean };
+  readonly stdout: NodeJS.ReadableStream;
+  once(event: "exit", listener: () => void): unknown;
+  kill(signal?: NodeJS.Signals): boolean;
+  disconnect(): void;
+}
+interface CodexTransportClass {
+  launch(command: string, args: string[], options: { env: NodeJS.ProcessEnv }): Promise<CodexTransportLike>;
+  reconnect(owner: unknown): Promise<CodexTransportLike>;
+}
+
+function routeEntries(directory: string): string[] {
+  if (!fs.existsSync(directory)) return [];
+  return fs.readdirSync(directory, { withFileTypes: true }).flatMap(entry => {
+    const absolute = path.join(directory, entry.name);
+    return entry.isDirectory() ? routeEntries(absolute) : entry.name === "route.js" ? [absolute] : [];
+  });
+}
+
+/** The transport class as the served build compiled it, reached the way the
+ *  server reaches it: through a real route entry and the webpack runtime. */
+export function loadBuiltCodexSocketTransport(root: string): { entry: string; module: string; transport: CodexTransportClass } {
+  const server = path.join(root, BUILT_SERVER_DIR);
+  const chunks = path.join(server, "chunks");
+  const holders = fs.existsSync(chunks)
+    ? fs.readdirSync(chunks).filter(name => name.endsWith(".js") && fs.readFileSync(path.join(chunks, name), "utf8").includes(CODEX_SOCKET_MARKER)).map(name => name.slice(0, -3))
+    : [];
+  if (holders.length === 0) throw new Error(`no compiled chunk in ${path.join(BUILT_SERVER_DIR, "chunks")} carries the Codex socket transport`);
+  const entry = routeEntries(path.join(server, "app")).sort().find(file => {
+    const text = fs.readFileSync(file, "utf8");
+    return holders.some(id => new RegExp(`[\\[,]${id}[,\\]]`).test(text));
+  });
+  if (!entry) throw new Error(`no compiled route loads the chunks carrying the Codex socket transport (${holders.join(", ")})`);
+  const require = createRequire(path.join(root, "package.json"));
+  require(entry);
+  const runtime = require(path.join(server, "webpack-runtime.js")) as ((id: string) => Record<string, unknown>) & { m: Record<string, unknown> };
+  for (const id of Object.keys(runtime.m).filter(id => String(runtime.m[id]).includes(CODEX_SOCKET_MARKER))) {
+    const transport = Object.values(runtime(id)).find(value => typeof value === "function"
+      && typeof (value as Partial<CodexTransportClass>).launch === "function"
+      && typeof (value as Partial<CodexTransportClass>).reconnect === "function");
+    if (transport) return { entry: path.relative(root, entry), module: id, transport: transport as CodexTransportClass };
+  }
+  throw new Error(`${path.relative(root, entry)} loaded, but no module in its graph exports the Codex socket transport`);
+}
+
+/** Launch the built transport against the stub, write one masked frame and
+ *  require the same bytes back. Runs in the child, under the sandbox. */
+export async function roundTripBuiltCodexSocket(root: string): Promise<CodexSocketEvidence> {
+  const { entry, module: moduleId, transport: Transport } = loadBuiltCodexSocketTransport(root);
+  const stub = path.join(os.tmpdir(), "codex-stub-app-server.ts");
+  fs.writeFileSync(stub, CODEX_STUB_SERVER);
+  const transport = await Transport.launch(process.execPath, [stub], { env: process.env });
+  const stubIdentity = captureProcessIdentity(transport.pid);
+  const exited = new Promise<void>(resolve => transport.once("exit", resolve));
+  try {
+    const frame = JSON.stringify({ id: 1, method: "delegatus/probe", params: { padding: "x".repeat(CODEX_SOCKET_FRAME_BYTES) } });
+    const started = Date.now();
+    const echoed = await new Promise<string>((resolve, reject) => {
+      let buffered = "";
+      const timer = setTimeout(() => reject(new Error(`the stub app-server echoed nothing within ${CODEX_SOCKET_REPLY_MS / 1_000}s`)), CODEX_SOCKET_REPLY_MS);
+      const settle = (error: Error | null, line?: string) => { clearTimeout(timer); if (error) reject(error); else resolve(line!); };
+      transport.stdout.on("data", chunk => {
+        buffered += String(chunk);
+        const end = buffered.indexOf("\n");
+        if (end >= 0) settle(null, buffered.slice(0, end));
+      });
+      transport.stdin.once("error", error => settle(error));
+      // ws throws out of `send` synchronously when it cannot mask the frame.
+      try { transport.stdin.write(`${frame}\n`, error => { if (error) settle(error); }); }
+      catch (error) { settle(error instanceof Error ? error : new Error(String(error))); }
+    });
+    if (echoed !== frame) throw new Error(`the stub app-server echoed ${echoed.length} bytes for a ${frame.length}-byte frame`);
+    return { entry, module: moduleId, frameBytes: Buffer.byteLength(frame), roundTripMs: Date.now() - started };
+  } finally {
+    transport.kill("SIGTERM");
+    await Promise.race([exited, new Promise(resolve => setTimeout(resolve, 2_000))]);
+    transport.disconnect();
+    await stopFixtureIdentity(stubIdentity);
+  }
+}
+
+/** A sandbox HOME short enough for the transport's private socket directory. */
+function codexSocketSandbox(): string {
+  const preferred = fs.realpathSync(os.tmpdir());
+  const sample = path.join(preferred, "llv-codex-socket-XXXXXX", ".cache", "delegatus", "s");
+  const base = Buffer.byteLength(sample) <= CODEX_SOCKET_ROOT_BYTES || process.platform === "win32" ? preferred : "/tmp";
+  return fs.mkdtempSync(path.join(base, "llv-codex-socket-"));
+}
+
+/** The probe above in a child under this interpreter and a private sandbox. */
+export async function verifyBuiltCodexSocket(root: string): Promise<{ ok: boolean; runtime: string; process: string; evidence?: CodexSocketEvidence; detail?: string; log?: string[] }> {
+  const runtime = `bun ${Bun.version}`;
+  const processName = "Viewer (compiled Next server, .next/server)";
+  const sandbox = codexSocketSandbox();
+  fs.mkdirSync(path.join(sandbox, "tmp"), { recursive: true, mode: 0o700 });
+  try {
+    const child = spawn(process.execPath, [path.join(root, "scripts", "verify-viewer-runtime.ts"), "--codex-socket-child"], {
+      cwd: root,
+      env: sandboxEnvironment(sandbox),
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let output = "";
+    child.stdout?.on("data", chunk => { output += String(chunk); });
+    const log = collector(child, "codex-socket");
+    const timer = setTimeout(() => child.kill("SIGKILL"), CODEX_SOCKET_BUDGET_MS);
+    const code = await new Promise<number | null>(resolve => { child.once("error", () => resolve(null)); child.once("exit", resolve); });
+    clearTimeout(timer);
+    const marker = output.lastIndexOf(CODEX_SOCKET_REPORT_PREFIX);
+    if (marker < 0) return { ok: false, runtime, process: processName, detail: `the Codex socket probe exited ${code} without reporting`, log: log() };
+    const report = JSON.parse(output.slice(marker + CODEX_SOCKET_REPORT_PREFIX.length).split("\n")[0] ?? "") as { evidence?: CodexSocketEvidence; error?: string };
+    return report.evidence
+      ? { ok: true, runtime, process: processName, evidence: report.evidence }
+      : { ok: false, runtime, process: processName, detail: report.error ?? "no detail" };
+  } finally {
+    fs.rmSync(sandbox, { recursive: true, force: true });
+  }
 }
 
 /**
@@ -369,6 +528,14 @@ if (import.meta.main) {
     console.log(USAGE);
     process.exit(0);
   }
+  if (argv.includes("--codex-socket-child")) {
+    let report: { evidence?: CodexSocketEvidence; error?: string };
+    try { report = { evidence: await roundTripBuiltCodexSocket(process.cwd()) }; }
+    catch (error) { report = { error: error instanceof Error ? `${error.message}\n${error.stack ?? ""}`.trim() : String(error) }; }
+    console.log(CODEX_SOCKET_REPORT_PREFIX + JSON.stringify(report));
+    /* The loaded route graph holds handles open. */
+    process.exit(0);
+  }
   if (argv.includes("--load-modules")) {
     console.log(MODULE_REPORT_PREFIX + JSON.stringify(loadServedRuntimeModules(process.cwd())));
     /* A loaded worker bundle holds a handle open, and this process has said
@@ -391,6 +558,19 @@ if (import.meta.main) {
       runner.once("error", () => resolve(1));
     });
     process.exit(code);
+  }
+
+  if (argv.includes("--codex-socket")) {
+    const report = await verifyBuiltCodexSocket(process.cwd());
+    console.log(JSON.stringify(report, null, 2));
+    if (!report.ok) {
+      console.error(`codex socket verification failed in the ${report.process} under ${report.runtime}: ${(report.detail ?? "no detail").split("\n")[0]}`);
+      process.exit(1);
+    }
+    console.error(`codex socket verified in the ${report.process} under ${report.runtime}:`
+      + ` ${report.evidence!.entry} launched the transport and round-tripped a ${report.evidence!.frameBytes}-byte masked frame`
+      + ` through a stub app-server in ${report.evidence!.roundTripMs} ms`);
+    process.exit(0);
   }
 
   if (argv.includes("--performance")) {

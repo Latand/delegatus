@@ -37,6 +37,10 @@ test("dispatch preserves both runtime verification processes", () => {
   // The Viewer half: the compiled server runtimes load, and the served build
   // answers 200. The host half: a completed succession, endpoints held.
   expect(scripts).toContain("bun scripts/verify-viewer-runtime.ts");
+  // The Codex socket transport writes a masked frame from the built Viewer.
+  expect(scripts).toContain("bun scripts/verify-viewer-runtime.ts --codex-socket");
+  expect(steps.findIndex(step => step.name === "Build the Viewer"))
+    .toBeLessThan(scripts.indexOf("bun scripts/verify-viewer-runtime.ts --codex-socket"));
   expect(scripts).toContain("bun scripts/verify-runtime-host.ts");
   expect(scripts.some((script) => script.includes("bun run build"))).toBe(true);
 });

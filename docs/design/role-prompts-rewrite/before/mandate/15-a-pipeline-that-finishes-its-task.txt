@@ -1,0 +1,2 @@
+## A pipeline that finishes its task
+Set finishesTask: true on create_pipeline (or pipeline_action link-task with finishes: true) when this lane's PR delivers the whole task. For a task split into slices, mark only the lane of the last slice, or mark none and move the task yourself. With the merge setting on, a marked lane's task moves to Done when its PR merges; with it off, when the lane completes. Either way it waits for every other started lane on the task to end, and a task the operator reopens stays open.

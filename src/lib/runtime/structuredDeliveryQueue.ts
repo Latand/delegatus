@@ -1940,7 +1940,12 @@ export class StructuredDeliveryQueue {
         await this.transitionUnlessSettled(effect.operationId, "failed", { reason: "unsupported-steering" });
         continue;
       }
-      const replacesTurn = effect.policy === "interrupt-active" || steerByInterrupt;
+      /* A host whose engine reads an interrupt as the operator refusing the
+         running tool call (Claude) takes an `interrupt-active` send as the
+         next turn's input: it waits for the turn, and never interrupts it. */
+      const waitsForTurn = effect.policy === "interrupt-active" && !steerByInterrupt
+        && host.sendWaitsForRunningTurn === true;
+      const replacesTurn = (effect.policy === "interrupt-active" && !waitsForTurn) || steerByInterrupt;
       const replacementIsActive = replacesTurn
         && (health.status === "active" || health.status === "attention")
         && Boolean(health.activeTurnRef);
@@ -1996,7 +2001,7 @@ export class StructuredDeliveryQueue {
       if (health.status === "idle") this.interruptAcknowledged.delete(effect.operationId);
       const deliveryFence = shouldInterrupt
         ? effect.turnId ?? health.activeTurnRef
-        : replacesTurn
+        : replacesTurn || waitsForTurn
           ? effect.turnId ?? null
           : effect.turnId !== undefined
             ? effect.turnId
@@ -2011,7 +2016,7 @@ export class StructuredDeliveryQueue {
         contentDigest: effect.contentDigest,
         text: effect.content.text,
         images: effect.content.images,
-        expectedTurnId: replacesTurn ? null : deliveryFence,
+        expectedTurnId: replacesTurn || waitsForTurn ? null : deliveryFence,
         ...(effect.runtime ? { runtime: effect.runtime } : {}),
         ...(effect.selectedContext ? { selectedContext: effect.selectedContext } : {}),
         ...(effect.origin ? { origin: effect.origin } : {}),
