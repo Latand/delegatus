@@ -261,6 +261,21 @@ body {
   }
 }
 
+/* Full autonomy: the selected snake, four seconds per lap. */
+.seat-tick-autonomy { --autonomy: var(--tick-3); --autonomy-lap: 4s; }
+.seat-tick-autonomy rect { fill: none; stroke: var(--autonomy); stroke-width: 2; stroke-linecap: round; }
+.seat-tick-autonomy-snake {
+  stroke-opacity: 0.08;
+  animation: seat-tick-autonomy-crawl var(--autonomy-lap) linear infinite;
+}
+@keyframes seat-tick-autonomy-crawl { from { stroke-dashoffset: 100; } to { stroke-dashoffset: 0; } }
+.seat-tick-autonomy-solid { display: none; }
+@media (prefers-reduced-motion: reduce) {
+  .seat-tick-autonomy-snakes { display: none; }
+  .seat-tick-autonomy .seat-tick-autonomy-snake { animation: none; }
+  .seat-tick-autonomy-solid { display: inline; }
+}
+
 /* Attention border: two soft comets orbiting the card edge in the state's
    color (--pane-glow) — visibly "waiting for you" without stealing focus. */
 @property --pane-angle {

@@ -393,7 +393,7 @@ function harness(options: { access?: "read-only" | "read-write" } = {}) {
     roleLookup: () => ({ engine: "claude", model: "opus", effort: "high", access, promptScaffold: "Guidance" }),
     spawnAgent: async (_input, onReserved) => {
       spawns += 1;
-      onReserved({ launchId: `launch-${spawns}`, conversationId: STAGE_CONVERSATION, accountId: "default" });
+      await onReserved({ launchId: `launch-${spawns}`, conversationId: STAGE_CONVERSATION, accountId: "default" });
       return {
         launchId: `launch-${spawns}`,
         conversationId: STAGE_CONVERSATION,
@@ -674,11 +674,11 @@ test("a crash after checkpointing a commit deadline preserves its automatic retr
   const original = prototype.mutate;
   let crashed = false;
   prototype.mutate = function<R>(
-    operation: (records: Pipeline[], persist: (records?: readonly Pipeline[]) => void) => Promise<R> | R,
+    operation: (records: Pipeline[], persist: (records?: readonly Pipeline[]) => Promise<void>) => Promise<R> | R,
     ...args: [Parameters<typeof original>[1]?, boolean?, number?, ((heldMs: number) => void)?]
   ): Promise<R> {
-    return original.call(this, (records, persist) => operation(records, changed => {
-      persist(changed);
+    return original.call(this, (records, persist) => operation(records, async changed => {
+      await persist(changed);
       if (!crashed && loadPipelines()[0]?.runs[0]?.attempts[0]?.stageCommitWait) {
         crashed = true;
         throw new Error("crash after commit deadline checkpoint");
@@ -715,11 +715,11 @@ test.each(["blocked", "deadline"] as const)("a rejected %s repair replays as par
   let checkpoint: Pipeline | null = null;
   // Complete the real write, then interrupt before final lane settlement.
   prototype.mutate = function<R>(
-    operation: (records: Pipeline[], persist: (records?: readonly Pipeline[]) => void) => Promise<R> | R,
+    operation: (records: Pipeline[], persist: (records?: readonly Pipeline[]) => Promise<void>) => Promise<R> | R,
     ...args: [Parameters<typeof original>[1]?, boolean?, number?, ((heldMs: number) => void)?]
   ): Promise<R> {
-    return original.call(this, (records, persist) => operation(records, (changed) => {
-      persist(changed);
+    return original.call(this, (records, persist) => operation(records, async (changed) => {
+      await persist(changed);
       const record = loadPipelines()[0];
       if (!checkpoint && record?.runs[0]?.attempts[0]?.commitRepair?.settledAt) {
         checkpoint = structuredClone(record);
@@ -858,10 +858,10 @@ async function interruptStageSettlement(h: ReturnType<typeof harness>, state: "n
   const prototype = SqliteStateCollection.prototype as InstanceType<typeof SqliteStateCollection<Pipeline>>;
   const original = prototype.mutate;
   prototype.mutate = function<R>(
-    operation: (records: Pipeline[], persist: (records?: readonly Pipeline[]) => void) => Promise<R> | R,
+    operation: (records: Pipeline[], persist: (records?: readonly Pipeline[]) => Promise<void>) => Promise<R> | R,
     ...args: [Parameters<typeof original>[1]?, boolean?, number?, ((heldMs: number) => void)?]
   ): Promise<R> {
-    return original.call(this, (records, persist) => operation(records, (changed) => {
+    return original.call(this, (records, persist) => operation(records, async (changed) => {
       if (changed?.some((record) => {
         const attempt = record.runs?.[0]?.attempts?.[0];
         return state === "refusal-checkpoint"
@@ -870,7 +870,7 @@ async function interruptStageSettlement(h: ReturnType<typeof harness>, state: "n
       })) {
         throw new Error("simulated crash before final stage settlement");
       }
-      persist(changed);
+      await persist(changed);
     }), ...args) as Promise<R>;
   };
   try {

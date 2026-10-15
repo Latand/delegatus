@@ -1129,7 +1129,7 @@ test.each(["codex", "claude"] as const)("a persisted provider cut recovers once 
   setAgentRegistryForTests(new AgentRegistry(registry.filename));
   try {
     await withRuntimeSnapshot(() => ({ runtime: { hostEpoch: 2 }, sessions: [
-      { conversationId: conversation.id, host: "alive", turn: "idle", attentionIds: [] },
+      { conversationId: conversation.id, host: "hosted", turn: "idle", attentionIds: [] },
     ] }), async () => {
       for (let tick = 0; tick < 5; tick += 1) {
         const production = defaultPipelinePorts();
@@ -1671,7 +1671,9 @@ for (const pool of [false, true]) {
       : { kind: "exhausted", resetsAt: due, allowedAccountIds: pool ? [LIMITED_ACCOUNT, SPARE_ACCOUNT] : [LIMITED_ACCOUNT] };
     while (f.now() < due * 1_000 + 120_000) { f.advance(30_000); await tickPipelines([], f.h.ports); }
     expect(f.h.spawnInputs).toHaveLength(2);
-  });
+    // Several hundred controller passes cover the full reset window; let them
+    // finish before the next fixture replaces their shared isolated store.
+  }, 30_000);
 }
 
 

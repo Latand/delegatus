@@ -145,11 +145,11 @@ export function permissionDenialRecorder(dependencies: PermissionDenialRecorderD
        nothing ran, so the same write is safe to repeat. */
     for (let attempt = 1; attempt <= ATTEMPT_WRITE_TRIES; attempt += 1) {
       try {
-        lineage = await mutate((pipelines, persist) => {
+        lineage = await mutate(async (pipelines, persist) => {
           const located = locateAttempt(pipelines, denial.conversationId, canonical);
           if (!located) return null;
           appendDenial(located.attempt, denial);
-          persist([located.pipeline]);
+          await persist([located.pipeline]);
           return located.lineage;
         }) ?? lineage;
         break;

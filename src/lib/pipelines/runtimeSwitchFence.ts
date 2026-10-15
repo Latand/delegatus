@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { allowedAccountIdsForProject } from "@/lib/accounts/projectBindings";
-import { loadPipelines } from "./store";
+import { findPipelineRecord, loadPipelines } from "./store";
+import type { AgentRegistry } from "@/lib/agent/registry";
 import type { PipelineRuntimeSwitch } from "./types";
 
 /*
@@ -34,7 +35,7 @@ export function pipelineSwitchFence(operationId: string): PipelineSwitchFence | 
       for (const run of pipeline.runs) {
         for (const attempt of run.attempts) {
           const record = attempt.runtimeSwitches?.find((item) => switchOperationKey(item, "reconfigure") === operationId);
-          if (record) return { project: pipeline.project, to: record.to };
+          if (record) return { project: pipeline.project, to: record.to, retired: !!record.retry };
         }
       }
     }
@@ -48,6 +49,7 @@ export function pipelineSwitchFence(operationId: string): PipelineSwitchFence | 
       // Read again on every call: the registry and the bindings may both have moved since admission.
       const current = find();
       if (!current) throw new Error("target account is no longer allowed: the stage's runtime switch record is gone");
+      if (current.retired) throw new Error("runtime switch retry withdrew the old attempt's execution authority");
       const pool = allowedAccountIdsForProject(current.project, current.to.engine);
       if (accountId !== undefined) {
         if (pool && (!accountId || !pool.includes(accountId))) {
@@ -60,4 +62,20 @@ export function pipelineSwitchFence(operationId: string): PipelineSwitchFence | 
       }
     },
   };
+}
+
+/** Read the membership's pipeline only; unrelated conversations do no pipeline scan.
+ * Retained attempts keep this fence after the replacement has started. */
+export function runtimeSwitchRetirementReason(conversationId: string, registry: Pick<AgentRegistry, "readOnlySnapshot">): string | null {
+  const memberships = registry.readOnlySnapshot().memberships[conversationId as `conversation_${string}`] ?? [];
+  for (const member of memberships) {
+    if (member.kind !== "pipeline") continue;
+    const pipeline = findPipelineRecord(member.containerId);
+    for (const run of pipeline?.runs ?? []) for (const attempt of run.attempts) {
+      const retired = attempt.runtimeSwitches?.find(record => record.retry &&
+        [record.from.conversationId, record.launch?.conversationId, attempt.conversationId].includes(conversationId));
+      if (retired) return "runtime switch retry withdrew the old attempt's execution authority";
+    }
+  }
+  return null;
 }
