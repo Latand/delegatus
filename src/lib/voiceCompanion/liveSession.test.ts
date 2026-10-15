@@ -94,6 +94,47 @@ test("October 12: the second latest orchestrator message is whole in one voice t
   } finally { await f.service.close(f.s.sessionId); }
 });
 
+test.each(["claude", "codex"] as const)("%s latest reads and shows reach a reply behind incoming-only pages within the descriptor budget", async (engine) => {
+  const reply = "The latest complete answer.\n".repeat(110).trimEnd();
+  const lines = [seatLine("user", "Read the answer", 0), seatLine("assistant", reply, 1),
+    ...Array.from({ length: 25 }, (_, index) => seatLine("user", `Seat tick — incoming ${index}`, index + 2))];
+  const f = await seatVoiceFixture(engine === "claude" ? lines : lines.map(line => ({ type: "response_item", timestamp: line.timestamp,
+    payload: { type: "message", role: line.type, content: [{ type: line.type === "user" ? "input_text" : "output_text", text: line.message.content[0].text }] } })), engine);
+  const read = fs.readSync;
+  let bytes = 0;
+  const reads = spyOn(fs, "readSync").mockImplementation(((...args: Parameters<typeof read>) => {
+    const count = read(...args); bytes += count; return count;
+  }) as typeof read);
+  try {
+    const result = await f.tool("orchestrator_messages");
+    expect(result.rows).toMatchObject([{ text: reply }]);
+    expect(bytes).toBeGreaterThan(0);
+    expect(bytes).toBeLessThanOrEqual(2 * 1024 * 1024);
+    bytes = 0;
+    expect(await f.tool("show_orchestrator_message", { read_aloud: false })).toMatchObject({ status: "shown" });
+    expect(f.service.transcriptRecord(f.s.sessionId).entries.filter(row => row.kind === "report")).toMatchObject([{ data: { text: reply } }]);
+    expect(bytes).toBeLessThanOrEqual(2 * 1024 * 1024);
+  } finally { reads.mockRestore(); await f.service.close(f.s.sessionId); }
+});
+
+test("a capped incoming-only read returns progress that reaches the latest reply on its next call", async () => {
+  const f = await seatVoiceFixture([seatLine("assistant", "Answer before the incoming pages", 0),
+    ...Array.from({ length: 36 }, (_, index) => seatLine("user", `Seat tick — ${index} ${"x".repeat(50000)}`, 1))]);
+  try {
+    const first = await f.tool("orchestrator_messages");
+    expect(first).toMatchObject({ rows: [], more: true, truncated: true });
+    expect(first.before).toBeString();
+    expect(first.scanned.bytes).toBeLessThanOrEqual(2 * 1024 * 1024);
+    fs.appendFileSync(f.filename, JSON.stringify(seatLine("user", "Seat tick — appended after the read", 2)) + "\n");
+    const next = await f.tool("orchestrator_messages", { before: first.before });
+    expect(next.rows).toMatchObject([{ text: "Answer before the incoming pages" }]);
+    expect(next.scanned.bytes).toBeLessThanOrEqual(2 * 1024 * 1024);
+    expect(await f.tool("show_orchestrator_message", { message: next.rows[0].handle, read_aloud: false })).toMatchObject({ status: "shown" });
+    const stale = first.before.replace(/[0-9a-f]{6}$/u, "000000");
+    expect(await f.tool("orchestrator_messages", { before: stale })).toMatchObject({ status: "stale_handle" });
+  } finally { await f.service.close(f.s.sessionId); }
+});
+
 test("voice reads a long Unicode message in two calls and targets stable handles or times", async () => {
   const long = ("Їжак 🎙 перевіряє рядок.\n".repeat(400));
   expect(Buffer.byteLength(long)).toBeGreaterThan(12000);
@@ -211,6 +252,40 @@ test.each([80, 160])("voice action pages advance through %i read-only calls with
     expect(empty).toBe(true);
     expect(actions).toEqual((noise === 160 ? [161, 0] : [0]).map(index => ({ time: null, action: `Started lane «Lane ${index}»`, outcome: "done" })));
   } finally { await f.service.close(f.s.sessionId); }
+});
+
+test.each([true, false])("Claude actions keep their completed outcome across scan pages (ok=%j)", async (ok) => {
+  const pair = (id: string, tool: string, input: Record<string, unknown>, value: unknown) => [
+    { type: "assistant", message: { content: [{ type: "tool_use", id, name: `mcp__viewer__${tool}`, input }] } },
+    { type: "user", message: { content: [{ type: "tool_result", tool_use_id: id, content: JSON.stringify(value) }] } },
+  ];
+  const f = await seatVoiceFixture([
+    ...pair("older", "create_task", { text: "Earlier task" }, { ok: true }),
+    ...pair("boundary", "create_pipeline", { task: "Boundary lane" }, { ok }),
+    ...Array.from({ length: 59 }, (_, index) => pair(`read-${index}`, "list_tasks", {}, { ok: true })).flat(),
+    { type: "assistant", message: { content: [{ type: "tool_use", id: "pending-read", name: "mcp__viewer__list_tasks", input: {} }] } },
+  ]);
+  const read = fs.readSync;
+  let bytes = 0;
+  const reads = spyOn(fs, "readSync").mockImplementation(((...args: Parameters<typeof read>) => {
+    const count = read(...args); bytes += count; return count;
+  }) as typeof read);
+  try {
+    const first = await f.tool("orchestrator_actions");
+    expect(first).toMatchObject({ rows: [], more: true });
+    expect(first.before).toBeString();
+    expect(bytes).toBeLessThanOrEqual(2 * 1024 * 1024);
+    bytes = 0;
+    const next = await f.tool("orchestrator_actions", { before: first.before, limit: 1 });
+    expect(next.rows).toEqual([{ time: null, action: "Started lane «Boundary lane»", outcome: ok ? "done" : "failed" }]);
+    expect(next.before).not.toBe(first.before);
+    expect(bytes).toBeLessThanOrEqual(2 * 1024 * 1024);
+    bytes = 0;
+    const last = await f.tool("orchestrator_actions", { before: next.before, limit: 1 });
+    expect(last).toMatchObject({ rows: [{ action: "Created task «Earlier task»", outcome: "done" }], more: false });
+    expect(bytes).toBeLessThanOrEqual(2 * 1024 * 1024);
+    expect(new Set([...next.rows, ...last.rows].map((row: { action: string }) => row.action)).size).toBe(2);
+  } finally { reads.mockRestore(); await f.service.close(f.s.sessionId); }
 });
 
 test("showing the newest reply keeps its whole turn on one card, speaks every line and supports silent show and reread", async () => {

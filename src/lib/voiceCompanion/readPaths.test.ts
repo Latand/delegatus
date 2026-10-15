@@ -507,16 +507,23 @@ test("the seat read retries a peer-held SQLite lock with an advancing timer and 
   } finally { await peer.release(); db.close(); }
 }, 20000);
 
-test("an action metadata retry reuses its original page without reading another descriptor byte", async () => {
+test("an action continuation metadata retry reuses its page and result overlap without another descriptor byte", async () => {
   const { seatActions } = await import("./seatTranscript");
   const filename = path.join(root, "retained-actions.jsonl");
-  fs.writeFileSync(filename, JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", id: "retained", name: "mcp__viewer__update_task", input: { taskId: "title" } }] } }) + "\n");
+  fs.writeFileSync(filename, [
+    { type: "assistant", message: { content: [{ type: "tool_use", id: "retained", name: "mcp__viewer__update_task", input: { taskId: "title" } }] } },
+    { type: "user", message: { content: [{ type: "tool_result", tool_use_id: "retained", content: '{"ok":true}' }] } },
+    { type: "assistant", message: { content: [{ type: "tool_use", id: "newer", name: "mcp__viewer__create_pipeline", input: { task: "New lane" } }] } },
+  ].map(row => JSON.stringify(row)).join("\n") + "\n");
   const descriptor = fs.openSync(filename, "r");
   const source = { descriptor, size: fs.fstatSync(descriptor).size, engine: "claude" as const };
+  const first = seatActions(source, filename, { limit: 1 }, value => value, () => undefined);
+  const args = { before: first.before };
   const retained: import("./seatTranscript").SeatActionRead = {};
-  try { expect(() => seatActions(source, filename, {}, value => value, () => { throw new Error("metadata busy"); }, retained)).toThrow("metadata busy"); }
+  try { expect(() => seatActions(source, filename, args, value => value, () => { throw new Error("metadata busy"); }, retained)).toThrow("metadata busy"); }
   finally { fs.closeSync(descriptor); }
   // A second read would fail with EBADF: the retained page is the only source.
-  const result = seatActions(source, filename, {}, value => value, () => "Retained title", retained);
-  expect(result.rows).toMatchObject([{ action: "Updated task «Retained title»" }]);
+  expect(retained.overlap!.bytes).toBeGreaterThan(0);
+  const result = seatActions(source, filename, args, value => value, () => "Retained title", retained);
+  expect(result.rows).toMatchObject([{ action: "Updated task «Retained title»", outcome: "done" }]);
 });

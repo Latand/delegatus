@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { readSync } from "node:fs";
 import { readMessagesPage, type ConversationMessage, type MessagesPage, type MessagesPageCursor, type MessagesPageSource } from "@/lib/session/messagesPage";
-import type { SessionToolCall } from "@/lib/session/reader";
+import { normalizeSessionLine, type SessionToolCall } from "@/lib/session/reader";
 import { isViewerMcpServer } from "@/lib/mcp/presentation";
 import { splitRelayMessageText } from "@/lib/orchestrator/relayText";
 import { byteShort } from "./prototypeRead";
@@ -68,30 +68,44 @@ const missing = (status: "stale_handle" | "not_found"): SeatMessages => ({ statu
   ? "The orchestrator changed. Read its latest messages for fresh handles."
   : "No such message within the bounded voice read. Older history may be outside this read.", shown: 0, more: false, before: null, truncated: false });
 
+/** Incoming pages do not answer a reply read. All pages share one byte allowance. */
+function replyPage(source: MessagesPageSource, cursor: MessagesPageCursor | null, allowance: number,
+  redactText: (text: string) => string, at: number | null = null, wholeTurn = false) {
+  const records: ConversationMessage[] = [];
+  let spent = 0, more = false, capped = false;
+  do {
+    const page = readMessagesPage(source, { kinds: new Set(["message"]), roles: new Set(["assistant", "user"]),
+      limit: 24, maxChars: 16000, cursor, maxScanBytes: allowance - spent, redactText });
+    spent += page.scanned.bytes; capped ||= page.scanned.capped;
+    records.push(...page.records); more = page.hasMore; cursor = page.cursor;
+    const newest = records.findIndex(row => row.role === "assistant" && (at === null || row.ts && Date.parse(row.ts) <= at));
+    if (newest >= 0 && (!wholeTurn || records.some((row, index) => index > newest && row.role === "user"))) break;
+  } while (cursor && spent < allowance && !capped);
+  return { records, cursor, spent, more, capped: capped || more && spent >= allowance };
+}
+const messageCursor = (filename: string, cursor: MessagesPageCursor) => `s${cursor.o.toString(36)}.${cursor.p}.${fingerprint(filename)}`;
+
 /** One descriptor, no author join, no registry snapshot, and one total scan allowance. */
 export function seatMessages(source: MessagesPageSource, filename: string, args: Record<string, unknown>, redactText: (text: string) => string): SeatMessages {
   if ((args.message && (args.before || args.at)) || (args.before && args.at) || (args.offset != null && !args.message)) throw new Error("INVALID_TOOL_ARGUMENTS");
   const token = args.message ?? args.before;
-  const pos = token ? position(filename, token) : null;
+  const scanCursor = typeof args.before === "string" && args.before.startsWith("s");
+  const pos = token ? position(filename, scanCursor ? `m${String(token).slice(1)}` : token) : null;
   if (pos === "stale_handle") return missing(pos);
   if (token && (!pos || pos.seq >= source.size)) return missing("not_found");
   const at = typeof args.at === "string" ? Date.parse(args.at) : null;
   if (at !== null && !Number.isFinite(at)) throw new Error("INVALID_TOOL_ARGUMENTS");
-  let cursor: MessagesPageCursor | null = pos ? { o: pos.seq, p: pos.part + (args.message ? 1 : 0), r: [] } : null;
-  let spent = 0, more = false, capped = false;
-  if (pos) {
+  const start: MessagesPageCursor | null = pos ? { o: pos.seq, p: pos.part + (args.message ? 1 : 0), r: [] } : null;
+  let anchorBytes = 0;
+  if (pos && !scanCursor) {
     const checked = anchor(source, pos, "message", redactText);
     if (!checked.row || checked.bytes >= SEAT_SCAN_BYTES) return missing("not_found");
-    spent = checked.bytes;
+    anchorBytes = checked.bytes;
   }
-  const records: ConversationMessage[] = [];
-  do {
-    const page = readMessagesPage(source, { kinds: new Set(["message"]), roles: new Set(["assistant", "user"]),
-      limit: 24, maxChars: 16000, cursor, maxScanBytes: SEAT_SCAN_BYTES - spent, redactText });
-    spent += page.scanned.bytes; capped ||= page.scanned.capped;
-    records.push(...page.records); more = page.hasMore; cursor = page.cursor;
-    if (at === null || page.records.some(row => row.role === "assistant" && row.ts && Date.parse(row.ts) <= at)) break;
-  } while (cursor && spent < SEAT_SCAN_BYTES && !capped);
+  const scan = replyPage(source, start, SEAT_SCAN_BYTES - anchorBytes, redactText, at);
+  const { records, cursor, capped } = scan;
+  const spent = anchorBytes + scan.spent;
+  let more = scan.more;
   const labels = new Map<ConversationMessage, string>();
   let after = "other";
   for (const row of [...records].reverse()) { if (row.role === "user") after = turnAfter(row.sourceText ?? row.text); else labels.set(row, after); }
@@ -140,7 +154,7 @@ export function seatMessages(source: MessagesPageSource, filename: string, args:
     if (piece.next !== null) more = true;
   }
   const newest = rows[0];
-  return { rows, shown: rows.length, more, before: rows.at(-1)?.handle ?? null,
+  return { rows, shown: rows.length, more, before: rows.at(-1)?.handle ?? (cursor ? messageCursor(filename, cursor) : null),
     truncated: capped || assistants.some(row => row.truncated) || rows.some(row => row.rest),
     speech: byteShort(`${rows.length} orchestrator messages.${newest ? ` Newest at ${newest.time}, after ${newest.after}: ${byteShort(newest.text, 200)}` : ""} before reads OLDER messages.`, 600),
     scanned: { bytes: spent, capped } };
@@ -155,8 +169,7 @@ export function newestSeatReply(source: MessagesPageSource, filename: string, me
     const row = anchor(source, pos, "message", redactText).row;
     return row?.seq === pos.seq && row.part === pos.part ? { handle: String(message), time: time(row.ts), text: row.text } : { status: "not_found" };
   }
-  const page = readMessagesPage(source, { kinds: new Set(["message"]), roles: new Set(["assistant", "user"]),
-    limit: 24, maxChars: 16000, maxScanBytes: SEAT_SCAN_BYTES, redactText });
+  const page = replyPage(source, null, SEAT_SCAN_BYTES, redactText, null, true);
   const newest = page.records.findIndex(row => row.role === "assistant");
   const end = page.records.findIndex((row, index) => index > newest && row.role === "user");
   const turn = page.records.slice(newest < 0 ? 0 : newest, end < 0 ? undefined : end).filter(row => row.role === "assistant");
@@ -219,7 +232,10 @@ export const ACTION_LINES: Record<string, ActionLine> = {
   ask_orchestrator_in_parallel: () => "Asked a parallel orchestrator",
 };
 export const NOT_SEAT_ACTIONS = new Set(["lifecycle_events", "agent_activity", "stage_report", "backfill_worktree_projects"]);
-export interface SeatActionRead { page?: MessagesPage; titles?: Map<string, string>; anchorBytes?: number }
+export interface SeatActionRead {
+  page?: MessagesPage; titles?: Map<string, string>; anchorBytes?: number;
+  overlap?: { results: Map<string, SessionToolCall>; bytes: number };
+}
 
 // Scan positions advance past pages containing only results or read-only calls,
 // including a scan exhausted inside a line.
@@ -230,6 +246,23 @@ function failed(value: unknown): boolean {
   const row = object(value);
   return row.ok === false || row.isError === true || row.is_error === true || (!!row.code && row.ok !== true) || row.status === "refused" || row.status === "failed"
     || (Array.isArray(row.content) && row.content.some(part => failed(object(part).text))) || (!!row.structuredContent && failed(row.structuredContent));
+}
+/** Re-read a bounded newer neighborhood of a continuation. Results there can
+ * belong to calls on the older page; only the older page may emit actions. */
+function actionResultOverlap(source: MessagesPageSource, offset: number, allowance: number) {
+  const results = new Map<string, SessionToolCall>();
+  const buffer = Buffer.allocUnsafe(Math.min(512 * 1024, allowance, source.size - offset));
+  const bytes = readSync(source.descriptor, buffer, 0, buffer.length, offset);
+  const lines = buffer.subarray(0, bytes).toString("utf8").split("\n");
+  if (offset + bytes < source.size) lines.pop(); // Never normalize a clipped result.
+  for (const line of lines) {
+    let value: unknown;
+    try { value = JSON.parse(line); } catch { continue; }
+    for (const row of normalizeSessionLine(source.engine, object(value))) {
+      if (row.record.kind === "tool_result" && row.call?.id) results.set(row.call.id, row.call);
+    }
+  }
+  return { results, bytes };
 }
 export function seatActions(source: MessagesPageSource, filename: string, args: Record<string, unknown>, redactText: (text: string) => string,
   lookup: (kind: "task" | "pipeline", id: string) => string | undefined, retained: SeatActionRead = {}) {
@@ -243,10 +276,12 @@ export function seatActions(source: MessagesPageSource, filename: string, args: 
     if (!checked.row || checked.bytes >= SEAT_SCAN_BYTES) return missing("not_found");
     retained.anchorBytes = checked.bytes;
   }
+  const overlap = retained.overlap ??= pos ? actionResultOverlap(source, pos.seq, SEAT_SCAN_BYTES - (retained.anchorBytes ?? 0) - 1)
+    : { results: new Map<string, SessionToolCall>(), bytes: 0 };
   const page = retained.page ??= readMessagesPage(source, { kinds: new Set(["tool_call", "tool_result"]), roles: new Set(["assistant", "tool"]), limit: 120,
     maxChars: 16000, since: typeof args.since === "string" ? args.since : undefined,
-    cursor: pos ? { o: pos.seq, p: pos.part, r: [] } : null, maxScanBytes: SEAT_SCAN_BYTES - (retained.anchorBytes ?? 0), redactText });
-  const results = new Map<string, SessionToolCall>();
+    cursor: pos ? { o: pos.seq, p: pos.part, r: [] } : null, maxScanBytes: SEAT_SCAN_BYTES - (retained.anchorBytes ?? 0) - overlap.bytes, redactText });
+  const results = new Map(overlap.results);
   for (const row of page.records) if (row.kind === "tool_result" && row.call?.id) results.set(row.call.id, row.call);
   const titles = retained.titles ??= new Map<string, string>();
   const title = (kind: "task" | "pipeline", id: unknown) => {
@@ -277,5 +312,5 @@ export function seatActions(source: MessagesPageSource, filename: string, args: 
   if (!stopped && page.cursor) before = actionCursor(filename, page.cursor);
   return { rows, shown: rows.length, more, before, truncated: page.scanned.capped,
     speech: byteShort(`${rows.length} orchestrator actions: ${rows.filter(row => row.outcome === "done").length} done, ${rows.filter(row => row.outcome === "failed").length} failed, ${rows.filter(row => row.outcome === "running").length} running. ${rows.slice(0, 2).map(row => row.action).join(". ")}`, 600),
-    scanned: { bytes: page.scanned.bytes + (retained.anchorBytes ?? 0), capped: page.scanned.capped } };
+    scanned: { bytes: page.scanned.bytes + (retained.anchorBytes ?? 0) + overlap.bytes, capped: page.scanned.capped } };
 }

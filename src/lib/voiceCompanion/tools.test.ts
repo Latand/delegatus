@@ -260,7 +260,9 @@ test("orchestrator reads expose bounded continuation and every mutating tool has
   }
   const properties = COMPANION_TOOLS.find(tool => tool.name === "orchestrator_messages")!.parameters.properties;
   expect(Object.keys(properties).sort()).toEqual(["project", "message", "offset", "at", "before", "limit", "refresh"].sort());
-  expect(COMPANION_TOOLS.find(tool => tool.name === "orchestrator_actions")!.description).toContain("even when rows is empty");
+  for (const name of ["orchestrator_messages", "orchestrator_actions"]) {
+    expect(COMPANION_TOOLS.find(tool => tool.name === name)!.description).toContain("even when rows is empty");
+  }
   for (const name of ["seat_tick_settings", "account_project_binding", "role_presets", "auto_updates", "curate_rules"]) {
     expect(ACTION_LINES[name]({}, () => "")).toBeNull();
   }
