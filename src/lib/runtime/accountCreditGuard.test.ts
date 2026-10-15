@@ -206,6 +206,15 @@ test.each(["owned", "restarted", "paused", "before transcript"] as const)("the c
     expect(replacement.launchId).not.toBe(reservation.receipt.launchId);
     expect(await stopHeadlessReviewAndWait(flow.id, 1, round)).toBe(false);
     expect(headlessReviewStatus(flow.id, 1, replacement, "codex")?.status).toBe("running");
+    const run = headlessRuns.get(`${flow.id}:1`)!;
+    const identity = run.identity;
+    run.identity = null;
+    try {
+      expect(await stopHeadlessReviewAndWait(flow.id, 1, {
+        reviewerPid: replacement.reviewerPid, reviewerIdentity: "stale-start-identity",
+      })).toBe(false);
+    } finally { run.identity = identity; }
+    expect(headlessReviewStatus(flow.id, 1, replacement, "codex")?.status).toBe("running");
     await kickStructuredDeliveryQueue();
     await tickFlows(entries);
     expect(loadFlow(flow.id)?.rounds[0]?.reviewerPid).toBe(replacement.reviewerPid);
