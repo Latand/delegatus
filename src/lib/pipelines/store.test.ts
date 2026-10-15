@@ -130,17 +130,21 @@ test.each([
   // SQLite's writer lock. Only that exact diagnostic is allowed; the exit,
   // durable ownership and restart replay still have to prove success.
   const releaseWarning = "[state lease] abandoned pipelines: SQLiteError: database is locked\n";
+  const admissionWarning = "[state lease] abandoned pipelines: StateLockDeferredError: state admission is busy at state.lease.release\n";
   const collect = async (child: ReturnType<typeof run>) => {
     const [output, errors, exit] = await Promise.all([
       new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited,
     ]);
     expect(exit).toBe(0);
-    expect(["", releaseWarning]).toContain(errors);
-    return { record: JSON.parse(output) as Pipeline, errors };
+    const waits = errors.split("\n").filter(line => line.startsWith("[blocking-wait] "));
+    for (const line of waits) expect(JSON.parse(line.slice("[blocking-wait] ".length)).site).toBe("state-write-lock");
+    const warnings = errors.split("\n").filter(line => line && !line.startsWith("[blocking-wait] ")).join("\n");
+    expect(["", releaseWarning.trim(), admissionWarning.trim()]).toContain(warnings);
+    return { record: JSON.parse(output) as Pipeline, errors: warnings };
   };
   const children = [run(deliveryFixture("owner-a"), contendedRelease), run(deliveryFixture("owner-b"))];
   const completed = await Promise.all(children.map(collect));
-  if (contendedRelease) expect(completed[0]!.errors).toBe(releaseWarning);
+  if (contendedRelease) expect([releaseWarning.trim(), admissionWarning.trim()]).toContain(completed[0]!.errors);
   const results = completed.map(({ record }) => record);
   const owner = results.find((record) => record.delivery?.active)!;
   const comparison = results.find((record) => record.delivery?.disposition === "comparison")!;
@@ -347,7 +351,7 @@ test("pipeline mutations refuse corrupt files and preserve individual rejected r
   try {
     for (const content of ["{", JSON.stringify({ schemaVersion: PIPELINES_SCHEMA_VERSION + 1, pipelines: [] })]) {
       fs.writeFileSync(file, content, "utf8");
-      await expect(withPipelineMutation((_pipelines, persist) => persist())).rejects.toThrow();
+      await expect(withPipelineMutation(async (_pipelines, persist) => await persist())).rejects.toThrow();
       expect(fs.readFileSync(file, "utf8")).toBe(content);
     }
     const stages: PipelineStage[] = [
@@ -358,7 +362,7 @@ test("pipeline mutations refuse corrupt files and preserve individual rejected r
       const filename = path.join(root, "pipelines.json");
       const bytes = JSON.stringify({ schemaVersion: PIPELINES_SCHEMA_VERSION, pipelines: [pipeline] });
       fs.writeFileSync(filename, bytes, "utf8");
-      await withPipelineMutation((records, persist) => { expect(records).toEqual([]); persist(); });
+      await withPipelineMutation(async (records, persist) => { expect(records).toEqual([]); await persist(); });
       expect(fs.readFileSync(filename, "utf8")).toBe(bytes);
       const db = new Database(path.join(root, "state.sqlite"));
       try { expect(db.query("SELECT COUNT(*) AS count FROM state_rows WHERE collection='pipelines'").get()).toEqual({ count: 1 }); }
@@ -989,7 +993,7 @@ test.each(["pipelines.json", "pipelines-archive.json"])("ordinary legacy %s read
 
 test("pending close custody retains publication ownership and stays out of the archive", async () => isolatedDelivery(async () => {
   const owner = await createPipelineWithDelivery(deliveryFixture("close-custody-owner"), deliveryTarget);
-  await withPipelineMutation((pipelines, persist) => {
+  await withPipelineMutation(async (pipelines, persist) => {
     const record = pipelines.find((item) => item.id === owner.id)!;
     record.state = "closed";
     record.cursor = null;
@@ -997,7 +1001,7 @@ test("pending close custody retains publication ownership and stays out of the a
     record.closeTeardown = { id: "close-obligation", phase: "pending", waitingForActivation: false, acknowledgeHosts: false, flow: null };
     record.closeReport = { status: "pending", pending: [], stopped: [], alreadyStopped: [], unconfirmed: [], acknowledged: [],
       reviewers: [], stillRunning: [], notes: [], worktree: null };
-    persist([record]);
+    await persist([record]);
   });
   expect(pipelineDeliveryLookup({ ...deliveryTarget, active: true })?.id).toBe(owner.id);
   expect(await archiveSettledPipelines(Date.parse("2026-08-01T00:00:00Z"))).toBe(0);
@@ -1006,11 +1010,11 @@ test("pending close custody retains publication ownership and stays out of the a
   borrowed.closeReport!.notes.push({ stageId: "build", attempt: 1, conversationId: null, agentPath: null, paneId: null, detail: "borrowed copy" });
   expect(loadPipelines()[0]!.closeTeardown!.waitingForActivation).toBeFalse();
   expect(loadPipelines()[0]!.closeReport!.notes).toEqual([]);
-  await withPipelineMutation((pipelines, persist) => {
+  await withPipelineMutation(async (pipelines, persist) => {
     const record = pipelines.find((item) => item.id === owner.id)!;
     record.closeTeardown!.phase = "settled";
     record.closeReport!.status = "settled";
-    persist([record]);
+    await persist([record]);
   });
   expect(pipelineDeliveryLookup({ ...deliveryTarget, active: true })).toBeNull();
   expect(await archiveSettledPipelines(Date.parse("2026-08-01T00:00:00Z"))).toBe(1);

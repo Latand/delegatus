@@ -1722,7 +1722,7 @@ test("a completed provision loses its fence when ownership changes before the ap
     current.delivery!.epoch += 1;
     current.delivery!.ownerId = "replacement-owner";
     current.delivery!.active = false;
-    persist();
+    await persist();
   });
   await holding;
   const tick = tickPipelines([], h.ports);
@@ -2494,7 +2494,7 @@ test("spawn reservations persist before actuation and concurrent creation waits 
   const spawnGate = new Promise<void>((resolve) => { releaseSpawn = resolve; });
   const reservation = new Promise<void>((resolve) => { reserved = resolve; });
   h.ports.spawnAgent = async (_input, onReserved) => {
-    onReserved({ launchId: "launch-durable", conversationId: "conversation_durable" });
+    await onReserved({ launchId: "launch-durable", conversationId: "conversation_durable" });
     reserved();
     await spawnGate;
     return { launchId: "launch-durable", conversationId: "conversation_durable", sessionId: "session-durable", transcript: "/codex/durable.jsonl", paneId: "%9" };

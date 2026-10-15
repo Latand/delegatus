@@ -848,10 +848,10 @@ export function productionAutoMergePorts(overrides: Partial<AutoMergePorts> & Pi
     now: Date.now,
     run,
     write: forgeWriter(run, forgeAppWriter(os.tmpdir(), GH_TIMEOUT_MS)),
-    mutate: (pipelineId, change) => withPipelineMutation((pipelines, persist) => {
+    mutate: (pipelineId, change) => withPipelineMutation(async (pipelines, persist) => {
       const pipeline = pipelines.find((candidate) => candidate.id === pipelineId);
       if (!pipeline || !change(pipeline)) return false;
-      persist();
+      await persist();
       return true;
     }),
     setting: mergeOnReviewSetting,

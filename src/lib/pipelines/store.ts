@@ -1,3 +1,4 @@
+import { waitForStateLock } from "@/lib/state/lockWait";
 import crypto from "node:crypto";
 import { performanceSpans } from "@/lib/performanceSpans";
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -1589,12 +1590,12 @@ export function pipelineLockWaitMs(): number {
  * releases are retried in the background. */
 export async function withPipelineMutation<T>(
   mutate: (pipelines: Pipeline[], persist: {
-    (): void;
-    (records: readonly Pipeline[]): void;
+    (): Promise<void>;
+    (records: readonly Pipeline[]): Promise<void>;
   }) => Promise<T> | T,
   observeHold?: (heldMs: number) => void,
 ): Promise<T> {
-  return withViewerOperation("pipelines.mutation", () => refuseBusyBeforeAdmission((admitted) => pipelineStore().mutate((pipelines, persist) => {
+  return withViewerOperation("pipelines.mutation", () => refuseBusyBeforeAdmission(async (admitted) => (await waitForStateLock("pipelines.open", pipelineStore, { waitMs: pipelineLockWaitMs() })).mutate((pipelines, persist) => {
     admitted();
     return mutate(pipelines, persist);
   }, undefined, false, pipelineLockWaitMs(), observeHold)));
@@ -1602,13 +1603,13 @@ export async function withPipelineMutation<T>(
 
 export async function withPipelineControllerMutation<T>(
   mutate: (pipelines: Pipeline[], persist: {
-    (): void;
-    (records: readonly Pipeline[]): void;
+    (): Promise<void>;
+    (records: readonly Pipeline[]): Promise<void>;
   }, assertCurrent: (pipeline: Pipeline) => void) => Promise<T> | T,
   observeHold?: (heldMs: number) => void,
   explicitOnly = false,
 ): Promise<T> {
-  return withViewerOperation("pipelines.controller-mutation", () => performanceSpans.wait(explicitOnly ? "controller.admission" : "controller.reconcile", () => pipelineStore().reconcileSnapshot(mutate, observeHold, explicitOnly)));
+  return withViewerOperation("pipelines.controller-mutation", () => performanceSpans.wait(explicitOnly ? "controller.admission" : "controller.reconcile", async () => (await waitForStateLock("pipelines.open", pipelineStore)).reconcileSnapshot(mutate, observeHold, explicitOnly)));
 }
 
 /** Short startup state admission under the existing cross-process lease.
@@ -1626,7 +1627,7 @@ export async function withPipelineStartupAdmission<T>(
     let entered = false;
     try {
       let evidence = await preparePipelineEvidence(compact ? "ownership" : "startup");
-      const store = pipelineStore();
+      const store = await waitForStateLock("pipelines.open", pipelineStore, { waitMs: pipelineLockWaitMs() });
       // A first migration changes authority. Reread its result before taking
       // the lease; a corrupt legacy source has already refused preparation.
       if (evidence.signature !== evidenceSignature()) evidence = await preparePipelineEvidence(compact ? "ownership" : "startup");
@@ -1683,7 +1684,7 @@ export function withDeliveryMutation<R>(operation: (tx: StateBoundedTransaction<
 }
 
 export async function withDeliveryMutationAsync<R>(operation: (tx: StateBoundedTransaction<Pipeline>) => R, limit = 16): Promise<R> {
-  return refuseBusyBeforeAdmission((admitted) => pipelineStore().boundedPatchAsync(limit, (tx) => {
+  return refuseBusyBeforeAdmission(async (admitted) => (await waitForStateLock("pipelines.open", pipelineStore, { waitMs: pipelineLockWaitMs() })).boundedPatchAsync(limit, (tx) => {
     admitted();
     return operation(tx);
   }, pipelineLockWaitMs()));

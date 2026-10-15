@@ -109,10 +109,10 @@ test.each(["refusal", "exception"] as const)("stale review flow cleanup keeps du
   expect(loadPipelines()[0]!.runs.find(run => run.stageId === "review")!.attempts.at(-1)!.flowId).toBeNull();
   expect(loadPipelines()[0]!.pendingReviewFlowCleanup).toContain(flowId);
 
-  await withPipelineMutation((lanes, persist) => {
+  await withPipelineMutation(async (lanes, persist) => {
     const current = lanes.find(lane => lane.id === pipeline.id)!;
     current.spec = "newer operator edit";
-    persist([current]);
+    await persist([current]);
   });
   await tickPipelines([], h.ports);
   await tickPipelines([], h.ports);
@@ -166,7 +166,7 @@ test("a rejected review flow attachment checkpoint keeps custody until the lane 
       await gate;
       const current = lanes.find(lane => lane.id === pipeline.id)!;
       current.spec = `${current.spec ?? current.task} concurrent edit`;
-      persist([current]);
+      await persist([current]);
     });
     await entered;
     return created;
@@ -702,11 +702,11 @@ test("close checkpoints a frozen host after its conversation path rebinds during
     stops++;
     expect(target.agentPath).toBe("/codex/stage-1.jsonl");
     const { withPipelineMutation } = await import("./store");
-    await withPipelineMutation((pipelines, persist) => {
+    await withPipelineMutation(async (pipelines, persist) => {
       const current = pipelines.find((item) => item.id === pipeline.id)!;
       current.runs[0]!.attempts[0]!.agentPath = "/codex/rebound-stage.jsonl";
       current.runs[0]!.attempts[0]!.paneId = "%new";
-      persist([current]);
+      await persist([current]);
     });
     return { outcome: "stopped" };
   };
@@ -808,10 +808,10 @@ for (const enabled of [false, true]) {
     let attemptBeforeNewStop: typeof newerAttempt;
     const sync = async () => {
       const { withPipelineMutation } = await import("./store");
-      await withPipelineMutation((pipelines, persist) => {
+      await withPipelineMutation(async (pipelines, persist) => {
         expect(reconcileEmbeddedReviewFlows(pipelines, [flow], h.ports.now())).toBe(true);
         if (flow.rounds.length === 2) newerAttempt = structuredClone(pipelines[0]!.runs[1]!.attempts[0]!);
-        persist();
+        await persist();
       });
     };
     await sync();

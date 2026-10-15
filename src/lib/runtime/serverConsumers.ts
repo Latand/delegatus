@@ -1,10 +1,11 @@
+import { waitForStateLock } from "@/lib/state/lockWait";
 import { agentRegistry } from "@/lib/agent/registry";
 import { isoNow, newRound } from "@/lib/flows/engine";
-import { loadFlows, saveFlows } from "@/lib/flows/store";
+import { withFlowMutation } from "@/lib/flows/store";
 import type { Flow } from "@/lib/flows/types";
-import { mutateTasks } from "@/lib/tasks/store";
+import { mutateTasksAsync as mutateTasks } from "@/lib/tasks/store";
 import { recordSpawnNoticeObligation } from "@/lib/spawnNotice/store";
-import { loadWorkflows, saveWorkflows } from "@/lib/workflows/store";
+import { withWorkflowMutation } from "@/lib/workflows/store";
 
 import type { RuntimeConsumerPorts, SpawnTurnEnded } from "./consumers";
 
@@ -54,30 +55,32 @@ export function recordSpawnTurnEnded(
 export function createServerRuntimeConsumers(): RuntimeConsumerPorts {
   return {
     flowReady(flowId, note) {
-      const flows = loadFlows();
-      const flow = flows.find((item) => item.id === flowId);
-      if (!flow) return undefined;
-      if (advanceFlowFromRuntime(flow, note)) saveFlows(flows);
-      return flow;
+      return withFlowMutation(async (flows, persist) => {
+        const flow = flows.find((item) => item.id === flowId);
+        if (!flow) return undefined;
+        if (advanceFlowFromRuntime(flow, note)) await persist();
+        return flow;
+      });
     },
     workflowStageCompleted(workflowId, stage) {
-      const workflows = loadWorkflows();
-      const workflow = workflows.find((item) => item.id === workflowId);
-      if (!workflow) return undefined;
-      if (workflow.stageIndex !== stage) return workflow;
-      const run = workflow.stageRuns[stage];
-      if (!run || run.doneAt) return workflow;
-      run.doneAt = isoNow();
-      const next = workflow.template.stages[stage + 1];
-      if (next) {
-        workflow.stageIndex = stage + 1;
-        workflow.state = next.kind === "review-loop" ? "reviewing" : "implementing";
-      } else {
-        workflow.state = "finishing";
-      }
-      workflow.stateDetail = null;
-      saveWorkflows(workflows);
-      return workflow;
+      return withWorkflowMutation(async (workflows, persist) => {
+        const workflow = workflows.find((item) => item.id === workflowId);
+        if (!workflow) return undefined;
+        if (workflow.stageIndex !== stage) return workflow;
+        const run = workflow.stageRuns[stage];
+        if (!run || run.doneAt) return workflow;
+        run.doneAt = isoNow();
+        const next = workflow.template.stages[stage + 1];
+        if (next) {
+          workflow.stageIndex = stage + 1;
+          workflow.state = next.kind === "review-loop" ? "reviewing" : "implementing";
+        } else {
+          workflow.state = "finishing";
+        }
+        workflow.stateDetail = null;
+        await persist();
+        return workflow;
+      });
     },
     taskDeliveryAcknowledged(taskId, assignmentId) {
       return mutateTasks((tasks) => {
@@ -92,8 +95,8 @@ export function createServerRuntimeConsumers(): RuntimeConsumerPorts {
         return { tasks, result: task };
       });
     },
-    spawnTurnEnded(turn) {
-      recordSpawnTurnEnded(turn);
+    async spawnTurnEnded(turn) {
+      await waitForStateLock("runtime.spawnTurnEnded", () => recordSpawnTurnEnded(turn));
     },
   };
 }

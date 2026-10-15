@@ -1,6 +1,9 @@
 # State database lock waits
 
-Audit on 2026-10-15. **Current main can block a calling event loop for over
+The audit below records the 05:09 UTC source baseline on 2026-10-15.
+The implementation and application measurements follow in [Implementation](#implementation).
+
+**That baseline can block a calling event loop for over
 30 seconds while waiting for `state.sqlite`.** A replay of the actual transaction
 helper made 6,000 failed acquisitions and 6,000 synchronous sleeps, taking
 30,600.6 ms and producing a 30,608.3 ms timer gap. The helper emitted no
@@ -704,4 +707,161 @@ contains only the declared untracked document, with no generated ignored files.
 No runtime-host rehearsal was required for this documentation audit; no runtime
 or dependency source changed. Historical exact SQLite wait
 counts, a causal stack for the 17.84-second production gap, production SQL hold
-durations and a full application after result remain explicitly unclaimed.
+durations remained unclaimed at the audit boundary. The implementation results
+below add the collection and application after measurements.
+
+
+## Implementation
+
+The implementation merges main through PR #2905 and preserves its evidence
+indexes, controller work selection, row-revision fencing and performance spans.
+The source audit above remains a dated record of the original baseline.
+
+`lockWait.ts` centralizes state admission. Viewer and runtime-host paths set
+SQLite's native busy timeout to zero and make one synchronous acquisition
+attempt. An asynchronous owner retries pre-admission failures with 1, 2, 4, 8,
+16, then 25 ms timer delays under a shared monotonic 30-second deadline.
+Nested connection and acquisition attempts share the active deadline. A
+synchronous caller receives `StateLockDeferredError` before its callback runs.
+Account-commit critical sections retain their immediate busy refusal.
+
+The SQL transaction begins before mutation preparation, contains no await, and
+commits once. Callback and commit failures roll back and cannot be retried as
+admission. Mutation-session baselines advance only after COMMIT. Async
+`persist()` callers await that boundary before launches, relays, acknowledgments
+or subsequent checkpoints. Controller snapshots retain immediate deferral behind
+an existing logical writer and recheck row revisions inside the admitted SQL
+transaction. Companion writes retain ordered leases and one transaction.
+
+The standalone MCP entry retains bounded synchronous retries for its existing
+sync callers. The entry path identifies that process; an inherited state-owner
+variable cannot enable synchronous retries in the Viewer. MCP emits an in-flight
+record from inside its retry loop and a terminal record. Worker integrity checks
+and backups retain their native timeouts off the main event loop; the scheduler's
+revision probe uses zero timeout and its existing file-signature fallback.
+
+### Attribution and source sites
+
+State waits log at 50 ms, including success, timeout, cancellation and errors.
+Immediate refusals also log. Each record retains the existing correlation or a
+static fallback, collection, outcome, process kind/PID, serving revision when
+available, attempts, maximum synchronous slice, backoff time and deliberate
+synchronous sleep. The active-wait view and fixed five-bucket counters bound
+retention. Logical leases report active age and completion above one second;
+SQL transaction holds report separately above 50 ms.
+
+| Site | Source boundary |
+| --- | --- |
+| `state.connection` | Connection and separate zero-timeout PRAGMAs in `sqliteStateStore.ts` |
+| `state.schema` | Schema readiness, fenced DDL and index installation |
+| `state.transaction.<collection>` | BEGIN before the synchronous callback; `migration` names seeding |
+| `state.lease` / `state.lease.sqlite` | Existing logical owner / SQLite contention during lease admission |
+| `state.lease.release` | One release attempt before existing abandoned-lease cleanup |
+| `state.marker`, `state.marker.board`, `state.marker.legacy` | Import-marker reads in the state, board and legacy-document stores |
+| `state.durability.revision` | Main-loop durability revision probe |
+
+### Before and after on the captured database
+
+Both sides used the immutable 156,934,144-byte read-only backup identified above,
+Bun 1.4.0, fresh writable copies, the same writer barriers and the three-CPU
+owned gate. The following values are maximum 5 ms timer intervals, in ms;
+triples retain all three runs. The after calls use the actual collection and
+transaction implementation. Constructor readiness now avoids the writer lock
+when every required schema object is already present.
+
+| Workload | Before, ms | After, ms |
+| --- | ---: | ---: |
+| Existing-schema first open during a 750 ms writer | 737.655 / 736.182 / 741.338 | 5.572 / 5.840 / 5.912 |
+| Bounded patch, 750 ms writer | 741.431 / 738.589 / 741.951 | 8.486 / 9.818 / 12.658 |
+| Async lease admission, 750 ms writer | 8.589 / 7.639 / 8.463 | 8.772 / 8.764 / 9.899 |
+| Persist after the logical lease, 750 ms writer | 740.493 / 738.558 / 739.336 | 7.130 / 7.210 / 9.804 |
+| Transaction BEGIN, 750 ms writer | 740.803 / 736.741 / 738.649 | 6.066 / 5.877 / 5.979 |
+| Bounded patch, 2 s writer | 1,989.773 | 8.494 |
+| Exhausted 30 s admission | 30,608.322 | 8.231 |
+| Four writers, 100 writes each | 350.765 / 347.746 / 1,276.511 | 57.066 / 10.418 / 29.063 |
+
+The exhausted candidate refused after 30,001.715 ms and made 1,196 attempts,
+with zero synchronous sleeps. The original exhausted 6,000 sleeps in
+30,600.642 ms. Every four-writer run retained 400 increments, 400 distinct trace
+entries in each writer's sequence, and zero remaining leases. Candidate
+completion times were 1,791.215 / 1,589.586 / 1,698.614 ms, versus
+2,457.398 / 2,788.190 / 3,699.673 ms before.
+
+The first candidate four-writer run had a 57.066 ms raw timer interval. It is
+retained as a miss of the timer target. A follow-up instrumented each SQLite
+statement and process CPU consumption, using the same data and quota. Its three
+maximum timer intervals were 28.851 / 14.355 / 13.328 ms; maximum SQL calls were
+19.655 / 4.107 / 6.288 ms, with 0.244 / 0.186 / 0.200 ms process CPU at those
+respective longest calls. All 1,200 writes were correct, with zero deliberate
+synchronous sleeps. These measurements distinguish elapsed scheduling/syscall
+time from application sleep; they cannot reconstruct the first outlier's cause.
+A later test run also recorded a 72.909 ms timer interval with a 1.856 ms maximum
+lock-attempt slice. The 50 ms contract concerns loop occupation by lock waiting;
+shared-host scheduling and unrelated synchronous work remain separately visible.
+
+### Regression controls and process verification
+
+The contention fixture blocks persistence after logical lease acquisition,
+checks the 50 ms bound over three 750 ms holds and a 2-second hold, and verifies
+that acknowledgment follows COMMIT. Additional cases exercise same-loop release,
+exclusive recovery contention, first-open migration, timeout, cancellation,
+rollback without callback replay, revisions/change logs and four independent
+writers. A separate controller case inserts the global writer after its logical
+lease. Flow snapshot coverage holds its lease across an async checkpoint.
+
+A scratch control replacing timer backoff with synchronous sleep failed the
+contention assertion in all four cases: 738.220 / 745.912 / 743.193 / 1,997.402 ms.
+The control changed no product file. Existing ownership, lease recovery,
+replacement, companion atomicity and release-fence tests remain in the path-only
+validation set. Test children use private state, HOME/config/temp directories
+and a closed Viewer control URL through the supplied owned gate.
+
+Four packaged MCP clients concurrently appended 80 ordered, distinct task lines;
+replays of their first requests added no duplicates. No call acknowledged while
+the initial SQLite writer held the lock. The emitted records identify the MCP
+process, source site, synchronous sleep and terminal outcome.
+
+The runtime-host rehearsal under Bun 1.4.0 completed succession in 509 ms, then
+answered 27/27 listener and 27/27 runtime socket probes over 15 seconds while
+13 callers on each endpoint abandoned their replies. Runtime-consumer contention
+also preserves a concurrent flow edit before acknowledging the resulting state.
+
+A production build of the Viewer also ran with four real packaged MCP clients
+against isolated state. Three 750 ms writer holds overlapped a real board PATCH,
+continuous board GETs and 40 task edits per run. All 120 task edits survived in
+each writer's order, and the board acknowledged only after its commit. Maximum
+Viewer timer intervals were 19.425 / 10.098 / 9.233 ms; the maximum HTTP response
+times were 19.038 / 11.359 / 4.880 ms over 97 / 103 / 105 reads. Reported lock
+attempt slices were 1.290 / 0.799 / 0.805 ms, with zero synchronous sleeps.
+Startup measurements are excluded from this contention window; the harness
+records them separately. After the final attribution change and merge from main,
+the same application run retained another 120 edits: timer maxima were
+23.395 / 16.226 / 15.344 ms and HTTP maxima were 24.037 / 24.212 / 12.642 ms
+over 65 / 79 / 88 reads. Its longest lock-attempt slice was 3.466 ms, with zero
+synchronous sleeps and the correct admission site at completion. The production
+Viewer runtime rehearsal and all 51 packaged MCP tests also passed.
+
+Additional exclusive-lock probes on fresh copies of the captured database
+returned bounded admission refusals for the board marker, legacy marker and
+connection, and used the existing durability-signature fallback. Their maximum
+timer intervals were 7.582, 5.448, 5.174 and 5.798 ms respectively. An ordinary
+WAL read during a writer held at 5.868 ms. All five made zero synchronous sleeps.
+
+The remaining sites were also replayed three times on each implementation.
+The seeding fixture transfers the writer immediately after schema COMMIT; its
+manual handoff barrier is excluded from the timer window on both sides. Each
+run inserted exactly one seed, and every candidate probe made zero synchronous
+sleeps. The exclusive-lock calls use the bounded refusal/fallback described above.
+
+| Workload | Before, ms | After, ms |
+| --- | ---: | ---: |
+| Board marker under exclusive lock, 750 ms | 739.730 / 736.928 / 738.400 | 8.960 / 9.203 / 8.441 |
+| Legacy marker under exclusive lock, 750 ms | 736.824 / 738.253 / 734.766 | 6.513 / 7.917 / 5.712 |
+| Connection under exclusive lock, 750 ms | 736.507 / 738.997 / 737.592 | 5.452 / 8.633 / 6.695 |
+| Native revision read under exclusive lock, 750 ms | 835.398 / 735.645 / 835.398 | 5.673 / 6.043 / 5.950 |
+| Ordinary WAL read during a writer, 750 ms | 5.794 / 5.675 / 5.423 | 6.145 / 7.847 / 6.105 |
+| Seeding race after schema commit, 750 ms | 785.574 / 757.387 / 755.494 | 10.910 / 19.342 / 10.063 |
+
+Production was not modified. The required calm 30-minute production window,
+including active leases at both boundaries and throughput/error counts, remains
+a release acceptance step after an authorized deployment.

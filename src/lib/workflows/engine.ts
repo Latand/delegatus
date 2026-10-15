@@ -28,7 +28,7 @@ import { instanceCpuAdmissionQueue } from "@/lib/runtime/cpuAdmissionScope";
 import { stateDir } from "@/lib/configDir";
 import { realExec, provisionWorktree, runFinish, setupStatus, startSetup, type ExecPort, type SetupStatus } from "./provision";
 import { fixerKickoff, prBody, stageKickoff } from "./prompts";
-import { buildWorkflow, loadTemplates, loadWorkflows, normalizeStages, saveWorkflows, setupExitPath, validateWorkflowLaunchModels } from "./store";
+import { buildWorkflow, loadTemplates, loadWorkflows, normalizeStages, saveWorkflowsAsync as saveWorkflows, setupExitPath, validateWorkflowLaunchModels } from "./store";
 import type {
   CreateWorkflowRequest,
   PatchWorkflowRequest,
@@ -291,7 +291,7 @@ async function ensureStageAgent(
   stagePrompt: string,
   entries: FileEntry[],
   ports: WorkflowPorts,
-  persistCheckpoint: () => void,
+  persistCheckpoint: () => void | Promise<void>,
 ): Promise<"spawning" | "waiting" | "ready"> {
   if (!run.startedAt) {
     if (wf.mode === "auto" && activeDrain()) {
@@ -334,7 +334,7 @@ async function ensureStageAgent(
     run.accountId = accountId;
     run.startedAt = ports.now();
     spawnsThisProcess.add(spawnKey(wf, run));
-    persistCheckpoint();
+    await persistCheckpoint();
     try {
       const spawned = await ports.spawnAgent(role, wf.worktreeDir, stagePrompt, run.accountId, stageSpawnTitle(wf, run));
       run.paneId = spawned.paneId;
@@ -386,7 +386,7 @@ function workflowGitFence(wf: Workflow, ports: WorkflowPorts) {
 }
 
 
-async function tickProvisioning(wf: Workflow, ports: WorkflowPorts, persistCheckpoint: () => void): Promise<void> {
+async function tickProvisioning(wf: Workflow, ports: WorkflowPorts, persistCheckpoint: () => void | Promise<void>): Promise<void> {
   if (!wf.baseRef) {
     const fence = workflowGitFence(wf, ports);
     let res: Awaited<ReturnType<typeof provisionWorktree>>;
@@ -398,7 +398,7 @@ async function tickProvisioning(wf: Workflow, ports: WorkflowPorts, persistCheck
     }
     wf.baseBranch = res.baseBranch;
     wf.baseRef = res.baseRef;
-    persistCheckpoint();
+    await persistCheckpoint();
   }
   if (wf.template.setup) {
     if (wf.setupPid == null && ports.setupStatus(wf).status !== "done") {
@@ -435,7 +435,7 @@ async function tickImplementing(
   entries: FileEntry[],
   entriesByPath: Map<string, FileEntry>,
   ports: WorkflowPorts,
-  persistCheckpoint: () => void,
+  persistCheckpoint: () => void | Promise<void>,
 ): Promise<void> {
   const run = currentRun(wf);
   const role = roleForStage(wf, wf.stageIndex);
@@ -469,7 +469,7 @@ async function tickReviewing(
   wf: Workflow,
   entries: FileEntry[],
   ports: WorkflowPorts,
-  persistCheckpoint: () => void,
+  persistCheckpoint: () => void | Promise<void>,
 ): Promise<void> {
   const run = currentRun(wf);
   const stage = reviewStageOf(wf);
@@ -517,7 +517,7 @@ async function tickReviewing(
       return;
     }
     wf.flowId = created.flow.id;
-    persistCheckpoint();
+    await persistCheckpoint();
     /* The stages already produced the work under review, so round 1 starts
        right away instead of waiting for a REVIEW_READY the fixer has no
        reason to print yet. */
@@ -556,7 +556,7 @@ async function tickFinishing(wf: Workflow, ports: WorkflowPorts): Promise<void> 
         const paused = current.find((item) => item.id === wf.id);
         if (paused && (paused.state === "paused" || paused.state === "closed")) {
           paused.stateDetail = res.error;
-          saveWorkflows(current);
+          await saveWorkflows(current);
         }
       }
       return;
@@ -578,7 +578,7 @@ async function tickWorkflow(
   entries: FileEntry[],
   entriesByPath: Map<string, FileEntry>,
   ports: WorkflowPorts,
-  persistCheckpoint: () => void,
+  persistCheckpoint: () => void | Promise<void>,
 ): Promise<boolean> {
   const before = JSON.stringify(wf);
   if (wf.state === "provisioning") await tickProvisioning(wf, ports, persistCheckpoint);
@@ -620,7 +620,7 @@ export async function tickWorkflows(entries: FileEntry[], ports: WorkflowPorts =
       const work = (async () => {
         if (await tickWorkflow(wf, entries, entriesByPath, ports, () => saveWorkflows(current))) {
           admissionChanged = true;
-          saveWorkflows(current);
+          await saveWorkflows(current);
         }
       })().catch(error => { console.error("[workflows] CPU-admitted start failed", error); })
         .finally(() => { running.delete(wf.id); starts.delete(wf.id); });
@@ -656,10 +656,10 @@ export async function tickWorkflows(entries: FileEntry[], ports: WorkflowPorts =
       try {
         if (await tickWorkflow(wf, entries, entriesByPath, ports, () => saveWorkflows(workflows))) changed = true;
       } finally { running.delete(wf.id); }
-      if (changed) saveWorkflows(workflows);
+      if (changed) await saveWorkflows(workflows);
     }
     await stopAdmissionPolling();
-    if (changed) saveWorkflows(workflows);
+    if (changed) await saveWorkflows(workflows);
     return { workflows: loadWorkflows(), changed: changed || admissionChanged };
   } finally {
     await stopAdmissionPolling();
@@ -779,7 +779,7 @@ export async function patchWorkflow(
     wf.closedAt = ports.now();
   }
 
-  saveWorkflows(workflows);
+  await saveWorkflows(workflows);
   ports.cpuAdmissionReconcile?.();
   return { workflow: wf };
 }
@@ -832,7 +832,7 @@ export async function createWorkflowFromRequest(
   }
   const workflows = loadWorkflows();
   workflows.push(wf);
-  saveWorkflows(workflows);
+  await saveWorkflows(workflows);
   return { workflow: wf };
 }
 

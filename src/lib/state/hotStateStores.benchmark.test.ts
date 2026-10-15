@@ -98,10 +98,10 @@ async function sqliteCycle(pipelineCount: number, flowCount: number): Promise<nu
     savePipelines(pipelines(pipelineCount));
     saveFlows(flows(flowCount));
     return await measure(async (iteration) => {
-      await withPipelineControllerMutation((records, persist) => {
+      await withPipelineControllerMutation(async (records, persist) => {
         for (const record of records) {
           record.stateDetail = `iteration ${iteration}`;
-          persist([record]);
+          await persist([record]);
         }
       });
       const activeFlows = loadFlowsForTick();
@@ -150,9 +150,9 @@ async function scannerCycleUnderPipelineChurn(): Promise<number> {
     saveFlows(flows(200));
     const projectKey = projectResolutionStateKey();
     return await measure(async (iteration) => {
-      await withPipelineControllerMutation((records, persist) => {
+      await withPipelineControllerMutation(async (records, persist) => {
         records[0]!.stateDetail = `scanner iteration ${iteration}`;
-        persist([records[0]!]);
+        await persist([records[0]!]);
       });
       expect(projectResolutionStateKey()).toBe(projectKey);
     });
@@ -170,9 +170,9 @@ async function projectFactCorpusRequest(): Promise<{ milliseconds: number; reado
   try {
     savePipelines(pipelines(500));
     saveFlows(flows(200));
-    await withPipelineControllerMutation((records, persist) => {
+    await withPipelineControllerMutation(async (records, persist) => {
       records[0]!.stateDetail = "unrelated pipeline heartbeat";
-      persist([records[0]!]);
+      await persist([records[0]!]);
     });
     resetStateReadonlyConnectionCountForTests();
     const startedAt = performance.now();

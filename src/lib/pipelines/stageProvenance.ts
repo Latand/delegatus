@@ -128,7 +128,7 @@ export async function settlePendingStageProvenance(ports: Pick<import("./engine"
     finally { clearInterval(watch); }
     revalidate();
     if (abort.signal.aborted) provenance = { ...report.provenance, state: "unknown", pullRequestState: "unknown" };
-    await withPipelineMutation((pipelines, persist) => {
+    await withPipelineMutation(async (pipelines, persist) => {
       const current = pipelines.find((item) => item.id === pipeline.id);
       const candidate = current?.runs.find((item) => item.stageId === run.stageId)?.attempts.find((item) => item.n === attempt.n);
       if (!current || candidate?.conversationId !== attempt.conversationId || candidate.report?.seq !== report.seq) return;
@@ -137,7 +137,7 @@ export async function settlePendingStageProvenance(ports: Pick<import("./engine"
       candidate.report = { ...candidate.report, provenance };
       current.stageReports = current.stageReports?.map((entry) => entry.seq === report.seq
         ? { ...entry, provenanceState: provenance.state, provenanceAt: ports.now() } : entry);
-      persist();
+      await persist();
       const repository = provenance.pullRequest ? pipelineRepository(current) : null;
       if (repository && provenance.pullRequest) {
         try { observeForgePullRequest(repository, provenance.pullRequest, provenance.branch, ports.now()); }
