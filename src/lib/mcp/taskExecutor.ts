@@ -11,7 +11,8 @@ export const TASK_EXECUTOR_TOOLS = new Set(["list_tasks", "get_task", "create_ta
 const MAX_PENDING = 64;
 const MAX_INPUT_BYTES = 4 * 1024 * 1024;
 export const TASK_EXECUTOR_FRAME_BYTES = 32 * 1024 * 1024;
-type Pending = { bytes: number; finish: (error?: Error, result?: McpToolResult) => void; dispose: () => void };
+type ExecutorResult = McpToolResult | { conversationId: string | null };
+type Pending = { bytes: number; finish: (error?: Error, result?: ExecutorResult) => void; dispose: () => void };
 export type TaskExecutorRequest = { id: number; name: string; args: McpToolArgs; caller: McpHttpCaller; deadlineAt: number; nativeWork?: McpToolCallContext["nativeWork"] };
 
 export function taskExecutorLaunch(cwd = process.cwd()) {
@@ -37,10 +38,20 @@ export class McpTaskExecutor {
 
   constructor(private runtime: { launch?: ReturnType<typeof taskExecutorLaunch>; env?: Partial<NodeJS.ProcessEnv>; idleMs?: number } = {}) {}
 
-  callTool(name: string, args: McpToolArgs, context: McpToolCallContext = {}): Promise<McpToolResult> {
+  async identifyCapability(capability: string, context: McpToolCallContext = {}): Promise<string | null> {
+    const result = await this.request("identifyCapability", {}, { capability }, context);
+    if (!("conversationId" in result)) throw new Error("invalid task executor identity reply");
+    return result.conversationId;
+  }
+
+  async callTool(name: string, args: McpToolArgs, context: McpToolCallContext = {}): Promise<McpToolResult> {
+    const caller = currentMcpHttpCaller();
+    if (!caller || !TASK_EXECUTOR_TOOLS.has(name)) throw new Error("task executor requires an authenticated Viewer call");
+    return await this.request(name, args, caller, context) as McpToolResult;
+  }
+
+  private request(name: string, args: McpToolArgs, caller: McpHttpCaller, context: McpToolCallContext): Promise<ExecutorResult> {
     return withViewerOperation("mcp.tasks.executor", async () => {
-      const caller = currentMcpHttpCaller();
-      if (!caller || !TASK_EXECUTOR_TOOLS.has(name)) throw new Error("task executor requires an authenticated Viewer call");
       const deadlineAt = Math.min(context.deadlineAt ?? Infinity, Date.now() + 30_000);
       if (context.signal?.aborted || deadlineAt <= Date.now()) throw new Error("task executor call ended before dispatch");
       const id = ++this.nextId;
@@ -48,7 +59,7 @@ export class McpTaskExecutor {
       const bytes = Buffer.byteLength(frame);
       if (this.pending.size >= MAX_PENDING || this.inputBytes + bytes > MAX_INPUT_BYTES) throw new Error("task executor admission is full; retry the original request key");
       // Reserve before waiting for an old guardian to close.
-      return await new Promise<McpToolResult>((resolve, reject) => {
+      return await new Promise<ExecutorResult>((resolve, reject) => {
         let settled = false;
         let dispatched: ChildProcess | undefined;
         let cancellationTimer: ReturnType<typeof setTimeout> | undefined;
@@ -101,7 +112,7 @@ export class McpTaskExecutor {
         const line = buffer.slice(0, end); buffer = buffer.slice(end + 1);
         try {
           if (Buffer.byteLength(line) + 1 > TASK_EXECUTOR_FRAME_BYTES) throw new Error("task executor frame exceeds its bound");
-          const reply = JSON.parse(line) as { id: number; result?: McpToolResult; error?: string };
+          const reply = JSON.parse(line) as { id: number; result?: ExecutorResult; error?: string };
           const job = this.pending.get(reply.id);
           if (!job || (!reply.result && !reply.error)) throw new Error("invalid task executor reply");
           job.finish(reply.error ? new Error(reply.error) : undefined, reply.result); job.dispose();

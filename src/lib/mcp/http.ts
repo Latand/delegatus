@@ -73,12 +73,8 @@ function productionService(): Promise<McpToolService> {
 }
 
 async function productionConversationForCapability(capability: string): Promise<string | null> {
-  const { capabilityConversationResolver } = await import("./bindings");
-  const { agentRegistry } = await import("@/lib/agent/registry");
-  return capabilityConversationResolver(
-    capability,
-    (digest) => agentRegistry().conversationIdForSpawnCapabilityDigest(digest),
-  )();
+  const { viewerTaskExecutor } = await import("./taskExecutor");
+  return viewerTaskExecutor().identifyCapability(capability);
 }
 
 const INFLIGHT_KEY = Symbol.for("llv.mcp.httpInflight");

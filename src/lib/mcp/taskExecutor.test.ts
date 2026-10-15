@@ -36,6 +36,20 @@ afterAll(async () => {
   fs.rmSync(root, { recursive: true, force: true });
 });
 
+test("capability lookup observes external rotation without retaining an authorization cache", async () => {
+  const executor = create();
+  const token = capabilities[2]!;
+  const conversationId = await executor.identifyCapability(token);
+  expect(typeof conversationId).toBe("string");
+  expect(await executor.identifyCapability("unknown")).toBeNull();
+  const { agentRegistry } = await import("@/lib/agent/registry");
+  const registry = agentRegistry();
+  const receipt = Object.values(registry.readOnlySnapshot().receipts).find(row => row.conversationId === conversationId)!;
+  const successor = registry.rotateSpawnCapabilityForReceipt(receipt.launchId);
+  expect(await executor.identifyCapability(token)).toBeNull();
+  expect(await executor.identifyCapability(successor)).toBe(conversationId);
+});
+
 test("isolated task service preserves receipts, identity, revisions and same-key replay across executors", async () => {
   const first = create();
   const created = await call(first, "create_task", { project: "fixture", text: "Executor task", board: "hidden", clientRequestId: "executor-create" });

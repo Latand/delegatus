@@ -8,6 +8,7 @@ import type { Database as BunDatabase } from "bun:sqlite";
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { AjvJsonSchemaValidator } from "@modelcontextprotocol/sdk/validation/ajv";
 import { z } from "zod";
 import { prototypePublishSchema } from "@/lib/prototypeReview/input";
 
@@ -4585,8 +4586,15 @@ const TOOL_TRANSPORT_SCHEMAS = Object.fromEntries(MCP_TOOL_NAMES.map(toolName =>
 })) as typeof TOOL_INPUT_SCHEMAS;
 
 export function createViewerMcpServer(service: McpToolService, tools: readonly McpToolName[] = MCP_TOOL_NAMES): McpServer {
+  // The SDK uses JSON Schema validation for outgoing elicitation, while tool
+  // inputs use Zod. Stateless tool calls need no AJV instance or meta-schemas.
+  // Keep the SDK's validator and its lifetime local to this server when used.
+  let elicitationValidator: AjvJsonSchemaValidator | undefined;
   const server = new McpServer({ name: MCP_SERVER_NAME, version: "1.0.0" }, {
     instructions: viewerMcpInstructions(),
+    jsonSchemaValidator: { getValidator(schema) {
+      return (elicitationValidator ??= new AjvJsonSchemaValidator()).getValidator(schema);
+    } },
   });
   for (const toolName of tools) {
     const taskMutation = toolName === "create_task" || toolName === "update_task";

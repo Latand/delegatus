@@ -7,6 +7,7 @@ import path from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { ElicitRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { NextRequest } from "next/server";
 
 /**
@@ -39,6 +40,25 @@ const { agentRegistry, setAgentRegistryForTests } = await import("@/lib/agent/re
 const route = await import("@/app/api/mcp/route");
 const { createMcpToolService, createViewerMcpServer, MemoryMcpReceiptStore, SqliteMcpReceiptStore, withMcpDispatchTurns } = await import("./server");
 const { productionViewerControlDependencies, sendDownstreamKey, viewerMcpBindings, viewerMcpRecoverableTools, viewerMcpToolPolicy } = await import("./bindings");
+
+test("a tool server still validates elicited content when its JSON Schema validator starts lazily", async () => {
+  const server = createViewerMcpServer({ async callTool() { throw new Error("no tool expected"); } });
+  const client = new Client({ name: "elicitation-fixture", version: "1" }, { capabilities: { elicitation: { form: {} } } });
+  let content: Record<string, string | number> = { value: "accepted" };
+  client.setRequestHandler(ElicitRequestSchema, async () => ({ action: "accept", content }));
+  const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
+  await Promise.all([server.connect(serverSide), client.connect(clientSide)]);
+  const params = { message: "Fixture value", requestedSchema: {
+    type: "object" as const, properties: { value: { type: "string" as const } }, required: ["value"],
+  } };
+  try {
+    expect(await server.server.elicitInput(params)).toMatchObject({ action: "accept", content: { value: "accepted" } });
+    content = { value: 42 };
+    await expect(server.server.elicitInput(params)).rejects.toThrow("does not match requested schema");
+    content = { value: "accepted again" };
+    expect(await server.server.elicitInput(params)).toMatchObject({ action: "accept", content });
+  } finally { await Promise.all([client.close(), server.close()]); }
+});
 
 test("MCP dispatch yields to timers, preserves each caller and keeps awaited operations concurrent", async () => {
   const { runAsMcpHttpCaller, currentMcpHttpCaller } = await import("./callerContext");

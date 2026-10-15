@@ -612,6 +612,12 @@ native-work metadata, deadline and cancellation. Other tools retain their
 existing service. The executor uses the `mcp` owner token with an explicit state
 directory and performs no independent startup migration.
 
+HTTP capability lookup also runs in that executor, reading the current registry
+for each request. External rotation and staged handover stay visible without an
+authorization cache. The full tool policy still rechecks caller authority before
+receipt replay and mutation. Protocol servers construct the SDK's AJV validator
+only when elicitation needs it; ordinary tool calls retain their Zod validation.
+
 The shared executor admits 64 calls and 4 MiB of pending input. Replies have a
 32 MiB frame bound and obey pipe backpressure. A cancelled reply retains its
 slot until settlement; an executor that has not settled cancellation after one
