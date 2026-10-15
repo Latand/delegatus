@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { initializeStateCollections, SqliteStateCollection } from "./sqliteStateStore";
+import { DatabaseReplacedError } from "./currentDatabase";
 
 type Row = { id: string; nested: { text: string } };
 const row = (id: string, text = id): Row => ({ id, nested: { text } });
@@ -117,6 +118,54 @@ test("a cold asynchronous read refuses an authority change during decoding", () 
   const decode = (value: unknown) => { authority = "two"; return value as Row; };
   const store = new SqliteStateCollection(filename, options(decode, () => authority));
   await expect(store.snapshotAsync()).rejects.toThrow("snapshot changed");
+}));
+
+test.each([false, true])("a refused database swap fill cannot poison a fresh reader (incremental: %s)", incremental => fixture(filename => {
+  let swap: (() => void) | undefined;
+  const decode = (value: unknown) => { const replace = swap; swap = undefined; replace?.(); return value as Row; };
+  const store = new SqliteStateCollection(filename, options(decode));
+  if (incremental) {
+    store.snapshot();
+    store.boundedPatch(1, tx => tx.put(row("a", "updated A")));
+  }
+  const replacement = `${filename}.replacement`;
+  initializeStateCollections(replacement, [{ collection: "fixture", schemaVersion: 1,
+    migrationId: "fixture", key: (r: Row) => r.id, loadRecords: () => [row("fresh B")] }]);
+  const db = new Database(replacement);
+  db.query("UPDATE state_collections SET revision = ? WHERE collection = 'fixture'").run(store.revision());
+  db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+  db.close();
+  swap = () => {
+    fs.renameSync(filename, `${filename}.old`);
+    for (const suffix of ["-wal", "-shm"]) {
+      if (fs.existsSync(filename + suffix)) fs.renameSync(filename + suffix, filename + ".old" + suffix);
+    }
+    fs.renameSync(replacement, filename);
+  };
+  expect(() => store.snapshot()).toThrow(DatabaseReplacedError);
+  const fresh = new SqliteStateCollection(filename, options(decode));
+  expect(fresh.snapshot()).toEqual([row("fresh B")]);
+  expect(store.snapshot()).toEqual([row("fresh B")]);
+}));
+
+test.each([false, true])("a refused authority transition fill cannot poison a fresh reader (incremental: %s)", incremental => fixture(filename => {
+  let authority = "one", transition = false;
+  const decode = (value: unknown): Row => {
+    const projection = authority;
+    if (transition) { authority = "two"; transition = false; }
+    return row((value as Row).id, projection);
+  };
+  const opts = options(decode, () => authority);
+  const store = new SqliteStateCollection(filename, opts);
+  if (incremental) {
+    store.snapshot();
+    store.boundedPatch(1, tx => tx.put(row("c")));
+  }
+  transition = true;
+  expect(() => store.snapshot()).toThrow("snapshot changed");
+  const expected = [row("a", "two"), row("b", "two"), ...(incremental ? [row("c", "two")] : [])];
+  expect(new SqliteStateCollection(filename, opts).snapshot()).toEqual(expected);
+  expect(store.snapshot()).toEqual(expected);
 }));
 
 test("the active, archive and task working set fits together without repeated decoding", () => fixture(filename => {

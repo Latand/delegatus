@@ -10,6 +10,12 @@ also include the supported role vocabulary. SQLite connections, validation
 functions, leases and mutable controller sessions stay local to their owning
 module.
 
+Cache fills capture their database identity and decode authority before decoding.
+Synchronous fills publish only after the read transaction commits and the captured
+context still matches; refused fills publish nothing. Mutable snapshots and
+mutation sessions detach every nested field from the shared decoded rows. Readonly
+list readers continue sharing those rows.
+
 Each VM keeps at most eight shared cache slots with a combined 256 MiB budget
 measured as UTF-16 source JSON bytes. Expanded object graphs can use more heap.
 Worker VMs maintain separate budgets. The frozen active, archive and task rows
@@ -108,6 +114,13 @@ the installed gate. The new shared-reader regression fails on the merged baselin
 two readers decode four rows. The candidate decodes two. Repository type checking,
 changed-file lint and both production builds pass. The local privacy gate passes
 with the committed fingerprints and required known-value checks.
+
+The 2026-10-15 correctness follow-up adds cold and incremental regressions for
+database replacement and authority transitions during decoding, plus two compiled
+stores with identical vocabulary. Nested snapshot edits and abandoned or aborted
+mutation sessions must leave peer readers and SQLite unchanged. The measurements
+above describe the candidate before this follow-up; no new performance sample is
+claimed for these correctness repairs.
 
 ## Parallel work and limits
 
