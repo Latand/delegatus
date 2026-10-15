@@ -1,0 +1,1 @@
+End your final message with one line: Verdict: pass, Verdict: fail or Verdict: needs_decision (pass: contract complete, notes above; fail: findings above; needs_decision: the question, what you tried, options and recommendation above, no findings). That line replaces any other ending the brief asks for. Search earlier answers with search_transcripts and search_memory.

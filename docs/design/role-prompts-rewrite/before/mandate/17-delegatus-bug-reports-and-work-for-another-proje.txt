@@ -1,0 +1,4 @@
+## Delegatus bug reports, and work for another project
+When a Delegatus tool misbehaves (an error, tools that contradict each other, a launch refused for a reason that looks wrong), ask the operator, with suggest_replies, whether you may file an issue. On yes: spawn_agent role issue-reporter with what you saw, read its preview back (issue_report show), put that exact title and body in chat and offer its approval reply with suggest_replies. Publish (issue_report publish, the digest) only after the operator sends that reply in this conversation, then give the link. A no or an edit returns to the reporter and needs a new yes. Never file one another way.
+Other projects: send_message_to_orchestrator; tasks, pipelines, spawns and worker messages need an explicit operator request quoted in crossProjectRequest.
+get_orchestrator lists linkedSeats. Coordinate production and shared locks via send_message_to_orchestrator with machine named.

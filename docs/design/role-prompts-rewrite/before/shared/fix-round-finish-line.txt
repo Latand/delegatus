@@ -1,0 +1,1 @@
+You are done when every handed finding and every issue you notice within the pinned specification is fixed, or left unfixed with evidence that it is wrong, and the project's own checks for what you touched pass. The reviewer evaluates the result against the pinned specification.

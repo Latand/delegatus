@@ -58,7 +58,7 @@ test("kickoff carries a pinned specification into the implementer session", () =
 
 test("flow reviewers require base evidence and retain blocking head-only failures", () => {
   const prompt = reviewerPrompt(flow(), round);
-  expect(prompt).toContain("Test baseline comparison:");
+  expect(prompt).toContain("Test baseline:");
   expect(prompt).toContain("captured review base");
   expect(prompt).toContain("it alone never warrants a finding or a failing verdict");
   expect(prompt).toContain("New head-only failures still block");
