@@ -102,7 +102,7 @@ test("confirmed parts publish immediately with Telegram ids; pending or failed p
   } finally { release(); await service.remove(); fs.rmSync(root, { recursive: true, force: true }); }
 });
 
-test.each(["text", "photo", "album", "document"] as const)("%s metadata lookup refusal keeps the original send key retryable", async kind => {
+test.each(["text", "photo", "album", "document", "rich"] as const)("%s metadata lookup refusal keeps the original send key retryable", async kind => {
   const root = fs.mkdtempSync(path.join(process.env.TMPDIR!, "telegram-metadata-"));
   const home = path.join(root, "home");
   const handoff = path.join(home, "handoff");
@@ -136,10 +136,12 @@ test.each(["text", "photo", "album", "document"] as const)("%s metadata lookup r
     publishMessage: () => "skipped",
   });
   let service = createService();
-  const method = kind === "text" ? "sendMessage" : kind === "photo" ? "sendPhoto" : kind === "album" ? "sendMediaGroup" : "sendDocument";
+  const method = kind === "rich" ? "sendRichMessage" : kind === "text" ? "sendMessage" : kind === "photo" ? "sendPhoto" : kind === "album" ? "sendMediaGroup" : "sendDocument";
   const send = (clientRequestId = "original") => {
     const input = { conversationId: "conversation_fixture", clientRequestId, chat: "fixture" };
     return kind === "text" ? service.send({ ...input, text: "Which sample?\n1) Small\n2) Large" })
+      : kind === "rich" ? service.sendRichMessage({ clientRequestId, chat: "fixture",
+        message: { markdown: "Which sample?\n1) Small\n2) Large", images: [] } })
       : kind === "document" ? service.sendDocument({ ...input, document: { path: document, caption: "Report" } })
       : service.sendMedia({ ...input, images: Array.from({ length: kind === "album" ? 2 : 1 }, () => ({ path: image, caption: "Sample" })) });
   };
@@ -154,9 +156,14 @@ test.each(["text", "photo", "album", "document"] as const)("%s metadata lookup r
     const receipt = { message_id: 18, date: 1791724800 };
     transport.script(method, ok(kind === "album" ? [receipt, { ...receipt, message_id: 19 }] : receipt));
     expect(await send()).toMatchObject({ alreadySent: false, messageIds: kind === "album" ? [18, 19] : [18] });
+    await service.stopPublications(); store.close();
+    store = new TelegramBotStore(filename); service = createService();
     available = false;
-    expect(await send()).toMatchObject({ alreadySent: true });
+    expect(await send()).toMatchObject({ alreadySent: true, messageIds: kind === "album" ? [18, 19] : [18] });
     expect(transport.callsOf(method)).toHaveLength(1);
+    store.setChatSettings("41", { alias: "fixture", postAllowed: false });
+    await expect(send()).rejects.toMatchObject({ code: "chat_not_allowed" });
+    store.setChatSettings("41", { alias: "fixture", postAllowed: true });
     available = true;
     for (const failure of ["network_failed", "timed_out"] as const) {
       transport.script(method, unreachable(failure));

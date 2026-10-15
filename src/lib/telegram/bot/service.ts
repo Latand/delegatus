@@ -1039,11 +1039,17 @@ export class TelegramBotService {
     };
     authorize();
     store.recordLookedUpChat(found.result, null, this.deps.now());
-    const pollPublication = this.publicationMetadata(botId, "poll", `review:${input.clientRequestId}`);
     const result = await this.sendRich({ ...input, chat: selected.chatId }, { authorize, chat: store.chat(selected.chatId)! });
-    if (input.message.review && result.messageIds[0]) this.reviewPolls.enqueue({ review: input.message.review,
-      key: input.clientRequestId, chatId: result.chatId, messageId: result.messageIds[0], transport, authorize,
-      publish: (message, text) => this.publishConfirmed(botId, message, result.chatId, null, text, { ...pollPublication, replyToMessageId: result.messageIds[0]! }) });
+    if (input.message.review && result.messageIds[0]) {
+      // Optional polls cannot prevent reconciliation of the form's receipt.
+      // Resolve their custody before enqueueing any new Telegram work.
+      try {
+        const pollPublication = this.publicationMetadata(botId, "poll", `review:${input.clientRequestId}`);
+        this.reviewPolls.enqueue({ review: input.message.review,
+          key: input.clientRequestId, chatId: result.chatId, messageId: result.messageIds[0], transport, authorize,
+          publish: (message, text) => this.publishConfirmed(botId, message, result.chatId, null, text, { ...pollPublication, replyToMessageId: result.messageIds[0]! }) });
+      } catch { console.warn("Telegram review polls unavailable", "publication_unavailable"); }
+    }
     return result;
   }
 
@@ -1074,7 +1080,6 @@ export class TelegramBotService {
     const transport = this.transport();
     if (!transport) throw new TelegramBotError("bot_not_connected", "no Telegram bot is connected");
     const botId = this.storedBotId();
-    const publication = this.publicationMetadata(botId, "review", `review:${input.clientRequestId}`);
     const callerKey = "prototype-review";
     const key = input.clientRequestId.trim();
     const attributedTo: TelegramBotAttribution = { unidentified: true };
@@ -1083,6 +1088,13 @@ export class TelegramBotService {
       if (claim.row.state !== "sent") throw new TelegramBotError("send_uncertain", "an earlier rich send may already be posted");
       return { chat: store.chat(claim.row.chatId)?.alias ?? claim.row.chatId, chatId: claim.row.chatId,
         messageIds: claim.row.messageIds, sentAt: claim.row.sentAt!, attributedTo, parts: claim.row.parts, alreadySent: true };
+    }
+    let publication: ReturnType<TelegramBotService["publicationMetadata"]>;
+    try {
+      publication = this.publicationMetadata(botId, "review", `review:${input.clientRequestId}`);
+    } catch (error) {
+      await releaseUnsentClaim(store.filename, callerKey, key);
+      throw error;
     }
     const topicId = Number.isSafeInteger(input.topicId) && input.topicId! > 0 ? input.topicId! : null;
     let chatId = chat.chatId;
