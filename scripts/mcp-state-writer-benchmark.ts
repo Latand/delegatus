@@ -95,17 +95,21 @@ export async function stateWriterChild(mode: string): Promise<void> {
     viewerLoopMonitor.start();
     const delay = monitorEventLoopDelay({ resolution: 10 }); delay.enable();
     let phase = "cold";
+    let measuredStart = Infinity, measuredEnd = Infinity, measuredHttpCalls = 0;
     const boundaries: ReturnType<typeof setTimeout>[] = [];
     const sample = () => fs.appendFileSync(process.env.MCP_BENCH_RESOURCES!, `${JSON.stringify({ at: Date.now(), phase, cpu: process.cpuUsage(), rss: process.memoryUsage().rss,
-      loopP50: delay.percentile(50) / 1e6, loopP95: delay.percentile(95) / 1e6, loopP99: delay.percentile(99) / 1e6, loopMax: delay.max / 1e6 })}\n`);
+      loopP50: delay.percentile(50) / 1e6, loopP95: delay.percentile(95) / 1e6, loopP99: delay.percentile(99) / 1e6, loopMax: delay.max / 1e6, measuredHttpCalls })}\n`);
     const server = Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 60, fetch: async request => {
       if (new URL(request.url).pathname === "/fixture-boundaries") {
         const input = await request.json() as { warmEnd: number; measuredEnd: number };
+        measuredStart = input.warmEnd; measuredEnd = input.measuredEnd;
         phase = "warm"; delay.reset();
         boundaries.push(setTimeout(() => { sample(); phase = "measured"; delay.reset(); sample(); }, Math.max(0, input.warmEnd - Date.now())));
         boundaries.push(setTimeout(() => { sample(); phase = "drain"; delay.reset(); }, Math.max(0, input.measuredEnd - Date.now())));
         return Response.json({ ok: true });
       }
+      const at = Date.now();
+      if (at >= measuredStart && at < measuredEnd) measuredHttpCalls++;
       return handleMcpHttpRequest(new NextRequest(request));
     } });
     process.env.LLV_VIEWER_CONTROL_URL = server.url.origin;
@@ -282,7 +286,8 @@ export async function runStateWriterSample(): Promise<void> {
     const mutations = calls.filter(row => row.name !== "list_tasks");
     const uncertain = mutations.filter(row => {
       const result = row.result as { ok?: boolean; code?: string } | undefined;
-      if (!result || ["outcome_unknown", "request_in_progress", "tool_failed"].includes(result.code ?? "")) return true;
+      if (!result || ["outcome_unknown", "request_in_progress", "tool_failed", "call_interrupted"].includes(result.code ?? "")
+        || result.code?.startsWith("http-")) return true;
       row.reconciled = row.result; return false;
     });
     let recoveryIndex = 0;
@@ -329,7 +334,8 @@ export async function runStateWriterSample(): Promise<void> {
         queried: recoveryAttempts, settled: calls.filter(row => row.reconciled !== undefined).length,
         successful: calls.filter(row => (row.reconciled as { ok?: boolean } | undefined)?.ok === true).length,
         unknown: calls.filter(row => row.name !== "list_tasks" && (!row.reconciled || (row.reconciled as { code?: string; transportError?: string }).transportError
-          || ["outcome_unknown", "request_in_progress"].includes((row.reconciled as { code?: string }).code ?? ""))).length },
+          || ["outcome_unknown", "request_in_progress", "tool_failed", "call_interrupted"].includes((row.reconciled as { code?: string }).code ?? "")
+          || (row.reconciled as { code?: string }).code?.startsWith("http-"))).length },
       latency: { p50: percentile(.5), p95: percentile(.95), p99: percentile(.99), max: latencies.at(-1) },
       seedChecksum: process.env.MCP_BENCH_SEED_CHECKSUM, failures: [...new Set(measured.filter(row => !row.ok).map(row => row.code))] };
     fs.writeFileSync(path.join(root, "summary.json"), JSON.stringify(summary, null, 2));

@@ -30,6 +30,7 @@ export async function stateWriterReport(root: string) {
   const phase = (at: number) => at < bounds.coldEnd ? "cold" : at < bounds.warmEnd ? "warm" : at < bounds.measuredEnd ? "measured" : "drain";
   const measured = (event: Event) => phase(event.atMs) === "measured";
   const affectedCalls = new Set<string>();
+  const applicationByProcess: Record<string, Record<string, number>> = {};
   const unfinished = new Map<string, Event>();
   let busyResults = 0, applicationWaitMs = 0, heldLeaseRefusals = 0, leaseSqlRefusals = 0, leaseRetryWaitMs = 0, failedOpens = 0;
   const leaseAcquisitionMs: number[] = [];
@@ -41,6 +42,11 @@ export async function stateWriterReport(root: string) {
     if (event.event === "call-start") unfinished.set(call, event);
     if (event.event === "call-end") unfinished.delete(call);
     if (!measured(event)) continue;
+    if (["busy-result", "application-sync-wait-ns", "lease-held-refusal", "lease-sql-refusal", "lease-retry-wait-ns"].includes(event.event)) {
+      const counters = applicationByProcess[`${role(event.pid)}:${event.pid}:${event.database ?? "unattributed"}`] ??= {};
+      counters[event.event] = (counters[event.event] ?? 0) + 1;
+      if (event.duration !== undefined) counters[event.event + "-duration-ns"] = (counters[event.event + "-duration-ns"] ?? 0) + event.duration;
+    }
     if (event.event === "busy-result") {
       busyResults++;
       if (event.call) affectedCalls.add(`${event.pid}:${event.call}`);
@@ -61,11 +67,14 @@ export async function stateWriterReport(root: string) {
   const holds: number[] = [], pending = new Map<string, Event[]>();
   const commitKinds: Record<string, number> = {};
   const byDatabase: Record<string, Record<string, number>> = {};
+  const byProcessDatabase: Record<string, Record<string, number>> = {};
   let commits = 0, opens = 0, zeroChangedCommits = 0, committedChanges = 0, busyHandlerSleeps = 0, busyHandlerWaitMs = 0;
   for await (const event of stream<Event>(root, "sql.ndjson")) {
     if (measured(event)) {
       const database = byDatabase[event.database] ??= {};
       database[event.event] = (database[event.event] ?? 0) + (event.event === "commit" || event.event === "committed-changes" || event.event === "sqlite-sleep-ns" ? event.value : 1);
+      const processDatabase = byProcessDatabase[`${role(event.pid)}:${event.pid}:${event.database}`] ??= {};
+      processDatabase[event.event] = (processDatabase[event.event] ?? 0) + (["commit", "committed-changes", "sqlite-sleep-ns"].includes(event.event) ? event.value : 1);
       if (event.event === "commit") commits += event.value;
       if (event.event === "open") opens++;
       if (event.event === "committed-changes") { committedChanges += event.value; if (!event.value) zeroChangedCommits++; }
@@ -137,7 +146,7 @@ export async function stateWriterReport(root: string) {
       else cpuLast.set(identity, process.cpuTicks);
     }
   }
-  const resources = lines<{ at: number; phase: string; cpu: { user: number; system: number }; rss: number; loopP50: number; loopP95: number; loopP99: number; loopMax: number }>(root, "viewer.ndjson").filter(row => row.phase === "measured");
+  const resources = lines<{ at: number; phase: string; cpu: { user: number; system: number }; rss: number; loopP50: number; loopP95: number; loopP99: number; loopMax: number; measuredHttpCalls?: number }>(root, "viewer.ndjson").filter(row => row.phase === "measured");
   const loop = resources.at(-1);
   const finalCensus = census.at(-1)?.processes ?? [];
   const max = (values: number[]) => Math.max(0, ...values);
@@ -150,6 +159,7 @@ export async function stateWriterReport(root: string) {
     unfinishedAdapterCallsAtTeardown: [...unfinished.values()].filter(event => event.pid !== viewer && !executors.has(event.pid)).length,
     sql: {
       measurementSeconds: bounds.seconds, measuredByDatabase: byDatabase,
+      measuredByProcessDatabase: byProcessDatabase, measuredApplicationByProcessDatabase: applicationByProcess,
       connections: [...counts.values()].map(({ lifetimeMs, current, ...group }) => ({ ...group, liveAtExit: current, currentAfterTeardown: 0, lifetimeMs: distribution(lifetimeMs) })),
       phases: Object.fromEntries(phases), commitKinds,
       commits, commitsPerSecond: commits / bounds.seconds, opensPerSecond: opens / bounds.seconds,
@@ -175,6 +185,7 @@ export async function stateWriterReport(root: string) {
       sampledCpuTicksLowerBound: sum([...cpuLast].map(([identity, ticks]) => Math.max(0, ticks - (cpuBefore.get(identity) ?? 0)))),
     },
     viewer: loop ? { loopP50: loop.loopP50, loopP95: loop.loopP95, loopP99: loop.loopP99, loopMax: loop.loopMax,
+      measuredHttpCalls: loop.measuredHttpCalls ?? null,
       firstSampleAt: resources[0].at, lastSampleAt: loop.at, scheduledStartAt: bounds.warmEnd, scheduledEndAt: bounds.measuredEnd,
       completedWindow: loop.at >= bounds.measuredEnd, resetDelayMs: resources[0].at - bounds.warmEnd,
       missingTailMs: Math.max(0, bounds.measuredEnd - loop.at),

@@ -1,6 +1,6 @@
 # MCP state writers: production audit and fix design
 
-Audit date: 2026-10-15 UTC. This stage changes documentation only. Production processes were observed through procfs, descriptor metadata, existing journals and SQLite connections opened with `mode=ro` and `PRAGMA query_only=ON`. No production signals, checkpoints, PRAGMAs that change storage, application mutations, deployments or restarts were issued. The stage completion report is the required controller operation.
+Audit date: 2026-10-15 UTC. The original audit changed documentation only. Production processes were observed through procfs, descriptor metadata, existing journals and SQLite connections opened with `mode=ro` and `PRAGMA query_only=ON`. No production signals, checkpoints, PRAGMAs that change storage, application mutations, deployments or restarts were issued. Later implementation and isolated measurements follow the audit; the latest change is the [task-worker channel](#task-worker-channel), whose full acceptance matrix remains pending.
 
 ## Answer and limits
 
@@ -10,7 +10,7 @@ Eighteen servers recorded zero `write_bytes` during the sample. Server **3534707
 
 The shared WAL's inode/size/mtime tuple changed **33 times in 30.014 seconds**, sampled every 250 ms. This is a lower bound on observed metadata transitions, about 1.10/s, with no attribution to a writer or collection. The previous investigation's 37 servers and at least 46 WAL changes/30 s describe an earlier release and workload; this sample cannot establish an improvement. [E1, E5]
 
-The current implementation permits direct MCP domain writes and retains handles per opened collection. Centralizing all managed MCP calls in the existing Viewer MCP service can eliminate the local database footprint while retaining the existing command and receipt implementation. Lifecycle hardening must also cover death of the actual agent while another descendant keeps its stdio descriptor open. No orphan cleanup is justified by this census.
+The audited implementation permits direct MCP domain writes and retains handles per opened collection. Centralizing all managed MCP calls in the existing Viewer MCP service can eliminate the local database footprint while retaining the existing command and receipt implementation. Lifecycle hardening must also cover death of the actual agent while another descendant keeps its stdio descriptor open. No orphan cleanup is justified by this census.
 
 **Accepted measurement boundary:** the controller's decision continuation, settled attempt 1, accepts the passive production baseline and its OS-level counters. Production tracing is prohibited. Exact SQL connection counts, commits and lock waits per process belong to the isolated before/after test with identical synthetic load described below. The audit is complete within that accepted boundary; executing and reviewing the synthetic comparison belongs to the build and review stages. Its results remain outstanding, and no performance improvement is claimed here.
 
@@ -878,3 +878,65 @@ previous response reader because the timer records zero progress; the bounded
 reader passes. The executor suite also covers full 128 MiB wire bounds,
 metadata bounds, split UTF-8, slow consumers, cancellation, worker loss,
 external capability rotation, receipt replay and actual Viewer owner death.
+
+### Task-worker channel
+
+The bounded-transfer candidate `8f8d356d71aebb0fe115230e5fd7fc8c5d622d2f`
+still spent time handling every stdio request on the Viewer. Its preliminary
+one-client pair returned loop p99/max of 0.601599/4.104558 ms, against
+0.207359/2.720363 ms for matched main
+`14e3199375a2ca4d1a3646eef52fc231794c7915`. Both samples completed all
+300 measured calls, with zero failures, pending calls, SQL contention or
+survivors. Collection stopped during the audit sample. This pair remains a
+failed diagnostic and cannot establish acceptance.
+Normalized rows and responses match, all connections balance and both SQL
+histories reproduce final state. The immutable record is
+[`mcp-state-writers-bounded-transfer-diagnostic.json`](../../evidence/mcp-state-writers-bounded-transfer-diagnostic.json).
+
+Managed Linux stdio task calls now obtain a delegation through the Viewer's
+authenticated HTTP endpoint. Later calls connect directly to the same
+Viewer-owned task worker through a random abstract Unix socket. Before sending
+credentials, the adapter checks the connected kernel peer's UID and PID and
+the issued process start identity and boot epoch. Every call also checks the
+delegation nonce, the current launch capability and the Viewer's release
+endpoint. The worker runs the existing HTTP SDK and full task service, including
+policy, receipts, revisions and companion transactions. Agents retain zero
+local database connections.
+
+The adapter caches one descriptor, scoped to the endpoint, launch capability
+and control credential. A stale channel retries through the Viewer once with
+the identical request body, original key and remaining deadline. Other tools,
+native HTTP and other operating systems retain the HTTP boundary. Enabling
+the Viewer's access key retires the existing worker before Settings answers;
+later delegations pass through the new perimeter. The benchmark retains its
+original unprotected configuration for all three source revisions.
+
+Pipe and socket calls share 64 admissions and a 4 MiB input budget, including
+socket metadata and delimiters. Each socket accepts one call with a deadline
+of at most 30 seconds. Metadata is bounded at 4 KiB and the complete reply at
+128 MiB. Partial inputs reserve admission; disconnects cancel their operation,
+and dispatched calls retain admission until their reply finishes or fails.
+The listener allows at most 128 connections, including refusals and draining
+replies. The worker expires after 60 idle seconds, reports heartbeats to an
+independent parent watchdog and remains under its existing lifetime guardian.
+The parent confirms exit before starting its successor.
+
+The acceptance reports additionally count measured HTTP arrivals on the Viewer,
+so the stdio measurements can establish whether requests actually leave its
+loop. Reconciliation treats interrupted calls, generic tool failures and HTTP
+failures as uncertain alongside timeouts. It retains their original failures
+and reports whether a receipt, a recovery reply, one committed effect or no
+effect after teardown resolves each original uncertain mutation.
+Measured SQL event counters also retain process role, PID and database, so
+connection balances, commits and lock waits can be checked per process.
+
+Source and production-compiled executor checks each pass 26 cases; the channel
+wire suite passes seven. Forwarding and HTTP checks pass 30 cases, packaged
+stdio passes 51, linked-task and wire checks pass 20 with one opt-in old-release
+skip, and Settings passes seven. TypeScript, the production build and the local
+privacy gate pass. All runs use explicit test paths and isolated state under
+the owned runner. Removing access-key withdrawal leaves the old worker alive
+after Settings answers; removing idempotent reservation disposal admits an
+oversized follow-up and starts another worker. Both regression tests fail with
+their guards absent and pass after restoration. The new transport still owes
+the complete alternating performance matrix.

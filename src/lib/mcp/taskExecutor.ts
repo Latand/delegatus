@@ -6,17 +6,18 @@ import { stateDir } from "@/lib/configDir";
 import { endLeasedHelper, leasedHelperInput, spawnLeasedHelper, unrefLeasedHelper } from "@/lib/helperLease";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { currentMcpHttpCaller, type McpHttpCaller } from "./callerContext";
+import { decodeTaskChannel, TASK_CHANNEL_CALLS, TASK_CHANNEL_HEADER, TASK_CHANNEL_REQUEST_HEADER, TASK_CHANNEL_TOOLS, TASK_CHANNEL_INPUT_BYTES, TASK_CHANNEL_REPLY_BYTES } from "./taskChannel";
 import type { McpToolArgs, McpToolCallContext, McpToolResult } from "./server";
 
-export const TASK_EXECUTOR_TOOLS = new Set(["list_tasks", "get_task", "create_task", "update_task"]);
-const MAX_PENDING = 64;
-const MAX_INPUT_BYTES = 4 * 1024 * 1024;
+export const TASK_EXECUTOR_TOOLS = TASK_CHANNEL_TOOLS;
+const MAX_PENDING = TASK_CHANNEL_CALLS;
+const MAX_INPUT_BYTES = TASK_CHANNEL_INPUT_BYTES;
 export const TASK_EXECUTOR_FRAME_BYTES = 32 * 1024 * 1024;
 // The HTTP envelope contains both structuredContent and its escaped text copy.
-export const TASK_EXECUTOR_HTTP_FRAME_BYTES = 4 * TASK_EXECUTOR_FRAME_BYTES;
+export const TASK_EXECUTOR_HTTP_FRAME_BYTES = TASK_CHANNEL_REPLY_BYTES;
 export type ExecutorHttpResponse = { status: number; headers: [string, string][]; body: ReadableStream<Uint8Array> };
 type ExecutorResult = McpToolResult | { conversationId: string | null } | { http: ExecutorHttpResponse };
-type ExecutorReply = { id: number; result?: ExecutorResult; error?: string; http?: ExecutorHttpResponse };
+type ExecutorReply = { id: number; result?: ExecutorResult; error?: string; http?: ExecutorHttpResponse; control?: { ready?: string | null; heartbeat?: boolean; retiring?: boolean } };
 type ExecutorWireReply = Omit<ExecutorReply, "http"> & { http?: Omit<ExecutorHttpResponse, "body"> };
 type Pending = { bytes: number; finish: (error?: Error, result?: ExecutorResult) => void; dispose: () => void };
 export type TaskExecutorRequest = { id: number; name: string; args: McpToolArgs; caller: McpHttpCaller; deadlineAt: number; nativeWork?: McpToolCallContext["nativeWork"] };
@@ -68,7 +69,7 @@ export class TaskExecutorReplies {
   }
 
   private accept(chunk: Buffer): void {
-    while (chunk.length) {
+    while (chunk.length && !this.closed) {
       if (this.output) {
         const output = this.output;
         const slice = chunk.subarray(0, 16_384);
@@ -109,7 +110,7 @@ export class TaskExecutorReplies {
         this.defer(chunk.subarray(end + 1)); return;
       } else {
         if (value.http) throw new Error("task executor HTTP frame is missing its body delimiter");
-        this.reply({ id: value.id, result: value.result, error: value.error }); this.complete(value.id);
+        this.reply({ id: value.id, result: value.result, error: value.error, control: value.control }); this.complete(value.id);
       }
       chunk = chunk.subarray(end + 1);
     }
@@ -144,6 +145,9 @@ export class McpTaskExecutor {
   private inputBytes = 0;
   private nextId = 0;
   private idle?: ReturnType<typeof setTimeout>;
+  private watchdog?: ReturnType<typeof setTimeout>;
+  private channel?: string;
+  private workerManagesIdle = false;
   private replies?: TaskExecutorReplies;
 
   constructor(private runtime: { launch?: ReturnType<typeof taskExecutorLaunch>; env?: Partial<NodeJS.ProcessEnv>; idleMs?: number } = {}) {}
@@ -170,7 +174,11 @@ export class McpTaskExecutor {
     }, caller, context);
     if (!("http" in result) || !result.http || typeof result.http !== "object") throw new Error("invalid task executor HTTP reply");
     const response = result.http as ExecutorHttpResponse;
-    return new Response(response.body, { status: response.status, headers: response.headers });
+    const answer = new Response(response.body, { status: response.status, headers: response.headers });
+    if (this.channel && caller.capability && response.status === 200 && request.headers.get(TASK_CHANNEL_REQUEST_HEADER) === "1") {
+      answer.headers.set(TASK_CHANNEL_HEADER, this.channel);
+    }
+    return answer;
   }
 
   private request(name: string, args: McpToolArgs, caller: McpHttpCaller, context: McpToolCallContext): Promise<ExecutorResult> {
@@ -204,6 +212,7 @@ export class McpTaskExecutor {
         const timer = setTimeout(cancel, Math.max(1, deadlineAt - Date.now()));
         context.signal?.addEventListener("abort", cancel, { once: true });
         const pending: Pending = { bytes, finish, dispose: () => {
+          if (this.pending.get(id) !== pending) return;
           clearTimeout(timer); clearTimeout(cancellationTimer); context.signal?.removeEventListener("abort", cancel);
           this.pending.delete(id); this.inputBytes -= bytes;
         } };
@@ -223,17 +232,39 @@ export class McpTaskExecutor {
     const launch = this.runtime.launch ?? taskExecutorLaunch();
     const child = spawnLeasedHelper("mcp-tasks", {
       command: launch.executable, args: [launch.workerPath], cwd: process.cwd(),
-      env: { ...process.env, ...this.runtime.env, LLV_STATE_DIR: this.runtime.env?.LLV_STATE_DIR ?? stateDir(), LLV_STATE_OWNER: "mcp" },
+      env: { ...process.env, ...this.runtime.env, LLV_STATE_DIR: this.runtime.env?.LLV_STATE_DIR ?? stateDir(), LLV_STATE_OWNER: "mcp",
+        LLV_MCP_TASK_IDLE_MS: String(this.runtime.idleMs ?? 60_000), LLV_MCP_TASK_VIEWER_PORT: this.runtime.env?.PORT ?? process.env.PORT ?? "" },
     }, this.runtime.env?.LLV_STATE_DIR ?? stateDir(), { input: true, stdout: "pipe", stderr: "inherit", followRelease: false });
     this.child = child;
+    this.workerManagesIdle = false;
+    const heartbeat = () => {
+      clearTimeout(this.watchdog);
+      this.watchdog = setTimeout(() => this.retire(child, "stopped its heartbeat"), 31_000);
+      this.watchdog.unref();
+    };
     this.replies = new TaskExecutorReplies(child.stdout!, reply => {
+      if (reply.id === 0) {
+        withViewerOperation("mcp.tasks.executor", () => {
+          if (!reply.control) throw new Error("invalid task executor control frame");
+          if (reply.control.retiring === true) { this.retire(child, "idle"); return; }
+          if (reply.control.ready !== undefined) {
+            const description = reply.control.ready;
+            if (description !== null && !decodeTaskChannel(description)) throw new Error("invalid task executor channel");
+            this.channel = description ?? undefined;
+            this.workerManagesIdle = true; clearTimeout(this.idle);
+          } else if (reply.control.heartbeat !== true) throw new Error("invalid task executor heartbeat");
+          heartbeat();
+        });
+        return;
+      }
       const job = this.pending.get(reply.id);
       const result = reply.http ? { http: reply.http } : reply.result;
       if (!job || (!result && !reply.error)) throw new Error("invalid task executor reply");
       job.finish(reply.error ? new Error(reply.error) : undefined, result);
     }, id => {
+      if (id === 0) return;
       this.pending.get(id)?.dispose();
-      if (!this.pending.size) {
+      if (!this.pending.size && !this.workerManagesIdle) {
         this.idle = setTimeout(() => this.retire(child), this.runtime.idleMs ?? 60_000);
         this.idle.unref();
       }
@@ -248,7 +279,8 @@ export class McpTaskExecutor {
   private retire(child: ChildProcess, reason = "stopped"): void {
     if (this.child !== child) return;
     this.replies?.close(); this.replies = undefined;
-    this.child = null; clearTimeout(this.idle);
+    this.child = null; clearTimeout(this.idle); clearTimeout(this.watchdog);
+    this.channel = undefined; this.workerManagesIdle = false;
     this.closing = child.exitCode !== null || child.signalCode !== null ? Promise.resolve()
       : new Promise(resolve => child.once("close", () => resolve()));
     endLeasedHelper(child);
@@ -264,4 +296,10 @@ const KEY = Symbol.for("llv.mcp.taskExecutor");
 export function viewerTaskExecutor(): McpTaskExecutor {
   const holder = globalThis as typeof globalThis & { [KEY]?: McpTaskExecutor };
   return holder[KEY] ??= new McpTaskExecutor();
+}
+
+/** Withdraw every delegation from the previous HTTP access policy. New calls
+ * await confirmed worker exit and inherit the Viewer's current perimeter. */
+export async function retireViewerTaskExecutor(): Promise<void> {
+  await (globalThis as typeof globalThis & { [KEY]?: McpTaskExecutor })[KEY]?.close();
 }

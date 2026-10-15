@@ -33,7 +33,7 @@ if (process.env.LLV_TASK_EXECUTOR_STALL) {
 
 if (process.env.LLV_TASK_EXECUTOR_REPORT_PID) {
   fs.writeFileSync(process.env.LLV_WRITER_READY!, String(process.pid));
-  await import("../mcpTask.worker");
+  await import(process.env.LLV_MCP_TASK_WORKER_BUNDLE ? path.resolve(process.env.LLV_MCP_TASK_WORKER_BUNDLE) : "../mcpTask.worker");
   await new Promise(() => {});
 }
 

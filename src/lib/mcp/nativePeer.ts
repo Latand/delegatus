@@ -43,7 +43,7 @@ export async function nativePeerProof(body: string): Promise<{ header: string; c
 }
 
 let credentials: ((fd: number) => { pid: number; uid: number }) | undefined;
-function peerCredentials(socket: net.Socket): { pid: number; uid: number } {
+export function peerCredentials(socket: net.Socket): { pid: number; uid: number } {
   if (!credentials) {
     const ffi = createRequire(import.meta.url)(`bun:${"ffi"}`);
     const libc = ffi.dlopen("libc.so.6", {

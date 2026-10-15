@@ -4,13 +4,17 @@ import os from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { PassThrough } from "node:stream";
+import net from "node:net";
 import { captureProcessIdentity, processIdentityStatus, type ProcessIdentity } from "@/lib/processIdentity";
 import { stopFixtureIdentity } from "@/lib/testing/fixtureProcess";
 import { ownFixtureChild, reapFixtureChildren } from "./ownedFixtureChildren";
 import { runAsMcpHttpCaller } from "./callerContext";
-import { McpTaskExecutor, TaskExecutorReplies, TASK_EXECUTOR_HTTP_FRAME_BYTES } from "./taskExecutor";
+import { McpTaskExecutor, TaskExecutorReplies, TASK_EXECUTOR_HTTP_FRAME_BYTES, viewerTaskExecutor } from "./taskExecutor";
 import type { McpToolResult } from "./server";
+import { callTaskChannel, decodeTaskChannel, TASK_CHANNEL_CALLS, TASK_CHANNEL_HEADER, TASK_CHANNEL_REQUEST_HEADER, TASK_CHANNEL_INPUT_BYTES } from "./taskChannel";
+import { peerCredentials } from "./nativePeer";
 
+const seedTaskId = `00000000-0000-4000-8000-${String(0).padStart(12, "0")}`;
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-task-executor-"));
 for (const name of ["HOME", "XDG_CONFIG_HOME", "LLV_STATE_DIR", "LLV_CODEX_HOME", "LLV_CLAUDE_HOME"]) {
   process.env[name] = path.join(root, name); fs.mkdirSync(process.env[name]!, { recursive: true });
@@ -20,9 +24,9 @@ process.env.LLV_VIEWER_CONTROL_URL = "http://127.0.0.1:1";
 let capability: string;
 let capabilities: string[];
 const executors: McpTaskExecutor[] = [];
-const create = () => {
-  const executor = new McpTaskExecutor(process.env.LLV_MCP_TASK_WORKER_BUNDLE
-    ? { launch: { executable: process.execPath, workerPath: path.resolve(process.env.LLV_MCP_TASK_WORKER_BUNDLE) } } : {});
+const create = (env?: Partial<NodeJS.ProcessEnv>) => {
+  const executor = new McpTaskExecutor({ ...(process.env.LLV_MCP_TASK_WORKER_BUNDLE
+    ? { launch: { executable: process.execPath, workerPath: path.resolve(process.env.LLV_MCP_TASK_WORKER_BUNDLE) } } : {}), ...(env ? { env } : {}) });
   executors.push(executor); return executor;
 };
 const call = (executor: McpTaskExecutor, name: string, args: Record<string, unknown>, context = {}) =>
@@ -40,6 +44,206 @@ afterAll(async () => {
   await reapFixtureChildren();
   fs.rmSync(root, { recursive: true, force: true });
 });
+
+async function privateChannel(executor: McpTaskExecutor, token = capability) {
+  const response = await executor.callHttpTool("get_task", {
+    jsonrpc: "2.0", id: "channel-discovery", method: "tools/call", params: { name: "get_task", arguments: { taskId: seedTaskId } },
+  }, new Request("http://127.0.0.1/api/mcp", { headers: {
+    "content-type": "application/json", accept: "application/json, text/event-stream", [TASK_CHANNEL_REQUEST_HEADER]: "1",
+  } }), { capability: token }, {});
+  const channel = decodeTaskChannel(response.headers.get(TASK_CHANNEL_HEADER));
+  expect(channel !== null).toBe(true);
+  expect((await response.json() as { result: { structuredContent: McpToolResult } }).result.structuredContent.ok).toBe(true);
+  return channel!;
+}
+
+test.skipIf(process.platform !== "linux")("a Viewer without a perimeter key can delegate managed task calls", async () => {
+  const executor = create({ LLV_TOKEN: "", PORT: "" });
+  const response = await executor.callHttpTool("get_task", {
+    jsonrpc: "2.0", id: "unprotected-channel", method: "tools/call", params: { name: "get_task", arguments: { taskId: seedTaskId } },
+  }, new Request("http://127.0.0.1/api/mcp", { headers: {
+    "content-type": "application/json", accept: "application/json, text/event-stream", [TASK_CHANNEL_REQUEST_HEADER]: "1",
+  } }), { capability }, {});
+  expect(decodeTaskChannel(response.headers.get(TASK_CHANNEL_HEADER)) !== null).toBe(true);
+  expect((await response.json() as { result: { structuredContent: McpToolResult } }).result.structuredContent.ok).toBe(true);
+});
+
+test.skipIf(process.platform !== "linux")("enabling the access key withdraws the old delegation before Settings returns", async () => {
+  const savedToken = process.env.LLV_TOKEN, savedPort = process.env.PORT;
+  process.env.LLV_TOKEN = ""; delete process.env.PORT;
+  const executor = viewerTaskExecutor(); executors.push(executor);
+  try {
+    const channel = await privateChannel(executor);
+    const { POST } = await import("@/app/api/links/route");
+    const { NextRequest } = await import("next/server");
+    const response = await POST(new NextRequest("http://127.0.0.1/api/links", {
+      method: "POST", headers: { host: "127.0.0.1", "content-type": "application/json", origin: "http://127.0.0.1" }, body: JSON.stringify({ action: "key" }),
+    }));
+    expect(response.status).toBe(200);
+    expect(Boolean(process.env.LLV_TOKEN)).toBe(true);
+    expect(processIdentityStatus(channel.identity)).toBe("dead");
+    await expect(privateCall(channel, "get_task", { taskId: seedTaskId })).rejects.toBeInstanceOf(Error);
+    const successor = await privateChannel(executor);
+    expect(successor.identity).not.toEqual(channel.identity);
+  } finally {
+    if (savedToken === undefined) delete process.env.LLV_TOKEN; else process.env.LLV_TOKEN = savedToken;
+    if (savedPort === undefined) delete process.env.PORT; else process.env.PORT = savedPort;
+  }
+});
+
+function privateCall(channel: NonNullable<ReturnType<typeof decodeTaskChannel>>, name: string, args: Record<string, unknown>, token = capability) {
+  return callTaskChannel(channel, JSON.stringify({ jsonrpc: "2.0", id: "private-call", method: "tools/call", params: { name, arguments: args } }), token,
+    new Headers({ "content-type": "application/json", accept: "application/json, text/event-stream" }), Date.now() + 30_000, new AbortController().signal);
+}
+
+test.skipIf(process.platform !== "linux")("the real task channel preserves command receipts, note attribution and wire escaping", async () => {
+  const executor = create({ LLV_TOKEN: "fixture-perimeter-key", PORT: "" });
+  const channel = await privateChannel(executor);
+  const args = { project: "fixture", text: "Private task", details: "Exact\n\t🙂", board: "hidden", clientRequestId: "private-task-create" };
+  const answer = await (await privateCall(channel, "create_task", args)).json() as { result: { structuredContent: McpToolResult } };
+  const result = answer.result.structuredContent;
+  expect(result.ok).toBe(true);
+  if (!result.ok) throw new Error("private creation refused");
+  expect(await call(executor, "create_task", args)).toMatchObject({ ok: true, replayed: true, taskId: result.taskId, revision: result.revision });
+  const edit = await (await privateCall(channel, "update_task", { taskId: result.taskId, note: "private caller", clientRequestId: "private-task-note", full: true })).json() as { result: { structuredContent: McpToolResult } };
+  const { agentRegistry } = await import("@/lib/agent/registry");
+  const conversationId = agentRegistry().conversationIdForSpawnCapabilityDigest(createHash("sha256").update(capability).digest("hex"));
+  expect(edit.result.structuredContent).toMatchObject({ ok: true, task: { details: args.details, note: { author: { conversationId } } } });
+  expect((await privateCall(channel, "unknown_private_tool", {})).status).toBe(403);
+});
+
+test.skipIf(process.platform !== "linux")("private receipt replay observes external capability rotation and worker replacement", async () => {
+  const executor = create({ LLV_TOKEN: "fixture-perimeter-key", PORT: "" });
+  const token = capabilities[5]!;
+  const channel = await privateChannel(executor, token);
+  const args = { project: "fixture", text: "Private rotation", board: "hidden", clientRequestId: "private-task-rotation" };
+  const accepted = await (await privateCall(channel, "create_task", args, token)).json() as { result: { structuredContent: McpToolResult } };
+  const result = accepted.result.structuredContent;
+  if (!result.ok) throw new Error("private creation refused");
+  const { agentRegistry } = await import("@/lib/agent/registry");
+  const registry = agentRegistry();
+  const conversationId = registry.conversationIdForSpawnCapabilityDigest(createHash("sha256").update(token).digest("hex"));
+  const receipt = Object.values(registry.readOnlySnapshot().receipts).find(row => row.conversationId === conversationId)!;
+  const successor = registry.rotateSpawnCapabilityForReceipt(receipt.launchId);
+  const refused = await privateCall(channel, "create_task", args, token);
+  expect(refused.status).toBe(403); expect((await refused.text()).includes(String(result.taskId))).toBe(false);
+  const replayed = await (await privateCall(channel, "create_task", args, successor)).json() as { result: { structuredContent: McpToolResult } };
+  expect(replayed.result.structuredContent).toMatchObject({ ok: true, replayed: true, taskId: result.taskId, revision: result.revision });
+  await executor.close();
+  await expect(privateCall(channel, "get_task", { taskId: result.taskId }, successor)).rejects.toBeInstanceOf(Error);
+  const replacement = create({ LLV_TOKEN: "fixture-perimeter-key", PORT: "" });
+  const next = await privateChannel(replacement, successor);
+  const afterRestart = await (await privateCall(next, "create_task", args, successor)).json() as { result: { structuredContent: McpToolResult } };
+  expect(afterRestart.result.structuredContent).toMatchObject({ ok: true, replayed: true, taskId: result.taskId, revision: result.revision });
+});
+
+test.skipIf(process.platform !== "linux")("new private calls are refused after their Viewer loses release traffic", async () => {
+  const target = path.join(process.env.LLV_STATE_DIR!, "viewer-release.json");
+  const previous = fs.existsSync(target) ? fs.readFileSync(target) : null;
+  const executor = create({ LLV_TOKEN: "fixture-perimeter-key", PORT: "1" });
+  try {
+    if (previous) fs.rmSync(target);
+    const channel = await privateChannel(executor);
+    fs.writeFileSync(target, JSON.stringify({ endpoint: "http://127.0.0.1:2" }));
+    expect((await privateCall(channel, "get_task", { taskId: seedTaskId })).status).toBe(403);
+  } finally { if (previous) fs.writeFileSync(target, previous); else fs.rmSync(target, { force: true }); }
+});
+
+test.skipIf(process.platform !== "linux")("stdio task calls use the delegated worker and retry a retired channel through the Viewer once", async () => {
+  const key = Symbol.for("llv.mcp.taskExecutor");
+  const holder = globalThis as typeof globalThis & { [key]?: McpTaskExecutor };
+  const previous = holder[key];
+  const keys = ["LLV_VIEWER_CONTROL_URL", "LLV_VIEWER_CONTROL_TOKEN", "LLV_SPAWN_CAPABILITY"] as const;
+  const env = Object.fromEntries(keys.map(key => [key, process.env[key]]));
+  const { NextRequest } = await import("next/server");
+  const { handleMcpHttpRequest } = await import("./http");
+  const { createProductionViewerMcpService } = await import("./server");
+  let requests = 0;
+  const listener = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: request => {
+    requests++;
+    if (request.headers.get("authorization") !== "Bearer fixture-perimeter-key") return new Response(null, { status: 403 });
+    return handleMcpHttpRequest(new NextRequest(request));
+  } });
+  const executor = create({ LLV_TOKEN: "fixture-perimeter-key", PORT: "" }); holder[key] = executor;
+  process.env.LLV_VIEWER_CONTROL_URL = listener.url.origin;
+  process.env.LLV_VIEWER_CONTROL_TOKEN = "fixture-perimeter-key";
+  process.env.LLV_SPAWN_CAPABILITY = capability;
+  try {
+    const adapter = await createProductionViewerMcpService(false, true);
+    const args = { project: "fixture", text: "Delegated adapter", board: "hidden", clientRequestId: "private-adapter-create" };
+    const created = await adapter.callTool("create_task", args);
+    if (!created.ok) throw new Error("adapter creation refused");
+    expect(requests).toBe(1);
+    const edit = { taskId: created.taskId, appendLine: "one private line", clientRequestId: "private-adapter-edit" };
+    const changed = await adapter.callTool("update_task", edit);
+    expect(changed.ok).toBe(true); expect(requests).toBe(1);
+    if (!changed.ok) throw new Error("private edit refused");
+    await executor.close(); holder[key] = create({ LLV_TOKEN: "fixture-perimeter-key", PORT: "" });
+    expect(await adapter.callTool("update_task", edit)).toMatchObject({ ok: true, replayed: true, revision: changed.revision });
+    expect(requests).toBe(2);
+    const read = await adapter.callTool("get_task", { taskId: created.taskId, full: true });
+    expect(JSON.stringify(read).match(/one private line/g)).toHaveLength(1); expect(requests).toBe(2);
+  } finally {
+    listener.stop(true);
+    if (previous) holder[key] = previous; else delete holder[key];
+    for (const key of keys) { if (env[key] === undefined) delete process.env[key]; else process.env[key] = env[key]; }
+  }
+}, 15_000);
+
+test.skipIf(process.platform !== "linux")("private inputs and pipe jobs share call and byte admission, and disconnects restore it", async () => {
+  const executor = create({ LLV_TOKEN: "fixture-perimeter-key", PORT: "" });
+  const channel = await privateChannel(executor);
+  const sockets: net.Socket[] = [];
+  const responses: number[] = [];
+  let full!: () => void;
+  const args = { taskId: seedTaskId, padding: "x".repeat(8192) };
+  const hold = async (bytes: number) => {
+    const socket = net.createConnection(channel.socketPath); sockets.push(socket);
+    socket.on("error", () => {});
+    socket.on("data", (chunk: Buffer) => {
+      const tab = chunk.indexOf(9);
+      if (tab >= 0) {
+        const status = (JSON.parse(chunk.subarray(0, tab).toString("utf8")) as { status: number }).status;
+        responses.push(status); if (status === 503) full?.();
+      }
+    });
+    await new Promise<void>((resolve, reject) => { socket.once("connect", resolve); socket.once("error", reject); });
+    expect(peerCredentials(socket).pid).toBe(channel.identity.pid);
+    socket.write(JSON.stringify({ nonce: channel.nonce, capability, deadlineAt: Date.now() + 30_000, bytes, headers: [] }) + "\t");
+  };
+  const refusal = () => expect(call(executor, "get_task", args)).rejects.toThrow("admission");
+  const restore = async () => {
+    for (const socket of sockets.splice(0)) socket.destroy();
+    for (let step = 0; step < 64; step++) {
+      try { expect((await call(executor, "get_task", args)).ok).toBe(true); return; }
+      catch (error) { if (!(error as Error).message.includes("admission")) throw error; }
+    }
+    throw new Error("disconnected input retained pipe admission");
+  };
+  const fill = async (count: number, bytes: number) => {
+    let timer: ReturnType<typeof setTimeout>;
+    const filled = new Promise<void>((resolve, reject) => {
+      full = resolve;
+      timer = setTimeout(() => reject(new Error(`private admission did not refuse its extra input before the protocol deadline (replies=${responses.join(",")})`)), 30_000);
+    });
+    void filled.catch(() => {});
+    try {
+      // The refused extra private input proves its peers hold admission before
+      // a pipe probe can race a not-yet-read private header.
+      for (let n = 0; n < count; n++) await hold(bytes);
+      await filled;
+    } finally { clearTimeout(timer!); full = () => {}; }
+  };
+  try {
+    await fill(2, TASK_CHANNEL_INPUT_BYTES - 4096);
+    await refusal(); await restore();
+    await fill(TASK_CHANNEL_CALLS + 1, 2);
+    await refusal();
+    const peer = create({ LLV_TOKEN: "fixture-perimeter-key", PORT: "" });
+    expect((await call(peer, "get_task", { taskId: args.taskId })).ok).toBe(true);
+    await restore();
+  } finally { for (const socket of sockets) socket.destroy(); }
+}, 45_000);
 
 test("HTTP pipe replies expose headers before the body ends and preserve split UTF-8 bytes", async () => {
   const source = new PassThrough();
@@ -374,11 +578,28 @@ test("timed-out replies retain admission until the executor settles or closes", 
   await executor.close();
 });
 
+test("retiring before a queued dispatch releases its byte reservation once", async () => {
+  const ready = path.join(root, "queued-retirement.ready");
+  const executor = new McpTaskExecutor({
+    launch: { executable: process.execPath, workerPath: path.join(import.meta.dir, "writerConcurrencyChild.ts") },
+    env: { LLV_TASK_EXECUTOR_REPORT_PID: "1", LLV_WRITER_READY: ready },
+  });
+  executors.push(executor);
+  await call(executor, "get_task", { taskId: seedTaskId });
+  const queued = call(executor, "get_task", { padding: "x".repeat(3 * 1024 * 1024) });
+  void queued.catch(() => {});
+  const closed = executor.close();
+  await expect(queued).rejects.toThrow("before its reply");
+  await closed; fs.unlinkSync(ready);
+  await expect(call(executor, "get_task", { padding: "x".repeat(5 * 1024 * 1024) })).rejects.toThrow("admission is full");
+  expect(fs.existsSync(ready)).toBe(false);
+});
+
 test("idle retirement closes the real executor before the next request starts one", async () => {
   const ready = path.join(root, "idle-worker.pid");
   const executor = new McpTaskExecutor({ idleMs: 10,
     launch: { executable: process.execPath, workerPath: path.join(import.meta.dir, "writerConcurrencyChild.ts") },
-    env: { LLV_TASK_EXECUTOR_REPORT_PID: "1", LLV_WRITER_READY: ready } });
+    env: { LLV_TOKEN: "fixture-perimeter-key", PORT: "", LLV_TASK_EXECUTOR_REPORT_PID: "1", LLV_WRITER_READY: ready } });
   executors.push(executor);
   const pending = call(executor, "list_tasks", { project: "fixture", limit: 1 });
   void pending.catch(() => {});
@@ -389,6 +610,14 @@ test("idle retirement closes the real executor before the next request starts on
   const shutdown = Date.now() + 3_000;
   while (processIdentityStatus(identity) === "alive" && Date.now() < shutdown) await Bun.sleep(10);
   expect(processIdentityStatus(identity)).not.toBe("alive");
+  fs.rmSync(ready);
+  const next = call(executor, "list_tasks", { project: "fixture", limit: 1 });
+  void next.catch(() => {});
+  const replacementDeadline = Date.now() + 5_000;
+  while (!fs.existsSync(ready) && Date.now() < replacementDeadline) await Bun.sleep(10);
+  const replacement = captureProcessIdentity(Number(fs.readFileSync(ready, "utf8")));
+  expect(replacement.startIdentity === identity.startIdentity && replacement.pid === identity.pid).toBe(false);
+  expect((await next).ok).toBe(true);
   await executor.close();
 });
 
@@ -402,10 +631,10 @@ test("the real task worker refuses before application imports without an explici
   expect(await output).toContain("task executor needs an explicit state directory");
 });
 
-test.skipIf(process.platform !== "linux")("hard Viewer death ends its actual task executor and guardian within three seconds", async () => {
-  const ready = path.join(root, "owner.ready");
+for (const protectedWorker of [false, true]) test.skipIf(process.platform !== "linux")(`hard Viewer death ends its actual task executor and guardian within three seconds (protected=${protectedWorker})`, async () => {
+  const ready = path.join(root, `owner-${protectedWorker}.ready`);
   const parent = ownFixtureChild(Bun.spawn({ cmd: [process.execPath, path.join(import.meta.dir, "writerConcurrencyChild.ts")],
-    env: { ...process.env, LLV_TASK_EXECUTOR_OWNER: capability, LLV_WRITER_READY: ready }, stdout: "ignore", stderr: "pipe" }));
+    env: { ...process.env, LLV_TOKEN: protectedWorker ? "fixture-perimeter-key" : "", LLV_TASK_EXECUTOR_OWNER: capability, LLV_WRITER_READY: ready }, stdout: "ignore", stderr: "pipe" }));
   const stderr = new Response(parent.stderr).text();
   const owned: ProcessIdentity[] = [];
   const descendants = (pid: number): number[] => {

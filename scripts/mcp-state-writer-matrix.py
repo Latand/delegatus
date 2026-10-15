@@ -164,7 +164,13 @@ def compare_samples(root):
                     result = json.loads(receipt["result_json"])
                     if isinstance(result, dict) and result.get("clientRequestId"):
                         final_receipts[(result.get("toolName"), result["clientRequestId"])] = result
+        def uncertain_reply(answer):
+            return (not isinstance(answer, dict) or "transportError" in answer
+                    or answer.get("code") in ["outcome_unknown", "request_in_progress", "tool_failed", "call_interrupted"]
+                    or str(answer.get("code", "")).startswith("http-"))
+
         effective = []
+        original_uncertain = {"receipt": 0, "recoveryReply": 0, "committedEffect": 0, "noEffectAtTeardown": 0, "unresolved": 0}
         unresolved = 0
         unknown_replies = 0
         resolved_committed = 0
@@ -180,8 +186,19 @@ def compare_samples(root):
                     if len(tasks) != len({task["id"] for task in tasks}):
                         violations.append("duplicate task in a list response")
                 continue
-            uncertain = not isinstance(answer, dict) or answer.get("code") in ["outcome_unknown", "request_in_progress"] or "transportError" in answer
+            uncertain = uncertain_reply(answer)
             effect = history["effects"].get(name + ":" + str(key))
+            if uncertain_reply(call.get("result")):
+                if (name, key) in final_receipts and not uncertain:
+                    original_uncertain["receipt"] += 1
+                elif not uncertain:
+                    original_uncertain["recoveryReply"] += 1
+                elif not history["replayMatchesFinalRows"]:
+                    original_uncertain["unresolved"] += 1
+                elif effect:
+                    original_uncertain["committedEffect"] += 1
+                else:
+                    original_uncertain["noEffectAtTeardown"] += 1
             if effect and (effect["commits"] != 1 or len(effect["rows"]) != 1):
                 violations.append("one mutation key committed more than one task effect")
             committed_task = json.loads(effect["rows"][0]["value_json"]) if effect and len(effect["rows"]) == 1 else None
@@ -280,6 +297,8 @@ def compare_samples(root):
         results[sample.name] = {"rows": len(rows), "responses": len(calls), "normalizedRowSha256": checksum_json(normalized_rows),
                                 "normalizedResponseSha256": checksum_json(responses), "settledResponseSha256": checksum_json(settled),
                                 "numericRowRevisionsRetained": True, "durableColumns": sorted(rows[0]), "unresolvedMutations": unresolved,
+                                "originalUncertainMutationReplies": sum(original_uncertain.values()),
+                                "originalUncertainDispositions": original_uncertain,
                                 "unknownMutationRepliesAtReconciliation": unknown_replies, "unknownRepliesWithCommittedEffect": resolved_committed,
                                 "unknownRepliesWithNoCommitAtTeardown": resolved_no_commit,
                                 "committedHistoryReplayMatchesFinalRows": history["replayMatchesFinalRows"],
