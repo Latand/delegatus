@@ -3,7 +3,8 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { gunzipSync } from "node:zlib";
+import { gunzipSync, gzipSync } from "node:zlib";
+import { BoardEncoder } from "@/lib/boardEncoding";
 import { readSummaryBootstrap, writeSummaryBootstrap, SUMMARY_BOOTSTRAP_FILE } from "./summaryBootstrap";
 
 const roots: string[] = [];
@@ -31,6 +32,60 @@ test("a completed summary round trips as exact JSON and gzip bytes", async () =>
   await writeSummaryBootstrap(root, summary("New board").body, summary("New board").etag);
   expect(Buffer.from((await readSummaryBootstrap(root))!.body).toString()).toContain("New board");
   expect(await fs.readdir(root)).toEqual([SUMMARY_BOOTSTRAP_FILE]);
+});
+
+test("a scoped v2 summary round trips with a separate body integrity hash", async () => {
+  const root = await directory();
+  const context = { scope: "a".repeat(40), epoch: "saved-viewer" };
+  const encoded = new BoardEncoder().encode(context.scope, context.epoch, JSON.parse(summary().body));
+  expect(encoded.etag).not.toBe(`"${createHash("sha1").update(encoded.body).digest("hex")}"`);
+  await writeSummaryBootstrap(root, encoded.body, encoded.etag, context);
+  const restored = await readSummaryBootstrap(root);
+  expect(restored?.etag).toBe(encoded.etag);
+  expect(Buffer.from(restored!.body).toString()).toBe(encoded.body);
+  expect(gunzipSync(restored!.gzip).toString()).toBe(encoded.body);
+
+  const file = path.join(root, SUMMARY_BOOTSTRAP_FILE);
+  const bytes = await fs.readFile(file);
+  const length = bytes.readUInt32BE(0);
+  const metadata = JSON.parse(bytes.subarray(4, 4 + length).toString());
+  expect(metadata.bodyHash).toBe(createHash("sha1").update(encoded.body).digest("hex"));
+  bytes[4 + length + 5] ^= 1;
+  await fs.writeFile(file, bytes);
+  expect(await readSummaryBootstrap(root)).toBeNull();
+});
+
+test("the reader still accepts the old manifest without a separate body hash", async () => {
+  const root = await directory();
+  const saved = summary();
+  const body = Buffer.from(saved.body);
+  const gzip = gzipSync(body);
+  const metadata = Buffer.from(JSON.stringify({ version: 1, scope: "operator-global-summary", etag: saved.etag,
+    bodyBytes: body.length, gzipBytes: gzip.length, gzipHash: createHash("sha256").update(gzip).digest("hex") }));
+  const prefix = Buffer.alloc(4);
+  prefix.writeUInt32BE(metadata.length);
+  const file = path.join(root, SUMMARY_BOOTSTRAP_FILE);
+  await fs.writeFile(file, Buffer.concat([prefix, metadata, body, gzip]));
+  const restored = await readSummaryBootstrap(root);
+  expect(restored?.etag).toBe(saved.etag);
+  expect(Buffer.from(restored!.body).toString()).toBe(saved.body);
+  expect(gunzipSync(restored!.gzip).toString()).toBe(saved.body);
+  const corrupted = await fs.readFile(file);
+  corrupted[4 + metadata.length + 5] ^= 1;
+  await fs.writeFile(file, corrupted);
+  expect(await readSummaryBootstrap(root)).toBeNull();
+});
+
+test("a scoped ETag must certify the exact scope, epoch and body", async () => {
+  const root = await directory();
+  const context = { scope: "b".repeat(40), epoch: "saved-viewer" };
+  const encoded = new BoardEncoder().encode(context.scope, context.epoch, JSON.parse(summary().body));
+  for (const candidate of [undefined, { ...context, scope: "c".repeat(40) }, { ...context, epoch: "other-viewer" }]) {
+    await expect(writeSummaryBootstrap(root, encoded.body, encoded.etag, candidate)).rejects.toThrow();
+    expect(await readSummaryBootstrap(root)).toBeNull();
+  }
+  await expect(writeSummaryBootstrap(root, encoded.body.replace("Saved board", "Other board"), encoded.etag, context)).rejects.toThrow();
+  expect(await readSummaryBootstrap(root)).toBeNull();
 });
 
 test("missing, truncated, incompatible and corrupted artifacts explicitly fall back", async () => {

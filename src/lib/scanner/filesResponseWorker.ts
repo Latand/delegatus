@@ -22,7 +22,7 @@ const FILES_RESPONSE_WORKER_STDERR_MAX_BYTES = 4 * 1024;
  *   not carry before and is replaced rather than trusted.
  * - **idle** — a worker nobody has asked for a projection in a minute holds a
  *   whole projection's heap for nothing, so it goes and the next poll forks a
- *   new one. A polled board never reaches this; a quiet Viewer always does.
+ *   new one. Cache hits and 304 polls do not renew this timer.
  */
 const FILES_RESPONSE_WORKER_RSS_LIMIT_BYTES = 1_536 * 1024 * 1024;
 const FILES_RESPONSE_WORKER_IDLE_MS = 60_000;
@@ -68,6 +68,8 @@ export type FilesResponseWorkerRequest = {
   deltaScope?: string;
   /** The parent's certified base, which may differ from a discarded build. */
   deltaFrom?: { bodyFile: string; etag: string };
+  /** v2 structured base belongs to this Viewer epoch and deltaScope. */
+  boardEpoch?: string;
 };
 
 export interface FilesResponseWorkerRuntime {
