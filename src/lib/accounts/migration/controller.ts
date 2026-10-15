@@ -3,7 +3,7 @@ import { activeClaudeAccountId, setActiveClaudeAccount } from "@/lib/accounts/cl
 import { activeCodexAccountId, codexAccountsMutationLocked, codexLoginPaneStatus, listCodexAccounts, setActiveCodexAccount, setCodexAccountLoginPane } from "@/lib/accounts/codex";
 import { managedCodexRuntime } from "@/lib/accounts/codexRuntime";
 import { withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
-import { agentRegistry, conversationLookupFromSnapshot, readOnlyConversationLookupFromSnapshot, type AgentRegistry } from "@/lib/agent/registry";
+import { agentRegistry, conversationLookupFromSnapshot, readOnlyConversationLookupFromSnapshot, RegistryWriterBusyError, type AgentRegistry } from "@/lib/agent/registry";
 import { readTranscriptHosts } from "@/lib/agent/transcriptHost";
 import { yieldToRuntime } from "@/lib/cooperative";
 import type { ChildProcess } from "node:child_process";
@@ -42,21 +42,32 @@ export async function reconcileAccountMigrationCycle(
   provider: SuccessorProviderPort = new RegisteredSuccessorProvider(),
   delivery: HeldDeliveryPort = deliveryPort,
 ): Promise<void> {
-  /* Waited for off the loop; one the lock refused is skipped this cycle and
-     the next one compacts. */
-  await registry.deliveryWrite({ label: "delivery.compact" }, () => registry.compactDeliveryReservations());
-  await yieldToRuntime();
-  /* Quota ticks run alongside migration reconciliation, not after it: a slow
-     or stuck migration pass (lock contention, wedged provider) must never
-     leave the account panel without fresh limits readings. Migration
-     decisions already consume the previous tick's durable observations, so
-     ordering between the two is immaterial. */
-  const quotaTicks = Promise.all([quota.tick("claude"), quota.tick("codex"), quota.tick("copilot")]);
   try {
-    await reconcileMigrations(provider, delivery, registry);
-  } finally {
-    await quotaTicks;
+    /* Waited for off the loop; one the lock refused is skipped this cycle and
+       the next one compacts. */
+    await registry.deliveryWrite({ label: "delivery.compact" }, () => registry.compactDeliveryReservations());
+    await yieldToRuntime();
+    /* Quota ticks run alongside migration reconciliation so a slow migration
+       cannot delay fresh readings. Observe every rejection immediately and
+       settle all peers before releasing the controller's running fence. */
+    const outcomes = await Promise.allSettled([
+      quota.tick("claude"), quota.tick("codex"), quota.tick("copilot"),
+      reconcileMigrations(provider, delivery, registry),
+    ]);
+    const failures = outcomes.filter((outcome): outcome is PromiseRejectedResult => outcome.status === "rejected");
+    // A busy peer must not hide another peer's failure.
+    const failure = failures.find(outcome => !reconciliationWriterBusy(outcome.reason)) ?? failures[0];
+    if (failure) throw failure.reason;
+  } catch (error) {
+    if (!reconciliationWriterBusy(error)) throw error;
+    // Failed transactions leave durable work for the next scheduled/requested pass.
+    console.warn("[account migration controller] reconciliation deferred: SQLite writer busy; retrying next pass");
   }
+}
+
+function reconciliationWriterBusy(error: unknown): boolean {
+  return error instanceof RegistryWriterBusyError
+    || (error instanceof Error && (error as { code?: string }).code === "SQLITE_BUSY");
 }
 
 // Compatibility routing reads persisted membership only. Neither getter nor

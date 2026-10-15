@@ -1,6 +1,6 @@
 import type { CompanionEvent, CompanionMode, CompanionUsage, Delivery, Id, Proposal, Recipient } from "./contract";
 import { admitDelegationProposal, type GateRefusal } from "./gate";
-import { liveProposalRefusal } from "./liveGate";
+import { liveProposalRefusal, VOICE_ASK_ENVELOPE_CHARS } from "./liveGate";
 
 /**
  * The one reducer the voice companion reads (#2519, design note §6). It joins
@@ -131,6 +131,7 @@ export const INITIAL_COMPANION_STATE: CompanionState = {
 
 const validId = (value: unknown): value is Id => typeof value === "string" && value.length > 0 && value.length <= ID_LIMIT;
 const clamp01 = (value: number) => (Number.isFinite(value) ? Math.min(1, Math.max(0, value)) : 0);
+const boundedAsk = (text: string) => text.slice(0, 2 * VOICE_ASK_ENVELOPE_CHARS);
 const bounded = (text: string) => (text.length > TEXT_LIMIT ? text.slice(0, TEXT_LIMIT) : text);
 const ms = (value: number) => (Number.isFinite(value) && value >= 0 ? Math.round(value) : 0);
 
@@ -362,14 +363,14 @@ function reduceCurrent(state: CompanionState, event: CompanionEvent): CompanionS
     case "delegation.tool.called": {
       if (!validId(event.callId)) return base;
       /* A tool call is a candidate and nothing more: it opens no delivery. */
-      return next({ delegation: { callId: event.callId, instruction: bounded(event.instruction), stage: "proposed", proposal: null, sourceText: null, delivery: null, refusal: null, answer: null, answers: [], notice: null } });
+      return next({ delegation: { callId: event.callId, instruction: boundedAsk(event.instruction), stage: "proposed", proposal: null, sourceText: null, delivery: null, refusal: null, answer: null, answers: [], notice: null } });
     }
     case "delegation.sending": {
       const { proposal } = event;
       if (base.delegation?.callId !== proposal.callId || base.delegation.stage !== "proposed") return next({});
       /* The send has started where the event came from, so the card says so:
          a second reading of the gate here could only show a sent request as refused. */
-      return next({ delegation: { ...base.delegation, stage: "sending", proposal, instruction: bounded(proposal.instruction) } });
+      return next({ delegation: { ...base.delegation, stage: "sending", proposal, instruction: boundedAsk(proposal.instruction) } });
     }
     case "delegation.confirmation.required": {
       const { proposal } = event;
@@ -382,7 +383,7 @@ function reduceCurrent(state: CompanionState, event: CompanionEvent): CompanionS
         : admitDelegationProposal({ sourceItemId: proposal.sourceItemId, instruction: proposal.instruction, inputs });
       if (!verdict.admit) return next({ delegation: { ...base.delegation, stage: "refused", refusal: verdict.reason } });
       const sourceText = inputs.find((input) => input.itemId === proposal.sourceItemId)?.text ?? null;
-      return next({ delegation: { ...base.delegation, stage: "awaiting-confirmation", proposal, sourceText, instruction: bounded(proposal.instruction) } });
+      return next({ delegation: { ...base.delegation, stage: "awaiting-confirmation", proposal, sourceText, instruction: boundedAsk(proposal.instruction) } });
     }
     case "delegation.retargeted": {
       const current = base.delegation;

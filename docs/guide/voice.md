@@ -36,8 +36,15 @@ continuous voice conversation from its composer.
 
 Switched on in Settings, a floating character on the desktop answers
 questions about the board by voice and sends work to the project's
-orchestrator when you ask. It speaks the orchestrator's new reports once and
-keeps them in the call's transcript.
+orchestrator when you ask. It writes each task in its own words, in your
+interface language unless you ask for another: what to do and why, the expected
+outcome, and the context needed from your conversation and the board. Each
+task can contain up to 4,000 characters. A short quote may preserve your key
+phrase. It keeps your scope and sends independent requests separately.
+General knowledge, chat and content it can provide itself stay with the voice;
+it answers them or declines, even if you ask to send them to the orchestrator.
+It speaks the orchestrator's new reports once and keeps them in the call's
+transcript.
 
 - **Through the API (with a key).** The default. It uses your OpenAI API
   key, has a monthly spend cap, and shows what the call and the month cost.

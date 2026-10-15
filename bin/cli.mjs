@@ -1140,6 +1140,8 @@ async function main() {
   }
 
   const runtimeHostEnvironment = cliRuntimeHostEnvironment(process.env, runtimeHostConfig);
+  // Both the runtime host and the Viewer launch control clients for this listener.
+  runtimeHostEnvironment.LLV_VIEWER_PORT = String(options.port);
 
   /* Self-update (#2007). A git checkout starts each child from the release
      the Viewer's Update surface last published (or from the package root),

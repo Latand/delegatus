@@ -4,7 +4,7 @@ import { canonicalProject } from "@/lib/projects/aliases";
 import { reportHeaderName } from "@/lib/projects/settings";
 import type { CompanionCommand, CompanionEvent, Delivery, Locale, Payload, Proposal, Recipient } from "./contract";
 import { admitDelegationProposal, type OperatorInput } from "./gate";
-import { liveProposalRefusal, waitingConfirmationWithdrawn, requestText, type EarlierRequest } from "./liveGate";
+import { askGist, VOICE_ASK_ENVELOPE_CHARS, liveProposalRefusal, waitingConfirmationWithdrawn, requestText, type EarlierRequest } from "./liveGate";
 import { cleanStrings, withoutCredentials, withoutLocalPaths } from "./redaction";
 import { DELEGATION_REASONS, deliveryFailureReason, type DelegationCode } from "./delegationOutcome";
 import { CompanionTranscriptRecords, type TranscriptEntry } from "./transcriptRecord";
@@ -55,7 +55,7 @@ const callRequest = (session: StoredSession, row: StoredProposal, now: number): 
   sentMinutesAgo: Math.max(0, Math.floor((now - row.expiresAt + CONFIRMATION_MS) / 60_000)), progressReports: row.reports.filter(id => id !== row.answered).length,
   askedBack: !row.answered && !!row.askedBack });
 /** What a request carries to the orchestrator: the operator's ask and how to report back on it. */
-const directiveText = (instruction: string, key: string) => `${instruction}\n\n[Voice Delegatus reply: report progress or the result using bridge_report with correlatesDirective equal to ${key}. Set answersDirective true on the report that answers this request in full, and false on progress, a partial answer or a question back. Keep the report tied to this request.]`;
+const directiveText = (instruction: string, key: string) => `${instruction}\n\n[Voice Delegatus wrote this request from the operator's speech; a last line naming the operator quotes them word for word. Reply: report progress or the result using bridge_report with correlatesDirective equal to ${key}. Set answersDirective true on the report that answers this request in full, and false on progress, a partial answer or a question back. Keep the report tied to this request.]`;
 /** The text of a report this session relayed, by its id. */
 const reportText = (session: StoredSession, reportId: string | undefined) => {
   const event = reportId ? session.events.find(row => (row.type === "orchestrator.answer" || row.type === "orchestrator.report") && row.reportId === reportId) : undefined;
@@ -360,7 +360,7 @@ export class CompanionAdmission {
       const request = callRequest(session, row, this.now());
       const answer = row.answered ? reported.find(event => event.reportId === row.answered) : undefined;
       const asked = !answer && row.askedBack ? reported.find(event => event.reportId === row.askedBack) : undefined;
-      return { request: request.handle, project: label(request.project), ask: request.instruction, sentMinutesAgo: request.sentMinutesAgo,
+      return { request: request.handle, project: label(request.project), ask: askGist(request.instruction), sentMinutesAgo: request.sentMinutesAgo,
         state: row.status === "failed" ? "delivery_failed" : row.answered ? "answered" : asked ? "orchestrator_asked_back" : "waiting_for_report", progressReports: request.progressReports,
         ...(answer ? { answer: { status: answer.status, text: answer.text, ...handled(answer.reportId) } } : {}),
         ...(asked ? { askedBack: { status: asked.status, text: asked.text, ...handled(asked.reportId) } } : {}) };
@@ -419,14 +419,14 @@ export class CompanionAdmission {
       // The projection's first card event shares the admission commit. A
       // restart can therefore replay the admitted delivery even if the
       // process stops before it emits the later sending/result events.
-      this.append(session, { type: "delegation.tool.called", callId, sourceItemId, instruction: instruction.slice(0, 2_000) }, this.now(), this.cleaner());
+      this.append(session, { type: "delegation.tool.called", callId, sourceItemId, instruction: [...instruction].slice(0, VOICE_ASK_ENVELOPE_CHARS).join("") }, this.now(), this.cleaner());
       if (proposal.confirmation) this.append(session, { type: "delegation.confirmation.required", proposal }, this.now(), this.cleaner());
       return proposal;
     });
     if (reusedLogicalRequest) return proposal;
     // Failed admission has no proposal commit to carry its card event.
     if (!proposal) {
-      this.emit(id, { type: "delegation.tool.called", callId, sourceItemId, instruction: instruction.slice(0, 2_000) });
+      this.emit(id, { type: "delegation.tool.called", callId, sourceItemId, instruction: [...instruction].slice(0, VOICE_ASK_ENVELOPE_CHARS).join("") });
       this.emit(id, { type: "delegation.tool.result", callId, result: { status: "refused", code: refusal } });
     }
     return proposal;

@@ -1,11 +1,13 @@
 import { agentPublicationIdentityEnv } from "@/lib/git/agentPublicationIdentity";
 import { afterEach, expect, test } from "bun:test";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { controllerCommitIdentityEnv } from "@/lib/git/controllerCommitIdentity";
 
 import { applyClaudeSpawnPolicy, fenceViewerSpawnPrompt, viewerMcpHttpUrl, viewerMcpServerEnv, viewerMcpTransport, viewerMcpTransportForLaunch, NATIVE_MULTI_AGENT_HOOK_MATCHER, NATIVE_MULTI_AGENT_TOOLS, NATIVE_SUBAGENT_DENY_MESSAGE, prepareManagedClaudeSpawnHome, viewerMcpServerEntry, VIEWER_SPAWN_PROMPT_FENCE } from "./spawnPolicy";
+import { viewerControlOrigin, viewerControlToken } from "@/lib/mcp/controlEndpoint";
 import { telegramMcpUrl } from "@/lib/telegram/packaging";
 
 const homes: string[] = [];
@@ -530,6 +532,138 @@ test("a key the Viewer puts in place at runtime (phone access) moves the next la
     expect(viewerMcpTransportForLaunch(capability)).toBe("http");
   } finally {
     for (const [name, value] of [["LLV_MCP_TRANSPORT", previous.transport], ["LLV_TOKEN", previous.token], ["LLV_STATE_DIR", previous.state]] as const) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  }
+});
+
+
+test("MCP children inherit the custom listener and environment-only credential", async () => {
+  const root = home();
+  const key = crypto.randomUUID();
+  const viewer = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: request =>
+    new Response(request.headers.get("authorization") === `Bearer ${key}` ? "authenticated" : "credential required", {
+      status: request.headers.get("authorization") === `Bearer ${key}` ? 200 : 403,
+    }),
+  });
+  try {
+    const source = { HOME: root, XDG_CONFIG_HOME: path.join(root, "config"), LLV_STATE_DIR: path.join(root, "state"),
+      LLV_VIEWER_PORT: String(viewer.port), LLV_TOKEN: key, PATH: process.env.PATH };
+    const env = viewerMcpServerEnv(source);
+    expect(env.LLV_TOKEN).toBeUndefined();
+    expect(viewerControlOrigin(env)).toBe(viewer.url.origin);
+    expect(viewerControlToken(env, viewer.url.origin) === key).toBe(true);
+    const child = Bun.spawn([process.execPath, "--eval", `
+      const { viewerControlOrigin, viewerControlToken } = await import(${JSON.stringify(path.resolve("src/lib/mcp/controlEndpoint.ts"))});
+      const origin = viewerControlOrigin(process.env);
+      const token = viewerControlToken(process.env, origin);
+      const response = await fetch(origin, { headers: token ? { authorization: "Bearer " + token } : {} });
+      console.log(response.status);
+    `], { env, stdout: "pipe", stderr: "pipe" });
+    expect(await new Response(child.stdout).text()).toBe("200\n");
+    expect(await child.exited).toBe(0);
+    const fenced = viewerMcpServerEnv({ ...source, LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1" });
+    expect(fenced.LLV_VIEWER_CONTROL_URL).toBe("http://127.0.0.1:1");
+    expect(viewerControlToken(fenced, "http://127.0.0.1:1")).toBeNull();
+    const registered = viewerMcpServerEnv(source, { LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1", PROJECT_AUTH: "kept" });
+    expect(registered.PROJECT_AUTH).toBe("kept");
+    expect(viewerControlToken(registered, "http://127.0.0.1:1")).toBeNull();
+  } finally {
+    viewer.stop(true);
+  }
+});
+
+test("registered Claude Viewer endpoints do not inherit credentials from the parent endpoint", async () => {
+  const accountHome = home();
+  const parentKey = crypto.randomUUID();
+  const childKey = crypto.randomUUID();
+  const parentRequests: Array<string | null> = [];
+  const childRequests: Array<string | null> = [];
+  const listener = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: request => {
+    parentRequests.push(request.headers.get("authorization"));
+    return new Response("ok");
+  } });
+  const childListener = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: request => {
+    childRequests.push(request.headers.get("authorization"));
+    return new Response("ok");
+  } });
+  const envNames = ["LLV_VIEWER_PORT", "LLV_TOKEN", "LLV_VIEWER_CONTROL_TOKEN", "LLV_VIEWER_CONTROL_URL", "XDG_CONFIG_HOME", "LLV_STATE_DIR"] as const;
+  const previous = Object.fromEntries(envNames.map(name => [name, process.env[name]]));
+  try {
+    process.env.LLV_VIEWER_PORT = "8898";
+    process.env.LLV_TOKEN = parentKey;
+    process.env.LLV_VIEWER_CONTROL_TOKEN = "";
+    process.env.LLV_VIEWER_CONTROL_URL = "";
+    process.env.XDG_CONFIG_HOME = path.join(accountHome, "config");
+    process.env.LLV_STATE_DIR = path.join(accountHome, "state");
+    const source = { ...process.env, LLV_VIEWER_PORT: String(listener.port), LLV_TOKEN: parentKey };
+    const parent = viewerMcpServerEnv(source);
+    expect(parent.LLV_VIEWER_CONTROL_TOKEN).toBe(parentKey);
+    await fetch(`http://127.0.0.1:${listener.port}`, { headers: { authorization: `Bearer ${parent.LLV_VIEWER_CONTROL_TOKEN}` } });
+
+    const ambientOverride = viewerMcpServerEnv(source, { LLV_VIEWER_PORT: String(childListener.port) });
+    expect(ambientOverride.LLV_VIEWER_CONTROL_TOKEN).toBeUndefined();
+    await fetch(`http://127.0.0.1:${childListener.port}`, { headers: ambientOverride.LLV_VIEWER_CONTROL_TOKEN
+      ? { authorization: `Bearer ${ambientOverride.LLV_VIEWER_CONTROL_TOKEN}` } : {} });
+    const pinnedOverride = viewerMcpServerEnv({ ...source, LLV_VIEWER_CONTROL_TOKEN: parentKey, LLV_TOKEN: undefined }, {
+      LLV_VIEWER_CONTROL_URL: `http://127.0.0.1:${childListener.port}`,
+    });
+    expect(pinnedOverride.LLV_VIEWER_CONTROL_TOKEN).toBeUndefined();
+    await fetch(`http://127.0.0.1:${childListener.port}`, { headers: pinnedOverride.LLV_VIEWER_CONTROL_TOKEN
+      ? { authorization: `Bearer ${pinnedOverride.LLV_VIEWER_CONTROL_TOKEN}` } : {} });
+    const explicitChild = viewerMcpServerEnv(source, {
+      LLV_VIEWER_PORT: String(childListener.port), LLV_VIEWER_CONTROL_TOKEN: childKey,
+    });
+    expect(explicitChild.LLV_VIEWER_CONTROL_TOKEN).toBe(childKey);
+    expect(explicitChild.LLV_TOKEN).toBeUndefined();
+    await fetch(`http://127.0.0.1:${childListener.port}`, { headers: { authorization: `Bearer ${explicitChild.LLV_VIEWER_CONTROL_TOKEN}` } });
+    const explicitLegacyChild = viewerMcpServerEnv(source, {
+      LLV_VIEWER_PORT: String(childListener.port), LLV_TOKEN: childKey,
+    });
+    expect(explicitLegacyChild.LLV_VIEWER_CONTROL_TOKEN).toBe(childKey);
+    expect(explicitLegacyChild.LLV_TOKEN).toBeUndefined();
+    await fetch(`http://127.0.0.1:${childListener.port}`, { headers: { authorization: `Bearer ${explicitLegacyChild.LLV_VIEWER_CONTROL_TOKEN}` } });
+    for (const inherited of [
+      { LLV_TOKEN: parentKey, LLV_VIEWER_CONTROL_TOKEN: undefined },
+      { LLV_TOKEN: undefined, LLV_VIEWER_CONTROL_TOKEN: parentKey },
+    ]) {
+      const aliasEndpoint = viewerMcpServerEnv({ ...source, ...inherited }, {
+        DELEGATUS_VIEWER_CONTROL_URL: `http://127.0.0.1:${childListener.port}`,
+      });
+      expect(aliasEndpoint.LLV_VIEWER_CONTROL_URL).toBe(`http://127.0.0.1:${childListener.port}`);
+      expect(aliasEndpoint).not.toHaveProperty("DELEGATUS_VIEWER_CONTROL_URL");
+      expect(aliasEndpoint.LLV_VIEWER_CONTROL_TOKEN).toBeUndefined();
+      await fetch(`http://127.0.0.1:${childListener.port}`, { headers: aliasEndpoint.LLV_VIEWER_CONTROL_TOKEN
+        ? { authorization: `Bearer ${aliasEndpoint.LLV_VIEWER_CONTROL_TOKEN}` } : {} });
+    }
+    const explicitAliasChild = viewerMcpServerEnv(source, {
+      DELEGATUS_VIEWER_CONTROL_URL: `http://127.0.0.1:${childListener.port}`,
+      DELEGATUS_VIEWER_CONTROL_TOKEN: childKey,
+    });
+    expect(explicitAliasChild.LLV_VIEWER_CONTROL_TOKEN).toBe(childKey);
+    expect(explicitAliasChild).not.toHaveProperty("DELEGATUS_VIEWER_CONTROL_TOKEN");
+    await fetch(`http://127.0.0.1:${childListener.port}`, { headers: { authorization: `Bearer ${explicitAliasChild.LLV_VIEWER_CONTROL_TOKEN}` } });
+    expect(parentRequests).toEqual([`Bearer ${parentKey}`]);
+    expect(childRequests).toEqual([null, null, `Bearer ${childKey}`, `Bearer ${childKey}`, null, null, `Bearer ${childKey}`]);
+
+    fs.writeFileSync(path.join(accountHome, ".claude.json"), JSON.stringify({ mcpServers: {
+      viewer: { type: "stdio", command: "viewer-mcp", env: {
+        DELEGATUS_VIEWER_CONTROL_URL: `http://127.0.0.1:${childListener.port}`,
+      } },
+    } }));
+    const installed = applyClaudeSpawnPolicy(accountHome, { profileId: "endpoint-fence", cwd: "/repo" });
+    const config = JSON.parse(fs.readFileSync(installed.mcpConfigPath, "utf8")) as {
+      mcpServers: { viewer: { env: Record<string, string> } };
+    };
+    expect(config.mcpServers.viewer.env.LLV_VIEWER_CONTROL_URL).toBe(`http://127.0.0.1:${childListener.port}`);
+    expect(config.mcpServers.viewer.env).not.toHaveProperty("DELEGATUS_VIEWER_CONTROL_URL");
+    expect(config.mcpServers.viewer.env.LLV_VIEWER_CONTROL_TOKEN).toBeUndefined();
+  } finally {
+    listener.stop(true);
+    childListener.stop(true);
+    for (const name of envNames) {
+      const value = previous[name];
       if (value === undefined) delete process.env[name];
       else process.env[name] = value;
     }
