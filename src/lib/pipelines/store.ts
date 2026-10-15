@@ -1087,6 +1087,28 @@ export async function controllerPipelineVersion(id: string): Promise<string> {
 export async function findControllerPipeline(id: string): Promise<Pipeline | null> {
   return waitForStateLock("pipelines.controller-candidate", () => stateLockAttempt("pipelines.controller-candidate", () => pipelineStore().pipelineControllerCandidate(id)));
 }
+export async function controllerAttemptWindow(id: string, after: number, stage: string) {
+  return withViewerOperation("pipelines.controller-read", () => waitForStateLock("pipelines.controller-attempts", () =>
+    stateLockAttempt("pipelines.controller-attempts", () => performanceSpans.sync("controller.lane", () => ({
+      window: pipelineStore().pipelineAttemptWindow(id, after, 16), current: pipelineStore().pipelineCurrentReferences(id, stage),
+    })))));
+}
+export async function controllerOtherTerminalHosts(id: string, selected: readonly number[]): Promise<boolean> {
+  return withViewerOperation("pipelines.controller-read", () => waitForStateLock("pipelines.controller-attempts", () =>
+    stateLockAttempt("pipelines.controller-attempts", () => performanceSpans.sync("controller.lane", () => pipelineStore().pipelineOtherTerminalHosts(id,selected)))));
+}
+export async function controllerHostHasLiveWork(target: import("./types").PipelineStageHostRef): Promise<boolean> {
+  const identities: Array<[string, string]> = [];
+  for (const kind of ["conversationId", "agentPath", "paneId", "launchId"] as const) if (target[kind]) identities.push([kind,target[kind]!]);
+  if (target.conversationId) identities.push(["srcConversationId",target.conversationId]);
+  if (target.agentPath) identities.push(["srcPath",target.agentPath]);
+  return withViewerOperation("pipelines.controller-read", () => waitForStateLock("pipelines.controller-owners", () =>
+    stateLockAttempt("pipelines.controller-owners", () => performanceSpans.sync("controller.ownership", () => pipelineStore().pipelineOwnerExists(identities,true)))));
+}
+export async function controllerFlowAttached(id: string): Promise<boolean> {
+  return withViewerOperation("pipelines.controller-read", () => waitForStateLock("pipelines.controller-owners", () =>
+    stateLockAttempt("pipelines.controller-owners", () => performanceSpans.sync("controller.ownership", () => pipelineStore().pipelineOwnerExists([["flow",id]],false)))));
+}
 export async function selectPipelineControllerWork(now: number, excluded: readonly string[]) {
   return waitForStateLock("pipelines.controller-schedule", () => stateLockAttempt("pipelines.controller-schedule", () => pipelineStore().pipelineTickWork(now, excluded)));
 }

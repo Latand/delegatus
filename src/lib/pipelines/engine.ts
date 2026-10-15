@@ -1,4 +1,4 @@
-import { controllerPipelineKeys, controllerAttemptSelected, withControllerPipelineScope } from "./controllerScope";
+import { controllerPipelineKeys, controllerAttemptSelected, controllerReferences, controllerCloseBudget, controllerRuns, withControllerPipelineScope } from "./controllerScope";
 import { startPipelineControllerJob, pipelineControllerJobLanes } from "./controllerJobs";
 import { performanceSpans } from "@/lib/performanceSpans";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
@@ -138,7 +138,7 @@ import { pipelineStageRuntimeProfile, pipelineStageSandbox, type PipelineStageRu
 import { pipelineValidationError, type PipelineValidationViolation } from "./validation";
 import { firstRunsElsewhere, TASK_RUNS_ELSEWHERE } from "@/lib/links/linked";
 import { pipelineHostHasLiveWork } from "./hostRetirement";
-import { pipelineArtifactsDir, pipelineRevision, assignPipelineDelivery, createPipelineWithDelivery, deliveryJournal, deliveryOwnerError, pipelineDeliveryLookup, takeoverPipelineDelivery, unclaimedPipelinePublications, withDeliveryMutationAsync, buildPipeline, findPipelineRecord, isEffectiveRole, loadPipelines, loadPipelinesForList, loadPipelinesAsync, selectControllerPipelines, controllerPipelineRowOrder, controllerPipelineVersion, pipelineGraphError, pipelineIdentity, pipelineTaskLinkError, PipelineStoreError, withPipelineControllerMutation, withPipelineMutation } from "./store";
+import { controllerOtherTerminalHosts, controllerHostHasLiveWork, controllerFlowAttached, pipelineArtifactsDir, pipelineRevision, assignPipelineDelivery, createPipelineWithDelivery, deliveryJournal, deliveryOwnerError, pipelineDeliveryLookup, takeoverPipelineDelivery, unclaimedPipelinePublications, withDeliveryMutationAsync, buildPipeline, findPipelineRecord, isEffectiveRole, loadPipelines, loadPipelinesForList, loadPipelinesAsync, selectControllerPipelines, controllerPipelineRowOrder, controllerPipelineVersion, pipelineGraphError, pipelineIdentity, pipelineTaskLinkError, PipelineStoreError, withPipelineControllerMutation, withPipelineMutation } from "./store";
 import { admitQueuedPipelineCreations, queuePipelineCreation } from "./creationQueue";
 import { projectIdentityFromRemote, localRepositoryProjectId } from "@/lib/projects/identity";
 import { mergeOnReviewEnabled } from "@/lib/projects/settings";
@@ -3311,7 +3311,7 @@ function reconcilePendingPipelineAdoptions(pipeline: Pipeline, ports: PipelinePo
 async function reconcileHistoricalAttempts(pipeline: Pipeline, entries: FileEntry[], ports: PipelinePorts): Promise<boolean> {
   let changed = false;
   let scanned = 0;
-  for (const run of pipeline.runs) {
+  for (const run of controllerRuns(pipeline)) {
     for (const attempt of run.attempts) {
       if (++scanned % 16 === 0) await yieldToRuntime();
       if (!controllerAttemptSelected(pipeline.id, run.stageId, attempt.n)) continue;
@@ -5012,7 +5012,7 @@ function rebindPipelineAttemptPaths(pipeline: Pipeline, ports: PipelinePorts): b
       changed = true;
     }
   }
-  for (const run of pipeline.runs) {
+  for (const run of controllerRuns(pipeline)) {
     for (const attempt of run.attempts) {
       if (!controllerAttemptSelected(pipeline.id, run.stageId, attempt.n)) continue;
       if (!attempt.conversationId || attempt.completedAt || openRuntimeSwitch(attempt)) continue;
@@ -5873,7 +5873,7 @@ export async function drainStageActivations(ports: PipelinePorts): Promise<void>
   if ((ports.structuredDeliveryPublication?.() ?? "ready") !== "ready") { await drainPipelineCloses(ports); return; }
   const owner = captureProcessIdentity(process.pid);
   for (const snapshot of await selectControllerPipelines("activation")) {
-    for (const run of snapshot.runs) for (const original of run.attempts) {
+    for (const run of controllerRuns(snapshot)) for (const original of run.attempts) {
       const reservation = original.activation;
       if (!reservation || activeActivations.has(reservation.id) || !controllerAttemptSelected(snapshot.id, run.stageId, original.n)) continue;
       // Both checkpoints can precede registry admission; keep their identity.
@@ -8324,7 +8324,7 @@ async function reconcileBoundReviewFlow(pipeline: Pipeline, ports: PipelinePorts
 
 function reconcilePipelineEmbeddedFlows(pipeline: Pipeline, ports: PipelinePorts): boolean {
   let changed = false;
-  for (const run of pipeline.runs) {
+  for (const run of controllerRuns(pipeline)) {
     for (const attempt of run.attempts) {
       if (!controllerAttemptSelected(pipeline.id, run.stageId, attempt.n)) continue;
       const flow = attempt.flowId ? ports.getFlow(attempt.flowId) : null;
@@ -9508,13 +9508,15 @@ async function reconcileTerminalStageHosts(pipeline: Pipeline, ports: PipelinePo
   const unconfirmedAttempts = new Set((pipeline.unconfirmedHosts ?? [])
     .map((host) => `${host.stageId}:${host.attempt}`));
   const prior = pipeline.terminalReap;
-  const candidates = launchedStageHosts(pipeline).filter(({ target, turnSettled }) => turnSettled
+  const refs = controllerReferences(pipeline.id);
+  const otherCandidates = refs ? await controllerOtherTerminalHosts(pipeline.id, refs.map(ref => ref.position)) : false;
+  const candidates = launchedStageHosts(pipeline, Boolean(refs)).filter(({ target, turnSettled }) => turnSettled
     && !(target.conversationId && target.conversationId === pipeline.srcConversationId)
     && !(target.agentPath && target.agentPath === pipeline.srcPath)
     && !settledAttempts.has(`${target.stageId}:${target.attempt}`)
     && !unconfirmedAttempts.has(`${target.stageId}:${target.attempt}`));
   if (candidates.length === 0) {
-    if (pipeline.state !== "completed" || prior?.settledAt) return false;
+    if (otherCandidates || pipeline.state !== "completed" || prior?.settledAt) return false;
     const settledAt = ports.now();
     pipeline.terminalReap = prior
       ? { ...prior, lastAt: settledAt, settledAttempts: [...settledAttempts], settledAt }
@@ -9533,7 +9535,7 @@ async function reconcileTerminalStageHosts(pipeline: Pipeline, ports: PipelinePo
   const deadline = ports.monotonicNow() + TERMINAL_REAP_BUDGET_MS;
   const survivors: Array<PipelineStageHostRef & { operationId: string | null; detail: string }> = [];
   let attempted = false;
-  let deferred = candidates.some(({ target }) => !controllerAttemptSelected(pipeline.id, target.stageId, target.attempt));
+  let deferred = otherCandidates || candidates.some(({ target }) => !controllerAttemptSelected(pipeline.id, target.stageId, target.attempt));
   let liveWork = false;
   for (const [index, { target, attempt }] of candidates.entries()) {
     if (!controllerAttemptSelected(pipeline.id, target.stageId, target.attempt)) continue;
@@ -9569,7 +9571,7 @@ async function reconcileTerminalStageHosts(pipeline: Pipeline, ports: PipelinePo
       liveWork = true;
       continue;
     }
-    if (pipelineHostHasLiveWork(controllerPipelineKeys() ? loadPipelinesForList() : pipelines, target)) {
+    if ((controllerPipelineKeys() ? await controllerHostHasLiveWork(target) : pipelineHostHasLiveWork(pipelines, target))) {
       liveWork = true;
       continue;
     }
@@ -9589,7 +9591,7 @@ async function reconcileTerminalStageHosts(pipeline: Pipeline, ports: PipelinePo
   }
   reap.lastAt = ports.now();
   reap.settledAttempts = [...settledAttempts];
-  if (controllerPipelineKeys() && (prior?.attemptRounds || candidates.some(({ target }) => !controllerAttemptSelected(pipeline.id, target.stageId, target.attempt)))) {
+  if (controllerPipelineKeys() && (otherCandidates || prior?.attemptRounds || candidates.some(({ target }) => !controllerAttemptSelected(pipeline.id, target.stageId, target.attempt)))) {
     const rounds = reap.attemptRounds ?? Object.fromEntries(candidates.map(({ target }) => [`${target.stageId}:${target.attempt}`, prior?.rounds ?? 0]));
     const final = survivors.filter(host => {
       const key = `${host.stageId}:${host.attempt}`;
@@ -9598,11 +9600,11 @@ async function reconcileTerminalStageHosts(pipeline: Pipeline, ports: PipelinePo
     });
     for (const key of settledAttempts) delete rounds[key];
     for (const host of final) delete rounds[`${host.stageId}:${host.attempt}`];
-    reap.rounds = Math.max(reap.rounds, 0, ...Object.values(rounds));
+    reap.rounds = Math.max(reap.rounds, attempted ? 1 : 0, ...Object.values(rounds));
     const known = new Set((pipeline.unconfirmedHosts ?? []).map(host => `${host.stageId}:${host.attempt}`));
     if (final.length) pipeline.unconfirmedHosts = [...(pipeline.unconfirmedHosts ?? []), ...final.filter(host => !known.has(`${host.stageId}:${host.attempt}`))
       .map(host => ({ ...host, at: reap.lastAt }))];
-    const complete = candidates.every(({ target }) => settledAttempts.has(`${target.stageId}:${target.attempt}`)
+    const complete = !otherCandidates && candidates.every(({ target }) => settledAttempts.has(`${target.stageId}:${target.attempt}`)
       || known.has(`${target.stageId}:${target.attempt}`) || final.some(host => host.stageId === target.stageId && host.attempt === target.attempt));
     reap.settledAt = complete && !liveWork ? reap.lastAt : null;
     if (reap.settledAt) delete reap.attemptRounds; else reap.attemptRounds = rounds;
@@ -10045,8 +10047,8 @@ async function drainPendingStaleControllerFlows(ports: PipelinePorts): Promise<v
     await withPipelineMutation(async (pipelines, persist) => {
       const owner = pipelines.find(pipeline => pipeline.id === item.pipelineId);
       if (!owner?.pendingReviewFlowCleanup?.includes(item.flowId)) return;
-      const attached = (controllerPipelineKeys() ? loadPipelinesForList() : pipelines).some(pipeline =>
-        pipeline.runs.some(run => run.attempts.some(attempt => attempt.flowId === item.flowId)));
+      const attached = (controllerPipelineKeys() ? await controllerFlowAttached(item.flowId) : pipelines.some(pipeline =>
+        pipeline.runs.some(run => run.attempts.some(attempt => attempt.flowId === item.flowId))));
       if (attached) {
         owner.pendingReviewFlowCleanup = owner.pendingReviewFlowCleanup.filter(flowId => flowId !== item.flowId);
         if (!owner.pendingReviewFlowCleanup.length) delete owner.pendingReviewFlowCleanup;
@@ -10081,8 +10083,8 @@ async function drainPendingStaleControllerFlows(ports: PipelinePorts): Promise<v
 async function settleStaleControllerFlow(error: unknown, ports: PipelinePorts): Promise<void> {
   if (!(error instanceof StaleControllerFlowError)) return;
   await withPipelineMutation(async (pipelines, persist) => {
-    if ((controllerPipelineKeys() ? loadPipelinesForList() : pipelines).some(pipeline =>
-      pipeline.runs.some(run => run.attempts.some(attempt => attempt.flowId === error.flowId)))) return;
+    if ((controllerPipelineKeys() ? await controllerFlowAttached(error.flowId) : pipelines.some(pipeline =>
+      pipeline.runs.some(run => run.attempts.some(attempt => attempt.flowId === error.flowId))))) return;
     const owner = pipelines.find(pipeline => pipeline.id === error.pipelineId);
     if (!owner) return;
     owner.pendingReviewFlowCleanup ??= [];
@@ -10248,14 +10250,14 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
     // an unfinished launch; reserved paths still need the absence proof in
     // neverStartedLaunch. Settled attempts leave this set.
     const closedLaunches = new Set((await selectControllerPipelines("closed-launch")).filter((pipeline) => pipeline.state === "closed"
-      && pipeline.runs.some((run) => run.attempts.some((attempt) => controllerAttemptSelected(pipeline.id, run.stageId, attempt.n) && attempt.launchId && attempt.state !== "failed" && !attempt.verdict
+      && controllerRuns(pipeline).some((run) => run.attempts.some((attempt) => controllerAttemptSelected(pipeline.id, run.stageId, attempt.n) && attempt.launchId && attempt.state !== "failed" && !attempt.verdict
         && ["starting", "path-pending"].includes(ports.spawnReceipt(attempt.launchId)?.state ?? "")))).map((pipeline) => pipeline.id));
     let closedLaunchesChanged = false;
     for (const id of closedLaunches) await withDeliveryMutationAsync(tx => {
       const pipeline = tx.get(id);
       if (!pipeline || pipeline.state !== "closed") return;
       let changed = false;
-      for (const run of pipeline.runs) for (const attempt of run.attempts) {
+      for (const run of controllerRuns(pipeline)) for (const attempt of run.attempts) {
         if (controllerAttemptSelected(pipeline.id, run.stageId, attempt.n)) changed = settleNeverStartedLaunch(pipeline, attempt, ports) || changed;
       }
       if (changed) { tx.put(pipeline); closedLaunchesChanged = true; }
@@ -10341,7 +10343,7 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
           changed = true;
           return;
         }
-        for (const run of pipeline.runs) for (const attempt of run.attempts) {
+        for (const run of controllerRuns(pipeline)) for (const attempt of run.attempts) {
           if (controllerAttemptSelected(pipeline.id, run.stageId, attempt.n)) pipelineChanged = await settleAbandonedLaunch(pipeline, attempt, lanePorts) || pipelineChanged;
         }
         pipelineChanged = performanceSpans.sync("controller.lane", () => reconcilePipelineEmbeddedFlows(pipeline, lanePorts)) || pipelineChanged;
@@ -11538,11 +11540,12 @@ function terminalizeAttemptForClose(candidate: StageHostCandidate, note: string,
  * board — this issue again, through another door. A legacy review attempt a
  * conversion kept is probed as the host it was, never labelled adopted.
  */
-function launchedStageHosts(pipeline: Pipeline): StageHostCandidate[] {
+function launchedStageHosts(pipeline: Pipeline, selected = false): StageHostCandidate[] {
   const candidates: StageHostCandidate[] = [];
   const seen = new Set<string>();
-  for (const run of pipeline.runs) {
+  for (const run of (selected ? controllerRuns(pipeline) : pipeline.runs)) {
     for (const attempt of run.attempts) {
+      if (selected && !controllerReferences(pipeline.id)?.some(ref => ref.stageId === run.stageId && ref.n === attempt.n && ref.firstHost)) continue;
       if (!attempt.conversationId && !attempt.agentPath && !attempt.paneId) continue;
       /* Rounds can share a host identity (a review round re-reads its reviewer
          conversation); probing one host once keeps the counts truthful. */
@@ -11641,7 +11644,8 @@ async function drainPipelineCloses(ports: PipelinePorts): Promise<void> {
   const owner = captureProcessIdentity(process.pid);
   for (const snapshot of await selectControllerPipelines("close")) {
     const obligation = snapshot.closeTeardown;
-    if (!obligation || activeCloses.has(obligation.id)) continue;
+    const budget = controllerCloseBudget(snapshot.id);
+    if (!obligation || activeCloses.has(obligation.id) || budget && budget.used >= 16) continue;
     if (obligation.phase === "settled") {
       const report = snapshot.closeReport!;
       if (report.unconfirmed.length && !report.stillRunning.length) {
@@ -11726,20 +11730,25 @@ async function drainPipelineCloses(ports: PipelinePorts): Promise<void> {
       });
       const deadline = ports.monotonicNow() + CLOSE_TEARDOWN_BUDGET_MS;
       let processed = 0;
+      const cancellationLimit = controllerPipelineKeys() ? 8 : Infinity;
       for (const target of [...(report.pendingContinuations ?? [])]) {
-        if (controllerPipelineKeys() && processed >= 16) break;
-        if (processed++ > 0 && ports.monotonicNow() >= deadline) break;
+        if (processed >= cancellationLimit || budget && (budget.cancellations >= 8 || budget.used >= 16)) break;
+        if (processed++ > 0 && ports.monotonicNow() >= deadline - (controllerPipelineKeys() ? CLOSE_TEARDOWN_BUDGET_MS / 2 : 0)) break;
+        if (budget) { budget.cancellations++; budget.used++; }
         try {
           await ports.invalidateProviderContinuation?.(target.conversationId);
           report.pendingContinuations = report.pendingContinuations!.filter((item) => item !== target);
         } catch (error) {
           target.detail = `runtime-host automatic continuation cancellation failed: ${String(error)}`;
+          report.pendingContinuations = [...report.pendingContinuations!.filter(item => item !== target), target];
         }
         await checkpoint();
       }
       for (const target of [...report.pending]) {
-        if (controllerPipelineKeys() && (processed >= 16 || !controllerAttemptSelected(snapshot.id, target.stageId, target.attempt))) break;
+        if (controllerPipelineKeys() && (processed >= 16 || budget && budget.used >= 16)) break;
+        if (!controllerAttemptSelected(snapshot.id, target.stageId, target.attempt)) continue;
         if (processed++ > 0 && ports.monotonicNow() >= deadline) break;
+        if (budget) budget.used++;
         const attempt = runFor(claimed, target.stageId)?.attempts.find((item) => item.n === target.attempt);
         if (!attempt) throw new Error("close target attempt disappeared");
         const host = plan.hosts!.find((item) => closeHostIdentity(item.target) === closeHostIdentity(target));
@@ -11753,7 +11762,7 @@ async function drainPipelineCloses(ports: PipelinePorts): Promise<void> {
         try { await stopCloseHost(candidate, report, ports); }
         catch (error) { report.unconfirmed.push({ ...target, operationId: null, detail: `close stop could not be confirmed: ${String(error)}` }); }
         if (closeHostIdentity(attempt) === closeHostIdentity(target)) Object.assign(attempt, closeHostEvidence(frozen));
-        report.pending.shift();
+        report.pending = report.pending.filter(item => item !== target);
         await checkpoint(candidate);
       }
       if (report.pending.length || report.pendingContinuations?.length) {

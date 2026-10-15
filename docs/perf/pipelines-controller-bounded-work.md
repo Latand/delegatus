@@ -89,6 +89,9 @@ scope of the measurements; production verification follows deployment.
 
 ## Before and after
 
+These measurements record the initial implementation. The review-fix replay
+below records the updated implementation.
+
 The table uses medians over three cold observations and six subsequent sweeps.
 Each candidate sweep uses eight phases, including its final empty observation.
 Main-thread CPU comes from utime+stime at 100 ticks/second. Timer delay is a
@@ -192,3 +195,114 @@ used isolated state and the supplied serving-release gate. The measured product
 source remained unchanged. These completed checks support the documented
 `LLV_SKIP_HOOKS=1` publication override after the concurrent runner refusal;
 required hosted checks still judge the published commit.
+
+
+## Review fixes, 2026-10-15
+
+Close drains share one phase budget across every invocation in that phase.
+At most eight cancellation attempts consume it, leaving capacity for host
+teardown within the sixteen-operation bound. Failed cancellations move to the
+end of the persisted pending list. A fresh process continues that order and
+retains every failed cancellation until it succeeds.
+
+Host and flow ownership guards read indexed identity references. Row triggers
+commit these references alongside the authoritative pipeline, including writes
+from older peers, rollback, deletion and restart backfill. The host projection
+preserves source ownership, publication custody, running attempts and unfinished
+activation. Resident-host checks and stale-flow cleanup keep peer protection.
+
+A second projection holds attempt positions and references to outstanding host
+obligations. The persisted keyset cursor selects sixteen references directly;
+a separate indexed lookup retains the current attempt. Deadline preparation
+and ordinary reconciliation use those references. Terminal reaping probes its
+selected references and asks an indexed existence query about other candidates.
+Its identity deduplication and retry custody retain the full engine's decisions.
+Projection construction materializes compact reference fields before sorting.
+
+The focused checks exercise seventeen cancellations with sixteen immediate
+refusals, host progress within the same phase budget and a fresh process between
+phases; resident-host and stale-flow peer ownership with zero and one thousand
+settled peers; and selection with 32 and 4,096 attempts. The projection checks
+compare custody predicates with the existing guard and cover old-writer SQL,
+rollback, deletion and backfill. An independent timer advances while each new
+read runs beside a peer-held writer lock.
+
+
+### Attempt preparation with fixed selected work
+
+The latest warmed scale probe keeps one paused lane and a sixteen-reference
+window. Each preparation sample invokes the production indexed window/current
+lookup. CPU uses the main thread's ten-millisecond accounting ticks over one
+thousand calls. The maximum call time bounds its synchronous work from above.
+
+| Measurement | 32 retained attempts | 4,096 retained attempts |
+| --- | ---: | ---: |
+| References returned per preparation | 16 | 16 |
+| Selected-key serializations across one phase | 80 | 80 |
+| Preparation calls | 1,000 | 1,000 |
+| Total preparation wall time | 37.84 ms | 32.12 ms |
+| Total preparation main-thread CPU | 40 ms | 30 ms |
+| Maximum preparation call wall time | 1.86 ms | 0.24 ms |
+| Whole warmed phase wall time | 25.80 ms | 87.55 ms |
+
+Whole-phase timings include existing full-lane copying. The indexed preparation
+and reconciliation selections keep their work fixed as that history grows.
+Ordinary metadata updates leave the reference projections untouched; changes to
+ownership or attempt fields rebuild their references atomically.
+
+
+### Paired replay after the fixes
+
+Three alternating pairs reused the unchanged E4/E5 checksums, the same guarded
+driver, fixed engine time, conservative responses and a ten-second Git wait.
+Each source export and trial had isolated roots. All 941 authoritative
+hot/archive payloads match in every pair. Every trial records zero refused
+actuation and zero replay errors. Candidate phases stayed within the two-second
+cold and 250-millisecond warm fixture budgets. Its largest warm labelled slice
+was 6.23 ms and largest warm timer delay was 57.75 ms.
+
+| Measurement | Baseline | Fixed candidate |
+| --- | ---: | ---: |
+| Largest cold phase, median (ms) | 11,652 | 1,417 |
+| Largest warm phase, median (ms) | 288.0 | 80.7 |
+| Largest cold phase across trials (ms) | 12,207 | 1,896 |
+| Largest warm phase across trials (ms) | 360.7 | 93.1 |
+| Largest cold per-phase main-thread CPU, median (ms) | 2,340 | 1,380 |
+| Largest warm per-phase main-thread CPU, median (ms) | 275 | 80 |
+| Complete cold sweep including job settlement, median (ms) | 11,676 | 12,645 |
+| Complete warm sweep including job settlement, median (ms) | 308 | 419 |
+| Complete cold sweep main-thread CPU, median (ms) | 2,350 | 3,290 |
+| Complete warm sweep main-thread CPU, median (ms) | 275 | 390 |
+| Cold pipeline decoded rows, median | 614 | 553 |
+| Cold pipeline decoded source bytes, median | 75,757,641 | 71,231,598 |
+| Cold pipeline cloned rows, median | 859 | 298 |
+| Cold pipeline cloned source bytes, median | 110,803,535 | 35,182,513 |
+| Cold pipeline logical read bytes, median | 749,671,688 | 1,045,528,937 |
+| Warm pipeline decoded rows, median | 94.5 | 55.5 |
+| Warm pipeline decoded source bytes, median | 11,298,036 | 7,460,856 |
+| Warm pipeline cloned rows, median | 373 | 91 |
+| Warm pipeline cloned source bytes, median | 49,692,470 | 11,390,425 |
+| Warm pipeline logical read bytes, median | 15,889,533 | 38,896,858 |
+| Whole-hot returned rows per sweep | 267 | 0 |
+| Cold largest labelled synchronous slice, median (ms) | 423.69 | 726.91 |
+| Warm largest labelled synchronous slice across trials (ms) | 3.42 | 6.23 |
+| Warm maximum timer delay across trials (ms) | 19.72 | 57.75 |
+| Cold largest observed lease hold across trials (ms) | 724.00 | 458.10 |
+| Warm largest observed lease hold across trials (ms) | 6.35 | 11.37 |
+
+Complete sweeps use more main-thread CPU, logical reads and wall time. Cold
+projection initialization remains visible. The phase and materialization
+measurements establish the improvement within this slice's scope. The raw
+samples, measured source hashes, preparation probe and check coverage are in
+[pipelines-controller-review-fixes.json](../../evidence/perf/pipelines-controller-review-fixes.json).
+
+The final two affected test files passed in 38.4 seconds. The publication suite
+passed all 432 cases in two disjoint filters (206 and 226 cases), with a
+15-second per-test timeout and the existing five-minute execution guard on each
+run. Its unfiltered invocation exceeded the file guard, and earlier default
+five-second successor cases timed out. The 23-file comparison also recorded
+19 baseline-reproduced assertions and one flaky assertion. The Linux backend and seventeen explicit platform
+files passed, as did TypeScript and changed-file lint. All commands used private
+HOME/config/temp/state roots and a closed-port control URL. No runtime-host
+product source changed. The local privacy gate passed over the PR range and
+every changed path.

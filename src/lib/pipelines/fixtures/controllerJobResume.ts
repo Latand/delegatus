@@ -1,4 +1,5 @@
 /** A real Viewer process boundary for controller job recovery tests. */
+import fs from "node:fs";
 import { defaultPipelinePorts } from "../engine";
 import { tickPipelinesController } from "../controllerPass";
 import { settlePipelineControllerJobs } from "../controllerJobs";
@@ -19,7 +20,16 @@ ports.stopStageAgent = async () => { throw new Error("recovery fixture cannot si
 ports.stopStagePane = async () => { throw new Error("recovery fixture cannot signal panes"); };
 ports.spawnAgent = async () => { throw new Error("recovery fixture cannot spawn an agent"); };
 ports.structuredDeliveryPublication = () => "unbound";
-for (let round = 0; round < 4; round++) {
+const closeLog = process.env.LLV_CONTROLLER_CLOSE_LOG;
+if (closeLog) {
+  if (!closeLog.startsWith(`${process.env.LLV_STATE_DIR}/`)) throw new Error("close fixture log must stay in isolated state");
+  ports.invalidateProviderContinuation = async id => {
+    fs.appendFileSync(closeLog, `cancel:${id}\n`);
+    if (id !== "close-16") throw new Error("temporary refusal");
+  };
+  ports.stopStageAgent = async target => { fs.appendFileSync(closeLog, `stop:${target.conversationId}\n`); return { outcome: "stopped" }; };
+}
+for (let round = 0; round < (closeLog ? 1 : 4); round++) {
   await tickPipelinesController([], ports);
   await settlePipelineControllerJobs();
 }

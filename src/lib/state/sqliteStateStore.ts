@@ -13,6 +13,7 @@ import { procBackend } from "@/lib/proc";
 import { rememberRecordBytes } from "./registryRecords";
 import { installPipelineControllerSchedule, selectPipelineTickWork, type PipelineTickWork } from "./pipelineControllerSchedule";
 import { installPipelineControllerIndex, type PipelineControllerSelection } from "./pipelineControllerIndex";
+import { installPipelineControllerReferences, type PipelineAttemptReference } from "./pipelineControllerReferences";
 import { installPipelineEvidenceIndex, pipelineEvidenceIndexReady } from "./pipelineEvidenceIndex";
 import { databaseFileIdentity, openCurrentDatabase } from "./currentDatabase";
 import { collectionReadCache, rememberCollectionReadCache, type ReadCacheSlot } from "./collectionReadCache";
@@ -383,7 +384,7 @@ function openRawDatabase(filename: string): Database {
           "state_rows_collection_order", "state_rows_controller_active", "state_changes_collection_revision",
           "pipeline_delivery_owner", "pipeline_delivery_history", "pipeline_creation_request", "pipeline_delivery_unclaimed",
           "pipeline_controller_work", "pipeline_controller_work_order", "pipeline_controller_work_insert",
-          "pipeline_controller_work_update", "pipeline_controller_work_delete", "pipeline_tick_delete"].every(name => names.has(name))
+          "pipeline_controller_work_update", "pipeline_controller_work_delete", "pipeline_tick_delete", "pipeline_refs_delete"].every(name => names.has(name))
           && pipelineEvidenceIndexReady(db)
           && db.query<{ journal_mode: string }, []>("PRAGMA journal_mode").get()?.journal_mode === "wal"
           && db.query<{ name: string }, []>("PRAGMA table_info(state_collections)").all().some(row => row.name === "change_floor")) return db;
@@ -463,6 +464,7 @@ function openRawDatabase(filename: string): Database {
         }
         installPipelineControllerIndex(db, path.dirname(filename));
         installPipelineControllerSchedule(db, path.dirname(filename));
+        installPipelineControllerReferences(db, path.dirname(filename));
         installPipelineEvidenceIndex(db, path.dirname(filename));
         db.exec("COMMIT");
         secureDatabaseFiles(filename);
@@ -1248,6 +1250,30 @@ export class SqliteStateCollection<T> {
 
   pipelineTickWork(now: number, excluded: readonly string[], limit = 4): PipelineTickWork[] {
     return selectPipelineTickWork(this.readDb, now, excluded, limit);
+  }
+
+  pipelineAttemptWindow(key: string, after: number, limit: number): PipelineAttemptReference[] {
+    if (!Number.isInteger(limit) || limit < 1 || limit > 16) throw new Error("invalid controller attempt budget");
+    const tail = this.readDb.query<PipelineAttemptReference, [string, number, number]>(`SELECT * FROM pipeline_attempt_refs
+      WHERE row_key=? AND position>? ORDER BY position LIMIT ?`).all(key, after, limit);
+    if (tail.length < limit) tail.push(...this.readDb.query<PipelineAttemptReference, [string, number, number]>(`SELECT * FROM pipeline_attempt_refs
+      WHERE row_key=? AND position<=? ORDER BY position LIMIT ?`).all(key, after, limit-tail.length));
+    return tail;
+  }
+
+  pipelineOtherTerminalHosts(key: string, selected: readonly number[]): boolean {
+    return Boolean(this.readDb.query(`SELECT 1 FROM pipeline_attempt_refs WHERE row_key=? AND terminal=1 AND firstHost=1
+      AND position NOT IN (SELECT value FROM json_each(?)) LIMIT 1`).get(key,JSON.stringify(selected)));
+  }
+
+  pipelineCurrentReferences(key: string, stage: string): PipelineAttemptReference[] {
+    return this.readDb.query<PipelineAttemptReference, [string, string]>(`SELECT * FROM pipeline_attempt_refs
+      WHERE row_key=? AND stageId=? AND historical=0 ORDER BY position DESC LIMIT 1`).all(key,stage);
+  }
+
+  pipelineOwnerExists(identities: readonly [string, string][], live: boolean): boolean {
+    return identities.some(([kind, identity]) => Boolean(this.readDb.query(`SELECT 1 FROM pipeline_owner_refs
+      WHERE kind=? AND identity=? ${live ? "AND live=1" : ""} LIMIT 1`).get(kind,identity)));
   }
 
   pipelineTickReady(now: number, excluded: readonly string[]): boolean {

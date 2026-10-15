@@ -2,7 +2,7 @@ import { expect, test, harness, create, BUILD_ONLY, loadPipelines, savePipelines
 import { FlowPipelineController, type FlowPipelineControllerHeartbeat } from "./controller";
 import { tickPipelinesController } from "./controllerPass";
 import { pipelineControllerJobLanes, settlePipelineControllerJobs, startPipelineControllerJob, takePipelineControllerJobChanges } from "./controllerJobs";
-import { acknowledgePipelineControllerWork, archiveSettledPipelines, controllerPipelineVersion, findControllerPipeline, pipelineControllerReady, selectControllerPipelines, selectPipelineControllerWork, withPipelineMutation } from "./store";
+import { controllerAttemptWindow, controllerOtherTerminalHosts, controllerHostHasLiveWork, controllerFlowAttached, acknowledgePipelineControllerWork, archiveSettledPipelines, controllerPipelineVersion, findControllerPipeline, pipelineControllerReady, selectControllerPipelines, selectPipelineControllerWork, withPipelineMutation } from "./store";
 import { SqliteStateCollection } from "@/lib/state/sqliteStateStore";
 import { spyOn } from "bun:test";
 import { performanceSpans, performanceSites } from "@/lib/performanceSpans";
@@ -398,6 +398,10 @@ test("a peer-held SQLite writer yields while a schedule acknowledgment waits", a
     expect(await controllerPipelineVersion(item!.row_key)).toContain(":");
     expect(await selectPipelineControllerWork(0, [])).toHaveLength(1);
     expect(await pipelineControllerReady(0, [])).toBe(true);
+    expect((await controllerAttemptWindow(item!.row_key, -1, "build")).window).toHaveLength(1);
+    expect(await controllerOtherTerminalHosts(item!.row_key, [])).toBe(true);
+    expect(await controllerHostHasLiveWork({ stageId: "build", attempt: 1, conversationId: null, agentPath: null, paneId: "missing" })).toBe(false);
+    expect(await controllerFlowAttached("missing")).toBe(false);
     await new Promise(resolve => setTimeout(resolve, 50));
     expect(timers).toBeGreaterThan(3);
     expect(finished).toBe(false);
@@ -494,3 +498,125 @@ while [ ! -e "$test_root/push-release" ]; do sleep 0.02; done
     fs.rmSync(box.root, { recursive: true, force: true });
   }
 }, 50_000);
+
+
+test("continuation failures cannot starve later cancellation or host teardown across restart", async () => {
+  const { h, lane } = await committing();
+  const original = lane.runs[0]!.attempts[0]!;
+  lane.runs[0]!.attempts = Array.from({ length: 17 }, (_, index) => ({ ...structuredClone(original), n: index + 1,
+    conversationId: `close-${index}`, launchId: null, paneId: null, agentPath: null, state: "running", verdict: null, completedAt: null }));
+  lane.state = "closed"; lane.closedAt = h.ports.now(); lane.cursor = null;
+  const pending = lane.runs[0]!.attempts.map(attempt => ({ stageId: "build", attempt: attempt.n,
+    conversationId: attempt.conversationId!, agentPath: null, paneId: null, launchId: null }));
+  lane.closeTeardown = { id: "fair-cancellation", phase: "pending", waitingForActivation: false, acknowledgeHosts: false, flow: null };
+  lane.closeReport = { pending: structuredClone(pending), pendingContinuations: structuredClone(pending), status: "pending",
+    stopped: [], alreadyStopped: [], unconfirmed: [], reviewers: [], acknowledged: [], stillRunning: [], notes: [], worktree: null };
+  savePipelines([lane]);
+  const cancellations = new Set<string>(), stops = new Set<string>();
+  let actions = 0;
+  h.ports.invalidateProviderContinuation = async id => { actions++; cancellations.add(id); if (id !== "close-16") throw new Error("temporary refusal"); };
+  h.ports.stopStageAgent = async target => { actions++; stops.add(target.conversationId!); return { outcome: "stopped" }; };
+  const closeLog = path.join(process.env.LLV_STATE_DIR!, "close-restart.log");
+  for (let phase = 0; phase < 10; phase++) {
+    actions = 0; await tickPipelinesController([], h.ports);
+    expect(actions).toBeLessThanOrEqual(16);
+    // A fresh process continues the persisted retry order and cursor.
+    if (phase === 0) {
+      const child = spawn(process.execPath, [path.resolve("src/lib/pipelines/fixtures/controllerJobResume.ts")], {
+        cwd: process.cwd(), env: { ...process.env, LLV_CONTROLLER_CLOSE_LOG: closeLog }, stdio: ["ignore","pipe","pipe"],
+      });
+      let output = ""; child.stderr!.on("data", chunk => { output += chunk; });
+      try { await until(new Promise<void>((resolve,reject) => {
+        child.once("error",reject); child.once("close", code => code === 0 ? resolve() : reject(new Error(output)));
+      }), 10_000); } finally { await stopFixtureProcess(child); }
+      const childActions = fs.readFileSync(closeLog,"utf8").trim().split("\n");
+      expect(childActions.length).toBeLessThanOrEqual(16);
+      for (const action of childActions) {
+        if (action.startsWith("cancel:")) cancellations.add(action.slice(7));
+        else if (action.startsWith("stop:")) stops.add(action.slice(5));
+      }
+    }
+  }
+  expect(cancellations.size).toBe(17); expect(stops.size).toBe(17);
+  const report = loadPipelines()[0]!.closeReport!;
+  expect(report.pending).toEqual([]);
+  expect(report.pendingContinuations).toHaveLength(16);
+  expect(report.pendingContinuations!.every(item => item.detail?.includes("temporary refusal"))).toBe(true);
+});
+
+test.each([0,1000])("resident terminal hosts and stale flow cleanup use indexed peer ownership with %s retained peers", async history => {
+  const { h, lane } = await committing();
+  lane.state = "completed"; lane.cursor = null;
+  const attempt = lane.runs[0]!.attempts[0]!;
+  attempt.completedAt = h.ports.now(); attempt.state = "passed";
+  const peer = structuredClone(lane); peer.id = "live-peer"; peer.state = "paused"; peer.delivery = undefined;
+  Object.assign(peer, pipelineIdentity(peer.id, peer.task, peer.repoDir));
+  peer.runs[0]!.attempts[0]!.state = "running";
+  peer.runs[0]!.attempts[0]!.flowId = "attached-flow";
+  lane.pendingReviewFlowCleanup = ["attached-flow", "orphan-flow"];
+  const retained = Array.from({ length: history }, (_, index) => {
+    const row = structuredClone(lane); row.id = `ownership-history-${index}`;
+    Object.assign(row,pipelineIdentity(row.id,row.task,row.repoDir));
+    row.state = "closed"; row.closedAt = h.ports.now(); row.pendingReviewFlowCleanup = [];
+    row.delivery = undefined; row.runs = row.runs.map(run => ({ ...run, attempts: [] }));
+    return row;
+  });
+  savePipelines([lane, peer, ...retained]);
+  h.ports.stageHostResident = async () => true;
+  h.ports.conversationAgentActive = async () => false;
+  let stopped = 0; const closed: string[] = [];
+  h.ports.stopStageAgent = async () => { stopped++; return { outcome: "stopped" }; };
+  h.ports.closeFlow = async id => { closed.push(id); return {}; };
+  const original = SqliteStateCollection.prototype.loadReadonly;
+  const loads = spyOn(SqliteStateCollection.prototype, "loadReadonly").mockImplementation(function(this: SqliteStateCollection<unknown>, ...args) {
+    if (new Error().stack?.match(/reconcileTerminalStageHosts|drainPendingStaleControllerFlows|settleStaleControllerFlow/)) throw new Error("whole collection ownership read");
+    return original.apply(this, args);
+  });
+  try {
+    await tickPipelinesController([], h.ports);
+    expect(stopped).toBe(0); expect(closed).toEqual(["orphan-flow"]);
+    expect(await controllerFlowAttached("attached-flow")).toBe(true);
+    const rows = loadPipelines(); rows[1]!.runs[0]!.attempts[0]!.state = "passed"; savePipelines(rows);
+    await tickPipelinesController([], h.ports);
+    expect(stopped).toBe(2);
+  } finally { loads.mockRestore(); }
+});
+
+test("attempt preparation reads at most sixteen references as one lane grows", async () => {
+  const { h, lane } = await committing();
+  lane.state = "paused"; lane.cursor = null;
+  const original = lane.runs[0]!.attempts[0]!;
+  for (const history of [32,4096]) {
+    lane.runs[0]!.attempts = Array.from({ length: history }, (_, index) => ({ ...structuredClone(original), n: index + 1,
+      historical: true, state: "failed", verdict: { status: "fail" }, completedAt: h.ports.now(),
+      conversationId: null, agentPath: null, paneId: null, launchId: null }));
+    savePipelines([lane]); await tickPipelinesController([], h.ports);
+    let keys = 0;
+    const stringify = JSON.stringify;
+    JSON.stringify = ((value, ...args) => {
+      if (Array.isArray(value) && value[0] === lane.id && typeof value[2] === "number") keys++;
+      return Reflect.apply(stringify, JSON, [value, ...args]);
+    }) as typeof JSON.stringify;
+    const start = performance.now();
+    try { await tickPipelinesController([], h.ports); } finally { JSON.stringify = stringify; }
+    expect(keys).toBeLessThanOrEqual(128);
+    const window = await controllerAttemptWindow(lane.id, -1, "");
+    expect(window.window).toHaveLength(16);
+    if (process.env.LLV_CONTROLLER_FIX_EVIDENCE) {
+      const wallMs = performance.now()-start;
+      const threadTicks = () => {
+        const fields = fs.readFileSync(`/proc/self/task/${process.pid}/stat`,"utf8").split(") ")[1]!.split(" ");
+        return Number(fields[11])+Number(fields[12]);
+      };
+      const before = threadTicks(), prepStart = performance.now();
+      let maxPreparationMs = 0;
+      for (let sample = 0; sample < 1000; sample++) {
+        const at = performance.now(); await controllerAttemptWindow(lane.id,16,"");
+        maxPreparationMs = Math.max(maxPreparationMs,performance.now()-at);
+      }
+      fs.appendFileSync(process.env.LLV_CONTROLLER_FIX_EVIDENCE, JSON.stringify({ history, keys, wallMs,
+        preparationSamples: 1000, preparationWallMs: performance.now()-prepStart,
+        preparationMainThreadMs: (threadTicks()-before)*10, maxPreparationMs }) + "\n");
+    }
+  }
+}, 30_000);
