@@ -1005,7 +1005,9 @@ Both answers are tested at the tool; the ask line is tested at the tick.
   `recordBridgeReportTelegram(id, { state, messageIds?, code?, message?, at })`.
   Failed sends retain the sender's explanation as `destinations.telegram.message`,
   including Telegram's description when it answered. Tokens, handles and numeric
-  identities are scrubbed before the reason is bounded to 300 characters. Both
+  identities are scrubbed before the reason is bounded to 300 characters,
+  including short labelled IDs with quoted keys or values. Telegram's description
+  precedes chat titles and generic advice so the bound retains the cause. Both
   receipt replays and report-key replays retain it; a successful retry clears it.
 - **Failure and retry**: a retryable code (`rate_limited`, `network_failed`,
   `timed_out`, `telegram_failed`) leaves `state: "failed"`, and calling

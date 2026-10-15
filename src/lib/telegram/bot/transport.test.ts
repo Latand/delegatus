@@ -187,3 +187,14 @@ test("failure descriptions redact identities before the length bound while prese
   expect(result.description).toContain("user_id=[id]");
   for (const value of [String(chatId), handle, TOKEN, TOKEN_TAIL, TOKEN.split(":")[0]!]) expect(result.description).not.toContain(value);
 });
+
+test("labelled numeric identities are scrubbed with quoted or unquoted keys and values", () => {
+  for (const label of ["chat_id", "user_id", "bot_id", "message_id", "topic_id"]) {
+    for (const value of [-7, 1, 2345]) {
+      for (const [keyQuote, valueQuote, separator] of [["", "", "="], ["", '"', "="], ['"', "", ": "], ['"', '"', ": "], ["'", "'", " = "]]) {
+        const prefix = `Bad Request: chat not found; ${keyQuote}${label}${keyQuote}${separator}${valueQuote}`;
+        expect(scrubTokenText(`${prefix}${value}${valueQuote}`, TOKEN)).toBe(`${prefix}[id]${valueQuote}`);
+      }
+    }
+  }
+});

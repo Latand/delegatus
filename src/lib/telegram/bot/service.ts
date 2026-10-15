@@ -198,6 +198,23 @@ function postRefusal(chat: ChatRow): { code: TelegramBotErrorCode; reason: strin
   return null;
 }
 
+/** Drop complete tags before decoding entities. A missing closing bracket
+ * ends the scan instead of restarting at every later opening bracket. */
+function telegramHtmlText(text: string): string {
+  const parts: string[] = [];
+  let start = 0;
+  let open = text.indexOf("<");
+  while (open !== -1) {
+    const close = text.indexOf(">", open + 1);
+    if (close === -1) break;
+    parts.push(text.slice(start, open));
+    start = close + 1;
+    open = text.indexOf("<", start);
+  }
+  parts.push(text.slice(start));
+  return decodeHTML(parts.join(""));
+}
+
 /**
  * Splits plain text into Telegram-sized parts at paragraph, then line, then
  * character boundaries. HTML is never split, because a split can cut a tag.
@@ -206,7 +223,7 @@ export function splitMessageText(text: string, format: "plain" | "html"): string
   if (format === "html") {
     // Telegram applies its limit after parsing entities. Markup and escaped
     // characters do not consume that budget; Telegram still validates HTML.
-    const displayed = decodeHTML(text.replace(/<[^>]*>/g, ""));
+    const displayed = telegramHtmlText(text);
     if (displayed.length <= BOT_TEXT_PART_CHARS) return [text];
     throw new TelegramBotError("text_too_long", `HTML text is limited to ${BOT_TEXT_PART_CHARS} characters after entity parsing; send plain text or split it`);
   }
@@ -233,23 +250,24 @@ export function splitMessageText(text: string, format: "plain" | "html"): string
 
 /** Telegram's refusal of a send, as one of our codes. */
 function sendFailure(result: Extract<BotCallResult, { ok: false }>, chat: ChatRow): TelegramBotError {
-  const detail = result.description ? ` (Telegram: ${result.description})` : "";
+  // Keep the cause ahead of titles and advice in bounded bridge diagnostics.
+  const detail = result.description ? `Telegram: ${result.description}; ` : "";
   if (result.kind === "unreachable") return new TelegramBotError("network_failed", "Telegram could not be reached, so nothing was sent");
   /* A connection that failed after it opened may have carried the post. */
   if (result.kind === "network_failed") return new TelegramBotError("network_failed", "the connection to Telegram failed; the message may or may not have been posted");
   if (result.kind === "timed_out") return new TelegramBotError("timed_out", "Telegram did not answer in time; the message may or may not have been posted");
   if (result.status === 429) {
-    return new TelegramBotError("rate_limited", `Telegram is rate-limiting this bot; retry after ${result.retryAfterSeconds ?? 1} s${detail}`, { retryAfterSeconds: result.retryAfterSeconds ?? 1 });
+    return new TelegramBotError("rate_limited", `${detail}Telegram is rate-limiting this bot; retry after ${result.retryAfterSeconds ?? 1} s`, { retryAfterSeconds: result.retryAfterSeconds ?? 1 });
   }
-  if (result.status === 401 || result.status === 404) return new TelegramBotError("token_rejected", `Telegram rejected the bot token; the operator must paste a new one in the Telegram panel${detail}`);
+  if (result.status === 401 || result.status === 404) return new TelegramBotError("token_rejected", `${detail}Telegram rejected the bot token; the operator must paste a new one in the Telegram panel`);
   if (result.status === 403) {
-    return new TelegramBotError("forbidden", `Telegram refused the post to ${chat.title}: the bot was blocked or removed, lacks the right to post, or the user never wrote to it${detail}`);
+    return new TelegramBotError("forbidden", `${detail}Telegram refused the post to ${chat.title}: the bot was blocked or removed, lacks the right to post, or the user never wrote to it`);
   }
   if (result.status === 400 && /parse entities|can't parse|unsupported start tag|unexpected end tag/i.test(result.description ?? "")) {
-    return new TelegramBotError("format_invalid", `Telegram could not parse the HTML formatting${detail}`);
+    return new TelegramBotError("format_invalid", `${detail}Telegram could not parse the HTML formatting`);
   }
-  if (result.status !== null && result.status >= 500) return new TelegramBotError("telegram_failed", `Telegram failed to handle the request${detail}`);
-  return new TelegramBotError("bad_request", `Telegram refused the message${detail}`);
+  if (result.status !== null && result.status >= 500) return new TelegramBotError("telegram_failed", `${detail}Telegram failed to handle the request`);
+  return new TelegramBotError("bad_request", `${detail}Telegram refused the message`);
 }
 
 const MEMBER_STATUSES: ReadonlySet<string> = new Set(["creator", "administrator", "member", "restricted", "left", "kicked"]);
@@ -929,7 +947,7 @@ export class TelegramBotService {
         store.failSend(sendCallerKey, clientRequestId, error.code, []);
         throw error;
       }
-      this.publishConfirmed(botId, result.result, chatId, topicId, result.result.text ?? (format === "html" ? decodeHTML(text.replace(/<[^>]*>/g, "")) : text));
+      this.publishConfirmed(botId, result.result, chatId, topicId, result.result.text ?? (format === "html" ? telegramHtmlText(text) : text));
       sent.push({ messageId: result.result.message_id, date: result.result.date, text, replyToMessageId: partReply, topicId });
     }
     const now = this.deps.now();

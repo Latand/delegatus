@@ -1029,6 +1029,16 @@ test("HTML admission counts decoded text at the Telegram limit and keeps markup 
   expect(() => splitMessageText(`<b>${"&#128512;".repeat(2048)}x</b>`, "html")).toThrow("after entity parsing");
 });
 
+test("malformed HTML length validation has a bounded CPU cost", () => {
+  for (const text of ["<".repeat(160_000), "<x".repeat(80_000), `${"x".repeat(160_000)}<`]) {
+    const started = process.cpuUsage();
+    expect(() => splitMessageText(text, "html")).toThrow("after entity parsing");
+    const used = process.cpuUsage(started);
+    // CPU time keeps descheduling out of the regression's generous budget.
+    expect(used.user + used.system).toBeLessThan(1_000_000);
+  }
+});
+
 test("Telegram's refusals map to codes: 403 forbidden, 429 rate_limited, entity errors format_invalid", async () => {
   await allowedTeam();
   transport.script("sendMessage", refused(403, "Forbidden: bot was kicked from the supergroup chat"));

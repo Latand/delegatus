@@ -708,6 +708,66 @@ test("Bot API 400 description survives storage and both replays with tokens and 
   });
 });
 
+for (const quoteValue of [false, true]) {
+  test(`Bot API quoted short identities stay private through storage and both replays (string values: ${quoteValue})`, async () => {
+    await withWireBot(async (sends, reject) => {
+      const chatId = -(7 * 13);
+      const identities = JSON.stringify({ chat_id: quoteValue ? String(chatId) : chatId });
+      const cause = "Bad Request: can't parse entities at byte offset 73";
+      reject(400, `${cause}; ${identities}`);
+      const args = { clientRequestId: "quoted-error", key: "quoted-error", class: "question", summary: "Two questions", sections: { decision: ["First question?", "Second question?"] } };
+      const service = serviceAs(MANAGER);
+      const first = await service.callTool("bridge_report", args) as ReportAnswer;
+      const cached = await service.callTool("bridge_report", args) as ReportAnswer;
+      expect(cached.replayed).toBe(true);
+      resetBridgeCollectionsForTests();
+      const replay = await file({ key: args.key, summary: "Replay" });
+      expect(replay.alreadyRecorded).toBe(true);
+      for (const answer of [first, cached, replay]) {
+        expect(answer.destinations?.telegram).toMatchObject({ state: "failed", code: "format_invalid", retryable: false });
+        expect(answer.destinations?.telegram?.message).toContain(cause);
+        expect(answer.destinations?.telegram).toEqual(first.destinations?.telegram);
+      }
+      const stored = readBridgeReportLog().reports[0]!.telegram!;
+      expect(stored.message).toBe(first.destinations!.telegram!.message);
+      for (const text of [JSON.stringify(first), JSON.stringify(cached), JSON.stringify(replay), JSON.stringify(stored), persistedBridgeReportRowsText()]) {
+        expect(text).not.toContain(String(chatId));
+      }
+      expect(sends).toHaveLength(1);
+    });
+  });
+}
+
+test("a maximum chat title preserves the bounded Bot API 403 cause through storage and both replays", async () => {
+  await withWireBot(async (sends, reject) => {
+    const title = "😀".repeat(128);
+    transport.script("getUpdates", ok([
+      { update_id: 2, my_chat_member: { chat: { ...TEAM, title }, date: 2, new_chat_member: { status: "administrator" } } },
+    ]));
+    await bot.pollOnce(new AbortController().signal);
+    expect(bot.listChats().chats.find((chat) => chat.chat === "team-reports")?.title).toBe(title);
+    const cause = "Forbidden: bot was kicked from the supergroup chat";
+    reject(403, cause);
+    const args = { clientRequestId: "long-title-error", key: "long-title-error", class: "status", summary: "Report" };
+    const service = serviceAs(MANAGER);
+    const first = await service.callTool("bridge_report", args) as ReportAnswer;
+    const cached = await service.callTool("bridge_report", args) as ReportAnswer;
+    expect(cached.replayed).toBe(true);
+    resetBridgeCollectionsForTests();
+    const replay = await file({ key: args.key, summary: "Replay" });
+    expect(replay.alreadyRecorded).toBe(true);
+    for (const answer of [first, cached, replay]) {
+      expect(answer.destinations?.telegram).toMatchObject({ state: "failed", code: "forbidden", retryable: false });
+      expect(answer.destinations?.telegram?.message).toContain(cause);
+      expect(answer.destinations!.telegram!.message!.length).toBeLessThanOrEqual(300);
+      expect(answer.destinations?.telegram).toEqual(first.destinations?.telegram);
+    }
+    expect(readBridgeReportLog().reports[0]!.telegram!.message).toBe(first.destinations!.telegram!.message);
+    expect(persistedBridgeReportRowsText()).toContain(cause);
+    expect(sends).toHaveLength(1);
+  });
+});
+
 test("retryable Bot API failures keep the latest cause and a successful replay clears it", async () => {
   await withWireBot(async (sends, reject) => {
     reject(500, "Internal Server Error: temporary send failure");

@@ -9,7 +9,7 @@ export function scrubTelegramDiagnostic(value: string): string {
     .replace(EMAIL, "[email]")
     .replace(/@[A-Za-z0-9_]+/g, "[handle]")
     .replace(/\b[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\b/gi, "[id]")
-    .replace(/((?:chat|user|bot|message|topic)(?:[_ ]ids?)?\s*[:=]\s*)-?\d+/gi, "$1[id]")
+    .replace(/((?:chat|user|bot|message|topic)(?:[_ ]ids?)?["']?\s*[:=]\s*["']?)-?\d+/gi, "$1[id]")
     .replace(/-?\b\d{5,}\b/g, "[id]")
     .replace(/\s+/g, " ").trim();
   return safe.length > 300 ? `${safe.slice(0, 299)}…` : safe;
