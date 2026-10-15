@@ -607,6 +607,9 @@ export function applySeatTickSettingsChange(
     if (prior && (["decision", "why", "undo", "taskId"].some(key => prior[key as keyof typeof prior] !== decision[key as keyof typeof decision]) || JSON.stringify(prior.review) !== JSON.stringify(d.review))) return { ok: false, error: "autonomous decision id already records different content" };
     if (!prior) autonomy = { ...autonomy, decisions: [...autonomy.decisions, { ...decision, at: context.at, by: context.actor }] };
   }
+  /* Logging a decision is not an edit of the settings: the row keeps the
+     operator's last real change as its editor, and the decision keeps its own author. */
+  const decisionOnly = Object.keys(change).every(key => key === "autonomyDecision" || change[key as keyof SeatTickSettingsChange] === undefined);
   const next: SeatTickSettings = {
     ...(autonomy ? { autonomy } : {}),
     ...(autonomyHistory.length ? { autonomyHistory } : {}),
@@ -619,8 +622,8 @@ export function applySeatTickSettingsChange(
     reason,
     monitorPrompt,
     until,
-    updatedAt: context.at,
-    setBy: context.actor,
+    updatedAt: decisionOnly ? current.updatedAt : context.at,
+    setBy: decisionOnly ? current.setBy : context.actor,
   };
   if (!seatTickSettingsAreDefault(next) && !next.reason) {
     return { ok: false, error: "instructions (reason) are required when the tick is disabled or its wake interval changes. Write what the seat should do and when it should stop; a quiet tick without instructions is indistinguishable from a broken one" };

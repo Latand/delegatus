@@ -70,6 +70,21 @@ test("release askBeforePublish is skipped only during a live episode; stored set
   expect((await api.seat_tick_settings({ clientRequestId: "off-read" })).release).toMatchObject({ askBeforePublish: true, effectiveAskBeforePublish: true });
 });
 
+test("recording an autonomous decision leaves the operator as the settings' last editor", () => {
+  const project = "autonomy-editor";
+  const seeded = seed(project);
+  const seat = { kind: "manager" as const, project, conversationId: "conversation_seat", seatEpoch: 1 };
+  const later = new Date(now + 60_000).toISOString();
+  const logged = applySeatTickSettingsChange(seeded, { autonomyDecision: { startedAt: at, id: "d1", decision: "Keep layout", why: "Fits", undo: "Choose spacious" } }, { at: later, actor: seat });
+  if (!logged.ok) throw new Error(logged.error);
+  expect(logged.settings.autonomy?.decisions[0]?.by).toEqual(seat);
+  expect(logged.settings.setBy).toEqual(operator);
+  expect(logged.settings.updatedAt).toBe(seeded.updatedAt);
+  const edited = applySeatTickSettingsChange(seeded, { monitorPrompt: "Watch the board", autonomyDecision: { startedAt: at, id: "d2", decision: "Keep layout", why: "Fits", undo: "Choose spacious" } }, { at: later, actor: seat });
+  if (!edited.ok) throw new Error(edited.error);
+  expect(edited.settings.setBy).toEqual(seat);
+});
+
 test("one ended-episode report survives retry, appears as a Done outcome, and returns identical chat text with reports off", async () => {
   setSystemTime(now);
   const project = "autonomy-report";

@@ -31624,6 +31624,11 @@ describe("full autonomy", () => {
           const setBy = await page.locator("[data-seat-tick-autonomy-set-by]:visible").first().textContent();
           expect(setBy).toMatch(/ · \S.*$/);
           if (lang === "uk") expect(setBy).toContain("змінив(ла)");
+          // A logged decision is the seat's entry, not an edit of the settings: the general line names the operator session and Details shows no conversation id.
+          const generalSetBy = await details.locator("p").filter({ hasText: lang === "uk" ? /^Змінив\(ла\) / : /^Set by / }).first().textContent();
+          expect(generalSetBy).toContain(lang === "uk" ? "власна сесія оператора" : "the operator's own session");
+          expect(generalSetBy).not.toMatch(/designated seat|призначений оркестратор/);
+          expect(await details.textContent()).not.toContain("conversation_seat");
           const emphasis = await log.locator("p").evaluateAll(nodes => nodes.map(node => ({ text: node.textContent ?? "", weight: Number(getComputedStyle(node).fontWeight), inner: [...node.querySelectorAll("span")].map(span => Number(getComputedStyle(span).fontWeight)) })));
           const decisionRow = emphasis.find(entry => entry.text === "Compact export layout");
           expect(decisionRow?.weight).toBeGreaterThanOrEqual(600);
