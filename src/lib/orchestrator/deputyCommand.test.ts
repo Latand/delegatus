@@ -11,6 +11,7 @@ import { beginDeputy, readDeputies } from "./deputies";
 import { readDeputyOwnLines, sweepDeputies } from "./deputySweep";
 import { productionDeputyCommandPorts } from "./deputyCommandPorts";
 import type { RuntimeHostClient } from "@/lib/runtime/client";
+import { AgentRegistry } from "@/lib/agent/registry";
 import { askOrchestratorInParallel, deputyDeliveryOrigin, deputyMessageKey, deputySessionId, type DeputyCommandPorts } from "./deputyCommand";
 import type { OrchestratorSeat } from "./seats";
 
@@ -444,13 +445,16 @@ test("a late completed answer is reconciled before Retry can send the saved ques
   });
 
   const runtime = { readSession: async () => null } as unknown as RuntimeHostClient;
-  const production = productionDeputyCommandPorts({ client: () => runtime });
-  const retry = await askOrchestratorInParallel({ retryAskId: readDeputies()[0]!.askId, clientRequestId: "retry-late-answer" }, {
-    ...first.ports,
-    prepareRetry: production.prepareRetry,
-  });
+  const registry = new AgentRegistry(path.join(sandbox, "retry-registry.json"));
+  try {
+    const production = productionDeputyCommandPorts({ client: () => runtime, registry });
+    const retry = await askOrchestratorInParallel({ retryAskId: readDeputies()[0]!.askId, clientRequestId: "retry-late-answer" }, {
+      ...first.ports,
+      prepareRetry: production.prepareRetry,
+    });
 
-  expect(retry).toMatchObject({ ok: true, deputy: { state: "ended", outcome: "done", result: { finalText: answer } } });
-  expect(first.calls.delivered).toHaveLength(1);
-  expect(readDeputies()[0]).toMatchObject({ state: "ended", outcome: "done", result: { finalText: answer } });
+    expect(retry).toMatchObject({ ok: true, deputy: { state: "ended", outcome: "done", result: { finalText: answer } } });
+    expect(first.calls.delivered).toHaveLength(1);
+    expect(readDeputies()[0]).toMatchObject({ state: "ended", outcome: "done", result: { finalText: answer } });
+  } finally { registry.close(); }
 });
