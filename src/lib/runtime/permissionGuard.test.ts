@@ -198,9 +198,9 @@ test("attendance: a stage or a delegated spawn is unattended; the operator's own
 
 test("a stage's safety-check permission request is denied at once and its turn finishes (#2215)", async () => {
   const conversationId = "conversation_stage";
-  await withPipelineMutation((pipelines, persist) => {
+  await withPipelineMutation(async (pipelines, persist) => {
     pipelines.push(stagePipeline(conversationId));
-    persist();
+    await persist();
   });
   const recorded: PermissionDenialRecord[] = [];
   const record = permissionDenialRecorder({ registry: identityRegistry });
@@ -368,7 +368,7 @@ test("a denial the pipeline lease refuses is retried onto the attempt, and the j
       mutatePipelines: (async (mutate) => {
         calls += 1;
         if (calls <= refusals) throw busy();
-        return mutate(pipelines, () => {});
+        return mutate(pipelines, async () => {});
       }) as typeof withPipelineMutation,
       appendLifecycle: (input) => { events.push(...input); return { appended: [], skipped: 0 }; },
       busyRetryDelayMs: 1,

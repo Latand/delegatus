@@ -29,7 +29,7 @@ async function tick() {
   flow = loadFlows().find((item) => item.id === flow.id)!;
   const base = flowTickBase([flow]);
   await tickFlow(flow, [], new Map<string, FileEntry>(), () => {});
-  persistTickFlows([flow], base);
+  await persistTickFlows([flow], base);
   return loadFlows().find((item) => item.id === flow.id)!;
 }
 beforeEach(() => {
@@ -177,7 +177,7 @@ test("atomic receipt survives a stale controller save", async () => {
   const base = flowTickBase([flow]);
   await submitFlowDecision(request, owner);
   flow.stateDetail = "stale projection";
-  persistTickFlows([flow], base);
+  await persistTickFlows([flow], base);
   expect(loadFlows()[0]?.agentDecisions).toHaveLength(1);
 });
 
@@ -195,7 +195,7 @@ test("a budget change racing completion discards the stale transition and retrie
   record("task_complete", { last_agent_message: "ready" });
   await tickFlow(stale, [], new Map(), () => {});
   expect(stale.state).toBe("spawning");
-  persistTickFlows([stale], base);
+  await persistTickFlows([stale], base);
   expect(loadFlows()[0]?.agentDecisions?.[0]?.disposition).toBe("accepted");
   expect(loadFlows()[0]?.rounds).toHaveLength(1);
   expect((await tick()).state).toBe("needs_decision");

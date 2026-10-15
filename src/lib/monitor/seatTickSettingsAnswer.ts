@@ -1,3 +1,4 @@
+import { autonomyActive, type AutonomySetting } from "./autonomy";
 import { viewerOwnProjectKeys } from "./seatTickSources";
 import { releaseStatus, type ReleaseStatus } from "@/lib/release/answer";
 import { RELEASE_DEFAULTS, type ReleaseSetting } from "@/lib/release/settings";
@@ -88,6 +89,7 @@ export interface SeatTickLastRun {
 }
 
 export interface SeatTickSettingsAnswer {
+  autonomy?: { active: boolean; until: string | null; startedAt: string | null; episode: AutonomySetting | null };
   release?: Partial<ReleaseSetting> & typeof RELEASE_DEFAULTS & { available: boolean; status: ReleaseStatus };
   autoRotate?: { enabled: boolean; thresholdPercent: number; defaultPercent: number; minPercent: number; maxPercent: number;
     windowKnown: boolean | null; lastAttempt: (AutoRotationAttempt & { nextAttemptAt: string }) | null;
@@ -263,6 +265,7 @@ export function seatTickSettingsAnswer(
   const active = orchestratorSeatForCurrentProject(project).active;
   const conversation = active?.conversationId ? agentRegistry().conversation(active.conversationId as never) : null;
   return {
+    autonomy: { active: autonomyActive(settings.autonomy, now), until: settings.autonomy?.until ?? null, startedAt: settings.autonomy?.startedAt ?? null, episode: effective.autonomy ?? null },
     release: { ...RELEASE_DEFAULTS, ...settings.release, available: viewerOwnProjectKeys().includes(project), status: releaseStatus(project) },
     autoRotate: { enabled: settings.autoRotate?.enabled ?? false, thresholdPercent: settings.autoRotate?.thresholdPercent ?? AUTO_ROTATE_DEFAULT_PERCENT,
       defaultPercent: AUTO_ROTATE_DEFAULT_PERCENT, minPercent: 50, maxPercent: 90,

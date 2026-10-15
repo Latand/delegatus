@@ -1,3 +1,4 @@
+import { stateLeaseHoldsInFlight } from "@/lib/state/sqliteStateStore";
 import { afterEach, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import fs from "node:fs";
@@ -85,6 +86,10 @@ test("durable hold measurement includes time before the first await continuation
   console.warn = (...args) => { lines.push(args); };
   try {
     const pending = withViewerOperation("pipelines.startup-admission", () => withPipelineMutation(() => true, held => { heldMs = held; }));
+    // Store opening may itself yield. Observe durable acquisition independently
+    // before blocking the continuation that will release it.
+    for (let turn = 0; turn < 20 && !stateLeaseHoldsInFlight().some(held => held.collection === "pipelines"); turn++) await Promise.resolve();
+    expect(stateLeaseHoldsInFlight().some(held => held.collection === "pipelines")).toBe(true);
     Bun.sleepSync(1100);
     expect(await pending).toBeTrue();
     expect(heldMs).toBeGreaterThan(1000);
@@ -100,7 +105,7 @@ test.each([false, true])("a foreign commit and a new owner invalidate prepared e
   const writer = withPipelineMutation(async (records, persist) => {
     entered(); await wait;
     const newOwner = { ...row, id: "new-owner", worktreeDir: "/repo-pipeline-new-owner", branch: "pipeline/synthetic-ownership-evidence-new-owner" };
-    persist([...records, newOwner]);
+    await persist([...records, newOwner]);
   });
   await ready;
   const reader = withPipelineStartupAdmission(async available => available, undefined, undefined, compact);

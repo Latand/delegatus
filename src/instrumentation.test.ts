@@ -1087,3 +1087,27 @@ test("the role mapping retirement pass runs with the serving release, first, and
   }
   expect(started).toEqual(["pipelines"]);
 });
+
+test("release readiness waits for board preparation and stays refused on failure", async () => {
+  for (const fail of [false, true]) {
+    let release!: () => void;
+    let ready = false;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    const activation = completeViewerRuntimeActivation({
+      initializeOperatorCapability: async () => undefined,
+      publishHotStateActivation: () => undefined,
+      startStructuredHosts: null,
+      startControllers: async () => undefined,
+      prepareBoard: async () => { await held; if (fail) throw new Error("fixture board unavailable"); },
+      publishViewerReleaseReady: () => { ready = true; },
+    });
+    const settled = activation.then(() => null, error => error);
+    await Bun.sleep(10);
+    expect(ready).toBe(false);
+    release();
+    const error = await settled;
+    expect(ready).toBe(!fail);
+    if (fail) expect(error.message).toContain("board unavailable");
+    else expect(error).toBeNull();
+  }
+});

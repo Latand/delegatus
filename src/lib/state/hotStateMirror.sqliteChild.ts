@@ -1,6 +1,6 @@
 import fs from "node:fs";
 
-import { checkpointFlowRollbackMirrorForDemotion, loadFlows, withFlowMutation } from "@/lib/flows/store";
+import { checkpointFlowRollbackMirrorForDemotionAsync, loadFlows, withFlowMutation } from "@/lib/flows/store";
 import { loadPipelines } from "@/lib/pipelines/store";
 import { loadWorkflows } from "@/lib/workflows/store";
 
@@ -13,9 +13,9 @@ function waitFor(filename: string): void {
 
 if (mode === "writer") {
   if (!releaseFile) throw new Error("hot state mirror writer release file is required");
-  await withFlowMutation((flows, persist) => {
+  await withFlowMutation(async (flows, persist) => {
     flows[0]!.stateDetail = "checkpoint-coherent";
-    persist();
+    await persist();
     fs.writeFileSync(readyFile, "ready");
     waitFor(releaseFile);
   });
@@ -23,7 +23,7 @@ if (mode === "writer") {
   loadFlows();
   fs.writeFileSync(readyFile, "ready");
 } else if (mode === "checkpoint-flows") {
-  checkpointFlowRollbackMirrorForDemotion();
+  await checkpointFlowRollbackMirrorForDemotionAsync();
   fs.writeFileSync(readyFile, "ready");
 } else if (mode === "open-pipelines") {
   loadPipelines();

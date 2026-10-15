@@ -143,7 +143,7 @@ import {
 } from "@/lib/bridge/pendingAcknowledgements";
 
 import { VoiceFloatButton } from "./voice/VoiceFloatButton";
-import { isDesignatedManagerConversation } from "./voice/managerIdentity";
+import { isCachedDesignatedManagerConversation, isDesignatedManagerConversation } from "./voice/managerIdentity";
 import { viewerContextPrelude } from "./voice/viewerContextPrelude";
 import { useSeatParallelBusy } from "./orchestrator/useSeatParallelBusy";
 import { publishSeatDeputy, useSeatProjectFor } from "./orchestrator/seatDeputies";
@@ -3599,10 +3599,12 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
           text: requestedText, images: requestedImages, files: requestedFiles, selectedContext,
           runtime: sendRuntime as Record<string, unknown> | undefined, policy,
         });
-        const bridge = await drainBridgeTurnStart();
-        const prelude = await withComposerAdmissionDeadline(
+        // Independent prerequisites overlap; both still gate the sealed payload.
+        const managerRead = withComposerAdmissionDeadline(
           isDesignatedManagerConversation(cardId, submittedFile.project), admissionTiming.admissionDeadlineMs,
-        ).catch(() => false)
+        ).catch(() => false);
+        const bridge = await drainBridgeTurnStart();
+        const prelude = (await managerRead) && isCachedDesignatedManagerConversation(cardId, submittedFile.project)
           ? viewerContextPrelude({ path: submittedFile.path, project: submittedFile.project }) : "";
         const taskLines = taskReferencePrelude(selectedContext.tasks);
         const composed = [taskLines, prelude, requestedText].filter(Boolean).join("\n");
@@ -3889,6 +3891,12 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
        the same reason it replays the original bytes. */
     const queuedTasks = outboxId ? readOutbox(cardId).find((entry) => entry.id === outboxId)?.selectedContext?.tasks : undefined;
     const selectedContext = durable ? durable.submission.selectedContext as SelectedContextRef : replayGeneration ? replayGeneration.selectedContext : withSelectedTasks(composerSelectedContext(), queuedTasks);
+    // Start the optional identity read alongside the bridge drain. Handle its
+    // deadline immediately, including while an older bridge ack is pending.
+    // Retained generations already own their complete payload and skip both.
+    const managerRead = durable || replayGeneration ? Promise.resolve(false) : withComposerAdmissionDeadline(
+      isDesignatedManagerConversation(cardId, file.project), admissionTiming.admissionDeadlineMs,
+    ).catch(() => false);
     /* #691 §4, the no-call path: a turn is opening, so whatever the manager
        reported while nothing was live rides in with it. Never on a replay — a
        retained generation replays its original bytes under its original key, and
@@ -3909,11 +3917,9 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
        queried per dispatch and cached. */
     // This optional read precedes admission. A lost seat response must not hold
     // the local wire fence forever; an unconfirmed designation adds no context.
-    const viewerPrelude = durable || replayGeneration || !(await withComposerAdmissionDeadline(
-      isDesignatedManagerConversation(cardId, file.project), admissionTiming.admissionDeadlineMs,
-    ).catch(() => false))
-      ? ""
-      : viewerContextPrelude({ path: file.path, project: file.project });
+    const viewerPrelude = (await managerRead) && isCachedDesignatedManagerConversation(cardId, file.project)
+      ? viewerContextPrelude({ path: file.path, project: file.project })
+      : "";
     const composedText = [taskReferencePrelude(selectedContext?.tasks), viewerPrelude, requestedText].filter(Boolean).join("\n");
     const payloadText = durable?.envelope?.body.text as string | undefined ?? replayGeneration?.text
       ?? (bridgeTurn?.text ? `${bridgeTurn.text}\n\n${composedText}` : composedText);

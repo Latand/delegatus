@@ -91,6 +91,8 @@ function normalizeWakeCommit(value: unknown): SeatTickWakeCommit | null {
     announcedMaintenance: conversationIds(raw.announcedMaintenance),
     announcedDeploys: conversationIds(raw.announcedDeploys),
     /* A plan from before #2030 records no note, so the next wake shows it. */
+    ...(typeof raw.autonomyShown === "string" ? { autonomyShown: raw.autonomyShown } : {}),
+    ...(typeof raw.autonomySummaryFor === "string" ? { autonomySummaryFor: raw.autonomySummaryFor } : {}),
     ...(noteRevision(raw.noteShown) === undefined ? {} : { noteShown: noteRevision(raw.noteShown) }),
     /* A plan from before reported stalls records none, so no stall yields. */
     ...(conversationIds(raw.reportedStalls).length > 0 ? { reportedStalls: conversationIds(raw.reportedStalls) } : {}),
@@ -295,6 +297,8 @@ function normalizeRow(value: unknown, legacy: boolean): SeatTickProjectState {
     announcedDeploys: conversationIds(raw.announcedDeploys).slice(-SEAT_TICK_ANNOUNCED_DEPLOYS_LIMIT),
     /* Absent on every row from before #2030: a seat remembered as having been
        shown no note is shown it. */
+    ...(typeof raw.autonomyShown === "string" ? { autonomyShown: raw.autonomyShown } : {}),
+    ...(typeof raw.autonomySummaryFor === "string" ? { autonomySummaryFor: raw.autonomySummaryFor } : {}),
     ...(noteRevision(raw.noteShown) === undefined ? {} : { noteShown: noteRevision(raw.noteShown) }),
     /* Absent reads as empty: a stall no wake is remembered naming keeps its
        place ahead of the unstarted tasks. */
