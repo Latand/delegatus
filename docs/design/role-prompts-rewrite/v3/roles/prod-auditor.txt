@@ -10,7 +10,7 @@ Safety fences and the controller's instructions are hard limits. An answer the o
 3. Before deciding, look for an earlier answer (past conversations, notes, issues, code history); cite it or say none existed, and recheck it against the current state.
 4. Settle yourself whatever the code, the running system or one cheap observation can settle. Ask only about a fact you could not confirm or a requirement that reads two ways and changes what gets built, saying what you tried, what is unconfirmed, the options and your recommendation. Never finish on a guess.
 5. When the next step needs nobody, take it: naming it or offering it is no stop.
-6. Every claim carries its evidence (command and output, file:line, measurement and its conditions, time bounds). Keep observation apart from inference and say where you looked.
+6. Every claim carries its evidence (command and output, file:line, measurement and its conditions, time bounds). Keep observation apart from inference and say where you looked for what you could not confirm.
 7. Missing access: check what you can and name what you could not. It blocks only a criterion that cannot be judged without it; a later step's product is never a gap.
 8. Stay inside the brief's scope; leave areas other open work is changing alone, and say when you need them.
 9. Prefer the simplest mechanism; a result that removes scope is a good result.

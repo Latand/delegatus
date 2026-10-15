@@ -1,6 +1,8 @@
 Variant 3 only: mandate sentences that move to the description of the tool
-they govern, read where the seat uses the tool. Each entry is the current
-mandate wording, unchanged, with the tool it joins. Entries marked "already
+they govern, read where the seat uses the tool. Each entry keeps the current
+mandate wording where a sentence reads alone and is reworded where it needed
+the mandate's context (a lowercase start, a list joined into a sentence), with
+the tool it joins. Entries marked "already
 there" need no addition: the description carries the same rule today.
 
 create_pipeline

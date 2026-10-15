@@ -2,7 +2,9 @@ Proposed additions to this repository's own instruction files (AGENTS.md, or
 CONTRIBUTING.md where noted). Every variant moves these sentences out of the
 shipped role prompts, because they name this repository's files, scripts,
 settings or languages and mislead an agent working on any other project. The
-text is the current wording, unchanged; only its home moves.
+text keeps the current wording where a sentence reads alone; a sentence that
+needed its prompt's context to read is reworded, and traceability.tsv names
+each sentence's source.
 
 ## Rendered evidence — how a visual critic frames this repository
 (AGENTS.md, section "Rendered evidence: call the driver that exists")

@@ -465,7 +465,8 @@ Everything in V1, plus:
 - **Project procedures move out**: the deployer's Delegatus paragraph, the
   merger's 17 protocol sentences and the visual critic's driver list move to
   this repository's AGENTS.md and CONTRIBUTING.md
-  (`project-files/AGENTS.additions.txt`, verbatim). The merger becomes
+  (`project-files/AGENTS.additions.txt`, the current wording wherever a
+  sentence reads alone). The merger becomes
   generic: it uses the batch-merge procedure the project names and finishes
   with needs_decision when there is none.
 - **Mandate**: Two channels, Bridge reports, Directives, Attention, Reply
@@ -489,21 +490,22 @@ with evidence. Seats need one rotation to receive it (version bump).
 
 Everything in V2, then compressed:
 
-- Core of 2,354 bytes: the same twelve principles in one or two clauses each.
+- Core of 2,385 bytes: the same twelve principles in one or two clauses each.
 - Role parts of 3–10 lines; the maintainer goes from 12,109 to 6,177
   characters by trusting the server's refusals
   (`boardMaintenance/guard.ts:68-78`) and drops their enumeration.
 - Every merger sentence beyond the core protocol moves to the project file.
-- Mandate of 14,058 characters (−52%): bulleted sections; rare-path task
+- Mandate of 14,374 characters (−51%): bulleted sections; rare-path task
   binding mechanics, review-edge details, bridge-report rules, attention and
   draft rules move into the descriptions of the tools they govern
-  (`v3/tool-descriptions.txt`, verbatim with the target tool).
+  (`v3/tool-descriptions.txt`, with the target tool, reworded only where a
+  sentence needed the mandate's context).
 - A fifth learned-rule level "universal" appears in the lesson request: an
   agent marks a rule that reads universal, and the curator proposes it to the
   operator for the core.
 
-Trade-off: the largest saving (−27% role text, −45% for the seat, −11 to
-−35% per stage) and the most behaviour risk. Much of it rests on agents
+Trade-off: the largest saving (−27% role text, −43% for the seat, −8 to
+−33% per stage) and the most behaviour risk. Much of it rests on agents
 reading tool descriptions, and in Claude Code an MCP tool is deferred: its
 description is invisible until the agent loads the tool, which this very
 session shows. Guidance on *when* to use a tool (attention moves, reply
@@ -518,9 +520,9 @@ needs the most new tests.
 | universal core extracted | no | yes, 12 principles + 3 conditional | yes, compressed |
 | contradictions fixed | yes | yes | yes |
 | project text moved out | partly (visual critic, test guidance, runtime host) | all 28 sentences | all |
-| 13 roles, one file each | 64,965 (−3%) | 81,831 (+23%) | 48,362 (−27%) |
-| seat (scaffold + mandate) | 28,922 (−3%) | 30,320 (+1%) | 16,587 (−45%) |
-| reviewer stage, whole layer | −2% | +5% | −26% |
+| 13 roles, one file each | 64,965 (−3%) | 81,831 (+23%) | 48,815 (−27%) |
+| seat (scaffold + mandate) | 28,922 (−3%) | 30,320 (+1%) | 16,934 (−43%) |
+| reviewer stage, whole layer | −2% | +5% | −24% |
 | moves text to tool descriptions | no | no | yes (`v3/tool-descriptions.txt`) |
 | new behaviour | none | merger asks when no batch procedure exists; hold replaces blocked | V2 plus a "universal" lesson level |
 | implementation | small: defaults.ts, prompt.ts, testGuidance.ts, mandate v55 | medium: new core constant, scaffolds, wrapper conditions, mandate v55, tests | large: V2 plus tool descriptions, curator flow |
@@ -570,30 +572,30 @@ delivered: body, shared rules or core, fences.
 
 | text | before | V1 | V2 | V3 | V1 Δ | V2 Δ | V3 Δ |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| role: orchestrator | 620 | 620 | 4,132 | 2,529 | +0% | +566% | +308% |
-| role: orchestrator.backlog-campaign | 1,081 | 1,081 | 4,593 | 2,956 | +0% | +325% | +173% |
-| role: orchestrator.stage | 2,901 | 2,901 | 4,305 | 2,674 | +0% | +48% | -8% |
-| role: reviewer | 7,156 | 6,850 | 7,847 | 4,834 | -4% | +10% | -32% |
-| role: verifier | 4,022 | 4,022 | 5,560 | 3,395 | +0% | +38% | -16% |
-| role: builder | 3,671 | 3,343 | 4,543 | 2,715 | -9% | +24% | -26% |
-| role: builder.frontend | 4,043 | 3,715 | 4,887 | 3,017 | -8% | +21% | -25% |
-| role: builder.apply-fixes | 4,767 | 4,185 | 5,022 | 3,081 | -12% | +5% | -35% |
-| role: architect | 6,102 | 5,538 | 6,541 | 3,824 | -9% | +7% | -37% |
-| role: cleaner | 3,076 | 3,076 | 4,378 | 2,776 | +0% | +42% | -10% |
-| role: prod-auditor | 3,436 | 3,436 | 4,747 | 3,166 | +0% | +38% | -8% |
-| role: deployer | 4,829 | 4,829 | 5,947 | 3,870 | +0% | +23% | -20% |
-| role: merger | 7,392 | 7,392 | 6,795 | 4,012 | +0% | -8% | -46% |
-| role: maintainer | 12,109 | 12,105 | 13,534 | 6,177 | -0% | +12% | -49% |
-| role: curator | 3,020 | 2,970 | 4,342 | 2,694 | -2% | +44% | -11% |
-| role: issue-reporter | 5,967 | 5,967 | 7,283 | 4,315 | +0% | +22% | -28% |
-| role: visual-critic | 5,281 | 4,817 | 6,182 | 4,055 | -9% | +17% | -23% |
-| **13 roles, one file each** | **66,681** | **64,965** | **81,831** | **48,362** | **-3%** | **+23%** | **-27%** |
-| mandate | 29,320 | 28,302 | 26,188 | 14,058 | -3% | -11% | -52% |
-| stage wrapper (read-only) | 3,709 | 3,761 | 4,485 | 4,078 | +1% | +21% | +10% |
-| stage wrapper (read-write) | 3,713 | 3,765 | 4,489 | 4,082 | +1% | +21% | +10% |
+| role: orchestrator | 620 | 620 | 4,132 | 2,560 | +0% | +566% | +313% |
+| role: orchestrator.backlog-campaign | 1,081 | 1,081 | 4,593 | 3,021 | +0% | +325% | +179% |
+| role: orchestrator.stage | 2,901 | 2,901 | 4,305 | 2,705 | +0% | +48% | -7% |
+| role: reviewer | 7,156 | 6,850 | 7,847 | 4,865 | -4% | +10% | -32% |
+| role: verifier | 4,022 | 4,022 | 5,560 | 3,426 | +0% | +38% | -15% |
+| role: builder | 3,671 | 3,343 | 4,543 | 2,746 | -9% | +24% | -25% |
+| role: builder.frontend | 4,043 | 3,715 | 4,887 | 3,048 | -8% | +21% | -25% |
+| role: builder.apply-fixes | 4,767 | 4,185 | 5,022 | 3,112 | -12% | +5% | -35% |
+| role: architect | 6,102 | 5,538 | 6,541 | 3,855 | -9% | +7% | -37% |
+| role: cleaner | 3,076 | 3,076 | 4,378 | 2,807 | +0% | +42% | -9% |
+| role: prod-auditor | 3,436 | 3,436 | 4,747 | 3,197 | +0% | +38% | -7% |
+| role: deployer | 4,829 | 4,829 | 5,947 | 3,901 | +0% | +23% | -19% |
+| role: merger | 7,392 | 7,392 | 6,795 | 4,064 | +0% | -8% | -45% |
+| role: maintainer | 12,109 | 12,105 | 13,534 | 6,208 | -0% | +12% | -49% |
+| role: curator | 3,020 | 2,970 | 4,342 | 2,725 | -2% | +44% | -10% |
+| role: issue-reporter | 5,967 | 5,967 | 7,283 | 4,346 | +0% | +22% | -27% |
+| role: visual-critic | 5,281 | 4,817 | 6,182 | 4,115 | -9% | +17% | -22% |
+| **13 roles, one file each** | **66,681** | **64,965** | **81,831** | **48,815** | **-3%** | **+23%** | **-27%** |
+| mandate | 29,320 | 28,302 | 26,188 | 14,374 | -3% | -11% | -51% |
+| stage wrapper (read-only) | 3,709 | 3,761 | 4,485 | 4,240 | +1% | +21% | +14% |
+| stage wrapper (read-write) | 3,713 | 3,765 | 4,489 | 4,244 | +1% | +21% | +14% |
 | memory/learned-rules.stage.txt | 860 | 860 | 843 | 843 | +0% | -2% | -2% |
 | memory/lesson-request.txt | 2,646 | 2,646 | 2,665 | 2,916 | +0% | +1% | +10% |
-| **seat: orchestrator scaffold + mandate** | **29,940** | **28,922** | **30,320** | **16,587** | **-3%** | **+1%** | **-45%** |
+| **seat: orchestrator scaffold + mandate** | **29,940** | **28,922** | **30,320** | **16,934** | **-3%** | **+1%** | **-43%** |
 
 A pipeline stage's whole first-message layer from Delegatus (stage wrapper
 plus role scaffold; the brief and the pinned specification excluded). For V2
@@ -602,17 +604,17 @@ receives:
 
 | stage role | before | V1 | V2 | V3 | V1 Δ | V2 Δ | V3 Δ |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| reviewer | 10,865 | 10,611 | 11,462 | 8,042 | -2% | +5% | -26% |
-| verifier | 7,731 | 7,783 | 9,175 | 6,603 | +1% | +19% | -15% |
-| architect | 9,811 | 9,299 | 10,606 | 7,482 | -5% | +8% | -24% |
-| prod-auditor | 7,145 | 7,197 | 8,362 | 6,374 | +1% | +17% | -11% |
-| visual-critic | 8,990 | 8,578 | 10,247 | 7,713 | -5% | +14% | -14% |
-| builder | 7,384 | 7,108 | 8,612 | 6,377 | -4% | +17% | -14% |
-| builder.frontend | 7,756 | 7,480 | 8,956 | 6,679 | -4% | +15% | -14% |
-| builder.apply-fixes | 8,480 | 7,950 | 9,511 | 7,163 | -6% | +12% | -16% |
-| cleaner | 6,789 | 6,841 | 7,997 | 5,988 | +1% | +18% | -12% |
-| merger | 11,105 | 11,157 | 10,414 | 7,224 | +0% | -6% | -35% |
-| orchestrator.stage | 6,614 | 6,666 | 7,924 | 5,886 | +1% | +20% | -11% |
+| reviewer | 10,865 | 10,611 | 11,462 | 8,235 | -2% | +5% | -24% |
+| verifier | 7,731 | 7,783 | 9,175 | 6,796 | +1% | +19% | -12% |
+| architect | 9,811 | 9,299 | 10,606 | 7,675 | -5% | +8% | -22% |
+| prod-auditor | 7,145 | 7,197 | 8,362 | 6,567 | +1% | +17% | -8% |
+| visual-critic | 8,990 | 8,578 | 10,247 | 7,935 | -5% | +14% | -12% |
+| builder | 7,384 | 7,108 | 8,612 | 6,570 | -4% | +17% | -11% |
+| builder.frontend | 7,756 | 7,480 | 8,956 | 6,872 | -4% | +15% | -11% |
+| builder.apply-fixes | 8,480 | 7,950 | 9,511 | 7,356 | -6% | +12% | -13% |
+| cleaner | 6,789 | 6,841 | 7,997 | 6,181 | +1% | +18% | -9% |
+| merger | 11,105 | 11,157 | 10,414 | 7,438 | +0% | -6% | -33% |
+| orchestrator.stage | 6,614 | 6,666 | 7,924 | 6,079 | +1% | +20% | -8% |
 
 ---
 
@@ -654,7 +656,7 @@ rule still lives or why it no longer applies.
 | RF.1 | `roles/defaults.ts:25-26` | U | anchor on the requirement | kept | core 1 + judging (WRONG-PREMISE) | core 1 + judging |
 | RF.2 | `roles/defaults.ts:25-26` | U | simplest mechanism | kept | core 9 + judging (OVER-BUILT) | core 9 + judging |
 | RF.3-4 | `roles/defaults.ts:25-26` | U | rendered surfaces, when UI changes | kept | RENDERED (reviewer, architect) | RENDERED (reviewer); dropped for the architect (the visual critic judges design frames) |
-| RF.5 | `roles/defaults.ts:25-26` | D | render under `$TMPDIR`, never the operator's Delegatus | kept | RENDERED + mechanics (scratch) | RENDERED |
+| RF.5 | `roles/defaults.ts:25-26` | D | render under `$TMPDIR`, never the operator's Delegatus | kept | RENDERED + mechanics (scratch) | mechanics (scratch: never the live worktree or the operator's Delegatus) + RENDERED (reviewer) |
 | RD.1 | `roles/defaults.ts:90` | D | project's review-export helper | kept | role (reviewer) | dropped (core 2: the project's files name its helpers) |
 | RD.2-3 | `roles/defaults.ts:90` | U | borrowed dependencies read-only | kept | role (reviewer) | role (reviewer, one sentence) |
 | RD.4 | `roles/defaults.ts:90` | U |  | kept | role (reviewer) | dropped (core 7 covers an unusable dependency graph) |
@@ -675,7 +677,7 @@ rule still lives or why it no longer applies.
 | ORCF.2 | `roles/defaults.ts:187-191` | D | workers start fresh | kept | fences (edited wording) | fences (merged) |
 | REV.1-6 | `roles/defaults.ts:8-11,206-207` | D | reviewer identity and parameters | kept | kept | kept (shortened) |
 | REV.7 | `roles/defaults.ts:8-11,206-207` | U | project's checks, caches to scratch | kept | kept | kept (shortened) |
-| REV.8 | `roles/defaults.ts:8-11,206-207` | U |  | kept | kept | kept |
+| REV.8 | `roles/defaults.ts:8-11,206-207` | U |  | kept | kept | kept (reworded) |
 | REVF.1-2 | `roles/defaults.ts:8-11,206-207` | D |  | kept | kept | fences (merged) |
 | VER.1-6 | `roles/defaults.ts:12-15,218-219` | D | claim labels and verdicts | kept | kept | kept (shortened) |
 | VER.7 | `roles/defaults.ts:12-15,218-219` | D | partly dup of SW.28 | kept | kept (unique part: unconfirmed claims and what settles them) | dropped (VER.4 + mechanics cover it) |
@@ -683,17 +685,19 @@ rule still lives or why it no longer applies.
 | VERF.2 | `roles/defaults.ts:12-15,218-219` | U |  | kept | kept | dropped (R: core 6) |
 | BLD.1-2 | `roles/defaults.ts:232-233` | D |  | kept | kept | kept |
 | BLD.3 | `roles/defaults.ts:232-233` | U | self-review | kept | kept | core 10 |
-| BLD.4 | `roles/defaults.ts:232-233` | D | Delegatus preview links | kept | kept | kept |
+| BLD.4 | `roles/defaults.ts:232-233` | D | Delegatus preview links | kept | kept | kept (reworded) |
 | BLDF.1-2 | `roles/defaults.ts:232-233` | D |  | kept | kept | fences (merged) |
 | ARC.1-2 | `roles/defaults.ts:244-245` | D |  | kept | kept | kept |
 | ARC.3 | `roles/defaults.ts:244-245` | R | dup of ARCF.1 | dropped (R) | dropped (R) | dropped (R) |
 | ARC.4 | `roles/defaults.ts:244-245` | D | declared output path | kept | kept | kept (shortened) |
 | ARC.5-6 | `roles/defaults.ts:244-245` | U | quote the requirement; default no; keep deferred scope | kept | kept + core 1 | kept + core 1 |
-| ARC.7-8 | `roles/defaults.ts:244-245` | D |  | kept | kept | kept |
+| ARC.7 | `roles/defaults.ts:244-245` | D |  | kept | kept | kept (shortened) |
+| ARC.8 | `roles/defaults.ts:244-245` | D |  | kept | kept (reworded) | kept (reworded) |
 | ARCF.1-2 | `roles/defaults.ts:244-245` | D |  | kept | kept | fences (merged) |
 | CLN.1 | `roles/defaults.ts:254-255` | D |  | kept | kept | kept |
 | CLN.2 | `roles/defaults.ts:254-255` | U | back up, keep siblings untouched | kept | role (classify) + core 11 + fences | role + core 11 + fences |
-| CLN.3-4 | `roles/defaults.ts:254-255` | D |  | kept | kept | kept |
+| CLN.3 | `roles/defaults.ts:254-255` | D |  | kept | kept | kept |
+| CLN.4 | `roles/defaults.ts:254-255` | D |  | kept | kept | kept (reworded) |
 | CLNF.1-2 | `roles/defaults.ts:254-255` | U |  | kept | kept | fences (merged) |
 | PA.1-2 | `roles/defaults.ts:266-267` | D |  | kept | kept | kept |
 | PA.3 | `roles/defaults.ts:266-267` | U | named read access only | kept | kept | kept + PRODUCTION |
@@ -703,14 +707,14 @@ rule still lives or why it no longer applies.
 | PA.7-8 | `roles/defaults.ts:266-267` | D |  | kept | kept | kept (shortened) |
 | PAF.1-2 | `roles/defaults.ts:266-267` | U |  | kept | kept | fences (merged) |
 | DEP.1-3 | `roles/defaults.ts:282-283` | D |  | kept | kept | kept |
-| DEP.4 | `roles/defaults.ts:282-283` | U | project's release procedure | kept | kept (+ never replace a committed procedure) | kept |
+| DEP.4 | `roles/defaults.ts:282-283` | U | project's release procedure | kept | kept (+ never replace a committed procedure) | kept (reworded) |
 | DEP.5-6 | `roles/defaults.ts:282-283` | P | this repository's deploy script and verdict files | kept (scoped: 'For a Delegatus checkout install') | project file | project file |
 | DEP.7 | `roles/defaults.ts:282-283` | P |  | kept | edited to tool-free form + project file verbatim | edited + project file |
 | DEP.8 | `roles/defaults.ts:282-283` | U | keep current version serving | kept | kept | PRODUCTION + kept |
 | DEP.9-10 | `roles/defaults.ts:282-283` | D | seat-quoted approval; release.askBeforePublish | kept | kept | kept (shortened) |
-| DEP.11 | `roles/defaults.ts:282-283` | U | plan, validate, present, stop | kept | kept | kept |
+| DEP.11 | `roles/defaults.ts:282-283` | U | plan, validate, present, stop | kept | kept | kept (shortened) |
 | DEP.12 | `roles/defaults.ts:282-283` | U | stop conditions | kept | kept | PRODUCTION + kept |
-| DEP.13 | `roles/defaults.ts:282-283` | D |  | kept | kept | kept |
+| DEP.13 | `roles/defaults.ts:282-283` | D |  | kept | kept | kept (shortened) |
 | DEPF.1-3 | `roles/defaults.ts:282-283` | D |  | kept | kept | fences (merged) |
 | MRG.1-2 | `roles/defaults.ts:291-296` | D |  | kept | kept | kept |
 | MRG.3-6 | `roles/defaults.ts:291-296` | D | GitHub review states; the rule itself is universal | kept | kept (rule stated tool-free, GitHub fields kept) | kept (one sentence) |
@@ -724,10 +728,10 @@ rule still lives or why it no longer applies.
 | MRG.15 | `roles/defaults.ts:291-296` | U | one validation per exact tuple | kept | kept | kept (merged) |
 | MRG.16 | `roles/defaults.ts:291-296` | P |  | kept | kept (tool-free) + project file | project file |
 | MRG.17-22 | `roles/defaults.ts:291-296` | P | gate internals of merge-batch.ts | kept | project file | project file |
-| MRG.23 | `roles/defaults.ts:291-296` | U | pre-existing failures | kept | kept | BASELINE |
+| MRG.23 | `roles/defaults.ts:291-296` | U | pre-existing failures | kept | kept; the clause on files main cannot complete to project file | BASELINE |
 | MRG.24 | `roles/defaults.ts:291-296` | P |  | kept | kept (joined to MRG.23) | BASELINE |
 | MRG.25-28 | `roles/defaults.ts:291-296` | P | confirmation and removal-probe protocol | kept | project file | project file |
-| MRG.29 | `roles/defaults.ts:291-296` | U | never guess a culprit | kept | kept | kept |
+| MRG.29 | `roles/defaults.ts:291-296` | U | never guess a culprit | kept | kept; retaining the detector to project file (MRG.27) | kept; retaining the detector to project file (MRG.27) |
 | MRG.30 | `roles/defaults.ts:291-296` | P | stale reviewed detector exception | kept | project file | project file |
 | MRG.31 | `roles/defaults.ts:291-296` | U |  | kept | kept | project file |
 | MRG.32 | `roles/defaults.ts:291-296` | D |  | kept | kept | kept (shortened) |
@@ -781,7 +785,8 @@ rule still lives or why it no longer applies.
 | VC.8 | `roles/defaults.ts:156-167,328-329` | P | widths U; 'en and uk' P | edited (every language and theme the project ships); en/uk to project file | edited | edited |
 | VC.9 | `roles/defaults.ts:156-167,328-329` | D | pinned VISUAL_CRITIC_UNFRAMED | kept | kept | kept |
 | VC.10 | `roles/defaults.ts:156-167,328-329` | U |  | kept | kept | kept |
-| VC.11-14 | `roles/defaults.ts:156-167,328-329` | D | pinned VISUAL_CRITIC_CLASSES | kept | kept | kept |
+| VC.11 | `roles/defaults.ts:156-167,328-329` | D | pinned VISUAL_CRITIC_CLASSES | kept | kept | kept (shortened) |
+| VC.12-14 | `roles/defaults.ts:156-167,328-329` | D | pinned VISUAL_CRITIC_CLASSES | kept | kept | kept |
 | VC.15 | `roles/defaults.ts:156-167,328-329` | U |  | kept | kept | kept |
 | VC.16-18 | `roles/defaults.ts:156-167,328-329` | D |  | kept | kept | kept (shortened) |
 | VC.19 | `roles/defaults.ts:156-167,328-329` | R | dup of process cleanup PC.1 | dropped (R) | dropped (R: core 11) | dropped (R: core 11) |
@@ -824,7 +829,7 @@ rule still lives or why it no longer applies.
 | M08.17 | `orchestrator/prompt.ts:164-223` | D |  | kept | kept | kept (shortened) |
 | M09.1-7 | `orchestrator/prompt.ts:259-260` | D |  | kept | kept | kept (shortened) |
 | M10.1 | `orchestrator/prompt.ts:458-459` | D | heading | kept | M:Before you decide | M:Before you decide |
-| M10.2 | `orchestrator/prompt.ts:458-459` | D | what Delegatus indexes | kept | kept | dropped (search_transcripts' description says it) |
+| M10.2 | `orchestrator/prompt.ts:458-459` | D | what Delegatus indexes | kept | edited (opening clause dropped: it carries no instruction) | dropped (search_transcripts' description says it) |
 | M10.3 | `orchestrator/prompt.ts:458-459` | U | 3 to 5 phrasings, scoped then unscoped | kept | kept | kept |
 | M10.4 | `orchestrator/prompt.ts:458-459` | D |  | kept | kept | kept (byte-offset detail left to the tool description) |
 | M10.5 | `orchestrator/prompt.ts:458-459` | U | cite by title and date | kept | kept | kept |
@@ -973,7 +978,7 @@ recommended option each, free text allowed).
 | operator's words | where this answers |
 | --- | --- |
 | «как переписать … роли, наш промпты ролей. И мандат оркестратора» | §1 inventories all 13 roles and their variants, the shared blocks, the stage wrapper, the mandate by section and the learned-rule framing; §3 rewrites each in three variants |
-| «не упустить ничего важного» | §5 and `traceability.tsv`: 676 sentences, each with a home or a stated reason; `project-files/AGENTS.additions.txt` and `v3/tool-descriptions.txt` hold moved text verbatim |
+| «не упустить ничего важного» | §5 and `traceability.tsv`: 676 sentences, each with a home or a stated reason; `project-files/AGENTS.additions.txt` and `v3/tool-descriptions.txt` hold the moved text; the frames tag each sentence reworded on the way |
 | «то, что может касаться всех проектов, всех людей в любых задачах … вынести» | §2.2 finds 15 universal principles and who lacks them; §3.3 makes them one core every agent reads |
 | «без привязки к какому-то конкретному инструменту или фреймворку», «абстрактні правила» | the core names no tool; §2.3 lists 28 project or tool-bound sentences and where each goes |
 | «показать мне … до и после … в виде diff», «читабельно» | `before/` and `v1/`, `v2/`, `v3/` hold the same file names, so each pair diffs mechanically for the prototype stage |

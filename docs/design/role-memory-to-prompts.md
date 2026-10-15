@@ -547,13 +547,13 @@ characters):
 
 > Rendered work (when the work changes what a person sees): render every state at every width the requirement names and at one width between each named pair, each language and theme the project ships, with real data in every field and a non-default value where one exists. For each state name its defining element and check that it is visible text on the first screen at every width. No control, popover, tooltip or menu may overlap foreign text or leave the viewport, and no row or label may be cut by a scroll edge, a pinned bar or the window; measure from text ranges, because element boxes alone miss fractional cuts. A modal makes its background inert: keyboard traversal and taps outside it reach nothing behind. Text contrast and target sizes meet the platform's accessibility floor. Show a fact once per surface; give neighbouring states distinct visible words; a colour difference alone tells them apart for nobody. Evidence covers each changed string at the exact viewport, scrolled until it is whole.
 
-For the reviewer, the architect and the visual critic the block is prefixed
-with "Judge rendered work by these rules; each breach is a finding carrying
-the viewport and the measured numbers:" and keeps V2's sentence about
-evidence that skips a named surface. For the architect it replaces V2's
-other two RENDERED sentences: rendering in a scratch export of the commit
-moves to core 16, and the severity-ranked findings with viewport and
-numbers are the prefix above.
+For the reviewer, the architect and the visual critic the block is preceded
+by a line of its own, "Judge rendered work by the rules below; each breach is
+a finding carrying the viewport and the measured numbers.", and keeps V2's
+sentence about evidence that skips a named surface. For the architect it
+replaces V2's other two RENDERED sentences: rendering in a scratch export of
+the commit moves to core 16, and the severity-ranked findings with viewport
+and numbers are that intro line.
 
 **TESTS block** (builder, reviewer; 584 characters; the reviewer's BASELINE
 sentences of V2 stay beside it):
