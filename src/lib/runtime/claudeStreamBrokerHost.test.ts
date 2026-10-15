@@ -976,6 +976,7 @@ describe("ClaudeStreamBrokerHost", () => {
   });
 
   test("managed fresh and adopted hosts share one settings profile while legacy settings stay local", async () => {
+    const stdioEnv = { ...process.env, LLV_SPAWN_CAPABILITY: undefined };
     const managedHome = fs.mkdtempSync(path.join(os.tmpdir(), "llv-claude-managed-policy-"));
     const sharedHome = fs.mkdtempSync(path.join(os.tmpdir(), "llv-claude-shared-policy-"));
     const sharedSettingsPath = path.join(sharedHome, "settings.json");
@@ -996,6 +997,7 @@ describe("ClaudeStreamBrokerHost", () => {
     const freshCapture: { args?: string[] } = {};
     const fresh = await ClaudeStreamBrokerHost.start({
       sessionId: "managed-policy-session",
+      env: stdioEnv,
       cwd: managedHome,
       claudeConfigDir: managedHome,
       spawnPolicyBaseSettingsPath: sharedSettingsPath,
@@ -1017,6 +1019,7 @@ describe("ClaudeStreamBrokerHost", () => {
     const adoptedChild = new FakeClaude(new RecordingDeliveryLedger());
     const adoptedCapture: { args?: string[] } = {};
     const adopted = await ClaudeStreamBrokerHost.adopt("managed-policy-session", {
+      env: stdioEnv,
       cwd: managedHome,
       claudeConfigDir: managedHome,
       spawnPolicyBaseSettingsPath: sharedSettingsPath,
@@ -1059,6 +1062,7 @@ describe("ClaudeStreamBrokerHost", () => {
     const legacyCapture: { args?: string[] } = {};
     const legacy = await ClaudeStreamBrokerHost.start({
       sessionId: "legacy-policy-session",
+      env: stdioEnv,
       cwd: legacyHome,
       claudeConfigDir: legacyHome,
       spawnPolicyBaseSettingsPath: null,

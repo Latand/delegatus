@@ -5030,6 +5030,7 @@ describe("CodexAppServerHost", () => {
   });
 
   test("boot re-host resumes Codex and reconstructs its Viewer MCP connector (#1346)", async () => {
+    const stdioEnv = { ...process.env, LLV_SPAWN_CAPABILITY: undefined };
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-structured-adoption-"));
     const registryPath = path.join(directory, "agent-registry.json");
     const registry = new AgentRegistry(registryPath);
@@ -5067,7 +5068,7 @@ describe("CodexAppServerHost", () => {
     const eventStore = new MemoryEventStore();
     const adopted = await adoptCodexRegistryHosts(
       registry,
-      () => ({ cwd: "/repo", eventStore, spawnProcess: fakeSpawn(server) }),
+      () => ({ cwd: "/repo", env: stdioEnv, eventStore, spawnProcess: fakeSpawn(server) }),
       { NODE_ENV: "test", LLV_STRUCTURED_HOSTS: "1" },
     );
     expect(adopted).toHaveLength(1);
@@ -5111,7 +5112,7 @@ describe("CodexAppServerHost", () => {
     const replacement = new FakeAppServer("adopted-thread");
     const releasedRows = await adoptCodexRegistryHosts(
       restartedRegistry,
-      () => ({ cwd: "/repo", eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(replacement) }),
+      () => ({ cwd: "/repo", env: stdioEnv, eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(replacement) }),
       { NODE_ENV: "test", LLV_STRUCTURED_HOSTS: "1" },
     );
     expect(releasedRows).toHaveLength(1);
