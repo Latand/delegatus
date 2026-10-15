@@ -362,38 +362,42 @@ production-safety evidence record. These measurements concern the Viewer and
 its controller; deployment and the calm production window remain separate work.
 
 
+The final replay set includes main `716ddaa48`. Its merge preserves both
+Telegram and pipeline monitor labels. Controller tests and TypeScript pass on
+the resolved tree; the numeric record retains the earlier measurements too.
+
 E4/E5 uses baseline `011a4fe97` and compares every authoritative hot/archive
 payload after each pair: 941 of 941 match in all three pairs. Synthetic write
 and retry comparisons use the reviewed revision `a677ae046`.
 
 | Measurement | Baseline | Fixed candidate |
 | --- | ---: | ---: |
-| Cold largest phase, median (ms) | 11,307.8 | 1,045.61 |
-| Cold largest phase across trials (ms) | 11,493.65 | 1,077.43 |
-| Cold largest per-phase main-thread CPU, median (ms) | 1,870 | 1,020 |
-| Cold complete sweep including jobs, median (ms) | 11,333.71 | 11,918.48 |
-| Cold complete sweep main-thread CPU, median (ms) | 1,870 | 2,420 |
+| Cold largest phase, median (ms) | 11,264.17 | 1,014.21 |
+| Cold largest phase across trials (ms) | 11,457.52 | 1,101.15 |
+| Cold largest per-phase main-thread CPU, median (ms) | 1,890 | 1,000 |
+| Cold complete sweep including jobs, median (ms) | 11,286.62 | 11,786.01 |
+| Cold complete sweep main-thread CPU, median (ms) | 1,890 | 2,430 |
 | Cold decoded rows, median | 614 | 526 |
 | Cold decoded source bytes, median | 75,757,641 | 67,767,804 |
 | Cold cloned pipeline roots, median | 859 | 271 |
 | Cold cloned roots and attempt bytes, median | 110,803,535 | 31,716,153 |
-| Cold logical read bytes, median | 749,671,743 | 1,041,564,892 |
-| Cold maximum labelled slice across trials (ms) | 490 | 562.78 |
-| Cold maximum timer delay across trials (ms) | 510.5 | 566.91 |
-| Cold maximum lease hold across trials (ms) | 493.32 | 388.95 |
-| Warm largest phase, median (ms) | 194.89 | 69.78 |
-| Warm largest phase across trials (ms) | 227.76 | 121.42 |
-| Warm largest per-phase main-thread CPU, median (ms) | 190 | 65 |
-| Warm complete sweep including jobs, median (ms) | 215.3 | 390.67 |
-| Warm complete sweep main-thread CPU, median (ms) | 190 | 345 |
+| Cold logical read bytes, median | 749,671,501 | 1,041,564,723 |
+| Cold maximum labelled slice across trials (ms) | 413.48 | 534.48 |
+| Cold maximum timer delay across trials (ms) | 505.35 | 538.74 |
+| Cold maximum lease hold across trials (ms) | 491.61 | 371.06 |
+| Warm largest phase, median (ms) | 185.57 | 58.72 |
+| Warm largest phase across trials (ms) | 200.29 | 64.14 |
+| Warm largest per-phase main-thread CPU, median (ms) | 180 | 60 |
+| Warm complete sweep including jobs, median (ms) | 205.89 | 343.23 |
+| Warm complete sweep main-thread CPU, median (ms) | 180 | 315 |
 | Warm decoded rows, median | 94.5 | 28.5 |
 | Warm decoded source bytes, median | 11,298,036 | 3,996,967 |
 | Warm cloned pipeline roots, median | 373 | 64 |
 | Warm cloned roots and attempt bytes, median | 49,692,470 | 7,923,970 |
-| Warm logical read bytes, median | 15,889,733.5 | 36,351,189.5 |
-| Warm maximum labelled slice across trials (ms) | 2.25 | 4.94 |
-| Warm maximum timer delay across trials (ms) | 9.89 | 50.74 |
-| Warm maximum lease hold across trials (ms) | 4.22 | 9.84 |
+| Warm logical read bytes, median | 15,889,480 | 36,351,251 |
+| Warm maximum labelled slice across trials (ms) | 3.27 | 3.87 |
+| Warm maximum timer delay across trials (ms) | 12.59 | 34.33 |
+| Warm maximum lease hold across trials (ms) | 2.78 | 6.15 |
 | Whole-hot returned rows per sweep | 267 | 0 |
 
 The candidate additionally copies 66 individual attempts per sweep (1,192,467
