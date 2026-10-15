@@ -178,15 +178,15 @@ async function finishDeputyNow(deputy: OrchestratorDeputy, outcome: DeputyOutcom
   }
   try { await ports.release(deputy); } catch { /* a host that is already gone needs no release */ }
   const lines = ports.ownLines(deputy) ?? [];
-  const answer = deputyTerminalAnswer(lines);
-  const finalText = answer.result.finalText;
+  const terminal = deputyTerminalAnswer(lines);
+  const finalText = terminal.result.finalText;
   const ended = await withAccountMutationLockAsync(() => end(deputy.askId, {
     outcome,
     expectedAttempt: deputy.attempt ?? 0,
     error: reason ?? (outcome === "done" ? null : outcome === "host-died" ? "The parallel host stopped before it answered." : outcome === "timeout" ? "The parallel question reached its time limit." : null),
     now: ports.now(),
-    touched: answer.touched,
-    result: answer.result,
+    touched: terminal.touched,
+    result: terminal.result,
   }), { caller: "deputy settlement" }) ?? deputy;
   /* A deputy that never started has nothing to report; its refusal already
      reached whoever asked. */
