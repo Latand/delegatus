@@ -10,13 +10,16 @@ import { browserCase, caseChromium as chromium, openFixture, serveEvidenceFixtur
 
 /*
  * The one rendered-evidence driver for the conversation window. Every case
- * here runs the production conversation components over
- * `conversationWindowEvidence.fixture.tsx`, against the production stylesheet,
- * in Chromium, and is gated by its environment variable, so a plain
+ * here runs the production conversation components over rendered fixtures,
+ * against the production stylesheet in Chromium, and is gated by its
+ * environment variable, so a plain
  * `bun test` loads this file and skips every case:
  *
  *   LLV_CONVERSATION_BROWSER_TEST=1 CHROME_BIN=google-chrome-stable \
  *     bun test src/components/conversation/conversationWindow.browser.test.tsx
+ *
+ * The native send-paint case uses LLV_NATIVE_SEND_PAINT_TEST and installed
+ * engines; its complete command is in docs/perf/send-click-to-paint.md.
  *
  * Add a conversation-window issue's rendered evidence as a `describe` block
  * here rather than as a new file (#1761).

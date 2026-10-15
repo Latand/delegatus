@@ -210,6 +210,28 @@ runs. Engine processes and loopback servers are closed through their owned
 handles; the case removes only its own temporary runtime/browser directory.
 The command's private environment directory remains available for inspection.
 
+The committed case was replayed from a clean export on 2026-10-15 with the
+same installed versions listed above: **160 sends, eight groups of 20, 5,351
+assertions, zero failures**, in 189.5 seconds of runner time. All eight frames
+show one visible canonical message and zero horizontal overflow; the frames
+were also inspected visually. The replay's medians are:
+
+| Engine | Delay | Source | Click → request ms | Click → visible canonical frame ms |
+|---|---:|---|---:|---:|
+| codex | 0 ms | before | 35.5 | 253.4 |
+| codex | 0 ms | after | 30.9 | 368.5 |
+| codex | 500 ms | before | 1026.8 | 1213.9 |
+| codex | 500 ms | after | 519.7 | 804.4 |
+| claude | 0 ms | before | 24.9 | 274.1 |
+| claude | 0 ms | after | 28.4 | 310.2 |
+| claude | 500 ms | before | 521.2 | 654.3 |
+| claude | 500 ms | after | 515.6 | 680.6 |
+
+The delayed Codex request saving is 507.2 ms; the visible-frame saving is
+409.5 ms. Immediate-reply frame medians increased in the later groups. These
+loaded-machine observations establish the controlled prerequisite overlap;
+they leave the production long-tail cause unresolved.
+
 The historical audit used scratch adaptations of these same fixtures and an
 older `AUDIT_ENGINE`/`AUDIT_BINARY` invocation, one engine and source condition
 at a time. Its four completed runs and original sample rows below are retained
