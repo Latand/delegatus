@@ -156,8 +156,9 @@ beforeAll(() => {
   bob = launchAgent("HTTP MCP caller B");
 });
 
-afterAll(() => {
+afterAll(async () => {
   listener?.stop(true);
+  await (await import("./taskExecutor")).viewerTaskExecutor().close();
   setAgentRegistryForTests(null);
   for (const key of Object.keys(process.env)) if (!(key in originalEnv)) delete process.env[key];
   Object.assign(process.env, originalEnv);

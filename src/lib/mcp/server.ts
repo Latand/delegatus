@@ -4668,7 +4668,7 @@ function mcpHttpCallerFromAuthInfo(authInfo: unknown): (McpHttpCaller & { cancel
  * The Viewer owns production bindings, durable receipts, policy and recovery.
  * Forwarded stdio calls use that same service and original request key.
  */
-export async function createProductionViewerMcpService(hostHealthProbe = false, stdio = false): Promise<McpToolService> {
+export async function createProductionViewerMcpService(hostHealthProbe = false, stdio = false, taskExecutor = false): Promise<McpToolService> {
   /* Forward before importing policy, bindings or receipts. The Viewer owns
      one service and rechecks authority before disclosing a saved result.
      Linux native clients prove their process through a per-call Unix peer
@@ -4693,6 +4693,24 @@ export async function createProductionViewerMcpService(hostHealthProbe = false, 
         } finally { active--; }
       },
     };
+  }
+  if (!hostHealthProbe && !taskExecutor) {
+    const { TASK_EXECUTOR_TOOLS, viewerTaskExecutor } = await import("./taskExecutor");
+    const { currentMcpHttpCaller } = await import("./callerContext");
+    let inline: Promise<McpToolService> | undefined;
+    return { async callTool(name, args, context) {
+      if (TASK_EXECUTOR_TOOLS.has(name) && currentMcpHttpCaller()) {
+        try { return await viewerTaskExecutor().callTool(name, args, context); }
+        catch (error) {
+          const mutation = isMutatingMcpTool(name as McpToolName);
+          return failure(name, clientRequestId(args), mutation ? "outcome_unknown" : "tool_failed",
+            error instanceof Error ? error.message : "task executor unavailable", !mutation, false,
+            mutation ? { outcome: "unknown", nextAction: "original-key-lookup" } : {});
+        }
+      }
+      inline ??= createProductionViewerMcpService(hostHealthProbe, false, true);
+      return (await inline).callTool(name, args, context);
+    } };
   }
   const {
     productionViewerControlDependencies,

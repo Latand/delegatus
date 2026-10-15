@@ -70,6 +70,18 @@ export async function stateWriterChild(mode: string): Promise<void> {
     return;
   }
   if (mode === "viewer") {
+    // The identical observer also covers a candidate's Viewer-owned task
+    // executor. Older revisions have no executor to install a launch for.
+    if (fs.existsSync(path.resolve("src/lib/mcp/taskExecutor.ts"))) {
+      const { McpTaskExecutor } = await import("../src/lib/mcp/taskExecutor");
+      const wrapper = path.join(process.env.TMPDIR!, "task-observed-bun");
+      const quote = (s: string) => `'${s.replaceAll("'", "'\\''")}'`;
+      fs.writeFileSync(wrapper, `#!/bin/sh\nexec ${quote(process.execPath)} --preload ${quote(path.resolve("scripts/sqlite-observer.ts"))} "$@"\n`, { mode: 0o700 });
+      (globalThis as Record<symbol, unknown>)[Symbol.for("llv.mcp.taskExecutor")] = new McpTaskExecutor({
+        launch: { executable: wrapper, workerPath: path.resolve("src/lib/mcpTask.worker.ts") },
+        env: { MCP_BENCH_TASK_EXECUTOR: "1" },
+      });
+    }
     const { handleMcpHttpRequest } = await import("@/lib/mcp/http");
     const { createProductionViewerMcpService } = await import("@/lib/mcp/server");
     const service = createProductionViewerMcpService(false);
@@ -157,7 +169,7 @@ export async function runStateWriterSample(): Promise<void> {
   const pids = new Set([viewer.pid]);
   const clients: Array<{ client: Client; transport: StdioClientTransport }> = [];
   let sampler: ReturnType<typeof setInterval> | undefined;
-  const calls: Array<{ client: number; index: number; phase: string; offered: number; completed?: number; ok?: boolean; code?: string; latency?: number; result?: unknown }> = [];
+  const calls: Array<{ client: number; index: number; phase: string; offered: number; name: string; args: Record<string, unknown>; completed?: number; ok?: boolean; code?: string; latency?: number; result?: unknown; reconciled?: unknown }> = [];
   try {
     await waitFile(ready, viewer);
     const { url } = JSON.parse(fs.readFileSync(ready, "utf8")) as { url: string };
@@ -194,7 +206,7 @@ export async function runStateWriterSample(): Promise<void> {
           ? { taskId: taskId(shared ? 0 : n), text: `Updated ${shared ? "shared" : n} ${index}`, clientRequestId: key,
             ...(shared ? { expectedProject: "fixture", expectedRevision } : {}) }
           : { project: "fixture", text: `Created ${n} ${index}`, placement: "unplaced", board: "hidden", clientRequestId: key };
-        const row: typeof calls[number] = { client: n, index, phase, offered: Date.now() }; calls.push(row);
+        const row: typeof calls[number] = { client: n, index, phase, name, args, offered: Date.now() }; calls.push(row);
         const started = performance.now();
         const operation = (async () => {
           try {
@@ -225,6 +237,37 @@ export async function runStateWriterSample(): Promise<void> {
     await Bun.sleep(Math.max(0, scheduledStart + (warmSeconds + seconds) * 1000 - performance.now()));
     const pendingAtEnd = pending.size;
     await Promise.race([Promise.all(pending), Bun.sleep(35_000)]);
+    // Re-query uncertain mutations under their original keys. Settled replies
+    // are already evidence; replaying old successes after bounded receipt
+    // retention would create a second workload during final-state collection.
+    // This phase is outside the measurement window and cannot improve its
+    // completed/failed counters. Save the returned disposition verbatim.
+    const reconciliationDeadline = Date.now() + 300_000;
+    const mutations = calls.filter(row => row.name !== "list_tasks");
+    const uncertain = mutations.filter(row => {
+      const result = row.result as { ok?: boolean; code?: string } | undefined;
+      if (!result || ["outcome_unknown", "request_in_progress", "tool_failed"].includes(result.code ?? "")) return true;
+      row.reconciled = row.result; return false;
+    });
+    let recoveryIndex = 0;
+    const recover = async () => { for (;;) {
+      const row = uncertain[recoveryIndex++];
+      if (!row || Date.now() >= reconciliationDeadline) return;
+      try {
+        if (mode === "stdio") {
+          const response = await clients[row.client]!.client.callTool({ name: row.name, arguments: row.args }, undefined,
+            { timeout: Math.min(30_000, reconciliationDeadline - Date.now()) });
+          row.reconciled = response.structuredContent ?? JSON.parse((response.content as Array<{ text?: string }>)[0]?.text ?? "null");
+        } else {
+          const response = await fetch(`${url}/api/mcp`, { method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream", "x-llv-spawn-capability": capabilities[row.client]!, origin: url },
+            signal: AbortSignal.timeout(Math.max(1, Math.min(30_000, reconciliationDeadline - Date.now()))),
+            body: JSON.stringify({ jsonrpc: "2.0", id: `reconcile-${row.client}-${row.index}`, method: "tools/call", params: { name: row.name, arguments: row.args } }) });
+          const envelope = await response.json() as { result?: { structuredContent?: unknown } };
+          row.reconciled = envelope.result?.structuredContent ?? { ok: false, code: `http-${response.status}` };
+        }
+      } catch (error) { row.reconciled = { transportError: String(error) }; }
+    } };
+    await Promise.all(Array.from({ length: Math.min(19, count) }, recover));
     clearInterval(sampler); sampler = undefined; sample("idle");
     fs.writeFileSync(path.join(root, "calls.json"), JSON.stringify(calls));
     const db = new Database(path.join(env.LLV_STATE_DIR!, "state.sqlite"), { readonly: true });
@@ -235,6 +278,14 @@ export async function runStateWriterSample(): Promise<void> {
     const percentile = (p: number) => latencies[Math.max(0, Math.ceil(latencies.length * p) - 1)];
     const summary = { clients: count, mode, shared, offered: measured.length, completed: measured.filter(row => row.completed !== undefined).length,
       failed: measured.filter(row => row.ok === false).length, pendingAtEnd, pendingAfterDrain: pending.size,
+      completedAtEnd: measured.filter(row => row.completed !== undefined && row.completed <= wallStart + (warmSeconds + seconds) * 1000).length,
+      failedAtEnd: measured.filter(row => row.ok === false && row.completed !== undefined && row.completed <= wallStart + (warmSeconds + seconds) * 1000).length,
+      reconciliation: { mutations: calls.filter(row => row.name !== "list_tasks").length,
+        uncertainReplies: uncertain.length,
+        queried: calls.filter(row => row.reconciled !== undefined).length,
+        successful: calls.filter(row => (row.reconciled as { ok?: boolean } | undefined)?.ok === true).length,
+        unknown: calls.filter(row => row.name !== "list_tasks" && (!row.reconciled || (row.reconciled as { code?: string; transportError?: string }).transportError
+          || ["outcome_unknown", "request_in_progress"].includes((row.reconciled as { code?: string }).code ?? ""))).length },
       latency: { p50: percentile(.5), p95: percentile(.95), p99: percentile(.99), max: latencies.at(-1) },
       seedChecksum: process.env.MCP_BENCH_SEED_CHECKSUM, failures: [...new Set(measured.filter(row => !row.ok).map(row => row.code))] };
     fs.writeFileSync(path.join(root, "summary.json"), JSON.stringify(summary, null, 2));
@@ -243,6 +294,8 @@ export async function runStateWriterSample(): Promise<void> {
     if (sampler) clearInterval(sampler);
     await Promise.all(clients.map(({ client }) => client.close()));
     await reapFixtureChildren();
+    const cleanupDeadline = Date.now() + 3_000;
+    while (census(pids).length && Date.now() < cleanupDeadline) await Bun.sleep(10);
     fs.writeFileSync(path.join(root, "teardown.json"), JSON.stringify(census(pids)));
     // A transport timeout may leave admitted work running in the Viewer.
     // Preserve the final durable rows after every fixture process has ended.

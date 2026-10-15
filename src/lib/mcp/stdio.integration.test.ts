@@ -2276,9 +2276,8 @@ test("packaged MCP writers retain ordered task edits while the Viewer yields on 
     for (let writer = 0; writer < 4; writer++) {
       expect(lines.filter(line => line.startsWith(`${writer}:`))).toEqual(Array.from({ length: 20 }, (_, sequence) => `${writer}:${sequence}`));
     }
-    // The port-0 Viewer fixture has an embedded entry point. Its process owns
-    // the asynchronous wait; the logger names the deferred SQLite lease site.
-    // The four packaged adapters own no state locks.
+    // The Viewer's single task executor owns this asynchronous wait. The four
+    // packaged adapters own no state locks.
     expect(waits().filter(taskWait)).toEqual(expect.arrayContaining([expect.objectContaining({
       synchronous: false, stateWait: expect.objectContaining({ outcome: "success", synchronousSleepMs: 0 }),
     })]));

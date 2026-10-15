@@ -3,6 +3,21 @@ import { waitForFixtureFile } from "./fixtureBarrier";
 
 import { NextRequest } from "next/server";
 
+if (process.env.LLV_TASK_EXECUTOR_STALL) {
+  process.stdin.resume();
+  await new Promise(() => {});
+}
+
+if (process.env.LLV_TASK_EXECUTOR_OWNER) {
+  const { createProductionViewerMcpService } = await import("./server");
+  const { runAsMcpHttpCaller } = await import("./callerContext");
+  const service = await createProductionViewerMcpService();
+  const result = await runAsMcpHttpCaller({ capability: process.env.LLV_TASK_EXECUTOR_OWNER }, () => service.callTool("list_tasks", { project: "fixture", limit: 1 }));
+  if (!result.ok) throw new Error(JSON.stringify(result));
+  fs.writeFileSync(process.env.LLV_WRITER_READY!, "ready");
+  await new Promise(() => {});
+}
+
 if (process.env.LLV_NATIVE_PEER_VERIFY) {
   if (fs.existsSync(process.env.LLV_NATIVE_PEER_HIDDEN!)) throw new Error("fixture did not hide its parent's mount");
   const { verifyNativePeer } = await import("./nativePeer");

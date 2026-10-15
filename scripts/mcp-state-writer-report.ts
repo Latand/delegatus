@@ -24,7 +24,8 @@ export async function stateWriterReport(root: string) {
   const census = lines<{ at: number; processes: Process[] }>(root, "census.ndjson");
   const viewer = read<{ pid: number }>(root, "viewer.ready").pid;
   const servers = new Set<number>();
-  const role = (pid: number) => pid === viewer ? "viewer" : servers.has(pid) ? "adapter" : "launcher";
+  const executors = new Set<number>();
+  const role = (pid: number) => pid === viewer ? "viewer" : executors.has(pid) ? "executor" : servers.has(pid) ? "adapter" : "launcher";
   const phase = (at: number) => at < bounds.coldEnd ? "cold" : at < bounds.warmEnd ? "warm" : at < bounds.measuredEnd ? "measured" : "drain";
   const measured = (event: Event) => phase(event.atMs) === "measured";
   const affectedCalls = new Set<string>();
@@ -33,6 +34,7 @@ export async function stateWriterReport(root: string) {
   const leaseAcquisitionMs: number[] = [];
   for await (const event of stream<Event>(root, "sql.ndjson.js")) {
     if (event.event === "process" && event.pid !== viewer) servers.add(event.pid);
+    if (event.event === "task-executor-process") executors.add(event.pid);
     const call = `${event.pid}:${event.call}`;
     if (event.event === "call-start") unfinished.set(call, event);
     if (event.event === "call-end") unfinished.delete(call);
@@ -140,7 +142,8 @@ export async function stateWriterReport(root: string) {
   return {
     ...summary,
     unfinishedViewerCallsAtTeardown: [...unfinished.values()].filter(event => event.pid === viewer).length,
-    unfinishedAdapterCallsAtTeardown: [...unfinished.values()].filter(event => event.pid !== viewer).length,
+    unfinishedExecutorCallsAtTeardown: [...unfinished.values()].filter(event => executors.has(event.pid)).length,
+    unfinishedAdapterCallsAtTeardown: [...unfinished.values()].filter(event => event.pid !== viewer && !executors.has(event.pid)).length,
     sql: {
       measurementSeconds: bounds.seconds, measuredByDatabase: byDatabase,
       connections: [...counts.values()].map(({ lifetimeMs, current, ...group }) => ({ ...group, liveAtExit: current, currentAfterTeardown: 0, lifetimeMs: distribution(lifetimeMs) })),

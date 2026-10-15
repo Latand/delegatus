@@ -129,4 +129,17 @@ globalThis.setTimeout = ((callback: (...args: unknown[]) => void, ms?: number, .
   return timer((...values: unknown[]) => { observe("lease-retry-wait-ns", { duration: Number(process.hrtime.bigint() - start) }); callback(...values); }, ms, ...args);
 }) as typeof timer;
 observe("process", { identity: fs.readFileSync(`/proc/${process.pid}/stat`, "utf8").split(") ")[1]!.split(" ")[19] });
+if (process.env.MCP_BENCH_TASK_EXECUTOR === "1") {
+  observe("task-executor-process");
+  const caller = await import("../src/lib/mcp/callerContext");
+  const run = caller.runAsMcpHttpCaller;
+  let sequence = 0;
+  mock.module("../src/lib/mcp/callerContext", () => ({ ...caller,
+    runAsMcpHttpCaller: <T>(identity: import("../src/lib/mcp/callerContext").McpHttpCaller, operation: () => T): T =>
+      run(identity, () => context.run({ call: `executor-${++sequence}` }, () => {
+        observe("call-start");
+        return Promise.resolve().then(operation).finally(() => observe("call-end")) as T;
+      })),
+  }));
+}
 if (process.env.MCP_BENCH_LEASES === "1") await observeLeases();
