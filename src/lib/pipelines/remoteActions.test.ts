@@ -52,8 +52,8 @@ test.each(["success", "failure", "pause", "owner"] as const)("skip-stage durably
       const pause = patchPipeline(h.lane.id, { action: "pause" }, h.ports);
       expect(await Promise.race([pause, Bun.sleep(150).then(() => null)])).not.toBeNull();
     }
-    if (outcome === "owner") await withPipelineMutation((pipelines, persist) => {
-      pipelines[0]!.delivery!.epoch++; persist();
+    if (outcome === "owner") await withPipelineMutation(async (pipelines, persist) => {
+      pipelines[0]!.delivery!.epoch++; await persist();
     });
     if (outcome === "pause" || outcome === "owner") { await Bun.sleep(75); expect(signal?.aborted).toBe(true); }
     release(); await work;
@@ -347,10 +347,10 @@ test("an old publication lock refusal preserves a newer reservation and lane det
   savePipelines([h.lane]);
   await patchPipeline(h.lane.id, { action: "publish" }, h.ports);
   const stale = findPipelineRecord(h.lane.id)!;
-  await withPipelineMutation((lanes, persist) => {
+  await withPipelineMutation(async (lanes, persist) => {
     const current = lanes.find((item) => item.id === h.lane.id)!;
     current.delivery!.operation = { ...current.delivery!.operation!, id: "new-publication" };
-    current.stateDetail = "new operator detail"; persist([current]);
+    current.stateDetail = "new operator detail"; await persist([current]);
   });
   const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
   Object.defineProperty(process, "platform", { ...platform, value: "win32" });
@@ -445,7 +445,7 @@ test("a cancelled takeover preserves a newer pause and its detail", async () => 
   } };
   expect((await patchPipeline(lane!.id, { action: "takeover", expectedOwner: owner!.id, expectedEpoch: 1, reason: "Recover publication" }, ports)).error).toBeUndefined();
   const settlement = settlePendingRemoteActions(ports); await entered;
-  await withPipelineMutation((lanes, persist) => { const current = lanes.find((item) => item.id === lane!.id)!; current.state = "paused"; current.stateDetail = "new operator pause"; persist([current]); });
+  await withPipelineMutation(async (lanes, persist) => { const current = lanes.find((item) => item.id === lane!.id)!; current.state = "paused"; current.stateDetail = "new operator pause"; await persist([current]); });
   await settlement;
   expect(findPipelineRecord(lane!.id)).toMatchObject({ state: "paused", stateDetail: "new operator pause", remoteAction: { state: "settled", error: "remote action superseded" } });
 });
@@ -466,8 +466,8 @@ test.each([false, true])("takeover settlement survives restart after the ownersh
   // run its separate result adoption. A new executor reads only the store.
   expect((await takeoverPipelineDelivery(lane!.id, owner!.id, 1, reason, null,
     (current) => current.remoteAction?.id === actionId && current.remoteAction.state === "pending")).error).toBeUndefined();
-  if (pauseAfterward) await withPipelineMutation((pipelines, persist) => {
-    const current = pipelines.find((item) => item.id === lane!.id)!; current.state = "paused"; current.stateDetail = "new operator pause"; persist([current]);
+  if (pauseAfterward) await withPipelineMutation(async (pipelines, persist) => {
+    const current = pipelines.find((item) => item.id === lane!.id)!; current.state = "paused"; current.stateDetail = "new operator pause"; await persist([current]);
   });
   await settlePendingRemoteActions(ports);
   const current = findPipelineRecord(lane!.id)!;
@@ -835,7 +835,7 @@ test("a paused lane cancels a remote check and preserves the pause", async () =>
     return h.ports.exec(command, args);
   } });
   await entered;
-  await withPipelineMutation((lanes, persist) => { lanes[0]!.state = "paused"; lanes[0]!.stateDetail = "operator pause"; persist(); });
+  await withPipelineMutation(async (lanes, persist) => { lanes[0]!.state = "paused"; lanes[0]!.stateDetail = "operator pause"; await persist(); });
   await executor;
   expect(cancelled).toBe(true);
   expect(findPipelineRecord(h.lane.id)).toMatchObject({ state: "paused", stateDetail: "operator pause", remoteAction: { state: "settled", error: "remote action superseded" } });

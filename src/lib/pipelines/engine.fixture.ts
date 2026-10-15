@@ -1384,7 +1384,7 @@ async function legacySpawnAttempt(h: ReturnType<typeof harness>) {
   h.ports.spawnAgent = async (_input, onReserved) => {
     fixtureCalls += 1;
     if (fixtureCalls === 1) throw new Error("structured initial message was not acknowledged");
-    onReserved({ launchId: "launch-fixture", conversationId: "conversation_fixture" });
+    await onReserved({ launchId: "launch-fixture", conversationId: "conversation_fixture" });
     throw new Error(HOST_UNAVAILABLE);
   };
   h.ports.spawnReceipt = (launchId) => launchId === "launch-fixture"

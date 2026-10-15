@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 
-import { applyBoardCommand } from "@/lib/board/command";
+import { applyBoardCommandAsync as applyBoardCommand } from "@/lib/board/command";
 import { boardFor, BoardStoreError } from "@/lib/board/store";
 import { readBoardPatchPayload } from "@/lib/board/validation";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
@@ -27,7 +27,7 @@ export async function PATCH(request: NextRequest): Promise<NextResponse> {
   const rejection = rejectCrossOrigin(request);
   if (rejection) { rejection.headers.set("Cache-Control", "no-store"); return rejection; }
   try {
-    const result = applyBoardCommand(await readBoardPatchPayload(request));
+    const result = await applyBoardCommand(await readBoardPatchPayload(request));
     if (!result.ok) return NextResponse.json({ error: "BOARD_REVISION_CONFLICT", board: result.board }, { status: 409, headers });
     /* `applied` lets the caller tell its own committed write from a no-op that
        was accepted against a board some other writer produced (#38). */

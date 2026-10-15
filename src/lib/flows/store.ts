@@ -1,3 +1,4 @@
+import { waitForStateLock } from "@/lib/state/lockWait";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -497,14 +498,14 @@ export function patchFlowRows(
 }
 
 /** Re-read and mutate flow state under the process-shared SQLite lease. */
-export async function withFlowMutation<T>(mutate: (flows: Flow[], persist: () => void) => T): Promise<T> {
-  return await flowStore().mutate(mutate, ({ dirtyRecords }) => prepareFlowRevisions(dirtyRecords));
+export async function withFlowMutation<T>(mutate: (flows: Flow[], persist: () => Promise<void>) => T | Promise<T>): Promise<T> {
+  return await (await waitForStateLock("flows.open", flowStore)).mutate(mutate, ({ dirtyRecords }) => prepareFlowRevisions(dirtyRecords));
 }
 
 /** Hold the flow collection lease while a cross-store consumer projects one exact
     durable generation. The callback cannot mutate flows through this interface. */
-export function withFlowSnapshot<T>(read: (flows: readonly Flow[]) => T): T {
-  return flowStore().withSnapshotSync(read);
+export async function withFlowSnapshot<T>(read: (flows: readonly Flow[]) => T | Promise<T>): Promise<T> {
+  return (await waitForStateLock("flows.open", flowStore)).mutate(records => read(records));
 }
 
 export function loadPresets(): FlowPreset[] {
@@ -522,3 +523,11 @@ export function savePresets(presets: FlowPreset[]): void {
 export { flowArtifactsDir, findingsPathFor, outputPathFor, stderrPathFor, stdoutPathFor } from "@/lib/reviewHistory/artifacts";
 export { atomicWriteText } from "@/lib/agent/artifacts";
 export { normalizeFindings } from "@/lib/review/findings";
+
+export function patchFlowRowsAsync(...args: Parameters<typeof patchFlowRows>): Promise<void> {
+  return waitForStateLock("flows.patchFlowRows", () => patchFlowRows(...args), { subject: "flows" });
+}
+
+export function saveFlowsAsync(...args: Parameters<typeof saveFlows>): Promise<void> {
+  return waitForStateLock("flows.saveFlows", () => saveFlows(...args), { subject: "flows" });
+}

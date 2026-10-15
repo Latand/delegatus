@@ -1,3 +1,4 @@
+import { waitForStateLock } from "@/lib/state/lockWait";
 import { agentRegistry, RegistryReadError, type RegistryFile } from "@/lib/agent/registry";
 import { registryRowProjection, type RegistryRowProjector } from "@/lib/agent/sqliteRegistryStore";
 import type { BoardMutationV1 } from "@/lib/board/mutations";
@@ -142,4 +143,9 @@ export function applyBoardCommand(
         mutationsWithConversationAliases(payload.mutations, dependencies.registrySnapshot),
       )
     : dependencies.patchBoard(payload.project, payload.baseRevision, payload.patch!);
+}
+
+/** Keep request acknowledgment behind the durable board commit. */
+export function applyBoardCommandAsync(...args: Parameters<typeof applyBoardCommand>): Promise<ReturnType<typeof applyBoardCommand>> {
+  return waitForStateLock("board.command", () => applyBoardCommand(...args), { subject: "board" });
 }
