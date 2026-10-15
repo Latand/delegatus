@@ -29,6 +29,7 @@ import {
   spawnStructuredConversation,
 } from "./structuredSpawn";
 import { spawnTransport } from "./spawnTransport";
+import { runtimeSwitchRetirementReason } from "@/lib/pipelines/runtimeSwitchFence";
 
 export interface StructuredRecoveryRequest {
   /** Fresh autonomous seat authority, re-read after recovery's lock waits. */
@@ -264,6 +265,9 @@ const recoveryStore = globalThis as typeof globalThis & {
   __llvStructuredRecovery?: Map<string, Promise<StructuredRecoveryResult | null>>;
 };
 const recoveries = recoveryStore.__llvStructuredRecovery ??= new Map();
+export function structuredRecoveryPending(conversationId: string): boolean {
+  return [...recoveries.keys()].some(key => key.includes(`:${conversationId}:`));
+}
 
 function candidateFor(
   registry: AgentRegistry,
@@ -383,6 +387,8 @@ async function recoverCandidate(
 ): Promise<StructuredRecoveryResult | null> {
   const ownership = dependencies.ownership;
   const assertOwnership = async (): Promise<void> => {
+    const retired = runtimeSwitchRetirementReason(candidate.conversationId, registry);
+    if (retired) throw new Error(retired);
     if (ownership && !await ownership.owns()) throw new StructuredRecoverySupersededError();
     assertPipelineTurnAllowed(candidate.conversationId, registry);
   };
@@ -445,9 +451,12 @@ async function recoverCandidate(
     let admissionGuard = request.admissionGuard;
     const assertAuthority = () => {
       assertRecoveryAdmission(request, registry);
+      const retired = runtimeSwitchRetirementReason(current.conversationId, registry);
+      if (retired) throw new Error(retired);
       request.authorityGuard?.();
     };
     const assertAccountAuthorized = async (): Promise<void> => {
+      assertAuthority();
       admissionGuard?.();
       await ownership?.authorizeAccount?.(account.accountId ?? null);
       assertAuthority();
@@ -469,9 +478,8 @@ async function recoverCandidate(
           launchProfile: current.spec.launchProfile,
         }, () => {
           // Recheck authority after both authorization and writer admission.
-          assertRecoveryAdmission(request, registry);
-          request.authorityGuard?.();
-          request.admissionGuard?.();
+          assertAuthority();
+          admissionGuard?.();
         });
     } catch (error) {
       /* #1716: the lock throws its typed busy refusal from the acquire, before
@@ -620,6 +628,8 @@ export async function recoverDeadStructuredConversation(
     dependencies.park ?? defaultParkResolver,
   );
   if (!candidate) return null;
+  const retired = runtimeSwitchRetirementReason(candidate.conversationId, registry);
+  if (retired) throw new Error(retired);
   let admittedRequest = request;
   const admissionSnapshot = registry.readOnlySnapshot();
   if (conversationAgentRole(admissionSnapshot, candidate.conversationId) === "curator") {

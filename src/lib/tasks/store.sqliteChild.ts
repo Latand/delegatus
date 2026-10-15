@@ -1,6 +1,7 @@
+import { waitForStateLock } from "@/lib/state/lockWait";
 import fs from "node:fs";
 
-import { importLegacyTasks, loadTasks, mutateTasks } from "./store";
+import { importLegacyTasks, loadTasks, mutateTasks, mutateTasksAsync } from "./store";
 import type { BoardTask } from "./types";
 
 const [mode, filePath, arg, gate] = process.argv.slice(2);
@@ -25,12 +26,12 @@ function task(id: string): BoardTask {
 
 if (mode === "import") {
   if (gate) waitFor(gate);
-  const outcome = importLegacyTasks(filePath, { reconcile: true });
+  const outcome = await waitForStateLock("tasks.import", () => importLegacyTasks(filePath, { reconcile: true }));
   console.log(JSON.stringify({ state: outcome.state, digest: outcome.record.rowDigest, rows: outcome.record.rowCount }));
 } else if (mode === "append") {
   if (gate) waitFor(gate);
   for (let index = 0; index < Number(arg); index += 1) {
-    mutateTasks((tasks) => ({ tasks: [...tasks, task(`${process.pid}-${index}`)], result: undefined }), filePath);
+    await mutateTasksAsync((tasks) => ({ tasks: [...tasks, task(`${process.pid}-${index}`)], result: undefined }), filePath);
   }
   console.log(JSON.stringify({ tasks: loadTasks(filePath).length }));
 } else if (mode === "hold-mutate") {

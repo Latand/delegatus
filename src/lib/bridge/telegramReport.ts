@@ -15,8 +15,6 @@ import { SECTION_EMOJI } from "./reportWords";
  * stays as plain text.
  */
 
-export const TELEGRAM_HTML_MAX_CHARS = 4_096;
-
 function escapeHtml(text: string): string {
   return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
@@ -42,7 +40,7 @@ export function renderTelegram(cut: CutReport, pullRequests: PullRequestLookup =
   const html = blocks.length > 0
     ? `${lines.join("\n")}\n<blockquote expandable>${blocks.join("\n\n")}</blockquote>`
     : lines.join("\n");
-  /* A 1 900-byte report never reaches Telegram's bound; this is the floor
-     under that arithmetic, never a cut a real report meets. */
-  return html.length <= TELEGRAM_HTML_MAX_CHARS ? html : lines.join("\n").slice(0, TELEGRAM_HTML_MAX_CHARS);
+  /* The shared cut bounds the displayed text. Escaping can make the HTML
+     longer than 4 096 characters; Telegram measures after entity parsing. */
+  return html;
 }

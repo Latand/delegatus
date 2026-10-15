@@ -2,6 +2,7 @@ import { spawnDiagnosticErrorForRegistry } from "@/lib/agent/spawnDiagnostics";
 import { creditGuardBlock } from "@/lib/accounts/creditGuard";
 import { assertPipelineTurnAllowed, enforceAccountCreditGuard } from "./accountCreditGuard";
 import { hasRuntimeSwitchKill } from "@/lib/pipelines/runtimeSwitch";
+import { runtimeSwitchRetirementReason } from "@/lib/pipelines/runtimeSwitchFence";
 import { ownerRelaySpawnAuthorized } from "@/lib/externalRelay/ownerAuthority";
 import { loadPipelinesForRetirement } from "@/lib/pipelines/store";
 import { pipelineHostHasLiveWork, providerRecoveryAttempt, providerRecoveryTurnProven } from "@/lib/pipelines/hostRetirement";
@@ -971,6 +972,7 @@ export async function bindStructuredDeliveryQueue(
         if (!ownerRelaySpawnAuthorized(receipt?.clientAttemptId))
           throw new StructuredSendRefusedError("owner relay first prompt authorization revoked");
       },
+      conversationRetired: conversationId => runtimeSwitchRetirementReason(conversationId, registry),
       /* Who may write to this conversation's engine right now (#1131): the
          evidence a `delivering` row is compared against before it is called
          abandoned, so a send another live executor is actuating is left to it. */

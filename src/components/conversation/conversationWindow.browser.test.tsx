@@ -10,13 +10,16 @@ import { browserCase, caseChromium as chromium, openFixture, serveEvidenceFixtur
 
 /*
  * The one rendered-evidence driver for the conversation window. Every case
- * here runs the production conversation components over
- * `conversationWindowEvidence.fixture.tsx`, against the production stylesheet,
- * in Chromium, and is gated by its environment variable, so a plain
+ * here runs the production conversation components over rendered fixtures,
+ * against the production stylesheet in Chromium, and is gated by its
+ * environment variable, so a plain
  * `bun test` loads this file and skips every case:
  *
  *   LLV_CONVERSATION_BROWSER_TEST=1 CHROME_BIN=google-chrome-stable \
  *     bun test src/components/conversation/conversationWindow.browser.test.tsx
+ *
+ * The native send-paint case uses LLV_NATIVE_SEND_PAINT_TEST and installed
+ * engines; its complete command is in docs/perf/send-click-to-paint.md.
  *
  * Add a conversation-window issue's rendered evidence as a `describe` block
  * here rather than as a new file (#1761).
@@ -4755,4 +4758,441 @@ describe("automatic long-text attachment", () => {
     } finally { await browser.close(); served.stop(); }
     fs.writeFileSync(path.join(evidence, "readings.json"), `${JSON.stringify(readings, null, 2)}\n`);
   }, 900_000);
+});
+
+/* Numeric parser work is timed separately from React/layout in this existing
+   conversation driver. An optional private manifest supplies frozen rollouts;
+   only hashes, counts and timings are written to the public evidence. */
+describe("Codex history paging", () => {
+  browserTest("Codex history paging: paired parser measurements and full/paged equality", async () => {
+    const { codexHistoryCorpus } = await import("../feed/__fixtures__/codexHistory");
+    const { createHash } = await import("node:crypto");
+    const out = path.resolve(".artifacts/codex-history");
+    fs.mkdirSync(out, { recursive: true });
+    const revision = Bun.spawnSync(["git", "rev-parse", `${process.env.LLV_HISTORY_BASE ?? "origin/main"}^{commit}`]);
+    if (revision.exitCode !== 0) throw new Error("cannot resolve parser baseline");
+    const base = revision.stdout.toString().trim();
+    const sources = new Map<string, string>();
+    for (const name of ["parse", "contextTokens"]) {
+      const result = Bun.spawnSync(["git", "show", `${base}:src/components/feed/${name}.ts`]);
+      if (result.exitCode !== 0) throw new Error(`cannot read parser baseline: ${name}`);
+      sources.set(path.resolve(`src/components/feed/${name}.ts`), result.stdout.toString());
+    }
+    const build = async (baseline: boolean) => {
+      const result = await Bun.build({
+        entrypoints: ["history-probe"], target: "browser", format: "iife", minify: true,
+        define: { "process.env.NODE_ENV": JSON.stringify("production") },
+        plugins: [{ name: "history-probe", setup(builder) {
+          builder.onResolve({ filter: /^history-probe$/ }, () => ({ path: "history-probe", namespace: "history-probe" }));
+          builder.onLoad({ filter: /.*/, namespace: "history-probe" }, () => ({ loader: "ts", resolveDir: process.cwd(), contents: `
+            import * as parser from ${JSON.stringify(path.resolve("src/components/feed/parse.ts"))};
+            import {comparableHistory, realHistoryIds} from ${JSON.stringify(path.resolve("src/components/feed/__fixtures__/codexHistoryComparison.ts"))};
+            globalThis.${baseline ? "historyBefore" : "historyAfter"} = {...parser, ids: realHistoryIds, shape: s => comparableHistory(s, parser, globalThis.historyRealIds)};
+          ` }));
+          if (baseline) builder.onLoad({ filter: /[/\\]feed[/\\](?:parse|contextTokens)\.ts$/ }, args => {
+            const contents = sources.get(args.path);
+            return contents ? { contents, loader: "ts" } : undefined;
+          });
+        } }],
+      });
+      if (!result.success) throw new Error(result.logs.join("\n"));
+      return result.outputs[0].text();
+    };
+    const bundles = [await build(true), await build(false)];
+    const candidate = Bun.spawnSync(["git", "rev-parse", "HEAD"]).stdout.toString().trim();
+    const sourceHashes = ["src/components/feed/parse.ts", "src/components/feed/contextTokens.ts", "src/components/feed/codexHistory.ts", "src/components/feed/__fixtures__/codexHistoryComparison.ts", "src/components/conversation/conversationWindow.browser.test.tsx"].map(file => ({ path: file, sha256: createHash("sha256").update(fs.readFileSync(file)).digest("hex") }));
+    const manifest = process.env.LLV_CODEX_HISTORY_MANIFEST
+      ? JSON.parse(fs.readFileSync(process.env.LLV_CODEX_HISTORY_MANIFEST, "utf8")) as { label: string; source: string; sha256: string }[]
+      : [533, 866, 1112, 1277, 3146].map((length, index) => ({ label: String.fromCharCode(65 + index), lines: codexHistoryCorpus(length, 16000) }));
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    const readings: unknown[] = [];
+    try {
+      const context = await browser.newContext();
+      const page = await context.newPage();
+      for (const content of bundles) await page.addScriptTag({ content });
+      const cdp = await context.newCDPSession(page);
+      for (const fixture of manifest) {
+        const bytes = "source" in fixture ? fs.readFileSync(fixture.source) : Buffer.from(fixture.lines.join("\n") + "\n");
+        const sha256 = createHash("sha256").update(bytes).digest("hex");
+        if ("sha256" in fixture) expect(sha256).toBe(fixture.sha256);
+        const lines = bytes.toString("utf8").trimEnd().split("\n");
+        await page.evaluate(lines => {
+          const g = globalThis as unknown as { historyLines: string[]; historyRealIds: Set<string>; historyAfter: { ids(lines: string[]): Set<string> } };
+          g.historyLines = lines; g.historyRealIds = g.historyAfter.ids(lines);
+        }, lines);
+        for (const rate of [1, 4]) for (const partition of ["300-lines", "4-MiB"]) {
+          await cdp.send("Emulation.setCPUThrottlingRate", { rate });
+          for (let repeat = -1; repeat < 3; repeat += 1) {
+            const pages = await page.evaluate(async ({ reverse, partition }) => {
+              type Probe = typeof import("../feed/parse") & { shape: (snapshot: unknown) => unknown };
+              const g = globalThis as unknown as { historyBefore: Probe; historyAfter: Probe; historyLines: string[] };
+              const cfg = { engine: "codex", fmt: "codex", showSvc: false, lineFilter: "" } as const;
+              const probes = [g.historyBefore, g.historyAfter];
+              const sessions = probes.map(p => p.createFeedSession(cfg));
+              const lines = g.historyLines;
+              const sizes = partition === "4-MiB" ? lines.map(line => new TextEncoder().encode(line).length + 1) : [];
+              const older = (end: number): number => {
+                if (partition === "300-lines") return Math.max(0, end - 300);
+                let start = end, bytes = 0;
+                while (start > 0 && (bytes + sizes[start - 1] <= 4 * 1024 * 1024 || start === end)) bytes += sizes[--start];
+                return start;
+              };
+              let start = older(lines.length);
+              sessions.forEach(s => s.feed(lines.slice(start), start, false));
+              const tasks: { start: number; duration: number }[] = [];
+              const observer = new PerformanceObserver(list => tasks.push(...list.getEntries().map(e => ({ start: e.startTime, duration: e.duration }))));
+              observer.observe({ type: "longtask" });
+              const wait = () => new Promise(resolve => setTimeout(resolve, 20));
+              const rows = [];
+              while (start > 0) {
+                const old = start; start = older(start);
+                const window = lines.slice(start);
+                const samples: unknown[] = [], snapshots: unknown[] = [];
+                for (const index of reverse ? [1, 0] : [0, 1]) {
+                  const stats = probes[index].codexHistoryStats?.(sessions[index]);
+                  await wait();
+                  const t = performance.now();
+                  snapshots[index] = sessions[index].feed(window, start, false);
+                  const end = performance.now();
+                  await wait();
+                  const after = probes[index].codexHistoryStats?.(sessions[index]);
+                  const delta = after && stats ? Object.fromEntries(["rawLines", "rawBytes", "effectChecks", "effectVisits", "rowPatches", "decodeMs", "replayMs", "verifyMs", "projectionMs"].map(key => [key, after[key as keyof typeof after] as number - (stats[key as keyof typeof stats] as number)])) : null;
+                  samples[index] = { ms: end - t, longTasks: tasks.filter(e => e.start < end && e.start + e.duration > t).map(e => e.duration), delta,
+                    joins: probes[index].feedJoinStats(sessions[index]), retained: after ? { effects: after.effects, slots: after.slots, versions: after.versions, frontier: after.frontier, checkpointBytes: after.checkpointBytes, resets: after.resets, replayByDependency: after.replayByDependency } : null };
+                }
+                const equal = JSON.stringify(probes[0].shape(snapshots[0])) === JSON.stringify(probes[1].shape(snapshots[1]));
+                rows.push({ start, incoming: old - start, window: window.length, before: samples[0], after: samples[1], equal });
+                await wait();
+              }
+              observer.disconnect();
+              return rows;
+            }, { reverse: repeat % 2 === 1, partition });
+            expect(pages.every(row => row.equal)).toBe(true);
+            if (repeat >= 0) {
+              readings.push({ fixture: fixture.label, lines: lines.length, bytes: bytes.length, sha256, rate, partition, repeat, pages });
+              fs.mkdirSync("evidence/codex-history", { recursive: true });
+              fs.writeFileSync("evidence/codex-history/parser.json", JSON.stringify({ base, candidate, sourceHashes, browser: browser.version(), readings }, null, 2) + "\n");
+            }
+          }
+        }
+      }
+      await context.close();
+      // Retention is sampled separately, after timing, in one fresh page per
+      // implementation. Raw input is loaded before the empty-page reading.
+      const memory = [];
+      for (const fixture of manifest) for (const index of [0, 1]) {
+        const isolated = await browser.newContext();
+        try {
+          const page = await isolated.newPage();
+          await page.addScriptTag({ content: bundles[index] });
+          const bytes = "source" in fixture ? fs.readFileSync(fixture.source) : Buffer.from(fixture.lines.join("\n") + "\n");
+          await page.evaluate(lines => { (globalThis as unknown as { historyLines: string[] }).historyLines = lines; }, bytes.toString("utf8").trimEnd().split("\n"));
+          const client = await isolated.newCDPSession(page);
+          await client.send("HeapProfiler.collectGarbage");
+          const before = await client.send("Runtime.getHeapUsage");
+          const counts = await page.evaluate(({ index }) => {
+            type Parser = typeof import("../feed/parse");
+            const g = globalThis as unknown as { historyBefore: Parser; historyAfter: Parser; historyLines: string[]; retainedHistory: import("../feed/parse").FeedSession };
+            const parser = index ? g.historyAfter : g.historyBefore;
+            const session = parser.createFeedSession({ engine: "codex", fmt: "codex", showSvc: false, lineFilter: "" });
+            const lines = g.historyLines;
+            let start = Math.max(0, lines.length - 300);
+            session.feed(lines.slice(start), start, false);
+            while (start > 0) { start = Math.max(0, start - 300); session.feed(lines.slice(start), start, false); }
+            g.retainedHistory = session;
+            return parser.codexHistoryStats?.(session) ?? null;
+          }, { index });
+          await client.send("HeapProfiler.collectGarbage");
+          const after = await client.send("Runtime.getHeapUsage");
+          memory.push({ fixture: fixture.label, implementation: index ? "after" : "before", emptyBytes: before.usedSize, retainedBytes: after.usedSize, sessionDeltaBytes: after.usedSize - before.usedSize,
+            counts: counts ? { effects: counts.effects, slots: counts.slots, versions: counts.versions, frontier: counts.frontier, checkpointBytes: counts.checkpointBytes } : null });
+        } finally { await isolated.close(); }
+      }
+      fs.writeFileSync("evidence/codex-history/memory.json", JSON.stringify({ base, candidate, sourceHashes, memory }, null, 2) + "\n");
+    } finally { await browser.close(); }
+  }, 600_000);
+});
+
+describe("Codex history paging rendered parity", () => {
+  browserTest("Codex history paging: desktop and phone preserve rows, open calls and the scroll anchor", async () => {
+    const out = path.resolve(".artifacts/codex-history/rendered"); fs.mkdirSync(out, { recursive: true });
+    const served = await serveEvidenceFixture(out, FIXTURE);
+    const readings = [];
+    try {
+      for (const width of [1440, 390]) {
+        const browser = await chromium.launch({ ...LAUNCH, ...(width === 1440 ? { ignoreDefaultArgs: ["--hide-scrollbars"] } : {}) });
+        try { for (const locale of ["en", "uk"] as const) {
+        const viewport = { width, height: width === 390 ? 844 : 900 };
+        const suffix = `case=codex-history&records=1277&page=300&window=300&latency=0&lang=${locale}`;
+        const { page, context, pageErrors } = await openFixture(browser, `${served.base}?${suffix}`, viewport, "dark", locale, "reduce", width === 390);
+        try {
+          await page.locator('[data-evidence-case="codex-history"] [data-feed-key]').first().waitFor();
+          await page.waitForFunction(() => document.querySelector('[data-log-feed-scroller]')?.getAttribute("data-tail-lines-start") !== null);
+          await page.evaluate(() => { for (const animation of document.getAnimations()) { animation.pause(); animation.currentTime = 0; } });
+          await page.screenshot({ path: path.join(out, `tail-${width}-${locale}.png`) });
+          const openKey = await page.evaluate(() => {
+            const total = (window as unknown as { llvHistory: { total(): number } }).llvHistory.total();
+            const key = `row:${total - 1}:0`;
+            document.querySelector(`[data-feed-key="${key}"]`)?.setAttribute("data-original-open-call", "true");
+            return key;
+          });
+          const top = () => page.locator(`[data-feed-key="${openKey}"]`).evaluate(node => node.getBoundingClientRect().top);
+          const beforeY = await top();
+          const olderStart = await page.evaluate(async () => {
+            const control = (window as unknown as { llvHistory: { loadOlder(): Promise<number>; start(): number } }).llvHistory;
+            await control.loadOlder(); return control.start();
+          });
+          await page.waitForFunction(start => Number(document.querySelector('[data-log-feed-scroller]')?.getAttribute("data-tail-lines-start")) === start, olderStart);
+          await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+          const drift = Math.abs(await top() - beforeY);
+          expect(drift).toBeLessThan(2);
+          expect(await page.locator(`[data-feed-key="${openKey}"][data-original-open-call]`).count()).toBe(1);
+          while (await page.evaluate(() => (window as unknown as { llvHistory: { start(): number } }).llvHistory.start()) > 0) {
+            await page.evaluate(() => (window as unknown as { llvHistory: { loadOlder(): Promise<number> } }).llvHistory.loadOlder());
+            await page.waitForTimeout(30);
+          }
+          const reveal = async () => {
+            for (let i = 0; i < 100; i += 1) {
+              await page.locator('[data-log-feed-scroller]').focus();
+              await page.keyboard.press("Home");
+              await page.waitForTimeout(20);
+              if (await page.getByText(translate(locale, "feed.startOfConvo"), { exact: true }).isVisible()
+                && await page.locator('[data-log-feed-scroller]').evaluate(node => node.scrollTop < 2)) return;
+            }
+            throw new Error("history start was not revealed");
+          };
+          await reveal();
+          const pagedRows = await page.locator('[data-feed-key]').evaluateAll(nodes => nodes.map(node => ({ key: node.getAttribute("data-feed-key"), kind: node.getAttribute("data-feed-kind"), text: node.textContent })));
+          expect(await page.locator(`[data-feed-key="${openKey}"][data-original-open-call]`).count()).toBe(1);
+          await page.screenshot({ path: path.join(out, `start-${width}-${locale}.png`) });
+          expect(await page.locator('[data-user-bubble]').filter({ hasText: "Inspect the fixture" }).count()).toBe(1);
+          const group = page.locator('[data-feed-kind="cmd-group"]').last();
+          await group.locator('[data-tool-row="group"]').first().click();
+          await group.evaluate(node => node.scrollIntoView({ block: "start" }));
+          expect(await group.innerText()).toContain("second");
+          await page.evaluate(() => { for (const animation of document.getAnimations()) { animation.pause(); animation.currentTime = 0; } });
+          await page.screenshot({ path: path.join(out, `seam-expanded-${width}-${locale}.png`) });
+          expect(pageErrors).toEqual([]);
+          await page.goto(`${served.base}?${suffix}&window=100000`);
+          await page.locator('[data-feed-key]').first().waitFor();
+          await reveal();
+          const fullRows = await page.locator('[data-feed-key]').evaluateAll(nodes => nodes.map(node => ({ key: node.getAttribute("data-feed-key"), kind: node.getAttribute("data-feed-kind"), text: node.textContent })));
+          expect(pagedRows).toEqual(fullRows);
+          expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+          readings.push({ width, locale, rows: pagedRows.length, equality: true, anchorDrift: drift, openCallRetained: true, expandedOutput: true });
+        } finally { await context.close(); }
+        } } finally { await browser.close(); }
+      }
+      fs.mkdirSync("evidence/codex-history", { recursive: true });
+      fs.writeFileSync("evidence/codex-history/rendered.json", JSON.stringify(readings, null, 2) + "\n");
+    } finally { served.stop(); }
+  }, 240_000);
+});
+
+describe("native send paint audit", () => {
+  // Explicit native opt-in: an ordinary browser run needs no installed engines.
+  const nativeTest = browserCase(process.env.LLV_NATIVE_SEND_PAINT_TEST === "1");
+  nativeTest("20 sends per engine, delay and scheduling control through native transcripts", async () => {
+    const binaries = { codex: process.env.LLV_CODEX_BINARY, claude: process.env.LLV_CLAUDE_BINARY };
+    for (const [engine, binary] of Object.entries(binaries)) {
+      if (!binary || !path.isAbsolute(binary) || !fs.existsSync(binary)) throw new Error(`LLV_${engine.toUpperCase()}_BINARY must name an installed absolute executable`);
+    }
+    const out = path.resolve(process.env.SEND_PAINT_OUT ?? ".artifacts/send-paint");
+    fs.mkdirSync(out, { recursive: true });
+    // Short owned paths also keep Chromium and the runtime's Unix sockets short.
+    const directory = fs.mkdtempSync(path.join("/var/tmp", "send-paint-"));
+    const originalEnv = { LLV_STATE_DIR: process.env.LLV_STATE_DIR, XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME, XDG_CACHE_HOME: process.env.XDG_CACHE_HOME };
+    const { startNativeCodexRuntime } = await import("@/lib/runtime/fixtures/nativeCodexRuntime");
+    const { createLogTailEventStream, parseLogStreamSubs } = await import("@/lib/logTailStream");
+    const { readDeliveryProgress } = await import("@/lib/runtime/deliveryProgress");
+    const { deliveryDedupToken } = await import("@/lib/runtime/deliveryDedup");
+    const now = () => performance.timeOrigin + performance.now();
+    const wait = async (done: () => Promise<boolean>) => {
+      const deadline = Date.now() + 30_000;
+      while (!await done()) {
+        if (Date.now() >= deadline) throw new Error("native send paint condition timed out");
+        await Bun.sleep(25);
+      }
+    };
+    type Sample = Record<string, number | string | null> & {
+      source: string; engine: string; delay_ms: number; trial: number;
+      post_ms: number; canonical_frame_ms: number;
+    };
+    const samples: Sample[] = [];
+    const frames: Array<{ frame: string; canonicalRows: number; overflowX: number; visible: boolean }> = [];
+    const keys = new Set<string>();
+    const persist = () => {
+      fs.writeFileSync(path.join(out, "samples.json"), JSON.stringify(samples, null, 2) + "\n");
+      if (samples.length) {
+        const columns = Object.keys(samples[0]);
+        fs.writeFileSync(path.join(out, "samples.csv"), [columns.join(","), ...samples.map(row => columns.map(column => row[column] ?? "").join(","))].join("\n") + "\n");
+      } else fs.writeFileSync(path.join(out, "samples.csv"), "");
+      fs.writeFileSync(path.join(out, "frames.json"), JSON.stringify(frames, null, 2) + "\n");
+    };
+    persist();
+    fs.writeFileSync(path.join(out, "summary.json"), JSON.stringify({ status: "incomplete", expectedSamples: 160 }) + "\n");
+    let browser: Browser | null = null;
+    try {
+      browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"], env: { ...process.env, TMPDIR: directory } });
+      for (const engine of ["claude", "codex"] as const) {
+        const runtime = engine === "claude"
+          ? await startNativeCodexRuntime(path.join(directory, engine), binaries.claude!, { engine })
+          : await startNativeCodexRuntime(path.join(directory, engine), binaries.codex!);
+        const timer = setInterval(() => runtime.provider.completeNext(), 5);
+        try {
+          const warm = await runtime.handle(new Request("http://localhost/api/runtime/send", { method: "POST", headers: { "content-type": "application/json" },
+            body: JSON.stringify({ conversationId: runtime.conversationId, idempotencyKey: "native-paint-warmup", text: "Warm up the native fixture.", policy: "interrupt-active" }) }));
+          expect(warm.ok).toBe(true);
+          await wait(async () => fs.existsSync(runtime.artifactPath) && (await runtime.host().health()).status === "idle" && (await runtime.receipts()).some(receipt => receipt.status === "delivered"));
+          let lastNativeAt = 0;
+          let previousText = "Warm up the native fixture.";
+          for (const source of ["before", "after"] as const) {
+            const runOut = path.join(out, `${source}-${engine}`);
+            fs.mkdirSync(runOut, { recursive: true });
+            const wire: Array<{ ingress: number; key: string; operationId: string; status: number }> = [];
+            const publications: Array<{ at: number; text: string }> = [];
+            const served = await serveEvidenceFixture(runOut, "scripts/capture-composer-payloads.fixture.tsx", {
+              "/fixture/receipts": async () => Response.json(await runtime.receipts()),
+              "/api/log/provenance": async () => {
+                const receipts = await runtime.receipts();
+                const messages = engine === "claude" ? Object.fromEntries(runtime.ledger.load(runtime.threadId)
+                  .filter(row => row.delivered && row.engineMessageId).map(row => [row.engineMessageId, {
+                    origin: "operator", submissionId: receipts.find(receipt => receipt.operationId === row.entry.id)?.idempotencyKey,
+                  }])) : {};
+                return Response.json({ messages, occurrences: [], submissions: Object.fromEntries(receipts.map(receipt => [deliveryDedupToken(receipt.operationId), receipt.idempotencyKey])) });
+              },
+              "/api/logs/stream": (request: Request) => {
+                const subs = parseLogStreamSubs(new URL(request.url).searchParams.get("subs"));
+                const stream = createLogTailEventStream(subs, request.signal, artifact => artifact === runtime.artifactPath);
+                return new Response(stream.pipeThrough(new TransformStream({ transform(chunk, controller) {
+                  publications.push({ at: now(), text: new TextDecoder().decode(chunk) });
+                  controller.enqueue(chunk);
+                } })), { headers: { "content-type": "text/event-stream", "cache-control": "no-store" } });
+              },
+              "/api/runtime/send": async (request: Request) => {
+                const ingress = now();
+                const body = await request.clone().json();
+                const response = await runtime.handle(request);
+                const answer = await response.clone().json();
+                wire.push({ ingress, key: body.idempotencyKey, operationId: answer.operationId, status: response.status });
+                return response;
+              },
+            }, { serialComposerPrerequisites: source === "before" });
+            try {
+              for (const delay of [0, 500]) for (let trial = 0; trial < 20; trial++) {
+                const text = `Native paint ${source} ${engine} ${delay} sample ${trial}.`;
+                const query = new URLSearchParams({ runtime: "journal", "native-paint": "1", engine, card: runtime.conversationId, path: runtime.artifactPath });
+                const { context, page, pageErrors } = await openFixture(browser, `${served.base}?${query}`, { width: 1280, height: 900 }, "dark", "en");
+                try {
+                  await page.waitForSelector("textarea");
+                  await page.waitForFunction(() => window.nativePaintReady);
+                  // The feed must have consumed the preceding native record
+                  // before click timing starts in this fresh browser context.
+                  await page.getByText(previousText, { exact: true }).first().waitFor({ state: "visible" });
+                  await page.evaluate(({ text, delay }) => window.armNativePaintAudit(text, delay), { text, delay });
+                  await page.fill("textarea", text);
+                  await page.click('button[type="submit"]');
+                  await page.waitForFunction(() => Boolean(window.nativePaintAudit?.canonicalFrame), undefined, { timeout: 30_000 });
+                  await wait(async () => (await runtime.host().health()).status === "idle");
+                  const reading = await page.evaluate(() => window.nativePaintAudit!);
+                  const mark = (value: number | undefined) => {
+                    expect(Number.isFinite(value)).toBe(true);
+                    return value!;
+                  };
+                  const click = mark(reading.click);
+                  expect(reading.key).toBeDefined();
+                  expect(keys.has(reading.key!)).toBe(false);
+                  keys.add(reading.key!);
+                  const requests = wire.filter(request => request.key === reading.key);
+                  expect(requests).toHaveLength(1);
+                  const request = requests[0];
+                  expect(request.status).toBeLessThan(300);
+                  const native = fs.readFileSync(runtime.artifactPath, "utf8").trim().split("\n").map(line => JSON.parse(line))
+                    .filter(row => engine === "claude" ? row.type === "user" && JSON.stringify(row.message?.content).includes(text)
+                      : row.type === "response_item" && row.payload?.role === "user" && JSON.stringify(row.payload.content).includes(text));
+                  expect(native).toHaveLength(1);
+                  const nativeAt = mark(Date.parse(native[0].timestamp));
+                  expect(nativeAt).toBeGreaterThanOrEqual(lastNativeAt);
+                  lastNativeAt = nativeAt;
+                  const publication = publications.find(chunk => chunk.at >= click && chunk.text.includes(text));
+                  const progress = readDeliveryProgress([request.operationId]).get(request.operationId);
+                  expect(progress?.originalKey).toBe(reading.key);
+                  const phase = (name: string) => mark(Date.parse(progress?.phaseHistory?.find(phase => phase.phase === name)?.at ?? ""));
+                  const manager = reading.prerequisites.filter(hop => hop.kind === "manager");
+                  const bridge = reading.prerequisites.filter(hop => hop.kind === "bridge");
+                  expect(manager).toHaveLength(1);
+                  expect(bridge).toHaveLength(engine === "codex" ? 1 : 0);
+                  expect(mark(reading.request)).toBeGreaterThanOrEqual(manager[0].end);
+                  if (engine === "codex") {
+                    expect(mark(reading.request)).toBeGreaterThanOrEqual(bridge[0].end);
+                    if (source === "before") expect(manager[0].start).toBeGreaterThanOrEqual(bridge[0].end);
+                    else if (delay) expect(manager[0].start).toBeLessThan(bridge[0].end);
+                  }
+                  expect(mark(reading.browserChunk)).toBeGreaterThanOrEqual(mark(publication?.at));
+                  expect(mark(reading.canonicalFrame)).toBeGreaterThanOrEqual(mark(reading.browserChunk));
+                  expect(reading.canonicalRows).toBe(1);
+                  expect(reading.overflowX).toBe(0);
+                  expect(reading.visible).toBe(true);
+                  expect(pageErrors).toEqual([]);
+                  previousText = text;
+                  samples.push({ source, engine, delay_ms: delay, trial, click_utc: new Date(click).toISOString(),
+                    post_ms: mark(reading.request) - click, handler_ms: request.ingress - click,
+                    queued_ms: phase("queued") - click, dispatching_ms: phase("dispatching") - click,
+                    native_ms: nativeAt - click, echo_ms: mark(Date.parse(progress?.engineEchoAt ?? "")) - click,
+                    server_chunk_ms: mark(publication?.at) - click, browser_chunk_ms: mark(reading.browserChunk) - click,
+                    canonical_frame_ms: mark(reading.canonicalFrame) - click, optimistic_frame_ms: mark(reading.optimisticFrame) - click,
+                    bridge_start_ms: bridge[0] ? bridge[0].start - click : null, bridge_end_ms: bridge[0] ? bridge[0].end - click : null,
+                    seat_start_ms: manager[0].start - click, seat_end_ms: manager[0].end - click,
+                  });
+                  if (trial === 0) {
+                    const frame = `${source}-${engine}-${delay}.png`;
+                    await page.screenshot({ path: path.join(out, frame) });
+                    frames.push({ frame, canonicalRows: reading.canonicalRows!, overflowX: reading.overflowX!, visible: reading.visible! });
+                  }
+                  persist();
+                } catch (error) {
+                  await page.screenshot({ path: path.join(runOut, "failure.png") }).catch(() => {});
+                  fs.writeFileSync(path.join(runOut, "failure.json"), JSON.stringify({
+                    error: String(error), audit: await page.evaluate(() => window.nativePaintAudit ?? null).catch(() => null),
+                  }, null, 2));
+                  throw error;
+                } finally { await context.close(); }
+              }
+            } finally { served.stop(); }
+            console.log(`native send paint: ${source} ${engine}: 40 samples`);
+          }
+          // Re-read the completed transcript: later turns must not duplicate an
+          // earlier send after its initial canonical checkpoint.
+          const transcript = fs.readFileSync(runtime.artifactPath, "utf8").trim().split("\n").map(line => JSON.parse(line));
+          for (const row of samples.filter(row => row.engine === engine)) {
+            const text = `Native paint ${row.source} ${engine} ${row.delay_ms} sample ${row.trial}.`;
+            expect(transcript.filter(record => engine === "claude" ? record.type === "user" && JSON.stringify(record.message?.content).includes(text)
+              : record.type === "response_item" && record.payload?.role === "user" && JSON.stringify(record.payload.content).includes(text))).toHaveLength(1);
+          }
+        } finally { clearInterval(timer); await runtime.close(); }
+      }
+      expect(samples).toHaveLength(160);
+      const percentile = (rows: number[], p: number) => {
+        rows.sort((a, b) => a - b);
+        const index = (rows.length - 1) * p;
+        const lower = Math.floor(index);
+        return rows[lower] + (rows[Math.ceil(index)] - rows[lower]) * (index - lower);
+      };
+      const summary = ["codex", "claude"].flatMap(engine => [0, 500].flatMap(delay => ["before", "after"].map(source => {
+        const group = samples.filter(row => row.engine === engine && row.delay_ms === delay && row.source === source);
+        expect(group).toHaveLength(20);
+        return { source, engine, delay_ms: delay, count: group.length,
+          post_p50_ms: percentile(group.map(row => row.post_ms), 0.5), post_p95_ms: percentile(group.map(row => row.post_ms), 0.95),
+          canonical_frame_p50_ms: percentile(group.map(row => row.canonical_frame_ms), 0.5), canonical_frame_p95_ms: percentile(group.map(row => row.canonical_frame_ms), 0.95) };
+      })));
+      fs.writeFileSync(path.join(out, "summary.json"), JSON.stringify(summary, null, 2) + "\n");
+      console.log(JSON.stringify(summary));
+    } finally {
+      await browser?.close();
+      for (const [key, value] of Object.entries(originalEnv)) {
+        if (value === undefined) delete process.env[key]; else process.env[key] = value;
+      }
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  }, 360_000);
 });

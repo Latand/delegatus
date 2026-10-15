@@ -20,6 +20,22 @@ if (!entry || !outdir) throw new Error("usage: buildEvidenceFixture.ts <entry> <
 
 const SERVER_DIRECTIVE = /^\s*(?:\/\/[^\n]*\n\s*|\/\*[\s\S]*?\*\/\s*)*["']use server["']/;
 
+// Historical scheduling control for the native send-paint experiment. Only
+// fixture bundles can select it; a changed source shape refuses the control.
+const serialComposer = process.argv.includes("--serial-composer-prerequisites");
+function serialPrerequisites(source: string): string {
+  for (const [manager, bridge] of [
+    ["        const managerRead = withComposerAdmissionDeadline(", "        const bridge = await drainBridgeTurnStart();"],
+    ["    const managerRead = durable || replayGeneration ? Promise.resolve(false) : withComposerAdmissionDeadline(", "    const bridgeTurn = durable || replayGeneration ? null : await drainBridgeTurnStart();"],
+  ]) {
+    if (source.split(manager).length !== 2 || source.split(bridge).length !== 2 || source.indexOf(manager) > source.indexOf(bridge)) {
+      throw new Error("serial composer control no longer matches the prerequisite sites");
+    }
+    source = source.replace(bridge + "\n", "").replace(manager, bridge + "\n" + manager);
+  }
+  return source;
+}
+
 const result = await Bun.build({
   entrypoints: [entry],
   outdir,
@@ -29,7 +45,8 @@ const result = await Bun.build({
     name: "server-action-stubs",
     setup(build) {
       build.onLoad({ filter: /\/src\/.*\.tsx?$/ }, (args) => {
-        const source = fs.readFileSync(args.path, "utf8");
+        let source = fs.readFileSync(args.path, "utf8");
+        if (serialComposer && args.path.replaceAll("\\", "/").endsWith("/src/components/TmuxComposer.tsx")) source = serialPrerequisites(source);
         const loader = args.path.endsWith(".tsx") ? "tsx" : "ts";
         if (!SERVER_DIRECTIVE.test(source)) return { contents: source, loader };
         const names = [...source.matchAll(/^export\s+(?:async\s+)?(?:function\s*\*?|const|let)\s+(\w+)/gm)].map((match) => match[1]);

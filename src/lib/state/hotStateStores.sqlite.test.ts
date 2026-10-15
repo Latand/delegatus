@@ -299,17 +299,17 @@ test("repeated implicit checkpoints retain nested and structural mutations acros
     await withFlowMutation(async (records, persist) => {
       const retained = records[0]!;
       retained.roles.implementer.model = "gpt-5.6-sol";
-      persist();
+      await persist();
       observed.push(await readFromChild("nested"));
 
       retained.stateDetail = "after-await";
-      persist();
+      await persist();
       observed.push(await readFromChild("retained-reference"));
 
       records.push(sampleFlow("structural"));
-      persist();
+      await persist();
       retained.stateDetail = "after-structural";
-      persist();
+      await persist();
       observed.push(await readFromChild("structural"));
     });
 

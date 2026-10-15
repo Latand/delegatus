@@ -1104,6 +1104,25 @@ function claudeForkFixture(base: string) {
   return { source, target, sourcePath, sourceGeneration, dependencies, input, successorPath };
 }
 
+for (const engine of ["claude", "codex"] as const) test(`a ${engine} migration rejects an owned writable transcript root inside a private home`, async () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), "llv-provider-root-safety-"));
+  roots.push(base);
+  const fixture = claudeForkFixture(base);
+  const target = accountRoot(engine, base, "unsafe-target");
+  const source = accountRoot(engine, base, "owned-source");
+  const sourcePath = path.join(source.transcriptRoot, "source.jsonl");
+  fs.writeFileSync(sourcePath, "", { mode: 0o600 });
+  fs.chmodSync(target.home, 0o700);
+  fs.chmodSync(target.transcriptRoot, 0o775);
+  const provider = new RegisteredSuccessorProvider({ ...fixture.dependencies,
+    accounts: { resolveTranscriptOwner: () => source, resolveSpawn: () => target } });
+  await expect(provider.create({ ...fixture.input, engine, source: { ...fixture.input.source, path: sourcePath }, targetAccountId: "unsafe-target" }))
+    .rejects.toThrow("target transcript root failed safety checks");
+  expect(fs.statSync(target.home).mode & 0o777).toBe(0o700);
+  expect(fs.statSync(target.transcriptRoot).mode & 0o777).toBe(0o775);
+  expect(Object.values(fixture.dependencies.registry.readOnlySnapshot().receipts)).toHaveLength(0);
+});
+
 test("Claude successor is a fork the viewer writes into the target root, with no launch", async () => {
   const base = fs.mkdtempSync(path.join(os.tmpdir(), "llv-provider-claude-fork-"));
   roots.push(base);

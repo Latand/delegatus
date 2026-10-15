@@ -263,7 +263,7 @@ export function doneCandidates(sources: DoneSources): DoneCandidates {
     out.push({
       key: `report:${report.id}`,
       kind: "report",
-      look: report.outcome.kind,
+      look: report.outcome.kind === "autonomy" ? "visible" : report.outcome.kind,
       project: report.project ?? null,
       at: report.at,
       title: firstLine(report.outcome.summary),

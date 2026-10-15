@@ -1,3 +1,4 @@
+import { waitForStateLock } from "@/lib/state/lockWait";
 import { classifyProviderCondition } from "@/lib/pipelines/providerConditions";
 import { durableStageTurnEvidence } from "@/lib/pipelines/durableEvidence";
 import { accountProbeIdentity, accountProbeSnapshot, withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
@@ -56,7 +57,7 @@ import {
   type ParsedFindings,
 } from "./findings";
 import { relayPrompt, reviewerPrompt } from "./prompts";
-import { atomicWriteText, findingsPathFor, loadFlow, loadFlows, loadFlowsForTick, loadPresets, patchFlowRows, patchFlowRowsAsync, saveFlows } from "./store";
+import { atomicWriteText, findingsPathFor, loadFlow, loadFlows, loadFlowsForTick, loadPresets, patchFlowRowsAsync as patchFlowRows, saveFlows } from "./store";
 import type { Flow, FlowPreset, FlowState, RelayDeliveryTransport, RoleConfig, Round } from "./types";
 import { chooseHeadlessReviewer, rateLimitStateDetail } from "./reviewerPolicy";
 
@@ -460,7 +461,7 @@ export interface RelayDeliveryOverrides {
   requireIdempotentDelivery?: boolean;
   /** Reports the selected transport before either structured or legacy
       actuation can begin, allowing the caller to checkpoint it. */
-  onTransportSelected?: (transport: RelayDeliveryTransport) => void;
+  onTransportSelected?: (transport: RelayDeliveryTransport) => void | Promise<void>;
 }
 
 export async function sendToImplementer(
@@ -500,7 +501,7 @@ export async function sendToImplementer(
          and the round keeps its durable client-message identity, so the relay
          that runs after the park lapses is the same one, not a duplicate. */
       if (overrides.holdWhenParked && recovered.hold) throw new RelayHeldByProviderLimitError(recovered.hold);
-      overrides.onTransportSelected?.("structured");
+      await overrides.onTransportSelected?.("structured");
       const structured = await (overrides.enqueueStructured ?? enqueueStructuredMessage)(
         {
           path: recovered.path,
@@ -556,7 +557,7 @@ export async function sendToImplementer(
     plugins: profile?.plugins,
   });
   if (!spec) throw new Error("implementer session cannot be resumed");
-  overrides.onTransportSelected?.("legacy");
+  await overrides.onTransportSelected?.("legacy");
   const outcome = await (overrides.deliver ?? deliverToTranscriptHost)({ entry, spec, payload: text });
   if (!outcome.ok) {
     if (outcome.actuation === "started") {
@@ -870,10 +871,10 @@ async function launchReviewer(
   round: Round,
   prepared: PreparedReviewerLaunch,
   reservation: Exclude<SpawnBeginResult, { kind: "conflict" }>,
-  persistCheckpoint: () => void,
+  persistCheckpoint: () => void | Promise<void>,
 ): Promise<void> {
   if (reservation.kind === "replay" && adoptReviewerReceipt(flow, round, reservation.receipt)) return;
-  persistCheckpoint();
+  await persistCheckpoint();
   const prompt = reviewerPrompt(flow, round);
   const { role, account } = prepared;
   flow.state = "reviewing";
@@ -910,12 +911,12 @@ async function launchReviewer(
        find and stop it. If a concurrent close/pause/retry took the flow over, the
        merge dropped our handle — the pane is an orphan, so kill it, and let a
        resume/retry re-spawn cleanly rather than parking as interrupted. */
-    persistCheckpoint();
+    await persistCheckpoint();
     const paneDisk = loadFlows().find((item) => item.id === flow.id);
     if (!reviewerLaunchPersisted(paneDisk, round)) {
-      if (adoptSyntheticLaunchTakeover(flow.id, round)) return;
+      if (await waitForStateLock("flows.adoptLaunch", () => adoptSyntheticLaunchTakeover(flow.id, round))) return;
       await stopOrphanPane(round);
-      if (paneDisk && paneDisk.state !== "closed") abandonLaunch(flow.id, round.n);
+      if (paneDisk && paneDisk.state !== "closed") await waitForStateLock("flows.abandonLaunch", () => abandonLaunch(flow.id, round.n));
     }
     return;
   }
@@ -939,12 +940,12 @@ async function launchReviewer(
      close/pause/retry took the flow over, terminate the orphan (forgetHeadlessReview
      SIGTERM/SIGKILLs the detached group) and clear the abandoned spawn markers so
      resume/retry re-spawns fresh. */
-  persistCheckpoint();
+  await persistCheckpoint();
   const headlessDisk = loadFlows().find((item) => item.id === flow.id);
   if (!reviewerLaunchPersisted(headlessDisk, round)) {
-    if (adoptSyntheticLaunchTakeover(flow.id, round)) return;
+    if (await waitForStateLock("flows.adoptLaunch", () => adoptSyntheticLaunchTakeover(flow.id, round))) return;
     forgetHeadlessReview(flow.id, round.n, round);
-    if (headlessDisk && headlessDisk.state !== "closed") abandonLaunch(flow.id, round.n);
+    if (headlessDisk && headlessDisk.state !== "closed") await waitForStateLock("flows.abandonLaunch", () => abandonLaunch(flow.id, round.n));
   }
 }
 
@@ -1075,11 +1076,11 @@ export function enforceHeadlessAccountCreditGuard(registry: AgentRegistry, block
           if (receipt && ["starting", "path-pending"].includes(receipt.state)) {
             await registry.failSpawnOffLoop(receipt.launchId, "paid-credit guard stopped reviewer before transcript attribution");
           }
-          await registry.endHostlessSpawnOffLoop(round.launchId);
+          await waitForStateLock("flows.creditGuardMarker", () => endHeadlessReviewerMarker(round, registry), { subject: "flows" });
         }
         // A concurrent pause/close or retry owns its new state. Only the stopped
         // binding may be reset, and a paused round remains paused.
-        await patchFlowRowsAsync([flow.id], rows => rows.filter(row => {
+        await patchFlowRows([flow.id], rows => rows.filter(row => {
           const latest = lastRound(row);
           if (!latest || latest.reviewerBindingId !== round.reviewerBindingId || latest.launchId !== round.launchId
             || row.state !== "reviewing" && row.state !== "spawning" && row.state !== "paused") return false;
@@ -1279,7 +1280,7 @@ export async function tickFlow(
   flow: Flow,
   entries: FileEntry[],
   entriesByPath: Map<string, FileEntry>,
-  persistCheckpoint: () => void,
+  persistCheckpoint: () => void | Promise<void>,
 ): Promise<boolean> {
   const before = JSON.stringify(flow);
   flow.implementerPath = currentConversationPath(flow.implementerConversationId, flow.implementerPath);
@@ -1474,7 +1475,7 @@ export async function tickFlow(
       );
       if (!reservation || !flowRevisionCurrent(flow)) return false;
       round.launchLeaseUntil = new Date(Date.now() + REVIEWER_LAUNCH_LEASE_MS).toISOString();
-      persistCheckpoint();
+      await persistCheckpoint();
       /* launchReviewer persists again after spawning (for the ownership/orphan
          check), so no extra checkpoint is needed here. */
       await launchReviewer(flow, round, prepared, reservation, persistCheckpoint);
@@ -1656,15 +1657,15 @@ export async function tickFlow(
         round.relayDeliveryTransport = null;
         round.relayStartedAt = isoNow();
         relayStartedThisProcess.add(relayKey);
-        persistCheckpoint();
+        await persistCheckpoint();
         await relayFindings(flow, entriesByPath, round, {
           requireIdempotentDelivery: round.relayRetryRequiresIdempotency ?? false,
-          onTransportSelected: (transport) => {
+          onTransportSelected: async (transport) => {
             round.relayDeliveryTransport = transport;
-            persistCheckpoint();
+            await persistCheckpoint();
           },
         });
-        persistCheckpoint();
+        await persistCheckpoint();
       } catch (error) {
         const detail = error instanceof Error ? error.message : String(error);
         if (error instanceof RelayHeldByProviderLimitError) {
@@ -1679,7 +1680,7 @@ export async function tickFlow(
           scheduleRelayRetry(flow, round, detail, false);
         }
         relayStartedThisProcess.delete(relayKey);
-        persistCheckpoint();
+        await persistCheckpoint();
       }
     })();
     relayLeases.set(relayKey, lease);
@@ -1727,16 +1728,16 @@ export function flowTickBase(flows: Flow[]): Map<string, FlowTickBase> {
  *     disk: top-level roles/roundLimit/mode, and each unstarted round's
  *     reviewerRole (the tick never edits an unspawned round's snapshot — only
  *     set-roles does), so a config change without a lifecycle change survives.
- * Fully synchronous, so no patchFlow can interleave between the read and write.
+ * Preparation and SQL commit run together after asynchronous admission.
  */
-export function persistTickFlows(
+export async function persistTickFlows(
   flows: Flow[],
   base: Map<string, FlowTickBase>,
   candidateIds?: ReadonlySet<string>,
-): void {
+): Promise<void> {
   const tickById = new Map(flows.map((flow) => [flow.id, flow] as const));
   const ids = candidateIds ?? new Set(tickById.keys());
-  patchFlowRows(ids, (diskFlows) => {
+  await patchFlowRows(ids, (diskFlows) => {
     const changed: Flow[] = [];
     for (const diskFlow of diskFlows) {
       const tick = tickById.get(diskFlow.id);
@@ -1841,16 +1842,16 @@ export async function tickFlows(entries: FileEntry[]): Promise<TickResult> {
     let changed = false;
     for (const flow of flows) {
       if (TERMINAL_STATES.has(flow.state)) continue;
-      const flowChanged = await tickFlow(flow, entries, entriesByPath, () => {
-        persistTickFlows(flows, base, new Set([...changedIds, flow.id]));
+      const flowChanged = await tickFlow(flow, entries, entriesByPath, async () => {
+        await persistTickFlows(flows, base, new Set([...changedIds, flow.id]));
       });
       if (flowChanged) {
         changed = true;
         changedIds.add(flow.id);
-        persistTickFlows(flows, base, changedIds);
+        await persistTickFlows(flows, base, changedIds);
       }
     }
-    if (changed) persistTickFlows(flows, base, changedIds);
+    if (changed) await persistTickFlows(flows, base, changedIds);
     const projected = cloneFlows(loadFlows());
     annotateFlowEntries(entries, projected);
     return { flows: projected, changed };

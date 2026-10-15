@@ -1,10 +1,11 @@
+import { waitForStateLock } from "./lockWait";
 import fs from "node:fs";
 
-import { loadFlows, saveFlows } from "@/lib/flows/store";
+import { loadFlows, saveFlowsAsync as saveFlows } from "@/lib/flows/store";
 import type { Flow } from "@/lib/flows/types";
 import { buildPipeline, withPipelineMutation } from "@/lib/pipelines/store";
 import type { PipelineStage } from "@/lib/pipelines/types";
-import { buildWorkflow, loadWorkflows, normalizeTemplate, saveWorkflows } from "@/lib/workflows/store";
+import { buildWorkflow, loadWorkflows, normalizeTemplate, saveWorkflowsAsync as saveWorkflows } from "@/lib/workflows/store";
 
 const [collection, label, readyFile, releaseFile] = process.argv.slice(2);
 if (!collection || !label || !readyFile || !releaseFile) throw new Error("hot state child arguments are required");
@@ -56,11 +57,11 @@ fs.writeFileSync(readyFile, "ready");
 waitFor(releaseFile);
 
 if (collection === "flows") {
-  const records = loadFlows();
+  const records = await waitForStateLock("flows.open", loadFlows);
   records.push(flow(`flow-${label}`));
-  saveFlows(records);
+  await saveFlows(records);
 } else if (collection === "pipelines") {
-  await withPipelineMutation((records, persist) => {
+  await withPipelineMutation(async (records, persist) => {
     records.push(buildPipeline({
       id: `pipe-${label}`,
       task: `task ${label}`,
@@ -71,7 +72,7 @@ if (collection === "flows") {
       srcConversationId: null,
       now: "2026-08-06T00:00:00.000Z",
     }));
-    persist();
+    await persist();
   });
 } else if (collection === "workflows") {
   const template = normalizeTemplate({
@@ -82,7 +83,7 @@ if (collection === "flows") {
     ],
   });
   if (!template) throw new Error("contention workflow template is invalid");
-  const records = loadWorkflows();
+  const records = await waitForStateLock("workflows.open", loadWorkflows);
   records.push(buildWorkflow({
     id: `work-${label}`,
     name: `workflow ${label}`,
@@ -93,7 +94,7 @@ if (collection === "flows") {
     mode: "manual",
     now: "2026-08-06T00:00:00.000Z",
   }));
-  saveWorkflows(records);
+  await saveWorkflows(records);
 } else {
   throw new Error(`unknown hot state collection: ${collection}`);
 }

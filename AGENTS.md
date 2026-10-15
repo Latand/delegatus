@@ -348,3 +348,33 @@ token at its entry point (see `bin/cli.mjs`, `src/runtime-host/main.ts`,
 an operator-shaped home with nothing preset. When you add a script that only
 needs *a* state directory, set `LLV_STATE_DIR` instead — claiming an owner
 token to silence a refusal is how the seventy minutes come back.
+
+# Performance invariants: hot paths never block and never do whole work
+
+Paths of this kind produced multi-second Viewer stalls in October 2026
+(`docs/perf/`). A builder follows these rules for any feature, and a reviewer
+checks each one against the diff.
+
+1. **A long-lived server's main loop never blocks.** No synchronous wait, sleep,
+   spin or retry on a shared resource (database lock, file lock, child process,
+   socket). Wait asynchronously under one overall deadline, keep synchronous work
+   in short slices, and record every long wait with its origin. Reviewers grep
+   the diff for synchronous waits and sleep loops.
+2. **Work per request, poll or tick scales with what changed, never with total
+   data size.** Use deltas, cursors, narrow projections and paging. Reviewers
+   estimate bytes per call times calls per minute and block whole-data reads,
+   parses or serializations on a hot path.
+3. **Every cache has a size bound, an eviction rule and one owner.** It is not
+   silently duplicated per module, worker or bundle. Large payloads stream with
+   backpressure instead of being built whole in memory. Reviewers ask for the
+   bound, the eviction rule and the owner of each new cache.
+4. **Slow or blocking work is attributable.** It carries a label and an origin
+   that monitoring can report, and a monitor reports its own overflow instead of
+   dropping data. A diff that adds hot-path work without attribution is a finding.
+5. **Startup and first-request paths serve a persisted, validated artifact and
+   refine in the background.** They never rebuild all derived state before the
+   first reply. Reviewers ask what the first request does on a cold start.
+6. **A performance claim rests on measurement.** Before and after on identical
+   data and load, with repeated runs, then a production check after deploy under
+   normal load, with the load recorded beside the numbers. A change with no such
+   evidence does not claim a gain.

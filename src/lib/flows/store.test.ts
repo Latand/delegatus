@@ -6,7 +6,7 @@ import path from "node:path";
 import { AgentRegistry } from "@/lib/agent/registry";
 import { CODEX_GPT61_SOL_MODEL, CODEX_TERRA_MODEL } from "@/lib/agent/models";
 
-import { configuredReviewerFallback, loadPresets, savePresets, loadFlows, mergeSeededPresets, patchFlowRows, reconcileFlowConversationOwnership, reconcileFlowConversationOwnershipCooperatively, saveFlows, seededPresetsFromRoles } from "./store";
+import { configuredReviewerFallback, loadPresets, savePresets, loadFlows, mergeSeededPresets, patchFlowRows, reconcileFlowConversationOwnership, reconcileFlowConversationOwnershipCooperatively, saveFlows, seededPresetsFromRoles, withFlowSnapshot, withFlowMutation } from "./store";
 import type { Flow, FlowPreset } from "./types";
 import { beginLegacySpawnFixture } from "@/lib/agent/registryTestFixtures";
 
@@ -577,3 +577,27 @@ for (const managed of [undefined, "role-registry"] as const) {
     }
   });
 }
+
+
+test("a flow snapshot retains its lease until an asynchronous cross-store checkpoint settles", async () => {
+  const previous = process.env.LLV_STATE_DIR;
+  const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "flow-snapshot-wait-"));
+  process.env.LLV_STATE_DIR = sandbox;
+  let release!: () => void, admitted!: () => void;
+  const ready = new Promise<void>(resolve => { admitted = resolve; });
+  let snapshot: Promise<unknown> | undefined, writer: Promise<unknown> | undefined;
+  try {
+    snapshot = withFlowSnapshot(async () => { admitted(); await new Promise<void>(resolve => { release = resolve; }); });
+    await ready;
+    let entered = false;
+    writer = withFlowMutation(() => { entered = true; });
+    await Bun.sleep(80);
+    expect(entered).toBe(false);
+    release(); await snapshot; await writer;
+    expect(entered).toBe(true);
+  } finally {
+    release?.(); await snapshot?.catch(() => {}); await writer?.catch(() => {});
+    if (previous === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previous;
+    fs.rmSync(sandbox, { recursive: true, force: true });
+  }
+});

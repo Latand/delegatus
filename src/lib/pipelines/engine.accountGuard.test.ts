@@ -43,6 +43,11 @@ async function fixture() {
 
 test.each(["binding", "credit", "exhausted", "abort"])("%s stops the old host and continues a pinned stage on an allowed account", async kind => {
   const f = await fixture();
+  const stop = f.h.ports.stopStageAgent;
+  f.h.ports.stopStageAgent = async (...args) => {
+    expect(f.current().runs[0]!.attempts[0]!.suspension?.requestedAt).toBeDefined();
+    return stop(...args);
+  };
   if (kind === "binding" || kind === "abort") f.allow(["account-b"]);
   else f.observations[0]!.limits!.weekly!.usedPercent = kind === "credit" ? 99 : 100;
   if (kind === "abort") f.h.durableTurns.set(f.attempt.agentPath!, { turn: "terminal", message: null,

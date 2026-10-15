@@ -47,6 +47,8 @@ interface StructuredOperationStatus {
 }
 
 export interface StructuredDeliveryQueuePort {
+  /** Durable withdrawal of a pipeline attempt, including after replacement. */
+  conversationRetired?(conversationId: string): string | null;
   /** Re-read the idle revision after claiming an automatic continuation. */
   idleContinuationCurrent?(conversationId: string, fence: import("./contracts").RuntimeIdleKillFence): Promise<boolean>;
   /** Pause durable effects while an automatic release handoff owns admission. */
@@ -1548,7 +1550,10 @@ export class StructuredDeliveryQueue {
       const step = <T>(detail: string, wait: () => Promise<T>) => this.checking(lane, effect, detail, wait);
       /* The fence every message send passes before its first actuation, asked
          under the add's own operation id (#1131). */
-      const settled = () => this.checking(lane, effect, "reading the durable delivery record", () => this.readSettled(effect.operationId));
+      const settled = () => this.checking(lane, effect, "reading the durable delivery record", async () => {
+        const retired = await readEvidence(() => !!this.port.conversationRetired?.(effect.conversationId), "runtime switch retirement is unavailable");
+        return !retired.readable || retired.value ? retired : this.readSettled(effect.operationId);
+      });
       if (await this.port.nativeQueueExecute(effect, reason, note, step, settled) === false) {
         this.retrySoon();
         return false;
@@ -1681,6 +1686,13 @@ export class StructuredDeliveryQueue {
           replacesTurn: effect.kind !== "inject" && effect.policy === "interrupt-active" };
       }
       if (this.port.handoffHeld?.()) { blockRest("update-handoff"); this.noteWait(effect, "update-handoff"); return true; }
+      const retired = this.port.conversationRetired?.(effect.conversationId);
+      if (retired && !isControlEffect(effect) && !isReconfigureEffect(effect)) {
+        if (effect.kind === "native-queue") {
+          if (!await this.executeNative(effect, retired, lane)) return true;
+        } else await this.transitionUnlessSettled(effect.operationId, "failed", { reason: retired });
+        continue;
+      }
       if (effect.kind === "send" && effect.onlyIfIdle && !guardedLease) {
         const blocked = await withConversationActuation(effect.conversationId,
           lease => this.drainTarget([effect], lane, lease));
@@ -2133,6 +2145,11 @@ export class StructuredDeliveryQueue {
           ?? (recordsRoute && durable?.delivery === "interrupt-then-turn-started" ? durable.interruptedTurnId ?? null : null),
       };
       let sent: { receipt: DeliveryReceipt } | { error: unknown };
+      const authorize = () => {
+        const retired = this.port.conversationRetired?.(effect.conversationId);
+        if (retired) throw new StructuredSendRefusedError(retired);
+        this.port.authorizeDispatch?.(effect.operationId, effect.conversationId);
+      };
       try {
         if (this.port.handoffHeld?.()) {
           this.firstDispatches.delete(effect.operationId);
@@ -2147,8 +2164,8 @@ export class StructuredDeliveryQueue {
         // later queued retry must establish its own canonical evidence.
         this.firstDispatches.delete(effect.operationId);
         if (steersIntoTurn && host.steer) {
-          this.port.authorizeDispatch?.(effect.operationId, effect.conversationId);
-          const outcome = await host.steer(entry, firstDispatch, () => this.port.authorizeDispatch?.(effect.operationId, effect.conversationId));
+          authorize();
+          const outcome = await host.steer(entry, firstDispatch, authorize);
           const settling = this.settleObservedSteer(effect, outcome).finally(() => {
             this.activeSteers.delete(effect.operationId);
             this.retrySoon();
@@ -2160,7 +2177,7 @@ export class StructuredDeliveryQueue {
           void settling.catch(() => undefined);
           continue;
         }
-        const receiving = sendWithReadRetry(host, entry, firstDispatch, () => this.port.authorizeDispatch?.(effect.operationId, effect.conversationId));
+        const receiving = sendWithReadRetry(host, entry, firstDispatch, authorize);
         if (queuesDuringTurn && !shouldInterrupt && !steersIntoTurn) {
           /* The engine confirms a queued input only when its own turn starts,
              which may wait on an answer to this conversation's attention. The

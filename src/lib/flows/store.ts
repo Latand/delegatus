@@ -1,3 +1,4 @@
+import { waitForStateLock } from "@/lib/state/lockWait";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -496,33 +497,15 @@ export function patchFlowRows(
   });
 }
 
-/** Keyed controller writes wait for the shared state lease off the loop. */
-export async function patchFlowRowsAsync(
-  flowIds: Iterable<string>,
-  prepare: (current: Flow[]) => readonly Flow[],
-): Promise<void> {
-  const ids = [...new Set(flowIds)];
-  if (!ids.length) return;
-  await flowStore().boundedPatchAsync(ids.length * 2, tx => {
-    const current = ids.flatMap(id => {
-      const flow = tx.get(id);
-      return flow ? [flow] : [];
-    });
-    const records = prepare(current);
-    prepareFlowRevisions(records);
-    for (const record of records) tx.put(record);
-  });
-}
-
 /** Re-read and mutate flow state under the process-shared SQLite lease. */
-export async function withFlowMutation<T>(mutate: (flows: Flow[], persist: () => void) => T): Promise<T> {
-  return await flowStore().mutate(mutate, ({ dirtyRecords }) => prepareFlowRevisions(dirtyRecords));
+export async function withFlowMutation<T>(mutate: (flows: Flow[], persist: () => Promise<void>) => T | Promise<T>): Promise<T> {
+  return await (await waitForStateLock("flows.open", flowStore)).mutate(mutate, ({ dirtyRecords }) => prepareFlowRevisions(dirtyRecords));
 }
 
 /** Hold the flow collection lease while a cross-store consumer projects one exact
     durable generation. The callback cannot mutate flows through this interface. */
-export function withFlowSnapshot<T>(read: (flows: readonly Flow[]) => T): T {
-  return flowStore().withSnapshotSync(read);
+export async function withFlowSnapshot<T>(read: (flows: readonly Flow[]) => T | Promise<T>): Promise<T> {
+  return (await waitForStateLock("flows.open", flowStore)).mutate(records => read(records));
 }
 
 export function loadPresets(): FlowPreset[] {
@@ -540,3 +523,11 @@ export function savePresets(presets: FlowPreset[]): void {
 export { flowArtifactsDir, findingsPathFor, outputPathFor, stderrPathFor, stdoutPathFor } from "@/lib/reviewHistory/artifacts";
 export { atomicWriteText } from "@/lib/agent/artifacts";
 export { normalizeFindings } from "@/lib/review/findings";
+
+export function patchFlowRowsAsync(...args: Parameters<typeof patchFlowRows>): Promise<void> {
+  return waitForStateLock("flows.patchFlowRows", () => patchFlowRows(...args), { subject: "flows" });
+}
+
+export function saveFlowsAsync(...args: Parameters<typeof saveFlows>): Promise<void> {
+  return waitForStateLock("flows.saveFlows", () => saveFlows(...args), { subject: "flows" });
+}

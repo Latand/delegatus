@@ -27,6 +27,10 @@ operator's view of a review is in [Pipelines in depth](guide/pipelines.md).
    head.
 5. `pass` follows the reviewer's own pass edge.
 
+A reviewer of a diff that touches a poll, health, request or startup path, a
+cache, a lock wait or the loop monitor checks it against the performance
+invariants in [AGENTS.md](../AGENTS.md#performance-invariants-hot-paths-never-block-and-never-do-whole-work).
+
 ## The budget
 
 The number of rounds is fixed when the pipeline is created, on the reviewer's

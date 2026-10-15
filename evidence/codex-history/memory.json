@@ -1,0 +1,168 @@
+{
+  "base": "5d839f09d30bc9e473bf262b1404f7566fe48526",
+  "candidate": "c828a730c527f5f97c97b7883c4ed4c53696ac32",
+  "sourceHashes": [
+    {
+      "path": "src/components/feed/parse.ts",
+      "sha256": "27762c063606105f26c5ff770fa7acf5e85f75e92e511df33475a9858e802ae9"
+    },
+    {
+      "path": "src/components/feed/contextTokens.ts",
+      "sha256": "9e1b859290eb170fff72189f9c881dd1ab3ffdff6333c429871966170b770fe6"
+    },
+    {
+      "path": "src/components/feed/codexHistory.ts",
+      "sha256": "5b8428671dfd1f95a6345ab97c1cc7b2b2354030158d0987d684c96403b3dbb1"
+    },
+    {
+      "path": "src/components/feed/__fixtures__/codexHistoryComparison.ts",
+      "sha256": "6fa233eeba5f106c70de2d580fd91ac029126d7282954579138e7c780b00402c"
+    },
+    {
+      "path": "src/components/conversation/conversationWindow.browser.test.tsx",
+      "sha256": "900e714f52aba1212743c849eb0621c64ca0610c0f0a01f2baaeade9b93f0872"
+    }
+  ],
+  "memory": [
+    {
+      "fixture": "A",
+      "implementation": "before",
+      "emptyBytes": 10744800,
+      "retainedBytes": 15035896,
+      "sessionDeltaBytes": 4291096,
+      "counts": null
+    },
+    {
+      "fixture": "A",
+      "implementation": "after",
+      "emptyBytes": 10753356,
+      "retainedBytes": 20759648,
+      "sessionDeltaBytes": 10006292,
+      "counts": {
+        "effects": 533,
+        "slots": 1171,
+        "versions": 4907,
+        "frontier": {
+          "users": 1,
+          "execs": 0,
+          "pendingMembers": 0,
+          "roundMembers": 0,
+          "sizes": 99
+        },
+        "checkpointBytes": 18218
+      }
+    },
+    {
+      "fixture": "B",
+      "implementation": "before",
+      "emptyBytes": 10926296,
+      "retainedBytes": 16567264,
+      "sessionDeltaBytes": 5640968,
+      "counts": null
+    },
+    {
+      "fixture": "B",
+      "implementation": "after",
+      "emptyBytes": 10934852,
+      "retainedBytes": 23241468,
+      "sessionDeltaBytes": 12306616,
+      "counts": {
+        "effects": 866,
+        "slots": 2341,
+        "versions": 9475,
+        "frontier": {
+          "users": 1,
+          "execs": 0,
+          "pendingMembers": 0,
+          "roundMembers": 0,
+          "sizes": 217
+        },
+        "checkpointBytes": 18603
+      }
+    },
+    {
+      "fixture": "C",
+      "implementation": "before",
+      "emptyBytes": 13645744,
+      "retainedBytes": 22086600,
+      "sessionDeltaBytes": 8440856,
+      "counts": null
+    },
+    {
+      "fixture": "C",
+      "implementation": "after",
+      "emptyBytes": 13654300,
+      "retainedBytes": 25577288,
+      "sessionDeltaBytes": 11922988,
+      "counts": {
+        "effects": 1112,
+        "slots": 2967,
+        "versions": 12402,
+        "frontier": {
+          "users": 1,
+          "execs": 0,
+          "pendingMembers": 0,
+          "roundMembers": 0,
+          "sizes": 256
+        },
+        "checkpointBytes": 22464
+      }
+    },
+    {
+      "fixture": "D",
+      "implementation": "before",
+      "emptyBytes": 9173664,
+      "retainedBytes": 13755172,
+      "sessionDeltaBytes": 4581508,
+      "counts": null
+    },
+    {
+      "fixture": "D",
+      "implementation": "after",
+      "emptyBytes": 9182220,
+      "retainedBytes": 20654536,
+      "sessionDeltaBytes": 11472316,
+      "counts": {
+        "effects": 1277,
+        "slots": 3339,
+        "versions": 14006,
+        "frontier": {
+          "users": 2,
+          "execs": 0,
+          "pendingMembers": 0,
+          "roundMembers": 0,
+          "sizes": 256
+        },
+        "checkpointBytes": 21401
+      }
+    },
+    {
+      "fixture": "E",
+      "implementation": "before",
+      "emptyBytes": 28088480,
+      "retainedBytes": 44998120,
+      "sessionDeltaBytes": 16909640,
+      "counts": null
+    },
+    {
+      "fixture": "E",
+      "implementation": "after",
+      "emptyBytes": 28097036,
+      "retainedBytes": 47813572,
+      "sessionDeltaBytes": 19716536,
+      "counts": {
+        "effects": 3146,
+        "slots": 7232,
+        "versions": 30506,
+        "frontier": {
+          "users": 1,
+          "execs": 0,
+          "pendingMembers": 0,
+          "roundMembers": 0,
+          "sizes": 256
+        },
+        "checkpointBytes": 35419
+      }
+    }
+  ]
+}

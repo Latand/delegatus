@@ -1,3 +1,4 @@
+import { waitForStateLock } from "@/lib/state/lockWait";
 import { jsonArrayRecordBytes, preservedRecordJson, rememberRecordBytes, registryRecordKey, reportRegistryRecord, stringifyRegistryDocument } from "@/lib/state/registryRecords";
 import { DEFAULT_REVIEW_ROUNDS } from "@/lib/reviewHistory/limits";
 import fs from "node:fs";
@@ -573,9 +574,9 @@ export function saveWorkflows(workflows: Workflow[]): void {
 
 /** Serialize one workflow read-modify-write across Viewer and runtime processes. */
 export async function withWorkflowMutation<T>(
-  mutate: (workflows: Workflow[], persist: () => void) => Promise<T> | T,
+  mutate: (workflows: Workflow[], persist: () => Promise<void>) => Promise<T> | T,
 ): Promise<T> {
-  return workflowStore().mutate(mutate);
+  return (await waitForStateLock("workflows.open", workflowStore)).mutate(mutate);
 }
 
 export function loadTemplates(): WorkflowTemplate[] {
@@ -676,4 +677,8 @@ export function setupStderrPath(workflowId: string): string {
 
 export function setupExitPath(workflowId: string): string {
   return path.join(workflowArtifactsDir(workflowId), "setup-exit");
+}
+
+export function saveWorkflowsAsync(...args: Parameters<typeof saveWorkflows>): Promise<void> {
+  return waitForStateLock("workflows.saveWorkflows", () => saveWorkflows(...args), { subject: "workflows" });
 }

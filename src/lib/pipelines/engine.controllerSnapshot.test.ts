@@ -61,9 +61,9 @@ test("a controller evidence reply cannot overwrite a concurrent lane edit or tri
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     await Promise.race([reading, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("evidence read did not start")), 1000); })]);
-    await withPipelineMutation((rows, persist) => {
+    await withPipelineMutation(async (rows, persist) => {
       rows[0]!.stateDetail = "operator edit during evidence";
-      persist([rows[0]!]);
+      await persist([rows[0]!]);
     });
   } finally { if (timer) clearTimeout(timer); release(); await tick; }
   expect(reads).toBe(1);

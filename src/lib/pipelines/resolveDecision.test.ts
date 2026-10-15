@@ -77,7 +77,7 @@ function harness() {
       spawnedStages.push(input.membership.stageId ?? "");
       prompts.push(input.prompt);
       const n = spawnedStages.length;
-      onReserved({ launchId: `launch-${n}`, conversationId: `conversation_stage_${n}`, accountId: "account-a" });
+      await onReserved({ launchId: `launch-${n}`, conversationId: `conversation_stage_${n}`, accountId: "account-a" });
       return { launchId: `launch-${n}`, conversationId: `conversation_stage_${n}`, sessionId: `session-${n}`, transcript: `/codex/stage-${n}.jsonl`, paneId: `%${n}`, accountId: "account-a" };
     },
     paneAgentAlive: async () => true,
