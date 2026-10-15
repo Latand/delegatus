@@ -4,6 +4,19 @@ import { waitForFixtureFile } from "./fixtureBarrier";
 
 import { NextRequest } from "next/server";
 
+if (process.env.LLV_TASK_EXECUTOR_HTTP_PARTIAL) {
+  const { createInterface } = await import("node:readline");
+  const input = createInterface({ input: process.stdin });
+  for await (const line of input) {
+    const request = JSON.parse(line) as { id: number };
+    process.stdout.write(JSON.stringify({ id: request.id, http: { status: 200, headers: [] } }) + '\t{"message":"partial');
+    fs.writeFileSync(process.env.LLV_WRITER_READY!, "ready");
+    await waitForFixtureFile(process.env.LLV_TASK_EXECUTOR_HTTP_PARTIAL);
+    process.stdout.write(' response"}\n');
+  }
+  process.exit(0);
+}
+
 if (process.env.LLV_TASK_EXECUTOR_STALL) {
   if (process.env.LLV_WRITER_READY) fs.writeFileSync(process.env.LLV_WRITER_READY, String(process.pid));
   process.stdin.resume();

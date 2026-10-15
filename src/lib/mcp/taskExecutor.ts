@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { ChildProcess } from "node:child_process";
+import type { Readable } from "node:stream";
 import { stateDir } from "@/lib/configDir";
 import { endLeasedHelper, leasedHelperInput, spawnLeasedHelper, unrefLeasedHelper } from "@/lib/helperLease";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
@@ -13,25 +14,88 @@ const MAX_INPUT_BYTES = 4 * 1024 * 1024;
 export const TASK_EXECUTOR_FRAME_BYTES = 32 * 1024 * 1024;
 // The HTTP envelope contains both structuredContent and its escaped text copy.
 export const TASK_EXECUTOR_HTTP_FRAME_BYTES = 4 * TASK_EXECUTOR_FRAME_BYTES;
-export type ExecutorHttpResponse = { status: number; headers: [string, string][]; body: string };
+export type ExecutorHttpResponse = { status: number; headers: [string, string][]; body: ReadableStream<Uint8Array> };
 type ExecutorResult = McpToolResult | { conversationId: string | null } | { http: ExecutorHttpResponse };
+type ExecutorReply = { id: number; result?: ExecutorResult; error?: string; http?: ExecutorHttpResponse };
+type ExecutorWireReply = Omit<ExecutorReply, "http"> & { http?: Omit<ExecutorHttpResponse, "body"> };
 type Pending = { bytes: number; finish: (error?: Error, result?: ExecutorResult) => void; dispose: () => void };
 export type TaskExecutorRequest = { id: number; name: string; args: McpToolArgs; caller: McpHttpCaller; deadlineAt: number; nativeWork?: McpToolCallContext["nativeWork"] };
 
-/** Encode at most 16K UTF-16 units per pull, preserving surrogate pairs.
- * HTTP backpressure bounds queued bytes; cancellation releases the wire body. */
-export function taskExecutorHttpResponse({ status, headers, body }: ExecutorHttpResponse): Response {
-  const encoder = new TextEncoder();
-  let offset = 0;
-  return new Response(new ReadableStream<Uint8Array>({
-    pull(controller) {
-      let end = Math.min(body.length, offset + 16_384);
-      if (end < body.length && body.charCodeAt(end - 1) >= 0xd800 && body.charCodeAt(end - 1) <= 0xdbff) end--;
-      controller.enqueue(encoder.encode(body.slice(offset, end))); offset = end;
-      if (offset === body.length) { body = ""; controller.close(); }
-    },
-    cancel() { body = ""; },
-  }), { status, headers });
+/** HTTP bodies cross the pipe as bytes. Only their small header is decoded on
+ * the Viewer; a slow network consumer pauses the pipe. Cancelled bodies drain
+ * through their existing frame so replies for other callers stay aligned. */
+export class TaskExecutorReplies {
+  private parts: Buffer[] = [];
+  private bytes = 0;
+  private output?: { id: number; bytes: number; controller?: ReadableStreamDefaultController<Uint8Array> };
+  private closed = false;
+
+  constructor(private source: Readable, private reply: (value: ExecutorReply) => void,
+    private complete: (id: number) => void, private failed: (error: Error) => void) {
+    source.on("data", (chunk: Buffer) => withViewerOperation("mcp.tasks.executor", () => {
+      if (this.closed) return;
+      try { this.accept(chunk); }
+      catch (error) { this.close(error as Error); failed(error as Error); }
+    }));
+    source.on("error", error => { this.close(error); failed(error); });
+    source.once("end", () => {
+      const error = new Error("task executor output ended");
+      this.close(error); failed(error);
+    });
+  }
+
+  private accept(chunk: Buffer): void {
+    while (chunk.length) {
+      if (this.output) {
+        const output = this.output;
+        const end = chunk.indexOf(10);
+        const body = end < 0 ? chunk : chunk.subarray(0, end);
+        output.bytes += body.length;
+        if (output.bytes > TASK_EXECUTOR_HTTP_FRAME_BYTES) throw new Error("task executor HTTP frame exceeds its bound");
+        if (body.length && output.controller) {
+          output.controller.enqueue(body);
+          if ((output.controller.desiredSize ?? 0) <= 0) this.source.pause();
+        }
+        if (end < 0) return;
+        output.controller?.close(); this.output = undefined;
+        this.complete(output.id); this.source.resume();
+        chunk = chunk.subarray(end + 1);
+        continue;
+      }
+      const newline = chunk.indexOf(10), tab = chunk.indexOf(9);
+      const http = tab >= 0 && (newline < 0 || tab < newline);
+      const end = http ? tab : newline;
+      const part = end < 0 ? chunk : chunk.subarray(0, end);
+      this.parts.push(part); this.bytes += part.length;
+      if (this.bytes + 1 > TASK_EXECUTOR_FRAME_BYTES) throw new Error("task executor frame exceeds its bound");
+      if (end < 0) return;
+      if (http && this.bytes > 16_384) throw new Error("task executor HTTP header exceeds its bound");
+      const value = JSON.parse(Buffer.concat(this.parts, this.bytes).toString("utf8")) as ExecutorWireReply;
+      const headerBytes = this.bytes;
+      this.parts = []; this.bytes = 0;
+      if (http) {
+        if (!value.http) throw new Error("task executor HTTP header is missing");
+        const output: NonNullable<TaskExecutorReplies["output"]> = { id: value.id, bytes: headerBytes + 2 };
+        this.output = output;
+        const body = new ReadableStream<Uint8Array>({
+          start(controller) { output.controller = controller; },
+          pull: () => { if (this.output === output) this.source.resume(); },
+          cancel: () => { output.controller = undefined; if (this.output === output) this.source.resume(); },
+        }, { highWaterMark: 65_536, size: value => value?.byteLength ?? 0 });
+        this.reply({ id: value.id, http: { ...value.http, body } });
+      } else {
+        if (value.http) throw new Error("task executor HTTP frame is missing its body delimiter");
+        this.reply({ id: value.id, result: value.result, error: value.error }); this.complete(value.id);
+      }
+      chunk = chunk.subarray(end + 1);
+    }
+  }
+
+  close(error = new Error("task executor reply ended before its frame completed")): void {
+    if (this.closed) return;
+    this.closed = true; this.parts = []; this.bytes = 0;
+    this.output?.controller?.error(error); this.output = undefined;
+  }
 }
 
 export function taskExecutorLaunch(cwd = process.cwd()) {
@@ -54,6 +118,7 @@ export class McpTaskExecutor {
   private inputBytes = 0;
   private nextId = 0;
   private idle?: ReturnType<typeof setTimeout>;
+  private replies?: TaskExecutorReplies;
 
   constructor(private runtime: { launch?: ReturnType<typeof taskExecutorLaunch>; env?: Partial<NodeJS.ProcessEnv>; idleMs?: number } = {}) {}
 
@@ -79,7 +144,7 @@ export class McpTaskExecutor {
     }, caller, context);
     if (!("http" in result) || !result.http || typeof result.http !== "object") throw new Error("invalid task executor HTTP reply");
     const response = result.http as ExecutorHttpResponse;
-    return taskExecutorHttpResponse(response);
+    return new Response(response.body, { status: response.status, headers: response.headers });
   }
 
   private request(name: string, args: McpToolArgs, caller: McpHttpCaller, context: McpToolCallContext): Promise<ExecutorResult> {
@@ -98,7 +163,8 @@ export class McpTaskExecutor {
         const finish: Pending["finish"] = (error, result) => {
           if (settled) return;
           settled = true;
-          error ? reject(error) : resolve(result!);
+          if (error) reject(error);
+          else resolve(result!);
         };
         const cancel = () => {
           finish(new Error("task executor reply was cancelled or timed out; look up the original request key"));
@@ -134,30 +200,18 @@ export class McpTaskExecutor {
       env: { ...process.env, ...this.runtime.env, LLV_STATE_DIR: this.runtime.env?.LLV_STATE_DIR ?? stateDir(), LLV_STATE_OWNER: "mcp" },
     }, this.runtime.env?.LLV_STATE_DIR ?? stateDir(), { input: true, stdout: "pipe", stderr: "inherit", followRelease: false });
     this.child = child;
-    let buffer = "";
-    child.stdout!.setEncoding("utf8");
-    child.stdout!.on("data", (chunk: string) => {
-      if (this.child !== child) return;
-      buffer += chunk;
-      let end: number;
-      while ((end = buffer.indexOf("\n")) >= 0) {
-        const line = buffer.slice(0, end); buffer = buffer.slice(end + 1);
-        try {
-          const separator = line.indexOf("\t");
-          if (Buffer.byteLength(line) + 1 > (separator < 0 ? TASK_EXECUTOR_FRAME_BYTES : TASK_EXECUTOR_HTTP_FRAME_BYTES)) throw new Error("task executor frame exceeds its bound");
-          const reply = JSON.parse(separator < 0 ? line : line.slice(0, separator)) as { id: number; result?: ExecutorResult; error?: string; http?: Omit<ExecutorHttpResponse, "body"> };
-          if (separator >= 0 && reply.http) reply.result = { http: { ...reply.http, body: line.slice(separator + 1) } };
-          const job = this.pending.get(reply.id);
-          if (!job || (!reply.result && !reply.error)) throw new Error("invalid task executor reply");
-          job.finish(reply.error ? new Error(reply.error) : undefined, reply.result); job.dispose();
-        } catch { this.retire(child); return; }
-      }
-      if (Buffer.byteLength(buffer) > TASK_EXECUTOR_HTTP_FRAME_BYTES) { this.retire(child); return; }
+    this.replies = new TaskExecutorReplies(child.stdout!, reply => {
+      const job = this.pending.get(reply.id);
+      const result = reply.http ? { http: reply.http } : reply.result;
+      if (!job || (!result && !reply.error)) throw new Error("invalid task executor reply");
+      job.finish(reply.error ? new Error(reply.error) : undefined, result);
+    }, id => {
+      this.pending.get(id)?.dispose();
       if (!this.pending.size) {
         this.idle = setTimeout(() => this.retire(child), this.runtime.idleMs ?? 60_000);
         this.idle.unref();
       }
-    });
+    }, () => this.retire(child));
     leasedHelperInput(child).on("error", () => this.retire(child));
     child.once("error", () => this.retire(child, "could not start"));
     child.once("close", (code, signal) => this.retire(child, `exited (${signal ?? code})`));
@@ -167,6 +221,7 @@ export class McpTaskExecutor {
 
   private retire(child: ChildProcess, reason = "stopped"): void {
     if (this.child !== child) return;
+    this.replies?.close(); this.replies = undefined;
     this.child = null; clearTimeout(this.idle);
     this.closing = child.exitCode !== null || child.signalCode !== null ? Promise.resolve()
       : new Promise(resolve => child.once("close", () => resolve()));

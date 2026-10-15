@@ -621,9 +621,10 @@ only when elicitation needs it; ordinary tool calls retain their Zod validation.
 The shared executor admits 64 calls and 4 MiB of pending input. Direct replies
 have a 32 MiB frame bound; HTTP envelopes have a 128 MiB bound to accommodate
 the SDK's structured answer and escaped text copy. Both obey pipe backpressure.
-The Viewer parses the small HTTP frame header, forwards the serialized body
-and encodes at most 16K UTF-16 units per network pull, keeping surrogate pairs
-intact. A cancelled reply retains its
+The Viewer decodes at most 16 KiB of HTTP frame metadata and forwards body
+bytes through a stream with a 64 KiB queue target. A slow consumer pauses the
+pipe; cancellation drains the current frame before reading the next reply.
+Split UTF-8 sequences pass through unchanged. A cancelled reply retains its
 slot until settlement; an executor that has not settled cancellation after one
 second is retired before a replacement starts. Sixty seconds idle retires it.
 The existing helper lease ends its process group when its Viewer dies. The
@@ -724,3 +725,55 @@ requires an explanation from the retained history; every successful or lost
 mutation reply must still reconcile with its one committed effect or with no
 effect after all owned processes have ended. Numeric row revisions, order and
 controller flags remain in the exact row comparison.
+
+
+### Complete one-client cohort before byte streaming
+
+The complete first cohort freezes candidate `99af6a276`, matched main
+`805a790ac` and the original audit product revision `45d25ac`. Each uses
+30 seconds warmup and 300 seconds measured load from the same seed. The
+revision order is candidate/main/audit, audit/main/candidate, then
+candidate/main/audit. This is a failed diagnostic cohort; the remaining
+client and transport cohorts cannot establish acceptance for this candidate.
+
+| Revision | Repetition | Loop p99 / max, ms | Offered / completed / failed | Pending at end / after drain | Process births / survivors | Adapter / total DB descriptors | State commits |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| candidate | 1 | 0.799 / 6.757 | 300 / 300 / 0 | 0 / 0 | 5 / 0 | 0 / 5 | 480 |
+| candidate | 2 | 0.984 / 34.316 | 300 / 300 / 0 | 0 / 0 | 5 / 0 | 0 / 5 | 480 |
+| candidate | 3 | 0.734 / 20.328 | 300 / 300 / 0 | 0 / 0 | 5 / 0 | 0 / 5 | 480 |
+| main | 1 | 1.709 / 11.542 | 300 / 300 / 0 | 0 / 0 | 3 / 0 | 5 / 5 | 570 |
+| main | 2 | 3.262 / 34.025 | 300 / 300 / 0 | 0 / 0 | 3 / 0 | 5 / 5 | 570 |
+| main | 3 | 0.994 / 7.473 | 300 / 300 / 0 | 0 / 0 | 3 / 0 | 5 / 5 | 570 |
+| audit | 1 | 1.377 / 17.561 | 300 / 300 / 0 | 0 / 0 | 3 / 0 | 5 / 5 | 480 |
+| audit | 2 | 0.757 / 7.908 | 300 / 300 / 0 | 0 / 0 | 3 / 0 | 5 / 5 | 480 |
+| audit | 3 | 1.170 / 10.123 | 300 / 300 / 0 | 0 / 0 | 3 / 0 | 5 / 5 | 480 |
+
+Median loop p99/max are 0.799/20.328 ms for the candidate,
+1.709/11.542 ms for matched main, and 1.170/10.123 ms for the audit.
+The candidate passes both p99 comparisons and fails both maximum comparisons.
+Performance acceptance remains unmet.
+
+All nine loop windows completed. Every process ended; every connection
+reconciles through explicit close or process exit, with zero remaining
+descriptors. No sample observed SQL contention. All six candidate/control
+pairs have identical normalized response and row hashes, retaining all six
+durable columns. Their committed histories reproduce every final row and
+leave no unresolved mutations. Per-process connections, commits, failure
+and pending counts, source/runtime/dependency identities, hashes and history
+checks are retained in
+[`mcp-state-writers-protocol-diagnostic.json`](../../evidence/mcp-state-writers-protocol-diagnostic.json).
+
+This candidate still assembled complete HTTP reply strings on the Viewer
+before encoding them for network pulls. The next change forwards body bytes
+from the worker pipe, with backpressure and cancellation that drains the
+current frame. Only bounded frame metadata is decoded. The existing service,
+request keys, policy and transactional writes remain inside the executor.
+The complete 1/19/37-client matrix must be repeated after this change.
+
+The byte-streaming executor suite passes 15 cases, including a real child
+that holds its HTTP body tail behind a barrier. The same held-body probe
+times out on the frozen executor and returns headers before release on the
+changed executor; both run through the owned runner in isolated state.
+The body matches after release. HTTP passes 15 cases, forwarding passes 12,
+and TypeScript and the local privacy gate pass. These checks verify the wire
+and lifecycle changes; performance acceptance still requires new measurements.

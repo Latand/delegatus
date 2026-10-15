@@ -3,11 +3,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
+import { PassThrough } from "node:stream";
 import { captureProcessIdentity, processIdentityStatus, type ProcessIdentity } from "@/lib/processIdentity";
 import { stopFixtureIdentity } from "@/lib/testing/fixtureProcess";
 import { ownFixtureChild, reapFixtureChildren } from "./ownedFixtureChildren";
 import { runAsMcpHttpCaller } from "./callerContext";
-import { McpTaskExecutor, taskExecutorHttpResponse } from "./taskExecutor";
+import { McpTaskExecutor, TaskExecutorReplies, TASK_EXECUTOR_HTTP_FRAME_BYTES } from "./taskExecutor";
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-task-executor-"));
 for (const name of ["HOME", "XDG_CONFIG_HOME", "TMPDIR", "LLV_STATE_DIR", "LLV_CODEX_HOME", "LLV_CLAUDE_HOME"]) {
@@ -38,23 +39,140 @@ afterAll(async () => {
   fs.rmSync(root, { recursive: true, force: true });
 });
 
-test("HTTP reply streaming preserves astral text across chunk boundaries and accepts cancellation", async () => {
-  const body = "x".repeat(16_383) + "🙂" + "λ".repeat(100_000);
-  const response = taskExecutorHttpResponse({ status: 200, headers: [["content-type", "application/json"]], body });
-  const reader = response.body!.getReader();
-  const decoder = new TextDecoder();
-  let decoded = "";
-  for (;;) {
-    const chunk = await reader.read();
-    if (chunk.done) break;
-    expect(chunk.value.length).toBeLessThanOrEqual(65_536);
-    decoded += decoder.decode(chunk.value, { stream: true });
+test("HTTP pipe replies expose headers before the body ends and preserve split UTF-8 bytes", async () => {
+  const source = new PassThrough();
+  const completed: number[] = [], errors: Error[] = [];
+  let response: Response | undefined;
+  const wire = new TaskExecutorReplies(source, value => {
+    if (!value.http) throw new Error("expected HTTP reply");
+    response = new Response(value.http.body, value.http);
+  }, id => completed.push(id), error => errors.push(error));
+  try {
+    const header = Buffer.from(JSON.stringify({ id: 1, http: { status: 200, headers: [["content-type", "application/json"]] } }) + "\t");
+    const body = Buffer.from('"' + "x".repeat(16_383) + "🙂" + "λ".repeat(100_000) + '"');
+    source.write(header.subarray(0, 7)); source.write(header.subarray(7));
+    expect(response).toBeDefined(); expect(completed).toEqual([]);
+    let settled = false;
+    const result = response!.text().then(value => { settled = true; return value; });
+    source.write(body.subarray(0, 16_386)); // Ends inside the emoji's UTF-8 bytes.
+    await Bun.sleep(0); expect(settled).toBe(false);
+    for (let offset = 16_386; offset < body.length; offset += 4_093) source.write(body.subarray(offset, offset + 4_093));
+    source.write("\n");
+    expect(await result).toBe(body.toString("utf8"));
+    expect(completed).toEqual([1]); expect(errors).toEqual([]);
+  } finally { wire.close(); source.destroy(); }
+});
+
+test("a slow HTTP consumer pauses the pipe and cancellation drains through the next reply", async () => {
+  const source = new PassThrough();
+  const completed: number[] = [], errors: Error[] = [], replies: unknown[] = [];
+  let body: ReadableStream<Uint8Array> | undefined;
+  const wire = new TaskExecutorReplies(source, value => {
+    replies.push(value);
+    if (value.http) body = value.http.body;
+  }, id => completed.push(id), error => errors.push(error));
+  try {
+    source.write(JSON.stringify({ id: 1, http: { status: 200, headers: [] } }) + "\t");
+    source.write(Buffer.alloc(65_536, 120));
+    source.write(Buffer.alloc(65_536, 121));
+    expect(source.isPaused()).toBe(true); expect(completed).toEqual([]);
+    await body!.cancel();
+    source.write(Buffer.from('tail\n{"id":2,"result":{"conversationId":null}}\n'));
+    await Bun.sleep(0);
+    expect(completed).toEqual([1, 2]); expect(replies).toHaveLength(2); expect(errors).toEqual([]);
+  } finally { wire.close(); source.destroy(); }
+});
+
+test("worker loss errors an HTTP body whose headers already arrived", async () => {
+  const source = new PassThrough();
+  let body: ReadableStream<Uint8Array> | undefined;
+  const wire = new TaskExecutorReplies(source, value => {
+    if (value.http) body = value.http.body;
+  }, () => {}, () => {});
+  try {
+    source.write(JSON.stringify({ id: 1, http: { status: 200, headers: [] } }) + "\tpart");
+    const reader = body!.getReader(); await reader.read();
+    const pending = reader.read();
+    wire.close(new Error("fixture worker ended"));
+    await expect(pending).rejects.toThrow("fixture worker ended");
+  } finally { wire.close(); source.destroy(); }
+});
+
+test("HTTP byte streaming keeps the complete wire bound across backpressure and chunk boundaries", async () => {
+  for (const extra of [0, 1]) {
+    const source = new PassThrough();
+    const completed: number[] = [], errors: Error[] = [];
+    let body: ReadableStream<Uint8Array> | undefined;
+    const wire = new TaskExecutorReplies(source, value => {
+      if (value.http) body = value.http.body;
+    }, id => completed.push(id), error => errors.push(error));
+    try {
+      const header = JSON.stringify({ id: 1, http: { status: 200, headers: [] } }) + "\t";
+      source.write(header);
+      const reader = body!.getReader();
+      const reading = (async () => {
+        let bytes = 0;
+        for (;;) {
+          const chunk = await reader.read();
+          if (chunk.done) return bytes;
+          bytes += chunk.value.byteLength;
+        }
+      })().then(bytes => bytes, error => error as Error);
+      const bytes = TASK_EXECUTOR_HTTP_FRAME_BYTES - Buffer.byteLength(header) - 1 + extra;
+      // Reuse one immutable chunk; the control exercises the full wire bound
+      // without allocating a complete response on the test thread.
+      const chunk = Buffer.alloc(1_048_576, 120);
+      for (let offset = 0; offset < bytes; offset += chunk.length) source.write(chunk.subarray(0, Math.min(chunk.length, bytes - offset)));
+      source.write("\n");
+      const result = await reading;
+      if (extra) {
+        expect(result).toBeInstanceOf(Error);
+        expect((result as Error).message).toContain("exceeds its bound");
+        expect(completed).toEqual([]); expect(errors).toHaveLength(1);
+      } else {
+        expect(result).toBe(bytes); expect(completed).toEqual([1]); expect(errors).toEqual([]);
+      }
+    } finally { wire.close(); source.destroy(); }
   }
-  decoded += decoder.decode();
-  expect(decoded).toBe(body);
-  const cancelled = taskExecutorHttpResponse({ status: 200, headers: [], body }).body!.getReader();
-  await cancelled.read(); await cancelled.cancel();
-  expect((await cancelled.read()).done).toBe(true);
+});
+
+test("HTTP frame metadata has its own small decoding bound", async () => {
+  for (const extra of [0, 1]) {
+    const source = new PassThrough();
+    const completed: number[] = [], errors: Error[] = [];
+    let body: ReadableStream<Uint8Array> | undefined;
+    const wire = new TaskExecutorReplies(source, value => {
+      if (value.http) body = value.http.body;
+    }, id => completed.push(id), error => errors.push(error));
+    try {
+      const header = (padding: number) => JSON.stringify({ id: 1, http: { status: 200, headers: [["x-fixture", "x".repeat(padding)]] } });
+      source.write(header(16_384 - Buffer.byteLength(header(0)) + extra) + "\t\n");
+      if (extra) {
+        expect(body).toBeUndefined(); expect(completed).toEqual([]);
+        expect(errors).toHaveLength(1); expect(errors[0]!.message).toContain("header exceeds its bound");
+      } else {
+        expect(await new Response(body).text()).toBe(""); expect(completed).toEqual([1]); expect(errors).toEqual([]);
+      }
+    } finally { wire.close(); source.destroy(); }
+  }
+});
+
+test("the real executor exposes HTTP headers while its worker holds the body tail", async () => {
+  const ready = path.join(root, "partial-http.ready"), release = path.join(root, "partial-http.release");
+  const executor = new McpTaskExecutor({
+    launch: { executable: process.execPath, workerPath: path.join(import.meta.dir, "writerConcurrencyChild.ts") },
+    env: { LLV_TASK_EXECUTOR_HTTP_PARTIAL: release, LLV_WRITER_READY: ready },
+  });
+  executors.push(executor);
+  try {
+    const response = await executor.callHttpTool("get_task", {}, new Request("http://127.0.0.1/api/mcp"), { capability }, { deadlineAt: Date.now() + 3_000 });
+    expect(fs.existsSync(release)).toBe(false);
+    const reader = response.body!.getReader();
+    expect(new TextDecoder().decode((await reader.read()).value)).toBe('{"message":"partial');
+    fs.writeFileSync(release, "release");
+    expect(new TextDecoder().decode((await reader.read()).value)).toBe(' response"}');
+    expect((await reader.read()).done).toBe(true);
+  } finally { fs.writeFileSync(release, "release"); await executor.close(); }
 });
 
 test("capability lookup observes external rotation without retaining an authorization cache", async () => {
