@@ -198,3 +198,35 @@ test("labelled numeric identities are scrubbed with quoted or unquoted keys and 
     }
   }
 });
+
+test("email candidates are scrubbed completely before bounding, including adjacent addresses", () => {
+  const address = (local: string, domain = "example.invalid") => [local, domain].join("@");
+  for (const value of [address("local.part+tag-test_"), address("x".repeat(400)), address("local", `${"x".repeat(400)}.invalid`)]) {
+    expect(scrubTokenText(`Bad Request: ${value}; chat not found`, TOKEN)).toBe("Bad Request: [email]; chat not found");
+  }
+  expect(scrubTokenText(address("first") + address("+second"), TOKEN)).toBe("[email][email]");
+  expect(scrubTokenText("Bad Request: " + ["local", "host"].join("@"), TOKEN)).toBe("Bad Request: local[handle]");
+});
+
+test("long Telegram error descriptions have a bounded CPU cost through the transport", async () => {
+  for (const hasSeparator of [false, true]) {
+    const samples: number[] = [];
+    for (const length of [16_000, 32_000, 64_000]) {
+      const tag = "x".repeat(length) + (hasSeparator ? "@host" : "");
+      const description = `Bad Request: can't parse entities: Unsupported start tag "${tag}" at byte offset 0`;
+      const transport = createBotApiTransport(TOKEN, async () => jsonResponse({ ok: false, error_code: 400, description }, 400));
+      const started = process.cpuUsage();
+      const result = await transport.call("sendMessage", { text: `<${tag}>`, parse_mode: "HTML" });
+      const used = process.cpuUsage(started);
+      samples.push(used.user + used.system);
+      expect(result.ok).toBe(false);
+      if (result.ok) throw new Error("expected refusal");
+      expect(result.description).toStartWith("Bad Request: can't parse entities: Unsupported start tag");
+      expect(result.description).toHaveLength(300);
+    }
+    console.info("Telegram diagnostic CPU microseconds", { hasSeparator, samples });
+    // CPU time excludes descheduling; leave ample room for JSON decoding and GC.
+    for (const sample of samples) expect(sample).toBeLessThan(100_000);
+    expect(samples[2]!).toBeLessThan(samples[0]! * 6 + 20_000);
+  }
+}, 15_000);
