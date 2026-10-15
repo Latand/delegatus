@@ -1733,9 +1733,9 @@ test.each(["terminal", "progress"] as const)("running retry-stage preserves %s e
 
 test("restart recovery reads restored idle and dead turns from the runtime snapshot", async () => {
   await withRuntimeSnapshot((requestNumber) => ({ runtime: { hostEpoch: 7 }, sessions: [
-    { conversationId: "idle-stage", host: "alive", turn: requestNumber === 0 ? "idle" : "running", attentionIds: [] },
+    { conversationId: "idle-stage", host: "hosted", turn: requestNumber === 0 ? "idle" : "running", attentionIds: [] },
     { conversationId: "dead-stage", host: "dead", turn: "running", attentionIds: [] },
-    { conversationId: "permission-stage", host: "alive", turn: "idle", attentionIds: ["permission"] },
+    { conversationId: "permission-stage", host: "hosted", turn: "idle", attentionIds: ["permission"] },
   ] }), async () => {
     const ports = defaultPipelinePorts();
     expect(await ports.conversationTurnInterrupted!("idle-stage")).toBe("idle");
@@ -1993,7 +1993,7 @@ test("restart leaves a worker adopted after dead evidence running", async () => 
   let killedAdopted = false;
   let sent = 0;
   await withRuntimeSnapshot((number) => ({ runtime: { hostEpoch: 7 }, sessions: [
-    { conversationId: id, host: number === 0 ? "dead" : "alive", turn: "running", attentionIds: [] },
+    { conversationId: id, host: number === 0 ? "dead" : "hosted", turn: "running", attentionIds: [] },
   ] }), async () => {
     const production = defaultPipelinePorts();
     const resumed = { ...h.ports, conversationTurnInterrupted: production.conversationTurnInterrupted,
