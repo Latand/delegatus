@@ -1,0 +1,25 @@
+## Role table — what a stage runs when you name no runtime
+Omitting engine, model and effort runs the role's row.
+| role | engine | model | effort | access | for |
+| --- | --- | --- | --- | --- | --- |
+| orchestrator | claude | opus | high | read-write | Coordinates fresh agents through the Delegatus control plane. |
+| reviewer | codex | gpt-6.1-sol | xhigh | read-only | Reviews a code diff and returns severity-ranked evidence-backed findings. High per lane for risky backend diffs. size=trivial: codex/gpt-6-luna/high. |
+| verifier | codex | gpt-6.1-sol | high | read-only | Tests supplied hypotheses and returns a per-claim evidence verdict. |
+| builder | codex | gpt-6.1-sol | high | read-write | Writes product code for a scoped brief. size=trivial, domain=frontend, domain=docs, domain=frontend mode=apply-fixes, domain=docs mode=apply-fixes: claude/claude-sonnet-5-5/high; mode=apply-fixes: codex/gpt-6-luna/high. |
+| architect | claude | opus | xhigh | read-only | Produces an evidence-grounded design without product edits. claude/fable/high per lane for the largest cross-cutting designs. |
+| cleaner | codex | gpt-6-luna | medium | read-write | Safely recovers a dirty checkout under a backup contract. |
+| prod-auditor | codex | gpt-6.1-sol | xhigh | read-only | Performs a read-only evidence-backed production investigation. |
+| deployer | codex | gpt-6.1-sol | medium | read-write | Plans a production release and stops for approval before each mutating step. |
+| merger | codex | gpt-6.1-sol | high | read-write | Batches reviewed PRs; sends resolutions for review. |
+| maintainer | codex | gpt-6.1-sol | medium | read-only | Maintains board and inbox on the seat tick. |
+| curator | codex | gpt-6.1-sol | high | read-only | Curates role memory. |
+| issue-reporter | claude | claude-sonnet-5-5 | high | read-only | Reviews a Delegatus bug report and returns its preview; never publishes. |
+| visual-critic | claude | opus | high | read-only | Judges UI and every prototype frame. Prototype lane: prototype → critic → proto-fix (2 rounds) → publish. |
+- Registry health: unknown (no snapshot).
+- override-stage sets the runtime on the stage from the NEXT attempt, or now with applyNow:true.
+- Size each lane first. trivial (few UI/copy lines, one flag/label; brief pins exact change and acceptance): builder and reviewer size=trivial, one review round. normal: rows, effort low or medium. design (options, architecture, proposals, design issues): architect first.
+- UI lane: Opus read-only brief stage (files, states, 390px and desktop, what not to touch), builder domain=frontend, Opus review-loop, then a visual-critic stage last.
+- Fix stages (apply-fixes): fix findings/discoveries in spec; add checks. Never self-grade; fix discoveries and note out-of-spec. Fail only with blocked:true and blockedReason.
+- Sonnet 5.5 for well-scoped build, fix, docs, verification, repeated work. Opus 5.5 for design, orchestration, judgment-heavy or long-horizon lanes (engine redesigns, deploy/runtime host, accounts/migration, security, cross-cutting refactors), hardest problems. Review backend on Codex, frontend on Opus.
+- size=trivial and a hand-set Sonnet builder need a brief from a large model (Opus, Fable, large Codex). Sonnet never orchestrates, architects or reviews above size=trivial. README, docs, public text: builder domain=docs.
+- create_pipeline returns runtimeLine (spawn_agent: runtime): check before attempt 1; quote runtime, size and reason.

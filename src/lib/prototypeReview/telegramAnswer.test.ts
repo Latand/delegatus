@@ -42,13 +42,14 @@ test("edited multiple answers, Other, comments, combinations and escaped Markdow
   } });
 });
 
-test("every wording of a known round is recorded, including incomplete or invalid shorthand", () => {
+test("known rounds accept partial choices and free comments while conflicting shorthand asks back", () => {
   const round = telegramRound();
   const line = prototypeCopyLine(round, 2);
-  for (const text of [line.replace("1a 2a 3a", "1a 2a"), line.replace("1a 2a 3a", "1a 1b 3a"),
-    line.replace("1a 2a 3a", "1ab 2a 3a"), line.replace("1a", "1f"), line.replace("Варіант 2", "Варіант 9"),
+  for (const text of [line.replace("1a 2a 3a", "1a 2a"), line.replace("Варіант 2", "Варіант 9"),
     line.replace("Варіант 2", "Варіанти 2, 2"), `${line} · Extra`, `${line} · Відповіді рекомендовані`,
     ]) expect(parsePrototypeAnswer(round, text)).toHaveProperty("input");
+  for (const text of [line.replace("1a 2a 3a", "1a 1b 3a"), line.replace("1a 2a 3a", "1ab 2a 3a"), line.replace("1a", "1f")])
+    expect(parsePrototypeAnswer(round, text)).toHaveProperty("error");
   expect(parsePrototypeAnswer(round, `${line} · ${prototypeReference(round)}`)).toHaveProperty("error");
 });
 
@@ -236,4 +237,36 @@ test("owner free text is explicit while ordinary web answer validation keeps its
   expect(normalizePrototypeAnswers(round.questions!, custom.answers, custom.comment, true)).toEqual(custom.answers!);
   const plus = parsePrototypeAnswer(round, `${prototypeReference(round)} · Відповіді 1a+ 2a 3a`).input!;
   expect(plus.answers![0]).toEqual({ questionId: "place", options: [0], other: true });
+});
+
+test.each(["1b, 2a, 3b", "1: b; 2: a; 3: b", "1b 2a 3b"])("contextual poll numbering maps ordered choices: %s", text => {
+  const round = telegramRound();
+  const match = matchPrototypeAnswer(text, [telegramTask([round])], undefined, [], `1. Question · ${prototypeReference(round)}`);
+  expect(match?.input).toMatchObject({ originalReply: text, comment: "", answers: [
+    { questionId: "place", options: [1] }, { questionId: "scope", options: [0] }, { questionId: "timing", options: [1] },
+  ] });
+});
+
+test("contextual answers preserve recommendations, custom comments, authority boundaries and ambiguous choices", () => {
+  const round = telegramRound();
+  for (const text of ["рекомендовані", "рекомендованные", "recommended"])
+    expect(parsePrototypeAnswer(round, text, true).input).toMatchObject({ originalReply: text, skip: true });
+  const comment = "  Мій власний варіант.\n  Збережіть  пробіли.  ";
+  expect(parsePrototypeAnswer(round, comment, true).input).toMatchObject({ originalReply: comment, comment: "Мій власний варіант.\nЗбережіть  пробіли." });
+  for (const text of ["b", "так", "1", "1a 1b", "1ab", "9a", "1l"])
+    expect(parsePrototypeAnswer(round, text, true)).toHaveProperty("error");
+  expect(parsePrototypeAnswer(round, "1b, 2a, 2b, 3b", true).input?.answers?.[1]).toEqual({ questionId: "scope", options: [0, 1] });
+  expect(matchPrototypeAnswer("1b", [telegramTask([round])], undefined, [])).toBeNull();
+  expect(matchPrototypeAnswer("1b", [telegramTask([round])], undefined, [], `${prototypeReference(round)} #proto-aaaaaaaa`)).toBeNull();
+});
+
+test.each(["1b, 2", "1b 2", "1b; 2:", "1b\n2", "1b, 2m", "1b, 2: m", "1b, 2mn", "1b, 12a"])("mixed shorthand refuses incomplete or invalid fragments: %s", text => {
+  expect(parsePrototypeAnswer(telegramRound(), text, true)).toHaveProperty("error");
+});
+
+test.each(["1b, 2a", "1b, wait 2 days", "1b, 2 days should be enough", "1b · 2: Почнемо завтра."])("mixed shorthand preserves choices and ordinary comments: %s", text => {
+  const input = parsePrototypeAnswer(telegramRound(), text, true).input!;
+  expect(input.answers?.[0]).toMatchObject({ questionId: "place", options: [1] });
+  if (text === "1b, 2a") expect(input.answers?.[1]).toMatchObject({ questionId: "scope", options: [0] });
+  else expect(input.comment).toContain(text.slice(4).trim());
 });

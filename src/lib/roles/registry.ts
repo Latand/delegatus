@@ -5,7 +5,7 @@ import { validateLaunchModel } from "@/lib/agent/models";
 
 import { ORCHESTRATOR_TASK_OWNERSHIP_HEADING } from "@/lib/orchestrator/prompt";
 
-import { BUILDER_FINISH_LINE, FIX_ROUND_FINISH_LINE, ORCHESTRATOR_WITHOUT_MANDATE_RULES } from "./defaults";
+import { BUILDER_FINISH_LINE, BUILDER_WORK_RULES, EARLIER_ANSWERS_MECHANICS, FIX_ROUND_FINISH_LINE, ORCHESTRATOR_WITHOUT_MANDATE_RULES, RENDERED_RULES } from "./defaults";
 import { roleEngineRefusal } from "./locks";
 import { configForVariant } from "./paramConfig";
 import { defaultRoleParameterValue } from "./parameters";
@@ -99,37 +99,58 @@ function renderScaffold(definition: RoleDefinition, params: RoleParamValues, pro
   const scoped = definition.id === "orchestrator" && params.mode !== "backlog-campaign"
     ? withoutLines(rendered, BACKLOG_CAMPAIGN_LINES, false)
     : rendered;
-  return withoutLines(scoped, OPTIONAL_PARAMETER_LINES, true);
+  /* A scaffold whose last lines were dropped ends where its text does. */
+  return withoutLines(scoped, OPTIONAL_PARAMETER_LINES, true).trimEnd();
 }
 
-/** Fix rounds repair discoveries within the spec; reviewers own the grade. */
-export const APPLY_FIXES_GUIDANCE = "Apply-fixes guidance: Fix every handed finding and anything you notice yourself within the pinned specification, including OVER-BUILT cuts and P0 findings. Add or adjust focused checks where the project has them and report verification evidence. Do not grade your own work; reviewers evaluate it. Never return fail because of an issue you found yourself: fix it immediately, or list it under Notes if it is outside the specification. A finding you judge wrong stays unfixed with evidence in your summary for the reviewer. Return fail only when you are blocked: you cannot build, cannot run required checks, or a handed finding is impossible within the specification. Set blocked:true only when you cannot proceed, and give the reason in blockedReason. Use these structured fields in stage_report or the fallback fenced JSON verdict. Omit blocked or set it false when you can proceed; your verdict is pass unless blocked. An observation outside the specification belongs under Notes.";
+/** Fix rounds repair discoveries within the spec; reviewers own the grade.
+    The paragraph defines blocked itself, because a fixer spawned without a
+    stage reads no stage wrapper. A blocked fix stage's structured fields are
+    the stage wrapper's to state: it renders at every launch, so lanes stored
+    with an older scaffold read them too. */
+export const APPLY_FIXES_GUIDANCE = `Fix round: your brief is a list of findings. Fix every handed finding and anything you notice yourself within the pinned specification, OVER-BUILT cuts and P0 findings included, and add or adjust focused checks where the project has them. ${FIX_ROUND_FINISH_LINE} Report the verification evidence. The reviewer judges the result against the pinned specification, so do not grade your own work. An observation outside the specification goes under Notes, and an issue you found yourself is never a reason to fail: fix it or note it. Your verdict is pass unless you are blocked: you cannot build, cannot run required checks, or a handed finding is impossible within the specification.`;
+
+/** The UI guidance a Builder with domain=frontend reads before the rendered
+    rules, which a prototype-mode Builder reads too. */
+export const FRONTEND_GUIDANCE = "UI work: follow the approved interaction and visual contract, preserve accessible semantics and responsive behaviour, and keep every language the project ships in step. Reuse the colours, type, spacing and components the surrounding UI already uses; add no new colour, font, pill or card shape, or decorative label the brief does not ask for.";
+
+/** The builder's opening as a fix round reads it: the fix-round paragraph
+    carries its own finish line. */
+const BUILDER_REVIEW_LINE = `${BUILDER_FINISH_LINE} Review your own diff before you finish and report the verification evidence. `;
 
 /**
  * The rendered scaffold body — parameter substitution plus any role-specific
- * guidance (Builder's domain=frontend contract and its fix-round rules) — with the safety-fence block
+ * guidance (Builder's fix round, its domain=frontend contract and the rendered
+ * rules of its frontend and prototype modes) — with the safety-fence block
  * kept separate so a length-capped caller (the pipeline lookup) can trim the
- * body without ever cutting a fence. This is the single source of the frontend
- * guidance; the pipeline reuses it, so a re-render can't drop it.
+ * body without ever cutting a fence. This is the single source of that
+ * guidance; the pipeline reuses it, so a re-render can't drop it. The guidance
+ * goes in front of the builder's work rules; a scaffold without them (an
+ * override stored before they existed) gets it at its end.
  */
 export function roleScaffoldBody(definition: RoleDefinition, params: RoleParamValues, project = "", deferWorkerLimit = false): string {
-  const frontendGuidance = definition.id === "builder" && params.domain === "frontend"
-    ? "\n\nUI/frontend implementation guidance: follow the approved interaction and visual contract, preserve accessible semantics and responsive behaviour, and keep every language the project ships in step. Reuse the colours, type, spacing and components the surrounding UI already uses; add no new colour, font, pill or card shape, or decorative label the brief does not ask for."
-    : "";
-  const fixRound = definition.id === "builder" && params.mode === "apply-fixes";
+  const rendered = renderScaffold(definition, params, project, deferWorkerLimit);
+  if (definition.id !== "builder") return rendered;
+  const fixRound = params.mode === "apply-fixes";
+  const frontend = params.domain === "frontend";
+  const guidance = [
+    ...(fixRound ? [APPLY_FIXES_GUIDANCE] : []),
+    ...(frontend ? [`${FRONTEND_GUIDANCE}\n${RENDERED_RULES}`] : params.mode === "prototype" ? [RENDERED_RULES] : []),
+  ];
   /* A fix round has one finish line, scoped to its findings. */
-  const rendered = fixRound ? renderScaffold(definition, params, project, deferWorkerLimit)
-    .replace(BUILDER_FINISH_LINE, FIX_ROUND_FINISH_LINE)
-    .replace("Review your own diff before you finish and report the verification evidence.", "Report the verification evidence; fix any issue you notice within the specification before finishing.")
-    : renderScaffold(definition, params, project, deferWorkerLimit);
-  return rendered + frontendGuidance + (fixRound ? `\n\n${APPLY_FIXES_GUIDANCE}` : "");
+  const body = fixRound ? rendered.replace(BUILDER_REVIEW_LINE, "") : rendered;
+  if (!guidance.length) return body;
+  const workRules = `\n\n${BUILDER_WORK_RULES}`;
+  return body.includes(workRules)
+    ? body.replace(workRules, `\n\n${guidance.join("\n\n")}${workRules}`)
+    : `${body}\n\n${guidance.join("\n\n")}`;
 }
 
 /** How a spawned role agent ends (docs/design/agent-prompt-contract.md §2.2):
     it has no stage to report to, so it ends in a line the seat reads, in the
     same three words a stage uses. The orchestrator reports outcomes and never
     gets it. */
-export const SPAWN_COMPLETION = "When you finish, end your final message with one line: Verdict: pass, Verdict: fail or Verdict: needs_decision. They mean what they mean for a pipeline stage: pass when the brief's contract is complete, with any notes above that line; fail with the findings listed above it; needs_decision with the question, the options and your recommendation above it. That line replaces any other ending the brief asks for (REVIEW_READY, VERDICT: APPROVE, VERDICT: REQUEST_CHANGES, NO FINDINGS).";
+export const SPAWN_COMPLETION = `When you finish, end your final message with one line: Verdict: pass, Verdict: fail or Verdict: needs_decision. pass: the brief's contract is complete, with any notes above that line. fail: the findings, listed above it. needs_decision: only the operator can unblock it; the question, what you tried, the options and your recommendation above it, and no findings. That line replaces any other ending the brief asks for (REVIEW_READY, VERDICT: APPROVE, VERDICT: REQUEST_CHANGES, NO FINDINGS). ${EARLIER_ANSWERS_MECHANICS}`;
 
 /** Whether a brief carries the seat mandate: every delivered mandate carries
     the task-ownership section, since delivery appends it when missing. */
@@ -140,12 +161,13 @@ function carriesSeatMandate(text: string): boolean {
 /** The first message of a role spawn: the scaffold, the caller's brief and the
     completion line; a spawn without a role is the brief alone. An orchestrator
     reports outcomes and gets no completion line; one launched without the
-    mandate gets the shared rules its scaffold leaves to the mandate. */
+    mandate gets the worker rule and the earlier-answers tools its mandate
+    would carry. */
 export function roleSpawnPrompt(role: { role: RoleId; scaffold: string } | null, userPrompt: string): string {
   if (!role) return userPrompt;
   const ending = role.role !== "orchestrator"
     ? SPAWN_COMPLETION
-    : carriesSeatMandate(userPrompt) ? "" : ORCHESTRATOR_WITHOUT_MANDATE_RULES;
+    : carriesSeatMandate(userPrompt) ? "" : `${ORCHESTRATOR_WITHOUT_MANDATE_RULES} ${EARLIER_ANSWERS_MECHANICS}`;
   return [role.scaffold, userPrompt, ending].filter(Boolean).join("\n\n");
 }
 

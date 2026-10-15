@@ -3923,7 +3923,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "queue.queueUnavailable": "Хост Codex цієї розмови не повідомив про підтримку черги.",
   "queue.steerMessage": "Скерувати поточний хід",
   "queue.steerHint": "Додає до вже запущеного ходу замість того, щоб перервати його.",
-  "queue.steerUnsupported": "Цього агента не можна скерувати; відправка перерве поточний хід.",
+  "queue.steerUnsupported": "Цього агента не можна скерувати; відправка дочекається кінця поточного ходу.",
   "queue.steerIdle": "Немає запущеного ходу, щоб скерувати.",
   "queue.interruptResendMessage": "Перервати й надіслати",
   "queue.interruptResendHint": "Цей агент не вміє скеровувати хід: поточний хід зупиниться, а ваше повідомлення почне наступний.",

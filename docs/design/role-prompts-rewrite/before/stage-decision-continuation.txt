@@ -1,0 +1,11 @@
+Decision continuation for stage {{stage}}, settled attempt 1:
+
+Question / prior result:
+
+{{question}}
+
+Answer:
+
+{{answer}}
+
+Where the answer differs from the brief or the pinned specification, the answer governs. Continue the stage from where the prior attempt stopped and report the final result with stage_report.

@@ -34,6 +34,7 @@ import { storedTaskSteps } from "./steps";
 import { isTaskAttachment } from "./attachments";
 import { withTaskCompletion } from "./completion";
 import type { RecentCreate } from "./commands";
+import type { PrototypeReviewRound } from "@/lib/prototypeReview/types";
 import type { AssignmentState, BoardTask, TaskAssignment, TaskBoardVisibility, TaskPlacement, TaskSource, TaskStatus, TaskStatusBy, TaskOrigin } from "./types";
 
 export const TASKS_FILE = statePath("tasks.json");
@@ -790,6 +791,29 @@ export function taskFeedSource(filePath = TASKS_FILE) {
     }),
     parse: (valueJson: string) => coerceTask(JSON.parse(valueJson)),
   };
+}
+
+/** Advisory Telegram outcomes are installation-local. Touch one task row and
+ * its cache revision, preserving editor, timestamps and linked group stamps. */
+export function mutateTaskTelegramPolls(taskId: string, reviewId: string,
+  change: (held: PrototypeReviewRound["telegramPolls"]) => PrototypeReviewRound["telegramPolls"], filePath = TASKS_FILE): void {
+  const collection = taskCollection(filePath, "read");
+  if (!collection) return;
+  collection.boundedPatch(2, tx => {
+    const raw = tx.get(`t:${taskId}`);
+    if (!raw || !coerceTask(raw)) return;
+    // Validation projects legacy defaults; retain the original stored fields.
+    const task = raw as unknown as BoardTask;
+    const round = task?.prototypeReviews?.find(round => round.id === reviewId);
+    if (!task || !round) return;
+    const before = snapshotTasks([task]);
+    const previous = JSON.stringify(round.telegramPolls);
+    const polls = change(round.telegramPolls);
+    if (JSON.stringify(polls) === previous) return;
+    round.telegramPolls = polls;
+    stampTaskRevisions([task], before, false);
+    tx.put(raw);
+  });
 }
 
 export function mutateTasksAsync<R>(mutate: (tasks: BoardTask[]) => { tasks: BoardTask[] | undefined; result: R }, filePath = TASKS_FILE): Promise<R> {

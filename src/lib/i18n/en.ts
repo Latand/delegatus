@@ -3990,7 +3990,7 @@ export const en = {
   "queue.queueUnavailable": "This conversation's Codex host has not advertised queue support.",
   "queue.steerMessage": "Steer the running turn",
   "queue.steerHint": "Adds to the turn already running instead of interrupting it.",
-  "queue.steerUnsupported": "This agent cannot be steered; a send interrupts the running turn instead.",
+  "queue.steerUnsupported": "This agent cannot be steered; a send waits for the running turn to finish.",
   "queue.steerIdle": "Nothing is running to steer.",
   "queue.interruptResendMessage": "Interrupt and send",
   "queue.interruptResendHint": "This agent cannot steer: the running turn stops and your message starts the next one.",
