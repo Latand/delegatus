@@ -11,6 +11,9 @@ with at most 16 queued forms and seven polls per form. Sends are serial and each
 has a five-second deadline. A durable pending claim becomes uncertain after an
 interruption; it is never resent automatically. Every outcome stays in the local
 round, and failures join the orchestrator's existing Telegram wake signals.
+Admitting a poll job persists an empty poll ledger before its first send, even
+while it waits behind another form. Recovery requires a ledger matching the
+publication key; older forms with no ledger stay unchanged and raise no poll alert.
 Poll metadata changes one task row and its cache revision while preserving its
 editor, timestamps and linked group stamps. Board answers leave polls alone.
 Questions exceeding the option count stay text-only. Full text remains in the

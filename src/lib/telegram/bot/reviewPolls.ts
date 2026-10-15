@@ -58,10 +58,12 @@ function mutatePolls(review: Pick<ReviewPollInput, "id" | "taskId">, change: (he
   else mutateSeatRound(review.id, round => { round.telegramPolls = change(round.telegramPolls); });
 }
 
-/** A sent form can outlive its in-memory poll job, including before its first claim. */
+/** Only a persisted poll schedule for this publication can need recovery.
+ * Older sent forms have no schedule, so absence does not imply interruption. */
 export function reviewPollsNeedRecovery(round: PrototypeReviewRound): boolean {
   if (round.telegramPost?.state !== "sent" || !round.questions?.length || round.questions.length > 7) return false;
-  const polls = round.telegramPolls?.key === round.telegramPost.key ? round.telegramPolls.questions : [];
+  if (round.telegramPolls?.key !== round.telegramPost.key) return false;
+  const polls = round.telegramPolls.questions;
   return round.questions.some(question => {
     const poll = polls.find(p => p.questionId === question.id);
     return !poll || poll.state === "pending";
@@ -106,7 +108,13 @@ export class ReviewPollQueue {
       void this.recordOverflow(job).catch(() => console.warn("Telegram review polls unavailable", "storage_unavailable"));
       return;
     }
-    const next = this.tail.then(() => new Promise<void>(resolve => setImmediate(resolve)))
+    // Persist the schedule at admission, including jobs waiting behind another
+    // form. Publication does not await this state write or any poll sends.
+    const scheduled = withViewerOperation("telegram.review-polls", () => state(() => {
+      if (!findRound(job.review)) return;
+      mutatePolls(job.review, held => held?.key === job.key ? held : { key: job.key, questions: [] });
+    }));
+    const next = Promise.all([this.tail, scheduled]).then(() => new Promise<void>(resolve => setImmediate(resolve)))
       .then(() => withViewerOperation("telegram.review-polls", () => this.post(job)))
       .catch(() => { console.warn("Telegram review polls unavailable", "storage_unavailable"); })
       .finally(() => { this.jobs.delete(identity); });

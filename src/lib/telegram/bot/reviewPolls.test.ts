@@ -193,6 +193,29 @@ test.each(["b", "1b, 2", "1b, 2m"])("ambiguous owner reply %s asks back once acr
   expect(saved().decision).toBeUndefined();
 });
 
+test.each([["task", "open"], ["task", "completed"], ["seat", "open"], ["seat", "completed"]] as const)("upgrade sweep preserves historical %s forms (%s) without poll-failure alerts", async (kind, status) => {
+  const { round, service, transport } = await connected(`historical-${kind}-${status}`);
+  await resetPrototypeDeliveryWorkerForTests();
+  cleanups.push(resetPrototypeDeliveryWorkerForTests);
+  cleanups.push(clearSeatRoundsForTests);
+  round.taskId = kind === "seat" ? null : round.taskId;
+  round.telegramPost = { key: round.id, state: "sent", at: round.createdAt };
+  if (status === "completed") round.decision = { chosen: [], comment: "Recorded answer", at: round.createdAt,
+    delivery: { state: "sent", clientMessageId: "historical-decision", conversationId: null, text: "Recorded answer" } };
+  if (kind === "seat") { saveTasks([]); insertSeatRound(round); }
+  else saveTasks([telegramTask([round])]);
+  const read = () => kind === "seat" ? findSeatRound(round.id)! : saved();
+  const before = JSON.stringify(read());
+  for (let attempt = 0; attempt < 2; attempt++) {
+    await sweepPrototypeDeliveries(undefined, { force: true, rescan: true });
+    expect(JSON.stringify(read())).toBe(before);
+    expect(telegramPostSignals(round.project, kind === "seat" ? [] : loadTasks(), kind === "seat" ? [read()] : [])).toEqual([]);
+  }
+  await service.waitForReviewPolls();
+  expect(transport.callsOf("sendPoll")).toHaveLength(0);
+  expect(transport.callsOf("sendRichMessage")).toHaveLength(0);
+});
+
 test.each(["task", "seat"])("restart sweep reconciles %s polls independently of a sent form without sending duplicates", async kind => {
   const { round, service, transport } = await connected(`restart-${kind}`);
   await resetPrototypeDeliveryWorkerForTests();
@@ -231,13 +254,14 @@ test("recovery accounts for jobs lost before the first claim in batches of sixte
   const rounds = Array.from({ length: 17 }, (_, i) => {
     const round = telegramRound(`lost-job-${i}`);
     round.telegramPost = { key: round.id, state: "sent", at: round.createdAt };
+    round.telegramPolls = { key: round.id, questions: [] };
     return round;
   });
   saveTasks([telegramTask(rounds)]);
   await sweepPrototypeDeliveries(undefined, { force: true, rescan: true });
   const first = loadTasks()[0]!.prototypeReviews!;
-  expect(first.filter(round => round.telegramPolls)).toHaveLength(16);
-  expect(first[16]!.telegramPolls).toBeUndefined();
+  expect(first.filter(round => round.telegramPolls?.questions.length === 3)).toHaveLength(16);
+  expect(first[16]!.telegramPolls).toEqual({ key: rounds[16]!.id, questions: [] });
   expect(first[0]!.telegramPolls?.questions.map(q => q.reason)).toEqual(Array(3).fill("interrupted_before_send"));
   await sweepPrototypeDeliveries(undefined, { force: true, rescan: true });
   expect(loadTasks()[0]!.prototypeReviews!.every(round => round.telegramPolls?.questions.length === 3)).toBe(true);
@@ -284,10 +308,39 @@ test("the sweep leaves live queued poll jobs with their current owner", async ()
   const recovery = sweepPrototypeDeliveries(undefined, { force: true, rescan: true });
   try {
     await Bun.sleep(30);
-    expect(read().telegramPolls).toBeUndefined();
+    expect(read().telegramPolls).toEqual({ key: queued.id, questions: [] });
   } finally { release(); await recovery; await service.waitForReviewPolls(); }
   expect(read().telegramPolls?.questions.map(q => q.state)).toEqual(["sent", "sent", "sent"]);
   expect(transport.callsOf("sendPoll")).toHaveLength(6);
+});
+
+test.each(["task", "seat"])("%s poll scheduling yields to a peer state lock while form publication returns", async kind => {
+  const { round, service, transport } = await connected(`schedule-contention-${kind}`);
+  if (kind === "seat") {
+    round.taskId = null;
+    saveTasks([]); insertSeatRound(round);
+    cleanups.push(clearSeatRoundsForTests);
+  }
+  const read = () => kind === "seat" ? findSeatRound(round.id)! : saved();
+  const peer = new Database(statePath("state.sqlite"));
+  peer.exec("PRAGMA busy_timeout = 0");
+  peer.exec("BEGIN IMMEDIATE");
+  let locked = true, ticks = 0;
+  const release = () => { if (locked) { peer.exec("ROLLBACK"); locked = false; } };
+  const timer = setInterval(() => { ticks++; }, 2);
+  const deadline = setTimeout(release, 2000);
+  try {
+    const result = await service.sendOwnerReview({ clientRequestId: round.id, message: renderPrototypeTelegram(round, []) });
+    expect(result?.messageIds).toEqual([10]);
+    expect(locked).toBe(true);
+    await Bun.sleep(30);
+    expect(ticks).toBeGreaterThan(2);
+    expect(read().telegramPolls).toBeUndefined();
+    expect(transport.callsOf("sendPoll")).toHaveLength(0);
+    release();
+    await service.waitForReviewPolls();
+    expect(read().telegramPolls?.questions.map(q => q.state)).toEqual(["sent", "sent", "sent"]);
+  } finally { clearTimeout(deadline); clearInterval(timer); release(); peer.close(); }
 });
 
 test.each([["task", "send"], ["seat", "send"], ["task", "recover"], ["seat", "recover"]])("%s round poll %s yields under a peer SQLite write lock", async (kind, action) => {
