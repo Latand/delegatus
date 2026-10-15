@@ -1,0 +1,38 @@
+[
+  {
+    "width": 1440,
+    "locale": "en",
+    "rows": 644,
+    "equality": true,
+    "anchorDrift": 0,
+    "openCallRetained": true,
+    "expandedOutput": true
+  },
+  {
+    "width": 1440,
+    "locale": "uk",
+    "rows": 644,
+    "equality": true,
+    "anchorDrift": 0,
+    "openCallRetained": true,
+    "expandedOutput": true
+  },
+  {
+    "width": 390,
+    "locale": "en",
+    "rows": 644,
+    "equality": true,
+    "anchorDrift": 0.25,
+    "openCallRetained": true,
+    "expandedOutput": true
+  },
+  {
+    "width": 390,
+    "locale": "uk",
+    "rows": 644,
+    "equality": true,
+    "anchorDrift": 0.25,
+    "openCallRetained": true,
+    "expandedOutput": true
+  }
+]

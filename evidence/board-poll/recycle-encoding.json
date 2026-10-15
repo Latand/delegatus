@@ -1,0 +1,278 @@
+{
+  "inputSha256": [
+    "3afc901582f898f01013ebd2dd91c0e4caa801de3aa431c9f68811272b997af8",
+    "2da069d27d0308250a5402936ab8ad071d38df089acdcc924682f8e024b8aa2e"
+  ],
+  "reports": [
+    {
+      "name": "observed",
+      "certifiedBaseBytes": 33529544,
+      "fullBytes": 33532499,
+      "fullGzipBytes": 6765197,
+      "deltaBytes": 29325,
+      "deltaGzipBytes": 5721,
+      "samples": [
+        {
+          "serializeHashMs": 168.02554599999985,
+          "v1DiffMs": 186.92468599999984,
+          "baselineBuildMs": 354.9502319999997,
+          "candidateBuildMs": 266.8643589999997,
+          "recycledBuildMs": 333.1778520000007,
+          "v1DeltaBytes": 76246
+        },
+        {
+          "serializeHashMs": 256.5004319999998,
+          "v1DiffMs": 303.200691,
+          "baselineBuildMs": 559.7011229999998,
+          "candidateBuildMs": 416.0300040000002,
+          "recycledBuildMs": 374.34718299999986,
+          "v1DeltaBytes": 76246
+        },
+        {
+          "serializeHashMs": 195.85651400000006,
+          "v1DiffMs": 264.07916399999976,
+          "baselineBuildMs": 459.9356779999998,
+          "candidateBuildMs": 340.54969299999993,
+          "recycledBuildMs": 341.3344589999997,
+          "v1DeltaBytes": 76246
+        },
+        {
+          "serializeHashMs": 150.99719100000038,
+          "v1DiffMs": 251.07465199999933,
+          "baselineBuildMs": 402.0718429999997,
+          "candidateBuildMs": 337.52778899999976,
+          "recycledBuildMs": 580.1449700000012,
+          "v1DeltaBytes": 76246
+        },
+        {
+          "serializeHashMs": 238.55085399999916,
+          "v1DiffMs": 231.220421,
+          "baselineBuildMs": 469.77127499999915,
+          "candidateBuildMs": 326.14127499999995,
+          "recycledBuildMs": 377.1311960000003,
+          "v1DeltaBytes": 76246
+        },
+        {
+          "serializeHashMs": 175.24415600000066,
+          "v1DiffMs": 213.54070200000024,
+          "baselineBuildMs": 388.7848580000009,
+          "candidateBuildMs": 289.62292700000035,
+          "recycledBuildMs": 342.6859059999988,
+          "v1DeltaBytes": 76246
+        },
+        {
+          "serializeHashMs": 169.62181500000042,
+          "v1DiffMs": 299.7508429999998,
+          "baselineBuildMs": 469.37265800000023,
+          "candidateBuildMs": 402.106006,
+          "recycledBuildMs": 506.31253900000047,
+          "v1DeltaBytes": 76246
+        }
+      ],
+      "baselineAllocation": {
+        "calls": 16358,
+        "stringBytes": 100152741,
+        "shallowStringBytes": 185025708,
+        "parseBytes": 67061881
+      },
+      "candidateAllocation": {
+        "calls": 3,
+        "stringBytes": 33561830,
+        "shallowStringBytes": 62068959,
+        "parseBytes": 0
+      },
+      "recycledAllocation": {
+        "calls": 3,
+        "stringBytes": 33561830,
+        "shallowStringBytes": 62068959,
+        "parseBytes": 33529544
+      },
+      "cachedPollAllocation": {
+        "calls": 1,
+        "stringBytes": 95,
+        "shallowStringBytes": 111,
+        "parseBytes": 0
+      }
+    },
+    {
+      "name": "largest-records",
+      "certifiedBaseBytes": 33532499,
+      "fullBytes": 33532524,
+      "fullGzipBytes": 6765249,
+      "deltaBytes": 14167,
+      "deltaGzipBytes": 6818,
+      "samples": [
+        {
+          "serializeHashMs": 164.11461399999826,
+          "v1DiffMs": 218.24196500000107,
+          "baselineBuildMs": 382.35657899999933,
+          "candidateBuildMs": 245.37224799999967,
+          "recycledBuildMs": 312.87039599999844,
+          "v1DeltaBytes": 639843
+        },
+        {
+          "serializeHashMs": 224.10487999999896,
+          "v1DiffMs": 272.511601000002,
+          "baselineBuildMs": 496.61648100000093,
+          "candidateBuildMs": 274.1429199999984,
+          "recycledBuildMs": 375.08480300000156,
+          "v1DeltaBytes": 639843
+        },
+        {
+          "serializeHashMs": 169.39963999999964,
+          "v1DiffMs": 202.111409000001,
+          "baselineBuildMs": 371.51104900000064,
+          "candidateBuildMs": 299.3977279999999,
+          "recycledBuildMs": 355.45811200000026,
+          "v1DeltaBytes": 639843
+        },
+        {
+          "serializeHashMs": 176.63142599999992,
+          "v1DiffMs": 186.39843699999983,
+          "baselineBuildMs": 363.02986299999975,
+          "candidateBuildMs": 269.8602749999991,
+          "recycledBuildMs": 346.1025530000006,
+          "v1DeltaBytes": 639843
+        },
+        {
+          "serializeHashMs": 292.3892640000013,
+          "v1DiffMs": 325.74582499999815,
+          "baselineBuildMs": 618.1350889999994,
+          "candidateBuildMs": 421.30231600000116,
+          "recycledBuildMs": 563.5393619999995,
+          "v1DeltaBytes": 639843
+        },
+        {
+          "serializeHashMs": 253.99497100000008,
+          "v1DiffMs": 327.235346999998,
+          "baselineBuildMs": 581.2303179999981,
+          "candidateBuildMs": 436.6882030000015,
+          "recycledBuildMs": 537.6173699999999,
+          "v1DeltaBytes": 639843
+        },
+        {
+          "serializeHashMs": 192.41752799999813,
+          "v1DiffMs": 235.48618400000123,
+          "baselineBuildMs": 427.90371199999936,
+          "candidateBuildMs": 264.2428780000009,
+          "recycledBuildMs": 436.14675499999794,
+          "v1DeltaBytes": 639843
+        }
+      ],
+      "baselineAllocation": {
+        "calls": 16360,
+        "stringBytes": 100722531,
+        "shallowStringBytes": 185871506,
+        "parseBytes": 67064861
+      },
+      "candidateAllocation": {
+        "calls": 3,
+        "stringBytes": 33546697,
+        "shallowStringBytes": 62067115,
+        "parseBytes": 0
+      },
+      "recycledAllocation": {
+        "calls": 3,
+        "stringBytes": 33546697,
+        "shallowStringBytes": 62067115,
+        "parseBytes": 33532499
+      },
+      "cachedPollAllocation": {
+        "calls": 1,
+        "stringBytes": 95,
+        "shallowStringBytes": 111,
+        "parseBytes": 0
+      }
+    },
+    {
+      "name": "largest-fields",
+      "certifiedBaseBytes": 33532499,
+      "fullBytes": 33532553,
+      "fullGzipBytes": 6765182,
+      "deltaBytes": 28142,
+      "deltaGzipBytes": 11610,
+      "samples": [
+        {
+          "serializeHashMs": 244.016475000004,
+          "v1DiffMs": 317.5967410000012,
+          "baselineBuildMs": 561.6132160000052,
+          "candidateBuildMs": 295.86959899999783,
+          "recycledBuildMs": 341.5052460000006,
+          "v1DeltaBytes": 543913
+        },
+        {
+          "serializeHashMs": 165.36912699999812,
+          "v1DiffMs": 224.51446199999918,
+          "baselineBuildMs": 389.8835889999973,
+          "candidateBuildMs": 253.91498000000138,
+          "recycledBuildMs": 325.79903300000296,
+          "v1DeltaBytes": 543913
+        },
+        {
+          "serializeHashMs": 186.15968200000498,
+          "v1DiffMs": 240.88482999999542,
+          "baselineBuildMs": 427.0445120000004,
+          "candidateBuildMs": 262.04646499999944,
+          "recycledBuildMs": 336.4359040000054,
+          "v1DeltaBytes": 543913
+        },
+        {
+          "serializeHashMs": 202.00484600000345,
+          "v1DiffMs": 303.5951569999961,
+          "baselineBuildMs": 505.60000299999956,
+          "candidateBuildMs": 400.5237330000018,
+          "recycledBuildMs": 565.9080929999982,
+          "v1DeltaBytes": 543913
+        },
+        {
+          "serializeHashMs": 260.8979309999995,
+          "v1DiffMs": 337.616452000002,
+          "baselineBuildMs": 598.5143830000015,
+          "candidateBuildMs": 364.5474810000014,
+          "recycledBuildMs": 377.8909449999992,
+          "v1DeltaBytes": 543913
+        },
+        {
+          "serializeHashMs": 173.45397300000332,
+          "v1DiffMs": 186.69533799999772,
+          "baselineBuildMs": 360.14931100000103,
+          "candidateBuildMs": 286.60487499999726,
+          "recycledBuildMs": 372.21243400000094,
+          "v1DeltaBytes": 543913
+        },
+        {
+          "serializeHashMs": 203.10609000000113,
+          "v1DiffMs": 222.6092359999966,
+          "baselineBuildMs": 425.71532599999773,
+          "candidateBuildMs": 331.00175400000444,
+          "recycledBuildMs": 516.5808879999968,
+          "v1DeltaBytes": 543913
+        }
+      ],
+      "baselineAllocation": {
+        "calls": 16360,
+        "stringBytes": 100626659,
+        "shallowStringBytes": 185675714,
+        "parseBytes": 67064890
+      },
+      "candidateAllocation": {
+        "calls": 3,
+        "stringBytes": 33560701,
+        "shallowStringBytes": 62084179,
+        "parseBytes": 0
+      },
+      "recycledAllocation": {
+        "calls": 3,
+        "stringBytes": 33560701,
+        "shallowStringBytes": 62084179,
+        "parseBytes": 33532499
+      },
+      "cachedPollAllocation": {
+        "calls": 1,
+        "stringBytes": 95,
+        "shallowStringBytes": 111,
+        "parseBytes": 0
+      }
+    }
+  ]
+}

@@ -1,0 +1,150 @@
+{
+  "base": "5d839f09d30bc9e473bf262b1404f7566fe48526",
+  "timezone": "UTC",
+  "rows": [
+    {
+      "name": "seams",
+      "showSvc": false,
+      "offset": 0,
+      "sha256": "5db4a6d121fb0cbc8cab033fd4c617c51fb1914a6d77566b4661ab3e9c9c9e77"
+    },
+    {
+      "name": "seams",
+      "showSvc": false,
+      "offset": -17,
+      "sha256": "7b57b4dd47a3dceeac4ab0824a50af26c04741fcbf9b07cfb6b13e27e6b60330"
+    },
+    {
+      "name": "seams",
+      "showSvc": true,
+      "offset": 0,
+      "sha256": "6485da78e8113d77ecc89503699fa721db5f499741f9be51101271803041b518"
+    },
+    {
+      "name": "seams",
+      "showSvc": true,
+      "offset": -17,
+      "sha256": "720732f8857dce5325bd55725e4337e8319bb2cd7b547f2bfde2063a04909294"
+    },
+    {
+      "name": "corpus",
+      "showSvc": false,
+      "offset": 0,
+      "sha256": "282b5e8fc9543993b6a26dcc93ee27d8bd221b7bf3ccdc1bf12f50ae914b319a"
+    },
+    {
+      "name": "corpus",
+      "showSvc": false,
+      "offset": -533,
+      "sha256": "761b7e9b5c074adadab440b8e2ac5c33ae28f75cda2c5c9c6ddeeedb8a6285b9"
+    },
+    {
+      "name": "corpus",
+      "showSvc": true,
+      "offset": 0,
+      "sha256": "2f625c75e60e862756cec921329e8c7395a5293969621238e24b6787f494628a"
+    },
+    {
+      "name": "corpus",
+      "showSvc": true,
+      "offset": -533,
+      "sha256": "ab2a0df2c0ef1237f825e3d6d4c0a5f9824ceca272f5f2682644cc7c81a1207e"
+    },
+    {
+      "name": "codex-turn-chronology-0.151.jsonl",
+      "showSvc": false,
+      "offset": 0,
+      "sha256": "029e9f1e1cdde7174d1e983ffd8680f0e0cb5f244c31bb703284a476720b0a00"
+    },
+    {
+      "name": "codex-turn-chronology-0.151.jsonl",
+      "showSvc": false,
+      "offset": -11,
+      "sha256": "2bc4f9e7f7f5861771989c735a2cf82626f8a5240ac6b8f7f04df40c0a859537"
+    },
+    {
+      "name": "codex-turn-chronology-0.151.jsonl",
+      "showSvc": true,
+      "offset": 0,
+      "sha256": "07721c016901de41d43662b8d8073f018f2647303425840361380214b69fe130"
+    },
+    {
+      "name": "codex-turn-chronology-0.151.jsonl",
+      "showSvc": true,
+      "offset": -11,
+      "sha256": "8847b2a38f87cd6d74864e040ad4c3187d06cfd12416d949f6ba53bda8e9d027"
+    },
+    {
+      "name": "codex-item-completed-envelope.jsonl",
+      "showSvc": false,
+      "offset": 0,
+      "sha256": "4b43c8992081960045dd20bce0beaf32a81dccfd2bd89d7998ff5252ba37e01d"
+    },
+    {
+      "name": "codex-item-completed-envelope.jsonl",
+      "showSvc": false,
+      "offset": -12,
+      "sha256": "93437b0406a39ac774856343f411d092050819b4ce3b14bfac09df05c7b1b539"
+    },
+    {
+      "name": "codex-item-completed-envelope.jsonl",
+      "showSvc": true,
+      "offset": 0,
+      "sha256": "d463d8e5634d02253f04b389590f304a3e089cb4998f8b4c13c7ed630a56b024"
+    },
+    {
+      "name": "codex-item-completed-envelope.jsonl",
+      "showSvc": true,
+      "offset": -12,
+      "sha256": "97e3e7380cf58c23232f9f245daf0e9f68ae0a75c8353164ca803f2052098c3e"
+    },
+    {
+      "name": "codex-thread-items-0.151.jsonl",
+      "showSvc": false,
+      "offset": 0,
+      "sha256": "9b99b24b3283e050ca1b68c0c567513832916e4fc30610ace849fb57d31fa0c9"
+    },
+    {
+      "name": "codex-thread-items-0.151.jsonl",
+      "showSvc": false,
+      "offset": -20,
+      "sha256": "22e2ee69b7faf3192b2c965b766e7d0513fc5f082357469241d24966c08d1791"
+    },
+    {
+      "name": "codex-thread-items-0.151.jsonl",
+      "showSvc": true,
+      "offset": 0,
+      "sha256": "9b99b24b3283e050ca1b68c0c567513832916e4fc30610ace849fb57d31fa0c9"
+    },
+    {
+      "name": "codex-thread-items-0.151.jsonl",
+      "showSvc": true,
+      "offset": -20,
+      "sha256": "22e2ee69b7faf3192b2c965b766e7d0513fc5f082357469241d24966c08d1791"
+    },
+    {
+      "name": "codex-payload-audit.jsonl",
+      "showSvc": false,
+      "offset": 0,
+      "sha256": "f8276f8c9c3e7bab4d5c1b579372a09009a1895952c49cfe496969fbc90756d1"
+    },
+    {
+      "name": "codex-payload-audit.jsonl",
+      "showSvc": false,
+      "offset": -32,
+      "sha256": "a06edee3267bc9b6b89000311c05f67a0945454a30b040ab629c032bc34822c2"
+    },
+    {
+      "name": "codex-payload-audit.jsonl",
+      "showSvc": true,
+      "offset": 0,
+      "sha256": "2aaac684ed5c582ce399a1f0b2de02ad081aeb1cdafbdaadce830a2c91d76bac"
+    },
+    {
+      "name": "codex-payload-audit.jsonl",
+      "showSvc": true,
+      "offset": -32,
+      "sha256": "e9137b0aff68bb2b29fadb5c9fd9092441fb446f815e67da4e6f1e228bb72e61"
+    }
+  ]
+}

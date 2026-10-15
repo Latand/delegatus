@@ -46,6 +46,8 @@ import { readTaskHold, storedTaskHold } from "@/lib/tasks/hold";
 import { withTaskCompletion } from "@/lib/tasks/completion";
 import { admissionSnapshot } from "@/lib/tasks/groupHide";
 import { getRuntimeBus } from "@/hooks/runtimeBus";
+import { createFilesClientCache } from "@/hooks/useFiles";
+import { diffBoard } from "@/lib/boardDelta";
 import { RUNTIME_PLANE_ABSENT } from "@/lib/runtime/flags";
 import { prototypeReviewSummary, prototypeRoundsSuperseded } from "@/lib/prototypeReview/model";
 import type { PrototypeAnswer, PrototypeQuestion, PrototypeDeliveryPhase, PrototypeDeliveryState, PrototypeMediaView, PrototypeReviewSummary, PrototypeRoundView } from "@/lib/prototypeReview/types";
@@ -3058,6 +3060,62 @@ Object.assign(window, {
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 
+const pollTransport = new URLSearchParams(location.search).get("pollTransport");
+let pollBase: { raw: Record<string, unknown>; etag: string } | undefined;
+let pollSequence = 0;
+const pollReads: Array<{ delta: boolean; bytes: number }> = [];
+Object.assign(window, {
+  boardPollReads: pollReads,
+  boardPollStep: () => {
+    const index = tasks.findIndex(task => task.id === "t-search");
+    tasks[index] = { ...tasks[index], text: `${tasks[index].text} updated` };
+    files[0] = { ...files[0], size: files[0].size + 1 };
+    fireTasksChanged();
+  },
+  boardPollBench: async (input: { before: string; after: string; delta: string }) => {
+    const results: Record<string, number[]> = {};
+    const expected = JSON.parse(input.after);
+    const equal = (a: unknown, b: unknown): boolean => {
+      if (a === b) return true;
+      if (!a || !b || typeof a !== "object" || typeof b !== "object" || Array.isArray(a) !== Array.isArray(b)) return false;
+      const left = a as Record<string, unknown>, right = b as Record<string, unknown>;
+      return Object.keys(left).length === Object.keys(right).length && Object.keys(left).every(key => Object.hasOwn(right, key) && equal(left[key], right[key]));
+    };
+    for (const mode of ["full", "delta"]) {
+      const samples: number[] = [];
+      for (let i = 0; i < 8; i++) {
+        let step = 0;
+        const cache = createFilesClientCache(async () => new Response(step++ === 0 ? input.before : mode === "full" ? input.after : input.delta, {
+          headers: { ETag: step === 1 ? "before" : "after", "x-llv-board-protocol": "2", ...(step > 1 && mode === "delta" ? { "x-llv-files-delta-base": "before" } : {}) },
+        }));
+        try {
+          await cache.revalidate();
+          const start = performance.now();
+          await cache.revalidate();
+          const elapsed = performance.now() - start;
+          if (!equal(cache.certifiedGlobal()?.raw, expected)) throw new Error("board benchmark state mismatch");
+          if (i) samples.push(elapsed);
+        } finally { cache.dispose(); }
+      }
+      results[mode] = samples;
+    }
+    return results;
+  },
+});
+
+function pollResponse(body: string, init?: RequestInit): Response {
+  const raw = { ...JSON.parse(body), boardProtocol: 2, boardScope: "fixture.global" };
+  const headers = new Headers(init?.headers);
+  const etag = `fixture-${++pollSequence}`;
+  const delta = pollTransport === "delta" && pollBase && headers.get("if-none-match") === pollBase.etag;
+  const encoded = delta ? JSON.stringify({ deltas: [diffBoard(pollBase!.raw, raw, pollBase!.etag, etag)] }) : JSON.stringify(raw);
+  const response = new Response(encoded, { headers: { ETag: etag, "content-type": "application/json", "x-llv-board-protocol": "2",
+    ...(delta ? { "x-llv-files-delta-base": pollBase!.etag } : {}) } });
+  pollBase = { raw, etag };
+  pollReads.push({ delta: Boolean(delta), bytes: new TextEncoder().encode(encoded).length });
+  return response;
+}
+
 /* A production-shaped, invented catalog for the landing board's poll cost.
    Keep inactive history: the Overview still projects it before filtering. */
 if (OVERVIEW_PERFORMANCE) {
@@ -3936,6 +3994,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       } });
     }
     if (evidence.filesDelayMs) await new Promise((resolve) => setTimeout(resolve, evidence.filesDelayMs));
+    if (pollTransport) return pollResponse(body, init);
     return new Response(body, { status: 200, headers: { "content-type": "application/json" } });
   }
   if (url.pathname === "/api/attention") {
