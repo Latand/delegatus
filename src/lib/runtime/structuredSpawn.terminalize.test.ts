@@ -1074,6 +1074,19 @@ function queuedOwnerFixture(transport: "tmux" | "structured", curator?: { id: st
   return { store, cwd, receipt: begun.receipt };
 }
 
+test("a newly failed accepted queue retains its reporting obligation until the next pass", async () => {
+  const { store, receipt } = queuedOwnerFixture("structured");
+  const raw = JSON.parse(fs.readFileSync(store.filename, "utf8"));
+  raw.receipts[receipt.launchId].launcher = { conversationId: "conversation_queue_launcher", notify: true };
+  fs.writeFileSync(store.filename, JSON.stringify(raw));
+  expect(await store.retireQueuedSpawnOffLoop(receipt.launchId, "accepted queue lost its owner")).toBe(true);
+  const reopened = new AgentRegistry(store.filename, undefined, undefined, { sqliteMode: "off" });
+  await terminalizeStaleStructuredSpawns(reopened, null);
+  await terminalizeStaleStructuredSpawns(reopened, null);
+  expect(queryLifecycleEvents({ conversationId: receipt.conversationId, type: "spawn_failed" }).events).toHaveLength(1);
+  expect(readSpawnNoticeTurn(receipt.conversationId, `launch:${receipt.launchId}`)?.outcome).toBe("lost");
+});
+
 function claimedCurator(project: string) {
   const scope = roleScope(project, "builder");
   roleMemoryCollection(true)!.boundedPatch(20, tx => {

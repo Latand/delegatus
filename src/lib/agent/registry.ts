@@ -4678,7 +4678,10 @@ export class AgentRegistry {
     if ((backend.source === "environment" || backend.source === "default") && mayRunStartupMaintenance) {
       publishRegistryBackendIdentity(filename, this.sqliteMode, sqliteFilename);
     }
-    if (mayRunStartupMaintenance) this.backfillFailedLaunchReporting();
+    if (mayRunStartupMaintenance) {
+      try { this.backfillFailedLaunchReporting(); }
+      catch (error) { console.warn("agent registry failure announcement backfill deferred:", error); }
+    }
   }
 
   /**
@@ -6426,7 +6429,10 @@ export class AgentRegistry {
         receipt.launchProfile = emptyLaunchProfile(receipt.queuedPinnedSpawn.spec.launchProfile, this.mcpGrantPolicy);
         receipt.queuedPinnedSpawn = null;
         receipt.error = reason;
-        if (receipt.state === "starting" && !receipt.pane && !receipt.key) receipt.state = "failed";
+        if (receipt.state === "starting" && !receipt.pane && !receipt.key) {
+          receipt.state = "failed";
+          markFailedLaunchReporting(receipt);
+        }
         terminalizeFailedSpawnDeliveriesInFile(file, launchId);
         return true;
       }));
