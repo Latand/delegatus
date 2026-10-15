@@ -12,6 +12,8 @@ import { ORCHESTRATOR_TASK_OWNERSHIP_HEADING } from "@/lib/orchestrator/prompt";
 import { APPLY_FIXES_GUIDANCE, FRONTEND_GUIDANCE, listRoles, resolveRole, resolveSpawnRole, roleFenceBlock, roleScaffoldBody, roleSpawnPrompt, SPAWN_COMPLETION } from "./registry";
 
 const repository = path.resolve(import.meta.dir, "../../..");
+/** The fix round's own definition of blocked, which a spawned fixer reads with no stage wrapper. */
+const BLOCKED_FIX_ROUND = "Your verdict is pass unless you are blocked: you cannot build, cannot run required checks, or a handed finding is impossible within the specification.";
 
 test("merger resolves a required reviewed-PR list with a read-write, non-nesting profile", () => {
   expect(resolveRole("merger", {})).toMatchObject({ ok: false, error: "missing required role parameter: prs" });
@@ -432,13 +434,28 @@ test.each(["general", "frontend", "docs"])("%s fixers repair their own discoveri
   expect(fix.value.prompt).toContain("Fix every handed finding and anything you notice yourself within the pinned specification");
   expect(fix.value.prompt).toContain("so do not grade your own work");
   expect(fix.value.prompt).toContain("an issue you found yourself is never a reason to fail: fix it or note it");
-  /* The blocked fields are the stage wrapper's, which every fix stage reads
-     at every launch, stored lanes included (pipelines/prompts.test.ts). */
-  expect(fix.value.prompt).toContain("Your verdict is pass unless you are blocked, as the stage contract below defines it.");
+  /* The paragraph defines blocked itself; the blocked fields are the stage
+     wrapper's, which every fix stage reads at every launch, stored lanes
+     included (pipelines/prompts.test.ts). */
+  expect(fix.value.prompt).toContain(BLOCKED_FIX_ROUND);
+  expect(fix.value.prompt).not.toContain("blockedReason");
   expect(fix.value.prompt).not.toContain("using Blocked: in the summary");
   expect(fix.value.prompt).toContain("goes under Notes");
   expect(fix.value.prompt).not.toContain("Review your own diff before you finish");
   expect(fix.value.prompt).not.toContain("finish with fail so the orchestrator can re-plan");
+});
+
+/* A fixer spawned without a stage reads no stage wrapper, so its prompt as
+   spawned states when it may fail and names no stage it lacks. */
+test("a spawned fixer reads the blocked-only failure definition without stage fields", () => {
+  const resolved = resolveSpawnRole({ role: "builder", roleParams: { mode: "apply-fixes", domain: "general" } });
+  if (!resolved.ok || !resolved.value) throw new Error("builder did not resolve");
+  const prompt = roleSpawnPrompt(resolved.value, "Fix the handed findings.");
+  expect(prompt).toContain(BLOCKED_FIX_ROUND);
+  expect(prompt).not.toContain("stage contract");
+  expect(prompt).not.toContain("blockedReason");
+  expect(prompt).not.toContain("blocked:true");
+  expect(prompt.endsWith(SPAWN_COMPLETION)).toBe(true);
 });
 
 /* §2.2: a spawned role agent has no stage to report to, so it ends in a

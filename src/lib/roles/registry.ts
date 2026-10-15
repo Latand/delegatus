@@ -104,10 +104,11 @@ function renderScaffold(definition: RoleDefinition, params: RoleParamValues, pro
 }
 
 /** Fix rounds repair discoveries within the spec; reviewers own the grade.
-    A blocked fix round's structured fields are the stage wrapper's to state:
-    it renders at every launch, so lanes stored with an older scaffold read
-    it too. */
-export const APPLY_FIXES_GUIDANCE = `Fix round: your brief is a list of findings. Fix every handed finding and anything you notice yourself within the pinned specification, OVER-BUILT cuts and P0 findings included, and add or adjust focused checks where the project has them. ${FIX_ROUND_FINISH_LINE} Report the verification evidence. The reviewer judges the result against the pinned specification, so do not grade your own work. An observation outside the specification goes under Notes, and an issue you found yourself is never a reason to fail: fix it or note it. Your verdict is pass unless you are blocked, as the stage contract below defines it.`;
+    The paragraph defines blocked itself, because a fixer spawned without a
+    stage reads no stage wrapper. A blocked fix stage's structured fields are
+    the stage wrapper's to state: it renders at every launch, so lanes stored
+    with an older scaffold read them too. */
+export const APPLY_FIXES_GUIDANCE = `Fix round: your brief is a list of findings. Fix every handed finding and anything you notice yourself within the pinned specification, OVER-BUILT cuts and P0 findings included, and add or adjust focused checks where the project has them. ${FIX_ROUND_FINISH_LINE} Report the verification evidence. The reviewer judges the result against the pinned specification, so do not grade your own work. An observation outside the specification goes under Notes, and an issue you found yourself is never a reason to fail: fix it or note it. Your verdict is pass unless you are blocked: you cannot build, cannot run required checks, or a handed finding is impossible within the specification.`;
 
 /** The UI guidance a Builder with domain=frontend reads before the rendered
     rules, which a prototype-mode Builder reads too. */
