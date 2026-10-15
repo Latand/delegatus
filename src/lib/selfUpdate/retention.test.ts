@@ -210,6 +210,58 @@ test("package containers follow the same protected set", async () => {
   expect(report.removed.length).toBeGreaterThan(0);
 });
 
+function packageContainerFixture() {
+  const h = fixture(0); h.record.checkout = null; h.ports.env = { LLV_SELF_UPDATE_KEEP_RELEASES: "1" };
+  const dirs = Array.from({ length: 4 }, (_, i) => path.join(h.record.releasesDir, `npm-3.0.${i}`));
+  for (const [i, dir] of dirs.entries()) {
+    fs.mkdirSync(dir); fs.writeFileSync(path.join(dir, "package.json"), "{}");
+    const date = new Date(h.now - (5 - i) * DAY);
+    fs.utimesSync(dir, date, date); fs.utimesSync(path.join(dir, "package.json"), date, date);
+  }
+  fs.writeFileSync(h.record.releasePointer, JSON.stringify({ dir: dirs[0] })); h.inputs.rollbackPackage = dirs[1]!;
+  return { ...h, dirs, target: dirs[2]! };
+}
+
+function dirtyNestedRepository(directory: string) {
+  fs.mkdirSync(directory, { recursive: true });
+  const git = (args: string[]) => {
+    const result = spawnSync("git", args, { cwd: directory, encoding: "utf8" });
+    expect(result.status).toBe(0);
+    return result.stdout;
+  };
+  git(["init", "-q"]);
+  fs.writeFileSync(path.join(directory, "tracked.txt"), "committed bytes\n");
+  git(["add", "tracked.txt"]);
+  git(["-c", "user.name=Fixture", "-c", "user.email=noreply@example.invalid", "commit", "-qm", "fixture"]);
+  fs.writeFileSync(path.join(directory, "tracked.txt"), "unique modified bytes\n");
+  fs.writeFileSync(path.join(directory, "untracked.txt"), "unique untracked bytes\n");
+}
+
+test("package retention preserves a dirty nested Git checkout", async () => {
+  const h = packageContainerFixture();
+  const nested = path.join(h.target, "workspace"); dirtyNestedRepository(nested);
+  const report = await h.run();
+  expect(fs.existsSync(nested)).toBeTrue();
+  expect(fs.readFileSync(path.join(nested, "tracked.txt"), "utf8")).toBe("unique modified bytes\n");
+  expect(fs.readFileSync(path.join(nested, "untracked.txt"), "utf8")).toBe("unique untracked bytes\n");
+  expect(report.removed.some(row => row.dir === h.target)).toBeFalse();
+  expect(report.kept).toContainEqual(expect.objectContaining({ dir: h.target, reason: "git-checkout" }));
+});
+
+test("package trash replay preserves a dirty nested Git checkout", async () => {
+  const h = packageContainerFixture();
+  const nested = path.join(h.target, "workspace"); dirtyNestedRepository(nested);
+  const journal = path.join(path.dirname(h.ports.reportFile!), "package-trash-legacy.json");
+  await expect(removeTreeViaTrash(h.target, { journal, held: () => false,
+    remove: async () => { throw new Error("interrupted package removal"); } })).rejects.toThrow("interrupted package removal");
+  const row = JSON.parse(fs.readFileSync(journal, "utf8")) as { trash: string };
+  const report = await h.run();
+  expect(fs.existsSync(row.trash)).toBeTrue();
+  expect(fs.readFileSync(path.join(row.trash, "workspace/tracked.txt"), "utf8")).toBe("unique modified bytes\n");
+  expect(fs.readFileSync(path.join(row.trash, "workspace/untracked.txt"), "utf8")).toBe("unique untracked bytes\n");
+  expect(report.removed.some(entry => entry.dir === h.target)).toBeFalse();
+});
+
 test("one failed removal is reported and the next candidate is still reclaimed", async () => {
   const h = fixture(); const run = h.ports.git!;
   h.ports.git = async (args, cwd) => args[1] === "remove" && args.at(-1) === h.dirs[1]
@@ -315,6 +367,26 @@ test("an unpublished commit created during the last ref query protects its relea
   const report = await h.run();
   expect(committed).toBeTrue(); expect(fs.existsSync(h.candidate)).toBeTrue();
   expect(fs.readFileSync(path.join(h.candidate, "late-commit.txt"), "utf8")).toBe("unique commit\n");
+  expect(report.removed.some(row => row.dir === h.candidate)).toBeFalse();
+});
+
+test("a late .next symlink cannot redirect ready-marker deletion into an active release", async () => {
+  const h = realReleaseFixture(); const run = h.ports.git!; let replaced = false; let finalHeadReads = 0;
+  const activeMarker = path.join(h.active, ".next/DELEGATUS_RELEASE_READY");
+  h.ports.git = async (args, cwd) => {
+    const result = await run(args, cwd);
+    if (!replaced && args[0] === "rev-parse" && args[1] === "--verify" && args[2] === "HEAD" && cwd === h.candidate
+      && ++finalHeadReads === 2) {
+      replaced = true;
+      fs.rmSync(path.join(h.candidate, ".next"), { recursive: true, force: true });
+      fs.symlinkSync(path.join(h.active, ".next"), path.join(h.candidate, ".next"), "dir");
+    }
+    return result;
+  };
+  const report = await h.run();
+  expect(replaced).toBeTrue();
+  expect(fs.readFileSync(activeMarker, "utf8")).toBe(h.git(["rev-parse", "HEAD"], h.active));
+  expect(fs.existsSync(h.candidate)).toBeTrue();
   expect(report.removed.some(row => row.dir === h.candidate)).toBeFalse();
 });
 

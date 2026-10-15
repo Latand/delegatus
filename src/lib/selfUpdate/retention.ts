@@ -247,17 +247,42 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
             || identity(candidate.dir) !== candidate.identity || fs.realpathSync(candidate.dir) !== candidate.dir) {
             report.kept.push({ dir: candidate.dir, reason: "changed", bytes }); continue;
           }
+          // Git checks above await subprocesses. Revalidate the marker's parent
+          // at the unlink edge so a late .next symlink cannot redirect deletion.
+          const nextDir = path.dirname(marker);
+          let markerParentExists = false;
+          try {
+            const parent = fs.lstatSync(nextDir);
+            markerParentExists = true;
+            if (!parent.isDirectory() || parent.isSymbolicLink() || fs.realpathSync(nextDir) !== nextDir
+              || !under(nextDir, candidate.dir)) {
+              report.kept.push({ dir: candidate.dir, reason: "changed", bytes }); continue;
+            }
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code === "ENOENT") markerParentExists = false;
+            else {
+              report.kept.push({ dir: candidate.dir, reason: "changed", bytes }); continue;
+            }
+          }
+          if (markerParentExists && fs.existsSync(marker) && fs.lstatSync(marker).isDirectory()) {
+            report.kept.push({ dir: candidate.dir, reason: "changed", bytes }); continue;
+          }
           fs.rmSync(marker, { force: true });
           const result = await run(["worktree", "remove", candidate.dir], record.checkout);
           if (result.code !== 0) throw new Error(`cannot remove release: ${result.stderr || result.stdout}`);
         } else {
+          const packageTree = inspectTree(candidate.dir, { git: true, mounts: mounts(candidate.dir) });
+          if (packageTree.hold) {
+            report.kept.push({ dir: candidate.dir, reason: packageTree.hold, bytes: bytesOf(candidate.dir) }); continue;
+          }
           const journal = path.join(path.dirname(reportFile), `package-trash-${randomUUID()}.json`);
           if (!await removeTreeViaTrash(candidate.dir, { journal, context: { sha: candidate.sha }, held: trash => {
             const current = read(); const activeProcesses = scan();
             const reason = protect({ dir: candidate.dir, sha: candidate.sha, age: candidate.age, locked: candidate.locked, identity: candidate.identity }, current, activeProcesses, true);
             if (reason) report.kept.push({ dir: candidate.dir, reason, bytes: 0 });
-            return !!reason || heldByProcess(trash, activeProcesses);
-          }, remove: ports.removeTree })) continue;
+            return !!reason || heldByProcess(trash, activeProcesses)
+              || !!inspectTree(trash, { git: true, mounts: mounts(trash) }).hold;
+          }, validate: trash => !inspectTree(trash, { git: true, mounts: mounts(trash) }).hold, remove: ports.removeTree })) continue;
         }
         report.removed.push({ dir: candidate.dir, sha: candidate.sha, bytes });
         } finally { releaseHead?.(); }
@@ -302,7 +327,7 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
         const bytes = fs.existsSync(row.trash) ? bytesOf(row.trash) : 0;
         if (await finishTreeTrash(journal, held, ports.removeTree,
           trash => (!outputCandidate || disposableGeneratedTree(trash, generatedOutput))
-            && (packageTrash || outputTrash || !inspectTree(trash, { git: true, mounts: mounts(trash) }).hold))) {
+            && (outputTrash || !inspectTree(trash, { git: true, mounts: mounts(trash) }).hold))) {
           if (packageTrash) report.removed.push({ dir: row.directory, sha: row.context?.sha ?? "", bytes });
           else if (!outputTrash) report.reclaimedCacheBytes += bytes;
         }
