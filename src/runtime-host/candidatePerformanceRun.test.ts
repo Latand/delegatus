@@ -44,11 +44,11 @@ function expectEvidenceIntact(report: CandidatePerformanceEvidence): void {
    promotion, browser views of the production build included. Run it with
    LLV_CANDIDATE_PERFORMANCE_FULL=1 after `bun run build`, with CHROME_BIN
    naming a Chromium, or `bun scripts/verify-viewer-runtime.ts --performance`. */
-test.skipIf(process.env.LLV_CANDIDATE_PERFORMANCE_FULL !== "1")("the candidate gate passes the current code over thirty thousand rows of retained history", async () => {
+test.skipIf(process.env.LLV_CANDIDATE_PERFORMANCE_FULL !== "1")("the candidate gate passes the current code over the complete managed-update census", async () => {
   const { code, report } = await runGate([]);
   if (!report.ok) console.error(JSON.stringify(report, null, 2));
   const measured = report.measurements!;
-  expect(measured.dataset.rows).toBeGreaterThan(29_000);
+  expect(measured.dataset.rows).toBeGreaterThanOrEqual(53_000);
   expect(measured.handover).toMatchObject({ switched: true, demotionExitCode: 0, servingRelease: "successor", serving: { failures: 0 } });
   expect(measured.workers).toMatchObject({ count: 4, rehosted: 4, answering: 4, lostProgress: 0, repeatedProgress: 0, failedPings: 0 });
   expectEvidenceIntact(report);

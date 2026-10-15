@@ -49,6 +49,127 @@ function attempt(write: () => void): boolean {
   }
 }
 
+test("cooperative preparation publishes one complete frozen view and follows peer writes", async () => {
+  const { open, filename, kept, delivery } = fixture();
+  const store = open();
+  const peer = open();
+  const preparation = store.prepareReadOnlySnapshot();
+  const concurrent = store.prepareReadOnlySnapshot();
+  const prepared = await preparation;
+  expect((await concurrent).file).toBe(prepared.file);
+  expect(prepared.file).toEqual(peer.readOnlySnapshot().file);
+  expect(store.readOnlySnapshot().file).toBe(prepared.file);
+  expect(Object.isFrozen(prepared.file.receipts[kept])).toBe(true);
+  expect(Object.isFrozen(prepared.file.heldDeliveries[delivery.id]?.command)).toBe(true);
+  peer.mutate(file => { file.receipts[kept]!.error = "peer changed after preparation"; }, false);
+  expect(store.readOnlySnapshot().file.receipts[kept]?.error).toBe("peer changed after preparation");
+  expect(prepared.file.receipts[kept]?.error).toBeNull();
+  const db = new Database(filename, { readonly: true });
+  try {
+    expect(db.query<{ count: number }, []>(`SELECT COUNT(*) AS count FROM sqlite_master WHERE name IN
+      ('registry_lookup_requestDigest','registry_lookup_supersedes_conversationId','registry_archive_request_digest','registry_archive_supersedes',
+       'registry_lookup_structuredHost_kind','registry_archive_structured_host_kind')`).get()?.count).toBe(6);
+  } finally { db.close(); }
+});
+
+test("recovery index preparation yields while a peer owns the writer", async () => {
+  const { open, filename } = fixture();
+  const store = open();
+  const peer = new Database(filename);
+  peer.exec("BEGIN IMMEDIATE");
+  let settled = false;
+  const preparing = store.prepareRecoveryIndexes().finally(() => { settled = true; });
+  try {
+    await new Promise(resolve => setTimeout(resolve, 25));
+    expect(settled).toBe(false);
+  } finally {
+    peer.exec("ROLLBACK");
+    peer.close();
+    await preparing;
+  }
+  expect(settled).toBe(true);
+});
+
+test("an aborted preparation leaves keyed reads and the next preparation usable", async () => {
+  const { open, kept } = fixture();
+  const store = open();
+  const controller = new AbortController();
+  controller.abort(new Error("retired preparation"));
+  await expect(store.prepareReadOnlySnapshot(controller.signal)).rejects.toThrow("retired preparation");
+  expect(store.read(file => file.receipts[kept]?.launchId)).toBe(kept);
+  expect((await store.prepareReadOnlySnapshot()).file.receipts[kept]?.launchId).toBe(kept);
+});
+
+test("structured host lookup keeps a held view through peer deletion and replacement", async () => {
+  const { open } = fixture();
+  const store = open();
+  const peer = open();
+  await store.prepareRecoveryIndexes();
+  const entry: RegistryFile["entries"][string] = {
+    key: { engine: "codex", sessionId: "indexed-host" }, artifactPath: "/sessions/indexed-host.jsonl",
+    cwd: "/repo", accountId: null, status: "dead", host: null, claimOwner: null, claimEpoch: 0, pendingAction: null,
+    updatedAt: "2020-01-01T00:00:00Z",
+    structuredHost: { kind: "codex-app-server", endpoint: "stdio:released", process: null, eventCursor: 0,
+      protocolVersion: null, writerClaimEpoch: 0, activeTurnRef: null, pendingAttention: [], activeFlags: [] },
+  };
+  store.mutate(file => { file.entries["codex:indexed-host"] = entry; }, false);
+  const held = store.readOnlySnapshot().file;
+  const hosts = (file: RegistryFile) => registryRowsMatching(file, "entries", "structuredHost.kind", "codex-app-server")
+    .map(row => row.key.sessionId);
+  peer.mutate(file => {
+    delete file.entries["codex:indexed-host"];
+    file.entries["codex:replacement-host"] = { ...entry, key: { engine: "codex", sessionId: "replacement-host" } };
+  }, false);
+  expect(hosts(held)).toEqual(["indexed-host"]);
+  expect(hosts(store.readOnlySnapshot().file)).toEqual(["replacement-host"]);
+  peer.mutate(file => { file.entries["codex:replacement-host"]!.structuredHost = undefined; }, false);
+  expect(hosts(store.readOnlySnapshot().file)).toEqual([]);
+  expect(hosts(held)).toEqual(["indexed-host"]);
+});
+
+test("preparation applies a peer commit and never publishes the stale transaction", async () => {
+  const { open, filename, kept } = fixture();
+  const writer = open();
+  let changed = false;
+  const reader = new SqliteAgentRegistryStore(filename, {
+    normalize: normalizeRegistry, readOnly: true,
+    initialSnapshot: () => { throw new Error("existing fixture required"); },
+    onRowPayloadRead: () => {
+      if (changed) return;
+      changed = true;
+      writer.mutate(file => { file.receipts[kept]!.error = "peer committed during preparation"; }, false);
+    },
+  });
+  stores.push(reader);
+  const prepared = await reader.prepareReadOnlySnapshot();
+  expect(changed).toBe(true);
+  expect(prepared.file.receipts[kept]?.error).toBe("peer committed during preparation");
+  const abort = new AbortController(); abort.abort(new Error("retired cached reader"));
+  await expect(reader.prepareReadOnlySnapshot(abort.signal)).rejects.toThrow("retired cached reader");
+});
+
+test("preparation completes under sustained peer commits and refreshes from their journal", async () => {
+  const { open, filename, kept } = fixture();
+  const writer = open();
+  let writing = true, writes = 0, loads = 0;
+  const reader = new SqliteAgentRegistryStore(filename, {
+    normalize: normalizeRegistry, readOnly: true,
+    initialSnapshot: () => { throw new Error("existing fixture required"); },
+    onSnapshotLoad: () => { loads++; },
+    onRowPayloadRead: (_collection, count) => {
+      if (!writing || !count) return;
+      writes++;
+      writer.mutate(file => { file.receipts[kept]!.error = `peer revision ${writes}`; }, false);
+    },
+  });
+  stores.push(reader);
+  try { await reader.prepareReadOnlySnapshot(); }
+  finally { writing = false; }
+  expect(writes).toBeGreaterThan(1);
+  expect(loads).toBe(1);
+  expect(reader.readOnlySnapshot().file.receipts[kept]?.error).toBe(`peer revision ${writes}`);
+});
+
 test("a reader cannot replace a collection of the shared view, even through the loader's accessor", () => {
   const { open, kept } = fixture();
   const store = open();

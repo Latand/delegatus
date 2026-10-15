@@ -3,6 +3,10 @@
 
      bun run src/runtime-host/candidatePerformanceRun.ts [--scale <0..1>]
 
+   --profile-dir <directory> writes separate CPU profiles for both source
+   Viewer processes. A profiled run is diagnostic evidence; repeat without
+   profiling for release qualification.
+
    It builds the synthetic registry (registryPerformanceDataset.ts) and the
    newest conversations' transcripts in a private home, and returns the
    registry to the schema the previous release left. It starts the candidate's
@@ -194,7 +198,7 @@ function sandboxEnvironment(root: string): Record<string, string> {
     /* The projection worker runs the candidate's source, as the releases do. */
     LLV_FILES_RESPONSE_WORKER_LAUNCH: "source",
   };
-  for (const name of ["LLV_CANDIDATE_PERFORMANCE_BIN", "LLV_BUN_EXECUTABLE", "LLV_CANDIDATE_PERFORMANCE_DEBUG", "BUN_OPTIONS", "LANG", "TZ"]) {
+  for (const name of ["LLV_CANDIDATE_PERFORMANCE_BIN", "LLV_BUN_EXECUTABLE", "LLV_CANDIDATE_PERFORMANCE_DEBUG", "LLV_FILES_RESPONSE_TRACE", "BUN_OPTIONS", "LANG", "TZ"]) {
     const value = process.env[name];
     if (value) env[name] = value;
   }
@@ -221,7 +225,10 @@ interface ChildOutcome {
     demotion with the demotion's code. */
 function child(mode: Exclude<Mode, "gate">, args: string[], env: Record<string, string>, reportFile?: string): { process: ChildProcess; result: Promise<ChildOutcome> } {
   const label = args.includes("--name") ? `${mode}:${args[args.indexOf("--name") + 1]}` : mode;
-  const started = spawn(runtimeBin(), [ENTRY, `--${mode}`, "--owner", String(process.pid), ...args], {
+  const profileDirectory = mode === "viewer" ? option("--profile-dir") : undefined;
+  if (profileDirectory) fs.mkdirSync(profileDirectory, { recursive: true });
+  const profile = profileDirectory ? ["--cpu-prof", `--cpu-prof-dir=${profileDirectory}`, `--cpu-prof-name=${label.replace(":", "-")}.cpuprofile`] : [];
+  const started = spawn(runtimeBin(), [...profile, ENTRY, `--${mode}`, "--owner", String(process.pid), ...args], {
     cwd: process.cwd(),
     env: env as NodeJS.ProcessEnv,
     stdio: ["ignore", "pipe", "pipe"],
@@ -506,7 +513,7 @@ async function viewerMain(): Promise<void> {
     registry.storageDiagnostics();
     report.registryOpenMs = performance.now() - openStarted;
     const snapshotStarted = performance.now();
-    registry.readOnlySnapshot();
+    await registry.prepareReadOnlySnapshot();
     report.snapshotMs = performance.now() - snapshotStarted;
     const { SqliteAgentRegistryStore, registryRowsMatching } = await import("@/lib/agent/sqliteRegistryStore");
     if (archive) {
@@ -521,7 +528,10 @@ async function viewerMain(): Promise<void> {
     }
     const { GET, filesProjectionQueueDiagnostics, filesProjectionsSettled, observeFilesProjectionBuilds } = await import("@/app/api/files/operatorProjection");
     const { drainFilesResponseWorker, filesResponseWorkerPoolDiagnostics } = await import("@/lib/scanner/filesResponseWorker");
-    observeFilesProjectionBuilds((sample) => samples.push(sample));
+    observeFilesProjectionBuilds((sample) => {
+      samples.push(sample);
+      if (sample.buildMs > 1_000) note(`projection ${JSON.stringify(sample)} at ${Date.now()}`);
+    });
     const firstStarted = performance.now();
     const first = await GET(new Request(`http://127.0.0.1/api/files?view=summary&path=${encodeURIComponent(firstScope)}`));
     await first.arrayBuffer();
@@ -772,6 +782,11 @@ function previousReleaseSchema(filename: string): void {
   const { Database } = process.getBuiltinModule("bun:sqlite") as typeof import("bun:sqlite");
   const db = new Database(filename);
   try {
+    // These receipt indexes are new to the candidate too. Seed-time schema
+    // preparation must not hide their first-boot migration cost.
+    for (const index of ["registry_archive_request_digest", "registry_archive_supersedes", "registry_lookup_requestDigest", "registry_lookup_supersedes_conversationId", "registry_lookup_structuredHost_kind", "registry_archive_structured_host_kind", "registry_rows_failure_repair"]) {
+      db.exec(`DROP INDEX IF EXISTS ${index}`);
+    }
     db.exec(`BEGIN IMMEDIATE;
       DROP VIEW registry_records;
       CREATE VIEW registry_records AS
@@ -913,6 +928,66 @@ async function browserPhase(input: {
 const finite = (value: unknown) => typeof value === "number" && Number.isFinite(value) ? Math.round(value) : 0;
 const numbers = (value: unknown) => Array.isArray(value) ? value.filter((item): item is number => typeof item === "number" && Number.isFinite(item)) : [];
 
+/** A fresh process over a caller-owned COPY of one synthetic census. This
+ * diagnostic cell can be copied unchanged into a baseline source export;
+ * both versions use their own production registry/recovery implementation.
+ * It measures registry preparation separately from the full candidate gate. */
+async function startupProbeMain(): Promise<void> {
+  const filename = option("--registry");
+  if (!filename || !fs.existsSync(filename)) throw new Error("--registry must name an isolated census copy");
+  const loop = lagWindow(); loop.enable();
+  const { AgentRegistry } = await import("@/lib/agent/registry");
+  let loads = 0;
+  const started = performance.now();
+  const registry = new AgentRegistry(path.join(path.dirname(filename), "agent-registry.json"), undefined, undefined,
+    { sqliteMode: "sqlite", onSqliteSnapshotLoad: () => { loads++; } });
+  registry.storageDiagnostics();
+  const openMs = performance.now() - started;
+  const viewStarted = performance.now();
+  if (typeof registry.prepareReadOnlySnapshot === "function") await registry.prepareReadOnlySnapshot();
+  else registry.readOnlySnapshot();
+  const viewMs = performance.now() - viewStarted;
+  await Bun.sleep(20);
+  const bootLoop = loop.summary(); loop.disable();
+  const { Database } = process.getBuiltinModule("bun:sqlite") as typeof import("bun:sqlite");
+  const db = new Database(filename, { readonly: true });
+  const retained = () => db.query<{ value_json: string }, []>(`SELECT value_json FROM registry_records
+    WHERE collection='heldDeliveries' OR collection='receipts' AND json_extract(value_json,'$.state')='path-pending'
+    ORDER BY collection,row_key`).all().map(row => row.value_json);
+  const before = retained();
+  const { RuntimeHost } = await import("./host");
+  const { RuntimeJournal } = await import("./journal");
+  const { serveRuntimeHost } = await import("./socket");
+  const { UnixRuntimeHostClient } = await import("@/lib/runtime/client");
+  const { recoverPendingStructuredSpawns } = await import("@/lib/runtime/structuredSpawn");
+  const { performanceSpans, performanceSites } = await import("@/lib/performanceSpans");
+  const journal = new RuntimeJournal(path.join(path.dirname(filename), "probe-runtime.sqlite"), { structuredHosts: true });
+  const host = new RuntimeHost(journal);
+  const counts: Record<string, number> = {};
+  const socket = path.join(process.env.TMPDIR!, "probe.sock");
+  const server = serveRuntimeHost(socket, { handle: async (request, options) => {
+    counts[request.method] = (counts[request.method] ?? 0) + 1;
+    return host.handle(request, options);
+  } });
+  await new Promise<void>(resolve => server.once("listening", resolve));
+  try {
+    performanceSpans.clear();
+    const recoveryLoop = lagWindow(); recoveryLoop.enable();
+    const recoveryStarted = performance.now();
+    const probeAt = db.query<{ at: string | null }, []>("SELECT MAX(json_extract(value_json,'$.createdAt')) AS at FROM registry_records WHERE collection='receipts' AND json_extract(value_json,'$.state')='path-pending'").get()?.at;
+    await recoverPendingStructuredSpawns(registry, new UnixRuntimeHostClient(socket), { now: () => probeAt ? Date.parse(probeAt) : Date.now() });
+    const recoveryMs = performance.now() - recoveryStarted;
+    await Bun.sleep(20); recoveryLoop.disable();
+    console.log(JSON.stringify({ openMs, viewMs, bootLoop, recoveryMs, recoveryLoop: recoveryLoop.summary(), counts, loads,
+      retained: before.length, preserved: JSON.stringify(before) === JSON.stringify(retained()),
+      longest: performanceSpans.snapshot().records.filter(row => row.kind === "sync").sort((a,b) => b.maxMs-a.maxMs).slice(0,6)
+        .map(row => ({ site: performanceSites[row.site], ms: row.maxMs })) }));
+  } finally {
+    await new Promise<void>(resolve => server.close(() => resolve()));
+    journal.close(); db.close(); registry.close();
+  }
+}
+
 async function gateMain(): Promise<CandidatePerformanceEvidence> {
   const checkedAt = new Date().toISOString();
   const runtime = `bun ${Bun.version}`;
@@ -960,6 +1035,13 @@ async function gateMain(): Promise<CandidatePerformanceEvidence> {
     const workers: WorkerSpec[] = dataset.workers.map((worker, index) => ({ ...worker, socket: path.join(root, "w", `${index}.sock`) }));
     const deliveryIds = [...dataset.pendingDeliveryIds, ...dataset.uncertainDeliveryIds];
     const deliveriesBefore = rowsOf(dataset.filename, "heldDeliveries", deliveryIds);
+    const { Database } = process.getBuiltinModule("bun:sqlite") as typeof import("bun:sqlite");
+    const censusDb = new Database(dataset.filename, { readonly: true });
+    const retainedDeliveryIds = censusDb.query<{ row_key: string }, []>("SELECT row_key FROM registry_records WHERE collection='heldDeliveries'").all().map(row => row.row_key);
+    const pendingLaunchIds = censusDb.query<{ row_key: string }, []>("SELECT row_key FROM registry_records WHERE collection='receipts' AND json_extract(value_json,'$.state')='path-pending'").all().map(row => row.row_key);
+    censusDb.close();
+    const retainedDeliveries = rowsOf(dataset.filename, "heldDeliveries", retainedDeliveryIds);
+    const pendingLaunches = rowsOf(dataset.filename, "receipts", pendingLaunchIds);
     /* Eight scopes, each pinning a different conversation with a transcript. */
     const pinned = Array.from({ length: SCOPES }, (_, scope) => dataset.conversationPaths[(scope * 7 + 3) % dataset.conversationPaths.length]!);
     const scopeQuery = (scope: number) => `/api/files?view=summary&path=${encodeURIComponent(pinned[scope]!)}`;
@@ -1220,7 +1302,11 @@ async function gateMain(): Promise<CandidatePerformanceEvidence> {
     const queues = [aReport.queue, bReport.queue].map((value) => (value ?? {}) as { maxWaiting?: number; refused?: number; expired?: number });
     const externalLatencies = numbers(externalOutcome.report.latencies);
     const deliveriesAfter = rowsOf(dataset.filename, "heldDeliveries", deliveryIds);
-    const deliveryPreserved = deliveryIds.every((id) => {
+    const retainedAfter = rowsOf(dataset.filename, "heldDeliveries", retainedDeliveryIds);
+    const launchesAfter = rowsOf(dataset.filename, "receipts", pendingLaunchIds);
+    const retainedPreserved = retainedDeliveryIds.every(id => retainedDeliveries.get(id)?.json === retainedAfter.get(id)?.json)
+      && pendingLaunchIds.every(id => pendingLaunches.get(id)?.json === launchesAfter.get(id)?.json);
+    const deliveryPreserved = retainedPreserved && deliveryIds.every((id) => {
       const before = deliveriesBefore.get(id);
       const after = deliveriesAfter.get(id);
       return before && after && !after.cold && before.json === after.json;
@@ -1272,7 +1358,7 @@ async function gateMain(): Promise<CandidatePerformanceEvidence> {
       }
     }
     const measurements: CandidatePerformanceMeasurements = {
-      dataset: { scale, rows: dataset.rows, coldRows: dataset.coldRows, payloadBytes: dataset.payloadBytes, transcripts: dataset.conversations.length, seedMs: Math.round(dataset.seedMs) },
+      dataset: { scale, rows: dataset.rows, coldRows: dataset.coldRows, payloadBytes: dataset.payloadBytes, transcripts: dataset.conversations.length, seedMs: Math.round(dataset.seedMs), receipts: dataset.receipts },
       firstBoot: {
         registryOpenMs: finite(aReport.registryOpenMs),
         firstSnapshotMs: finite(aReport.snapshotMs),
@@ -1350,7 +1436,7 @@ async function gateMain(): Promise<CandidatePerformanceEvidence> {
       sqliteBusy: finite(aReport.busy) + finite(bReport.busy) + finite(externalOutcome.report.busy),
       runtimeTimeouts: runtimeRpc.timeouts,
       runtimeRpc,
-      deliveryEvidence: { pending: dataset.pendingDeliveryIds.length, uncertain: dataset.uncertainDeliveryIds.length, preserved: deliveryPreserved },
+      deliveryEvidence: { pending: dataset.pendingDeliveryIds.length, uncertain: dataset.uncertainDeliveryIds.length, retained: retainedDeliveryIds.length, pendingLaunches: pendingLaunchIds.length, preserved: deliveryPreserved },
       browser,
     };
     const breaches = candidatePerformanceBreaches(measurements);
@@ -1387,6 +1473,17 @@ async function gateMain(): Promise<CandidatePerformanceEvidence> {
   }
 }
 
+if (import.meta.main && option("--seed-census")) {
+  const { buildRegistryPerformanceDataset } = await import("@/lib/agent/registryPerformanceDataset");
+  const dataset = buildRegistryPerformanceDataset(option("--seed-census")!);
+  previousReleaseSchema(dataset.filename);
+  console.log(JSON.stringify({ rows: dataset.rows, receipts: dataset.receipts, payloadBytes: dataset.payloadBytes }));
+  process.exit(0);
+}
+if (import.meta.main && process.argv.includes("--probe-startup")) {
+  await startupProbeMain();
+  process.exit(0);
+}
 if (import.meta.main) {
   const mode: Mode = process.argv.includes("--writer") ? "writer"
     : process.argv.includes("--viewer") ? "viewer"

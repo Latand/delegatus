@@ -12,7 +12,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { appDirIn } from "../bin/appDir.mjs";
 import { probeHeadersFrom } from "../bin/internalService.mjs";
-import { processIdentityStatus } from "../src/lib/processIdentity";
+import { captureProcessIdentity, processIdentityStatus } from "../src/lib/processIdentity";
+import { retireFencedManagedViewer, type ManagedContainerIdentity } from "../src/runtime-host/managedRetirement";
+import { managedNativePreservationArgs } from "../src/runtime-host/managedNativePreservation";
+import { writeJsonDurably } from "../src/lib/state/durableJson";
 
 import type {
   ViewerHealthEvidence,
@@ -1141,7 +1144,9 @@ function authorityMatchesRelease(authority: HotStateAuthority | null, target: Vi
 async function checkpointHotStateFence(
   request: HotStateAuthority,
   revision: string,
+  candidate?: ViewerReleaseIdentity,
 ): Promise<HotStateAuthority> {
+  const deadline = Date.now() + 30_000;
   if (request.activationOwner) {
     const started = Date.now();
     for (;;) {
@@ -1152,6 +1157,41 @@ async function checkpointHotStateFence(
       // Only positive death permits the adapter to checkpoint for the Viewer.
       // A live or unreadable identity keeps its startup/release barrier.
       if (processIdentityStatus(request.activationOwner) === "dead") break;
+      if (candidate && Date.now() - started >= 10_000) {
+        reportAdapterPhase("rollback", "retiring the unresponsive managed Viewer");
+        await retireFencedManagedViewer(candidate, request.activationOwner, {
+          inspect: async container => {
+            const result = await command(["docker", "container", "inspect", "--format",
+              '{"id":{{json .Id}},"image":{{json .Config.Image}},"revision":{{json (index .Config.Labels "dev.live-log-viewer.revision")}},"managed":{{json (index .Config.Labels "dev.live-log-viewer.managed")}},"running":{{json .State.Running}}}', container], { timeoutMs: 2_000 });
+            return JSON.parse(result) as ManagedContainerIdentity;
+          },
+          stop: async id => { await command(["docker", "container", "stop", "--time", "5", id], { timeoutMs: 8_000 }); },
+          preserveNativeProcesses: async (owner, id) => {
+            await command(["docker", "exec", "--user", "0", id, ...managedNativePreservationArgs(owner)], { timeoutMs: 5_000 });
+          },
+          fenceStands: () => {
+            const current = readHotStateAuthority(stateDir);
+            return current?.mode === "fencing" && current.epoch === request.epoch && current.releaseRevision === revision
+              && JSON.stringify(current.activationOwner) === JSON.stringify(request.activationOwner);
+          },
+          recordBoundary: async container => {
+            const [{ SqliteAgentRegistryStore }, { normalizeRegistry }] = await Promise.all([
+              import("../src/lib/agent/sqliteRegistryStore"), import("../src/lib/agent/registry"),
+            ]);
+            const registry = new SqliteAgentRegistryStore(path.join(stateDir, "agent-registry.sqlite"), {
+              readOnly: true, normalize: normalizeRegistry, initialSnapshot: normalizeRegistry({ version: 2, entries: {}, receipts: {} }),
+            });
+            try {
+              const evidence = registry.retirementEvidence(`structured-host:${JSON.stringify(request.activationOwner)}`);
+              writeJsonDurably(path.join(stateDir, "deployments", `retirement-${request.epoch}.json`), {
+                version: 1, at: new Date().toISOString(), epoch: request.epoch, revision,
+                activationOwner: request.activationOwner, container, ...evidence,
+              });
+            } finally { registry.close(); }
+          },
+        });
+        break;
+      }
       if (Date.now() - started >= 30_000) throw new Error("Viewer did not acknowledge hot-state quiescence within 30000 ms");
       await new Promise<void>((resolve) => setTimeout(resolve, 25));
     }
@@ -1159,12 +1199,13 @@ async function checkpointHotStateFence(
   const previousExplicitRevision = process.env[HOT_STATE_RELEASE_REVISION_ENV];
   process.env[HOT_STATE_RELEASE_REVISION_ENV] = revision;
   try {
-    const { checkpointHotStateRollbackMirrorsForDemotion } = await import("../src/lib/viewerInstrumentation");
-    const { withStateMutationActivation } = await import("../src/lib/state/stateMutationBarrier");
+    const { checkpointHotStateRollbackMirrorsInWorker } = await import("../src/lib/state/durability");
     /* The adapter reaches this only for a Viewer it has established is dead,
        carrying that release's own revision. It owns the fence for this step,
        so the barrier (#1905) admits the mirror writes — and only these. */
-    const revisions = await withStateMutationActivation(checkpointHotStateRollbackMirrorsForDemotion);
+    const remaining = deadline - Date.now() - 2_000; // Reserve helper cleanup.
+    if (remaining <= 0) throw new Error("hot-state checkpoint exhausted its quiescence deadline");
+    const revisions = await checkpointHotStateRollbackMirrorsInWorker(stateDir, Math.min(10_000, remaining));
     const current = readHotStateAuthority(stateDir);
     if (current?.mode === "fencing"
       && current.epoch === request.epoch
@@ -1189,6 +1230,7 @@ async function checkpointHotStateFence(
 async function fenceCurrentSqliteRelease(
   revision: string,
   destination: ViewerReleaseIdentity,
+  retiringCandidate?: ViewerReleaseIdentity,
 ): Promise<HotStateAuthority | null> {
   const previous = readHotStateAuthority(stateDir);
   if (authorityMatchesRelease(previous, destination)) return previous;
@@ -1196,11 +1238,14 @@ async function fenceCurrentSqliteRelease(
   if (previous.releaseRevision !== revision) {
     throw new Error("active hot-state authority differs from the rollback source release");
   }
-  const request = publishHotStateAuthority(stateDir, "fencing", revision);
+  const request = publishHotStateAuthority(stateDir, "fencing", revision,
+    retiringCandidate ? { retirementOwner: captureProcessIdentity(process.pid) } : {});
   try {
-    return await checkpointHotStateFence(request, revision);
+    return await checkpointHotStateFence(request, revision, retiringCandidate);
   } catch (error) {
-    restoreHotStateAuthority(stateDir, previous, request);
+    // A failed containment attempt retains the fence. Unknown owner death
+    // cannot restore writer authority or authorize the rollback checkpoint.
+    if (!retiringCandidate) restoreHotStateAuthority(stateDir, previous, request);
     throw error;
   }
 }
@@ -1503,7 +1548,7 @@ async function main(): Promise<unknown> {
     const previousMcpRuntime = mcpRuntime(input.previousMcpRuntime);
     const candidate = release(input.candidate);
     reportAdapterPhase(action, "fencing the promoted SQLite release");
-    const fence = await fenceCurrentSqliteRelease(candidate.revision, previous);
+    const fence = await fenceCurrentSqliteRelease(candidate.revision, previous, candidate);
     return switchTarget(
       previous,
       "restore",

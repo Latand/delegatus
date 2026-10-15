@@ -1032,6 +1032,35 @@ test("a submitted continuation whose reservation was compacted away is resolved,
   }
 });
 
+test("recording a demotion cut reads only its conversation from archived history", async () => {
+  const { buildRegistryPerformanceDataset, REGISTRY_PERFORMANCE_SHAPE } = await import("@/lib/agent/registryPerformanceDataset");
+  const dataset = buildRegistryPerformanceDataset(directory, {
+    ...REGISTRY_PERFORMANCE_SHAPE, conversations: 400, entries: 100, receipts: 100,
+    deliveryOperationOwners: 100, heldDeliveries: 100, hotTerminalRows: 4,
+    lineageEdges: 100, memberships: 100,
+  });
+  let conversationReads = 0;
+  const registryFile = path.join(directory, "agent-registry.json");
+  const registry = new AgentRegistry(registryFile, undefined, undefined, {
+    sqliteMode: "sqlite", onSqliteRowPayloadRead: (collection, count) => {
+      if (collection === "conversations") conversationReads += count;
+    },
+  });
+  try {
+    await registry.prepareReadOnlySnapshot();
+    conversationReads = 0;
+    const worker = dataset.workers[0]!;
+    await recordDemotionInterruption(registry, { engine: "codex", sessionId: worker.sessionId }, {
+      status: "active", sessionKey: worker.sessionId, endpoint: "fake:host",
+      pid: 2_000_001_119, processStartIdentity: "recorded-engine", eventCursor: 0,
+      protocolVersion: "test", activeTurnRef: CUT_TURN, pendingAttention: [], activeFlags: [], account: null,
+    }, { seats: () => [] });
+    expect(obligationsFor(registryFile)).toHaveLength(1);
+    expect(obligationsFor(registryFile)[0]?.hostKey).toBe(worker.key);
+    expect(conversationReads).toBeLessThan(10);
+  } finally { registry.close(); }
+});
+
 test("a seat that names an alias of the cut conversation is recorded on the obligation", async () => {
   const cut = incumbentConversation("claude", cutSessionId(19), deadEngine(2_000_001_119));
   const alias = ["conversation_18350000", "0000", "4000", "8000", "0000000alias"].join("-") as `conversation_${string}`;
