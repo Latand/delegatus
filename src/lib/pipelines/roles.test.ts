@@ -256,6 +256,61 @@ test("every shipped role and variant scaffold fits the stage cap untruncated", (
   }
 });
 
+/* Parameter values the registry accepts (up to 2,000 characters of text) must
+   not cut the rules: a stage either stores the whole scaffold or is refused
+   before it is stored. */
+test("accepted text parameter values keep every rule whole or refuse the stage", () => {
+  const wholeEnd = "16. Leave the checkout as you found it";
+  for (const definition of ROLE_DEFAULTS) {
+    if (definition.id === "maintainer") continue; // not a pipeline role
+    for (const parameter of definition.parameters.filter((candidate) => candidate.kind === "text")) {
+      for (const length of [40, 250, 499, 2_000]) {
+        const params = { [parameter.key]: "r".repeat(length) };
+        expect(validatePipelineRoleParams(definition.id, params)).toBeNull();
+        /* A deployer runs in a pipeline only as a release run; the
+           orchestrator renders its text parameters only in backlog-campaign
+           mode. */
+        const stageParams = definition.id === "deployer" ? { ...params, mode: "release" }
+          : definition.id === "orchestrator" ? { ...params, mode: "backlog-campaign" } : params;
+        const resolved = resolvePipelineRole({ role: { roleId: definition.id, params: stageParams } } as never, "run", pipelineRoleLookup);
+        if (resolved.error) {
+          expect(resolved.error).toContain(`role ${definition.id} parameter ${parameter.key} makes its scaffold`);
+          expect(resolved.error).toContain("which would cut the end of its rules");
+          continue;
+        }
+        const scaffold = resolved.role?.promptScaffold ?? "";
+        expect(scaffold.length).toBeLessThanOrEqual(MAX_SCAFFOLD_LENGTH);
+        expect(scaffold).toContain("r".repeat(length));
+        expect(scaffold).toContain(wholeEnd);
+        /* The tail (the last rules, any role coda and the fences) is the one
+           the role's defaults render. */
+        const withoutText: Record<string, string> = { ...stageParams };
+        delete withoutText[parameter.key];
+        expect(scaffold).toEndWith(pipelineRoleLookup(definition.id, withoutText)!.promptScaffold!.slice(-1_500));
+      }
+    }
+  }
+});
+
+test("a reviewer diff source past the stage cap is refused, a usual one keeps rules 13 to 16", () => {
+  const range = `feature/${"a".repeat(240)}...feature/${"b".repeat(240)}`;
+  for (const diffSource of [range, "x".repeat(2_000)]) {
+    const params = { diffSource, lens: "correctness", parallelN: 1 };
+    expect(validatePipelineRoleParams("reviewer", params)).toBeNull();
+    const looked = pipelineRoleLookup("reviewer", params);
+    expect(looked?.parameterOverflow?.keys).toEqual(["diffSource"]);
+    const resolved = resolvePipelineRole({ role: { roleId: "reviewer", params } }, "review-loop", pipelineRoleLookup);
+    expect(resolved.role).toBeUndefined();
+    expect(resolved.error).toBe(`role reviewer parameter diffSource makes its scaffold ${looked!.parameterOverflow!.characters} characters longer than the ${MAX_SCAFFOLD_LENGTH} a stage stores, which would cut the end of its rules; shorten it by at least ${looked!.parameterOverflow!.characters} characters`);
+  }
+  const usual = "origin/main...pipeline/role-prompts-and-orchestrator-mandate-im-cf4db9bf";
+  const resolved = resolvePipelineRole({ role: { roleId: "reviewer", params: { diffSource: usual } } }, "review-loop", pipelineRoleLookup);
+  const scaffold = resolved.role?.promptScaffold ?? "";
+  expect(scaffold).toContain(`Change under review: ${usual}`);
+  for (const rule of ["13. Read the newest answer before you act", "14. Date and list from the primary record", "15. An error reply, a timeout or a status is no proof", "16. Leave the checkout as you found it"]) expect(scaffold).toContain(rule);
+  expect(scaffold).toEndWith(pipelineRoleLookup("reviewer")!.promptScaffold!.slice(-2_000));
+});
+
 test("pipeline role lookup ignores the retired orchestrator maxWorkers parameter", () => {
   expect(pipelineRoleLookup("orchestrator")?.promptScaffold).not.toContain("keep at most");
   expect(pipelineRoleLookup("orchestrator", { maxWorkers: 1 })?.promptScaffold).toBe(pipelineRoleLookup("orchestrator")?.promptScaffold);

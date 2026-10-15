@@ -33,7 +33,25 @@ test("merger resolves a required reviewed-PR list with a read-write, non-nesting
   expect(role.value.prompt).toContain("Run heavy checks one at a time.");
   /* The operator, 2026-10-15: a project that names no batch procedure gets a
      plain squash of each exact reviewed head with the launched identity. */
-  expect(role.value.prompt).toContain("Merge through the batch procedure the project's instruction files name; when the project names none, merge each listed pull request at its reviewed head with the plain exact-head squash and the launched identity, and say so in your report.");
+  expect(role.value.prompt).toContain("Merge through the batch procedure the project's instruction files name. When the project names none, use the plain squash below and say so in your report; it needs no batch, validation receipt or batch URL, and no exception from anyone.");
+  expect(role.value.prompt).toContain("On either path, merge a listed pull request only at its reviewed head, rechecked immediately before the merge, with the launched identity;");
+  /* The batch's receipt, landing, URL and completion bind only the batch
+     path, so a project with no batch tooling can finish its exact-head
+     squash without constructing one. */
+  const plainStart = role.value.prompt.indexOf("\nPlain squash: ");
+  const batchStart = role.value.prompt.indexOf("\nBatch procedure: ");
+  expect(plainStart).toBeGreaterThan(0);
+  expect(batchStart).toBeGreaterThan(plainStart);
+  const shared = role.value.prompt.slice(0, plainStart);
+  const plain = role.value.prompt.slice(plainStart, batchStart);
+  const batch = role.value.prompt.slice(batchStart, role.value.prompt.indexOf("\n\n", batchStart));
+  expect(plain).toContain("squash-merge exactly that head");
+  expect(plain).toContain("End with one row per listed PR (merged <main sha>, needs-review <sha>, culprit <check: excerpt>, head-moved). Pass when every input has a row; fail on an unreachable forge.");
+  for (const batchOnly of ["full-validation receipt", "land the batch with rebase", "the batch URL", "the batch merged or is empty", "Validation belongs", "validation belongs to one exact tuple"]) {
+    expect(shared).not.toContain(batchOnly);
+    expect(plain).not.toContain(batchOnly);
+  }
+  for (const batchOnly of ["full-validation receipt", "land the batch with rebase", "the batch URL", "the batch merged or is empty", "validation belongs to one exact tuple"]) expect(batch).toContain(batchOnly);
   expect(role.value.prompt).toContain("A rebase of a branch that a lane still continues drops accepted commits: merge the base into it instead.");
   expect(role.value.prompt).not.toContain("finish with needs_decision and say so");
   /* This repository's procedure is its own: CONTRIBUTING.md names it. */

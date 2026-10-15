@@ -29,7 +29,11 @@ rule and changes only where or how long it is said.
   its revision, a date from a report's arrival, an ignored open pull request)
   is left out: principles 6, 8 and 14 of the working rules state it. The
   reviewer is 11,744 characters; a test keeps every role and variant at least
-  200 characters under the cap.
+  200 characters under the cap. A text parameter value that would still push
+  a stage's scaffold past the cap refuses the stage before it is stored,
+  naming the parameter and how much to cut, so no stored scaffold loses the
+  end of its rules; the reviewer has room for a diff source of about 300
+  characters. An operator override stored near the cap is trimmed as before.
 - **The seat's envelope.** A seat's first message, its scaffold plus the
   delivered mandate, shares one 32,000-byte structured envelope with its
   rotation history. The full working rules beside the v4 mandate come to
@@ -47,6 +51,11 @@ rule and changes only where or how long it is said.
   merge bar". The seat block follows as its own section, "Doing what was
   asked", and the delivered decision directive opens "Decisions." inside
   "Reaching the operator".
+
+The merger's default for a project without a batch procedure has its own
+paragraph: a plain squash of each exact reviewed head, with its own rows and
+pass condition. The tuple, the full-validation receipt, the rebase landing
+and the batch URL sit in the batch paragraph and bind only that path.
 
 ## How a stored seat or lane receives it
 
