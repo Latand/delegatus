@@ -2,7 +2,10 @@ import { describe, expect, test } from "bun:test";
 
 import {
   DIFF_CAPS,
+  TEXT_DIFF_CAPS,
   diffFromApplyPatch,
+  diffFromTexts,
+  diffTextLines,
   diffFromClaudeEdit,
   diffFromCodexFileChange,
   normalizeEdit,
@@ -287,5 +290,102 @@ describe("redaction runs before slicing", () => {
     );
     const joined = file.hunks.flatMap((h) => h.lines.map((l) => l.text)).join("\n");
     expect(joined).not.toContain("hunter2");
+  });
+});
+
+describe("whole-text diff (the rotation dialog's mandate)", () => {
+  const marks = (lines: { t: string; text: string }[]) => lines.filter((line) => line.t !== " ").map((line) => line.t + line.text);
+
+  test("equal texts have no changed rows and no hunks", () => {
+    expect(marks(diffTextLines("a\nb", "a\nb"))).toEqual([]);
+    const file = diffFromTexts("a\nb", "a\nb");
+    expect(file.hunks).toEqual([]);
+    expect([file.added, file.removed, file.truncated]).toEqual([0, 0, false]);
+  });
+
+  test("a trailing newline and a CRLF are each one changed line, because the receiver sees them", () => {
+    expect(marks(diffTextLines("a\nb", "a\nb\n"))).toEqual(["+"]);
+    expect(marks(diffTextLines("a\nb", "a\r\nb"))).toEqual(["-a", "+a\r"]);
+  });
+
+  test("a reworded paragraph reads removed then added, and the pair carries intraline spans", () => {
+    const old = "# Rules\nKeep the project moving and report every decision to the operator.\nEnd.";
+    const next = "# Rules\nKeep the project moving and report every decision to the owner.\nEnd.";
+    const file = diffFromTexts(old, next);
+    const lines = file.hunks.flatMap((hunk) => hunk.lines);
+    expect(marks(lines)).toEqual(["-Keep the project moving and report every decision to the operator.", "+Keep the project moving and report every decision to the owner."]);
+    expect([file.added, file.removed]).toEqual([1, 1]);
+    const [removed, added] = lines.filter((line) => line.t !== " ");
+    expect(removed.intraline?.some((span) => span.changed)).toBe(true);
+    expect(added.intraline?.some((span) => span.changed)).toBe(true);
+    expect(removed.intraline?.map((span) => span.text).join("")).toBe(removed.text);
+    expect(added.intraline?.map((span) => span.text).join("")).toBe(added.text);
+    /* The shared prefix is not highlighted. */
+    expect(removed.intraline?.[0]).toMatchObject({ changed: false });
+  });
+
+  test("context one keeps one unchanged line around each change and merges neighbours", () => {
+    const old = Array.from({ length: 12 }, (_, i) => `line ${i}`);
+    const next = [...old];
+    next[2] = "line 2 changed";
+    next[4] = "line 4 changed";
+    next[10] = "line 10 changed";
+    const file = diffFromTexts(old.join("\n"), next.join("\n"));
+    expect(file.hunks).toHaveLength(2);
+    expect(file.hunks[0].lines.map((line) => line.t + line.text)).toEqual([
+      " line 1", "-line 2", "+line 2 changed", " line 3", "-line 4", "+line 4 changed", " line 5",
+    ]);
+    expect(file.hunks[1].lines.map((line) => line.t + line.text)).toEqual([" line 9", "-line 10", "+line 10 changed", " line 11"]);
+  });
+
+  test("a hunk is headed by the nearest heading above it, and not by its own first row", () => {
+    const old = "# One\nfirst\nsecond\n## Two\nthird\nfourth\nfifth";
+    const next = "# One\nfirst\nsecond\n## Two\nthird\nFOURTH\nfifth";
+    expect(diffFromTexts(old, next).hunks.map((hunk) => hunk.header)).toEqual(["## Two"]);
+    const headingChanged = diffFromTexts("# One\nfirst", "# Uno\nfirst");
+    expect(headingChanged.hunks[0].header).toBeUndefined();
+    expect(diffFromTexts("a\nb", "a\nc").hunks[0].header).toBeUndefined();
+  });
+
+  test("two 32,000-byte texts with nothing in common are not truncated under the text caps", () => {
+    const paragraph = (seed: string) => Array.from({ length: 200 }, (_, i) => `${seed} ${i} ${"x".repeat(150)}`).join("\n");
+    const oldText = paragraph("old").slice(0, 32_000);
+    const newText = paragraph("new").slice(0, 32_000);
+    const file = diffFromTexts(oldText, newText);
+    expect(file.truncated).toBe(false);
+    expect(file.removed).toBe(oldText.split("\n").length);
+    expect(file.added).toBe(newText.split("\n").length);
+    expect(file.hunks.flatMap((hunk) => hunk.lines)).toHaveLength(file.added + file.removed);
+  });
+
+  test("past the table bound the middle becomes one removal run then one addition run", () => {
+    const oldText = Array.from({ length: 1_100 }, (_, i) => `a${i}`).join("\n");
+    const newText = Array.from({ length: 1_100 }, (_, i) => `b${i}`).join("\n");
+    const rows = diffTextLines(oldText, newText);
+    expect(rows.slice(0, 1_100).every((row) => row.t === "-")).toBe(true);
+    expect(rows.slice(1_100).every((row) => row.t === "+")).toBe(true);
+  });
+
+  test("text caps truncate a runaway draft and keep the true counts", () => {
+    const old = "start";
+    const huge = Array.from({ length: TEXT_DIFF_CAPS.linesPerFile + 100 }, (_, i) => `row ${i}`).join("\n");
+    const file = diffFromTexts(old, huge);
+    expect(file.truncated).toBe(true);
+    expect(file.added).toBe(TEXT_DIFF_CAPS.linesPerFile + 100);
+    expect(file.hunks.flatMap((hunk) => hunk.lines)).toHaveLength(TEXT_DIFF_CAPS.linesPerFile);
+  });
+
+  test("the feed's default caps are unchanged by the caps parameter", () => {
+    const big = Array.from({ length: DIFF_CAPS.linesPerFile + 50 }, (_, i) => `line ${i}`).join("\n");
+    const file = only(normalizeEdit("Write", { file_path: "/repo/big.ts", content: big }).files);
+    expect(file.truncated).toBe(true);
+    expect(file.hunks.flatMap((hunk) => hunk.lines)).toHaveLength(DIFF_CAPS.linesPerFile);
+    expect(DIFF_CAPS).toEqual({ files: 8, hunksPerFile: 16, linesPerFile: 200, charsPerLine: 2_000, totalChars: 64_000 });
+  });
+
+  test("a secret typed into the draft is redacted in the rendered model", () => {
+    const sensitiveKey = String.fromCharCode(97, 112, 105, 95, 107, 101, 121);
+    const file = diffFromTexts("a", `a\n${sensitiveKey}=SUPERSECRETVALUE`);
+    expect(file.hunks.flatMap((hunk) => hunk.lines.map((line) => line.text)).join("\n")).not.toContain("SUPERSECRETVALUE");
   });
 });

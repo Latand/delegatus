@@ -3,6 +3,7 @@ import { Window as HappyWindow } from "happy-dom";
 import { flushSync } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
 
+import { diffTextLines } from "@/components/feed/diff";
 import { emptyStore } from "@/components/runtime/runtimeModel";
 import type { RuntimeSessionView } from "@/hooks/useRuntime";
 import { FILES_CHANGED_EVENT } from "@/lib/filesEvents";
@@ -442,6 +443,16 @@ function mandateRules(host: HTMLElement): HTMLElement {
 
 function rulesSummary(host: HTMLElement): string {
   return mandateRules(host).querySelector("summary")?.textContent ?? "";
+}
+
+/** The rotate draft's mandate section opens on a press of its line (#2942). */
+function pressRules(host: HTMLElement): void {
+  flushSync(() => (mandateRules(host).querySelector("summary") as HTMLElement).click());
+}
+
+function lineCounts(oldText: string, newText: string): string {
+  const rows = diffTextLines(oldText, newText);
+  return `+${rows.filter((row) => row.t === "+").length} −${rows.filter((row) => row.t === "-").length}`;
 }
 
 /** The create draft keeps its pickers behind the Runs on row's Change (#2166). */
@@ -1386,7 +1397,7 @@ test("an estimate at 100% is never the red chip; a provider count there is", asy
   expect((await chipTone(false)).className).toContain("text-danger");
 });
 
-test("Rotate over a STALE seat opens the SAME draft on the CURRENT default mandate, names it, and keeps the incumbent's text one press away (#1452)", async () => {
+test("Rotate over a STALE seat opens the SAME draft with the mandate as ONE collapsed diff line, and keeps the incumbent's text one press away (#1452, #2942)", async () => {
   const host = await mountLive();
 
   /* The seat card already says the seat is behind, in the reading
@@ -1400,14 +1411,21 @@ test("Rotate over a STALE seat opens the SAME draft on the CURRENT default manda
 
   expect(host.querySelector("[data-orchestrator-panel]")?.getAttribute("data-orchestrator-mode")).toBe("rotate");
   expect(host.querySelector('[data-orchestrator-draft="rotate"]')).not.toBeNull();
-  /* v3 said «you do not talk to the user»; a successor never inherits an older
-     default by default. The heading names what the text IS. */
-  const mandate = host.querySelector("[data-orchestrator-mandate]") as HTMLTextAreaElement;
-  expect(mandate.value).toBe(ORCHESTRATOR_SYSTEM_PROMPT);
-  expect(rulesSummary(host)).toBe(`Its instructions (v${ORCHESTRATOR_PROMPT_VERSION}) (edit)`);
+  /* Folded: no text box, no diff, one line naming both versions and the lines
+     that differ. It never opens by itself. */
+  const rules = mandateRules(host) as HTMLDetailsElement;
+  expect(rules.open).toBe(false);
+  expect(rules.getAttribute("data-orchestrator-mandate-state")).toBe("changed");
+  expect(host.querySelector("[data-orchestrator-mandate]")).toBeNull();
+  expect(host.querySelector("[data-orchestrator-mandate-diff]")).toBeNull();
+  const counts = lineCounts("run it", ORCHESTRATOR_SYSTEM_PROMPT);
+  expect(rulesSummary(host)).toBe(`Mandate v3 → v${ORCHESTRATOR_PROMPT_VERSION} · lines: ${counts}`);
+  /* The slot above the line: the existing keep button, and no sentence that
+     would say the two versions a second time. */
   const stale = host.querySelector("[data-orchestrator-mandate-stale]") as HTMLElement;
   expect(stale.getAttribute("data-orchestrator-mandate-stale")).toBe("3");
-  expect(stale.textContent).toContain(`based on v3; the current default is v${ORCHESTRATOR_PROMPT_VERSION}`);
+  expect(stale.textContent).toBe("Keep the incumbent's mandate (based on v3)");
+  expect(host.textContent).not.toContain("the current default is v");
   /* A rotation is not an introduction: this operator already has one running (#1163). */
   expect(host.querySelector("[data-orchestrator-intro]")).toBeNull();
   expect(host.textContent).not.toContain("Handoff from your predecessor");
@@ -1419,12 +1437,33 @@ test("Rotate over a STALE seat opens the SAME draft on the CURRENT default manda
   expect(panelState(host)).toBe("live");
   expect(incumbentRow(host)).not.toBeNull();
 
-  /* The explicit choice: the incumbent's own text, headed as exactly that. */
+  /* Opened by the operator: the diff first, then the text box under it. */
+  pressRules(host);
+  expect(rules.open).toBe(true);
+  const diff = host.querySelector("[data-orchestrator-mandate-diff]") as HTMLElement;
+  const mandate = host.querySelector("[data-orchestrator-mandate]") as HTMLTextAreaElement;
+  expect(mandate.value).toBe(ORCHESTRATOR_SYSTEM_PROMPT);
+  expect(diff.compareDocumentPosition(mandate) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  const rows = [...diff.querySelectorAll("[data-orchestrator-mandate-diff-line]")].map((row) => row.getAttribute("data-orchestrator-mandate-diff-line"));
+  expect(rows.filter((kind) => kind === "+").length).toBe(Number(counts.match(/\+(\d+)/)![1]));
+  expect(rows.filter((kind) => kind === "-").length).toBe(Number(counts.match(/−(\d+)/)![1]));
+
+  /* The explicit choice: the incumbent's own text. The line says it is
+     unchanged, the slot offers the way back, and nothing opened by itself. */
+  pressRules(host);
+  expect(rules.open).toBe(false);
   flushSync(() => (host.querySelector("[data-orchestrator-keep-incumbent]") as HTMLButtonElement).click());
   await settle();
-  expect(mandate.value).toBe("run it");
-  expect(rulesSummary(host)).toBe(`Incumbent's mandate (based on v3; current default is v${ORCHESTRATOR_PROMPT_VERSION}) (edit)`);
+  expect(rules.open).toBe(false);
+  expect(rulesSummary(host)).toBe(`Mandate unchanged (v3; the current default is v${ORCHESTRATOR_PROMPT_VERSION}) (edit)`);
   expect(host.querySelector("[data-orchestrator-keep-incumbent]")).toBeNull();
+  const restore = host.querySelector("[data-orchestrator-restore-default]") as HTMLButtonElement;
+  expect(restore.textContent).toContain("Restore default");
+  /* Unchanged has no diff to show, even once «(edit)» opens the text box. */
+  pressRules(host);
+  expect(host.querySelector("[data-orchestrator-mandate-diff]")).toBeNull();
+  expect((host.querySelector("[data-orchestrator-mandate]") as HTMLTextAreaElement).value).toBe("run it");
+  expect(host.textContent).not.toContain("Restore current mandate");
   /* ...and it is what the rotation posts. */
   flushSync(() => confirmButton(host).click());
   await settle();
@@ -1432,34 +1471,72 @@ test("Rotate over a STALE seat opens the SAME draft on the CURRENT default manda
   expect(rotatePosts[0]!.mandate).toBe("run it");
 });
 
-test("Rotate over a seat on the CURRENT default keeps the incumbent's text, headed as the incumbent's — an operator's edit survives", async () => {
+test("the restore button in the slot returns the changed line over the default, and an edit reads «your edit» against the incumbent (#2942)", async () => {
+  const host = await mountLive();
+  flushSync(() => rotateButton(host).click());
+  await settle();
+  const counts = lineCounts("run it", ORCHESTRATOR_SYSTEM_PROMPT);
+  flushSync(() => (host.querySelector("[data-orchestrator-keep-incumbent]") as HTMLButtonElement).click());
+  await settle();
+  flushSync(() => (host.querySelector("[data-orchestrator-restore-default]") as HTMLButtonElement).click());
+  await settle();
+  expect(rulesSummary(host)).toBe(`Mandate v3 → v${ORCHESTRATOR_PROMPT_VERSION} · lines: ${counts}`);
+  expect(host.querySelector("[data-orchestrator-keep-incumbent]")).not.toBeNull();
+  expect(host.querySelector("[data-orchestrator-restore-default]")).toBeNull();
+
+  pressRules(host);
+  const edited = `${ORCHESTRATOR_SYSTEM_PROMPT}\nOne more rule.`;
+  type(host.querySelector("[data-orchestrator-mandate]") as HTMLTextAreaElement, edited);
+  await settle();
+  expect(rulesSummary(host)).toBe(`Mandate v3 → your edit · lines: ${lineCounts("run it", edited)}`);
+  /* Typing leaves the section as the operator left it: open. */
+  expect((mandateRules(host) as HTMLDetailsElement).open).toBe(true);
+  flushSync(() => confirmButton(host).click());
+  await settle();
+  expect(rotatePosts[0]!.mandate).toBe(edited);
+});
+
+test("Rotate over a seat on the CURRENT default says the mandate is unchanged, with no diff and nothing to open but the editor (#2942)", async () => {
   const host = await mountLive(incumbent(), activeSeat({ mandate: "run it, my way", promptVersion: ORCHESTRATOR_PROMPT_VERSION }));
   expect(incumbentRow(host)!.querySelector("[data-orchestrator-mandate-version]")).toBeNull();
 
   flushSync(() => rotateButton(host).click());
   await settle();
 
-  const mandate = host.querySelector("[data-orchestrator-mandate]") as HTMLTextAreaElement;
-  expect(mandate.value).toBe("run it, my way");
-  expect(rulesSummary(host)).toBe(`Incumbent's mandate (based on v${ORCHESTRATOR_PROMPT_VERSION}, the current default) (edit)`);
+  const rules = mandateRules(host) as HTMLDetailsElement;
+  expect(rules.getAttribute("data-orchestrator-mandate-state")).toBe("unchanged");
+  expect(rulesSummary(host)).toBe(`Mandate unchanged (v${ORCHESTRATOR_PROMPT_VERSION}) (edit)`);
+  expect(rules.open).toBe(false);
+  expect(host.querySelector("[data-orchestrator-mandate]")).toBeNull();
   expect(host.querySelector("[data-orchestrator-mandate-stale]")).toBeNull();
   expect(host.querySelector("[data-orchestrator-keep-incumbent]")).toBeNull();
+  expect(host.querySelector("[data-orchestrator-restore-default]")).toBeNull();
+
+  /* «(edit)» reaches the editor, and still no diff: nothing differs. */
+  pressRules(host);
+  expect((host.querySelector("[data-orchestrator-mandate]") as HTMLTextAreaElement).value).toBe("run it, my way");
+  expect(host.querySelector("[data-orchestrator-mandate-diff]")).toBeNull();
 
   flushSync(() => (host.querySelector("[data-orchestrator-rotate-cancel]") as HTMLButtonElement).click());
   await settle();
   expect(host.querySelector('[data-orchestrator-conversation="conversation_orch"]')).not.toBeNull();
 });
 
-test("Rotate over bespoke rules (no version) keeps them — they claim no version and are never stale", async () => {
+test("Rotate over bespoke rules (no version) keeps them — they claim no version, are never stale, and say so on the line", async () => {
   const host = await mountLive(incumbent(), activeSeat({ mandate: "my own rules", promptVersion: null }));
   expect(incumbentRow(host)!.querySelector("[data-orchestrator-mandate-version]")).toBeNull();
 
   flushSync(() => rotateButton(host).click());
   await settle();
 
+  expect(rulesSummary(host)).toBe("Mandate unchanged (own rules) (edit)");
+  pressRules(host);
   expect((host.querySelector("[data-orchestrator-mandate]") as HTMLTextAreaElement).value).toBe("my own rules");
-  expect(rulesSummary(host)).toBe("Incumbent's mandate — its own operating rules (edit)");
   expect(host.querySelector("[data-orchestrator-keep-incumbent]")).toBeNull();
+  /* An edit over bespoke rules says where it started. */
+  type(host.querySelector("[data-orchestrator-mandate]") as HTMLTextAreaElement, "my own rules\nand one more");
+  await settle();
+  expect(rulesSummary(host)).toBe("Mandate own rules → your edit · lines: +1 −0");
 });
 
 test("confirming a rotation posts to the ROTATE route, and never composes the handoff itself", async () => {
@@ -1467,6 +1544,7 @@ test("confirming a rotation posts to the ROTATE route, and never composes the ha
   flushSync(() => rotateButton(host).click());
   await settle();
 
+  pressRules(host);
   type(host.querySelector("[data-orchestrator-mandate]") as HTMLTextAreaElement, "You run Atlas now.");
   await settle();
   flushSync(() => confirmButton(host).click());

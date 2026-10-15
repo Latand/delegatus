@@ -20,7 +20,6 @@ import {
   ORCHESTRATOR_PROMPT_VERSION,
   ORCHESTRATOR_SPAWN_CONFIG,
   ORCHESTRATOR_SYSTEM_PROMPT,
-  orchestratorMandateStale,
 } from "@/lib/orchestrator/prompt";
 import type { OrchestratorSeat } from "@/lib/orchestrator/seats";
 import type { BoardTask } from "@/lib/tasks/types";
@@ -35,6 +34,7 @@ import { ProcessStatusControls } from "../TaskHeader";
 import { seatDraftReadiness, useOrchestratorDraftPrefill, useOrchestratorDraftReveal, usePendingSeatConfirm } from "./draftPrefill";
 import { FailureTime } from "./FailureTime";
 import { IncumbentHeader } from "./IncumbentHeader";
+import { MandateDiff } from "./MandateDiff";
 import { incumbentHostLive, type OrchestratorIncumbent } from "./incumbent";
 import { DeputyTwin, liveSeatDeputy, SeatDeputyChip } from "./SeatDeputyChip";
 import { OrchestratorConversation } from "./OrchestratorConversation";
@@ -47,6 +47,8 @@ import {
   orchestratorQuietBannerEligible,
   resolveSeatFile,
   rotateMandateBase,
+  rotateMandateLine,
+  rotateMandateView,
   SEAT_BIND_TIMEOUT_MS,
   seatBadgeOf,
   seatBindPending,
@@ -1046,12 +1048,13 @@ function OrchestratorDraft({
   const rotate = mode === "rotate";
   /* A cause with a plain sentence replaces the recorded text and the hint. */
   const failureCopy = errored ? seatFailureCopy(state.error, state.retry) : null;
-  /* A stale incumbent (#1452): the draft started from the current default, so
-     the incumbent's own text is offered explicitly, for as long as the text in
-     the box is not already it. */
-  const staleVersion = incumbent && orchestratorMandateStale(incumbent.promptVersion) ? incumbent.promptVersion : null;
-  const keepOffered = staleVersion !== null && incumbent !== null && mandate !== incumbent.mandate && onKeepIncumbent !== undefined;
-  const summary = mandateSummaryOf(mandate, incumbent);
+  /* The rotate draft says what the successor's mandate is against the
+     incumbent's own: one line, the diff behind it (#2942). A stale incumbent
+     (#1452) started the draft from the current default, so the incumbent's own
+     text is offered explicitly above that line, and the way back once chosen. */
+  const view = rotate && incumbent ? rotateMandateView(incumbent, mandate) : null;
+  const summary = mandateSummaryOf(mandate);
+  const restoreInSlot = view?.slot === "restore-default";
   /* The engine readiness preflight the agent launcher shares (#2170): on a
      signed-out account the draft says so before anything is pressed, and its
      primary opens that account's sign-in instead of designating. */
@@ -1061,17 +1064,17 @@ function OrchestratorDraft({
      changes, and 58 lines of them ahead of the pickers is what made this draft
      unreadable (#1163).
      The disclosure keeps its OWN open state — the operator's toggle is theirs
-     to keep — and this only ever nudges it open when there is something in
+     to keep. Only the create draft nudges it open, when there is something in
      there to read: a mandate already edited (typed here, or restored from a
-     previous visit). A failed designation no longer opens it (#2166): the
-     error block says what went wrong above, and a newcomer's first failure
-     buried the button under sixty lines of rules they never wrote. */
-  const rules = useRef<HTMLDetailsElement>(null);
+     previous visit). The rotate draft never opens it by itself: its section is
+     one line, and the diff or the editor opens on a press. A failed designation
+     no longer opens it (#2166): the error block says what went wrong above, and
+     a newcomer's first failure buried the button under sixty lines of rules they
+     never wrote. */
+  const [toggled, setToggled] = useState<boolean | null>(null);
+  const rulesOpen = toggled ?? (edited && !rotate);
   const launchChoices = useRef<HTMLDivElement>(null);
   useOrchestratorDraftReveal(project ?? "", launchChoices);
-  useEffect(() => {
-    if (edited && rules.current) rules.current.open = true;
-  }, [edited]);
   return (
     <form
       className="flex min-h-0 flex-1 flex-col"
@@ -1146,67 +1149,91 @@ function OrchestratorDraft({
           <RunsOnRow draft={launch} disabled={submitting} cwd={cwd} revealRef={launchChoices} />
         )}
 
-        {/* Said above the folded rules, where it is read: the incumbent's
-            mandate is behind the default, and its text is the one alternative
-            the operator may want (#1452). */}
-        {keepOffered ? (
-          <p
-            className="flex shrink-0 flex-wrap items-center gap-x-2 gap-y-1 rounded-control border border-warning/45 bg-warning-soft px-3 py-2 text-ui leading-4 text-secondary"
-            data-orchestrator-mandate-stale={String(staleVersion)}
+        {/* The incumbent's own text, on offer over a stale default (#1452), and
+            the way back to that default once it was chosen. Said above the
+            mandate line, where it is read; the line itself names both versions,
+            so no sentence repeats them. */}
+        {view?.slot ? (
+          <div
+            className="flex shrink-0"
+            {...(view.staleVersion !== null ? { "data-orchestrator-mandate-stale": String(view.staleVersion) } : {})}
           >
-            <span>{t("orchPanel.rotateStaleMandate", { version: staleVersion, current: ORCHESTRATOR_PROMPT_VERSION })}</span>
             <button
               type="button"
-              data-orchestrator-keep-incumbent
-              onClick={onKeepIncumbent}
+              {...(view.slot === "keep" ? { "data-orchestrator-keep-incumbent": "" } : { "data-orchestrator-restore-default": "" })}
+              onClick={view.slot === "keep" ? onKeepIncumbent : onRestore}
               disabled={submitting}
-              className="inline-flex items-center gap-1 rounded-control border border-border bg-canvas px-2 py-0.5 text-caption font-semibold text-secondary hover:border-accent/45 hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-60"
+              className={SLOT_BUTTON}
             >
-              {t("orchPanel.keepIncumbentMandate", { version: staleVersion })}
+              {view.slot === "keep" ? (
+                t("orchPanel.keepIncumbentMandate", { version: view.staleVersion ?? 0 })
+              ) : (
+                <>
+                  <RotateCcw className="h-3 w-3" aria-hidden /> {t("orchPanel.restoreDefault")}
+                </>
+              )}
             </button>
-          </p>
+          </div>
         ) : null}
 
         {/* Collapsed, the rules are one line the operator can ignore; open, they
-            are the same textarea they have always been. Confirm posts what this
-            field holds either way — the disclosure hides the text, it never
-            edits it (PRD #976 decision 3). */}
+            are the diff against the incumbent's mandate (when it differs) and the
+            same textarea they have always been. Confirm posts what this field
+            holds either way — the disclosure hides the text, it never edits it
+            (PRD #976 decision 3). */}
         <details
-          ref={rules}
+          open={rulesOpen}
           className="shrink-0 rounded-control border border-border bg-card/60"
           data-orchestrator-mandate-details
+          data-orchestrator-mandate-state={view?.kind}
         >
-          <summary className="min-h-7 cursor-pointer select-none list-item px-3 py-1.5 text-label font-semibold text-secondary marker:text-muted hover:text-primary">
-            {t(summary.key, summary.params)} {t("orchPanel.mandateEdit")}
+          <summary
+            onClick={(event) => {
+              event.preventDefault();
+              setToggled(!rulesOpen);
+            }}
+            className={`min-h-7 cursor-pointer select-none px-3 py-1.5 text-label font-semibold text-secondary hover:text-primary ${
+              view?.kind === "unchanged" ? "list-none" : "list-item marker:text-muted"
+            }`}
+          >
+            {view ? `${rotateMandateLine(t, view)}${view.kind === "unchanged" ? ` ${t("orchPanel.mandateEdit")}` : ""}` : `${t(summary.key, summary.params)} ${t("orchPanel.mandateEdit")}`}
           </summary>
-          <div className="flex flex-col gap-1 border-t border-border px-3 py-2">
-            <div className="flex min-h-6 items-center gap-2">
-              {edited ? (
-                <button
-                  type="button"
-                  onClick={onRestore}
+          {/* The create draft keeps its textarea in the folded details, as it
+              always has; the rotate draft mounts the diff and the editor only
+              while open. */}
+          {rulesOpen || !rotate ? (
+            <div className="flex flex-col gap-2 border-t border-border px-3 py-2">
+              {view?.kind === "changed" && incumbent ? <MandateDiff oldText={incumbent.mandate} newText={mandate} /> : null}
+              <div className="flex flex-col gap-1">
+                <div className="flex min-h-6 items-center gap-2">
+                  {edited && !restoreInSlot ? (
+                    <button
+                      type="button"
+                      onClick={onRestore}
+                      disabled={submitting}
+                      className="inline-flex items-center gap-1 rounded-control border border-border bg-canvas px-2 py-0.5 text-caption font-semibold text-muted hover:border-accent/45 hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-60"
+                    >
+                      <RotateCcw className="h-3 w-3" aria-hidden /> {t(rotate && view?.staleVersion == null ? "orchPanel.restoreIncumbent" : "orchPanel.restoreDefault")}
+                    </button>
+                  ) : null}
+                  <span className="ml-auto shrink-0 text-caption text-muted">{t("orchPanel.mandateSent")}</span>
+                </div>
+                <textarea
+                  id="orchestrator-mandate"
+                  data-orchestrator-mandate
+                  aria-label={t("orchPanel.mandate")}
+                  value={mandate}
                   disabled={submitting}
-                  className="inline-flex items-center gap-1 rounded-control border border-border bg-canvas px-2 py-0.5 text-caption font-semibold text-muted hover:border-accent/45 hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-60"
-                >
-                  <RotateCcw className="h-3 w-3" aria-hidden /> {t(rotate && staleVersion === null ? "orchPanel.restoreIncumbent" : "orchPanel.restoreDefault")}
-                </button>
-              ) : null}
-              <span className="ml-auto shrink-0 text-caption text-muted">{t("orchPanel.mandateSent")}</span>
+                  onChange={(event) => onMandate(event.target.value)}
+                  spellCheck={false}
+                  /* The mandate is PROSE the agent reads, so it is sans (design
+                     system §1.1 mono rule) — the only mono here is the cwd below,
+                     which is a path. */
+                  className="min-h-[220px] w-full resize-none rounded-surface border border-border bg-sunken px-3 py-2.5 text-ui leading-[1.45] text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-60"
+                />
+              </div>
             </div>
-            <textarea
-              id="orchestrator-mandate"
-              data-orchestrator-mandate
-              aria-label={t("orchPanel.mandate")}
-              value={mandate}
-              disabled={submitting}
-              onChange={(event) => onMandate(event.target.value)}
-              spellCheck={false}
-              /* The mandate is PROSE the agent reads, so it is sans (design
-                 system §1.1 mono rule) — the only mono here is the cwd below,
-                 which is a path. */
-              className="min-h-[220px] w-full resize-none rounded-surface border border-border bg-sunken px-3 py-2.5 text-ui leading-[1.45] text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-60"
-            />
-          </div>
+          ) : null}
         </details>
 
         {/* The directory is a fact about the LAUNCH, not about the rules, so it
@@ -1270,6 +1297,10 @@ function OrchestratorDraft({
     </form>
   );
 }
+
+/** The mandate slot's button above the rotate draft's mandate line. */
+const SLOT_BUTTON =
+  "inline-flex items-center gap-1 rounded-control border border-border bg-canvas px-2 py-0.5 text-caption font-semibold text-secondary hover:border-accent/45 hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-60";
 
 const QUIET_BADGE = "border-border bg-canvas text-muted";
 const DANGER_BADGE = "border-danger/40 bg-danger-soft text-danger";

@@ -25,13 +25,32 @@ export interface DiffModel {
   filesTruncated: boolean;
 }
 
+export interface DiffCaps {
+  files: number;
+  hunksPerFile: number;
+  linesPerFile: number;
+  charsPerLine: number;
+  totalChars: number;
+}
+
 export const DIFF_CAPS = {
   files: 8,
   hunksPerFile: 16,
   linesPerFile: 200,
   charsPerLine: 2_000,
   totalChars: 64_000,
-} as const;
+} as const satisfies DiffCaps;
+
+/** Caps for a whole-text diff (the rotation dialog's mandate). Two mandates at
+    the 32,000-byte structured envelope total at most 64,000 chars, so this
+    leaves twice that headroom for a draft typed past the envelope. */
+export const TEXT_DIFF_CAPS: DiffCaps = {
+  files: 1,
+  hunksPerFile: 500,
+  linesPerFile: 2_000,
+  charsPerLine: 8_000,
+  totalChars: 128_000,
+};
 
 const BLOB_MIN = 20_000;
 const INTRALINE_MIN_SIMILARITY = 0.5;
@@ -163,7 +182,7 @@ function fileHasContent(raw: RawFile): boolean {
 /* Applies every §4 cap once, redacting each line before it is sliced so a secret
    straddling the char boundary cannot survive in the kept half. `budget` is the
    per-event total-char allowance, shared across the files of one event. */
-function finalizeFile(raw: RawFile, budget: { remaining: number }): FileDiff {
+function finalizeFile(raw: RawFile, budget: { remaining: number }, caps: DiffCaps = DIFF_CAPS): FileDiff {
   let added = 0;
   let removed = 0;
   for (const hunk of raw.hunks) {
@@ -180,21 +199,21 @@ function finalizeFile(raw: RawFile, budget: { remaining: number }): FileDiff {
   let hunkCount = 0;
   const hunks: Hunk[] = [];
   for (const rawHunk of raw.hunks) {
-    if (hunkCount >= DIFF_CAPS.hunksPerFile) {
+    if (hunkCount >= caps.hunksPerFile) {
       truncated = true;
       break;
     }
     const lines: DiffLine[] = [];
     let stop = false;
     for (const rawLine of rawHunk.lines) {
-      if (lineCount >= DIFF_CAPS.linesPerFile) {
+      if (lineCount >= caps.linesPerFile) {
         truncated = true;
         stop = true;
         break;
       }
       let text = redactSecrets(rawLine.text);
-      if (text.length > DIFF_CAPS.charsPerLine) {
-        text = text.slice(0, DIFF_CAPS.charsPerLine);
+      if (text.length > caps.charsPerLine) {
+        text = text.slice(0, caps.charsPerLine);
         truncated = true;
       }
       if (budget.remaining - text.length < 0) {
@@ -408,4 +427,111 @@ export function normalizeEdit(tool: string, args: Record<string, unknown>): Diff
   if (tool === "Edit" || tool === "MultiEdit" || tool === "NotebookEdit") return diffFromClaudeEdit(args);
   if (tool === "apply_patch") return diffFromApplyPatch(str(args.input));
   return EMPTY;
+}
+
+/** Largest LCS table a whole-text diff builds (cells). A middle run past it
+    becomes one removal run and one addition run. */
+const TEXT_DIFF_MAX_CELLS = 1_000_000;
+
+/**
+ * A line diff of two whole texts. Both are split on "\n" and every segment is
+ * kept, so a trailing newline or a CRLF is a changed line, exactly as the
+ * receiver would see it. The common prefix and suffix are trimmed, then an LCS
+ * table (bounded by `TEXT_DIFF_MAX_CELLS`) decides the middle. On ties
+ * removals come before additions, so a reworded paragraph reads `-old` then
+ * `+new` and pairs up for the intraline highlight.
+ */
+export function diffTextLines(oldText: string, newText: string): DiffLine[] {
+  if (oldText === newText) return oldText.split("\n").map((text): DiffLine => ({ t: " ", text }));
+  const oldLines = oldText.split("\n");
+  const newLines = newText.split("\n");
+  let start = 0;
+  while (start < oldLines.length && start < newLines.length && oldLines[start] === newLines[start]) start += 1;
+  let oldEnd = oldLines.length;
+  let newEnd = newLines.length;
+  while (oldEnd > start && newEnd > start && oldLines[oldEnd - 1] === newLines[newEnd - 1]) {
+    oldEnd -= 1;
+    newEnd -= 1;
+  }
+  const out: DiffLine[] = oldLines.slice(0, start).map((text): DiffLine => ({ t: " ", text }));
+  const rows = oldEnd - start;
+  const columns = newEnd - start;
+  if (rows === 0 || columns === 0 || (rows + 1) * (columns + 1) > TEXT_DIFF_MAX_CELLS) {
+    for (let i = start; i < oldEnd; i += 1) out.push({ t: "-", text: oldLines[i] });
+    for (let j = start; j < newEnd; j += 1) out.push({ t: "+", text: newLines[j] });
+  } else {
+    /* table[i][j] is the LCS of the middle's tails from old row i and new row j. */
+    const width = columns + 1;
+    const table = new Uint32Array((rows + 1) * width);
+    for (let i = rows - 1; i >= 0; i -= 1) {
+      for (let j = columns - 1; j >= 0; j -= 1) {
+        table[i * width + j] =
+          oldLines[start + i] === newLines[start + j]
+            ? table[(i + 1) * width + j + 1] + 1
+            : Math.max(table[(i + 1) * width + j], table[i * width + j + 1]);
+      }
+    }
+    let i = 0;
+    let j = 0;
+    while (i < rows || j < columns) {
+      if (i < rows && j < columns && oldLines[start + i] === newLines[start + j]) {
+        out.push({ t: " ", text: oldLines[start + i] });
+        i += 1;
+        j += 1;
+      } else if (i < rows && (j >= columns || table[(i + 1) * width + j] >= table[i * width + j + 1])) {
+        out.push({ t: "-", text: oldLines[start + i] });
+        i += 1;
+      } else {
+        out.push({ t: "+", text: newLines[start + j] });
+        j += 1;
+      }
+    }
+  }
+  for (let i = oldEnd; i < oldLines.length; i += 1) out.push({ t: " ", text: oldLines[i] });
+  return out;
+}
+
+const HEADING_RE = /^#{1,6} /;
+
+/**
+ * The whole-text diff as the shared `FileDiff` model: `context` unchanged
+ * lines around each change (lines are paragraphs, so one is enough), each hunk
+ * headed by the nearest heading above it, and the model's own redaction,
+ * intraline highlights and truncation under `TEXT_DIFF_CAPS`. Equal texts give
+ * a model with no hunks.
+ */
+export function diffFromTexts(oldText: string, newText: string, options: { path?: string; context?: number } = {}): FileDiff {
+  const context = options.context ?? 1;
+  const ops = diffTextLines(oldText, newText);
+  const near = new Array<boolean>(ops.length).fill(false);
+  ops.forEach((op, index) => {
+    if (op.t === " ") return;
+    for (let k = Math.max(0, index - context); k <= Math.min(ops.length - 1, index + context); k += 1) near[k] = true;
+  });
+  const hunks: { header?: string; lines: DiffLine[] }[] = [];
+  let index = 0;
+  while (index < ops.length) {
+    if (!near[index]) {
+      index += 1;
+      continue;
+    }
+    const first = index;
+    while (index < ops.length && near[index]) index += 1;
+    let header: string | undefined;
+    if (!(ops[first].t !== "-" && HEADING_RE.test(ops[first].text))) {
+      for (let k = first - 1; k >= 0; k -= 1) {
+        if (ops[k].t !== "-" && HEADING_RE.test(ops[k].text)) {
+          header = ops[k].text;
+          break;
+        }
+      }
+    }
+    const lines = ops.slice(first, index);
+    hunks.push(header ? { header, lines } : { lines });
+  }
+  return finalizeFile(
+    { path: options.path ?? "mandate", op: "update", hunks, content: "", includeEmpty: true },
+    { remaining: TEXT_DIFF_CAPS.totalChars },
+    TEXT_DIFF_CAPS,
+  );
 }

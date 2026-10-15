@@ -47,6 +47,7 @@ import { setKanbanCardsOpenByDefault } from "./cardOpenDefault";
 import { resolvePipelineLinks, resolveTaskLinks, type CachedPullRequest, type FilesWorkLinks, type ForgeCacheView, type ForgeRepositoryView, type ResolvedWorkLinks } from "@/lib/forge/workLinks";
 import type { Pipeline } from "@/lib/pipelines/types";
 import { ORCHESTRATOR_PROMPT_VERSION, orchestratorMandateForDelivery } from "@/lib/orchestrator/prompt";
+import { fixtureIncumbentMandate, type FixtureMandateKind } from "./rotationMandateFixture";
 import { readTaskHold, storedTaskHold } from "@/lib/tasks/hold";
 import { withTaskCompletion } from "@/lib/tasks/completion";
 import { admissionSnapshot } from "@/lib/tasks/groupHide";
@@ -385,6 +386,13 @@ const ASKS_YOU_SETTING = { enabled: ASKS_YOU };
    a context past the rotation line, twenty previous seats and a running host
    with its Stop host control — every element the row has to keep readable. */
 const SEAT_HEAD = SCENARIO === "seat-head";
+/* The incumbent's stored mandate for the rotation dialog's diff
+   (`&mandate=changed|unchanged`): derived from the current default, see
+   rotationMandateFixture.ts. Without it the seat keeps its one-line mandate. */
+const ROTATION_MANDATE_KIND = SEAT_HEAD ? new URLSearchParams(location.search).get("mandate") : null;
+const ROTATION_MANDATE = ROTATION_MANDATE_KIND === "changed" || ROTATION_MANDATE_KIND === "unchanged"
+  ? fixtureIncumbentMandate(ROTATION_MANDATE_KIND as FixtureMandateKind)
+  : null;
 const SEAT_UNCONFIRMED = SEAT_HEAD && new URLSearchParams(location.search).get("usage") === "unconfirmed";
 /* The same seat with its agent not running and its context past the rotation
    line: the status read reports both causes, as data, beside the sentences it
@@ -4483,8 +4491,8 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     evidence.seatReads += 1;
     return json({
       seat: {
-        project: PROJECT, seatEpoch: 3, conversationId: orchestrator.conversationId, path: orchestrator.path, mandate: "Keep the project moving.",
-        promptVersion: SEAT_HEAD ? ORCHESTRATOR_PROMPT_VERSION - 1 : null, predecessorConversationId: null, state: "active",
+        project: PROJECT, seatEpoch: 3, conversationId: orchestrator.conversationId, path: orchestrator.path, mandate: ROTATION_MANDATE?.mandate ?? "Keep the project moving.",
+        promptVersion: ROTATION_MANDATE ? ROTATION_MANDATE.promptVersion : SEAT_HEAD ? ORCHESTRATOR_PROMPT_VERSION - 1 : null, predecessorConversationId: null, state: "active",
         intent: { clientRequestId: "seat-atlas", mode: "spawn", launchId: null, error: null }, designatedAt: iso(9 * 60 * MIN), activatedAt: iso(9 * 60 * MIN),
       },
       pending: null,
