@@ -32,6 +32,7 @@ import { FeedItem } from "@/components/feed/FeedItem";
 import { ImageGalleryProvider, Lightbox, type GalleryImage } from "@/components/feed/Lightbox";
 import { ImagePane } from "@/components/preview/ImagePane";
 import { buildFeed, type Item } from "@/components/feed/parse";
+import { codexHistoryCorpus, codexHistorySeams, historyCall } from "@/components/feed/__fixtures__/codexHistory";
 import { LogFeed } from "@/components/LogFeed";
 import { RuntimeComposerReceipts, TmuxComposer } from "@/components/TmuxComposer";
 import { setLogFeedDependenciesForTests } from "@/components/logFeedDependencies";
@@ -94,6 +95,7 @@ export type ConversationWindowCase =
   | "delivery-check-card"
   | "lifecycle"
   | "long-history"
+  | "codex-history"
   | "queued"
   | "receipt-delivered"
   | "retired-on-transcript"
@@ -1473,10 +1475,15 @@ interface HistoryControls {
   loads: () => number;
   start: () => number;
   total: () => number;
+  loadOlder: () => Promise<number>;
 }
 
 function mountLongHistory(root: HTMLElement): void {
-  const all = historyTranscript(Number(params.get("turns") ?? 700));
+  const codex = params.get("case") === "codex-history";
+  const all = codex
+    ? [...codexHistoryCorpus(Number(params.get("records") ?? 1277)), ...codexHistorySeams(), historyCall("open-at-tail", 40)]
+    : historyTranscript(Number(params.get("turns") ?? 700));
+  const file = codex ? { ...HISTORY_FILE, path: "/codex-history.jsonl", name: "codex-history.jsonl", engine: "codex", fmt: "codex" } as FileEntry : HISTORY_FILE;
   const page = Number(params.get("page") ?? 250);
   const latency = Number(params.get("latency") ?? 40);
   let start = Math.max(0, all.length - Number(params.get("window") ?? 400));
@@ -1508,11 +1515,11 @@ function mountLongHistory(root: HTMLElement): void {
     read,
     read,
   ) });
-  (window as unknown as { llvHistory: HistoryControls }).llvHistory = { loads: () => loads, start: () => start, total: () => all.length };
+  (window as unknown as { llvHistory: HistoryControls }).llvHistory = { loads: () => loads, start: () => start, total: () => all.length, loadOlder };
   createRoot(root).render(
-    <div data-evidence-case="long-history" className="flex h-dvh flex-col bg-canvas text-primary">
+    <div data-evidence-case={codex ? "codex-history" : "long-history"} className="flex h-dvh flex-col bg-canvas text-primary">
       <div className="flex min-h-0 flex-1 flex-col">
-        <LogFeed file={HISTORY_FILE} showSvc={false} lineFilter="" onStatus={() => undefined} paused={false} follow setFollow={() => undefined} />
+        <LogFeed file={file} showSvc={false} lineFilter="" onStatus={() => undefined} paused={false} follow setFollow={() => undefined} />
       </div>
     </div>,
   );
@@ -1759,7 +1766,7 @@ const requested = (params.get("case") as ConversationWindowCase | null) ?? "rece
    rendering one arranged frame. */
 if (root && requested === "lifecycle") mountLifecycle(root);
 else if (root && requested === "payload-notice") mountPayloadNotice(root);
-else if (root && requested === "long-history") mountLongHistory(root);
+else if (root && (requested === "long-history" || requested === "codex-history")) mountLongHistory(root);
 else if (root && requested === "own-message-steps") mountOwnMessageSteps(root);
 else if (root && requested === "delivery-stalled") {
   const startedAt = Date.now();
