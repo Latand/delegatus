@@ -511,10 +511,20 @@ function withImmediateTransaction<T>(db: Database, busyMessage: string, operatio
   }
 }
 
-async function stateTransactionAsync<T>(filename: string, collection: string, operation: (db: Database) => T): Promise<T> {
+async function stateTransactionAsync<T>(filename: string, collection: string, operation: (db: Database) => T, afterCommit?: (result: T) => void): Promise<T> {
   return waitForStateLock(`state.transaction.${collection}`, () => {
     const db = connectDatabase(filename);
-    try { return withImmediateTransaction(db, "state transaction is busy", () => operation(db), collection); }
+    try {
+      const result = withImmediateTransaction(db, "state transaction is busy", () => operation(db), collection);
+      // Apply the committed baseline before yielding to queued edits. Keep
+      // bookkeeping failures from replaying a transaction that already committed.
+      try { afterCommit?.(result); }
+      catch (error) {
+        if (stateLockDeferral(error)) throw new FileTransactionBusyError("state checkpoint bookkeeping failed after commit");
+        throw error;
+      }
+      return result;
+    }
     finally { db.close(); }
   }, { subject: collection });
 }
@@ -1713,9 +1723,8 @@ export class SqliteStateCollection<T> {
       const source = controllerOnly ? this.loadControllerReadonly() : this.loadReadonly();
       const session = this.track(source);
       return await operation(session.records, async (records) => {
-        const committed = await stateTransactionAsync(this.filename, this.options.collection,
-          db => this.persistSession(lease, session, beforePersist, records, db));
-        committed();
+        await stateTransactionAsync(this.filename, this.options.collection,
+          db => this.persistSession(lease, session, beforePersist, records, db), apply => apply());
       });
     } finally {
       await this.releaseLease(lease);
@@ -1763,14 +1772,13 @@ export class SqliteStateCollection<T> {
       const acquiredAt = durableHolds.get(lease)!.start;
       const committed: string[] = [];
       try {
-        const apply = await withViewerOperation("pipelines.controller-checkpoint", () => stateTransactionAsync(this.filename, this.options.collection, db => performanceSpans.sync("state.checkpoint", () => this.persistSession(lease, session, context => {
+        await withViewerOperation("pipelines.controller-checkpoint", () => stateTransactionAsync(this.filename, this.options.collection, db => performanceSpans.sync("state.checkpoint", () => this.persistSession(lease, session, context => {
           if (context.structural) throw new Error("controller snapshots cannot replace the collection");
           for (const record of context.dirtyRecords) {
             assertCurrent(record);
             committed.push(this.options.key(record));
           }
-        }, records, db))));
-        apply();
+        }, records, db)), apply => apply()));
         for (const key of committed) {
           const current = rowRevision(key);
           if (current !== undefined) expected.set(key, current);
@@ -2338,6 +2346,7 @@ export class SqliteStateCollection<T> {
       timer.unref();
       durableHolds.set(ownerToken, { start, operation, collection: this.options.collection, timer });
       if (held) {
+        finishDurableHold(held.owner_token, this.options.collection);
         if (now - held.acquired_at > STATE_LEASE_MAX_AGE_MS) console.warn(`[state lease] taking over ${this.options.collection} from pid ${held.owner_pid}, age ${now - held.acquired_at} ms`);
         const old = abandonedTokens(this.filename, this.options.collection)?.get(held.owner_token);
         if (old) forgetAbandoned(old);

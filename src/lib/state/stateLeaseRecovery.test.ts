@@ -1,9 +1,9 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { initializeStateCollections, SqliteStateCollection, injectStateWriteFaultForTests, StateLeaseLostError, STATE_LEASE_MAX_AGE_MS } from "./sqliteStateStore";
+import { initializeStateCollections, SqliteStateCollection, injectStateWriteFaultForTests, stateLeaseHoldsInFlight, StateLeaseLostError, STATE_LEASE_MAX_AGE_MS } from "./sqliteStateStore";
 
 import { FileTransactionBusyError } from "./fileTransaction";
 import { StateDiskFullError, setStateFreeBytesProbeForTests, noteStateCommit, noteStateDiskFull, stateWriteHealth } from "./diskFull";
@@ -58,6 +58,27 @@ test("the owner's next write replaces its abandoned token without waiting for th
   expect(token(c)).not.toBe(first);
   injectStateWriteFaultForTests(null);
   await until(() => token(c) === undefined);
+});
+test("replacing an abandoned token retires its active hold and warning timer", async () => {
+  const c = setup("replaced_hold");
+  const warnings = spyOn(console, "warn").mockImplementation(() => {});
+  const holds = () => stateLeaseHoldsInFlight().filter(hold => hold.collection === "replaced_hold");
+  try {
+    injectStateWriteFaultForTests({ site: "release", collection: "replaced_hold", times: 1, error: full() });
+    c.boundedPatch(1, tx => tx.put({ key: "x", value: 1 }));
+    expect(holds()).toHaveLength(1);
+    c.boundedPatch(1, tx => tx.put({ key: "x", value: 2 }));
+    const db = new Database(c.filename, { readonly: true });
+    try { expect(db.query("SELECT * FROM state_leases").get()).toBeNull(); }
+    finally { db.close(); }
+    // Observe the original timer even if the immediate active-hold check fails.
+    const afterReplacement = holds();
+    await Bun.sleep(1100);
+    expect(warnings.mock.calls.filter(([label, detail]) => label === "[state lease-hold]" && detail?.collection === "replaced_hold")).toEqual([]);
+    expect(afterReplacement).toEqual([]);
+    expect(holds()).toEqual([]);
+    expect(c.get("x")?.value).toBe(2);
+  } finally { warnings.mockRestore(); }
 });
 test("abandoned release retries without another store call", async () => {
   const c = setup();

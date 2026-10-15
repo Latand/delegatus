@@ -20,12 +20,12 @@ afterEach(async () => {
   resetBlockingWaitsForTests();
 });
 
-function fixture() {
+function fixture(validate?: (row: LockRow) => void) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "state-lock-")); roots.push(root);
   const filename = path.join(root, "state.sqlite");
   const seed = { ...lockRowOptions, migrationId: "one", loadRecords: () => [{ key: "counter", value: 0, trace: [] } as LockRow] };
   initializeStateCollections(filename, [seed]);
-  const store = new SqliteStateCollection(filename, lockRowOptions);
+  const store = new SqliteStateCollection(filename, { ...lockRowOptions, validate });
   return { root, filename, store, seed };
 }
 
@@ -179,6 +179,70 @@ test("timeouts and cancellation never invoke a pending write; callback and commi
   expect(entered).toBe(2); expect(store.get("counter")!.value).toBe(0);
   await store.boundedPatchAsync(1, tx => tx.put({ key: "after", value: 2, trace: [] }));
   expect(store.get("after")!.value).toBe(2);
+});
+
+test.each(["implicit", "explicit", "structural"] as const)("%s checkpoints retain edits queued after COMMIT", async mode => {
+  const { store } = fixture();
+  let entered = 0, acknowledged = 0;
+  await store.mutate(async (rows, persist) => {
+    entered++;
+    rows[0]!.value = 1;
+    if (mode === "structural") rows.push({ key: "first", value: 1, trace: [] });
+    queueMicrotask(() => {
+      rows[0]!.value = 2;
+      if (mode === "structural") rows.push({ key: "queued", value: 2, trace: [] });
+    });
+    await persist(mode === "explicit" ? [rows[0]!] : undefined);
+    acknowledged++;
+    // The first checkpoint committed before the queued edit ran.
+    expect(store.get("counter")!.value).toBe(1);
+    expect(rows[0]!.value).toBe(2);
+    await persist();
+    acknowledged++;
+  });
+  expect(entered).toBe(1);
+  expect(acknowledged).toBe(2);
+  expect(store.get("counter")!.value).toBe(2);
+  if (mode === "structural") expect(store.snapshot().map(row => row.key)).toEqual(["counter", "first", "queued"]);
+});
+
+test.each(["implicit", "explicit"] as const)("%s controller checkpoints retain edits queued after COMMIT", async mode => {
+  let duringWrite = () => {};
+  const { store } = fixture(() => duringWrite());
+  await store.reconcileSnapshot(async (rows, persist) => {
+    rows[0]!.value = 1;
+    // Controller checkpoints await lease admission first. Queue from inside
+    // the synchronous write to reach the same post-COMMIT microtask boundary.
+    duringWrite = () => {
+      duringWrite = () => {};
+      queueMicrotask(() => { rows[0]!.value = 2; });
+    };
+    await persist(mode === "explicit" ? [rows[0]!] : undefined);
+    expect(store.get("counter")!.value).toBe(1);
+    expect(rows[0]!.value).toBe(2);
+    await persist();
+  });
+  expect(store.get("counter")!.value).toBe(2);
+});
+
+test.each(["implicit", "explicit", "structural"] as const)("%s checkpoint rollback preserves dirty changes for retry", async mode => {
+  const { store } = fixture();
+  let entered = 0, prepared = 0;
+  await store.mutate(async (rows, persist) => {
+    entered++;
+    rows[0]!.value = 1;
+    if (mode === "structural") rows.push({ key: "added", value: 1, trace: [] });
+    injectStateWriteFaultForTests({ site: "commit", collection: "lock_probe", times: 1, error: new Error("database is locked") });
+    await expect(persist(mode === "explicit" ? [rows[0]!] : undefined)).rejects.toThrow("database is locked");
+    expect(store.get("counter")!.value).toBe(0);
+    expect(store.get("added")).toBeNull();
+    expect(prepared).toBe(1);
+    await persist();
+  }, () => { prepared++; });
+  expect(entered).toBe(1);
+  expect(prepared).toBe(2);
+  expect(store.get("counter")!.value).toBe(1);
+  if (mode === "structural") expect(store.get("added")!.value).toBe(1);
 });
 
 test("four independent writers retain all 400 ordered writes, revisions and change-log entries", async () => {
