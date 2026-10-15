@@ -29,7 +29,7 @@ operator's view of a review is in [Pipelines in depth](guide/pipelines.md).
 
 A reviewer of a diff that touches a poll, health, request or startup path, a
 cache, a lock wait or the loop monitor checks it against the performance
-invariants in [AGENTS.md](../AGENTS.md#the-viewer-stalled-for-tens-of-seconds-and-every-cause-was-a-hot-path-doing-whole-work).
+invariants in [AGENTS.md](../AGENTS.md#performance-invariants-hot-paths-never-block-and-never-do-whole-work).
 
 ## The budget
 

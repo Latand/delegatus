@@ -349,57 +349,32 @@ an operator-shaped home with nothing preset. When you add a script that only
 needs *a* state directory, set `LLV_STATE_DIR` instead — claiming an owner
 token to silence a refusal is how the seventy minutes come back.
 
-# The Viewer stalled for tens of seconds, and every cause was a hot path doing whole work
+# Performance invariants: hot paths never block and never do whole work
 
-On 2026-10-14 and 2026-10-15 the Viewer's event loop stopped for seconds at a
-time: a 17.840 s gap logged `operations:[]`, and a replay of the state-database
-helper held the loop for 30.6 s. None of the causes was a bug in one function.
-Each was a path that runs every poll, request or tick doing work proportional to
-the whole collection, the whole history or the whole wait, and each was invisible
-until the loop stopped. The fixes and their measurements are in `docs/perf/`;
-these rules keep the next change from reintroducing the shape. A builder follows
-them and a reviewer checks the diff against them (`docs/review-loop.md`).
+Paths of this kind produced multi-second Viewer stalls in October 2026
+(`docs/perf/`). A builder follows these rules for any feature, and a reviewer
+checks each one against the diff.
 
-1. **No synchronous waiting on a Viewer or runtime-host loop.** The state
-   database helper slept in `Atomics.wait` through 6,000 failed acquisitions,
-   30,411.8 ms in the replay (#2916, `docs/perf/state-db-lock-waits.md`).
-   Acquire asynchronously under one absolute deadline with `busy_timeout=0`, keep
-   every synchronous slice at or below 5 ms, and log any wait over 50 ms with its
-   call site. `grep` the diff for `Atomics.wait`, sleep spins, a `busy_timeout`
-   above zero and sync child calls. The standalone MCP server
-   keeps bounded synchronous retries; that exemption covers it and nothing else.
-2. **Poll, health and per-request paths cost O(changes).** One health poll
-   decoded 898 retained evidence rows, 119,589,465 bytes (#2905,
-   `docs/perf/viewer-stalls-attribution.md`). A board poll moved a 33.5 MB
-   summary per tab (#2911, still open at writing). Runtime snapshots of 5–9 MB
-   were parsed on the main thread, 1,021–1,177 ms a minute at 48 reads a minute,
-   and narrow projections cut that to 14–16 ms (#2915, `docs/perf/runtime-snapshots.md`).
-   Use deltas, cursors, narrow projections and paging. Never read, parse or
-   stringify a whole collection or a multi-MB JSON body per request or tick on the
-   main thread. A reviewer asks for bytes per call times calls per minute.
-3. **Every cache has a bound, an eviction rule and one owner.** Each compiled
-   Next bundle kept its own decoded copy of the pipeline archive plus the source
-   JSON, and list reads hydrated the whole archive. A shared read cache under an
-   eight-slot, 256 MiB budget cut median RSS from 2,264 to 1,232 MiB and collected
-   heap by 56.6% (#2923, `docs/perf/viewer-heap-gc.md`,
-   `docs/perf/viewer-heap-gc-fixes.md`). A module-level cache is duplicated per
-   bundle, so name its owner. Load archives in pages. Stream large HTTP bodies
-   under reader backpressure.
-4. **Long work is attributable.** The monitor kept sixteen labels and no
-   overflow counters, so the 17.840 s gap named nothing and its cause stays
-   unconfirmed (#2905, `docs/perf/viewer-stalls-attribution.md`). New blocking or
-   slow work registers with the loop monitor with an operation label, a phase and
-   its call site, and the monitor reports overflow instead of dropping labels. A
-   diff that adds hot-path work without attribution is a finding.
-5. **A cold path has a bootstrap.** After a restart the first board bytes took
-   9.6–11.4 s, because the 33 MB summary was rebuilt before anything answered.
-   Serving the saved summary and refining behind it gave 9.6–13.4 ms to first
-   byte (#2919, `docs/perf/cold-board-start.md`). When a route rebuilds a large
-   model on first request, persist the last good answer, validate it, serve it
-   and refine after the response.
-6. **A performance change ships with evidence.** Before and after on identical
-   data and load: a read-only production copy, an isolated instance, at least three
-   runs, every run kept and partial failures kept. After deploy, a 30–60 minute
-   production pause audit under normal load, with the load stated beside the
-   numbers, since heavy agent load confounds it. An uncontrolled partial window
-   proves nothing and is labelled so.
+1. **A long-lived server's main loop never blocks.** No synchronous wait, sleep,
+   spin or retry on a shared resource (database lock, file lock, child process,
+   socket). Wait asynchronously under one overall deadline, keep synchronous work
+   in short slices, and record every long wait with its origin. Reviewers grep
+   the diff for synchronous waits and sleep loops.
+2. **Work per request, poll or tick scales with what changed, never with total
+   data size.** Use deltas, cursors, narrow projections and paging. Reviewers
+   estimate bytes per call times calls per minute and block whole-data reads,
+   parses or serializations on a hot path.
+3. **Every cache has a size bound, an eviction rule and one owner.** It is not
+   silently duplicated per module, worker or bundle. Large payloads stream with
+   backpressure instead of being built whole in memory. Reviewers ask for the
+   bound, the eviction rule and the owner of each new cache.
+4. **Slow or blocking work is attributable.** It carries a label and an origin
+   that monitoring can report, and a monitor reports its own overflow instead of
+   dropping data. A diff that adds hot-path work without attribution is a finding.
+5. **Startup and first-request paths serve a persisted, validated artifact and
+   refine in the background.** They never rebuild all derived state before the
+   first reply. Reviewers ask what the first request does on a cold start.
+6. **A performance claim rests on measurement.** Before and after on identical
+   data and load, with repeated runs, then a production check after deploy under
+   normal load, with the load recorded beside the numbers. A change with no such
+   evidence does not claim a gain.
