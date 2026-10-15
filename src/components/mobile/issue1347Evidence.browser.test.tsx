@@ -265,7 +265,7 @@ interface ControlsGeometry {
   rowOpen: Box | null;
   rowControls: Box | null;
   sheet: { rotate: Box | null; identityText: string; contextLeft: string | null; predecessor: boolean; mandateView: boolean } | null;
-  rotateDraft: { confirm: Box | null; cancel: Box | null; mandate: Box | null; scrollerBottom: number } | null;
+  rotateDraft: { confirm: Box | null; cancel: Box | null; mandateLine: Box | null; scrollerBottom: number } | null;
 }
 
 async function withPage<T>(inner: string, key: string, scheme: "light" | "dark", measure: (page: import("playwright-core").Page) => Promise<T>): Promise<T> {
@@ -356,7 +356,7 @@ async function measureControls(page: import("playwright-core").Page, scheme: "li
       rotateDraft: draft ? {
         confirm: document.querySelector("[data-orchestrator-confirm]") ? box(document.querySelector("[data-orchestrator-confirm]")!) : null,
         cancel: document.querySelector("[data-orchestrator-rotate-cancel]") ? box(document.querySelector("[data-orchestrator-rotate-cancel]")!) : null,
-        mandate: document.querySelector("[data-orchestrator-mandate]") ? box(document.querySelector("[data-orchestrator-mandate]")!) : null,
+        mandateLine: document.querySelector("[data-orchestrator-mandate-fold]") ? box(document.querySelector("[data-orchestrator-mandate-fold]")!) : null,
         scrollerBottom: draft.getBoundingClientRect().bottom,
       } : null,
     };
@@ -521,11 +521,12 @@ test("issues 1347 + 1348: the phone's rename editor and orchestrator controls me
       expect(control!.right).toBeLessThanOrEqual(390);
       expect(control!.bottom).toBeLessThanOrEqual(844);
     }
-    /* The mandate is on screen in the draft's own scroller. (What it and the
-       pickers are PREFILLED with is a property React writes, which static
-       markup does not carry — the DOM suite pins the prefill.) */
-    expect(rotate.rotateDraft!.mandate).not.toBeNull();
-    expect(rotate.rotateDraft!.mandate!.top).toBeLessThan(rotate.rotateDraft!.scrollerBottom);
+    /* The mandate's one collapsed line (#2942) is on screen in the draft's own
+       scroller; the text box and the diff open on a press. (What the pickers
+       are PREFILLED with is a property React writes, which static markup does
+       not carry — the DOM suite pins the prefill.) */
+    expect(rotate.rotateDraft!.mandateLine).not.toBeNull();
+    expect(rotate.rotateDraft!.mandateLine!.top).toBeLessThan(rotate.rotateDraft!.scrollerBottom);
   }
 
   fs.writeFileSync(

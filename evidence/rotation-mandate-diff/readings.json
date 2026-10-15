@@ -1,0 +1,1654 @@
+{
+  "added": 2,
+  "removed": 6,
+  "readings": [
+    {
+      "shot": "rotation-mandate-changed-collapsed-390-en-light",
+      "line": {
+        "text": "Mandate v54 → v55 · lines: +2 −6",
+        "whole": true,
+        "box": {
+          "left": 12,
+          "right": 378,
+          "top": 352,
+          "bottom": 396,
+          "width": 366,
+          "height": 44
+        },
+        "chevron": true,
+        "expanded": "false",
+        "contrast": 7
+      },
+      "state": "changed",
+      "slot": {
+        "text": "Keep the incumbent's mandate (based on v54)",
+        "kind": "keep",
+        "whole": true,
+        "box": {
+          "left": 12,
+          "right": 258.21875,
+          "top": 296,
+          "bottom": 340,
+          "width": 246.21875,
+          "height": 44
+        }
+      },
+      "sentence": false,
+      "diff": null,
+      "editor": null,
+      "overlaps": [],
+      "pageScroll": 0,
+      "sections": {
+        "scrollerTop": 57,
+        "footerTop": 775
+      },
+      "viewport": {
+        "width": 390,
+        "height": 844
+      }
+    },
+    {
+      "shot": "rotation-mandate-changed-collapsed-390-uk-light",
+      "line": {
+        "text": "Мандат v54 → v55 · рядки: +2 −6",
+        "whole": true,
+        "box": {
+          "left": 12,
+          "right": 378,
+          "top": 352,
+          "bottom": 396,
+          "width": 366,
+          "height": 44
+        },
+        "chevron": true,
+        "expanded": "false",
+        "contrast": 7
+      },
+      "state": "changed",
+      "slot": {
+        "text": "Лишити мандат чинного (на основі v54)",
+        "kind": "keep",
+        "whole": true,
+        "box": {
+          "left": 12,
+          "right": 234.109375,
+          "top": 296,
+          "bottom": 340,
+          "width": 222.109375,
+          "height": 44
+        }
+      },
+      "sentence": false,
+      "diff": null,
+      "editor": null,
+      "overlaps": [],
+      "pageScroll": 0,
+      "sections": {
+        "scrollerTop": 57,
+        "footerTop": 775
+      },
+      "viewport": {
+        "width": 390,
+        "height": 844
+      }
+    },
+    {
+      "shot": "rotation-mandate-changed-collapsed-768-en-light",
+      "line": {
+        "text": "Mandate v54 → v55 · lines: +2 −6",
+        "whole": true,
+        "box": {
+          "left": 274,
+          "right": 742,
+          "top": 407.90625,
+          "bottom": 435.90625,
+          "width": 468,
+          "height": 28
+        },
+        "chevron": true,
+        "expanded": null,
+        "contrast": 7.3
+      },
+      "state": "changed",
+      "slot": {
+        "text": "Keep the incumbent's mandate (based on v54)",
+        "kind": "keep",
+        "whole": true,
+        "box": {
+          "left": 273,
+          "right": 511.21875,
+          "top": 374.40625,
+          "bottom": 394.90625,
+          "width": 238.21875,
+          "height": 20.5
+        }
+      },
+      "sentence": false,
+      "diff": null,
+      "editor": null,
+      "overlaps": [],
+      "pageScroll": 0,
+      "sections": {
+        "scrollerTop": 155.4,
+        "footerTop": 673
+      },
+      "viewport": {
+        "width": 768,
+        "height": 900
+      }
+    },
+    {
+      "shot": "rotation-mandate-changed-collapsed-768-uk-light",
+      "line": {
+        "text": "Мандат v54 → v55 · рядки: +2 −6",
+        "whole": true,
+        "box": {
+          "left": 274,
+          "right": 742,
+          "top": 438.90625,
+          "bottom": 466.90625,
+          "width": 468,
+          "height": 28
+        },
+        "chevron": true,
+        "expanded": null,
+        "contrast": 7.3
+      },
+      "state": "changed",
+      "slot": {
+        "text": "Лишити мандат чинного (на основі v54)",
+        "kind": "keep",
+        "whole": true,
+        "box": {
+          "left": 273,
+          "right": 487.109375,
+          "top": 405.40625,
+          "bottom": 425.90625,
+          "width": 214.109375,
+          "height": 20.5
+        }
+      },
+      "sentence": false,
+      "diff": null,
+      "editor": null,
+      "overlaps": [],
+      "pageScroll": 0,
+      "sections": {
+        "scrollerTop": 186.4,
+        "footerTop": 673
+      },
+      "viewport": {
+        "width": 768,
+        "height": 900
+      }
+    },
+    {
+      "shot": "rotation-mandate-changed-collapsed-1440-en-light",
+      "line": {
+        "text": "Mandate v54 → v55 · lines: +2 −6",
+        "whole": true,
+        "box": {
+          "left": 338,
+          "right": 1350,
+          "top": 391.90625,
+          "bottom": 419.90625,
+          "width": 1012,
+          "height": 28
+        },
+        "chevron": true,
+        "expanded": null,
+        "contrast": 7.3
+      },
+      "state": "changed",
+      "slot": {
+        "text": "Keep the incumbent's mandate (based on v54)",
+        "kind": "keep",
+        "whole": true,
+        "box": {
+          "left": 337,
+          "right": 575.21875,
+          "top": 358.40625,
+          "bottom": 378.90625,
+          "width": 238.21875,
+          "height": 20.5
+        }
+      },
+      "sentence": false,
+      "diff": null,
+      "editor": null,
+      "overlaps": [],
+      "pageScroll": 0,
+      "sections": {
+        "scrollerTop": 155.4,
+        "footerTop": 673
+      },
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      }
+    },
+    {
+      "shot": "rotation-mandate-changed-collapsed-1440-uk-light",
+      "line": {
+        "text": "Мандат v54 → v55 · рядки: +2 −6",
+        "whole": true,
+        "box": {
+          "left": 338,
+          "right": 1350,
+          "top": 391.90625,
+          "bottom": 419.90625,
+          "width": 1012,
+          "height": 28
+        },
+        "chevron": true,
+        "expanded": null,
+        "contrast": 7.3
+      },
+      "state": "changed",
+      "slot": {
+        "text": "Лишити мандат чинного (на основі v54)",
+        "kind": "keep",
+        "whole": true,
+        "box": {
+          "left": 337,
+          "right": 551.109375,
+          "top": 358.40625,
+          "bottom": 378.90625,
+          "width": 214.109375,
+          "height": 20.5
+        }
+      },
+      "sentence": false,
+      "diff": null,
+      "editor": null,
+      "overlaps": [],
+      "pageScroll": 0,
+      "sections": {
+        "scrollerTop": 155.4,
+        "footerTop": 673
+      },
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      }
+    },
+    {
+      "shot": "rotation-mandate-changed-expanded-390-en-light",
+      "line": {
+        "text": "Mandate v54 → v55 · lines: +2 −6",
+        "whole": true,
+        "box": {
+          "left": 12,
+          "right": 378,
+          "top": 121,
+          "bottom": 165,
+          "width": 366,
+          "height": 44
+        },
+        "chevron": true,
+        "expanded": "true",
+        "contrast": 7
+      },
+      "state": "changed",
+      "slot": {
+        "text": "Keep the incumbent's mandate (based on v54)",
+        "kind": "keep",
+        "whole": true,
+        "box": {
+          "left": 12,
+          "right": 258.21875,
+          "top": 65,
+          "bottom": 109,
+          "width": 246.21875,
+          "height": 44
+        }
+      },
+      "sentence": false,
+      "diff": {
+        "added": 2,
+        "removed": 6,
+        "context": 5,
+        "intraline": 2,
+        "scrollOverflow": false,
+        "rowsInside": true,
+        "firstWhole": true,
+        "captions": [
+          "Who you are",
+          "Initial visible status",
+          "How work runs",
+          "Fences"
+        ],
+        "headingMarkers": [],
+        "splitHighlights": [],
+        "contrast": {
+          "add": 4.8,
+          "del": 4.7,
+          "context": 15.6,
+          "intraline": 12.3
+        }
+      },
+      "editor": {
+        "visible": true,
+        "label": "Mandate",
+        "labelWhole": false,
+        "afterDiff": true,
+        "after": true
+      },
+      "overlaps": [],
+      "pageScroll": 0,
+      "sections": {
+        "scrollerTop": 57,
+        "footerTop": 775
+      },
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "atEditor": {
+        "label": "Mandate",
+        "labelWhole": true
+      },
+      "editedLine": "Mandate v54 → your edit · lines: +3 −7"
+    },
+    {
+      "shot": "rotation-mandate-changed-expanded-390-uk-light",
+      "line": {
+        "text": "Мандат v54 → v55 · рядки: +2 −6",
+        "whole": true,
+        "box": {
+          "left": 12,
+          "right": 378,
+          "top": 121,
+          "bottom": 165,
+          "width": 366,
+          "height": 44
+        },
+        "chevron": true,
+        "expanded": "true",
+        "contrast": 7
+      },
+      "state": "changed",
+      "slot": {
+        "text": "Лишити мандат чинного (на основі v54)",
+        "kind": "keep",
+        "whole": true,
+        "box": {
+          "left": 12,
+          "right": 234.109375,
+          "top": 65,
+          "bottom": 109,
+          "width": 222.109375,
+          "height": 44
+        }
+      },
+      "sentence": false,
+      "diff": {
+        "added": 2,
+        "removed": 6,
+        "context": 5,
+        "intraline": 2,
+        "scrollOverflow": false,
+        "rowsInside": true,
+        "firstWhole": true,
+        "captions": [
+          "Who you are",
+          "Initial visible status",
+          "How work runs",
+          "Fences"
+        ],
+        "headingMarkers": [],
+        "splitHighlights": [],
+        "contrast": {
+          "add": 4.8,
+          "del": 4.7,
+          "context": 15.6,
+          "intraline": 12.3
+        }
+      },
+      "editor": {
+        "visible": true,
+        "label": "Мандат",
+        "labelWhole": false,
+        "afterDiff": true,
+        "after": true
+      },
+      "overlaps": [],
+      "pageScroll": 0,
+      "sections": {
+        "scrollerTop": 57,
+        "footerTop": 775
+      },
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "atEditor": {
+        "label": "Мандат",
+        "labelWhole": true
+      },
+      "editedLine": "Мандат v54 → ваша правка · рядки: +3 −7"
+    },
+    {
+      "shot": "rotation-mandate-changed-expanded-768-en-light",
+      "line": {
+        "text": "Mandate v54 → v55 · lines: +2 −6",
+        "whole": true,
+        "box": {
+          "left": 274,
+          "right": 742,
+          "top": 196.90625,
+          "bottom": 224.90625,
+          "width": 468,
+          "height": 28
+        },
+        "chevron": true,
+        "expanded": null,
+        "contrast": 7.3
+      },
+      "state": "changed",
+      "slot": {
+        "text": "Keep the incumbent's mandate (based on v54)",
+        "kind": "keep",
+        "whole": true,
+        "box": {
+          "left": 273,
+          "right": 511.21875,
+          "top": 163.40625,
+          "bottom": 183.90625,
+          "width": 238.21875,
+          "height": 20.5
+        }
+      },
+      "sentence": false,
+      "diff": {
+        "added": 2,
+        "removed": 6,
+        "context": 5,
+        "intraline": 2,
+        "scrollOverflow": false,
+        "rowsInside": true,
+        "firstWhole": true,
+        "captions": [
+          "Who you are",
+          "Initial visible status",
+          "How work runs",
+          "Fences"
+        ],
+        "headingMarkers": [],
+        "splitHighlights": [],
+        "contrast": {
+          "add": 4.8,
+          "del": 4.7,
+          "context": 15.6,
+          "intraline": 12.3
+        }
+      },
+      "editor": {
+        "visible": true,
+        "label": "Mandate",
+        "labelWhole": false,
+        "afterDiff": true,
+        "after": true
+      },
+      "overlaps": [],
+      "pageScroll": 0,
+      "sections": {
+        "scrollerTop": 155.4,
+        "footerTop": 673
+      },
+      "viewport": {
+        "width": 768,
+        "height": 900
+      },
+      "atEditor": {
+        "label": "Mandate",
+        "labelWhole": true
+      },
+      "editedLine": "Mandate v54 → your edit · lines: +3 −7"
+    },
+    {
+      "shot": "rotation-mandate-changed-expanded-768-uk-light",
+      "line": {
+        "text": "Мандат v54 → v55 · рядки: +2 −6",
+        "whole": true,
+        "box": {
+          "left": 274,
+          "right": 742,
+          "top": 227.90625,
+          "bottom": 255.90625,
+          "width": 468,
+          "height": 28
+        },
+        "chevron": true,
+        "expanded": null,
+        "contrast": 7.3
+      },
+      "state": "changed",
+      "slot": {
+        "text": "Лишити мандат чинного (на основі v54)",
+        "kind": "keep",
+        "whole": true,
+        "box": {
+          "left": 273,
+          "right": 487.109375,
+          "top": 194.40625,
+          "bottom": 214.90625,
+          "width": 214.109375,
+          "height": 20.5
+        }
+      },
+      "sentence": false,
+      "diff": {
+        "added": 2,
+        "removed": 6,
+        "context": 5,
+        "intraline": 2,
+        "scrollOverflow": false,
+        "rowsInside": true,
+        "firstWhole": true,
+        "captions": [
+          "Who you are",
+          "Initial visible status",
+          "How work runs",
+          "Fences"
+        ],
+        "headingMarkers": [],
+        "splitHighlights": [],
+        "contrast": {
+          "add": 4.8,
+          "del": 4.7,
+          "context": 15.6,
+          "intraline": 12.3
+        }
+      },
+      "editor": {
+        "visible": true,
+        "label": "Мандат",
+        "labelWhole": false,
+        "afterDiff": true,
+        "after": true
+      },
+      "overlaps": [],
+      "pageScroll": 0,
+      "sections": {
+        "scrollerTop": 186.4,
+        "footerTop": 673
+      },
+      "viewport": {
+        "width": 768,
+        "height": 900
+      },
+      "atEditor": {
+        "label": "Мандат",
+        "labelWhole": true
+      },
+      "editedLine": "Мандат v54 → ваша правка · рядки: +3 −7"
+    },
+    {
+      "shot": "rotation-mandate-changed-expanded-1440-en-light",
+      "line": {
+        "text": "Mandate v54 → v55 · lines: +2 −6",
+        "whole": true,
+        "box": {
+          "left": 338,
+          "right": 1350,
+          "top": 196.90625,
+          "bottom": 224.90625,
+          "width": 1012,
+          "height": 28
+        },
+        "chevron": true,
+        "expanded": null,
+        "contrast": 7.3
+      },
+      "state": "changed",
+      "slot": {
+        "text": "Keep the incumbent's mandate (based on v54)",
+        "kind": "keep",
+        "whole": true,
+        "box": {
+          "left": 337,
+          "right": 575.21875,
+          "top": 163.40625,
+          "bottom": 183.90625,
+          "width": 238.21875,
+          "height": 20.5
+        }
+      },
+      "sentence": false,
+      "diff": {
+        "added": 2,
+        "removed": 6,
+        "context": 5,
+        "intraline": 2,
+        "scrollOverflow": false,
+        "rowsInside": true,
+        "firstWhole": true,
+        "captions": [
+          "Who you are",
+          "Initial visible status",
+          "How work runs",
+          "Fences"
+        ],
+        "headingMarkers": [],
+        "splitHighlights": [],
+        "contrast": {
+          "add": 4.8,
+          "del": 4.7,
+          "context": 15.6,
+          "intraline": 12.3
+        }
+      },
+      "editor": {
+        "visible": true,
+        "label": "Mandate",
+        "labelWhole": true,
+        "afterDiff": true,
+        "after": true
+      },
+      "overlaps": [],
+      "pageScroll": 0,
+      "sections": {
+        "scrollerTop": 155.4,
+        "footerTop": 673
+      },
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "atEditor": {
+        "label": "Mandate",
+        "labelWhole": true
+      },
+      "editedLine": "Mandate v54 → your edit · lines: +3 −7"
+    },
+    {
+      "shot": "rotation-mandate-changed-expanded-1440-uk-light",
+      "line": {
+        "text": "Мандат v54 → v55 · рядки: +2 −6",
+        "whole": true,
+        "box": {
+          "left": 338,
+          "right": 1350,
+          "top": 196.90625,
+          "bottom": 224.90625,
+          "width": 1012,
+          "height": 28
+        },
+        "chevron": true,
+        "expanded": null,
+        "contrast": 7.3
+      },
+      "state": "changed",
+      "slot": {
+        "text": "Лишити мандат чинного (на основі v54)",
+        "kind": "keep",
+        "whole": true,
+        "box": {
+          "left": 337,
+          "right": 551.109375,
+          "top": 163.40625,
+          "bottom": 183.90625,
+          "width": 214.109375,
+          "height": 20.5
+        }
+      },
+      "sentence": false,
+      "diff": {
+        "added": 2,
+        "removed": 6,
+        "context": 5,
+        "intraline": 2,
+        "scrollOverflow": false,
+        "rowsInside": true,
+        "firstWhole": true,
+        "captions": [
+          "Who you are",
+          "Initial visible status",
+          "How work runs",
+          "Fences"
+        ],
+        "headingMarkers": [],
+        "splitHighlights": [],
+        "contrast": {
+          "add": 4.8,
+          "del": 4.7,
+          "context": 15.6,
+          "intraline": 12.3
+        }
+      },
+      "editor": {
+        "visible": true,
+        "label": "Мандат",
+        "labelWhole": true,
+        "afterDiff": true,
+        "after": true
+      },
+      "overlaps": [],
+      "pageScroll": 0,
+      "sections": {
+        "scrollerTop": 155.4,
+        "footerTop": 673
+      },
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "atEditor": {
+        "label": "Мандат",
+        "labelWhole": true
+      },
+      "editedLine": "Мандат v54 → ваша правка · рядки: +3 −7"
+    },
+    {
+      "shot": "rotation-mandate-unchanged-390-en-light",
+      "line": {
+        "text": "Mandate unchanged (v55) (edit)",
+        "whole": true,
+        "box": {
+          "left": 12,
+          "right": 378,
+          "top": 296,
+          "bottom": 340,
+          "width": 366,
+          "height": 44
+        },
+        "chevron": false,
+        "expanded": "false",
+        "contrast": 7
+      },
+      "state": "unchanged",
+      "slot": null,
+      "sentence": false,
+      "diff": null,
+      "editor": null,
+      "overlaps": [],
+      "pageScroll": 0,
+      "sections": {
+        "scrollerTop": 57,
+        "footerTop": 775
+      },
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "afterEditPress": {
+        "diffRows": 0,
+        "editor": true
+      }
+    },
+    {
+      "shot": "rotation-mandate-unchanged-390-uk-light",
+      "line": {
+        "text": "Мандат без змін (v55) (редагувати)",
+        "whole": true,
+        "box": {
+          "left": 12,
+          "right": 378,
+          "top": 296,
+          "bottom": 340,
+          "width": 366,
+          "height": 44
+        },
+        "chevron": false,
+        "expanded": "false",
+        "contrast": 7
+      },
+      "state": "unchanged",
+      "slot": null,
+      "sentence": false,
+      "diff": null,
+      "editor": null,
+      "overlaps": [],
+      "pageScroll": 0,
+      "sections": {
+        "scrollerTop": 57,
+        "footerTop": 775
+      },
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "afterEditPress": {
+        "diffRows": 0,
+        "editor": true
+      }
+    },
+    {
+      "shot": "rotation-mandate-unchanged-768-en-light",
+      "line": {
+        "text": "Mandate unchanged (v55) (edit)",
+        "whole": true,
+        "box": {
+          "left": 274,
+          "right": 742,
+          "top": 375.40625,
+          "bottom": 403.40625,
+          "width": 468,
+          "height": 28
+        },
+        "chevron": false,
+        "expanded": null,
+        "contrast": 7.3
+      },
+      "state": "unchanged",
+      "slot": null,
+      "sentence": false,
+      "diff": null,
+      "editor": null,
+      "overlaps": [],
+      "pageScroll": 0,
+      "sections": {
+        "scrollerTop": 155.4,
+        "footerTop": 673
+      },
+      "viewport": {
+        "width": 768,
+        "height": 900
+      },
+      "afterEditPress": {
+        "diffRows": 0,
+        "editor": true
+      }
+    },
+    {
+      "shot": "rotation-mandate-unchanged-768-uk-light",
+      "line": {
+        "text": "Мандат без змін (v55) (редагувати)",
+        "whole": true,
+        "box": {
+          "left": 274,
+          "right": 742,
+          "top": 406.40625,
+          "bottom": 434.40625,
+          "width": 468,
+          "height": 28
+        },
+        "chevron": false,
+        "expanded": null,
+        "contrast": 7.3
+      },
+      "state": "unchanged",
+      "slot": null,
+      "sentence": false,
+      "diff": null,
+      "editor": null,
+      "overlaps": [],
+      "pageScroll": 0,
+      "sections": {
+        "scrollerTop": 186.4,
+        "footerTop": 673
+      },
+      "viewport": {
+        "width": 768,
+        "height": 900
+      },
+      "afterEditPress": {
+        "diffRows": 0,
+        "editor": true
+      }
+    },
+    {
+      "shot": "rotation-mandate-unchanged-1440-en-light",
+      "line": {
+        "text": "Mandate unchanged (v55) (edit)",
+        "whole": true,
+        "box": {
+          "left": 338,
+          "right": 1350,
+          "top": 359.40625,
+          "bottom": 387.40625,
+          "width": 1012,
+          "height": 28
+        },
+        "chevron": false,
+        "expanded": null,
+        "contrast": 7.3
+      },
+      "state": "unchanged",
+      "slot": null,
+      "sentence": false,
+      "diff": null,
+      "editor": null,
+      "overlaps": [],
+      "pageScroll": 0,
+      "sections": {
+        "scrollerTop": 155.4,
+        "footerTop": 673
+      },
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "afterEditPress": {
+        "diffRows": 0,
+        "editor": true
+      }
+    },
+    {
+      "shot": "rotation-mandate-unchanged-1440-uk-light",
+      "line": {
+        "text": "Мандат без змін (v55) (редагувати)",
+        "whole": true,
+        "box": {
+          "left": 338,
+          "right": 1350,
+          "top": 359.40625,
+          "bottom": 387.40625,
+          "width": 1012,
+          "height": 28
+        },
+        "chevron": false,
+        "expanded": null,
+        "contrast": 7.3
+      },
+      "state": "unchanged",
+      "slot": null,
+      "sentence": false,
+      "diff": null,
+      "editor": null,
+      "overlaps": [],
+      "pageScroll": 0,
+      "sections": {
+        "scrollerTop": 155.4,
+        "footerTop": 673
+      },
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "afterEditPress": {
+        "diffRows": 0,
+        "editor": true
+      }
+    },
+    {
+      "shot": "rotation-mandate-kept-390-en-light",
+      "line": {
+        "text": "Mandate unchanged (v54; the current default is v55) (edit)",
+        "whole": true,
+        "box": {
+          "left": 12,
+          "right": 378,
+          "top": 352,
+          "bottom": 396,
+          "width": 366,
+          "height": 44
+        },
+        "chevron": false,
+        "expanded": "false",
+        "contrast": 7
+      },
+      "state": "unchanged",
+      "slot": {
+        "text": "Restore default",
+        "kind": "restore",
+        "whole": true,
+        "box": {
+          "left": 12,
+          "right": 128.796875,
+          "top": 296,
+          "bottom": 340,
+          "width": 116.796875,
+          "height": 44
+        }
+      },
+      "sentence": false,
+      "diff": null,
+      "editor": null,
+      "overlaps": [],
+      "pageScroll": 0,
+      "sections": {
+        "scrollerTop": 57,
+        "footerTop": 775
+      },
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "restoredLine": "Mandate v54 → v55 · lines: +2 −6"
+    },
+    {
+      "shot": "rotation-mandate-kept-390-uk-light",
+      "line": {
+        "text": "Мандат без змін (v54; поточний типовий — v55) (редагувати)",
+        "whole": true,
+        "box": {
+          "left": 12,
+          "right": 378,
+          "top": 352,
+          "bottom": 396,
+          "width": 366,
+          "height": 44
+        },
+        "chevron": false,
+        "expanded": "false",
+        "contrast": 7
+      },
+      "state": "unchanged",
+      "slot": {
+        "text": "Повернути типовий",
+        "kind": "restore",
+        "whole": true,
+        "box": {
+          "left": 12,
+          "right": 154.171875,
+          "top": 296,
+          "bottom": 340,
+          "width": 142.171875,
+          "height": 44
+        }
+      },
+      "sentence": false,
+      "diff": null,
+      "editor": null,
+      "overlaps": [],
+      "pageScroll": 0,
+      "sections": {
+        "scrollerTop": 57,
+        "footerTop": 775
+      },
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "restoredLine": "Мандат v54 → v55 · рядки: +2 −6"
+    },
+    {
+      "shot": "rotation-mandate-kept-768-en-light",
+      "line": {
+        "text": "Mandate unchanged (v54; the current default is v55) (edit)",
+        "whole": true,
+        "box": {
+          "left": 274,
+          "right": 742,
+          "top": 407.90625,
+          "bottom": 435.90625,
+          "width": 468,
+          "height": 28
+        },
+        "chevron": false,
+        "expanded": null,
+        "contrast": 7.3
+      },
+      "state": "unchanged",
+      "slot": {
+        "text": "Restore default",
+        "kind": "restore",
+        "whole": true,
+        "box": {
+          "left": 273,
+          "right": 379.796875,
+          "top": 374.40625,
+          "bottom": 394.90625,
+          "width": 106.796875,
+          "height": 20.5
+        }
+      },
+      "sentence": false,
+      "diff": null,
+      "editor": null,
+      "overlaps": [],
+      "pageScroll": 0,
+      "sections": {
+        "scrollerTop": 155.4,
+        "footerTop": 673
+      },
+      "viewport": {
+        "width": 768,
+        "height": 900
+      },
+      "restoredLine": "Mandate v54 → v55 · lines: +2 −6"
+    },
+    {
+      "shot": "rotation-mandate-kept-768-uk-light",
+      "line": {
+        "text": "Мандат без змін (v54; поточний типовий — v55) (редагувати)",
+        "whole": true,
+        "box": {
+          "left": 274,
+          "right": 742,
+          "top": 438.90625,
+          "bottom": 466.90625,
+          "width": 468,
+          "height": 28
+        },
+        "chevron": false,
+        "expanded": null,
+        "contrast": 7.3
+      },
+      "state": "unchanged",
+      "slot": {
+        "text": "Повернути типовий",
+        "kind": "restore",
+        "whole": true,
+        "box": {
+          "left": 273,
+          "right": 405.171875,
+          "top": 405.40625,
+          "bottom": 425.90625,
+          "width": 132.171875,
+          "height": 20.5
+        }
+      },
+      "sentence": false,
+      "diff": null,
+      "editor": null,
+      "overlaps": [],
+      "pageScroll": 0,
+      "sections": {
+        "scrollerTop": 186.4,
+        "footerTop": 673
+      },
+      "viewport": {
+        "width": 768,
+        "height": 900
+      },
+      "restoredLine": "Мандат v54 → v55 · рядки: +2 −6"
+    },
+    {
+      "shot": "rotation-mandate-kept-1440-en-light",
+      "line": {
+        "text": "Mandate unchanged (v54; the current default is v55) (edit)",
+        "whole": true,
+        "box": {
+          "left": 338,
+          "right": 1350,
+          "top": 391.90625,
+          "bottom": 419.90625,
+          "width": 1012,
+          "height": 28
+        },
+        "chevron": false,
+        "expanded": null,
+        "contrast": 7.3
+      },
+      "state": "unchanged",
+      "slot": {
+        "text": "Restore default",
+        "kind": "restore",
+        "whole": true,
+        "box": {
+          "left": 337,
+          "right": 443.796875,
+          "top": 358.40625,
+          "bottom": 378.90625,
+          "width": 106.796875,
+          "height": 20.5
+        }
+      },
+      "sentence": false,
+      "diff": null,
+      "editor": null,
+      "overlaps": [],
+      "pageScroll": 0,
+      "sections": {
+        "scrollerTop": 155.4,
+        "footerTop": 673
+      },
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "restoredLine": "Mandate v54 → v55 · lines: +2 −6"
+    },
+    {
+      "shot": "rotation-mandate-kept-1440-uk-light",
+      "line": {
+        "text": "Мандат без змін (v54; поточний типовий — v55) (редагувати)",
+        "whole": true,
+        "box": {
+          "left": 338,
+          "right": 1350,
+          "top": 391.90625,
+          "bottom": 419.90625,
+          "width": 1012,
+          "height": 28
+        },
+        "chevron": false,
+        "expanded": null,
+        "contrast": 7.3
+      },
+      "state": "unchanged",
+      "slot": {
+        "text": "Повернути типовий",
+        "kind": "restore",
+        "whole": true,
+        "box": {
+          "left": 337,
+          "right": 469.171875,
+          "top": 358.40625,
+          "bottom": 378.90625,
+          "width": 132.171875,
+          "height": 20.5
+        }
+      },
+      "sentence": false,
+      "diff": null,
+      "editor": null,
+      "overlaps": [],
+      "pageScroll": 0,
+      "sections": {
+        "scrollerTop": 155.4,
+        "footerTop": 673
+      },
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "restoredLine": "Мандат v54 → v55 · рядки: +2 −6"
+    },
+    {
+      "shot": "rotation-mandate-changed-collapsed-390-uk-dark",
+      "line": {
+        "text": "Мандат v54 → v55 · рядки: +2 −6",
+        "whole": true,
+        "box": {
+          "left": 12,
+          "right": 378,
+          "top": 352,
+          "bottom": 396,
+          "width": 366,
+          "height": 44
+        },
+        "chevron": true,
+        "expanded": "false",
+        "contrast": 7.1
+      },
+      "state": "changed",
+      "slot": {
+        "text": "Лишити мандат чинного (на основі v54)",
+        "kind": "keep",
+        "whole": true,
+        "box": {
+          "left": 12,
+          "right": 234.109375,
+          "top": 296,
+          "bottom": 340,
+          "width": 222.109375,
+          "height": 44
+        }
+      },
+      "sentence": false,
+      "diff": null,
+      "editor": null,
+      "overlaps": [],
+      "pageScroll": 0,
+      "sections": {
+        "scrollerTop": 57,
+        "footerTop": 775
+      },
+      "viewport": {
+        "width": 390,
+        "height": 844
+      }
+    },
+    {
+      "shot": "rotation-mandate-changed-collapsed-1440-en-dark",
+      "line": {
+        "text": "Mandate v54 → v55 · lines: +2 −6",
+        "whole": true,
+        "box": {
+          "left": 338,
+          "right": 1350,
+          "top": 391.90625,
+          "bottom": 419.90625,
+          "width": 1012,
+          "height": 28
+        },
+        "chevron": true,
+        "expanded": null,
+        "contrast": 6.8
+      },
+      "state": "changed",
+      "slot": {
+        "text": "Keep the incumbent's mandate (based on v54)",
+        "kind": "keep",
+        "whole": true,
+        "box": {
+          "left": 337,
+          "right": 575.21875,
+          "top": 358.40625,
+          "bottom": 378.90625,
+          "width": 238.21875,
+          "height": 20.5
+        }
+      },
+      "sentence": false,
+      "diff": null,
+      "editor": null,
+      "overlaps": [],
+      "pageScroll": 0,
+      "sections": {
+        "scrollerTop": 155.4,
+        "footerTop": 673
+      },
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      }
+    },
+    {
+      "shot": "rotation-mandate-changed-expanded-390-uk-dark",
+      "line": {
+        "text": "Мандат v54 → v55 · рядки: +2 −6",
+        "whole": true,
+        "box": {
+          "left": 12,
+          "right": 378,
+          "top": 121,
+          "bottom": 165,
+          "width": 366,
+          "height": 44
+        },
+        "chevron": true,
+        "expanded": "true",
+        "contrast": 7.1
+      },
+      "state": "changed",
+      "slot": {
+        "text": "Лишити мандат чинного (на основі v54)",
+        "kind": "keep",
+        "whole": true,
+        "box": {
+          "left": 12,
+          "right": 234.109375,
+          "top": 65,
+          "bottom": 109,
+          "width": 222.109375,
+          "height": 44
+        }
+      },
+      "sentence": false,
+      "diff": {
+        "added": 2,
+        "removed": 6,
+        "context": 5,
+        "intraline": 2,
+        "scrollOverflow": false,
+        "rowsInside": true,
+        "firstWhole": true,
+        "captions": [
+          "Who you are",
+          "Initial visible status",
+          "How work runs",
+          "Fences"
+        ],
+        "headingMarkers": [],
+        "splitHighlights": [],
+        "contrast": {
+          "add": 6.3,
+          "del": 5.1,
+          "context": 14.9,
+          "intraline": 8
+        }
+      },
+      "editor": {
+        "visible": true,
+        "label": "Мандат",
+        "labelWhole": false,
+        "afterDiff": true,
+        "after": true
+      },
+      "overlaps": [],
+      "pageScroll": 0,
+      "sections": {
+        "scrollerTop": 57,
+        "footerTop": 775
+      },
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "atEditor": {
+        "label": "Мандат",
+        "labelWhole": true
+      },
+      "editedLine": "Мандат v54 → ваша правка · рядки: +3 −7"
+    },
+    {
+      "shot": "rotation-mandate-changed-expanded-1440-en-dark",
+      "line": {
+        "text": "Mandate v54 → v55 · lines: +2 −6",
+        "whole": true,
+        "box": {
+          "left": 338,
+          "right": 1350,
+          "top": 196.90625,
+          "bottom": 224.90625,
+          "width": 1012,
+          "height": 28
+        },
+        "chevron": true,
+        "expanded": null,
+        "contrast": 6.8
+      },
+      "state": "changed",
+      "slot": {
+        "text": "Keep the incumbent's mandate (based on v54)",
+        "kind": "keep",
+        "whole": true,
+        "box": {
+          "left": 337,
+          "right": 575.21875,
+          "top": 163.40625,
+          "bottom": 183.90625,
+          "width": 238.21875,
+          "height": 20.5
+        }
+      },
+      "sentence": false,
+      "diff": {
+        "added": 2,
+        "removed": 6,
+        "context": 5,
+        "intraline": 2,
+        "scrollOverflow": false,
+        "rowsInside": true,
+        "firstWhole": true,
+        "captions": [
+          "Who you are",
+          "Initial visible status",
+          "How work runs",
+          "Fences"
+        ],
+        "headingMarkers": [],
+        "splitHighlights": [],
+        "contrast": {
+          "add": 6.3,
+          "del": 5.1,
+          "context": 14.9,
+          "intraline": 8
+        }
+      },
+      "editor": {
+        "visible": true,
+        "label": "Mandate",
+        "labelWhole": true,
+        "afterDiff": true,
+        "after": true
+      },
+      "overlaps": [],
+      "pageScroll": 0,
+      "sections": {
+        "scrollerTop": 155.4,
+        "footerTop": 673
+      },
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "atEditor": {
+        "label": "Mandate",
+        "labelWhole": true
+      },
+      "editedLine": "Mandate v54 → your edit · lines: +3 −7"
+    },
+    {
+      "shot": "rotation-mandate-unchanged-390-uk-dark",
+      "line": {
+        "text": "Мандат без змін (v55) (редагувати)",
+        "whole": true,
+        "box": {
+          "left": 12,
+          "right": 378,
+          "top": 296,
+          "bottom": 340,
+          "width": 366,
+          "height": 44
+        },
+        "chevron": false,
+        "expanded": "false",
+        "contrast": 7.1
+      },
+      "state": "unchanged",
+      "slot": null,
+      "sentence": false,
+      "diff": null,
+      "editor": null,
+      "overlaps": [],
+      "pageScroll": 0,
+      "sections": {
+        "scrollerTop": 57,
+        "footerTop": 775
+      },
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "afterEditPress": {
+        "diffRows": 0,
+        "editor": true
+      }
+    },
+    {
+      "shot": "rotation-mandate-unchanged-1440-en-dark",
+      "line": {
+        "text": "Mandate unchanged (v55) (edit)",
+        "whole": true,
+        "box": {
+          "left": 338,
+          "right": 1350,
+          "top": 359.40625,
+          "bottom": 387.40625,
+          "width": 1012,
+          "height": 28
+        },
+        "chevron": false,
+        "expanded": null,
+        "contrast": 6.8
+      },
+      "state": "unchanged",
+      "slot": null,
+      "sentence": false,
+      "diff": null,
+      "editor": null,
+      "overlaps": [],
+      "pageScroll": 0,
+      "sections": {
+        "scrollerTop": 155.4,
+        "footerTop": 673
+      },
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "afterEditPress": {
+        "diffRows": 0,
+        "editor": true
+      }
+    },
+    {
+      "shot": "rotation-mandate-kept-390-uk-dark",
+      "line": {
+        "text": "Мандат без змін (v54; поточний типовий — v55) (редагувати)",
+        "whole": true,
+        "box": {
+          "left": 12,
+          "right": 378,
+          "top": 352,
+          "bottom": 396,
+          "width": 366,
+          "height": 44
+        },
+        "chevron": false,
+        "expanded": "false",
+        "contrast": 7.1
+      },
+      "state": "unchanged",
+      "slot": {
+        "text": "Повернути типовий",
+        "kind": "restore",
+        "whole": true,
+        "box": {
+          "left": 12,
+          "right": 154.171875,
+          "top": 296,
+          "bottom": 340,
+          "width": 142.171875,
+          "height": 44
+        }
+      },
+      "sentence": false,
+      "diff": null,
+      "editor": null,
+      "overlaps": [],
+      "pageScroll": 0,
+      "sections": {
+        "scrollerTop": 57,
+        "footerTop": 775
+      },
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "restoredLine": "Мандат v54 → v55 · рядки: +2 −6"
+    },
+    {
+      "shot": "rotation-mandate-kept-1440-en-dark",
+      "line": {
+        "text": "Mandate unchanged (v54; the current default is v55) (edit)",
+        "whole": true,
+        "box": {
+          "left": 338,
+          "right": 1350,
+          "top": 391.90625,
+          "bottom": 419.90625,
+          "width": 1012,
+          "height": 28
+        },
+        "chevron": false,
+        "expanded": null,
+        "contrast": 6.8
+      },
+      "state": "unchanged",
+      "slot": {
+        "text": "Restore default",
+        "kind": "restore",
+        "whole": true,
+        "box": {
+          "left": 337,
+          "right": 443.796875,
+          "top": 358.40625,
+          "bottom": 378.90625,
+          "width": 106.796875,
+          "height": 20.5
+        }
+      },
+      "sentence": false,
+      "diff": null,
+      "editor": null,
+      "overlaps": [],
+      "pageScroll": 0,
+      "sections": {
+        "scrollerTop": 155.4,
+        "footerTop": 673
+      },
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "restoredLine": "Mandate v54 → v55 · lines: +2 −6"
+    }
+  ]
+}
