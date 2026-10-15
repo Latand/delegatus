@@ -409,6 +409,24 @@ test("a transport return follows a retired attempt, and the retention bound make
 /* The age retirement (#1746) is the second reason an attempt may leave the
    fence, and the row has to be able to hold one: it names no superseding seat,
    because the seat never moved. */
+test.each(["dispatch", "operation"] as const)("retirement refuses a concurrent %s change under the same wake key", change => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "seat-retirement-race-"));
+  try {
+    const accounting = new SeatTickAccounting(path.join(dir, "state.sqlite"), "project");
+    accounting.initialize(emptySeatTickState(), null);
+    accounting.prepare(accounting.readState(), { clientMessageId: "aged", conversationId: CONVERSATION, seatEpoch: 169,
+      operationId: null, text: "wake", preparedAt: "2026-10-15T00:33:00.000Z",
+      commit: { proposal: false, reasons: [], fingerprint: "fp", eventsThrough: 7, children: [] } });
+    const observed = accounting.readState().outstandingWake!;
+    if (change === "dispatch") accounting.beginDispatch(observed);
+    else accounting.writeState({ ...accounting.readState(), outstandingWake: { ...observed, operationId: "accepted" } });
+    expect(accounting.retire(observed, "2026-10-15T05:03:00.000Z", { reason: "unresolved-age", supersededBy: null }))
+      .toEqual({ retired: false, evicted: null });
+    expect(accounting.readState().outstandingWake?.clientMessageId).toBe(observed.clientMessageId);
+    expect(accounting.readState().retiredWakes).toEqual([]);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
 test("an attempt retired on its age bound is stored with its reason and no superseding seat", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "seat-accounting-retire-age-"));
   try {
