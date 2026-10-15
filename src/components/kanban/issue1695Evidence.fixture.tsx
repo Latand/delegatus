@@ -1,3 +1,4 @@
+import { nativeAssociationForm } from "@/lib/attention/nativeAssociationForm";
 import { issueReportApprovalDrafts } from "@/lib/issueReports/approvalReply";
 import { issueReportPreviewText } from "@/lib/issueReports/previewText";
 import type { IssueReportFinding } from "@/lib/issueReports/scrub";
@@ -3262,6 +3263,13 @@ if (DECISIONS) {
     held.title = L("Where to pin the «Done» list and when to deploy it after the merge, for every instance of the project", "Де закріпити список «Готово» і коли деплоїти його після мержу, на кожній інстанції проєкту");
     held.questions![1]!.options[0] = { label: L("Right after the merge, once main is green and the checks on the merged commit have passed", "Одразу після мержу, щойно main зелений і перевірки на змерженому коміті пройшли"), recommended: true };
   }
+  if (DECISIONS === "native-association") {
+    const form = nativeAssociationForm({ home: "/fixture/claude", pid: 4201, processIdentity: "4201:100", domain: "fixture",
+      sessionId: "fixture-session", transcript: "/fixture/claude/projects/external-session/transcript.jsonl", recordRevision: "fixture-record",
+      generationProof: "fixture-writer", conversationId: "conversation_external", cwd: "/fixture/worktrees/external-session", startedAt: Date.UTC(2026, 9, 15, 9, 30) }, UK ? "uk" : "en");
+    Object.assign(seatRounds[0]!, form, { source: { conversationId: null }, nativeAssociationState: "pending" });
+    seatRounds.splice(1); delete protoRounds["t-search"];
+  }
   if (DECISIONS === "answered") {
     const held = seatRounds[0]!;
     held.decision = { chosen: [], answers: [{ questionId: "place", options: [0] }, { questionId: "deploy", options: [0] }], comment: "", at: iso(MIN), delivery: { state: "sent", retryable: false } };
@@ -3276,7 +3284,7 @@ function fixtureDecisions() {
     const held = tasks.find((entry) => entry.id === taskId);
     return waiting && !waiting.decision && !protoHidden.has(waiting.id) && held ? [{ ...waiting, taskTitle: held.text.split("\n")[0] }] : [];
   });
-  return [...fromTasks, ...seatRounds.filter((round) => !round.decision)].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  return [...fromTasks, ...seatRounds.filter((round) => !round.decision || (round.nativeAssociationState && round.decision.answers?.every(answer => answer.options[0] === 1)))].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
 }
 const seatDecisionNotices = () => seatRounds.filter((round) => !round.decision).map((round) => ({ id: `prototype:${round.id}`, project: PROJECT, taskId: null, reviewId: round.id, title: round.title, asks: "questions" as const, createdAt: round.createdAt, target: { kind: "seat-decision" as const, project: PROJECT, reviewId: round.id } }));
 type FixtureAlbumItem = { id: string; src: string; name: string | null; ts: number; via: "read" | "named" | "pasted"; source: { key: string; conversationId: string | null; path: string; stage?: { pipelineId: string; stageId: string; attempt: number; round?: number } }; isNew: boolean };
@@ -3661,6 +3669,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       if (!held) return json({ error: "review not found" }, 404);
       held.decision = { ...(body.reject ? { rejected: true as const } : {}), chosen: body.chosen ?? [], answers: body.answers, comment: body.comment ?? "", at: new Date().toISOString(), delivery: { state: "sent", retryable: false } };
       protoPublish();
+      if (held.nativeAssociationState) held.nativeAssociationState = body.answers?.every((answer: { options: number[] }) => answer.options[0] === 1) ? "approved" : "refused";
       return json({ project: PROJECT, decisions: fixtureDecisions() });
     }
     const review = url.searchParams.get("review");

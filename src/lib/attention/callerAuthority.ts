@@ -17,8 +17,8 @@ import { nativeCallerRefusal, type NativeCallerRefusal, type NativeCallerVerdict
  * agent that started it, so walking up from here reaches that agent's pid, and
  * the registry says which conversation that pid is hosting; the capability
  * digest names the same conversation when every pid is gone. An external
- * Claude process can also prove its scanned generation through a native record
- * bound to its kernel identity, when neither existing chain names a caller.
+ * Claude process can also use an operator-approved association of its kernel
+ * identity and corroborated transcript generation when neither existing chain names a caller.
  *
  * Deliberately pure over supplied sources: the decision is a function of an
  * ancestry and a registry snapshot, so it is testable without a process tree.
@@ -55,9 +55,9 @@ export interface AttentionCallerSources {
 
 export type AttentionCallerAuthority =
   /** The operator's own root session. */
-  | { kind: "root"; conversationId: string | null; evidence?: "native-session" }
+  | { kind: "root"; conversationId: string | null; evidence?: "native-session"; nativeProof?: string }
   /** A conversation that is positively NOT the root. */
-  | { kind: "worker"; conversationId: string; role: string | null; evidence?: "native-session" }
+  | { kind: "worker"; conversationId: string; role: string | null; evidence?: "native-session"; nativeProof?: string }
   /** No evidence named the caller. See {@link attentionCallerAuthority}. */
   | { kind: "unidentified"; admission?: NativeCallerRefusal };
 
@@ -118,12 +118,12 @@ export function attentionCallerAuthority(sources: AttentionCallerSources): Atten
     ?? (capabilityConversationId
       ? byId.get(capabilityConversationId) ?? { conversationId: capabilityConversationId, pids: [], role: null }
       : null);
-  let evidence: { evidence?: "native-session" } = {};
+  let evidence: { evidence?: "native-session"; nativeProof?: string } = {};
   if (!conversation && sources.nativeCaller) {
     const native = sources.nativeCaller();
     if (native.kind === "refused") return { kind: "unidentified", admission: native };
     conversation = byId.get(native.conversationId) ?? null;
-    evidence = { evidence: "native-session" };
+    evidence = { evidence: "native-session", nativeProof: native.proof };
   }
   if (!conversation) return { kind: "unidentified" };
   if (isRootConversation(conversation, sources.rootConversationId())) {

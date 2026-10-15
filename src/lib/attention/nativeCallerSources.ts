@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -9,6 +10,9 @@ import { processIdentityStatus } from "@/lib/processIdentity";
 import { argvEngine, isHelperArgv, readStructuredHostStamp } from "@/lib/scanner/process";
 import { processAncestry } from "./callerAuthority";
 import { nativeSessionRecord, type NativeCallerSources, type NativeRecordRead } from "./nativeCaller";
+
+import { nativeGenerationCurrent, nativeSessionObserved, nativeTranscriptCallProof } from "./nativeCallProof";
+import { nativeAssociation } from "./nativeAssociation";
 
 const MAX_RECORD_BYTES = 64 * 1024;
 
@@ -27,7 +31,11 @@ export function readNativeSessionRecord(home: string, pid: number): NativeRecord
       length += read;
     }
     if (length > MAX_RECORD_BYTES) return { kind: "invalid" };
-    return { kind: "record", value: JSON.parse(buffer.subarray(0, length).toString("utf8")) };
+    const after = fs.fstatSync(descriptor);
+    if (stat.ino !== after.ino || stat.size !== after.size || stat.ctimeMs !== after.ctimeMs || stat.mtimeMs !== after.mtimeMs) return { kind: "invalid" };
+    const bytes = buffer.subarray(0, length);
+    return { kind: "record", value: JSON.parse(bytes.toString("utf8")),
+      revision: `${stat.dev}:${stat.ino}:${stat.ctimeMs}:${stat.mtimeMs}:${crypto.createHash("sha256").update(bytes).digest("hex")}` };
   } catch (error) {
     return { kind: (error as NodeJS.ErrnoException).code === "ENOENT" ? "missing" : "invalid" };
   } finally {
@@ -84,12 +92,32 @@ export function nativeCallerSources(snapshot: () => Pick<RegistrySnapshot, "conv
           if (read.kind !== "record") continue;
           const record = nativeSessionRecord(read.value, pid);
           if (record?.sessionId === sessionId && procBackend.pidAlive(pid) && !procBackend.processExited(pid)
-            && procBackend.processIdentity(pid) === `${pid}:${record.procStart}`) return true;
+            && procBackend.processIdentity(pid) === `${pid}:${record.procStart}` && nativeSessionObserved(pid, sessionId)) return true;
         }
       }
       return false;
     },
+    cwd: (pid) => procBackend.readCwd(pid),
+    association: nativeAssociation,
+    generationProof: nativeGenerationProof,
     snapshot,
     hostStatus: processIdentityStatus,
   };
+}
+
+/** Each call needs fresh proof from Claude's synchronous PreToolUse hook. */
+export function nativeGenerationProof(pid: number, transcript: string): string | null {
+  return nativeTranscriptCallProof(pid, transcript);
+}
+
+/** Approval is refused if the process or the shown generation ended while the
+ * operator was reading. The admission resolver repeats the registry guards. */
+export function nativeAssociationCurrent(evidence: import("./nativeCaller").NativeAdmissionEvidence): boolean {
+  if (!procBackend.pidAlive(evidence.pid) || procBackend.processExited(evidence.pid)
+    || procBackend.processIdentity(evidence.pid) !== evidence.processIdentity) return false;
+  const read = readNativeSessionRecord(evidence.home, evidence.pid);
+  const record = read.kind === "record" ? nativeSessionRecord(read.value, evidence.pid) : null;
+  if (read.kind !== "record" || !record || read.revision !== evidence.recordRevision || record.sessionId !== evidence.sessionId
+    || record.pidDomain !== evidence.domain) return false;
+  return nativeGenerationCurrent(evidence.pid, evidence.sessionId, evidence.transcript, evidence.generationProof);
 }

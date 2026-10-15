@@ -94,6 +94,8 @@ export interface PrototypeDecision {
 export interface PrototypeReviewRound {
   id: string;
   title: string;
+  /** Local operator association evidence; never supplied by publication input. */
+  nativeAssociation?: import("@/lib/attention/nativeCaller").NativeAdmissionEvidence;
   /** Null for a round the project's orchestrator published without a task
       (docs/design/operator-decision-forms.md §2.2). */
   taskId: string | null;
@@ -118,7 +120,9 @@ export interface PrototypeTelegramPost {
   reason?: string;
 }
 export interface PrototypeMediaView extends PrototypeMedia { available: boolean; url: string | null }
-export interface PrototypeRoundView extends Omit<PrototypeReviewRound, "publicationKey" | "inputDigest" | "critic" | "decision" | "variants"> {
+export interface PrototypeRoundView extends Omit<PrototypeReviewRound, "publicationKey" | "inputDigest" | "critic" | "nativeAssociation" | "decision" | "variants"> {
+  /** Enables revocation in the existing Decisions column; contains no kernel proof. */
+  nativeAssociationState?: "pending" | "approved" | "refused";
   variants: Array<Omit<PrototypeVariant, "frames" | "videos"> & {
     frames: Array<Omit<PrototypeFrame, "image" | "original"> & { image: PrototypeMediaView; original?: PrototypeMediaView }>;
     videos: Array<{ media: PrototypeMediaView; caption: string }>;

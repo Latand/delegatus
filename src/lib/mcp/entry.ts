@@ -10,7 +10,10 @@ import { startViewerMcpServer } from "./server";
 
 discardUnsupportedApiCredentials();
 
-startViewerMcpServer().catch((error) => {
+const start = process.argv.includes("--native-caller-hook")
+  ? import("@/lib/attention/nativeCallerHook").then(module => module.runNativeCallerHook())
+  : startViewerMcpServer();
+start.catch((error) => {
   console.error(error instanceof Error ? error.message : String(error));
   process.exitCode = 1;
 });

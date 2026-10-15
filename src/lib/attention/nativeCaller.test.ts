@@ -17,9 +17,11 @@ function fixture(overrides: Partial<NativeCallerSources> = {}) {
   const sources: NativeCallerSources = {
     platform: "linux", ancestry: () => [99, 42, 41], isClaude: (pid) => pid === 42,
     hostStamp: () => null, home: () => HOME, accounts: () => [{ home: HOME, projectsDir: `${HOME}/projects` }],
-    realpath: (file) => file, record: () => ({ kind: "record", value: record }), identity: (pid) => `${pid}:100`,
+    realpath: (file) => file, record: () => ({ kind: "record", value: record, revision: "record-1" }), identity: (pid) => `${pid}:100`,
     domain: () => record.pidDomain, bootTime: () => 10_000, processStartedAt: () => 11_000,
     sessionHeldElsewhere: () => false, snapshot: () => snapshot as unknown as ReturnType<NativeCallerSources["snapshot"]>,
+    cwd: () => "/fixture/project", generationProof: () => "writer-1",
+    association: () => ({ status: "approved", proof: "approved-1" }),
     hostStatus: () => "dead", ...overrides,
   };
   return { sources, record, conversation, generation, snapshot };
@@ -28,10 +30,10 @@ function refused(sources: NativeCallerSources, reason: NativeCallerReason) {
   expect(resolveNativeCaller(sources)).toEqual({ kind: "refused", reason, retryable: reason === "session-not-scanned" });
 }
 
-test("a current unhosted native generation is admitted without cwd evidence", () => {
+test("an operator-approved current generation ignores cwd claims in the record", () => {
   const f = fixture();
   Object.assign(f.record, { cwd: "/unrelated/project" });
-  expect(resolveNativeCaller(f.sources)).toEqual({ kind: "admitted", conversationId: "conversation_native" });
+  expect(resolveNativeCaller(f.sources)).toEqual({ kind: "admitted", conversationId: "conversation_native", proof: "approved-1" });
 });
 
 test("a non-Linux server and a server with no Claude parent are refused", () => {
@@ -155,15 +157,15 @@ test("the real bounded reader refuses symlinks, directories, oversized and malfo
     const target = path.join(home, "target"); fs.writeFileSync(target, "{}"); fs.symlinkSync(target, file);
     expect(readNativeSessionRecord(home, 42)).toEqual({ kind: "invalid" }); fs.unlinkSync(file);
     fs.mkdirSync(file); expect(readNativeSessionRecord(home, 42)).toEqual({ kind: "invalid" }); fs.rmdirSync(file);
-    fs.writeFileSync(file, "{}".padEnd(64 * 1024, " ")); expect(readNativeSessionRecord(home, 42)).toEqual({ kind: "record", value: {} });
+    fs.writeFileSync(file, "{}".padEnd(64 * 1024, " ")); expect(readNativeSessionRecord(home, 42)).toMatchObject({ kind: "record", value: {}, revision: expect.any(String) });
     fs.writeFileSync(file, "{}".padEnd(64 * 1024 + 1, " ")); expect(readNativeSessionRecord(home, 42)).toEqual({ kind: "invalid" });
     fs.writeFileSync(file, "{"); expect(readNativeSessionRecord(home, 42)).toEqual({ kind: "invalid" });
-    fs.writeFileSync(file, "{}"); expect(readNativeSessionRecord(home, 42)).toEqual({ kind: "record", value: {} });
+    fs.writeFileSync(file, "{}"); expect(readNativeSessionRecord(home, 42)).toMatchObject({ kind: "record", value: {}, revision: expect.any(String) });
   } finally { fs.rmSync(home, { recursive: true, force: true }); }
 });
 
 test("every refusal gives the reason and continuation route without identity disclosure", () => {
-  const reasons: NativeCallerReason[] = ["platform-unverified", "no-claude-ancestor", "capability-unresolved", "capability-conflict", "foreign-host", "unknown-claude-home", "session-record-missing", "session-record-invalid", "session-kind", "process-identity-mismatch", "domain-mismatch", "record-predates-process", "session-held-twice", "session-not-scanned", "generation-ambiguous", "generation-not-current", "transcript-outside-home", "generation-hosted"];
+  const reasons: NativeCallerReason[] = ["platform-unverified", "no-claude-ancestor", "capability-unresolved", "capability-conflict", "foreign-host", "unknown-claude-home", "session-record-missing", "session-record-invalid", "session-kind", "process-identity-mismatch", "domain-mismatch", "record-predates-process", "session-held-twice", "session-not-scanned", "generation-ambiguous", "generation-not-current", "transcript-outside-home", "generation-hosted", "session-changed", "session-proof-unavailable", "approval-waiting", "approval-refused", "approval-unavailable"];
   for (const reason of reasons) {
     const text = nativeAdmissionMessage({ reason, retryable: reason === "session-not-scanned" });
     expect(text).toContain(`[${reason}]`); expect(text).toContain("open the conversation in Delegatus");
@@ -182,4 +184,50 @@ test("a host reservation without a recorded PID stays unverified", () => {
     const f = fixture(); Object.assign(f.snapshot.entries, { reserved: { artifactPath: f.generation.path, ...host } });
     refused(f.sources, "generation-hosted");
   }
+});
+
+test("a valid caller-writable record never grants unattended admission", () => {
+  refused(fixture({ association: () => ({ status: "waiting", proof: "pending" }) }).sources, "approval-waiting");
+  refused(fixture({ association: () => ({ status: "refused", proof: "revoked" }) }).sources, "approval-refused");
+  refused(fixture({ generationProof: () => null }).sources, "session-proof-unavailable");
+  refused(fixture({ association: () => { throw new Error("store busy"); } }).sources, "approval-unavailable");
+});
+
+test("a record rewrite during snapshot refuses the old session before requesting approval", () => {
+  const f = fixture(); let approved = false;
+  f.sources.snapshot = () => {
+    f.record.sessionId = ["22222222", "2222", "4222", "8222", "222222222222"].join("-");
+    return f.snapshot as unknown as ReturnType<NativeCallerSources["snapshot"]>;
+  };
+  f.sources.association = () => { approved = true; return { status: "approved", proof: "bad" }; };
+  refused(f.sources, "session-changed"); expect(approved).toBe(false);
+});
+
+test("a changed record revision or hook generation proof refuses the approved generation", () => {
+  for (const seam of ["record", "writer"] as const) {
+    const f = fixture(); let reads = 0;
+    if (seam === "record") f.sources.record = () => ({ kind: "record", value: f.record, revision: ++reads === 1 ? "record-1" : "record-2" });
+    else f.sources.generationProof = () => ++reads === 1 ? "writer-1" : "writer-2";
+    refused(f.sources, "session-changed");
+  }
+});
+
+test("the production record reader detects a session rewrite during snapshot", () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "llv-native-switch-"));
+  try {
+    const f = fixture(); fs.mkdirSync(path.join(home, "sessions"));
+    const file = path.join(home, "sessions", "42.json"); fs.writeFileSync(file, JSON.stringify(f.record));
+    let reads = 0; let associations = 0;
+    f.sources.record = () => { reads++; return readNativeSessionRecord(home, 42); };
+    f.sources.snapshot = () => {
+      fs.writeFileSync(file, JSON.stringify({ ...f.record, sessionId: ["33333333", "3333", "4333", "8333", "333333333333"].join("-") }));
+      return f.snapshot as unknown as ReturnType<NativeCallerSources["snapshot"]>;
+    };
+    f.sources.association = () => { associations++; return { status: "approved", proof: "bad" }; };
+    refused(f.sources, "session-changed"); expect(reads).toBe(2); expect(associations).toBe(0);
+  } finally { fs.rmSync(home, { recursive: true, force: true }); }
+});
+
+test("a new hook generation with an old asynchronously updated record stays refused", () => {
+  refused(fixture({ generationProof: () => null }).sources, "session-proof-unavailable");
 });

@@ -406,6 +406,7 @@ async function requestViewerControl(
   let lastFailure = "connection failed";
   while (Date.now() < expiresAt) {
     if (context.signal?.aborted) throw context.signal.reason;
+    if (init.method === "POST") context.assertCaller?.();
     attempts += 1;
     const remainingMs = Math.max(1, expiresAt - Date.now());
     const attempt = deadlineSignal(Math.min(CONTROL_ATTEMPT_TIMEOUT_MS, remainingMs), {
@@ -616,8 +617,10 @@ async function dispatchViewerControl(
   };
   /* From here on the request may be on the wire: the service reads this to
      tell a failure that happened BEFORE any dispatch from one after it. */
+  context.assertCaller?.();
   if (context.dispatch) context.dispatch.attempted = true;
   while (true) {
+    context.assertCaller?.();
     attempt = deadlineSignal(Math.min(CONTROL_ATTEMPT_TIMEOUT_MS, Math.max(1, expiresAt - Date.now())), {
       signal: context.signal,
       reason: "Viewer control dispatch timed out",
@@ -2273,6 +2276,7 @@ async function createPipeline(args: McpToolArgs, context?: McpToolCallContext, d
   refuseCrossProjectFromSeat("create_pipeline", () => (text(args.repoDir) ? projectForCwd(text(args.repoDir)) : null), args, dependencies);
   const request = withoutKeys(args, ["clientRequestId", "recoveryOnly", "crossProjectRequest"]);
   if (request.src === undefined && dependencies) request.src = inferredPipelineSource(dependencies);
+  context?.assertCaller?.();
   if (context?.dispatch) context.dispatch.attempted = true;
   /* Every MCP caller is an agent; the sizing rules judge the attributed
      conversation, and the create's `src` creator when attribution names none. */
@@ -7346,6 +7350,7 @@ function recoveryCaller(dependencies: Partial<Pick<ViewerMcpDomainDependencies, 
   return {
     kind: authority.kind,
     conversationId: authority.conversationId,
+    ...(authority.nativeProof ? { nativeProof: authority.nativeProof } : {}),
     project,
     ...(predecessors.length ? { predecessors } : {}),
   };
@@ -7748,6 +7753,7 @@ export function viewerMcpRecoverableTools(
 ): Partial<Record<McpToolName, McpRecoverableTool>> {
   return {
     create_pipeline: {
+      currentCaller: () => recoveryCaller(domainDependencies),
       bindForRecovery: (args) => launchRecoveryBinding(args, domainDependencies, "repoDir"),
       bind: async (args) => {
         args = await namedLaunchProject(args, domainDependencies, "repoDir");
@@ -7767,6 +7773,7 @@ export function viewerMcpRecoverableTools(
     },
     spawn_agent: {
       bind: (args) => bindSpawn(args, domainDependencies),
+      currentCaller: () => recoveryCaller(domainDependencies),
       bindForRecovery: (args) => launchRecoveryBinding(args, domainDependencies, "cwd"),
       authorizeClaim: (args, binding) => {
         requireMcpDeployerCaller(args, binding.target.project, domainDependencies);
@@ -7775,11 +7782,13 @@ export function viewerMcpRecoverableTools(
       recover: (binding, options) => recoverSpawn(binding, options.legacy, domainDependencies, options.args, options.context),
     },
     send_message_to_orchestrator: {
+      currentCaller: () => recoveryCaller(domainDependencies),
       bind: (args) => bindOrchestratorSend(args, domainDependencies),
       bindForRecovery: (args) => bindOrchestratorSend(args, domainDependencies, true),
       recover: (binding, options) => recoverSend(binding, options.legacy, domainDependencies, options.args),
     },
     send_message: {
+      currentCaller: () => recoveryCaller(domainDependencies),
       bind: (args) => bindSend(args, domainDependencies),
       recover: (binding, options) => recoverSend(binding, options.legacy, domainDependencies, options.args),
     },

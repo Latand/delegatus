@@ -1,3 +1,4 @@
+import { nativeAssociationCurrent } from "@/lib/attention/nativeCallerSources";
 import { NextRequest } from "next/server";
 import { conversationHostPOST } from "@/app/api/conversation-host/handlers";
 import { handleRuntimeRetry } from "@/lib/runtime/http";
@@ -181,6 +182,13 @@ export function decidePrototype(request: PrototypeDeliveryContext,taskId: string
     catch (error) { throw new PrototypeError((error as Error).message); }
     const skipped = input.skip ? true : undefined;
     const chosen = [...input.chosen].sort((a,b) => a-b);
+    if (round.nativeAssociation && !input.skip && !input.reject && !input.recommendedWithReservation
+      && ["identity", "evidence"].every(id => {
+        const answer = answers?.find(answer => answer.questionId === id);
+        return answer && !answer.skipped && !answer.other && !answer.customText && answer.options.length === 1 && answer.options[0] === 1;
+      }) && !nativeAssociationCurrent(round.nativeAssociation)) {
+      throw new PrototypeError("This native session changed or ended. Nothing was approved; ask the live session to request a new association.", 409);
+    }
     const prior = round.decision;
     if (prior && prior.comment === input.comment && JSON.stringify(prior.chosen) === JSON.stringify(chosen)
       && JSON.stringify(prior.answers) === JSON.stringify(answers) && prior.skipped === skipped && prior.rejected === input.reject

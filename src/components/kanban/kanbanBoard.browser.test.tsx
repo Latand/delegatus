@@ -31366,3 +31366,80 @@ describe("independent panel scroll", () => {
     expect(failures).toEqual([]);
   }, 600_000);
 });
+
+
+describe("native caller operator association", () => {
+  browserTest("native association reuses the decision form on desktop and phone", async () => {
+    const out = path.resolve(".artifacts/native-association/frames"); fs.mkdirSync(out, { recursive: true });
+    const served = await serveEvidenceFixture(path.join(out, "bundle"));
+    const readings: unknown[] = [];
+    try {
+      for (const width of [1440, 390]) {
+        const browser = await chromium.launch({ ...LAUNCH, ...(width === 1440 ? { ignoreDefaultArgs: ["--hide-scrollbars"] } : {}) });
+        try {
+          for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) {
+            const phone = width === 390;
+            const { context, page, pageErrors } = await openFixture(browser, `${served.base}?decisions=native-association`, { width, height: phone ? 844 : 900 }, scheme, lang, "reduce", phone);
+            try {
+              if (phone) { await page.locator("[data-mobile2-seat-open]").click(); await page.locator("[data-decision-strip]").click(); }
+              const scope = phone ? '[data-mobile2-sheet="decisions"]' : '[data-decision-column="decisions"]';
+              const id = `pr_${"d".repeat(32)}`;
+              const row = page.locator(`${scope} [data-decision-row="${id}"]`);
+              if (await row.count()) await row.click();
+              const card = page.locator(`${scope} [data-decision-card="open"][data-decision-review="${id}"]`);
+              await card.waitFor();
+              const first = card.locator('[data-prototype-question="identity"]');
+              await first.scrollIntoViewIfNeeded();
+              const tag = `${lang}-${scheme}-${width}`;
+              await page.screenshot({ path: path.join(out, `${tag}-request.png`) });
+              await card.locator('[data-prototype-option="identity:1"]').click();
+              const proof = card.locator('[data-prototype-question="evidence"]'); await proof.scrollIntoViewIfNeeded();
+              const shown = await proof.textContent();
+              expect(shown).toContain("Claude"); expect(shown).toContain("/fixture/worktrees/external-session");
+              expect(shown).toContain("2026-10-15T09:30:00.000Z"); expect(shown).toContain("/fixture/claude/projects/external-session/transcript.jsonl");
+              expect(await card.evaluate(node => node.scrollWidth - node.clientWidth)).toBeLessThanOrEqual(1);
+              await page.screenshot({ path: path.join(out, `${tag}-evidence.png`) });
+              await card.locator('[data-prototype-option="evidence:1"]').click();
+              const send = card.locator("[data-decision-send]"); await send.scrollIntoViewIfNeeded(); await send.click();
+              await page.waitForFunction(() => (window as unknown as { decisionPosts: unknown[] }).decisionPosts.length === 1);
+              const posted = await page.evaluate(() => (window as unknown as { decisionPosts: { answers: unknown[] }[] }).decisionPosts[0]);
+              expect(posted.answers).toEqual([{ questionId: "identity", options: [1] }, { questionId: "evidence", options: [1] }]);
+              const tab = page.locator(`${phone ? scope : "[data-decision-column]"} [data-decision-tab="decisions"]`);
+              await tab.click();
+              const revoke = page.locator(`${scope} [data-native-association-revoke]`);
+              await revoke.waitFor(); await revoke.scrollIntoViewIfNeeded();
+              await page.screenshot({ path: path.join(out, `${tag}-approved.png`) });
+              await page.evaluate(() => {
+                const original = window.fetch; let refused = false;
+                window.fetch = (async (input, init) => {
+                  if (!refused && String(input) === "/api/projects/decisions" && init?.method === "POST") {
+                    refused = true;
+                    return new Response(JSON.stringify({ error: "Association is busy" }), { status: 503, headers: { "content-type": "application/json" } });
+                  }
+                  return original(input, init);
+                }) as typeof window.fetch;
+              });
+              await revoke.click();
+              const revokeError = page.locator(`${scope} [role="alert"]`);
+              await revokeError.waitFor(); await revokeError.scrollIntoViewIfNeeded();
+              const revocationError = await revokeError.innerText(); expect(revocationError).toContain("Association is busy");
+              await page.screenshot({ path: path.join(out, `${tag}-revoke-error.png`) });
+              await revoke.click();
+              await page.waitForFunction(() => (window as unknown as { decisionPosts: unknown[] }).decisionPosts.length === 2);
+              const revocation = await page.evaluate(() => (window as unknown as { decisionPosts: { answers: unknown[] }[] }).decisionPosts[1]);
+              expect(revocation.answers).toEqual([{ questionId: "identity", options: [0] }, { questionId: "evidence", options: [0] }]);
+              await revoke.waitFor({ state: "detached" });
+              await page.screenshot({ path: path.join(out, `${tag}-revoked.png`) });
+              expect(pageErrors).toEqual([]); readings.push({ lang, scheme, width, shown, posted, revocationError, revocation });
+            } catch (error) {
+              await page.screenshot({ path: path.join(out, `${lang}-${scheme}-${width}-failed.png`) }).catch(() => {});
+              throw error;
+            } finally { await context.close(); }
+          }
+        } finally { await browser.close(); }
+      }
+      fs.mkdirSync("evidence/native-association", { recursive: true });
+      fs.writeFileSync("evidence/native-association/decisions.json", JSON.stringify(readings, null, 2) + "\n");
+    } finally { served.stop(); }
+  }, 300_000);
+});

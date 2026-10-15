@@ -97,9 +97,9 @@ test("the ancestry walk stops at the root of the tree, a cycle, and its own boun
 
 test("native evidence identifies a scanned worker and the configured root", () => {
   const native = { ancestry: () => [99, 42], hosted: () => [{ conversationId: "native", role: "worker", pids: [] }],
-    rootConversationId: () => null, nativeCaller: () => ({ kind: "admitted" as const, conversationId: "native" }) };
-  expect(attentionCallerAuthority(native)).toEqual({ kind: "worker", conversationId: "native", role: "worker", evidence: "native-session" });
-  expect(attentionCallerAuthority({ ...native, rootConversationId: () => "native" })).toEqual({ kind: "root", conversationId: "native", evidence: "native-session" });
+    rootConversationId: () => null, nativeCaller: () => ({ kind: "admitted" as const, proof: "fixture-proof", conversationId: "native" }) };
+  expect(attentionCallerAuthority(native)).toEqual({ kind: "worker", conversationId: "native", role: "worker", evidence: "native-session", nativeProof: "fixture-proof" });
+  expect(attentionCallerAuthority({ ...native, rootConversationId: () => "native" })).toEqual({ kind: "root", conversationId: "native", evidence: "native-session", nativeProof: "fixture-proof" });
 });
 
 test("native evidence is never read when a capability names the caller or a managed ancestor matches", () => {

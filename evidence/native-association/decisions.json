@@ -1,0 +1,378 @@
+[
+  {
+    "lang": "en",
+    "scheme": "light",
+    "width": 1440,
+    "shown": "Engine: Claude. Cwd: /fixture/worktrees/external-session. Process started: 2026-10-15T09:30:00.000Z. Transcript: /fixture/claude/projects/external-session/transcript.jsonl. PID: 4201. Verify this exact session; a sibling needs its own approval.2Engine: Claude. Cwd: /fixture/worktrees/external-session. Process started: 2026-10-15T09:30:00.000Z. Transcript: /fixture/claude/projects/external-session/transcript.jsonl. PID: 4201. Verify this exact session; a sibling needs its own approval.Evidence does not match recommendedI verified this exact sessionOther — write it belowAlready decided",
+    "posted": {
+      "project": "atlas",
+      "reviewId": "pr_dddddddddddddddddddddddddddddddd",
+      "chosen": [],
+      "comment": "",
+      "answers": [
+        {
+          "questionId": "identity",
+          "options": [
+            1
+          ]
+        },
+        {
+          "questionId": "evidence",
+          "options": [
+            1
+          ]
+        }
+      ]
+    },
+    "revocationError": "Access could not be revoked: Association is busy",
+    "revocation": {
+      "project": "atlas",
+      "reviewId": "pr_dddddddddddddddddddddddddddddddd",
+      "chosen": [],
+      "comment": "",
+      "answers": [
+        {
+          "questionId": "identity",
+          "options": [
+            0
+          ]
+        },
+        {
+          "questionId": "evidence",
+          "options": [
+            0
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "lang": "en",
+    "scheme": "dark",
+    "width": 1440,
+    "shown": "Engine: Claude. Cwd: /fixture/worktrees/external-session. Process started: 2026-10-15T09:30:00.000Z. Transcript: /fixture/claude/projects/external-session/transcript.jsonl. PID: 4201. Verify this exact session; a sibling needs its own approval.2Engine: Claude. Cwd: /fixture/worktrees/external-session. Process started: 2026-10-15T09:30:00.000Z. Transcript: /fixture/claude/projects/external-session/transcript.jsonl. PID: 4201. Verify this exact session; a sibling needs its own approval.Evidence does not match recommendedI verified this exact sessionOther — write it belowAlready decided",
+    "posted": {
+      "project": "atlas",
+      "reviewId": "pr_dddddddddddddddddddddddddddddddd",
+      "chosen": [],
+      "comment": "",
+      "answers": [
+        {
+          "questionId": "identity",
+          "options": [
+            1
+          ]
+        },
+        {
+          "questionId": "evidence",
+          "options": [
+            1
+          ]
+        }
+      ]
+    },
+    "revocationError": "Access could not be revoked: Association is busy",
+    "revocation": {
+      "project": "atlas",
+      "reviewId": "pr_dddddddddddddddddddddddddddddddd",
+      "chosen": [],
+      "comment": "",
+      "answers": [
+        {
+          "questionId": "identity",
+          "options": [
+            0
+          ]
+        },
+        {
+          "questionId": "evidence",
+          "options": [
+            0
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "lang": "uk",
+    "scheme": "light",
+    "width": 1440,
+    "shown": "Рушій: Claude. Робоча тека: /fixture/worktrees/external-session. Початок процесу: 2026-10-15T09:30:00.000Z. Транскрипт: /fixture/claude/projects/external-session/transcript.jsonl. PID: 4201. Перевірте саме цю сесію; сусідня потребує окремого дозволу.2Рушій: Claude. Робоча тека: /fixture/worktrees/external-session. Початок процесу: 2026-10-15T09:30:00.000Z. Транскрипт: /fixture/claude/projects/external-session/transcript.jsonl. PID: 4201. Перевірте саме цю сесію; сусідня потребує окремого дозволу.Дані не збігаються рекомендованоЯ перевірив саме цю сесіюІнше — напишіть нижчеВже вирішено",
+    "posted": {
+      "project": "atlas",
+      "reviewId": "pr_dddddddddddddddddddddddddddddddd",
+      "chosen": [],
+      "comment": "",
+      "answers": [
+        {
+          "questionId": "identity",
+          "options": [
+            1
+          ]
+        },
+        {
+          "questionId": "evidence",
+          "options": [
+            1
+          ]
+        }
+      ]
+    },
+    "revocationError": "Не вдалося відкликати доступ: Association is busy",
+    "revocation": {
+      "project": "atlas",
+      "reviewId": "pr_dddddddddddddddddddddddddddddddd",
+      "chosen": [],
+      "comment": "",
+      "answers": [
+        {
+          "questionId": "identity",
+          "options": [
+            0
+          ]
+        },
+        {
+          "questionId": "evidence",
+          "options": [
+            0
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "lang": "uk",
+    "scheme": "dark",
+    "width": 1440,
+    "shown": "Рушій: Claude. Робоча тека: /fixture/worktrees/external-session. Початок процесу: 2026-10-15T09:30:00.000Z. Транскрипт: /fixture/claude/projects/external-session/transcript.jsonl. PID: 4201. Перевірте саме цю сесію; сусідня потребує окремого дозволу.2Рушій: Claude. Робоча тека: /fixture/worktrees/external-session. Початок процесу: 2026-10-15T09:30:00.000Z. Транскрипт: /fixture/claude/projects/external-session/transcript.jsonl. PID: 4201. Перевірте саме цю сесію; сусідня потребує окремого дозволу.Дані не збігаються рекомендованоЯ перевірив саме цю сесіюІнше — напишіть нижчеВже вирішено",
+    "posted": {
+      "project": "atlas",
+      "reviewId": "pr_dddddddddddddddddddddddddddddddd",
+      "chosen": [],
+      "comment": "",
+      "answers": [
+        {
+          "questionId": "identity",
+          "options": [
+            1
+          ]
+        },
+        {
+          "questionId": "evidence",
+          "options": [
+            1
+          ]
+        }
+      ]
+    },
+    "revocationError": "Не вдалося відкликати доступ: Association is busy",
+    "revocation": {
+      "project": "atlas",
+      "reviewId": "pr_dddddddddddddddddddddddddddddddd",
+      "chosen": [],
+      "comment": "",
+      "answers": [
+        {
+          "questionId": "identity",
+          "options": [
+            0
+          ]
+        },
+        {
+          "questionId": "evidence",
+          "options": [
+            0
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "lang": "en",
+    "scheme": "light",
+    "width": 390,
+    "shown": "Engine: Claude. Cwd: /fixture/worktrees/external-session. Process started: 2026-10-15T09:30:00.000Z. Transcript: /fixture/claude/projects/external-session/transcript.jsonl. PID: 4201. Verify this exact session; a sibling needs its own approval.2Engine: Claude. Cwd: /fixture/worktrees/external-session. Process started: 2026-10-15T09:30:00.000Z. Transcript: /fixture/claude/projects/external-session/transcript.jsonl. PID: 4201. Verify this exact session; a sibling needs its own approval.Evidence does not match recommendedI verified this exact sessionOther — write it belowAlready decided",
+    "posted": {
+      "project": "atlas",
+      "reviewId": "pr_dddddddddddddddddddddddddddddddd",
+      "chosen": [],
+      "comment": "",
+      "answers": [
+        {
+          "questionId": "identity",
+          "options": [
+            1
+          ]
+        },
+        {
+          "questionId": "evidence",
+          "options": [
+            1
+          ]
+        }
+      ]
+    },
+    "revocationError": "Access could not be revoked: Association is busy",
+    "revocation": {
+      "project": "atlas",
+      "reviewId": "pr_dddddddddddddddddddddddddddddddd",
+      "chosen": [],
+      "comment": "",
+      "answers": [
+        {
+          "questionId": "identity",
+          "options": [
+            0
+          ]
+        },
+        {
+          "questionId": "evidence",
+          "options": [
+            0
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "lang": "en",
+    "scheme": "dark",
+    "width": 390,
+    "shown": "Engine: Claude. Cwd: /fixture/worktrees/external-session. Process started: 2026-10-15T09:30:00.000Z. Transcript: /fixture/claude/projects/external-session/transcript.jsonl. PID: 4201. Verify this exact session; a sibling needs its own approval.2Engine: Claude. Cwd: /fixture/worktrees/external-session. Process started: 2026-10-15T09:30:00.000Z. Transcript: /fixture/claude/projects/external-session/transcript.jsonl. PID: 4201. Verify this exact session; a sibling needs its own approval.Evidence does not match recommendedI verified this exact sessionOther — write it belowAlready decided",
+    "posted": {
+      "project": "atlas",
+      "reviewId": "pr_dddddddddddddddddddddddddddddddd",
+      "chosen": [],
+      "comment": "",
+      "answers": [
+        {
+          "questionId": "identity",
+          "options": [
+            1
+          ]
+        },
+        {
+          "questionId": "evidence",
+          "options": [
+            1
+          ]
+        }
+      ]
+    },
+    "revocationError": "Access could not be revoked: Association is busy",
+    "revocation": {
+      "project": "atlas",
+      "reviewId": "pr_dddddddddddddddddddddddddddddddd",
+      "chosen": [],
+      "comment": "",
+      "answers": [
+        {
+          "questionId": "identity",
+          "options": [
+            0
+          ]
+        },
+        {
+          "questionId": "evidence",
+          "options": [
+            0
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "lang": "uk",
+    "scheme": "light",
+    "width": 390,
+    "shown": "Рушій: Claude. Робоча тека: /fixture/worktrees/external-session. Початок процесу: 2026-10-15T09:30:00.000Z. Транскрипт: /fixture/claude/projects/external-session/transcript.jsonl. PID: 4201. Перевірте саме цю сесію; сусідня потребує окремого дозволу.2Рушій: Claude. Робоча тека: /fixture/worktrees/external-session. Початок процесу: 2026-10-15T09:30:00.000Z. Транскрипт: /fixture/claude/projects/external-session/transcript.jsonl. PID: 4201. Перевірте саме цю сесію; сусідня потребує окремого дозволу.Дані не збігаються рекомендованоЯ перевірив саме цю сесіюІнше — напишіть нижчеВже вирішено",
+    "posted": {
+      "project": "atlas",
+      "reviewId": "pr_dddddddddddddddddddddddddddddddd",
+      "chosen": [],
+      "comment": "",
+      "answers": [
+        {
+          "questionId": "identity",
+          "options": [
+            1
+          ]
+        },
+        {
+          "questionId": "evidence",
+          "options": [
+            1
+          ]
+        }
+      ]
+    },
+    "revocationError": "Не вдалося відкликати доступ: Association is busy",
+    "revocation": {
+      "project": "atlas",
+      "reviewId": "pr_dddddddddddddddddddddddddddddddd",
+      "chosen": [],
+      "comment": "",
+      "answers": [
+        {
+          "questionId": "identity",
+          "options": [
+            0
+          ]
+        },
+        {
+          "questionId": "evidence",
+          "options": [
+            0
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "lang": "uk",
+    "scheme": "dark",
+    "width": 390,
+    "shown": "Рушій: Claude. Робоча тека: /fixture/worktrees/external-session. Початок процесу: 2026-10-15T09:30:00.000Z. Транскрипт: /fixture/claude/projects/external-session/transcript.jsonl. PID: 4201. Перевірте саме цю сесію; сусідня потребує окремого дозволу.2Рушій: Claude. Робоча тека: /fixture/worktrees/external-session. Початок процесу: 2026-10-15T09:30:00.000Z. Транскрипт: /fixture/claude/projects/external-session/transcript.jsonl. PID: 4201. Перевірте саме цю сесію; сусідня потребує окремого дозволу.Дані не збігаються рекомендованоЯ перевірив саме цю сесіюІнше — напишіть нижчеВже вирішено",
+    "posted": {
+      "project": "atlas",
+      "reviewId": "pr_dddddddddddddddddddddddddddddddd",
+      "chosen": [],
+      "comment": "",
+      "answers": [
+        {
+          "questionId": "identity",
+          "options": [
+            1
+          ]
+        },
+        {
+          "questionId": "evidence",
+          "options": [
+            1
+          ]
+        }
+      ]
+    },
+    "revocationError": "Не вдалося відкликати доступ: Association is busy",
+    "revocation": {
+      "project": "atlas",
+      "reviewId": "pr_dddddddddddddddddddddddddddddddd",
+      "chosen": [],
+      "comment": "",
+      "answers": [
+        {
+          "questionId": "identity",
+          "options": [
+            0
+          ]
+        },
+        {
+          "questionId": "evidence",
+          "options": [
+            0
+          ]
+        }
+      ]
+    }
+  }
+]

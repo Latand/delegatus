@@ -1,3 +1,4 @@
+import { nativeAssociationDecisionApproves } from "@/lib/attention/nativeAssociationForm";
 import { firstLineTitle } from "@/lib/tasks/helpers";
 import type { BoardTask } from "@/lib/tasks/types";
 import type { PrototypeDecision, PrototypeDeliveryPhase, PrototypeDeliveryState, PrototypeReviewRound, PrototypeReviewSummary, PrototypeReviewNotice, PrototypeRoundView, PrototypeMedia, PrototypeReviewReplica } from "./types";
@@ -16,10 +17,10 @@ export function prototypeDeliveryPhase(delivery: PrototypeDecision["delivery"], 
 
 /** Only presentation metadata crosses installation boundaries. */
 export function prototypeRoundMetadata(round: PrototypeReviewRound): PrototypeRoundView {
-  const { publicationKey: _key, inputDigest: _digest, critic: _critic, decision, variants, ...publicRound } = round;
-  void _critic;
+  const { publicationKey: _key, inputDigest: _digest, critic: _critic, nativeAssociation: _association, decision, variants, ...publicRound } = round;
+  void _critic; void _association;
   const media = (item: PrototypeMedia) => ({ ...item, available: false, url: null });
-  return { ...publicRound, variants: variants.map(v => ({ ...v,
+  return { ...publicRound, ...(_association ? { nativeAssociationState: !decision ? "pending" as const : nativeAssociationDecisionApproves(decision) ? "approved" as const : "refused" as const } : {}), variants: variants.map(v => ({ ...v,
     frames: v.frames.map(({ image, original, ...frame }) => ({ ...frame, image: media(image), ...(original ? { original: media(original) } : {}) })),
     videos: v.videos.map(video => ({ ...video, media: media(video.media) })) })),
     ...(decision ? { decision: { chosen: decision.chosen, ...(decision.originalReply !== undefined ? { originalReply: decision.originalReply } : {}),

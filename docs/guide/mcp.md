@@ -83,6 +83,49 @@ notice and moves nothing. `dismiss_attention` clears a card's "needs you"
 flag until something new comes up, the same as the card's Dismiss; called
 without a target, it reads the project's **Needs you** list.
 
+## Approving an external Claude session
+
+A Claude session started outside Delegatus needs your explicit approval before
+attributed mutations and receipt recovery. Its first call creates an association
+request in **Waiting for you → Decisions**. Verify the displayed engine,
+working directory, process start time and transcript against your terminal,
+then approve that exact process and generation. The agent repeats its original
+call with the same `clientRequestId`.
+
+Approval belongs to that live process and transcript generation. A resumed
+session in a new process needs its own approval before recovering an old key.
+The approved record stays in the existing **Decisions** column. Press
+**Revoke access** there to withdraw access; approved records add no waiting badge.
+A sibling session's PID record cannot inherit another session's approval.
+
+Native admission is supported on Linux over stdio. Merge these hooks into your
+Claude settings alongside any existing hooks, then restart Claude. Keep them
+synchronous; `PreToolUse` adds a fresh session proof automatically and changes
+no tool permission decision. Session changes and process exit end the old
+approval. Claude documents these lifecycle events and input replacement in its
+[hooks reference](https://code.claude.com/docs/en/hooks).
+
+```json
+{
+  "hooks": {
+    "SessionStart": [{ "hooks": [{ "type": "command", "command": "delegatus-mcp --native-caller-hook" }] }],
+    "SessionEnd": [{ "hooks": [{ "type": "command", "command": "delegatus-mcp --native-caller-hook" }] }],
+    "PreToolUse": [{
+      "matcher": "mcp__viewer__.*",
+      "hooks": [{ "type": "command", "command": "delegatus-mcp --native-caller-hook", "timeout": 30 }]
+    }]
+  }
+}
+```
+
+Use the updated Delegatus package for both the stdio server and the hook.
+Missing, expired, replayed or mismatched proof is refused with
+`session-proof-unavailable`; repeat the original call through the configured
+hook, or open the conversation in Delegatus and continue under its host.
+Hook input is bounded to 4 MiB. Proof expires after five minutes and is used
+once; a fresh proof on a retry retains the original `clientRequestId` and
+logical arguments. Never copy a proof into another call.
+
 ## Repeating a call
 
 Every call takes a `clientRequestId`. Repeat a call with the same id and
