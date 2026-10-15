@@ -7,7 +7,6 @@ import { accountManager } from "@/lib/accounts/manager";
 import { successorRefusal } from "@/lib/links/adoptionGuard";
 import type { AccountContext, AccountManager } from "@/lib/accounts/contracts";
 import { CodexAppServerClient, CodexAppServerError } from "@/lib/accounts/codexAppServer";
-import { sharedClaudeProjectsRoot } from "@/lib/accounts/claude";
 import { realClaudeLoginPorts } from "@/lib/accounts/claudeLogin";
 import { resumeCwd } from "@/lib/agent/cli";
 import { normalizeClaudeLaunchModel } from "@/lib/agent/models";
@@ -34,6 +33,7 @@ import { cleanupTmuxHostIfMatches, forgetResumePaneIfMatches, verifyTmuxHostEvid
 
 import { launchProfileCodexSandbox, launchProfileEngineReadOnly, type LaunchProfile, type ProviderReceipt, type SuccessorProviderPort, type ViewerConversationId } from "./contracts";
 import { forkClaudeHistory, hashValidatedHistory, HistorySecurityError, MigrationTargetUnavailableError, safeCopyHistory, validateHistorySource } from "./safeHistoryCopy";
+import { validateMigrationTargetRoot } from "./targetRoot";
 
 interface StructuredHostPublicationInput {
   receipt: ProviderReceipt;
@@ -1352,32 +1352,6 @@ export async function authorizeCodexForkRetry(
   });
 }
 
-/* The shared Claude transcript store (issue #891, phase 1) is the one
-   transcript root that legitimately lives outside every account home; a
-   cut-over account reports its canonical path directly. */
-function isSharedClaudeTranscriptRoot(transcriptRoot: string): boolean {
-  try { return fs.realpathSync(transcriptRoot) === fs.realpathSync(sharedClaudeProjectsRoot()); }
-  catch { return false; }
-}
-
-function ensureTargetRoot(account: AccountContext): void {
-  const home = fs.lstatSync(account.home);
-  if (!home.isDirectory() || home.isSymbolicLink() || (process.getuid && home.uid !== process.getuid()) || (home.mode & 0o022) !== 0) {
-    throw new MigrationTargetUnavailableError("unsafe-home", "target account home failed safety checks");
-  }
-  if (path.dirname(path.resolve(account.transcriptRoot)) !== path.resolve(account.home)
-    && !(account.engine === "claude" && isSharedClaudeTranscriptRoot(account.transcriptRoot))) {
-    throw new Error("target transcript root is outside its account home");
-  }
-  try { fs.mkdirSync(account.transcriptRoot, { mode: 0o700 }); } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-  }
-  const root = fs.lstatSync(account.transcriptRoot);
-  if (!root.isDirectory() || root.isSymbolicLink() || (process.getuid && root.uid !== process.getuid()) || (root.mode & 0o022) !== 0) {
-    throw new Error("target transcript root failed safety checks");
-  }
-}
-
 function claudePaneFromHost(receipt: ProviderReceipt): { paneId: string; panePid: number } {
   if (receipt.host.kind !== "claude-stream") throw new Error("successor Claude host identity is invalid");
   const matched = /^(%[0-9]+):([1-9][0-9]*)$/.exec(receipt.host.identity);
@@ -1439,7 +1413,7 @@ export class RegisteredSuccessorProvider implements SuccessorProviderPort {
   async create(input: Parameters<SuccessorProviderPort["create"]>[0]): Promise<ProviderReceipt> {
     const target = this.dependencies.accounts.resolveSpawn(input.engine, input.targetAccountId);
     const source = assertRegisteredRoots(this.dependencies.accounts.resolveTranscriptOwner(input.engine, input.source.path), target, input.source.path);
-    ensureTargetRoot(target);
+    await validateMigrationTargetRoot(target, true);
     return input.engine === "codex"
       ? this.createCodex(input.operationId, input.conversationId, input.source.id, input.source.path, input.source.launchProfile, source, target, input.recordContinuityPath)
       : this.createClaude(input.operationId, input.conversationId, input.source.path, input.source.launchProfile, source, target, input.recordContinuityPath);
@@ -1447,7 +1421,7 @@ export class RegisteredSuccessorProvider implements SuccessorProviderPort {
 
   async verify(receipt: ProviderReceipt, input: { engine: "claude" | "codex"; targetAccountId: string; launchProfile: LaunchProfile }): Promise<void> {
     const target = this.dependencies.accounts.resolveSpawn(input.engine, input.targetAccountId);
-    ensureTargetRoot(target);
+    await validateMigrationTargetRoot(target, true);
     if (input.engine === "claude") {
       const status = await this.dependencies.claudeStatus(target.home);
       if (!status.loggedIn) throw new MigrationTargetUnavailableError("not-authenticated", "target Claude account is not authenticated");

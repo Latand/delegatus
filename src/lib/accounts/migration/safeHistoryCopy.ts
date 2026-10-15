@@ -22,14 +22,14 @@ export class HistorySecurityError extends Error {
 }
 
 /** The target account cannot receive this conversation — it is not signed in,
-    or its home failed the safety checks a successor is spawned under. It is
-    the one provider failure the operator can act on directly, so it keeps a
+    or its home or transcript directory failed the successor safety checks.
+    It is the one provider failure the operator can act on directly, so it keeps a
     stable named code and a message the card can show (issue #1028), instead of
     collapsing into the generic preflight failure alongside internals. */
 export class MigrationTargetUnavailableError extends Error {
   readonly code = "target-account-unavailable";
 
-  constructor(readonly detail: "not-authenticated" | "unsafe-home" | "not-allowed", message: string) {
+  constructor(readonly detail: "not-authenticated" | "unsafe-home" | "unsafe-transcript-root" | "not-allowed", message: string) {
     super(message);
     this.name = "MigrationTargetUnavailableError";
   }
@@ -602,7 +602,9 @@ export function sanitizeProviderError(error: unknown): { code: string; message: 
         ? "target account is not signed in; sign it in or switch to another account"
         : error.detail === "not-allowed"
           ? "target account is no longer allowed on this project; the conversation stays on its account"
-          : "target account home failed safety checks; repair it or switch to another account",
+          : error.detail === "unsafe-transcript-root"
+            ? "target transcript directory failed safety checks; repair its location, ownership and permissions (owner-controlled, no group or other write), or switch to another account"
+            : "target account home failed safety checks; repair it or switch to another account",
     };
   }
   return { code: "provider-failed", message: "successor provider failed a recoverable preflight" };
