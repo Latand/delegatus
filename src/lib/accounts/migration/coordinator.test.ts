@@ -5000,3 +5000,24 @@ test("a target the caller no longer authorizes is neither created nor published"
     expect(settled.generations.at(-1)?.accountId).toBe("a");
   }
 });
+
+
+test("parallel B: the normal drain delivers a hostless reclaimed first send after restart", async () => {
+  const store = registry();
+  const conversation = store.ensureConversation("claude", "/sessions/parallel-fork.jsonl", null);
+  const held = store.holdDelivery(conversation.id, "Explain the new failure", "parallel-first-send", "text", [], null,
+    { origin: { kind: "operator" } }, { recoveryIntent: "reclaimed-host" });
+  expect(held).toMatchObject({ state: "assigned", attempts: 0, recoveryIntent: "reclaimed-host" });
+  const restarted = new AgentRegistry(store.filename);
+  const sends: string[] = [];
+  const port = { deliver: async ({ delivery }: { delivery: typeof held }) => {
+    sends.push(delivery.command.operationId);
+    expect(delivery.text).toBe("Explain the new failure");
+    return "delivered" as const;
+  } };
+  await reconcileMigrations({} as SuccessorProviderPort, port, restarted);
+  expect(sends).toEqual([held.command.operationId]);
+  expect(restarted.pendingDeliveries(conversation.id)).toEqual([]);
+  await reconcileMigrations({} as SuccessorProviderPort, port, restarted);
+  expect(sends).toHaveLength(1);
+});
