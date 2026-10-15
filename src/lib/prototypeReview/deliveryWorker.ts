@@ -7,6 +7,7 @@ import { loadSeatRounds } from "./seatRounds";
 import { prototypeWorld } from "./world";
 import { postPrototypeReviewToTelegram } from "./telegramPost";
 import { reconcileReviewPolls, reviewPollsNeedRecovery } from "@/lib/telegram/bot/reviewPolls";
+import { telegramBotService } from "@/lib/telegram/bot/service";
 
 /*
  * The background delivery of saved prototype decisions.
@@ -123,8 +124,9 @@ export async function sweepPrototypeDeliveries(ports: PrototypeDeliveryPorts = p
     }
     let reconciliations = 0;
     for (const round of rounds) if (reconciliations < 16 && reviewPollsNeedRecovery(round)) {
-      reconciliations++;
       await new Promise<void>(resolve => setImmediate(resolve));
+      if (telegramBotService().hasReviewPollWork(round.id, round.telegramPost!.key)) continue;
+      reconciliations++;
       attempts.push(reconcileReviewPolls(round).catch(() => console.warn("Telegram review polls reconciliation deferred", "storage_unavailable")));
     }
   }

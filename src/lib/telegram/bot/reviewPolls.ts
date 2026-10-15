@@ -96,6 +96,8 @@ export class ReviewPollQueue {
   private jobs = new Map<string, Promise<void>>();
   private tail: Promise<void> = Promise.resolve();
 
+  owns(reviewId: string, key: string): boolean { return this.jobs.has(`${reviewId}:${key}`); }
+
   enqueue(job: PollJob): void {
     if (!job.review.questions.length || job.review.questions.length > 7) return;
     const identity = `${job.review.id}:${job.key}`;

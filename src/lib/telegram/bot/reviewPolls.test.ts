@@ -266,6 +266,30 @@ test("recovery waits for the active sender and preserves its confirmed outcomes"
   expect(transport.callsOf("sendPoll")).toHaveLength(3);
 });
 
+test("the sweep leaves live queued poll jobs with their current owner", async () => {
+  const { round, service, transport } = await connected("queue-owner");
+  let entered!: () => void, release!: () => void;
+  const sending = new Promise<void>(resolve => { entered = resolve; });
+  const held = new Promise<void>(resolve => { release = resolve; });
+  cleanups.push(release);
+  cleanups.push(resetPrototypeDeliveryWorkerForTests);
+  let messageId = 10;
+  transport.handlers.sendPoll = async () => { entered(); await held; return ok({ message_id: ++messageId, date: 1791724801 }); };
+  await postPrototypeReviewToTelegram(round);
+  await sending;
+  const queued = telegramRound("queued-polls");
+  saveTasks([telegramTask([saved(), queued])]);
+  await postPrototypeReviewToTelegram(queued);
+  const read = () => loadTasks()[0]!.prototypeReviews!.find(r => r.id === queued.id)!;
+  const recovery = sweepPrototypeDeliveries(undefined, { force: true, rescan: true });
+  try {
+    await Bun.sleep(30);
+    expect(read().telegramPolls).toBeUndefined();
+  } finally { release(); await recovery; await service.waitForReviewPolls(); }
+  expect(read().telegramPolls?.questions.map(q => q.state)).toEqual(["sent", "sent", "sent"]);
+  expect(transport.callsOf("sendPoll")).toHaveLength(6);
+});
+
 test.each([["task", "send"], ["seat", "send"], ["task", "recover"], ["seat", "recover"]])("%s round poll %s yields under a peer SQLite write lock", async (kind, action) => {
   const { round, service } = await connected(`contention-${kind}`);
   const held = kind === "seat" ? { ...round, taskId: null } : round;

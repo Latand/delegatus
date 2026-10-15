@@ -317,6 +317,7 @@ function lookupFailure(result: Extract<BotCallResult, { ok: false }>): TelegramB
 export class TelegramBotService {
   private readonly reviewPolls = new ReviewPollQueue();
   async waitForReviewPolls(): Promise<void> { await this.reviewPolls.idle(); }
+  hasReviewPollWork(reviewId: string, key: string): boolean { return this.reviewPolls.owns(reviewId, key); }
   private transportCache: BotTransport | null = null;
   private storeCache: TelegramBotStore | null = null;
   private poller: { controller: AbortController; done: Promise<void> } | null = null;
