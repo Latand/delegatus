@@ -1375,6 +1375,8 @@ export class CodexAppServerHost implements EngineHost {
   private readonly memoryCell: AgentMemoryCell | null;
   private releasing = false;
   private released = false;
+  /** A failed handshake relinquishes only its connection to the retained owner. */
+  private reconnecting: boolean;
   private dead = false;
   private reaped = false;
   private terminationStarted = false;
@@ -1392,6 +1394,7 @@ export class CodexAppServerHost implements EngineHost {
 
   private constructor(child: CodexTransport, identity: CodexThreadIdentity, options: CodexAppServerHostOptions) {
     this.child = child;
+    this.reconnecting = !!options.socketOwner;
     this.callbackGeneration = child instanceof CodexSocketTransport
       ? codexRequestDigest({ pid: child.pid, startIdentity: child.startIdentity, bootEpoch: child.bootEpoch, endpoint: child.endpoint })
       : randomUUID();
@@ -1672,6 +1675,8 @@ export class CodexAppServerHost implements EngineHost {
          run already reads it. */
       if (noticeIntoHistory) await provisional.injectRunNotice(TELEGRAM_UNAVAILABLE_THIS_RUN_NOTICE);
       if (threadId && !deliberatelyPaused && threadStatus(result)?.type === "idle") await provisional.recoverIdleNativeQueue();
+      if (provisional.dead || provisional.released) throw provisional.failure ?? new Error("Codex app-server connection closed during initialization");
+      provisional.reconnecting = false;
       return provisional;
     } catch (error) {
       try {
@@ -3074,6 +3079,12 @@ export class CodexAppServerHost implements EngineHost {
   detachForViewerRestart(): boolean {
     if (!(this.child instanceof CodexSocketTransport) || this.dead || this.releasing || this.released
       || !this.writerFenceAllowsActuation() || this.childProcessOwnership() !== "owned") return false;
+    this.disconnectSocketConnection();
+    return true;
+  }
+
+  private disconnectSocketConnection(): void {
+    if (!(this.child instanceof CodexSocketTransport)) throw new Error("Codex host has no socket connection");
     this.released = true;
     this.writerFence = () => false;
     this.stateListeners.clear();
@@ -3096,11 +3107,17 @@ export class CodexAppServerHost implements EngineHost {
     this.rejectPendingCompactions(new Error("Viewer connection relinquished"));
     this.rejectRealtimeStart(new Error("Viewer connection relinquished"));
     this.memoryCell?.close();
-    return true;
   }
 
   async release(): Promise<void> {
     if (this.released) return;
+    if (this.reconnecting) {
+      this.disconnectSocketConnection();
+      const cleanup = this.releaseCleanup;
+      this.releaseCleanup = null;
+      cleanup?.();
+      return;
+    }
     this.nativeQueue?.queue.dispose();
     if (!this.releasePromise) {
       const attempt = this.releaseAndReap();
@@ -4054,6 +4071,10 @@ export class CodexAppServerHost implements EngineHost {
           restored.params = params;
           restored.receipt = { ...existing[1] };
           if (!restored.receipt.dispatch) delete restored.receipt.recovery;
+          // Replay restores custody while dispatch still lacks a resolution receipt.
+          else if (!restored.receipt.recovery) restored.receipt.recovery = {
+            at: new Date().toISOString(), outcome: "delivery-uncertain", reason: "resumed-without-callback",
+          };
           this.persistAttention(existing[0], restored);
         }
         // The original callback and its dispatch receipt remain authoritative.

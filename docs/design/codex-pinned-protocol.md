@@ -88,7 +88,9 @@ uses the process's retained protocol pin and claims the exact recorded listener
 only after the previous writer has relinquished ownership or is proven gone.
 A normal Viewer demotion drops the connection while keeping the app-server;
 startup also reconnects after a hard Viewer exit. It preserves the surviving
-process's MCP credential and thread policy. `thread/resume` replays pending
+process's MCP credential and thread policy. A failed reconnect handshake closes
+its connection and releases the writer claim, keeping the original process
+available for another attempt. `thread/resume` replays pending
 callbacks, restoring their original attention identity. Reusing an RPC ID in a
 new process does not transfer callback ownership.
 
@@ -100,7 +102,9 @@ request whose callback cannot be recovered. An answer with a dispatch receipt
 and no server-resolution receipt is `delivery-uncertain`, including after a
 process dies or a timeout expires. It is never dispatched again. A subsequent
 resolution notification from the verified original generation can still close
-that attention. These outcomes retain the original request and its receipts.
+that attention. Replayed dispatches without resolution receipts immediately
+retain a durable uncertainty outcome, including when replay precedes the
+resume reply. These outcomes retain the original request and its receipts.
 
 The event ledger and runtime journal have separate restart regressions. The
 process fixtures kill a Viewer with a pending request and after an answer has

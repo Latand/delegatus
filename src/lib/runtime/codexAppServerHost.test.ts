@@ -6329,7 +6329,11 @@ test("a hard Viewer process restart in the middle of an answer keeps the fsynced
   }
 }, 30_000);
 
-for (const [midAnswer, graceful] of [[false, false], [true, false], [false, true]]) test.skipIf(process.platform === "win32")(`Viewer restart reconnects through the registry to the exact callback owner (mid-answer=${midAnswer}, graceful=${graceful})`, async () => {
+for (const { midAnswer = false, graceful = false, reconnectFailure, crashBeforeWrite = false, replayFirst = false } of [
+  {}, { midAnswer: true }, { graceful: true },
+  { reconnectFailure: "rpc" }, { reconnectFailure: "disconnect" },
+  { midAnswer: true, crashBeforeWrite: true }, { midAnswer: true, crashBeforeWrite: true, replayFirst: true },
+]) test.skipIf(process.platform === "win32")(`Viewer restart reconnects through the registry to the exact callback owner (mid-answer=${midAnswer}, graceful=${graceful}, failure=${reconnectFailure}, crash-before-write=${crashBeforeWrite}, replay-first=${replayFirst})`, async () => {
   const fixture = path.join(import.meta.dir, "fixtures/codexCallbackProcess.ts");
   // Keep the Unix path below the kernel limit even under the gate's nested roots.
   const socketRoot = fs.mkdtempSync(path.join(os.tmpdir(), "cs-"));
@@ -6337,7 +6341,8 @@ for (const [midAnswer, graceful] of [[false, false], [true, false], [false, true
   const descriptor = path.join(socketRoot, "owner.json");
   const writeLog = path.join(metadataState, "socket-answers.jsonl");
   const directory = path.join(metadataState, "socket-events");
-  const config = { socket: path.join(socketRoot, "rpc.sock"), hold: midAnswer };
+  const config = { socket: path.join(socketRoot, "rpc.sock"), hold: midAnswer, reconnectFailure, replayFirst,
+    ...(crashBeforeWrite ? { resolutionFile: path.join(socketRoot, "resolve") } : {}) };
   fs.writeFileSync(descriptor, JSON.stringify(config));
   const children: ReturnType<typeof spawn>[] = [];
   const launch = (mode: string) => {
@@ -6364,13 +6369,15 @@ for (const [midAnswer, graceful] of [[false, false], [true, false], [false, true
     const engine = launch("engine-socket");
     const owner = await ready(engine);
     fs.writeFileSync(descriptor, JSON.stringify({ ...config, owner }));
-    const first = launch(graceful ? "socket-detach" : midAnswer ? "socket-dispatch" : "socket-wait");
-    await ready(first);
-    if (midAnswer) await waitFor(() => fs.existsSync(writeLog), first.errors);
+    const first = launch(crashBeforeWrite ? "socket-crash-dispatch" : graceful ? "socket-detach" : midAnswer ? "socket-dispatch" : "socket-wait");
+    const initial = await ready(first);
+    expect(initial.enginePid).toBe(owner.process.pid);
+    if (midAnswer && !crashBeforeWrite) await waitFor(() => fs.existsSync(writeLog), first.errors);
+    if (crashBeforeWrite) await waitFor(() => first.child.signalCode !== null, first.errors);
     const before = new FileRuntimeEventStore(directory).load("callback-process-thread");
     const request = before.find(event => event.kind === "attention");
     expect(request?.kind === "attention" && request.codexReceipt?.identity.generation).toBeTruthy();
-    if (!graceful) first.child.kill("SIGKILL");
+    if (!graceful && !crashBeforeWrite) first.child.kill("SIGKILL");
     await waitFor(() => first.child.signalCode !== null || first.child.exitCode !== null, first.errors);
     expect(engine.child.exitCode).toBeNull();
     const second = launch("socket-resume");
@@ -6386,9 +6393,16 @@ for (const [midAnswer, graceful] of [[false, false], [true, false], [false, true
       expect(restored.receipt.kind).toBe("attention-resolved");
       expect(restored.receipt.codexReceipt.serverResolution.outcome).toBe("answered");
     }
-    expect(fs.readFileSync(writeLog, "utf8").trim().split("\n")).toHaveLength(1);
+    const writes = fs.existsSync(writeLog) ? fs.readFileSync(writeLog, "utf8").trim().split("\n") : [];
+    expect(writes).toHaveLength(crashBeforeWrite ? 0 : 1);
+    if (crashBeforeWrite) {
+      expect(restored.visible).toBe(1);
+      expect(restored.closed).toBeTrue();
+      const reopened = new FileRuntimeEventStore(directory).load("callback-process-thread");
+      expect(reopened.findLast(event => event.kind === "attention-resolved")).toMatchObject({ codexReceipt: { serverResolution: { outcome: "answered" } } });
+    }
     const terminal = new FileRuntimeEventStore(directory).load("callback-process-thread").filter(event => event.kind === "attention-resolved");
-    expect(terminal).toHaveLength(midAnswer ? 0 : 1);
+    expect(terminal).toHaveLength(midAnswer && !crashBeforeWrite ? 0 : 1);
   } finally {
     for (const child of children) if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
     await Promise.all(children.filter(child => child.exitCode === null && child.signalCode === null).map(child => new Promise<void>(resolve => child.once("close", () => resolve()))));
