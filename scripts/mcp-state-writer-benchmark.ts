@@ -72,6 +72,8 @@ export async function stateWriterChild(mode: string): Promise<void> {
     return;
   }
   if (mode === "viewer") {
+    if (!process.env.MCP_BENCH_HOST_NAMESPACE || fs.readlinkSync("/proc/self/ns/pid") === process.env.MCP_BENCH_HOST_NAMESPACE
+      || fs.readlinkSync("/proc/self") !== String(process.pid)) throw new Error("fixture Viewer needs its own process namespace");
     // The identical observer also covers a candidate's Viewer-owned task
     // executor. Older revisions have no executor to install a launch for.
     if (fs.existsSync(path.resolve("src/lib/mcp/taskExecutor.ts"))) {
@@ -89,6 +91,8 @@ export async function stateWriterChild(mode: string): Promise<void> {
     const service = createProductionViewerMcpService(false);
     await service;
     (globalThis as Record<symbol, unknown>)[Symbol.for("llv.mcp.httpService")] = service;
+    const { viewerLoopMonitor } = await import("@/lib/viewerLoopMonitor");
+    viewerLoopMonitor.start();
     const delay = monitorEventLoopDelay({ resolution: 10 }); delay.enable();
     let phase = "cold";
     const boundaries: ReturnType<typeof setTimeout>[] = [];
@@ -107,7 +111,7 @@ export async function stateWriterChild(mode: string): Promise<void> {
     process.env.LLV_VIEWER_CONTROL_URL = server.url.origin;
     fs.writeFileSync(process.env.MCP_BENCH_READY!, JSON.stringify({ url: server.url.origin, pid: process.pid }));
     const timer = setInterval(sample, 1000);
-    const stop = () => { clearInterval(timer); boundaries.forEach(clearTimeout); delay.disable(); server.stop(true); process.exit(0); };
+    const stop = () => { clearInterval(timer); boundaries.forEach(clearTimeout); delay.disable(); viewerLoopMonitor.stop(); server.stop(true); process.exit(0); };
     process.on("SIGTERM", stop);
     return;
   }

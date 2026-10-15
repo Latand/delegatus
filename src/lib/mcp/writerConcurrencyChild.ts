@@ -1,8 +1,16 @@
 import fs from "node:fs";
 import path from "node:path";
-import { waitForFixtureFile } from "./fixtureBarrier";
-
 import { NextRequest } from "next/server";
+
+// The benchmark already requires an owned PID namespace. Load its Viewer
+// before the barrier fixture, whose parent polling is synchronous test work.
+if (process.env.MCP_BENCH_CHILD) {
+  await (await import("../../../scripts/mcp-state-writer-benchmark")).stateWriterChild(process.env.MCP_BENCH_CHILD);
+  if (process.env.MCP_BENCH_CHILD === "seed") process.exit(0);
+  await new Promise(() => {});
+}
+
+const { waitForFixtureFile } = await import("./fixtureBarrier");
 
 if (process.env.LLV_TASK_EXECUTOR_HTTP_PARTIAL) {
   const { createInterface } = await import("node:readline");
@@ -50,12 +58,6 @@ if (process.env.LLV_NATIVE_PEER_VERIFY) {
   const { verifyNativePeer } = await import("./nativePeer");
   console.log(JSON.stringify(await verifyNativePeer(process.env.LLV_NATIVE_PEER_VERIFY, process.env.LLV_NATIVE_PEER_BODY!)));
   process.exit(0);
-}
-
-if (process.env.MCP_BENCH_CHILD) {
-  await (await import("../../../scripts/mcp-state-writer-benchmark")).stateWriterChild(process.env.MCP_BENCH_CHILD);
-  if (process.env.MCP_BENCH_CHILD === "seed") process.exit(0);
-  await new Promise(() => {});
 }
 
 // Native observer controls share the concurrency fixture and its owned runner.

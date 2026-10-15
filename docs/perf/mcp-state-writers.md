@@ -801,3 +801,50 @@ All seven completed windows had zero SQL contention and no teardown survivors. E
 The task endpoint now combines capability lookup and HTTP dispatch in one executor request for declared bodies up to 16 KiB. Larger and unframed requests authenticate before reading their body. The executor checks the current capability before SDK dispatch; per-tool policy still rechecks authority before receipt replay or mutation. Native peer verification, request keys, cancellation, revisions and companion transactions keep their existing paths. Authentication refusals use one shared response formatter.
 
 The new regression covers unknown and externally rotated capabilities through small framed, large framed and unframed requests, malformed JSON refusal order, receipt non-disclosure, and original-key replay through the successor capability. The source and compiled executor suites each pass 16 cases; packaged stdio passes 51, HTTP/cancellation 18, and linked-task/wire suites 20 with one old-release opt-in skip. TypeScript, production build and local privacy pass. Performance acceptance requires a new immutable alternating matrix after this change.
+
+### Combined authentication diagnostic and fixture calibration
+
+Candidate `9e2271531683d4d91b609e7c0c32deb31668a033` combines the small,
+framed task request's registry lookup and dispatch in one executor request.
+It checks the current capability before protocol dispatch; the full tool policy
+still checks authority before replay or mutation. Large and unframed requests
+keep authentication before body parsing. Tests cover external capability
+rotation, malformed bodies, all three framing cases and original-key replay.
+
+The complete one-client, stdio, independent-task cohort used three alternating
+repetitions against matched main `fe18cb41d73481f6b4e4bd105b708cb03e2d3b05`
+and audit `45d25ac796d5824713c9fb57d65f57efea61041b`, with the unchanged
+30-second warmup and 300-second measurement. All nine samples completed
+300/300 measured calls, with zero failures, pending calls, SQL contention or
+teardown survivors. Candidate adapter database opens remained zero. All six
+candidate/control row and response hashes agreed after the declared
+normalization, and every committed history reproduced its final durable rows.
+No mutation remained unresolved. The immutable record is
+[`mcp-state-writers-combined-auth-diagnostic.json`](../../evidence/mcp-state-writers-combined-auth-diagnostic.json).
+
+| Median loop delay, ms | Candidate | Main | Audit |
+|---|---:|---:|---:|
+| p99 | 0.642047 | 0.681471 | 0.655871 |
+| Maximum | 4.640120 | 3.811877 | 3.832169 |
+
+**Acceptance fails:** the median maximum regressed against both controls.
+The third candidate maximum was 133.570566 ms; that observation remains in
+the record. Collection stopped after this cohort. The next partial sample is
+excluded, and this cohort cannot be combined with later measurements.
+
+A separate 30-second-warmup/120-second diagnostic CPU profile found repeated
+synchronous procfs reads from the barrier fixture's 100 ms parent check.
+The benchmark Viewer inherited that check through an unused barrier import.
+The production Viewer does not run that fixture. The benchmark also imported
+the production operation monitor without starting its timer, leaving completed
+operations retained until its fixed-size retention path ran on each new one.
+Production starts that monitor during Viewer instrumentation.
+
+The calibrated harness enters the benchmark before importing the barrier
+fixture and starts/stops the production operation monitor. Its Viewer refuses
+to start outside the required private PID namespace; the owned runner and
+namespace still end its descendants on owner death. Non-benchmark lifecycle
+and barrier fixtures retain their original parent checks. All three source
+revisions receive this same harness. The seed, request schedule, repetitions,
+load windows and declared no-regression criterion stay unchanged. The earlier
+samples remain failed evidence, with their original harness identities.
