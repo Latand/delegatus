@@ -76,6 +76,18 @@ describe.each(["0.154.0", "0.159.0", "0.162.1"])("Codex %s request boundary", ve
     expect(() => decodeCodexServerRequest(protocol, 1, question, params)).toThrow("question prompts must be nonempty");
   });
 
+  test.each(["", " \t\n"])("refuses a list of blank labels %j when custom answers are forbidden", blank => {
+    const choice = { ...questions.questions[0]!, options: [{ label: blank, description: "Offered choice" }] };
+    const params = { ...questions, questions: [choice] };
+    expect(() => decodeCodexServerRequest(protocol, 1, question, params)).toThrow("no visible choices or custom answer");
+
+    const answer = { answers: { first: { answers: ["Custom choice"] } } };
+    for (const offered of [{ ...choice, isOther: true }, { ...choice, options: null }, { ...choice, options: [] }]) {
+      const decoded = decodeCodexServerRequest(protocol, 1, question, { ...params, questions: [offered] });
+      expect(encodeCodexServerResponse(protocol, question, answer, decoded.params)).toEqual(answer);
+    }
+  });
+
   test("grants only requested permission scopes", () => {
     const permissions = { network: { enabled: true }, fileSystem: { read: ["/workspace/input"], write: ["/workspace/output"] } };
     const params = { ...approval, command: undefined, cwd: "/workspace", permissions };

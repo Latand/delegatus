@@ -76,6 +76,10 @@ export function decodeCodexServerRequest(protocol: CodexPinnedProtocol, id: stri
     if (request.params.questions.some(question => !question.question.trim())) {
       throw new Error("Codex question prompts must be nonempty");
     }
+    if (request.params.questions.some(question => question.options?.length && !question.isOther
+      && question.options.every(option => !option.label.trim()))) {
+      throw new Error("Codex question has no visible choices or custom answer");
+    }
   }
   return request;
 }
