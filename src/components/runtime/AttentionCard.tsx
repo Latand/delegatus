@@ -19,8 +19,9 @@ export interface AttentionCardProps {
   attention: RuntimeAttention;
   onApprove?: () => void;
   onDeny?: () => void;
+  onAction?: (response: unknown) => void;
   onAnswerQuestion?: (optionIndex: number, questionIndex?: number) => void;
-  onAnswerQuestions?: (answers: number[][]) => void;
+  onAnswerQuestions?: (answers: number[][], customAnswers?: string[]) => void;
   /** Issue #765: hide the card from the live composer region without touching
       the attention itself — the operator's own skip, never a resolution. */
   onDismiss?: () => void;
@@ -38,23 +39,25 @@ export interface AttentionCardProps {
  * reduced motion. The `autoResolutionMs` countdown is display-only — only an
  * engine-confirmed resolution closes the card (Sol: no client auto-resolve).
  */
-export function AttentionCard({ attention, onApprove, onDeny, onAnswerQuestion, onAnswerQuestions, onDismiss, busy, archived = false }: AttentionCardProps) {
+export function AttentionCard({ attention, onApprove, onDeny, onAction, onAnswerQuestion, onAnswerQuestions, onDismiss, busy, archived = false }: AttentionCardProps) {
   const { t } = useLocale();
   const isMobile = useIsMobile();
   const cardRef = useRef<HTMLDivElement>(null);
   const heuristic = attention.kind === "waiting_heuristic";
   const remaining = useCountdown(attention.autoResolutionMs ?? null);
   const [selections, setSelections] = useState<Record<number, number[]>>({});
+  const [customAnswers, setCustomAnswers] = useState<Record<number, string>>({});
   const [selectionAttentionId, setSelectionAttentionId] = useState(attention.id);
   if (selectionAttentionId !== attention.id) {
     setSelectionAttentionId(attention.id);
     setSelections({});
+    setCustomAnswers({});
   }
 
   // Focus the first control and trap Tab within the card while it is open.
   // Archived cards are inert history — no focus trap, no keyboard resolution.
   useEffect(() => {
-    if (archived) return;
+    if (archived || attention.unowned || busy) return;
     const node = cardRef.current;
     if (!node) return;
     const focusables = () => Array.from(node.querySelectorAll<HTMLElement>('button,[href],input,select,textarea,[tabindex]:not([tabindex="-1"])')).filter((el) => !el.hasAttribute("disabled"));
@@ -97,7 +100,7 @@ export function AttentionCard({ attention, onApprove, onDeny, onAnswerQuestion, 
     };
     node.addEventListener("keydown", onKey);
     return () => node.removeEventListener("keydown", onKey);
-  }, [attention.id, onApprove, onDeny, archived]);
+  }, [attention.id, attention.unowned, busy, onApprove, onDeny, archived]);
 
   const questions = attention.request.questions
     ?? (attention.request.question ? [attention.request.question] : []);
@@ -119,7 +122,9 @@ export function AttentionCard({ attention, onApprove, onDeny, onAnswerQuestion, 
       <div className="mb-2 flex flex-wrap items-center gap-2">
         {attention.unowned && !archived ? (
           <span className="inline-flex items-center gap-1 rounded-full bg-danger/15 px-2 py-0.5 text-[11px] font-bold text-danger" role="alert">
-            <AlertTriangle className="h-3.5 w-3.5" aria-hidden /> {t("runtime.attention.unowned")}
+            <AlertTriangle className="h-3.5 w-3.5" aria-hidden /> {t(attention.codexReceipt?.recovery
+              ? attention.codexReceipt.recovery.outcome === "delivery-uncertain" ? "runtime.attention.unconfirmed" : "runtime.attention.unavailable"
+              : "runtime.attention.unowned")}
           </span>
         ) : null}
         <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-bold ${heuristic ? "bg-sunken text-muted" : "bg-warning-soft text-warning"}`}>
@@ -162,12 +167,15 @@ export function AttentionCard({ attention, onApprove, onDeny, onAnswerQuestion, 
         </div>
       ) : null}
 
-      {attention.request.detail ? <div className="mt-2 text-[12px] text-muted">{attention.request.detail}</div> : null}
+      {attention.request.detail ? <div className="mt-2 break-words text-[12px] text-muted">{attention.codexReceipt?.recovery
+        ? t(attention.codexReceipt.recovery.outcome === "callback-unavailable" ? "runtime.attention.callbackUnavailable" : "runtime.attention.deliveryUncertain")
+        : attention.request.detail}</div> : null}
 
-      {questions.length > 0 && !archived ? (
+      {questions.length > 0 && !archived && !attention.unowned ? (
         <div className="mt-2 space-y-3">
           {questions.map((question, questionIndex) => {
-            const staged = questions.length > 1 || question.multiSelect === true;
+            const freeText = question.isOther === true || !question.options?.length;
+            const staged = questions.length > 1 || question.multiSelect === true || freeText;
             const selected = selections[questionIndex] ?? [];
             return <div key={questionIndex}>
               {question.header ? <div className="text-[11px] font-bold text-muted">{question.header}</div> : null}
@@ -181,6 +189,7 @@ export function AttentionCard({ attention, onApprove, onDeny, onAnswerQuestion, 
                 }`}
                 disabled={busy}
                 onClick={() => {
+                  setCustomAnswers(current => ({ ...current, [questionIndex]: "" }));
                   if (!staged) {
                     onAnswerQuestion?.(index, questionIndex);
                     return;
@@ -195,20 +204,32 @@ export function AttentionCard({ attention, onApprove, onDeny, onAnswerQuestion, 
                 }}
               >
                 <span className="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded border border-border bg-card text-[10px] font-bold">{index + 1}</span>
-                <span className="min-w-0">
+                <span className="min-w-0 [overflow-wrap:anywhere]">
                   <span className="block text-[13px] font-bold">{option.label}</span>
                   {option.description ? <span className="block text-[12px] text-muted">{option.description}</span> : null}
                 </span>
               </button>
                 ))}
               </div>
+              {freeText ? (
+                <label className="mt-2 block text-[12px] text-secondary">
+                  {t("runtime.attention.customAnswer")}
+                  <input type={question.isSecret ? "password" : "text"} autoComplete="off"
+                    className="mt-1 block w-full min-w-0 rounded border border-border bg-canvas p-2 text-primary"
+                    value={customAnswers[questionIndex] ?? ""} disabled={busy}
+                    onChange={event => {
+                      setCustomAnswers(current => ({ ...current, [questionIndex]: event.target.value }));
+                      setSelections(current => ({ ...current, [questionIndex]: [] }));
+                    }} />
+                </label>
+              ) : null}
             </div>;
           })}
-          {questions.length > 1 || questions.some((question) => question.multiSelect) ? (
+          {questions.length > 1 || questions.some((question) => question.multiSelect || question.isOther || !question.options?.length) ? (
             <button
               className="inline-flex items-center gap-1.5 rounded-[8px] bg-brand px-3 py-1.5 text-[13px] font-bold text-on-brand disabled:opacity-60"
-              disabled={busy || questions.some((_question, index) => !(selections[index]?.length))}
-              onClick={() => onAnswerQuestions?.(questions.map((_question, index) => selections[index] ?? []))}
+              disabled={busy || questions.some((_question, index) => !(selections[index]?.length) && !customAnswers[index]?.trim())}
+              onClick={() => onAnswerQuestions?.(questions.map((_question, index) => selections[index] ?? []), questions.map((_question, index) => customAnswers[index] ?? ""))}
             >
               <Check className="h-4 w-4" aria-hidden /> {t("runtime.attention.answer")}
             </button>
@@ -216,7 +237,21 @@ export function AttentionCard({ attention, onApprove, onDeny, onAnswerQuestion, 
           </div>
       ) : null}
 
-      {(attention.kind === "approval" || attention.kind === "permission") && (onApprove || onDeny) && !archived ? (
+      {onAction && !archived && !attention.unowned ? (
+        <div className="mt-3 flex flex-wrap items-start gap-2">
+          {attention.request.protocol?.actions?.map((action, index) => (
+            <div key={index} className="min-w-0 max-w-full">
+              <button className="rounded-[8px] border border-border bg-canvas px-3 py-1.5 text-[13px] font-bold text-primary disabled:opacity-60"
+                disabled={busy} onClick={() => onAction(action.response)}>
+                {t(`runtime.attention.action.${action.kind}`)}
+              </button>
+              {action.detail && attention.request.protocol!.actions!.findIndex(candidate => candidate.detail === action.detail) === index ? <pre className="mt-1 max-w-full whitespace-pre-wrap break-all text-[12px] text-muted">{action.detail}</pre> : null}
+            </div>
+          ))}
+        </div>
+      ) : null}
+
+      {(attention.kind === "approval" || attention.kind === "permission") && (onApprove || onDeny) && !archived && !attention.unowned ? (
         <div className="mt-3 flex flex-wrap items-center gap-2">
           {onApprove ? (
             <button

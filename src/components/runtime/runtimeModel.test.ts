@@ -529,6 +529,21 @@ describe("deterministic convergence", () => {
 /* --------------------- attention projection --------------------- */
 
 describe("attention", () => {
+  test("a replay cannot reopen a Codex terminal restored from a runtime snapshot", () => {
+    const codexReceipt: NonNullable<RuntimeAttention["codexReceipt"]> = {
+      identity: { generation: "owner", threadId: "thread", turnId: "turn", itemId: "item", method: "item/commandExecution/requestApproval", requestId: 1, approvalId: null },
+      receivedAt: "2026-10-15T00:00:00Z", requestDigest: "a".repeat(64),
+      dispatch: { digest: "b".repeat(64), at: "2026-10-15T00:01:00Z" },
+      serverResolution: { at: "2026-10-15T00:02:00Z", outcome: "answered" },
+    };
+    const row = attention({ id: "durable", conversationId: "conv_a", state: "resolved", codexReceipt });
+    let store = installSnapshot({ ...snapshot(), attentions: [row] });
+    const replay = { ...codexReceipt }; delete replay.dispatch; delete replay.serverResolution;
+    store = apply(store, env("attention", { type: "session", id: "conv_a" }, 4, { ...row, state: "open", codexReceipt: replay }));
+    expect(store.attentions.durable?.state).toBe("resolved");
+    expect(store.attentions.durable?.codexReceipt?.serverResolution?.outcome).toBe("answered");
+    expect(openAttentions(store, store.sessions.conv_a!)).toEqual([]);
+  });
   test("open attention lands on the session and unowned sorts first", () => {
     let store = installSnapshot(snapshot());
     store = apply(store, env("attention", { type: "session", id: "conv_a" }, 4, attention({ id: "a1", conversationId: "conv_a" })));

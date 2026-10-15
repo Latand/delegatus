@@ -5,6 +5,7 @@ import { afterAll, expect, test } from "bun:test";
 
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import type { BoardTask } from "@/lib/tasks/types";
+import type { RuntimeHostClient } from "@/lib/runtime/client";
 
 /**
  * The launch boundary against the real registry and the real task store
@@ -421,9 +422,11 @@ test.each(["journal", "notice"] as const)("a failed receipt repairs its refused 
   if (begun.kind !== "created") throw new Error("expected launch");
   registry.rememberMembership("conversation_fixture_launcher", { kind: "orchestrator", containerId: "launcher-project",
     role: "orchestrator", slot: "seat", stageId: null, stageOrder: null, round: null, parentConversationId: null });
-  const failedFile = JSON.parse(fs.readFileSync(registry.filename, "utf8")) as { receipts: Record<string, { state: string; error: string | null }> };
+  const failedFile = JSON.parse(fs.readFileSync(registry.filename, "utf8"));
   failedFile.receipts[begun.receipt.launchId]!.state = "failed";
   failedFile.receipts[begun.receipt.launchId]!.error = "host vanished";
+  failedFile.receipts[begun.receipt.launchId]!.failureRepairState = "pending";
+  failedFile.receipts[begun.receipt.launchId]!.failureReporting.failedAt = new Date().toISOString();
   fs.writeFileSync(registry.filename, JSON.stringify(failedFile));
   const failOnce = () => { throw new Error("temporary transaction refusal"); };
   settleFailedLaunch(registry.snapshot().receipts[begun.receipt.launchId]!, undefined, {
@@ -479,7 +482,6 @@ test("a failed receipt retries its task settlement after lifecycle and notice re
 
 test("a failed child in another project writes its wake event into the launching seat's project", async () => {
   const { queryLifecycleEvents } = await import("@/lib/lifecycle/journal");
-  const { settleFailedLaunch } = await import("./launchMembership");
   const registry = registryAt("cross-project-report");
   saveTasks([task("cross-project-task", "Work in another project")]);
   const begun = registry.beginSpawnRequest({ engine: "codex", cwd: stateDir, explicitProject: "child-project",
@@ -489,9 +491,134 @@ test("a failed child in another project writes its wake event into the launching
   if (begun.kind !== "created") throw new Error("expected launch");
   registry.rememberMembership("conversation_fixture_launcher", { kind: "orchestrator", containerId: "launcher-project",
     role: "orchestrator", slot: "seat", stageId: null, stageOrder: null, round: null, parentConversationId: null });
-  registry.failStructuredSpawn(begun.receipt.launchId, "host vanished", { announce: false });
-  settleFailedLaunch(registry.snapshot().receipts[begun.receipt.launchId]!, undefined, { launcherProject: "launcher-project" });
+  registry.failStructuredSpawn(begun.receipt.launchId, "host vanished");
   expect(queryLifecycleEvents({ project: "launcher-project", conversationId: begun.receipt.conversationId, type: "spawn_failed" }).events)
     .toEqual([expect.objectContaining({ conversationId: begun.receipt.conversationId })]);
   expect(queryLifecycleEvents({ project: "child-project", conversationId: begun.receipt.conversationId, type: "spawn_failed" }).events).toEqual([]);
+});
+
+test.each(["explicit", "placeholder"] as const)("a fresh failure of an already settled %s task never wakes the launcher", async target => {
+  const { queryLifecycleEvents } = await import("@/lib/lifecycle/journal");
+  const { readSpawnNoticeTurn } = await import("@/lib/spawnNotice/store");
+  saveTasks([task("settled-work", "Finished work")]);
+  const registry = registryAt(`settled-${target}`);
+  const begun = registry.beginSpawnRequest({ engine: "codex", cwd: stateDir, explicitProject: project, transport: "structured",
+    clientAttemptId: `settled-${target}`, ...(target === "explicit" ? { taskIds: ["settled-work"] } : {}),
+    launcher: { conversationId: "conversation_fixture_launcher", notify: true }, launchProfile: emptyLaunchProfile({ cwd: stateDir, title: "Finished work" }) });
+  if (begun.kind !== "created") throw new Error("expected launch");
+  saveTasks(loadTasks().map(row => ({ ...row, status: "done" })));
+  registry.failStructuredSpawn(begun.receipt.launchId, "host vanished");
+  await terminalizeStaleStructuredSpawns(registryAt(`settled-${target}`), null);
+  expect(queryLifecycleEvents({ conversationId: begun.receipt.conversationId, type: "spawn_failed" }).events).toEqual([]);
+  expect(readSpawnNoticeTurn(begun.receipt.conversationId, `launch:${begun.receipt.launchId}`)).toBeNull();
+});
+
+test.each(["intact", "legacy"] as const)("a saved synchronous TASK_RUNS_ELSEWHERE refusal stays silent with %s reporting state", async reporting => {
+  const { queryLifecycleEvents } = await import("@/lib/lifecycle/journal");
+  const { readSpawnNoticeTurn } = await import("@/lib/spawnNotice/store");
+  const { LaunchMembershipError } = await import("./launchMembership");
+  const links = path.join(stateDir, "links");
+  fs.mkdirSync(links, { recursive: true });
+  const self = ["0a0a0a0a", "1111", "4111", "8111", "111111111111"].join("-");
+  const peer = ["0b0b0b0b", "2222", "4222", "8222", "222222222222"].join("-");
+  const identity = path.join(links, "self.json");
+  fs.writeFileSync(identity, JSON.stringify({ v: 1, installId: self, label: "fixture", publicUrl: null, check: null }));
+  try {
+    saveTasks([{ ...task("peer-work", "Runs elsewhere"), machine: peer }]);
+    const attempt = `synchronous-peer-refusal-${reporting}`;
+    const registry = registryAt(attempt);
+    let refusal: unknown;
+    try {
+      registry.beginSpawnRequest({ engine: "codex", cwd: stateDir, explicitProject: project, transport: "structured",
+        clientAttemptId: attempt, taskIds: ["peer-work"], launcher: { conversationId: "conversation_fixture_launcher", notify: true },
+        launchProfile: emptyLaunchProfile({ cwd: stateDir, title: "Runs elsewhere" }) });
+    } catch (error) { refusal = error; }
+    expect(refusal).toBeInstanceOf(LaunchMembershipError);
+    expect((refusal as InstanceType<typeof LaunchMembershipError>).code).toBe("TASK_RUNS_ELSEWHERE");
+    const receipt = registry.spawnReceiptForClientAttempt(attempt)!;
+    expect(receipt.failureAnnouncementSuppressed).toBe(true);
+    expect(receipt.launcher?.conversationId).toBe("conversation_fixture_launcher");
+    if (reporting === "legacy") {
+      /* The refusal was returned above, but an older registry writer retained
+         only the failed receipt. Missing reports cannot make it a fresh loss. */
+      const raw = JSON.parse(fs.readFileSync(registry.filename, "utf8"));
+      delete raw.receipts[receipt.launchId].failureAnnouncementSuppressed;
+      delete raw.receipts[receipt.launchId].failureReporting;
+      delete raw.receipts[receipt.launchId].failureRepairState;
+      fs.writeFileSync(registry.filename, JSON.stringify(raw));
+    }
+    const reopened = registryAt(attempt);
+    await terminalizeStaleStructuredSpawns(reopened, null);
+    await terminalizeStaleStructuredSpawns(reopened, null);
+    expect({ events: queryLifecycleEvents({ conversationId: receipt.conversationId, type: "spawn_failed" }).events.length,
+      notice: readSpawnNoticeTurn(receipt.conversationId, `launch:${receipt.launchId}`) !== null }).toEqual({ events: 0, notice: false });
+  } finally { fs.rmSync(identity, { force: true }); }
+});
+
+test.each([["off", "open"], ["off", "done"], ["sqlite", "open"], ["sqlite", "done"]] as const)("a recovered structured launch tracks its %s/%s replacement task before a fresh failure", async (mode, status) => {
+  const settled = status === "done";
+  const { queryLifecycleEvents } = await import("@/lib/lifecycle/journal");
+  const { readSpawnNoticeTurn } = await import("@/lib/spawnNotice/store");
+  const { spawnLossRelevant } = await import("@/lib/spawnNotice/production");
+  const attempt = `recovered-loss-${mode}-${status}`;
+  const reopen = () => mode === "sqlite"
+    ? new AgentRegistry(path.join(stateDir, "agents.json"), undefined, undefined, { sqliteMode: "sqlite", sqliteFilename: path.join(stateDir, "state.sqlite") })
+    : registryAt(attempt);
+  saveTasks([task("deleted-launch-target", "Queued work")]);
+  const registry = reopen();
+  const begun = registry.beginSpawnRequest({ engine: "claude", cwd: stateDir, explicitProject: project, transport: "structured",
+    accountId: "account-a", accountPin: true, clientAttemptId: attempt, taskIds: ["deleted-launch-target"],
+    launcher: { conversationId: "conversation_current_launcher", notify: true }, launchProfile: emptyLaunchProfile({ cwd: stateDir, title: "Queued work" }) });
+  if (begun.kind !== "created") throw new Error("expected queued receipt");
+  registry.queuePinnedSpawn(begun.receipt.launchId, { version: 1, retryAt: new Date(Date.now() - 1_000).toISOString(),
+    accountId: "account-a", locale: "en",
+    spec: { engine: "claude", command: "claude", cwd: stateDir, windowName: "queued-pin", launchProfile: emptyLaunchProfile({ cwd: stateDir, title: "Queued work" }) },
+    ["prompt"]: "Continue the queued work", imageRefs: [], parentArtifactPath: null, pipelineSourceConversationId: null,
+  }, "Queued work");
+  if (!begun.receipt.admissionOwner) throw new Error("expected reservation owner");
+  expect(registry.releaseStartingStructuredSpawn(begun.receipt.launchId, begun.receipt.admissionOwner).released).toBe(true);
+  saveTasks([]);
+  const reopened = reopen();
+  const tick = await terminalizeStaleStructuredSpawns(reopened, {} as RuntimeHostClient, {
+    resolveSpawnAccount: () => {
+      if (settled) saveTasks(loadTasks().map(row => ({ ...row, status: "done" })));
+      throw new Error("runtime host unavailable after membership recovery");
+    },
+  });
+  expect(tick.terminalized).toContain(begun.receipt.launchId);
+  const replacement = loadTasks()[0]!;
+  expect(replacement.id).not.toBe("deleted-launch-target");
+  expect(replacement.assignments.some(row => row.launchId === begun.receipt.launchId)).toBe(true);
+  const notice = readSpawnNoticeTurn(begun.receipt.conversationId, `launch:${begun.receipt.launchId}`);
+  expect(queryLifecycleEvents({ conversationId: begun.receipt.conversationId, type: "spawn_failed" }).events).toHaveLength(settled ? 0 : 1);
+  if (settled) expect(notice).toBeNull();
+  else {
+    expect(notice?.launcherConversationId).toBe("conversation_current_launcher");
+    expect(spawnLossRelevant(notice!, { receipt: id => reopened.spawnReceipt(id), task: id => loadTasks().find(row => row.id === id) ?? null })).toBe(true);
+  }
+  expect(reopen().spawnReceipt(begun.receipt.launchId)?.failureReporting?.taskIds).toEqual([replacement.id]);
+  await terminalizeStaleStructuredSpawns(reopen(), null);
+  await terminalizeStaleStructuredSpawns(reopen(), null);
+  expect(queryLifecycleEvents({ conversationId: begun.receipt.conversationId, type: "spawn_failed" }).events).toHaveLength(settled ? 0 : 1);
+  expect(readSpawnNoticeTurn(begun.receipt.conversationId, `launch:${begun.receipt.launchId}`)).toEqual(notice);
+});
+
+test("a fresh failure from a retired seat writes no wake event for its successor", async () => {
+  const { queryLifecycleEvents } = await import("@/lib/lifecycle/journal");
+  const { readSpawnNoticeTurn } = await import("@/lib/spawnNotice/store");
+  const { ORCHESTRATOR_SEATS_SCHEMA_VERSION } = await import("@/lib/orchestrator/seats");
+  const seatsFile = path.join(stateDir, "orchestrator-seats.json");
+  const registry = registryAt("retired-launcher");
+  const begun = registry.beginSpawnRequest({ engine: "codex", cwd: stateDir, explicitProject: project, transport: "structured",
+    clientAttemptId: "retired-launcher", launcher: { conversationId: "conversation_retired_seat", notify: true },
+    launchProfile: emptyLaunchProfile({ cwd: stateDir, title: "Retired launcher work" }) });
+  if (begun.kind !== "created") throw new Error("expected launch");
+  fs.writeFileSync(seatsFile, JSON.stringify({ schemaVersion: ORCHESTRATOR_SEATS_SCHEMA_VERSION, seats: {},
+    revocations: [{ project, conversationId: "conversation_retired_seat", seatEpoch: 1, revokedAt: new Date().toISOString(), successorConversationId: "conversation_current_seat" }] }));
+  try {
+    registry.failStructuredSpawn(begun.receipt.launchId, "host vanished");
+    await terminalizeStaleStructuredSpawns(registryAt("retired-launcher"), null);
+    expect(queryLifecycleEvents({ conversationId: begun.receipt.conversationId, type: "spawn_failed" }).events).toEqual([]);
+    expect(readSpawnNoticeTurn(begun.receipt.conversationId, `launch:${begun.receipt.launchId}`)).toBeNull();
+  } finally { fs.rmSync(seatsFile, { force: true }); }
 });

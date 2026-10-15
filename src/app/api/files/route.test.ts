@@ -9,6 +9,7 @@ import { Database } from "bun:sqlite";
 
 import { StateDiskFullError, noteStateDiskFull, noteStateCommit, setStateFreeBytesProbeForTests, stateWriteHealth } from "@/lib/state/diskFull";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
+import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
 import { withoutArchivedPredecessors } from "@/lib/accounts/identity";
 import { agentRegistry, AgentRegistry, setAgentRegistryForTests } from "@/lib/agent/registry";
 import { seatIdentityResolver } from "@/lib/bridge/seatIdentity";
@@ -37,10 +38,10 @@ import {
   setFileScanRunnerForTests,
   setFileCatalogMembershipProbeForTests,
 } from "@/lib/scanner/scanCache";
-import { setFilesResponseWorkerRuntimeForTests, shutdownFilesResponseWorker } from "@/lib/scanner/filesResponseWorker";
+import { filesResponseWorkerPoolDiagnostics, setFilesResponseWorkerRuntimeForTests, shutdownFilesResponseWorker } from "@/lib/scanner/filesResponseWorker";
 import { deepFreeze } from "@/lib/deepFreeze";
-import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
 import { gunzipSync } from "node:zlib";
+import { BoardEncoder } from "@/lib/boardEncoding";
 import { writeSummaryBootstrap } from "@/lib/scanner/summaryBootstrap";
 import { stopFixtureProcess } from "@/lib/testing/fixtureProcess";
 import { setFilesResponseDependenciesForTests } from "./dependencies";
@@ -64,6 +65,8 @@ let previousState: string | undefined;
 function resetFilesProjectionCacheForTests(): void {
   const store = globalThis as typeof globalThis & {
     __llvFilesProjectionCache?: Map<string, unknown>;
+    __llvBoardHistory?: unknown;
+    __llvBoardEncoder?: unknown;
     __llvFilesProjectionInflight?: Map<string, Promise<unknown>>;
     __llvFilesProjectionWorkerTail?: Promise<void>;
     __llvFilesPersistedProjectionChecked?: boolean;
@@ -71,6 +74,8 @@ function resetFilesProjectionCacheForTests(): void {
     __llvFilesWorkerWriteFailedSince?: string | null;
   };
   store.__llvFilesProjectionCache = new Map();
+  store.__llvBoardHistory = undefined;
+  store.__llvBoardEncoder = undefined;
   store.__llvFilesProjectionInflight = new Map();
   store.__llvFilesProjectionWorkerTail = undefined;
   store.__llvFilesPersistedProjectionChecked = undefined;
@@ -3871,6 +3876,64 @@ function retainedHistory(count: number, changed = -1): FileEntry[] {
   }));
 }
 
+test("board v2 route keeps the client's certified ETag after idle worker retirement", async () => {
+  const { applyBoardDelta } = await import("@/lib/boardDelta");
+  const setting = "LLV_FILES_RESPONSE_WORKER_IDLE_MS";
+  const previousSetting = process.env[setting];
+  process.env[setting] = "40";
+  setFilesResponseWorkerRuntimeForTests({
+    launch: { executable: process.execPath, workerPath: path.join(process.cwd(), "src/lib/filesResponse.worker.ts") },
+    env: { ...process.env, NODE_ENV: "production", LLV_STATE_DIR: stateDir, LLV_AGENT_REGISTRY_SQLITE: "off", LLV_FILES_RESPONSE_WORKER: "1" },
+    timeoutMs: 30_000,
+  });
+  const request = (headers: Record<string, string> = {}) => new Request("http://127.0.0.1/api/files?view=summary", {
+    headers: { "x-llv-board-protocol": "2", ...headers },
+  });
+  let retiredChild: ChildProcess | undefined;
+  try {
+    scannedFiles = retainedHistory(200);
+    const first = await GET(request());
+    const child = (globalThis as typeof globalThis & { __llvFilesResponseWorker?: { child: ChildProcess } }).__llvFilesResponseWorker!.child;
+    retiredChild = child;
+    const etag = first.headers.get("etag")!;
+    const body = await first.text();
+    const quiet = await GET(request({ "if-none-match": etag }));
+    expect(quiet.status).toBe(304);
+    const deadline = Date.now() + 5_000;
+    while (filesResponseWorkerPoolDiagnostics().pid !== null && Date.now() < deadline) await Bun.sleep(10);
+    expect(filesResponseWorkerPoolDiagnostics().lastRetirement).toBe("idle");
+    expect(filesResponseWorkerPoolDiagnostics().pid).toBeNull();
+    await stopFixtureProcess(child);
+    scannedFiles = retainedHistory(200, 123);
+    const scan = await currentFileScan({ fresh: true });
+    expect(scan.snapshot.files.find(entry => entry.path === "/sessions/retained-123.jsonl")!.mtime).toBe(9_999);
+    const store = globalThis as typeof globalThis & { __llvFilesProjectionInflight?: Map<string, Promise<unknown>> };
+    // A 304 can have queued a rebuild of the older generation. Settle that,
+    // then the fresh generation, before checking the client's retained cursor.
+    await Promise.all([...store.__llvFilesProjectionInflight?.values() ?? []]);
+    await GET(request());
+    await Promise.all([...store.__llvFilesProjectionInflight?.values() ?? []]);
+    const headers = { "if-none-match": etag, "x-llv-files-delta": "1" };
+    const next = await GET(request(headers));
+    expect(next.status).toBe(200);
+    expect(next.headers.get("x-llv-files-delta-base")).toBe(etag);
+    expect(next.headers.get("x-llv-board-reset")).toBeNull();
+    const delta = await next.text();
+    expect(Buffer.byteLength(delta)).toBeLessThan(Buffer.byteLength(body) / 10);
+    let applied = JSON.parse(body);
+    for (const patch of JSON.parse(delta).deltas) applied = applyBoardDelta(applied, patch);
+    expect(applied.files.find((entry: FileEntry) => entry.path === "/sessions/retained-123.jsonl").mtime).toBe(9_999);
+    expect(applied).toEqual(await (await GET(request())).json());
+    expect(fs.readdirSync(path.join(stateDir, "files-response-results"))).toEqual([]);
+  } finally {
+    if (previousSetting === undefined) delete process.env[setting];
+    else process.env[setting] = previousSetting;
+    setFilesResponseWorkerRuntimeForTests(null);
+    await stopTestWorker();
+    if (retiredChild) await stopFixtureProcess(retiredChild);
+  }
+}, 30_000);
+
 test("#1994: a changed board revision reaches a delta-capable client as the changed rows only", async () => {
   scannedFiles = retainedHistory(2_000);
   const responses: Array<{ status: number; bytes: number; delta: boolean }> = [];
@@ -3948,6 +4011,79 @@ test("#1994: a client without delta support, or behind the retained chain, gets 
   expect(unknownBase.headers.has("x-llv-files-delta-base")).toBe(false);
 });
 
+test("board v2 isolates legacy, pinned and agent scopes and evicts histories with projections", async () => {
+  scannedFiles = retainedHistory(200);
+  const { BoardHistory } = await import("@/lib/boardHistory");
+  const store = globalThis as typeof globalThis & { __llvBoardHistory?: InstanceType<typeof BoardHistory> };
+  store.__llvBoardHistory = new BoardHistory();
+  const request = (suffix = "", headers: Record<string, string> = {}) => new Request(`http://127.0.0.1/api/files?view=summary${suffix}`, {
+    headers: { "x-llv-board-protocol": "2", ...headers },
+  });
+  const first = await GET(request());
+  const tag = first.headers.get("etag")!;
+  expect(first.headers.get("x-llv-board-protocol")).toBe("2");
+  expect(first.headers.get("x-llv-board-reset")).toBe("cold");
+  const raw = await first.json();
+  const legacy = await GET(request("", { "x-llv-board-protocol": "1", "if-none-match": tag, "x-llv-files-delta": "1" }));
+  expect(legacy.status).toBe(200);
+  expect(legacy.headers.has("x-llv-board-protocol")).toBe(false);
+  const { boardProtocol: _version, boardScope: _scope, ...plain } = raw;
+  expect(await legacy.json()).toEqual(plain);
+  for (const [suffix, headers] of [["&path=%2Fpinned", {}], ["", { [VIEWER_SPAWN_CAPABILITY_HEADER]: "fixture" }]] as const) {
+    const response = await GET(request(suffix, { ...headers, "if-none-match": tag, "x-llv-files-delta": "1" }));
+    expect(response.status).toBe(200);
+    expect(response.headers.has("x-llv-files-delta-base")).toBe(false);
+    expect(response.headers.get("etag")).not.toBe(tag);
+  }
+  const scopeKey = JSON.stringify([null, "summary", "board-v2"]);
+  store.__llvBoardHistory.record(scopeKey, "prior", tag, "{}", Date.now());
+  for (let i = 0; i < 33; i++) await GET(request(`&path=%2Fscope-${i}`));
+  expect(store.__llvBoardHistory.answer(scopeKey, "prior", tag, 100_000).reason).toBe("expired");
+});
+
+test.each([1, 4, 8])("board v2 shares a changed poll across %s tabs with exact full-summary equality", async (tabs) => {
+  const { applyBoardDelta } = await import("@/lib/boardDelta");
+  scannedFiles = retainedHistory(2000);
+  const request = (headers: Record<string, string> = {}) => new Request("http://127.0.0.1/api/files?view=summary", {
+    headers: { "x-llv-board-protocol": "2", ...headers },
+  });
+  const initial = await GET(request());
+  const base = initial.headers.get("etag")!;
+  const raw = await initial.json();
+  scannedFiles = retainedHistory(2000, 1234).map((entry, i) => i < 20 ? { ...entry, size: entry.size + 1 } : entry);
+  await currentFileScan({ fresh: true });
+  await GET(request());
+  const inflight = (globalThis as typeof globalThis & { __llvFilesProjectionInflight?: Map<string, Promise<unknown>> }).__llvFilesProjectionInflight;
+  await Promise.all(inflight?.values() ?? []);
+  const full = await GET(request());
+  const expected = await full.json();
+  const tag = full.headers.get("etag")!;
+  const answers = await Promise.all(Array.from({ length: tabs }, () => GET(request({
+    "if-none-match": base, "x-llv-files-delta": "1", "accept-encoding": "gzip", "x-llv-board-scope": raw.boardScope,
+  }))));
+  let compressed: Uint8Array<ArrayBuffer> | undefined;
+  for (const answer of answers) {
+    expect(answer.headers.get("x-llv-files-delta-base")).toBe(base);
+    expect(answer.headers.get("etag")).toBe(tag);
+    expect(answer.headers.get("content-encoding")).toBe("gzip");
+    const bytes = new Uint8Array(await answer.arrayBuffer());
+    if (compressed) expect(bytes).toEqual(compressed);
+    compressed = bytes;
+    const { gunzipSync } = await import("node:zlib");
+    const envelope = JSON.parse(gunzipSync(bytes).toString());
+    let state = raw;
+    for (const delta of envelope.deltas) state = applyBoardDelta(state, delta);
+    expect(state).toEqual(expected);
+    expect(bytes.byteLength).toBeLessThan(Buffer.byteLength(JSON.stringify(expected)) / 10);
+  }
+  const quiet = await GET(request({ "if-none-match": tag, "x-llv-files-delta": "1" }));
+  expect(quiet.status).toBe(304);
+  expect(await quiet.text()).toBe("");
+  const reset = await GET(request({ "if-none-match": "old-release", "x-llv-files-delta": "1", "x-llv-board-scope": "other-epoch.scope" }));
+  expect(reset.headers.get("x-llv-board-reset")).toBe("epoch");
+  expect(await reset.json()).toEqual(expected);
+});
+
 test("#1994: board bodies are gzip-encoded for a caller that accepts gzip", async () => {
   scannedFiles = retainedHistory(500);
   const plain = await (await GET(new Request("http://127.0.0.1/api/files?view=summary"))).text();
@@ -3963,7 +4099,7 @@ test("#1994: deltas are negotiated only within the exact summary scope that cert
   scannedFiles = retainedHistory(200);
   const global = await GET(new Request("http://127.0.0.1/api/files?view=summary"));
   const globalEtag = global.headers.get("etag")!;
-  expect(global.headers.get("vary")).toBe("accept-encoding, x-llv-files-delta");
+  expect(global.headers.get("vary")).toBe("accept-encoding, x-llv-files-delta, x-llv-board-protocol");
   const full = await GET(new Request("http://127.0.0.1/api/files"));
   const fullEtag = full.headers.get("etag")!;
   scannedFiles = retainedHistory(200, 9);
@@ -4362,6 +4498,27 @@ async function seedSummaryBootstrap(): Promise<string> {
   resetFilesProjectionCacheForTests();
   return body;
 }
+
+test("a persisted v2 summary bootstraps exact bytes before the current board refines", async () => {
+  const saved = await seedSummaryBootstrap();
+  const context = { scope: "a".repeat(40), epoch: "previous-viewer" };
+  const encoded = new BoardEncoder().encode(context.scope, context.epoch, JSON.parse(saved));
+  await writeSummaryBootstrap(stateDir, encoded.body, encoded.etag, context);
+  const callbacks: Array<() => Promise<void>> = [];
+  const response = await GET(new Request("http://127.0.0.1/api/files?view=summary", {
+    headers: { "x-llv-board-protocol": "2" },
+  }), callback => { callbacks.push(callback); });
+  expect(response.headers.get("x-llv-files-projection-cache")).toBe("bootstrap");
+  expect(response.headers.get("etag")).toBe(encoded.etag);
+  expect(await response.text()).toBe(encoded.body);
+  expect(callbacks).toHaveLength(1);
+  await callbacks[0]!();
+  const refined = await GET(new Request("http://127.0.0.1/api/files?view=summary", {
+    headers: { "x-llv-board-protocol": "2", "x-llv-files-generation": "1" },
+  }));
+  expect(refined.headers.get("x-llv-files-projection-cache")).not.toBe("bootstrap");
+  expect((await refined.json()).boardProtocol).toBe(2);
+});
 
 test("a large saved summary yields to queued work while its body is consumed", async () => {
   const saved = JSON.parse(await seedSummaryBootstrap());

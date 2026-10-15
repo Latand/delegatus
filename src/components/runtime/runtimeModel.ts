@@ -175,23 +175,31 @@ export interface AttentionRequest {
     "prompt": string;
     options?: { label: string; description?: string; recommended?: boolean }[];
     multiSelect?: boolean;
+    isOther?: boolean;
+    isSecret?: boolean;
   };
   questions?: Array<{
     header?: string;
     "prompt": string;
     options?: { label: string; description?: string; recommended?: boolean }[];
     multiSelect?: boolean;
+    isOther?: boolean;
+    isSecret?: boolean;
   }>;
   protocol?: {
     engine: RuntimeEngine;
     method: string;
     questionId?: string;
     questionIds?: string[];
+    questionOptions?: string[][];
+    responseRef?: string;
     input?: Record<string, unknown>;
+    actions?: import("@/lib/runtime/codexAttentionActions").CodexAttentionAction[];
   };
 }
 
 export interface RuntimeAttention {
+  codexReceipt?: import("@/lib/runtime/codexRequestReceipt").CodexRequestReceipt;
   id: string;
   conversationId: string;
   kind: AttentionKind;
@@ -739,6 +747,9 @@ function reduceKnown(store: RuntimeStore, env: RuntimeEnvelope, revision: number
     }
     case "attention": {
       const att = env.payload as RuntimeAttention;
+      // Codex IDs include their owner and request identity. Once resolved,
+      // a replay of that ID cannot reopen the operator's controls.
+      if (att.codexReceipt && store.attentions[att.id]?.codexReceipt?.serverResolution) break;
       store.attentions = { ...store.attentions, [att.id]: att };
       updateSession(store, att.conversationId, revision, (s) =>
         s.attentionIds.includes(att.id) ? s : { ...s, attentionIds: [...s.attentionIds, att.id] },
@@ -746,14 +757,14 @@ function reduceKnown(store: RuntimeStore, env: RuntimeEnvelope, revision: number
       break;
     }
     case "attention-resolved": {
-      const p = env.payload as { attentionId?: string; id?: string; conversationId?: string; state?: AttentionState };
+      const p = env.payload as { attentionId?: string; id?: string; conversationId?: string; state?: AttentionState; codexReceipt?: RuntimeAttention["codexReceipt"] };
       /* Engine-host projections carried the attention id only as `id` before
          #765; accept both so replayed ledger events still retire the card. */
       const attentionId = p.attentionId ?? p.id;
       if (!attentionId) break;
       const existing = store.attentions[attentionId];
       if (existing) {
-        store.attentions = { ...store.attentions, [attentionId]: { ...existing, state: p.state ?? "resolved", unowned: false } };
+        store.attentions = { ...store.attentions, [attentionId]: { ...existing, state: p.state ?? "resolved", unowned: false, ...(p.codexReceipt ? { codexReceipt: p.codexReceipt } : {}) } };
       }
       const convId = p.conversationId ?? existing?.conversationId;
       if (convId) {

@@ -1,0 +1,177 @@
+{
+  "baselineCommit": "e3dad062c8f3a18c710b7f37317ac8f4826b077f",
+  "bun": "1.4.0",
+  "hotRows": 267,
+  "archivedRows": 674,
+  "requestedGitWaitMs": 10000,
+  "clockTicksPerSecond": 100,
+  "sourceHashes": {
+    "relief-before-source": "753f1e08cc999f48a5f60d6c7523f46ab98d621ccd167d7249216be625ca6ff3",
+    "relief-after-source": "6a10cbd519a84f82dd9b8f797e598db10a3fb6654cdd1e75e6a2b66e4dca65d7"
+  },
+  "driverSha256": "bdb760365715e480fe8ceeda93202274a6720343bbb6b8caa8858fbab1ae5459",
+  "pairs": [
+    {
+      "pair": 1,
+      "equivalence": {
+        "rows": 941,
+        "identical": true,
+        "differentKeys": []
+      },
+      "before": {
+        "firstPassWallMs": 12775.310831,
+        "firstPassProcessUserMs": 12843.139,
+        "waitWallMs": 10070.083482,
+        "waitMainThreadCpuPercent": 99.10543460577044,
+        "waitMaxTimerGapMs": 140.25658599999997,
+        "fullPassMaxTimerGapMs": 850.3325159999986,
+        "mutablePipelineSnapshots": 112,
+        "mutablePipelineCopiedRows": 29904,
+        "maxMutableSnapshotMs": 270.89777200000003,
+        "coldRegistrySnapshotMs": 722.178006,
+        "warmPassWallMs": [
+          338.3448210000006,
+          363.89259800000036
+        ],
+        "allPassChanged": [
+          true,
+          true,
+          true
+        ],
+        "refusedActions": 0,
+        "replayErrors": []
+      },
+      "after": {
+        "firstPassWallMs": 11992.194473,
+        "firstPassProcessUserMs": 2899.607,
+        "waitWallMs": 10000.222228,
+        "waitMainThreadCpuPercent": 7.89982444378135,
+        "waitMaxTimerGapMs": 8.69919899999968,
+        "fullPassMaxTimerGapMs": 702.2992210000001,
+        "mutablePipelineSnapshots": 0,
+        "mutablePipelineCopiedRows": 0,
+        "maxMutableSnapshotMs": 0,
+        "coldRegistrySnapshotMs": 671.9155089999999,
+        "warmPassWallMs": [
+          317.3225160000002,
+          278.7614219999996
+        ],
+        "allPassChanged": [
+          true,
+          true,
+          true
+        ],
+        "refusedActions": 0,
+        "replayErrors": []
+      }
+    },
+    {
+      "pair": 2,
+      "equivalence": {
+        "rows": 941,
+        "identical": true,
+        "differentKeys": []
+      },
+      "before": {
+        "firstPassWallMs": 12509.012614000001,
+        "firstPassProcessUserMs": 12430.691,
+        "waitWallMs": 10096.918421,
+        "waitMainThreadCpuPercent": 99.04011880695772,
+        "waitMaxTimerGapMs": 123.69105000000036,
+        "fullPassMaxTimerGapMs": 720.4298359999993,
+        "mutablePipelineSnapshots": 121,
+        "mutablePipelineCopiedRows": 32307,
+        "maxMutableSnapshotMs": 271.2179560000002,
+        "coldRegistrySnapshotMs": 606.6524770000001,
+        "warmPassWallMs": [
+          250.91986600000018,
+          243.6399930000007
+        ],
+        "allPassChanged": [
+          true,
+          true,
+          true
+        ],
+        "refusedActions": 0,
+        "replayErrors": []
+      },
+      "after": {
+        "firstPassWallMs": 12132.000191,
+        "firstPassProcessUserMs": 3108.321,
+        "waitWallMs": 10000.222571999999,
+        "waitMainThreadCpuPercent": 8.5998085923402,
+        "waitMaxTimerGapMs": 8.924318999999741,
+        "fullPassMaxTimerGapMs": 753.7014519999999,
+        "mutablePipelineSnapshots": 0,
+        "mutablePipelineCopiedRows": 0,
+        "maxMutableSnapshotMs": 0,
+        "coldRegistrySnapshotMs": 728.841259,
+        "warmPassWallMs": [
+          345.98576499999945,
+          377.2366409999995
+        ],
+        "allPassChanged": [
+          true,
+          true,
+          true
+        ],
+        "refusedActions": 0,
+        "replayErrors": []
+      }
+    },
+    {
+      "pair": 3,
+      "equivalence": {
+        "rows": 941,
+        "identical": true,
+        "differentKeys": []
+      },
+      "before": {
+        "firstPassWallMs": 12215.3547,
+        "firstPassProcessUserMs": 12034.335,
+        "waitWallMs": 10026.613003999999,
+        "waitMainThreadCpuPercent": 98.9366997214566,
+        "waitMaxTimerGapMs": 133.0652200000004,
+        "fullPassMaxTimerGapMs": 669.3830479999999,
+        "mutablePipelineSnapshots": 114,
+        "mutablePipelineCopiedRows": 30438,
+        "maxMutableSnapshotMs": 239.69895899999983,
+        "coldRegistrySnapshotMs": 656.507922,
+        "warmPassWallMs": [
+          219.19688599999972,
+          209.64467299999887
+        ],
+        "allPassChanged": [
+          true,
+          true,
+          true
+        ],
+        "refusedActions": 0,
+        "replayErrors": []
+      },
+      "after": {
+        "firstPassWallMs": 11810.20471,
+        "firstPassProcessUserMs": 2755.338,
+        "waitWallMs": 10000.279165,
+        "waitMainThreadCpuPercent": 7.599787840522749,
+        "waitMaxTimerGapMs": 7.5824559999998655,
+        "fullPassMaxTimerGapMs": 606.738343,
+        "mutablePipelineSnapshots": 0,
+        "mutablePipelineCopiedRows": 0,
+        "maxMutableSnapshotMs": 0,
+        "coldRegistrySnapshotMs": 573.888024,
+        "warmPassWallMs": [
+          237.39121200000045,
+          259.3769169999996
+        ],
+        "allPassChanged": [
+          true,
+          true,
+          true
+        ],
+        "refusedActions": 0,
+        "replayErrors": []
+      }
+    }
+  ]
+}

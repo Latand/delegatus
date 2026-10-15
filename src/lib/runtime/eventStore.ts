@@ -1,3 +1,4 @@
+import { validCodexRequestReceipt } from "./codexRequestReceipt";
 import fs from "node:fs";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
@@ -169,9 +170,10 @@ function validEvent(value: unknown): value is RuntimeEvent {
       return nonEmptyString(event.turnId)
         && (event.status === "completed" || event.status === "interrupted" || event.status === "error");
     case "attention":
-      return nonEmptyString(event.id) && nonEmptyString(event.method) && Object.hasOwn(event, "attention");
+      return nonEmptyString(event.id) && nonEmptyString(event.method) && Object.hasOwn(event, "attention")
+        && (event.codexReceipt === undefined || validCodexRequestReceipt(event.codexReceipt));
     case "attention-resolved":
-      return nonEmptyString(event.id)
+      return (event.codexReceipt === undefined || validCodexRequestReceipt(event.codexReceipt)) && nonEmptyString(event.id)
         && (event.resolution === "answered" || event.resolution === "host-restarted" || event.resolution === "server-resolved" || event.resolution === "turn-ended");
     case "limits":
       return Object.hasOwn(event, "snapshot");

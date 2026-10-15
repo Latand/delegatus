@@ -267,7 +267,92 @@ test("a worker that dies mid-build fails its build and the next one starts a fre
   }
 });
 
-/* #1994: the delta from a scope's previous representation survives the
+test("v2 resident worker preserves the certified base across discarded builds and retirement", async () => {
+  const { applyBoardDelta } = await import("@/lib/boardDelta");
+  const stateDir = scratchState();
+  const scoped = { ...request, url: "http://127.0.0.1/api/files?view=summary", deltaScope: "c".repeat(40), boardEpoch: "first" };
+  try {
+    const first = await buildFilesResponseInWorker(scoped, runtimeFor(stateDir));
+    expect(JSON.parse(first.body).boardProtocol).toBe(2);
+    const changed = structuredClone(scoped);
+    changed.snapshot!.projectCatalog = [{ project: "new", conversations: 0, smt: 1 }] as never;
+    const next = await buildFilesResponseInWorker(changed, runtimeFor(stateDir), first);
+    expect(next.delta?.base).toBe(first.etag);
+    expect(applyBoardDelta(JSON.parse(first.body), JSON.parse(next.delta!.body))).toEqual(JSON.parse(next.body));
+    const unpublished = structuredClone(changed);
+    unpublished.snapshot!.projectCatalog = [{ project: "discarded", conversations: 0, smt: 2 }] as never;
+    await buildFilesResponseInWorker(unpublished, runtimeFor(stateDir), next);
+    const certified = await buildFilesResponseInWorker(scoped, runtimeFor(stateDir), next);
+    expect(certified.delta?.base).toBe(next.etag);
+    expect(applyBoardDelta(JSON.parse(next.body), JSON.parse(certified.delta!.body))).toEqual(JSON.parse(certified.body));
+    await stopTestWorker();
+    const recovered = await buildFilesResponseInWorker(changed, runtimeFor(stateDir), certified);
+    expect(recovered.delta?.base).toBe(certified.etag);
+    expect(applyBoardDelta(JSON.parse(certified.body), JSON.parse(recovered.delta!.body))).toEqual(JSON.parse(recovered.body));
+    const restarted = await buildFilesResponseInWorker({ ...changed, boardEpoch: "second" }, runtimeFor(stateDir), recovered);
+    expect(restarted.etag).not.toBe(recovered.etag);
+    expect(restarted.delta).toBeUndefined();
+    const otherScope = await buildFilesResponseInWorker({ ...changed, deltaScope: "d".repeat(40) }, runtimeFor(stateDir), recovered);
+    expect(otherScope.delta).toBeUndefined();
+    expect(fs.readdirSync(path.join(stateDir, "files-response-results"))).toEqual([]);
+  } finally {
+    await stopTestWorker();
+    fs.rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+for (const retirement of ["idle", "size"] as const) {
+  test(`v2 keeps a small delta from the certified ETag after ${retirement} retirement`, async () => {
+    const { applyBoardDelta } = await import("@/lib/boardDelta");
+    const stateDir = scratchState();
+    if (retirement === "idle") process.env.LLV_FILES_RESPONSE_WORKER_IDLE_MS = "40";
+    const runtime = runtimeFor(stateDir);
+    const scoped = (mtime: number) => ({
+      ...request,
+      url: "http://127.0.0.1/api/files?view=summary",
+      deltaScope: "e".repeat(40), boardEpoch: "same-viewer",
+      snapshot: {
+        files: Array.from({ length: 20 }, (_, index) => ({
+          path: `/sessions/session-${index}.jsonl`, root: "codex-sessions", name: `session-${index}`,
+          project: "repo", title: "retained title ".repeat(1000), engine: "codex", kind: "session", fmt: "codex",
+          parent: null, mtime: index === 0 ? mtime : 1, size: 1, activity: "recent", proc: null, pid: null,
+          model: null, pendingQuestion: null, waitingInput: null,
+        })),
+        projectCatalog: [], complete: true,
+      },
+    });
+    let retiredChild: ChildProcess | undefined;
+    try {
+      const before = filesResponseWorkerPoolDiagnostics().spawns;
+      let first = await buildFilesResponseInWorker(scoped(1) as never, runtime);
+      const child = (globalThis as typeof globalThis & { __llvFilesResponseWorker?: { child: ChildProcess } }).__llvFilesResponseWorker!.child;
+      retiredChild = child;
+      if (retirement === "idle") {
+        const deadline = Date.now() + 5_000;
+        while (filesResponseWorkerPoolDiagnostics().pid !== null && Date.now() < deadline) await Bun.sleep(10);
+      } else {
+        process.env.LLV_FILES_RESPONSE_WORKER_RSS_LIMIT_MB = "1";
+        first = await buildFilesResponseInWorker(scoped(1) as never, runtime, first);
+      }
+      expect(filesResponseWorkerPoolDiagnostics().lastRetirement).toBe(retirement);
+      expect(filesResponseWorkerPoolDiagnostics().pid).toBeNull();
+      await stopFixtureProcess(child);
+      delete process.env.LLV_FILES_RESPONSE_WORKER_RSS_LIMIT_MB;
+      const next = await buildFilesResponseInWorker(scoped(2) as never, runtime, first);
+      expect(filesResponseWorkerPoolDiagnostics().spawns - before).toBe(2);
+      expect(next.delta?.base).toBe(first.etag);
+      expect(Buffer.byteLength(next.delta!.body)).toBeLessThan(Buffer.byteLength(next.body) / 10);
+      expect(applyBoardDelta(JSON.parse(first.body), JSON.parse(next.delta!.body))).toEqual(JSON.parse(next.body));
+      expect(fs.readdirSync(path.join(stateDir, "files-response-results"))).toEqual([]);
+    } finally {
+      await stopTestWorker();
+      if (retiredChild) await stopFixtureProcess(retiredChild);
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+}
+
+/* #1994: the v1 delta from a scope's previous representation survives the
    worker being retired between two revisions. */
 test("a retired worker still answers the next revision with a delta from its persisted base", async () => {
   const stateDir = scratchState();
@@ -376,6 +461,19 @@ test("the production worker persists only a completed operator summary", async (
     const restored = await readSummaryBootstrap(stateDir);
     expect(restored?.etag).toBe(result.etag);
     expect(Buffer.from(restored!.body).toString()).toBe(result.body);
+    const scoped = { ...summary, deltaScope: "f".repeat(40), boardEpoch: "bootstrap-viewer" };
+    const encoded = await buildFilesResponseInWorker(scoped, runtime);
+    expect(JSON.parse(encoded.body).boardProtocol).toBe(2);
+    const savedV2 = await readSummaryBootstrap(stateDir);
+    expect(savedV2?.etag).toBe(encoded.etag);
+    expect(Buffer.from(savedV2!.body).toString()).toBe(encoded.body);
+    const changed = structuredClone(scoped);
+    changed.snapshot.projectCatalog = [{ project: "after-bootstrap", conversations: 0, smt: 1 }] as never;
+    const next = await buildFilesResponseInWorker(changed, runtime, encoded);
+    expect(next.delta?.base).toBe(encoded.etag);
+    const { applyBoardDelta } = await import("@/lib/boardDelta");
+    expect(applyBoardDelta(JSON.parse(encoded.body), JSON.parse(next.delta!.body))).toEqual(JSON.parse(next.body));
+    expect((await readSummaryBootstrap(stateDir))?.etag).toBe(next.etag);
   } finally {
     await stopTestWorker();
     fs.rmSync(stateDir, { recursive: true, force: true });
