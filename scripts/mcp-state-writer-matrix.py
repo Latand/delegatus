@@ -41,6 +41,8 @@ def environment(root):
         folder = root / key
         folder.mkdir(parents=True, exist_ok=True)
         env[key] = str(folder)
+    # Keep every fixture directory beneath the process's declared temp root.
+    env["TMPDIR"] = str(root)
     env.update(CODEX_HOME=env["LLV_CODEX_HOME"], CLAUDE_CONFIG_DIR=env["LLV_CLAUDE_HOME"],
                LLV_VIEWER_CONTROL_URL="http://127.0.0.1:1", NODE_ENV="test", LLV_STRUCTURED_HOSTS="0")
     return env

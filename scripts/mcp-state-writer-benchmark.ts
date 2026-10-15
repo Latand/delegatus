@@ -17,6 +17,8 @@ function environment(root: string): Record<string, string> {
     env[name] = path.join(root, name);
     fs.mkdirSync(env[name]!, { recursive: true });
   }
+  // The state guard admits the complete fixture tree through this temp root.
+  env.TMPDIR = root;
   return { ...env, CODEX_HOME: env.LLV_CODEX_HOME!, CLAUDE_CONFIG_DIR: env.LLV_CLAUDE_HOME!,
     LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1", LLV_STRUCTURED_HOSTS: "0", LLV_STATE_ACTIVATION: "sqlite", NODE_ENV: "test" };
 }
@@ -200,6 +202,21 @@ export async function runStateWriterSample(): Promise<void> {
       if (transport.pid) pids.add(transport.pid);
       transport.stderr?.on("data", chunk => fs.appendFileSync(path.join(root, `client-${n}.stderr`), chunk));
     }
+    // Refuse a broken service before spending a measurement window on errors.
+    const probeArgs = { taskId: taskId(0) };
+    let probe: { ok?: boolean } | undefined;
+    if (mode === "stdio") {
+      const response = await clients[0]!.client.callTool({ name: "get_task", arguments: probeArgs });
+      probe = response.structuredContent as typeof probe;
+    } else {
+      const response = await fetch(`${url}/api/mcp`, { method: "POST", headers: {
+        "content-type": "application/json", accept: "application/json, text/event-stream",
+        "x-llv-spawn-capability": capabilities[0]!, origin: url,
+      }, body: JSON.stringify({ jsonrpc: "2.0", id: "fixture-preflight", method: "tools/call", params: { name: "get_task", arguments: probeArgs } }) });
+      const envelope = await response.json() as { result?: { structuredContent?: typeof probe } };
+      probe = envelope.result?.structuredContent;
+    }
+    if (!probe?.ok) throw new Error(`fixture task preflight failed: ${JSON.stringify(probe)}`);
     const sample = (phase: string) => fs.appendFileSync(path.join(root, "census.ndjson"), `${JSON.stringify({ at: Date.now(), phase, processes: census(pids) })}\n`);
     sample("cold"); sampler = setInterval(() => sample("load"), 250);
     const pending = new Set<Promise<void>>();
@@ -323,10 +340,13 @@ export async function runStateWriterSample(): Promise<void> {
       try {
         fs.writeFileSync(path.join(root, "final-rows.json"), JSON.stringify(db.query("SELECT * FROM state_rows ORDER BY collection,row_key").all()));
       } finally { db.close(); }
-      const receipts = new Database(path.join(env.LLV_STATE_DIR!, "mcp-receipts.sqlite"), { readonly: true });
-      try {
-        fs.writeFileSync(path.join(root, "final-receipts.json"), JSON.stringify(receipts.query("SELECT receipt_key,result_json FROM mcp_receipts ORDER BY receipt_key").all()));
-      } finally { receipts.close(); }
+      const receiptFile = path.join(env.LLV_STATE_DIR!, "mcp-receipts.sqlite");
+      if (fs.existsSync(receiptFile)) {
+        const receipts = new Database(receiptFile, { readonly: true });
+        try {
+          fs.writeFileSync(path.join(root, "final-receipts.json"), JSON.stringify(receipts.query("SELECT receipt_key,result_json FROM mcp_receipts ORDER BY receipt_key").all()));
+        } finally { receipts.close(); }
+      }
     }
   }
 }
