@@ -282,6 +282,22 @@ The design covers current structured hosts, state sandboxing, scopes and both re
 
 ## Implementation, 2026-10-15
 
+The implementation remains a draft pending stdio MCP receipt compatibility.
+The current `src/lib/mcp/server.ts` records `process.pid` and its local start
+identity in shared mutation receipts. Its `processOwnerAlive` reader interprets
+that PID in the reader's namespace. An isolated probe through the production
+SQLite receipt store and tool service reproduced the failure twice: a native
+owner remained alive in its private namespace while an outer recovery caller
+received `not_executed`; the same recovery then prevented the living owner
+from marking its receipt dispatching. The observations are recorded under
+`compatibilityBlocker` in `evidence/agent-signal-sandbox.json`.
+
+The brief reserves MCP writer transport and lifetime for a parallel lane.
+Complete that routing prerequisite and verify receipt recovery across the
+namespace boundary before merging this implementation. A focused change to
+shared receipt identities would require expanding this lane's scope. The core
+signal tests below do not exercise that shared mutation path.
+
 `src/lib/runtime/agentSignalSandbox.ts` is the shared managed launch adapter.
 `bin/agent-signal-sandbox.py` enters the delegated invocation scope, moves its
 supervisors into an `agent` leaf, installs the namespace mounts and proves
@@ -411,3 +427,10 @@ over fifteen seconds, including abandoned connections. The production Viewer
 build also served HTTP 200 under the pin. Local privacy with committed
 fingerprints, changed-file lint and whitespace checks passed. The PR carries
 the hosted check results.
+
+After the interrupted build attempt, a fresh isolated replay passed the nine
+registry/metadata cases, eleven kernel cases, seven gate cases, six real-engine
+profile cases (fresh/resumed and both headless paths) and the terminal case.
+The two built-image cases were skipped in this replay; their separate earlier
+results remain recorded above. The stdio receipt probe still reproduced the
+compatibility blocker. No MCP writer files were changed.

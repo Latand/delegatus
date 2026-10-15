@@ -235,6 +235,34 @@
       "localPrivacyWithCommittedFingerprints": "pass",
       "changedFileLint": "pass",
       "whitespace": "pass"
+    },
+    "resumedAttempt": {
+      "isolation": "Fresh HOME, XDG_CONFIG_HOME, TMPDIR and LLV_STATE_DIR through the installed owned runner; explicit test file paths.",
+      "unitPassed": 9,
+      "kernelPassed": 11,
+      "gatePassed": 7,
+      "nativeProfilePassed": 6,
+      "terminalPassed": 1,
+      "containerCasesSkipped": 2,
+      "containerSkipReason": "No image selected for this replay; earlier built-image results retained.",
+      "mcpReceiptCompatibility": "failed"
     }
+  },
+  "compatibilityBlocker": {
+    "status": "unresolved",
+    "boundary": "stdio MCP mutation receipts shared across private PID namespaces",
+    "productionSources": [
+      "src/lib/mcp/server.ts"
+    ],
+    "probe": "A live namespace-local owner claims a receipt in an isolated SQLite store; an outer production tool-service caller attempts recoveryOnly for that same receipt.",
+    "reproductions": 2,
+    "observed": {
+      "privateOwnerAlive": true,
+      "persistedOwnerWasPrivate": true,
+      "outerRecoveryCode": "not_executed",
+      "dispatchDeniedForStillLivingOwner": true
+    },
+    "requiredBehavior": "Recovery retains a living owner and leaves its dispatch claim intact.",
+    "resolution": "Integrate the fenced MCP routing prerequisite and verify it across namespaces, or authorize a focused receipt-identity change."
   }
 }
