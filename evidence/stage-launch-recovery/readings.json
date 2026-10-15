@@ -1,5 +1,5 @@
 {
-  "recordedAt": "2026-10-15T23:08:19.112571+00:00",
+  "recordedAt": "2026-10-15T23:28:56.699082+00:00",
   "mainRevision": "5bd026c067e562af075ce25d838482a3c8b00a3f",
   "runtime": "Bun 1.4.0 (34cbb9a40)",
   "isolation": [
@@ -113,6 +113,23 @@
         "(fail) managed early admission holds actual pipeline launches across recovery until terminal status",
         "(fail) managed drain-switch-off admission holds actual pipeline launches across recovery until terminal status"
       ]
+    },
+    {
+      "source": "candidate",
+      "command": "bun test src/lib/pipelines/engine.providerBudget.test.ts",
+      "pass": 164,
+      "fail": 0,
+      "summary": "Ran 164 tests across 1 file. [280.77s]",
+      "failingCases": []
+    },
+    {
+      "source": "candidate",
+      "command": "bun test src/lib/proc/memory.test.ts src/lib/proc/portable.test.ts src/lib/proc/darwinIdentity.test.ts src/lib/proc/index.test.ts src/lib/proc/windowsSnapshot.test.ts src/lib/proc/windowsIdentity.test.ts src/lib/proc/windowsCwd.test.ts src/lib/proc/windows.test.ts src/lib/processGroup.test.ts src/lib/platformHome.test.ts src/lib/runtime/localEndpoint.test.ts src/lib/scanner/describe.test.ts src/lib/state/durableJson.test.ts src/runtime-host/socket.test.ts src/runtime-host/runtimeHostFence.test.ts bin/server-runtime.test.ts bin/bind-guard.test.ts",
+      "pass": 194,
+      "fail": 0,
+      "summary": "Ran 204 tests across 17 files. [2.10s]",
+      "failingCases": [],
+      "skip": 10
     }
   ],
   "typecheck": {
@@ -173,5 +190,24 @@
       ]
     },
     "correction": "Missing historical launches reuse the pass projection; existing launches obtain fresh keyed evidence."
+  },
+  "linuxBackend": {
+    "command": "bun scripts/verify-platform-backend.ts --expect linux",
+    "exitCode": 0,
+    "result": "platform readers verified"
+  },
+  "publicationHook": {
+    "reviewedSourceCommit": "fabc66dec150d95730516e9c990d6a487d880a36",
+    "types": "pass",
+    "eslint": "pass; zero introduced errors",
+    "privacy": "pass, including commits",
+    "refusal": "provider-budget runner exceeded the five-minute file deadline; all other new failures cleared",
+    "baselineFailures": [
+      "creation early-switch admission",
+      "ports early admission",
+      "ports drain-switch-off admission"
+    ],
+    "serialFinalProviderBudget": "164 pass, zero failures, 280.77 seconds",
+    "completion": "The stopped Linux checks passed separately. Publication uses the repository-documented LLV_SKIP_HOOKS=1 exception for the timeout refusal after these checks."
   }
 }

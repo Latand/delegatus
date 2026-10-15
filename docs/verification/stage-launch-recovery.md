@@ -29,7 +29,8 @@ filenames remain valid. Receipt, generation and native-entry evidence is read
 fresh in one keyed transaction after awaited transcript reads. The regression
 reuses one ports instance and changes the real registry during that await.
 Conflicting operation identities or a changed generation name the conflict.
-A spent observation budget retains the original identities and names the missing evidence. The success regression
+A spent observation budget retains the original identities and names the
+missing evidence. The success regression
 requires one host start, one first prompt and the same stage attempt.
 
 The new envelope write waits through registry asynchronous admission, rechecks
@@ -56,7 +57,8 @@ including remote actions and manual retry, awaits asynchronous admission.
 The F1 admission hunks in `registry.ts`, the `launchMembership.ts` source and
 their first three membership regressions match PR #2951. This branch adds peer
 release and deadline coverage. The separate `spawnEvidence` reader in
-`registry.ts` supplies fresh F3 evidence without loading unrelated history. Missing historical launches reuse the pass
+`registry.ts` supplies fresh F3 evidence without loading unrelated history.
+Missing historical launches reuse the pass
 projection; existing launches read fresh evidence. Its pipeline adapter preserves
 terminal replay evidence before another membership admission can erase it.
 
@@ -85,3 +87,9 @@ Keep the same runtime and isolation. The full changed test files run on the
 candidate. The publication hook also runs its own type, lint, touched-test,
 platform and privacy checks. Required PR checks are recorded separately from
 local checks.
+
+The publication hook refused the provider-budget file at its five-minute
+deadline. The final serial file passes all 164 tests; main serial controls
+also pass. The stopped Linux backend and explicit platform files pass
+separately. The readings record these results and the repository-documented
+publication exception used for this timeout.
