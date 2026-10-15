@@ -46,7 +46,7 @@ import { emptyLaunchProfile, type ViewerConversationId } from "@/lib/accounts/mi
 import { requestAccountMigrationTick } from "@/lib/accounts/migration/controllerSignal";
 import { effectiveRemaining } from "@/lib/accounts/migration/quotaPolicy";
 import { freshSpecFor } from "@/lib/agent/cli";
-import { agentRegistry, deliveryMayHaveArrived, identityMaterializationFence, REGISTRY_WRITER_BUSY, type AgentRegistryEntry, type DurableMembershipInput, type RegistryFile, type StructuredTerminationCapture, type TmuxHostEvidence } from "@/lib/agent/registry";
+import { agentRegistry, deliveryMayHaveArrived, identityMaterializationFence, resolveConversationAlias, RegistryWriterBusyError, REGISTRY_WRITER_BUSY, type AgentRegistryEntry, type DurableMembershipInput, type RegistryFile, type StructuredTerminationCapture, type TmuxHostEvidence } from "@/lib/agent/registry";
 import { registryRowProjection, registryRowsMatching, type RegistryRowProjector } from "@/lib/agent/sqliteRegistryStore";
 import { forEachCooperatively, yieldToRuntime } from "@/lib/cooperative";
 import { transcriptAllowed } from "@/lib/agent/spawnParent";
@@ -1395,6 +1395,17 @@ const ADOPTION_MEMBERSHIPS: RegistryRowProjector<"memberships", RegistryFile["me
     && membership.containerId && membership.slot.startsWith("adopt:") && membership.stageId && membership.parentConversationId),
 };
 
+/** A retained generation can use an id from the transcript filename. Its
+ * path and the original native entry must agree on this launch. */
+function stageLaunchGenerationMatches(receipt: RegistryFile["receipts"][string] | null,
+  generation: { engine: string; path: string } | null | undefined,
+  entry: Pick<AgentRegistryEntry, "artifactPath" | "structuredHostOperationId"> | null | undefined): boolean {
+  if (!receipt?.key || !receipt.artifactPath || receipt.retryClaim) return false;
+  if (!generation || !entry || generation.engine !== receipt.key.engine || generation.path !== receipt.artifactPath
+    || entry.artifactPath !== receipt.artifactPath) return false;
+  return !entry.structuredHostOperationId || entry.structuredHostOperationId === receipt.launchId;
+}
+
 export function defaultPipelinePorts(
   dependencies: { liveness?: TurnLivenessDependencies; termination?: StructuredHostTerminationDependencies;
     panes?: { snapshot?: typeof paneInfo; observation?: typeof panePidMap };
@@ -1553,10 +1564,10 @@ export function defaultPipelinePorts(
     scheduleTick: schedulePipelineTick,
     spawnReceiptState: (launchId) => registry.snapshotSpawns([launchId])[launchId]?.state ?? null,
     spawnReceipt: (launchId) => {
-      const current = snapshot();
-      const receipt = current.receipts[launchId];
+      const evidence = registry.spawnEvidence(launchId);
+      const receipt = evidence.receipt;
       if (!receipt) return null;
-      const identityPublished = identityFence().allowsReceipt(receipt);
+      const identityPublished = identityFence().allowsReceipt(receipt, { structured: evidence.structured });
       return {
         state: receipt.state,
         launchId: receipt.launchId,
@@ -1570,11 +1581,8 @@ export function defaultPipelinePorts(
         staged: receipt.key !== null,
         neverBegan: receipt.state === "failed" && !receipt.rejection && receipt.membershipAdmitted === false
           && !receipt.key && !receipt.pane && !receipt.verifiedHost && !receipt.artifactPath
-          && !current.conversations[receipt.conversationId]?.generations.length,
-        currentGeneration: !!receipt.key && !receipt.retryClaim && current.conversations[receipt.conversationId]?.generations.at(-1)?.id === receipt.key.sessionId
-          && current.conversations[receipt.conversationId]?.generations.at(-1)?.path === receipt.artifactPath
-          && (!current.entries[sessionKeyId(receipt.key)]?.structuredHostOperationId
-            || current.entries[sessionKeyId(receipt.key)]?.structuredHostOperationId === receipt.launchId),
+          && !evidence.generation,
+        currentGeneration: stageLaunchGenerationMatches(receipt, evidence.generation, evidence.entry),
       };
     },
     recoverStagedLaunch: (launchId, eligible) => withViewerOperation("pipelines.evidence", async () => {
@@ -1589,10 +1597,15 @@ export function defaultPipelinePorts(
             startedAt: Date.now(), nextTryAt: Date.now(), reason: `replayed receipt remains ${before.state}; original first-message outcome unconfirmed${before.error ? `; ${redactBounded(before.error, 200)}` : ""}` };
           const { STAGED_RECOVERY_PREFIX } = await import("@/lib/runtime/stagedRecovery");
           await registry.deliveryWriteOrBusy({ label: "pipeline.spawn-evidence", operationId: launchId }, () =>
-            registry.preserveSpawnArtifactOwnership(launchId, STAGED_RECOVERY_PREFIX + JSON.stringify(recovery), (file, current) =>
-              eligible() && current.state === before.state && current.error === before.error && !current.retryClaim
-              && current.conversationId === before.conversationId && current.key?.sessionId === before.key?.sessionId
-              && (!current.key || file.conversations[current.conversationId]?.generations.at(-1)?.id === current.key.sessionId)));
+            registry.preserveSpawnArtifactOwnership(launchId, STAGED_RECOVERY_PREFIX + JSON.stringify(recovery), (file, current) => {
+              const conversation = file.conversations[resolveConversationAlias(file, current.conversationId)];
+              const generation = conversation?.generations.at(-1);
+              return eligible() && current.state === before.state && current.error === before.error && !current.retryClaim
+                && current.conversationId === before.conversationId && current.key?.sessionId === before.key?.sessionId
+                && (!current.key || stageLaunchGenerationMatches(current,
+                  conversation && generation ? { engine: conversation.engine, path: generation.path } : null,
+                  file.entries[sessionKeyId(current.key)]));
+            }));
         }
         await recoverStagedStructuredLaunch(launchId, registry, client, { eligible });
       } finally { invalidateRegistryProjection(); }
@@ -7131,8 +7144,9 @@ async function tickRunStage(
          own clock includes the restart, which would spend the budget before a
          single retry. A wait persisted from before the restart keeps its own
          start, so its exhaustion still counts every round. */
-      if (receipt.state === "failed" && receipt.error && isTransientStructuredSpawnFailure(receipt.error)) {
+      if (receipt.state === "failed" && receipt.error && (receipt.neverBegan || isTransientStructuredSpawnFailure(receipt.error))) {
         const now = ports.now();
+        if (unixMs(attempt.controllerWait?.retryAfter ?? "") > unixMs(now)) return;
         const deferred = await deferRetiredLaunchRetry(pipeline, stage, attempt, receipt, now, now, ports);
         if (deferred === "waiting") return;
         if (deferred === "exhausted") {
@@ -8558,7 +8572,7 @@ async function waitForStagedLaunch(
   ports.scheduleTick?.(Math.max(1_000, nextTryAt - unixMs(now)));
 }
 
-const SPAWN_GENERATION_CONFLICT = "stage spawn evidence conflicts: reserved session differs from the current registry generation; original launch retained";
+const SPAWN_GENERATION_CONFLICT = "stage spawn evidence conflicts: reserved launch does not match the current registry generation and native owner; original launch retained";
 
 function unresolvedSpawnPark(attempt: PipelineStageAttempt): boolean {
   return attempt.error?.startsWith("stage spawn is unresolved") === true;
@@ -9349,7 +9363,20 @@ async function deferRetiredLaunchRetry(
   if (prepublicationInterruption && !await safeToReplace()) return "delivered";
   const neverBegan = receipt.neverBegan === true;
   const originalError = receipt.error;
-  const claim = await ports.claimSpawnRetry(receipt.launchId, `${pipeline.id}:${stage.id}:${receipt.launchId}`);
+  let claim: Awaited<ReturnType<PipelinePorts["claimSpawnRetry"]>>;
+  try { claim = await ports.claimSpawnRetry(receipt.launchId, `${pipeline.id}:${stage.id}:${receipt.launchId}`); }
+  catch (error) {
+    if (!(error instanceof RegistryWriterBusyError)) throw error;
+    if (bookControllerWaitRound(attempt, since, now, ports,
+      { budgetMs: SPAWN_HOST_WAIT_BUDGET_MS, retryMaxMs: SPAWN_HOST_RETRY_MAX_MS }) === "exhausted") return "exhausted";
+    spawnsThisProcess.delete(attemptKey(pipeline, stage, attempt));
+    attempt.state = "spawning";
+    attempt.error = null;
+    pipeline.state = "running";
+    setCursorState(pipeline, stage.id, "spawning");
+    pipeline.stateDetail = `stage spawn deferred: ${redactBounded(error.message, 300)}; retry at ${attempt.controllerWait!.retryAfter}`;
+    return "waiting";
+  }
   if (claim !== "claimed") return "settled";
   const currentReceipt = ports.spawnReceipt(receipt.launchId);
   if (!currentReceipt || currentReceipt.state !== "failed" || currentReceipt.launchId !== receipt.launchId

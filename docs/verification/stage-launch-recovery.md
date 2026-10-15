@@ -12,7 +12,9 @@ and source hashes are in `evidence/stage-launch-recovery/readings.json`.
 | F2 | Preserve a failed replay before membership can overwrite its admission proof. An unadmitted failed receipt with no host, native key, artifact or conversation generation takes the existing retry claim and persisted backoff. | `engine.recovery.test.ts`: executor exit before binding, legacy park, concurrent controller processes, manual claim collision, late completion, withdrawn proof and budget exhaustion after a controller process restart. |
 | F3 | Seed the existing recovery envelope in lookup-only uncertainty. Reconcile the original launch and first-message operations, current generation and timely native turn. | `engine.recovery.test.ts`: incomplete replay without an envelope; operation conflict, generation conflict, generation changes across awaited reads/completion, stale turn and absent evidence. |
 
-F2 uses the same `pipeline:stage:launch` claim as manual retry. `spawnCalls`,
+F2 uses the same `pipeline:stage:launch` claim as manual retry. A busy claim
+keeps the original launch in spawning with durable backoff; it retires nothing
+until the claim commits. `spawnCalls`,
 retired launches and the controller wait remain durable. The attempt keeps its
 checkout and input. A receipt completed during the claim is adopted through the
 existing settlement path. A conflicting claim retains the original launch and
@@ -21,8 +23,13 @@ its recorded failure.
 F3 uses the existing ten-minute recovery window and sixteen-check cap. Its
 uncertain phase permits operation lookups and settlement. It sends no first
 prompt. A matching native turn can restore the original attempt to running
-while completion confirmation lags. Conflicting operation identities or a
-changed generation name the conflict. A spent observation budget retains the
+while completion confirmation lags. The current generation and original native
+entry must agree on the reserved path; retained generation ids from older
+filenames remain valid. Receipt, generation and native-entry evidence is read
+fresh in one keyed transaction after awaited transcript reads. The regression
+reuses one ports instance and changes the real registry during that await.
+Conflicting operation identities or a changed generation name the conflict.
+A spent observation budget retains the
 original identities and names the missing evidence. The success regression
 requires one host start, one first prompt and the same stage attempt.
 
@@ -47,9 +54,11 @@ including remote actions and manual retry, awaits asynchronous admission.
 
 ## Parallel work
 
-The F1 source hunks in `registry.ts` and `launchMembership.ts`, and their first
-three membership regressions, match PR #2951. This branch adds peer release and
-deadline coverage. Its pipeline adapter also preserves terminal replay evidence
+The F1 admission hunks in `registry.ts`, the `launchMembership.ts` source and
+their first three membership regressions match PR #2951. This branch adds peer
+release and deadline coverage. The separate `spawnEvidence` reader in
+`registry.ts` supplies fresh F3 evidence without loading unrelated history. Its pipeline adapter also preserves
+terminal replay evidence
 before another membership admission can erase it.
 
 The retry-claim interface and its awaited callers follow the async-admission
@@ -65,6 +74,8 @@ command through the project's `scripts/gate-slot.sh` admission wrapper:
 ```sh
 bun test src/lib/tasks/launchMembership.test.ts
 bun test src/lib/pipelines/engine.recovery.test.ts
+bun test src/lib/pipelines/engine.creation.test.ts
+bun test src/lib/pipelines/spawnRestartRecovery.test.ts
 ./node_modules/.bin/tsc --noEmit --incremental false
 ```
 
