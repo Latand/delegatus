@@ -108,7 +108,7 @@ test("HTTP admission stays keyed as thousands of unrelated sessions and reservat
         body: JSON.stringify({ conversationId: target.id, idempotencyKey: `message-${i}`, text: "continue" }),
       }), "send", { enabled: () => true, structuredEnabled: () => true,
         client: () => runtimeClient.runtimeHostClient(), registry: () => registry,
-        enqueue: enqueueStructuredMessage, retireReplySuggestions: () => ({ cleared: false, pending: false }), kick: () => {} });
+        enqueue: enqueueStructuredMessage, recordOperatorAdmission: () => false, kick: () => {} });
       expect(response.status).toBe(202);
       admission.push(performance.now() - start);
     }

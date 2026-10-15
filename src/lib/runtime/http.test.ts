@@ -259,19 +259,19 @@ test("runtime send records operator activity before delivery failure and exclude
   }
 });
 
-test("#1202 an operator's structured message retires that conversation's reply drafts; an agent's does not", async () => {
-  /* Retired by the path that accepts the message, so a closed dock, an
+test("an operator's structured message records its admission; an agent's does not", async () => {
+  /* Recorded by the path that accepts the message, so a closed dock, an
      unmounted pane or a second device changes nothing about it. */
-  const retired: { conversationId: string; at: number }[] = [];
+  const recorded: { conversationId: string; at: number; key: string | undefined }[] = [];
   const agentCapability = "c".repeat(43);
   const dependencies: RuntimeHttpDependencies = {
     enabled: () => true,
     structuredEnabled: () => true,
     client: () => null,
     enqueue: async () => null,
-    retireReplySuggestions: (conversationId, at) => {
-      retired.push({ conversationId, at: at.getTime() });
-      return { cleared: true, pending: false };
+    recordOperatorAdmission: (conversationId, at, key) => {
+      recorded.push({ conversationId, at: at.getTime(), key });
+      return true;
     },
   };
   setCallerConversationResolverForTests(() => "conversation_agent");
@@ -287,30 +287,26 @@ test("#1202 an operator's structured message retires that conversation's reply d
       text: "worker status",
       idempotencyKey: "agent-traffic-one",
     }, { host: "127.0.0.1", [VIEWER_SPAWN_CAPABILITY_HEADER]: agentCapability }), "send", dependencies);
-    /* A permission answer is a keypress, not the sentence the drafts offered. */
+    /* A permission answer is a keypress, not a message. */
     await handleRuntimeCommand(request({
       conversationId: "conversation_asked",
       option: "yes",
       idempotencyKey: "operator-dialog-one",
     }), "answer", dependencies);
 
-    expect(retired.map((entry) => entry.conversationId)).toEqual(["conversation_asked"]);
-    /* Stamped when the message was accepted, so the compare-and-clear in the
-       store can spare a set offered while it was in flight. */
-    expect(retired[0]!.at).toBeGreaterThanOrEqual(before);
+    expect(recorded.map((entry) => [entry.conversationId, entry.key])).toEqual([["conversation_asked", "operator-answer-one"]]);
+    /* Stamped when the message was accepted. */
+    expect(recorded[0]!.at).toBeGreaterThanOrEqual(before);
   } finally {
     setCallerConversationResolverForTests(null);
   }
 });
 
-test("#1202 a structured message re-delivered under its own key spares drafts offered since it was admitted", async () => {
-  /* The client retries a send it already had accepted — same idempotency key,
-     minutes later. The manager has asked something else in between, and that
-     question the operator has never seen must survive the retry. */
+test("a structured message re-delivered under its own key keeps its first admission", async () => {
   const previousStateDir = process.env.LLV_STATE_DIR;
-  const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-runtime-suggestions-"));
+  const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-runtime-admissions-"));
   process.env.LLV_STATE_DIR = sandbox;
-  const { readReplySuggestions, recordReplySuggestions } = await import("@/lib/suggestions/store");
+  const { readReplySuggestionsFile } = await import("@/lib/suggestions/store");
   /* No stub: the durable store IS the thing under test here. */
   const dependencies: RuntimeHttpDependencies = {
     enabled: () => true,
@@ -325,26 +321,12 @@ test("#1202 a structured message re-delivered under its own key spares drafts of
     dependencies,
   );
   try {
-    recordReplySuggestions({
-      conversationId,
-      replies: [{ label: "hold", text: "Hold. Explain the rollback first." }],
-      origin: { kind: "manager", conversationId, role: "orchestrator" },
-      at: new Date(Date.now() - 60_000),
-    });
     await send("operator-answer-replayed");
-    expect(readReplySuggestions(conversationId)).toBeNull();
-    /* The route stamps the admission on the wall clock the record compares
-       against, so the next offer has to land in a later millisecond. */
+    const [first] = readReplySuggestionsFile().admissions;
+    expect(first).toMatchObject({ conversationId, key: "operator-answer-replayed" });
     await new Promise((resolve) => setTimeout(resolve, 10));
-
-    const offeredSince = recordReplySuggestions({
-      conversationId,
-      replies: [{ label: "ship it", text: "Ship it." }],
-      origin: { kind: "manager", conversationId, role: "orchestrator" },
-    });
     await send("operator-answer-replayed");
-
-    expect(readReplySuggestions(conversationId)?.setId).toBe(offeredSince.set.setId);
+    expect(readReplySuggestionsFile().admissions).toEqual([first!]);
   } finally {
     if (previousStateDir === undefined) delete process.env.LLV_STATE_DIR;
     else process.env.LLV_STATE_DIR = previousStateDir;

@@ -44,6 +44,7 @@ function page(
       maxChars: query.maxChars ?? 4_000,
       ...(query.since ? { since: query.since } : {}),
       ...(query.cursor ? { cursor: query.cursor } : {}),
+      ...(query.maxScanBytes ? { maxScanBytes: query.maxScanBytes } : {}),
     });
   } finally {
     fs.closeSync(descriptor);
@@ -56,6 +57,26 @@ const times = [
   "2026-08-30T10:02:00.000Z",
   "2026-08-30T10:03:00.000Z",
 ] as const;
+
+test("a caller scan allowance includes timestamp and pinned-record probes, and tool evidence stays private", () => {
+  const filename = fixture([
+    { type: "assistant", timestamp: times[0], message: { content: [{ type: "tool_use", id: "call-private", name: "mcp__viewer__create_task", input: { text: "Task title" } }] } },
+    { type: "user", timestamp: times[1], message: { content: [{ type: "tool_result", tool_use_id: "call-private", is_error: true, content: "Refused" }] } },
+  ]);
+  const normal = page(filename, "claude");
+  expect(normal.records[0].call).toMatchObject({ id: "call-private", error: true, result: "Refused" });
+  expect(normal.records[1].call).toMatchObject({ id: "call-private", server: "viewer", tool: "create_task", input: { text: "Task title" } });
+  expect(Object.keys(normal.records[1])).not.toContain("call");
+  expect(JSON.stringify(normal)).not.toContain("call-private");
+  const allowance = 100;
+  const bounded = page(filename, "claude", { maxScanBytes: allowance });
+  expect(bounded.scanned.bytes).toBeLessThanOrEqual(allowance);
+  expect(bounded.scanned.capped).toBe(true);
+  const probe = page(filename, "claude", { cursor: { o: normal.records[1].seq, p: 1, r: [] }, maxScanBytes: allowance });
+  expect(probe.scanned.bytes).toBeLessThanOrEqual(allowance);
+  expect(probe.records).toEqual([]);
+  expect(probe.scanned.capped).toBe(true);
+});
 
 test("Claude and Codex produce the same normalized record shapes without envelope or hook noise", () => {
   const claude = fixture([
@@ -89,8 +110,8 @@ test("Claude and Codex produce the same normalized record shapes without envelop
   expect(claudeRecords.map((record) => record.role).sort()).toEqual(codexRecords.map((record) => record.role).sort());
   expect(claudeRecords.map((record) => Object.keys(record).sort()))
     .toEqual(codexRecords.map((record) => Object.keys(record).sort()));
-  expect(claudeRecords.every((record) => !("part" in record))).toBe(true);
-  expect(codexRecords.every((record) => !("part" in record))).toBe(true);
+  expect(claudeRecords.every((record) => !Object.keys(record).includes("part"))).toBe(true);
+  expect(codexRecords.every((record) => !Object.keys(record).includes("part"))).toBe(true);
   expect(JSON.stringify(claudeRecords)).not.toContain("hook noise");
   expect(JSON.stringify(codexRecords)).not.toContain("synthetic-session");
   expect(codexRecords.filter((record) => record.kind === "message")).toHaveLength(2);

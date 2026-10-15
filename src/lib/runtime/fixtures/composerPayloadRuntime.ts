@@ -178,7 +178,7 @@ export async function startComposerPayloadRuntime(directory: string): Promise<Co
     client: () => client,
     registry: () => registry,
     enqueue: enqueueStructuredMessage,
-    retireReplySuggestions: () => ({ cleared: false, pending: false }),
+    recordOperatorAdmission: () => false,
     kick: kickStructuredDeliveryQueue,
   };
   const queue = { conversationId: `conversation_${crypto.randomUUID()}`, threadId: crypto.randomUUID(), accountId: "fixture-account" };

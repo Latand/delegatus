@@ -107,24 +107,15 @@ test("task text in another language than the interface is stored with a warning;
   expect(detailsOnly.warnings).toBeUndefined();
 });
 
-test("a seat's ask reminds it that an away operator learns the ask only from a question report", async () => {
-  const replies = [{ label: "yes", text: "Yes, go ahead." }, { label: "hold", text: "Hold for now." }];
-  const answer = await bindings().suggest_replies({ clientRequestId: "s-1", replies });
-  expect(answer.reminder).toBe(`If the operator is away, they learn this ask only from a question report: file one with key ask:${answer.setId as string} and the ask in the decision section.`);
-  setBridgeReports(PROJECT, false, "operator");
-  const off = await bindings().suggest_replies({ clientRequestId: "s-2", replies });
-  expect(off.reminder).toBeUndefined();
-});
-
-test("switching the tick off or slowing it answers with the owed reports, the open ask and a request for a report now", async () => {
+test("switching the tick off or slowing it answers with the owed reports and a request for a report now", async () => {
   const owed: SeatTickProjectState = {
     ...emptySeatTickState(),
     reportsOwed: [{ key: "deploy:aaaaaaaa:succeeded", label: "deploy aaaaaaaa succeeded", receivedAt: "2026-09-25T12:00:00.000Z" }],
-    asksOwed: [{ key: "ask:rsg_1", setId: "rsg_1", conversationId: SEAT, at: "2026-09-25T12:00:00.000Z" }],
   };
   const domain = { peekTickState: () => owed };
   const off = await bindings(domain).seat_tick_settings({ clientRequestId: "k-1", enabled: false, reason: "night" });
-  expect(off).toMatchObject({ reportsOwed: ["deploy:aaaaaaaa:succeeded"], askOwed: ["ask:rsg_1"] });
+  expect(off).toMatchObject({ reportsOwed: ["deploy:aaaaaaaa:succeeded"] });
+  expect(off).not.toHaveProperty("askOwed");
   expect(off.reportReminder).toStartWith("Nothing will ask you for reports while the tick is off or slowed. File a report now");
 
   const slower = await bindings(domain).seat_tick_settings({ clientRequestId: "k-2", enabled: true, wakeIntervalMinutes: 180, reason: "slow day" });

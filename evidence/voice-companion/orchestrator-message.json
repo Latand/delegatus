@@ -1,0 +1,174 @@
+{
+  "driver": "src/components/kanban/kanbanBoard.browser.test.tsx",
+  "synthetic": true,
+  "readings": [
+    {
+      "label": "1440-en-light",
+      "bytes": 3014,
+      "completeLane": true,
+      "completePanel": true,
+      "title": "Message",
+      "lane": {
+        "inside": true,
+        "scrolls": true,
+        "horizontalOverflow": false
+      },
+      "panel": {
+        "inside": true,
+        "titleVisible": true,
+        "scrolls": true,
+        "overflow": false
+      },
+      "insideViewport": true,
+      "overlapArea": 0,
+      "handleArea": 0
+    },
+    {
+      "label": "1440-en-dark",
+      "bytes": 3014,
+      "completeLane": true,
+      "completePanel": true,
+      "title": "Message",
+      "lane": {
+        "inside": true,
+        "scrolls": true,
+        "horizontalOverflow": false
+      },
+      "panel": {
+        "inside": true,
+        "titleVisible": true,
+        "scrolls": true,
+        "overflow": false
+      },
+      "insideViewport": true,
+      "overlapArea": 0,
+      "handleArea": 0
+    },
+    {
+      "label": "1440-uk-light",
+      "bytes": 3163,
+      "completeLane": true,
+      "completePanel": true,
+      "title": "Повідомлення",
+      "lane": {
+        "inside": true,
+        "scrolls": true,
+        "horizontalOverflow": false
+      },
+      "panel": {
+        "inside": true,
+        "titleVisible": true,
+        "scrolls": true,
+        "overflow": false
+      },
+      "insideViewport": true,
+      "overlapArea": 0,
+      "handleArea": 0
+    },
+    {
+      "label": "1440-uk-dark",
+      "bytes": 3163,
+      "completeLane": true,
+      "completePanel": true,
+      "title": "Повідомлення",
+      "lane": {
+        "inside": true,
+        "scrolls": true,
+        "horizontalOverflow": false
+      },
+      "panel": {
+        "inside": true,
+        "titleVisible": true,
+        "scrolls": true,
+        "overflow": false
+      },
+      "insideViewport": true,
+      "overlapArea": 0,
+      "handleArea": 0
+    },
+    {
+      "label": "1000-en-light",
+      "bytes": 3014,
+      "completeLane": true,
+      "completePanel": true,
+      "title": "Message",
+      "lane": {
+        "inside": true,
+        "scrolls": true,
+        "horizontalOverflow": false
+      },
+      "panel": {
+        "inside": true,
+        "titleVisible": true,
+        "scrolls": true,
+        "overflow": false
+      },
+      "insideViewport": true,
+      "overlapArea": 0,
+      "handleArea": 0
+    },
+    {
+      "label": "1000-en-dark",
+      "bytes": 3014,
+      "completeLane": true,
+      "completePanel": true,
+      "title": "Message",
+      "lane": {
+        "inside": true,
+        "scrolls": true,
+        "horizontalOverflow": false
+      },
+      "panel": {
+        "inside": true,
+        "titleVisible": true,
+        "scrolls": true,
+        "overflow": false
+      },
+      "insideViewport": true,
+      "overlapArea": 0,
+      "handleArea": 0
+    },
+    {
+      "label": "1000-uk-light",
+      "bytes": 3163,
+      "completeLane": true,
+      "completePanel": true,
+      "title": "Повідомлення",
+      "lane": {
+        "inside": true,
+        "scrolls": true,
+        "horizontalOverflow": false
+      },
+      "panel": {
+        "inside": true,
+        "titleVisible": true,
+        "scrolls": true,
+        "overflow": false
+      },
+      "insideViewport": true,
+      "overlapArea": 0,
+      "handleArea": 0
+    },
+    {
+      "label": "1000-uk-dark",
+      "bytes": 3163,
+      "completeLane": true,
+      "completePanel": true,
+      "title": "Повідомлення",
+      "lane": {
+        "inside": true,
+        "scrolls": true,
+        "horizontalOverflow": false
+      },
+      "panel": {
+        "inside": true,
+        "titleVisible": true,
+        "scrolls": true,
+        "overflow": false
+      },
+      "insideViewport": true,
+      "overlapArea": 0,
+      "handleArea": 0
+    }
+  ]
+}
