@@ -2887,6 +2887,106 @@ describe("the transcript keeps 60% of its column beside the composer's own row",
   }, 900_000);
 });
 
+describe("no reply-draft pills on the board conversation pane", () => {
+  /*
+   * Operator, 2026-10-15: every ask reaches the operator through the decision
+   * form, and no reply-draft pill renders under a manager's message. The dock
+   * and the phone's seat are covered by the kanban driver's «issue report
+   * advisory preview» case; this is the board's own conversation pane, the
+   * production BranchPane over an orchestrator's day, at 1440 px and on a
+   * 390 px phone, in both languages and both schemes.
+   *
+   * The fixture answers `/api/log/suggestions` with a set newer than every row,
+   * as the retired route did, so a feed that still read drafts would draw them
+   * under the latest turn and, scrolled away, beside the way back to the tail.
+   * Per moment: zero `[data-reply-suggestions]` and `[data-reply-suggestion]`,
+   * zero reads of the route, and the pane itself on screen.
+   *
+   *   LLV_CONVERSATION_BROWSER_TEST=1 CHROME_BIN=<chrome> \
+   *     bun test src/components/conversation/conversationWindow.browser.test.tsx -t "no reply-draft pills"
+   *
+   * Frames go to `.artifacts/reply-pills-pane/` (not committed); the
+   * measurements to `evidence/reply-pills-pane/readings.json`.
+   */
+  const OUT = path.resolve(".artifacts/reply-pills-pane");
+  const EVIDENCE = path.resolve("evidence/reply-pills-pane");
+  const SURFACES = [
+    { name: "board-pane-1440", width: 1440, height: 900, phone: false },
+    { name: "board-pane-phone-390", width: 390, height: 844, phone: true },
+  ] as const;
+  const LANGS = ["en", "uk"] as const;
+  const SCHEMES = ["light", "dark"] as const;
+
+  interface Reading {
+    surface: string; lang: string; scheme: string; moment: "latest-turn" | "scrolled-away";
+    /** BranchPane's body is on the page and the dock's conversation is not. */
+    pane: boolean;
+    pills: number;
+    draftReads: number;
+    /** How far the feed sits above its end, in px. */
+    fromEnd: number;
+    overflowX: number;
+  }
+
+  browserTest("the pane draws no reply pill at its latest turn or scrolled away, at 1440 and 390 px, en/uk, light/dark", async () => {
+    fs.rmSync(OUT, { recursive: true, force: true });
+    fs.mkdirSync(OUT, { recursive: true });
+    fs.mkdirSync(EVIDENCE, { recursive: true });
+    const served = await serveEvidenceFixture(OUT, FIXTURE);
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Reading[] = [];
+    try {
+      for (const surface of SURFACES) for (const lang of LANGS) for (const scheme of SCHEMES) {
+        const where = `${surface.name}-${lang}-${scheme}`;
+        const { context, page, pageErrors } = await openFixture(browser, `${served.base}?case=own-message-steps&lang=${lang}&surface=pane&offered-replies=1`,
+          { width: surface.width, height: surface.height }, scheme, lang, "reduce", surface.phone);
+        const read = async (moment: Reading["moment"]): Promise<Reading> => {
+          /* Past the feed's settle and any read a pill row would make on mount. */
+          await page.waitForTimeout(700);
+          const seen = await page.evaluate(() => {
+            const scroller = document.querySelector<HTMLElement>("[data-conversation-body] [data-log-feed-scroller]");
+            return {
+              pane: Boolean(scroller) && !document.querySelector("[data-orchestrator-conversation]"),
+              pills: document.querySelectorAll("[data-reply-suggestions], [data-reply-suggestion]").length,
+              draftReads: ((window as unknown as { replyDraftReads?: string[] }).replyDraftReads ?? []).length,
+              fromEnd: scroller ? Math.round(scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop) : -1,
+              overflowX: Math.max(0, document.documentElement.scrollWidth - innerWidth),
+            };
+          });
+          await page.screenshot({ path: path.join(OUT, `${where}-${moment}.png`) });
+          const reading = { surface: surface.name, lang, scheme, moment, ...seen };
+          readings.push(reading);
+          return reading;
+        };
+        try {
+          await page.locator("[data-own-message]").first().waitFor({ timeout: 20_000 });
+          const latest = await read("latest-turn");
+          expect(latest.pane).toBe(true);
+          expect(latest.fromEnd).toBeLessThanOrEqual(2);
+          expect(latest.pills).toBe(0);
+
+          /* Away from the tail, where the floating row used to follow the operator. */
+          await page.locator("[data-conversation-body] [data-log-feed-scroller]").hover();
+          await page.mouse.wheel(0, -900);
+          const away = await read("scrolled-away");
+          expect(away.fromEnd).toBeGreaterThan(200);
+          expect(away.pills).toBe(0);
+          expect(away.draftReads).toBe(0);
+          expect(away.overflowX).toBe(0);
+          expect(pageErrors).toEqual([]);
+        } finally {
+          await context.close();
+        }
+      }
+    } finally {
+      await browser.close();
+      served.stop();
+    }
+    expect(readings).toHaveLength(SURFACES.length * LANGS.length * SCHEMES.length * 2);
+    fs.writeFileSync(path.join(EVIDENCE, "readings.json"), `${JSON.stringify({ surfaces: SURFACES, readings }, null, 2)}\n`);
+  }, 600_000);
+});
+
 describe("own-message step row", () => {
   /*
    * The row that steps between the operator's own messages
