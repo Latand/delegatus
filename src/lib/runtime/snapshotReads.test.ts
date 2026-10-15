@@ -26,7 +26,7 @@ test("malformed projections remain unreadable, including wrong versions, missing
 });
 
 test.each([2, 65])("activity preserves %s rows publishing one requested identity in response order", count => {
-  const sessions = Array.from({ length: count }, (_, index) => ({
+  const sessions: RuntimeActivitySession[] = Array.from({ length: count }, (_, index) => ({
     ...session, turn: index === 0 ? "running" : "idle", attentionIds: [`attention-${index}`],
   }));
   for (const snapshotRead of [undefined, { version: 1, kind: "activity" }]) {
