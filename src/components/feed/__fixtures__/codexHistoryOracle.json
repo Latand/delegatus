@@ -1,6 +1,6 @@
 {
   "base": "5d839f09d30bc9e473bf262b1404f7566fe48526",
-  "timezone": "Europe/Kyiv",
+  "timezone": "UTC",
   "rows": [
     {
       "name": "seams",

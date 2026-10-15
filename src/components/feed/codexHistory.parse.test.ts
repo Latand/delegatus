@@ -234,4 +234,47 @@ describe("Codex history hand-over", () => {
     expect(item.kind === "tool" && item.outputTruncated).toBe(true);
     expect(codexHistoryStats(session)!.rawLines - before.rawLines).toBe(1);
   });
+
+  test("ambiguous execs and overflow remain latched until a real reset", () => {
+    const wrapper = (id: string) => historyRecord("response_item", { type: "custom_tool_call", name: "exec", call_id: id, input: 'text(await tools.exec_command({cmd:"echo nested"}));' });
+    const child = (id: string) => historyRecord("event_msg", { type: "item_completed", item: { type: "commandExecution", id, command: "echo nested", status: "completed", aggregatedOutput: "nested" } });
+    const lines = [...Array.from({ length: 17 }, (_, n) => wrapper(`outer-${n}`)), child("exec-ambiguous"),
+      historyOutput("outer-0", 1, "Error: refused"), historyOutput("outer-1", 2),
+      historyRecord("turn_context", { cwd: "workspace", turn_id: "reset" }, 3),
+      wrapper("recovered"), child("exec-recovered"), historyOutput("recovered", 4), historyUsage(5), historyUsage(6)];
+    for (const page of [1, 2, 7]) equalWalk(lines, page, false);
+  });
+
+  test("random partitions, live arrivals and later window eviction agree at each operation", () => {
+    const all = [...codexHistoryCorpus(137), ...codexHistorySeams()];
+    for (let seed = 1; seed < 5; seed += 1) {
+      let random = seed;
+      const next = () => (random = (Math.imul(random, 1664525) + 1013904223) >>> 0);
+      const session = createFeedSession(config);
+      let start = all.length - 17, end = all.length - 6;
+      for (let step = 0; start > 0 || end < all.length; step += 1) {
+        if (step % 3 === 1) end = Math.min(all.length, end + 1 + next() % 5);
+        else start = Math.max(0, start - 1 - next() % 24);
+        const lines = all.slice(start, end), live = Boolean(step % 2);
+        expect(historyShape(session.feed(lines, start - 300, live), lines)).toEqual(historyShape(createFeedSession(config).feed(lines, start - 300, live), lines));
+      }
+      const shortened = all.slice(25);
+      expect(historyShape(session.feed(shortened, -275, false))).toEqual(historyShape(createFeedSession(config).feed(shortened, -275, false)));
+      expect(codexHistoryStats(session)!.resets.evicted).toBe(1);
+    }
+  });
+
+  test("the installed terminal continuation pairs a live child of an exec left open at the join", () => {
+    const lines = codexHistorySeams(), prefix = lines.slice(0, 5);
+    for (const offset of [0, -20]) {
+      const session = createFeedSession(config);
+      session.feed(prefix.slice(4), 4 + offset, true);
+      session.feed(prefix, offset, true);
+      for (const end of [6, 7, 10, lines.length]) {
+        const window = lines.slice(0, end);
+        expect(historyShape(session.feed(window, offset, true))).toEqual(historyShape(createFeedSession(config).feed(window, offset, true)));
+      }
+      expect(codexHistoryStats(session)!.resets).toEqual({});
+    }
+  });
 });
