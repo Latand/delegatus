@@ -247,6 +247,7 @@ import {
   requestDigest,
   McpDispatchNotExecutedError,
   McpDispatchUncertainError,
+  McpPrototypePublicationPendingError,
   McpDispatchVerdictError,
   McpDispatchSettledRefusalError,
   McpToolRefusal,
@@ -335,6 +336,9 @@ const CONTROL_ATTEMPT_TIMEOUT_MS = 5_000;
 const CONTROL_READ_RECOVERY_BUDGET_MS = 12_000;
 const CONTROL_RECOVERY_BUDGET_MS = 8_000;
 const CONTROL_UNSCOPED_RECOVERY_BUDGET_MS = 5_000;
+// Publication copies bounded media and awaits the Telegram receipt. Give that
+// operation the MCP call's remaining budget, including the settlement reserve.
+const PROTOTYPE_CONTROL_BUDGET_MS = 30_000;
 const CONTROL_DEADLINE_RESERVE_MS = 250;
 const CONTROL_RETRY_BASE_MS = 100;
 const CONTROL_RETRY_MAX_MS = 1_000;
@@ -403,10 +407,11 @@ async function requestViewerControl(
   const now = Date.now();
   const deadlineAt = context.deadlineAt;
   const retryable = deadlineAt !== undefined;
+  const publication = init.method === "POST" && pathname === "/api/prototype-reviews";
   const callerBudget = deadlineAt === undefined
-    ? CONTROL_UNSCOPED_RECOVERY_BUDGET_MS
+    ? (publication ? PROTOTYPE_CONTROL_BUDGET_MS - CONTROL_DEADLINE_RESERVE_MS : CONTROL_UNSCOPED_RECOVERY_BUDGET_MS)
     : Math.max(0, deadlineAt - now - CONTROL_DEADLINE_RESERVE_MS);
-  const expiresAt = now + Math.min(CONTROL_READ_RECOVERY_BUDGET_MS, callerBudget);
+  const expiresAt = now + Math.min(publication ? PROTOTYPE_CONTROL_BUDGET_MS : CONTROL_READ_RECOVERY_BUDGET_MS, callerBudget);
   let attempts = 0;
   let lastFailure = "connection failed";
   while (Date.now() < expiresAt) {
@@ -414,7 +419,7 @@ async function requestViewerControl(
     if (init.method === "POST") context.assertCaller?.();
     attempts += 1;
     const remainingMs = Math.max(1, expiresAt - Date.now());
-    const attempt = deadlineSignal(Math.min(CONTROL_ATTEMPT_TIMEOUT_MS, remainingMs), {
+    const attempt = deadlineSignal(publication ? remainingMs : Math.min(CONTROL_ATTEMPT_TIMEOUT_MS, remainingMs), {
       signal: context.signal,
       reason: "Viewer control reconnect attempt timed out",
     });
@@ -529,19 +534,26 @@ async function postViewerControl(
   /* Every control mutation carries its endpoint's idempotency identity
      (clientAttemptId, clientMessageId or clientRequestId). Repeating the same
      request after a lost transport answer therefore asks for its receipt. */
-  const { response, parsed, unreadable } = await requestViewerControl(pathname, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      ...headers,
-    },
-    body: JSON.stringify(body),
-  }, context, pinConfiguredEndpoint);
+  let answer: Awaited<ReturnType<typeof requestViewerControl>>;
+  try {
+    answer = await requestViewerControl(pathname, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...headers },
+      body: JSON.stringify(body),
+    }, context, pinConfiguredEndpoint);
+  } catch (error) {
+    if (pathname === "/api/prototype-reviews") {
+      throw new McpPrototypePublicationPendingError(error instanceof Error ? error.message : "Viewer publication wait ended");
+    }
+    throw error;
+  }
+  const { response, parsed, unreadable } = answer;
   /* A body of literal `null` is valid JSON, so `.catch` never fires and every
      later `result.x` throws a TypeError before the status can be classified —
      which is how a 405 from a revision that does not serve the route arrived as
      an uncatchable crash instead of a refusal (#790). */
   if (unreadable && response.ok) {
+    if (pathname === "/api/prototype-reviews") throw new McpPrototypePublicationPendingError("Viewer publication response was unreadable");
     throw new ViewerControlResponseError(
       `Viewer control returned an unreadable response with status ${response.status}`,
     );
@@ -549,6 +561,10 @@ async function postViewerControl(
   const result: Record<string, unknown> = parsed && typeof parsed === "object" && !Array.isArray(parsed)
     ? parsed as Record<string, unknown>
     : {};
+  if (pathname === "/api/prototype-reviews" && response.ok
+    && (typeof result.reviewId !== "string" || !/^pr_[a-f0-9]{32}$/.test(result.reviewId))) {
+    throw new McpPrototypePublicationPendingError("Viewer publication response did not name its reviewId");
+  }
   if (result.error || (!response.ok && result.state !== "busy")) {
     const message = controlFailureMessage(response.status, result.error);
     /* #1131: a refusal that names an ACCEPTED send is not just prose. The send
