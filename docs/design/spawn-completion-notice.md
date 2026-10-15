@@ -334,7 +334,8 @@ failure; it offers no relaunch instruction.
 The release owner silently backfills existing failed receipts in pages of at
 most 64 at startup; the reaper continues with its actuation cap. Backfill uses
 the state startup-mutation fence. SQLite selects legacy and pending receipt
-keys through indexes on both hot and archived history; after settlement,
+keys through an index over retained current rows, including archived receipt
+copies; after settlement,
 those receipts leave the repair query. The JSON rollback backend retains its
 existing in-memory registry reads. Task settlement remains owed when its
 write is refused, even when announcements were suppressed.

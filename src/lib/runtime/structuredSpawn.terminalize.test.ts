@@ -1,9 +1,11 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { Database } from "bun:sqlite";
 import { afterEach, expect, spyOn, test } from "bun:test";
 
 import { AgentRegistry, type AgentRegistrySqliteMode, type SpawnLauncher } from "@/lib/agent/registry";
+import { failedLaunchRepairQuery } from "@/lib/agent/sqliteRegistryStore";
 import { spawnResponseForReceipt } from "@/lib/agent/spawnResponse";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { claimPass, patchPass, readPass } from "@/lib/memory/curation/store";
@@ -302,6 +304,15 @@ test("a bounded silent backfill converges archived historical failures without r
     onSqliteRowPayloadRead: (collection, count) => { if (collection === "receipts") receiptReads += count; } });
   expect(Object.values(reopened.snapshot().receipts).filter(row => row.failureAnnouncementSuppressed)).toHaveLength(64);
   expect(reopened.archiveInactiveRows(256)).toBeGreaterThan(0);
+  const db = new Database(store.filename.replace(/\.json$/, ".sqlite"), { readonly: true });
+  try {
+    for (const legacy of [true, false]) {
+      const plan = db.query<{ detail: string }, [number]>(`EXPLAIN QUERY PLAN ${failedLaunchRepairQuery(legacy)}`).all(3).map(row => row.detail).join("\n");
+      expect(plan).toContain("USING INDEX registry_rows_failure_repair");
+      expect(plan).not.toContain("USE TEMP B-TREE");
+      expect(plan).not.toContain("SCAN");
+    }
+  } finally { db.close(); }
   expect(reopened.backfillFailedLaunchReporting(3)).toBe(3);
   expect(reopened.failedSpawnReceipts(2)).toHaveLength(2);
   for (let pass = 0; pass < 5; pass++) await terminalizeStaleStructuredSpawns(reopened, null);
