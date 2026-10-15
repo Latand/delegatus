@@ -372,3 +372,21 @@ One managed-auto deployment test fails identically on main and candidate in
 self-update code outside this lane; it is retained unchanged and reported as
 baseline evidence. Fresh independent review and the designated manager's
 approved deploy/rendered verification remain separate stages.
+
+### CI bounded-evidence test repair (2026-10-15)
+
+The 10,000-update startup evidence test performed 20,000 synchronous disk
+flushes. PR #2905 and its merged main (`45d25ac79`) had identical test and
+startup-store files. Ordinary isolated runs took 1.97 s and 2.86 s respectively.
+Adding 2 ms after each real `fsync` reproduced the unchanged 30-second timeout
+on both revisions: 46.29 s on the PR and 45.31 s on main. This control establishes
+the test's sensitivity to storage latency; CI did not record per-flush timings.
+
+The test keeps all 10,000 real file replacements and now advances the progress
+value on every iteration. Only the loop's `fsync` calls use a test stub, with
+20,000 calls required. The stub is restored in `finally` before another progress
+write, epoch binding and all remaining startup phases use real flushes. Assertions
+check the fixed file size, latest counters and timestamp, unchanged phase count,
+ready wire parsing and preservation by an older writer. Under the same 2 ms
+latency control, the repaired test took 0.34 s. Production durability and the
+30-second test timeout are unchanged.

@@ -57,3 +57,28 @@ test("an absent original-send key reads only its recipient's retained delivery r
     expect(f.reads.get("deliveryOperationOwners") ?? 0).toBeLessThan(20);
   } finally { f.close(); }
 });
+
+test("cold claim and quota readers avoid full snapshot construction and observe peer changes", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "targeted-registry-polls-"));
+  let snapshots = 0;
+  const data = buildRegistryPerformanceDataset(directory, scaledRegistryPerformanceShape(0.02));
+  const registry = new AgentRegistry(path.join(directory, "agent-registry.json"), undefined, undefined, {
+    sqliteMode: "sqlite", sqliteFilename: data.filename, onSqliteSnapshotLoad: () => { snapshots++; },
+  });
+  try {
+    const before = snapshots;
+    expect(registry.ownsStructuredHostClaim({ engine: "codex", sessionId: "absent" }, "synthetic", 1)).toBe(false);
+    expect(registry.structuredHostWriteHeldByTermination({ engine: "codex", sessionId: "absent" }, "synthetic", 1)).toBe(false);
+    const policy = registry.autoBalancePolicy("codex");
+    const observations = registry.quotaObservations("codex");
+    expect(snapshots).toBe(before);
+    const expected = registry.readOnlySnapshot();
+    expect(policy).toEqual(expected.autoBalance.codex);
+    expect(observations).toEqual(Object.values(expected.quotaObservations.codex));
+    const peer = new Database(data.filename);
+    try {
+      peer.query("UPDATE registry_meta SET value=json_set(value,'$.codex.enabled',json(?)) WHERE key='autoBalance'").run(JSON.stringify(!policy.enabled));
+      expect(registry.autoBalancePolicy("codex").enabled).toBe(!policy.enabled);
+    } finally { peer.close(); }
+  } finally { registry.close(); fs.rmSync(directory, { recursive: true, force: true }); }
+});

@@ -1,5 +1,6 @@
+import { performanceSpans } from "@/lib/performanceSpans";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 
 import { agentRegistry } from "@/lib/agent/registry";
@@ -431,7 +432,7 @@ async function projectionFor(
       // The worker receives serialized data or reads its own file. Inline
       // enrichment instead needs an owned copy of the borrowed cache value.
       const cloneStartedAt = performance.now();
-      const ownedSnapshot = structuredClone(snapshot);
+      const ownedSnapshot = performanceSpans.sync("files.clone", () => structuredClone(snapshot));
       scan.cloneDurationMs += performance.now() - cloneStartedAt;
       const built: FilesBuilt = { epoch, generation: scan.generation, sequence: nextProjectionSequence() };
       let encoded: ReturnType<BoardEncoder["encode"]> | undefined;
@@ -455,7 +456,7 @@ async function projectionFor(
     let cacheKey = key;
     if (filesResponseWorkerEnabled() && !filesystemExhausted()) {
       try {
-        representation = await queueProjectionWorker(async () => {
+        representation = await performanceSpans.wait("files.queue", () => queueProjectionWorker(async () => {
           /* Superseded while it waited: the scope already holds a body built
              for this very input, so the queued build is discarded. */
           const settled = projectionCache().get(scopeKey);
@@ -469,20 +470,20 @@ async function projectionFor(
              counts as generation 0. */
           const sequence = nextProjectionSequence();
           const fromFile = !scan.pinOverlayPaths?.length && fs.existsSync(persistedSnapshot);
-          const { snapshotRead, ...projected } = await buildFilesResponseInWorker({
+          const { snapshotRead, ...projected } = await performanceSpans.wait("files.worker", () => buildFilesResponseInWorker({
             type: "project",
             url: request.url,
             headers: [...headers.entries()],
             ...(fromFile ? { snapshotFile: persistedSnapshot } : { snapshot }),
             ...(board ? { boardEpoch: epoch } : {}),
             ...(summary ? { deltaScope: createHash("sha1").update(scopeKey).digest("hex") } : {}),
-          }, undefined, summary ? previous : undefined);
+          }, undefined, summary ? previous : undefined));
           // Result-file transport recovers independently of state-data writes.
           // The body may itself report a state write failure from the worker.
           projectionCacheStore.__llvFilesWorkerWriteFailedSince = undefined;
           const generation = !fromFile ? scan.generation : snapshotRead?.epoch === epoch ? snapshotRead.generation : 0;
           return { ...projected, built: { epoch, generation, sequence } };
-        });
+        }));
       } catch (error) {
         if (error instanceof FilesProjectionQueueError && cached) {
           /* The last representation stands until a build gets its turn. */
@@ -509,7 +510,7 @@ async function projectionFor(
     if (summary && !board && previous && previous.etag !== representation.etag
       && representation.delta?.base !== previous.etag) representation.delta = {
       base: previous.etag,
-      body: diffFilesBodies(previous.body, representation.body, previous.etag, representation.etag),
+      body: performanceSpans.sync("files.delta", () => diffFilesBodies(previous.body, representation.body, previous.etag, representation.etag)),
     };
     if (representation.delta) {
       boardHistory().record(scopeKey, representation.delta.base, representation.etag, representation.delta.body);
@@ -562,7 +563,7 @@ function withCurrentWriteHealth(representation: ProjectionRepresentation): Proje
   parsed ??= JSON.parse(representation.body);
   const system = parsed!.systemHealth as { storage?: { incidents?: unknown[] } } | undefined;
   parsed!.systemHealth = { ...system, storage: { incidents: [], ...system?.storage, writes } };
-  const body = JSON.stringify(parsed);
+  const body = performanceSpans.sync("files.encode", () => JSON.stringify(parsed));
   return { ...representation, body, bytes: Buffer.byteLength(body), stateWrites: writes,
     etag: `"${createHash("sha1").update(body).digest("hex")}"`, delta: undefined };
 }
@@ -588,7 +589,19 @@ export function HEAD(request: Request): Response {
 }
 
 export async function GET(request: Request): Promise<Response> {
-  return withViewerOperation("files.get", () => getFiles(request));
+  const id = randomUUID();
+  performanceSpans.request(id, new URL(request.url).searchParams.get("view") === "storage-health" ? "health" : "files");
+  performanceSpans.event("http.dispatch", id);
+  let failed = true;
+  try {
+    const response = await performanceSpans.correlate(id, () => withViewerOperation("files.get", () => getFiles(request)));
+    failed = false;
+    return response;
+  } finally {
+    // This boundary means the Response is prepared. The framework owns the
+    // later network write, so this record makes no claim about wire completion.
+    performanceSpans.event("http.response-ready", id, 0, failed);
+  }
 }
 
 async function getFiles(request: Request): Promise<Response> {
@@ -603,14 +616,14 @@ async function getFiles(request: Request): Promise<Response> {
   const selectedProject = url.searchParams.get("project")?.trim() || undefined;
   markBoardViewed(selectedProject);
   const pinnedPath = url.searchParams.get("path")?.trim() || undefined;
-  const scan = await cachedFileScan(
+  const scan = await performanceSpans.wait("files.scan", () => cachedFileScan(
     selectedProject,
     pinnedPath,
     Date.now(),
     requiredRevision,
     requiredGeneration,
     { copySnapshot: false },
-  );
+  ));
 
   /* One-time, in the long-lived server process rather than in the per-request
      response worker: the guard there would be re-armed on every spawn, and the
@@ -629,7 +642,7 @@ async function getFiles(request: Request): Promise<Response> {
   const summary = url.searchParams.get("view") === "summary";
   const agent = request.headers.has(VIEWER_SPAWN_CAPABILITY_HEADER);
   const board = summary && request.headers.get(BOARD_PROTOCOL_HEADER) === "2";
-  const scopeKey = projectionScopeKey(pinnedPath, summary, agent, board);
+  const scopeKey = performanceSpans.sync("files.key", () => projectionScopeKey(pinnedPath, summary, agent, board));
   const waiting = projectionCache().get(scopeKey)?.representation;
   if (requiredGeneration !== undefined && scan.generation < scan.targetGeneration && previousEtag
     && currentWriteHealth().state === "ok" && waiting && withCurrentWriteHealth(waiting).etag === previousEtag) {
@@ -646,7 +659,7 @@ async function getFiles(request: Request): Promise<Response> {
     return response;
   }
 
-  const baseKey = projectionBaseKey(scan, pinnedPath);
+  const baseKey = performanceSpans.sync("files.key", () => projectionBaseKey(scan, pinnedPath));
   const key = projectionKey(baseKey);
   /* The persisted body is the operator's. */
   if (!summary && !agent) warmPersistedProjection(scopeKey, pinnedPath, scan.epoch ?? "0");

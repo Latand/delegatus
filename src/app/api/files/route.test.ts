@@ -3997,7 +3997,7 @@ test.each([1, 4, 8])("board v2 shares a changed poll across %s tabs with exact f
   const answers = await Promise.all(Array.from({ length: tabs }, () => GET(request({
     "if-none-match": base, "x-llv-files-delta": "1", "accept-encoding": "gzip", "x-llv-board-scope": raw.boardScope,
   }))));
-  let compressed: Uint8Array | undefined;
+  let compressed: Uint8Array<ArrayBuffer> | undefined;
   for (const answer of answers) {
     expect(answer.headers.get("x-llv-files-delta-base")).toBe(base);
     expect(answer.headers.get("etag")).toBe(tag);
