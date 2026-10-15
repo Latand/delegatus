@@ -11,6 +11,9 @@ import { stateDir, statePath } from "@/lib/configDir";
 import { isDiskFullError, noteStateCommit, noteStateDiskFull, stateWriteHealth, STATE_DISK_FULL_FLOOR_BYTES, type StateWriteHealth } from "@/lib/state/diskFull";
 import { FILES_BUILT_HEADER, formatFilesBuilt, type FilesBuilt } from "@/lib/filesBuilt";
 import { diffFilesBodies, FILES_DELTA_ACCEPT_HEADER, FILES_DELTA_BASE_HEADER } from "@/lib/filesDelta";
+import { BOARD_PROTOCOL_HEADER, BOARD_SCOPE_HEADER } from "@/lib/boardDelta";
+import { BoardEncoder, boardCursorScope } from "@/lib/boardEncoding";
+import { BoardHistory } from "@/lib/boardHistory";
 import { acceptsGzip, gzipBody } from "@/lib/http/gzipBody";
 import { readStateCollectionRevision, readStateCollectionRevisions } from "@/lib/state/sqliteStateStore";
 import { ensureEmptyTaskBoardVisibilityMigration } from "@/lib/tasks/boardVisibilityMigration";
@@ -31,6 +34,7 @@ function generationHeader(request: Request, name: string): number | undefined {
 type CachedScan = Awaited<ReturnType<typeof cachedFileScan>>;
 type ProjectionRepresentation = {
   body: string;
+  bytes?: number;
   contentType: string;
   etag: string;
   timing: string;
@@ -79,15 +83,10 @@ const PROJECTION_STATE_FILES = [
      (docs/design/attention-auto-resolve.md): a rotation moves no scan. */
   "orchestrator-seats.json",
 ] as const;
-/* A client more links behind than this, or whose deltas add up to more than a
-   quarter of the full body, is sent the full body. */
-const DELTA_LINKS_PER_SCOPE = 32;
-const DELTA_PATH_MAX_LINKS = 16;
-const DELTA_MAX_BODY_FRACTION = 0.25;
-type DeltaLink = { etag: string; delta: string };
 const projectionCacheStore = globalThis as typeof globalThis & {
   __llvFilesProjectionCache?: Map<string, CachedProjection>;
-  __llvFilesDeltaLinks?: Map<string, Map<string, DeltaLink>>;
+  __llvBoardHistory?: BoardHistory;
+  __llvBoardEncoder?: BoardEncoder;
   __llvFilesGzipBodies?: WeakMap<ProjectionRepresentation, Promise<Uint8Array>>;
   __llvFilesProjectionInflight?: Map<string, Promise<ProjectionRepresentation>>;
   __llvFilesProjectionPersistenceTail?: Promise<void>;
@@ -111,50 +110,12 @@ function projectionCache(): Map<string, CachedProjection> {
   return projectionCacheStore.__llvFilesProjectionCache;
 }
 
-/* Every representation a scope moved through, as base ETag → the next one and
-   the delta that gets there (#1994). A phone that certified any recent
-   representation catches up with the rows that changed, never the board. */
-function deltaLinks(scopeKey: string): Map<string, DeltaLink> {
-  projectionCacheStore.__llvFilesDeltaLinks ??= new Map();
-  let links = projectionCacheStore.__llvFilesDeltaLinks.get(scopeKey);
-  if (!links) {
-    links = new Map();
-    projectionCacheStore.__llvFilesDeltaLinks.set(scopeKey, links);
-  }
-  return links;
+function boardHistory(): BoardHistory {
+  return projectionCacheStore.__llvBoardHistory ??= new BoardHistory();
 }
 
-function recordDeltaLink(scopeKey: string, base: string, etag: string, delta: string): void {
-  if (!base || !etag || base === etag) return;
-  const links = deltaLinks(scopeKey);
-  links.delete(base);
-  links.set(base, { etag, delta });
-  while (links.size > DELTA_LINKS_PER_SCOPE) {
-    const oldest = links.keys().next().value as string | undefined;
-    if (oldest === undefined) break;
-    links.delete(oldest);
-  }
-}
-
-/** The deltas from `from` to `to`, or null when the chain does not reach or a
-    full body is cheaper. */
-function deltaPath(scopeKey: string, from: string, to: string, fullBytes: number): string[] | null {
-  const links = projectionCacheStore.__llvFilesDeltaLinks?.get(scopeKey);
-  if (!links) return null;
-  const deltas: string[] = [];
-  const seen = new Set<string>();
-  let bytes = 0;
-  let at = from;
-  while (at !== to) {
-    const link = links.get(at);
-    if (!link || seen.has(at) || deltas.length >= DELTA_PATH_MAX_LINKS) return null;
-    seen.add(at);
-    bytes += link.delta.length;
-    if (bytes > fullBytes * DELTA_MAX_BODY_FRACTION) return null;
-    deltas.push(link.delta);
-    at = link.etag;
-  }
-  return deltas.length ? deltas : null;
+function boardEncoder(): BoardEncoder {
+  return projectionCacheStore.__llvBoardEncoder ??= new BoardEncoder();
 }
 
 /** One compression per representation, however many clients fetch it. */
@@ -276,8 +237,9 @@ function projectionScopeKey(
   pinnedPath: string | undefined,
   summary = false,
   agent = false,
+  board = false,
 ): string {
-  return JSON.stringify([pinnedPath ?? null, ...(summary ? ["summary"] : []), ...(agent ? ["agent"] : [])]);
+  return JSON.stringify([pinnedPath ?? null, ...(summary ? ["summary"] : []), ...(agent ? ["agent"] : []), ...(board ? ["board-v2"] : [])]);
 }
 
 function projectionKey(baseKey: string): string {
@@ -357,6 +319,7 @@ function rememberProjection(scopeKey: string, key: string, representation: Proje
     const oldest = cache.keys().next().value as string | undefined;
     if (oldest === undefined) break;
     cache.delete(oldest);
+    boardHistory().forget(oldest);
   }
 }
 
@@ -444,6 +407,7 @@ async function projectionFor(
   request: Request,
   scan: CachedScan,
   summary: boolean,
+  board = false,
 ): Promise<ProjectionResult> {
   const cached = projectionCache().get(scopeKey);
   if (cached?.key === key && !projectionCacheStore.__llvFilesWorkerWriteFailedSince) return { representation: cached.representation, cacheStatus: "hit" };
@@ -470,14 +434,20 @@ async function projectionFor(
       const ownedSnapshot = structuredClone(snapshot);
       scan.cloneDurationMs += performance.now() - cloneStartedAt;
       const built: FilesBuilt = { epoch, generation: scan.generation, sequence: nextProjectionSequence() };
+      let encoded: ReturnType<BoardEncoder["encode"]> | undefined;
       const response = await buildFilesResponse(new Request(request.url, { headers }), {
         listFilesWithProjectCatalog: async () => ownedSnapshot,
+        ...(board ? { encode: (data: import("@/lib/types").FilesResponse) => {
+          encoded = boardEncoder().encode(createHash("sha1").update(scopeKey).digest("hex"), epoch, data as unknown as Record<string, unknown>);
+          return encoded;
+        } } : {}),
       });
       return {
         body: await response.text(),
         contentType: response.headers.get("content-type") ?? "application/json",
         etag: response.headers.get("etag") ?? "",
         timing: response.headers.get("server-timing") ?? "",
+        ...(encoded ? { delta: encoded.delta, stateWrites: encoded.stateWrites as StateWriteHealth, stateDataWrites: encoded.stateWrites as StateWriteHealth } : {}),
         built,
       };
     };
@@ -504,6 +474,7 @@ async function projectionFor(
             url: request.url,
             headers: [...headers.entries()],
             ...(fromFile ? { snapshotFile: persistedSnapshot } : { snapshot }),
+            ...(board ? { boardEpoch: epoch } : {}),
             ...(summary ? { deltaScope: createHash("sha1").update(scopeKey).digest("hex") } : {}),
           }, undefined, summary ? previous : undefined);
           // Result-file transport recovers independently of state-data writes.
@@ -535,13 +506,13 @@ async function projectionFor(
       representation = await inlineProjection();
     }
     representation = withCurrentWriteHealth(representation);
-    if (summary && previous && previous.etag !== representation.etag
+    if (summary && !board && previous && previous.etag !== representation.etag
       && representation.delta?.base !== previous.etag) representation.delta = {
       base: previous.etag,
       body: diffFilesBodies(previous.body, representation.body, previous.etag, representation.etag),
     };
     if (representation.delta) {
-      recordDeltaLink(scopeKey, representation.delta.base, representation.etag, representation.delta.body);
+      boardHistory().record(scopeKey, representation.delta.base, representation.etag, representation.delta.body);
       /* The link holds the delta; the cached representation need not. */
       representation = { ...representation, delta: undefined };
     }
@@ -592,7 +563,7 @@ function withCurrentWriteHealth(representation: ProjectionRepresentation): Proje
   const system = parsed!.systemHealth as { storage?: { incidents?: unknown[] } } | undefined;
   parsed!.systemHealth = { ...system, storage: { incidents: [], ...system?.storage, writes } };
   const body = JSON.stringify(parsed);
-  return { ...representation, body, stateWrites: writes,
+  return { ...representation, body, bytes: Buffer.byteLength(body), stateWrites: writes,
     etag: `"${createHash("sha1").update(body).digest("hex")}"`, delta: undefined };
 }
 
@@ -657,7 +628,8 @@ async function getFiles(request: Request): Promise<Response> {
   const previousEtag = request.headers.get("if-none-match");
   const summary = url.searchParams.get("view") === "summary";
   const agent = request.headers.has(VIEWER_SPAWN_CAPABILITY_HEADER);
-  const scopeKey = projectionScopeKey(pinnedPath, summary, agent);
+  const board = summary && request.headers.get(BOARD_PROTOCOL_HEADER) === "2";
+  const scopeKey = projectionScopeKey(pinnedPath, summary, agent, board);
   const waiting = projectionCache().get(scopeKey)?.representation;
   if (requiredGeneration !== undefined && scan.generation < scan.targetGeneration && previousEtag
     && currentWriteHealth().state === "ok" && waiting && withCurrentWriteHealth(waiting).etag === previousEtag) {
@@ -665,6 +637,8 @@ async function getFiles(request: Request): Promise<Response> {
       status: 304,
       headers: {
         ETag: previousEtag,
+        ...(board ? { [BOARD_PROTOCOL_HEADER]: "2" } : {}),
+        vary: `accept-encoding, ${FILES_DELTA_ACCEPT_HEADER}, ${BOARD_PROTOCOL_HEADER}`,
         "server-timing": `files-generation-wait;dur=0.0;desc="generation ${scan.generation} of ${scan.targetGeneration}"`,
       },
     });
@@ -679,9 +653,9 @@ async function getFiles(request: Request): Promise<Response> {
   const cached = projectionCache().get(scopeKey)?.representation;
   const projected: ProjectionResult = filesystemExhausted() && cached
     ? { representation: cached, cacheStatus: "stale" }
-    : await projectionFor(scopeKey, key, request, scan, summary);
+    : await projectionFor(scopeKey, key, request, scan, summary, board);
   const refreshed = withCurrentWriteHealth(projected.representation);
-  if (refreshed.etag !== projected.representation.etag && summary) recordDeltaLink(scopeKey,
+  if (refreshed.etag !== projected.representation.etag && summary && !board) boardHistory().record(scopeKey,
     projected.representation.etag, refreshed.etag,
     diffFilesBodies(projected.representation.body, refreshed.body, projected.representation.etag, refreshed.etag));
   projected.representation = refreshed;
@@ -694,31 +668,42 @@ async function getFiles(request: Request): Promise<Response> {
     ETag: projected.representation.etag,
     ...(notModified ? {} : { "content-type": projected.representation.contentType }),
     "x-llv-files-projection-cache": projected.cacheStatus,
-    vary: `accept-encoding, ${FILES_DELTA_ACCEPT_HEADER}`,
+    vary: `accept-encoding, ${FILES_DELTA_ACCEPT_HEADER}, ${BOARD_PROTOCOL_HEADER}`,
+    ...(board ? { [BOARD_PROTOCOL_HEADER]: "2" } : {}),
     /* The live scan's generation goes out as `x-llv-files-generation`; this
        is the one the body was built from, older when the answer is stale. */
     ...(projected.representation.built ? { [FILES_BUILT_HEADER]: formatFilesBuilt(projected.representation.built) } : {}),
   };
   let body: string | Uint8Array | null = null;
+  const fullBytes = projected.representation.bytes ??= Buffer.byteLength(projected.representation.body);
   if (!notModified) {
     /* A client that certified an earlier representation of this scope, and
        says it can apply a delta, gets the rows that changed since (#1994). */
     const base = request.headers.get("if-none-match");
-    const deltas = base && summary && request.headers.get(FILES_DELTA_ACCEPT_HEADER) === "1"
-      ? deltaPath(scopeKey, base, projected.representation.etag, projected.representation.body.length)
-      : null;
-    if (deltas && base) {
+    const result = base && summary && request.headers.get(FILES_DELTA_ACCEPT_HEADER) === "1"
+      ? boardHistory().answer(scopeKey, base, projected.representation.etag, fullBytes, Date.now(), board ? 0.1 : 0.25)
+      : undefined;
+    const delta = result?.answer;
+    if (delta && base) {
       headers[FILES_DELTA_BASE_HEADER] = base;
-      headers["cache-control"] = "no-store";
-      body = `{"deltas":[${deltas.join(",")}]}`;
+      body = delta.body;
     } else {
       body = projected.representation.body;
+      if (board) {
+        const cursorScope = request.headers.get(BOARD_SCOPE_HEADER);
+        const currentScope = boardCursorScope(scan.epoch ?? "0", createHash("sha1").update(scopeKey).digest("hex"));
+        headers["x-llv-board-reset"] = cursorScope && cursorScope !== currentScope
+          ? cursorScope.split(".")[0] !== currentScope.split(".")[0] ? "epoch" : "scope"
+          : result?.reason ?? (base ? "unsupported" : "cold");
+      }
     }
+    headers["cache-control"] = "no-store";
     if (acceptsGzip(request) && body.length >= 1024) {
-      body = deltas ? await gzipBody(body) : await gzippedRepresentation(projected.representation);
+      body = delta ? await boardHistory().gzip(delta) : await gzippedRepresentation(projected.representation);
       headers["content-encoding"] = "gzip";
     }
   }
+  headers["x-llv-files-bytes"] = String(body === null ? 0 : typeof body === "string" ? Buffer.byteLength(body) : body.byteLength);
   const response = new Response(body as BodyInit | null, {
     status: notModified ? 304 : 200,
     headers,

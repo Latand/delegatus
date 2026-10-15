@@ -15,6 +15,13 @@ import type { FileEntry } from "@/lib/types";
 import { setStateFreeBytesProbeForTests } from "@/lib/state/diskFull";
 
 import { buildFilesResponse } from "./response";
+import { createHash } from "node:crypto";
+import { estimateShallowMemoryUsageOf } from "bun:jsc";
+import { BoardEncoder } from "@/lib/boardEncoding";
+import { BoardHistory } from "@/lib/boardHistory";
+import { applyBoardDelta } from "@/lib/boardDelta";
+import { diffFilesBodies } from "@/lib/filesDelta";
+import { gzipBody } from "@/lib/http/gzipBody";
 
 let registryRoot = "";
 let stateDir = "";
@@ -184,3 +191,75 @@ test("issue 798: the read-only conversation lookup shares snapshot structure ins
   expect(lookup.conversation(conversationId(7))).toBe(owned!);
   expect(lookup.conversationForPath("/sessions/perf/unknown.jsonl")).toBeNull();
 });
+
+/* Private, frozen production bodies are read only. The report contains counts
+ * and timings; payload text and filesystem names never leave this process. */
+test.skipIf(!process.env.BOARD_POLL_BASE_FILE || !process.env.BOARD_POLL_NEXT_FILE)("board poll production-size encoding replay", async () => {
+  type Json = Record<string, unknown>;
+  const aBody = fs.readFileSync(process.env.BOARD_POLL_BASE_FILE!, "utf8");
+  const bBody = fs.readFileSync(process.env.BOARD_POLL_NEXT_FILE!, "utf8");
+  const a = JSON.parse(aBody) as Json;
+  const b = JSON.parse(bBody) as Json;
+  const largest = (rows: Json[]) => rows.reduce((best, row) => JSON.stringify(row).length > JSON.stringify(best).length ? row : best);
+  const large = structuredClone(b);
+  const pipeline = largest(large.pipelines as Json[]);
+  pipeline.state = pipeline.state === "running" ? "paused" : "running";
+  const task = largest(large.tasks as Json[]);
+  task.details = `${task.details ?? ""}\nOne more recorded detail.`;
+  const reports: unknown[] = [];
+  for (const [name, before, after] of [["observed", a, b], ["largest-records", b, large]] as const) {
+    const oldBody = JSON.stringify(before);
+    const oldTag = `"${createHash("sha1").update(oldBody).digest("hex")}"`;
+    const samples: unknown[] = [];
+    let finalDelta = "", full = "";
+    for (let sample = 0; sample < 8; sample++) {
+      const encoder = new BoardEncoder();
+      const base = encoder.encode("global", "replay", before);
+      const start = performance.now();
+      const body = JSON.stringify(after);
+      const etag = `"${createHash("sha1").update(body).digest("hex")}"`;
+      const serialized = performance.now();
+      const oldDelta = diffFilesBodies(oldBody, body, oldTag, etag);
+      const baselineDone = performance.now();
+      const next = encoder.encode("global", "replay", after);
+      const candidateDone = performance.now();
+      expect(applyBoardDelta(JSON.parse(base.body), JSON.parse(next.delta!.body))).toEqual(JSON.parse(next.body));
+      finalDelta = `{"deltas":[${next.delta!.body}]}`;
+      full = next.body;
+      if (sample) samples.push({ serializeHashMs: serialized - start, v1DiffMs: baselineDone - serialized,
+        baselineBuildMs: baselineDone - start, candidateBuildMs: candidateDone - baselineDone, v1DeltaBytes: Buffer.byteLength(oldDelta) });
+    }
+    const countStrings = (run: () => unknown) => {
+      const stringify = JSON.stringify, parse = JSON.parse;
+      let calls = 0, stringBytes = 0, shallowStringBytes = 0, parseBytes = 0;
+      JSON.stringify = ((...args: Parameters<typeof JSON.stringify>) => {
+        const value = stringify(...args);
+        if (value !== undefined) { calls++; stringBytes += Buffer.byteLength(value); shallowStringBytes += estimateShallowMemoryUsageOf(value); }
+        return value;
+      }) as typeof JSON.stringify;
+      JSON.parse = ((value: string, ...args: []) => { parseBytes += Buffer.byteLength(value); return parse(value, ...args); }) as typeof JSON.parse;
+      try { run(); } finally { JSON.stringify = stringify; JSON.parse = parse; }
+      return { calls, stringBytes, shallowStringBytes, parseBytes };
+    };
+    const encoder = new BoardEncoder();
+    const base = encoder.encode("global", "replay", before);
+    const baselineAllocation = countStrings(() => {
+      const body = JSON.stringify(after);
+      diffFilesBodies(oldBody, body, oldTag, `"${createHash("sha1").update(body).digest("hex")}"`);
+    });
+    const candidateAllocation = countStrings(() => encoder.encode("global", "replay", after));
+    const next = encoder.encode("global", "replay", before);
+    const history = new BoardHistory();
+    history.record("global", base.etag, next.etag + "target", JSON.parse(finalDelta).deltas.map((d: unknown) => JSON.stringify(d)).join(","));
+    const answer = history.answer("global", base.etag, next.etag + "target", Buffer.byteLength(full)).answer!;
+    expect(answer).toBeDefined();
+    const pollAllocation = countStrings(() => history.answer("global", base.etag, next.etag + "target", Buffer.byteLength(full)));
+    const gzip = await gzipBody(finalDelta);
+    reports.push({ name, fullBytes: Buffer.byteLength(full), fullGzipBytes: (await gzipBody(full)).length,
+      deltaBytes: Buffer.byteLength(finalDelta), deltaGzipBytes: gzip.length, samples, baselineAllocation, candidateAllocation, cachedPollAllocation: pollAllocation });
+    expect(Buffer.byteLength(finalDelta)).toBeLessThan(Buffer.byteLength(full) / 10);
+  }
+  const result = { inputSha256: [aBody, bBody].map(body => createHash("sha256").update(body).digest("hex")), reports };
+  if (process.env.BOARD_POLL_REPORT) fs.writeFileSync(process.env.BOARD_POLL_REPORT, JSON.stringify(result, null, 2) + "\n");
+  console.log(JSON.stringify({ probe: "board-poll-encoding", ...result }));
+}, 120_000);

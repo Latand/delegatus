@@ -5,6 +5,7 @@ import path from "node:path";
 import { buildFilesResponse } from "@/app/api/files/response";
 import { statePath } from "@/lib/configDir";
 import { diffFilesBodies } from "@/lib/filesDelta";
+import { BoardEncoder } from "@/lib/boardEncoding";
 import type { FilesResponseWorkerRequest } from "@/lib/scanner/filesResponseWorker";
 
 /** One request frame. A whole snapshot can ride inline, so the bound is large. */
@@ -32,6 +33,7 @@ function workerRequest(value: unknown): FilesResponseWorkerRequest | null {
     || !Array.isArray(value.headers)
     || (value.snapshotFile !== undefined && typeof value.snapshotFile !== "string")
     || (value.deltaScope !== undefined && (typeof value.deltaScope !== "string" || !/^[0-9a-f]{40}$/.test(value.deltaScope)))
+    || (value.boardEpoch !== undefined && (typeof value.boardEpoch !== "string" || !value.boardEpoch || !value.deltaScope))
     || (value.deltaFrom !== undefined && (!record(value.deltaFrom)
       || typeof value.deltaFrom.bodyFile !== "string" || typeof value.deltaFrom.etag !== "string"
       || !/^"[0-9a-f]{40}"$/.test(value.deltaFrom.etag)))
@@ -65,12 +67,19 @@ function snapshotFor(request: FilesResponseWorkerRequest): {
     : { snapshot };
 }
 
+const boardEncoder = new BoardEncoder();
+
 async function build(request: FilesResponseWorkerRequest): Promise<Record<string, string>> {
   const { snapshot, read } = snapshotFor(request);
+  let encoded: ReturnType<BoardEncoder["encode"]> | undefined;
   const response = await buildFilesResponse(new Request(request.url, {
     headers: new Headers(request.headers),
   }), {
     listFilesWithProjectCatalog: async () => snapshot,
+    ...(request.boardEpoch && request.deltaScope ? { encode: (data: import("@/lib/types").FilesResponse) => {
+      encoded = boardEncoder.encode(request.deltaScope!, request.boardEpoch!, data as unknown as Record<string, unknown>);
+      return encoded;
+    } } : {}),
   });
   const resultDirectory = statePath("files-response-results");
   fs.mkdirSync(resultDirectory, { recursive: true, mode: 0o700 });
@@ -78,14 +87,20 @@ async function build(request: FilesResponseWorkerRequest): Promise<Record<string
   const body = await response.text();
   const etag = response.headers.get("etag") ?? "";
   fs.writeFileSync(bodyFile, body, { encoding: "utf8", mode: 0o600 });
+  let boardDelta: Record<string, string> = {};
+  if (encoded?.delta) {
+    const deltaFile = path.join(resultDirectory, `${process.pid}-${crypto.randomUUID()}.delta.json`);
+    fs.writeFileSync(deltaFile, encoded.delta.body, { encoding: "utf8", mode: 0o600 });
+    boardDelta = { deltaFile, deltaBase: encoded.delta.base };
+  }
   return {
     bodyFile,
-    stateWritesJson: JSON.stringify(JSON.parse(body).systemHealth?.storage?.writes ?? { state: "ok", since: null, freeBytes: null }),
+    stateWritesJson: JSON.stringify((encoded ? encoded.stateWrites : JSON.parse(body).systemHealth?.storage?.writes) ?? { state: "ok", since: null, freeBytes: null }),
     contentType: response.headers.get("content-type") ?? "application/json",
     etag,
     timing: response.headers.get("server-timing") ?? "",
     ...read,
-    ...(request.deltaScope ? deltaFromBase(resultDirectory, request.deltaScope, body, etag, request.deltaFrom) : {}),
+    ...(request.boardEpoch ? boardDelta : request.deltaScope ? deltaFromBase(resultDirectory, request.deltaScope, body, etag, request.deltaFrom) : {}),
   };
 }
 

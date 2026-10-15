@@ -268,6 +268,31 @@ test("a worker that dies mid-build fails its build and the next one starts a fre
 
 /* #1994: the delta from a scope's previous representation survives the
    worker being retired between two revisions. */
+test("v2 resident worker emits nested deltas and resets safely after worker retirement", async () => {
+  const { applyBoardDelta } = await import("@/lib/boardDelta");
+  const stateDir = scratchState();
+  const scoped = { ...request, url: "http://127.0.0.1/api/files?view=summary", deltaScope: "c".repeat(40), boardEpoch: "first" };
+  try {
+    const first = await buildFilesResponseInWorker(scoped, runtimeFor(stateDir));
+    expect(JSON.parse(first.body).boardProtocol).toBe(2);
+    const changed = structuredClone(scoped);
+    changed.snapshot!.projectCatalog = [{ project: "new", conversations: 0, smt: 1 }] as never;
+    const next = await buildFilesResponseInWorker(changed, runtimeFor(stateDir), first);
+    expect(next.delta?.base).toBe(first.etag);
+    expect(applyBoardDelta(JSON.parse(first.body), JSON.parse(next.delta!.body))).toEqual(JSON.parse(next.body));
+    await stopTestWorker();
+    const reset = await buildFilesResponseInWorker(changed, runtimeFor(stateDir), next);
+    expect(reset.delta).toBeUndefined();
+    const restarted = await buildFilesResponseInWorker({ ...changed, boardEpoch: "second" }, runtimeFor(stateDir));
+    expect(restarted.etag).not.toBe(reset.etag);
+    expect(restarted.delta).toBeUndefined();
+    expect(fs.readdirSync(path.join(stateDir, "files-response-results"))).toEqual([]);
+  } finally {
+    await stopTestWorker();
+    fs.rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
 test("a retired worker still answers the next revision with a delta from its persisted base", async () => {
   const stateDir = scratchState();
   const deltaScope = "a".repeat(40);

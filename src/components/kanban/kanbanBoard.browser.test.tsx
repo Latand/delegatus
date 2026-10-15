@@ -1,4 +1,5 @@
 import { staleWorkingResponse } from "@/lib/agent/spawnProjection.fixture";
+import { diffBoard } from "@/lib/boardDelta";
 import { describe, expect } from "bun:test";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
@@ -81,6 +82,74 @@ const VIEWPORT = { width: 1440, height: 900 } as const;
 type Scheme = "light" | "dark";
 
 const card = (id: string) => `[data-kanban-board] .card[data-id="task:${id}"]`;
+
+describe("board poll delta equivalence", () => {
+  browserTest("full and delta feeds render the same desktop and phone board after updates", async () => {
+    const out = path.resolve(".artifacts/board-poll");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    const readings: unknown[] = [];
+    try {
+      for (const width of [1440, 390]) {
+        let expected: unknown;
+        for (const transport of ["full", "delta"]) {
+          const { context, page, pageErrors } = await openFixture(browser, "about:blank", { width, height: 900 }, "dark", "en", "reduce", width === 390);
+          try {
+            await page.addInitScript(() => { Date.now = () => 1_791_856_800_000; });
+            await page.goto(`${server.base}?scenario=stages&cards=open&proto=telegram&pollTransport=${transport}`);
+            const surface = width === 390 ? "[data-phone-kanban]" : "[data-kanban-board]";
+            await page.locator(surface).waitFor();
+            await page.waitForFunction(() => (window as unknown as { boardPollReads: unknown[] }).boardPollReads.length > 0);
+            for (let step = 0; step < 3; step++) {
+              const count = await page.evaluate(() => {
+                const fixture = window as unknown as { boardPollStep(): void; boardPollReads: unknown[] };
+                const count = fixture.boardPollReads.length;
+                fixture.boardPollStep();
+                return count;
+              });
+              await page.waitForFunction(count => (window as unknown as { boardPollReads: unknown[] }).boardPollReads.length > count, count);
+              await page.waitForTimeout(500);
+            }
+            await page.evaluate(() => { for (const animation of document.getAnimations()) { animation.pause(); animation.currentTime = 0; } });
+            const rendered = await page.locator(surface).evaluate(element => ({
+              text: (element as HTMLElement).innerText,
+              cards: Array.from(element.querySelectorAll(".card[data-id], [data-phone-card]")).map(card => {
+                const rect = card.getBoundingClientRect();
+                return { id: card.getAttribute("data-id") ?? card.getAttribute("data-phone-card"), text: (card as HTMLElement).innerText,
+                  x: Math.round(rect.x), y: Math.round(rect.y), width: Math.round(rect.width), height: Math.round(rect.height) };
+              }),
+            }));
+            if (transport === "full") expected = rendered;
+            else expect(rendered as unknown).toEqual(expected);
+            const reads = await page.evaluate(() => (window as unknown as { boardPollReads: Array<{ delta: boolean; bytes: number }> }).boardPollReads);
+            if (transport === "delta") expect(reads.filter(read => read.delta).length).toBeGreaterThanOrEqual(3);
+            expect(pageErrors).toEqual([]);
+            await page.screenshot({ path: path.join(out, `${width}-${transport}.png`), fullPage: true });
+            if (width !== 390) {
+              await page.locator(card("t-search")).scrollIntoViewIfNeeded();
+              await page.screenshot({ path: path.join(out, `${width}-${transport}-cards.png`) });
+            }
+            readings.push({ width, transport, cardCount: rendered.cards.length, equal: true, reads });
+          } finally { await context.close(); }
+        }
+      }
+      if (process.env.BOARD_POLL_BASE_FILE && process.env.BOARD_POLL_NEXT_FILE) {
+        const before = { ...JSON.parse(fs.readFileSync(process.env.BOARD_POLL_BASE_FILE, "utf8")), boardProtocol: 2, boardScope: "replay" };
+        const after = { ...JSON.parse(fs.readFileSync(process.env.BOARD_POLL_NEXT_FILE, "utf8")), boardProtocol: 2, boardScope: "replay" };
+        const { context, page } = await openFixture(browser, server.base, VIEWPORT, "dark", "en", "reduce");
+        try {
+          const result = await page.evaluate(input => (window as unknown as { boardPollBench(input: unknown): Promise<unknown> }).boardPollBench(input), {
+            before: JSON.stringify(before), after: JSON.stringify(after), delta: JSON.stringify({ deltas: [diffBoard(before, after, "before", "after")] }),
+          });
+          readings.push({ productionSizeClientApply: result });
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/board-poll", { recursive: true });
+      fs.writeFileSync("evidence/board-poll/render.json", JSON.stringify(readings, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 180_000);
+});
 
 describe("Overview incremental catalog", () => {
   browserTest("measures changed files payloads with the rendered catalog unchanged", async () => {

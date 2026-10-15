@@ -68,6 +68,8 @@ export type FilesResponseWorkerRequest = {
   deltaScope?: string;
   /** The parent's certified base, which may differ from a discarded build. */
   deltaFrom?: { bodyFile: string; etag: string };
+  /** v2 structured base belongs to this Viewer epoch and deltaScope. */
+  boardEpoch?: string;
 };
 
 export interface FilesResponseWorkerRuntime {
@@ -458,7 +460,7 @@ async function dispatch(
   const worker = residentWorker(runtime);
   let previousFile: string | undefined;
   try {
-    if (previous && request.deltaScope) {
+    if (previous && request.deltaScope && !request.boardEpoch) {
       previousFile = path.join(worker.resultDirectory, `${process.pid}-${crypto.randomUUID()}.base.json`);
       await fs.promises.mkdir(worker.resultDirectory, { recursive: true, mode: 0o700 });
       await fs.promises.writeFile(previousFile, previous.body, { encoding: "utf8", mode: 0o600 });

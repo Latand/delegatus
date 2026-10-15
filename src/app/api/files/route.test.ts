@@ -9,6 +9,7 @@ import { Database } from "bun:sqlite";
 
 import { StateDiskFullError, noteStateDiskFull, noteStateCommit, setStateFreeBytesProbeForTests, stateWriteHealth } from "@/lib/state/diskFull";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
+import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
 import { withoutArchivedPredecessors } from "@/lib/accounts/identity";
 import { agentRegistry, AgentRegistry, setAgentRegistryForTests } from "@/lib/agent/registry";
 import { seatIdentityResolver } from "@/lib/bridge/seatIdentity";
@@ -61,6 +62,8 @@ let previousState: string | undefined;
 function resetFilesProjectionCacheForTests(): void {
   const store = globalThis as typeof globalThis & {
     __llvFilesProjectionCache?: Map<string, unknown>;
+    __llvBoardHistory?: unknown;
+    __llvBoardEncoder?: unknown;
     __llvFilesProjectionInflight?: Map<string, Promise<unknown>>;
     __llvFilesProjectionWorkerTail?: Promise<void>;
     __llvFilesPersistedProjectionChecked?: boolean;
@@ -68,6 +71,8 @@ function resetFilesProjectionCacheForTests(): void {
     __llvFilesWorkerWriteFailedSince?: string | null;
   };
   store.__llvFilesProjectionCache = new Map();
+  store.__llvBoardHistory = undefined;
+  store.__llvBoardEncoder = undefined;
   store.__llvFilesProjectionInflight = new Map();
   store.__llvFilesProjectionWorkerTail = undefined;
   store.__llvFilesPersistedProjectionChecked = undefined;
@@ -3942,6 +3947,79 @@ test("#1994: a client without delta support, or behind the retained chain, gets 
   expect(unknownBase.headers.has("x-llv-files-delta-base")).toBe(false);
 });
 
+test("board v2 isolates legacy, pinned and agent scopes and evicts histories with projections", async () => {
+  scannedFiles = retainedHistory(200);
+  const { BoardHistory } = await import("@/lib/boardHistory");
+  const store = globalThis as typeof globalThis & { __llvBoardHistory?: InstanceType<typeof BoardHistory> };
+  store.__llvBoardHistory = new BoardHistory();
+  const request = (suffix = "", headers: Record<string, string> = {}) => new Request(`http://127.0.0.1/api/files?view=summary${suffix}`, {
+    headers: { "x-llv-board-protocol": "2", ...headers },
+  });
+  const first = await GET(request());
+  const tag = first.headers.get("etag")!;
+  expect(first.headers.get("x-llv-board-protocol")).toBe("2");
+  expect(first.headers.get("x-llv-board-reset")).toBe("cold");
+  const raw = await first.json();
+  const legacy = await GET(request("", { "x-llv-board-protocol": "1", "if-none-match": tag, "x-llv-files-delta": "1" }));
+  expect(legacy.status).toBe(200);
+  expect(legacy.headers.has("x-llv-board-protocol")).toBe(false);
+  const { boardProtocol: _version, boardScope: _scope, ...plain } = raw;
+  expect(await legacy.json()).toEqual(plain);
+  for (const [suffix, headers] of [["&path=%2Fpinned", {}], ["", { [VIEWER_SPAWN_CAPABILITY_HEADER]: "fixture" }]] as const) {
+    const response = await GET(request(suffix, { ...headers, "if-none-match": tag, "x-llv-files-delta": "1" }));
+    expect(response.status).toBe(200);
+    expect(response.headers.has("x-llv-files-delta-base")).toBe(false);
+    expect(response.headers.get("etag")).not.toBe(tag);
+  }
+  const scopeKey = JSON.stringify([null, "summary", "board-v2"]);
+  store.__llvBoardHistory.record(scopeKey, "prior", tag, "{}", Date.now());
+  for (let i = 0; i < 33; i++) await GET(request(`&path=%2Fscope-${i}`));
+  expect(store.__llvBoardHistory.answer(scopeKey, "prior", tag, 100_000).reason).toBe("expired");
+});
+
+test.each([1, 4, 8])("board v2 shares a changed poll across %s tabs with exact full-summary equality", async (tabs) => {
+  const { applyBoardDelta } = await import("@/lib/boardDelta");
+  scannedFiles = retainedHistory(2000);
+  const request = (headers: Record<string, string> = {}) => new Request("http://127.0.0.1/api/files?view=summary", {
+    headers: { "x-llv-board-protocol": "2", ...headers },
+  });
+  const initial = await GET(request());
+  const base = initial.headers.get("etag")!;
+  const raw = await initial.json();
+  scannedFiles = retainedHistory(2000, 1234).map((entry, i) => i < 20 ? { ...entry, size: entry.size + 1 } : entry);
+  await currentFileScan({ fresh: true });
+  await GET(request());
+  const inflight = (globalThis as typeof globalThis & { __llvFilesProjectionInflight?: Map<string, Promise<unknown>> }).__llvFilesProjectionInflight;
+  await Promise.all(inflight?.values() ?? []);
+  const full = await GET(request());
+  const expected = await full.json();
+  const tag = full.headers.get("etag")!;
+  const answers = await Promise.all(Array.from({ length: tabs }, () => GET(request({
+    "if-none-match": base, "x-llv-files-delta": "1", "accept-encoding": "gzip", "x-llv-board-scope": raw.boardScope,
+  }))));
+  let compressed: Uint8Array | undefined;
+  for (const answer of answers) {
+    expect(answer.headers.get("x-llv-files-delta-base")).toBe(base);
+    expect(answer.headers.get("etag")).toBe(tag);
+    expect(answer.headers.get("content-encoding")).toBe("gzip");
+    const bytes = new Uint8Array(await answer.arrayBuffer());
+    if (compressed) expect(bytes).toEqual(compressed);
+    compressed = bytes;
+    const { gunzipSync } = await import("node:zlib");
+    const envelope = JSON.parse(gunzipSync(bytes).toString());
+    let state = raw;
+    for (const delta of envelope.deltas) state = applyBoardDelta(state, delta);
+    expect(state).toEqual(expected);
+    expect(bytes.byteLength).toBeLessThan(Buffer.byteLength(JSON.stringify(expected)) / 10);
+  }
+  const quiet = await GET(request({ "if-none-match": tag, "x-llv-files-delta": "1" }));
+  expect(quiet.status).toBe(304);
+  expect(await quiet.text()).toBe("");
+  const reset = await GET(request({ "if-none-match": "old-release", "x-llv-files-delta": "1", "x-llv-board-scope": "other-epoch.scope" }));
+  expect(reset.headers.get("x-llv-board-reset")).toBe("epoch");
+  expect(await reset.json()).toEqual(expected);
+});
+
 test("#1994: board bodies are gzip-encoded for a caller that accepts gzip", async () => {
   scannedFiles = retainedHistory(500);
   const plain = await (await GET(new Request("http://127.0.0.1/api/files?view=summary"))).text();
@@ -3957,7 +4035,7 @@ test("#1994: deltas are negotiated only within the exact summary scope that cert
   scannedFiles = retainedHistory(200);
   const global = await GET(new Request("http://127.0.0.1/api/files?view=summary"));
   const globalEtag = global.headers.get("etag")!;
-  expect(global.headers.get("vary")).toBe("accept-encoding, x-llv-files-delta");
+  expect(global.headers.get("vary")).toBe("accept-encoding, x-llv-files-delta, x-llv-board-protocol");
   const full = await GET(new Request("http://127.0.0.1/api/files"));
   const fullEtag = full.headers.get("etag")!;
   scannedFiles = retainedHistory(200, 9);
