@@ -4125,7 +4125,7 @@ test("a live deputy takes the Viewer's own interruption continuation and nothing
 });
 
 
-test.each(["timeout", "revoked", "obsolete", "pending"] as const)(
+test.each(["timeout", "revoked", "obsolete", "ended-after-read", "ended-during-recovery", "pending"] as const)(
   "a reclaimed-host drain fences a deputy's %s attempt before recovery or send",
   async scenario => {
     const { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent, orchestratorSeatFor } = await import("@/lib/orchestrator/seats");
@@ -4186,7 +4186,10 @@ test.each(["timeout", "revoked", "obsolete", "pending"] as const)(
       let recoveries = 0;
       const received: string[] = [];
       const runtime = {
-        readSession: sessionReader(async () => resumed ? snapshot(conversation.id) : { ...snapshot(conversation.id), sessions: [] }),
+        readSession: sessionReader(async () => {
+          if (scenario === "ended-after-read") endDeputy(begun.deputy.askId, { outcome: "timeout", expectedAttempt: 0 });
+          return resumed ? snapshot(conversation.id) : { ...snapshot(conversation.id), sessions: [] };
+        }),
         operationStatus: async (operationId: string) => ({ operationId, replayed: false, receipt: { operationId,
           idempotencyKey: clientMessageId, conversationId: conversation.id, kind: "send", status: "delivered", queuePosition: null,
           at: "2026-10-15T20:36:20.000Z", revision: 1 } }),
@@ -4204,6 +4207,7 @@ test.each(["timeout", "revoked", "obsolete", "pending"] as const)(
             enabled: () => true, registry: () => registry, client: () => runtime, kick: () => {},
             recover: async () => {
               recoveries++;
+              if (scenario === "ended-during-recovery") endDeputy(begun.deputy.askId, { outcome: "timeout", expectedAttempt: 0 });
               recordStructuredOwner(registry, conversation);
               resumed = true;
               return { target: null, path: artifactPath, conversationId: conversation.id, spawned: true } as const;
@@ -4217,8 +4221,9 @@ test.each(["timeout", "revoked", "obsolete", "pending"] as const)(
         expect(received).toEqual(["Explain the parallel failure"]);
         expect(registry.pendingDeliveries(conversation.id)).toEqual([]);
       } else {
-        expect(resumed).toBe(false);
-        expect(recoveries).toBe(0);
+        const endedDuringRecovery = scenario === "ended-during-recovery";
+        expect(resumed).toBe(endedDuringRecovery);
+        expect(recoveries).toBe(endedDuringRecovery ? 1 : 0);
         expect(received).toEqual([]);
         expect(registry.readOnlySnapshot().heldDeliveries[held.id]).toMatchObject({ state: "failed", error: expect.any(String) });
       }
