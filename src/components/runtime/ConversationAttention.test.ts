@@ -56,3 +56,16 @@ test("subscription host approval responses match each engine protocol", () => {
   expect(approvalResolution(attention("claude"), true)).toEqual({ behavior: "allow" });
   expect(approvalResolution(attention("claude"), false)).toEqual({ behavior: "deny", message: "Denied in Viewer" });
 });
+
+test("Codex responses keep original option labels and custom answers under their exact question ids", () => {
+  const request = attention("codex");
+  request.request.questions = [
+    { prompt: "Pick one", options: [{ label: "Clipped…" }] },
+    { prompt: "Enter value", isOther: true, isSecret: true },
+  ];
+  request.request.protocol!.questionIds = ["choice-id", "secret-id"];
+  request.request.protocol!.questionOptions = [["Original complete option label"], []];
+  expect(questionsResolution(request, [[0], []], ["", "custom value"])).toEqual({ answers: {
+    "choice-id": { answers: ["Original complete option label"] }, "secret-id": { answers: ["custom value"] },
+  } });
+});

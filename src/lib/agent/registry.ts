@@ -7796,6 +7796,8 @@ export class AgentRegistry {
     owner: ProcessIdentity,
     options: {
       allowUnhosted?: boolean;
+      /** Reattach this exact native Codex listener after its writer died. */
+      reconnectCodex?: { endpoint: string; process: ProcessIdentity };
       reclaimUnverifiedOwner?: boolean;
       setupHost?: StructuredHostColumns;
       setupEntry?: Pick<AgentRegistryEntry, "artifactPath" | "cwd" | "accountId" | "launchProfile">;
@@ -7828,7 +7830,15 @@ export class AgentRegistry {
          engine beside it (#2790). Callers that may stop the orphan do so by
          its recorded identity and claim again once it is proven gone. */
       const liveHost = structuredHost.process;
-      if (liveHost && this.ownerAlive(liveHost)) return null;
+      if (liveHost && this.ownerAlive(liveHost)) {
+        const reconnect = options.reconnectCodex;
+        if (!reconnect || structuredHost.kind !== "codex-app-server"
+          || !structuredHost.endpoint.startsWith("codex-unix:")
+          || structuredHost.endpoint !== reconnect.endpoint
+          || !liveHost.startIdentity || liveHost.pid !== reconnect.process.pid
+          || liveHost.startIdentity !== reconnect.process.startIdentity
+          || liveHost.bootEpoch !== reconnect.process.bootEpoch) return null;
+      }
       const requestedOwner = structuredClaimOwner(owner);
       if (entry.claimOwner) {
         const priorOwner = structuredClaimIdentity(entry.claimOwner);

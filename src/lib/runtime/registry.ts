@@ -1,3 +1,4 @@
+import { verifiedCodexSocketOwner } from "./codexSocketTransport";
 import type {
   AgentHostStatus,
   AgentRegistry,
@@ -818,8 +819,10 @@ export async function adoptCodexRegistryHosts(
       await registry.withOperationLock(entry.key, owner, async () => {
         const current = registry.readOnlySnapshot().entries[sessionKeyId(entry.key)];
         if (!current?.structuredHost || !shouldAdopt(current)) return;
-        let claimed = (dependencies.claimHost ? await dependencies.claimHost(entry, owner) : registry.claimStructuredHost(entry.key, owner, { allowUnhosted: true }));
-        if (!claimed) {
+        const socketOwner = current.structuredHost.process && verifiedCodexSocketOwner({ endpoint: current.structuredHost.endpoint, process: current.structuredHost.process })
+          ? { endpoint: current.structuredHost.endpoint, process: current.structuredHost.process } : undefined;
+        let claimed = (dependencies.claimHost ? await dependencies.claimHost(entry, owner) : registry.claimStructuredHost(entry.key, owner, { allowUnhosted: true, reconnectCodex: socketOwner }));
+        if (!claimed && !socketOwner) {
           const current = registry.readOnlySnapshot().entries[sessionKeyId(entry.key)];
           const orphan = current?.structuredHost?.kind === "codex-app-server"
             ? current.structuredHost.process
@@ -844,6 +847,10 @@ export async function adoptCodexRegistryHosts(
         const refused = (dependencies.admit ?? adoptionRefusal)(claimed, registry.readOnlySnapshot());
         if (refused) {
           console.error(`[linked boards] boot adoption of ${sessionKeyId(entry.key)} refused: ${refused.error}`);
+          if (socketOwner) {
+            registry.releaseStructuredHostClaim(entry.key, claimed.claimOwner!, claimed.claimEpoch);
+            return;
+          }
           registry.setStructuredHostClaimed(entry.key, {
             ...claimed.structuredHost,
             endpoint: "stdio:released",
@@ -855,9 +862,11 @@ export async function adoptCodexRegistryHosts(
           return;
         }
         try {
+          const retainedProtocolVersion = claimed.structuredHost.protocolVersion;
           const options = {
             ...optionsFor(claimed),
             initialEventCursor: claimed.structuredHost.eventCursor,
+            ...(socketOwner ? { socketOwner, readProtocolVersion: () => retainedProtocolVersion ?? "unknown" } : {}),
           };
           /* The production static method calls `this.open`; keep its class
              receiver instead of extracting it into an unbound function. */
@@ -885,6 +894,10 @@ export async function adoptCodexRegistryHosts(
           }
           // A refused cell (work that cannot be contained) or a failed open; the next message relaunches it.
           console.error(`[structured hosts] boot adoption of ${sessionKeyId(entry.key)} failed: ${error instanceof Error ? error.message : String(error)}`);
+          if (socketOwner && !processIdentityProvenDead(socketOwner.process)) {
+            registry.releaseStructuredHostClaim(entry.key, claimed.claimOwner!, claimed.claimEpoch);
+            return;
+          }
           registry.setStructuredHostClaimed(entry.key, {
             ...claimed.structuredHost,
             endpoint: "stdio:released",
@@ -1024,4 +1037,19 @@ export async function adoptClaudeRegistryHosts(
     }
   }
   return adopted;
+}
+
+/** The exact live native listener is handed to the next Viewer. Its process
+ * and endpoint remain recorded; only the current writer claim is released. */
+export async function detachCodexHostForViewerRestart(registry: AgentRegistry, key: SessionKey, host: import("./engineHost").EngineHost): Promise<boolean> {
+  if (!(host instanceof CodexAppServerHost)) return false;
+  const state = await host.health();
+  const entry = registry.readOnlySnapshot().entries[sessionKeyId(key)];
+  if (!entry?.claimOwner || !entry.structuredHost?.process
+    || state.pid !== entry.structuredHost.process.pid
+    || state.processStartIdentity !== entry.structuredHost.process.startIdentity
+    || state.endpoint !== entry.structuredHost.endpoint) return false;
+  if (!host.detachForViewerRestart()) return false;
+  registry.releaseStructuredHostClaim(key, entry.claimOwner, entry.claimEpoch);
+  return true;
 }

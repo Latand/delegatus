@@ -12,6 +12,7 @@ import fs from "node:fs";
 import { structuredHostsEnabled } from "@/lib/runtime/flags";
 import { Database } from "bun:sqlite";
 
+import { codexRequestDigest, sameCodexRequest } from "@/lib/runtime/codexRequestReceipt";
 import {
   RUNTIME_SCHEMA_VERSION,
   compactViewerDeploymentError, parseViewerDeploymentListCursor, viewerDeploymentListCursor, viewerDeploymentListLimit,
@@ -2436,9 +2437,16 @@ export class RuntimeJournal {
         status = "rejected";
         reason = "attention-missing";
       } else if (attention.state !== "open") {
-        status = attention.state === "resolving" ? "rejected" : "answered";
-        reason = attention.state === "resolving" ? "attention-resolving" : null;
+        const confirmed = attention.codexReceipt
+          ? attention.codexReceipt.serverResolution?.outcome === "answered"
+            && attention.codexReceipt.dispatch?.digest === codexRequestDigest(command.resolution)
+          : attention.state === "resolved";
+        status = confirmed ? "answered" : "rejected";
+        reason = confirmed ? null : attention.state === "resolving" ? "attention-resolving" : "attention-no-longer-answerable";
         turnId = attention.turnId ?? turnId;
+      } else if (attention.unowned || attention.codexReceipt?.recovery || attention.codexReceipt?.protocolError) {
+        status = "rejected";
+        reason = attention.codexReceipt?.recovery?.outcome ?? "attention-ownership-unavailable";
       } else if (!session || session.host !== "hosted") {
         status = "rejected";
         reason = session?.host === "dead" || session?.host === "unhosted" ? "dead-host" : "no-claim";
@@ -2781,6 +2789,9 @@ export class RuntimeJournal {
       return;
     }
     if (command.kind === "answer" && receipt.status === "answered") {
+      // Codex's server-resolution receipt is the sole terminal transition.
+      // Its event pump can arrive before or after the operation completion.
+      if (this.entity<RuntimeAttention>("attention", command.attentionId)?.codexReceipt) return;
       this.appendInTransaction(normalizeRuntimeEventInput({
         scope: { type: "session", id: command.conversationId },
         kind: "attention-resolved",
@@ -2959,9 +2970,14 @@ export class RuntimeJournal {
     }
     if (event.kind === "attention") {
       const id = typeof payload.id === "string" ? payload.id : typeof payload.requestId === "string" ? payload.requestId : `attention-${event.seq}`;
+      const retained = this.entity<RuntimeAttention>("attention", id);
+      const incoming = payload.codexReceipt as RuntimeAttention["codexReceipt"];
+      if (retained?.codexReceipt?.serverResolution && incoming
+        && sameCodexRequest(retained.codexReceipt.identity, incoming.identity)) return;
       const conversationId = typeof payload.conversationId === "string" ? payload.conversationId : scope.id;
       const kind = payload.kind === "approval" || payload.kind === "permission" || payload.kind === "waiting_heuristic" ? payload.kind : "question";
       const attention: RuntimeAttention = {
+        ...(payload.codexReceipt ? { codexReceipt: payload.codexReceipt as RuntimeAttention["codexReceipt"] } : {}),
         id,
         conversationId,
         kind,
@@ -2989,7 +3005,7 @@ export class RuntimeJournal {
       const attention = this.entity<RuntimeAttention>("attention", id);
       if (attention) {
         const state = payload.state === "expired-confirmed" || payload.state === "cancelled" || payload.state === "resolution-unknown" ? payload.state : "resolved";
-        this.upsertEntity("attention", id, event.revision, { ...attention, state, unowned: false }, event.seq);
+        this.upsertEntity("attention", id, event.revision, { ...attention, state, unowned: false, ...(payload.codexReceipt ? { codexReceipt: payload.codexReceipt } : {}) }, event.seq);
         const session = this.entity<RuntimeSession>("session", attention.conversationId);
         if (session) this.upsertEntity("session", attention.conversationId, event.revision, { ...session, revision: event.revision, attentionIds: session.attentionIds.filter((item) => item !== id) }, event.seq);
       }

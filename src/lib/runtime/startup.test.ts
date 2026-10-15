@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import net from "node:net";
 import { expect, spyOn, test } from "bun:test";
 
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
@@ -1525,6 +1526,30 @@ async function startupAdoptionAttempts(
   }
   return attempts;
 }
+
+test.each(["terminal", "busy"] as const)("startup retains a native callback owner with a %s transcript without a restart nudge", async turn => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "cb-"));
+  fs.chmodSync(directory, 0o700);
+  const socket = path.join(directory, "rpc.sock");
+  const server = net.createServer(connection => { connection.on("error", () => {}); connection.end(); });
+  await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(socket, resolve); });
+  fs.chmodSync(socket, 0o600);
+  const registry = new AgentRegistry(path.join(directory, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const sessionId = "22222222-2222-0222-0222-222222222222";
+  const { conversation } = addStructuredRestartConversation(registry, directory, {
+    sessionId, status: "live", turn,
+    transcriptRecords: turn === "terminal" ? [{ type: "event_msg", timestamp: new Date().toISOString(), payload: { type: "task_complete", turn_id: "turn" } }] : recentTurnRecords("codex"),
+  });
+  const stored = registry.readOnlySnapshot().entries[`codex:${sessionId}`]!;
+  registry.upsert({ ...stored, structuredHost: { ...stored.structuredHost!, endpoint: `codex-unix:${socket}`, process: captureProcessIdentity(process.pid), pendingAttention: ["callback"] } });
+  try {
+    expect(await startupAdoptionAttempts(registry)).toEqual([`codex:${sessionId}`]);
+    expect(registry.pendingDeliveries(conversation.id)).toEqual([]);
+  } finally {
+    await new Promise<void>(resolve => server.close(() => resolve()));
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
 
 /** One Viewer whose passes and scheduled re-probes a restart cut case drives
     itself: the rows each pass would adopt, and the probes it scheduled. */

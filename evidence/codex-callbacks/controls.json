@@ -1,0 +1,164 @@
+{
+  "records": [
+    {
+      "width": 390,
+      "lang": "en",
+      "scenario": "permissions",
+      "frame": "390-en-permissions.png",
+      "geometry": {
+        "width": 390,
+        "client": 390
+      }
+    },
+    {
+      "width": 390,
+      "lang": "en",
+      "scenario": "question",
+      "frame": "390-en-question.png",
+      "geometry": {
+        "width": 390,
+        "client": 390
+      }
+    },
+    {
+      "width": 390,
+      "lang": "en",
+      "scenario": "uncertain",
+      "frame": "390-en-uncertain.png",
+      "geometry": {
+        "width": 390,
+        "client": 390
+      }
+    },
+    {
+      "width": 390,
+      "lang": "en",
+      "scenario": "unavailable",
+      "frame": "390-en-unavailable.png",
+      "geometry": {
+        "width": 390,
+        "client": 390
+      }
+    },
+    {
+      "width": 390,
+      "lang": "uk",
+      "scenario": "permissions",
+      "frame": "390-uk-permissions.png",
+      "geometry": {
+        "width": 390,
+        "client": 390
+      }
+    },
+    {
+      "width": 390,
+      "lang": "uk",
+      "scenario": "question",
+      "frame": "390-uk-question.png",
+      "geometry": {
+        "width": 390,
+        "client": 390
+      }
+    },
+    {
+      "width": 390,
+      "lang": "uk",
+      "scenario": "uncertain",
+      "frame": "390-uk-uncertain.png",
+      "geometry": {
+        "width": 390,
+        "client": 390
+      }
+    },
+    {
+      "width": 390,
+      "lang": "uk",
+      "scenario": "unavailable",
+      "frame": "390-uk-unavailable.png",
+      "geometry": {
+        "width": 390,
+        "client": 390
+      }
+    },
+    {
+      "width": 1280,
+      "lang": "en",
+      "scenario": "permissions",
+      "frame": "1280-en-permissions.png",
+      "geometry": {
+        "width": 672,
+        "client": 1280
+      }
+    },
+    {
+      "width": 1280,
+      "lang": "en",
+      "scenario": "question",
+      "frame": "1280-en-question.png",
+      "geometry": {
+        "width": 672,
+        "client": 1280
+      }
+    },
+    {
+      "width": 1280,
+      "lang": "en",
+      "scenario": "uncertain",
+      "frame": "1280-en-uncertain.png",
+      "geometry": {
+        "width": 672,
+        "client": 1280
+      }
+    },
+    {
+      "width": 1280,
+      "lang": "en",
+      "scenario": "unavailable",
+      "frame": "1280-en-unavailable.png",
+      "geometry": {
+        "width": 672,
+        "client": 1280
+      }
+    },
+    {
+      "width": 1280,
+      "lang": "uk",
+      "scenario": "permissions",
+      "frame": "1280-uk-permissions.png",
+      "geometry": {
+        "width": 672,
+        "client": 1280
+      }
+    },
+    {
+      "width": 1280,
+      "lang": "uk",
+      "scenario": "question",
+      "frame": "1280-uk-question.png",
+      "geometry": {
+        "width": 672,
+        "client": 1280
+      }
+    },
+    {
+      "width": 1280,
+      "lang": "uk",
+      "scenario": "uncertain",
+      "frame": "1280-uk-uncertain.png",
+      "geometry": {
+        "width": 672,
+        "client": 1280
+      }
+    },
+    {
+      "width": 1280,
+      "lang": "uk",
+      "scenario": "unavailable",
+      "frame": "1280-uk-unavailable.png",
+      "geometry": {
+        "width": 672,
+        "client": 1280
+      }
+    }
+  ]
+}

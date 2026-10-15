@@ -1,4 +1,5 @@
 import { isNonblockingCodexQuestion } from "./codexAttention";
+import { codexAttentionActions } from "./codexAttentionActions";
 import { codexServerRequestKind } from "./codexServerRequests";
 import { RUNTIME_EVENT_PAYLOAD_LIMIT_BYTES, runtimeHostKindForEngine, type RuntimeAttentionKind, type RuntimeAttentionRequest, type RuntimeEngine, type RuntimeEventInput } from "./contracts";
 import type { RuntimeEvent } from "./engineHost";
@@ -205,6 +206,8 @@ function questionFrom(value: unknown): RuntimeAttentionRequest["question"] | nul
     "prompt": clipped(prompt, 512),
     ...(options?.length ? { options } : {}),
     ...(typeof source.multiSelect === "boolean" ? { multiSelect: source.multiSelect } : {}),
+    ...(typeof source.isOther === "boolean" ? { isOther: source.isOther } : {}),
+    ...(source.isSecret === true ? { isSecret: true } : source.isSecret === false ? { isSecret: false } : {}),
   };
 }
 
@@ -253,6 +256,10 @@ function attentionProjection(engine: RuntimeEngine, event: Extract<RuntimeEvent,
   if (title) request.title = clipped(title, 256);
   const detail = text(source.detail, source.message, claudePermission ? source.decision_reason : null);
   if (detail) request.detail = clipped(detail, 2 * 1024);
+  if (event.codexReceipt?.protocolError) request.detail = event.codexReceipt.protocolError;
+  else if (event.codexReceipt?.recovery) request.detail = event.codexReceipt.recovery.outcome === "callback-unavailable"
+    ? "Codex lost this callback when its process ended. This request can no longer receive an answer."
+    : "The answer was dispatched, but Codex has not confirmed its resolution. It will not be delivered again.";
   const firstQuestion = record(questions[0]);
   const questionIds = questions.map((candidate) => text(record(candidate).id)).filter((id): id is string => id !== null);
   const protocolInput = tool === "AskUserQuestion"
@@ -265,7 +272,12 @@ function attentionProjection(engine: RuntimeEngine, event: Extract<RuntimeEvent,
     method,
     ...(text(firstQuestion.id) ? { questionId: text(firstQuestion.id)! } : {}),
     ...(questionIds.length > 0 ? { questionIds } : {}),
+    ...(engine === "codex" && questions.length ? { questionOptions: questions.map(question => {
+      const options = record(question).options;
+      return Array.isArray(options) ? options.map(option => String(record(option).label)) : [];
+    }) } : {}),
     ...(protocolInput ? { input: protocolInput } : {}),
+    ...(event.codexReceipt && !event.codexReceipt.protocolError ? { actions: codexAttentionActions(method, source) } : {}),
   };
   return {
     kind,
@@ -436,9 +448,10 @@ export function projectEngineHostEvent(
         id: event.id,
         conversationId,
         kind: projected.kind,
-        state: "open",
-        unowned: record(event.attention).unowned === true,
-        createdAt: new Date().toISOString(),
+        state: event.codexReceipt?.dispatch && !event.codexReceipt.recovery ? "resolving" : "open",
+        unowned: record(event.attention).unowned === true || !!event.codexReceipt?.recovery || !!event.codexReceipt?.protocolError,
+        createdAt: event.codexReceipt?.receivedAt ?? new Date().toISOString(),
+        ...(event.codexReceipt ? { codexReceipt: event.codexReceipt } : {}),
         request: projected.request,
         turnId: projected.turnId,
         isBlocking: projected.isBlocking,
@@ -461,6 +474,7 @@ export function projectEngineHostEvent(
         conversationId,
         state: event.resolution === "turn-ended" ? "cancelled" : "resolved",
         resolution: event.resolution,
+        ...(event.codexReceipt ? { codexReceipt: event.codexReceipt } : {}),
       },
     };
   }

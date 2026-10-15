@@ -1,3 +1,4 @@
+import { CodexSocketTransport, type CodexTransport, type CodexSocketOwner } from "./codexSocketTransport";
 import { codexOperatorQuestionPolicy } from "@/lib/agent/operatorQuestionPolicy";
 import { memoryField, memoryKillText } from "./agentMemoryState";
 import type { AgentMemoryCell } from "./agentMemory";
@@ -5,13 +6,14 @@ import { normalizeNativeQueueObservation } from "./nativeQueueContent";
 import { agentCodexPublicationPolicy } from "@/lib/git/agentPublicationIdentity";
 import { CodexRealtimeTranscript } from "./codexRealtimeTranscript";
 import type { NativeQueueInput } from "./nativeCodexQueue";
-import { StructuredSendRefusedError } from "./engineHost";
+import { StructuredAnswerError, StructuredSendRefusedError } from "./engineHost";
 import type { FirstDispatchEvidence } from "./engineHost";
 import { basename } from "node:path";
 import { isNonblockingCodexQuestion } from "./codexAttention";
 import { CodexPinnedProtocol, installedCodexVersion } from "@/lib/accounts/codexPinnedProtocol";
 import { parseAppServerMessage } from "@/lib/accounts/codexAppServerProtocol";
-import { encodeCodexServerResponse } from "./codexServerRequests";
+import { decodeCodexServerRequest, encodeCodexServerResponse } from "./codexServerRequests";
+import { codexRequestDigest, codexRequestIdentity, sameCodexRequest, type CodexRequestReceipt } from "./codexRequestReceipt";
 import { normalizeCodexProtocolReceipt } from "./codexProtocolReceipt";
 import { assertCatalogOffersTier, codexTurnProfile } from "./codexTurnProfile";
 import { StringDecoder } from "node:string_decoder";
@@ -21,7 +23,7 @@ import type { NativeQueueHost } from "./nativeQueueExecutor";
 import type { NativeQueueRecord } from "./nativeQueueContracts";
 import { spawn } from "node:child_process";
 import type { ChildProcessWithoutNullStreams, SpawnOptionsWithoutStdio } from "node:child_process";
-import { createHash, type Hash } from "node:crypto";
+import { createHash, randomUUID, type Hash } from "node:crypto";
 import fs from "node:fs";
 
 import type { ProcessIdentity } from "@/lib/agent/registry";
@@ -107,6 +109,7 @@ type Subscriber = {
   closed: boolean;
 };
 type PendingAnswer = {
+  promise: Promise<void>;
   resolve(): void;
   reject(error: Error): void;
   timer: ReturnType<typeof setTimeout>;
@@ -148,6 +151,8 @@ type PendingAttention = {
   origin: "current" | "restored";
   isBlocking?: boolean;
   answer?: PendingAnswer;
+  params: JsonObject;
+  receipt?: CodexRequestReceipt;
 };
 type ThreadStatus = {
   type: "active" | "idle" | "notLoaded" | "systemError";
@@ -193,6 +198,10 @@ type UnsequencedEvent = RuntimeEvent extends infer Event
   : never;
 
 export interface CodexAppServerHostOptions {
+  /** Exact surviving owner admitted under the registry writer claim. */
+  socketOwner?: CodexSocketOwner;
+  /** Test seam; production uses the reviewed native socket on current Codex. */
+  persistentCallbacks?: boolean;
   serviceTier?: string;
   cwd: string;
   codexHome?: string;
@@ -1246,11 +1255,11 @@ function threadStatus(value: unknown): ThreadStatus | null {
   return { type, activeFlags };
 }
 
-/** One stdio app-server owner with replayable, multi-subscriber event fan-out. */
+/** One app-server connection with durable callbacks and event replay. */
 export class CodexAppServerHost implements EngineHost {
   readonly identity: CodexThreadIdentity;
 
-  private readonly child: ChildProcessWithoutNullStreams;
+  private readonly child: CodexTransport;
   private readonly requestTimeoutMs: number;
   private readonly realtimeStartTimeoutMs: number;
   private readonly deliveryConfirmationTimeoutMs: number;
@@ -1325,6 +1334,9 @@ export class CodexAppServerHost implements EngineHost {
   private injectCapability: "unknown" | "supported" | "unsupported" = "unknown";
   private readonly stdoutDecoder = new StringDecoder("utf8");
   private readonly attentions = new Map<string, PendingAttention>();
+  private readonly callbackGeneration: string;
+  /** Includes terminal requests so a late replay cannot reopen their callback. */
+  private readonly callbackReceipts = new Map<string, CodexRequestReceipt>();
   private readonly stateListeners = new Set<(state: HostState) => void>();
   private readonly preRestoreEvents: UnsequencedEvent[] = [];
   private readonly preRestoreMessages: Array<{ message: JsonObject; bytes: number; receivedAt: string }> = [];
@@ -1378,8 +1390,11 @@ export class CodexAppServerHost implements EngineHost {
   private readonly reapedPromise: Promise<void>;
   private resolveReaped!: () => void;
 
-  private constructor(child: ChildProcessWithoutNullStreams, identity: CodexThreadIdentity, options: CodexAppServerHostOptions) {
+  private constructor(child: CodexTransport, identity: CodexThreadIdentity, options: CodexAppServerHostOptions) {
     this.child = child;
+    this.callbackGeneration = child instanceof CodexSocketTransport
+      ? codexRequestDigest({ pid: child.pid, startIdentity: child.startIdentity, bootEpoch: child.bootEpoch, endpoint: child.endpoint })
+      : randomUUID();
     this.memoryCell = options.memoryCell ?? null;
     this.memoryCell?.onChange(() => this.notifyStateListeners());
     this.identity = identity;
@@ -1445,7 +1460,7 @@ export class CodexAppServerHost implements EngineHost {
 
   private static async open(options: CodexAppServerHostOptions, threadId: string | null): Promise<CodexAppServerHost> {
     let memoryHook: ReturnType<typeof installCodexMemoryHook> = null;
-    try { if (options.codexHome && !options.cleanMemory) memoryHook = installCodexMemoryHook(options.codexHome, options.env ?? process.env); }
+    try { if (!options.socketOwner && options.codexHome && !options.cleanMemory) memoryHook = installCodexMemoryHook(options.codexHome, options.env ?? process.env); }
     catch { /* optional memory must never stop a launch */ }
     const spawnProcess = options.memoryCell?.wrapSpawn(options.spawnProcess) ?? options.spawnProcess ?? ((command, args, spawnOptions) =>
       spawn(command, args, { ...spawnOptions, stdio: ["pipe", "pipe", "pipe"] }));
@@ -1457,9 +1472,9 @@ export class CodexAppServerHost implements EngineHost {
     let cleanupArgs: string[];
     let questionPolicy: ReturnType<typeof codexOperatorQuestionPolicy> | undefined;
     try {
-      features = options.allowSubagents === true ? [] : readCodexFeatures(binary, options.env ?? process.env);
-      cleanupArgs = codexProcessCleanupArgs(options.codexHome);
-      if (options.operatorDecisionForms) {
+      features = options.socketOwner || options.allowSubagents === true ? [] : readCodexFeatures(binary, options.env ?? process.env);
+      cleanupArgs = options.socketOwner ? [] : codexProcessCleanupArgs(options.codexHome);
+      if (!options.socketOwner && options.operatorDecisionForms) {
         questionPolicy = codexOperatorQuestionPolicy(options.codexHome);
         cleanupArgs.push(...questionPolicy.args);
       }
@@ -1503,13 +1518,16 @@ export class CodexAppServerHost implements EngineHost {
       throw error;
     }
     const childEnv = telegram.env;
-    let child: ChildProcessWithoutNullStreams;
+    let child: CodexTransport;
     try {
-      child = spawnProcess(binary, args, {
-        cwd: options.cwd,
-        env: childEnv,
-        detached: true,
-      });
+      const spawnOptions = { cwd: options.cwd, env: childEnv, detached: true };
+      child = options.socketOwner
+        ? await CodexSocketTransport.reconnect(options.socketOwner)
+        : process.platform !== "win32"
+          && (options.persistentCallbacks ?? !options.spawnProcess)
+          ? await CodexSocketTransport.launch(binary, args, spawnOptions, options.memoryCell ? base => options.memoryCell!.wrapSpawn(base) : undefined)
+          : spawnProcess(binary, args, spawnOptions);
+      if (options.socketOwner && child.pid) options.memoryCell?.attach(child.pid);
     } catch (error) {
       options.releaseCleanup?.();
       throw error;
@@ -1597,7 +1615,7 @@ export class CodexAppServerHost implements EngineHost {
          below, where the next turn reads it. An engine too old to take a
          history item still gets the instructions. */
       const learnedInstructions = options.cleanMemory ? undefined : options.developerInstructions;
-      const noticeIntoHistory = telegram.unavailable && Boolean(threadId) && provisional.supportsNativeHistory() && !learnedInstructions;
+      const noticeIntoHistory = !options.socketOwner && telegram.unavailable && Boolean(threadId) && provisional.supportsNativeHistory() && !learnedInstructions;
       /* The thread parameter replaces the account's own developer
          instructions; keep those before this run's learned rules and notice. */
       const runInstructions = learnedInstructions || telegram.unavailable && !noticeIntoHistory
@@ -1610,7 +1628,7 @@ export class CodexAppServerHost implements EngineHost {
         }
         : {};
       const result = threadId
-        ? await provisional.resumeThreadTolerantly({
+        ? await provisional.resumeThreadTolerantly(options.socketOwner ? { threadId } : {
           threadId,
           ...(options.serviceTier ? { serviceTier: options.serviceTier } : {}),
           ...launchAccess,
@@ -2948,20 +2966,58 @@ export class CodexAppServerHost implements EngineHost {
       throw new Error("Codex app-server host is unavailable");
     }
     const attention = this.attentions.get(attentionRef);
-    if (attention?.origin === "restored") throw new Error("attention belongs to a previous host generation; answer ownership is unavailable");
+    const receipt = this.callbackReceipts.get(attentionRef);
+    if (receipt?.serverResolution) {
+      if (receipt.serverResolution.outcome === "answered" && receipt.dispatch?.digest === codexRequestDigest(value)) return;
+      throw new Error("Codex request is already resolved; this answer was not delivered");
+    }
+    if (attention?.origin === "restored") throw new StructuredAnswerError("attention belongs to a previous host generation; answer ownership is unavailable", receipt?.dispatch ? "uncertain" : "unavailable");
     if (!attention) throw new Error("attention request is missing or already answered");
-    if (attention.answer) throw new Error("attention answer is already awaiting confirmation");
-    const result = encodeCodexServerResponse(this.protocol, attention.method, value);
-    await new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        attention.answer = undefined;
-        const error = new Error("attention answer timed out; outcome is uncertain");
-        reject(error);
-        this.fail(error);
-      }, this.requestTimeoutMs);
-      attention.answer = { resolve, reject, timer };
+    if (receipt?.protocolError) throw new Error(receipt.protocolError);
+    const digest = codexRequestDigest(value);
+    if (receipt?.dispatch) {
+      if (receipt.dispatch.digest !== digest) throw new Error("Codex request is already awaiting confirmation with a different answer");
+      if (attention.answer) return attention.answer.promise;
+      throw new StructuredAnswerError("Codex answer delivery is uncertain; it will not be delivered again", "uncertain");
+    }
+    let result: unknown;
+    try { result = encodeCodexServerResponse(this.protocol, attention.method, value, attention.params); }
+    catch (error) {
+      // Admission may already show resolving. Restore the still-owned request
+      // after refusing its value, so the operator can correct that answer.
+      this.persistAttention(attentionRef, attention);
+      throw error;
+    }
+    let settle!: Pick<PendingAnswer, "resolve" | "reject">;
+    const promise = new Promise<void>((resolve, reject) => { settle = { resolve, reject }; });
+    // Attach the waiter before writing: a native response may arrive synchronously.
+    const timer = setTimeout(() => {
+      attention.answer = undefined;
+      if (attention.receipt) {
+        attention.receipt = { ...attention.receipt, recovery: { at: new Date().toISOString(), outcome: "delivery-uncertain", reason: "timeout" } };
+        this.persistAttention(attentionRef, attention);
+      }
+      settle.reject(new StructuredAnswerError("attention answer timed out; outcome is uncertain and the answer will not be redelivered", "uncertain"));
+    }, this.requestTimeoutMs);
+    attention.answer = { ...settle, promise, timer };
+    try {
+      if (!attention.receipt) throw new Error("Codex callback has no durable identity");
+      attention.receipt = { ...attention.receipt, dispatch: { digest, at: new Date().toISOString() } };
+      this.persistAttention(attentionRef, attention);
+      if (this.ledgerFailed || this.dead || !this.writerFenceAllowsActuation()) throw new Error("Codex answer dispatch could not be recorded under the current owner");
       this.write({ jsonrpc: "2.0", id: attention.rpcId, result });
-    });
+    } catch (error) {
+      clearTimeout(timer);
+      attention.answer = undefined;
+      settle.reject(error instanceof Error ? error : new Error(safeError(error)));
+    }
+    return promise;
+  }
+
+  private persistAttention(id: string, attention: PendingAttention): void {
+    const receipt = attention.receipt;
+    this.emit({ kind: "attention", id, method: attention.method, attention: attention.params, ...(receipt ? { codexReceipt: receipt } : {}) });
+    if (!this.ledgerFailed && receipt) this.callbackReceipts.set(id, receipt);
   }
 
   async health(): Promise<HostState> {
@@ -2997,7 +3053,7 @@ export class CodexAppServerHost implements EngineHost {
     return {
       status,
       sessionKey: this.identity.threadId,
-      endpoint: pid ? `stdio:${pid}` : "stdio:released",
+      endpoint: pid ? this.child instanceof CodexSocketTransport ? this.child.endpoint : `stdio:${pid}` : "stdio:released",
       pid,
       processStartIdentity,
       eventCursor: this.cursor,
@@ -3012,6 +3068,35 @@ export class CodexAppServerHost implements EngineHost {
         protocol: normalizeCodexProtocolReceipt({ schemaVersion: this.protocol.version, schemaDigest: this.protocol.schemaDigest, experimentalApi: this.experimentalApi,
           provider: this.providerCapabilities, models: record(this.modelCatalog)?.data, anomalies: this.protocolAnomalies }) },
     };
+  }
+
+  /** Relinquish a Viewer connection while the native callback owner survives. */
+  detachForViewerRestart(): boolean {
+    if (!(this.child instanceof CodexSocketTransport) || this.dead || this.releasing || this.released
+      || !this.writerFenceAllowsActuation() || this.childProcessOwnership() !== "owned") return false;
+    this.released = true;
+    this.writerFence = () => false;
+    this.stateListeners.clear();
+    this.child.disconnect();
+    this.nativeQueue?.queue.dispose();
+    this.clearVoiceStreamTimers();
+    this.closeSubscribers();
+    for (const attention of this.attentions.values()) {
+      if (!attention.answer) continue;
+      clearTimeout(attention.answer.timer);
+      attention.answer.reject(new StructuredAnswerError("Viewer disconnected after answer dispatch; confirmation is pending", "uncertain"));
+      attention.answer = undefined;
+    }
+    for (const request of this.pending.values()) {
+      clearTimeout(request.timer);
+      request.reject(new Error("Viewer connection relinquished"));
+    }
+    this.pending.clear();
+    this.rejectPendingDeliveries(new Error("Viewer connection relinquished"));
+    this.rejectPendingCompactions(new Error("Viewer connection relinquished"));
+    this.rejectRealtimeStart(new Error("Viewer connection relinquished"));
+    this.memoryCell?.close();
+    return true;
   }
 
   async release(): Promise<void> {
@@ -3337,8 +3422,9 @@ export class CodexAppServerHost implements EngineHost {
         if (event.status !== "completed") this.cancelledVoiceTurns.add(event.turnId);
       }
       if (event.kind === "attention") {
-        this.attentions.set(event.id, { rpcId: "restored", method: event.method, origin: "restored", isBlocking: !isNonblockingCodexQuestion(event.method, event.attention) });
+        this.attentions.set(event.id, { rpcId: event.codexReceipt?.identity.requestId ?? "restored", method: event.method, origin: "restored", params: record(event.attention) ?? {}, receipt: event.codexReceipt, isBlocking: !isNonblockingCodexQuestion(event.method, event.attention) });
       }
+      if ((event.kind === "attention" || event.kind === "attention-resolved") && event.codexReceipt) this.callbackReceipts.set(event.id, event.codexReceipt);
       if (event.kind === "attention-resolved") this.attentions.delete(event.id);
       if (event.kind === "realtime-delivery-progress") {
         this.realtimeDeliveries.set(event.deliveryId, {
@@ -3397,9 +3483,12 @@ export class CodexAppServerHost implements EngineHost {
     }
     for (const [attentionId, attention] of [...this.attentions]) {
       if (attention.origin !== "restored") continue;
-      const previous = this.events.findLast(event => event.kind === "attention" && event.id === attentionId);
-      if (previous?.kind === "attention") this.emit({ kind: "attention", id: attentionId, method: attention.method,
-        attention: { ...(record(previous.attention) ?? {}), unowned: true } });
+      attention.params = { ...attention.params, unowned: true };
+      if (attention.receipt && !attention.receipt.recovery) attention.receipt = {
+        ...attention.receipt,
+        recovery: { at: new Date().toISOString(), outcome: attention.receipt.dispatch ? "delivery-uncertain" : "callback-unavailable", reason: "resumed-without-callback" },
+      };
+      this.persistAttention(attentionId, attention);
     }
     this.emitThreadStatus(resumedTurnTerminalized && !this.activeTurnId
       ? { type: "idle", activeFlags: [] }
@@ -3954,18 +4043,46 @@ export class CodexAppServerHost implements EngineHost {
     if (!method) return this.fail(new Error("Codex app-server message has no method"));
     const params = record(message.params) ?? {};
     if (typeof id === "number" || typeof id === "string") {
-      const baseAttentionId = `${method}:${String(id)}`;
+      const identity = codexRequestIdentity(this.callbackGeneration, method, id, params);
+      const existing = [...this.callbackReceipts].find(([, receipt]) => sameCodexRequest(receipt.identity, identity));
+      const requestDigest = codexRequestDigest(params);
+      if (existing) {
+        if (existing[1].requestDigest !== requestDigest) { this.protocolAnomalies++; this.notifyStateListeners(); return; }
+        const restored = this.attentions.get(existing[0]);
+        if (restored?.origin === "restored" && !existing[1].serverResolution) {
+          restored.origin = "current";
+          restored.params = params;
+          restored.receipt = { ...existing[1] };
+          if (!restored.receipt.dispatch) delete restored.receipt.recovery;
+          this.persistAttention(existing[0], restored);
+        }
+        // The original callback and its dispatch receipt remain authoritative.
+        return;
+      }
+      if ([...this.callbackReceipts.values()].some(receipt => receipt.identity.generation === this.callbackGeneration && receipt.identity.requestId === id)) {
+        this.protocolAnomalies++;
+        this.notifyStateListeners();
+        return;
+      }
+      let protocolError: string | undefined;
+      try { decodeCodexServerRequest(this.protocol, id, method, params); }
+      catch (error) { protocolError = `Codex request cannot be answered: ${safeError(error)}; raw answers are disabled`; this.protocolAnomalies++; }
+      // Runtime attention IDs share one journal across conversations. Include
+      // the native owner and typed RPC identity so concurrent hosts cannot alias.
+      const baseAttentionId = `${method}:${String(id)}:${codexRequestDigest(identity)}`;
       const currentRequest = [...this.attentions].find(([, attention]) => attention.origin === "current" && attention.rpcId === id && attention.method === method);
       let attentionId = currentRequest?.[0] ?? baseAttentionId;
-      if (!currentRequest && this.attentions.has(attentionId)) {
+      if (!currentRequest && (this.attentions.has(attentionId) || this.callbackReceipts.has(attentionId))) {
         const generation = `${baseAttentionId}:generation-${this.cursor + 1}`;
         attentionId = generation;
         let collision = 0;
-        while (this.attentions.has(attentionId)) attentionId = `${generation}:${++collision}`;
+        while (this.attentions.has(attentionId) || this.callbackReceipts.has(attentionId)) attentionId = `${generation}:${++collision}`;
       }
-      this.attentions.set(attentionId, { ...currentRequest?.[1], rpcId: id, method, origin: "current", isBlocking: !isNonblockingCodexQuestion(method, params) });
-      const event = { kind: "attention" as const, id: attentionId, method, attention: params };
-      if (!reconcileBufferedLifecycle || !this.consumeBufferedNotification(event)) this.emit(event);
+      const attention: PendingAttention = { rpcId: id, method, origin: "current", params, isBlocking: !isNonblockingCodexQuestion(method, params), receipt: {
+        identity, requestDigest, receivedAt: receivedAt ?? new Date().toISOString(), ...(protocolError ? { protocolError } : {}),
+      } };
+      this.attentions.set(attentionId, attention);
+      this.persistAttention(attentionId, attention);
       return;
     }
     if (!this.protocol.hasMethod("ServerNotification", method)) { this.protocolAnomalies++; this.notifyStateListeners(); return; }
@@ -4077,15 +4194,21 @@ export class CodexAppServerHost implements EngineHost {
       const requestId = params.requestId;
       if (typeof requestId !== "number" && typeof requestId !== "string") return;
       const resolved = [...this.attentions.entries()].find(([, attention]) =>
-        attention.origin === "current" && attention.rpcId === requestId);
+        (attention.origin === "current" || attention.receipt?.identity.generation === this.callbackGeneration) && attention.rpcId === requestId
+        && (attention.receipt?.identity.threadId === null || attention.receipt?.identity.threadId === params.threadId));
       if (!resolved) return;
       const answer = resolved[1].answer;
-      if (answer) {
-        clearTimeout(answer.timer);
-        answer.resolve();
-      }
+      const previous = resolved[1].receipt;
+      const resolution = previous?.dispatch ? "answered" : "server-resolved";
+      const receipt: CodexRequestReceipt | undefined = previous ? { ...previous, serverResolution: { at: receivedAt ?? new Date().toISOString(), outcome: resolution } } : undefined;
       this.attentions.delete(resolved[0]);
-      this.emit({ kind: "attention-resolved", id: resolved[0], resolution: answer ? "answered" : "server-resolved" });
+      this.emit({ kind: "attention-resolved", id: resolved[0], resolution, ...(receipt ? { codexReceipt: receipt } : {}) });
+      if (this.ledgerFailed) {
+        if (answer) { clearTimeout(answer.timer); answer.reject(new StructuredAnswerError("Codex resolution could not be persisted; delivery is uncertain", "uncertain")); }
+        return;
+      }
+      if (receipt) this.callbackReceipts.set(resolved[0], receipt);
+      if (answer) { clearTimeout(answer.timer); answer.resolve(); }
       return;
     }
     /* Everything below this line projects into the owned thread's conversation,
@@ -4276,10 +4399,16 @@ export class CodexAppServerHost implements EngineHost {
 
   private rejectPendingAnswers(error: Error): void {
     const rejection = new Error(safeError(error));
-    for (const attention of this.attentions.values()) {
+    for (const [id, attention] of this.attentions) {
+      if (!this.ledgerFailed && attention.receipt && !attention.receipt.serverResolution && !attention.receipt.recovery) {
+        attention.receipt = { ...attention.receipt, recovery: {
+          at: new Date().toISOString(), outcome: attention.receipt.dispatch ? "delivery-uncertain" : "callback-unavailable", reason: "process-lost",
+        } };
+        this.persistAttention(id, attention);
+      }
       if (!attention.answer) continue;
       clearTimeout(attention.answer.timer);
-      attention.answer.reject(rejection);
+      attention.answer.reject(new StructuredAnswerError(rejection.message, attention.receipt?.dispatch ? "uncertain" : "unavailable"));
       attention.answer = undefined;
     }
   }

@@ -1,3 +1,4 @@
+import { detachCodexHostForViewerRestart } from "./registry";
 import { spawnDiagnosticErrorForRegistry } from "@/lib/agent/spawnDiagnostics";
 import { ownerRelaySpawnAuthorized } from "@/lib/externalRelay/ownerAuthority";
 import { loadPipelinesForRetirement } from "@/lib/pipelines/store";
@@ -2445,7 +2446,8 @@ export async function handOverHostForDemotion(
  * claim each durable row on its bounded startup retry. All releases begin in
  * one turn so several slow engine shutdowns consume one grace window.
  *
- * A host whose turn is in flight is cut by this release, and so is an idle
+ * A surviving native Codex listener keeps its turn and callback ownership.
+ * Other hosts whose turns are in flight are cut by this release, as is an idle
  * Claude host still waiting on background work, so the continuation it is
  * owed is recorded first (#1835); the store retries the record and falls
  * back to its pending journal. A host whose obligation still could not be
@@ -2467,6 +2469,7 @@ export async function releaseStructuredDeliveryHostsForDemotion(
   await Promise.allSettled(registrations.map(async ({ key, host }) => {
     const registry = unpublishedLaunchHosts.get(sessionKeyId(key))?.registry ?? state.activeRegistry;
     try {
+      if (registry && await detachCodexHostForViewerRestart(registry, key, host)) return;
       const current = await host.health();
       if (registry) await handOverHostForDemotion(registry, key, current, options, () => host.health());
       else if ((current.status === "active" || current.status === "attention")

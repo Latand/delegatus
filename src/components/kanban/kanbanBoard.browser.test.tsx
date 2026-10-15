@@ -31461,3 +31461,42 @@ describe("native caller operator association", () => {
     } finally { served.stop(); }
   }, 300_000);
 });
+
+describe("Codex durable callback actions", () => {
+  browserTest("offered scopes, custom questions and recovery outcomes render on phone and desktop", async () => {
+    const out = path.resolve(".artifacts/codex-callbacks"); fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    const records: unknown[] = [];
+    try {
+      for (const width of [390, 1280]) for (const lang of ["en", "uk"]) for (const scenario of ["permissions", "question", "uncertain", "unavailable"]) {
+        const page = await browser.newPage({ viewport: { width, height: 900 } });
+        await page.addInitScript(language => localStorage.setItem("llv_lang", language), lang);
+        await page.goto(`${server.base}/?scenario=codex-callbacks&callback=${scenario}`);
+        const card = page.locator("[data-codex-callback]");
+        await card.waitFor();
+        if (scenario === "permissions") {
+          await card.getByRole("button", { name: translate(lang as "en" | "uk", "runtime.attention.action.grantSession") }).click();
+          expect(await page.locator("[data-callback-answer]").textContent()).toContain('"scope":"session"');
+        } else if (scenario === "question") {
+          const inputs = card.locator("input");
+          await inputs.nth(0).fill("Custom region"); await inputs.nth(1).fill("Release note");
+          await card.getByRole("button", { name: translate(lang as "en" | "uk", "runtime.attention.answer"), exact: true }).click();
+          expect(await page.locator("[data-callback-answer]").textContent()).toContain("Custom region");
+        } else {
+          expect(await card.locator("button,input").count()).toBe(0);
+          expect(await card.textContent()).toContain(translate(lang as "en" | "uk", scenario === "uncertain" ? "runtime.attention.unconfirmed" : "runtime.attention.unavailable"));
+          expect(await card.textContent()).toContain(translate(lang as "en" | "uk", scenario === "uncertain" ? "runtime.attention.deliveryUncertain" : "runtime.attention.callbackUnavailable"));
+        }
+        const geometry = await card.evaluate(element => ({ width: element.scrollWidth, client: document.documentElement.clientWidth }));
+        expect(geometry.width).toBeLessThanOrEqual(geometry.client);
+        const frame = `${width}-${lang}-${scenario}.png`;
+        await page.screenshot({ path: path.join(out, frame), fullPage: true });
+        records.push({ width, lang, scenario, frame, geometry });
+        await page.close();
+      }
+      fs.mkdirSync("evidence/codex-callbacks", { recursive: true });
+      fs.writeFileSync("evidence/codex-callbacks/controls.json", JSON.stringify({ records }, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 180_000);
+});

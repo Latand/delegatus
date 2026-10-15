@@ -206,23 +206,30 @@ export interface RuntimeAttentionRequest {
     "prompt": string;
     options?: Array<{ label: string; description?: string; recommended?: boolean }>;
     multiSelect?: boolean;
+    isOther?: boolean;
+    isSecret?: boolean;
   };
   questions?: Array<{
     header?: string;
     "prompt": string;
     options?: Array<{ label: string; description?: string; recommended?: boolean }>;
     multiSelect?: boolean;
+    isOther?: boolean;
+    isSecret?: boolean;
   }>;
   protocol?: {
     engine: RuntimeEngine;
     method: string;
     questionId?: string;
     questionIds?: string[];
+    questionOptions?: string[][];
     input?: Record<string, unknown>;
+    actions?: import("./codexAttentionActions").CodexAttentionAction[];
   };
 }
 
 export interface RuntimeAttention {
+  codexReceipt?: import("./codexRequestReceipt").CodexRequestReceipt;
   id: string;
   conversationId: string;
   kind: RuntimeAttentionKind;

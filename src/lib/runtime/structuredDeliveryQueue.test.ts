@@ -3170,3 +3170,21 @@ test("dispatch authorization is rechecked before a thread-read resend", async ()
   expect(sends).toBe(1);
   expect(statuses).toContain("failed");
 });
+
+test.each(["uncertain", "unavailable"] as const)("a %s Codex callback outcome is never requeued after its process dies", async outcome => {
+  const { StructuredAnswerError } = await import("./engineHost");
+  let writes = 0, terminal = false;
+  const transitions: string[] = [];
+  const target = host(async () => ({ outcome: "turn-started", turnId: "unused" }));
+  target.answer = async () => { writes++; throw new StructuredAnswerError("callback process lost", outcome); };
+  target.health = async () => ({ ...idleState(), ...(writes ? { status: "dead" as const } : {}) });
+  const queue = new StructuredDeliveryQueue({
+    effects: async () => terminal ? [] : [{ id: "effect:callback-loss", kind: "runtime.answer", eventSeq: 1, payload: {
+      operationId: "callback-loss", conversationId: "conversation-one", attentionId: "callback", resolution: { decision: "accept" },
+    } }],
+    transition: async (_id, status) => { transitions.push(status); if (status === "uncertain" || status === "failed") terminal = true; },
+  }, () => target);
+  await queue.drain(); await queue.drain();
+  expect(writes).toBe(1);
+  expect(transitions).toEqual(["delivering", outcome === "uncertain" ? "uncertain" : "failed"]);
+});
