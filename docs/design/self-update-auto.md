@@ -628,14 +628,19 @@ request settle: the manual path's pending restart moves from memory
 
 ### 6.3 Pruning, now that nobody presses the button
 
-With updates arriving by themselves, release directories pile up on a shared
-disk (14 of them, 4.6 GB, in the facts table). After an automatic apply settles, release directories under
-`releasesDir` are removed except the ones web and the runtime host run, the
-pointer's, the rollback target's, and the newest remaining one. Removal is
-`git worktree remove --force <dir>` from the checkout, followed by
-`git worktree prune`. A directory that is not a registered worktree of this
-checkout is never touched, and nothing is removed by an ad-hoc recursive
-delete. Manual-only installs keep today's behaviour (Deferred).
+Updated 2026-10-15 for #2886. Every settled successful apply runs retention,
+including seat and operator applies. Update admission remains busy until the
+pass finishes. Active, serving, rollback, in-flight, process-used and locked
+releases stay, together with releases built within 24 hours and the newest
+three older releases. `LLV_SELF_UPDATE_KEEP_RELEASES` changes that count
+(minimum one). Without a readable Linux process scan, retention removes nothing.
+
+Registered release worktrees are removed individually. Other worktree
+registrations stay. Completed retained builds release only
+`.next/cache/webpack`; runtime caches and serving output stay. Per-candidate
+errors are recorded in `self-update/retention.json` and never change the
+successful apply's outcome. Package containers follow the same protections.
+The full policy and recovery rules are in [bounded-cleanup.md](bounded-cleanup.md).
 
 ## 7. The setting and the dialog
 
@@ -940,9 +945,8 @@ reload row, evidence).
   and forges other than github.com.
 - **The long-wait Needs-you item was delivered by #2430.** It carries the
   Deploy now / Keep waiting decision under the current drain contract.
-- **Restoring the pointer after a manual restart falls back**, and **pruning
-  on manual-only installs.** Both are the operator's to see today. They could
-  share the automatic path's code later.
+- **Restoring the pointer after a manual restart falls back.** Release
+  retention for manual installs was delivered by #2886 (§6.3).
 - **Reloading an idle page by itself** after an update.
 - **An MCP read of the automatic state** for orchestrators
   (`deployment_status`).

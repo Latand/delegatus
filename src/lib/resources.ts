@@ -2666,6 +2666,6 @@ export async function readResourcesWithDiagnostic(fresh = false, options: Resour
   }
   const read = withViewerSection(await resourcesReader().read(fresh, options));
   /* Loaded here, never by the collector worker that imports this module. */
-  const [{ readDiskPressure }, { worktreeSweepStatus }, { tempSweepStatus }] = await Promise.all([import("@/lib/state/diskPressure"), import("@/lib/pipelines/worktreeSweep"), import("@/lib/tempSweep")]);
-  return { ...read, payload: { ...read.payload, diskPressure: await readDiskPressure(), worktreeSweep: worktreeSweepStatus(), tempSweep: tempSweepStatus() } };
+  const [{ readDiskPressure }, { worktreeSweepStatus }, { tempSweepStatus }, { releaseRetentionStatus }] = await Promise.all([import("@/lib/state/diskPressure"), import("@/lib/pipelines/worktreeSweep"), import("@/lib/tempSweep"), import("@/lib/selfUpdate/retention")]);
+  return { ...read, payload: { ...read.payload, diskPressure: await readDiskPressure(), worktreeSweep: worktreeSweepStatus(), tempSweep: tempSweepStatus(), releaseRetention: releaseRetentionStatus() } };
 }
