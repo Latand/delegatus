@@ -138,3 +138,40 @@ test("real MCP form decisions retain undo and reject native association, other p
   await expect(api.seat_tick_settings({ clientRequestId: "late", autonomyDecision: { ...entry, id: "late", review: { ...entry.review, reviewId: late.id } } })).rejects.toThrow("no longer active");
   expect(findPrototypeRound(null, late.id)?.decision).toBeUndefined();
 });
+
+test("the tool schema preserves rejection and per-question skips with seat attribution", async () => {
+  setSystemTime(now);
+  const project = "autonomy-form-options";
+  seed(project);
+  const api = binding(project);
+  const round = await publishPrototype({ clientRequestId: "skip-form", title: "Choose layout", questions: [
+    { id: "settled", text: "Already decided?", options: [{ label: "Yes", recommended: true }, { label: "No" }], other: true },
+    { id: "layout", text: "Which layout?", options: [{ label: "Compact", recommended: true }, { label: "Spacious" }], other: true },
+  ] }, null, { conversationId: "conversation_seat" }, project);
+  const parsed = TOOL_INPUT_SCHEMAS.seat_tick_settings.parse({ clientRequestId: "skip-question", autonomyDecision: {
+    startedAt: at, id: "skip", decision: "Keep the settled answer; use a custom layout", why: "The first question was answered", undo: "Amend the saved form",
+    review: { reviewId: round.id, chosen: [], comment: "Keep this literal text: Skipped by the operator", answers: [
+      { questionId: "settled", options: [], skipped: true }, { questionId: "layout", options: [], other: true, customText: "Compact with a wider title" },
+    ] },
+  } });
+  await api.seat_tick_settings(parsed);
+  const decision = findPrototypeRound(null, round.id)!.decision!;
+  expect(decision.answers?.[0]?.skipped).toBe(true);
+  expect(decision.delivery.text).toContain("Skipped by the seat");
+  expect(decision.delivery.text).toContain("Seat's custom note");
+  expect(decision.delivery.text).toContain("Keep this literal text: Skipped by the operator");
+
+  const variant = await publishPrototype({ clientRequestId: "reject-form", title: "Reject layout", questions: [
+    { id: "layout", text: "Which layout?", options: [{ label: "Compact", recommended: true }, { label: "Spacious" }], other: true },
+  ] }, null, { conversationId: "conversation_seat" }, project);
+  mutatePrototypeRound(null, variant.id, held => {
+    delete held.questions;
+    held.variants = [{ number: 1, name: "Compact", description: "A compact layout", frames: [], videos: [] }];
+  });
+  await api.seat_tick_settings(TOOL_INPUT_SCHEMAS.seat_tick_settings.parse({ clientRequestId: "reject-variants", autonomyDecision: {
+    startedAt: at, id: "reject", decision: "Revise the layout", why: "The title is clipped", undo: "Amend the saved form and choose Compact",
+    review: { reviewId: variant.id, chosen: [], comment: "Keep the full title visible", reject: true },
+  } }));
+  expect(findPrototypeRound(null, variant.id)?.decision?.rejected).toBe(true);
+  expect(readSeatTickSettings(project).autonomy?.decisions.at(-1)?.reviewState).toBe("decided");
+});
