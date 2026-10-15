@@ -15,7 +15,27 @@ export function fakeAgentMemory(options: { mode?: MemoryMode; admissionFailure?:
   const reaps: string[] = [];
   const cell = new AgentMemoryCell(plan, { cgroupRoot: root, cgroupForPid: () => options.admissionFailure ? null : group,
     runner: (command, args) => { reaps.push([command, ...args].join(" ")); return ""; } });
-  return { cell, reaps, kill: () => { fs.writeFileSync(file, "oom 1\noom_kill 1\n"); cell.readEvents(); }, dispose: () => { cell.close(); fs.rmSync(root, { recursive: true, force: true }); } };
+  /* A descendant moved into its own transient scope beside the agent's, as
+     `systemd-run --user --scope` places it (#2790). Its counters roll up into
+     the slice, never into the agent's own leaf scope. */
+  const sliceFile = path.join(root, plan.slice, "memory.events");
+  fs.writeFileSync(sliceFile, "oom 0\noom_kill 0\n");
+  let sliceCounters = { oom: 0, kills: 0 };
+  const sibling = (name: string) => {
+    const scopeFile = path.join(root, plan.slice, name, "memory.events");
+    fs.mkdirSync(path.dirname(scopeFile), { recursive: true });
+    fs.writeFileSync(scopeFile, "oom 0\noom_kill 0\n");
+    return {
+      kill: () => {
+        fs.writeFileSync(scopeFile, "oom 1\noom_kill 1\n");
+        sliceCounters = { oom: sliceCounters.oom + 1, kills: sliceCounters.kills + 1 };
+        fs.writeFileSync(sliceFile, `oom ${sliceCounters.oom}\noom_kill ${sliceCounters.kills}\n`);
+        cell.readEvents();
+      },
+      end: () => { fs.rmSync(path.dirname(scopeFile), { recursive: true, force: true }); cell.readEvents(); },
+    };
+  };
+  return { cell, reaps, sibling, kill: () => { fs.writeFileSync(file, "oom 1\noom_kill 1\n"); cell.readEvents(); }, dispose: () => { cell.close(); fs.rmSync(root, { recursive: true, force: true }); } };
 }
 
 /** An owned child and a surviving tool; every signal stays inside this fixture. */

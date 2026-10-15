@@ -608,20 +608,24 @@ describe("the successor-epoch case", () => {
     expect(await probe()).toMatchObject({ quiet: false, blockers: { turns: 1, turnList: [{ reason: "turn-claimed" }] } });
   });
 
-  test("an adopted wrapper is judged on the row reference its new claim carried over, and its new writer", async () => {
+  test("a successor claim waits out the wrapper a dead row still records, then is judged on its own writer", async () => {
     const path = transcript("settled");
     const c = conversation(path);
     const a = spawn();
     const claimA = claimHost(c.key, path, a.identity, "live", "a-turn");
     publish(c.id, c.key, path, claimA.fence, "a-turn");
-    // The host publishes `dead` before its late reap; a successor claim adopts the orphaned wrapper.
+    // The host publishes `dead` before its late reap; its wrapper is still running.
     f.registry.setStructuredHostClaimed(c.key, columns(a.identity, claimA.epoch, "a-turn"), "dead", claimA.fence.slice(0, claimA.fence.lastIndexOf(":")), claimA.epoch);
     release(c.key, claimA);
+    /* A successor beside a live wrapper is two writers on one session (#2790). */
+    expect(f.registry.claimStructuredHost(c.key, viewer)).toBeNull();
+    await exit(a);
     const adopted = f.registry.claimStructuredHost(c.key, viewer);
     expect(adopted).toMatchObject({ claimEpoch: 2, structuredHost: { process: { pid: a.child.pid }, activeTurnRef: "a-turn" } });
-    f.registry.setStructuredHostClaimed(c.key, columns(a.identity, 2, "a-turn"), "idle", adopted!.claimOwner!, 2);
+    const b = spawn();
+    f.registry.setStructuredHostClaimed(c.key, columns(b.identity, 2, "a-turn"), "idle", adopted!.claimOwner!, 2);
     expect(await probe()).toMatchObject({ quiet: false, blockers: { turns: 1, turnList: [{ reason: "turn-claimed" }] } });
-    f.registry.setStructuredHostClaimed(c.key, columns(a.identity, 2, null), "idle", adopted!.claimOwner!, 2);
+    f.registry.setStructuredHostClaimed(c.key, columns(b.identity, 2, null), "idle", adopted!.claimOwner!, 2);
     publish(c.id, c.key, path, `${adopted!.claimOwner}:2`, null);
     expect(await probe()).toMatchObject({ quiet: true, blockers: { turns: 0 } });
   });
@@ -768,9 +772,11 @@ describe("the delayed predecessor write", () => {
     const seatA = heldHost(a.child.pid, { status: "idle", activeTurnRef: null });
     await bindStructuredDeliveryQueue([{ key: c.key, host: seatA.host }], { registry: f.registry, client: f.client, hostlessSettleIntervalMs: 0 });
     expect(row(c.id)).toMatchObject({ writerClaim: claimA.fence });
-    // A reports `dead` before its reap; B's claim adopts the terminal row at epoch 2.
+    // A reports `dead` before its reap; B's claim takes the terminal row at epoch 2 once A's process is gone.
     f.registry.setStructuredHostClaimed(c.key, columns(a.identity, claimA.epoch), "dead", claimA.fence.slice(0, claimA.fence.lastIndexOf(":")), claimA.epoch);
     release(c.key, claimA);
+    expect(f.registry.claimStructuredHost(c.key, viewer)).toBeNull();
+    await exit(a);
     const b = spawn();
     const claimed = f.registry.claimStructuredHost(c.key, viewer);
     expect(claimed).toMatchObject({ claimEpoch: 2 });

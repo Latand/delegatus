@@ -554,9 +554,11 @@ any of these holds:
   `registry.ts:7021`), so the claim belongs to that host.
 
 Otherwise the claimant is a **setup owner** for the row's artifact: the row is
-terminal, where the registry admits a claim over an orphaned wrapper, or it
-records no live host. It holds while its process lives and is released when
-that process is gone.
+terminal, or it records no live host. A terminal row can still name a live
+wrapper when an earlier release wrote the claim; since #2790 the registry
+refuses a new claim over any row whose recorded process may still run. The
+setup owner holds while its process lives and is released when that process
+is gone.
 
 Clause a decides finding 2 as the review reproduced it. Clause b decides the
 same state as it occurs in production, where the claimant is the Viewer: a

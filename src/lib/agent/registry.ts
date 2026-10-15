@@ -1,4 +1,6 @@
+import { performanceSpans } from "@/lib/performanceSpans";
 import { normalizeHostMemory, type HostMemoryState } from "@/lib/runtime/agentMemoryState";
+import { normalizeHostEndCause, type HostEndCause } from "@/lib/runtime/hostEndCause";
 import { recordBlockingWait, withWaitCorrelation, type BlockingWaitCorrelation } from "@/lib/blockingWaits";
 import crypto from "node:crypto";
 import { parseRuntimeIdleKillFence } from "@/lib/runtime/commands";
@@ -133,6 +135,8 @@ export interface TmuxHostEvidence {
 
 export interface StructuredHostColumns {
   memory?: HostMemoryState;
+  /** Why the recorded host ended (#2790); kept with the terminal row. */
+  ended?: HostEndCause;
   kind: "codex-app-server" | "claude-broker" | "copilot-acp";
   endpoint: string;
   process: ProcessIdentity | null;
@@ -2162,6 +2166,7 @@ function normalizeStructuredHost(value: unknown): StructuredHostColumns | null {
       ? { pendingToolUses: normalizePendingToolUses(host.pendingToolUses) }
       : {}),
     ...(normalizeHostMemory(host.memory) ? { memory: normalizeHostMemory(host.memory)! } : {}),
+    ...(normalizeHostEndCause(host.ended) ? { ended: normalizeHostEndCause(host.ended)! } : {}),
     ...(normalizeProviderRetry(host.providerRetry) ? { providerRetry: normalizeProviderRetry(host.providerRetry) } : {}),
     ...(Number.isSafeInteger(host.releaseHandoffClaimEpoch) && (host.releaseHandoffClaimEpoch ?? -1) >= 0
       ? { releaseHandoffClaimEpoch: host.releaseHandoffClaimEpoch }
@@ -5511,8 +5516,8 @@ export class AgentRegistry {
   }
 
   private readKeyed<T>(reader: (file: RegistryFile) => T): T {
-    return this.sqliteStore && (this.sqliteMode === "read" || this.sqliteMode === "sqlite")
-      ? this.sqliteStore.read(reader) : reader(this.readOnlySnapshot());
+    return performanceSpans.sync("registry.keyed", () => this.sqliteStore && (this.sqliteMode === "read" || this.sqliteMode === "sqlite")
+      ? this.sqliteStore.read(reader) : reader(this.readOnlySnapshot()));
   }
 
   /** A detached delivery view for one conversation, including historical aliases. */
@@ -7538,6 +7543,40 @@ export class AgentRegistry {
     return withdrawn;
   }
 
+  /** Lifts a captured termination tree from its row once every identity it
+      retained is confirmed gone, and changes nothing else: the stopped root
+      stays recorded, proven dead, so a claim that follows reads the columns
+      it would have read had the host been reaped (#2790). Bound to the root
+      the capture named. A retained identity this caller did not confirm, or
+      one that may still run, keeps the whole capture as the replacement fence. */
+  settleStructuredTerminationSurvivors(
+    key: SessionKey,
+    expectedRoot: Readonly<ProcessIdentity>,
+    confirmedSurvivors: readonly ProcessIdentity[],
+    source = "unspecified",
+  ): boolean {
+    const identityKey = (identity: Readonly<ProcessIdentity>) => `${identity.pid}:${identity.startIdentity}:${identity.bootEpoch ?? ""}`;
+    const settled = this.mutate((file): ProcessIdentity[] | null => {
+      const entry = file.entries[sessionKeyId(key)];
+      const current = entry?.structuredHost?.process ?? null;
+      if (!entry || !current || !sameRecordedProcessIdentity(current, expectedRoot) || this.ownerAlive(current)) return null;
+      const retained = entry.structuredTerminationSurvivors ?? [];
+      const confirmed = new Set(confirmedSurvivors.map(identityKey));
+      if (retained.some(identity => !confirmed.has(identityKey(identity)) || this.ownerAlive(identity))) return null;
+      if (entry.structuredTerminationSurvivors === undefined) return [];
+      delete entry.structuredTerminationSurvivors;
+      entry.updatedAt = now();
+      return clone(retained);
+    });
+    if (settled && settled.length > 0) {
+      journalStructuredTermination(this.filename, {
+        at: now(), event: "settled", source, key: sessionKeyId(key), root: expectedRoot.pid,
+        pids: settled.map(identity => identity.pid),
+      });
+    }
+    return settled !== null;
+  }
+
   /**
    * Ends the publication marker a process-less launch left on its row (#2020).
    *
@@ -7732,18 +7771,22 @@ export class AgentRegistry {
   /** Why a claimed write was refused: true when the caller still owns the
       writer fence and only a captured termination tree holds the row. */
   structuredHostWriteHeldByTermination(key: SessionKey, claimOwner: string, claimEpoch: number): boolean {
-    const entry = this.readOnlySnapshot().entries[sessionKeyId(key)];
-    return entry?.claimOwner === claimOwner
+    return this.readKeyed(file => {
+      const entry = file.entries[sessionKeyId(key)];
+      return entry?.claimOwner === claimOwner
       && entry.claimEpoch === claimEpoch
       && entry.structuredHost?.writerClaimEpoch === claimEpoch
       && (entry.structuredTerminationSurvivors?.length ?? 0) > 0;
+    });
   }
 
   ownsStructuredHostClaim(key: SessionKey, claimOwner: string, claimEpoch: number): boolean {
-    const entry = this.readOnlySnapshot().entries[sessionKeyId(key)];
-    return entry?.claimOwner === claimOwner
+    return this.readKeyed(file => {
+      const entry = file.entries[sessionKeyId(key)];
+      return entry?.claimOwner === claimOwner
       && entry.claimEpoch === claimEpoch
       && entry.structuredHost?.writerClaimEpoch === claimEpoch;
+    });
   }
 
   /** Atomically claims a stale structured row and advances its writer fence.
@@ -7766,7 +7809,6 @@ export class AgentRegistry {
           claimEpoch: 0, claimOwner: null, pendingAction: "resume" as const, updatedAt: now() }
         : null);
       if (!entry) return null;
-      const terminal = entry.status === "unhosted" || entry.status === "dead";
       // A dead-host cleanup clears these columns. Resume setup must publish
       // its writer claim before starting the replacement host, under this lock.
       const structuredHost = entry.structuredHost
@@ -7778,12 +7820,15 @@ export class AgentRegistry {
          mutation loads rows lazily rather than from an assembled snapshot, so
          the origin decision is applied to this one row here (#739). */
       reboundEntryMcpGrant(file, key, this.mcpGrantPolicy, entryGrantAttestors(file, key));
-      /* A terminal status permits adoption of an orphaned wrapper while the
-         claim owner remains the writer fence. A host can publish `dead` before
-         its late reap releases that claim, and its live writer must finish
-         before a successor advances the epoch. */
+      /* A recorded engine process that may still run owns the session,
+         whatever the row's status says. A host publishes `dead` when its
+         stream fails and reaps the child later, and a Viewer generation that
+         ends in between leaves a terminal row over a live engine still
+         writing in its worktree. Granting the claim then starts a second
+         engine beside it (#2790). Callers that may stop the orphan do so by
+         its recorded identity and claim again once it is proven gone. */
       const liveHost = structuredHost.process;
-      if (!terminal && liveHost && this.ownerAlive(liveHost)) return null;
+      if (liveHost && this.ownerAlive(liveHost)) return null;
       const requestedOwner = structuredClaimOwner(owner);
       if (entry.claimOwner) {
         const priorOwner = structuredClaimIdentity(entry.claimOwner);
@@ -9578,11 +9623,11 @@ export class AgentRegistry {
   }
 
   autoBalancePolicy(engine: AgentEngine): AutoBalancePolicy {
-    return clone(this.readOnlySnapshot().autoBalance[engine]);
+    return this.readKeyed(file => clone(file.autoBalance[engine]));
   }
 
   quotaObservations(engine: AgentEngine): DurableQuotaObservation[] {
-    return clone(Object.values(this.readOnlySnapshot().quotaObservations[engine]));
+    return this.readKeyed(file => clone(Object.values(file.quotaObservations[engine])));
   }
 
   /** Records one account's live reading outside the controller's evaluation

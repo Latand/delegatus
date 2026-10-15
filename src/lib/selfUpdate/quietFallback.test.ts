@@ -461,14 +461,22 @@ test("current writer setup retains custody after fallback without a host process
   expect(await probeQuiet(snapshot, ports(f.journal), Date.now(), true)).toMatchObject({ quiet: true, blockers: { turns: 0 } });
 });
 
-/* claimStructuredHost lets setup claim a dead/unhosted row that still records
-   the previous wrapper. That wrapper answering idle cannot settle the setup. */
+/* A setup claim over a dead/unhosted row that still records the previous
+   wrapper. claimStructuredHost no longer grants one while that wrapper lives
+   (#2790), but rows an earlier release wrote keep the shape, and the wrapper
+   answering idle still cannot settle the setup. */
 async function claimOverLivingPreviousHost(status: "dead" | "unhosted", setup: ReturnType<typeof Bun.spawn>, reused = false) {
   settleTranscript();
   await fallback(status);
   const identity = captureProcessIdentity(setup.pid)!;
-  const claim = f.registry.claimStructuredHost(f.key, reused ? { ...identity, startIdentity: "different-start" } : identity, { allowUnhosted: true });
-  expect(claim).toMatchObject({ status, structuredHost: { process: { pid: child.pid } } });
+  const owner = reused ? { ...identity, startIdentity: "different-start" } : identity;
+  expect(f.registry.claimStructuredHost(f.key, owner, { allowUnhosted: true })).toBeNull();
+  const entry = f.registry.readOnlySnapshot().entries[`codex:${f.key.sessionId}`]!;
+  const claimEpoch = entry.claimEpoch + 1;
+  f.registry.upsert({ ...entry, claimEpoch, claimOwner: `structured-host:${JSON.stringify(owner)}`,
+    structuredHost: { ...entry.structuredHost!, writerClaimEpoch: claimEpoch } });
+  expect(f.registry.readOnlySnapshot().entries[`codex:${f.key.sessionId}`])
+    .toMatchObject({ status, structuredHost: { process: { pid: child.pid } } });
   await bindStructuredDeliveryQueue([], { registry: f.registry, client: f.client, hostlessSettleIntervalMs: 0 });
 }
 

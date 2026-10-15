@@ -1,11 +1,13 @@
+import { tmpdir } from "node:os";
 import { afterAll, describe, expect, jest, spyOn, test } from "bun:test";
 import * as childProcess from "node:child_process";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { builtRevision, realPorts, releaseBuilt, UpdateRunner, type StepPorts } from "./steps";
+import { builtRevision, prepareExistingRelease, realPorts, releaseBuilt, UpdateRunner, type StepPorts } from "./steps";
 import { releaseDirFor } from "./release";
+import { runGit } from "./git";
 import { setCpuPortsForTests } from "@/lib/runtime/cpuPlacement";
 import { CpuPressureGate, DEFAULT_CPU_PRESSURE_POLICY } from "@/lib/runtime/cpuPressure";
 import { CHECKOUT_STEPS as STEP_NAMES, type CheckoutStepName as StepName } from "./types";
@@ -18,12 +20,30 @@ const RELEASE = `${RELEASES}/a1b2c3d4e5f6`;
 const roots: string[] = [];
 afterAll(() => { for (const root of roots) rmSync(root, { recursive: true, force: true }); });
 
+test("retry recovery preserves a file created after the deleted-path listing", async () => {
+  const root = mkdtempSync(join(tmpdir(), "llv-release-recovery-race-")); roots.push(root);
+  const git = (args: string[]) => {
+    const result = childProcess.spawnSync("git", ["-c", "user.name=Fixture", "-c", "user.email=noreply@example.invalid", ...args], { cwd: root, encoding: "utf8" });
+    expect(result.status).toBe(0);
+  };
+  git(["init", "-q", "-b", "main"]);
+  writeFileSync(join(root, "source.txt"), "committed\n"); git(["add", "source.txt"]); git(["commit", "-qm", "initial"]);
+  rmSync(join(root, "source.txt"));
+  let injected = false;
+  const refusal = await prepareExistingRelease(root, async (args, cwd) => {
+    if (args[0] === "checkout-index") { injected = true; writeFileSync(join(root, "source.txt"), "late unique data\n"); }
+    return runGit(args, cwd);
+  });
+  expect(injected).toBeTrue(); expect(refusal).not.toBeNull();
+  expect(readFileSync(join(root, "source.txt"), "utf8")).toBe("late unique data\n");
+});
+
 interface Script { lines?: string[]; exit?: number }
 
 /* A stubbed spawn: each step's command is recognised by its argv and answers
    with scripted lines and an exit code. Nothing real runs. */
 function harness(scripts: Partial<Record<StepName, Script>>, overrides: Partial<StepPorts> = {}, stepTimeoutMs?: Partial<Record<StepName, number>>, livenessPollMs?: number) {
-  const logDir = mkdtempSync("/var/tmp/self-update-steps-");
+  const logDir = mkdtempSync(join(tmpdir(), "llv-self-update-steps-"));
   roots.push(logDir);
   const calls: string[][] = [];
   const cwds: string[] = [];
@@ -44,6 +64,7 @@ function harness(scripts: Partial<Record<StepName, Script>>, overrides: Partial<
     buildIdReadable: () => true,
     publish: (release) => { published.push(release); },
     now: () => clock,
+    prepareExistingRelease: async () => null,
     ...overrides,
   };
   const runner = new UpdateRunner(
@@ -387,7 +408,7 @@ describe("child exit while command output is draining", () => {
     const children = [old, retry];
     const spawn = spyOn(childProcess, "spawn").mockImplementation((() => children.shift()!) as unknown as typeof childProcess.spawn);
     const real = realPorts(() => {});
-    const logDir = mkdtempSync("/var/tmp/self-update-retry-"); roots.push(logDir);
+    const logDir = mkdtempSync(join(tmpdir(), "llv-self-update-retry-")); roots.push(logDir);
     const options = { cwd: logDir, env: { TMPDIR: logDir }, onLine: () => {} };
     const abandoned = real.run(["fixture"], options).catch((error: unknown) => error);
     old.emit("exit", null, "SIGTERM");
@@ -416,7 +437,7 @@ describe("child exit while command output is draining", () => {
     let held = true;
     const gate = new CpuPressureGate(DEFAULT_CPU_PRESSURE_POLICY, { sample: () => held ? 90 : null, now: () => 0 });
     const real = realPorts(() => {}, { pressure: () => gate, pollMs: 5 });
-    const logDir = mkdtempSync("/var/tmp/self-update-retry-"); roots.push(logDir);
+    const logDir = mkdtempSync(join(tmpdir(), "llv-self-update-retry-")); roots.push(logDir);
     const options = { cwd: logDir, env: { TMPDIR: logDir }, onLine: () => {} };
     const abandoned = real.run(["fixture"], options).catch((error: unknown) => error);
     old.emit("exit", null, "SIGTERM");
@@ -702,7 +723,7 @@ describe("UpdateRunner", () => {
    directory. The same target then costs a pointer, never another build. */
 describe("a release directory that already passed its ready check", () => {
   function built(overrides: Partial<StepPorts> = {}) {
-    const base = mkdtempSync("/var/tmp/self-update-built-"); roots.push(base);
+    const base = mkdtempSync(join(tmpdir(), "llv-self-update-built-")); roots.push(base);
     const releasesDir = join(base, "releases"); const dir = releaseDirFor(releasesDir, TARGET);
     const calls: string[][] = []; const published: { sha: string; dir: string }[] = [];
     const real = realPorts(() => {});
@@ -717,6 +738,7 @@ describe("a release directory that already passed its ready check", () => {
       },
       memAvailableMb: () => memory, revParse: async (ref) => ref === "HEAD" ? head : TARGET,
       exists: existsSync, buildIdReadable: real.buildIdReadable, builtRevision: real.builtRevision, markBuilt: real.markBuilt,
+      prepareExistingRelease: async () => null,
       publish: (release) => { published.push(release); }, now: () => 1_000, ...overrides,
     };
     const runner = () => new UpdateRunner({ checkout: CHECKOUT, remote: "/var/tmp/remote.git", branch: "main", bun: "/opt/bun", logDir: join(base, "logs"), releasesDir, env: { PATH: "/usr/bin" } }, ports, () => {});
@@ -776,7 +798,7 @@ describe("a release directory that already passed its ready check", () => {
 /* The real runner behind install and build: heavy work is refused without CPU
    containment and waits for CPU pressure; git steps ask for neither. */
 describe("release install and build admission", () => {
-  const dir = () => { const base = mkdtempSync("/var/tmp/self-update-admission-"); roots.push(base); return base; };
+  const dir = () => { const base = mkdtempSync(join(tmpdir(), "llv-self-update-admission-")); roots.push(base); return base; };
   const available = { probe: () => ({ kind: "available" as const, systemdVersion: 255 }), runner: () => "" };
   async function withCpu<T>(ports: Parameters<typeof setCpuPortsForTests>[0], body: () => Promise<T>): Promise<T> {
     const previous = process.env.LLV_AGENT_CPU;
@@ -873,4 +895,54 @@ describe("release install and build admission", () => {
       for (const expected of ["--slice=delegatus-agents-work.slice", "CPUWeight=100", "CPUQuota=300%", "CPUQuotaPeriodSec=20ms"]) expect(args).toContain(expected);
     });
   });
+});
+
+
+test("checkout of an existing release directory restores deleted tracked files", async () => {
+  const root = mkdtempSync(join(process.env.TMPDIR!, "llv-release-restore-")); roots.push(root);
+  const git = (args: string[], cwd = root) => {
+    const result = childProcess.spawnSync("git", args, { cwd, encoding: "utf8" }); expect(result.status).toBe(0); return result.stdout.trim();
+  };
+  git(["init", "-q", "-b", "main"]); writeFileSync(join(root, "tracked.txt"), "recoverable"); git(["add", "."]);
+  git(["-c", "user.name=Fixture", "-c", "user.email=noreply@example.invalid", "commit", "-qm", "fixture"]);
+  const target = git(["rev-parse", "HEAD"]); const releases = join(root, "releases"); const release = releaseDirFor(releases, target);
+  git(["worktree", "add", "--detach", release]); rmSync(join(release, "tracked.txt"));
+  const ports: StepPorts = {
+    run: async (command, options) => {
+      if (command[0] === "git" && command[1] === "checkout") git(command.slice(1), options.cwd);
+      return 0;
+    }, memAvailableMb: () => 8192, revParse: async () => target, exists: existsSync, buildIdReadable: () => true,
+    now: Date.now, publish: () => {},
+  };
+  const runner = new UpdateRunner({ checkout: root, releasesDir: releases, remote: "fixture", branch: "main", bun: "bun", logDir: join(root, "logs"), env: {} }, ports, () => {});
+  await runner.start(target);
+  expect(runner.state.state).toBe("done"); expect(readFileSync(join(release, "tracked.txt"), "utf8")).toBe("recoverable");
+});
+
+test("retrying an existing release preserves tracked edits and untracked obstructions", async () => {
+  const root = mkdtempSync(join(process.env.TMPDIR!, "llv-release-preserve-")); roots.push(root);
+  const git = (args: string[], cwd = root) => {
+    const result = childProcess.spawnSync("git", args, { cwd, encoding: "utf8" });
+    if (result.status !== 0) throw new Error(result.stderr);
+    return result.stdout.trim();
+  };
+  git(["init", "-q", "-b", "main"]);
+  writeFileSync(join(root, "source.txt"), "committed source\n"); writeFileSync(join(root, ".gitignore"), "operator.local\n"); git(["add", "."]);
+  git(["-c", "user.name=Fixture", "-c", "user.email=noreply@example.invalid", "commit", "-qm", "fixture"]);
+  const target = git(["rev-parse", "HEAD"]); const releases = join(root, "releases");
+  const release = releaseDirFor(releases, target); git(["worktree", "add", "--detach", release]);
+  writeFileSync(join(release, "source.txt"), "unique operator edit\n");
+  writeFileSync(join(release, "obstructing.txt"), "keep this too\n");
+  writeFileSync(join(release, "operator.local"), "ignored operator data\n");
+  const ports: StepPorts = {
+    run: async (command, options) => command.includes("checkout") ? (git(command.slice(1), options.cwd), 0) : 0,
+    memAvailableMb: () => 8192, revParse: async () => target, exists: existsSync, buildIdReadable: () => true,
+    now: Date.now, publish: () => {},
+  };
+  const runner = new UpdateRunner({ checkout: root, releasesDir: releases, remote: "fixture", branch: "main", bun: "bun", logDir: join(root, "logs"), env: {} }, ports, () => {});
+  await runner.start(target);
+  expect(runner.state.state).toBe("failed");
+  expect(readFileSync(join(release, "source.txt"), "utf8")).toBe("unique operator edit\n");
+  expect(readFileSync(join(release, "obstructing.txt"), "utf8")).toBe("keep this too\n");
+  expect(readFileSync(join(release, "operator.local"), "utf8")).toBe("ignored operator data\n");
 });

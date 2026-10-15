@@ -16,9 +16,11 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, w
 import { createHash, randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
+import { writeJsonDurably } from "@/lib/state/durableJson";
 import { realExec } from "@/lib/workflows/provision";
 
-import { cancelUntakenRequest, DIALOG_WRITER, readAuto, requestAutoRestart, restorePointer, writeAuto, pruneReleaseWorktrees, type AutoState, type AutoView, type AutoWriter } from "./auto";
+import { cancelUntakenRequest, DIALOG_WRITER, readAuto, requestAutoRestart, restorePointer, writeAuto, type AutoState, type AutoView, type AutoWriter } from "./auto";
+import { retainReleases, type RetentionInputs } from "./retention";
 import { activeDrain, DRAIN_NOTICE_MS, DRAIN_LEASE_MS, DRAIN_START_WINDOW_MS, releaseDrain, writeDrain } from "./drain";
 import { GreenReader, type GreenVerdict } from "./green";
 import { appendHistory, findAutoSwitchRequest, readHistory, storeAutoSwitchResponse } from "./history";
@@ -187,6 +189,7 @@ export class SelfUpdateService {
   private savedUpdate: UpdateState | null = null;
   private checking: Promise<void> | null = null;
   private pollTimer: ReturnType<typeof setTimeout> | null = null;
+  private retaining = false;
   private runner: RunnerPort | null = null;
   private runnerRecord: string | null = null;
   private managed: ManagedRecord | null;
@@ -789,8 +792,39 @@ export class SelfUpdateService {
     const rollback = this.auto.rollbackPointer;
     this.auto = { ...this.auto, waitingSince: null, waitingTarget: null, lastBlockers: null, quietSince: null, noticeAt: null, rollbackPointer: null, rollbackCaptured: false };
     this.saveAuto();
-    try { await (this.deps.prune ?? pruneReleaseWorktrees)(record, rollback); }
-    catch (error) { console.error("[self-update] release cleanup failed", error instanceof Error ? error.name : "unknown"); }
+    await this.retain(record, rollback);
+  }
+
+  private async retain(record: LauncherRecord, rollback: string | null = null): Promise<void> {
+    if (this.retaining || this.runner?.state.state === "running" || this.pendingRestart || this.auto.pending
+      || ["building", "ready", "switching"].includes(this.apply.current?.state ?? "")) return;
+    if (existsSync(record.requestFile)) return;
+    this.retaining = true;
+    const current = () => {
+      const file = this.deps.env[LAUNCHER_RECORD_ENV]?.trim() || launcherControlFile(record.requestFile, "launcher");
+      const owner = readLauncherRecord(file);
+      if (!owner) throw new Error("cannot read launcher record for retention");
+      const intent = this.apply.current;
+      const inputs: RetentionInputs = {
+        rollbackPointers: [rollback, this.auto.rollbackPointer, intent?.rollbackPointer ?? null],
+        rollbackPackage: intent?.rollbackPackage?.root,
+        inFlight: [
+          ...(this.runner && ["running", "failed"].includes(this.runner.state.state) && this.runner.state.releaseDir ? [this.runner.state.releaseDir] : []),
+          ...(intent && ["building", "ready", "switching", "failed"].includes(intent.state) ? [releaseDirFor(record.releasesDir, intent.target)] : []),
+        ],
+      };
+      return { record: owner ?? record, inputs };
+    };
+    try {
+      if (this.deps.prune) await this.deps.prune(record, rollback);
+      else await retainReleases(record, current().inputs, { now: this.deps.now, env: this.deps.env,
+        reportFile: join(this.deps.dir, "retention.json"), current });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      try { writeJsonDurably(join(this.deps.dir, "retention.json"), { at: new Date(this.deps.now()).toISOString(), removed: [], reclaimedCacheBytes: 0, kept: [], errors: [message] }); }
+      catch (error) { console.error("[self-update] cannot write retention report", error instanceof Error ? error.message : String(error)); }
+      console.error("[self-update] release cleanup failed", message);
+    } finally { this.retaining = false; }
   }
 
   private finishManagedAuto(snapshot?: Snapshot): void {
@@ -1394,7 +1428,7 @@ export class SelfUpdateService {
   /** No await may separate this check from the custody write it admits. */
   private reserve(record: LauncherRecord, write: () => void, ownedApply?: string): ActionResult | null {
     const intent = this.apply.current;
-    if (this.runner?.state.state === "running" || managedActive(this.managed)
+    if (this.retaining || this.runner?.state.state === "running" || managedActive(this.managed)
       || intent && ["building", "ready", "switching"].includes(intent.state) && intent.requestId !== ownedApply) return busy("update");
     if (this.pendingRestart) return busy(this.pendingRestart.role === "web" ? "restart-web" : "restart-runtime-host");
     if (this.auto.pending) return busy(this.auto.pending.role === "web" ? "restart-web" : "restart-runtime-host");
@@ -1418,6 +1452,7 @@ export class SelfUpdateService {
   }
 
   async startUpdate(clientKey: string): Promise<ActionResult> {
+    if (this.retaining) return busy("update");
     const decision = await this.decide();
     const snapshot = await this.snapshot();
     if (snapshot.busy) return busy(snapshot.busy);
@@ -1900,7 +1935,7 @@ export class SelfUpdateService {
   }
 
   active(): boolean {
-    return this.checking !== null || (this.runner?.state.state === "running") || managedActive(this.managed) || this.pendingRestart !== null;
+    return this.retaining || this.checking !== null || (this.runner?.state.state === "running") || managedActive(this.managed) || this.pendingRestart !== null;
   }
 
   /** The installation as it is now, without the work in progress: what every
@@ -2046,6 +2081,7 @@ export class SelfUpdateService {
       // The handoff this apply owned is verified or rolled back. Its launcher
       // holds the settings in memory; the key leaves the disk.
       releaseLauncherCredentials(record.checkout ?? packageRoot(record), this.custodyEnvironment());
+      if (settled === "done" && !intent.rolledBack) await this.retain(record);
     }
     const at = new Date(now).toISOString();
 
@@ -2082,7 +2118,7 @@ export class SelfUpdateService {
        entry whose PID is gone is a launch that failed, which blocks nothing,
        and the surface offers to start it again. */
     const moving = (view: ProcessView) => view.state === "stopping" || view.state === "starting";
-    let busy: Busy = runner.state.state === "running" ? "update" : null;
+    let busy: Busy = this.retaining || runner.state.state === "running" ? "update" : null;
     if (!busy && moving(web)) busy = "restart-web";
     if (!busy && moving(host)) busy = "restart-runtime-host";
     const pending = this.pendingRestart;

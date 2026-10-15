@@ -193,7 +193,7 @@ The automatic path (after #2430) files the same request under #2430's custody. T
 Remove the "update it the way you installed it" sentences in both locales.
 
 Also in P2:
-- `pruneReleaseWorktrees` protects the directory of `launcher.revision`, which is the execve rollback target.
+- `retainReleases` protects the directory of `launcher.revision`, which is the execve rollback target.
 - Docs: README Update section and service section, plus `docs/design/self-update.md`. Commit this design as `docs/design/self-update-every-install.md`.
 
 ### P3 — `deploy_exact_sha` on a checkout install

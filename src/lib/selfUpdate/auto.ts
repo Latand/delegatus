@@ -1,11 +1,10 @@
 import { randomUUID } from "node:crypto";
-import { mkdirSync, readFileSync, renameSync, writeFileSync, rmSync, statSync } from "node:fs";
-import { basename, dirname, resolve, sep } from "node:path";
+import { mkdirSync, readFileSync, renameSync, writeFileSync, rmSync } from "node:fs";
+import { dirname } from "node:path";
 import type { GreenVerdict } from "./green";
 import { publishLauncherRequest, type LauncherRecord, type LauncherRole } from "./launcher";
 import type { QuietBlockers } from "./quiet";
 import type { Revision } from "./types";
-import { runGit } from "./git";
 import { endRestartGate, restartGateFile } from "./restartGate";
 
 export type AutoPhase = "idle" | "checks" | "not-green" | "building" | "waiting" | "deploying" | "restarting-web" | "restarting-host";
@@ -125,36 +124,4 @@ export async function startSelfUpdateAuto(): Promise<void> {
   // A dynamic import avoids resolving the state directory while this module loads.
   const { selfUpdateService } = await import("./instance");
   selfUpdateService().startAuto();
-}
-
-/** Remove only registered release worktrees generated in this release root. */
-export async function pruneReleaseWorktrees(record: LauncherRecord, rollbackPointer: string | null, run: typeof runGit = runGit): Promise<void> {
-  if (!record.checkout) return;
-  const listed = await run(["worktree", "list", "--porcelain"], record.checkout);
-  if (listed.code !== 0) throw new Error("cannot list release worktrees");
-  const root = resolve(record.releasesDir) + sep;
-  const candidates = listed.stdout.split(/\n\n/).flatMap((block) => {
-    const directory = /^worktree (.+)$/m.exec(block)?.[1];
-    const sha = /^HEAD ([a-f0-9]{40})$/m.exec(block)?.[1];
-    if (!directory || !sha || !resolve(directory).startsWith(root) || dirname(resolve(directory)) !== resolve(record.releasesDir)
-      || !/^[a-f0-9]{12}$/.test(basename(directory))) return [];
-    try { return [{ directory, sha, mtime: statSync(directory).mtimeMs }]; } catch { return []; }
-  });
-  let rollbackDir: string | null = null;
-  try { rollbackDir = (JSON.parse(rollbackPointer ?? "null") as { dir?: string } | null)?.dir ?? null; } catch { /* checkout rollback */ }
-  const current = [record.web.revision, record.runtimeHost.revision, record.launcher.revision];
-  let pointerDir: string | null = null;
-  try { pointerDir = (JSON.parse(readFileSync(record.releasePointer, "utf8")) as { dir?: string }).dir ?? null; } catch { /* no pointer */ }
-  const protectedDirs = new Set([pointerDir, rollbackDir].filter((part): part is string => !!part).map((part) => resolve(part)));
-  const currentRelease = (candidate: { sha: string }) => current.some((revision) => revision && candidate.sha.startsWith(revision));
-  const newestRemaining = candidates.filter((candidate) => !protectedDirs.has(resolve(candidate.directory)) && !currentRelease(candidate))
-    .sort((a, b) => b.mtime - a.mtime)[0]?.directory;
-  if (newestRemaining) protectedDirs.add(resolve(newestRemaining));
-  for (const candidate of candidates) {
-    if (protectedDirs.has(resolve(candidate.directory)) || currentRelease(candidate)) continue;
-    const removed = await run(["worktree", "remove", "--force", candidate.directory], record.checkout);
-    if (removed.code !== 0) throw new Error("cannot remove a release worktree");
-  }
-  const pruned = await run(["worktree", "prune"], record.checkout);
-  if (pruned.code !== 0) throw new Error("cannot prune release worktree metadata");
 }

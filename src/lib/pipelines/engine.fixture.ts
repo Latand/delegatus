@@ -1725,6 +1725,7 @@ async function frozenSurvivorStartup(pipelineId: string, terminateSurvivor: () =
   });
   const selected: string[] = [];
   const scheduled: Array<() => void> = [];
+  let rescheduled: (() => void) | undefined;
   let retired = false;
   const dependencies: import("@/lib/runtime/startup").StructuredStartupDependencies = {
     registry, client, orchestratorSeats: () => [], refreshTranscriptState: async () => {},
@@ -1741,7 +1742,24 @@ async function frozenSurvivorStartup(pipelineId: string, terminateSurvivor: () =
       }
       return [];
     },
-    schedule: (callback) => { scheduled.push(callback); return { unref() {} }; },
+    schedule: (callback) => { scheduled.push(callback); rescheduled?.(); return { unref() {} }; },
+  };
+  const runScheduledProbe = async () => {
+    expect(scheduled).toHaveLength(1);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const next = new Promise<void>((resolve, reject) => {
+      rescheduled = resolve;
+      timer = setTimeout(() => reject(new Error("startup evidence probe did not reschedule")), 2_000);
+    });
+    try {
+      scheduled.shift()!();
+      // The production evidence read is asynchronous. Its next scheduled
+      // probe proves the read finished before assertions or fixture teardown.
+      await next;
+    } finally {
+      clearTimeout(timer);
+      rescheduled = undefined;
+    }
   };
   const before = structuredClone(registry.readOnlySnapshot().entries);
   const pipelineBefore = loadPipelines().find((pipeline) => pipeline.id === pipelineId)!;
@@ -1751,8 +1769,7 @@ async function frozenSurvivorStartup(pipelineId: string, terminateSurvivor: () =
     expect(new Set(structuredStartupDeferral()?.hostKeys)).toEqual(new Set(members.map(({ key }) => `${key.engine}:${key.sessionId}`)));
     expect(registry.readOnlySnapshot().entries).toEqual(before);
     for (let probe = 0; probe < 2; probe++) {
-      expect(scheduled).toHaveLength(1);
-      scheduled.shift()!();
+      await runScheduledProbe();
       expect(selected).toEqual([]);
       expect(structuredStartupDeferral()?.nextProbeMs).toBe(2_000 * 2 ** probe);
       expect(registry.readOnlySnapshot().entries).toEqual(before);

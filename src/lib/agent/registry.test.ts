@@ -4258,6 +4258,69 @@ describe("structured host retirement (issue #1199)", () => {
     expect(retired?.status).toBe("dead");
   });
 
+  /* #2790: a host publishes `dead` as soon as its stream fails and is reaped
+     later, and a Viewer generation that dies inside that window leaves the
+     row terminal while the engine process keeps writing. The row's status
+     says the stream is gone; only the recorded process says whether the
+     agent is. A successor claim would start a second engine on the same
+     session and worktree. */
+  for (const status of ["dead", "unhosted"] as const) {
+    test(`a ${status} row is not claimable while its recorded engine process lives`, () => {
+      const engineProcess = { pid: 424_300, startIdentity: "424300:engine" };
+      const goneViewer = { pid: 424_301, startIdentity: "424301:viewer" };
+      const alive = new Set([engineProcess.pid]);
+      const store = registry((owner) => alive.has(owner.pid));
+      store.upsert({
+        ...hostedEntry(engineProcess),
+        status,
+        claimEpoch: 1,
+        claimOwner: `structured-host:${JSON.stringify(goneViewer)}`,
+      });
+      const successor = { pid: 424_302, startIdentity: "424302:successor" };
+
+      expect(store.claimStructuredHost(KEY, successor, { allowUnhosted: true })).toBeNull();
+      expect(store.readOnlySnapshot().entries[`codex:${KEY.sessionId}`]).toMatchObject({
+        status,
+        claimEpoch: 1,
+        structuredHost: { process: engineProcess, writerClaimEpoch: 1 },
+      });
+
+      alive.delete(engineProcess.pid);
+      expect(store.claimStructuredHost(KEY, successor, { allowUnhosted: true })).toMatchObject({
+        claimEpoch: 2,
+        structuredHost: { writerClaimEpoch: 2 },
+      });
+    });
+  }
+
+  /* #2790: an orphan stop lifts its captured tree only when every captured
+     writer is proven gone, and leaves the stopped root recorded so the claim
+     that follows reads the same columns a reaped host leaves. */
+  test("a captured orphan tree settles only once each captured writer is confirmed gone", () => {
+    const root = { pid: 424_310, startIdentity: "424310:engine" };
+    const tool = { pid: 424_311, startIdentity: "424311:tool" };
+    const alive = new Set([root.pid, tool.pid]);
+    const store = registry((owner) => alive.has(owner.pid));
+    store.upsert({ ...hostedEntry(root), status: "dead", claimEpoch: 1 });
+    expect(store.recordStructuredTerminationSurvivors(KEY, root, [root, tool])).toBeTrue();
+    const row = () => store.readOnlySnapshot().entries[`codex:${KEY.sessionId}`]!;
+
+    alive.delete(root.pid);
+    /* The tool was never confirmed, then is confirmed while it still runs. */
+    expect(store.settleStructuredTerminationSurvivors(KEY, root, [root])).toBeFalse();
+    expect(store.settleStructuredTerminationSurvivors(KEY, root, [root, tool])).toBeFalse();
+    expect(row().structuredTerminationSurvivors).toEqual([root, tool]);
+    expect(store.claimStructuredHost(KEY, { pid: 424_312, startIdentity: "424312:successor" }, { allowUnhosted: true })).toBeNull();
+
+    alive.delete(tool.pid);
+    expect(store.settleStructuredTerminationSurvivors(KEY, { pid: 424_399, startIdentity: "424399:other" }, [root, tool])).toBeFalse();
+    expect(store.settleStructuredTerminationSurvivors(KEY, root, [root, tool])).toBeTrue();
+    expect(row().structuredTerminationSurvivors).toBeUndefined();
+    expect(row()).toMatchObject({ status: "dead", claimEpoch: 1, structuredHost: { process: root } });
+    expect(store.claimStructuredHost(KEY, { pid: 424_312, startIdentity: "424312:successor" }, { allowUnhosted: true }))
+      .toMatchObject({ claimEpoch: 2 });
+  });
+
   test("a row that names no process at all is still the caller's to clear", () => {
     const store = registry();
     store.upsert(hostedEntry(null));

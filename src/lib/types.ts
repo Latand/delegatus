@@ -901,6 +901,8 @@ export interface ResourcesPayload {
   diskPressure?: import("./state/diskPressure").DiskPressure;
   /** The last worktree sweep, counts and bytes per reason. */
   worktreeSweep?: ReturnType<typeof import("./pipelines/worktreeSweep").worktreeSweepStatus>;
+  /** Release retention counts, reclaimed cache bytes and errors. */
+  releaseRetention?: ReturnType<typeof import("./selfUpdate/retention").releaseRetentionStatus>;
   /** Temp cleanup's Git and inspection holds, with counts and bytes. */
   tempSweep?: ReturnType<typeof import("./tempSweep").tempSweepStatus>;
   system: ResourcesSystem | null;

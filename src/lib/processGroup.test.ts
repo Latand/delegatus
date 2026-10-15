@@ -7,6 +7,7 @@ import { procBackend } from "@/lib/proc";
 import { resetWindowsSnapshotForTests } from "@/lib/proc/windows";
 
 import {
+  captureProcessTree,
   processTreeTerminationOrder,
   signalDetachedProcessGroup,
   signalProcessGroup,
@@ -198,4 +199,51 @@ test("a detached child falls back to its own handle when the group signal finds 
   };
   expect(signalDetachedProcessGroup(child, "SIGTERM", () => undefined)).toBe(true);
   expect(killedDirectly).toBe(true);
+});
+
+/* #2790: what a stop must read before its first signal. A tool that called
+   setsid is still a descendant while its parent runs; a member reparented
+   away is still in the group the root leads. Both are named, the root is not,
+   a pid whose identity cannot be read is left out only once it is gone, and
+   one that still runs makes the capture incomplete. */
+test("captureProcessTree names descendants and group members with their identities, never the root", () => {
+  const groups: Record<number, number> = { 100: 100, 101: 100, 102: 102, 103: 100, 104: 100, 200: 200 };
+  const capture = captureProcessTree(100, {
+    ...source([[100, 1], [101, 100], [102, 101], [103, 1], [104, 100], [200, 1]], { 104: null }),
+    processGroupId: (pid) => groups[pid] ?? null,
+    pidAlive: (pid) => pid !== 104,
+  });
+  expect(capture.identities.map((identity) => [identity.pid, identity.startIdentity]).sort()).toEqual([
+    [101, "101:start"], [102, "102:start"], [103, "103:start"],
+  ]);
+  expect(capture.unresolved).toEqual([]);
+  expect(capture.identities.every((identity) => typeof identity.bootEpoch === "string" && identity.bootEpoch.length > 0)).toBe(true);
+});
+
+test("captureProcessTree reads no group when the root leads none", () => {
+  const capture = captureProcessTree(100, {
+    ...source([[100, 1], [101, 100], [103, 1]]),
+    processGroupId: (pid) => (pid === 100 ? 1 : 100),
+  });
+  expect(capture.identities.map((identity) => identity.pid)).toEqual([101]);
+});
+
+test("captureProcessTree names a running member whose identity it could not read as unresolved", () => {
+  const capture = captureProcessTree(100, {
+    ...source([[100, 1], [101, 100], [102, 101]], { 102: null }),
+    processGroupId: () => null,
+    pidAlive: () => true,
+  });
+  expect(capture.identities.map((identity) => identity.pid)).toEqual([101]);
+  expect(capture.unresolved).toEqual([102]);
+});
+
+test("captureProcessTree names a member with no boot epoch as unresolved", () => {
+  const capture = captureProcessTree(100, {
+    ...source([[100, 1], [101, 100]]),
+    processGroupId: () => null,
+    bootEpoch: () => null,
+  });
+  expect(capture.identities).toEqual([]);
+  expect(capture.unresolved).toEqual([101]);
 });

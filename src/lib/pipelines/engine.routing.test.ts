@@ -2428,7 +2428,7 @@ test("retry-stage leaves an idle host whose transcript is still growing, and sto
   h.advanceWallClock(2_000);
   await tickPipelines([entry(attempt.agentPath!)], idle);
   const young = await patchPipeline(pipeline.id, { action: "retry-stage", expectedStageId: "build", expectedAttempt: 1 }, idle);
-  expect(young).toMatchObject({ status: 409, error: "the running attempt is not confirmed stalled or has a pending delivery" });
+  expect(young).toMatchObject({ status: 409, error: "the running attempt is not confirmed stalled" });
   expect(stops()).toEqual([]);
   expect(loadPipelines()[0]).toMatchObject({ state: "running" });
   // The same record, a minute short of the bound and then past it.
@@ -2439,6 +2439,33 @@ test("retry-stage leaves an idle host whose transcript is still growing, and sto
   await patchPipeline(pipeline.id, { action: "retry-stage", expectedStageId: "build", expectedAttempt: 1 }, idle);
   expect(stops()).toEqual([`stop-host:build:1:${attempt.conversationId}`]);
   expect(loadPipelines()[0]).toMatchObject({ state: "needs_decision", stateDetail: "confirmed stalled attempt was stopped for retry" });
+});
+
+test("retry-stage names a pending delivery apart from an attempt that is not confirmed stalled (#2790)", async () => {
+  const h = harness();
+  const pipeline = await create(h.ports, SILENT_RUN as never);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  const lane = loadPipelines()[0]!;
+  const attempt = lane.runs[0]!.attempts[0]!;
+  attempt.paneId = null;
+  savePipelines([lane]);
+  h.setStageHost(attempt.conversationId!, { outcome: "stopped" });
+  let held = true;
+  /* A stalled attempt, by every reading but the queued message waiting for it. */
+  const stalled: PipelinePorts = { ...h.ports,
+    restartRecoveryBootId: () => "same-boot",
+    restartRecoveryBootStartedAt: () => Date.parse(attempt.startedAt!) - 60_000,
+    conversationTurnInterrupted: async () => "stalled",
+    conversationDeliveryOutstanding: () => held };
+  const stops = () => h.calls.filter((call) => call.startsWith("stop-host:"));
+  h.durableTurns.set(attempt.agentPath!, { turn: "busy", message: null, lastRecordAt: Date.parse(h.ports.now()) });
+  const pending = await patchPipeline(pipeline.id, { action: "retry-stage", expectedStageId: "build", expectedAttempt: 1 }, stalled);
+  expect(pending).toMatchObject({ status: 409, error: "the running attempt has a pending delivery; retry once that delivery settles" });
+  expect(stops()).toEqual([]);
+  held = false;
+  await patchPipeline(pipeline.id, { action: "retry-stage", expectedStageId: "build", expectedAttempt: 1 }, stalled);
+  expect(stops()).toEqual([`stop-host:build:1:${attempt.conversationId}`]);
 });
 
 test("a recovery that parks names a restart only when the service restarted", async () => {
