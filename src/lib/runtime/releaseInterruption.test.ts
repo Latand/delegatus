@@ -1164,7 +1164,7 @@ test("persistent update drain holds a fresh agent turn through queue recovery, w
       body: JSON.stringify({ conversationId: conversation.id, text: "Fresh autonomous work", idempotencyKey: "during-drain" }) });
     const response = await handleRuntimeCommand(request, "send", { enabled: () => true, structuredEnabled: () => true,
       registry: () => registry, client: () => client, recordOperatorRequest: () => null,
-      retireReplySuggestions: () => ({ cleared: false, pending: false }), kick: () => {} });
+      recordOperatorAdmission: () => false, kick: () => {} });
     expect(response.status).toBe(202);
     const accepted = await response.json();
     await kickStructuredDeliveryQueue();

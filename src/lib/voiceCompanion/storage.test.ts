@@ -11,6 +11,7 @@ const { CompanionStorage } = await import("./storage");
 const { configFilePath } = await import("@/lib/configDir");
 afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
 
+
 test("settings are off by default; saving a key returns availability and writes owner-only", () => {
   const storage = new CompanionStorage();
   expect(storage.settings()).toMatchObject({ enabled: false, keySource: "missing", backend: "api" });
@@ -171,4 +172,28 @@ test("stored session authority and backend token details reject malformed data",
   }
   fs.writeFileSync(file, JSON.stringify(valid));
   expect(storage.read().sessions[session.id].startedBy).toEqual({ memberId: "m_fixture" });
+});
+
+test("the message-card storage writer waits asynchronously for a peer lock while an independent timer advances", async () => {
+  const { statePath } = await import("@/lib/configDir");
+  const { readLockPeer, threeTimerTicks } = await import("./readLock.fixture");
+  const storage = new CompanionStorage(); storage.updateSettings({ enabled: true });
+  const peer = await readLockPeer(root, statePath("voice-companion.json"), "file");
+  let settled = false;
+  const pending = storage.changeAsync(document => { document.settings.monthlyCapUsd = 27; }).finally(() => { settled = true; });
+  void pending.catch(() => {});
+  try {
+    await threeTimerTicks();
+    expect(settled).toBe(false);
+    await peer.release(); await pending;
+    expect(storage.settings().monthlyCapUsd).toBe(27);
+  } finally { await peer.release(); }
+}, 20000);
+
+test("the asynchronous message writer releases a synchronous commit before a legacy writer enters", async () => {
+  const storage = new CompanionStorage();
+  const pending = storage.changeAsync(document => { document.settings.monthlyCapUsd = 29; });
+  storage.change(document => { document.settings.enabled = false; });
+  await pending;
+  expect(storage.settings()).toMatchObject({ monthlyCapUsd: 29, enabled: false });
 });

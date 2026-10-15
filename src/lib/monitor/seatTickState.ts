@@ -396,7 +396,6 @@ export function seatTickStateForEpoch(row: SeatTickProjectState, seatEpoch: numb
     ...(row.reportSeenAt !== undefined ? { reportSeenAt: row.reportSeenAt } : {}),
     ...(row.reportFingerprint !== undefined ? { reportFingerprint: row.reportFingerprint } : {}),
     ...(row.checkFingerprint !== undefined ? { checkFingerprint: row.checkFingerprint } : {}),
-    ...(row.asksOwed ? { asksOwed: row.asksOwed } : {}),
     accounting: row.accounting,
   };
 }

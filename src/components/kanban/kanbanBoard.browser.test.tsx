@@ -23413,6 +23413,68 @@ describe("floating voice companion", () => {
      scenario, then frames the companion as the operator finds it (the character focused), the panel at its newest
      line with everything collapsed, one call opened, and a message copied. `LLV_VOICE_COMPANION_ONLY` runs it only
      when it names `transcript` (or is unset). Images go to `<hand-off>/transcript`, never into the tree. */
+  browserTest("whole orchestrator message in the existing lane and conversation panel", async () => {
+    const { sampleOrchestratorMessage } = await import("@/components/voiceCompanion/transcriptSample.fixture");
+    const out = path.join(HANDOFF, "orchestrator-message");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(OUT);
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    const readings: unknown[] = [];
+    try {
+      for (const viewport of SIZES) for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) {
+        const label = `${viewport.width}-${lang}-${scheme}`;
+        const { context, page, pageErrors } = await openVoice(browser, server.base, "&script=short&transcript=1&seatmessage=1", { viewport, scheme, lang, motion: "reduce" });
+        try {
+          for (let notice = 0; notice < 3 && await page.locator("[data-attention-toast-dismiss]").count(); notice++) await page.locator("[data-attention-toast-dismiss]").first().click();
+          await page.locator("[data-companion-talk]").click();
+          await page.waitForFunction(() => (window as unknown as { voiceCompanion: Voice }).voiceCompanion.finished, null, { timeout: 60000 });
+          const card = page.locator('[data-companion-report][data-report-id="voice-whole-message"]');
+          await card.waitFor();
+          const expected = sampleOrchestratorMessage(lang);
+          const title = lang === "uk" ? "Повідомлення" : "Message";
+          expect(await card.locator(".vc-deleg-title").innerText()).toContain(title);
+          expect(await card.locator("[data-companion-answer]").textContent()).toBe(expected);
+          const placement = await readCompanion(page);
+          expect(placement.insideViewport).toBe(true); expect(placement.overlapArea).toBe(0); expect(placement.handleArea).toBe(0);
+          const lane = await card.evaluate(element => {
+            const box = element.getBoundingClientRect(); const host = element.closest("[data-companion-lane]")?.getBoundingClientRect();
+            const answer = element.querySelector<HTMLElement>(".vc-answer")!;
+            return { inside: !!host && box.left >= host.left - 1 && box.right <= host.right + 1 && box.top >= host.top - 1 && box.bottom <= host.bottom + 1,
+              scrolls: answer.scrollHeight > answer.clientHeight, horizontalOverflow: answer.scrollWidth > answer.clientWidth + 1 };
+          });
+          expect(lane.inside).toBe(true); expect(lane.horizontalOverflow).toBe(false);
+          await page.screenshot({ path: path.join(out, `${label}-lane.png`) });
+          await page.locator("[data-voice-companion] [data-grip]").focus(); await page.keyboard.press("Enter");
+          const panel = page.locator("[data-companion-transcript-view]"); await panel.waitFor();
+          const report = panel.locator("[data-transcript-report]").filter({ hasText: title }).last();
+          await report.scrollIntoViewIfNeeded();
+          await report.evaluate(element => {
+            const body = element.closest("[data-transcript-body]")!;
+            body.scrollTop += element.getBoundingClientRect().top - body.getBoundingClientRect().top - 8;
+          });
+          expect(await report.locator(".vc-answer").textContent()).toBe(expected);
+          expect(await report.innerText()).toContain(title);
+          const geometry = await panel.evaluate(element => {
+            const box = element.getBoundingClientRect(); const body = element.querySelector<HTMLElement>("[data-transcript-body]")!;
+            const heading = element.querySelector('[data-report-status="message"] .vc-deleg-title')!.getBoundingClientRect();
+            const clip = body.getBoundingClientRect();
+            return { inside: box.left >= 0 && box.top >= 0 && box.right <= innerWidth && box.bottom <= innerHeight,
+              titleVisible: heading.top >= clip.top && heading.bottom <= clip.bottom,
+              scrolls: body.scrollHeight > body.clientHeight, overflow: body.scrollWidth > body.clientWidth + 1 };
+          });
+          expect(geometry.inside).toBe(true); expect(geometry.titleVisible).toBe(true); expect(geometry.scrolls).toBe(true); expect(geometry.overflow).toBe(false);
+          await page.screenshot({ path: path.join(out, `${label}-panel.png`) });
+          await panel.locator("[data-transcript-body]").evaluate(element => { element.scrollTop = element.scrollHeight; });
+          await page.screenshot({ path: path.join(out, `${label}-panel-end.png`) });
+          expect(pageErrors).toEqual([]);
+          readings.push({ label, bytes: Buffer.byteLength(expected), completeLane: true, completePanel: true, title, lane, panel: geometry,
+            insideViewport: placement.insideViewport, overlapArea: placement.overlapArea, handleArea: placement.handleArea });
+        } finally { await context.close(); }
+      }
+      record("orchestrator-message.json", { driver: DRIVER, synthetic: true, readings });
+    } finally { await browser.close(); server.stop(); }
+  });
+
   browserTest("transcript view: the character opens the whole conversation, calls collapsed, each message copyable, 1440 and 1000, en and uk, light and dark", async () => {
     if (ONLY && !ONLY.includes("transcript")) return;
     const out = path.join(HANDOFF, "transcript");
@@ -26920,20 +26982,22 @@ describe("queued hold kinds on the card", () => {
 describe("issue report advisory preview", () => {
   /* PR #2530: the operator decides on this message, so it has to show which
      lines become public, that approving publishes them, and what each hint
-     points at, with the replies in reach. */
+     points at. The approval is asked in the seat's decision form under it;
+     no reply pill renders in the dock or on the phone. */
   const COPY = {
     en: { heading: "PREVIEW", from: "PUBLISHED FROM HERE", to: "PUBLISHED UP TO HERE", titleLabel: "Title", below: "Everything below this line stays in this chat.",
       judgment: "Agent's privacy judgment", legacy: "No agent judgment was recorded for this preview.", hints: "Detector hints", none: "None found.", warning: "Warning: ",
       port: "a port", closing: ["files exactly the title and body above", "public issue in the Delegatus repository", "readable by anyone"], unprevented: "Hints do not prevent this.",
-      approve: "Yes, publish as a public issue", reply: "Yes, publish report " },
+      reply: "Yes, publish report " },
     uk: { heading: "ПОПЕРЕДНІЙ ПЕРЕГЛЯД", from: "ПУБЛІКУЄТЬСЯ ЗВІДСИ", to: "ПУБЛІКУЄТЬСЯ ДОСЮДИ", titleLabel: "Назва", below: "Усе нижче цього рядка лишається в цьому чаті.",
       judgment: "Оцінка приватності від агента", legacy: "Для цього перегляду оцінку агента не записано.", hints: "Підказки детекторів", none: "Нічого не знайдено.", warning: "Попередження: ",
       port: "порт", closing: ["із назви й тексту вище", "публічний issue в репозиторії Delegatus", "може прочитати будь-хто"], unprevented: "Підказки цьому не перешкоджають.",
-      approve: "Так, публікуй як публічний issue", reply: "Так, публікуй звіт " },
+      reply: "Так, публікуй звіт " },
   } as const;
   const DOTTED = "203.0.113.22:8898";
+  const REPORT_FORM = `pr_${"f".repeat(32)}`;
 
-  browserTest("the preview bounds the published text, quotes hints verbatim, says approving publishes, and keeps the replies in reach", async () => {
+  browserTest("the preview bounds the published text, quotes hints verbatim, says approving publishes, and asks approval in a form with no reply pills", async () => {
     const out = path.resolve(".artifacts/issue-report-hints/rendered");
     fs.rmSync(out, { recursive: true, force: true });
     fs.mkdirSync(out, { recursive: true });
@@ -26947,11 +27011,13 @@ describe("issue report advisory preview", () => {
         const copy = COPY[lang];
         const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=agent-report&report-preview=${variant}`, { width, height }, scheme, lang, "reduce", phone);
         try {
-          if (phone) await page.locator("[data-mobile2-seat-card]").click();
+          /* The seat card's open control: with a form waiting, the card's middle is its «Questions» chip. */
+          if (phone) await page.locator("[data-mobile2-seat-open]").click();
           const preview = page.locator("[data-tts-message]").filter({ hasText: copy.heading }).first();
           await preview.waitFor();
-          const drafts = page.locator("[data-reply-suggestion]");
-          await drafts.first().waitFor();
+          /* The seat's approval form, asked under the preview. */
+          const pointer = page.locator(`[data-decision-pointer="${REPORT_FORM}"]`);
+          await pointer.waitFor();
           const frame = (position: string) => page.screenshot({ path: path.join(out, `${variant}-${lang}-${scheme}-${width}-${position}.png`) });
 
           /* The order a reader meets the parts in: the bounded text, the line that ends it, then the review. */
@@ -26986,16 +27052,13 @@ describe("issue report advisory preview", () => {
             expect(line.slice(0, line.indexOf(": "))).not.toMatch(/_|\(written\)/);
           }
 
-          /* As the chat rests: the end of the message, with the replies under it. */
-          const reach = async () => page.evaluate(() => {
+          /* As the chat rests: the end of the message and the form's pointer under it, and no pill anywhere. */
+          const reach = async (form: string) => page.evaluate((id) => {
             const box = (node: Element | null) => { const rect = node?.getBoundingClientRect(); return rect ? { left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom } : null; };
-            const row = document.querySelector("[data-reply-suggestions]");
             const field = [...document.querySelectorAll("textarea")].find((node) => node.getBoundingClientRect().height > 0) ?? null;
-            return { placement: row?.getAttribute("data-reply-suggestions") ?? null, row: box(row), approve: box(row?.querySelector("[data-reply-suggestion]") ?? null), composer: box(field) };
-          });
-          expect(await drafts.allInnerTexts()).toHaveLength(3);
-          expect((await drafts.first().innerText()).trim()).toBe(copy.approve);
-          const resting = await reach();
+            return { pills: document.querySelectorAll("[data-reply-suggestions], [data-reply-suggestion]").length, pointer: box(document.querySelector(`[data-decision-pointer="${id}"]`)), composer: box(field) };
+          }, form);
+          const resting = await reach(REPORT_FORM);
           await frame("end");
           /* Walked by the wheel, as a reader does: the feed follows its own end until the operator moves it. */
           const walkTo = async (target: ReturnType<typeof preview.locator>, block: "start" | "center") => {
@@ -27012,13 +27075,13 @@ describe("issue report advisory preview", () => {
             await page.waitForTimeout(250);
           };
           await walkTo(preview, "start");
-          const top = await reach();
+          const top = await reach(REPORT_FORM);
           await frame("top");
           const visible: Record<string, boolean> = {};
           for (const marker of [copy.from, copy.to]) {
             const line = preview.locator("b").filter({ hasText: marker });
             await walkTo(line, "center");
-            /* The marker is drawn inside the feed, clear of the composer and the floating replies. */
+            /* The marker is drawn inside the feed, clear of the composer. */
             visible[marker] = await line.evaluate((node) => {
               const rect = node.getBoundingClientRect();
               const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
@@ -27028,18 +27091,15 @@ describe("issue report advisory preview", () => {
             await frame(marker === copy.from ? "start" : "boundary");
           }
           for (const placed of [resting, top]) {
-            expect(placed.row).not.toBeNull();
+            expect(placed.pills).toBe(0);
+            expect(placed.pointer).not.toBeNull();
             expect(placed.composer).not.toBeNull();
-            if (phone) {
-              expect(placed.row!.left).toBeGreaterThanOrEqual(0);
-              expect(placed.row!.right).toBeLessThanOrEqual(width);
-              expect(placed.approve!.left).toBeGreaterThanOrEqual(0);
-              expect(placed.approve!.right).toBeLessThanOrEqual(width);
-              expect(placed.row!.top).toBeGreaterThanOrEqual(0);
-              expect(placed.row!.bottom).toBeLessThanOrEqual(placed.composer!.top);
-              expect(placed.composer!.bottom).toBeLessThanOrEqual(height);
-            }
+            if (phone) expect(placed.composer!.bottom).toBeLessThanOrEqual(height);
           }
+          /* At rest the pointer is on screen, whole, between the preview and the composer. */
+          expect(resting.pointer!.left).toBeGreaterThanOrEqual(0);
+          expect(resting.pointer!.right).toBeLessThanOrEqual(width);
+          expect(resting.pointer!.bottom).toBeLessThanOrEqual(resting.composer!.top);
 
           const geometry = await preview.evaluate((node) => {
             const rect = node.getBoundingClientRect();
@@ -27061,25 +27121,29 @@ describe("issue report advisory preview", () => {
           expect(geometry.textLeft).toBeGreaterThanOrEqual(0);
           expect(geometry.textRight).toBeLessThanOrEqual(width);
 
-          /* Approving takes two actions on every surface: the draft lands in the field, and nothing is sent. */
-          let approval: { field: string; sent: number; draftsLeft: number } | null = null;
+          /* Approving is the form's first option, which names the whole digest, and «Answer». */
+          let approval: { label: string; posted: unknown; pills: number } | null = null;
           if (variant === "many" && scheme === "light") {
-            if (phone) await drafts.first().tap(); else await drafts.first().click();
-            const field = page.locator("textarea").filter({ visible: true }).first();
-            await page.waitForFunction((prefix) => [...document.querySelectorAll("textarea")].some((node) => node.value.startsWith(prefix)), copy.reply);
-            approval = {
-              field: await field.inputValue(),
-              sent: await page.locator("[data-tts-message], [data-outbox-row]").filter({ hasText: copy.reply }).count(),
-              draftsLeft: await drafts.count(),
-            };
-            expect(approval.field).toBe(`${copy.reply}${"a".repeat(64)}`);
-            expect(approval.sent).toBe(0);
-            expect(approval.draftsLeft).toBe(3);
-            await frame("approve-tapped");
+            await pointer.locator("[data-decision-pointer-open]").click();
+            const card = page.locator(`[data-decision-card="open"][data-decision-review="${REPORT_FORM}"]`).filter({ visible: true }).first();
+            await card.waitFor();
+            const yes = card.locator('[data-prototype-option="publish-report:0"]');
+            const label = (await yes.innerText()).replace(/\s+/g, " ").trim();
+            expect(label).toContain(`${copy.reply}${"a".repeat(64)}`);
+            await frame("approval-form");
+            if (phone) await yes.tap(); else await yes.click();
+            await card.locator("[data-decision-send]").click();
+            await page.waitForFunction(() => (window as unknown as { decisionPosts: unknown[] }).decisionPosts.length > 0);
+            const posts = await page.evaluate(() => (window as unknown as { decisionPosts: unknown[] }).decisionPosts);
+            expect(posts).toHaveLength(1);
+            expect(posts[0]).toMatchObject({ reviewId: REPORT_FORM, answers: [{ questionId: "publish-report", options: [0] }] });
+            approval = { label, posted: posts[0], pills: await page.locator("[data-reply-suggestions], [data-reply-suggestion]").count() };
+            expect(approval.pills).toBe(0);
+            await frame("approval-answered");
           }
           expect(pageErrors).toEqual([]);
           readings.push({ variant, lang, scheme, width, markers: { from: copy.from, to: copy.to, below: copy.below }, order, closing, hintLines: hintLines.length, dotted,
-            replies: await drafts.allInnerTexts(), resting, top, geometry, approval, pageErrors });
+            pills: resting.pills, resting, top, geometry, approval, pageErrors });
         } finally { await context.close(); }
       }
       const evidence = path.resolve("evidence/issue-report-hints/rendered.json");

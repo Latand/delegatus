@@ -1025,7 +1025,6 @@ export const uk: Record<keyof typeof en, Message> = {
   "composer.outboxFull": "Черга повідомлень заповнена: усі записи ще не вирішено. Спершу повторіть, відновіть або видаліть одне з них; чернетку збережено.",
   "composer.runtimePill": "Модель і міркування — застосується до наступного повідомлення",
   // Чернетки відповідей, які менеджер пропонує під своїм повідомленням (#1202)
-  "composer.suggestedReplies": "Підказані відповіді — торкніться, щоб підставити в поле вводу",
   "composer.reasoningGroup": "Міркування",
   "composer.modelGroup": "Модель",
   "composer.speedGroup": "Швидкість",
@@ -2265,6 +2264,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "render.notDelivered": "не доставлено",
   "render.voiceDelegatusTag": "голос",
   "render.voiceDelegatusLabel": "Від голосового Delegatus · на ваше прохання",
+  "voiceCompanion.report.message": "Повідомлення",
   "voiceCompanion.report.progress": "Перебіг",
   "voiceCompanion.report.result": "Результат",
   "voiceCompanion.report.question": "Питання",

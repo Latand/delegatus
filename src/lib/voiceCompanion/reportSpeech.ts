@@ -58,3 +58,8 @@ export function speechParts(intro: string, text: string, continued: string, limi
   parts.push(current);
   return parts;
 }
+
+/** Formatting remains in the card; the spoken copy carries only its words. */
+export function messageSpokenText(text: string): string {
+  return text.replace(/\[([^\]]+)\]\([^)]*\)/gu, "$1").replace(/\*\*|__|`/gu, "").replace(/^\s*#{1,6}\s+/gmu, "");
+}

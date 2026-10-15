@@ -124,7 +124,7 @@ export type Payload =
         | { status: "refused" | "cancelled"; code: string };
     }
   | { type: "delegation.delivery.settled"; delivery: Delivery; status: "delivered" | "failed"; code?: string }
-  | { type: "orchestrator.report"; reportId: Id; status: "progress" | "result" | "question" | "blocked"; text: string; at: number; project: string }
+  | { type: "orchestrator.report"; reportId: Id; status: "progress" | "result" | "question" | "blocked" | "message"; text: string; at: number; project: string }
   | { type: "orchestrator.answer"; delivery: Delivery; reportId: Id; status: "progress" | "result" | "question" | "blocked"; text: string }
   /** `resetsAt` (Unix seconds) names when a refused plan limit resets. */
   | { type: "error"; code: string; recoverable: boolean; resetsAt?: number };

@@ -182,8 +182,9 @@ requests and cards in it are links. New reports arrive live.
 When a Delegatus tool fails, the orchestrator offers in its chat to prepare a
 bug report. If you agree, a reporter agent gathers the evidence, writes the
 report and checks it for private details. The chat then shows the exact
-title and body with the agent's privacy judgment, and nothing is filed until
-you approve that text.
+title and body with the agent's privacy judgment and asks in a decision form
+whether to publish. Nothing is filed until you choose the option that
+approves that exact text.
 
 ## Work for another project
 

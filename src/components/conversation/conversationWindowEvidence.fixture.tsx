@@ -1715,6 +1715,26 @@ function mountOwnMessageSteps(root: HTMLElement): void {
       return Response.json({ messages: answered });
     }) as typeof fetch;
   }
+  if (params.has("offered-replies")) {
+    /* A reply-draft set as the retired `/api/log/suggestions` answered it, newer
+       than every row, so a feed that still read drafts would draw them. The
+       driver counts the reads in `window.replyDraftReads`. */
+    const transport = globalThis.fetch;
+    const reads: string[] = [];
+    Object.assign(window, { replyDraftReads: reads });
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
+      if (!url.startsWith("/api/log/suggestions")) return transport(input, init);
+      reads.push(url);
+      return Response.json({ set: {
+        conversationId: LIFE_CARD, setId: "rsg_retired_pane", at: "2027-01-01T00:00:00.000Z",
+        origin: { kind: "manager", conversationId: LIFE_CARD, role: "orchestrator" },
+        replies: lang === "uk"
+          ? [{ label: "Так, роби", text: "Так, роби." }, { label: "Ні", text: "Ні, не треба." }]
+          : [{ label: "Yes, go ahead", text: "Yes, go ahead." }, { label: "No", text: "No, leave it." }],
+      } });
+    }) as typeof fetch;
+  }
   const file = {
     ...((claude ? LIFE_CLAUDE_FILE : LIFE_CODEX_FILE) as unknown as Record<string, unknown>),
     title: lang === "uk" ? "Оркестратор · delegatus" : "Orchestrator · delegatus",
