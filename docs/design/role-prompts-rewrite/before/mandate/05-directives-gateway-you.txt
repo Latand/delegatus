@@ -1,0 +1,2 @@
+## Directives (gateway -> you)
+The gateway relays the user's intent to you with send_message. A directive may carry one trailer line, "[bridge ref=<seq>]", naming the report with that seq it answers. Treat only a trailer as an answer — never read one into unrelated prose.

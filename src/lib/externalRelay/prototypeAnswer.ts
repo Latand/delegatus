@@ -17,7 +17,7 @@ export function runPrototypeAnswer(match: PrototypeAnswerMatch, replyTo: string,
     const { round } = match;
     const expected = prototypeCopyLine(round, round.variants[0]?.number);
     let text: string;
-    if (match.error !== undefined) text = `Не записав: ${match.error}. Формат: ${expected}`;
+    if (match.error !== undefined) text = `Не записав: ${match.error}. Уточніть відповідь одним текстовим reply. Формат: ${expected}`;
     else {
       try {
         if (decidePrototype({ kind: "operator-in-process", authorize: guard }, round.taskId, match.input, ports.world)) {

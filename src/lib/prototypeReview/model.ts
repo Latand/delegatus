@@ -31,7 +31,7 @@ export function prototypeRoundMetadata(round: PrototypeReviewRound): PrototypeRo
 export function prototypeReviewReplica(task: BoardTask): PrototypeReviewReplica | undefined {
   const summary = prototypeReviewSummary(task.prototypeReviews ?? []);
   return summary ? { summary, rounds: task.prototypeReviews!.map(round => {
-    const { telegramPost: _localPost, ...metadata } = prototypeRoundMetadata({ ...round, taskId: task.id, project: task.project });
+    const { telegramPost: _localPost, telegramPolls: _localPolls, ...metadata } = prototypeRoundMetadata({ ...round, taskId: task.id, project: task.project });
     return metadata;
   }) } : task.prototypeReviewReplica;
 }

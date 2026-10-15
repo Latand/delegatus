@@ -1,0 +1,86 @@
+[
+  {
+    "method": "sendRichMessage",
+    "params": {
+      "chat_id": 41,
+      "rich_message": {
+        "markdown": "# 🧪 Прототип · Review layout\nReview layout · #proto-db95be60\n\n**1 · Choice 1**\n\nKeeps controls together\\.\n\n<tg-slideshow>\n![](tg://photo?id=v1f1 \"1 · Compact\")\n</tg-slideshow>\n\n**2 · Choice 2**\n\nKeeps controls together\\.\n\nКадри — у Delegatus.\n\n**3 · Choice 3**\n\nKeeps controls together\\.\n\nКадри — у Delegatus.\n\n<p><b>Питання 1/3 · Where should this live?</b><br>a) Existing review ✅<br>b) New window</p>\n\n<p><b>Питання 2/3 · Which surfaces? (можна кілька)</b><br>a) Desktop ✅<br>b) Phone</p>\n\n<p><b>Питання 3/3 · When should work start?</b><br>a) After answering ✅<br>b) Later<br>+ Інше — у коментарі</p>\n\n---\nЯк відповісти: дайте текстовий reply на цей пост або його опитування: 1b, 2a; 1: b; рекомендовані; або відповідь своїми словами. Рішення записує лише текстовий reply власника. Голоси показують думки учасників. Можна також надіслати клону #proto-db95be60 і відповідь, або скористатися кнопкою. Застереження до рекомендованих відповідей теж збережуться. Повне рев’ю — у Delegatus.\n\n<tg-button-row align=\"center\">\n<tg-button type=\"copy_text\" style=\"success\" text=\"Прототип «Review layout» #proto-db95be60 · Відповіді рекомендовані\">Скопіювати рекомендовані</tg-button>\n</tg-button-row>\n<tg-button-row align=\"center\">\n<tg-button type=\"copy_text\" text=\"Прототип «Review layout» #proto-db95be60 · Варіант 1 · Відповіді 1a 2a 3a\">Варіант 1</tg-button>\n<tg-button type=\"copy_text\" text=\"Прототип «Review layout» #proto-db95be60 · Варіант 2 · Відповіді 1a 2a 3a\">Варіант 2</tg-button>\n<tg-button type=\"copy_text\" text=\"Прототип «Review layout» #proto-db95be60 · Варіант 3 · Відповіді 1a 2a 3a\">Варіант 3</tg-button>\n</tg-button-row>",
+        "media": [
+          {
+            "id": "v1f1",
+            "media": {
+              "type": "photo",
+              "media": "attach://v1f1"
+            }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "method": "sendPoll",
+    "params": {
+      "chat_id": 41,
+      "reply_parameters": {
+        "message_id": 10
+      },
+      "question": "1. Where should this live? · #proto-db95be60",
+      "options": [
+        {
+          "text": "1a) Existing review ✅"
+        },
+        {
+          "text": "1b) New window"
+        }
+      ],
+      "type": "regular",
+      "is_anonymous": true,
+      "allows_multiple_answers": false,
+      "shuffle_options": false
+    }
+  },
+  {
+    "method": "sendPoll",
+    "params": {
+      "chat_id": 41,
+      "reply_parameters": {
+        "message_id": 10
+      },
+      "question": "2. Which surfaces? · #proto-db95be60",
+      "options": [
+        {
+          "text": "2a) Desktop ✅"
+        },
+        {
+          "text": "2b) Phone"
+        }
+      ],
+      "type": "regular",
+      "is_anonymous": true,
+      "allows_multiple_answers": true,
+      "shuffle_options": false
+    }
+  },
+  {
+    "method": "sendPoll",
+    "params": {
+      "chat_id": 41,
+      "reply_parameters": {
+        "message_id": 10
+      },
+      "question": "3. When should work start? · #proto-db95be60 · Свій варіант — текстовим reply",
+      "options": [
+        {
+          "text": "3a) After answering ✅"
+        },
+        {
+          "text": "3b) Later"
+        }
+      ],
+      "type": "regular",
+      "is_anonymous": true,
+      "allows_multiple_answers": false,
+      "shuffle_options": false
+    }
+  }
+]
