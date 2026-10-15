@@ -5,7 +5,7 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 
 import type { RuntimeHostGenerationIdentity, ViewerRuntimeHostStartupPhase } from "@/lib/runtime/contracts";
 
@@ -226,14 +226,25 @@ import { checkRuntimeHost } from "../../scripts/runtime-host-healthcheck";
 test("journal progress replaces bounded evidence without changing ready wire phases", () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "startup-progress-"));
   const filename = path.join(directory, "record.json");
-  const store = new RuntimeHostStartupStore(filename, { generation, pid: 4242, startIdentity: "4242:start", now: () => "2026-01-01T00:00:00.000Z" });
+  let now = "2026-01-01T00:00:00.000Z";
+  const store = new RuntimeHostStartupStore(filename, { generation, pid: 4242, startIdentity: "4242:start", now: () => now });
   try {
     store.begin(); store.record("fence-acquired"); store.stableEntryListening();
-    store.progress({ subphase: "hash-chain", done: 10000, total: 10000, committedBatches: 0 });
+    store.progress({ subphase: "hash-chain", done: 10000, total: 20000, committedBatches: 0 });
     const size = fs.statSync(filename).size;
-    for (let i = 0; i < 10000; i++) store.progress({ subphase: "hash-chain", done: 10000, total: 10000, committedBatches: 0 });
+    // Exercise 10,000 real file replacements without making this size/shape
+    // assertion depend on 20,000 disk flushes. The writes before and after this
+    // loop retain real fsync; every replacement must still request both flushes.
+    const flush = spyOn(fs, "fsyncSync").mockImplementation(() => {});
+    try {
+      for (let i = 1; i <= 10000; i++) store.progress({ subphase: "hash-chain", done: 10000 + i, total: 20000, committedBatches: 0 });
+      expect(flush).toHaveBeenCalledTimes(20000);
+    } finally { flush.mockRestore(); }
     expect(fs.statSync(filename).size).toBe(size);
+    expect(JSON.parse(fs.readFileSync(filename, "utf8")).journal.done).toBe(20000);
     expect(JSON.parse(fs.readFileSync(filename, "utf8")).phases.length).toBe(2);
+    now = "2026-01-01T00:00:01.000Z";
+    store.progress({ subphase: "hash-chain", done: 20001, total: 20001, committedBatches: 1 });
     store.bindHostEpoch(7); for (const phase of phases.slice(2)) store.record(phase);
     const evidence = store.readyEvidence();
     expect(startupModule.parseRuntimeHostHandoffEvidence({ ...evidence, probe: { checkedAt: "2026-01-01T00:00:00.000Z", requestId: "probe", responseId: "probe", elapsedMs: 1 } }, generation).phases.length).toBe(7);
@@ -241,7 +252,9 @@ test("journal progress replaces bounded evidence without changing ready wire pha
     const record = JSON.parse(fs.readFileSync(filename, "utf8"));
     fs.writeFileSync(filename, JSON.stringify({ ...record, hostEpoch: 7 }));
     expect(new RuntimeHostStartupStore(filename).readyEvidence().hostEpoch).toBe(7);
-    expect(JSON.parse(fs.readFileSync(filename, "utf8")).journal.done).toBe(10000);
+    expect(JSON.parse(fs.readFileSync(filename, "utf8")).journal).toEqual({
+      subphase: "hash-chain", done: 20001, total: 20001, committedBatches: 1, updatedAt: now,
+    });
   } finally { fs.rmSync(directory, { recursive: true, force: true }); }
 }, 30_000);
 

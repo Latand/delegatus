@@ -1,4 +1,5 @@
 import { staleWorkingResponse } from "@/lib/agent/spawnProjection.fixture";
+import { NATIVE_ASSOCIATION_AUTHORIZATION_ERROR } from "@/lib/attention/nativeAssociationForm";
 import { describe, expect } from "bun:test";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
@@ -31365,4 +31366,162 @@ describe("independent panel scroll", () => {
     for (const row of placed) if (Math.abs(row.to - row.from) < Math.min(NOTCH, pageRoom.get(row.layout) ?? 0) - 1) failures.push(`${row.layout}: ${row.row} by ${row.input} moved the page only ${row.from} → ${row.to}`);
     expect(failures).toEqual([]);
   }, 600_000);
+});
+
+
+describe("cold board summary", () => {
+  browserTest("saved and refined boards match through an empty store and document reload", async () => {
+    const out = path.resolve(".artifacts/cold-board-summary");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    const readings: unknown[] = [];
+    try {
+      for (const oversized of [false, true]) {
+        const { context, page, pageErrors } = await openFixture(browser, "about:blank", VIEWPORT, "dark", "en", "reduce");
+        try {
+          await page.addInitScript(() => {
+            Date.now = () => 1_792_041_000_000;
+            localStorage.setItem("llv:kanban-seat:v2", JSON.stringify({ height: null, collapsed: { atlas: true }, placement: "top", width: null }));
+          });
+          for (const load of ["empty-store", "reload"]) {
+            if (load === "empty-store") await page.goto(`${server.base}?scenario=cold-board&cards=closed${oversized ? "&oversized=1" : ""}`);
+            else await page.reload();
+            await page.locator("[data-kanban-board] .card").first().waitFor({ timeout: 30_000 });
+            await page.waitForFunction(() => (window as unknown as { coldBoardEvidence: { calls: Array<{ required: string | null }> } }).coldBoardEvidence.calls.some(call => call.required === "1"));
+            await page.evaluate(() => { for (const animation of document.getAnimations()) { animation.pause(); animation.currentTime = 0; } });
+            const board = page.locator("[data-kanban-board]");
+            await board.locator('.card[data-id^="task:"]').first().scrollIntoViewIfNeeded();
+            const before = await board.innerText();
+            const geometry = () => page.locator("[data-kanban-board] .card").evaluateAll(cards => cards.map(card => {
+              const box = card.getBoundingClientRect(); return { id: card.getAttribute("data-id"), x: box.x, y: box.y, w: box.width, h: box.height };
+            }));
+            const beforeGeometry = await geometry();
+            const label = `${oversized ? "oversized" : "small"}-${load}`;
+            await page.screenshot({ path: path.join(out, `${label}-saved.png`) });
+            await page.evaluate(() => (window as unknown as { coldBoardEvidence: { release(): void } }).coldBoardEvidence.release());
+            await page.waitForFunction(() => (window as unknown as { coldBoardEvidence: { refined: boolean } }).coldBoardEvidence.refined);
+            await page.waitForTimeout(500);
+            await page.evaluate(() => { for (const animation of document.getAnimations()) { animation.pause(); animation.currentTime = 0; } });
+            expect(await board.innerText()).toBe(before);
+            expect(await geometry()).toEqual(beforeGeometry);
+            await page.screenshot({ path: path.join(out, `${label}-refined.png`) });
+            const reading = await page.evaluate(() => {
+              const { calls, parses, firstBoardAt, refined } = (window as unknown as { coldBoardEvidence: {
+                calls: Array<{ required: string | null; conditional: string | null; bytes: number; respondedAt: number }>;
+                parses: Array<{ codeUnits: number; ms: number }>; firstBoardAt: number; refined: boolean;
+              } }).coldBoardEvidence;
+              return { calls, parses, firstBoardAt, firstBoardFromResponseMs: firstBoardAt - calls[0]!.respondedAt, refined };
+            });
+            expect(reading.firstBoardAt).toBeGreaterThan(0);
+            expect(reading.parses.length).toBeGreaterThan(0);
+            if (load === "reload") expect(!!reading.calls[0]!.conditional).toBe(!oversized);
+            if (load === "empty-store" && !oversized) await page.waitForFunction(async () => {
+              const db = await new Promise<IDBDatabase>((resolve, reject) => { const request = indexedDB.open("delegatus-boot", 1); request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error); });
+              try { return await new Promise<boolean>((resolve, reject) => { const request = db.transaction("snapshot").objectStore("snapshot").get("files"); request.onsuccess = () => resolve(!!request.result); request.onerror = () => reject(request.error); }); }
+              finally { db.close(); }
+            });
+            expect(reading.refined).toBe(true);
+            readings.push({ label, ...reading, cards: beforeGeometry.length, sameText: true, sameGeometry: true });
+          }
+          expect(pageErrors).toEqual([]);
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/cold-board-summary", { recursive: true });
+      fs.writeFileSync("evidence/cold-board-summary/browser.json", JSON.stringify(readings, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 120_000);
+});
+
+describe("native caller operator association", () => {
+  browserTest("native association reuses the decision form on desktop and phone", async () => {
+    const out = path.resolve(".artifacts/native-association/frames"); fs.mkdirSync(out, { recursive: true });
+    const served = await serveEvidenceFixture(path.join(out, "bundle"));
+    const readings: unknown[] = [];
+    try {
+      for (const width of [1440, 390]) {
+        const browser = await chromium.launch({ ...LAUNCH, ...(width === 1440 ? { ignoreDefaultArgs: ["--hide-scrollbars"] } : {}) });
+        try {
+          for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) {
+            const phone = width === 390;
+            const { context, page, pageErrors } = await openFixture(browser, `${served.base}?decisions=native-association`, { width, height: phone ? 844 : 900 }, scheme, lang, "reduce", phone);
+            try {
+              if (phone) { await page.locator("[data-mobile2-seat-open]").click(); await page.locator("[data-decision-strip]").click(); }
+              const scope = phone ? '[data-mobile2-sheet="decisions"]' : '[data-decision-column="decisions"]';
+              const id = `pr_${"d".repeat(32)}`;
+              const row = page.locator(`${scope} [data-decision-row="${id}"]`);
+              if (await row.count()) await row.click();
+              const card = page.locator(`${scope} [data-decision-card="open"][data-decision-review="${id}"]`);
+              await card.waitFor();
+              const first = card.locator('[data-prototype-question="identity"]');
+              await first.scrollIntoViewIfNeeded();
+              const tag = `${lang}-${scheme}-${width}`;
+              await page.screenshot({ path: path.join(out, `${tag}-request.png`) });
+              await card.locator('[data-prototype-option="identity:1"]').click();
+              const proof = card.locator('[data-prototype-question="evidence"]'); await proof.scrollIntoViewIfNeeded();
+              const shown = await proof.textContent();
+              expect(shown).toContain("Claude"); expect(shown).toContain("/fixture/worktrees/external-session");
+              expect(shown).toContain("2026-10-15T09:30:00.000Z"); expect(shown).toContain("/fixture/claude/projects/external-session/transcript.jsonl");
+              expect(await card.evaluate(node => node.scrollWidth - node.clientWidth)).toBeLessThanOrEqual(1);
+              await page.screenshot({ path: path.join(out, `${tag}-evidence.png`) });
+              await card.locator('[data-prototype-option="evidence:1"]').click();
+              await page.evaluate(message => {
+                const original = window.fetch; let refused = false;
+                window.fetch = (async (input, init) => {
+                  if (!refused && String(input) === "/api/projects/decisions" && init?.method === "POST") {
+                    refused = true;
+                    return new Response(JSON.stringify({ error: message }), { status: 403, headers: { "content-type": "application/json" } });
+                  }
+                  return original(input, init);
+                }) as typeof window.fetch;
+              }, NATIVE_ASSOCIATION_AUTHORIZATION_ERROR);
+              const send = card.locator("[data-decision-send]"); await send.scrollIntoViewIfNeeded(); await send.click();
+              const authorizationAlert = card.locator('[role="alert"]'); await authorizationAlert.waitFor(); await authorizationAlert.scrollIntoViewIfNeeded();
+              const authorizationError = await authorizationAlert.innerText();
+              expect(authorizationError).toContain(NATIVE_ASSOCIATION_AUTHORIZATION_ERROR);
+              expect(await card.evaluate(node => node.scrollWidth - node.clientWidth)).toBeLessThanOrEqual(1);
+              expect(await page.evaluate(() => (window as unknown as { decisionPosts: unknown[] }).decisionPosts.length)).toBe(0);
+              await page.screenshot({ path: path.join(out, `${tag}-authorization-required.png`) });
+              await send.scrollIntoViewIfNeeded(); await send.click();
+              await page.waitForFunction(() => (window as unknown as { decisionPosts: unknown[] }).decisionPosts.length === 1);
+              const posted = await page.evaluate(() => (window as unknown as { decisionPosts: { answers: unknown[] }[] }).decisionPosts[0]);
+              expect(posted.answers).toEqual([{ questionId: "identity", options: [1] }, { questionId: "evidence", options: [1] }]);
+              const tab = page.locator(`${phone ? scope : "[data-decision-column]"} [data-decision-tab="decisions"]`);
+              await tab.click();
+              const revoke = page.locator(`${scope} [data-native-association-revoke]`);
+              await revoke.waitFor(); await revoke.scrollIntoViewIfNeeded();
+              await page.screenshot({ path: path.join(out, `${tag}-approved.png`) });
+              await page.evaluate(() => {
+                const original = window.fetch; let refused = false;
+                window.fetch = (async (input, init) => {
+                  if (!refused && String(input) === "/api/projects/decisions" && init?.method === "POST") {
+                    refused = true;
+                    return new Response(JSON.stringify({ error: "Association is busy" }), { status: 503, headers: { "content-type": "application/json" } });
+                  }
+                  return original(input, init);
+                }) as typeof window.fetch;
+              });
+              await revoke.click();
+              const revokeError = page.locator(`${scope} [role="alert"]`);
+              await revokeError.waitFor(); await revokeError.scrollIntoViewIfNeeded();
+              const revocationError = await revokeError.innerText(); expect(revocationError).toContain("Association is busy");
+              await page.screenshot({ path: path.join(out, `${tag}-revoke-error.png`) });
+              await revoke.click();
+              await page.waitForFunction(() => (window as unknown as { decisionPosts: unknown[] }).decisionPosts.length === 2);
+              const revocation = await page.evaluate(() => (window as unknown as { decisionPosts: { answers: unknown[] }[] }).decisionPosts[1]);
+              expect(revocation.answers).toEqual([{ questionId: "identity", options: [0] }, { questionId: "evidence", options: [0] }]);
+              await revoke.waitFor({ state: "detached" });
+              await page.screenshot({ path: path.join(out, `${tag}-revoked.png`) });
+              expect(pageErrors).toEqual([]); readings.push({ lang, scheme, width, shown, authorizationError, posted, revocationError, revocation });
+            } catch (error) {
+              await page.screenshot({ path: path.join(out, `${lang}-${scheme}-${width}-failed.png`) }).catch(() => {});
+              throw error;
+            } finally { await context.close(); }
+          }
+        } finally { await browser.close(); }
+      }
+      fs.mkdirSync("evidence/native-association", { recursive: true });
+      fs.writeFileSync("evidence/native-association/decisions.json", JSON.stringify(readings, null, 2) + "\n");
+    } finally { served.stop(); }
+  }, 300_000);
 });

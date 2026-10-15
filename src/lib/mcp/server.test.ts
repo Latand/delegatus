@@ -21,6 +21,7 @@ import {
   McpToolTimingAggregate,
   SqliteMcpReceiptStore,
   createViewerMcpServer,
+  validRequestBinding,
   createMcpToolService,
   type McpToolBindings,
   type McpReceiptStore,
@@ -2130,6 +2131,7 @@ interface RecoveryHarness {
   bindingCalls: McpToolCallContext[];
   recoverCalls: { binding: McpRequestBinding; legacy: boolean }[];
   evidence: McpRecoveryEvidence;
+  onBind?: () => void;
   bindingImpl: (args: Record<string, unknown>, context?: McpToolCallContext) => Promise<Record<string, unknown>>;
 }
 
@@ -2157,9 +2159,11 @@ function recoveryHarness(
   /* One recoverable tool shape serves both mutations: a send binds its
      conversation, a spawn its directory, and the service treats them alike. */
   const tool: McpRecoverableTool = {
+    currentCaller: () => harness.caller,
     bind: (args) => {
       if (typeof args.text !== "string" && typeof args.cwd !== "string") throw new McpToolRefusal("text is required", { code: "invalid_request" });
-      return { caller: harness.caller, target: { project: "proj-a", identity: String(args.conversationId ?? args.cwd) }, downstreamKey: `key:${String(args.clientRequestId)}` };
+      const caller = { ...harness.caller }; harness.onBind?.();
+      return { caller, target: { project: "proj-a", identity: String(args.conversationId ?? args.cwd) }, downstreamKey: `key:${String(args.clientRequestId)}` };
     },
     recover: async (binding, options) => {
       harness.recoverCalls.push({ binding, legacy: options.legacy });
@@ -3165,4 +3169,95 @@ test("prototype publication tells callers about the critic gate and fresh refusa
     await client.close();
     await server.close();
   }
+});
+
+
+test("native admission refusals disclose no binding and only inventory pending is retryable", async () => {
+  for (const reason of ["session-not-scanned", "session-record-missing", "capability-unresolved"] as const) {
+    const harness = recoveryHarness({ ...UNIDENTIFIED, admission: { reason, retryable: reason === "session-not-scanned" } });
+    const answer = await harness.service.callTool("send_message", SEND);
+    expect(answer).toEqual({ ok: false, toolName: "send_message", clientRequestId: SEND.clientRequestId, replayed: false,
+      error: expect.stringContaining(`[${reason}]`), code: "caller_unidentified", retryable: reason === "session-not-scanned" });
+    expect(answer.error).toContain("open the conversation in Delegatus");
+    expect(harness.bindingCalls).toHaveLength(0); expect(harness.recoverCalls).toHaveLength(0);
+    expect(await harness.store.lookup(`send_message:${SEND.clientRequestId}`)).toBeNull();
+  }
+});
+
+test("a native session switch during receipt lookup claims and dispatches nothing", async () => {
+  const store: McpRecoveryReceiptStore = new MemoryMcpReceiptStore();
+  const harness = recoveryHarness({ ...OWNER, nativeProof: "generation-a" }, store);
+  const lookup = store.lookup.bind(store);
+  store.lookup = async key => {
+    harness.caller = { ...OTHER, nativeProof: "generation-b" };
+    return lookup(key);
+  };
+  // authorizeClaim forces the asynchronous absent-lookup seam before a claim.
+  const result = await harness.service.callTool("send_message", { ...SEND, recoveryOnly: true });
+  expect(result).toMatchObject({ ok: false, code: "caller_unidentified" });
+  expect(harness.bindingCalls).toHaveLength(0); expect(harness.recoverCalls).toHaveLength(0);
+  expect(await lookup(`send_message:${SEND.clientRequestId}`)).toBeNull();
+});
+
+test("native session evidence is revalidated before fresh claim after async binding", async () => {
+  const store: McpRecoveryReceiptStore = new MemoryMcpReceiptStore();
+  const harness = recoveryHarness({ ...OWNER, nativeProof: "generation-a" }, store);
+  const originalClaim = store.claim.bind(store); let claims = 0;
+  store.claim = async (...args) => { claims++; return originalClaim(...args); };
+  // The binding pins generation A; its asynchronous return meets generation B.
+  harness.onBind = () => { harness.caller = { ...OWNER, nativeProof: "generation-b" }; };
+  expect(await harness.service.callTool("send_message", SEND)).toMatchObject({ ok: false, code: "caller_unidentified" });
+  expect(claims).toBe(0); expect(harness.bindingCalls).toHaveLength(0);
+});
+
+test("a native session switch while terminal recovery is read discloses no receipt", async () => {
+  const harness = recoveryHarness({ ...OWNER, nativeProof: "generation-a" });
+  expect(await harness.service.callTool("send_message", SEND)).toMatchObject({ ok: true });
+  const lookup = harness.store.lookup.bind(harness.store);
+  harness.store.lookup = async key => {
+    const row = await lookup(key);
+    harness.caller = { ...OTHER, nativeProof: "generation-b" };
+    return row;
+  };
+  const result = await harness.service.callTool("send_message", { ...SEND, recoveryOnly: true });
+  expect(result).toMatchObject({ ok: false, code: "caller_unidentified" });
+  expect(JSON.stringify(result)).not.toContain("op_dispatched");
+  expect(harness.bindingCalls).toHaveLength(1);
+});
+
+test("native generation proof is validated on persisted receipt bindings", () => {
+  const binding = { version: 1, toolName: "send_message", clientRequestId: "native-proof", downstreamKey: "native-key", claimedAt: "2026-10-15T09:00:00Z", owner: { pid: 42, startIdentity: "42:100" }, caller: { ...OWNER, nativeProof: "proof" }, target: { project: "proj-a", identity: "conversation_target" } };
+  expect(validRequestBinding(binding)).toBe(true);
+  for (const proof of [null, {}, "", "x".repeat(129)]) expect(validRequestBinding({ ...binding, caller: { ...binding.caller, nativeProof: proof } })).toBe(false);
+  const { nativeProof: _proof, ...legacy } = binding.caller; void _proof;
+  expect(validRequestBinding({ ...binding, caller: legacy })).toBe(true);
+});
+
+for (const backend of ["memory", "file", "sqlite"] as const) test(`native generation rechecks inside the ${backend} receipt claim`, async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-native-claim-")); scratch.push(directory);
+  const store: McpRecoveryReceiptStore = backend === "memory" ? new MemoryMcpReceiptStore()
+    : backend === "file" ? new FileMcpReceiptStore(path.join(directory, "receipts.json"))
+      : new SqliteMcpReceiptStore(path.join(directory, "receipts.sqlite"));
+  const harness = recoveryHarness({ ...OWNER, nativeProof: "generation-a" }, store);
+  const claim = store.claim.bind(store);
+  store.claim = async (...args) => {
+    // The store's acquisition wait outlives the earlier authority read.
+    harness.caller = { ...OTHER, nativeProof: "generation-b" };
+    return claim(...args);
+  };
+  try {
+    expect(await harness.service.callTool("send_message", SEND)).toMatchObject({ ok: false, code: "caller_unidentified" });
+    expect(await store.lookup(`send_message:${SEND.clientRequestId}`)).toBeNull();
+    expect(harness.bindingCalls).toHaveLength(0);
+  } finally { if (store instanceof SqliteMcpReceiptStore) store.close(); }
+});
+
+test("hook transport proof is excluded from logical receipt arguments and downstream payload", async () => {
+  const harness = recoveryHarness(OWNER);
+  let input: Record<string, unknown> = {};
+  harness.bindingImpl = async args => { input = args; return { operationId: "op_dispatched" }; };
+  expect(await harness.service.callTool("send_message", { ...SEND, nativeCallerProof: "x".repeat(43) })).toMatchObject({ ok: true });
+  expect(input).not.toHaveProperty("nativeCallerProof");
+  expect(await harness.service.callTool("send_message", { ...SEND, nativeCallerProof: "y".repeat(43) })).toMatchObject({ ok: true, replayed: true });
+  expect(harness.bindingCalls).toHaveLength(1);
 });
