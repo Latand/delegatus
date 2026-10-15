@@ -283,6 +283,7 @@ Each time you are seated, Delegatus sends a read-only board pass after your firs
     Up to v55 it offered the suggested issues as reply drafts; v56 offers them
     in a decision form (the operator, 2026-10-15). */
 const SHIPPED_BOARD_REPORT_DIRECTIVES = [`${ORCHESTRATOR_BOARD_REPORT_HEADING}
+When you are seated, fresh or by rotation, Delegatus makes one read-only pass over this board and sends it after your first turn as a message headed "[Delegatus] Board maintenance report". Leave the board walk to it: take its sections in order and re-read each item before you change it. You alone change this board: close items one by one with the reason, and a card marked "ask first" only when the operator agrees. Offer its suggested issues with suggest_replies and start none unasked; where it finds no recorded priority, say so once and never ask the operator to label issues or add fields. Cover an unavailable section or a missing report with your own reads.`, `${ORCHESTRATOR_BOARD_REPORT_HEADING}
 Each time you are seated, Delegatus makes one read-only pass over this board and sends it after your first turn, headed "[Delegatus] Board maintenance report". Your first turn gives status and leaves the board walk to it; later wakes still make their own pass. Take its sections in order and re-read each item before you change it. You alone change this board: close items one by one with the reason, and a card marked "ask first" only when the operator agrees. Offer its suggested issues with suggest_replies and start none unasked; where it finds no recorded priority, say so once and never ask for labels or fields. Cover an unavailable section or a missing report with your own reads.`, `${ORCHESTRATOR_BOARD_REPORT_HEADING}
 Each time you are seated, Delegatus sends a read-only board pass after your first turn, headed "[Delegatus] Board maintenance report". Your first turn gives status and leaves the board walk to it; later wakes still make their own pass. Re-read each item, section by section, before you change it. You alone change this board, one by one with the reason: close items (a card marked "ask first" only when the operator agrees) and clear Waiting-for-you rows that ask nothing with dismiss_attention. Offer its suggested issues with suggest_replies and start none unasked; with no recorded priority, say so once and never ask for labels or fields. Cover a missing section or report with your own reads.`];
 
@@ -467,6 +468,32 @@ YOU decide when to deploy, and you execute it yourself. Your authority is your d
     still holding the v55 body asks in a form instead; delivery removes this
     exact line and nothing else, the way it removes the old deploy section. */
 const SHIPPED_REPLY_DRAFTS_PARAGRAPH = "Reply drafts. For an open ask that is not a decision, call suggest_replies with 2–4 short, distinct drafts in the operator's language, each sendable as-is. A tap puts a draft in their composer for editing and never sends it. The newest set replaces the last; their next message clears it. Offer fresh drafts with each open ask, never for an answered question; a message that asks nothing needs none.";
+
+/** The section on reply drafts as v10 to v54 shipped it, newest first, each
+    whole from its heading to its last line. A seat still holding one of them
+    would keep calling suggest_replies, so delivery removes the exact section
+    with the blank line after it, the way it removes the v55 paragraph. */
+const REPLY_DRAFTS_HEADING = "## Reply drafts (suggest_replies)";
+const SHIPPED_REPLY_DRAFTS_SECTIONS: readonly string[] = [
+  `${REPLY_DRAFTS_HEADING}
+Decisions go to the form; drafts are for replies that are not a choice. A plan you want a yes to, and a stage's question you cannot settle, are decisions. For other open asks, call suggest_replies with 2–4 short, distinct drafts in the operator's language, each sendable as-is.
+A tap puts a draft in their composer for editing and never sends it. The newest set replaces the last; their next message clears it. Offer fresh drafts with each open ask, never for an answered question. Messages asking nothing need none.`,
+  `${REPLY_DRAFTS_HEADING}
+After each message asking the operator something or proposing a course of action, call suggest_replies with 2–4 short, distinct drafts in their language, each sendable as-is. Restate decisions with a pointer to their form.
+Drafts appear as pills under your message; a tap puts one in the composer for editing and never sends it. They are offers; decisions stay in the form. The newest set replaces the previous one and the operator's next message clears it. Refresh with each ask; never re-offer drafts for an answered question. A message asking nothing needs no drafts.`,
+  `${REPLY_DRAFTS_HEADING}
+Call suggest_replies after EVERY message of yours that asks the operator something or proposes a course of action — a question, a choice between options, a plan you want a yes to. Offer 2–4 short, distinct drafts, each one a message they could send as-is: the plain yes, the narrowed yes, the "hold — explain X first". Write them in the operator's own language, the one they are writing to you in.
+They render as pills under your message and land in their composer on a tap, editable before sending — Delegatus never sends one, so a draft is an offer and never a decision, and never a substitute for asking clearly in the message itself. The newest set replaces your previous one for that conversation, and their next message clears it: offer a fresh set with each new ask, and never re-offer drafts to something they already answered. A message that asks nothing needs no drafts.`,
+  `${REPLY_DRAFTS_HEADING}
+Call suggest_replies after EVERY message of yours that asks the operator something or proposes a course of action — a question, a choice between options, a plan you want a yes to. Work you can decide yourself is no ask: do it and say what you did. Offer 2–4 short, distinct drafts, each one a message they could send as-is: the plain yes, the narrowed yes, the "hold — explain X first". Write them in the operator's own language, the one they are writing to you in.
+They render as pills under your message and land in their composer on a tap, editable before sending — Delegatus never sends one, so a draft is an offer and never a decision, and never a substitute for asking clearly in the message itself. The newest set replaces your previous one for that conversation, and their next message clears it: offer a fresh set with each new ask, and never re-offer drafts to something they already answered. A message that asks nothing needs no drafts.`,
+  `${REPLY_DRAFTS_HEADING}
+Call suggest_replies after EVERY message of yours that asks the operator something or proposes a course of action — a question, a choice between options, a plan you want a yes to, a status that ends in "shall I". Offer 2–4 short, distinct drafts, each one a message they could send as-is: the plain yes, the narrowed yes, the "hold — explain X first". Write them in the operator's own language, the one they are writing to you in.
+They render as pills under your message and land in their composer on a tap, editable before sending — Delegatus never sends one, so a draft is an offer and never a decision, and never a substitute for asking clearly in the message itself. The newest set replaces your previous one for that conversation, and their next message clears it: offer a fresh set with each new ask, and never re-offer drafts to something they already answered. A message that asks nothing needs no drafts.`,
+  `${REPLY_DRAFTS_HEADING}
+Call suggest_replies after EVERY message of yours that asks the operator something or proposes a course of action — a question, a choice between options, a plan you want a yes to, a status that ends in "shall I". Offer 2–4 short, distinct drafts, each one a message they could send as-is: the plain yes, the narrowed yes, the "hold — explain X first". Write them in the operator's own language, the one they are writing to you in.
+They render as pills under your message and land in their composer on a tap, editable before sending — the viewer never sends one, so a draft is an offer and never a decision, and never a substitute for asking clearly in the message itself. The newest set replaces your previous one for that conversation, and their next message clears it: offer a fresh set with each new ask, and never re-offer drafts to something they already answered. A message that asks nothing needs no drafts.`,
+];
 
 /** v30: the operator's words of 2026-09-27 — warm, a friend who teases a
     little, speaks the way they speak, and keeps working without being asked.
@@ -673,9 +700,9 @@ const DELIVERED_DIRECTIVES: readonly { markers: readonly string[]; directive: st
     shipped, and delivery asks nothing about whose project this is. The clock
     section as it shipped up to v20 is replaced the same way (#2030), by exact
     match with the current one, which states the tick contract the wake no
-    longer repeats. The v55 reply-draft paragraph is removed and the v40–v55
-    bug-report rule replaced the same way (v56), so no seat is told to ask
-    with reply drafts.
+    longer repeats. The v55 reply-draft paragraph and the v10–v54 reply-draft
+    sections are removed and the v40–v55 bug-report rule replaced the same way
+    (v56), so no seat is told to ask with reply drafts.
 
     Last, delivery renders the role table (#1880) from `roles` and puts it at
     the end, replacing any table the mandate already carried. Server callers
@@ -694,6 +721,7 @@ export function orchestratorMandateWithRoleTable(mandate: string, roleTable: str
   mandate = SHIPPED_BUG_REPORT_RULES.reduce((text, shipped) => text.split(shipped).join(ORCHESTRATOR_BUG_REPORT_RULE), mandate)
     .split(`${SHIPPED_REPLY_DRAFTS_PARAGRAPH}\n`).join("")
     .split(SHIPPED_REPLY_DRAFTS_PARAGRAPH).join("");
+  mandate = SHIPPED_REPLY_DRAFTS_SECTIONS.reduce((text, shipped) => text.split(`${shipped}\n\n`).join("").split(shipped).join(""), mandate);
   const withoutShipped = SHIPPED_CLOCK_SECTIONS.reduce(
     (text, shipped) => text.split(shipped).join(ORCHESTRATOR_VIEWER_CLOCK_DIRECTIVE),
     SHIPPED_GREETING_OFFERS.reduce(

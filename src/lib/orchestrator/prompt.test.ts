@@ -1076,8 +1076,10 @@ Do exactly what the operator asked, where they asked it; anything beyond the lit
 
 /* A seat delivered v54 keeps its stored mandate until it rotates; delivery
    replaces each v54 directive that v55 rewrote by exact match, so the seat
-   reads one current copy and no stale one. The fixture is the v54 default
-   byte for byte: its fingerprint is the one v54 shipped with. */
+   reads one current copy and no stale one, and removes the v54 section on
+   reply drafts the same way, so the seat is never told to ask with them. The
+   fixture is the v54 default byte for byte: its fingerprint is the one v54
+   shipped with. */
 test("delivery replaces every rewritten v54 directive by exact match", () => {
   const v54 = fs.readFileSync(path.join(import.meta.dir, "fixtures/mandate-v54.txt"), "utf8");
   expect(createHash("sha256").update(v54).digest("hex")).toBe(PROMPT_FINGERPRINTS[54]);
@@ -1089,8 +1091,17 @@ test("delivery replaces every rewritten v54 directive by exact match", () => {
     expect(v54).toContain(stale);
     expect(delivered).not.toContain(stale);
   }
+  for (const retired of ["suggest_replies", "Reply drafts"]) expect(v54).toContain(retired);
+  for (const retired of ["suggest_replies", "Reply drafts", "reply draft"]) expect(delivered).not.toContain(retired);
+  /* Removing the section leaves one blank line between its neighbours. */
+  expect(delivered).toContain("Targets are typed by kind (conversation, stage, pipeline, task, draft, region, point) and the tool schema gives each shape and intent.\n\n## Delegatus's clock");
+  expect(delivered).not.toContain("\n\n\n");
   expect(orchestratorMandateForDelivery(delivered)).toBe(delivered);
+  expect(orchestratorMandateWithRoleTable(v54, null)).toBe(orchestratorMandateWithRoleTable(orchestratorMandateWithRoleTable(v54, null), null));
   expect(orchestratorMandateCarriesTickContract({ mandate: v54, promptVersion: 54 })).toBe(true);
+  /* A bespoke section under the same heading keeps its own wording. */
+  const bespoke = "## Reply drafts (suggest_replies)\nOur own wording about replies.";
+  expect(orchestratorMandateForDelivery(`Coordinate.\n\n${bespoke}`)).toContain(bespoke);
 });
 
 /* A seat delivered v55 keeps its stored mandate until it rotates; delivery
