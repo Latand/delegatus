@@ -218,7 +218,7 @@ export interface BridgeReportV1 {
   outcome?: BridgeReportOutcome;
 }
 
-export const BRIDGE_REPORT_OUTCOME_KINDS = ["incident", "publication"] as const;
+export const BRIDGE_REPORT_OUTCOME_KINDS = ["incident", "publication", "autonomy"] as const;
 export type BridgeReportOutcomeKind = typeof BRIDGE_REPORT_OUTCOME_KINDS[number];
 
 export interface BridgeReportOutcome {

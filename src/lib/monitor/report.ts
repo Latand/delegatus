@@ -1,3 +1,4 @@
+import { autonomyMandate, type AutonomySetting } from "./autonomy";
 import { createHash } from "node:crypto";
 
 import { ORCHESTRATOR_SEAT_TICK_CONTRACT, ORCHESTRATOR_VIEWER_CLOCK_HEADING } from "@/lib/orchestrator/prompt";
@@ -231,6 +232,10 @@ function snapshotSection(snapshotAt: string | undefined, compact: boolean): stri
 }
 
 export function seatTickWakeMessage(input: {
+  autonomy?: AutonomySetting | null;
+  autonomyUnchanged?: boolean;
+  issues?: readonly ProposalIssue[];
+  now?: number;
   project: string;
   workers?: WakeWorkers;
   /** Oldest evidence time, preserved across transport retention and replay. */
@@ -276,6 +281,7 @@ export function seatTickWakeMessage(input: {
   if (input.gaps && input.gaps.length > 0) {
     lines.push("", "Evidence unavailable:", ...input.gaps.map((gap) => `- ${gap.source}: ${gap.detail}.`));
   }
+  if (input.issues?.length) lines.push("", "Open issues:", ...input.issues.map(issue => `- #${issue.number} ${issue.title} [${issue.labels.join(", ")}]`));
   lines.push("", "Items:", ...input.items.map(seatTickBullet));
   lines.push("", "Why you were woken:", ...input.reasons.map(reason => `- ${reason.kind}: ${reason.detail}`));
   if (input.deferred > 0) {
@@ -308,18 +314,24 @@ export function seatTickWakeMessage(input: {
   }
   // Compact only large ledgers, keeping ordinary wakes' established framing.
   const compactLedger = !!input.workers && (input.reportLines?.join("\n").length ?? 0) > 800;
+  const autonomy = autonomyMandate(input.autonomy, input.now ?? Date.now(), input.autonomyUnchanged);
+  const noteLimit = autonomy.length ? 100 : SEAT_TICK_PROMPT_PREVIEW_LIMIT;
+  const autonomyNote = autonomy.length && input.monitorPrompt
+    ? ["", `Standing monitor note (${input.monitorPrompt.length} chars): seat_tick_settings verbose:true reads it.`]
+    : null;
   const reserved = [
+    ...autonomy,
     ...snapshotSection(input.snapshotAt, !!input.workers),
     ...(input.reportLines && input.reportLines.length > 0 ? ["", compactLedger ? "Reports:" : "Bridge reports:", ...input.reportLines.map((line) => `- ${line}`)] : []),
     ...(input.operatorInstructions ? ["", compactLedger ? "Operator instructions:" : "Operator instructions for every wake:", input.operatorInstructions] : []),
-    ...seatTickPromptSection(input.monitorPrompt, input.monitorPromptUnchanged === true, SEAT_TICK_PROMPT_PREVIEW_LIMIT, !!input.workers),
-    ...workerSection(input.workers),
+    ...(autonomyNote ?? seatTickPromptSection(input.monitorPrompt, input.monitorPromptUnchanged === true, noteLimit, !!input.workers)),
+    ...(autonomy.length && input.workers ? ["", `Worker limit ${input.workers.limit} (${input.workers.source}; machine ${input.workers.machine}); running ${input.workers.running}. Overrides mandate/launch limits.`] : workerSection(input.workers)),
     ...seatTickContractLines(input.mandateCarriesContract === true),
   ];
   // Large report ledgers keep all their keys. Shorten the note's explicitly
   // marked preview when that tail would exceed the payload bound.
-  if (input.reportLines?.length && redactMonitorText(reserved.join("\n")).length > SEAT_TICK_MESSAGE_LIMIT - 700) {
-    const note = seatTickPromptSection(input.monitorPrompt, input.monitorPromptUnchanged === true, SEAT_TICK_PROMPT_PREVIEW_LIMIT, !!input.workers);
+  if (!autonomyNote && input.reportLines?.length && redactMonitorText(reserved.join("\n")).length > SEAT_TICK_MESSAGE_LIMIT - 700) {
+    const note = seatTickPromptSection(input.monitorPrompt, input.monitorPromptUnchanged === true, noteLimit, !!input.workers);
     reserved.splice(reserved.length - seatTickContractLines(input.mandateCarriesContract === true).length - (input.workers ? 2 : 0) - note.length, note.length,
       ...seatTickPromptSection(input.monitorPrompt, input.monitorPromptUnchanged === true, 100, !!input.workers));
   }

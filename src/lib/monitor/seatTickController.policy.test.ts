@@ -1864,3 +1864,70 @@ test("a refusal the record contradicts keeps the attempt (#1465)", async () => {
   expect(await runSeatTickCheck(fixture.project, next.deps)).toMatchObject({ delivery: { clientMessageId: record!.delivery!.clientMessageId, outcome: "deferred-outstanding" } });
   expect(next.sent).toEqual([]);
 });
+
+
+test("autonomy overlay is full on the first landed wake, compact later, and full after rotation", async () => {
+  const { applySeatTickSettingsChange } = await import("./seatTickSettings");
+  const applied = applySeatTickSettingsChange(defaultSeatTickSettings(PROJECT), { autonomy: { enabled: true } }, { at: new Date(NOW).toISOString(), actor: { kind: "gateway", conversationId: null, project: null, seatEpoch: null } });
+  if (!applied.ok) throw new Error(applied.error);
+  const options = { pipelines: OPEN_LANE, state: OVERDUE, settings: applied.settings, now: NOW };
+  const rig = harness(options);
+  await runSeatTickCheck(PROJECT, rig.deps);
+  expect(rig.sent[0]!.text).toContain("decide all questions, open forms and variants");
+  expect(rig.written.at(-1)!.autonomyShown).toBe(`${applied.settings.autonomy!.startedAt}:${applied.settings.autonomy!.updatedAt}`);
+  options.now += 61 * MINUTE;
+  await runSeatTickCheck(PROJECT, rig.deps);
+  expect(rig.sent[1]!.text).toContain("rules from episode");
+  expect(rig.sent[1]!.text).not.toContain("decide all questions");
+  rig.seat = { ...rig.seat!, conversationId: SUCCESSOR, seatEpoch: rig.seat!.seatEpoch + 1 };
+  options.now += 61 * MINUTE;
+  await runSeatTickCheck(PROJECT, rig.deps);
+  expect(rig.sent.at(-1)!.text).toContain("decide all questions, open forms and variants");
+});
+
+test("autonomy idle gathers issues and two unchanged landed wakes stop searching", async () => {
+  const { applySeatTickSettingsChange } = await import("./seatTickSettings");
+  const applied = applySeatTickSettingsChange(defaultSeatTickSettings(PROJECT), { autonomy: { enabled: true } }, { at: new Date(NOW).toISOString(), actor: { kind: "gateway", conversationId: null, project: null, seatEpoch: null } });
+  if (!applied.ok) throw new Error(applied.error);
+  const options = { pipelines: [], settings: applied.settings, now: NOW };
+  const rig = harness(options);
+  for (let i = 0; i < 2; i++) {
+    expect(await runSeatTickCheck(PROJECT, rig.deps)).toMatchObject({ verdict: "wake", reasons: ["autonomy-idle"] });
+    expect(rig.sent[i]!.text).toContain("#1245 the native seat tick");
+    options.now += 61 * MINUTE;
+  }
+  expect(await runSeatTickCheck(PROJECT, rig.deps)).toMatchObject({ verdict: "quiet" });
+  expect(rig.sent).toHaveLength(2);
+  expect(rig.cards.some(entry => entry.card.kind === "retry-guard")).toBe(true);
+  options.now += 9 * 60 * MINUTE;
+  const restarted = applySeatTickSettingsChange(options.settings, { autonomy: { enabled: true } }, { at: new Date(options.now).toISOString(), actor: { kind: "gateway", conversationId: null, project: null, seatEpoch: null } });
+  if (!restarted.ok) throw new Error(restarted.error);
+  options.settings = { ...restarted.settings, autonomyHistory: restarted.settings.autonomyHistory?.map(episode => ({ ...episode, reportAt: new Date(options.now).toISOString() })) };
+  for (let i = 0; i < 2; i++) {
+    expect(await runSeatTickCheck(PROJECT, rig.deps)).toMatchObject({ verdict: "wake" });
+    options.now += 61 * MINUTE;
+  }
+  expect(rig.sent).toHaveLength(4);
+  expect(await runSeatTickCheck(PROJECT, rig.deps)).toMatchObject({ verdict: "quiet" });
+});
+
+test("expiry removes the overlay and requests one end report even with wakes switched off", async () => {
+  const { applySeatTickSettingsChange } = await import("./seatTickSettings");
+  const at = new Date(NOW).toISOString();
+  const actor = { kind: "gateway" as const, conversationId: null, project: null, seatEpoch: null };
+  const on = applySeatTickSettingsChange(defaultSeatTickSettings(PROJECT), { autonomy: { enabled: true } }, { at, actor });
+  if (!on.ok) throw new Error(on.error);
+  const off = applySeatTickSettingsChange(on.settings, { enabled: false, reason: "Operator returned" }, { at: new Date(NOW + MINUTE).toISOString(), actor });
+  if (!off.ok) throw new Error(off.error);
+  const options = { pipelines: OPEN_LANE, settings: off.settings, now: NOW + MINUTE };
+  const rig = harness(options);
+  expect(await runSeatTickCheck(PROJECT, rig.deps)).toMatchObject({ verdict: "wake", reasons: ["autonomy-ended"], items: 0 });
+  expect(rig.sent[0]!.text).toContain(`key autonomy:${at}`);
+  expect(rig.sent[0]!.text).not.toContain("Full autonomy until");
+  options.now += MINUTE;
+  expect(await runSeatTickCheck(PROJECT, rig.deps)).toMatchObject({ verdict: "quiet" });
+  expect(rig.sent).toHaveLength(1);
+  options.settings = { ...off.settings, autonomy: { ...off.settings.autonomy!, reportAt: new Date(options.now).toISOString() } };
+  options.now += 61 * MINUTE;
+  expect(await runSeatTickCheck(PROJECT, rig.deps)).toMatchObject({ verdict: "quiet" });
+});

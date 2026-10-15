@@ -1,0 +1,287 @@
+{
+  "driver": "src/components/kanban/kanbanBoard.browser.test.tsx",
+  "case": "full autonomy",
+  "prototype": "226235e2e47c2782ea345a00c29ef4367aab7e95",
+  "framesRoot": ".artifacts/full-autonomy",
+  "widths": [
+    1440,
+    390
+  ],
+  "themes": [
+    "light",
+    "dark"
+  ],
+  "locales": [
+    "uk",
+    "en"
+  ],
+  "states": [
+    "off",
+    "draft",
+    "settings",
+    "on",
+    "reduced",
+    "undo",
+    "unlimited",
+    "unlimited-status",
+    "ended"
+  ],
+  "snakePhasesMs": [
+    0,
+    1000,
+    2000,
+    3000
+  ],
+  "captures": [
+    {
+      "width": 1440,
+      "scheme": "light",
+      "lang": "uk",
+      "ring": {
+        "x": 1027.3125,
+        "y": 103,
+        "width": 112,
+        "height": 24
+      },
+      "track": {
+        "x": 1027.3125,
+        "y": 103,
+        "width": 112,
+        "height": 24
+      },
+      "pageErrors": []
+    },
+    {
+      "width": 1440,
+      "scheme": "light",
+      "lang": "en",
+      "ring": {
+        "x": 1069.65625,
+        "y": 103,
+        "width": 112,
+        "height": 24
+      },
+      "track": {
+        "x": 1069.65625,
+        "y": 103,
+        "width": 112,
+        "height": 24
+      },
+      "pageErrors": []
+    },
+    {
+      "width": 1440,
+      "scheme": "dark",
+      "lang": "uk",
+      "ring": {
+        "x": 1027.3125,
+        "y": 103,
+        "width": 112,
+        "height": 24
+      },
+      "track": {
+        "x": 1027.3125,
+        "y": 103,
+        "width": 112,
+        "height": 24
+      },
+      "pageErrors": []
+    },
+    {
+      "width": 1440,
+      "scheme": "dark",
+      "lang": "en",
+      "ring": {
+        "x": 1069.65625,
+        "y": 103,
+        "width": 112,
+        "height": 24
+      },
+      "track": {
+        "x": 1069.65625,
+        "y": 103,
+        "width": 112,
+        "height": 24
+      },
+      "pageErrors": []
+    },
+    {
+      "width": 390,
+      "scheme": "light",
+      "lang": "uk",
+      "ring": {
+        "x": 222,
+        "y": 467.5,
+        "width": 124,
+        "height": 36
+      },
+      "track": {
+        "x": 222,
+        "y": 467.5,
+        "width": 124,
+        "height": 36
+      },
+      "pageErrors": []
+    },
+    {
+      "width": 390,
+      "scheme": "light",
+      "lang": "en",
+      "ring": {
+        "x": 222,
+        "y": 467.5,
+        "width": 124,
+        "height": 36
+      },
+      "track": {
+        "x": 222,
+        "y": 467.5,
+        "width": 124,
+        "height": 36
+      },
+      "pageErrors": []
+    },
+    {
+      "width": 390,
+      "scheme": "dark",
+      "lang": "uk",
+      "ring": {
+        "x": 222,
+        "y": 467.5,
+        "width": 124,
+        "height": 36
+      },
+      "track": {
+        "x": 222,
+        "y": 467.5,
+        "width": 124,
+        "height": 36
+      },
+      "pageErrors": []
+    },
+    {
+      "width": 390,
+      "scheme": "dark",
+      "lang": "en",
+      "ring": {
+        "x": 222,
+        "y": 467.5,
+        "width": 124,
+        "height": 36
+      },
+      "track": {
+        "x": 222,
+        "y": 467.5,
+        "width": 124,
+        "height": 36
+      },
+      "pageErrors": []
+    }
+  ],
+  "frames": [
+    "1440-dark-en-draft.png",
+    "1440-dark-en-ended.png",
+    "1440-dark-en-off.png",
+    "1440-dark-en-on.png",
+    "1440-dark-en-reduced.png",
+    "1440-dark-en-settings.png",
+    "1440-dark-en-snake-0.png",
+    "1440-dark-en-snake-1000.png",
+    "1440-dark-en-snake-2000.png",
+    "1440-dark-en-snake-3000.png",
+    "1440-dark-en-undo.png",
+    "1440-dark-en-unlimited-status.png",
+    "1440-dark-en-unlimited.png",
+    "1440-dark-uk-draft.png",
+    "1440-dark-uk-ended.png",
+    "1440-dark-uk-off.png",
+    "1440-dark-uk-on.png",
+    "1440-dark-uk-reduced.png",
+    "1440-dark-uk-settings.png",
+    "1440-dark-uk-snake-0.png",
+    "1440-dark-uk-snake-1000.png",
+    "1440-dark-uk-snake-2000.png",
+    "1440-dark-uk-snake-3000.png",
+    "1440-dark-uk-undo.png",
+    "1440-dark-uk-unlimited-status.png",
+    "1440-dark-uk-unlimited.png",
+    "1440-light-en-draft.png",
+    "1440-light-en-ended.png",
+    "1440-light-en-off.png",
+    "1440-light-en-on.png",
+    "1440-light-en-reduced.png",
+    "1440-light-en-settings.png",
+    "1440-light-en-snake-0.png",
+    "1440-light-en-snake-1000.png",
+    "1440-light-en-snake-2000.png",
+    "1440-light-en-snake-3000.png",
+    "1440-light-en-undo.png",
+    "1440-light-en-unlimited-status.png",
+    "1440-light-en-unlimited.png",
+    "1440-light-uk-draft.png",
+    "1440-light-uk-ended.png",
+    "1440-light-uk-off.png",
+    "1440-light-uk-on.png",
+    "1440-light-uk-reduced.png",
+    "1440-light-uk-settings.png",
+    "1440-light-uk-snake-0.png",
+    "1440-light-uk-snake-1000.png",
+    "1440-light-uk-snake-2000.png",
+    "1440-light-uk-snake-3000.png",
+    "1440-light-uk-undo.png",
+    "1440-light-uk-unlimited-status.png",
+    "1440-light-uk-unlimited.png",
+    "390-dark-en-draft.png",
+    "390-dark-en-ended.png",
+    "390-dark-en-off.png",
+    "390-dark-en-on.png",
+    "390-dark-en-reduced.png",
+    "390-dark-en-settings.png",
+    "390-dark-en-snake-0.png",
+    "390-dark-en-snake-1000.png",
+    "390-dark-en-snake-2000.png",
+    "390-dark-en-snake-3000.png",
+    "390-dark-en-undo.png",
+    "390-dark-en-unlimited-status.png",
+    "390-dark-en-unlimited.png",
+    "390-dark-uk-draft.png",
+    "390-dark-uk-ended.png",
+    "390-dark-uk-off.png",
+    "390-dark-uk-on.png",
+    "390-dark-uk-reduced.png",
+    "390-dark-uk-settings.png",
+    "390-dark-uk-snake-0.png",
+    "390-dark-uk-snake-1000.png",
+    "390-dark-uk-snake-2000.png",
+    "390-dark-uk-snake-3000.png",
+    "390-dark-uk-undo.png",
+    "390-dark-uk-unlimited-status.png",
+    "390-dark-uk-unlimited.png",
+    "390-light-en-draft.png",
+    "390-light-en-ended.png",
+    "390-light-en-off.png",
+    "390-light-en-on.png",
+    "390-light-en-reduced.png",
+    "390-light-en-settings.png",
+    "390-light-en-snake-0.png",
+    "390-light-en-snake-1000.png",
+    "390-light-en-snake-2000.png",
+    "390-light-en-snake-3000.png",
+    "390-light-en-undo.png",
+    "390-light-en-unlimited-status.png",
+    "390-light-en-unlimited.png",
+    "390-light-uk-draft.png",
+    "390-light-uk-ended.png",
+    "390-light-uk-off.png",
+    "390-light-uk-on.png",
+    "390-light-uk-reduced.png",
+    "390-light-uk-settings.png",
+    "390-light-uk-snake-0.png",
+    "390-light-uk-snake-1000.png",
+    "390-light-uk-snake-2000.png",
+    "390-light-uk-snake-3000.png",
+    "390-light-uk-undo.png",
+    "390-light-uk-unlimited-status.png",
+    "390-light-uk-unlimited.png"
+  ]
+}

@@ -1,5 +1,6 @@
 import { changeRelease, normalizeRelease, type ReleaseSetting, type ReleaseSettingChange } from "@/lib/release/settings";
 import fs from "node:fs";
+import { autonomyActive, changeAutonomy, endedAutonomy, type AutonomySetting, type AutonomyChange, type AutonomyDecisionInput } from "./autonomy";
 
 import { statePath } from "@/lib/configDir";
 import { ROTATION_THRESHOLD_FRACTION } from "@/lib/orchestrator/contextPolicy";
@@ -100,6 +101,8 @@ export interface AutoRotateSetting {
   why: string | null;
 }
 export interface SeatTickSettings {
+  autonomy?: AutonomySetting | null;
+  autonomyHistory?: AutonomySetting[];
   release?: ReleaseSetting | null;
   autoRotate?: AutoRotateSetting | null;
   maintenance?: BoardMaintenanceSetting | null;
@@ -128,6 +131,8 @@ export interface SeatTickSettings {
 /** The settings as one check should read them: the record with its expiry
     already applied. */
 export interface EffectiveSeatTickSettings {
+  autonomy?: AutonomySetting | null;
+  autonomyHistory?: AutonomySetting[];
   release?: ReleaseSetting | null;
   autoRotate?: AutoRotateSetting | null;
   maintenance: { enabled: boolean; intervalHours: number; intervalMs: number };
@@ -163,6 +168,8 @@ export interface EffectiveSeatTickSettings {
 }
 
 export interface SeatTickSettingsChange {
+  autonomy?: AutonomyChange;
+  autonomyDecision?: AutonomyDecisionInput;
   release?: ReleaseSettingChange;
   autoRotate?: { enabled?: boolean; thresholdPercent?: number | string | null; why?: string | null };
   maintenance?: { enabled?: boolean; intervalHours?: number | string | null };
@@ -237,6 +244,8 @@ function normalizeRow(project: string, value: unknown): SeatTickSettings {
   const raw = value as Record<string, unknown>;
   return {
     project,
+    ...(normalizeAutonomy(raw.autonomy) ? { autonomy: normalizeAutonomy(raw.autonomy) } : {}),
+    ...(Array.isArray(raw.autonomyHistory) ? { autonomyHistory: raw.autonomyHistory.map(normalizeAutonomy).filter((entry): entry is AutonomySetting => entry !== null) } : {}),
     ...(normalizeRelease(raw.release) ? { release: normalizeRelease(raw.release) } : {}),
     ...(normalizeAutoRotate(raw.autoRotate) ? { autoRotate: normalizeAutoRotate(raw.autoRotate) } : {}),
     ...(normalizeMaintenance(raw.maintenance) ? { maintenance: normalizeMaintenance(raw.maintenance) } : {}),
@@ -253,6 +262,15 @@ function normalizeRow(project: string, value: unknown): SeatTickSettings {
     updatedAt: isoOrNull(raw.updatedAt),
     setBy: normalizeActor(raw.setBy),
   };
+}
+
+function normalizeAutonomy(value: unknown): AutonomySetting | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const raw = value as AutonomySetting;
+  const actor = normalizeActor(raw.setBy);
+  if (!actor || typeof raw.enabled !== "boolean" || !isoOrNull(raw.startedAt) || !isoOrNull(raw.updatedAt)
+    || (raw.until !== null && !isoOrNull(raw.until))) return null;
+  return { ...raw, setBy: actor, decisions: Array.isArray(raw.decisions) ? raw.decisions : [] };
 }
 
 function normalizeAutoRotate(value: unknown): AutoRotateSetting | null {
@@ -379,6 +397,7 @@ export function effectiveSeatTickSettings(
   if (lapsed || seatTickSettingsAreDefault(settings)) {
     return {
       release: settings.release, maintenance, maintenanceSetting: settings.maintenance, autoRotate: settings.autoRotate,
+      autonomy: endedAutonomy(settings.autonomy, nowMs), autonomyHistory: settings.autonomyHistory,
       enabled: true,
       wakeIntervalMs: defaultWakeIntervalMs,
       reason: settings.reason,
@@ -395,6 +414,7 @@ export function effectiveSeatTickSettings(
   }
   return {
     release: settings.release, maintenance, maintenanceSetting: settings.maintenance, autoRotate: settings.autoRotate,
+    autonomy: endedAutonomy(settings.autonomy, nowMs), autonomyHistory: settings.autonomyHistory,
     enabled: settings.enabled,
     wakeIntervalMs: settings.wakeIntervalMinutes === null
       ? defaultWakeIntervalMs
@@ -424,11 +444,11 @@ export function effectiveSeatTickSettings(
  */
 export function seatTickSettingsAfterLapse(
   project: string,
-  lapsed: Pick<EffectiveSeatTickSettings, "reason" | "monitorPrompt" | "updatedAt" | "setBy"> & Partial<Pick<EffectiveSeatTickSettings, "maintenanceSetting" | "autoRotate" | "release">>,
+  lapsed: Pick<EffectiveSeatTickSettings, "reason" | "monitorPrompt" | "updatedAt" | "setBy"> & Partial<Pick<EffectiveSeatTickSettings, "maintenanceSetting" | "autoRotate" | "release" | "autonomy" | "autonomyHistory">>,
 ): SeatTickSettings {
   const restored = defaultSeatTickSettings(project);
-  if (!lapsed.reason && !lapsed.monitorPrompt && !lapsed.maintenanceSetting && !lapsed.autoRotate && !lapsed.release) return restored;
-  return { ...restored, ...(lapsed.release ? { release: lapsed.release } : {}), ...(lapsed.maintenanceSetting ? { maintenance: lapsed.maintenanceSetting } : {}), ...(lapsed.autoRotate ? { autoRotate: lapsed.autoRotate } : {}), reason: lapsed.reason, monitorPrompt: lapsed.monitorPrompt, updatedAt: lapsed.updatedAt, setBy: lapsed.setBy };
+  if (!lapsed.reason && !lapsed.monitorPrompt && !lapsed.maintenanceSetting && !lapsed.autoRotate && !lapsed.release && !lapsed.autonomy && !lapsed.autonomyHistory?.length) return restored;
+  return { ...restored, ...(lapsed.autonomy ? { autonomy: lapsed.autonomy } : {}), ...(lapsed.autonomyHistory ? { autonomyHistory: lapsed.autonomyHistory } : {}), ...(lapsed.release ? { release: lapsed.release } : {}), ...(lapsed.maintenanceSetting ? { maintenance: lapsed.maintenanceSetting } : {}), ...(lapsed.autoRotate ? { autoRotate: lapsed.autoRotate } : {}), reason: lapsed.reason, monitorPrompt: lapsed.monitorPrompt, updatedAt: lapsed.updatedAt, setBy: lapsed.setBy };
 }
 
 export type SeatTickSettingsChangeResult =
@@ -450,7 +470,11 @@ export function applySeatTickSettingsChange(
   change: SeatTickSettingsChange,
   context: { at: string; actor: SeatTickSettingsActor },
 ): SeatTickSettingsChangeResult {
-  const touched = ["enabled", "wakeIntervalMinutes", "reason", "monitorPrompt", "until", "maintenance", "autoRotate", "release"].filter((key) => Object.hasOwn(change, key));
+  if (change.autonomy !== undefined || change.autonomyDecision !== undefined) {
+    const effective = effectiveSeatTickSettings(current, Date.parse(context.at), 60 * 60_000);
+    if (effective.lapsed) current = seatTickSettingsAfterLapse(current.project, effective);
+  }
+  const touched = ["enabled", "wakeIntervalMinutes", "reason", "monitorPrompt", "until", "maintenance", "autoRotate", "release", "autonomy", "autonomyDecision"].filter((key) => Object.hasOwn(change, key));
   if (touched.length === 0) return { ok: false, error: "a tick settings change needs at least one field" };
 
   const enabled = Object.hasOwn(change, "enabled") ? change.enabled : current.enabled;
@@ -559,7 +583,33 @@ export function applySeatTickSettingsChange(
     try { release = changeRelease(release, change.release!, context, current.project); }
     catch (error) { return { ok: false, error: error instanceof Error ? error.message : "invalid release change" }; }
   }
+  let autonomy = endedAutonomy(current.autonomy, Date.parse(context.at));
+  const autonomyHistory = [...(current.autonomyHistory ?? [])];
+  if (Object.hasOwn(change, "autonomy")) {
+    try {
+      const next = changeAutonomy(autonomy, change.autonomy!, context, current.project, enabled);
+      if (autonomy && next?.startedAt !== autonomy.startedAt) autonomyHistory.push(autonomy);
+      autonomy = next;
+    } catch (error) { return { ok: false, error: (error as Error).message }; }
+  }
+  if (autonomy?.enabled && !enabled) {
+    try { autonomy = changeAutonomy(autonomy, { enabled: false, why: change.reason ?? current.reason ?? "Wakes turned off" }, context, current.project, false); }
+    catch (error) { return { ok: false, error: (error as Error).message }; }
+  }
+  if (change.autonomyDecision !== undefined) {
+    const d = change.autonomyDecision;
+    if (context.actor.kind !== "manager" || context.actor.project !== current.project) return { ok: false, error: "only this project's seat records autonomous decisions" };
+    if (!autonomy || !autonomyActive(autonomy, Date.parse(context.at)) || d?.startedAt !== autonomy.startedAt) return { ok: false, error: "this autonomy episode is no longer active" };
+    if (!d || ["id", "decision", "why", "undo"].some(key => typeof d[key as keyof typeof d] !== "string" || !String(d[key as keyof typeof d]).trim() || String(d[key as keyof typeof d]).length > 2000)) return { ok: false, error: "autonomyDecision needs id, decision, why and undo (1–2000 characters each)" };
+    if (d.taskId !== undefined && (typeof d.taskId !== "string" || !d.taskId || d.taskId.length > 200)) return { ok: false, error: "invalid autonomyDecision.taskId" };
+    const decision = { id: d.id, decision: redactMonitorText(d.decision), why: redactMonitorText(d.why), undo: redactMonitorText(d.undo), ...(d.taskId ? { taskId: d.taskId } : {}), ...(d.review ? { review: d.review, reviewState: "pending" as const } : {}) };
+    const prior = autonomy.decisions.find(entry => entry.id === d.id);
+    if (prior && (["decision", "why", "undo", "taskId"].some(key => prior[key as keyof typeof prior] !== decision[key as keyof typeof decision]) || JSON.stringify(prior.review) !== JSON.stringify(d.review))) return { ok: false, error: "autonomous decision id already records different content" };
+    if (!prior) autonomy = { ...autonomy, decisions: [...autonomy.decisions, { ...decision, at: context.at, by: context.actor }] };
+  }
   const next: SeatTickSettings = {
+    ...(autonomy ? { autonomy } : {}),
+    ...(autonomyHistory.length ? { autonomyHistory } : {}),
     ...(release ? { release } : {}),
     project: current.project,
     ...(maintenance ? { maintenance } : {}),
@@ -605,4 +655,54 @@ export function applySeatTickNoteLineEdits(
 ): { ok: true; monitorPrompt: string | null } | { ok: false; error: string } {
   const edited = applyLineEdits(note, edits, "the note");
   return edited.ok ? { ok: true, monitorPrompt: edited.value } : { ok: false, error: edited.error };
+}
+
+/** A report acknowledgement merges into the latest row, preserving concurrent edits. */
+export function markAutonomyReported(project: string, startedAt: string, at: string, filePath = seatTickSettingsPath()): void {
+  settingsStore.mutate(filePath, file => {
+    const current = file.projects[project];
+    if (!current) throw new Error("autonomy episode not found");
+    const mark = (episode: AutonomySetting) => episode.startedAt === startedAt ? { ...endedAutonomy(episode, Date.parse(at))!, reportAt: at } : episode;
+    const next = { ...current, ...(current.autonomy ? { autonomy: mark(current.autonomy) } : {}),
+      ...(current.autonomyHistory ? { autonomyHistory: current.autonomyHistory.map(mark) } : {}) };
+    return { next: { ...file, projects: { ...file.projects, [project]: next } }, result: undefined };
+  });
+}
+
+/** Apply against the locked row so an extension cannot overwrite a decision or an end report. */
+export function changeSeatTickSettings(project: string, change: SeatTickSettingsChange, context: { at: string; actor: SeatTickSettingsActor }, filePath = seatTickSettingsPath()): SeatTickSettingsChangeResult {
+  return settingsStore.mutate(filePath, file => {
+    const result = applySeatTickSettingsChange(file.projects[project] ?? defaultSeatTickSettings(project), change, context);
+    return { next: result.ok ? { ...file, projects: { ...file.projects, [project]: result.settings } } : file, result };
+  });
+}
+
+export function expireSeatAutonomy(project: string, now: number, filePath = seatTickSettingsPath()): void {
+  settingsStore.mutate(filePath, file => {
+    const current = file.projects[project];
+    if (!current?.autonomy?.enabled || autonomyActive(current.autonomy, now)) return { next: file, result: undefined };
+    return { next: { ...file, projects: { ...file.projects, [project]: { ...current, autonomy: endedAutonomy(current.autonomy, now) } } }, result: undefined };
+  });
+}
+
+/** Re-read under the store lock: schedule expiry must preserve intervening autonomy edits. */
+export function expireSeatSchedule(project: string, now: number, interval: number, filePath = seatTickSettingsPath()): void {
+  settingsStore.mutate(filePath, file => {
+    const current = file.projects[project];
+    if (!current) return { next: file, result: undefined };
+    const effective = effectiveSeatTickSettings(current, now, interval);
+    if (!effective.lapsed) return { next: file, result: undefined };
+    return { next: { ...file, projects: { ...file.projects, [project]: seatTickSettingsAfterLapse(project, effective) } }, result: undefined };
+  });
+}
+
+/** Form settlement is independently durable; retain failed attempts and allow the same id to retry. */
+export function markAutonomyDecisionReview(project: string, startedAt: string, id: string, reviewState: "decided" | "refused", filePath = seatTickSettingsPath()): void {
+  settingsStore.mutate(filePath, file => {
+    const current = file.projects[project];
+    if (!current) throw new Error("autonomy episode not found");
+    const mark = (episode: AutonomySetting) => episode.startedAt === startedAt ? { ...episode, decisions: episode.decisions.map(d => d.id === id ? { ...d, reviewState } : d) } : episode;
+    const next = { ...current, ...(current.autonomy ? { autonomy: mark(current.autonomy) } : {}), ...(current.autonomyHistory ? { autonomyHistory: current.autonomyHistory.map(mark) } : {}) };
+    return { next: { ...file, projects: { ...file.projects, [project]: next } }, result: undefined };
+  });
 }

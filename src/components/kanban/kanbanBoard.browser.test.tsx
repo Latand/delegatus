@@ -31461,3 +31461,137 @@ describe("native caller operator association", () => {
     } finally { served.stop(); }
   }, 300_000);
 });
+
+describe("full autonomy", () => {
+  browserTest("full autonomy: saved setting, snake, static motion and undo log at 1440 and 390", async () => {
+    const out = path.resolve(process.env.LLV_AUTONOMY_FRAMES ?? ".artifacts/full-autonomy");
+    fs.mkdirSync(out, { recursive: true });
+    const { defaultSeatTickSettings, applySeatTickSettingsChange, writeSeatTickSettings } = await import("@/lib/monitor/seatTickSettings");
+    const { seatTickSettingsAnswer } = await import("@/lib/monitor/seatTickSettingsAnswer");
+    const gateway = { kind: "gateway" as const, project: null, conversationId: null, seatEpoch: null };
+    let row = defaultSeatTickSettings("atlas");
+    const answer = (project: string) => {
+      writeSeatTickSettings(project, { ...row, project });
+      return seatTickSettingsAnswer(project, false, gateway, { now: Date.now });
+    };
+    const writes: unknown[] = [];
+    const server = await serveEvidenceFixture(out, undefined, {
+      "/api/monitor/seat-tick/settings": async (request: Request) => {
+        const project = new URL(request.url).searchParams.get("project") ?? "atlas";
+        if (request.method !== "PUT") return Response.json(answer(project));
+        const body = await request.json();
+        writes.push(body);
+        const applied = applySeatTickSettingsChange({ ...row, project: body.project }, body, { at: new Date().toISOString(), actor: gateway });
+        if (!applied.ok) return Response.json({ error: applied.error }, { status: 400 });
+        row = applied.settings;
+        if (row.autonomy?.enabled && row.autonomy.decisions.length === 0) {
+          const actor = { kind: "manager" as const, project: body.project, conversationId: "conversation_seat", seatEpoch: 1 };
+          const logged = applySeatTickSettingsChange(row, { autonomyDecision: { startedAt: row.autonomy.startedAt, id: "layout", decision: "Compact export layout", why: "The full title fits the phone.", undo: "Reopen the export-layout form and choose Spacious." } }, { at: new Date().toISOString(), actor });
+          if (!logged.ok) throw new Error(logged.error);
+          row = logged.settings;
+          row.autonomy!.decisions.push(...(["decided", "pending", "refused"] as const).map(reviewState => ({ ...row.autonomy!.decisions[0]!, id: reviewState, decision: `Layout form: ${reviewState}`, reviewState })));
+        }
+        return Response.json({ ...answer(body.project), changed: true });
+      },
+      "/api/roles": { revision: "fixture", health: "ok", launchChoices: [], roles: [{ id: "maintainer", name: "Maintainer", config: { engine: "claude", model: "opus", effort: "high" } }] },
+    });
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    const readings: unknown[] = [];
+    const control = '[role="slider"][data-seat-tick-switch]';
+    const seek = async (page: Page, time = 1000) => page.evaluate(t => {
+      for (const animation of document.getAnimations()) {
+        animation.pause();
+        const target = (animation.effect as KeyframeEffect | null)?.target;
+        animation.currentTime = target instanceof Element && target.matches(".seat-tick-autonomy-snake") ? t : 1000;
+      }
+    }, time);
+    try {
+      for (const width of [1440, 390]) for (const scheme of ["light", "dark"] as const) for (const lang of ["uk", "en"] as const) {
+        row = defaultSeatTickSettings("atlas");
+        const phone = width === 390;
+        const label = `${width}-${scheme}-${lang}`;
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=seat-head&tick=driver`, { width, height: phone ? 844 : 900 }, scheme, lang, "no-preference", phone);
+        try {
+          await page.evaluate(value => document.documentElement.setAttribute("data-role-frame", value), DEFAULT_ROLE_FRAME);
+          const toastDismiss = page.locator("[data-attention-toast-dismiss]");
+          await toastDismiss.waitFor({ timeout: 2000 }).catch(error => { if (error.name !== "TimeoutError") throw error; });
+          if (await toastDismiss.isVisible()) await toastDismiss.click();
+          if (phone) await page.locator("[data-mobile2-open=seat]").first().click();
+          const chip = page.locator(`${control}:visible`).first();
+          await chip.waitFor();
+          expect(await chip.getAttribute("data-seat-tick-autonomy")).toBe("off");
+          await seek(page);
+          await page.screenshot({ path: path.join(out, `${label}-off.png`) });
+          await chip.locator("[data-seat-tick-thumb]").click();
+          const toggle = page.locator("[data-seat-tick-autonomy-enabled]:visible");
+          await toggle.scrollIntoViewIfNeeded();
+          await toggle.click();
+          const duration = page.locator("select[data-seat-tick-autonomy-duration]:visible");
+          expect(await duration.inputValue()).toBe("8");
+          await seek(page);
+          await page.screenshot({ path: path.join(out, `${label}-draft.png`) });
+          await page.locator("[data-seat-tick-save]:visible").click();
+          await page.waitForFunction(() => document.querySelector<HTMLSelectElement>('select[data-seat-tick-autonomy-duration]')?.value === "keep");
+          await toggle.scrollIntoViewIfNeeded();
+          await seek(page);
+          await page.screenshot({ path: path.join(out, `${label}-settings.png`) });
+          // Escape closes the settings surface, exposing the chip in its actual header.
+          await page.keyboard.press("Escape");
+          const active = page.locator(`${control}[data-seat-tick-autonomy=on]:visible`).first();
+          await active.waitFor();
+          for (const phase of [0, 1000, 2000, 3000]) {
+            await seek(page, phase);
+            expect(await active.evaluate(node => {
+              const box = node.getBoundingClientRect();
+              return node.contains(document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2));
+            })).toBe(true);
+            await active.screenshot({ path: path.join(out, `${label}-snake-${phase}.png`) });
+          }
+          await seek(page);
+          await page.screenshot({ path: path.join(out, `${label}-on.png`) });
+          const ring = await active.locator("[data-seat-tick-autonomy-ring]").boundingBox();
+          const track = await active.locator("[data-seat-tick-track]").boundingBox();
+          expect(ring).not.toBeNull(); expect(track).not.toBeNull();
+          expect(Math.abs(ring!.width - track!.width)).toBeLessThan(1);
+          expect(Math.abs(ring!.height - track!.height)).toBeLessThan(1);
+          await page.emulateMedia({ reducedMotion: "reduce" });
+          await seek(page);
+          expect(await active.locator(".seat-tick-autonomy-solid").evaluate(node => getComputedStyle(node).display)).toBe("inline");
+          expect(await active.locator(".seat-tick-autonomy-snake").first().evaluate(node => getComputedStyle(node).animationName)).toBe("none");
+          await page.screenshot({ path: path.join(out, `${label}-reduced.png`) });
+          await active.locator("[data-seat-tick-thumb]").click();
+          const details = page.locator("[data-seat-tick-details]:visible");
+          await details.locator("summary").click();
+          const log = page.locator("[data-seat-tick-autonomy-log]:visible");
+          await log.scrollIntoViewIfNeeded();
+          expect(await log.textContent()).toContain("Reopen the export-layout form");
+          await seek(page);
+          await page.screenshot({ path: path.join(out, `${label}-undo.png`) });
+          await duration.selectOption("unlimited");
+          await page.locator("[data-seat-tick-save]:visible").click();
+          await page.waitForFunction(() => document.querySelector<HTMLSelectElement>('select[data-seat-tick-autonomy-duration]')?.selectedOptions[0]?.value === "keep");
+          await toggle.scrollIntoViewIfNeeded();
+          await seek(page);
+          await page.screenshot({ path: path.join(out, `${label}-unlimited.png`) });
+          await page.locator("[data-seat-tick-autonomy-summary]:visible").scrollIntoViewIfNeeded();
+          await seek(page);
+          await page.screenshot({ path: path.join(out, `${label}-unlimited-status.png`) });
+          await toggle.click();
+          await page.locator("[data-seat-tick-save]:visible").click();
+          await page.waitForFunction(() => !document.querySelector('[data-seat-tick-autonomy="on"]'));
+          await toggle.scrollIntoViewIfNeeded();
+          await seek(page);
+          await page.screenshot({ path: path.join(out, `${label}-ended.png`) });
+          readings.push({ width, scheme, lang, ring, track, pageErrors });
+          expect(pageErrors).toEqual([]);
+        } catch (error) {
+          await seek(page);
+          await page.screenshot({ path: path.join(out, `${label}-failure.png`) });
+          fs.writeFileSync(path.join(out, "failure.json"), JSON.stringify({ label, row, writes, pageErrors, body: await page.locator("body").innerText() }, null, 2));
+          throw error;
+        } finally { await context.close(); }
+      }
+      fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify({ readings, writes }, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 240_000);
+});

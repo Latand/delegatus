@@ -4,9 +4,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { agentRegistry } from "@/lib/agent/registry";
 import { callerConversationId } from "@/lib/agent/operatorAuthority";
 import {
-  applySeatTickSettingsChange,
-  readSeatTickSettings,
-  writeSeatTickSettings,
+  changeSeatTickSettings,
   type SeatTickSettingsActor,
   type SeatTickSettingsChange,
 } from "@/lib/monitor/seatTickSettings";
@@ -35,7 +33,8 @@ export const dynamic = "force-dynamic";
  *   `readSeatTickSettings`, so what comes back is what a later check will
  *   read rather than the echo of what was sent. A change with no fields is a
  *   read, as the tool's is.
- * - **Nobody is refused; everybody is attributed.** Controls are a capability
+ * - **Every change is attributed.** Guarded sub-settings apply their actor rules.
+ *   Controls are a capability
  *   (`rotationActor`, #1402): the browser records as `gateway` — the
  *   operator's own session, which is what the board card already calls it — a
  *   caller that named itself with the target project's active seat records as
@@ -117,6 +116,7 @@ export async function PUT(req: NextRequest): Promise<NextResponse<SeatTickSettin
      one place that decides what each field may be, and it names the field and
      the rule in the refusal it returns. */
   const change: SeatTickSettingsChange = {};
+  if (body.autonomy !== undefined) change.autonomy = body.autonomy as SeatTickSettingsChange["autonomy"];
   if (body.release !== undefined) change.release = body.release as SeatTickSettingsChange["release"];
   if (body.autoRotate !== undefined) change.autoRotate = body.autoRotate as SeatTickSettingsChange["autoRotate"];
   if (body.maintenance !== undefined) change.maintenance = body.maintenance as SeatTickSettingsChange["maintenance"];
@@ -143,10 +143,9 @@ export async function PUT(req: NextRequest): Promise<NextResponse<SeatTickSettin
     if (Object.keys(change).length === 0) {
       return NextResponse.json(seatTickSettingsAnswer(project, false, actor), { headers: NO_STORE });
     }
-    const applied = applySeatTickSettingsChange(readSeatTickSettings(project), change, { at: new Date().toISOString(), actor });
+    const applied = changeSeatTickSettings(project, change, { at: new Date().toISOString(), actor });
     if (!applied.ok) return NextResponse.json({ error: applied.error }, { status: 400 });
     if (change.release) releaseControlChange(project, change.release, actor, applied.settings.updatedAt!);
-    writeSeatTickSettings(project, applied.settings);
     return NextResponse.json({ ...seatTickSettingsAnswer(project, true, actor), ...(applied.notes ? { notes: applied.notes } : {}) }, { headers: NO_STORE });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "seat tick settings could not be written" }, { status: 500 });

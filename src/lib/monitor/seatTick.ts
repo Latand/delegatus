@@ -1,3 +1,4 @@
+import { autonomyActive, pendingAutonomyReports, autonomyEndInstructions } from "./autonomy";
 import { createHash } from "node:crypto";
 import { seatTickBullet } from "./report";
 import { redactMonitorText } from "./redact";
@@ -1242,8 +1243,11 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
   const persistedStalls = stalled.filter((entry) => verifiedIdle(entry.pipeline.stageActivity) || input.state.stalledSeen.includes(entry.pipeline.id));
   const persistedChildStalls = offeredChildStalls.filter((entry) => verifiedIdle(entry.child.activity) || input.state.stalledSeen.includes(childStallId(entry.child)));
   const unknownChildren = input.children.filter((child) => child.status === "unknown").length;
-  const unstarted = input.tasks.filter((task) => isUnstarted(task, input.now, input.policy.backlogAfterMs));
-  const backlog = input.tasks.filter((task) => task.status === "assigned" && !task.owned && !task.runsOn).length - unstarted.length;
+  const autonomous = autonomyActive(input.settings.autonomy, input.now);
+  const endReports = pendingAutonomyReports(input.settings, input.now);
+  const unstarted = input.tasks.filter((task) => isUnstarted(task, input.now, input.policy.backlogAfterMs)
+    || autonomous && task.status === "inbox" && !task.owned && !task.runsOn);
+  const backlog = input.tasks.filter((task) => task.status === "assigned" && !task.owned && !task.runsOn).length - unstarted.filter(task => task.status === "assigned").length;
   const openWork = hasOpenWork(input);
   /* The bound shortens while the seat's own children are moving (#1881): a
      child that settled or stalled since the last wake is due at the next
@@ -1278,7 +1282,7 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
      all. The stall memory above is kept fresh for the same reason: when the
      tick is turned back on it decides from what it has been watching rather
      than from a blank row. */
-  if (!input.settings.enabled) {
+  if (!input.settings.enabled && endReports.length === 0) {
     return {
       verdict: {
         kind: "quiet",
@@ -1291,9 +1295,20 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
     };
   }
 
+  // Ending the mode still owes its report after the operator disables wakes.
+  // No work agenda is admitted through that reporting exception.
+  if (!input.settings.enabled) {
+    if (!wakeDue && input.state.autonomySummaryFor === endReports[0]!.startedAt) return { verdict: { kind: "quiet", detail: "autonomy end report already requested" }, state: quiet(observed, at), cards: [] };
+    return { verdict: { kind: "wake", reasons: [{ kind: "autonomy-ended", detail: "the autonomy episode ended; its report is owed" }], items: [], deferred: 0, skippedChildren: { stale: 0, unreadable: 0, unchanged: 0 }, gaps: [], reportLines: [autonomyEndInstructions(endReports[0]!)] }, state: observed, cards: [] };
+  }
+
   const laneEvents = input.events.filter(event => isOwedEvent(event, input));
   const intervalAgenda = input.pipelines.some(isOpenLane) || runningChildren.length > 0 || input.signals.length > 0;
   const candidates: SeatTickWakeReason[] = [];
+  if (endReports.length && (wakeDue || input.state.autonomySummaryFor !== endReports[0]!.startedAt)) candidates.push({ kind: "autonomy-ended", detail: "the autonomy episode ended; its report is owed" });
+  if (autonomous && wakeDue && !input.pipelines.some(isOpenLane) && runningChildren.length === 0 && unstarted.length === 0) {
+    candidates.push({ kind: "autonomy-idle", detail: "Find and start useful work: Inbox, then GitHub issues, board-maintenance suggestions, then your findings. Prioritize autonomous-marked tasks; respect worker slots and the forbidden list." });
+  }
   const verifiedIdleDue = verifiedIdleWakeDue(input);
   if (wakeDue) {
     /* A verdict the seat cannot decide without leads the wake — and waits for
@@ -1340,7 +1355,7 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
   const asks = input.workerAsks ?? [];
   if (asks.length > 0) {
     const more = asks.length > 1 ? ` and ${asks.length - 1} more` : "";
-    candidates.push({ kind: "worker-ask", detail: `a worker or stage waits on you first and is off the operator's list${more}: answer each where it asked, or ask the operator in a decision form (publish_prototype_review) and dismiss_attention escalate {reviewId}` });
+    candidates.push({ kind: "worker-ask", detail: `a worker or stage waits on you first and is off the operator's list${more}: answer each where it asked, ${autonomous ? "decide yourself and record the decision with an undo path" : "or ask the operator in a decision form (publish_prototype_review) and dismiss_attention escalate {reviewId}"}` });
   }
   // A newly owed outcome is due on the next check, including after a recent
   // interval wake. Delivery accounting still discharges it exactly once.
@@ -1383,7 +1398,7 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
          a board showing twenty-nine assigned cards can see why, rather than
          concluding the tick cannot count. */
       const held = backlog > 0 ? `, and ${backlog} older than the backlog bound the wake no longer names` : "";
-      candidates.push({ kind: "unstarted-task", detail: `${unstarted.length} assigned board task(s) nothing has started${held}` });
+      candidates.push({ kind: "unstarted-task", detail: `${unstarted.length} ${autonomous ? "eligible" : "assigned"} board task(s) nothing has started${held}` });
     }
     /* The interval is a floor on wakes, never a licence to speak with nothing
        to say. Reaching here with no candidate means no lane event, no persisted
@@ -1455,7 +1470,7 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
        versioned work remains eligible to initialize it past an exhausted
        whole-reason retry guard. */
     const unseenPage = pending.some(item => item.itemVersion && !shownItems.has(item.itemVersion));
-    if (!(reason.kind === "interval" && hasPeriodicWork) && !unseenPage && guardCount(input.state, reason.kind, input.changeFingerprint) >= input.policy.retryGuard) {
+    if (!(reason.kind === "interval" && hasPeriodicWork) && reason.kind !== "autonomy-ended" && !(reason.kind === "autonomy-idle" && !input.state.autonomyShown?.startsWith(`${input.settings.autonomy?.startedAt}:`)) && !unseenPage && guardCount(input.state, reason.kind, input.changeFingerprint) >= input.policy.retryGuard) {
       guardHeld += 1;
       cards.push({
         ref: seatTickRetryGuardRef(reason.kind),
@@ -1546,7 +1561,7 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
         skippedChildren,
         unreadableChildren: unreadable.named,
         gaps,
-        ...(lines.length > 0 ? { reportLines: lines } : {}),
+        ...((lines.length > 0 || endReports.length) ? { reportLines: [...endReports.slice(0, 1).map(autonomyEndInstructions), ...lines] } : {}),
       },
       state,
       cards,
@@ -1594,7 +1609,7 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
     const idle = { ...quiet(state, at), idleSince: input.state.idleSince ?? at };
     /* The proposal is a wake too — it resumes a host and spends a turn — so it
        waits out the same hour on top of its own 24-hour slot. */
-    if (wakeDue && elapsed(input.state.lastProposalAt, input.now, input.policy.proposalIntervalMs)) {
+    if (!autonomous && wakeDue && elapsed(input.state.lastProposalAt, input.now, input.policy.proposalIntervalMs)) {
       return {
         verdict: { kind: "proactive", detail: `no open lane, no unblocked task, and the proposal slot is due${unplaced}` },
         state: idle,
@@ -1768,7 +1783,9 @@ export function seatTickReportLines(
       lines.push(compactLedger ? `Report ${input.workers!.running} running workers.` : "Nothing is running now: the report says so.");
     }
   }
-  if (asks.length > 1) {
+  if (asks.length && autonomyActive(input.settings.autonomy, input.now)) {
+    lines.push(`Owed choices: decide within the autonomy rules, log why and undo. Resolve existing reports with bridge_report class: status, matching keys: ${asks.map(ask => ask.key).join(", ")}. Forbidden choices still wait for the operator.`);
+  } else if (asks.length > 1) {
     // Keep all durable keys visible without repeating the same bridge action
     // sixteen times in the reserved tail of a bounded wake.
     lines.push(`${compactLedger ? "Question reports owed: bridge_report class: question; question in decision section; keys: " : "Question reports owed: file bridge_report with class: question, the question in the decision section, and each matching key: "}${asks.map(ask => ask.key).join(", ")}.`);
@@ -2045,6 +2062,8 @@ export function seatTickWakeCommitPlan(
     terminalChildren?: readonly string[];
     /** The revision of the monitor note the wake carries (#2030). */
     noteShown?: string | null;
+    autonomySummaryFor?: string;
+    autonomyShown?: string;
     /** The project's Bridge reports setting: off, the landing records no
         owed outcome (docs/design/orchestrator-reports.md §5.1). */
     bridgeReports?: boolean;
@@ -2053,7 +2072,7 @@ export function seatTickWakeCommitPlan(
   },
 ): SeatTickWakeCommit | null {
   const { fingerprint, eventsThrough } = context;
-  const note = context.noteShown === undefined ? {} : { noteShown: context.noteShown };
+  const note = { ...(context.autonomyShown ? { autonomyShown: context.autonomyShown } : {}), ...(context.noteShown === undefined ? {} : { noteShown: context.noteShown }), ...(context.autonomySummaryFor ? { autonomySummaryFor: context.autonomySummaryFor } : {}) };
   if (verdict.kind === "proactive") return { proposal: true, reasons: [], fingerprint, eventsThrough, children: [], announcedLanes: [], announcedDeploys: [], announcedMaintenance: [], shownChildren: [], ...note };
   if (verdict.kind !== "wake") return null;
   const framed = context.frozenText === undefined ? null : `\n${context.frozenText}\n`;
@@ -2161,7 +2180,7 @@ export function seatTickWakeCommit(
   const eventsThrough = Math.max(state.eventsThrough ?? 0, commit.eventsThrough);
   /* What the seat now holds of its own note (#2030); a plan that predates the
      field leaves the record as it was. */
-  const note = commit.noteShown === undefined ? {} : { noteShown: commit.noteShown };
+  const note = { ...(commit.autonomyShown ? { autonomyShown: commit.autonomyShown } : {}), ...(commit.noteShown === undefined ? {} : { noteShown: commit.noteShown }), ...(commit.autonomySummaryFor ? { autonomySummaryFor: commit.autonomySummaryFor } : {}) };
   if (commit.proposal) {
     return {
       ...state,
@@ -2186,7 +2205,9 @@ export function seatTickWakeCommit(
   const wakesWithoutChange: Partial<Record<SeatTickWakeReasonKind, number>> = {};
   for (const kind of SEAT_TICK_WAKE_REASON_KINDS) {
     if (!carried.includes(kind)) continue;
-    wakesWithoutChange[kind] = fruitless ? (state.wakesWithoutChange[kind] ?? 0) + 1 : 0;
+    const sameAutonomyEpisode = commit.autonomyShown?.slice(0, 24) === state.autonomyShown?.slice(0, 24);
+    wakesWithoutChange[kind] = kind === "autonomy-idle" && !sameAutonomyEpisode ? 1
+      : fruitless ? (state.wakesWithoutChange[kind] ?? 0) + 1 : kind === "autonomy-idle" ? 1 : 0;
   }
   return {
     ...state,
