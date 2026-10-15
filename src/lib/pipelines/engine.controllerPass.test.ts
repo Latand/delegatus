@@ -244,16 +244,22 @@ test("bounded controller phases finish dirty parked and closed obligations in th
     .toEqual(expectedOperations.filter(operation => operation.endsWith(`:${row.id}`)));
 });
 
-test("selectors share immutable decoded hosts by revision and detach mutations", async () => {
+test("selectors share immutable candidates across kinds by revision and detach mutations", async () => {
   const { lane } = await committing();
   const first = await selectControllerPipelines("hosts"), second = await selectControllerPipelines("hosts");
   expect(first[0]).toBe(second[0]);
+  expect((await selectControllerPipelines("running"))[0]).toBe(first[0]);
+  expect(Object.isFrozen(first[0]!.runs[0]!.attempts[0])).toBe(true);
   await withPipelineMutation(async (rows, persist) => { rows[0]!.stateDetail = "changed"; await persist([rows[0]!]); });
   expect(first[0]!.stateDetail).not.toBe("changed");
   const third = await selectControllerPipelines("hosts");
   expect(third[0]).not.toBe(first[0]);
   expect(third[0]!.id).toBe(lane.id);
   expect(third[0]!.stateDetail).toBe("changed");
+  await withPipelineMutation(async (rows, persist) => { rows[0]!.pendingReviewFlowCleanup = ["retained-flow"]; await persist([rows[0]!]); });
+  const cleanup = await selectControllerPipelines("cleanup");
+  cleanup[0]!.pendingReviewFlowCleanup!.push("discarded-edit");
+  expect((await selectControllerPipelines("cleanup"))[0]!.pendingReviewFlowCleanup).toEqual(["retained-flow"]);
 });
 
 test.each(["alias", "unknown-common-directory"] as const)("the controller preserves full-engine decisions and command ordering for a %s branch claim", async shape => {
@@ -583,19 +589,33 @@ test.each([0,1000])("resident terminal hosts and stale flow cleanup use indexed 
   } finally { loads.mockRestore(); }
 });
 
-test("complete warmed phases keep attempt visits and copies bounded as one lane grows", async () => {
+test.each(["paused", "running"] as const)("complete warmed %s phases keep attempt visits and copies bounded as one lane grows", async state => {
   const { h, lane } = await committing();
-  lane.state = "paused"; lane.cursor = null;
+  const exec = h.ports.exec;
+  h.ports.exec = (command, args, ...rest) => {
+    // The generic Git stub loads a full snapshot to find this branch. Keep
+    // the same reply without counting fixture work as engine materialization.
+    if (command === "git" && args[0] === "branch" && args[1] === "--show-current") return { code: 0, stdout: `${lane.branch}\n`, stderr: "" };
+    return exec(command, args, ...rest);
+  };
+  lane.state = state; lane.cursor = state === "running" ? { ...lane.cursor!, state: "running" } : null;
   const original = lane.runs[0]!.attempts[0]!;
   for (const history of [32,4096]) {
     lane.runs[0]!.attempts = Array.from({ length: history }, (_, index) => ({ ...structuredClone(original), n: index + 1,
       historical: true, state: "failed", verdict: { status: "fail" }, completedAt: h.ports.now(),
       conversationId: `retained-${index}`, agentPath: `retained-path-${index}`, paneId: null, launchId: null }));
+    if (state === "running") lane.runs[0]!.attempts.push({ ...structuredClone(original), n: history + 1,
+      state: "running", verdict: null, completedAt: null });
     lane.terminalReap = { rounds:1,stopped:history,lastAt:h.ports.now(),settledAt:h.ports.now(),
       settledAttempts:Array.from({ length:history },(_,n) => `build:${n+1}`) };
     savePipelines([lane]); await tickPipelinesController([], h.ports);
     const samples = [];
     for (let sample = 0; sample < (process.env.LLV_CONTROLLER_FIX_EVIDENCE ? 30 : 3); sample++) {
+      // Fix the selected obligations across sizes and samples: the first
+      // sixteen history references plus the distinct current running tail.
+      const schedule = new Database(path.join(process.env.LLV_STATE_DIR!, "state.sqlite"));
+      try { schedule.query("UPDATE pipeline_tick_work SET attempt_cursor=0 WHERE row_key=?").run(lane.id); }
+      finally { schedule.close(); }
       let visits = 0, copies = 0, maxSliceMs = 0, timerDelayMs = 0;
       const isAttempts = (value: unknown[]) => value.length > 0 && value[0] && typeof value[0] === "object" && "n" in value[0] && "effectiveRole" in value[0];
       const iterator = Array.prototype[Symbol.iterator];
@@ -640,7 +660,7 @@ test("complete warmed phases keep attempt visits and copies bounded as one lane 
       expect(visits).toBeLessThanOrEqual(256);
       expect(copies).toBeLessThanOrEqual(128);
     }
-    if (process.env.LLV_CONTROLLER_FIX_EVIDENCE) fs.appendFileSync(process.env.LLV_CONTROLLER_FIX_EVIDENCE,JSON.stringify({ history, samples })+"\n");
+    if (process.env.LLV_CONTROLLER_FIX_EVIDENCE) fs.appendFileSync(process.env.LLV_CONTROLLER_FIX_EVIDENCE,JSON.stringify({ state, history, samples })+"\n");
   }
 },30_000);
 

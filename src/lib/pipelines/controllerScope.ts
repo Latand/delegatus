@@ -84,6 +84,26 @@ export function controllerRuns(pipeline: Pipeline): Pipeline["runs"] {
   }
   return runs;
 }
+
+/** Ordinary progression can change the selected attempts or append a new
+ * tail. Compare those obligations and run headers without serializing the
+ * retained history. Unscoped callers retain the complete comparison. */
+export function controllerTickFingerprint(pipeline: Pipeline): string {
+  const refs = controllerReferences(pipeline.id);
+  if (!refs) return JSON.stringify(pipeline);
+  return JSON.stringify({ ...pipeline,
+    runs: pipeline.runs.map((run, index) => {
+      const selected = refs.filter(ref => ref.run === index).map(ref => ref.attempt);
+      const tail = run.attempts.length - 1;
+      if (tail >= 0 && !selected.includes(tail)) selected.push(tail);
+      return { ...run, attemptCount: run.attempts.length, attempts: selected.map(at => run.attempts[at]) };
+    }),
+    terminalReap: pipeline.terminalReap ? { ...pipeline.terminalReap,
+      settledAttempts: { length: pipeline.terminalReap.settledAttempts?.length,
+        selected: refs.map(ref => controllerSettledAttempt(pipeline, `${ref.stageId}:${ref.n}`)) } } : undefined,
+  });
+}
+
 export function withControllerPipelineScope<T>(keys: readonly string[], run: () => Promise<T>, attempts?: ReadonlySet<string>, references?: Scope["references"]): Promise<T> {
   return scope.run({ keys, attempts, references, closes: new Map() }, run);
 }

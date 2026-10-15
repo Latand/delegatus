@@ -438,3 +438,103 @@ in the owned run. Its partial samples are retained in the numeric
 record. The two ordinary regressions failed independently on that revision;
 the identical SQL write comparison completed at every size. The candidate's
 expanded fixture completes all thirty phases at both sizes.
+
+## Running-lane and schema-upgrade follow-up
+
+The next review found repeated full copies in running selections, a regression
+in unrelated keyed writes, and an incomplete schema-readiness sentinel. Hosts
+and running selections now share immutable candidates. Other selection kinds
+retain detached report/header copies and use the controller attempt window.
+Explicit full-result callers retain their complete mutable snapshots.
+
+Complete running phases also serialized the whole lane twice to detect
+progress. That comparison now covers run headers, selected obligations and any
+new attempt tail, under the static controller-lane label. The growth case keeps
+a running cursor and a distinct current attempt alongside sixteen historical
+references. It pins that window before each measured phase so both sizes do
+exactly the same selected work.
+
+The write regression came from combining the reference-trigger graph with the
+scalar order subquery inside each keyed INSERT. Separating the indexed MAX
+lookup from the INSERT preserves its transaction, order allocation, conditional
+patches, rollback and all old-writer triggers. The unchanged 5,000 ms test failed
+on the reviewed code in 6,696.91 ms and now passes in 142.46 ms. An identical
+500-write comparison and its trigger-removal control are recorded below.
+
+Both the outer database-opening fast path and the installer now require the
+same complete reference schema. A fresh-process regression checks compact
+backfill, unchanged authoritative rows and zero reference inserts after an
+output-only edit. A separate probe installed the actual reference schema from
+`a677ae046`, then opened it in a fresh current process: compact input and owner
+backfill succeeded, every authoritative row stayed identical, and an output edit
+caused zero reference inserts.
+
+Three final alternating E4/E5 pairs use the unchanged checksums, baseline
+`011a4fe97`, identical guarded driver, fixed time and ten-second Git delay.
+Every pair matches all 941 authoritative hot/archive records. Cold initialization
+and two warm sweeps remain separate. Entries are medians except named maxima.
+
+| Measurement | Baseline | Follow-up candidate |
+| --- | ---: | ---: |
+| Cold largest phase (ms) | 11,211.04 | 1,026.46 |
+| Cold largest phase across trials (ms) | 11,289.08 | 1,041.82 |
+| Cold largest per-phase main-thread CPU (ms) | 1,670 | 960 |
+| Cold complete sweep including jobs (ms) | 11,233.74 | 11,760.80 |
+| Cold complete sweep main-thread CPU (ms) | 1,670 | 2,240 |
+| Cold decoded rows / source bytes | 614 / 75,757,641 | 526 / 67,767,804 |
+| Cold cloned roots / roots and attempt bytes | 859 / 110,803,535 | 256 / 30,295,938 |
+| Cold logical read bytes | 749,671,524 | 1,041,564,757 |
+| Cold maximum labelled synchronous slice (ms) | 377.01 | 586.05 |
+| Cold maximum timer delay (ms) | 459.69 | 590.85 |
+| Cold maximum lease hold (ms) | 446.96 | 332.52 |
+| Warm largest phase (ms) | 184.94 | 57.29 |
+| Warm largest phase across trials (ms) | 223.71 | 61.42 |
+| Warm largest per-phase main-thread CPU (ms) | 185 | 60 |
+| Warm complete sweep including jobs (ms) | 205.24 | 341.36 |
+| Warm complete sweep main-thread CPU (ms) | 185 | 310 |
+| Warm decoded rows / source bytes | 94.5 / 11,298,036 | 28.5 / 3,996,967 |
+| Warm cloned roots / roots and attempt bytes | 373 / 49,692,470 | 52 / 6,845,539 |
+| Warm logical read bytes | 15,889,378.5 | 36,351,195.5 |
+| Warm maximum labelled synchronous slice (ms) | 1.84 | 4.80 |
+| Warm maximum timer delay (ms) | 13.98 | 34.95 |
+| Warm maximum lease hold (ms) | 3.06 | 7.00 |
+| Whole-hot returned rows per sweep | 267 | 0 |
+
+The candidate detaches 108 individual attempts per sweep, included in the byte
+total. Complete-sweep CPU and logical reads remain above the original engine;
+cold schema initialization remains visible in slice and timer measurements.
+The fixture phase budgets pass. Production deployment and its calm observation
+window remain separate work.
+
+Thirty complete warmed phases per size and state keep the selected window fixed:
+
+| State | Retained history | Visits / copies per phase | Median phase (ms) | Maximum labelled slice (ms) | Maximum timer delay (ms) |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Paused | 32 | 112 / 16 | 24.42 | 1.66 | 17.45 |
+| Paused | 4,096 | 112 / 16 | 25.96 | 1.96 | 17.63 |
+| Running, plus current attempt | 32 | 136 / 17 | 23.60 | 1.08 | 15.90 |
+| Running, plus current attempt | 4,096 | 136 / 17 | 35.13 | 1.89 | 20.74 |
+
+On the reviewed revision, the new running case copied 12,291 attempts at the
+larger size and failed its 128-copy bound. Its fresh-process upgrade case failed
+because `pipeline_ref_inputs` remained absent. Together with the unchanged
+bounded-store timeout, all three findings have failing controls on the reviewed
+code. Numeric samples, source hashes and the earlier exploratory replay are
+retained under `runningAndUpgradeReview` in the
+[existing evidence record](../../evidence/perf/pipelines-controller-production-safety-fixes.json).
+
+| Unrelated 500-write transaction, three samples | Reviewed median (ms) | Follow-up median (ms) |
+| --- | ---: | ---: |
+| All reference triggers installed | 611.79 | 10.51 |
+| Reference triggers removed in the private database | 161.22 | 9.34 |
+
+The identical probe runs on the recorded reviewed export and final candidate.
+Ordinary prepared VALUES inserts take about 1.8 ms on both; the expensive
+combination is the scalar order subquery inside the trigger-bearing INSERT.
+Reference-trigger SQL stays intact in the fix.
+
+Focused verification passes 260 tests across ten explicit files, each with
+isolated HOME, config, temp and state roots and a closed Viewer control URL.
+The full touched files contribute 35 controller-pass and ten bounded-store
+tests. Nonincremental TypeScript and changed-file ESLint pass, with six existing
+warnings. The evidence record lists each file and count.

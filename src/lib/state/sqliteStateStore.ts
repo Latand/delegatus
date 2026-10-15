@@ -13,7 +13,7 @@ import { procBackend } from "@/lib/proc";
 import { rememberRecordBytes } from "./registryRecords";
 import { installPipelineControllerSchedule, selectPipelineTickWork, type PipelineTickWork } from "./pipelineControllerSchedule";
 import { installPipelineControllerIndex, type PipelineControllerSelection } from "./pipelineControllerIndex";
-import { installPipelineControllerReferences, type PipelineAttemptReference } from "./pipelineControllerReferences";
+import { installPipelineControllerReferences, pipelineControllerReferencesReady, type PipelineAttemptReference } from "./pipelineControllerReferences";
 import { installPipelineEvidenceIndex, pipelineEvidenceIndexReady } from "./pipelineEvidenceIndex";
 import { databaseFileIdentity, openCurrentDatabase } from "./currentDatabase";
 import { collectionReadCache, rememberCollectionReadCache, type ReadCacheSlot } from "./collectionReadCache";
@@ -384,7 +384,8 @@ function openRawDatabase(filename: string): Database {
           "state_rows_collection_order", "state_rows_controller_active", "state_changes_collection_revision",
           "pipeline_delivery_owner", "pipeline_delivery_history", "pipeline_creation_request", "pipeline_delivery_unclaimed",
           "pipeline_controller_work", "pipeline_controller_work_order", "pipeline_controller_work_insert",
-          "pipeline_controller_work_update", "pipeline_controller_work_delete", "pipeline_tick_delete", "pipeline_refs_delete"].every(name => names.has(name))
+          "pipeline_controller_work_update", "pipeline_controller_work_delete", "pipeline_tick_delete"].every(name => names.has(name))
+          && pipelineControllerReferencesReady(db, names)
           && pipelineEvidenceIndexReady(db)
           && db.query<{ journal_mode: string }, []>("PRAGMA journal_mode").get()?.journal_mode === "wal"
           && db.query<{ name: string }, []>("PRAGMA table_info(state_collections)").all().some(row => row.name === "change_floor")) return db;
@@ -1331,7 +1332,9 @@ export class SqliteStateCollection<T> {
 
   /** A candidate projection reads only indexed work, preserving collection
       order. A private read transaction pins flags and payloads together while
-      peer writers commit; decoding and per-caller copies yield between batches.
+      peer writers commit; decoding yields between batches. Observation-only
+      hosts/running selectors share immutable candidates; other selectors keep
+      detached copies, limited to the controller's attempt window when scoped.
       Actuation still belongs to the caller's existing admission fences. */
   async pipelineControllerSelection(kind: PipelineControllerSelection, throughOrder = Number.MAX_SAFE_INTEGER, keys?: readonly string[]): Promise<T[]> {
     if (this.options.collection !== "pipelines") throw new Error("pipeline selection requires the pipeline collection");
@@ -1353,7 +1356,8 @@ export class SqliteStateCollection<T> {
         `).all(kind, order, order, key, throughOrder, ...(keys ? [JSON.stringify(keys)] : []), 16));
         await mapCooperatively(rows, row => {
           const decoded = this.controllerRow(row.row_key, row.row_revision, db, identity, authority);
-          if (decoded) records.push(kind === "hosts" ? decoded : performanceSpans.sync("pipeline.copy", () => this.options.clone(decoded)));
+          if (decoded) records.push(kind === "hosts" || kind === "running" ? decoded
+            : performanceSpans.sync("pipeline.copy", () => (this.options.cloneController ?? this.options.clone)(decoded)));
           order = row.row_order; key = row.row_key;
         }, { batchSize: 4, timeBudgetMs: 16 });
         if (rows.length < 16) break;
@@ -1513,10 +1517,16 @@ export class SqliteStateCollection<T> {
               this.validate(record);
               const key = this.options.key(record);
               this.assertRowWritable(db, key);
+              // Keep the indexed order lookup outside the INSERT program:
+              // SQLite's scalar-subquery form repeatedly initializes the
+              // reference trigger graph even for unrelated collections.
+              const order = db.query<{ value: number }, [string]>(
+                "SELECT COALESCE(MAX(row_order)+1,0) AS value FROM state_rows WHERE collection=?",
+              ).get(this.options.collection)!.value;
               db.query(`INSERT INTO state_rows(collection,row_key,value_json,row_order,row_revision,controller_active)
-                VALUES (?,?,?,(SELECT COALESCE(MAX(row_order)+1,0) FROM state_rows WHERE collection=?),?,?) ON CONFLICT(collection,row_key) DO UPDATE SET
+                VALUES (?,?,?,?,?,?) ON CONFLICT(collection,row_key) DO UPDATE SET
                 value_json=excluded.value_json,row_revision=excluded.row_revision,controller_active=excluded.controller_active`)
-                .run(this.options.collection, key, JSON.stringify(record), this.options.collection, revision, this.options.controllerActive?.(record) === false ? 0 : 1);
+                .run(this.options.collection, key, JSON.stringify(record), order, revision, this.options.controllerActive?.(record) === false ? 0 : 1);
               changed.set(key, "upsert");
             },
             delete: (key) => {

@@ -3,11 +3,17 @@ import { mayRunStateStartupMutation } from "@/lib/stateOwnership";
 
 export type PipelineAttemptReference = { stageId: string; n: number; run: number; attempt: number; position: number; firstHost: number };
 
+export function pipelineControllerReferencesReady(db: Database, objects?: ReadonlySet<string>): boolean {
+  const names = objects ?? new Set(db.query<{ name: string }, []>("SELECT name FROM sqlite_master").all().map(row => row.name));
+  return ["pipeline_ref_inputs", "pipeline_attempt_refs", "pipeline_owner_refs", "pipeline_attempt_terminal",
+    "pipeline_attempt_current", "pipeline_owner_lookup", "pipeline_refs_insert", "pipeline_refs_update", "pipeline_refs_delete",
+    "pipeline_ref_inputs_insert", "pipeline_ref_inputs_update"].every(name => names.has(name));
+}
+
 /** Write-time projections. Old writers participate through the same row
  * triggers; controller reads never enumerate retained payloads for ownership. */
 export function installPipelineControllerReferences(db: Database, directory: string): void {
-  if (db.query("SELECT 1 FROM sqlite_master WHERE name='pipeline_ref_inputs'").get()
-    && db.query("SELECT 1 FROM sqlite_master WHERE name='pipeline_refs_delete'").get()) return;
+  if (pipelineControllerReferencesReady(db)) return;
   if (!mayRunStateStartupMutation(directory)) return;
   for (const name of ["pipeline_refs_insert", "pipeline_refs_update", "pipeline_refs_delete", "pipeline_ref_inputs_insert", "pipeline_ref_inputs_update"]) db.exec(`DROP TRIGGER IF EXISTS ${name}`);
   for (const name of ["pipeline_attempt_refs", "pipeline_owner_refs", "pipeline_ref_inputs"]) db.exec(`DROP TABLE IF EXISTS ${name}`);

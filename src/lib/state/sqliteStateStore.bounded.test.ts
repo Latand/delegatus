@@ -2,6 +2,7 @@ import { expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
 import { Database } from "bun:sqlite";
 import { initializeStateCollections, SqliteStateCollection, StateSnapshotChangedError } from "./sqliteStateStore";
 import { publishHotStateAuthority } from "./hotStateAuthority";
@@ -338,3 +339,44 @@ test("output-only old-writer edits leave compact references intact as retained h
     } finally { peer.close(); }
   } finally { fs.rmSync(dir,{ recursive: true,force: true }); }
 },30_000);
+
+test("a fresh process upgrades the pre-compact reference schema before ordinary reads", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "controller-reference-upgrade-"));
+  const filename = path.join(dir, "state.sqlite");
+  const row = { key: "legacy-lane", state: "paused", runs: [{ stageId: "build", attempts: [
+    { n: 1, conversationId: "legacy-host", state: "failed", completedAt: "done", output: "retained" },
+  ] }] };
+  const options = { collection: "pipelines", schemaVersion: 1, busyMessage: "busy", key: (value: typeof row) => value.key,
+    decode: (raw: unknown) => raw as typeof row, clone: (value: typeof row) => structuredClone(value) };
+  try {
+    initializeStateCollections(filename, [{ ...options, migrationId: "legacy", loadRecords: () => [row] }]);
+    const db = new Database(filename);
+    // The previous schema has reference tables and the delete sentinel, but
+    // maintains references directly from state_rows, without compact inputs.
+    for (const name of ["pipeline_refs_insert", "pipeline_refs_update", "pipeline_ref_inputs_insert", "pipeline_ref_inputs_update"]) db.exec(`DROP TRIGGER ${name}`);
+    db.exec("DROP TRIGGER pipeline_refs_delete");
+    db.exec("DROP TABLE pipeline_ref_inputs");
+    db.exec("CREATE TRIGGER pipeline_refs_delete AFTER DELETE ON state_rows WHEN OLD.collection='pipelines' BEGIN DELETE FROM pipeline_attempt_refs WHERE row_key=OLD.row_key; DELETE FROM pipeline_owner_refs WHERE row_key=OLD.row_key; END");
+    const before = db.query("SELECT * FROM state_rows").all();
+    db.close();
+    const result = spawnSync(process.execPath, ["--eval", `
+      const { SqliteStateCollection } = await import(${JSON.stringify(path.resolve("src/lib/state/sqliteStateStore.ts"))});
+      const store = new SqliteStateCollection(process.env.UPGRADE_DATABASE, {
+        collection: 'pipelines', schemaVersion: 1, busyMessage: 'busy',
+        key: row => row.key, decode: row => row, clone: row => structuredClone(row),
+      });
+      if (!store.pipelineOwnerExists([['conversationId','legacy-host']],false)) throw new Error('missing backfill');
+    `], { env: { ...process.env, UPGRADE_DATABASE: filename }, encoding: "utf8", timeout: 10_000 });
+    expect({ status: result.status, stderr: result.stderr }).toEqual({ status: 0, stderr: "" });
+    const upgraded = new Database(filename);
+    try {
+      expect(upgraded.query("SELECT * FROM state_rows").all()).toEqual(before);
+      expect(upgraded.query("SELECT row_key FROM pipeline_ref_inputs").all()).toEqual([{ row_key: row.key }]);
+      expect(upgraded.query("SELECT stageId,n FROM pipeline_attempt_refs").all()).toEqual([{ stageId: "build", n: 1 }]);
+      upgraded.exec("CREATE TABLE ref_upgrade_probe(n INTEGER)");
+      for (const table of ["pipeline_attempt_refs", "pipeline_owner_refs"]) upgraded.exec(`CREATE TRIGGER probe_${table} AFTER INSERT ON ${table} BEGIN INSERT INTO ref_upgrade_probe VALUES(1); END`);
+      upgraded.query("UPDATE state_rows SET value_json=json_set(value_json,'$.runs[0].attempts[0].output','new output') WHERE collection='pipelines'").run();
+      expect(upgraded.query("SELECT count(*) AS n FROM ref_upgrade_probe").get()).toEqual({ n: 0 });
+    } finally { upgraded.close(); }
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
