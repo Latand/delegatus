@@ -340,8 +340,12 @@ for (const engine of ["claude", "codex"] as const) {
       if (activity !== "same-tick" && activity !== "operator-refused") { f.h.setConversationActive(true); f.advance(10_000); await tickPipelines([], { ...f.h.ports }); }
       if (activity === "harness-control") {
         f.advance(Date.parse("2026-10-05T20:00:00Z") - f.now());
-        await patchPipeline(loadPipelines()[0]!.id, { action: "pause" }, f.h.ports);
-        await patchPipeline(loadPipelines()[0]!.id, { action: "resume" }, f.h.ports);
+        // Restore the historical control boundary: current pause stops this
+        // active host, so only older records can continue its next quota cut.
+        const prior = loadPipelines()[0]!;
+        prior.pausedAt = prior.resumedAt = f.h.ports.now();
+        prior.controlGeneration = "legacy-harness-control-before-cut";
+        savePipelines([prior]);
       }
       if (activity === "busy-operator" && engine === "codex") records.push({ type: "response_item", timestamp: at(), payload: { type: "function_call_output", call_id: "chain-call", output: "ok" } });
       if (activity !== "operator-refused") f.advance(Date.parse("2026-10-05T21:30:00Z") - f.now()); else f.advance(500);
