@@ -178,9 +178,11 @@ describe("platform verifier snapshot retries", () => {
   function harness(commands: WindowsSnapshotCommandResult[]) {
     const waits: number[] = [];
     const logs: string[] = [];
+    const timeouts: number[] = [];
     let calls = 0;
     const result = requireWindowsSnapshot({
-      attempt: () => {
+      attempt: timeoutMs => {
+        timeouts.push(timeoutMs);
         const command = commands[Math.min(calls++, commands.length - 1)]!;
         const data = parseWindowsProcessSnapshot(command.error ? "" : command.stdout);
         return { command, listed: snapshotEntries(data, () => null, 1) };
@@ -188,7 +190,7 @@ describe("platform verifier snapshot retries", () => {
       sleep: async ms => { waits.push(ms); },
       log: line => { logs.push(line); },
     });
-    return { result, waits, logs, calls: () => calls };
+    return { result, waits, logs, timeouts, calls: () => calls };
   }
 
   test("a good first snapshot needs no retry or diagnostic", async () => {
@@ -203,11 +205,28 @@ describe("platform verifier snapshot retries", () => {
     const run = harness([...Array.from({ length: count }, () => empty), good]);
     expect((await run.result).length).toBe(5);
     expect(run.calls()).toBe(count + 1);
+    expect(run.timeouts).toEqual(Array.from({ length: count + 1 }, () => 30_000));
     expect(run.waits).toEqual([250, 500].slice(0, count));
     expect(run.logs).toHaveLength(count);
     for (const [index, line] of run.logs.entries()) {
-      expect(line).toBe(`Win32_Process snapshot attempt ${index + 1}/3 failed: ${JSON.stringify({ ...empty, processes: 0 })}`);
+      expect(line).toBe(`Win32_Process snapshot attempt ${index + 1}/3 failed: ${JSON.stringify({ reason: "PowerShell exited successfully; the parsed snapshot is empty", timeoutMs: 30_000, ...empty, processes: 0 })}`);
     }
+  });
+
+  test("a cold-start timeout is named and can recover on a fresh attempt", async () => {
+    const timeout = { ...empty, status: null, signal: "SIGTERM", error: "ETIMEDOUT: powershell.exe" };
+    const run = harness([timeout, good]);
+    expect((await run.result).length).toBe(5);
+    expect(run.calls()).toBe(2);
+    expect(run.timeouts).toEqual([30_000, 30_000]);
+    expect(run.logs[0]).toContain('"reason":"PowerShell snapshot timed out after 30000 ms"');
+    expect(run.logs[0]).toContain('"error":"ETIMEDOUT: powershell.exe"');
+  });
+
+  test("persistent timeouts fail with a timeout diagnosis", async () => {
+    const run = harness([{ ...empty, status: null, error: "ETIMEDOUT: powershell.exe" }]);
+    await expect(run.result).rejects.toThrow("snapshot failed after 3 attempts: PowerShell snapshot timed out after 30000 ms");
+    expect(run.calls()).toBe(3);
   });
 
   test.each([
@@ -222,9 +241,10 @@ describe("platform verifier snapshot retries", () => {
     ["signal with parseable output", { ...good, status: null, signal: "SIGTERM" }],
   ] satisfies [string, WindowsSnapshotCommandResult][])("%s fails hard after three attempts with all raw evidence", async (_name, command) => {
     const run = harness([command]);
-    await expect(run.result).rejects.toThrow("after 3 attempts; PowerShell or the CSV parse is broken");
+    await expect(run.result).rejects.toThrow("snapshot failed after 3 attempts:");
     expect(run.calls()).toBe(3);
     expect(run.waits).toEqual([250, 500]);
+    expect(run.timeouts).toEqual([30_000, 30_000, 30_000]);
     expect(run.logs).toHaveLength(3);
     for (const [index, line] of run.logs.entries()) {
       expect(line.startsWith(`Win32_Process snapshot attempt ${index + 1}/3 failed: `)).toBe(true);

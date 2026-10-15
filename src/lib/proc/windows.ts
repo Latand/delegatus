@@ -86,11 +86,11 @@ export interface WindowsSnapshotCommandResult {
   error: string | null;
 }
 
-function runSnapshotCommand(): WindowsSnapshotCommandResult {
+function runSnapshotCommand(timeoutMs: number): WindowsSnapshotCommandResult {
   const result = spawnSync(
     "powershell.exe",
     ["-NoProfile", "-NonInteractive", "-EncodedCommand", encodedPowerShellCommand(WINDOWS_PROCESS_SNAPSHOT_SCRIPT)],
-    { encoding: "utf8", maxBuffer: MAX_BUFFER, timeout: RUN_TIMEOUT_MS, windowsHide: true },
+    { encoding: "utf8", maxBuffer: MAX_BUFFER, timeout: timeoutMs, windowsHide: true },
   );
   const error: NodeJS.ErrnoException | undefined = result.error;
   return {
@@ -120,8 +120,8 @@ export function resetWindowsSnapshotForTests(): void {
 /** Take a fresh command result and populate the same cache every backend reader
  * uses. The verifier calls this on each retry so the five-second TTL cannot
  * replay a failed attempt. Ordinary backend reads retain their single call. */
-export function refreshWindowsSnapshot(): WindowsSnapshotCommandResult {
-  const command = runSnapshotCommand();
+export function refreshWindowsSnapshot(timeoutMs = RUN_TIMEOUT_MS): WindowsSnapshotCommandResult {
+  const command = runSnapshotCommand(timeoutMs);
   snapshotMemo = {
     at: Date.now(),
     data: parseWindowsProcessSnapshot(command.error ? "" : command.stdout),
