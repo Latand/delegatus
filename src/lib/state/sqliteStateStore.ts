@@ -1,3 +1,5 @@
+import { AsyncLocalStorage } from "node:async_hooks";
+import { performanceSpans } from "@/lib/performanceSpans";
 import { AccountCommitBusyError, accountMutationHeld } from "@/lib/accounts/accountMutationContext";
 import crypto from "node:crypto";
 import { viewerLoopMonitor, withViewerOperation } from "@/lib/viewerLoopMonitor";
@@ -12,6 +14,7 @@ import { procBackend } from "@/lib/proc";
 
 import { rememberRecordBytes } from "./registryRecords";
 import { installPipelineControllerIndex, type PipelineControllerSelection } from "./pipelineControllerIndex";
+import { installPipelineEvidenceIndex, pipelineEvidenceIndexReady } from "./pipelineEvidenceIndex";
 import { databaseFileIdentity, openCurrentDatabase } from "./currentDatabase";
 import { FileTransactionBusyError } from "./fileTransaction";
 import { isDiskFullError, noteStateCommit, noteStateDiskFull, StateDiskFullError, stateFreeBytes, STATE_DISK_FULL_FLOOR_BYTES } from "./diskFull";
@@ -83,7 +86,7 @@ function deleteLease(lease: AbandonedLease): void {
     db.exec("BEGIN IMMEDIATE");
     injectWriteFault("release", lease.collection);
     db.query("DELETE FROM state_leases WHERE collection = ? AND owner_token = ?").run(lease.collection, lease.token);
-    db.exec("COMMIT");
+    performanceSpans.sync("state.lease-release", () => db.exec("COMMIT"));
     finishDurableHold(lease.token, lease.collection);
   } catch (error) { rollbackQuietly(db); throw error; }
   finally { db.close(); }
@@ -131,8 +134,24 @@ import {
 } from "./hotStateAuthority";
 
 const LOCK_ATTEMPTS = 6_000;
+const SYNC_LOCK_ATTEMPTS = 6; // At most 30 ms of deliberate sleep on a request thread.
 const LOCK_WAIT_MS = 5;
 const SYNC_SLEEP = new Int32Array(new SharedArrayBuffer(4));
+const stateWriteWait = new AsyncLocalStorage<{ started?: number; site: string }>();
+function sleepForStateWriter(): void {
+  const wait = stateWriteWait.getStore();
+  if (wait) wait.started ??= performance.now();
+  performanceSpans.sync("state.write-wait", () => Atomics.wait(SYNC_SLEEP, 0, 0, LOCK_WAIT_MS));
+}
+function measureStateWriteWait<T>(site: string, work: () => T): T {
+  const wait = { site, started: undefined as number | undefined };
+  let refused = true;
+  try { const value = stateWriteWait.run(wait, work); refused = false; return value; }
+  finally {
+    if (wait.started !== undefined) recordBlockingWait({ site: "state-write-lock", subject: site, synchronous: true,
+      durationMs: performance.now() - wait.started, refused });
+  }
+}
 const CHANGE_READ_CHUNK = 400;
 const CHANGE_RETENTION_REVISIONS = 1_024;
 const CHANGE_PRUNE_BATCH = 1_000;
@@ -329,18 +348,21 @@ function connectDatabase(filename: string): Database {
 }
 
 function connectRawDatabase(filename: string): Database {
+  return measureStateWriteWait("connectRawDatabase", () => connectRawDatabaseAttempt(filename));
+}
+function connectRawDatabaseAttempt(filename: string): Database {
   fs.mkdirSync(path.dirname(filename), { recursive: true, mode: 0o700 });
   const Database = sqliteDatabase();
   const db = new Database(filename, { create: true, strict: true });
   try {
-    for (let attempt = 0; attempt < LOCK_ATTEMPTS; attempt += 1) {
+    for (let attempt = 0; attempt < SYNC_LOCK_ATTEMPTS; attempt += 1) {
       try {
         db.exec("PRAGMA busy_timeout = 0; PRAGMA synchronous = FULL; PRAGMA journal_size_limit = 67108864; PRAGMA foreign_keys = ON;");
         return db;
       } catch (error) {
         if (!isBusyError(error)) throw classifyStateError(error, "state transaction");
         if (accountMutationHeld()) throw new AccountCommitBusyError("state writer is busy during account commit");
-        Atomics.wait(SYNC_SLEEP, 0, 0, LOCK_WAIT_MS);
+        sleepForStateWriter();
       }
     }
     throw new FileTransactionBusyError("state database connection is busy");
@@ -368,9 +390,12 @@ function openDatabase(filename: string): Database {
 }
 
 function openRawDatabase(filename: string): Database {
+  return measureStateWriteWait("openRawDatabase", () => openRawDatabaseAttempt(filename));
+}
+function openRawDatabaseAttempt(filename: string): Database {
   const db = connectRawDatabase(filename);
   try {
-    for (let attempt = 0; attempt < LOCK_ATTEMPTS; attempt += 1) {
+    for (let attempt = 0; attempt < SYNC_LOCK_ATTEMPTS; attempt += 1) {
       try {
         db.exec("PRAGMA journal_mode = WAL; PRAGMA auto_vacuum = INCREMENTAL;");
         db.exec("BEGIN IMMEDIATE");
@@ -448,6 +473,7 @@ function openRawDatabase(filename: string): Database {
           db.exec("ALTER TABLE state_collections ADD COLUMN change_floor INTEGER NOT NULL DEFAULT 0");
         }
         installPipelineControllerIndex(db, path.dirname(filename));
+        installPipelineEvidenceIndex(db, path.dirname(filename));
         db.exec("COMMIT");
         secureDatabaseFiles(filename);
         return db;
@@ -455,7 +481,7 @@ function openRawDatabase(filename: string): Database {
         rollbackQuietly(db);
         if (!isBusyError(error)) throw classifyStateError(error, "state transaction");
         if (accountMutationHeld()) throw new AccountCommitBusyError("state writer is busy during account commit");
-        Atomics.wait(SYNC_SLEEP, 0, 0, LOCK_WAIT_MS);
+        sleepForStateWriter();
       }
     }
     throw new FileTransactionBusyError("state database initialization is busy");
@@ -484,7 +510,10 @@ function isBusyError(error: unknown): boolean {
 }
 
 function withImmediateTransaction<T>(db: Database, busyMessage: string, operation: () => T, collection?: string): T {
-  for (let attempt = 0; attempt < LOCK_ATTEMPTS; attempt += 1) {
+  return measureStateWriteWait("transaction", () => immediateTransactionAttempt(db, busyMessage, operation, collection));
+}
+function immediateTransactionAttempt<T>(db: Database, busyMessage: string, operation: () => T, collection?: string): T {
+  for (let attempt = 0; attempt < SYNC_LOCK_ATTEMPTS; attempt += 1) {
     try {
       db.exec("BEGIN IMMEDIATE");
       const before = db.query<{ changes: number }, []>("SELECT total_changes() AS changes").get()!.changes;
@@ -498,7 +527,7 @@ function withImmediateTransaction<T>(db: Database, busyMessage: string, operatio
       rollbackQuietly(db);
       if (!isBusyError(error)) throw classifyStateError(error, "state transaction");
       if (accountMutationHeld()) throw new AccountCommitBusyError("state writer is busy during account commit");
-      Atomics.wait(SYNC_SLEEP, 0, 0, LOCK_WAIT_MS);
+      sleepForStateWriter();
     }
   }
   throw new FileTransactionBusyError(busyMessage);
@@ -550,53 +579,55 @@ export function initializeStateCollections(
     afterCollectionImport?: (collection: string) => void;
   } = {},
 ): void {
-  ensureFirstSqliteCutover(filename, seeds);
-  const allowFencedExisting = !options.reimportExisting && stateCollectionsInitialized(filename, seeds);
-  const db = openDatabase(filename);
-  try {
-    for (let attempt = 0; attempt < LOCK_ATTEMPTS; attempt += 1) {
-      try {
-        db.exec("BEGIN IMMEDIATE");
-        assertSqliteInitializationAuthority(filename, allowFencedExisting);
-        if (options.reimportExisting && !collectionMarkersMatch(db, seeds)) {
-          const removeLease = db.query("DELETE FROM state_leases WHERE collection = ?");
-          const removeCollection = db.query("DELETE FROM state_collections WHERE collection = ?");
+  return measureStateWriteWait("migration", () => {
+    ensureFirstSqliteCutover(filename, seeds);
+    const allowFencedExisting = !options.reimportExisting && stateCollectionsInitialized(filename, seeds);
+    const db = openDatabase(filename);
+    try {
+      for (let attempt = 0; attempt < SYNC_LOCK_ATTEMPTS; attempt += 1) {
+        try {
+          db.exec("BEGIN IMMEDIATE");
+          assertSqliteInitializationAuthority(filename, allowFencedExisting);
+          if (options.reimportExisting && !collectionMarkersMatch(db, seeds)) {
+            const removeLease = db.query("DELETE FROM state_leases WHERE collection = ?");
+            const removeCollection = db.query("DELETE FROM state_collections WHERE collection = ?");
+            for (const seed of seeds) {
+              removeLease.run(seed.collection);
+              removeCollection.run(seed.collection);
+            }
+          }
           for (const seed of seeds) {
-            removeLease.run(seed.collection);
-            removeCollection.run(seed.collection);
-          }
-        }
-        for (const seed of seeds) {
-          const current = db.query<{ schema_version: number; migration_id: string }, [string]>(
-            "SELECT schema_version, migration_id FROM state_collections WHERE collection = ?",
-          ).get(seed.collection);
-          if (current) {
-            if (current.schema_version !== seed.schemaVersion) {
-              throw new Error(`unsupported ${seed.collection} SQLite schema: ${current.schema_version}`);
+            const current = db.query<{ schema_version: number; migration_id: string }, [string]>(
+              "SELECT schema_version, migration_id FROM state_collections WHERE collection = ?",
+            ).get(seed.collection);
+            if (current) {
+              if (current.schema_version !== seed.schemaVersion) {
+                throw new Error(`unsupported ${seed.collection} SQLite schema: ${current.schema_version}`);
+              }
+              if (current.migration_id !== seed.migrationId) {
+                throw new Error(`unsupported ${seed.collection} SQLite migration: ${current.migration_id}`);
+              }
+              continue;
             }
-            if (current.migration_id !== seed.migrationId) {
-              throw new Error(`unsupported ${seed.collection} SQLite migration: ${current.migration_id}`);
-            }
-            continue;
+            insertSeed(db, seed);
+            options.afterCollectionImport?.(seed.collection);
           }
-          insertSeed(db, seed);
-          options.afterCollectionImport?.(seed.collection);
+          assertSqliteInitializationAuthority(filename, allowFencedExisting);
+          db.exec("COMMIT");
+          secureDatabaseFiles(filename);
+          return;
+        } catch (error) {
+          rollbackQuietly(db);
+          if (!isBusyError(error)) throw classifyStateError(error, "state transaction");
+          if (accountMutationHeld()) throw new AccountCommitBusyError("state writer is busy during account commit");
+          sleepForStateWriter();
         }
-        assertSqliteInitializationAuthority(filename, allowFencedExisting);
-        db.exec("COMMIT");
-        secureDatabaseFiles(filename);
-        return;
-      } catch (error) {
-        rollbackQuietly(db);
-        if (!isBusyError(error)) throw classifyStateError(error, "state transaction");
-        if (accountMutationHeld()) throw new AccountCommitBusyError("state writer is busy during account commit");
-        Atomics.wait(SYNC_SLEEP, 0, 0, LOCK_WAIT_MS);
       }
+      throw new FileTransactionBusyError("state migration is busy");
+    } finally {
+      db.close();
     }
-    throw new FileTransactionBusyError("state migration is busy");
-  } finally {
-    db.close();
-  }
+  });
 }
 
 /** Evidence of one legacy file's first-boot import (#1870). */
@@ -872,6 +903,86 @@ export function stateDatabaseSignature(filename: string): string {
   return parts.join("|");
 }
 
+let evidenceVersionReader: { identity: string; db: ReturnType<typeof connectReadonlyDatabase>; generation: number } | undefined;
+let evidenceReaderGeneration = 0;
+/** A dedicated read-only connection observes every committed write, including
+ * writes that bypass collection revisions and change journals. Its generation
+ * and inode prevent reuse after replacement or a switch of state directory. */
+export function stateEvidenceVersion(filename: string): string {
+  let identity: string;
+  try {
+    const stat = fs.statSync(filename, { bigint: true });
+    identity = `${filename}:${stat.dev}:${stat.ino}`;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    evidenceVersionReader?.db.close(); evidenceVersionReader = undefined;
+    return "missing";
+  }
+  if (evidenceVersionReader?.identity !== identity) {
+    evidenceVersionReader?.db.close();
+    evidenceVersionReader = undefined;
+    evidenceVersionReader = { identity, db: connectReadonlyDatabase(filename), generation: ++evidenceReaderGeneration };
+  }
+  const reader = evidenceVersionReader;
+  const version = reader.db.query<{ data_version: number }, []>("PRAGMA data_version").get()!.data_version;
+  const schema = reader.db.query<{ schema_version: number }, []>("PRAGMA schema_version").get()!.schema_version;
+  return `${reader.generation}:${version}:${schema}`;
+}
+
+/** The index's validity is checked against the actual trigger definitions.
+ * Schema loss or an older store takes the complete reader path. */
+export function pipelineEvidenceRevision(filename: string): string | null {
+  if (!fs.existsSync(filename)) return null;
+  const db = connectReadonlyDatabase(filename);
+  try {
+    if (!pipelineEvidenceIndexReady(db)) return null;
+    const revision = db.query<{ revision: number }, []>("SELECT revision FROM pipeline_evidence_clock WHERE id=1").get();
+    const schema = db.query<{ schema_version: number }, []>("PRAGMA schema_version").get()!.schema_version;
+    return revision ? `${databaseFileIdentity(filename)}:${schema}:${revision.revision}` : null;
+  } finally { db.close(); }
+}
+
+export type CompactEvidenceCache<T> = { identity: string; rows: Map<string, { revision: number; value: T }> };
+
+/** Revalidate only changed rows, against one consistent snapshot. The caller
+ * supplies a compact projection; this cache never retains historical JSON. */
+export async function readCompactPipelineEvidence<T>(filename: string, prior: CompactEvidenceCache<T> | undefined,
+  project: (record: unknown, collection: string) => T): Promise<CompactEvidenceCache<T> | null> {
+  if (!fs.existsSync(filename)) return null;
+  const db = connectReadonlyDatabase(filename);
+  try {
+    db.exec("BEGIN");
+    if (!pipelineEvidenceIndexReady(db)) return null;
+    const schema = db.query<{ schema_version: number }, []>("PRAGMA schema_version").get()!.schema_version;
+    const identity = `${databaseFileIdentity(filename)}:${schema}`;
+    const collections = db.query<{ collection: string }, []>("SELECT collection FROM state_collections WHERE collection IN ('pipelines','pipelines_archive')").all();
+    if (collections.length !== 2) return null;
+    const rows = new Map<string, { revision: number; value: T }>();
+    const read = db.query<{ value_json: string }, [string, string]>("SELECT value_json FROM state_rows WHERE collection=? AND row_key=?");
+    const headers = db.query<{ collection: string; row_key: string; revision: number }, []>(`SELECT r.collection,r.row_key,COALESCE(e.revision,-1) AS revision
+      FROM state_rows r LEFT JOIN pipeline_evidence_rows e ON e.collection=r.collection AND e.row_key=r.row_key
+      WHERE r.collection IN ('pipelines','pipelines_archive') ORDER BY r.collection,r.row_order,r.row_key`).iterate();
+    let slice = performance.now();
+    for (const header of headers) {
+      const key = JSON.stringify([header.collection, header.row_key]);
+      const previous = prior?.identity === identity ? prior.rows.get(key) : undefined;
+      if (previous && previous.revision === header.revision) rows.set(key, previous);
+      else {
+        const raw = performanceSpans.sync("state.sql-next", () => read.get(header.collection, header.row_key))!.value_json;
+        let value: unknown;
+        try { value = performanceSpans.sync("state.json", () => JSON.parse(raw), 1, Buffer.byteLength(raw)); }
+        catch (error) { throw new Error(`corrupt ${header.collection} SQLite row: ${header.row_key}`, { cause: error }); }
+        rows.set(key, { revision: header.revision, value: project(value, header.collection) });
+      }
+      if (performance.now() - slice >= 4) {
+        await performanceSpans.wait("pipeline.yield", () => new Promise<void>(resolve => setTimeout(resolve, 0)));
+        slice = performance.now();
+      }
+    }
+    return { identity, rows };
+  } finally { rollbackQuietly(db); db.close(); }
+}
+
 /** Read raw authoritative rows for compatibility projections, with JSON fallback before migration. */
 export function readStateCollectionRows(filename: string, collection: string): unknown[] | null {
   return readStateCollectionsRows(filename, [collection]).get(collection) ?? null;
@@ -938,13 +1049,17 @@ export async function visitStateCollectionsRows(
     const rows = db.query<{ collection: string; row_key: string; value_json: string }, SQLQueryBindings[]>(
       `SELECT collection, row_key, value_json FROM state_rows WHERE collection IN (${placeholders}) ORDER BY collection, row_order, row_key`,
     ).iterate(...collections as SQLQueryBindings[]);
-    for (const row of rows) {
+    const iterator = rows[Symbol.iterator]();
+    for (;;) {
+      const next = performanceSpans.sync("state.sql-next", () => iterator.next());
+      if (next.done) break;
+      const row = next.value;
       let value: unknown;
-      try { value = JSON.parse(row.value_json); }
+      try { value = performanceSpans.sync("state.json", () => JSON.parse(row.value_json), 1, Buffer.byteLength(row.value_json)); }
       catch (error) { throw new Error(`corrupt ${row.collection} SQLite row: ${row.row_key}`, { cause: error }); }
       visit(value, row.collection);
       if (performance.now() - slice >= 4) {
-        await new Promise<void>(resolve => setTimeout(resolve, 0));
+        await performanceSpans.wait("pipeline.yield", () => new Promise<void>(resolve => setTimeout(resolve, 0)));
         slice = performance.now();
       }
     }
@@ -1649,13 +1764,13 @@ export class SqliteStateCollection<T> {
       const acquiredAt = durableHolds.get(lease)!.start;
       const committed: string[] = [];
       try {
-        withViewerOperation("pipelines.controller-checkpoint", () => this.persistSession(lease, session, context => {
+        withViewerOperation("pipelines.controller-checkpoint", () => performanceSpans.sync("state.checkpoint", () => this.persistSession(lease, session, context => {
           if (context.structural) throw new Error("controller snapshots cannot replace the collection");
           for (const record of context.dirtyRecords) {
             assertCurrent(record);
             committed.push(this.options.key(record));
           }
-        }, records));
+        }, records)));
         for (const key of committed) {
           const current = rowRevision(key);
           if (current !== undefined) expected.set(key, current);
@@ -2204,7 +2319,7 @@ export class SqliteStateCollection<T> {
         INSERT INTO state_leases(collection, owner_token, owner_pid, owner_start_identity, acquired_at)
         VALUES (?, ?, ?, ?, ?)
       `).run(this.options.collection, ownerToken, process.pid, procBackend.processIdentity(process.pid), Date.now());
-      db.exec("COMMIT");
+      performanceSpans.sync("state.lease-commit", () => db.exec("COMMIT"));
       durableHolds.set(ownerToken, { start: performance.now(), operation: viewerLoopMonitor.current() ?? `${this.options.collection}.mutation` });
       if (held) {
         if (now - held.acquired_at > STATE_LEASE_MAX_AGE_MS) console.warn(`[state lease] taking over ${this.options.collection} from pid ${held.owner_pid}, age ${now - held.acquired_at} ms`);
@@ -2231,7 +2346,7 @@ export class SqliteStateCollection<T> {
         if (waitMs === 0) break;
         if ((attempt + 1) % 200 === 0) this.assertDiskHasSpace();
         if (accountMutationHeld()) throw new AccountCommitBusyError("state writer is busy during account commit");
-        Atomics.wait(SYNC_SLEEP, 0, 0, LOCK_WAIT_MS);
+        sleepForStateWriter();
       }
       this.assertDiskHasSpace();
       throw new FileTransactionBusyError(this.options.busyMessage);
