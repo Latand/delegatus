@@ -30,6 +30,8 @@ const { createServerRuntimeConsumers } = await import("@/lib/runtime/serverConsu
 const { requestPipelineTick } = await import("@/lib/pipelines/controllerSignal");
 const { RuntimeHost, RuntimeHostFence } = await import("./host");
 const { RuntimeJournal } = await import("./journal");
+const { viewerLoopMonitor } = await import("@/lib/viewerLoopMonitor");
+viewerLoopMonitor.start();
 const { McpHealthProbeAdmissions } = await import("./mcpHealthProbeAdmission");
 const { createLegacyRuntimeScheduler } = await import("./legacyScheduler");
 const { serveRuntimeHost } = await import("./socket");
@@ -165,6 +167,8 @@ await acquireRuntimeHostFence({
 startup.record("fence-acquired");
 // The predecessor publishes the successor record before releasing the fence.
 const bootGeneration = currentRuntimeHostGeneration();
+const { performanceProcess } = await import("@/lib/performanceSpans");
+performanceProcess.revision = bootGeneration.revision && /^[a-f0-9]{7,40}$/.test(bootGeneration.revision) ? bootGeneration.revision : null;
 const deploymentsEnabled = process.env.LLV_VIEWER_DEPLOYMENTS === "1";
 const deploymentAdapterPath = deploymentsEnabled
   ? process.env.LLV_VIEWER_DEPLOY_ADAPTER?.trim() || "/app/scripts/runtime-host-viewer-adapter.ts"
@@ -364,6 +368,7 @@ function stop(): void {
   if (receiptSweepTimer) clearInterval(receiptSweepTimer);
   if (journalMaintenanceTimer) clearInterval(journalMaintenanceTimer);
   server.close(() => {
+    viewerLoopMonitor.stop();
     journal.close();
     deploymentProxy?.close();
     remoteEntryProxy?.close();
@@ -408,6 +413,7 @@ function handOffToStagedSuccessor(context: { deploymentId: string; revision: str
   if (receiptSweepTimer) clearInterval(receiptSweepTimer);
   if (journalMaintenanceTimer) clearInterval(journalMaintenanceTimer);
   server.close(() => {
+    viewerLoopMonitor.stop();
     journal.close();
     deploymentProxy?.close();
     remoteEntryProxy?.close();

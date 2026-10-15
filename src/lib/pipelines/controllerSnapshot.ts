@@ -1,3 +1,4 @@
+import { performanceSpans, type PerformanceSite } from "@/lib/performanceSpans";
 import { StateSnapshotChangedError } from "@/lib/state/sqliteStateStore";
 
 /** Carries custody of a flow created just as its lane revision changed. */
@@ -23,9 +24,13 @@ export function controllerSnapshotPorts<T extends object>(ports: T, assertCurren
       return (...args: unknown[]) => {
         assertCurrent();
         if (property === "createFlow") args[3] = assertCurrent;
-        const result = Reflect.apply(value, target, args);
+        const result = performanceSpans.sync("controller.port-start", () => Reflect.apply(value, target, args));
         if (result && typeof result.then === "function") {
-          return Promise.resolve(result).then(value => {
+          const name = String(property);
+          const category: PerformanceSite = /git|commit|publish|reviewHead|branch/i.test(name) ? "controller.git-wait"
+            : /spawn|host|runtime|kill|session/i.test(name) ? "controller.runtime-wait"
+            : /save|persist|flow|task/i.test(name) ? "controller.store-wait" : "controller.other-wait";
+          return performanceSpans.wait(category, () => Promise.resolve(result)).then(value => {
             try {
               assertCurrent();
             } catch (error) {
