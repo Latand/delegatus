@@ -701,6 +701,7 @@ export function accountGuardObligationStore(directory: string) {
   // The watchdog keeps one bounded directory cursor across ticks. Reading all
   // index names on every page would still scale with retained pending work.
   let scan: fs.Dir | null = null;
+  let inFlight: { names: string[]; complete: boolean } | null = null;
   let expires: ReturnType<typeof setTimeout> | undefined;
   const closeScan = async () => {
     const current = scan;
@@ -715,14 +716,21 @@ export function accountGuardObligationStore(directory: string) {
       return withViewerOperation("account-credit-guard.store", async () => {
         if (expires) clearTimeout(expires);
         try {
-          scan ??= await fs.promises.opendir(indexDirectory, { bufferSize: 64 });
-          const names: string[] = [];
-          let complete = false;
-          for (let visited = 0; visited < 64; visited++) {
-            const entry = await scan.read();
-            if (!entry) { complete = true; break; }
-            if (entry.name.startsWith(OBLIGATION_PREFIX) && entry.name.endsWith(".json")) names.push(entry.name);
+          if (!inFlight) {
+            scan ??= await fs.promises.opendir(indexDirectory, { bufferSize: 64 });
+            const names: string[] = [];
+            let complete = false;
+            for (let visited = 0; visited < 64; visited++) {
+              const entry = await scan.read();
+              if (!entry) { complete = true; break; }
+              if (entry.name.startsWith(OBLIGATION_PREFIX) && entry.name.endsWith(".json")) names.push(entry.name);
+            }
+            inFlight = { names, complete };
           }
+          // Retain only bounded names until the consumer acknowledges success.
+          // A retry re-reads durable states, including effects from a partial pass.
+          const current = inFlight;
+          const { names, complete } = current;
           const obligations = await transaction(() => store.list({ names, after: "", limit: 64, nextCursor: null }));
           if (complete) await closeScan();
           else {
@@ -733,7 +741,8 @@ export function accountGuardObligationStore(directory: string) {
             }); }, 30_000);
             expires.unref?.();
           }
-          return { obligations, nextCursor: complete ? null : "pending" };
+          return { obligations, nextCursor: complete ? null : "pending",
+            acknowledge: () => { if (inFlight === current) inFlight = null; } };
         } catch (error) { await closeScan(); throw error; }
       });
     },

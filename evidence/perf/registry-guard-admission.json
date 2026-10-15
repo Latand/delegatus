@@ -1,8 +1,8 @@
 {
   "schemaVersion": 2,
-  "measuredAt": "2026-10-15T21:19:46Z",
+  "measuredAt": "2026-10-15T22:19:59.801388Z",
   "baseRevision": "05f90f84db4ec8e60736491d8e3df3dc5e1f47e2",
-  "candidateSourceSha256": "177c1ed85258e124d59cd7953ed6a8952cc7b708accc191168ac7da6e2c6aa63",
+  "candidateSourceSha256": "724ce849ee7a00b2f1b21b9ecab8c7da9356a7b8f402993e2bf3a9e85175752c",
   "sourceFiles": [
     "scripts/measure-registry-guard.ts",
     "src/lib/agent/registry.ts",
@@ -50,107 +50,31 @@
         "tickMs": 1000,
         "pendingObligations": 128
       },
-      "elapsedMs": 4843.61789,
-      "mainThreadCpuMs": 70,
-      "mainThreadCorePercent": 1.4452007071928623,
-      "maxTimerDelayMs": 203.0627730000001,
-      "maxWriteSyncSliceMs": 203.407156,
-      "maxGuardFileReadSyncSliceMs": 0.04039499999998952,
+      "elapsedMs": 4854.689560999999,
+      "mainThreadCpuMs": 100,
+      "mainThreadCorePercent": 2.0598639468802897,
+      "maxTimerDelayMs": 205.66018000000008,
+      "maxWriteSyncSliceMs": 203.92291699999998,
+      "maxGuardFileReadSyncSliceMs": 0.032780000000002474,
       "guardStoreReads": 272,
       "guardTickElapsedMs": [
-        3.802001999999902,
-        5.860143999999764,
-        2.5364089999993666,
-        3.179198999999244
+        6.834276000000045,
+        3.625250000000051,
+        5.009100999999646,
+        5.958318999999392
       ],
       "waits": {
         "registry-lock": {
           "count": 4,
           "synchronousCount": 4,
-          "totalMs": 799,
-          "maxMs": 200.8,
-          "p95Ms": 200.8
-        }
-      },
-      "variant": "baseline",
-      "pair": 1
-    },
-    {
-      "sourceRevision": "177c1ed85258e124d59cd7953ed6a8952cc7b708accc191168ac7da6e2c6aa63",
-      "asyncAdmission": true,
-      "fixtureSha256": "0477541854e3a2c0bab28a6aee16ef88bd5802d7de5e680d7a76f0b02623f91a",
-      "unmigratedCaller": null,
-      "load": {
-        "registryWrites": 4,
-        "peerHoldMs": 200,
-        "guardTicks": 4,
-        "tickMs": 1000,
-        "pendingObligations": 128
-      },
-      "elapsedMs": 4837.995124,
-      "mainThreadCpuMs": 90,
-      "mainThreadCorePercent": 1.8602747149027512,
-      "maxTimerDelayMs": 3.8262359999999944,
-      "maxWriteSyncSliceMs": 3.136312000000089,
-      "maxGuardFileReadSyncSliceMs": 0,
-      "guardStoreReads": 0,
-      "guardTickElapsedMs": [
-        0.11351699999977427,
-        0.058096000000205095,
-        0.0450170000003709,
-        0.037916000000222994
-      ],
-      "waits": {
-        "registry-lock-async": {
-          "count": 4,
-          "synchronousCount": 0,
-          "totalMs": 814.5,
-          "maxMs": 204.3,
-          "p95Ms": 204.3
-        }
-      },
-      "variant": "candidate",
-      "pair": 1
-    },
-    {
-      "sourceRevision": "05f90f84db4ec8e60736491d8e3df3dc5e1f47e2",
-      "asyncAdmission": false,
-      "fixtureSha256": "0477541854e3a2c0bab28a6aee16ef88bd5802d7de5e680d7a76f0b02623f91a",
-      "unmigratedCaller": null,
-      "load": {
-        "registryWrites": 4,
-        "peerHoldMs": 200,
-        "guardTicks": 4,
-        "tickMs": 1000,
-        "pendingObligations": 128
-      },
-      "elapsedMs": 4836.515171999999,
-      "mainThreadCpuMs": 70,
-      "mainThreadCorePercent": 1.4473230727208397,
-      "maxTimerDelayMs": 198.28698399999996,
-      "maxWriteSyncSliceMs": 203.11290399999996,
-      "maxGuardFileReadSyncSliceMs": 0.036120999999639025,
-      "guardStoreReads": 272,
-      "guardTickElapsedMs": [
-        2.690450999999939,
-        2.9965110000002824,
-        2.820090999999593,
-        2.9875529999999344
-      ],
-      "waits": {
-        "registry-lock": {
-          "count": 4,
-          "synchronousCount": 4,
-          "totalMs": 804.6,
+          "totalMs": 799.3,
           "maxMs": 201.6,
           "p95Ms": 201.6
         }
-      },
-      "variant": "baseline",
-      "pair": 2
+      }
     },
     {
-      "sourceRevision": "177c1ed85258e124d59cd7953ed6a8952cc7b708accc191168ac7da6e2c6aa63",
+      "sourceRevision": "724ce849ee7a00b2f1b21b9ecab8c7da9356a7b8f402993e2bf3a9e85175752c",
       "asyncAdmission": true,
       "fixtureSha256": "0477541854e3a2c0bab28a6aee16ef88bd5802d7de5e680d7a76f0b02623f91a",
       "unmigratedCaller": null,
@@ -161,30 +85,28 @@
         "tickMs": 1000,
         "pendingObligations": 128
       },
-      "elapsedMs": 4829.795624,
+      "elapsedMs": 4837.568928000001,
       "mainThreadCpuMs": 70,
-      "mainThreadCorePercent": 1.449336689365471,
-      "maxTimerDelayMs": 3.4290770000000066,
-      "maxWriteSyncSliceMs": 3.144215000000031,
+      "mainThreadCorePercent": 1.4470078058182863,
+      "maxTimerDelayMs": 4.235576000000037,
+      "maxWriteSyncSliceMs": 3.358404999999948,
       "maxGuardFileReadSyncSliceMs": 0,
       "guardStoreReads": 0,
       "guardTickElapsedMs": [
-        0.08011399999986679,
-        0.04208299999982046,
-        0.034993999999642256,
-        0.06763500000033673
+        0.07649200000014389,
+        0.036489999999957945,
+        0.05663300000014715,
+        0.06631699999979901
       ],
       "waits": {
         "registry-lock-async": {
           "count": 4,
           "synchronousCount": 0,
-          "totalMs": 806.5,
-          "maxMs": 202.4,
-          "p95Ms": 202.4
+          "totalMs": 812.8,
+          "maxMs": 204.4,
+          "p95Ms": 204.4
         }
-      },
-      "variant": "candidate",
-      "pair": 2
+      }
     },
     {
       "sourceRevision": "05f90f84db4ec8e60736491d8e3df3dc5e1f47e2",
@@ -198,33 +120,31 @@
         "tickMs": 1000,
         "pendingObligations": 128
       },
-      "elapsedMs": 4843.496349,
-      "mainThreadCpuMs": 70,
-      "mainThreadCorePercent": 1.4452369725529446,
-      "maxTimerDelayMs": 200.8052429999999,
-      "maxWriteSyncSliceMs": 204.27964100000008,
-      "maxGuardFileReadSyncSliceMs": 0.040046000000074855,
+      "elapsedMs": 4848.335816,
+      "mainThreadCpuMs": 90,
+      "mainThreadCorePercent": 1.8563070590735666,
+      "maxTimerDelayMs": 201.45548399999984,
+      "maxWriteSyncSliceMs": 204.08751000000007,
+      "maxGuardFileReadSyncSliceMs": 0.03740699999980279,
       "guardStoreReads": 272,
       "guardTickElapsedMs": [
-        5.9170100000001185,
-        4.374718999999914,
-        2.7692550000001575,
-        2.7728739999993195
+        5.922350000000279,
+        4.773199999999633,
+        5.9443639999999505,
+        2.8096069999992324
       ],
       "waits": {
         "registry-lock": {
           "count": 4,
           "synchronousCount": 4,
-          "totalMs": 800.8,
-          "maxMs": 202,
-          "p95Ms": 202
+          "totalMs": 798.6,
+          "maxMs": 201.6,
+          "p95Ms": 201.6
         }
-      },
-      "variant": "baseline",
-      "pair": 3
+      }
     },
     {
-      "sourceRevision": "177c1ed85258e124d59cd7953ed6a8952cc7b708accc191168ac7da6e2c6aa63",
+      "sourceRevision": "724ce849ee7a00b2f1b21b9ecab8c7da9356a7b8f402993e2bf3a9e85175752c",
       "asyncAdmission": true,
       "fixtureSha256": "0477541854e3a2c0bab28a6aee16ef88bd5802d7de5e680d7a76f0b02623f91a",
       "unmigratedCaller": null,
@@ -235,30 +155,98 @@
         "tickMs": 1000,
         "pendingObligations": 128
       },
-      "elapsedMs": 4831.678326,
-      "mainThreadCpuMs": 50,
-      "mainThreadCorePercent": 1.034837102688363,
-      "maxTimerDelayMs": 2.449752999999987,
-      "maxWriteSyncSliceMs": 1.9704240000000937,
+      "elapsedMs": 4836.188660999999,
+      "mainThreadCpuMs": 80,
+      "mainThreadCorePercent": 1.6541951856662693,
+      "maxTimerDelayMs": 4.115845000000036,
+      "maxWriteSyncSliceMs": 3.365543000000116,
       "maxGuardFileReadSyncSliceMs": 0,
       "guardStoreReads": 0,
       "guardTickElapsedMs": [
-        0.05841600000030667,
-        0.054376999999931286,
-        0.037422999999762396,
-        0.04776499999934458
+        0.061427999999978056,
+        0.04457400000001144,
+        0.0522449999998571,
+        0.06470700000045326
       ],
       "waits": {
         "registry-lock-async": {
           "count": 4,
           "synchronousCount": 0,
-          "totalMs": 813,
-          "maxMs": 205.1,
-          "p95Ms": 205.1
+          "totalMs": 812.8,
+          "maxMs": 204.3,
+          "p95Ms": 204.3
         }
+      }
+    },
+    {
+      "sourceRevision": "05f90f84db4ec8e60736491d8e3df3dc5e1f47e2",
+      "asyncAdmission": false,
+      "fixtureSha256": "0477541854e3a2c0bab28a6aee16ef88bd5802d7de5e680d7a76f0b02623f91a",
+      "unmigratedCaller": null,
+      "load": {
+        "registryWrites": 4,
+        "peerHoldMs": 200,
+        "guardTicks": 4,
+        "tickMs": 1000,
+        "pendingObligations": 128
       },
-      "variant": "candidate",
-      "pair": 3
+      "elapsedMs": 4848.72222,
+      "mainThreadCpuMs": 80,
+      "mainThreadCorePercent": 1.649919223460898,
+      "maxTimerDelayMs": 201.73832900000002,
+      "maxWriteSyncSliceMs": 203.69399899999996,
+      "maxGuardFileReadSyncSliceMs": 0.0315029999997023,
+      "guardStoreReads": 272,
+      "guardTickElapsedMs": [
+        4.835594000000128,
+        5.992749000000003,
+        6.277917999999772,
+        3.425674999999501
+      ],
+      "waits": {
+        "registry-lock": {
+          "count": 4,
+          "synchronousCount": 4,
+          "totalMs": 800.3,
+          "maxMs": 200.8,
+          "p95Ms": 200.8
+        }
+      }
+    },
+    {
+      "sourceRevision": "724ce849ee7a00b2f1b21b9ecab8c7da9356a7b8f402993e2bf3a9e85175752c",
+      "asyncAdmission": true,
+      "fixtureSha256": "0477541854e3a2c0bab28a6aee16ef88bd5802d7de5e680d7a76f0b02623f91a",
+      "unmigratedCaller": null,
+      "load": {
+        "registryWrites": 4,
+        "peerHoldMs": 200,
+        "guardTicks": 4,
+        "tickMs": 1000,
+        "pendingObligations": 128
+      },
+      "elapsedMs": 4838.575971,
+      "mainThreadCpuMs": 90,
+      "mainThreadCorePercent": 1.860051398167868,
+      "maxTimerDelayMs": 7.3325000000000955,
+      "maxWriteSyncSliceMs": 4.1451620000000275,
+      "maxGuardFileReadSyncSliceMs": 0,
+      "guardStoreReads": 0,
+      "guardTickElapsedMs": [
+        0.08655399999997826,
+        0.06408799999962866,
+        0.062004000000342785,
+        0.07139400000050955
+      ],
+      "waits": {
+        "registry-lock-async": {
+          "count": 4,
+          "synchronousCount": 0,
+          "totalMs": 813.2,
+          "maxMs": 205.6,
+          "p95Ms": 205.6
+        }
+      }
     }
   ],
   "gateWrapperRevision": "fe18cb41d73481f6b4e4bd105b708cb03e2d3b05",
@@ -270,7 +258,7 @@
       "fixtureSha256": "0477541854e3a2c0bab28a6aee16ef88bd5802d7de5e680d7a76f0b02623f91a",
       "unmigratedCaller": {
         "caller": "accounts.recordLiveObservation",
-        "synchronousMs": 202.13985500000035,
+        "synchronousMs": 202.72796600000038,
         "timerAdvancedAtReturn": false
       },
       "load": {
@@ -280,36 +268,36 @@
         "tickMs": 1000,
         "pendingObligations": 128
       },
-      "elapsedMs": 5045.231451,
-      "mainThreadCpuMs": 70,
-      "mainThreadCorePercent": 1.3874487360956556,
-      "maxTimerDelayMs": 200.28218300000003,
-      "maxWriteSyncSliceMs": 203.64645799999994,
-      "maxGuardFileReadSyncSliceMs": 0.024360999999771593,
+      "elapsedMs": 5051.238416,
+      "mainThreadCpuMs": 110,
+      "mainThreadCorePercent": 2.1776837864467176,
+      "maxTimerDelayMs": 201.07684699999982,
+      "maxWriteSyncSliceMs": 203.57957,
+      "maxGuardFileReadSyncSliceMs": 0.04470899999978428,
       "guardStoreReads": 272,
       "guardTickElapsedMs": [
-        2.9884960000003957,
-        2.643188000000009,
-        5.48965600000065,
-        5.6269219999994675
+        4.363980000000083,
+        4.122853000000305,
+        4.051375000000007,
+        7.782086000000163
       ],
       "waits": {
         "registry-lock": {
           "count": 5,
           "synchronousCount": 5,
-          "totalMs": 1001.5,
-          "maxMs": 201.7,
-          "p95Ms": 201.7
+          "totalMs": 996.7,
+          "maxMs": 200.3,
+          "p95Ms": 200.3
         }
       }
     },
     "candidate": {
-      "sourceRevision": "177c1ed85258e124d59cd7953ed6a8952cc7b708accc191168ac7da6e2c6aa63",
+      "sourceRevision": "724ce849ee7a00b2f1b21b9ecab8c7da9356a7b8f402993e2bf3a9e85175752c",
       "asyncAdmission": true,
       "fixtureSha256": "0477541854e3a2c0bab28a6aee16ef88bd5802d7de5e680d7a76f0b02623f91a",
       "unmigratedCaller": {
         "caller": "accounts.recordLiveObservation",
-        "synchronousMs": 202.76812299999983,
+        "synchronousMs": 202.81485799999973,
         "timerAdvancedAtReturn": false
       },
       "load": {
@@ -319,33 +307,33 @@
         "tickMs": 1000,
         "pendingObligations": 128
       },
-      "elapsedMs": 5039.922472,
-      "mainThreadCpuMs": 60,
-      "mainThreadCorePercent": 1.1904945033051293,
-      "maxTimerDelayMs": 199.44907200000034,
-      "maxWriteSyncSliceMs": 2.5122010000000046,
+      "elapsedMs": 5040.942069,
+      "mainThreadCpuMs": 90,
+      "mainThreadCorePercent": 1.7853805651421384,
+      "maxTimerDelayMs": 202.73930999999993,
+      "maxWriteSyncSliceMs": 5.428023999999937,
       "maxGuardFileReadSyncSliceMs": 0,
       "guardStoreReads": 0,
       "guardTickElapsedMs": [
-        0.05552399999987756,
-        0.032159999999748834,
-        0.05084600000009232,
-        0.051744000000326196
+        0.08815400000003137,
+        0.058263000000351894,
+        0.042427000000316184,
+        0.052378000000317115
       ],
       "waits": {
         "registry-lock-async": {
           "count": 4,
           "synchronousCount": 0,
-          "totalMs": 816.4,
-          "maxMs": 205.2,
-          "p95Ms": 205.2
+          "totalMs": 810.1,
+          "maxMs": 203.5,
+          "p95Ms": 203.5
         },
         "registry-lock": {
           "count": 1,
           "synchronousCount": 1,
-          "totalMs": 199.9,
-          "maxMs": 199.9,
-          "p95Ms": 199.9
+          "totalMs": 200.3,
+          "maxMs": 200.3,
+          "p95Ms": 200.3
         }
       }
     }
@@ -399,6 +387,45 @@
       "ok": true
     },
     "behavioralBaselineRevision": "14e3199375a2ca4d1a3646eef52fc231794c7915",
-    "privacy": "passed for source, evidence and draft PR text"
+    "privacy": "passed for source, evidence and draft PR text",
+    "scope": "Initial implementation checks before review; final fix checks are recorded in fixVerification."
+  },
+  "fixVerification": {
+    "reviewedRevision": "3563a13445138fb472a765b2e0fbd41b2e7cdcaf",
+    "testsByPath": {
+      "src/lib/runtime/accountCreditGuard.test.ts": 29,
+      "src/lib/runtime/accountCreditGuard.tick.test.ts": 7,
+      "src/lib/runtime/interruptionObligations.test.ts": 25,
+      "src/lib/runtime/structuredRecovery.test.ts": 27,
+      "src/lib/runtime/structuredMessageDelivery.accountReseat.test.ts": 32
+    },
+    "isolation": [
+      "HOME",
+      "XDG_CONFIG_HOME",
+      "TMPDIR",
+      "LLV_STATE_DIR"
+    ],
+    "viewerControlUrl": "closed loopback port",
+    "regressionControls": {
+      "custodyRaceBefore": {
+        "pass": 0,
+        "fail": 12
+      },
+      "pageRetryBefore": {
+        "pass": 0,
+        "fail": 2
+      },
+      "stopAssertionFaults": {
+        "ordering": "1 fail",
+        "submitted receipt": "1 fail",
+        "event-loop progress": "1 fail"
+      }
+    },
+    "types": "passed",
+    "eslint": {
+      "errors": 0,
+      "warnings": 0
+    },
+    "privacy": "passed for source, evidence and commits"
   }
 }

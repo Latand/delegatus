@@ -40,6 +40,66 @@ function observe(registry: ReturnType<typeof agentRegistry>, accountId: string, 
       credits: { hasCredits: true, balance: "10", unlimited: false } } });
 }
 
+for (const step of ["reseat", "continue", "resume"] as const) for (const replacement of ["applying", "applied", "migration", "generation"] as const) {
+  test(`a newer ${replacement} owner retains custody while guard ${step} admission waits`, async () => {
+    const f = migrationDeliveryFixture();
+    const cuts = interruptionObligationStore(interruptionObligationDirectory(f.registry.filename));
+    const source = f.conversation.generations.at(-1)!;
+    const cut = cuts.record({ conversationId: f.conversation.id, engine: "codex", hostKey: `codex:${f.key.sessionId}`,
+      path: source.path, owner: null, claimEpoch: 1, turnRef: "custody-turn", boundary: "paid-credit-guard",
+      reason: "account-guard", checkpoint: { lastEventKind: null, lastEventAt: null }, seat: null }).obligation;
+    f.registry.upsert({ ...f.registry.readOnlySnapshot().entries[cut.hostKey]!, status: "dead", structuredHost: null });
+    const provider: SuccessorProviderPort = { virtualSource: true, create: async input => {
+      const successor = path.join(f.root, `${input.targetAccountId}.jsonl`);
+      fs.copyFileSync(source.path, successor);
+      return { operationId: input.operationId, nativeId: `native-${input.targetAccountId}`, path: successor,
+        continuityPaths: [successor], historyHash: "fixture", host: { kind: "codex-app-server", identity: input.targetAccountId,
+          epoch: 1, verifiedAt: "2026-01-01T00:00:00.000Z" } };
+    }, verify: async () => {} };
+    let transfers = 0;
+    let expected: ReturnType<typeof f.registry.conversation>;
+    const transfer = async () => {
+      transfers++;
+      const profile = source.launchProfile;
+      if (replacement === "applying" || replacement === "applied") {
+        f.registry.claimConversationReconfigure(f.conversation.id, { operationId: "operator-switch", revision: 1,
+          profile, accountId: "account-c" });
+        if (replacement === "applied") f.registry.settleConversationReconfigure(f.conversation.id, "operator-switch", 1, "applied");
+      } else {
+        f.registry.requestConversationReseat(f.conversation.id, "account-c");
+        if (replacement === "generation") await advanceConversationMigration(f.conversation.id, f.registry, provider, { deferBoardRepair: true });
+      }
+      expected = f.registry.conversation(f.conversation.id);
+    };
+    const select = spyOn(accountManager, "resolveProjectSpawn").mockImplementation((engine, request) => ({
+      kind: "available", account: { engine, accountId: request?.requestedId ?? "account-b", kind: "managed",
+        home: f.root, transcriptRoot: f.root, env: { NODE_ENV: "test" } },
+    }));
+    const write = f.registry.deliveryWriteOrBusy.bind(f.registry);
+    const admission = spyOn(f.registry, "deliveryWriteOrBusy").mockImplementation(async (correlation, callback) => {
+      if (correlation.label === `account-credit-guard.${step}`) await transfer();
+      return write(correlation, callback);
+    });
+    try {
+      if (step === "continue") {
+        f.registry.requestConversationReseat(f.conversation.id, "account-b", undefined, undefined, true);
+        await advanceConversationMigration(f.conversation.id, f.registry, provider, { deferBoardRepair: true });
+      }
+      if (step !== "resume") observe(f.registry, "account-a", 99);
+      const receipts = f.registry.conversationDeliverySnapshot({ conversationId: f.conversation.id }).heldDeliveries;
+      await expect(enforceAccountCreditGuard(f.registry, [], async () => true, async () => false, async request => {
+        await transfer();
+        request.recoveryAuthorityGuard!();
+        throw new Error("stale continuation was authorized");
+      })).rejects.toThrow("paid-credit recovery lost conversation custody");
+      expect(transfers).toBe(1);
+      expect(f.registry.conversation(f.conversation.id)).toEqual(expected!);
+      expect(f.registry.conversationDeliverySnapshot({ conversationId: f.conversation.id }).heldDeliveries).toEqual(receipts);
+      expect(cuts.list()).toMatchObject([{ id: cut.id, state: "owed", attempts: 0 }]);
+    } finally { admission.mockRestore(); select.mockRestore(); await f.cleanup(); }
+  });
+}
+
 for (const state of ["owed", "submitted"] as const) for (const loss of ["exhaustion", "binding removal"] as const) {
   test(`a ${state} continuation survives ${loss} of its committed successor`, async () => {
     const f = migrationDeliveryFixture();
@@ -405,16 +465,31 @@ test("a guarded stop discharges every older owed cut in bounded pages before its
     for (let n = 0; n < 130; n++) older.push((await store.record({ ...base, turnRef: `older-${n}` })).obligation.id);
     const submitted = (await store.record({ ...base, turnRef: "submitted-turn" })).obligation;
     await store.update(submitted.id, { state: "submitted", operationId: "existing-continuation" });
-    let timerAdvanced = false;
-    const timer = setTimeout(() => { timerAdvanced = true; }, 5);
+    let loopTurns = 0;
+    let progress = setImmediate(function advance() { loopTurns++; progress = setImmediate(advance); });
+    const atStop: { older: string[]; submitted: unknown; loopTurns: number }[] = [];
+    let continuations = 0;
+    let failure: unknown;
     try {
-      await expect(enforceAccountCreditGuard(f.registry, [{ key: f.key, host: f.host }], async () => {
-        for (const id of older) expect(JSON.parse(fs.readFileSync(path.join(directory, `${id}.json`), "utf8")).state).toBe("discharged");
-        expect(JSON.parse(fs.readFileSync(path.join(directory, `${submitted.id}.json`), "utf8")).state).toBe("submitted");
-        expect(timerAdvanced).toBe(true);
+      await enforceAccountCreditGuard(f.registry, [{ key: f.key, host: f.host }], async () => {
+        atStop.push({
+          older: older.map(id => JSON.parse(fs.readFileSync(path.join(directory, `${id}.json`), "utf8")).state),
+          submitted: JSON.parse(fs.readFileSync(path.join(directory, `${submitted.id}.json`), "utf8")),
+          loopTurns,
+        });
         return false;
-      }, async () => { throw new Error("a refused stop cannot continue"); }, async () => null))
-        .rejects.toThrow("termination remains pending");
-    } finally { clearTimeout(timer); }
+      }, async () => { continuations++; return false; }, async () => { continuations++; return null; })
+        .catch(error => { failure = error; });
+    } finally { clearImmediate(progress); }
+    expect(atStop).toHaveLength(1);
+    expect(atStop[0]!.older).toEqual(older.map(() => "discharged"));
+    expect(atStop[0]!.submitted).toMatchObject({ state: "submitted", operationId: "existing-continuation" });
+    // The independent check-phase barrier advances between cleanup pages,
+    // regardless of how quickly the filesystem completes each write.
+    expect(atStop[0]!.loopTurns).toBeGreaterThan(1);
+    expect(continuations).toBe(0);
+    expect(failure).toBeInstanceOf(AggregateError);
+    expect((failure as AggregateError).errors.map(error => error.message))
+      .toEqual(["paid-credit guard could not confirm host termination"]);
   } finally { await f.cleanup(); }
 });

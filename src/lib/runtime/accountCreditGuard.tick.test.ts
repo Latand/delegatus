@@ -82,6 +82,55 @@ test("a failed store pass remains dirty and is retried on the next tick", async 
   } finally { failed.mockRestore(); f.registry.close(); }
 });
 
+for (const failureAt of ["operator stop", "continuation"] as const) {
+  test(`a failed ${failureAt} reconciliation retries its pending page on the next tick`, async () => {
+    const f = migrationDeliveryFixture();
+    const store = interruptionObligationStore(interruptionObligationDirectory(f.registry.filename));
+    const generation = f.conversation.generations.at(-1)!;
+    const ids: string[] = [];
+    let failedId: string | null = null;
+    let fail = true;
+    const visits = new Map<string, number>();
+    const resumed: string[] = [];
+    f.registry.upsert({ ...f.registry.readOnlySnapshot().entries[`codex:${f.key.sessionId}`]!, status: "dead", structuredHost: null });
+    const { accountManager } = await import("@/lib/accounts/manager");
+    const selection = spyOn(accountManager, "resolveProjectSpawn").mockReturnValue({ kind: "available",
+      account: { engine: "codex", accountId: "account-a", kind: "managed", home: f.root, transcriptRoot: f.root, env: { NODE_ENV: "test" } } });
+    const poll = (now: number) => enforceAccountCreditGuard(f.registry, [], async () => true, async (_id, recordedAt) => {
+      const id = ids[Number(recordedAt.slice(17, 19)) + Number(recordedAt.slice(14, 16)) * 60]!;
+      visits.set(id, (visits.get(id) ?? 0) + 1);
+      if (failureAt === "operator stop" && fail && visits.size === 3) { fail = false; failedId = id; throw new Error("reconciliation unavailable"); }
+      return failureAt === "operator stop";
+    }, async request => {
+      if (fail && resumed.length === 2) { fail = false; failedId = request.clientMessageId!; throw new Error("reconciliation unavailable"); }
+      resumed.push(request.clientMessageId!);
+      return { ok: true, structured: true, outcome: "delivered", operationId: request.operationId!, target: f.conversation.id,
+        receipt: { operationId: request.operationId!, idempotencyKey: request.clientMessageId!, conversationId: f.conversation.id,
+          kind: "send", status: "delivered", revision: 1, at: "2026-01-01T00:00:00.000Z" } };
+    }, { onlyIfChanged: true, now });
+    try {
+      for (let n = 0; n < 130; n++) ids.push(store.record({ ...cut(n), conversationId: f.conversation.id,
+        hostKey: `codex:${f.key.sessionId}`, path: generation.path, turnRef: `retry-${n}`,
+        recordedAt: new Date(Date.UTC(2026, 0, 1, 0, 0, n)).toISOString() }).obligation.id);
+      await expect(poll(0)).rejects.toThrow("reconciliation unavailable");
+      expect(failedId).not.toBeNull();
+      const failed = failedId!;
+      await poll(1);
+      expect(visits.get(failed)).toBe(2);
+      for (let n = 2; n <= 5; n++) await poll(n);
+      expect(store.list()).toHaveLength(130);
+      expect(store.list().every(row => row.state === (failureAt === "operator stop" ? "discharged" : "delivered"))).toBe(true);
+      if (failureAt === "continuation") {
+        expect(resumed).toHaveLength(130);
+        expect(new Set(resumed).size).toBe(130);
+      } else expect(resumed).toEqual([]);
+      const calls = [...visits.values()].reduce((a, b) => a + b, 0);
+      await poll(6);
+      expect([...visits.values()].reduce((a, b) => a + b, 0)).toBe(calls);
+    } finally { selection.mockRestore(); await f.cleanup(); }
+  });
+}
+
 test("external writes are found by the slow fallback, and a fresh process inspects durable pending work", async () => {
   const f = fixture("external");
   const childSource = `import { accountGuardObligationStore } from ${JSON.stringify(path.join(import.meta.dir, "interruptionObligations.ts"))};

@@ -395,11 +395,33 @@ test("guard ticks advance a bounded native directory cursor without listing ever
       const result = await store.scanPage();
       expect(result.obligations.length).toBeLessThanOrEqual(64);
       visited.push(...result.obligations.map(row => row.id));
+      result.acknowledge();
       if (!result.nextCursor) break;
     }
     expect(pendingLists).toBe(0);
     expect(visited.sort()).toEqual(ids.sort());
   } finally { spy.mockRestore(); }
+});
+
+test("guard pages retain bounded names until acknowledgement and reload partial durable effects", async () => {
+  const obligations = path.join(directory, "guard-page-retry");
+  const store = accountGuardObligationStore(obligations);
+  for (let n = 0; n < 65; n++) await store.record({ ...releaseCut, reason: "account-guard", turnRef: `retry-${n}` });
+  const first = await store.scanPage();
+  expect(first.obligations.length).toBeGreaterThan(0);
+  expect(first.obligations.length).toBeLessThanOrEqual(64);
+  const settled = first.obligations[0]!.id;
+  await store.update(settled, { state: "delivered", resolvedAt: "2026-01-01T00:00:00.000Z" });
+  const retry = await store.scanPage();
+  expect(retry.obligations.map(row => row.id)).toEqual(first.obligations.slice(1).map(row => row.id));
+  retry.acknowledge();
+  const next = await store.scanPage();
+  expect(next.obligations.length).toBeGreaterThan(0);
+  expect(next.obligations.every(row => !first.obligations.some(prior => prior.id === row.id))).toBe(true);
+  // A stale acknowledgement cannot discard a later page.
+  first.acknowledge();
+  expect((await store.scanPage()).obligations).toEqual(next.obligations);
+  next.acknowledge();
 });
 
 test("conversation lookup preserves ordinary terminal witnesses across fresh stores and timestamp ties", async () => {

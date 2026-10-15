@@ -4,7 +4,7 @@ import { accountManager } from "@/lib/accounts/manager";
 import { conversationProjectKey } from "@/lib/accounts/conversationProject";
 import { creditGuardBlock } from "@/lib/accounts/creditGuard";
 import { requestAccountMigrationTick } from "@/lib/accounts/migration/controllerSignal";
-import type { AgentRegistry } from "@/lib/agent/registry";
+import type { AgentRegistry, RegistryConversation } from "@/lib/agent/registry";
 import { sessionKeyId, type SessionKey } from "@/lib/agent/sessionKey";
 import { findPipelineRecord, loadPipelinesForRetirement } from "@/lib/pipelines/store";
 import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
@@ -54,6 +54,16 @@ interface GuardPassState {
 const shared = process as typeof process & { __llvAccountGuardPasses?: WeakMap<AgentRegistry, GuardPassState> };
 const passes = shared.__llvAccountGuardPasses ??= new WeakMap<AgentRegistry, GuardPassState>();
 export const ACCOUNT_GUARD_FALLBACK_MS = 30_000;
+
+function recoveryCustody(conversation: RegistryConversation): string {
+  const generation = conversation.generations.at(-1);
+  const migration = conversation.migration;
+  const reconfigure = conversation.reconfigure;
+  return JSON.stringify([conversation.id, generation?.id, generation?.path, generation?.accountId,
+    migration && [migration.operationId, migration.intentId, migration.revision, migration.phase, migration.targetId,
+      migration.sourceGenerationId, migration.creditGuard],
+    reconfigure && [reconfigure.operationId, reconfigure.revision, reconfigure.status]]);
+}
 
 /** Stop every locally owned credited turn at the cutoff. The durable cut is
  * written before releasing its host. Ordinary stages retain their controller's
@@ -109,7 +119,7 @@ async function runAccountCreditGuard(registry: AgentRegistry,
   }), headlessStop]);
   const failures = stops.filter((result): result is PromiseRejectedResult => result.status === "rejected");
   if (failures.length) throw new AggregateError(failures.map(result => result.reason), "paid-credit guard termination remains pending");
-  const { obligations: page, nextCursor } = await store.scanPage();
+  const { obligations: page, nextCursor, acknowledge } = await store.scanPage();
   for (const obligation of page) {
     if (obligation.reason !== "account-guard") continue;
     if (obligation.state === "submitted") {
@@ -145,6 +155,7 @@ async function runAccountCreditGuard(registry: AgentRegistry,
         && !current.attempt.suspension && !openRuntimeSwitch(current.attempt);
     };
     if (!eligible() || conversation.reconfigure?.status === "applying") continue;
+    const custody = recoveryCustody(conversation);
     if (await operatorStopped(conversation.id, obligation.recordedAt)) {
       await store.update(obligation.id, { state: "discharged", resolvedAt: new Date().toISOString(), resolution: "operator stopped the conversation after the guard" });
       continue;
@@ -170,6 +181,10 @@ async function runAccountCreditGuard(registry: AgentRegistry,
     const authorizeTarget = () => {
       if (!eligible()) throw new Error("paid-credit recovery lost pipeline custody");
       const latest = registry.conversation(conversation.id);
+      if (!latest || latest.supersededBy || latest.reconfigure?.status === "applying"
+        || recoveryCustody(latest) !== custody) {
+        throw new Error("paid-credit recovery lost conversation custody");
+      }
       const latestProfile = latest?.generations.at(-1)?.launchProfile;
       const latestProject = pipelineOwner(conversation.id, registry)?.pipeline.project
         ?? conversationProjectKey(latest?.projectOwnership, latestProfile);
@@ -218,6 +233,7 @@ async function runAccountCreditGuard(registry: AgentRegistry,
     await store.update(obligation.id, { state: "submitted", operationId: held.command.operationId, attempts: obligation.attempts + 1 });
     requestAccountMigrationTick();
   }
+  acknowledge();
   state.cursor = nextCursor ?? "";
 }
 
@@ -249,6 +265,11 @@ export function enforceAccountCreditGuard(registry: AgentRegistry, hosts: GuardH
     current.obligationRevision = obligationRevision;
     current.hosts = hostToken;
     current.fallbackAt = now + ACCOUNT_GUARD_FALLBACK_MS;
+  }).catch(error => {
+    // Even a fallback pass can fail at an unchanged revision. Keep it dirty
+    // until its retained page has been reconciled and acknowledged.
+    current.cursor = "pending";
+    throw error;
   }).finally(() => { current.running = undefined; });
   return current.running;
 }
