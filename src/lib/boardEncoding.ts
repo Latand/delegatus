@@ -21,16 +21,25 @@ function jsonValue(value: unknown): unknown {
 
 /** One structured base per active scope. Full JSON remains available for a
  * reset, while steady updates compare values without parsing either body or
- * stringifying unchanged rows. Worker retirement simply causes a full reset. */
+ * stringifying unchanged rows. A missing or displaced base can be restored
+ * lazily from the parent's certified representation. */
 export class BoardEncoder {
   private bases = new Map<string, Base>();
   constructor(private limits = { scopes: 4, bytes: 96 * 1024 * 1024, ageMs: 120_000 }) {}
 
-  encode(scope: string, epoch: string, data: Json, now = Date.now()) {
+  encode(scope: string, epoch: string, data: Json, now = Date.now(), certified?: { etag: string; readBody: () => string }) {
     for (const [key, entry] of this.bases) if (now - entry.at >= this.limits.ageMs) this.bases.delete(key);
     const key = JSON.stringify([epoch, scope]);
-    const previous = this.bases.get(key);
+    let previous: Pick<Base, "value" | "etag"> | undefined = this.bases.get(key);
     const boardScope = boardCursorScope(epoch, scope);
+    if (certified && previous?.etag !== certified.etag) {
+      const body = certified.readBody();
+      const restored = JSON.parse(body) as Json | null;
+      previous = restored?.boardProtocol === 2 && restored.boardScope === boardScope
+        && `"${createHash("sha1").update(key).update(body).digest("hex")}"` === certified.etag
+        ? { value: restored, etag: certified.etag }
+        : undefined;
+    }
     const value = jsonValue({ ...data, boardProtocol: 2, boardScope }) as Json;
     const body = JSON.stringify(value);
     const etag = `"${createHash("sha1").update(key).update(body).digest("hex")}"`;

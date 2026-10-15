@@ -22,7 +22,7 @@ const FILES_RESPONSE_WORKER_STDERR_MAX_BYTES = 4 * 1024;
  *   not carry before and is replaced rather than trusted.
  * - **idle** — a worker nobody has asked for a projection in a minute holds a
  *   whole projection's heap for nothing, so it goes and the next poll forks a
- *   new one. A polled board never reaches this; a quiet Viewer always does.
+ *   new one. Cache hits and 304 polls do not renew this timer.
  */
 const FILES_RESPONSE_WORKER_RSS_LIMIT_BYTES = 1_536 * 1024 * 1024;
 const FILES_RESPONSE_WORKER_IDLE_MS = 60_000;
@@ -460,7 +460,7 @@ async function dispatch(
   const worker = residentWorker(runtime);
   let previousFile: string | undefined;
   try {
-    if (previous && request.deltaScope && !request.boardEpoch) {
+    if (previous && request.deltaScope) {
       previousFile = path.join(worker.resultDirectory, `${process.pid}-${crypto.randomUUID()}.base.json`);
       await fs.promises.mkdir(worker.resultDirectory, { recursive: true, mode: 0o700 });
       await fs.promises.writeFile(previousFile, previous.body, { encoding: "utf8", mode: 0o600 });

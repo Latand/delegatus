@@ -71,6 +71,31 @@ test("encoder owns the base, binds scope/epoch and normalizes JSON values", () =
   expect(small.encode("one", "epoch", a, 5).delta).toBeUndefined();
 });
 
+test("encoder restores only a matching certified base and reads it only when needed", () => {
+  const original = new BoardEncoder();
+  const first = original.encode("scope", "epoch", base(), 1);
+  const changed = base();
+  changed.tasks[0].assignments[0].status = "complete";
+  const expected = original.encode("scope", "epoch", changed, 2);
+  let reads = 0;
+  const certified = { etag: first.etag, readBody: () => { reads++; return first.body; } };
+  const restored = new BoardEncoder();
+  const recovered = restored.encode("scope", "epoch", changed, 2, certified);
+  expect(reads).toBe(1);
+  expect(recovered).toEqual(expected);
+  expect(applyBoardDelta(JSON.parse(first.body), JSON.parse(recovered.delta!.body))).toEqual(JSON.parse(recovered.body));
+  const current = { etag: recovered.etag, readBody: () => { throw new Error("resident base should be reused"); } };
+  expect(restored.encode("scope", "epoch", changed, 3, current).delta).toBeUndefined();
+  expect(restored.encode("scope", "other-epoch", changed, 4, certified).delta).toBeUndefined();
+  expect(restored.encode("other-scope", "epoch", changed, 5, certified).delta).toBeUndefined();
+  // A certified cursor with different bytes must not label a patch.
+  expect(new BoardEncoder().encode("scope", "epoch", changed, 6, { ...certified, etag: '"wrong"' }).delta).toBeUndefined();
+  // Restoring a base does not exempt it from the existing retention budget.
+  const bounded = new BoardEncoder({ scopes: 1, bytes: 2000, ageMs: 100 });
+  expect(bounded.encode("scope", "epoch", changed, 7, certified).delta).toBeDefined();
+  expect(bounded.encode("scope", "epoch", base(), 8).delta).toBeUndefined();
+});
+
 test("history reuses identity/gzip answers and bounds scopes, links, UTF-8 bytes and age", async () => {
   const history = new BoardHistory({ scopes: 2, links: 2, path: 2, bytes: 3000, ageMs: 100 });
   history.record("s", "a", "b", '{"v":2}', 1);

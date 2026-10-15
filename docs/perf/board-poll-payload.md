@@ -587,13 +587,18 @@ empty arrays preserve the entire model, including histories and editor text.
 Application validates the complete chain before publication and keeps
 unchanged subtrees by reference. Arbitrary map keys use own data properties.
 
-The worker encodes from projected values before JSON; v2 avoids reading and
-parsing two full bodies, row stringification for comparison, the parent's
-previous-body file, and a full-body parse for storage health. A changed
-projection still serializes one full reset body. Worker retirement or a
-discarded build can require a full reset. A rare write-health overlay also
-uses a full reset. These cases preserve the existing health and lifecycle
-fences. First load and reset remain large.
+The worker encodes from projected values before JSON; v2 avoids parsing two
+full bodies, row stringification for comparison and a full-body parse for
+storage health. The parent supplies its certified previous body through a
+temporary private file. A matching resident base avoids reading that file.
+After worker retirement, base eviction or a discarded build, the encoder
+reads and parses the certified base once, verifies its protocol, epoch/scope
+and content hash, then produces the same nested delta as a resident worker.
+The file is removed after the build. Inline projections use the same recovery
+with the parent's existing body string. A changed projection still serializes
+one full reset body. First load, incompatible cursors and a rare write-health
+overlay can still require a large full answer. Health and lifecycle fences
+remain in effect.
 
 `BoardHistory` bounds both protocols to 32 scopes, 32 links per scope, 16 links
 per answer, two minutes of retained history and 16 MiB of UTF-8 payloads plus
@@ -666,3 +671,64 @@ file paths and isolated home/config/temp/state roots through the gate.
 | Chromium client apply, full replacement → delta, median | 608.20 ms | 9.00 ms |
 
 Seven samples per case after one warmup. Raw samples retain the range; timings describe the admitted isolated replay. Full reset bodies add protocol metadata and remain about 33.53 MB.
+
+### Certified-base recovery, 2026-10-15
+
+The pre-fix worker regression reproduced missing v2 deltas after both idle
+and RSS retirement, and a wrong base ETag after a discarded build. A 304 does
+not renew the worker's idle timer. The parent now supplies its certified base
+to v2 as well as v1; recovery validates the epoch/scope and exact body hash.
+The regression checks retire the actual worker, verify the next process is
+new, apply the delta to the certified body and compare the entire result.
+They also verify temporary base/result files are removed, scope changes
+reset, a matching resident base avoids reading the file, and the
+existing retention budget still applies. The idle route case keeps the
+client's ETag through a 304 and retirement, settles queued projections and
+compares the resulting delta with the full route answer.
+
+The existing production-size encoding replay now additionally creates a new
+encoder from the certified body for every sample. Its output must equal the
+resident encoder's output exactly. Fresh raw results are in
+`evidence/board-poll/recycle-encoding.json`; the original encoding evidence
+is retained. Both runs use the same frozen input hashes recorded above.
+
+| Observed update | Result |
+| --- | ---: |
+| Full v2 body | 33,532,499 B |
+| Recovered delta / gzip | 29,325 B / 5,721 B |
+| Recovered delta as a fraction of full | 0.0875% |
+| Existing v1 encode/diff, median | 459.94 ms |
+| Resident v2 encode/diff, median | 337.53 ms |
+| Recovered v2 encode/diff, median | 374.35 ms |
+| Certified base spooled per changed build | 33,529,544 B |
+| JSON parse input during recovery | 33,529,544 B |
+| Cumulative shallow JSON string results during recovery | 62,068,959 B |
+| Chromium full apply, median / max | 386.4 ms / 564.6 ms |
+| Chromium recovered-delta apply, median / max | 7.5 ms / 40.6 ms |
+
+The server measurements include the recovery parse and hash and exclude
+worker file I/O, store assembly and HTTP transport. Spooling occurs on a
+changed projection build; cached polls and 304s keep their existing paths.
+Recovery parses one certified body; a matching resident base still parses
+none. String measurements exclude object graphs, native file-buffer
+allocation and GC. The unchanged limits remain four retained encoder bases,
+96 MiB of encoded base values, two-minute expiry, 60-second worker idle
+retirement and 1,536 MiB RSS retirement.
+
+The existing browser driver feeds a recovered production-size delta through
+the real client cache. All seven measured delta applies completed below
+50 ms; all seven full replacements exceeded 50 ms. The same driver compares
+18 cards at 1440×900 and 390×900 after three updates, including waiting
+rounds, prototype notices, text, order, counts and geometry. Both transports
+agree. All six fresh screenshots were visually inspected, including the
+scrolled desktop cards. Results are in
+`evidence/board-poll/recycle-render.json`; the original render evidence is
+retained and local frames remain in `.artifacts/board-poll`.
+
+The serial isolated checks passed 161 tests: `src/lib/boardDelta.test.ts`,
+`src/lib/scanner/filesResponseWorker.test.ts`,
+`src/app/api/files/route.test.ts`, `src/app/api/files/response.perf.test.ts`
+with the frozen input variables, and the `board poll delta equivalence`
+case in `src/components/kanban/kanbanBoard.browser.test.tsx` with
+`LLV_KANBAN_BROWSER_TEST=1` and `CHROME_BIN`. Each command ran under the
+required gate with isolated HOME, XDG_CONFIG_HOME, TMPDIR and LLV_STATE_DIR.

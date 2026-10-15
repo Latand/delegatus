@@ -1,5 +1,5 @@
 import { staleWorkingResponse } from "@/lib/agent/spawnProjection.fixture";
-import { diffBoard } from "@/lib/boardDelta";
+import { BoardEncoder } from "@/lib/boardEncoding";
 import { NATIVE_ASSOCIATION_AUTHORIZATION_ERROR } from "@/lib/attention/nativeAssociationForm";
 import { describe, expect } from "bun:test";
 import { execFileSync } from "node:child_process";
@@ -136,12 +136,17 @@ describe("board poll delta equivalence", () => {
         }
       }
       if (process.env.BOARD_POLL_BASE_FILE && process.env.BOARD_POLL_NEXT_FILE) {
-        const before = { ...JSON.parse(fs.readFileSync(process.env.BOARD_POLL_BASE_FILE, "utf8")), boardProtocol: 2, boardScope: "replay" };
-        const after = { ...JSON.parse(fs.readFileSync(process.env.BOARD_POLL_NEXT_FILE, "utf8")), boardProtocol: 2, boardScope: "replay" };
+        const before = new BoardEncoder().encode("global", "replay", JSON.parse(fs.readFileSync(process.env.BOARD_POLL_BASE_FILE, "utf8")));
+        const after = new BoardEncoder().encode("global", "replay", JSON.parse(fs.readFileSync(process.env.BOARD_POLL_NEXT_FILE, "utf8")), Date.now(), {
+          etag: before.etag, readBody: () => before.body,
+        });
+        expect(after.delta?.base).toBe(before.etag);
+        // The browser benchmark uses fixed cursor labels for both transports.
+        const delta = { ...JSON.parse(after.delta!.body), base: "before", etag: "after" };
         const { context, page } = await openFixture(browser, server.base, VIEWPORT, "dark", "en", "reduce");
         try {
           const result = await page.evaluate(input => (window as unknown as { boardPollBench(input: unknown): Promise<unknown> }).boardPollBench(input), {
-            before: JSON.stringify(before), after: JSON.stringify(after), delta: JSON.stringify({ deltas: [diffBoard(before, after, "before", "after")] }),
+            before: before.body, after: after.body, delta: JSON.stringify({ deltas: [delta] }),
           });
           readings.push({ productionSizeClientApply: result });
         } finally { await context.close(); }

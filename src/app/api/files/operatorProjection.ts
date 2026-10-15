@@ -439,7 +439,8 @@ async function projectionFor(
       const response = await buildFilesResponse(new Request(request.url, { headers }), {
         listFilesWithProjectCatalog: async () => ownedSnapshot,
         ...(board ? { encode: (data: import("@/lib/types").FilesResponse) => {
-          encoded = boardEncoder().encode(createHash("sha1").update(scopeKey).digest("hex"), epoch, data as unknown as Record<string, unknown>);
+          encoded = boardEncoder().encode(createHash("sha1").update(scopeKey).digest("hex"), epoch, data as unknown as Record<string, unknown>, Date.now(),
+            previous ? { etag: previous.etag, readBody: () => previous.body } : undefined);
           return encoded;
         } } : {}),
       });

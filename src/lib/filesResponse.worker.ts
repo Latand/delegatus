@@ -71,13 +71,23 @@ const boardEncoder = new BoardEncoder();
 
 async function build(request: FilesResponseWorkerRequest): Promise<Record<string, string>> {
   const { snapshot, read } = snapshotFor(request);
+  const certified = request.deltaFrom;
   let encoded: ReturnType<BoardEncoder["encode"]> | undefined;
   const response = await buildFilesResponse(new Request(request.url, {
     headers: new Headers(request.headers),
   }), {
     listFilesWithProjectCatalog: async () => snapshot,
     ...(request.boardEpoch && request.deltaScope ? { encode: (data: import("@/lib/types").FilesResponse) => {
-      encoded = boardEncoder.encode(request.deltaScope!, request.boardEpoch!, data as unknown as Record<string, unknown>);
+      encoded = boardEncoder.encode(request.deltaScope!, request.boardEpoch!, data as unknown as Record<string, unknown>, Date.now(),
+        certified ? {
+          etag: certified.etag,
+          readBody: () => {
+            if (path.dirname(path.resolve(certified.bodyFile)) !== path.resolve(statePath("files-response-results"))) {
+              throw new Error("files response worker received an invalid delta base path");
+            }
+            return fs.readFileSync(certified.bodyFile, "utf8");
+          },
+        } : undefined);
       return encoded;
     } } : {}),
   });

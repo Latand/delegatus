@@ -38,7 +38,7 @@ import {
   setFileScanRunnerForTests,
   setFileCatalogMembershipProbeForTests,
 } from "@/lib/scanner/scanCache";
-import { setFilesResponseWorkerRuntimeForTests, shutdownFilesResponseWorker } from "@/lib/scanner/filesResponseWorker";
+import { filesResponseWorkerPoolDiagnostics, setFilesResponseWorkerRuntimeForTests, shutdownFilesResponseWorker } from "@/lib/scanner/filesResponseWorker";
 import { deepFreeze } from "@/lib/deepFreeze";
 import { stopFixtureProcess } from "@/lib/testing/fixtureProcess";
 import { setFilesResponseDependenciesForTests } from "./dependencies";
@@ -3869,6 +3869,64 @@ function retainedHistory(count: number, changed = -1): FileEntry[] {
     mtime: index === changed ? 9_999 : index,
   }));
 }
+
+test("board v2 route keeps the client's certified ETag after idle worker retirement", async () => {
+  const { applyBoardDelta } = await import("@/lib/boardDelta");
+  const setting = "LLV_FILES_RESPONSE_WORKER_IDLE_MS";
+  const previousSetting = process.env[setting];
+  process.env[setting] = "40";
+  setFilesResponseWorkerRuntimeForTests({
+    launch: { executable: process.execPath, workerPath: path.join(process.cwd(), "src/lib/filesResponse.worker.ts") },
+    env: { ...process.env, NODE_ENV: "production", LLV_STATE_DIR: stateDir, LLV_AGENT_REGISTRY_SQLITE: "off", LLV_FILES_RESPONSE_WORKER: "1" },
+    timeoutMs: 30_000,
+  });
+  const request = (headers: Record<string, string> = {}) => new Request("http://127.0.0.1/api/files?view=summary", {
+    headers: { "x-llv-board-protocol": "2", ...headers },
+  });
+  let retiredChild: ChildProcess | undefined;
+  try {
+    scannedFiles = retainedHistory(200);
+    const first = await GET(request());
+    const child = (globalThis as typeof globalThis & { __llvFilesResponseWorker?: { child: ChildProcess } }).__llvFilesResponseWorker!.child;
+    retiredChild = child;
+    const etag = first.headers.get("etag")!;
+    const body = await first.text();
+    const quiet = await GET(request({ "if-none-match": etag }));
+    expect(quiet.status).toBe(304);
+    const deadline = Date.now() + 5_000;
+    while (filesResponseWorkerPoolDiagnostics().pid !== null && Date.now() < deadline) await Bun.sleep(10);
+    expect(filesResponseWorkerPoolDiagnostics().lastRetirement).toBe("idle");
+    expect(filesResponseWorkerPoolDiagnostics().pid).toBeNull();
+    await stopFixtureProcess(child);
+    scannedFiles = retainedHistory(200, 123);
+    const scan = await currentFileScan({ fresh: true });
+    expect(scan.snapshot.files.find(entry => entry.path === "/sessions/retained-123.jsonl")!.mtime).toBe(9_999);
+    const store = globalThis as typeof globalThis & { __llvFilesProjectionInflight?: Map<string, Promise<unknown>> };
+    // A 304 can have queued a rebuild of the older generation. Settle that,
+    // then the fresh generation, before checking the client's retained cursor.
+    await Promise.all([...store.__llvFilesProjectionInflight?.values() ?? []]);
+    await GET(request());
+    await Promise.all([...store.__llvFilesProjectionInflight?.values() ?? []]);
+    const headers = { "if-none-match": etag, "x-llv-files-delta": "1" };
+    const next = await GET(request(headers));
+    expect(next.status).toBe(200);
+    expect(next.headers.get("x-llv-files-delta-base")).toBe(etag);
+    expect(next.headers.get("x-llv-board-reset")).toBeNull();
+    const delta = await next.text();
+    expect(Buffer.byteLength(delta)).toBeLessThan(Buffer.byteLength(body) / 10);
+    let applied = JSON.parse(body);
+    for (const patch of JSON.parse(delta).deltas) applied = applyBoardDelta(applied, patch);
+    expect(applied.files.find((entry: FileEntry) => entry.path === "/sessions/retained-123.jsonl").mtime).toBe(9_999);
+    expect(applied).toEqual(await (await GET(request())).json());
+    expect(fs.readdirSync(path.join(stateDir, "files-response-results"))).toEqual([]);
+  } finally {
+    if (previousSetting === undefined) delete process.env[setting];
+    else process.env[setting] = previousSetting;
+    setFilesResponseWorkerRuntimeForTests(null);
+    await stopTestWorker();
+    if (retiredChild) await stopFixtureProcess(retiredChild);
+  }
+}, 30_000);
 
 test("#1994: a changed board revision reaches a delta-capable client as the changed rows only", async () => {
   scannedFiles = retainedHistory(2_000);

@@ -239,11 +239,17 @@ test.skipIf(!process.env.BOARD_POLL_BASE_FILE || !process.env.BOARD_POLL_NEXT_FI
       const baselineDone = performance.now();
       const next = encoder.encode("global", "replay", after);
       const candidateDone = performance.now();
+      const recovered = new BoardEncoder().encode("global", "replay", after, Date.now(), {
+        etag: base.etag, readBody: () => base.body,
+      });
+      const recoveredDone = performance.now();
+      expect(recovered).toEqual(next);
       expect(applyBoardDelta(JSON.parse(base.body), JSON.parse(next.delta!.body))).toEqual(JSON.parse(next.body));
       finalDelta = `{"deltas":[${next.delta!.body}]}`;
       full = next.body;
       if (sample) samples.push({ serializeHashMs: serialized - start, v1DiffMs: baselineDone - serialized,
-        baselineBuildMs: baselineDone - start, candidateBuildMs: candidateDone - baselineDone, v1DeltaBytes: Buffer.byteLength(oldDelta) });
+        baselineBuildMs: baselineDone - start, candidateBuildMs: candidateDone - baselineDone,
+        recycledBuildMs: recoveredDone - candidateDone, v1DeltaBytes: Buffer.byteLength(oldDelta) });
     }
     const countStrings = (run: () => unknown) => {
       const stringify = JSON.stringify, parse = JSON.parse;
@@ -264,6 +270,9 @@ test.skipIf(!process.env.BOARD_POLL_BASE_FILE || !process.env.BOARD_POLL_NEXT_FI
       diffFilesBodies(oldBody, body, oldTag, `"${createHash("sha1").update(body).digest("hex")}"`);
     });
     const candidateAllocation = countStrings(() => encoder.encode("global", "replay", after));
+    const recycledAllocation = countStrings(() => new BoardEncoder().encode("global", "replay", after, Date.now(), {
+      etag: base.etag, readBody: () => base.body,
+    }));
     const next = encoder.encode("global", "replay", after);
     const history = new BoardHistory();
     history.record("global", base.etag, next.etag, JSON.parse(finalDelta).deltas.map((d: unknown) => JSON.stringify(d)).join(","));
@@ -271,8 +280,9 @@ test.skipIf(!process.env.BOARD_POLL_BASE_FILE || !process.env.BOARD_POLL_NEXT_FI
     expect(answer).toBeDefined();
     const pollAllocation = countStrings(() => history.answer("global", base.etag, next.etag, Buffer.byteLength(full)));
     const gzip = await gzipBody(finalDelta);
-    reports.push({ name, fullBytes: Buffer.byteLength(full), fullGzipBytes: (await gzipBody(full)).length,
-      deltaBytes: Buffer.byteLength(finalDelta), deltaGzipBytes: gzip.length, samples, baselineAllocation, candidateAllocation, cachedPollAllocation: pollAllocation });
+    reports.push({ name, certifiedBaseBytes: Buffer.byteLength(base.body), fullBytes: Buffer.byteLength(full), fullGzipBytes: (await gzipBody(full)).length,
+      deltaBytes: Buffer.byteLength(finalDelta), deltaGzipBytes: gzip.length, samples, baselineAllocation, candidateAllocation,
+      recycledAllocation, cachedPollAllocation: pollAllocation });
     expect(Buffer.byteLength(finalDelta)).toBeLessThan(Buffer.byteLength(full) / 10);
   }
   const result = { inputSha256: [aBody, bBody].map(body => createHash("sha256").update(body).digest("hex")), reports };
