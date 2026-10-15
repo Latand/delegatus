@@ -84,7 +84,7 @@ describe("runtime-host Docker credentials (#102)", () => {
     expect(compose).toContain('group_add:\n    - "${DELEGATUS_DOCKER_GID:-${LLV_DOCKER_GID:-957}}"');
     const wrapper = dockerfile.match(/cat > \/usr\/local\/bin\/docker <<'WRAPPER'([\s\S]*?)WRAPPER/)?.[1];
     expect(wrapper).toBeDefined();
-    expect(wrapper).toContain("nsenter -t 1 -m -p -C --");
+    expect(wrapper).toContain("nsenter -t 1 -m -p -C --no-fork --");
     expect(wrapper).toContain('/usr/bin/setpriv --reuid="$uid" --regid="$gid" --groups="$groups" --');
     expect(wrapper).not.toContain("--setgid");
     expect(wrapper).not.toContain("--setuid");
@@ -93,6 +93,7 @@ describe("runtime-host Docker credentials (#102)", () => {
   test("host CLI and tmux shims retain every supplementary group", () => {
     const cliShim = dockerfile.match(/make_nsenter_shim\(\) \{([\s\S]*?)\n\}/)?.[1];
     expect(cliShim).toBeDefined();
+    expect(cliShim).toContain("nsenter -t 1 -m -p -C --no-fork --");
     expect(cliShim).toContain("groups=\\$(id -G | tr ' ' ',')");
     expect(cliShim).toContain('/usr/bin/setpriv --reuid="\\$uid" --regid="\\$gid" --groups="\\$groups" --');
     expect(cliShim).not.toContain("--setgid");
@@ -100,6 +101,7 @@ describe("runtime-host Docker credentials (#102)", () => {
 
     const tmuxWrapper = dockerfile.match(/cat > \/usr\/local\/bin\/tmux <<'WRAPPER'([\s\S]*?)WRAPPER/)?.[1];
     expect(tmuxWrapper).toBeDefined();
+    expect(tmuxWrapper).toContain("nsenter -t 1 -m -p -C --no-fork --");
     expect(tmuxWrapper).toContain("groups=$(id -G | tr ' ' ',')");
     expect(tmuxWrapper).toContain('/usr/bin/setpriv --reuid="$uid" --regid="$gid" --groups="$groups" --');
     expect(tmuxWrapper).not.toContain("--setgid");

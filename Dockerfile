@@ -103,7 +103,8 @@ uid=\$(id -u)
 gid=\$(id -g)
 groups=\$(id -G | tr ' ' ',')
 # The host cgroup mount and /proc membership paths need the same namespace.
-exec nsenter -t 1 -m -p -C -- /usr/bin/setpriv --reuid="\$uid" --regid="\$gid" --groups="\$groups" -- /bin/sh -c 'cd "\$1" || exit; shift; if [ -n "\${LLV_SIGNAL_LAUNCHER:-}" ]; then launcher=\$LLV_SIGNAL_LAUNCHER; receipt=\$LLV_SIGNAL_RECEIPT; unset LLV_SIGNAL_LAUNCHER LLV_SIGNAL_RECEIPT LLV_DOCKER_NSENTER_SHIMS; if [ "\${LLV_SIGNAL_AUTOMATIC:-}" = 1 ]; then exec /usr/bin/python3 "\$launcher" --automatic --receipt "\$receipt" -- "\$@"; fi; exec /usr/bin/python3 "\$launcher" --receipt "\$receipt" -- "\$@"; fi; exec "\$@"' sh "\$wd" "$host_path" "\$@"
+# Compose shares the host PID namespace. Keep the launch handle through exec.
+exec nsenter -t 1 -m -p -C --no-fork -- /usr/bin/setpriv --reuid="\$uid" --regid="\$gid" --groups="\$groups" -- /bin/sh -c 'cd "\$1" || exit; shift; if [ -n "\${LLV_SIGNAL_LAUNCHER:-}" ]; then launcher=\$LLV_SIGNAL_LAUNCHER; receipt=\$LLV_SIGNAL_RECEIPT; unset LLV_SIGNAL_LAUNCHER LLV_SIGNAL_RECEIPT LLV_DOCKER_NSENTER_SHIMS; if [ "\${LLV_SIGNAL_AUTOMATIC:-}" = 1 ]; then exec /usr/bin/python3 "\$launcher" --automatic --receipt "\$receipt" -- "\$@"; fi; exec /usr/bin/python3 "\$launcher" --receipt "\$receipt" -- "\$@"; fi; exec "\$@"' sh "\$wd" "$host_path" "\$@"
 WRAPPER
   chmod +x "/usr/local/bin/$name"
 }
@@ -128,7 +129,7 @@ esac
 uid=$(id -u)
 gid=$(id -g)
 groups=$(id -G | tr ' ' ',')
-exec nsenter -t 1 -m -p -C -- /usr/bin/setpriv --reuid="$uid" --regid="$gid" --groups="$groups" -- /bin/sh -c 'cd "$1" || exit; shift; exec "$@"' sh "$wd" /usr/bin/docker "$@"
+exec nsenter -t 1 -m -p -C --no-fork -- /usr/bin/setpriv --reuid="$uid" --regid="$gid" --groups="$groups" -- /bin/sh -c 'cd "$1" || exit; shift; exec "$@"' sh "$wd" /usr/bin/docker "$@"
 WRAPPER
 chmod +x /usr/local/bin/docker
 cat > /usr/local/bin/tmux <<'WRAPPER'
@@ -151,7 +152,7 @@ run_host_tmux() {
   # turning the TAB field separators panePidMap relies on into "_" — which left
   # the viewer unable to see (or kill) any tmux session. Force UTF-8 so tabs
   # survive regardless of whether the container env propagates through nsenter.
-  nsenter -t 1 -m -p -C -- /usr/bin/setpriv --reuid="$uid" --regid="$gid" --groups="$groups" -- /bin/sh -c 'cd "$1" || exit; shift; exec "$@"' sh "$wd" env LC_ALL=C.UTF-8 /usr/bin/tmux "$@"
+  nsenter -t 1 -m -p -C --no-fork -- /usr/bin/setpriv --reuid="$uid" --regid="$gid" --groups="$groups" -- /bin/sh -c 'cd "$1" || exit; shift; exec "$@"' sh "$wd" env LC_ALL=C.UTF-8 /usr/bin/tmux "$@"
 }
 
 target_key() {

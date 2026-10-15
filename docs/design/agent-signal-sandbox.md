@@ -4,6 +4,9 @@ Source: operator's pinned requirement, 2026-10-15, “Agents can only signal the
 
 # Agent signal sandbox
 
+The design-stage record is retained below. The implementation and its
+measurements appear in [Implementation, 2026-10-15](#implementation-2026-10-15).
+
 ## Decision
 
 Use one unprivileged **user, PID and mount namespace per managed agent invocation**, assembled with Bubblewrap. Give it a private `/proc`, a working private `/dev`, the original unprivileged UID/GID, no capabilities and `no_new_privs`. Keep the existing launch hooks. Enforce the namespace before either native engine can execute a tool.
@@ -382,3 +385,29 @@ release. Its `setStructuredHost`, `upsert`, `claimStructuredHost`,
 `terminateStructuredHost` and `markUnhosted` writes all refused to discard an
 active domain. The current reader retained every identity and refused
 retirement while its recorded supervisor was still alive.
+
+### Implementation verification
+
+The kernel suite passed three consecutive runs with eleven cases per run.
+The separate built-image cases passed normal completion and container
+interruption, including host UID drop, the bundled bounded gate, foreign
+fixture survival and reaping all four recorded domain identities. The shim
+enters the host cgroup namespace and uses `nsenter --no-fork` with Compose's
+shared host PID namespace; its managed handle stays the launcher through exec.
+
+Both real native engines passed fresh/resumed full, restricted and read-only
+profiles, plus their file-backed headless paths. The seven gate integration
+cases passed, including same-domain lease reuse, cross-user-namespace refusal,
+shared old/new FIFO contention, owner death and independent deadline cleanup.
+The real tmux fixtures passed terminal input, controlling tty, resize,
+interrupt, exit status, resource placement and host-PID pane lookup.
+
+Explicit touched files passed the project's comparison runner after fixture
+expectations and transport injection were updated. Post-merge types passed;
+registry persistence and Docker contracts passed thirty cases. The pinned-Bun
+runtime-host rehearsal passed on the host and in the complete rebuilt image:
+each answered 27/27 stable-listener requests and 27/27 runtime-socket requests
+over fifteen seconds, including abandoned connections. The production Viewer
+build also served HTTP 200 under the pin. Local privacy with committed
+fingerprints, changed-file lint and whitespace checks passed. The PR carries
+the hosted check results.

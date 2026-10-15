@@ -172,22 +172,29 @@ kernelTest("production signal domain refuses foreign syscalls and utilities, sto
   }
 }, 30_000);
 
-test.skipIf(process.env.LLV_SIGNAL_SANDBOX_KERNEL_TEST !== "1" || !process.env.LLV_SIGNAL_SANDBOX_IMAGE)("the built image enters the host, drops UID and confines its host CLI and bundled gate", async () => {
+test.skipIf(process.env.LLV_SIGNAL_SANDBOX_KERNEL_TEST !== "1" || !process.env.LLV_SIGNAL_SANDBOX_IMAGE).each(["completion", "interruption"] as const)("the built image enters the host, drops UID and confines its host CLI and bundled gate: %s", async mode => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "signal-container-"));
   const home = path.join(root, "home"); fs.mkdirSync(path.join(home, ".bun/bin"), { recursive: true });
   fs.symlinkSync(fs.realpathSync(process.execPath), path.join(home, ".bun/bin/bun"));
   const temporary = path.join(root, "tmp"); fs.mkdirSync(temporary);
+  const domainFile = path.join(root, "domain.json");
+  const proofFile = path.join(root, "proof");
   const foreign = spawn("/bin/sleep", ["60"], { stdio: "ignore" });
   const foreignIdentity = captureProcessIdentity(foreign.pid!);
-  const source = `import {spawnSignalSandbox, signalAgentDomain, resolveSignalTooling} from './src/lib/runtime/agentSignalSandbox.ts';
+  const source = `import {spawnSignalSandbox, signalAgentDomain, signalDomain, resolveSignalTooling} from './src/lib/runtime/agentSignalSandbox.ts';
+import fs from 'node:fs';
 const tooling=resolveSignalTooling();
 if(tooling.gate.startsWith('/app/')) throw new Error('container path escaped into host tooling');
 const code=${JSON.stringify(`try {process.kill(${foreign.pid},'SIGTERM');throw Error('foreign signal succeeded')} catch(e) {if(e.code!=='ESRCH')throw e;}
 const child=Bun.spawn(['/bin/sleep','30']);child.kill('SIGTERM');await child.exited;if(child.signalCode!=='SIGTERM')throw Error('own cleanup failed');
 const gate=Bun.spawn(['bash',process.env.FIXTURE_GATE,'/bin/echo','container-gate'],{stdout:'pipe',stderr:'pipe'});
 const [status,out,err]=await Promise.all([gate.exited,new Response(gate.stdout).text(),new Response(gate.stderr).text()]);
-if(status!==0||out.trim()!=='container-gate')throw Error(err);console.log('container signal proof complete');`)};
+if(status!==0||out.trim()!=='container-gate')throw Error(err);
+if(${mode === "interruption"}) {await Bun.write(${JSON.stringify(proofFile)},'ready');await Bun.sleep(60_000);}
+console.log('container signal proof complete');`)};
 const child=await spawnSignalSandbox('bun',['-e',code],{env:{...process.env,FIXTURE_GATE:tooling.gate},stdio:['ignore','pipe','pipe']});
+fs.writeFileSync(${JSON.stringify(domainFile + ".new")},JSON.stringify(signalDomain(child)));
+fs.renameSync(${JSON.stringify(domainFile + ".new")},${JSON.stringify(domainFile)});
 let out='',err='';child.stdout.on('data',x=>out+=x);child.stderr.on('data',x=>err+=x);
 try {await new Promise(r=>child.once('close',r));if(child.exitCode!==0||out.trim()!=='container signal proof complete')throw Error(err||out);console.log('bridge passed');}
 finally {if(child.exitCode===null&&child.signalCode===null)signalAgentDomain(child,'SIGKILL');}
@@ -203,13 +210,36 @@ finally {if(child.exitCode===null&&child.signalCode===null)signalAgentDomain(chi
   try {
     expect(create.status, create.stderr).toBe(0); id = create.stdout.trim(); expect(id).toMatch(/^[a-f0-9]{64}$/);
     const container = spawn("docker", ["start", "--attach", id], { stdio: ["ignore", "pipe", "pipe"] });
+    const closed = once(container, "close");
     let output = "", errors = ""; container.stdout.on("data", chunk => { output += chunk; }); container.stderr.on("data", chunk => { errors += chunk; });
-    await once(container, "close");
-    expect(container.exitCode, errors).toBe(0); expect(output.trim()).toBe("bridge passed");
+    if (mode === "interruption") {
+      const deadline = Date.now() + 10_000;
+      while (!fs.existsSync(proofFile) && container.exitCode === null && Date.now() < deadline) await Bun.sleep(10);
+      expect(fs.existsSync(proofFile), errors).toBeTrue();
+      const domain = normalizeAgentSignalDomain(JSON.parse(fs.readFileSync(domainFile, "utf8")))!;
+      expect(processIdentityStatus(domain.native)).toBe("alive");
+      expect(spawnSync("docker", ["rm", "--force", id], { stdio: "ignore", timeout: 10_000 }).status).toBe(0);
+    }
+    await closed;
+    if (mode === "completion") { expect(container.exitCode, errors).toBe(0); expect(output.trim()).toBe("bridge passed"); }
+    else expect(container.exitCode).not.toBe(0);
     expect(processIdentityStatus(foreignIdentity)).toBe("alive");
   } finally {
     if (id && /^[a-f0-9]{64}$/.test(id)) spawnSync("docker", ["rm", "--force", id], { stdio: "ignore", timeout: 10_000 });
-    await close(foreign); fs.rmSync(root, { recursive: true, force: true });
+    try {
+      if (fs.existsSync(domainFile)) {
+        const domain = normalizeAgentSignalDomain(JSON.parse(fs.readFileSync(domainFile, "utf8")))!;
+        // The host CLI moved into its own scope. Removing the container alone
+        // cannot reap that scope if the fixture was interrupted.
+        for (const identity of [domain.init, domain.monitor]) {
+          if (processIdentityStatus(identity) === "alive") process.kill(identity.pid, "SIGKILL");
+        }
+        const end = Date.now() + 3_000;
+        const identities = [domain.init, domain.native, domain.bubblewrap, domain.monitor];
+        while (identities.some(identity => processIdentityStatus(identity) === "alive") && Date.now() < end) await Bun.sleep(10);
+        expect(identities.map(identity => processIdentityStatus(identity))).toEqual(["dead", "dead", "dead", "dead"]);
+      }
+    } finally { await close(foreign); fs.rmSync(root, { recursive: true, force: true }); }
   }
 }, 45_000);
 

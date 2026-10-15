@@ -43,6 +43,11 @@ executes. The launcher is copied into a cache beneath the mounted home, so the
 host executes the same policy as the Viewer release. Container services retain
 their `bun-container` interpreter.
 
+The shims use `nsenter --no-fork` with Compose's shared host PID namespace.
+The managed child handle therefore remains the launcher through the host
+transition and UID drop. Entering the host cgroup namespace also keeps
+membership paths aligned with the host cgroup mount.
+
 ## Production instance
 
 Runtime-host owns production releases and the stable listener on

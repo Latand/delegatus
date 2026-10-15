@@ -149,5 +149,92 @@
     ],
     "currentAuthorityRetained": true,
     "livingSupervisorRetirementRefused": true
+  },
+  "verification": {
+    "kernel": {
+      "file": "src/lib/runtime/agentSignalSandbox.integration.test.ts",
+      "passesPerRun": 11,
+      "consecutiveRuns": 3,
+      "foreignFixtureSurvived": true,
+      "registryOrphanStopRetiredDomain": true
+    },
+    "containerBridge": {
+      "file": "src/lib/runtime/agentSignalSandbox.integration.test.ts",
+      "cases": [
+        "completion",
+        "interruption"
+      ],
+      "passed": 2,
+      "assertions": 14,
+      "hostUidDrop": true,
+      "bundledGatePassed": true,
+      "allRecordedDomainProcessesReaped": true
+    },
+    "gates": {
+      "file": "src/lib/runtime/sandboxGateRunner.integration.test.ts",
+      "passed": 7,
+      "assertions": 33,
+      "postMergePassed": true
+    },
+    "nativeEngines": {
+      "file": "src/lib/runtime/agentSignalSandbox.native.test.ts",
+      "profiles": [
+        "full",
+        "restricted",
+        "read-only"
+      ],
+      "engines": [
+        "codex",
+        "claude"
+      ],
+      "freshAndResumed": true,
+      "headlessBothEngines": true,
+      "passed": 6,
+      "assertions": 65
+    },
+    "terminal": {
+      "files": [
+        "src/lib/runtime/agentSignalSandbox.terminal.test.ts",
+        "src/lib/runtime/cpuPlacement.scope.test.ts"
+      ],
+      "rawInputControllingTtyResizeInterruptExitStatusPassed": true,
+      "scopePlacementPassed": true,
+      "hostPidPaneLookupPassed": true
+    },
+    "postMerge": {
+      "typecheck": "pass",
+      "registryPersistenceAndDockerContracts": {
+        "passed": 30,
+        "assertions": 137
+      },
+      "hostRehearsal": {
+        "runtime": "Bun 1.4.0",
+        "successionMs": 506,
+        "listenerAnswers": 27,
+        "listenerPolls": 27,
+        "socketAnswers": 27,
+        "socketPolls": 27,
+        "windowMs": 15000
+      }
+    },
+    "imageHostRehearsal": {
+      "runtime": "Bun 1.4.0 via bun-container",
+      "successionMs": 521,
+      "listenerAnswers": 27,
+      "listenerPolls": 27,
+      "socketAnswers": 27,
+      "socketPolls": 27,
+      "windowMs": 15000
+    },
+    "viewerRuntime": {
+      "runtime": "Bun 1.4.0",
+      "loadedServerModules": 25,
+      "rootHttpStatus": 200
+    },
+    "publication": {
+      "localPrivacyWithCommittedFingerprints": "pass",
+      "changedFileLint": "pass",
+      "whitespace": "pass"
+    }
   }
 }
