@@ -682,6 +682,8 @@ const STACK_KIND_RANK: Record<WorkerStack["kind"], number> = { flow: 0, pipeline
 
 export interface CollapseContextInput {
   files: readonly FileEntry[];
+  /** Reusable path lookup for this corpus; payload classification still uses files. */
+  resolveClaimPath?: TranscriptClaimResolver;
   flows: readonly Flow[];
   pipelines?: readonly Pipeline[];
   /** Durable manual placements/expansions — pinned against collapse. */
@@ -706,7 +708,7 @@ const EMPTY_SEEN: ReadonlyMap<string, number> = new Map();
 export function collapseContext(input: CollapseContextInput): CollapseContext {
   /* One resolver per pass: durable flow/pipeline records are matched against the
      projected corpus, whatever spelling each side happens to carry (#943). */
-  const resolveClaimPath = transcriptClaimResolver(input.files);
+  const resolveClaimPath = input.resolveClaimPath ?? transcriptClaimResolver(input.files);
   return {
     flows: input.flows,
     pipelines: input.pipelines,

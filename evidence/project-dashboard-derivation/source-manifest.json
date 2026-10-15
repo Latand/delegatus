@@ -1,0 +1,56 @@
+{
+  "measuredSource": {
+    "src/components/ProjectDashboard.tsx": "6f2773feaeff94bf1b8159f9b0340d638ff9fda88562620650865c1f57aa5f6c",
+    "src/components/flows/directReviewGroups.ts": "14e7a4cccc7842928661ed4d4192d1174d41e74da962df1d366c160a3046f13a",
+    "src/components/kanban/buildEvidenceFixture.ts": "ef3eced2122aafccbfb11580bcee22c8d2c020e41dbbf61ceff20091cfdf2b3a",
+    "src/components/kanban/issue1695BrowserHarness.ts": "226ede6f87e9bc1bad077e139dba0f51d1c0e420fbc558fc01838db5d2b7dec3",
+    "src/components/kanban/issue1695Evidence.fixture.tsx": "cbe9cb15cc0c0bbf07b88352069c8ded37eac13b240b2373cc4c069917cfb4f6",
+    "src/components/kanban/kanbanBoard.browser.test.tsx": "660d427c937ae2393d09498e743d39cb48bdc34a7fb96857201f3d3b82fdc581",
+    "src/components/kanban/kanbanModel.test.ts": "14df76b3337cb5fddfd87cc4ef254f0a4df2503621938db366651de58b3b93c3",
+    "src/components/kanban/kanbanModel.ts": "7e94a507a9ccbd6e0eb50e60814eb35cf82079282a6de90971597b16a45f7323",
+    "src/components/kanban/reuseKanbanModel.ts": "04b9ca25a0dd7ae8bde2879d0208740a44bc9af214457c6a14cd0894b1dbabd0",
+    "src/components/kanban/useBands.ts": "aa0a748b7d75f743343559481e4f055947e9d49eb721c3718cc1f088b84f385e",
+    "src/components/projectModel.ts": "a22ae0bb22bb1c8ab5bbbbbaa5e492b771ec87186694195e1af5afe0f3d6f60d",
+    "src/components/scheme/layout.ts": "b1e0f66e7f26c3e9569f56d2cdea0d77d05228962416a58fb51ca3954b9c35a9",
+    "src/components/scheme/taskBands.ts": "5a6f2654e7d39cdcfa35a51b30fe647e0d742ba53bde8b63a8709ad6dd6b4c30",
+    "src/components/scheme/workerCollapse.test.ts": "275b84cd367e7d773216b127d2a0ddf9d1026bedfc3f5d5064b970f576e5fc42",
+    "src/components/scheme/workerCollapse.ts": "0d7c4408f535624a09b86265349e59642a0cb78f55544e02f7b650be09b50777",
+    "src/components/tasks/taskWorkflowModel.test.ts": "4edd86b73ece655d08724919325d3529e0691dad27d92fb24494b2005165aee5",
+    "src/components/tasks/taskWorkflowModel.ts": "1b93ebcaea147314e83359d30413c544b0b5bb7dc7f9a961ec2aeffdd307e81f",
+    "src/components/transcriptClaims.ts": "1bed68b06bb1e6f6e6c8fa27e4d5eed1a8af6330f535d367cd721730b4ccecca",
+    "src/components/workingAgents.ts": "75b8d5847a46520832ade3ac9368de42d91655fb481bd6aa94b5d1e71a5e4b1a",
+    "src/components/projectDashboardDerivation.test.ts": "0e8669f335b6725d9b6c8f1a7f48cc52394db7968af14e536bc078c037538210",
+    "src/components/projectDashboardDerivation.ts": "28acc1afbb7bec521cd28df5ee55d0360cc0be053c2cf23eeec3f09e7461023b"
+  },
+  "finalSource": {
+    "src/components/ProjectDashboard.tsx": "6f2773feaeff94bf1b8159f9b0340d638ff9fda88562620650865c1f57aa5f6c",
+    "src/components/flows/directReviewGroups.ts": "14e7a4cccc7842928661ed4d4192d1174d41e74da962df1d366c160a3046f13a",
+    "src/components/kanban/buildEvidenceFixture.ts": "ef3eced2122aafccbfb11580bcee22c8d2c020e41dbbf61ceff20091cfdf2b3a",
+    "src/components/kanban/issue1695BrowserHarness.ts": "226ede6f87e9bc1bad077e139dba0f51d1c0e420fbc558fc01838db5d2b7dec3",
+    "src/components/kanban/issue1695Evidence.fixture.tsx": "cbe9cb15cc0c0bbf07b88352069c8ded37eac13b240b2373cc4c069917cfb4f6",
+    "src/components/kanban/kanbanBoard.browser.test.tsx": "660d427c937ae2393d09498e743d39cb48bdc34a7fb96857201f3d3b82fdc581",
+    "src/components/kanban/kanbanModel.test.ts": "14df76b3337cb5fddfd87cc4ef254f0a4df2503621938db366651de58b3b93c3",
+    "src/components/kanban/kanbanModel.ts": "7e94a507a9ccbd6e0eb50e60814eb35cf82079282a6de90971597b16a45f7323",
+    "src/components/kanban/reuseKanbanModel.ts": "04b9ca25a0dd7ae8bde2879d0208740a44bc9af214457c6a14cd0894b1dbabd0",
+    "src/components/kanban/useBands.ts": "aa0a748b7d75f743343559481e4f055947e9d49eb721c3718cc1f088b84f385e",
+    "src/components/projectModel.ts": "a22ae0bb22bb1c8ab5bbbbbaa5e492b771ec87186694195e1af5afe0f3d6f60d",
+    "src/components/scheme/layout.ts": "b1e0f66e7f26c3e9569f56d2cdea0d77d05228962416a58fb51ca3954b9c35a9",
+    "src/components/scheme/taskBands.ts": "5a6f2654e7d39cdcfa35a51b30fe647e0d742ba53bde8b63a8709ad6dd6b4c30",
+    "src/components/scheme/workerCollapse.test.ts": "275b84cd367e7d773216b127d2a0ddf9d1026bedfc3f5d5064b970f576e5fc42",
+    "src/components/scheme/workerCollapse.ts": "0d7c4408f535624a09b86265349e59642a0cb78f55544e02f7b650be09b50777",
+    "src/components/tasks/taskWorkflowModel.test.ts": "4edd86b73ece655d08724919325d3529e0691dad27d92fb24494b2005165aee5",
+    "src/components/tasks/taskWorkflowModel.ts": "1b93ebcaea147314e83359d30413c544b0b5bb7dc7f9a961ec2aeffdd307e81f",
+    "src/components/transcriptClaims.ts": "1bed68b06bb1e6f6e6c8fa27e4d5eed1a8af6330f535d367cd721730b4ccecca",
+    "src/components/workingAgents.ts": "75b8d5847a46520832ade3ac9368de42d91655fb481bd6aa94b5d1e71a5e4b1a",
+    "src/components/projectDashboardDerivation.test.ts": "0e8669f335b6725d9b6c8f1a7f48cc52394db7968af14e536bc078c037538210",
+    "src/components/projectDashboardDerivation.ts": "28acc1afbb7bec521cd28df5ee55d0360cc0be053c2cf23eeec3f09e7461023b"
+  },
+  "baselineBundles": {
+    "raw": "619ebe992fb9faf22b7aba46a42d27abb21cf19186b1315be5a6e2954a07bc97",
+    "timed": "4c433565e8082920b7f4df0281ee8c8ea7088f85e1eca72cad3ee39b47a7b49a"
+  },
+  "candidateBundles": {
+    "raw": "df8454a545b63e7c87205120e21055785f0b78418d530f7f0bcb3a7abea7b304",
+    "timed": "a857091aaea01a92eae4c587808287d21b02a1c6e063b4f3edb08a7c8f8992d6"
+  }
+}

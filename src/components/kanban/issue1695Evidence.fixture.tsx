@@ -78,6 +78,7 @@ import { refreshTeamView } from "@/components/team/teamClient";
  */
 
 const SCENARIO = new URLSearchParams(location.search).get("scenario");
+const PROJECT_DERIVATION = SCENARIO === "project-derivation";
 const OVERVIEW_PERFORMANCE = SCENARIO === "overview-performance";
 /* A task another machine runs (docs/design/synced-task-card.md): four tasks owned by the linked stage
    install, one of them with no lane (an older peer), beside the board's own local ones. The page
@@ -123,7 +124,7 @@ const DRAG_BOARD = SCENARIO === "drag-board";
    owning some of its lanes. */
 const ARROWS = SCENARIO === "orchestrator-arrows";
 const CPU_QUEUE = SCENARIO === "cpu-queue" || SCENARIO === "cpu-queue-stalled";
-const PIPELINES = SCENARIO === "pipelines" || STAGES || FLAT || SYNCED || DRAG_BOARD || ARROWS || CPU_QUEUE;
+const PIPELINES = PROJECT_DERIVATION || SCENARIO === "pipelines" || STAGES || FLAT || SYNCED || DRAG_BOARD || ARROWS || CPU_QUEUE;
 /* #1846: `&runtime=structured` answers the runtime snapshot with one structured session, for the running
    verify conversation, so its composer's runtime pill and the board's account chip both draw. */
 /* The seat-noise scenario (docs/design/seat-panel-noise.md) seats the orchestrator on a structured host too,
@@ -1753,6 +1754,14 @@ const mixedFailed = UNSTARTED ? add(conversation("mixed-failed", L("Replay the m
     state: "failed", initialMessage: "failed", retrySafe: true, error: "account limit reached: the weekly window resets in 3 days" },
 })) : null;
 
+// The historical project corpus also used by the derivation audit.
+if (PROJECT_DERIVATION) for (let i = 0; i < 280; i++) {
+  const builder = add(conversation(`history-builder-${i}`, `Historical work ${i}`));
+  const reviewers = [0, 1].map(j => add(conversation(`history-review-${i}-${j}`, `Historical review ${i}`)));
+  const flow = reviewFlow(`history-flow-${i}`, builder, reviewers[1], ["REQUEST_CHANGES", "REQUEST_CHANGES", "REQUEST_CHANGES", "APPROVE"], 100000);
+  flow.state = "closed";
+  flows.push(flow);
+}
 let revision = 1;
 function task(id: string, status: TaskStatus, title: string, description: string, updatedAgo: number, members: FileEntry[] = [], over: Partial<BoardTask> = {}): BoardTask {
   return {
@@ -2300,6 +2309,10 @@ if (ICONS) {
     const icon = stored[tasks[index]!.id];
     if (icon) tasks[index] = { ...tasks[index]!, icon } as BoardTask;
   }
+}
+if (PROJECT_DERIVATION) for (let i = 0; i < 600; i++) {
+  tasks.push(task(`history-task-${i}`, "done", `Historical task ${i}`, "Synthetic acceptance notes. ".repeat(12), 100000,
+    i < 60 ? [files.find(f => f.name === `history-builder-${i}.jsonl`)!] : [], i < 60 ? {} : { board: "hidden" }));
 }
 if (EDITING) {
   const at = (id: string) => tasks.findIndex((entry) => entry.id === id);
@@ -2961,6 +2974,16 @@ const evidence = {
   },
 };
 Object.assign(window, { evidence });
+if (PROJECT_DERIVATION) Object.assign(window, {
+  projectCorpus: { files: files.length, flows: flows.length, tasks: tasks.length, liveIds: files.filter(f => f.activity === "live").map(f => f.conversationId) },
+  projectPoll: () => {
+    files[0] = { ...files[0], mtime: files[0].mtime + 1, size: files[0].size + 1 };
+    window.dispatchEvent(new Event("llv:files-changed"));
+  },
+  projectCatalogHead: () => ({ size: files[0].size, mtime: files[0].mtime }),
+  projectSessions: () => Object.values(getRuntimeBus().getState().store.sessions).map(s => ({ id: s.conversationId, revision: s.revision })),
+  projectConnection: () => getRuntimeBus().getState().connection,
+});
 
 /* Streams stay silent, except the log stream, which reports it cannot connect
    so the feeds read their transcripts through the polled route below. */
@@ -2977,12 +3000,30 @@ class QuietEventSource {
 class StreamEventSource extends QuietEventSource {
   onmessage: ((event: { data: string }) => void) | null = null;
   onopen: (() => void) | null = null;
+  private heartbeats = new Set<(event: { data: string }) => void>();
+  private heartbeatTimer: number | undefined;
   constructor(url: string | URL) {
     super(url);
     if (String(url).startsWith("/api/runtime/stream")) {
       openStream(this);
       setTimeout(() => this.onopen?.(), 0);
+      // The real runtime route sends a named heartbeat every 15 seconds while
+      // quiet. A slow CPU-throttled mount can outlast the client's 20-second
+      // watchdog before the driver starts streaming its measured events.
+      if (PROJECT_DERIVATION) this.heartbeatTimer = window.setInterval(() => {
+        for (const listener of this.heartbeats) listener({ data: "{}" });
+      }, 15_000);
     }
+  }
+  addEventListener(type?: string, listener?: (event: { data: string }) => void) {
+    if (type === "heartbeat" && listener) this.heartbeats.add(listener);
+  }
+  removeEventListener(type?: string, listener?: (event: { data: string }) => void) {
+    if (type === "heartbeat" && listener) this.heartbeats.delete(listener);
+  }
+  close() {
+    window.clearInterval(this.heartbeatTimer);
+    this.heartbeats.clear();
   }
 }
 let streamSource: StreamEventSource | null = null;

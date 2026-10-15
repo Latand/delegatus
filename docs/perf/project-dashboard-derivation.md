@@ -1,3 +1,5 @@
+> Implementation follow-up: the client-side fix and retained shared-driver regression are recorded in [the acceptance evidence](../../evidence/project-dashboard-derivation/README.md). The dated audit below describes the unchanged baseline before that implementation.
+
 # ProjectDashboard derivation audit — 2026-10-15
 
 Current main still misses the project-board acceptance criterion. With 357 cards, an open conversation, 40 transcript events/s, CPU ×4 and 30 seconds of scrolling, all three ordinary-source runs contained a clock-triggered long task with more than 50 ms of sampled dashboard/board-model work. Exact callback measurements confirmed cumulative derivation work above 50 ms in all three paired diagnostic runs. The remaining trigger is the board clock and its downstream invalidation chain; text deltas themselves no longer rebuild ProjectDashboard per event.
@@ -118,7 +120,7 @@ For output equivalence, compare complete derived card IDs, column/order, groupin
 
 In this audit, all 357 rendered card IDs, order and column assignments matched between the raw and timed variant before and after each window. Displayed text also matched after normalizing only age strings and standalone clock/date labels. Those labels legitimately differed because the paired contexts started at different wall times. This proves the observed rendering parity of the probes; a future optimized model still needs the complete output-equivalence checks above. The application source was unchanged.
 
-**Commands, artifacts and verification.** All heavy browser execution was sequential. The command below is the actual invocation with machine-specific executable locations represented by variables; `GATE` is the installed wrapper named by the stage and `CHROME_BIN` is the existing headless-shell executable. `AUDIT` is the private scratch root `/var/tmp/pd-audit-h48um9f1`. The selected gate never accesses the live Viewer at the closed control URL.
+**Commands, artifacts and verification.** All heavy browser execution was sequential. The command below is the actual invocation with machine-specific executable locations represented by variables; `GATE` is the installed wrapper named by the stage and `CHROME_BIN` is the existing headless-shell executable. `AUDIT` names the private OS temporary root used for the audit. The selected gate never accesses the live Viewer at the closed control URL.
 
 ```bash
 cd "$AUDIT/checkout"

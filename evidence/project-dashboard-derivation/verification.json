@@ -1,0 +1,137 @@
+{
+  "baselineCommit": "45d25ac796d5824713c9fb57d65f57efea61041b",
+  "touchedTestFiles": [
+    "src/components/ProjectDashboard.backgroundTaskDock.dom.test.tsx",
+    "src/components/ProjectDashboard.catalogFailure.dom.test.tsx",
+    "src/components/ProjectDashboard.empty.dom.test.tsx",
+    "src/components/ProjectDashboard.flash.dom.test.tsx",
+    "src/components/ProjectDashboard.headerBar.dom.test.tsx",
+    "src/components/ProjectDashboard.inlineCatalog.dom.test.tsx",
+    "src/components/ProjectDashboard.launchClaim.dom.test.tsx",
+    "src/components/ProjectDashboard.loadingStates.dom.test.tsx",
+    "src/components/ProjectDashboard.looseReader.dom.test.tsx",
+    "src/components/ProjectDashboard.mobileLaunchFocus.dom.test.tsx",
+    "src/components/ProjectDashboard.pipelineNavigation.dom.test.tsx",
+    "src/components/ProjectDashboard.searchLanding.dom.test.tsx",
+    "src/components/ProjectDashboard.seatTasks.dom.test.tsx",
+    "src/components/ProjectDashboard.selection.dom.test.tsx",
+    "src/components/ProjectDashboard.shelf.dom.test.tsx",
+    "src/components/ProjectDashboard.test.ts",
+    "src/components/ProjectDashboard.unownedConversations.dom.test.tsx",
+    "src/components/ProjectDashboard.viewSwitch.dom.test.tsx",
+    "src/components/projectModel.test.ts",
+    "src/components/projectDashboardDerivation.test.ts",
+    "src/components/scheme/layout.test.ts",
+    "src/components/scheme/layout.lineage.test.ts",
+    "src/components/scheme/placementHorizon.test.ts",
+    "src/components/scheme/workerCollapse.test.ts",
+    "src/components/scheme/taskBands.test.ts",
+    "src/components/flows/directReviewGroups.test.ts",
+    "src/components/flows/flowModel.test.ts",
+    "src/components/launchHistoryModel.test.ts",
+    "src/components/tasks/taskWorkflowModel.test.ts",
+    "src/components/kanban/kanbanModel.test.ts",
+    "src/components/kanban/reuseKanbanModel.test.ts",
+    "src/components/kanban/overviewBands.test.ts",
+    "src/hooks/useNowSeconds.dom.test.tsx",
+    "src/components/Viewer.switching.dom.test.tsx",
+    "src/components/workingAgents.test.ts",
+    "src/components/turnDuration.test.ts",
+    "src/components/scheme/taskStacks.test.ts"
+  ],
+  "touchedComparison": {
+    "newFailures": 0,
+    "preexistingFailures": 28,
+    "fixed": 0,
+    "removedOrSkipped": 0,
+    "flaky": 0
+  },
+  "preexistingAssertions": [
+    "src/components/ProjectDashboard.launchClaim.dom.test.tsx: a failed-delivery launch record on a scanned transcript path never hides the conversation",
+    "src/components/ProjectDashboard.launchClaim.dom.test.tsx: a pathless terminal receipt is still shelved and never becomes a board card",
+    "src/components/ProjectDashboard.looseReader.dom.test.tsx: a switch to a project the Board is already showing files for leaves the reader behind, and it is not back on return",
+    "src/components/ProjectDashboard.looseReader.dom.test.tsx: an attention jump to a conversation a card holds brings it into the same window, never into its card",
+    "src/components/ProjectDashboard.looseReader.dom.test.tsx: a `#c=` landing on a conversation a card holds brings it into the same window, never into its card",
+    "src/components/ProjectDashboard.looseReader.dom.test.tsx: another conversation no card holds comes into the window after the first, which stays in its list",
+    "src/components/ProjectDashboard.looseReader.dom.test.tsx: a focus handoff `show` to a card does not report arrival under the window, and leaves the window",
+    "src/components/ProjectDashboard.looseReader.dom.test.tsx: a focus handoff `open` to a card does not report arrival under the window, and brings the conversation into it",
+    "src/components/ProjectDashboard.looseReader.dom.test.tsx: a pipeline link on this project leaves the window and focuses the card that holds the pipeline",
+    "src/components/ProjectDashboard.looseReader.dom.test.tsx: a pipeline link to another project switches to it with no window, and focuses the card that holds the pipeline there",
+    "src/components/ProjectDashboard.unownedConversations.dom.test.tsx: an active flow's reviewer round: on no card, and a catalog landing opens its transcript and composer on the Board, with nothing written",
+    "src/components/ProjectDashboard.unownedConversations.dom.test.tsx: an active flow's reviewer round: an attention jump opens the same reader",
+    "src/components/ProjectDashboard.unownedConversations.dom.test.tsx: an active flow's reviewer round: a focus handoff resolves it though no card holds it, opens its reader in the window, and its Return closes it",
+    "src/components/ProjectDashboard.unownedConversations.dom.test.tsx: a collapsed worker: on no card, and a catalog landing opens its transcript and composer on the Board, with nothing written",
+    "src/components/ProjectDashboard.unownedConversations.dom.test.tsx: a collapsed worker: an attention jump opens the same reader",
+    "src/components/ProjectDashboard.unownedConversations.dom.test.tsx: a collapsed worker: a focus handoff resolves it though no card holds it, opens its reader in the window, and its Return closes it",
+    "src/components/ProjectDashboard.unownedConversations.dom.test.tsx: an engine's own subagent: on no card, and a catalog landing opens its transcript and composer on the Board, with nothing written",
+    "src/components/ProjectDashboard.unownedConversations.dom.test.tsx: an engine's own subagent: an attention jump opens the same reader",
+    "src/components/ProjectDashboard.unownedConversations.dom.test.tsx: an engine's own subagent: a focus handoff resolves it though no card holds it, opens its reader in the window, and its Return closes it",
+    "src/components/ProjectDashboard.unownedConversations.dom.test.tsx: under a standing landing, a card's link to Conversations opens the project's list over the Board",
+    "src/components/Viewer.switching.dom.test.tsx: desktop: an in-app \u00abOpen conversation\u00bb link focuses the target's reader without rebuilding the board",
+    "src/components/Viewer.switching.dom.test.tsx: desktop: a cross-project link switches the project, then focuses \u2014 from the last known catalog",
+    "src/components/Viewer.switching.dom.test.tsx: desktop: a project switch paints the revisited board synchronously and never remounts the dashboard",
+    "src/components/Viewer.switching.dom.test.tsx: desktop: a fresh tail record in one reader leaves the other readers' panes untouched",
+    "src/components/Viewer.switching.dom.test.tsx: desktop: a cold deep link from the URL still resolves a beyond-cap conversation",
+    "src/components/Viewer.switching.dom.test.tsx: phone: A \u2192 B \u2192 A through the board shows A's previous rows synchronously, then the fresh tail lands without a flash",
+    "src/components/Viewer.switching.dom.test.tsx: phone: a bar swipe never walks Recent \u2014 it bumps, and the switcher row is the hop",
+    "src/components/Viewer.switching.dom.test.tsx: phone: switching project through the project sheet paints the revisited board from cache"
+  ],
+  "readerMemoization": [
+    {
+      "case": "in-app focus",
+      "expected": 0,
+      "baseline": 6,
+      "candidate": 6
+    },
+    {
+      "case": "fresh tail",
+      "expected": 0,
+      "baseline": 3,
+      "candidate": 3
+    }
+  ],
+  "focusedUnits": {
+    "files": 9,
+    "passed": 223,
+    "assertions": 4484
+  },
+  "typecheck": "pass",
+  "changedFileLint": {
+    "introducedErrors": 0,
+    "preexistingErrors": 29
+  },
+  "logs": {
+    "unit-paths.log": "e1041edb19f1bb4c1deade8b0a740138a1656feb19628c1c12d370a21666c5d4",
+    "types-paths.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "lint-paths.log": "671361afe2aa1b3d7021c8f89d76ae3f798ea11e173934a45b9bbf86184fa797",
+    "touched-final.log": "da7af7fd8751e75f0f451165224e7eb8ec5853e8818777e98091efc766ce3224",
+    "reader-head.log": "2b2016d58346d86d97406ecf7a0e466b9964de3cc2fe7ffff869eee1b73290ab",
+    "reader-base.log": "44e557d056e89b374ea0f534b80b6679a36856afd2a76208bc425b1420542daa",
+    "paths-timed.log": "c47d2432a3a231c87f959c72f64b80dee78aa920fd046b2b9a2d3caa2b21e1fc",
+    "paths-raw.log": "ac8f5e132dae989fcfc4a03bbeeb58706ea928f5531e8c642ee3a680ee2843dd",
+    "browser-regressions.log": "49f4babf5f285ec1e98f55bf0c99be24ab4c55a8d601fd90fe3d202328423196",
+    "browser-baseline-red.log": "328193027c18c62520018be60150ebb3f01d73bc16352fa5998ef3d705af733b",
+    "privacy-final.log": "e968434c852f050df922a65d7a05e8c5a5b06493c7d46c62ad96e396a125111c"
+  },
+  "existingBrowserCases": {
+    "passed": [
+      "Overview incremental catalog",
+      "pipeline graphs and Past attempts",
+      "cross-project Overview"
+    ],
+    "preexistingFailures": [
+      {
+        "case": "kanban board geometry",
+        "baseline": "14 px horizontal overflow at 640 \u00d7 720, light and dark",
+        "candidate": "14 px horizontal overflow at 640 \u00d7 720, light and dark"
+      },
+      {
+        "case": "conversations opened from cards",
+        "baseline": "card-reordering wait timeout",
+        "candidate": "card-reordering wait timeout"
+      }
+    ],
+    "historicalRecordsPreserved": true
+  },
+  "localPrivacy": "pass"
+}

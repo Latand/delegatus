@@ -3,7 +3,7 @@ import type { BoardTask } from "@/lib/tasks/types";
 import type { Pipeline, PipelineStageAttempt } from "@/lib/pipelines/types";
 import type { Flow } from "@/lib/flows/types";
 import type { FileEntry } from "@/lib/types";
-import { createTaskWorkflowProjector, projectTaskWorkflows } from "./taskWorkflowModel";
+import { createTaskWorkflowProjector, projectTaskWorkflows, taskWorkflowMembershipKey } from "./taskWorkflowModel";
 
 const task = (id = "task-a", overrides: Partial<BoardTask> = {}): BoardTask => ({ id, project: "project", text: "Restore delivery",
   status: "assigned", placement: "unplaced", assignments: [], createdAt: "2026-01-01", updatedAt: "2026-01-01", ...overrides });
@@ -149,4 +149,48 @@ test("pipeline and review edits retain unrelated tasks and refresh findings with
   const next = project(tasks, [finished], [changed], []);
   expect(next.tasks[0].executions[0].pipeline.state).toBe("completed");
   expect(next.tasks[1]).toBe(reviewed.tasks[1]);
+});
+
+
+test("size and freshness updates refresh all shared references and match full projection through generation changes", () => {
+  const project = createTaskWorkflowProjector();
+  const a = file("a"), b = file("b"), outside = file("outside");
+  const tasks = [task("task-a"), task("task-b")];
+  const pipelines = [pipeline("shared", [attempt(1, { conversationId: "a", agentPath: a.path, flowId: "review" })], { taskIds: tasks.map(t => t.id) })];
+  const flows = [{ id: "review", project: "project", implementerPath: a.path, implementerConversationId: "a", state: "closed", rounds: [
+    { n: 1, reviewerPath: b.path, reviewerConversationId: "b", verdict: "APPROVE", findingsCount: 0 },
+  ] } as Flow];
+  for (const files of [
+    [a, b, outside], [a, { ...b, size: 100 }, outside], [a, { ...b, mtime: 20 }, outside],
+    [{ ...a, size: 10, mtime: 30 }, b, { ...outside, size: 50 }],
+    [a, { ...b, title: "Renamed", activity: "idle" as const }, outside],
+    [a, file("b", "fixtures/rebound.jsonl"), outside], [a, outside], [outside, a, b],
+  ]) {
+    const result = project(tasks, pipelines, flows, files, "project");
+    expect(result).toEqual(projectTaskWorkflows(tasks, pipelines, flows, files, "project"));
+    expect(result.tasks.every(t => t.references.every(Boolean))).toBe(true);
+  }
+  const oldA = file("a", "fixtures/a-old.jsonl", { migratedTo: "fixtures/a-next.jsonl", mtime: 10 });
+  const olderA = file("a", "fixtures/a-older.jsonl", { migratedTo: "fixtures/a-next.jsonl", mtime: 5 });
+  for (const files of [[oldA, olderA, b], [oldA, { ...olderA, mtime: 15 }, b]]) {
+    expect(project(tasks, pipelines, flows, files)).toEqual(projectTaskWorkflows(tasks, pipelines, flows, files));
+  }
+  for (const files of [[a, a, b], [{ ...a, size: 500 }, a, b], [a, { ...a, size: 700 }, b]]) {
+    expect(project(tasks, pipelines, flows, files)).toEqual(projectTaskWorkflows(tasks, pipelines, flows, files));
+  }
+});
+
+test("membership keys survive payload freshness but change when generation or relationship facts change", () => {
+  const project = createTaskWorkflowProjector();
+  const tasks = [task()], pipelines = [pipeline("p", [attempt(1, { conversationId: "a" })])], flows: Flow[] = [];
+  const a = file("a"), b = file("b");
+  const first = project(tasks, pipelines, flows, [a, b]);
+  const fresh = project(tasks, pipelines, flows, [{ ...a, size: 200, mtime: 50 }, b]);
+  expect(taskWorkflowMembershipKey(fresh)).toBe(taskWorkflowMembershipKey(first));
+  expect(fresh.tasks[0].references[0].file?.size).toBe(200);
+  for (const files of [[{ ...a, activity: "idle" as const }, b], [file("a", "fixtures/new.jsonl"), b], [b], [b, a]]) {
+    const next = project(tasks, pipelines, flows, files);
+    expect(taskWorkflowMembershipKey(next)).not.toBe(taskWorkflowMembershipKey(fresh));
+    expect(next).toEqual(projectTaskWorkflows(tasks, pipelines, flows, files));
+  }
 });
