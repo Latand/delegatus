@@ -1,0 +1,136 @@
+[
+  {
+    "width": 1440,
+    "transport": "full",
+    "cardCount": 18,
+    "equal": true,
+    "reads": [
+      {
+        "delta": false,
+        "bytes": 46412
+      },
+      {
+        "delta": false,
+        "bytes": 46412
+      },
+      {
+        "delta": false,
+        "bytes": 46420
+      },
+      {
+        "delta": false,
+        "bytes": 46428
+      },
+      {
+        "delta": false,
+        "bytes": 46436
+      }
+    ]
+  },
+  {
+    "width": 1440,
+    "transport": "delta",
+    "cardCount": 18,
+    "equal": true,
+    "reads": [
+      {
+        "delta": false,
+        "bytes": 46412
+      },
+      {
+        "delta": false,
+        "bytes": 46412
+      },
+      {
+        "delta": true,
+        "bytes": 479
+      },
+      {
+        "delta": true,
+        "bytes": 487
+      },
+      {
+        "delta": true,
+        "bytes": 495
+      }
+    ]
+  },
+  {
+    "width": 390,
+    "transport": "full",
+    "cardCount": 18,
+    "equal": true,
+    "reads": [
+      {
+        "delta": false,
+        "bytes": 46412
+      },
+      {
+        "delta": false,
+        "bytes": 46412
+      },
+      {
+        "delta": false,
+        "bytes": 46420
+      },
+      {
+        "delta": false,
+        "bytes": 46428
+      },
+      {
+        "delta": false,
+        "bytes": 46436
+      }
+    ]
+  },
+  {
+    "width": 390,
+    "transport": "delta",
+    "cardCount": 18,
+    "equal": true,
+    "reads": [
+      {
+        "delta": false,
+        "bytes": 46412
+      },
+      {
+        "delta": false,
+        "bytes": 46412
+      },
+      {
+        "delta": true,
+        "bytes": 479
+      },
+      {
+        "delta": true,
+        "bytes": 487
+      },
+      {
+        "delta": true,
+        "bytes": 495
+      }
+    ]
+  },
+  {
+    "productionSizeClientApply": {
+      "full": [
+        564.5999999046326,
+        384.39999985694885,
+        363.2999999523163,
+        386.40000009536743,
+        503.09999990463257,
+        367.2000000476837,
+        438.5
+      ],
+      "delta": [
+        7.5,
+        8.599999904632568,
+        5.200000047683716,
+        4.299999952316284,
+        5.099999904632568,
+        18.799999952316284,
+        40.60000014305115
+      ]
+    }
+  }
+]

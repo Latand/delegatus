@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
 import path from "node:path";
+import { boardCursorScope } from "@/lib/boardEncoding";
 import { gzipBody } from "@/lib/http/gzipBody";
 
 /** Increment when the operator summary schema changes incompatibly. */
@@ -20,6 +21,8 @@ interface Manifest {
   version: number;
   scope: "operator-global-summary";
   etag: string;
+  /** Absent in older artifacts, whose ETag is the body SHA-1. */
+  bodyHash?: string;
   bodyBytes: number;
   gzipBytes: number;
   gzipHash: string;
@@ -28,16 +31,21 @@ interface Manifest {
 /** Called only by the projection worker. Compression, decoding and hashing
  * stay there. One atomically replaced file binds the manifest and both bodies,
  * including when a predecessor and successor finish builds concurrently. */
-export async function writeSummaryBootstrap(directory: string, body: string, etag: string): Promise<void> {
+export async function writeSummaryBootstrap(directory: string, body: string, etag: string, board?: { scope: string; epoch: string }): Promise<void> {
   const parsed = JSON.parse(body);
+  const bodyHash = createHash("sha1").update(body).digest("hex");
+  const expectedEtag = board
+    ? `"${createHash("sha1").update(JSON.stringify([board.epoch, board.scope])).update(body).digest("hex")}"`
+    : `"${bodyHash}"`;
   if (parsed.readProjection !== "board-summary" || parsed.systemHealth?.storage?.writes?.state !== "ok"
-    || etag !== `"${createHash("sha1").update(body).digest("hex")}"`) {
+    || etag !== expectedEtag
+    || (board && (parsed.boardProtocol !== 2 || parsed.boardScope !== boardCursorScope(board.epoch, board.scope)))) {
     throw new Error("summary bootstrap requires a healthy operator summary and its ETag");
   }
   const bytes = Buffer.from(body);
   if (bytes.length > MAX_BYTES) return;
   const gzip = await gzipBody(bytes);
-  const manifest: Manifest = { version: VERSION, scope: "operator-global-summary", etag,
+  const manifest: Manifest = { version: VERSION, scope: "operator-global-summary", etag, bodyHash,
     bodyBytes: bytes.length, gzipBytes: gzip.length, gzipHash: createHash("sha256").update(gzip).digest("hex") };
   const metadata = Buffer.from(JSON.stringify(manifest));
   const prefix = Buffer.alloc(4);
@@ -60,6 +68,7 @@ function manifest(value: unknown): Manifest | null {
   const m = value as Manifest;
   return m.version === VERSION && m.scope === "operator-global-summary"
     && typeof m.etag === "string" && /^"[0-9a-f]{40}"$/.test(m.etag)
+    && (m.bodyHash === undefined || (typeof m.bodyHash === "string" && /^[0-9a-f]{40}$/.test(m.bodyHash)))
     && typeof m.gzipHash === "string" && /^[0-9a-f]{64}$/.test(m.gzipHash)
     && Number.isSafeInteger(m.bodyBytes) && m.bodyBytes > 0 && m.bodyBytes <= MAX_BYTES
     && Number.isSafeInteger(m.gzipBytes) && m.gzipBytes > 0 && m.gzipBytes <= MAX_BYTES ? m : null;
@@ -92,7 +101,7 @@ export async function readSummaryBootstrap(directory: string): Promise<SummaryBo
     const metadata = manifest(JSON.parse((await readBytes(handle, length, 4)).bytes.toString("utf8")));
     if (!metadata || size !== 4 + length + metadata.bodyBytes + metadata.gzipBytes) return null;
     const body = await readBytes(handle, metadata.bodyBytes, 4 + length, "sha1");
-    if (`"${body.hash}"` !== metadata.etag) return null;
+    if (body.hash !== (metadata.bodyHash ?? metadata.etag.slice(1, -1))) return null;
     const gzip = await readBytes(handle, metadata.gzipBytes, 4 + length + metadata.bodyBytes, "sha256");
     if (gzip.hash !== metadata.gzipHash) return null;
     return { body: body.bytes, gzip: gzip.bytes, etag: metadata.etag };
