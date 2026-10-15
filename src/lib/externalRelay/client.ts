@@ -9,6 +9,7 @@ import {
   type ExternalRelayTarget,
 } from "./protocol";
 import type { PairedRelay } from "./store";
+import { waitForStateLock } from "@/lib/state/lockWait";
 import { recordPublishedRelayReference } from "./publishedReferences";
 
 export class ExternalRelayError extends Error {
@@ -60,6 +61,19 @@ async function target(input: string, options: { query?: boolean } = {}): Promise
     throw new ExternalRelayError("http_public");
   return { url, address: addresses[0]! };
 }
+/** A publication deadline covers name resolution as well as the socket. Late
+ * DNS completion cannot prepare a body or start an HTTP request. */
+async function targetWithSignal(input: string, signal?: AbortSignal) {
+  if (!signal) return target(input);
+  signal.throwIfAborted();
+  let onAbort: (() => void) | undefined;
+  try {
+    return await Promise.race([target(input), new Promise<never>((_resolve, reject) => {
+      onAbort = () => reject(signal.reason);
+      signal.addEventListener("abort", onAbort, { once: true });
+    })]);
+  } finally { if (onAbort) signal.removeEventListener("abort", onAbort); }
+}
 export async function relayOrigin(value: string): Promise<string> {
   const { url } = await target(value);
   if (url.pathname !== "/") throw new ExternalRelayError("invalid_address");
@@ -76,7 +90,7 @@ export async function relayCall<T = unknown>(
     prepareBody?: () => unknown;
   } = {},
 ): Promise<{ status: number; body: T | null }> {
-  const { url, address } = await target(apiBase);
+  const { url, address } = await targetWithSignal(apiBase, options.signal);
   if (!url.pathname.endsWith("/v1") || !route.startsWith("/"))
     throw new ExternalRelayError("invalid_address");
   const outgoing = options.prepareBody ? options.prepareBody() : body;
@@ -118,7 +132,7 @@ export async function relayCall<T = unknown>(
           }
           chunks.push(chunk);
         });
-        response.on("end", () => {
+        response.on("end", async () => {
           if (!response.complete) {
             reject(new ExternalRelayError("unreachable"));
             return;
@@ -159,7 +173,7 @@ export async function relayCall<T = unknown>(
             );
             return;
           }
-          try { recordPublishedRelayReference(apiBase, route, method, outgoing, status, parsed); }
+          try { await waitForStateLock("relay.publication-reference", () => recordPublishedRelayReference(apiBase, route, method, outgoing, status, parsed), { waitMs: 5000 }); }
           catch { reject(new ExternalRelayError("publication_context_unavailable")); return; }
           resolve({ status, body: parsed as T });
         });

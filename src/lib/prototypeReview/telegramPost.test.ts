@@ -26,14 +26,15 @@ afterEach(async () => {
   for (const service of services.splice(0)) { await service.waitForReviewPolls(); await service.remove(); }
   for (const root of roots.splice(0)) await fs.rm(root, { recursive: true, force: true });
 });
-async function connected() {
+async function connected(publicationTarget?: bot.TelegramBotDependencies["publicationTarget"]) {
   const root = await fs.mkdtemp(path.join(process.env.TMPDIR!, "rich-post-")); roots.push(root);
   const store = new TelegramBotStore(path.join(root, "bot.sqlite"));
   const transport = new FakeBotTransport();
   let token: string | null = null;
   const service = new bot.TelegramBotService({ ...bot.productionTelegramBotDependencies(), openStore: () => store,
-    removeStoreFiles: () => {}, transportFor: () => transport, saveToken: t => { token = t; }, removeToken: () => { token = null; },
-    withStoredToken: consume => token ? consume(token, "42") : null, publishMessage: () => {} });
+    removeStoreFiles: () => {}, transportFor: () => transport, now: () => new Date("2026-10-11T13:00:00Z"), saveToken: t => { token = t; }, removeToken: () => { token = null; },
+    withStoredToken: consume => token ? consume(token, "42") : null, publishMessage: () => {},
+    ...(publicationTarget ? { publicationTarget } : {}) });
   services.push(service);
   transport.script("getMe", ok({ id: 42, is_bot: true, first_name: "Fixture" }));
   await service.connect(fakeBotToken()); await service.stopPoller();
@@ -273,8 +274,38 @@ test("a 238-frame nine-variant round survives a definite Telegram size refusal a
   expect(loadTasks()[0]!.prototypeReviews![0]!).toMatchObject({ telegramPost: { state: "sent" } });
 });
 
-test("a pending post after a lost completion replays its bot receipt; uncertain sends stay visible without another send", async () => {
-  const { transport } = await connected();
+test("owner review admits new sends before transport and optional poll metadata cannot fail a confirmed form", async () => {
+  let unavailable = true;
+  const { service, transport, store } = await connected(() => {
+    if (unavailable) throw Error("fixture metadata unavailable");
+    return null;
+  });
+  updateRelayStore(s => ({ ...s, relays: [destinationRelay()] }));
+  transport.handlers.getChat = () => ok({ id: 41, type: "private" });
+  const round = telegramRound("poll-metadata"); saveTasks([telegramTask([round])]);
+  const input = { clientRequestId: round.id, message: renderPrototypeTelegram(round, []) };
+  await expect(service.sendOwnerReview(input)).rejects.toThrow("fixture metadata unavailable");
+  expect(transport.callsOf("sendRichMessage")).toHaveLength(0);
+  expect(store.sendRow("prototype-review", round.id)).toMatchObject({ state: "failed", messageIds: [] });
+  unavailable = false;
+  transport.handlers.sendRichMessage = () => {
+    unavailable = true;
+    return ok({ message_id: 21, date: 5 });
+  };
+  expect(await service.sendOwnerReview(input)).toMatchObject({ alreadySent: false, messageIds: [21] });
+  expect(await service.sendOwnerReview(input)).toMatchObject({ alreadySent: true, messageIds: [21] });
+  await service.waitForReviewPolls();
+  expect(transport.callsOf("sendPoll")).toHaveLength(0);
+  expect(transport.callsOf("sendRichMessage")).toHaveLength(1);
+  expect(store.sendRow("prototype-review", round.id)?.state).toBe("sent");
+});
+
+test.each(["available", "refused"] as const)("a pending post after a lost completion replays its bot receipt with %s metadata; uncertain sends stay visible without another send", async metadata => {
+  let unavailable = false;
+  const { service, transport, store } = await connected(() => {
+    if (unavailable) throw Error("fixture metadata unavailable");
+    return null;
+  });
   const { mutatePrototypeRound } = await import("./store");
   const { sweepPrototypeDeliveries } = await import("./deliveryWorker");
   updateRelayStore(s => ({ ...s, relays: [destinationRelay()] }));
@@ -282,10 +313,23 @@ test("a pending post after a lost completion replays its bot receipt; uncertain 
   const round = telegramRound("lost-completion"); saveTasks([telegramTask([round])]);
   transport.script("sendRichMessage", ok({ message_id: 21, date: 5 }));
   await postPrototypeReviewToTelegram(round);
+  await service.waitForReviewPolls();
+  const pollCalls = transport.callsOf("sendPoll").length;
+  const receipt = store.sendRow("prototype-review", round.id)!;
+  unavailable = metadata === "refused";
   mutatePrototypeRound(round.taskId, round.id, held => { held.telegramPost!.state = "pending"; });
   await sweepPrototypeDeliveries();
   expect(loadTasks()[0]!.prototypeReviews![0]!.telegramPost?.state).toBe("sent");
+  expect(await service.sendOwnerReview({ clientRequestId: round.id, message: renderPrototypeTelegram(round, []) }))
+    .toMatchObject({ alreadySent: true, messageIds: [21], sentAt: receipt.sentAt });
+  await service.waitForReviewPolls();
+  expect(transport.callsOf("sendPoll")).toHaveLength(pollCalls);
+  expect(store.sendRow("prototype-review", round.id)).toEqual(receipt);
   expect(transport.callsOf("sendRichMessage")).toHaveLength(1);
+  updateRelayStore(s => ({ ...s, relays: [{ ...destinationRelay(), paused: true }] }));
+  expect(await service.sendOwnerReview({ clientRequestId: round.id, message: renderPrototypeTelegram(round, []) })).toBeNull();
+  updateRelayStore(s => ({ ...s, relays: [destinationRelay()] }));
+  unavailable = false;
   const uncertain = telegramRound("uncertain-post"); saveTasks([telegramTask([uncertain])]);
   transport.script("sendRichMessage", unreachable("timed_out"));
   await postPrototypeReviewToTelegram(uncertain); await postPrototypeReviewToTelegram(uncertain);

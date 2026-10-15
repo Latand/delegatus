@@ -193,3 +193,16 @@ test("non-owner messages and an off owner switch cannot enter this owner context
   expect(ownerTierFor({ ownerTier: false }, request)).toBeNull();
   expect(ownerTierFor({ ownerTier: true }, { ...request, input: { ...request.input, requester: { ...request.input.requester!, is_owner: false } } })).toBeNull();
 });
+
+
+test("publication topic custody is immutable and invalid topics supply no mapping", () => {
+  const apiBase = "http://127.0.0.1:1/v1";
+  const outgoing = { chat_id: Number(chatId), message_id: messageId, message_thread_id: 7 };
+  recordPublishedRelayReference(apiBase, "/targets/target/messages", "POST", outgoing, 200, { message_key: "topic-reference", replayed: false });
+  expect(publishedRelayReference(apiBase, "target", "topic-reference")?.topicId).toBe(7);
+  expect(() => recordPublishedRelayReference(apiBase, "/targets/target/messages", "POST", { ...outgoing, message_thread_id: 8 }, 200,
+    { message_key: "topic-reference", replayed: true })).toThrow("reference conflict");
+  recordPublishedRelayReference(apiBase, "/targets/target/messages", "POST", { ...outgoing, message_thread_id: -1 }, 200,
+    { message_key: "invalid-topic", replayed: false });
+  expect(publishedRelayReference(apiBase, "target", "invalid-topic")).toBeNull();
+});

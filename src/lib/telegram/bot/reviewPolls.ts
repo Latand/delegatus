@@ -14,7 +14,7 @@ type Sent = { message_id: number; date: number };
 interface PollJob {
   review: ReviewPollInput; key: string; chatId: string; messageId: number;
   transport: BotTransport; authorize(): void;
-  publish(message: Sent, text: string): void;
+  publish(message: Sent, text: string): void | Promise<void>;
 }
 
 const shorten = (value: string, limit: number) => {
@@ -165,7 +165,7 @@ export class ReviewPollQueue {
             outcome = { questionId: question.id, state: "uncertain", reason: "send_uncertain" };
           } else {
             outcome = { questionId: question.id, state: "sent", messageId: result.result.message_id };
-            job.publish(result.result, [payload.question, ...payload.options.map(o => o.text), "Рішення записує лише текстовий reply власника."].join("\n"));
+            await job.publish(result.result, [payload.question, ...payload.options.map(o => o.text), "Рішення записує лише текстовий reply власника."].join("\n"));
           }
         } catch {
           outcome = { questionId: question.id, state: "uncertain", reason: "send_unconfirmed" };
