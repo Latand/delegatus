@@ -210,6 +210,13 @@ for (const engine of ["claude", "codex"] as const) for (const source of ["dead",
     const model = engine === "codex" ? "gpt-6-astra" : "opus";
     const effort = engine === "codex" ? "xhigh" : "high";
     const serviceTier = engine === "codex" ? "priority" : null;
+    let targetId = "target";
+    if (engine === "codex") {
+      const { createManagedCodexAccount } = await import("@/lib/accounts/codex");
+      const target = createManagedCodexAccount("Switch target");
+      targetId = target.id;
+      fs.writeFileSync(path.join(target.home, "models_cache.json"), JSON.stringify({ models: [{ slug: model, service_tiers: [{ id: serviceTier }] }] }));
+    }
     h.ports.roleLookup = id => ({ ...role(id)!, engine, model, effort });
     const lane = await runningStage(h);
     const checkout = dirtyCheckout(lane.worktreeDir, lane.branch);
@@ -226,9 +233,9 @@ for (const engine of ["claude", "codex"] as const) for (const source of ["dead",
     h.ports.conversationTurnInterrupted = async id => id === STAGE_CONVERSATION ? (source === "dead" || source === "limited-dead" ? "dead" : "idle") : null;
     h.ports.runtimeSwitchSourceUnavailable = id => id === STAGE_CONVERSATION && source === "absent";
     h.ports.conversationGeneration = id => ({ engine, model, effort, serviceTier,
-      accountId: id === STAGE_CONVERSATION ? "default" : "target", sessionId: id === STAGE_CONVERSATION ? "session-1" : "session-2", agentPath: STAGE_TRANSCRIPT });
-    h.ports.allowedAccountIds = () => ["default", "target"];
-    const chosen = await patchPipeline(lane.id, { action: "override-stage", stageId: "plan", account: "target", model, effort, serviceTier, applyNow: true,
+      accountId: id === STAGE_CONVERSATION ? "default" : targetId, sessionId: id === STAGE_CONVERSATION ? "session-1" : "session-2", agentPath: STAGE_TRANSCRIPT });
+    h.ports.allowedAccountIds = () => ["default", targetId];
+    const chosen = await patchPipeline(lane.id, { action: "override-stage", stageId: "plan", account: targetId, model, effort, serviceTier, applyNow: true,
       expectedAttempt: 1, expectedConversationId: STAGE_CONVERSATION }, h.ports);
     expect(chosen.error).toBeUndefined();
     const restarted = await import(`./engine?fresh-switch=${crypto.randomUUID()}`) as typeof import("./engine");
@@ -244,11 +251,11 @@ for (const engine of ["claude", "codex"] as const) for (const source of ["dead",
     expect(old!.verdict?.status).toBe("needs_decision"); expect(old!.completedAt).toBe(h.ports.now());
     expect(old!.launchId).toBe("launch-1"); expect(old!.providerWait).toBeUndefined();
     expect(old!.runtimeSwitches![0]!.retry?.completedAt).toBe(h.ports.now());
-    expect(next).toMatchObject({ n: 2, state: "running", accountId: "target", effectiveRole: { engine, model, effort } });
+    expect(next).toMatchObject({ n: 2, state: "running", accountId: targetId, effectiveRole: { engine, model, effort } });
     expect(next!.effectiveRole.serviceTier ?? null).toBe(serviceTier);
     expect(next!.restartContext).toEqual({ previousAttempt: 1, transcriptPath: STAGE_TRANSCRIPT });
     expect(h.spawnInputs[1]!.prompt).toContain("use its transcript for reference");
-    expect(h.spawnInputs[1]).toMatchObject({ cwd: lane.worktreeDir, requestedAccountId: "target", supersedes: STAGE_CONVERSATION });
+    expect(h.spawnInputs[1]).toMatchObject({ cwd: lane.worktreeDir, requestedAccountId: targetId, supersedes: STAGE_CONVERSATION });
   });
 }
 
@@ -615,6 +622,41 @@ test("a model switch interrupts, reconfigures and continues once, keeping the at
   expect(attempt.providerWait).toBeUndefined();
   expect(attempt.definition?.prompt).toBe("Plan");
   expect(requested.pipeline?.branch).toBe(loadPipelines()[0]?.branch);
+});
+test("a transcript question after a completed switch keeps ordinary decision admission", async () => {
+  const { pipelineRevision } = await import("./store");
+  const { drainRuntimeSwitches } = await import("./engine");
+  const h = switchHarness(); await requestSwitch(h);
+  await tickPipelines([], h.ports);
+  h.advance(2000);
+  h.ports.conversationAgentActive = async () => false;
+  h.setTurn({ turn: "terminal", message: { text: 'Which format?\n```json\n{"status":"needs_decision","findings":[]}\n```', ts: h.wallClock() } });
+  await tickPipelines([], h.ports);
+  const settled = loadPipelines()[0]!;
+  expect(settled.runs[0]!.attempts[0]).toMatchObject({ state: "needs_decision", verdict: { status: "needs_decision" } });
+  expect(settled.runs[0]!.attempts[0]!.report).toBeUndefined();
+  h.ports.runtimeSwitchSourceUnavailable = () => true;
+  await drainRuntimeSwitches(h.ports);
+  expect(loadPipelines()[0]!.runs[0]!.attempts).toEqual(settled.runs[0]!.attempts);
+  const answer = await patchPipeline(settled.id, { action: "resolve-decision", clientRequestId: "format-answer", answer: "Use Markdown.",
+    expectedStageId: "plan", expectedAttempt: 1, expectedRevision: pipelineRevision(loadPipelines()[0]!) }, h.ports, { kind: "operator" });
+  expect(answer.error).toBeUndefined();
+  expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(2);
+});
+
+test("a mechanical switch park requires retry retirement before a decision continuation", async () => {
+  const { pipelineRevision } = await import("./store");
+  const h = switchHarness(); await requestSwitch(h);
+  h.ports.runtimeSwitchControl = async () => { throw new Error("structured control unavailable"); };
+  h.advance(10 * 60_000 + 1);
+  await tickPipelines([], h.ports);
+  const settled = loadPipelines()[0]!;
+  expect(settled.runs[0]!.attempts[0]!.verdict?.status).toBe("needs_decision");
+  const answer = await patchPipeline(settled.id, { action: "resolve-decision", clientRequestId: "unsafe-answer", answer: "Continue.",
+    expectedStageId: "plan", expectedAttempt: 1, expectedRevision: pipelineRevision(settled) }, h.ports, { kind: "operator" });
+  expect(answer.error).toContain("retry-stage");
+  expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(1);
+  expect((await patchPipeline(settled.id, { action: "retry-stage", expectedStageId: "plan", expectedAttempt: 1 }, h.ports)).error).toBeUndefined();
 });
 test("concurrent requests replay one target and refuse a different target", async () => {
   const h = switchHarness(); const first = await requestSwitch(h); const id = first.pipeline!.id;

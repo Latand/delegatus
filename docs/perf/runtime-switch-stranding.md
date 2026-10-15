@@ -550,14 +550,16 @@ the stage input and transcript reference, and uses ordinary launch admission.
 Checkout, branch, HEAD, index and working files stay in place. Pause, close,
 changed stage identity and a newer kill withdraw cleanup's authority; a later
 explicit retry can authorize replacement after that kill. A report accepted
-before retirement survives a concurrent failed runtime read.
+before retirement survives a concurrent failed runtime read. A later agent
+question after a completed switch retains ordinary decision admission;
+mechanical switch parks require retry cleanup before a replacement starts.
 
 The regression files extend the matrix above through these cases:
 
 | File | Verified cases |
 | --- | --- |
 | `src/lib/pipelines/runtimeSwitch.test.ts` | Both Claude and Codex: dead/absent source, live/dead usage wait, known/unknown reset, running/parked admission. Real Git fixtures compare branch, HEAD, staged content, modified bytes and binary untracked content across recovery. Exactly one fresh attempt launches on the selected account/model/effort/tier. |
-| Same switch suite | Legacy requested/cutting/switching/continuing/failed/superseded/committed parks; pending cleanup across engine reload; double retry and override; stale expectations; late report; pause/close/kill; authorization loss; recorded live child; late producer reservation. A reopened registry retains reconfigure withdrawal and rejects recovery of the retired conversation, including retirement during an authorization wait. |
+| Same switch suite | Legacy requested/cutting/switching/continuing/failed/superseded/committed parks; pending cleanup across engine reload; double retry and override; stale expectations; late report; pause/close/kill; authorization loss; recorded live child; late producer reservation; ordinary agent questions after a completed switch. A reopened registry retains reconfigure withdrawal and rejects recovery of the retired conversation, including retirement during an authorization wait. |
 | Same switch suite, retained cases | Proven and uncertain continuation failure, rollback, missing delivery/generation/native-start witnesses, reserved and missing handoff receipts, failed launches, account revocation, lost acknowledgements and continuation evidence boundaries. The seven old retry-refusal expectations now assert accepted retry plus no premature replacement. |
 | `src/lib/runtime/structuredDeliveryQueue.test.ts` | Retirement before drain, during journal write and before resend prevents old continuation dispatch. Existing control and delivery behavior remains covered. |
 | `src/lib/accounts/migration/provider.test.ts` | Both engines reject an owned `0775` transcript root inside an owned `0700` home before reserving any successor. Directory modes remain unchanged. |

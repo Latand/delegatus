@@ -41,6 +41,14 @@ const BUDGET = 10 * 60_000;
 export const openRuntimeSwitch = (attempt: PipelineStageAttempt) => attempt.runtimeSwitches?.find(item => OPEN.has(item.phase));
 export const pendingRuntimeSwitchRetry = (attempt: PipelineStageAttempt) => attempt.runtimeSwitches?.find(item => item.retry && !item.retry.completedAt);
 
+/** Legacy parks have no verdict; current mechanical parks retain the switch's reason. */
+export function recoverableRuntimeSwitch(attempt: PipelineStageAttempt) {
+  const last = attempt.runtimeSwitches?.at(-1);
+  return pendingRuntimeSwitchRetry(attempt) ?? openRuntimeSwitch(attempt)
+    ?? (attempt.state === "needs_decision" && !attempt.report
+      && (!attempt.verdict || !!attempt.error && attempt.error === last?.outcome) ? last : undefined);
+}
+
 /** Mechanical settlement does not impersonate an agent report or follow a failure edge. */
 export function parkRuntimeSwitch(pipeline: Pipeline, attempt: PipelineStageAttempt, record: PipelineRuntimeSwitch, reason: string, now: string): void {
   reason = hardenedRedact(reason).slice(0, 2000);

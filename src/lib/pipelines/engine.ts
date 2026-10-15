@@ -1,7 +1,7 @@
 import { pipelinePublishesRemoteBranch, MISSING_DELIVERY_REMOTE, LOCAL_DELIVERY_PUBLISH_REFUSAL } from "./publication";
 import { StateSnapshotChangedError } from "@/lib/state/sqliteStateStore";
 import { controllerSnapshotPorts, StaleControllerFlowError } from "./controllerSnapshot";
-import { attemptEvidenceFloor, attemptAccountPin, currentRuntimeSeat, openRuntimeSwitch, pendingRuntimeSwitchRetry, parkRuntimeSwitch, requestRuntimeSwitchRetry, switchOperationKey, driveRuntimeSwitch, runtimeTargetsEqual, hasRuntimeSwitchKill, cancelPendingRuntimeSwitch, RuntimeSwitchSuperseded, runtimeSwitchControlAcknowledgement, runtimeSwitchReconfigureOutcome } from "./runtimeSwitch";
+import { attemptEvidenceFloor, attemptAccountPin, currentRuntimeSeat, openRuntimeSwitch, pendingRuntimeSwitchRetry, recoverableRuntimeSwitch, parkRuntimeSwitch, requestRuntimeSwitchRetry, switchOperationKey, driveRuntimeSwitch, runtimeTargetsEqual, hasRuntimeSwitchKill, cancelPendingRuntimeSwitch, RuntimeSwitchSuperseded, runtimeSwitchControlAcknowledgement, runtimeSwitchReconfigureOutcome } from "./runtimeSwitch";
 import { hardenedRedact } from "@/lib/view/compactText";
 import { resolveSendReceipt } from "@/lib/runtime/sendSettlement";
 import type { RuntimeSwitchDelivery } from "./runtimeSwitch";
@@ -6348,8 +6348,7 @@ export async function drainRuntimeSwitches(ports: PipelinePorts): Promise<boolea
     if ((!parked && snapshot.state !== "running") || (ports.structuredDeliveryPublication?.() ?? "ready") !== "ready" || ports.drainHold?.()) continue;
     const originalStage = currentStage(snapshot);
     const originalAttempt = originalStage && currentAttempt(snapshot, originalStage.id);
-    const recoveryRecord = (attempt: PipelineStageAttempt) => pendingRuntimeSwitchRetry(attempt) ?? openRuntimeSwitch(attempt)
-      ?? (attempt.state === "needs_decision" && !attempt.report ? attempt.runtimeSwitches?.at(-1) : undefined);
+    const recoveryRecord = recoverableRuntimeSwitch;
     const original = originalAttempt && recoveryRecord(originalAttempt);
     if (!original || !originalStage || original.retry?.completedAt) continue;
     const lock = path.join(pipelineArtifactsDir(snapshot.id), `runtime-switch-${crypto.createHash("sha256").update(original.id).digest("hex")}.lock`);
@@ -11865,7 +11864,7 @@ function resolveDecision(
     || attempt.verdict?.status !== "needs_decision" || !attempt.completedAt) {
     return { error: "resolve-decision requires a run attempt settled with a needs_decision verdict", status: 409 };
   }
-  if (!attempt.report && attempt.runtimeSwitches?.length) {
+  if (recoverableRuntimeSwitch(attempt)) {
     return { error: "use retry-stage to retire the runtime switch before starting a replacement", status: 409 };
   }
   if (pipeline.runs.some((run) => run.attempts.some((item) => item.activation))) {
