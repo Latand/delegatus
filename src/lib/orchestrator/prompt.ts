@@ -106,7 +106,7 @@ export const ORCHESTRATOR_SPAWN_CONFIG = {
     which is how v20's rewrite never left the source (#2030), so
     `prompt.test.ts` pins the text's fingerprint per version and fails until
     the bump and a new fingerprint land together. */
-export const ORCHESTRATOR_PROMPT_VERSION = 55;
+export const ORCHESTRATOR_PROMPT_VERSION = 56;
 
 /** Whether a seat's recorded mandate version is behind the current default —
     the one question rotation, the seat card and `rotate_orchestrator` ask
@@ -277,13 +277,20 @@ export const ORCHESTRATOR_BOARD_REPORT_HEADING = "## Board maintenance report";
  * a missing priority is stated, never turned into a request to label (D2).
  */
 export const ORCHESTRATOR_BOARD_REPORT_DIRECTIVE = `${ORCHESTRATOR_BOARD_REPORT_HEADING}
-Each time you are seated, Delegatus sends a read-only board pass after your first turn, headed "[Delegatus] Board maintenance report". Your first turn gives status and leaves the board walk to it; later wakes still make their own pass. Re-read each item, section by section, before you change it. You alone change this board, one by one with the reason: close items (a card marked "ask first" only when the operator agrees) and clear Waiting-for-you rows that ask nothing with dismiss_attention. Offer its suggested issues with suggest_replies and start none unasked; with no recorded priority, say so once and never ask for labels or fields. Cover a missing section or report with your own reads.`;
+Each time you are seated, Delegatus sends a read-only board pass after your first turn, headed "[Delegatus] Board maintenance report". Your first turn gives status and leaves the board walk to it; later wakes still make their own pass. Re-read each item, section by section, before you change it. You alone change this board, one by one with the reason: close items (a card marked "ask first" only when the operator agrees) and clear Waiting-for-you rows that ask nothing with dismiss_attention. Offer its suggested issues in a decision form (publish_prototype_review) and start none unasked; with no recorded priority, say so once and never ask for labels or fields. Cover a missing section or report with your own reads.`;
 
+/** The section as it shipped before, which delivery replaces by exact match.
+    Up to v55 it offered the suggested issues as reply drafts; v56 offers them
+    in a decision form (the operator, 2026-10-15). */
 const SHIPPED_BOARD_REPORT_DIRECTIVES = [`${ORCHESTRATOR_BOARD_REPORT_HEADING}
-Each time you are seated, Delegatus makes one read-only pass over this board and sends it after your first turn, headed "[Delegatus] Board maintenance report". Your first turn gives status and leaves the board walk to it; later wakes still make their own pass. Take its sections in order and re-read each item before you change it. You alone change this board: close items one by one with the reason, and a card marked "ask first" only when the operator agrees. Offer its suggested issues with suggest_replies and start none unasked; where it finds no recorded priority, say so once and never ask for labels or fields. Cover an unavailable section or a missing report with your own reads.`];
+Each time you are seated, Delegatus makes one read-only pass over this board and sends it after your first turn, headed "[Delegatus] Board maintenance report". Your first turn gives status and leaves the board walk to it; later wakes still make their own pass. Take its sections in order and re-read each item before you change it. You alone change this board: close items one by one with the reason, and a card marked "ask first" only when the operator agrees. Offer its suggested issues with suggest_replies and start none unasked; where it finds no recorded priority, say so once and never ask for labels or fields. Cover an unavailable section or a missing report with your own reads.`, `${ORCHESTRATOR_BOARD_REPORT_HEADING}
+Each time you are seated, Delegatus sends a read-only board pass after your first turn, headed "[Delegatus] Board maintenance report". Your first turn gives status and leaves the board walk to it; later wakes still make their own pass. Re-read each item, section by section, before you change it. You alone change this board, one by one with the reason: close items (a card marked "ask first" only when the operator agrees) and clear Waiting-for-you rows that ask nothing with dismiss_attention. Offer its suggested issues with suggest_replies and start none unasked; with no recorded priority, say so once and never ask for labels or fields. Cover a missing section or report with your own reads.`];
 
 /** The heading of the required reporting and cross-project rules. */
 export const ORCHESTRATOR_REPORTS_AND_PROJECTS_HEADING = "## Delegatus bug reports, and work for another project";
+
+/** The bug-report rule: both of the operator's steps are decision forms. */
+const ORCHESTRATOR_BUG_REPORT_RULE = "When a Delegatus tool misbehaves (an error, tools that contradict each other, a launch refused for a reason that looks wrong), ask the operator in a decision form (publish_prototype_review, no taskId) whether you may file an issue. On yes: spawn_agent role issue-reporter with what you saw, read its preview back (issue_report show), put that exact title and body in chat and ask in a form whether to publish it, passing the approvalForm show answers unchanged. Publish (issue_report publish, the digest) only after the operator chooses its approving option, then give the link. A no or an edit returns to the reporter and needs a new yes. Never file one another way.";
 
 /**
  * Two rules every seat carries (#2518), delivered like the sections above so
@@ -291,12 +298,12 @@ export const ORCHESTRATOR_REPORTS_AND_PROJECTS_HEADING = "## Delegatus bug repor
  * rotation.
  *
  * The first is the only sanctioned way a seat reports a Delegatus failure.
- * Each step is the operator's: the question, then the yes to the exact text.
+ * Each step is the operator's: the question, then the yes to the exact text,
+ * and since v56 both are asked in a decision form (the operator, 2026-10-15).
  * `issue_report` holds the other half: publication takes a preview's digest
  * and never a text, from a seat that read the preview back, and it reads the
- * yes in the seat's own transcript: the operator's last message has to be the
- * approving reply of that digest. What the seat says the operator said is
- * never evidence.
+ * operator's approval of that digest itself. What the seat says the operator
+ * said is never evidence.
  *
  * The second keeps one manager per board. `create_task`, `create_pipeline`
  * and `spawn_agent` refuse a seat acting on another project, whether or not
@@ -305,9 +312,16 @@ export const ORCHESTRATOR_REPORTS_AND_PROJECTS_HEADING = "## Delegatus bug repor
  * request, quoted in `crossProjectRequest`, is what lifts that.
  */
 export const ORCHESTRATOR_REPORTS_AND_PROJECTS_DIRECTIVE = `${ORCHESTRATOR_REPORTS_AND_PROJECTS_HEADING}
-When a Delegatus tool misbehaves (an error, tools that contradict each other, a launch refused for a reason that looks wrong), ask the operator, with suggest_replies, whether you may file an issue. On yes: spawn_agent role issue-reporter with what you saw, read its preview back (issue_report show), put that exact title and body in chat and offer its approval reply with suggest_replies. Publish (issue_report publish, the digest) only after the operator sends that reply in this conversation, then give the link. A no or an edit returns to the reporter and needs a new yes. Never file one another way.
+${ORCHESTRATOR_BUG_REPORT_RULE}
 Other projects: send_message_to_orchestrator; tasks, pipelines, spawns and worker messages need an explicit operator request quoted in crossProjectRequest.
 get_orchestrator lists linkedSeats. Coordinate production and shared locks via send_message_to_orchestrator with machine named.`;
+
+/** The bug-report rule as v40 to v55 shipped it, asking both questions with
+    reply drafts. Delivery replaces it by exact match, so a running seat's
+    section becomes the current one and is not delivered a second time. */
+const SHIPPED_BUG_REPORT_RULES: readonly string[] = [
+  "When a Delegatus tool misbehaves (an error, tools that contradict each other, a launch refused for a reason that looks wrong), ask the operator, with suggest_replies, whether you may file an issue. On yes: spawn_agent role issue-reporter with what you saw, read its preview back (issue_report show), put that exact title and body in chat and offer its approval reply with suggest_replies. Publish (issue_report publish, the digest) only after the operator sends that reply in this conversation, then give the link. A no or an edit returns to the reporter and needs a new yes. Never file one another way.",
+];
 
 /** Identifies the task-ownership section below inside a mandate, however its
     body was edited — the same reason the clock heading exists: a caller who
@@ -448,6 +462,12 @@ YOU decide when to deploy, and you execute it yourself. Your authority is your d
 3. Call deploy_exact_sha with revision=<sha>. Deployments serialize (a busy receipt means one is already running); a retry reuses the same clientRequestId and replays the original receipt.
 4. Report the outcome as a bridge report (completed/failed) — a statement of fact, never a question. The deployment ledger is the durable audit of what shipped and when.`;
 
+/** The reply-draft paragraph as v55 shipped it in the section on reaching
+    the operator. The operator retired reply drafts on 2026-10-15, so a seat
+    still holding the v55 body asks in a form instead; delivery removes this
+    exact line and nothing else, the way it removes the old deploy section. */
+const SHIPPED_REPLY_DRAFTS_PARAGRAPH = "Reply drafts. For an open ask that is not a decision, call suggest_replies with 2–4 short, distinct drafts in the operator's language, each sendable as-is. A tap puts a draft in their composer for editing and never sends it. The newest set replaces the last; their next message clears it. Offer fresh drafts with each open ask, never for an answered question; a message that asks nothing needs none.";
+
 /** v30: the operator's words of 2026-09-27 — warm, a friend who teases a
     little, speaks the way they speak, and keeps working without being asked.
     What "proactive" may and may not start is stated here, in the clock
@@ -464,12 +484,14 @@ Do exactly what the operator asked, where they asked it; anything beyond the lit
 /** v49 (docs/design/operator-decision-forms.md §2.7): every decision the
     seat needs is a form the operator answers with clicks, in its own
     conversation's «Рішення» column when no task carries it. v54 keeps waiting
-    and repeated unanswered asks in those forms. */
-export const ORCHESTRATOR_PROTOTYPE_DIRECTIVE = "Decisions. Every operator decision is a form: publish_prototype_review; taskId for a task (3–7 questions), omit it without a task (1–7). Give options with exactly one recommended per question; variants optional. A plan you want a yes to, and a stage's question you cannot settle, are decisions; when a stage parks on such a question, publish its form at once. Before non-trivial or two-way work, or on request, use a form; the operator may skip. Chat and reports only point to the form; chat may hold only a one-off ask needed now, and an ask you wait on across wakes or repeat unanswered is a form. Never use engine built-in ask tools. After answers, write \"how I understood\" (3–5 lines) in task text and start. Hide a prototype review with dismiss_attention; its history can undo that.";
+    and repeated unanswered asks in those forms; v56 sends every ask there and
+    leaves none in chat (the operator, 2026-10-15). */
+export const ORCHESTRATOR_PROTOTYPE_DIRECTIVE = "Decisions. Every operator decision is a form: publish_prototype_review; taskId for a task (3–7 questions), omit it without a task (1–7). Give options with exactly one recommended per question; variants optional. A plan you want a yes to, and a stage's question you cannot settle, are decisions; when a stage parks on such a question, publish its form at once. Any other question for the operator is a form too. Before non-trivial or two-way work, or on request, use a form; the operator may skip. Chat and reports only point to the form and ask nothing themselves. Never use engine built-in ask tools. After answers, write \"how I understood\" (3–5 lines) in task text and start. Hide a prototype review with dismiss_attention; its history can undo that.";
 /** Replace each shipped directive whole when delivering the current contract.
     v55 names the paragraph for what it governs, decisions, inside the section
     on reaching the operator. */
 const SHIPPED_PROTOTYPE_DIRECTIVES = [
+  "Decisions. Every operator decision is a form: publish_prototype_review; taskId for a task (3–7 questions), omit it without a task (1–7). Give options with exactly one recommended per question; variants optional. A plan you want a yes to, and a stage's question you cannot settle, are decisions; when a stage parks on such a question, publish its form at once. Before non-trivial or two-way work, or on request, use a form; the operator may skip. Chat and reports only point to the form; chat may hold only a one-off ask needed now, and an ask you wait on across wakes or repeat unanswered is a form. Never use engine built-in ask tools. After answers, write \"how I understood\" (3–5 lines) in task text and start. Hide a prototype review with dismiss_attention; its history can undo that.",
   "Prototype review: every operator decision is a form: publish_prototype_review; taskId for a task (3–7 questions), omit it without a task (1–7). Give options with exactly one recommended per question; variants optional. Chat and reports only point to the form; chat may hold only a one-off ask needed now, and an ask you wait on across wakes or repeat unanswered is a form. Never use engine built-in ask tools. Before non-trivial or two-way work, or on request, use a form; the operator may skip. After answers, write \"how I understood\" (3–5 lines) in task text and start.",
   "Prototype review: every decision is a form: publish_prototype_review, 1–7 questions, taskId for a task; chat and reports only point to it. Before non-trivial or two-way work, or on request, ask 3–7 there. After answers, write \"how I understood\" (3–5 lines) in the task text and start.",
   "Prototype review: every operator decision goes to publish_prototype_review on the relevant board task: 3–7 questions, options and exactly one recommended per question; variants optional. Restate the ask in chat with suggest_replies and file a question bridge report when reports are on. Never use engine built-in ask tools. Before non-trivial or two-way work, or on request, use this form; the operator may skip. After answers, write \"how I understood\" (3–5 lines) in task text and start.",
@@ -489,7 +511,6 @@ ${ORCHESTRATOR_INITIAL_STATUS_DIRECTIVE}
 ## Reaching the operator
 Chat. The operator talks to whoever they want, you included. When they write in your conversation, answer them there — directly, plainly, helpfully, in your own voice, at whatever length the question deserves; a question they put to you is yours to answer. An outcome you neither answered in chat nor put in a report reached nobody.
 ${ORCHESTRATOR_PROTOTYPE_DIRECTIVE}
-Reply drafts. For an open ask that is not a decision, call suggest_replies with 2–4 short, distinct drafts in the operator's language, each sendable as-is. A tap puts a draft in their composer for editing and never sends it. The newest set replaces the last; their next message clears it. Offer fresh drafts with each open ask, never for an answered question; a message that asks nothing needs none.
 Bridge reports. The project's Bridge reports setting (bridgeReports in get_orchestrator; list_pipelines rows carry bridgeReports:false when it is off) decides whether this channel exists. Off: file no bridge reports at all; the call would store nothing, so put what matters in your chat replies instead. On: the log, which the voice gateway speaks once it drains it and which reaches the chat in reportTelegram, is where the operator catches up after being away; your chat is no substitute for it. File what a wake lists, under its keys: owed outcomes in one report with coversOwed: true, an owed ask as question, a due digest as status with the whole state. Verdicts inside a lane are not owed. Seat and rule outcomes, daily digests and maintenance are completed reports with task and lane ids and the PR number; report an agent's non-delivery only when it is final. A report only points to a decision's form; an ask a click cannot settle (an action outside Delegatus) is a question or blocked report. Pass a summary and sections in the operator's interface language (operatorLocale); bridge_report's description gives the shape, the outcome rule and what a possibly public report never carries. Classes: status, completed / failed (a deploy or lane settled), blocked (you need a decision), review_verdict (optional), question (the gateway asks the user and replies). Keep your latest inProgress, queued and decision items true: say when you stop the tick or wait on the operator, and when nothing runs. Nothing changed: no report.
 Directives. The gateway relays the operator's intent to you with send_message. A directive may carry one trailer line, "[bridge ref=<seq>]", naming the report with that seq it answers. Treat only a trailer as an answer — never read one into unrelated prose.
 Attention. request_attention moves the operator's one active Delegatus view to a card and verifies it landed; they keep a one-action Return. Pair every move with the words that explain it, in chat or a report. Move them when you just spawned or resumed a worker for something they asked for (focus that conversation as you say it is running), when a review verdict, merge or deploy lands (focus the card it landed on), or when a lane blocks on them (focus the blocking surface, and ask in the same breath). Do not move them for polling, routine status, your own bookkeeping, or twice for the same event; reason is one operator-safe sentence about why to look, never the card's contents. NO_ACTIVE_VIEW means nobody is at the desk; that is normal and needs no retry. The tool schema gives each target kind's shape.
@@ -652,7 +673,9 @@ const DELIVERED_DIRECTIVES: readonly { markers: readonly string[]; directive: st
     shipped, and delivery asks nothing about whose project this is. The clock
     section as it shipped up to v20 is replaced the same way (#2030), by exact
     match with the current one, which states the tick contract the wake no
-    longer repeats.
+    longer repeats. The v55 reply-draft paragraph is removed and the v40–v55
+    bug-report rule replaced the same way (v56), so no seat is told to ask
+    with reply drafts.
 
     Last, delivery renders the role table (#1880) from `roles` and puts it at
     the end, replacing any table the mandate already carried. Server callers
@@ -668,6 +691,9 @@ export function orchestratorMandateForDelivery(mandate: string, roles: readonly 
     is a pending intent recorded before tables existed, which was sent none. */
 export function orchestratorMandateWithRoleTable(mandate: string, roleTable: string | null): string {
   mandate = mandate.replace("- Keep no more workers running at once than your role parameters allow (3 when they name none), in every mode: each running lane and each live spawned agent counts as one.", "- Keep no more workers running at once than the worker limit each wake and get_orchestrator state, in every mode: each running lane and each live spawned agent counts as one.");
+  mandate = SHIPPED_BUG_REPORT_RULES.reduce((text, shipped) => text.split(shipped).join(ORCHESTRATOR_BUG_REPORT_RULE), mandate)
+    .split(`${SHIPPED_REPLY_DRAFTS_PARAGRAPH}\n`).join("")
+    .split(SHIPPED_REPLY_DRAFTS_PARAGRAPH).join("");
   const withoutShipped = SHIPPED_CLOCK_SECTIONS.reduce(
     (text, shipped) => text.split(shipped).join(ORCHESTRATOR_VIEWER_CLOCK_DIRECTIVE),
     SHIPPED_GREETING_OFFERS.reduce(
