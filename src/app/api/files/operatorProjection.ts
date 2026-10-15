@@ -20,7 +20,8 @@ import { readStateCollectionRevision, readStateCollectionRevisions } from "@/lib
 import { ensureEmptyTaskBoardVisibilityMigration } from "@/lib/tasks/boardVisibilityMigration";
 import { markBoardViewed } from "@/lib/links/boardPresence";
 import { buildFilesResponse } from "./response";
-import { cachedFileScan } from "@/lib/scanner/scanCache";
+import { cachedFileScan, fileScanBootstrapEpoch } from "@/lib/scanner/scanCache";
+import { readSummaryBootstrap, type SummaryBootstrap } from "@/lib/scanner/summaryBootstrap";
 import { buildFilesResponseInWorker, filesResponseWorkerEnabled } from "@/lib/scanner/filesResponseWorker";
 import { createFilesProjectionQueue, FilesProjectionQueueError, type FilesProjectionBuildSample, type FilesProjectionQueue, type FilesProjectionQueueDiagnostics } from "./projectionQueue";
 
@@ -589,13 +590,16 @@ export function HEAD(request: Request): Response {
   return new Response(null, { status: 204, headers: { "cache-control": "no-store" } });
 }
 
-export async function GET(request: Request): Promise<Response> {
+export type AfterFilesResponse = (work: () => Promise<void>) => void;
+const nextTurn: AfterFilesResponse = (work) => { setTimeout(() => { void work(); }, 0); };
+
+export async function GET(request: Request, afterResponse: AfterFilesResponse = nextTurn): Promise<Response> {
   const id = randomUUID();
   performanceSpans.request(id, new URL(request.url).searchParams.get("view") === "storage-health" ? "health" : "files");
   performanceSpans.event("http.dispatch", id);
   let failed = true;
   try {
-    const response = await performanceSpans.correlate(id, () => withViewerOperation("files.get", () => getFiles(request)));
+    const response = await performanceSpans.correlate(id, () => withViewerOperation("files.get", () => getFiles(request, false, afterResponse)));
     failed = false;
     return response;
   } finally {
@@ -605,7 +609,85 @@ export async function GET(request: Request): Promise<Response> {
   }
 }
 
-async function getFiles(request: Request): Promise<Response> {
+type BoardBootstrap = {
+  directory: string;
+  read: Promise<SummaryBootstrap | null>;
+  refining?: boolean;
+};
+const bootstrapStore = globalThis as typeof globalThis & { __llvBoardBootstrap?: BoardBootstrap };
+
+function boardBootstrap(): BoardBootstrap {
+  const directory = stateDir();
+  if (bootstrapStore.__llvBoardBootstrap?.directory !== directory) {
+    bootstrapStore.__llvBoardBootstrap = { directory, read: readSummaryBootstrap(directory) };
+  }
+  return bootstrapStore.__llvBoardBootstrap;
+}
+
+/** Registration loads this module and the saved bytes before Next accepts
+ * requests, including on a passive candidate. Building a missing artifact
+ * requires release ownership and runs during activation. */
+export async function prepareBoardSummary(buildIfMissing = false): Promise<void> {
+  const saved = await boardBootstrap().read;
+  if (!buildIfMissing) return;
+  if (saved && currentWriteHealth().state === "ok") return;
+  const response = await getFiles(new Request("http://localhost/api/files?view=summary"), true);
+  await response.body?.cancel();
+}
+
+/** Bound each network write and yield between chunks. A single multi-MB
+ * Response buffer otherwise keeps copying and flushing in one Viewer turn. */
+function bootstrapBody(bytes: Uint8Array): ReadableStream<Uint8Array> {
+  let offset = 0;
+  return new ReadableStream({
+    async pull(controller) {
+      const end = Math.min(offset + 256 * 1024, bytes.length);
+      controller.enqueue(bytes.subarray(offset, end));
+      offset = end;
+      if (offset === bytes.length) controller.close();
+      else await new Promise<void>(resolve => { setImmediate(resolve); });
+    },
+  });
+}
+
+async function bootstrapResponse(request: Request, afterResponse: AfterFilesResponse): Promise<Response | null> {
+  const scope = projectionScopeKey(undefined, true, false);
+  if (projectionCache().has(scope)) return null;
+  const bootstrap = boardBootstrap();
+  const saved = await bootstrap.read;
+  // A normal read may have completed while validation was awaiting disk.
+  if (!saved || projectionCache().has(scope) || currentWriteHealth().state !== "ok") return null;
+  if (!bootstrap.refining) {
+    bootstrap.refining = true;
+    afterResponse(async () => {
+      try {
+        const response = await getFiles(new Request("http://localhost/api/files?view=summary"), true);
+        await response.body?.cancel();
+        // The normal cache owns subsequent responses. Drop the extra byte copies.
+        bootstrap.read = Promise.resolve(null);
+      } catch {
+        bootstrap.refining = false;
+        console.warn("[board bootstrap] refinement failed; next read will retry");
+      }
+    });
+  }
+  const gzip = acceptsGzip(request);
+  return new Response(bootstrapBody(gzip ? saved.gzip : saved.body), { headers: {
+    "content-type": "application/json",
+    "cache-control": "no-store",
+    etag: saved.etag,
+    vary: `accept-encoding, ${FILES_DELTA_ACCEPT_HEADER}`,
+    ...(gzip ? { "content-encoding": "gzip" } : {}),
+    "x-llv-files-projection-cache": "bootstrap",
+    "x-llv-files-cache": "stale",
+    "x-llv-files-generation": "0",
+    "x-llv-files-target-generation": "1",
+    [FILES_BUILT_HEADER]: formatFilesBuilt({ epoch: fileScanBootstrapEpoch(), generation: 0, sequence: 0 }),
+    "server-timing": 'files-bootstrap;dur=0;desc="persisted summary; refinement pending"',
+  } });
+}
+
+async function getFiles(request: Request, skipBootstrap = false, afterResponse: AfterFilesResponse = nextTurn): Promise<Response> {
   const requiredRevision = generationHeader(request, "x-llv-files-revision");
   const requiredGeneration = generationHeader(request, "x-llv-files-generation");
   const url = new URL(request.url);
@@ -617,6 +699,12 @@ async function getFiles(request: Request): Promise<Response> {
   const selectedProject = url.searchParams.get("project")?.trim() || undefined;
   markBoardViewed(selectedProject);
   const pinnedPath = url.searchParams.get("path")?.trim() || undefined;
+  if (!skipBootstrap && url.searchParams.get("view") === "summary" && !pinnedPath
+    && !request.headers.has(VIEWER_SPAWN_CAPABILITY_HEADER)
+    && requiredRevision === undefined && requiredGeneration === undefined) {
+    const response = await bootstrapResponse(request, afterResponse);
+    if (response) return response;
+  }
   const scan = await performanceSpans.wait("files.scan", () => cachedFileScan(
     selectedProject,
     pinnedPath,

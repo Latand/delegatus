@@ -133,7 +133,11 @@ test("dead Viewer MCP withholds a recordless refusal retry under its original ke
   expect(unavailable.sent).toEqual([]);
   expect(dead?.delivery?.outcome).toBe("seat-mcp-unavailable");
   expect(unavailable.cards.some(({ card }) => card.kind === "mcp-unavailable" && card.state === "open")).toBe(true);
-  expect(fixture.row().outstandingWake).toEqual(pending);
+  expect(fixture.row().outstandingWake).toEqual({ ...pending,
+    text: pending.text!.replace(pending.preparedAt!, new Date(fixture.now + 5 * MINUTE).toISOString()),
+    recovery: { ...pending.recovery!, checkedAt: new Date(fixture.now + 5 * MINUTE).toISOString(),
+      nextRetryAt: new Date(fixture.now + 10 * MINUTE).toISOString(), reason: expect.stringContaining("seat-mcp-unavailable") },
+  });
   expect(fixture.acknowledged()).toEqual([]);
 
   const recovered = childRig(fixture, { realWakeState: true, now: fixture.now + 10 * MINUTE });
@@ -141,12 +145,13 @@ test("dead Viewer MCP withholds a recordless refusal retry under its original ke
     mcpHealth: () => ({ status: "healthy", detail: "stdio MCP is live" }),
   });
   expect(recovered.sent).toHaveLength(1);
-  expect(recovered.sent[0]).toMatchObject({ clientMessageId: pending.clientMessageId, text: pending.text });
+  expect(recovered.sent[0]).toMatchObject({ clientMessageId: pending.clientMessageId,
+    text: pending.text!.replace(pending.preparedAt!, new Date(fixture.now + 10 * MINUTE).toISOString()) });
   expect(fixture.acknowledged()).toEqual([child.id]);
   expect(fixture.row().outstandingWake).toBeNull();
 });
 
-test("a dead-host original-key retry recovers without changing its wake or acknowledging early", async () => {
+test("a dead-host original-key retry refreshes its snapshot and recovers without acknowledging early", async () => {
   const fixture = childFixture("dead-host-same-key");
   setAgentRegistryForTests(fixture.registry);
   const child = fixture.spawn({ title: "owed worker", turn: "terminal" });
@@ -164,7 +169,7 @@ test("a dead-host original-key retry recovers without changing its wake or ackno
   recovered.deps.mcpHealth = () => ({ status: "dead", detail: "old MCP absent" });
   await runSeatTickCheck(fixture.project, recovered.deps);
   expect(recovered.sent).toHaveLength(1);
-  expect(recovered.sent[0]!.text).toBe(pending.text!);
+  expect(recovered.sent[0]!.text).toBe(pending.text!.replace(pending.preparedAt!, new Date(fixture.now + 5 * MINUTE).toISOString()));
   expect(fixture.acknowledged()).toEqual([child.id]);
   expect(fixture.row().outstandingWake).toBeNull();
   expect(fixture.row().hostRecovery?.state).toBe("revived");
@@ -200,13 +205,18 @@ test("a drain retains an unaccepted wake's original key until its retry is admit
     const held = childRig(fixture, { realWakeState: true, now: fixture.now + 5 * MINUTE });
     await runSeatTickCheck(fixture.project, held.deps);
     expect(held.sent).toEqual([]);
-    expect(fixture.row().outstandingWake).toEqual(pending);
+    expect(fixture.row().outstandingWake).toEqual({ ...pending,
+      text: pending.text!.replace(pending.preparedAt!, new Date(fixture.now + 5 * MINUTE).toISOString()),
+      recovery: { ...pending.recovery!, checkedAt: new Date(fixture.now + 5 * MINUTE).toISOString(),
+        nextRetryAt: new Date(fixture.now + 10 * MINUTE).toISOString(), reason: "AUTO_UPDATE_DRAIN" },
+    });
     expect(fixture.acknowledged()).toEqual([]);
     releaseDrain(drainFile(), "retry-seat");
     const resumed = childRig(fixture, { realWakeState: true, now: fixture.now + 10 * MINUTE });
     await runSeatTickCheck(fixture.project, resumed.deps);
     expect(resumed.sent).toHaveLength(1);
-    expect(resumed.sent[0]).toMatchObject({ clientMessageId: pending.clientMessageId, text: pending.text });
+    expect(resumed.sent[0]).toMatchObject({ clientMessageId: pending.clientMessageId,
+      text: pending.text!.replace(pending.preparedAt!, new Date(fixture.now + 10 * MINUTE).toISOString()) });
     expect(fixture.acknowledged()).toEqual([child.id]);
     expect(fixture.row().outstandingWake).toBeNull();
   } finally { releaseDrain(drainFile(), "retry-seat"); }

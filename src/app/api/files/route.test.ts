@@ -40,6 +40,9 @@ import {
 } from "@/lib/scanner/scanCache";
 import { filesResponseWorkerPoolDiagnostics, setFilesResponseWorkerRuntimeForTests, shutdownFilesResponseWorker } from "@/lib/scanner/filesResponseWorker";
 import { deepFreeze } from "@/lib/deepFreeze";
+import { gunzipSync } from "node:zlib";
+import { BoardEncoder } from "@/lib/boardEncoding";
+import { writeSummaryBootstrap } from "@/lib/scanner/summaryBootstrap";
 import { stopFixtureProcess } from "@/lib/testing/fixtureProcess";
 import { setFilesResponseDependenciesForTests } from "./dependencies";
 
@@ -78,6 +81,7 @@ function resetFilesProjectionCacheForTests(): void {
   store.__llvFilesPersistedProjectionChecked = undefined;
   store.__llvFilesWriteRecovery = undefined;
   store.__llvFilesWorkerWriteFailedSince = undefined;
+  delete (globalThis as { __llvBoardBootstrap?: unknown }).__llvBoardBootstrap;
 }
 
 beforeEach(() => {
@@ -196,7 +200,9 @@ const { postSnapshot } = await import("@/app/api/agent/snapshot/handler");
 const { resetPresenceForTest, upsertPresence } = await import("@/lib/view/presenceStore");
 const { controllerFileScan } = await import("@/lib/pipelines/controller");
 const { allowedKillTarget, buildResourceSnapshot, lastResourceTargetRefs, noteSessionTargets, readResourceFileSnapshot } = await import("@/lib/resources");
-const { GET } = await import("./route");
+// The HTTP adapter supplies Next after(); these direct handler tests own its
+// completion scheduler. Compiled HTTP and browser replays exercise the adapter.
+const { GET, prepareBoardSummary } = await import("./operatorProjection");
 const { buildFilesResponse, consolidateProjectCatalogByRepository } = await import("./response");
 
 test.each([
@@ -4482,4 +4488,190 @@ test("the internal needs-you read shares the operator summary and its warm cache
   expect(scans).toBe(scansBefore);
   await dismissAttention({ kind: "prototype", taskId: task.id, reviewId: "round-a" }, { kind: "operator" }, { ports: { now: () => new Date(), task: () => task as never, resolveConversation: () => null, pipelines: () => [], pipeline: () => null, setPipelineDismissal: async () => ({}), resolveReports: () => ({ resolved: [], alreadyClear: [], unknown: [] }) } });
   expect((await operatorBoardRepresentation()).tasks[0]!.prototypeReview?.waitingDismissal?.by).toEqual({ kind: "operator" });
+});
+
+async function seedSummaryBootstrap(): Promise<string> {
+  const response = await GET(new Request("http://127.0.0.1/api/files?view=summary"));
+  const body = await response.text();
+  await writeSummaryBootstrap(stateDir, body, response.headers.get("etag")!);
+  resetFilesRouteCacheForTests();
+  resetFilesProjectionCacheForTests();
+  return body;
+}
+
+test("a persisted v2 summary bootstraps exact bytes before the current board refines", async () => {
+  const saved = await seedSummaryBootstrap();
+  const context = { scope: "a".repeat(40), epoch: "previous-viewer" };
+  const encoded = new BoardEncoder().encode(context.scope, context.epoch, JSON.parse(saved));
+  await writeSummaryBootstrap(stateDir, encoded.body, encoded.etag, context);
+  const callbacks: Array<() => Promise<void>> = [];
+  const response = await GET(new Request("http://127.0.0.1/api/files?view=summary", {
+    headers: { "x-llv-board-protocol": "2" },
+  }), callback => { callbacks.push(callback); });
+  expect(response.headers.get("x-llv-files-projection-cache")).toBe("bootstrap");
+  expect(response.headers.get("etag")).toBe(encoded.etag);
+  expect(await response.text()).toBe(encoded.body);
+  expect(callbacks).toHaveLength(1);
+  await callbacks[0]!();
+  const refined = await GET(new Request("http://127.0.0.1/api/files?view=summary", {
+    headers: { "x-llv-board-protocol": "2", "x-llv-files-generation": "1" },
+  }));
+  expect(refined.headers.get("x-llv-files-projection-cache")).not.toBe("bootstrap");
+  expect((await refined.json()).boardProtocol).toBe(2);
+});
+
+test("a large saved summary yields to queued work while its body is consumed", async () => {
+  const saved = JSON.parse(await seedSummaryBootstrap());
+  const body = JSON.stringify({ ...saved, padding: "x".repeat(4 * 1024 * 1024) });
+  await writeSummaryBootstrap(stateDir, body, `"${createHash("sha1").update(body).digest("hex")}"`);
+  const response = await GET(new Request("http://127.0.0.1/api/files?view=summary"), () => undefined);
+  let progressed = false;
+  const checkpoint = setImmediate(() => { progressed = true; });
+  try {
+    expect(await response.text()).toBe(body);
+    expect(progressed).toBe(true);
+  } finally { clearImmediate(checkpoint); }
+});
+
+test("cold summary returns saved bytes while one held scan refines concurrent reads", async () => {
+  const saved = await seedSummaryBootstrap();
+  let release!: () => void;
+  scanGates = [new Promise<void>(resolve => { release = resolve; })];
+  const priorScans = scans;
+  try {
+    const replies = await Promise.all(Array.from({ length: 3 }, () => GET(new Request("http://127.0.0.1/api/files?view=summary"))));
+    for (const response of replies) {
+      expect(response.headers.get("x-llv-files-projection-cache")).toBe("bootstrap");
+      expect(response.headers.get("x-llv-files-generation")).toBe("0");
+      expect(response.headers.get("x-llv-files-target-generation")).toBe("1");
+      expect(await response.text()).toBe(saved);
+    }
+    await Bun.sleep(20);
+    expect(scans).toBe(priorScans + 1);
+  } finally { release(); }
+  const refined = await GET(new Request("http://127.0.0.1/api/files?view=summary", { headers: { "x-llv-files-generation": "1" } }));
+  expect(refined.headers.get("x-llv-files-projection-cache")).not.toBe("bootstrap");
+  expect((await refined.json()).readProjection).toBe("board-summary");
+});
+
+for (const suffix of ["", "?view=summary&path=/fixture/pinned.jsonl"]) {
+  test(`bootstrap never supplies another representation: ${suffix || "full"}`, async () => {
+    await seedSummaryBootstrap();
+    const response = await GET(new Request(`http://127.0.0.1/api/files${suffix}`));
+    expect(response.headers.get("x-llv-files-projection-cache")).not.toBe("bootstrap");
+  });
+}
+
+test("bootstrap cannot hide current disk-full health", async () => {
+  await seedSummaryBootstrap();
+  noteStateDiskFull("fixture write failure");
+  const response = await GET(new Request("http://127.0.0.1/api/files?view=summary"));
+  expect(response.headers.get("x-llv-files-projection-cache")).not.toBe("bootstrap");
+  expect((await response.json()).systemHealth.storage.writes.state).toBe("disk-full");
+});
+
+
+test("passive preparation reads saved bytes without starting a scan or a projection", async () => {
+  await prepareBoardSummary();
+  expect(scans).toBe(0);
+  await seedSummaryBootstrap();
+  const priorScans = scans;
+  await prepareBoardSummary();
+  expect(scans).toBe(priorScans);
+});
+
+test("bootstrap gzip is the same full representation even with an old conditional base", async () => {
+  const saved = await seedSummaryBootstrap();
+  let release!: () => void;
+  scanGates = [new Promise<void>(resolve => { release = resolve; })];
+  try {
+    const response = await GET(new Request("http://127.0.0.1/api/files?view=summary", { headers: {
+      "accept-encoding": "gzip", "if-none-match": '"old"', "x-llv-files-delta": "1",
+    } }));
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-encoding")).toBe("gzip");
+    expect(gunzipSync(await response.arrayBuffer()).toString()).toBe(saved);
+  } finally { release(); }
+  await GET(new Request("http://127.0.0.1/api/files?view=summary", { headers: { "x-llv-files-generation": "1" } }));
+});
+
+const bootstrapRequiredHeaders: Record<string, string>[] = [
+  { [VIEWER_SPAWN_CAPABILITY_HEADER]: "fixture-agent" },
+  { "x-llv-files-revision": "1" },
+  { "x-llv-files-generation": "1" },
+];
+for (const headers of bootstrapRequiredHeaders) {
+  test(`bootstrap respects ${Object.keys(headers)[0]}`, async () => {
+    await seedSummaryBootstrap();
+    const response = await GET(new Request("http://127.0.0.1/api/files?view=summary", { headers }));
+    expect(response.headers.get("x-llv-files-projection-cache")).not.toBe("bootstrap");
+  });
+}
+
+
+
+async function refinedBootstrapSummary(): Promise<Response> {
+  // The ordinary scan protocol can answer generation zero while the shared
+  // refresh runs. Drive its completion header as the browser does.
+  const deadline = Date.now() + 4_000;
+  while (Date.now() < deadline) {
+    const response = await GET(new Request("http://127.0.0.1/api/files?view=summary", { headers: { "x-llv-files-generation": "1" } }));
+    if (Number(response.headers.get("x-llv-files-generation")) >= 1
+      && response.headers.get("x-llv-files-projection-cache") !== "stale") return response;
+    await response.body?.cancel();
+    await Bun.sleep(10);
+  }
+  throw new Error("bootstrap refinement did not complete");
+}
+
+test("refinement replaces saved membership and advances within the bootstrap epoch", async () => {
+  scannedFiles = [file("/sessions/removed.jsonl"), file("/sessions/retained.jsonl")];
+  await seedSummaryBootstrap();
+  scannedFiles = [file("/sessions/added.jsonl"), file("/sessions/retained.jsonl")];
+  let release!: () => void;
+  scanGates = [new Promise<void>(resolve => { release = resolve; })];
+  const saved = await GET(new Request("http://127.0.0.1/api/files?view=summary"));
+  try {
+    expect((await saved.json()).files.map((entry: FileEntry) => entry.path)).toContain("/sessions/removed.jsonl");
+  } finally { release(); }
+  const refined = await refinedBootstrapSummary();
+  const entries = (await refined.json()).files.map((entry: FileEntry) => entry.path);
+  expect(entries).toContain("/sessions/added.jsonl");
+  expect(entries).toContain("/sessions/retained.jsonl");
+  expect(entries).not.toContain("/sessions/removed.jsonl");
+  expect(refined.headers.get("x-llv-files-built")!.split(".")[0]).toBe(saved.headers.get("x-llv-files-built")!.split(".")[0]);
+  expect(Number(refined.headers.get("x-llv-files-generation"))).toBeGreaterThanOrEqual(1);
+});
+
+
+test("bootstrap refinement waits for the response completion callback", async () => {
+  const saved = await seedSummaryBootstrap();
+  const work: Array<() => Promise<void>> = [];
+  const before = scans;
+  const response = await GET(new Request("http://127.0.0.1/api/files?view=summary"), callback => { work.push(callback); });
+  expect(await response.text()).toBe(saved);
+  expect(scans).toBe(before);
+  expect(work).toHaveLength(1);
+  await work[0]!();
+  await refinedBootstrapSummary();
+  expect(scans).toBe(before + 1);
+});
+
+
+test("a failed bootstrap refinement leaves saved bytes available for a later retry", async () => {
+  const saved = await seedSummaryBootstrap();
+  const work: Array<() => Promise<void>> = [];
+  const schedule = (callback: () => Promise<void>) => { work.push(callback); };
+  const before = await GET(new Request("http://127.0.0.1/api/files?view=summary"), schedule);
+  expect(await before.text()).toBe(saved);
+  fs.rmSync(path.join(stateDir, "files-scan-snapshot.json"), { force: true });
+  setFileScanRunnerForTests(async () => { throw new Error("fixture scan refused"); });
+  await work.shift()!();
+  const retry = await GET(new Request("http://127.0.0.1/api/files?view=summary"), schedule);
+  expect(await retry.text()).toBe(saved);
+  expect(work).toHaveLength(1);
+  setFileScanRunnerForTests(filesRouteScanRunner);
+  await work.shift()!();
+  const refined = await GET(new Request("http://127.0.0.1/api/files?view=summary"));
+  expect(refined.headers.get("x-llv-files-projection-cache")).not.toBe("bootstrap");
 });

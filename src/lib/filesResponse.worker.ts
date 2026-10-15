@@ -3,10 +3,13 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { buildFilesResponse } from "@/app/api/files/response";
-import { statePath } from "@/lib/configDir";
+import { writeSummaryBootstrap } from "@/lib/scanner/summaryBootstrap";
+import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
+import { stateDir, statePath } from "@/lib/configDir";
 import { diffFilesBodies } from "@/lib/filesDelta";
 import { BoardEncoder } from "@/lib/boardEncoding";
 import type { FilesResponseWorkerRequest } from "@/lib/scanner/filesResponseWorker";
+import type { StateWriteHealth } from "@/lib/state/diskFull";
 
 /** One request frame. A whole snapshot can ride inline, so the bound is large. */
 const FRAME_MAX_BYTES = 8 * 1024 * 1024;
@@ -103,9 +106,18 @@ async function build(request: FilesResponseWorkerRequest): Promise<Record<string
     fs.writeFileSync(deltaFile, encoded.delta.body, { encoding: "utf8", mode: 0o600 });
     boardDelta = { deltaFile, deltaBase: encoded.delta.base };
   }
+  const url = new URL(request.url);
+  const stateWrites = ((encoded ? encoded.stateWrites : JSON.parse(body).systemHealth?.storage?.writes) as StateWriteHealth | undefined)
+    ?? { state: "ok", since: null, freeBytes: null };
+  if (url.searchParams.get("view") === "summary" && !url.searchParams.get("path")?.trim()
+    && !new Headers(request.headers).has(VIEWER_SPAWN_CAPABILITY_HEADER)
+    && stateWrites.state === "ok") {
+    try { await writeSummaryBootstrap(stateDir(), body, etag, encoded ? { scope: request.deltaScope!, epoch: request.boardEpoch! } : undefined); }
+    catch { console.warn("[board bootstrap] cache write failed; live response remains available"); }
+  }
   return {
     bodyFile,
-    stateWritesJson: JSON.stringify((encoded ? encoded.stateWrites : JSON.parse(body).systemHealth?.storage?.writes) ?? { state: "ok", since: null, freeBytes: null }),
+    stateWritesJson: JSON.stringify(stateWrites),
     contentType: response.headers.get("content-type") ?? "application/json",
     etag,
     timing: response.headers.get("server-timing") ?? "",

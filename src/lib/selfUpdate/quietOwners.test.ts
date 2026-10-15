@@ -1,3 +1,4 @@
+import { projectSnapshotRead } from "@/lib/runtime/snapshotReads";
 /* The case map of docs/design/update-drain-liveness.md over the real seams:
    AgentRegistry claims, the delivery controller's fallback and seats,
    RuntimeJournal commands and `projectEngineHostEvent`, read by the
@@ -80,7 +81,7 @@ afterEach(async () => {
 });
 
 function ports(overrides: Partial<QuietPorts> = {}): QuietPorts {
-  return { ...productionDeps().quiet!, runtimeSnapshot: async () => f.journal.snapshot(),
+  return { ...productionDeps().quiet!, runtimeSnapshot: async () => projectSnapshotRead(f.journal.snapshotRead({ version: 1, kind: "owners" }), "owners"),
     owners: ownerCensusReader(productionLivenessSources, { readEvents: async (after) => f.journal.replay(after),
       readProducerCursor: async (kind, prefix) => f.journal.producerCursor(kind, prefix), readSession: (query) => f.client.readSession!(query) }),
     pipelines: () => [], flows: () => [], seats: () => [], presence: () => [],
