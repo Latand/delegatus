@@ -9,6 +9,7 @@ import { stopFixtureIdentity } from "@/lib/testing/fixtureProcess";
 import { ownFixtureChild, reapFixtureChildren } from "./ownedFixtureChildren";
 import { runAsMcpHttpCaller } from "./callerContext";
 import { McpTaskExecutor, TaskExecutorReplies, TASK_EXECUTOR_HTTP_FRAME_BYTES } from "./taskExecutor";
+import type { McpToolResult } from "./server";
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-task-executor-"));
 for (const name of ["HOME", "XDG_CONFIG_HOME", "LLV_STATE_DIR", "LLV_CODEX_HOME", "LLV_CLAUDE_HOME"]) {
@@ -209,6 +210,55 @@ test("isolated HTTP dispatch preserves the SDK envelope and direct-service recei
   });
 });
 
+test("task HTTP calls authenticate unknown and rotated capabilities before receipt replay", async () => {
+  const executor = create();
+  const key = Symbol.for("llv.mcp.taskExecutor");
+  const holder = globalThis as typeof globalThis & { [key]?: McpTaskExecutor };
+  const previous = holder[key]; holder[key] = executor;
+  const { NextRequest } = await import("next/server");
+  const { handleMcpHttpRequest } = await import("./http");
+  const token = capabilities[3]!;
+  const conversationId = await executor.identifyCapability(token);
+  const args = { project: "fixture", text: "HTTP caller authentication", board: "hidden", clientRequestId: "executor-http-auth" };
+  const post = (capability: string, framed = true, large = false, malformed = false) => {
+    const body = malformed ? "{" : JSON.stringify({ jsonrpc: "2.0", id: 19, method: "tools/call", params: {
+      name: "create_task", arguments: { ...args, ...(large ? { details: "x".repeat(16_384) } : {}) },
+    } });
+    return handleMcpHttpRequest(new NextRequest("http://127.0.0.1/api/mcp", { method: "POST", body, headers: {
+      host: "127.0.0.1", "content-type": "application/json", accept: "application/json, text/event-stream", "x-llv-spawn-capability": capability,
+      ...(framed ? { "content-length": String(Buffer.byteLength(body)) } : {}),
+    } }));
+  };
+  try {
+    const response = await post(token);
+    const accepted = await response.json() as { result?: { structuredContent: McpToolResult } };
+    if (response.status !== 200 || !accepted.result) throw new Error(JSON.stringify({ status: response.status, accepted }));
+    const result = accepted.result.structuredContent;
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error(JSON.stringify(result));
+    expect(typeof result.taskId).toBe("string");
+    expect(typeof result.revision).toBe("string");
+    for (const [framed, large] of [[false, false], [true, false], [true, true]]) {
+      const refused = await post("q".repeat(43), framed, large);
+      expect(refused.status).toBe(403);
+      expect(await refused.text()).not.toContain(String(result.taskId));
+    }
+    expect((await post("q".repeat(43), true, false, true)).status).toBe(403);
+    expect((await post(token, true, false, true)).status).toBe(400);
+    const { agentRegistry } = await import("@/lib/agent/registry");
+    const registry = agentRegistry();
+    const receipt = Object.values(registry.readOnlySnapshot().receipts).find(row => row.conversationId === conversationId)!;
+    const successor = registry.rotateSpawnCapabilityForReceipt(receipt.launchId);
+    for (const framed of [false, true]) {
+      const refused = await post(token, framed);
+      expect(refused.status).toBe(403);
+      expect(await refused.text()).not.toContain(String(result.taskId));
+    }
+    const replay = await (await post(successor)).json() as { result: { structuredContent: McpToolResult } };
+    expect(replay.result.structuredContent).toMatchObject({ ok: true, replayed: true, taskId: result.taskId, revision: result.revision });
+  } finally { if (previous) holder[key] = previous; else delete holder[key]; }
+});
+
 test("isolated task service preserves receipts, identity, revisions and same-key replay across executors", async () => {
   const first = create();
   const created = await call(first, "create_task", { project: "fixture", text: "Executor task", board: "hidden", clientRequestId: "executor-create" });
@@ -233,7 +283,7 @@ test("isolated task service preserves receipts, identity, revisions and same-key
   const { NextRequest } = await import("next/server");
   const { handleMcpHttpRequest } = await import("./http");
   const refused = await handleMcpHttpRequest(new NextRequest("http://127.0.0.1/api/mcp", { method: "POST",
-    headers: { "content-type": "application/json", "x-llv-spawn-capability": "invalid" },
+    headers: { host: "127.0.0.1", "content-type": "application/json", "x-llv-spawn-capability": "invalid" },
     body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "update_task", arguments: { taskId, appendLine: "one durable edit", clientRequestId: "executor-edit" } } }),
   }));
   expect(refused.status).toBe(403);

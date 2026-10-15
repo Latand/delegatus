@@ -4,6 +4,8 @@ import type { NextRequest } from "next/server";
 
 import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/capabilityHeader";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
+import { TASK_EXECUTOR_TOOLS, viewerTaskExecutor } from "./taskExecutor";
+import { mcpHttpRefusal as refusal } from "./httpResponse";
 
 import {
   createProductionViewerMcpService,
@@ -74,7 +76,6 @@ function productionService(): Promise<McpToolService> {
 }
 
 async function productionConversationForCapability(capability: string): Promise<string | null> {
-  const { viewerTaskExecutor } = await import("./taskExecutor");
   return viewerTaskExecutor().identifyCapability(capability);
 }
 
@@ -109,15 +110,6 @@ let testDependencies: McpHttpDependencies | null = null;
 /** Test seam: a Next route takes no dependency argument. */
 export function setMcpHttpDependenciesForTests(dependencies: McpHttpDependencies | null): void {
   testDependencies = dependencies;
-}
-
-/** A JSON-RPC error with no request id, which is what a refusal before any
-    message was read can honestly carry. */
-function refusal(status: number, code: number, message: string, headers: Record<string, string> = {}): Response {
-  return new Response(JSON.stringify({ jsonrpc: "2.0", error: { code, message }, id: null }), {
-    status,
-    headers: { "content-type": "application/json", "cache-control": "no-store", ...headers },
-  });
 }
 
 /** GET (a standalone server-to-client stream) and DELETE (ending a session)
@@ -158,17 +150,31 @@ export async function handleMcpHttpRequest(request: NextRequest): Promise<Respon
   if (!nativePeer && !unidentified && !CAPABILITY_PATTERN.test(capability)) {
     return refusal(403, -32001, `The Viewer MCP endpoint requires the ${VIEWER_SPAWN_CAPABILITY_HEADER} header carrying this agent's launch capability.`);
   }
+  // Small framed bodies can combine authentication and task dispatch in one
+  // executor request. Larger or unframed bodies keep authentication first.
+  const length = request.headers.get("content-length");
+  let bodyRead = !!nativePeer;
+  let parseFailed = false;
+  if (!bodyRead && !testDependencies && length !== null && /^\d{1,5}$/.test(length) && Number(length) <= 16_384) {
+    bodyRead = true;
+    try { body = await request.json(); }
+    catch { parseFailed = true; }
+  }
+  const earlyMessages = bodyRead && !parseFailed ? jsonRpcMessages(body) : [];
+  const earlyTool = earlyMessages.length === 1 && earlyMessages[0]?.method === "tools/call"
+    ? (earlyMessages[0].params as { name?: unknown } | undefined)?.name : undefined;
+  const executorAuthenticates = !testDependencies && typeof earlyTool === "string" && TASK_EXECUTOR_TOOLS.has(earlyTool);
   let conversationId: string | null;
   try {
     // Native identity and approval are resolved by the full tool policy using
     // this authenticated peer's ancestry. A PID alone grants no tool access.
-    conversationId = nativePeer || unidentified ? "local-peer" : testDependencies
+    conversationId = executorAuthenticates ? null : nativePeer || unidentified ? "local-peer" : testDependencies
       ? testDependencies.conversationForCapability(capability)
       : await productionConversationForCapability(capability);
   } catch {
     return refusal(503, -32002, "The Viewer could not read its agent registry to identify this caller; retry the call.");
   }
-  if (!conversationId) {
+  if (!executorAuthenticates && !conversationId) {
     return refusal(403, -32001, "This launch capability names no current agent: it is unknown or was rotated by a later launch.");
   }
 
@@ -180,7 +186,8 @@ export async function handleMcpHttpRequest(request: NextRequest): Promise<Respon
   }
 
   try {
-    if (!nativePeer) body = await request.json();
+    if (parseFailed) throw new Error("invalid JSON");
+    if (!bodyRead) body = await request.json();
   } catch {
     return refusal(400, -32700, "Parse error: the request body is not JSON.");
   }
@@ -225,7 +232,6 @@ export async function handleMcpHttpRequest(request: NextRequest): Promise<Respon
     ? [requested as McpToolName] : undefined;
   let server: ReturnType<typeof createViewerMcpServer> | undefined;
   try {
-    const { TASK_EXECUTOR_TOOLS, viewerTaskExecutor } = await import("./taskExecutor");
     if (!testDependencies && typeof requested === "string" && TASK_EXECUTOR_TOOLS.has(requested)) {
       try {
         return await viewerTaskExecutor().callHttpTool(requested, body, request,

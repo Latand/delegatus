@@ -781,3 +781,23 @@ changed executor; both run through the owned runner in isolated state.
 The body matches after release. HTTP passes 15 cases, forwarding passes 12,
 and TypeScript and the local privacy gate pass. These checks verify the wire
 and lifecycle changes; performance acceptance still requires new measurements.
+
+### Byte streaming cohort and combined authentication
+
+The byte-streaming candidate `8e40a078770e14ac51eae1eb3bb84d37d93c82b3` completed three one-client stdio repetitions. Their median loop p99/max was **0.631807/2.930454 ms**. Two original-audit repetitions returned p99 values of 0.561151 and 0.628735 ms. Any third audit result leaves its median at or below 0.628735 ms, so the declared p99 criterion was already unreachable. The controller stopped the cohort during the third main sample. That partial window is retained and excluded.
+
+| Source | Repetition | Loop p99 / max, ms | Offered / completed / failed | Pending at end / after drain | Process births / survivors | Peak adapter / total descriptors | State commits |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| candidate | 1 | 0.653311 / 2.930454 | 300 / 300 / 0 | 0 / 0 | 5 / 0 | 0 / 5 | 480 |
+| main | 1 | 0.646143 / 4.076807 | 300 / 300 / 0 | 0 / 0 | 3 / 0 | 5 / 5 | 570 |
+| audit | 1 | 0.561151 / 3.958003 | 300 / 300 / 0 | 0 / 0 | 3 / 0 | 5 / 5 | 480 |
+| audit | 2 | 0.628735 / 1.780211 | 300 / 300 / 0 | 0 / 0 | 3 / 0 | 5 / 5 | 480 |
+| main | 2 | 0.621567 / 2.548013 | 300 / 300 / 0 | 0 / 0 | 3 / 0 | 5 / 5 | 570 |
+| candidate | 2 | 0.578047 / 2.890962 | 300 / 300 / 0 | 0 / 0 | 5 / 0 | 0 / 5 | 480 |
+| candidate | 3 | 0.631807 / 2.993709 | 300 / 300 / 0 | 0 / 0 | 5 / 0 | 0 / 5 | 480 |
+
+All seven completed windows had zero SQL contention and no teardown survivors. Every connection balances through explicit close or process exit. All seven committed histories reproduce their final rows, with no unresolved mutation. All four available candidate/control pairs have identical normalized response and row hashes, retaining all six durable columns. Source, observer, runtime, quota and seed identities, per-process balances and the partial observation are in [`mcp-state-writers-byte-streaming-diagnostic.json`](../../evidence/mcp-state-writers-byte-streaming-diagnostic.json).
+
+The task endpoint now combines capability lookup and HTTP dispatch in one executor request for declared bodies up to 16 KiB. Larger and unframed requests authenticate before reading their body. The executor checks the current capability before SDK dispatch; per-tool policy still rechecks authority before receipt replay or mutation. Native peer verification, request keys, cancellation, revisions and companion transactions keep their existing paths. Authentication refusals use one shared response formatter.
+
+The new regression covers unknown and externally rotated capabilities through small framed, large framed and unframed requests, malformed JSON refusal order, receipt non-disclosure, and original-key replay through the successor capability. The source and compiled executor suites each pass 16 cases; packaged stdio passes 51, HTTP/cancellation 18, and linked-task/wire suites 20 with one old-release opt-in skip. TypeScript, production build and local privacy pass. Performance acceptance requires a new immutable alternating matrix after this change.
