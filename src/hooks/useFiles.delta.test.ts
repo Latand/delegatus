@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 
 import { diffFilesRepresentations } from "@/lib/filesDelta";
+import { diffBoard } from "@/lib/boardDelta";
 
 import { createFilesClientCache } from "./useFiles";
 
@@ -131,4 +132,103 @@ test("an unchanged board answers 304 and keeps every published identity", async 
   expect(cache.read().files).toBe(before.files);
   expect(cache.read().pipelines).toBe(before.pipelines);
   unsubscribe();
+});
+
+const boardFull = (body: Json, etag: string) => () => new Response(JSON.stringify(body), {
+  headers: { ETag: etag, "x-llv-board-protocol": "2" },
+});
+const boardDelta = (from: Json, to: Json, base: string, etag: string) => () => new Response(
+  JSON.stringify({ deltas: [diffBoard(from, to, base, etag)] }), {
+    headers: { ETag: etag, "x-llv-files-delta-base": base, "x-llv-board-protocol": "2" },
+  });
+
+test("v2 multi-link reconstruction equals the full-summary client state, retaining every consumer field", async () => {
+  const one: Json = { ...representation("one"), boardProtocol: 2, boardScope: "epoch.scope",
+    tasks: [{ id: "t1", text: "Task", details: "complete editor text", assignments: [], prototypeReview: { status: "waiting", rounds: [1] } }],
+    flows: [{ id: "f1", state: "waiting" }], workflows: [{ id: "w1", members: ["t1"] }],
+    seatDecisions: [{ id: "s1", state: "waiting" }], prototypeReviewNotices: [{ id: "r1", state: "open" }],
+    workLinks: { tasks: { t1: { pr: 4 } }, pipelines: {} }, systemHealth: { tmux: { status: "healthy" } },
+    projectCatalog: [{ project: "p", conversations: 2 }], projectAliases: { old: "p" },
+    conversationAliases: { old: "new" }, launchRoutes: { "spawn:x": "new" }, pipelinesError: "temporary store refusal",
+  } as Json;
+  const two = structuredClone(one);
+  (two.tasks as Array<Record<string, unknown>>)[0].details = "updated details";
+  two.seatDecisions = [];
+  delete two.pipelinesError;
+  const three = structuredClone(two);
+  three.files = [{ path: "/b", tag: "three" }, { path: "/new" }];
+  three.flows = [];
+  three.prototypeReviewNotices = [];
+  const { seen, fetcher } = scripted([boardFull(one, "b1"), () => new Response(JSON.stringify({ deltas: [
+    diffBoard(one, two, "b1", "b2"), diffBoard(two, three, "b2", "b3"),
+  ] }), { headers: { ETag: "b3", "x-llv-files-delta-base": "b1", "x-llv-board-protocol": "2" } })]);
+  const cache = createFilesClientCache(fetcher);
+  const cold = createFilesClientCache(scripted([boardFull(three, "b3")]).fetcher);
+  try {
+    await cache.revalidate();
+    const pipeline = cache.read().pipelines[0];
+    await cache.revalidate();
+    await cold.revalidate();
+    expect(seen[0].headers["x-llv-board-protocol"]).toBe("2");
+    expect(cache.certifiedGlobal()?.raw).toEqual(three);
+    expect(cache.read()).toEqual(cold.read());
+    expect(cache.read().pipelines[0]).toBe(pipeline);
+  } finally { cache.dispose(); cold.dispose(); }
+});
+
+test("a broken v2 chain publishes nothing partial and performs one bounded legacy refetch", async () => {
+  const one: Json = { ...representation("one"), boardProtocol: 2 };
+  const two: Json = { ...representation("two"), boardProtocol: 2 };
+  const { seen, fetcher } = scripted([boardFull(one, "b1"), () => new Response(JSON.stringify({ deltas: [
+    diffBoard(one, two, "b1", "b2"), { ...diffBoard(two, one, "wrong", "b3") },
+  ] }), { headers: { ETag: "b3", "x-llv-files-delta-base": "b1", "x-llv-board-protocol": "2" } }),
+  () => new Response("unavailable", { status: 503 }), full(representation("legacy"), "legacy")]);
+  const cache = createFilesClientCache(fetcher);
+  try {
+    await cache.revalidate();
+    await expect(cache.revalidate()).rejects.toThrow();
+    expect(cache.read().files).toEqual(one.files as never);
+    expect(cache.read().catalogFailures).toBe(1);
+    expect(seen[2].headers["x-llv-board-protocol"]).toBeUndefined();
+    expect(seen[2].headers["x-llv-files-delta"]).toBeUndefined();
+    await cache.revalidate();
+    expect(cache.read().catalogFailures).toBe(0);
+  } finally { cache.dispose(); }
+});
+
+test("v2 overlays remain separate and persisted versions negotiate through restart and rollback", async () => {
+  const one: Json = { ...representation("one"), boardProtocol: 2, boardScope: "epoch.scope" };
+  const two: Json = { ...representation("two", "server-new"), boardProtocol: 2, boardScope: "epoch.scope" };
+  const { fetcher } = scripted([boardDelta(one, two, "b1", "b2"), full(representation("rollback"), "v1")]);
+  const cache = createFilesClientCache(fetcher);
+  try {
+    expect(cache.hydrate({ etag: "unsupported", text: JSON.stringify({ ...one, boardProtocol: 3 }) })).toBe(false);
+    expect(cache.hydrate({ etag: "b1", text: JSON.stringify(one) })).toBe(true);
+    cache.applyPipeline(pipeline("p1", "optimistic draft") as never, false);
+    await cache.revalidate();
+    expect(cache.read().pipelines[0].task).toBe("optimistic draft");
+    expect(cache.certifiedGlobal()?.raw.pipelines).toEqual(two.pipelines);
+    cache.revertPipeline("p1");
+    expect(cache.read().pipelines[0].task).toBe("server-new");
+    await cache.revalidate();
+    expect(cache.read().files).toEqual(representation("rollback").files as never);
+  } finally { cache.dispose(); }
+});
+
+test("unknown protocol responses trigger one legacy read while auth refusal preserves the last live board", async () => {
+  const { seen, fetcher } = scripted([
+    boardFull({ ...representation("good"), boardProtocol: 2 }, "good"),
+    () => new Response(null, { status: 304, headers: { "x-llv-board-protocol": "3" } }),
+    full(representation("legacy"), "legacy"),
+    () => new Response("denied", { status: 403 }),
+  ]);
+  const cache = createFilesClientCache(fetcher);
+  try {
+    await cache.revalidate();
+    await cache.revalidate();
+    expect(seen).toHaveLength(3);
+    expect(seen[2].headers["x-llv-board-protocol"]).toBeUndefined();
+    await expect(cache.revalidate()).rejects.toThrow("403");
+    expect(cache.read().files).toEqual(representation("legacy").files as never);
+  } finally { cache.dispose(); }
 });
