@@ -12958,8 +12958,6 @@ export async function patchPipeline(
         if (!isEffectiveRole(target.effectiveRole)) return { error: "stage role is not a valid engine/model/effort combination", status: 400 };
         const overrideSizingRefusal = stageSizingRefusal(pipeline.stages.map(item => item.id === target.id ? target : item), graphEditBriefer(actor, pipeline, ports), ports, new Set([target.id]));
         if (overrideSizingRefusal) return { error: overrideSizingRefusal.error, status: 400 };
-        const tierRefusal = stageAccountRefusal([target], pipeline.project, ports);
-        if (tierRefusal) return tierRefusal;
       }
 
       if (req.prompt !== undefined) {
@@ -12995,6 +12993,12 @@ export async function patchPipeline(
           }
           target.account = requested;
         }
+      }
+      // Validate the resolved runtime against the account this request leaves
+      // on the stage; clearing the pin checks the project's full allowed pool.
+      if (changesRoleOrRuntime) {
+        const tierRefusal = stageAccountRefusal([target], pipeline.project, ports);
+        if (tierRefusal) return tierRefusal;
       }
       let runtimeSwitch: PipelineRuntimeSwitch | null = null;
       if (req.applyNow && live?.conversationId) {
