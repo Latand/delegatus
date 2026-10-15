@@ -1081,6 +1081,77 @@
     "privacy": {
       "command": "bun scripts/privacy-publication-gate.ts --require-known-values --repository <checkout> --paths <23 explicit paths>",
       "exitCode": 0
+    },
+    "publicationHook": {
+      "typesPassedSeconds": 288,
+      "lintPassedSeconds": 8,
+      "privacy": "pass",
+      "touchedPaths": [
+        "./src/lib/pipelines/engine.controllerPass.test.ts",
+        "./src/lib/performanceSpans.test.ts",
+        "./src/lib/pipelines/controller.test.ts",
+        "./src/lib/pipelines/engine.providerBudget.test.ts",
+        "./src/lib/pipelines/engine.provisioning.test.ts",
+        "./src/lib/pipelines/engine.succession.test.ts",
+        "./src/lib/pipelines/engine.creation.test.ts",
+        "./src/lib/pipelines/engine.containment.test.ts",
+        "./src/lib/pipelines/engine.providerChains.test.ts",
+        "./src/lib/pipelines/engine.controllerSnapshot.test.ts",
+        "./src/lib/pipelines/engine.settlement.test.ts",
+        "./src/lib/pipelines/engine.accountGuard.test.ts",
+        "./src/lib/pipelines/engine.routing.test.ts",
+        "./src/lib/pipelines/engine.activation.test.ts",
+        "./src/lib/pipelines/engine.cpuQueue.test.ts",
+        "./src/lib/pipelines/engine.providerSignals.test.ts",
+        "./src/lib/pipelines/engine.recovery.test.ts",
+        "./src/lib/pipelines/engine.watchdogRegression.test.ts",
+        "./src/lib/pipelines/engine.publication.test.ts",
+        "./src/lib/pipelines/engine.cpuAdmissionPolling.test.ts",
+        "./src/lib/pipelines/engine.ports.test.ts",
+        "./src/lib/pipelines/stageProvenance.test.ts",
+        "./src/lib/pipelines/store.test.ts",
+        "./src/lib/pipelines/store.reads.test.ts",
+        "./src/lib/runtime/cpuAdmission.test.ts",
+        "./src/lib/state/pipelineControllerIndex.owner.test.ts",
+        "./src/lib/state/sqliteStateStore.readCache.test.ts",
+        "./src/lib/state/sqliteStateStore.bounded.test.ts",
+        "./src/lib/state/sqliteStateStore.lifecycle.test.ts"
+      ],
+      "headElapsedMs": 468830,
+      "baselineElapsedMs": 149656,
+      "preExisting": [
+        "src/lib/pipelines/engine.creation.test.ts: a stage completes and its successor waits for both update roles: early-switch-off"
+      ],
+      "runnerRefusal": "src/lib/pipelines/engine.providerBudget.test.ts exceeded the five-minute file budget during concurrent publication checks; exit 124",
+      "isolatedRecheck": {
+        "file": "src/lib/pipelines/engine.providerBudget.test.ts",
+        "pass": 164,
+        "fail": 0,
+        "elapsedMs": 213600
+      },
+      "linuxBackend": "pass",
+      "linuxTestPaths": [
+        "./src/lib/proc/memory.test.ts",
+        "./src/lib/proc/portable.test.ts",
+        "./src/lib/proc/darwinIdentity.test.ts",
+        "./src/lib/proc/index.test.ts",
+        "./src/lib/proc/windowsSnapshot.test.ts",
+        "./src/lib/proc/windowsIdentity.test.ts",
+        "./src/lib/proc/windowsCwd.test.ts",
+        "./src/lib/proc/windows.test.ts",
+        "./src/lib/processGroup.test.ts",
+        "./src/lib/platformHome.test.ts",
+        "./src/lib/runtime/localEndpoint.test.ts",
+        "./src/lib/scanner/describe.test.ts",
+        "./src/lib/state/durableJson.test.ts",
+        "./src/runtime-host/socket.test.ts",
+        "./src/runtime-host/runtimeHostFence.test.ts",
+        "./bin/server-runtime.test.ts",
+        "./bin/bind-guard.test.ts"
+      ],
+      "linuxTestsHeadElapsedMs": 1459,
+      "linuxTests": "pass",
+      "resolution": "Independent required checks completed before using the documented publication-hook override. No product source changed after the measured implementation."
     }
   }
 }

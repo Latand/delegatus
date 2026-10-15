@@ -175,3 +175,20 @@ passes with incremental output disabled. The local privacy gate passes with
 committed known-value fingerprints over all twenty-three changed paths.
 Runtime-host source and the Bun pin are unchanged. Deployment and the required
 production journal audit remain with the authorized deployment stage.
+
+
+### Publication verification
+
+The publication hook passed types (288 seconds), changed-line lint (8 seconds)
+and privacy. Its twenty-nine-file touched-test run exceeded the five-minute
+file limit in `engine.providerBudget.test.ts` during concurrent checks. An
+isolated rerun passed all 164 tests in 214 seconds. The hook also reproduced one
+pre-existing creation-test failure on the merge base: the `early-switch-off`
+case of a stage completing while its successor waits for both update roles.
+
+The stopped Linux checks then ran independently: the backend probe passed,
+and all seventeen explicit Linux test files passed (1.46 seconds). Every check
+used isolated state and the supplied serving-release gate. The measured product
+source remained unchanged. These completed checks support the documented
+`LLV_SKIP_HOOKS=1` publication override after the concurrent runner refusal;
+required hosted checks still judge the published commit.
