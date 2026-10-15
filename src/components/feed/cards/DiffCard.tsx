@@ -7,7 +7,7 @@ import { MESSAGE_ACTION } from "../actionStyles";
 import { CopyButton } from "../CopyButton";
 import { tr, type ToolBody } from "../parse";
 import { FileRef } from "./shared";
-import type { DiffLine, FileDiff, Hunk } from "../diff";
+import { headingText, type DiffLine, type FileDiff, type Hunk } from "../diff";
 
 /** Level-1 visible-line budget per file: a compact preview of the first lines
     shown expanded by default; "show all" reveals the capped rest (issue #90). */
@@ -82,18 +82,22 @@ function LineRow({ line, prose = false }: { line: DiffLine; prose?: boolean }) {
     wrapping variant a mandate (paragraphs, not code) is read in: sans, wrapped,
     hunk captions without the `@@` prefix. */
 export function DiffRows({ rows, prose = false }: { rows: DiffRow[]; prose?: boolean }) {
+  const caption = (text: string) => (
+    <div className={prose ? "break-words px-2 pt-1 text-caption text-muted" : "whitespace-pre px-2 text-muted"}>{text}</div>
+  );
   return (
     <>
-      {rows.map(({ line, header, start }, i) => (
-        <div key={i} className={prose && start && i > 0 ? "mt-1 border-t border-border pt-1" : undefined}>
-          {header ? (
-            <div className={prose ? "break-words px-2 pt-1 text-caption text-muted" : "whitespace-pre px-2 text-muted"}>
-              {prose ? header : `@@ ${header}`}
-            </div>
-          ) : null}
-          <LineRow line={line} prose={prose} />
-        </div>
-      ))}
+      {rows.map(({ line, header, start }, i) => {
+        /* A heading the diff passes through unchanged reads as the same small
+           caption a hunk's own heading does, in prose without its `#` marker. */
+        const heading = prose && line.t === " " ? headingText(line.text) : null;
+        return (
+          <div key={i} className={prose && start && i > 0 ? "mt-1 border-t border-border pt-1" : undefined}>
+            {header ? caption(prose ? (headingText(header) ?? header) : `@@ ${header}`) : null}
+            {heading !== null ? caption(heading) : <LineRow line={line} prose={prose} />}
+          </div>
+        );
+      })}
     </>
   );
 }

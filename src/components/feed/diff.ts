@@ -120,8 +120,27 @@ function intralineSpans(edits: IntralineEdit[], side: "remove" | "add"): Intrali
   return spans;
 }
 
+const WORD_CHAR_RE = /[\p{L}\p{N}_]/u;
+
+/** Widen every changed run to the whole word it touches, so a prose reader sees
+    "adjusted" highlighted as one span, not "adjust" and "d" around a plain "e". */
+function snapSpansToWords(spans: IntralineSpan[]): IntralineSpan[] {
+  const chars: { char: string; changed: boolean }[] = [];
+  for (const span of spans) for (const char of span.text) chars.push({ char, changed: span.changed });
+  const snapped = chars.map((entry) => entry.changed);
+  const isWord = (index: number) => WORD_CHAR_RE.test(chars[index].char);
+  chars.forEach((entry, index) => {
+    if (!entry.changed || !isWord(index)) return;
+    for (let k = index - 1; k >= 0 && isWord(k); k -= 1) snapped[k] = true;
+    for (let k = index + 1; k < chars.length && isWord(k); k += 1) snapped[k] = true;
+  });
+  const out: IntralineSpan[] = [];
+  chars.forEach((entry, index) => addSpan(out, entry.char, snapped[index]));
+  return out;
+}
+
 /** Add spans only to paired runs of removed and added lines in one hunk. */
-function addIntralineHighlights(lines: DiffLine[]): DiffLine[] {
+function addIntralineHighlights(lines: DiffLine[], snapToWords = false): DiffLine[] {
   const highlighted = lines.map((line) => ({ ...line }));
   let index = 0;
   while (index < highlighted.length) {
@@ -140,8 +159,10 @@ function addIntralineHighlights(lines: DiffLine[]): DiffLine[] {
       if (removed.text === added.text) continue;
       const edits = intralineEdits(removed.text, added.text);
       if (!edits) continue;
-      removed.intraline = intralineSpans(edits, "remove");
-      added.intraline = intralineSpans(edits, "add");
+      const removedSpans = intralineSpans(edits, "remove");
+      const addedSpans = intralineSpans(edits, "add");
+      removed.intraline = snapToWords ? snapSpansToWords(removedSpans) : removedSpans;
+      added.intraline = snapToWords ? snapSpansToWords(addedSpans) : addedSpans;
     }
   }
   return highlighted;
@@ -182,7 +203,7 @@ function fileHasContent(raw: RawFile): boolean {
 /* Applies every §4 cap once, redacting each line before it is sliced so a secret
    straddling the char boundary cannot survive in the kept half. `budget` is the
    per-event total-char allowance, shared across the files of one event. */
-function finalizeFile(raw: RawFile, budget: { remaining: number }, caps: DiffCaps = DIFF_CAPS): FileDiff {
+function finalizeFile(raw: RawFile, budget: { remaining: number }, caps: DiffCaps = DIFF_CAPS, snapToWords = false): FileDiff {
   let added = 0;
   let removed = 0;
   for (const hunk of raw.hunks) {
@@ -228,7 +249,7 @@ function finalizeFile(raw: RawFile, budget: { remaining: number }, caps: DiffCap
     /* Flush the lines gathered before the cap tripped, then stop — a `break`
        past this push would silently drop the kept half of the diff. */
     if (lines.length) {
-      const highlighted = addIntralineHighlights(lines);
+      const highlighted = addIntralineHighlights(lines, snapToWords);
       hunks.push(rawHunk.header ? { header: rawHunk.header, lines: highlighted } : { lines: highlighted });
       hunkCount += 1;
     }
@@ -493,6 +514,11 @@ export function diffTextLines(oldText: string, newText: string): DiffLine[] {
 
 const HEADING_RE = /^#{1,6} /;
 
+/** A markdown heading line's text without its `#` marker, or null for any other line. */
+export function headingText(text: string): string | null {
+  return HEADING_RE.test(text) ? text.replace(HEADING_RE, "") : null;
+}
+
 /**
  * The whole-text diff as the shared `FileDiff` model: `context` unchanged
  * lines around each change (lines are paragraphs, so one is enough), each hunk
@@ -533,5 +559,6 @@ export function diffFromTexts(oldText: string, newText: string, options: { path?
     { path: options.path ?? "mandate", op: "update", hunks, content: "", includeEmpty: true },
     { remaining: TEXT_DIFF_CAPS.totalChars },
     TEXT_DIFF_CAPS,
+    true,
   );
 }

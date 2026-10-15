@@ -347,6 +347,22 @@ describe("whole-text diff (the rotation dialog's mandate)", () => {
     expect(diffFromTexts("a\nb", "a\nc").hunks[0].header).toBeUndefined();
   });
 
+  test("intraline highlights cover the whole changed word, not a piece of it", () => {
+    const file = diffFromTexts("The seat is adjusted soon.", "The seat is receiving soon.");
+    const [removed, added] = file.hunks[0].lines;
+    expect(removed.intraline?.filter((span) => span.changed).map((span) => span.text)).toEqual(["adjusted"]);
+    expect(added.intraline?.filter((span) => span.changed).map((span) => span.text)).toEqual(["receiving"]);
+    const joined = (line: typeof removed) => line.intraline?.map((span) => span.text).join("");
+    expect(joined(removed)).toBe(removed.text);
+    expect(joined(added)).toBe(added.text);
+  });
+
+  test("the shared tool-edit diff keeps character-level highlights", () => {
+    const file = diffFromClaudeEdit({ file_path: "a.ts", old_string: "adjusted", new_string: "adjuster" }).files[0];
+    const changed = file.hunks[0].lines[1].intraline?.filter((span) => span.changed).map((span) => span.text);
+    expect(changed).toEqual(["r"]);
+  });
+
   test("two 32,000-byte texts with nothing in common are not truncated under the text caps", () => {
     const paragraph = (seed: string) => Array.from({ length: 200 }, (_, i) => `${seed} ${i} ${"x".repeat(150)}`).join("\n");
     const oldText = paragraph("old").slice(0, 32_000);

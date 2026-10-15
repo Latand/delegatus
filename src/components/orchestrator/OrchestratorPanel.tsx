@@ -1206,6 +1206,9 @@ function OrchestratorDraft({
               {view?.kind === "changed" && incumbent ? <MandateDiff oldText={incumbent.mandate} newText={mandate} /> : null}
               <div className="flex flex-col gap-1">
                 <div className="flex min-h-6 items-center gap-2">
+                  <label className="text-label font-semibold text-muted" htmlFor="orchestrator-mandate">
+                    {t("orchPanel.mandate")}
+                  </label>
                   {edited && !restoreInSlot ? (
                     <button
                       type="button"
@@ -1221,7 +1224,6 @@ function OrchestratorDraft({
                 <textarea
                   id="orchestrator-mandate"
                   data-orchestrator-mandate
-                  aria-label={t("orchPanel.mandate")}
                   value={mandate}
                   disabled={submitting}
                   onChange={(event) => onMandate(event.target.value)}

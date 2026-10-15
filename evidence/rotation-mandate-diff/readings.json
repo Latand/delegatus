@@ -307,15 +307,19 @@
       "diff": {
         "added": 2,
         "removed": 6,
-        "context": 7,
-        "intraline": 4,
+        "context": 5,
+        "intraline": 2,
         "scrollOverflow": false,
         "rowsInside": true,
         "firstWhole": true,
         "captions": [
-          "## How work runs",
-          "## Fences"
+          "Who you are",
+          "Initial visible status",
+          "How work runs",
+          "Fences"
         ],
+        "headingMarkers": [],
+        "splitHighlights": [],
         "contrast": {
           "add": 4.8,
           "del": 4.7,
@@ -325,6 +329,8 @@
       },
       "editor": {
         "visible": true,
+        "label": "Mandate",
+        "labelWhole": false,
         "afterDiff": true,
         "after": true
       },
@@ -337,6 +343,10 @@
       "viewport": {
         "width": 390,
         "height": 844
+      },
+      "atEditor": {
+        "label": "Mandate",
+        "labelWhole": true
       },
       "editedLine": "Mandate v54 → your edit · lines: +3 −7"
     },
@@ -375,15 +385,19 @@
       "diff": {
         "added": 2,
         "removed": 6,
-        "context": 7,
-        "intraline": 4,
+        "context": 5,
+        "intraline": 2,
         "scrollOverflow": false,
         "rowsInside": true,
         "firstWhole": true,
         "captions": [
-          "## How work runs",
-          "## Fences"
+          "Who you are",
+          "Initial visible status",
+          "How work runs",
+          "Fences"
         ],
+        "headingMarkers": [],
+        "splitHighlights": [],
         "contrast": {
           "add": 4.8,
           "del": 4.7,
@@ -393,6 +407,8 @@
       },
       "editor": {
         "visible": true,
+        "label": "Мандат",
+        "labelWhole": false,
         "afterDiff": true,
         "after": true
       },
@@ -405,6 +421,10 @@
       "viewport": {
         "width": 390,
         "height": 844
+      },
+      "atEditor": {
+        "label": "Мандат",
+        "labelWhole": true
       },
       "editedLine": "Мандат v54 → ваша правка · рядки: +3 −7"
     },
@@ -443,15 +463,19 @@
       "diff": {
         "added": 2,
         "removed": 6,
-        "context": 7,
-        "intraline": 4,
+        "context": 5,
+        "intraline": 2,
         "scrollOverflow": false,
         "rowsInside": true,
         "firstWhole": true,
         "captions": [
-          "## How work runs",
-          "## Fences"
+          "Who you are",
+          "Initial visible status",
+          "How work runs",
+          "Fences"
         ],
+        "headingMarkers": [],
+        "splitHighlights": [],
         "contrast": {
           "add": 4.8,
           "del": 4.7,
@@ -461,6 +485,8 @@
       },
       "editor": {
         "visible": true,
+        "label": "Mandate",
+        "labelWhole": false,
         "afterDiff": true,
         "after": true
       },
@@ -473,6 +499,10 @@
       "viewport": {
         "width": 768,
         "height": 900
+      },
+      "atEditor": {
+        "label": "Mandate",
+        "labelWhole": true
       },
       "editedLine": "Mandate v54 → your edit · lines: +3 −7"
     },
@@ -511,15 +541,19 @@
       "diff": {
         "added": 2,
         "removed": 6,
-        "context": 7,
-        "intraline": 4,
+        "context": 5,
+        "intraline": 2,
         "scrollOverflow": false,
         "rowsInside": true,
         "firstWhole": true,
         "captions": [
-          "## How work runs",
-          "## Fences"
+          "Who you are",
+          "Initial visible status",
+          "How work runs",
+          "Fences"
         ],
+        "headingMarkers": [],
+        "splitHighlights": [],
         "contrast": {
           "add": 4.8,
           "del": 4.7,
@@ -529,6 +563,8 @@
       },
       "editor": {
         "visible": true,
+        "label": "Мандат",
+        "labelWhole": false,
         "afterDiff": true,
         "after": true
       },
@@ -541,6 +577,10 @@
       "viewport": {
         "width": 768,
         "height": 900
+      },
+      "atEditor": {
+        "label": "Мандат",
+        "labelWhole": true
       },
       "editedLine": "Мандат v54 → ваша правка · рядки: +3 −7"
     },
@@ -579,15 +619,19 @@
       "diff": {
         "added": 2,
         "removed": 6,
-        "context": 7,
-        "intraline": 4,
+        "context": 5,
+        "intraline": 2,
         "scrollOverflow": false,
         "rowsInside": true,
         "firstWhole": true,
         "captions": [
-          "## How work runs",
-          "## Fences"
+          "Who you are",
+          "Initial visible status",
+          "How work runs",
+          "Fences"
         ],
+        "headingMarkers": [],
+        "splitHighlights": [],
         "contrast": {
           "add": 4.8,
           "del": 4.7,
@@ -597,6 +641,8 @@
       },
       "editor": {
         "visible": true,
+        "label": "Mandate",
+        "labelWhole": true,
         "afterDiff": true,
         "after": true
       },
@@ -609,6 +655,10 @@
       "viewport": {
         "width": 1440,
         "height": 900
+      },
+      "atEditor": {
+        "label": "Mandate",
+        "labelWhole": true
       },
       "editedLine": "Mandate v54 → your edit · lines: +3 −7"
     },
@@ -647,15 +697,19 @@
       "diff": {
         "added": 2,
         "removed": 6,
-        "context": 7,
-        "intraline": 4,
+        "context": 5,
+        "intraline": 2,
         "scrollOverflow": false,
         "rowsInside": true,
         "firstWhole": true,
         "captions": [
-          "## How work runs",
-          "## Fences"
+          "Who you are",
+          "Initial visible status",
+          "How work runs",
+          "Fences"
         ],
+        "headingMarkers": [],
+        "splitHighlights": [],
         "contrast": {
           "add": 4.8,
           "del": 4.7,
@@ -665,6 +719,8 @@
       },
       "editor": {
         "visible": true,
+        "label": "Мандат",
+        "labelWhole": true,
         "afterDiff": true,
         "after": true
       },
@@ -677,6 +733,10 @@
       "viewport": {
         "width": 1440,
         "height": 900
+      },
+      "atEditor": {
+        "label": "Мандат",
+        "labelWhole": true
       },
       "editedLine": "Мандат v54 → ваша правка · рядки: +3 −7"
     },
@@ -1303,15 +1363,19 @@
       "diff": {
         "added": 2,
         "removed": 6,
-        "context": 7,
-        "intraline": 4,
+        "context": 5,
+        "intraline": 2,
         "scrollOverflow": false,
         "rowsInside": true,
         "firstWhole": true,
         "captions": [
-          "## How work runs",
-          "## Fences"
+          "Who you are",
+          "Initial visible status",
+          "How work runs",
+          "Fences"
         ],
+        "headingMarkers": [],
+        "splitHighlights": [],
         "contrast": {
           "add": 6.3,
           "del": 5.1,
@@ -1321,6 +1385,8 @@
       },
       "editor": {
         "visible": true,
+        "label": "Мандат",
+        "labelWhole": false,
         "afterDiff": true,
         "after": true
       },
@@ -1333,6 +1399,10 @@
       "viewport": {
         "width": 390,
         "height": 844
+      },
+      "atEditor": {
+        "label": "Мандат",
+        "labelWhole": true
       },
       "editedLine": "Мандат v54 → ваша правка · рядки: +3 −7"
     },
@@ -1371,15 +1441,19 @@
       "diff": {
         "added": 2,
         "removed": 6,
-        "context": 7,
-        "intraline": 4,
+        "context": 5,
+        "intraline": 2,
         "scrollOverflow": false,
         "rowsInside": true,
         "firstWhole": true,
         "captions": [
-          "## How work runs",
-          "## Fences"
+          "Who you are",
+          "Initial visible status",
+          "How work runs",
+          "Fences"
         ],
+        "headingMarkers": [],
+        "splitHighlights": [],
         "contrast": {
           "add": 6.3,
           "del": 5.1,
@@ -1389,6 +1463,8 @@
       },
       "editor": {
         "visible": true,
+        "label": "Mandate",
+        "labelWhole": true,
         "afterDiff": true,
         "after": true
       },
@@ -1401,6 +1477,10 @@
       "viewport": {
         "width": 1440,
         "height": 900
+      },
+      "atEditor": {
+        "label": "Mandate",
+        "labelWhole": true
       },
       "editedLine": "Mandate v54 → your edit · lines: +3 −7"
     },

@@ -1447,6 +1447,13 @@ test("Rotate over a STALE seat opens the SAME draft with the mandate as ONE coll
   const rows = [...diff.querySelectorAll("[data-orchestrator-mandate-diff-line]")].map((row) => row.getAttribute("data-orchestrator-mandate-diff-line"));
   expect(rows.filter((kind) => kind === "+").length).toBe(Number(counts.match(/\+(\d+)/)![1]));
   expect(rows.filter((kind) => kind === "-").length).toBe(Number(counts.match(/−(\d+)/)![1]));
+  /* Headings read one way and without their markdown marker; the editor is
+     named by a visible label bound to it. */
+  const unchangedHeadings = [...diff.querySelectorAll("[data-orchestrator-mandate-diff-line=' ']")].filter((row) => /^\s*#{1,6} /.test(row.textContent ?? ""));
+  expect(unchangedHeadings).toHaveLength(0);
+  expect(diff.textContent).not.toMatch(/(^|\s)#{2} [A-Z]/);
+  const label = host.querySelector("label[for='orchestrator-mandate']") as HTMLLabelElement;
+  expect(label.textContent).toBe("Mandate");
 
   /* The explicit choice: the incumbent's own text. The line says it is
      unchanged, the slot offers the way back, and nothing opened by itself. */

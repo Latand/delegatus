@@ -30098,6 +30098,15 @@ describe("rotation dialog: the mandate as a diff", () => {
         rowsInside: rows.every((row) => { const box = union(textRects(rowText(row))); const container = diff.getBoundingClientRect(); return !box || (box.right <= container.right + 0.5 && box.left >= container.left - 0.5); }),
         firstWhole: first ? whole(first.parentElement) : null,
         captions: [...diff.querySelectorAll<HTMLElement>(".text-caption")].map((caption) => caption.textContent!),
+        /* A heading never shows its markdown marker on a caption or a context row, and a highlight never ends inside a word. */
+        headingMarkers: [...diff.querySelectorAll<HTMLElement>(".text-caption")].map((caption) => caption.textContent!)
+          .concat(kinds(" ").map((row) => rowText(row).textContent!)).filter((text) => /^#{1,6}\s/.test(text)),
+        splitHighlights: [...diff.querySelectorAll<HTMLElement>('[class*="diff-add-strong"], [class*="diff-del-strong"]')].flatMap((span) => {
+          const word = /[\p{L}\p{N}_]/u;
+          const before = span.previousSibling?.textContent?.slice(-1) ?? "";
+          const after = span.nextSibling?.textContent?.slice(0, 1) ?? "";
+          return word.test(before) || word.test(after) ? [`${before}[${span.textContent}]${after}`] : [];
+        }),
         contrast: {
           add: kinds("+").length ? Math.min(...kinds("+").map((row) => contrast(rowText(row)))) : null,
           del: kinds("-").length ? Math.min(...kinds("-").map((row) => contrast(rowText(row)))) : null,
@@ -30105,7 +30114,7 @@ describe("rotation dialog: the mandate as a diff", () => {
           intraline: Math.min(...[...diff.querySelectorAll('[class*="diff-add-strong"], [class*="diff-del-strong"]')].map(contrast), 99),
         },
       } : null,
-      editor: field ? { visible: field.getClientRects().length > 0, afterDiff: diff ? !!(diff.compareDocumentPosition(field) & Node.DOCUMENT_POSITION_FOLLOWING) : null, after: rows.length ? !!(rows.at(-1)!.compareDocumentPosition(field) & Node.DOCUMENT_POSITION_FOLLOWING) : null } : null,
+      editor: field ? { visible: field.getClientRects().length > 0, label: (field.labels?.[0]?.textContent ?? null), labelWhole: whole(field.labels?.[0]), afterDiff: diff ? !!(diff.compareDocumentPosition(field) & Node.DOCUMENT_POSITION_FOLLOWING) : null, after: rows.length ? !!(rows.at(-1)!.compareDocumentPosition(field) & Node.DOCUMENT_POSITION_FOLLOWING) : null } : null,
       overlaps,
       pageScroll: document.documentElement.scrollWidth - innerWidth,
       sections: { scrollerTop: round(scroller.getBoundingClientRect().top), footerTop: round(footer.getBoundingClientRect().top) },
@@ -30212,6 +30221,9 @@ describe("rotation dialog: the mandate as a diff", () => {
             expect([diff.added, diff.removed], `${name} rendered rows equal the driver's own count`).toEqual([added, removed]);
             expect(reading.line.text, `${name} the line counts equal the rendered rows`).toContain(`+${diff.added} −${diff.removed}`);
             expect(diff.intraline, `${name} intraline highlights`).toBeGreaterThanOrEqual(1);
+            expect(diff.splitHighlights, `${name} every highlight covers whole words`).toEqual([]);
+            expect(diff.headingMarkers, `${name} headings carry no markdown marker`).toEqual([]);
+            expect(reading.editor?.label, `${name} the editor is named by a visible label`).toBe(tr("orchPanel.mandate"));
             expect(diff.scrollOverflow, `${name} no sideways scroll inside the diff`).toBe(false);
             expect(diff.rowsInside, `${name} every row inside the container`).toBe(true);
             expect(diff.firstWhole, `${name} the first row and its caption whole`).toBe(true);
@@ -30251,6 +30263,23 @@ describe("rotation dialog: the mandate as a diff", () => {
             expect(await page.locator("[data-orchestrator-mandate]").inputValue(), `${name} restore returns the default text exactly`).toBe(ORCHESTRATOR_SYSTEM_PROMPT);
             frame.restoredLine = back.line.text;
           } else if (shot.state === "changed-expanded") {
+            /* The editor scrolled into view: its label is whole text on that screen, and a second frame shows it. */
+            await page.evaluate((phone) => {
+              const draft = document.querySelector<HTMLElement>('[data-orchestrator-draft="rotate"]')!;
+              const scroller = phone ? draft : (draft.firstElementChild as HTMLElement);
+              const label = document.querySelector<HTMLTextAreaElement>("[data-orchestrator-mandate]")!.labels![0]!;
+              scroller.scrollTop += label.getBoundingClientRect().top - scroller.getBoundingClientRect().top - 8;
+            }, phone);
+            await page.waitForTimeout(300);
+            const atEditor = await readDraft(page, phone);
+            expect(atEditor.editor?.labelWhole, `${name} the editor's label whole when scrolled to`).toBe(true);
+            expect(atEditor.editor?.label, `${name} the editor's label`).toBe(tr("orchPanel.mandate"));
+            if (phone) await page.screenshot({ path: path.join(out, `${name}-editor.png`) });
+            else {
+              const panel = (await page.locator("[data-orchestrator-mode]").first().boundingBox())!;
+              await page.screenshot({ path: path.join(out, `${name}-editor.png`), clip: { x: Math.max(0, panel.x - 8), y: Math.max(0, panel.y - 8), width: Math.min(shot.width, panel.x + panel.width + 8) - Math.max(0, panel.x - 8), height: Math.min(900, panel.y + panel.height + 8) - Math.max(0, panel.y - 8) } });
+            }
+            frame.atEditor = { label: atEditor.editor?.label, labelWhole: atEditor.editor?.labelWhole };
             const lines = ORCHESTRATOR_SYSTEM_PROMPT.split("\n");
             lines[3] = `${lines[3]}x`;
             const typed = lines.join("\n");
