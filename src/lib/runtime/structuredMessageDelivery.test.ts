@@ -4151,6 +4151,11 @@ test.each(["timeout", "revoked", "obsolete", "pending"] as const)(
       if (begun.kind !== "begun") throw new Error("the deputy fixture did not begin");
       recordDeputyFork(begun.deputy.askId, { deputyConversationId: conversation.id, artifactPath, forkRecordCount: 0 });
       recordStructuredOwner(registry, conversation);
+      const generation = conversation.generations.at(-1)!;
+      const registryKey = `${conversation.engine}:${generation.id}`;
+      const owner = registry.readOnlySnapshot().entries[registryKey]!;
+      registry.upsert({ ...owner, status: "dead", claimOwner: null,
+        structuredHost: owner.structuredHost ? { ...owner.structuredHost, process: null } : null });
       const clientMessageId = deputyMessageKey(begun.deputy.askId, 0);
       const held = registry.holdDelivery(conversation.id, "Explain the parallel failure", clientMessageId, "text", [], null,
         { origin: { kind: "operator" } }, { recoveryIntent: "reclaimed-host" });
