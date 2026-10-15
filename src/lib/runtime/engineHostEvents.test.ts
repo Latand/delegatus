@@ -7,6 +7,17 @@ import { coalesceReadyEngineDeltas, projectEngineHostEvent, type CoalescedEngine
 import { normalizeRuntimeLiveTurn, projectRuntimeLiveTurnItem, runtimeLiveTurnItems } from "./liveTurn";
 
 describe("projectEngineHostEvent", () => {
+  test("an oversized question structure is visible without incomplete answer controls", () => {
+    const projected = projectEngineHostEvent("conversation_one", "codex:thread-one", {
+      kind: "attention", id: "large-question", method: "item/tool/requestUserInput", seq: 1,
+      attention: { questions: Array.from({ length: 100 }, (_, i) => ({ id: `question-${i}`, question: "q".repeat(512),
+        options: [{ label: "a".repeat(256), description: "d".repeat(256) }] })) },
+    })!;
+    expect(() => assertRuntimeEvent(projected)).not.toThrow();
+    expect(projected.payload).toMatchObject({ kind: "question", unowned: true, request: { detail: expect.stringContaining("callback remains pending") } });
+    expect(projected.payload.request).not.toHaveProperty("questions");
+    expect(projected.payload.request).not.toHaveProperty("protocol");
+  });
   test("routes legacy Codex command and patch requests by exact method", () => {
     for (const method of ["execCommandApproval", "applyPatchApproval"]) {
       const projected = projectEngineHostEvent("conversation_one", "codex:thread-one", {

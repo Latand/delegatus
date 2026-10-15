@@ -1,4 +1,6 @@
 import { isNonblockingCodexQuestion } from "./codexAttention";
+import { projectCodexAttentionActions } from "./codexAttentionActions";
+import { codexRequestDigest } from "./codexRequestReceipt";
 import { codexServerRequestKind } from "./codexServerRequests";
 import { RUNTIME_EVENT_PAYLOAD_LIMIT_BYTES, runtimeHostKindForEngine, type RuntimeAttentionKind, type RuntimeAttentionRequest, type RuntimeEngine, type RuntimeEventInput } from "./contracts";
 import type { RuntimeEvent } from "./engineHost";
@@ -205,6 +207,8 @@ function questionFrom(value: unknown): RuntimeAttentionRequest["question"] | nul
     "prompt": clipped(prompt, 512),
     ...(options?.length ? { options } : {}),
     ...(typeof source.multiSelect === "boolean" ? { multiSelect: source.multiSelect } : {}),
+    ...(typeof source.isOther === "boolean" ? { isOther: source.isOther } : {}),
+    ...(source.isSecret === true ? { isSecret: true } : source.isSecret === false ? { isSecret: false } : {}),
   };
 }
 
@@ -253,6 +257,10 @@ function attentionProjection(engine: RuntimeEngine, event: Extract<RuntimeEvent,
   if (title) request.title = clipped(title, 256);
   const detail = text(source.detail, source.message, claudePermission ? source.decision_reason : null);
   if (detail) request.detail = clipped(detail, 2 * 1024);
+  if (event.codexReceipt?.protocolError) request.detail = event.codexReceipt.protocolError;
+  else if (event.codexReceipt?.recovery) request.detail = event.codexReceipt.recovery.outcome === "callback-unavailable"
+    ? "Codex lost this callback when its process ended. This request can no longer receive an answer."
+    : "The answer was dispatched, but Codex has not confirmed its resolution. It will not be delivered again.";
   const firstQuestion = record(questions[0]);
   const questionIds = questions.map((candidate) => text(record(candidate).id)).filter((id): id is string => id !== null);
   const protocolInput = tool === "AskUserQuestion"
@@ -263,9 +271,11 @@ function attentionProjection(engine: RuntimeEngine, event: Extract<RuntimeEvent,
   request.protocol = {
     engine,
     method,
-    ...(text(firstQuestion.id) ? { questionId: text(firstQuestion.id)! } : {}),
-    ...(questionIds.length > 0 ? { questionIds } : {}),
+    ...(engine !== "codex" && text(firstQuestion.id) ? { questionId: text(firstQuestion.id)! } : {}),
+    ...(engine !== "codex" && questionIds.length > 0 ? { questionIds } : {}),
+    ...(engine === "codex" ? { responseRef: event.codexReceipt?.requestDigest ?? codexRequestDigest(source) } : {}),
     ...(protocolInput ? { input: protocolInput } : {}),
+    ...(event.codexReceipt && !event.codexReceipt.protocolError ? { actions: projectCodexAttentionActions(method, source, event.codexReceipt.requestDigest) } : {}),
   };
   return {
     kind,
@@ -429,22 +439,26 @@ export function projectEngineHostEvent(
   }
   if (event.kind === "attention") {
     const projected = attentionProjection(engine, event);
-    return {
-      ...base,
-      kind: "attention",
-      payload: {
-        id: event.id,
-        conversationId,
-        kind: projected.kind,
-        state: "open",
-        unowned: record(event.attention).unowned === true,
-        createdAt: new Date().toISOString(),
-        request: projected.request,
-        turnId: projected.turnId,
-        isBlocking: projected.isBlocking,
-        ...(projected.autoResolutionMs !== undefined ? { autoResolutionMs: projected.autoResolutionMs } : {}),
-      },
+    const payload = {
+      id: event.id,
+      conversationId,
+      kind: projected.kind,
+      state: event.codexReceipt?.dispatch && !event.codexReceipt.recovery ? "resolving" : "open",
+      unowned: record(event.attention).unowned === true || !!event.codexReceipt?.recovery || !!event.codexReceipt?.protocolError,
+      createdAt: event.codexReceipt?.receivedAt ?? new Date().toISOString(),
+      ...(event.codexReceipt ? { codexReceipt: event.codexReceipt } : {}),
+      request: projected.request,
+      turnId: projected.turnId,
+      isBlocking: projected.isBlocking,
+      ...(projected.autoResolutionMs !== undefined ? { autoResolutionMs: projected.autoResolutionMs } : {}),
     };
+    // Many questions or policy choices can overflow even after text clipping.
+    // Withhold incomplete answer controls; retain the full callback in its ledger.
+    if (engine === "codex" && Buffer.byteLength(JSON.stringify(payload)) > RUNTIME_EVENT_PAYLOAD_LIMIT_BYTES) {
+      payload.request = { detail: "Codex request exceeds the display budget. Its callback remains pending; answer controls are unavailable." };
+      payload.unowned = true;
+    }
+    return { ...base, kind: "attention", payload };
   }
   if (event.kind === "attention-resolved") {
     /* `attentionId` is the field every reducer keys on (the journal's own
@@ -461,6 +475,7 @@ export function projectEngineHostEvent(
         conversationId,
         state: event.resolution === "turn-ended" ? "cancelled" : "resolved",
         resolution: event.resolution,
+        ...(event.codexReceipt ? { codexReceipt: event.codexReceipt } : {}),
       },
     };
   }

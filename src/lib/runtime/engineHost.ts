@@ -1,6 +1,7 @@
 import type { HostMemoryState } from "./agentMemory";
 import type { HostEndCause } from "./hostEndCause";
 import type { NativeQueueHost } from "./nativeQueueExecutor";
+
 import type { SelectedContextRef } from "@/lib/selection/selectedContext";
 
 import type { MessageOrigin } from "./messageOrigin";
@@ -12,6 +13,11 @@ import {
   type StructuredImageRef,
   type StructuredMessageContent,
 } from "./structuredContent";
+
+/** A callback result that must survive control-executor retries. */
+export class StructuredAnswerError extends Error {
+  constructor(message: string, readonly outcome: "uncertain" | "unavailable") { super(message); }
+}
 
 export interface QueueEntry {
   id: string;
@@ -100,8 +106,8 @@ export type RuntimeEvent =
   | { kind: "voice-chunk"; turnId: string; delivery: RuntimeVoiceDelivery; seq: number }
   /** History can infer interruption after a lost process; it carries no operator pause intent. */
   | { kind: "turn-ended"; turnId: string; status: "completed" | "interrupted" | "error"; interruptionSource?: "history"; seq: number }
-  | { kind: "attention"; id: string; method: string; attention: unknown; seq: number }
-  | { kind: "attention-resolved"; id: string; resolution: "answered" | "host-restarted" | "server-resolved" | "turn-ended"; seq: number }
+  | { kind: "attention"; id: string; method: string; attention: unknown; codexReceipt?: import("./codexRequestReceipt").CodexRequestReceipt; seq: number }
+  | { kind: "attention-resolved"; id: string; resolution: "answered" | "host-restarted" | "server-resolved" | "turn-ended"; codexReceipt?: import("./codexRequestReceipt").CodexRequestReceipt; seq: number }
   | { kind: "limits"; snapshot: unknown; seq: number }
   | { kind: "realtime-delivery-progress"; deliveryId: string; digest: string; responseIndex: number; offset: number; seq: number }
   | { kind: "realtime-delivery-acknowledged"; deliveryId: string; digest: string; seq: number }
