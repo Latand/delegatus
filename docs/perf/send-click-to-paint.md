@@ -147,15 +147,73 @@ const isManager = await managerRead;
 
 Use each call site's existing replay guards and captured project value. This starts an existing optional read earlier; it does not authorize dispatch before required payload preparation. A seat GET can reconcile a pending launch, so keep authorization and identity checks server-side and verify pending-seat/rotation cases. No bridge acknowledgement may be committed merely because the identity request finished. The positive-context regression below verifies that both preludes still enter one message. Extend it for a durable attachment, pending bridge acknowledgement, lookup timeout and replay before publishing the implementation.
 
-**Validation and commands.** Scratch source export used `git archive HEAD`, with no branch operation or install. `$AUDIT` below denotes that export's parent; `$RUN` denotes the private environment root; `$GATE` was `$HOME/.cache/delegatus/self-update/bb38046574072bf9/releases/781ecd4c3348/scripts/gate-slot.sh`. Binaries were absolute installed executable paths selected from their package directories; version metadata was read from the same installed packages.
+**Reproducing the native experiment (fix continuation, 2026-10-15).** The
+`native send paint audit` case is now saved in the existing
+`src/components/conversation/conversationWindow.browser.test.tsx` driver. Its
+composer fixture selects production log tailing with `native-paint=1`; the
+existing native runtime fixture accepts Claude as well as Codex. The case
+requires installed native binaries and Chromium, and fails if either engine is
+missing. No account credentials or external model service are needed.
 
-For each before/after and engine combination, the executed native-driver command had this form, with the variables set to those recorded paths and output directories:
+From a source checkout or clean export with matching dependencies, set
+`CHROME_BIN`, `LLV_CODEX_BINARY` and `LLV_CLAUDE_BINARY` to absolute executable
+paths. Set `GATE` to the assigned gate when running in a pipeline; otherwise it
+defaults to the repository gate. Run this single command sequence:
 
 ```sh
-rtk proxy env HOME="$RUN/home" XDG_CONFIG_HOME="$RUN/config"   XDG_CACHE_HOME="$RUN/cache" TMPDIR="$RUN/tmp" LLV_STATE_DIR="$RUN/state"   LLV_VIEWER_CONTROL_URL=http://127.0.0.1:1 LLV_CONVERSATION_BROWSER_TEST=1   CHROME_BIN="$CHROME_BIN" AUDIT_ENGINE="$ENGINE" AUDIT_BINARY="$ENGINE_BIN"   SEND_PAINT_OUT="$AUDIT/native-$SIDE-$ENGINE"   bash "$GATE" bun test   src/components/conversation/conversationWindow.browser.test.tsx   -t 'native send paint audit'
+: "${CHROME_BIN:?Set the installed Chromium executable}"
+: "${LLV_CODEX_BINARY:?Set the installed Codex executable}"
+: "${LLV_CLAUDE_BINARY:?Set the installed Claude executable}"
+PAINT_RUN="$(mktemp -d /var/tmp/send-paint-run.XXXXXX)"
+PAINT_OUT="$PWD/.artifacts/send-paint/$(basename "$PAINT_RUN")"
+mkdir -p "$PAINT_RUN/home" "$PAINT_RUN/config" "$PAINT_RUN/cache" \
+  "$PAINT_RUN/tmp" "$PAINT_RUN/state"
+rtk proxy env HOME="$PAINT_RUN/home" XDG_CONFIG_HOME="$PAINT_RUN/config" \
+  XDG_CACHE_HOME="$PAINT_RUN/cache" TMPDIR="$PAINT_RUN/tmp" \
+  LLV_STATE_DIR="$PAINT_RUN/state" LLV_VIEWER_CONTROL_URL=http://127.0.0.1:1 \
+  LLV_NATIVE_SEND_PAINT_TEST=1 CHROME_BIN="$CHROME_BIN" \
+  LLV_CODEX_BINARY="$LLV_CODEX_BINARY" LLV_CLAUDE_BINARY="$LLV_CLAUDE_BINARY" \
+  SEND_PAINT_OUT="$PAINT_OUT" bash "${GATE:-scripts/gate-slot.sh}" \
+  bun test src/components/conversation/conversationWindow.browser.test.tsx \
+  -t 'native send paint audit'
 ```
 
-The scratch case extends the existing driver. Its instrumentation is described below; the worktree contains only this report. To reproduce, wire the existing native fixture's `handle` to port-0 `/api/runtime/send`, its real transcript through `createLogTailEventStream`, and its receipts/provenance to the existing composer fixture; instrument the marks defined above. Adapt Claude using its existing native loopback-provider test. Run one warm-up and 20 sequential sends per condition, reset identity immediately before each click, and use fresh contexts. Observe both `[data-message-row]` and canonical `[data-feed-kind="user"]` rows. Do not replace native transcript input with `llvHost.echo()`; that belongs only to the separate UI-only control.
+One invocation runs 160 measured sends: 20 per engine, delay (0/500 ms), and
+source condition. Each engine gets a warm-up turn, excluded from the samples.
+Every send uses a fresh browser context and a cold manager cache, waits for
+native idle and for the feed to contain the preceding native user record
+before arming the clock, and traverses the real send handler, runtime journal, engine
+process, native transcript and transcript SSE. The browser mark comes from a
+subscriber to the production log bus. Both canonical row renderers are checked;
+exactly one matching row must be visible with no local-outbox attributes.
+The saved checkpoint also waits for the feed's automatic scroll to bring that
+row inside its clipped viewport. That can add a frame after DOM adoption; the
+historical scratch checkpoint only required DOM adoption. Compare the saved
+before/after groups with each other, keeping the older rows as their own run.
+
+The `before` bundle restores the old bridge-before-manager order at both
+composer preparation sites through the existing fixture bundler. Its source
+matcher refuses a changed or already-serial source shape. The `after` bundle
+uses the current composer unchanged. The driver checks request ordering and
+both preparation barriers for every sample; timing medians remain observations
+under the machine's current load. Neither production source nor the checkout
+is rewritten to run the control. The other fixture users keep synthetic log
+input unless they explicitly select native paint mode.
+
+Outputs under `PAINT_OUT` are `samples.json`, `samples.csv` (the original hop
+columns, milliseconds relative to click), `summary.json` (eight groups of 20,
+linearly interpolated p50/p95), `frames.json` (visibility and geometry), and
+eight PNG frames. Samples are written incrementally, so a failed run retains
+its partial data and a failure frame; only a complete run replaces the
+incomplete summary marker with eight groups covering 160 rows. Fresh evidence goes to a new output directory when retaining multiple
+runs. Engine processes and loopback servers are closed through their owned
+handles; the case removes only its own temporary runtime/browser directory.
+The command's private environment directory remains available for inspection.
+
+The historical audit used scratch adaptations of these same fixtures and an
+older `AUDIT_ENGINE`/`AUDIT_BINARY` invocation, one engine and source condition
+at a time. Its four completed runs and original sample rows below are retained
+as dated observations. The saved case above is the reproducible entry point.
 
 Complete native runs each passed 161 assertions and one browser test (25 unrelated cases filtered out). Their click-time UTC bounds and raw sample hashes are:
 

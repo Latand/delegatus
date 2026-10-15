@@ -4756,3 +4756,210 @@ describe("automatic long-text attachment", () => {
     fs.writeFileSync(path.join(evidence, "readings.json"), `${JSON.stringify(readings, null, 2)}\n`);
   }, 900_000);
 });
+
+describe("native send paint audit", () => {
+  // Explicit native opt-in: an ordinary browser run needs no installed engines.
+  const nativeTest = browserCase(process.env.LLV_NATIVE_SEND_PAINT_TEST === "1");
+  nativeTest("20 sends per engine, delay and scheduling control through native transcripts", async () => {
+    const binaries = { codex: process.env.LLV_CODEX_BINARY, claude: process.env.LLV_CLAUDE_BINARY };
+    for (const [engine, binary] of Object.entries(binaries)) {
+      if (!binary || !path.isAbsolute(binary) || !fs.existsSync(binary)) throw new Error(`LLV_${engine.toUpperCase()}_BINARY must name an installed absolute executable`);
+    }
+    const out = path.resolve(process.env.SEND_PAINT_OUT ?? ".artifacts/send-paint");
+    fs.mkdirSync(out, { recursive: true });
+    // Short owned paths also keep Chromium and the runtime's Unix sockets short.
+    const directory = fs.mkdtempSync(path.join("/var/tmp", "send-paint-"));
+    const originalEnv = { LLV_STATE_DIR: process.env.LLV_STATE_DIR, XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME, XDG_CACHE_HOME: process.env.XDG_CACHE_HOME };
+    const { startNativeCodexRuntime } = await import("@/lib/runtime/fixtures/nativeCodexRuntime");
+    const { createLogTailEventStream, parseLogStreamSubs } = await import("@/lib/logTailStream");
+    const { readDeliveryProgress } = await import("@/lib/runtime/deliveryProgress");
+    const { deliveryDedupToken } = await import("@/lib/runtime/deliveryDedup");
+    const now = () => performance.timeOrigin + performance.now();
+    const wait = async (done: () => Promise<boolean>) => {
+      const deadline = Date.now() + 30_000;
+      while (!await done()) {
+        if (Date.now() >= deadline) throw new Error("native send paint condition timed out");
+        await Bun.sleep(25);
+      }
+    };
+    type Sample = Record<string, number | string | null> & {
+      source: string; engine: string; delay_ms: number; trial: number;
+      post_ms: number; canonical_frame_ms: number;
+    };
+    const samples: Sample[] = [];
+    const frames: Array<{ frame: string; canonicalRows: number; overflowX: number; visible: boolean }> = [];
+    const keys = new Set<string>();
+    const persist = () => {
+      fs.writeFileSync(path.join(out, "samples.json"), JSON.stringify(samples, null, 2) + "\n");
+      if (samples.length) {
+        const columns = Object.keys(samples[0]);
+        fs.writeFileSync(path.join(out, "samples.csv"), [columns.join(","), ...samples.map(row => columns.map(column => row[column] ?? "").join(","))].join("\n") + "\n");
+      } else fs.writeFileSync(path.join(out, "samples.csv"), "");
+      fs.writeFileSync(path.join(out, "frames.json"), JSON.stringify(frames, null, 2) + "\n");
+    };
+    persist();
+    fs.writeFileSync(path.join(out, "summary.json"), JSON.stringify({ status: "incomplete", expectedSamples: 160 }) + "\n");
+    let browser: Browser | null = null;
+    try {
+      browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"], env: { ...process.env, TMPDIR: directory } });
+      for (const engine of ["codex", "claude"] as const) {
+        const runtime = engine === "claude"
+          ? await startNativeCodexRuntime(path.join(directory, engine), binaries.claude!, { engine })
+          : await startNativeCodexRuntime(path.join(directory, engine), binaries.codex!);
+        const timer = setInterval(() => runtime.provider.completeNext(), 5);
+        try {
+          const warm = await runtime.handle(new Request("http://localhost/api/runtime/send", { method: "POST", headers: { "content-type": "application/json" },
+            body: JSON.stringify({ conversationId: runtime.conversationId, idempotencyKey: "native-paint-warmup", text: "Warm up the native fixture.", policy: "interrupt-active" }) }));
+          expect(warm.ok).toBe(true);
+          await wait(async () => fs.existsSync(runtime.artifactPath) && (await runtime.host().health()).status === "idle" && (await runtime.receipts()).some(receipt => receipt.status === "delivered"));
+          let lastNativeAt = 0;
+          let previousText = "Warm up the native fixture.";
+          for (const source of ["before", "after"] as const) {
+            const runOut = path.join(out, `${source}-${engine}`);
+            fs.mkdirSync(runOut, { recursive: true });
+            const wire: Array<{ ingress: number; key: string; operationId: string; status: number }> = [];
+            const publications: Array<{ at: number; text: string }> = [];
+            const served = await serveEvidenceFixture(runOut, "scripts/capture-composer-payloads.fixture.tsx", {
+              "/fixture/receipts": async () => Response.json(await runtime.receipts()),
+              "/api/log/provenance": async () => {
+                const receipts = await runtime.receipts();
+                const messages = engine === "claude" ? Object.fromEntries(runtime.ledger.load(runtime.threadId)
+                  .filter(row => row.delivered && row.engineMessageId).map(row => [row.engineMessageId, {
+                    origin: "operator", submissionId: receipts.find(receipt => receipt.operationId === row.entry.id)?.idempotencyKey,
+                  }])) : {};
+                return Response.json({ messages, occurrences: [], submissions: Object.fromEntries(receipts.map(receipt => [deliveryDedupToken(receipt.operationId), receipt.idempotencyKey])) });
+              },
+              "/api/logs/stream": (request: Request) => {
+                const subs = parseLogStreamSubs(new URL(request.url).searchParams.get("subs"));
+                const stream = createLogTailEventStream(subs, request.signal, artifact => artifact === runtime.artifactPath);
+                return new Response(stream.pipeThrough(new TransformStream({ transform(chunk, controller) {
+                  publications.push({ at: now(), text: new TextDecoder().decode(chunk) });
+                  controller.enqueue(chunk);
+                } })), { headers: { "content-type": "text/event-stream", "cache-control": "no-store" } });
+              },
+              "/api/runtime/send": async (request: Request) => {
+                const ingress = now();
+                const body = await request.clone().json();
+                const response = await runtime.handle(request);
+                const answer = await response.clone().json();
+                wire.push({ ingress, key: body.idempotencyKey, operationId: answer.operationId, status: response.status });
+                return response;
+              },
+            }, { serialComposerPrerequisites: source === "before" });
+            try {
+              for (const delay of [0, 500]) for (let trial = 0; trial < 20; trial++) {
+                const text = `Native paint ${source} ${engine} ${delay} sample ${trial}.`;
+                const query = new URLSearchParams({ runtime: "journal", "native-paint": "1", engine, card: runtime.conversationId, path: runtime.artifactPath });
+                const { context, page, pageErrors } = await openFixture(browser, `${served.base}?${query}`, { width: 1280, height: 900 }, "dark", "en");
+                try {
+                  await page.waitForSelector("textarea");
+                  await page.waitForFunction(() => window.nativePaintReady);
+                  // The feed must have consumed the preceding native record
+                  // before click timing starts in this fresh browser context.
+                  await page.waitForFunction(text => [...document.querySelectorAll('[data-feed-kind="user"]')]
+                    .some(row => row.textContent?.includes(text)), previousText);
+                  await page.evaluate(({ text, delay }) => window.armNativePaintAudit(text, delay), { text, delay });
+                  await page.fill("textarea", text);
+                  await page.click('button[type="submit"]');
+                  await page.waitForFunction(() => Boolean(window.nativePaintAudit?.canonicalFrame), undefined, { timeout: 30_000 });
+                  await wait(async () => (await runtime.host().health()).status === "idle");
+                  const reading = await page.evaluate(() => window.nativePaintAudit!);
+                  const mark = (value: number | undefined) => {
+                    expect(Number.isFinite(value)).toBe(true);
+                    return value!;
+                  };
+                  const click = mark(reading.click);
+                  expect(reading.key).toBeDefined();
+                  expect(keys.has(reading.key!)).toBe(false);
+                  keys.add(reading.key!);
+                  const requests = wire.filter(request => request.key === reading.key);
+                  expect(requests).toHaveLength(1);
+                  const request = requests[0];
+                  expect(request.status).toBeLessThan(300);
+                  const native = fs.readFileSync(runtime.artifactPath, "utf8").trim().split("\n").map(line => JSON.parse(line))
+                    .filter(row => engine === "claude" ? row.type === "user" && JSON.stringify(row.message?.content).includes(text)
+                      : row.type === "response_item" && row.payload?.role === "user" && JSON.stringify(row.payload.content).includes(text));
+                  expect(native).toHaveLength(1);
+                  const nativeAt = mark(Date.parse(native[0].timestamp));
+                  expect(nativeAt).toBeGreaterThanOrEqual(lastNativeAt);
+                  lastNativeAt = nativeAt;
+                  const publication = publications.find(chunk => chunk.at >= click && chunk.text.includes(text));
+                  const progress = readDeliveryProgress([request.operationId]).get(request.operationId);
+                  expect(progress?.originalKey).toBe(reading.key);
+                  const phase = (name: string) => mark(Date.parse(progress?.phaseHistory?.find(phase => phase.phase === name)?.at ?? ""));
+                  const manager = reading.prerequisites.filter(hop => hop.kind === "manager");
+                  const bridge = reading.prerequisites.filter(hop => hop.kind === "bridge");
+                  expect(manager).toHaveLength(1);
+                  expect(bridge).toHaveLength(engine === "codex" ? 1 : 0);
+                  expect(mark(reading.request)).toBeGreaterThanOrEqual(manager[0].end);
+                  if (engine === "codex") {
+                    expect(mark(reading.request)).toBeGreaterThanOrEqual(bridge[0].end);
+                    if (source === "before") expect(manager[0].start).toBeGreaterThanOrEqual(bridge[0].end);
+                    else if (delay) expect(manager[0].start).toBeLessThan(bridge[0].end);
+                  }
+                  expect(mark(reading.browserChunk)).toBeGreaterThanOrEqual(mark(publication?.at));
+                  expect(mark(reading.canonicalFrame)).toBeGreaterThanOrEqual(mark(reading.browserChunk));
+                  expect(reading.canonicalRows).toBe(1);
+                  expect(reading.overflowX).toBe(0);
+                  expect(reading.visible).toBe(true);
+                  expect(pageErrors).toEqual([]);
+                  previousText = text;
+                  samples.push({ source, engine, delay_ms: delay, trial, click_utc: new Date(click).toISOString(),
+                    post_ms: mark(reading.request) - click, handler_ms: request.ingress - click,
+                    queued_ms: phase("queued") - click, dispatching_ms: phase("dispatching") - click,
+                    native_ms: nativeAt - click, echo_ms: mark(Date.parse(progress?.engineEchoAt ?? "")) - click,
+                    server_chunk_ms: mark(publication?.at) - click, browser_chunk_ms: mark(reading.browserChunk) - click,
+                    canonical_frame_ms: mark(reading.canonicalFrame) - click, optimistic_frame_ms: mark(reading.optimisticFrame) - click,
+                    bridge_start_ms: bridge[0] ? bridge[0].start - click : null, bridge_end_ms: bridge[0] ? bridge[0].end - click : null,
+                    seat_start_ms: manager[0].start - click, seat_end_ms: manager[0].end - click,
+                  });
+                  if (trial === 0) {
+                    const frame = `${source}-${engine}-${delay}.png`;
+                    await page.screenshot({ path: path.join(out, frame) });
+                    frames.push({ frame, canonicalRows: reading.canonicalRows!, overflowX: reading.overflowX!, visible: reading.visible! });
+                  }
+                  persist();
+                } catch (error) {
+                  await page.screenshot({ path: path.join(runOut, "failure.png") }).catch(() => {});
+                  fs.writeFileSync(path.join(runOut, "failure.json"), JSON.stringify(await page.evaluate(() => window.nativePaintAudit).catch(() => null), null, 2));
+                  throw error;
+                } finally { await context.close(); }
+              }
+            } finally { served.stop(); }
+            console.log(`native send paint: ${source} ${engine}: 40 samples`);
+          }
+          // Re-read the completed transcript: later turns must not duplicate an
+          // earlier send after its initial canonical checkpoint.
+          const transcript = fs.readFileSync(runtime.artifactPath, "utf8").trim().split("\n").map(line => JSON.parse(line));
+          for (const row of samples.filter(row => row.engine === engine)) {
+            const text = `Native paint ${row.source} ${engine} ${row.delay_ms} sample ${row.trial}.`;
+            expect(transcript.filter(record => engine === "claude" ? record.type === "user" && JSON.stringify(record.message?.content).includes(text)
+              : record.type === "response_item" && record.payload?.role === "user" && JSON.stringify(record.payload.content).includes(text))).toHaveLength(1);
+          }
+        } finally { clearInterval(timer); await runtime.close(); }
+      }
+      expect(samples).toHaveLength(160);
+      const percentile = (rows: number[], p: number) => {
+        rows.sort((a, b) => a - b);
+        const index = (rows.length - 1) * p;
+        const lower = Math.floor(index);
+        return rows[lower] + (rows[Math.ceil(index)] - rows[lower]) * (index - lower);
+      };
+      const summary = ["codex", "claude"].flatMap(engine => [0, 500].flatMap(delay => ["before", "after"].map(source => {
+        const group = samples.filter(row => row.engine === engine && row.delay_ms === delay && row.source === source);
+        expect(group).toHaveLength(20);
+        return { source, engine, delay_ms: delay, count: group.length,
+          post_p50_ms: percentile(group.map(row => row.post_ms), 0.5), post_p95_ms: percentile(group.map(row => row.post_ms), 0.95),
+          canonical_frame_p50_ms: percentile(group.map(row => row.canonical_frame_ms), 0.5), canonical_frame_p95_ms: percentile(group.map(row => row.canonical_frame_ms), 0.95) };
+      })));
+      fs.writeFileSync(path.join(out, "summary.json"), JSON.stringify(summary, null, 2) + "\n");
+      console.log(JSON.stringify(summary));
+    } finally {
+      await browser?.close();
+      for (const [key, value] of Object.entries(originalEnv)) {
+        if (value === undefined) delete process.env[key]; else process.env[key] = value;
+      }
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  }, 360_000);
+});
