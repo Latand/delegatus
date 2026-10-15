@@ -312,10 +312,11 @@ function deputyDrainAuthorityCurrent(
   registry: AgentRegistry,
 ): boolean {
   const keyedAttempt = /^deputy_ask_[a-f0-9]{40}$/.test(request.clientMessageId);
+  if (!keyedAttempt) return true;
   const file = readDeputyFileOrNull();
-  if (!file) return !keyedAttempt;
+  if (!file) return false;
   const named = deputyNamingIn(file, { conversationId: request.conversationId, path: request.path });
-  if (!named) return !keyedAttempt;
+  if (!named) return false;
   const deputy = named.deputy;
   if (!deputy || deputy.state !== "pending"
     || deputy.deputyConversationId !== request.conversationId
@@ -334,6 +335,7 @@ async function deputyDrainFence(
   operationId: string,
   registry: AgentRegistry,
 ): Promise<HeldStructuredMessageOutcome | undefined> {
+  if (!/^deputy_ask_[a-f0-9]{40}$/.test(request.clientMessageId)) return undefined;
   let verdict: "allowed" | "rejected" | "busy";
   try {
     verdict = await withViewerOperation("runtime.delivery.deputy-authority", () => withAccountMutationLockAsync(() => {
