@@ -302,7 +302,7 @@ export async function runStateWriterSample(): Promise<void> {
     if (fs.existsSync(filename)) {
       const db = new Database(filename, { readonly: true });
       try {
-        fs.writeFileSync(path.join(root, "final-rows.json"), JSON.stringify(db.query("SELECT collection,row_key,value_json,row_revision FROM state_rows ORDER BY collection,row_key").all()));
+        fs.writeFileSync(path.join(root, "final-rows.json"), JSON.stringify(db.query("SELECT * FROM state_rows ORDER BY collection,row_key").all()));
       } finally { db.close(); }
       const receipts = new Database(path.join(env.LLV_STATE_DIR!, "mcp-receipts.sqlite"), { readonly: true });
       try {

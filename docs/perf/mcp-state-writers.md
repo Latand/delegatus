@@ -652,6 +652,12 @@ normalized hashes retain numeric SQL revisions; concurrent revision ordering,
 shared-task guard outcomes and the 100-entry create-receipt cap are also checked
 against each sample's committed history.
 
+New snapshots include all six durable columns: collection, key, value, order,
+numeric revision and controller flag. Comparer controls reconcile a complete
+sample with every mutation reply replaced by unknown, and reject independent
+changes to row order and the controller flag. Archived four-column diagnostics
+remain readable with their original, narrower comparison boundary.
+
 Run from a clean candidate checkout with its dependencies installed. `GATE`
 names the supplied owned runner; `SQLITE_INCLUDE` names the directory containing
 `sqlite3ext.h`. Omitting `--seed` and `--capabilities` generates a fresh synthetic

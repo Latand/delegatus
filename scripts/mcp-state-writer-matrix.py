@@ -112,10 +112,13 @@ def committed_history(root, sample):
         with mirror:
             for statement in statements:
                 mirror.execute(statement["sql"])
-    rows = [{"collection": c, "row_key": k, "value_json": v, "row_revision": r}
-            for c, k, v, r in mirror.execute("SELECT collection,row_key,value_json,row_revision FROM state_rows ORDER BY collection,row_key")]
-    mirror.close()
     actual = json.loads((sample / "final-rows.json").read_text())
+    # Historical diagnostic records retained four columns. New samples retain
+    # every persisted column, including ordering and the controller index flag.
+    columns = list(actual[0])
+    rows = [dict(zip(columns, row)) for row in mirror.execute(
+        "SELECT " + ",".join(columns) + " FROM state_rows ORDER BY collection,row_key")]
+    mirror.close()
     return {"transactions": len(transactions), "effects": effects, "replayMatchesFinalRows": rows == actual,
             "replayedRowSha256": checksum_json(rows), "finalRowSha256": checksum_json(actual)}
 
@@ -128,8 +131,12 @@ def compare_samples(root):
     the history checks below report those separately from corruption.
     """
     with sqlite3.connect(f"file:{root / 'seed' / 'state.sqlite'}?mode=ro", uri=True) as db:
-        seed = {(c, k): {"collection": c, "row_key": k, "value_json": json.loads(v), "row_revision": r}
-                for c, k, v, r in db.execute("SELECT collection,row_key,value_json,row_revision FROM state_rows")}
+        columns = [row[1] for row in db.execute("PRAGMA table_info(state_rows)")]
+        full_seed = {}
+        for values in db.execute("SELECT * FROM state_rows"):
+            row = dict(zip(columns, values))
+            row["value_json"] = json.loads(row["value_json"])
+            full_seed[(row["collection"], row["row_key"])] = row
     results = {}
     for sample in sorted(root.iterdir()):
         if not (sample / "report.json").exists():
@@ -137,6 +144,7 @@ def compare_samples(root):
         calls = json.loads((sample / "calls.json").read_text())
         rows = [{**row, "value_json": json.loads(row["value_json"])}
                 for row in json.loads((sample / "final-rows.json").read_text())]
+        seed = {key: {field: row[field] for field in rows[0]} for key, row in full_seed.items()}
         manifest = json.loads((sample / "manifest.json").read_text())
         by_key = {(row["collection"], row["row_key"]): row for row in rows}
         replacements, violations, creates, updates = {}, [], {}, {}
@@ -265,7 +273,7 @@ def compare_samples(root):
         settled = normalize(effective)
         results[sample.name] = {"rows": len(rows), "responses": len(calls), "normalizedRowSha256": checksum_json(normalized_rows),
                                 "normalizedResponseSha256": checksum_json(responses), "settledResponseSha256": checksum_json(settled),
-                                "numericRowRevisionsRetained": True, "unresolvedMutations": unresolved,
+                                "numericRowRevisionsRetained": True, "durableColumns": sorted(rows[0]), "unresolvedMutations": unresolved,
                                 "unknownMutationRepliesAtReconciliation": unknown_replies, "unknownRepliesWithCommittedEffect": resolved_committed,
                                 "unknownRepliesWithNoCommitAtTeardown": resolved_no_commit,
                                 "committedHistoryReplayMatchesFinalRows": history["replayMatchesFinalRows"],
