@@ -60,6 +60,13 @@ environment. Both Bun spawn forms supply it explicitly, including synchronous
 calls whose native default otherwise uses the startup environment. Explicit
 fixture environments still take precedence.
 
+The preload also sets `GIT_TEMPLATE_DIR` to an empty directory in the run
+root. `git init` copies template hooks, including symlinks, into a fixture
+repository; an inherited template could otherwise point a fixture hook write
+back at a shared generated hook. The isolation regression supplies that
+symlink and checks the inherited hook body byte-for-byte after each nested
+runner finishes.
+
 Every reused generated hook is checked against the SHA-256 of its expected
 body, with a bounded read and executable-mode validation. Invalid bodies,
 links and missing hooks are atomically replaced and logged by hook name and
@@ -81,7 +88,9 @@ bun test src/lib/testing/testChildren.test.ts
 
 The isolation file replays the removed fixture's discovery and write against a
 synthetic inherited guard for Node and both Bun spawn forms. It also checks a
-missing HOME and that a newly generated guard stays within the test root.
+missing HOME and that a newly generated guard stays within the test root. Its
+template case checks that a copied hook symlink cannot redirect the fixture
+write.
 The guard file covers foreign and same-size bodies, oversized files, missing
 hooks, symlinks (including generated roots), executable mode, failed replacement cleanup and repair in a
 fresh process. Existing cases exercise native policy copies, identity refusal,

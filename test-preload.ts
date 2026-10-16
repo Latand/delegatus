@@ -60,6 +60,11 @@ for (const key of ["HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME"]) {
 
 process.env.GIT_CONFIG_NOSYSTEM = "1";
 process.env.GIT_CONFIG_GLOBAL = path.join(process.env.HOME!, ".gitconfig");
+// `git init` copies hooks from GIT_TEMPLATE_DIR, including symlinks. A fixture
+// that then writes through its repository hook path could otherwise overwrite
+// a hook outside its root even though core.hooksPath is isolated.
+process.env.GIT_TEMPLATE_DIR = path.join(run.root, "git-template");
+fs.mkdirSync(process.env.GIT_TEMPLATE_DIR, { recursive: true, mode: 0o700 });
 
 beginTestChildOwnership(run.root);
 afterAll(() => run.release());

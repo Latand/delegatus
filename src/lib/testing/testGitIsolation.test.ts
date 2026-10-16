@@ -13,6 +13,10 @@ test.each(["node", "node-no-home", "bun", "bun-object", "bun-sync", "bun-sync-ob
     fs.mkdirSync(inherited);
     const hook = path.join(inherited, "pre-push");
     fs.writeFileSync(hook, "inherited guard body\n");
+    const template = path.join(root, "git-template");
+    const templateHooks = path.join(template, "hooks");
+    fs.mkdirSync(templateHooks, { recursive: true });
+    fs.symlinkSync(hook, path.join(templateHooks, "pre-push"));
     const home = path.join(root, "launch-home"); fs.mkdirSync(home);
     fs.writeFileSync(path.join(home, ".gitconfig"), `[core]\n hooksPath = ${inherited.replaceAll("\\", "/")}\n`);
     fs.writeFileSync(path.join(root, "bunfig.toml"), `[test]\npreload = [${JSON.stringify(path.resolve("test-preload.ts"))}]\n`);
@@ -51,7 +55,7 @@ test.each(["node", "node-no-home", "bun", "bun-object", "bun-sync", "bun-sync-ob
     `);
     const result = spawnSync(process.execPath, ["test", "./fixture.test.ts"], { cwd: root, encoding: "utf8", timeout: 30_000,
       env: { ...process.env, LLV_STATE_DIR: undefined, HOME: runner === "node-no-home" ? undefined : home, XDG_CONFIG_HOME: home, GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "core.hooksPath",
-        GIT_CONFIG_VALUE_0: inherited, LLV_AGENT_GIT_GUARD_DIR: inherited, LLV_STAGE_GIT_RECEIPT: path.join(root, "foreign-receipt") } });
+        GIT_CONFIG_VALUE_0: inherited, GIT_TEMPLATE_DIR: template, LLV_AGENT_GIT_GUARD_DIR: inherited, LLV_STAGE_GIT_RECEIPT: path.join(root, "foreign-receipt") } });
     expect(result.status, result.stdout + result.stderr).toBe(0);
     expect(fs.readFileSync(hook, "utf8")).toBe("inherited guard body\n");
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
