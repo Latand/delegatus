@@ -476,8 +476,7 @@ Rendered evidence: the kanban driver's «role avatars» block
 
 ## 11. Dark theme: no keyline
 
-> «На тёмной теме подсветка делегатусов какая-то вокруг иконок, лишняя, мне кажется.»
-> (operator, 2026-10-16)
+On 2026-10-16 the pale glow around the Delegatus avatars in the dark theme was judged unnecessary.
 
 The keyline of §9 (dilate the drawing's alpha by 1.2, flood `#FFF6EE` at 0.55)
 read on the dark card as a pale halo round every figure, in the conversation

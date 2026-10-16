@@ -143,6 +143,7 @@ interface ControllerState {
   /* Optional: a controller published by a bundle realm built before #2515
      shares this object and has no such hook. */
   settleHostlessSessions?: (() => Promise<number>) | null;
+  updateStartupDeferral?: ((conversationId: string, deferred: boolean) => void) | null;
   completeActive: ((adopted: readonly StructuredDeliveryHost[], progress?: (phase: StructuredHostStartupPhase) => void, assertActive?: () => void, deferredConversationIds?: ReadonlySet<string>) => Promise<void>) | null;
   stopActive: () => void;
   lastDrainError?: string | null;
@@ -219,6 +220,7 @@ function retireStructuredDeliveryPublication(): void {
   state.terminateActiveHost = null;
   state.settleHostlessSessions = null;
   state.completeActive = null;
+  state.updateStartupDeferral = null;
   setStructuredDeliveryKick(null);
   markStructuredDeliveryControllerUnavailable();
 }
@@ -768,7 +770,7 @@ export async function bindStructuredDeliveryQueue(
   // the remaining hosts. Their original queued operations must wait for those
   // seats instead of attempting competing recovery and terminalizing them.
   let startupPending = dependencies.deferStartupWork === true;
-  let deferredStartupConversations: ReadonlySet<string> = new Set();
+  let deferredStartupConversations = new Set<string>();
   let scheduleAutomaticRetry = () => {};
   let requestDrain = () => {};
   const nativeReconciliations = new Map<string, Promise<void>>();
@@ -1941,6 +1943,7 @@ export async function bindStructuredDeliveryQueue(
       state.detachRetiredActiveHost = null;
       state.settleHostlessSessions = null;
       state.completeActive = null;
+      state.updateStartupDeferral = null;
       setStructuredDeliveryKick(null);
     }
   };
@@ -1971,7 +1974,7 @@ export async function bindStructuredDeliveryQueue(
          down controller never gets to mutate the registry. Do this before
          registering hosts so even a registration-triggered drain sees the
          repaired durable state. */
-      deferredStartupConversations = deferredConversationIds;
+      deferredStartupConversations = new Set(deferredConversationIds);
       registry.repairCompletedStructuredSpawnMarkers();
       await phase("registering structured delivery hosts");
       for (const item of items) await register(item);
@@ -2029,6 +2032,11 @@ export async function bindStructuredDeliveryQueue(
     return completion;
   };
   state.completeActive = complete;
+  state.updateStartupDeferral = (conversationId, deferred) => {
+    if (stopped || state.activeQueue !== queue) throw new StructuredDeliveryControllerUnavailableError();
+    if (deferred) deferredStartupConversations.add(conversationId);
+    else deferredStartupConversations.delete(conversationId);
+  };
   state.settleHostlessSessions = settleHostlessSessions;
   const settleIntervalMs = dependencies.hostlessSettleIntervalMs ?? HOSTLESS_SETTLE_INTERVAL_MS;
   if (settleIntervalMs > 0) {
@@ -2174,6 +2182,13 @@ export async function publishStructuredDeliveryHost(
   ownsOperation?: () => Promise<boolean>,
 ): Promise<() => Promise<void>> {
   return requireStructuredDeliveryControllerPublication()(item, ownsOperation);
+}
+
+/** Adjust one startup row without replaying historical publication or disturbing
+ * another row's hand-over fence. */
+export function updateStructuredStartupDeferral(registry: AgentRegistry, conversationId: string, deferred: boolean): void {
+  if (state.activeRegistry !== registry || !state.updateStartupDeferral) throw new StructuredDeliveryControllerUnavailableError();
+  state.updateStartupDeferral(conversationId, deferred);
 }
 
 export async function completeStructuredDeliveryQueueStartup(
