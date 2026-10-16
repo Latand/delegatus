@@ -26,6 +26,7 @@ const GRANT_COLLECTIONS = new Set(["entries", "receipts", "conversations", "line
 const SNAPSHOT_SPAWN_ALIAS_LIMIT = 64;
 const SNAPSHOT_TITLE_CONVERSATION_LIMIT = 2_000;
 const SNAPSHOT_TITLE_OWNED_PATH_LIMIT = 128;
+const WRITER_SNAPSHOT_CACHE_ROW_LIMIT = 8_192;
 
 /** Archive storage retains each current row in registry_rows for older
     readers. Selecting its keys here avoids sorting every candidate through
@@ -571,6 +572,13 @@ export interface SqliteRegistryMutation<T> {
   revision: number;
 }
 
+export interface RegistryDeliveryCompactionChanges {
+  changeId: number;
+  full: boolean;
+  deliveryIds: string[];
+  ownerOperationIds: string[];
+}
+
 export class RegistryMutationRetryLimitError extends Error {
   override name = "RegistryMutationRetryLimitError";
   constructor(readonly operationName: string, readonly attempts: number) {
@@ -643,6 +651,72 @@ export type DecidedRegistryFile = RegistryFile & { readonly [DECIDED]: true };
 
 type StampedSnapshot = SqliteRegistrySnapshot & { stamp: string };
 
+/** Mutable snapshots own their changes. Accessors defer copying a row until
+    the caller reads it; JSON serialization and structuredClone still read a
+    complete, ordinary object. Cold rows remain pinned to the reader view that
+    created the snapshot. */
+function detachedWriterSnapshot(source: RegistryFile): RegistryFile {
+  const detached = {} as RegistryFile;
+  for (const field of Object.keys(source) as Array<keyof RegistryFile>) {
+    if (!ROW_COLLECTION_KEYS.has(field)) {
+      Object.defineProperty(detached, field, {
+        enumerable: true, configurable: true, writable: true, value: structuredClone(source[field]),
+      });
+      continue;
+    }
+    const collection = field as RowCollection;
+    const install = (value: unknown) => Object.defineProperty(detached, collection, {
+      enumerable: true, configurable: true, writable: true, value,
+    });
+    Object.defineProperty(detached, collection, {
+      enumerable: true, configurable: true,
+      set: install,
+      get: () => {
+        const rows: Record<string, unknown> = {};
+        for (const key of Object.keys(source[collection])) {
+          const put = (value: unknown) => Object.defineProperty(rows, key, {
+            enumerable: true, configurable: true, writable: true, value,
+          });
+          Object.defineProperty(rows, key, {
+            enumerable: true, configurable: true, set: put,
+            get: () => {
+              const value = structuredClone((source[collection] as Record<string, unknown>)[key]);
+              put(value);
+              return value;
+            },
+          });
+        }
+        install(rows);
+        return rows;
+      },
+    });
+  }
+  return detached;
+}
+
+/** Keep hot normalized rows in the writer owner. A cold property remains a
+    reader-view accessor, so it is parsed only when the writer asks for it. */
+function mergedWriterRows(
+  hot: Record<string, unknown>,
+  merged: Record<string, unknown>,
+): Record<string, unknown> {
+  return new Proxy(hot, {
+    get: (target, property, receiver) => Object.hasOwn(target, property)
+      ? Reflect.get(target, property, receiver)
+      : Reflect.get(merged, property, merged),
+    set: (target, property, value) => Reflect.set(target, property, value),
+    deleteProperty: (target, property) => Reflect.deleteProperty(target, property),
+    has: (target, property) => Reflect.has(target, property) || Reflect.has(merged, property),
+    ownKeys: () => Reflect.ownKeys(merged),
+    getOwnPropertyDescriptor: (target, property) => {
+      const hotDescriptor = Reflect.getOwnPropertyDescriptor(target, property);
+      if (hotDescriptor) return hotDescriptor;
+      const coldDescriptor = Reflect.getOwnPropertyDescriptor(merged, property);
+      return coldDescriptor ? { ...coldDescriptor, configurable: true } : undefined;
+    },
+  });
+}
+
 interface LazyRegistrySnapshot extends SqliteRegistrySnapshot {
   file: DecidedRegistryFile;
   changes(): RegistryChanges;
@@ -707,6 +781,13 @@ export class SqliteAgentRegistryStore {
   private preparedReader: SqliteAgentRegistryStore | null = null;
   private preparingReader: Promise<SqliteRegistrySnapshot> | null = null;
   private closed = false;
+  /** Used while the wrapper retires a replaced inode, letting issued cold
+      snapshots finish against their still-open reader connection. */
+  private snapshotReadDatabase: BunDatabase | null = null;
+  /** Weak ownership keeps issued snapshots detached without retaining callers'
+      snapshots for the lifetime of the store. A close materializes only the
+      snapshots callers still hold, before their lazy archive readers close. */
+  private readonly issuedSnapshots = new Set<WeakRef<RegistryFile>>();
   private readonly normalize: (value: unknown, mode?: { deferStoredGrantDecision: true }) => RegistryFile;
   private readonly normalizePartial: (value: unknown) => RegistryFile;
   private readonly onCreditGuardChange: (() => void) | undefined;
@@ -724,6 +805,15 @@ export class SqliteAgentRegistryStore {
   /** Stamped like the grant record: a complete snapshot is only ever handed
       out again over exactly the database it was loaded from. */
   private readOnlyCache: StampedSnapshot | null = null;
+  /** One current writer source. Rows share the immutable reader's values;
+      archive versions and grant/dependency tokens permit keyed refreshes.
+      Callers own detached copies and cannot change this source. */
+  private writerSnapshotCache: {
+    source: RegistryFile; revision: number; stamp: string; view: RegistryFile; rowCount: number;
+  } | null = null;
+  /** Leave the first call on the existing reader path; later calls may build
+      the bounded writer view even when another writer advances revision. */
+  private writerSnapshotStarted = false;
   private snapshotChangeId = 0;
   private readOnlyHotFile: RegistryFile | null = null;
   private readonly coldReaderRows = new Map<number, { stamp: string; row: unknown }>();
@@ -856,7 +946,7 @@ export class SqliteAgentRegistryStore {
         const db = new Database(filename, { readonly: true, strict: true });
         db.exec("PRAGMA busy_timeout = 5000");
         return db;
-      }, { reopened: (db) => this.onDatabaseReopened(db) });
+      }, { reopened: (db, previous) => this.onDatabaseReopened(db, previous) });
       const table = this.db.query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'registry_meta'").get();
       if (!table || !this.imported()) {
         this.db.close();
@@ -913,7 +1003,7 @@ export class SqliteAgentRegistryStore {
         db.transaction(() => installRegistryArchive(db)).immediate();
       }
       return db;
-    }, { reopened: (db) => this.onDatabaseReopened(db) });
+    }, { reopened: (db, previous) => this.onDatabaseReopened(db, previous) });
     this.grantJournalReady = true;
     this.changesReady = Boolean(this.db.query("SELECT 1 FROM sqlite_master WHERE name='registry_changes'").get());
     this.recordsSource = this.changesReady ? "registry_records" : "registry_rows";
@@ -1145,17 +1235,53 @@ export class SqliteAgentRegistryStore {
   }
 
   close(): void {
-    this.closed = true;
-    this.preparedReader?.close();
-    this.db.close();
+    try {
+      this.preserveIssuedSnapshots();
+    } finally {
+      this.closed = true;
+      this.writerSnapshotCache = null;
+      this.writerSnapshotStarted = false;
+      try { this.preparedReader?.close(); }
+      finally { this.db.close(); }
+    }
   }
 
-  private onDatabaseReopened(db: BunDatabase): void {
+  private preserveIssuedSnapshots(): void {
+    for (const reference of this.issuedSnapshots) {
+      const file = reference.deref();
+      this.issuedSnapshots.delete(reference);
+      if (!file) continue;
+      // Archived properties are lazy database readers. Resolve them in the
+      // dependency order while the connection is open; afterward each issued
+      // mutable snapshot owns ordinary cloned row values.
+      for (const collection of ROW_COLLECTIONS) {
+        const rows = file[collection] as Record<string, unknown>;
+        for (const key of Object.keys(rows)) void rows[key];
+      }
+    }
+  }
+
+  private trackIssuedSnapshot(snapshot: SqliteRegistrySnapshot): SqliteRegistrySnapshot {
+    for (const reference of this.issuedSnapshots) {
+      if (!reference.deref()) this.issuedSnapshots.delete(reference);
+    }
+    this.issuedSnapshots.add(new WeakRef(snapshot.file));
+    return snapshot;
+  }
+
+  private onDatabaseReopened(db: BunDatabase, previousDb?: BunDatabase): void {
+    if (previousDb) {
+      this.snapshotReadDatabase = previousDb;
+      try { this.preserveIssuedSnapshots(); }
+      finally { this.snapshotReadDatabase = null; }
+    }
     // A restored file may have the same revision and counter stamp as the file
     // it replaced. No parsed row or assembled grant from the old inode holds.
     this.rowCache.clear();
     this.revisionCache = null;
     this.readOnlyCache = null;
+    this.writerSnapshotCache = null;
+    this.writerSnapshotStarted = false;
     this.readOnlyHotFile = null;
     this.coldReaderRows.clear();
     this.coldStableRows.clear();
@@ -1183,8 +1309,53 @@ export class SqliteAgentRegistryStore {
   }
 
   snapshot(): SqliteRegistrySnapshot {
-    const { file, revision } = this.loadSnapshot(false);
-    return { file, revision };
+    // Preparation transfers ownership to its read connection; keep one cache.
+    if (this.preparedReader) return this.preparedReader.snapshot();
+    return performanceSpans.sync("registry.writer-snapshot", () => {
+      const previous = this.writerSnapshotCache;
+      if (previous) {
+        const { file: view, revision } = this.readOnlySnapshot();
+        const stamp = this.readOnlyCache!.stamp;
+        if (previous.view === view && previous.revision === revision && previous.stamp === stamp) {
+          return this.trackIssuedSnapshot({ file: detachedWriterSnapshot(previous.source), revision });
+        }
+        this.writerSnapshotCache = null;
+      }
+
+      const { file: view, revision } = this.readOnlySnapshot();
+      const stamp = this.readOnlyCache!.stamp;
+      if (!this.writerSnapshotStarted) {
+        this.writerSnapshotStarted = true;
+        return this.trackIssuedSnapshot({ file: detachedWriterSnapshot(view), revision });
+      }
+
+      const collections = new Map<RowCollection, { rows: Record<string, unknown>; hotKeys: string[] }>();
+      let rowCount = 0;
+      for (const collection of ROW_COLLECTIONS) {
+        const rows = view[collection] as Record<string, unknown>;
+        const cold = this.coldViewCache?.coldKeys.get(collection);
+        const hotKeys = Object.keys(rows).filter(key => !cold?.has(key));
+        rowCount += hotKeys.length;
+        collections.set(collection, { rows, hotKeys });
+      }
+      if (rowCount > WRITER_SNAPSHOT_CACHE_ROW_LIMIT) {
+        return this.trackIssuedSnapshot({ file: detachedWriterSnapshot(view), revision });
+      }
+
+      const source = this.normalizePartial({ version: 2, entries: {}, receipts: {} });
+      for (const field of META_FIELDS) {
+        (source as unknown as Record<string, unknown>)[field] = view[field];
+      }
+      for (const collection of ROW_COLLECTIONS) {
+        const { rows, hotKeys } = collections.get(collection)!;
+        const hot: Record<string, unknown> = {};
+        for (const key of hotKeys) hot[key] = rows[key];
+        (source as unknown as Record<string, unknown>)[collection] = mergedWriterRows(hot, rows);
+      }
+      Object.freeze(source);
+      this.writerSnapshotCache = { source, revision, stamp, view, rowCount };
+      return this.trackIssuedSnapshot({ file: detachedWriterSnapshot(source), revision });
+    });
   }
 
   private loadSnapshot(useRowCache: boolean): StampedSnapshot {
@@ -1278,6 +1449,8 @@ export class SqliteAgentRegistryStore {
             // a quiet interval and rebuilding all history on every commit.
             const current = reader.readOnlySnapshot();
             this.readOnlyCache = null;
+            this.writerSnapshotCache = null;
+            this.writerSnapshotStarted = false;
             this.readOnlyHotFile = null;
             this.coldViewCache = null;
             this.readerViews.clear();
@@ -1336,6 +1509,38 @@ export class SqliteAgentRegistryStore {
 
   private changeId(): number {
     return this.changesReady ? this.db.query<{ seq: number }, []>("SELECT COALESCE(MAX(seq),0) AS seq FROM registry_changes").get()!.seq : 0;
+  }
+
+  /** A monotone cursor for delivery compaction; unrelated registry rows do not
+      make the expensive pass run again. */
+  deliveryCompactionChangeId(): number {
+    return this.changesReady
+      ? this.db.query<{ seq: number }, []>(`SELECT COALESCE(MAX(seq),0) AS seq FROM registry_changes
+          WHERE collection IN ('heldDeliveries','deliveryOperationOwners','conversationAliases')`).get()!.seq
+      : this.revision();
+  }
+
+  /** Changed delivery and owner keys since the last pass. A trimmed journal or
+      alias change makes the caller reconcile the complete owner set. */
+  deliveryCompactionChangesSince(since: number | null): RegistryDeliveryCompactionChanges {
+    if (!this.changesReady) return { changeId: this.revision(), full: true, deliveryIds: [], ownerOperationIds: [] };
+    const changeId = this.deliveryCompactionChangeId();
+    const first = this.db.query<{ seq: number }, []>("SELECT COALESCE(MIN(seq),0) AS seq FROM registry_changes").get()!.seq;
+    if (since === null || changeId < since || (first > 0 && since < first - 1)) {
+      return { changeId, full: true, deliveryIds: [], ownerOperationIds: [] };
+    }
+    const changes = this.db.query<{ collection: string; row_key: string }, [number]>(
+      "SELECT DISTINCT collection,row_key FROM registry_changes WHERE seq>? AND collection IN ('heldDeliveries','deliveryOperationOwners','conversationAliases')",
+    ).all(since);
+    if (changes.some(change => change.collection === "conversationAliases")) {
+      return { changeId, full: true, deliveryIds: [], ownerOperationIds: [] };
+    }
+    return {
+      changeId,
+      full: false,
+      deliveryIds: changes.filter(change => change.collection === "heldDeliveries").map(change => change.row_key),
+      ownerOperationIds: changes.filter(change => change.collection === "deliveryOperationOwners").map(change => change.row_key),
+    };
   }
 
   private refreshColdKeys(): void {
@@ -1874,7 +2079,9 @@ export class SqliteAgentRegistryStore {
   ): () => unknown {
     return () => {
       // The immutable version id pins payload truth for an already-held view.
-      if (databaseFileIdentity(this.filename) !== identity) throw new DatabaseReplacedError("registry view was replaced; request a fresh snapshot");
+      if (!this.snapshotReadDatabase && databaseFileIdentity(this.filename) !== identity) {
+        throw new DatabaseReplacedError("registry view was replaced; request a fresh snapshot");
+      }
       /* An operation owner normalizes against its delivery, which commits
          can change; every other archived row reads the same until its
          pinned grant decision is replaced. */
@@ -1891,7 +2098,8 @@ export class SqliteAgentRegistryStore {
         this.coldReaderRows.delete(id); this.coldReaderRows.set(id,cached);
         return cached.row;
       }
-      const raw = this.db.query<{ value_json: string }, [number]>("SELECT value_json FROM registry_archive WHERE id=?").get(id);
+      const raw = (this.snapshotReadDatabase ?? this.db)
+        .query<{ value_json: string }, [number]>("SELECT value_json FROM registry_archive WHERE id=?").get(id);
       if (!raw) throw new Error("registry archive version is missing");
       this.onRowPayloadRead?.(collection,1);
       this.onRowPayloadParse?.(collection,1);
@@ -1900,6 +2108,15 @@ export class SqliteAgentRegistryStore {
       const normalized = this.normalizePartial({ version: 2,entries: {},receipts: {},[collection]: { [key]: value },
         ...(delivery ? { heldDeliveries: { [delivery.id]: delivery } } : {}) });
       let row = (normalized[collection] as Record<string, unknown>)[key];
+      if (row === undefined && collection === "deliveryOperationOwners" && deliveries) {
+        // The complete loader also synthesizes an owner from its delivery
+        // when an archived legacy owner is malformed. Keep that behavior for
+        // a lazy archived read, using the delivery set pinned by this view.
+        const matching = Object.values(deliveries.read()).find(candidate => candidate.command.operationId === key);
+        if (matching) row = this.normalizePartial({ version: 2,entries: {},receipts: {},
+          heldDeliveries: { [matching.id]: matching },
+        }).deliveryOperationOwners[key];
+      }
       if (pinnedGrants) {
         const candidate = row as GrantProfileRow;
         const profiles = collection === "conversations" ? (candidate.generations ?? []).map(generation => generation.launchProfile) : [candidate.launchProfile];
@@ -2080,6 +2297,8 @@ export class SqliteAgentRegistryStore {
       const deliveries = collection === "deliveryOperationOwners" ? hotDeliveries : undefined;
       const reusable = previous && sameRows(previous.hot,hot) && previous.synthetic === synthetic
         && (!deliveries || sameRows(previous.deliveries,deliveries))
+        && (collection !== "deliveryOperationOwners"
+          || source?.coldSignatures.get("heldDeliveries") === coldSignatures.get("heldDeliveries"))
         && (!READER_GRANT_COLLECTIONS.has(collection) || source!.forgets === this.coldGrantForgets);
       if (reusable) {
         Object.defineProperty(file,collection,{ enumerable: true,configurable: false,get: previous.built });
@@ -3213,7 +3432,7 @@ export class SqliteAgentRegistryStore {
          the subject, its attestors and this transaction's own rewrites of them.
          Assembling the whole file instead read every historical row for each
          grant-bearing write: 20,839 payloads and 1.2 s per write (#2761). */
-      if (!readOnly && this.coldKeys.size && ![...reorderedCollections].some(kind => GRANT_COLLECTIONS.has(kind))) {
+      if (!readOnly && ![...reorderedCollections].some(kind => GRANT_COLLECTIONS.has(kind))) {
         const identity = grantDecisionKey(collection,key);
         if (scopedDecided.has(identity)) return row;
         scopedDecided.add(identity);
@@ -3570,7 +3789,6 @@ export class SqliteAgentRegistryStore {
           }));
           if (changed.size > 0) changes.rows.set(collection, changed);
           if (reorderedCollections.has(collection)) {
-            changes.rows.set(collection, new Set([...Object.keys(baseline), ...Object.keys(current)]));
             changes.order.add(collection);
           }
         }

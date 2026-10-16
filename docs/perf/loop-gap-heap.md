@@ -122,20 +122,19 @@ reported on the pull request.
 
 ## Recorded results
 
-Completed **2026-10-16T14:33:12.947Z**, Bun **1.4.0**, interpreter revision
+Completed **2026-10-16T15:14:10.489Z**, Bun **1.4.0**, interpreter revision
 `34cbb9a40b4bd1bd767d134a7065e66c2432a676`. CPU affinity was 8; the owned gate's CPU quota was
 three cores and its memory cap 8 GiB. The one-core affinity was the tighter
 CPU limit. Both bounds passed the one-point budget.
 
 | Workload | Pairs | Mean added CPU points | Conservative 95% upper bound |
 | --- | ---: | ---: | ---: |
-| idle | 600 | -0.0118 | 0.0602 |
-| load | 600 | 0.1365 | 0.6402 |
+| idle | 600 | 0.0302 | 0.0742 |
+| load | 600 | 0.1338 | 0.6336 |
 
-The negative idle estimate is measurement noise. Aggregate active-time CPU
-rate differences agree with the paired estimates: -0.0117 points at idle and
-+0.1419 points under load. One-lag correlations of the paired differences were
--0.0112 and +0.0377 respectively.
+Aggregate active-time CPU rate differences agree with the paired estimates: +0.0302 points at idle and
++0.1416 points under load. One-lag correlations of the paired differences were
++0.0061 and +0.0106 respectively.
 
 [Accepted measurements](../../evidence/loop-gap-heap/overhead.json) retain every
 block as a row, with explicit column names, source hashes, statistics and
@@ -145,10 +144,11 @@ resource windows. [Capability probe](../../evidence/loop-gap-heap/probe.json),
 retain the calibration record. No values are rounded in the JSON.
 
 The baseline source is main revision `02f9301fc32370210a4af533c1204741c6436f52`.
-Integration includes current main `a880de287`; the intervening monitor changes
+Integration includes main `93bbd3b54`; the intervening monitor changes
 add operations to its TypeScript union. Transpiling the measured and
 integrated monitors produced identical JavaScript hashes, recorded beside the
-original and final source hashes. The heap sampler and benchmark hashes match
+original and final source hashes. Both measurement arms include the merged
+registry watchdog label. The heap sampler, span recorder and benchmark hashes match
 the final source bytes.
 
 The probe advertised no GC entries and delivered none during six explicit
