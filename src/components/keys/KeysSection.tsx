@@ -1,7 +1,7 @@
 "use client";
 
 import { Check, ChevronRight, ClipboardPaste, Copy, Eye, EyeOff, MoreHorizontal } from "lucide-react";
-import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { copyText } from "@/components/feed/CopyButton";
 import { KEYS_CHANGED_EVENT } from "@/components/keys/openKeys";
@@ -31,55 +31,96 @@ type T = ReturnType<typeof useLocale>["t"];
 
 /* ---- Reading and writing ------------------------------------------------ */
 
+/** A save sent and not yet answered: its row shows `entry` meanwhile. */
+interface Save { entry: KeyEntry; seq: number }
+
 /** What a row does to the list while a save is in flight: show the saved state at once, and take it back if the save is refused. */
 interface Optimism {
-  hold: (entry: KeyEntry) => void;
-  /** Ends a held entry; `restore` puts the row back. False when a newer save has replaced it. */
-  release: (entry: KeyEntry, restore: KeyEntry | null) => boolean;
-  adopt: (answer: KeysAnswer) => void;
+  hold: (entry: KeyEntry) => Save;
+  /** The server took the save: its row (and only its row) becomes what the server answered. */
+  accept: (save: Save, answer: KeysAnswer | null) => void;
+  /** The server refused the save; the row goes back to its last confirmed state once none is in flight. True when it is the newest save of its row that has been answered. */
+  refuse: (save: Save) => boolean;
+  /** One row's answer to a write that waited for it. */
+  confirm: (id: KeyId, answer: KeysAnswer) => void;
 }
 
 function useKeys() {
   const [answer, setAnswer] = useState<KeysAnswer | null>(null);
   const [failed, setFailed] = useState(false);
-  /* The rows a save is still answering for: a list read that lands meanwhile must not undo them. */
-  const held = useRef(new Map<KeyId, KeyEntry>());
+  /* The saves each row is still answering for, oldest first. The row shows the newest of them over `answer`, whose
+     rows stay the last ones the server confirmed, so a refusal needs no copy of what the row was. */
+  const pending = useRef(new Map<KeyId, Save[]>());
+  const [overlay, setOverlay] = useState<ReadonlyMap<KeyId, KeyEntry>>(new Map());
   /* Counts saves sent: a list read that began before the latest one describes the keys from before it. */
   const sent = useRef(0);
-  const adopt = useCallback((next: KeysAnswer) => {
-    setAnswer({ ...next, keys: next.keys.map((entry) => held.current.get(entry.id) ?? entry) });
+  /* The newest save of each row the server has answered: an older save answering later cannot put its row back. */
+  const accepted = useRef(new Map<KeyId, number>());
+  /* A list read that began while saves were in flight was not adopted; it is repeated once none is. */
+  const deferred = useRef(false);
+  const publish = useCallback(() => {
+    setOverlay(new Map([...pending.current].flatMap(([id, saves]) => saves.length ? [[id, saves[saves.length - 1].entry] as const] : [])));
   }, []);
-  const hold = useCallback((entry: KeyEntry) => {
-    sent.current += 1;
-    held.current.set(entry.id, entry);
+  const drop = useCallback((save: Save) => {
+    const saves = pending.current.get(save.entry.id) ?? [];
+    const rest = saves.filter((candidate) => candidate !== save);
+    if (rest.length) pending.current.set(save.entry.id, rest); else pending.current.delete(save.entry.id);
+    return rest.length === 0 || rest[rest.length - 1].seq < save.seq;
+  }, []);
+  const mergeRow = useCallback((entry: KeyEntry) => {
     setAnswer((now) => now && { ...now, keys: now.keys.map((candidate) => candidate.id === entry.id ? entry : candidate) });
   }, []);
-  const release = useCallback((entry: KeyEntry, restore: KeyEntry | null) => {
-    if (held.current.get(entry.id) !== entry) return false;
-    held.current.delete(entry.id);
-    if (restore) setAnswer((now) => now && { ...now, keys: now.keys.map((candidate) => candidate.id === entry.id ? restore : candidate) });
-    return true;
-  }, []);
-  const optimism: Optimism = { hold, release, adopt };
+  const hold = useCallback((entry: KeyEntry): Save => {
+    const save = { entry, seq: ++sent.current };
+    pending.current.set(entry.id, [...(pending.current.get(entry.id) ?? []), save]);
+    publish();
+    return save;
+  }, [publish]);
+  const accept = useCallback((save: Save, next: KeysAnswer | null) => {
+    drop(save);
+    /* Only this row is taken from the answer: its other rows were read before saves that may have settled since. */
+    if ((accepted.current.get(save.entry.id) ?? 0) < save.seq) {
+      accepted.current.set(save.entry.id, save.seq);
+      mergeRow(next?.keys.find((candidate) => candidate.id === save.entry.id) ?? save.entry);
+    }
+    publish();
+  }, [drop, mergeRow, publish]);
+  const refuse = useCallback((save: Save) => {
+    const newest = drop(save);
+    publish();
+    /* A newer save the server has taken since makes this refusal old news. */
+    return newest && (accepted.current.get(save.entry.id) ?? 0) < save.seq;
+  }, [drop, publish]);
+  const confirm = useCallback((id: KeyId, next: KeysAnswer) => {
+    const entry = next.keys.find((candidate) => candidate.id === id);
+    if (entry) mergeRow(entry);
+  }, [mergeRow]);
+  const optimism: Optimism = { hold, accept, refuse, confirm };
   const load = useCallback(() => {
     const began = sent.current;
+    const quiet = pending.current.size === 0;
+    if (quiet) deferred.current = false;
     return fetch("/api/keys", { cache: "no-store" })
       .then(async (response) => {
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const next = await response.json() as KeysAnswer;
-        /* A save has gone out since this read began; its own answer re-reads the list. */
-        if (sent.current === began) adopt(next);
+        /* A save went out since this read began (or was in flight when it did); the answer to that save re-reads the list. */
+        if (sent.current === began && quiet) setAnswer(next); else deferred.current = true;
         setFailed(false);
       })
       .catch(() => setFailed(true));
-  }, [adopt]);
+  }, []);
+  useEffect(() => {
+    if (overlay.size === 0 && deferred.current) void load();
+  }, [overlay, load]);
   useEffect(() => {
     const read = () => { void load(); };
     read();
     window.addEventListener(KEYS_CHANGED_EVENT, read);
     return () => window.removeEventListener(KEYS_CHANGED_EVENT, read);
   }, [load]);
-  return { answer, failed, reload: load, optimism };
+  const shown = useMemo(() => answer && (overlay.size ? { ...answer, keys: answer.keys.map((entry) => overlay.get(entry.id) ?? entry) } : answer), [answer, overlay]);
+  return { answer: shown, failed, reload: load, optimism };
 }
 
 async function revealValue(id: KeyId, purpose: "reveal" | "copy"): Promise<string | null> {
@@ -120,7 +161,6 @@ async function writeValue(id: KeyId, value: string): Promise<WriteResult> {
     const response = await fetch(`/api/keys/${id}`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ value }) });
     if (response.ok) {
       const answer = await response.json().catch(() => null) as KeysAnswer | null;
-      window.dispatchEvent(new Event(KEYS_CHANGED_EVENT));
       return { ok: true, answer: answer && Array.isArray(answer.keys) ? answer : null };
     }
     const body = await response.json().catch(() => ({})) as { code?: unknown };
@@ -348,9 +388,10 @@ function useRowActions(entry: KeyEntry, optimism: Optimism) {
   /* The refusal a save met after the row had already taken it: the field comes back with it. */
   const [editError, setEditError] = useState<WriteFailure | null>(null);
   const timer = useRef<number | null>(null);
-  /* Every answer to a reveal belongs to the press that asked for it: Hide, a changed key and leaving the page end it. */
+  /* Every answer to a reveal belongs to the press that asked for it: Hide, a changed key, a save and leaving the page end it. */
   const epoch = useRef(0);
-  const revealing = useRef(false);
+  /* The epoch of the reveal request on its way, null when none. */
+  const revealing = useRef<number | null>(null);
   const flash = (next: Note) => {
     setNote(next);
     if (timer.current !== null) window.clearTimeout(timer.current);
@@ -361,16 +402,18 @@ function useRowActions(entry: KeyEntry, optimism: Optimism) {
     const hide = window.setTimeout(() => setValue(null), 30_000);
     return () => window.clearTimeout(hide);
   }, [value, setValue]);
+  /* A value revealed for another key is dropped for good, not hidden: the mask coming back must not bring it back. */
+  if (revealed && revealed.masked !== entry.masked) setRevealed(null);
   useEffect(() => { epoch.current += 1; }, [entry.masked]);
   useEffect(() => () => { epoch.current += 1; if (timer.current !== null) window.clearTimeout(timer.current); }, []);
   const toggle = async () => {
     if (value !== null) { epoch.current += 1; setValue(null); return; }
     /* A second press before the answer asks for what is already on its way. */
-    if (revealing.current) return;
-    revealing.current = true;
+    if (revealing.current === epoch.current) return;
     const mine = ++epoch.current;
+    revealing.current = mine;
     const answer = await revealValue(entry.id, "reveal");
-    revealing.current = false;
+    if (revealing.current === mine) revealing.current = null;
     if (epoch.current === mine) setValue(answer);
   };
   const copy = async (text: string) => { if (await copyFetched(revealValue(entry.id, "copy"))) flash({ kind: "copied", text }); };
@@ -388,22 +431,25 @@ function useRowActions(entry: KeyEntry, optimism: Optimism) {
   const save = async (typed: string): Promise<WriteFailure | null> => {
     const trimmed = typed.trim();
     if (!validKeyValue(entry.id, trimmed)) return "invalid";
+    /* A replaced key's old value is gone from the page for good, and a reveal still on its way is void. */
+    epoch.current += 1;
+    setRevealed(null);
     if (entry.id === "telegram") {
       const result = await writeValue(entry.id, typed);
       if (!result.ok) return result.error;
-      if (result.answer) optimism.adopt(result.answer);
+      if (result.answer) optimism.confirm(entry.id, result.answer);
+      window.dispatchEvent(new Event(KEYS_CHANGED_EVENT));
       cancelEdit(); saved();
       return null;
     }
-    const before = entry;
     const shown: KeyEntry = { ...entry, source: "file", masked: maskKey(entry.id, trimmed) };
-    optimism.hold(shown);
+    const save = optimism.hold(shown);
     cancelEdit(); saved();
     void writeValue(entry.id, typed).then((result) => {
       if (result.ok) {
-        /* An older save answering after a newer one was sent describes the keys from before it. */
-        if (optimism.release(shown, null) && result.answer) optimism.adopt(result.answer);
-      } else if (optimism.release(shown, before)) {
+        optimism.accept(save, result.answer);
+        window.dispatchEvent(new Event(KEYS_CHANGED_EVENT));
+      } else if (optimism.refuse(save)) {
         if (timer.current !== null) window.clearTimeout(timer.current);
         setNote(null);
         setEditError(result.error);

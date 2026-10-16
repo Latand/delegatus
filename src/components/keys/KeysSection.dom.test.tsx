@@ -5,7 +5,7 @@ import type { Root } from "react-dom/client";
 
 import { installActEnv } from "@/test-helpers/actEnv";
 import { setLocale, translate } from "@/lib/i18n";
-import type { ImportPreview, KeysAnswer } from "@/lib/keys/shared";
+import type { ImportPreview, KeyEntry, KeysAnswer } from "@/lib/keys/shared";
 
 /*
  * «Keys», Варіант 1 (docs/design/keys-settings.md): the page over a stub of
@@ -475,3 +475,141 @@ test("a commented assignment or a comment holding a bare key shows no part of th
   expect(host.innerHTML).not.toContain(OPENAI.slice(-8));
   expect(host.innerHTML).not.toContain(PASTED.slice(-8));
 });
+
+/* ---- Review round: clipboard fallback, replaced reveals, overlapping saves ---- */
+
+test("a clipboard fallback that throws leaves no textarea holding the key, for Copy and for Copy all", async () => {
+  const text = `${envLine("OPENROUTER_API_KEY", OPENROUTER)}\n`;
+  serve(answer(), (call) => call.url === "/api/keys/export" ? Response.json({ text, count: 1, omitted: [] }) : undefined);
+  const host = await mount(<KeysMenuPage onImport={() => {}} />);
+  const writable = Object.getOwnPropertyDescriptor(dom.navigator, "clipboard")!;
+  const exec = (document as unknown as { execCommand?: unknown }).execCommand;
+  const seen: string[] = [];
+  Object.defineProperty(dom.navigator, "clipboard", { configurable: true, value: { writeText: async () => { throw new Error("denied"); } } });
+  (document as unknown as { execCommand: unknown }).execCommand = () => {
+    seen.push(document.querySelector("textarea")?.value ?? "");
+    throw new Error("SecurityError");
+  };
+  try {
+    await click(row(host, "openrouter").querySelector("[data-keys-copy]"));
+    await click(host.querySelector("[data-keys-copy-all]"));
+    /* The fallback ran with the key in the element, and the element is gone with the key in it. */
+    expect(seen).toEqual([OPENROUTER, text]);
+    expect(document.querySelector("textarea")).toBeNull();
+    expect(document.body.innerHTML).not.toContain(OPENROUTER);
+  } finally {
+    Object.defineProperty(dom.navigator, "clipboard", writable);
+    (document as unknown as { execCommand: unknown }).execCommand = exec;
+  }
+});
+
+/* The window's timers are captured, and cleared ones never run, so that 30 seconds pass at once. */
+async function withTimers<T>(run: (timers: { fn: () => void; ms: number }[]) => Promise<T>) {
+  const realSet = window.setTimeout, realClear = window.clearTimeout;
+  const timers: { fn: () => void; ms: number }[] = [];
+  const win = window as unknown as { setTimeout: unknown; clearTimeout: unknown };
+  win.setTimeout = (fn: () => void, ms = 0) => { timers.push({ fn, ms }); return timers.length; };
+  win.clearTimeout = (id: number) => { if (timers[id - 1]) timers[id - 1] = { fn: () => {}, ms: -1 }; };
+  try { return await run(timers); } finally { win.setTimeout = realSet; win.clearTimeout = realClear; }
+}
+
+test("a revealed key whose save is refused after its 30 seconds ran out stays hidden; a new press reads the current key", async () => {
+  const puts: Array<(response: Response) => void> = [];
+  serve(answer(), (call) => call.method === "PUT" ? new Promise<Response>((resolve) => { puts.push(resolve); }) : undefined);
+  const host = await mount(<KeysMenuPage onImport={() => {}} />);
+  await withTimers(async (timers) => {
+    await click(row(host, "openrouter").querySelector("[data-keys-eye]"));
+    expect(row(host, "openrouter").querySelector("[data-keys-revealed]")).not.toBeNull();
+    await click(row(host, "openrouter").querySelector("[data-keys-more]"));
+    await click(row(host, "openrouter").querySelector("[data-keys-menu-item='replace']"));
+    await type(host, "openrouter", ["sk", "or", "v1", "5".repeat(64)].join("-"));
+    await submit(host, "openrouter");
+    await settle();
+    expect(row(host, "openrouter").querySelector("[data-keys-revealed]")).toBeNull();
+    await act(async () => { for (const timer of timers.filter((candidate) => candidate.ms === 30_000)) timer.fn(); });
+    await act(async () => { puts[0]!(Response.json({ code: "write_failed" }, { status: 500 })); });
+    await settle(); await settle();
+    expect(row(host, "openrouter").querySelector("[data-keys-revealed]")).toBeNull();
+    expect(host.innerHTML).not.toContain(OPENROUTER);
+    const reveals = calls.filter((call) => call.url.endsWith("/reveal")).length;
+    await click(row(host, "openrouter").querySelector("[data-keys-eye]"));
+    expect(calls.filter((call) => call.url.endsWith("/reveal"))).toHaveLength(reveals + 1);
+  });
+});
+
+test("a revealed key replaced by one with the same mask is not shown any more", async () => {
+  const lookalike = ["sk", "or", "v1", "7".repeat(60) + "0000"].join("-");
+  serve(answer(), (call) => call.method === "PUT" ? Response.json(answer()) : undefined);
+  const host = await mount(<KeysMenuPage onImport={() => {}} />);
+  await click(row(host, "openrouter").querySelector("[data-keys-eye]"));
+  expect(row(host, "openrouter").querySelector("[data-keys-revealed]")).not.toBeNull();
+  await click(row(host, "openrouter").querySelector("[data-keys-more]"));
+  await click(row(host, "openrouter").querySelector("[data-keys-menu-item='replace']"));
+  await type(host, "openrouter", lookalike);
+  await submit(host, "openrouter");
+  await settle(); await settle();
+  expect(calls.filter((call) => call.method === "PUT")).toHaveLength(1);
+  expect(row(host, "openrouter").querySelector("[data-keys-revealed]")).toBeNull();
+  expect(host.innerHTML).not.toContain(OPENROUTER);
+});
+
+test("an older save's snapshot answering late leaves another row's newer settled save alone, while the refresh is still pending", async () => {
+  const A = "1".repeat(64), B = "2".repeat(64);
+  const puts = new Map<string, (response: Response) => void>();
+  const base = answer();
+  const rows = (soniox: KeyEntry) => ({ ...base, keys: base.keys.map((entry) => entry.id === "soniox" ? soniox : entry.id === "elevenlabs" ? { ...entry, source: "file" as const, masked: mask(A) } : entry) });
+  const soniox: KeyEntry = { id: "soniox", variable: "SONIOX_API_KEY", source: "file", masked: mask(B) };
+  let reads = 0;
+  serve(base, (call) => {
+    if (call.method === "PUT") return new Promise<Response>((resolve) => { puts.set(call.url, resolve); });
+    /* The mount read answers; every refresh after it stays in flight. */
+    if (call.url === "/api/keys" && ++reads > 1) return new Promise<Response>(() => {});
+    return undefined;
+  });
+  const host = await mount(<KeysMenuPage onImport={() => {}} />);
+  await click(row(host, "elevenlabs").querySelector("[data-keys-add]"));
+  await type(host, "elevenlabs", A);
+  await submit(host, "elevenlabs");
+  await click(row(host, "soniox").querySelector("[data-keys-add]"));
+  await type(host, "soniox", B);
+  await submit(host, "soniox");
+  await settle();
+  await act(async () => { puts.get("/api/keys/soniox")!(Response.json(rows(soniox))); });
+  await settle();
+  /* Saved earlier, answered later: its snapshot still has Soniox as it was before. */
+  await act(async () => { puts.get("/api/keys/elevenlabs")!(Response.json(rows(base.keys[3]!))); });
+  await settle(); await settle();
+  expect(row(host, "soniox").getAttribute("data-keys-source")).toBe("file");
+  expect(row(host, "elevenlabs").getAttribute("data-keys-source")).toBe("file");
+  await click(row(host, "soniox").querySelector("[data-keys-more]"));
+  await click(row(host, "soniox").querySelector("[data-keys-menu-item='masked']"));
+  expect(clipboard).toEqual([mask(B)]);
+});
+
+for (const order of ["oldest first", "newest first"] as const) {
+  test(`two saves of an unset key that are both refused (${order}) leave the stored state, with the refusal in the field and no mask of an unsaved value`, async () => {
+    const A = "1".repeat(64), B = "2".repeat(64);
+    const puts: Array<(response: Response) => void> = [];
+    serve(answer(), (call) => call.method === "PUT" ? new Promise<Response>((resolve) => { puts.push(resolve); }) : undefined);
+    const host = await mount(<KeysMenuPage onImport={() => {}} />);
+    await click(row(host, "elevenlabs").querySelector("[data-keys-add]"));
+    await type(host, "elevenlabs", A);
+    await submit(host, "elevenlabs");
+    await settle();
+    await click(row(host, "elevenlabs").querySelector("[data-keys-more]"));
+    await click(row(host, "elevenlabs").querySelector("[data-keys-menu-item='replace']"));
+    await type(host, "elevenlabs", B);
+    await submit(host, "elevenlabs");
+    await settle();
+    expect(puts).toHaveLength(2);
+    for (const index of order === "oldest first" ? [0, 1] : [1, 0]) {
+      await act(async () => { puts[index]!(Response.json({ code: "write_failed" }, { status: 500 })); });
+      await settle(); await settle();
+    }
+    expect(row(host, "elevenlabs").getAttribute("data-keys-source")).toBe("missing");
+    expect(row(host, "elevenlabs").querySelector("[data-keys-error='failed']")).not.toBeNull();
+    expect(row(host, "elevenlabs").querySelector("[data-keys-more], [data-keys-copy]")).toBeNull();
+    expect(host.innerHTML).not.toContain(mask(A));
+    expect(host.innerHTML).not.toContain(mask(B));
+  });
+}
