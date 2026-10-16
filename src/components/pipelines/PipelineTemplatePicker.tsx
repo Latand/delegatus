@@ -80,7 +80,7 @@ export function PipelineTemplatePicker({
       phase: "blocked",
       code: result.code ?? "missing",
       path: result.path ?? canonicalRepoDir,
-      error: result.code ? undefined : result.error,
+      error: result.code === "initialization_refused" || !result.code ? result.error : undefined,
     });
   };
 

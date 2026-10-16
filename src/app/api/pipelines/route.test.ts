@@ -216,23 +216,29 @@ test("pipeline POST rejects non-object JSON", async () => {
   }
 });
 
-test("pipeline POST returns the stable admission payload without creating a record", async () => {
-  const plainDir = fs.mkdtempSync(path.join(os.tmpdir(), "llv-pipeline-plain-"));
-  try {
-    const response = await POST(new NextRequest("http://127.0.0.1/api/pipelines", {
-      method: "POST",
-      headers: { host: "127.0.0.1", "content-type": "application/json" },
-      body: JSON.stringify({ task: "blocked", src: creatorPath, repoDir: plainDir, autoStart: false, stages: [] }),
-    }));
-    expect(response.status).toBe(400);
-    expect(await response.json()).toEqual({
-      error: `not a git repository: ${plainDir}`,
-      code: "not_git",
-      field: "repoDir",
-      path: plainDir,
-    });
-    expect((await GET(collectionRequest())).status).toBe(200);
-  } finally {
-    fs.rmSync(plainDir, { recursive: true, force: true });
-  }
+test("pipeline POST refuses the state directory with its safety reason", async () => {
+  const response = await POST(new NextRequest("http://127.0.0.1/api/pipelines", {
+    method: "POST", headers: { host: "127.0.0.1", "content-type": "application/json" },
+    body: JSON.stringify({ task: "blocked", src: creatorPath, repoDir: process.env.LLV_STATE_DIR, autoStart: false, stages: [] }),
+  }));
+  expect(response.status).toBe(403);
+  expect(await response.json()).toEqual({
+    error: "initialization refused for the Delegatus state directory", code: "initialization_refused", field: "repoDir", path: process.env.LLV_STATE_DIR,
+  });
+  expect((await GET(collectionRequest())).status).toBe(200);
+});
+
+test("pipeline POST creates a draft in a plain folder and returns its initialization inventory", async () => {
+  const folder = fs.mkdtempSync(path.join(sandbox, "board-project-"));
+  fs.writeFileSync(path.join(folder, "readme.txt"), "Project\n");
+  const response = await POST(new NextRequest("http://127.0.0.1/api/pipelines", {
+    method: "POST", headers: { host: "127.0.0.1", "content-type": "application/json" },
+    body: JSON.stringify({ task: "New project", src: creatorPath, repoDir: folder, autoStart: false, stages: [] }),
+  }));
+  expect(response.status).toBe(201);
+  const body = await response.json();
+  expect(body.repositoryInitialization.committedFiles).toEqual([".gitignore", "readme.txt"]);
+  expect(body.repositoryInitialization.defaultIgnorePatterns).toContain(".env*");
+  expect(body.pipeline.state).toBe("draft");
+  expect(body.pipeline.delivery.target.remote).toBe("");
 });

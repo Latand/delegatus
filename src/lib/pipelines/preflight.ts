@@ -183,6 +183,7 @@ export function pipelineRepoPreflightStatus(code: PipelineRepoPreflightErrorCode
 
 export function pipelineRepoPreflightError(result: Extract<PipelineRepoPreflight, { ok: false }>): string {
   switch (result.code) {
+    case "initialization_refused": return result.detail ?? "repository initialization refused";
     case "missing": return `directory does not exist: ${result.path}`;
     case "not_directory": return `not a directory: ${result.path}`;
     case "repo_unreadable": return `repository is not readable: ${result.path}`;

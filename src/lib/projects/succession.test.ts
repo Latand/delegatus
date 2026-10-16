@@ -280,3 +280,32 @@ test("a key with no ledger entry is never aliased, and the forge is not asked", 
   expect(forgeAnswers.asked).toEqual([]);
   expect(canonicalProject(unseen)).toBe(unseen);
 });
+
+
+test("pipeline initialization keeps the directory seat, task and conversations under the local repository", async () => {
+  const folder = path.join(SANDBOX, "new-local-project");
+  fs.mkdirSync(folder);
+  fs.writeFileSync(path.join(folder, "readme.txt"), "Project\n");
+  const old = projectForCwd(folder)!;
+  expect(old).toStartWith("dir-");
+  const designated = await executeOrchestratorSeatRequest(
+    { project: old, cwd: folder, mandate: "run the board", clientRequestId: "local-init-designate" }, seatDependencies(),
+  );
+  expect(designated.status).toBe(200);
+  const created = mutateTasks(tasks => {
+    const result = createTask(tasks, { project: old, text: "Develop the local project", placement: "unplaced" });
+    return { tasks: result.ok ? result.tasks : undefined, result };
+  });
+  expect(created.ok).toBe(true);
+  const before = await transcript("local-before", folder);
+  await scan([before]);
+  const { defaultPipelinePorts } = await import("@/lib/pipelines/engine");
+  expect((await defaultPipelinePorts().preflightRepo(folder)).ok).toBe(true);
+  const current = projectForCwd(folder)!;
+  expect(current).toStartWith("repo-");
+  expect(canonicalProject(old)).toBe(current);
+  expect(orchestratorSeatFor(current).active?.conversationId).toBe(SEAT);
+  expect(loadTasks().filter(task => task.text === "Develop the local project").map(task => task.project)).toEqual([current]);
+  const after = await transcript("local-after", folder);
+  expect((await scan([before, after])).projectCatalog.map(row => row.project)).toEqual([current]);
+});

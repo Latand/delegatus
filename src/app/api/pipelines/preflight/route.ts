@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
+import { preparePipelineRepository } from "@/lib/pipelines/initializeRepository";
+
 import {
   pipelineRepoPreflightError,
   pipelineRepoPreflightStatus,
@@ -25,7 +27,7 @@ type Dependencies = { preflight: (repoDir: string, ports?: Parameters<typeof pre
 
 async function postPreflight(
   req: NextRequest,
-  dependencies: Dependencies = { preflight: preflightPipelineRepo },
+  dependencies: Dependencies = { preflight: (repoDir) => preparePipelineRepository(repoDir, false) },
 ): Promise<NextResponse<PreflightSuccess | PreflightFailure>> {
   const rejection = rejectCrossOrigin(req);
   if (rejection) return rejection as NextResponse<PreflightFailure>;

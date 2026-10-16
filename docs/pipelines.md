@@ -8,6 +8,32 @@ A pipeline runs one to eight stages in one dedicated git worktree; compose them 
 
 `GET /api/pipelines/<id>` returns `{ "ok": true, "pipeline": {...} }` with the full record for one pipeline, plus its `revision`, `stageDigests` and `graphDigest`.
 
+A project folder can start without Git. Creation initializes a local repository on
+`main` and makes one baseline commit authored by Delegatus before provisioning.
+The board's directory check is read-only; creating the draft performs initialization.
+The creation answer includes `repositoryInitialization`: the commit, committed
+files, excluded paths and baseline ignore patterns. The project's bridge log
+keeps the same inventory in a complete status report.
+
+Delegatus appends exclusions to existing `.gitignore` files and preserves their
+original rules. It omits environment files, credentials, keys, dependencies,
+build outputs, links, nested repositories and files whose contents match the
+secret detector. The default limits are 2 MiB per file, 32 MiB of inspected
+file data and 2,000 directory entries. Configure them with
+`LLV_PIPELINE_INIT_MAX_FILE_BYTES`, `LLV_PIPELINE_INIT_MAX_BYTES` and
+`LLV_PIPELINE_INIT_MAX_FILES`, respectively. An individual file above its limit
+is excluded. Exceeding the total size, entry limit or report path-list bound
+refuses initialization before installing Git metadata or editing ignore files.
+The complete inventory must fit the bridge's 8 KiB report bound; path names
+have an additional 4,000-byte aggregate bound.
+
+The home directory itself, its ancestors, system paths and Delegatus state
+roots are refused with a reason. Existing repository working trees use their
+repository root. Initialization records the directory-to-local-repository
+succession so the seat, tasks and conversations keep their project. The
+repository remains local until a remote is explicitly added. Local lanes
+complete on their lane branch through the existing no-origin behavior.
+
 `POST /api/pipelines` accepts:
 
 ```json
