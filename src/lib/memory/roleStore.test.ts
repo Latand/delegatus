@@ -10,11 +10,12 @@ process.env.LLV_STATE_DIR = sandbox;
 afterAll(() => fs.rmSync(sandbox, { recursive: true, force: true }));
 
 const { appendRule, codePoints, sameRule, scopeChars } = await import("./roleConsolidate");
-const { deleteRule, learnedRulesBlock, leaveLessons: writeLesson, projectView, recordLessonRequest, restoreRule, stageLessons } = await import("./roleStore");
+const { deleteRule, learnedRulesBlock, leaveLessons: writeLesson, projectView, recordLessonRequest, restoreRule, stageLessons, roleMemoryCollection } = await import("./roleStore");
 const { roleMemoryEnabled } = await import("./settings");
 const { canonicalProject, persistProjectAliases } = await import("@/lib/projects/aliases");
 const { renderLearnedRules } = await import("./roleRender");
 const { ROLE_MEMORY_BOUND } = await import("./roleTypes");
+const ROLE_MEMORY_HISTORY_LIMIT = 10_000;
 type RoleMemoryRule = import("./roleTypes").RoleMemoryRule;
 
 let n = 0;
@@ -86,6 +87,8 @@ test("a scope over 10 000 characters is consolidated under the bound, and the dr
     attempt += 1;
     const left = leaveLessons({ request: request(attempt), source: source(attempt), lessons: [{ scope: "role", rule: distinct(attempt), why: `Round ${attempt} taught it.` }], none: null, now: new Date(Date.UTC(2026, 9, 7, 0, attempt)).toISOString() }).left[0]!;
     if (attempt === 1) firstId = left.id;
+    const row = roleMemoryCollection()!.get(`r:${left.id}`);
+    if (attempt === 1 && row?.kind === "rule") roleMemoryCollection()!.boundedPatch(1, tx => tx.put({ ...row, curatedAt: row.createdAt }));
     expect(left.scopeChars).toBeLessThanOrEqual(ROLE_MEMORY_BOUND);
     firstArchived = left.archived.includes(firstId);
   }
@@ -202,7 +205,7 @@ test("a generated id that is already taken is drawn again: no lesson is ever ove
   }
 });
 
-test("project succession keeps every stored rule, its history and the stage lines under both keys, within the bound", () => {
+test("project succession keeps unseen lessons under both keys until curation", () => {
   const old = `dir-${PROJECT()}-old`;
   const current = `repo-${PROJECT()}-current`;
   const words = ["alpha", "bravo", "charlie", "delta", "echo", "foxtrot", "golf", "hotel", "india", "juliet", "kilo", "lima", "mike"];
@@ -234,7 +237,7 @@ test("project succession keeps every stored rule, its history and the stage line
     const block = learnedRulesBlock(key, "builder");
     const builder = projectView(key).scopes.find((scope) => scope.roleId === "builder")!;
     expect(builder.scope).toBe(`role:${current}:builder`);
-    expect(builder.chars).toBeLessThanOrEqual(ROLE_MEMORY_BOUND);
+    expect(builder.chars).toBeGreaterThan(ROLE_MEMORY_BOUND);
     /* The newest rules of both keys are injected; what the bound pushed out and what the operator removed stay in history. */
     expect(block).toContain(oldIds[oldIds.length - 2]!);
     expect(block).toContain(currentIds[currentIds.length - 1]!);
@@ -242,17 +245,17 @@ test("project succession keeps every stored rule, its history and the stage line
     const everything = [...builder.active, ...builder.left].map((entry) => entry.id);
     for (const id of [...oldIds, ...currentIds]) expect(everything).toContain(id);
     expect(builder.left).toContainEqual(expect.objectContaining({ id: removed, reason: "deleted" }));
-    expect(builder.chars).toBeLessThanOrEqual(ROLE_MEMORY_BOUND);
+    expect(builder.chars).toBeGreaterThan(ROLE_MEMORY_BOUND);
     expect(projectView(key).scopes.filter((scope) => scope.roleId === "builder")).toHaveLength(1);
     const lines = stageLessons(key);
     expect(lines.some((row) => row.pipelineId === "p-old")).toBe(true);
     expect(lines.some((row) => row.pipelineId === "p-current")).toBe(true);
   }
-  /* The removed rule comes back into the merged scope, which keeps its bound. */
+  /* Returning an unseen rule preserves it while the merged scope awaits curation. */
   restoreRule(removed, "2026-10-07T02:00:00.000Z");
   const merged = projectView(current).scopes.find((scope) => scope.roleId === "builder")!;
   expect(merged.active.map((entry) => entry.id)).toContain(removed);
-  expect(merged.chars).toBeLessThanOrEqual(ROLE_MEMORY_BOUND);
+  expect(merged.chars).toBeGreaterThan(ROLE_MEMORY_BOUND);
 });
 
 test("rules that differ only by an operator or a flag stay two active rules on append and on succession; a true repeat still merges", () => {
@@ -289,4 +292,18 @@ test("rules that differ only by an operator or a flag stay two active rules on a
   const builder = projectView(current).scopes.find((scope) => scope.roleId === "builder")!;
   expect(builder.active.map((entry) => entry.id)).toEqual([x.id, plus.id]);
   expect(builder.left).toContainEqual(expect.objectContaining({ id: again.id, state: "merged", reason: "duplicate", mergedInto: x.id }));
+});
+
+
+test("ordinary history has an independent ten-thousand-entry window beside every curator record", () => {
+  const scope = `role:${PROJECT()}:builder`;
+  const ordinary = Array.from({ length: ROLE_MEMORY_HISTORY_LIMIT + 5 }, (_, i) => ({ revision: i + 1, at: "2026-10-16T00:00:00.000Z", by: "agent" as const, added: [], merged: [], archived: [] }));
+  const curator = Array.from({ length: 10 }, (_, i) => ({ revision: ordinary.length + i + 1, at: "2026-10-16T00:00:00.000Z", by: "curator" as const, pass: `fixture-pass-${i}`, added: [], merged: [], archived: [], before: [] }));
+  roleMemoryCollection(true)!.boundedPatch(1, tx => tx.put({ kind: "scope", scope, revision: ordinary.length + curator.length, active: [], history: [...ordinary, ...curator] }));
+  leaveLessons({ request: request(), source: source(), lessons: [{ scope: "role", rule: "Inspect the recorded history before replacing durable scope guidance.", why: "Earlier scope changes lost their audit entries." }], none: null, now: "2026-10-16T00:00:00.000Z" });
+  const row = roleMemoryCollection()!.get(`s:${scope}`);
+  if (row?.kind !== "scope") throw Error("scope missing");
+  expect(row.history.filter(entry => !entry.pass)).toHaveLength(ROLE_MEMORY_HISTORY_LIMIT);
+  expect(row.history.filter(entry => entry.pass)).toEqual(curator);
+  expect(row.history[0].revision).toBe(7);
 });

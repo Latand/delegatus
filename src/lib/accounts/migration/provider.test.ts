@@ -334,7 +334,7 @@ test.each(["codex", "claude"] as const)("%s migration keeps an undesignated pipe
   });
   expect(receivedProfile).toMatchObject({ cleanMemory: true, learnedRules: { project: "pipeline-project", roleId: "builder" } });
   const { learnedRulesForLaunchProfile } = await import("@/lib/memory/roleLaunch");
-  expect(learnedRulesForLaunchProfile(receivedProfile)).toBeUndefined();
+  expect(await learnedRulesForLaunchProfile(receivedProfile)).toBeUndefined();
 });
 
 test("Claude successor cleanup releases its published broker owner", async () => {

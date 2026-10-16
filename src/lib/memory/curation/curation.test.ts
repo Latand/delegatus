@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, expect, test, spyOn } from "bun:test";
+import { Database } from "bun:sqlite";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -798,4 +799,92 @@ test("stubbed launch, restart reconcile and settle keep no board card", async ()
   expect(bodies[0]).toMatchObject({ role: "curator", cwd: dir, mcpServers: ["viewer"] }); expect(bodies[0]).not.toHaveProperty("taskId");
   now += 1000; endedTurn = true; expect(await controller.reconcile(PROJECT)).toContain("settled"); expect(archived).toHaveLength(1); expect(machinePass()).toBeNull();
   expect(projectView(PROJECT).curation?.passes[0].state).toBe("succeeded");
+});
+
+test("ninety percent schedules early curation, a full scope keeps unseen lessons through a failed pass", async () => {
+  const scope = roleScope(PROJECT, "builder");
+  const ids = Array.from({ length: 26 }, (_, i) => fixture(scope, { rule: `Check ownership category ${i} before publication. ${"guidance ".repeat(29)}`.slice(0, 300), curatedAt: at() }));
+  const initial = pass(); ended(initial);
+  expect(curationStatus(PROJECT, NOW + 31 * 60_000).due).toBe(false);
+  const added: string[] = [];
+  for (let i = 0; i < 10; i++) {
+    const source: RuleSource = { project: PROJECT, pipelineId: "pressure", stageId: "build", attempt: i + 1, roleId: "builder", fixRound: false, conversationId: "conversation_pressure" };
+    recordLessonRequest({ ...source, at: at(2000 + i) });
+    const lesson = leaveLessons({ request: source, source, lessons: [{ scope: "role", rule: `Inspect pending ownership category ${i} before writing. ${"guidance ".repeat(29)}`.slice(0, 300), why }], none: null, now: at(2000 + i) }).left[0]!;
+    added.push(lesson.id);
+    expect(lesson.archived.some(id => added.includes(id))).toBe(false);
+    if (i === 0) expect(curationStatus(PROJECT, NOW + 31 * 60_000).due).toBe(false);
+    if (i === 1) expect(curationStatus(PROJECT, NOW + 31 * 60_000).due).toBe(true);
+  }
+  // Real write paths must never archive a never-curated rule for budget.
+  expect(roleMemoryCollection()!.snapshot().filter(row => row.kind === "rule" && row.reason === "budget" && !row.curatedAt)).toEqual([]);
+  const early = pass(NOW + 31 * 60_000);
+  expect(early).not.toBeNull();
+  patchPass(early.id, { state: "failed", endedAt: at(32 * 60_000), failure: "fixture failure" });
+  for (const id of added) expect(row(id).state).toBe("active");
+  expect(pass(NOW + 33 * 60_000)).toBeNull();
+  const script = `import { curationStatus, claimPass } from ${JSON.stringify(path.join(import.meta.dir, "store.ts"))}; console.log(JSON.stringify({ due: curationStatus(${JSON.stringify(PROJECT)}, ${NOW + 33 * 60_000}).due, claimed: !!claimPass({ project: ${JSON.stringify(PROJECT)}, repoDir: null, now: ${NOW + 33 * 60_000} }) }));`;
+  const restarted = Bun.spawn([process.execPath, "-e", script], { env: { ...process.env }, stdout: "pipe", stderr: "pipe" });
+  const [exit, output, error] = await Promise.all([restarted.exited, new Response(restarted.stdout).text(), new Response(restarted.stderr).text()]);
+  expect(exit).toBe(0); expect(error).toBe("");
+  expect(JSON.parse(output)).toEqual({ due: true, claimed: false });
+  const retried = pass(NOW + 62 * 60_000);
+  expect(retried).not.toBeNull();
+  const active = [...ids, ...added].filter(id => row(id).state === "active");
+  applyCuration(retried, input({ [scope]: active }));
+  for (const id of added) expect(row(id).curatedAt).toBeTruthy();
+  expect(curationStatus(PROJECT, NOW + 63 * 60_000).due).toBe(false);
+});
+
+test("a scope containing only unseen lessons may exceed budget until a bounded curator partition commits", () => {
+  const scope = roleScope(PROJECT, "builder");
+  const ids = Array.from({ length: 30 }, (_, i) => fixture(scope, { rule: `Check pending category ${i} before publication. ${"guidance ".repeat(30)}`.slice(0, 300) }));
+  const source: RuleSource = { project: PROJECT, pipelineId: "at-bound", stageId: "build", attempt: 1, roleId: "builder", fixRound: false, conversationId: "conversation_bound" };
+  recordLessonRequest({ ...source, at: at(2000) });
+  const added = leaveLessons({ request: source, source, none: null, lessons: [{ scope: "role", rule: `Inspect new pending categories before writing. ${"guidance ".repeat(30)}`.slice(0, 300), why }], now: at(2000) }).left[0]!;
+  expect(added.archived).toEqual([]);
+  expect(added.scopeChars).toBeGreaterThan(ROLE_MEMORY_BOUND);
+  const p = pass();
+  refusal(p, input({ [scope]: [...ids, added.id] }), "CURATE_BOUND");
+  expect(row(added.id).curatedAt).toBeUndefined();
+  applyCuration(p, input({ [scope]: ids.slice(1).concat(added.id) }, { archive: [{ id: ids[0], reason: "stale", note: "An older obligation no longer applies to current readers." }] }));
+  expect(projectView(PROJECT).scopes.find(s => s.scope === scope)!.chars).toBeLessThanOrEqual(ROLE_MEMORY_BOUND);
+});
+
+
+test("warm curation status skips payload reads and invalidates after a durable scope change", () => {
+  const scope = roleScope(PROJECT, "builder");
+  fixture(scope);
+  curationStatus(PROJECT, NOW);
+  const collection = roleMemoryCollection()!;
+  const snapshot = spyOn(collection, "snapshot");
+  const get = spyOn(collection, "get");
+  try {
+    curationStatus(PROJECT, NOW + 1);
+    expect(snapshot).not.toHaveBeenCalled(); expect(get).not.toHaveBeenCalled();
+    const writer = new Database(path.join(dir, "state.sqlite"));
+    try { writer.exec("CREATE TABLE unrelated_fixture (value INTEGER)"); writer.exec("INSERT INTO unrelated_fixture VALUES (1)"); } finally { writer.close(); }
+    curationStatus(PROJECT, NOW + 2);
+    expect(get).not.toHaveBeenCalled();
+    fixture(scope);
+    get.mockClear();
+    curationStatus(PROJECT, NOW + 2);
+    expect(snapshot).not.toHaveBeenCalled(); expect(get).toHaveBeenCalled();
+  } finally { snapshot.mockRestore(); get.mockRestore(); }
+});
+
+
+test("early pressure is dispatched even when a quieter project has a newer wake", async () => {
+  const quiet = "quiet-fixture";
+  fixture(roleScope(quiet, "builder"), { curatedAt: at() });
+  ended(pass(NOW - 2 * 60 * 60_000, quiet), -60 * 60_000);
+  const scope = roleScope(PROJECT, "builder");
+  for (let i = 0; i < 26; i++) fixture(scope, { rule: `Inspect ownership category ${i}. ${"guidance ".repeat(35)}`.slice(0, 300), curatedAt: at() });
+  ended(pass(NOW - 2 * 60 * 60_000), -60 * 60_000);
+  for (let i = 0; i < 2; i++) fixture(scope, { rule: `Inspect pending category ${i}. ${"guidance ".repeat(35)}`.slice(0, 300) });
+  expect(curationStatus(quiet, NOW).due).toBe(false);
+  expect(curationStatus(PROJECT, NOW)).toMatchObject({ due: true, newLessons: 0 });
+  const f = hostingFixture(); f.seat(PROJECT, at(-20_000)); f.seat(quiet, at(-1000));
+  expect(await f.controller.launchIfDue(f.tick)).toContain("launched");
+  expect(f.bodies).toHaveLength(1); expect(f.bodies[0].project).toBe(PROJECT);
 });

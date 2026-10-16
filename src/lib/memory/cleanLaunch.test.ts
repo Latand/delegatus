@@ -45,11 +45,11 @@ test("one decision: clean roles and review gates of any role, from a stage or a 
   expect(conversationMemoryExcluded({ agentRole: "builder", launchProfile: {} })).toBe(false);
 });
 
-test("the launch profile's mark reaches the Claude host options", () => {
+test("the launch profile's mark reaches the Claude host options", async () => {
   const account = { kind: "managed", accountId: "account-a", home: home(), transcriptRoot: home(), env: {} } as never;
-  const options = (cleanMemory?: boolean) => claudeStructuredHostOptions({ spec: { cwd: "/repo", launchProfile: emptyLaunchProfile({ cwd: "/repo", ...(cleanMemory ? { cleanMemory } : {}) }) } as never, account }, { env: {}, host: {} } as never);
-  expect(options(true).cleanMemory).toBe(true);
-  expect(options().cleanMemory).toBe(false);
+  const options = async (cleanMemory?: boolean) => await claudeStructuredHostOptions({ spec: { cwd: "/repo", launchProfile: emptyLaunchProfile({ cwd: "/repo", ...(cleanMemory ? { cleanMemory } : {}) }) } as never, account }, { env: {}, host: {} } as never);
+  expect((await options(true)).cleanMemory).toBe(true);
+  expect((await options()).cleanMemory).toBe(false);
 });
 
 test("a clean Claude launch turns auto memory off and installs no shared-memory hook", () => {
