@@ -7,9 +7,9 @@ import { NextRequest, NextResponse } from "next/server";
 import crypto from "node:crypto";
 
 import { DeliveryAdmissionRefusedError, type DeliveryAdmissionGuard } from "@/lib/deliveryAdmission";
-import { orchestratorRecipientRefusal } from "@/lib/orchestrator/seats";
+import { orchestratorRecipientRefusal, orchestratorRecipientRefusalAsync } from "@/lib/orchestrator/seats";
 import { recordOperatorRequest } from "@/lib/activity/requestLedger";
-import { agentRegistry, resolveConversationAlias, RETRY_ATTEMPT_ID_OWNED_ELSEWHERE, type AgentRegistry } from "@/lib/agent/registry";
+import { agentRegistry, conversationIdsResolvingTo, resolveConversationAlias, RETRY_ATTEMPT_ID_OWNED_ELSEWHERE, type AgentRegistry } from "@/lib/agent/registry";
 import { withConversationActuation } from "@/lib/deliveryActuation";
 import { structuredAttachmentOutcome, type AttachmentDeliveryOutcome } from "@/lib/attachmentRetention";
 import type { InboxFileUpload, StagedInboxFiles } from "@/lib/inboxFiles";
@@ -822,15 +822,17 @@ export async function handleRuntimeRetry(
     }
     const registry = (dependencies.registry ?? agentRegistry)();
     const recipientSnapshot = registry.conversationDeliverySnapshot({ conversationId: previous.receipt.conversationId });
-    const canonicalRecipientId = resolveConversationAlias(recipientSnapshot,
-      previous.receipt.conversationId as `conversation_${string}`);
-    const recipientEngine = recipientSnapshot.conversations[canonicalRecipientId]?.engine;
-    const recipientAliasRevision = recipientEngine
-      ? recipientSnapshot.conversationRevision[recipientEngine]
-      : undefined;
-    const recipientRefusal = () => orchestratorRecipientRefusal(previous!.receipt.conversationId,
-      id => resolveConversationAlias(recipientSnapshot, id as `conversation_${string}`),
-      recipientAliasRevision);
+    const recipientIds = conversationIdsResolvingTo(recipientSnapshot,
+      resolveConversationAlias(recipientSnapshot, previous.receipt.conversationId as `conversation_${string}`));
+    const recipientRefusal = () => orchestratorRecipientRefusal(recipientIds,
+      id => resolveConversationAlias(recipientSnapshot, id as `conversation_${string}`));
+    const warmRecipientAuthority = async () => {
+      const refusal = await orchestratorRecipientRefusalAsync(recipientIds,
+        id => resolveConversationAlias(recipientSnapshot, id as `conversation_${string}`));
+      if (refusal) throw Object.assign(new DeliveryAdmissionRefusedError("orchestrator-recipient-revoked"), {
+        message: refusal.error, status: refusal.status, successorConversationId: refusal.successorConversationId,
+      });
+    };
     const recipientGuard = () => {
       const refusal = recipientRefusal();
       if (refusal) throw Object.assign(new DeliveryAdmissionRefusedError("orchestrator-recipient-revoked"),
@@ -910,6 +912,7 @@ export async function handleRuntimeRetry(
           dependencies.kick();
           return NextResponse.json({ operationId, receipt: runtimePresentationReceipt(current.receipt) }, { status: 202 });
         }
+        await warmRecipientAuthority();
         recipientGuard();
         const claim = await client.claimDeliveryAction(operationId, "retry");
         if (claim.winner !== "retry") return NextResponse.json({ error: `runtime delivery ${claim.winner} already won; retry refused` }, { status: 409 });
@@ -1007,6 +1010,7 @@ export async function handleRuntimeRetry(
     }
     nextIdempotencyKey ??= terminalRetryIdempotencyKey(previous.operationId);
     const recover = dependencies.recover ?? recoverDeadStructuredConversation;
+    await warmRecipientAuthority();
     const refusedBeforeRecovery = recipientRefusal();
     if (refusedBeforeRecovery) return NextResponse.json(refusedBeforeRecovery, { status: refusedBeforeRecovery.status });
     const recovered = await recover(
@@ -1019,9 +1023,11 @@ export async function handleRuntimeRetry(
         retryable: true,
       }, { status: 503 });
     }
+    await warmRecipientAuthority();
     const refusedAfterRecovery = recipientRefusal();
     if (refusedAfterRecovery) return NextResponse.json(refusedAfterRecovery, { status: refusedAfterRecovery.status });
     await dependencies.republish?.(previous.receipt.conversationId);
+    await warmRecipientAuthority();
     const refusedAfterRepublish = recipientRefusal();
     if (refusedAfterRepublish) return NextResponse.json(refusedAfterRepublish, { status: refusedAfterRepublish.status });
     /* A2: the attempt's row and its record exist BEFORE the retry command
@@ -1092,6 +1098,7 @@ export async function handleRuntimeRetry(
     };
     let result: Awaited<ReturnType<typeof retry>>;
     try {
+      await warmRecipientAuthority();
       recipientGuard();
       try {
         result = await retry();

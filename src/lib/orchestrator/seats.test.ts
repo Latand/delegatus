@@ -30,6 +30,8 @@ import {
   recordOrchestratorSeatAuthCredentialBaseline,
   confirmOrchestratorSeatMaterialization,
   revokedOrchestratorSeatConversationsOrUnknown,
+  orchestratorRecipientRefusal,
+  orchestratorRecipientRefusalAsync,
 } from "./seats";
 
 let sandbox = "";
@@ -766,87 +768,95 @@ test("a revoked seat still counts as held once nothing is seated (#2170)", () =>
   }, "proj-a")).toBe(true);
 });
 
-test("REVIEW recipient authority lookup reuses a bounded recipient decision and invalidates on seat change", () => {
-  const registry = new AgentRegistry(path.join(sandbox, "registry.json"), undefined, undefined, { sqliteMode: "off" });
-  const conversation = registry.ensureConversation("codex", path.join(sandbox, "recipient.jsonl"), "default");
-  const snapshot = registry.conversationDeliverySnapshot({ conversationId: conversation.id });
-  expect(snapshot.conversationRevision.codex).toBe(registry.readOnlySnapshot().conversationRevision.codex);
+test("recipient authority indexes retained history once across distinct recipients and invalidates safely", async () => {
+  const conversations = Array.from({ length: 20 }, (_, index) => ({ id: `conversation_recipient_${index}` }));
   const seatsPath = path.join(sandbox, "orchestrator-seats.json");
-  fs.writeFileSync(seatsPath, JSON.stringify({
+  const history = (targetRevocationEpoch = 1) => JSON.stringify({
     schemaVersion: 1,
-    nextSeatEpoch: 10001,
-    seats: {},
+    nextSeatEpoch: 10003,
+    seats: {
+      "other-project": {
+        project: "other-project",
+        seatEpoch: 10001,
+        conversationId: conversations[0]!.id,
+        path: null,
+        mandate: "test",
+        promptVersion: null,
+        predecessorConversationId: null,
+        state: "active",
+        intent: { clientRequestId: "seat-test", mode: "existing", launchId: null, error: null },
+        designatedAt: AT,
+        activatedAt: AT,
+      },
+    },
     pending: {},
-    revocations: Array.from({ length: 10_000 }, (_, index) => ({
-      project: `historic-${index}`,
-      conversationId: `conversation_historic_${index}`,
-      seatEpoch: index + 1,
-      revokedAt: AT,
-      successorConversationId: null,
-    })),
+    revocations: [
+      ...Array.from({ length: 10_000 }, (_, index) => ({
+        project: `historic-${index}`,
+        conversationId: `conversation_historic_${index}`,
+        seatEpoch: index + 1,
+        revokedAt: AT,
+        successorConversationId: null,
+      })),
+      {
+        project: "recipient-project",
+        conversationId: "conversation_historic_0",
+        seatEpoch: targetRevocationEpoch,
+        revokedAt: AT,
+        successorConversationId: "conversation_successor",
+      },
+    ],
     history: [],
     rollbacks: {},
-  }), "utf8");
+  });
+  fs.writeFileSync(seatsPath, history(), "utf8");
 
-  const readSpy = spyOn(fs, "readFileSync");
+  const syncReadSpy = spyOn(fs, "readFileSync");
+  const asyncReadSpy = spyOn(fs.promises, "readFile");
+  let aliasCalls = 0;
+  const resolveAlias = (id: string) => { aliasCalls += 1; return id; };
   try {
-    for (let index = 0; index < 20; index += 1) {
-      expect(conversationDeliverabilityFromRecord(snapshot, { conversationId: conversation.id }).condition).toBe("reclaimed");
+    for (const conversation of conversations) {
+      expect(await orchestratorRecipientRefusalAsync([conversation.id], resolveAlias)).toBeNull();
     }
-    const readsAfterWarmup = readSpy.mock.calls.filter(([filePath]) => filePath === seatsPath).length;
-    expect(readsAfterWarmup).toBe(1);
+    expect(asyncReadSpy.mock.calls.filter(([filePath]) => filePath === seatsPath)).toHaveLength(1);
+    expect(syncReadSpy.mock.calls.filter(([filePath]) => filePath === seatsPath)).toHaveLength(0);
 
-    fs.writeFileSync(seatsPath, JSON.stringify({
-      schemaVersion: 1,
-      nextSeatEpoch: 2,
-      seats: {},
-      pending: {},
-      revocations: [{
-        project: "recipient-project",
-        conversationId: conversation.id,
-        seatEpoch: 1,
-        revokedAt: AT,
-        successorConversationId: "conversation_successor",
-      }],
-      history: [],
-      rollbacks: {},
-    }), "utf8");
+    for (const conversation of conversations) {
+      expect(await orchestratorRecipientRefusalAsync([conversation.id], resolveAlias)).toBeNull();
+    }
+    expect(asyncReadSpy.mock.calls.filter(([filePath]) => filePath === seatsPath)).toHaveLength(1);
 
-    expect(conversationDeliverabilityFromRecord(snapshot, { conversationId: conversation.id })).toMatchObject({
-      condition: "superseded",
+    const firstRecipient = conversations[0]!;
+    expect(await orchestratorRecipientRefusalAsync(["conversation_historic_0", firstRecipient.id], resolveAlias)).toBeNull();
+    expect(aliasCalls).toBe(0);
+    expect(asyncReadSpy.mock.calls.filter(([filePath]) => filePath === seatsPath)).toHaveLength(1);
+
+    beginOrchestratorSeatIntent({ project: "other-project", mandate: "rotate seat", clientRequestId: "seat-index-rotation", mode: "existing", now: AT });
+    completeOrchestratorSeatIntent({ project: "other-project", clientRequestId: "seat-index-rotation",
+      conversationId: "conversation_index_successor", path: null, now: AT });
+    const syncReadsBeforeGuard = syncReadSpy.mock.calls.filter(([filePath]) => filePath === seatsPath).length;
+    expect(orchestratorRecipientRefusal([firstRecipient.id])).toMatchObject({
+      status: 409,
+      successorConversationId: "conversation_index_successor",
+    });
+    expect(syncReadSpy.mock.calls.filter(([filePath]) => filePath === seatsPath)).toHaveLength(syncReadsBeforeGuard);
+    expect(asyncReadSpy.mock.calls.filter(([filePath]) => filePath === seatsPath)).toHaveLength(1);
+
+    fs.writeFileSync(seatsPath, history(10002), "utf8");
+    expect(await orchestratorRecipientRefusalAsync(["conversation_historic_0", firstRecipient.id], resolveAlias)).toMatchObject({
+      status: 409,
+      error: "orchestrator seat was rotated; send to conversation_successor",
       successorConversationId: "conversation_successor",
     });
-    const readsAfterRotation = readSpy.mock.calls.filter(([filePath]) => filePath === seatsPath).length;
-    expect(readsAfterRotation).toBe(2);
+    expect(asyncReadSpy.mock.calls.filter(([filePath]) => filePath === seatsPath)).toHaveLength(2);
+    expect(aliasCalls).toBe(1);
 
-    fs.writeFileSync(seatsPath, JSON.stringify({
-      schemaVersion: 1,
-      nextSeatEpoch: 2,
-      seats: {},
-      pending: {},
-      revocations: [{
-        project: "recipient-project",
-        conversationId: "conversation_alias_target",
-        seatEpoch: 1,
-        revokedAt: AT,
-        successorConversationId: "conversation_successor",
-      }],
-      history: [],
-      rollbacks: {},
-    }), "utf8");
-    expect(conversationDeliverabilityFromRecord(snapshot, { conversationId: conversation.id }).condition).toBe("reclaimed");
-
-    const aliasedSnapshot = structuredClone(snapshot);
-    aliasedSnapshot.conversationAliases.conversation_alias_target = conversation.id;
-    aliasedSnapshot.conversationRevision.codex += 1;
-    expect(conversationDeliverabilityFromRecord(aliasedSnapshot, { conversationId: conversation.id })).toMatchObject({
-      condition: "superseded",
-      successorConversationId: "conversation_successor",
-    });
-    const readsAfterAliasRevision = readSpy.mock.calls.filter(([filePath]) => filePath === seatsPath).length;
-    expect(readsAfterAliasRevision).toBe(4);
+    fs.writeFileSync(seatsPath, "{broken", "utf8");
+    expect(await orchestratorRecipientRefusalAsync([firstRecipient.id], resolveAlias)).toMatchObject({ status: 503 });
+    expect(asyncReadSpy.mock.calls.filter(([filePath]) => filePath === seatsPath)).toHaveLength(3);
   } finally {
-    readSpy.mockRestore();
-    registry.close();
+    asyncReadSpy.mockRestore();
+    syncReadSpy.mockRestore();
   }
 });

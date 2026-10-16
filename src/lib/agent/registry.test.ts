@@ -1100,20 +1100,20 @@ describe("agent registry", () => {
     expect(handoff.entry.pendingAction).toBe("handoff");
   });
 
-  test("startup repair clears only an exact completed structured launch marker", () => {
+  test("startup repair clears only an exact completed structured launch marker", async () => {
     const store = jsonRegistry();
     const fixture = structuredLaunchFixture(store, "spawn");
     const legacyEntry = { ...fixture.entry };
     delete legacyEntry.structuredHostOperationId;
     store.upsert({ ...legacyEntry, pendingAction: "spawn" });
-    expect(conversationDeliverabilityFromRecord(store.snapshot(), { conversationId: fixture.conversationId })).toMatchObject({
+    expect(await conversationDeliverabilityFromRecord(store.snapshot(), { conversationId: fixture.conversationId })).toMatchObject({
       condition: "synchronizing",
       deliverable: false,
     });
 
     expect(store.repairCompletedStructuredSpawnMarkers()).toBe(1);
     expect(store.readOnlySnapshot().entries[`codex:${fixture.entry.key.sessionId}`]?.pendingAction).toBeNull();
-    expect(conversationDeliverabilityFromRecord(store.snapshot(), { conversationId: fixture.conversationId })).toMatchObject({
+    expect(await conversationDeliverabilityFromRecord(store.snapshot(), { conversationId: fixture.conversationId })).toMatchObject({
       condition: "deliverable",
       deliverable: true,
     });
