@@ -39,7 +39,8 @@ const missing = (error: unknown) => (error as NodeJS.ErrnoException).code === "E
 // Refusal needs a boolean; avoid the display redactor's per-character decoded
 // copies and unbounded assignment-prefix backtracking on source files.
 const containsSecret = (value: string) => SECRET_ASSIGNMENT.test(value)
-  || /-----BEGIN [A-Z ]*PRIVATE KEY-----/.test(value)
+  || /\b[a-z][a-z0-9+.-]*:\/\/[^\s/:@]+:[^\s/@]+@/i.test(value)
+  || /-----BEGIN (?:PGP )?[A-Z ]*PRIVATE KEY(?: BLOCK)?-----/.test(value)
   || SECRET_PATTERNS.some(pattern => pattern.test(value)) || knownProviderSecretOffset(value) !== -1;
 function secret(value: string): boolean {
   if (containsSecret(value)) return true;
@@ -60,6 +61,18 @@ async function canonical(value: string): Promise<string> {
 }
 
 /** This guard runs on real paths before any project mutation. */
+async function assertNoRepositoryAncestor(candidate: string): Promise<void> {
+  for (let ancestor = candidate; ; ancestor = path.dirname(ancestor)) {
+    try {
+      await fs.lstat(path.join(ancestor, ".git"));
+      throw new Error("initialization refused inside an existing repository's working tree; select its repository root");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    if (ancestor === path.dirname(ancestor)) return;
+  }
+}
+
 async function safeRoot(candidate: string): Promise<void> {
   const homes = [os.homedir(), os.userInfo().homedir, process.env.HOME].filter((value): value is string => !!value);
   for (const home of homes) if (inside(await canonical(home), candidate)) throw new Error("initialization refused for the home directory or its ancestors");
@@ -211,9 +224,13 @@ export async function readRepositoryInitialization(root: string): Promise<Reposi
 }
 
 /** Picker checks are read-only. Only pipeline creation installs a ready commit. */
-export async function preparePipelineRepository(rawPath: string, initialize = true): Promise<PipelineRepoPreflight> {
+export async function preparePipelineRepository(
+  rawPath: string,
+  initialize = true,
+  options: Parameters<typeof preflightPipelineRepo>[2] = {},
+): Promise<PipelineRepoPreflight> {
   return withViewerOperation("pipelines.repository-initialization", async () => {
-    const admission = await preflightPipelineRepo(rawPath);
+    const admission = await preflightPipelineRepo(rawPath, undefined, options);
     if (admission.ok) {
       const requested = rawPath.trim();
       const expanded = requested === "~" || requested.startsWith("~/") ? path.join(os.homedir(), requested.slice(1)) : requested;
@@ -232,6 +249,7 @@ export async function preparePipelineRepository(rawPath: string, initialize = tr
     let directory: Awaited<ReturnType<typeof fs.open>> | undefined;
     try {
       await safeRoot(candidate);
+      await assertNoRepositoryAncestor(candidate);
       try {
         await fs.access(candidate, constants.W_OK | constants.X_OK);
         await fs.access(path.dirname(candidate), constants.W_OK | constants.X_OK);
@@ -324,12 +342,14 @@ export async function preparePipelineRepository(rawPath: string, initialize = tr
         try { await fs.lstat(path.join(candidate, ".git")); throw new Error("Git metadata appeared during initialization; retry"); }
         catch (error) { if (!missing(error)) throw error; }
         await assertRoot();
+        await assertNoRepositoryAncestor(candidate);
         for (const file of selected.filter(file => file.relative !== ".gitignore" && path.basename(file.relative) === ".gitignore")) {
           await appendIgnore(stableRoot, file, baselineIgnore(data.ignored, path.posix.dirname(file.relative)));
         }
         if (originalIgnore) await appendIgnore(stableRoot, originalIgnore, appended);
         else await fs.writeFile(path.join(stableRoot, ".gitignore"), ignore, { flag: "wx" });
         await assertRoot();
+        await assertNoRepositoryAncestor(candidate);
         await fs.rename(path.join(prepared, ".git"), path.join(stableRoot, ".git"));
         await assertRoot();
         await report(candidate, initialization);

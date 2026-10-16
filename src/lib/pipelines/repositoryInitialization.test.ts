@@ -11,6 +11,8 @@ import { directoryProjectId, localRepositoryProjectId } from "@/lib/projects/ide
 import { projectForCwd } from "@/lib/scanner/describe";
 import { globalCache } from "@/lib/scanner/caches";
 import { readBridgeReportLog } from "@/lib/bridge/store";
+import { resetBlockingWaitsForTests } from "@/lib/blockingWaits";
+import { clearPipelinePreflightCache } from "./preflight";
 import { realProvisionExec } from "./git";
 import { realExec } from "@/lib/workflows/provision";
 import { POST as preflight } from "@/app/api/pipelines/preflight/route";
@@ -111,6 +113,86 @@ test("B: content secrets, nested ignore overrides, links and large files never e
   expect(git(dir, "status", "--porcelain")).toBe("");
   git(dir, "add", "--all");
   expect(git(dir, "diff", "--cached", "--name-only")).toBe("");
+});
+
+
+test("B: standard connection URLs and PGP private key armor are ignored from the first commit", async () => {
+  const dir = folder();
+  const password = "fixture-" + "p".repeat(48);
+  const keyBody = "private-material-" + "k".repeat(48);
+  const connection = `postgresql://fixture-user:${password}@db.invalid:5432/app`;
+  const privateKey = `-----BEGIN PGP PRIVATE KEY BLOCK-----\n${keyBody}\n-----END PGP PRIVATE KEY BLOCK-----`;
+  fs.writeFileSync(path.join(dir, "settings.toml"), `database_url = "${connection}"\n`);
+  fs.writeFileSync(path.join(dir, "backup.asc"), privateKey);
+
+  const result = await admit(dir);
+  expect(result.ok).toBe(true);
+  const committed = git(dir, "ls-tree", "-r", "--name-only", "HEAD");
+  expect(committed).toContain("readme.txt");
+  expect(committed).not.toMatch(/settings\.toml|backup\.asc/);
+  expect(git(dir, "check-ignore", "settings.toml")).toBe("settings.toml");
+  expect(git(dir, "check-ignore", "backup.asc")).toBe("backup.asc");
+  expect(git(dir, "status", "--porcelain")).toBe("");
+  const outward = JSON.stringify({ result, reports: readBridgeReportLog().reports });
+  expect(outward).toContain("settings.toml");
+  expect(outward).toContain("backup.asc");
+  expect(outward).not.toContain(password);
+  expect(outward).not.toContain(keyBody);
+  expect(execFileSync("git", ["-C", dir, "show", "HEAD:.gitignore"], { encoding: "utf8" })).not.toContain(password);
+  expect(fs.readFileSync(path.join(dir, "settings.toml"), "utf8")).toContain(password);
+});
+
+test.each(["initializer", "board", "creation"])("B: inherited Git discovery overrides cannot hide an enclosing repository: %s", async surface => {
+  const parent = folder();
+  git(parent, "init", "-b", "main", "--template=");
+  const child = path.join(parent, "child");
+  fs.mkdirSync(child);
+  const previous = process.env.GIT_CEILING_DIRECTORIES;
+  process.env.GIT_CEILING_DIRECTORIES = parent;
+  try {
+    if (surface === "initializer") {
+      expect(await admit(child)).toMatchObject({ ok: false, code: "initialization_refused", detail: expect.stringContaining("existing repository's working tree") });
+    } else if (surface === "board") {
+      const response = await preflight(new NextRequest("http://localhost/api/pipelines/preflight", { method: "POST", headers: { host: "localhost" }, body: JSON.stringify({ repoDir: child }) }));
+      expect(response.status).toBe(403);
+      expect(JSON.stringify(await response.json())).toContain("existing repository's working tree");
+    } else {
+      const h = ports();
+      const result = await createPipelineFromRequest({ task: "Refuse hidden nested project", repoDir: child, stages: RUN_STAGES as never }, h.ports);
+      expect(result.status).toBe(403);
+      expect(result.error).toContain("existing repository's working tree");
+      expect(result.pipeline).toBeUndefined();
+    }
+  } finally {
+    if (previous === undefined) delete process.env.GIT_CEILING_DIRECTORIES;
+    else process.env.GIT_CEILING_DIRECTORIES = previous;
+  }
+  expect(fs.existsSync(path.join(child, ".git"))).toBe(false);
+  expect(fs.existsSync(path.join(child, ".gitignore"))).toBe(false);
+  expect(fs.existsSync(path.join(parent, ".gitignore"))).toBe(false);
+});
+
+test("P2: repeated board preflight reuses the successful existing-repository Git probes", async () => {
+  const dir = folder();
+  git(dir, "init", "-b", "main", "--template=");
+  const bin = path.join(root, "git-probe-bin");
+  fs.mkdirSync(bin, { recursive: true });
+  const log = path.join(root, "git-probe-count");
+  const actualGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
+  fs.writeFileSync(path.join(bin, "git"), `#!/bin/sh\ncase " $* " in *" rev-parse "*) printf x >> '${log}' ;; esac\nexec '${actualGit}' "$@"\n`, { mode: 0o755 });
+  clearPipelinePreflightCache();
+  const previous = process.env.PATH;
+  process.env.PATH = bin + path.delimiter + (previous ?? "");
+  try {
+    for (let i = 0; i < 2; i++) {
+      const response = await preflight(new NextRequest("http://localhost/api/pipelines/preflight", { method: "POST", headers: { host: "localhost" }, body: JSON.stringify({ repoDir: dir }) }));
+      expect(response.status).toBe(200);
+    }
+    expect(fs.readFileSync(log, "utf8")).toHaveLength(2);
+  } finally {
+    if (previous === undefined) delete process.env.PATH; else process.env.PATH = previous;
+    clearPipelinePreflightCache();
+  }
 });
 
 test.each(["initializer", "board", "creation"])("B: a subfolder of an existing working tree is refused with a reason: %s", async surface => {
@@ -270,26 +352,81 @@ test("A/C: concurrent creators and a restarted process reuse the one initial com
   expect(readBridgeReportLog().reports.filter(report => report.project === localRepositoryProjectId(dir))).toHaveLength(1);
 });
 
-test("C: both a fresh succession write and a receipt replay yield to a peer-held state writer", async () => {
-  await admit(folder());
+test("C: fresh succession and receipt replay yield at the contended write boundary", async () => {
+  expect((await admit(folder())).ok).toBe(true);
   for (const replay of [false, true]) {
     const dir = folder();
     if (replay) expect((await admit(dir)).ok).toBe(true);
+    const database = path.join(process.env.LLV_STATE_DIR!, "state.sqlite");
     const ready = path.join(dir, "peer-ready");
-    const child = Bun.spawn([process.execPath, "src/lib/state/lockWait.fixture.ts", "hold", path.join(process.env.LLV_STATE_DIR!, "state.sqlite"), ready, "unused", "500"], { env: process.env, stdout: "ignore", stderr: "pipe" });
+    const release = path.join(dir, "peer-release");
+    const waitLogs: string[] = [];
+    resetBlockingWaitsForTests(line => waitLogs.push(line));
+    const peer = Bun.spawn([process.execPath, "src/lib/state/lockWait.fixture.ts", "hold", database, ready, release, "manual"], { env: process.env, stdout: "ignore", stderr: "pipe" });
+    let pending: Promise<Awaited<ReturnType<typeof admit>>> | undefined;
     try {
+      const deadline = performance.now() + 10_000;
       while (!fs.existsSync(ready)) {
-        if (child.exitCode !== null) throw new Error(await new Response(child.stderr).text());
-        await Bun.sleep(5);
+        if (peer.exitCode !== null) throw new Error(await new Response(peer.stderr).text());
+        if (performance.now() > deadline) throw new Error("peer lock readiness deadline");
+        await Bun.sleep(2);
       }
-      let advanced = false;
-      const timer = setTimeout(() => { advanced = true; }, 20);
-      try { expect((await admit(dir)).ok).toBe(true); expect(advanced).toBe(true); }
-      finally { clearTimeout(timer); }
-      expect(await child.exited).toBe(0);
-    } finally { if (child.exitCode === null) { child.kill("SIGKILL"); await child.exited; } }
+      let settled = false;
+      let outcome = "pending";
+      const operation = Promise.resolve(admit(dir));
+      pending = operation;
+      operation.then(result => { settled = true; outcome = result.ok ? "ok" : result.code; }, () => { settled = true; outcome = "rejected"; });
+      while (!waitLogs.some(line => {
+        const entry = JSON.parse(line.replace(/^\[blocking-wait\] /, ""));
+        return entry.site === "state-write-lock" && entry.stateWait?.outcome === "waiting" && /state\.lease\.sqlite|pipelines\.repository-initialization/.test(entry.stateWait.callSite);
+      })) {
+        if (settled) throw new Error(`initialization settled before the contended state-write boundary (${outcome})`);
+        if (performance.now() > deadline) throw new Error("initialization never reached its contended state-write boundary");
+        await Bun.sleep(2);
+      }
+      expect(settled).toBe(false);
+      if (!replay) expect(fs.existsSync(path.join(dir, ".git"))).toBe(true);
+      let ticks = 0;
+      const timer = setInterval(() => ticks++, 5);
+      try {
+        await Bun.sleep(35);
+        expect(ticks).toBeGreaterThanOrEqual(3);
+        expect(fs.existsSync(release)).toBe(false);
+      } finally { clearInterval(timer); }
+      fs.writeFileSync(release, "release");
+      expect((await operation).ok).toBe(true);
+      expect(await peer.exited).toBe(0);
+
+      // Negative control: a synchronous SQLite writer on this same state DB
+      // must stall its own event loop while the peer holds the database lock.
+      const controlReady = path.join(dir, "sync-ready");
+      const controlGo = path.join(dir, "sync-go");
+      const holderReady = path.join(dir, "control-peer-ready");
+      const holder = Bun.spawn([process.execPath, "src/lib/state/lockWait.fixture.ts", "hold", database, holderReady, controlGo, "manual:350"], { env: process.env, stdout: "ignore", stderr: "pipe" });
+      const control = Bun.spawn([process.execPath, "src/lib/state/lockWait.fixture.ts", "sync-probe", database, controlReady, controlGo, "1200"], { env: process.env, stdout: "pipe", stderr: "pipe" });
+      try {
+        const controlDeadline = performance.now() + 10_000;
+        while (!fs.existsSync(holderReady) || !fs.existsSync(controlReady)) {
+          if (holder.exitCode !== null || control.exitCode !== null) throw new Error("synchronous-writer control exited before lock contention");
+          if (performance.now() > controlDeadline) throw new Error("synchronous-writer control readiness deadline");
+          await Bun.sleep(2);
+        }
+        fs.writeFileSync(controlGo, "go");
+        const output = await new Response(control.stdout).text();
+        expect(await control.exited).toBe(0);
+        expect(JSON.parse(output).maxGap).toBeGreaterThan(200);
+        expect(await holder.exited).toBe(0);
+      } finally {
+        if (control.exitCode === null) { control.kill("SIGKILL"); await control.exited; }
+        if (holder.exitCode === null) { holder.kill("SIGKILL"); await holder.exited; }
+      }
+    } finally {
+      if (pending && !fs.existsSync(release)) fs.writeFileSync(release, "release");
+      if (peer.exitCode === null) { peer.kill("SIGKILL"); await peer.exited; }
+      resetBlockingWaitsForTests();
+    }
   }
-});
+}, 20_000);
 
 test("B: existing linked worktrees retain their repository and receive no initialization receipt", async () => {
   const dir = folder();

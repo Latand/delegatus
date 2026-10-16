@@ -19,8 +19,26 @@ if (import.meta.main) {
     if (mode === "exclusive") db.exec("PRAGMA locking_mode = EXCLUSIVE");
     db.exec("BEGIN EXCLUSIVE");
     fs.writeFileSync(ready!, "ready");
-    try { await Bun.sleep(Number(argument)); }
-    finally { db.exec("ROLLBACK"); db.close(); }
+    try {
+      if (argument?.startsWith("manual")) {
+        while (!fs.existsSync(go!)) await Bun.sleep(1);
+        const heldFor = Number(argument.split(":")[1] ?? 0);
+        if (heldFor) await Bun.sleep(heldFor);
+      } else await Bun.sleep(Number(argument));
+    } finally { db.exec("ROLLBACK"); db.close(); }
+  } else if (mode === "sync-probe") {
+    const db = new Database(filename!);
+    db.exec("PRAGMA busy_timeout = " + Number(argument));
+    fs.writeFileSync(ready!, "ready");
+    while (!fs.existsSync(go!)) await Bun.sleep(1);
+    let last = performance.now(), maxGap = 0;
+    const timer = setInterval(() => { const now = performance.now(); maxGap = Math.max(maxGap, now - last); last = now; }, 5);
+    const start = performance.now();
+    try {
+      db.exec("BEGIN IMMEDIATE"); db.exec("ROLLBACK");
+      await Bun.sleep(10);
+      console.log(JSON.stringify({ elapsed: performance.now() - start, maxGap }));
+    } finally { clearInterval(timer); db.close(); }
   } else if (mode === "writer") {
     const store = new SqliteStateCollection(filename!, lockRowOptions);
     fs.writeFileSync(ready!, "ready");

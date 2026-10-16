@@ -27,7 +27,7 @@ type Dependencies = { preflight: (repoDir: string, ports?: Parameters<typeof pre
 
 async function postPreflight(
   req: NextRequest,
-  dependencies: Dependencies = { preflight: (repoDir) => preparePipelineRepository(repoDir, false) },
+  dependencies: Dependencies = { preflight: (repoDir, _ports, options) => preparePipelineRepository(repoDir, false, options) },
 ): Promise<NextResponse<PreflightSuccess | PreflightFailure>> {
   const rejection = rejectCrossOrigin(req);
   if (rejection) return rejection as NextResponse<PreflightFailure>;

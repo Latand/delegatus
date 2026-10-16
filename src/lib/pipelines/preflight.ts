@@ -18,8 +18,18 @@ export interface PipelineRepoPreflightPorts {
     a `probe_failed` transient (code `null`), never a false `not_git` (#353 AC3). */
 const GIT_PROBE_TIMEOUT_MS = 4000;
 
+function discoveryEnvironment(): Partial<NodeJS.ProcessEnv> {
+  const env: Partial<NodeJS.ProcessEnv> = {};
+  for (const key of Object.keys(process.env)) if (key.startsWith("GIT_")) env[key] = undefined;
+  return {
+    ...env,
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null",
+  };
+}
+
 const boundedGitExec: ExecPort = async (command, args, cwd) =>
-  (await realExec(command, args, cwd, undefined, { timeoutMs: GIT_PROBE_TIMEOUT_MS }));
+  (await realExec(command, args, cwd, discoveryEnvironment(), { timeoutMs: GIT_PROBE_TIMEOUT_MS }));
 
 const DEFAULT_PORTS: PipelineRepoPreflightPorts = {
   homeDir: os.homedir,
