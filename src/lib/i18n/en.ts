@@ -142,6 +142,7 @@ export const en = {
   "keys.import.again": "Paste other lines",
   "keys.import.invalid": "Wrong format",
   "keys.import.unknown": "Unknown, skipped: {names}",
+  "keys.import.unknownMore": "Unknown, skipped: {names} and {count} more",
   "keys.import.unparsed": "Lines without NAME=, skipped: {lines}",
   "keys.import.bot": "A bot answers on one machine only. Disconnect it on the old one.",
   "keys.import.apply": "Apply {count}",

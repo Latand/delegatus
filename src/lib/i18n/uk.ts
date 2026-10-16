@@ -142,6 +142,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "keys.import.again": "Вставити інше",
   "keys.import.invalid": "Невірний формат",
   "keys.import.unknown": "Невідомі, пропущено: {names}",
+  "keys.import.unknownMore": "Невідомі, пропущено: {names} та ще {count}",
   "keys.import.unparsed": "Рядки без NAME=, пропущено: {lines}",
   "keys.import.bot": "Бот відповідає лише на одній машині. Від’єднайте його на старій.",
   "keys.import.apply": "Застосувати: {count}",

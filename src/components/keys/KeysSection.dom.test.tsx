@@ -449,6 +449,21 @@ for (const lang of ["en", "uk"] as const) test(`${lang}: import shows the pasted
   expect(host.querySelector("[data-keys-import-preview]")).toBeNull();
 });
 
+for (const lang of ["en", "uk"] as const) test(`${lang}: a long list of unknown variables names the first two and counts the rest`, async () => {
+  setLocale(lang);
+  const unknown = ["LLV_TOKEN", ...Array.from({ length: 30 }, (_, index) => `LLV_NOTE_${String(index + 1).padStart(2, "0")}`)];
+  serve(answer(), (call) => call.url === "/api/keys/import" ? Response.json({ rows: [{ id: "soniox", kind: "new", masked: "••••••••4444" }], unknown, unparsed: [] }) : undefined);
+  const host = await mount(<KeysImportPage />);
+  const area = host.querySelector<HTMLTextAreaElement>("[data-keys-import-text]")!;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(dom.HTMLTextAreaElement.prototype, "value")!.set!.call(area, `${envLine("SONIOX_API_KEY", "4".repeat(64))}`);
+    area.dispatchEvent(new dom.Event("input", { bubbles: true }) as unknown as Event);
+  });
+  await settle(); await settle();
+  expect(host.querySelector("[data-keys-import-unknown]")!.textContent).toBe(translate(lang, "keys.import.unknownMore", { names: "LLV_TOKEN, LLV_NOTE_01", count: 29 }));
+  expect(host.querySelector("[data-keys-import-unknown]")!.textContent).not.toContain("LLV_NOTE_02");
+});
+
 test("an import with nothing to write offers no Apply that does something", async () => {
   serve(answer(), (call) => call.url === "/api/keys/import" ? Response.json({ rows: [{ id: "openai", kind: "env", masked: "sk-proj-••••••••5555" }], unknown: [], unparsed: [] }) : undefined);
   const host = await mount(<KeysImportPage />);

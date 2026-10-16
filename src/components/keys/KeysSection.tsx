@@ -594,7 +594,7 @@ export function KeysMenuPage({ size = "menu", onImport, focusKey = null, focusSe
   const glyph = sheet ? "h-[18px] w-[18px] shrink-0 text-secondary" : "h-4 w-4 shrink-0 text-secondary";
   return (
     <div data-keys-page="" className={`flex flex-col font-normal ${sheet ? "pb-4" : "pb-1"}`}>
-      <div className={`flex flex-col empty:hidden ${sheet ? "gap-2 px-4" : "gap-1.5 px-2"}`}><Notices answer={answer} failed={failed} reload={() => void reload()} size={size} /></div>
+      <div className={`flex flex-col empty:hidden ${sheet ? "gap-2 px-4 pt-2" : "gap-1.5 px-2"}`}><Notices answer={answer} failed={failed} reload={() => void reload()} size={size} /></div>
       <div data-keys-list="" className="flex flex-col">
         {answer?.keys.map((entry) => <KeyRow key={entry.id} entry={entry} size={size} staging={answer.staging} owner={answer.owner} focus={entry.id === focusKey} focusSeq={focusSeq} optimism={optimism} />)}
       </div>
@@ -714,7 +714,9 @@ export function KeysImportPage({ size = "menu" }: { size?: Size }) {
                 <span className={`min-w-0 font-medium ${VERDICT[row.kind]} ${small} ${menu ? "basis-full" : "flex-1 text-right"}`}>{verdictText(t, row, menu)}</span>
               </div>
             ))}
-            {preview.unknown.length ? <p data-keys-import-unknown="" className={`pt-1 text-muted ${small}`}>{t("keys.import.unknown", { names: preview.unknown.join(", ") })}</p> : null}
+            {preview.unknown.length ? <p data-keys-import-unknown="" className={`pt-1 text-muted ${small}`}>{preview.unknown.length > 3
+              ? t("keys.import.unknownMore", { names: preview.unknown.slice(0, 2).join(", "), count: preview.unknown.length - 2 })
+              : t("keys.import.unknown", { names: preview.unknown.join(", ") })}</p> : null}
             {preview.unparsed.length ? <p data-keys-import-unparsed="" className={`pt-1 text-muted ${small}`}>{t("keys.import.unparsed", { lines: preview.unparsed.join(", ") })}</p> : null}
             {preview.rows.some((row) => row.id === "telegram" && (row.kind === "new" || row.kind === "replaces")) ? (
               <p data-keys-import-bot="" className={`mt-1.5 rounded-control bg-warning-soft text-warning ${menu ? "px-2 py-1 text-[11px] leading-snug" : "px-3 py-2 text-label"}`}>{t("keys.import.bot")}</p>

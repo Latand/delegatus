@@ -11502,6 +11502,15 @@ describe("keys settings", () => {
               .filter((control) => !menuNode!.contains(control) && control.closest("[data-keys-row]") !== menuNode!.closest("[data-keys-row]"))
               .filter((control) => { const r = control.getBoundingClientRect(); return r.width > 0 && r.left < menu.right && r.right > menu.left && r.top < menu.bottom && r.bottom > menu.top; })
               .map((control) => control.getAttribute("aria-label") ?? control.tagName) : [];
+            /* A notice sits clear of the line under the page header, and a long import names few unknown variables and keeps «Apply» under the bot notice. */
+            const pageNode = host.querySelector<HTMLElement>("[data-keys-page]");
+            const noticeNode = pageNode?.querySelector<HTMLElement>("[data-keys-staging], [data-keys-member], [data-keys-failed]");
+            const noticeGap = pageNode && noticeNode ? Math.round((noticeNode.getBoundingClientRect().top - pageNode.getBoundingClientRect().top) * 10) / 10 : null;
+            const unknownNode = host.querySelector<HTMLElement>("[data-keys-import-unknown]");
+            const unknownLines = unknownNode ? Math.round(unknownNode.getBoundingClientRect().height / parseFloat(getComputedStyle(unknownNode).lineHeight)) : null;
+            const botNode = host.querySelector<HTMLElement>("[data-keys-import-bot]");
+            const applyNode = host.querySelector<HTMLElement>("[data-keys-import-apply]");
+            const applyGap = botNode && applyNode ? Math.round((applyNode.getBoundingClientRect().top - botNode.getBoundingClientRect().bottom) * 10) / 10 : null;
             const envRow = host.querySelector<HTMLElement>('[data-keys-row][data-keys-source="env"]');
             const envRowText = envRow ? envRow.innerText.replace(/\s+/g, " ").trim() : null;
             const inView = (r?: DOMRect) => r ? r.left >= 0 && r.top >= 0 && r.right <= innerWidth && r.bottom <= innerHeight : null;
@@ -11509,7 +11518,7 @@ describe("keys settings", () => {
             const fieldText = [...host.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>("textarea, input:not([type=password])")].map((field) => field.value).join(" ");
             return {
               surface: { left: Math.round(box.left), top: Math.round(box.top), width: Math.round(box.width), height: Math.round(box.height) },
-              overflowX: host.scrollWidth - host.clientWidth, truncated, cutByEdge, offscreen, smallTargets, squashed,
+              overflowX: host.scrollWidth - host.clientWidth, truncated, cutByEdge, offscreen, smallTargets, squashed, noticeGap, unknownLines, applyGap,
               surfaceInView: inView(box), popoverInView: inView(popover), menuInView: inView(menu), popoverInSurface: inSurface(popover), menuInSurface: inSurface(menu), menuCovers, envRowText,
               text: (host.innerText ?? "").replace(/\s+/g, " ").trim(), fieldText,
             };
@@ -11533,6 +11542,9 @@ describe("keys settings", () => {
             if (geometry.offscreen.length) failures.push(`${key}: controls outside the surface ${geometry.offscreen.join(", ")}`);
             if (geometry.smallTargets.length) failures.push(`${key}: phone targets under 44 px ${geometry.smallTargets.join(", ")}`);
             if (geometry.squashed.length) failures.push(`${key}: pasted lines squeezed over the next ${geometry.squashed.join(" | ")}`);
+            if (geometry.noticeGap !== null && geometry.noticeGap < 8) failures.push(`${key}: the notice starts ${geometry.noticeGap} px under the header line`);
+            if (geometry.unknownLines !== null && geometry.unknownLines > 2) failures.push(`${key}: the unknown variables take ${geometry.unknownLines} lines`);
+            if (geometry.applyGap !== null && geometry.applyGap > 12) failures.push(`${key}: Apply is ${geometry.applyGap} px under the bot notice`);
             if (geometry.truncated.length) failures.push(`${key}: cut text ${geometry.truncated.join(" | ")}`);
             if (geometry.surfaceInView === false) failures.push(`${key}: the menu or sheet reaches past the window (${geometry.surface.top}+${geometry.surface.height})`);
             if (geometry.popoverInView === false || geometry.popoverInSurface === false) failures.push(`${key}: popover outside the surface or the window`);
