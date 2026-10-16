@@ -65,6 +65,89 @@ import { readClaudeCredentials } from "@/lib/accounts/claudeCredentials";
 const browserTest = browserCase(process.env.LLV_KANBAN_BROWSER_TEST === "1");
 const LAUNCH: LaunchOptions = { headless: true, args: ["--no-sandbox"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) };
 
+describe("managed MCP catalog failure", () => {
+  browserTest("cause and retry guidance in the Updates panel", async () => {
+    const before = process.env.LLV_MCP_CATALOG_BEFORE === "1";
+    const out = path.resolve(".artifacts/managed-mcp-catalog", before ? "before" : "after");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    const { MANAGED_STEPS, idleCheck, idleUpdate, stoppedProcess } = await import("@/lib/selfUpdate/types");
+    const OLD = "7".repeat(40), TARGET = "a".repeat(40), at = "2026-10-16T08:00:00.000Z";
+    const rev = (sha: string) => ({ sha, short: sha.slice(0, 7), version: "1.13.0", date: at });
+    const processView = (pid: number) => ({ ...stoppedProcess(), state: "healthy", pid, revision: OLD.slice(0, 7), startedAt: at, lastHealthAt: at, lastHealthOk: true });
+    const failures = [
+      ["legacy", "MCP runtime is missing tools: suggest_replies", "selfUpdate.mcp.legacy", "suggest_replies"],
+      ["declared", "MCP candidate did not register declared tools: new_read. Retrying the same image will not help; choose a corrected release.", "selfUpdate.mcp.declared", "new_read"],
+      ["contract", "MCP candidate is missing deployment contract tools: board_snapshot. Retrying the same image will not help; choose a corrected release.", "selfUpdate.mcp.contract", "board_snapshot"],
+      ["invalid", "MCP candidate tool catalog is invalid. Retrying the same image will not help; choose a corrected release.", "selfUpdate.mcp.invalid", ""],
+      ["temporary", "MCP startup timed out", null, ""],
+    ] as const;
+    const readings: unknown[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const width of before ? [390, 1440] : [390, 800, 1440]) {
+        const context = await browser.newContext({ viewport: { width, height: width === 390 ? 844 : 900 }, colorScheme: theme, reducedMotion: "reduce", ...(width === 390 ? { isMobile: true, hasTouch: true } : {}) });
+        const page = await context.newPage();
+        const errors: string[] = [];
+        page.on("pageerror", error => errors.push(error.message));
+        try {
+          await context.addInitScript(({ lang, theme }) => {
+            localStorage.setItem("llv_lang", lang); localStorage.setItem("llv-theme", theme);
+            const streams: Record<string, ((event: { data: string }) => void)[]>[] = [];
+            let Source = window.EventSource;
+            Object.defineProperty(window, "EventSource", { configurable: true, get: () => Source, set: (Base: typeof EventSource) => {
+              Source = class extends Base {
+                constructor(url: string | URL) {
+                  super(url);
+                  if (String(url).startsWith("/api/self-update/events") && !String(url).includes("readOnly")) {
+                    const listeners: Record<string, ((event: { data: string }) => void)[]> = {}; streams.push(listeners);
+                    Object.assign(this, { addEventListener: (type: string, listener: (event: { data: string }) => void) => { (listeners[type] ??= []).push(listener); } });
+                  }
+                }
+              } as typeof EventSource;
+            } });
+            Object.assign(window, { catalogEmit: (data: unknown) => { for (const listeners of streams) for (const listener of listeners.state ?? []) listener({ data: JSON.stringify(data) }); } });
+          }, { lang, theme });
+          await page.goto(server.base);
+          await page.evaluate(theme => document.documentElement.setAttribute("data-theme", theme), theme);
+          await page.waitForSelector(width === 390 ? "[data-phone-card], [data-mobile2-shell], [data-mobile-shell]" : "[data-kanban-board]");
+          await page.evaluate(() => window.dispatchEvent(new Event("llv:open-self-update")));
+          const dialog = page.locator("[data-self-update-dialog]"); await dialog.waitFor();
+          for (const [state, reason, key, tools] of before ? failures.slice(0, 1) : failures) {
+            const snapshot = {
+              mode: "managed", unsupportedReason: null, installed: rev(OLD), available: rev(TARGET), serving: { web: rev(OLD), runtimeHost: rev(OLD) },
+              check: idleCheck(), busy: null, processes: { web: processView(1001), runtimeHost: processView(1002) },
+              meta: { branch: "main", remote: "", checkout: null, pollMinutes: 60, serverTime: at },
+              update: { ...idleUpdate(MANAGED_STEPS), state: "failed", target: TARGET, targetShort: TARGET.slice(0, 7), targetVersion: "1.13.0", startedAt: at, finishedAt: "2026-10-16T08:00:39.900Z",
+                steps: MANAGED_STEPS.map((name, index) => ({ name, state: index < 3 ? "done" : index === 3 ? "failed" : "pending", startedAt: at, durationMs: index === 3 ? 11900 : index === 1 ? 28000 : 0, tail: index === 3 ? [reason] : [], exitCode: null,
+                  failure: null })) },
+            };
+            await page.evaluate(data => (window as unknown as { catalogEmit(data: unknown): void }).catalogEmit(data), snapshot);
+            const panel = dialog.locator("[data-update='failed']"); await panel.waitFor();
+            await panel.scrollIntoViewIfNeeded();
+            const cause = await panel.locator("[data-cause]").innerText();
+            const guidance = await panel.locator("[data-retry-guidance]").count() ? await panel.locator("[data-retry-guidance]").textContent() : null;
+            if (before) { expect(cause).toBe(reason); expect(guidance).toBeNull(); }
+            else {
+              expect(cause).toBe(key ? translate(lang, key, { tools }) : reason);
+              expect(guidance).toBe(translate(lang, state === "temporary" ? "selfUpdate.mcp.retryTemporary" : state === "legacy" ? "selfUpdate.mcp.retryLegacy" : "selfUpdate.mcp.retryCandidate"));
+              for (const selector of ["[data-cause]", "[data-retry-guidance]", "[data-action='retry']"]) {
+                const box = await panel.locator(selector).boundingBox();
+                expect(box).not.toBeNull(); expect(box!.x).toBeGreaterThanOrEqual(0); expect(box!.x + box!.width).toBeLessThanOrEqual(width);
+                expect(box!.y).toBeGreaterThanOrEqual(0); expect(box!.y + box!.height).toBeLessThanOrEqual(width === 390 ? 844 : 900);
+              }
+            }
+            await panel.screenshot({ path: path.join(out, `${lang}-${theme}-${width}-${state}.png`) });
+            readings.push({ lang, theme, width, state, cause, guidance });
+          }
+          expect(errors).toEqual([]);
+        } finally { await context.close(); }
+      }
+      fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify({ before, readings }, null, 2));
+    } finally { await browser.close(); server.stop(); }
+  }, 90_000);
+});
+
 describe("machine worker limit", () => {
   browserTest("machine worker limit: desktop setting, seat face and popover in both languages and themes", async () => {
     const out = path.resolve(".artifacts/machine-worker-limit/desktop"); fs.mkdirSync(out, { recursive: true });
@@ -20319,7 +20402,7 @@ describe("whole-card drag rendered evidence", () => {
         await page.waitForTimeout(400);
         await page.mouse.move(centre + 60, box.y + 80, { steps: 8 });
         await page.waitForTimeout(400);
-        const dropping = await page.evaluate(() => [...document.querySelectorAll(".column.drop")].map((column) => (column as HTMLElement).dataset.status));
+        const dropping = await page.evaluate(() => [...document.querySelectorAll(".column[data-drop]")].map((column) => (column as HTMLElement).dataset.status));
         expect(dropping, "the column under the pointer is the one that takes it").toEqual(["blocked"]);
         await page.mouse.up();
         await page.waitForTimeout(300);
@@ -20373,6 +20456,345 @@ describe("whole-card drag rendered evidence", () => {
       } finally { await context.close(); }
     } finally { await browser.close(); server.stop(); }
   }, 120_000);
+});
+
+/*
+ * Card drag on a board that is alive (operator, 2026-10-16: «перетаскивание карточек … заметно лагает»).
+ * The static 48-card reading above holds the display rate; the board the operator drags on is not static:
+ * a poll lands every ten seconds with every working agent's transcript a line longer, and the board's wall
+ * clock ticks every thirty. This block drags over the same `drag-board` scene while both arrive mid-drag,
+ * three runs per surface, and writes the readings to `evidence/live-board-drag/<label>-<surface>[-x<cpu>].json`.
+ *
+ *   LLV_LIVE_DRAG_LABEL=before|after   names the record
+ *   LLV_LIVE_DRAG_RUNS=3               drags per surface
+ *   LLV_LIVE_DRAG_LOAD=polls+clock     what arrives mid-drag: polls, clock, both joined with +, or none
+ *   LLV_DRAG_CPU=4                     the CPU throttling rate of the page
+ */
+describe("live-board drag rendered evidence", () => {
+  const OUT = path.resolve(".artifacts/live-board-drag");
+  const LABEL = process.env.LLV_LIVE_DRAG_LABEL ?? "run";
+  const RUNS = Number(process.env.LLV_LIVE_DRAG_RUNS ?? "3");
+  const CPU = Number(process.env.LLV_DRAG_CPU ?? "1");
+  const LOAD = new Set((process.env.LLV_LIVE_DRAG_LOAD ?? "polls+clock").split("+"));
+  /* Four polls and the 30 s clock inside the 3 s path: more than a real drag meets, so a cost shows. */
+  const POLL_AT = [400, 1100, 1800, 2500];
+  const CLOCK_AT = 1500;
+  /* The board's wall clock runs on one 30 s interval, and `Date.now` is moved by the same 30 s when the driver ticks it, as
+     half a minute of real time would have: both are the production path, only the wait is skipped. */
+  const CLOCK_HOOK = `(() => { const real = window.setInterval.bind(window); const now = Date.now.bind(Date); window.__skew = 0; window.__boardClock = [];
+    Date.now = () => now() + window.__skew;
+    window.setInterval = (fn, ms, ...rest) => { if (ms === 30000 && typeof fn === "function") window.__boardClock.push(fn); return real(fn, ms, ...rest); }; })();`;
+  interface Frames { count: number; over20: number; over33: number; longestMs: number }
+  const arrive = (page: Page) => page.evaluate(({ polls, clock, pollAt, clockAt }) => {
+    const w = window as unknown as { dragBoardChurn(): void; __skew: number; __boardClock: Array<() => void> };
+    if (polls) for (const at of pollAt) setTimeout(() => w.dragBoardChurn(), at);
+    if (clock) setTimeout(() => { w.__skew += 30_000; for (const tick of w.__boardClock) tick(); }, clockAt);
+  }, { polls: LOAD.has("polls"), clock: LOAD.has("clock"), pollAt: POLL_AT, clockAt: CLOCK_AT });
+  const startFrames = (page: Page) => page.evaluate(() => {
+    const w = window as unknown as { __gaps: { stamps: number[]; on: boolean } };
+    w.__gaps = { stamps: [], on: true };
+    const tick = (now: number) => { if (w.__gaps.on) { w.__gaps.stamps.push(now); requestAnimationFrame(tick); } };
+    requestAnimationFrame(tick);
+  });
+  const readFrames = async (page: Page): Promise<Frames> => {
+    const stamps = await page.evaluate(() => { const w = window as unknown as { __gaps: { stamps: number[]; on: boolean } }; w.__gaps.on = false; return w.__gaps.stamps; });
+    const gaps = stamps.slice(1).map((stamp, index) => stamp - stamps[index]!);
+    return { count: stamps.length, over20: gaps.filter((gap) => gap > 20).length, over33: gaps.filter((gap) => gap > 33.4).length, longestMs: Math.round(Math.max(0, ...gaps) * 100) / 100 };
+  };
+  const median = (values: number[]) => percentile(values, 0.5);
+  const summarize = (runs: Array<{ reading: Omit<DragReadingLike, "trace">; frames: Frames }>) => ({
+    p95FrameMs: median(runs.map((run) => run.reading.frameMs.p95)),
+    maxFrameMs: median(runs.map((run) => run.reading.frameMs.max)),
+    longTasks: median(runs.map((run) => run.reading.longTasks.count)),
+    longestTaskMs: median(runs.map((run) => run.reading.longTasks.longestMs)),
+    moveCostMsPerMove: median(runs.map((run) => run.reading.moveCost.events ? run.reading.moveCost.totalMs / run.reading.moveCost.events : 0)),
+    inputLagP95Ms: median(runs.map((run) => run.reading.inputLagMs.p95)),
+    framesOver20ms: median(runs.map((run) => run.frames.over20)),
+    mutations: median(runs.map((run) => run.reading.mutations)),
+  });
+  type DragReadingLike = Awaited<ReturnType<typeof recordDrag>>;
+  const write = (surface: string, board: unknown, runs: unknown[], summary: unknown) => {
+    fs.mkdirSync("evidence/live-board-drag", { recursive: true });
+    fs.writeFileSync(`evidence/live-board-drag/${LABEL}-${surface}${CPU > 1 ? `-x${CPU}` : ""}.json`, `${JSON.stringify({ board, cpuThrottling: CPU, load: [...LOAD], pollAtMs: POLL_AT, clockAtMs: CLOCK_AT, runs, median: summary }, null, 2)}\n`);
+  };
+
+  browserTest("a 3 s desktop drag with polls and a clock tick landing mid-drag, three runs", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    const server = await serveEvidenceFixture(OUT);
+    const browser = await chromium.launch(LAUNCH);
+    const runs: Array<{ reading: Omit<DragReadingLike, "trace">; frames: Frames }> = [];
+    try {
+      for (let run = 0; run < RUNS; run += 1) {
+        const { context, page, pageErrors } = await openFixture(browser, "about:blank", { width: 1440, height: 900 }, "light", "en");
+        try {
+          await page.addInitScript(CLOCK_HOOK);
+          await page.goto(`${server.base}?scenario=drag-board`);
+          const source = page.locator('.kb .column[data-status="inbox"] .card[data-id^="task:t-drag-"]').first();
+          await source.waitFor();
+          await page.locator(".kb").first().click({ position: { x: 4, y: 4 }, force: true }).catch(() => {});
+          await page.keyboard.press("o");
+          await page.waitForTimeout(500);
+          await source.scrollIntoViewIfNeeded();
+          await page.waitForTimeout(100);
+          const box = (await source.boundingBox())!;
+          const blocked = (await page.locator('.column[data-status="blocked"] .col-body').boundingBox())!;
+          const from: [number, number] = [box.x + 8, box.y + 8];
+          const cdp = await context.newCDPSession(page);
+          if (CPU > 1) await cdp.send("Emulation.setCPUThrottlingRate", { rate: CPU });
+          await page.mouse.move(...from);
+          await page.mouse.down();
+          await startFrames(page);
+          const reading = await recordDrag(page, cdp, OUT, `${LABEL}-desktop-${run}`, async () => {
+            await arrive(page);
+            return playPath(cdp, [from, [from[0] + 120, from[1] + 160], [blocked.x + blocked.width / 2, from[1] + 40], [blocked.x + blocked.width / 2 - 200, from[1] + 320]], 3000, 8);
+          });
+          const frames = await readFrames(page);
+          expect(await page.locator(".kb .card.ghost").count(), "the card is being dragged").toBe(1);
+          if (run === 0) await page.screenshot({ path: path.join(OUT, `${LABEL}-desktop-mid-drag.png`) });
+          await page.mouse.up();
+          expect(pageErrors).toEqual([]);
+          runs.push({ reading: { ...reading, trace: undefined } as never, frames });
+          console.log(JSON.stringify({ surface: "desktop", run, ...reading, frames, trace: undefined }));
+        } finally { await context.close(); }
+      }
+      write("desktop", { scene: "drag-board", tasks: 48, viewport: "1440x900", path: "3 s, one move per 8 ms" }, runs, summarize(runs));
+      console.log(JSON.stringify({ surface: "desktop", median: summarize(runs) }));
+    } finally { await browser.close(); server.stop(); }
+  }, 300_000);
+
+  browserTest("a 3 s phone drag with polls and a clock tick landing mid-drag, three runs", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    const server = await serveEvidenceFixture(OUT);
+    const browser = await chromium.launch(LAUNCH);
+    const runs: Array<{ reading: Omit<DragReadingLike, "trace">; frames: Frames }> = [];
+    try {
+      for (let run = 0; run < RUNS; run += 1) {
+        const { context, page, pageErrors } = await openFixture(browser, "about:blank", { width: 390, height: 844 }, "light", "en", "no-preference", true, 2);
+        try {
+          await page.addInitScript(CLOCK_HOOK);
+          await page.goto(`${server.base}?scenario=drag-board`);
+          await page.waitForSelector('[data-phone-kanban] [data-phone-card^="task:t-drag-"]', { timeout: 20_000 });
+          await page.waitForTimeout(800);
+          const card = page.locator('[data-phone-kanban-column="assigned"] [data-phone-card^="task:t-drag-"]').first();
+          await card.scrollIntoViewIfNeeded();
+          await page.waitForTimeout(300);
+          const box = (await card.boundingBox())!;
+          const from: [number, number] = [box.x + box.width / 2, box.y + 18];
+          const cdp = await context.newCDPSession(page);
+          if (CPU > 1) await cdp.send("Emulation.setCPUThrottlingRate", { rate: CPU });
+          await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: from[0], y: from[1] }] });
+          await page.waitForTimeout(700);
+          const tile = (await page.locator('[data-phone-dock-tile="blocked"]').boundingBox())!;
+          expect(tile, "the dock is drawn after the hold").not.toBeNull();
+          await startFrames(page);
+          const reading = await recordDrag(page, cdp, OUT, `${LABEL}-phone-${run}`, async () => {
+            await arrive(page);
+            return playPath(cdp, [from, [from[0] + 60, from[1] - 140], [from[0] - 40, from[1] - 260], [tile.x + tile.width / 2, tile.y + tile.height / 2]], 3000, 16, true);
+          });
+          const frames = await readFrames(page);
+          expect(await page.locator("[data-phone-lift-ghost]").count(), "the card is lifted").toBe(1);
+          if (run === 0) await page.screenshot({ path: path.join(OUT, `${LABEL}-phone-mid-drag.png`) });
+          await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+          await page.waitForTimeout(600);
+          expect(pageErrors).toEqual([]);
+          runs.push({ reading: { ...reading, trace: undefined } as never, frames });
+          console.log(JSON.stringify({ surface: "phone", run, ...reading, frames, trace: undefined }));
+        } finally { await context.close(); }
+      }
+      write("phone", { scene: "drag-board", tasks: 48, viewport: "390x844 touch", path: "hold 0.7 s, then 3 s, one move per 16 ms" }, runs, summarize(runs));
+      console.log(JSON.stringify({ surface: "phone", median: summarize(runs) }));
+    } finally { await browser.close(); server.stop(); }
+  }, 300_000);
+});
+
+/*
+ * An agent opens from the closed card (operator, 2026-10-16: «открывай агента напрямую, без необходимости сначала
+ * раскрывать карточку через «працюю»»). The `drag-board` scene with `cards=closed` has 48 closed cards, every second
+ * one with a lane whose Review stage is running. On the desktop each stage with an agent is a button in the card's one
+ * chain line; on the phone the card's face is one button and a tap on a pill (or within 11 px of it) opens the agent,
+ * a tap anywhere else the task, as before. `LLV_CLOSED_CARD_FRAMES=<dir>` writes the frames.
+ */
+describe("closed-card agent open rendered evidence", () => {
+  const OUT = path.resolve(".artifacts/closed-card-agent");
+  const FRAMES = process.env.LLV_CLOSED_CARD_FRAMES;
+  const lanes = '.kb .card[data-collapsed="1"] .card-chain';
+  const shot = async (page: Page, name: string, target?: ReturnType<Page["locator"]>) => {
+    if (!FRAMES) return;
+    fs.mkdirSync(FRAMES, { recursive: true });
+    await (target ?? page).screenshot({ path: path.join(FRAMES, `${name}.png`) });
+  };
+
+  browserTest("1440: every stage with an agent on a closed card is a button; one click opens the agent in its window, the card stays closed, a drag from the pill still drags, and «Working» still opens the card", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    const server = await serveEvidenceFixture(OUT);
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    try {
+      for (const lang of ["en", "uk"] as const) {
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=drag-board&cards=closed`, { width: 1440, height: 900 }, "light", lang);
+        try {
+          await page.locator(lanes).first().waitFor();
+          await page.locator(".kb").first().click({ position: { x: 4, y: 4 }, force: true }).catch(() => {});
+          await page.keyboard.press("o");
+          await page.waitForTimeout(500);
+          const card = page.locator('.kb .card[data-collapsed="1"]:has(.card-chain button.pb-pill[data-stage])').first();
+          await card.scrollIntoViewIfNeeded();
+          const id = (await card.getAttribute("data-id"))!;
+          const cardNow = () => page.locator(`.kb .card[data-id="${id}"]`);
+          /* The chain: Build passed, Review running, Verify not started. Those with an agent are buttons, the rest text. */
+          const buttons = await cardNow().locator(".card-chain button.pb-pill[data-stage]").evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-stage")));
+          const text = await cardNow().locator(".card-chain span.pb-pill[data-stage]").evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-stage")));
+          expect(buttons.length, `${lang}: at least the running stage is a button`).toBeGreaterThan(0);
+          expect(buttons, `${lang}: the running stage is one`).toContain("review");
+          expect([...buttons, ...text].sort(), `${lang}: every pill is one or the other`).toEqual(expect.arrayContaining(["review"]));
+          const pill = cardNow().locator('.card-chain button.pb-pill[data-stage="review"]');
+          const box = (await pill.boundingBox())!;
+          expect(box.height, `${lang}: the pill keeps its 22 px`).toBeGreaterThanOrEqual(22);
+          expect(box.height).toBeLessThanOrEqual(24);
+          await shot(page, `desktop-1440-${lang}-closed-card`, cardNow());
+
+          /* Keyboard: Tab reaches the pill and its ring is whole inside the clipped line. */
+          await pill.focus();
+          await page.keyboard.press("Shift+Tab");
+          await page.keyboard.press("Tab");
+          const ring = await pill.evaluate((node) => {
+            const style = getComputedStyle(node);
+            const line = (node.closest(".pb-pills") as HTMLElement).getBoundingClientRect();
+            const rect = node.getBoundingClientRect();
+            return { outline: style.outlineStyle, width: parseFloat(style.outlineWidth), offset: parseFloat(style.outlineOffset), insideLine: rect.top - line.top >= 0 && line.bottom - rect.bottom >= 0 };
+          });
+          expect(ring.outline, `${lang}: the focus ring draws`).toBe("solid");
+          expect(ring.offset, `${lang}: inside the pill, so the line's overflow does not clip it`).toBeLessThan(0);
+          await shot(page, `desktop-1440-${lang}-closed-card-focus`, cardNow());
+
+          /* A press that moves is a drag, and the click it leaves is swallowed: no agent opens. */
+          const at: [number, number] = [box.x + box.width / 2, box.y + box.height / 2];
+          await page.mouse.move(...at);
+          await page.mouse.down();
+          await page.mouse.move(at[0] + 90, at[1] + 60, { steps: 6 });
+          await page.waitForTimeout(80);
+          expect(await page.locator(".kb .card.ghost").count(), `${lang}: the card is dragged by its pill`).toBe(1);
+          await page.mouse.move(at[0] + 90, at[1] + 62);
+          await page.mouse.up();
+          await page.waitForTimeout(120);
+          expect(await page.locator("[data-agent-window-frame]").count(), `${lang}: a drag opens nothing`).toBe(0);
+
+          /* A click opens the agent in the window with no round trip first: every fetch the page makes from the click
+             until the frame is drawn is held (the fixture answers them in the page, so the page's own `fetch` is the
+             seam), so a window that waits on one never shows and the case fails. The milliseconds are logged as a
+             measurement only; the claim asserted is the property, which a loaded machine cannot flip. */
+          type Open = { down: number; shown: number | null; frameAfterCommit: boolean | null; held: number };
+          await page.evaluate(() => {
+            const w = window as unknown as { __open: Open; __release: () => void };
+            const open: Open = { down: 0, shown: null, frameAfterCommit: null, held: 0 };
+            w.__open = open;
+            const pending: Array<() => void> = [];
+            const realFetch = window.fetch;
+            let holding = true;
+            window.fetch = ((...args: Parameters<typeof fetch>) => {
+              if (!holding) return realFetch.apply(window, args);
+              open.held += 1;
+              return new Promise<Response>((resolve, reject) => { pending.push(() => realFetch.apply(window, args).then(resolve, reject)); });
+            }) as typeof fetch;
+            w.__release = () => { holding = false; window.fetch = realFetch; for (const resume of pending.splice(0)) resume(); };
+            addEventListener("pointerdown", () => { open.down = performance.now(); }, { capture: true, once: true });
+            addEventListener("click", () => {
+              requestAnimationFrame(() => { open.frameAfterCommit = !!document.querySelector("[data-agent-window-frame]"); });
+            }, { capture: true, once: true });
+            new MutationObserver((_records, observer) => {
+              if (document.querySelector("[data-agent-window-frame]")) { open.shown = performance.now(); observer.disconnect(); }
+            }).observe(document.body, { childList: true, subtree: true });
+          });
+          const hash = await page.evaluate(() => location.hash);
+          let opened: Open;
+          try {
+            await pill.click();
+            await page.locator("[data-agent-window-frame]").waitFor({ timeout: 2000 });
+            await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+            opened = await page.evaluate(() => (window as unknown as { __open: Open }).__open);
+          } finally {
+            await page.evaluate(() => (window as unknown as { __release: () => void }).__release());
+          }
+          expect(opened.shown, `${lang}: the window drew with every fetch held back`).not.toBeNull();
+          console.log(JSON.stringify({ surface: "desktop-1440", lang, pointerDownToWindowMs: Math.round((opened.shown! - opened.down) * 10) / 10, fetchesHeldMeanwhile: opened.held }));
+          expect(opened.frameAfterCommit, `${lang}: the frame is there one animation frame after the click, in the commit the click makes`).toBe(true);
+          expect(await page.evaluate(() => location.hash), `${lang}: no link was followed`).toBe(hash);
+          expect(await cardNow().getAttribute("data-collapsed"), `${lang}: the card stays closed`).toBe("1");
+          await page.waitForTimeout(400);
+          await shot(page, `desktop-1440-${lang}-agent-open`);
+          await page.keyboard.press("Escape");
+          await page.locator("[data-agent-window-frame]").waitFor({ state: "detached" }).catch(() => {});
+
+          /* «Working» (the state line) and the chevron still open the card, and the card body is no target. */
+          await cardNow().locator("[data-card-state-toggle]").click();
+          expect(await cardNow().getAttribute("data-collapsed"), `${lang}: the state line opens the card`).toBe("0");
+          await cardNow().locator("[data-card-state-toggle]").click();
+          expect(await cardNow().getAttribute("data-collapsed")).toBe("1");
+          expect(await page.locator("[data-agent-window-frame]").count()).toBe(0);
+          expect(pageErrors).toEqual([]);
+        } finally { await context.close(); }
+      }
+    } finally { await browser.close(); server.stop(); }
+  }, 180_000);
+
+  browserTest("390: a tap on a pill (and within 11 px of it) opens the agent, a tap on the card opens the task, as before", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    const server = await serveEvidenceFixture(OUT);
+    const browser = await chromium.launch(LAUNCH);
+    try {
+      for (const lang of ["en", "uk"] as const) {
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=drag-board`, { width: 390, height: 844 }, "light", lang, "no-preference", true, 2);
+        try {
+          await page.waitForSelector('[data-phone-kanban] [data-phone-card-pipeline] [data-stage-open]', { timeout: 20_000 });
+          await page.waitForTimeout(600);
+          const card = page.locator('[data-phone-kanban-column="assigned"] [data-phone-card-pipeline]:has([data-stage-open="review"])').first();
+          await card.scrollIntoViewIfNeeded();
+          await page.waitForTimeout(300);
+          const key = (await card.getAttribute("data-phone-card"))!;
+          const reach = async (): Promise<{ pill: { x: number; y: number; width: number; height: number }; faceBox: { x: number; y: number; width: number; height: number } }> => ({
+            pill: (await card.locator('[data-stage-open="review"]').boundingBox())!,
+            faceBox: (await card.boundingBox())!,
+          });
+          let { pill, faceBox } = await reach();
+          expect(pill.height, `${lang}: the pill is drawn as it was`).toBeLessThanOrEqual(24);
+          await shot(page, `phone-390-${lang}-card`, card);
+          const screenOf = () => page.evaluate(() => document.querySelector("[data-mobile2-screen]")?.getAttribute("data-mobile2-screen") ?? "board");
+          const back = async () => { await page.goBack().catch(() => {}); await page.waitForTimeout(500); };
+
+          /* 1. The pill itself. */
+          await page.touchscreen.tap(pill.x + pill.width / 2, pill.y + pill.height / 2);
+          await page.waitForTimeout(500);
+          expect(await screenOf(), `${lang}: the pill opens the agent's conversation`).toBe("chat");
+          await shot(page, `phone-390-${lang}-agent-open`);
+          await back();
+          expect(await screenOf()).toBe("board");
+
+          /* 2. 10 px under the pill: still its target, so a 22 px pill is a 44 px one. */
+          ({ pill, faceBox } = await reach());
+          await page.touchscreen.tap(pill.x + pill.width / 2, pill.y + pill.height + 9);
+          await page.waitForTimeout(500);
+          expect(await screenOf(), `${lang}: 9 px under the pill is the pill`).toBe("chat");
+          await back();
+
+          /* 3. The card's title: the task, as before. */
+          const title = (await card.locator("[data-phone-card-title]").boundingBox())!;
+          await page.touchscreen.tap(title.x + title.width / 2, title.y + title.height / 2);
+          await page.waitForTimeout(500);
+          expect(await screenOf(), `${lang}: the card opens the task`).toBe("task");
+          await back();
+
+          /* 4. Beyond reach (16 px above the pill, the state line): the task too. */
+          ({ pill, faceBox } = await reach());
+          await page.touchscreen.tap(pill.x + pill.width / 2, pill.y - 16);
+          await page.waitForTimeout(500);
+          expect(await screenOf(), `${lang}: 16 px above the pill is the card`).toBe("task");
+          await back();
+          expect(await page.locator(`[data-phone-card="${key}"]`).count()).toBe(1);
+          expect(faceBox.width).toBeGreaterThan(0);
+          expect(pageErrors).toEqual([]);
+        } finally { await context.close(); }
+      }
+    } finally { await browser.close(); server.stop(); }
+  }, 180_000);
 });
 
 /*

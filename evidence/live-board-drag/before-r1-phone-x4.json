@@ -1,0 +1,167 @@
+{
+  "board": {
+    "scene": "drag-board",
+    "tasks": 48,
+    "viewport": "390x844 touch",
+    "path": "hold 0.7 s, then 3 s, one move per 16 ms"
+  },
+  "cpuThrottling": 4,
+  "load": [
+    "polls",
+    "clock"
+  ],
+  "pollAtMs": [
+    400,
+    1100,
+    1800,
+    2500
+  ],
+  "clockAtMs": 1500,
+  "runs": [
+    {
+      "reading": {
+        "moves": 188,
+        "frames": 195,
+        "frameMs": {
+          "p50": 16.7,
+          "p95": 16.8,
+          "max": 33.4
+        },
+        "longTasks": {
+          "count": 0,
+          "longestMs": 30.69
+        },
+        "moveCost": {
+          "events": 120,
+          "totalMs": 73.01,
+          "maxMs": 1.56
+        },
+        "layouts": {
+          "count": 1,
+          "totalMs": 0.95
+        },
+        "recalcs": {
+          "count": 92,
+          "totalMs": 50.34
+        },
+        "inputLagMs": {
+          "p95": 40.2,
+          "max": 66.1
+        },
+        "mutations": 98,
+        "mutationKinds": {
+          "attributes:style on div.select-none": 91,
+          "characterData: on #text.": 5,
+          "attributes:aria-label on button.flex": 1,
+          "attributes:data-over on div.flex": 1
+        }
+      },
+      "frames": {
+        "count": 197,
+        "over20": 4,
+        "over33": 1,
+        "longestMs": 33.4
+      }
+    },
+    {
+      "reading": {
+        "moves": 188,
+        "frames": 196,
+        "frameMs": {
+          "p50": 16.7,
+          "p95": 16.8,
+          "max": 50
+        },
+        "longTasks": {
+          "count": 0,
+          "longestMs": 26.7
+        },
+        "moveCost": {
+          "events": 128,
+          "totalMs": 74.57,
+          "maxMs": 1.94
+        },
+        "layouts": {
+          "count": 1,
+          "totalMs": 1.52
+        },
+        "recalcs": {
+          "count": 103,
+          "totalMs": 52.57
+        },
+        "inputLagMs": {
+          "p95": 40.7,
+          "max": 43.3
+        },
+        "mutations": 109,
+        "mutationKinds": {
+          "attributes:style on div.select-none": 102,
+          "characterData: on #text.": 5,
+          "attributes:aria-label on button.flex": 1,
+          "attributes:data-over on div.flex": 1
+        }
+      },
+      "frames": {
+        "count": 198,
+        "over20": 2,
+        "over33": 1,
+        "longestMs": 50
+      }
+    },
+    {
+      "reading": {
+        "moves": 188,
+        "frames": 195,
+        "frameMs": {
+          "p50": 16.7,
+          "p95": 16.8,
+          "max": 33.4
+        },
+        "longTasks": {
+          "count": 0,
+          "longestMs": 25.84
+        },
+        "moveCost": {
+          "events": 132,
+          "totalMs": 74.08,
+          "maxMs": 1.77
+        },
+        "layouts": {
+          "count": 1,
+          "totalMs": 1.27
+        },
+        "recalcs": {
+          "count": 104,
+          "totalMs": 50.83
+        },
+        "inputLagMs": {
+          "p95": 41,
+          "max": 49
+        },
+        "mutations": 110,
+        "mutationKinds": {
+          "attributes:style on div.select-none": 103,
+          "characterData: on #text.": 5,
+          "attributes:aria-label on button.flex": 1,
+          "attributes:data-over on div.flex": 1
+        }
+      },
+      "frames": {
+        "count": 197,
+        "over20": 4,
+        "over33": 1,
+        "longestMs": 33.4
+      }
+    }
+  ],
+  "median": {
+    "p95FrameMs": 16.8,
+    "maxFrameMs": 33.4,
+    "longTasks": 0,
+    "longestTaskMs": 26.7,
+    "moveCostMsPerMove": 0.582578125,
+    "inputLagP95Ms": 40.7,
+    "framesOver20ms": 4,
+    "mutations": 109
+  }
+}

@@ -73,7 +73,7 @@ const ROW_ACTION = "min-h-11 shrink-0 rounded-full border border-border px-3 fon
     ghost treatment, so the two swap without moving a pixel of the row (see
     `actionStyles.ts`). */
 function affordanceClass(coarse: boolean): string {
-  return `inline-flex shrink-0 items-center justify-center rounded-[6px] border border-transparent text-muted hover:bg-sunken hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${coarse ? "h-11 w-11" : "p-1"}`;
+  return `composer-ghost inline-flex shrink-0 items-center justify-center rounded-[6px] border border-transparent text-muted hover:bg-sunken hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${coarse ? "h-11 w-11" : "p-1"}`;
 }
 
 /**

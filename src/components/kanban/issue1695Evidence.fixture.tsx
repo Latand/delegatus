@@ -2334,6 +2334,17 @@ if (DRAG_BOARD) {
         { stageId: "review", state: "running", input: null, activatedBy: null }));
     }
   }
+  /* A live board: every working conversation has written a line since the last poll, as the
+     agents on a running board do. `window.dragBoardChurn()` is one such poll arriving. */
+  Object.assign(window, {
+    dragBoardChurn: () => {
+      for (let index = 0; index < files.length; index += 1) {
+        const file = files[index]!;
+        if (file.activity === "live") files[index] = { ...file, size: file.size + 64, mtime: file.mtime + 1 };
+      }
+      fireTasksChanged();
+    },
+  });
 }
 if (OVERVIEW_SCOPE) {
   tasks.push(
