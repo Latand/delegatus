@@ -18,6 +18,16 @@ const digest = (text: string) => createHash("sha256").update(text).digest("hex")
 const profile = { learnedRules: { project: "ledger-project", roleId: "builder" } };
 const start = (engine: "codex" | "claude" = "codex"): MemoryEngineStart => ({ engine, conversationId: "conversation_ledger", cwd: root, home: path.join(root, `home-${n}`), attempt: { pipelineId: "ledger-pipeline", stageId: "build", attempt: 2 } });
 const write = (file: string, text: string) => { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, text); };
+async function runChild(script: string): Promise<void> {
+  const child = Bun.spawn([process.execPath, "-e", script], { env: process.env, stdout: "pipe", stderr: "pipe" });
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const timeout = new Promise<never>((_, reject) => { timer = setTimeout(() => { child.kill("SIGKILL"); void child.exited.then(() => reject(Error("memory-ledger child exceeded its deadline"))); }, 30_000); });
+    const result = Promise.all([child.exited, new Response(child.stderr).text()]);
+    const [code, stderr] = await Promise.race([result, timeout]);
+    expect({ code, stderr }).toEqual({ code: 0, stderr: "" });
+  } finally { if (timer) clearTimeout(timer); }
+}
 function lesson(rule: string, attempt = 1, rewrite?: string) {
   const source = { project: "ledger-project", pipelineId: "ledger-pipeline", stageId: "build", attempt, roleId: "builder", fixRound: false, conversationId: "conversation_ledger" };
   recordLessonRequest({ ...source, at: "2026-10-16T00:00:00.000Z" });
@@ -162,6 +172,40 @@ test("a byte-limit eviction keeps newer starts and drops their predecessor copie
   expect(rows).toHaveLength(1); expect(rows[0].sequence).toBe(2);
   expect(engineMemoryVersion(old)).toBeNull();
   expect(engineMemoryVersion(rows[0].delivery.engineMemory[0].hash)!.toString()).toBe("A newer captured version.");
+});
+
+test("the 64 MiB archive bound survives a seed, fresh writer and fresh reader", async () => {
+  const state = process.env.LLV_STATE_DIR!;
+  const archive = path.join(state, "role-memory", "delivery.sqlite");
+  const seedScript = `import { Database } from "bun:sqlite";
+import { createHash } from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
+const filename = ${JSON.stringify(archive)};
+fs.mkdirSync(path.dirname(filename), { recursive: true });
+const db = new Database(filename);
+db.exec("CREATE TABLE deliveries (sequence INTEGER PRIMARY KEY AUTOINCREMENT, body TEXT NOT NULL); CREATE TABLE versions (hash TEXT PRIMARY KEY, content BLOB NOT NULL); CREATE TABLE files (sequence INTEGER REFERENCES deliveries(sequence) ON DELETE CASCADE, hash TEXT REFERENCES versions(hash), PRIMARY KEY(sequence, hash)); CREATE INDEX files_hash ON files(hash); BEGIN IMMEDIATE");
+for (let i = 0; i < 64; i++) { const content = Buffer.alloc(1024 * 1024, i); const hash = createHash("sha256").update(content).digest("hex"); const row = { schemaVersion: 1, conversationId: "seed-" + i, engine: "codex", at: "2026-10-16T00:00:00.000Z", scopes: [], rules: [], bytes: 0, engineMemory: [{ kind: "codex-summary", hash, bytes: content.length, loadedBytes: content.length }] }; db.query("INSERT INTO deliveries(sequence,body) VALUES (?,?)").run(i + 1, JSON.stringify(row)); db.query("INSERT INTO versions(hash,content) VALUES (?,?)").run(hash, content); db.query("INSERT INTO files(sequence,hash) VALUES (?,?)").run(i + 1, hash); }
+db.exec("COMMIT"); db.close();`;
+  await runChild(seedScript);
+
+  const summaryFile = path.join(root, `home-${n}`, "memories", "memory_summary.md");
+  write(summaryFile, "z".repeat(1024 * 1024));
+  const input: MemoryEngineStart = { engine: "codex", conversationId: "fresh-writer", cwd: root, home: path.dirname(path.dirname(summaryFile)), nativeMemoryEnabled: true };
+  const writerScript = `import { learnedRulesForLaunchProfile } from ${JSON.stringify(path.join(import.meta.dir, "roleLaunch.ts"))};
+await learnedRulesForLaunchProfile(undefined, ${JSON.stringify(input)});`;
+  await runChild(writerScript);
+
+  const readerScript = `import assert from "node:assert/strict";
+import { DELIVERY_LEDGER_FILE_BYTES, engineMemoryVersion, memoryDeliveries } from ${JSON.stringify(path.join(import.meta.dir, "deliveryLedger.ts"))};
+import { Database } from "bun:sqlite";
+const rows = memoryDeliveries(); assert.equal(rows.length, 64);
+assert.deepEqual(rows.map(row => row.sequence), Array.from({ length: 64 }, (_, i) => i + 2));
+const db = new Database(${JSON.stringify(archive)}, { readonly: true });
+const bytes = db.query("SELECT COALESCE(SUM(length(content)),0) AS bytes FROM versions").get().bytes;
+assert.ok(bytes <= DELIVERY_LEDGER_FILE_BYTES); db.close();
+for (const row of rows) for (const file of row.delivery.engineMemory) { const content = engineMemoryVersion(file.hash); assert.ok(content, "retained delivery must have its content copy"); assert.equal(content.length, file.bytes); }`;
+  await runChild(readerScript);
 });
 
 test("Claude custom directories, disabled settings and linked checkout defaults resolve to the captured index", async () => {

@@ -15,7 +15,7 @@ const { CodexAppServerHost } = await import("@/lib/runtime/codexAppServerHost");
 const { ClaudeStreamBrokerHost } = await import("@/lib/runtime/claudeStreamBrokerHost");
 const { leaveLessons, recordLessonRequest } = await import("./roleStore");
 const { learnedRulesForLaunchProfile, sweepOldLearnedRulesFiles, LEARNED_RULES_MAX_BYTES } = await import("./roleLaunch");
-const { memoryDeliveries } = await import("./deliveryLedger");
+const { engineMemoryVersion, memoryDeliveries } = await import("./deliveryLedger");
 const { renderLearnedRules } = await import("./roleRender");
 const ownership = await import("@/lib/stateOwnership");
 const text = "Validate the ownership of durable receipts before replaying their acknowledgement.";
@@ -75,6 +75,53 @@ test.each(["codex", "claude"] as const)("%s fresh and resumed starts reload the 
       expect(fs.existsSync(path.join(process.env.LLV_STATE_DIR!, "role-memory", "launch"))).toBe(false);
     } finally { start.mockRestore(); adopt.mockRestore(); }
   }
+});
+
+test.each([
+  { resumed: false, allowSubagents: false }, { resumed: true, allowSubagents: false },
+  { resumed: false, allowSubagents: true }, { resumed: true, allowSubagents: true },
+])("Codex starts share the effective native-memory decision with the ledger (resumed: $resumed, allowed: $allowSubagents)", async ({ resumed, allowSubagents }) => {
+  const cwd = fs.mkdtempSync(path.join(sandbox, "codex-memory-policy-"));
+  const project = `codex-memory-policy-${resumed}-${allowSubagents}`;
+  const source = { project, pipelineId: project, stageId: "build", attempt: 1, roleId: "builder", fixRound: false, conversationId: `conversation_${project}` };
+  recordLessonRequest({ ...source, at: "2026-10-11T00:00:00.000Z" });
+  leaveLessons({ request: source, source, none: null, lessons: [{ scope: "role", rule: text, why: "A stored receipt was replayed with a different owner." }] });
+  const launchProfile = emptyLaunchProfile({ cwd, allowSubagents, learnedRules: { project, roleId: "builder" } });
+  const codexHome = path.join(cwd, "codex-home");
+  fs.mkdirSync(path.join(codexHome, "memories"), { recursive: true });
+  fs.writeFileSync(path.join(codexHome, "config.toml"), "[features]\nmemories = true\n");
+  const summary = "Account memory that the denied launch cannot load.";
+  fs.writeFileSync(path.join(codexHome, "memories", "memory_summary.md"), summary);
+  const registry = new AgentRegistry(path.join(cwd, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const sessionId = crypto.randomUUID();
+  const transcript = resumed ? path.join(cwd, `${sessionId}.jsonl`) : null;
+  if (transcript) {
+    fs.writeFileSync(transcript, JSON.stringify({ type: "session_meta", payload: { id: sessionId } }) + "\n");
+    const conversation = registry.ensureConversation("codex", transcript, "account-a");
+    registry.upsert({ key: { engine: "codex", sessionId }, artifactPath: transcript, cwd, accountId: "account-a", launchProfile, status: "dead", host: null, claimEpoch: 0, claimOwner: null, pendingAction: null });
+    void conversation;
+  }
+  const begun = beginLegacySpawnFixture(registry, { engine: "codex", cwd, transport: "structured", launchProfile,
+    ...(transcript ? { purpose: "resume-successor", expectedArtifactPath: transcript, conversationId: registry.conversationForPath(transcript)!.id } : {}) });
+  if (begun.kind !== "created") throw Error("Codex memory-policy receipt missing");
+  const seen: Record<string, unknown>[] = [];
+  const capture = async (options: unknown) => { seen.push(options as Record<string, unknown>); throw Error("captured Codex memory-policy start"); };
+  const start = spyOn(CodexAppServerHost, "start").mockImplementation(capture as never);
+  const adopt = spyOn(CodexAppServerHost, "adopt").mockImplementation(async (_id, options) => capture(options) as never);
+  const prompt = "Fixture brief";
+  try {
+    await expect(defaultStartHost({ engine: "codex", registry, receipt: begun.receipt,
+      spec: { command: "codex", engine: "codex", cwd, windowName: "memory-policy", transcript: transcript ?? undefined, launchProfile },
+      account: { engine: "codex", accountId: "account-a", kind: "managed", home: codexHome, transcriptRoot: cwd, env: { NODE_ENV: "test" } },
+      ...{ prompt }, client: {} as import("@/lib/runtime/client").RuntimeHostClient }, "fixture-capability")).rejects.toThrow("captured Codex memory-policy start");
+    const delivery = memoryDeliveries().find(row => row.delivery.conversationId === begun.receipt.conversationId)!.delivery;
+    const enabled = allowSubagents;
+    expect(seen[0]?.nativeMemoryEnabled).toBe(enabled);
+    expect(seen[0]?.developerInstructions).toContain(text);
+    expect(delivery.engineMemory).toEqual(enabled ? [{ kind: "codex-summary", hash: crypto.createHash("sha256").update(summary).digest("hex"), bytes: Buffer.byteLength(summary), loadedBytes: Buffer.byteLength(summary) }] : []);
+    if (enabled) expect(engineMemoryVersion(delivery.engineMemory[0]!.hash)?.toString()).toBe(summary);
+    expect((resumed ? adopt.mock.calls.length : start.mock.calls.length)).toBe(1);
+  } finally { start.mockRestore(); adopt.mockRestore(); registry.close(); }
 });
 
 test.each(["codex", "claude"] as const)("%s receives a seat-written rule on fresh and resumed engine starts from another account", async engine => {

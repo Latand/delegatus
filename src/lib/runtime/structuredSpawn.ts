@@ -15,6 +15,7 @@ import { claudeSettingsPath } from "@/lib/accounts/claude";
 import { claudeValidityFromLimitRead } from "@/lib/accounts/spawnHealth";
 import { explicitLaunchProfileSandbox, launchProfileEngineReadOnly, type LaunchProfile, type ViewerConversationId } from "@/lib/accounts/migration/contracts";
 import { learnedRulesForLaunchProfile, memoryStartIdentity } from "@/lib/memory/roleLaunch";
+import { codexNativeMemoryEnabled } from "@/lib/agent/codexSpawnPolicy";
 import type { SpawnAccountAdmission } from "@/lib/agent/accountLiveness";
 import { effectiveClaudePermissionMode, resolveCopilotBinary, type AgentEngine, type ResumeSpec } from "@/lib/agent/cli";
 import { identityMaterializationFence, resolveConversationAlias, structuredClaimIdentity, type AgentRegistry, type AgentRegistryEntry, type ProcessIdentity, type RegistryFile, type SpawnReceipt, type StructuredHostColumns } from "@/lib/agent/registry";
@@ -2018,6 +2019,7 @@ export async function defaultStartHost(
   const access = materializeStructuredHostAccess(structuredHostAccessPolicy(profile), input.account.env, capability);
   const env = access.env;
   if (input.engine === "codex") {
+    const nativeMemoryEnabled = await codexNativeMemoryEnabled(input.account.home, profile.allowSubagents, profile.cleanMemory === true);
     const options = {
       cwd: input.spec.cwd,
       codexHome: input.account.home,
@@ -2028,7 +2030,8 @@ export async function defaultStartHost(
       allowSubagents: profile.allowSubagents,
       operatorDecisionForms: operatorDecisionFormsRequired(input.receipt.agentRole, input.receipt.artifactPath ?? input.spec.transcript),
       cleanMemory: profile.cleanMemory === true,
-      developerInstructions: await learnedRulesForLaunchProfile(profile, { engine: "codex", ...memoryStartIdentity(input.registry, input.receipt.conversationId), cwd: input.spec.cwd, home: input.account.home, env }),
+      nativeMemoryEnabled,
+      developerInstructions: await learnedRulesForLaunchProfile(profile, { engine: "codex", ...memoryStartIdentity(input.registry, input.receipt.conversationId), cwd: input.spec.cwd, home: input.account.home, env, nativeMemoryEnabled }),
       mcpServers: profile.mcpServers,
       validateTelegramGrant,
       /* Plugin grant from the durable profile (issue #687): present only for

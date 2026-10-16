@@ -216,6 +216,8 @@ export interface CodexAppServerHostOptions {
   operatorDecisionForms?: boolean;
   /** No automatic memory: no shared-memory hook and Codex's memories feature off. */
   cleanMemory?: boolean;
+  /** Effective native-memory decision shared with the delivery ledger. */
+  nativeMemoryEnabled?: boolean;
   developerInstructions?: string;
   mcpServers?: string[];
   validateTelegramGrant?: () => void;
@@ -1487,7 +1489,7 @@ export class CodexAppServerHost implements EngineHost {
     const granted = grantedPlugins(options.plugins);
     if (!options.allowSubagents) subagentFeatures.plugins = granted.length > 0;
     /* A clean launch reads none of Codex's own memories. */
-    if (options.cleanMemory) subagentFeatures.memories = false;
+    if (options.cleanMemory || options.nativeMemoryEnabled === false) subagentFeatures.memories = false;
     const args = [
       "-c", `agents.enabled=${options.allowSubagents === true}`,
       ...(options.allowSubagents === true ? [] : ["-c", 'approvals_reviewer="user"']),

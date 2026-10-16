@@ -77,7 +77,7 @@ test.each(["full", "restricted"] as const)("startup replays durable Codex sandbo
       adopt: async (store, optionsFor) => {
         const options = await optionsFor(store.readOnlySnapshot().entries["codex:access-thread"]!);
         try {
-          expect(options).toMatchObject({ sandbox: sandbox === "full" ? "danger-full-access" : "workspace-write", approvalPolicy: "on-request" });
+          expect(options).toMatchObject({ sandbox: sandbox === "full" ? "danger-full-access" : "workspace-write", approvalPolicy: "on-request", nativeMemoryEnabled: false });
         } finally { options.releaseCleanup?.(); }
         return [];
       }, adoptClaude: async () => [],

@@ -882,6 +882,11 @@ test.each(["codex", "claude"] as const)("a %s migration successor runs in the CP
   const source = accountRoot(engine, base, "source");
   const target = accountRoot(engine, base, "target");
   const registry = new AgentRegistry(path.join(base, "provider-registry.json"));
+  if (engine === "codex") {
+    fs.writeFileSync(path.join(target.home, "config.toml"), "[features]\nmemories = true\n");
+    fs.mkdirSync(path.join(target.home, "memories"), { recursive: true });
+    fs.writeFileSync(path.join(target.home, "memories", "memory_summary.md"), "The migration successor is launched with native memories disabled.");
+  }
   const { recordLessonRequest, leaveLessons } = await import("@/lib/memory/roleStore");
   const lessonSource = { project: `successor-rules-${engine}`, pipelineId: `successor-rules-${engine}`, stageId: "build", attempt: 1, roleId: "builder", fixRound: false, conversationId: "conversation_successor_rules" };
   const rule = "Check the current owner before replaying a persisted acknowledgement.";
@@ -895,9 +900,10 @@ test.each(["codex", "claude"] as const)("a %s migration successor runs in the CP
     release: async () => {},
   };
   const cells: Array<AgentMemoryCell | null> = [];
-  const capture = async (sessionId: string, options: { memoryCell?: AgentMemoryCell | null; developerInstructions?: string; appendSystemPrompt?: string }) => {
+  const capture = async (sessionId: string, options: { memoryCell?: AgentMemoryCell | null; developerInstructions?: string; appendSystemPrompt?: string; nativeMemoryEnabled?: boolean }) => {
     cells.push(options.memoryCell ?? null);
     expect(engine === "codex" ? options.developerInstructions : options.appendSystemPrompt).toContain(rule);
+    if (engine === "codex") expect(options.nativeMemoryEnabled).toBe(false);
     return { ...fakeHost, identity: engine === "codex" ? { threadId: sessionId } : { sessionId } };
   };
   const adopt = engine === "codex"
@@ -919,7 +925,9 @@ test.each(["codex", "claude"] as const)("a %s migration successor runs in the CP
     return begun.conversationId;
   };
   let attempt = 0;
+  const publishedConversations: string[] = [];
   const publish = (conversationId: string) => {
+    publishedConversations.push(conversationId);
     attempt += 1;
     const nativeId = ["50505050", "5050", "4050", "8050", `50505050505${attempt}`].join("-");
     const transcript = path.join(target.transcriptRoot, `${nativeId}.jsonl`);
@@ -928,7 +936,7 @@ test.each(["codex", "claude"] as const)("a %s migration successor runs in the CP
       host: engine === "codex"
         ? { kind: "codex-app-server", identity: nativeId, epoch: 1, verifiedAt: "2026-10-07T09:00:00.000Z" }
         : { kind: "claude-fork", identity: nativeId, epoch: 1, verifiedAt: "2026-10-07T09:00:00.000Z" } } as ProviderReceipt;
-    return provider.publishHost(receipt, { engine, conversationId: conversationId as `conversation_${string}`, targetAccountId: "target", launchProfile: emptyLaunchProfile({ cwd: base, learnedRules: { project: lessonSource.project, roleId: lessonSource.roleId } }) });
+    return provider.publishHost(receipt, { engine, conversationId: conversationId as `conversation_${string}`, targetAccountId: "target", launchProfile: emptyLaunchProfile({ cwd: base, allowSubagents: true, learnedRules: { project: lessonSource.project, roleId: lessonSource.roleId } }) });
   };
   const saved = { structured: process.env.LLV_STRUCTURED_HOSTS, cpu: process.env.LLV_AGENT_CPU, memory: process.env.LLV_AGENT_MEMORY };
   Object.assign(process.env, { LLV_STRUCTURED_HOSTS: "1", LLV_AGENT_CPU: "auto", LLV_AGENT_MEMORY: "off" });
@@ -946,6 +954,12 @@ test.each(["codex", "claude"] as const)("a %s migration successor runs in the CP
       { workload: "work", slice: "test-agents-work.slice", weight: 100, quotaPercent: 300 },
       { workload: "operator", slice: "test-agents.slice", weight: 1000, quotaPercent: null },
     ]);
+    if (engine === "codex") {
+      const { memoryDeliveries } = await import("@/lib/memory/deliveryLedger");
+      for (const conversationId of publishedConversations.slice(0, 2)) {
+        expect(memoryDeliveries().find(row => row.delivery.conversationId === conversationId)?.delivery.engineMemory).toEqual([]);
+      }
+    }
     const reason = "the kernel applied no CPU controls to a scope in test-agents.slice; the cpu controller is off on one of its ancestors";
     setCpuPortsForTests({ probe: (): CpuContainment => ({ kind: "missing", reason }), runner: () => "" });
     await expect(publish(launch("pipeline"))).rejects.toThrow(`CPU containment for agent work is unavailable: ${reason}`);

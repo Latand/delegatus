@@ -5,6 +5,7 @@ import { waitForStateLock } from "@/lib/state/lockWait";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { operatorDecisionFormsRequired } from "@/lib/orchestrator/operatorDecisionForms";
 import { learnedRulesForLaunchProfile, memoryStartIdentity, roleMemoryProfileForIdentity } from "@/lib/memory/roleLaunch";
+import { codexNativeMemoryEnabled } from "@/lib/agent/codexSpawnPolicy";
 import fs from "node:fs";
 
 import { withoutUnsupportedApiCredentials } from "@/lib/environmentIsolation";
@@ -2330,6 +2331,7 @@ async function adoptStructuredHostsPass(
           startupEnvironment,
           capability,
         );
+        const nativeMemoryEnabled = await codexNativeMemoryEnabled(owner?.home, launchProfile?.allowSubagents ?? false, launchProfile?.cleanMemory === true);
         return {
           cwd: entry.cwd,
           codexHome: owner?.home,
@@ -2341,7 +2343,8 @@ async function adoptStructuredHostsPass(
           allowSubagents: launchProfile?.allowSubagents ?? false,
           operatorDecisionForms: operatorDecisionFormsRequired(conversation?.agentRole, entry.artifactPath),
           cleanMemory: launchProfile?.cleanMemory === true,
-          developerInstructions: await learnedRulesForLaunchProfile(launchProfile, { engine: "codex", ...memoryStartIdentity(registry, conversation.id), cwd: entry.cwd, home: owner?.home, env: access.env }),
+          nativeMemoryEnabled,
+          developerInstructions: await learnedRulesForLaunchProfile(launchProfile, { engine: "codex", ...memoryStartIdentity(registry, conversation.id), cwd: entry.cwd, home: owner?.home, env: access.env, nativeMemoryEnabled }),
           mcpServers: launchProfile?.mcpServers ?? ["viewer"],
           validateTelegramGrant: startupTelegramGrantCheck(registry, entry),
           /* Re-adoption replays the durable grant (issue #687) — a session never

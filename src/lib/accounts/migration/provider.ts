@@ -9,6 +9,7 @@ import type { AccountContext, AccountManager } from "@/lib/accounts/contracts";
 import { CodexAppServerClient, CodexAppServerError } from "@/lib/accounts/codexAppServer";
 import { realClaudeLoginPorts } from "@/lib/accounts/claudeLogin";
 import { resumeCwd } from "@/lib/agent/cli";
+import { codexNativeMemoryEnabled } from "@/lib/agent/codexSpawnPolicy";
 import { normalizeClaudeLaunchModel } from "@/lib/agent/models";
 import { agentRegistry, type AgentRegistry, type TmuxHostEvidence } from "@/lib/agent/registry";
 import { sessionKey, sessionKeyId } from "@/lib/agent/sessionKey";
@@ -369,13 +370,17 @@ async function publishCodexSuccessorHost(input: StructuredHostPublicationInput):
     throw error;
   }
   try {
-    const developerInstructions = await learnedRulesForLaunchProfile(input.profile, { engine: "codex", ...memoryStartIdentity(input.registry, input.conversationId, input.receipt.path), cwd: input.profile.cwd, home: input.target.home, env: access.env });
+    // A migration successor never widens native delegation, regardless of the
+    // source profile, so its memories feature follows that denied policy.
+    const nativeMemoryEnabled = await codexNativeMemoryEnabled(input.target.home, false, input.profile.cleanMemory === true);
+    const developerInstructions = await learnedRulesForLaunchProfile(input.profile, { engine: "codex", ...memoryStartIdentity(input.registry, input.conversationId, input.receipt.path), cwd: input.profile.cwd, home: input.target.home, env: access.env, nativeMemoryEnabled });
     if (input.ownsOperation && !await input.ownsOperation()
       || !input.registry.ownsStructuredHostClaim(key, claimed.claimOwner, claimed.claimEpoch)) throw Error("successor ownership changed during memory preparation");
     host = await CodexAppServerHost.adopt(input.receipt.nativeId, {
       cwd: input.profile.cwd,
       codexHome: input.target.home,
       cleanMemory: input.profile.cleanMemory === true,
+      nativeMemoryEnabled,
       developerInstructions,
       fileAuthCredentials: input.target.kind === "managed",
       model: input.profile.model ?? undefined,

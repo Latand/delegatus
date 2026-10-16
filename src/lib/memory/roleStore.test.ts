@@ -18,6 +18,17 @@ const { ROLE_MEMORY_BOUND } = await import("./roleTypes");
 const ROLE_MEMORY_HISTORY_LIMIT = 10_000;
 type RoleMemoryRule = import("./roleTypes").RoleMemoryRule;
 
+async function runMemoryChild(script: string): Promise<void> {
+  const child = Bun.spawn([process.execPath, "-e", script], { env: process.env, stdout: "pipe", stderr: "pipe" });
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const timeout = new Promise<never>((_, reject) => { timer = setTimeout(() => { child.kill("SIGKILL"); void child.exited.then(() => reject(Error("role-memory history child exceeded its deadline"))); }, 30_000); });
+    const result = Promise.all([child.exited, new Response(child.stderr).text()]);
+    const [code, stderr] = await Promise.race([result, timeout]);
+    expect({ code, stderr }).toEqual({ code: 0, stderr: "" });
+  } finally { if (timer) clearTimeout(timer); }
+}
+
 let n = 0;
 const PROJECT = () => `project-${n}`;
 beforeEach(() => { n += 1; });
@@ -306,4 +317,29 @@ test("ordinary history has an independent ten-thousand-entry window beside every
   expect(row.history.filter(entry => !entry.pass)).toHaveLength(ROLE_MEMORY_HISTORY_LIMIT);
   expect(row.history.filter(entry => entry.pass)).toEqual(curator);
   expect(row.history[0].revision).toBe(7);
+});
+
+test("the ordinary history window and curator records survive seed, fresh writer and fresh reader processes", async () => {
+  const scope = `role:${PROJECT()}:builder`;
+  const modulePath = path.join(import.meta.dir, "roleStore.ts");
+  const seedScript = `import { roleMemoryCollection } from ${JSON.stringify(modulePath)};
+const ordinary = Array.from({ length: 10_005 }, (_, i) => ({ revision: i + 1, at: "2026-10-16T00:00:00.000Z", by: "agent", added: [], merged: [], archived: [] }));
+const curator = Array.from({ length: 10 }, (_, i) => ({ revision: 10_006 + i, at: "2026-10-16T00:00:00.000Z", by: "curator", pass: "persisted-pass-" + i, added: [], merged: [], archived: [], before: [] }));
+roleMemoryCollection(true).boundedPatch(1, tx => tx.put({ kind: "scope", scope: ${JSON.stringify(scope)}, revision: 10_015, active: [], history: [...ordinary, ...curator] }));`;
+  await runMemoryChild(seedScript);
+
+  const writerScript = `import { leaveLessons, recordLessonRequest } from ${JSON.stringify(modulePath)};
+const source = { project: ${JSON.stringify(PROJECT())}, pipelineId: "history-process", stageId: "fix", attempt: 1, roleId: "builder", fixRound: false, conversationId: "conversation_history_process" };
+recordLessonRequest({ ...source, at: "2026-10-16T00:00:00.000Z" });
+leaveLessons({ request: source, source, lessons: [{ scope: "role", rule: "Inspect persisted history after a fresh process writes to the scope.", why: "A process-local assertion missed reload behavior." }], none: null, now: "2026-10-16T00:00:00.000Z" });`;
+  await runMemoryChild(writerScript);
+
+  const readerScript = `import assert from "node:assert/strict";
+import { roleMemoryCollection } from ${JSON.stringify(modulePath)};
+const row = roleMemoryCollection().get("s:" + ${JSON.stringify(scope)}); assert.equal(row.kind, "scope");
+const ordinary = row.history.filter(entry => !entry.pass); const curator = row.history.filter(entry => entry.pass);
+assert.equal(ordinary.length, 10_000); assert.equal(curator.length, 10);
+assert.deepEqual(ordinary.map(entry => entry.revision), [...Array.from({ length: 9_999 }, (_, i) => i + 7), 10_016]);
+assert.deepEqual(curator.map(entry => entry.pass), Array.from({ length: 10 }, (_, i) => "persisted-pass-" + i));`;
+  await runMemoryChild(readerScript);
 });

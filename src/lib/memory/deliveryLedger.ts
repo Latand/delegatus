@@ -19,6 +19,8 @@ export interface MemoryEngineStart {
   cwd: string;
   home?: string;
   env?: NodeJS.ProcessEnv;
+  /** Effective native-memory decision resolved by the launch policy. */
+  nativeMemoryEnabled?: boolean;
   /** Fallback used by the native Claude spawn policy when home settings are absent. */
   claudeSettingsPath?: string | null;
 }
@@ -53,13 +55,15 @@ async function optionalFile(file: string): Promise<Buffer | null> {
   } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return null; throw error; }
 }
 async function engineMemory(start: MemoryEngineStart, clean: boolean) {
-  if (clean) return [];
+  if (clean || start.nativeMemoryEnabled === false) return [];
   const home = start.home ?? path.join(start.env?.HOME ?? process.env.HOME ?? os.homedir(), start.engine === "codex" ? ".codex" : ".claude");
   let file: string;
   if (start.engine === "codex") {
-    const configFile = await optionalFile(path.join(home, "config.toml"));
-    const config = configFile ? Bun.TOML.parse(configFile.toString("utf8")) as { features?: { memories?: boolean }; memories?: { use_memories?: boolean } } : {};
-    if (config.features?.memories === false || config.memories?.use_memories === false) return [];
+    if (start.nativeMemoryEnabled !== true) {
+      const configFile = await optionalFile(path.join(home, "config.toml"));
+      const config = configFile ? Bun.TOML.parse(configFile.toString("utf8")) as { features?: { memories?: boolean }; memories?: { use_memories?: boolean } } : {};
+      if (config.features?.memories === false || config.memories?.use_memories === false) return [];
+    }
     file = path.join(home, "memories", "memory_summary.md");
   } else {
     let root = repositoryRootForPath(start.cwd) ?? start.cwd;
