@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import { retainCreditGuardEvidence } from "@/lib/accounts/creditGuard";
 import fs from "node:fs";
 import path from "node:path";
@@ -249,7 +250,7 @@ export class QuotaController {
      marked as cache provenance, which keeps it ineligible for auto-balance
      decisions (those require a fresh live observation). */
   private carryForward(engine: QuotaEngine, accountId: string, reason: string, now: number): QuotaObservation {
-    const previous = this.registry.readOnlySnapshot().quotaObservations[engine][accountId];
+    const previous = this.registry.quotaObservations(engine).find(row => row.accountId === accountId);
     if (previous?.limits) {
       return {
         engine,
@@ -324,10 +325,11 @@ export class QuotaController {
         || snapshot.routing !== this.registry.engineRouting(engine).revision
         || snapshot.active !== active) return [];
       const observations: QuotaObservation[] = [];
+      const previousByAccount = new Map(this.registry.quotaObservations(engine).map(row => [row.accountId, row]));
       for (const [index, result] of results.entries()) {
         const account = current.get(result.account.id);
         if (!credentialsUnchanged[index] || !account || snapshot.accounts[index]!.identity !== accountProbeIdentity(account)) continue;
-        const previous = this.registry.readOnlySnapshot().quotaObservations[engine][account.id];
+        const previous = previousByAccount.get(account.id);
         // Another read may have committed while this one waited for its provider.
         if (previous && Date.parse(previous.authCheckedAt) > now) continue;
         const observation = result.observation;
@@ -344,13 +346,19 @@ export class QuotaController {
         }
       }
       if (observations.length) {
+        const durable = observations.map(observation => durableQuotaObservation({ ...observation, engine }, this.bootId));
+        const changed = durable.filter(observation => !isDeepStrictEqual(previousByAccount.get(observation.accountId), observation));
         if (engine === "copilot") {
-          observations.forEach((observation) => this.registry.recordQuotaObservation(durableQuotaObservation(observation, this.bootId)));
+          changed.forEach(observation => this.registry.recordQuotaObservation(observation));
           return observations;
         }
+        // A cached provider answer carries its original timestamps. Rewriting
+        // it only advances the policy revision and invalidates every reader.
+        // An active sustain window still needs its time-based evaluation.
+        if (!changed.length && !this.registry.autoBalancePolicy(engine).sustain) return observations;
         this.registry.recordQuotaEvaluation({
           engine,
-          observations: observations.map((observation) => durableQuotaObservation({ ...observation, engine }, this.bootId)),
+          observations: durable,
           signature: null, evidence: null, bootId: this.bootId,
           now: new Date(now).toISOString(), minimumGapMs: 60_000,
         });

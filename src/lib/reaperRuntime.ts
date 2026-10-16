@@ -1012,9 +1012,18 @@ export async function runReaperCycle(options: {
      structured-runtime rollback, while structured receipts wait for their
      required client. The pass is bounded and idempotent; its failure never
      blocks the reaper. */
-  const runtimeClientForSpawns = (options.actuation?.runtimeClient ?? runtimeHostClient)();
   try {
-    await (options.actuation?.terminalizeStaleSpawns ?? terminalizeStaleStructuredSpawns)(registry, runtimeClientForSpawns);
+    const inventorySidecar = process.env.LLV_ACCOUNT_CONTROLLER_INVENTORY_WORKER === "1";
+    const hasSpawnWork = !inventorySidecar || registry.openSpawnReceipts().length > 0
+      || Object.values(registry.readOnlySnapshot().entries).some(entry => entry.status === "starting");
+    if (hasSpawnWork) {
+      const runtimeClientForSpawns = (options.actuation?.runtimeClient ?? runtimeHostClient)();
+      await (options.actuation?.terminalizeStaleSpawns ?? terminalizeStaleStructuredSpawns)(registry, runtimeClientForSpawns, {
+        // The sidecar never activates the serving release, including after a
+        // restart. Its pending launches still converge without owner backfill.
+        repairFailures: !inventorySidecar,
+      });
+    }
   } catch (error) {
     console.error("[reaper] stale structured spawn convergence failed", error);
   }
