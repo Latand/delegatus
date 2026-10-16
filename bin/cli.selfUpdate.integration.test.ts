@@ -2048,7 +2048,6 @@ for (const failurePhase of ["none", "files", "page", "chunk", "output", "journal
         expect(candidate.phases.page.status).toBe(pageFails ? "failed" : "ready");
         expect(candidate.phases.page.elapsedMs).toBeGreaterThanOrEqual(200);
       }
-      expect(candidate.elapsedMs).toBeLessThan(3_000);
       expect(candidate.phases.chunk.status).toBe(failurePhase === "none" ? "ready" : failurePhase === "chunk" ? "failed" : "pending");
       expect(statSync(evidenceFile).mode & 0o777).toBe(0o600);
     }

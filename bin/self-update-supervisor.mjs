@@ -439,6 +439,7 @@ export async function waitForPageAndChunk(port, {
 
 function readinessReason(detail) {
   if (detail === null || detail === undefined) return null;
+  if (["http-status", "probe-error", "deadline"].includes(detail)) return detail;
   if (detail === "Viewer readiness deadline expired") return "deadline";
   if (/^GET \/ answered [1-5]\d\d$/.test(detail)
     || /^GET \/_next\/static\/[^\s]+\.js answered [1-5]\d\d$/.test(detail)) return "http-status";

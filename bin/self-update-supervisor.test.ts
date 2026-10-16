@@ -524,11 +524,43 @@ describe("bounded page and chunk readiness", () => {
     now = 300;
     journal.observe({ phase: "files", status: "ready" });
     journal.finish();
-    expect(JSON.parse(readFileSync(file, "utf8")).runs[0].phases.files).toMatchObject({ attempts: 2, elapsedMs: 300, status: "ready" });
+    expect(JSON.parse(readFileSync(file, "utf8")).runs[0]).toMatchObject({
+      elapsedMs: 300,
+      phases: { files: { attempts: 2, elapsedMs: 300, status: "ready" } },
+    });
     for (let n = 0; n < 4; n++) createReadinessJournal(file, { revision: `rollback-${n}`, pid: 124 + n }, () => now).finish();
     const runs = JSON.parse(readFileSync(file, "utf8")).runs;
     expect(runs).toHaveLength(4);
     expect(runs.map((run: { revision: string }) => run.revision)).toEqual(["rollback-0", "rollback-1", "rollback-2", "rollback-3"]);
+  });
+
+  test("reopening a journal preserves normalized readiness reasons without raw details", () => {
+    const file = join(root, "normalized-readiness.json");
+    const candidate = createReadinessJournal(file, { revision: "candidate", pid: 123 });
+    candidate.observe({ phase: "files", status: "failed", detail: "GET / answered 503" });
+    candidate.observe({ phase: "page", status: "failed", detail: "Viewer readiness probe failed (TimeoutError)" });
+    candidate.observe({ phase: "chunk", status: "failed", detail: "Viewer readiness deadline expired" });
+    candidate.finish("GET / answered 503");
+
+    const beforeRollback = JSON.parse(readFileSync(file, "utf8"));
+    beforeRollback.runs.unshift({ revision: "legacy", detail: "spawn /private/sentinel with secret-value",
+      phases: { page: { detail: "spawn /private/sentinel with secret-value" } } });
+    writeFileSync(file, JSON.stringify(beforeRollback));
+
+    createReadinessJournal(file, { revision: "rollback", pid: 124 });
+    const persisted = readFileSync(file, "utf8");
+    const runs = JSON.parse(persisted).runs;
+    expect(runs.find((run: { revision: string }) => run.revision === "candidate")).toMatchObject({
+      detail: "http-status",
+      phases: {
+        files: { detail: "http-status" },
+        page: { detail: "probe-error" },
+        chunk: { detail: "deadline" },
+      },
+    });
+    expect(runs.find((run: { revision: string }) => run.revision === "legacy")).toMatchObject({ detail: "probe-failed", phases: { page: { detail: "probe-failed" } } });
+    expect(persisted).not.toContain("/private/sentinel");
+    expect(persisted).not.toContain("secret-value");
   });
 
   test("journal failures at initial, phase and final writes stay best effort and details are sanitized", () => {
