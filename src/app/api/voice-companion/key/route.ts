@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { CompanionStorage } from "@/lib/voiceCompanion/storage";
+import { keysOwnerGate } from "@/lib/keys/access";
 import { companionBody, companionFailure, companionOperator } from "@/lib/voiceCompanion/http";
 
 export const runtime = "nodejs";
@@ -7,7 +8,7 @@ export const dynamic = "force-dynamic";
 
 /** Write-only. Even failures return a fixed code, without the request or a path. */
 export async function PUT(req: NextRequest) {
-  const rejection = companionOperator(req);
+  const rejection = keysOwnerGate(req) ?? companionOperator(req);
   if (rejection) return rejection;
   try {
     const body = await companionBody(req, 1_024);

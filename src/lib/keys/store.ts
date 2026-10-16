@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import fs from "node:fs";
 
 import { openRouterKeyPath, writeOpenRouterApiKey } from "@/lib/asks/settings";
@@ -113,6 +114,11 @@ export function exportKeys(now: Date): { text: string; count: number; omitted: K
   return { text: [exportHeader(lines.length, now), ...lines].join("\n") + "\n", count: lines.length, omitted };
 }
 
+/** A fingerprint of the whole value, for the import's re-check: the mask hides most of a key, so two different keys can share it. */
+function keyRevision(id: KeyId, value: string): string {
+  return crypto.createHash("sha256").update(`delegatus-key-revision:${id}:${value}`).digest("hex").slice(0, 24);
+}
+
 type PlannedRow = ImportRow & { value?: string };
 
 function plan(text: string): { rows: PlannedRow[]; unknown: string[]; unparsed: number[] } {
@@ -123,8 +129,8 @@ function plan(text: string): { rows: PlannedRow[]; unknown: string[]; unparsed: 
     const here = readKey(id);
     if (here.source === "env") return { id, kind: "env", masked };
     if (here.value === value) return { id, kind: "same", masked };
-    if (here.source === "file") return { id, kind: "replaces", masked, was: maskKey(id, here.value!), value };
-    if (here.source === "failed") return { id, kind: "replaces", masked, was: null, value };
+    if (here.source === "file") return { id, kind: "replaces", masked, was: maskKey(id, here.value!), revision: keyRevision(id, here.value!), value };
+    if (here.source === "failed") return { id, kind: "replaces", masked, was: null, revision: null, value };
     return { id, kind: "new", masked, value };
   });
   return { rows, unknown: parsed.unknown, unparsed: parsed.unparsed };
@@ -146,7 +152,7 @@ export interface ImportOutcome {
 /**
  * Writes the keys the operator confirmed, and only while each still matches
  * what the preview showed: the same kind, and for a replacement the same key
- * being replaced. A key set or changed since the preview is left alone.
+ * being replaced, compared by a fingerprint of its whole value. A key set or changed since the preview is left alone.
  */
 export async function applyImport(text: string, confirm: ImportConfirmation): Promise<ImportOutcome> {
   const outcome: ImportOutcome = { saved: [], unconfirmed: [], failed: [] };
@@ -155,7 +161,7 @@ export async function applyImport(text: string, confirm: ImportConfirmation): Pr
     const row = plan(text).rows.find((candidate) => candidate.id === id);
     if (!row || (row.kind !== "new" && row.kind !== "replaces")) continue;
     const confirmed = confirm[id];
-    if (!confirmed || confirmed.kind !== row.kind || (row.kind === "replaces" && (confirmed.was ?? null) !== (row.was ?? null))) {
+    if (!confirmed || confirmed.kind !== row.kind || (row.kind === "replaces" && (confirmed.revision ?? null) !== (row.revision ?? null))) {
       outcome.unconfirmed.push(id);
       continue;
     }

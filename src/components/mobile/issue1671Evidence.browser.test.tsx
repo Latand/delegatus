@@ -11375,6 +11375,8 @@ describe("keys settings", () => {
       `${envLine("DELEGATUS_TELEGRAM_BOT_TOKEN", "7".repeat(9))}:${"6".repeat(35)}`,
       `LLV_TOKEN=${"8".repeat(32)}`,
     ].join("\n");
+    /* The sample with thirty more harmless variables after it: the longest small import a person pastes. */
+    const IMPORT_LONG = [IMPORT_SAMPLE, ...Array.from({ length: 30 }, (_, index) => `LLV_NOTE_${String(index + 1).padStart(2, "0")}=1`)].join("\n");
     /* The bot's connect asks Telegram who the bot is; here it records the token as the connect would, and nothing leaves the machine. */
     setTelegramConnectForTests(async (token) => { saveBotToken(token, botIdFromToken(token)); });
     let listFails = false;
@@ -11401,9 +11403,9 @@ describe("keys settings", () => {
     const readings: Record<string, unknown>[] = [];
     const failures: string[] = [];
     type State = "settings" | "list" | "env-popover" | "revealed" | "copied" | "menu" | "copied-masked" | "replace-invalid" | "add"
-      | "copy-all" | "import-preview" | "import-done" | "staging" | "member" | "read-failed" | "row-failed" | "from-dictation";
+      | "copy-all" | "import-preview" | "import-long" | "import-done" | "staging" | "member" | "read-failed" | "row-failed" | "from-dictation";
     const STATES: State[] = ["settings", "list", "env-popover", "revealed", "copied", "menu", "copied-masked", "replace-invalid", "add",
-      "copy-all", "import-preview", "import-done", "staging", "member", "read-failed", "row-failed", "from-dictation"];
+      "copy-all", "import-preview", "import-long", "import-done", "staging", "member", "read-failed", "row-failed", "from-dictation"];
 
     /* Each scene's machine: staging by its variable, a team member by a session of a team in its own state directory, a list that cannot be read, one key file that cannot be. */
     let memberCookie: string | null = null;
@@ -11488,9 +11490,11 @@ describe("keys settings", () => {
             for (const control of host.querySelectorAll<HTMLElement>("button, input, textarea, [role=button]")) {
               const r = control.getBoundingClientRect();
               if (!r.width) continue;
-              if (r.left < box.left - 1 || r.right > box.right + 1) offscreen.push(control.getAttribute("aria-label") ?? control.textContent?.trim().slice(0, 40) ?? control.tagName);
-              if (phone && !control.matches("[data-keys-dot]") && (r.height < 43.5 || r.width < 43.5) && control.closest("[data-keys-page], [data-keys-import-page]")) smallTargets.push(`${control.getAttribute("aria-label") ?? control.textContent?.trim().slice(0, 40)} ${Math.round(r.width)}×${Math.round(r.height)}`);
+              if (r.left < box.left - 1 || r.right > box.right + 1 || r.right > innerWidth + 0.5) offscreen.push(control.getAttribute("aria-label") ?? control.textContent?.trim().slice(0, 40) ?? control.tagName);
+              if (phone && (r.height < 43.5 || r.width < 43.5) && control.closest("[data-keys-page], [data-keys-import-page]")) smallTargets.push(`${control.getAttribute("aria-label") ?? control.textContent?.trim().slice(0, 40)} ${Math.round(r.width)}×${Math.round(r.height)}`);
             }
+            /* A pasted line whose text is taller than its own box was squeezed over the lines after it. */
+            const squashed = [...host.querySelectorAll<HTMLElement>("[data-keys-import-masked] > span")].filter((line) => line.scrollHeight > line.clientHeight + 1).map((line) => line.textContent?.slice(0, 30) ?? "");
             const popover = document.querySelector("[data-keys-pop]")?.closest("[role=tooltip]")?.getBoundingClientRect();
             const menuNode = document.querySelector("[data-keys-menu]");
             const menu = menuNode?.getBoundingClientRect();
@@ -11505,8 +11509,8 @@ describe("keys settings", () => {
             const fieldText = [...host.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>("textarea, input:not([type=password])")].map((field) => field.value).join(" ");
             return {
               surface: { left: Math.round(box.left), top: Math.round(box.top), width: Math.round(box.width), height: Math.round(box.height) },
-              overflowX: host.scrollWidth - host.clientWidth, truncated, cutByEdge, offscreen, smallTargets,
-              popoverInView: inView(popover), menuInView: inView(menu), popoverInSurface: inSurface(popover), menuInSurface: inSurface(menu), menuCovers, envRowText,
+              overflowX: host.scrollWidth - host.clientWidth, truncated, cutByEdge, offscreen, smallTargets, squashed,
+              surfaceInView: inView(box), popoverInView: inView(popover), menuInView: inView(menu), popoverInSurface: inSurface(popover), menuInSurface: inSurface(menu), menuCovers, envRowText,
               text: (host.innerText ?? "").replace(/\s+/g, " ").trim(), fieldText,
             };
           }, { surface, phone });
@@ -11528,7 +11532,9 @@ describe("keys settings", () => {
             if (geometry.overflowX > 1) failures.push(`${key}: horizontal overflow ${geometry.overflowX}`);
             if (geometry.offscreen.length) failures.push(`${key}: controls outside the surface ${geometry.offscreen.join(", ")}`);
             if (geometry.smallTargets.length) failures.push(`${key}: phone targets under 44 px ${geometry.smallTargets.join(", ")}`);
+            if (geometry.squashed.length) failures.push(`${key}: pasted lines squeezed over the next ${geometry.squashed.join(" | ")}`);
             if (geometry.truncated.length) failures.push(`${key}: cut text ${geometry.truncated.join(" | ")}`);
+            if (geometry.surfaceInView === false) failures.push(`${key}: the menu or sheet reaches past the window (${geometry.surface.top}+${geometry.surface.height})`);
             if (geometry.popoverInView === false || geometry.popoverInSurface === false) failures.push(`${key}: popover outside the surface or the window`);
             if (geometry.menuInView === false || geometry.menuInSurface === false) failures.push(`${key}: menu outside the surface or the window`);
             if (geometry.menuCovers.length) failures.push(`${key}: menu covers ${geometry.menuCovers.join(", ")}`);
@@ -11601,15 +11607,28 @@ describe("keys settings", () => {
                   expect(lines.slice(1)).toEqual([`${envLine("OPENROUTER_API_KEY", value.openrouter)}`, `${envLine("OPENAI_API_KEY", value.openai)}`, `${envLine("ELEVENLABS_API_KEY", value.elevenlabs)}`]);
                   break;
                 }
-                case "import-preview": case "import-done":
+                case "import-preview": case "import-long": case "import-done":
                   await tap("[data-keys-open-import]");
-                  await page.locator("[data-keys-import-text]").fill(IMPORT_SAMPLE);
+                  await page.locator("[data-keys-import-text]").fill(state === "import-long" ? IMPORT_LONG : IMPORT_SAMPLE);
                   await page.locator("[data-keys-import-preview]").waitFor();
                   expect(await page.locator("[data-keys-import-row]").evaluateAll((rows) => rows.map((element) => `${element.getAttribute("data-keys-import-row")}:${element.getAttribute("data-keys-import-kind")}`)))
                     .toEqual(["openrouter:replaces", "openai:env", "elevenlabs:invalid", "soniox:new", "telegram:new"]);
                   /* The preview wrote nothing. */
                   expect(fs.readFileSync(path.join(CONFIG, "openrouter-api-key"), "utf8")).toBe(value.openrouter);
                   if (state === "import-preview") { await frame(state, phone ? "[data-keys-import-apply]" : undefined); break; }
+                  if (state === "import-long") {
+                    /* «Apply» is reachable: scrolled to, it lies whole inside the window and the menu, whatever the paste's length. */
+                    const apply = page.locator("[data-keys-import-apply]");
+                    await apply.scrollIntoViewIfNeeded();
+                    const reach = await page.evaluate(({ surface }) => {
+                      const a = document.querySelector("[data-keys-import-apply]")!.getBoundingClientRect();
+                      const s = document.querySelector(surface)!.getBoundingClientRect();
+                      return { a: { top: a.top, bottom: a.bottom }, s: { top: s.top, bottom: s.bottom }, height: innerHeight };
+                    }, { surface });
+                    if (reach.a.top < 0 || reach.a.bottom > reach.height || reach.a.top < reach.s.top - 1 || reach.a.bottom > reach.s.bottom + 1) failures.push(`keys-${state}-${lang}-${theme}-${width}: Apply is not reachable ${JSON.stringify(reach)}`);
+                    await frame(state, "[data-keys-import-apply]");
+                    break;
+                  }
                   await tap("[data-keys-import-apply]");
                   await page.locator("[data-keys-import-done]").waitFor();
                   expect(await page.locator("[data-keys-import-text]").inputValue()).toBe("");

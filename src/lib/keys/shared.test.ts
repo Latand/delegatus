@@ -49,3 +49,17 @@ test("the pasted text shows masked: names kept, values down to four characters, 
   const shown = maskPastedLines([`# Delegatus keys · 2026-10-15 · 2`, `export ${envLine("OPENROUTER_API_KEY", openrouter)}`, elevenlabs, `${elevenlabs}=x`, "SONIOX_API_KEY=short"].join("\n"));
   expect(shown).toEqual(["# Delegatus keys · 2026-10-15 · 2", "OPENROUTER_API_KEY=••••0000", "••••1111", "••••", "SONIOX_API_KEY=••••"]);
 });
+
+test("a comment never shows a pasted value: the export header stays, any other comment is hidden", () => {
+  const openai = ["sk", "proj", "2".repeat(48)].join("-");
+  const shown = maskPastedLines([
+    "# Delegatus keys · 2026-10-15 · 2",
+    `# ${envLine("OPENAI_API_KEY", openai)}`,
+    `#${envLine("OPENROUTER_API_KEY", openrouter)}`,
+    `## ${elevenlabs}`,
+    "# a note about the keys",
+  ].join("\n"));
+  expect(shown[0]).toBe("# Delegatus keys · 2026-10-15 · 2");
+  expect(shown.slice(1)).toEqual(["# ••••", "# ••••", "# ••••", "# ••••"]);
+  for (const secret of [openai, openrouter, elevenlabs]) expect(shown.join("\n")).not.toContain(secret.slice(-8));
+});

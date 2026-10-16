@@ -13,10 +13,10 @@ function confirmation(raw: unknown): ImportConfirmation | null {
   const confirm: ImportConfirmation = {};
   for (const [id, entry] of Object.entries(raw as Record<string, unknown>)) {
     if (!isKeyId(id) || !entry || typeof entry !== "object") return null;
-    const { kind, was } = entry as { kind?: unknown; was?: unknown };
+    const { kind, revision } = entry as { kind?: unknown; revision?: unknown };
     if (kind !== "new" && kind !== "replaces") return null;
-    if (was !== undefined && was !== null && typeof was !== "string") return null;
-    confirm[id] = { kind, was: typeof was === "string" ? was : null };
+    if (revision !== undefined && revision !== null && typeof revision !== "string") return null;
+    confirm[id] = { kind, revision: typeof revision === "string" ? revision : null };
   }
   return confirm;
 }

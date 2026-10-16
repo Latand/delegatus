@@ -8,17 +8,13 @@ at `0ce86fd1a`.
 
 ## Originating requirement
 
-Operator, 2026-10-15 ~06:40Z, voice message in Russian, relayed verbatim in
-the pinned task specification:
-
-> «нам в настройках, у нас есть сейчас настройки делегатуса, нам нужно иметь
-> возможность там где-то место, где вводить все ключи. Чтобы можно было.
-> Switch glazic нажать, и его просмотреть, скопировать, или скопировать без.
-> Чтобы я мог переносить на другую машину. Чтобы все ключи. Ключи вводились в
-> одном месте, а не как сейчас, ключ open router только. То есть там, где у
-> нас транскрипции, так там разные environment variables, они должны быть там
-> сделаны. Можно сделать прототип, несколько прототипов, я посмотрю картинки.
-> Решения.»
+Operator request, 2026-10-15, summarised from the pinned task specification:
+Settings should have one place to enter every key. Each key can be looked at
+through an eye switch, copied, or copied without being shown, so the whole set
+can move to another machine. Keys are entered in that one place instead of only
+the OpenRouter key today; the dictation providers, which currently read separate
+environment variables, belong there too. The operator wants several prototypes
+as pictures and then a decision.
 
 What it asks for, point by point:
 
@@ -27,7 +23,7 @@ What it asks for, point by point:
 | R1 | One place in Delegatus Settings where every key is entered | §4, §6 (one «Ключі» section replaces the single OpenRouter row) |
 | R2 | An eye switch to look at a key | §5 reveal contract, every variant |
 | R3 | Copy a key | §5, every variant |
-| R4 | «скопировать без» — copy without (looking) | §5; the reading is question Q1 |
+| R4 | Copy without looking at the value | §5; the reading is question Q1 |
 | R5 | So the keys can be moved to another machine | §7 move options, every variant |
 | R6 | All keys, the transcription ones included, which today are only environment variables | §2 inventory, §4 catalog |
 | R7 | Several prototypes as pictures, then decisions | §6 variants, §10 questions |
@@ -57,7 +53,7 @@ Three other keys can be typed into Delegatus, each in its own corner:
 
 When a dictation key is missing, the error names a file path and a variable
 (`src/app/api/transcribe/route.ts:60`, `:78`; `src/app/api/transcribe/token/route.ts:48`, `:81`),
-which is the «разные environment variables» the operator meets.
+which are the separate environment variables the operator meets.
 
 **Every key path is write-only by design.** The reader comments say so in four
 places: «never logged, never returned by a route»
@@ -212,16 +208,15 @@ per press:
   then masks again; leaving the page or closing the menu masks at once.
   `aria-pressed` on the eye.
 - **Copy** fetches the value and writes it to the clipboard without putting
-  it on screen. This is the natural reading of «скопировать без» («copy
-  without looking»), so the default copy never reveals. Over a plain-http LAN
+  it on screen. This is the natural reading of "copy without looking", so the default copy never reveals. Over a plain-http LAN
   origin `navigator.clipboard` is absent and the existing fallback
   (`src/components/feed/CopyButton.tsx:12-38`) uses `execCommand`, which iOS
   allows only inside the tap; the build fetches on `pointerdown` and copies on
   `click`, or uses a promise-valued `ClipboardItem`. A confirmation reads
   «Скопійовано» for 2 s.
 - **Copy masked** copies the masked string from the list payload. It needs no
-  reveal request. It exists for the second reading of «скопировать без»
-  (sharing which key is set in a chat or an issue). Q1.
+  reveal request. It exists for the second reading of "copy without" (sharing which
+  key is set in a chat or an issue). Q1.
 
 ## 6. Variants
 
@@ -367,7 +362,7 @@ safe to send only with a passphrase sent separately; the step says so.
 
 ## 10. Operator questions
 
-**Q1. What does «скопировать без» mean?**
+**Q1. What does "copy without" mean?**
 (a) Copy the value without showing it on screen — the default copy button
 does that. (b) Copy a masked form (`sk-or-v1-••••0000`) to show which key is
 set. (c) Both: copy without showing as the button, masked copy in ⋯.
@@ -507,7 +502,9 @@ fields replaced by a button that opens «Keys» on that key. The build follows
   /api/keys/<id>`, `POST /api/keys/export`, and `POST /api/keys/import`,
   which answers a masked preview for `{ text }` and writes for `{ text,
   confirm }` only the keys whose kind (and, for a replacement, whose replaced
-  key) still match what the preview showed. The gate is
+  key) still match what the preview showed. A replaced key is matched by a
+  fingerprint of its whole value (`revision`), because the mask hides most of
+  a key and two different keys can share it. The gate is
   `src/lib/keys/access.ts`: same origin, no spawn capability of any kind, no
   Viewer service, a browser page's own `sec-fetch-site: same-origin`, and the
   owner on a team install.
@@ -529,8 +526,25 @@ fields replaced by a button that opens «Keys» on that key. The build follows
   makes it taller; the drivers bound the list at 380 px and leave the open
   states unbounded.
 - The older write routes (`PUT /api/asks-you/key`, `/api/transcribe/key`,
-  `/api/voice-companion/key`) stay for clients of an earlier release; no
-  surface of this one calls them.
+  `/api/voice-companion/key`, and the bot token's `connect` on `POST
+  /api/telegram/bot`) stay for clients of an earlier release; no surface of
+  this one calls them. Each takes the same gate as `PUT /api/keys/<id>`, so no
+  agent, plain request, request from another site or team member who is not
+  the owner changes a key through them. Their request formats and their
+  variable and staging protections are unchanged.
+- **Saving is optimistic.** A valid key shows as saved the moment it is sent
+  and the field closes; a refusal puts the row back, reopens the field and
+  says why. The typed value is never kept. The bot's token is the exception:
+  its field waits, since Telegram has to accept the token. A value that cannot
+  be the key is refused on the page without a request. A reveal that is still
+  on its way when Hide is pressed, or when the page is left, shows nothing.
+- **Import page.** A pasted comment shows as `# ••••` unless it is the export
+  header, since a comment can hold a key. The pasted lines scroll inside a box
+  of eight lines, and on the desktop the page scrolls inside the window, so
+  «Apply» stays reachable however long the paste.
+- **Touch.** On a touch screen the status dot is a 44 × 44 px cell at the
+  start of its row (the dot stays 7 px); with a mouse it keeps its 16 px
+  control and 28 px hit area.
 - Frames come from the phone driver's «keys settings» case at 1440, 800 and
   390 px, light and dark, en and uk, over the real routes in a throw-away
   config directory; its readings are `evidence/keys-settings/frames.json`.

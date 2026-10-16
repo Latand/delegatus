@@ -46,7 +46,7 @@ const answer = (over: Partial<KeysAnswer> = {}): KeysAnswer => ({ staging: false
 
 type Call = { url: string; method: string; body: unknown };
 let calls: Call[] = [];
-function serve(list: KeysAnswer, extra: (call: Call) => Response | undefined = () => undefined) {
+function serve(list: KeysAnswer, extra: (call: Call) => Response | Promise<Response> | undefined = () => undefined) {
   calls = [];
   globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
     const call = { url: String(input), method: init?.method ?? "GET", body: typeof init?.body === "string" ? JSON.parse(init.body) : null };
@@ -150,22 +150,145 @@ test("copy all copies the export's NAME=value lines and says how many", async ()
   expect(host.innerHTML).not.toContain(OPENROUTER);
 });
 
-test("an invalid replacement is refused in words and the field is emptied", async () => {
-  serve(answer(), (call) => call.method === "PUT" ? Response.json({ code: "invalid_key" }, { status: 400 }) : undefined);
-  const host = await mount(<KeysMenuPage onImport={() => {}} />);
-  await click(row(host, "elevenlabs").querySelector("[data-keys-add]"));
-  const input = row(host, "elevenlabs").querySelector<HTMLInputElement>("[data-keys-field] input")!;
-  expect(input.type).toBe("password");
+async function type(host: HTMLElement, id: string, typed: string) {
+  const input = row(host, id).querySelector<HTMLInputElement>("[data-keys-field] input")!;
   await act(async () => {
-    const setter = Object.getOwnPropertyDescriptor(dom.HTMLInputElement.prototype, "value")!.set!;
-    setter.call(input, "sk_short");
+    Object.getOwnPropertyDescriptor(dom.HTMLInputElement.prototype, "value")!.set!.call(input, typed);
     input.dispatchEvent(new dom.Event("input", { bubbles: true }) as unknown as Event);
   });
-  await act(async () => { row(host, "elevenlabs").querySelector("form")!.dispatchEvent(new dom.Event("submit", { bubbles: true, cancelable: true }) as unknown as Event); });
+  return input;
+}
+const submit = async (host: HTMLElement, id: string) => {
+  await act(async () => { row(host, id).querySelector("form")!.dispatchEvent(new dom.Event("submit", { bubbles: true, cancelable: true }) as unknown as Event); });
+};
+
+test("a value that cannot be the key is refused in words at once, sent nowhere, and the field is emptied", async () => {
+  serve(answer());
+  const host = await mount(<KeysMenuPage onImport={() => {}} />);
+  await click(row(host, "elevenlabs").querySelector("[data-keys-add]"));
+  const input = await type(host, "elevenlabs", "sk_short");
+  expect(input.type).toBe("password");
+  await submit(host, "elevenlabs");
   await settle();
-  expect(calls.find((call) => call.method === "PUT")).toEqual({ url: "/api/keys/elevenlabs", method: "PUT", body: { value: "sk_short" } });
+  expect(calls.some((call) => call.method === "PUT")).toBe(false);
   expect(row(host, "elevenlabs").querySelector("[data-keys-error='invalid']")!.textContent).toBe(translate("en", "keys.invalid", { name: "ElevenLabs" }));
   expect(input.value).toBe("");
+  expect(row(host, "elevenlabs").getAttribute("data-keys-source")).toBe("missing");
+});
+
+test("a valid save shows the key as saved before the server answers, then adopts the server's list", async () => {
+  let release!: (response: Response) => void;
+  const held = new Promise<Response>((resolve) => { release = resolve; });
+  const stored = answer();
+  serve(stored, (call) => call.method === "PUT" ? held : undefined);
+  const host = await mount(<KeysMenuPage onImport={() => {}} />);
+  await click(row(host, "soniox").querySelector("[data-keys-add]"));
+  const typed = "4".repeat(64);
+  await type(host, "soniox", typed);
+  await submit(host, "soniox");
+  await settle();
+  /* The answer is still pending: the row already says saved, the field is gone, and nothing typed stays on the page. */
+  expect(calls.filter((call) => call.method === "PUT")).toHaveLength(1);
+  expect(row(host, "soniox").getAttribute("data-keys-source")).toBe("file");
+  expect(row(host, "soniox").querySelector("[data-keys-field]")).toBeNull();
+  expect(row(host, "soniox").querySelector("[data-keys-note='saved']")).not.toBeNull();
+  expect(row(host, "soniox").querySelector("[data-keys-eye]")).not.toBeNull();
+  expect(host.innerHTML).not.toContain(typed);
+  /* The server now holds the key, as its list and its save answer both say. */
+  stored.keys[3] = { id: "soniox", variable: "SONIOX_API_KEY", source: "file", masked: "••••••••4444" };
+  await act(async () => { release(Response.json(stored)); });
+  await settle(); await settle();
+  expect(row(host, "soniox").getAttribute("data-keys-source")).toBe("file");
+  expect(row(host, "soniox").querySelector("[data-keys-field]")).toBeNull();
+});
+
+for (const refusal of [{ code: "write_failed", status: 500, shown: "failed" }, { code: "invalid_key", status: 400, shown: "invalid" }]) {
+  test(`a refused save (${refusal.code}) is taken back: the row returns to its state and the field comes back with the reason`, async () => {
+    let release!: (response: Response) => void;
+    const held = new Promise<Response>((resolve) => { release = resolve; });
+    serve(answer(), (call) => call.method === "PUT" ? held : undefined);
+    const host = await mount(<KeysMenuPage onImport={() => {}} />);
+    await click(row(host, "soniox").querySelector("[data-keys-add]"));
+    await type(host, "soniox", "4".repeat(64));
+    await submit(host, "soniox");
+    await settle();
+    expect(row(host, "soniox").getAttribute("data-keys-source")).toBe("file");
+    await act(async () => { release(Response.json({ code: refusal.code }, { status: refusal.status })); });
+    await settle(); await settle();
+    expect(row(host, "soniox").getAttribute("data-keys-source")).toBe("failed");
+    expect(row(host, "soniox").querySelector("[data-keys-note='saved']")).toBeNull();
+    expect(row(host, "soniox").querySelector(`[data-keys-error='${refusal.shown}']`)).not.toBeNull();
+    expect(row(host, "soniox").querySelector<HTMLInputElement>("[data-keys-field] input")!.value).toBe("");
+    expect(host.innerHTML).not.toContain("4".repeat(32));
+  });
+}
+
+test("the bot's token is the one save that waits for its answer, since Telegram has to accept it", async () => {
+  let release!: (response: Response) => void;
+  const held = new Promise<Response>((resolve) => { release = resolve; });
+  serve(answer(), (call) => call.method === "PUT" ? held : undefined);
+  const host = await mount(<KeysMenuPage onImport={() => {}} />);
+  await click(row(host, "telegram").querySelector("[data-keys-add]"));
+  await type(host, "telegram", `${"9".repeat(9)}:${"6".repeat(35)}`);
+  await submit(host, "telegram");
+  await settle();
+  expect(row(host, "telegram").getAttribute("data-keys-source")).toBe("missing");
+  expect(row(host, "telegram").querySelector("[data-keys-field] input")!.hasAttribute("disabled")).toBe(true);
+  await act(async () => { release(Response.json({ code: "telegram_refused" }, { status: 409 })); });
+  await settle(); await settle();
+  expect(row(host, "telegram").querySelector("[data-keys-error='telegram']")).not.toBeNull();
+});
+
+const gate = () => {
+  const answers: ((response: Response) => void)[] = [];
+  return {
+    pending: () => new Promise<Response>((resolve) => { answers.push(resolve); }),
+    answer: (index: number) => act(async () => { answers[index]!(Response.json({ value: OPENROUTER })); }),
+    count: () => answers.length,
+  };
+};
+
+test("a reveal answer that arrives after Hide cannot show the key again, and a second press before the answer asks for nothing new", async () => {
+  const reveals = gate();
+  serve(answer(), (call) => call.url.endsWith("/reveal") ? reveals.pending() : undefined);
+  const host = await mount(<KeysMenuPage onImport={() => {}} />);
+  const eye = () => row(host, "openrouter").querySelector<HTMLButtonElement>("[data-keys-eye]")!;
+  await click(eye());
+  await click(eye());
+  expect(reveals.count()).toBe(1);
+  await reveals.answer(0);
+  await settle();
+  expect(row(host, "openrouter").querySelector("[data-keys-revealed]")).not.toBeNull();
+  await click(eye());
+  expect(row(host, "openrouter").querySelector("[data-keys-revealed]")).toBeNull();
+  expect(host.innerHTML).not.toContain(OPENROUTER);
+});
+
+test("a reveal answer that arrives after the page is left shows nothing, and a fresh reveal still hides after 30 seconds", async () => {
+  const reveals = gate();
+  serve(answer(), (call) => call.url.endsWith("/reveal") ? reveals.pending() : undefined);
+  const host = await mount(<KeysMenuPage onImport={() => {}} />);
+  await click(row(host, "openrouter").querySelector("[data-keys-eye]"));
+  act(() => root?.unmount()); root = undefined;
+  await reveals.answer(0);
+  expect(document.body.innerHTML).not.toContain(OPENROUTER);
+
+  const realSet = window.setTimeout;
+  const timers: { fn: () => void; ms: number }[] = [];
+  (window as unknown as { setTimeout: unknown }).setTimeout = (fn: () => void, ms = 0) => { timers.push({ fn, ms }); return timers.length; };
+  try {
+    const fresh = gate();
+    serve(answer(), (call) => call.url.endsWith("/reveal") ? fresh.pending() : undefined);
+    const again = await mount(<KeysMenuPage onImport={() => {}} />);
+    await act(async () => { row(again, "openrouter").querySelector<HTMLElement>("[data-keys-eye]")!.click(); });
+    await fresh.answer(0);
+    expect(row(again, "openrouter").querySelector("[data-keys-revealed]")).not.toBeNull();
+    const hide = timers.filter((timer) => timer.ms === 30_000).at(-1)!;
+    await act(async () => { hide.fn(); });
+    expect(row(again, "openrouter").querySelector("[data-keys-revealed]")).toBeNull();
+  } finally {
+    (window as unknown as { setTimeout: unknown }).setTimeout = realSet;
+  }
 });
 
 for (const lang of ["en", "uk"] as const) test(`${lang}: a team member sees states only, with no value, no action and no transfer`, async () => {
@@ -206,7 +329,7 @@ for (const lang of ["en", "uk"] as const) test(`${lang}: import shows the pasted
   setLocale(lang);
   const preview: ImportPreview = {
     rows: [
-      { id: "openrouter", kind: "replaces", masked: "sk-or-v1-••••••••3333", was: "sk-or-v1-••••••••0000" },
+      { id: "openrouter", kind: "replaces", masked: "sk-or-v1-••••••••3333", was: "sk-or-v1-••••••••0000", revision: "a1b2c3d4e5f6a1b2c3d4e5f6" },
       { id: "openai", kind: "env", masked: "sk-proj-••••••••5555" },
       { id: "elevenlabs", kind: "invalid" },
       { id: "soniox", kind: "new", masked: "••••••••4444" },
@@ -245,7 +368,7 @@ for (const lang of ["en", "uk"] as const) test(`${lang}: import shows the pasted
   expect(apply.textContent).toBe(translate(lang, "keys.import.apply", { count: 3 }));
   await click(apply);
   expect(calls.filter((call) => call.url === "/api/keys/import").at(-1)!.body).toEqual({ text, confirm: {
-    openrouter: { kind: "replaces", was: "sk-or-v1-••••••••0000" },
+    openrouter: { kind: "replaces", revision: "a1b2c3d4e5f6a1b2c3d4e5f6" },
     soniox: { kind: "new" },
     telegram: { kind: "new" },
   } });
@@ -266,4 +389,19 @@ test("an import with nothing to write offers no Apply that does something", asyn
   });
   await settle(); await settle();
   expect(host.querySelector<HTMLButtonElement>("[data-keys-import-apply]")!.disabled).toBe(true);
+});
+
+test("a commented assignment or a comment holding a bare key shows no part of the pasted value", async () => {
+  serve(answer(), (call) => call.url === "/api/keys/import" ? Response.json({ rows: [], unknown: [], unparsed: [] }) : undefined);
+  const host = await mount(<KeysImportPage />);
+  const area = host.querySelector<HTMLTextAreaElement>("[data-keys-import-text]")!;
+  const text = [`# ${envLine("OPENAI_API_KEY", OPENAI)}`, `# ${PASTED}`, "# Delegatus keys · 2026-10-15 · 1"].join("\n");
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(dom.HTMLTextAreaElement.prototype, "value")!.set!.call(area, text);
+    area.dispatchEvent(new dom.Event("input", { bubbles: true }) as unknown as Event);
+  });
+  await settle(); await settle();
+  expect([...host.querySelectorAll("[data-keys-import-masked] span")].map((line) => line.textContent)).toEqual(["# ••••", "# ••••", "# Delegatus keys · 2026-10-15 · 1"]);
+  expect(host.innerHTML).not.toContain(OPENAI.slice(-8));
+  expect(host.innerHTML).not.toContain(PASTED.slice(-8));
 });

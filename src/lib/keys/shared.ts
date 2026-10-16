@@ -135,11 +135,15 @@ export function parseKeyLines(text: string): ParsedKeyLines {
   return { entries: KEY_IDS.filter((id) => found.has(id)).map((id) => ({ id, value: found.get(id)! })), unknown, unparsed };
 }
 
-/** The pasted lines as the page shows them: comments and names kept (without `export`), every value down to its last four characters. */
+/** The one comment «Copy all keys» writes; any other comment may hold a pasted key. */
+const EXPORT_HEADER = /^# Delegatus keys · \d{4}-\d{2}-\d{2} · \d+$/;
+
+/** The pasted lines as the page shows them: names kept (without `export`), every value down to its last four characters, a comment hidden unless it is the export header. */
 export function maskPastedLines(text: string): string[] {
   return text.replace(/\s+$/, "").split(/\r?\n/).map((raw) => {
     const line = raw.trim();
-    if (!line || line.startsWith("#")) return line;
+    if (!line) return line;
+    if (line.startsWith("#")) return EXPORT_HEADER.test(line) ? line : "# ••••";
     const match = /^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]{0,63})\s*=\s*(.*)$/.exec(line);
     const named = match && echoableName(match[1]) ? match : null;
     /* A line with an `=` that is no NAME=value may hold a key on either side of it, so it shows no tail at all. */
@@ -159,6 +163,8 @@ export interface ImportRow {
   masked?: string;
   /** For `replaces`: the key saved here now, masked, or null when it could not be read. */
   was?: string | null;
+  /** For `replaces`: a fingerprint of the whole key saved here now (null when it could not be read), so a key that differs only in its hidden characters is a different revision. */
+  revision?: string | null;
 }
 
 export interface ImportPreview {
@@ -167,8 +173,8 @@ export interface ImportPreview {
   unparsed: number[];
 }
 
-/** What the operator confirmed per key: the kind the preview showed, and for a replacement the key it replaces. */
-export type ImportConfirmation = Partial<Record<KeyId, { kind: "new" | "replaces"; was?: string | null }>>;
+/** What the operator confirmed per key: the kind the preview showed, and for a replacement the revision of the key it replaces. */
+export type ImportConfirmation = Partial<Record<KeyId, { kind: "new" | "replaces"; revision?: string | null }>>;
 
 /** The header line of «Copy all keys»: a date and a count, no machine names. */
 export function exportHeader(count: number, now: Date): string {

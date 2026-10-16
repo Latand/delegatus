@@ -329,7 +329,7 @@ describe("import", () => {
     expect(text).not.toContain("8".repeat(32));
     const preview = JSON.parse(text) as ImportPreview;
     expect(preview.rows).toEqual([
-      { id: "openrouter", kind: "replaces", masked: "sk-or-v1-••••••••3333", was: "sk-or-v1-••••••••0000" },
+      { id: "openrouter", kind: "replaces", masked: "sk-or-v1-••••••••3333", was: "sk-or-v1-••••••••0000", revision: expect.stringMatching(/^[0-9a-f]{24}$/) },
       { id: "openai", kind: "env", masked: "sk-proj-••••••••2222" },
       { id: "elevenlabs", kind: "invalid" },
       { id: "soniox", kind: "new", masked: "••••••••4444" },
@@ -354,7 +354,9 @@ describe("import", () => {
   });
 
   test("a confirmed replacement is written only while it replaces the key the preview showed", async () => {
-    const confirm = { openrouter: { kind: "replaces", was: "sk-or-v1-••••••••0000" } };
+    const shown = await (await importKeys({ text: pasted() })).json() as ImportPreview;
+    const confirm = { openrouter: { kind: "replaces", revision: shown.rows.find((row) => row.id === "openrouter")!.revision } };
+    expect(confirm.openrouter.revision).toBeString();
     /* Another tab changed the key after this preview: the confirmation no longer describes this machine. */
     saveFile("openrouter-api-key", ["sk", "or", "v1", "1".repeat(64)].join("-"));
     const stale = await (await importKeys({ text: pasted(), confirm })).json() as { saved: string[]; unconfirmed: string[] };
@@ -366,6 +368,22 @@ describe("import", () => {
     const fresh = await (await importKeys({ text: pasted(), confirm })).json() as { saved: string[] };
     expect(fresh.saved).toEqual(["openrouter"]);
     expect(fs.readFileSync(keyFile("openrouter-api-key"), "utf8")).toBe(value.openrouterNext);
+  });
+
+  test("a key changed after the preview is left alone even when its mask is unchanged", async () => {
+    const shown = await (await importKeys({ text: pasted() })).json() as ImportPreview;
+    const row = shown.rows.find((candidate) => candidate.id === "openrouter")!;
+    /* Same public prefix, same last four characters: only a hidden middle character differs. */
+    const lookalike = value.openrouter.slice(0, 20) + "5" + value.openrouter.slice(21);
+    saveFile("openrouter-api-key", lookalike);
+    const after = await (await importKeys({ text: pasted() })).json() as ImportPreview;
+    expect(after.rows.find((candidate) => candidate.id === "openrouter")!.was).toBe(row.was);
+    const outcome = await (await importKeys({ text: pasted(), confirm: { openrouter: { kind: "replaces", was: row.was, revision: row.revision } } })).json() as { saved: string[]; unconfirmed: string[] };
+    expect(outcome.saved).toEqual([]);
+    expect(outcome.unconfirmed).toContain("openrouter");
+    expect(fs.readFileSync(keyFile("openrouter-api-key"), "utf8")).toBe(`${lookalike}\n`);
+    expect(JSON.stringify(shown)).not.toContain(value.openrouter);
+    expect(JSON.stringify(shown)).not.toContain(lookalike);
   });
 
   test("a confirmed new key that was set since the preview is left alone", async () => {

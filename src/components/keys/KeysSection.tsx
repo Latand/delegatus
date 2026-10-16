@@ -8,7 +8,7 @@ import { KEYS_CHANGED_EVENT } from "@/components/keys/openKeys";
 import { useCoarsePointer } from "@/hooks/useCoarsePointer";
 import { useLocale } from "@/lib/i18n";
 import {
-  KEY_PROVIDER_NAME, maskedTail, maskPastedLines,
+  KEY_PROVIDER_NAME, maskedTail, maskKey, maskPastedLines, validKeyValue,
   type ImportConfirmation, type ImportPreview, type ImportRow, type KeyEntry, type KeyId, type KeysAnswer,
 } from "@/lib/keys/shared";
 
@@ -31,23 +31,47 @@ type T = ReturnType<typeof useLocale>["t"];
 
 /* ---- Reading and writing ------------------------------------------------ */
 
+/** What a row does to the list while a save is in flight: show the saved state at once, and take it back if the save is refused. */
+interface Optimism {
+  hold: (entry: KeyEntry) => void;
+  /** Ends a held entry; `restore` puts the row back. False when a newer save has replaced it. */
+  release: (entry: KeyEntry, restore: KeyEntry | null) => boolean;
+  adopt: (answer: KeysAnswer) => void;
+}
+
 function useKeys() {
   const [answer, setAnswer] = useState<KeysAnswer | null>(null);
   const [failed, setFailed] = useState(false);
+  /* The rows a save is still answering for: a list read that lands meanwhile must not undo them. */
+  const held = useRef(new Map<KeyId, KeyEntry>());
+  const adopt = useCallback((next: KeysAnswer) => {
+    setAnswer({ ...next, keys: next.keys.map((entry) => held.current.get(entry.id) ?? entry) });
+  }, []);
+  const hold = useCallback((entry: KeyEntry) => {
+    held.current.set(entry.id, entry);
+    setAnswer((now) => now && { ...now, keys: now.keys.map((candidate) => candidate.id === entry.id ? entry : candidate) });
+  }, []);
+  const release = useCallback((entry: KeyEntry, restore: KeyEntry | null) => {
+    if (held.current.get(entry.id) !== entry) return false;
+    held.current.delete(entry.id);
+    if (restore) setAnswer((now) => now && { ...now, keys: now.keys.map((candidate) => candidate.id === entry.id ? restore : candidate) });
+    return true;
+  }, []);
+  const optimism: Optimism = { hold, release, adopt };
   const load = useCallback(() => fetch("/api/keys", { cache: "no-store" })
     .then(async (response) => {
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      setAnswer(await response.json() as KeysAnswer);
+      adopt(await response.json() as KeysAnswer);
       setFailed(false);
     })
-    .catch(() => setFailed(true)), []);
+    .catch(() => setFailed(true)), [adopt]);
   useEffect(() => {
     const read = () => { void load(); };
     read();
     window.addEventListener(KEYS_CHANGED_EVENT, read);
     return () => window.removeEventListener(KEYS_CHANGED_EVENT, read);
   }, [load]);
-  return { answer, failed, reload: load };
+  return { answer, failed, reload: load, optimism };
 }
 
 async function revealValue(id: KeyId, purpose: "reveal" | "copy"): Promise<string | null> {
@@ -80,15 +104,20 @@ async function copyFetched(fetched: Promise<string | null>): Promise<boolean> {
   return value !== null && copyText(value);
 }
 
-type WriteResult = "ok" | "invalid" | "telegram" | "failed";
+type WriteFailure = "invalid" | "telegram" | "failed";
+type WriteResult = { ok: true; answer: KeysAnswer | null } | { ok: false; error: WriteFailure };
 
 async function writeValue(id: KeyId, value: string): Promise<WriteResult> {
   try {
     const response = await fetch(`/api/keys/${id}`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ value }) });
-    if (response.ok) { window.dispatchEvent(new Event(KEYS_CHANGED_EVENT)); return "ok"; }
+    if (response.ok) {
+      const answer = await response.json().catch(() => null) as KeysAnswer | null;
+      window.dispatchEvent(new Event(KEYS_CHANGED_EVENT));
+      return { ok: true, answer: answer && Array.isArray(answer.keys) ? answer : null };
+    }
     const body = await response.json().catch(() => ({})) as { code?: unknown };
-    return body.code === "invalid_key" ? "invalid" : body.code === "telegram_refused" ? "telegram" : "failed";
-  } catch { return "failed"; }
+    return { ok: false, error: body.code === "invalid_key" ? "invalid" : body.code === "telegram_refused" ? "telegram" : "failed" };
+  } catch { return { ok: false, error: "failed" }; }
 }
 
 export const keyName = (t: T, id: KeyId) => id === "telegram" ? t("keys.name.telegram") : KEY_PROVIDER_NAME[id];
@@ -145,7 +174,7 @@ function useDot() {
   return { open, setOpen, id, hoverIn, hoverOut, pin, isOpen };
 }
 
-function StatusDot({ entry, dot }: { entry: KeyEntry; dot: ReturnType<typeof useDot> }) {
+function StatusDot({ entry, dot, coarse }: { entry: KeyEntry; dot: ReturnType<typeof useDot>; coarse: boolean }) {
   const { t } = useLocale();
   const ref = useRef<HTMLSpanElement>(null);
   const { open, setOpen } = dot;
@@ -167,7 +196,7 @@ function StatusDot({ entry, dot }: { entry: KeyEntry; dot: ReturnType<typeof use
       aria-label={t("keys.dotAria", { name: keyName(t, entry.id), state: dotWords(t, entry) })}
       aria-expanded={open}
       aria-describedby={open ? dot.id : undefined}
-      className={`relative inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full ${FOCUS} before:absolute before:-inset-1.5 before:content-['']`}
+      className={`relative inline-flex shrink-0 items-center justify-center rounded-full ${FOCUS} ${coarse ? "h-11 w-11" : "h-4 w-4 before:absolute before:-inset-1.5 before:content-['']"}`}
       onPointerEnter={(event) => { if (event.pointerType === "mouse") dot.hoverIn(); }}
       onPointerLeave={(event) => { if (event.pointerType === "mouse") dot.hoverOut(); }}
       onFocus={() => setOpen(true)}
@@ -245,14 +274,21 @@ function RowMenu({ anchor, items, onClose, full }: { anchor: HTMLElement; items:
   );
 }
 
-/** The field behind «Replace» and «Add»: write-only, emptied on every submit, never filled from a saved key. */
-function ValueField({ entry, size, onDone }: { entry: KeyEntry; size: Size; onDone: (saved: boolean) => void }) {
+/**
+ * The field behind «Replace» and «Add»: write-only, emptied on every submit,
+ * never filled from a saved key. `onSave` answers the refusal to show while
+ * the field stays open, or null once the row has taken the save over.
+ */
+function ValueField({ entry, size, initialError, onSave, onCancel }: {
+  entry: KeyEntry; size: Size; initialError: WriteFailure | null;
+  onSave: (value: string) => Promise<WriteFailure | null>; onCancel: () => void;
+}) {
   const { t } = useLocale();
   const coarse = useCoarsePointer();
   const input = useRef<HTMLInputElement>(null);
   const [has, setHas] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<Exclude<WriteResult, "ok"> | null>(null);
+  const [error, setError] = useState<WriteFailure | null>(initialError);
   useEffect(() => { input.current?.focus(); }, []);
   const name = keyName(t, entry.id);
   const control = coarse ? "min-h-11 text-body" : size === "menu" ? "h-7 text-[11.5px]" : "h-8 text-ui";
@@ -262,10 +298,9 @@ function ValueField({ entry, size, onDone }: { entry: KeyEntry; size: Size; onDo
     if (input.current) input.current.value = "";
     setHas(false);
     setBusy(true);
-    const result = await writeValue(entry.id, value);
+    const refused = await onSave(value);
     setBusy(false);
-    if (result === "ok") onDone(true);
-    else setError(result);
+    if (refused) setError(refused);
   };
   return (
     <div data-keys-field={entry.id} className="flex w-full flex-col gap-1">
@@ -274,11 +309,11 @@ function ValueField({ entry, size, onDone }: { entry: KeyEntry; size: Size; onDo
         <input ref={input} type="password" autoComplete="off" spellCheck={false} maxLength={4096} aria-label={t("keys.fieldAria", { name })} disabled={busy}
           placeholder={placeholder} data-1p-ignore="" data-lpignore="true"
           onChange={(event) => { setHas(Boolean(event.target.value.trim())); setError(null); }}
-          onKeyDown={(event) => { if (event.key === "Escape") { event.stopPropagation(); onDone(false); } }}
+          onKeyDown={(event) => { if (event.key === "Escape") { event.stopPropagation(); onCancel(); } }}
           className={`${control} min-w-0 flex-1 ${size === "menu" ? "basis-full" : ""} rounded-control border bg-canvas px-2 font-mono text-primary placeholder:text-muted ${FOCUS} ${error ? "border-danger" : "border-border"}`} />
         <button type="submit" disabled={!has || busy} data-keys-save=""
           className={`${control} shrink-0 whitespace-nowrap rounded-control border border-border bg-card px-2.5 font-semibold text-primary hover:bg-sunken disabled:opacity-45 ${FOCUS}`}>{t("keys.save")}</button>
-        <button type="button" data-keys-cancel="" onClick={() => onDone(false)}
+        <button type="button" data-keys-cancel="" onClick={onCancel}
           className={`shrink-0 whitespace-nowrap px-1 font-semibold text-secondary underline underline-offset-2 hover:text-primary ${FOCUS} ${coarse ? "min-h-11 text-label" : size === "menu" ? "text-[11px]" : "text-label"}`}>{t("keys.cancel")}</button>
       </form>
       {error ? (
@@ -294,11 +329,20 @@ function ValueField({ entry, size, onDone }: { entry: KeyEntry; size: Size; onDo
 
 type Note = { kind: "copied" | "masked" | "saved"; text: string } | null;
 
-function useRowActions(entry: KeyEntry) {
-  const [value, setValue] = useState<string | null>(null);
+function useRowActions(entry: KeyEntry, optimism: Optimism) {
+  const { t } = useLocale();
+  /* A value is shown only for the key it was revealed for: a saved replacement hides it. */
+  const [revealed, setRevealed] = useState<{ value: string; masked: string | null } | null>(null);
+  const value = revealed && revealed.masked === entry.masked ? revealed.value : null;
+  const setValue = useCallback((next: string | null) => setRevealed(next === null ? null : { value: next, masked: entry.masked }), [entry.masked]);
   const [note, setNote] = useState<Note>(null);
   const [editing, setEditing] = useState(false);
+  /* The refusal a save met after the row had already taken it: the field comes back with it. */
+  const [editError, setEditError] = useState<WriteFailure | null>(null);
   const timer = useRef<number | null>(null);
+  /* Every answer to a reveal belongs to the press that asked for it: Hide, a changed key and leaving the page end it. */
+  const epoch = useRef(0);
+  const revealing = useRef(false);
   const flash = (next: Note) => {
     setNote(next);
     if (timer.current !== null) window.clearTimeout(timer.current);
@@ -308,32 +352,79 @@ function useRowActions(entry: KeyEntry) {
     if (value === null) return;
     const hide = window.setTimeout(() => setValue(null), 30_000);
     return () => window.clearTimeout(hide);
-  }, [value]);
-  useEffect(() => () => { if (timer.current !== null) window.clearTimeout(timer.current); }, []);
-  const toggle = async () => { if (value !== null) setValue(null); else setValue(await revealValue(entry.id, "reveal")); };
+  }, [value, setValue]);
+  useEffect(() => { epoch.current += 1; }, [entry.masked]);
+  useEffect(() => () => { epoch.current += 1; if (timer.current !== null) window.clearTimeout(timer.current); }, []);
+  const toggle = async () => {
+    if (value !== null) { epoch.current += 1; setValue(null); return; }
+    /* A second press before the answer asks for what is already on its way. */
+    if (revealing.current) return;
+    revealing.current = true;
+    const mine = ++epoch.current;
+    const answer = await revealValue(entry.id, "reveal");
+    revealing.current = false;
+    if (epoch.current === mine) setValue(answer);
+  };
   const copy = async (text: string) => { if (await copyFetched(revealValue(entry.id, "copy"))) flash({ kind: "copied", text }); };
   const copyMasked = async (text: string) => { if (entry.masked && await copyText(entry.masked)) flash({ kind: "masked", text }); };
-  return { value, note, editing, setEditing, toggle, copy, copyMasked, flash };
+  const cancelEdit = () => { setEditing(false); setEditError(null); };
+  const open = () => { setEditError(null); setEditing(true); };
+  const saved = () => flash({ kind: "saved", text: t("keys.savedNote", { name: keyName(t, entry.id) }) });
+
+  /**
+   * Saves a typed value. A key the server needs no one else's word for shows
+   * as saved at once (the optimistic entry, the editor closed) and is taken
+   * back, with the field and the reason, if the save is refused. The bot's
+   * token is checked with Telegram first, so its field waits for the answer.
+   */
+  const save = async (typed: string): Promise<WriteFailure | null> => {
+    const trimmed = typed.trim();
+    if (!validKeyValue(entry.id, trimmed)) return "invalid";
+    if (entry.id === "telegram") {
+      const result = await writeValue(entry.id, typed);
+      if (!result.ok) return result.error;
+      if (result.answer) optimism.adopt(result.answer);
+      cancelEdit(); saved();
+      return null;
+    }
+    const before = entry;
+    const shown: KeyEntry = { ...entry, source: "file", masked: maskKey(entry.id, trimmed) };
+    optimism.hold(shown);
+    cancelEdit(); saved();
+    void writeValue(entry.id, typed).then((result) => {
+      if (result.ok) {
+        optimism.release(shown, null);
+        if (result.answer) optimism.adopt(result.answer);
+      } else if (optimism.release(shown, before)) {
+        if (timer.current !== null) window.clearTimeout(timer.current);
+        setNote(null);
+        setEditError(result.error);
+        setEditing(true);
+      }
+    });
+    return null;
+  };
+  return { value, note, editing, editError, open, cancelEdit, toggle, copy, copyMasked, save };
 }
 
-function KeyRow({ entry, size, staging, owner, focus }: { entry: KeyEntry; size: Size; staging: boolean; owner: boolean; focus: boolean }) {
+function KeyRow({ entry, size, staging, owner, focus, optimism }: { entry: KeyEntry; size: Size; staging: boolean; owner: boolean; focus: boolean; optimism: Optimism }) {
   const { t } = useLocale();
   const coarse = useCoarsePointer();
   const name = keyName(t, entry.id);
-  const actions = useRowActions(entry);
+  const actions = useRowActions(entry, optimism);
   const dot = useDot();
   const [menuAnchor, setMenuAnchor] = useState<HTMLElement | null>(null);
   const firstButton = useRef<HTMLButtonElement>(null);
   const set = isSet(entry);
   const writable = owner && !staging && entry.source !== "env";
   const sheet = size === "sheet";
-  const { setEditing } = actions;
+  const { open: openEditor } = actions;
   /* Opened from a place that asked for this key: an unset key opens its field, a set one takes focus on its first button. */
   useEffect(() => {
     if (!focus) return;
-    if (!set && writable) setEditing(true);
+    if (!set && writable) openEditor();
     else firstButton.current?.focus();
-  }, [focus, set, writable, setEditing]);
+  }, [focus, set, writable, openEditor]);
   const glyph = coarse ? "h-[18px] w-[18px]" : "h-3.5 w-3.5";
   const icons = owner && set ? (
     <>
@@ -351,22 +442,24 @@ function KeyRow({ entry, size, staging, owner, focus }: { entry: KeyEntry; size:
     </>
   ) : null;
   const addButton = writable && !set && !actions.editing ? (
-    <button ref={firstButton} type="button" data-keys-add={entry.id} onClick={() => actions.setEditing(true)}
+    <button ref={firstButton} type="button" data-keys-add={entry.id} onClick={actions.open}
       className={`shrink-0 whitespace-nowrap rounded-control border border-border bg-card font-semibold text-primary hover:bg-sunken ${FOCUS} ${coarse ? "min-h-11 px-3.5 text-body" : "h-7 px-2.5 text-[11.5px]"}`}>
       {entry.source === "failed" ? t("keys.replace") : t("keys.add")}
     </button>
   ) : null;
   const menuItems = [
     { label: t("keys.copyMasked"), data: "masked", run: () => void actions.copyMasked(t("keys.copiedMasked", { masked: maskedTail(entry.masked ?? "") })) },
-    ...(writable ? [{ label: t("keys.replace"), data: "replace", run: () => actions.setEditing(true) }] : []),
+    ...(writable ? [{ label: t("keys.replace"), data: "replace", run: actions.open }] : []),
   ];
   const noteLine = actions.note ? (
     <span role="status" data-keys-note={actions.note.kind} className="min-w-0 truncate font-medium text-success">{actions.note.text}</span>
   ) : null;
   const stateWords = entry.source === "missing" ? t("keys.state.missing") : entry.source === "failed" ? t("keys.state.failedShort") : null;
+  /* On a touch screen the dot is a 44 px cell of its own at the row's start; elsewhere it leads the second line. */
+  const statusDot = <StatusDot entry={entry} dot={dot} coarse={coarse} />;
   const second = noteLine ?? (
     <span className="inline-flex min-w-0 items-center gap-1.5">
-      <StatusDot entry={entry} dot={dot} />
+      {coarse ? null : statusDot}
       {stateWords ? <span className={entry.source === "failed" ? "truncate text-warning" : "truncate"}>{stateWords}</span>
         : owner ? <span className="truncate"><span data-keys-masked={entry.id} className="font-mono">{maskedTail(entry.masked ?? "")}</span>{entry.source === "env" && sheet ? <span data-keys-env-tail="">{` · ${t("keys.state.envShort")}`}</span> : null}</span>
         : <span className="truncate">{entry.source === "env" ? t("keys.state.envSource") : t("keys.state.file")}</span>}
@@ -375,6 +468,7 @@ function KeyRow({ entry, size, staging, owner, focus }: { entry: KeyEntry; size:
   return (
     <div data-keys-row={entry.id} data-keys-source={entry.source} className={`flex flex-col ${sheet ? "gap-2 px-4 py-2" : "gap-1 rounded-control px-2 py-1"}`}>
       <div className={`flex items-center gap-1 ${sheet ? "min-h-11" : "min-h-[34px]"}`}>
+        {coarse ? <span className="-ml-3 flex shrink-0">{statusDot}</span> : null}
         <span className="flex min-w-0 flex-1 flex-col gap-px">
           <span className={`truncate font-semibold text-primary ${sheet ? "text-body leading-5" : "text-[12px] leading-4"}`}>{name}
             {/* The 232 px panel has no room after the masked tail: a key set by a variable says so after its name. */}
@@ -391,7 +485,7 @@ function KeyRow({ entry, size, staging, owner, focus }: { entry: KeyEntry; size:
           <span className={`text-muted ${sheet ? "text-label" : "text-[10.5px]"}`}>{t("keys.revealHides")}</span>
         </div>
       ) : null}
-      {actions.editing ? <ValueField entry={entry} size={size} onDone={(saved) => { actions.setEditing(false); if (saved) actions.flash({ kind: "saved", text: t("keys.savedNote", { name }) }); }} /> : null}
+      {actions.editing ? <ValueField entry={entry} size={size} initialError={actions.editError} onSave={actions.save} onCancel={actions.cancelEdit} /> : null}
     </div>
   );
 }
@@ -421,7 +515,7 @@ function Notices({ answer, failed, reload, size }: { answer: KeysAnswer | null; 
 /** The keys page of the header menu; `onImport` opens the import page under it, `focusKey` the key a place asked for. */
 export function KeysMenuPage({ size = "menu", onImport, focusKey = null }: { size?: Size; onImport: () => void; focusKey?: KeyId | null }) {
   const { t } = useLocale();
-  const { answer, failed, reload } = useKeys();
+  const { answer, failed, reload, optimism } = useKeys();
   const [copied, setCopied] = useState<number | null>(null);
   const sheet = size === "sheet";
   const copyAll = async () => {
@@ -444,7 +538,7 @@ export function KeysMenuPage({ size = "menu", onImport, focusKey = null }: { siz
     <div data-keys-page="" className={`flex flex-col font-normal ${sheet ? "pb-4" : "pb-1"}`}>
       <div className={`flex flex-col empty:hidden ${sheet ? "gap-2 px-4" : "gap-1.5 px-2"}`}><Notices answer={answer} failed={failed} reload={() => void reload()} size={size} /></div>
       <div data-keys-list="" className="flex flex-col">
-        {answer?.keys.map((entry) => <KeyRow key={entry.id} entry={entry} size={size} staging={answer.staging} owner={answer.owner} focus={entry.id === focusKey} />)}
+        {answer?.keys.map((entry) => <KeyRow key={entry.id} entry={entry} size={size} staging={answer.staging} owner={answer.owner} focus={entry.id === focusKey} optimism={optimism} />)}
       </div>
       {answer?.owner ? (
         <div className="mt-1 flex flex-col border-t border-border pt-1">
@@ -517,7 +611,7 @@ export function KeysImportPage({ size = "menu" }: { size?: Size }) {
   const apply = async () => {
     if (!writes.length || busy) return;
     const confirm: ImportConfirmation = {};
-    for (const row of writes) confirm[row.id] = row.kind === "replaces" ? { kind: "replaces", was: row.was ?? null } : { kind: "new" };
+    for (const row of writes) confirm[row.id] = row.kind === "replaces" ? { kind: "replaces", revision: row.revision ?? null } : { kind: "new" };
     setBusy(true);
     const response = await postImport({ text, confirm });
     setBusy(false);
@@ -529,15 +623,16 @@ export function KeysImportPage({ size = "menu" }: { size?: Size }) {
   const again = () => { setText(""); setDone(null); window.setTimeout(() => area.current?.focus(), 0); };
 
   return (
-    <div data-keys-import-page="" className={`font-normal ${size === "sheet" ? "px-4 pb-4 pt-1" : "px-2 pb-1.5"}`}>
+    /* The panel is as tall as its page: in the 232 px menu the page scrolls inside the window, so «Apply» is always reachable. */
+    <div data-keys-import-page="" className={`font-normal ${size === "sheet" ? "px-4 pb-4 pt-1" : "max-h-[calc(100dvh-6rem)] overflow-y-auto px-2 pb-1.5"}`}>
       <div data-keys-import="" className={`flex flex-col ${menu ? "gap-1.5" : "gap-3"}`}>
         <p className={`${menu ? "text-[11px] leading-snug" : "text-body"} text-muted`}>{t("keys.import.hint")}</p>
-        {/* Once pasted, the lines show with their values masked, in the small mono of the list: the phone's 16 px input floor made the field the largest text on screen. */}
+        {/* Once pasted, the lines show with their values masked, in the small mono of the list: the phone's 16 px input floor made the field the largest text on screen. The box shows eight whole lines and scrolls past them; a wrapped line keeps its height (`shrink-0`) instead of being squeezed over the next. */}
         {text.trim() ? (
           <div className="flex flex-col gap-1">
-            <div data-keys-import-masked="" role="group" aria-label={t("keys.import.aria")}
-              className={`flex flex-col rounded-control border border-border bg-sunken font-mono text-secondary ${menu ? "px-2 py-1 text-[10.5px] leading-[14px]" : "px-3 py-2 text-[11.5px] leading-4"}`}>
-              {maskPastedLines(text).map((line, index) => <span key={index} className={`block min-h-[1lh] ${line.startsWith("#") ? "whitespace-pre-wrap [overflow-wrap:anywhere]" : "break-all"}`}>{line}</span>)}
+            <div data-keys-import-masked="" role="group" tabIndex={0} aria-label={t("keys.import.aria")}
+              className={`flex flex-col overflow-y-auto rounded-control border border-border bg-sunken font-mono text-secondary ${FOCUS} ${menu ? "max-h-[calc(8lh+6px)] px-2 py-1 text-[10.5px] leading-[14px]" : "max-h-[calc(8lh+10px)] px-3 py-2 text-[11.5px] leading-4"}`}>
+              {maskPastedLines(text).map((line, index) => <span key={index} className={`block min-h-[1lh] shrink-0 ${line.startsWith("#") ? "whitespace-pre-wrap [overflow-wrap:anywhere]" : "break-all"}`}>{line}</span>)}
             </div>
             <div className={`flex items-center justify-between gap-2 ${small}`}>
               <span className="text-muted">{t("keys.import.maskedNote")}</span>
