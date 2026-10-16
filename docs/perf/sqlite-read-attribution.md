@@ -1,9 +1,9 @@
 # SQLite read attribution
 
-The isolated synthetic scenario attributes at least 99.13% of each measured
-pause to named synchronous work with byte counters. In the full-registry
-window, `registry.deliveryOperationOwners.all` reads 927.8 MB and
-`registry.receipts.all` reads 645.9 MB. These are local workload findings.
+The isolated synthetic scenario attributes 98.9–99.7% of each measured pause
+to named operations with read or decoded bytes. In the full-registry window,
+`registry.deliveryOperationOwners.all` reads 452.7 MB and
+`registry.receipts.all` reads 315.1 MB. These are local workload findings.
 Production confirmation follows deployment.
 
 ## Reproduce
@@ -34,72 +34,85 @@ The state database has 262 pipelines with about 30 MB of JSON and 796 archive
 rows with about 90 MB. The existing registry performance dataset supplies
 53,299 retained rows and 212,738,843 JSON bytes. Each case repeatedly reads the
 real store APIs for at least 750 ms, lets the monitor's real timer report its
-gap, and requires at least 80% attribution plus positive read and decoded-byte
-counters. The operation envelope uses the existing `withViewerOperation`
+gap, and requires at least 80% byte-backed operation coverage plus positive
+read or decoded-byte evidence. Unproven read intervals remain unavailable and
+their byte totals are lower bounds. The operation envelope uses the existing `withViewerOperation`
 entry point. The registry-owner case opens a fresh read-only store so an
 already-decoded view cannot erase the workload.
 
 ## Recorded result
 
-Recorded on 2026-10-16 at 17:43 UTC, Linux, Bun 1.4.0. MB means 1,000,000
+Recorded on 2026-10-16 at 18:53 UTC, Linux, Bun 1.4.0. MB means 1,000,000
 bytes. The read column is sampled thread `rchar`, including cached reads;
 procfs collection for the serving thread runs in an independent worker.
 
 | Workload | Repetitions | Pause ms | Attributed time | Read MB | Decoded JSON MB |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| pipelines | 35 | 752 | 100.00% | 1,043.0 | 1,050.3 |
-| pipelines_archive | 13 | 754 | 99.98% | 1,188.4 | 1,170.3 |
-| registry.snapshot | 2 | 1,363 | 100.00% | 1,827.9 | 425.5 |
-| deliveryOperationOwners | 2 | 1,122 | 99.13% | 307.2 | 90.7 |
+| pipelines | 22 | 753 | 99.58% | 109.8 | 660.2 |
+| pipelines_archive | 8 | 753 | 99.65% | 604.1 | 720.2 |
+| registry.snapshot | 1 | 1,402 | 98.96% | 847.5 | 212.7 |
+| deliveryOperationOwners | 1 | 1,256 | 100.00% | 0.0 | 45.3 |
 
-All four windows exceed the 80% acceptance threshold and report positive read
-and decoded-byte counters. The full registry window reads 1,827.9 MB for
-425.5 MB of decoded JSON: repeated SQLite page access can exceed payload size.
-Its largest readers are `registry.deliveryOperationOwners.all` (927.8 MB),
-`registry.receipts.all` (645.9 MB), and `registry.conversations.all` (102.9 MB).
-The owner-only window's largest readers are
-`registry.deliveryOperationOwners.all` (107.1 MB), `registry.all` (64.8 MB),
-and `registry.receipts.all` (53.0 MB). Full archive and pipeline
-reads appear as `state.pipelines_archive.all` and `state.pipelines.all`.
+All four windows exceed the 80% threshold. The byte totals are observed lower
+bounds; unavailable reader intervals stay visible in the call counts. The full
+registry window reads 847.5 MB for 212.7 MB of decoded JSON. Its largest
+measured readers are `registry.deliveryOperationOwners.all` (452.7 MB),
+`registry.receipts.all` (315.1 MB), `registry.conversations.all` (40.9 MB), and
+`registry.entries.all` (38.7 MB). In the owner-only window, 463 `registry.all`
+calls have unavailable byte intervals; 45.3 MB of JSON was decoded, while no
+read interval was proven. Full archive and pipeline reads appear as
+`state.pipelines_archive.all` and `state.pipelines.all`.
 
-The owner-only case records 46,296 calls without an I/O sample. Byte values
-are observed lower bounds; they are never extrapolated from sampled calls.
-Decoded JSON bytes count attempted UTF-8 input, including a failed parse.
+The owner-only case records 463 `registry.all` calls without a proven I/O
+interval. A zero read total on a row is accompanied by unavailable-call
+counts; it is not a measured zero. Byte values are never extrapolated from
+sampled calls. Decoded JSON bytes count attempted UTF-8 input, including a
+failed parse.
 
 Three alternating enabled/disabled pairs per case retain the same data and
-load. Median disabled/enabled wall times in ms are 28.93/29.95 (pipelines),
-63.11/69.33 (archive), 647.73/654.58 (registry), and 533.89/560.91 (owners).
-Median paired enabled-minus-disabled differences range from -26.63 to +5.23 ms,
-with no consistent direction. The sampler reports 2.61–4.31 ms of observer
-time per measured gap. These local figures describe
-this synthetic workload and do not estimate production CPU use.
+load. Median disabled/enabled wall times in ms are 33.83/41.28 (pipelines),
+80.74/97.30 (archive), 1,474.48/1,485.76 (registry), and 986.28/1,426.30
+(owners). Median paired enabled-minus-disabled differences range from +2.91
+to +261.81 ms and vary by workload. The sampler reports 4.56–7.96 ms of observer time per
+measured gap. These local figures describe this synthetic workload and do not
+estimate production CPU use.
 
 ## Accounting contract and bounds
 
 `operations` gains `readBytes` and `decodedJsonBytes`. The additive `reads`
 object reports per-operation totals and the top 16 readers, with synchronous
 time, byte counters, sampled/unsampled/unavailable calls, failures, and bounded
-connection-id samples. Each connection also owns lifetime counters, exposed by
-`sqliteReadCounters`, in a shared WeakMap. Reopening a replaced database binds
-decoders to the new connection. Neither statements nor connections acquire a
-new lifetime owner.
+connection-id samples. `byteAttributedSyncMs` counts main-thread synchronous
+time for operation names that carry measured read or decoded bytes;
+`workerSyncMs` stays separate. Each connection also owns lifetime counters,
+exposed by `sqliteReadCounters`, in a shared WeakMap. Reopening a replaced
+database binds decoders to the new connection. Neither statements nor
+connections acquire a new lifetime owner.
 
-The serving thread reads only atomics from its sampler worker; it never opens
-procfs inside a measured callback. The sampler polls its
-`/proc/<pid>/task/<tid>/io` counter every 10 ms and stops after a read takes over
-10 ms or three consecutive failures. Its time is reported as `observerMs`, and
-a stopped or unavailable sampler is visible through `samplerDegraded` and
-unavailable-call counts. Byte deltas are sampled for at most 32 paired
-operation observations per 10 ms window. `rchar` measures bytes returned by
-read/pread, including cache hits; physical disk reads are a different quantity.
-No page counts are inferred from returned JSON size.
+The serving and worker threads read only atomics from their own sampler worker;
+neither opens procfs inside a measured callback. A sampler polls its target
+thread's `/proc/<pid>/task/<tid>/io` counter every 10 ms and stops after a read
+takes over 10 ms or three consecutive failures. Its time is reported as
+`observerMs`, and a stopped or unavailable sampler is visible through
+`samplerDegraded` and unavailable-call counts. Each synchronous frame gets a
+temporary owner token. The sampler keeps a byte delta only across consecutive
+samples with the same token; a reader receives it only when those samples fall
+inside that frame. Stale snapshots, unowned intervals and frames with nested
+readers count as unavailable, never as a measured zero or bytes for a later
+reader. At most 32 byte observations are attempted per 10 ms window. `rchar`
+measures bytes returned by read/pread, including cache hits; physical disk reads
+are a different quantity. No page counts are inferred from returned JSON size.
 
-Worker threads collect their own `/proc/thread-self/io` deltas and send compact
-batches to the parent through `attachReadAttributionWorker`. Each worker has at
-most one unacknowledged batch and 256 queued reader events; parent retention is
-also capped at 128 aggregates. `workerBatches`, `workerTransportDropped`, and
-the regular dropped-record counters expose transport and retention overflow.
-Worker identity and connection samples stay on each aggregated reader row.
+Worker threads collect their own thread-counter deltas off-loop and send compact
+batches to the parent through `attachReadAttributionWorker`. Worker durations
+are reported as `workerSyncMs` with bounded start/end intervals and do not enter
+main-loop `namedSyncMs` or `attributedFraction`. Each worker has at most one
+unacknowledged batch and 256 queued reader events; parent retention is also
+capped at 128 aggregates. `workerBatches`, `workerTransportDropped`, and the
+regular dropped-record counters expose transport and retention overflow.
+Worker intervals use epoch-millisecond endpoints so the parent can place late
+batches on the same timeline as its own gaps. Worker identity and connection
+samples stay on each aggregated reader row.
 
 Synchronous frames subtract nested time and I/O. AsyncLocalStorage carries
 only the static operation name across awaits. A peer's reads during an await
@@ -115,10 +128,12 @@ Per-connection counters keep scalar values; WeakMap keys disappear with their
 connections. Ordinary ticks clear the interval aggregates. There is no
 per-read logging, row retention, SQL text or binding content in a diagnostic.
 
-`reads.namedSyncMs` sums exclusive synchronous frames within the timer window;
-`reads.attributedFraction` divides that by the full window and caps it at one.
-The scenario additionally clips attributed time to the reported pause duration.
-Long awaited `operations.durationMs` remains separate. A GC inside a named
+`reads.namedSyncMs` sums exclusive main-thread synchronous frames within the
+timer window. `reads.byteAttributedSyncMs` sums those frames for operation names
+that also carry measured read or decoded bytes; `reads.attributedFraction`
+divides that value by the full window and caps it at one. The scenario
+additionally clips attributed time to the reported pause duration. Long awaited
+`operations.durationMs` remains separate. A GC inside a named
 synchronous frame still belongs to that frame's elapsed interval; GC signals
 can explain it independently.
 
@@ -175,19 +190,13 @@ operation-name union and server capability block; this change adds no conflict
 at either site. Its connection-lifetime policy remains outside this patch.
 A final three-way comparison against current main is clean for all four overlapping source files; no merge was needed.
 
-Focused tests cover real SQLite statements and iteration, transaction rollback,
-failed SQL/JSON, file replacement, async interleaving, proc failure, counter
-regression, overflow, process restart, and diagnostic privacy. The store suites,
-type checker, changed-file lint, production Next.js/MCP build and privacy gate are run with
-isolated roots and a closed control URL. Hosted checks follow pipeline
+The corrected path-based run covers two touched test files and 24 tests,
+including SQLite statements and iteration, worker reads, stale samples, nested
+observer costs, overflow, process restart and diagnostic privacy. Typecheck,
+changed-file lint and publication privacy use isolated roots and a closed
+control URL. The broader pre-review campaign is retained in
+`evidence/read-attribution/checks.json`; hosted checks follow pipeline
 publication.
-
-The final focused campaign covers 29 explicit test files. Two retain exactly
-the same failures on the starting commit: `src/lib/reviewHistory/reader.test.ts`
-(one unowned-import case) and `src/lib/externalRelay/ownerBridgeContext.test.ts`
-(ten bridge-log admission cases). Changed-file lint retains three existing
-errors and introduces none. The baseline and final case identities are recorded
-in `evidence/read-attribution/checks.json`.
 
 Transaction decoders receive the connection that supplied their row, including
 controller selections, bounded writes, atomic moves and preserved-row checks.

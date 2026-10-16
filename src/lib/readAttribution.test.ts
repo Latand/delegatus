@@ -121,14 +121,70 @@ test("proc counter reads stay off the serving thread", () => {
     const recorder = createReadAttribution();
     for (let i = 0; i < 20; i++) recorder.run("files.get", () => {});
     expect(procReads).toBe(0);
-    expect(recorder.snapshot(1).namedSyncMs).toBeLessThan(1);
   } finally { read.mockRestore(); }
+});
+
+test("stale thread counter samples never bill a later reader or certify zero bytes", () => {
+  const staleA = { bytes: 0, observerBytes: 0, sampledAt: 1, sequence: 7, owner: 0 };
+  const lateA = { bytes: 1_048_576, observerBytes: 0, sampledAt: 49, sequence: 8, owner: 0 };
+  const snapshots = [staleA, staleA, lateA, lateA];
+  let index = 0;
+  const recorder = createReadAttribution(() => 50, () => snapshots[index++] ?? lateA);
+  recorder.sync("reader-A", () => { /* the sampler has not published A's completed I/O yet */ }, 1);
+  recorder.sync("reader-B", () => {}, 2);
+  const report = recorder.snapshot(100);
+  expect(report.top.find(row => row.reader === "reader-A")).toMatchObject({ readBytes: 0, sampledCalls: 0, unavailableCalls: 1 });
+  expect(report.top.find(row => row.reader === "reader-B")).toMatchObject({ readBytes: 0, sampledCalls: 0, unavailableCalls: 1 });
+});
+
+test("nested empty callbacks exclude every level of observer work from application time", () => {
+  let at = 0;
+  const recorder = createReadAttribution(() => at, () => {
+    at += 20;
+    return { bytes: 0, observerBytes: 0, observerMs: 20 };
+  });
+  recorder.run("files.get", () => recorder.sync("state.get", () => recorder.sync("state.decode", () => {})));
+  const report = recorder.snapshot(200);
+  expect(report.namedSyncMs).toBe(0);
+  expect(report.observerMs).toBeGreaterThanOrEqual(120);
+});
+
+test("worker durations remain outside main-loop pause coverage", () => {
+  let at = 0;
+  const recorder = createReadAttribution(() => at, () => null);
+  recorder.sync("empty-main-work", () => { at += 590; });
+  recorder.ingestWorker("delayed-worker", { threadId: 5, dropped: 0, events: [{
+    operation: "files.get", reader: "state.get", connection: 3, syncMs: 600, readBytes: 4096, decodedJsonBytes: 32,
+    start: 1_800_000_000_000, end: 1_800_000_000_600, observerMs: 0, samplerDegraded: false,
+    sampledCalls: 1, unsampledCalls: 0, unavailableCalls: 0, failed: 0,
+  }] });
+  const report = recorder.snapshot(600);
+  expect(report.namedSyncMs).toBe(590);
+  expect(report.byteAttributedSyncMs).toBe(0);
+  expect(report.attributedFraction).toBe(0);
+  expect(report.workerSyncMs).toBe(600);
+  expect(report.top[0]).toMatchObject({ worker: "delayed-worker-5", readBytes: 4096, decodedJsonBytes: 32 });
+  expect(report.top[0].workerIntervals).toEqual([{ start: 1_800_000_000_000, end: 1_800_000_000_600, syncMs: 600 }]);
+});
+
+test("named main-loop work counts toward coverage when its operation carries decoded bytes", () => {
+  let at = 0;
+  const recorder = createReadAttribution(() => at, () => null);
+  recorder.run("files.get", () => {
+    recorder.sync("state.get", () => { at += 500; });
+    recorder.sync("state.json", () => {}, 4, 32, false);
+  });
+  const report = recorder.snapshot(500);
+  expect(report.namedSyncMs).toBe(500);
+  expect(report.byteAttributedSyncMs).toBe(500);
+  expect(report.attributedFraction).toBe(1);
 });
 
 test("worker event and parent retention overflow are reported", () => {
   const recorder = createReadAttribution(() => 0, () => null);
   recorder.ingestWorker("bounded-worker", { threadId: 7, dropped: 3, events: Array.from({ length: 140 }, (_, index) => ({
     operation: "files.get", reader: `reader-${index}`, connection: index + 1, syncMs: 1, readBytes: 4, decodedJsonBytes: 2,
+    start: index, end: index + 1,
     observerMs: 0, samplerDegraded: false, sampledCalls: 1, unsampledCalls: 0, unavailableCalls: 0, failed: 0,
   })) });
   const report = recorder.snapshot(1);
@@ -150,6 +206,43 @@ test("a degraded proc source is isolated and stops sampling", async () => {
     expect(probe.snapshot()).toMatchObject({ degraded: true, samples: 1 });
     expect(probe.snapshot().observerMs).toBeGreaterThanOrEqual(20);
   } finally { await probe.stop(); }
+});
+
+test("a slow counter source cannot stall an actual worker event loop", async () => {
+  const worker = new Worker(`
+    const { parentPort, workerData } = require('node:worker_threads');
+    const fs = require('node:fs');
+    const nativeReadFileSync = fs.readFileSync;
+    fs.readFileSync = function(path, ...args) {
+      if (String(path) === '/proc/thread-self/io') {
+        parentPort.postMessage({ type: 'sync-proc-read' });
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 200);
+      }
+      return nativeReadFileSync.call(this, path, ...args);
+    };
+    let timerFired = false;
+    setTimeout(() => { timerFired = true; parentPort.postMessage({ type: 'timer' }); }, 0);
+    const { readAttribution, createReadCounterSamplerProbe } = require(workerData.modulePath);
+    const probe = createReadCounterSamplerProbe(40);
+    readAttribution.run('worker.empty', () => {});
+    setTimeout(() => {
+      const counter = probe.snapshot();
+      void probe.stop();
+      parentPort.postMessage({ type: 'report', timerFired, counter, reads: readAttribution.snapshot(1) });
+    }, 100);
+  `, { eval: true, workerData: { modulePath: `${import.meta.dir}/readAttribution.ts` } });
+  const messages: Array<Record<string, unknown>> = [];
+  try {
+    const report = await new Promise<Record<string, unknown>>((resolve, reject) => {
+      worker.on("message", message => { messages.push(message); if (message.type === "report") resolve(message); });
+      worker.once("error", reject);
+    });
+    expect(messages.find(message => message.type === "timer")?.type).toBe("timer");
+    expect(messages.some(message => message.type === "sync-proc-read")).toBe(false);
+    expect(report.timerFired).toBe(true);
+    expect((report.counter as { degraded: boolean }).degraded).toBe(true);
+    expect((report.counter as { observerMs: number }).observerMs).toBeGreaterThan(0);
+  } finally { await worker.terminate(); }
 });
 
 test("worker transport caps pending batches and reports dropped observations", async () => {

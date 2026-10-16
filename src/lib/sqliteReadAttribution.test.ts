@@ -113,7 +113,10 @@ test("real statements, iteration, cache and JSON parsing retain connection ident
     at = 1100; monitor.tick();
     const gap = JSON.parse(lines[0]!.slice("[viewer loop-gap] ".length));
     expect(gap.reads.decodedJsonBytes).toBe(Buffer.byteLength(json) * 2 + 7);
-    if (process.platform === "linux") expect(gap.reads.readBytes).toBeGreaterThan(200_000);
+    if (process.platform === "linux") {
+      expect(gap.reads.readBytes).toBe(0);
+      expect(gap.reads.unavailableCalls).toBeGreaterThan(0);
+    }
     const jsonReader = gap.reads.top.find((row: { reader: string }) => row.reader === "state.json");
     expect(jsonReader.connection).toBeGreaterThan(0);
     expect(jsonReader.failed).toBe(1);
@@ -126,6 +129,23 @@ test("real statements, iteration, cache and JSON parsing retain connection ident
     expect(gap.operations[0].decodedJsonBytes).toBe(gap.reads.decodedJsonBytes);
     monitor.stop();
     expect(readAttribution.snapshot(1).top).toEqual([]);
+    if (process.platform === "linux") {
+      const bulkDb = new Database(filename);
+      const nativeQuery = bulkDb.query.bind(bulkDb);
+      observeSqlite(bulkDb, "state-bulk");
+      const connection = sqliteReadCounters(bulkDb)!.connection;
+      try {
+        bulkDb.exec("PRAGMA cache_size=-16; PRAGMA shrink_memory");
+        readAttribution.sync("state.bulk", () => {
+          Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
+          nativeQuery("SELECT value_json FROM state_rows").all();
+          Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
+        }, connection);
+        const bulk = readAttribution.snapshot(100).top.find(row => row.reader === "state.bulk");
+        expect(bulk?.connection).toBe(connection);
+        expect(bulk?.readBytes).toBeGreaterThan(100_000);
+      } finally { bulkDb.close(); readAttribution.clear(); }
+    }
     db.transaction(() => db!.query("INSERT INTO state_rows VALUES (?,?)").run("tasks", "{}"))();
     expect(() => db!.transaction(() => { db!.exec("DELETE FROM state_rows"); throw Error("rollback"); })()).toThrow();
     expect(db.query("SELECT count(*) AS n FROM state_rows").get()).toEqual({ n: 2 });
@@ -171,16 +191,28 @@ test("worker SQLite reads and JSON decoding reach the parent loop monitor with w
     const { Database } = require('bun:sqlite');
     const { observeSqlite, sqliteReadCounters, parseSqliteJson } = require(workerData.sqliteModule);
     const { readAttribution } = require(workerData.readModule);
+    const { startReadAttributionSampler } = require(workerData.readModule);
     parentPort.on('message', message => {
       if (message?.type === 'delegatus-read-attribution-ack') parentPort.close();
     });
-    const db = observeSqlite(new Database(workerData.filename), 'worker-state');
+    const db = new Database(workerData.filename);
+    observeSqlite(db, 'worker-state');
+    startReadAttributionSampler();
     readAttribution.run('worker.fixture', () => {
       const row = readAttribution.sync('worker-state.get', () => {
         const value = db.query('SELECT value FROM rows').get();
         Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 35);
         return value;
       }, sqliteReadCounters(db).connection);
+      const bulkDb = new Database(workerData.filename);
+      const bulkQuery = bulkDb.query.bind(bulkDb);
+      observeSqlite(bulkDb, 'worker-state-bulk');
+      readAttribution.sync('worker-state.bulk', () => {
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
+        bulkQuery('SELECT value FROM rows').all();
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
+      }, sqliteReadCounters(bulkDb).connection);
+      bulkDb.close();
       parseSqliteJson(row.value, db);
     });
     db.close();
@@ -204,7 +236,9 @@ test("worker SQLite reads and JSON decoding reach the parent loop monitor with w
     const workerSql = report.reads.top.find((row: { operation: string; reader: string }) => row.operation === workerJson.operation
       && row.reader === "worker-state.get");
     expect(workerSql.connections).toHaveLength(1);
-    if (process.platform === "linux") expect(workerSql.readBytes).toBeGreaterThan(0);
+    if (process.platform === "linux") expect(workerSql.unavailableCalls).toBeGreaterThan(0);
+    const workerBulk = report.reads.top.find((row: { reader: string }) => row.reader === "worker-state.bulk");
+    if (process.platform === "linux") expect(workerBulk.readBytes).toBeGreaterThan(0);
     expect(report.reads.workerBatches).toBeGreaterThan(0);
   } finally { detach(); await worker.terminate(); readAttribution.clear(); fs.rmSync(directory, { recursive: true, force: true }); }
 });

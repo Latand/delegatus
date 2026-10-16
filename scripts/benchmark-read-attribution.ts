@@ -77,7 +77,7 @@ try {
     viewerLoopMonitor.stop();
     const window = gaps.slice(before);
     const pauseMs = window.reduce((sum, gap) => sum + gap.gapMs, 0);
-    const attributedMs = window.reduce((sum, gap) => sum + Math.min(gap.gapMs, gap.reads.namedSyncMs), 0);
+    const attributedMs = window.reduce((sum, gap) => sum + Math.min(gap.gapMs, gap.reads.byteAttributedSyncMs), 0);
     const fraction = pauseMs ? attributedMs / pauseMs : 0;
     reports.push({ name: subject.name, iterations, rows, pauseMs, attributedMs, attributedFraction: fraction, timings,
       gaps: window.map(({ gapMs, reads }) => ({ gapMs, reads })) });
@@ -89,7 +89,8 @@ try {
   fs.writeFileSync(output, JSON.stringify({ schema: 1, utc: new Date().toISOString(), runtime: Bun.version, platform: process.platform,
     command: "bun scripts/benchmark-read-attribution.ts evidence/read-attribution/local.json", scale,
     sourceHashes: hashes, shape, registry: { rows: dataset.rows, payloadBytes: dataset.payloadBytes, shape: dataset.shape }, reports }, null, 2) + "\n");
-  if (gaps.length < cases.length || gaps.some(gap => gap.reads.attributedFraction < 0.8 || gap.reads.decodedJsonBytes === 0 || gap.reads.readBytes === 0)) {
+  if (gaps.length < cases.length || gaps.some(gap => gap.reads.attributedFraction < 0.8
+    || gap.reads.decodedJsonBytes === 0 && gap.reads.readBytes === 0)) {
     throw new Error("local read attribution did not meet the 80% acceptance threshold; inspect the saved report");
   }
   console.log(JSON.stringify(reports.map(row => { const { name, pauseMs, attributedFraction } = row as { name: string; pauseMs: number; attributedFraction: number }; return { name, pauseMs, attributedFraction }; })));
