@@ -131,6 +131,87 @@
   :root:not([data-theme="light"]) .vc-btn:hover { background: var(--color-raised); }
   :root:not([data-theme="light"]) .vc-btn:not([data-on]):hover { color: var(--color-accent); }
   :root:not([data-theme="light"]) .vc-btn:active { background: var(--color-strong); }
+
+  /* ── Every other control (the audit of 2026-10-16) ─────────────────────── */
+
+  /* Hover fills that were a darker well take the raised surface: `--dc-hover`
+     is read by the board and pipeline rules, which fall back to
+     the well in the light theme. */
+  :root:not([data-theme="light"]) { --dc-hover: var(--color-raised); }
+
+  /* The brand fill is the emblem's cream in the dark theme, a light slab on
+     the dark surfaces. Filled primary actions take the accent with a canvas
+     label, as Send and «Говорити» do; a disabled one keeps its dim. */
+  :root:not([data-theme="light"]) .bg-brand { background-color: var(--color-accent); }
+  :root:not([data-theme="light"]) .border-brand { border-color: var(--color-accent); }
+  :root:not([data-theme="light"]) .text-on-brand { color: var(--color-canvas); }
+  :root:not([data-theme="light"]) .bg-brand:is(button, a, [role="button"]):hover:not(:disabled):not([aria-disabled="true"]) {
+    background-color: color-mix(in srgb, var(--color-accent) 88%, var(--color-primary));
+    border-color: color-mix(in srgb, var(--color-accent) 88%, var(--color-primary));
+    opacity: 1;
+  }
+  :root:not([data-theme="light"]) .bg-brand:is(button, a, [role="button"]):active:not(:disabled):not([aria-disabled="true"]) {
+    background-color: color-mix(in srgb, var(--color-accent) 88%, var(--color-canvas));
+  }
+
+  /* White on the dark accent, success, warning and info fills read 2.2–2.9:1;
+     the canvas reads 6.3–10:1. The red danger fill keeps its white. */
+  :root:not([data-theme="light"]) :is(.bg-accent, .bg-success, .bg-warning, .bg-info).text-white,
+  :root:not([data-theme="light"]) .data-\[over\]\:text-white[data-over] { color: var(--color-canvas); }
+  :root:not([data-theme="light"]) .bg-accent.text-white:is(button, a, [role="button"]):hover:not(:disabled):not([aria-disabled="true"]) {
+    background-color: color-mix(in srgb, var(--color-accent) 88%, var(--color-primary));
+    opacity: 1;
+  }
+  :root:not([data-theme="light"]) .bg-accent.text-white:is(button, a, [role="button"]):active:not(:disabled):not([aria-disabled="true"]) {
+    background-color: color-mix(in srgb, var(--color-accent) 88%, var(--color-canvas));
+  }
+
+  /* The phone's Stop: a near-white slab in the send slot. Outlined on the
+     raised surface with a primary square, so it never reads as Send. */
+  :root:not([data-theme="light"]) [data-composer-send-visual="stop"] {
+    background: var(--color-raised);
+    border-color: var(--color-strong);
+    color: var(--color-primary);
+  }
+  :root:not([data-theme="light"]) button:active:not(:disabled):not([aria-disabled="true"]) > [data-composer-send-visual="stop"] { background: var(--color-strong); }
+
+  /* The switch knob drawn white: the card on the accent track, muted off it. */
+  :root:not([data-theme="light"]) .bg-accent > .bg-white.rounded-full { background-color: var(--color-card); }
+  :root:not([data-theme="light"]) .bg-sunken > .bg-white.rounded-full { background-color: var(--color-muted); }
+
+  /* A project the catalogue alone knows reads muted (5.1:1) without the extra
+     dim, which took it to 3.3:1. */
+  :root:not([data-theme="light"]) [data-rail-project].opacity-70 { opacity: 1; }
+
+  /* Focus: the ring utilities at 35–60 % accent read about 2:1 on the dark
+     surfaces; the dark theme draws them solid (5.3:1 or more). Where a solid
+     outline is already drawn (the board's own, the composer's), the ring would
+     double it and stays out. */
+  :root:not([data-theme="light"]) :is(.focus-visible\:ring-accent\/35, .focus-visible\:ring-accent\/40, .focus-visible\:ring-accent\/45, .focus-visible\:ring-accent\/50, .focus-visible\:ring-accent\/55, .focus-visible\:ring-accent\/60):focus-visible,
+  :root:not([data-theme="light"]) .focus-within\:ring-accent\/40:focus-within,
+  :root:not([data-theme="light"]) .group:focus-visible .group-focus-visible\:ring-accent\/40 { --tw-ring-color: var(--color-accent); }
+  :root:not([data-theme="light"]) .kb :focus-visible:not(:where(.reader-host *, .seat *, .kb-lead *, .bar-slot *)),
+  :root:not([data-theme="light"]) .composer-ghost:focus-visible,
+  :root:not([data-theme="light"]) button[data-composer-send]:focus-visible { --tw-ring-color: transparent; }
+  :root:not([data-theme="light"]) .kb .reader.conv:focus-visible { box-shadow: inset 0 0 0 2px var(--color-accent); }
+
+  /* Hover and press washes that sank into the well or the canvas take the
+     raised surface; a press adds a strong line, since a lighter fill would take
+     muted labels under 4.5:1. Inside a raised menu, list or popover the well
+     stays: it is the one step that keeps those labels legible. */
+  @media (hover: hover) {
+    :root:not([data-theme="light"]) :is(.hover\:bg-sunken, .hover\:bg-canvas, .hover\:bg-well, .hover\:bg-black\/5):hover:not(:disabled):not([aria-disabled="true"]):not(:where(.bg-raised, [role="menu"], [role="listbox"], .kb .menu, .kb .popover) *) {
+      background-color: var(--color-raised);
+    }
+    :root:not([data-theme="light"]) :is(.hover\:bg-sunken, .hover\:bg-canvas, .hover\:bg-well, .hover\:bg-black\/5):hover:active:not(:focus-visible):not(:disabled):not(:where(.bg-raised, [role="menu"], [role="listbox"], .kb .menu, .kb .popover) *) {
+      box-shadow: inset 0 0 0 1px var(--color-strong);
+    }
+  }
+  :root:not([data-theme="light"]) :is(.active\:bg-sunken, .active\:bg-canvas):active:not(:where(.bg-raised, [role="menu"], [role="listbox"]) *) {
+    background-color: var(--color-raised);
+    box-shadow: inset 0 0 0 1px var(--color-strong);
+  }
+  :root:not([data-theme="light"]) .kb .icon-btn:active:not(:disabled) { background: var(--color-raised); box-shadow: inset 0 0 0 1px var(--color-strong); }
 }
 
 /* `data-theme="dark"` pins dark whatever the OS asks. */
@@ -250,3 +331,84 @@
 :root[data-theme="dark"] .vc-btn:hover { background: var(--color-raised); }
 :root[data-theme="dark"] .vc-btn:not([data-on]):hover { color: var(--color-accent); }
 :root[data-theme="dark"] .vc-btn:active { background: var(--color-strong); }
+
+/* ── Every other control (the audit of 2026-10-16) ─────────────────────── */
+
+/* Hover fills that were a darker well take the raised surface: `--dc-hover`
+   is read by the board and pipeline rules, which fall back to
+   the well in the light theme. */
+:root[data-theme="dark"] { --dc-hover: var(--color-raised); }
+
+/* The brand fill is the emblem's cream in the dark theme, a light slab on
+   the dark surfaces. Filled primary actions take the accent with a canvas
+   label, as Send and «Говорити» do; a disabled one keeps its dim. */
+:root[data-theme="dark"] .bg-brand { background-color: var(--color-accent); }
+:root[data-theme="dark"] .border-brand { border-color: var(--color-accent); }
+:root[data-theme="dark"] .text-on-brand { color: var(--color-canvas); }
+:root[data-theme="dark"] .bg-brand:is(button, a, [role="button"]):hover:not(:disabled):not([aria-disabled="true"]) {
+  background-color: color-mix(in srgb, var(--color-accent) 88%, var(--color-primary));
+  border-color: color-mix(in srgb, var(--color-accent) 88%, var(--color-primary));
+  opacity: 1;
+}
+:root[data-theme="dark"] .bg-brand:is(button, a, [role="button"]):active:not(:disabled):not([aria-disabled="true"]) {
+  background-color: color-mix(in srgb, var(--color-accent) 88%, var(--color-canvas));
+}
+
+/* White on the dark accent, success, warning and info fills read 2.2–2.9:1;
+   the canvas reads 6.3–10:1. The red danger fill keeps its white. */
+:root[data-theme="dark"] :is(.bg-accent, .bg-success, .bg-warning, .bg-info).text-white,
+:root[data-theme="dark"] .data-\[over\]\:text-white[data-over] { color: var(--color-canvas); }
+:root[data-theme="dark"] .bg-accent.text-white:is(button, a, [role="button"]):hover:not(:disabled):not([aria-disabled="true"]) {
+  background-color: color-mix(in srgb, var(--color-accent) 88%, var(--color-primary));
+  opacity: 1;
+}
+:root[data-theme="dark"] .bg-accent.text-white:is(button, a, [role="button"]):active:not(:disabled):not([aria-disabled="true"]) {
+  background-color: color-mix(in srgb, var(--color-accent) 88%, var(--color-canvas));
+}
+
+/* The phone's Stop: a near-white slab in the send slot. Outlined on the
+   raised surface with a primary square, so it never reads as Send. */
+:root[data-theme="dark"] [data-composer-send-visual="stop"] {
+  background: var(--color-raised);
+  border-color: var(--color-strong);
+  color: var(--color-primary);
+}
+:root[data-theme="dark"] button:active:not(:disabled):not([aria-disabled="true"]) > [data-composer-send-visual="stop"] { background: var(--color-strong); }
+
+/* The switch knob drawn white: the card on the accent track, muted off it. */
+:root[data-theme="dark"] .bg-accent > .bg-white.rounded-full { background-color: var(--color-card); }
+:root[data-theme="dark"] .bg-sunken > .bg-white.rounded-full { background-color: var(--color-muted); }
+
+/* A project the catalogue alone knows reads muted (5.1:1) without the extra
+   dim, which took it to 3.3:1. */
+:root[data-theme="dark"] [data-rail-project].opacity-70 { opacity: 1; }
+
+/* Focus: the ring utilities at 35–60 % accent read about 2:1 on the dark
+   surfaces; the dark theme draws them solid (5.3:1 or more). Where a solid
+   outline is already drawn (the board's own, the composer's), the ring would
+   double it and stays out. */
+:root[data-theme="dark"] :is(.focus-visible\:ring-accent\/35, .focus-visible\:ring-accent\/40, .focus-visible\:ring-accent\/45, .focus-visible\:ring-accent\/50, .focus-visible\:ring-accent\/55, .focus-visible\:ring-accent\/60):focus-visible,
+:root[data-theme="dark"] .focus-within\:ring-accent\/40:focus-within,
+:root[data-theme="dark"] .group:focus-visible .group-focus-visible\:ring-accent\/40 { --tw-ring-color: var(--color-accent); }
+:root[data-theme="dark"] .kb :focus-visible:not(:where(.reader-host *, .seat *, .kb-lead *, .bar-slot *)),
+:root[data-theme="dark"] .composer-ghost:focus-visible,
+:root[data-theme="dark"] button[data-composer-send]:focus-visible { --tw-ring-color: transparent; }
+:root[data-theme="dark"] .kb .reader.conv:focus-visible { box-shadow: inset 0 0 0 2px var(--color-accent); }
+
+/* Hover and press washes that sank into the well or the canvas take the
+   raised surface; a press adds a strong line, since a lighter fill would take
+   muted labels under 4.5:1. Inside a raised menu, list or popover the well
+   stays: it is the one step that keeps those labels legible. */
+@media (hover: hover) {
+  :root[data-theme="dark"] :is(.hover\:bg-sunken, .hover\:bg-canvas, .hover\:bg-well, .hover\:bg-black\/5):hover:not(:disabled):not([aria-disabled="true"]):not(:where(.bg-raised, [role="menu"], [role="listbox"], .kb .menu, .kb .popover) *) {
+    background-color: var(--color-raised);
+  }
+  :root[data-theme="dark"] :is(.hover\:bg-sunken, .hover\:bg-canvas, .hover\:bg-well, .hover\:bg-black\/5):hover:active:not(:focus-visible):not(:disabled):not(:where(.bg-raised, [role="menu"], [role="listbox"], .kb .menu, .kb .popover) *) {
+    box-shadow: inset 0 0 0 1px var(--color-strong);
+  }
+}
+:root[data-theme="dark"] :is(.active\:bg-sunken, .active\:bg-canvas):active:not(:where(.bg-raised, [role="menu"], [role="listbox"]) *) {
+  background-color: var(--color-raised);
+  box-shadow: inset 0 0 0 1px var(--color-strong);
+}
+:root[data-theme="dark"] .kb .icon-btn:active:not(:disabled) { background: var(--color-raised); box-shadow: inset 0 0 0 1px var(--color-strong); }

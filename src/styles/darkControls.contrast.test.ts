@@ -92,13 +92,84 @@ test("a state colour is left alone: muted call, connecting mic, context Send", (
   expect(RULES.split(/(?=^\/\* `data-theme="dark"` pins)/m).length).toBe(2);
 });
 
-test("a Send that cannot send keeps its dim on hover and press, in both scopes", () => {
+test("a Send or Stop that cannot act keeps its dim on hover and press, in both scopes", () => {
   const scopes = RULES.split(/(?=^\/\* `data-theme="dark"` pins)/m);
   expect(scopes.length).toBe(2);
   for (const scope of scopes) {
     const states = scope.split("\n").filter((line) => /composer-send/.test(line) && /:(?:hover|active):not\(:disabled\)/.test(line));
-    expect(states.length).toBe(6);
+    /* Six for Send and its phone visual, one for the phone Stop's press. */
+    expect(states.length).toBe(7);
     for (const line of states) expect(line).toContain(':not([aria-disabled="true"])');
+  }
+});
+
+/* The rest of the dark controls (the audit of 2026-10-16). */
+const sunken = dark("surface-sunken");
+const well = dark("surface-well");
+const success = dark("color-success");
+const warning = dark("color-warning");
+const danger = dark("color-danger");
+const brand = dark("color-brand");
+const white = "#ffffff";
+/** The two scopes' audit blocks, each with its scope prefix and indent stripped. */
+function auditBlocks(): string[] {
+  return RULES.split(/(?=^\/\* `data-theme="dark"` pins)/m).map((scope) => {
+    const block = scope.slice(scope.indexOf("Every other control"));
+    return block.replace(/:root(?::not\(\[data-theme="light"\]\)|\[data-theme="dark"\])/g, ":root").replace(/^ +/gm, "").replace(/\n}\s*$/, "").trim();
+  });
+}
+
+test("a filled primary action takes the accent with a canvas label instead of the cream brand slab", () => {
+  expect(contrast(brand, card)).toBeGreaterThan(14);
+  for (const fill of [accent, hover, pressed]) expect(contrast(canvas, fill)).toBeGreaterThanOrEqual(5.1);
+  for (const block of auditBlocks()) {
+    expect(block).toContain(":root .bg-brand { background-color: var(--color-accent); }");
+    expect(block).toContain(":root .text-on-brand { color: var(--color-canvas); }");
+  }
+});
+
+test("white on the dark accent, success, warning and info fills is replaced by the canvas; red danger keeps its white", () => {
+  for (const fill of [accent, success, warning, info]) {
+    expect(contrast(white, fill)).toBeLessThan(3);
+    expect(contrast(canvas, fill)).toBeGreaterThanOrEqual(6.3);
+  }
+  for (const block of auditBlocks()) {
+    expect(block).toContain(":root :is(.bg-accent, .bg-success, .bg-warning, .bg-info).text-white,");
+    expect(block).not.toMatch(/bg-danger|color-danger/);
+  }
+  expect(danger).toBe("#f07171");
+});
+
+test("the phone Stop, the switch knob and the focus ring hold their floors", () => {
+  expect(contrast(primary, raised)).toBeGreaterThanOrEqual(12.8);
+  expect(contrast(primary, strong)).toBeGreaterThanOrEqual(8.4);
+  /* Non-text: the 3:1 floor. */
+  expect(contrast(card, accent)).toBeGreaterThanOrEqual(5.8);
+  expect(contrast(muted, sunken)).toBeGreaterThanOrEqual(5.4);
+  for (const ground of [canvas, card, raised, sunken, well]) expect(contrast(accent, ground)).toBeGreaterThanOrEqual(5.3);
+});
+
+test("a hover wash lifts to the raised surface and keeps every label over 4.5:1", () => {
+  for (const label of [muted, secondary, primary]) expect(contrast(label, raised)).toBeGreaterThanOrEqual(4.6);
+  /* The well it replaces sat below the card it was drawn on. */
+  expect(luminance(well)).toBeLessThan(luminance(card));
+  expect(luminance(raised)).toBeGreaterThan(luminance(card));
+  /* A lighter step (the strong line as a fill) would take muted labels under the floor, which is why a press draws a line. */
+  expect(contrast(muted, strong)).toBeLessThan(4.5);
+  for (const block of auditBlocks()) expect(block).toContain(":root { --dc-hover: var(--color-raised); }");
+});
+
+test("the audit rules are the same in both dark scopes and never reach the light theme", () => {
+  const [system, pinned] = auditBlocks();
+  expect(system).toBe(pinned);
+  expect(system.length).toBeGreaterThan(2000);
+  /* `--dc-hover` is declared only by the two dark scopes; the light theme reads each rule's fallback. */
+  expect(RULES.match(/--dc-hover:/g)?.length).toBe(2);
+  expect(TOKENS).not.toContain("--dc-hover");
+  for (const sheet of ["../components/kanban/kanbanBoard.css", "../components/pipelines/pipelineBlock.css"]) {
+    const uses = fs.readFileSync(path.join(import.meta.dir, sheet), "utf8").match(/var\(--dc-hover[^;]*;/g) ?? [];
+    expect(uses.length).toBeGreaterThan(0);
+    for (const use of uses) expect(use).toMatch(/^var\(--dc-hover, var\(--surface-(well|sunken)/);
   }
 });
 
