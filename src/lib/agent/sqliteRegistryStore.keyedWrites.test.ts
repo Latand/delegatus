@@ -155,6 +155,28 @@ test("writer snapshots follow peer and unversioned writes while held snapshots s
   expect(held.file.receipts["receipt-0001"]!.error).toBeNull();
 });
 
+test("issued snapshots retain unread archived owners after close in both reader modes", async () => {
+  for (const prepared of [false, true]) {
+    for (const cached of [false, true]) {
+      const root = directory();
+      const dataset = buildRegistryPerformanceDataset(root, scaledRegistryPerformanceShape(0.02));
+      const store = new SqliteAgentRegistryStore(dataset.filename, {
+        initialSnapshot: () => { throw new Error("fixture already imported"); }, normalize: normalizeRegistry,
+      });
+      stores.push(store);
+      if (prepared) await store.prepareReadOnlySnapshot();
+      if (cached) store.snapshot();
+      const held = store.snapshot();
+      const operationId = dataset.coldOperationIds[0]!;
+      store.close();
+      stores.splice(stores.indexOf(store), 1);
+      expect(held.file.deliveryOperationOwners[operationId]).toMatchObject({
+        command: { operationId }, deliveryId: "performance-delivery-0", terminalState: "delivered",
+      });
+    }
+  }
+});
+
 test("the writer cache row bound holds in a fresh process", async () => {
   const f = fixture(8_193);
   f.open().mutate(file => { file.receipts["receipt-0001"]!.error = 'Перевірка 🌌 "quoted"\n'; }, false);

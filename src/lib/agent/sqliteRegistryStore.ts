@@ -781,6 +781,10 @@ export class SqliteAgentRegistryStore {
   private preparedReader: SqliteAgentRegistryStore | null = null;
   private preparingReader: Promise<SqliteRegistrySnapshot> | null = null;
   private closed = false;
+  /** Weak ownership keeps issued snapshots detached without retaining callers'
+      snapshots for the lifetime of the store. A close materializes only the
+      snapshots callers still hold, before their lazy archive readers close. */
+  private readonly issuedSnapshots = new Set<WeakRef<RegistryFile>>();
   private readonly normalize: (value: unknown, mode?: { deferStoredGrantDecision: true }) => RegistryFile;
   private readonly normalizePartial: (value: unknown) => RegistryFile;
   private readonly onCreditGuardChange: (() => void) | undefined;
@@ -1228,11 +1232,35 @@ export class SqliteAgentRegistryStore {
   }
 
   close(): void {
+    this.preserveIssuedSnapshots();
     this.closed = true;
     this.writerSnapshotCache = null;
     this.writerSnapshotStarted = false;
     this.preparedReader?.close();
     this.db.close();
+  }
+
+  private preserveIssuedSnapshots(): void {
+    for (const reference of this.issuedSnapshots) {
+      const file = reference.deref();
+      this.issuedSnapshots.delete(reference);
+      if (!file) continue;
+      // Archived properties are lazy database readers. Resolve them in the
+      // dependency order while the connection is open; afterward each issued
+      // mutable snapshot owns ordinary cloned row values.
+      for (const collection of ROW_COLLECTIONS) {
+        const rows = file[collection] as Record<string, unknown>;
+        for (const key of Object.keys(rows)) void rows[key];
+      }
+    }
+  }
+
+  private trackIssuedSnapshot(snapshot: SqliteRegistrySnapshot): SqliteRegistrySnapshot {
+    for (const reference of this.issuedSnapshots) {
+      if (!reference.deref()) this.issuedSnapshots.delete(reference);
+    }
+    this.issuedSnapshots.add(new WeakRef(snapshot.file));
+    return snapshot;
   }
 
   private onDatabaseReopened(db: BunDatabase): void {
@@ -1278,7 +1306,7 @@ export class SqliteAgentRegistryStore {
         const { file: view, revision } = this.readOnlySnapshot();
         const stamp = this.readOnlyCache!.stamp;
         if (previous.view === view && previous.revision === revision && previous.stamp === stamp) {
-          return { file: detachedWriterSnapshot(previous.source), revision };
+          return this.trackIssuedSnapshot({ file: detachedWriterSnapshot(previous.source), revision });
         }
         this.writerSnapshotCache = null;
       }
@@ -1287,7 +1315,7 @@ export class SqliteAgentRegistryStore {
       const stamp = this.readOnlyCache!.stamp;
       if (!this.writerSnapshotStarted) {
         this.writerSnapshotStarted = true;
-        return { file: detachedWriterSnapshot(view), revision };
+        return this.trackIssuedSnapshot({ file: detachedWriterSnapshot(view), revision });
       }
 
       const collections = new Map<RowCollection, { rows: Record<string, unknown>; hotKeys: string[] }>();
@@ -1300,7 +1328,7 @@ export class SqliteAgentRegistryStore {
         collections.set(collection, { rows, hotKeys });
       }
       if (rowCount > WRITER_SNAPSHOT_CACHE_ROW_LIMIT) {
-        return { file: detachedWriterSnapshot(view), revision };
+        return this.trackIssuedSnapshot({ file: detachedWriterSnapshot(view), revision });
       }
 
       const source = this.normalizePartial({ version: 2, entries: {}, receipts: {} });
@@ -1315,7 +1343,7 @@ export class SqliteAgentRegistryStore {
       }
       Object.freeze(source);
       this.writerSnapshotCache = { source, revision, stamp, view, rowCount };
-      return { file: detachedWriterSnapshot(source), revision };
+      return this.trackIssuedSnapshot({ file: detachedWriterSnapshot(source), revision });
     });
   }
 
