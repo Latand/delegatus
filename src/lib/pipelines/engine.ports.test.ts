@@ -2315,8 +2315,8 @@ async function detachedAttemptFixture(name: string) {
     expect(r.code, r.stderr).toBe(0);
     return r.stdout.trim();
   };
-  const commit = async () => {
-    fs.writeFileSync(path.join(detached, "fix.txt"), "attempt fix\n");
+  const commit = async (content = "attempt fix\n") => {
+    fs.writeFileSync(path.join(detached, "fix.txt"), content);
     await run("add", "fix.txt");
     await run("commit", "-m", "attempt fix");
     return await run("rev-parse", "HEAD");
@@ -2619,5 +2619,81 @@ test.each(["unchanged", "absent"] as const)("attempt Git custody refuses an unco
       const branch = await realExec("git", ["show-ref", "--verify", `refs/heads/${f.lane.branch}`], f.origin);
       expect(branch.code).not.toBe(0);
     }
+  } finally { savePipelines([]); fs.rmSync(f.root, { recursive: true, force: true }); }
+});
+
+test.each(["outside", "mixed"] as const)("attempt Git custody refuses a no-receipt remote suffix containing %s commits", async shape => {
+  const f = await detachedAttemptFixture(`attempt-git-no-receipt-${shape}`);
+  try {
+    if (shape === "mixed") await f.commit();
+    const date = new Date(Date.parse(f.attempt.startedAt!) + 2000).toISOString();
+    const foreign = await realExec("git", ["commit", "--allow-empty", "-m", "outside commit"], f.detached,
+      { ...f.env, GIT_CONFIG_COUNT: "0", GIT_AUTHOR_DATE: date, GIT_COMMITTER_DATE: date });
+    expect(foreign.code, foreign.stderr).toBe(0);
+    const candidate = await f.git(f.detached, "rev-parse", "HEAD");
+    const pushed = await realExec("git", ["push", "origin", `HEAD:refs/heads/${f.lane.branch}`], f.detached,
+      { ...f.env, GIT_CONFIG_COUNT: "0" });
+    expect(pushed.code, pushed.stderr).toBe(0);
+    await f.git(f.worktree, "merge", "--ff-only", candidate);
+    const failed = await f.finish();
+    expect(failed.state).toBe("needs_decision");
+    expect(failed.stateDetail).toContain("settling the stage push");
+    expect(failed.lastPassedCommit).toBe(f.base);
+    expect(failed.cursor?.stageId).toBe("build");
+    expect(await f.git(f.worktree, "rev-parse", "HEAD")).toBe(candidate);
+    expect(await f.git(f.origin, "rev-parse", `refs/heads/${f.lane.branch}`)).toBe(candidate);
+  } finally { savePipelines([]); fs.rmSync(f.root, { recursive: true, force: true }); }
+});
+
+test("attempt Git custody settles a proved local commit without a remote push", async () => {
+  const f = await detachedAttemptFixture("attempt-git-unpublished-local");
+  try {
+    const candidate = await f.commit();
+    await f.git(f.worktree, "merge", "--ff-only", candidate);
+    const accepted = await f.finish();
+    expect(accepted.lastPassedCommit).toBe(candidate);
+    expect(accepted.cursor?.stageId).toBe("review");
+    expect(await f.git(f.origin, "rev-parse", `refs/heads/${f.lane.branch}`)).toBe(candidate);
+  } finally { savePipelines([]); fs.rmSync(f.root, { recursive: true, force: true }); }
+});
+
+test("attempt Git custody refuses a later rejected candidate despite an earlier confirmed push", async () => {
+  const f = await detachedAttemptFixture("attempt-git-rejected-later-candidate");
+  try {
+    const first = await f.commit();
+    await f.run("push", "origin", `HEAD:refs/heads/${f.lane.branch}`);
+    const second = await f.commit("attempt fix two\n");
+    const hook = path.join(f.origin, "hooks", "pre-receive");
+    fs.writeFileSync(hook, "#!/bin/sh\nexit 1\n");
+    fs.chmodSync(hook, 0o755);
+    const rejected = await realExec("git", ["push", "origin", `HEAD:refs/heads/${f.lane.branch}`], f.detached, f.env);
+    expect(rejected.code).not.toBe(0);
+    fs.rmSync(hook);
+    const refused = await f.finish();
+    expect(refused.state).toBe("needs_decision");
+    expect(refused.stateDetail).toContain("recorded push candidate was not confirmed");
+    expect(refused.lastPassedCommit).toBe(f.base);
+    expect(refused.cursor?.stageId).toBe("build");
+    expect(await f.git(f.origin, "rev-parse", `refs/heads/${f.lane.branch}`)).toBe(first);
+    expect(second).not.toBe(first);
+  } finally { savePipelines([]); fs.rmSync(f.root, { recursive: true, force: true }); }
+});
+
+test("attempt Git custody settles the later candidate after a rejected push is retried", async () => {
+  const f = await detachedAttemptFixture("attempt-git-retried-later-candidate");
+  try {
+    await f.commit();
+    await f.run("push", "origin", `HEAD:refs/heads/${f.lane.branch}`);
+    const second = await f.commit("attempt fix two\n");
+    const hook = path.join(f.origin, "hooks", "pre-receive");
+    fs.writeFileSync(hook, "#!/bin/sh\nexit 1\n");
+    fs.chmodSync(hook, 0o755);
+    const rejected = await realExec("git", ["push", "origin", `HEAD:refs/heads/${f.lane.branch}`], f.detached, f.env);
+    expect(rejected.code).not.toBe(0);
+    fs.rmSync(hook);
+    expect(await f.run("push", "origin", `HEAD:refs/heads/${f.lane.branch}`)).toBe("");
+    const accepted = await f.finish();
+    expect(accepted.lastPassedCommit).toBe(second);
+    expect(accepted.cursor?.stageId).toBe("review");
   } finally { savePipelines([]); fs.rmSync(f.root, { recursive: true, force: true }); }
 });

@@ -19,20 +19,22 @@ async function smallFile(file: string): Promise<string | null> {
   } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return null; throw error; }
 }
 
-async function hasRecordedPushForRef(directory: string, ref: string): Promise<boolean> {
+async function recordedPushesForRef(directory: string, ref: string): Promise<string[]> {
   let entries: Awaited<ReturnType<typeof fs.opendir>>;
   try { entries = await fs.opendir(path.join(directory, "pushes")); }
-  catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return false; throw error; }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return []; throw error; }
   let inspected = 0;
+  const candidates: string[] = [];
   for await (const entry of entries) {
-    if (++inspected > 256) return true;
+    if (++inspected > 256) throw new Error("too many stage push receipts");
     if (!/^[0-9a-f]{40}$/.test(entry.name)) continue;
     const receipt = await smallFile(path.join(directory, "pushes", entry.name));
-    if (receipt === null) return true;
+    if (receipt === null) throw new Error("stage push receipt disappeared");
     const [recordedRef, recordedUrl, trailing] = receipt.split("\n");
-    if (!recordedRef || !recordedUrl || trailing !== "" || recordedRef === ref) return true;
+    if (!recordedRef || !recordedUrl || trailing !== "") throw new Error("stage push receipt is malformed");
+    if (recordedRef === ref) candidates.push(entry.name);
   }
-  return false;
+  return candidates;
 }
 
 export async function stageAttemptPushRefusal(launchId: string | null): Promise<string | null> {
@@ -81,20 +83,45 @@ export async function settleStageAttemptPush(pipeline: Pipeline, attempt: Pipeli
     const local = await exec("git", ["rev-parse", "HEAD"], pipeline.worktreeDir);
     if (local.code !== 0) return refuse("the lane head cannot be read");
     const head = local.stdout.trim();
-    if (!tip) return await hasRecordedPushForRef(directory, ref)
-      ? refuse("the recorded push candidate was not confirmed on the delivery remote") : null;
-    const pushed = await smallFile(path.join(directory, "pushes", tip));
-    if (pushed === null) {
-      if (await hasRecordedPushForRef(directory, ref)) {
-        return refuse("the recorded push candidate was not confirmed on the delivery remote");
-      }
-      // A behind remote is normal before controller publication. An unknown
-      // ahead tip is never authority, even with the same author and date.
-      const known = await exec("git", ["merge-base", "--is-ancestor", tip, head], pipeline.worktreeDir);
-      return known.code === 0 ? null : refuse("the remote tip has no push receipt from this attempt; commit in the lane worktree and let Delegatus publish");
-    }
+    const candidates = await recordedPushesForRef(directory, ref);
     const url = await exec("git", ["remote", "get-url", "--push", remote], pipeline.worktreeDir);
     const expectedUrl = url.code === 0 ? url.stdout.trim() : remote;
+    for (const candidate of candidates) {
+      const receipt = await smallFile(path.join(directory, "pushes", candidate));
+      if (receipt !== `${ref}\n${expectedUrl}\n`) return refuse("the push receipt names another delivery target");
+      if (!tip || (await exec("git", ["merge-base", "--is-ancestor", candidate, tip], pipeline.worktreeDir)).code !== 0) {
+        return refuse("the recorded push candidate was not confirmed on the delivery remote");
+      }
+    }
+    const verifiedSuffix = async (target: string): Promise<boolean> => {
+      if (target === start.head) return true;
+      if ((await exec("git", ["merge-base", "--is-ancestor", start.head, target], pipeline.worktreeDir)).code !== 0) return false;
+      const log = await exec("git", ["log", "--no-show-signature", "--no-notes", "--no-color", "--max-count=257", "--format=%H %ct", `${start.head}..${target}`], pipeline.worktreeDir);
+      const commits = log.stdout.trim().split("\n");
+      if (log.code !== 0 || commits.length > 256 || !log.stdout.trim()) return false;
+      const from = Math.floor(Date.parse(start.startedAt) / 1000);
+      const through = Math.floor(Date.parse(attempt.completedAt ?? now) / 1000);
+      for (const line of commits) {
+        const [sha, stamp] = line.split(" ");
+        if (!/^[0-9a-f]{40}$/.test(sha) || !/^\d+$/.test(stamp) || Number(stamp) < from || Number(stamp) > through
+          || await smallFile(path.join(directory, "commits", sha)) !== "") return false;
+      }
+      return true;
+    };
+    if (!tip) {
+      return await verifiedSuffix(head) ? null
+        : refuse("the lane suffix contains a commit not proved to have been made during this attempt");
+    }
+    const pushed = await smallFile(path.join(directory, "pushes", tip));
+    if (pushed === null) {
+      // A remote behind the attempt's start is normal before publication. The
+      // lane's own ancestry cannot prove an imported remote commit belongs to
+      // this attempt.
+      const known = await exec("git", ["merge-base", "--is-ancestor", tip, start.head], pipeline.worktreeDir);
+      if (known.code !== 0) return refuse("the remote tip has no push receipt from this attempt; commit in the lane worktree and let Delegatus publish");
+      return await verifiedSuffix(head) ? null
+        : refuse("the lane suffix contains a commit not proved to have been made during this attempt");
+    }
     if (pushed !== `${ref}\n${expectedUrl}\n`) return refuse("the push receipt names another delivery target");
     if (head !== start.head && head !== tip) return refuse("the lane moved away from the attempt's starting head");
     const fetched = await exec("git", ["fetch", "--no-tags", remote, ref], pipeline.worktreeDir, undefined, { timeoutMs: 10000 });
@@ -105,16 +132,7 @@ export async function settleStageAttemptPush(pipeline: Pipeline, attempt: Pipeli
       if (!/^[0-9a-f]{40}$/.test(accepted)
         || (await exec("git", ["merge-base", "--is-ancestor", accepted, tip], pipeline.worktreeDir)).code !== 0) return refuse("the pushed head would drop accepted history");
     }
-    const log = await exec("git", ["log", "--no-show-signature", "--no-notes", "--no-color", "--max-count=257", "--format=%H %ct", `${start.head}..${tip}`], pipeline.worktreeDir);
-    const commits = log.stdout.trim().split("\n");
-    if (log.code !== 0 || commits.length > 256 || !log.stdout.trim()) return refuse("the pushed suffix exceeds the attempt proof bound");
-    const from = Math.floor(Date.parse(start.startedAt) / 1000);
-    const through = Math.floor(Date.parse(attempt.completedAt ?? now) / 1000);
-    for (const line of commits) {
-      const [sha, stamp] = line.split(" ");
-      if (!/^[0-9a-f]{40}$/.test(sha) || !/^\d+$/.test(stamp) || Number(stamp) < from || Number(stamp) > through
-        || await smallFile(path.join(directory, "commits", sha)) !== "") return refuse("the pushed suffix includes a commit not proved to have been made during this attempt");
-    }
+    if (!await verifiedSuffix(tip)) return refuse("the pushed suffix exceeds the attempt proof bound or includes a commit not proved to have been made during this attempt");
     const status = await exec("git", ["status", "--porcelain"], pipeline.worktreeDir);
     const branch = await exec("git", ["branch", "--show-current"], pipeline.worktreeDir);
     if (status.code !== 0 || status.stdout.trim() || branch.code !== 0
