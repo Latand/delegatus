@@ -329,7 +329,6 @@ test("renaming and deleting branches preserves foreign commits without rewriting
   } finally { f.close(); }
 });
 
-
 test.each([false, true])("pre-push preserves the repository hook input and refusal with stage binding=%s", (bound) => {
   const f = fixture();
   try {
@@ -356,7 +355,6 @@ test.each([false, true])("pre-push preserves the repository hook input and refus
   } finally { f.close(); }
 });
 
-
 test("a stage Git binding preserves pushes from an unrelated fixture repository", () => {
   const f = fixture();
   try {
@@ -376,5 +374,94 @@ test("a stage Git binding preserves pushes from an unrelated fixture repository"
     expect(pushed.exitCode, pushed.stderr.toString()).toBe(0);
     expect(fs.existsSync(path.join(receipt, "refused"))).toBe(false);
     expect(f.ok(["rev-parse", "HEAD"])).toBe(original);
+  } finally { f.close(); }
+});
+
+test.each(["foreign", "same-size", "oversized", "missing", ...(process.platform === "win32" ? [] : ["symlink", "mode"])])("launch verifies warmed hook bodies: %s", (kind) => {
+  const f = fixture();
+  const warnings = spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    const directory = f.env.LLV_AGENT_GIT_GUARD_DIR!;
+    const hook = path.join(directory, "pre-push");
+    const expected = fs.readFileSync(hook, "utf8");
+    const peer = path.join(f.root, "foreign-hook");
+    fs.writeFileSync(peer, "foreign body");
+    if (kind === "foreign") fs.writeFileSync(hook, "#!/bin/sh\necho transport rejected once >&2\nexit 1\n");
+    if (kind === "same-size") fs.writeFileSync(hook, expected.replace("set -eu", "set +eu"));
+    if (kind === "oversized") fs.writeFileSync(hook, "x".repeat(1_000_000));
+    if (kind === "missing") fs.unlinkSync(hook);
+    if (kind === "symlink") { fs.unlinkSync(hook); fs.symlinkSync(peer, hook); }
+    if (kind === "mode") fs.chmodSync(hook, 0o600);
+    const next = agentPublicationIdentityEnv(f.env);
+    expect(next.LLV_AGENT_GIT_GUARD_DIR).toBe(directory);
+    expect(fs.lstatSync(hook).isFile()).toBe(true);
+    expect(fs.readFileSync(hook, "utf8")).toBe(expected);
+    if (process.platform !== "win32") expect(fs.statSync(hook).mode & 0o777).toBe(0o700);
+    expect(fs.readFileSync(peer, "utf8")).toBe("foreign body");
+    expect(warnings).toHaveBeenCalledWith(expect.stringContaining("pre-push"));
+    warnings.mockClear();
+    agentPublicationIdentityEnv(next);
+    expect(warnings).not.toHaveBeenCalled();
+  } finally { warnings.mockRestore(); f.close(); }
+});
+
+test("a fresh launch process repairs an inherited guard before returning its environment", () => {
+  const f = fixture();
+  try {
+    const directory = f.env.LLV_AGENT_GIT_GUARD_DIR!;
+    const hook = path.join(directory, "pre-push");
+    const expected = fs.readFileSync(hook, "utf8");
+    fs.writeFileSync(hook, "foreign body");
+    const script = `import { agentPublicationIdentityEnv } from ${JSON.stringify(path.resolve("src/lib/git/agentPublicationIdentity.ts"))};
+      console.log(JSON.stringify(agentPublicationIdentityEnv(${JSON.stringify(f.env)})));`;
+    const child = Bun.spawnSync([process.execPath, "--eval", script], { env: { ...process.env, LLV_STATE_DIR: path.join(f.root, "child-state") }, stdout: "pipe", stderr: "pipe" });
+    expect(child.exitCode, child.stderr.toString()).toBe(0);
+    expect(JSON.parse(child.stdout.toString()).LLV_AGENT_GIT_GUARD_DIR).toBe(directory);
+    expect(fs.readFileSync(hook, "utf8")).toBe(expected);
+    expect(child.stderr.toString()).toContain("pre-push");
+  } finally { f.close(); }
+});
+
+test("launch refuses an unreplaceable hook and cleans its pending file", () => {
+  const f = fixture();
+  try {
+    const directory = f.env.LLV_AGENT_GIT_GUARD_DIR!;
+    const hook = path.join(directory, "pre-push");
+    fs.unlinkSync(hook); fs.mkdirSync(hook);
+    expect(() => agentPublicationIdentityEnv(f.env)).toThrow();
+    expect(fs.statSync(hook).isDirectory()).toBe(true);
+    expect(fs.readdirSync(directory).filter(name => name.startsWith("pre-push."))).toEqual([]);
+  } finally { f.close(); }
+});
+
+test("a guard source without HOME uses the runner's private home", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "guard-home-default-"));
+  const previous = process.env.HOME;
+  const passwdHome = spyOn(os, "homedir").mockReturnValue(path.join(root, "passwd-home"));
+  try {
+    process.env.HOME = path.join(root, "runner-home");
+    const env = agentPublicationIdentityEnv({ NODE_ENV: "test" });
+    expect(env.LLV_AGENT_GIT_GUARD_DIR!.startsWith(process.env.HOME + path.sep)).toBe(true);
+    expect(fs.existsSync(path.join(root, "passwd-home"))).toBe(false);
+  } finally {
+    passwdHome.mockRestore();
+    if (previous === undefined) delete process.env.HOME; else process.env.HOME = previous;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+
+test.skipIf(process.platform === "win32").each(["root", "directory"])("launch refuses a symlinked generated %s", (kind) => {
+  const f = fixture();
+  try {
+    const directory = f.env.LLV_AGENT_GIT_GUARD_DIR!;
+    const target = kind === "root" ? path.dirname(directory) : directory;
+    const moved = path.join(f.root, "foreign-directory");
+    fs.renameSync(target, moved);
+    fs.symlinkSync(moved, target, "dir");
+    const hook = path.join(moved, ...(kind === "root" ? [path.basename(directory)] : []), "pre-push");
+    fs.writeFileSync(hook, "foreign body");
+    expect(() => agentPublicationIdentityEnv(f.env)).toThrow("Invalid generated Git hook");
+    expect(fs.readFileSync(hook, "utf8")).toBe("foreign body");
   } finally { f.close(); }
 });
