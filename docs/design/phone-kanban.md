@@ -429,7 +429,12 @@ follows the tabs. Each column keeps its scroll offset.
 - **Pipeline line (when the task has pipelines):** the pipeline block at card
   density (§3.13): the stage chain, then the age with a unit ("4m", "1h 5m"),
   then the #2059 link on the right as passive text (`pr-issue-chips.md` §6.4: a
-  link cannot nest in the card's button). The card shows the pipeline that
+  link cannot nest in the card's button). A stage pill that has a conversation is
+  a tap target inside that button (operator, 2026-10-16): the pills cannot be
+  buttons there, so the face reads the tap against them, within 11 px above and
+  below a pill and 2 px beside it (a 44 px target for a 22 px pill), opens that
+  agent's conversation, and sends every other tap to the task as before. The
+  card shows the pipeline that
   needs the operator if one does, else the newest unfinished one; "+n running",
   "+n paused" name the others.
 - **Reason line (needs you only):** what the pipeline needs, in warning ink:

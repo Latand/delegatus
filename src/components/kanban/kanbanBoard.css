@@ -135,8 +135,11 @@
 /* A menu opened from the row owns the space under it: the «Needs you» toast hangs at the window's
    right edge 8 px under the row, so while the «+» menu, the Hidden tray, ⋯, the filter or the
    recent agents' list is open the toast is not drawn, and it returns when the menu closes. */
-.kb:is([data-bar-menu], :has([data-bar-recent-list], [data-bar-more-menu], [data-bar-filter-menu])) [data-attention-toast],
+.kb[data-bar-menu] [data-attention-toast],
+.kb .bar:has([data-bar-recent-list], [data-bar-more-menu], [data-bar-filter-menu]) [data-attention-toast],
 [data-project-bar]:has([data-bar-more-menu]) [data-attention-toast] { visibility: hidden; }
+/* The `:has()` hangs on the bar, the toast's own row: hung on the board (`.kb:has(...)`) it asked the browser to
+   recheck the whole board whenever any node was added under it, which every dragged card's ghost does. */
 /* The one primary action: while something waits, the needs-you chip is the only filled control in
    the row, so the eye goes there first; at zero it is outlined and muted. */
 :is(.kb .bar[data-bar="project"], [data-project-bar]) [data-attention-count]:has([data-attention-dot]):not([aria-expanded="true"]) {
@@ -234,7 +237,8 @@
   background-size: 18px 18px; background-position: 9px 9px;
   border: 1px solid var(--border-default);
 }
-.kb .column.drop { box-shadow: inset 0 0 0 2px var(--color-accent); }
+/* The column under a dragged card: an attribute no other rule names, so crossing a column restyles that column and nothing in it. */
+.kb .column[data-drop] { box-shadow: inset 0 0 0 2px var(--color-accent); }
 /* The wide share (#1841): a widened shelf takes the workspace's dot grid and
    Assigned the shelf's fill, and the swap animates. */
 /* The layout helper owns the visible width transition. Reflowing tracks on
@@ -249,8 +253,10 @@
    there the layout helper holds the first card in the window itself. */
 .kb[data-column-layout-active] .board:not(.tabs) .col-body { overflow-anchor: none; }
 /* Under the agent window the columns keep their scroll: a card that grows or
-   leaves there (a launch's draft) moves nothing the operator comes back to. */
-.kb:has(> .agent-window-layer) .col-body { overflow-anchor: none; }
+   leaves there (a launch's draft) moves nothing the operator comes back to.
+   The board says so with an attribute: `.kb:has(> .agent-window-layer)` made
+   every node added under the board (the dragged card's ghost) restyle all of it. */
+.kb[data-agent-window-open] .col-body { overflow-anchor: none; }
 /* Promotion exists only while these real surfaces are moving. */
 .kb[data-column-layout-active] .column { transition: none; }
 .kb [data-layout-animating="card"], .kb [data-layout-animating="frame"] { transform-origin: top left; will-change: transform; }
@@ -1317,23 +1323,26 @@
 .kb .board.scroll .column[data-status].agent { --kb-column-width: var(--agent-min); }
 
 /* An empty column folds to a strip. Rested on by a mouse (`.open`, set after
-   DWELL_CUE_MS), focused or under a dragged card (`.drop`) it opens to the
+   DWELL_CUE_MS), focused or under a dragged card (`.drop-open`) it opens to the
    track it would have had, which KanbanBoard writes as `--kb-track-<status>`;
-   the scroller opens it to its flex basis. */
-.kb .board:has(> .column.strip[data-status="inbox"]:is(.open, :focus-within, .drop)) { --kb-open-inbox: var(--kb-track-inbox); }
-.kb .board:has(> .column.strip[data-status="assigned"]:is(.open, :focus-within, .drop)) { --kb-open-assigned: var(--kb-track-assigned); }
-.kb .board:has(> .column.strip[data-status="blocked"]:is(.open, :focus-within, .drop)) { --kb-open-blocked: var(--kb-track-blocked); }
-.kb .board:has(> .column.strip[data-status="done"]:is(.open, :focus-within, .drop)) { --kb-open-done: var(--kb-track-done); }
-.kb .board.scroll .column.strip:not(.open, :focus-within, .drop) { --kb-column-width: var(--strip-w); }
-.kb .column.strip:not(.open, :focus-within, .drop) { overflow: hidden; }
-.kb .column.strip:not(.open, :focus-within, .drop) > .col-head { flex-direction: column; align-items: center; gap: 8px; padding: 12px 0 8px; }
-.kb .column.strip:not(.open, :focus-within, .drop) > .col-head > :not(h2, .n, [data-colmenu], [data-column-stopped], [data-column-no-reason]) { display: none; }
+   the scroller opens it to its flex basis. The drag sets `.drop-open` on a strip
+   only, and marks every column it is over with `data-drop` (the outline above):
+   a class named inside `:has()` or `:not()` restyles the board or the column's
+   whole subtree whenever it changes, and the drag changes it on every column it crosses. */
+.kb .board:has(> .column.strip[data-status="inbox"]:is(.open, :focus-within, .drop-open)) { --kb-open-inbox: var(--kb-track-inbox); }
+.kb .board:has(> .column.strip[data-status="assigned"]:is(.open, :focus-within, .drop-open)) { --kb-open-assigned: var(--kb-track-assigned); }
+.kb .board:has(> .column.strip[data-status="blocked"]:is(.open, :focus-within, .drop-open)) { --kb-open-blocked: var(--kb-track-blocked); }
+.kb .board:has(> .column.strip[data-status="done"]:is(.open, :focus-within, .drop-open)) { --kb-open-done: var(--kb-track-done); }
+.kb .board.scroll .column.strip:not(.open, :focus-within, .drop-open) { --kb-column-width: var(--strip-w); }
+.kb .column.strip:not(.open, :focus-within, .drop-open) { overflow: hidden; }
+.kb .column.strip:not(.open, :focus-within, .drop-open) > .col-head { flex-direction: column; align-items: center; gap: 8px; padding: 12px 0 8px; }
+.kb .column.strip:not(.open, :focus-within, .drop-open) > .col-head > :not(h2, .n, [data-colmenu], [data-column-stopped], [data-column-no-reason]) { display: none; }
 /* The menu is not drawn on the strip, where the strip opening would move it
    from under the pointer; it stays in the tab order, and focus opens the strip. */
-.kb .column.strip:not(.open, :focus-within, .drop) > .col-head > [data-colmenu] { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
-.kb .column.strip:not(.open, :focus-within, .drop) > .col-head > .n { order: -1; }
-.kb .column.strip:not(.open, :focus-within, .drop) > .col-head > h2 { writing-mode: vertical-rl; max-height: 240px; }
-.kb .column.strip:not(.open, :focus-within, .drop) > .col-body { display: none; }
+.kb .column.strip:not(.open, :focus-within, .drop-open) > .col-head > [data-colmenu] { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+.kb .column.strip:not(.open, :focus-within, .drop-open) > .col-head > .n { order: -1; }
+.kb .column.strip:not(.open, :focus-within, .drop-open) > .col-head > h2 { writing-mode: vertical-rl; max-height: 240px; }
+.kb .column.strip:not(.open, :focus-within, .drop-open) > .col-body { display: none; }
 
 /* ── Link to a task ──────────────────────────────────────────────────────── */
 .kb .popover.link-picker .search { display: block; padding: 0 8px 6px; }

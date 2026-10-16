@@ -691,6 +691,7 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
             taskTitle={card.titlePending ? null : card.title}
             reasonLine={false}
             aside={otherOpen ? t("cardState.moreLanes", { count: otherOpen }) : undefined}
+            onOpenStage={(pipeline, stage) => props.onOpenStage(pipeline, stage, card.id)}
           />
         </div>
       ) : null}
