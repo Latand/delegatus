@@ -188,7 +188,7 @@ from every child, so the catalog stays closed (Deferred).
 **The places that ask for a key today** (memory's «Ввести ключ»,
 `MemoryPage.tsx:208-209`; the setup guide's voice step; the voice companion
 dialog) keep their state line and replace their own field with a button that
-opens **Ключі** at that row. That is R1's «в одном месте»: one field, one
+opens **Ключі** at that row. That is R1's ask for a single place: one field, one
 validator, one writer. Q6.
 
 Staging keeps today's rule: a staging Viewer shares production's files and
@@ -269,8 +269,7 @@ settings.
 - **390 px.** The dialog becomes a full-height sheet with a sticky header
   and footer; rows stack: name and dot on the first line, field with eye and
   copy on the second, ⋯ at the end of the first.
-- Room for the variable names (the «environment variables» the operator
-  mentions) and a one-line reveal. Cost: one more dialog in the app.
+- Room for the environment-variable names and a one-line reveal. Cost: one more dialog in the app.
 
 ### Варіант 3 · «Задані зверху, перенесення окремо»
 
@@ -396,7 +395,7 @@ already have their own panel.
 voice companion dialog):**
 (a) Replace their field with a button that opens **Ключі** at that key.
 (b) Keep their own fields, writing through the same catalog.
-*Recommended: (a)* — «вводились в одном месте» is the requirement.
+*Recommended: (a)* — entering keys in a single place is the requirement.
 
 ## 11. Validation against the requirement
 

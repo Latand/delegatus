@@ -81,9 +81,10 @@ export function HeaderMenuPanel({ project, onClose }: { project: string | null; 
   /* A place that asked for a key opened this menu on «Keys» at that key. */
   const [view, setView] = useState<View>(() => pendingKeys() ? "keys" : "rest");
   const [focusKey, setFocusKey] = useState<KeyId | null>(() => pendingKeys()?.key ?? null);
+  const [focusSeq, setFocusSeq] = useState(0);
   useEffect(() => {
     settleKeys();
-    return onOpenKeys(({ key }) => { settleKeys(); setFocusKey(key); setView("keys"); });
+    return onOpenKeys(({ key }) => { settleKeys(); setFocusKey(key); setFocusSeq((seq) => seq + 1); setView("keys"); });
   }, []);
   const [helpOpen, setHelpOpen] = useState(false);
   /* Passive: the app's session guard loads the team view once per page. */
@@ -195,7 +196,7 @@ export function HeaderMenuPanel({ project, onClose }: { project: string | null; 
         ) : view === "keys" ? (
           <div data-header-menu-page="keys">
             {backRow(t("keys.title"))}
-            <KeysMenuPage focusKey={focusKey} onImport={() => open("keysImport")} />
+            <KeysMenuPage focusKey={focusKey} focusSeq={focusSeq} onImport={() => open("keysImport")} />
           </div>
         ) : view === "keysImport" ? (
           <div data-header-menu-page="keys-import">
@@ -289,9 +290,10 @@ function PhoneMenu({ title, project, nav, create = [], board, rules = [], onClos
   /* As on the desktop: a page that opens takes focus on its back row, and back returns it to the row that opened the page. */
   const [{ view, focus }, setPlace] = useState<{ view: PhoneView; focus: string | null }>(() => pendingKeys() ? { view: "keys", focus: null } : { view: "rest", focus: null });
   const [focusKey, setFocusKey] = useState<KeyId | null>(() => pendingKeys()?.key ?? null);
+  const [focusSeq, setFocusSeq] = useState(0);
   useEffect(() => {
     settleKeys();
-    return onOpenKeys(({ key }) => { settleKeys(); setFocusKey(key); setPlace({ view: "keys", focus: null }); });
+    return onOpenKeys(({ key }) => { settleKeys(); setFocusKey(key); setFocusSeq((seq) => seq + 1); setPlace({ view: "keys", focus: null }); });
   }, []);
   useEffect(() => {
     if (focus) document.querySelector<HTMLElement>(`[data-mobile2-sheet='menu'] [data-mobile2-menu-row='${focus}']`)?.focus();
@@ -365,7 +367,7 @@ function PhoneMenu({ title, project, nav, create = [], board, rules = [], onClos
   let entries: MobileMenuEntry[];
   if (view === "settings") entries = [backRow(t("headerMenu.settings")), ...settingsItems.flatMap((item) => settingsEntry(item) ?? [])];
   else if (view === "memory") entries = [backRow(t("headerMenu.memory")), { kind: "custom", key: "memory-page", node: <MemoryPanel size="sheet" /> }];
-  else if (view === "keys") entries = [backRow(t("keys.title")), { kind: "custom", key: "keys-page", node: <KeysMenuPage size="sheet" focusKey={focusKey} onImport={() => go("keysImport")} /> }];
+  else if (view === "keys") entries = [backRow(t("keys.title")), { kind: "custom", key: "keys-page", node: <KeysMenuPage size="sheet" focusKey={focusKey} focusSeq={focusSeq} onImport={() => go("keysImport")} /> }];
   else if (view === "keysImport") entries = [backRow(t("keys.import")), { kind: "custom", key: "keys-import-page", node: <KeysImportPage size="sheet" /> }];
   else if (view === "help") entries = [backRow(t("headerMenu.help")), ...helpItems];
   else if (view === "rules") entries = [backRow(t("headerMenu.rules")), ...rules];

@@ -44,10 +44,13 @@ function useKeys() {
   const [failed, setFailed] = useState(false);
   /* The rows a save is still answering for: a list read that lands meanwhile must not undo them. */
   const held = useRef(new Map<KeyId, KeyEntry>());
+  /* Counts saves sent: a list read that began before the latest one describes the keys from before it. */
+  const sent = useRef(0);
   const adopt = useCallback((next: KeysAnswer) => {
     setAnswer({ ...next, keys: next.keys.map((entry) => held.current.get(entry.id) ?? entry) });
   }, []);
   const hold = useCallback((entry: KeyEntry) => {
+    sent.current += 1;
     held.current.set(entry.id, entry);
     setAnswer((now) => now && { ...now, keys: now.keys.map((candidate) => candidate.id === entry.id ? entry : candidate) });
   }, []);
@@ -58,13 +61,18 @@ function useKeys() {
     return true;
   }, []);
   const optimism: Optimism = { hold, release, adopt };
-  const load = useCallback(() => fetch("/api/keys", { cache: "no-store" })
-    .then(async (response) => {
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      adopt(await response.json() as KeysAnswer);
-      setFailed(false);
-    })
-    .catch(() => setFailed(true)), [adopt]);
+  const load = useCallback(() => {
+    const began = sent.current;
+    return fetch("/api/keys", { cache: "no-store" })
+      .then(async (response) => {
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const next = await response.json() as KeysAnswer;
+        /* A save has gone out since this read began; its own answer re-reads the list. */
+        if (sent.current === began) adopt(next);
+        setFailed(false);
+      })
+      .catch(() => setFailed(true));
+  }, [adopt]);
   useEffect(() => {
     const read = () => { void load(); };
     read();
@@ -393,8 +401,8 @@ function useRowActions(entry: KeyEntry, optimism: Optimism) {
     cancelEdit(); saved();
     void writeValue(entry.id, typed).then((result) => {
       if (result.ok) {
-        optimism.release(shown, null);
-        if (result.answer) optimism.adopt(result.answer);
+        /* An older save answering after a newer one was sent describes the keys from before it. */
+        if (optimism.release(shown, null) && result.answer) optimism.adopt(result.answer);
       } else if (optimism.release(shown, before)) {
         if (timer.current !== null) window.clearTimeout(timer.current);
         setNote(null);
@@ -407,7 +415,7 @@ function useRowActions(entry: KeyEntry, optimism: Optimism) {
   return { value, note, editing, editError, open, cancelEdit, toggle, copy, copyMasked, save };
 }
 
-function KeyRow({ entry, size, staging, owner, focus, optimism }: { entry: KeyEntry; size: Size; staging: boolean; owner: boolean; focus: boolean; optimism: Optimism }) {
+function KeyRow({ entry, size, staging, owner, focus, focusSeq, optimism }: { entry: KeyEntry; size: Size; staging: boolean; owner: boolean; focus: boolean; focusSeq: number; optimism: Optimism }) {
   const { t } = useLocale();
   const coarse = useCoarsePointer();
   const name = keyName(t, entry.id);
@@ -418,13 +426,17 @@ function KeyRow({ entry, size, staging, owner, focus, optimism }: { entry: KeyEn
   const set = isSet(entry);
   const writable = owner && !staging && entry.source !== "env";
   const sheet = size === "sheet";
-  const { open: openEditor } = actions;
-  /* Opened from a place that asked for this key: an unset key opens its field, a set one takes focus on its first button. */
+  /* Opened from a place that asked for this key: an unset key opens its field, a set one takes focus on its first button.
+     Each request runs once, from the state the row has when it arrives; the row's own Cancel and Escape are not a request. */
+  const asked = useRef({ set, writable, open: actions.open });
+  useEffect(() => {
+    asked.current = { set, writable, open: actions.open };
+  });
   useEffect(() => {
     if (!focus) return;
-    if (!set && writable) openEditor();
+    if (!asked.current.set && asked.current.writable) asked.current.open();
     else firstButton.current?.focus();
-  }, [focus, set, writable, openEditor]);
+  }, [focus, focusSeq]);
   const glyph = coarse ? "h-[18px] w-[18px]" : "h-3.5 w-3.5";
   const icons = owner && set ? (
     <>
@@ -512,8 +524,8 @@ function Notices({ answer, failed, reload, size }: { answer: KeysAnswer | null; 
 
 /* ---- The page ----------------------------------------------------------- */
 
-/** The keys page of the header menu; `onImport` opens the import page under it, `focusKey` the key a place asked for. */
-export function KeysMenuPage({ size = "menu", onImport, focusKey = null }: { size?: Size; onImport: () => void; focusKey?: KeyId | null }) {
+/** The keys page of the header menu; `onImport` opens the import page under it, `focusKey` the key a place asked for, `focusSeq` which request it was (the same key asked twice opens twice). */
+export function KeysMenuPage({ size = "menu", onImport, focusKey = null, focusSeq = 0 }: { size?: Size; onImport: () => void; focusKey?: KeyId | null; focusSeq?: number }) {
   const { t } = useLocale();
   const { answer, failed, reload, optimism } = useKeys();
   const [copied, setCopied] = useState<number | null>(null);
@@ -538,7 +550,7 @@ export function KeysMenuPage({ size = "menu", onImport, focusKey = null }: { siz
     <div data-keys-page="" className={`flex flex-col font-normal ${sheet ? "pb-4" : "pb-1"}`}>
       <div className={`flex flex-col empty:hidden ${sheet ? "gap-2 px-4" : "gap-1.5 px-2"}`}><Notices answer={answer} failed={failed} reload={() => void reload()} size={size} /></div>
       <div data-keys-list="" className="flex flex-col">
-        {answer?.keys.map((entry) => <KeyRow key={entry.id} entry={entry} size={size} staging={answer.staging} owner={answer.owner} focus={entry.id === focusKey} optimism={optimism} />)}
+        {answer?.keys.map((entry) => <KeyRow key={entry.id} entry={entry} size={size} staging={answer.staging} owner={answer.owner} focus={entry.id === focusKey} focusSeq={focusSeq} optimism={optimism} />)}
       </div>
       {answer?.owner ? (
         <div className="mt-1 flex flex-col border-t border-border pt-1">

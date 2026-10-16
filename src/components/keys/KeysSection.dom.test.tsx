@@ -223,6 +223,76 @@ for (const refusal of [{ code: "write_failed", status: 500, shown: "failed" }, {
   });
 }
 
+const mask = (typed: string) => `••••••••${typed.slice(-4)}`;
+const withElevenlabs = (list: KeysAnswer, typed: string): KeysAnswer => ({ ...list, keys: list.keys.map((entry) => entry.id === "elevenlabs" ? { ...entry, source: "file", masked: mask(typed) } : entry) });
+
+/* Two saves of one key, the newer answered first: the older answer is the keys from before the newer one. */
+async function twoSaves(older: "answers" | "fails") {
+  const A = "1".repeat(64), B = "2".repeat(64);
+  const puts: Array<(response: Response) => void> = [];
+  const lists: Array<(response: Response) => void> = [];
+  const base = answer();
+  const answerA = withElevenlabs(base, A), answerB = withElevenlabs(base, B);
+  /* The server's list: the keys as the second save leaves them, whichever answer arrives first. */
+  serve(base, (call) => {
+    if (call.method === "PUT") return new Promise<Response>((resolve) => { puts.push(resolve); });
+    /* The reads the saves trigger stay in flight, so only the save answers decide what the row shows. */
+    if (call.url === "/api/keys" && puts.length >= 2) return new Promise<Response>(() => {});
+    if (call.url === "/api/keys" && lists.length < 1 && puts.length === 1) return new Promise<Response>((resolve) => { lists.push(resolve); });
+    return undefined;
+  });
+  const host = await mount(<KeysMenuPage onImport={() => {}} />);
+  await click(row(host, "elevenlabs").querySelector("[data-keys-add]"));
+  await type(host, "elevenlabs", A);
+  await submit(host, "elevenlabs");
+  await settle();
+  /* A read that begins between the two saves and lands after both. */
+  await act(async () => { window.dispatchEvent(new Event("delegatus:provider-key-changed")); });
+  await click(row(host, "elevenlabs").querySelector("[data-keys-more]"));
+  await click(row(host, "elevenlabs").querySelector("[data-keys-menu-item='replace']"));
+  await type(host, "elevenlabs", B);
+  await submit(host, "elevenlabs");
+  await settle();
+  expect(puts).toHaveLength(2);
+  base.keys = answerB.keys;
+  await act(async () => { puts[1]!(Response.json(answerB)); });
+  await settle(); await settle();
+  await act(async () => {
+    puts[0]!(older === "answers" ? Response.json(answerA) : Response.json({ code: "write_failed" }, { status: 500 }));
+    lists[0]?.(Response.json(answerA));
+  });
+  await settle(); await settle();
+  return { host, B };
+}
+
+for (const older of ["answers", "fails"] as const) {
+  test(`an older save of a key that ${older} after the newer one keeps the newer key shown, and Copy masked copies it`, async () => {
+    const { host, B } = await twoSaves(older);
+    expect(row(host, "elevenlabs").getAttribute("data-keys-source")).toBe("file");
+    expect(row(host, "elevenlabs").querySelector("[data-keys-field]")).toBeNull();
+    await click(row(host, "elevenlabs").querySelector("[data-keys-more]"));
+    await click(row(host, "elevenlabs").querySelector("[data-keys-menu-item='masked']"));
+    expect(clipboard).toEqual([mask(B)]);
+  });
+}
+
+test("a key opened from another place: Cancel and Escape close its field and leave it closed, and asking again opens it again", async () => {
+  serve(answer());
+  const node = (seq: number) => <KeysMenuPage onImport={() => {}} focusKey="elevenlabs" focusSeq={seq} />;
+  const host = await mount(node(1));
+  expect(row(host, "elevenlabs").querySelector("[data-keys-field]")).not.toBeNull();
+  await click(row(host, "elevenlabs").querySelector("[data-keys-cancel]"));
+  expect(row(host, "elevenlabs").querySelector("[data-keys-field]")).toBeNull();
+  await click(row(host, "elevenlabs").querySelector("[data-keys-add]"));
+  const input = row(host, "elevenlabs").querySelector<HTMLInputElement>("[data-keys-field] input")!;
+  await act(async () => { input.dispatchEvent(new dom.KeyboardEvent("keydown", { key: "Escape", bubbles: true }) as unknown as Event); });
+  await settle();
+  expect(row(host, "elevenlabs").querySelector("[data-keys-field]")).toBeNull();
+  await act(async () => { root!.render(node(2)); });
+  await settle();
+  expect(row(host, "elevenlabs").querySelector("[data-keys-field]")).not.toBeNull();
+});
+
 test("the bot's token is the one save that waits for its answer, since Telegram has to accept it", async () => {
   let release!: (response: Response) => void;
   const held = new Promise<Response>((resolve) => { release = resolve; });
