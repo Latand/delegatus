@@ -2,26 +2,11 @@
 
 ## Originating requirement
 
-The operator, 2026-10-16 12:25 UTC, dictated in the comment of the decision form
-«Відповіді на форми йдуть до старого оркестратора» (a seat-published round), and
-pinned to this lane verbatim (excerpt; the rest of the comment is the MCP hash
-audit, lane d1bbb135):
-
-> «відповіді йдуть до старого оркестратора, значит, нам нужно сделать так, что
-> старый оркестратор вообще недоступен, и вообще старый оркестраторы вообще
-> недоступны для взаимодействия, потому что это сильно мешает работе, и нужно
-> сделать так, что если через Viewer кто-то пытается им что-то отправить, они не
-> должны никак быть, э-э, добавлены, и вообще должен быть какой-то один общий
-> канал, который ведёт к оркестратору, и. То есть оттуда только выбирается
-> текущий оркестратор, и никакой больше, то есть они напрямую не должны
-> общаться с оркестратором»
-
-In English: answers go to the old orchestrator. Old orchestrators must be
-entirely unavailable for interaction, because this badly gets in the way of
-work. If anyone tries to send them something through the Viewer, it must not be
-added at all. There must be one common channel that leads to the orchestrator.
-Only the current orchestrator is chosen from it, never another one. Nobody
-talks to an orchestrator conversation directly.
+On 2026-10-16 at 12:25 UTC, the operator reported that saved form answers
+were reaching a previous orchestrator and disrupting work. The requirement is
+one project-addressed delivery channel that always chooses the current seat.
+Revoked seats must refuse all incoming messages, including messages submitted
+through the Viewer. This public document paraphrases the private decision.
 
 The answer on the same form: a lane now, a builder, two review rounds.
 
@@ -33,9 +18,11 @@ after.
 
 Every `file:line` below is at `02f9301fc`. That was main when this stage
 started, and production has run that build since 11:28:45 UTC on 2026-10-16
-(deployment ledger). Main has since moved one commit, to `18096e8f2` (#2966,
-mandate text only), which touches none of the files cited here. This stage
-wrote nothing but this document.
+(deployment ledger). The design stage compared main with `18096e8f2` (#2966, mandate text only).
+Implementation also checked the subsequent automatic-rotation and macOS fixture
+changes (#2969 and #2968); their changes stay outside this implementation
+except for separate operation-label entries in the shared monitor type.
+The design stage originally wrote only this document.
 
 ## Decision in one paragraph
 
@@ -115,7 +102,7 @@ are shortened to eight characters.
 | 10-16 11:28:45 | deployment `02f9301f` succeeded | production carries #2952 and #2957 |
 | 11:53:15–11:54:18 | 11 `prototype-decision:*` operations, ingress | answers saved or retried from the Decisions panel; a round's delivery `startedAt` (11:53:55–12:03:24 on five rounds) is written only by an explicit Retry |
 | 11:54:51–12:05:02 | same operations: `conversation-busy`, `queued`, `awaiting-turn`; two delivered while `f8395a87` was still the seat (12:00:55, 12:03:11); nine `failed` at 12:04:59–12:05:02 "accepted for delivery but never executed; … fenced" | the seat was mid-turn throughout |
-| 12:05:04 | voice directive `voice-5ab74f41`, ingress (the operator by voice: «Проведи ротацию оркестратора») | admitted to `f8395a87` at 12:05:06, the seat then |
+| 12:05:04 | voice directive `voice-5ab74f41`, ingress (an operator request to rotate the orchestrator) | admitted to `f8395a87` at 12:05:06, the seat then |
 | 12:05:06–12:05:21 | nine `retry_*` operations admitted to `f8395a87` | all passed #2952's admission check: `f8395a87` was still the seat |
 | **12:06:32** | **seats: `f8395a87` revoked (epoch 67), successor `efb4e487`, triggered by the operator** | the rotation |
 | 12:06:02 → 12:13:33 | the nine `retry_*` operations: `awaiting-turn` from 12:06:02, then `dispatching` one per turn at 12:06:55, 12:07:11, 12:07:47, 12:08:06, 12:11:08, 12:12:20, 12:13:08, 12:13:21, 12:13:33 | **every one dispatched to the revoked seat after its revocation** |
@@ -280,7 +267,7 @@ promptly, without waiting for the old seat's turn to end (7 minutes on
 
 One function, `seatDeliveryDisposition(operation)`, classifies by the
 operation's client key namespace. The owner modules mint these keys, and the
-classifier imports their builders, never string copies.
+classifier reads the shared namespaces used by those builders.
 
 | Class | Keys (builder) | At rotation | Why |
 | --- | --- | --- | --- |
@@ -307,7 +294,7 @@ Owner changes, each small:
   receipt, read through `receipt()` in `deliveryPaths.ts:24-28`) takes the
   existing `delegation.retargeted` branch. The text then starts with the redirect
   note of §4.5. On 2026-10-16 that note is what would have told seat
-  `efb4e487` that «Проведи ротацию оркестратора» was spoken at 12:05:04, before
+  `efb4e487` that the request to rotate the orchestrator was spoken at 12:05:04, before
   the rotation at 12:06:32 that already fulfilled it.
 - **Spawn notices** (`sweep.ts:243-247`). An attempt whose operation failed
   with `SEND_SEAT_REVOKED_REASON` is cleared and never retried as written. The next
@@ -328,8 +315,7 @@ receiving agent:
 > `[Delegatus] Redirected to you, the current orchestrator: sent to the previous orchestrator at HH:MM UTC, which was replaced at HH:MM UTC before this reached it. Check it is still needed before acting.`
 
 This line is agent-facing. It is the only added text, and it appears only on
-redirected messages. 2026-10-16 is the reason: a stale "rotate the
-orchestrator" was acted on and cost a fresh seat. With no current seat (a
+redirected messages. 2026-10-16 is the reason: a stale rotation request was acted on and cost a fresh seat. With no current seat (a
 project left without one), the record waits as `awaiting-seat`. The next
 activation in that project runs the pass again. After 24 hours the record
 becomes `dropped`.
@@ -411,12 +397,12 @@ changes with them.
 
 ## 5. Validation against the requirement
 
-| The operator's words | Where it holds |
+| Requirement (paraphrased) | Where it holds |
 | --- | --- |
-| «старый оркестратор вообще недоступен… недоступны для взаимодействия» | §4.2: no message reaches a revoked seat at admission, dispatch, held drain, legacy delivery or host recovery, whatever id was captured. Controls stay, so it can be stopped. |
-| «если через Viewer кто-то пытается им что-то отправить, они не должны никак быть добавлены» | §4.5: a composer, `send_message` or task send to a revoked id is refused before anything is reserved, naming the current seat. |
-| «один общий канал, который ведёт к оркестратору… выбирается текущий оркестратор, и никакой больше» | §4.1 and §4.3: one module chooses the current seat. A message admitted while a seat was current, still queued at rotation, is carried to the seat that is current at delivery. Sends addressed by project are re-routed. |
-| «они напрямую не должны общаться с оркестратором» | A conversation id stops being a delivery address the moment its seat is revoked. Only the channel reaches the seat that holds the project. |
+| Revoked seats accept no interactions | §4.2: no message reaches a revoked seat at admission, dispatch, held drain, legacy delivery or host recovery, whatever id was captured. Controls stay, so it can be stopped. |
+| Viewer sends to a revoked seat add no message | §4.5: a composer, `send_message` or task send to a revoked id is refused before anything is reserved, naming the current seat. |
+| A single channel chooses the current project seat | §4.1 and §4.3: one module chooses the current seat. A message admitted while a seat was current, still queued at rotation, is carried to the seat that is current at delivery. Sends addressed by project are re-routed. |
+| Revoked conversation ids cease to be delivery addresses | A conversation id stops being a delivery address the moment its seat is revoked. Only the channel reaches the seat that holds the project. |
 | (pinned) history stays readable | §4.7 |
 | (pinned) tests red on main, green after | §6 |
 
@@ -424,13 +410,13 @@ changes with them.
 
 All are run by explicit path through `scripts/gate-slot.sh`. Each run gets a
 private HOME, XDG_CONFIG_HOME, TMPDIR and `LLV_STATE_DIR`, with
-`LLV_VIEWER_CONTROL_URL` on a closed port. Each is shown red on `02f9301fc`
-first, in a scratch export.
+`LLV_VIEWER_CONTROL_URL` on a closed port. The queued-delivery regressions are first reproduced on `02f9301fc`
+in a scratch export; existing refusal and read guards already pass there.
 
 1. **The 2026-10-16 case** goes in `src/lib/prototypeReview/answerDelivery.integration.test.ts`.
    It uses the real ingress, journal and queue over the fake engine. The
    fixture `src/lib/runtime/fixtures/composerPayloadRuntime.ts` gains an
-   optional second Claude conversation and a switch that holds the first one
+   optional second structured conversation and a switch that holds the first one
    mid-turn. Seat N publishes a seat round. A member answers. The delivery is
    admitted to N and waits `awaiting-turn`. The test rotates N → N+1 through the
    real designation store (`beginOrchestratorSeatIntent` and
@@ -533,13 +519,36 @@ first, in a scratch export.
 - **Some answers travel twice by design.** The 12:05:56 seat wake carried
   `pr_199242c2` as a "saved operator answer" item (#2957's carriage), and the
   same answer arrived again at 12:13:33 as `retry_63412e20`. The revoked seat
-  itself described most of the redelivered answers as "a repeat, already done". This design sends
+  itself reported that most redelivered answers had already been handled. This design sends
   them to the right seat. Whether an answer should travel both ways is #2957's
   question, and worth its own task.
 - **A revoked seat can still act inside the turn it was in.** At 12:08–12:15
   `f8395a87` created tasks and rotated the seat. Each of those actions followed a
   message delivered after its revocation, which this lane stops. What remains is
   the turn running at the moment of revocation (see Deferred).
+
+## Implementation details
+
+The channel persists a deterministic destination operation before redirect
+admission. Recovery checks that admission before choosing another seat, so a
+lost acknowledgement cannot resend an accepted message to a later successor.
+Receipt reads follow the redirect chain under the original operation identity.
+The channel uses revisions to keep a delayed writer from replacing another
+release's settled record.
+
+The 2,000-row bound evicts the oldest settled record whose evidence can be
+retired safely. Redirect records remain while their source operation is still
+queryable; a full collection applies backpressure instead of losing the proof
+that prevents another send.
+
+Spawn notices previously settled at delivery acceptance. They now wait for the
+receipt to confirm arrival, and notices accepted by the previous implementation
+can be reopened under their child keys after a rotation. Native queue removal
+uses the existing durable delete command and revision fence; no runtime-host
+code or command schema changes are needed. A refused delete retains custody.
+
+The public requirement and incident descriptions above paraphrase the private
+operator decisions. They contain no dictated quotations.
 
 ## Deferred — not currently justified
 

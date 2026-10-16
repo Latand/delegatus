@@ -1,3 +1,4 @@
+import { seatMessageKeys } from "@/lib/orchestrator/seatDeliveryKeys";
 import crypto from "node:crypto";
 
 import type { AgentLivenessRecord } from "@/lib/lifecycle/liveness";
@@ -41,7 +42,7 @@ export interface BoardReportSeat {
 
 /** A replay of the same epoch is the same message to the delivery layer. */
 export function boardReportMessageId(project: string, seatEpoch: number): string {
-  return `board_report_${crypto.createHash("sha256").update(`${project}:${seatEpoch}`).digest("hex").slice(0, 40)}`;
+  return `${seatMessageKeys.boardReport}${crypto.createHash("sha256").update(`${project}:${seatEpoch}`).digest("hex").slice(0, 40)}`;
 }
 
 export interface BoardReportDelivery {

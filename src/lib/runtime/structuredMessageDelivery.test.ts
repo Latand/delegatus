@@ -5040,7 +5040,7 @@ test.each(["id", "path", "runtime-read", "reservation-wait"])("D4 rotated seat r
 });
 
 
-test("D4 a rotated seat keeps an already bound message and its original operation", async () => {
+test("a message bound to a rotated seat is never re-commanded to it", async () => {
   const { registry, conversation } = registryWithConversation();
   recordStructuredOwner(registry, conversation);
   const held = registry.holdDelivery(conversation.id, "already accepted", "bound-seat-message", "text", [], null,
@@ -5062,12 +5062,12 @@ test("D4 a rotated seat keeps an already bound message and its original operatio
         conversationId: conversation.id, kind: "send", status: "queued", revision: 1, at: new Date().toISOString() } };
     } }) as unknown as RuntimeHostClient,
   });
-  expect(result).toMatchObject({ ok: true, operationId: "bound-seat-operation" });
-  expect(receivedOperation).toBe("bound-seat-operation");
+  expect(result).toMatchObject({ ok: false, status: 409, successorConversationId: successor.id });
+  expect(receivedOperation).toBeUndefined();
   expect(Object.keys(registry.readOnlySnapshot().heldDeliveries)).toEqual([held.id]);
 });
 
-test("an admitted delivery recovers its original dead host after seat rotation and drains once", async () => {
+test("an admitted delivery to a rotated seat never recovers its host and is withdrawn", async () => {
   const { registry, conversation } = registryWithConversation();
   recordStructuredOwner(registry, conversation);
   const held = registry.holdDelivery(conversation.id, "accepted before rotation", "rotation-recovery-message", "text", [], null,
@@ -5102,14 +5102,15 @@ test("an admitted delivery recovers its original dead host after seat rotation a
       commands.push(command);
       return { operationId: command.operationId, replayed: false, receipt: {
         operationId: command.operationId, idempotencyKey: command.idempotencyKey,
-        conversationId: conversation.id, kind: "send" as const, status: "delivered" as const,
+        conversationId: conversation.id, kind: "send" as const, status: "queued" as const,
         queuePosition: null, at: "2026-07-29T00:00:00.000Z", revision: 1,
       } };
     },
+    transitionOperation: async (operationId: string) => ({ operationId, receipt: { status: "failed", reason: "the orchestrator seat was replaced before this reached it; it was not delivered there" } }),
     operationStatus: async (operationId: string) => ({
       operationId, replayed: false, receipt: {
         operationId, idempotencyKey: "rotation-recovery-message", conversationId: conversation.id,
-        kind: "send" as const, status: "delivered" as const, queuePosition: null,
+        kind: "send" as const, status: "queued" as const, queuePosition: null,
         at: "2026-07-29T00:00:00.000Z", revision: 1,
       },
     }),
@@ -5134,17 +5135,10 @@ test("an admitted delivery recovers its original dead host after seat rotation a
     kick: () => {},
   } as never;
 
-  expect(await deliverHeldStructuredMessage(request, dependencies)).toBe("held");
-  expect(await deliverHeldStructuredMessage(request, dependencies)).toBe("delivered");
-  expect(recoveries).toBe(1);
-  expect(commands).toHaveLength(1);
-  expect(commands[0]).toMatchObject({ operationId: "rotation-recovery-operation", idempotencyKey: "rotation-recovery-message" });
-  expect(registry.deliveryAdmissionForKey(conversation.id, "rotation-recovery-message")).toMatchObject({
-    outcome: "admitted",
-    operationId: "rotation-recovery-operation",
-    deliveryId: held.id,
-  });
-  expect(registry.readOnlySnapshot().heldDeliveries[held.id]?.state).toBe("assigned");
+  expect(await deliverHeldStructuredMessage(request, dependencies)).toBe("failed");
+  expect(recoveries).toBe(0);
+  expect(commands).toHaveLength(0);
+  expect(registry.readOnlySnapshot().heldDeliveries[held.id]?.state).toBe("failed");
 });
 
 test("parallel B: a hostless fork's saved first question reaches the resumed host through the normal drain", async () => {

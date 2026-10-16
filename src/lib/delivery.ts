@@ -1,9 +1,10 @@
+import { orchestratorRecipientRefusalAsync } from "@/lib/orchestrator/seats";
 import { DeliveryAdmissionRefusedError, type DeliveryAdmissionGuard } from "@/lib/deliveryAdmission";
 import { memoryIndex } from "@/lib/memory/service";
 import { registeredHostForPath } from "@/lib/conversation/registeredHost";
 import { resumeEligibility, resumeSpecFor, type AgentEngine } from "@/lib/agent/cli";
 import type { AgentReconfiguration } from "@/lib/agent/reconfigure";
-import { agentRegistry, deliveryMayHaveArrived, REGISTRY_WRITER_BUSY, serviceTierForSpeed, type AgentRegistry, type AgentRegistryEntry, type RegistryConversation, type TmuxHostEvidence } from "@/lib/agent/registry";
+import { agentRegistry, conversationIdsResolvingTo, resolveConversationAlias, deliveryMayHaveArrived, REGISTRY_WRITER_BUSY, serviceTierForSpeed, type AgentRegistry, type AgentRegistryEntry, type RegistryConversation, type TmuxHostEvidence } from "@/lib/agent/registry";
 import { conversationAgentRole } from "@/lib/agent/spawnAdmission";
 import type { HeldDelivery } from "@/lib/accounts/migration/contracts";
 import { accountManager, ProjectAccountRefusedError, resolveResumeAccountId } from "@/lib/accounts/manager";
@@ -79,10 +80,18 @@ export interface DeliveryFailure {
   admission?: "refused";
 }
 
+async function legacySeatRefusal(registry: AgentRegistry, conversation: Pick<RegistryConversation, "id"> | null) {
+  if (!conversation) return null;
+  const snapshot = registry.conversationDeliverySnapshot({ conversationId: conversation.id });
+  return orchestratorRecipientRefusalAsync(conversationIdsResolvingTo(snapshot, conversation.id),
+    id => resolveConversationAlias(snapshot, id as `conversation_${string}`));
+}
+
 /** A send or resume addressed to a terminally superseded round (issue #383)
     must never implicitly fork it through recovery — it answers with a
     redirectable pointer to the live chain end instead. Explicit "resume here"
     clears the edge first and never reaches this guard. */
+
 function supersededRejection(
   registry: AgentRegistry,
   conversation: Pick<RegistryConversation, "id" | "supersededBy"> | null,
@@ -507,6 +516,8 @@ export async function resumeConversation(
   }
   const registry = overrides.registry ?? agentRegistry();
   const known = registry.conversationForPath(filePath);
+  const seatRefusal = await legacySeatRefusal(registry, known);
+  if (seatRefusal) return { ok: false, outcome: "failed", admission: "refused", ...seatRefusal };
   const rejected = supersededRejection(registry, known);
   if (rejected) return rejected;
   const recover = overrides.recover ?? recoverDeadStructuredConversation;
@@ -806,6 +817,8 @@ export async function deliverConversationMessage(message: ConversationMessage, o
        refused before anything is typed. */
     if (!conversation) return failure(message.conversationId ? "conversation is unknown to the viewer" : "delivery target is unavailable", 404);
   }
+  const seatRefusal = await legacySeatRefusal(registry, conversation);
+  if (seatRefusal) return { ok: false, outcome: "failed", admission: "refused", ...seatRefusal };
   const rejected = supersededRejection(registry, conversation);
   if (rejected) return rejected;
   if (conversation) {

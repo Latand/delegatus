@@ -1,3 +1,5 @@
+import { currentSeat } from "@/lib/orchestrator/seatChannel";
+import { lookupOriginalSend, resolveSendReceipt, SEND_SEAT_REVOKED_REASON } from "@/lib/runtime/sendSettlement";
 import fs from "node:fs";
 
 import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
@@ -16,6 +18,7 @@ import { taskSelectionSource } from "@/lib/tasks/store";
 
 import {
   pendingSpawnNotices,
+  clearRevokedSpawnNoticeAttempt,
   pruneSpawnNotices,
   readSpawnNoticeChild,
   recordSpawnNoticeAttempt,
@@ -63,10 +66,12 @@ export function spawnNoticeRecipient(
   launcher: string,
   ports: {
     seats: typeof readOrchestratorSeatFileOrNull;
+    current?: typeof currentSeat;
     conversation: (id: string) => ReturnType<ReturnType<typeof agentRegistry>["conversation"]>;
     hiddenPaths: (project: string) => readonly string[];
   } = {
     seats: readOrchestratorSeatFileOrNull,
+    current: currentSeat,
     conversation: (id) => agentRegistry().conversation(id as ViewerConversationId),
     hiddenPaths: (project) => boardFor(project).prefs.hidden,
   },
@@ -78,7 +83,7 @@ export function spawnNoticeRecipient(
       .filter((revocation) => revocation.conversationId === launcher)
       .sort((left, right) => right.revokedAt.localeCompare(left.revokedAt))[0];
     if (retired) {
-      const current = seats.seats[retired.project]?.conversationId;
+      const current = (ports.current ? ports.current(retired.project) : seats.seats[retired.project])?.conversationId;
       if (!current) return { kind: "skip", reason: "no-seat" };
       target = current;
     }
@@ -183,9 +188,27 @@ function productionPorts(): SpawnNoticeSweepPorts {
     origin: (child) => agentMessageOrigin(agentRegistry().conversationDeliverySnapshot({ conversationId: child }), child),
     recordAttempt: recordSpawnNoticeAttempt,
     settle: settleSpawnNotices,
+    clearAttempt: clearRevokedSpawnNoticeAttempt,
+    async revokedAttempt(attempt) {
+      const original = lookupOriginalSend(agentRegistry().readOnlySnapshot(), { conversationId: attempt.recipientConversationId, clientMessageId: attempt.clientMessageId });
+      if (original.kind !== "found") return false;
+      const receipt = await resolveSendReceipt(original.operationId);
+      return receipt?.state === "failed" && receipt.reason === SEND_SEAT_REVOKED_REASON;
+    },
     async deliver(request) {
+      const original = lookupOriginalSend(agentRegistry().readOnlySnapshot(), { conversationId: request.conversationId, clientMessageId: request.clientMessageId });
+      if (original.kind === "found") {
+        const receipt = await resolveSendReceipt(original.operationId);
+        if (receipt?.state === "delivered") return { ok: true, operationId: receipt.operationId };
+        if (!receipt || receipt.state === "in-flight") return { ok: false, error: "notice awaits its delivery receipt", uncertain: true };
+      }
       const outcome = await deliverConversationMessage(request);
-      if (outcome.ok) return { ok: true, operationId: outcome.operationId ?? null };
+      if (outcome.ok) {
+        if (!outcome.operationId) return { ok: true, operationId: null };
+        const receipt = await resolveSendReceipt(outcome.operationId);
+        return receipt?.state === "delivered" ? { ok: true, operationId: outcome.operationId }
+          : { ok: false, error: "notice awaits its delivery receipt", uncertain: true };
+      }
       return {
         ok: false,
         error: outcome.error,

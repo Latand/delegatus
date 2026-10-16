@@ -3203,3 +3203,40 @@ test.each(["uncertain", "unavailable"] as const)("a %s Codex callback outcome is
   expect(writes).toBe(1);
   expect(transitions).toEqual(["delivering", outcome === "uncertain" ? "uncertain" : "failed"]);
 });
+
+for (const boundary of ["drain", "engine", "unknown", "unknown-at-engine"] as const) test(`seat channel fences queued sends at ${boundary}`, async () => {
+  let authority: "open" | "revoked" | "unknown" = boundary === "engine" || boundary === "unknown-at-engine" ? "open" : boundary === "unknown" ? "unknown" : "revoked";
+  let sends = 0;
+  const transitions: { status: string; reason?: string | null }[] = [];
+  const reason = "the orchestrator seat was replaced before this reached it; it was not delivered there";
+  const queue = new StructuredDeliveryQueue({
+    effects: async () => [{ id: "effect:seat-fence", kind: "runtime.send", eventSeq: 1,
+      payload: { kind: "send", operationId: "seat-fence", conversationId: "conversation-one", text: "saved operator answer", policy: "queue" } }],
+    status: async () => ({ status: "queued", revision: 1 }), hostClaim: async () => "owner:1",
+    seatRecipient: () => authority === "open" ? { kind: "open" } : { kind: authority, reason },
+    transition: async (_id, status, details) => {
+      transitions.push({ status, reason: details?.reason });
+      if (status === "delivering") authority = boundary === "unknown-at-engine" ? "unknown" : "revoked";
+    },
+  }, () => host(async () => { sends++; return { outcome: "turn-started", turnId: "turn-one" }; }));
+  await queue.drain();
+  expect(sends).toBe(0);
+  if (boundary === "unknown") expect(transitions).toEqual([]);
+  else if (boundary === "unknown-at-engine") expect(transitions.at(-1)).toMatchObject({ status: "queued" });
+  else expect(transitions.at(-1)).toEqual({ status: "failed", reason });
+});
+
+for (const kind of ["interrupt", "kill"] as const) test(`a revoked seat can still receive the ${kind} control`, async () => {
+  let acted = 0;
+  const target = host(async () => { throw new Error("no message expected"); });
+  target.health = async () => ({ ...idleState(), status: "active", activeTurnRef: "held-turn" });
+  target.interrupt = async () => { acted++; };
+  const queue = new StructuredDeliveryQueue({
+    effects: async () => [{ id: "effect:seat-control", kind: `runtime.${kind}`, eventSeq: 1,
+      payload: { kind, operationId: "seat-control", conversationId: "conversation-one", turnId: "held-turn", sessionKey: { engine: "codex", sessionId: "thread-one" } } }],
+    seatRecipient: () => ({ kind: "revoked", reason: "revoked seat" }),
+    transition: async () => {},
+  }, () => target, async () => { acted++; return true; });
+  await queue.drain();
+  expect(acted).toBe(1);
+});

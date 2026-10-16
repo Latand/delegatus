@@ -9,7 +9,7 @@ export type ViewerOperation = "controller.account-migration" | "orchestrator.dep
   | "pipelines.evidence" | "pipelines.get" | "files.get" | "files.health" | "controller.scan" | "controller.pipelines" | "controller.flows" | "activity.ingest" | "controller.account-credit-guard" | "account-credit-guard.store"
   | "prototype.publish" | "prototype.copy" | "prototype.state" | "prototype.delivery" | "prototype.telegram"
   | "pipelines.controller-job" | "pipelines.controller-lane" | "pipelines.controller-schedule"
-  | "telegram.outbound-state" | "telegram.outbound-publication" | "orchestrator.recipient-authority";
+  | "telegram.outbound-state" | "telegram.outbound-publication" | "orchestrator.recipient-authority" | "orchestrator.seat-channel";
 type Operation = { name: ViewerOperation; start: number; end?: number };
 const shared = globalThis as typeof globalThis & { __delegatusLoopMonitor?: ReturnType<typeof createViewerLoopMonitor> };
 

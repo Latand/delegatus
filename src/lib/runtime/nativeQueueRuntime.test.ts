@@ -6,7 +6,7 @@ import { NextRequest } from "next/server";
 import { RuntimeJournal } from "@/runtime-host/journal";
 import { AgentRegistry } from "@/lib/agent/registry";
 import { NativeCodexQueue, NativeQueueProtocolRefusal, type NativeQueuedSubmission } from "./nativeCodexQueue";
-import { NativeQueueExecutor } from "./nativeQueueExecutor";
+import { NativeQueueExecutor, withdrawNativeSeatMessage } from "./nativeQueueExecutor";
 import { StructuredSendRefusedError } from "./engineHost";
 import type { EngineHost } from "./engineHost";
 import { RuntimeHostUnavailableError, type RuntimeHostClient } from "./client";
@@ -1327,4 +1327,45 @@ test.each([
   expect(f.calls.filter((call) => call.endsWith("/add"))).toHaveLength(0);
   expect(f.journal.nativeQueueRead(conversationId)[0]?.state).toBe("refused");
   f.journal.close();
+});
+
+for (const refusal of [false, true]) test(`seat channel native withdrawal proves deletion (native refusal: ${refusal})`, async () => {
+  const f = fixture();
+  try {
+    const add = command("seat-channel-native");
+    f.journal.executeOperation(add);
+    await f.executor.execute(add);
+    expect(f.items).toHaveLength(1);
+    if (refusal) f.refuseDelete();
+    const removed = await withdrawNativeSeatMessage(conversationId, add.operationId, f.client, f.executor);
+    expect(removed).toBe(!refusal);
+    expect(f.items).toHaveLength(refusal ? 1 : 0);
+    expect(f.calls).toContain("thread/queue/delete");
+    if (!refusal) {
+      expect(f.journal.nativeQueueRead(conversationId)[0]!.state).toBe("removed");
+      expect(await withdrawNativeSeatMessage(conversationId, add.operationId, f.client, f.executor)).toBe(true);
+      expect(f.calls.filter(method => method === "thread/queue/delete")).toHaveLength(1);
+    }
+  } finally { f.journal.close(); }
+});
+
+test("the native add settled fence refuses a seat revoked after the drain check", async () => {
+  const f = fixture();
+  const add = command("seat-channel-native-race");
+  f.journal.executeOperation(add);
+  let reads = 0;
+  const reason = "the orchestrator seat was replaced before this reached it; it was not delivered there";
+  const queue = new StructuredDeliveryQueue({
+    effects: async (kinds, after) => f.journal.effectBatch(100, kinds, after),
+    status: async id => f.journal.operationResult(id)?.receipt ?? null,
+    transition: async (id, status, details) => { f.journal.transitionOperation(id, status, details); },
+    seatRecipient: () => ++reads === 1 ? { kind: "open" } : { kind: "revoked", reason },
+    nativeQueueExecute: (command, refusal, note, step, settled) => f.executor.execute(command, refusal, note, step, settled),
+  }, () => f.host);
+  try {
+    await queue.drain();
+    expect(f.items).toHaveLength(0);
+    expect(f.calls).not.toContain("thread/queue/add");
+    expect(f.journal.operationResult(add.operationId)?.receipt).toMatchObject({ status: "failed", reason });
+  } finally { f.journal.close(); }
 });

@@ -1,3 +1,4 @@
+import { withdrawRuntimeWake } from "@/lib/orchestrator/seatChannel";
 import { defaultSeatTickAdmissionSources } from "./seatTickAdmissionSources";
 import { readReleaseProject } from "@/lib/release/store";
 import { readSeatTurnOutcome, type SeatTurnOutcome } from "./seatAuthIncident";
@@ -450,27 +451,7 @@ export async function wakeStateFromRecord(wake: SeatTickOutstandingWake, ports: 
  * drain that is about to settle it would break that drain for a claim the tick
  * cannot honestly make anyway.
  */
-export async function withdrawRuntimeWake(
-  operationId: string,
-  reason: string,
-  client: RuntimeHostClient,
-): Promise<SeatTickWithdrawal> {
-  const current = await client.operationStatus(operationId, { currentRetryLeaf: true });
-  if (!current) return "unknown";
-  const status = current.receipt.status;
-  if (RUNTIME_LANDED.has(status) || RUNTIME_IN_FLIGHT.has(status)) return "too-late";
-  if (status === "failed" || status === "rejected") return "withdrawn";
-  if (!RUNTIME_QUEUED.has(status)) return "unknown";
-  try {
-    const settled = await client.transitionOperation(current.operationId, "failed", { reason });
-    return settled.receipt.status === "failed" ? "withdrawn" : "too-late";
-  } catch {
-    /* The host refuses the transition exactly when the operation left the queue
-       between the read and the write — which is the drain taking it. */
-    const after = await client.operationStatus(current.operationId, { currentRetryLeaf: true });
-    return after && RUNTIME_LANDED.has(after.receipt.status) ? "too-late" : "unknown";
-  }
-}
+export { withdrawRuntimeWake } from "@/lib/orchestrator/seatChannel";
 
 export interface SeatTickSources {
   memoryProblems?: (project: string, shown: readonly string[]) => SeatTickSignalInput[];

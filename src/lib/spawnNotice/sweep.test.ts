@@ -493,3 +493,17 @@ test.each(["legacy", "refused", "settled", "deleted", "current"] as const)("deli
   expect(sent).toHaveLength(state === "current" ? 1 : 0);
   expect(store.readSpawnNoticeTurn(child, "launch:recheck")?.state).toBe(state === "current" ? "sent" : "skipped");
 });
+
+test("a queued spawn notice whose seat was revoked is retried for the current seat", async () => {
+  const child = nextChild();
+  obligation(child, "rotation-turn");
+  const h = harness([child], { clearAttempt: store.clearRevokedSpawnNoticeAttempt });
+  h.answers.push({ ok: false, error: "queued", uncertain: true });
+  await sweepSpawnNotices(h.ports);
+  expect(store.readSpawnNoticeChild(child)?.attempt?.recipientConversationId).toBe(LAUNCHER);
+  h.ports.revokedAttempt = async () => true;
+  h.ports.recipient = () => ({ kind: "deliver", conversationId: "conversation_new_seat", path: "/sessions/new-seat.jsonl" });
+  await sweepSpawnNotices(h.ports);
+  expect(h.sent.map(row => row.conversationId)).toEqual([LAUNCHER, "conversation_new_seat"]);
+  expect(store.readSpawnNoticeTurn(child, "rotation-turn")).toMatchObject({ state: "sent", recipientConversationId: "conversation_new_seat" });
+});

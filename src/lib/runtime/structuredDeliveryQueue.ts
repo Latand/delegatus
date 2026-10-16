@@ -1,3 +1,4 @@
+import type { SeatRecipientVerdict } from "@/lib/orchestrator/seatChannel";
 import { blockingHostActivityFlags } from "./hostActivityFlags";
 import { NativeQueueProtocolRefusal } from "./nativeCodexQueue";
 import { RetryBackoff } from "./retryBackoff";
@@ -12,7 +13,7 @@ import type { RuntimeRetirementClaim, RuntimeTransitionOptions, RuntimeInjection
 import { captureProcessIdentity, processIdentityProvenDead, sameRecordedProcessIdentity } from "@/lib/processIdentity";
 import { evidenceAgrees, readEvidence, readOptionalEvidence, type Evidence } from "./evidence";
 import type { CompactCapableHost, DeliveryReceipt, EngineHost, FirstDispatchEvidence, HostState, QueueEntry, RuntimeInjectOutcome, RuntimeSteerOutcome } from "./engineHost";
-import { hostSupportsCompact, hostSupportsInject, StructuredAnswerError, StructuredCompactError, StructuredInjectError, StructuredSendRefusedError } from "./engineHost";
+import { hostSupportsCompact, hostSupportsInject, StructuredDispatchDeferredError, StructuredAnswerError, StructuredCompactError, StructuredInjectError, StructuredSendRefusedError } from "./engineHost";
 import {
   parseStructuredImageRefs,
   structuredContent,
@@ -47,6 +48,8 @@ interface StructuredOperationStatus {
 }
 
 export interface StructuredDeliveryQueuePort {
+  seatRecipient?(conversationId: string): SeatRecipientVerdict;
+  seatRecipientAsync?(conversationId: string): Promise<SeatRecipientVerdict>;
   /** Durable withdrawal of a pipeline attempt, including after replacement. */
   conversationRetired?(conversationId: string): string | null;
   /** Re-read the idle revision after claiming an automatic continuation. */
@@ -1551,6 +1554,9 @@ export class StructuredDeliveryQueue {
       /* The fence every message send passes before its first actuation, asked
          under the add's own operation id (#1131). */
       const settled = () => this.checking(lane, effect, "reading the durable delivery record", async () => {
+        const seat = effect.action === "add" ? await (this.port.seatRecipientAsync?.(effect.conversationId) ?? this.port.seatRecipient?.(effect.conversationId)) : undefined;
+        if (seat?.kind === "unknown") return { readable: false as const, reason: seat.reason };
+        if (seat?.kind === "revoked") throw new StructuredSendRefusedError(seat.reason);
         const retired = await readEvidence(() => !!this.port.conversationRetired?.(effect.conversationId), "runtime switch retirement is unavailable");
         return !retired.readable || retired.value ? retired : this.readSettled(effect.operationId);
       });
@@ -1686,7 +1692,15 @@ export class StructuredDeliveryQueue {
           replacesTurn: effect.kind !== "inject" && effect.policy === "interrupt-active" };
       }
       if (this.port.handoffHeld?.()) { blockRest("update-handoff"); this.noteWait(effect, "update-handoff"); return true; }
-      const retired = this.port.conversationRetired?.(effect.conversationId);
+      const seat = !isControlEffect(effect) && !isReconfigureEffect(effect)
+        && !(effect.kind === "native-queue" && (effect.action === "delete" || effect.action === "reorder")) ? await (this.port.seatRecipientAsync?.(effect.conversationId) ?? this.port.seatRecipient?.(effect.conversationId)) : undefined;
+      if (seat?.kind === "unknown") {
+        this.noteWait(effect, "evidence-unreadable", { wake: "retry", detail: seat.reason });
+        blockRest("evidence-unreadable", "retry", seat.reason);
+        this.retrySoon();
+        return true;
+      }
+      const retired = seat?.kind === "revoked" ? seat.reason : this.port.conversationRetired?.(effect.conversationId);
       if (retired && !isControlEffect(effect) && !isReconfigureEffect(effect)) {
         if (effect.kind === "native-queue") {
           if (!await this.executeNative(effect, retired, lane)) return true;
@@ -2151,6 +2165,9 @@ export class StructuredDeliveryQueue {
       };
       let sent: { receipt: DeliveryReceipt } | { error: unknown };
       const authorize = () => {
+        const seat = this.port.seatRecipient?.(effect.conversationId);
+        if (seat?.kind === "unknown") throw new StructuredDispatchDeferredError(seat.reason);
+        if (seat?.kind === "revoked") throw new StructuredSendRefusedError(seat.reason);
         const retired = this.port.conversationRetired?.(effect.conversationId);
         if (retired) throw new StructuredSendRefusedError(retired);
         this.port.authorizeDispatch?.(effect.operationId, effect.conversationId);
@@ -2221,6 +2238,12 @@ export class StructuredDeliveryQueue {
     if ("error" in outcome) {
       const error = outcome.error;
       const reason = failureReason(error);
+      if (error instanceof StructuredDispatchDeferredError) {
+        await this.transitionUnlessSettled(effect.operationId, "queued", { reason });
+        this.noteWait(effect, "evidence-unreadable", { wake: "retry", detail: reason });
+        this.retrySoon();
+        return "stop";
+      }
       if (error instanceof StructuredSendRefusedError || error instanceof NativeQueueProtocolRefusal) {
         if (context.steerOrQueue && context.steersIntoTurn) {
           this.refusedSteerTurns.set(effect.operationId, context.activeTurnRef);
@@ -2709,6 +2732,17 @@ export class StructuredDeliveryQueue {
     this.noteWait(effect, "dispatching", { lane, attempted: true, wake: "event" });
     let outcome;
     try {
+      const seat = this.port.seatRecipient?.(effect.conversationId);
+      if (seat?.kind === "unknown") {
+        await this.transitionUnlessSettled(effect.operationId, "queued", { reason: seat.reason });
+        this.noteWait(effect, "evidence-unreadable", { wake: "retry", detail: seat.reason });
+        this.retrySoon();
+        return true;
+      }
+      if (seat?.kind === "revoked") {
+        await this.transitionUnlessSettled(effect.operationId, "failed", { reason: seat.reason });
+        return true;
+      }
       outcome = await host.inject({
         operationId: effect.operationId,
         threadId: binding.threadId,
