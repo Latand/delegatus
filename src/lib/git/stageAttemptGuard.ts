@@ -13,7 +13,7 @@ export async function prepareStageGitGuard(launchId: string, worktree: string, e
   const head = await exec("git", ["rev-parse", "HEAD"], worktree);
   if (head.code !== 0 || !/^[0-9a-f]{40}$/.test(head.stdout.trim())) throw new Error("stage Git guard cannot read the starting head");
   await fs.mkdir(directory, { recursive: true, mode: 0o700 });
-  const start = { launchId, worktree, head: head.stdout.trim(), startedAt: now };
+  const start = { launchId, worktree, head: head.stdout.trim(), startedAt: now, commitReceiptVersion: 1 };
   try { await fs.writeFile(path.join(directory, "start.json"), JSON.stringify(start), { flag: "wx", mode: 0o600 }); }
   catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
@@ -66,10 +66,11 @@ if [ "$hook" = post-commit ] || [ "$hook" = post-merge ] || [ "$hook" = post-app
           : > "$receipt/commits/$made"
         done || exit 1
       elif [ "$hook" = post-merge ]; then
-        action=$(git reflog -1 --format=%gs HEAD) || exit 1
-        case "$action" in
-          *': Merge made by '*) made=$(git rev-parse HEAD) || exit 1; : > "$receipt/commits/$made" ;;
-        esac
+        # post-merge also runs after a fast-forward. Reflog action text comes
+        # from GIT_REFLOG_ACTION, so only a real merge commit proves creation.
+        parents=$(git rev-list --parents -n 1 HEAD) || exit 1
+        set -- $parents
+        if [ "$#" -ge 3 ]; then made=$1; : > "$receipt/commits/$made"; fi
       else
         made=$(git rev-parse HEAD) || exit 1
         : > "$receipt/commits/$made"

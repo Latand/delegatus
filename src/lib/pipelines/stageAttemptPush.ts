@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { stageGitReceiptDirectory } from "@/lib/git/stageAttemptGuard";
+import { agentPublicationIdentityEnv } from "@/lib/git/agentPublicationIdentity";
 import type { ExecPort } from "@/lib/workflows/provision";
 import { pipelineLiteralGitEnv, type PipelineGitResult } from "./git";
 import type { Pipeline, PipelineStageAttempt } from "./types";
@@ -74,6 +75,10 @@ export async function settleStageAttemptPush(pipeline: Pipeline, attempt: Pipeli
       || !Number.isFinite(Date.parse(start.startedAt)) || !attempt.startedAt
       || !Number.isFinite(Date.parse(attempt.startedAt)) || !Number.isFinite(Date.parse(now))
       || Date.parse(start.startedAt) < Date.parse(attempt.startedAt) || Date.parse(start.startedAt) > Date.parse(now)) return refuse("the attempt's starting-head receipt is invalid");
+    // A start receipt from before complete hook coverage cannot distinguish a
+    // missing legacy merge receipt from a current unproved commit. Only those
+    // historical launches may use the identity-checked reflog recovery path.
+    const allowLegacyNativeCreation = raw === null || start.commitReceiptVersion !== 1;
     const delivery = pipeline.delivery;
     if (!delivery || !delivery.active || delivery.disposition !== "owner" || delivery.ownerId !== pipeline.id
       || delivery.publish !== "enabled") return null;
@@ -106,8 +111,14 @@ export async function settleStageAttemptPush(pipeline: Pipeline, attempt: Pipeli
       }
     }
     let nativeCreated: Set<string> | undefined;
+    // Older launches may have installed start.json before their hook set was
+    // complete. Reflog entries recover those missing receipts only when the
+    // commit carries the publication identity pinned into the producing agent.
+    const publicationIdentity = agentPublicationIdentityEnv(process.env);
+    const expectedName = publicationIdentity.GIT_AUTHOR_NAME;
+    const expectedEmail = publicationIdentity.GIT_AUTHOR_EMAIL;
     const nativeCreation = async (sha: string): Promise<boolean> => {
-      if (raw !== null) return false;
+      if (!allowLegacyNativeCreation) return false;
       if (!nativeCreated) {
         nativeCreated = new Set();
         const from = Math.floor(Date.parse(attempt.startedAt!) / 1000);
@@ -117,12 +128,22 @@ export async function settleStageAttemptPush(pipeline: Pipeline, attempt: Pipeli
             "--max-count=128", `--skip=${offset}`, `--since=${attempt.startedAt}`, `--until=${attempt.completedAt ?? now}`, "HEAD"], pipeline.worktreeDir);
           if (reflog.code !== 0) throw new Error("native worktree creation evidence is unavailable");
           const rows = reflog.stdout.trimEnd().split("\n").filter(Boolean);
+          const candidates: string[] = [];
           for (const row of rows) {
             const [made, selector, action] = row.split("\0");
             const stamp = selector?.match(/@\{(\d+)\}$/)?.[1];
-            if (!stamp || Number(stamp) < from || Number(stamp) > through) continue;
+            if (!stamp || Number(stamp) < from || Number(stamp) > through || !/^[0-9a-f]{40}$/.test(made ?? "")) continue;
             if (/^(?:commit(?: \(initial\)| \(amend\))?|cherry-pick|am|rebase \((?:pick|reword|squash|fixup)\)): /.test(action ?? "")
-              || /^merge .*: Merge made by /.test(action ?? "")) nativeCreated.add(made);
+              || /^merge .*: Merge made by /.test(action ?? "")) candidates.push(made);
+          }
+          if (candidates.length && expectedName && expectedEmail) {
+            const identities = await exec("git", ["log", "--no-walk", "--format=%H%x00%an%x00%ae%x00%cn%x00%ce", ...candidates], pipeline.worktreeDir);
+            if (identities.code !== 0) throw new Error("native worktree creation identity is unavailable");
+            for (const identity of identities.stdout.trimEnd().split("\n")) {
+              const [made, author, authorEmail, committer, committerEmail] = identity.split("\0");
+              if (made && author === expectedName && authorEmail === expectedEmail
+                && committer === expectedName && committerEmail === expectedEmail) nativeCreated.add(made);
+            }
           }
           if (rows.length < 128) break;
         }

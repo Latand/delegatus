@@ -9,6 +9,7 @@ import { settleStageAttemptPush } from "./stageAttemptPush";
 import type { Pipeline, PipelineStageAttempt } from "./types";
 
 const START = "2026-10-16T08:00:00.000Z", NOW = "2026-10-16T12:00:00.000Z";
+let nextFixture = 0;
 async function fixture(legacy = false) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "stage-proof-"));
   const lane = path.join(root, "lane"), remote = path.join(root, "remote.git"), foreign = path.join(root, "foreign");
@@ -33,15 +34,15 @@ async function fixture(legacy = false) {
   await git(foreign, "config", "user.name", "Fixture");
   await git(foreign, "config", "user.email", ["noreply", "example.invalid"].join("@"));
   await git(foreign, "config", "commit.gpgSign", "false");
-  const launchId = "stage-proof-fixture";
+  const launchId = `stage-proof-fixture-${++nextFixture}`;
   const attempt = { launchId, startedAt: START, completedAt: null } as PipelineStageAttempt;
   const pipeline = { id: "proof", worktreeDir: lane, branch: "pipeline/proof", baseBranch: "main", baseRef: base, lastPassedCommit: base,
     delivery: { active: true, disposition: "owner", ownerId: "proof", publish: "enabled",
       target: { remote, branch: "refs/heads/pipeline/proof" } } } as Pipeline;
   if (!legacy) {
     Object.assign(env, await prepareStageGitGuard(launchId, lane, realExec, START));
-    Object.assign(env, agentPublicationIdentityEnv({ ...env, HOME: root }));
   }
+  Object.assign(env, agentPublicationIdentityEnv({ ...env, HOME: root }));
   const own = async (...args: string[]) => await git(lane, ...args);
   const commit = async (label: string) => { await own("commit", "--allow-empty", "-m", label); return own("rev-parse", "HEAD"); };
   const push = async () => own("push", "origin", "HEAD:refs/heads/pipeline/proof");
@@ -172,6 +173,45 @@ test.each([{ pushed: false }, { pushed: true }])("B: legacy native creation is r
   } finally { await f.close(); }
 });
 
+test("B: legacy reflog recovery refuses a commit made under an operator identity", async () => {
+  const f = await fixture(true);
+  try {
+    const secondEnvironment: NodeJS.ProcessEnv = { ...f.env, GIT_AUTHOR_NAME: "Operator",
+      GIT_AUTHOR_EMAIL: ["operator", "example.invalid"].join("@"),
+      GIT_COMMITTER_NAME: "Operator", GIT_COMMITTER_EMAIL: ["operator", "example.invalid"].join("@") };
+    delete secondEnvironment.LLV_AGENT_GIT_GUARD_DIR;
+    for (const key of Object.keys(secondEnvironment)) if (/^GIT_CONFIG_(?:COUNT|KEY_\d+|VALUE_\d+)$/.test(key)) delete secondEnvironment[key as keyof typeof secondEnvironment];
+    const made = await realExec("git", ["commit", "--allow-empty", "-m", "operator commit"], f.lane, secondEnvironment);
+    expect(made.code, made.stderr).toBe(0);
+    const head = await f.own("rev-parse", "HEAD");
+    const pushed = await realExec("git", ["push", "--no-verify", "origin", "HEAD:refs/heads/pipeline/proof"], f.lane, f.env);
+    expect(pushed.code, pushed.stderr).toBe(0);
+    const result = await f.settle();
+    expect(result?.ok).toBe(false);
+    if (!result || result.ok) throw new Error("legacy reflog adopted an operator commit");
+    expect(result.error).toContain(head);
+  } finally { await f.close(); }
+});
+
+test("B: an older start receipt can recover an own merge missing its commit receipt", async () => {
+  const f = await fixture();
+  try {
+    await f.commit("own before historical merge");
+    await f.git(f.foreign, "commit", "--allow-empty", "-m", "main advances");
+    await f.git(f.foreign, "push", "origin", "main");
+    await f.own("fetch", "origin", "main");
+    await f.own("merge", "--no-ff", "-m", "historical own merge", "origin/main");
+    const head = await f.own("rev-parse", "HEAD");
+    const startPath = path.join(f.receipt, "start.json");
+    const start = JSON.parse(await fs.readFile(startPath, "utf8"));
+    delete start.commitReceiptVersion;
+    await fs.writeFile(startPath, JSON.stringify(start));
+    await fs.rm(path.join(f.receipt, "commits", head), { force: true });
+    await f.push();
+    expect(await f.settle()).toEqual({ ok: true, sha: head });
+  } finally { await f.close(); }
+});
+
 
 test("B: native merge hooks record creation without attesting a foreign fast-forward", async () => {
   const f = await fixture();
@@ -184,6 +224,28 @@ test("B: native merge hooks record creation without attesting a foreign fast-for
     const made = await f.own("rev-parse", "HEAD");
     expect(await fs.readFile(path.join(f.receipt, "commits", made), "utf8")).toBe("");
     expect(await fs.access(path.join(f.receipt, "commits", imported)).then(() => true, () => false)).toBe(false);
+  } finally { await f.close(); }
+});
+
+test("B: a caller-controlled merge reflog action cannot receipt a foreign fast-forward", async () => {
+  const f = await fixture();
+  try {
+    await f.commit("own before foreign fast-forward");
+    await f.push();
+    await f.git(f.foreign, "fetch", "origin", "pipeline/proof");
+    await f.git(f.foreign, "checkout", "-b", "pipeline/proof", "FETCH_HEAD");
+    await f.git(f.foreign, "commit", "--allow-empty", "-m", "foreign fast-forward");
+    const foreign = await f.git(f.foreign, "rev-parse", "HEAD");
+    await f.git(f.foreign, "push", "origin", "HEAD:refs/heads/pipeline/proof");
+    await f.own("fetch", "origin", "pipeline/proof");
+    const merged = await realExec("git", ["merge", "--ff-only", "FETCH_HEAD"], f.lane,
+      { ...f.env, GIT_REFLOG_ACTION: "merge foreign: Merge made by fixture" });
+    expect(merged.code, merged.stderr).toBe(0);
+    expect(await fs.access(path.join(f.receipt, "commits", foreign)).then(() => true, () => false)).toBe(false);
+    const result = await f.settle();
+    expect(result?.ok).toBe(false);
+    if (!result || result.ok) throw new Error("foreign fast-forward acquired an attempt receipt");
+    expect(result.error).toContain(foreign);
   } finally { await f.close(); }
 });
 
