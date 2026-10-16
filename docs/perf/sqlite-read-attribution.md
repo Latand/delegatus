@@ -1,9 +1,9 @@
 # SQLite read attribution
 
-The isolated synthetic scenario attributes at least 99.10% of each measured
+The isolated synthetic scenario attributes at least 99.13% of each measured
 pause to named synchronous work with byte counters. In the full-registry
-window, `registry.deliveryOperationOwners.all` reads 460.6 MB and
-`registry.receipts.all` reads 328.1 MB. These are local workload findings.
+window, `registry.deliveryOperationOwners.all` reads 927.8 MB and
+`registry.receipts.all` reads 645.9 MB. These are local workload findings.
 Production confirmation follows deployment.
 
 ## Reproduce
@@ -41,33 +41,38 @@ already-decoded view cannot erase the workload.
 
 ## Recorded result
 
-Recorded on 2026-10-16 at 15:47:14 UTC, Linux, Bun 1.4.0. MB means 1,000,000 bytes.
-The read column is sampled main-thread `rchar`, including cached reads.
+Recorded on 2026-10-16 at 17:43 UTC, Linux, Bun 1.4.0. MB means 1,000,000
+bytes. The read column is sampled thread `rchar`, including cached reads;
+procfs collection for the serving thread runs in an independent worker.
 
 | Workload | Repetitions | Pause ms | Attributed time | Read MB | Decoded JSON MB |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| pipelines | 27 | 756 | 100.00% | 814.2 | 810.2 |
-| pipelines_archive | 8 | 773 | 100.00% | 731.3 | 720.2 |
-| registry.snapshot | 1 | 958 | 99.10% | 913.9 | 212.7 |
-| deliveryOperationOwners | 1 | 754 | 99.80% | 486.7 | 45.3 |
+| pipelines | 35 | 752 | 100.00% | 1,043.0 | 1,050.3 |
+| pipelines_archive | 13 | 754 | 99.98% | 1,188.4 | 1,170.3 |
+| registry.snapshot | 2 | 1,363 | 100.00% | 1,827.9 | 425.5 |
+| deliveryOperationOwners | 2 | 1,122 | 99.13% | 307.2 | 90.7 |
 
-All four gaps report zero dropped reader records. The registry window reads
-913.9 MB for 212.7 MB of decoded JSON: repeated SQLite page access can exceed
-payload size. The owner-only case also reads receipt and conversation
-attestors; its largest aggregate reader is `registry.all` (310.2 MB), followed
-by `registry.receipts.all` (92.0 MB). Full archive and pipeline reads appear as
-`state.pipelines_archive.all` and `state.pipelines.all`.
+All four windows exceed the 80% acceptance threshold and report positive read
+and decoded-byte counters. The full registry window reads 1,827.9 MB for
+425.5 MB of decoded JSON: repeated SQLite page access can exceed payload size.
+Its largest readers are `registry.deliveryOperationOwners.all` (927.8 MB),
+`registry.receipts.all` (645.9 MB), and `registry.conversations.all` (102.9 MB).
+The owner-only window's largest readers are
+`registry.deliveryOperationOwners.all` (107.1 MB), `registry.all` (64.8 MB),
+and `registry.receipts.all` (53.0 MB). Full archive and pipeline
+reads appear as `state.pipelines_archive.all` and `state.pipelines.all`.
 
-The owner-only case records 22,998 calls without an I/O sample. Byte values
+The owner-only case records 46,296 calls without an I/O sample. Byte values
 are observed lower bounds; they are never extrapolated from sampled calls.
 Decoded JSON bytes count attempted UTF-8 input, including a failed parse.
 
 Three alternating enabled/disabled pairs per case retain the same data and
-load. Median disabled/enabled wall times in ms are 34.27/35.98 (pipelines),
-86.61/86.67 (archive), 857.27/864.28 (registry), and 776.66/710.86 (owners).
-This comparison measures incremental counter cost with the connection
-decorators present in both modes. It gives no production CPU estimate or
-speedup claim.
+load. Median disabled/enabled wall times in ms are 28.93/29.95 (pipelines),
+63.11/69.33 (archive), 647.73/654.58 (registry), and 533.89/560.91 (owners).
+Median paired enabled-minus-disabled differences range from -26.63 to +5.23 ms,
+with no consistent direction. The sampler reports 2.61–4.31 ms of observer
+time per measured gap. These local figures describe
+this synthetic workload and do not estimate production CPU use.
 
 ## Accounting contract and bounds
 
@@ -79,12 +84,22 @@ connection-id samples. Each connection also owns lifetime counters, exposed by
 decoders to the new connection. Neither statements nor connections acquire a
 new lifetime owner.
 
-Byte sampling starts at most 32 paired `/proc/self/task/<main-thread>/io`
-measurements per 10 ms sampling window. The observer removes its own proc-file
-bytes. `rchar` measures bytes returned by read/pread, including cache hits;
-physical disk reads are a different quantity. Unsupported platforms, worker
-threads, refused proc reads and regressing counters expose unavailable counts.
+The serving thread reads only atomics from its sampler worker; it never opens
+procfs inside a measured callback. The sampler polls its
+`/proc/<pid>/task/<tid>/io` counter every 10 ms and stops after a read takes over
+10 ms or three consecutive failures. Its time is reported as `observerMs`, and
+a stopped or unavailable sampler is visible through `samplerDegraded` and
+unavailable-call counts. Byte deltas are sampled for at most 32 paired
+operation observations per 10 ms window. `rchar` measures bytes returned by
+read/pread, including cache hits; physical disk reads are a different quantity.
 No page counts are inferred from returned JSON size.
+
+Worker threads collect their own `/proc/thread-self/io` deltas and send compact
+batches to the parent through `attachReadAttributionWorker`. Each worker has at
+most one unacknowledged batch and 256 queued reader events; parent retention is
+also capped at 128 aggregates. `workerBatches`, `workerTransportDropped`, and
+the regular dropped-record counters expose transport and retention overflow.
+Worker identity and connection samples stay on each aggregated reader row.
 
 Synchronous frames subtract nested time and I/O. AsyncLocalStorage carries
 only the static operation name across awaits. A peer's reads during an await

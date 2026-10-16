@@ -1,4 +1,4 @@
-import { readAttribution } from "./readAttribution";
+import { readAttribution, startReadAttributionSampler } from "./readAttribution";
 import { performanceSpans, performanceSites, performanceProcess } from "./performanceSpans";
 import { startLoopWatchdog } from "./loopWatchdog";
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -151,6 +151,7 @@ export function createViewerLoopMonitor(log?: (line: string) => void, now = () =
     start() {
       if (timer) return;
       last = now();
+      startReadAttributionSampler();
       watchdog = startLoopWatchdog();
       spans.observeSite(watchdog.site);
       const poll = () => { tick(); timer = setTimeout(poll, 10); timer.unref(); };

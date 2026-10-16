@@ -4,10 +4,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { observeSqlite, parseSqliteJson, sqliteReadCounters } from "./sqliteReadAttribution";
-import { readAttribution } from "./readAttribution";
+import { readAttribution, startReadAttributionSampler } from "./readAttribution";
 import { createViewerLoopMonitor } from "./viewerLoopMonitor";
 import { openCurrentDatabase } from "./state/currentDatabase";
 import { initializeStateCollections, SqliteStateCollection } from "./state/sqliteStateStore";
+import { Worker } from "node:worker_threads";
+import { attachReadAttributionWorker } from "./readAttribution";
 
 test("mixed collections and later bind slots keep the generic reader label", () => {
   const db = observeSqlite(new Database(":memory:"), "state");
@@ -71,7 +73,7 @@ test.each(["before", "after"])("prototype guards installed %s decoration are obs
   } finally { db?.close(); readAttribution.clear(); }
 });
 
-test("real statements, iteration, cache and JSON parsing retain connection identity in gap logs", () => {
+test("real statements, iteration, cache and JSON parsing retain connection identity in gap logs", async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "read-attribution-"));
   const filename = path.join(directory, "fixture.sqlite");
   const open = () => observeSqlite(new Database(filename), "state");
@@ -85,13 +87,24 @@ test("real statements, iteration, cache and JSON parsing retain connection ident
     db = openCurrentDatabase(filename, open);
     db.exec("PRAGMA cache_size=-16");
     readAttribution.clear();
+    startReadAttributionSampler();
+    await new Promise(resolve => setTimeout(resolve, 30));
+    readAttribution.clear();
     let at = 0;
     const lines: string[] = [];
     const monitor = createViewerLoopMonitor(line => lines.push(line), () => at);
     monitor.run("pipelines.get", () => {
       const statement = db!.query<{ value_json: string }, [string]>("SELECT value_json FROM state_rows WHERE collection=?");
       expect(statement).toBe(db!.query("SELECT value_json FROM state_rows WHERE collection=?"));
-      for (const row of statement.iterate("pipelines")) parseSqliteJson(row.value_json, db);
+      const iterator = statement.iterate("pipelines");
+      const first = readAttribution.sync("state.iterate", () => {
+        const row = iterator.next();
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 35);
+        return row;
+      }, sqliteReadCounters(db!)!.connection);
+      expect(first.done).toBe(false);
+      parseSqliteJson(first.value!.value_json, db);
+      for (const row of iterator) parseSqliteJson(row.value_json, db);
       for (const row of statement.all("pipelines")) parseSqliteJson(row.value_json, db);
       expect(statement.get("pipelines")!.value_json).toBe(json);
       expect(statement.values("pipelines")).toHaveLength(1);
@@ -139,6 +152,61 @@ test("connection reopening updates the identity used by row decoders", () => {
     const after = readAttribution.snapshot(1).top.find(row => row.reader === "state.json")!.connection;
     expect(after).toBeGreaterThan(before);
   } finally { db.close(); readAttribution.clear(); fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("worker SQLite reads and JSON decoding reach the parent loop monitor with worker identity", async () => {
+  readAttribution.clear();
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "read-attribution-worker-"));
+  const filename = path.join(directory, "fixture.sqlite");
+  const seed = new Database(filename);
+  const payload = JSON.stringify({ value: "x".repeat(1024 * 1024) });
+  seed.exec("CREATE TABLE rows(value TEXT)");
+  seed.query("INSERT INTO rows VALUES (?)").run(payload);
+  seed.close();
+  let now = 0;
+  const lines: string[] = [];
+  const monitor = createViewerLoopMonitor(line => lines.push(line), () => now);
+  const worker = new Worker(`
+    const { parentPort, workerData } = require('node:worker_threads');
+    const { Database } = require('bun:sqlite');
+    const { observeSqlite, sqliteReadCounters, parseSqliteJson } = require(workerData.sqliteModule);
+    const { readAttribution } = require(workerData.readModule);
+    parentPort.on('message', message => {
+      if (message?.type === 'delegatus-read-attribution-ack') parentPort.close();
+    });
+    const db = observeSqlite(new Database(workerData.filename), 'worker-state');
+    readAttribution.run('worker.fixture', () => {
+      const row = readAttribution.sync('worker-state.get', () => {
+        const value = db.query('SELECT value FROM rows').get();
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 35);
+        return value;
+      }, sqliteReadCounters(db).connection);
+      parseSqliteJson(row.value, db);
+    });
+    db.close();
+    parentPort.postMessage({ type: 'worker-done' });
+  `, { eval: true, workerData: { filename, sqliteModule: `${import.meta.dir}/sqliteReadAttribution.ts`, readModule: `${import.meta.dir}/readAttribution.ts` } });
+  const detach = attachReadAttributionWorker(worker, "fixture");
+  try {
+    await new Promise<void>((resolve, reject) => {
+      worker.once("error", reject);
+      worker.once("exit", code => code === 0 ? resolve() : reject(new Error(`worker exited ${code}`)));
+    });
+    await new Promise(resolve => setImmediate(resolve));
+    monitor.run("files.get", () => {});
+    now = 600;
+    monitor.tick();
+    const report = JSON.parse(lines[0]!.slice("[viewer loop-gap] ".length));
+    const workerJson = report.reads.top.find((row: { reader: string }) => row.reader === "worker-state.json");
+    expect(workerJson).toMatchObject({ reader: "worker-state.json", decodedJsonBytes: 1024 * 1024 + 12 });
+    expect(workerJson.worker).toMatch(/^fixture-\d+$/);
+    expect(workerJson.operation).toBe(`worker-${workerJson.worker}:worker.fixture`);
+    const workerSql = report.reads.top.find((row: { operation: string; reader: string }) => row.operation === workerJson.operation
+      && row.reader === "worker-state.get");
+    expect(workerSql.connections).toHaveLength(1);
+    if (process.platform === "linux") expect(workerSql.readBytes).toBeGreaterThan(0);
+    expect(report.reads.workerBatches).toBeGreaterThan(0);
+  } finally { detach(); await worker.terminate(); readAttribution.clear(); fs.rmSync(directory, { recursive: true, force: true }); }
 });
 
 test("a real process restart resets counter retention and sampling budgets", async () => {

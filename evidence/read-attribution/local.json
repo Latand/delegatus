@@ -1,18 +1,18 @@
 {
   "schema": 1,
-  "utc": "2026-10-16T15:47:14.733Z",
+  "utc": "2026-10-16T17:43:45.415Z",
   "runtime": "1.4.0",
   "platform": "linux",
   "command": "bun scripts/benchmark-read-attribution.ts evidence/read-attribution/local.json",
   "scale": 1,
   "sourceHashes": {
-    "src/lib/readAttribution.ts": "b1996c9b4d3d7b446e320eb39623036456f5e6c851a74930959fce682a02ede5",
+    "src/lib/readAttribution.ts": "93792846761baceb76d6db96e5f60252373525d589c067d97c1102806fa47637",
     "src/lib/sqliteReadAttribution.ts": "e4aa258b789eb73f0cb20dcc829ba80b06e64a4bad6951787f7823297ee21251",
-    "src/lib/viewerLoopMonitor.ts": "d212219081d9a2914f9776740aa4252b98680356e4eef1c48993fb072cca0cf9",
+    "src/lib/viewerLoopMonitor.ts": "f57f0fafdf1fd6ba153ff7eaa3d685e757e5f7d31be83e2c7b28431331eb9fff",
     "src/lib/performanceSpans.ts": "636e68ba8984c412e85a70a80b3100505e9a72a24af8b4a1988714c3fd03f125",
     "src/lib/state/sqliteStateStore.ts": "e4d9843b46aadaf1fd05f380ea6a05b497095c47402f4b05b42b004f1631bb58",
     "src/lib/agent/sqliteRegistryStore.ts": "807b5e87e7a398dd660ba941fa3934f2d530595ac07e3352ff62efc9fdd64cb9",
-    "scripts/benchmark-read-attribution.ts": "5cc8ae3afa61a65535735b6cc81727aef703a1de0c4ea63836195db12eb6a88f"
+    "scripts/benchmark-read-attribution.ts": "9d7b6e162e7efc8ea273c7d309f229788986549e62fd5fd08fbee2e33fce3d2a"
   },
   "shape": [
     {
@@ -52,41 +52,45 @@
   "reports": [
     {
       "name": "pipelines",
-      "iterations": 27,
-      "rows": 7074,
-      "pauseMs": 756,
-      "attributedMs": 756,
+      "iterations": 35,
+      "rows": 9170,
+      "pauseMs": 752,
+      "attributedMs": 752,
       "attributedFraction": 1,
       "timings": [
         {
-          "disabledMs": 37.65221999999994,
-          "enabledMs": 31.61136400000032
+          "disabledMs": 28.931883000001108,
+          "enabledMs": 29.95109600000069
         },
         {
-          "enabledMs": 37.962610000000495,
-          "disabledMs": 34.27156300000024
+          "enabledMs": 30.390835000000152,
+          "disabledMs": 29.318475000000035
         },
         {
-          "disabledMs": 33.147923000000446,
-          "enabledMs": 35.97725200000059
+          "disabledMs": 16.38288400000056,
+          "enabledMs": 17.792475000000195
         }
       ],
       "gaps": [
         {
-          "gapMs": 756,
+          "gapMs": 752,
           "reads": {
-            "source": "linux-main-thread-rchar",
+            "source": "linux-thread-rchar",
             "byteCoverage": "sampled-exclusive",
             "sampleLimit": {
               "calls": 32,
               "windowMs": 10
             },
-            "windowMs": 765.5810430000001,
-            "namedSyncMs": 756.7535749999952,
-            "attributedFraction": 0.9884695838791754,
-            "readBytes": 814164726,
-            "decodedJsonBytes": 810217620,
-            "sampledCalls": 162,
+            "windowMs": 762.0525269999998,
+            "namedSyncMs": 752.5030720000013,
+            "attributedFraction": 0.9874687706402705,
+            "observerMs": 2.613,
+            "samplerDegraded": false,
+            "workerBatches": 0,
+            "workerTransportDropped": 0,
+            "readBytes": 1043045927,
+            "decodedJsonBytes": 1050282100,
+            "sampledCalls": 210,
             "unsampledCalls": 0,
             "unavailableCalls": 0,
             "dropped": 0,
@@ -99,45 +103,21 @@
                 "reader": "state.pipelines.all",
                 "connection": 0,
                 "connections": [
+                  16,
+                  17,
+                  18,
+                  19,
                   20,
                   21,
                   22,
-                  23,
-                  24,
-                  25,
-                  26,
-                  27
+                  23
                 ],
-                "connectionSamplesDropped": 19,
-                "calls": 27,
-                "syncMs": 429.0952450000059,
-                "readBytes": 812062110,
+                "connectionSamplesDropped": 27,
+                "calls": 35,
+                "syncMs": 426.2610980000045,
+                "readBytes": 669803085,
                 "decodedJsonBytes": 0,
-                "sampledCalls": 27,
-                "unsampledCalls": 0,
-                "unavailableCalls": 0,
-                "failed": 0
-              },
-              {
-                "operation": "pipelines.get",
-                "reader": "state.prepare",
-                "connection": 0,
-                "connections": [
-                  20,
-                  21,
-                  22,
-                  23,
-                  24,
-                  25,
-                  26,
-                  27
-                ],
-                "connectionSamplesDropped": 19,
-                "calls": 27,
-                "syncMs": 30.692824000001565,
-                "readBytes": 2096172,
-                "decodedJsonBytes": 0,
-                "sampledCalls": 27,
+                "sampledCalls": 35,
                 "unsampledCalls": 0,
                 "unavailableCalls": 0,
                 "failed": 0
@@ -148,11 +128,35 @@
                 "connection": 0,
                 "connections": [],
                 "connectionSamplesDropped": 0,
-                "calls": 27,
-                "syncMs": 109.67429999991691,
-                "readBytes": 6405,
+                "calls": 35,
+                "syncMs": 84.27027200004704,
+                "readBytes": 364588151,
                 "decodedJsonBytes": 0,
-                "sampledCalls": 27,
+                "sampledCalls": 35,
+                "unsampledCalls": 0,
+                "unavailableCalls": 0,
+                "failed": 0
+              },
+              {
+                "operation": "pipelines.get",
+                "reader": "state.prepare",
+                "connection": 0,
+                "connections": [
+                  16,
+                  17,
+                  18,
+                  19,
+                  20,
+                  21,
+                  22,
+                  23
+                ],
+                "connectionSamplesDropped": 27,
+                "calls": 35,
+                "syncMs": 36.44611900000382,
+                "readBytes": 4413308,
+                "decodedJsonBytes": 0,
+                "sampledCalls": 35,
                 "unsampledCalls": 0,
                 "unavailableCalls": 0,
                 "failed": 0
@@ -162,21 +166,21 @@
                 "reader": "state.close",
                 "connection": 0,
                 "connections": [
+                  16,
+                  17,
+                  18,
+                  19,
                   20,
                   21,
                   22,
-                  23,
-                  24,
-                  25,
-                  26,
-                  27
+                  23
                 ],
-                "connectionSamplesDropped": 19,
-                "calls": 27,
-                "syncMs": 13.687303000000611,
-                "readBytes": 39,
+                "connectionSamplesDropped": 27,
+                "calls": 35,
+                "syncMs": 11.128623000002335,
+                "readBytes": 4241383,
                 "decodedJsonBytes": 0,
-                "sampledCalls": 27,
+                "sampledCalls": 35,
                 "unsampledCalls": 0,
                 "unavailableCalls": 0,
                 "failed": 0
@@ -186,20 +190,20 @@
                 "reader": "state.json",
                 "connection": 0,
                 "connections": [
+                  16,
+                  17,
+                  18,
+                  19,
                   20,
                   21,
                   22,
-                  23,
-                  24,
-                  25,
-                  26,
-                  27
+                  23
                 ],
-                "connectionSamplesDropped": 4978,
-                "calls": 7074,
-                "syncMs": 172.80442300007599,
+                "connectionSamplesDropped": 7074,
+                "calls": 9170,
+                "syncMs": 193.90719399995214,
                 "readBytes": 0,
-                "decodedJsonBytes": 810217620,
+                "decodedJsonBytes": 1050282100,
                 "sampledCalls": 0,
                 "unsampledCalls": 0,
                 "unavailableCalls": 0,
@@ -210,21 +214,21 @@
                 "reader": "state.exec",
                 "connection": 0,
                 "connections": [
+                  16,
+                  17,
+                  18,
+                  19,
                   20,
                   21,
                   22,
-                  23,
-                  24,
-                  25,
-                  26,
-                  27
+                  23
                 ],
-                "connectionSamplesDropped": 38,
-                "calls": 54,
-                "syncMs": 0.7994799999942188,
+                "connectionSamplesDropped": 54,
+                "calls": 70,
+                "syncMs": 0.48976599999150494,
                 "readBytes": 0,
                 "decodedJsonBytes": 0,
-                "sampledCalls": 54,
+                "sampledCalls": 70,
                 "unsampledCalls": 0,
                 "unavailableCalls": 0,
                 "failed": 0
@@ -233,8 +237,8 @@
             "operations": [
               {
                 "name": "pipelines.get",
-                "readBytes": 814164726,
-                "decodedJsonBytes": 810217620
+                "readBytes": 1043045927,
+                "decodedJsonBytes": 1050282100
               }
             ]
           }
@@ -243,41 +247,45 @@
     },
     {
       "name": "pipelines_archive",
-      "iterations": 8,
-      "rows": 6368,
-      "pauseMs": 773,
-      "attributedMs": 773,
-      "attributedFraction": 1,
+      "iterations": 13,
+      "rows": 10348,
+      "pauseMs": 754,
+      "attributedMs": 753.8558699999994,
+      "attributedFraction": 0.9998088461538454,
       "timings": [
         {
-          "disabledMs": 70.92834500000026,
-          "enabledMs": 73.37974199999917
+          "disabledMs": 64.80186999999933,
+          "enabledMs": 70.02797500000088
         },
         {
-          "enabledMs": 86.66546600000038,
-          "disabledMs": 86.60597699999926
+          "enabledMs": 69.33190800000011,
+          "disabledMs": 56.08344399999987
         },
         {
-          "disabledMs": 87.03997399999935,
-          "enabledMs": 108.84465600000112
+          "disabledMs": 63.108806000000186,
+          "enabledMs": 51.295696999999564
         }
       ],
       "gaps": [
         {
-          "gapMs": 773,
+          "gapMs": 754,
           "reads": {
-            "source": "linux-main-thread-rchar",
+            "source": "linux-thread-rchar",
             "byteCoverage": "sampled-exclusive",
             "sampleLimit": {
               "calls": 32,
               "windowMs": 10
             },
-            "windowMs": 782.9360770000003,
-            "namedSyncMs": 775.9867439999998,
-            "attributedFraction": 0.9911240097318947,
-            "readBytes": 731342481,
-            "decodedJsonBytes": 720200816,
-            "sampledCalls": 48,
+            "windowMs": 763.8890929999998,
+            "namedSyncMs": 753.8558699999994,
+            "attributedFraction": 0.9868656024913287,
+            "observerMs": 2.888000000000001,
+            "samplerDegraded": false,
+            "workerBatches": 0,
+            "workerTransportDropped": 0,
+            "readBytes": 1188431010,
+            "decodedJsonBytes": 1170326326,
+            "sampledCalls": 78,
             "unsampledCalls": 0,
             "unavailableCalls": 0,
             "dropped": 0,
@@ -290,45 +298,21 @@
                 "reader": "state.pipelines_archive.all",
                 "connection": 0,
                 "connections": [
-                  53,
-                  54,
-                  55,
-                  56,
                   57,
                   58,
                   59,
-                  60
+                  60,
+                  61,
+                  62,
+                  63,
+                  64
                 ],
-                "connectionSamplesDropped": 0,
-                "calls": 8,
-                "syncMs": 457.7519669999965,
-                "readBytes": 730717551,
+                "connectionSamplesDropped": 5,
+                "calls": 13,
+                "syncMs": 455.5490670000054,
+                "readBytes": 1012813833,
                 "decodedJsonBytes": 0,
-                "sampledCalls": 8,
-                "unsampledCalls": 0,
-                "unavailableCalls": 0,
-                "failed": 0
-              },
-              {
-                "operation": "pipelines.get",
-                "reader": "state.prepare",
-                "connection": 0,
-                "connections": [
-                  53,
-                  54,
-                  55,
-                  56,
-                  57,
-                  58,
-                  59,
-                  60
-                ],
-                "connectionSamplesDropped": 0,
-                "calls": 8,
-                "syncMs": 12.923549000001003,
-                "readBytes": 621088,
-                "decodedJsonBytes": 0,
-                "sampledCalls": 8,
+                "sampledCalls": 13,
                 "unsampledCalls": 0,
                 "unavailableCalls": 0,
                 "failed": 0
@@ -339,35 +323,35 @@
                 "connection": 0,
                 "connections": [],
                 "connectionSamplesDropped": 0,
-                "calls": 8,
-                "syncMs": 114.79364100013481,
-                "readBytes": 3764,
+                "calls": 13,
+                "syncMs": 93.08562799988067,
+                "readBytes": 175539441,
                 "decodedJsonBytes": 0,
-                "sampledCalls": 8,
+                "sampledCalls": 13,
                 "unsampledCalls": 0,
                 "unavailableCalls": 0,
                 "failed": 0
               },
               {
                 "operation": "pipelines.get",
-                "reader": "state.close",
+                "reader": "state.prepare",
                 "connection": 0,
                 "connections": [
-                  53,
-                  54,
-                  55,
-                  56,
                   57,
                   58,
                   59,
-                  60
+                  60,
+                  61,
+                  62,
+                  63,
+                  64
                 ],
-                "connectionSamplesDropped": 0,
-                "calls": 8,
-                "syncMs": 5.724062999997841,
-                "readBytes": 78,
+                "connectionSamplesDropped": 5,
+                "calls": 13,
+                "syncMs": 13.069549999994706,
+                "readBytes": 77736,
                 "decodedJsonBytes": 0,
-                "sampledCalls": 8,
+                "sampledCalls": 13,
                 "unsampledCalls": 0,
                 "unavailableCalls": 0,
                 "failed": 0
@@ -377,21 +361,45 @@
                 "reader": "state.json",
                 "connection": 0,
                 "connections": [
-                  53,
-                  54,
-                  55,
-                  56,
                   57,
                   58,
                   59,
-                  60
+                  60,
+                  61,
+                  62,
+                  63,
+                  64
                 ],
-                "connectionSamplesDropped": 0,
-                "calls": 6368,
-                "syncMs": 184.3975059998702,
+                "connectionSamplesDropped": 3980,
+                "calls": 10348,
+                "syncMs": 186.37389300012,
                 "readBytes": 0,
-                "decodedJsonBytes": 720200816,
+                "decodedJsonBytes": 1170326326,
                 "sampledCalls": 0,
+                "unsampledCalls": 0,
+                "unavailableCalls": 0,
+                "failed": 0
+              },
+              {
+                "operation": "pipelines.get",
+                "reader": "state.close",
+                "connection": 0,
+                "connections": [
+                  57,
+                  58,
+                  59,
+                  60,
+                  61,
+                  62,
+                  63,
+                  64
+                ],
+                "connectionSamplesDropped": 5,
+                "calls": 13,
+                "syncMs": 5.613772999997309,
+                "readBytes": 0,
+                "decodedJsonBytes": 0,
+                "sampledCalls": 13,
                 "unsampledCalls": 0,
                 "unavailableCalls": 0,
                 "failed": 0
@@ -401,21 +409,21 @@
                 "reader": "state.exec",
                 "connection": 0,
                 "connections": [
-                  53,
-                  54,
-                  55,
-                  56,
                   57,
                   58,
                   59,
-                  60
+                  60,
+                  61,
+                  62,
+                  63,
+                  64
                 ],
-                "connectionSamplesDropped": 0,
-                "calls": 16,
-                "syncMs": 0.39601799999945797,
+                "connectionSamplesDropped": 10,
+                "calls": 26,
+                "syncMs": 0.16395900000134134,
                 "readBytes": 0,
                 "decodedJsonBytes": 0,
-                "sampledCalls": 16,
+                "sampledCalls": 26,
                 "unsampledCalls": 0,
                 "unavailableCalls": 0,
                 "failed": 0
@@ -424,8 +432,8 @@
             "operations": [
               {
                 "name": "pipelines.get",
-                "readBytes": 731342481,
-                "decodedJsonBytes": 720200816
+                "readBytes": 1188431010,
+                "decodedJsonBytes": 1170326326
               }
             ]
           }
@@ -434,41 +442,45 @@
     },
     {
       "name": "registry.snapshot",
-      "iterations": 1,
-      "rows": 8428,
-      "pauseMs": 958,
-      "attributedMs": 949.3797210000012,
-      "attributedFraction": 0.9910017964509407,
+      "iterations": 2,
+      "rows": 16856,
+      "pauseMs": 1363,
+      "attributedMs": 1363,
+      "attributedFraction": 1,
       "timings": [
         {
-          "disabledMs": 857.2668430000012,
-          "enabledMs": 864.2796330000019
+          "disabledMs": 701.219833000001,
+          "enabledMs": 654.582343
         },
         {
-          "enabledMs": 858.9522649999999,
-          "disabledMs": 818.0796410000003
+          "enabledMs": 634.074466,
+          "disabledMs": 647.7271119999987
         },
         {
-          "disabledMs": 877.8737540000002,
-          "enabledMs": 977.6118129999995
+          "disabledMs": 602.1805789999999,
+          "enabledMs": 662.3473580000009
         }
       ],
       "gaps": [
         {
-          "gapMs": 958,
+          "gapMs": 1363,
           "reads": {
-            "source": "linux-main-thread-rchar",
+            "source": "linux-thread-rchar",
             "byteCoverage": "sampled-exclusive",
             "sampleLimit": {
               "calls": 32,
               "windowMs": 10
             },
-            "windowMs": 967.9369750000005,
-            "namedSyncMs": 949.3797210000012,
-            "attributedFraction": 0.9808280348005103,
-            "readBytes": 913935367,
-            "decodedJsonBytes": 212739784,
-            "sampledCalls": 49,
+            "windowMs": 1373.1957939999993,
+            "namedSyncMs": 1368.0649400000002,
+            "attributedFraction": 0.9962635670583775,
+            "observerMs": 4.305999999999997,
+            "samplerDegraded": false,
+            "workerBatches": 0,
+            "workerTransportDropped": 0,
+            "readBytes": 1827871631,
+            "decodedJsonBytes": 425479568,
+            "sampledCalls": 98,
             "unsampledCalls": 0,
             "unavailableCalls": 0,
             "dropped": 0,
@@ -479,16 +491,16 @@
               {
                 "operation": "registry.prepare",
                 "reader": "registry.deliveryOperationOwners.all",
-                "connection": 13,
+                "connection": 9,
                 "connections": [
-                  13
+                  9
                 ],
                 "connectionSamplesDropped": 0,
-                "calls": 1,
-                "syncMs": 245.80049199999848,
-                "readBytes": 460592138,
+                "calls": 2,
+                "syncMs": 395.0152110000017,
+                "readBytes": 927786481,
                 "decodedJsonBytes": 0,
-                "sampledCalls": 1,
+                "sampledCalls": 2,
                 "unsampledCalls": 0,
                 "unavailableCalls": 0,
                 "failed": 0
@@ -496,16 +508,16 @@
               {
                 "operation": "registry.prepare",
                 "reader": "registry.receipts.all",
-                "connection": 13,
+                "connection": 9,
                 "connections": [
-                  13
+                  9
                 ],
                 "connectionSamplesDropped": 0,
-                "calls": 1,
-                "syncMs": 216.3583060000019,
-                "readBytes": 328111898,
+                "calls": 2,
+                "syncMs": 263.7413319999978,
+                "readBytes": 645860810,
                 "decodedJsonBytes": 0,
-                "sampledCalls": 1,
+                "sampledCalls": 2,
                 "unsampledCalls": 0,
                 "unavailableCalls": 0,
                 "failed": 0
@@ -513,16 +525,16 @@
               {
                 "operation": "registry.prepare",
                 "reader": "registry.conversations.all",
-                "connection": 13,
+                "connection": 9,
                 "connections": [
-                  13
+                  9
                 ],
                 "connectionSamplesDropped": 0,
-                "calls": 1,
-                "syncMs": 52.621398999999656,
-                "readBytes": 56997104,
+                "calls": 2,
+                "syncMs": 86.92833899999823,
+                "readBytes": 102853683,
                 "decodedJsonBytes": 0,
-                "sampledCalls": 1,
+                "sampledCalls": 2,
                 "unsampledCalls": 0,
                 "unavailableCalls": 0,
                 "failed": 0
@@ -530,50 +542,16 @@
               {
                 "operation": "registry.prepare",
                 "reader": "registry.entries.all",
-                "connection": 13,
+                "connection": 9,
                 "connections": [
-                  13
+                  9
                 ],
                 "connectionSamplesDropped": 0,
-                "calls": 1,
-                "syncMs": 26.35026099999959,
-                "readBytes": 48528176,
+                "calls": 2,
+                "syncMs": 47.99561099999846,
+                "readBytes": 89450726,
                 "decodedJsonBytes": 0,
-                "sampledCalls": 1,
-                "unsampledCalls": 0,
-                "unavailableCalls": 0,
-                "failed": 0
-              },
-              {
-                "operation": "registry.prepare",
-                "reader": "registry.all",
-                "connection": 13,
-                "connections": [
-                  13
-                ],
-                "connectionSamplesDropped": 0,
-                "calls": 7,
-                "syncMs": 19.36347999999998,
-                "readBytes": 14407899,
-                "decodedJsonBytes": 0,
-                "sampledCalls": 7,
-                "unsampledCalls": 0,
-                "unavailableCalls": 0,
-                "failed": 0
-              },
-              {
-                "operation": "registry.prepare",
-                "reader": "registry.memberships.all",
-                "connection": 13,
-                "connections": [
-                  13
-                ],
-                "connectionSamplesDropped": 0,
-                "calls": 1,
-                "syncMs": 5.949720999997226,
-                "readBytes": 5272800,
-                "decodedJsonBytes": 0,
-                "sampledCalls": 1,
+                "sampledCalls": 2,
                 "unsampledCalls": 0,
                 "unavailableCalls": 0,
                 "failed": 0
@@ -584,28 +562,45 @@
                 "connection": 0,
                 "connections": [],
                 "connectionSamplesDropped": 0,
-                "calls": 1,
-                "syncMs": 222.34836100035682,
-                "readBytes": 17160,
+                "calls": 2,
+                "syncMs": 295.21690900022077,
+                "readBytes": 43321049,
                 "decodedJsonBytes": 0,
-                "sampledCalls": 1,
+                "sampledCalls": 2,
                 "unsampledCalls": 0,
                 "unavailableCalls": 0,
                 "failed": 0
               },
               {
                 "operation": "registry.prepare",
-                "reader": "registry.get",
-                "connection": 13,
+                "reader": "registry.all",
+                "connection": 9,
                 "connections": [
-                  13
+                  9
                 ],
                 "connectionSamplesDropped": 0,
-                "calls": 11,
-                "syncMs": 0.12028900000223075,
-                "readBytes": 8192,
+                "calls": 14,
+                "syncMs": 24.467579000003752,
+                "readBytes": 13326511,
                 "decodedJsonBytes": 0,
-                "sampledCalls": 11,
+                "sampledCalls": 14,
+                "unsampledCalls": 0,
+                "unavailableCalls": 0,
+                "failed": 0
+              },
+              {
+                "operation": "registry.prepare",
+                "reader": "registry.memberships.all",
+                "connection": 9,
+                "connections": [
+                  9
+                ],
+                "connectionSamplesDropped": 0,
+                "calls": 2,
+                "syncMs": 9.675683999998,
+                "readBytes": 5272371,
+                "decodedJsonBytes": 0,
+                "sampledCalls": 2,
                 "unsampledCalls": 0,
                 "unavailableCalls": 0,
                 "failed": 0
@@ -613,15 +608,15 @@
               {
                 "operation": "registry.prepare",
                 "reader": "registry.json",
-                "connection": 13,
+                "connection": 9,
                 "connections": [
-                  13
+                  9
                 ],
                 "connectionSamplesDropped": 0,
-                "calls": 53306,
-                "syncMs": 159.93870499962577,
+                "calls": 106612,
+                "syncMs": 244.64267499978814,
                 "readBytes": 0,
-                "decodedJsonBytes": 212739784,
+                "decodedJsonBytes": 425479568,
                 "sampledCalls": 0,
                 "unsampledCalls": 0,
                 "unavailableCalls": 0,
@@ -630,16 +625,33 @@
               {
                 "operation": "registry.prepare",
                 "reader": "registry.prepare",
-                "connection": 13,
+                "connection": 9,
                 "connections": [
-                  13
+                  9
                 ],
                 "connectionSamplesDropped": 0,
-                "calls": 23,
-                "syncMs": 0.4941320000179985,
+                "calls": 46,
+                "syncMs": 0.23976800000309595,
                 "readBytes": 0,
                 "decodedJsonBytes": 0,
-                "sampledCalls": 23,
+                "sampledCalls": 46,
+                "unsampledCalls": 0,
+                "unavailableCalls": 0,
+                "failed": 0
+              },
+              {
+                "operation": "registry.prepare",
+                "reader": "registry.get",
+                "connection": 9,
+                "connections": [
+                  9
+                ],
+                "connectionSamplesDropped": 0,
+                "calls": 22,
+                "syncMs": 0.1042899999920337,
+                "readBytes": 0,
+                "decodedJsonBytes": 0,
+                "sampledCalls": 22,
                 "unsampledCalls": 0,
                 "unavailableCalls": 0,
                 "failed": 0
@@ -647,16 +659,16 @@
               {
                 "operation": "registry.prepare",
                 "reader": "registry.exec",
-                "connection": 13,
+                "connection": 9,
                 "connections": [
-                  13
+                  9
                 ],
                 "connectionSamplesDropped": 0,
-                "calls": 2,
-                "syncMs": 0.03457500000149594,
+                "calls": 4,
+                "syncMs": 0.037541999998211395,
                 "readBytes": 0,
                 "decodedJsonBytes": 0,
-                "sampledCalls": 2,
+                "sampledCalls": 4,
                 "unsampledCalls": 0,
                 "unavailableCalls": 0,
                 "failed": 0
@@ -665,8 +677,8 @@
             "operations": [
               {
                 "name": "registry.prepare",
-                "readBytes": 913935367,
-                "decodedJsonBytes": 212739784
+                "readBytes": 1827871631,
+                "decodedJsonBytes": 425479568
               }
             ]
           }
@@ -675,42 +687,46 @@
     },
     {
       "name": "deliveryOperationOwners",
-      "iterations": 1,
-      "rows": 14218,
-      "pauseMs": 754,
-      "attributedMs": 752.5280349999994,
-      "attributedFraction": 0.9980477917771875,
+      "iterations": 2,
+      "rows": 28436,
+      "pauseMs": 1122,
+      "attributedMs": 1112.2707950000004,
+      "attributedFraction": 0.9913286942959005,
       "timings": [
         {
-          "disabledMs": 633.7921139999999,
-          "enabledMs": 681.0740890000015
+          "disabledMs": 609.3247909999991,
+          "enabledMs": 560.9121620000005
         },
         {
-          "enabledMs": 710.8590860000004,
-          "disabledMs": 776.6578950000003
+          "enabledMs": 507.2579749999968,
+          "disabledMs": 533.8922210000019
         },
         {
-          "disabledMs": 952.1331649999993,
-          "enabledMs": 949.7098069999993
+          "disabledMs": 531.2737940000006,
+          "enabledMs": 596.4189100000003
         }
       ],
       "gaps": [
         {
-          "gapMs": 754,
+          "gapMs": 1122,
           "reads": {
-            "source": "linux-main-thread-rchar",
+            "source": "linux-thread-rchar",
             "byteCoverage": "sampled-exclusive",
             "sampleLimit": {
               "calls": 32,
               "windowMs": 10
             },
-            "windowMs": 764.4720540000017,
-            "namedSyncMs": 752.5280349999994,
-            "attributedFraction": 0.9843761208307004,
-            "readBytes": 486700223,
-            "decodedJsonBytes": 45349560,
-            "sampledCalls": 1466,
-            "unsampledCalls": 22998,
+            "windowMs": 1131.734422999998,
+            "namedSyncMs": 1112.2707950000004,
+            "attributedFraction": 0.9828019475201579,
+            "observerMs": 3.297000000000004,
+            "samplerDegraded": false,
+            "workerBatches": 0,
+            "workerTransportDropped": 0,
+            "readBytes": 307156955,
+            "decodedJsonBytes": 90699120,
+            "sampledCalls": 2446,
+            "unsampledCalls": 46482,
             "unavailableCalls": 0,
             "dropped": 0,
             "droppedMs": 0,
@@ -719,188 +735,73 @@
             "top": [
               {
                 "operation": "registry.prepare",
-                "reader": "registry.all",
-                "connection": 67,
+                "reader": "registry.deliveryOperationOwners.all",
+                "connection": 0,
                 "connections": [
-                  67
+                  76,
+                  77
                 ],
                 "connectionSamplesDropped": 0,
-                "calls": 1031,
-                "syncMs": 278.34618399999454,
-                "readBytes": 310236790,
+                "calls": 66,
+                "syncMs": 42.58680999999342,
+                "readBytes": 107109479,
                 "decodedJsonBytes": 0,
-                "sampledCalls": 367,
-                "unsampledCalls": 664,
+                "sampledCalls": 64,
+                "unsampledCalls": 2,
+                "unavailableCalls": 0,
+                "failed": 0
+              },
+              {
+                "operation": "registry.prepare",
+                "reader": "registry.all",
+                "connection": 0,
+                "connections": [
+                  76,
+                  77
+                ],
+                "connectionSamplesDropped": 0,
+                "calls": 2062,
+                "syncMs": 424.90375000002314,
+                "readBytes": 64752193,
+                "decodedJsonBytes": 0,
+                "sampledCalls": 592,
+                "unsampledCalls": 1470,
                 "unavailableCalls": 0,
                 "failed": 0
               },
               {
                 "operation": "registry.prepare",
                 "reader": "registry.receipts.all",
-                "connection": 67,
+                "connection": 0,
                 "connections": [
-                  67
+                  76,
+                  77
                 ],
                 "connectionSamplesDropped": 0,
-                "calls": 2,
-                "syncMs": 28.246055999999953,
-                "readBytes": 92024814,
+                "calls": 4,
+                "syncMs": 45.39030199999979,
+                "readBytes": 53030912,
                 "decodedJsonBytes": 0,
                 "sampledCalls": 2,
-                "unsampledCalls": 0,
+                "unsampledCalls": 2,
                 "unavailableCalls": 0,
                 "failed": 0
               },
               {
                 "operation": "registry.prepare",
                 "reader": "registry.conversations.all",
-                "connection": 67,
+                "connection": 0,
                 "connections": [
-                  67
+                  76,
+                  77
                 ],
                 "connectionSamplesDropped": 0,
-                "calls": 983,
-                "syncMs": 27.30895400008012,
-                "readBytes": 34598951,
+                "calls": 1966,
+                "syncMs": 42.70712699990327,
+                "readBytes": 47546428,
                 "decodedJsonBytes": 0,
-                "sampledCalls": 37,
-                "unsampledCalls": 946,
-                "unavailableCalls": 0,
-                "failed": 0
-              },
-              {
-                "operation": "registry.prepare",
-                "reader": "registry.deliveryOperationOwners.all",
-                "connection": 67,
-                "connections": [
-                  67
-                ],
-                "connectionSamplesDropped": 0,
-                "calls": 33,
-                "syncMs": 37.34165099999154,
-                "readBytes": 33543362,
-                "decodedJsonBytes": 0,
-                "sampledCalls": 33,
-                "unsampledCalls": 0,
-                "unavailableCalls": 0,
-                "failed": 0
-              },
-              {
-                "operation": "registry.prepare",
-                "reader": "registry.entries.all",
-                "connection": 67,
-                "connections": [
-                  67
-                ],
-                "connectionSamplesDropped": 0,
-                "calls": 2,
-                "syncMs": 10.713330999999016,
-                "readBytes": 12480551,
-                "decodedJsonBytes": 0,
-                "sampledCalls": 2,
-                "unsampledCalls": 0,
-                "unavailableCalls": 0,
-                "failed": 0
-              },
-              {
-                "operation": "registry.prepare",
-                "reader": "registry.memberships.all",
-                "connection": 67,
-                "connections": [
-                  67
-                ],
-                "connectionSamplesDropped": 0,
-                "calls": 2,
-                "syncMs": 2.392606999997952,
-                "readBytes": 2781184,
-                "decodedJsonBytes": 0,
-                "sampledCalls": 2,
-                "unsampledCalls": 0,
-                "unavailableCalls": 0,
-                "failed": 0
-              },
-              {
-                "operation": "registry.prepare",
-                "reader": "registry.get",
-                "connection": 67,
-                "connections": [
-                  67
-                ],
-                "connectionSamplesDropped": 0,
-                "calls": 5767,
-                "syncMs": 19.687590000077762,
-                "readBytes": 454669,
-                "decodedJsonBytes": 0,
-                "sampledCalls": 177,
-                "unsampledCalls": 5590,
-                "unavailableCalls": 0,
-                "failed": 0
-              },
-              {
-                "operation": "registry.prepare",
-                "reader": "registry.deliveryOperationOwners.get",
-                "connection": 67,
-                "connections": [
-                  67
-                ],
-                "connectionSamplesDropped": 0,
-                "calls": 1925,
-                "syncMs": 16.511138000074425,
-                "readBytes": 317560,
-                "decodedJsonBytes": 0,
-                "sampledCalls": 40,
-                "unsampledCalls": 1885,
-                "unavailableCalls": 0,
-                "failed": 0
-              },
-              {
-                "operation": "registry.prepare",
-                "reader": "registry.receipts.get",
-                "connection": 67,
-                "connections": [
-                  67
-                ],
-                "connectionSamplesDropped": 0,
-                "calls": 591,
-                "syncMs": 4.8331290000569425,
-                "readBytes": 167917,
-                "decodedJsonBytes": 0,
-                "sampledCalls": 12,
-                "unsampledCalls": 579,
-                "unavailableCalls": 0,
-                "failed": 0
-              },
-              {
-                "operation": "registry.prepare",
-                "reader": "registry.conversations.get",
-                "connection": 67,
-                "connections": [
-                  67
-                ],
-                "connectionSamplesDropped": 0,
-                "calls": 1893,
-                "syncMs": 5.638407000074949,
-                "readBytes": 61440,
-                "decodedJsonBytes": 0,
-                "sampledCalls": 58,
-                "unsampledCalls": 1835,
-                "unavailableCalls": 0,
-                "failed": 0
-              },
-              {
-                "operation": "registry.prepare",
-                "reader": "registry.prepare",
-                "connection": 67,
-                "connections": [
-                  67
-                ],
-                "connectionSamplesDropped": 0,
-                "calls": 12229,
-                "syncMs": 13.352812000110134,
-                "readBytes": 32846,
-                "decodedJsonBytes": 0,
-                "sampledCalls": 730,
-                "unsampledCalls": 11499,
+                "sampledCalls": 69,
+                "unsampledCalls": 1897,
                 "unavailableCalls": 0,
                 "failed": 0
               },
@@ -910,12 +811,48 @@
                 "connection": 0,
                 "connections": [],
                 "connectionSamplesDropped": 0,
-                "calls": 1,
-                "syncMs": 8.157397999999375,
-                "readBytes": 139,
+                "calls": 2,
+                "syncMs": 12.044374000008247,
+                "readBytes": 27721884,
                 "decodedJsonBytes": 0,
-                "sampledCalls": 1,
+                "sampledCalls": 2,
                 "unsampledCalls": 0,
+                "unavailableCalls": 0,
+                "failed": 0
+              },
+              {
+                "operation": "registry.prepare",
+                "reader": "registry.entries.all",
+                "connection": 0,
+                "connections": [
+                  76,
+                  77
+                ],
+                "connectionSamplesDropped": 0,
+                "calls": 4,
+                "syncMs": 13.50121399999989,
+                "readBytes": 5230631,
+                "decodedJsonBytes": 0,
+                "sampledCalls": 2,
+                "unsampledCalls": 2,
+                "unavailableCalls": 0,
+                "failed": 0
+              },
+              {
+                "operation": "registry.prepare",
+                "reader": "registry.prepare",
+                "connection": 0,
+                "connections": [
+                  76,
+                  77
+                ],
+                "connectionSamplesDropped": 0,
+                "calls": 24458,
+                "syncMs": 12.886577000255784,
+                "readBytes": 1765428,
+                "decodedJsonBytes": 0,
+                "sampledCalls": 1218,
+                "unsampledCalls": 23240,
                 "unavailableCalls": 0,
                 "failed": 0
               },
@@ -925,8 +862,8 @@
                 "connection": 0,
                 "connections": [],
                 "connectionSamplesDropped": 0,
-                "calls": 1,
-                "syncMs": 257.65244799974244,
+                "calls": 2,
+                "syncMs": 372.1381789987281,
                 "readBytes": 0,
                 "decodedJsonBytes": 0,
                 "sampledCalls": 0,
@@ -937,15 +874,16 @@
               {
                 "operation": "registry.prepare",
                 "reader": "registry.json",
-                "connection": 67,
+                "connection": 0,
                 "connections": [
-                  67
+                  76,
+                  77
                 ],
                 "connectionSamplesDropped": 0,
-                "calls": 40660,
-                "syncMs": 41.9458749998048,
+                "calls": 81320,
+                "syncMs": 64.30552400082888,
                 "readBytes": 0,
-                "decodedJsonBytes": 45349560,
+                "decodedJsonBytes": 90699120,
                 "sampledCalls": 0,
                 "unsampledCalls": 0,
                 "unavailableCalls": 0,
@@ -953,32 +891,126 @@
               },
               {
                 "operation": "registry.prepare",
-                "reader": "registry.close",
-                "connection": 67,
+                "reader": "registry.get",
+                "connection": 0,
                 "connections": [
-                  67
+                  76,
+                  77
                 ],
                 "connectionSamplesDropped": 0,
-                "calls": 1,
-                "syncMs": 0.25493899999855785,
+                "calls": 11534,
+                "syncMs": 33.26665300014429,
                 "readBytes": 0,
                 "decodedJsonBytes": 0,
-                "sampledCalls": 1,
+                "sampledCalls": 304,
+                "unsampledCalls": 11230,
+                "unavailableCalls": 0,
+                "failed": 0
+              },
+              {
+                "operation": "registry.prepare",
+                "reader": "registry.deliveryOperationOwners.get",
+                "connection": 0,
+                "connections": [
+                  76,
+                  77
+                ],
+                "connectionSamplesDropped": 0,
+                "calls": 3850,
+                "syncMs": 24.009725000010803,
+                "readBytes": 0,
+                "decodedJsonBytes": 0,
+                "sampledCalls": 49,
+                "unsampledCalls": 3801,
+                "unavailableCalls": 0,
+                "failed": 0
+              },
+              {
+                "operation": "registry.prepare",
+                "reader": "registry.conversations.get",
+                "connection": 0,
+                "connections": [
+                  76,
+                  77
+                ],
+                "connectionSamplesDropped": 0,
+                "calls": 3786,
+                "syncMs": 11.579776000176935,
+                "readBytes": 0,
+                "decodedJsonBytes": 0,
+                "sampledCalls": 107,
+                "unsampledCalls": 3679,
+                "unavailableCalls": 0,
+                "failed": 0
+              },
+              {
+                "operation": "registry.prepare",
+                "reader": "registry.receipts.get",
+                "connection": 0,
+                "connections": [
+                  76,
+                  77
+                ],
+                "connectionSamplesDropped": 0,
+                "calls": 1182,
+                "syncMs": 8.494142999923497,
+                "readBytes": 0,
+                "decodedJsonBytes": 0,
+                "sampledCalls": 25,
+                "unsampledCalls": 1157,
+                "unavailableCalls": 0,
+                "failed": 0
+              },
+              {
+                "operation": "registry.prepare",
+                "reader": "registry.memberships.all",
+                "connection": 0,
+                "connections": [
+                  76,
+                  77
+                ],
+                "connectionSamplesDropped": 0,
+                "calls": 4,
+                "syncMs": 4.05093300000226,
+                "readBytes": 0,
+                "decodedJsonBytes": 0,
+                "sampledCalls": 4,
                 "unsampledCalls": 0,
                 "unavailableCalls": 0,
                 "failed": 0
               },
               {
                 "operation": "registry.prepare",
-                "reader": "registry.headers",
+                "reader": "registry.close",
                 "connection": 0,
-                "connections": [],
+                "connections": [
+                  76,
+                  77
+                ],
                 "connectionSamplesDropped": 0,
-                "calls": 1,
-                "syncMs": 0.07459199999721022,
+                "calls": 2,
+                "syncMs": 0.3317390000047453,
                 "readBytes": 0,
                 "decodedJsonBytes": 0,
-                "sampledCalls": 1,
+                "sampledCalls": 2,
+                "unsampledCalls": 0,
+                "unavailableCalls": 0,
+                "failed": 0
+              },
+              {
+                "operation": "registry.prepare",
+                "reader": "registry.exec",
+                "connection": 0,
+                "connections": [
+                  76,
+                  77
+                ],
+                "connectionSamplesDropped": 0,
+                "calls": 6,
+                "syncMs": 0.040684999996301485,
+                "readBytes": 0,
+                "decodedJsonBytes": 0,
+                "sampledCalls": 6,
                 "unsampledCalls": 0,
                 "unavailableCalls": 0,
                 "failed": 0
@@ -987,8 +1019,8 @@
             "operations": [
               {
                 "name": "registry.prepare",
-                "readBytes": 486700223,
-                "decodedJsonBytes": 45349560
+                "readBytes": 307156955,
+                "decodedJsonBytes": 90699120
               }
             ]
           }

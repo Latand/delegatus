@@ -1,5 +1,7 @@
-import { expect, test } from "bun:test";
-import { createReadAttribution } from "./readAttribution";
+import { expect, spyOn, test } from "bun:test";
+import fs from "node:fs";
+import { Worker } from "node:worker_threads";
+import { attachReadAttributionWorker, createReadAttribution, createReadCounterSamplerProbe, readAttribution, startReadAttributionSampler } from "./readAttribution";
 
 test("nested readers have exclusive time and bytes; observer traffic is removed", () => {
   let at = 0, bytes = 0;
@@ -86,4 +88,90 @@ test("synchronous site siblings name child SQL and preserve exclusive bytes thro
   expect(report.namedSyncMs).toBe(800);
   expect(report.readBytes).toBe(4096);
   expect(report.operations).toEqual([{ name: "registry.snapshot", readBytes: 4096, decodedJsonBytes: 16 }]);
+});
+
+test("a slow counter source cannot be charged to empty application work", () => {
+  let at = 0;
+  let calls = 0;
+  const recorder = createReadAttribution(() => at, () => {
+    calls++;
+    at += 20;
+    return { bytes: calls, observerBytes: 0, observerMs: 20, degraded: true };
+  });
+  for (let i = 0; i < 20; i++) recorder.run("files.get", () => {});
+  const report = recorder.snapshot(400);
+  expect(report.namedSyncMs).toBe(0);
+  expect(report.top.every(row => row.syncMs === 0)).toBe(true);
+  expect(report.observerMs).toBeGreaterThan(0);
+  expect(report.samplerDegraded).toBe(true);
+});
+
+test("proc counter reads stay off the serving thread", () => {
+  startReadAttributionSampler();
+  let procReads = 0;
+  const original = fs.readFileSync;
+  const read = spyOn(fs, "readFileSync").mockImplementation(((...args: Parameters<typeof fs.readFileSync>) => {
+    if (String(args[0]).includes("/proc/") && String(args[0]).endsWith("/io")) {
+      procReads++;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+    }
+    return original.apply(fs, args as never);
+  }) as typeof fs.readFileSync);
+  try {
+    const recorder = createReadAttribution();
+    for (let i = 0; i < 20; i++) recorder.run("files.get", () => {});
+    expect(procReads).toBe(0);
+    expect(recorder.snapshot(1).namedSyncMs).toBeLessThan(1);
+  } finally { read.mockRestore(); }
+});
+
+test("worker event and parent retention overflow are reported", () => {
+  const recorder = createReadAttribution(() => 0, () => null);
+  recorder.ingestWorker("bounded-worker", { threadId: 7, dropped: 3, events: Array.from({ length: 140 }, (_, index) => ({
+    operation: "files.get", reader: `reader-${index}`, connection: index + 1, syncMs: 1, readBytes: 4, decodedJsonBytes: 2,
+    observerMs: 0, samplerDegraded: false, sampledCalls: 1, unsampledCalls: 0, unavailableCalls: 0, failed: 0,
+  })) });
+  const report = recorder.snapshot(1);
+  expect(report.workerBatches).toBe(1);
+  expect(report.workerTransportDropped).toBe(15);
+  expect(report.dropped).toBe(12);
+  expect(report.readBytes).toBe(512);
+});
+
+test("a degraded proc source is isolated and stops sampling", async () => {
+  const probe = createReadCounterSamplerProbe(20);
+  let timerFired = false;
+  setTimeout(() => { timerFired = true; }, 0);
+  try {
+    const deadline = Date.now() + 1000;
+    while (!probe.snapshot().degraded && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 5));
+    await new Promise(resolve => setTimeout(resolve, 25));
+    expect(timerFired).toBe(true);
+    expect(probe.snapshot()).toMatchObject({ degraded: true, samples: 1 });
+    expect(probe.snapshot().observerMs).toBeGreaterThanOrEqual(20);
+  } finally { await probe.stop(); }
+});
+
+test("worker transport caps pending batches and reports dropped observations", async () => {
+  readAttribution.clear();
+  const worker = new Worker(`
+    const { parentPort, workerData } = require('node:worker_threads');
+    const { readAttribution } = require(workerData.modulePath);
+    let acknowledgements = 0;
+    parentPort.on('message', message => {
+      if (message?.type === 'delegatus-read-attribution-ack' && ++acknowledgements === 1) parentPort.close();
+    });
+    for (let index = 0; index < 300; index++) readAttribution.sync('reader-' + index, () => {}, 0, 0, false);
+  `, { eval: true, workerData: { modulePath: `${import.meta.dir}/readAttribution.ts` } });
+  const detach = attachReadAttributionWorker(worker, "overflow-probe");
+  try {
+    await new Promise<void>((resolve, reject) => {
+      worker.once("error", reject);
+      worker.once("exit", code => code === 0 ? resolve() : reject(new Error(`worker exited ${code}`)));
+    });
+    const report = readAttribution.snapshot(1);
+    expect(report.workerBatches).toBe(1);
+    expect(report.workerTransportDropped).toBeGreaterThanOrEqual(44);
+    expect(report.dropped).toBeGreaterThan(0);
+  } finally { detach(); await worker.terminate(); readAttribution.clear(); }
 });

@@ -7,7 +7,7 @@ import { initializeStateCollections, readStateCollectionRows } from "../src/lib/
 import { buildRegistryPerformanceDataset, REGISTRY_PERFORMANCE_SHAPE, scaledRegistryPerformanceShape } from "../src/lib/agent/registryPerformanceDataset";
 import { normalizeRegistry } from "../src/lib/agent/registry";
 import { SqliteAgentRegistryStore } from "../src/lib/agent/sqliteRegistryStore";
-import { readAttribution } from "../src/lib/readAttribution";
+import { readAttribution, startReadAttributionSampler } from "../src/lib/readAttribution";
 import { performanceSpans } from "../src/lib/performanceSpans";
 import { viewerLoopMonitor, withViewerOperation } from "../src/lib/viewerLoopMonitor";
 import { isOperatorOwnedDirectory } from "../src/lib/stateOwnership";
@@ -45,6 +45,8 @@ const cases = [
   } },
 ];
 const reports: unknown[] = [], gaps: Array<{ gapMs: number; reads: ReturnType<typeof readAttribution.snapshot> }> = [];
+startReadAttributionSampler();
+await Bun.sleep(30);
 const restore = viewerLoopMonitor.setLogSink(line => {
   if (line.startsWith("[viewer loop-gap] ")) gaps.push(JSON.parse(line.slice("[viewer loop-gap] ".length)));
 });
