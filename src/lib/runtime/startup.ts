@@ -2685,7 +2685,15 @@ async function adoptStructuredHostsPass(
         } catch (error) {
           try {
             assertActive();
-            await rowRetries.failed(key, startupRowReason(error), Date.now(), assertActive);
+            const failed = await rowRetries.failed(key, startupRowReason(error), Date.now(), assertActive);
+            if (failed.quarantined && !failed.resolved && failed.noticePending !== false) {
+              try {
+                await startupRowNotice(entry, failed, assertActive);
+                await rowRetries.notified(failed, assertActive);
+              } catch {
+                console.error("[structured hosts] quarantine card publication deferred", { key });
+              }
+            }
           } catch { console.error("[structured hosts] row retry could not be recorded", { key }); }
           try { assertActive(); } catch { return; }
           rowRetries.schedule(key, schedule, retry);
@@ -2693,7 +2701,14 @@ async function adoptStructuredHostsPass(
       };
       rowRetries.schedule(key, schedule, retry);
     }
-    if (rowRetry) return adoptedHosts;
+    if (rowRetry) {
+      if (deferredHostKeys.size > 0 || fencedReceipts.length > 0 || held.size > 0 || retryHostKeys.size > 0) {
+        rememberDeferredStructuredStartup(
+          dependencies, registry, [...deferredHostKeys], pipelineEvidence.deferred, fencedReceipts.length, held, admitHeldPendingWork, retryHostKeys,
+        );
+      }
+      return adoptedHosts;
+    }
     if (deferredHostKeys.size > 0 || fencedReceipts.length > 0 || held.size > 0 || retryHostKeys.size > 0) {
       /* The rows are retained exactly as a retry would retain them: the next
          pass continues through the hosts this one published. The pass itself
@@ -2767,7 +2782,7 @@ function rememberDeferredStructuredStartup(
     : DEFERRED_STARTUP_REPROBE_INITIAL_MS;
   const state: DeferredStructuredStartup = {
     hostKeys, conversationIds: new Set(conversationIds), fencedReceipts, held, retryHostKeys,
-    capAdmitted: sameEvidence && (capAdmitted || previous.capAdmitted), message, delayMs,
+    capAdmitted: capAdmitted || (sameEvidence && previous.capAdmitted), message, delayMs,
   };
   deferredStartup = state;
   /* Past the cap, pending work takes a row that still cannot be decided, on

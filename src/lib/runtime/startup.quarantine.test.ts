@@ -14,6 +14,8 @@ import { RuntimeJournal } from "@/runtime-host/journal";
 import { type RuntimeHostClient } from "./client";
 import { adoptStructuredHostsAtStartup, structuredStartupDeferral, type StructuredStartupDependencies } from "./startup";
 import { bindStructuredDeliveryQueue } from "./structuredDeliveryController";
+import { enqueueStructuredMessage } from "./structuredMessageDelivery";
+import { restartCutEvidenceHolds } from "./restartCutHold";
 
 /* #2761: a successor's startup pass can reach a live worker's row while the
    incumbent still owns it, skip it, and find it released by the incumbent's
@@ -221,6 +223,151 @@ test("a row retry preserves another pipeline row's existing startup deferral", a
     await adoptStructuredHostsAtStartup(dependencies);
     expect(structuredStartupDeferral()?.hostKeys).toEqual([`codex:${fenced}`]);
     expect(registry.readOnlySnapshot().entries[`codex:${fenced}`]!.claimEpoch).toBe(3);
+  } finally {
+    now.mockRestore(); await bindStructuredDeliveryQueue([], { registry, client: null }); journal.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("an early row retry error publishes its quarantine reason when the third attempt fails", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-startup-quarantine-early-error-"));
+  const registry = new AgentRegistry(path.join(directory, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
+  const sessionId = "25300000-0000-0000-0000-000000000078";
+  const key = `codex:${sessionId}`;
+  passedOverRow(registry, directory, sessionId, "unhosted", "handoff");
+  let failRead = false;
+  const client = runtimeJournalClient(journal);
+  const originalRead = client.readSession;
+  if (!originalRead) throw new Error("fixture runtime client has no session reader");
+  let reads = 0;
+  let refreshes = 0;
+  client.readSession = async (...args) => {
+    reads++;
+    if (failRead) throw new Error("runtime session is temporarily unreadable");
+    return originalRead(...args);
+  };
+  let clock = Date.parse("2026-10-16T12:00:00Z");
+  const now = spyOn(Date, "now").mockImplementation(() => clock);
+  const scheduled: { callback: () => void; delay: number }[] = [];
+  const logs = spyOn(console, "error");
+  const dependencies: StructuredStartupDependencies = {
+    registry, client, orchestratorSeats: () => [], resolveCodexOwner: () => null,
+    resolveClaudeOwner: () => null, adoptClaude: async () => [],
+    refreshTranscriptState: async () => { refreshes++; }, schedule: (callback, delay) => {
+      scheduled.push({ callback, delay }); return {};
+    }, pipelineEvidence: () => ({ settled: new Set(), deferred: new Set() }),
+  };
+  const retryRecord = () => {
+    try {
+      return fs.readdirSync(`${registry.filename}.startup-retries`).filter(file => file.endsWith(".json"))
+        .map(file => JSON.parse(fs.readFileSync(path.join(`${registry.filename}.startup-retries`, file), "utf8")))
+        .find(row => row.key === key);
+    } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined; throw error; }
+  };
+  const fireNext = async (attempts: number) => {
+    const task = scheduled.shift(); expect(task).toBeDefined();
+    clock += task!.delay; task!.callback();
+    const deadline = performance.now() + 3000;
+    while ((retryRecord()?.attempts !== attempts || scheduled.length === 0
+      || (attempts >= 3 && retryRecord()?.noticePending !== false)) && performance.now() < deadline) await Bun.sleep(1);
+    expect(retryRecord()?.attempts).toBe(attempts);
+  };
+  try {
+    await adoptStructuredHostsAtStartup(dependencies);
+    expect(retryRecord()).toMatchObject({ attempts: 1, quarantined: false });
+    const row = registry.readOnlySnapshot().entries[key]!;
+    registry.upsert({ ...row, status: "live", claimOwner: null, structuredHost: { ...row.structuredHost!, process: null } });
+    failRead = true;
+    await fireNext(2);
+    await fireNext(3);
+    const retry = retryRecord();
+    expect(retry).toMatchObject({ attempts: 3, quarantined: true, reason: "adoption-failed", noticePending: false });
+    expect(reads).toBeGreaterThan(0);
+    const { loadTasks } = await import("@/lib/tasks/store");
+    const { statePath } = await import("@/lib/configDir");
+    const card = loadTasks(statePath("tasks.json")).filter(task => task.text.includes(key));
+    expect(card).toHaveLength(1);
+    expect(card[0]!.text).toContain("adoption-failed");
+    expect(refreshes).toBe(1);
+    expect(logs.mock.calls.some(([message, detail]) => String(message).includes("row quarantined")
+      && (detail as { key?: string } | undefined)?.key === key)).toBe(true);
+  } finally {
+    logs.mockRestore(); now.mockRestore();
+    await bindStructuredDeliveryQueue([], { registry, client: null }); journal.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("an unreadable restart-cut row installs capped pending-work admission on its row retry", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-startup-quarantine-held-work-"));
+  const registry = new AgentRegistry(path.join(directory, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
+  const sessionId = "25300000-0000-0000-0000-000000000079";
+  const key = `codex:${sessionId}`;
+  passedOverRow(registry, directory, sessionId, "unhosted", "handoff");
+  let clock = Date.parse("2026-10-16T12:00:00Z");
+  const now = spyOn(Date, "now").mockImplementation(() => clock);
+  const scheduled: { callback: () => void; delay: number; due: number }[] = [];
+  let adoptions = 0;
+  let refreshes = 0;
+  const ledger = createFakeDeliveryLedger();
+  const host = Object.assign(new FakeEngineHost(ledger), {
+    setWriterFence: () => {}, onEvent: () => () => {}, onStateChange: () => () => {},
+  });
+  const dependencies: StructuredStartupDependencies = {
+    registry, client: runtimeJournalClient(journal), orchestratorSeats: () => [],
+    resolveCodexOwner: () => null, resolveClaudeOwner: () => null, adoptClaude: async () => [],
+    refreshTranscriptState: async () => { refreshes++; },
+    readHostTurnRecord: () => ({ state: "unreadable", reason: "fixture ledger is unreadable" }),
+    pipelineEvidence: () => ({ settled: new Set(), deferred: new Set() }),
+    adoptCodexHost: async () => { adoptions++; return host as never; },
+    schedule: (callback, delay) => { scheduled.push({ callback, delay, due: clock + delay }); return {}; },
+  };
+  try {
+    await adoptStructuredHostsAtStartup(dependencies);
+    const row = registry.readOnlySnapshot().entries[key]!;
+    registry.upsert({ ...row, status: "live", claimOwner: null, structuredHost: { ...row.structuredHost!, process: null } });
+    const conversation = registry.conversationForPath(row.artifactPath)!;
+    const queued = await enqueueStructuredMessage({
+      path: row.artifactPath, conversationId: conversation.id, clientMessageId: "startup-held-work-message",
+      operationId: "startup-held-work-operation", kind: "send", policy: "queue", turnId: null,
+      text: "resume after restart-cut admission", hasImages: false,
+    }, { enabled: () => true, client: () => null, registry: () => registry, requestMigrationTick: () => {}, progress: null });
+    expect(queued).toMatchObject({ ok: true, outcome: "held" });
+    const first = scheduled.shift(); expect(first).toBeDefined();
+    clock += first!.delay; first!.callback();
+    const deadline = performance.now() + 3000;
+    while (structuredStartupDeferral() === null && performance.now() < deadline) await Bun.sleep(1);
+    expect(structuredStartupDeferral()?.hostKeys).toContain(key);
+    expect(restartCutEvidenceHolds(key)).toBe(true);
+    expect(refreshes).toBe(1);
+    expect(registry.readOnlySnapshot().heldDeliveries).not.toEqual({});
+
+    while (structuredStartupDeferral()?.nextProbeMs !== 30_000 && clock - Date.parse("2026-10-16T12:00:00Z") < 120_000) {
+      const previousProbe = structuredStartupDeferral()?.nextProbeMs;
+      expect(previousProbe).toBeGreaterThan(0);
+      const index = scheduled.findLastIndex(task => task.delay === previousProbe);
+      expect(index).toBeGreaterThanOrEqual(0);
+      const [next] = scheduled.splice(index, 1);
+      clock = next!.due; next!.callback();
+      const probeDeadline = performance.now() + 3000;
+      while (structuredStartupDeferral()?.nextProbeMs === previousProbe && performance.now() < probeDeadline) await Bun.sleep(1);
+      expect(structuredStartupDeferral()?.nextProbeMs).not.toBe(previousProbe);
+    }
+    expect(structuredStartupDeferral()?.nextProbeMs).toBe(30_000);
+    expect(clock - Date.parse("2026-10-16T12:00:00Z")).toBeGreaterThanOrEqual(30_000);
+    expect(adoptions).toBe(0);
+    const cappedProbe = scheduled.findIndex(task => task.delay === 30_000);
+    expect(cappedProbe).toBeGreaterThanOrEqual(0);
+    const [probe] = scheduled.splice(cappedProbe, 1);
+    clock = probe!.due; probe!.callback();
+    const adoptionDeadline = performance.now() + 3000;
+    while ((adoptions === 0 || restartCutEvidenceHolds(key)) && performance.now() < adoptionDeadline) await Bun.sleep(1);
+    expect(adoptions).toBeGreaterThan(0);
+    expect(restartCutEvidenceHolds(key)).toBe(false);
+    expect(Object.values(registry.readOnlySnapshot().heldDeliveries).some(delivery =>
+      delivery.text === "resume after restart-cut admission")).toBe(true);
   } finally {
     now.mockRestore(); await bindStructuredDeliveryQueue([], { registry, client: null }); journal.close();
     fs.rmSync(directory, { recursive: true, force: true });
