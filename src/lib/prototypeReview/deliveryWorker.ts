@@ -16,8 +16,9 @@ import { telegramBotService } from "@/lib/telegram/bot/service";
  * project's seat from here. Each owed decision is attempted at once, then on a
  * backoff while its attempts fail, then every few seconds while the seat holds
  * it queued behind a running turn. Every Viewer boot sweeps the store and
- * attempts each owed decision, so a decision saved during a deploy or a restart
- * goes out once the Viewer is back. Attempts are idempotent by the decision's
+ * attempts each owed decision within its persisted attempt and age budgets.
+ * A decision saved during a deploy resumes once the Viewer is back. Exhausted
+ * deliveries stay saved and join the seat wake agenda. Attempts are idempotent by the decision's
  * message key and serialized by the round's decision lock.
  *
  * The state lives on `globalThis`: the route bundle that records a decision
@@ -52,7 +53,7 @@ const productionPorts = (): PrototypeDeliveryPorts => ({ delivery: prototypeDeli
 
 /** How long after an attempt the next one is due, from what the attempt left. */
 export function prototypeDeliveryDelay(delivery: PrototypeDecision["delivery"]): number {
-  if (delivery.state === "sent") return Number.POSITIVE_INFINITY;
+  if (delivery.state === "sent" || delivery.exhaustedAt) return Number.POSITIVE_INFINITY;
   if (!delivery.conversationId) return PROTOTYPE_DELIVERY_SEAT_POLL_MS;
   const failures = delivery.failures ?? 0;
   if (!failures) return PROTOTYPE_DELIVERY_IN_FLIGHT_MS;
@@ -80,7 +81,7 @@ function run(taskId: string | null, reviewId: string, ports: PrototypeDeliveryPo
           state.due.set(reviewId, ports.now() + PROTOTYPE_DELIVERY_BACKOFF_MS[0]);
           continue;
         }
-        if (!decision || decision.delivery.state === "sent") {
+        if (!decision || decision.delivery.state === "sent" || decision.delivery.exhaustedAt) {
           state.owed.delete(reviewId); state.due.delete(reviewId);
         } else state.due.set(reviewId, ports.now() + prototypeDeliveryDelay(decision.delivery));
       } while (entry.again);
@@ -100,11 +101,11 @@ function scan(state: WorkerState, now: number): void {
   for (const task of loadTasksForList()) {
     if (runsElsewhere(task)) continue;
     for (const round of task.prototypeReviews ?? []) {
-      if (round.decision && round.decision.delivery.state !== "sent") owed.set(round.id, task.id);
+      if (round.decision && round.decision.delivery.state !== "sent" && !round.decision.delivery.exhaustedAt) owed.set(round.id, task.id);
     }
   }
   for (const round of loadSeatRounds()) {
-    if (round.decision && round.decision.delivery.state !== "sent") owed.set(round.id, null);
+    if (round.decision && round.decision.delivery.state !== "sent" && !round.decision.delivery.exhaustedAt) owed.set(round.id, null);
   }
   state.owed = owed;
   for (const reviewId of [...state.due.keys()]) if (!owed.has(reviewId)) state.due.delete(reviewId);

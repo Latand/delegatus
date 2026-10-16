@@ -22,6 +22,7 @@ export function withPrototypeReviewSummaries<T extends BoardTask>(tasks: readonl
     /* Only this installation drives a decision's delivery, so only its own rounds say how it goes. */
     const held = prototypeReviews?.at(-1)?.decision;
     return { ...task, prototypeReview: { ...current, ...(current.decision && held ? { decision: { ...current.decision, phase: prototypeDeliveryPhase(held.delivery, now) } } : {}),
+      ...(prototypeReviews ? { undelivered: prototypeReviews.filter(round => round.decision && prototypeDeliveryPhase(round.decision.delivery, now) === "attention").map(round => ({ reviewId: round.id, title: round.title, at: round.decision!.at })) } : {}),
       ...(record?.kind === "prototype" && record.taskId === task.id ? { waitingDismissal: { at: record.at, by: record.by } } : {}) } };
   });
 }
@@ -107,20 +108,22 @@ export function readSeatRounds(project: string): PrototypeReviewRead {
   return { taskId: null, rounds, waitingReviewId: waiting.at(-1)?.id ?? null };
 }
 
-/** Every open decision of a project, oldest first: each task's waiting round
-    and each unanswered seat round. Rounds another installation owns are
+/** Every actionable decision of a project, oldest first: waiting forms and
+    saved answers whose delivery needs attention. Rounds another installation owns are
     answered there, and a round the operator hid waits on nobody. */
 export function operatorDecisions(project: string, tasks: readonly BoardTask[] = loadTasks()): OperatorDecisionsRead {
   const key = canonicalProject(project);
-  const fromTasks = tasks.filter(task => canonicalProject(task.project) === key && !runsElsewhere(task)
-    && prototypeReviewSummary(task.prototypeReviews ?? [])?.waitingReviewId).flatMap(task => {
+  const now = Date.now();
+  const fromTasks = tasks.filter(task => canonicalProject(task.project) === key && !runsElsewhere(task)).flatMap(task => {
+    const rounds = task.prototypeReviews ?? [];
+    if (!prototypeReviewSummary(rounds)?.waitingReviewId
+      && !rounds.some(round => round.decision && prototypeDeliveryPhase(round.decision.delivery, now) === "attention")) return [];
     const read = readPrototypeReviews(task);
-    const waiting = read.waitingReviewId ? read.rounds.find(round => round.id === read.waitingReviewId) : undefined;
-    return waiting ? [{ ...waiting, taskTitle: firstLineTitle(task.text) }] : [];
+    return read.rounds.filter(round => round.id === read.waitingReviewId || round.decision?.delivery.phase === "attention")
+      .map(round => ({ ...round, taskTitle: firstLineTitle(task.text) }));
   });
-  // Approved live associations stay reachable for revocation in this column.
-  // Only undecided rounds contribute to Waiting for you and its badge.
   const fromSeat = localRoundViews(loadSeatRounds(key).filter(round => !round.decision
+    || prototypeDeliveryPhase(round.decision.delivery, Date.now()) === "attention"
     || (round.nativeAssociation && nativeAssociationDecisionApproves(round.decision) && nativeAssociationCurrent(round.nativeAssociation))), null);
   return { project: key, decisions: [...fromTasks, ...fromSeat].sort((a, b) => a.createdAt.localeCompare(b.createdAt)) };
 }
@@ -135,9 +138,10 @@ export function operatorDecisionRound(project: string, reviewId: string, tasks: 
   return round && task ? { ...round, taskTitle: firstLineTitle(task.text) } : null;
 }
 
-/** The seat's open questions, as notices: one each, beside the tasks' rounds. */
+/** The seat's waiting forms and undelivered answers, beside the tasks' rounds. */
 export function seatDecisionNotices(project?: string): PrototypeReviewNotice[] {
-  try { return loadSeatRounds(project).filter(round => !round.decision).map(seatRoundNotice); }
+  try { return loadSeatRounds(project).filter(round => !round.decision || prototypeDeliveryPhase(round.decision.delivery, Date.now()) === "attention")
+    .map(round => ({ ...seatRoundNotice(round), ...(round.decision ? { undelivered: true as const } : {}) })); }
   catch { return []; /* The board read never fails on the seat's questions; the column says so on its own read. */ }
 }
 

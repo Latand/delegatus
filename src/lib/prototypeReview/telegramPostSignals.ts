@@ -1,3 +1,5 @@
+import { prototypeDeliveryExhausted } from "./deliveryPolicy";
+import { prototypeDeliveryPhase } from "./model";
 import { canonicalProject } from "@/lib/projects/aliases";
 import { runsElsewhere } from "@/lib/links/linked";
 import type { BoardTask } from "@/lib/tasks/types";
@@ -8,7 +10,11 @@ import type { PrototypeReviewRound } from "./types";
 export function telegramPostSignals(project: string, tasks: readonly BoardTask[], seatRounds: readonly PrototypeReviewRound[]): SeatTickSignalInput[] {
   const rounds = [...tasks.filter(t => !runsElsewhere(t)).flatMap(t => t.prototypeReviews ?? []), ...seatRounds]
     .filter(r => canonicalProject(r.project) === canonicalProject(project));
-  return [...rounds
+  return [...rounds.filter(round => round.decision && round.decision.delivery.state !== "sent" && (["failed", "uncertain", "no-orchestrator"].includes(round.decision.delivery.state)
+      || (round.decision.delivery.failures ?? 0) > 0 || prototypeDeliveryExhausted(round.decision, Date.now())
+      || prototypeDeliveryPhase(round.decision.delivery, Date.now()) === "attention"))
+    .map(round => ({ id: `prototype-answer:${round.id}:${round.decision!.delivery.clientMessageId}`, actionable: true,
+      label: `Saved operator answer needs delivery verification; reviewId ${round.id}${round.taskId ? `; taskId ${round.taskId}` : ""}. The operator already answered. Verify operation ${round.decision!.delivery.operationId ?? "not admitted"} before acting; never resend an uncertain execution. Read read_prototype_review${round.taskId ? ` with taskId ${round.taskId}` : " without taskId"} for the full record. Saved answer follows:\n${round.decision!.delivery.text}` })), ...rounds
     .filter(r => canonicalProject(r.project) === canonicalProject(project) && r.telegramPost && ["failed", "uncertain"].includes(r.telegramPost.state))
     .map(r => ({ id: `prototype-telegram:${r.id}:${r.telegramPost!.key}`, actionable: true,
       label: `Prototype Telegram post ${r.telegramPost!.state}: ${r.telegramPost!.reason ?? "unavailable"}; reviewId ${r.id}. Read the review and resend with resend_prototype_review_telegram and a fresh clientRequestId.` })),

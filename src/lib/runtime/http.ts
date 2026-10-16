@@ -753,6 +753,7 @@ export async function handleRuntimeRetry(
   request: NextRequest,
   operationId: string,
   dependencies: RuntimeRetryHttpDependencies = DEFAULT_RETRY_DEPENDENCIES,
+  authorize: () => void = () => {},
 ): Promise<NextResponse> {
   const rejection = rejectCrossOrigin(request);
   if (rejection) return rejection;
@@ -827,6 +828,7 @@ export async function handleRuntimeRetry(
     const recipientRefusal = () => orchestratorRecipientRefusal(recipientIds,
       id => resolveConversationAlias(recipientSnapshot, id as `conversation_${string}`));
     const warmRecipientAuthority = async () => {
+      authorize();
       const refusal = await orchestratorRecipientRefusalAsync(recipientIds,
         id => resolveConversationAlias(recipientSnapshot, id as `conversation_${string}`));
       if (refusal) throw Object.assign(new DeliveryAdmissionRefusedError("orchestrator-recipient-revoked"), {
@@ -834,6 +836,7 @@ export async function handleRuntimeRetry(
       });
     };
     const recipientGuard = () => {
+      authorize();
       const refusal = recipientRefusal();
       if (refusal) throw Object.assign(new DeliveryAdmissionRefusedError("orchestrator-recipient-revoked"),
         { message: refusal.error, status: refusal.status, successorConversationId: refusal.successorConversationId });

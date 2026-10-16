@@ -4,25 +4,29 @@ import { NATIVE_ASSOCIATION_AUTHORIZATION_ERROR } from "@/lib/attention/nativeAs
 import { NextRequest } from "next/server";
 import { conversationHostPOST } from "@/app/api/conversation-host/handlers";
 import { handleRuntimeRetry } from "@/lib/runtime/http";
-import { journalVerdict, resolveOriginalSend, resolveSendReceipt } from "@/lib/runtime/sendSettlement";
+import { SEND_DISCARDED_REASON, SEND_LOST_REASON, SEND_UNVERIFIED_REASON, SEND_UNRECORDED_REASON, SEND_UNSETTLEABLE_REASON, journalVerdict, resolveOriginalSend, resolveSendReceipt } from "@/lib/runtime/sendSettlement";
 import { agentRegistry } from "@/lib/agent/registry";
+import { taskFeedSource } from "@/lib/tasks/store";
+import { findSeatRound } from "./seatRounds";
 import { runtimeHostClient } from "@/lib/runtime/client";
 import { withFileTransaction } from "@/lib/state/fileTransaction";
-import { authenticatedOwner, teamActor } from "@/lib/team";
+import { activeDeliveryActor, telegramOwnerActor, authenticatedOwner, teamActor } from "@/lib/team";
 import { directOperatorActivityAuthority } from "@/lib/agent/operatorAuthority";
 import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/capabilityHeader";
 import { ownerReviewDestination } from "@/lib/externalRelay/telegramPublication";
 import { runsElsewhere } from "@/lib/links/linked";
 import { prototypeReviewSummary } from "./model";
 import { PrototypeError, PROTOTYPE_LIMITS } from "./input";
-import { decisionLock, findPrototypeRound, mutatePrototypeRound } from "./store";
+import { decisionLock, findPrototypeRound, mutatePrototypeRound, withPrototypeState } from "./store";
 import { MAX_STRUCTURED_TEXT_BYTES } from "@/lib/runtime/structuredContent";
 import { normalizePrototypeAnswers, recommendedAnswers } from "./questions";
 import type { DecidePrototypeInput, PrototypeDecision, PrototypeDeliveryState, PrototypeReviewRound } from "./types";
 import { prototypeWorld, type PrototypeWorld } from "./world";
+import { withViewerOperation } from "@/lib/viewerLoopMonitor";
+import { PROTOTYPE_DELIVERY_MAX_ATTEMPTS, prototypeDeliveryExhausted } from "./deliveryPolicy";
 import { prototypeTextLength } from "./textLength";
 
-export type PrototypeDeliveryContext = NextRequest | { kind: "operator-in-process"; authorize: () => void } | { kind: "autonomous-seat"; conversationId: string; project: string; authorize: () => void };
+export type PrototypeDeliveryContext = NextRequest | { kind: "operator-in-process"; telegramUserId?: string; authorize: () => void } | { kind: "autonomous-seat"; conversationId: string; project: string; authorize: () => void };
 const inProcess = (request: PrototypeDeliveryContext): request is Extract<PrototypeDeliveryContext, { kind: string }> => "kind" in request && (request.kind === "operator-in-process" || request.kind === "autonomous-seat");
 
 /** The persisted delivery text: retries use these exact bytes. A changed
@@ -66,11 +70,13 @@ export interface PrototypeDelivery {
   recover(decision: PrototypeDecision): Promise<PrototypeDeliveryResult | null>;
   send(decision: PrototypeDecision): Promise<PrototypeDeliveryResult>;
   retry(decision: PrototypeDecision): Promise<PrototypeDeliveryResult>;
+  /** Fence and verify the old execution before following a replacement seat. */
+  retire?(decision: PrototypeDecision): Promise<PrototypeDeliveryResult>;
 }
 export async function prototypeDeliveryResponse(response: Response): Promise<PrototypeDeliveryResult> {
   const body = await response.json();
   const state = body.receipt?.status === "delivered" || body.outcome === "delivered" ? "sent" : response.ok ? "pending"
-    : body.admission === "refused" ? "failed" : "uncertain";
+    : body.admission === "refused" || body.code === "member_required" ? "failed" : "uncertain";
   return { state, ...(typeof body.operationId === "string" ? { operationId: body.operationId } : {}) };
 }
 /** An in-process request to the Viewer's own routes, from loopback. */
@@ -78,6 +84,8 @@ const viewerRequest = (pathname: string, body?: unknown) => new NextRequest(new 
   method: "POST", headers: { host: "localhost", ...(body === undefined ? {} : { "content-type": "application/json" }) },
   ...(body === undefined ? {} : { body: JSON.stringify(body) }),
 });
+const journalRequiresVerification = (reason: string | null | undefined) =>
+  reason === SEND_DISCARDED_REASON || reason === SEND_UNVERIFIED_REASON || reason === SEND_UNRECORDED_REASON || reason === SEND_UNSETTLEABLE_REASON;
 export const prototypeDelivery: PrototypeDelivery = {
   async recover(decision) {
     const delivery = decision.delivery;
@@ -87,7 +95,7 @@ export const prototypeDelivery: PrototypeDelivery = {
       if (original.kind === "absent") {
         // The admission ledger also remembers compacted keys. Absence in the
         // active rows alone cannot authorize another send after retention.
-        const admission = agentRegistry().deliveryAdmissionForKey(delivery.conversationId!,delivery.clientMessageId);
+        const admission = await withPrototypeState(() => agentRegistry().deliveryAdmissionForKey(delivery.conversationId!,delivery.clientMessageId));
         if (admission.outcome === "not-executed") return null;
         if (admission.outcome !== "admitted") return { state: "uncertain" };
         operationId = admission.operationId;
@@ -96,16 +104,45 @@ export const prototypeDelivery: PrototypeDelivery = {
     }
     const receipt = await resolveSendReceipt(operationId);
     if (receipt?.state === "delivered") return { state: "sent",operationId };
-    // A failed reservation can still have unknown disposition. The journal's
-    // terminal failure proves it never actuated; the existing retry route
-    // owns recovery and the single retry leaf.
-    const journal = await runtimeHostClient()?.operationStatus(operationId,{ currentRetryLeaf: true }).catch(() => null);
-    if (journal) {
-      const verdict = journalVerdict(journal.receipt.status,journal.receipt.reason);
-      if (verdict) return { state: verdict.state === "delivered" ? "sent" : verdict.disposition === "lost" ? "failed" : "uncertain",operationId: journal.operationId };
-      return { state: "pending",operationId: journal.operationId };
+    // An explicitly admitted retry has its own owner and outcome. Only that
+    // durable link can follow a journal leaf past the original terminal row.
+    if (receipt?.state === "failed") {
+      if (receipt.reason === SEND_DISCARDED_REASON) return { state: "uncertain", operationId };
+      const journal = await runtimeHostClient()?.operationStatus(operationId, { currentRetryLeaf: true }).catch(() => null);
+      if (journal && journal.operationId !== operationId) {
+        const linked = await withPrototypeState(() => {
+          const owner = agentRegistry().deliverySnapshotForOperation(journal.operationId).deliveryOperationOwners[journal.operationId];
+          return !!owner?.retryOfOperationId && owner.conversationId === delivery.conversationId && owner.clientMessageId === delivery.clientMessageId;
+        });
+        if (!linked) return { state: "uncertain", operationId };
+        const retry = await resolveSendReceipt(journal.operationId);
+        return { state: retry?.state === "delivered" ? "sent" : retry?.state === "in-flight" ? "pending" : retry?.resend === "safe" ? "failed" : "uncertain", operationId: journal.operationId };
+      }
+      // A terminal journal failure proves non-execution too. An open journal
+      // cannot undo the durable reservation's terminal outcome.
+      if (journalRequiresVerification(journal?.receipt.reason)) return { state: "uncertain", operationId };
+      const verdict = journal && journalVerdict(journal.receipt.status, journal.receipt.reason);
+      return { state: receipt.resend === "safe" || verdict?.disposition === "lost" ? "failed" : "uncertain", operationId };
     }
-    return { state: receipt?.state === "in-flight" ? "pending" : receipt && !receipt.duplicateRisk ? "failed" : "uncertain",operationId };
+    return { state: receipt?.state === "in-flight" ? "pending" : "uncertain", operationId };
+  },
+  async retire(decision) {
+    const operationId = decision.delivery.operationId!;
+    const client = runtimeHostClient();
+    if (!client) return { state: "uncertain", operationId };
+    let journal = await client.operationStatus(operationId, { currentRetryLeaf: true });
+    if (!journal) return { state: "uncertain", operationId };
+    if (["pending", "queued"].includes(journal.receipt.status)) {
+      try {
+        journal = await client.transitionOperation(journal.operationId, "failed", { reason: SEND_LOST_REASON }, { fromStatuses: ["pending", "queued"] });
+      } catch {
+        journal = await client.operationStatus(operationId, { currentRetryLeaf: true });
+      }
+    }
+    if (journalRequiresVerification(journal?.receipt.reason)) return { state: "uncertain", operationId };
+    const verdict = journal && journalVerdict(journal.receipt.status, journal.receipt.reason);
+    if (verdict?.state === "delivered") return { state: "sent", operationId: journal!.operationId };
+    return { state: verdict?.disposition === "lost" ? "failed" : "uncertain", operationId: journal?.operationId ?? operationId };
   },
   async send(decision) {
     return prototypeDeliveryResponse(await conversationHostPOST(viewerRequest("/api/conversation-host", { conversationId: decision.delivery.conversationId,
@@ -114,9 +151,20 @@ export const prototypeDelivery: PrototypeDelivery = {
   },
   async retry(decision) {
     const operationId = decision.delivery.operationId!;
-    return prototypeDeliveryResponse(await handleRuntimeRetry(viewerRequest(`/api/runtime/operations/${operationId}`),operationId));
+    return prototypeDeliveryResponse(await handleRuntimeRetry(viewerRequest(`/api/runtime/operations/${operationId}`), operationId, undefined, () => {
+      if (!prototypeAuthorCurrent(decision)) throw new PrototypeError("decision author is no longer authorized", 403);
+    }));
   },
 };
+
+function prototypeAuthorCurrent(decision: PrototypeDecision): boolean {
+  const actor = decision.decidedBy ?? { kind: "operator" as const };
+  if (actor.kind === "agent") return true;
+  if (!activeDeliveryActor(actor)) return false;
+  if (!decision.telegramUserId) return true;
+  const owner = telegramOwnerActor(decision.telegramUserId);
+  return owner?.kind === actor.kind && (actor.kind !== "member" || owner.kind === "member" && owner.memberId === actor.memberId);
+}
 
 /** Refreshes a saved answer from its receipt; a read never sends or retries. */
 export async function refreshPrototypeDelivery(taskId: string | null,reviewId: string,delivery = prototypeDelivery): Promise<void> {
@@ -138,7 +186,15 @@ export async function refreshPrototypeDelivery(taskId: string | null,reviewId: s
 
 const messageKey = (reviewId: string, revision: number) => revision === 1 ? `prototype-decision:${reviewId}` : `prototype-decision:${reviewId}:${revision}`;
 function decidedBy(request: PrototypeDeliveryContext): NonNullable<PrototypeDecision["decidedBy"]> {
-  if (inProcess(request)) return request.kind === "autonomous-seat" ? { kind: "agent", conversationId: request.conversationId } : { kind: "operator" };
+  if (inProcess(request)) {
+    if (request.kind === "autonomous-seat") return { kind: "agent", conversationId: request.conversationId };
+    if (request.telegramUserId !== undefined) {
+      const actor = telegramOwnerActor(request.telegramUserId);
+      if (!actor) throw new PrototypeError("verified Telegram owner is no longer an active member", 403);
+      return actor;
+    }
+    return { kind: "operator" };
+  }
   const actor = teamActor(request);
   return actor.kind === "member" ? { kind: "member", memberId: actor.memberId } : { kind: "operator" };
 }
@@ -175,9 +231,19 @@ export function decidePrototype(request: PrototypeDeliveryContext,taskId: string
     }
     if ("retry" in input) {
       if (!round.decision) throw new PrototypeError("save a decision before retrying");
+      if (round.decision.delivery.state === "sent") return false;
       // The operator asked again: the backoff starts over and so does the wait before attention.
       delete round.decision.delivery.failures; delete round.decision.delivery.failingSince;
-      return round.decision.delivery.state !== "sent";
+      delete round.decision.delivery.attempts; delete round.decision.delivery.exhaustedAt;
+      round.decision.delivery.startedAt = new Date().toISOString();
+      // An authenticated person explicitly adopts this exact saved reply. A
+      // legacy operator record alone supplies no member identity for recovery.
+      const actor = decidedBy(request);
+      if ((!round.decision.decidedBy || round.decision.decidedBy.kind === "operator") && actor.kind === "member") {
+        round.decision.decidedBy = actor;
+        delete round.decision.telegramUserId;
+      }
+      return true;
     }
     if (input.reject !== undefined && input.reject !== true) throw new PrototypeError("invalid reject");
     const ownerReply = input.originalReply !== undefined;
@@ -225,7 +291,7 @@ export function decidePrototype(request: PrototypeDeliveryContext,taskId: string
     if (questionnaire && Buffer.byteLength(text) > MAX_STRUCTURED_TEXT_BYTES) throw new PrototypeError("the answer is too long to send; shorten the comment");
     round.decision = { chosen, ...(ownerReply ? { originalReply: input.originalReply } : {}), ...(input.recommendedWithReservation ? { recommendedWithReservation: true as const } : {}),
       ...(input.reject ? { rejected: true as const } : {}), ...(answers ? { answers } : {}), ...(skipped ? { skipped } : {}), comment: input.comment, at: new Date().toISOString(),
-      decidedBy: decidedBy(request), ...(nativeAssociationApproval ? { nativeAssociationApproval } : {}), revision, delivery: {
+      decidedBy: decidedBy(request), ...(inProcess(request) && request.kind === "operator-in-process" && request.telegramUserId ? { telegramUserId: request.telegramUserId } : {}), ...(nativeAssociationApproval ? { nativeAssociationApproval } : {}), revision, delivery: {
         state: recipient ? "pending" : "no-orchestrator", conversationId: recipient, clientMessageId: messageKey(reviewId, revision), text } };
     return true;
   });
@@ -244,62 +310,84 @@ export interface PrototypeDeliveryPorts { delivery: PrototypeDelivery; world: Pr
  * sent again through the runtime's own retry under the same key. Answers the
  * decision as it now stands, or null when the round or its decision is gone.
  */
-export async function attemptPrototypeDelivery(taskId: string | null,reviewId: string,ports: PrototypeDeliveryPorts): Promise<PrototypeDecision | null> {
-  const current = () => findPrototypeRound(taskId,reviewId)?.decision ?? null;
+export async function attemptPrototypeDelivery(taskId: string | null, reviewId: string, ports: PrototypeDeliveryPorts): Promise<PrototypeDecision | null> {
+  const roundAt = () => taskId === null ? findSeatRound(reviewId)
+    : taskFeedSource()?.get(taskId)?.prototypeReviews?.find(round => round.id === reviewId);
+  const current = () => withPrototypeState(() => roundAt()?.decision ?? null);
   try {
-    return await withFileTransaction(decisionLock(reviewId),"prototype decision is busy",async () => {
-      const round = findPrototypeRound(taskId,reviewId);
+    return await withViewerOperation("prototype.delivery", () => withFileTransaction(decisionLock(reviewId), "prototype decision is busy", async () => {
+      const round = await withPrototypeState(roundAt);
       let decision = round?.decision;
       if (!round || !decision || decision.delivery.state === "sent") return decision ?? null;
       const key = decision.delivery.clientMessageId;
       const at = () => new Date(ports.now()).toISOString();
-      const update = (change: (held: PrototypeDecision) => void) => mutatePrototypeRound(taskId,reviewId,held => {
+      const update = (change: (held: PrototypeDecision) => void) => withPrototypeState(() => mutatePrototypeRound(taskId, reviewId, held => {
         if (held.decision?.delivery.clientMessageId !== key) throw new SupersededDecision();
         change(held.decision);
         return structuredClone(held.decision);
-      });
-      /* Only a message handed to the send path can have been admitted. A
-         record written before the mark existed may have been, unless it never
-         had anyone to go to. */
+      }));
+      const revalidate = async () => {
+        const held = await current();
+        if (held?.delivery.clientMessageId !== key) throw new SupersededDecision();
+        return held;
+      };
+      if (prototypeDeliveryExhausted(decision, ports.now())) return update(held => { held.delivery.exhaustedAt ??= at(); });
       const handedOver = decision.delivery.dispatchedAt !== undefined || decision.delivery.operationId !== undefined
         || (decision.revision === undefined && decision.delivery.state !== "no-orchestrator");
-      const seat = ports.world.orchestrator(round.project);
       if (!decision.delivery.conversationId) {
+        const seat = await withPrototypeState(() => ports.world.orchestrator(round.project));
         if (!seat) return decision;
-        decision = update(held => { held.delivery.conversationId = seat; held.delivery.state = "pending"; });
+        decision = await update(held => { held.delivery.conversationId = seat; held.delivery.state = "pending"; });
       }
-      const recovered = handedOver ? await ports.delivery.recover(decision).catch((): PrototypeDeliveryResult => ({ state: "uncertain" })) : null;
+      let recovered = handedOver ? await ports.delivery.recover(decision).catch((): PrototypeDeliveryResult => ({ state: "uncertain" })) : null;
+      // Re-read every captured decision and seat after asynchronous evidence.
+      decision = await revalidate();
+      let seat = await withPrototypeState(() => ports.world.orchestrator(round.project));
+      if (recovered?.state === "failed" && recovered.operationId && seat && seat !== decision.delivery.conversationId) {
+        decision = await update(held => { held.delivery.operationId = recovered!.operationId; });
+        recovered = ports.delivery.retire ? await ports.delivery.retire(decision).catch((): PrototypeDeliveryResult => ({ state: "uncertain" })) : recovered;
+        decision = await revalidate();
+        seat = await withPrototypeState(() => ports.world.orchestrator(round.project));
+        if (recovered.state === "failed" && seat && seat !== decision.delivery.conversationId) {
+          decision = await update(held => {
+            held.delivery.predecessors = [...held.delivery.predecessors ?? [], { conversationId: held.delivery.conversationId!, operationId: recovered!.operationId! }].slice(-PROTOTYPE_DELIVERY_MAX_ATTEMPTS);
+            held.delivery.conversationId = seat;
+            delete held.delivery.operationId;
+          });
+          recovered = null;
+        }
+      }
+      const mayDispatch = () => withPrototypeState(() => prototypeAuthorCurrent(decision!));
       let result: PrototypeDeliveryResult;
-      if (recovered === null) {
-        /* Nothing was admitted under this key, so the message goes now, to
-           whoever holds the project's seat now: the seat named at decision
-           time may have rotated during a deploy. */
-        decision = update(held => {
-          if (seat) held.delivery.conversationId = seat;
-          held.delivery.state = "pending";
-          held.delivery.dispatchedAt ??= at();
-        });
-        result = await ports.delivery.send(decision).catch((): PrototypeDeliveryResult => ({ state: "uncertain" }));
-      } else if (recovered.state === "failed" && recovered.operationId) {
-        const operationId = recovered.operationId;
-        decision = update(held => { held.delivery.operationId = operationId; });
-        result = await ports.delivery.retry(decision).catch((): PrototypeDeliveryResult => ({ state: "uncertain" }));
+      if (recovered === null || recovered.state === "failed" && recovered.operationId) {
+        if (!await mayDispatch()) result = { state: "failed" };
+        else {
+          decision = await update(held => {
+            if (recovered === null && seat) held.delivery.conversationId = seat;
+            if (recovered?.operationId) held.delivery.operationId = recovered.operationId;
+            held.delivery.state = "pending";
+            held.delivery.dispatchedAt ??= at();
+            held.delivery.attempts = (held.delivery.attempts ?? 0) + 1;
+          });
+          // Dispatch authorization is checked again by the real ingress. The
+          // retry path also checks the original member immediately before use.
+          result = await (recovered === null ? ports.delivery.send(decision) : ports.delivery.retry(decision))
+            .catch((): PrototypeDeliveryResult => ({ state: "uncertain" }));
+        }
       } else result = recovered;
-      /* An earlier attempt the journal shows failed is a failure even when the
-         runtime admits its retry: the history of failures ends only when the
-         message lands (or the operator asks again), so repeated admitted
-         attempts that each fail back off and reach attention. */
       const failed = recovered?.state === "failed" || result.state === "failed" || result.state === "uncertain";
       return update(held => {
         held.delivery.state = result.state;
         if (result.operationId) held.delivery.operationId = result.operationId;
-        if (result.state === "sent") { delete held.delivery.failures; delete held.delivery.failingSince; }
-        else if (failed) {
+        if (result.state === "sent") {
+          delete held.delivery.failures; delete held.delivery.failingSince; delete held.delivery.exhaustedAt;
+        } else if (failed) {
           held.delivery.failures = (held.delivery.failures ?? 0) + 1;
           held.delivery.failingSince ??= at();
         }
+        if (prototypeDeliveryExhausted(held, ports.now())) held.delivery.exhaustedAt ??= at();
       });
-    });
+    }));
   } catch (error) {
     if (error instanceof SupersededDecision) return current();
     if ((error as { status?: unknown }).status === 404) return null;
