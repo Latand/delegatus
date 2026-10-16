@@ -8,6 +8,10 @@ import path from "node:path";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 
 import { beginDeputy, readDeputies } from "./deputies";
+import { readDeputyOwnLines, sweepDeputies } from "./deputySweep";
+import { productionDeputyCommandPorts } from "./deputyCommandPorts";
+import type { RuntimeHostClient } from "@/lib/runtime/client";
+import { AgentRegistry } from "@/lib/agent/registry";
 import { askOrchestratorInParallel, deputyDeliveryOrigin, deputyMessageKey, deputySessionId, type DeputyCommandPorts } from "./deputyCommand";
 import type { OrchestratorSeat } from "./seats";
 
@@ -307,4 +311,151 @@ test("a deputy queued behind a seat change rechecks authority before writing", a
     expect(calls.forks).toEqual([]);
     expect(calls.delivered).toEqual([]);
   } finally { await neighbor; }
+});
+
+
+test("parallel C: retry restores the saved text and image after a failed first delivery", async () => {
+  const picture = { mime: "image/gif", base64: Buffer.from("GIF89a0000").toString("base64") };
+  const first = ports({ deliver: async () => ({ ok: false, error: "membership unavailable" }) });
+  expect((await askOrchestratorInParallel({ ...ask, images: [picture] }, first.ports)).ok).toBe(false);
+  const saved = readDeputies()[0]!;
+  let settled = 0;
+  const sent: unknown[] = [];
+  const retry = ports({
+    prepareRetry: async () => { settled++; return { ok: true }; },
+    deliver: async input => { sent.push(input); return { ok: true }; },
+  } as Partial<DeputyCommandPorts>);
+  const request = { retryAskId: saved.askId, clientRequestId: "retry-one" };
+  const answer = await askOrchestratorInParallel(request, retry.ports);
+  expect(answer.ok).toBe(true);
+  expect(settled).toBe(1);
+  expect(sent).toHaveLength(1);
+  expect(sent[0]).toMatchObject({ text: expect.stringContaining(ask.text), images: [picture] });
+  expect(retry.calls.forks).toEqual([]);
+  expect(readDeputies()[0]).toMatchObject({ state: "active", attempt: 1, ask: { text: ask.text, images: 1 } });
+  expect((await askOrchestratorInParallel(request, retry.ports)).ok).toBe(true);
+  expect(sent).toHaveLength(1);
+});
+
+test("parallel C: an unsettled earlier operation refuses retry and keeps the saved ask", async () => {
+  const first = ports({ deliver: async () => ({ ok: false, error: "membership unavailable" }) });
+  await askOrchestratorInParallel(ask, first.ports);
+  const saved = readDeputies()[0]!;
+  const retry = ports({ prepareRetry: async () => ({ ok: false, error: "previous operation is unsettled" }) } as Partial<DeputyCommandPorts>);
+  const result = await askOrchestratorInParallel({ retryAskId: saved.askId, clientRequestId: "retry-refused" }, retry.ports);
+  expect(result).toMatchObject({ ok: false, error: expect.stringContaining("previous operation is unsettled") });
+  expect(retry.calls.delivered).toEqual([]);
+  expect(readDeputies()[0]).toMatchObject({ state: "ended", ask: { text: ask.text } });
+});
+
+
+test("parallel C: held first delivery is pending and retains its operation", async () => {
+  const held = ports({ deliver: async () => ({ ok: true, outcome: "held", operationId: "first-operation" }) });
+  expect((await askOrchestratorInParallel(ask, held.ports)).ok).toBe(true);
+  expect(readDeputies()[0]).toMatchObject({ state: "pending", delivery: { operationId: "first-operation", outcome: "held" } });
+});
+
+
+test("parallel C: image publication waits asynchronously and saved refs survive collection", async () => {
+  const { collectRuntimeImageReachableDigests } = await import("@/lib/runtime/runtimeImageStore");
+  const state = process.env.LLV_STATE_DIR!;
+  const imageRoot = path.join(state, "runtime-images");
+  fs.mkdirSync(imageRoot, { recursive: true, mode: 0o700 });
+  const lock = path.join(imageRoot, ".writer-lock");
+  fs.mkdirSync(lock, { mode: 0o700 });
+  fs.writeFileSync(path.join(lock, "owner.json"), JSON.stringify({ pid: process.pid, startIdentity: null, token: "fixture-image-owner" }));
+  let progressed = false;
+  const timer = setTimeout(() => { progressed = !fs.existsSync(path.join(state, "account-selection.lock")); fs.rmSync(lock, { recursive: true }); }, 20);
+  try {
+    await askOrchestratorInParallel({ ...ask, images: [{ mime: "image/gif", base64: Buffer.from("GIF89a0000").toString("base64") }] },
+      ports({ deliver: async () => ({ ok: false, error: "start refused" }) }).ports);
+    expect(progressed).toBe(true);
+    const record = readDeputies()[0]!;
+    expect(record.imageRefs).toHaveLength(1);
+    expect(collectRuntimeImageReachableDigests(state).has(record.imageRefs![0]!.sha256)).toBe(true);
+  } finally { clearTimeout(timer); if (fs.existsSync(lock)) fs.rmSync(lock, { recursive: true }); }
+});
+
+test("parallel C: retry rechecks a seat rotation after settlement and sends nothing", async () => {
+  const failed = ports({ deliver: async () => ({ ok: false, error: "start refused" }) });
+  await askOrchestratorInParallel(ask, failed.ports);
+  const saved = readDeputies()[0]!;
+  let rotated = false;
+  const retry = ports({ activeSeat: () => rotated ? { ...seat, seatEpoch: seat.seatEpoch + 1 } : seat,
+    prepareRetry: async () => { rotated = true; return { ok: true }; } });
+  const result = await askOrchestratorInParallel({ retryAskId: saved.askId, clientRequestId: "retry-rotated" }, retry.ports);
+  expect(result).toMatchObject({ ok: false });
+  expect(retry.calls.delivered).toEqual([]);
+  expect(readDeputies()[0]).toMatchObject({ state: "ended", attempt: 0 });
+});
+
+
+test("parallel C: a legacy image ask recovers its envelope from the original delivery", async () => {
+  const picture = { mime: "image/gif", base64: Buffer.from("GIF89a0000").toString("base64") };
+  await askOrchestratorInParallel({ ...ask, images: [picture] }, ports({ deliver: async () => ({ ok: false, error: "start refused" }) }).ports);
+  const saved = readDeputies()[0]!;
+  const filename = path.join(process.env.LLV_STATE_DIR!, "orchestrator-deputies.json");
+  const file = JSON.parse(fs.readFileSync(filename, "utf8"));
+  delete file.deputies[0].imageRefs;
+  fs.writeFileSync(filename, JSON.stringify(file));
+  const sent: unknown[] = [];
+  const retry = ports({ prepareRetry: async () => ({ ok: true }), imageRefsForRetry: () => saved.imageRefs ?? [],
+    deliver: async input => { sent.push(input.images); return { ok: true }; } } as Partial<DeputyCommandPorts>);
+  expect((await askOrchestratorInParallel({ retryAskId: saved.askId, clientRequestId: "legacy-retry" }, retry.ports)).ok).toBe(true);
+  expect(sent).toEqual([[picture]]);
+});
+
+
+test("parallel C: a task-join refusal ends visibly before host delivery", async () => {
+  const refused = ports({ joinSeatTask: () => { throw new Error("task membership unavailable"); } });
+  expect(await askOrchestratorInParallel(ask, refused.ports)).toMatchObject({ ok: false, code: "launch_failed" });
+  expect(readDeputies()[0]).toMatchObject({ state: "ended", outcome: "failed", error: "launch: task membership unavailable", ask: { text: ask.text } });
+  expect(refused.calls.delivered).toEqual([]);
+});
+
+
+test("a late completed answer is reconciled before Retry can send the saved question again", async () => {
+  const answer = "The parallel question was answered before the host exited.";
+  const artifactPath = path.join(sandbox, "late-answer.jsonl");
+  const registry = new AgentRegistry(path.join(sandbox, "retry-registry.json"));
+  try {
+    const conversation = registry.ensureConversation("claude", artifactPath, null);
+    const first = ports({ fork: () => {
+      fs.writeFileSync(artifactPath, "");
+      return { path: artifactPath, records: 0, size: 0 };
+    }, registerConversation: () => conversation.id });
+    expect(await askOrchestratorInParallel(ask, first.ports)).toMatchObject({ ok: true });
+    expect(first.calls.delivered).toHaveLength(1);
+
+    let ownLineReads = 0;
+    await sweepDeputies({
+      now: () => new Date("2026-09-26T12:02:00.000Z"),
+      deputies: readDeputies,
+      activeSeat: () => seat,
+      runtime: async () => {
+        fs.writeFileSync(artifactPath, `${JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: answer }] } })}\n`);
+        return { host: "dead", turn: "idle" };
+      },
+      ownLines: deputy => ++ownLineReads === 1 ? [] : readDeputyOwnLines(deputy),
+      interrupt: async () => {},
+      release: async () => {},
+      noteSeat: async () => "queued",
+    });
+    expect(readDeputies()[0]).toMatchObject({
+      state: "ended",
+      outcome: "host-died",
+      result: { finalText: answer },
+    });
+
+    const runtime = { readSession: async () => null } as unknown as RuntimeHostClient;
+    const production = productionDeputyCommandPorts({ client: () => runtime, registry });
+    const retry = await askOrchestratorInParallel({ retryAskId: readDeputies()[0]!.askId, clientRequestId: "retry-late-answer" }, {
+      ...first.ports,
+      prepareRetry: production.prepareRetry,
+    });
+
+    expect(retry).toMatchObject({ ok: true, deputy: { state: "ended", outcome: "done", result: { finalText: answer } } });
+    expect(first.calls.delivered).toHaveLength(1);
+    expect(readDeputies()[0]).toMatchObject({ state: "ended", outcome: "done", result: { finalText: answer } });
+  } finally { registry.close(); }
 });

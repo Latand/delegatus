@@ -1,3 +1,4 @@
+import { StateLockDeferredError, waitForStateLock } from "@/lib/state/lockWait";
 import { performanceSpans } from "@/lib/performanceSpans";
 import { normalizeHostMemory, type HostMemoryState } from "@/lib/runtime/agentMemoryState";
 import { normalizeHostEndCause, type HostEndCause } from "@/lib/runtime/hostEndCause";
@@ -23,7 +24,7 @@ import {
   type ProcessIdentity,
 } from "@/lib/processIdentity";
 import { durableSemanticTitle, firstMeaningfulPromptLine, SPAWN_TITLE_REQUIRED_ERROR } from "@/lib/title";
-import { ACCOUNT_MUTATION_ADMISSION_WAIT_MS, withAccountMutationLock, withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
+import { ACCOUNT_MUTATION_ADMISSION_WAIT_MS, AccountMutationBusyError, withAccountMutationLock, withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
 import { accountMutationHeld } from "@/lib/accounts/accountMutationContext";
 import { readRetiredAccountIds, retiredAccountIds } from "@/lib/accounts/accountsStore";
 import { conversationProjectKey } from "@/lib/accounts/conversationProject";
@@ -4547,6 +4548,11 @@ export class AgentRegistry {
   private readonly sqliteStore: SqliteAgentRegistryStore | null;
   /** Synchronous writer admission lends its JSON claim to the mutation. */
   private admittedJsonWriter: RegistryLockClaim | null = null;
+  private creditGuardRevision = 0;
+
+  /** Local commits and host notifications invalidate the guard without reading storage. */
+  accountCreditGuardRevision(): number { return this.creditGuardRevision; }
+  invalidateAccountCreditGuard(): void { this.creditGuardRevision += 1; }
   private readonly beforeDualWriteMutationReplace: (() => void) | undefined;
   private readOnlyCache: { signature: string; snapshot: RegistryFile } | null = null;
   private readonly mirrorCheckpointMs: number;
@@ -4618,6 +4624,7 @@ export class AgentRegistry {
       verifyImport: (source, imported) => verifyRegistryImport(source, imported, storage.onRegistryImportVerify),
       normalize: (value, mode) => normalizeRegistry(value, storage.mcpGrantPolicy, mode),
       mcpGrantPolicy: storage.mcpGrantPolicy,
+      onCreditGuardChange: () => this.invalidateAccountCreditGuard(),
       onWriterWait: (duration) => {
         this.recordMetric(this.writerWaits, duration);
         storage.onSqliteWriterWait?.(duration);
@@ -5400,6 +5407,7 @@ export class AgentRegistry {
       if (changed) {
         const payload = sqlite ? serializeRegistry(file, sqlite.revision + 1) : currentPayload;
         writeAtomicPayload(this.filename, payload);
+        this.invalidateAccountCreditGuard();
       }
       if (sqlite && !changed) this.assertSqliteParity();
       if (sqlite && changed) {
@@ -5444,8 +5452,8 @@ export class AgentRegistry {
    * that transaction, so the wait and the write cannot be separated by another
    * writer. `{ acquired: false }` means the lock stayed held past the deadline
    * and nothing ran; the refusal is logged with the operation it was for, and
-   * the caller defers. `operation` must go straight to its mutation, with no
-   * snapshot read before it. Stores without a SQLite writer run it at once.
+   * the caller defers. `operation` stays synchronous; keyed reads before its
+   * mutation share the admitted transaction. Stores without a SQLite writer run it at once.
    */
   private async whenWriterHeld<T>(
     correlation: { label: string; operationId?: string | null },
@@ -5472,7 +5480,7 @@ export class AgentRegistry {
    * One registry write on a delivery path, with the write lock waited for off
    * the event loop and correlated with the operation it is made for
    * (docs/design/delivery-progress-and-drain.md, rule c). `write` makes exactly
-   * one registry mutation and reads no snapshot before it. `{ acquired: false }`
+   * one registry mutation; its keyed reads share the admitted transaction. `{ acquired: false }`
    * means nothing was written; each caller states what a refusal leaves.
    */
   async deliveryWrite<T>(
@@ -6018,9 +6026,33 @@ export class AgentRegistry {
   /** Bounded, non-blocking admission for request and controller paths. */
   async beginSpawnRequestAsync(input: SpawnRequest, guard?: () => void): Promise<SpawnBeginResult> {
     const caller = input.purpose === "resume-successor" ? "resume" : "spawn";
-    const written = await this.accountMutationWrite(`${caller} admission`, () => this.beginSpawnRequest(input), guard);
+    const deadline = performance.now() + (this.writerDeadlineMs ?? 2_000);
+    const remaining = () => Math.max(0, deadline - performance.now());
+    const written = await this.accountMutationWrite(`${caller} admission`, () => this.reserveSpawnRequest(input), guard, { waitMs: remaining() });
     if (!written.acquired) throw new RegistryWriterBusyError(`${caller} admission`);
-    return written.value;
+    const result = written.value;
+    if (result.kind === "created" || result.kind === "replay") {
+      // Reservation is durable. Retry only its idempotent prerequisite, with
+      // no registry writer held while the task store takes its own writer.
+      const admission = await waitForStateLock(`${caller}.membership`, async () => {
+        try {
+          return await withAccountMutationLockAsync(() => {
+            guard?.();
+            return this.admitSpawnMembership(input, result);
+          }, { caller: `${caller} membership`, waitMs: remaining() });
+        } catch (error) {
+          if (error instanceof AccountMutationBusyError) throw new StateLockDeferredError(`${caller}.membership`);
+          throw error;
+        }
+      }, { waitMs: remaining(), subject: result.receipt.launchId });
+      if (admission.ok) {
+        const recorded = await this.accountMutationWrite(`${caller} membership record`, () => {
+          this.recordSpawnMembership(result.receipt, admission.taskIds);
+        }, guard, { waitMs: remaining() });
+        if (!recorded.acquired) throw new RegistryWriterBusyError(`${caller} membership record`);
+      }
+    }
+    return result;
   }
 
   /** Acquire each writer without waiting while the other is held. A failed
@@ -6063,8 +6095,8 @@ export class AgentRegistry {
     }
   }
 
-  beginSpawnRequest(input: SpawnRequest): SpawnBeginResult {
-    const result = withAccountMutationLock(() => {
+  private reserveSpawnRequest(input: SpawnRequest): SpawnBeginResult {
+    return withAccountMutationLock(() => {
       if ((input.engine === "claude" || input.engine === "codex") && input.accountId && input.accountId !== "default") {
         /* The registry moved into state.sqlite (#1870, slice 7); its retired
            list is read through the store rather than by parsing the file. */
@@ -6083,6 +6115,18 @@ export class AgentRegistry {
       }
       return result;
     });
+  }
+
+  private admitSpawnMembership(input: SpawnRequest, result: Extract<SpawnBeginResult, { kind: "created" | "replay" }>) {
+    return admitReservedLaunch(input, result.receipt, (reason) => {
+      if (result.kind !== "created") return;
+      if (input.transport === "structured") this.failStructuredSpawn(result.receipt.launchId, reason, { announce: false });
+      else this.failSpawn(result.receipt.launchId, reason);
+    });
+  }
+
+  beginSpawnRequest(input: SpawnRequest): SpawnBeginResult {
+    const result = this.reserveSpawnRequest(input);
     /* Canonical task membership (#1586): the receipt is the last shared step
        before any launch path actuates, and every caller has passed its own
        admission checks to get here. Membership is committed with the reserved
@@ -6090,11 +6134,7 @@ export class AgentRegistry {
        fresh receipt and aborts the launch. A replay converges on the first
        admission's task. */
     if (result.kind === "created" || result.kind === "replay") {
-      const admission = admitReservedLaunch(input, result.receipt, (reason) => {
-        if (result.kind !== "created") return;
-        if (input.transport === "structured") this.failStructuredSpawn(result.receipt.launchId, reason, { announce: false });
-        else this.failSpawn(result.receipt.launchId, reason);
-      });
+      const admission = this.admitSpawnMembership(input, result);
       if (admission.ok) this.recordSpawnMembership(result.receipt, admission.taskIds);
     }
     return result;
@@ -8944,12 +8984,13 @@ export class AgentRegistry {
 
   /** Whether a migration is a switch owned by the conversation's applying reconfigure and still cancellable. */
   reconfigureOwnedCancellableSwitch(id: ViewerConversationId): boolean {
-    const snapshot = this.readOnlySnapshot();
-    const conversation = snapshot.conversations[resolveConversationAlias(snapshot, id)];
-    const migration = conversation?.migration;
-    const owner = conversation?.reconfigure;
-    if (!migration || !owner || owner.status !== "applying" || !CANCELLABLE_SWITCH_PHASES.has(migration.phase)) return false;
-    return snapshot.migrationIntents[migration.intentId]?.requestIds.includes(reconfigureMigrationRequestId(owner)) === true;
+    return this.readKeyed(snapshot => {
+      const conversation = snapshot.conversations[resolveConversationAlias(snapshot, id)];
+      const migration = conversation?.migration;
+      const owner = conversation?.reconfigure;
+      if (!migration || !owner || owner.status !== "applying" || !CANCELLABLE_SWITCH_PHASES.has(migration.phase)) return false;
+      return snapshot.migrationIntents[migration.intentId]?.requestIds.includes(reconfigureMigrationRequestId(owner)) === true;
+    });
   }
 
   canonicalPath(artifactPath: string): string {

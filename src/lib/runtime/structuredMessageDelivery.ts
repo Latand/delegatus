@@ -2,6 +2,7 @@ import { spawnDiagnosticError, spawnDiagnosticErrorFor } from "@/lib/agent/spawn
 import { DeliveryAdmissionRefusedError, type DeliveryAdmissionGuard } from "@/lib/deliveryAdmission";
 import { ownerRelaySpawnAuthorized } from "@/lib/externalRelay/ownerAuthority";
 import crypto from "node:crypto";
+import path from "node:path";
 
 import {
   agentRegistry,
@@ -16,10 +17,11 @@ import { structuredHostsEnabled } from "./flags";
 import { readRetiredAccountIds } from "@/lib/accounts/accountsStore";
 import type { AgentEngine } from "@/lib/agent/cli";
 import { deliveryFence } from "@/lib/accounts/migration/coordinator";
+import { withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
 import { requestAccountMigrationTick } from "@/lib/accounts/migration/controllerSignal";
 import { actingOperation, actuationBusy, withConversationActuation, type ActuationLease } from "@/lib/deliveryActuation";
 import { orchestratorRecipientRefusal, orchestratorRecipientRefusalAsync } from "@/lib/orchestrator/seats";
-import { deputyDeliveryRefusal } from "@/lib/orchestrator/deputies";
+import { deputyDeliveryRefusal, deputyMessageKey, deputyNamingIn, productionDeputyPrincipal, readDeputyFileOrNull } from "@/lib/orchestrator/deputies";
 import type { HeldDelivery, HeldDeliveryCommand, ViewerConversationId } from "@/lib/accounts/migration/contracts";
 
 import type { SelectedContextRef } from "@/lib/selection/selectedContext";
@@ -60,6 +62,7 @@ import { STRUCTURED_DELIVERY_TIMING } from "./structuredDeliveryQueue";
 import { markStructuredRuntimeSessionRecovered } from "./startupStatus";
 import { isInterruptionObligationId } from "./interruptionObligations";
 import { isInterruptedCodexContinuationId, RECOVERY_NOTICE_ORIGIN } from "./recoveryNotices";
+import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 
 export interface StructuredMessageRequest {
   /** Live authorization at fresh reservation, after runtime and lock waits. */
@@ -326,6 +329,82 @@ export type HeldStructuredMessageOutcome = "delivered" | "failed" | "delivery-un
 
 function heldForRetry(cause: string, waitReason: DeliveryWaitReason = "awaiting-host"): HeldForRetry {
   return { outcome: "held", cause, waitReason };
+}
+
+function deputyDrainAuthorityCurrent(
+  request: HeldStructuredMessageRequest,
+  operationId: string,
+  registry: AgentRegistry,
+): boolean {
+  const keyedAttempt = /^deputy_ask_[a-f0-9]{40}$/.test(request.clientMessageId);
+  if (!keyedAttempt) return true;
+  const file = readDeputyFileOrNull();
+  if (!file) return false;
+  const named = deputyNamingIn(file, { conversationId: request.conversationId, path: request.path });
+  if (!named) return false;
+  const deputy = named.deputy;
+  if (!deputy || deputy.state !== "pending"
+    || deputy.deputyConversationId !== request.conversationId
+    || !deputy.artifactPath || path.resolve(deputy.artifactPath) !== path.resolve(request.path)
+    || request.clientMessageId !== deputyMessageKey(deputy.askId, deputy.attempt ?? 0)) return false;
+  const principal = productionDeputyPrincipal(request.conversationId);
+  if (!principal || principal.askId !== deputy.askId || principal.seatConversationId !== deputy.seatConversationId
+    || principal.seatEpoch !== deputy.seatEpoch) return false;
+  const admission = registry.deliveryAdmissionForKey(request.conversationId, request.clientMessageId);
+  return admission.outcome === "admitted" && admission.deliveryId === request.deliveryId
+    && admission.operationId === operationId;
+}
+
+async function deputyDrainFence(
+  request: HeldStructuredMessageRequest,
+  operationId: string,
+  registry: AgentRegistry,
+): Promise<HeldStructuredMessageOutcome | undefined> {
+  if (!/^deputy_ask_[a-f0-9]{40}$/.test(request.clientMessageId)) return undefined;
+  let verdict: "allowed" | "rejected" | "busy";
+  try {
+    verdict = await withViewerOperation("runtime.delivery.deputy-authority", () => withAccountMutationLockAsync(() => {
+      return deputyDrainAuthorityCurrent(request, operationId, registry) ? "allowed" : "rejected";
+    }, { caller: "deputy held delivery authority" }));
+  } catch {
+    verdict = "busy";
+  }
+  if (verdict === "rejected") return { outcome: "rejected", cause: "the parallel question's seat, attempt, or delivery reservation is no longer current" };
+  if (verdict === "busy") return heldForRetry("the parallel question's authority is being updated");
+  return undefined;
+}
+
+type DeputyDrainDispatch = { dispatched: RuntimeOperationResult } | { blocked: HeldStructuredMessageOutcome };
+
+async function deputyDrainDispatchFence(
+  request: HeldStructuredMessageRequest,
+  operationId: string,
+  registry: AgentRegistry,
+  dispatch: () => Promise<RuntimeOperationResult>,
+): Promise<DeputyDrainDispatch> {
+  if (!/^deputy_ask_[a-f0-9]{40}$/.test(request.clientMessageId)) {
+    return { dispatched: await dispatch() };
+  }
+  let commandStarted = false;
+  try {
+    return await withViewerOperation("runtime.delivery.deputy-authority", () =>
+      withAccountMutationLockAsync(async () => {
+        if (!deputyDrainAuthorityCurrent(request, operationId, registry)) {
+          return { blocked: {
+            outcome: "rejected",
+            cause: "the parallel question's seat, attempt, or delivery reservation is no longer current",
+          } };
+        }
+        // Keep the same lock seat rotation uses until the runtime host has
+        // durably admitted this command. A check whose lock is released before
+        // this await leaves the question authorized by a stale snapshot.
+        commandStarted = true;
+        return { dispatched: await dispatch() };
+      }, { caller: "deputy held delivery dispatch" }));
+  } catch (error) {
+    if (commandStarted) throw error;
+    return { blocked: heldForRetry("the parallel question's authority is being updated") };
+  }
 }
 
 /**
@@ -1054,6 +1133,9 @@ async function deliverHeldAttempt(
 ): Promise<HeldStructuredMessageOutcome> {
   const operationId = request.command?.operationId
     ?? registry.readOnlySnapshot().heldDeliveries[request.deliveryId]?.command.operationId ?? request.deliveryId;
+  const authorityFence = () => deputyDrainFence(request, operationId, registry);
+  const initialAuthority = await authorityFence();
+  if (initialAuthority !== undefined) return initialAuthority;
   const refuseOwnerPrompt = async (): Promise<HeldStructuredMessageOutcome | undefined> => {
     if (ownerFirstPromptAllowed(registry, operationId)) return undefined;
     const delivery = reservationFor(registry, operationId);
@@ -1074,12 +1156,16 @@ async function deliverHeldAttempt(
     session = await progress.step("reading the recipient's runtime session",
       () => readRuntimeSession(client, { conversationId: request.conversationId ?? undefined, artifactPath: request.path || undefined }));
   } catch (error) {
+    const invalidAuthority = await authorityFence();
+    if (invalidAuthority !== undefined) return invalidAuthority;
     spawnDiagnosticErrorFor(Object.values(registry.readOnlySnapshot().receipts).find(receipt =>
       `spawn_message_${receipt.launchId}` === request.command?.operationId)?.clientAttemptId,
       "[structured delivery] runtime session read failed", error);
     progress.unreadable(error instanceof Error ? error.message : String(error));
     return heldOutcomeDuringRuntimeSynchronization(request, registry, error instanceof Error ? error.message : String(error));
   }
+  const afterRuntimeRead = await authorityFence();
+  if (afterRuntimeRead !== undefined) return afterRuntimeRead;
   recordStructuredRuntimeRecovery(session, dependencies.startupRecovered ?? markStructuredRuntimeSessionRecovered);
   if (!session || (isStructuredHostKind(session.hostKind) && (session.host === "dead" || session.host === "unhosted"))) {
     const owner = await persistedCurrentOwner(request, registry);
@@ -1109,12 +1195,19 @@ async function deliverHeldAttempt(
        named on the send's record and stalls within the bound. A refused one
        leaves the reservation for the next pass, recorded `awaiting-host`. */
     progress.wait("recovering-host", "the conversation's host was reclaimed");
+    const beforeRecovery = await authorityFence();
+    if (beforeRecovery !== undefined) return beforeRecovery;
     try {
       const recovered = await (dependencies.recover ?? recoverDeadStructuredConversation)({
         path: request.path,
         conversationId: request.conversationId,
         origin: request.command?.origin,
         operationId: request.command?.operationId ?? request.deliveryId,
+        authorityGuard: () => {
+          if (!deputyDrainAuthorityCurrent(request, operationId, registry)) {
+            throw new DeliveryAdmissionRefusedError("deputy-delivery-authority-changed");
+          }
+        },
       }, {
         registry,
         client,
@@ -1122,8 +1215,12 @@ async function deliverHeldAttempt(
           void (dependencies.kick ?? kickStructuredDeliveryQueue)();
         },
       });
+      const afterRecovery = await authorityFence();
+      if (afterRecovery !== undefined) return afterRecovery;
       return recovered ? "held" : heldForRetry(deliverabilityFailureMessage({ condition: "reclaimed" }));
     } catch (error) {
+      const invalidAuthority = await authorityFence();
+      if (invalidAuthority !== undefined) return invalidAuthority;
       if (error instanceof StructuredRecoveryHeldForUpdateError) {
         progress.wait("update-handoff");
         return "held";
@@ -1139,10 +1236,14 @@ async function deliverHeldAttempt(
       dependencies.republish ?? republishStructuredDeliveryHost,
     ));
     session = refreshed.session;
+    const afterRefresh = await authorityFence();
+    if (afterRefresh !== undefined) return afterRefresh;
     if (refreshed.republished && (session.host === "dead" || session.host === "unhosted")) {
       return heldForRetry("the recipient's host was republished without a live process");
     }
   } catch (error) {
+    const invalidAuthority = await authorityFence();
+    if (invalidAuthority !== undefined) return invalidAuthority;
     return heldForRetry(`the recipient's host could not be made ready: ${error instanceof Error ? error.message : String(error)}`);
   }
   if (session.hostKind === "tmux-legacy") return requiresStructuredHeldCommand(request) ? "failed" : null;
@@ -1164,7 +1265,7 @@ async function deliverHeldAttempt(
     progress.wait("dispatching");
     if (!ownerFirstPromptAllowed(registry, operationId))
       return await refuseOwnerPrompt() ?? heldForRetry("owner first prompt authorization changed");
-    const result = await client.command({
+    const fenced = await deputyDrainDispatchFence(request, operationId, registry, () => client.command({
       kind: command.kind,
       operationId: command.operationId,
       conversationId: request.runtimeConversationId ?? request.conversationId,
@@ -1181,7 +1282,9 @@ async function deliverHeldAttempt(
       /* #1117: the authorship persisted on the held record survives the
          migration hold — the drained message re-attributes exactly as admitted. */
       ...(command.origin ? { origin: command.origin } : {}),
-    });
+    }));
+    if ("blocked" in fenced) return fenced.blocked;
+    const result = fenced.dispatched;
     if (result.receipt.status === "queued" || result.receipt.status === "pending") progress.admitted();
     try {
       await (dependencies.kick ?? kickStructuredDeliveryQueue)();

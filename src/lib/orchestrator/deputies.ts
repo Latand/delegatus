@@ -1,3 +1,4 @@
+import { parseStructuredImageRefs, type StructuredImageRef } from "@/lib/runtime/structuredContent";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -53,8 +54,7 @@ export type DeputyAskOrigin =
 
 export interface DeputyAsk {
   text: string;
-  /** How many images rode with the ask; the pictures themselves go to the
-      deputy's host and are not copied into the record. */
+  /** Number of attachments; imageRefs retains their content-addressed envelope. */
   images: number;
   sender: DeputyAskSender | null;
   origin: DeputyAskOrigin;
@@ -81,6 +81,13 @@ export interface DeputyNote {
 }
 
 export interface OrchestratorDeputy {
+  /** Retry keeps the same fork and envelope, with a new message key only
+      after the preceding delivery has settled. */
+  answerFromBytes?: number | null;
+  attempt?: number;
+  retryRequestId?: string | null;
+  imageRefs?: StructuredImageRef[];
+  delivery?: { operationId: string | null; outcome: string; reason: string | null } | null;
   askId: string;
   clientRequestId: string;
   project: string;
@@ -184,6 +191,13 @@ export function normalizeDeputy(value: unknown): OrchestratorDeputy | null {
     ? { clientMessageId: row.note.clientMessageId, sentAt: String(row.note.sentAt ?? ""), outcome: String(row.note.outcome ?? "") }
     : null;
   return {
+    answerFromBytes: typeof row.answerFromBytes === "number" && Number.isSafeInteger(row.answerFromBytes) && row.answerFromBytes >= 0 ? row.answerFromBytes : null,
+    attempt: typeof row.attempt === "number" && Number.isSafeInteger(row.attempt) && row.attempt >= 0 ? row.attempt : 0,
+    retryRequestId: stringOrNull(row.retryRequestId),
+    imageRefs: parseStructuredImageRefs(row.imageRefs ?? [], 16) ?? [],
+    delivery: row.delivery && typeof row.delivery.outcome === "string" ? {
+      operationId: stringOrNull(row.delivery.operationId), outcome: row.delivery.outcome, reason: stringOrNull(row.delivery.reason),
+    } : null,
     askId: row.askId,
     clientRequestId: row.clientRequestId,
     project: canonicalOrchestratorProject(row.project),
@@ -305,6 +319,7 @@ export function beginDeputy(input: {
   seatEpoch: number;
   seatPath: string | null;
   clientRequestId: string;
+  imageRefs?: StructuredImageRef[];
   /** An ask with no origin named is the operator's. */
   ask: Omit<DeputyAsk, "origin"> & { origin?: DeputyAskOrigin };
   now?: Date;
@@ -318,6 +333,7 @@ export function beginDeputy(input: {
       && deputyLive(deputy, now.getTime()));
     if (live) return { value: { kind: "limit" as const, deputy: live }, changed: false };
     const deputy: OrchestratorDeputy = {
+      attempt: 0, retryRequestId: null, imageRefs: input.imageRefs ?? [], delivery: null,
       askId: input.askId ?? `deputy_${crypto.randomUUID()}`,
       clientRequestId: input.clientRequestId,
       project: canonicalOrchestratorProject(input.project),
@@ -369,21 +385,65 @@ export function recordDeputyFork(askId: string, fork: { deputyConversationId: st
   });
 }
 
-export function activateDeputy(askId: string, now = new Date()): OrchestratorDeputy | null {
-  return updateDeputy(askId, (deputy) => deputy.state !== "pending" ? null : { ...deputy, state: "active", activatedAt: now.toISOString() });
+export function recordDeputyDelivery(askId: string, delivery: NonNullable<OrchestratorDeputy["delivery"]>, expectedAttempt?: number): OrchestratorDeputy | null {
+  return updateDeputy(askId, deputy => deputy.state !== "pending" || (expectedAttempt !== undefined && expectedAttempt !== (deputy.attempt ?? 0)) ? null : { ...deputy, delivery });
+}
+
+export function retryDeputy(askId: string, requestId: string, expectedAttempt: number, now = new Date(), answerFromBytes?: number, imageRefs?: StructuredImageRef[]): OrchestratorDeputy | null {
+  return mutateDeputies(file => {
+    const deputy = file.deputies.find(row => row.askId === askId);
+    if (!deputy) return { value: null, changed: false };
+    if (deputy.retryRequestId === requestId) return { value: deputy, changed: false };
+    if (deputy.state !== "ended" || deputy.outcome === "done" || deputy.outcome === "seat-rotated"
+      || (deputy.attempt ?? 0) !== expectedAttempt
+      || file.deputies.some(row => row.askId !== askId && row.seatConversationId === deputy.seatConversationId && deputyLive(row, now.getTime()))) {
+      return { value: null, changed: false };
+    }
+    const next: OrchestratorDeputy = { ...deputy, attempt: expectedAttempt + 1, retryRequestId: requestId,
+      state: "pending", outcome: null, result: null, imageRefs: imageRefs ?? deputy.imageRefs ?? [], answerFromBytes: answerFromBytes ?? deputy.answerFromBytes ?? null, endedAt: null, activatedAt: null, error: null, delivery: null, note: null,
+      expiresAt: new Date(now.getTime() + DEPUTY_LIFETIME_MS).toISOString() };
+    file.deputies[file.deputies.indexOf(deputy)] = next;
+    return { value: next, changed: true };
+  });
+}
+
+/** Preserve a terminal answer discovered after a sweep ended the attempt. */
+export function reconcileDeputyAnswer(
+  askId: string,
+  expectedAttempt: number,
+  answer: { touched: DeputyTouched; result: DeputyResult },
+): OrchestratorDeputy | null {
+  return mutateDeputies(file => {
+    const index = file.deputies.findIndex(row => row.askId === askId);
+    if (index < 0) return { value: null, changed: false };
+    const deputy = file.deputies[index]!;
+    if (deputy.state !== "ended" || (deputy.attempt ?? 0) !== expectedAttempt
+      || deputy.outcome === "done" || deputy.outcome === "seat-rotated") {
+      return { value: null, changed: false };
+    }
+    const completed = { ...deputy, outcome: "done" as const, touched: answer.touched,
+      result: answer.result, error: null };
+    file.deputies[index] = completed;
+    return { value: completed, changed: true };
+  });
+}
+
+export function activateDeputy(askId: string, now = new Date(), expectedAttempt?: number): OrchestratorDeputy | null {
+  return updateDeputy(askId, (deputy) => deputy.state !== "pending" || (expectedAttempt !== undefined && expectedAttempt !== (deputy.attempt ?? 0)) ? null : { ...deputy, state: "active", activatedAt: now.toISOString() });
 }
 
 /** End a record once. A second end (a sweep racing the route, a predecessor
     release still running its timer) leaves the first answer standing. */
 export function endDeputy(askId: string, ending: {
   outcome: DeputyOutcome;
+  expectedAttempt?: number;
   now?: Date;
   touched?: DeputyTouched;
   result?: DeputyResult | null;
   error?: string | null;
 }): OrchestratorDeputy | null {
   const now = ending.now ?? new Date();
-  return updateDeputy(askId, (deputy) => deputy.state === "ended" ? null : {
+  return updateDeputy(askId, (deputy) => (deputy.state === "ended" || (ending.expectedAttempt !== undefined && ending.expectedAttempt !== (deputy.attempt ?? 0))) ? null : {
     ...deputy,
     state: "ended",
     endedAt: now.toISOString(),
@@ -394,8 +454,8 @@ export function endDeputy(askId: string, ending: {
   });
 }
 
-export function recordDeputyNote(askId: string, note: DeputyNote): OrchestratorDeputy | null {
-  return updateDeputy(askId, (deputy) => deputy.note ? null : { ...deputy, note });
+export function recordDeputyNote(askId: string, note: DeputyNote, expectedAttempt?: number): OrchestratorDeputy | null {
+  return updateDeputy(askId, (deputy) => deputy.note || (expectedAttempt !== undefined && expectedAttempt !== (deputy.attempt ?? 0)) ? null : { ...deputy, note });
 }
 
 /** The live record and the newest ended ones of one seat, newest first. */
@@ -432,9 +492,9 @@ export function deputyConversationRefsIn(
   return { conversationIds: [...conversationIds], paths: [...paths] };
 }
 
-/** The delivery key of the deputy's one message; stable across retries. */
-export function deputyMessageKey(askId: string): string {
-  return `deputy_ask_${crypto.createHash("sha256").update(askId).digest("hex").slice(0, 40)}`;
+/** The message key stays stable within one delivery attempt. */
+export function deputyMessageKey(askId: string, attempt = 0): string {
+  return `deputy_ask_${crypto.createHash("sha256").update(attempt ? `${askId}:retry:${attempt}` : askId).digest("hex").slice(0, 40)}`;
 }
 
 /** The deputy (or the trimmed trace of one) that names a conversation, by its
@@ -489,7 +549,7 @@ export function deputyDeliveryRefusal(
   const named = deputyNamingIn(file, target);
   if (!named) return null;
   const deputy = named.deputy;
-  if (deputy && deputy.state === "pending" && target.clientMessageId?.trim() === deputyMessageKey(deputy.askId)) return null;
+  if (deputy && deputy.state === "pending" && target.clientMessageId?.trim() === deputyMessageKey(deputy.askId, deputy.attempt ?? 0)) return null;
   if (deputy && target.interruptionContinuation === true && deputyLive(deputy, nowMs)) return null;
   return {
     code: DEPUTY_CONVERSATION_CLOSED,

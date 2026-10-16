@@ -46,6 +46,11 @@ export function runtimeImageCapability(engine: "claude" | "codex" | "copilot", p
   };
 }
 
+/** Acquisition refused before the quota-critical section ran. */
+export class RuntimeImageWriterBusyError extends Error {
+  constructor() { super("runtime image writer lock timed out"); }
+}
+
 const MIME_EXT: Record<StructuredImageMime, string> = {
   "image/png": "png",
   "image/jpeg": "jpg",
@@ -432,6 +437,7 @@ export function collectRuntimeImageReachableDigests(
      both files count. */
   const registryJson = path.join(root, "agent-registry.json");
   if (!registryLivesInSqlite(registryJson)) collectJsonFile(registryJson, digests, retireBefore);
+  collectJsonFile(path.join(root, "orchestrator-deputies.json"), digests, retireBefore);
   collectRegistrySqliteDigests(path.join(root, "agent-registry.sqlite"), digests, retireBefore);
   collectClaudeLedgerDigests(path.join(root, "claude-delivery-ledger"), digests, retireBefore);
   collectJsonDirectory(path.join(root, "structured-host-events"), digests, retireBefore);
@@ -644,7 +650,7 @@ export class RuntimeImageStore {
           }
         });
         if (acquired) break;
-        if (this.now() >= deadline) throw new Error("runtime image writer lock timed out");
+        if (this.now() >= deadline) throw new RuntimeImageWriterBusyError();
         sleepSync(5);
       }
       /* Final ownership verification before the quota-critical section: only
@@ -702,7 +708,7 @@ export class RuntimeImageStore {
           }
         }
         if (!acquired) {
-          if (this.now() >= deadline) throw new Error("runtime image writer lock timed out");
+          if (this.now() >= deadline) throw new RuntimeImageWriterBusyError();
           sleepSync(5);
         }
       }

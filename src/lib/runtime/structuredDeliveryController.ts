@@ -1292,8 +1292,9 @@ export async function bindStructuredDeliveryQueue(
   let drainBackoffMs = DELIVERY_DRAIN_COALESCE_MS;
   let stopped = false;
   let guarding: Promise<void> | null = null;
-  const enforceGuard = () => guarding ??= enforceAccountCreditGuard(registry,
-    [...hosts].map(([id, host]) => ({ key: registrations.get(id)!.key, host })),
+  const guardHosts = () => [...hosts].map(([id, host]) => ({ key: registrations.get(id)!.key, host }));
+  const enforceGuard = (onlyIfChanged = false) => guarding ??= enforceAccountCreditGuard(registry,
+    guardHosts,
     async (key, host) => hosts.get(sessionKeyId(key)) === host
       && (await state.terminateActiveHost?.(key) ?? false),
     (id, since) => hasRuntimeSwitchKill(client, id, since, [], true), async request => {
@@ -1305,7 +1306,7 @@ export async function bindStructuredDeliveryQueue(
       return enqueueStructuredMessage({ ...request, admissionGuard: authorize, recoveryAuthorityGuard: authorizeRecovery }, { enabled: () => true,
         registry: () => registry, client: () => client, recover: dependencies.recover, kick: requestDrain,
         authorizeDispatch: authorizeRecovery, interruptionContinuation: true });
-    }).finally(() => { guarding = null; });
+    }, { onlyIfChanged }).finally(() => { guarding = null; });
   const scheduleDrain = (delayMs = DELIVERY_DRAIN_COALESCE_MS): boolean => {
     if (stopped || drainTimer) return false;
     drainTimer = setTimeout(() => {
@@ -1602,6 +1603,7 @@ export async function bindStructuredDeliveryQueue(
   const detachRegistration = async (key: string, registered: HostRegistration): Promise<void> => {
     const discardedEntry = entryForHost(registry, registered);
     const conversationId = discardedEntry ? conversationIdForEntry(registry, discardedEntry) : null;
+    registry.invalidateAccountCreditGuard();
     registered.attachment?.unsubscribe();
     await registered.attachment?.stopEvents();
     const pendingPublications = publishChains.get(key);
@@ -1713,6 +1715,7 @@ export async function bindStructuredDeliveryQueue(
     let projectedState = hostProjectionKey(initialState);
     const unsubscribe = observable.onStateChange((state) => {
       const nextDeliveryState = deliveryStateKey(state);
+      if (nextDeliveryState !== deliveryState) registry.invalidateAccountCreditGuard();
       const nextProjectedState = hostProjectionKey(state);
       const previous = publishChains.get(key) ?? Promise.resolve();
       const next = previous
@@ -1785,6 +1788,7 @@ export async function bindStructuredDeliveryQueue(
     const registration: HostRegistration = seat
       ?? { key: item.key, host: item.host, writerEpoch: item.writerEpoch, attachment: null, cancelled: false };
     registration.writerEpoch ??= item.writerEpoch;
+    registry.invalidateAccountCreditGuard();
     registration.attachment = { unsubscribe, stopEvents };
     seatRegistration(key, registration);
     if (unpublishedLaunchHosts.get(key)?.host === item.host) unpublishedLaunchHosts.delete(key);
@@ -2055,7 +2059,7 @@ export async function bindStructuredDeliveryQueue(
          wakes only writes records; an unregistered host's target stays
          deferred by the drain, which notes `startup` on its records. */
       if (stopped || state.activeQueue !== queue) return;
-      void enforceGuard().catch(error => controllerDiagnosticError("[structured delivery] paid-credit guard retry pending", error));
+      void enforceGuard(true).catch(error => controllerDiagnosticError("[structured delivery] paid-credit guard retry pending", error));
       void queue.tick().catch((error) => {
         controllerDiagnosticError("[structured delivery] watchdog failed", { error: error instanceof Error ? error.message : String(error) });
       });

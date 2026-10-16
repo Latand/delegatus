@@ -292,7 +292,7 @@ export interface PipelinePorts {
   spawnReceiptState?(launchId: string): PipelineSpawnReceipt["state"] | null;
   recoverStagedLaunch?(launchId: string, eligible: () => boolean): Promise<void>;
   failStageLaunch?(launchId: string, conversationId: string, reason: string): boolean;
-  claimSpawnRetry(launchId: string, claimId: string): "claimed" | "settled" | "conflict";
+  claimSpawnRetry(launchId: string, claimId: string): "claimed" | "settled" | "conflict" | Promise<"claimed" | "settled" | "conflict">;
   /** Original launch/message journal evidence, freshly fenced by the failed
       receipt. An unavailable read never proves that a prompt was absent. */
   unpublishedLaunchRetrySafe?(launchId: string): Promise<boolean>;
@@ -645,15 +645,16 @@ export function pipelineClaudePermissionMode(
   return sandbox === "full" ? "bypassPermissions" : "auto";
 }
 
-function parentIdentity(parentPath: string | null): {
+async function parentIdentity(parentPath: string | null): Promise<{
   conversationId: ViewerConversationId | null;
   sessionKey: ReturnType<typeof sessionKeyFromTranscript>;
-} {
+}> {
   if (!parentPath) return { conversationId: null, sessionKey: null };
   const engine = engineForTranscript(parentPath);
   if (!engine) return { conversationId: null, sessionKey: null };
   const registry = agentRegistry();
-  const conversation = registry.conversationForPath(parentPath) ?? registry.ensureConversation(engine, parentPath, null);
+  const conversation = registry.conversationForPath(parentPath) ?? await registry.deliveryWriteOrBusy({ label: "pipeline.parent" },
+    () => registry.ensureConversation(engine, parentPath, null));
   return { conversationId: conversation.id, sessionKey: sessionKeyFromTranscript(engine, parentPath) };
 }
 
@@ -698,7 +699,7 @@ async function spawnPipelineAgent(
       serviceTier ? `serviceTier ${serviceTier} offered by: ${candidates.filter(account => offers?.offering.includes(account.id)).map(account => account.label).join(", ")}` : undefined);
   }
   const account = resolution.account;
-  const parent = parentIdentity(input.parentPath);
+  const parent = await parentIdentity(input.parentPath);
   const { access, sandbox } = input.runtimeProfile;
   if (access !== input.role.access) {
     throw new Error("pipeline stage runtime access does not match its effective role");
@@ -1275,14 +1276,17 @@ async function stopStageHostByRecordedIdentity(
       onFirstEffect?.();
     },
     ...(termination.persistCapturedTree ? {} : {
-      persistCapturedTree: (identities: readonly ProcessIdentity[]) => {
-        capture = registry.captureStructuredTerminationSurvivors(probe.key, root, identities, source);
+      persistCapturedTree: async (identities: readonly ProcessIdentity[]) => {
+        capture = await registry.deliveryWriteOrBusy({ label: "pipeline.termination-capture" },
+          () => registry.captureStructuredTerminationSurvivors(probe.key, root, identities, source));
         onCapture?.(capture);
         return capture !== null;
       },
-      withdrawCapturedTree: () => {
-        if (!capture) return;
-        const withdrawn = registry.withdrawStructuredTerminationSurvivors(probe.key, root, capture, source);
+      withdrawCapturedTree: async () => {
+        const captured = capture;
+        if (!captured) return;
+        const withdrawn = await registry.deliveryWriteOrBusy({ label: "pipeline.termination-withdraw" },
+          () => registry.withdrawStructuredTerminationSurvivors(probe.key, root, captured, source));
         if (withdrawn) onCapture?.(null);
       },
     }),
@@ -1630,8 +1634,9 @@ export function defaultPipelinePorts(
         delivery.command.operationId === `spawn_message_${launchId}`
           && (delivery.attempts !== 0 || delivery.state !== "failed" || deliveryMayHaveArrived(current, delivery)));
     },
-    claimSpawnRetry: (launchId, claimId) => {
-      const result = registry.claimFailedSpawnForRetry(launchId, claimId).kind;
+    claimSpawnRetry: async (launchId, claimId) => {
+      const result = (await registry.deliveryWriteOrBusy({ label: "pipeline.spawn-retry", operationId: launchId },
+        () => registry.claimFailedSpawnForRetry(launchId, claimId))).kind;
       invalidateRegistryProjection();
       return result;
     },
@@ -1924,7 +1929,7 @@ export function defaultPipelinePorts(
       return { state: current && status?.receipt.status === "applied" ? "superseded" : "pending" };
     },
     cancelRuntimeSwitch: async (conversationId, operationId) => {
-      cancelPendingRuntimeSwitch(registry, conversationId, operationId);
+      await cancelPendingRuntimeSwitch(registry, conversationId, operationId);
     },
     retireRuntimeSwitch: async record => {
       const { retireRuntimeSwitchProducers } = await import("./runtimeSwitchRecovery");
@@ -1971,7 +1976,7 @@ export function defaultPipelinePorts(
           () => registry.retryConversationMigration(id, migration.revision));
         if (!retried.acquired) throw new Error(REGISTRY_WRITER_BUSY);
       } else {
-        registry.requestConversationReseat(id, targetAccountId);
+        await registry.deliveryWriteOrBusy({ label: "pipeline.reseat" }, () => registry.requestConversationReseat(id, targetAccountId));
       }
       requestAccountMigrationTick();
       invalidateRegistryProjection();
@@ -9228,7 +9233,7 @@ async function deferRetiredLaunchRetry(
     }
   };
   if (prepublicationInterruption && !await safeToReplace()) return "delivered";
-  const claim = ports.claimSpawnRetry(receipt.launchId, `${pipeline.id}:${stage.id}:${receipt.launchId}`);
+  const claim = await ports.claimSpawnRetry(receipt.launchId, `${pipeline.id}:${stage.id}:${receipt.launchId}`);
   if (claim !== "claimed") return "settled";
   const startupCondition: ProviderCondition = { kind: "host_death", scope: null, resetLabel: null, label: "failed startup" };
   const recoverySummary = `failed startup: ${redactBounded(failure, 300)}; keeping uncommitted work`;
@@ -9815,7 +9820,7 @@ export async function settlePendingRemoteActions(ports: PipelinePorts = defaultP
         const flow = attempt?.flowId ? ports.getFlow(attempt.flowId) : null;
         if (!abort.signal.aborted && !cleanupError && flow && flow.state !== "closed") cleanupError = (await ports.closeFlow(flow.id))?.error;
         revalidate();
-        if (!abort.signal.aborted && action.retryReceipt?.claimId && ports.claimSpawnRetry(action.retryReceipt.launchId, action.retryReceipt.claimId) !== "claimed") abort.abort();
+        if (!abort.signal.aborted && action.retryReceipt?.claimId && (await ports.claimSpawnRetry(action.retryReceipt.launchId, action.retryReceipt.claimId)) !== "claimed") abort.abort();
         if (cleanupError) result = { ok: false, error: cleanupError };
         else if (!abort.signal.aborted && action.action === "skip-stage" && stage && attempt) {
           const outputs = attemptStage(stage, attempt).outputs ?? [];
@@ -9867,7 +9872,7 @@ export async function settlePendingRemoteActions(ports: PipelinePorts = defaultP
       if (!pipeline || pipeline.remoteAction?.id !== action.id || pipeline.remoteAction.state !== "pending") return;
       const refusal = budgetRefusal(pipeline);
       const stale = Boolean(refusal) || !matches(pipeline) || !receiptMatches()
-        || (action.retryReceipt?.claimId !== undefined && ports.claimSpawnRetry(action.retryReceipt.launchId, action.retryReceipt.claimId) !== "claimed");
+        || (action.retryReceipt?.claimId !== undefined && (await ports.claimSpawnRetry(action.retryReceipt.launchId, action.retryReceipt.claimId)) !== "claimed");
       pipeline.remoteAction = { ...action, state: "settled", settledAt: ports.now(), ...(!result.ok || stale ? { error: refusal?.error ?? (stale ? "remote action superseded" : (result as { error: string }).error) } : {}) };
       if (pipeline.delivery) deliveryJournal(pipeline, "recovery", stale ? `${action.action} remote verification superseded`
         : result.ok ? `${action.action} remote verification settled` : `${action.action} remote verification failed: ${result.error}`, action.actor?.kind === "agent" ? action.actor.conversationId : null);
@@ -13230,7 +13235,7 @@ export async function patchPipeline(
         if (!retryLaunchId || !retryStageId) {
           return { error: "structured retry identity is unavailable", status: 409 };
         }
-        const claim = ports.claimSpawnRetry(retryLaunchId, `${pipeline.id}:${retryStageId}:${retryLaunchId}`);
+        const claim = await ports.claimSpawnRetry(retryLaunchId, `${pipeline.id}:${retryStageId}:${retryLaunchId}`);
         if (claim !== "claimed") {
           return {
             error: claim === "settled"

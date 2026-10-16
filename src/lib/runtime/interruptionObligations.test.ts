@@ -36,6 +36,15 @@ const releaseCut: InterruptionObligationInput = {
   recordedAt: "2026-09-19T11:16:20.000Z",
 };
 
+async function conversationCuts(store: ReturnType<typeof accountGuardObligationStore>, conversationId: string) {
+  const cuts: import("./interruptionObligations").InterruptionObligation[] = [];
+  for await (const page of store.conversationPages(conversationId)) {
+    expect(page.length).toBeLessThanOrEqual(64);
+    cuts.push(...page);
+  }
+  return cuts;
+}
+
 test("the obligation id is derived from the cut, so separate processes agree on one key", () => {
   const first = interruptionObligationStore(directory).record(releaseCut);
   /* A second store instance stands in for a successor process. */
@@ -364,4 +373,114 @@ test("a settled guard receipt takes precedence over its older copy in a fresh im
   await guard.update(cut.id, { state: "delivered", resolvedAt: new Date().toISOString() });
   expect(await accountGuardObligationStore(obligations).list()).toEqual([]);
   expect((await accountGuardObligationStore(obligations).page("")).obligations).toEqual([]);
+});
+
+
+test("guard ticks advance a bounded native directory cursor without listing every pending name", async () => {
+  const obligations = path.join(directory, "guard-native-cursor");
+  const store = accountGuardObligationStore(obligations);
+  const ids: string[] = [];
+  for (let n = 0; n < 193; n++) ids.push((await store.record({ ...releaseCut, reason: "account-guard",
+    conversationId: `conversation_cursor_${n}`, turnRef: `guard-${n}` } as never)).obligation.id);
+  const list = fs.readdirSync;
+  let pendingLists = 0;
+  const spy = spyOn(fs, "readdirSync").mockImplementation(((...args: Parameters<typeof fs.readdirSync>) => {
+    if (String(args[0]) === `${obligations}.account-guard-pending`) pendingLists++;
+    return Reflect.apply(list, fs, args);
+  }) as typeof list);
+  const visited: string[] = [];
+  try {
+    for (let pages = 0; ; pages++) {
+      expect(pages).toBeLessThan(6);
+      const result = await store.scanPage();
+      expect(result.obligations.length).toBeLessThanOrEqual(64);
+      visited.push(...result.obligations.map(row => row.id));
+      result.acknowledge();
+      if (!result.nextCursor) break;
+    }
+    expect(pendingLists).toBe(0);
+    expect(visited.sort()).toEqual(ids.sort());
+  } finally { spy.mockRestore(); }
+});
+
+test("guard pages retain bounded names until acknowledgement and reload partial durable effects", async () => {
+  const obligations = path.join(directory, "guard-page-retry");
+  const store = accountGuardObligationStore(obligations);
+  for (let n = 0; n < 65; n++) await store.record({ ...releaseCut, reason: "account-guard", turnRef: `retry-${n}` });
+  const first = await store.scanPage();
+  expect(first.obligations.length).toBeGreaterThan(0);
+  expect(first.obligations.length).toBeLessThanOrEqual(64);
+  const settled = first.obligations[0]!.id;
+  await store.update(settled, { state: "delivered", resolvedAt: "2026-01-01T00:00:00.000Z" });
+  const retry = await store.scanPage();
+  expect(retry.obligations.map(row => row.id)).toEqual(first.obligations.slice(1).map(row => row.id));
+  retry.acknowledge();
+  const next = await store.scanPage();
+  expect(next.obligations.length).toBeGreaterThan(0);
+  expect(next.obligations.every(row => !first.obligations.some(prior => prior.id === row.id))).toBe(true);
+  // A stale acknowledgement cannot discard a later page.
+  first.acknowledge();
+  expect((await store.scanPage()).obligations).toEqual(next.obligations);
+  next.acknowledge();
+});
+
+test("conversation lookup preserves ordinary terminal witnesses across fresh stores and timestamp ties", async () => {
+  const obligations = path.join(directory, "guard-conversation-index");
+  const store = accountGuardObligationStore(obligations);
+  const one = (await store.record({ ...releaseCut, reason: "account-guard", turnRef: "one" })).obligation;
+  const two = (await store.record({ ...releaseCut, reason: "account-guard", turnRef: "two" })).obligation;
+  expect(two.recordedAt).toBe(one.recordedAt);
+  await store.update(one.id, { state: "discharged", resolution: "a newer cut", resolvedAt: one.recordedAt });
+  expect((await conversationCuts(accountGuardObligationStore(obligations), one.conversationId)).map(row => row.id)).toEqual([two.id]);
+  expect((await store.record({ ...releaseCut, reason: "account-guard", turnRef: "one" })).created).toBe(false);
+  expect(JSON.parse(fs.readFileSync(path.join(obligations, `${one.id}.json`), "utf8")).state).toBe("discharged");
+  expect(interruptionObligationStore(obligations).list().find(row => row.id === one.id)?.state).not.toBe("owed");
+});
+
+
+test("a guard cut refused by the directory replays its durable pending witness", async () => {
+  const obligations = path.join(directory, "guard-replay-journal");
+  const store = accountGuardObligationStore(obligations);
+  const first = await store.record({ ...releaseCut, reason: "account-guard", turnRef: "guard-journal" });
+  fs.appendFileSync(`${obligations}.pending.jsonl`, `${JSON.stringify(first.obligation)}\n`);
+  fs.unlinkSync(path.join(obligations, `${first.obligation.id}.json`));
+  const replay = await store.record({ ...releaseCut, reason: "account-guard", turnRef: "guard-journal" });
+  expect(replay.created).toBe(false);
+  expect(replay.obligation).toEqual(first.obligation);
+  expect((await conversationCuts(store, first.obligation.conversationId)).map(row => row.id)).toContain(first.obligation.id);
+});
+
+
+test("a conversation pointer cannot return or discharge another conversation's cut", async () => {
+  const { createHash } = await import("node:crypto");
+  const obligations = path.join(directory, "guard-foreign-pointer");
+  const store = accountGuardObligationStore(obligations);
+  const own = (await store.record({ ...releaseCut, reason: "account-guard", turnRef: "own" })).obligation;
+  const other = (await store.record({ ...releaseCut, conversationId: "conversation_other", reason: "account-guard", turnRef: "other" })).obligation;
+  const pointers = path.join(`${obligations}.account-guard-pending.conversations`, createHash("sha256").update(own.conversationId).digest("hex"));
+  fs.writeFileSync(path.join(pointers, `${other.id}.json`), JSON.stringify({ id: other.id }));
+  expect((await conversationCuts(store, own.conversationId)).map(row => row.id)).toEqual([own.id]);
+  expect(interruptionObligationStore(obligations).list().find(row => row.id === other.id)?.state).toBe("owed");
+});
+
+
+test("guard replay uses its cut identity index without scanning pending history", async () => {
+  const obligations = path.join(directory, "guard-cut-identity");
+  const store = accountGuardObligationStore(obligations);
+  const input = { ...releaseCut, reason: "account-guard" as const, owner: { pid: 123, startIdentity: "fixture-owner" }, turnRef: "same-turn" };
+  const first = await store.record(input);
+  for (let n = 0; n < 130; n++) await store.record({ ...input, turnRef: `other-${n}` });
+  const read = fs.readdirSync;
+  let historyScans = 0;
+  const scan = spyOn(fs, "readdirSync").mockImplementation(((...args: Parameters<typeof fs.readdirSync>) => {
+    if (String(args[0]).startsWith(`${obligations}.account-guard-pending`)) historyScans++;
+    return Reflect.apply(read, fs, args);
+  }) as typeof read);
+  try {
+    const replay = await store.record({ ...input, boundary: "another-observation-of-the-same-cut" });
+    expect(replay.created).toBe(false);
+    expect(replay.obligation.id).toBe(first.obligation.id);
+    expect(historyScans).toBe(0);
+  } finally { scan.mockRestore(); }
+  expect((await conversationCuts(store, first.obligation.conversationId)).length).toBe(131);
 });
