@@ -5338,7 +5338,7 @@ describe("CodexAppServerHost", () => {
         ok: true,
         toolName: "deployment_status",
         count: 1,
-        deployments: [deployment],
+        deployments: [{ ...deployment, revision: "eeeeeeee" }],
       });
       expect(controlRequests).toBe(1);
       const events = new FileRuntimeEventStore(eventsPath).load(successorReady.sessionId);

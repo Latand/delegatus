@@ -1,4 +1,4 @@
-import { shortIdsInAnswer } from "@/lib/shortIds";
+import { shortIdsInAnswer, shortenHashesInText } from "@/lib/shortIds";
 import { normalizeShortIdArgs } from "./shortIdArgs";
 import { runWithNativeCallProof } from "@/lib/attention/nativeCallProof";
 import { nativeAdmissionMessage, type NativeCallerRefusal } from "@/lib/attention/nativeCaller";
@@ -371,6 +371,8 @@ export type McpToolBinding = ((args: McpToolArgs, context?: McpToolCallContext) 
       caller's clientRequestId never answers another's. A refusal burns nothing.
       Must not mutate state. */
   receiptScope?: (args: McpToolArgs, context?: McpToolCallContext) => Promise<string>;
+  /** Resolve guarded references to their retained full identity before hashing a receipt. */
+  canonicalizeReceiptArgs?: (args: McpToolArgs) => McpToolArgs;
 };
 export type McpToolBindings = Record<McpToolName, McpToolBinding>;
 
@@ -2682,7 +2684,8 @@ export function createMcpToolService(
       const digestArgs: McpToolArgs = recoverable
         ? Object.fromEntries(Object.entries(effectiveArgs).filter(([name]) => name !== "recoveryOnly"))
         : effectiveArgs;
-      const digest = requestDigest(typedTool, digestArgs);
+      const canonicalArgs = bindings[typedTool].canonicalizeReceiptArgs?.(digestArgs) ?? digestArgs;
+      const digest = requestDigest(typedTool, canonicalArgs);
       const key = receiptKey(typedTool, requestId, scope);
       /* A recoverable mutation never joins an in-process duplicate: who is
          calling is decided first, and every later call under the key — in
@@ -3428,7 +3431,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
   get_conversation: "Read a conversation summary and its recent messages and tools, newest kept within an answer budget: each record keeps its first maxChars characters with truncated:true when cut, and omitted counts the older records left out. full:true returns complete records and tail lines. With tailLines, conversationId or selectedContext uses the bounded identity path, while transcriptPath uses the validated pinned reader; both return a bounded raw tail without a corpus scan. For normalized, filtered, paged messages use conversation_messages.",
   conversation_deliverability: "Read whether one conversation currently has a deliverable host from the durable registry record. An accepted resume stays synchronizing until the current generation records a claimed process; reclaimed, synchronizing, superseded, and unknown are distinct conditions.",
   conversation_messages: "Read one conversation newest-first as engine-normalized records; Claude and Codex return the same shape, while hook attachments and usage envelopes are omitted. Identity accepts conversationId, transcriptPath, or selectedContext and resolves through the same bounded paths as get_conversation. kinds is a non-empty subset of message | reasoning | tool_call | tool_result | trace (default message). roles is a non-empty subset of user | assistant | system | tool (default all). since is an inclusive ISO timestamp lower bound. limit clamps to 1..200 (default 20); maxChars clamps to 1..16000 (default 4000), and truncated marks cut text after secret redaction. Records are newest-first. Pass the opaque cursor unchanged with an omitted or fresh clientRequestId for each next-older page while hasMore is true; cursors are bound to the transcript and filters. A normal empty page returns records: []. File work is bounded by the page, so a 100 MB rollout is never parsed in full.",
-  deploy_exact_sha: "Deploy the serving Delegatus application by commit SHA or unique prefix of at least 7 characters on the tracked branch. Never a branch name. Only its server-attributed designated seat deploys; other projects cannot deploy through this tool. Managed installs require a full SHA. Idempotent by clientRequestId; deployments serialize at the runtime host. An accepted deploy records wakeOnSettle:true for the seat: end the turn, and its next wake reports the terminal phase and paused lanes.",
+  deploy_exact_sha: "Deploy the serving Delegatus application by commit SHA or unique prefix of at least 7 characters on the tracked branch. Never a branch name. Only its server-attributed designated seat deploys; other projects cannot deploy through this tool. Idempotent by clientRequestId; deployments serialize at the runtime host. An accepted deploy records wakeOnSettle:true for the seat: end the turn, and its next wake reports the terminal phase and paused lanes.",
   get_pipeline: "Read one pipeline by durable id, with stageDigests and graphDigest for a guarded graph edit. Use full:true for delivery ownership, closeReport, work links and retained bodies. Compact by default; full:true or compact:false returns the whole record, prompts, role scaffolds and attempt transcripts included. `stageId` narrows the answer to that stage and one attempt (the latest by default, or `attempt`): its verdict, findings, reported summary, conversation and error, with no prompts or transcripts. `compact: true` answers the list_pipelines compact row plus the digests.",
   board_snapshot: "Read a bounded, redacted snapshot of the Delegatus board, durable placement, and the selected project's hidden conversation count.",
   list_flows: "List durable implement-review flows newest-created first, compact by default, with a 24 KB row budget and cursor pagination. Rows include identity, state, revision, spec title/length and round count. omittedCount counts matching records outside this page; omittedRecordCount counts compacted records. Follow nextCursor with the same filters and a fresh clientRequestId until hasMore is false. full:true or compact:false returns complete records; get_flow(flowId) reads one full record. A single explicit full record can exceed the budget. Unknown states are ignored; limits clamp and invalid or mismatched cursors restart with cursorReset:true.",
@@ -3878,7 +3881,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
       branch: z.string().startsWith("refs/heads/"),
       remote: z.string().optional(),
       pr: z.number().int().positive().optional(),
-      rejectedHead: z.string().regex(/^[0-9a-f]{40}$/i).optional(),
+      rejectedHead: z.string().regex(/^[0-9a-f]{7,40}$/i).optional().describe("Commit SHA or unique local commit prefix (7+ hex)."),
       comparison: z.boolean().optional(),
     }).optional().describe("Delivery target, using the PR head repository remote and full branch. The canonical repository plus branch has one Delegatus publisher. A competing creation becomes an internal comparison lane and names its owner; host Git/gh tools remain unchanged."),
     task: z.string().min(1).describe("Board title for the pipeline."),
@@ -4559,6 +4562,19 @@ export function viewerMcpInstructions(locale?: "en" | "uk" | null): string {
 
 const VIEWER_MCP_BASE_INSTRUCTIONS = "This server is Delegatus, registered under the MCP key `viewer`, so its tools are named mcp__viewer__*. List tasks newest-first with status sets, openOnly, ids or query and follow nextCursor. Lists are compact by default; full:true retrieves complete records; get_pipeline is compact by default. Use get_task/get_flow for complete records. Writes acknowledge changedFields and revision. Use seat_tick_settings verbose:true to read the complete monitor note. Use clientRequestId on mutations; pure reads may omit it for a fresh observation. Static readMore hints require includeHints:true or full:true. Reuse it only when replaying the same logical operation. Launch admission names new tasks before the agent starts, using the supplied title and a concise launcher brief or a short title derived from the prompt. Refinement is optional: for a legacy placeholder, update_task with refine: { text } supplies a short human title (3–10 words) on the first line and at most two concise sentences. Read-only roles skip refinement. A refine that answers TASK_NOT_FOUND means your conversation holds no task; carry on. Keep an existing meaningful title; the reply says already-named when one exists. Reuse the same text on retry. A task's text is for the human who reviews the board, and refine writes only that; agent-facing context (the prompt, the working notes, the ids, the rules, the state) belongs in the separate details field of create_task and update_task, condensed, which the card shows behind one collapsed Details row. Use agent_fleet first for compact counts by engine, model, effort and account; request detail or filters only when needed. Read the board through these tools rather than curl: list_pipelines with state `open` and compact: true for the open lanes, get_pipeline with stageId for one stage's conclusion, deployment_status and agent_activity with compact: true, and account_limits for each account's usage windows.";
 
+function shortenSchemaDescriptions<T extends z.ZodType>(schema: T): T {
+  const def = (schema as unknown as { _zod?: { def?: { type?: string; element?: z.ZodType } } })._zod?.def;
+  let output: z.ZodType = schema;
+  if (schema instanceof z.ZodObject) {
+    output = schema.safeExtend(Object.fromEntries(Object.entries(schema.shape).map(([key, child]) => [key, shortenSchemaDescriptions(child)])));
+  } else if (def?.type === "array" && def.element) {
+    output = z.array(shortenSchemaDescriptions(def.element));
+  }
+  const description = schema.description;
+  if (description) output = output.meta({ ...output.meta(), description: shortenHashesInText(description) });
+  return output as T;
+}
+
 // The hook supplies this transport proof automatically. It is never part of
 // the logical arguments, their digest, downstream payload or durable answer.
 for (const name of MCP_TOOL_NAMES) TOOL_INPUT_SCHEMAS[name] = TOOL_INPUT_SCHEMAS[name].extend({ nativeCallerProof: z.string().regex(/^[A-Za-z0-9_-]{43}$/).optional().describe("Injected by the synchronous Delegatus Claude hook. Omit in ordinary arguments; never invent or copy a proof.") });
@@ -4580,7 +4596,7 @@ export function createViewerMcpServer(service: McpToolService): McpServer {
     )) : schema;
     server.registerTool(toolName, {
       description: TOOL_DESCRIPTIONS[toolName],
-      inputSchema,
+      inputSchema: shortenSchemaDescriptions(inputSchema),
     }, async (args, extra) => {
       if (taskMutation) {
         const parsed = schema.safeParse(args);

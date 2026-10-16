@@ -177,10 +177,11 @@ import { queuedPipelineCreationMessage, queuedPipelineCreationStatus } from "@/l
 import type { TaskPipelineReadModel } from "@/lib/pipelines/taskBinding";
 import { PIPELINE_LIST_DEFAULT_LIMIT, pipelineCompactRow, pipelineListRow } from "@/lib/pipelines/listProjection";
 import { graphDigest, stageDigests } from "@/lib/pipelines/stageDigest";
-import { loadPipelinesForList, pipelineSelectionSource, pipelineDeliveryLookup } from "@/lib/pipelines/store";
+import { loadPipelinesForList, pipelineSelectionSource, pipelineDeliveryLookup, pipelineRevision } from "@/lib/pipelines/store";
 import type { CreatePipelineRequest, PatchPipelineRequest, Pipeline, PipelineAction, PipelineCloseReport, PipelineMergeState } from "@/lib/pipelines/types";
 import type { PauseResumeActor } from "@/lib/pauseResumeActor";
 import { viewerRepositoryProjects } from "@/lib/projects/viewerRepository";
+import { projectKeyIndexSnapshot } from "@/lib/projects/projectKeyIndex";
 import { listFiles } from "@/lib/scanner";
 import { validExplicitProject } from "@/lib/accounts/migration/contracts";
 import { describe, projectForCwd, reprojectFileDescription } from "@/lib/scanner/describe";
@@ -4274,11 +4275,15 @@ function orchestratorProjectBinding(
   run: (resolved: McpToolArgs, context?: McpToolCallContext) => Promise<McpToolPayload>,
   optionalProject = false,
   requireActiveSeat = true,
+  allowIndexedBoardWithoutSeat = false,
 ): McpToolBinding {
   const resolved = new WeakMap<McpToolArgs, McpToolArgs>();
   const resolve = async (args: McpToolArgs) => {
     if (optionalProject && !text(args.project)) return args;
-    return { ...args, project: await resolveOrchestratorToolProject(required(args, "project"), dependencies, requireActiveSeat) };
+    const requested = required(args, "project");
+    const indexedBoard = allowIndexedBoardWithoutSeat && /^(repo|dir)-[a-f0-9]{32}$/i.test(requested)
+      && [...projectKeyIndexSnapshot()].some(project => project.toLowerCase() === requested.toLowerCase());
+    return { ...args, project: await resolveOrchestratorToolProject(requested, dependencies, requireActiveSeat && !indexedBoard) };
   };
   return Object.assign(
     async (args: McpToolArgs, context?: McpToolCallContext) => {
@@ -7835,12 +7840,23 @@ export function viewerMcpBindings(
     spawn_agent: (args, context) => spawnAgent(args, viewerControlForCall(controlDependencies, context), context, domainDependencies),
     send_message: (args, context) => sendMessage(args, viewerControlForCall(controlDependencies, context), domainDependencies, context),
     message_receipt: (args) => messageReceipt(args),
-    create_task: orchestratorProjectBinding(domainDependencies, (args) => createBoardTask(args, domainDependencies), true),
+    create_task: orchestratorProjectBinding(domainDependencies, (args) => createBoardTask(args, domainDependencies), true, true, true),
     update_task: (args) => updateBoardTask(args, domainDependencies),
     create_pipeline: (args, context) => unadmittedBeforeMutation(async () => (await createPipeline(args, context, domainDependencies))),
     pipeline_action: Object.assign(
       (args: McpToolArgs) => unadmittedBeforeMutation(() => pipelineAction(args, domainDependencies)),
-      { authorizeReceipt: (args: McpToolArgs) => {
+      { canonicalizeReceiptArgs: (args: McpToolArgs) => {
+        if (args.action !== "resolve-decision" || typeof args.expectedRevision !== "string") return args;
+        const id = required(args, "pipelineId");
+        const pipeline = domainDependencies.readPipelineRecord
+          ? domainDependencies.readPipelineRecord(id)
+          : domainDependencies.getPipelines?.().pipelines.find((item) => item.id === id);
+        if (!pipeline) return args;
+        const accepted = pipeline.decisionAnswers?.find((entry) => entry.clientRequestId === args.clientRequestId);
+        const retained = accepted?.expectedRevision ?? pipelineRevision(pipeline);
+        if (!/^[a-f0-9]{7,64}$/i.test(args.expectedRevision) || !retained.toLowerCase().startsWith(args.expectedRevision.toLowerCase())) return args;
+        return { ...args, expectedRevision: retained };
+      }, authorizeReceipt: (args: McpToolArgs) => {
         if (!PIPELINE_RECEIPT_ACTIONS.has(args.action as PipelineAction)) return;
         const id = required(args, "pipelineId");
         const pipeline = domainDependencies.readPipelineRecord

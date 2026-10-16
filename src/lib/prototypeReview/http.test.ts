@@ -85,10 +85,12 @@ test("the full form keeps originals, captions and videos; safe routes serve copi
   const input = await fullInput(); const id = await publish(input); const review = (await read()).rounds[0]!;
   const frame = review.variants[0]!.frames[0]!;
   expect(frame.caption).toBe("Changed controls"); expect(frame.original?.available).toBe(true);
-  const image = await imageGET(request(frame.image.url!)); expect(image.status).toBe(200); expect(Buffer.from(await image.arrayBuffer())).toEqual(PNG);
+  const shortRound = id.slice(0, 11);
+  const image = await imageGET(request(`/api/image?taskId=task-prototype&prototype=${shortRound}&media=${frame.image.id.slice(0, 8)}`)); expect(image.status, image.status === 200 ? "" : JSON.stringify(await image.clone().json())).toBe(200); expect(Buffer.from(await image.arrayBuffer())).toEqual(PNG);
+  const original = await imageGET(request(`/api/image?taskId=task-prototype&prototype=${shortRound}&media=${frame.original!.id.slice(0, 8)}`)); expect(original.status).toBe(200); expect(Buffer.from(await original.arrayBuffer())).toEqual(Buffer.concat([PNG,Buffer.from("original")]));
   const media = review.variants[0]!.videos[0]!.media;
   const rangeRequest = request(media.url!); rangeRequest.headers.set("range","bytes=4-11");
-  const video = await prototypeMediaGET(rangeRequest,"task-prototype",id,media.id,"video");
+  const video = await prototypeMediaGET(rangeRequest,"task-prototype",shortRound,media.id.slice(0, 8),"video");
   expect(video.status).toBe(206); expect(video.headers.get("content-range")).toBe(`bytes 4-11/${MP4.length}`); expect(Buffer.from(await video.arrayBuffer())).toEqual(Buffer.from("ftypisom"));
   rangeRequest.headers.set("range","bytes=999-"); expect((await prototypeMediaGET(rangeRequest,"task-prototype",id,media.id,"video")).status).toBe(416);
   rangeRequest.headers.set("range","bytes=-4"); const suffix = await prototypeMediaGET(rangeRequest,"task-prototype",id,media.id,"video"); expect(suffix.status).toBe(206); await suffix.arrayBuffer();

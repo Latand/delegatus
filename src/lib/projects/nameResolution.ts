@@ -5,10 +5,29 @@ import { canonicalProject, projectAliasSnapshot, recordedProjectRemotes } from "
 import { projectCurationSnapshot } from "./curation";
 import { reportHeaderName } from "./settings";
 import { activeOrchestratorSeats } from "@/lib/orchestrator/seats";
-import { conversationCatalogSnapshot } from "@/lib/scanner/conversationCatalog";
+import { conversationCatalogProjectsSnapshot } from "@/lib/scanner/conversationCatalog";
 import { projectInfoFromCwd } from "@/lib/scanner/describe";
+import { projectKeyIndexSnapshot } from "./projectKeyIndex";
 
 type Member = { project: string; displayName?: string; projectName?: string; projectRoot?: string | null; cwd?: string | null; worktree?: string };
+const catalogMembers = new WeakMap<readonly Member[], readonly Member[]>();
+
+function uniqueCatalogMembers(files: readonly Member[] | undefined): readonly Member[] {
+  if (!files) return [];
+  const cached = catalogMembers.get(files);
+  if (cached) return cached;
+  const seen = new Set<string>();
+  const members: Member[] = [];
+  for (const file of files) {
+    const identity = JSON.stringify([file.project, file.displayName, file.projectName, file.projectRoot, file.cwd, file.worktree]);
+    if (seen.has(identity)) continue;
+    seen.add(identity);
+    members.push(file);
+  }
+  catalogMembers.set(files, members);
+  return members;
+}
+
 type Sources = {
   authorizedSeats?(): readonly { project?: string | null }[];
   callerProject?(): string | null;
@@ -36,7 +55,11 @@ export function namedProjectDirectory(sources: Sources = {}, extraKeys: readonly
     return target;
   };
   const last = sources.lastCompletedCatalog?.();
-  const members: readonly Member[] = [...(last?.projectCatalog ?? []), ...(last?.files ?? []), ...conversationCatalogSnapshot()];
+  const memberKeys = new Set([
+    ...conversationCatalogProjectsSnapshot(),
+    ...projectKeyIndexSnapshot(),
+  ]);
+  const members: readonly Member[] = [...(last?.projectCatalog ?? []), ...uniqueCatalogMembers(last?.files), ...[...memberKeys].map(project => ({ project }))];
   const seats = activeOrchestratorSeats();
   const authorized = sources.authorizedSeats?.() ?? [];
   const manualProjects = projectCurationSnapshot().manualProjects;

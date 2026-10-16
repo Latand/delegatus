@@ -3,7 +3,7 @@ export const SHORT_ID_CHARS = 8;
 export const MIN_SHORT_ID_CHARS = 7;
 
 function parts(value: string): { tag: string; hash: string } | null {
-  for (const pattern of [/^(evt_|rpt_)([a-f0-9]{24})$/i, /^(repo-|dir-|pr_)([a-f0-9]{32})$/i, /^(roles-\d+-)([a-f0-9]{20})$/i, /^(task-legacy:)([a-f0-9]{64})$/i]) {
+  for (const pattern of [/^(evt_|rpt_)([a-f0-9]{24})$/i, /^(repo-|dir-|pr_)([a-f0-9]{32})$/i, /^(m_)([a-f0-9]{24})$/i, /^(roles-\d+-)([a-f0-9]{20})$/i, /^(task-legacy:)([a-f0-9]{64})$/i]) {
     const match = pattern.exec(value);
     if (match) return { tag: match[1]!, hash: match[2]! };
   }
@@ -43,6 +43,11 @@ export function shortIdsInAnswer<T>(payload: T): T {
   const seen = new WeakMap<object, unknown>();
   const visit = (value: unknown, key = ""): unknown => {
     if (typeof value === "string" && key === "label" && /^(Yes, publish report |Так, публікуй звіт )/.test(value)) return shortenHashesInText(value);
+    if (typeof value === "string" && key === "url") return value
+      .replace(/(prototype=)(pr_[a-f0-9]{32})/gi, (_all, prefix: string, id: string) => prefix + shortId(id))
+      .replace(/(\/prototypes\/)(pr_[a-f0-9]{32})/gi, (_all, prefix: string, id: string) => prefix + shortId(id))
+      .replace(/(media=)([a-f0-9]{64})/gi, (_all, prefix: string, id: string) => prefix + shortId(id))
+      .replace(/(\/video\/)([a-f0-9]{64})/gi, (_all, prefix: string, id: string) => prefix + shortId(id));
     if (typeof value === "string") return authored.has(key) ? value : status.has(key) ? shortenHashesInText(value) : shortId(value);
     if (!value || typeof value !== "object") return value;
     if (seen.has(value)) return seen.get(value);

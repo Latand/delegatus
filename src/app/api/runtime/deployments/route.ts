@@ -160,8 +160,6 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       const receipt = await service.deployRevision({ ...target, idempotencyKey: body.idempotencyKey });
       return NextResponse.json(receipt, { status: receipt.state === "accepted" ? 202 : 409 });
     }
-    if ("revision" in target && target.revision.length < 40) return NextResponse.json(
-      { error: "pass the full SHA or a ref", reason: "revision_invalid" }, { status: 400 });
     const receipt = await requestViewerDeployment({ ...target, idempotencyKey: body.idempotencyKey });
     return NextResponse.json(receipt, { status: receipt.state === "busy" ? 409 : 202 });
   } catch (error) {

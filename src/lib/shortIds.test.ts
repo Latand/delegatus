@@ -5,7 +5,7 @@ const hash = "a1b2c3d4" + "e".repeat(56);
 const sha = hash.slice(0, 40);
 const uuid = ["a1b2c3d4", "0000", "4000", "8000", "000000000000"].join("-");
 const values = [hash, sha, `repo-${hash.slice(0, 32)}`, `dir-${hash.slice(0, 32)}`, `pr_${hash.slice(0, 32)}`,
-  `roles-3-${hash.slice(0, 20)}`, `evt_${hash.slice(0, 24)}`, `rpt_${hash.slice(0, 24)}`, `task-legacy:${hash}`, `task-v1:${uuid}`];
+  `m_${hash.slice(0, 24)}`, `roles-3-${hash.slice(0, 20)}`, `evt_${hash.slice(0, 24)}`, `rpt_${hash.slice(0, 24)}`, `task-legacy:${hash}`, `task-v1:${uuid}`];
 
 test.each(values)("short ids preserve the type and resolve case-insensitively: %s", value => {
   const short = shortId(value);
@@ -46,6 +46,12 @@ test("answer transformation is idempotent, preserves authored strings and traver
   expect(output.stages).toEqual(["a1b2c3d4"]);
   expect(shortIdsInAnswer(output)).toEqual(output);
   expect(input.revision).toBe(hash);
+});
+
+test("prototype media URLs carry usable short review and media references", () => {
+  const review = `pr_${hash.slice(0, 32)}`;
+  const url = `/api/image?taskId=task-1&prototype=${review}&media=${hash}`;
+  expect(shortIdsInAnswer({ url }).url).toBe(`/api/image?taskId=task-1&prototype=pr_a1b2c3d4&media=a1b2c3d4`);
 });
 
 test("only the server's consent labels shorten embedded digests in labels", () => {

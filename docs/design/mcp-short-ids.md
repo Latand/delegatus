@@ -44,7 +44,8 @@ test fails when a default answer or an agent-facing template carries a hash of
 
 Ids that are not hashes (task, conversation, launch and operation UUIDs) and
 pagination cursors are listed in the audit and deferred with their evidence
-(§5).
+(§5). Memory ids, project keys and prototype media references are hashes and
+therefore use collision-checked short forms too.
 
 ## 1. Audit
 
@@ -77,7 +78,9 @@ Line numbers are at base `02f9301f`. "Uses" are calls passing the field in the
 | I10 | `backfill_worktree_projects.project` and every `project` / `expectedProject` argument (26 tools take `project`) | `repo-<32 hex>` / `dir-<32 hex>` (`projects/identity.ts:57`) | `server.ts:4013` `^repo-[0-9a-f]{32}$`; others free strings | `nameResolution.ts:147–185`; `boardReadProject` `bindings.ts:5617` (aliases only) | `project` fields in answers, refusal candidate lists | — | short key resolved once at the MCP boundary, §2.6 |
 | I11 | `cursor` on budget-paged reads (`list_conversations`, `agent_fleet` detail) | `mcp-page-<32 hex>` random token | free string | `budgetPage.ts:19–24` (per-process cache, 128 entries, 5 min) | `nextCursor` | — | generate an 8-hex token |
 | — | `create_pipeline.baseRef` | any ref | `server.ts:3881` | resolved by git | git | 131 (agents already pass 9- and 12-character SHAs) | nothing to change |
-| — | `create_pipeline.delivery.rejectedHead` | 40-hex | `server.ts:3867`; `engine.ts:11666` | engine | PR head | 0 | deferred (§5) |
+| I12 | `create_pipeline.delivery.rejectedHead` | 7–40 hex | `server.ts`; `engine.ts` | tracked local commits | short; resolve before admission |
+| I13 | `search_memory` result `id` and subsequent open | `m_<24 hex>` | MCP and memory HTTP route | scoped memory entries | short, prefix lookup refuses collisions |
+| I14 | prototype media URLs in `read_prototype_review` | `pr_<32 hex>` and 64-hex media id | prototype read and media routes | task rounds and stored media manifests | short references resolve at the media boundary |
 | — | `nativeCallerProof` | 43-char base64url | `server.ts:4550` | hook proof | injected by the hook, never typed | — | out of scope: a hook-issued capability |
 
 ### 1.3 Opaque ids that are not hashes
@@ -275,12 +278,9 @@ existing "The requested revision was not found on the tracked branch". Several
 is "The short revision <p> names <n> commits on the tracked branch; pass more
 characters". The idempotency check at 1791 compares the revision as the caller
 sent it, so a replay with the same short value replays; the ledger and the
-answer record the full SHA. The route (`route.ts:147`) accepts 7–40 hex for
-checkout installs. A managed install, which hands the request to the runtime
-host, refuses a short revision with "pass the full SHA or a ref": all 897
-`deploymentId` values in the scanned answers name checkout deployments, and
-changing the runtime host's resolution is not justified by that (§5). This is
-deploy-path code: AGENTS.md makes it high risk, with three review rounds.
+answer record the full SHA. Both checkout and managed routes accept 7–40 hex
+and hand the reference to server-side commit resolution. This is deploy-path
+code: AGENTS.md makes it high risk, with three review rounds.
 
 ### 2.4 A consent binding keeps the full value
 
@@ -607,8 +607,6 @@ and rebase and reverify any slice whose file moved.
 |---|---|---|
 | Short forms for UUID record ids (`taskId`, `conversationId`, `launchId`, `operationId`, `deploymentId`) in answers and inputs | They are random record ids. Agents copy them faithfully: 10 of 3,744 task-id passes had no prior appearance in their transcript, and those fail as not-found. Resolving short UUIDs needs a prefix lookup in four stores and a normalization of every id field in about 25 tools, plus test churn across the suite | the not-found rate on copied ids rises, or the operator asks for short task and conversation ids. Operator-facing report text already drops them (§2.7) |
 | Short handles for pagination cursors (base64 list cursors, the 1.7 KB `search_transcripts` cursor) | Not hashes; a wrong cursor restarts with `cursorReset` and never reads another record. A short handle needs shared durable storage across stateless HTTP servers, which is #2930's area | after #2930 lands, if cursor bytes show up in answer-size measurements |
-| Prefix resolution for managed (container) installs in the runtime host | All 897 `deploymentId` values in the scanned answers name checkout deployments; the runtime host is the critical process. Managed installs keep full SHA or `ref` | a managed install's seat deploys by prefix |
-| `create_pipeline.delivery.rejectedHead` | 0 uses in 10 days; its validation sits inside `createPipelineFromRequest`, which #2962 is changing. Until then a caller takes the full SHA from git, since answers print 8 characters | #2962 merges and a caller appears |
 | Unifying the UI's existing 7- and 12-character SHAs on 8 | Already short and prefixes of the same commit; costs rendered evidence with no operator gain | a UI change touches those components anyway |
 | The gate wrapper path in stage prompts (`…/self-update/<16 hex>/releases/<12 hex>/scripts/gate-slot.sh`) | A filesystem location copied within one turn; a typo fails loudly; the release path is deliberately immutable. Below the 20-character threshold | agents are seen mistyping it |
 | Dropping `stageDigests` from answers on completed or closed pipelines | Saves about 15 bytes per stage and adds a conditional answer shape | — |
@@ -627,8 +625,11 @@ and rebase and reverify any slice whose file moved.
    judged atomically against the record.
 4. **A consent binding keeps the full value server-side**, and the agent passes
    a reference and copies nothing (§2.4).
-5. **Deploy prefixes resolve where refs already resolve** for checkout
-   installs; managed installs stay as they are (§2.3, §5).
+5. **Deploy prefixes resolve on both install types**, and `rejectedHead`
+   resolves against local commits before pipeline admission. Unknown and
+   ambiguous prefixes refuse before a write. Memory opens and prototype media
+   reads resolve short ids against their authorized candidate set, preserve
+   full-id compatibility and refuse collisions.
 6. **UUID ids and cursors are deferred** with the evidence in §1.3. This is the
    one choice that changes what the operator sees in tool-call views (task and
    conversation UUIDs remain there). It was settled here because the
@@ -680,5 +681,6 @@ each repeated three times. `evidence/mcp-short-ids.json` records the counts,
 source fingerprints, revisions, commands and check outcomes. The measurement
 claims a reduction in serialized answer bytes. It makes no latency claim.
 
-Checkout deploy-prefix changes require three review rounds under the project
-policy. Managed install prefix resolution remains deferred as specified above.
+The deployment route and delivery admission now accept unique short commit
+references. These changes touch deploy-path code and require three review
+rounds under the project policy.

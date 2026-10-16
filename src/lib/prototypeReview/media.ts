@@ -11,12 +11,15 @@ import { prototypeWorld, taskForPrototype, type PrototypeWorld } from "./world";
 import { findSeatRound } from "./seatRounds";
 import { canonicalProject } from "@/lib/projects/aliases";
 import type { PrototypeReviewRound } from "./types";
+import { resolveShortId } from "@/lib/shortIds";
 
 /** The round a media read names: the task's, or with no task a seat's own
     pictures, read only from the seat's project. */
 function mediaRound(taskId: string,reviewId: string,kind: "image" | "video",caller: ReturnType<PrototypeWorld["caller"]>): PrototypeReviewRound | undefined {
-  if (taskId) return taskForPrototype(taskId,caller).prototypeReviews?.find(r => r.id === reviewId);
-  const round = kind === "image" ? findSeatRound(reviewId) : undefined;
+  const rounds = taskId ? taskForPrototype(taskId,caller).prototypeReviews ?? [] : kind === "image" ? [findSeatRound(reviewId)].filter((r): r is PrototypeReviewRound => !!r) : [];
+  const resolution = resolveShortId(rounds.map(round => round.id), reviewId);
+  if (resolution.kind === "ambiguous") throw new PrototypeError("review id is ambiguous; pass more characters", 409);
+  const round = resolution.kind === "match" ? rounds.find(candidate => candidate.id === resolution.value) : undefined;
   if (round && caller.conversationId && (!caller.project || canonicalProject(round.project) !== canonicalProject(caller.project))) throw new PrototypeError("prototype access is limited to the caller's project",403);
   return round;
 }
@@ -28,9 +31,12 @@ export async function prototypeMediaGET(request: NextRequest,taskId: string,revi
   let handle;
   try {
     const round = mediaRound(taskId,reviewId,kind,world.caller(request));
-    const media = round && !round.mediaRemovedAt ? roundMedia(round).find(m => m.id === mediaId && m.mime.startsWith(`${kind}/`)) : null;
+    const matchingMedia = round && !round.mediaRemovedAt ? roundMedia(round).filter(m => m.mime.startsWith(`${kind}/`)) : [];
+    const mediaResolution = resolveShortId(matchingMedia.map(m => m.id), mediaId);
+    if (mediaResolution.kind === "ambiguous") throw new PrototypeError("media id is ambiguous; pass more characters",409);
+    const media = mediaResolution.kind === "match" ? matchingMedia.find(m => m.id === mediaResolution.value) : null;
     if (!media) throw new PrototypeError("media not found",404);
-    const candidate = storedMediaPath(await fs.realpath(prototypeRoot()),reviewId,media);
+    const candidate = storedMediaPath(await fs.realpath(prototypeRoot()),round!.id,media);
     handle = await fs.open(candidate,constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
     const pinned = await handle.stat();
     // The open file itself must be the store's copy: a round directory swapped for a link answers from elsewhere.

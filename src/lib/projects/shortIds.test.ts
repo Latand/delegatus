@@ -22,6 +22,13 @@ test("short project keys resolve at the boundary and through names; ambiguity ne
   await expect(normalizeShortIdArgs({ project: "repo-ffffffff" })).rejects.toMatchObject({ details: { code: "unknown_project" } });
 });
 
+test("cached catalog projection preserves names from file rows omitted by the project catalog", () => {
+  const files = [{ project: a, displayName: "File-only board", projectRoot: "/fixture/file-only" }];
+  const sources = { lastCompletedCatalog: () => ({ projectCatalog: [], files }) };
+  expect(resolveNamedProject("File-only board", namedProjectDirectory(sources))).toBe(a);
+  expect(resolveNamedProject("File-only board", namedProjectDirectory(sources))).toBe(a);
+});
+
 test("list_tasks reads the same rows with a full or a unique short project key", async () => {
   const { saveTasks } = await import("@/lib/tasks/store");
   const { viewerMcpBindings } = await import("@/lib/mcp/bindings");
@@ -33,6 +40,36 @@ test("list_tasks reads the same rows with a full or a unique short project key",
   const short = await service.callTool("list_tasks", { project: a.slice(0, 17) });
   expect(short.ok).toBe(true); expect(short).toEqual(full);
   expect(JSON.stringify(short)).toContain("short-project-task");
+});
+
+test("task-only project keys are indexed before short-key writes and collisions refuse", async () => {
+  const { saveTasks } = await import("@/lib/tasks/store");
+  const prefix = "repo-deadbeef";
+  const left = `${prefix}${"a".repeat(24)}`;
+  const right = `${prefix}${"b".repeat(24)}`;
+  const at = "2026-10-16T00:00:00.000Z";
+  const task = (id: string, project: string) => ({ id, text: id, project, status: "inbox" as const, placement: "unplaced" as const, assignments: [], createdAt: at, updatedAt: at });
+  saveTasks([task("task-only-a", left), task("task-only-b", right)]);
+  await expect(normalizeShortIdArgs({ project: prefix })).rejects.toMatchObject({ details: { code: "ambiguous_project" } });
+  let writes = 0;
+  const { createMcpToolService, MemoryMcpReceiptStore } = await import("@/lib/mcp/server");
+  const service = createMcpToolService({ create_task: async () => { writes++; return { task: task("unexpected", right) }; } } as never, new MemoryMcpReceiptStore());
+  const refused = await service.callTool("create_task", { project: prefix, text: "must refuse" });
+  expect(refused).toMatchObject({ ok: false, code: "ambiguous_project" });
+  expect(writes).toBe(0);
+  saveTasks([task("task-only-a", left)]);
+  expect(await normalizeShortIdArgs({ project: left.slice(0, 17) })).toEqual({ project: left });
+  expect(await normalizeShortIdArgs({ project: left })).toEqual({ project: left });
+  const { viewerMcpBindings } = await import("@/lib/mcp/bindings");
+  const roundTrip = createMcpToolService(viewerMcpBindings(), new MemoryMcpReceiptStore());
+  const listed = await roundTrip.callTool("list_tasks", { project: left.slice(0, 17) });
+  if (!listed.ok) throw new Error(listed.error);
+  expect(listed).toMatchObject({ ok: true, tasks: [{ project: "repo-deadbeef" }] });
+  const returnedProject = (listed.tasks as Array<{ project: string }>)[0]!.project;
+  const created = await roundTrip.callTool("create_task", { clientRequestId: "task-only-round-trip", project: returnedProject, text: "Round-trip task" });
+  if (!created.ok) throw new Error(created.error);
+  expect(created, JSON.stringify(created)).toMatchObject({ ok: true });
+  expect((await import("@/lib/tasks/store")).loadTasks().some(row => row.text === "Round-trip task" && row.project === left)).toBe(true);
 });
 
 test("a short expectedProject preserves an aliased task's stored project guard", async () => {

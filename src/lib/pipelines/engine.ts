@@ -11664,8 +11664,17 @@ export async function createPipelineFromRequest(
     || pipelineBaseBranchError(targetInput.branch.slice("refs/heads/".length))
     || (targetInput.pr !== undefined && (!Number.isSafeInteger(targetInput.pr) || targetInput.pr < 1))
     || (targetInput.comparison !== undefined && typeof targetInput.comparison !== "boolean")
-    || (targetInput.rejectedHead !== undefined && !/^[0-9a-f]{40}$/i.test(targetInput.rejectedHead)))) {
-    return { error: "delivery requires a full refs/heads branch, positive PR number and exact rejected head", status: 400 };
+    || (targetInput.rejectedHead !== undefined && !/^[0-9a-f]{7,40}$/i.test(targetInput.rejectedHead)))) {
+    return { error: "delivery requires a full refs/heads branch, positive PR number and a commit SHA or unique prefix", status: 400 };
+  }
+  let rejectedHead = targetInput?.rejectedHead;
+  if (rejectedHead && rejectedHead.length < 40) {
+    const resolvedHead = await ports.exec("git", ["rev-parse", "--verify", "--end-of-options", `${rejectedHead}^{commit}`], repoDir);
+    if (resolvedHead.code !== 0 || !/^[0-9a-f]{40}$/i.test(resolvedHead.stdout.trim())) {
+      const ambiguous = /ambiguous|disambiguate/i.test(`${resolvedHead.stderr}\n${resolvedHead.stdout}`);
+      return { error: ambiguous ? "rejectedHead is ambiguous; pass more characters" : "rejectedHead does not identify a local commit", status: ambiguous ? 409 : 400 };
+    }
+    rejectedHead = resolvedHead.stdout.trim().toLowerCase();
   }
   const resolvedRemote = await resolveDeliveryRemote(repoDir, targetInput?.remote, ports.exec, { allowLiteral: true });
   if (!resolvedRemote.ok) return { error: resolvedRemote.error, status: resolvedRemote.status };
@@ -11687,7 +11696,7 @@ export async function createPipelineFromRequest(
     }
   }
   const target = { repository, remote: origin, branch: targetInput?.branch ?? `refs/heads/${pipeline.branch}`,
-    ...(targetInput?.pr ? { pr: targetInput.pr } : {}), ...(targetInput?.rejectedHead ? { rejectedHead: targetInput.rejectedHead } : {}) };
+    ...(targetInput?.pr ? { pr: targetInput.pr } : {}), ...(rejectedHead ? { rejectedHead } : {}) };
   pipeline.creationRequest = options.creationRequest;
   if (options.refreshOf) pipeline.refreshOf = { pipelineId: options.refreshOf.pipelineId, base: options.refreshOf.base };
   if (!options.ensureTask) {

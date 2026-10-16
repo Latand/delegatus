@@ -12,6 +12,7 @@ import { pipelineHasPullRequest } from "@/lib/forge/resolve";
 import { githubRepositoryOfRemote } from "@/lib/forge/workLinks";
 import { statePath } from "@/lib/configDir";
 import { canonicalProject, projectAliasSnapshot, projectAliasResolver } from "@/lib/projects/aliases";
+import { replaceProjectKeySource } from "@/lib/projects/projectKeyIndex";
 import { effortScale } from "@/lib/agent/efforts";
 import { normalizeClaudeLaunchModel } from "@/lib/agent/models";
 import { MAX_SCAFFOLD_LENGTH } from "@/lib/roles/store";
@@ -1668,7 +1669,9 @@ export function withDeliveryPublicationDetail(pipeline: Pipeline): Pipeline {
  * anything that overlays one takes `loadPipelinesForProjection`.
  */
 export function loadPipelinesForList(): readonly Pipeline[] {
-  return cachedPipelines();
+  const pipelines = cachedPipelines();
+  replaceProjectKeySource("pipelines", pipelines.map(pipeline => canonicalProject(pipeline.project)));
+  return pipelines;
 }
 
 /** How long a pipeline mutation waits for the registry lease before it refuses
@@ -1899,6 +1902,7 @@ export async function takeoverPipelineDelivery(id: string, expectedOwner: string
 
 export function savePipelines(pipelines: Pipeline[]): void {
   pipelineStore().replaceSync(pipelines);
+  replaceProjectKeySource("pipelines", pipelines.map(pipeline => canonicalProject(pipeline.project)));
 }
 
 /** Settled records leave the hot registry after this long; the archive keeps

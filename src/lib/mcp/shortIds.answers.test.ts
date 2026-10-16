@@ -85,7 +85,7 @@ test("default answers contain short ids, with a repeatable service size census",
     assignments: Array.from({ length: 8 }, (_, j) => ({ path: `sessions/agent-${i}-${j}.jsonl`, conversationId: `conversation-${i}-${j}`, panePid: null, state: "linked", error: null, at: new Date(now).toISOString() })),
   })) as never);
   const files = Array.from({ length: 100 }, (_, i) => ({
-    path: path.join(sandbox, `agent-${i}.jsonl`), conversationId: `conversation-${i}`, project: "repo-1234567890abcdef1234567890abcdef",
+    path: `/fixture/conversations/agent-${i}.jsonl`, conversationId: `conversation-${i}`, project: "repo-1234567890abcdef1234567890abcdef",
     engine: "codex", title: `Board worker ${i}`, kind: "session", root: "codex", name: `agent-${i}`,
     fmt: "jsonl", parent: null, mtime: (now - i * 86400000) / 1000, size: 1024,
     activity: "live", proc: null, pid: null,
@@ -176,7 +176,9 @@ test("default answers contain short ids, with a repeatable service size census",
   await Promise.all([client.connect(a), server.connect(b)]);
   try {
     const listed = JSON.stringify(await client.listTools());
-    rows.push({ tool: "tools/list", scenario: "protocol", outcome: "success", bytes: Buffer.byteLength(listed), observedCalls: 0, observedScenarioCalls: 0, hashChars: 0, weightedBytes: null });
+    const hashChars = (listed.match(/[a-f0-9]{20,}/gi) ?? []).reduce((sum, value) => sum + value.length, 0);
+    if (!process.env.MCP_SIZE_OUTPUT) expect(listed, "tools/list exposes a long hash").not.toMatch(/[a-f0-9]{20,}|task-v1:[a-f0-9]{9,}/i);
+    rows.push({ tool: "tools/list", scenario: "protocol", outcome: "success", bytes: Buffer.byteLength(listed), observedCalls: 0, observedScenarioCalls: 0, hashChars, weightedBytes: null });
   } finally { await client.close(); await server.close(); }
   const frequencySample = JSON.parse(fs.readFileSync(new URL("./answerSizes.frequency.json", import.meta.url), "utf8")) as { counts: Record<string, number>; scenarioCounts: Record<string, number> };
   const frequencies = frequencySample.counts;
@@ -245,6 +247,100 @@ test("review ambiguity survives the real Viewer-control transport", async () => 
     process.env.LLV_VIEWER_CONTROL_URL = oldUrl;
     if (oldCapability === undefined) delete process.env[VIEWER_SPAWN_CAPABILITY_ENV]; else process.env[VIEWER_SPAWN_CAPABILITY_ENV] = oldCapability;
   }
+});
+
+test("tools/list shortens hashes in input-field descriptions", async () => {
+  if (process.env.MCP_SIZE_OUTPUT) return;
+  const { Client } = await import("@modelcontextprotocol/sdk/client/index.js");
+  const { InMemoryTransport } = await import("@modelcontextprotocol/sdk/inMemory.js");
+  const { createViewerMcpServer, TOOL_INPUT_SCHEMAS, createMcpToolService, MemoryMcpReceiptStore } = await import("./server");
+  const { z } = await import("zod");
+  const original = TOOL_INPUT_SCHEMAS.get_task;
+  const planted = "d".repeat(40);
+  TOOL_INPUT_SCHEMAS.get_task = z.object({ taskId: z.string().describe(`Identifier ${planted}`) }) as never;
+  const server = createViewerMcpServer(createMcpToolService(viewerMcpBindings, new MemoryMcpReceiptStore()));
+  const client = new Client({ name: "catalog-short-ids", version: "1" });
+  const [left, right] = InMemoryTransport.createLinkedPair();
+  try {
+    await Promise.all([client.connect(left), server.connect(right)]);
+    const listed = JSON.stringify(await client.listTools());
+    expect(listed).not.toContain(planted);
+    expect(listed).toContain("dddddddd");
+  } finally {
+    await client.close(); await server.close();
+    TOOL_INPUT_SCHEMAS.get_task = original;
+  }
+});
+
+test("default prototype media references shorten and retain resolvable ids", async () => {
+  if (process.env.MCP_SIZE_OUTPUT) return;
+  const { createMcpToolService, MemoryMcpReceiptStore } = await import("./server");
+  const review = `pr_${"a".repeat(32)}`;
+  const image = "b".repeat(64);
+  const original = "c".repeat(64);
+  const video = "d".repeat(64);
+  const answer = createMcpToolService({ read_prototype_review: async () => ({
+    rounds: [{ reviewId: review, variants: [{ frames: [{ image: { id: image, url: `/api/image?prototype=${review}&media=${image}` }, original: { id: original, url: `/api/image?prototype=${review}&media=${original}` } }], videos: [{ media: { id: video, url: `/api/tasks/task/prototypes/${review}/video/${video}` } }] }] }],
+  }) } as never, new MemoryMcpReceiptStore());
+  const result = await answer.callTool("read_prototype_review", { clientRequestId: "short-media", taskId: "task" });
+  const payload = JSON.stringify(result);
+  expect(payload).not.toMatch(/[a-f0-9]{20,}/i);
+  expect(payload).toContain("prototype=pr_aaaaaaaa");
+  expect(payload).toContain("media=bbbbbbbb");
+  expect(payload).toContain("/video/dddddddd");
+  expect(result).toMatchObject({ ok: true, rounds: [{ variants: [{ frames: [{ image: { id: "bbbbbbbb" }, original: { id: "cccccccc" } }], videos: [{ media: { id: "dddddddd" } }] }] }] });
+});
+
+test("pipeline revision receipt replay accepts full and displayed references after the record changes", async () => {
+  if (process.env.MCP_SIZE_OUTPUT) return;
+  const full = "a1b2c3d4" + "e".repeat(56);
+  let calls = 0, revision = full;
+  const canonicalize = (retainedRevision: string) => (args: Record<string, unknown>) => {
+    const revision = args.expectedRevision;
+    return typeof revision === "string" && retainedRevision.toLowerCase().startsWith(revision.toLowerCase())
+      ? { ...args, expectedRevision: retainedRevision }
+      : args;
+  };
+  const service = createMcpToolService({ pipeline_action: Object.assign(async () => {
+    calls++;
+    const answer = { accepted: true, revision };
+    revision = "f".repeat(64);
+    return answer;
+  }, { canonicalizeReceiptArgs: canonicalize(full) }) } as never, new MemoryMcpReceiptStore());
+  const args = { pipelineId: "pipe-receipt", action: "resolve-decision", expectedRevision: full, answer: "accept" };
+  const first = await service.callTool("pipeline_action", { clientRequestId: "full-then-short", ...args });
+  const replay = await service.callTool("pipeline_action", { clientRequestId: "full-then-short", ...args, expectedRevision: full.slice(0, 8) });
+  expect(first.ok).toBe(true);
+  expect(replay).toMatchObject({ ok: true, replayed: true });
+  expect(calls).toBe(1);
+  const conflict = await service.callTool("pipeline_action", { clientRequestId: "full-then-short", ...args, answer: "reject" });
+  expect(conflict).toMatchObject({ ok: false, code: "idempotency_conflict" });
+
+  const reverse = createMcpToolService({ pipeline_action: Object.assign(async () => { calls++; return { accepted: true }; }, { canonicalizeReceiptArgs: canonicalize(full) }) } as never, new MemoryMcpReceiptStore());
+  await reverse.callTool("pipeline_action", { clientRequestId: "short-then-full", ...args, expectedRevision: full.slice(0, 8) });
+  const fullReplay = await reverse.callTool("pipeline_action", { clientRequestId: "short-then-full", ...args });
+  expect(fullReplay).toMatchObject({ ok: true, replayed: true });
+  expect(calls).toBe(2);
+});
+
+test("pipeline receipt replay does not merge distinct full revisions with a shared prefix", async () => {
+  if (process.env.MCP_SIZE_OUTPUT) return;
+  const retained = "a1b2c3d" + "1" + "e".repeat(56);
+  const other = "a1b2c3d" + "2" + "e".repeat(56);
+  let calls = 0;
+  const canonicalize = (args: Record<string, unknown>) => {
+    const revision = args.expectedRevision;
+    return typeof revision === "string" && retained.startsWith(revision.toLowerCase())
+      ? { ...args, expectedRevision: retained }
+      : args;
+  };
+  const guarded = createMcpToolService({
+    pipeline_action: Object.assign(async () => { calls++; return { accepted: true }; }, { canonicalizeReceiptArgs: canonicalize }),
+  } as never, new MemoryMcpReceiptStore());
+  await guarded.callTool("pipeline_action", { clientRequestId: "prefix-collision", action: "resolve-decision", expectedRevision: retained, answer: "accept" });
+  const conflict = await guarded.callTool("pipeline_action", { clientRequestId: "prefix-collision", action: "resolve-decision", expectedRevision: other, answer: "accept" });
+  expect(conflict).toMatchObject({ ok: false, code: "idempotency_conflict" });
+  expect(calls).toBe(1);
 });
 
 test("short budget-page tokens continue their page and refuse changed filters or owners", async () => {
