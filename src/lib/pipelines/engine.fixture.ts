@@ -31,6 +31,18 @@ import { worktreeDiskWait } from "@/lib/state/diskPressure";
 
 process.env.LLV_STATE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "llv-pipeline-engine-"));
 const engineModule = await import("./engine");
+// Native Git and reserved-host fixtures model their forge separately;
+// PR delivery regressions use a GitHub target and execute the real helper.
+const pullRequestModule = await import("./stagePullRequest");
+const realEnsureStagePullRequest = pullRequestModule.ensureStagePullRequest;
+const fixturePullRequests = spyOn(pullRequestModule, "ensureStagePullRequest").mockImplementation(async (pipeline, attempt, exec, acceptedHead) => {
+  if (pipeline.delivery && /^(?:\/|file:|git@example\.invalid:)/.test(pipeline.delivery.target.remote)) {
+    pipeline.delivery.target.pr ??= 17;
+    return { ok: true };
+  }
+  return realEnsureStagePullRequest(pipeline, attempt, exec, acceptedHead);
+});
+afterAll(() => fixturePullRequests.mockRestore());
 const { IDLE_TURN_QUIET_MS, interruptedTurnRecoveryParkDetail } = engineModule;
 const { adoptAttempt, defaultPipelinePorts, ensureTaskPipelineForAssignment, patchPipeline: rawPatchPipeline, pipelineAttemptTargetForSource, pipelineClaudePermissionMode, reconcileEmbeddedReviewFlows, reviewNote, setPipelineDismissal, terminalFlowStageVerdict, tickPipelines } = engineModule;
 const { verdictRoutesAsFail } = await import("./verdict");
@@ -135,6 +147,19 @@ function harness() {
       if (options?.stdoutEncoding === "latin1") return realExec(rawCommand, rawArgs, cwd, env, options);
       calls.push(`${rawCommand} ${rawArgs.join(" ")}`);
       const args = rawCommand === "timeout" ? rawArgs.slice(rawArgs.indexOf("git") + 1) : rawArgs;
+      // Virtual worktree heads stand for commits produced by the fake agent.
+      // Real-worktree fixtures replace this port with actual Git.
+      if (args[0] === "rev-list" && args.includes("--max-count=128")) {
+        const [anchor, target] = args.at(-1)!.split("..");
+        return { code: 0, stdout: target && target !== anchor ? `${target}\n` : "", stderr: "" };
+      }
+      if (args[0] === "reflog") {
+        const pipeline = loadPipelines().find(p => p.worktreeDir === cwd) ?? loadPipelines()[0];
+        const attempt = pipeline?.runs.find(run => run.stageId === pipeline.cursor?.stageId)?.attempts.at(-1);
+        const stamp = Math.floor(Date.parse(attempt?.startedAt ?? new Date(clock).toISOString()) / 1000);
+        return Promise.resolve(ports.exec("git", ["rev-parse", "HEAD"], cwd)).then(head => ({ code: 0,
+          stdout: `${head.stdout.trim()}\0HEAD@{${stamp}}\0commit: stage work\n`, stderr: "" }));
+      }
       if (args[0] === "write-tree") return { code: 0, stdout: `${"8".repeat(40)}\n`, stderr: "" };
       if (args[0] === "symbolic-ref") return { code: 0, stdout: `refs/heads/${loadPipelines()[0]?.branch ?? "pipeline/test"}\n`, stderr: "" };
       if (args[0] === "rev-parse" && args.includes("--git-path")) return { code: 0, stdout: `${path.join(cwd, ".git", "index")}\n`, stderr: "" };
@@ -302,13 +327,17 @@ async function realWorktreeLane(name: string, stages: unknown[], publication?: "
   const repo = path.join(root, "repo");
   const { realExec } = await import("@/lib/workflows/provision");
   const { realProvisionExec } = await import("./git");
+  const h = harness();
+  // Native reflog creation and the controller share one deterministic clock.
   const git = async (cwd: string, ...args: string[]) => {
-    const result = (await realExec("git", args, cwd));
+    const date = ["commit", "merge", "rebase", "am"].includes(args[0]!) ? h.ports.now() : undefined;
+    const result = (await realExec("git", args, cwd, date ? { GIT_AUTHOR_DATE: date, GIT_COMMITTER_DATE: date } : undefined));
     if (result.code !== 0) throw new Error(result.stderr || result.stdout);
     return result.stdout.trim();
   };
   fs.mkdirSync(repo);
   (await git(root, "init", "--bare", "--initial-branch=main", origin));
+  fs.mkdirSync(path.join(origin, "hooks"), { recursive: true });
   (await git(repo, "init", "--initial-branch=main"));
   (await git(repo, "config", "user.name", "Fixture"));
   (await git(repo, "config", "user.email", "noreply@example.com"));
@@ -319,7 +348,6 @@ async function realWorktreeLane(name: string, stages: unknown[], publication?: "
   (await git(repo, "remote", "add", "origin", origin));
   (await git(repo, "push", "origin", "main"));
   const base = (await git(repo, "rev-parse", "HEAD"));
-  const h = harness();
   h.ports.exec = realExec;
   h.ports.provisionExec = realProvisionExec;
   const created = await createPipelineFromRequest({ task: name, ...brief, repoDir: repo, baseRef: base, stages: stages as never,
@@ -1118,8 +1146,10 @@ function publishHarness(h: ReturnType<typeof harness>, options: { origin?: boole
   h.ports.exec = (rawCommand, rawArgs, cwd) => {
     const command = rawCommand === "timeout" ? "git" : rawCommand;
     const args = rawCommand === "timeout" ? rawArgs.slice(rawArgs.indexOf("git") + 1) : rawArgs;
-    if (command !== "git") return baseExec(command, args, cwd);
     const branch = loadPipelines()[0]?.branch ?? "pipeline/test";
+    if (command !== "git") return baseExec(command, args, cwd);
+    if (args[0] === "reflog") return { code: 0, stdout: `${localHead}\0HEAD@{${Math.floor(Date.parse(loadPipelines()[0]!.runs.flatMap(run => run.attempts).at(-1)!.startedAt!) / 1000)}}\0commit: stage work\n`, stderr: "" };
+    if (args[0] === "rev-list" && args.includes("--max-count=128")) return { code: 0, stdout: `${localHead}\n`, stderr: "" };
     if (args[0] === "status") return { code: 0, stdout: dirty ? " M src/lib/thing.ts\n" : "", stderr: "" };
     if (args[0] === "add") return { code: 0, stdout: "", stderr: "" };
     if (args[0] === "show" && args.includes("--format=%P%x00%T%x00%B")) return {

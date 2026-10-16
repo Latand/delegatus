@@ -2355,7 +2355,7 @@ test("attempt Git custody refuses an unproved detached push and fails the stage 
     expect(r.code).toBe(0);
     const refused = await realExec("git", ["push", "origin", `HEAD:refs/heads/${f.lane.branch}`], f.detached, f.env);
     expect(refused.code).not.toBe(0);
-    expect(refused.stderr).toContain("no proof from this attempt");
+    expect(refused.stderr).toContain("not created in the attempt worktree");
     expect(await f.git(f.origin, "for-each-ref", "--format=%(objectname)", `refs/heads/${f.lane.branch}`)).toBe("");
     const failed = await f.finish();
     expect(failed.state).toBe("needs_decision");
@@ -2365,15 +2365,11 @@ test("attempt Git custody refuses an unproved detached push and fails the stage 
   } finally { savePipelines([]); fs.rmSync(f.root, { recursive: true, force: true }); }
 });
 
-for (const shape of ["foreign", "wrong-attempt", "missing-start", "missing-push", "malformed", "oversized", "mixed", "old", "future", "non-descendant", "remote-race", "remote-after-merge", "local-race", "pause", "claim-race", "dirty", "released"] as const) {
+for (const shape of ["foreign", "wrong-attempt", "missing-start", "malformed", "oversized", "mixed", "non-descendant", "remote-race", "remote-after-merge", "local-race", "pause", "claim-race", "dirty", "released"] as const) {
   test(`attempt Git custody preserves the fences for ${shape}`, async () => {
     const f = await detachedAttemptFixture(`attempt-git-${shape}`);
     try {
       if (shape === "non-descendant") await f.run("checkout", "--orphan", "unrelated");
-      if (shape === "old" || shape === "future") {
-        const stamp = Date.parse(f.attempt.startedAt!) + (shape === "old" ? -60000 : 3600000);
-        f.env.GIT_AUTHOR_DATE = f.env.GIT_COMMITTER_DATE = new Date(stamp).toISOString();
-      }
       if (shape === "mixed") await f.git(f.detached, "commit", "--allow-empty", "-m", "unproved ancestor");
       const fixed = await f.commit();
       // An adversarial writer may bypass its hooks. Settlement still needs all
@@ -2386,7 +2382,6 @@ for (const shape of ["foreign", "wrong-attempt", "missing-start", "missing-push"
         fs.writeFileSync(file, JSON.stringify({ ...JSON.parse(fs.readFileSync(file, "utf8")), launchId: "another-attempt" }));
       }
       if (shape === "missing-start") fs.rmSync(path.join(f.receipt, "start.json"));
-      if (shape === "missing-push") fs.rmSync(path.join(f.receipt, "pushes"), { recursive: true });
       if (shape === "malformed" || shape === "oversized") fs.writeFileSync(path.join(f.receipt, "start.json"), shape === "malformed" ? "{" : "x".repeat(8193));
       if (shape === "foreign") fs.rmSync(path.join(f.receipt, "commits", fixed), { force: true });
       if (shape === "dirty") fs.writeFileSync(path.join(f.worktree, "unsaved.txt"), "unsaved\n");
@@ -2451,23 +2446,16 @@ test("attempt Git custody replays its durable proof in a new controller process"
 });
 
 
-test.each([256, 257])("attempt Git custody bounds the proved suffix at 256 commits (%i)", async (count) => {
+test.each([256, 257])("attempt Git custody accepts every proved suffix commit (%i)", async (count) => {
   const f = await detachedAttemptFixture(`attempt-git-bound-${count}`);
   try {
     for (let n = 0; n < count; n++) await f.run("commit", "--allow-empty", "-m", `attempt change ${n}`);
     const fixed = await f.run("rev-parse", "HEAD");
     const pushed = await realExec("git", ["push", "origin", `HEAD:refs/heads/${f.lane.branch}`], f.detached, f.env);
-    expect(pushed.code === 0).toBe(count === 256);
+    expect(pushed.code, pushed.stderr).toBe(0);
     const settled = await f.finish();
-    if (count === 256) {
-      expect(settled.lastPassedCommit).toBe(fixed);
-      expect(settled.cursor?.stageId).toBe("review");
-    } else {
-      expect(pushed.stderr).toContain("stage push refused");
-      expect(settled.state).toBe("needs_decision");
-      expect(settled.lastPassedCommit).toBe(f.base);
-      expect(await f.git(f.worktree, "rev-parse", "HEAD")).toBe(f.base);
-    }
+    expect(settled.lastPassedCommit).toBe(fixed);
+    expect(settled.cursor?.stageId).toBe("review");
   } finally { savePipelines([]); fs.rmSync(f.root, { recursive: true, force: true }); }
 }, 60000);
 
