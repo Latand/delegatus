@@ -690,6 +690,7 @@ OBSERVER="$RUN_ROOT/observer.so"
 bash "$GATE" cc -I "$SQLITE_INCLUDE" -O2 -fPIC -shared scripts/sqlite-observer.c -o "$OBSERVER"
 python3 -B scripts/mcp-state-writer-matrix.py --output "$RUN_ROOT" --gate "$GATE" --observer "$OBSERVER" --baseline "$BASELINE" --candidate HEAD --audit 45d25ac
 python3 -B scripts/mcp-state-writer-matrix.py --compare "$RUN_ROOT"
+bash "$GATE" python3 -B scripts/mcp-state-writer-matrix.py --verify-comparer "$RUN_ROOT"
 ```
 
 The complete alternating matrix is required before performance acceptance.
@@ -757,6 +758,23 @@ requires an explanation from the retained history; every successful or lost
 mutation reply must still reconcile with its one committed effect or with no
 effect after all owned processes have ended. Numeric row revisions, order and
 controller flags remain in the exact row comparison.
+
+Comparer version 2 also decodes task `nextCursor` tokens before normalizing
+their generated ID and timestamp; their filter scope remains unchanged. It
+checks each original successful mutation response against its committed task,
+independently of later receipt recovery. Successful list responses must contain
+known committed task versions with the fixture's exact compact fields, valid
+counts, filter scope, cursor boundary and an ordering possible from those
+versions. Statement and commit observations bound which create counts could
+have been visible during the request. Selection and individual row reads may
+observe different committed versions, as the existing list API permits.
+The report records its analysis-file checksum and normalization version;
+previous immutable aggregates retain their original normalization.
+The comparer control command copies one complete one-client sample under the
+caller's temporary root. It accepts the unchanged record and a record with all
+mutation replies replaced by unknown. It rejects independent changes to list
+text, counts, filter scope, ordering, a mutation summary, durable row order and
+the controller flag. Collected load records stay intact.
 
 
 ### Complete one-client cohort before byte streaming

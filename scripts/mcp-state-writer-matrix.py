@@ -4,6 +4,7 @@ Each sample takes its own owned-runner admission. Interrupted samples stay on
 disk; rerunning the same command resumes only samples with complete reports.
 """
 import argparse
+import base64
 import hashlib
 import json
 import os
@@ -107,7 +108,8 @@ def committed_history(root, sample):
                 transactions.append((revision, event["atNs"], statements))
                 call = statements[0].get("call", "")
                 if call.startswith(("create_task:", "update_task:")):
-                    entry = effects.setdefault(call, {"commits": 0, "rows": []})
+                    entry = effects.setdefault(call, {"commits": 0, "rows": [],
+                                                      "notBeforeMs": statements[0]["atMs"], "observedCommitMs": event["atMs"]})
                     entry["commits"] += 1
                     entry["rows"].extend(row for row in inserts if row["collection"] == "tasks" and row["row_key"].startswith("t:"))
     literals.close()
@@ -127,6 +129,108 @@ def committed_history(root, sample):
     mirror.close()
     return {"transactions": len(transactions), "effects": effects, "replayMatchesFinalRows": rows == actual,
             "replayedRowSha256": checksum_json(rows), "finalRowSha256": checksum_json(actual)}
+
+
+def task_cursor(value):
+    if not isinstance(value, str) or not 0 < len(value) <= 2048:
+        raise ValueError("invalid task cursor length")
+    decoded = json.loads(base64.b64decode(value + "=" * (-len(value) % 4), altchars=b"-_", validate=True))
+    if (not isinstance(decoded, dict) or set(decoded) != {"scope", "id", "time"}
+            or not all(isinstance(item, str) for item in decoded.values())):
+        raise ValueError("invalid task cursor fields")
+    return decoded
+
+
+def fixture_task_summary(task, links=False):
+    """Expected compact fields of the benchmark's short, unassigned tasks."""
+    result = {key: task[key] for key in ["id", "project", "status", "text", "updatedAt", "revision", "placement"]}
+    result.update(assignmentCount=len(task.get("assignments", [])), detailsLength=len(task.get("details", "")),
+                  textLength=len(task["text"]))
+    if "board" in task:
+        result["board"] = task["board"]
+    if links:
+        result.update(pipelineIds=[], pipelineIdsOmitted=0)
+    return result
+
+
+def check_list_answers(calls, seed, history):
+    """Check page content against seed and committed versions independently.
+
+    The product may read page selection and individual records at different
+    committed revisions. Do not impose a single atomic snapshot on that API.
+    Commit logging occurs after releasing the SQL lock: statement and commit
+    observations bound the possible visibility window without ordering peers
+    by their logger's scheduling.
+    """
+    versions, creations, seed_counts, violations = {}, [], {}, []
+    for (collection, key), row in seed.items():
+        if collection == "tasks" and key.startswith("t:"):
+            task = row["value_json"]
+            versions[(task["id"], task["revision"])] = (task, 0)
+            seed_counts[task["project"]] = seed_counts.get(task["project"], 0) + 1
+    for name, effect in history["effects"].items():
+        for row in effect["rows"]:
+            task = json.loads(row["value_json"])
+            versions[(task["id"], task["revision"])] = (task, effect["notBeforeMs"])
+            if name.startswith("create_task:"):
+                creations.append((task["project"], effect["notBeforeMs"], effect["observedCommitMs"]))
+    times_by_id = {}
+    for (identity, _), (task, start) in versions.items():
+        times_by_id.setdefault(identity, []).append((task["updatedAt"], start))
+    checked = 0
+    for call in calls:
+        answer = call.get("result")
+        if call["name"] != "list_tasks" or not isinstance(answer, dict) or not answer.get("ok"):
+            continue
+        checked += 1
+        tasks, args = answer.get("tasks", []), call["args"]
+        project, limit = args["project"], args["limit"]
+        lower = seed_counts[project] + sum(p == project and commit <= call["offered"] for p, _, commit in creations)
+        upper = seed_counts[project] + sum(p == project and start <= call["completed"] for p, start, _ in creations)
+        total = answer.get("total")
+        if not isinstance(total, int) or not lower <= total <= upper:
+            violations.append("list total differs from its possible committed create counts")
+            continue
+        if (answer.get("count") != len(tasks) or len(tasks) != min(limit, total)
+                or answer.get("remainingCount") != total - len(tasks)
+                or answer.get("omittedCount") != total - len(tasks)
+                or answer.get("hasMore") != (total > len(tasks))
+                or answer.get("cursorReset") is not False
+                or answer.get("compact") is not True or answer.get("omittedRecordCount") != len(tasks)):
+            violations.append("list pagination metadata differs from its returned rows")
+        if len(tasks) != len({task["id"] for task in tasks}):
+            violations.append("duplicate task in a list response")
+        for task in tasks:
+            stored = versions.get((task.get("id"), task.get("revision")))
+            if (not stored or stored[1] > call["completed"] or stored[0]["project"] != project
+                    or fixture_task_summary(stored[0], links=True) != task):
+                violations.append("a listed task differs from every visible committed version")
+        boundary = None
+        if answer.get("hasMore") and tasks:
+            try:
+                cursor = task_cursor(answer.get("nextCursor"))
+                scope = {"project": project, "statuses": [], "placement": "", "openOnly": False,
+                         "updatedSince": "", "ids": [], "query": "", "priorities": []}
+                expected_scope = hashlib.sha256(json.dumps(scope, separators=(",", ":")).encode()).hexdigest()[:16]
+                times = {time for time, start in times_by_id.get(tasks[-1]["id"], []) if start <= call["completed"]}
+                if cursor["scope"] != expected_scope or cursor["id"] != tasks[-1]["id"] or cursor["time"] not in times:
+                    raise ValueError("cursor differs from its selected boundary")
+                boundary = (cursor["time"], cursor["id"])
+            except (ValueError, TypeError):
+                violations.append("list cursor differs from its committed boundary or filters")
+        elif answer.get("nextCursor") is not None:
+            violations.append("terminal list retains a next cursor")
+        previous = None
+        for index, task in enumerate(tasks):
+            choices = [(time, task["id"]) for time, start in times_by_id.get(task["id"], [])
+                       if start <= call["completed"] and (previous is None or (time, task["id"]) < previous)]
+            if boundary and index == len(tasks) - 1:
+                choices = [choice for choice in choices if choice == boundary]
+            if not choices:
+                violations.append("list ordering differs from every committed selection history")
+                break
+            previous = max(choices)
+    return checked, violations
 
 
 def compare_samples(root):
@@ -158,6 +262,8 @@ def compare_samples(root):
         history = committed_history(root, sample)
         if not history["replayMatchesFinalRows"]:
             violations.append("committed SQL history differs from final durable rows")
+        checked_lists, list_violations = check_list_answers(calls, seed, history)
+        violations.extend(list_violations)
         if (sample / "final-receipts.json").exists():
             for receipt in json.loads((sample / "final-receipts.json").read_text()):
                 if receipt["result_json"]:
@@ -181,10 +287,6 @@ def compare_samples(root):
             answer = final_receipts.get((name, key), call.get("reconciled", call.get("result")))
             effective.append(answer)
             if name == "list_tasks":
-                if isinstance(answer, dict) and answer.get("ok"):
-                    tasks = answer.get("tasks", [])
-                    if len(tasks) != len({task["id"] for task in tasks}):
-                        violations.append("duplicate task in a list response")
                 continue
             uncertain = uncertain_reply(answer)
             effect = history["effects"].get(name + ":" + str(key))
@@ -202,9 +304,18 @@ def compare_samples(root):
             if effect and (effect["commits"] != 1 or len(effect["rows"]) != 1):
                 violations.append("one mutation key committed more than one task effect")
             committed_task = json.loads(effect["rows"][0]["value_json"]) if effect and len(effect["rows"]) == 1 else None
+            original = call.get("result")
+            if isinstance(original, dict) and original.get("ok"):
+                if (not committed_task or original.get("taskId") != committed_task["id"]
+                        or original.get("revision") != committed_task["revision"]
+                        or original.get("task") != fixture_task_summary(committed_task)
+                        or original.get("toolName") != name or original.get("clientRequestId") != key):
+                    violations.append("original successful mutation reply differs from its committed task effect")
             if isinstance(answer, dict) and answer.get("ok"):
                 if not committed_task or answer.get("taskId") != committed_task["id"] or answer.get("revision") != committed_task["revision"]:
                     violations.append("a successful reply differs from its committed task effect")
+                elif answer.get("task") != fixture_task_summary(committed_task):
+                    violations.append("mutation task summary differs from its committed task effect")
             if uncertain:
                 unknown_replies += 1
                 if not history["replayMatchesFinalRows"]:
@@ -279,7 +390,15 @@ def compare_samples(root):
 
         def normalize(value):
             if isinstance(value, dict):
-                return {key: normalize(item) for key, item in value.items()}
+                normalized = {}
+                for key, item in value.items():
+                    if key == "nextCursor" and item is not None:
+                        try:
+                            item = {"taskCursor": task_cursor(item)}
+                        except (ValueError, TypeError):
+                            pass
+                    normalized[key] = normalize(item)
+                return normalized
             if isinstance(value, list):
                 return [normalize(item) for item in value]
             if isinstance(value, str):
@@ -305,6 +424,7 @@ def compare_samples(root):
                                 "committedRowTransactions": history["transactions"],
                                 "replayedRowSha256": history["replayedRowSha256"], "finalRowSha256": history["finalRowSha256"],
                                 "committedCreates": len(creates), "committedUpdates": len(updates), "createReceipts": len(actual_receipts),
+                                "successfulListRepliesChecked": checked_lists,
                                 "historyViolations": {reason: violations.count(reason) for reason in sorted(set(violations))}}
         (sample / "equivalence.json").write_text(json.dumps(results[sample.name], indent=2) + "\n")
     pairs = []
@@ -318,13 +438,81 @@ def compare_samples(root):
                               "exactNormalizedRowsEqual": results[peer]["normalizedRowSha256"] == candidate["normalizedRowSha256"],
                               "exactNormalizedResponsesEqual": results[peer]["normalizedResponseSha256"] == candidate["normalizedResponseSha256"],
                               "bothHistoriesReconciled": not any(results[key]["unresolvedMutations"] or results[key]["historyViolations"] for key in [peer, name])})
-    result = {"normalization": "Generated task IDs and revision tokens by original mutation key; sample ISO times except the fixed seed instant. Numeric SQL row revisions and every other field retained.",
+    result = {"normalizationVersion": 2,
+              "analysisFileSha256": digest(pathlib.Path(__file__)),
+              "normalization": "Generated task IDs and revision tokens by original mutation key; sample ISO times except the fixed seed instant, including the decoded id/time of task nextCursor tokens while retaining their scope. Numeric SQL row revisions and every other field retained.",
               "samples": results, "pairs": pairs}
     (root / "comparisons.json").write_text(json.dumps(result, indent=2) + "\n")
     print(json.dumps({"samples": len(results), "pairs": len(pairs), "reconciled": sum(pair["bothHistoriesReconciled"] for pair in pairs)}, indent=2))
 
 
+def verify_comparer(root):
+    """Exercise the oracle against copied records; leave collected data intact."""
+    scratch = pathlib.Path(tempfile.gettempdir()).resolve()
+    root = root.resolve()
+    if not root.is_relative_to(scratch) or root == scratch:
+        raise RuntimeError("comparer controls require an isolated study under the caller's temporary root")
+    source = next(sample for sample in sorted(root.iterdir())
+                  if (sample / "report.json").exists() and json.loads((sample / "manifest.json").read_text())["clients"] == 1)
+    cases = ["pristine", "unknown-mutations", "list-text", "list-count", "cursor-scope", "list-order",
+             "mutation-summary", "row-order", "controller-flag"]
+    with tempfile.TemporaryDirectory(prefix="comparer-controls-", dir=scratch) as directory:
+        controls = pathlib.Path(directory)
+        (controls / "seed").symlink_to(root / "seed", target_is_directory=True)
+        for case in cases:
+            target = controls / case
+            target.mkdir()
+            for name in ["report.json", "manifest.json", "sql.ndjson", "final-receipts.json"]:
+                (target / name).symlink_to(source / name)
+            calls = json.loads((source / "calls.json").read_text())
+            rows = json.loads((source / "final-rows.json").read_text())
+            listed = next(call for call in calls if call["name"] == "list_tasks" and call.get("result", {}).get("ok"))
+            mutation = next(call for call in calls if call["name"] != "list_tasks" and call.get("result", {}).get("ok"))
+            if case == "unknown-mutations":
+                for call in calls:
+                    if call["name"] != "list_tasks":
+                        call["result"] = {"ok": False, "code": "outcome_unknown"}
+                        call.pop("reconciled", None)
+                (target / "final-receipts.json").unlink()
+                (target / "final-receipts.json").write_text("[]")
+            elif case == "list-text":
+                listed["result"]["tasks"][0]["text"] = "Wrong returned text"
+            elif case == "list-count":
+                listed["result"]["count"] -= 1
+            elif case == "cursor-scope":
+                cursor = task_cursor(listed["result"]["nextCursor"])
+                cursor["scope"] = "0" * 16
+                listed["result"]["nextCursor"] = base64.urlsafe_b64encode(json.dumps(cursor).encode()).decode().rstrip("=")
+            elif case == "list-order":
+                tasks = listed["result"]["tasks"]
+                tasks[0], tasks[1] = tasks[1], tasks[0]
+            elif case == "mutation-summary":
+                mutation["result"]["task"]["status"] = "done"
+            elif case == "row-order":
+                rows[0]["row_order"] += 1
+            elif case == "controller-flag":
+                rows[0]["controller_active"] = 1 - rows[0]["controller_active"]
+            (target / "calls.json").write_text(json.dumps(calls))
+            (target / "final-rows.json").write_text(json.dumps(rows))
+        compare_samples(controls)
+        results = json.loads((controls / "comparisons.json").read_text())
+        records = {}
+        for name, sample in results["samples"].items():
+            clean = not sample["historyViolations"] and not sample["unresolvedMutations"]
+            expected = name in ["pristine", "unknown-mutations"]
+            records[name] = {"accepted": clean, "expectedAcceptance": expected, "violations": sample["historyViolations"]}
+            if clean != expected:
+                raise RuntimeError(f"comparer control {name} gave an unexpected verdict: {sample['historyViolations']}")
+        report = {"analysisFileSha256": digest(pathlib.Path(__file__)), "sourceSample": source.name, "controls": records}
+    filename = root / f"comparer-controls-{time.time_ns()}.json"
+    filename.write_text(json.dumps(report, indent=2) + "\n")
+    print("PASS nine comparer controls; record:", filename.name)
+
+
 def main():
+    if len(sys.argv) == 3 and sys.argv[1] == "--verify-comparer":
+        verify_comparer(pathlib.Path(sys.argv[2]))
+        return
     if len(sys.argv) == 3 and sys.argv[1] == "--compare":
         compare_samples(pathlib.Path(sys.argv[2]))
         return
