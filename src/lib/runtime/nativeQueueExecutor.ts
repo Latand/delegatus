@@ -298,8 +298,16 @@ export async function withdrawNativeSeatMessage(conversationId: string, operatio
   if (entry.state === "removed" || entry.state === "refused") return true;
   if (entry.state === "admitted" && !entry.nativeSubmissionId) {
     if (!client.nativeQueueTransition) return false;
-    await client.nativeQueueTransition(operationId, { phase: "refused", reason: SEND_SEAT_REVOKED_REASON });
-    return true;
+    try {
+      const result = await client.nativeQueueTransition(operationId, { phase: "seat-withdrawal", reason: SEND_SEAT_REVOKED_REASON });
+      const after = (await client.nativeQueueRead(conversationId)).find(row => row.entryId === operationId);
+      return result.receipt.status === "failed" && after?.state === "refused" && after.reason === SEND_SEAT_REVOKED_REASON;
+    } catch {
+      // `prepared` makes the operation `delivering` before the executor calls
+      // Codex. A losing conditional claim keeps custody for canonical evidence
+      // or a later acknowledged native deletion.
+      return false;
+    }
   }
   if (!entry.nativeSubmissionId || entry.state !== "queued") return false;
   const { createHash } = await import("node:crypto");

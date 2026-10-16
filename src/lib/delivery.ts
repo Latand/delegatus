@@ -1180,6 +1180,10 @@ async function actuateConversationMessage(
     const refusal = await legacySeatRefusal(registry, target);
     return refusal ? seatRefusalFailure(refusal) : null;
   };
+  const currentSeatAuthorityGuard = (target: Pick<RegistryConversation, "id"> | null): DeliveryAdmissionGuard => () => {
+    const refusal = legacySeatRefusalSync(target);
+    if (refusal) throw new DeliveryAdmissionRefusedError(refusal.error, refusal);
+  };
   /* The paths are recorded before anything is typed, off the loop. Refused,
      nothing is typed: the send fails before actuation, its images are deleted
      and its reservation discarded the way a failure there always is. */
@@ -1210,7 +1214,7 @@ async function actuateConversationMessage(
       if (finalRefusal) return await settle(finalRefusal);
       recordTerminal(bundle.payload);
       dispatching();
-      await (overrides.sendText ?? sendText)(target, bundle.payload);
+      await (overrides.sendText ?? sendText)(target, bundle.payload, currentSeatAuthorityGuard(conversationForTerminal));
       actuation = "completed";
       return await settle({ ok: true, target, ...(imagePaths.length ? { imagePaths } : {}) });
     }
@@ -1257,7 +1261,8 @@ async function actuateConversationMessage(
       if (finalRefusal) return await settle(finalRefusal);
       recordTerminal(bundle.payload);
       dispatching();
-      const outcome = await hostOutcome((overrides.deliver ?? deliverToTranscriptHost)({ entry, spec, payload: bundle.payload }));
+      const outcome = await hostOutcome((overrides.deliver ?? deliverToTranscriptHost)({ entry, spec, payload: bundle.payload,
+        authorityGuard: currentSeatAuthorityGuard(registry.conversationForPath(entry.path) ?? conversationForTerminal) }));
       if (!outcome.ok) { actuation = outcome.actuation === "started" ? "started" : "none"; return await settle(cleanupFailedImageDelivery(outcome, imagePaths)); }
       actuation = "completed";
       return await settle({ ...outcome, ...(imagePaths.length ? { imagePaths } : {}) });
@@ -1310,7 +1315,8 @@ async function actuateConversationMessage(
     const imageField = imagePaths.length ? { imagePaths } : {};
     recordTerminal(relayText, root.path, true);
     dispatching();
-    const outcome = await hostOutcome((overrides.deliver ?? deliverToTranscriptHost)({ entry: root, spec: rootSpec, payload: relayText }));
+    const outcome = await hostOutcome((overrides.deliver ?? deliverToTranscriptHost)({ entry: root, spec: rootSpec, payload: relayText,
+      authorityGuard: currentSeatAuthorityGuard(registry.conversationForPath(root.path)) }));
     if (!outcome.ok) { actuation = outcome.actuation === "started" ? "started" : "none"; return await settle(cleanupFailedImageDelivery(outcome, imagePaths)); }
     actuation = "completed";
     return await settle({ ...outcome, ...imageField });
@@ -1326,6 +1332,9 @@ async function actuateConversationMessage(
       deleteInboxImages(imagePaths);
     }
     settleRecord(uncertain ? "uncertain" : "failed", error instanceof Error ? error.message : String(error));
-    return absorbing(failure(error, 500, uncertain ? "started" : undefined));
+    if (error instanceof DeliveryAdmissionRefusedError && error.details?.status === 409) {
+      return await settle(seatRefusalFailure(error.details));
+    }
+    return absorbing(failure(error, error instanceof DeliveryAdmissionRefusedError ? 409 : 500, uncertain ? "started" : undefined));
   }
 }

@@ -45,12 +45,19 @@ function fixture(journal = makeJournal()) {
   let refuseDelete = false;
   let refuseUpdate = false;
   let proof: NativeQueueProof | null = null;
+  let holdAdd = false;
+  let addStarted: (() => void) | null = null;
+  let releaseAdd: (() => void) | null = null;
   const queue = new NativeCodexQueue({ rpc: async (method, params) => {
     calls.push(method);
     if (method === "thread/queue/list") return { data: items, nextCursor: null };
     if (method === "thread/queue/add") {
       const queuedSubmission = { id: `native-${++next}`, clientUserMessageId: params.clientUserMessageId as string, input: params.input as NativeQueuedSubmission["input"] };
       items.push(queuedSubmission);
+      if (holdAdd) {
+        addStarted?.();
+        await new Promise<void>(resolve => { releaseAdd = resolve; });
+      }
       if (loseAdd) throw new Error("lost add reply");
       return { queuedSubmission };
     }
@@ -96,6 +103,9 @@ function fixture(journal = makeJournal()) {
   } as unknown as EngineHost;
   const executor = new NativeQueueExecutor({ client, resolveHost: () => host, binding: () => liveBinding });
   return { journal, client, executor, host, calls, queue, startedSubmissionIds, get items() { return items; },
+    holdAdd: () => { holdAdd = true; },
+    waitAddStarted: () => new Promise<void>(resolve => { addStarted = resolve; }),
+    releaseAdd: () => releaseAdd?.(),
     loseAdd: () => { loseAdd = true; }, race: () => { raceDelete = true; }, refuseDelete: () => { refuseDelete = true; },
     refuseUpdate: (value = true) => { refuseUpdate = value; },
     /* The host goes idle AND the journal's session projection says so: the
@@ -1346,6 +1356,49 @@ for (const refusal of [false, true]) test(`seat channel native withdrawal proves
       expect(await withdrawNativeSeatMessage(conversationId, add.operationId, f.client, f.executor)).toBe(true);
       expect(f.calls.filter(method => method === "thread/queue/delete")).toHaveLength(1);
     }
+  } finally { f.journal.close(); }
+});
+
+test("seat withdrawal keeps custody while an accepted native add is awaiting its acknowledgement", async () => {
+  const f = fixture();
+  let dispatch: Promise<void | false> | undefined;
+  try {
+    const add = command("seat-channel-add-in-flight");
+    f.journal.executeOperation(add);
+    f.holdAdd();
+    const started = f.waitAddStarted();
+    dispatch = f.executor.execute(add);
+    await started;
+
+    expect(f.items).toHaveLength(1);
+    expect(f.journal.operationResult(add.operationId)?.receipt.status).toBe("delivering");
+    expect(await withdrawNativeSeatMessage(conversationId, add.operationId, f.client, f.executor)).toBe(false);
+    expect(f.journal.operationResult(add.operationId)?.receipt.status).toBe("delivering");
+    expect(f.journal.nativeQueueRead(conversationId)[0]?.state).toBe("admitted");
+    expect(f.items).toHaveLength(1);
+
+    f.releaseAdd();
+    await dispatch;
+    expect(f.journal.nativeQueueRead(conversationId)[0]?.state).toBe("queued");
+    expect(await withdrawNativeSeatMessage(conversationId, add.operationId, f.client, f.executor)).toBe(true);
+    expect(f.items).toHaveLength(0);
+    expect(f.journal.nativeQueueRead(conversationId)[0]?.state).toBe("removed");
+  } finally { f.releaseAdd(); await dispatch; f.journal.close(); }
+});
+
+test("seat withdrawal wins atomically before native add preparation", async () => {
+  const f = fixture();
+  try {
+    const add = command("seat-channel-before-prepare");
+    f.journal.executeOperation(add);
+
+    expect(await withdrawNativeSeatMessage(conversationId, add.operationId, f.client, f.executor)).toBe(true);
+    await f.executor.execute(add);
+
+    expect(f.journal.operationResult(add.operationId)?.receipt).toMatchObject({ status: "failed", reason: expect.stringContaining("orchestrator seat") });
+    expect(f.journal.nativeQueueRead(conversationId)[0]?.state).toBe("refused");
+    expect(f.items).toHaveLength(0);
+    expect(f.calls).not.toContain("thread/queue/add");
   } finally { f.journal.close(); }
 });
 
