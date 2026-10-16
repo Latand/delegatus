@@ -17584,6 +17584,7 @@ describe("wide card: each fail branch hangs under the stage it fails from", () =
   const GATES: Record<string, Record<string, string>> = {
     "t-chain-wide": { "review-fix": "review" },
     "t-chain-gates": { fix: "review", "ui-fix": "visual" },
+    "t-chain-gates-long": { "critique-fix": "critique", "review-fix": "review" },
     "t-chain-shared": { fix: "review" },
     "t-chain-failed": { "critique-fix": "critique" },
     "t-chain-wide-long": { "review-fix-after-the-attachment-check": "review" },

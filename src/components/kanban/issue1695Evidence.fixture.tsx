@@ -1596,6 +1596,14 @@ const stageChainPipelines: Pipeline[] = STAGE_CHAIN ? (() => {
         { stageId: "fix", attempts: [attempt(1, "passed", null, { ...done(60), ...failVia("review") })] },
         { stageId: "visual", attempts: [attempt(1, "running", null, { startedAt: iso(10 * MIN), ...passVia("review") })] },
       ], { stageId: "visual", state: "running", input: null, activatedBy: null }),
+    /* Two gates in a row, each with a fix wider than its gate and no attempt yet: the earlier fix takes the room up to the later fix, and wraps at spaces only. */
+    pipeline("p-chain-gates-long", L("Critique and review the sync screens", "Критика і рев’ю екранів синхронізації"), "t-chain-gates-long", "running",
+      [stage("build", "builder", "critique"), stage("critique", "architect", "review", { onFail: { to: "critique-fix", maxRounds: 2 } }), stage("review", "reviewer", null, { kind: "run", onFail: { to: "review-fix", maxRounds: 2 } }), stage("critique-fix", "builder", "critique"), stage("review-fix", "builder", "review")],
+      [
+        { stageId: "build", attempts: [attempt(1, "passed", null, done(90))] },
+        { stageId: "critique", attempts: [attempt(1, "passed", null, { ...done(70), ...passVia("build") })] },
+        { stageId: "review", attempts: [attempt(1, "running", null, { startedAt: iso(10 * MIN), ...passVia("critique") })] },
+      ], { stageId: "review", state: "running", input: null, activatedBy: null }),
     /* One fix shared by two gates is drawn once, under the first; it runs now because Visual failed. */
     pipeline("p-chain-shared", L("Review and check the import screens", "Переглянути і перевірити екрани імпорту"), "t-chain-shared", "running",
       [stage("build", "builder", "review"), stage("review", "reviewer", "visual", { kind: "run", onFail: { to: "fix", maxRounds: 2 } }), stage("visual", "reviewer", "merge", { kind: "run", onFail: { to: "fix", maxRounds: 2 } }), stage("fix", "builder", "review"), stage("merge", "cleaner", null)],
@@ -1926,6 +1934,7 @@ const tasks: BoardTask[] = [
     task("t-chain-long", "blocked", L("Confirm every attachment arrives whole", "Підтвердити, що кожне вкладення доходить цілим"), "", 8 * MIN),
     task("t-chain-wide", "assigned", L("Keep the review fix on the card, wide", "Залишити виправлення рев’ю на картці, широка"), "", 45 * MIN),
     task("t-chain-gates", "assigned", L("Review and check the export screens", "Переглянути і перевірити екрани експорту"), "", 44 * MIN),
+    task("t-chain-gates-long", "assigned", L("Critique and review the sync screens", "Критика і рев’ю екранів синхронізації"), "", 45 * MIN),
     task("t-chain-shared", "assigned", L("Review and check the import screens", "Переглянути і перевірити екрани імпорту"), "", 43 * MIN),
     task("t-chain-failed", "assigned", L("Critique the sync, then review it", "Критика синхронізації, потім рев’ю"), "", 42 * MIN),
     task("t-chain-wide-long", "assigned", L("Check every attachment on arrival", "Перевірити кожне вкладення при надходженні"), "", 41 * MIN),

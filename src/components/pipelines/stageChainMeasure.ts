@@ -23,6 +23,8 @@ export type StageChainStep = {
   cut: boolean;
   inkOutside: boolean;
   nameLines: number;
+  /** True when a word of the name (split at spaces and hyphens) is drawn across two lines. */
+  wordBroken: boolean;
   /** The pill's visible text, its `st-*` state class and its border colour. */
   label: string;
   state: string | null;
@@ -69,12 +71,25 @@ export const measureStageChain = (selector: string) => `(() => {
     }
     const name = pill.querySelector(".pb-name");
     const lineHeight = parseFloat(getComputedStyle(name).lineHeight) || 16;
+    /* A word cut across lines: its range has rects on two tops. */
+    let wordBroken = false;
+    const nameWalker = document.createTreeWalker(name, NodeFilter.SHOW_TEXT);
+    for (let node = nameWalker.nextNode(); node; node = nameWalker.nextNode()) {
+      if (!node.nodeValue || !node.nodeValue.trim() || node.parentElement.closest(".pb-branch-word, .pb-attempt")) continue;
+      for (const m of node.nodeValue.matchAll(/[^\\s-]+/g)) {
+        const range = document.createRange();
+        range.setStart(node, m.index);
+        range.setEnd(node, m.index + m[0].length);
+        const tops = new Set([...range.getClientRects()].filter((r) => r.width > 0).map((r) => Math.round(r.top)));
+        if (tops.size > 1) wordBroken = true;
+      }
+    }
     return {
       stage: pill.getAttribute("data-stage"), kind: step.getAttribute("data-step"), through: step.hasAttribute("data-through"),
       left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom,
       arrow: arrow ? getComputedStyle(arrow).display : null,
       before: pseudo(step, "::before"), after: pseudo(step, "::after"),
-      cut: name.scrollWidth > name.clientWidth + 1, inkOutside, nameLines: Math.round(name.getBoundingClientRect().height / lineHeight),
+      cut: name.scrollWidth > name.clientWidth + 1, inkOutside, nameLines: Math.round(name.getBoundingClientRect().height / lineHeight), wordBroken,
       label: name.innerText.trim(), state: ([...pill.classList].find((c) => c.startsWith("st-")) || null), borderColor: getComputedStyle(pill).borderTopColor,
     };
   });
@@ -157,6 +172,7 @@ export function wideStageChainFailures(label: string, lane: StageChainLane, gate
   for (const step of lane.steps) {
     if (step.cut) fail(`${step.stage}: the name is clipped`);
     if (step.inkOutside) fail(`${step.stage}: text paints outside its pill`);
+    if (step.wordBroken) fail(`${step.stage}: a word of "${step.label}" breaks across lines (the pill is ${Math.round(step.right - step.left)} px wide)`);
     if (/^(branch|гілка):/.test(step.label)) fail(`${step.stage}: still says "${step.label}"`);
     for (const box of lane.beside ?? []) {
       if (Math.min(step.right, box.right) - Math.max(step.left, box.left) > 0.5 && Math.min(step.bottom, box.bottom) - Math.max(step.top, box.top) > 0.5) fail(`${step.stage}: a pill runs into the links or the age`);

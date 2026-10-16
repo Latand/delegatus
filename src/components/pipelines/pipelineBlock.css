@@ -219,13 +219,15 @@
    Under 380 px (every shelf card, the phone's 342 px lane) the stages stand
    one under another, joined by a 1 px rail, and a fail branch hangs off its
    reviewer on a dashed elbow. The wide lane keeps its row and its arrows; the
-   data-step / --pb-order the chain writes are read only here
-   (docs/design/narrow-card-stage-chain.md). */
+   data-step / --pb-order the chain writes are read here and by the wide form
+   below (docs/design/narrow-card-stage-chain.md). */
 .pblock[data-density="task"] {
   container: pb-lane / inline-size;
   --pb-chain-gap: 8px;
   --pb-rail-x: 15px;
   --pb-branch-indent: 28px;
+  /* 4 px flex gap + the next arrow's 12 px and 4 px margin + the next indent, less an 8 px gap. */
+  --pb-branch-reach: calc(4px + 16px + var(--pb-branch-indent) - 8px);
   --pb-rail: var(--border-strong);
 }
 @container pb-lane (max-width: 379.98px) {
@@ -294,12 +296,15 @@
   }
   /* A branch adds nothing to its unit's width, so a long fix never moves its gate
      or a later pass stage to a new line: the pill takes its gate's width (at
-     least 8rem) and the name wraps inside it. A gate with a later branch of its
-     own keeps to its column, so two branches never meet. */
+     least 8rem) and the name wraps inside it, at spaces. A gate with a later branch
+     of its own may use the room up to that branch instead: its gate's column plus
+     the flex gap, the next arrow and the next indent, less the 8 px that keeps the
+     two branches apart (--pb-branch-reach). */
   .pblock .pb-chain .pb-unit > .pb-step[data-step="branch"] { contain: inline-size; justify-self: stretch; }
   .pblock .pb-chain .pb-unit > .pb-step[data-step="branch"] > .pb-pill {
     flex: none; width: max-content; max-width: max(100%, 8rem); height: auto; min-height: 22px; padding-block: 2px;
   }
+  .pblock .pb-chain .pb-unit:has(~ .pb-unit > .pb-step[data-step="branch"]) > .pb-step[data-step="branch"] { margin-inline-end: calc(-1 * var(--pb-branch-reach)); max-width: calc(100% + var(--pb-branch-reach)); }
   .pblock .pb-chain .pb-unit:has(~ .pb-unit > .pb-step[data-step="branch"]) > .pb-step[data-step="branch"] > .pb-pill { max-width: 100%; }
   .pblock .pb-chain .pb-unit > .pb-step[data-step="branch"] .pb-name { white-space: normal; overflow-wrap: anywhere; }
   .pblock .pb-chain .pb-unit > .pb-step[data-step="branch"] .pb-pill .pret,
