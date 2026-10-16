@@ -1,4 +1,4 @@
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, afterEach, expect, setSystemTime, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -13,6 +13,7 @@ process.env.LLV_VIEWER_CONTROL_URL = "http://127.0.0.1:1";
 process.env.LLV_RUNTIME_HOST_SOCKET = path.join(sandbox, "absent.sock");
 process.env.LLV_RUNTIME_HOST_CONTROL_SOCKET = path.join(sandbox, "absent-control.sock");
 afterAll(() => fs.rmSync(sandbox, { recursive: true, force: true }));
+afterEach(() => setSystemTime());
 
 const bindingModule = process.env.MCP_SIZE_BINDINGS ?? "./bindings";
 const { persistProjectAliases } = await import("@/lib/projects/aliases");
@@ -49,6 +50,7 @@ function flowCorpus(count: number, now: number) {
 
 test("default answers contain short ids, with a repeatable service size census", async () => {
   const now = Date.parse("2026-09-20T09:00:00.000Z");
+  setSystemTime(now);
   const pipelines = pipelineCorpus(24, 2);
   saveFlows(flowCorpus(24, now));
   for (const [i, pipeline] of pipelines.entries()) {
