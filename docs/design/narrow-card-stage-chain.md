@@ -127,8 +127,9 @@ facts on each `.pb-step`, which only the vertical CSS reads:
 
   Ties keep DOM order.
 
-**Anchor of a branch.** The first main chip, in `summary.chips` order, whose
-`stage.onFail?.to` is the branch's id. This is the reviewer, and `summary.loops`
+**Anchor of a branch.** The main chip whose
+`stage.onFail?.to` is the branch's id: of several, the one that last fired the
+branch, else the first in `summary.chips` order. This is the reviewer, and `summary.loops`
 holds the same pair. If no main chip fails to it (for example, only another
 branch does), the anchor is the last main chip. The branch then keeps its
 place at the end, as today.
@@ -367,11 +368,25 @@ in this horizontal form only.
   whole, so a stage never leaves its fix behind. A branch adds nothing to its
   unit's width (`contain: inline-size`): a fix wider than its stage never
   moves the stage or a later pass stage to a new line. Its pill takes the
-  stage's width, at least 8rem, and the name wraps inside it; a stage with a
-  later branch of its own keeps its fix to its column, so two fixes never
-  meet.
-- A fix shared by two gates is drawn once, under the first gate that fails to
-  it; the other gate says it with its `↺ n/m` mark.
+  stage's width, at least 8rem, and the name wraps inside it. A stage with a
+  later branch of its own may use the room up to that branch's elbow: the next
+  unit's rail stands 15px right of its column, so the earlier fix reaches
+  `--pb-branch-reach` (4 + 16 + 15 − 8 = 27px) past its column and stops 8px
+  short of the elbow, which therefore crosses no pill. That fix counts its
+  longest word toward its unit's width (a cyclic percentage is 0 in the
+  intrinsic contribution, so it asks no more), so a word never breaks and the
+  elbow never meets the pill: the unit grows by the few pixels the word needs,
+  and the gap before the next arrow with it. The last gate with a
+  branch and the stages after it are one unit (`data-tail`): the unit takes
+  the row's free room (`flex: 1 1 auto`, its last column `1fr`), so that fix
+  may use the room under the later stages up to the lane's right edge before
+  it wraps, and still adds nothing to the pass row's width. Its pass stages
+  keep their width (`min-width: max-content`): a tail wider than the row
+  overflows by a few pixels rather than ellipsize a stage.
+- A fix shared by two gates is drawn once, under the gate that last fired it
+  (the `activatedBy` of its latest fail-activated attempt), else under the
+  first gate that fails to it; the other gate says it with its `↺ n/m` mark.
+  The narrow form reads the same anchor.
 - The word «branch» is its own span (`.pb-branch-word`) and is hidden in the
   wide form, where the position and the elbow say it. Accessible names are
   unchanged.

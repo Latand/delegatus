@@ -226,8 +226,9 @@
   --pb-chain-gap: 8px;
   --pb-rail-x: 15px;
   --pb-branch-indent: 28px;
-  /* 4 px flex gap + the next arrow's 12 px and 4 px margin + the next indent, less an 8 px gap. */
-  --pb-branch-reach: calc(4px + 16px + var(--pb-branch-indent) - 8px);
+  /* 4 px flex gap + the next arrow's 12 px and 4 px margin + the next unit's rail, less an 8 px gap:
+     an earlier fix stops 8 px short of the next unit's elbow. */
+  --pb-branch-reach: calc(4px + 16px + var(--pb-rail-x) - 8px);
   --pb-rail: var(--border-strong);
 }
 @container pb-lane (max-width: 379.98px) {
@@ -277,10 +278,14 @@
     align-items: center; justify-items: start; min-width: 0; max-width: 100%;
   }
   .pblock .pb-chain .pb-unit > .pb-step:not([data-step="branch"]) { display: contents; }
-  .pblock .pb-chain .pb-unit > .pb-step > .pb-arrow { grid-column: 1; grid-row: 1; margin-inline-end: 4px; }
-  .pblock .pb-chain .pb-unit > .pb-step:not([data-step="branch"]) > .pb-pill { grid-column: 2; grid-row: 1; }
+  .pblock .pb-chain .pb-unit > .pb-step > .pb-arrow { grid-column: var(--pb-gc, 1); grid-row: 1; margin-inline-end: 4px; }
+  .pblock .pb-chain .pb-unit > .pb-step:not([data-step="branch"]) > .pb-pill { grid-column: calc(var(--pb-gc, 1) + 1); grid-row: 1; }
+  /* The last gate with a branch and the stages after it are one unit (--pb-gc is a late stage's arrow column):
+     the unit takes the row's free room and its last column, so the branch may reach the lane's right edge. */
+  .pblock .pb-chain .pb-unit[data-tail] { grid-template-columns: var(--pb-columns); flex: 1 1 auto; }
+  .pblock .pb-chain .pb-unit > .pb-step[data-late] > .pb-arrow { margin-inline-start: 4px; }
   .pblock .pb-chain .pb-unit > .pb-step[data-step="branch"] {
-    grid-column: 2; position: relative; box-sizing: border-box; max-width: 100%; padding-left: var(--pb-branch-indent);
+    grid-column: 2 / -1; position: relative; box-sizing: border-box; max-width: 100%; padding-left: var(--pb-branch-indent);
   }
   .pblock .pb-chain .pb-unit > .pb-step[data-step="branch"]::after {
     content: ""; position: absolute; pointer-events: none; box-sizing: border-box;
@@ -304,9 +309,19 @@
   .pblock .pb-chain .pb-unit > .pb-step[data-step="branch"] > .pb-pill {
     flex: none; width: max-content; max-width: max(100%, 8rem); height: auto; min-height: 22px; padding-block: 2px;
   }
-  .pblock .pb-chain .pb-unit:has(~ .pb-unit > .pb-step[data-step="branch"]) > .pb-step[data-step="branch"] { margin-inline-end: calc(-1 * var(--pb-branch-reach)); max-width: calc(100% + var(--pb-branch-reach)); }
-  .pblock .pb-chain .pb-unit:has(~ .pb-unit > .pb-step[data-step="branch"]) > .pb-step[data-step="branch"] > .pb-pill { max-width: 100%; }
+  /* An earlier gate's fix counts its longest word toward its unit's width (a cyclic percentage is 0 there),
+     so the unit grows by those few pixels rather than break a word or reach the next elbow; with room it
+     takes its one line, else it wraps at spaces inside the reach. */
+  .pblock .pb-chain .pb-unit:has(~ .pb-unit > .pb-step[data-step="branch"]) > .pb-step[data-step="branch"] {
+    contain: none; margin-inline-end: calc(-1 * var(--pb-branch-reach)); max-width: calc(100% + var(--pb-branch-reach));
+  }
+  .pblock .pb-chain .pb-unit:has(~ .pb-unit > .pb-step[data-step="branch"]) > .pb-step[data-step="branch"] > .pb-pill {
+    width: min(min-content, 9rem); min-width: min(max-content, 100%); max-width: none;
+  }
+  .pblock .pb-chain .pb-unit:has(~ .pb-unit > .pb-step[data-step="branch"]) > .pb-step[data-step="branch"] .pb-name { overflow-wrap: break-word; }
   .pblock .pb-chain .pb-unit > .pb-step[data-step="branch"] .pb-name { white-space: normal; overflow-wrap: anywhere; }
+  /* The tail's pass stages keep their width: a tail wider than the row overflows rather than ellipsize a stage. */
+  .pblock .pb-chain .pb-unit[data-tail] > .pb-step:not([data-step="branch"]) > .pb-pill { min-width: max-content; }
   .pblock .pb-chain .pb-unit > .pb-step[data-step="branch"] .pb-pill .pret,
   .pblock .pb-chain .pb-unit > .pb-step[data-step="branch"] .pb-pill .ccircle { flex-shrink: 0; }
   @media (pointer: coarse) {

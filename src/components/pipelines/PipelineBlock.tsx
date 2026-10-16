@@ -172,27 +172,45 @@ function ChainPills({ summary, nameOf, suffixes, selected, onOpenStage }: {
       onOpen={onOpenStage}
     />
   );
-  const steps = chainSteps(summary.chips);
-  const units = steps.filter((entry) => entry.step !== "branch");
-  const hasBranch = steps.length > units.length;
+  const steps = chainSteps(summary.chips, summary.pipeline);
+  const mains = steps.filter((entry) => entry.step !== "branch");
+  const hasBranch = steps.length > mains.length;
+  /* The last gate with a branch and the stages after it form one unit: its branch may use the room to the lane's right edge, under them. */
+  const tail = hasBranch ? Math.max(...steps.filter((entry) => entry.step === "branch").map((entry) => entry.anchor)) : mains.length;
+  const units = mains.filter((entry) => entry.anchor <= tail);
   return (
     <div className="pb-pills" data-chain={summary.pipeline.id} data-branches={hasBranch ? "1" : undefined}>
-      {units.map((gate) => (
-        <span key={gate.chip.stage.id} className="pb-unit">
-          {[gate, ...steps.filter((entry) => entry.step === "branch" && entry.anchor === gate.anchor)].map(({ chip, step, through, order }) => (
-            <span
-              key={chip.stage.id}
-              className="pb-step"
-              data-step={step}
-              data-through={through ? "1" : undefined}
-              style={{ "--pb-order": order } as CSSProperties}
-            >
-              {step === "next" ? <span className="pb-arrow" aria-hidden="true">→</span> : null}
-              {pill(chip)}
-            </span>
-          ))}
-        </span>
-      ))}
+      {units.map((gate) => {
+        const isTail = hasBranch && gate.anchor === tail;
+        const members = [
+          gate,
+          ...(isTail ? mains.filter((entry) => entry.anchor > tail) : []),
+          ...steps.filter((entry) => entry.step === "branch" && entry.anchor === gate.anchor),
+        ];
+        const columns = members.filter((entry) => entry.step !== "branch").length;
+        return (
+          <span
+            key={gate.chip.stage.id}
+            className="pb-unit"
+            data-tail={isTail ? "1" : undefined}
+            style={isTail ? { "--pb-columns": `${"auto auto ".repeat(columns - 1)}auto 1fr` } as CSSProperties : undefined}
+          >
+            {members.map(({ chip, step, through, order }, index) => (
+              <span
+                key={chip.stage.id}
+                className="pb-step"
+                data-step={step}
+                data-through={through ? "1" : undefined}
+                data-late={step !== "branch" && index > 0 ? "1" : undefined}
+                style={{ "--pb-order": order, ...(step !== "branch" && index > 0 ? { "--pb-gc": 2 * index + 1 } : {}) } as CSSProperties}
+              >
+                {step === "next" ? <span className="pb-arrow" aria-hidden="true">→</span> : null}
+                {pill(chip)}
+              </span>
+            ))}
+          </span>
+        );
+      })}
     </div>
   );
 }

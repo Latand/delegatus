@@ -189,39 +189,6 @@
           "borderColor": "rgb(229, 223, 213)"
         },
         {
-          "stage": "critique-fix",
-          "kind": "branch",
-          "through": true,
-          "left": 52,
-          "top": 364.125,
-          "right": 189.859375,
-          "bottom": 394.125,
-          "arrow": null,
-          "before": {
-            "content": "\"\"",
-            "height": 38,
-            "left": 15,
-            "width": 1,
-            "borderLeft": "solid",
-            "borderBottom": "solid"
-          },
-          "after": {
-            "content": "\"\"",
-            "height": 23,
-            "left": 15,
-            "width": 13,
-            "borderLeft": "dashed",
-            "borderBottom": "dashed"
-          },
-          "cut": false,
-          "inkOutside": false,
-          "nameLines": 1,
-          "wordBroken": false,
-          "label": "branch: Critique fix",
-          "state": "st-passed",
-          "borderColor": "rgb(229, 223, 213)"
-        },
-        {
           "stage": "review",
           "kind": "next",
           "through": false,
@@ -251,6 +218,39 @@
           "nameLines": 1,
           "wordBroken": false,
           "label": "Review",
+          "state": "st-passed",
+          "borderColor": "rgb(229, 223, 213)"
+        },
+        {
+          "stage": "critique-fix",
+          "kind": "branch",
+          "through": true,
+          "left": 52,
+          "top": 364.125,
+          "right": 189.859375,
+          "bottom": 394.125,
+          "arrow": null,
+          "before": {
+            "content": "\"\"",
+            "height": 38,
+            "left": 15,
+            "width": 1,
+            "borderLeft": "solid",
+            "borderBottom": "solid"
+          },
+          "after": {
+            "content": "\"\"",
+            "height": 23,
+            "left": 15,
+            "width": 13,
+            "borderLeft": "dashed",
+            "borderBottom": "dashed"
+          },
+          "cut": false,
+          "inkOutside": false,
+          "nameLines": 1,
+          "wordBroken": false,
+          "label": "branch: Critique fix",
           "state": "st-passed",
           "borderColor": "rgb(229, 223, 213)"
         }
@@ -458,39 +458,6 @@
           "borderColor": "rgb(41, 44, 54)"
         },
         {
-          "stage": "critique-fix",
-          "kind": "branch",
-          "through": true,
-          "left": 52,
-          "top": 364.125,
-          "right": 189.859375,
-          "bottom": 394.125,
-          "arrow": null,
-          "before": {
-            "content": "\"\"",
-            "height": 38,
-            "left": 15,
-            "width": 1,
-            "borderLeft": "solid",
-            "borderBottom": "solid"
-          },
-          "after": {
-            "content": "\"\"",
-            "height": 23,
-            "left": 15,
-            "width": 13,
-            "borderLeft": "dashed",
-            "borderBottom": "dashed"
-          },
-          "cut": false,
-          "inkOutside": false,
-          "nameLines": 1,
-          "wordBroken": false,
-          "label": "branch: Critique fix",
-          "state": "st-passed",
-          "borderColor": "rgb(41, 44, 54)"
-        },
-        {
           "stage": "review",
           "kind": "next",
           "through": false,
@@ -520,6 +487,39 @@
           "nameLines": 1,
           "wordBroken": false,
           "label": "Review",
+          "state": "st-passed",
+          "borderColor": "rgb(41, 44, 54)"
+        },
+        {
+          "stage": "critique-fix",
+          "kind": "branch",
+          "through": true,
+          "left": 52,
+          "top": 364.125,
+          "right": 189.859375,
+          "bottom": 394.125,
+          "arrow": null,
+          "before": {
+            "content": "\"\"",
+            "height": 38,
+            "left": 15,
+            "width": 1,
+            "borderLeft": "solid",
+            "borderBottom": "solid"
+          },
+          "after": {
+            "content": "\"\"",
+            "height": 23,
+            "left": 15,
+            "width": 13,
+            "borderLeft": "dashed",
+            "borderBottom": "dashed"
+          },
+          "cut": false,
+          "inkOutside": false,
+          "nameLines": 1,
+          "wordBroken": false,
+          "label": "branch: Critique fix",
           "state": "st-passed",
           "borderColor": "rgb(41, 44, 54)"
         }

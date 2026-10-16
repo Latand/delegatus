@@ -6,7 +6,7 @@ import type { Pipeline, PipelineStage, StageFinding } from "@/lib/pipelines/type
 import type { KanbanPipeline, KanbanStageChip } from "@/components/kanban/kanbanModel";
 import { pipelineActionOptions } from "@/components/kanban/stagesModel";
 import { stageAccess, type StageChipState } from "./pipelineModel";
-import { latestAttempt } from "@/lib/pipelines/stageChip";
+import { latestAttempt, stageAttempts } from "@/lib/pipelines/stageChip";
 import { pipelineMovedAtMs, stageFindings } from "@/lib/pipelines/laneReads";
 
 export { pipelineMovedAtMs, stageFindings };
@@ -99,14 +99,21 @@ export type ChainStep = {
 
 /**
  * The chips in draw order with their place in the vertical chain. A branch's
- * anchor is the first main chip whose fail edge leads to it (its reviewer),
- * else the last main chip, which leaves the branch at the end.
+ * anchor is the main chip whose fail edge leads to it (its reviewer): of
+ * several, the one that last fired it, else the first; with none, the last
+ * main chip, which leaves the branch at the end.
  */
-export function chainSteps(chips: readonly KanbanStageChip[]): ChainStep[] {
+export function chainSteps(chips: readonly KanbanStageChip[], pipeline?: Pipeline): ChainStep[] {
   const main = chips.filter((chip) => !chip.branch);
   const mainSteps = main.map((chip, index): ChainStep => ({ chip, step: index === 0 ? "first" : "next", through: false, order: 2 * index, anchor: index }));
   const branchSteps = chips.filter((chip) => chip.branch).map((chip): ChainStep => {
-    const found = main.findIndex((candidate) => candidate.stage.onFail?.to === chip.stage.id);
+    const gates = main.flatMap((candidate, index) => (candidate.stage.onFail?.to === chip.stage.id ? [index] : []));
+    /* A fix several gates return to hangs under the gate that last fired it, else under the first. */
+    const firedBy = pipeline
+      ? stageAttempts(pipeline, chip.stage.id).findLast((attempt) => attempt.activatedBy?.edge === "fail")?.activatedBy?.stageId
+      : undefined;
+    const fired = firedBy ? gates.find((index) => main[index]!.stage.id === firedBy) : undefined;
+    const found = fired ?? gates[0] ?? -1;
     const anchor = found >= 0 ? found : Math.max(0, main.length - 1);
     return { chip, step: "branch", through: anchor < main.length - 1, order: 2 * anchor + 1, anchor };
   });

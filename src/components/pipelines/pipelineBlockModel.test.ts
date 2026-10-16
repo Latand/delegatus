@@ -235,4 +235,11 @@ test("the vertical chain puts each branch under its reviewer, and the rail passe
   expect(read(chainSteps([chip("build", "passed"), chip("review", "passed"), chip("diagnose", "needs_decision", true)])))
     .toEqual(["build:first:0@0", "review:next:2@1", "diagnose:branch:3@1"]);
   expect(read(chainSteps([chip("only", "running")]))).toEqual(["only:first:0@0"]);
+  /* A fix two gates return to hangs under the gate that last fired it, else under the first. */
+  const shared = [chip("build", "passed"), withFail("review", "fix"), withFail("visual", "fix"), chip("fix", "running", true)];
+  expect(read(chainSteps(shared)).at(-1)).toBe("fix:branch+:3@1");
+  const fired = (by: string) => ({ runs: [{ stageId: "fix", attempts: [{ activatedBy: { stageId: by, attempt: 1, edge: "fail" } }] }] }) as unknown as Pipeline;
+  expect(read(chainSteps(shared, fired("visual"))).at(-1)).toBe("fix:branch:5@2");
+  expect(read(chainSteps(shared, fired("review"))).at(-1)).toBe("fix:branch+:3@1");
+  expect(read(chainSteps(shared, fired("build"))).at(-1)).toBe("fix:branch+:3@1");
 });

@@ -187,12 +187,15 @@ export function wideStageChainFailures(label: string, lane: StageChainLane, gate
   main.forEach((step, index) => {
     if (drawn(step.before.content) || drawn(step.after.content)) fail(`${step.stage}: a main stage draws a connector`);
     if (index > 0 && step.arrow === "none") fail(`${step.stage}: no arrow before it`);
-    /* A branch adds nothing to its unit: the next main stage on the same line follows its gate by the arrow and its gaps. */
+    /* A branch adds nothing to its unit but the few pixels its longest word needs: the next main stage on the same
+       line follows its gate by the arrow and its gaps, and by that much when the gate's fix is wider than the gate. */
     const next = main[index + 1];
     if (next && Math.abs(next.top - step.top) <= 1) {
       const gap = next.left - step.right;
+      const widest = lane.steps.filter((entry) => entry.kind === "branch" && gates[entry.stage] === step.stage).reduce((most, entry) => Math.max(most, entry.right - entry.left), 0);
+      const room = 4 + 12 + 4 + 4 + (widest ? Math.max(0, widest + 1 - (step.right - step.left)) : 0);
       if (gap < 0) fail(`${next.stage}: starts ${-gap} px before ${step.stage} ends`);
-      if (gap > 4 + 12 + 4 + 4) fail(`${next.stage}: ${gap} px after ${step.stage}, expected the arrow and its gaps only`);
+      if (gap > room + 1) fail(`${next.stage}: ${gap} px after ${step.stage}, expected the arrow and its gaps only`);
     }
   });
   for (const step of branches) {
@@ -206,6 +209,15 @@ export function wideStageChainFailures(label: string, lane: StageChainLane, gate
     const armAt = step.top - 8 + step.after.height;
     const middle = (step.top + step.bottom) / 2;
     if (Math.abs(armAt - middle) > 1.5) fail(`${step.stage}: the elbow arm lands at ${armAt}, the pill's middle is ${middle}`);
+    /* The elbow's box, rail to arm, crosses no other pill: it stands 13 px left of its own pill. */
+    const elbow: Box = { left: step.left - 28 + 15, right: step.left, top: step.top - 8, bottom: step.top - 8 + step.after.height };
+    for (const other of lane.steps) {
+      if (other === step) continue;
+      if (Math.min(elbow.right, other.right) - Math.max(elbow.left, other.left) > 0.5 && Math.min(elbow.bottom, other.bottom) - Math.max(elbow.top, other.top) > 0.5) fail(`${step.stage}: its elbow crosses ${other.stage}`);
+    }
   }
+  /* The last fix has no later fix to keep clear of: it takes the room to the lane's edge before it wraps. */
+  const last = branches.at(-1);
+  if (last && last.nameLines > 2) fail(`${last.stage}: the last fix takes ${last.nameLines} lines, expected 2 at most`);
   return failures;
 }
