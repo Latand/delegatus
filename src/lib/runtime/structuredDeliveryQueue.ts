@@ -842,6 +842,9 @@ export class StructuredDeliveryQueue {
    * eviction or restart returns to the conservative recovery path. */
   private readonly firstDispatches = new Map<string, FirstDispatchEvidence>();
   private readonly successfulKillBoundaries = new Map<string, SuccessfulKillBoundary>();
+  /** Reconfigures listed with a deferred kill retain that decision until their
+   * own receipt settles; a later drain must not recover the stopped host. */
+  private readonly killedReconfigures = new Set<string>();
   /** Compactions whose engine control is issued and whose evidence has not
       arrived. The effect stays pending in the journal meanwhile, so every later
       drain pass must find it here and leave it alone (#862). */
@@ -1002,6 +1005,7 @@ export class StructuredDeliveryQueue {
       if (!listed.has(operationId)) this.owedSwitchHolds.delete(operationId);
     }
     const pendingIds = new Set(rawEffects.map(effect => effect.payload.operationId));
+    for (const id of this.killedReconfigures) if (!pendingIds.has(id)) this.killedReconfigures.delete(id);
     for (const id of this.refusedSteerTurns.keys()) if (!pendingIds.has(id)) this.refusedSteerTurns.delete(id);
     for (const id of this.interruptIssuedAt.keys()) if (!pendingIds.has(id)) this.interruptIssuedAt.delete(id);
     this.releaseSettledLanes(pendingIds);
@@ -1096,7 +1100,16 @@ export class StructuredDeliveryQueue {
             else this.noteWait(effect, "startup", { wake: "event" });
           }
           if (kills.length === 0) return true;
-          return await this.drainTarget(kills, lane) || kills.length < deferred.length;
+          const killedGenerations = new Set<string>();
+          try {
+            return await this.drainTarget(kills, lane, undefined, killedGenerations) || kills.length < deferred.length;
+          } finally {
+            for (const effect of deferred) {
+              if (isReconfigureEffect(effect) && (effect.sessionKey
+                ? killedGenerations.has(`${effect.sessionKey.engine}:${effect.sessionKey.sessionId}`)
+                : killedGenerations.size > 0)) this.killedReconfigures.add(effect.operationId);
+            }
+          }
         }
         for (const prepare of targetPreparations.get(conversationId) ?? []) await prepare();
         return this.drainTarget(grouped.get(conversationId) ?? [], lane);
@@ -1592,7 +1605,8 @@ export class StructuredDeliveryQueue {
     }
   }
 
-  private async drainTarget(effects: DeliveryEffect[], lane?: DeliveryLane, guardedLease?: ActuationLease): Promise<boolean> {
+  private async drainTarget(effects: DeliveryEffect[], lane?: DeliveryLane, guardedLease?: ActuationLease,
+    killedGenerations = new Set<string>()): Promise<boolean> {
     let updateHeld = false;
     const waitAll = (reason: DeliveryWaitReason, wake: "retry" | "event" = "event", detail?: string | null) => {
       for (const effect of effects) this.noteWait(effect, reason, { wake, ...(detail !== undefined ? { detail } : {}) });
@@ -1682,7 +1696,6 @@ export class StructuredDeliveryQueue {
     // interrupt/answer/kill can still use their independently readable receipts.
     effects = nativeReceiptUnavailable ? openEffects.filter(isControlEffect) : openEffects;
     if (nativeReceiptUnavailable) this.retrySoon();
-    const killedGenerations = new Set<string>();
     const reconfigures = effects.filter(isReconfigureEffect);
     const currentReconfigure = reconfigures.reduce<StructuredReconfigureEffect | null>(
       (current, effect) => !current || effect.eventSeq > current.eventSeq ? effect : current,
@@ -1744,9 +1757,11 @@ export class StructuredDeliveryQueue {
             await this.transitionReconfigure(previous, "failed", { reason: "superseded" }, effect);
           }
         }
-        if (effect.sessionKey
+        const killBoundary = this.successfulKillBoundaries.get(effect.conversationId);
+        if ((killBoundary && effect.eventSeq <= killBoundary.eventSeq)
+          || this.killedReconfigures.has(effect.operationId) || (effect.sessionKey
           ? killedGenerations.has(`${effect.sessionKey.engine}:${effect.sessionKey.sessionId}`)
-          : killedGenerations.size > 0) {
+          : killedGenerations.size > 0)) {
           await this.transitionReconfigure(effect, "failed", { reason: "conversation-killed" });
           continue;
         }
