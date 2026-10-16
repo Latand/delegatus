@@ -7,6 +7,8 @@ import { join } from "node:path";
 
 import {
   createLauncherRecord,
+  createReadinessJournal,
+  waitForPageAndChunk,
   exitError,
   hostEntrypoint,
   installedRelease,
@@ -97,6 +99,8 @@ describe("paths, entry and identity", () => {
       releasePointer: "/s/self-update/release-abc.json",
       trial: "/s/self-update/trial-abc.json",
       adopt: "/s/self-update/adopt-abc.json",
+      readiness: "/s/self-update/readiness-abc.json",
+      startupOutput: "/s/self-update/startup-output-abc.json",
       releasesDir: "/c/delegatus/self-update/abc/releases",
     });
   });
@@ -382,4 +386,100 @@ test.each(["gate-expired", "issuer-changed", "launcher-changed"] as const)("watc
     expect(readFileSync(gateFile, "utf8")).toBe(expectedGate); expect(readFileSync(ownerFile, "utf8")).toBe(expectedOwner);
     expect(JSON.parse(readFileSync(`${file}.result.json`, "utf8"))).toMatchObject({ requestId: "accepted-relaunch", state: "rejected" });
   } finally { resume(); watcher.stop(); }
+});
+
+
+describe("bounded page and chunk readiness", () => {
+  for (const slowPhase of ["page", "html", "chunk"] as const) {
+    test(`retries after one stalled ${slowPhase} and persists all phase attempts`, async () => {
+      let pages = 0;
+      let chunks = 0;
+      const server = createServer((request, response) => {
+        if (request.url === "/") {
+          pages += 1;
+          if (pages === 1 && slowPhase === "page") {
+            setTimeout(() => response.end('<script src="/_next/static/chunks/app.js"></script>'), 200).unref();
+            return;
+          }
+          response.writeHead(200, { "content-type": "text/html" });
+          if (pages === 1 && slowPhase === "html") {
+            response.flushHeaders();
+            setTimeout(() => response.end('<script src="/_next/static/chunks/app.js"></script>'), 200).unref();
+            return;
+          }
+          response.end('<script src="/_next/static/chunks/app.js"></script>');
+        } else {
+          chunks += 1;
+          if (chunks === 1 && slowPhase === "chunk") {
+            setTimeout(() => response.end("// late chunk"), 200).unref();
+            return;
+          }
+          response.end("// ready");
+        }
+      });
+      await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+      const file = join(root, `readiness-${slowPhase}.json`);
+      const journal = createReadinessJournal(file, { revision: "candidate", pid: 123 });
+      try {
+        const error = await waitForPageAndChunk((server.address() as { port: number }).port, {
+          timeoutMs: 2_000, attemptTimeoutMs: 100, intervalMs: 20, onPhase: journal.observe,
+        });
+        journal.finish(error);
+        expect(error).toBeNull();
+        const run = JSON.parse(readFileSync(file, "utf8")).runs[0];
+        expect(run.status).toBe("ready");
+        expect(run.phases.page.attempts).toBeGreaterThanOrEqual(2);
+        expect(run.phases.page.status).toBe("ready");
+        expect(run.phases.chunk.attempts).toBe(slowPhase === "chunk" ? 2 : 1);
+        expect(run.phases.chunk.status).toBe("ready");
+        expect(run.phases[slowPhase === "html" ? "page" : slowPhase].elapsedMs).toBeGreaterThanOrEqual(100);
+      } finally { server.closeAllConnections(); server.close(); }
+    });
+  }
+
+  for (const phase of ["page", "chunk"] as const) {
+    test(`a ${phase} that never answers exhausts one deadline and records the failure`, async () => {
+      const server = createServer((request, response) => {
+        if (phase === "chunk" && request.url === "/") response.end('<script src="/_next/static/chunks/app.js"></script>');
+      });
+      await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+      const file = join(root, `never-${phase}.json`);
+      const journal = createReadinessJournal(file, { revision: "failed", pid: 123 });
+      const started = performance.now();
+      try {
+        const failure = await waitForPageAndChunk((server.address() as { port: number }).port, {
+          timeoutMs: 350, attemptTimeoutMs: 200, intervalMs: 30, onPhase: journal.observe,
+        });
+        journal.finish(failure);
+        const elapsed = performance.now() - started;
+        expect(failure).toContain("Timeout");
+        expect(elapsed).toBeGreaterThanOrEqual(340);
+        expect(elapsed).toBeLessThan(650);
+        const run = JSON.parse(readFileSync(file, "utf8")).runs[0];
+        expect(run.status).toBe("failed");
+        expect(run.phases[phase].status).toBe("failed");
+        expect(run.phases[phase].attempts).toBe(2);
+        expect(run.elapsedMs).toBeGreaterThanOrEqual(340);
+      } finally { server.closeAllConnections(); server.close(); }
+    });
+  }
+
+  test("journal measures phase time including backoff and retains bounded runs across reopen", () => {
+    const file = join(root, "reopened-readiness.json");
+    let now = 0;
+    const journal = createReadinessJournal(file, { revision: "candidate", pid: 123 }, () => now);
+    journal.observe({ phase: "files", status: "running" });
+    now = 50;
+    journal.observe({ phase: "files", status: "failed" });
+    now = 250;
+    journal.observe({ phase: "files", status: "running" });
+    now = 300;
+    journal.observe({ phase: "files", status: "ready" });
+    journal.finish();
+    expect(JSON.parse(readFileSync(file, "utf8")).runs[0].phases.files).toMatchObject({ attempts: 2, elapsedMs: 300, status: "ready" });
+    for (let n = 0; n < 4; n++) createReadinessJournal(file, { revision: `rollback-${n}`, pid: 124 + n }, () => now).finish();
+    const runs = JSON.parse(readFileSync(file, "utf8")).runs;
+    expect(runs).toHaveLength(4);
+    expect(runs.map((run: { revision: string }) => run.revision)).toEqual(["rollback-0", "rollback-1", "rollback-2", "rollback-3"]);
+  });
 });

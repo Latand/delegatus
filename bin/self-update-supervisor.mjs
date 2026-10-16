@@ -51,6 +51,8 @@ export function selfUpdatePaths({ stateDirectory, cacheDirectory, installId }) {
     releasePointer: join(base, `release-${installId}.json`),
     trial: join(base, `trial-${installId}.json`),
     adopt: join(base, `adopt-${installId}.json`),
+    readiness: join(base, `readiness-${installId}.json`),
+    startupOutput: join(base, `startup-output-${installId}.json`),
     /* Each release holds its own node_modules and .next (well over a
        gigabyte), so they live in the cache, not in the state directory. */
     releasesDir: join(appDirIn(cacheDirectory), "self-update", installId, "releases"),
@@ -358,6 +360,13 @@ export function watchRestartRequests(requestFile, handle, { intervalMs = 500, ad
   };
 }
 
+// Only a code/class is safe here: fetch errors can echo authentication headers.
+function readinessError(error) {
+  const kind = [error?.code, error?.name].find((value) => typeof value === "string" && /^[A-Za-z][A-Za-z0-9_]{0,39}$/.test(value));
+  return kind ? `Viewer readiness probe failed (${kind})` : "Viewer readiness probe failed";
+}
+
+
 /**
  * A restarted web process is ready when `GET /` answers 200 and so does the
  * first script chunk that page references. `/` alone can answer 200 from a
@@ -369,24 +378,92 @@ export function watchRestartRequests(requestFile, handle, { intervalMs = 500, ad
  * install the page is shown only to a member, and the tag is how the
  * launcher's own probe reads it (sign-in-and-team §4.2).
  */
-export async function probePageAndChunk(port, timeoutMs = 5_000, headers = {}) {
+export async function probePageAndChunk(port, timeoutMs = 5_000, headers = {}, onPhase = () => {}) {
+  const signal = AbortSignal.timeout(timeoutMs);
+  let phase = "page";
+  let started = performance.now();
+  let failure = null;
+  const finish = () => onPhase({ phase, status: failure ? "failed" : "ready", elapsedMs: performance.now() - started, detail: failure });
+  onPhase({ phase, status: "running" });
   try {
-    const signal = AbortSignal.timeout(timeoutMs);
     const page = await fetch(`http://127.0.0.1:${port}/`, { signal, redirect: "manual", headers });
     const html = page.status === 200 ? await page.text() : (await page.body?.cancel(), "");
-    if (page.status !== 200) return `GET / answered ${page.status}`;
+    if (page.status !== 200) return failure = `GET / answered ${page.status}`;
     const chunk = /["'](\/_next\/static\/[^"'?#]+\.js)["']/.exec(html)?.[1];
     if (!chunk) return null;
+    finish();
+    phase = "chunk";
+    started = performance.now();
+    onPhase({ phase, status: "running" });
     const asset = await fetch(`http://127.0.0.1:${port}${chunk}`, { signal, redirect: "manual" });
     await asset.body?.cancel();
-    return asset.status === 200 ? null : `GET ${chunk} answered ${asset.status}`;
+    return failure = asset.status === 200 ? null : `GET ${chunk} answered ${asset.status}`;
   } catch (error) {
-    // Fetch errors can include the rejected header value. Restart diagnostics
-    // are persisted and printed by the launcher, so the message stays out and
-    // only the error's own code or class name says what kind it was.
-    const kind = [error?.code, error?.name].find((value) => typeof value === "string" && /^[A-Za-z][A-Za-z0-9_]{0,39}$/.test(value));
-    return kind ? `Viewer readiness probe failed (${kind})` : "Viewer readiness probe failed";
+    return failure = readinessError(error);
+  } finally {
+    finish();
   }
+}
+
+// One budget for the complete page+chunk sequence, including retry backoff.
+// A refused member credential cannot improve by waiting; preserve its receipt.
+export async function waitForPageAndChunk(port, {
+  timeoutMs = 90_000, attemptTimeoutMs = 5_000, intervalMs = 200,
+  headers = {}, onPhase = () => {},
+} = {}) {
+  const deadline = performance.now() + timeoutMs;
+  let failure = "Viewer readiness deadline expired";
+  while (performance.now() < deadline) {
+    failure = await probePageAndChunk(port, Math.max(1, Math.ceil(Math.min(attemptTimeoutMs, deadline - performance.now()))), headers, onPhase);
+    if (!failure || /^GET \/ answered 40[13]$/.test(failure)) return failure;
+    const remaining = deadline - performance.now();
+    if (remaining <= 0) break;
+    await new Promise(resolve => setTimeout(resolve, Math.min(intervalMs, remaining)));
+  }
+  return failure;
+}
+
+/** A bounded record survives launcher exec, including a rollback's own boot.
+ * Each start retains four runs; each phase keeps counters instead of a row
+ * per attempt. Callers persist before dispatching any exec or rollback.
+ */
+export function createReadinessJournal(file, { revision, pid }, clock = () => performance.now()) {
+  let runs;
+  try { runs = JSON.parse(readFileSync(file, "utf8")).runs; } catch { /* first boot */ }
+  if (!Array.isArray(runs)) runs = [];
+  runs = runs.slice(-3);
+  const started = clock();
+  const run = { revision, pid, startedAt: new Date().toISOString(), status: "running", elapsedMs: 0,
+    phases: Object.fromEntries(["files", "page", "chunk"].map(phase => [phase, { attempts: 0, elapsedMs: 0, status: "pending" }])) };
+  runs.push(run);
+  const phaseStarts = new Map();
+  const save = () => {
+    run.elapsedMs = Math.max(0, Math.round(clock() - started));
+    mkdirSync(dirname(file), { recursive: true });
+    const temporary = `${file}.${process.pid}.tmp`;
+    writeFileSync(temporary, JSON.stringify({ version: 1, runs }) + "\n", { mode: 0o600 });
+    renameSync(temporary, file);
+  };
+  save();
+  return {
+    observe({ phase, status, detail = null }) {
+      const entry = run.phases[phase];
+      if (status === "running") {
+        entry.attempts += 1;
+        if (!phaseStarts.has(phase)) phaseStarts.set(phase, clock());
+      }
+      entry.status = status;
+      entry.elapsedMs = Math.max(0, Math.round(clock() - phaseStarts.get(phase)));
+      entry.detail = detail;
+      save();
+    },
+    /** @param {string | null} [detail] */
+    finish(detail = null) {
+      run.status = detail ? "failed" : "ready";
+      run.detail = detail;
+      save();
+    },
+  };
 }
 
 /** How a child ended, as the record's error facts. */
