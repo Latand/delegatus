@@ -1,7 +1,7 @@
 import { expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import { Worker } from "node:worker_threads";
-import { attachReadAttributionWorker, createReadAttribution, createReadCounterSamplerProbe, readAttribution, startReadAttributionSampler } from "./readAttribution";
+import { attachReadAttributionWorker, createReadAttribution, createReadCounterSamplerProbe, readAttribution, samplerSource, startReadAttributionSampler } from "./readAttribution";
 
 test("nested readers have exclusive time and bytes; observer traffic is removed", () => {
   let at = 0, bytes = 0;
@@ -194,7 +194,7 @@ test("worker event and parent retention overflow are reported", () => {
   expect(report.readBytes).toBe(512);
 });
 
-test("a degraded proc source is isolated and stops sampling", async () => {
+test("a degraded proc source is isolated and backs off sampling", async () => {
   const probe = createReadCounterSamplerProbe(20);
   let timerFired = false;
   setTimeout(() => { timerFired = true; }, 0);
@@ -268,3 +268,78 @@ test("worker transport caps pending batches and reports dropped observations", a
     expect(report.dropped).toBeGreaterThan(0);
   } finally { detach(); await worker.terminate(); readAttribution.clear(); }
 });
+
+// Run the production worker program with a controlled procfs seam. Each test
+// owns a fresh worker and buffer; no service process or shared state is used.
+function samplerFixture(mode: "ownership-race" | "transient-slow" | "transient-denied" | "denied") {
+  const buffer = new SharedArrayBuffer(15 * 8);
+  const cells = new BigInt64Array(buffer);
+  const prefix = `{
+    const fs = require('node:fs');
+    const { workerData } = require('node:worker_threads');
+    const cells = new BigInt64Array(workerData.buffer);
+    const nativeRead = fs.readFileSync;
+    const nativeTimeout = setTimeout;
+    globalThis.setTimeout = function(callback, delay) {
+      Atomics.store(cells, 14, BigInt(delay));
+      return nativeTimeout(callback, delay);
+    };
+    let reads = 0;
+    fs.readFileSync = function(...args) {
+      reads++;
+      if (workerData.mode === 'denied' || workerData.mode === 'transient-denied' && reads <= 3) throw new Error('unavailable');
+      if (workerData.mode === 'transient-slow' && reads === 1)
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+      const raw = nativeRead.apply(this, args);
+      if (workerData.mode === 'ownership-race' && reads <= 3) Atomics.add(cells, 8, BigInt(1));
+      return raw;
+    };
+  }`;
+  const worker = new Worker(prefix + samplerSource, { eval: true,
+    workerData: { buffer, mode, pid: process.pid, tid: process.pid, delayMs: 0, timeOrigin: performance.timeOrigin } });
+  return { cells, stop: () => worker.terminate() };
+}
+
+async function untilSampler(predicate: () => boolean) {
+  const deadline = performance.now() + 5000;
+  while (!predicate() && performance.now() < deadline) await new Promise(resolve => setTimeout(resolve, 5));
+  expect(predicate()).toBe(true);
+}
+
+test.skipIf(process.platform !== "linux")("ownership changes during procfs reads do not disable the production sampler", async () => {
+  const probe = samplerFixture("ownership-race");
+  try {
+    await untilSampler(() => Atomics.load(probe.cells, 5) >= BigInt(4) && Atomics.load(probe.cells, 4) === BigInt(0));
+    expect(Atomics.load(probe.cells, 2)).toBe(BigInt(1));
+    expect(Atomics.load(probe.cells, 8)).toBe(BigInt(3));
+  } finally { await probe.stop(); }
+}, 10_000);
+
+test.skipIf(process.platform !== "linux")("a transient slow sample backs off and recovers without restarting the process", async () => {
+  const probe = samplerFixture("transient-slow");
+  try {
+    await untilSampler(() => Atomics.load(probe.cells, 4) === BigInt(1) && Atomics.load(probe.cells, 14) === BigInt(250));
+    expect(Atomics.load(probe.cells, 2)).toBe(-BigInt(1));
+    await untilSampler(() => Atomics.load(probe.cells, 5) >= BigInt(3) && Atomics.load(probe.cells, 4) === BigInt(0));
+    expect(Atomics.load(probe.cells, 2)).toBe(BigInt(1));
+  } finally { await probe.stop(); }
+}, 10_000);
+
+test("an inaccessible proc source remains unavailable and retries at a bounded rate", async () => {
+  const probe = samplerFixture("denied");
+  try {
+    await untilSampler(() => Atomics.load(probe.cells, 5) >= BigInt(4) && Atomics.load(probe.cells, 14) === BigInt(1000));
+    expect(Atomics.load(probe.cells, 2)).toBe(-BigInt(1));
+    expect(Atomics.load(probe.cells, 4)).toBe(BigInt(1));
+  } finally { await probe.stop(); }
+}, 10_000);
+
+test.skipIf(process.platform !== "linux")("proc read failures recover after the source becomes accessible", async () => {
+  const probe = samplerFixture("transient-denied");
+  try {
+    await untilSampler(() => Atomics.load(probe.cells, 4) === BigInt(1));
+    expect(Atomics.load(probe.cells, 2)).toBe(-BigInt(1));
+    await untilSampler(() => Atomics.load(probe.cells, 5) >= BigInt(4) && Atomics.load(probe.cells, 4) === BigInt(0));
+    expect(Atomics.load(probe.cells, 2)).toBe(BigInt(1));
+  } finally { await probe.stop(); }
+}, 10_000);

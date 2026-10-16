@@ -91,9 +91,10 @@ connections acquire a new lifetime owner.
 
 The serving and worker threads read only atomics from their own sampler worker;
 neither opens procfs inside a measured callback. A sampler polls its target
-thread's `/proc/<pid>/task/<tid>/io` counter every 10 ms and stops after a read
-takes over 10 ms or three consecutive failures. Its time is reported as
-`observerMs`, and a stopped or unavailable sampler is visible through
+thread's `/proc/<pid>/task/<tid>/io` counter every 10 ms. A read taking over
+10 ms or three consecutive failures marks the source unavailable and backs off
+for 250–1000 ms. A healthy sample restores normal polling and availability.
+Its time is reported as `observerMs`, and an unavailable sampler is visible through
 `samplerDegraded` and unavailable-call counts. Each synchronous frame gets a
 temporary owner token. The sampler keeps a byte delta only across consecutive
 samples with the same token; a reader receives it only when those samples fall
@@ -203,3 +204,90 @@ controller selections, bounded writes, atomic moves and preserved-row checks.
 A regression test first fails on the previous implementation and passes after
 that connection is forwarded. Mixed collection reads and later bind slots keep
 a generic reader label, avoiding a false attribution to the first argument.
+
+
+## Production sampler recovery
+
+The service runs the deployed checkout under Bun 1.4.0 with
+`NODE_ENV=production`. The 2026-10-16 startup journal establishes that the
+sampler started and could read procfs: at 21:49:18.563Z one Viewer gap attributed
+48,979,968 read bytes. The 187 subsequent gaps selected from
+21:49:21.650Z through 22:04:59.589Z all reported zero observer time and bytes.
+Recounting the 22:30:06.198–23:00:15.352Z event window from the
+22:29:36–23:02:15Z journal query reproduced the audit exactly: 182 Viewer gaps,
+all degraded, zero sampled calls, zero read bytes, 181,934 unavailable calls
+and 988,263 unsampled calls. Embedded `utc` timestamps select the event window;
+the wider journal bounds include forwarding slack.
+
+An ownership change during the sampler's procfs read selected numeric `0`,
+then attempted to store it in a `BigInt64Array`. The resulting exception was
+counted as a source failure; three collisions stopped the worker's timer for
+that release. Replaying three ownership changes in the production worker
+program under Bun 1.4.0 in a systemd user scope stopped at exactly three
+samples, status -1, degraded 1, and 0.245 ms observer time, unchanged 150 ms
+later. This reproduces the failure without a permission or startup fault.
+The mismatch between number and BigInt is corrected to `0n`; collided samples
+remain unowned and cannot supply another frame's byte delta.
+
+A second permanent-stop path treated a single sample taking over 10 ms as
+terminal. A systemd user scope with 10% CPU quota and four bounded CPU workers
+reproduced this without a procfs permission failure: two samplers stopped at
+16 samples with 20.667 and 38.583 ms observer time and stayed stopped after
+contention ended. Slow or failed sources now retry on the sampler worker with
+a bounded delay; a successful sample clears degradation. No procfs read or
+counter wait is added to a serving callback.
+
+The regressions execute the production worker program with controlled reads,
+covering owner collisions, transient latency, denied access, backoff and
+recovery. The SQLite process fixture runs twice with private state and
+`NODE_ENV=production`: three collisions followed by one slow sample must
+recover, then real SQLite bytes must reach the reader, connection and operation
+in a serialized loop-gap record. That process regression fails on the original
+source with `sampler did not recover`. The existing stale-sample, nested-frame
+and off-thread tests continue to guard byte ownership and serving-loop safety.
+
+Local verification passed 30 focused tests, full typecheck, the production
+build, 73 runtime-verdict tests, both runtime rehearsals, the compiled Codex
+socket check and 16 privacy tracker audit cases. The recovery fixture also
+reached the sampler through a real compiled route and its webpack module:
+4,197,936 bytes reached the connection lifetime counter and `files.get`, with
+one sampled call and `samplerDegraded=false`. For the Viewer verifier, child
+sandbox paths were kept below the child TMPDIR; its normal sibling layout is
+misclassified as operator state when stage scratch itself sits below state.
+Verification logic and the committed verifier were unchanged.
+
+After deployment, allow a loaded 30-minute window on the new Viewer process.
+Set `WINDOW_START`, `WINDOW_END` and `VIEWER_PID` to that window's UTC bounds and
+the deployed Viewer's PID. Run this read-only journal check:
+
+```sh
+journalctl --user -u delegatus.service --utc --all \
+  --since "$WINDOW_START" --until "$WINDOW_END" -o cat --no-pager |
+  grep -a '^\[viewer loop-gap\] ' |
+  VIEWER_PID="$VIEWER_PID" python3 -c '
+import json, os, sys
+rows = [json.loads(line.split("] ", 1)[1]) for line in sys.stdin]
+rows = [row for row in rows if row.get("role") == "viewer"
+        and row.get("pid") == int(os.environ["VIEWER_PID"])]
+reads = [row["reads"] for row in rows]
+result = {
+    "gaps": len(rows),
+    "degraded": sum(r["samplerDegraded"] for r in reads),
+    "readBytes": sum(r["readBytes"] for r in reads),
+    "sampledCalls": sum(r["sampledCalls"] for r in reads),
+    "operationBytes": sum(op["readBytes"] for r in reads for op in r["operations"]),
+    "connectionBytes": sum(item["readBytes"] for r in reads for item in r["top"]
+                           if item["connection"] or item["connections"]),
+}
+print(json.dumps(result))
+assert result["gaps"] > 0
+assert result["readBytes"] > 0 and result["sampledCalls"] > 0
+assert result["operationBytes"] > 0 and result["connectionBytes"] > 0
+assert result["degraded"] * 2 < result["gaps"]
+'
+```
+
+Acceptance requires nonzero sampled bytes at both operation and connection
+level and degradation on fewer than half the gaps. A window without Viewer
+gaps supplies no verdict. Deployment and that production acceptance check are
+performed by the release lane.
