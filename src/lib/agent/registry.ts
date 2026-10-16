@@ -5588,6 +5588,7 @@ export class AgentRegistry {
       }
       if (conversation) {
         result.conversations[id] = clone(conversation);
+        result.conversationRevision[conversation.engine] = file.conversationRevision[conversation.engine];
         const generation = conversation.generations.at(-1);
         if (generation) {
           const key = `${conversation.engine}:${generation.id}`;
@@ -10100,9 +10101,13 @@ export class AgentRegistry {
   /** {@link holdDelivery} with the write lock waited for off the event loop
       and kept for the write, correlated with the operation it admits. Null
       when the lock stayed held past its deadline: nothing was reserved. */
-  async holdDeliveryOffLoop(...admission: Parameters<AgentRegistry["holdDelivery"]>): Promise<HeldDelivery | null> {
-    const write = await this.accountMutationWrite("delivery.admit", () => this.holdDelivery(...admission), undefined, {
-      operationId: admission[6]?.operationId ?? null,
+  async holdDeliveryOffLoop(
+    ...admission: [...Parameters<AgentRegistry["holdDelivery"]>, admissionPreflight?: () => Promise<void>]
+  ): Promise<HeldDelivery | null> {
+    const holdAdmission = admission.slice(0, 8) as Parameters<AgentRegistry["holdDelivery"]>;
+    await admission[8]?.();
+    const write = await this.accountMutationWrite("delivery.admit", () => this.holdDelivery(...holdAdmission), undefined, {
+      operationId: holdAdmission[6]?.operationId ?? null,
       correlate: held => ({ label: "delivery.admit", operationId: held.command.operationId }),
       waitMs: this.writerDeadlineMs ?? 5_000,
     });

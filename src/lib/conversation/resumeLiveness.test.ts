@@ -195,7 +195,7 @@ test("a detector timeout after starting a legacy host settles resume, immediate 
   expect(remembered).toBe(0);
   const settled = registry.readOnlySnapshot();
   expect(settled.receipts[launchId!]).toMatchObject({ state: "completed", error: null });
-  expect(conversationDeliverabilityFromRecord(settled, {
+  expect(await conversationDeliverabilityFromRecord(settled, {
     conversationId: conversation.id,
   })).toMatchObject({
     deliverable: true,

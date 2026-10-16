@@ -671,7 +671,7 @@ Every case stays and passes unchanged.
 | a host whose obligation cannot be recorded anywhere … | Release path, unchanged |
 | restarts between recording, admitting and recording the admission … | Record id keys the delivery |
 | provider recovery bookkeeping written after the cut … | The owed release record postpones the decision, so the replayed prompt is no new cut |
-| a message that reaches the cut conversation first …; a send the runtime admitted before …; a send the runtime admits while … | Discharge by a newer message, unchanged |
+| a message that reaches the cut conversation first …; a send the runtime admitted before …; a send the runtime admits while … | Discharge requires positive delivery evidence. Admission keeps the obligation owed until the newer operation delivers or proves unexecuted |
 | a seat cut by the deploy it requested …; a seat rotated …; a seat that names an alias … | Seats are outside this capture |
 | an unpublished host the release cannot hand over …; one published host failing its health probe … | Release records; restart records of the retrying boot are filtered out of the assertion |
 | a submitted continuation whose reservation was compacted away … | Settling before capture |

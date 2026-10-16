@@ -6,6 +6,8 @@ import path from "node:path";
 
 import {
   agentRegistry,
+  conversationIdsResolvingTo,
+  readOnlyConversationLookupFromSnapshot,
   DeliveryReservationConflictError,
   REGISTRY_WRITER_BUSY,
   type AgentRegistry,
@@ -18,6 +20,7 @@ import { deliveryFence } from "@/lib/accounts/migration/coordinator";
 import { withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
 import { requestAccountMigrationTick } from "@/lib/accounts/migration/controllerSignal";
 import { actingOperation, actuationBusy, withConversationActuation, type ActuationLease } from "@/lib/deliveryActuation";
+import { orchestratorRecipientRefusal, orchestratorRecipientRefusalAsync } from "@/lib/orchestrator/seats";
 import { deputyDeliveryRefusal, deputyMessageKey, deputyNamingIn, productionDeputyPrincipal, readDeputyFileOrNull } from "@/lib/orchestrator/deputies";
 import type { HeldDelivery, HeldDeliveryCommand, ViewerConversationId } from "@/lib/accounts/migration/contracts";
 
@@ -64,6 +67,8 @@ import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 export interface StructuredMessageRequest {
   /** Live authorization at fresh reservation, after runtime and lock waits. */
   admissionGuard?: DeliveryAdmissionGuard;
+  /** Async authority hydration before the reservation writer wait. */
+  admissionGuardAsync?: () => Promise<void>;
   /** The autonomous caller's authority fence during replacement host publication. */
   recoveryAuthorityGuard?: () => void;
   path: string;
@@ -239,6 +244,26 @@ function acceptedHeld(operationId: string, target: string | null = null, spawned
 function reservationFor(registry: AgentRegistry, operationId: string): HeldDelivery | null {
   return Object.values(registry.deliverySnapshotForOperation(operationId).heldDeliveries)
     .find((candidate) => candidate.command.operationId === operationId) ?? null;
+}
+
+function reservationMatchesDeliveryRequest(
+  registry: AgentRegistry,
+  request: HeldStructuredMessageRequest,
+  operationId: string,
+): boolean {
+  const conversationId = request.conversationId;
+  const clientMessageId = request.clientMessageId;
+  if (!conversationId || !clientMessageId || !request.deliveryId || request.command?.operationId !== operationId) return false;
+  const reservation = reservationFor(registry, operationId);
+  if (!reservation
+    || reservation.id !== request.deliveryId
+    || reservation.conversationId !== conversationId
+    || reservation.clientMessageId !== clientMessageId
+    || reservation.command.operationId !== operationId) return false;
+  const admission = registry.deliveryAdmissionForKey(conversationId, clientMessageId);
+  return admission.outcome === "admitted"
+    && admission.operationId === operationId
+    && admission.deliveryId === reservation.id;
 }
 
 /** Serializes preflight → publication → reservation per (conversation,
@@ -449,7 +474,9 @@ function requiresStructuredHeldCommand(request: HeldStructuredMessageRequest): b
 
 function deliveryFailure(error: unknown): Extract<StructuredMessageResult, { ok: false }> {
   if (error instanceof DeliveryAdmissionRefusedError) return refusedBeforeReservation({
-    ok: false, structured: true, outcome: "failed", error: error.message, code: error.code, status: 409,
+    ok: false, structured: true, outcome: "failed", error: error.message, code: error.code, status: "status" in error && error.status === 503 ? 503 : 409,
+    ...("successorConversationId" in error && typeof error.successorConversationId === "string"
+      ? { successorConversationId: error.successorConversationId } : {}),
   });
   return {
     ok: false,
@@ -510,10 +537,10 @@ type PersistedMessageOwner = {
   conversation: RegistryConversation;
 };
 
-function persistedCurrentOwner(
+async function persistedCurrentOwner(
   request: Pick<StructuredMessageRequest, "conversationId" | "path">,
   registry: AgentRegistry,
-): PersistedMessageOwner | null {
+): Promise<PersistedMessageOwner | null> {
   const conversation = request.conversationId?.startsWith("conversation_")
     ? registry.conversation(request.conversationId as ViewerConversationId)
     : registry.conversationForPath(request.path);
@@ -522,7 +549,7 @@ function persistedCurrentOwner(
   const snapshot = registry.conversationDeliverySnapshot(request);
   const entry = snapshot.entries[`${conversation.engine}:${generation.id}`];
   if (!entry || entry.artifactPath !== generation.path) return null;
-  const deliverability = conversationDeliverabilityFromRecord(snapshot, {
+  const deliverability = await conversationDeliverabilityFromRecord(snapshot, {
     conversationId: conversation.id,
     transcriptPath: generation.path,
   });
@@ -538,16 +565,16 @@ function persistedCurrentOwner(
   return null;
 }
 
-function heldOutcomeDuringRuntimeSynchronization(
+async function heldOutcomeDuringRuntimeSynchronization(
   request: HeldStructuredMessageRequest,
   registry: AgentRegistry,
   cause: string,
-): HeldStructuredMessageOutcome {
+): Promise<HeldStructuredMessageOutcome> {
   // A failed read while reconciling a command that may already have reached
   // the journal cannot authorize another attempt. Newly assigned rows have
   // not dispatched yet and must keep a reason-bearing bounded deferral.
   if (request.reconcileUncertain) return "delivery-uncertain";
-  const owner = persistedCurrentOwner(request, registry);
+  const owner = await persistedCurrentOwner(request, registry);
   // This path runs before command dispatch. Legacy ownership still belongs to
   // its fallback path; every structured or unresolved owner gets a bounded
   // retry that retains the runtime-read cause.
@@ -595,7 +622,7 @@ async function holdDuringRuntimeSynchronization(
   admission: SynchronizationImageAdmission = {},
   wait: HeldAdmissionWait = { progress: null, reason: "awaiting-host" },
 ): Promise<StructuredMessageResult | null> {
-  const owner = persistedCurrentOwner(request, registry);
+  const owner = await persistedCurrentOwner(request, registry);
   const unresolvedConversation = request.conversationId?.startsWith("conversation_")
     ? registry.conversation(request.conversationId as ViewerConversationId)
     : registry.conversationForPath(request.path);
@@ -611,7 +638,7 @@ async function holdDuringRuntimeSynchronization(
     && activeAccountId !== null
     && unresolvedGeneration.accountId !== activeAccountId;
   if (!owner && !accountReseatWithoutOwner && !allowReclaimed) {
-    const deliverability = conversationDeliverabilityFromRecord(registry.conversationDeliverySnapshot(request), {
+    const deliverability = await conversationDeliverabilityFromRecord(registry.conversationDeliverySnapshot(request), {
       conversationId: request.conversationId,
       transcriptPath: request.path,
     });
@@ -717,6 +744,7 @@ async function holdDuringRuntimeSynchronization(
         commandInput(request),
         { recoveryIntent: allowReclaimed ? "reclaimed-host" : null, admissionGuard: request.admissionGuard,
           ...(needsAccountReseat ? { reseatToActiveAccount: { launchId: request.launchId } } : {}) },
+        request.admissionGuardAsync,
       );
       if (!held) throw new Error(REGISTRY_WRITER_BUSY);
       return held;
@@ -1140,11 +1168,11 @@ async function deliverHeldAttempt(
   if (afterRuntimeRead !== undefined) return afterRuntimeRead;
   recordStructuredRuntimeRecovery(session, dependencies.startupRecovered ?? markStructuredRuntimeSessionRecovered);
   if (!session || (isStructuredHostKind(session.hostKind) && (session.host === "dead" || session.host === "unhosted"))) {
-    const owner = persistedCurrentOwner(request, registry);
+    const owner = await persistedCurrentOwner(request, registry);
     if (owner?.kind === "legacy") {
       return heldOutcomeDuringRuntimeSynchronization(request, registry, "runtime session is unavailable");
     }
-    const deliverability = conversationDeliverabilityFromRecord(registry.conversationDeliverySnapshot(request), {
+    const deliverability = await conversationDeliverabilityFromRecord(registry.conversationDeliverySnapshot(request), {
       conversationId: request.conversationId,
       transcriptPath: request.path,
     });
@@ -1157,7 +1185,12 @@ async function deliverHeldAttempt(
        its message, attachments and operation id, and the reason (#1974). It
        used to be recorded `delivery-uncertain`, which settlement must treat
        as possibly executed, for a message that provably never left. */
-    if (deliverability.condition !== "reclaimed") return heldForRetry(deliverability.reason);
+    const rotatedSeatReservation = deliverability.condition === "superseded"
+      && deliverability.reason.startsWith("orchestrator seat was ")
+      && reservationMatchesDeliveryRequest(registry, request, operationId);
+    if (deliverability.condition !== "reclaimed" && !rotatedSeatReservation) {
+      return heldForRetry(deliverability.reason);
+    }
     /* Recorded before the recovery is awaited (A5): a recovery that hangs is
        named on the send's record and stalls within the bound. A refused one
        leaves the reservation for the next pass, recorded `awaiting-host`. */
@@ -1330,7 +1363,45 @@ export async function enqueueStructuredMessage(
   }
   const rawImages = imageAdmission.images;
   const registry = (dependencies.registry ?? agentRegistry)();
-  const durableOwner = persistedCurrentOwner(request, registry);
+  const recipientSnapshot = registry.conversationDeliverySnapshot(request);
+  const recipientLookup = readOnlyConversationLookupFromSnapshot(recipientSnapshot);
+  const recipient = request.conversationId
+    ? recipientLookup.conversation(request.conversationId as ViewerConversationId)
+    : recipientLookup.conversationForPath(request.path);
+  const recipientIds = recipient
+    ? conversationIdsResolvingTo(recipientSnapshot, recipient.id as ViewerConversationId)
+    : [];
+  const recipientKey = request.clientMessageId?.trim();
+  const boundRecipient = Boolean(recipient && recipientKey
+    && registry.deliveryAdmissionForKey(recipient.id, recipientKey).outcome === "admitted");
+  // This guard also runs inside the reservation transaction. Its registry
+  // identity is captured before admission; the seat store is re-read at use.
+  const recipientRefusal = () => recipient && !boundRecipient
+    ? orchestratorRecipientRefusal(recipientIds,
+      id => recipientLookup.canonicalConversationId(id as ViewerConversationId))
+    : null;
+  const recipientRefusalAsync = async () => recipient && !boundRecipient
+    ? orchestratorRecipientRefusalAsync(recipientIds,
+      id => recipientLookup.canonicalConversationId(id as ViewerConversationId))
+    : null;
+  const refusedRecipient = await recipientRefusalAsync();
+  if (refusedRecipient) return refusedBeforeReservation({ ok: false, structured: true, outcome: "failed", ...refusedRecipient });
+  const callerGuard = request.admissionGuard;
+  request = { ...request, admissionGuard: reconciled => {
+    callerGuard?.(reconciled);
+    const refusal = recipientRefusal();
+    if (refusal) throw Object.assign(new DeliveryAdmissionRefusedError("orchestrator-recipient-revoked"),
+      { message: refusal.error, ...refusal });
+  } };
+  const callerGuardAsync = request.admissionGuardAsync;
+  request = { ...request, admissionGuardAsync: async () => {
+    await callerGuardAsync?.();
+    const refusal = await recipientRefusalAsync();
+    if (refusal) throw Object.assign(new DeliveryAdmissionRefusedError("orchestrator-recipient-revoked"), {
+      message: refusal.error, ...refusal,
+    });
+  } };
+  const durableOwner = await persistedCurrentOwner(request, registry);
   if (durableOwner?.kind === "legacy") {
     return requiresStructuredCommand(request) ? legacyCommandUnavailable() : null;
   }
@@ -1365,13 +1436,15 @@ export async function enqueueStructuredMessage(
     );
   }
   let continuationRecoveredHost = false;
+  const refusedAfterRead = await recipientRefusalAsync();
+  if (refusedAfterRead) return refusedBeforeReservation({ ok: false, structured: true, outcome: "failed", ...refusedAfterRead });
   if (dependencies.idleContinuationAllowed) {
     /* Startup leaves pipeline cuts to their controller. Requiring a hosted
        idle fence before recovering that host left restart-cut stages waiting
        forever on an unhosted session. Recover only the durable current owner,
        without reserving a send that the drain could deliver past this guard. */
     if (!session || session.host === "dead" || session.host === "unhosted") {
-      const owner = persistedCurrentOwner(request, registry);
+      const owner = await persistedCurrentOwner(request, registry);
       if (owner?.kind !== "structured") return continuationRefused("no durable structured owner is available for recovery");
       const retired = supersededRejection(registry, owner.conversation);
       if (retired) return retired;
@@ -1397,6 +1470,7 @@ export async function enqueueStructuredMessage(
         }
         if (!await dependencies.idleContinuationAllowed()) return continuationRefused("stage eligibility changed during host republication");
         if (!session || session.host === "dead" || session.host === "unhosted") {
+          request.admissionGuard?.();
           const recovered = await (dependencies.recover ?? recoverDeadStructuredConversation)({
             path: generation.path, conversationId: owner.conversation.id, origin: request.origin,
           }, { registry, client });
@@ -1448,7 +1522,7 @@ export async function enqueueStructuredMessage(
   }
   recordStructuredRuntimeRecovery(session, dependencies.startupRecovered ?? markStructuredRuntimeSessionRecovered);
   if (!session) {
-    const deliverability = conversationDeliverabilityFromRecord(registry.conversationDeliverySnapshot(request), {
+    const deliverability = await conversationDeliverabilityFromRecord(registry.conversationDeliverySnapshot(request), {
       conversationId: request.conversationId,
       transcriptPath: request.path,
     });
@@ -1466,7 +1540,7 @@ export async function enqueueStructuredMessage(
   }
   if (session.hostKind === "tmux-legacy") return requiresStructuredCommand(request) ? legacyCommandUnavailable() : null;
   if (!isStructuredHostKind(session.hostKind)) {
-    const deliverability = conversationDeliverabilityFromRecord(registry.conversationDeliverySnapshot(request), {
+    const deliverability = await conversationDeliverabilityFromRecord(registry.conversationDeliverySnapshot(request), {
       conversationId: request.conversationId,
       transcriptPath: request.path,
     });
@@ -1611,6 +1685,7 @@ export async function enqueueStructuredMessage(
         commandInput(request),
         { admissionGuard: request.admissionGuard,
           ...(needsAccountReseat && request.kind !== "inject" ? { reseatToActiveAccount: { launchId: request.launchId } } : {}) },
+        request.admissionGuardAsync,
       );
       if (!held) throw new Error(REGISTRY_WRITER_BUSY);
       return held;

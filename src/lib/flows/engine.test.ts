@@ -3276,9 +3276,9 @@ test("a headless reviewer that exits stops fencing its conversation, and a later
   expect(loadFlows().find((item) => item.id === flow.id)?.rounds[0]?.verdict).toBe("APPROVE");
   expect(registry.readOnlySnapshot().entries[`codex:${sessionId}`]).toMatchObject({ status: "dead", pendingAction: null, host: null });
   const request = { conversationId, path: reviewer.path };
-  expect(conversationDeliverabilityFromRecord(registry.conversationDeliverySnapshot(request), {
+  expect((await conversationDeliverabilityFromRecord(registry.conversationDeliverySnapshot(request), {
     conversationId, transcriptPath: reviewer.path,
-  }).condition).toBe("reclaimed");
+  })).condition).toBe("reclaimed");
 
   let recovered = 0;
   const sent = await enqueueStructuredMessage({ ...request, text: "one more question about round 1", clientMessageId: "hostless-reviewer-question" }, {
