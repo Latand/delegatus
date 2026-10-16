@@ -145,8 +145,8 @@ resource windows. [Capability probe](../../evidence/loop-gap-heap/probe.json),
 retain the calibration record. No values are rounded in the JSON.
 
 The baseline source is main revision `02f9301fc32370210a4af533c1204741c6436f52`.
-Integration includes current main `8ba30644e`; the intervening monitor change
-adds an operation to its TypeScript union. Transpiling the measured and
+Integration includes current main `a880de287`; the intervening monitor changes
+add operations to its TypeScript union. Transpiling the measured and
 integrated monitors produced identical JavaScript hashes, recorded beside the
 original and final source hashes. The heap sampler and benchmark hashes match
 the final source bytes.

@@ -624,7 +624,7 @@
             "available": false,
             "reason": "rate_limited",
             "retryAfterSeconds": 60,
-            "note": "Wait the stated seconds before reading group history again."
+            "note": "Wait the stated seconds before reading group history again. HTTP 429."
           }
         },
         {
@@ -634,7 +634,7 @@
             "available": false,
             "reason": "rate_limited",
             "retryAfterSeconds": 60,
-            "note": "Wait the stated seconds before reading group history again."
+            "note": "Wait the stated seconds before reading group history again. HTTP 429."
           }
         },
         {

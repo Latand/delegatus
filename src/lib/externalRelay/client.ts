@@ -29,7 +29,7 @@ export function isUnknownFeatureRefusal(error: unknown): error is ExternalRelayE
 const bare = (host: string) => host.replace(/^\[|\]$/g, "");
 const loopback = (address: string) =>
   address === "::1" || (net.isIP(address) === 4 && address.startsWith("127."));
-async function target(input: string, options: { query?: boolean } = {}): Promise<{ url: URL; address: string }> {
+async function target(input: string, options: { query?: boolean; detailedErrors?: boolean } = {}): Promise<{ url: URL; address: string }> {
   let url: URL;
   try {
     url = new URL(input);
@@ -52,7 +52,7 @@ async function target(input: string, options: { query?: boolean } = {}): Promise
           (item) => item.address,
         );
   } catch {
-    throw new ExternalRelayError("unreachable");
+    throw new ExternalRelayError(options.detailedErrors ? "dns_error" : "unreachable");
   }
   if (
     !addresses.length ||
@@ -63,12 +63,12 @@ async function target(input: string, options: { query?: boolean } = {}): Promise
 }
 /** A publication deadline covers name resolution as well as the socket. Late
  * DNS completion cannot prepare a body or start an HTTP request. */
-async function targetWithSignal(input: string, signal?: AbortSignal) {
-  if (!signal) return target(input);
+async function targetWithSignal(input: string, signal?: AbortSignal, detailedErrors = false) {
+  if (!signal) return target(input, { detailedErrors });
   signal.throwIfAborted();
   let onAbort: (() => void) | undefined;
   try {
-    return await Promise.race([target(input), new Promise<never>((_resolve, reject) => {
+    return await Promise.race([target(input, { detailedErrors }), new Promise<never>((_resolve, reject) => {
       onAbort = () => reject(signal.reason);
       signal.addEventListener("abort", onAbort, { once: true });
     })]);
@@ -86,11 +86,14 @@ export async function relayCall<T = unknown>(
   body?: unknown,
   credential?: string,
   options: { timeoutMs?: number; maxBytes?: number; signal?: AbortSignal;
+    /** Preserve DNS failures for readers that report transport causes. */
+    detailedErrors?: boolean;
+    onResponseStatus?: (status: number) => void;
     /** Trusted caller rechecks its body after DNS, immediately before emission. */
     prepareBody?: () => unknown;
   } = {},
 ): Promise<{ status: number; body: T | null }> {
-  const { url, address } = await targetWithSignal(apiBase, options.signal);
+  const { url, address } = await targetWithSignal(apiBase, options.signal, options.detailedErrors);
   if (!url.pathname.endsWith("/v1") || !route.startsWith("/"))
     throw new ExternalRelayError("invalid_address");
   const outgoing = options.prepareBody ? options.prepareBody() : body;
@@ -121,13 +124,14 @@ export async function relayCall<T = unknown>(
         },
       },
       (response) => {
+        options.onResponseStatus?.(response.statusCode ?? 0);
         response.on("error", reject);
         const chunks: Buffer[] = [];
         let size = 0;
         response.on("data", (chunk: Buffer) => {
           size += chunk.length;
           if (size > (options.maxBytes ?? 1_048_576)) {
-            response.destroy(new ExternalRelayError("too_large"));
+            response.destroy(new ExternalRelayError("too_large", options.detailedErrors ? response.statusCode : 0));
             return;
           }
           chunks.push(chunk);

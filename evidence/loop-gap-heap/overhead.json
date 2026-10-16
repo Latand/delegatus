@@ -259,7 +259,7 @@
   ],
   "passed": true,
   "finalSourceHashes": {
-    "candidate": "ac2503fc5071c9728f16253160b34e9369d917c8abc95c25414c5c516af6ae6b"
+    "candidate": "a417de45e62ff95cc1d288c7d79ad9b0b6b3bb053d5789a6075588f6efdfe603"
   },
   "runtimeJavaScriptEquivalence": {
     "baselineMeasured": "bbe2700083c435faf674f7b0e914be7fb4c5e212c3d7cafb5f2af8e4aa717803",
@@ -267,7 +267,7 @@
     "candidateMeasured": "e49da08b4923cc79e8597e7cb1f947c0b3a40dc3acbcc252480a2bf180b76ad8",
     "candidateIntegrated": "e49da08b4923cc79e8597e7cb1f947c0b3a40dc3acbcc252480a2bf180b76ad8"
   },
-  "mergedMainRevision": "8ba30644e03105bbcdf55c99891f1b9d5d00af6b",
+  "mergedMainRevision": "a880de287ec6a92cf1bb3da721b70f5dd52d7a51",
   "measurementsColumns": [
     "mode",
     "run",
