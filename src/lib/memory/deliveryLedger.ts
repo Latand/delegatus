@@ -1,4 +1,3 @@
-import { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -12,6 +11,15 @@ import type { learnedRulesSnapshot } from "./roleStore";
 export const DELIVERY_LEDGER_STARTS = 10_000;
 export const DELIVERY_LEDGER_FILE_BYTES = 64 * 1024 * 1024;
 const MAX_FILE_BYTES = 1024 * 1024;
+
+function sqliteDatabase(): typeof import("bun:sqlite").Database {
+  /* Resolve Bun's builtin only when the ledger is used. Route modules that
+     import role-launch policy are also loaded by Next's Node build workers. */
+  const sqlite = process.getBuiltinModule?.("bun:sqlite") as typeof import("bun:sqlite") | undefined;
+  if (!sqlite) throw new Error("The memory delivery ledger requires the Bun runtime");
+  return sqlite.Database;
+}
+
 export interface MemoryEngineStart {
   engine: "codex" | "claude";
   conversationId: string;
@@ -122,6 +130,7 @@ export async function recordMemoryDelivery(start: MemoryEngineStart, clean: bool
           const stat = fs.lstatSync(filename);
           if (!stat.isFile() || stat.nlink !== 1) throw Error("memory delivery archive must be an unlinked regular file");
         } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+        const Database = sqliteDatabase();
         const db = new Database(filename, { create: true });
         fs.chmodSync(filename, 0o600);
         try {
@@ -169,6 +178,7 @@ export function memoryDeliveries(after = 0, limit = 100): { sequence: number; de
   if (!Number.isSafeInteger(after) || after < 0 || !Number.isInteger(limit) || limit < 1 || limit > 100) throw Error("invalid memory delivery page");
   const filename = statePath("role-memory", "delivery.sqlite");
   if (!fs.existsSync(filename)) return [];
+  const Database = sqliteDatabase();
   const db = new Database(filename, { readonly: true });
   try { return db.query<{ sequence: number; body: string }, [number, number]>("SELECT sequence,body FROM deliveries WHERE sequence>? ORDER BY sequence LIMIT ?").all(after, limit).map(row => ({ sequence: row.sequence, delivery: JSON.parse(row.body) as MemoryDelivery })); }
   finally { db.close(); }
@@ -177,6 +187,7 @@ export function engineMemoryVersion(hash: string): Buffer | null {
   if (!/^[a-f0-9]{64}$/.test(hash)) throw Error("invalid engine memory hash");
   const filename = statePath("role-memory", "delivery.sqlite");
   if (!fs.existsSync(filename)) return null;
+  const Database = sqliteDatabase();
   const db = new Database(filename, { readonly: true });
   try { const row = db.query<{ content: Uint8Array }, [string]>("SELECT content FROM versions WHERE hash=?").get(hash); if (!row) return null; const data = Buffer.from(row.content); if (createHash("sha256").update(data).digest("hex") !== hash) throw Error("engine memory copy failed integrity check"); return data; }
   finally { db.close(); }
