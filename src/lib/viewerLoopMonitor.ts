@@ -7,6 +7,7 @@ export type ViewerOperation = "runtime.startup-row" | "controller.account-migrat
   | "pipelines.controller-read" | "pipelines.controller-decode" | "pipelines.controller-materialize"
   | "pipelines.controller-checkpoint" | "pipelines.controller-select" | "pipelines.delivery-liveness"
   | "pipelines.evidence" | "pipelines.get" | "files.get" | "files.health" | "controller.scan" | "controller.pipelines" | "controller.flows" | "activity.ingest" | "controller.account-credit-guard" | "account-credit-guard.store"
+  | "runtime.rpc" | "runtime.delivery-list" | "runtime.delivery-wake"
   | "external-relay.owner-history"
   | "prototype.publish" | "prototype.copy" | "prototype.state" | "prototype.delivery" | "prototype.telegram"
   | "pipelines.controller-job" | "pipelines.controller-lane" | "pipelines.controller-schedule"
