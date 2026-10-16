@@ -925,6 +925,7 @@ export async function bindStructuredDeliveryQueue(
         return false;
       },
       effects: (kinds, afterEventSeq) => effectPages.read(kinds, afterEventSeq),
+      takeEffectsReadFailure: () => effectPages.takeReadFailure(),
       idleContinuationCurrent: async (conversationId, fence) => {
         const session = await readRuntimeSession(client, { conversationId });
         // This operation itself blocks retirement. Admission and the claim
@@ -1312,11 +1313,11 @@ export async function bindStructuredDeliveryQueue(
         authorizeDispatch: authorizeRecovery, interruptionContinuation: true });
     }, { onlyIfChanged }).finally(() => { guarding = null; });
   const scheduleDrain = (delayMs = DELIVERY_DRAIN_COALESCE_MS): boolean => !stopped && drainWake.schedule(delayMs);
-  const drainWithRetry = async (afterAdmission = false): Promise<void> => {
+  const drainWithRetry = async (afterAdmission = false, freshAdmission = false): Promise<void> => {
     if (stopped) return;
     try {
       if (!startupPending) await enforceGuard();
-      if (afterAdmission) await queue.drainAfterAdmission();
+      if (afterAdmission) await queue.drainAfterAdmission(freshAdmission);
       else await queue.drain();
       drainBackoffMs = DELIVERY_DRAIN_COALESCE_MS;
     } catch (error) {
@@ -1905,10 +1906,10 @@ export async function bindStructuredDeliveryQueue(
   };
   state.activeQueue = queue;
   state.activeRegistry = registry;
-  setStructuredDeliveryKick(() => {
+  setStructuredDeliveryKick((freshAdmission = false) => {
     if (stopped) return;
-    drainWake.cancel();
-    return drainWithRetry(true);
+    if (freshAdmission) drainWake.cancel();
+    return drainWithRetry(true, freshAdmission);
   });
   state.stopActive = () => {
     stopped = true;

@@ -1,6 +1,6 @@
 import { DeliveryEffectPages } from "./deliveryEffectPages";
 import { RuntimeHostUnavailableError, type RuntimeHostClient } from "./client";
-import { expect, test } from "bun:test";
+import { expect, test, setSystemTime } from "bun:test";
 
 import type { DeliveryReceipt, EngineHost, HostState, QueueEntry, RuntimeEvent } from "./engineHost";
 import { DeliveryProgressStore } from "./deliveryProgress";
@@ -1003,14 +1003,18 @@ test("a cached listing timeout delivers a free recipient and stale terminal effe
     if (fail) throw new RuntimeHostUnavailableError("runtime host request timed out");
     return base.effects(kinds, after);
   } } as RuntimeHostClient, () => { retries++; });
-  const queue = queueFor({ ...base, effects: (...args) => pages.read(...args) }, { "conversation-a": target.engine }, {});
+  const queue = queueFor({ ...base, effects: (...args) => pages.read(...args), takeEffectsReadFailure: () => pages.takeReadFailure() }, { "conversation-a": target.engine }, {});
   await queue.drain();
   expect(progress.get("cached-send")?.waitReason).toBe("awaiting-turn");
   fail = true;
   turn = null;
   await queue.drain();
   expect(target.inputs).toEqual(["cached-send"]);
-  await queue.drain();
+  expect(retries).toBe(1);
+  // Another positively admitted message owns an immediate new pass; the old
+  // cached terminal operation still cannot actuate again.
+  journal.admit("next-admission", "conversation-b");
+  await queue.drainAfterAdmission(true);
   expect(target.inputs).toEqual(["cached-send"]);
   expect(progress.get("cached-send")?.terminal?.state).toBe("delivered");
   expect(retries).toBe(2);
@@ -1029,7 +1033,20 @@ test("a fresh admission immediately replaces the wake of a failed listing", asyn
   await expect(queue.drain()).rejects.toThrow("listing timed out");
   fail = false;
   journal.admit("fresh-after-failure", "conversation-a");
-  await queue.drainAfterAdmission();
+  await queue.drainAfterAdmission(true);
   expect(target.inputs).toEqual(["fresh-after-failure"]);
   queue.retire();
+});
+
+test("observer admission barriers retain the failed listing budget without new journal work", async () => {
+  const journal = fakeJournal();
+  const base = journal.port();
+  let reads = 0;
+  const queue = queueFor({ ...base, effects: async () => { reads++; throw new Error("listing unavailable"); } }, {}, {});
+  setSystemTime(new Date("2026-10-16T12:00:00Z"));
+  try {
+    await expect(queue.drain()).rejects.toThrow("listing unavailable");
+    for (let index=0; index<100; index++) await queue.drainAfterAdmission();
+    expect(reads).toBe(1);
+  } finally { queue.retire(); setSystemTime(); }
 });

@@ -79,6 +79,8 @@ export interface StructuredDeliveryQueuePort {
    * `false` means the registry refused the write: nothing was held. */
   holdForFailedSwitch?(effect: StructuredReconfigureEffect, reason: string): void | boolean | Promise<void | boolean>;
   effects(kinds?: readonly string[], afterEventSeq?: number): Promise<StructuredDeliveryEffect[]>;
+  /** A cached page can keep serving while refresh failed; preserve poll backoff. */
+  takeEffectsReadFailure?(): boolean;
   transition(
     operationId: string,
     status: StructuredDeliveryTransition,
@@ -910,11 +912,11 @@ export class StructuredDeliveryQueue {
     this.timing = { ...STRUCTURED_DELIVERY_TIMING, ...timing };
   }
 
-  drain(options: { safety?: boolean; afterAdmission?: boolean } = {}): Promise<void> {
+  drain(options: { safety?: boolean; freshAdmission?: boolean } = {}): Promise<void> {
     if (this.retirementExecutor.retired) return Promise.resolve();
     // Fresh admitted work owns a new wake, even when an older listing failed.
     // Preserve the failure budget; a successful pass still resets it below.
-    if (!options.afterAdmission && !this.passRetry.ready()) { this.retrySoon(); return Promise.resolve(); }
+    if (!options.freshAdmission && !this.passRetry.ready()) { this.retrySoon(); return Promise.resolve(); }
     if (this.activeDrain) {
       /* A watchdog pass is a safety net: one already running covers it. */
       if (options.safety) return this.activeDrain;
@@ -940,12 +942,12 @@ export class StructuredDeliveryQueue {
   }
 
   /** Guarantees a drain pass whose journal read starts after this request. */
-  async drainAfterAdmission(): Promise<void> {
+  async drainAfterAdmission(freshAdmission = false): Promise<void> {
     const precedingDrain = this.activeDrain;
     /* The preceding drain owner reports its own failure. This barrier still
        evaluates the journal state created by the completed admission. */
     if (precedingDrain) await precedingDrain.catch(() => undefined);
-    await this.drain({ afterAdmission: true });
+    await this.drain({ freshAdmission });
   }
 
   private async drainUntilSettled(safety = false): Promise<void> {
@@ -955,6 +957,11 @@ export class StructuredDeliveryQueue {
       try {
         await this.drainPass(safety && first);
         first = false;
+        if (this.port.takeEffectsReadFailure?.()) {
+          this.passRetry.fail();
+          this.retrySoon();
+          break;
+        }
         this.passRetry.reset();
       } catch (error) {
         this.passRetry.fail();
@@ -1114,6 +1121,7 @@ export class StructuredDeliveryQueue {
   }
 
   private async listEffects(): Promise<StructuredDeliveryEffect[]> {
+    this.port.takeEffectsReadFailure?.();
     const rawEffects: StructuredDeliveryEffect[] = [];
     let afterEventSeq = 0;
     while (true) {

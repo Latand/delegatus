@@ -41,9 +41,11 @@ is current. This change reduces repeated decoding and
 wire data for unchanged pages.
 
 A shorter wake replaces a later retry timer. A watchdog wake discovered while a
-listing is in flight remains owed for its next pass. Fresh admission starts a
-new pass immediately through an older listing's retry backoff; success resets
-the failure budget. These paths retain the original operation and message key.
+listing is in flight remains owed for its next pass. A newly committed pending receipt
+(`replayed: false`) grants an immediate admission wake. Observer kicks and
+replayed receipts retain the listing failure budget. Returning cached effects
+also retains that budget when their refresh failed. A fresh successful read
+resets it. These paths retain the original operation and message key.
 The loop monitor names RPC, delivery listing and delivery wake work.
 
 ## Shared protocol and write inventory
@@ -54,6 +56,9 @@ The loop monitor names RPC, delivery listing and delivery wake work.
 | Response `keepAlive` | The listener acknowledges reuse; the client releases only acknowledged leases. Encoded snapshots, ordinary responses and domain refusals use the same connection lifetime. Mocks and old listeners omit the field and close. |
 | Conditional effect page | The delivery controller calls `DeliveryEffectPages`, then optional `RuntimeHostClient.effectPage`. Recovery proxies forward cancellation. Old clients and the spawn, startup and reconfigure readers keep calling array `effectBatch`. |
 | Effect page version | `RuntimeJournal` combines its generation and SQLite write witnesses. Admission, retry, operation transitions, native queue transitions, retention and direct outbox writes invalidate through SQLite; another connection invalidates through `data_version`. No schema or write format changes. |
+| Fresh-admission flag | `enqueueStructuredMessage` derives it from the committed `RuntimeJournal.executeOperation` result, only for a new pending/queued receipt. `structuredDeliverySignal` carries the optional flag across bundles; the controller passes it to `drainAfterAdmission`. Submitted fields cannot grant it. HTTP dependency objects and composer/native fixtures forward the callback unchanged. |
+| Other signal producers | Structured controls, native queue HTTP edits, startup recovery, account migration and self-update draining keep their unflagged observer wakes. Zero-argument callbacks remain compatible and keep backoff. |
+| Cached refresh health | The controller consumes `takeEffectsReadFailure` once per listing pass. A cached page remains usable while a failed refresh still counts against the queue's existing poll backoff. |
 | Wake ownership | Admission kicks, host state changes, retries and the watchdog reach the existing delivery controller. Each controller owns one wake timer; stop cancels it. Seat recipient authority and inbox composition stay with their existing owners. |
 
 ## Measurement procedure
@@ -72,7 +77,8 @@ Both revisions run the identical driver and lockfile dependencies under Bun
 mode per repeat. A separate listing sample retains exactly 200 pending effects
 and runs three repeats of 30 unchanged passes. Each revision starts with fresh private state.
 The report records UTC completion time and a SHA-256 of the exercised source.
-The original isolated pilot was collected before product edits.
+The original isolated pilot was collected before product edits. Both reports
+were regenerated with the same driver after the poll-budget repair.
 
 Run from a scratch export with private home, config, temp and state roots:
 
@@ -99,15 +105,15 @@ Measurements are recorded in `evidence/message-delivery-before.json` and
 
 | Metric (repeats 1 / 2 / 3) | Before | After |
 | --- | --- | --- |
-| Idle send confirmation p95 (ms) | 44.217 / 46.604 / 50.708 | 52.714 / 38.456 / 43.350 |
-| Two-second CPU slice: send confirmation p95 (ms) | 2063.092 / 2070.944 / 2050.664 | 2069.303 / 2052.605 / 2106.092 |
-| Viewer append RPC p50 (ms) | 1.012 / 0.738 / 0.604 | 1.618 / 0.591 / 0.632 |
-| Host append handler p50 (ms) | 0.577 / 0.469 / 0.409 | 0.977 / 0.418 / 0.481 |
-| Viewer / handler p50 ratio | 1.753 / 1.575 / 1.478 | 1.656 / 1.414 / 1.314 |
+| Idle send confirmation p95 (ms) | 61.856 / 39.965 / 32.171 | 47.002 / 32.931 / 38.204 |
+| Two-second CPU slice: send confirmation p95 (ms) | 2043.755 / 2054.880 / 2049.496 | 2064.636 / 2066.639 / 2090.527 |
+| Viewer append RPC p50 (ms) | 0.961 / 0.535 / 0.532 | 0.877 / 0.590 / 0.537 |
+| Host append handler p50 (ms) | 0.575 / 0.333 / 0.354 | 0.601 / 0.428 / 0.398 |
+| Viewer / handler p50 ratio | 1.672 / 1.605 / 1.503 | 1.459 / 1.379 / 1.349 |
 | New sockets per 100 warm RPCs | 100 / 100 / 100 | 0 / 0 / 0 |
 | Result payload bytes per 30 listing passes | 4,784,220 / 4,784,220 / 4,784,220 | 166,206 / 166,206 / 166,206 |
 | Listing RPCs per 30 passes | 90 / 90 / 90 | 90 / 90 / 90 |
-| Time for 30 listing passes (ms) | 88.097 / 90.809 / 86.465 | 19.538 / 15.371 / 17.291 |
+| Time for 30 listing passes (ms) | 96.925 / 69.376 / 89.743 | 9.951 / 11.389 / 7.156 |
 
 All three after repeats meet both latency bounds. Result payload falls by 96.5%.
 The listing pass time falls in every repeat. Total send time shows no
@@ -127,6 +133,7 @@ roots, and the Viewer control URL on a closed endpoint:
 - `bun node_modules/typescript/bin/tsc --noEmit --incremental false`: passed.
 - Scoped ESLint: zero errors; two existing unused-variable warnings in the controller.
 - `bun scripts/verify-runtime-host.ts`: passed under Bun 1.4.0. The successor took over in 508 ms; listener and socket checks each answered 27/27 over 15 seconds.
+- `bun test src/lib/runtime/structuredDeliveryController.migration.test.ts src/lib/runtime/structuredDeliveryQueue.progress.test.ts src/lib/runtime/structuredMessageDelivery.test.ts`: 212 passed, including the production unanswered-socket poll bound and fresh-versus-replayed receipt checks.
 - Publication privacy gate: passed on all changed source, tests, measurements and this report.
 
 The lost-wake regression is red on the baseline: a send admitted during an older

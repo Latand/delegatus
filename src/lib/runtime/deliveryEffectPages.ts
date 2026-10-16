@@ -33,6 +33,8 @@ type Page = { version?: string; effects: RuntimePendingEffect[]; checkedAt: numb
 export class DeliveryEffectPages {
   private readonly pages = new Map<string, Page>();
   private bytes = 0;
+  private readFailed = false;
+  takeReadFailure(): boolean { const failed = this.readFailed; this.readFailed = false; return failed; }
   constructor(private readonly client: RuntimeHostClient, private readonly retry: () => void, private readonly now = () => performance.now()) {}
   read(kinds?: readonly string[], afterEventSeq = 0): Promise<RuntimePendingEffect[]> {
     return withViewerOperation("runtime.delivery-list", async () => {
@@ -67,6 +69,7 @@ export class DeliveryEffectPages {
       } catch (error) {
         const fallback = this.pages.get(key);
         if (!fallback || this.now() - fallback.checkedAt > MAX_STALE_MS || !isRuntimeHostTransportFailure(error)) throw error;
+        this.readFailed = true;
         this.retry();
         return fallback.effects;
       }
