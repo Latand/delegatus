@@ -346,7 +346,12 @@ function observationUnchanged(
   return delivered === undefined || delivered < observedAt;
 }
 
-async function inventory(files: FileEntry[], registry: AgentRegistry, snapshot = registry.readOnlySnapshot()): Promise<ConversationObservation[]> {
+async function inventory(
+  files: FileEntry[],
+  registry: AgentRegistry,
+  snapshot = registry.readOnlySnapshot(),
+  onTranscriptRead?: (pathname: string, complete: boolean) => void,
+): Promise<ConversationObservation[]> {
   const inventoryStartedAt = Date.now();
   const conversationByPath = new Map<string, RegistryConversation>();
   const launchProfileByPath = new Map<string, RegistryConversation["generations"][number]["launchProfile"]>();
@@ -384,6 +389,7 @@ async function inventory(files: FileEntry[], registry: AgentRegistry, snapshot =
     const owner = accountManager.resolveTranscriptOwner(engine, entry.path);
     const mtimeMs = entry.mtime * 1000;
     const observedTurn = transcriptTurnResult(entry.path, entry.size, mtimeMs, engine);
+    onTranscriptRead?.(entry.path, observedTurn.complete);
     const hostedPath = hostedPaths.has(entry.path);
     const parsed = observedTurn.complete ? hostFencedTurn(observedTurn, hostedPath) : null;
     const releasedDeadTurn = deadStalledTurn(
@@ -558,7 +564,7 @@ export async function reconcileMigrationInventory(
 ): Promise<ReturnType<AgentRegistry["snapshot"]>> {
   const entries = files ?? await listFiles();
   const observations = await inventory(entries, registry, options.incrementalInventory
-    ? incrementalInventorySnapshot(registry, entries) : registry.readOnlySnapshot());
+    ? incrementalInventorySnapshot(registry, entries) : registry.readOnlySnapshot(), options.onTranscriptRead);
   let snapshot: RegistryFile;
   if (options.readOnlySnapshot) {
     if (options.incrementalInventory) {
@@ -775,6 +781,8 @@ export interface MigrationCoordinatorOptions {
   readOnlySnapshot?: boolean;
   /** A scanner delta: read and repair only its conversations and parents. */
   incrementalInventory?: boolean;
+  /** Reports transcript reads that cannot yet safely acknowledge an inventory path. */
+  onTranscriptRead?: (pathname: string, complete: boolean) => void;
   ownsOperation?: () => Promise<boolean>;
   /** Asked right before the successor is created and at every ownership
       check of its publication, the controller's registration included; a

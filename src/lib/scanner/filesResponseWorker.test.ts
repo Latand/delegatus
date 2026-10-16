@@ -227,18 +227,43 @@ test("normal RSS and idle cache hits keep one warm worker and retirement logs it
   process.env.LLV_FILES_RESPONSE_WORKER_IDLE_MS = "40";
   const logs: unknown[][] = [];
   const log = spyOn(console, "warn").mockImplementation((...args) => { logs.push(args); });
+  let fakeNow = 1_000_000;
+  const now = spyOn(Date, "now").mockImplementation(() => fakeNow);
+  const timers = new Map<object, { run: () => void; due: number }>();
+  const setTimer = spyOn(globalThis, "setTimeout").mockImplementation(((run: () => void, delay = 0) => {
+    const handle = { unref() {} };
+    timers.set(handle, { run, due: fakeNow + Number(delay) });
+    return handle;
+  }) as never);
+  const clearTimer = spyOn(globalThis, "clearTimeout").mockImplementation(((handle: object) => { timers.delete(handle); }) as never);
+  const advance = async (ms: number) => {
+    const until = fakeNow + ms;
+    while (true) {
+      const next = [...timers].filter(([, timer]) => timer.due <= until).sort((a, b) => a[1].due - b[1].due)[0];
+      if (!next) break;
+      const [handle, timer] = next;
+      timers.delete(handle);
+      fakeNow = timer.due;
+      timer.run();
+      await Promise.resolve();
+    }
+    fakeNow = until;
+  };
   try {
     const before = filesResponseWorkerPoolDiagnostics().spawns;
     await buildFilesResponseInWorker(request, runtimeFor(stateDir));
     const pid = filesResponseWorkerPoolDiagnostics().pid;
     expect(pid).not.toBeNull();
-    await new Promise(resolve => setTimeout(resolve, 120));
+    await advance(61_000);
     await buildFilesResponseInWorker(request, runtimeFor(stateDir, { LLV_UNUSED_TEST_VALUE: "changed" }));
     expect(filesResponseWorkerPoolDiagnostics().pid).toBe(pid);
     expect(filesResponseWorkerPoolDiagnostics().spawns - before).toBe(1);
     shutdownFilesResponseWorker("explicit test shutdown");
     expect(logs).toContainEqual([`[files response worker] retired: explicit test shutdown`, { pid, rssBytes: expect.any(Number) }]);
   } finally {
+    clearTimer.mockRestore();
+    setTimer.mockRestore();
+    now.mockRestore();
     log.mockRestore();
     await stopTestWorker();
     fs.rmSync(stateDir, { recursive: true, force: true });

@@ -138,7 +138,7 @@ export function accountControllerScan(
 
 export interface AccountMigrationControllerCyclePorts {
   scan: () => ReturnType<typeof listFilesWithProjectCatalog>;
-  reconcileInventory: (registry: AgentRegistry, files: ControllerScan["files"]) => Promise<InventorySnapshot>;
+  reconcileInventory: (registry: AgentRegistry, files: ControllerScan["files"], onTranscriptRead?: (pathname: string, complete: boolean) => void) => Promise<InventorySnapshot>;
   reconcileFlowOwnership: (lookup: ConversationLookup) => Promise<void>;
   reconcileWorkflowOwnership: (lookup: ConversationLookup) => Promise<void>;
   reconcileHandoffOwnership: (lookup: ConversationLookup) => Promise<void>;
@@ -194,7 +194,9 @@ const DEFAULT_CONTROLLER_CYCLE_PORTS: AccountMigrationControllerCyclePorts = {
   // The inventory sidecar consumes the completed snapshot published by the
   // Viewer. Process-wide coordination cannot cover a separate OS process.
   scan: () => accountControllerScan(),
-  reconcileInventory: (registry, files) => reconcileMigrationInventory(registry, files, { readOnlySnapshot: true, incrementalInventory: true }),
+  reconcileInventory: (registry, files, onTranscriptRead) => reconcileMigrationInventory(registry, files, {
+    readOnlySnapshot: true, incrementalInventory: true, onTranscriptRead,
+  }),
   reconcileFlowOwnership: reconcileFlowConversationOwnershipCooperatively,
   reconcileWorkflowOwnership: reconcileWorkflowConversationOwnershipCooperatively,
   reconcileHandoffOwnership: reconcileHandoffConversationOwnershipCooperatively,
@@ -220,6 +222,7 @@ export class AccountMigrationController {
   private inventoryInputs = new Map<string, string>();
   private inventoryRevision: string | null = null;
   private inventoryContexts = new Map<string, string>();
+  private inventoryPending = new Set<string>();
   private inventoryCursor = 0;
   private running: Promise<void> | null = null;
   private trailingCycleRequested = false;
@@ -267,8 +270,12 @@ export class AccountMigrationController {
     const revision = JSON.stringify([accountsCollectionRevision(),
       this.registry.engineRouting("claude").activeAccountId, this.registry.engineRouting("codex").activeAccountId]);
     const nextInputs = new Map(files.map(file => [file.path, inventoryFileSignature(file)]));
+    const filesByPath = new Map(files.map(file => [file.path, file]));
+    for (const pathname of this.inventoryPending) if (!nextInputs.has(pathname)) this.inventoryPending.delete(pathname);
     const contextFor = (pathname: string): string => {
       const scoped = this.registry.activityConversationSnapshot(pathname);
+      const parentPath = filesByPath.get(pathname)?.parent ?? null;
+      const parent = parentPath ? this.registry.conversationForPath(parentPath) : null;
       return JSON.stringify([
         Object.values(scoped.conversations).map(row => [row.id, row.generations.at(-1)?.id,
           row.generations.find(generation => generation.path === pathname)?.launchProfile, row.turn, row.continuityPaths, row.projectOwnership]),
@@ -276,25 +283,37 @@ export class AccountMigrationController {
         scoped.conversationAliases, scoped.lineageEdges, scoped.memberships,
         Object.values(scoped.receipts).map(row => [row.launchId, row.state, row.parentConversationId, row.launcher?.conversationId]),
         Object.values(scoped.heldDeliveries).filter(item => item.state === "delivered").map(item => item.deliveredAt),
+        parentPath, parent && [parent.id, parent.turn, parent.generations.at(-1)?.id, parent.continuityPaths],
       ]);
     };
     // A host, alias or delivery may change without a transcript write. Revisit
     // at most 32 paths per poll, rotating across the current catalog.
-    const contextChanged = new Set<string>();
     const cursorPaths = [...nextInputs.keys()].sort();
-    for (let visited = 0; visited < Math.min(32, cursorPaths.length); visited++) {
-      const pathname = cursorPaths[(this.inventoryCursor + visited) % cursorPaths.length]!;
-      if (contextFor(pathname) !== this.inventoryContexts.get(pathname)) contextChanged.add(pathname);
+    const retryPaths = [...this.inventoryPending].filter(pathname => nextInputs.has(pathname)).sort().slice(0, 32);
+    const checkedPaths = new Set(retryPaths);
+    for (let visited = 0; visited < Math.min(32 - retryPaths.length, cursorPaths.length); visited++) {
+      checkedPaths.add(cursorPaths[(this.inventoryCursor + visited) % cursorPaths.length]!);
     }
+    const contextChanged = new Set([...checkedPaths].filter(pathname => contextFor(pathname) !== this.inventoryContexts.get(pathname)));
     const nextCursor = cursorPaths.length ? (this.inventoryCursor + 32) % cursorPaths.length : 0;
     const changed = revision !== this.inventoryRevision ? files
-      : files.filter(file => nextInputs.get(file.path) !== this.inventoryInputs.get(file.path) || contextChanged.has(file.path));
+      : files.filter(file => nextInputs.get(file.path) !== this.inventoryInputs.get(file.path)
+        || contextChanged.has(file.path) || retryPaths.includes(file.path));
+    const observedBefore = new Map(changed.map(file => [file.path, contextFor(file.path)]));
+    const transcriptReads = new Map<string, boolean>();
     if (this.inventoryRevision === null || changed.length) {
-      await this.ports.reconcileInventory(this.registry, changed);
+      await this.ports.reconcileInventory(this.registry, changed, (pathname, complete) => transcriptReads.set(pathname, complete));
     }
-    // Later phases await independent actors. Acknowledge only the context
-    // inventory just observed, so their changes remain visible to the cursor.
-    const observedContexts = new Map(changed.map(file => [file.path, contextFor(file.path)]));
+    // Acknowledge the pre-write context only when the corresponding transcript
+    // read completed and no concurrent registry writer changed its dependency.
+    const observedContexts = new Map<string, string>();
+    for (const [pathname, context] of observedBefore) {
+      if (transcriptReads.get(pathname) === false) this.inventoryPending.add(pathname);
+      else if (contextFor(pathname) === context) {
+        this.inventoryPending.delete(pathname);
+        observedContexts.set(pathname, context);
+      }
+    }
     await yieldToRuntime();
     // Ownership stores can change independently of the scanner. Their lookups
     // remain keyed and do not need an assembled registry snapshot.

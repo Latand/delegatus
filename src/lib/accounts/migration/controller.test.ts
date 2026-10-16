@@ -476,6 +476,138 @@ test("inventory reconciles only file deltas and retries a failed delta before ac
   } finally { registry.close(); }
 });
 
+test("incomplete transcript observations remain on the bounded retry cursor", async () => {
+  const registry = new AgentRegistry(path.join(stateDir, "pending-transcript-inventory.json"));
+  const pathname = "/delta/pending.jsonl";
+  const file = { path: pathname, engine: "codex", size: 1, mtime: 1, parent: null } as never;
+  const batches: string[][] = [];
+  let complete = false;
+  const controller = new AccountMigrationController(registry, { tick: async () => {} }, null, {
+    scan: async () => ({ files: [file], projectCatalog: [], complete: true }),
+    reconcileInventory: async (_current, changed, reportRead) => {
+      batches.push(changed.map(entry => entry.path));
+      for (const entry of changed) reportRead?.(entry.path, complete);
+      return registry.readOnlySnapshot();
+    },
+    reconcileFlowOwnership: async () => {}, reconcileWorkflowOwnership: async () => {}, reconcileHandoffOwnership: async () => {},
+    reconcileFiles: async () => {}, reconcileRuntime: async () => {}, reconcileTaskStore: async () => {}, syncRouting: async () => {},
+    reconcileMigrationCycle: async () => {},
+  });
+  try {
+    await controller.poll();
+    expect(batches).toEqual([[pathname]]);
+    await controller.poll();
+    expect(batches).toHaveLength(2);
+    complete = true;
+    await controller.poll();
+    await controller.poll();
+    expect(batches).toEqual([[pathname], [pathname], [pathname]]);
+  } finally { registry.close(); }
+});
+
+test("a transient transcript EIO retries through the controller without a file change", async () => {
+  const registry = new AgentRegistry(path.join(stateDir, "controller-transcript-eio.json"));
+  const pathname = path.join(stateDir, "controller-transcript-eio.jsonl");
+  fs.writeFileSync(pathname, [
+    JSON.stringify({ type: "session_meta", payload: { cwd: "/repo/controller-eio" } }),
+    "x".repeat(150_000),
+    JSON.stringify({ type: "event_msg", timestamp: "2026-10-16T00:00:00.000Z", payload: { type: "task_complete" } }),
+    "",
+  ].join("\n"));
+  const stat = fs.statSync(pathname);
+  const file = { path: pathname, engine: "codex", parent: null, size: stat.size, mtime: stat.mtimeMs / 1000,
+    activity: "recent", title: "Controller EIO" } as never;
+  registry.reconcileConversations([{ engine: "codex", path: pathname, accountId: null, launchProfile: emptyLaunchProfile(),
+    turn: { state: "busy", source: "assistant", terminalAt: null }, observedAt: "2026-10-15T00:00:00.000Z" }], { snapshot: false });
+  const originalOpenSync = fs.openSync;
+  let opens = 0;
+  fs.openSync = ((target: fs.PathLike, ...args: unknown[]) => {
+    if (path.resolve(String(target)) === pathname) {
+      opens++;
+      if (opens === 1) {
+        const error = new Error("temporary transcript EIO") as NodeJS.ErrnoException;
+        error.code = "EIO";
+        throw error;
+      }
+    }
+    return Reflect.apply(originalOpenSync, fs, [target, ...args]);
+  }) as typeof fs.openSync;
+  const controller = new AccountMigrationController(registry, { tick: async () => {} }, null, {
+    scan: async () => ({ files: [file], projectCatalog: [], complete: true }),
+    reconcileFlowOwnership: async () => {}, reconcileWorkflowOwnership: async () => {}, reconcileHandoffOwnership: async () => {},
+    reconcileFiles: async () => {}, reconcileRuntime: async () => {}, reconcileTaskStore: async () => {}, syncRouting: async () => {},
+    reconcileMigrationCycle: async () => {},
+  });
+  try {
+    await controller.poll();
+    expect(registry.conversationForPath(pathname)?.turn.state).toBe("busy");
+    fs.openSync = originalOpenSync;
+    await controller.poll();
+    expect(registry.conversationForPath(pathname)?.turn.state).toBe("terminal");
+    await controller.poll();
+    expect(opens).toBe(2);
+  } finally { fs.openSync = originalOpenSync; registry.close(); }
+});
+
+test("a concurrent inventory write remains unacknowledged until the next pass", async () => {
+  const registry = new AgentRegistry(path.join(stateDir, "inventory-cas-conflict.json"), undefined, undefined, { sqliteMode: "sqlite" });
+  const pathname = "/delta/cas.jsonl";
+  const file = { path: pathname, engine: "codex", size: 1, mtime: 1, parent: null } as never;
+  const batches: string[][] = [];
+  let compete = true;
+  const controller = new AccountMigrationController(registry, { tick: async () => {} }, null, {
+    scan: async () => ({ files: [file], projectCatalog: [], complete: true }),
+    reconcileInventory: async (_current, changed, reportRead) => {
+      batches.push(changed.map(entry => entry.path));
+      for (const entry of changed) reportRead?.(entry.path, true);
+      if (compete) {
+        compete = false;
+        registry.reconcileConversations([{ engine: "codex", path: pathname, accountId: null, launchProfile: emptyLaunchProfile(),
+          turn: { state: "busy", source: "assistant", terminalAt: null }, observedAt: "2026-10-16T00:01:00Z" }], { snapshot: false });
+      }
+      return registry.activityConversationSnapshot(pathname);
+    },
+    reconcileFlowOwnership: async () => {}, reconcileWorkflowOwnership: async () => {}, reconcileHandoffOwnership: async () => {},
+    reconcileFiles: async () => {}, reconcileRuntime: async () => {}, reconcileTaskStore: async () => {}, syncRouting: async () => {},
+    reconcileMigrationCycle: async () => {},
+  });
+  try {
+    await controller.poll();
+    await controller.poll();
+    expect(batches).toEqual([[pathname], [pathname]]);
+    await controller.poll();
+    expect(batches).toHaveLength(2);
+  } finally { registry.close(); }
+});
+
+test("late parent admission invalidates a child's inventory dependency", async () => {
+  const registry = new AgentRegistry(path.join(stateDir, "late-parent-inventory.json"), undefined, undefined, { sqliteMode: "sqlite" });
+  const parentPath = path.join(stateDir, "codex-parent.jsonl");
+  const childPath = path.join(stateDir, "codex-parent-subagents-child.jsonl");
+  fs.writeFileSync(parentPath, JSON.stringify({ type: "session_meta", payload: { cwd: "/repo/parent" } }) + "\n");
+  fs.writeFileSync(childPath, JSON.stringify({ type: "session_meta", payload: { cwd: "/repo/parent" } }) + "\n");
+  const stat = fs.statSync(childPath);
+  const child = { path: childPath, engine: "codex", size: stat.size, mtime: stat.mtimeMs / 1000, parent: parentPath,
+    activity: "idle", title: "Child" } as never;
+  const controller = new AccountMigrationController(registry, { tick: async () => {} }, null, {
+    scan: async () => ({ files: [child], projectCatalog: [], complete: true }),
+    reconcileFlowOwnership: async () => {}, reconcileWorkflowOwnership: async () => {}, reconcileHandoffOwnership: async () => {},
+    reconcileFiles: async () => {}, reconcileRuntime: async () => {}, reconcileTaskStore: async () => {}, syncRouting: async () => {},
+    reconcileMigrationCycle: async () => {},
+  });
+  try {
+    await controller.poll();
+    const childConversation = registry.conversationForPath(childPath)!;
+    expect(childConversation.generations.at(-1)?.launchProfile.parentConversationId).toBeNull();
+    registry.reconcileConversations([{ engine: "codex", path: parentPath, accountId: null, launchProfile: emptyLaunchProfile(),
+      turn: { state: "idle", source: "empty", terminalAt: null }, observedAt: "2026-10-16T00:00:00Z" }], { snapshot: false });
+    await controller.poll();
+    const parentConversation = registry.conversationForPath(parentPath)!;
+    expect(registry.conversationForPath(childPath)?.generations.at(-1)?.launchProfile.parentConversationId).toBe(parentConversation.id);
+    expect(registry.readOnlySnapshot().lineageEdges[childConversation.id]?.parentConversationId).toBe(parentConversation.id);
+  } finally { registry.close(); }
+});
+
 
 test("an idle migration tick does not sweep all delivery history", async () => {
   const registry = new AgentRegistry(path.join(stateDir, "no-idle-compaction.json"));

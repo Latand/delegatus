@@ -505,10 +505,10 @@ export async function reconcileFileControllers(
 ): Promise<void> {
   // The sidecar already compared the complete scan and a bounded registry
   // cursor. Link/observation recovery needs another pass only for new inputs.
-  if (options.inventoryChanged !== false) {
-    await linkEntries(entries, { persist: true });
-    observeCodexSubagentTranscripts(agentRegistry(), entries);
-  }
+  if (options.inventoryChanged !== false) await linkEntries(entries, { persist: true });
+  // The observer keeps its own successful-work cursor and retries failed or
+  // budget-deferred paths. Run it every pass without rebuilding registry links.
+  observeCodexSubagentTranscripts(agentRegistry(), entries);
   await yieldToRuntime();
   // Custom session titles (issue #33) must reach push bodies too, so overlay
   // them before notifying — a rename shows the human name in notifications.

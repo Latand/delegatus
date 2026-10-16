@@ -3893,6 +3893,8 @@ test("board v2 route keeps the client's certified ETag across warm cache hits an
     headers: { "x-llv-board-protocol": "2", ...headers },
   });
   let retiredChild: ChildProcess | undefined;
+  let fakeNow = 1_000_000;
+  const now = spyOn(Date, "now").mockImplementation(() => fakeNow);
   try {
     scannedFiles = retainedHistory(200);
     const first = await GET(request());
@@ -3902,7 +3904,7 @@ test("board v2 route keeps the client's certified ETag across warm cache hits an
     const body = await first.text();
     const quiet = await GET(request({ "if-none-match": etag }));
     expect(quiet.status).toBe(304);
-    await Bun.sleep(120);
+    fakeNow += 61_000;
     expect(filesResponseWorkerPoolDiagnostics().pid).toBe(child.pid!);
     shutdownFilesResponseWorker("route test shutdown");
     expect(filesResponseWorkerPoolDiagnostics().lastRetirement).toBe("route test shutdown");
@@ -3930,6 +3932,7 @@ test("board v2 route keeps the client's certified ETag across warm cache hits an
     expect(applied).toEqual(await (await GET(request())).json());
     expect(fs.readdirSync(path.join(stateDir, "files-response-results"))).toEqual([]);
   } finally {
+    now.mockRestore();
     if (previousSetting === undefined) delete process.env[setting];
     else process.env[setting] = previousSetting;
     setFilesResponseWorkerRuntimeForTests(null);
