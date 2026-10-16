@@ -88,27 +88,36 @@ export function useTelegramBot(enabled: boolean): TelegramBotState {
   /* A chat's switch, its alias and the document roots are local stores with no
      Telegram request: each shows at once and a refusal puts the stored value
      back (audit B38, B39). Only the chat being written waits, so a second
-     press on it sends nothing. */
+     press on it sends nothing. A refusal restores only what its own press
+     drew: another chat's write, drawn or answered meanwhile, stays. */
   const [pending, setPending] = useState<ReadonlySet<string>>(() => new Set());
   const pendingRef = useRef(new Set<string>());
-  const drawn = useCallback(async (predict: (held: TelegramBotStatusPayload) => TelegramBotStatusPayload, body: Record<string, unknown>) => {
+  const drawn = useCallback(async (
+    predict: (held: TelegramBotStatusPayload) => TelegramBotStatusPayload,
+    restore: (current: TelegramBotStatusPayload, before: TelegramBotStatusPayload) => TelegramBotStatusPayload,
+    body: Record<string, unknown>,
+  ) => {
     let before: TelegramBotStatusPayload | null = null;
     setStatus((held) => { before = held; return held ? predict(held) : held; });
     const answer = await act(body, true);
-    if (!answer) setStatus((held) => before ?? held);
+    if (!answer) setStatus((held) => (held && before ? restore(held, before) : held));
     return answer;
   }, [act]);
   const setChat = useCallback(async (chatId: string, alias: string, postAllowed: boolean) => {
     if (pendingRef.current.has(chatId)) return;
     pendingRef.current.add(chatId);
     setPending(new Set(pendingRef.current));
-    await drawn((held) => ({ ...held, chats: held.chats.map((chat) => chat.chatId === chatId ? { ...chat, alias: alias || null, postAllowed, postable: postAllowed && alias !== "" && chat.member } : chat) }), { action: "chat", chatId, alias, postAllowed });
+    await drawn(
+      (held) => ({ ...held, chats: held.chats.map((chat) => chat.chatId === chatId ? { ...chat, alias: alias || null, postAllowed, postable: postAllowed && alias !== "" && chat.member } : chat) }),
+      (current, before) => ({ ...current, chats: current.chats.map((chat) => chat.chatId === chatId ? before.chats.find((held) => held.chatId === chatId) ?? chat : chat) }),
+      { action: "chat", chatId, alias, postAllowed },
+    );
     pendingRef.current.delete(chatId);
     setPending(new Set(pendingRef.current));
   }, [drawn]);
   const setDocumentRoots = useCallback(async (roots: string[]) => {
     if (!roots.length) return (await act({ action: "documents", roots })) !== null;
-    return (await drawn((held) => ({ ...held, documents: { roots, custom: true } }), { action: "documents", roots })) !== null;
+    return (await drawn((held) => ({ ...held, documents: { roots, custom: true } }), (current, before) => ({ ...current, documents: before.documents }), { action: "documents", roots })) !== null;
   }, [act, drawn]);
 
   useEffect(() => {

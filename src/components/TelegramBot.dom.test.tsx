@@ -286,3 +286,62 @@ test("document folders close on the press and list the saved roots, and a refusa
     expect(live.section.querySelector('[role="alert"]')).not.toBeNull();
   } finally { live.restore(); }
 });
+
+/* Two chats written at once, answered in each order: a refusal takes back only
+   its own chat, and the other chat keeps what was drawn for it or what the
+   server answered. */
+for (const order of ["the other chat answers first", "the refusal answers first"] as const) {
+  test(`a refused chat write leaves another chat's write standing (${order})`, async () => {
+    const { useTelegramBot } = await import("@/hooks/useTelegramBot");
+    const status: TelegramBotStatusPayload = {
+      ...DISCONNECTED_BOT_STATUS,
+      connected: true,
+      bot: { name: "Report Bot", username: "report_test_bot", canReadAllGroupMessages: false, canJoinGroups: true },
+      receiving: "polling",
+      chats: CHATS,
+      documents: { roots: ["/fixture-home/handoff"], custom: false },
+    };
+    const pending = new Map<string, (response: Response) => void>();
+    const posts: Array<Record<string, unknown>> = [];
+    const saved = globalThis.fetch;
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method !== "POST") return Response.json({ bot: status });
+      const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+      posts.push(body);
+      return new Promise<Response>((resolve) => { pending.set(String(body.chatId), resolve); });
+    }) as typeof fetch;
+    const answer = (chatId: string, response: Response) => act(async () => { pending.get(chatId)!(response); await new Promise((resolve) => setTimeout(resolve, 0)); });
+    function Live() {
+      return <TelegramBotSection state={useTelegramBot(true)} />;
+    }
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    root = createRoot(container);
+    try {
+      await act(async () => root!.render(<Live />));
+      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+      const section = container;
+      const checked = (title: string) => switchFor(section, title).getAttribute("aria-checked");
+      /* Team Reports is switched off; Реліз gets an alias and is switched on. */
+      await act(async () => switchFor(section, "Team Reports").click());
+      const field = fieldFor(section, "Реліз")!;
+      await type(field, "release");
+      await tapAfterTyping(field, switchFor(section, "Реліз"));
+      expect([checked("Team Reports"), checked("Реліз")]).toEqual(["false", "true"]);
+      expect(posts.map((post) => post.chatId)).toEqual(["-1000000000101", "-1000000000505"]);
+      const releaseStored = { ...status, chats: status.chats.map((entry) => (entry.chatId === "-1000000000505" ? { ...entry, alias: "release", postAllowed: true, postable: true } : entry)) };
+      if (order === "the other chat answers first") {
+        await answer("-1000000000505", Response.json({ bot: releaseStored }));
+        await answer("-1000000000101", Response.json({ code: "action_failed" }, { status: 500 }));
+      } else {
+        await answer("-1000000000101", Response.json({ code: "action_failed" }, { status: 500 }));
+        /* Реліз is still on its way: it stays drawn on. */
+        expect([checked("Team Reports"), checked("Реліз")]).toEqual(["true", "true"]);
+        await answer("-1000000000505", Response.json({ bot: releaseStored }));
+      }
+      expect([checked("Team Reports"), checked("Реліз")]).toEqual(["true", "true"]);
+      expect(fieldFor(section, "Реліз")!.value).toBe("release");
+      expect(posts).toHaveLength(2);
+    } finally { globalThis.fetch = saved; }
+  });
+}
