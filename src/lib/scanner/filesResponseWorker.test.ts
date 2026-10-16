@@ -1,7 +1,7 @@
 import { readSummaryBootstrap } from "./summaryBootstrap";
-import { captureProcessIdentity, processIdentityStatus } from "@/lib/processIdentity";
+import { captureProcessIdentity } from "@/lib/processIdentity";
 import { signalFixtureIdentity, stopFixtureProcess } from "@/lib/testing/fixtureProcess";
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { applyFilesDelta } from "@/lib/filesDelta";
 import fs from "node:fs";
@@ -11,6 +11,7 @@ import { spawnSync, type ChildProcess } from "node:child_process";
 
 import {
   buildFilesResponseInWorker,
+  drainFilesResponseWorker,
   filesResponseWorkerPoolDiagnostics,
   shutdownFilesResponseWorker,
   type FilesResponseWorkerRuntime,
@@ -25,6 +26,9 @@ function runtimeFor(stateDir: string, extra: Record<string, string> = {}): Files
       ...process.env,
       NODE_ENV: "production" as const,
       LLV_STATE_DIR: stateDir,
+      HOME: path.join(stateDir, "home"),
+      XDG_CONFIG_HOME: path.join(stateDir, "config"),
+      TMPDIR: stateDir,
       LLV_AGENT_REGISTRY_SQLITE: "off",
       LLV_FILES_RESPONSE_WORKER: "1",
       ...extra,
@@ -217,32 +221,50 @@ test("concurrent projections are served by one worker process", async () => {
   }
 });
 
-test("a worker that ends a build above the size threshold is retired", async () => {
+test("normal RSS and idle cache hits keep one warm worker and retirement logs its cause", async () => {
   const stateDir = scratchState();
   process.env.LLV_FILES_RESPONSE_WORKER_RSS_LIMIT_MB = "1";
+  process.env.LLV_FILES_RESPONSE_WORKER_IDLE_MS = "40";
+  const logs: unknown[][] = [];
+  const log = spyOn(console, "warn").mockImplementation((...args) => { logs.push(args); });
+  let fakeNow = 1_000_000;
+  const now = spyOn(Date, "now").mockImplementation(() => fakeNow);
+  const timers = new Map<object, { run: () => void; due: number }>();
+  const setTimer = spyOn(globalThis, "setTimeout").mockImplementation(((run: () => void, delay = 0) => {
+    const handle = { unref() {} };
+    timers.set(handle, { run, due: fakeNow + Number(delay) });
+    return handle;
+  }) as never);
+  const clearTimer = spyOn(globalThis, "clearTimeout").mockImplementation(((handle: object) => { timers.delete(handle); }) as never);
+  const advance = async (ms: number) => {
+    const until = fakeNow + ms;
+    while (true) {
+      const next = [...timers].filter(([, timer]) => timer.due <= until).sort((a, b) => a[1].due - b[1].due)[0];
+      if (!next) break;
+      const [handle, timer] = next;
+      timers.delete(handle);
+      fakeNow = timer.due;
+      timer.run();
+      await Promise.resolve();
+    }
+    fakeNow = until;
+  };
   try {
     const before = filesResponseWorkerPoolDiagnostics().spawns;
     await buildFilesResponseInWorker(request, runtimeFor(stateDir));
-    expect(filesResponseWorkerPoolDiagnostics().lastRetirement).toBe("size");
-    expect(filesResponseWorkerPoolDiagnostics().pid).toBeNull();
-    await buildFilesResponseInWorker(request, runtimeFor(stateDir));
-    expect(filesResponseWorkerPoolDiagnostics().spawns - before).toBe(2);
+    const pid = filesResponseWorkerPoolDiagnostics().pid;
+    expect(pid).not.toBeNull();
+    await advance(61_000);
+    await buildFilesResponseInWorker(request, runtimeFor(stateDir, { LLV_UNUSED_TEST_VALUE: "changed" }));
+    expect(filesResponseWorkerPoolDiagnostics().pid).toBe(pid);
+    expect(filesResponseWorkerPoolDiagnostics().spawns - before).toBe(1);
+    shutdownFilesResponseWorker("explicit test shutdown");
+    expect(logs).toContainEqual([`[files response worker] retired: explicit test shutdown`, { pid, rssBytes: expect.any(Number) }]);
   } finally {
-    await stopTestWorker();
-    fs.rmSync(stateDir, { recursive: true, force: true });
-  }
-});
-
-test("a worker nobody asks for a projection is retired when it goes idle", async () => {
-  const stateDir = scratchState();
-  process.env.LLV_FILES_RESPONSE_WORKER_IDLE_MS = "40";
-  try {
-    await buildFilesResponseInWorker(request, runtimeFor(stateDir));
-    expect(filesResponseWorkerPoolDiagnostics().pid).not.toBeNull();
-    await new Promise((resolve) => setTimeout(resolve, 250));
-    expect(filesResponseWorkerPoolDiagnostics().lastRetirement).toBe("idle");
-    expect(filesResponseWorkerPoolDiagnostics().pid).toBeNull();
-  } finally {
+    clearTimer.mockRestore();
+    setTimer.mockRestore();
+    now.mockRestore();
+    log.mockRestore();
     await stopTestWorker();
     fs.rmSync(stateDir, { recursive: true, force: true });
   }
@@ -301,11 +323,10 @@ test("v2 resident worker preserves the certified base across discarded builds an
   }
 });
 
-for (const retirement of ["idle", "size"] as const) {
+for (const retirement of ["shutdown", "drained"] as const) {
   test(`v2 keeps a small delta from the certified ETag after ${retirement} retirement`, async () => {
     const { applyBoardDelta } = await import("@/lib/boardDelta");
     const stateDir = scratchState();
-    if (retirement === "idle") process.env.LLV_FILES_RESPONSE_WORKER_IDLE_MS = "40";
     const runtime = runtimeFor(stateDir);
     const scoped = (mtime: number) => ({
       ...request,
@@ -324,16 +345,11 @@ for (const retirement of ["idle", "size"] as const) {
     let retiredChild: ChildProcess | undefined;
     try {
       const before = filesResponseWorkerPoolDiagnostics().spawns;
-      let first = await buildFilesResponseInWorker(scoped(1) as never, runtime);
+      const first = await buildFilesResponseInWorker(scoped(1) as never, runtime);
       const child = (globalThis as typeof globalThis & { __llvFilesResponseWorker?: { child: ChildProcess } }).__llvFilesResponseWorker!.child;
       retiredChild = child;
-      if (retirement === "idle") {
-        const deadline = Date.now() + 5_000;
-        while (filesResponseWorkerPoolDiagnostics().pid !== null && Date.now() < deadline) await Bun.sleep(10);
-      } else {
-        process.env.LLV_FILES_RESPONSE_WORKER_RSS_LIMIT_MB = "1";
-        first = await buildFilesResponseInWorker(scoped(1) as never, runtime, first);
-      }
+      if (retirement === "drained") await drainFilesResponseWorker("drained");
+      else shutdownFilesResponseWorker("shutdown");
       expect(filesResponseWorkerPoolDiagnostics().lastRetirement).toBe(retirement);
       expect(filesResponseWorkerPoolDiagnostics().pid).toBeNull();
       await stopFixtureProcess(child);

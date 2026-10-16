@@ -1987,13 +1987,16 @@ function wakeItems(context: {
     if (items.some((item) => item.id === child.conversationId)) continue;
     items.push({ kind: "child", id: child.outcomeId ?? child.conversationId, label: `${child.title} — spawned child running` });
   }
+  const savedAnswers: SeatTickItem[] = [];
   for (const signal of input.signals) {
     if (signal.id === "disk-space" && signal.episode === input.state.diskPressureShown) continue;
     const item: SeatTickItem = { kind: "signal", id: signal.id, label: signal.label, ...(signal.id === "disk-space" && signal.episode ? { diskPressureEpisode: signal.episode } : {}) };
     /* Low disk leads the agenda, so the per-wake bound never cuts it. */
     if (item.diskPressureEpisode) items.unshift(item);
+    else if (item.id.startsWith("prototype-answer:")) savedAnswers.push(item);
     else items.push(item);
   }
+  items.splice(items[0]?.diskPressureEpisode ? 1 : 0, 0, ...savedAnswers);
   return items;
 }
 

@@ -3238,7 +3238,8 @@ function protoSummary(rounds: PrototypeRoundView[]): PrototypeReviewSummary {
   const waitingDismissal = summary.waitingReviewId ? protoHidden.get(summary.waitingReviewId) : undefined;
   /* As the Viewer's own read: a decision this installation delivers carries its delivery's phase on the card too. */
   const phase = rounds.at(-1)?.decision?.delivery.phase;
-  return { ...summary, ...(summary.decision && phase ? { decision: { ...summary.decision, phase } } : {}), ...(waitingDismissal ? { waitingDismissal } : {}) };
+  const undelivered = rounds.filter(round => round.decision?.delivery.phase === "attention").map(round => ({ reviewId: round.id, title: round.title, at: round.decision!.at }));
+  return { ...summary, ...(undelivered.length ? { undelivered } : {}), ...(summary.decision && phase ? { decision: { ...summary.decision, phase } } : {}), ...(waitingDismissal ? { waitingDismissal } : {}) };
 }
 function protoPublish(): void {
   for (const [taskId, rounds] of Object.entries(protoRounds)) {
@@ -3425,6 +3426,13 @@ if (DECISIONS) {
     Object.assign(seatRounds[0]!, form, { source: { conversationId: null }, nativeAssociationState: "pending" });
     seatRounds.splice(1); delete protoRounds["t-search"];
   }
+  if (DECISIONS === "undelivered") {
+    for (const [index, round] of [...seatRounds, ...Object.values(protoRounds).flat()].entries()) {
+      round.decision = { chosen: [], answers: (round.questions ?? []).map(question => ({ questionId: question.id, options: [0] })),
+        comment: L("Keep the recommended answer; it is already saved.", "Залиште рекомендовану відповідь; її вже збережено."), at: iso(MIN),
+        delivery: { state: (["pending", "uncertain", "failed"] as const)[index % 3]!, phase: "attention", retryable: true } };
+    }
+  }
   if (DECISIONS === "answered") {
     const held = seatRounds[0]!;
     held.decision = { chosen: [], answers: [{ questionId: "place", options: [0] }, { questionId: "deploy", options: [0] }], comment: "", at: iso(MIN), delivery: { state: "sent", retryable: false } };
@@ -3442,11 +3450,12 @@ function fixtureDecisions() {
   const fromTasks = Object.entries(protoRounds).flatMap(([taskId, rounds]) => {
     const waiting = rounds.at(-1);
     const held = tasks.find((entry) => entry.id === taskId);
-    return waiting && !waiting.decision && !protoHidden.has(waiting.id) && held ? [{ ...waiting, taskTitle: held.text.split("\n")[0] }] : [];
+    return held ? rounds.filter(round => (!round.decision && round === waiting && !protoHidden.has(round.id)) || round.decision?.delivery.phase === "attention")
+      .map(round => ({ ...round, taskTitle: held.text.split("\n")[0] })) : [];
   });
-  return [...fromTasks, ...seatRounds.filter((round) => !round.decision || (round.nativeAssociationState && round.decision.answers?.every(answer => answer.options[0] === 1)))].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  return [...fromTasks, ...seatRounds.filter((round) => !round.decision || round.decision.delivery.phase === "attention" || (round.nativeAssociationState && round.decision.answers?.every(answer => answer.options[0] === 1)))].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
 }
-const seatDecisionNotices = () => seatRounds.filter((round) => !round.decision).map((round) => ({ id: `prototype:${round.id}`, project: PROJECT, taskId: null, reviewId: round.id, title: round.title, asks: "questions" as const, createdAt: round.createdAt, target: { kind: "seat-decision" as const, project: PROJECT, reviewId: round.id } }));
+const seatDecisionNotices = () => seatRounds.filter((round) => !round.decision || round.decision.delivery.phase === "attention").map((round) => ({ ...(round.decision ? { undelivered: true as const } : {}), id: `prototype:${round.id}`, project: PROJECT, taskId: null, reviewId: round.id, title: round.title, asks: "questions" as const, createdAt: round.createdAt, target: { kind: "seat-decision" as const, project: PROJECT, reviewId: round.id } }));
 type FixtureAlbumItem = { id: string; src: string; name: string | null; ts: number; via: "read" | "named" | "pasted"; source: { key: string; conversationId: string | null; path: string; stage?: { pipelineId: string; stageId: string; attempt: number; round?: number } }; isNew: boolean };
 const albumOpened = new Map<string, number>([["t-export", Date.now()]]);
 const albumSource = (file: FileEntry, stage?: { pipelineId: string; stageId: string; attempt: number; round?: number }) => ({ key: file.conversationId ?? file.path, conversationId: file.conversationId ?? null, path: file.path, ...(stage ? { stage } : {}) });
@@ -3823,11 +3832,12 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   }
   if ((DECISIONS || PROTO || REPORT_PREVIEW) && url.pathname === "/api/projects/decisions") {
     if (method === "POST") {
-      const body = JSON.parse(String(init?.body)) as { reviewId: string; answers?: PrototypeAnswer[]; comment?: string; chosen?: number[]; reject?: true };
+      const body = JSON.parse(String(init?.body)) as { reviewId: string; answers?: PrototypeAnswer[]; comment?: string; chosen?: number[]; reject?: true; retry?: true };
       decisionPosts.push(body);
       const held = [...seatRounds, ...Object.values(protoRounds).flat()].find((round) => round.id === body.reviewId);
       if (!held) return json({ error: "review not found" }, 404);
-      held.decision = { ...(body.reject ? { rejected: true as const } : {}), chosen: body.chosen ?? [], answers: body.answers, comment: body.comment ?? "", at: new Date().toISOString(), delivery: { state: "sent", retryable: false } };
+      if (body.retry && held.decision) held.decision = { ...held.decision, delivery: { state: "sent", phase: "delivered", retryable: false } };
+      else held.decision = { ...(body.reject ? { rejected: true as const } : {}), chosen: body.chosen ?? [], answers: body.answers, comment: body.comment ?? "", at: new Date().toISOString(), delivery: { state: "sent", retryable: false } };
       protoPublish();
       if (held.nativeAssociationState) held.nativeAssociationState = body.answers?.every((answer: { options: number[] }) => answer.options[0] === 1) ? "approved" : "refused";
       return json({ project: PROJECT, decisions: fixtureDecisions() });

@@ -1,3 +1,4 @@
+import { hasUndeliveredDecision, TaskDecisionUndeliveredError } from "./decisionCompletion";
 import { admissionKeys, admissionSnapshot } from "./groupHide";
 import type { BoardTask } from "./types";
 
@@ -14,6 +15,7 @@ export function withTaskCompletion(task: BoardTask, previous?: BoardTask): Board
     return next;
   }
   const baseline = previous ?? task;
+  if (baseline.status !== "done" && hasUndeliveredDecision(task)) throw new TaskDecisionUndeliveredError();
   const entering = baseline.status !== "done";
   const admissions = task.doneAdmissions ?? baseline.doneAdmissions ?? admissionSnapshot(baseline.assignments);
   const known = new Set(admissions);

@@ -1,17 +1,19 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
 import { Database } from "bun:sqlite";
 
-import { AgentRegistry, setAgentRegistryForTests } from "@/lib/agent/registry";
+import { AgentRegistry, agentRegistry, setAgentRegistryForTests } from "@/lib/agent/registry";
+import * as describe from "@/lib/scanner/describe";
 import { projectInfoFromCwd } from "@/lib/scanner/describe";
 import { resetStateReadonlyConnectionCountForTests, stateReadonlyConnectionCountForTests } from "@/lib/state/sqliteStateStore";
 import type { FileEntry } from "@/lib/types";
 
+import { persistProjectAliases } from "@/lib/projects/aliases";
 import { resolveProjectAttribution } from "./projectResolution";
-import { overlayResourceSessionTitles, overlaySessionTitles, registryProjectionForSnapshot } from "./titleProjection";
+import { overlayControllerSessionTitles, overlayResourceSessionTitles, overlaySessionTitles, registryProjectionForSnapshot } from "./titleProjection";
 import { writeSessionTitle } from "./titleStore";
 
 const UUID = "11111111-2222-4333-0444-555555555555";
@@ -240,3 +242,70 @@ function setRegistryConversation() {
   setAgentRegistryForTests(registry);
   return conversation;
 }
+
+
+test("the controller reuses one projection while loading new title overrides and evicts it on new inventory", () => {
+  const conversation = setRegistryConversation();
+  const registry = agentRegistry();
+  const reads = spyOn(registry, "readOnlySnapshot");
+  try {
+    overlayControllerSessionTitles([entry()], false);
+    writeSessionTitle([`conversation:${conversation.id}`], `conversation:${conversation.id}`, "Fresh title", undefined, "controller-title");
+    const fresh = entry();
+    overlayControllerSessionTitles([fresh], true);
+    expect(reads).toHaveBeenCalledTimes(1);
+    expect(fresh).toMatchObject({ title: "Fresh title", conversationId: conversation.id, renamable: true });
+    overlayControllerSessionTitles([entry()], false);
+    expect(reads).toHaveBeenCalledTimes(2);
+  } finally { reads.mockRestore(); }
+});
+
+test("a failed controller projection is retried and cannot reuse another registry owner's identities", () => {
+  const conversation = setRegistryConversation();
+  overlayControllerSessionTitles([entry()], false);
+  const replacement = new AgentRegistry(path.join(registryRoot, "replacement.json"));
+  setAgentRegistryForTests(replacement);
+  const reads = spyOn(replacement, "readOnlySnapshot").mockImplementationOnce(() => { throw new Error("registry unavailable"); });
+  try {
+    const unavailable = entry();
+    overlayControllerSessionTitles([unavailable], true);
+    expect(unavailable.conversationId).toBeUndefined();
+    const recovered = entry();
+    overlayControllerSessionTitles([recovered], true);
+    expect(recovered.conversationId).not.toBe(conversation.id);
+    expect(reads).toHaveBeenCalledTimes(2);
+  } finally { reads.mockRestore(); replacement.close(); }
+});
+
+
+test("a warm title overlay resolves each distinct cwd once per overlay", () => {
+  const registry = agentRegistry();
+  registry.reconcileConversations([{ engine: "claude", path: SESSION_PATH, accountId: null,
+    launchProfile: { cwd: "/repo/title-fixture", project: "fixture" } as never,
+    turn: { state: "idle", source: "empty", terminalAt: null }, observedAt: "2026-10-16T00:00:00Z" }]);
+  const snapshot = registry.readOnlySnapshot();
+  overlaySessionTitles([entry()], snapshot);
+  const cwd = spyOn(describe, "projectInfoFromCwd");
+  try {
+    const projected = entry();
+    overlaySessionTitles([projected, entry()], snapshot);
+    expect(projected.project).toBeTruthy();
+    expect(cwd).toHaveBeenCalledTimes(1);
+  } finally { cwd.mockRestore(); }
+});
+
+
+test("a warm title overlay sees project aliases changed without a registry write", () => {
+  const registry = agentRegistry();
+  registry.reconcileConversations([{ engine: "claude", path: SESSION_PATH, accountId: null,
+    launchProfile: { cwd: null, project: "fixture-before" } as never,
+    turn: { state: "idle", source: "empty", terminalAt: null }, observedAt: "2026-10-16T00:00:00Z" }]);
+  const snapshot = registry.readOnlySnapshot();
+  const before = entry();
+  overlaySessionTitles([before], snapshot);
+  expect(before.project).toBe("fixture-before");
+  expect(persistProjectAliases([{ source: "fixture-before", target: "fixture-after", displayName: "Fixture" }])).toBe(true);
+  const after = entry();
+  overlaySessionTitles([after], snapshot);
+  expect(after.project).toBe("fixture-after");
+});

@@ -554,3 +554,31 @@ test("a Codex probe records the provider's reached-limit marker beside the perce
   expect(durableQuotaObservation(await codexObservationFromProbe(account, probe(false), now), "boot-reached-test")).toMatchObject({ limitReached: false });
   expect(durableQuotaObservation(await codexObservationFromProbe(account, probe(), now), "boot-reached-test")).not.toHaveProperty("limitReached");
 });
+
+
+test("identical cached quota observations do not rewrite registry history", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-idle-quota-"));
+  const registry = new AgentRegistry(path.join(root, "registry.json"), undefined, undefined, { sqliteMode: "sqlite" });
+  let now = Date.parse("2026-10-16T00:00:00Z");
+  const account: CodexAccount = { id: "account-a", label: "Fixture", kind: "managed", home: path.join(root, "account"),
+    sessionsDir: path.join(root, "account/sessions"), authPresent: true, loginPane: null, createdAt: 1 };
+  const controller = new QuotaController(registry, { list: () => [account], active: () => account.id, credentialIdentity: () => "fixture",
+    probe: async engine => ({ engine, accountId: account.id, authenticated: true, authCheckedAt: now,
+      limits: { session: { usedPercent: 10, resetsAt: null }, weekly: null, plan: "pro", capturedAt: now / 1000 },
+      provenance: { source: "cache", reason: null, staleSince: null }, observedAt: now }),
+  }, "fixture-boot", () => now);
+  try {
+    await controller.tick("codex");
+    const revision = registry.storageDiagnostics().revision;
+    await controller.tick("codex");
+    expect(registry.storageDiagnostics().revision).toBe(revision);
+    const observations = registry.quotaObservations("codex");
+    registry.recordQuotaEvaluation({ engine: "codex", observations, signature: "fixture-sustain", bootId: "fixture-boot",
+      now: new Date(now).toISOString(), minimumGapMs: 60000 });
+    await controller.tick("codex");
+    expect(registry.autoBalancePolicy("codex").sustain).toBeNull();
+    now += 60000;
+    await controller.tick("codex");
+    expect(registry.quotaObservations("codex")[0]!.authCheckedAt).toBe(new Date(now).toISOString());
+  } finally { registry.close(); fs.rmSync(root, { recursive: true, force: true }); }
+});

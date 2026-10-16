@@ -65,9 +65,9 @@ export function useOperatorDecisions(project: string, active: boolean, initial?:
     return () => { controller.abort(); clearInterval(timer); window.removeEventListener(TASKS_CHANGED_EVENT, changed); };
   }, [active, initial, refresh]);
 
-  const answer = useCallback(async (reviewId: string, body: DecisionAnswer): Promise<boolean> => {
+  const answer = useCallback(async (reviewId: string, body: DecisionAnswer | { retry: true }): Promise<boolean> => {
     setError(null);
-    drafts.set(reviewId, body);
+    if (!("retry" in body)) drafts.set(reviewId, body);
     setAnswering((held) => new Set([...held, reviewId]));
     ++sequence.current;
     try {
