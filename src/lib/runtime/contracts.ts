@@ -617,6 +617,9 @@ export interface RuntimeHostDiagnostics {
     models: Array<{ id: string; inputModalities: string[] }>;
     modelsTruncated?: boolean;
     anomalies: number;
+    /** Set when the executable has no pin of its own and runs under
+        `schemaVersion` because its generated schema extends that pin additively. */
+    unpinnedCli?: { cliVersion: string; cliSchemaDigest: string };
   };
 }
 
