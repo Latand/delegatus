@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { AgentRegistry, agentRegistry, setAgentRegistryForTests } from "@/lib/agent/registry";
+import { reconcileMigrationInventory } from "./coordinator";
 import type { CodexAccount } from "@/lib/accounts/codex";
 import { structuredContent, type StructuredImageRef } from "@/lib/runtime/structuredContent";
 import { emptyLaunchProfile, type SuccessorProviderPort } from "./contracts";
@@ -502,6 +503,104 @@ test("incomplete transcript observations remain on the bounded retry cursor", as
     await controller.poll();
     await controller.poll();
     expect(batches).toEqual([[pathname], [pathname], [pathname]]);
+  } finally { registry.close(); }
+});
+
+test("a persistent incomplete read does not starve later registry contexts", async () => {
+  const registry = new AgentRegistry(path.join(stateDir, "fair-context-cursor.json"), undefined, undefined, { sqliteMode: "sqlite" });
+  const paths = Array.from({ length: 64 }, (_, index) => `/fair/${String(index).padStart(3, "0")}.jsonl`);
+  const files = paths.map(pathname => ({ path: pathname, engine: "codex", size: 1, mtime: 1, parent: null }) as never);
+  const batches: string[][] = [];
+  const controller = new AccountMigrationController(registry, { tick: async () => {} }, null, {
+    scan: async () => ({ files, projectCatalog: [], complete: true }),
+    reconcileInventory: async (_current, changed, reportRead) => {
+      const visited = changed.map(file => file.path);
+      batches.push(visited);
+      for (const pathname of visited) reportRead?.(pathname, pathname !== paths[0]);
+      return registry.readOnlySnapshot();
+    },
+    reconcileFlowOwnership: async () => {}, reconcileWorkflowOwnership: async () => {}, reconcileHandoffOwnership: async () => {},
+    reconcileFiles: async () => {}, reconcileRuntime: async () => {}, reconcileTaskStore: async () => {}, syncRouting: async () => {},
+    reconcileMigrationCycle: async () => {},
+  });
+  try {
+    await controller.poll();
+    await controller.poll();
+    registry.reconcileConversations([{ engine: "codex", path: paths[63]!, accountId: null, launchProfile: emptyLaunchProfile(),
+      turn: { state: "busy", source: "assistant", terminalAt: null }, observedAt: "2026-10-16T00:01:00Z" }], { snapshot: false });
+    for (let pass = 0; pass < 8; pass++) await controller.poll();
+    expect(batches.slice(1).every(batch => batch.length <= 32)).toBe(true);
+    expect(batches.slice(1).some(batch => batch.includes(paths[63]!))).toBe(true);
+  } finally { registry.close(); }
+});
+
+test("more than 32 persistent incomplete reads all receive fair retries", async () => {
+  const registry = new AgentRegistry(path.join(stateDir, "fair-pending-cursor.json"));
+  const paths = Array.from({ length: 70 }, (_, index) => `/pending/${String(index).padStart(3, "0")}.jsonl`);
+  const files = paths.map(pathname => ({ path: pathname, engine: "codex", size: 1, mtime: 1, parent: null }) as never);
+  const retryCounts = new Map(paths.map(pathname => [pathname, 0]));
+  const controller = new AccountMigrationController(registry, { tick: async () => {} }, null, {
+    scan: async () => ({ files, projectCatalog: [], complete: true }),
+    reconcileInventory: async (_current, changed, reportRead) => {
+      for (const file of changed) {
+        retryCounts.set(file.path, retryCounts.get(file.path)! + 1);
+        reportRead?.(file.path, false);
+      }
+      return registry.readOnlySnapshot();
+    },
+    reconcileFlowOwnership: async () => {}, reconcileWorkflowOwnership: async () => {}, reconcileHandoffOwnership: async () => {},
+    reconcileFiles: async () => {}, reconcileRuntime: async () => {}, reconcileTaskStore: async () => {}, syncRouting: async () => {},
+    reconcileMigrationCycle: async () => {},
+  });
+  try {
+    await controller.poll();
+    await controller.poll(); await controller.poll(); await controller.poll();
+    expect([...retryCounts.values()].every(count => count >= 2)).toBe(true);
+  } finally { registry.close(); }
+});
+
+test("an acknowledged provider fork is reconsidered when its source thread appears", async () => {
+  const registry = new AgentRegistry(path.join(stateDir, "late-fork-source-registry.json"), undefined, undefined, { sqliteMode: "sqlite" });
+  const root = path.join(stateDir, "late-fork-source");
+  fs.mkdirSync(root, { recursive: true });
+  const sourceThreadId = "019f9557-0000-0700-0000-00000000aaaa";
+  const forkThreadId = "019f9557-0000-0700-0000-00000000bbbb";
+  const sourcePath = path.join(root, `rollout-${sourceThreadId}.jsonl`);
+  const forkPath = path.join(root, `rollout-${forkThreadId}.jsonl`);
+  const sessionMeta = (id: string, forkedFromId?: string) => JSON.stringify({ type: "session_meta", payload: {
+    id, cwd: "/repo", ...(forkedFromId ? { forked_from_id: forkedFromId } : {}),
+  } }) + "\n";
+  fs.writeFileSync(forkPath, sessionMeta(forkThreadId, sourceThreadId));
+  const described = (pathname: string, nativeForkSourceThreadId: string | null) => {
+    const stat = fs.statSync(pathname);
+    return { path: pathname, root: "codex-sessions", name: path.basename(pathname), project: "repo", title: path.basename(pathname),
+      engine: "codex", kind: "session", fmt: "codex", parent: null, mtime: stat.mtimeMs / 1000, size: stat.size,
+      activity: "idle", proc: null, pid: null, model: null, pendingQuestion: null, waitingInput: null,
+      nativeForkSourceThreadId } as never;
+  };
+  let files = [described(forkPath, sourceThreadId)];
+  const controller = new AccountMigrationController(registry, { tick: async () => {} }, null, {
+    scan: async () => ({ files, projectCatalog: [], complete: true }),
+    reconcileInventory: (current, changed, onTranscriptRead) => reconcileMigrationInventory(current, changed, {
+      readOnlySnapshot: true, incrementalInventory: true, onTranscriptRead,
+    }),
+    reconcileFlowOwnership: async () => {}, reconcileWorkflowOwnership: async () => {}, reconcileHandoffOwnership: async () => {},
+    reconcileFiles: async () => {}, reconcileRuntime: async () => {}, reconcileTaskStore: async () => {}, syncRouting: async () => {},
+    reconcileMigrationCycle: async () => {},
+  });
+  try {
+    await controller.poll(); await controller.poll();
+    expect(Object.values(registry.readOnlySnapshot().conversations)).toHaveLength(1);
+    const forkContents = fs.readFileSync(forkPath, "utf8");
+    fs.writeFileSync(sourcePath, sessionMeta(sourceThreadId));
+    files = [described(forkPath, sourceThreadId), described(sourcePath, null)];
+    await controller.poll();
+    await controller.poll();
+    const conversations = Object.values(registry.readOnlySnapshot().conversations);
+    expect(conversations).toHaveLength(1);
+    expect(conversations[0]!.providerForkPaths).toContain(forkPath);
+    expect(registry.conversationForPath(forkPath)?.id).toBe(registry.conversationForPath(sourcePath)?.id);
+    expect(fs.readFileSync(forkPath, "utf8")).toBe(forkContents);
   } finally { registry.close(); }
 });
 

@@ -6,7 +6,7 @@ rebasing before final checks; its test-hook isolation change leaves the measured
 worker implementations identical.
 The comparison uses an immutable synthetic registry with 7,098 conversations
 and 560 transcript files. It does not copy account credentials or act on live
-processes. Raw samples and the source fingerprint are in
+processes. Raw samples and separate baseline/candidate source fingerprints are in
 `evidence/viewer-idle-workers.json`.
 
 ## Confirmed causes
@@ -70,7 +70,13 @@ or failed phase acknowledges nothing. A fresh process replays its first
 inventory. Account collection or active engine-routing changes invalidate file inputs.
 Cursor order follows sorted paths, independently of activity sorting. A
 registry-only host, alias, membership, receipt or delivered-message change is revisited within
-`ceil(catalog size / 32)` polls. Normal transcript changes take the next pass.
+`ceil(catalog size / 32)` polls. Pending transcript reads share that same
+round-robin window, and the cursor advances by the number of catalog paths
+visited. More than 32 pending reads therefore rotate fairly while ordinary
+context checks continue. Normal transcript changes take the next pass.
+Provider forks include the source thread's catalog path and current owner in
+their context signature. A source admitted during reconciliation leaves its
+fork pending for the next cursor visit, so the fork observation is reconsidered.
 Known paths use conversation/receipt-scoped snapshots. A newly discovered path
 can still require one complete snapshot to recover an unindexed pending
 launch profile; that existing cold recovery path is kept for correctness.
@@ -154,41 +160,44 @@ through its real child entry point and production response code.
 ## Verification
 
 Regression tests run by explicit file path, in isolated state, through the
-owned gate. Main was sampled with the same regression tests and isolation.
-Real process restart cases cover both inventory acknowledgements and the
-sidecar owner policy. Existing quota refusal/race and reaper cases remain in
-the touched file runs. The tests also retain delta delivery across explicit
-worker retirement and recovery after a child dies mid-build.
+owned gate and documented baseline comparator. The controller tests cover
+64-path context progress with one persistent incomplete read, 70 persistent
+incomplete reads, and late provider-source admission after a fork was already
+acknowledged. The fork test exercises the real inventory coordinator and
+checks that its transcript bytes remain unchanged while ownership converges.
+Quota refusal/race and reaper checks remain in their explicit-path runs. The
+files-worker tests retain delta delivery across explicit retirement and recovery
+after a child dies mid-build.
 
 ## Before and after
 
-Three paired runs; six warm migration passes per run. MB means decimal bytes.
-Values below are medians of run averages; the evidence retains every sample.
+Three paired runs; six steady-state idle migration passes per run. MB means
+decimal bytes. Values below are medians of run averages; cold, settling, and
+one-file delta samples remain beside the steady-state samples in the evidence.
+The raw records include baseline and candidate source fingerprints. The
+candidate fingerprint covers the final controller implementation.
 
-| Identical synthetic workload | Main | Change |
+| Identical synthetic workload | Pinned baseline | Candidate |
 | --- | ---: | ---: |
-| Migration CPU per minute | 1,595.98 ms | 130.53 ms |
-| Migration logical reads per warm cycle | 48.446 MB | 2.673 MB |
-| Inventory paths submitted, unchanged scan | 560 | 0 |
-| Inventory paths submitted, one changed file | 560 | 1 |
-| Files worker CPU per minute at the measured interval | 1,534.69 ms | 803.71 ms |
-| Files worker reads for the second build | 132.094 MB | 46.704 MB |
-| Files worker respawns/hour, extrapolated | 52.92 | 0 |
+| Migration CPU per modeled minute | 1,522.02 ms | 247.38 ms |
+| Migration logical reads per idle cycle | 48.444 MB | 2.688 MB |
+| Inventory paths submitted, unchanged scan | 560 | 32 |
+| Inventory paths submitted, one changed file | 560 | 33 |
+| Files worker CPU per minute at the measured interval | 1,246.86 ms | 744.31 ms |
+| Files worker reads for the second build | 132.093 MB | 46.704 MB |
+| Files worker respawns/hour, extrapolated | 53.19 | 0 |
 | Files worker observed replacements, three intervals | 3 | 0 |
 
-Migration CPU run averages span 1,344–1,986 ms on main and 95–141 ms on the
-change. This is a scoped synthetic measurement. Its remaining controller
+Migration CPU run averages span 1,417–1,909 ms on the baseline and 196–275 ms
+on the candidate. This is a scoped synthetic measurement. Its remaining controller
 phases still account for reads; it does not claim zero idle I/O. The seed is
-7,749,793 bytes; its SHA-256 and resource bounds are in the evidence.
+7,754,833 bytes; its SHA-256, raw samples, source hashes, and resource bounds
+are in the evidence.
 
-The final runs report 26 controller tests, 97 quota/reaper/files-worker tests,
-and 37 title/membership/scanner-retirement tests passing. All 17 scoped Linux
-files and five additional sibling files pass. The files-route file has 146
-passes and six failures; the same six assertions fail on current main with the
-same export and isolation. The evidence names each assertion. The export has
-no Git metadata, and the bridge fixtures encounter a write refusal. These are
-retained as baseline failures under the project's local-gate policy.
-TypeScript passes, and ESLint reports zero errors with two existing unused-value
-warnings in the route tests. Privacy inspection covers every changed file and
-the commit message. No production deployment or production performance claim
-is part of this verification.
+The baseline comparator reports zero new failures across 17 scoped Linux test
+files, with the same three pre-existing files-route assertions seen on the
+pinned baseline. The focused controller suite passes 22 tests with the three
+new deterministic regressions. TypeScript and changed-file ESLint pass.
+Publication privacy is checked on the final changed files and commit before
+publication. No production deployment or production performance claim is part
+of this verification.

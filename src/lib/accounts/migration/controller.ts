@@ -6,6 +6,7 @@ import { activeCodexAccountId, codexAccountsMutationLocked, codexLoginPaneStatus
 import { managedCodexRuntime } from "@/lib/accounts/codexRuntime";
 import { withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
 import { agentRegistry, RegistryWriterBusyError, type AgentRegistry } from "@/lib/agent/registry";
+import { sessionKeyFromTranscript } from "@/lib/agent/sessionKey";
 import { readTranscriptHosts } from "@/lib/agent/transcriptHost";
 import { yieldToRuntime } from "@/lib/cooperative";
 import type { ChildProcess } from "node:child_process";
@@ -271,11 +272,19 @@ export class AccountMigrationController {
       this.registry.engineRouting("claude").activeAccountId, this.registry.engineRouting("codex").activeAccountId]);
     const nextInputs = new Map(files.map(file => [file.path, inventoryFileSignature(file)]));
     const filesByPath = new Map(files.map(file => [file.path, file]));
+    const pathByThreadId = new Map<string, string>();
+    for (const file of files) {
+      const threadId = file.engine === "codex" ? sessionKeyFromTranscript("codex", file.path)?.sessionId : null;
+      if (threadId && !pathByThreadId.has(threadId)) pathByThreadId.set(threadId, file.path);
+    }
     for (const pathname of this.inventoryPending) if (!nextInputs.has(pathname)) this.inventoryPending.delete(pathname);
     const contextFor = (pathname: string): string => {
       const scoped = this.registry.activityConversationSnapshot(pathname);
       const parentPath = filesByPath.get(pathname)?.parent ?? null;
       const parent = parentPath ? this.registry.conversationForPath(parentPath) : null;
+      const sourceThreadId = filesByPath.get(pathname)?.nativeForkSourceThreadId ?? null;
+      const sourcePath = sourceThreadId ? pathByThreadId.get(sourceThreadId) ?? null : null;
+      const source = sourcePath ? this.registry.conversationForPath(sourcePath) : null;
       return JSON.stringify([
         Object.values(scoped.conversations).map(row => [row.id, row.generations.at(-1)?.id,
           row.generations.find(generation => generation.path === pathname)?.launchProfile, row.turn, row.continuityPaths, row.projectOwnership]),
@@ -284,22 +293,23 @@ export class AccountMigrationController {
         Object.values(scoped.receipts).map(row => [row.launchId, row.state, row.parentConversationId, row.launcher?.conversationId]),
         Object.values(scoped.heldDeliveries).filter(item => item.state === "delivered").map(item => item.deliveredAt),
         parentPath, parent && [parent.id, parent.turn, parent.generations.at(-1)?.id, parent.continuityPaths],
+        sourceThreadId, sourcePath, source && [source.id, source.turn, source.generations.at(-1)?.id, source.continuityPaths],
       ]);
     };
     // A host, alias or delivery may change without a transcript write. Revisit
     // at most 32 paths per poll, rotating across the current catalog.
     const cursorPaths = [...nextInputs.keys()].sort();
-    const retryPaths = [...this.inventoryPending].filter(pathname => nextInputs.has(pathname)).sort().slice(0, 32);
-    const checkedPaths = new Set(retryPaths);
-    for (let visited = 0; visited < Math.min(32 - retryPaths.length, cursorPaths.length); visited++) {
+    const checkedPaths = new Set<string>();
+    for (let visited = 0; visited < Math.min(32, cursorPaths.length); visited++) {
       checkedPaths.add(cursorPaths[(this.inventoryCursor + visited) % cursorPaths.length]!);
     }
-    const contextChanged = new Set([...checkedPaths].filter(pathname => contextFor(pathname) !== this.inventoryContexts.get(pathname)));
-    const nextCursor = cursorPaths.length ? (this.inventoryCursor + 32) % cursorPaths.length : 0;
+    const checkedContexts = new Map([...checkedPaths].map(pathname => [pathname, contextFor(pathname)]));
+    const contextChanged = new Set([...checkedPaths].filter(pathname => checkedContexts.get(pathname) !== this.inventoryContexts.get(pathname)));
+    const nextCursor = cursorPaths.length ? (this.inventoryCursor + checkedPaths.size) % cursorPaths.length : 0;
     const changed = revision !== this.inventoryRevision ? files
       : files.filter(file => nextInputs.get(file.path) !== this.inventoryInputs.get(file.path)
-        || contextChanged.has(file.path) || retryPaths.includes(file.path));
-    const observedBefore = new Map(changed.map(file => [file.path, contextFor(file.path)]));
+        || contextChanged.has(file.path) || (checkedPaths.has(file.path) && this.inventoryPending.has(file.path)));
+    const observedBefore = new Map(changed.map(file => [file.path, checkedContexts.get(file.path) ?? contextFor(file.path)]));
     const transcriptReads = new Map<string, boolean>();
     if (this.inventoryRevision === null || changed.length) {
       await this.ports.reconcileInventory(this.registry, changed, (pathname, complete) => transcriptReads.set(pathname, complete));
@@ -313,6 +323,12 @@ export class AccountMigrationController {
         this.inventoryPending.delete(pathname);
         observedContexts.set(pathname, context);
       }
+    }
+    // Inventory can admit a provider source while this pass is awaiting its
+    // write. Keep dependants pending so their carried observations are replayed
+    // against the newly admitted owner on the next bounded cursor visit.
+    for (const pathname of checkedPaths) {
+      if (contextFor(pathname) !== checkedContexts.get(pathname)) this.inventoryPending.add(pathname);
     }
     await yieldToRuntime();
     // Ownership stores can change independently of the scanner. Their lookups

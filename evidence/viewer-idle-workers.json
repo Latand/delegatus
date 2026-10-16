@@ -1,18 +1,30 @@
 {
-  "schemaVersion": 1,
-  "recordedAt": "2026-10-16T09:42:32.221695+00:00",
+  "schemaVersion": 2,
+  "recordedAt": "2026-10-16T10:48:41.701Z",
   "initialBase": "917189ae562def76980341620987479ab2813cfc",
-  "mergedMain": "e7507d58863450a1f45b1a93d2b27a059ca13c6e",
-  "sourceFingerprintSha256": "03d82ee0d54fb1eddde5dd364984407a8becf4585070b18611917a64393ed317",
-  "sourceFilesSha256": {
+  "reviewedImplementation": "d610032e44b08a4cabbd9699a9dd80d60cb74d60",
+  "sourceFingerprintSha256": "563cbfd014ec51c1e483cb0cce235c6e137617217d596f23b6f31047a8b85e0b",
+  "baselineSourceFilesSha256": {
     "scripts/benchmark-viewer-workers.ts": "397d9e31758a55de6c4c5e91e47d31575a579b6e9c70ec26d54a4934941ed81e",
-    "src/lib/accounts/migration/controller.ts": "1114128895427f9d2e69606ae2dfc7dd381038a4b77eb2fc7b4328b0f5d1542e",
-    "src/lib/accounts/migration/coordinator.ts": "a496d431fa50fb2db7f6a9330aac3e4bcc415a8e629ac12739afdfedca6129f4",
+    "src/lib/accounts/migration/controller.ts": "d78ffff52a9c75b3c95dd0ef54f2c547737cba52e080e36887cbe52b29842fc9",
+    "src/lib/accounts/migration/coordinator.ts": "16a207af8254b18e1ca11232555f59038bf1ba1d21f0687a2867a81852deb509",
+    "src/lib/accounts/migration/quotaController.ts": "08e3e58dc33d9706631afa86a8b6f1d21a8154fd46b8f64e1d668634fa383267",
+    "src/lib/filesResponse.worker.ts": "5571288be9287e59e315fd5f1efffa02dd9b3ee4b7d5a3ba3c1f6e75d4f3baea",
+    "src/lib/reaperRuntime.ts": "2bca8e0d7bea909c8647a9eb09740597b84e0d6d209aef1a901478307ac0a7a3",
+    "src/lib/scanner/filesResponseWorker.ts": "e54531b34a910a813a75a47eda641bd1211f09427f31092d5d5c708fa3f68684",
+    "src/lib/scanner/index.ts": "d72421687f64cec9553dcf22aab954c70dda598897b61bc34c18cd80bf0479a0",
+    "src/lib/session/titleProjection.ts": "009afe63498b9e71155eee6bf45055305c59d4ddb7753cea46e46d9b4f862ba3",
+    "src/lib/viewerLoopMonitor.ts": "72f48cdb1a8225a2c6e78ab125761d0e171c23a130eea2f166a90cc0e7bd95d6"
+  },
+  "candidateSourceFilesSha256": {
+    "scripts/benchmark-viewer-workers.ts": "397d9e31758a55de6c4c5e91e47d31575a579b6e9c70ec26d54a4934941ed81e",
+    "src/lib/accounts/migration/controller.ts": "7a93f1cca54f58843664bbe27e1bf1f60210f775510e2d17008f1f01aa2d430f",
+    "src/lib/accounts/migration/coordinator.ts": "8fa1da8092aa29bbafeed43a6489066d510a6060cc63d96196fae43b1ad6f50e",
     "src/lib/accounts/migration/quotaController.ts": "5ea882c5ba757be96493652a8298c2a6429c4bd619b93d3aab04bf5c4d461709",
     "src/lib/filesResponse.worker.ts": "3389852ab93feec3e4f22bc01904480156792e2a6b5fa9b977ae786c2cfef782",
     "src/lib/reaperRuntime.ts": "8bf8b346dcce7846c78004bd24c61a7c47f90aea40d41749fb1aeb408e06dc61",
     "src/lib/scanner/filesResponseWorker.ts": "1370c2268a197e5c2a6176b520d27fc0d03963b540dec5f81e12ec183149e6c1",
-    "src/lib/scanner/index.ts": "a2e54f4a1059dfbecf9f640809f57786563027f7b532ea08e10c7a046c537686",
+    "src/lib/scanner/index.ts": "c83e3ba63b6d80c8dd8b8018c7cbcd4a4435ddae6ef2ad5429c735bd2bf49f79",
     "src/lib/session/titleProjection.ts": "4a01b1223cdc246d32e7149838b4718cb003203ca0085c450d20620882366293",
     "src/lib/viewerLoopMonitor.ts": "4302f89059dadfc38e7f4cef130347f745bade0cc6be7b43f66b545f4275e399"
   },
@@ -20,8 +32,8 @@
     "mode": "prepare",
     "rows": 7098,
     "scanned": 560,
-    "seedBytes": 7749793,
-    "seedSha256": "cdf6e3f1c8136b78a4d2774cdf8526c3372f77b389764c007c7f25a68834caf2"
+    "seedBytes": 7754833,
+    "seedSha256": "b29f99dd481a3e8fffc6fd2fd2093326c8cf456eae5fb6d322aeb1efc5b3531d"
   },
   "resources": {
     "bun": "1.4.0",
@@ -32,14 +44,13 @@
   "method": {
     "gate": "installed scripts/gate-slot.sh from release fe18cb41d734; one owned admitted shell, sequential commands",
     "state": "fresh HOME, XDG_CONFIG_HOME, TMPDIR, LLV_STATE_DIR and provider homes for each sample",
-    "driver": "bun scripts/benchmark-viewer-workers.ts MODE FIXTURE; identical driver in both exports",
+    "driver": "bun scripts/benchmark-viewer-workers.ts MODE FIXTURE; identical driver in both clean exports",
     "migration": "real inventory, file controllers and migration policy; quota probes, runtime/process reaping, task reconciliation and routing stubbed; task admission remains real",
     "readCounter": "Linux /proc rchar, logical bytes including page-cache hits and measurement overhead",
-    "migrationCpuPerMinute": "sum CPU * 60000 / sum(60000 + wall time), modeling production quiet interval; no sleep between six cycles",
-    "filesCpuPerMinute": "second child lifetime CPU if replaced, otherwise child CPU delta, normalized over the observed two-build interval",
+    "migrationCpuPerMinute": "six steady-state idle passes normalized over the production 60-second quiet interval; cold, settling and delta passes retained in each raw sample",
+    "filesCpuPerMinute": "second child lifetime CPU if replaced, otherwise retained child CPU delta; normalized over the observed two-build interval",
     "filesRespawns": "one real 65000ms idle interval per sample; replacements extrapolated to an hour, not an hour-long soak",
-    "source": "source worker entry points under pinned Bun; no production build or live-state performance claim",
-    "testCommandTemplate": "bun test FILE, by explicit path inside the installed gate owned shell"
+    "source": "pinned Bun worker entry points; no production build or live-state performance claim"
   },
   "runs": {
     "migration": {
@@ -49,728 +60,746 @@
           "rows": 7098,
           "scanned": 560,
           "bootstrap": {
-            "cpuMs": 1.416,
-            "readBytes": 169,
-            "wallMs": 1.1128920000001017
+            "cpuMs": 1.66,
+            "readBytes": 165,
+            "wallMs": 1.3754590000000917
           },
           "cold": {
-            "cpuMs": 3134.058,
-            "readBytes": 82363535,
-            "wallMs": 2651.4844619999994,
+            "cpuMs": 2431.632,
+            "readBytes": 82393303,
+            "wallMs": 2017.072837,
             "inventoryPaths": 560,
             "linksRefreshed": true,
             "phaseReadBytes": {
-              "inventory": 32549697,
-              "files": 49207321,
-              "migrations": 8476
-            }
-          },
-          "settling": {
-            "cpuMs": 1763.382,
-            "readBytes": 64242870,
-            "wallMs": 1671.4042140000001,
-            "inventoryPaths": 560,
-            "linksRefreshed": true,
-            "phaseReadBytes": {
-              "inventory": 15836222,
-              "files": 48373140,
-              "migrations": 8401
-            }
-          },
-          "idle": [
-            {
-              "cpuMs": 1340.042,
-              "readBytes": 48328188,
-              "wallMs": 1255.7222459999994,
-              "inventoryPaths": 560,
-              "linksRefreshed": true,
-              "phaseReadBytes": {
-                "inventory": 60677,
-                "files": 48242232,
-                "migrations": 171
-              }
-            },
-            {
-              "cpuMs": 1344.086,
-              "readBytes": 48336684,
-              "wallMs": 1288.111006,
-              "inventoryPaths": 560,
-              "linksRefreshed": true,
-              "phaseReadBytes": {
-                "inventory": 27947,
-                "files": 48283458,
-                "migrations": 171
-              }
-            },
-            {
-              "cpuMs": 1491.246,
-              "readBytes": 48390160,
-              "wallMs": 1432.9100419999995,
-              "inventoryPaths": 560,
-              "linksRefreshed": true,
-              "phaseReadBytes": {
-                "inventory": 27909,
-                "files": 48336972,
-                "migrations": 171
-              }
-            },
-            {
-              "cpuMs": 1769.179,
-              "readBytes": 48439583,
-              "wallMs": 1659.7552110000015,
-              "inventoryPaths": 560,
-              "linksRefreshed": true,
-              "phaseReadBytes": {
-                "inventory": 27795,
-                "files": 48386430,
-                "migrations": 210
-              }
-            },
-            {
-              "cpuMs": 1871.838,
-              "readBytes": 48521586,
-              "wallMs": 1755.281961999999,
-              "inventoryPaths": 560,
-              "linksRefreshed": true,
-              "phaseReadBytes": {
-                "inventory": 27796,
-                "files": 48468506,
-                "migrations": 172
-              }
-            },
-            {
-              "cpuMs": 2007.88,
-              "readBytes": 48649082,
-              "wallMs": 1946.517414,
-              "inventoryPaths": 560,
-              "linksRefreshed": true,
-              "phaseReadBytes": {
-                "inventory": 28138,
-                "files": 48595660,
-                "migrations": 172
-              }
-            }
-          ],
-          "delta": {
-            "cpuMs": 1914.347,
-            "readBytes": 48616708,
-            "wallMs": 1884.5367800000004,
-            "inventoryPaths": 560,
-            "linksRefreshed": true,
-            "phaseReadBytes": {
-              "inventory": 28252,
-              "files": 48563172,
-              "migrations": 172
-            }
-          },
-          "cadenceSeconds": 60,
-          "cpuMsPerScheduledMinute": 1637.3785,
-          "cpuMsPerMinute": 1595.9792509519862,
-          "bytesReadPerIdleCycle": 48444213.833333336
-        },
-        {
-          "mode": "migration",
-          "rows": 7098,
-          "scanned": 560,
-          "bootstrap": {
-            "cpuMs": 2.039,
-            "readBytes": 169,
-            "wallMs": 1.0615109999999959
-          },
-          "cold": {
-            "cpuMs": 2841.175,
-            "readBytes": 82363238,
-            "wallMs": 2376.104269,
-            "inventoryPaths": 560,
-            "linksRefreshed": true,
-            "phaseReadBytes": {
-              "inventory": 32549659,
-              "files": 49207138,
-              "migrations": 8438
-            }
-          },
-          "settling": {
-            "cpuMs": 1919.04,
-            "readBytes": 64242713,
-            "wallMs": 1790.7769289999997,
-            "inventoryPaths": 560,
-            "linksRefreshed": true,
-            "phaseReadBytes": {
-              "inventory": 15835994,
-              "files": 48373173,
-              "migrations": 8439
-            }
-          },
-          "idle": [
-            {
-              "cpuMs": 1680.074,
-              "readBytes": 48328183,
-              "wallMs": 1614.3974959999996,
-              "inventoryPaths": 560,
-              "linksRefreshed": true,
-              "phaseReadBytes": {
-                "inventory": 60715,
-                "files": 48242189,
-                "migrations": 171
-              }
-            },
-            {
-              "cpuMs": 1606.398,
-              "readBytes": 48336603,
-              "wallMs": 1515.128259,
-              "inventoryPaths": 560,
-              "linksRefreshed": true,
-              "phaseReadBytes": {
-                "inventory": 27871,
-                "files": 48283453,
-                "migrations": 171
-              }
-            },
-            {
-              "cpuMs": 1310.694,
-              "readBytes": 48390616,
-              "wallMs": 1233.7977429999992,
-              "inventoryPaths": 560,
-              "linksRefreshed": true,
-              "phaseReadBytes": {
-                "inventory": 28137,
-                "files": 48337124,
-                "migrations": 209
-              }
-            },
-            {
-              "cpuMs": 1216.42,
-              "readBytes": 48439776,
-              "wallMs": 1170.4975859999995,
-              "inventoryPaths": 560,
-              "linksRefreshed": true,
-              "phaseReadBytes": {
-                "inventory": 28099,
-                "files": 48386357,
-                "migrations": 210
-              }
-            },
-            {
-              "cpuMs": 1213.184,
-              "readBytes": 48522080,
-              "wallMs": 1176.0342629999996,
-              "inventoryPaths": 560,
-              "linksRefreshed": true,
-              "phaseReadBytes": {
-                "inventory": 28176,
-                "files": 48468582,
-                "migrations": 210
-              }
-            },
-            {
-              "cpuMs": 1215.523,
-              "readBytes": 48657502,
-              "wallMs": 1175.6532699999989,
-              "inventoryPaths": 560,
-              "linksRefreshed": true,
-              "phaseReadBytes": {
-                "inventory": 28252,
-                "files": 48603966,
-                "migrations": 172
-              }
-            }
-          ],
-          "delta": {
-            "cpuMs": 1339.994,
-            "readBytes": 48617048,
-            "wallMs": 1314.958243000001,
-            "inventoryPaths": 560,
-            "linksRefreshed": true,
-            "phaseReadBytes": {
-              "inventory": 28404,
-              "files": 48563360,
-              "migrations": 172
-            }
-          },
-          "cadenceSeconds": 60,
-          "cpuMsPerScheduledMinute": 1373.7155,
-          "cpuMsPerMinute": 1344.270346116991,
-          "bytesReadPerIdleCycle": 48445793.333333336
-        },
-        {
-          "mode": "migration",
-          "rows": 7098,
-          "scanned": 560,
-          "bootstrap": {
-            "cpuMs": 1.405,
-            "readBytes": 166,
-            "wallMs": 1.1290880000000243
-          },
-          "cold": {
-            "cpuMs": 2528.359,
-            "readBytes": 82363031,
-            "wallMs": 2104.507419,
-            "inventoryPaths": 560,
-            "linksRefreshed": true,
-            "phaseReadBytes": {
-              "inventory": 32549416,
-              "files": 49207189,
+              "inventory": 32579617,
+              "files": 49207223,
               "migrations": 8435
             }
           },
           "settling": {
-            "cpuMs": 1755.043,
-            "readBytes": 64242731,
-            "wallMs": 1639.5000920000002,
+            "cpuMs": 1770.399,
+            "readBytes": 64283677,
+            "wallMs": 1624.1554879999999,
             "inventoryPaths": 560,
             "linksRefreshed": true,
             "phaseReadBytes": {
-              "inventory": 15836029,
-              "files": 48373171,
+              "inventory": 15876999,
+              "files": 48373147,
               "migrations": 8436
             }
           },
           "idle": [
             {
-              "cpuMs": 1577.145,
-              "readBytes": 48328167,
-              "wallMs": 1512.3048079999999,
+              "cpuMs": 1486.031,
+              "readBytes": 48328139,
+              "wallMs": 1432.932444,
               "inventoryPaths": 560,
               "linksRefreshed": true,
               "phaseReadBytes": {
-                "inventory": 60636,
-                "files": 48242267,
+                "inventory": 60598,
+                "files": 48242239,
+                "migrations": 206
+              }
+            },
+            {
+              "cpuMs": 1528.001,
+              "readBytes": 48336483,
+              "wallMs": 1435.9948189999996,
+              "inventoryPaths": 560,
+              "linksRefreshed": true,
+              "phaseReadBytes": {
+                "inventory": 27754,
+                "files": 48283427,
+                "migrations": 206
+              }
+            },
+            {
+              "cpuMs": 1489.397,
+              "readBytes": 48390136,
+              "wallMs": 1402.439488000001,
+              "inventoryPaths": 560,
+              "linksRefreshed": true,
+              "phaseReadBytes": {
+                "inventory": 27855,
+                "files": 48336941,
+                "migrations": 206
+              }
+            },
+            {
+              "cpuMs": 1581.612,
+              "readBytes": 48439385,
+              "wallMs": 1506.4056530000016,
+              "inventoryPaths": 560,
+              "linksRefreshed": true,
+              "phaseReadBytes": {
+                "inventory": 27792,
+                "files": 48386326,
+                "migrations": 169
+              }
+            },
+            {
+              "cpuMs": 1267.506,
+              "readBytes": 48521575,
+              "wallMs": 1229.5577589999994,
+              "inventoryPaths": 560,
+              "linksRefreshed": true,
+              "phaseReadBytes": {
+                "inventory": 27755,
+                "files": 48468551,
+                "migrations": 169
+              }
+            },
+            {
+              "cpuMs": 1344.06,
+              "readBytes": 48648881,
+              "wallMs": 1242.0763270000007,
+              "inventoryPaths": 560,
+              "linksRefreshed": true,
+              "phaseReadBytes": {
+                "inventory": 27907,
+                "files": 48595705,
+                "migrations": 169
+              }
+            }
+          ],
+          "delta": {
+            "cpuMs": 2023.331,
+            "readBytes": 48616923,
+            "wallMs": 1989.9946179999988,
+            "inventoryPaths": 560,
+            "linksRefreshed": true,
+            "phaseReadBytes": {
+              "inventory": 28325,
+              "files": 48563291,
+              "migrations": 207
+            }
+          },
+          "cadenceSeconds": 60,
+          "cpuMsPerScheduledMinute": 1449.4345,
+          "cpuMsPerMinute": 1416.9647277195807,
+          "bytesReadPerIdleCycle": 48444099.833333336
+        },
+        {
+          "mode": "migration",
+          "rows": 7098,
+          "scanned": 560,
+          "bootstrap": {
+            "cpuMs": 1.528,
+            "readBytes": 165,
+            "wallMs": 1.2214630000000852
+          },
+          "cold": {
+            "cpuMs": 3437.765,
+            "readBytes": 82393251,
+            "wallMs": 2996.125375,
+            "inventoryPaths": 560,
+            "linksRefreshed": true,
+            "phaseReadBytes": {
+              "inventory": 32579429,
+              "files": 49207354,
+              "migrations": 8399
+            }
+          },
+          "settling": {
+            "cpuMs": 2632.882,
+            "readBytes": 64283716,
+            "wallMs": 2484.376684,
+            "inventoryPaths": 560,
+            "linksRefreshed": true,
+            "phaseReadBytes": {
+              "inventory": 15877038,
+              "files": 48373185,
+              "migrations": 8398
+            }
+          },
+          "idle": [
+            {
+              "cpuMs": 2000.887,
+              "readBytes": 48328172,
+              "wallMs": 1934.17101,
+              "inventoryPaths": 560,
+              "linksRefreshed": true,
+              "phaseReadBytes": {
+                "inventory": 60674,
+                "files": 48242234,
                 "migrations": 168
               }
             },
             {
-              "cpuMs": 1907.412,
-              "readBytes": 48336511,
-              "wallMs": 1813.6291,
+              "cpuMs": 1456.958,
+              "readBytes": 48336599,
+              "wallMs": 1377.3815510000004,
               "inventoryPaths": 560,
               "linksRefreshed": true,
               "phaseReadBytes": {
                 "inventory": 27868,
-                "files": 48283379,
+                "files": 48283467,
                 "migrations": 168
               }
             },
             {
-              "cpuMs": 1949.681,
-              "readBytes": 48390709,
-              "wallMs": 1847.1079980000004,
+              "cpuMs": 1925.439,
+              "readBytes": 48390189,
+              "wallMs": 1827.7158549999986,
               "inventoryPaths": 560,
               "linksRefreshed": true,
               "phaseReadBytes": {
-                "inventory": 28248,
-                "files": 48337083,
-                "migrations": 244
+                "inventory": 27830,
+                "files": 48337019,
+                "migrations": 206
               }
             },
             {
-              "cpuMs": 2213.843,
-              "readBytes": 48439715,
-              "wallMs": 2163.3088829999997,
+              "cpuMs": 2581.812,
+              "readBytes": 48521597,
+              "wallMs": 2496.2921800000004,
               "inventoryPaths": 560,
               "linksRefreshed": true,
               "phaseReadBytes": {
-                "inventory": 28058,
-                "files": 48386352,
+                "inventory": 28020,
+                "files": 48468272,
                 "migrations": 207
               }
             },
             {
-              "cpuMs": 2631.744,
-              "readBytes": 48611928,
-              "wallMs": 2623.83907,
+              "cpuMs": 1797.955,
+              "readBytes": 48513533,
+              "wallMs": 1752.2687850000002,
               "inventoryPaths": 560,
               "linksRefreshed": true,
               "phaseReadBytes": {
-                "inventory": 28097,
-                "files": 48558524,
+                "inventory": 27945,
+                "files": 48460243,
                 "migrations": 207
               }
             },
             {
-              "cpuMs": 2034.44,
-              "readBytes": 48567498,
-              "wallMs": 2007.4052819999997,
+              "cpuMs": 2054.745,
+              "readBytes": 48558898,
+              "wallMs": 1967.4356899999984,
               "inventoryPaths": 560,
               "linksRefreshed": true,
               "phaseReadBytes": {
-                "inventory": 28287,
-                "files": 48513904,
+                "inventory": 28021,
+                "files": 48505570,
                 "migrations": 207
               }
             }
           ],
           "delta": {
-            "cpuMs": 1348.84,
-            "readBytes": 48616875,
-            "wallMs": 1322.9622280000003,
+            "cpuMs": 1790.089,
+            "readBytes": 48616814,
+            "wallMs": 1764.8607279999997,
             "inventoryPaths": 560,
             "linksRefreshed": true,
             "phaseReadBytes": {
               "inventory": 28287,
-              "files": 48563319,
+              "files": 48563220,
+              "migrations": 207
+            }
+          },
+          "cadenceSeconds": 60,
+          "cpuMsPerScheduledMinute": 1969.6326666666664,
+          "cpuMsPerMinute": 1909.4054311157595,
+          "bytesReadPerIdleCycle": 48441498
+        },
+        {
+          "mode": "migration",
+          "rows": 7098,
+          "scanned": 560,
+          "bootstrap": {
+            "cpuMs": 1.485,
+            "readBytes": 165,
+            "wallMs": 1.2284429999999702
+          },
+          "cold": {
+            "cpuMs": 2517.592,
+            "readBytes": 82392895,
+            "wallMs": 2120.4211920000002,
+            "inventoryPaths": 560,
+            "linksRefreshed": true,
+            "phaseReadBytes": {
+              "inventory": 32579313,
+              "files": 49207157,
+              "migrations": 8435
+            }
+          },
+          "settling": {
+            "cpuMs": 1733.418,
+            "readBytes": 64283715,
+            "wallMs": 1599.5122300000003,
+            "inventoryPaths": 560,
+            "linksRefreshed": true,
+            "phaseReadBytes": {
+              "inventory": 15876999,
+              "files": 48373223,
+              "migrations": 8398
+            }
+          },
+          "idle": [
+            {
+              "cpuMs": 1441.812,
+              "readBytes": 48328212,
+              "wallMs": 1391.4922939999997,
+              "inventoryPaths": 560,
+              "linksRefreshed": true,
+              "phaseReadBytes": {
+                "inventory": 60636,
+                "files": 48242274,
+                "migrations": 206
+              }
+            },
+            {
+              "cpuMs": 1784.361,
+              "readBytes": 48336593,
+              "wallMs": 1661.3540890000004,
+              "inventoryPaths": 560,
+              "linksRefreshed": true,
+              "phaseReadBytes": {
+                "inventory": 27830,
+                "files": 48283499,
+                "migrations": 168
+              }
+            },
+            {
+              "cpuMs": 1430.912,
+              "readBytes": 48390643,
+              "wallMs": 1342.456588000001,
+              "inventoryPaths": 560,
+              "linksRefreshed": true,
+              "phaseReadBytes": {
+                "inventory": 28172,
+                "files": 48337093,
+                "migrations": 244
+              }
+            },
+            {
+              "cpuMs": 1603.653,
+              "readBytes": 48439760,
+              "wallMs": 1551.0912250000001,
+              "inventoryPaths": 560,
+              "linksRefreshed": true,
+              "phaseReadBytes": {
+                "inventory": 28096,
+                "files": 48386359,
+                "migrations": 207
+              }
+            },
+            {
+              "cpuMs": 1346.534,
+              "readBytes": 48521912,
+              "wallMs": 1309.2344199999989,
+              "inventoryPaths": 560,
+              "linksRefreshed": true,
+              "phaseReadBytes": {
+                "inventory": 28097,
+                "files": 48468508,
+                "migrations": 207
+              }
+            },
+            {
+              "cpuMs": 1752.373,
+              "readBytes": 48648995,
+              "wallMs": 1714.2627809999994,
+              "inventoryPaths": 560,
+              "linksRefreshed": true,
+              "phaseReadBytes": {
+                "inventory": 28097,
+                "files": 48595591,
+                "migrations": 207
+              }
+            }
+          ],
+          "delta": {
+            "cpuMs": 2706.994,
+            "readBytes": 48616730,
+            "wallMs": 2695.054295,
+            "inventoryPaths": 560,
+            "linksRefreshed": true,
+            "phaseReadBytes": {
+              "inventory": 28173,
+              "files": 48563288,
               "migrations": 169
             }
           },
           "cadenceSeconds": 60,
-          "cpuMsPerScheduledMinute": 2052.3775,
-          "cpuMsPerMinute": 1986.3448043637386,
-          "bytesReadPerIdleCycle": 48445754.666666664
+          "cpuMsPerScheduledMinute": 1559.9408333333333,
+          "cpuMsPerMinute": 1522.0176851659664,
+          "bytesReadPerIdleCycle": 48444352.5
         }
       ],
-      "head": [
+      "candidate": [
         {
           "mode": "migration",
           "rows": 7098,
           "scanned": 560,
           "bootstrap": {
-            "cpuMs": 285.281,
-            "readBytes": 39195248,
-            "wallMs": 208.94500399999993
+            "cpuMs": 335.416,
+            "readBytes": 39195209,
+            "wallMs": 254.28776400000015
           },
           "cold": {
-            "cpuMs": 2536.76,
-            "readBytes": 19955927,
-            "wallMs": 2130.629803,
+            "cpuMs": 2806.845,
+            "readBytes": 19979089,
+            "wallMs": 2344.6710940000003,
             "inventoryPaths": 560,
             "linksRefreshed": true,
             "phaseReadBytes": {
-              "inventory": 4462278,
-              "files": 14418179,
-              "migrations": 242
+              "inventory": 3643398,
+              "files": 14418014,
+              "migrations": 245
             }
           },
           "settling": {
-            "cpuMs": 1859.319,
-            "readBytes": 18968252,
-            "wallMs": 1685.9633269999995,
+            "cpuMs": 2234.095,
+            "readBytes": 19003325,
+            "wallMs": 1969.0355399999999,
             "inventoryPaths": 560,
             "linksRefreshed": true,
             "phaseReadBytes": {
-              "inventory": 5417028,
-              "files": 13510562,
-              "migrations": 319
+              "inventory": 5449694,
+              "files": 13510490,
+              "migrations": 207
             }
           },
           "idle": [
             {
-              "cpuMs": 80.751,
-              "readBytes": 2544806,
-              "wallMs": 65.35539900000003,
-              "inventoryPaths": 0,
-              "linksRefreshed": false,
+              "cpuMs": 248.198,
+              "readBytes": 2583731,
+              "wallMs": 210.359058,
+              "inventoryPaths": 32,
+              "linksRefreshed": true,
               "phaseReadBytes": {
-                "files": 2506894,
-                "migrations": 243
+                "inventory": 37812,
+                "files": 2507669,
+                "migrations": 207
               }
             },
             {
-              "cpuMs": 102.999,
-              "readBytes": 2586032,
-              "wallMs": 67.77386899999965,
-              "inventoryPaths": 0,
-              "linksRefreshed": false,
+              "cpuMs": 264.387,
+              "readBytes": 2596175,
+              "wallMs": 233.75057800000013,
+              "inventoryPaths": 32,
+              "linksRefreshed": true,
               "phaseReadBytes": {
-                "files": 2548120,
-                "migrations": 243
+                "inventory": 9062,
+                "files": 2548863,
+                "migrations": 168
               }
             },
             {
-              "cpuMs": 102.682,
-              "readBytes": 2639470,
-              "wallMs": 82.30246200000056,
-              "inventoryPaths": 0,
-              "linksRefreshed": false,
+              "cpuMs": 288.843,
+              "readBytes": 2649852,
+              "wallMs": 252.09804899999926,
+              "inventoryPaths": 32,
+              "linksRefreshed": true,
               "phaseReadBytes": {
-                "files": 2601634,
-                "migrations": 167
+                "inventory": 9140,
+                "files": 2602423,
+                "migrations": 207
               }
             },
             {
-              "cpuMs": 88.612,
-              "readBytes": 2688731,
-              "wallMs": 75.22739199999978,
-              "inventoryPaths": 0,
-              "linksRefreshed": false,
+              "cpuMs": 243.973,
+              "readBytes": 2699199,
+              "wallMs": 226.81566900000053,
+              "inventoryPaths": 32,
+              "linksRefreshed": true,
               "phaseReadBytes": {
-                "files": 2650933,
-                "migrations": 167
+                "inventory": 9062,
+                "files": 2651926,
+                "migrations": 168
               }
             },
             {
-              "cpuMs": 106.825,
-              "readBytes": 2770879,
-              "wallMs": 74.27399499999956,
-              "inventoryPaths": 0,
-              "linksRefreshed": false,
+              "cpuMs": 267.318,
+              "readBytes": 2773203,
+              "wallMs": 248.6611929999999,
+              "inventoryPaths": 32,
+              "linksRefreshed": true,
               "phaseReadBytes": {
-                "files": 2733081,
-                "migrations": 167
+                "inventory": 9062,
+                "files": 2725852,
+                "migrations": 207
               }
             },
             {
-              "cpuMs": 88.954,
-              "readBytes": 2808085,
-              "wallMs": 78.2280639999999,
-              "inventoryPaths": 0,
-              "linksRefreshed": false,
+              "cpuMs": 342.409,
+              "readBytes": 2818455,
+              "wallMs": 273.2293060000002,
+              "inventoryPaths": 32,
+              "linksRefreshed": true,
               "phaseReadBytes": {
-                "files": 2770211,
-                "migrations": 243
+                "inventory": 9140,
+                "files": 2771104,
+                "migrations": 168
               }
             }
           ],
           "delta": {
-            "cpuMs": 107.133,
-            "readBytes": 2899557,
-            "wallMs": 97.47660799999994,
-            "inventoryPaths": 1,
+            "cpuMs": 286.448,
+            "readBytes": 2876080,
+            "wallMs": 269.8618969999998,
+            "inventoryPaths": 33,
             "linksRefreshed": true,
             "phaseReadBytes": {
-              "inventory": 32935,
-              "files": 2828657,
-              "migrations": 167
-            }
-          },
-          "cadenceSeconds": 60,
-          "cpuMsPerScheduledMinute": 95.13716666666666,
-          "cpuMsPerMinute": 95.02019649306467,
-          "bytesReadPerIdleCycle": 2673000.5
-        },
-        {
-          "mode": "migration",
-          "rows": 7098,
-          "scanned": 560,
-          "bootstrap": {
-            "cpuMs": 249.8,
-            "readBytes": 39195248,
-            "wallMs": 173.47903699999995
-          },
-          "cold": {
-            "cpuMs": 2601.276,
-            "readBytes": 19955778,
-            "wallMs": 2210.3346389999997,
-            "inventoryPaths": 560,
-            "linksRefreshed": true,
-            "phaseReadBytes": {
-              "inventory": 4462088,
-              "files": 14418176,
-              "migrations": 242
-            }
-          },
-          "settling": {
-            "cpuMs": 3106.151,
-            "readBytes": 18968097,
-            "wallMs": 2847.321458,
-            "inventoryPaths": 560,
-            "linksRefreshed": true,
-            "phaseReadBytes": {
-              "inventory": 5416952,
-              "files": 13510559,
-              "migrations": 243
-            }
-          },
-          "idle": [
-            {
-              "cpuMs": 111.305,
-              "readBytes": 2544804,
-              "wallMs": 92.15184800000043,
-              "inventoryPaths": 0,
-              "linksRefreshed": false,
-              "phaseReadBytes": {
-                "files": 2506968,
-                "migrations": 205
-              }
-            },
-            {
-              "cpuMs": 146.392,
-              "readBytes": 2585877,
-              "wallMs": 110.50106799999958,
-              "inventoryPaths": 0,
-              "linksRefreshed": false,
-              "phaseReadBytes": {
-                "files": 2548041,
-                "migrations": 167
-              }
-            },
-            {
-              "cpuMs": 102.666,
-              "readBytes": 2639313,
-              "wallMs": 89.53354399999989,
-              "inventoryPaths": 0,
-              "linksRefreshed": false,
-              "phaseReadBytes": {
-                "files": 2601515,
-                "migrations": 167
-              }
-            },
-            {
-              "cpuMs": 141.832,
-              "readBytes": 2688735,
-              "wallMs": 122.55620400000043,
-              "inventoryPaths": 0,
-              "linksRefreshed": false,
-              "phaseReadBytes": {
-                "files": 2650899,
-                "migrations": 205
-              }
-            },
-            {
-              "cpuMs": 148.497,
-              "readBytes": 2770993,
-              "wallMs": 114.37537000000066,
-              "inventoryPaths": 0,
-              "linksRefreshed": false,
-              "phaseReadBytes": {
-                "files": 2733157,
-                "migrations": 167
-              }
-            },
-            {
-              "cpuMs": 133.918,
-              "readBytes": 2808201,
-              "wallMs": 123.4187750000001,
-              "inventoryPaths": 0,
-              "linksRefreshed": false,
-              "phaseReadBytes": {
-                "files": 2770327,
-                "migrations": 205
-              }
-            }
-          ],
-          "delta": {
-            "cpuMs": 111.604,
-            "readBytes": 2899408,
-            "wallMs": 100.19838299999992,
-            "inventoryPaths": 1,
-            "linksRefreshed": true,
-            "phaseReadBytes": {
-              "inventory": 32935,
-              "files": 2828584,
-              "migrations": 167
-            }
-          },
-          "cadenceSeconds": 60,
-          "cpuMsPerScheduledMinute": 130.76833333333335,
-          "cpuMsPerMinute": 130.53173122398292,
-          "bytesReadPerIdleCycle": 2672987.1666666665
-        },
-        {
-          "mode": "migration",
-          "rows": 7098,
-          "scanned": 560,
-          "bootstrap": {
-            "cpuMs": 229.348,
-            "readBytes": 39195172,
-            "wallMs": 172.69696999999996
-          },
-          "cold": {
-            "cpuMs": 2559.194,
-            "readBytes": 19955907,
-            "wallMs": 2116.6270649999997,
-            "inventoryPaths": 560,
-            "linksRefreshed": true,
-            "phaseReadBytes": {
-              "inventory": 4462240,
-              "files": 14418207,
-              "migrations": 280
-            }
-          },
-          "settling": {
-            "cpuMs": 2567.621,
-            "readBytes": 18967901,
-            "wallMs": 2399.1361770000003,
-            "inventoryPaths": 560,
-            "linksRefreshed": true,
-            "phaseReadBytes": {
-              "inventory": 5416930,
-              "files": 13510372,
+              "inventory": 9129,
+              "files": 2828710,
               "migrations": 205
             }
           },
+          "cadenceSeconds": 60,
+          "cpuMsPerScheduledMinute": 275.8546666666667,
+          "cpuMsPerMinute": 274.7519087801815,
+          "bytesReadPerIdleCycle": 2686769.1666666665
+        },
+        {
+          "mode": "migration",
+          "rows": 7098,
+          "scanned": 560,
+          "bootstrap": {
+            "cpuMs": 281.171,
+            "readBytes": 39195250,
+            "wallMs": 213.457265
+          },
+          "cold": {
+            "cpuMs": 3342.85,
+            "readBytes": 19979119,
+            "wallMs": 2875.1610949999995,
+            "inventoryPaths": 560,
+            "linksRefreshed": true,
+            "phaseReadBytes": {
+              "inventory": 3643249,
+              "files": 14418079,
+              "migrations": 207
+            }
+          },
+          "settling": {
+            "cpuMs": 3041.551,
+            "readBytes": 19003446,
+            "wallMs": 2709.1917379999995,
+            "inventoryPaths": 560,
+            "linksRefreshed": true,
+            "phaseReadBytes": {
+              "inventory": 5449641,
+              "files": 13510617,
+              "migrations": 249
+            }
+          },
           "idle": [
             {
-              "cpuMs": 171.665,
-              "readBytes": 2544877,
-              "wallMs": 106.92182000000048,
-              "inventoryPaths": 0,
-              "linksRefreshed": false,
+              "cpuMs": 250.45,
+              "readBytes": 2583518,
+              "wallMs": 225.72000099999968,
+              "inventoryPaths": 32,
+              "linksRefreshed": true,
               "phaseReadBytes": {
-                "files": 2507003,
-                "migrations": 167
+                "inventory": 37756,
+                "files": 2507548,
+                "migrations": 208
               }
             },
             {
-              "cpuMs": 160.231,
-              "readBytes": 2585841,
-              "wallMs": 130.70062899999994,
-              "inventoryPaths": 0,
-              "linksRefreshed": false,
+              "cpuMs": 249.303,
+              "readBytes": 2596302,
+              "wallMs": 209.4256260000002,
+              "inventoryPaths": 32,
+              "linksRefreshed": true,
               "phaseReadBytes": {
-                "files": 2548043,
-                "migrations": 167
+                "inventory": 9139,
+                "files": 2548878,
+                "migrations": 209
               }
             },
             {
-              "cpuMs": 146.067,
-              "readBytes": 2639355,
-              "wallMs": 117.75910299999941,
-              "inventoryPaths": 0,
-              "linksRefreshed": false,
+              "cpuMs": 223.955,
+              "readBytes": 2649671,
+              "wallMs": 190.15721800000028,
+              "inventoryPaths": 32,
+              "linksRefreshed": true,
               "phaseReadBytes": {
-                "files": 2601557,
-                "migrations": 167
+                "inventory": 9104,
+                "files": 2602347,
+                "migrations": 171
               }
             },
             {
-              "cpuMs": 153.303,
-              "readBytes": 2688812,
-              "wallMs": 136.62176799999997,
-              "inventoryPaths": 0,
-              "linksRefreshed": false,
+              "cpuMs": 253.219,
+              "readBytes": 2699182,
+              "wallMs": 241.90054899999996,
+              "inventoryPaths": 32,
+              "linksRefreshed": true,
               "phaseReadBytes": {
-                "files": 2650976,
-                "migrations": 167
+                "inventory": 9026,
+                "files": 2651930,
+                "migrations": 210
               }
             },
             {
-              "cpuMs": 115.364,
-              "readBytes": 2770956,
-              "wallMs": 78.95469299999968,
-              "inventoryPaths": 0,
-              "linksRefreshed": false,
+              "cpuMs": 245.489,
+              "readBytes": 2781456,
+              "wallMs": 230.0838789999998,
+              "inventoryPaths": 32,
+              "linksRefreshed": true,
               "phaseReadBytes": {
-                "files": 2733158,
-                "migrations": 167
+                "inventory": 9104,
+                "files": 2734048,
+                "migrations": 171
               }
             },
             {
-              "cpuMs": 99.835,
-              "readBytes": 2816353,
-              "wallMs": 89.30687500000022,
-              "inventoryPaths": 0,
-              "linksRefreshed": false,
+              "cpuMs": 267.333,
+              "readBytes": 2826825,
+              "wallMs": 225.09051,
+              "inventoryPaths": 32,
+              "linksRefreshed": true,
               "phaseReadBytes": {
-                "files": 2778479,
-                "migrations": 205
+                "inventory": 9065,
+                "files": 2779456,
+                "migrations": 171
               }
             }
           ],
           "delta": {
-            "cpuMs": 130.574,
-            "readBytes": 2899520,
-            "wallMs": 120.41422200000034,
-            "inventoryPaths": 1,
+            "cpuMs": 192.204,
+            "readBytes": 2876081,
+            "wallMs": 175.24205599999914,
+            "inventoryPaths": 33,
             "linksRefreshed": true,
             "phaseReadBytes": {
-              "inventory": 32935,
-              "files": 2828658,
-              "migrations": 167
+              "inventory": 9182,
+              "files": 2828599,
+              "migrations": 208
             }
           },
           "cadenceSeconds": 60,
-          "cpuMsPerScheduledMinute": 141.07750000000001,
-          "cpuMsPerMinute": 140.8192278009105,
-          "bytesReadPerIdleCycle": 2674365.6666666665
+          "cpuMsPerScheduledMinute": 248.2915,
+          "cpuMsPerMinute": 247.3827957970598,
+          "bytesReadPerIdleCycle": 2689492.3333333335
+        },
+        {
+          "mode": "migration",
+          "rows": 7098,
+          "scanned": 560,
+          "bootstrap": {
+            "cpuMs": 308.798,
+            "readBytes": 39195212,
+            "wallMs": 226.07579099999998
+          },
+          "cold": {
+            "cpuMs": 3529.174,
+            "readBytes": 19979399,
+            "wallMs": 3072.245969,
+            "inventoryPaths": 560,
+            "linksRefreshed": true,
+            "phaseReadBytes": {
+              "inventory": 3643401,
+              "files": 14418201,
+              "migrations": 245
+            }
+          },
+          "settling": {
+            "cpuMs": 2222.758,
+            "readBytes": 19003607,
+            "wallMs": 2030.3654400000005,
+            "inventoryPaths": 560,
+            "linksRefreshed": true,
+            "phaseReadBytes": {
+              "inventory": 5449923,
+              "files": 13510651,
+              "migrations": 208
+            }
+          },
+          "idle": [
+            {
+              "cpuMs": 182.655,
+              "readBytes": 2583479,
+              "wallMs": 155.86889900000006,
+              "inventoryPaths": 32,
+              "linksRefreshed": true,
+              "phaseReadBytes": {
+                "inventory": 37718,
+                "files": 2507553,
+                "migrations": 170
+              }
+            },
+            {
+              "cpuMs": 192.728,
+              "readBytes": 2596299,
+              "wallMs": 164.48413700000037,
+              "inventoryPaths": 32,
+              "linksRefreshed": true,
+              "phaseReadBytes": {
+                "inventory": 9122,
+                "files": 2548855,
+                "migrations": 208
+              }
+            },
+            {
+              "cpuMs": 176.198,
+              "readBytes": 2649566,
+              "wallMs": 152.48437299999932,
+              "inventoryPaths": 32,
+              "linksRefreshed": true,
+              "phaseReadBytes": {
+                "inventory": 9058,
+                "files": 2602295,
+                "migrations": 171
+              }
+            },
+            {
+              "cpuMs": 183.19,
+              "readBytes": 2699225,
+              "wallMs": 168.7444000000005,
+              "inventoryPaths": 32,
+              "linksRefreshed": true,
+              "phaseReadBytes": {
+                "inventory": 9026,
+                "files": 2651856,
+                "migrations": 171
+              }
+            },
+            {
+              "cpuMs": 205.609,
+              "readBytes": 2781488,
+              "wallMs": 188.74416100000053,
+              "inventoryPaths": 32,
+              "linksRefreshed": true,
+              "phaseReadBytes": {
+                "inventory": 9182,
+                "files": 2733973,
+                "migrations": 246
+              }
+            },
+            {
+              "cpuMs": 238.049,
+              "readBytes": 2818623,
+              "wallMs": 194.70958900000005,
+              "inventoryPaths": 32,
+              "linksRefreshed": true,
+              "phaseReadBytes": {
+                "inventory": 9084,
+                "files": 2771141,
+                "migrations": 208
+              }
+            }
+          ],
+          "delta": {
+            "cpuMs": 229.537,
+            "readBytes": 2876043,
+            "wallMs": 210.72673000000032,
+            "inventoryPaths": 33,
+            "linksRefreshed": true,
+            "phaseReadBytes": {
+              "inventory": 9160,
+              "files": 2828637,
+              "migrations": 208
+            }
+          },
+          "cadenceSeconds": 60,
+          "cpuMsPerScheduledMinute": 196.40483333333336,
+          "cpuMsPerMinute": 195.84719350701377,
+          "bytesReadPerIdleCycle": 2688113.3333333335
         }
       ]
     },
@@ -781,19 +810,19 @@
           "rows": 7098,
           "scanned": 560,
           "gapMs": 65000,
-          "elapsedMs": 69034.51214400001,
+          "elapsedMs": 67547.19069999999,
           "builds": 2,
           "spawns": 2,
           "respawns": 1,
-          "respawnsPerHour": 52.14782995048494,
+          "respawnsPerHour": 53.29607290388763,
           "workerSamples": [
             {
-              "cpuTicks": 241,
-              "readBytes": 115506246
+              "cpuTicks": 193,
+              "readBytes": 115028512
             },
             {
-              "cpuTicks": 265,
-              "readBytes": 132093605
+              "cpuTicks": 138,
+              "readBytes": 132093084
             }
           ]
         },
@@ -802,19 +831,19 @@
           "rows": 7098,
           "scanned": 560,
           "gapMs": 65000,
-          "elapsedMs": 68026.814664,
+          "elapsedMs": 67850.574024,
           "builds": 2,
           "spawns": 2,
           "respawns": 1,
-          "respawnsPerHour": 52.92030823111774,
+          "respawnsPerHour": 53.05776777550347,
           "workerSamples": [
             {
-              "cpuTicks": 223,
-              "readBytes": 115505978
+              "cpuTicks": 227,
+              "readBytes": 115028289
             },
             {
-              "cpuTicks": 174,
-              "readBytes": 132093569
+              "cpuTicks": 141,
+              "readBytes": 132093134
             }
           ]
         },
@@ -823,42 +852,42 @@
           "rows": 7098,
           "scanned": 560,
           "gapMs": 65000,
-          "elapsedMs": 67665.23384199999,
+          "elapsedMs": 67688.058089,
           "builds": 2,
           "spawns": 2,
           "respawns": 1,
-          "respawnsPerHour": 53.20309700556256,
+          "respawnsPerHour": 53.18515705187644,
           "workerSamples": [
             {
-              "cpuTicks": 194,
-              "readBytes": 115506063
+              "cpuTicks": 200,
+              "readBytes": 115028265
             },
             {
-              "cpuTicks": 154,
-              "readBytes": 132093606
+              "cpuTicks": 153,
+              "readBytes": 132093047
             }
           ]
         }
       ],
-      "head": [
+      "candidate": [
         {
           "mode": "files",
           "rows": 7098,
           "scanned": 560,
           "gapMs": 65000,
-          "elapsedMs": 67783.89852,
+          "elapsedMs": 67193.543818,
           "builds": 2,
           "spawns": 1,
           "respawns": 0,
           "respawnsPerHour": 0,
           "workerSamples": [
             {
-              "cpuTicks": 282,
-              "readBytes": 115499437
+              "cpuTicks": 174,
+              "readBytes": 115042997
             },
             {
-              "cpuTicks": 372,
-              "readBytes": 162203313
+              "cpuTicks": 285,
+              "readBytes": 161746724
             }
           ]
         },
@@ -867,19 +896,19 @@
           "rows": 7098,
           "scanned": 560,
           "gapMs": 65000,
-          "elapsedMs": 67188.515319,
+          "elapsedMs": 66907.636823,
           "builds": 2,
           "spawns": 1,
           "respawns": 0,
           "respawnsPerHour": 0,
           "workerSamples": [
             {
-              "cpuTicks": 207,
-              "readBytes": 115499417
+              "cpuTicks": 166,
+              "readBytes": 115043040
             },
             {
-              "cpuTicks": 297,
-              "readBytes": 162203141
+              "cpuTicks": 249,
+              "readBytes": 161746766
             }
           ]
         },
@@ -888,19 +917,19 @@
           "rows": 7098,
           "scanned": 560,
           "gapMs": 65000,
-          "elapsedMs": 67069.475164,
+          "elapsedMs": 66942.18971,
           "builds": 2,
           "spawns": 1,
           "respawns": 0,
           "respawnsPerHour": 0,
           "workerSamples": [
             {
-              "cpuTicks": 182,
-              "readBytes": 115499444
+              "cpuTicks": 171,
+              "readBytes": 115042969
             },
             {
-              "cpuTicks": 275,
-              "readBytes": 162203168
+              "cpuTicks": 253,
+              "readBytes": 161746544
             }
           ]
         }
@@ -909,1133 +938,24 @@
   },
   "summary": {
     "base": {
-      "migrationCpuMsPerMinuteMedian": 1595.9792509519862,
-      "migrationReadBytesPerCycleMedian": 48445754.666666664,
-      "filesRespawnsPerHourMedian": 52.92030823111774,
-      "filesWarmCpuMsPerMinuteMedian": 1534.6889387024144,
-      "filesSecondBuildReadBytesMedian": 132093605,
+      "migrationCpuMsPerMinuteMedian": 1522.0176851659664,
+      "migrationReadBytesPerIdleCycleMedian": 48444099.833333336,
+      "migrationUnchangedPathsMedian": 560,
+      "migrationOneFileDeltaPathsMedian": 560,
+      "filesRespawnsPerHourMedian": 53.18515705187644,
+      "filesWarmCpuMsPerMinuteMedian": 1246.8575427243316,
+      "filesSecondBuildReadBytesMedian": 132093084,
       "filesObservedRespawns": 3
     },
-    "head": {
-      "migrationCpuMsPerMinuteMedian": 130.53173122398292,
-      "migrationReadBytesPerCycleMedian": 2673000.5,
+    "candidate": {
+      "migrationCpuMsPerMinuteMedian": 247.3827957970598,
+      "migrationReadBytesPerIdleCycleMedian": 2688113.3333333335,
+      "migrationUnchangedPathsMedian": 32,
+      "migrationOneFileDeltaPathsMedian": 33,
       "filesRespawnsPerHourMedian": 0,
-      "filesWarmCpuMsPerMinuteMedian": 803.7087848067024,
-      "filesSecondBuildReadBytesMedian": 46703724,
+      "filesWarmCpuMsPerMinuteMedian": 744.3096537954675,
+      "filesSecondBuildReadBytesMedian": 46703726,
       "filesObservedRespawns": 0
     }
-  },
-  "testsByExplicitPath": {
-    "src/lib/accounts/migration/controller.performance.test.ts": {
-      "pass": 11,
-      "fail": []
-    },
-    "src/lib/accounts/migration/controller.test.ts": {
-      "pass": 15,
-      "fail": []
-    },
-    "src/lib/reaperRuntime.test.ts": {
-      "pass": 62,
-      "fail": []
-    },
-    "src/lib/scanner/filesResponseWorker.test.ts": {
-      "pass": 14,
-      "fail": []
-    },
-    "src/lib/accounts/migration/quotaController.test.ts": {
-      "pass": 21,
-      "fail": []
-    },
-    "src/lib/scanner/taskExtractionRetirement.test.ts": {
-      "pass": 2,
-      "fail": []
-    },
-    "src/lib/session/titleProjection.test.ts": {
-      "pass": 13,
-      "fail": []
-    },
-    "src/lib/tasks/membership.test.ts": {
-      "pass": 22,
-      "fail": []
-    },
-    "src/app/api/files/route.test.ts": {
-      "pass": 146,
-      "fail": [
-        "repository-backed catalog rows collapse to the current repository identity",
-        "a unique repository display name absorbs its matching legacy project key",
-        "a bridge report invalidates a warm files projection through the report collection's revision (#1870 slice 4)",
-        "a no-transcript structured reservation projects its card from canonical cwd truth",
-        "issue 1168: the seat's open bridge ask rides the files payload and clears on the answering directive",
-        "issue 1168: a seat rekeyed since it filed keeps one identity \u2014 the ask reaches its card and the directive still clears it"
-      ]
-    },
-    "src/lib/accounts/migration/controller.busy.test.ts": {
-      "pass": 2,
-      "fail": []
-    },
-    "src/lib/accounts/migration/controller.logins.test.ts": {
-      "pass": 1,
-      "fail": []
-    },
-    "src/lib/accounts/migration/controller.routing.test.ts": {
-      "pass": 1,
-      "fail": []
-    },
-    "src/lib/accounts/migration/controllerScan.test.ts": {
-      "pass": 2,
-      "fail": []
-    },
-    "src/lib/accounts/migration/coordinatorNoOpInventory.test.ts": {
-      "pass": 8,
-      "fail": []
-    },
-    "src/lib/accounts/migration/coordinatorTurnAuthority.test.ts": {
-      "pass": 24,
-      "fail": []
-    },
-    "src/lib/accounts/migration/coordinator.writerWait.test.ts": {
-      "pass": 8,
-      "fail": []
-    },
-    "src/lib/runtime/codexSubagentDetection.test.ts": {
-      "pass": 33,
-      "fail": []
-    },
-    "src/lib/pipelines/engine.cpuAdmissionPolling.test.ts": {
-      "pass": 18,
-      "fail": []
-    },
-    "src/lib/agent/sqliteRegistryStore.readOnlyView.test.ts": {
-      "pass": 22,
-      "fail": []
-    },
-    "src/lib/platformHome.test.ts": {
-      "pass": 5,
-      "fail": []
-    },
-    "src/lib/proc/darwinIdentity.test.ts": {
-      "pass": 3,
-      "fail": []
-    },
-    "src/lib/proc/index.test.ts": {
-      "pass": 4,
-      "fail": []
-    },
-    "src/lib/proc/memory.test.ts": {
-      "pass": 17,
-      "fail": []
-    },
-    "src/lib/proc/portable.test.ts": {
-      "pass": 1,
-      "fail": []
-    },
-    "src/lib/proc/windows.test.ts": {
-      "pass": 16,
-      "fail": []
-    },
-    "src/lib/proc/windowsCwd.test.ts": {
-      "pass": 3,
-      "fail": []
-    },
-    "src/lib/proc/windowsIdentity.test.ts": {
-      "pass": 6,
-      "fail": []
-    },
-    "src/lib/proc/windowsSnapshot.test.ts": {
-      "pass": 14,
-      "fail": []
-    },
-    "src/lib/processGroup.test.ts": {
-      "pass": 15,
-      "fail": []
-    },
-    "src/lib/runtime/localEndpoint.test.ts": {
-      "pass": 5,
-      "fail": []
-    },
-    "src/lib/scanner/describe.test.ts": {
-      "pass": 50,
-      "fail": []
-    },
-    "src/lib/state/durableJson.test.ts": {
-      "pass": 1,
-      "fail": []
-    },
-    "src/runtime-host/runtimeHostFence.test.ts": {
-      "pass": 5,
-      "fail": []
-    },
-    "src/runtime-host/socket.test.ts": {
-      "pass": 5,
-      "fail": []
-    },
-    "bin/bind-guard.test.ts": {
-      "pass": 15,
-      "fail": []
-    },
-    "bin/server-runtime.test.ts": {
-      "pass": 29,
-      "fail": []
-    },
-    "src/lib/accounts/migration/coordinator.test.ts": {
-      "pass": 124,
-      "fail": []
-    },
-    "src/lib/reaperRuntime.performance.test.ts": {
-      "pass": 2,
-      "fail": []
-    },
-    "src/lib/scanner/index.integrity.test.ts": {
-      "pass": 4,
-      "fail": []
-    },
-    "src/lib/scanner/index.pin.test.ts": {
-      "pass": 2,
-      "fail": []
-    }
-  },
-  "redOnMain": [
-    {
-      "testNames": [
-        "normal RSS and idle cache hits keep one warm worker and retirement logs its cause",
-        "inventory reconciles only file deltas and retries a failed delta before acknowledging it",
-        "inventory sidecar leaves owner-only failure repair to the Viewer"
-      ],
-      "baseRevision": "917189ae562def76980341620987479ab2813cfc",
-      "result": "expected regression failure on main",
-      "runnerErrors": 0
-    },
-    {
-      "testNames": [
-        "normal RSS and idle cache hits keep one warm worker and retirement logs its cause"
-      ],
-      "baseRevision": "917189ae562def76980341620987479ab2813cfc",
-      "result": "expected regression failure on main",
-      "runnerErrors": 0
-    },
-    {
-      "testNames": [
-        "an idle migration tick does not sweep all delivery history",
-        "a scanner delta uses keyed conversations without hydrating retained registry history"
-      ],
-      "baseRevision": "917189ae562def76980341620987479ab2813cfc",
-      "result": "expected regression failure on main",
-      "runnerErrors": 0
-    },
-    {
-      "testNames": [
-        "identical cached quota observations do not rewrite registry history",
-        "sidecar failure-repair policy survives a real process restart without granting release authority",
-        "inventory acknowledgement starts fresh in each real process"
-      ],
-      "baseRevision": "917189ae562def76980341620987479ab2813cfc",
-      "result": "expected regression failure on main",
-      "runnerErrors": 0
-    },
-    {
-      "testNames": [
-        "incremental inventory waits off its loop for a peer-held registry writer"
-      ],
-      "baseRevision": "917189ae562def76980341620987479ab2813cfc",
-      "result": "expected regression failure on main",
-      "runnerErrors": 0
-    },
-    {
-      "testNames": [
-        "unchanged controller inventory leaves registry-wide link recovery out of the deadline pass"
-      ],
-      "baseRevision": "917189ae562def76980341620987479ab2813cfc",
-      "result": "expected regression failure on main",
-      "runnerErrors": 0
-    },
-    {
-      "testNames": [
-        "the inventory sidecar prepares its shared read view before it starts polling"
-      ],
-      "baseRevision": "917189ae562def76980341620987479ab2813cfc",
-      "result": "expected regression failure on main",
-      "runnerErrors": 0
-    },
-    {
-      "testNames": [
-        "an idle inventory sidecar does not open spawn hygiene writers"
-      ],
-      "baseRevision": "917189ae562def76980341620987479ab2813cfc",
-      "result": "expected regression failure on main",
-      "runnerErrors": 0
-    },
-    {
-      "testNames": [
-        "an idle migration tick does not sweep all delivery history"
-      ],
-      "baseRevision": "e7507d58863450a1f45b1a93d2b27a059ca13c6e",
-      "result": "expected regression failure on main",
-      "runnerErrors": 0
-    },
-    {
-      "testNames": [
-        "idle file reconciliation opens no task admission writer",
-        "idle controller tasks open no mutation",
-        "task admission waits asynchronously for a peer and notices removed membership"
-      ],
-      "baseRevision": "e7507d58863450a1f45b1a93d2b27a059ca13c6e",
-      "result": "expected regression failure on main",
-      "runnerErrors": 0
-    },
-    {
-      "testNames": [
-        "a warm title overlay resolves each distinct cwd once per overlay"
-      ],
-      "baseRevision": "e7507d58863450a1f45b1a93d2b27a059ca13c6e",
-      "result": "expected regression failure on main",
-      "runnerErrors": 0
-    }
-  ],
-  "baselineFailures": {
-    "file": "src/app/api/files/route.test.ts",
-    "names": [
-      "repository-backed catalog rows collapse to the current repository identity",
-      "a unique repository display name absorbs its matching legacy project key",
-      "a bridge report invalidates a warm files projection through the report collection's revision (#1870 slice 4)",
-      "a no-transcript structured reservation projects its card from canonical cwd truth",
-      "issue 1168: the seat's open bridge ask rides the files payload and clears on the answering directive",
-      "issue 1168: a seat rekeyed since it filed keeps one identity \u2014 the ask reaches its card and the directive still clears it"
-    ],
-    "comparison": "same six assertions reproduced on main in the same scratch export and isolation; missing Git metadata and bridge refusal fixtures",
-    "comparedMain": "e7507d58863450a1f45b1a93d2b27a059ca13c6e"
-  },
-  "excludedExploratorySamples": [
-    {
-      "variant": "preliminary",
-      "sample": "migration-base-1.jsonl",
-      "includedInFinalComparison": false,
-      "cpuMsPerScheduledMinute": 1550.9383333333333,
-      "bytesReadPerIdleCycle": 52900860.333333336,
-      "cold": {
-        "cpuMs": 2497.087,
-        "readBytes": 111075769,
-        "wallMs": 2021.4334410000001
-      },
-      "delta": {
-        "cpuMs": 1652.424,
-        "readBytes": 48648580,
-        "wallMs": 1612.6563509999996
-      }
-    },
-    {
-      "variant": "preliminary",
-      "sample": "migration-base-2.jsonl",
-      "includedInFinalComparison": false,
-      "cpuMsPerScheduledMinute": 1642.514,
-      "bytesReadPerIdleCycle": 52917284.833333336,
-      "cold": {
-        "cpuMs": 3106.463,
-        "readBytes": 111076110,
-        "wallMs": 2518.362803
-      },
-      "delta": {
-        "cpuMs": 1447.741,
-        "readBytes": 48559066,
-        "wallMs": 1408.5565480000005
-      }
-    },
-    {
-      "variant": "preliminary",
-      "sample": "migration-base-3.jsonl",
-      "includedInFinalComparison": false,
-      "cpuMsPerScheduledMinute": 1718.2164999999998,
-      "bytesReadPerIdleCycle": 52917208.833333336,
-      "cold": {
-        "cpuMs": 3062.373,
-        "readBytes": 111075876,
-        "wallMs": 2564.690609
-      },
-      "delta": {
-        "cpuMs": 1334.502,
-        "readBytes": 48558595,
-        "wallMs": 1315.1800280000007
-      }
-    },
-    {
-      "variant": "preliminary",
-      "sample": "migration-head-1.jsonl",
-      "includedInFinalComparison": false,
-      "cpuMsPerScheduledMinute": 430.5178333333334,
-      "bytesReadPerIdleCycle": 12560295.666666666,
-      "cold": {
-        "cpuMs": 3234.099,
-        "readBytes": 101348183,
-        "wallMs": 2651.5494869999998
-      },
-      "delta": {
-        "cpuMs": 728.325,
-        "readBytes": 48283179,
-        "wallMs": 699.6057730000002
-      }
-    },
-    {
-      "variant": "preliminary",
-      "sample": "migration-head-2.jsonl",
-      "includedInFinalComparison": false,
-      "cpuMsPerScheduledMinute": 401.0611666666667,
-      "bytesReadPerIdleCycle": 12560301.833333334,
-      "cold": {
-        "cpuMs": 3386.14,
-        "readBytes": 101347978,
-        "wallMs": 2792.776704
-      },
-      "delta": {
-        "cpuMs": 650.171,
-        "readBytes": 48283101,
-        "wallMs": 621.179717
-      }
-    },
-    {
-      "variant": "preliminary",
-      "sample": "migration-head-3.jsonl",
-      "includedInFinalComparison": false,
-      "cpuMsPerScheduledMinute": 437.10566666666676,
-      "bytesReadPerIdleCycle": 12560347.666666666,
-      "cold": {
-        "cpuMs": 3588.217,
-        "readBytes": 101348063,
-        "wallMs": 2913.782473
-      },
-      "delta": {
-        "cpuMs": 650.836,
-        "readBytes": 48282911,
-        "wallMs": 618.3615239999999
-      }
-    },
-    {
-      "variant": "pre-shared-registry",
-      "sample": "migration-base-1.jsonl",
-      "includedInFinalComparison": false,
-      "cpuMsPerScheduledMinute": 1504.7291666666667,
-      "bytesReadPerIdleCycle": 48464717.5,
-      "cold": {
-        "cpuMs": 2481.877,
-        "readBytes": 111076206,
-        "wallMs": 2033.856681
-      },
-      "delta": {
-        "cpuMs": 1363.568,
-        "readBytes": 48616251,
-        "wallMs": 1323.5536199999988
-      }
-    },
-    {
-      "variant": "pre-shared-registry",
-      "sample": "migration-base-2.jsonl",
-      "includedInFinalComparison": false,
-      "cpuMsPerScheduledMinute": 2742.1143333333334,
-      "bytesReadPerIdleCycle": 48464749.5,
-      "cold": {
-        "cpuMs": 4973.62,
-        "readBytes": 111076068,
-        "wallMs": 4347.492169
-      },
-      "delta": {
-        "cpuMs": 1740.315,
-        "readBytes": 48706353,
-        "wallMs": 1712.2235589999982
-      }
-    },
-    {
-      "variant": "pre-shared-registry",
-      "sample": "migration-base-3.jsonl",
-      "includedInFinalComparison": false,
-      "cpuMsPerScheduledMinute": 2262.2301666666667,
-      "bytesReadPerIdleCycle": 48464696.166666664,
-      "cold": {
-        "cpuMs": 3573.79,
-        "readBytes": 111075940,
-        "wallMs": 2965.830357
-      },
-      "delta": {
-        "cpuMs": 2124.115,
-        "readBytes": 48616758,
-        "wallMs": 2104.268540000001
-      }
-    },
-    {
-      "variant": "pre-shared-registry",
-      "sample": "migration-head-1.jsonl",
-      "includedInFinalComparison": false,
-      "cpuMsPerScheduledMinute": 771.2966666666667,
-      "bytesReadPerIdleCycle": 48407211.333333336,
-      "cold": {
-        "cpuMs": 3430.16,
-        "readBytes": 101325126,
-        "wallMs": 2886.861024
-      },
-      "delta": {
-        "cpuMs": 970.149,
-        "readBytes": 48640984,
-        "wallMs": 955.5702089999995
-      }
-    },
-    {
-      "variant": "pre-shared-registry",
-      "sample": "migration-head-2.jsonl",
-      "includedInFinalComparison": false,
-      "cpuMsPerScheduledMinute": 869.1571666666667,
-      "bytesReadPerIdleCycle": 48407286.666666664,
-      "cold": {
-        "cpuMs": 3629.028,
-        "readBytes": 101324892,
-        "wallMs": 3046.717403
-      },
-      "delta": {
-        "cpuMs": 771.222,
-        "readBytes": 48640951,
-        "wallMs": 752.9866490000004
-      }
-    },
-    {
-      "variant": "pre-shared-registry",
-      "sample": "migration-head-3.jsonl",
-      "includedInFinalComparison": false,
-      "cpuMsPerScheduledMinute": 838.5108333333334,
-      "bytesReadPerIdleCycle": 48407267.5,
-      "cold": {
-        "cpuMs": 3244.856,
-        "readBytes": 101325153,
-        "wallMs": 2698.876097
-      },
-      "delta": {
-        "cpuMs": 690.341,
-        "readBytes": 48731048,
-        "wallMs": 678.8289010000008
-      }
-    },
-    {
-      "variant": "shared-before-links",
-      "sample": "migration-base-1.jsonl",
-      "includedInFinalComparison": false,
-      "cpuMsPerScheduledMinute": 1628.309833333333,
-      "bytesReadPerIdleCycle": 48443566.333333336,
-      "cold": {
-        "cpuMs": 2464.372,
-        "readBytes": 82361982,
-        "wallMs": 2032.8047000000001
-      },
-      "delta": {
-        "cpuMs": 1301.53,
-        "readBytes": 48616003,
-        "wallMs": 1272.8211629999987
-      }
-    },
-    {
-      "variant": "shared-before-links",
-      "sample": "migration-base-2.jsonl",
-      "includedInFinalComparison": false,
-      "cpuMsPerScheduledMinute": 1776.7498333333333,
-      "bytesReadPerIdleCycle": 48443566.166666664,
-      "cold": {
-        "cpuMs": 2780.119,
-        "readBytes": 82362414,
-        "wallMs": 2387.808201
-      },
-      "delta": {
-        "cpuMs": 1885.354,
-        "readBytes": 48615854,
-        "wallMs": 1868.8019089999998
-      }
-    },
-    {
-      "variant": "shared-before-links",
-      "sample": "migration-base-3.jsonl",
-      "includedInFinalComparison": false,
-      "cpuMsPerScheduledMinute": 1178.4080000000001,
-      "bytesReadPerIdleCycle": 48426966.333333336,
-      "cold": {
-        "cpuMs": 2065.125,
-        "readBytes": 82362257,
-        "wallMs": 1724.184729
-      },
-      "delta": {
-        "cpuMs": 1302.886,
-        "readBytes": 48615889,
-        "wallMs": 1275.5374260000008
-      }
-    },
-    {
-      "variant": "shared-before-links",
-      "sample": "migration-head-1.jsonl",
-      "includedInFinalComparison": false,
-      "cpuMsPerScheduledMinute": 704.0988333333333,
-      "bytesReadPerIdleCycle": 48409887.666666664,
-      "cold": {
-        "cpuMs": 3038.577,
-        "readBytes": 82578991,
-        "wallMs": 2543.632358
-      },
-      "delta": {
-        "cpuMs": 749.301,
-        "readBytes": 48640888,
-        "wallMs": 731.2672789999997
-      }
-    },
-    {
-      "variant": "shared-before-links",
-      "sample": "migration-head-2.jsonl",
-      "includedInFinalComparison": false,
-      "cpuMsPerScheduledMinute": 652.4556666666666,
-      "bytesReadPerIdleCycle": 48409774.166666664,
-      "cold": {
-        "cpuMs": 4415.673,
-        "readBytes": 82579171,
-        "wallMs": 3750.6196069999996
-      },
-      "delta": {
-        "cpuMs": 646.078,
-        "readBytes": 48640748,
-        "wallMs": 633.4969409999994
-      }
-    },
-    {
-      "variant": "shared-before-links",
-      "sample": "migration-head-3.jsonl",
-      "includedInFinalComparison": false,
-      "cpuMsPerScheduledMinute": 647.7381666666666,
-      "bytesReadPerIdleCycle": 48409861.333333336,
-      "cold": {
-        "cpuMs": 3706.033,
-        "readBytes": 82579021,
-        "wallMs": 3096.550269
-      },
-      "delta": {
-        "cpuMs": 732.785,
-        "readBytes": 48640904,
-        "wallMs": 725.2633119999991
-      }
-    },
-    {
-      "variant": "unprepared-reader",
-      "sample": "migration-base-1.jsonl",
-      "includedInFinalComparison": false,
-      "cpuMsPerScheduledMinute": 1379.994,
-      "bytesReadPerIdleCycle": 48429707.333333336,
-      "cold": {
-        "cpuMs": 2225.078,
-        "readBytes": 82362236,
-        "wallMs": 1838.3029649999999
-      },
-      "delta": {
-        "cpuMs": 1760.78,
-        "readBytes": 48705880,
-        "wallMs": 1731.0040750000007
-      }
-    },
-    {
-      "variant": "unprepared-reader",
-      "sample": "migration-base-2.jsonl",
-      "includedInFinalComparison": false,
-      "cpuMsPerScheduledMinute": 1749.4243333333334,
-      "bytesReadPerIdleCycle": 48444804.166666664,
-      "cold": {
-        "cpuMs": 2929.244,
-        "readBytes": 82362269,
-        "wallMs": 2514.3781989999998
-      },
-      "delta": {
-        "cpuMs": 2128.759,
-        "readBytes": 48615965,
-        "wallMs": 2043.1006959999995
-      }
-    },
-    {
-      "variant": "unprepared-reader",
-      "sample": "migration-base-3.jsonl",
-      "includedInFinalComparison": false,
-      "cpuMsPerScheduledMinute": 1671.0705,
-      "bytesReadPerIdleCycle": 48442082.333333336,
-      "cold": {
-        "cpuMs": 2544.578,
-        "readBytes": 82362029,
-        "wallMs": 2163.8526009999996
-      },
-      "delta": {
-        "cpuMs": 1465.366,
-        "readBytes": 48615632,
-        "wallMs": 1430.8303229999983
-      }
-    },
-    {
-      "variant": "unprepared-reader",
-      "sample": "migration-debug.jsonl",
-      "includedInFinalComparison": false,
-      "cpuMsPerScheduledMinute": 780.9500000000002,
-      "bytesReadPerIdleCycle": 48409036.333333336,
-      "cold": {
-        "cpuMs": 3674.076,
-        "readBytes": 82579259,
-        "wallMs": 3037.288945,
-        "inventoryPaths": 560,
-        "linksRefreshed": true
-      },
-      "delta": {
-        "cpuMs": 656.477,
-        "readBytes": 48640672,
-        "wallMs": 644.60779,
-        "inventoryPaths": 1,
-        "linksRefreshed": true
-      }
-    },
-    {
-      "variant": "unprepared-reader",
-      "sample": "migration-head-1.jsonl",
-      "includedInFinalComparison": false,
-      "cpuMsPerScheduledMinute": 663.6605000000001,
-      "bytesReadPerIdleCycle": 48409063.666666664,
-      "cold": {
-        "cpuMs": 4472.811,
-        "readBytes": 82579080,
-        "wallMs": 3784.472202
-      },
-      "delta": {
-        "cpuMs": 792.203,
-        "readBytes": 48640948,
-        "wallMs": 728.027583000001
-      }
-    },
-    {
-      "variant": "unprepared-reader",
-      "sample": "migration-head-2.jsonl",
-      "includedInFinalComparison": false,
-      "cpuMsPerScheduledMinute": 648.2061666666667,
-      "bytesReadPerIdleCycle": 48409112.5,
-      "cold": {
-        "cpuMs": 3969.815,
-        "readBytes": 82579004,
-        "wallMs": 3328.8714840000002
-      },
-      "delta": {
-        "cpuMs": 684.645,
-        "readBytes": 48640867,
-        "wallMs": 662.9767849999989
-      }
-    },
-    {
-      "variant": "unprepared-reader",
-      "sample": "migration-head-3.jsonl",
-      "includedInFinalComparison": false,
-      "cpuMsPerScheduledMinute": 746.4086666666667,
-      "bytesReadPerIdleCycle": 48409067.166666664,
-      "cold": {
-        "cpuMs": 3932.523,
-        "readBytes": 82579205,
-        "wallMs": 3291.25763
-      },
-      "delta": {
-        "cpuMs": 630.92,
-        "readBytes": 48640753,
-        "wallMs": 619.8657920000005
-      }
-    },
-    {
-      "variant": "before-title-cwd",
-      "sample": "migration-base-1.jsonl",
-      "includedInFinalComparison": false,
-      "cpuMsPerScheduledMinute": 1548.4030000000002,
-      "bytesReadPerIdleCycle": 48441994.833333336,
-      "cold": {
-        "cpuMs": 2045.526,
-        "readBytes": 82362437,
-        "wallMs": 1740.6124879999998,
-        "inventoryPaths": 560,
-        "linksRefreshed": true
-      },
-      "delta": {
-        "cpuMs": 3449.995,
-        "readBytes": 48615889,
-        "wallMs": 3387.6879910000025,
-        "inventoryPaths": 560,
-        "linksRefreshed": true
-      }
-    },
-    {
-      "variant": "before-title-cwd",
-      "sample": "migration-base-2.jsonl",
-      "includedInFinalComparison": false,
-      "cpuMsPerScheduledMinute": 2841.9441666666667,
-      "bytesReadPerIdleCycle": 48442070.5,
-      "cold": {
-        "cpuMs": 3903.7,
-        "readBytes": 82362194,
-        "wallMs": 3475.688364,
-        "inventoryPaths": 560,
-        "linksRefreshed": true
-      },
-      "delta": {
-        "cpuMs": 2299.481,
-        "readBytes": 48705723,
-        "wallMs": 2266.818879000002,
-        "inventoryPaths": 560,
-        "linksRefreshed": true
-      }
-    },
-    {
-      "variant": "before-title-cwd",
-      "sample": "migration-base-3.jsonl",
-      "includedInFinalComparison": false,
-      "cpuMsPerScheduledMinute": 2601.2605000000003,
-      "bytesReadPerIdleCycle": 48442134.166666664,
-      "cold": {
-        "cpuMs": 4311.689,
-        "readBytes": 82362454,
-        "wallMs": 3849.486404,
-        "inventoryPaths": 560,
-        "linksRefreshed": true
-      },
-      "delta": {
-        "cpuMs": 2717.318,
-        "readBytes": 48705734,
-        "wallMs": 2693.819513000002,
-        "inventoryPaths": 560,
-        "linksRefreshed": true
-      }
-    },
-    {
-      "variant": "before-title-cwd",
-      "sample": "migration-debug.jsonl",
-      "includedInFinalComparison": false,
-      "cpuMsPerScheduledMinute": 129.75650000000002,
-      "bytesReadPerIdleCycle": 2512048.5,
-      "cold": {
-        "cpuMs": 3505.101,
-        "readBytes": 19874107,
-        "wallMs": 3063.9361609999996,
-        "inventoryPaths": 560,
-        "linksRefreshed": true,
-        "phaseReadBytes": {
-          "inventory": 4462357,
-          "files": 14336393,
-          "migrations": 245
-        }
-      },
-      "delta": {
-        "cpuMs": 131.944,
-        "readBytes": 2740005,
-        "wallMs": 110.78464099999928,
-        "inventoryPaths": 1,
-        "linksRefreshed": true,
-        "phaseReadBytes": {
-          "inventory": 32938,
-          "files": 2669087,
-          "migrations": 170
-        }
-      }
-    },
-    {
-      "variant": "before-title-cwd",
-      "sample": "migration-head-1.jsonl",
-      "includedInFinalComparison": false,
-      "cpuMsPerScheduledMinute": 760.7871666666666,
-      "bytesReadPerIdleCycle": 48407786.333333336,
-      "cold": {
-        "cpuMs": 3062.79,
-        "readBytes": 65623259,
-        "wallMs": 2636.702819,
-        "inventoryPaths": 560,
-        "linksRefreshed": true
-      },
-      "delta": {
-        "cpuMs": 757.362,
-        "readBytes": 48632831,
-        "wallMs": 746.1559529999995,
-        "inventoryPaths": 1,
-        "linksRefreshed": true
-      }
-    },
-    {
-      "variant": "before-title-cwd",
-      "sample": "migration-head-2.jsonl",
-      "includedInFinalComparison": false,
-      "cpuMsPerScheduledMinute": 834.9245000000001,
-      "bytesReadPerIdleCycle": 48405007.833333336,
-      "cold": {
-        "cpuMs": 4185.096,
-        "readBytes": 65623140,
-        "wallMs": 3657.2481160000007,
-        "inventoryPaths": 560,
-        "linksRefreshed": true
-      },
-      "delta": {
-        "cpuMs": 1042.264,
-        "readBytes": 48632628,
-        "wallMs": 1036.7767109999986,
-        "inventoryPaths": 1,
-        "linksRefreshed": true
-      }
-    },
-    {
-      "variant": "before-title-cwd",
-      "sample": "migration-head-3.jsonl",
-      "includedInFinalComparison": false,
-      "cpuMsPerScheduledMinute": 832.9176666666667,
-      "bytesReadPerIdleCycle": 48407550.833333336,
-      "cold": {
-        "cpuMs": 4919.487,
-        "readBytes": 65624950,
-        "wallMs": 4361.705801,
-        "inventoryPaths": 560,
-        "linksRefreshed": true,
-        "phaseReadBytes": {
-          "inventory": 4462284,
-          "files": 60087278,
-          "migrations": 248
-        }
-      },
-      "delta": {
-        "cpuMs": 755.474,
-        "readBytes": 48634035,
-        "wallMs": 742.7436959999995,
-        "inventoryPaths": 1,
-        "linksRefreshed": true,
-        "phaseReadBytes": {
-          "inventory": 32942,
-          "files": 48563093,
-          "migrations": 212
-        }
-      }
-    },
-    {
-      "variant": "project-map-control",
-      "sample": "migration-base-1.jsonl",
-      "includedInFinalComparison": false,
-      "cpuMsPerScheduledMinute": 1645.8698333333332,
-      "bytesReadPerIdleCycle": 48444489.833333336,
-      "cold": {
-        "cpuMs": 2203.418,
-        "readBytes": 82362897,
-        "wallMs": 1862.399882,
-        "inventoryPaths": 560,
-        "linksRefreshed": true,
-        "phaseReadBytes": {
-          "inventory": 32549256,
-          "files": 49207109,
-          "migrations": 8441
-        }
-      },
-      "delta": {
-        "cpuMs": 1376.564,
-        "readBytes": 48616717,
-        "wallMs": 1347.1796130000002,
-        "inventoryPaths": 560,
-        "linksRefreshed": true,
-        "phaseReadBytes": {
-          "inventory": 28179,
-          "files": 48563239,
-          "migrations": 175
-        }
-      }
-    },
-    {
-      "variant": "project-map-control",
-      "sample": "migration-base-2.jsonl",
-      "includedInFinalComparison": false,
-      "cpuMsPerScheduledMinute": 1555.0643333333335,
-      "bytesReadPerIdleCycle": 48444340.166666664,
-      "cold": {
-        "cpuMs": 2554.775,
-        "readBytes": 82362869,
-        "wallMs": 2231.5991240000003,
-        "inventoryPaths": 560,
-        "linksRefreshed": true,
-        "phaseReadBytes": {
-          "inventory": 32549326,
-          "files": 49207117,
-          "migrations": 8435
-        }
-      },
-      "delta": {
-        "cpuMs": 1863.347,
-        "readBytes": 48616627,
-        "wallMs": 1838.9525630000007,
-        "inventoryPaths": 560,
-        "linksRefreshed": true,
-        "phaseReadBytes": {
-          "inventory": 28176,
-          "files": 48563167,
-          "migrations": 172
-        }
-      }
-    },
-    {
-      "variant": "project-map-control",
-      "sample": "migration-base-3.jsonl",
-      "includedInFinalComparison": false,
-      "cpuMsPerScheduledMinute": 1974.7495,
-      "bytesReadPerIdleCycle": 48442879.166666664,
-      "cold": {
-        "cpuMs": 3663.877,
-        "readBytes": 82363193,
-        "wallMs": 3220.3773,
-        "inventoryPaths": 560,
-        "linksRefreshed": true,
-        "phaseReadBytes": {
-          "inventory": 32549557,
-          "files": 49207157,
-          "migrations": 8438
-        }
-      },
-      "delta": {
-        "cpuMs": 2096.048,
-        "readBytes": 48616620,
-        "wallMs": 2064.022213,
-        "inventoryPaths": 560,
-        "linksRefreshed": true,
-        "phaseReadBytes": {
-          "inventory": 28024,
-          "files": 48563274,
-          "migrations": 210
-        }
-      }
-    },
-    {
-      "variant": "project-map-control",
-      "sample": "migration-debug.jsonl",
-      "includedInFinalComparison": false,
-      "cpuMsPerScheduledMinute": 129.75650000000002,
-      "bytesReadPerIdleCycle": 2512048.5,
-      "cold": {
-        "cpuMs": 3505.101,
-        "readBytes": 19874107,
-        "wallMs": 3063.9361609999996,
-        "inventoryPaths": 560,
-        "linksRefreshed": true,
-        "phaseReadBytes": {
-          "inventory": 4462357,
-          "files": 14336393,
-          "migrations": 245
-        }
-      },
-      "delta": {
-        "cpuMs": 131.944,
-        "readBytes": 2740005,
-        "wallMs": 110.78464099999928,
-        "inventoryPaths": 1,
-        "linksRefreshed": true,
-        "phaseReadBytes": {
-          "inventory": 32938,
-          "files": 2669087,
-          "migrations": 170
-        }
-      }
-    },
-    {
-      "variant": "project-map-control",
-      "sample": "migration-head-1.jsonl",
-      "includedInFinalComparison": false,
-      "cpuMsPerScheduledMinute": 93.49633333333333,
-      "bytesReadPerIdleCycle": 2512070.1666666665,
-      "cold": {
-        "cpuMs": 2571.128,
-        "readBytes": 19874069,
-        "wallMs": 2182.80926,
-        "inventoryPaths": 560,
-        "linksRefreshed": true,
-        "phaseReadBytes": {
-          "inventory": 4462168,
-          "files": 14336343,
-          "migrations": 246
-        }
-      },
-      "delta": {
-        "cpuMs": 109.407,
-        "readBytes": 2740188,
-        "wallMs": 99.8946449999994,
-        "inventoryPaths": 1,
-        "linksRefreshed": true,
-        "phaseReadBytes": {
-          "inventory": 32979,
-          "files": 2669251,
-          "migrations": 172
-        }
-      }
-    },
-    {
-      "variant": "project-map-control",
-      "sample": "migration-head-2.jsonl",
-      "includedInFinalComparison": false,
-      "cpuMsPerScheduledMinute": 106.9535,
-      "bytesReadPerIdleCycle": 2513368.8333333335,
-      "cold": {
-        "cpuMs": 3636.851,
-        "readBytes": 19873916,
-        "wallMs": 3136.2842899999996,
-        "inventoryPaths": 560,
-        "linksRefreshed": true,
-        "phaseReadBytes": {
-          "inventory": 4462167,
-          "files": 14336276,
-          "migrations": 283
-        }
-      },
-      "delta": {
-        "cpuMs": 116.097,
-        "readBytes": 2739891,
-        "wallMs": 105.06504200000018,
-        "inventoryPaths": 1,
-        "linksRefreshed": true,
-        "phaseReadBytes": {
-          "inventory": 32938,
-          "files": 2669011,
-          "migrations": 208
-        }
-      }
-    },
-    {
-      "variant": "project-map-control",
-      "sample": "migration-head-3.jsonl",
-      "includedInFinalComparison": false,
-      "cpuMsPerScheduledMinute": 95.005,
-      "bytesReadPerIdleCycle": 2513351.1666666665,
-      "cold": {
-        "cpuMs": 3027.932,
-        "readBytes": 19873596,
-        "wallMs": 2612.806928,
-        "inventoryPaths": 560,
-        "linksRefreshed": true,
-        "phaseReadBytes": {
-          "inventory": 4462088,
-          "files": 14336150,
-          "migrations": 242
-        }
-      },
-      "delta": {
-        "cpuMs": 116.258,
-        "readBytes": 2739979,
-        "wallMs": 97.95137000000068,
-        "inventoryPaths": 1,
-        "linksRefreshed": true,
-        "phaseReadBytes": {
-          "inventory": 32935,
-          "files": 2669003,
-          "migrations": 167
-        }
-      }
-    }
-  ],
-  "checkCommands": [
-    "bun node_modules/typescript/bin/tsc --noEmit --incremental false",
-    "bun node_modules/eslint/bin/eslint.js <changed TypeScript paths>",
-    "bun scripts/privacy-publication-gate.ts --require-known-values --paths <changed paths>",
-    "git diff --check"
-  ],
-  "checks": {
-    "typecheck": "pass",
-    "eslint": {
-      "errors": 0,
-      "preExistingRouteWarnings": 2
-    },
-    "privacyFiles": "pass",
-    "linuxBackend": "pass",
-    "scopedLinuxFiles": 17,
-    "additionalRequiredSiblingFiles": 5,
-    "gitWhitespace": "pass",
-    "privacyCommit": "verified after local commit before publication"
   }
 }
