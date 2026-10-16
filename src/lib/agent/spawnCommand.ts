@@ -5,7 +5,8 @@ import os from "node:os";
 import path from "node:path";
 
 import { codexLaunchTier, CodexServiceTierUnavailableError } from "@/lib/accounts/codexServiceTiers";
-import { after, NextRequest, NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
+import { deferSpawnWork } from "./spawnDeferral";
 
 import { operatorLocale } from "@/lib/operator/settings";
 import { accountsCollectionRevision } from "@/lib/accounts/accountsStore";
@@ -193,7 +194,7 @@ export const productionSpawnCommandDependencies: SpawnCommandDependencies = {
   publishFilesRevision,
   spawnStructuredConversation,
   assertStructuredRuntime: assertDarwinStructuredRuntime,
-  defer: (work) => after(work),
+  defer: deferSpawnWork,
   storeImages: (images) => runtimeImageStore().putMany(images),
   adoptPipelineAttemptFromSource,
   pipelineAttemptTargetForSource,
