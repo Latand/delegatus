@@ -2,8 +2,11 @@ import type { Metadata, Viewport } from "next";
 import "./globals.css";
 import { PRODUCT_NAME } from "@/lib/brand";
 
+import { roleAvatarDarkCss } from "@/components/brand/roleAvatarDarkCss";
 import { TeamSessionGuard } from "@/components/team/TeamSessionGuard";
 import { ROLE_FRAME_BOOT_SCRIPT } from "@/lib/roleFrames";
+
+const ROLE_AVATAR_DARK_CSS = roleAvatarDarkCss();
 
 export const metadata: Metadata = {
   title: PRODUCT_NAME,
@@ -30,6 +33,8 @@ export default function RootLayout({
     <html lang="en" className="h-full antialiased" suppressHydrationWarning>
       <head>
         <script dangerouslySetInnerHTML={{ __html: ROLE_FRAME_BOOT_SCRIPT }} />
+        {/* The dark theme's role avatars: the costumes without the light drawing's keyline. */}
+        <style dangerouslySetInnerHTML={{ __html: ROLE_AVATAR_DARK_CSS }} />
         {/* This document is the app itself, served by a Viewer that has the stream route: over plain HTTP
             its live streams share one connection (src/lib/streamMux/protocol.ts). */}
         <meta name="llv-stream-mux" content="1" />

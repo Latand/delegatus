@@ -14,7 +14,9 @@ import type { FrameRole } from "@/lib/roleFrames";
  *    an accessory thinner than 2;
  *  - no highlights or glints: every hat is flat colour like the body;
  *  - a hat covers the hair, with no grey fin behind it;
- *  - one pale keyline round the silhouette, so one file serves both schemes.
+ *  - the light drawing carries a pale keyline round the silhouette; the dark
+ *    theme draws the same costume without it (a pale ring on the dark card read
+ *    as a halo, operator 2026-10-16), see `costumeSvg(role, "dark")`.
  */
 
 const INK = "#231B1C";
@@ -44,7 +46,8 @@ function glasses(kind: "clear" | "no-right-lens" | "sunglasses"): string {
   const right = kind === "clear";
   return `<g fill="#FBEBDD" stroke="${INK}" stroke-width="3.6" stroke-linejoin="round">${LENS_L}${right ? LENS_R : ""}</g>${BRIDGE}<circle cx="22" cy="31" r="2.3" fill="${INK}"/>${right ? `<circle cx="42" cy="31" r="2.3" fill="${INK}"/>` : ""}`;
 }
-/** The pale keyline: invisible on a light card, an edge on a dark one. */
+/** The pale keyline of the light drawing: invisible on a light card. The dark
+    drawing leaves it out. */
 const KEYLINE = `<filter id="k" x="-8%" y="-8%" width="116%" height="116%"><feMorphology in="SourceAlpha" operator="dilate" radius="1.2" result="d"/><feFlood flood-color="#FFF6EE" flood-opacity="0.55"/><feComposite in2="d" operator="in"/><feMerge><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge></filter>`;
 
 /** One role's costume: what it does to the mark's hair, belly and glasses, and the layer it adds. */
@@ -173,9 +176,11 @@ const COSTUMES: Record<FrameRole, Costume> = {
   },
 };
 
-/** One role's costume as a standalone SVG document on the mark's 64 grid. */
-export function costumeSvg(role: string): string {
+/** One role's costume as a standalone SVG document on the mark's 64 grid. The
+    dark scheme's drawing is the light one without the keyline filter. */
+export function costumeSvg(role: string, scheme: "light" | "dark" = "light"): string {
   const costume = Object.hasOwn(COSTUMES, role) ? COSTUMES[role as FrameRole] : NEUTRAL_COSTUME;
+  const dark = scheme === "dark";
   const hair = costume.hair === "none" ? "" : costume.hair === "under-band" ? HAIR_UNDER_BAND : costume.hair === "trimmed" ? HAIR_TRIMMED : HAIR;
-  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">${KEYLINE}<g filter="url(#k)">${BODY_CLIP}${BODY}${costume.belly ?? BELLY}${hair}${glasses(costume.glasses ?? "clear")}${costume.front ?? ""}</g></svg>`;
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">${dark ? "" : KEYLINE}<g${dark ? "" : ' filter="url(#k)"'}>${BODY_CLIP}${BODY}${costume.belly ?? BELLY}${hair}${glasses(costume.glasses ?? "clear")}${costume.front ?? ""}</g></svg>`;
 }
