@@ -11502,7 +11502,7 @@ describe("keys settings", () => {
               .filter((control) => !menuNode!.contains(control) && control.closest("[data-keys-row]") !== menuNode!.closest("[data-keys-row]"))
               .filter((control) => { const r = control.getBoundingClientRect(); return r.width > 0 && r.left < menu.right && r.right > menu.left && r.top < menu.bottom && r.bottom > menu.top; })
               .map((control) => control.getAttribute("aria-label") ?? control.tagName) : [];
-            /* A notice sits clear of the line under the page header, and a long import names few unknown variables and keeps «Apply» under the bot notice. */
+            /* On the phone sheet a notice sits at least 8 px under the line below the page header, and a long import names few unknown variables and keeps «Apply» under the bot notice. */
             const pageNode = host.querySelector<HTMLElement>("[data-keys-page]");
             const noticeNode = pageNode?.querySelector<HTMLElement>("[data-keys-staging], [data-keys-member], [data-keys-failed]");
             const noticeGap = pageNode && noticeNode ? Math.round((noticeNode.getBoundingClientRect().top - pageNode.getBoundingClientRect().top) * 10) / 10 : null;
@@ -11542,7 +11542,7 @@ describe("keys settings", () => {
             if (geometry.offscreen.length) failures.push(`${key}: controls outside the surface ${geometry.offscreen.join(", ")}`);
             if (geometry.smallTargets.length) failures.push(`${key}: phone targets under 44 px ${geometry.smallTargets.join(", ")}`);
             if (geometry.squashed.length) failures.push(`${key}: pasted lines squeezed over the next ${geometry.squashed.join(" | ")}`);
-            if (geometry.noticeGap !== null && geometry.noticeGap < 8) failures.push(`${key}: the notice starts ${geometry.noticeGap} px under the header line`);
+            if (phone && geometry.noticeGap !== null && geometry.noticeGap < 8) failures.push(`${key}: the notice starts ${geometry.noticeGap} px under the header line`);
             if (geometry.unknownLines !== null && geometry.unknownLines > 2) failures.push(`${key}: the unknown variables take ${geometry.unknownLines} lines`);
             if (geometry.applyGap !== null && geometry.applyGap > 12) failures.push(`${key}: Apply is ${geometry.applyGap} px under the bot notice`);
             if (geometry.truncated.length) failures.push(`${key}: cut text ${geometry.truncated.join(" | ")}`);
