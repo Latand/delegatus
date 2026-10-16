@@ -321,6 +321,61 @@ else cp "$FIXTURE_SCHEMAS/stable.json" "$4/codex_app_server_protocol.schemas.jso
       }
     } finally { fs.rmSync(root, { recursive: true, force: true }); }
   });
+
+  test("a generator that ignores SIGTERM is killed at the deadline, refused, and not awaited by the next launch", async () => {
+    // The fixture ignores SIGTERM, as a hung CLI or a wrapper that keeps a
+    // child would, and leaves a grandchild in its group. Each launch records
+    // both pids so this test stops only what it started.
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-schema-hang-"));
+    const pidsFile = path.join(root, "pids");
+    const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+    const started = () => fs.existsSync(pidsFile) ? fs.readFileSync(pidsFile, "utf8").split(/\s+/).filter(Boolean).map(Number) : [];
+    try {
+      const binary = path.join(root, "codex");
+      fs.writeFileSync(binary, `#!/bin/sh
+if [ -n "$FIXTURE_HANG" ] && [ -e "$FIXTURE_HANG" ]; then
+  trap "" TERM
+  sleep 30 &
+  echo "$$ $!" >> "$FIXTURE_PIDS"
+  wait
+  exit 0
+fi
+mkdir -p "$4"
+if [ "$5" = "--experimental" ]; then cp "$FIXTURE_SCHEMAS/experimental.json" "$4/codex_app_server_protocol.schemas.json"
+else cp "$FIXTURE_SCHEMAS/stable.json" "$4/codex_app_server_protocol.schemas.json"; fi
+`, { mode: 0o755 });
+      const hang = path.join(root, "hang");
+      fs.writeFileSync(hang, "");
+      const scratch = path.join(root, "tmp");
+      fs.mkdirSync(scratch);
+      const previousTmp = process.env.TMPDIR;
+      process.env.TMPDIR = scratch;
+      try {
+        const env: NodeJS.ProcessEnv = { NODE_ENV: "test", PATH: process.env.PATH, FIXTURE_HANG: hang, FIXTURE_PIDS: pidsFile, FIXTURE_SCHEMAS: path.join(import.meta.dir, "protocol", "0.163.0") };
+        let calls = 0;
+        const generate: CodexSchemaGenerator = (cli, childEnv) => { calls++; return generateCodexSchemas(cli, childEnv, { timeoutMs: 200 }); };
+        const began = performance.now();
+        await expect(resolveCodexProtocol("0.163.5", binary, env, generate)).rejects.toThrow("CLI 0.163.5 has no pinned schema and its schema could not be compared with pin 0.163.0. Pin the CLI to a supported version, or regenerate with scripts/generate-codex-protocol.ts and review compatibility. Supported: 0.163.0, 0.162.1, 0.159.0, 0.154.0; cause: generate-json-schema failed (timed out)");
+        expect(performance.now() - began).toBeLessThan(5_000);
+        const hung = started();
+        expect(hung).toHaveLength(2);
+        const deadline = performance.now() + 2_000;
+        while (hung.some(alive) && performance.now() < deadline) await Bun.sleep(20);
+        expect(hung.filter(alive)).toEqual([]);
+        expect(fs.readdirSync(scratch)).toEqual([]);
+        // The refusal was evicted: the next launch generates afresh.
+        fs.rmSync(hang);
+        expect((await resolveCodexProtocol("0.163.5", binary, env, generate)).unpinned?.cliVersion).toBe("0.163.5");
+        expect(calls).toBe(2);
+        expect(fs.readdirSync(scratch)).toEqual([]);
+      } finally {
+        if (previousTmp === undefined) delete process.env.TMPDIR; else process.env.TMPDIR = previousTmp;
+      }
+    } finally {
+      for (const pid of started()) { try { process.kill(pid, "SIGKILL"); } catch { /* already gone */ } }
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  }, 10_000);
 });
 
 test("the router dispatches a generated request to its typed handler and response codec", async () => {

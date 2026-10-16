@@ -1,4 +1,4 @@
-import { execFile, spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -18,6 +18,7 @@ import oldestStable from "./protocol/0.154.0/stable.json";
 import oldestManifest from "./protocol/0.154.0/manifest.json";
 import { CodexAppServerProtocolError } from "./codexAppServerProtocol";
 import { codexSchemaBreaks } from "./codexSchemaCompatibility";
+import { signalDetachedProcessGroup } from "@/lib/processGroup";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 
 type Schema = { [key: string]: unknown; properties?: Record<string, Schema | boolean | undefined>; oneOf?: Schema[]; anyOf?: Schema[]; $ref?: string; type?: string | string[]; definitions?: Record<string, Schema> };
@@ -213,16 +214,31 @@ function nearestOlderPin(version: string): typeof pins[number] | undefined {
     .sort((left, right) => compareSemver(semver(right.manifest.version)!, semver(left.manifest.version)!))[0];
 }
 
-export const generateCodexSchemas: CodexSchemaGenerator = async (binary, env) => {
+/* One generator run, bounded without the child's cooperation: at the deadline
+ * its whole process group (an npm shim keeps the native binary as a child) is
+ * SIGKILLed and the run rejects at once, so a CLI that ignores signals cannot
+ * hold the shared admission past the bound. */
+function runGenerator(binary: string, args: string[], env: NodeJS.ProcessEnv, timeoutMs: number, label: string): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    const fail = (reason: string) => new CodexAppServerProtocolError(`${label} failed (${reason})`);
+    let settled = false;
+    const settle = (error?: Error) => { if (settled) return; settled = true; clearTimeout(timer); if (error) reject(error); else resolve(); };
+    const child = spawn(binary, args, { env, detached: true, stdio: "ignore" });
+    const timer = setTimeout(() => { signalDetachedProcessGroup(child, "SIGKILL"); settle(fail("timed out")); }, timeoutMs);
+    child.once("error", error => settle(fail(`exit ${String((error as NodeJS.ErrnoException).code ?? "unknown")}`)));
+    child.once("exit", (code, signal) => settle(code === 0 ? undefined : fail(`exit ${String(code ?? signal ?? "unknown")}`)));
+  });
+}
+
+export const generateCodexSchemas = async (binary: string, env: NodeJS.ProcessEnv, options: { timeoutMs?: number } = {}): Promise<{ stable: string; experimental: string }> => {
   const scratch = await fs.promises.mkdtemp(path.join(os.tmpdir(), "delegatus-codex-schema-"));
   try {
     const result = { stable: "", experimental: "" };
     for (const name of ["stable", "experimental"] as const) {
       const out = path.join(scratch, name);
-      await new Promise<void>((resolve, reject) => execFile(binary,
-        ["app-server", "generate-json-schema", "--out", out, ...(name === "experimental" ? ["--experimental"] : [])],
-        { env, timeout: GENERATION_TIMEOUT_MS, maxBuffer: 1024 * 1024 },
-        error => error ? reject(new CodexAppServerProtocolError(`generate-json-schema${name === "experimental" ? " --experimental" : ""} failed (${error.killed ? "timed out" : `exit ${String(error.code ?? error.signal ?? "unknown")}`})`)) : resolve()));
+      const experimental = name === "experimental" ? ["--experimental"] : [];
+      await runGenerator(binary, ["app-server", "generate-json-schema", "--out", out, ...experimental], env,
+        options.timeoutMs ?? GENERATION_TIMEOUT_MS, `generate-json-schema${experimental.length ? " --experimental" : ""}`);
       result[name] = await fs.promises.readFile(path.join(out, "codex_app_server_protocol.schemas.json"), "utf8");
     }
     return result;
