@@ -14,6 +14,9 @@ import type { RuntimeSwitchDelivery } from "./runtimeSwitch";
 import type { PipelineRuntimeSwitch } from "./types";
 import { launchServiceTier } from "@/lib/runtime/codexTurnProfile";
 import { isAccountMutationContention } from "@/lib/accounts/contentionMessage";
+import { AccountCommitBusyError } from "@/lib/accounts/accountMutationContext";
+import { FileTransactionBusyError } from "@/lib/state/fileTransaction";
+import { stateDatabaseBusy, stateLockDeferral } from "@/lib/state/lockWait";
 import { agentMemoryHeadroom, memoryKillText, type AgentMemoryKill } from "@/lib/runtime/agentMemory";
 import { claudeHostEndText } from "@/lib/runtime/hostEndCause";
 import { CPU_PRESSURE_DETAIL_PREFIXES, cpuPressureHoldDetail, machineCpuPressureGate, machineCpuPressurePollMs, type CpuPressureHold } from "@/lib/runtime/cpuPressure";
@@ -6327,6 +6330,22 @@ async function spawnRunStage(
       return;
     }
     const detail = error instanceof Error ? error.message : String(error);
+    if (!attempt.launchId && !attempt.conversationId && !attempt.agentPath && !attempt.paneId
+      && isLaunchAdmissionContention(error)) {
+      const failedAt = ports.now();
+      if (bookControllerWaitRound(attempt, activationNow, failedAt, ports,
+        { budgetMs: SPAWN_HOST_WAIT_BUDGET_MS, retryMaxMs: SPAWN_HOST_RETRY_MAX_MS }) === "exhausted") {
+        park(pipeline, controllerWaitParkDetail(attempt, failedAt, detail), attempt);
+        return;
+      }
+      attempt.state = "pending";
+      attempt.error = null;
+      setCursorState(pipeline, stage.id, "pending");
+      pipeline.stateDetail = `stage spawn deferred: ${controllerFailureReason(detail)}; retry at ${attempt.controllerWait!.retryAfter}`;
+      if (attempt.activation) attempt.activation.phase = "settled";
+      await persist();
+      return;
+    }
     const wait = attempt.providerWait;
     // Admission failed before a launch was reserved. The old quota reset still
     // owes a retry; any reserved identity keeps the ordinary receipt/host gate.
@@ -9498,6 +9517,15 @@ function isPrepublicationSpawnFailure(failure: string): boolean {
     || failure === `${releasedBeforePublication}${PREPUBLICATION_RETRY_REFUSAL_SUFFIX}`
     || failure.startsWith("structured spawn interrupted before identity staging: ")
     || failure.startsWith("structured spawn interrupted before runtime admission: ");
+}
+
+/** Acquisition failures before the reservation callback cannot have dispatched
+ * a host. A bound identity keeps the receipt's existing recovery authority. */
+function isLaunchAdmissionContention(error: unknown): boolean {
+  const code = error && typeof error === "object" && "code" in error ? error.code : null;
+  return stateDatabaseBusy(error) || stateDatabaseBusy(code)
+    || error instanceof RegistryWriterBusyError || error instanceof AccountCommitBusyError
+    || error instanceof FileTransactionBusyError || stateLockDeferral(error) !== null;
 }
 
 function isTransientStructuredSpawnFailure(failure: string): boolean {

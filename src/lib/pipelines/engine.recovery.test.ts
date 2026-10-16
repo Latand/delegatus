@@ -2668,7 +2668,7 @@ test("two activation controllers claim one pre-host retry and reserve one succes
   f.h.ports.claimSpawnRetry = async (...args) => { enter(); await gate; return claim(...args); };
   const first = engineModule.drainStageActivations(f.h.ports);
   try {
-    await entered;
+    await Promise.race([entered, first.then(() => { throw new Error("pre-host retry claim was never reached"); })]);
     const peer = Bun.spawn([process.execPath, "-e", `
       const { defaultPipelinePorts, drainStageActivations } = await import("./src/lib/pipelines/engine.ts");
       await drainStageActivations({ ...defaultPipelinePorts(), spawnAgent: async () => { throw new Error("unexpected peer dispatch"); } });
@@ -2815,4 +2815,140 @@ test.each(["released", "exhausted"] as const)("a contended retry claim keeps the
   expect(attempt.spawnCalls).toBe(1);
   if (outcome === "released") expect(attempt.retiredLaunches).toHaveLength(1);
   else expect(attempt.error).toContain("failed after 1 retries");
+});
+
+
+const RAW_ADMISSION_BUSY = ["database is locked", "database is busy", "SQLITE_BUSY", "SQLITE_LOCKED"] as const;
+test.each(RAW_ADMISSION_BUSY.flatMap(message => (["released", "exhausted"] as const).map(outcome => ({ message, outcome }))))("raw SQLite admission contention before a receipt uses bounded retry: %j", async ({ message, outcome }) => {
+  const h = harness();
+  await create(h.ports);
+  await tickPipelines([], h.ports);
+  const advance = frozenWallClock(h);
+  const baseSpawn = h.ports.spawnAgent;
+  let calls = 0;
+  const admissionInputs: Parameters<PipelinePorts["spawnAgent"]>[0][] = [];
+  h.ports.spawnAgent = async (input, reserved) => {
+    calls++; admissionInputs.push(input);
+    if (calls === 1 || outcome === "exhausted") throw new Error(message);
+    return baseSpawn(input, reserved);
+  };
+  Object.assign(h.ports, { sleep: forbiddenSleep, claimSpawnRetry: () => { throw new Error("a missing receipt has no retry claim"); } });
+  await tickPipelines([], h.ports);
+  const waiting = loadPipelines()[0]!;
+  const attempt = waiting.runs[0]!.attempts[0]!;
+  expect(waiting).toMatchObject({ state: "running", cursor: { state: "pending" } });
+  expect(waiting.stateDetail).toContain(`stage spawn deferred: ${message}; retry at `);
+  expect(attempt).toMatchObject({ n: 1, state: "pending", launchId: null, conversationId: null, spawnCalls: 1,
+    controllerWait: { rounds: 1, budgetMs: 600_000, retryMaxMs: 60_000 } });
+  expect(h.spawnInputs).toHaveLength(0);
+  await tickPipelines([], h.ports);
+  expect(calls).toBe(1);
+  if (outcome === "released") {
+    advance(Date.parse(attempt.controllerWait!.retryAfter) - Date.parse(h.ports.now()) + 1);
+    await tickPipelines([], h.ports);
+    const running = loadPipelines()[0]!;
+    expect(running).toMatchObject({ state: "running", worktreeDir: waiting.worktreeDir });
+    expect(running.runs[0]!.attempts).toHaveLength(1);
+    expect(running.runs[0]!.attempts[0]).toMatchObject({ n: 1, state: "running", launchId: "launch-1", spawnCalls: 2 });
+    expect(h.spawnInputs).toHaveLength(1);
+    expect(h.spawnInputs[0]).toMatchObject({ cwd: admissionInputs[0]!.cwd, prompt: admissionInputs[0]!.prompt });
+  } else {
+    const child = Bun.spawn([process.execPath, "-e", `
+      const { defaultPipelinePorts, tickPipelines } = await import("./src/lib/pipelines/engine.ts");
+      const { loadPipelines } = await import("./src/lib/pipelines/store.ts");
+      let calls = 0;
+      await tickPipelines([], { ...defaultPipelinePorts(),
+        now: () => new Date(Number(process.env.LLV_TEST_CLOCK)).toISOString(),
+        exec: async () => ({ code: 0, stdout: "", stderr: "" }),
+        worktreePresent: () => true, sourcePathAllowed: () => false, engineReadiness: () => "connected",
+        cpuPressureHold: () => null, cpuAdmissionReconcile: () => {}, drainHold: () => null,
+        structuredDeliveryPublication: () => "ready", scheduleTick: () => {},
+        spawnAgent: async () => { calls++; throw new Error(process.env.LLV_TEST_BUSY); },
+        spawnReceipt: () => null,
+        claimSpawnRetry: () => { throw new Error("unexpected receipt claim"); },
+      });
+      const pipeline = loadPipelines()[0];
+      process.stdout.write(JSON.stringify({ calls, pipeline }));
+      process.exit(0);
+    `], { cwd: process.cwd(), env: { ...process.env, LLV_TEST_CLOCK: String(Date.parse(attempt.controllerWait!.startedAt) + 601_000), LLV_TEST_BUSY: message }, stdout: "pipe", stderr: "pipe" });
+    const childDeadline = setTimeout(() => { if (child.exitCode === null) child.kill(); }, 10_000);
+    try {
+      const [output, errors, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+      expect({ code, errors }).toMatchObject({ code: 0 });
+      const result = JSON.parse(output);
+      expect({ calls: result.calls, detail: result.pipeline.stateDetail }).toMatchObject({ calls: 1 });
+      expect(result.pipeline).toMatchObject({ state: "needs_decision", worktreeDir: waiting.worktreeDir });
+      expect(result.pipeline.runs[0].attempts).toHaveLength(1);
+      expect(result.pipeline.runs[0].attempts[0]).toMatchObject({ n: 1, launchId: null, conversationId: null, spawnCalls: 2,
+        controllerWait: { startedAt: attempt.controllerWait!.startedAt, rounds: 1, budgetMs: 600_000 } });
+      expect(result.pipeline.stateDetail).toContain(`stage spawn failed after 1 retries over 601s: ${message}`);
+    } finally { clearTimeout(childDeadline); if (child.exitCode === null) child.kill(); await child.exited; }
+  }
+}, 20_000);
+
+test.each([...RAW_ADMISSION_BUSY])("raw SQLite contention after reservation retains the unresolved receipt: %s", async message => {
+  const h = harness();
+  await create(h.ports);
+  await tickPipelines([], h.ports);
+  frozenWallClock(h);
+  let calls = 0;
+  h.ports.spawnAgent = async (_input, reserved) => {
+    calls++;
+    await reserved({ launchId: "launch-locked-reserved", conversationId: "conversation_locked_reserved" });
+    throw new Error(message);
+  };
+  h.ports.spawnReceipt = () => ({ ...failedReceipt("launch-locked-reserved", "conversation_locked_reserved", message), state: "starting" });
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  expect(calls).toBe(1);
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]).toMatchObject({ state: "needs_decision", launchId: "launch-locked-reserved", conversationId: "conversation_locked_reserved" });
+  expect(h.spawnInputs).toHaveLength(0);
+});
+
+test.each(["SQLITE_CORRUPT: database disk image is malformed", "disk I/O error"])("permanent storage admission failures retain their cause: %s", async message => {
+  const h = harness();
+  await create(h.ports);
+  await tickPipelines([], h.ports);
+  frozenWallClock(h);
+  let calls = 0;
+  h.ports.spawnAgent = async () => { calls++; throw new Error(message); };
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  expect(calls).toBe(1);
+  expect(loadPipelines()[0]).toMatchObject({ state: "needs_decision", stateDetail: message });
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.controllerWait).toBeUndefined();
+});
+
+
+test.each(["registry", "account-commit", "lease", "deferred", "wrapped-deferred", "busy-code", "locked-code"])("typed storage admission contention without a receipt uses the same wait: %s", async kind => {
+  const { RegistryWriterBusyError } = await import("@/lib/agent/registry");
+  const { AccountCommitBusyError } = await import("@/lib/accounts/accountMutationContext");
+  const { FileTransactionBusyError } = await import("@/lib/state/fileTransaction");
+  const { StateLockDeferredError } = await import("@/lib/state/lockWait");
+  const failure = kind === "registry" ? new RegistryWriterBusyError("pipeline.parent")
+    : kind === "account-commit" ? new AccountCommitBusyError("state writer is busy during account commit")
+    : kind === "lease" ? new FileTransactionBusyError("state admission timed out at pipeline.fixture")
+    : kind === "deferred" ? new StateLockDeferredError("pipeline.fixture")
+    : kind === "wrapped-deferred" ? new Error("storage admission is being updated", { cause: new StateLockDeferredError("pipeline.fixture") })
+    : Object.assign(new Error("SQLite admission is temporarily unavailable"), { code: kind === "busy-code" ? "SQLITE_BUSY" : "SQLITE_LOCKED" });
+  const h = harness();
+  await create(h.ports);
+  await tickPipelines([], h.ports);
+  const advance = frozenWallClock(h);
+  const baseSpawn = h.ports.spawnAgent;
+  let calls = 0;
+  h.ports.spawnAgent = async (input, reserved) => {
+    if (++calls === 1) throw failure;
+    return baseSpawn(input, reserved);
+  };
+  Object.assign(h.ports, { sleep: forbiddenSleep });
+  await tickPipelines([], h.ports);
+  const attempt = loadPipelines()[0]!.runs[0]!.attempts[0]!;
+  expect(attempt).toMatchObject({ n: 1, state: "pending", launchId: null, conversationId: null,
+    controllerWait: { rounds: 1, budgetMs: 600_000, retryMaxMs: 60_000 } });
+  expect(loadPipelines()[0]!.stateDetail).toContain(`stage spawn deferred: ${failure.message}; retry at `);
+  advance(Date.parse(attempt.controllerWait!.retryAfter) - Date.parse(h.ports.now()) + 1);
+  await tickPipelines([], h.ports);
+  expect(h.spawnInputs).toHaveLength(1);
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]).toMatchObject({ n: 1, state: "running", launchId: "launch-1", spawnCalls: 2 });
 });
