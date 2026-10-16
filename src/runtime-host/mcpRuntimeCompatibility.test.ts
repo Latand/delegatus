@@ -5,12 +5,24 @@ import path from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 
-import { createViewerMcpServer, MCP_TOOL_NAMES } from "@/lib/mcp/server";
+import { createViewerMcpHealthProbeServer, createViewerMcpServer, MCP_TOOL_NAMES } from "@/lib/mcp/server";
 import { probeMcpRuntime as legacyProbe } from "./fixtures/legacyMcpRuntimeProbe";
+
+test("ordinary stdio clients cannot discover the deprecated update bridge", async () => {
+  const server = createViewerMcpServer({ async callTool() { throw new Error("no tool call expected"); } });
+  const client = new Client({ name: "ordinary-agent", version: "1" });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  try {
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+    const names = (await client.listTools()).tools.map(tool => tool.name);
+    expect(names).not.toContain("suggest_replies");
+    expect(MCP_TOOL_NAMES as readonly string[]).not.toContain("suggest_replies");
+  } finally { await client.close(); await server.close(); }
+});
 
 test("deprecated update bridge: every call refuses with the decision-form route without entering the service", async () => {
   let calls = 0;
-  const server = createViewerMcpServer({ async callTool() { calls++; throw new Error("bridge entered active service"); } });
+  const server = createViewerMcpHealthProbeServer({ async callTool() { calls++; throw new Error("bridge entered active service"); } });
   const client = new Client({ name: "bridge-test", version: "1" });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   try {
@@ -36,8 +48,8 @@ test("deprecated update bridge: the unchanged old prober accepts the new candida
   fs.writeFileSync(worker, `
     import { StdioServerTransport } from ${JSON.stringify(require.resolve("@modelcontextprotocol/sdk/server/stdio.js"))};
     import { ListToolsRequestSchema } from ${JSON.stringify(require.resolve("@modelcontextprotocol/sdk/types.js"))};
-    import { createViewerMcpServer, MCP_TOOL_NAMES } from ${JSON.stringify(path.resolve("src/lib/mcp/server.ts"))};
-    const server = createViewerMcpServer({async callTool(name) {return {ok:true,toolName:name,clientRequestId:null,replayed:false};}});
+    import { createViewerMcpHealthProbeServer, MCP_TOOL_NAMES } from ${JSON.stringify(path.resolve("src/lib/mcp/server.ts"))};
+    const server = createViewerMcpHealthProbeServer({async callTool(name) {return {ok:true,toolName:name,clientRequestId:null,replayed:false};}});
     if (process.argv.includes("--without-bridge")) server.server.setRequestHandler(ListToolsRequestSchema,()=>({tools:MCP_TOOL_NAMES.map(name=>({name,inputSchema:{type:"object"}}))}));
     await server.connect(new StdioServerTransport());
   `);

@@ -4617,6 +4617,14 @@ export function createViewerMcpServer(service: McpToolService): McpServer {
       }
     });
   }
+  return server;
+}
+
+/** The retired name exists only for a runtime-host-admitted update probe.
+ * Ordinary stdio and HTTP servers never register it, so agents cannot discover
+ * the compatibility surface in tools/list. */
+export function createViewerMcpHealthProbeServer(service: McpToolService): McpServer {
+  const server = createViewerMcpServer(service);
   // Older installed deployers compare the candidate against their full catalog.
   // Removal conditions: docs/verification/managed-mcp-catalog.md#bridge-removal.
   // This registration never enters bindings, policy, receipts or agent prompts.
@@ -4708,7 +4716,9 @@ export async function startViewerMcpServer(): Promise<void> {
   delete process.env[MCP_HEALTH_PROBE_CAPABILITY_ENV];
   const hostHealthProbe = await admittedMcpHealthProbe(healthProbeCapability);
   const service = await createProductionViewerMcpService(hostHealthProbe, true);
-  const server = createViewerMcpServer(service);
+  const server = hostHealthProbe
+    ? createViewerMcpHealthProbeServer(service)
+    : createViewerMcpServer(service);
   const transport = new StdioServerTransport();
   // The SDK does not close its transport on EOF. A dead client (including a
   // killed launcher) must not leave domain timers or in-flight reads resident.
