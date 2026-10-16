@@ -203,6 +203,13 @@
   :root:not([data-theme="light"]) .kb :focus-visible:not(:where(.reader-host *, .seat *, .kb-lead *, .bar-slot *)),
   :root:not([data-theme="light"]) .composer-ghost:focus-visible,
   :root:not([data-theme="light"]) button[data-composer-send]:focus-visible { --tw-ring-color: transparent; }
+  /* A filled accent action draws its solid ring flush around an accent fill,
+     which reads as the button growing. A canvas gap, as Send has, separates them. */
+  :root:not([data-theme="light"]) :is(.bg-brand, .bg-accent.text-white):is(.focus-visible\:ring-accent\/35, .focus-visible\:ring-accent\/40, .focus-visible\:ring-accent\/45, .focus-visible\:ring-accent\/50, .focus-visible\:ring-accent\/55, .focus-visible\:ring-accent\/60):focus-visible {
+    --tw-ring-offset-width: 2px;
+    --tw-ring-offset-color: var(--color-canvas);
+    --tw-ring-offset-shadow: 0 0 0 2px var(--color-canvas);
+  }
   :root:not([data-theme="light"]) .kb .reader.conv:focus-visible { box-shadow: inset 0 0 0 2px var(--color-accent); }
   /* The role-memory lesson button draws its outline at 40 % accent (2:1); solid it reads 5.3:1 or more. */
   :root:not([data-theme="light"]) .pblock .stage-lesson:focus-visible { outline-color: var(--color-accent); }
@@ -233,6 +240,9 @@
     box-shadow: inset 0 0 0 1px var(--color-strong);
   }
   :root:not([data-theme="light"]) .kb .icon-btn:active:not(:disabled) { background: var(--color-raised); box-shadow: inset 0 0 0 1px var(--color-strong); }
+  /* On the raised surfaces (sheet, popover, menu) the press keeps the well the
+     hover shows: raised on raised would lift the button off its hover. */
+  :root:not([data-theme="light"]) .kb :is(.gsheet, .popover, .menu) .icon-btn:active:not(:disabled) { background: var(--surface-well); box-shadow: inset 0 0 0 1px var(--color-strong); }
 }
 
 /* `data-theme="dark"` pins dark whatever the OS asks. */
@@ -424,6 +434,13 @@
 :root[data-theme="dark"] .kb :focus-visible:not(:where(.reader-host *, .seat *, .kb-lead *, .bar-slot *)),
 :root[data-theme="dark"] .composer-ghost:focus-visible,
 :root[data-theme="dark"] button[data-composer-send]:focus-visible { --tw-ring-color: transparent; }
+/* A filled accent action draws its solid ring flush around an accent fill,
+   which reads as the button growing. A canvas gap, as Send has, separates them. */
+:root[data-theme="dark"] :is(.bg-brand, .bg-accent.text-white):is(.focus-visible\:ring-accent\/35, .focus-visible\:ring-accent\/40, .focus-visible\:ring-accent\/45, .focus-visible\:ring-accent\/50, .focus-visible\:ring-accent\/55, .focus-visible\:ring-accent\/60):focus-visible {
+  --tw-ring-offset-width: 2px;
+  --tw-ring-offset-color: var(--color-canvas);
+  --tw-ring-offset-shadow: 0 0 0 2px var(--color-canvas);
+}
 :root[data-theme="dark"] .kb .reader.conv:focus-visible { box-shadow: inset 0 0 0 2px var(--color-accent); }
 /* The role-memory lesson button draws its outline at 40 % accent (2:1); solid it reads 5.3:1 or more. */
 :root[data-theme="dark"] .pblock .stage-lesson:focus-visible { outline-color: var(--color-accent); }
@@ -454,3 +471,6 @@
   box-shadow: inset 0 0 0 1px var(--color-strong);
 }
 :root[data-theme="dark"] .kb .icon-btn:active:not(:disabled) { background: var(--color-raised); box-shadow: inset 0 0 0 1px var(--color-strong); }
+/* On the raised surfaces (sheet, popover, menu) the press keeps the well the
+   hover shows: raised on raised would lift the button off its hover. */
+:root[data-theme="dark"] .kb :is(.gsheet, .popover, .menu) .icon-btn:active:not(:disabled) { background: var(--surface-well); box-shadow: inset 0 0 0 1px var(--color-strong); }

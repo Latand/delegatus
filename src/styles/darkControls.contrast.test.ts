@@ -316,3 +316,23 @@ test("the board's raised surfaces keep the well for hover fills and the cards in
     expect(lines.indexOf("{ --dc-hover: var(--color-raised); }")).toBeLessThan(lines.indexOf(".kb :is(.gsheet, .popover, .menu)"));
   }
 });
+
+test("a pressed icon button on a raised surface keeps the well, and a focused accent fill is ringed with a canvas gap, in both scopes", () => {
+  /* The press is no lighter than the hover it follows: the well, never the sheet's own raised colour. */
+  expect(luminance(well)).toBeLessThan(luminance(raised));
+  const scopes = RULES.split(/(?=^\/\* `data-theme="dark"` pins)/m);
+  expect(scopes.length).toBe(2);
+  for (const scope of scopes) {
+    const lines = scope.replace(/^ +/gm, "");
+    expect(lines).toMatch(/\.kb :is\(\.gsheet, \.popover, \.menu\) \.icon-btn:active:not\(:disabled\) \{ background: var\(--surface-well\); box-shadow: inset 0 0 0 1px var\(--color-strong\); \}/);
+    /* The raised-surface press follows the general one it overrides. */
+    expect(lines.indexOf(".kb .icon-btn:active:not(:disabled) {")).toBeLessThan(lines.indexOf(".kb :is(.gsheet, .popover, .menu) .icon-btn:active"));
+    const ring = lines.match(/:is\(\.bg-brand, \.bg-accent\.text-white\):is\(([^)]*)\):focus-visible \{([^}]*)\}/);
+    expect(ring).not.toBeNull();
+    for (const share of ["35", "40", "45", "50", "55", "60"]) expect(ring![1]).toContain(`.focus-visible\\:ring-accent\\/${share}`);
+    expect(ring![2]).toContain("--tw-ring-offset-width: 2px;");
+    expect(ring![2]).toContain("--tw-ring-offset-shadow: 0 0 0 2px var(--color-canvas);");
+  }
+  /* The ring is solid accent over the canvas gap: 3:1 or more against the canvas. */
+  expect(contrast(accent, canvas)).toBeGreaterThanOrEqual(3);
+});
