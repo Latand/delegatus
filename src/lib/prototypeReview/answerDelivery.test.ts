@@ -16,6 +16,7 @@ import { mintSession, MEMBER_COOKIE } from "@/lib/team/sessions";
 import { LEGACY_FIXTURE_TITLE, planGhostSettlement, applyGhostSettlement } from "@/lib/tasks/ghostSettlement";
 import { operatorDecisions, seatDecisionNotices, withPrototypeReviewSummaries } from "./read";
 import { prototypeReviewNotices } from "./model";
+import { persistProjectAliases, resetProjectAliasesForTests } from "@/lib/projects/aliases";
 import { resetPrototypeDeliveryWorkerForTests, settlePrototypeDeliveriesForTests, sweepPrototypeDeliveries } from "./deliveryWorker";
 import { clearSeatRoundsForTests, insertSeatRound, findSeatRound, loadSeatRounds, mutateSeatRound, SEAT_ROUNDS_LIMIT } from "./seatRounds";
 import { telegramPostSignals } from "./telegramPostSignals";
@@ -50,10 +51,12 @@ beforeEach(async () => {
   setSystemTime(NOW);
   await resetPrototypeDeliveryWorkerForTests(); resetTeamStoreForTests();
   root = fs.mkdtempSync(path.join(process.env.TMPDIR!, "answer-state-")); process.env.LLV_STATE_DIR = root;
+  resetProjectAliasesForTests();
   saveTasks([]); clearSeatRoundsForTests();
 });
 afterEach(async () => {
   await resetPrototypeDeliveryWorkerForTests(); resetTeamStoreForTests();
+  resetProjectAliasesForTests();
   setSystemTime();
   process.env.LLV_STATE_DIR = previousState; fs.rmSync(root, { recursive: true, force: true });
 });
@@ -203,6 +206,20 @@ test("C: badge notices and the panel include the same undelivered task and seat 
   expect(notices.map(n => n.reviewId).sort()).toEqual([ID, seat.id]);
   expect(panel.map(r => r.id).sort()).toEqual(notices.map(n => n.reviewId).sort());
   expect(panel.every(r => r.decision?.delivery.phase === "attention")).toBe(true);
+});
+
+test("C: seat answer notices use the canonical project after project succession", () => {
+  expect(persistProjectAliases([{ source: "project-previous", target: "project-a", displayName: "Project A" }])).toBe(true);
+  const saved = decision(); saved.delivery.failingSince = "2026-10-16T07:00:00Z";
+  const historical = { ...round(), project: "project-previous", decision: saved };
+  insertSeatRound(historical);
+
+  const panel = operatorDecisions("project-a", []).decisions;
+  const notices = seatDecisionNotices().filter(notice => notice.project === "project-a");
+
+  expect(panel.map(item => item.id)).toEqual([ID]);
+  expect(notices.map(item => item.reviewId)).toEqual(panel.map(item => item.id));
+  expect(notices[0]).toMatchObject({ project: "project-a", target: { project: "project-a" }, undelivered: true });
 });
 
 test.each(["pending", "failed", "uncertain", "no-orchestrator"] as const)("D: %s decided rounds block both task commands and direct store completion", state => {

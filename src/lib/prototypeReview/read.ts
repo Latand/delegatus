@@ -141,7 +141,10 @@ export function operatorDecisionRound(project: string, reviewId: string, tasks: 
 /** The seat's waiting forms and undelivered answers, beside the tasks' rounds. */
 export function seatDecisionNotices(project?: string): PrototypeReviewNotice[] {
   try { return loadSeatRounds(project).filter(round => !round.decision || prototypeDeliveryPhase(round.decision.delivery, Date.now()) === "attention")
-    .map(round => ({ ...seatRoundNotice(round), ...(round.decision ? { undelivered: true as const } : {}) })); }
+    .map(round => {
+      const project = canonicalProject(round.project);
+      return { ...seatRoundNotice({ ...round, project }), ...(round.decision ? { undelivered: true as const } : {}) };
+    }); }
   catch { return []; /* The board read never fails on the seat's questions; the column says so on its own read. */ }
 }
 
