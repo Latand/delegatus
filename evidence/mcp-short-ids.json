@@ -1,12 +1,12 @@
 {
   "schemaVersion": 1,
-  "recordedAt": "2026-10-16T19:22:21.688Z",
+  "recordedAt": "2026-10-16T19:30:16.205Z",
   "baselineRevision": "a880de287ec6a92cf1bb3da721b70f5dd52d7a51",
-  "implementationRevision": "c0c6341ceefce74f44350c7c5e6923ebcde02c25",
+  "implementationRevision": "173c7fb1dbaa74f9a373fdb1a1313eb390126b8e",
   "integratedMainRevision": "a880de287ec6a92cf1bb3da721b70f5dd52d7a51",
   "fixture": {
     "path": "src/lib/mcp/shortIds.answers.test.ts",
-    "sha256": "7c9c69e97f9de6a55cc9ecb792353e588d5fc3594667ec1db62c34b7ffec3d5e",
+    "sha256": "d108ca15cc6f2a699d727bc5c279888a2f7a0d126bc5f4714866d8bf2da1754c",
     "pipelines": 24,
     "stagesPerPipeline": 4,
     "attemptsPerStage": 2,
@@ -783,14 +783,14 @@
       "policy": "Matched against captured merge base; only introduced failures block."
     },
     "touchedTestCommand": "bash scripts/gate-slot.sh bun scripts/local-gate-tests.ts --base a880de287ec6a92cf1bb3da721b70f5dd52d7a51 <explicit test paths>",
-    "settlement": "Nine explicit test files: zero new failures; two engine.creation assertions reproduce on the base. Three new test files were judged on head alone.",
-    "typecheck": "gate-slot.sh ./node_modules/.bin/tsc --noEmit: passed",
-    "lint": "eslint-changes.ts against captured base: zero introduced errors, zero pre-existing errors in changed files",
+    "settlement": "Nine explicit changed test paths: zero new failures and two engine.creation failures pre-existed on the captured base; final media collision and answer guards reran green on head.",
+    "typecheck": "gate-slot.sh ./node_modules/.bin/tsc --noEmit after final collision fixtures: passed",
+    "lint": "eslint-changes.ts against captured base: zero introduced errors, zero pre-existing errors in changed files; final test edits pass focused lint.",
     "build": "gate-slot.sh bun run build:mcp: passed (13,053,941 bytes)",
     "privacy": "privacy-publication-gate.ts --require-known-values --base a880de287ec6a92cf1bb3da721b70f5dd52d7a51: passed",
     "defaultAnswerGuard": "Head census and populated guards pass; baseline census records long hashes, and tools/list mutation is rejected.",
     "hosted": "No push; required hosted checks await pipeline publication.",
-    "finalFixture": "Three isolated runs per revision were byte-identical: base 376,832 bytes / 15,812 long-hash characters; head 362,554 bytes / zero long-hash characters."
+    "finalFixture": "Final fixture SHA recorded; three isolated runs per revision were byte-identical: base 376,832 bytes / 15,812 long-hash characters; head 362,554 bytes / zero long-hash characters."
   },
   "sourceSha256": {
     "src/app/api/runtime/deployments/route.ts": "dae440a27df66fd48b5c27ad38c7ae872447f9acb439f9720b1ff31a19acbba5",
@@ -821,7 +821,7 @@
     "src/lib/mcp/issueReport.test.ts": "15918d9ae3a69d443ee353550150d8b2c348819fc328c5f76e6b8f1d4ed5af74",
     "src/lib/mcp/server.ts": "5f8e7a32ce795ae8a9316e87664a8d2abf116386a1252341faa30bfffce59a71",
     "src/lib/mcp/shortIdArgs.ts": "97b8833c65a8a3992e518023afde6ed2dca345d7354fd2d4ba95b4aa63621d62",
-    "src/lib/mcp/shortIds.answers.test.ts": "7c9c69e97f9de6a55cc9ecb792353e588d5fc3594667ec1db62c34b7ffec3d5e",
+    "src/lib/mcp/shortIds.answers.test.ts": "d108ca15cc6f2a699d727bc5c279888a2f7a0d126bc5f4714866d8bf2da1754c",
     "src/lib/monitor/ruleReports.test.ts": "7ee31247d97f830de32a2ad8a2413af97c2742dd9b4a306fab677800e589387a",
     "src/lib/monitor/ruleReports.ts": "0d22394bd09763369e7b0ab9e0aca4cf8c70d59158d684532101d9b8e55a025a",
     "src/lib/monitor/seatTick.test.ts": "f7e5f4f9d8223f3dfb1a45fd87af2e5b6dd2d334486922c2c99096e53ee8f9a1",
@@ -842,7 +842,7 @@
     "src/lib/pipelines/types.ts": "5632200a81cfb7ccbdf9f711fc8395b91ffb27789d1ae0b143293f7fc8072bcb",
     "src/lib/projects/nameResolution.ts": "f675379ccca77e17d980b9f32b0d1eb372339fbfb8a243dfacf9d910b615bcf9",
     "src/lib/projects/shortIds.test.ts": "f06f6d6a0aea9102e2013c5d70cf9bdae5ae02393b9daaa6fe90452408ef421f",
-    "src/lib/prototypeReview/http.test.ts": "b538fd3b1b8f763b87537b5f19d45700135919b210c72316a72457882708708f",
+    "src/lib/prototypeReview/http.test.ts": "dc11d040ef80b2bae73c9d7c2df26897f592aafdfc4f14c8d61f655de8acdd98",
     "src/lib/prototypeReview/http.ts": "abdc7fd1148bc36b752b277a33fcd0372adaf71fdc8231e4a2c9a3783943cd58",
     "src/lib/prototypeReview/input.ts": "177589f1b17e24693c7344f6fd8fde9417f442a1a208cfe87aace90da2a9e616",
     "src/lib/prototypeReview/seatDecisions.test.ts": "d497468790b3bc623f6f357579fbfda78480e5efbe7d3c7906796a2226f17414",
