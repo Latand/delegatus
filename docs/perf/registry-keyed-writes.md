@@ -7,7 +7,9 @@ payload row, with median wall time falling from 982.543 ms to 53.071 ms.
 ## Cause on main
 
 The control is `917189ae562def76980341620987479ab2813cfc`, fetched from main
-before implementation and rechecked before publication.
+before implementation. Main later advanced to the hook-isolation fix
+`e7507d58863450a1f45b1a93d2b27a059ca13c6e`; that update was merged without
+rebasing before the PR opened. All four measured source hashes remain identical.
 
 - `src/lib/agent/sqliteRegistryStore.ts:2839` calls `loadLazyInTransaction`
   at line 2855; the lazy loader starts at line 3125. Ordinary keyed mutations
@@ -206,8 +208,10 @@ All checks ran in the isolated source export through the gate wrapper.
   evidence record.
 - Privacy publication gate with committed fingerprints and
   `--require-known-values`: all changed files and the prepared PR body passed.
-- Fetched main and ran `git merge --no-edit origin/main`; main remained at the
-  recorded control and Git reported already up to date.
+- Initially fetched and merged main at the recorded control. Before opening
+  the PR, merged the newer hook-isolation main update without rebasing and
+  rechecked the merged tree with another type check and all 221 focused tests
+  under the new test preload. Measured production code hashes were unchanged.
 
 The original checkpoint test passed on the control. Its old expectation that a
 checkpoint must reload a complete snapshot was updated to require no reload,

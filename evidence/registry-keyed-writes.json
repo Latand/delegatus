@@ -8671,6 +8671,15 @@
       }
     ],
     "privacy": "passed: require-known-values on all publication files and PR body",
-    "baseRefresh": "origin/main remained at the recorded base; git merge --no-edit origin/main reported Already up to date"
+    "baseRefresh": "Initial refresh stayed at the measured control; the later hook-isolation main update was merged without rebase before the PR opened",
+    "mergedMain": "e7507d58863450a1f45b1a93d2b27a059ca13c6e",
+    "measuredSourceUnchangedAfterMerge": true,
+    "postMergeTypecheck": "passed in an isolated export of the staged merge",
+    "postMergeFocusedTests": {
+      "passed": 221,
+      "failed": 0,
+      "files": 9,
+      "testPreload": "hook-isolation version from merged main"
+    }
   }
 }
