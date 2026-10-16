@@ -184,12 +184,17 @@
   :root:not([data-theme="light"]) [data-rail-project].opacity-70 { opacity: 1; }
 
   /* Focus: the ring utilities at 35–60 % accent read about 2:1 on the dark
-     surfaces; the dark theme draws them solid (5.3:1 or more). Where a solid
+     surfaces; the dark theme draws them solid (5.3:1 or more). The danger,
+     warning and info rings at 30–50 % read 1.6–3.1:1 and are drawn solid in
+     their own colour (5.4:1 or more). Where a solid
      outline is already drawn (the board's own, the composer's), the ring would
      double it and stays out. */
   :root:not([data-theme="light"]) :is(.focus-visible\:ring-accent\/35, .focus-visible\:ring-accent\/40, .focus-visible\:ring-accent\/45, .focus-visible\:ring-accent\/50, .focus-visible\:ring-accent\/55, .focus-visible\:ring-accent\/60):focus-visible,
   :root:not([data-theme="light"]) .focus-within\:ring-accent\/40:focus-within,
   :root:not([data-theme="light"]) .group:focus-visible .group-focus-visible\:ring-accent\/40 { --tw-ring-color: var(--color-accent); }
+  :root:not([data-theme="light"]) :is(.focus-visible\:ring-danger\/30, .focus-visible\:ring-danger\/40, .focus-visible\:ring-danger\/50):focus-visible { --tw-ring-color: var(--color-danger); }
+  :root:not([data-theme="light"]) :is(.focus-visible\:ring-warning\/40, .focus-visible\:ring-warning\/50):focus-visible { --tw-ring-color: var(--color-warning); }
+  :root:not([data-theme="light"]) .focus-within\:ring-info\/40:focus-within { --tw-ring-color: var(--color-info); }
   :root:not([data-theme="light"]) .kb :focus-visible:not(:where(.reader-host *, .seat *, .kb-lead *, .bar-slot *)),
   :root:not([data-theme="light"]) .composer-ghost:focus-visible,
   :root:not([data-theme="light"]) button[data-composer-send]:focus-visible { --tw-ring-color: transparent; }
@@ -202,17 +207,19 @@
 
   /* Hover and press washes that sank into the well or the canvas take the
      raised surface; a press adds a strong line, since a lighter fill would take
-     muted labels under 4.5:1. Inside a raised menu, list or popover the well
-     stays: it is the one step that keeps those labels legible. */
+     muted labels under 4.5:1. Inside a surface that is itself raised (`.bg-raised`,
+     the board's `.menu` and `.popover`) the well stays: it is the one step that
+     keeps those labels legible. A menu on the card (the bar's needs filter, the
+     pipeline strip's ⋯) lifts to raised like any other row. */
   @media (hover: hover) {
-    :root:not([data-theme="light"]) :is(.hover\:bg-sunken, .hover\:bg-canvas, .hover\:bg-well, .hover\:bg-black\/5):hover:not(:disabled):not([aria-disabled="true"]):not(:where(.bg-raised, [role="menu"], [role="listbox"], .kb .menu, .kb .popover) *) {
+    :root:not([data-theme="light"]) :is(.hover\:bg-sunken, .hover\:bg-canvas, .hover\:bg-well, .hover\:bg-black\/5):hover:not(:disabled):not([aria-disabled="true"]):not(:where(.bg-raised, .kb .menu, .kb .popover) *) {
       background-color: var(--color-raised);
     }
-    :root:not([data-theme="light"]) :is(.hover\:bg-sunken, .hover\:bg-canvas, .hover\:bg-well, .hover\:bg-black\/5):hover:active:not(:focus-visible):not(:disabled):not(:where(.bg-raised, [role="menu"], [role="listbox"], .kb .menu, .kb .popover) *) {
+    :root:not([data-theme="light"]) :is(.hover\:bg-sunken, .hover\:bg-canvas, .hover\:bg-well, .hover\:bg-black\/5):hover:active:not(:focus-visible):not(:disabled):not(:where(.bg-raised, .kb .menu, .kb .popover) *) {
       box-shadow: inset 0 0 0 1px var(--color-strong);
     }
   }
-  :root:not([data-theme="light"]) :is(.active\:bg-sunken, .active\:bg-canvas):active:not(:where(.bg-raised, [role="menu"], [role="listbox"]) *) {
+  :root:not([data-theme="light"]) :is(.active\:bg-sunken, .active\:bg-canvas):active:not(:where(.bg-raised, .kb .menu, .kb .popover) *) {
     background-color: var(--color-raised);
     box-shadow: inset 0 0 0 1px var(--color-strong);
   }
@@ -389,12 +396,17 @@
 :root[data-theme="dark"] [data-rail-project].opacity-70 { opacity: 1; }
 
 /* Focus: the ring utilities at 35–60 % accent read about 2:1 on the dark
-   surfaces; the dark theme draws them solid (5.3:1 or more). Where a solid
+   surfaces; the dark theme draws them solid (5.3:1 or more). The danger,
+   warning and info rings at 30–50 % read 1.6–3.1:1 and are drawn solid in
+   their own colour (5.4:1 or more). Where a solid
    outline is already drawn (the board's own, the composer's), the ring would
    double it and stays out. */
 :root[data-theme="dark"] :is(.focus-visible\:ring-accent\/35, .focus-visible\:ring-accent\/40, .focus-visible\:ring-accent\/45, .focus-visible\:ring-accent\/50, .focus-visible\:ring-accent\/55, .focus-visible\:ring-accent\/60):focus-visible,
 :root[data-theme="dark"] .focus-within\:ring-accent\/40:focus-within,
 :root[data-theme="dark"] .group:focus-visible .group-focus-visible\:ring-accent\/40 { --tw-ring-color: var(--color-accent); }
+:root[data-theme="dark"] :is(.focus-visible\:ring-danger\/30, .focus-visible\:ring-danger\/40, .focus-visible\:ring-danger\/50):focus-visible { --tw-ring-color: var(--color-danger); }
+:root[data-theme="dark"] :is(.focus-visible\:ring-warning\/40, .focus-visible\:ring-warning\/50):focus-visible { --tw-ring-color: var(--color-warning); }
+:root[data-theme="dark"] .focus-within\:ring-info\/40:focus-within { --tw-ring-color: var(--color-info); }
 :root[data-theme="dark"] .kb :focus-visible:not(:where(.reader-host *, .seat *, .kb-lead *, .bar-slot *)),
 :root[data-theme="dark"] .composer-ghost:focus-visible,
 :root[data-theme="dark"] button[data-composer-send]:focus-visible { --tw-ring-color: transparent; }
@@ -407,17 +419,19 @@
 
 /* Hover and press washes that sank into the well or the canvas take the
    raised surface; a press adds a strong line, since a lighter fill would take
-   muted labels under 4.5:1. Inside a raised menu, list or popover the well
-   stays: it is the one step that keeps those labels legible. */
+   muted labels under 4.5:1. Inside a surface that is itself raised (`.bg-raised`,
+   the board's `.menu` and `.popover`) the well stays: it is the one step that
+   keeps those labels legible. A menu on the card (the bar's needs filter, the
+   pipeline strip's ⋯) lifts to raised like any other row. */
 @media (hover: hover) {
-  :root[data-theme="dark"] :is(.hover\:bg-sunken, .hover\:bg-canvas, .hover\:bg-well, .hover\:bg-black\/5):hover:not(:disabled):not([aria-disabled="true"]):not(:where(.bg-raised, [role="menu"], [role="listbox"], .kb .menu, .kb .popover) *) {
+  :root[data-theme="dark"] :is(.hover\:bg-sunken, .hover\:bg-canvas, .hover\:bg-well, .hover\:bg-black\/5):hover:not(:disabled):not([aria-disabled="true"]):not(:where(.bg-raised, .kb .menu, .kb .popover) *) {
     background-color: var(--color-raised);
   }
-  :root[data-theme="dark"] :is(.hover\:bg-sunken, .hover\:bg-canvas, .hover\:bg-well, .hover\:bg-black\/5):hover:active:not(:focus-visible):not(:disabled):not(:where(.bg-raised, [role="menu"], [role="listbox"], .kb .menu, .kb .popover) *) {
+  :root[data-theme="dark"] :is(.hover\:bg-sunken, .hover\:bg-canvas, .hover\:bg-well, .hover\:bg-black\/5):hover:active:not(:focus-visible):not(:disabled):not(:where(.bg-raised, .kb .menu, .kb .popover) *) {
     box-shadow: inset 0 0 0 1px var(--color-strong);
   }
 }
-:root[data-theme="dark"] :is(.active\:bg-sunken, .active\:bg-canvas):active:not(:where(.bg-raised, [role="menu"], [role="listbox"]) *) {
+:root[data-theme="dark"] :is(.active\:bg-sunken, .active\:bg-canvas):active:not(:where(.bg-raised, .kb .menu, .kb .popover) *) {
   background-color: var(--color-raised);
   box-shadow: inset 0 0 0 1px var(--color-strong);
 }

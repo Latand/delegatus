@@ -135,7 +135,8 @@ test("white on the dark accent, success, warning and info fills is replaced by t
   }
   for (const block of auditBlocks()) {
     expect(block).toContain(":root :is(.bg-accent, .bg-success, .bg-warning, .bg-info).text-white,");
-    expect(block).not.toMatch(/bg-danger|color-danger/);
+    /* The red fill is not matched; the danger focus ring below is a ring colour, not a fill. */
+    expect(block).not.toMatch(/bg-danger/);
   }
   expect(danger).toBe("#f07171");
 });
@@ -180,4 +181,81 @@ test("the rules read the tokens the numbers above come from", () => {
   expect(RULES).toContain("color-mix(in srgb, var(--color-accent) 88%, var(--color-canvas))");
   expect(RULES).toContain("color-mix(in srgb, var(--color-accent) 25%, var(--color-card))");
   expect(RULES).not.toMatch(/data-proto/);
+});
+
+/* Review of PR #2965: the danger, warning and info rings at 30–50 % were left translucent. */
+/** `fg` at `alpha` over `ground`, the way a box-shadow ring composites. */
+const over = (fg: string, alpha: number, ground: string): string => mix(fg, alpha, ground);
+
+test("a translucent danger, warning or info focus ring was under the floor, and its solid colour clears it on every surface", () => {
+  /* Measured against the surfaces the controls sit on, as the accent ring is. */
+  expect(contrast(over(danger, 0.3, card), card)).toBeLessThan(1.7);
+  expect(contrast(over(danger, 0.4, card), card)).toBeLessThan(2);
+  expect(contrast(over(danger, 0.5, card), card)).toBeLessThan(2.5);
+  expect(contrast(over(warning, 0.4, card), card)).toBeLessThan(2.5);
+  expect(contrast(over(warning, 0.5, raised), raised)).toBeLessThan(3);
+  expect(contrast(over(info, 0.4, card), card)).toBeLessThan(2.6);
+  for (const ground of [card, raised, canvas]) {
+    expect(contrast(danger, ground)).toBeGreaterThanOrEqual(5.4);
+    expect(contrast(warning, ground)).toBeGreaterThanOrEqual(7.7);
+    expect(contrast(info, ground)).toBeGreaterThanOrEqual(8.4);
+  }
+});
+
+/** Every ring-colour utility (with its focus variant) the sources spell, at an alpha under 100 %. */
+function translucentFocusRings(): Set<string> {
+  const found = new Set<string>();
+  const walk = (directory: string): void => {
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+      const full = path.join(directory, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else if (/\.(tsx|ts)$/.test(entry.name) && !/\.test\.tsx?$/.test(entry.name)) {
+        for (const match of fs.readFileSync(full, "utf8").matchAll(/(?:group-)?focus(?:-visible|-within)?:ring-(?:accent|danger|warning|info|success)\/\d+/g)) found.add(match[0]);
+      }
+    }
+  };
+  walk(path.join(import.meta.dir, ".."));
+  return found;
+}
+/** The class as a selector: `focus-visible:ring-danger/40` becomes `.focus-visible\:ring-danger\/40`. */
+const asSelector = (utility: string): string => `.${utility.replace(/[:/]/g, (character) => `\\${character}`)}`;
+
+test("no focus-visible or focus-within ring below 100 % alpha is left unmapped in either dark scope", () => {
+  const rings = translucentFocusRings();
+  expect(rings.size).toBeGreaterThan(10);
+  for (const utility of ["focus-visible:ring-danger/30", "focus-visible:ring-danger/50", "focus-visible:ring-warning/40", "focus-visible:ring-warning/50", "focus-within:ring-info/40"]) expect(rings.has(utility)).toBe(true);
+  for (const scope of RULES.split(/(?=^\/\* `data-theme="dark"` pins)/m)) {
+    for (const utility of rings) expect(scope).toContain(asSelector(utility));
+  }
+});
+
+test("the danger, warning and info rings are drawn in their own colour, in both scopes", () => {
+  const scopes = RULES.split(/(?=^\/\* `data-theme="dark"` pins)/m);
+  expect(scopes.length).toBe(2);
+  for (const scope of scopes) {
+    const lines = scope.replace(/^ +/gm, "");
+    expect(lines).toMatch(/:is\(\.focus-visible\\:ring-danger\\\/30, \.focus-visible\\:ring-danger\\\/40, \.focus-visible\\:ring-danger\\\/50\):focus-visible \{ --tw-ring-color: var\(--color-danger\); \}/);
+    expect(lines).toMatch(/:is\(\.focus-visible\\:ring-warning\\\/40, \.focus-visible\\:ring-warning\\\/50\):focus-visible \{ --tw-ring-color: var\(--color-warning\); \}/);
+    expect(lines).toMatch(/\.focus-within\\:ring-info\\\/40:focus-within \{ --tw-ring-color: var\(--color-info\); \}/);
+  }
+});
+
+test("a hover row in a menu on the card lifts to raised; only menus that are raised keep the well", () => {
+  const scopes = RULES.split(/(?=^\/\* `data-theme="dark"` pins)/m);
+  for (const scope of scopes) {
+    /* The exception names surfaces that are raised, never a bare menu or listbox role. */
+    expect(scope).not.toMatch(/\[role="(?:menu|listbox)"\]/);
+    expect(scope).toContain(":not(:where(.bg-raised, .kb .menu, .kb .popover) *)");
+  }
+  /* The two menus the review named are drawn on the card, so they lift. */
+  const bar = fs.readFileSync(path.join(import.meta.dir, "../components/ProjectBar.tsx"), "utf8");
+  const strip = fs.readFileSync(path.join(import.meta.dir, "../components/pipelines/PipelineStrip.tsx"), "utf8");
+  expect(bar).toMatch(/data-bar-filter-menu=""\s+className=\{`[^`]*\bbg-card\b/);
+  expect(strip).toMatch(/role="menu" aria-label=\{t\("pipelineStrip\.moreActions"\)\} className="[^"]*\bbg-card\b/);
+  expect(bar).toContain("hover:bg-well");
+  expect(strip).toContain("hover:bg-sunken");
+  expect(luminance(well)).toBeLessThan(luminance(card));
+  expect(luminance(sunken)).toBeLessThan(luminance(card));
+  expect(luminance(raised)).toBeGreaterThan(luminance(card));
+  for (const label of [muted, secondary, primary]) expect(contrast(label, raised)).toBeGreaterThanOrEqual(4.6);
 });
