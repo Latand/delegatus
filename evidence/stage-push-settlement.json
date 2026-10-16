@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-10-16T12:23:30.210946+00:00",
+  "generatedAt": "2026-10-16T12:26:55.180182+00:00",
   "baseRevision": "9d3e9b3df40fe892173483000c2c801496147808",
   "testedSourceRevision": "cfd55fc8241ae5eae87be24896db8a893b3054ba",
   "mergedMain": "02f9301fc32370210a4af533c1204741c6436f52",
@@ -17,7 +17,8 @@
     "src/lib/performanceSpans.ts": "d344f8b074ef557e5b6662d68df794731ff0d711bce7e8f1ab65d78e8911ed24",
     "docs/verification/stage-push-settlement.md": "9f49b3cc654b622a2cc192fe49dbca439d366c2701b36eed86c106d8adc4301d",
     "src/lib/pipelines/git.test.ts": "8616704b06ec3180f08663986213be3bf57a6917773c1d4ead3201ec30da1580",
-    "src/lib/pipelines/engine.publication.test.ts": "7f87afb6f6ca5811c369d6d07059941195fbdc7d91b20cb8295641d5e7c5c85c"
+    "src/lib/pipelines/engine.publication.test.ts": "7f87afb6f6ca5811c369d6d07059941195fbdc7d91b20cb8295641d5e7c5c85c",
+    "docs/verification/stage-git-custody.md": "f1374358a29c3d27a722a555f85f55c25d8f134f7efcaa5c11b3ec02497a9a7f"
   },
   "command": "bash scripts/gate-slot.sh bun test <explicit file path>; one fresh isolated process per file",
   "isolation": [
@@ -12183,7 +12184,8 @@
     "Two managed-admission assertions in engine.ports.test.ts fail on both revisions.",
     "Full engine.publication.test.ts reaches the 300-second file deadline on both revisions; before that cutoff main records five per-test timeouts and head records no failed case. The 24 native publication cases finish separately.",
     "Bare Git test fixtures explicitly create hook directories instead of depending on a global Git template.",
-    "No performance gain is claimed."
+    "No performance gain is claimed.",
+    "The historical stage-git-custody verification already records provider-budget runner cutoffs followed by passing isolated runs. Its superseded proof rules are marked as historical."
   ],
   "scopedLinux": {
     "result": "passed",
