@@ -1,7 +1,7 @@
 # MCP short ids: no long hashes for agents to retype
 
-Status: design, 2026-10-16. Base commit `02f9301f` on main. Lane: the design
-stage of the pipeline pinned to this task.
+Status: implemented, 2026-10-16. Audit base: `02f9301f` on main.
+Implementation integrates main through `7b9a0f86`.
 
 ## 0. Originating requirement
 
@@ -647,3 +647,38 @@ Notes:
   already follow the title-and-#PR rule.
 - This stage's own prompt named its base commit in 40 characters; after slice
   5 the same line carries 8.
+
+## 7. Implementation notes
+
+The shared formatter and resolver live in `src/lib/shortIds.ts`. The MCP
+service applies the answer transform after success, refusal and receipt replay,
+before recording serialized bytes. Full reads retain their stored values.
+
+Two audit additions are covered by the implementation and its tests:
+
+- Lifecycle `evt_` ids and bridge `rpt_` ids have 24 hex characters. No MCP
+  input consumes either value, so their default answers use output-only short
+  forms. Their stored identities stay whole.
+- The composed issue-report preview heading carries a digest too. It now uses
+  the short form at its source. Decision option labels use short display text
+  while stored labels retain the whole consent digest.
+
+A real pair of report previews in `mcp/issueReport.test.ts` shares its first
+eight digest characters. The approval reference returned by `show` therefore
+uses the shortest unique prefix when eight characters collide. This keeps a
+resolved preview usable through publication of its consent form. Publication
+still checks the exact stored text and the full digest; choosing a form for
+one preview cannot approve its sibling.
+
+The default-answer census has 24 pipelines with four stages and two attempts
+per stage, 24 tasks and 100 conversations. Real read bindings and projections
+run through the MCP service; writes that normally cross Viewer control use
+fixed receipts. It also renders a settled-deploy seat wake and reads
+`tools/list` over the MCP protocol. `MCP_SIZE_OUTPUT` records every scenario
+without enforcing answer budgets. Before and after use the same fixture,
+each repeated three times. `evidence/mcp-short-ids.json` records the counts,
+source fingerprints, revisions, commands and check outcomes. The measurement
+claims a reduction in serialized answer bytes. It makes no latency claim.
+
+Checkout deploy-prefix changes require three review rounds under the project
+policy. Managed install prefix resolution remains deferred as specified above.

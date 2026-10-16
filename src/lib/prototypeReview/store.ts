@@ -1,3 +1,4 @@
+import { resolveShortId } from "@/lib/shortIds";
 import crypto from "node:crypto";
 import { constants } from "node:fs";
 import fs from "node:fs/promises";
@@ -11,7 +12,7 @@ import { waitForStateLock } from "@/lib/state/lockWait";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { admittedSource, expandPrototypeInput, PrototypeError, PROTOTYPE_LIMITS, unreadableSource } from "./input";
 import { openedAt } from "@/lib/artifact/localFile";
-import { findSeatRound, insertSeatRound, loadSeatRounds, mutateSeatRound } from "./seatRounds";
+import { insertSeatRound, loadSeatRounds, mutateSeatRound } from "./seatRounds";
 import type { PrototypeMedia, PrototypeReviewRound, PublishPrototypeInput } from "./types";
 
 const MIME: Record<string, PrototypeMedia["mime"]> = {
@@ -135,8 +136,9 @@ export function mutatePrototypeRound<T>(taskId: string | null, reviewId: string,
   });
 }
 export function findPrototypeRound(taskId: string | null, reviewId: string): PrototypeReviewRound | undefined {
-  if (taskId === null) return findSeatRound(reviewId);
-  return loadTasks().find(t => t.id === taskId)?.prototypeReviews?.find(r => r.id === reviewId);
+  const rounds = taskId === null ? loadSeatRounds() : loadTasks().find(t => t.id === taskId)?.prototypeReviews ?? [];
+  const resolved = resolvePrototypeReviewId(rounds, reviewId);
+  return resolved ? rounds.find(round => round.id === resolved) : undefined;
 }
 /** Metadata is a task extension in the existing revisioned, linked SQLite store.
     A null task is the seat asking without one: the round goes to the seat's
@@ -248,4 +250,10 @@ async function publishRound(input: PublishPrototypeInput, taskId: string | null,
       if (!committed) await fs.rm(roundDirectory(id),{ recursive: true, force: true });
     }
   });
+}
+
+export function resolvePrototypeReviewId(rounds: readonly Pick<PrototypeReviewRound, "id">[], given: string): string | null {
+  const result = resolveShortId(rounds.map(round => round.id), given);
+  if (result.kind === "ambiguous") throw Object.assign(new PrototypeError("reviewId is ambiguous; pass more characters", 409), { code: "short_id_ambiguous", candidates: result.candidates });
+  return result.kind === "match" ? result.value : null;
 }

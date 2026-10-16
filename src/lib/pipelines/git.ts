@@ -1,3 +1,4 @@
+import { shortId } from "@/lib/shortIds";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -491,7 +492,7 @@ async function finishInterruptedCheckout(pipeline: Pipeline, branch: string, sta
   const head = await exec("git", ["rev-parse", "HEAD"], pipeline.worktreeDir, signal);
   if (head.code !== 0) return failure("reading the interrupted pipeline checkout", head);
   if (head.stdout.trim() !== start) {
-    return { ok: false, error: `the interrupted pipeline checkout is at ${head.stdout.trim()}, not its start commit ${start}; remove the worktree and retry-stage` };
+    return { ok: false, error: `the interrupted pipeline checkout is at ${shortId(head.stdout.trim())}, not its start commit ${shortId(start)}; remove the worktree and retry-stage` };
   }
   // A checkout killed while Git is building its index can leave an empty
   // index, so use the selected start tree as the source of tracked paths.
@@ -1430,7 +1431,7 @@ export async function reconcilePipelineStageHead(pipeline: Pipeline, head: strin
     missing ||= merged.code !== 0 || merged.stdout.split("\0")[0].trim() !== tree.stdout.trim();
   }
   if (missing) {
-    return { ok: false, error: `stage head ${head} does not preserve accepted head ${accepted}; dropped accepted commits: ${[...dropped, ...droppedMerges].join(", ")}; accepted content is missing or conflicts with the stage tree` };
+    return { ok: false, error: `stage head ${shortId(head)} does not preserve accepted head ${shortId(accepted)}; dropped accepted commits: ${[...dropped, ...droppedMerges].map(shortId).join(", ")}; accepted content is missing or conflicts with the stage tree` };
   }
   const commit = (await exec("git", ["commit-tree", tree.stdout.trim(), "-p", head, "-p", accepted,
     "-m", `pipeline(${pipeline.id}): reconcile rebased stage`], pipeline.worktreeDir, controllerCommitIdentityEnv()));
@@ -2056,14 +2057,14 @@ export async function reconcilePipelinePublication(id: string, expectedEpoch: nu
 async function executePipelinePublication(pipeline: Pipeline, exec: ExecPort, request: PipelinePublishRequest): Promise<PipelinePublishResult> {
   const acceptedSha = request.acceptedSha;
   if (!/^[0-9a-f]{40}$/i.test(acceptedSha)) {
-    return { ok: false, error: `the accepted pipeline revision is not an exact commit SHA: ${acceptedSha || "absent"}` };
+    return { ok: false, error: `the accepted pipeline revision is not an exact commit SHA: ${shortId(acceptedSha || "absent")}` };
   }
   const local = (await currentPipelineBranchHead(pipeline, exec));
   if (!local.ok) return local;
   /* The worktree must still hold the accepted revision when publication starts.
      A head that has moved on is not this publication's business to push. */
   if (local.sha !== acceptedSha) {
-    return { ok: false, error: `the pipeline worktree is at ${local.sha}, not the accepted revision ${acceptedSha}; nothing was published` };
+    return { ok: false, error: `the pipeline worktree is at ${shortId(local.sha)}, not the accepted revision ${shortId(acceptedSha)}; nothing was published` };
   }
   if (request.publishedSha && request.publishedSha === acceptedSha) return { ok: true, sha: acceptedSha, remote: "published" };
 
@@ -2145,7 +2146,7 @@ async function executePipelinePublication(pipeline: Pipeline, exec: ExecPort, re
   if (!confirm.ok) return { ok: true, sha: acceptedSha, remote: "unreachable", detail: confirm.error, uncertain: true };
   const publishedHead = confirm.sha;
   if (publishedHead !== acceptedSha) {
-    return { ok: false, error: `publishing the pipeline branch did not land: origin/${pipeline.branch} is ${publishedHead || "absent"}, expected ${acceptedSha}` };
+    return { ok: false, error: `publishing the pipeline branch did not land: origin/${pipeline.branch} is ${shortId(publishedHead || "absent")}, expected ${shortId(acceptedSha)}` };
   }
   return { ok: true, sha: acceptedSha, remote: "published" };
 }

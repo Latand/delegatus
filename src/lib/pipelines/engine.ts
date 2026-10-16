@@ -138,7 +138,8 @@ import { conversationRuntime } from "@/lib/agent/conversationRuntime";
 import { normalizeStageOutputPath } from "./stageAccess";
 import { settlePendingStageProvenance, stageProvenanceFence } from "./stageProvenance";
 import { commitAndAdoptStageBranch, observeStageBranchProtection, stageBranchOwnershipFence, type StageBranchProtection } from "./stageBranch";
-import { graphDigest, isStageDigest, stageDigest } from "./stageDigest";
+import { graphDigest, stageDigest } from "./stageDigest";
+import { matchesShortId, resolveShortId, shortId } from "@/lib/shortIds";
 import { pipelineStageRuntimeProfile, pipelineStageSandbox, type PipelineStageRuntimeProfile } from "./stageSandbox";
 import { pipelineValidationError, type PipelineValidationViolation } from "./validation";
 import { firstRunsElsewhere, TASK_RUNS_ELSEWHERE } from "@/lib/links/linked";
@@ -3990,7 +3991,7 @@ function terminalBudgetDecisionRefusal(
 }
 
 function reviewPendingDetail(pending: NonNullable<Pipeline["reviewPending"]>): string {
-  const short = (sha: string | null) => sha ? sha.slice(0, 12) : "unknown";
+  const short = (sha: string | null) => shortId(sha ?? "unknown");
   if (pending.terminalRecheck) return `budget spent: ${pending.findings} findings left (${pending.stageId}), head ${short(pending.currentHead)} failed terminal re-check. review budget is fixed; resolve the retained review or close the lane`;
   return `review budget spent (onExhausted: stop-after-fix): last review failed (${pending.verdict}, ${pending.findings} finding${pending.findings === 1 ? "" : "s"}), head ${short(pending.currentHead)} unreviewed; reviewed ${short(pending.reviewedHead)}. review budget is fixed; accept the head or close the lane`;
 }
@@ -4186,7 +4187,7 @@ async function retryTerminalStagePublication(
   const current = (await currentPipelineBranchHead(pipeline, ports.exec));
   if (!current.ok || current.sha !== pipeline.lastPassedCommit) {
     const detail = afterCommitRepair(attempt, current.ok
-      ? `the worktree moved to ${current.sha} after accepting ${pipeline.lastPassedCommit}; commit and publish the current head before completing this stage`
+      ? `the worktree moved to ${shortId(current.sha)} after accepting ${shortId(pipeline.lastPassedCommit)}; commit and publish the current head before completing this stage`
       : `the accepted head cannot be verified before completion: ${current.error}`);
     // Head verification can be retried without discarding the accepted pass.
     attempt.error = detail;
@@ -4488,11 +4489,11 @@ function publicationRepairWorker(pipeline: Pipeline, attempt: PipelineStageAttem
 function stagePublicationRepairText(stage: PipelineStage, attempt: PipelineStageAttempt, repair: NonNullable<PipelineStageAttempt["publicationRepair"]>): string {
   const readOnly = attempt.effectiveRole.access !== "read-write";
   return [
-    `Your work was accepted at ${repair.sha}, and its publication was refused. Repair that refusal on this pipeline's current branch.`,
+    `Your work was accepted at ${shortId(repair.sha)}, and its publication was refused. Repair that refusal on this pipeline's current branch.`,
     `What the publication attempt printed:\n${hookOutputForRepair(repair.detail)}`,
     readOnly
       ? `Change only your declared outputs (${(attemptStage(stage, attempt).outputs ?? []).join(", ")}); leave them uncommitted for the controller. Do not stage, commit or push.`
-      : `Fix the files or your own unpublished commit metadata named by the refusal. Preserve all work through ${repair.baseSha}; stay on this branch. Leave the repair uncommitted or commit it here. The controller will publish it.`,
+      : `Fix the files or your own unpublished commit metadata named by the refusal. Preserve all work through ${shortId(repair.baseSha)}; stay on this branch. Leave the repair uncommitted or commit it here. The controller will publish it.`,
     "The original pass stays recorded. Changed content that already passed review returns to its review gate under the lane's existing budget rules.",
     "Never bypass the hook: no --no-verify, skip variable, hook path change or disabled check. This is the only publication repair turn; a second refusal parks with its cause.",
     "If you cannot repair it within your scope, end with the reason in this fenced block. stage_report is closed for the accepted stage:",
@@ -4795,13 +4796,13 @@ async function commitPassedStage(
     delete attempt.stageCommitWait;
   }
   if (stage.kind === "review-loop" && result.sha !== attempt.reviewHeadSha) {
-    parkStage(`approved review flow head mismatch during settlement: reviewed ${attempt.reviewHeadSha ?? "no exact head"}, settled ${result.sha}`);
+    parkStage(`approved review flow head mismatch during settlement: reviewed ${shortId(attempt.reviewHeadSha ?? "no exact head")}, settled ${shortId(result.sha)}`);
     return;
   }
   if (pipeline.lastPassedCommit && result.sha !== pipeline.lastPassedCommit) {
     const ancestor = (await ports.exec("git", ["merge-base", "--is-ancestor", pipeline.lastPassedCommit, result.sha], pipeline.worktreeDir));
     if (ancestor.code !== 0 && (ancestor.code !== 1 || !allowCommit)) {
-      parkStage(`stage head ${result.sha} does not descend from accepted head ${pipeline.lastPassedCommit}; ${ancestor.stderr.trim() || "reconciliation requires a writable builder stage"}`);
+      parkStage(`stage head ${shortId(result.sha)} does not descend from accepted head ${shortId(pipeline.lastPassedCommit)}; ${ancestor.stderr.trim() || "reconciliation requires a writable builder stage"}`);
       return;
     }
     if (ancestor.code === 1) {
@@ -7720,7 +7721,7 @@ async function publishReviewIngressHead(
     return {
       ok: false,
       retryable: false,
-      detail: `review stage head mismatch: the accepted review head is ${expected}, but the pipeline worktree is at ${local.sha}; nothing was published`,
+      detail: `review stage head mismatch: the accepted review head is ${shortId(expected)}, but the pipeline worktree is at ${shortId(local.sha)}; nothing was published`,
     };
   }
   /* An internal pipeline reviews the clean local revision it accepted. */
@@ -7730,7 +7731,7 @@ async function publishReviewIngressHead(
      rather than trusting a durable record that may be stale or migrated. */
   const published = queuePipelinePublication(pipeline, ports.exec, { acceptedSha: expected });
   if (!published.ok) {
-    return { ok: false, retryable: false, detail: `review stage could not publish the accepted head ${expected}: ${published.error}` };
+    return { ok: false, retryable: false, detail: `review stage could not publish the accepted head ${shortId(expected)}: ${published.error}` };
   }
   if (published.remote === "unreachable") {
     return { ok: false, retryable: true, detail: `passed but unpublished: ${published.detail}` };
@@ -7739,7 +7740,7 @@ async function publishReviewIngressHead(
     return {
       ok: false,
       retryable: false,
-      detail: `review stage requires a published pipeline branch at ${expected}: ${MISSING_DELIVERY_REMOTE}`,
+      detail: `review stage requires a published pipeline branch at ${shortId(expected)}: ${MISSING_DELIVERY_REMOTE}`,
     };
   }
   pipeline.publishedCommit = published.sha;
@@ -8326,18 +8327,18 @@ const APPROVED_REMOTE_HEAD_WAIT_PREFIX = "approved review flow waiting for the r
     about the head either way. */
 async function reviewHeadFence(pipeline: Pipeline, attempt: PipelineStageAttempt, ports: PipelinePorts): Promise<{ park: string } | { retry: string } | null> {
   if (!attempt.reviewHeadSha || attempt.expectedReviewHeadSha !== attempt.reviewHeadSha) {
-    return { park: `approved review flow envelope mismatch: expected ${attempt.expectedReviewHeadSha ?? "no exact head"}, reviewed ${attempt.reviewHeadSha ?? "no exact head"}` };
+    return { park: `approved review flow envelope mismatch: expected ${shortId(attempt.expectedReviewHeadSha ?? "no exact head")}, reviewed ${shortId(attempt.reviewHeadSha ?? "no exact head")}` };
   }
   const currentHead = (await currentPipelineBranchHead(pipeline, ports.exec));
   if (!currentHead.ok) return { park: `approved review flow could not verify the current pipeline head: ${currentHead.error}` };
   if (attempt.reviewHeadSha !== currentHead.sha) {
-    return { park: `approved review flow head mismatch: reviewed ${attempt.reviewHeadSha}, current pipeline head is ${currentHead.sha}` };
+    return { park: `approved review flow head mismatch: reviewed ${shortId(attempt.reviewHeadSha)}, current pipeline head is ${shortId(currentHead.sha)}` };
   }
   if (!publishesRemoteBranch(pipeline)) return null;
   const remoteHead = (await currentPipelineRemoteBranchHead(pipeline, ports.exec));
   if (!remoteHead.ok) return remoteHead.transient ? { retry: remoteHead.error } : { park: `${APPROVED_REMOTE_HEAD_UNVERIFIED}: ${remoteHead.error}` };
   if (attempt.reviewHeadSha !== remoteHead.sha) {
-    return { park: `approved review flow head mismatch: reviewed ${attempt.reviewHeadSha}, remote pipeline head is ${remoteHead.sha}` };
+    return { park: `approved review flow head mismatch: reviewed ${shortId(attempt.reviewHeadSha)}, remote pipeline head is ${shortId(remoteHead.sha)}` };
   }
   return null;
 }
@@ -10012,7 +10013,7 @@ function applySkippedStage(pipeline: Pipeline, stage: PipelineStage, attempt: Pi
   attempt.state = "skipped";
   attempt.completedAt = ports.now();
   attempt.output = sha !== previousHead
-    ? `Skipped by operator; current head ${sha} was accepted as its result.`
+    ? `Skipped by operator; current head ${shortId(sha)} was accepted as its result.`
     : "Skipped by operator.";
   if (publishesRemoteBranch(pipeline) && pipeline.publishedCommit !== sha) {
     pipeline.state = "running";
@@ -11172,13 +11173,13 @@ const STAGE_CHANGED_ERROR = "the stage changed since it was read; read it again 
 
 /** `expectedStageDigest` on an edit of one stage: that stage's digest, edges included. */
 function stageDigestRefusal(stage: PipelineStage, req: PatchPipelineRequest): PipelinePatchResult | null {
-  if (req.expectedStageDigest === undefined || stageDigest(stage) === req.expectedStageDigest) return null;
+  if (req.expectedStageDigest === undefined || matchesShortId(stageDigest(stage), req.expectedStageDigest)) return null;
   return { error: STAGE_CHANGED_ERROR, status: 409, code: "STAGE_CHANGED", field: "expectedStageDigest" };
 }
 
 /** `expectedStageDigest` on a structural edit: the digest of the whole ordered plan. */
 function graphDigestRefusal(pipeline: Pipeline, req: PatchPipelineRequest): PipelinePatchResult | null {
-  if (req.expectedStageDigest === undefined || graphDigest(pipeline.stages) === req.expectedStageDigest) return null;
+  if (req.expectedStageDigest === undefined || matchesShortId(graphDigest(pipeline.stages), req.expectedStageDigest)) return null;
   return { error: "the pipeline's stages changed since they were read; read the pipeline again before editing its graph", status: 409, code: "STAGE_CHANGED", field: "expectedStageDigest" };
 }
 
@@ -11289,7 +11290,7 @@ function stageGuardShapeError(req: PatchPipelineRequest): PipelinePatchResult | 
   const stageBound = req.action === "retry-stage" || req.action === "skip-stage" || req.action === "resolve-decision";
   if (stated("expectedStageDigest")) {
     if (!GRAPH_EDIT_ACTIONS.has(req.action)) return { error: `expectedStageDigest applies only to graph edits (${[...GRAPH_EDIT_ACTIONS].join(", ")})`, status: 400, field: "expectedStageDigest" };
-    if (!isStageDigest(req.expectedStageDigest)) return { error: "expectedStageDigest must be a 64-character lowercase hex SHA-256 digest", status: 400, field: "expectedStageDigest" };
+    if ((typeof req.expectedStageDigest !== "string" || !/^[0-9a-f]{7,64}$/i.test(req.expectedStageDigest))) return { error: "expectedStageDigest must be the digest returned by get_pipeline", status: 400, field: "expectedStageDigest" };
   }
   if (stated("expectedStageId")) {
     if (!stageBound) return { error: "expectedStageId applies only to retry-stage, skip-stage and resolve-decision", status: 400, field: "expectedStageId" };
@@ -12375,7 +12376,7 @@ function resolveDecision(
     || typeof req.answer !== "string" || !req.answer.trim() || req.answer.length > MAX_DECISION_ANSWER_CHARS
     || typeof req.expectedStageId !== "string" || !req.expectedStageId.trim()
     || !Number.isSafeInteger(req.expectedAttempt) || req.expectedAttempt! < 1
-    || typeof req.expectedRevision !== "string" || !/^[0-9a-f]{64}$/.test(req.expectedRevision)) {
+    || typeof req.expectedRevision !== "string" || !/^[0-9a-f]{7,64}$/i.test(req.expectedRevision)) {
     return { error: `resolve-decision requires clientRequestId (up to 200 characters), answer (up to ${MAX_DECISION_ANSWER_CHARS} characters), expectedStageId, positive expectedAttempt and expectedRevision from get_pipeline`, status: 400 };
   }
   const guardShape = stageGuardShapeError(req);
@@ -12383,14 +12384,14 @@ function resolveDecision(
   const prior = pipeline.decisionAnswers?.find((entry) => entry.clientRequestId === req.clientRequestId);
   if (prior) {
     if (prior.answer !== req.answer || prior.stageId !== req.expectedStageId
-      || prior.attempt !== req.expectedAttempt || prior.expectedRevision !== req.expectedRevision) {
+      || prior.attempt !== req.expectedAttempt || !matchesShortId(prior.expectedRevision, req.expectedRevision!)) {
       return { error: "clientRequestId already belongs to a different decision answer", status: 409 };
     }
     return { pipeline, decisionAnswer: prior, replayed: true };
   }
   // Rollback disables admission; durable answers and pending attempts remain readable/drainable.
   if (process.env.LLV_PIPELINE_RESOLVE_DECISION === "0") return { error: "resolve-decision is disabled", status: 409 };
-  if (pipelineRevision(pipeline) !== req.expectedRevision) {
+  if (!matchesShortId(pipelineRevision(pipeline), req.expectedRevision!)) {
     return { error: "the pipeline changed since it was read; read it again before answering", status: 409, code: "STAGE_CHANGED", field: "expectedRevision" };
   }
   const expectation = expectedStageRefusal(pipeline, req);
@@ -12414,7 +12415,7 @@ function resolveDecision(
   const termination = unresolvedTerminationRefusal(attempt);
   if (termination) return { error: termination, status: 409 };
   const decision: PipelineDecisionAnswer = {
-    clientRequestId: req.clientRequestId, expectedRevision: req.expectedRevision,
+    clientRequestId: req.clientRequestId, expectedRevision: pipelineRevision(pipeline),
     stageId: stage.id, attempt: attempt.n, nextAttempt: runFor(pipeline, stage.id)!.attempts.length + 1,
     question: attempt.output ?? attempt.report?.summary ?? "", answer: req.answer,
     actor: structuredClone(actor!), at: ports.now(),
@@ -12451,14 +12452,14 @@ function continueReview(
   if (!actor) return { error: "continue-review needs an actor", status: 403 };
   if (typeof req.clientRequestId !== "string" || !req.clientRequestId.trim() || req.clientRequestId.length > 200
     || !Number.isSafeInteger(req.addRounds) || req.addRounds! < 1 || req.addRounds! > MAX_FAIL_EDGE_ROUNDS
-    || typeof req.expectedRevision !== "string" || !/^[0-9a-f]{64}$/.test(req.expectedRevision)) {
+    || typeof req.expectedRevision !== "string" || !/^[0-9a-f]{7,64}$/i.test(req.expectedRevision)) {
     return { error: `continue-review requires clientRequestId (up to 200 characters), addRounds (1 to ${MAX_FAIL_EDGE_ROUNDS}) and expectedRevision from get_pipeline`, status: 400 };
   }
   const guardShape = stageGuardShapeError(req);
   if (guardShape) return guardShape;
   const prior = pipeline.reviewGrants?.find((grant) => grant.clientRequestId === req.clientRequestId);
   if (prior) {
-    if (prior.rounds !== req.addRounds || prior.expectedRevision !== req.expectedRevision
+    if (prior.rounds !== req.addRounds || !matchesShortId(prior.expectedRevision, req.expectedRevision!)
       || prior.actor.kind !== actor.kind || (prior.actor.kind === "agent" && actor.kind === "agent" && prior.actor.conversationId !== actor.conversationId)) {
       return { error: "clientRequestId already belongs to a different continue-review", status: 409 };
     }
@@ -12482,14 +12483,14 @@ function acceptHead(
   if (refusal) return { ...refusal, error: "only the pipeline creator conversation, the project's current designated seat for a lane an agent created, or a direct user action can accept this head" };
   if (!actor) return { error: "accept-head needs an actor", status: 403 };
   if (typeof req.clientRequestId !== "string" || !req.clientRequestId.trim() || req.clientRequestId.length > 200
-    || typeof req.expectedRevision !== "string" || !/^[0-9a-f]{64}$/.test(req.expectedRevision)) {
+    || typeof req.expectedRevision !== "string" || !/^[0-9a-f]{7,64}$/i.test(req.expectedRevision)) {
     return { error: "accept-head requires clientRequestId (up to 200 characters) and expectedRevision from get_pipeline", status: 400 };
   }
   const guardShape = stageGuardShapeError(req);
   if (guardShape) return guardShape;
   const prior = pipeline.reviewAcceptances?.find((entry) => entry.clientRequestId === req.clientRequestId);
   if (prior) {
-    if (prior.expectedRevision !== req.expectedRevision || prior.actor.kind !== actor.kind
+    if (!matchesShortId(prior.expectedRevision, req.expectedRevision!) || prior.actor.kind !== actor.kind
       || (prior.actor.kind === "agent" && actor.kind === "agent" && prior.actor.conversationId !== actor.conversationId)) {
       return { error: "clientRequestId already belongs to a different accept-head", status: 409 };
     }
@@ -12499,7 +12500,7 @@ function acceptHead(
   if (pipeline.state !== "needs_review" || !pending) {
     return { error: `accept-head requires a pipeline in needs_review; this one is ${pipeline.state}`, status: 409 };
   }
-  if (pipelineRevision(pipeline) !== req.expectedRevision) {
+  if (!matchesShortId(pipelineRevision(pipeline), req.expectedRevision!)) {
     return { error: "the pipeline changed since it was read; read it again before accepting its head", status: 409, code: "STAGE_CHANGED", field: "expectedRevision" };
   }
   const review = pipeline.stages.find((stage) => stage.id === pending.stageId);
@@ -12509,11 +12510,11 @@ function acceptHead(
     return { error: "the review stage or the fix it handed off to is no longer in this pipeline", status: 409 };
   }
   if (pipeline.lastPassedCommit !== pending.currentHead) {
-    return { error: `the pipeline head moved from ${pending.currentHead} to ${pipeline.lastPassedCommit}; read it again`, status: 409, code: "STAGE_CHANGED" };
+    return { error: `the pipeline head moved from ${shortId(pending.currentHead)} to ${shortId(pipeline.lastPassedCommit)}; read it again`, status: 409, code: "STAGE_CHANGED" };
   }
   const acceptance: PipelineReviewAcceptance = {
     clientRequestId: req.clientRequestId,
-    expectedRevision: req.expectedRevision,
+    expectedRevision: pipelineRevision(pipeline),
     stageId: pending.stageId,
     attempt: pending.attempt,
     fixStageId: pending.fixStageId,
@@ -12601,7 +12602,7 @@ function previewLegacyReview(pipeline: Pipeline, req: PatchPipelineRequest, port
 
 function legacyReviewRequestShapeError(req: PatchPipelineRequest, revert: boolean): PipelinePatchResult | null {
   if (typeof req.clientRequestId !== "string" || !req.clientRequestId.trim() || req.clientRequestId.length > 200
-    || typeof req.expectedRevision !== "string" || !/^[0-9a-f]{64}$/.test(req.expectedRevision)
+    || typeof req.expectedRevision !== "string" || !/^[0-9a-f]{7,64}$/i.test(req.expectedRevision)
     || (req.stageId !== undefined && (typeof req.stageId !== "string" || !req.stageId))
     || (revert && typeof req.stageId !== "string")
     || (req.reviewLimit !== undefined && !Number.isSafeInteger(req.reviewLimit))
@@ -12629,7 +12630,7 @@ function convertLegacyReview(
   if (shape) return shape;
   const prior = pipeline.legacyReviewConversions?.find((item) => item.clientRequestId === req.clientRequestId);
   if (prior) {
-    if (prior.expectedRevision !== req.expectedRevision || (req.stageId !== undefined && req.stageId !== prior.stageId)
+    if (!matchesShortId(prior.expectedRevision, req.expectedRevision!) || (req.stageId !== undefined && req.stageId !== prior.stageId)
       || (req.reviewLimit !== undefined && req.reviewLimit !== prior.reviewLimit)
       || (req.implementerStageId !== undefined && req.implementerStageId !== prior.implementerStageId)) {
       return { error: "clientRequestId already belongs to a different legacy review conversion", status: 409 };
@@ -12638,7 +12639,7 @@ function convertLegacyReview(
   }
   // Rollback disables admission; converted records and their originals stay readable.
   if (process.env.LLV_PIPELINE_LEGACY_REVIEW_CONVERSION === "0") return { error: "convert-legacy-review is disabled", status: 409 };
-  if (pipelineRevision(pipeline) !== req.expectedRevision) {
+  if (!matchesShortId(pipelineRevision(pipeline), req.expectedRevision!)) {
     return { error: "the pipeline changed since it was read; read it again and preview before converting", status: 409, code: "STAGE_CHANGED", field: "expectedRevision" };
   }
   if ((pipeline.legacyReviewConversions?.length ?? 0) >= legacyReview.MAX_LEGACY_REVIEW_CONVERSIONS) {
@@ -12649,7 +12650,7 @@ function convertLegacyReview(
     return { error: `legacy review conversion refused: ${preview.refusals.map((item) => `${item.code}: ${item.message}`).join("; ")}`, status: 409, legacyReviewPreview: preview };
   }
   const conversion = legacyReview.applyLegacyReviewConversion(pipeline, preview, {
-    clientRequestId: req.clientRequestId!, expectedRevision: req.expectedRevision!, actor: actor!, at: ports.now(),
+    clientRequestId: req.clientRequestId!, expectedRevision: pipelineRevision(pipeline), actor: actor!, at: ports.now(),
   });
   return { pipeline, legacyReviewConversion: conversion, replayed: false };
 }
@@ -12666,7 +12667,7 @@ function revertLegacyReview(
     if (prior.stageId !== req.stageId) return { error: "clientRequestId already belongs to a different legacy review revert", status: 409 };
     return { pipeline, legacyReviewConversion: prior, replayed: true };
   }
-  if (pipelineRevision(pipeline) !== req.expectedRevision) {
+  if (!matchesShortId(pipelineRevision(pipeline), req.expectedRevision!)) {
     return { error: "the pipeline changed since it was read; read it again before reverting", status: 409, code: "STAGE_CHANGED", field: "expectedRevision" };
   }
   const receipt = { clientRequestId: req.clientRequestId!, actor: actor!, at: ports.now() };
@@ -12796,7 +12797,16 @@ export async function patchPipeline(
     if (pipeline.delivery && !pipeline.delivery.target.remote) return { error: LOCAL_DELIVERY_PUBLISH_REFUSAL, status: 409 };
     const deliveryError = pipeline.delivery && deliveryOwnerError(pipeline, pipelineDeliveryLookup({ ...pipeline.delivery.target, active: true }));
     if (deliveryError) return { error: deliveryError, status: 409 };
-    const accepted = req.acceptedSha ?? pipeline.lastPassedCommit;
+    let accepted = pipeline.lastPassedCommit;
+    if (req.acceptedSha !== undefined && req.acceptedSha.toLowerCase() !== pipeline.lastPassedCommit.toLowerCase()) {
+      if (!/^[0-9a-f]{7,40}$/i.test(req.acceptedSha)) return { error: "publication requires an accepted SHA from get_pipeline or git", status: 400 };
+      const head = await currentPipelineBranchHead(pipeline, ports.exec);
+      if (!head.ok) return { error: head.error, status: 409 };
+      const resolved = resolveShortId([pipeline.lastPassedCommit, head.sha], req.acceptedSha);
+      if (resolved.kind === "ambiguous") return { error: `acceptedSha is ambiguous (${resolved.candidates.join(", ")}); pass more characters`, code: "short_id_ambiguous", field: "acceptedSha", status: 409 };
+      if (resolved.kind === "none") return { error: `acceptedSha matches neither passed ${shortId(pipeline.lastPassedCommit)} nor HEAD ${shortId(head.sha)}`, status: 409 };
+      accepted = resolved.value;
+    }
     const moved = accepted !== pipeline.lastPassedCommit;
     const publicationFence = remoteActionFence(pipeline);
     const publicationEvidence = passedPublicationEvidence(pipeline);
@@ -12808,7 +12818,7 @@ export async function patchPipeline(
       if (!/^[0-9a-f]{40}$/i.test(accepted)) return { error: "publication requires an exact accepted SHA", status: 400 };
       const head = await currentPipelineBranchHead(pipeline, ports.exec);
       if (!head.ok) return { error: head.error, status: 409 };
-      if (head.sha !== accepted) return { error: `worktree HEAD ${head.sha} does not equal acceptedSha ${accepted}`, status: 409 };
+      if (head.sha !== accepted) return { error: `worktree HEAD ${shortId(head.sha)} does not equal acceptedSha ${shortId(accepted)}`, status: 409 };
       const ancestor = await ports.exec("git", ["merge-base", "--is-ancestor", pipeline.lastPassedCommit, accepted], pipeline.worktreeDir, pipelineLiteralGitEnv());
       if (ancestor.code !== 0) return { error: ancestor.code === 1
         ? "the previously passed commit is not an ancestor of acceptedSha"
@@ -12829,7 +12839,7 @@ export async function patchPipeline(
       if (!current || current.delivery?.epoch !== pipeline.delivery?.epoch) return { error: "delivery changed before publication admission", status: 409 };
       if (current.delivery && !current.delivery.target.remote) return { error: LOCAL_DELIVERY_PUBLISH_REFUSAL, status: 409 };
       if (current.state === "closed" || current.closedAt || current.hiddenAt) return { error: "a closed lane cannot publish", status: 409 };
-      if (moved && (remoteActionFence(current) !== publicationFence || passedPublicationEvidence(current) !== publicationEvidence)) {
+      if ((moved || req.acceptedSha !== undefined) && (remoteActionFence(current) !== publicationFence || passedPublicationEvidence(current) !== publicationEvidence)) {
         return { error: "the lane changed during accepted-head verification; read it again", status: 409 };
       }
       if (moved && current.delivery?.operation?.state === "running") return { error: "publisher is still in flight; reconcile before accepting a moved head", status: 409 };
@@ -12844,7 +12854,7 @@ export async function patchPipeline(
         currentAttempt(current, current.cursor!.stageId)!.publicationIntegration = integration;
       }
       const resumesPass = moved || resumablePassedPublication(current);
-      const acceptedSha = req.acceptedSha ?? current.lastPassedCommit;
+      const acceptedSha = req.acceptedSha === undefined ? current.lastPassedCommit : accepted;
       if (!/^[0-9a-f]{40}$/i.test(acceptedSha)) return { error: "publication requires an exact accepted SHA", status: 400 };
       if (!current.delivery) {
         if (current.state === "completed") return { error: "a completed legacy lane has no delivery claim", status: 409 };

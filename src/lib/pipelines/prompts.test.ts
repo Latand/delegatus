@@ -169,6 +169,7 @@ test("run prompt renders task, previous output, spec, access, verdict, and nesti
   expect(prompt).toContain("In the block each finding is a string that starts with its severity");
   expect(parseStageVerdict('```json\n{"status":"fail","findings":["P1 — src/a.ts:3 wrong label"]}\n```')).toMatchObject({ verdict: { status: "fail", rankedFindings: [{ severity: "P1", text: "src/a.ts:3 wrong label" }] } });
   expect(prompt).not.toContain("COMMENT");
+    expect(prompt).not.toMatch(/[a-f0-9]{20,}/i);
   expect(prompt).toContain("Role preset: builder");
   expect(prompt).toContain("Keep the implementation focused on pipeline support.");
 });
@@ -336,8 +337,9 @@ test("every stage a lane renders names no stack and teaches one verdict vocabula
     const prompt = renderStagePrompt(pipeline, current, current.effectiveRole, "prior output");
     for (const pattern of STACK_SPECIFIC) expect(prompt).not.toMatch(pattern);
     expect(prompt).not.toContain("COMMENT");
+    expect(prompt).not.toMatch(/[a-f0-9]{20,}/i);
     expect(prompt).not.toMatch(/Inspect\s+with/);
-    expect(prompt).toContain(`This pipeline's worktree started from commit ${"a".repeat(40)} on main.`);
+    expect(prompt).toContain(`This pipeline's worktree started from commit ${"a".repeat(8)} on main.`);
     /* Once in the completion sentence; the builder's brief asked for one more. */
     const briefMarkers = current.id === "build" ? 1 : 0;
     expect(prompt.split("REVIEW_READY").length - 1).toBe(1 + briefMarkers);

@@ -533,3 +533,12 @@ test("a dispatched choice amended to rejection gets a new message identity and e
   const repeated = await reviewPOST(request("/review", { reviewId: id, reject: true, chosen: [], comment: "Redo everything." }), "task-prototype");
   expect(repeated.status).toBe(200); expect(loadTasks()[0]!.prototypeReviews![0]!.decision!.revision).toBe(2);
 });
+
+test("unexpected prototype failures stay unavailable, including null and primitive errors", async () => {
+  const { prototypeFailure } = await import("./http");
+  for (const error of [null, undefined, "failure", new Error("internal detail")]) {
+    const response = prototypeFailure(error);
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({ error: "prototype review is unavailable" });
+  }
+});

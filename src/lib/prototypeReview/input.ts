@@ -26,7 +26,7 @@ export const prototypeQuestionsSchema = z.array(z.object({
 });
 export const prototypePublishSchema = z.object({
   clientRequestId: z.string().min(1).max(160), taskId: z.string().min(1).optional(),
-  title: z.string().trim().min(1).max(120), dir: localPath.optional(),
+  title: z.string().trim().min(1).max(120).optional(), issueReport: z.string().regex(/^[a-f0-9]{7,64}$/i).optional(), dir: localPath.optional(),
   variants: z.array(z.object({
     number: z.number().int().min(1).max(9), name: z.string().trim().min(1).max(60),
     description: z.string().trim().min(1).max(300),
@@ -44,11 +44,12 @@ export class PrototypeError extends Error {
 export function parsePrototypeInput(raw: unknown): PublishPrototypeInput {
   const parsed = prototypePublishSchema.safeParse(raw);
   if (!parsed.success) throw new PrototypeError(`invalid prototype publication: ${parsed.error.issues.map(issue => `${issue.path.join(".")}: ${issue.message}`).join("; ")}`);
+  if (!parsed.data.title || parsed.data.issueReport) throw new PrototypeError("a composed form needs a title");
   if (new Set((parsed.data.variants ?? []).map(v => v.number)).size !== (parsed.data.variants ?? []).length) throw new PrototypeError("variant numbers must be unique");
   if (parsed.data.dir && (parsed.data.variants ?? []).some(v => v.frames?.length || v.videos?.length)) throw new PrototypeError("use dir or explicit frames and videos in variants");
   if (!parsed.data.variants?.length && !parsed.data.questions?.length) throw new PrototypeError("publish variants or questions");
   if (parsed.data.dir && !parsed.data.variants?.length) throw new PrototypeError("dir requires variants");
-  return parsed.data;
+  return { ...parsed.data, title: parsed.data.title };
 }
 function quote(value: string) { return `'${value.replaceAll("'", "'\\''")}'`; }
 export function unreadableSource(raw: string): PrototypeError {

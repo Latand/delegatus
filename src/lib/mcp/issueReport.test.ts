@@ -1,3 +1,6 @@
+import { updateOperatorSettings } from "@/lib/operator/settings";
+import { resolvePrototypeReviewId } from "@/lib/prototypeReview/store";
+import { shortId } from "@/lib/shortIds";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
@@ -36,11 +39,12 @@ let previousState: string | undefined;
 let previousCapability: string | undefined;
 
 beforeEach(async () => {
-  sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-mcp-issue-report-"));
+
   privacyState = fs.mkdtempSync(path.join(os.tmpdir(), "llv-mcp-privacy-sources-"));
   previousState = process.env.LLV_STATE_DIR;
   previousCapability = process.env[VIEWER_SPAWN_CAPABILITY_ENV];
   process.env.LLV_STATE_DIR = privacyState;
+  sandbox = path.join(privacyState, "issue-reports"); fs.mkdirSync(sandbox);
   /* The seat's own capability; the fake Viewer below names the caller itself. */
   process.env[VIEWER_SPAWN_CAPABILITY_ENV] = "a".repeat(43);
   await resetPrototypeDeliveryWorkerForTests();
@@ -98,6 +102,7 @@ const EDIT_FIRST = { answers: [{ questionId: ISSUE_REPORT_QUESTION_ID, options: 
 const NO = { answers: [{ questionId: ISSUE_REPORT_QUESTION_ID, options: [2] }] };
 
 function harness(options: { publisher?: Publisher; finder?: (report: { title: string; body: string }) => Promise<string | null>; deny?: PublicDenyList; privacyRead?: () => Promise<void>; controlRead?: (url: string) => Promise<Record<string, unknown>>; locale?: "en" | "uk" } = {}) {
+  updateOperatorSettings({ locale: options.locale ?? "en", source: "chosen" });
   const published: { title: string; body: string; repository: string }[] = [];
   /* Every caller gets its own service and receipt store, as every agent has
      its own MCP server process over the one state directory. */
@@ -148,10 +153,11 @@ function harness(options: { publisher?: Publisher; finder?: (report: { title: st
     expect(shown.ok).toBe(true);
     const asked = await as(seat).callTool("publish_prototype_review", { clientRequestId: `form-${next += 1}`, ...(form ?? shown.approvalForm as ApprovalForm) }) as McpToolResult & Record<string, unknown>;
     expect(asked).toMatchObject({ ok: true, taskId: null });
-    return asked.reviewId as string;
+    return resolvePrototypeReviewId(loadSeatRounds(), asked.reviewId as string)!;
   };
   /** The operator answers the form in Delegatus, through the decision route. */
   const decides = async (reviewId: string, answer: Partial<DecidePrototypeInput> = YES) => {
+    reviewId = resolvePrototypeReviewId(loadSeatRounds(), reviewId)!;
     const delivery = { recover: async () => null, send: async () => ({ state: "sent" as const }), retry: async () => ({ state: "sent" as const }) };
     const operator: PrototypeWorld = { ...prototypeWorld, orchestrator: () => loadSeatRounds().find((round) => round.id === reviewId)?.source.conversationId ?? null };
     const response = await decisionsPOST(request("/api/projects/decisions", { project: PROJECT, reviewId, chosen: [], comment: "", ...answer }), operator, delivery);
@@ -166,7 +172,8 @@ function harness(options: { publisher?: Publisher; finder?: (report: { title: st
 async function previewed(h: ReturnType<typeof harness>, report = REPORT): Promise<string> {
   const preview = await h.call(REPORTER, { action: "preview", ...report });
   expect(preview.ok).toBe(true);
-  return preview.digest as string;
+  expect(preview.digest).toBe(shortId(issueReportDigest(report)));
+  return issueReportDigest(report);
 }
 
 /** The next millisecond: a form is after a reading only by the clock. */
@@ -183,8 +190,8 @@ test("the tool is on the published surface, keyed like every other mutation", ()
   expect(schema.safeParse({ clientRequestId: "a", action: "publish", digest: "f".repeat(64) }).success).toBe(true);
   /* Publication takes no approval from its caller: the field is gone. */
   expect(Object.keys(schema.shape)).not.toContain("approval");
-  /* A digest is the whole 64 characters; a shortened one names nothing. */
-  expect(schema.safeParse({ clientRequestId: "a", action: "publish", digest: "f".repeat(8) }).success).toBe(false);
+  /* The advertised digest accepts the short value shown by preview. */
+  expect(schema.safeParse({ clientRequestId: "a", action: "publish", digest: "f".repeat(8) }).success).toBe(true);
   expect(schema.safeParse({ clientRequestId: "a", action: "file" }).success).toBe(false);
 });
 
@@ -225,8 +232,9 @@ test("the seat asks in a decision form, and the operator's approving choice file
   const digest = await previewed(h);
 
   const answer = await h.call(SEAT_CALLER, { action: "show", digest });
-  expect(answer).toMatchObject({ ok: true, title: REPORT.title, body: REPORT.body, digest });
-  const form = answer.approvalForm as ApprovalForm;
+  expect(answer).toMatchObject({ ok: true, title: REPORT.title, body: REPORT.body, digest: shortId(digest) });
+  expect(answer.approvalForm).toEqual({ issueReport: shortId(digest) });
+  const form = issueReportApprovalForm({ digest, title: REPORT.title }, "en");
   expect(form).toEqual(issueReportApprovalForm({ digest, title: REPORT.title }, "en"));
   /* Its approving option names the whole digest; the others refuse or ask for an edit. */
   expect(form.questions).toHaveLength(1);
@@ -241,7 +249,7 @@ test("the seat asks in a decision form, and the operator's approving choice file
   expect(loadSeatRounds(PROJECT)).toEqual([expect.objectContaining({ id: reviewId, taskId: null, title: form.title, questions: form.questions, source: expect.objectContaining({ conversationId: SEAT }) })]);
   /* Asked and not answered yet. */
   expect(await h.call(SEAT_CALLER, { action: "publish", digest }))
-    .toMatchObject({ ok: false, code: "issue_report_approval_required", details: { reason: "not_answered", reviewId } });
+    .toMatchObject({ ok: false, code: "issue_report_approval_required", details: { reason: "not_answered", reviewId: shortId(reviewId) } });
   expect(h.published).toEqual([]);
 
   await h.decides(reviewId);
@@ -264,8 +272,8 @@ test("the form is asked in the operator's language, and its English twin approve
   const h = harness({ locale: "uk" });
   const digest = await previewed(h);
   const shown = await h.call(SEAT_CALLER, { action: "show", digest });
-  expect(shown.approvalForm).toEqual(issueReportApprovalForm({ digest, title: REPORT.title }, "uk"));
-  expect((shown.approvalForm as ApprovalForm).questions[0]!.options[0]!.label).toBe(issueReportApprovalReplies(digest).uk);
+  expect(shown.approvalForm).toEqual({ issueReport: shortId(digest) });
+  expect(issueReportApprovalForm({ digest, title: REPORT.title }, "uk").questions[0]!.options[0]!.label).toBe(issueReportApprovalReplies(digest).uk);
   expect(shown.next).toContain("publish_prototype_review");
 
   await h.decides(await h.asks(digest, SEAT_CALLER, issueReportApprovalForm({ digest, title: REPORT.title }, "en")));
@@ -339,7 +347,7 @@ test("an agent's decision of the form approves nothing, and the operator's later
   await settlePrototypeDeliveriesForTests();
   expect(loadSeatRounds(PROJECT)[0]!.decision?.decidedBy).toEqual({ kind: "agent", conversationId: SEAT });
   expect(await h.call(SEAT_CALLER, { action: "publish", digest }))
-    .toMatchObject({ ok: false, code: "issue_report_approval_required", details: { reason: "not_an_approval", reviewId } });
+    .toMatchObject({ ok: false, code: "issue_report_approval_required", details: { reason: "not_an_approval", reviewId: shortId(reviewId) } });
   expect(h.published).toEqual([]);
 
   /* The operator confirms the agent's choice with the same answer: a person decided it now. */
@@ -360,7 +368,7 @@ test.each([
   const reviewId = await h.asks(digest);
   await h.decides(reviewId, answer as Partial<DecidePrototypeInput>);
   expect(await h.call(SEAT_CALLER, { action: "publish", digest }))
-    .toMatchObject({ ok: false, code: "issue_report_approval_required", details: { reason: "not_an_approval", reviewId } });
+    .toMatchObject({ ok: false, code: "issue_report_approval_required", details: { reason: "not_an_approval", reviewId: shortId(reviewId) } });
   expect(h.published).toEqual([]);
 });
 
@@ -385,16 +393,16 @@ test.each(["en", "uk"] as const)("a refusal explains in %s how to ask and which 
   const unasked = await h.call(SEAT_CALLER, { action: "publish", digest });
   expect(unasked).toMatchObject({ ok: false, code: "issue_report_approval_required", details: { reason: "no_form" } });
   expect(unasked.error).toContain("publish_prototype_review");
-  expect(unasked.error).toContain("approvalForm");
+  expect(unasked.error).toContain("issueReport");
 
   const reviewId = await h.asks(digest);
   const waiting = await h.call(SEAT_CALLER, { action: "publish", digest });
-  expect(waiting.error).toContain(reviewId);
+  expect(waiting.error).toContain(shortId(reviewId));
   expect(waiting.error).toContain(locale === "uk" ? "ще не відповів" : "has not answered");
 
   await h.decides(reviewId, EDIT_FIRST);
   const refused = await h.call(SEAT_CALLER, { action: "publish", digest });
-  expect(refused.error).toContain(issueReportApprovalReplies(digest)[locale]);
+  expect(refused.error).toContain(issueReportApprovalReplies(shortId(digest))[locale]);
   expect(h.published).toEqual([]);
 });
 
@@ -481,7 +489,7 @@ test("a form counts only when asked after the preview was read back, and only th
   await h.approves(digest);
   const newer = await h.asks(digest);
   expect(await h.call(SEAT_CALLER, { action: "publish", digest }))
-    .toMatchObject({ ok: false, code: "issue_report_approval_required", details: { reason: "not_answered", reviewId: newer } });
+    .toMatchObject({ ok: false, code: "issue_report_approval_required", details: { reason: "not_answered", reviewId: shortId(newer) } });
   expect(h.published).toEqual([]);
 
   await h.decides(newer);
@@ -644,7 +652,7 @@ test.each([
     const answer = await h.call(REPORTER, { action: "preview", ...report });
     expect(answer).toMatchObject({ ok: true, privacyJudgment: JUDGMENT });
     expect(answer.hints).toEqual(expect.arrayContaining([expect.objectContaining({ class: kind, where, span: expect.objectContaining({ text: expect.any(String) }) })]));
-    const digest = answer.digest as string;
+    const digest = issueReportDigest(report);
     expect(readIssueReportPreview(digest, sandbox)).toMatchObject({ ...report, privacyJudgment: JUDGMENT, hints: answer.hints });
     const shown = await h.call(SEAT_CALLER, { action: "show", digest });
     expect(shown).toMatchObject({ ...report, privacyJudgment: JUDGMENT, hints: answer.hints });
@@ -654,7 +662,7 @@ test.each([
     expect(shown.previewText).toContain(JUDGMENT.assessment);
     expect(shown.previewText).toContain("Detector hints");
     expect(shown.previewLanguage).toBe("en");
-    expect(shown.approvalForm).toEqual(issueReportApprovalForm({ digest, title: report.title }, "en"));
+    expect(shown.approvalForm).toEqual({ issueReport: shortId(digest) });
     expect(await h.call(SEAT_CALLER, { action: "publish", digest })).toMatchObject({ ok: false, code: "issue_report_approval_required" });
     await h.approves(digest);
     expect(await h.call(SEAT_CALLER, { action: "publish", digest })).toMatchObject({ ok: true, published: true });
@@ -680,7 +688,7 @@ test("missing hint sources are advisory and cannot block storage or publication"
   const answer = await h.call(REPORTER, { action: "preview", ...report });
   expect(answer).toMatchObject({ ok: true, hintWarnings: [expect.stringContaining("unavailable")] });
   expect(answer.hints).toEqual(expect.arrayContaining([expect.objectContaining({ class: "host" })]));
-  const digest = answer.digest as string;
+  const digest = issueReportDigest(report);
   const shown = await h.call(SEAT_CALLER, { action: "show", digest });
   expect(shown.hintWarnings).toEqual(answer.hintWarnings);
   await h.approves(digest);

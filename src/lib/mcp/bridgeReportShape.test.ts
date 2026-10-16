@@ -14,7 +14,7 @@ const SANDBOX = fs.mkdtempSync(path.join(os.tmpdir(), "llv-bridge-report-shape-"
 const OLD_STATE = process.env.LLV_STATE_DIR;
 process.env.LLV_STATE_DIR = path.join(SANDBOX, "state");
 
-const { appendBridgeReports, readBridgeReportLog, resetBridgeCollectionsForTests, scopedReportId } = await import("@/lib/bridge/store");
+const { appendBridgeReports, readBridgeReportLog, readBridgeChannel, resetBridgeCollectionsForTests, scopedReportId } = await import("@/lib/bridge/store");
 const { persistProjectAliases, resetProjectAliasesForTests } = await import("@/lib/projects/aliases");
 const { persistedBridgeReportRowsText } = await import("@/lib/bridge/storeFixture");
 const { recordDeploySnapshot, resetTaskChangeCollectionsForTests } = await import("@/lib/bridge/taskChanges");
@@ -140,6 +140,7 @@ beforeEach(async () => {
   resetTaskChangeCollectionsForTests();
   resetProjectSettingsForTests();
   resetProjectAliasesForTests();
+  readBridgeReportLog(); readBridgeChannel();
   locale = "en";
   tasks = [];
   transport = new FakeBotTransport();
@@ -824,4 +825,10 @@ test("a maximum deploy report delivers its task section beside three decisions",
     for (const decision of decisions) expect(decoded).toContain(decision);
     for (const line of readBridgeReportLog().reports[0]!.body.split("\n").filter((line) => line.startsWith("• "))) expect(decoded).toContain(line);
   });
+});
+
+test("MCP callers cannot attach server-derived card links to a report", async () => {
+  const answer = await file({ key: "server-derived-cards", summary: "Checked the current work.", cards: ["foreign-card"] });
+  expect(answer.ok).toBe(true);
+  expect(readBridgeReportLog().reports.at(-1)?.cards).toBeUndefined();
 });

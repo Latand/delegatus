@@ -1,3 +1,4 @@
+import { shortId } from "@/lib/shortIds";
 import type { Flow, Round } from "./types";
 import { REVIEW_BASELINE_RULE } from "@/lib/roles/defaults";
 
@@ -32,8 +33,8 @@ export function reviewerPrompt(flow: Flow, round: Round): string {
     "You are the reviewer in an implement-review loop.",
     "",
     `Working directory: ${flow.cwd}`,
-    `Review scope: git diff ${flow.baseRef}...HEAD plus uncommitted changes in the same working tree.`,
-    `Exact review HEAD: ${round.reviewHeadSha ?? "unavailable"}`,
+    `Review scope: git diff ${shortId(flow.baseRef)}...HEAD plus uncommitted changes in the same working tree.`,
+    `Exact review HEAD: ${shortId(round.reviewHeadSha ?? "unavailable")}`,
     "",
     "Pinned flow specification and acceptance criteria:",
     flow.spec?.trim() || "No pinned specification was supplied for this flow.",

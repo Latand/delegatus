@@ -1,3 +1,4 @@
+import { shortId } from "@/lib/shortIds";
 /* The MANAGER's draft defaults and versioned system directive (#182, #691 §4/§6).
  *
  * The per-project panel initializes its shared launch controls from these defaults
@@ -106,7 +107,7 @@ export const ORCHESTRATOR_SPAWN_CONFIG = {
     which is how v20's rewrite never left the source (#2030), so
     `prompt.test.ts` pins the text's fingerprint per version and fails until
     the bump and a new fingerprint land together. */
-export const ORCHESTRATOR_PROMPT_VERSION = 56;
+export const ORCHESTRATOR_PROMPT_VERSION = 57;
 
 /** Whether a seat's recorded mandate version is behind the current default —
     the one question rotation, the seat card and `rotate_orchestrator` ask
@@ -502,11 +503,21 @@ They render as pills under your message and land in their composer on a tap, edi
 const ORCHESTRATOR_PERSONALITY = `## Who you are
 Warm and friendly, a good friend on this project who likes to tease a little; keep it light, and drop it when something broke or the operator is under pressure. Mirror how the operator talks: language, register, brevity, and their casual words when they use them. You are hard-working and want to keep going: keep work moving and take the next owed step unasked. Proactive covers accepted work (what the operator asked for, the tasks on this board, every step they need) and proposing next work. Its boundary: never start work nobody asked for, or change what the operator owns (settings, branches, checkouts, accounts, their own agents) without asking.`;
 
+/** The literal-request sentence: a proposal goes to the operator in a decision
+    form (v57, the operator, 2026-10-16). */
+const ORCHESTRATOR_LITERAL_PROPOSAL = "anything beyond the literal request is a proposal, put to the operator in a decision form and acted on only after their yes.";
+
+/** The same sentence as v55 and v56 shipped it, offering the proposal in chat;
+    delivery replaces it by exact match so a seat on either version reads v57. */
+const SHIPPED_LITERAL_REQUEST_PROPOSALS = [
+  "anything beyond the literal request is a proposal offered in chat and acted on only after their yes.",
+] as const;
+
 /** v55 (docs/design/role-memory-to-prompts.md §4.1, the SEAT block): what
     seats learned about the literal request, routine recoveries, forms, names
     and delivery. It follows "Who you are", which stays word for word. */
 const ORCHESTRATOR_LITERAL_REQUEST = `## Doing what was asked
-Do exactly what the operator asked, where they asked it; anything beyond the literal request is a proposal offered in chat and acted on only after their yes. A routine recovery (a re-run of a flaky check, a retry) is reported in one line or not at all; alarm wording is for something broken. Every question in a form admits a free-text answer. An unfamiliar product or model name is looked up first inside the vendor already under discussion. A message you sent is delivered once its destination shows it; the sending tool's answer proves only that it was accepted.`;
+Do exactly what the operator asked, where they asked it; ${ORCHESTRATOR_LITERAL_PROPOSAL} A routine recovery (a re-run of a flaky check, a retry) is reported in one line or not at all; alarm wording is for something broken. Every question in a form admits a free-text answer. An unfamiliar product or model name is looked up first inside the vendor already under discussion. A message you sent is delivered once its destination shows it; the sending tool's answer proves only that it was accepted.`;
 
 /** v49 (docs/design/operator-decision-forms.md §2.7): every decision the
     seat needs is a form the operator answers with clicks, in its own
@@ -631,7 +642,7 @@ function resetNote(resets: readonly { row: string; from: RoleConfig }[]): string
 export function orchestratorRoleTable(roles: readonly RoleDefinition[]): string {
   const registry = (roles as RegistryRoleDefinitions).registry;
   const registryStatus = registry
-    ? `Registry revision: ${registry.revision}. Registry health: ${registry.health.state}${registry.health.state === "degraded" ? ` (${registry.health.reason}; shipped defaults shown)` : ""}.${resetNote(registry.resets ?? [])}`
+    ? `Registry revision: ${shortId(registry.revision)}. Registry health: ${registry.health.state}${registry.health.state === "degraded" ? ` (${registry.health.reason}; shipped defaults shown)` : ""}.${resetNote(registry.resets ?? [])}`
     : "Registry health: unknown (no snapshot).";
   const overriddenNote = overriddenScaffoldNote(roles);
   return [
@@ -718,6 +729,7 @@ export function orchestratorMandateForDelivery(mandate: string, roles: readonly 
     is a pending intent recorded before tables existed, which was sent none. */
 export function orchestratorMandateWithRoleTable(mandate: string, roleTable: string | null): string {
   mandate = mandate.replace("- Keep no more workers running at once than your role parameters allow (3 when they name none), in every mode: each running lane and each live spawned agent counts as one.", "- Keep no more workers running at once than the worker limit each wake and get_orchestrator state, in every mode: each running lane and each live spawned agent counts as one.");
+  mandate = SHIPPED_LITERAL_REQUEST_PROPOSALS.reduce((text, shipped) => text.split(shipped).join(ORCHESTRATOR_LITERAL_PROPOSAL), mandate);
   mandate = SHIPPED_BUG_REPORT_RULES.reduce((text, shipped) => text.split(shipped).join(ORCHESTRATOR_BUG_REPORT_RULE), mandate)
     .split(`${SHIPPED_REPLY_DRAFTS_PARAGRAPH}\n`).join("")
     .split(SHIPPED_REPLY_DRAFTS_PARAGRAPH).join("");

@@ -1,3 +1,4 @@
+import { shortId } from "@/lib/shortIds";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -82,8 +83,8 @@ test("no prohibition on addressing the operator survives anywhere in the mandate
 
 /* Seats record the mandate version they were spawned on; `get_orchestrator` reports
    this constant as defaultPromptVersion, so an older seat reads as stale without a diff. */
-test("the default mandate is at version 56, and a v55 seat reads as stale", () => {
-  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(56);
+test("the default mandate is at version 57, and a v56 seat reads as stale", () => {
+  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(57);
   /* #1720, and again #1760 — a seat already running keeps the mandate it was
      delivered, so the version bump is the only thing that surfaces a changed
      section until its next spawn, adoption or rotation. #1749 is the change
@@ -127,7 +128,9 @@ test("the default mandate is at version 56, and a v55 seat reads as stale", () =
      variant 4 of docs/design/role-prompts-rewrite.md) leaves the universal
      rules to the role prompt's working rules and holds tasks instead of
      marking them blocked. v56 (the operator, 2026-10-15) retires reply drafts:
-     every ask, the bug report's two included, goes through a decision form. */
+     every ask, the bug report's two included, goes through a decision form. v57
+     (the operator, 2026-10-16) sends a proposal beyond the literal request to a
+     decision form, not to chat. */
   expect(orchestratorMandateStale(30)).toBe(true);
   expect(orchestratorMandateStale(31)).toBe(true);
   expect(orchestratorMandateStale(32)).toBe(true);
@@ -154,7 +157,8 @@ test("the default mandate is at version 56, and a v55 seat reads as stale", () =
   expect(orchestratorMandateStale(53)).toBe(true);
   expect(orchestratorMandateStale(54)).toBe(true);
   expect(orchestratorMandateStale(55)).toBe(true);
-  expect(orchestratorMandateStale(56)).toBe(false);
+  expect(orchestratorMandateStale(56)).toBe(true);
+  expect(orchestratorMandateStale(57)).toBe(false);
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("gives the shape, the outcome rule and what");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain(ORCHESTRATOR_BOARD_REPORT_DIRECTIVE);
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("File what a wake lists, under its keys");
@@ -231,6 +235,8 @@ const PROMPT_FINGERPRINTS: Readonly<Record<number, string>> = {
   55: "61412fba0b5617e722a1761a69e3550976315a4615bdda0b5ff841bcdaaac4b4",
   // v56 retires reply drafts: every ask goes through a decision form.
   56: "b3d3166f2c01b81db853ccd15e4182c0c88ed9b46be86e52a2ab613b5f32950a",
+  // v57 puts a proposal beyond the literal request in a decision form.
+  57: "928041c147b9f068a23674313b33c285c78555fa6a8afc0a89aeb20f49e99639",
 };
 
 /* #2187 §4.7, decided D1 = A: the setting governs every automatic merge. Off,
@@ -734,7 +740,7 @@ test("successive mandate renders read saved rows, variants and revision from the
     expect(second).toContain("| builder | codex | gpt-6-sol | medium |");
     expect(second).toContain("domain=frontend: claude/opus/high");
     expect(second).toContain("size=trivial: codex/gpt-5.6-luna/medium");
-    expect(second).toContain(`Registry revision: ${nextRevision}. Registry health: healthy.`);
+    expect(second).toContain(`Registry revision: ${shortId(nextRevision)}. Registry health: healthy.`);
     expect(second).not.toContain(firstRevision);
     expect(second).not.toContain("| builder | codex | gpt-6.1-sol | high |");
     expect(second.split(ORCHESTRATOR_ROLE_TABLE_HEADING)).toHaveLength(2);
@@ -1068,7 +1074,10 @@ test("the seat's Who you are section is kept word for word and the literal-reque
 Warm and friendly, a good friend on this project who likes to tease a little; keep it light, and drop it when something broke or the operator is under pressure. Mirror how the operator talks: language, register, brevity, and their casual words when they use them. You are hard-working and want to keep going: keep work moving and take the next owed step unasked. Proactive covers accepted work (what the operator asked for, the tasks on this board, every step they need) and proposing next work. Its boundary: never start work nobody asked for, or change what the operator owns (settings, branches, checkouts, accounts, their own agents) without asking.
 
 ## Doing what was asked
-Do exactly what the operator asked, where they asked it; anything beyond the literal request is a proposal offered in chat and acted on only after their yes.`);
+Do exactly what the operator asked, where they asked it; anything beyond the literal request is a proposal, put to the operator in a decision form and acted on only after their yes.`);
+  const literalRequest = ORCHESTRATOR_SYSTEM_PROMPT.slice(ORCHESTRATOR_SYSTEM_PROMPT.indexOf("## Doing what was asked"), ORCHESTRATOR_SYSTEM_PROMPT.indexOf("\n\n", ORCHESTRATOR_SYSTEM_PROMPT.indexOf("## Doing what was asked")));
+  expect(literalRequest).not.toContain("offered in chat");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).not.toContain("offered in chat");
   const v54 = fs.readFileSync(path.join(import.meta.dir, "fixtures/mandate-v54.txt"), "utf8");
   const section = (text: string) => text.slice(text.indexOf("## Who you are"), text.indexOf("\n\n", text.indexOf("## Who you are")));
   expect(section(ORCHESTRATOR_SYSTEM_PROMPT)).toBe(section(v54));
@@ -1120,11 +1129,28 @@ test("delivery takes every reply-draft instruction out of a v55 mandate by exact
   /* Removing the paragraph leaves its neighbours as the current body has them. */
   expect(delivered).toContain(`${ORCHESTRATOR_PROTOTYPE_DIRECTIVE}\nBridge reports.`);
   expect(orchestratorMandateForDelivery(delivered)).toBe(delivered);
-  /* With the role table set aside, the delivered v55 mandate is the v56 one. */
+  /* With the role table set aside, the delivered v55 mandate is the current one. */
   expect(orchestratorMandateWithRoleTable(v55, null)).toBe(orchestratorMandateWithRoleTable(ORCHESTRATOR_SYSTEM_PROMPT, null));
   expect(orchestratorMandateCarriesTickContract({ mandate: v55, promptVersion: 55 })).toBe(true);
   /* A bespoke mandate's own wording about replies survives. */
   expect(orchestratorMandateForDelivery("Coordinate. Reply drafts: our own wording.")).toContain("Reply drafts: our own wording.");
+});
+
+/* A seat delivered v56 keeps its stored mandate until it rotates; delivery
+   replaces the literal-request sentence v57 rewrote by exact match, so the seat
+   proposes in a decision form and not in chat. The fixture is the v56 default
+   byte for byte. */
+test("delivery sends a v56 mandate's proposals to a decision form by exact match", () => {
+  const v56 = fs.readFileSync(path.join(import.meta.dir, "fixtures/mandate-v56.txt"), "utf8");
+  expect(createHash("sha256").update(v56).digest("hex")).toBe(PROMPT_FINGERPRINTS[56]);
+  expect(v56).toContain("is a proposal offered in chat and acted on only after their yes");
+  const delivered = orchestratorMandateForDelivery(v56);
+  expect(delivered).not.toContain("offered in chat");
+  expect(delivered).toContain("anything beyond the literal request is a proposal, put to the operator in a decision form and acted on only after their yes.");
+  expect(orchestratorMandateWithRoleTable(v56, null)).toBe(orchestratorMandateWithRoleTable(ORCHESTRATOR_SYSTEM_PROMPT, null));
+  expect(orchestratorMandateForDelivery(delivered)).toBe(delivered);
+  /* A bespoke mandate's own wording about proposals survives. */
+  expect(orchestratorMandateForDelivery("Coordinate. Proposals are offered in chat.")).toContain("Proposals are offered in chat.");
 });
 
 /* The seat reads every working rule once, in its mandate: the full text beside
