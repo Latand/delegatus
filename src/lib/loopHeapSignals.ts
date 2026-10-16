@@ -22,13 +22,13 @@ const observeGc: GcSubscriber = record => {
   }
 };
 
-/** Two scalar heap readings are a proxy only. On Bun heapUsed describes the
- * last collection's survivors (block capacity before the first GC), including
- * their external storage. It misses
- * allocations since that collection and simultaneous allocation/reclamation.
- * Neither heapStats/heapSize (heap walks) nor forced GC belongs in the poll. Heap reads run at 250 ms cadence, with a fresh read on a gap. */
-export function createLoopHeapSignals(readHeap = () => process.memoryUsage().heapUsed, subscribe: GcSubscriber = observeGc, now = () => performance.now()) {
+/** Heap sampling is unavailable on Bun: process.memoryUsage() synchronously
+ * reads RSS, while heapStats/heapSize walk the heap. Neither belongs in the
+ * loop poll. Keep the scalar reader injectable for deterministic tests and
+ * runtimes that can provide a nonblocking counter. */
+export function createLoopHeapSignals(readHeap: (() => number) | undefined = undefined, subscribe: GcSubscriber = observeGc, now = () => performance.now()) {
   const read = () => {
+    if (!readHeap) return null;
     try { const value = readHeap(); return Number.isFinite(value) && value >= 0 ? value : null; }
     catch { return null; }
   };
@@ -79,11 +79,11 @@ export function createLoopHeapSignals(readHeap = () => process.memoryUsage().hea
           ? { source: "performance-observer", coverage: "observed-entries", count, ms, dropped: lost, late }
           : { source: "unavailable", count: null, ms: null, reason: subscription?.unavailable ?? "monitor-not-started" },
         heap: {
-          source: "process.memoryUsage.heapUsed", sampleFrom: beforeAt, sampleTo: sampledAt,
+          source: readHeap ? "heap-reader" : "unavailable", sampleFrom: beforeAt, sampleTo: sampledAt,
           deltaBytes: before === null || current === null ? null : current - before,
           allocatedBytes: null, freedBytes: null,
           allocationUnavailable: "no-cheap-cumulative-counters",
-          ...(before === null || current === null ? { unavailable: "heap-read-failed" } : {}),
+          ...(before === null || current === null ? { unavailable: readHeap ? "heap-read-failed" : "nonblocking-heap-sampling-unavailable" } : {}),
           ...(gapMs > LOOP_HEAP_DETAIL_THRESHOLD_MS ? { beforeBytes: before, afterBytes: current } : {}),
         },
       };

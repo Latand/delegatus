@@ -13,7 +13,7 @@ test("heap proxy preserves growth, shrinkage and zero without inventing allocati
   heap = 9000;
   const growth = signals.sample(0, 800, 790)!;
   expect(growth.gc).toEqual({ source: "unavailable", count: null, ms: null, reason: "gc-entry-unsupported" });
-  expect(growth.heap).toEqual({ source: "process.memoryUsage.heapUsed", sampleFrom: 0, sampleTo: 800, deltaBytes: 5000,
+  expect(growth.heap).toEqual({ source: "heap-reader", sampleFrom: 0, sampleTo: 800, deltaBytes: 5000,
     allocatedBytes: null, freedBytes: null, allocationUnavailable: "no-cheap-cumulative-counters" });
   heap = 1000;
   expect(signals.sample(800, 1600, 790)!.heap.deltaBytes).toBe(-8000);
@@ -137,14 +137,37 @@ test("ordinary polls only advance the baseline and allocate no report", () => {
   expect(signals.sample(250, 1000, 740)!.heap.deltaBytes).toBe(100);
 });
 
-test("the pinned Bun exposes the cached heap proxy and explicitly lacks GC entries", () => {
+test("the pinned Bun reports heap sampling unavailable without blocking the loop", () => {
   const signals = createLoopHeapSignals();
   signals.start();
   const report = signals.sample(0, 1000, 990)!;
-  expect(report.heap.source).toBe("process.memoryUsage.heapUsed");
-  expect(Number.isFinite(report.heap.deltaBytes)).toBe(true);
+  expect(report.heap).toMatchObject({ source: "unavailable", deltaBytes: null,
+    unavailable: "nonblocking-heap-sampling-unavailable" });
   expect(report.gc).toMatchObject({ count: null, ms: null, reason: "gc-entry-unsupported" });
   signals.stop();
+});
+
+test("default heap sampling never calls Bun memoryUsage on the monitor loop", () => {
+  const original = process.memoryUsage;
+  let reads = 0;
+  Object.defineProperty(process, "memoryUsage", {
+    configurable: true,
+    value: () => { reads++; throw new Error("synchronous native read"); },
+  });
+  const signals = createSignals(undefined, unsupported, () => 0);
+  try {
+    signals.start();
+    const report = signals.sample(0, 1001, 1001)!;
+    expect(reads).toBe(0);
+    expect(report.heap).toMatchObject({
+      source: "unavailable", sampleFrom: 0, sampleTo: 1001, deltaBytes: null,
+      unavailable: "nonblocking-heap-sampling-unavailable",
+      beforeBytes: null, afterBytes: null,
+    });
+  } finally {
+    signals.stop();
+    Object.defineProperty(process, "memoryUsage", { configurable: true, value: original });
+  }
 });
 
 test("overlapping GC entries count separately but their wall time is a union", () => {

@@ -11,18 +11,17 @@ them. The GC interval is `lastTick` through `tick`. `gapMs` subtracts the expect
 | `gc.count`, `gc.ms` | Count of observed entries overlapping the interval and the union of their clipped durations in milliseconds. Both are null when observation is unavailable. |
 | `gc.reason` | `gc-entry-unsupported`, `gc-observer-refused`, or `monitor-not-started` when unavailable. |
 | `gc.coverage`, `gc.dropped`, `gc.late` | Supported observers report `observed-entries`, entries lost to the 128-entry bound, and entries delivered after their interval ended. Observation supplies partial evidence. |
-| `heap.source`, `heap.deltaBytes` | `process.memoryUsage.heapUsed` and the signed difference between heap sample readings. A failed reading produces null and `heap.unavailable: heap-read-failed`. |
-| `heap.sampleFrom`, `heap.sampleTo` | Monotonic poll timestamps bounding the heap proxy. Regular heap reads are 250 ms apart; every reported gap forces a fresh read. The starting sample can precede `lastTick` by up to 250 ms plus timer scheduling delay. |
-| `heap.allocatedBytes`, `heap.freedBytes` | Null, with `allocationUnavailable: no-cheap-cumulative-counters`. The signed delta cannot separate allocations from reclamation or assign all change to the narrower GC interval. |
-| `heap.beforeBytes`, `heap.afterBytes` | Heap readings at `heap.sampleFrom` and `heap.sampleTo`, included only when `gapMs > 1000`. An exact one-second gap omits them. |
+| `heap.source`, `heap.deltaBytes` | `unavailable` and null on Bun because its heap accessors perform synchronous native work. A gap still reports the sampler's monotonic window. |
+| `heap.unavailable` | `nonblocking-heap-sampling-unavailable` when the runtime has no safe counter; `heap-read-failed` when an injected reader fails. |
+| `heap.sampleFrom`, `heap.sampleTo` | Monotonic poll timestamps bounding the most recent attempted sample window. The start advances at the 250 ms sampling cadence, and every reported gap advances it. |
+| `heap.allocatedBytes`, `heap.freedBytes` | Null, with `allocationUnavailable: no-cheap-cumulative-counters`. |
+| `heap.beforeBytes`, `heap.afterBytes` | Null endpoints included only when `gapMs > 1000`. An exact one-second gap omits them. |
 
-On Bun, this heap reading describes survivors of the most recent collection,
-including their external storage. It misses objects allocated since that
-collection. A zero delta can conceal both allocation and collection. A shrinking
-heap supplies a proxy for reclamation; it establishes no GC duration or cause
-for the stall. Existing unresolved attribution remains unchanged.
+The Bun sampler reports heap values as unavailable. Its scalar process-memory
+getter performs synchronous OS reads, and the alternative heap accessors walk
+the heap. Existing unresolved attribution remains unchanged.
 
-The 10 ms timer reads the runtime heap at 250 ms cadence and forces a read
+The 10 ms timer advances scalar sample-window timestamps at 250 ms cadence and
 on every reported gap. It allocates a diagnostic object only for a reported gap. It forces no GC,
 starts no profiler and takes no snapshot. GC observation starts and stops with
 the monitor. It retains only bounded numeric timing records and ignores callbacks
@@ -40,11 +39,10 @@ standalone capability probe. Timed overhead runs use ordinary automatic GC.
 
 The pinned runtime’s
 [`Process_functionMemoryUsage`](https://github.com/oven-sh/bun/blob/34cbb9a40b4bd1bd767d134a7065e66c2432a676/src/jsc/bindings/BunProcess.cpp#L4080)
-reads a cached collection result (and uses allocated block capacity until the
-first collection). Its
+calls `getRSS`, whose Linux implementation synchronously reads
+`/proc/self/stat`, so it is excluded from the loop sampler. Its
 [`functionHeapSize`](https://github.com/oven-sh/bun/blob/34cbb9a40b4bd1bd767d134a7065e66c2432a676/src/jsc/modules/BunJSCModule.h#L195)
-calls `heap.size()`, which walks heap blocks. The scalar getter’s cost rises
-with retained population in the probe, so it is excluded from the poll. The
+calls `heap.size()`, which walks heap blocks, so it is excluded from the poll. The
 [allocation-counter reference](https://bun.sh/reference/node/v8/getHeapStatistics)
 describes `total_allocated_bytes` as cumulative; the pinned-build probe checks
 that claim directly. Counter resets make subtraction unsuitable for allocation
@@ -122,19 +120,18 @@ reported on the pull request.
 
 ## Recorded results
 
-Completed **2026-10-16T15:14:10.489Z**, Bun **1.4.0**, interpreter revision
+Completed **2026-10-16T16:34:29.059Z**, Bun **1.4.0**, interpreter revision
 `34cbb9a40b4bd1bd767d134a7065e66c2432a676`. CPU affinity was 8; the owned gate's CPU quota was
 three cores and its memory cap 8 GiB. The one-core affinity was the tighter
 CPU limit. Both bounds passed the one-point budget.
 
 | Workload | Pairs | Mean added CPU points | Conservative 95% upper bound |
 | --- | ---: | ---: | ---: |
-| idle | 600 | 0.0302 | 0.0742 |
-| load | 600 | 0.1338 | 0.6336 |
+| idle | 600 | 0.0165 | 0.0625 |
+| load | 600 | -0.2434 | 0.2803 |
 
-Aggregate active-time CPU rate differences agree with the paired estimates: +0.0302 points at idle and
-+0.1416 points under load. One-lag correlations of the paired differences were
-+0.0061 and +0.0106 respectively.
+The implementation under measurement reports heap values as unavailable, so
+the candidate adds no heap read to the loop.
 
 [Accepted measurements](../../evidence/loop-gap-heap/overhead.json) retain every
 block as a row, with explicit column names, source hashes, statistics and
