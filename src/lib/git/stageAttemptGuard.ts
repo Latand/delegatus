@@ -25,19 +25,17 @@ export async function prepareStageGitGuard(launchId: string, worktree: string, e
   return { LLV_STAGE_GIT_RECEIPT: directory, LLV_STAGE_GIT_WORKTREE: worktree };
 }
 
-const quote = (s: string) => "'" + s.replaceAll("'", "'\\''") + "'";
-
 /** These receipts attest cooperating stage commands, like the author guard.
  * They grant no authority to arbitrary remote commits or later review repair. */
-export function stageAttemptGuardScript(source: Readonly<Record<string, string | undefined>>): string {
-  const receipt = source.LLV_STAGE_GIT_RECEIPT;
-  const worktree = source.LLV_STAGE_GIT_WORKTREE;
-  if (!receipt && !worktree) return "";
-  if (!receipt || !worktree || !path.isAbsolute(receipt) || !path.isAbsolute(worktree)) throw new Error("Invalid stage Git guard binding");
+export function stageAttemptGuardScript(): string {
   return `
-receipt=${quote(receipt)}
-lane=${quote(worktree)}
-scratch=${quote(source.TMPDIR ?? "")}
+stage_receipt=\${LLV_STAGE_GIT_RECEIPT:-}
+stage_worktree=\${LLV_STAGE_GIT_WORKTREE:-}
+if [ -n "$stage_receipt" ] || [ -n "$stage_worktree" ]; then
+  case "$stage_receipt:$stage_worktree" in /*:/*) ;; *) echo 'Invalid stage Git guard binding' >&2; exit 1 ;; esac
+  receipt=$stage_receipt
+  lane=$stage_worktree
+  scratch=\${TMPDIR:-}
 lane_git() (
   unset GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR GIT_INDEX_FILE GIT_PREFIX
   git -C "$lane" "$@"
@@ -92,6 +90,7 @@ if [ "$hook" = pre-push ]; then
     mv "$pending" "$receipt/pushes/$new"
   done || exit 1
   fi
+fi
 fi
 `;
 }

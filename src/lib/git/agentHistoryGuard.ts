@@ -45,7 +45,7 @@ check_author() {
   [ "$author" = ${quote(name + "\n" + email)} ] || refuse
 }
 hook=\${0##*/}
-${stageAttemptGuardScript(source)}
+${stageAttemptGuardScript()}
 if [ "$hook" = prepare-commit-msg ]; then
   # commit exports its effective author, including -C/-c inheritance. The
   # cherry-pick sequencer needs its own source check. --no-verify runs this hook.
@@ -103,7 +103,7 @@ original=$(GIT_CONFIG_COUNT=${count} git config --path --get core.hooksPath) || 
 target="$original/$hook"
 [ -x "$target" ] || exit 0
 if [ "$hook" = reference-transaction ] || [ "$hook" = pre-push ]; then
-  ${source.LLV_STAGE_GIT_RECEIPT ? "" : 'if [ "$hook" = pre-push ]; then exec "$target" "$@"; fi'}
+  if [ "$hook" = pre-push ] && [ -z "\${LLV_STAGE_GIT_RECEIPT:-}" ]; then exec "$target" "$@"; fi
   printf '%s\\n' "$input" | "$target" "$@"
 else
   exec "$target" "$@"

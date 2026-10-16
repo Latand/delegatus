@@ -2564,3 +2564,60 @@ test("attempt Git custody restores report provenance after an interrupted fast-f
     expect(accepted.cursor?.stageId).toBe("review");
   } finally { savePipelines([]); fs.rmSync(f.root, { recursive: true, force: true }); }
 });
+
+test.each(["outside", "mixed", "malformed"] as const)("attempt Git custody revalidates full proof after a fast-forward replay: %s", async shape => {
+  const f = await detachedAttemptFixture(`attempt-git-adopted-${shape}`);
+  try {
+    let candidate: string;
+    if (shape === "outside") {
+      const date = new Date(Date.parse(f.attempt.startedAt!) + 1000).toISOString();
+      const result = await realExec("git", ["commit", "--allow-empty", "-m", "outside commit"], f.detached,
+        { ...f.env, GIT_CONFIG_COUNT: "0", GIT_AUTHOR_DATE: date, GIT_COMMITTER_DATE: date });
+      expect(result.code, result.stderr).toBe(0);
+      candidate = (await f.git(f.detached, "rev-parse", "HEAD"));
+    } else {
+      candidate = await f.commit();
+      if (shape === "mixed") {
+        const date = new Date(Date.parse(f.attempt.startedAt!) + 2000).toISOString();
+        const result = await realExec("git", ["commit", "--allow-empty", "-m", "outside ancestor"], f.detached,
+          { ...f.env, GIT_CONFIG_COUNT: "0", GIT_AUTHOR_DATE: date, GIT_COMMITTER_DATE: date });
+        expect(result.code, result.stderr).toBe(0);
+        candidate = (await f.git(f.detached, "rev-parse", "HEAD"));
+      }
+    }
+    await f.git(f.worktree, "merge", "--ff-only", candidate);
+    const pushed = await realExec("git", ["push", "origin", `HEAD:refs/heads/${f.lane.branch}`], f.worktree, f.env);
+    expect(pushed.code, pushed.stderr).toBe(0);
+    if (shape === "malformed") fs.writeFileSync(path.join(f.receipt, "commits", candidate), "not an empty receipt");
+    const failed = await f.finish();
+    expect(failed.state).toBe("needs_decision");
+    expect(failed.stateDetail).toContain("settling the stage push");
+    expect(failed.lastPassedCommit).toBe(f.base);
+    expect(failed.cursor?.stageId).toBe("build");
+    expect(await f.git(f.worktree, "rev-parse", "HEAD")).toBe(candidate);
+    expect(await f.git(f.origin, "rev-parse", `refs/heads/${f.lane.branch}`)).toBe(candidate);
+  } finally { savePipelines([]); fs.rmSync(f.root, { recursive: true, force: true }); }
+});
+
+test.each(["unchanged", "absent"] as const)("attempt Git custody refuses an unconfirmed recorded candidate on an %s remote branch", async shape => {
+  const f = await detachedAttemptFixture(`attempt-git-unconfirmed-${shape}`);
+  try {
+    const candidate = await f.commit();
+    await f.git(f.origin, "update-ref", `refs/heads/${f.lane.branch}`, f.base);
+    if (shape === "absent") await f.git(f.origin, "update-ref", "-d", `refs/heads/${f.lane.branch}`);
+    // Model the hook's durable write before the repository hook or transport
+    // refusal. Preserve that candidate while the delivery tip stays put.
+    fs.mkdirSync(path.join(f.receipt, "pushes"), { recursive: true });
+    fs.writeFileSync(path.join(f.receipt, "pushes", candidate), `refs/heads/${f.lane.branch}\n${f.origin}\n`);
+    const failed = await f.finish();
+    expect(failed.state).toBe("needs_decision");
+    expect(failed.stateDetail).toContain("recorded push candidate was not confirmed");
+    expect(failed.lastPassedCommit).toBe(f.base);
+    expect(failed.cursor?.stageId).toBe("build");
+    if (shape === "unchanged") expect(await f.git(f.origin, "rev-parse", `refs/heads/${f.lane.branch}`)).toBe(f.base);
+    else {
+      const branch = await realExec("git", ["show-ref", "--verify", `refs/heads/${f.lane.branch}`], f.origin);
+      expect(branch.code).not.toBe(0);
+    }
+  } finally { savePipelines([]); fs.rmSync(f.root, { recursive: true, force: true }); }
+});

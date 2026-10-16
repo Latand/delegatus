@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -25,6 +25,29 @@ test("hooks stay in the shared home across a container-to-host launch and sandbo
     const reapplied = agentPublicationIdentityEnv(env);
     expect(reapplied.GIT_CONFIG_COUNT).toBe(env.GIT_CONFIG_COUNT);
     expect(reapplied[`GIT_CONFIG_VALUE_${last}`]).toBe(hooks);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("stage attempt bindings reuse warmed hook files across native launch configuration", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "guard-stage-binding-"));
+  try {
+    const source = (launchId: string): NodeJS.ProcessEnv => ({ HOME: root, TMPDIR: path.join(root, "tmp"), NODE_ENV: "test",
+      LLV_STAGE_GIT_RECEIPT: path.join(root, "receipts", launchId), LLV_STAGE_GIT_WORKTREE: path.join(root, "lane") });
+    fs.mkdirSync(path.join(root, "tmp"));
+    const first = source("first-launch");
+    const firstEnv = withAgentConfigSandbox({ NODE_ENV: "test" }, first);
+    const hookDir = firstEnv.LLV_AGENT_GIT_GUARD_DIR;
+    const write = spyOn(fs, "writeFileSync");
+    const rename = spyOn(fs, "renameSync");
+    try {
+      for (const launchId of ["second", "third", "fourth", "fifth", "sixth"]) {
+        const next = withAgentConfigSandbox({ NODE_ENV: "test" }, source(`${launchId}-launch`));
+        expect(next.LLV_AGENT_GIT_GUARD_DIR).toBe(hookDir);
+        expect(next.LLV_STAGE_GIT_RECEIPT).toBe(path.join(root, "receipts", `${launchId}-launch`));
+      }
+      expect(write).not.toHaveBeenCalled();
+      expect(rename).not.toHaveBeenCalled();
+    } finally { write.mockRestore(); rename.mockRestore(); }
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 

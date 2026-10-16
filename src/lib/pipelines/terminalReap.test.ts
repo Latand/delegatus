@@ -991,3 +991,33 @@ test("parked publication custody keeps its revision until a host actually settle
   expect(pipelineRevision(loadPipelines()[0]!)).not.toBe(before);
   expect(loadPipelines()[0]!.terminalReap?.settledAttempts).toEqual(["implement:1"]);
 });
+
+test("scheduled parked reap keeps its revision across off-window active hosts", async () => {
+  const { tickPipelinesController } = await import("./controllerPass");
+  const h = harness();
+  const record = pipelineRecord({ id: "parked-controller-custody", state: "needs_decision",
+    attempts: [attempt(1, "conversation_parked_builder_0", true)] });
+  record.cursor = { stageId: "implement", state: "committing", input: null, activatedBy: null };
+  record.runs[0]!.attempts = Array.from({ length: 20 }, (_, index) => ({
+    ...attempt(index + 1, `conversation_parked_builder_${index}`, true),
+  }));
+  record.terminalReap = { rounds: 1, stopped: 0, lastAt: "1970-01-01T00:00:01.000Z", settledAttempts: [], settledAt: null,
+    attemptRounds: Object.fromEntries(record.runs[0]!.attempts.map(item => [`implement:${item.n}`, 1])) };
+  savePipelines([record]);
+  for (const item of record.runs[0]!.attempts) h.resident.set(item.conversationId!, true);
+  const before = pipelineRevision(loadPipelines()[0]!);
+  await tickPipelinesController([], h.ports);
+  const afterFirst = pipelineRevision(loadPipelines()[0]!);
+  let now = Date.parse(h.ports.now());
+  h.ports.now = () => new Date(now).toISOString();
+  now += 60_000;
+  await tickPipelinesController([], h.ports);
+  expect(pipelineRevision(loadPipelines()[0]!)).toBe(afterFirst);
+  expect(afterFirst).toBe(before);
+  expect(h.stops).toEqual([]);
+  h.resident.set("conversation_parked_builder_0", false);
+  h.active.set("conversation_parked_builder_0", false);
+  await tickPipelinesController([], h.ports);
+  expect(pipelineRevision(loadPipelines()[0]!)).not.toBe(afterFirst);
+  expect(loadPipelines()[0]!.terminalReap?.settledAttempts).toContain("implement:1");
+});

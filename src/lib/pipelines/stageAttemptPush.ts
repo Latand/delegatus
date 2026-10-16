@@ -19,6 +19,22 @@ async function smallFile(file: string): Promise<string | null> {
   } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return null; throw error; }
 }
 
+async function hasRecordedPushForRef(directory: string, ref: string): Promise<boolean> {
+  let entries: Awaited<ReturnType<typeof fs.opendir>>;
+  try { entries = await fs.opendir(path.join(directory, "pushes")); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return false; throw error; }
+  let inspected = 0;
+  for await (const entry of entries) {
+    if (++inspected > 256) return true;
+    if (!/^[0-9a-f]{40}$/.test(entry.name)) continue;
+    const receipt = await smallFile(path.join(directory, "pushes", entry.name));
+    if (receipt === null) return true;
+    const [recordedRef, recordedUrl, trailing] = receipt.split("\n");
+    if (!recordedRef || !recordedUrl || trailing !== "" || recordedRef === ref) return true;
+  }
+  return false;
+}
+
 export async function stageAttemptPushRefusal(launchId: string | null): Promise<string | null> {
   if (!launchId) return null;
   try { return (await smallFile(path.join(stageGitReceiptDirectory(launchId), "refused")))?.trim() ?? null; }
@@ -65,18 +81,13 @@ export async function settleStageAttemptPush(pipeline: Pipeline, attempt: Pipeli
     const local = await exec("git", ["rev-parse", "HEAD"], pipeline.worktreeDir);
     if (local.code !== 0) return refuse("the lane head cannot be read");
     const head = local.stdout.trim();
-    if (!tip) return null;
-    if (tip === head) {
-      // A crash can leave the verified fast-forward on disk before its final
-      // row write. Observe the clean current head again for report provenance.
-      const receipt = await smallFile(path.join(directory, "pushes", tip));
-      const clean = await exec("git", ["status", "--porcelain"], pipeline.worktreeDir);
-      const current = await exec("git", ["rev-parse", "HEAD"], pipeline.worktreeDir);
-      return receipt !== null && clean.code === 0 && !clean.stdout.trim()
-        && current.code === 0 && current.stdout.trim() === tip ? { ok: true, sha: tip } : null;
-    }
+    if (!tip) return await hasRecordedPushForRef(directory, ref)
+      ? refuse("the recorded push candidate was not confirmed on the delivery remote") : null;
     const pushed = await smallFile(path.join(directory, "pushes", tip));
     if (pushed === null) {
+      if (await hasRecordedPushForRef(directory, ref)) {
+        return refuse("the recorded push candidate was not confirmed on the delivery remote");
+      }
       // A behind remote is normal before controller publication. An unknown
       // ahead tip is never authority, even with the same author and date.
       const known = await exec("git", ["merge-base", "--is-ancestor", tip, head], pipeline.worktreeDir);
@@ -85,7 +96,7 @@ export async function settleStageAttemptPush(pipeline: Pipeline, attempt: Pipeli
     const url = await exec("git", ["remote", "get-url", "--push", remote], pipeline.worktreeDir);
     const expectedUrl = url.code === 0 ? url.stdout.trim() : remote;
     if (pushed !== `${ref}\n${expectedUrl}\n`) return refuse("the push receipt names another delivery target");
-    if (head !== start.head) return refuse("the lane moved away from the attempt's starting head");
+    if (head !== start.head && head !== tip) return refuse("the lane moved away from the attempt's starting head");
     const fetched = await exec("git", ["fetch", "--no-tags", remote, ref], pipeline.worktreeDir, undefined, { timeoutMs: 10000 });
     if (fetched.code !== 0) return refuse("the pushed commit could not be fetched");
     const ancestor = await exec("git", ["merge-base", "--is-ancestor", start.head, tip], pipeline.worktreeDir);
@@ -111,8 +122,10 @@ export async function settleStageAttemptPush(pipeline: Pipeline, attempt: Pipeli
     if (await remoteHead() !== tip) return refuse("the remote tip raced the attempt proof");
     const current = await exec("git", ["rev-parse", "HEAD"], pipeline.worktreeDir);
     if (current.code !== 0 || current.stdout.trim() !== head) return refuse("the lane head raced the attempt proof");
-    const merged = await exec("git", ["merge", "--ff-only", "--no-overwrite-ignore", tip], pipeline.worktreeDir);
-    if (merged.code !== 0) return refuse("the proved push could not fast-forward the lane");
+    if (head !== tip) {
+      const merged = await exec("git", ["merge", "--ff-only", "--no-overwrite-ignore", tip], pipeline.worktreeDir);
+      if (merged.code !== 0) return refuse("the proved push could not fast-forward the lane");
+    }
     const final = await exec("git", ["rev-parse", "HEAD"], pipeline.worktreeDir);
     const clean = await exec("git", ["status", "--porcelain"], pipeline.worktreeDir);
     if (final.code !== 0 || final.stdout.trim() !== tip || clean.code !== 0 || clean.stdout.trim()

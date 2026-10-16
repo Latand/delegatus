@@ -9637,8 +9637,8 @@ async function reconcileTerminalStageHosts(pipeline: Pipeline, ports: PipelinePo
   // Custody and active work can keep the same host here indefinitely. A
   // probe that made no progress must leave the durable row (and revision)
   // alone so a parked decision remains actionable.
-  if (prior && liveWork && !attempted && !deferred && !prior.settledAt
-    && settledAttempts.size === (prior?.settledAttempts?.length ?? 0)) return false;
+  if (prior && !attempted && survivors.length === 0 && !prior.settledAt
+    && settledAttempts.size === (prior.settledAttempts?.length ?? 0)) return false;
   reap.lastAt = ports.now();
   reap.settledAttempts = [...settledAttempts];
   if (controllerPipelineKeys() && (otherCandidates || prior?.attemptRounds || candidates.some(({ target }) => !controllerAttemptSelected(pipeline.id, target.stageId, target.attempt)))) {
