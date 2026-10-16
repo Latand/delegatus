@@ -41,14 +41,15 @@ export function useVoiceCompanionSettings(open: boolean): VoiceCompanionSettings
       const result = await response.json();
       if (!response.ok) {
         const code = typeof result?.code === "string" && /^[A-Z_]{1,40}$/.test(result.code) ? result.code : "COMPANION_UNAVAILABLE";
-        if (current === sequence.current) setError(code);
+        /* A refusal always names its code, whatever the send order; only a panel closed since the press drops it. */
+        if (born === epoch.current) setError(code);
         return false;
       }
       /* An answer older than one already taken never overwrites it. */
       if (born === epoch.current && current > applied.current) { applied.current = current; setStored(result as CompanionSettings); }
       return true;
     } catch {
-      if (current === sequence.current) setError("COMPANION_UNAVAILABLE");
+      if (born === epoch.current) setError("COMPANION_UNAVAILABLE");
       return false;
     } finally {
       if (press) setPresses((held) => held.filter((entry) => entry.id !== current));
@@ -68,7 +69,7 @@ export function useVoiceCompanionSettings(open: boolean): VoiceCompanionSettings
     if (!open) return;
     let disposed = false;
     queueMicrotask(() => { if (!disposed) void refresh(); });
-    return () => { disposed = true; sequence.current++; epoch.current++; };
+    return () => { disposed = true; epoch.current++; };
   }, [open, refresh]);
   return { settings, busy, error, refresh, update, saveKey: key => request("key", { key }) };
 }

@@ -101,3 +101,34 @@ test("an older accepted write answering after a newer refusal is kept", async ()
   await server.answer(0, Response.json({ ...STORED, callMemory: true }));
   expect([seen!.settings?.callMemory, seen!.settings?.enabled]).toEqual([true, true]);
 });
+
+test("an older press refused while a newer one is out names its code", async () => {
+  const server = holdPuts();
+  await mount();
+  await act(async () => { void seen!.update({ callMemory: true }); void seen!.update({ enabled: false }); await new Promise((resolve) => setTimeout(resolve, 0)); });
+  await server.answer(0, Response.json({ code: "COMPANION_UNAVAILABLE" }, { status: 503 }));
+  expect([seen!.settings?.callMemory, seen!.settings?.enabled]).toEqual([false, false]);
+  expect(seen!.error).toBe("COMPANION_UNAVAILABLE");
+  await server.answer(1, Response.json({ ...STORED, enabled: false }));
+  expect(seen!.error).toBe("COMPANION_UNAVAILABLE");
+});
+
+test("an older press refused after a newer one was accepted names its code", async () => {
+  const server = holdPuts();
+  await mount();
+  await act(async () => { void seen!.update({ callMemory: true }); void seen!.update({ enabled: false }); await new Promise((resolve) => setTimeout(resolve, 0)); });
+  await server.answer(1, Response.json({ ...STORED, enabled: false }));
+  await server.answer(0, Response.json({ code: "CAP_INVALID" }, { status: 400 }));
+  expect([seen!.settings?.callMemory, seen!.settings?.enabled]).toEqual([false, false]);
+  expect(seen!.error).toBe("CAP_INVALID");
+});
+
+test("a pressed control clears the old refusal when the operator presses again", async () => {
+  const server = holdPuts();
+  await mount();
+  await act(async () => { void seen!.update({ callMemory: true }); await new Promise((resolve) => setTimeout(resolve, 0)); });
+  await server.answer(0, Response.json({ code: "CAP_INVALID" }, { status: 400 }));
+  expect(seen!.error).toBe("CAP_INVALID");
+  await act(async () => { void seen!.update({ enabled: false }); await new Promise((resolve) => setTimeout(resolve, 0)); });
+  expect(seen!.error).toBeNull();
+});
