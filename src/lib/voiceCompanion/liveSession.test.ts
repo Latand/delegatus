@@ -504,7 +504,7 @@ test("minting is server configured, a model request is delivered at once with no
   expect(JSON.parse(f.provider.requests[1].input.find(item => item.type === "function_call_output")!.output as string)).toMatchObject({ status: "sent", delivery: "queued" });
   expect(f.provider.requests[0].input[0].content).toContain("Operator: Ask the orchestrator to review the plan.");
   expect(f.provider.requests[1].input.filter(item => item.type === "function_call_output")).toHaveLength(1);
-  expect(spoken(f)).toMatchObject([{ delegation_id: "delegation-a", content: "Here is what I found." }]);
+  expect(spoken(f)).toMatchObject([{ delegation_id: "delegation-a", content: "Here is what I found. The request is queued for the orchestrator." }]);
   await f.service.command(session.sessionId, { type: "confirmation", proposalId: proposal.proposalId, via: "tap", decision: "send" });
   expect(f.sends()).toBe(1);
   await f.service.close(session.sessionId);
@@ -2437,4 +2437,70 @@ test("composed long tasks arrive whole and preserve pending handles, tool argume
     expect(reports.requests.map(row => row.request)).toEqual(["r1", "r2", "r3"]);
     expect(JSON.stringify(reports).length).toBeLessThan(3000);
   } finally { await f.service.close(session.sessionId); }
+});
+
+for (const mode of ["gate", "no-recipient", "project-refused", "delivery-failed", "too-long"] as const)
+  test(`honest delivery: ${mode} replaces a backend's false success claim with server speech`, async () => {
+    const f = fixture();
+    if (mode === "no-recipient") spyOn(f.reads, "resolveProject").mockImplementation(() => { throw new Error("NO_ORCHESTRATOR"); });
+    if (mode === "project-refused") spyOn(f.reads, "resolveProject").mockImplementation(() => { throw new Error("PROJECT_REFUSED"); });
+    if (mode === "gate") spyOn(f.admission, "delegate").mockResolvedValue({ state: "refused", code: "not_requested" });
+    if (mode === "delivery-failed") spyOn(f.admission, "delegate").mockResolvedValue({ state: "sent", status: "failed", failureCode: "RECIPIENT_REFUSED" });
+    const instruction = mode === "too-long" ? "Long request ".repeat(310) : "Review the plan";
+    f.provider.responder = (request, index) => backendResponse(`honest_${index}`, request.input.some(item => item.type === "function_call_output")
+      ? [message("Yes, I passed it to the orchestrator.")]
+      : [functionCall("honest-send", "request_orchestrator_delegation", { instruction })]);
+    const session = await f.service.start({ project: "fixture", locale: "en", sdp: "v=0" });
+    f.provider.replay(session.providerId, delegationCreated("honest", 100));
+    await f.service.drain(session.sessionId);
+    expect(f.sends()).toBe(0);
+    const output = JSON.parse(f.provider.requests[1].input.find(item => item.type === "function_call_output")!.output as string);
+    expect(output.sent).toBe(false);
+    expect(output.speech).toMatch(/^Nothing (was|has been|new was) sent/);
+    expect(spoken(f).at(-1)?.content).toStartWith("Nothing was sent");
+    expect(spoken(f).at(-1)?.content).not.toContain("I passed it");
+    await f.service.close(session.sessionId);
+  });
+
+for (const delivery of ["queued", "delivered", "unknown"] as const) test(`honest delivery: successful ${delivery} state survives a long backend answer`, async () => {
+  const f = fixture();
+  spyOn(f.admission, "delegate").mockResolvedValue({ state: "sent", status: delivery });
+  f.provider.responder = (request, index) => backendResponse(`sent_${index}`, request.input.some(item => item.type === "function_call_output")
+    ? [message("A long answer. ".repeat(60))] : [functionCall("send", "request_orchestrator_delegation", { instruction: "Review the plan" })]);
+  const session = await f.service.start({ project: "fixture", locale: "en", sdp: "v=0" });
+  f.provider.replay(session.providerId, delegationCreated("delivery", 100));
+  await f.service.drain(session.sessionId);
+  const speech = String(spoken(f).at(-1)?.content);
+  expect(Buffer.byteLength(speech)).toBeLessThanOrEqual(500);
+  const suffix = { queued: "The request is queued for the orchestrator.", delivered: "The orchestrator received the request.", unknown: "The request's delivery is not confirmed yet." };
+  expect(speech.endsWith(suffix[delivery])).toBe(true);
+  expect(f.provider.refused).toHaveLength(0);
+  await f.service.close(session.sessionId);
+});
+
+test("honest delivery: a pending confirmation keeps the question and states it has not sent", async () => {
+  const f = fixture();
+  f.provider.responder = (request, index) => backendResponse(`confirm_${index}`, request.input.some(item => item.type === "function_call_output")
+    ? [message("Shall I send this scope?")] : [functionCall("prepare", "request_orchestrator_delegation", { instruction: "Review the plan", confirmation_reason: "Confirm the scope." })]);
+  const session = await f.service.start({ project: "fixture", locale: "en", sdp: "v=0" });
+  f.provider.replay(session.providerId, delegationCreated("confirmation", 100));
+  await f.service.drain(session.sessionId);
+  expect(spoken(f).at(-1)?.content).toBe("Shall I send this scope? Nothing has been sent yet: it waits for the operator's yes or no.");
+  expect(f.sends()).toBe(0);
+  await f.service.close(session.sessionId);
+});
+
+test("honest delivery: a refusal on the last tool round suppresses the budget answer's false success", async () => {
+  const f = fixture();
+  f.provider.responder = (request, index) => backendResponse(`budget_${index}`, index < 3
+    ? [functionCall(`read_${index}`, "orchestrator_reports")]
+    : request.tool_choice === "none" ? [message("Yes, I passed it to the orchestrator.")]
+      : [functionCall("too_long", "request_orchestrator_delegation", { instruction: "Long request ".repeat(310) })]);
+  const session = await f.service.start({ project: "fixture", locale: "en", sdp: "v=0" });
+  f.provider.replay(session.providerId, delegationCreated("budget", 100));
+  await f.service.drain(session.sessionId);
+  expect(f.provider.requests.at(-1)?.tool_choice).toBe("none");
+  expect(spoken(f).at(-1)?.content).toBe("Nothing was sent: the task was too long. Ask the operator to say it more briefly.");
+  expect(f.sends()).toBe(0);
+  await f.service.close(session.sessionId);
 });
