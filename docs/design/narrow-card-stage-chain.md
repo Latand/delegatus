@@ -249,6 +249,8 @@ The rules:
   `.pb-pills` and `.pb-step` render pixel for pixel as they do at the merge
   base: arrows, wrap, and branches at the end. The new attributes and the
   `--pb-order` custom property are read only inside the container query.
+  (The branches at the end changed on 2026-10-16: see "The wide lane draws a
+  branch under its stage" below.)
 - **The pill.** Its size, padding, outline, tone classes, glyph and badge,
   `CountCircle`, `ReturnSuffix`, colours, tooltip, aria label and click target.
   The only exception is the name wrapping in the vertical chain.
@@ -348,7 +350,31 @@ No ADR: the change is reversible CSS plus three attributes.
 - "не стрелочка идёт сбоку": the arrow is not drawn in the vertical chain.
 - The review-fix branch hangs off its reviewer on a dashed elbow, indented, so
   it does not read as the next step.
-- Wide layouts are untouched.
+- Wide layouts are untouched (until the section below).
+
+## The wide lane draws a branch under its stage
+
+Operator, 2026-10-16: a fail branch drawn as a «branch: Fix» pill at the end of
+the wide row reads badly; draw it as a branch under the review it comes from,
+in this horizontal form only.
+
+- `ChainPills` wraps each main step in a `.pb-unit` together with the branches
+  whose gate (`chainSteps().anchor`) it is. Under 380px the unit is
+  `display: contents`, so the narrow form sees the flat steps it always saw.
+- From 380px the unit is a two-column grid: the arrow and the stage on the
+  first row, each branch under the stage, indented by `--pb-branch-indent`, on
+  the narrow form's dashed elbow. The pass row stays one line; a unit wraps
+  whole, so a stage never leaves its fix behind. A fix wider than its stage
+  opens that much space before the next arrow.
+- A fix shared by two gates is drawn once, under the first gate that fails to
+  it; the other gate says it with its `↺ n/m` mark.
+- The word «branch» is its own span (`.pb-branch-word`) and is hidden in the
+  wide form, where the position and the elbow say it. Accessible names are
+  unchanged.
+- The card and screen densities are unchanged.
+- `wideStageChainFailures` (`stageChainMeasure.ts`) holds the geometry; the
+  kanban board driver's "wide card" block reads it over `?scenario=stage-chain`
+  and records `evidence/stage-chain-branch/`.
 
 ## Deferred — not currently justified
 

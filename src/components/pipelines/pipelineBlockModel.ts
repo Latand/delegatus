@@ -84,7 +84,7 @@ export function cardChain(summary: KanbanPipeline): KanbanStageChip[] {
 
 /** What a task lane's chain says about one chip, for the vertical chain a
     narrow lane draws (docs/design/narrow-card-stage-chain.md §2). The wide
-    row ignores all of it. */
+    row reads only `anchor`, to hang a branch under its gate. */
 export type ChainStep = {
   chip: KanbanStageChip;
   /** `first` and `next` are the main line; `branch` hangs off a reviewer. */
@@ -93,6 +93,8 @@ export type ChainStep = {
   through: boolean;
   /** Vertical position: a main chip at main index i takes 2i, a branch 2a + 1 under its anchor a. */
   order: number;
+  /** The main index the step belongs to: its own for a main chip, its gate's for a branch. The wide row groups a gate with its branches by it. */
+  anchor: number;
 };
 
 /**
@@ -102,11 +104,11 @@ export type ChainStep = {
  */
 export function chainSteps(chips: readonly KanbanStageChip[]): ChainStep[] {
   const main = chips.filter((chip) => !chip.branch);
-  const mainSteps = main.map((chip, index): ChainStep => ({ chip, step: index === 0 ? "first" : "next", through: false, order: 2 * index }));
+  const mainSteps = main.map((chip, index): ChainStep => ({ chip, step: index === 0 ? "first" : "next", through: false, order: 2 * index, anchor: index }));
   const branchSteps = chips.filter((chip) => chip.branch).map((chip): ChainStep => {
     const found = main.findIndex((candidate) => candidate.stage.onFail?.to === chip.stage.id);
     const anchor = found >= 0 ? found : Math.max(0, main.length - 1);
-    return { chip, step: "branch", through: anchor < main.length - 1, order: 2 * anchor + 1 };
+    return { chip, step: "branch", through: anchor < main.length - 1, order: 2 * anchor + 1, anchor };
   });
   return [...mainSteps, ...branchSteps];
 }

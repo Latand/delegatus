@@ -308,14 +308,23 @@ test("the task chain tags each step for the narrow lane's vertical layout, and k
     runs: stages.map((entry) => ({ stageId: entry.id, attempts: [attempt(1, "passed", 600)] })),
   } as unknown as Partial<Pipeline>);
   const host = mount(<PipelineBlock summary={summarizePipeline(through)} density="task" nowMs={NOW_MS} onOpenStage={() => {}} />);
-  const steps = [...host.querySelectorAll<HTMLElement>(".pb-pills > .pb-step")];
-  expect(steps.map((step) => step.querySelector<HTMLElement>(".pb-pill")!.dataset.stage)).toEqual(["build", "critique", "review", "critique-fix"]);
-  expect(steps.map((step) => step.dataset.step)).toEqual(["first", "next", "next", "branch"]);
-  expect(steps.map((step) => step.dataset.through ?? null)).toEqual([null, null, null, "1"]);
-  expect(steps.map((step) => step.style.getPropertyValue("--pb-order"))).toEqual(["0", "2", "4", "3"]);
-  /* The wide row is the DOM as it was: an arrow before each later main step and none before the first or the branch. */
+  /* Each main step is a unit with the branches that return to it, so the branch follows its reviewer in the DOM. */
+  const units = [...host.querySelectorAll<HTMLElement>(".pb-pills > .pb-unit")];
+  expect(units.map((unit) => [...unit.querySelectorAll(":scope > .pb-step .pb-pill")].map((pill) => (pill as HTMLElement).dataset.stage))).toEqual([["build"], ["critique", "critique-fix"], ["review"]]);
+  expect(host.querySelector(".pb-pills")?.getAttribute("data-branches")).toBe("1");
+  const steps = [...host.querySelectorAll<HTMLElement>(".pb-pills .pb-step")];
+  expect(steps.map((step) => step.querySelector<HTMLElement>(".pb-pill")!.dataset.stage)).toEqual(["build", "critique", "critique-fix", "review"]);
+  expect(steps.map((step) => step.dataset.step)).toEqual(["first", "next", "branch", "next"]);
+  expect(steps.map((step) => step.dataset.through ?? null)).toEqual([null, null, "1", null]);
+  expect(steps.map((step) => step.style.getPropertyValue("--pb-order"))).toEqual(["0", "2", "3", "4"]);
+  /* An arrow before each later main step and none before the first or the branch. */
   expect(host.querySelectorAll(".pb-arrow").length).toBe(2);
-  expect(steps.map((step) => Boolean(step.querySelector(":scope > .pb-arrow")))).toEqual([false, true, true, false]);
+  expect(steps.map((step) => Boolean(step.querySelector(":scope > .pb-arrow")))).toEqual([false, true, false, true]);
+  /* The branch says "branch" in its own span, which the wide row hides and the narrow form shows. */
+  const branch = host.querySelector<HTMLElement>('[data-stage="critique-fix"] .pb-name')!;
+  expect(branch.textContent).toBe("branch: Critique fix");
+  expect(branch.querySelector(".pb-branch-word")?.textContent).toBe("branch:");
+  expect(host.querySelector('[data-stage="critique"] .pb-branch-word')).toBeNull();
 
   /* The operator's lane: the reviewer is the last stage, so nothing passes its branch. */
   const fixStages = [stage("build", "builder", "review"), stage("review", "reviewer", null, { onFail: { to: "review-fix", maxRounds: 3 } }), stage("review-fix", "builder", "review")];
@@ -324,7 +333,7 @@ test("the task chain tags each step for the narrow lane's vertical layout, and k
     runs: fixStages.map((entry) => ({ stageId: entry.id, attempts: [attempt(1, "passed", 600)] })),
   } as unknown as Partial<Pipeline>);
   const lane = mount(<PipelineBlock summary={summarizePipeline(fix)} density="task" nowMs={NOW_MS} onOpenStage={() => {}} />);
-  const laneSteps = [...lane.querySelectorAll<HTMLElement>(".pb-pills > .pb-step")];
+  const laneSteps = [...lane.querySelectorAll<HTMLElement>(".pb-pills .pb-step")];
   expect(laneSteps.map((step) => step.dataset.step)).toEqual(["first", "next", "branch"]);
   expect(laneSteps.some((step) => step.dataset.through)).toBe(false);
   expect(laneSteps.map((step) => step.style.getPropertyValue("--pb-order"))).toEqual(["0", "2", "3"]);

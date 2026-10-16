@@ -126,10 +126,15 @@ function StagePill({ pipeline, chip, name, suffix, interactive, selected, onOpen
   ].filter(Boolean).join(". ");
   const hover = [[name, state, rework, who].filter(Boolean).join(" · "), suffix?.title].filter(Boolean).join(" · ");
   const className = `pb-pill tone-${STAGE_TONE[chip.state]} st-${chip.state}${attempt ? "" : " waiting"}${chip.branch ? " side" : ""}${chip.rework ? " rework" : ""}${selected ? " selected" : ""}`;
+  /* The wide row hangs a branch under its gate and drops the word "branch" (the elbow says it), so the word is its own span. */
+  const label = chip.branch ? t("kanban.branch", { stage: name }) : name;
+  const branchWord = chip.branch ? t("kanban.branch", { stage: "" }).trim() : "";
   const body = (
     <>
       <StageGlyph state={chip.state} model={chip.stage.effectiveRole ? stageIdentity(pipeline, chip.stage) : null} live={chip.rework} fallback="mark" />
-      <span className="pb-name">{chip.branch ? t("kanban.branch", { stage: name }) : name}</span>
+      <span className="pb-name">
+        {branchWord && label.startsWith(branchWord) ? <><span className="pb-branch-word">{branchWord}</span>{label.slice(branchWord.length)}</> : label}
+      </span>
       {chip.rounds ? <CountCircle n={chip.rounds} tone="neutral" label={t("kanban.stageAriaRounds", { stage: name, state, count: chip.rounds })} /> : null}
       {drawn(suffix) ? <ReturnSuffix arc={suffix.arc} title={suffix.title} /> : null}
     </>
@@ -148,7 +153,7 @@ function StagePill({ pipeline, chip, name, suffix, interactive, selected, onOpen
   );
 }
 
-/** The chain as a row that wraps: the pass path joined by arrows, then the fail branches. */
+/** The chain as a row that wraps: the pass path joined by arrows, each stage in a unit with the fail branches that return to it. A narrow lane draws the units' steps flat and reads their order (pipelineBlock.css). */
 function ChainPills({ summary, nameOf, suffixes, selected, onOpenStage }: {
   summary: KanbanPipeline;
   nameOf: (stage: PipelineStage) => string;
@@ -167,18 +172,25 @@ function ChainPills({ summary, nameOf, suffixes, selected, onOpenStage }: {
       onOpen={onOpenStage}
     />
   );
+  const steps = chainSteps(summary.chips);
+  const units = steps.filter((entry) => entry.step !== "branch");
+  const hasBranch = steps.length > units.length;
   return (
-    <div className="pb-pills" data-chain={summary.pipeline.id}>
-      {chainSteps(summary.chips).map(({ chip, step, through, order }) => (
-        <span
-          key={chip.stage.id}
-          className="pb-step"
-          data-step={step}
-          data-through={through ? "1" : undefined}
-          style={{ "--pb-order": order } as CSSProperties}
-        >
-          {step === "next" ? <span className="pb-arrow" aria-hidden="true">→</span> : null}
-          {pill(chip)}
+    <div className="pb-pills" data-chain={summary.pipeline.id} data-branches={hasBranch ? "1" : undefined}>
+      {units.map((gate) => (
+        <span key={gate.chip.stage.id} className="pb-unit">
+          {[gate, ...steps.filter((entry) => entry.step === "branch" && entry.anchor === gate.anchor)].map(({ chip, step, through, order }) => (
+            <span
+              key={chip.stage.id}
+              className="pb-step"
+              data-step={step}
+              data-through={through ? "1" : undefined}
+              style={{ "--pb-order": order } as CSSProperties}
+            >
+              {step === "next" ? <span className="pb-arrow" aria-hidden="true">→</span> : null}
+              {pill(chip)}
+            </span>
+          ))}
         </span>
       ))}
     </div>

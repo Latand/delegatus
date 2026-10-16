@@ -97,6 +97,8 @@
 .pblock .pb-pills { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; min-width: 0; }
 .pblock .pb-step { display: inline-flex; align-items: center; gap: 4px; min-width: 0; max-width: 100%; }
 .pblock .pb-arrow { flex: none; color: var(--color-muted); font-size: var(--text-label); }
+/* A stage and the fail branches that return to it. The narrow lane and the card lay the steps out flat; the wide lane stacks them (below). */
+.pblock .pb-unit { display: contents; }
 
 /* ── Task density: the lane row ──────────────────────────────────────────── */
 .pblock .pb-head { display: flex; align-items: center; gap: 2px; min-height: 28px; min-width: 0; }
@@ -257,6 +259,40 @@
   @media (pointer: coarse) {
     .pblock[data-density="task"] .pb-chain .pb-pill { min-height: 30px; }
   }
+}
+
+/* ── Task density: a wide lane draws a fail branch under its stage ──────────
+   From 380 px each stage and the branches that return to it form one unit:
+   the arrow and the stage on the first row, its branches indented under the
+   stage on a dashed elbow, the narrow elbow's values. The pass row stays one
+   line; a unit wraps whole, so a stage never leaves its fix behind. The word
+   "branch" is left to the elbow. */
+@container pb-lane (min-width: 380px) {
+  .pblock .pb-chain > .pb-pills { align-items: flex-start; }
+  .pblock .pb-chain > .pb-pills[data-branches] { row-gap: var(--pb-chain-gap); }
+  .pblock .pb-chain .pb-unit {
+    display: inline-grid; grid-template-columns: auto minmax(0, auto); row-gap: var(--pb-chain-gap);
+    align-items: center; justify-items: start; min-width: 0; max-width: 100%;
+  }
+  .pblock .pb-chain .pb-unit > .pb-step:not([data-step="branch"]) { display: contents; }
+  .pblock .pb-chain .pb-unit > .pb-step > .pb-arrow { grid-column: 1; grid-row: 1; margin-inline-end: 4px; }
+  .pblock .pb-chain .pb-unit > .pb-step:not([data-step="branch"]) > .pb-pill { grid-column: 2; grid-row: 1; }
+  .pblock .pb-chain .pb-unit > .pb-step[data-step="branch"] {
+    grid-column: 2; position: relative; box-sizing: border-box; max-width: 100%; padding-left: var(--pb-branch-indent);
+  }
+  .pblock .pb-chain .pb-unit > .pb-step[data-step="branch"]::after {
+    content: ""; position: absolute; pointer-events: none; box-sizing: border-box;
+    left: var(--pb-rail-x); top: calc(-1 * var(--pb-chain-gap));
+    width: calc(var(--pb-branch-indent) - var(--pb-rail-x)); height: calc(var(--pb-chain-gap) + 50%);
+    border-left: 1px dashed var(--pb-rail); border-bottom: 1px dashed var(--pb-rail);
+  }
+  /* A second branch of the same stage: the rail runs on past the first one's elbow. */
+  .pblock .pb-chain .pb-unit > .pb-step[data-step="branch"]:has(+ .pb-step[data-step="branch"])::before {
+    content: ""; position: absolute; pointer-events: none; box-sizing: border-box;
+    left: var(--pb-rail-x); top: 50%; height: calc(50% + var(--pb-chain-gap));
+    border-left: 1px dashed var(--pb-rail);
+  }
+  .pblock .pb-chain .pb-branch-word { display: none; }
 }
 
 /* ── Card density: one line, passive ─────────────────────────────────────── */

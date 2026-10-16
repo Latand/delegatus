@@ -1,8 +1,10 @@
 /*
  * What the two browser drivers (the kanban board's and the phone's) read off a
  * task lane's stage chain, and what a narrow lane has to satisfy
- * (docs/design/narrow-card-stage-chain.md). Not a test: the drivers import it,
- * so the desktop card and the phone's task screen are held to one set of rules.
+ * (docs/design/narrow-card-stage-chain.md), and what a wide lane has to
+ * satisfy: each fail branch hangs under the stage it fails from. Not a test:
+ * the drivers import it, so the desktop card and the phone's task screen are
+ * held to one set of rules.
  */
 
 type Pseudo = { content: string; height: number; left: number; width: number; borderLeft: string; borderBottom: string };
@@ -21,9 +23,22 @@ export type StageChainStep = {
   cut: boolean;
   inkOutside: boolean;
   nameLines: number;
+  /** The pill's visible text, its `st-*` state class and its border colour. */
+  label: string;
+  state: string | null;
+  borderColor: string;
 };
 
-export type StageChainLane = { width: number; direction: string; steps: StageChainStep[]; overlaps: string[] };
+type Box = { left: number; top: number; right: number; bottom: number };
+
+export type StageChainLane = {
+  width: number;
+  direction: string;
+  steps: StageChainStep[];
+  overlaps: string[];
+  /** The rects of what shares the row with the pills: the work links and the age. */
+  beside?: Box[];
+};
 
 /** A script for `page.evaluate`: the lane row under `selector`, read from
     geometry and computed style, or null when it is not drawn. */
@@ -58,6 +73,7 @@ export const measureStageChain = (selector: string) => `(() => {
       arrow: arrow ? getComputedStyle(arrow).display : null,
       before: pseudo(step, "::before"), after: pseudo(step, "::after"),
       cut: name.scrollWidth > name.clientWidth + 1, inkOutside, nameLines: Math.round(name.getBoundingClientRect().height / lineHeight),
+      label: name.innerText.trim(), state: ([...pill.classList].find((c) => c.startsWith("st-")) || null), borderColor: getComputedStyle(pill).borderTopColor,
     };
   });
   const overlaps = [];
@@ -66,7 +82,11 @@ export const measureStageChain = (selector: string) => `(() => {
     const w = Math.min(a.right, b.right) - Math.max(a.left, b.left), h = Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top);
     if (w > 0.5 && h > 0.5) overlaps.push(a.stage + "/" + b.stage);
   }
-  return { width: block.getBoundingClientRect().width, direction: getComputedStyle(block.querySelector(".pb-pills")).flexDirection, steps, overlaps };
+  const beside = [...block.querySelectorAll(".pb-chain > .pb-links, .pb-chain > .pb-tail")].map((el) => {
+    const r = el.getBoundingClientRect();
+    return { left: r.left, top: r.top, right: r.right, bottom: r.bottom };
+  });
+  return { width: block.getBoundingClientRect().width, direction: getComputedStyle(block.querySelector(".pb-pills")).flexDirection, steps, overlaps, beside };
 })()`;
 
 const drawn = (content: string) => content !== "none" && content !== "normal";
@@ -109,6 +129,56 @@ export function stageChainFailures(label: string, lane: StageChainLane): string[
     const followed = main.some((entry) => entry.top > step.bottom);
     if (step.through !== followed) fail(`${step.stage}: through=${step.through}, a stage follows=${followed}`);
     if (step.through && step.before.height < step.bottom - step.top + 8 - 0.5) fail(`${step.stage}: the rail stops at the branch (${step.before.height} px)`);
+  }
+  return failures;
+}
+
+/** What a wide lane owes (§2): a row, the pass stages on one line while they
+    fit with an arrow before each later one, and every fail branch 28 px right of
+    the stage it fails from, 8 px under it, on a dashed elbow that lands on the
+    pill's middle. `gates` names each branch's expected stage; the word "branch"
+    is left to the elbow. Returns the broken rules, worded for the failure. */
+export function wideStageChainFailures(label: string, lane: StageChainLane, gates: Record<string, string>): string[] {
+  const failures: string[] = [];
+  const fail = (text: string) => failures.push(`${label}: ${text}`);
+  if (lane.width < 380) fail(`the lane is ${lane.width} px wide, expected a wide one`);
+  if (lane.direction !== "row") fail(`the chain is ${lane.direction}, expected row`);
+  if (lane.overlaps.length) fail(`pills overlap — ${lane.overlaps.join(", ")}`);
+  for (const step of lane.steps) {
+    if (step.cut) fail(`${step.stage}: the name is clipped`);
+    if (step.inkOutside) fail(`${step.stage}: text paints outside its pill`);
+    if (/^(branch|гілка):/.test(step.label)) fail(`${step.stage}: still says "${step.label}"`);
+    for (const box of lane.beside ?? []) {
+      if (Math.min(step.right, box.right) - Math.max(step.left, box.left) > 0.5 && Math.min(step.bottom, box.bottom) - Math.max(step.top, box.top) > 0.5) fail(`${step.stage}: a pill runs into the links or the age`);
+    }
+  }
+  const main = lane.steps.filter((step) => step.kind !== "branch");
+  const branches = lane.steps.filter((step) => step.kind === "branch");
+  main.forEach((step, index) => {
+    if (drawn(step.before.content) || drawn(step.after.content)) fail(`${step.stage}: a main stage draws a connector`);
+    if (index > 0 && step.arrow === "none") fail(`${step.stage}: no arrow before it`);
+    /* The branch row below a gate: the next main stage on the same line starts after the widest of the two. */
+    const next = main[index + 1];
+    if (next && Math.abs(next.top - step.top) <= 1) {
+      const under = branches.filter((entry) => Math.abs(entry.left - 28 - step.left) <= 1 && entry.top > step.bottom);
+      const overhang = Math.max(0, ...under.map((entry) => entry.right - step.right));
+      const gap = next.left - step.right;
+      if (gap < 0) fail(`${next.stage}: starts ${-gap} px before ${step.stage} ends`);
+      /* The arrow and its two 4 px gaps, plus what the branch is wider than its gate by. */
+      if (gap > 4 + 12 + 4 + overhang + 4) fail(`${next.stage}: ${gap} px after ${step.stage}, ${overhang} px of it a wider branch`);
+    }
+  });
+  for (const step of branches) {
+    const gate = gates[step.stage];
+    const anchor = main.find((entry) => Math.abs(entry.left - (step.left - 28)) <= 1 && entry.bottom <= step.top + 1);
+    if (!anchor) { fail(`${step.stage}: no stage 28 px left of it and above it`); continue; }
+    if (gate && anchor.stage !== gate) fail(`${step.stage}: hangs under ${anchor.stage}, expected ${gate}`);
+    if (Math.abs(step.top - anchor.bottom - 8) > 1) fail(`${step.stage}: ${step.top - anchor.bottom} px under ${anchor.stage}, expected 8`);
+    if (step.after.borderLeft !== "dashed" || step.after.borderBottom !== "dashed") fail(`${step.stage}: the elbow is ${step.after.borderLeft}/${step.after.borderBottom}`);
+    if (Math.abs(step.after.left - 15) > 0.5 || Math.abs(step.after.width - 13) > 0.5) fail(`${step.stage}: elbow left ${step.after.left}, width ${step.after.width}`);
+    const armAt = step.top - 8 + step.after.height;
+    const middle = (step.top + step.bottom) / 2;
+    if (Math.abs(armAt - middle) > 1.5) fail(`${step.stage}: the elbow arm lands at ${armAt}, the pill's middle is ${middle}`);
   }
   return failures;
 }
