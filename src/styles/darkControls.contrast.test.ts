@@ -92,6 +92,16 @@ test("a state colour is left alone: muted call, connecting mic, context Send", (
   expect(RULES.split(/(?=^\/\* `data-theme="dark"` pins)/m).length).toBe(2);
 });
 
+test("a Send that cannot send keeps its dim on hover and press, in both scopes", () => {
+  const scopes = RULES.split(/(?=^\/\* `data-theme="dark"` pins)/m);
+  expect(scopes.length).toBe(2);
+  for (const scope of scopes) {
+    const states = scope.split("\n").filter((line) => /composer-send/.test(line) && /:(?:hover|active):not\(:disabled\)/.test(line));
+    expect(states.length).toBe(6);
+    for (const line of states) expect(line).toContain(':not([aria-disabled="true"])');
+  }
+});
+
 test("the rules read the tokens the numbers above come from", () => {
   expect(RULES).toContain("color-mix(in srgb, var(--color-accent) 88%, var(--color-primary))");
   expect(RULES).toContain("color-mix(in srgb, var(--color-accent) 88%, var(--color-canvas))");

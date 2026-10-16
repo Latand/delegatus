@@ -58,16 +58,16 @@
     color: var(--color-canvas);
     border-color: var(--dc-send);
   }
-  :root:not([data-theme="light"]) button[data-composer-send="send"]:not([data-mobile2-send]):hover:not(:disabled),
-  :root:not([data-theme="light"]) button[data-composer-send="queue"]:not([data-mobile2-send]):hover:not(:disabled),
-  :root:not([data-theme="light"]) button:hover:not(:disabled) > [data-composer-send-visual="ready"] {
+  :root:not([data-theme="light"]) button[data-composer-send="send"]:not([data-mobile2-send]):hover:not(:disabled):not([aria-disabled="true"]),
+  :root:not([data-theme="light"]) button[data-composer-send="queue"]:not([data-mobile2-send]):hover:not(:disabled):not([aria-disabled="true"]),
+  :root:not([data-theme="light"]) button:hover:not(:disabled):not([aria-disabled="true"]) > [data-composer-send-visual="ready"] {
     background: color-mix(in srgb, var(--dc-send) 88%, var(--color-primary));
     border-color: color-mix(in srgb, var(--dc-send) 88%, var(--color-primary));
     opacity: 1;
   }
-  :root:not([data-theme="light"]) button[data-composer-send="send"]:not([data-mobile2-send]):active:not(:disabled),
-  :root:not([data-theme="light"]) button[data-composer-send="queue"]:not([data-mobile2-send]):active:not(:disabled),
-  :root:not([data-theme="light"]) button:active:not(:disabled) > [data-composer-send-visual="ready"] {
+  :root:not([data-theme="light"]) button[data-composer-send="send"]:not([data-mobile2-send]):active:not(:disabled):not([aria-disabled="true"]),
+  :root:not([data-theme="light"]) button[data-composer-send="queue"]:not([data-mobile2-send]):active:not(:disabled):not([aria-disabled="true"]),
+  :root:not([data-theme="light"]) button:active:not(:disabled):not([aria-disabled="true"]) > [data-composer-send-visual="ready"] {
     background: color-mix(in srgb, var(--dc-send) 88%, var(--color-canvas));
     border-color: color-mix(in srgb, var(--dc-send) 88%, var(--color-primary));
   }
@@ -177,16 +177,16 @@
   color: var(--color-canvas);
   border-color: var(--dc-send);
 }
-:root[data-theme="dark"] button[data-composer-send="send"]:not([data-mobile2-send]):hover:not(:disabled),
-:root[data-theme="dark"] button[data-composer-send="queue"]:not([data-mobile2-send]):hover:not(:disabled),
-:root[data-theme="dark"] button:hover:not(:disabled) > [data-composer-send-visual="ready"] {
+:root[data-theme="dark"] button[data-composer-send="send"]:not([data-mobile2-send]):hover:not(:disabled):not([aria-disabled="true"]),
+:root[data-theme="dark"] button[data-composer-send="queue"]:not([data-mobile2-send]):hover:not(:disabled):not([aria-disabled="true"]),
+:root[data-theme="dark"] button:hover:not(:disabled):not([aria-disabled="true"]) > [data-composer-send-visual="ready"] {
   background: color-mix(in srgb, var(--dc-send) 88%, var(--color-primary));
   border-color: color-mix(in srgb, var(--dc-send) 88%, var(--color-primary));
   opacity: 1;
 }
-:root[data-theme="dark"] button[data-composer-send="send"]:not([data-mobile2-send]):active:not(:disabled),
-:root[data-theme="dark"] button[data-composer-send="queue"]:not([data-mobile2-send]):active:not(:disabled),
-:root[data-theme="dark"] button:active:not(:disabled) > [data-composer-send-visual="ready"] {
+:root[data-theme="dark"] button[data-composer-send="send"]:not([data-mobile2-send]):active:not(:disabled):not([aria-disabled="true"]),
+:root[data-theme="dark"] button[data-composer-send="queue"]:not([data-mobile2-send]):active:not(:disabled):not([aria-disabled="true"]),
+:root[data-theme="dark"] button:active:not(:disabled):not([aria-disabled="true"]) > [data-composer-send-visual="ready"] {
   background: color-mix(in srgb, var(--dc-send) 88%, var(--color-canvas));
   border-color: color-mix(in srgb, var(--dc-send) 88%, var(--color-primary));
 }
