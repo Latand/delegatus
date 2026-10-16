@@ -147,6 +147,38 @@ test("B: queued replies reach attention after their durable age limit", async ()
   expect(telegramPostSignals("project-a", [], [findSeatRound(ID)!]).some(s => s.label.includes(saved.delivery.text))).toBe(true);
 });
 
+test("B: the receipt still settles after the final admitted attempt", async () => {
+  const saved = decision(); saved.delivery.state = "pending"; saved.delivery.attempts = 10;
+  insertSeatRound({ ...round(), decision: saved });
+  const p = ports(); let recoveries = 0, sends = 0;
+  p.delivery.recover = async () => { recoveries++; return { state: "sent", operationId: "operation-old" }; };
+  p.delivery.send = p.delivery.retry = async () => { sends++; return { state: "sent" }; };
+
+  await sweepPrototypeDeliveries(p, { force: true });
+
+  expect(recoveries).toBe(1);
+  expect(sends).toBe(0);
+  expect(findSeatRound(ID)!.decision!.delivery.state).toBe("sent");
+});
+
+test("D: task completion accepts a late delivered receipt after the age bound", async () => {
+  const saved = decision(); saved.delivery.state = "pending"; saved.delivery.attempts = 1;
+  saved.delivery.startedAt = new Date(NOW - 31 * 60_000).toISOString();
+  saveTasks([task([{ ...round("task-a"), decision: saved }])]);
+  const p = ports(); let sends = 0;
+  p.now = () => NOW;
+  p.delivery.recover = async () => ({ state: "sent", operationId: "operation-old" });
+  p.delivery.send = p.delivery.retry = async () => { sends++; return { state: "sent" }; };
+
+  await sweepPrototypeDeliveries(p, { force: true });
+
+  const delivered = loadTasks()[0]!.prototypeReviews![0]!.decision!;
+  expect(delivered.delivery.state).toBe("sent");
+  expect(delivered.delivery.exhaustedAt).toBeUndefined();
+  expect(sends).toBe(0);
+  expect(patchTask(loadTasks(), "task-a", { status: "done" }, new Date(NOW).toISOString()).ok).toBe(true);
+});
+
 test("B: a new process cannot reset an exhausted decision's retry budget", async () => {
   const saved = decision(); delete saved.delivery.operationId; delete saved.delivery.dispatchedAt;
   insertSeatRound({ ...round(), decision: saved });
@@ -253,16 +285,25 @@ test.each(["seat", "task"])("B: %s delivery storage waits off the loop for a pee
   decidePrototype(request(), taskId, { reviewId: ID, chosen: [], skip: true, comment: "" }, world);
   const database = kind === "seat" ? path.join(root, "state.sqlite") : path.join(path.dirname(TASKS_FILE), "state.sqlite");
   const ready = path.join(root, "holder-ready");
-  const child = Bun.spawn([process.execPath, new URL("../state/lockWait.fixture.ts", import.meta.url).pathname, "hold", database, ready, path.join(root, "go"), "500"], { env: { ...process.env, NODE_ENV: "test" }, stdout: "pipe", stderr: "pipe" });
+  const release = path.join(root, "go");
+  const child = Bun.spawn([process.execPath, new URL("../state/lockWait.fixture.ts", import.meta.url).pathname, "hold-until-release", database, ready, release, "10000"], { env: { ...process.env, NODE_ENV: "test" }, stdout: "pipe", stderr: "pipe" });
   let ticks = 0;
   const timer = setInterval(() => { if (stateLockWaitsInFlight().length) ticks++; }, 5);
   try {
     const deadline = performance.now() + 5000;
     while (!fs.existsSync(ready)) { if (child.exitCode !== null || performance.now() > deadline) throw new Error("peer lock did not become ready"); await Bun.sleep(5); }
-    await attemptPrototypeDelivery(taskId, ID, ports());
+    await Bun.sleep(650);
+    const attempt = attemptPrototypeDelivery(taskId, ID, ports());
+    const waitDeadline = performance.now() + 5000;
+    while (ticks <= 5) {
+      if (child.exitCode !== null || performance.now() > waitDeadline) throw new Error("delivery did not wait for the peer lock");
+      await Bun.sleep(5);
+    }
+    fs.writeFileSync(release, "release");
+    await attempt;
     expect(ticks).toBeGreaterThan(5);
     expect(await child.exited).toBe(0);
-  } finally { clearInterval(timer); if (child.exitCode === null) child.kill(); await child.exited; }
+  } finally { clearInterval(timer); fs.writeFileSync(release, "release"); if (child.exitCode === null) child.kill(); await child.exited; }
 }, 10000);
 
 

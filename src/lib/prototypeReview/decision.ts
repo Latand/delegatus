@@ -331,7 +331,10 @@ export async function attemptPrototypeDelivery(taskId: string | null, reviewId: 
         if (held?.delivery.clientMessageId !== key) throw new SupersededDecision();
         return held;
       };
-      if (prototypeDeliveryExhausted(decision, ports.now())) return update(held => { held.delivery.exhaustedAt ??= at(); });
+      const exhausted = prototypeDeliveryExhausted(decision, ports.now());
+      if (exhausted && !decision.delivery.exhaustedAt) {
+        decision = await update(held => { held.delivery.exhaustedAt = at(); });
+      }
       const handedOver = decision.delivery.dispatchedAt !== undefined || decision.delivery.operationId !== undefined
         || (decision.revision === undefined && decision.delivery.state !== "no-orchestrator");
       if (!decision.delivery.conversationId) {
@@ -360,19 +363,23 @@ export async function attemptPrototypeDelivery(taskId: string | null, reviewId: 
       const mayDispatch = () => withPrototypeState(() => prototypeAuthorCurrent(decision!));
       let result: PrototypeDeliveryResult;
       if (recovered === null || recovered.state === "failed" && recovered.operationId) {
-        if (!await mayDispatch()) result = { state: "failed" };
-        else {
-          decision = await update(held => {
-            if (recovered === null && seat) held.delivery.conversationId = seat;
-            if (recovered?.operationId) held.delivery.operationId = recovered.operationId;
-            held.delivery.state = "pending";
-            held.delivery.dispatchedAt ??= at();
-            held.delivery.attempts = (held.delivery.attempts ?? 0) + 1;
-          });
-          // Dispatch authorization is checked again by the real ingress. The
-          // retry path also checks the original member immediately before use.
-          result = await (recovered === null ? ports.delivery.send(decision) : ports.delivery.retry(decision))
-            .catch((): PrototypeDeliveryResult => ({ state: "uncertain" }));
+        if (exhausted) {
+          result = recovered ?? { state: decision.delivery.state };
+        } else {
+          if (!await mayDispatch()) result = { state: "failed" };
+          else {
+            decision = await update(held => {
+              if (recovered === null && seat) held.delivery.conversationId = seat;
+              if (recovered?.operationId) held.delivery.operationId = recovered.operationId;
+              held.delivery.state = "pending";
+              held.delivery.dispatchedAt ??= at();
+              held.delivery.attempts = (held.delivery.attempts ?? 0) + 1;
+            });
+            // Dispatch authorization is checked again by the real ingress. The
+            // retry path also checks the original member immediately before use.
+            result = await (recovered === null ? ports.delivery.send(decision) : ports.delivery.retry(decision))
+              .catch((): PrototypeDeliveryResult => ({ state: "uncertain" }));
+          }
         }
       } else result = recovered;
       const failed = recovered?.state === "failed" || result.state === "failed" || result.state === "uncertain";
