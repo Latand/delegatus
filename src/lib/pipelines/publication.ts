@@ -21,7 +21,7 @@ export function publicationDeadlineOnly(output: string): boolean {
     const member = /^pre-push: ([^;:]{1,60}): failed \(([^)]*)\)/.exec(line);
     const otherCheckFailed = member && !["touched tests", "Linux tests"].includes(member[1]!) && member[2] !== "124";
     if (line.startsWith("(fail) ") || (line.startsWith("NEW ") && !runnerDeadline.test(line)) || otherCheckFailed
-      || /surviving owned processes:|stop them before pushing again|PRIVACY GATE: FAIL/.test(line)) return false;
+      || /surviving owned processes:|stop them before pushing again|PRIVACY GATE: FAIL|budget cleanup failed:|owned test child guardian(?:: surviving owned processes:| could not end an owned process)|owned runner guardian exceeded cleanup deadline/.test(line)) return false;
     if (/^command timed out after \d+ms/.test(line)
       || /^pre-push: no verdict within the push budget of \d+ s:/.test(line)
       || /^owned runner: (?:deadline expired|execution guard expired)$/.test(line)

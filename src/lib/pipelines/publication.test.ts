@@ -33,6 +33,10 @@ test.each([
   "pre-push: privacy: failed (1)",
   "PRIVACY GATE: FAIL",
   "owned runner: surviving owned processes: fixture",
+  "owned runner: budget cleanup failed: child tree could not be stopped",
+  "owned test child guardian: surviving owned processes: fixture",
+  "owned test child guardian could not end an owned process",
+  "owned runner guardian exceeded cleanup deadline",
   "stop them before pushing again",
 ])("a decisive refusal vetoes a capacity retry: %s", refusal => {
   expect(publicationDeadlineOnly(`pre-push: touched tests: failed (1)\n${refusal}\nowned runner: deadline expired`)).toBe(false);

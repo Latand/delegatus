@@ -187,8 +187,11 @@ for (const fails of [false, true]) test(`pre-push credits admission across a sup
   try {
     pending = realExec(process.execPath, ["-e", caller], process.cwd(), { ...f.env, LLV_GATE_SLOT_LEASE: "" }, { timeoutMs: 20_000 });
     await until(() => f.count() === 1);
-    await Bun.sleep(4500); // The original absolute hook deadline has passed.
-    f.age();
+    // The ticket is the inter-process barrier. Move its admission timestamp
+    // past the caller's four-second budget, then release pressure immediately.
+    // The recorded queue interval is credited without depending on scheduler time.
+    f.db.query("UPDATE tickets SET since = ?").run(Date.now() - 5000);
+    fs.writeFileSync(f.env.LLV_GATE_PSI_FILE, "");
     const result = await pending;
     expect(result.code, result.stderr).toBe(fails ? 1 : 0);
     expect(result.stderr).not.toContain("no verdict within");

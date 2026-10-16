@@ -113,11 +113,12 @@ skips types; scoped Linux tests are compared against the merge base like touched
 tests. A pipeline's publication runs this hook without the Viewer's own
 settings (`pipelinePublicationHookEnv`): on 2026-10-04 the Viewer's `LLV_LANG`
 reached a CLI test through the hook and parked five lanes that had changed
-nothing. A publication stopped only by an execution deadline retries after 1, 5 and
-15 minutes, then every 15 minutes until it reaches a verdict. CPU admission
-waits do not spend the check budget, including the handoff into the admitted
-hook process. A named failing assertion, another failed check or failed cleanup
-keeps the refusal decisive. A refused publication of an unchanged head retries
+nothing. A publication stopped only by an execution deadline retries after 1,
+5 and 15 minutes, then parks after those three retries with the cause on its
+first line. CPU admission waits do not spend the check budget, including the
+handoff into the admitted hook process. A named failing assertion, another
+failed check or failed cleanup keeps the refusal decisive. A refused
+publication of an unchanged head retries
 after 1, 5 and 15 minutes, then parks with the cause on its first line. A push
 interrupted by a signal or a stopped Viewer before it reached the remote is
 counted the same way, whatever the stage changed. A refusal of a

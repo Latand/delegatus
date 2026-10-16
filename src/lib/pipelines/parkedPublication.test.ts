@@ -694,10 +694,10 @@ test("a hook that stopped at the deadline it was handed is retried as an interru
     expect(h.current().delivery!.operation!.result).toMatchObject({ ok: false, outcome: "not-landed", failure: { retryableDeadline: true, hookBudgetMs: 840_000, hookStoppedCheck: "touched tests", changedFiles: 1 } });
     for (const wait of [60_000, 5 * 60_000, 15 * 60_000]) { clock += wait; for (let n = 0; n < 8; n++) await tickPipelines([], ports); }
     expect(h.pushes()).toBe(4);
-    expect(h.current().state).toBe("running");
-    expect(h.current().stateDetail).toContain("automatic capacity retry 4");
+    expect(h.current().state).toBe("needs_decision");
+    expect(h.current().stateDetail).toContain("after 3 automatic retries");
     fs.writeFileSync(h.hook, "#!/bin/sh\nexit 0\n", { mode: 0o700 });
-    clock += 15 * 60_000;
+    expect((await patchPipeline(h.lane.id, { action: "publish" }, ports)).error).toBeUndefined();
     for (let n = 0; n < 8; n++) await tickPipelines([], ports);
     expect(h.current().state).toBe("completed");
   } finally { h.cleanup(); }
@@ -1264,19 +1264,64 @@ for (const failsAfterWait of [false, true]) test(`capacity retries survive a con
     // A new controller process sees the durable future retry and does no push.
     await restart();
     expect(h.current().runs[0]!.attempts[0]!.publicationRetry!.failures).toBe(1);
-    // More than three deadline failures still wait, with a capped interval.
-    for (const wait of [60_000, 5 * 60_000, 15 * 60_000]) { clock += wait; await restart(); }
-    expect(h.current().state).toBe("running");
-    expect(h.current().runs[0]!.attempts[0]!.publicationRetry).toMatchObject({ failures: 4, retryAt: "2026-10-16T10:36:00.000Z" });
+    // A transient overload clears before the bounded retry budget is spent.
+    clock += 60_000; await restart();
     fs.writeFileSync(h.hook, failsAfterWait
       ? "#!/bin/sh\necho 'pre-push: touched tests: failed (1)' >&2\necho '(fail) named publication assertion [2.00ms]' >&2\nexit 1\n"
       : "#!/bin/sh\nexit 0\n", { mode: 0o700 });
-    clock += 15 * 60_000; await restart();
+    clock += 5 * 60_000; await restart();
     expect(h.current().state).toBe(failsAfterWait ? "needs_decision" : "completed");
     if (failsAfterWait) {
       expect(h.current().stateDetail!.split("\n")[0]).toContain("named publication assertion");
       expect(h.current().publishedCommit).toBeNull();
     } else expect(h.current().publishedCommit).toBe(head);
+  } finally { h.cleanup(); }
+}, 90_000);
+
+test("owned-runner cleanup refusal parks despite a deadline marker", async () => {
+  const h = fixture();
+  try {
+    trailingLane(h, 2, { "src/work.ts": "export const work = 1;\n" });
+    fs.writeFileSync(h.hook, "#!/bin/sh\necho 'pre-push: touched tests: failed (1)' >&2\necho 'owned runner: execution guard expired' >&2\necho 'owned runner: budget cleanup failed: child tree could not be stopped' >&2\nexit 1\n", { mode: 0o700 });
+    expect((await patchPipeline(h.lane.id, { action: "publish" }, h.ports)).error).toBeUndefined();
+    await h.tick();
+    expect(h.pushes()).toBe(1);
+    expect(h.current().state).toBe("needs_decision");
+    expect(h.current().delivery!.operation!.result!.failure).toMatchObject({ retryableDeadline: false });
+    expect(h.current().stateDetail!.split("\n")[0]).toContain("touched tests");
+  } finally { h.cleanup(); }
+});
+
+test("permanent capacity deadlines stop after three retries across controller restarts", async () => {
+  const h = fixture();
+  try {
+    trailingLane(h, 2, { "src/work.ts": "export const work = 1;\n" });
+    const attempts = path.join(h.root, "push-attempts");
+    fs.writeFileSync(h.hook, `#!/bin/sh\necho attempt >> '${attempts}'\necho 'pre-push: touched tests: failed (124)' >&2\necho 'owned runner: deadline expired' >&2\nexit 1\n`, { mode: 0o700 });
+    let clock = Date.parse("2026-10-16T11:00:00.000Z");
+    const ports = { ...h.ports, now: () => new Date(clock).toISOString(), scheduleTick: () => {} };
+    expect((await patchPipeline(h.lane.id, { action: "publish" }, ports)).error).toBeUndefined();
+    for (let n = 0; n < 8; n++) await tickPipelines([], ports);
+    expect(h.pushes()).toBe(1);
+    const engine = path.join(import.meta.dir, "engine.ts");
+    const restart = async () => {
+      const script = `import { defaultPipelinePorts, tickPipelines } from ${JSON.stringify(engine)};
+        const ports = { ...defaultPipelinePorts(), now: () => ${JSON.stringify(new Date(clock).toISOString())}, scheduleTick: () => {},
+          conversationAgentActive: async () => false, stageHostResident: async () => false, paneAgentAlive: async () => false, getFlow: () => null, worktreePresent: () => true };
+        for (let n = 0; n < 8; n++) await tickPipelines([], ports);`;
+      const outcome = await realExec(process.execPath, ["-e", script], process.cwd(), { ...process.env, LLV_STATE_DIR: state }, { timeoutMs: 30_000 });
+      expect(outcome.code, outcome.stderr).toBe(0);
+    };
+    await restart();
+    for (const wait of [60_000, 5 * 60_000, 15 * 60_000]) { clock += wait; await restart(); }
+    expect(fs.readFileSync(attempts, "utf8").trim().split("\n")).toHaveLength(4);
+    expect(h.current().state).toBe("needs_decision");
+    expect(h.current().runs[0]!.attempts[0]!.publicationRetry).toMatchObject({ failures: 3, exhausted: true });
+    expect(h.current().stateDetail!.split("\n")[0]).toContain("after 3 automatic retries");
+    clock += 60 * 60_000;
+    await restart();
+    expect(fs.readFileSync(attempts, "utf8").trim().split("\n")).toHaveLength(4);
+    expect(h.current().state).toBe("needs_decision");
   } finally { h.cleanup(); }
 }, 90_000);
 

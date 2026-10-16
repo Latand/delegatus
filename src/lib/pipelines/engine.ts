@@ -4086,8 +4086,7 @@ function stageHeadAccepted(attempt: PipelineStageAttempt | null): boolean {
   return attempt?.verdict?.status === "pass" || attempt?.acceptedForReview === true;
 }
 
-/** One minute, five, fifteen: capacity deadlines keep the last interval;
-    other refusals and interruptions park when these retries are spent. */
+/** One minute, five, fifteen: every automatic publication retry is bounded. */
 const PUBLICATION_RETRY_DELAYS_MS = [60_000, 5 * 60_000, 15 * 60_000];
 
 type RefusedPublication = { error: string; failure?: import("./types").PipelinePublicationFailure; outcome?: "not-landed" };
@@ -4102,6 +4101,9 @@ function publicationNotLanded(published: RefusedPublication): boolean {
 function passedPublicationParkDetail(attempt: PipelineStageAttempt, published: RefusedPublication): string {
   const failure = published.failure;
   const retried = attempt.publicationRetry?.exhausted ? `; retried ${PUBLICATION_RETRY_DELAYS_MS.length} times` : "";
+  if (failure?.retryableDeadline && attempt.publicationRetry?.exhausted) {
+    return `publishing the passed stage: a check reached its execution deadline without a verdict after ${PUBLICATION_RETRY_DELAYS_MS.length} automatic retries. This is a capacity failure; once capacity is available, use publish to try again.\n${published.error}`;
+  }
   if (publicationNotLanded(published)) {
     return `publishing the passed stage: ${publicationInterruptionCause(failure)}${retried}. Nothing on this branch caused it: check that the hook can finish on this machine (time limit, memory, a stopped Viewer), then retry-stage.\n${published.error}`;
   }
@@ -4125,10 +4127,9 @@ function commitsRefusedByPrivacy(failure: import("./types").PipelinePublicationF
  * and tries again instead of asking a person at once: a refusal of a head that
  * changes nothing, or a push interrupted before it reached the remote (the
  * hook was not allowed to finish, so there is no verdict about the branch).
- * Execution deadlines without a decisive refusal keep retrying at a capped
- * interval. Each failed operation is counted once on the attempt; the wait is
- * durable across ticks and restarts. Other interruptions and unchanged-head
- * refusals still park at their existing retry limit.
+ * Execution deadlines without a decisive refusal retry on the same bounded
+ * backoff as other interruptions. Each failed operation is counted once on
+ * the attempt; the limit is durable across ticks and restarts.
  * A refused stage that changed files, or whose commits privacy refused,
  * proceeds to its bounded producer repair.
  */
@@ -4149,7 +4150,7 @@ function retryRefusedPublication(
   if (previous?.operationId !== operation.id) {
     // A refusal after retry-stage or an exhausted round starts a new round.
     const failures = (previous && !previous.exhausted ? previous.failures : 0) + 1;
-    if (!deadlineOnly && failures > PUBLICATION_RETRY_DELAYS_MS.length) {
+    if (failures > PUBLICATION_RETRY_DELAYS_MS.length) {
       attempt.publicationRetry = { ...previous!, operationId: operation.id, exhausted: true };
       return false;
     }
@@ -4159,7 +4160,7 @@ function retryRefusedPublication(
     record = { sha: operation.sha, operationId: operation.id, failures,
       retryAt: new Date(unixMs(ports.now()) + delay).toISOString() };
     attempt.publicationRetry = record;
-  } else if (previous.exhausted && !deadlineOnly) return false;
+  } else if (previous.exhausted) return false;
   const wait = unixMs(record!.retryAt) - unixMs(ports.now());
   if (wait <= 0) {
     delete pipeline.delivery!.operation;
