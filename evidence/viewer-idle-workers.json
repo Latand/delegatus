@@ -1,0 +1,961 @@
+{
+  "schemaVersion": 2,
+  "recordedAt": "2026-10-16T10:48:41.701Z",
+  "initialBase": "917189ae562def76980341620987479ab2813cfc",
+  "reviewedImplementation": "d610032e44b08a4cabbd9699a9dd80d60cb74d60",
+  "sourceFingerprintSha256": "563cbfd014ec51c1e483cb0cce235c6e137617217d596f23b6f31047a8b85e0b",
+  "baselineSourceFilesSha256": {
+    "scripts/benchmark-viewer-workers.ts": "397d9e31758a55de6c4c5e91e47d31575a579b6e9c70ec26d54a4934941ed81e",
+    "src/lib/accounts/migration/controller.ts": "d78ffff52a9c75b3c95dd0ef54f2c547737cba52e080e36887cbe52b29842fc9",
+    "src/lib/accounts/migration/coordinator.ts": "16a207af8254b18e1ca11232555f59038bf1ba1d21f0687a2867a81852deb509",
+    "src/lib/accounts/migration/quotaController.ts": "08e3e58dc33d9706631afa86a8b6f1d21a8154fd46b8f64e1d668634fa383267",
+    "src/lib/filesResponse.worker.ts": "5571288be9287e59e315fd5f1efffa02dd9b3ee4b7d5a3ba3c1f6e75d4f3baea",
+    "src/lib/reaperRuntime.ts": "2bca8e0d7bea909c8647a9eb09740597b84e0d6d209aef1a901478307ac0a7a3",
+    "src/lib/scanner/filesResponseWorker.ts": "e54531b34a910a813a75a47eda641bd1211f09427f31092d5d5c708fa3f68684",
+    "src/lib/scanner/index.ts": "d72421687f64cec9553dcf22aab954c70dda598897b61bc34c18cd80bf0479a0",
+    "src/lib/session/titleProjection.ts": "009afe63498b9e71155eee6bf45055305c59d4ddb7753cea46e46d9b4f862ba3",
+    "src/lib/viewerLoopMonitor.ts": "72f48cdb1a8225a2c6e78ab125761d0e171c23a130eea2f166a90cc0e7bd95d6"
+  },
+  "candidateSourceFilesSha256": {
+    "scripts/benchmark-viewer-workers.ts": "397d9e31758a55de6c4c5e91e47d31575a579b6e9c70ec26d54a4934941ed81e",
+    "src/lib/accounts/migration/controller.ts": "7a93f1cca54f58843664bbe27e1bf1f60210f775510e2d17008f1f01aa2d430f",
+    "src/lib/accounts/migration/coordinator.ts": "8fa1da8092aa29bbafeed43a6489066d510a6060cc63d96196fae43b1ad6f50e",
+    "src/lib/accounts/migration/quotaController.ts": "5ea882c5ba757be96493652a8298c2a6429c4bd619b93d3aab04bf5c4d461709",
+    "src/lib/filesResponse.worker.ts": "3389852ab93feec3e4f22bc01904480156792e2a6b5fa9b977ae786c2cfef782",
+    "src/lib/reaperRuntime.ts": "8bf8b346dcce7846c78004bd24c61a7c47f90aea40d41749fb1aeb408e06dc61",
+    "src/lib/scanner/filesResponseWorker.ts": "1370c2268a197e5c2a6176b520d27fc0d03963b540dec5f81e12ec183149e6c1",
+    "src/lib/scanner/index.ts": "c83e3ba63b6d80c8dd8b8018c7cbcd4a4435ddae6ef2ad5429c735bd2bf49f79",
+    "src/lib/session/titleProjection.ts": "4a01b1223cdc246d32e7149838b4718cb003203ca0085c450d20620882366293",
+    "src/lib/viewerLoopMonitor.ts": "4302f89059dadfc38e7f4cef130347f745bade0cc6be7b43f66b545f4275e399"
+  },
+  "fixture": {
+    "mode": "prepare",
+    "rows": 7098,
+    "scanned": 560,
+    "seedBytes": 7754833,
+    "seedSha256": "b29f99dd481a3e8fffc6fd2fd2093326c8cf456eae5fb6d322aeb1efc5b3531d"
+  },
+  "resources": {
+    "bun": "1.4.0",
+    "cpuMax": "60000 20000",
+    "memoryMax": "8589934592",
+    "clockTicksPerSecond": 100
+  },
+  "method": {
+    "gate": "installed scripts/gate-slot.sh from release fe18cb41d734; one owned admitted shell, sequential commands",
+    "state": "fresh HOME, XDG_CONFIG_HOME, TMPDIR, LLV_STATE_DIR and provider homes for each sample",
+    "driver": "bun scripts/benchmark-viewer-workers.ts MODE FIXTURE; identical driver in both clean exports",
+    "migration": "real inventory, file controllers and migration policy; quota probes, runtime/process reaping, task reconciliation and routing stubbed; task admission remains real",
+    "readCounter": "Linux /proc rchar, logical bytes including page-cache hits and measurement overhead",
+    "migrationCpuPerMinute": "six steady-state idle passes normalized over the production 60-second quiet interval; cold, settling and delta passes retained in each raw sample",
+    "filesCpuPerMinute": "second child lifetime CPU if replaced, otherwise retained child CPU delta; normalized over the observed two-build interval",
+    "filesRespawns": "one real 65000ms idle interval per sample; replacements extrapolated to an hour, not an hour-long soak",
+    "source": "pinned Bun worker entry points; no production build or live-state performance claim"
+  },
+  "runs": {
+    "migration": {
+      "base": [
+        {
+          "mode": "migration",
+          "rows": 7098,
+          "scanned": 560,
+          "bootstrap": {
+            "cpuMs": 1.66,
+            "readBytes": 165,
+            "wallMs": 1.3754590000000917
+          },
+          "cold": {
+            "cpuMs": 2431.632,
+            "readBytes": 82393303,
+            "wallMs": 2017.072837,
+            "inventoryPaths": 560,
+            "linksRefreshed": true,
+            "phaseReadBytes": {
+              "inventory": 32579617,
+              "files": 49207223,
+              "migrations": 8435
+            }
+          },
+          "settling": {
+            "cpuMs": 1770.399,
+            "readBytes": 64283677,
+            "wallMs": 1624.1554879999999,
+            "inventoryPaths": 560,
+            "linksRefreshed": true,
+            "phaseReadBytes": {
+              "inventory": 15876999,
+              "files": 48373147,
+              "migrations": 8436
+            }
+          },
+          "idle": [
+            {
+              "cpuMs": 1486.031,
+              "readBytes": 48328139,
+              "wallMs": 1432.932444,
+              "inventoryPaths": 560,
+              "linksRefreshed": true,
+              "phaseReadBytes": {
+                "inventory": 60598,
+                "files": 48242239,
+                "migrations": 206
+              }
+            },
+            {
+              "cpuMs": 1528.001,
+              "readBytes": 48336483,
+              "wallMs": 1435.9948189999996,
+              "inventoryPaths": 560,
+              "linksRefreshed": true,
+              "phaseReadBytes": {
+                "inventory": 27754,
+                "files": 48283427,
+                "migrations": 206
+              }
+            },
+            {
+              "cpuMs": 1489.397,
+              "readBytes": 48390136,
+              "wallMs": 1402.439488000001,
+              "inventoryPaths": 560,
+              "linksRefreshed": true,
+              "phaseReadBytes": {
+                "inventory": 27855,
+                "files": 48336941,
+                "migrations": 206
+              }
+            },
+            {
+              "cpuMs": 1581.612,
+              "readBytes": 48439385,
+              "wallMs": 1506.4056530000016,
+              "inventoryPaths": 560,
+              "linksRefreshed": true,
+              "phaseReadBytes": {
+                "inventory": 27792,
+                "files": 48386326,
+                "migrations": 169
+              }
+            },
+            {
+              "cpuMs": 1267.506,
+              "readBytes": 48521575,
+              "wallMs": 1229.5577589999994,
+              "inventoryPaths": 560,
+              "linksRefreshed": true,
+              "phaseReadBytes": {
+                "inventory": 27755,
+                "files": 48468551,
+                "migrations": 169
+              }
+            },
+            {
+              "cpuMs": 1344.06,
+              "readBytes": 48648881,
+              "wallMs": 1242.0763270000007,
+              "inventoryPaths": 560,
+              "linksRefreshed": true,
+              "phaseReadBytes": {
+                "inventory": 27907,
+                "files": 48595705,
+                "migrations": 169
+              }
+            }
+          ],
+          "delta": {
+            "cpuMs": 2023.331,
+            "readBytes": 48616923,
+            "wallMs": 1989.9946179999988,
+            "inventoryPaths": 560,
+            "linksRefreshed": true,
+            "phaseReadBytes": {
+              "inventory": 28325,
+              "files": 48563291,
+              "migrations": 207
+            }
+          },
+          "cadenceSeconds": 60,
+          "cpuMsPerScheduledMinute": 1449.4345,
+          "cpuMsPerMinute": 1416.9647277195807,
+          "bytesReadPerIdleCycle": 48444099.833333336
+        },
+        {
+          "mode": "migration",
+          "rows": 7098,
+          "scanned": 560,
+          "bootstrap": {
+            "cpuMs": 1.528,
+            "readBytes": 165,
+            "wallMs": 1.2214630000000852
+          },
+          "cold": {
+            "cpuMs": 3437.765,
+            "readBytes": 82393251,
+            "wallMs": 2996.125375,
+            "inventoryPaths": 560,
+            "linksRefreshed": true,
+            "phaseReadBytes": {
+              "inventory": 32579429,
+              "files": 49207354,
+              "migrations": 8399
+            }
+          },
+          "settling": {
+            "cpuMs": 2632.882,
+            "readBytes": 64283716,
+            "wallMs": 2484.376684,
+            "inventoryPaths": 560,
+            "linksRefreshed": true,
+            "phaseReadBytes": {
+              "inventory": 15877038,
+              "files": 48373185,
+              "migrations": 8398
+            }
+          },
+          "idle": [
+            {
+              "cpuMs": 2000.887,
+              "readBytes": 48328172,
+              "wallMs": 1934.17101,
+              "inventoryPaths": 560,
+              "linksRefreshed": true,
+              "phaseReadBytes": {
+                "inventory": 60674,
+                "files": 48242234,
+                "migrations": 168
+              }
+            },
+            {
+              "cpuMs": 1456.958,
+              "readBytes": 48336599,
+              "wallMs": 1377.3815510000004,
+              "inventoryPaths": 560,
+              "linksRefreshed": true,
+              "phaseReadBytes": {
+                "inventory": 27868,
+                "files": 48283467,
+                "migrations": 168
+              }
+            },
+            {
+              "cpuMs": 1925.439,
+              "readBytes": 48390189,
+              "wallMs": 1827.7158549999986,
+              "inventoryPaths": 560,
+              "linksRefreshed": true,
+              "phaseReadBytes": {
+                "inventory": 27830,
+                "files": 48337019,
+                "migrations": 206
+              }
+            },
+            {
+              "cpuMs": 2581.812,
+              "readBytes": 48521597,
+              "wallMs": 2496.2921800000004,
+              "inventoryPaths": 560,
+              "linksRefreshed": true,
+              "phaseReadBytes": {
+                "inventory": 28020,
+                "files": 48468272,
+                "migrations": 207
+              }
+            },
+            {
+              "cpuMs": 1797.955,
+              "readBytes": 48513533,
+              "wallMs": 1752.2687850000002,
+              "inventoryPaths": 560,
+              "linksRefreshed": true,
+              "phaseReadBytes": {
+                "inventory": 27945,
+                "files": 48460243,
+                "migrations": 207
+              }
+            },
+            {
+              "cpuMs": 2054.745,
+              "readBytes": 48558898,
+              "wallMs": 1967.4356899999984,
+              "inventoryPaths": 560,
+              "linksRefreshed": true,
+              "phaseReadBytes": {
+                "inventory": 28021,
+                "files": 48505570,
+                "migrations": 207
+              }
+            }
+          ],
+          "delta": {
+            "cpuMs": 1790.089,
+            "readBytes": 48616814,
+            "wallMs": 1764.8607279999997,
+            "inventoryPaths": 560,
+            "linksRefreshed": true,
+            "phaseReadBytes": {
+              "inventory": 28287,
+              "files": 48563220,
+              "migrations": 207
+            }
+          },
+          "cadenceSeconds": 60,
+          "cpuMsPerScheduledMinute": 1969.6326666666664,
+          "cpuMsPerMinute": 1909.4054311157595,
+          "bytesReadPerIdleCycle": 48441498
+        },
+        {
+          "mode": "migration",
+          "rows": 7098,
+          "scanned": 560,
+          "bootstrap": {
+            "cpuMs": 1.485,
+            "readBytes": 165,
+            "wallMs": 1.2284429999999702
+          },
+          "cold": {
+            "cpuMs": 2517.592,
+            "readBytes": 82392895,
+            "wallMs": 2120.4211920000002,
+            "inventoryPaths": 560,
+            "linksRefreshed": true,
+            "phaseReadBytes": {
+              "inventory": 32579313,
+              "files": 49207157,
+              "migrations": 8435
+            }
+          },
+          "settling": {
+            "cpuMs": 1733.418,
+            "readBytes": 64283715,
+            "wallMs": 1599.5122300000003,
+            "inventoryPaths": 560,
+            "linksRefreshed": true,
+            "phaseReadBytes": {
+              "inventory": 15876999,
+              "files": 48373223,
+              "migrations": 8398
+            }
+          },
+          "idle": [
+            {
+              "cpuMs": 1441.812,
+              "readBytes": 48328212,
+              "wallMs": 1391.4922939999997,
+              "inventoryPaths": 560,
+              "linksRefreshed": true,
+              "phaseReadBytes": {
+                "inventory": 60636,
+                "files": 48242274,
+                "migrations": 206
+              }
+            },
+            {
+              "cpuMs": 1784.361,
+              "readBytes": 48336593,
+              "wallMs": 1661.3540890000004,
+              "inventoryPaths": 560,
+              "linksRefreshed": true,
+              "phaseReadBytes": {
+                "inventory": 27830,
+                "files": 48283499,
+                "migrations": 168
+              }
+            },
+            {
+              "cpuMs": 1430.912,
+              "readBytes": 48390643,
+              "wallMs": 1342.456588000001,
+              "inventoryPaths": 560,
+              "linksRefreshed": true,
+              "phaseReadBytes": {
+                "inventory": 28172,
+                "files": 48337093,
+                "migrations": 244
+              }
+            },
+            {
+              "cpuMs": 1603.653,
+              "readBytes": 48439760,
+              "wallMs": 1551.0912250000001,
+              "inventoryPaths": 560,
+              "linksRefreshed": true,
+              "phaseReadBytes": {
+                "inventory": 28096,
+                "files": 48386359,
+                "migrations": 207
+              }
+            },
+            {
+              "cpuMs": 1346.534,
+              "readBytes": 48521912,
+              "wallMs": 1309.2344199999989,
+              "inventoryPaths": 560,
+              "linksRefreshed": true,
+              "phaseReadBytes": {
+                "inventory": 28097,
+                "files": 48468508,
+                "migrations": 207
+              }
+            },
+            {
+              "cpuMs": 1752.373,
+              "readBytes": 48648995,
+              "wallMs": 1714.2627809999994,
+              "inventoryPaths": 560,
+              "linksRefreshed": true,
+              "phaseReadBytes": {
+                "inventory": 28097,
+                "files": 48595591,
+                "migrations": 207
+              }
+            }
+          ],
+          "delta": {
+            "cpuMs": 2706.994,
+            "readBytes": 48616730,
+            "wallMs": 2695.054295,
+            "inventoryPaths": 560,
+            "linksRefreshed": true,
+            "phaseReadBytes": {
+              "inventory": 28173,
+              "files": 48563288,
+              "migrations": 169
+            }
+          },
+          "cadenceSeconds": 60,
+          "cpuMsPerScheduledMinute": 1559.9408333333333,
+          "cpuMsPerMinute": 1522.0176851659664,
+          "bytesReadPerIdleCycle": 48444352.5
+        }
+      ],
+      "candidate": [
+        {
+          "mode": "migration",
+          "rows": 7098,
+          "scanned": 560,
+          "bootstrap": {
+            "cpuMs": 335.416,
+            "readBytes": 39195209,
+            "wallMs": 254.28776400000015
+          },
+          "cold": {
+            "cpuMs": 2806.845,
+            "readBytes": 19979089,
+            "wallMs": 2344.6710940000003,
+            "inventoryPaths": 560,
+            "linksRefreshed": true,
+            "phaseReadBytes": {
+              "inventory": 3643398,
+              "files": 14418014,
+              "migrations": 245
+            }
+          },
+          "settling": {
+            "cpuMs": 2234.095,
+            "readBytes": 19003325,
+            "wallMs": 1969.0355399999999,
+            "inventoryPaths": 560,
+            "linksRefreshed": true,
+            "phaseReadBytes": {
+              "inventory": 5449694,
+              "files": 13510490,
+              "migrations": 207
+            }
+          },
+          "idle": [
+            {
+              "cpuMs": 248.198,
+              "readBytes": 2583731,
+              "wallMs": 210.359058,
+              "inventoryPaths": 32,
+              "linksRefreshed": true,
+              "phaseReadBytes": {
+                "inventory": 37812,
+                "files": 2507669,
+                "migrations": 207
+              }
+            },
+            {
+              "cpuMs": 264.387,
+              "readBytes": 2596175,
+              "wallMs": 233.75057800000013,
+              "inventoryPaths": 32,
+              "linksRefreshed": true,
+              "phaseReadBytes": {
+                "inventory": 9062,
+                "files": 2548863,
+                "migrations": 168
+              }
+            },
+            {
+              "cpuMs": 288.843,
+              "readBytes": 2649852,
+              "wallMs": 252.09804899999926,
+              "inventoryPaths": 32,
+              "linksRefreshed": true,
+              "phaseReadBytes": {
+                "inventory": 9140,
+                "files": 2602423,
+                "migrations": 207
+              }
+            },
+            {
+              "cpuMs": 243.973,
+              "readBytes": 2699199,
+              "wallMs": 226.81566900000053,
+              "inventoryPaths": 32,
+              "linksRefreshed": true,
+              "phaseReadBytes": {
+                "inventory": 9062,
+                "files": 2651926,
+                "migrations": 168
+              }
+            },
+            {
+              "cpuMs": 267.318,
+              "readBytes": 2773203,
+              "wallMs": 248.6611929999999,
+              "inventoryPaths": 32,
+              "linksRefreshed": true,
+              "phaseReadBytes": {
+                "inventory": 9062,
+                "files": 2725852,
+                "migrations": 207
+              }
+            },
+            {
+              "cpuMs": 342.409,
+              "readBytes": 2818455,
+              "wallMs": 273.2293060000002,
+              "inventoryPaths": 32,
+              "linksRefreshed": true,
+              "phaseReadBytes": {
+                "inventory": 9140,
+                "files": 2771104,
+                "migrations": 168
+              }
+            }
+          ],
+          "delta": {
+            "cpuMs": 286.448,
+            "readBytes": 2876080,
+            "wallMs": 269.8618969999998,
+            "inventoryPaths": 33,
+            "linksRefreshed": true,
+            "phaseReadBytes": {
+              "inventory": 9129,
+              "files": 2828710,
+              "migrations": 205
+            }
+          },
+          "cadenceSeconds": 60,
+          "cpuMsPerScheduledMinute": 275.8546666666667,
+          "cpuMsPerMinute": 274.7519087801815,
+          "bytesReadPerIdleCycle": 2686769.1666666665
+        },
+        {
+          "mode": "migration",
+          "rows": 7098,
+          "scanned": 560,
+          "bootstrap": {
+            "cpuMs": 281.171,
+            "readBytes": 39195250,
+            "wallMs": 213.457265
+          },
+          "cold": {
+            "cpuMs": 3342.85,
+            "readBytes": 19979119,
+            "wallMs": 2875.1610949999995,
+            "inventoryPaths": 560,
+            "linksRefreshed": true,
+            "phaseReadBytes": {
+              "inventory": 3643249,
+              "files": 14418079,
+              "migrations": 207
+            }
+          },
+          "settling": {
+            "cpuMs": 3041.551,
+            "readBytes": 19003446,
+            "wallMs": 2709.1917379999995,
+            "inventoryPaths": 560,
+            "linksRefreshed": true,
+            "phaseReadBytes": {
+              "inventory": 5449641,
+              "files": 13510617,
+              "migrations": 249
+            }
+          },
+          "idle": [
+            {
+              "cpuMs": 250.45,
+              "readBytes": 2583518,
+              "wallMs": 225.72000099999968,
+              "inventoryPaths": 32,
+              "linksRefreshed": true,
+              "phaseReadBytes": {
+                "inventory": 37756,
+                "files": 2507548,
+                "migrations": 208
+              }
+            },
+            {
+              "cpuMs": 249.303,
+              "readBytes": 2596302,
+              "wallMs": 209.4256260000002,
+              "inventoryPaths": 32,
+              "linksRefreshed": true,
+              "phaseReadBytes": {
+                "inventory": 9139,
+                "files": 2548878,
+                "migrations": 209
+              }
+            },
+            {
+              "cpuMs": 223.955,
+              "readBytes": 2649671,
+              "wallMs": 190.15721800000028,
+              "inventoryPaths": 32,
+              "linksRefreshed": true,
+              "phaseReadBytes": {
+                "inventory": 9104,
+                "files": 2602347,
+                "migrations": 171
+              }
+            },
+            {
+              "cpuMs": 253.219,
+              "readBytes": 2699182,
+              "wallMs": 241.90054899999996,
+              "inventoryPaths": 32,
+              "linksRefreshed": true,
+              "phaseReadBytes": {
+                "inventory": 9026,
+                "files": 2651930,
+                "migrations": 210
+              }
+            },
+            {
+              "cpuMs": 245.489,
+              "readBytes": 2781456,
+              "wallMs": 230.0838789999998,
+              "inventoryPaths": 32,
+              "linksRefreshed": true,
+              "phaseReadBytes": {
+                "inventory": 9104,
+                "files": 2734048,
+                "migrations": 171
+              }
+            },
+            {
+              "cpuMs": 267.333,
+              "readBytes": 2826825,
+              "wallMs": 225.09051,
+              "inventoryPaths": 32,
+              "linksRefreshed": true,
+              "phaseReadBytes": {
+                "inventory": 9065,
+                "files": 2779456,
+                "migrations": 171
+              }
+            }
+          ],
+          "delta": {
+            "cpuMs": 192.204,
+            "readBytes": 2876081,
+            "wallMs": 175.24205599999914,
+            "inventoryPaths": 33,
+            "linksRefreshed": true,
+            "phaseReadBytes": {
+              "inventory": 9182,
+              "files": 2828599,
+              "migrations": 208
+            }
+          },
+          "cadenceSeconds": 60,
+          "cpuMsPerScheduledMinute": 248.2915,
+          "cpuMsPerMinute": 247.3827957970598,
+          "bytesReadPerIdleCycle": 2689492.3333333335
+        },
+        {
+          "mode": "migration",
+          "rows": 7098,
+          "scanned": 560,
+          "bootstrap": {
+            "cpuMs": 308.798,
+            "readBytes": 39195212,
+            "wallMs": 226.07579099999998
+          },
+          "cold": {
+            "cpuMs": 3529.174,
+            "readBytes": 19979399,
+            "wallMs": 3072.245969,
+            "inventoryPaths": 560,
+            "linksRefreshed": true,
+            "phaseReadBytes": {
+              "inventory": 3643401,
+              "files": 14418201,
+              "migrations": 245
+            }
+          },
+          "settling": {
+            "cpuMs": 2222.758,
+            "readBytes": 19003607,
+            "wallMs": 2030.3654400000005,
+            "inventoryPaths": 560,
+            "linksRefreshed": true,
+            "phaseReadBytes": {
+              "inventory": 5449923,
+              "files": 13510651,
+              "migrations": 208
+            }
+          },
+          "idle": [
+            {
+              "cpuMs": 182.655,
+              "readBytes": 2583479,
+              "wallMs": 155.86889900000006,
+              "inventoryPaths": 32,
+              "linksRefreshed": true,
+              "phaseReadBytes": {
+                "inventory": 37718,
+                "files": 2507553,
+                "migrations": 170
+              }
+            },
+            {
+              "cpuMs": 192.728,
+              "readBytes": 2596299,
+              "wallMs": 164.48413700000037,
+              "inventoryPaths": 32,
+              "linksRefreshed": true,
+              "phaseReadBytes": {
+                "inventory": 9122,
+                "files": 2548855,
+                "migrations": 208
+              }
+            },
+            {
+              "cpuMs": 176.198,
+              "readBytes": 2649566,
+              "wallMs": 152.48437299999932,
+              "inventoryPaths": 32,
+              "linksRefreshed": true,
+              "phaseReadBytes": {
+                "inventory": 9058,
+                "files": 2602295,
+                "migrations": 171
+              }
+            },
+            {
+              "cpuMs": 183.19,
+              "readBytes": 2699225,
+              "wallMs": 168.7444000000005,
+              "inventoryPaths": 32,
+              "linksRefreshed": true,
+              "phaseReadBytes": {
+                "inventory": 9026,
+                "files": 2651856,
+                "migrations": 171
+              }
+            },
+            {
+              "cpuMs": 205.609,
+              "readBytes": 2781488,
+              "wallMs": 188.74416100000053,
+              "inventoryPaths": 32,
+              "linksRefreshed": true,
+              "phaseReadBytes": {
+                "inventory": 9182,
+                "files": 2733973,
+                "migrations": 246
+              }
+            },
+            {
+              "cpuMs": 238.049,
+              "readBytes": 2818623,
+              "wallMs": 194.70958900000005,
+              "inventoryPaths": 32,
+              "linksRefreshed": true,
+              "phaseReadBytes": {
+                "inventory": 9084,
+                "files": 2771141,
+                "migrations": 208
+              }
+            }
+          ],
+          "delta": {
+            "cpuMs": 229.537,
+            "readBytes": 2876043,
+            "wallMs": 210.72673000000032,
+            "inventoryPaths": 33,
+            "linksRefreshed": true,
+            "phaseReadBytes": {
+              "inventory": 9160,
+              "files": 2828637,
+              "migrations": 208
+            }
+          },
+          "cadenceSeconds": 60,
+          "cpuMsPerScheduledMinute": 196.40483333333336,
+          "cpuMsPerMinute": 195.84719350701377,
+          "bytesReadPerIdleCycle": 2688113.3333333335
+        }
+      ]
+    },
+    "files": {
+      "base": [
+        {
+          "mode": "files",
+          "rows": 7098,
+          "scanned": 560,
+          "gapMs": 65000,
+          "elapsedMs": 67547.19069999999,
+          "builds": 2,
+          "spawns": 2,
+          "respawns": 1,
+          "respawnsPerHour": 53.29607290388763,
+          "workerSamples": [
+            {
+              "cpuTicks": 193,
+              "readBytes": 115028512
+            },
+            {
+              "cpuTicks": 138,
+              "readBytes": 132093084
+            }
+          ]
+        },
+        {
+          "mode": "files",
+          "rows": 7098,
+          "scanned": 560,
+          "gapMs": 65000,
+          "elapsedMs": 67850.574024,
+          "builds": 2,
+          "spawns": 2,
+          "respawns": 1,
+          "respawnsPerHour": 53.05776777550347,
+          "workerSamples": [
+            {
+              "cpuTicks": 227,
+              "readBytes": 115028289
+            },
+            {
+              "cpuTicks": 141,
+              "readBytes": 132093134
+            }
+          ]
+        },
+        {
+          "mode": "files",
+          "rows": 7098,
+          "scanned": 560,
+          "gapMs": 65000,
+          "elapsedMs": 67688.058089,
+          "builds": 2,
+          "spawns": 2,
+          "respawns": 1,
+          "respawnsPerHour": 53.18515705187644,
+          "workerSamples": [
+            {
+              "cpuTicks": 200,
+              "readBytes": 115028265
+            },
+            {
+              "cpuTicks": 153,
+              "readBytes": 132093047
+            }
+          ]
+        }
+      ],
+      "candidate": [
+        {
+          "mode": "files",
+          "rows": 7098,
+          "scanned": 560,
+          "gapMs": 65000,
+          "elapsedMs": 67193.543818,
+          "builds": 2,
+          "spawns": 1,
+          "respawns": 0,
+          "respawnsPerHour": 0,
+          "workerSamples": [
+            {
+              "cpuTicks": 174,
+              "readBytes": 115042997
+            },
+            {
+              "cpuTicks": 285,
+              "readBytes": 161746724
+            }
+          ]
+        },
+        {
+          "mode": "files",
+          "rows": 7098,
+          "scanned": 560,
+          "gapMs": 65000,
+          "elapsedMs": 66907.636823,
+          "builds": 2,
+          "spawns": 1,
+          "respawns": 0,
+          "respawnsPerHour": 0,
+          "workerSamples": [
+            {
+              "cpuTicks": 166,
+              "readBytes": 115043040
+            },
+            {
+              "cpuTicks": 249,
+              "readBytes": 161746766
+            }
+          ]
+        },
+        {
+          "mode": "files",
+          "rows": 7098,
+          "scanned": 560,
+          "gapMs": 65000,
+          "elapsedMs": 66942.18971,
+          "builds": 2,
+          "spawns": 1,
+          "respawns": 0,
+          "respawnsPerHour": 0,
+          "workerSamples": [
+            {
+              "cpuTicks": 171,
+              "readBytes": 115042969
+            },
+            {
+              "cpuTicks": 253,
+              "readBytes": 161746544
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "summary": {
+    "base": {
+      "migrationCpuMsPerMinuteMedian": 1522.0176851659664,
+      "migrationReadBytesPerIdleCycleMedian": 48444099.833333336,
+      "migrationUnchangedPathsMedian": 560,
+      "migrationOneFileDeltaPathsMedian": 560,
+      "filesRespawnsPerHourMedian": 53.18515705187644,
+      "filesWarmCpuMsPerMinuteMedian": 1246.8575427243316,
+      "filesSecondBuildReadBytesMedian": 132093084,
+      "filesObservedRespawns": 3
+    },
+    "candidate": {
+      "migrationCpuMsPerMinuteMedian": 247.3827957970598,
+      "migrationReadBytesPerIdleCycleMedian": 2688113.3333333335,
+      "migrationUnchangedPathsMedian": 32,
+      "migrationOneFileDeltaPathsMedian": 33,
+      "filesRespawnsPerHourMedian": 0,
+      "filesWarmCpuMsPerMinuteMedian": 744.3096537954675,
+      "filesSecondBuildReadBytesMedian": 46703726,
+      "filesObservedRespawns": 0
+    }
+  }
+}

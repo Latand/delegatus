@@ -1,0 +1,166 @@
+{
+  "schemaVersion": 1,
+  "recordedAtUtc": "2026-10-16T08:09:58.919864+00:00",
+  "baseline": "917189ae562def76980341620987479ab2813cfc",
+  "sourceSha256": {
+    "test-preload.ts": "46ea2d463a635acd25e873fe1824df4065a6ad304921fc71d5646a36343b2e4a",
+    "src/lib/git/agentHistoryGuard.ts": "342730a66b80eec30479f865ced66ab4a9fb44c4eb6378a41af9e2ba4d1642cf",
+    "src/lib/git/agentHistoryGuard.test.ts": "5e75a1444b4e8aaa682273d16088438878c7acff5f08243e4a92b6bce1d743fe",
+    "src/lib/testing/testChildren.ts": "39461128633232815e34385050466fef3bb1c745f9598cb5f630309c04fe2d9a",
+    "src/lib/testing/testGitIsolation.test.ts": "787a00ad0d45f239dd5c7279cdfae9657cec34b1b96915d7469c1933f9996469"
+  },
+  "sharedHookObservation": {
+    "observedAtUtc": "2026-10-16T08:09:27.443121+00:00",
+    "readOnly": true,
+    "prePush": {
+      "sha256": "5fb87cd48af86ec7ac72cab3122967d7c03b5632b97cbb9fbf19268c29fae352",
+      "mtimeUtc": "2026-10-16T01:48:07.985029+00:00",
+      "body": "#!/bin/sh\necho transport rejected once >&2\nexit 1\n"
+    },
+    "preCommit": {
+      "sha256": "9dd53c7b63846c0ca8787b487ad612c01bbd61438da95df5fc253d6e5fdc6d29",
+      "mtimeUtc": "2026-10-15T19:27:44.706061+00:00",
+      "hashPrefixMatchesDirectory": true
+    }
+  },
+  "writer": {
+    "temporarySource": "src/lib/pipelines/engine.ports.test.ts:2611",
+    "survivingCallPath": "src/lib/pipelines/engine.fixture.ts:306",
+    "patchRecordedAtUtc": "2026-10-16T01:44:20.019Z",
+    "removedAtUtc": "2026-10-16T01:48:56.351Z",
+    "committed": false
+  },
+  "testWrapper": "scripts/gate-slot.sh",
+  "wrapperRelease": "fe18cb41d734",
+  "isolation": [
+    "HOME",
+    "XDG_CONFIG_HOME",
+    "TMPDIR",
+    "LLV_STATE_DIR"
+  ],
+  "checks": [
+    {
+      "name": "red-final-guard",
+      "baseline": true,
+      "command": [
+        "bun",
+        "test",
+        "src/lib/git/agentHistoryGuard.test.ts",
+        "--test-name-pattern",
+        "launch verifies warmed|fresh launch process|unreplaceable|guard source without HOME|symlinked generated"
+      ],
+      "exitCode": 1,
+      "expectedExitCode": 1,
+      "counts": {
+        "pass": 0,
+        "fail": 11
+      }
+    },
+    {
+      "name": "red-final-isolation",
+      "baseline": true,
+      "command": [
+        "bun",
+        "test",
+        "src/lib/testing/testGitIsolation.test.ts"
+      ],
+      "exitCode": 1,
+      "expectedExitCode": 1,
+      "counts": {
+        "pass": 0,
+        "fail": 7
+      }
+    },
+    {
+      "name": "green-final-guard",
+      "baseline": false,
+      "command": [
+        "bun",
+        "test",
+        "src/lib/git/agentHistoryGuard.test.ts"
+      ],
+      "exitCode": 0,
+      "expectedExitCode": 0,
+      "counts": {
+        "pass": 129,
+        "fail": 0
+      }
+    },
+    {
+      "name": "green-final-isolation",
+      "baseline": false,
+      "command": [
+        "bun",
+        "test",
+        "src/lib/testing/testGitIsolation.test.ts"
+      ],
+      "exitCode": 0,
+      "expectedExitCode": 0,
+      "counts": {
+        "pass": 7,
+        "fail": 0
+      }
+    },
+    {
+      "name": "green-final-children",
+      "baseline": false,
+      "command": [
+        "bun",
+        "test",
+        "src/lib/testing/testChildren.test.ts"
+      ],
+      "exitCode": 0,
+      "expectedExitCode": 0,
+      "counts": {
+        "pass": 6,
+        "fail": 0
+      }
+    },
+    {
+      "name": "types-final",
+      "baseline": false,
+      "command": [
+        "bun",
+        "node_modules/typescript/bin/tsc",
+        "--noEmit",
+        "--pretty",
+        "false",
+        "--incremental",
+        "false"
+      ],
+      "exitCode": 0,
+      "expectedExitCode": 0,
+      "counts": {}
+    },
+    {
+      "name": "adjacent-tests",
+      "command": [
+        "bun",
+        "test",
+        "src/lib/tempDirs.test.ts",
+        "src/lib/git/agentPublicationIdentity.test.ts",
+        "src/lib/runtime/agentConfigSandbox.test.ts"
+      ],
+      "exitCode": 0,
+      "counts": {
+        "pass": 13,
+        "fail": 0
+      }
+    },
+    {
+      "name": "repository-precommit",
+      "command": [
+        "bun",
+        "scripts/local-gate.ts",
+        "pre-commit"
+      ],
+      "exitCode": 0,
+      "result": [
+        "staged whitespace passed",
+        "privacy passed",
+        "0 ESLint errors introduced",
+        "0 existing ESLint errors"
+      ]
+    }
+  ]
+}

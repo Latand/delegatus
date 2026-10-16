@@ -81,6 +81,10 @@
 .pblock .pb-pill.selected { box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-accent) 35%, transparent); }
 .pblock button.pb-pill:hover { border-color: var(--border-strong); }
 .pblock button.pb-pill:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 1px; }
+/* On the closed card the chain clips to its line, so the ring sits inside the pill. */
+.pblock .pb-pills.fold button.pb-pill:focus-visible { outline-offset: -2px; }
+/* The phone card's pills are not buttons (the face is one): a press says which one it reached, as a hover does on the desktop. */
+.pblock .pb-pill[data-stage-open]:active { border-color: var(--border-strong); }
 .pblock .pb-pill .ccircle { min-width: 14px; height: 14px; }
 
 /* The fail edge on the failing pill: fired is warning, spent is danger, and a

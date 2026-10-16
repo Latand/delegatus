@@ -171,7 +171,7 @@ function reply(payload: Record<string, unknown>): void {
   process.stdout.write(`${JSON.stringify(payload)}\n`);
 }
 
-/** What the parent recycles on. Reported with every answer, success or not. */
+/** Diagnostic RSS, reported with every answer, success or not. */
 function residentBytes(): number {
   try {
     return process.memoryUsage().rss;

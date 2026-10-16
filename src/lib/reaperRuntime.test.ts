@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -2528,3 +2528,76 @@ for (const intervening of ["retry", "new-attempt", "live-owner", "unchanged"] as
     }
   });
 }
+
+
+test("inventory sidecar leaves owner-only failure repair to the Viewer", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-reaper-sidecar-"));
+  const previous = process.env.LLV_ACCOUNT_CONTROLLER_INVENTORY_WORKER;
+  process.env.LLV_ACCOUNT_CONTROLLER_INVENTORY_WORKER = "1";
+  const registry = new AgentRegistry(path.join(directory, "agent-registry.json"));
+  const optionsSeen: unknown[] = [];
+  registry.beginSpawnRequest({ engine: "codex", cwd: directory, accountId: "account-a", transport: "structured",
+    clientAttemptId: "pending-sidecar-fixture", requestDigest: "a".repeat(64), launchProfile: emptyLaunchProfile({ cwd: directory, title: "Pending sidecar fixture" }) });
+  try {
+    for (let pass = 0; pass < 2; pass++) await runReaperCycle({ registry, hosts: [], files: [],
+      actuation: { loadFlows: () => [], runtimeClient: () => null,
+        terminalizeStaleSpawns: (async (_registry, _client, options) => {
+          optionsSeen.push(options?.repairFailures);
+          if (options?.repairFailures !== false) throw new Error("owner-only backfill refused");
+          return { examined: 0, terminalized: [], recovered: [] };
+        }) as NonNullable<import("./reaperRuntime").ReaperActuationOverrides["terminalizeStaleSpawns"]>,
+      },
+    });
+    expect(optionsSeen).toEqual([false, false]);
+  } finally {
+    registry.close();
+    if (previous === undefined) delete process.env.LLV_ACCOUNT_CONTROLLER_INVENTORY_WORKER;
+    else process.env.LLV_ACCOUNT_CONTROLLER_INVENTORY_WORKER = previous;
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+
+test("sidecar failure-repair policy survives a real process restart without granting release authority", () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), "llv-sidecar-owner-"));
+  const program = `
+    const { AgentRegistry } = await import(${JSON.stringify(new URL("./agent/registry.ts", import.meta.url).href)});
+    const { runReaperCycle } = await import(${JSON.stringify(new URL("./reaperRuntime.ts", import.meta.url).href)});
+    const { emptyLaunchProfile } = await import(${JSON.stringify(new URL("./accounts/migration/contracts.ts", import.meta.url).href)});
+    const registry = new AgentRegistry(process.env.LLV_STATE_DIR + "/registry.json");
+    registry.beginSpawnRequest({ engine: "codex", cwd: process.env.LLV_STATE_DIR, accountId: "account-a", transport: "structured",
+      clientAttemptId: "pending-restart-fixture", requestDigest: "b".repeat(64), launchProfile: emptyLaunchProfile({cwd: process.env.LLV_STATE_DIR, title: "Pending restart fixture"}) });
+    const errors = [];
+    console.error = (...args) => errors.push(args.map(String).join(" "));
+    await runReaperCycle({registry, hosts: [], files: [], actuation: {loadFlows: () => [], runtimeClient: () => null}});
+    registry.close();
+    process.stdout.write(JSON.stringify(errors));
+  `;
+  try {
+    for (let restart = 0; restart < 2; restart++) {
+      const child = spawnSync(process.execPath, ["--eval", program], { encoding: "utf8", timeout: 10000,
+        env: { ...process.env, NODE_ENV: "production", LLV_STATE_OWNER: "viewer", LLV_ACCOUNT_CONTROLLER_INVENTORY_WORKER: "1",
+          LLV_STATE_DIR: base, HOME: path.join(base, "home"), XDG_CONFIG_HOME: path.join(base, "config"), TMPDIR: base } });
+      expect(child.status, child.stderr).toBe(0);
+      expect(JSON.parse(child.stdout)).toEqual([]);
+    }
+  } finally { fs.rmSync(base, { recursive: true, force: true }); }
+});
+
+
+test("an idle inventory sidecar does not open spawn hygiene writers", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-sidecar-idle-"));
+  const previous = process.env.LLV_ACCOUNT_CONTROLLER_INVENTORY_WORKER;
+  process.env.LLV_ACCOUNT_CONTROLLER_INVENTORY_WORKER = "1";
+  const registry = new AgentRegistry(path.join(directory, "registry.json"));
+  const hygiene = spyOn(registry, "terminalizeAbandonedSpawnEntries");
+  try {
+    await runReaperCycle({ registry, hosts: [], files: [], actuation: { loadFlows: () => [], runtimeClient: () => null } });
+    expect(hygiene).not.toHaveBeenCalled();
+  } finally {
+    hygiene.mockRestore(); registry.close();
+    if (previous === undefined) delete process.env.LLV_ACCOUNT_CONTROLLER_INVENTORY_WORKER;
+    else process.env.LLV_ACCOUNT_CONTROLLER_INVENTORY_WORKER = previous;
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});

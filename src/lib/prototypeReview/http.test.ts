@@ -186,8 +186,12 @@ test("failed task commits leave no publication or decision and no dispatch", asy
 
 test("retention removes old copies while decisions and round history remain", async () => {
   const id = await publish(await fullInput("retention-old"));
-  await reviewPOST(request("/review", { reviewId: id, chosen: [1], comment: "Keep the compact layout" }), "task-prototype");
+  await reviewPOST(request("/review", { reviewId: id, chosen: [1], comment: "Keep the compact layout" }), "task-prototype",
+    { ...prototypeWorld, orchestrator: () => "conversation_seat" },
+    { recover: async () => null, send: async () => ({ state: "sent" }), retry: async () => ({ state: "sent" }) });
+  await settlePrototypeDeliveriesForTests();
   const stored = loadTasks()[0]!;
+  expect(stored.prototypeReviews![0]!.decision!.delivery.state).toBe("sent");
   stored.status = "done"; stored.doneAt = "2020-01-01T00:00:00Z"; stored.updatedAt = stored.doneAt;
   saveTasks([stored]);
   await publish(await fullInput("retention-new"));

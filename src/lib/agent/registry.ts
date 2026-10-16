@@ -5767,6 +5767,29 @@ export class AgentRegistry {
     return this.readKeyed(file => clone(file.receipts[launchId] ?? null));
   }
 
+  /** Fresh, keyed evidence for one launch across asynchronous controller reads.
+      Returns its latest generation and original native entry only. */
+  spawnEvidence(launchId: string): {
+    receipt: SpawnReceipt | null;
+    generation: { engine: AgentEngine; id: string; path: string } | null;
+    entry: Pick<AgentRegistryEntry, "artifactPath" | "structuredHostOperationId"> | null;
+    structured: boolean;
+  } {
+    return this.readKeyed(file => {
+      const receipt = file.receipts[launchId];
+      if (!receipt) return { receipt: null, generation: null, entry: null, structured: false };
+      const conversation = file.conversations[resolveConversationAlias(file, receipt.conversationId)];
+      const generation = conversation?.generations.at(-1);
+      const entry = receipt.key ? file.entries[sessionKeyId(receipt.key)] : null;
+      return {
+        receipt: clone(receipt),
+        generation: conversation && generation ? { engine: conversation.engine, id: generation.id, path: generation.path } : null,
+        entry: entry ? { artifactPath: entry.artifactPath, structuredHostOperationId: entry.structuredHostOperationId } : null,
+        structured: !!entry?.structuredHost || typeof entry?.structuredHostOperationId === "string",
+      };
+    });
+  }
+
   conversationIdForSpawnCapabilityDigest(digest: string): ViewerConversationId | null {
     if (!/^[0-9a-f]{64}$/.test(digest)) return null;
     return this.readKeyed(file => {

@@ -357,3 +357,47 @@ test("parallel A: a peer-held task database yields the loop and rechecks authori
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
+
+
+test.each(["released", "deadline"] as const)("launch admission: a real task writer preserves one reservation through %s", async outcome => {
+  const { Database } = await import("bun:sqlite");
+  const { AgentRegistry } = await import("@/lib/agent/registry");
+  const { statePath } = await import("@/lib/configDir");
+  const { loadTasks } = await import("./store");
+  const fs = await import("node:fs");
+  const path = await import("node:path");
+  const os = await import("node:os");
+  loadTasks();
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "launch-peer-"));
+  const registry = new AgentRegistry(path.join(directory, "registry.json"), undefined, undefined,
+    { sqliteMode: "off", sqliteWriterDeadlineMs: outcome === "deadline" ? 40 : 2_000 });
+  const peer = new Database(statePath("state.sqlite"));
+  let locked = false, progress = 0;
+  const input = { engine: "codex" as const, cwd: "/repo", transport: "structured" as const,
+    clientAttemptId: "membership-retry", launchProfile: { title: "Task writer recovery" }, purpose: "resume-successor" as const,
+    origin: { kind: "successor" as const } };
+  // This clock is independent of admission's promise and account context.
+  const timer = setInterval(() => {
+    if (!locked) return;
+    progress++;
+    if (outcome === "released" && progress === 3) { peer.exec("ROLLBACK"); locked = false; }
+  }, 5);
+  try {
+    peer.exec("BEGIN IMMEDIATE"); locked = true;
+    const admission = registry.beginSpawnRequestAsync(input);
+    if (outcome === "deadline") {
+      await expect(admission).rejects.toThrow("state admission timed out");
+      expect(registry.spawnReceiptForClientAttempt(input.clientAttemptId)).toMatchObject({ state: "starting", membershipAdmitted: false });
+      peer.exec("ROLLBACK"); locked = false;
+    } else expect((await admission).kind).toBe("created");
+    expect(progress).toBeGreaterThan(0);
+    const before = registry.spawnReceiptForClientAttempt(input.clientAttemptId)!;
+    expect((await registry.beginSpawnRequestAsync(input)).kind).toBe("replay");
+    const rows = Object.values(registry.readOnlySnapshot().receipts);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ launchId: before.launchId, state: "starting", membershipAdmitted: true, key: null });
+  } finally {
+    clearInterval(timer); if (locked) peer.exec("ROLLBACK"); peer.close(); registry.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});

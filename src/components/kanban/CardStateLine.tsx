@@ -3,7 +3,7 @@
 import { ArrowDown, ArrowUp } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 
-import { clockText } from "@/components/activity/format";
+import { browserZone, clockText } from "@/components/activity/format";
 import { TooltipBubble } from "@/components/TooltipBubble";
 import { humanizeDuration } from "@/components/turnDuration";
 import { fmtAgeSeconds } from "@/components/utils";
@@ -19,14 +19,6 @@ import { cardStatePopover, cardStateText, type CardState } from "./cardState";
  * (working, a hold, a pause), the motion line is the sentence. The dot opens a
  * one-line popover, the owner and how long, by hover, focus or tap.
  */
-
-const browserZone = (): string => {
-  try {
-    return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
-  } catch {
-    return "UTC";
-  }
-};
 
 /** The dot and its popover. On the phone's card face, which is one button, it is passive. */
 export function CardStateDot({ state, nowMs, title, interactive }: { state: CardState; nowMs: number; title: string; interactive: boolean }) {

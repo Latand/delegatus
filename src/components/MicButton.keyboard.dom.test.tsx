@@ -56,14 +56,15 @@ afterEach(async () => {
   document.body.replaceChildren();
 });
 
-async function render(): Promise<HTMLButtonElement> {
+async function render(phase: "idle" | "starting" = "idle", anchored = false): Promise<HTMLButtonElement> {
   const host = document.createElement("div");
   document.body.appendChild(host);
   await act(async () => {
     root = createRoot(host);
     root.render(
       <MicButtonView
-        phase="idle"
+        phase={phase}
+        anchored={anchored}
         elapsed={0}
         maxSeconds={300}
         remaining={300}
@@ -78,7 +79,7 @@ async function render(): Promise<HTMLButtonElement> {
       />,
     );
   });
-  const button = host.querySelector<HTMLButtonElement>('button[aria-label="Dictate"]');
+  const button = host.querySelector<HTMLButtonElement>(phase === "idle" ? 'button[aria-label="Dictate"]' : "button[data-mic-phase]");
   if (!button) throw new Error("no Dictate button");
   return button;
 }
@@ -150,4 +151,15 @@ test("picking an option closes the menu and returns focus to the button", async 
   await act(async () => { await new Promise((resolve) => setTimeout(resolve, 10)); });
   expect(document.querySelector("[data-mic-backend-menu]")).toBeNull();
   expect(document.activeElement).toBe(button);
+});
+
+test("the anchored mic names its phase, so the dark rest colour leaves the connecting accent alone", async () => {
+  const idle = await render("idle", true);
+  expect(idle.getAttribute("data-mic-phase")).toBe("idle");
+  expect(idle.className).toContain("composer-ghost");
+  await act(async () => { root?.unmount(); });
+  document.body.replaceChildren();
+  const starting = await render("starting", true);
+  expect(starting.getAttribute("data-mic-phase")).toBe("starting");
+  expect(starting.className).toContain("text-accent");
 });

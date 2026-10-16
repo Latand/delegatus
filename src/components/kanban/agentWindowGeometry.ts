@@ -76,8 +76,12 @@ export function useAgentWindowGeometry(rootRef: RefObject<HTMLElement | null>): 
     observer?.observe(root);
     const bar = root.querySelector<HTMLElement>(":scope > .bar");
     if (bar) observer?.observe(bar);
-    /* The reason filters come and go under the header with its width. */
-    const rows = typeof MutationObserver === "function" ? new MutationObserver(apply) : null;
+    /* The reason filters come and go under the header with its width. Only a header row counts: the dragged card's
+       ghost and hint are added and removed here too, and a forced layout for each is what the drag pays at its start. */
+    const isRow = (node: Node) => node instanceof HTMLElement && node.matches(".bar");
+    const rows = typeof MutationObserver === "function"
+      ? new MutationObserver((records) => { if (records.some((record) => [...record.addedNodes, ...record.removedNodes].some(isRow))) apply(); })
+      : null;
     rows?.observe(root, { childList: true });
     return () => {
       window.removeEventListener("resize", apply);
