@@ -38,24 +38,30 @@ make no further scope change. This audit designs from the words: the default is
 optimism everywhere, and every remaining wait in section 5 names its reason.
 
 **Validation against the quote.** Every action that writes to the server is in
-section 5 with its class; every class B entry in section 6 says what changes at
+section 5 with its class, each control row carrying its own reason rather than
+inheriting a neighbour's exemption; every class B entry in section 6 says what changes at
 once, what rolls back and where the error shows; every class C entry names
 irreversible, server-computed or conflict. Section 8 is one fix line, as the
 decision asked.
 
 ## 2. Summary
 
-- **Inventory:** 121 rows in section 5. 113 of them reach the server (a row
-  groups presses that share one handler); 8 are local actions on the same
-  surfaces, kept for completeness. They come from 329 reachable components
-  with about 1,350 event-handler attributes; every handler not in the tables
-  changes only browser state and is immediate by construction (section 5.9).
+- **Inventory:** 136 rows in section 5. 128 of them reach the server (a row
+  groups presses that share one handler and one outcome); 8 are local actions
+  on the same surfaces, kept for completeness. They come from 329 reachable
+  components with about 1,350 event-handler attributes. A verifier pass found
+  rows that had been folded into a neighbour's exemption (the external-relay
+  controls, Copilot account selection, the linked-install sharing switches,
+  provider key saves, team profile edits, the Telegram Off choice, the update
+  check); each now has its own row and class. Handlers not in the tables
+  change only browser state and are immediate by construction (section 5.9).
   Fourteen mutation-bearing component files are unreachable from any page and
   are excluded (section 5.10).
-- **Classes:** 44 rows **A** (already optimistic, or local), 31 rows **B**
-  (should become optimistic; 27 changes, B1–B27), 45 rows **C** (legitimately
+- **Classes:** 43 rows **A** (already optimistic, or local), 44 rows **B**
+  (should become optimistic; 36 changes, B1–B36), 48 rows **C** (legitimately
   wait, reason named), and one row (L5) that takes the class of the lane action
-  it sends.
+  it sends. The counts are computed from the section 5 tables by the script in
+  section 11.
 - **The busiest surfaces mostly conform already.** Kanban card moves, edits,
   colour, priority, icon, hide and dismiss; the Waiting-for-you dismissals and
   Done acceptance; the «Рішення» column's answers; composer sends; account and
@@ -66,10 +72,12 @@ decision asked.
   questions in the feed («Надіслати», up to 10 s of "Sending…"), permission
   Allow/Deny, the prototype review window's save, lane pause/resume and the
   "finishes the task" check, link/unlink, show-on-board, launch-row dismissal,
-  new tasks, conversation rename, and ten settings rows.
-- **Why it matters here:** the production Viewer logged 4,792 event-loop
-  gaps longer than 1 s and 2,913 longer than 3 s (max 19.2 s) between
-  2026-10-15 21:00 UTC and 2026-10-16 12:44 UTC (section 3). Any button that
+  new tasks, conversation rename, Undo of an edit still being written, and
+  about twenty settings, account, team and relay rows.
+- **Why it matters here:** the production Viewer logged 9,830 event-loop
+  gaps of 0.5 s or more, 4,792 longer than 1 s and 2,913 longer than 3 s
+  (max 19.2 s) between 2026-10-15 21:00 UTC and 2026-10-16 12:44 UTC
+  (section 3). Any button that
   waits for an answer waits through those gaps.
 - **Mechanism:** reuse the existing overlays; add one small primitive
   (`revertTaskSnapshot`) and an optional predicted record on the kanban
@@ -111,7 +119,7 @@ measured without a new instrument (deferred, section 10). The common context:
 
 | Evidence | Value | Source |
 |---|---:|---|
-| Viewer loop gaps > 0.5 s, 2026-10-15 21:00:03Z – 2026-10-16 12:44:35Z (three Viewer processes across deploys) | 9,830 | `journalctl --user -u delegatus.service -g "viewer loop-gap"`, counted by `gapMs` and `role:"viewer"`; read-only |
+| Viewer loop gaps ≥ 0.5 s (17 of them exactly 500 ms), 2026-10-15 21:00:03Z – 2026-10-16 12:44:35Z (three Viewer processes across deploys) | 9,830 | `journalctl --user -u delegatus.service --since "2026-10-15 21:00:03 UTC" --until "2026-10-16 12:44:35 UTC" -g "viewer loop-gap" -o cat`, each JSON record decoded, filtered to `role:"viewer"` and counted by `gapMs`; read-only (9,813 are > 500 ms) |
 | … of which > 1 s / > 3 s | 4,792 / 2,913 | same |
 | Longest gap in that window | 19,220 ms | same |
 | Gaps > 1 s in the 2026-10-14 production window; longest | 147; 37,306 ms | `docs/design/viewer-stalls-2026-10-14.md` |
@@ -156,7 +164,8 @@ section 6), C waits with the reason named.
 |---|---|---|---|---|---|---|
 | K1 | Move a card to a column (drag, status menu, `[`/`]`, phone sheet) | `kanban/KanbanBoard.tsx:949` (drag `:1849`, menu `:1412`, keys `:993`); `mobile/MobileKanban.tsx:1030`; `mobile/MobileTaskScreen.tsx:658` | Card moves at once (M1); receipt with Undo | Card returns or goes to the server's column; flash; error receipt with Retry or "Move anyway" | est. one task PATCH | A |
 | K2 | Save a hold (blocked reason) | `KanbanBoard.tsx:2725` → move with `hold` | Same as K1 | Same as K1 | est. | A |
-| K3 | Undo / Redo (Ctrl+Z, U, receipt) | `KanbanBoard.tsx:930` | Applied at once, fenced write | Refused task flashes; receipt says why | est. | A |
+| K3 | Undo / Redo (Ctrl+Z, U, receipt) of an edit whose write has been answered | `KanbanBoard.tsx:930` (`applyEntry` at `:941`) | Applied at once, fenced write | Refused task flashes; receipt says why | est. | A |
+| K3b | Undo / Redo of an edit whose write is still in flight | `KanbanBoard.tsx:944` (`entry.settled`; `applyEntry` runs at `:941` only after it resolves) | **Waits**: nothing is applied until the original write answers (`if (entry.saved === undefined) void entry.settled.then(answered)`); the card stays in the optimistic destination. A write that did not save is skipped for the next entry | After the answer, as K3 | stalls last as long as the original write (section 3) | **B28** |
 | K4 | Rename title, edit description or details inline | `KanbanBoard.tsx:1037` (commit `:1113`); `MobileTaskScreen.tsx:613`, `:621` | New text at once (M1) | Draft kept with Retry/Discard in the card (`kanban/KanbanCard.tsx:782`); a conflict shows theirs and mine (`:803`) | est. | A |
 | K5 | Colour, priority, icon | `KanbanBoard.tsx:1185`, `:1203`, `:1221`; `MobileTaskScreen.tsx:676`, `:683` | At once (M1) | Flash + error receipt with Retry | est. | A |
 | K6 | Hide a group; hide idle; hide finished; show a hidden group | `KanbanBoard.tsx:1269`, `:1327` (menu `:1434`, `:1442`, divider `:3330`), `:1241`; `MobileKanban.tsx:1051`, `:1059`; `MobileTaskScreen.tsx:699` | At once (M1) | Group comes back; per-task receipt | est. | A |
@@ -261,7 +270,8 @@ Lane actions in the card menu are in 5.4.
 | S1 | Asks-you on/off | `asksYouSetting.ts:78` (M7) | At once | Restored; row marked failed | est. | A |
 | S2 | Bridge reports on/off | `reportLog/bridgeReportsSetting.ts:86` (M7) | At once | Same | est. | A |
 | S3 | Merge on review | `MergeOnReviewRow.tsx:64` (M7) | At once | Same | est. | A |
-| S4 | Share the project with linked installations | `links/ShareProjectRow.tsx:28` | Switch disabled until the answer | `failed` hint | est. | **B18** |
+| S4 | Share the project with linked installations (project menu and sheet) | `links/ShareProjectRow.tsx:28` | Switch disabled until the answer | `failed` hint | est. | **B18** |
+| S4b | Linked-install dialog: "Share all" and the per-project sharing checkboxes | `links/LinkedSettingsDialog.tsx:366` (all), `:368` (project) → `share` `:204` → `linkedAction` `:160` | `PATCH /api/links/shared` then a refresh; the checkbox keeps the old value and every dialog control is disabled (`busy`) until both answer | Alert at the top of the dialog (`linkError`, `:232`) | est. one local store write + refresh (`src/app/api/links/shared/route.ts:19`–`:24` only persists the chosen flags) | **B18** |
 | S5 | Agent memory on/off | `memory/MemoryPage.tsx:71` | Busy until the answer | "save" error | est. | **B19** |
 | S6 | Seat tick settings (auto-rotate, cadence, monitor note) | `orchestrator/useSeatTickSettings.ts:255`; `SeatTickSwitch.tsx:252`, `:345` | Pending value shown at once | Restored + error | est. | A |
 | S7 | Worker limit set / reset (project, machine) | `orchestrator/WorkerLimitChip.tsx:32`, `:119` | Field keeps the typed value; chip and popover locked until the answer | Restored + "save" error | est. | **B20** |
@@ -270,11 +280,14 @@ Lane actions in the card menu are in 5.4.
 | S10 | Dictation backend (mic menu) | `MicButton.tsx:157` | Saving until the answer | Error | est. | **B22** |
 | S11 | Dictation backend (setup guide) | `onboarding/VoiceStep.tsx:218` | At once | Restored + error | est. | A |
 | S12 | Read-aloud backend / voice | `feed/SpeakButton.tsx:425` | Waits | Error | est. | **B23** |
-| S13 | Provider keys (OpenRouter, dictation, voice companion) | `asks/OpenRouterKeyField.tsx:15`; `VoiceStep.tsx:112`; `hooks/useVoiceCompanionSettings.ts:23` (`key`) | Busy | "Invalid key" / failed | est. | C — server-computed (the provider validates the key) |
+| S13a | OpenRouter key (Asks-you and shared memory) | `asks/OpenRouterKeyField.tsx:15` → `PUT /api/asks-you/key` | Field emptied at once, input and button disabled until the answer, then "saved" | "Invalid key" / failed alert under the field | est. one local file write; the route checks the key's syntax and writes it (`src/app/api/asks-you/key/route.ts:36`–`:38`), no provider request | **B31** |
+| S13b | Dictation provider key (setup guide) | `onboarding/VoiceStep.tsx:112` → `PUT /api/transcribe/key` | Saving until the answer; field emptied only after success | Note with the reason; 409 when the key comes from the environment | est. one local file write; the route checks shape and environment ownership (`src/app/api/transcribe/key/route.ts:31`–`:44`) | **B31** |
+| S13c | Voice companion key | `hooks/useVoiceCompanionSettings.ts:23` (`key`) → `PUT /api/voice-companion/key` | Busy until the answer | Error code under the field | est. one local file write; `saveKey` validates syntax and writes (`src/lib/voiceCompanion/storage.ts:360`–`:363`) | **B31** |
 | S14 | Voice companion settings (other than the key) | `useVoiceCompanionSettings.ts:23` (`settings`) | Busy | Error | est. | **B24** |
 | S15 | Delete call memory | `voiceCompanion/CallMemorySetting.tsx:15` | Writing | Retry | est. | C — irreversible |
 | S16 | Telemetry | `telemetry/TelemetrySettings.tsx:30` | Busy | Error | est. | **B25** |
-| S17 | Seat reports chat (Telegram link) | `orchestrator/SeatReports.tsx:74`; `ProjectReportsOverview.tsx:81`; `onboarding/TelegramReportsStep.tsx:118` | Saving | Error with the server's message | est. | C — server-computed (link resolved by the server) |
+| S17a | Seat reports: turn Telegram reports Off ("Log only") | `orchestrator/SeatReports.tsx:155` → `save(null)` `:74`; `ProjectReportsOverview.tsx:81` | The stored choice changes only after the PUT answers; `reset()` follows | Error line under the control | est. one local write: the route handles `null` with `setReportTelegram(project, null)` and resolves no chat or link (`src/app/api/projects/settings/route.ts:157`–`:158`) | **B30** |
+| S17 | Seat reports: choose a chat or paste a link | `SeatReports.tsx:74`; `ProjectReportsOverview.tsx:81`; `onboarding/TelegramReportsStep.tsx:118` | Saving | Error with the server's message | est. Telegram lookup for a pasted link | C — server-computed (the server resolves the link and checks the bot is in the chat, `route.ts:124`–`:155`) |
 | S18 | Telegram sign-in, bot, report groups | `hooks/useTelegramConnection.ts:111`; `useTelegramBot.ts:63`; `useTelegramReports.ts:92` | Busy | Failure code | est. | C — server-computed (external service) |
 | S19 | Push notifications | `PushBell.tsx:35` | Browser permission prompt, then subscribe | — | est. | C — server-computed (permission, subscription) |
 | S20 | Learned rules: delete, restore, revert | `roleMemory/LearnedRules.tsx:146` | Waits | "save" error | est. | **B26** |
@@ -299,26 +312,40 @@ Lane actions in the card menu are in 5.4.
 | R2 | Add an account, sign in, submit a login code («Надіслати код»), cancel a login | `useEngineAccounts.ts:781`, `:903`, `:930`, `:947`; `AccountsPanel.tsx:1130`, `:1152` | Busy | Notice | est. | C — server-computed (external auth) |
 | R3 | Remove / restore an account; clean up orphans | `useEngineAccounts.ts:1008`, `:1042`, `:1175` | Removing | Refusal names what holds it | est. | C — conflict (refused while in use) |
 | R4 | Refresh limits; reset credits; copy terminal command | `useEngineAccounts.ts:1109`, `:1137`, `:1073` | Busy | Notice | est. | C — server-computed (credit reset is irreversible) |
-| R5 | Claude provider editor save | `AccountsPanel.tsx:804` | Busy | Error | est. | C — server-computed (token check, model list) |
-| R6 | Copilot accounts add / remove | `CopilotFooterRow.tsx:71`, `:95` | Busy | Refusal | est. | C — server-computed (external auth) |
+| R5a | Claude provider editor: save an existing provider account | `AccountsPanel.tsx:804` (`request("save")`, PATCH) | Busy until the answer; the form stays open | Error line in the editor | est. one local write: `updateProviderClaudeAccount` (`src/lib/accounts/claude.ts:551`–`:584`) persists, no provider request | **B32** |
+| R5 | Claude provider editor: add a new provider account; "list models" | `AccountsPanel.tsx:804` (`request("save")` POST, `request("provider-models")`) | Busy | Error | est. one provider request: the route lists the provider's models before creating (`src/app/api/accounts/claude/route.ts:65`–`:86`) | C — server-computed (remote model list and token check) |
+| R6a | Copilot: use another account | `CopilotFooterRow.tsx:168` → `post` `:71`–`:90` | **No pending state**: the old "active" badge stays and the old row's button stays pressable until the POST answers, then `setBody` redraws | Alert at the foot of the row (`:263`) | est. one local write | **B33** |
+| R6 | Copilot: add an account, restore a hidden one, sign in, cancel a sign-in, choose plaintext storage | `CopilotFooterRow.tsx:238`, `:259`, `:174`, `:181`, `:188`, `:195`, `:196` → `post` | No busy state; the row changes when the answer redraws it | Alert at the foot of the row | est. | C — server-computed (a managed home and its sign-in supervisor are created or advanced on the server; the sign-in itself is external auth) |
+| R6c | Copilot: remove an account | `CopilotFooterRow.tsx:95` (confirm `:215`) | Confirm closes; no busy state until the answer | Refusal block under the row, with Retry (`:229`) | est. | C — conflict (refused while live sessions, conversations or a sign-in hold the account: `src/app/api/accounts/copilot/route.ts:119`–`:127`) |
 | R7 | Crown a project; favourite; archive a project or a switchboard card | `hooks/useProjectCuration.ts:75`; `ProjectDashboard.tsx:485` (M4); `hooks/useArchivedProjects.ts`, `hooks/useArchivedPaths.ts` (local storage) | At once | Crown restored on failure | est. | A |
 | R8 | Create a project | `ProjectRail.tsx:767`; `mobile/MobileProjectSheet.tsx:198` → `useProjectCuration.ts:97` | Busy | Error | est. | C — server-computed (directory, key) |
 | R9 | Delete a project's transcripts | `ProjectTrash.tsx:234` | Confirm, busy | Count of failures | est. | C — irreversible |
 | R10 | Designate / confirm an orchestrator seat | `orchestrator/useSeatConfirm.ts:149`; `MobileSeatCard.tsx:281` | Submitting | Failure | est. | C — server-computed (spawns the seat) |
-| R11 | Team: sign in, join, approve requests and sessions, invites, member roles, passkeys, sign out | `team/MembersTab.tsx:63`, `:69`, `:257`, `:333`, `:401`, `:412`; `team/SessionsTab.tsx:49`–`:57`; `team/TeamPage.tsx:37`, `:106`; `team/SignInCard.tsx:279`; `team/JoinCard.tsx:93`; `headerMenu/HeaderMenu.tsx:49` | Busy | Error | est. | C — server-computed (authorization) |
+| R11b | Team member: rename, pick a colour (self or owner) | `team/MembersTab.tsx:422`, `:440` → `patch` `:330` | `busy`; the heading, avatar and selected colour radio (`aria-checked` from `member.color`, `:438`) change only after the PATCH and `refreshTeamView` | Error line in the member dialog | est. one local write; the route authorizes the caller and persists the operator's value (`src/app/api/team/members/[id]/route.ts:27`–`:34`) | **B34** |
+| R11 | Team: sign in, join, approve requests and sessions, invites, revoke or restore members, passkeys, sign out | `team/MembersTab.tsx:63`, `:69`, `:257`, `:333`, `:401`, `:412`; `team/SessionsTab.tsx:49`–`:57`; `team/TeamPage.tsx:37`, `:106`; `team/SignInCard.tsx:279`; `team/JoinCard.tsx:93`; `headerMenu/HeaderMenu.tsx:49` | Busy | Error | est. | C — server-computed (authorization and credentials) |
 | R12 | Phone access QR | `AccessQrButton.tsx:107` | Loading | Error | est. | C — server-computed (one-time URL) |
 | R13 | Self-update: update, retry, install action, restart | `selfUpdate/SelfUpdateDialog.tsx:70` (`:129`–`:131`) | Pending | Error | est. | C — irreversible |
-| R14 | External relay pairing; voice clone | `externalRelay/ExternalRelaySection.tsx:262`, `:284`, `:293`; `CloneCreate.tsx:144` | Busy | Error | est. | C — server-computed (external service) |
-| R15 | Setup guide: mark a step done / skipped | `onboarding/OnboardingDialog.tsx:253` | At once | **Silent** (no rollback, no error) | est. | A (deferred note, section 10) |
+| R13b | Self-update: "Check now" / "Retry check" / "Check again" | `selfUpdate/SelfUpdateView.tsx:203`–`:208`, `:392` → `actions.check` `selfUpdate/SelfUpdateDialog.tsx:137` → `act` `:70` → `POST /api/self-update/check` | The button is disabled while `pending` holds `check`; the "checking" status line comes from the server snapshot (`SelfUpdateView.tsx:308`), not from the press | Error in the dialog | est. one remote revision lookup | C — server-computed (the result is the remote's current revision) |
+| R14 | External relay: pair a relay; create a voice clone | `externalRelay/ExternalRelaySection.tsx:262`, `:284`, `:293`; `CloneCreate.tsx:144` | Busy | Error | est. | C — server-computed (external service) |
+| R14b | External relay: "answered here" switch of a target | `externalRelay/ExternalRelaySection.tsx:487` → `act` `:574` (`actions.route` `:585`–`:586`) → `PATCH …/targets/[targetId]` | `busy` disables every relay control; the switch keeps its old position until the request and `onChanged` finish | Error line of the relay card | est. one round trip to the external relay: the route stores the relay's own answer (`src/app/api/external-relay/relays/[id]/targets/[targetId]/route.ts:37`–`:67`) | C — server-computed (the external relay confirms who answers) |
+| R14c | External relay: target engine, model, effort | `ExternalRelaySection.tsx:494`, `:498`, `:503` → `patchTarget` `:585` | Same lock; old values stay until the answer | Error line of the relay card | est. one local store write (`src/app/api/external-relay/relays/[id]/route.ts:61`–`:103`) | **B35** |
+| R14d | External relay: concurrency, member limit, owner tier | `ExternalRelaySection.tsx:511`, `:405`–`:419` (limit field), `:522` → `patchTarget` | Same | Same | est. | **B35** |
+| R14e | External relay: pause / resume | `ExternalRelaySection.tsx:605` → `act` `:574` | Menu item disabled while busy; the state line changes after the answer | Error line of the relay card | est. one local write; the route also revokes the relay's running owner runs afterwards (`route.ts:111`) | **B36** |
+| R14f | External relay: disconnect | `ExternalRelaySection.tsx:609` | Busy | Error | est. | C — irreversible (unpairs the relay; pairing needs a new code from the external service) |
+| R15 | Setup guide: mark a step done / skipped | `onboarding/OnboardingDialog.tsx:253` (`mark`; `putOnboarding` result discarded, `onboarding/useOnboarding.ts:56`–`:66` returns `null` on refusal or network failure) | The step changes at once | **Silent**: the check stays changed, nothing is restored, no error | est. | **B29** |
 | R16 | Setup guide: health check start/stop; phone access on/off | `onboarding/CheckStep.tsx:128`, `:139`; `PhoneStep.tsx:96` | Busy | Error | est. | C — server-computed |
 | R17 | Task sheet: create (and send to agents) | `tasks/TaskSheet.tsx:43` | Busy through create and send | Error in the composer; send outcome toast | est. | **B7** (create); send C — server-computed per target |
 
 ### 5.9 Local-only interactions and background traffic
 
 Of the about 1,350 handler attributes in reachable components, every one not
-listed above changes only browser state (open/close, fold, select, navigate,
+listed above is meant to change only browser state (open/close, fold, select, navigate,
 search, filter, zoom, scroll, draft text) and is immediate: class A by
-construction. Background requests that are not operator actions:
+construction. The verifier pass showed that this claim needs a per-file check:
+a handler can sit in a file already named in a row and still write to the
+server. The write-site list of section 11 is therefore matched against the
+tables by file, and the controls of every file with a write site were re-read
+after the pass (the relay, Copilot, linked-install, team, update and key rows). Background requests that are not operator actions:
 `hooks/useViewPresence.ts:214`, `hooks/logBus.ts:92`,
 `hooks/hostTargetBus.ts:75`, `hooks/useFiles.ts:1318`,
 `taskAlbum/TaskAlbum.tsx:135`, `onboarding/useOnboarding.ts:122`.
@@ -357,7 +384,16 @@ longer exists, in which case the nearest surface that still shows the subject.
 | B15 | Update decision: Keep waiting (W10) | The row leaves Waiting-for-you | Row returns | The row's existing error line |
 | B16 | Conversation rename (C14) | Set the overlay to the typed title before the PATCH | Restore the previous overlay | Today's "Rename failed" with Retry |
 | B17 | Work link detach (L14) | Remove the chip | Put it back | The chip row's refusal line |
-| B18–B27 | Settings rows S4, S5, S7, S8, S10, S12, S14, S16, S20, S24 | The new value, as M7 does (`MergeOnReviewRow.tsx:64`); drop the busy lock | Restore the previous value | The row's existing failure hint or line |
+| B18–B27 | Settings rows S4, S4b, S5, S7, S8, S10, S12, S14, S16, S20, S24 | The new value, as M7 does (`MergeOnReviewRow.tsx:64`); drop the busy lock. For S4b the checkbox and, for "Share all", every project's derived checked/disabled state flip from one local copy of `shared`; the dialog's `busy` lock stays only for the unrelated key, connect and code actions | Restore the previous `shared` copy (both entry points, S4 and S4b, read the same store) | The row's existing failure hint (S4); the dialog's top alert, `linkError` (S4b) |
+| B28 | Undo / Redo of an edit still being written (K3b) | Draw the reversed value at once through M1's per-field overlay (`drawnTasks`), as for a saved edit; queue the fenced write behind the original one in the task's existing write queue | The fence needs the revision and lineage the original write returns (`useTaskMutations.ts` header), so the write still leaves after the original answers. If the original is refused or conflicts, drop the queued reversal and show the server's value, as K3 does for a refused entry (`KanbanBoard.tsx:889`–`:892`); if the reversal itself is refused, redraw the pre-undo value | The existing error receipt of K3 (`undoFailed` / `undoRefused`) |
+| B29 | Setup guide step mark (R15) | Unchanged: the step changes at once | Keep the prior step state in `mark` (`OnboardingDialog.tsx:253`); when `putOnboarding` returns `null`, restore it | An error line at the guide step that was marked, with Retry; the next read still corrects stale state |
+| B30 | Seat reports Off (S17a) | Show "Log only" at once: set the displayed choice to `null` in `useProjectReports` (`SeatReports.tsx:53`, `save` at `:74`) before the PUT and run `reset()` | Restore the previous `reportTelegram` and chosen chat | The existing failure line under the control (`failed`) |
+| B31 | Key saves S13a–S13c (OpenRouter, dictation, voice companion) | Show the key as stored ("saved" status, key-present state) at once and keep the field emptied | Restore the typed key to the field (kept in a ref until the answer, never in logs or a stored draft) and clear the "saved" status; a 409 `KEY_FROM_ENV` (dictation, voice companion) restores the field and shows the environment source | The existing alert under each field (`providerKey.invalid` / `providerKey.failed`, the setup-guide note, the voice companion error code) |
+| B32 | Claude provider editor, existing account (R5a) | Close the editor and show the new label, base URL and model on the account row at once, with the token field cleared | Reopen the editor with the typed values (token included, held in component state until the answer) | The editor's error line (`AccountsPanel.tsx:843`) when open; otherwise a notice on the account row. New accounts and "list models" stay C (R5) |
+| B33 | Copilot: use another account (R6a) | Move the "active" badge to the pressed row at once and disable repeat presses on both rows | Restore the previous active row | The alert at the foot of the Copilot row (`CopilotFooterRow.tsx:263`) |
+| B34 | Team member name and colour (R11b) | Heading, avatar and the selected colour radio use a local overlay of the typed name / picked colour until `refreshTeamView` shows the stored one | Restore the previous name and colour; the form reverts to the stored name | The error line in the member dialog (existing `setError`, `errorText`) |
+| B35 | External relay target settings (R14c, R14d) | Draw the predicted target (engine with its default model and no effort, model with its kept effort, effort, concurrency, member limit, owner tier) in the relay card at once; the controls of other targets stay usable | Restore the stored target; the member-limit field returns its stored text | The relay card's error line. "Answered here" (R14b) stays C: the external relay confirms it |
+| B36 | External relay pause / resume (R14e) | The state line shows paused or resumed and the menu label flips at once | Restore the previous state | The relay card's error line |
 
 ## 7. The «Надіслати» button that triggered the rule
 
@@ -395,23 +431,23 @@ predicted value and rolls it back (section 4). The fix line extends those:
    with `revertPipelineSnapshot` on refusal or no answer, exactly as
    `patchPipeline` does (`pipelineModel.ts:1698`). `usePipelineActions` passes
    it for pause and resume only.
-2. **Tasks (B4–B7):** `board` joins M1 as a field (B4). For assignments and the
+2. **Tasks (B4–B7, B28):** `board` joins M1 as a field (B4), and B28 draws the reversal through M1's overlay while its fenced write queues behind the original. For assignments and the
    provisional card (B5–B7), add `revertTaskSnapshot(id)` beside
    `revertPipelineSnapshot` (`useFiles.ts:1220`) so `applyTaskSnapshot`
    (`:1203`) can be taken back; this is the one new primitive.
 3. **Decisions (B12–B14):** one draft store for both the column and the review
    window (the column's `drafts` map), so a refused save always comes back with
    its words wherever it was made; fix the column's `answering` filter.
-4. **Everything else (B1–B3, B15–B27):** component state, switched before the
+4. **Everything else (B1–B3, B15–B27, B29–B36):** component state, switched before the
    request, using the failure branches those components already have. The
-   template is M7. A shared hook for ten rows is heavier than the rows
+   template is M7. A shared hook for these rows is heavier than the rows
    themselves.
 
 The #2747 server split (answer after the durable record, deliver in the
 background) is not needed for the client to be optimistic here: B1 and B2 show
 the result at once while the routes still wait, and roll back when they refuse.
 
-**One fix line, four slices, in this order.** Each slice is one commit with
+**One fix line, five slices, in this order.** Each slice is one commit with
 failing-first DOM tests: the press shows the new state while the request is
 held open by a deferred fetch; a refusal restores the prior state and shows the
 error text in place; a second press during the request sends nothing twice.
@@ -419,18 +455,23 @@ error text in place; a second press during the request sends nothing twice.
 | Slice | Items | Files | Risk | Tests to extend or add |
 |---|---|---|---|---|
 | 1. The reported button and the answers | B1, B2, B3 | `voiceCompanion/VoiceCompanion.tsx`, `feed/QuestionCard.tsx`, `attention/PermissionActions.tsx`, `runtime/ConversationAttention.tsx` | Low: client only, existing failure paths | `voiceCompanion/voiceCompanionProduct.dom.test.tsx`, `feed/QuestionCard.delivery.dom.test.tsx`, a new `PermissionActions.dom.test.tsx` |
-| 2. Board cards and lanes | B4–B11, B17 | `kanban/useTaskMutations.ts`, `kanban/KanbanBoard.tsx`, `mobile/MobileKanban.tsx`, `kanban/kanbanAssignments.ts`, `hooks/useFiles.ts`, `kanban/pipelinePorts.ts`, `kanban/usePipelineActions.ts`, `pipelines/finishesTask.ts`, `kanban/stageDrafts.ts`, `pipelines/StagePlaceholderPane.tsx`, `tasks/useTaskCreateDraft.ts`, `tasks/TaskSheet.tsx`, `workLinks/*` | Medium: shared task and pipeline caches; the provisional card must be replaced exactly once | `kanban/KanbanBoard.dom.test.tsx`, `mobile/MobileKanban.dom.test.tsx`, `kanban/KanbanDrafts.dom.test.tsx`, `tasks/TaskSheet.dom.test.tsx`, `pipelines/StagePlaceholderPane.dom.test.tsx`, new tests beside `pipelinePorts.ts` and `useFiles.ts` |
+| 2. Board cards and lanes | B4–B11, B17, B28 | `kanban/useTaskMutations.ts`, `kanban/KanbanBoard.tsx`, `mobile/MobileKanban.tsx`, `kanban/kanbanAssignments.ts`, `hooks/useFiles.ts`, `kanban/pipelinePorts.ts`, `kanban/usePipelineActions.ts`, `pipelines/finishesTask.ts`, `kanban/stageDrafts.ts`, `pipelines/StagePlaceholderPane.tsx`, `tasks/useTaskCreateDraft.ts`, `tasks/TaskSheet.tsx`, `workLinks/*` | Medium: shared task and pipeline caches; the provisional card must be replaced exactly once | `kanban/KanbanBoard.dom.test.tsx`, `mobile/MobileKanban.dom.test.tsx`, `kanban/KanbanDrafts.dom.test.tsx`, `tasks/TaskSheet.dom.test.tsx`, `pipelines/StagePlaceholderPane.dom.test.tsx`, new tests beside `pipelinePorts.ts` and `useFiles.ts` |
 | 3. Decisions | B12–B15 | `hooks/usePrototypeReview.ts`, `prototypeReview/PrototypeReview.tsx`, `decisions/useOperatorDecisions.ts`, `decisions/DecisionColumn.tsx`, `decisions/DecisionCard.tsx`, `decisions/DecisionPointer.tsx`, `selfUpdate/AutoDrainDecision.tsx` | Medium: reverses the review window's wait chosen in #2747's fix round; the kept draft must survive a close and another task's review opening | `prototypeReview/PrototypeReview.dom.test.tsx`, `decisions/DecisionColumn.dom.test.tsx`, a new `DecisionPointer` test |
-| 4. Rename and settings | B16, B18–B27 | `session/SessionTitle.tsx`, `links/ShareProjectRow.tsx`, `memory/MemoryPage.tsx`, `orchestrator/WorkerLimitChip.tsx`, `orchestrator/useMaintainerRole.ts`, `MicButton.tsx`, `feed/SpeakButton.tsx`, `hooks/useVoiceCompanionSettings.ts`, `telemetry/TelemetrySettings.tsx`, `roleMemory/LearnedRules.tsx`, `selfUpdate/SelfUpdateDialog.tsx` | Low | `session/SessionTitle.dom.test.tsx`, `memory/MemoryPage.dom.test.tsx`, `orchestrator/WorkerLimitChip.dom.test.tsx`, `feed/SpeakButton.dom.test.tsx`, `MicButton.keyboard.dom.test.tsx`, `roleMemory/LearnedRules.render.test.tsx`, new tests for the rest |
+| 4. Rename and settings | B16, B18–B27, B29, B30 | `session/SessionTitle.tsx`, `links/ShareProjectRow.tsx`, `links/LinkedSettingsDialog.tsx`, `onboarding/OnboardingDialog.tsx`, `orchestrator/SeatReports.tsx`, `memory/MemoryPage.tsx`, `orchestrator/WorkerLimitChip.tsx`, `orchestrator/useMaintainerRole.ts`, `MicButton.tsx`, `feed/SpeakButton.tsx`, `hooks/useVoiceCompanionSettings.ts`, `telemetry/TelemetrySettings.tsx`, `roleMemory/LearnedRules.tsx`, `selfUpdate/SelfUpdateDialog.tsx` | Low | `session/SessionTitle.dom.test.tsx`, `memory/MemoryPage.dom.test.tsx`, `orchestrator/WorkerLimitChip.dom.test.tsx`, `feed/SpeakButton.dom.test.tsx`, `MicButton.keyboard.dom.test.tsx`, `roleMemory/LearnedRules.render.test.tsx`, new tests for the rest |
+| 5. Keys, accounts, team and relay | B31–B36 | `asks/OpenRouterKeyField.tsx`, `onboarding/VoiceStep.tsx`, `hooks/useVoiceCompanionSettings.ts`, `AccountsPanel.tsx`, `CopilotFooterRow.tsx`, `team/MembersTab.tsx`, `externalRelay/ExternalRelaySection.tsx` | Medium for the key rows (a failed save must hand the typed secret back to the field and nowhere else); low for the rest | `asks/OpenRouterKeyField.dom.test.tsx`, existing `CopilotFooterRow`, team and relay DOM tests, new tests for the provider editor and the voice step |
 
 The line touches no runtime-host code, no Bun pin and no deploy path. Every UI
 change still owes rendered evidence through the existing drivers (kanban board
 driver, conversation-window driver, phone driver) in en and uk, light and dark.
 
+The fix line is complete when every B row of section 5 maps to a B entry here
+and every entry appears in one slice: B1–B3 slice 1; B4–B11, B17, B28 slice 2;
+B12–B15 slice 3; B16, B18–B27, B29, B30 slice 4; B31–B36 slice 5.
+
 **Open work on the same files, to recheck when the line starts:** PR #2962
 changes `pipelines/pipelineModel.ts` and `PipelineTemplatePicker.tsx`; the open
-settings lane for API keys may change the provider-key rows next to S13 and
-S14; the open lane routing decisions to the current orchestrator may change
+settings lane for API keys may change the provider-key rows next to S13a–S13c
+and S14; the open lane routing decisions to the current orchestrator may change
 decision delivery next to B12–B14. None of them was changing these handlers at
 the audit's revision.
 
@@ -455,7 +496,7 @@ the audit's revision.
 ## 10. Deferred — not currently justified
 
 - **A generic optimistic-mutation library or hook** across domains: the
-  overlays exist per domain, and the ten settings rows are a few lines each.
+  overlays exist per domain, and the settings rows are a few lines each.
 - **#2747-style server splits** for `/api/answer` and the voice confirmation:
   client optimism meets the rule; revisit if the 10 s confirmation wait causes
   late rollbacks the operator notices.
@@ -465,7 +506,6 @@ the audit's revision.
 - **Accounts panel lock:** the active-account switch is optimistic, but every
   row is disabled while any account write runs (`AccountsPanel.tsx:539`).
 - **Edge-control lock** while an edge write runs (`StageEdgeControls.tsx:68`).
-- **Setup-guide step marks** fail silently (R15); the next read corrects them.
 - **Local thumbnails while task-draft images upload** (C19).
 - **Deleting the unreachable components** in 5.10: a cleanup, outside this
   rule.
@@ -476,13 +516,29 @@ the audit's revision.
 
 - Write sites: a script over `src/components`, `src/hooks`, `src/app` listing
   every `fetch(` with its method and route (114 non-GET sites; 110 reachable).
+  Cross-check: every file with a write method that is not under `src/app/api`
+  and is not a test appears by name in this document; the files not named
+  are `overlay/useAttentionOffers.ts` (the attention-request client: its
+  accept runs as an automatic follow with no press, its return is W13, and its
+  decline, dismiss and preview have no caller), `session/sessionTitleApi.ts` (the rename client of C14),
+  `hooks/useBridgeReportRelay.ts` (background cursor acknowledgement, not an
+  action), and `workflows/workflowModel.ts` and `flows/flowModel.ts`
+  (reachable only from the unreachable strips of 5.10).
 - Waits: `grep -rlE "set(Busy|Saving|Pending|Sending|Submitting|…)\(true"` over
   the same trees (66 files).
 - Reachability: an import-graph walk from the app entry points (329 reachable
   components, 28 unreachable, of which two are Next.js icon routes).
-- Loop gaps: `journalctl --user -u delegatus.service -S "2026-10-16 00:00:00"
-  -g "viewer loop-gap" -o cat`, grouped by process and `role`, counting
-  `gapMs`. Read-only.
+- Loop gaps: `journalctl --user -u delegatus.service --since "2026-10-15
+  21:00:03 UTC" --until "2026-10-16 12:44:35 UTC" -g "viewer loop-gap" -o cat`;
+  strip the `[viewer loop-gap] ` prefix, decode each JSON record, keep
+  `role == "viewer"`, count `gapMs`. Result: 9,830 records; 9,813 above 500 ms
+  and 17 at exactly 500 ms; 4,792 above 1,000 ms; 2,913 above 3,000 ms; maximum
+  19,220 ms. Read-only.
+- Class counts: parse every row of the tables in sections 5.1–5.8 (a first
+  cell of the form `K3b`), take the last cell's leading class (`A`, `**B…**`,
+  `C`, `as L1–L4`) and count the distinct `**B<n>**` ids. At this revision:
+  136 rows (43 A, 44 B, 48 C, 1 inherited) and 36 B ids; 8 rows are marked
+  `(local)`.
 - Call journal: the two voice sessions of 2026-10-16 between 11:47 and 12:26
   UTC, read for `utterance`, `request` and `session_end` records. Read-only;
   nothing quoted.
