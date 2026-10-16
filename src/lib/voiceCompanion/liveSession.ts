@@ -24,6 +24,8 @@ import { backendUsageTokens, backendUsageUsd, BACKEND_RESPONSE_RESERVE_USD, BACK
 // every astral character as a JSON surrogate pair. Leave room for the other
 // bounded tool fields while keeping oversized responses explicit.
 const MAX_BACKEND_TOOL_ARGUMENT_SCALARS = 64_000;
+const DELIVERY_LANGUAGE = /\b(?:send|sent|sending|forward(?:ed|ing)?|pass(?:ed|ing)?|relay(?:ed|ing)?|deliver(?:ed|ing)?)\b|(?:відправ|надішл|переда|перешл|отправ|послал|передал)[\p{L}]*/iu;
+const UNSUPPORTED_DELIVERY_CLAIM = /\b(?:i|we)\s+(?:(?:have|had)\s+)?(?:sent|delivered|forwarded|passed|relayed|queued)\b|\b(?:it|the request|your request|the message)\s+(?:has|was|is)\s+(?:been\s+)?(?:sent|delivered|forwarded|passed|relayed|queued)\b|(?:я\s+)?(?:передав|надіслав|відправив|переслав|отправил|послал)(?:а|и|о)?\b/iu;
 
 function processAlive(pid: number): boolean {
   try { process.kill(pid, 0); return true; }
@@ -451,7 +453,10 @@ export class CompanionLiveSessions {
       const awaitingList = awaiting.map(request => scrub(`- ${request.handle}, project ${JSON.stringify(reportHeaderName(request.project, stored.locale))}, sent ${request.sentMinutesAgo} min ago, ${request.progressReports} progress report(s)${request.askedBack ? ", the orchestrator asked back" : ""}: ${JSON.stringify(askGist(request.instruction))}`)).join("\n").slice(-3000);
       const latestInput = (sourceTurn === undefined ? stored.inputs.slice(-1) : stored.inputs.filter(row => row.turn === sourceTurn)).map(row => row.text).join(" ");
       const latest = latestInput.slice(-2_000);
-      const explicitSendRequested = explicitDelegationRequest(latestInput).admit;
+      // Short requests and questions may refer to a recipient or an earlier
+      // request without naming the orchestrator. Delivery language still
+      // requires a current send result or a receipt read in this turn.
+      const deliveryClaimNeedsReceipt = explicitDelegationRequest(latestInput).admit || DELIVERY_LANGUAGE.test(latestInput);
       const input: BackendItem[] = [...(active.memory ? [{ role: "developer", content: active.memory }] : []), { role: "user", content: `Project currently in view: ${projectLabel}. Default reads and sends to this project; a named project overrides it.\n${active.projectDirectory}\nReads earlier in this call, newest last:\n${previousReads || "(none)"}\n\nRequests sent to the orchestrator in this call that still wait for its report:\n${awaitingList || "(none)"}\nAn ask that repeats or rephrases one of these passes its handle as pending_request. orchestrator_reports reads what came back.\n\nThe conversation so far, oldest first:\n${record || "(no transcript yet)"}${active.privateHistory ? "\nThe voice's replies since a Telegram group was read in this call are withheld from you, and so are the reads made while it was read. If the operator asks to send something the voice said since then, ask them to say in their own words what to send." : ""}\n\nThe operator's latest turn, which this delegation answers: ${latest ? JSON.stringify(scrub(latest)) : "(not transcribed yet)"}\nAct on that turn alone. Earlier turns only resolve what it refers to; never add an earlier request it does not ask to send.\n\nThe voice delegated here. Answer it with the registry tools, or write and send the task the operator explicitly asked to send.${waiting
         ? `\n\nA request to the orchestrator is waiting for the operator's answer and has not been sent: "${waiting.instruction}". When the operator has just answered it, pass that answer on with resolve_orchestrator_confirmation.` : ""}` }];
       const calls = new Set<string>();
@@ -490,7 +495,7 @@ export class CompanionLiveSessions {
           const text = output.filter(item => item.type === "message" && Array.isArray(item.content)).flatMap(item => (item.content as unknown[]).map(jsonObject))
             .filter(part => part?.type === "output_text" && typeof part.text === "string").map(part => part!.text as string).join(" ");
           const answer = text || (final ? spentRoundSpeech(tried, viewed) : "Done.");
-          const unsupportedDelivery = explicitSendRequested && facts.length === 0
+          const unsupportedDelivery = facts.length === 0 && (deliveryClaimNeedsReceipt || UNSUPPORTED_DELIVERY_CLAIM.test(answer))
             ? stored.locale === "uk" ? "Нічого не надіслано: у цьому дзвінку немає підтвердження доставки."
               : "Nothing was sent: this call has no delivery confirmation."
             : answer;

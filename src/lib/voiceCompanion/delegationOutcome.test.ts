@@ -8,11 +8,12 @@ test("non-sent results explicitly say nothing was sent without repeating an exis
   expect(nothingSent({ status: "sent", speech: "Sent." })).toEqual({ status: "sent", speech: "Sent." });
 });
 
-test("delivery facts cover every unsent status and leave fresh report reads alone", () => {
+test("delivery facts cover unsent results and treat fresh report receipts as proof of the earlier send", () => {
   for (const status of ["refused", "failed", "too_long", "check_waiting", "nothing_waiting"])
     expect(deliveryFact({ status, reason: "Unavailable." })?.speech.toLowerCase()).toContain("nothing was sent");
   expect(deliveryFact({ status: "sent", delivery: "failed" })?.kind).toBe("nothing");
-  for (const status of ["answered", "awaiting_report"]) expect(deliveryFact({ status })).toBeNull();
+  expect(deliveryFact({ status: "awaiting_report" })).toEqual({ kind: "awaiting", speech: "The request is already queued; its report is pending." });
+  expect(deliveryFact({ status: "answered" })).toEqual({ kind: "sent", speech: "The orchestrator already received this request." });
 });
 
 test("a failed last send suppresses the model's claim, a confirmation keeps its question, and success carries its state", () => {

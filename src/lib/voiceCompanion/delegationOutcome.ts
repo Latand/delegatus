@@ -64,7 +64,10 @@ const DELIVERY_SPEECH: Record<string, string> = {
 export function deliveryFact(result: Record<string, unknown>): DeliveryFact | null {
   if (result.status === "sent" && typeof result.delivery === "string" && DELIVERY_SPEECH[result.delivery])
     return { kind: "sent", speech: DELIVERY_SPEECH[result.delivery] };
-  if (result.status === "awaiting_report" || result.status === "answered") return null;
+  if (result.status === "awaiting_report")
+    return { kind: "awaiting", speech: "The request is already queued; its report is pending." };
+  if (result.status === "answered")
+    return { kind: "sent", speech: "The orchestrator already received this request." };
   if (result.status === "awaiting_confirmation") {
     const instruction = typeof result.instruction === "string" ? result.instruction : "";
     const reason = typeof result.confirmationReason === "string" ? result.confirmationReason

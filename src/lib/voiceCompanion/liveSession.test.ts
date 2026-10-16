@@ -940,6 +940,45 @@ test("an explicit send request with no tool or fresh receipt never hands a fabri
   await f.service.close(s.sessionId);
 });
 
+for (const utterance of ["Send it to him.", "Отправь ему проверить план.", "Did you send my earlier request to the orchestrator?", "What did you find?"]) {
+  test(`a delivery claim without a send or fresh receipt is suppressed for ${utterance}`, async () => {
+    const f = fixture();
+    f.provider.responder = () => backendResponse("fabricated-delivery", [message("Yes, I passed it to the orchestrator.")]);
+    const s = await f.service.start({ project: "fixture", locale: "en", sdp: "v=0" });
+    f.provider.replay(s.providerId, said(utterance, 0), delegationCreated("no-send", 500));
+    await f.service.drain(s.sessionId);
+
+    expect(f.sends()).toBe(0);
+    expect(f.admission.callReports(s.sessionId).requests).toHaveLength(0);
+    expect(f.service.transcriptRecord(s.sessionId).entries.filter(entry => entry.kind === "tool")).toHaveLength(0);
+    expect(spoken(f).at(-1)?.content).toBe("Nothing was sent: this call has no delivery confirmation.");
+    await f.service.close(s.sessionId);
+  });
+}
+
+test("a repeated request speaks its fresh awaiting-report receipt without sending again", async () => {
+  const f = fixture();
+  f.provider.responder = (request, index) => request.input.some(item => item.type === "function_call_output")
+    ? backendResponse(`repeat-answer-${index}`, [message("The request is already queued; its report is pending.")])
+    : backendResponse(`repeat-call-${index}`, [functionCall(`repeat-${index}`, "request_orchestrator_delegation", {
+      instruction: "Ask the orchestrator to review the plan.", ...(index ? { pending_request: "r1" } : {}),
+    })]);
+  const s = await f.service.start({ project: "fixture", locale: "en", sdp: "v=0" });
+  f.provider.replay(s.providerId, said("Ask the orchestrator to review the plan.", 0), delegationCreated("first", 500));
+  await f.service.drain(s.sessionId);
+  expect(f.sends()).toBe(1);
+
+  f.provider.replay(s.providerId, said("Done.", 1_000, "output"), said("Ask the orchestrator to review the plan.", 3_000), delegationCreated("repeat", 3_500));
+  await f.service.drain(s.sessionId);
+
+  const receipt = JSON.parse(String(f.provider.requests.at(-1)!.input.find(item => item.type === "function_call_output")!.output));
+  expect(receipt).toMatchObject({ status: "awaiting_report", request: "r1" });
+  expect(f.sends()).toBe(1);
+  expect(spoken(f).at(-1)?.content).toContain("The request is already queued; its report is pending.");
+  expect(spoken(f).at(-1)?.content).not.toContain("Nothing was sent");
+  await f.service.close(s.sessionId);
+});
+
 test("a restarted service closes the session it no longer owns before anything else, once, and keeps the admitted delivery", async () => {
   const f = fixture();
   const old = await f.service.start({ project: "fixture", locale: "en", sdp: "v=0", requestId: "before-restart" });
@@ -2252,7 +2291,7 @@ test("an answered question asked again is answered from its report read whole, a
   f.provider.replay(s.providerId, said("And the review?", 2_000), delegationCreated("again", 2_600));
   await f.service.drain(s.sessionId);
   const again = spoken(f).slice(before);
-  expect(again[0]).toMatchObject({ delegation_id: "again", content: "Short intro." });
+  expect(again[0]).toMatchObject({ delegation_id: "again", content: "Short intro. The orchestrator already received this request." });
   expect(again.slice(1).map(row => String(row.content).split("\n").slice(1).join("\n")).join("\n").split("\n")).toEqual(lines);
   expect(f.sends()).toBe(1);
   await f.service.close(s.sessionId);
