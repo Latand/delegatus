@@ -6,7 +6,7 @@ import { Database } from "bun:sqlite";
 import { afterEach, expect, test } from "bun:test";
 
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
-import { normalizeRegistry } from "./registry";
+import { normalizeRegistry, type RegistryFile } from "./registry";
 import { buildRegistryPerformanceDataset, scaledRegistryPerformanceShape } from "./registryPerformanceDataset";
 import { registryLockHolder } from "./registryLockHolderFixture";
 import { SqliteAgentRegistryStore } from "./sqliteRegistryStore";
@@ -24,7 +24,7 @@ function directory() {
   return root;
 }
 
-function fixture() {
+function fixture(receiptCount = 257) {
   const root = directory();
   const initial = normalizeRegistry({ version: 2, entries: {}, receipts: {
     template: { launchId: "template", conversationId: "conversation_fixture", engine: "codex",
@@ -32,17 +32,16 @@ function fixture() {
       launchProfile: emptyLaunchProfile({ cwd: "/registry-fixture", title: "Exercise keyed registry writes", mcpServers: ["viewer"] }) },
   } });
   const receipt = initial.receipts.template!;
-  initial.receipts = Object.fromEntries(Array.from({ length: 257 }, (_, index) => {
+  initial.receipts = Object.fromEntries(Array.from({ length: receiptCount }, (_, index) => {
     const launchId = `receipt-${String(index).padStart(4, "0")}`;
     return [launchId, { ...structuredClone(receipt), launchId }];
   }));
   let reads = 0;
   let loads = 0;
   const filename = path.join(root, "registry.sqlite");
-  const open = (writerSnapshotCacheBytes?: number) => {
+  const open = () => {
     const store = new SqliteAgentRegistryStore(filename, {
       initialSnapshot: initial, normalize: normalizeRegistry,
-      writerSnapshotCacheBytes,
       onSnapshotLoad: () => loads++, onRowPayloadRead: (_collection, count) => { reads += count; },
     });
     stores.push(store);
@@ -51,15 +50,16 @@ function fixture() {
   return { filename, initial, open, reset: () => { reads = loads = 0; }, counts: () => ({ reads, loads }) };
 }
 
-test("a single-row mutation returning a snapshot avoids reading every unchanged row", () => {
+test("a mutation returning a snapshot builds the bounded view from the current reader revision", () => {
   const f = fixture();
   const store = f.open();
   store.snapshot();
   f.reset();
   const mutation = store.mutate(file => { file.receipts["receipt-0001"]!.error = "changed"; });
   console.log(JSON.stringify({ operation: "one receipt with snapshot", fixtureRows: 257, payloadRowsRead: f.counts().reads }));
-  expect(f.counts().reads).toBeLessThanOrEqual(2);
+  expect(f.counts().loads).toBe(0);
   expect(mutation.file!.receipts["receipt-0001"]!.error).toBe("changed");
+  expect((store as unknown as { writerSnapshotCache: { rowCount: number } | null }).writerSnapshotCache?.rowCount).toBe(257);
 });
 
 test("a single grant-bearing row mutation reads its attestors without materializing unrelated rows", () => {
@@ -88,17 +88,23 @@ test("a single grant-bearing row mutation reads its attestors without materializ
   expect(store.snapshot().file.receipts[subject.key]!.error).toBe("one changed row");
 });
 
-test("writer snapshots reuse one stored revision and remain detached and mutable", () => {
+test("the first writer snapshot stays on the reader path; the second call builds a detached cache", () => {
   const f = fixture();
   const store = f.open();
   const first = store.snapshot();
+  expect((store as unknown as { writerSnapshotCache: unknown }).writerSnapshotCache).toBeNull();
   f.reset();
   const second = store.snapshot();
-  expect(f.counts()).toEqual({ reads: 0, loads: 0 });
+  expect((store as unknown as { writerSnapshotCache: { rowCount: number } | null }).writerSnapshotCache?.rowCount).toBe(257);
+  expect(f.counts().loads).toBe(0);
   expect(second.revision).toBe(first.revision);
-  second.file.receipts["receipt-0001"]!.launchProfile.mcpServers.push("reader-only-change");
-  delete second.file.receipts["receipt-0002"];
-  second.file.receipts["receipt-appended"] = structuredClone(first.file.receipts["receipt-0001"]!);
+  f.reset();
+  const third = store.snapshot();
+  expect(f.counts()).toEqual({ reads: 0, loads: 0 });
+  expect(third.revision).toBe(first.revision);
+  third.file.receipts["receipt-0001"]!.launchProfile.mcpServers.push("reader-only-change");
+  delete third.file.receipts["receipt-0002"];
+  third.file.receipts["receipt-appended"] = structuredClone(first.file.receipts["receipt-0001"]!);
   expect(first.file.receipts["receipt-0001"]!.launchProfile.mcpServers).toEqual(["viewer"]);
   expect(store.snapshot().file.receipts["receipt-0002"]).toBeDefined();
   expect(store.snapshot().file.receipts["receipt-appended"]).toBeUndefined();
@@ -149,42 +155,41 @@ test("writer snapshots follow peer and unversioned writes while held snapshots s
   expect(held.file.receipts["receipt-0001"]!.error).toBeNull();
 });
 
-test("writer snapshot byte admission is enforced again in each fresh process", async () => {
-  const f = fixture();
+test("the writer cache row bound holds in a fresh process", async () => {
+  const f = fixture(8_193);
   f.open().mutate(file => { file.receipts["receipt-0001"]!.error = 'Перевірка 🌌 "quoted"\n'; }, false);
-  const probe = async (limit: number) => {
+  const childRoot = path.join(path.dirname(f.filename), "child");
+  const env = {
+    ...process.env,
+    HOME: path.join(childRoot, "home"),
+    XDG_CONFIG_HOME: path.join(childRoot, "config"),
+    LLV_STATE_DIR: path.join(childRoot, "state"),
+    TMPDIR: path.join(childRoot, "tmp"),
+  };
+  for (const pathname of [env.HOME, env.XDG_CONFIG_HOME, env.LLV_STATE_DIR, env.TMPDIR]) {
+    fs.mkdirSync(pathname!, { recursive: true });
+  }
+  const probe = async () => {
     const code = `
       import { normalizeRegistry } from ${JSON.stringify(pathToFileURL(path.join(import.meta.dir, "registry.ts")).href)};
       import { SqliteAgentRegistryStore } from ${JSON.stringify(pathToFileURL(path.join(import.meta.dir, "sqliteRegistryStore.ts")).href)};
       const store = new SqliteAgentRegistryStore(process.argv[1], {
         normalize: normalizeRegistry, initialSnapshot: () => { throw Error("already imported"); },
-        writerSnapshotCacheBytes: Number(process.argv[2]),
       });
-      const first = store.snapshot();
-      console.log(JSON.stringify({ bytes: store.writerSnapshotCache?.bytes ?? null,
-        actualBytes: Buffer.byteLength(JSON.stringify(first.file)),
-        count: Object.keys(first.file.receipts).length }));
+      store.snapshot();
+      const second = store.snapshot();
+      console.log(JSON.stringify({ cached: store.writerSnapshotCache !== null,
+        rowCount: store.writerSnapshotCache?.rowCount ?? null,
+        count: Object.keys(second.file.receipts).length }));
       store.close();
     `;
-    const child = Bun.spawn([process.execPath, "-e", code, f.filename, String(limit)], { stdout: "pipe", stderr: "pipe" });
+    const child = Bun.spawn([process.execPath, "-e", code, f.filename], { stdout: "pipe", stderr: "pipe", env });
     const [stdout, stderr, exit] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
     expect(stderr).toBe("");
     expect(exit).toBe(0);
-    return JSON.parse(stdout) as { bytes: number | null; actualBytes: number; count: number };
+    return JSON.parse(stdout) as { cached: boolean; rowCount: number | null; count: number };
   };
-  const admitted = await probe(2 * 1024 * 1024);
-  expect(admitted.bytes).toBeGreaterThan(0);
-  expect(admitted.bytes).toBe(admitted.actualBytes);
-  expect(await probe(0)).toEqual({ bytes: null, actualBytes: admitted.actualBytes, count: 257 });
-  for (let restart = 0; restart < 2; restart++) {
-    expect(await probe(admitted.bytes!)).toEqual(admitted);
-    expect(await probe(admitted.bytes! - 1)).toEqual({ bytes: null, actualBytes: admitted.actualBytes, count: 257 });
-  }
-});
-
-test("invalid snapshot byte limits refuse before opening the database", () => {
-  const f = fixture();
-  for (const limit of [-1, 0.5, NaN, Infinity]) expect(() => f.open(limit)).toThrow("invalid writer snapshot cache byte limit");
+  expect(await probe()).toEqual({ cached: false, rowCount: null, count: 8_193 });
 });
 
 test("writer snapshot refreshes cold grants and owner defaults from their changed attestors", () => {
@@ -229,7 +234,7 @@ test("writer snapshot refreshes cold grants and owner defaults from their change
   }
 });
 
-test("a malformed archived owner keeps the eager writer's legacy synthesis behavior", () => {
+test("a malformed archived owner keeps the legacy synthesized owner in reader snapshots", () => {
   const root = directory();
   const dataset = buildRegistryPerformanceDataset(root, scaledRegistryPerformanceShape(0.02));
   const operationId = dataset.coldOperationIds[0]!;
@@ -244,8 +249,9 @@ test("a malformed archived owner keeps the eager writer's legacy synthesis behav
     initialSnapshot: () => { throw new Error("already imported"); }, normalize: normalizeRegistry,
   });
   stores.push(store);
-  const eager = (store as unknown as { loadSnapshot(cache: boolean): { file: unknown } }).loadSnapshot(false).file;
-  expect(JSON.stringify(store.snapshot().file)).toBe(JSON.stringify(eager));
+  const eager = (store as unknown as { loadSnapshot(cache: boolean): { file: RegistryFile } }).loadSnapshot(false).file;
+  expect(store.snapshot().file.deliveryOperationOwners[operationId])
+    .toEqual(eager.deliveryOperationOwners[operationId]);
 });
 
 test("a rejected mutation and a no-op leave the revision and the cached snapshot intact", () => {

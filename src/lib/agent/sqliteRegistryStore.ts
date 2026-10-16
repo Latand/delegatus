@@ -26,7 +26,7 @@ const GRANT_COLLECTIONS = new Set(["entries", "receipts", "conversations", "line
 const SNAPSHOT_SPAWN_ALIAS_LIMIT = 64;
 const SNAPSHOT_TITLE_CONVERSATION_LIMIT = 2_000;
 const SNAPSHOT_TITLE_OWNED_PATH_LIMIT = 128;
-const WRITER_SNAPSHOT_CACHE_BYTES = 256 * 1024 * 1024;
+const WRITER_SNAPSHOT_CACHE_ROW_LIMIT = 8_192;
 
 /** Archive storage retains each current row in registry_rows for older
     readers. Selecting its keys here avoids sorting every candidate through
@@ -572,6 +572,13 @@ export interface SqliteRegistryMutation<T> {
   revision: number;
 }
 
+export interface RegistryDeliveryCompactionChanges {
+  changeId: number;
+  full: boolean;
+  deliveryIds: string[];
+  ownerOperationIds: string[];
+}
+
 export class RegistryMutationRetryLimitError extends Error {
   override name = "RegistryMutationRetryLimitError";
   constructor(readonly operationName: string, readonly attempts: number) {
@@ -580,9 +587,6 @@ export class RegistryMutationRetryLimitError extends Error {
 }
 
 export interface SqliteRegistryStoreOptions {
-  /** Maximum normalized JSON bytes retained by the writer snapshot owner.
-      An oversized view is returned without retaining it. */
-  writerSnapshotCacheBytes?: number;
   /** MCP readers can use an older schema until its serving owner migrates it. */
   allowArchiveMigration?: boolean;
   /** The legacy registry to import on first boot. A loader is called only
@@ -647,24 +651,20 @@ export type DecidedRegistryFile = RegistryFile & { readonly [DECIDED]: true };
 
 type StampedSnapshot = SqliteRegistrySnapshot & { stamp: string };
 
-interface WriterSnapshotRow {
-  token: unknown;
-  grants: unknown;
-  delivery: unknown;
-  value: unknown;
-  bytes: number;
-}
-
 /** Mutable snapshots own their changes. Accessors defer copying a row until
     the caller reads it; JSON serialization and structuredClone still read a
-    complete, ordinary object. The source contains pinned values, never a
-    database accessor, so a held snapshot also survives a closed/replaced DB. */
+    complete, ordinary object. Cold rows remain pinned to the reader view that
+    created the snapshot. */
 function detachedWriterSnapshot(source: RegistryFile): RegistryFile {
-  const detached = { ...source };
-  for (const field of META_FIELDS) Object.defineProperty(detached, field, {
-    enumerable: true, configurable: true, writable: true, value: structuredClone(source[field]),
-  });
-  for (const collection of ROW_COLLECTIONS) {
+  const detached = {} as RegistryFile;
+  for (const field of Object.keys(source) as Array<keyof RegistryFile>) {
+    if (!ROW_COLLECTION_KEYS.has(field)) {
+      Object.defineProperty(detached, field, {
+        enumerable: true, configurable: true, writable: true, value: structuredClone(source[field]),
+      });
+      continue;
+    }
+    const collection = field as RowCollection;
     const install = (value: unknown) => Object.defineProperty(detached, collection, {
       enumerable: true, configurable: true, writable: true, value,
     });
@@ -692,6 +692,29 @@ function detachedWriterSnapshot(source: RegistryFile): RegistryFile {
     });
   }
   return detached;
+}
+
+/** Keep hot normalized rows in the writer owner. A cold property remains a
+    reader-view accessor, so it is parsed only when the writer asks for it. */
+function mergedWriterRows(
+  hot: Record<string, unknown>,
+  merged: Record<string, unknown>,
+): Record<string, unknown> {
+  return new Proxy(hot, {
+    get: (target, property, receiver) => Object.hasOwn(target, property)
+      ? Reflect.get(target, property, receiver)
+      : Reflect.get(merged, property, merged),
+    set: (target, property, value) => Reflect.set(target, property, value),
+    deleteProperty: (target, property) => Reflect.deleteProperty(target, property),
+    has: (target, property) => Reflect.has(target, property) || Reflect.has(merged, property),
+    ownKeys: () => Reflect.ownKeys(merged),
+    getOwnPropertyDescriptor: (target, property) => {
+      const hotDescriptor = Reflect.getOwnPropertyDescriptor(target, property);
+      if (hotDescriptor) return hotDescriptor;
+      const coldDescriptor = Reflect.getOwnPropertyDescriptor(merged, property);
+      return coldDescriptor ? { ...coldDescriptor, configurable: true } : undefined;
+    },
+  });
 }
 
 interface LazyRegistrySnapshot extends SqliteRegistrySnapshot {
@@ -779,9 +802,11 @@ export class SqliteAgentRegistryStore {
       archive versions and grant/dependency tokens permit keyed refreshes.
       Callers own detached copies and cannot change this source. */
   private writerSnapshotCache: {
-    source: RegistryFile; revision: number; view: RegistryFile; bytes: number;
-    rows: Map<RowCollection, Map<string, WriterSnapshotRow>>;
+    source: RegistryFile; revision: number; stamp: string; view: RegistryFile; rowCount: number;
   } | null = null;
+  /** Leave the first call on the existing reader path; later calls may build
+      the bounded writer view even when another writer advances revision. */
+  private writerSnapshotStarted = false;
   private snapshotChangeId = 0;
   private readOnlyHotFile: RegistryFile | null = null;
   private readonly coldReaderRows = new Map<number, { stamp: string; row: unknown }>();
@@ -889,8 +914,6 @@ export class SqliteAgentRegistryStore {
   }
 
   constructor(readonly filename: string, private readonly options: SqliteRegistryStoreOptions) {
-    const snapshotLimit = options.writerSnapshotCacheBytes ?? WRITER_SNAPSHOT_CACHE_BYTES;
-    if (!Number.isSafeInteger(snapshotLimit) || snapshotLimit < 0) throw new RangeError("invalid writer snapshot cache byte limit");
     fs.mkdirSync(path.dirname(filename), { recursive: true, mode: 0o700 });
     const sqlite = process.getBuiltinModule?.("bun:sqlite") as typeof import("bun:sqlite") | undefined;
     if (!sqlite) throw new Error("SQLite registry modes require the Bun runtime");
@@ -1207,6 +1230,7 @@ export class SqliteAgentRegistryStore {
   close(): void {
     this.closed = true;
     this.writerSnapshotCache = null;
+    this.writerSnapshotStarted = false;
     this.preparedReader?.close();
     this.db.close();
   }
@@ -1218,6 +1242,7 @@ export class SqliteAgentRegistryStore {
     this.revisionCache = null;
     this.readOnlyCache = null;
     this.writerSnapshotCache = null;
+    this.writerSnapshotStarted = false;
     this.readOnlyHotFile = null;
     this.coldReaderRows.clear();
     this.coldStableRows.clear();
@@ -1248,59 +1273,48 @@ export class SqliteAgentRegistryStore {
     // Preparation transfers ownership to its read connection; keep one cache.
     if (this.preparedReader) return this.preparedReader.snapshot();
     return performanceSpans.sync("registry.writer-snapshot", () => {
-      const { file: view, revision } = this.readOnlySnapshot();
       const previous = this.writerSnapshotCache;
-      if (previous?.view === view && previous.revision === revision) {
-        return { file: detachedWriterSnapshot(previous.source), revision };
+      if (previous) {
+        const { file: view, revision } = this.readOnlySnapshot();
+        const stamp = this.readOnlyCache!.stamp;
+        if (previous.view === view && previous.revision === revision && previous.stamp === stamp) {
+          return { file: detachedWriterSnapshot(previous.source), revision };
+        }
+        this.writerSnapshotCache = null;
       }
+
+      const { file: view, revision } = this.readOnlySnapshot();
+      const stamp = this.readOnlyCache!.stamp;
+      if (!this.writerSnapshotStarted) {
+        this.writerSnapshotStarted = true;
+        return { file: detachedWriterSnapshot(view), revision };
+      }
+
+      const collections = new Map<RowCollection, { rows: Record<string, unknown>; hotKeys: string[] }>();
+      let rowCount = 0;
+      for (const collection of ROW_COLLECTIONS) {
+        const rows = view[collection] as Record<string, unknown>;
+        const cold = this.coldViewCache?.coldKeys.get(collection);
+        const hotKeys = Object.keys(rows).filter(key => !cold?.has(key));
+        rowCount += hotKeys.length;
+        collections.set(collection, { rows, hotKeys });
+      }
+      if (rowCount > WRITER_SNAPSHOT_CACHE_ROW_LIMIT) {
+        return { file: detachedWriterSnapshot(view), revision };
+      }
+
       const source = this.normalizePartial({ version: 2, entries: {}, receipts: {} });
-      const rows = new Map<RowCollection, Map<string, WriterSnapshotRow>>();
-      let bytes = Buffer.byteLength(JSON.stringify({ version: 2 }));
-      const token = (collection: RowCollection, key: string): unknown =>
-        this.coldViewCache?.coldIds.get(collection)?.get(key)
-          ?? (view[collection] as Record<string, unknown>)[key];
       for (const field of META_FIELDS) {
         (source as unknown as Record<string, unknown>)[field] = view[field];
-        bytes += Buffer.byteLength(JSON.stringify(field)) + 2 + Buffer.byteLength(JSON.stringify(view[field]));
       }
       for (const collection of ROW_COLLECTIONS) {
-        const values: Record<string, unknown> = {};
-        const kept = new Map<string, WriterSnapshotRow>();
-        const keys = Object.keys(view[collection]);
-        bytes += Buffer.byteLength(JSON.stringify(collection)) + 4 + Math.max(0, keys.length - 1);
-        for (const key of keys) {
-          const identity = token(collection, key);
-          const archived = this.coldViewCache?.coldIds.get(collection)?.get(key);
-          const grants = archived === undefined ? undefined : this.coldGrantDecisions.get(archived)?.lists;
-          const old = previous?.rows.get(collection)?.get(key);
-          const deliveryId = collection === "deliveryOperationOwners"
-            ? (old?.value as { deliveryId?: string } | undefined)?.deliveryId : undefined;
-          const delivery = deliveryId ? token("heldDeliveries", deliveryId) : undefined;
-          let row: WriterSnapshotRow;
-          if (old && old.token === identity && old.grants === grants && old.delivery === delivery) row = old;
-          else {
-            const value = (view[collection] as Record<string, unknown>)[key];
-            // A malformed archived owner can normalize away in the reader.
-            // The eager writer also synthesizes legacy owners from deliveries.
-            if (value === undefined) {
-              this.writerSnapshotCache = null;
-              const { file, revision } = this.loadSnapshot(false);
-              return { file, revision };
-            }
-            const linkedId = collection === "deliveryOperationOwners" ? (value as { deliveryId?: string }).deliveryId : undefined;
-            row = { token: identity, grants, delivery: linkedId ? token("heldDeliveries", linkedId) : undefined,
-              value, bytes: Buffer.byteLength(JSON.stringify(value)) + Buffer.byteLength(JSON.stringify(key)) + 1 };
-          }
-          values[key] = row.value;
-          kept.set(key, row);
-          bytes += row.bytes;
-        }
-        (source as unknown as Record<string, unknown>)[collection] = Object.freeze(values);
-        rows.set(collection, kept);
+        const { rows, hotKeys } = collections.get(collection)!;
+        const hot: Record<string, unknown> = {};
+        for (const key of hotKeys) hot[key] = rows[key];
+        (source as unknown as Record<string, unknown>)[collection] = mergedWriterRows(hot, rows);
       }
       Object.freeze(source);
-      this.writerSnapshotCache = bytes <= (this.options.writerSnapshotCacheBytes ?? WRITER_SNAPSHOT_CACHE_BYTES)
-        ? { source, revision, view, rows, bytes } : null;
+      this.writerSnapshotCache = { source, revision, stamp, view, rowCount };
       return { file: detachedWriterSnapshot(source), revision };
     });
   }
@@ -1397,6 +1411,7 @@ export class SqliteAgentRegistryStore {
             const current = reader.readOnlySnapshot();
             this.readOnlyCache = null;
             this.writerSnapshotCache = null;
+            this.writerSnapshotStarted = false;
             this.readOnlyHotFile = null;
             this.coldViewCache = null;
             this.readerViews.clear();
@@ -1455,6 +1470,38 @@ export class SqliteAgentRegistryStore {
 
   private changeId(): number {
     return this.changesReady ? this.db.query<{ seq: number }, []>("SELECT COALESCE(MAX(seq),0) AS seq FROM registry_changes").get()!.seq : 0;
+  }
+
+  /** A monotone cursor for delivery compaction; unrelated registry rows do not
+      make the expensive pass run again. */
+  deliveryCompactionChangeId(): number {
+    return this.changesReady
+      ? this.db.query<{ seq: number }, []>(`SELECT COALESCE(MAX(seq),0) AS seq FROM registry_changes
+          WHERE collection IN ('heldDeliveries','deliveryOperationOwners','conversationAliases')`).get()!.seq
+      : this.revision();
+  }
+
+  /** Changed delivery and owner keys since the last pass. A trimmed journal or
+      alias change makes the caller reconcile the complete owner set. */
+  deliveryCompactionChangesSince(since: number | null): RegistryDeliveryCompactionChanges {
+    if (!this.changesReady) return { changeId: this.revision(), full: true, deliveryIds: [], ownerOperationIds: [] };
+    const changeId = this.deliveryCompactionChangeId();
+    const first = this.db.query<{ seq: number }, []>("SELECT COALESCE(MIN(seq),0) AS seq FROM registry_changes").get()!.seq;
+    if (since === null || changeId < since || (first > 0 && since < first - 1)) {
+      return { changeId, full: true, deliveryIds: [], ownerOperationIds: [] };
+    }
+    const changes = this.db.query<{ collection: string; row_key: string }, [number]>(
+      "SELECT DISTINCT collection,row_key FROM registry_changes WHERE seq>? AND collection IN ('heldDeliveries','deliveryOperationOwners','conversationAliases')",
+    ).all(since);
+    if (changes.some(change => change.collection === "conversationAliases")) {
+      return { changeId, full: true, deliveryIds: [], ownerOperationIds: [] };
+    }
+    return {
+      changeId,
+      full: false,
+      deliveryIds: changes.filter(change => change.collection === "heldDeliveries").map(change => change.row_key),
+      ownerOperationIds: changes.filter(change => change.collection === "deliveryOperationOwners").map(change => change.row_key),
+    };
   }
 
   private refreshColdKeys(): void {
@@ -2019,6 +2066,15 @@ export class SqliteAgentRegistryStore {
       const normalized = this.normalizePartial({ version: 2,entries: {},receipts: {},[collection]: { [key]: value },
         ...(delivery ? { heldDeliveries: { [delivery.id]: delivery } } : {}) });
       let row = (normalized[collection] as Record<string, unknown>)[key];
+      if (row === undefined && collection === "deliveryOperationOwners" && deliveries) {
+        // The complete loader also synthesizes an owner from its delivery
+        // when an archived legacy owner is malformed. Keep that behavior for
+        // a lazy archived read, using the delivery set pinned by this view.
+        const matching = Object.values(deliveries.read()).find(candidate => candidate.command.operationId === key);
+        if (matching) row = this.normalizePartial({ version: 2,entries: {},receipts: {},
+          heldDeliveries: { [matching.id]: matching },
+        }).deliveryOperationOwners[key];
+      }
       if (pinnedGrants) {
         const candidate = row as GrantProfileRow;
         const profiles = collection === "conversations" ? (candidate.generations ?? []).map(generation => generation.launchProfile) : [candidate.launchProfile];
@@ -2199,6 +2255,8 @@ export class SqliteAgentRegistryStore {
       const deliveries = collection === "deliveryOperationOwners" ? hotDeliveries : undefined;
       const reusable = previous && sameRows(previous.hot,hot) && previous.synthetic === synthetic
         && (!deliveries || sameRows(previous.deliveries,deliveries))
+        && (collection !== "deliveryOperationOwners"
+          || source?.coldSignatures.get("heldDeliveries") === coldSignatures.get("heldDeliveries"))
         && (!READER_GRANT_COLLECTIONS.has(collection) || source!.forgets === this.coldGrantForgets);
       if (reusable) {
         Object.defineProperty(file,collection,{ enumerable: true,configurable: false,get: previous.built });

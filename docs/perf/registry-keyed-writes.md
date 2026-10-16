@@ -1,220 +1,150 @@
-# Registry writes and cached writer snapshots
+# Keyed registry writes, snapshots and compaction
 
-Repeated writer snapshots avoid rereading retained registry payloads. On the
-fixed production copy below, a keyed write returning a snapshot reads one
-payload row, with median wall time falling from 982.543 ms to 53.071 ms.
+This change addresses the archived-owner freshness defect and the registry
+workload measured for PR #2958. It keeps the write transaction, revision,
+ordering, durability and lock fences intact.
 
-## Cause on main
+## Changes
 
-The control is `917189ae562def76980341620987479ab2813cfc`, fetched from main
-before implementation. Main later advanced to the hook-isolation fix
-`e7507d58863450a1f45b1a93d2b27a059ca13c6e`; that update was merged without
-rebasing before the PR opened. All four measured source hashes remain identical.
+An archived operation-owner accessor is reused only while the cold delivery
+signature it depends on remains the same. When a delivery changes and is
+archived again, a current snapshot rebuilds that owner against the delivery
+pinned by the current reader. A snapshot already held by a caller keeps its old
+delivery and owner values. The writer and prepared-reader paths share this
+behavior.
 
-- `src/lib/agent/sqliteRegistryStore.ts:2839` calls `loadLazyInTransaction`
-  at line 2855; the lazy loader starts at line 3125. Ordinary keyed mutations
-  already use dirty-row persistence. The existing keyed-write test in
-  `src/lib/agent/registry.sqlite.test.ts` also proves that behavior.
-- `snapshot()` at lines 1185–1187 always calls `loadSnapshot(false)`. Its
-  complete loader at lines 3112–3121 materializes every collection. A mutation
-  requesting its returned snapshot reaches this path at lines 2918–2920.
-- The scoped grant decision at line 3216 requires a nonempty cold-key map.
-  Without that map, a keyed granted-row write falls back to an assembled
-  decision over unrelated rows.
-- Replacement change tracking at line 3573 overwrites the computed delta with
-  all current keys and `Object.keys(baseline)`. The baseline is a Map, so this
-  also loses deleted keys.
+The writer snapshot cache is built on the second call. The first call follows
+the existing reader path. The cache retains at most 8,192 hot rows; cold rows
+remain behind `mergedArchiveReader`. One store owns one cache. A changed
+revision, changed storage stamp or database replacement refreshes or clears it.
+If the hot-row count exceeds the bound, the store returns a detached snapshot
+without retaining a writer cache.
 
-The earlier research generalized the bulk-compaction cost to every mutation.
-The ordinary keyed-write control below already reads one payload row on main.
-The reproducible failures are returned snapshots, repeated writer snapshots,
-the grant decision without cold markers, and collection replacements.
+Global delivery compaction tracks changes in `heldDeliveries`,
+`deliveryOperationOwners` and `conversationAliases`. A collection and sequence
+index supports the cursor. A delivery or owner change selects only the
+associated conversation rows through the existing registry index; an unchanged
+cursor skips the mutation. The first pass, a trimmed journal, an alias change
+and a due retention expiry keep the full reconciliation path. Compaction
+semantics, retention order and fences remain unchanged.
 
-## Red and green checks
+Production `sqlite` writes call `mutate(..., false)` at
+`src/lib/agent/registry.ts:5377`. The writer-snapshot measurements quantify
+the snapshot API and its other callers; the compaction measurements cover the
+production tick path.
 
-`bun test src/lib/agent/sqliteRegistryStore.keyedWrites.test.ts` ran against
-an export of the control before source changes. A single-row mutation returning
-its snapshot read **258 payloads for 257 stored rows**. A second unchanged
-writer snapshot read all 257 again. A single granted receipt edit without cold
-markers read 817 payloads in a 1,072-row fixture. Replacement also left its
-removed row behind.
+## Before and after
 
-The corresponding final counts are **1**, **0**, and **4**. A trigger recording
-payload UPDATEs proves that a replacement writes only its changed receipt,
-removes its deleted receipt, and preserves row order. Additional checks cover
-rollback, no-op writes, peer writes with and without a revision increment,
-cold grant revocation/restoration, owner defaults, malformed archived owners,
-detached snapshots after
-close, numeric watchdog attribution, and asynchronous admission beside a
-separate process holding the writer lock.
+Measurements used the same offline SQLite copy for all six processes: 46,909
+rows, 164,805,759 stored JSON bytes, 46,268 cold rows, revision 405906. Bun
+1.4.0 ran the current main export at `02f9301fc323` and the reviewed candidate
+in the alternating order `main-1, candidate-1, main-2, candidate-2, main-3,
+candidate-3`, under one `scripts/gate-slot.sh` admission. Each process used
+private HOME, XDG_CONFIG_HOME, LLV_STATE_DIR and TMPDIR. The identical driver
+ran five workloads from fresh copies, with three writer operations per
+workload, and performed three unchanged compaction ticks plus three ticks
+after one new delivery per conversation. Each workload forced GC before
+sampling.
 
-The cache limit is checked in fresh Bun processes at the exact serialized UTF-8
-byte limit, one byte below it, and zero, including escaped and multibyte text.
-An eager load through the original loader remains the independent JSON and
-ordering oracle for the new writer view.
+The first-snapshot row reports the median of the three first calls in the
+`writer-snapshot` workload. Startup includes opening the store. Peak heap is
+the maximum sampled `process.memoryUsage().heapUsed` over all five workloads
+and all three runs. MB is decimal. Reads are Linux `/proc/self/io` rchar,
+including cached reads and measurement overhead.
 
-## Implementation
+| Measure | Main | Candidate |
+| --- | ---: | ---: |
+| Store open, ms | 265.205 | 286.079 |
+| Store open plus first snapshot, ms | 3,054.783 | 916.807 |
+| First snapshot, ms | 2,792.847 | 614.405 |
+| First snapshot read MB | 908.110 | 683.708 |
+| First snapshot payload rows | 46,909 | 719 |
+| Subsequent writer snapshot operation p50, ms | 3,203.087 | 23.972 |
+| Single keyed write p50, ms | 8.720 | 13.995 |
+| Single keyed write read MB | 0.000559 | 0.014408 |
+| Keyed write with snapshot p50, ms | 3,399.763 | 108.672 |
+| Keyed write with snapshot read MB | 908.536 | 0.389 |
+| Full JSON serialization p50, ms | 4,083.772 | 10,794.511 |
+| Full JSON serialization read MB | 908.200 | 247.754 |
+| Maximum sampled JS heap across all five workloads, MB | 1,168.531 | 637.700 |
 
-The store retains one current writer source, bounded to **256 MiB of complete
-normalized JSON**, including keys, separators and metadata. An oversized source
-is returned without retaining it. A replaced database and close clear the
-cache; cooperative preparation transfers its owner to the prepared reader.
-The process-wide registry singleton owns the production store, including across
-compiled Next server bundles.
+Each paired candidate run had lower store-open-plus-first-snapshot time,
+first-snapshot time and sampled peak heap than its main run. This copy had 641
+hot rows; cold rows stayed lazy. The full JSON serialization workload was
+slower on the candidate (10.795 s versus 4.084 s median) while reading fewer
+bytes. Production SQLite writes call `mutate(..., false)`, so this serialization
+path and the writer snapshot API are not used by the production write path.
+The one-row keyed write was 5.3 ms slower at the median, with about 14 KB of
+read traffic instead of 559 bytes; its payload-row count remained one.
 
-The immutable reader already validates revision and store stamp, including
-unversioned peer writes. The writer source follows that validated view. It
-reuses unchanged row values by hot-row identity or immutable archive version,
-pinned grant lists, and the referenced delivery's version for operation owners.
-Callers receive independent mutable objects; row copying happens when they read
-a returned row. JSON serialization and structuredClone still produce the
-complete snapshot. Every returned snapshot pins values independently of the
-database and remains usable after close or file replacement.
+### Delivery compaction per tick
 
-Grant-bearing mutations use the existing scoped decision in both storage
-layouts. Transaction-local attestors, grant fences, optimistic retries, writer
-admission and commit ordering keep their existing paths. Collection replacement
-keeps the computed payload delta and persists the requested order separately.
-When a malformed archived row normalizes away, the writer uses its original
-eager loader to preserve legacy owner synthesis. There is no schema change.
-`registry.writer-snapshot` is registered in the
-static performance site table so the watchdog can attribute this work.
+Each value is the median of the three run-level medians. The initial pass is a
+full reconciliation. The unchanged and one-change rows use three ticks per
+run. The sampled heap-growth column is the peak live JavaScriptCore heap growth
+over the pre-operation `heapSize` baseline. It records concurrent heap
+pressure at sample points; cumulative object allocations remain unmeasured.
 
-## Method and load
-
-One read-only SQLite backup of production supplied all samples. The backup
-contains **46,527 rows**, **162,774,508 stored JSON bytes**, **45,952 cold-marked
-rows**, at registry revision **402086**. Its SHA-256 is recorded in
-[evidence/registry-keyed-writes.json](../../evidence/registry-keyed-writes.json).
-No production process was profiled or snapshotted.
-
-Each workload starts from a fresh copy of that same backup. Before and after
-run in separate Bun 1.4.0 processes with private HOME, XDG_CONFIG_HOME,
-LLV_STATE_DIR and TMPDIR. One `scripts/gate-slot.sh` admission contains the
-sequential process sequence **before, after, after, before, before, after**.
-The gate's CPU quota applies to the whole sequence. Source hashes in every
-report identify the measured store, registry, performance sites and driver.
-
-The reusable driver is `scripts/registry-write-benchmark.ts`. Each process runs
-five workloads. Each workload warms one writer snapshot, forces GC once before
-timing, then performs 12 operations with 25 ms before and 15 ms after each.
-The bulk control performs two operations. Keyed writes edit the first receipt
-in persisted order through `withWriter` and `mutate`; their iteration values are
-identical between variants. Snapshot reads return the object; the separate JSON
-workload consumes every row. The bulk control runs the real public
-`deliveryWrite(compactDeliveryReservations)` with logical time frozen at
-`2026-10-16T08:00:00.000Z`; it opens a fresh AgentRegistry alongside the warmed
-store and includes constructor work.
-
-Read bytes are deltas of Linux `/proc/self/io` rchar, including SQLite reads
-served from the OS cache and the small measurement reads. Payload counts come
-from the store's existing observers. Wall time uses performance.now. Observed
-peak heap uses Bun's process.memoryUsage().heapUsed after operations, at batch
-reads, and every 2,048 parsed rows. Peaks between samples can be missed. The
-10 ms independent timer measures excess delay; the real Viewer loop monitor
-also runs and records its gaps above 500 ms. This exercises the Viewer's registry
-executor and monitor in isolation. Browser and whole-application traffic are
-outside this load.
-
-A run from either source export uses the same driver copied from this change:
-
-```sh
-mkdir -p "$RUN/home" "$RUN/config" "$RUN/state" "$RUN/tmp"
-HOME="$RUN/home" XDG_CONFIG_HOME="$RUN/config" \
-  LLV_STATE_DIR="$RUN/state" TMPDIR="$RUN/tmp" \
-  bash scripts/gate-slot.sh bun scripts/registry-write-benchmark.ts \
-  "$OFFLINE_REGISTRY" "$RUN/result.json" "$LABEL" 12
-```
-
-`RUN` is a fresh directory under the stage's owned scratch root and
-`OFFLINE_REGISTRY` is the immutable offline backup. Never supply a live database.
-
-## Measured before and after
-
-Wall time, bytes and payload rows are medians of all operations across three
-runs per variant. Heap is the largest observed sample across those runs.
-MB uses 1,000,000 bytes; MiB uses 1,048,576 bytes. Arrows show before → after.
-
-| Workload | Payload rows/op | Read MB/op | Wall ms/op | Observed peak heap MiB |
+| Tick | Wall ms | Read MB | Payload rows | Sampled heap growth MB |
 | --- | ---: | ---: | ---: | ---: |
-| Keyed write, no returned snapshot | 1 → 1 | 0.000137 → 0.000168 | 4.387 → 3.959 | 12.2 → 340.1 |
-| Unchanged writer snapshot | 46,527 → 0 | 906.698565 → 0.000132 | 982.409 → 0.387 | 884.1 → 477.0 |
-| Writer snapshot plus full JSON | 46,527 → 0 | 906.705156 → 0.031525 | 1429.534 → 1171.631 | 736.8 → 609.3 |
-| Keyed write plus returned snapshot | 46,528 → 1 | 907.020523 → 0.001868 | 982.543 → 53.071 | 888.5 → 503.5 |
-| Bulk compaction control | 20,765 → 20,765 | 551.641604 → 551.641532 | 1543.640 → 1508.970 | 704.8 → 739.5 |
+| Initial full reconciliation, main | 2,560.473 | 546.922 | 20,940 | 351.896 |
+| Initial full reconciliation, candidate | 2,281.512 | 546.954 | 20,940 | 378.117 |
+| No relevant changes, main | 3,571.473 | 547.172 | 20,940 | 235.408 |
+| No relevant changes, candidate | 42.668 | 0.002145 | 0 | 0 |
+| One changed conversation, main | 3,452.429 | 547.255 | 20,946 | 388.485 |
+| One changed conversation, candidate | 63.996 | 0.071777 | 8 | 0.000472 |
 
-The compaction payload-count median is 20,765: each pair reads 20,766 then
-20,764 payloads. Its read volume is unchanged. The ordinary keyed-write workload retains its original single-row behavior.
-Its observed heap sample rises from 12.2 MiB to 340.1 MiB after warming the
-writer cache; the table records its operation times separately.
+The candidate's initial full pass read and decoded the same rows as main; its
+sampled heap-growth proxy rose by 26.2 MB while median wall time fell by 279 ms.
+The steady ticks avoid the whole-history owner walk: unchanged ticks read no
+row payloads, and one-conversation ticks read eight in this workload.
 
-Timer quantiles below are the medians of each run's quantiles. Maximum is the
-largest delay in any of the three runs. All values are milliseconds.
+| Loop-gap measure during compaction load | Main | Candidate |
+| --- | ---: | ---: |
+| Independent 10 ms timer p50 gap, ms | 1.186 | 0.103 |
+| Independent 10 ms timer p95 gap, ms | 3,898.787 | 415.262 |
+| Independent 10 ms timer p99 gap, ms | 5,486.571 | 2,300.223 |
+| Viewer monitor gaps above 500 ms, median count | 7 | 1 |
+| Viewer monitor p95 gap, ms | 5,485 | 2,300 |
+| Viewer monitor p99 gap, ms | 5,485 | 2,300 |
 
-| Workload | Gap p50 | Gap p95 | Gap p99 | Gap max |
-| --- | ---: | ---: | ---: | ---: |
-| Keyed write, no returned snapshot | 0.080 → 0.082 | 5.017 → 4.678 | 5.348 → 5.904 | 12.493 → 6.543 |
-| Unchanged writer snapshot | 0.125 → 0.079 | 1099.674 → 0.860 | 1161.455 → 2.382 | 1204.420 → 6.329 |
-| Writer snapshot plus full JSON | 0.172 → 0.372 | 1629.491 → 1199.953 | 1986.853 → 1620.902 | 2049.748 → 1722.253 |
-| Keyed write plus returned snapshot | 0.368 → 0.097 | 1149.830 → 55.592 | 1341.867 → 221.495 | 1519.546 → 365.870 |
-| Bulk compaction control | 6.231 → 1.051 | 1572.853 → 1567.645 | 1572.853 → 1567.645 | 1794.560 → 1692.736 |
+The timer p95/p99 and Viewer monitor distributions include the initial full
+pass, which remains the largest candidate gap. The allocation column above is
+sampled live heap growth, not cumulative allocation volume.
 
-The first writer source is more expensive: in the unchanged-snapshot workload,
-its cold median rises from **1,215.643 ms / 906.686 MB** to
-**2,709.075 ms / 932.292 MB**. Warm reuse pays that initial cost back. Full JSON
-serialization still traverses and copies every row, with a 1,171.631 ms median
-and a 1,722.253 ms maximum timer gap in the candidate. Bulk compaction retains
-its whole-candidate scan. These measurements establish the snapshot and keyed
-write behavior above; they do not establish a production-wide CPU reduction.
-Cold-row retirement, MCP process placement and remaining synchronous callers
-remain separate work.
+## Driver and verification evidence
 
-Raw final samples, completion timestamps, individual operations, source hashes,
-pilot samples and failed/partial experiment records are in the evidence JSON.
-An initial run exposed the missing watchdog site; a later in-parse JSC heap
-census was cancelled because the census itself dominated the control. Both are
-excluded from the final table. The final six runs use the lightweight counter
-and identical instrumentation.
+The reusable driver is
+[`scripts/registry-write-benchmark.ts`](../../scripts/registry-write-benchmark.ts).
+The six raw reports, load description, input digest, source hashes and derived
+medians are in
+[`evidence/registry-keyed-writes-review-rerun.json`](../../evidence/registry-keyed-writes-review-rerun.json).
+The database was an offline copy; no live process or state was profiled or
+snapshotted.
 
-## Shared hunks and coordination
+Focused checks cover delivery re-archive with and without a prepared reader,
+held snapshot values, lazy hot/cold writer snapshots and the row-count bound,
+keyed replacement behavior, and compaction's one-conversation reads, no-op
+skip, expiry wake and cursor rebuild after a real process restart. The related
+registry SQLite and registry test files exercise the burn-in checkpoint,
+ordering, revision and fence paths.
 
-[PR #2930](https://github.com/Latand/delegatus/pull/2930), at its checked
-candidate `97c1a8bc`, changes MCP bindings, the task executor and server
-initialization. It changes neither `registry.ts` nor `sqliteRegistryStore.ts`.
-This change preserves the mutate, withWriter, snapshot and readOnlySnapshot
-signatures. The additional cache-limit option is internal to store construction
-and defaults at its existing producer. Its performance site is appended to the
-static table; the MCP lane's operation taxonomy is in viewerLoopMonitor.ts.
-**Shared hunks: none at the checked revisions.**
+PR #2930 was checked at head `8f2f1e1f`; its files were MCP bindings, the task
+executor and server initialization. It touched neither `registry.ts` nor
+`sqliteRegistryStore.ts`; its `viewerLoopMonitor.ts` operation label is outside
+this patch's diff. Shared hunks were absent. This change keeps the existing
+mutation, writer admission, snapshot and reader interfaces.
 
-The idle-worker lane keeps registry interfaces and both registry source files
-unchanged. The form-answer and hook-guard branches had no registry changes when
-checked. Their executors, controller scheduling, form delivery and hook setup
-are outside this diff.
+The branch incorporates the clean advance of `origin/main` to
+`02f9301f`. PR #2957's `prototype.delivery` and PR #2963's
+`controller.account-migration` labels in `viewerLoopMonitor.ts` are part of
+that base. This patch leaves the monitor unchanged and includes its source
+hash in the repeated measurement. Open PR #2926 adds structured-host
+signal-domain fields in `registry.ts` and startup triggers in
+`sqliteRegistryStore.ts`; its hunks are separate from the delivery compaction,
+owner-reader and writer-cache changes here. Open PR #2962 adds another
+ViewerOperation label in `viewerLoopMonitor.ts`, which this patch leaves
+unchanged. Shared hunks with these checked changes: none.
 
-## Verification
-
-All checks ran in the isolated source export through the gate wrapper.
-
-- Type check: `bun node_modules/typescript/bin/tsc --noEmit --incremental false`.
-- ESLint: the six changed TypeScript files, including the benchmark and tests.
-- **221 tests passed, zero failures**, across these explicit paths:
-  `sqliteRegistryStore.keyedWrites.test.ts`, `performanceSpans.test.ts`,
-  `registry.sqlite.test.ts`, `sqliteRegistryStore.readOnlyView.test.ts`,
-  `sqliteRegistryStore.refresh.test.ts`, `mcpAllowlist.test.ts`,
-  `registry.writerWait.test.ts`, `registryArchive.test.ts`, and
-  `sqliteRegistryStore.history.test.ts` (agent paths are under `src/lib/agent`;
-  performance spans is under `src/lib`). Commands and group counts are in the
-  evidence record.
-- Privacy publication gate with committed fingerprints and
-  `--require-known-values`: all changed files and the prepared PR body passed.
-- Initially fetched and merged main at the recorded control. Before opening
-  the PR, merged the newer hook-isolation main update without rebasing and
-  rechecked the merged tree with another type check and all 221 focused tests
-  under the new test preload. Measured production code hashes were unchanged.
-
-The original checkpoint test passed on the control. Its old expectation that a
-checkpoint must reload a complete snapshot was updated to require no reload,
-18,000 persisted receipts and the current `_sqliteRevision`. Its first updated
-assertion used the wrong JSON field; that test-only error was corrected before
-the final green run. No runtime-host source or Bun pin changed.
+Cold-row retirement, MCP process placement and remaining synchronous registry
+callers remain outside this change.
