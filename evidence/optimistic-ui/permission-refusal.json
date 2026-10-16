@@ -1,0 +1,181 @@
+{
+  "failures": [],
+  "readings": {
+    "phone-390-en-light": {
+      "leftAtOnce": true,
+      "sent": 1,
+      "reason": "Not answered: The host refused the answer: the request is already closed.",
+      "lines": 2,
+      "cut": false,
+      "buttons": [
+        "Allow once",
+        "Deny"
+      ]
+    },
+    "phone-430-en-light": {
+      "leftAtOnce": true,
+      "sent": 1,
+      "reason": "Not answered: The host refused the answer: the request is already closed.",
+      "lines": 2,
+      "cut": false,
+      "buttons": [
+        "Allow once",
+        "Deny"
+      ]
+    },
+    "desktop-1440-en-light": {
+      "leftAtOnce": true,
+      "sent": 1,
+      "reason": "Not answered: The host refused the answer: the request is already closed.",
+      "lines": 2,
+      "cut": false,
+      "buttons": [
+        "Allow once",
+        "Deny"
+      ]
+    },
+    "desktop-768-en-light": {
+      "leftAtOnce": true,
+      "sent": 1,
+      "reason": "Not answered: The host refused the answer: the request is already closed.",
+      "lines": 2,
+      "cut": false,
+      "buttons": [
+        "Allow once",
+        "Deny"
+      ]
+    },
+    "phone-390-uk-light": {
+      "leftAtOnce": true,
+      "sent": 1,
+      "reason": "Відповідь не надіслано: Хост відхилив відповідь: запит уже закрито.",
+      "lines": 2,
+      "cut": false,
+      "buttons": [
+        "Дозволити раз",
+        "Відхилити"
+      ]
+    },
+    "phone-430-uk-light": {
+      "leftAtOnce": true,
+      "sent": 1,
+      "reason": "Відповідь не надіслано: Хост відхилив відповідь: запит уже закрито.",
+      "lines": 2,
+      "cut": false,
+      "buttons": [
+        "Дозволити раз",
+        "Відхилити"
+      ]
+    },
+    "desktop-1440-uk-light": {
+      "leftAtOnce": true,
+      "sent": 1,
+      "reason": "Відповідь не надіслано: Хост відхилив відповідь: запит уже закрито.",
+      "lines": 2,
+      "cut": false,
+      "buttons": [
+        "Дозволити раз",
+        "Відхилити"
+      ]
+    },
+    "desktop-768-uk-light": {
+      "leftAtOnce": true,
+      "sent": 1,
+      "reason": "Відповідь не надіслано: Хост відхилив відповідь: запит уже закрито.",
+      "lines": 2,
+      "cut": false,
+      "buttons": [
+        "Дозволити раз",
+        "Відхилити"
+      ]
+    },
+    "phone-390-en-dark": {
+      "leftAtOnce": true,
+      "sent": 1,
+      "reason": "Not answered: The host refused the answer: the request is already closed.",
+      "lines": 2,
+      "cut": false,
+      "buttons": [
+        "Allow once",
+        "Deny"
+      ]
+    },
+    "phone-430-en-dark": {
+      "leftAtOnce": true,
+      "sent": 1,
+      "reason": "Not answered: The host refused the answer: the request is already closed.",
+      "lines": 2,
+      "cut": false,
+      "buttons": [
+        "Allow once",
+        "Deny"
+      ]
+    },
+    "desktop-1440-en-dark": {
+      "leftAtOnce": true,
+      "sent": 1,
+      "reason": "Not answered: The host refused the answer: the request is already closed.",
+      "lines": 2,
+      "cut": false,
+      "buttons": [
+        "Allow once",
+        "Deny"
+      ]
+    },
+    "desktop-768-en-dark": {
+      "leftAtOnce": true,
+      "sent": 1,
+      "reason": "Not answered: The host refused the answer: the request is already closed.",
+      "lines": 2,
+      "cut": false,
+      "buttons": [
+        "Allow once",
+        "Deny"
+      ]
+    },
+    "phone-390-uk-dark": {
+      "leftAtOnce": true,
+      "sent": 1,
+      "reason": "Відповідь не надіслано: Хост відхилив відповідь: запит уже закрито.",
+      "lines": 2,
+      "cut": false,
+      "buttons": [
+        "Дозволити раз",
+        "Відхилити"
+      ]
+    },
+    "phone-430-uk-dark": {
+      "leftAtOnce": true,
+      "sent": 1,
+      "reason": "Відповідь не надіслано: Хост відхилив відповідь: запит уже закрито.",
+      "lines": 2,
+      "cut": false,
+      "buttons": [
+        "Дозволити раз",
+        "Відхилити"
+      ]
+    },
+    "desktop-1440-uk-dark": {
+      "leftAtOnce": true,
+      "sent": 1,
+      "reason": "Відповідь не надіслано: Хост відхилив відповідь: запит уже закрито.",
+      "lines": 2,
+      "cut": false,
+      "buttons": [
+        "Дозволити раз",
+        "Відхилити"
+      ]
+    },
+    "desktop-768-uk-dark": {
+      "leftAtOnce": true,
+      "sent": 1,
+      "reason": "Відповідь не надіслано: Хост відхилив відповідь: запит уже закрито.",
+      "lines": 2,
+      "cut": false,
+      "buttons": [
+        "Дозволити раз",
+        "Відхилити"
+      ]
+    }
+  }
+}

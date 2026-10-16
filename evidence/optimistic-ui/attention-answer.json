@@ -1,0 +1,725 @@
+{
+  "failures": [],
+  "readings": {
+    "permission-1440-en-light": {
+      "answeredLine": {
+        "text": "Answered: Allow once",
+        "left": 490.578125,
+        "right": 628.796875,
+        "top": 205.5,
+        "bottom": 220.5,
+        "lines": 1
+      },
+      "buttonsWhileOut": 0,
+      "sent": 1,
+      "refusalLine": {
+        "text": "The host refused the answer: the request is already closed.",
+        "left": 451.578125,
+        "right": 789.6875,
+        "top": 266,
+        "bottom": 280,
+        "lines": 1
+      },
+      "buttonsBack": [
+        {
+          "text": "Allow once",
+          "disabled": false
+        },
+        {
+          "text": "Deny",
+          "disabled": false
+        }
+      ]
+    },
+    "question-1440-en-light": {
+      "answeredLine": {
+        "text": "Answered: Keep the current branch name and rebase onto main before the merge",
+        "left": 478.515625,
+        "right": 983.484375,
+        "top": 95.5,
+        "bottom": 110.5,
+        "lines": 1
+      },
+      "buttonsWhileOut": 0,
+      "sent": 1,
+      "refusalLine": {
+        "text": "The host refused the answer: the request is already closed.",
+        "left": 460.546875,
+        "right": 798.65625,
+        "top": 257,
+        "bottom": 271,
+        "lines": 1
+      },
+      "buttonsBack": [
+        {
+          "text": "1Keep the current branch name and rebase onto main before the mergeHistory stays, conflicts are resolved before the merge.",
+          "disabled": false
+        },
+        {
+          "text": "2Rename it after the task number",
+          "disabled": false
+        }
+      ]
+    },
+    "permission-1440-uk-light": {
+      "answeredLine": {
+        "text": "Відповідь: Дозволити раз",
+        "left": 490.578125,
+        "right": 658.515625,
+        "top": 205.5,
+        "bottom": 220.5,
+        "lines": 1
+      },
+      "buttonsWhileOut": 0,
+      "sent": 1,
+      "refusalLine": {
+        "text": "Хост відхилив відповідь: запит уже закрито.",
+        "left": 451.578125,
+        "right": 717.59375,
+        "top": 266,
+        "bottom": 280,
+        "lines": 1
+      },
+      "buttonsBack": [
+        {
+          "text": "Дозволити раз",
+          "disabled": false
+        },
+        {
+          "text": "Відхилити",
+          "disabled": false
+        }
+      ]
+    },
+    "question-1440-uk-light": {
+      "answeredLine": {
+        "text": "Відповідь: Лишити поточну назву й перебазувати на main перед злиттям",
+        "left": 494.390625,
+        "right": 967.609375,
+        "top": 95.5,
+        "bottom": 110.5,
+        "lines": 1
+      },
+      "buttonsWhileOut": 0,
+      "sent": 1,
+      "refusalLine": {
+        "text": "Хост відхилив відповідь: запит уже закрито.",
+        "left": 477.796875,
+        "right": 743.8125,
+        "top": 257,
+        "bottom": 271,
+        "lines": 1
+      },
+      "buttonsBack": [
+        {
+          "text": "1Лишити поточну назву й перебазувати на main перед злиттямІсторія лишається, конфлікти розв'язуються до злиття.",
+          "disabled": false
+        },
+        {
+          "text": "2Перейменувати за номером задачі",
+          "disabled": false
+        }
+      ]
+    },
+    "permission-1440-en-dark": {
+      "answeredLine": {
+        "text": "Answered: Allow once",
+        "left": 490.578125,
+        "right": 628.796875,
+        "top": 205.5,
+        "bottom": 220.5,
+        "lines": 1
+      },
+      "buttonsWhileOut": 0,
+      "sent": 1,
+      "refusalLine": {
+        "text": "The host refused the answer: the request is already closed.",
+        "left": 451.578125,
+        "right": 789.6875,
+        "top": 266,
+        "bottom": 280,
+        "lines": 1
+      },
+      "buttonsBack": [
+        {
+          "text": "Allow once",
+          "disabled": false
+        },
+        {
+          "text": "Deny",
+          "disabled": false
+        }
+      ]
+    },
+    "question-1440-en-dark": {
+      "answeredLine": {
+        "text": "Answered: Keep the current branch name and rebase onto main before the merge",
+        "left": 478.515625,
+        "right": 983.484375,
+        "top": 95.5,
+        "bottom": 110.5,
+        "lines": 1
+      },
+      "buttonsWhileOut": 0,
+      "sent": 1,
+      "refusalLine": {
+        "text": "The host refused the answer: the request is already closed.",
+        "left": 460.546875,
+        "right": 798.65625,
+        "top": 257,
+        "bottom": 271,
+        "lines": 1
+      },
+      "buttonsBack": [
+        {
+          "text": "1Keep the current branch name and rebase onto main before the mergeHistory stays, conflicts are resolved before the merge.",
+          "disabled": false
+        },
+        {
+          "text": "2Rename it after the task number",
+          "disabled": false
+        }
+      ]
+    },
+    "permission-1440-uk-dark": {
+      "answeredLine": {
+        "text": "Відповідь: Дозволити раз",
+        "left": 490.578125,
+        "right": 658.515625,
+        "top": 205.5,
+        "bottom": 220.5,
+        "lines": 1
+      },
+      "buttonsWhileOut": 0,
+      "sent": 1,
+      "refusalLine": {
+        "text": "Хост відхилив відповідь: запит уже закрито.",
+        "left": 451.578125,
+        "right": 717.59375,
+        "top": 266,
+        "bottom": 280,
+        "lines": 1
+      },
+      "buttonsBack": [
+        {
+          "text": "Дозволити раз",
+          "disabled": false
+        },
+        {
+          "text": "Відхилити",
+          "disabled": false
+        }
+      ]
+    },
+    "question-1440-uk-dark": {
+      "answeredLine": {
+        "text": "Відповідь: Лишити поточну назву й перебазувати на main перед злиттям",
+        "left": 494.390625,
+        "right": 967.609375,
+        "top": 95.5,
+        "bottom": 110.5,
+        "lines": 1
+      },
+      "buttonsWhileOut": 0,
+      "sent": 1,
+      "refusalLine": {
+        "text": "Хост відхилив відповідь: запит уже закрито.",
+        "left": 477.796875,
+        "right": 743.8125,
+        "top": 257,
+        "bottom": 271,
+        "lines": 1
+      },
+      "buttonsBack": [
+        {
+          "text": "1Лишити поточну назву й перебазувати на main перед злиттямІсторія лишається, конфлікти розв'язуються до злиття.",
+          "disabled": false
+        },
+        {
+          "text": "2Перейменувати за номером задачі",
+          "disabled": false
+        }
+      ]
+    },
+    "permission-768-en-light": {
+      "answeredLine": {
+        "text": "Answered: Allow once",
+        "left": 154.578125,
+        "right": 292.796875,
+        "top": 205.5,
+        "bottom": 220.5,
+        "lines": 1
+      },
+      "buttonsWhileOut": 0,
+      "sent": 1,
+      "refusalLine": {
+        "text": "The host refused the answer: the request is already closed.",
+        "left": 115.578125,
+        "right": 453.6875,
+        "top": 266,
+        "bottom": 280,
+        "lines": 1
+      },
+      "buttonsBack": [
+        {
+          "text": "Allow once",
+          "disabled": false
+        },
+        {
+          "text": "Deny",
+          "disabled": false
+        }
+      ]
+    },
+    "question-768-en-light": {
+      "answeredLine": {
+        "text": "Answered: Keep the current branch name and rebase onto main before the merge",
+        "left": 142.515625,
+        "right": 647.484375,
+        "top": 95.5,
+        "bottom": 110.5,
+        "lines": 1
+      },
+      "buttonsWhileOut": 0,
+      "sent": 1,
+      "refusalLine": {
+        "text": "The host refused the answer: the request is already closed.",
+        "left": 124.546875,
+        "right": 462.65625,
+        "top": 257,
+        "bottom": 271,
+        "lines": 1
+      },
+      "buttonsBack": [
+        {
+          "text": "1Keep the current branch name and rebase onto main before the mergeHistory stays, conflicts are resolved before the merge.",
+          "disabled": false
+        },
+        {
+          "text": "2Rename it after the task number",
+          "disabled": false
+        }
+      ]
+    },
+    "permission-768-uk-light": {
+      "answeredLine": {
+        "text": "Відповідь: Дозволити раз",
+        "left": 154.578125,
+        "right": 322.515625,
+        "top": 205.5,
+        "bottom": 220.5,
+        "lines": 1
+      },
+      "buttonsWhileOut": 0,
+      "sent": 1,
+      "refusalLine": {
+        "text": "Хост відхилив відповідь: запит уже закрито.",
+        "left": 115.578125,
+        "right": 381.59375,
+        "top": 266,
+        "bottom": 280,
+        "lines": 1
+      },
+      "buttonsBack": [
+        {
+          "text": "Дозволити раз",
+          "disabled": false
+        },
+        {
+          "text": "Відхилити",
+          "disabled": false
+        }
+      ]
+    },
+    "question-768-uk-light": {
+      "answeredLine": {
+        "text": "Відповідь: Лишити поточну назву й перебазувати на main перед злиттям",
+        "left": 158.390625,
+        "right": 631.609375,
+        "top": 95.5,
+        "bottom": 110.5,
+        "lines": 1
+      },
+      "buttonsWhileOut": 0,
+      "sent": 1,
+      "refusalLine": {
+        "text": "Хост відхилив відповідь: запит уже закрито.",
+        "left": 141.796875,
+        "right": 407.8125,
+        "top": 257,
+        "bottom": 271,
+        "lines": 1
+      },
+      "buttonsBack": [
+        {
+          "text": "1Лишити поточну назву й перебазувати на main перед злиттямІсторія лишається, конфлікти розв'язуються до злиття.",
+          "disabled": false
+        },
+        {
+          "text": "2Перейменувати за номером задачі",
+          "disabled": false
+        }
+      ]
+    },
+    "permission-768-en-dark": {
+      "answeredLine": {
+        "text": "Answered: Allow once",
+        "left": 154.578125,
+        "right": 292.796875,
+        "top": 205.5,
+        "bottom": 220.5,
+        "lines": 1
+      },
+      "buttonsWhileOut": 0,
+      "sent": 1,
+      "refusalLine": {
+        "text": "The host refused the answer: the request is already closed.",
+        "left": 115.578125,
+        "right": 453.6875,
+        "top": 266,
+        "bottom": 280,
+        "lines": 1
+      },
+      "buttonsBack": [
+        {
+          "text": "Allow once",
+          "disabled": false
+        },
+        {
+          "text": "Deny",
+          "disabled": false
+        }
+      ]
+    },
+    "question-768-en-dark": {
+      "answeredLine": {
+        "text": "Answered: Keep the current branch name and rebase onto main before the merge",
+        "left": 142.515625,
+        "right": 647.484375,
+        "top": 95.5,
+        "bottom": 110.5,
+        "lines": 1
+      },
+      "buttonsWhileOut": 0,
+      "sent": 1,
+      "refusalLine": {
+        "text": "The host refused the answer: the request is already closed.",
+        "left": 124.546875,
+        "right": 462.65625,
+        "top": 257,
+        "bottom": 271,
+        "lines": 1
+      },
+      "buttonsBack": [
+        {
+          "text": "1Keep the current branch name and rebase onto main before the mergeHistory stays, conflicts are resolved before the merge.",
+          "disabled": false
+        },
+        {
+          "text": "2Rename it after the task number",
+          "disabled": false
+        }
+      ]
+    },
+    "permission-768-uk-dark": {
+      "answeredLine": {
+        "text": "Відповідь: Дозволити раз",
+        "left": 154.578125,
+        "right": 322.515625,
+        "top": 205.5,
+        "bottom": 220.5,
+        "lines": 1
+      },
+      "buttonsWhileOut": 0,
+      "sent": 1,
+      "refusalLine": {
+        "text": "Хост відхилив відповідь: запит уже закрито.",
+        "left": 115.578125,
+        "right": 381.59375,
+        "top": 266,
+        "bottom": 280,
+        "lines": 1
+      },
+      "buttonsBack": [
+        {
+          "text": "Дозволити раз",
+          "disabled": false
+        },
+        {
+          "text": "Відхилити",
+          "disabled": false
+        }
+      ]
+    },
+    "question-768-uk-dark": {
+      "answeredLine": {
+        "text": "Відповідь: Лишити поточну назву й перебазувати на main перед злиттям",
+        "left": 158.390625,
+        "right": 631.609375,
+        "top": 95.5,
+        "bottom": 110.5,
+        "lines": 1
+      },
+      "buttonsWhileOut": 0,
+      "sent": 1,
+      "refusalLine": {
+        "text": "Хост відхилив відповідь: запит уже закрито.",
+        "left": 141.796875,
+        "right": 407.8125,
+        "top": 257,
+        "bottom": 271,
+        "lines": 1
+      },
+      "buttonsBack": [
+        {
+          "text": "1Лишити поточну назву й перебазувати на main перед злиттямІсторія лишається, конфлікти розв'язуються до злиття.",
+          "disabled": false
+        },
+        {
+          "text": "2Перейменувати за номером задачі",
+          "disabled": false
+        }
+      ]
+    },
+    "permission-390-en-light": {
+      "answeredLine": {
+        "text": "Answered: Allow once",
+        "left": 55,
+        "right": 193.21875,
+        "top": 223.5,
+        "bottom": 238.5,
+        "lines": 1
+      },
+      "buttonsWhileOut": 0,
+      "sent": 1,
+      "refusalLine": {
+        "text": "The host refused the answer: the request is already closed.",
+        "left": 16,
+        "right": 354.109375,
+        "top": 284,
+        "bottom": 298,
+        "lines": 1
+      },
+      "buttonsBack": [
+        {
+          "text": "Allow once",
+          "disabled": false
+        },
+        {
+          "text": "Deny",
+          "disabled": false
+        }
+      ]
+    },
+    "question-390-en-light": {
+      "answeredLine": {
+        "text": "Answered: Keep the current branch name and rebase onto main before the merge",
+        "left": 55,
+        "right": 339.625,
+        "top": 119,
+        "bottom": 153.5,
+        "lines": 2
+      },
+      "buttonsWhileOut": 0,
+      "sent": 1,
+      "refusalLine": {
+        "text": "The host refused the answer: the request is already closed.",
+        "left": 16,
+        "right": 354.109375,
+        "top": 318,
+        "bottom": 332,
+        "lines": 1
+      },
+      "buttonsBack": [
+        {
+          "text": "1Keep the current branch name and rebase onto main before the mergeHistory stays, conflicts are resolved before the merge.",
+          "disabled": false
+        },
+        {
+          "text": "2Rename it after the task number",
+          "disabled": false
+        }
+      ]
+    },
+    "permission-390-uk-light": {
+      "answeredLine": {
+        "text": "Відповідь: Дозволити раз",
+        "left": 55,
+        "right": 222.9375,
+        "top": 223.5,
+        "bottom": 238.5,
+        "lines": 1
+      },
+      "buttonsWhileOut": 0,
+      "sent": 1,
+      "refusalLine": {
+        "text": "Хост відхилив відповідь: запит уже закрито.",
+        "left": 16,
+        "right": 282.015625,
+        "top": 284,
+        "bottom": 298,
+        "lines": 1
+      },
+      "buttonsBack": [
+        {
+          "text": "Дозволити раз",
+          "disabled": false
+        },
+        {
+          "text": "Відхилити",
+          "disabled": false
+        }
+      ]
+    },
+    "question-390-uk-light": {
+      "answeredLine": {
+        "text": "Відповідь: Лишити поточну назву й перебазувати на main перед злиттям",
+        "left": 55,
+        "right": 294.140625,
+        "top": 119,
+        "bottom": 153.5,
+        "lines": 2
+      },
+      "buttonsWhileOut": 0,
+      "sent": 1,
+      "refusalLine": {
+        "text": "Хост відхилив відповідь: запит уже закрито.",
+        "left": 16,
+        "right": 282.015625,
+        "top": 318,
+        "bottom": 332,
+        "lines": 1
+      },
+      "buttonsBack": [
+        {
+          "text": "1Лишити поточну назву й перебазувати на main перед злиттямІсторія лишається, конфлікти розв'язуються до злиття.",
+          "disabled": false
+        },
+        {
+          "text": "2Перейменувати за номером задачі",
+          "disabled": false
+        }
+      ]
+    },
+    "permission-390-en-dark": {
+      "answeredLine": {
+        "text": "Answered: Allow once",
+        "left": 55,
+        "right": 193.21875,
+        "top": 223.5,
+        "bottom": 238.5,
+        "lines": 1
+      },
+      "buttonsWhileOut": 0,
+      "sent": 1,
+      "refusalLine": {
+        "text": "The host refused the answer: the request is already closed.",
+        "left": 16,
+        "right": 354.109375,
+        "top": 284,
+        "bottom": 298,
+        "lines": 1
+      },
+      "buttonsBack": [
+        {
+          "text": "Allow once",
+          "disabled": false
+        },
+        {
+          "text": "Deny",
+          "disabled": false
+        }
+      ]
+    },
+    "question-390-en-dark": {
+      "answeredLine": {
+        "text": "Answered: Keep the current branch name and rebase onto main before the merge",
+        "left": 55,
+        "right": 339.625,
+        "top": 119,
+        "bottom": 153.5,
+        "lines": 2
+      },
+      "buttonsWhileOut": 0,
+      "sent": 1,
+      "refusalLine": {
+        "text": "The host refused the answer: the request is already closed.",
+        "left": 16,
+        "right": 354.109375,
+        "top": 318,
+        "bottom": 332,
+        "lines": 1
+      },
+      "buttonsBack": [
+        {
+          "text": "1Keep the current branch name and rebase onto main before the mergeHistory stays, conflicts are resolved before the merge.",
+          "disabled": false
+        },
+        {
+          "text": "2Rename it after the task number",
+          "disabled": false
+        }
+      ]
+    },
+    "permission-390-uk-dark": {
+      "answeredLine": {
+        "text": "Відповідь: Дозволити раз",
+        "left": 55,
+        "right": 222.9375,
+        "top": 223.5,
+        "bottom": 238.5,
+        "lines": 1
+      },
+      "buttonsWhileOut": 0,
+      "sent": 1,
+      "refusalLine": {
+        "text": "Хост відхилив відповідь: запит уже закрито.",
+        "left": 16,
+        "right": 282.015625,
+        "top": 284,
+        "bottom": 298,
+        "lines": 1
+      },
+      "buttonsBack": [
+        {
+          "text": "Дозволити раз",
+          "disabled": false
+        },
+        {
+          "text": "Відхилити",
+          "disabled": false
+        }
+      ]
+    },
+    "question-390-uk-dark": {
+      "answeredLine": {
+        "text": "Відповідь: Лишити поточну назву й перебазувати на main перед злиттям",
+        "left": 55,
+        "right": 294.140625,
+        "top": 119,
+        "bottom": 153.5,
+        "lines": 2
+      },
+      "buttonsWhileOut": 0,
+      "sent": 1,
+      "refusalLine": {
+        "text": "Хост відхилив відповідь: запит уже закрито.",
+        "left": 16,
+        "right": 282.015625,
+        "top": 318,
+        "bottom": 332,
+        "lines": 1
+      },
+      "buttonsBack": [
+        {
+          "text": "1Лишити поточну назву й перебазувати на main перед злиттямІсторія лишається, конфлікти розв'язуються до злиття.",
+          "disabled": false
+        },
+        {
+          "text": "2Перейменувати за номером задачі",
+          "disabled": false
+        }
+      ]
+    }
+  }
+}

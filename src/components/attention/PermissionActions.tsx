@@ -1,7 +1,7 @@
 "use client";
 
 import { Check, Loader2, X } from "@/components/icons";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { layerPermissionAnswer, unlayerPermissionAnswer } from "@/components/attention/dismissalOverlay";
 import { requestFilesRefresh } from "@/lib/filesEvents";
@@ -29,6 +29,10 @@ export function PermissionActions({ file, size = "compact" }: { file: FileEntry;
   const permission = file.pendingPermission;
   const [busy, setBusy] = useState<Decision | null>(null);
   const [error, setError] = useState<string | null>(() => (permission ? failures.get(permission.id) ?? null : null));
+  const reason = useRef<HTMLSpanElement>(null);
+  /* The row returns on a refusal at the foot of a scrolling list: the reason is
+     brought into the list's view whole, never left behind its edge. */
+  useEffect(() => { if (error) reason.current?.scrollIntoView({ block: "nearest" }); }, [error]);
   if (!permission) return null;
 
   const answer = async (decision: Decision) => {
@@ -93,7 +97,7 @@ export function PermissionActions({ file, size = "compact" }: { file: FileEntry;
         {busy === "deny" ? <Loader2 className={`${icon} animate-spin motion-reduce:animate-none`} aria-hidden /> : <X className={icon} aria-hidden />}
         {t("attention.permissionDeny")}
       </button>
-      {error ? <span role="alert" className="min-w-0 truncate text-[11px] text-danger">{t("attention.permissionFailed", { error })}</span> : null}
+      {error ? <span ref={reason} role="alert" className="min-w-0 basis-full break-words text-[11px] text-danger">{t("attention.permissionFailed", { error })}</span> : null}
     </div>
   );
 }

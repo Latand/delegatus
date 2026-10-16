@@ -5355,3 +5355,97 @@ describe("parallel question failure and retry", () => {
     } finally { await browser.close(); served.stop(); fs.closeSync(chromeDir); fs.rmSync(chromeTmp, { recursive: true, force: true }); }
   }, 60_000);
 });
+
+/*
+ * Optimistic UI, audit B3: the conversation's structured attention card shows
+ * the operator's answer on the press (the controls give way to «Answered: …»),
+ * and a refusal brings the buttons back with the reason in the card's own
+ * alert. Rendered through the production `ConversationAttention`, in both
+ * languages and themes, at 1440, 768 and 390; the readings are measured from
+ * text ranges and go to `evidence/optimistic-ui/attention-answer.json`.
+ */
+describe("attention answer shows at once and a refusal brings the card back", () => {
+  browserTest("Allow once and a chosen option read whole while the answer is out, and the refusal names its reason", async () => {
+    const out = path.resolve(".artifacts/attention-answer");
+    fs.mkdirSync(out, { recursive: true });
+    const served = await serveEvidenceFixture(out, FIXTURE);
+    const chromeTmp = fs.mkdtempSync(path.join(os.tmpdir(), "attention-chrome-"));
+    const chromeDir = fs.openSync(chromeTmp, "r");
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"],
+      env: { ...process.env, TMPDIR: process.platform === "linux" ? `/proc/${process.pid}/fd/${chromeDir}` : chromeTmp } });
+    const readings: Record<string, unknown> = {};
+    const failures: string[] = [];
+    try {
+      for (const width of [1440, 768, 390]) for (const scheme of ["light", "dark"] as const) for (const lang of ["en", "uk"] as const) for (const kind of ["permission", "question"] as const) {
+        const key = `${kind}-${width}-${lang}-${scheme}`;
+        const { page, context, pageErrors } = await openFixture(browser, `${served.base}?case=attention-answer&kind=${kind}&lang=${lang}`, { width, height: 900 }, scheme, lang, "reduce", width === 390);
+        try {
+          const refusal = lang === "uk" ? "Хост відхилив відповідь: запит уже закрито." : "The host refused the answer: the request is already closed.";
+          const posts: unknown[] = [];
+          let release: () => void = () => undefined;
+          const held = new Promise<void>((resolve) => { release = resolve; });
+          await page.route("**/api/runtime/answer", async route => {
+            posts.push(route.request().postDataJSON());
+            await held;
+            await route.fulfill({ status: 409, json: { error: refusal } });
+          });
+          await page.locator("[data-attention-kind]").waitFor();
+          const label = kind === "permission"
+            ? translate(lang, "runtime.attention.allowOnce")
+            : lang === "uk" ? "Лишити поточну назву й перебазувати на main перед злиттям" : "Keep the current branch name and rebase onto main before the merge";
+          const answeredText = translate(lang, "runtime.attention.answered", { answer: label });
+          const measure = () => page.evaluate(() => {
+            const card = document.querySelector("[data-attention-kind]")!.getBoundingClientRect();
+            const whole = (element: Element | null) => {
+              if (!element) return null;
+              const rects: DOMRect[] = [];
+              const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+              for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+                const range = document.createRange(); range.selectNodeContents(node);
+                rects.push(...[...range.getClientRects()].filter(r => r.width > 0));
+              }
+              return { text: element.textContent, left: Math.min(...rects.map(r => r.left)), right: Math.max(...rects.map(r => r.right)), top: Math.min(...rects.map(r => r.top)), bottom: Math.max(...rects.map(r => r.bottom)), lines: new Set(rects.map(r => Math.round(r.top))).size };
+            };
+            const buttons = [...document.querySelectorAll("[data-attention-kind] button")].filter(b => !b.hasAttribute("data-attention-dismiss"));
+            return {
+              width: innerWidth, overflow: document.documentElement.scrollWidth - innerWidth,
+              card: { left: card.left, right: card.right, top: card.top, bottom: card.bottom },
+              answered: whole(document.querySelector("[data-attention-answered]")),
+              alert: whole(document.querySelector("[role=alert]")),
+              buttons: buttons.map(b => ({ text: b.textContent?.trim(), disabled: (b as HTMLButtonElement).disabled })),
+            };
+          });
+          const insideCard = (box: { left: number; right: number; top: number; bottom: number } | null, reading: Awaited<ReturnType<typeof measure>>) =>
+            Boolean(box && box.left >= reading.card.left - 0.5 && box.right <= reading.card.right + 0.5 && box.top >= reading.card.top - 0.5 && box.bottom <= reading.card.bottom + 0.5 + 40);
+
+          await page.screenshot({ path: path.join(out, `${key}-open.png`) });
+          if (kind === "permission") await page.getByRole("button", { name: label, exact: true }).click();
+          else await page.getByRole("button", { name: label }).click();
+          await page.locator("[data-attention-answered]").waitFor();
+          const answered = await measure();
+          await page.screenshot({ path: path.join(out, `${key}-answered.png`) });
+          if (answered.answered?.text !== answeredText) failures.push(`${key}: the answered line reads ${JSON.stringify(answered.answered?.text)}`);
+          if (answered.buttons.length !== 0) failures.push(`${key}: ${answered.buttons.length} buttons stay beside the answered line`);
+          if (!insideCard(answered.answered, answered)) failures.push(`${key}: the answered line leaves its card`);
+          if (answered.overflow > 0) failures.push(`${key}: the page overflows by ${answered.overflow}`);
+          if (posts.length !== 1) failures.push(`${key}: ${posts.length} answers sent while the first is out`);
+
+          release();
+          await page.locator("[role=alert]").waitFor();
+          await page.locator("[data-attention-answered]").waitFor({ state: "detached" });
+          const refused = await measure();
+          await page.screenshot({ path: path.join(out, `${key}-refused.png`) });
+          if (refused.alert?.text !== refusal) failures.push(`${key}: the refusal reads ${JSON.stringify(refused.alert?.text)}`);
+          if (refused.buttons.length === 0 || refused.buttons.some(b => b.disabled)) failures.push(`${key}: the buttons are not back: ${JSON.stringify(refused.buttons)}`);
+          if (refused.alert && (refused.alert.left < 0 || refused.alert.right > refused.width)) failures.push(`${key}: the refusal leaves the viewport`);
+          if (refused.overflow > 0) failures.push(`${key}: the page overflows by ${refused.overflow} after the refusal`);
+          if (pageErrors.length) failures.push(`${key}: page errors ${pageErrors.join(" | ")}`);
+          readings[key] = { answeredLine: answered.answered, buttonsWhileOut: answered.buttons.length, sent: posts.length, refusalLine: refused.alert, buttonsBack: refused.buttons };
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/optimistic-ui", { recursive: true });
+      fs.writeFileSync("evidence/optimistic-ui/attention-answer.json", JSON.stringify({ failures, readings }, null, 2) + "\n");
+      expect(failures).toEqual([]);
+    } finally { await browser.close(); served.stop(); fs.closeSync(chromeDir); fs.rmSync(chromeTmp, { recursive: true, force: true }); }
+  }, 600_000);
+});

@@ -99,6 +99,8 @@ test("a refused Deny brings the row back with both buttons and the reason in it"
   expect(row.querySelector<HTMLButtonElement>("[data-permission-allow]")!.disabled).toBe(false);
   expect(row.querySelector<HTMLButtonElement>("[data-permission-deny]")!.disabled).toBe(false);
   expect(row.querySelector("[role=alert]")?.textContent).toBe(en["attention.permissionFailed"].replace("{error}", "HOST_GONE"));
+  /* The reason is read whole: it wraps under the buttons instead of ending in an ellipsis. */
+  expect(row.querySelector("[role=alert]")?.className).not.toContain("truncate");
 });
 
 test("a lost Allow brings the row back with the network's words", async () => {

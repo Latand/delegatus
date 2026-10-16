@@ -393,6 +393,7 @@ let snapshotReads = 0;
    tests sends (`src/lib/runtime/fixtures/fakeClaudePermissionCli.ts`, which
    reads the filesystem and so cannot load here). */
 const PERMISSION_SCENE = new URLSearchParams(location.search).has("permission");
+const PERMISSION_REFUSE = new URLSearchParams(location.search).get("permission") === "refuse";
 const PERMISSION_COMMAND = "rm -rf $R/home $R/*.json";
 const PERMISSION_REASON = "Dangerous rm operation on possibly-empty variable path: $R/*.json in `rm -rf $R/home $R/*.json` (rewrite it as \"${R:?}\"/*.json or use a literal path)";
 if (PERMISSION_SCENE) {
@@ -508,6 +509,8 @@ const evidence = {
   taskPatches: [] as Array<{ id: string; body: Record<string, unknown> }>,
   /* Every Allow once / Deny a Needs-you row sent (#2215). */
   permissionAnswers: [] as Array<Record<string, unknown>>,
+  /* With `?permission=refuse` the host holds each permission answer until this is called, then refuses it. */
+  releasePermission: () => {},
   /* Holds each pipeline answer this long, so a step can watch the frames
      painted while its requests are out. */
   pipelineAnswerDelayMs: 0,
@@ -1433,6 +1436,10 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
     if (body.action === "permission") {
       evidence.permissionAnswers.push(body);
+      if (PERMISSION_REFUSE) {
+        await new Promise<void>((resolve) => { evidence.releasePermission = resolve; });
+        return json({ ok: false, error: localStorage.getItem("llv_lang") === "uk" ? "Хост відхилив відповідь: запит уже закрито." : "The host refused the answer: the request is already closed." }, 409);
+      }
       return json({ ok: true }, 202);
     }
   }
