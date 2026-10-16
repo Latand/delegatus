@@ -10,7 +10,13 @@ process.env.LLV_STATE_DIR = path.join(root, "state");
 process.env.XDG_CONFIG_HOME = path.join(root, "config");
 const { CompanionStorage } = await import("./storage");
 const { CompanionAdmission } = await import("./admission");
-const { COMPANION_TOOL_REGISTRY, COMPANION_TOOLS, runCompanionTool } = await import("./tools");
+const { COMPANION_TOOL_REGISTRY, COMPANION_TOOLS, EGRESS_TOOLS, runCompanionTool } = await import("./tools");
+
+test("every delegation tool declares egress and only task creation carries model text out", () => {
+  expect([...EGRESS_TOOLS]).toEqual(["request_orchestrator_delegation"]);
+  for (const entry of COMPANION_TOOL_REGISTRY.filter(entry => entry.class === "delegation"))
+    expect(typeof entry.egress, entry.name).toBe("boolean");
+});
 afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
 
 test("prototype selectors have strict nullable fields and bounded variants and language", async () => {

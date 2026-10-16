@@ -27,6 +27,7 @@ import { RISE_FRAME_SHARE, RISE_MS } from "@/lib/voiceCompanion/motion";
 import { CONTROL_SELECTOR, LANE_HEIGHTS, NARROW_LANE_WIDTHS } from "@/lib/voiceCompanion/placement";
 import { DEMO_IDS, demoAnswer, demoInstruction, SCENARIOS, scenarioText } from "@/lib/voiceCompanion/scenarios";
 import { DELEGATION_LINGER_MS, REPORT_CAP } from "@/components/voiceCompanion/VoiceCompanion";
+import { roleAvatarDarkCss } from "@/components/brand/roleAvatarDarkCss";
 import { browserCase, caseChromium as chromium, captureWorkerLimitFrames, capturePrototypeQuestions, capturePrototypeSkipRows, captureSeatMandateHandover, openFixture, serveEvidenceFixture, waitForSectionOpen } from "./issue1695BrowserHarness";
 import { kanbanLayoutMode } from "./KanbanBoard";
 import { ORCHESTRATOR_BURST_LIMIT, ORCHESTRATOR_WIRE_FADE_MS, ORCHESTRATOR_WIRE_HOLD_MS } from "./orchestratorArrows";
@@ -36,7 +37,7 @@ import { maintenanceCardText } from "@/lib/boardMaintenance/text";
 import type { MaintenanceRun } from "@/lib/boardMaintenance/types";
 import { seatTickSettingsCardText } from "@/lib/monitor/cards";
 import { autoRotationCardNotice, type AutoRotationAttempt } from "@/lib/monitor/seatAutoRotation";
-import { measureStageChain, stageChainFailures, type StageChainLane as Lane } from "@/components/pipelines/stageChainMeasure";
+import { measureStageChain, stageChainFailures, wideStageChainFailures, type StageChainLane as Lane } from "@/components/pipelines/stageChainMeasure";
 import { sampleAnswer, sampleMemory } from "@/lib/memory/profile.fixture";
 import { createProfileService } from "@/lib/memory/profileService";
 import type { MemoryProfileView, ProfileRow } from "@/lib/memory/profileTypes";
@@ -6862,7 +6863,11 @@ describe("the header's menu, built: variant 2's icon row, variant 3's rows", () 
   /* docs/design/header-menu.md: 360 px for every desktop state, 380 px for the Settings page and its voice row. */
   const DESKTOP_PX = 360;
   const SETTINGS_PX = 420;
-  const desktopBound = (state: string) => (/^settings(-|$)/.test(state) ? SETTINGS_PX : DESKTOP_PX);
+  /* «Keys» is 370 px as approved (six rows, the back row and two transfer rows); an open field passes it and only the window bounds it (docs/design/keys-settings.md §15). */
+  const KEYS_PX = 380;
+  const desktopBound = (state: string) => (/^settings(-|$)/.test(state) ? SETTINGS_PX
+    : state === "keys-replace" || state === "keys-invalid" || state === "memory-noKey-keys" ? Infinity
+    : /^keys(-|$)/.test(state) ? KEYS_PX : DESKTOP_PX);
   const COUNTS = { decisions: 214, delivered: 61, prepared: 69, noCandidates: 48, noMatches: 97, skipped: 12, failed: 5 };
   /* Today's fourteen entries, by the attribute each carries in the built menu. */
   const ENTRIES: Record<string, { desktop: string | null; phone: string | null }> = {
@@ -6876,7 +6881,7 @@ describe("the header's menu, built: variant 2's icon row, variant 3's rows", () 
     dictation: { desktop: "[data-rail-menu-dictation]", phone: "[data-mobile2-menu-row='dictation']" },
     ping: { desktop: "[data-rail-menu-ping]", phone: "[data-mobile2-menu-row='ping']" },
     memory: { desktop: "[data-rail-menu-memory]", phone: "[data-mobile2-menu-row='memory']" },
-    key: { desktop: "[data-rail-menu-key]", phone: "[data-mobile2-menu-row='key']" },
+    keys: { desktop: "[data-rail-menu-keys]", phone: "[data-mobile2-menu-row='keys']" },
     linked: { desktop: "[data-rail-menu-linked-settings]", phone: "[data-mobile2-menu-row='linked-settings']" },
     relay: { desktop: "[data-rail-menu-external-relay]", phone: "[data-mobile2-menu-row='external-relay']" },
     update: { desktop: "[data-rail-menu-update]", phone: "[data-mobile2-menu-row='self-update']" },
@@ -6922,6 +6927,12 @@ describe("the header's menu, built: variant 2's icon row, variant 3's rows", () 
     let enabled = true;
     let keyPresent = true;
     const serve = (state: Memory) => { memory = state; enabled = state !== "off"; keyPresent = state !== "noKey"; };
+    const keysList = () => ({ staging: false, owner: true, keys: [
+      { id: "openrouter", variable: "OPENROUTER_API_KEY", source: keyPresent ? "file" : "missing", masked: keyPresent ? "sk-or-v1-••••••••0000" : null },
+      { id: "openai", variable: "OPENAI_API_KEY", source: "env", masked: "sk-proj-••••••••2222" },
+      { id: "elevenlabs", variable: "ELEVENLABS_API_KEY", source: "file", masked: "sk_••••••••1111" },
+      ...(["soniox", "fishaudio", "telegram"] as const).map((id) => ({ id, variable: id === "telegram" ? "DELEGATUS_TELEGRAM_BOT_TOKEN" : id === "fishaudio" ? "FISH_AUDIO_API_KEY" : "SONIOX_API_KEY", source: "missing", masked: null })),
+    ] });
     const server = await serveEvidenceFixture(path.join(out, "bundle-root"), undefined, {
       "/api/memory/settings": async (request: Request) => {
         if (request.method === "PUT") enabled = Boolean((await request.json() as { enabled?: boolean }).enabled);
@@ -6932,11 +6943,13 @@ describe("the header's menu, built: variant 2's icon row, variant 3's rows", () 
           spentUsd: memory === "capped" ? 5 : 1.214, month: "2026-10", counts: COUNTS,
         });
       },
-      "/api/asks-you/key": async (request: Request) => {
-        /* The route's own check: printable ASCII, nothing else. */
-        if (request.method === "PUT" && !/^[\x21-\x7e]+$/.test((await request.json() as { key?: string }).key ?? "")) return Response.json({ present: keyPresent, source: keyPresent ? "file" : null, error: "invalid_key" }, { status: 400 });
-        if (request.method === "PUT") keyPresent = true;
-        return Response.json({ present: keyPresent, source: keyPresent ? "file" : null });
+      /* «Keys» (docs/design/keys-settings.md): the list as the route answers it, and the OpenRouter key's write with the route's check. */
+      "/api/keys": () => Response.json(keysList()),
+      "/api/keys/openrouter": async (request: Request) => {
+        const value = (await request.json() as { value?: string }).value ?? "";
+        if (!/^sk-or-[\x21-\x7e]{10,}$/.test(value.trim())) return Response.json({ error: "invalid key", code: "invalid_key" }, { status: 400 });
+        keyPresent = true;
+        return Response.json(keysList());
       },
       "/api/team": { mode: "team", me: { id: "member-1", name: "Fixture member", role: "owner", telegram: null }, members: [], methods: {} },
       "/api/telemetry": { enabled: true, locked: false, noticeDismissed: true },
@@ -7005,16 +7018,16 @@ describe("the header's menu, built: variant 2's icon row, variant 3's rows", () 
       for (const word of words) if (word !== now) failures.push(`${tag}: a state word reads ${word}, the route says ${now}`);
     }
 
-    /** With Details open, submits a key with a control character in it; the route refuses it and the field says why. */
+    /** On «Keys», opened from memory on the OpenRouter key: submits a key with a control character in it; the route refuses it and the field says why. */
     async function refuseKey(page: Page, tag: string, lang: "en" | "uk") {
-      if (await page.locator("[data-memory-details][aria-expanded='false']").count()) await page.locator("[data-memory-details]").click();
-      const field = page.locator("[data-memory-reason] [data-provider-key]");
+      const field = page.locator("[data-keys-field='openrouter']");
+      if (!await field.locator("input").waitFor({ timeout: 5_000 }).then(() => true, () => false)) { failures.push(`${tag}: «Open Keys» did not open the OpenRouter key's field`); return; }
       await field.locator("input").fill("pasted\u0007value");
-      await field.locator("button[type=submit]").click();
+      await field.locator("[data-keys-save]").click();
       const alert = field.locator("[role=alert]");
       if (!await alert.waitFor({ timeout: 5_000 }).then(() => true, () => false)) failures.push(`${tag}: a refused key shows no reason`);
-      else if ((await alert.textContent())?.trim() !== translate(lang, "providerKey.invalid")) failures.push(`${tag}: the refusal is not the key's own reason`);
-      if (!await page.locator("[data-memory-table]").count()) failures.push(`${tag}: Details closed when the key was refused`);
+      else if ((await alert.textContent())?.trim() !== translate(lang, "keys.invalid", { name: "OpenRouter" })) failures.push(`${tag}: the refusal is not the key's own reason`);
+      if (await field.locator("input").inputValue() !== "") failures.push(`${tag}: the refused key stayed in the field`);
     }
 
     async function desktop(frame: (typeof DESKTOP)[number], scheme: Scheme, lang: "en" | "uk") {
@@ -7058,23 +7071,27 @@ describe("the header's menu, built: variant 2's icon row, variant 3's rows", () 
             await capture(page, at, "desktop", `memory-${now}-details`, now);
           }
           if (now === "noKey") {
+            /* «Open Keys» turns the menu to «Keys» with the OpenRouter key's field open: one place keys are entered. */
             await page.locator("[data-memory-enter-key]").click();
-            if (!await page.locator("[data-memory-reason] [data-provider-key] input").count()) failures.push(`${tag}: «Enter the key» did not open the field where it was pressed`);
-            await capture(page, at, "desktop", "memory-noKey-field", now);
+            if (!await page.locator(`${PANEL} [data-header-menu-page='keys'] [data-keys-field='openrouter'] input`).waitFor({ timeout: 5_000 }).then(() => true, () => false)) failures.push(`${tag}: «Open Keys» did not open «Keys» on the OpenRouter key`);
+            await capture(page, at, "desktop", "memory-noKey-keys", now);
             await refuseKey(page, tag, lang);
-            await capture(page, at, "desktop", "memory-noKey-invalid", now);
-          }
-          await page.locator("[data-rail-menu-back]").click();
-          await page.locator("[data-rail-menu-key]").click();
-          await page.locator("[data-key-page]").waitFor();
-          await capture(page, at, "desktop", now === "noKey" ? "key-missing" : now === "working" ? "key" : `key-${now}`, now);
+            await capture(page, at, "desktop", "keys-invalid", now);
+            await page.locator("[data-rail-menu-back]").click();
+          } else await page.locator("[data-rail-menu-back]").click();
+          await page.locator("[data-rail-menu-keys]").click();
+          await page.locator("[data-keys-page] [data-keys-row]").first().waitFor();
+          await capture(page, at, "desktop", now === "noKey" ? "keys-missing" : now === "working" ? "keys" : `keys-${now}`, now);
           if (now === "working") {
-            await page.locator("[data-key-replace]").click();
-            if (!await page.locator("[data-key-page] [data-provider-key] input").count()) failures.push(`${tag}: Replace did not open the field`);
-            await capture(page, at, "desktop", "key-replace", now);
-            /* Escape from a page deep in the menu closes it onto ⋯, where Enter opens it again. */
+            await page.locator("[data-keys-more='openrouter']").click();
+            await page.locator("[data-keys-menu-item='replace']").click();
+            if (!await page.locator("[data-keys-field='openrouter'] input").count()) failures.push(`${tag}: Replace did not open the field`);
+            await capture(page, at, "desktop", "keys-replace", now);
+            /* Escape first closes the open field, then the menu onto ⋯, where Enter opens it again. */
             await page.keyboard.press("Escape");
-            if (await page.locator(PANEL).count() || !await page.evaluate(() => document.activeElement?.hasAttribute("data-rail-menu"))) failures.push(`${tag}: Escape from the key page did not close the menu onto ⋯`);
+            if (await page.locator("[data-keys-field]").count() || !await page.locator(PANEL).count()) failures.push(`${tag}: Escape in the field did not close only the field`);
+            await page.keyboard.press("Escape");
+            if (await page.locator(PANEL).count() || !await page.evaluate(() => document.activeElement?.hasAttribute("data-rail-menu"))) failures.push(`${tag}: Escape from the keys page did not close the menu onto ⋯`);
             await page.keyboard.press("Enter");
             /* Once per frame: «Install ping» opens the product's dialog, which keeps the ping alone. */
             await page.locator("[data-rail-menu-settings]").click();
@@ -7082,7 +7099,7 @@ describe("the header's menu, built: variant 2's icon row, variant 3's rows", () 
             const dialog = page.locator("[data-telemetry-settings]");
             if (!await dialog.waitFor({ timeout: 5_000 }).then(() => true, () => false)) failures.push(`${tag}: «Install ping» did not open the dialog`);
             else {
-              if (await dialog.locator("[data-memory-page], [data-memory-setting], [data-provider-key]").count()) failures.push(`${tag}: the ping's dialog still draws memory or the key`);
+              if (await dialog.locator("[data-memory-page], [data-memory-setting], [data-keys-page]").count()) failures.push(`${tag}: the ping's dialog still draws memory or the keys`);
               if ((await dialog.locator("#telemetry-title").textContent())?.trim() !== translate(lang, "headerMenu.ping")) failures.push(`${tag}: the dialog is not titled «${translate(lang, "headerMenu.ping")}»`);
               await page.screenshot({ path: path.join(out, `desktop-${frame.name}-${scheme}-${lang}-dialog-ping.png`) });
             }
@@ -7138,15 +7155,16 @@ describe("the header's menu, built: variant 2's icon row, variant 3's rows", () 
           await capture(page, at, "phone", `memory-${now}`, now);
           if (now === "noKey") {
             await page.locator("[data-memory-enter-key]").click();
-            await capture(page, at, "phone", "memory-noKey-field", now);
+            if (!await page.locator(`${SHEET} [data-keys-field='openrouter'] input`).waitFor({ timeout: 5_000 }).then(() => true, () => false)) failures.push(`${tag}: «Open Keys» did not open «Keys» on the OpenRouter key`);
+            await capture(page, at, "phone", "memory-noKey-keys", now);
             await refuseKey(page, tag, lang);
-            await capture(page, at, "phone", "memory-noKey-invalid", now);
+            await capture(page, at, "phone", "keys-invalid", now);
           }
           if (now === "working" || now === "noKey") {
             await page.locator(`${SHEET} [data-mobile2-menu-row="back"]`).click();
-            await page.locator(`${SHEET} [data-mobile2-menu-row="key"]`).click();
-            await page.locator("[data-key-page]").waitFor();
-            await capture(page, at, "phone", now === "noKey" ? "key-missing" : "key", now);
+            await page.locator(`${SHEET} [data-mobile2-menu-row="keys"]`).click();
+            await page.locator("[data-keys-page] [data-keys-row]").first().waitFor();
+            await capture(page, at, "phone", now === "noKey" ? "keys-missing" : "keys", now);
           }
           if (pageErrors.length) failures.push(`${tag}: page errors ${pageErrors.join(" | ")}`);
         } catch (error) {
@@ -7179,7 +7197,7 @@ describe("the header's menu, built: variant 2's icon row, variant 3's rows", () 
         states.find((entry) => entry.surface === surface && entry.frame === frame && entry.lang === lang && entry.state === state && entry.scheme === scheme);
       for (const lang of ["en", "uk"] as const) {
         const uk = lang === "uk";
-        const order = ["rest", "help-member", "settings", "memory-working", "memory-working-details", "memory-off", "memory-noKey", "memory-noKey-field", "memory-noKey-invalid", "memory-capped", "key", "key-replace", "key-missing"];
+        const order = ["rest", "help-member", "settings", "memory-working", "memory-working-details", "memory-off", "memory-noKey", "memory-noKey-keys", "keys-invalid", "memory-capped", "keys", "keys-replace", "keys-missing"];
         const cells = [];
         for (const state of order) {
           const entry = of("desktop", "1440", lang, state);
@@ -7187,7 +7205,7 @@ describe("the header's menu, built: variant 2's icon row, variant 3's rows", () 
         }
         await sheet(path.join(out, `sheet-built-desktop-${lang}.png`), uk ? "Меню заголовка, зібране: стани · 1440×900 · світла" : "The header's menu, built: its states · 1440×900 · light", 6, cells);
         const phoneCells = [];
-        for (const state of ["rest", "help", "settings", "memory-working", "memory-noKey-field", "memory-capped", "key", "rules"]) {
+        for (const state of ["rest", "help", "settings", "memory-working", "memory-noKey-keys", "memory-capped", "keys", "rules"]) {
           const entry = of("phone", "390", lang, state);
           if (entry) phoneCells.push({ label: `${state} · ${Math.round(entry.box[3])} px`, ...(await crop(path.join(out, entry.file), [0, 0, 390, 844], 0)) });
         }
@@ -7221,7 +7239,7 @@ describe("the header's menu, built: variant 2's icon row, variant 3's rows", () 
       }
       fs.mkdirSync("evidence/compact-card-menu", { recursive: true });
       fs.writeFileSync("evidence/compact-card-menu/header-menu-built.json", `${JSON.stringify({
-        driver: "src/components/kanban/kanbanBoard.browser.test.tsx", block: "the header's menu, built", bound: { desktop: DESKTOP_PX, settings: SETTINGS_PX, phone: TODAY_SHEET_PX },
+        driver: "src/components/kanban/kanbanBoard.browser.test.tsx", block: "the header's menu, built", bound: { desktop: DESKTOP_PX, settings: SETTINGS_PX, keys: KEYS_PX, phone: TODAY_SHEET_PX },
         tallest: {
           desktop: Math.max(...states.filter((entry) => entry.surface === "desktop").map((entry) => entry.box[3])),
           phone: Math.max(...states.filter((entry) => entry.surface === "phone").map((entry) => entry.box[3])),
@@ -17553,7 +17571,8 @@ describe("narrow card: the pipeline stages read as one vertical chain", () => {
           if (wide.width < 380) fail(`t-chain-wide: the lane is ${wide.width} px wide, expected a wide one`);
           if (wide.direction !== "row") fail(`t-chain-wide: the chain is ${wide.direction}, expected row`);
           for (const step of wide.steps.slice(1, 2)) if (step.arrow !== "inline" && step.arrow !== "block" && step.arrow !== "flex") fail(`t-chain-wide/${step.stage}: the arrow is ${step.arrow}`);
-          for (const step of wide.steps) {
+          /* The wide lane's branch hangs under its stage on an elbow of its own (the describe below); its main stages draw no rail and no elbow. */
+          for (const step of wide.steps.filter((entry) => entry.kind !== "branch")) {
             if (step.before.content !== "none" && step.before.content !== "normal") fail(`t-chain-wide/${step.stage}: draws a rail`);
             if (step.after.content !== "none" && step.after.content !== "normal") fail(`t-chain-wide/${step.stage}: draws an elbow`);
           }
@@ -17566,6 +17585,83 @@ describe("narrow card: the pipeline stages read as one vertical chain", () => {
     fs.writeFileSync(`evidence/stage-chain-vertical/${STAMP}.json`, `${JSON.stringify({ readings, failures }, null, 2)}\n`);
     expect(failures).toEqual([]);
   }, 180_000);
+});
+
+describe("wide card: each fail branch hangs under the stage it fails from", () => {
+  /*
+   * A lane of 380 px or more keeps its pass row on one line and draws a fail
+   * branch under the stage it fails from, on the narrow form's dashed elbow,
+   * not at the end of the chain. Read over `?scenario=stage-chain` at seven
+   * desktop widths, in both colour schemes and both languages, from geometry
+   * and computed style. STAGE_CHAIN_STAMP=before records the same frames on a
+   * checkout without the change and asserts nothing about the layout.
+   * Frames go to STAGE_CHAIN_PNG_DIR, outside the tree.
+   */
+  const STAMP = process.env.STAGE_CHAIN_STAMP === "before" ? "before" : "after";
+  const PNG_DIR = process.env.STAGE_CHAIN_PNG_DIR ?? path.join(process.env.HOME ?? ".", "Pictures/delegatus-review/stage-chain-branch");
+  const GATES: Record<string, Record<string, string>> = {
+    "t-chain-wide": { "review-fix": "review" },
+    "t-chain-gates": { fix: "review", "ui-fix": "visual" },
+    "t-chain-gates-long": { "critique-fix": "critique", "review-fix": "review" },
+    "t-chain-shared": { fix: "visual" },
+    "t-chain-failed": { "critique-fix": "critique" },
+    "t-chain-wide-long": { "review-fix-after-the-attachment-check": "review" },
+  };
+  const seatFolded = `try { localStorage.setItem("llv:kanban-seat:v2", JSON.stringify({ height: null, collapsed: { atlas: true }, placement: "top", width: null })); } catch {}`;
+  const byState = (lane: Lane, stage: string) => lane.steps.find((step) => step.stage === stage)!.state;
+
+  browserTest("a fix stands under its gate in every wide lane; the pass row stays one line; the live stage keeps its colour", async () => {
+    const out = path.resolve(".artifacts/stage-chain-branch");
+    fs.mkdirSync(out, { recursive: true });
+    fs.mkdirSync(PNG_DIR, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const failures: string[] = [];
+    const readings: Record<string, Record<string, Lane>> = {};
+    try {
+      for (const width of [1000, 1024, 1180, 1280, 1366, 1440, 1920]) for (const scheme of ["light", "dark"] as const) for (const lang of ["en", "uk"] as const) {
+        const key = `${width}-${scheme}-${lang}`;
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=stage-chain`, { width, height: 1100 }, scheme, lang);
+        try {
+          await context.addInitScript(seatFolded);
+          await page.reload();
+          await page.waitForSelector(`${card("t-chain-wide")} .pblock[data-density="task"]`, { timeout: 30_000 });
+          await page.waitForTimeout(600);
+          const lanes: Record<string, Lane> = {};
+          for (const task of Object.keys(GATES)) {
+            await page.locator(card(task)).scrollIntoViewIfNeeded();
+            await page.waitForTimeout(150);
+            lanes[task] = await page.evaluate(measureStageChain(`[data-kanban-board] .card[data-id="task:${task}"] .pblock[data-density="task"]`)) as Lane;
+            if (!lanes[task]) throw new Error(`${key} ${task}: no lane row drawn`);
+            await page.locator(card(task)).screenshot({ path: path.join(PNG_DIR, `${STAMP}-${key}-${task}.png`) });
+          }
+          readings[key] = lanes;
+          if (STAMP === "before") { expect(pageErrors).toEqual([]); continue; }
+
+          for (const [task, gates] of Object.entries(GATES)) failures.push(...wideStageChainFailures(`${key} ${task}`, lanes[task]!, gates));
+          const fail = (text: string) => failures.push(`${key}: ${text}`);
+          /* A shared fix is drawn once, and the gate that fired it carries the live return mark. */
+          const shared = lanes["t-chain-shared"]!;
+          if (shared.steps.filter((step) => step.stage === "fix").length !== 1) fail("t-chain-shared: the shared fix is not drawn exactly once");
+          const arcLive = await page.locator(`${card("t-chain-shared")} .pb-pill[data-stage="visual"] .pret[data-arc-live="1"]`).count();
+          if (arcLive !== 1) fail(`t-chain-shared: Visual carries ${arcLive} live return marks, expected 1`);
+          /* The live stage stands out: a running pill's border differs from a passed one's, branch or not. */
+          const live = lanes["t-chain-gates"]!;
+          const border = (stage: string) => live.steps.find((step) => step.stage === stage)!.borderColor;
+          if (byState(live, "visual") !== "st-running") fail("t-chain-gates: Visual is not running");
+          if (border("visual") === border("build")) fail("t-chain-gates: the running pill looks like a passed one");
+          const running = shared.steps.find((step) => step.stage === "fix")!;
+          if (running.state !== "st-running" || running.borderColor === shared.steps.find((step) => step.stage === "build")!.borderColor) fail("t-chain-shared: the running fix does not stand out");
+          /* The fix that failed keeps the lane's answer panel. */
+          if (await page.locator(`${card("t-chain-failed")} .pb-answer, ${card("t-chain-failed")} [data-answer-action]`).count() === 0) fail("t-chain-failed: the answer panel is gone");
+          expect(pageErrors).toEqual([]);
+        } finally { await context.close(); }
+      }
+    } finally { await browser.close(); server.stop(); }
+    fs.mkdirSync("evidence/stage-chain-branch", { recursive: true });
+    fs.writeFileSync(`evidence/stage-chain-branch/${STAMP}.json`, `${JSON.stringify({ readings, failures }, null, 2)}\n`);
+    expect(failures).toEqual([]);
+  }, 600_000);
 });
 
 describe("fast TTS header", () => {
@@ -21876,7 +21972,7 @@ describe("floating voice companion", () => {
     fs.mkdirSync(EVIDENCE, { recursive: true });
     fs.writeFileSync(path.join(EVIDENCE, name), `${JSON.stringify(body, null, 2)}\n`);
   };
-  type Voice = { dispatches: number; delivered: boolean; finished: boolean; settingsWrites: Array<Record<string, unknown>>; keyWrites: number[]; settingsOpened: number; events: Array<{ type: string; atMs: number; responseId?: string; itemId?: string; speaker?: string }> };
+  type Voice = { dispatches: number; delivered: boolean; finished: boolean; settingsWrites: Array<Record<string, unknown>>; settingsOpened: number; events: Array<{ type: string; atMs: number; responseId?: string; itemId?: string; speaker?: string }> };
   const voiceOf = (page: Page) => page.evaluate(() => {
     const v = (window as unknown as { voiceCompanion: Voice }).voiceCompanion;
     return { dispatches: v.dispatches, finished: v.finished, events: v.events.map((event) => ({ type: event.type, atMs: Math.round(event.atMs), itemId: event.itemId, speaker: event.speaker })) };
@@ -23574,17 +23670,17 @@ describe("floating voice companion", () => {
   }, 900_000);
 
   /* The shell's own mount and the settings rows that turn it on. The fixture mounts nothing: the Viewer does, once
-     the settings routes (answered here from memory) say the companion is enabled. The key typed is a made-up
-     string; nothing on this page reaches a provider. The rows offer one choice of how the voice talks: the API
-     with its key (the default) or Codex V3 on a managed account's plan (operator decision, 2026-10-11). */
-  browserTest("off by default; the settings rows turn the companion on in the shell, choose the API or Codex V3, take a key without echoing it and keep the cap only for the API, and offer no demo", async () => {
+     the settings routes (answered here from memory) say the companion is enabled. Nothing on this page reaches a
+     provider. The rows offer one choice of how the voice talks: the API with its key (the default) or Codex V3 on
+     a managed account's plan (operator decision, 2026-10-11); the key itself is entered in «Keys», which the key
+     row opens (docs/design/keys-settings.md §4). */
+  browserTest("off by default; the settings rows turn the companion on in the shell, choose the API or Codex V3, open «Keys» for the key and keep the cap only for the API, and offer no demo", async () => {
     fs.mkdirSync(HANDOFF, { recursive: true });
     const server = await serveEvidenceFixture(OUT);
     const { browser, close } = await launchOwned(["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream"]);
     const cases: unknown[] = [];
     let processes = { started: 0, leftAfterClose: 0 };
-    const KEY = "fixture-voice-key-0000";
-    const writes = (page: Page) => page.evaluate(() => { const v = (window as unknown as { voiceCompanion: Voice & { sessionStarts: unknown[] } }).voiceCompanion; return { settings: v.settingsWrites, keys: v.keyWrites, starts: v.sessionStarts }; });
+    const writes = (page: Page) => page.evaluate(() => { const v = (window as unknown as { voiceCompanion: Voice & { sessionStarts: unknown[] } }).voiceCompanion; return { settings: v.settingsWrites, starts: v.sessionStarts }; });
     /* The Codex plan lines as the dialog writes them, with the reset and read times the page itself formats in the
        board's 24-hour form: the whole-account note, one line a window, the reading time. */
     const planLines = (page: Page, lang: "en" | "uk") => page.evaluate((lang) => {
@@ -23623,23 +23719,11 @@ describe("floating voice companion", () => {
           await section.locator("[data-voice-companion-key]").waitFor({ timeout: 10_000 });
           if (viewport.width > 639) await page.waitForSelector('[data-voice-companion][data-mode="official-realtime"]', { timeout: 10_000 });
           expect((await writes(page)).settings, `${label}: the switch wrote one setting`).toEqual([{ enabled: true }]);
-          /* The key: typed once, sent once, cleared, and nowhere on the page afterwards. */
-          expect((await section.locator("[data-voice-companion-key-status]").innerText()).startsWith(translate(lang, "voiceCompanion.settings.key.missing")), `${label}: no key yet`).toBe(true);
-          const input = section.locator("[data-voice-companion-key] input");
-          expect(await input.getAttribute("type"), `${label}: the key is typed masked`).toBe("password");
-          await input.fill(KEY);
-          await section.locator("[data-voice-companion-key] button[type=submit]").click();
-          await page.waitForSelector('[data-voice-companion-key][data-key-source="file"]', { timeout: 10_000 });
-          const afterKey = await page.evaluate((key) => ({
-            value: document.querySelector<HTMLInputElement>("[data-voice-companion-key] input")!.value,
-            inPage: document.documentElement.outerHTML.includes(key) || [...document.querySelectorAll<HTMLInputElement>("input, textarea")].some((field) => field.value.includes(key)),
-            inStorage: JSON.stringify({ ...localStorage }).includes(key) || JSON.stringify({ ...sessionStorage }).includes(key) || location.href.includes(key),
-            status: document.querySelector<HTMLElement>("[data-voice-companion-key-status]")!.innerText.trim(),
-          }), KEY);
-          expect(afterKey.value, `${label}: the field is cleared`).toBe("");
-          expect([afterKey.inPage, afterKey.inStorage], `${label}: the key is nowhere in the page, its storage or its address`).toEqual([false, false]);
-          expect(afterKey.status.startsWith(translate(lang, "voiceCompanion.settings.key.saved")), `${label}: saved is said (${afterKey.status})`).toBe(true);
-          expect((await writes(page)).keys, `${label}: the key was sent once`).toEqual([KEY.length]);
+          /* The key: where it comes from, and «Open Keys»; no field here, since keys are entered in one place. */
+          const keyStatus = (await section.locator("[data-voice-companion-key-status]").innerText()).trim();
+          expect(keyStatus.startsWith(translate(lang, "voiceCompanion.settings.key.missing")), `${label}: no key yet`).toBe(true);
+          expect(await section.locator("[data-voice-companion-key] input").count(), `${label}: no key field`).toBe(0);
+          expect((await section.locator("[data-voice-companion-open-keys]").innerText()).trim(), `${label}: the way to «Keys»`).toBe(translate(lang, "keys.open"));
           /* The cap and the month's usage. */
           const cap = section.locator("[data-voice-companion-cap] input");
           expect(await cap.inputValue(), `${label}: the default cap`).toBe("20");
@@ -23660,23 +23744,15 @@ describe("floating voice companion", () => {
             controls: node.querySelectorAll("input, button, select").length,
             demoWords: /demo|демо/iu.test(node.textContent ?? ""),
           }));
-          expect(choices, `${label}: the switch, the choice with the API chosen, the key and the cap`).toEqual({ choice: [["api", true, translate(lang, "voiceCompanion.settings.backend.api")], ["codex", false, translate(lang, "voiceCompanion.settings.backend.codex")]], controls: 6, demoWords: false });
+          /* The switch, the two choices, «Open Keys», the cap and the call-memory row's two controls (the count read 6 on main before the call-memory row came). */
+          expect(choices, `${label}: the switch, the choice with the API chosen, the way to the key and the cap`).toEqual({ choice: [["api", true, translate(lang, "voiceCompanion.settings.backend.api")], ["codex", false, translate(lang, "voiceCompanion.settings.backend.codex")]], controls: 7, demoWords: false });
           const dialog = await page.evaluate(() => {
             const box = document.querySelector<HTMLElement>("[data-voice-companion-settings]")!.getBoundingClientRect();
             const section = document.querySelector<HTMLElement>("[data-voice-companion-setting]")!;
             const cut = [...section.querySelectorAll<HTMLElement>("button, label, legend, p, span")].filter((node) => node.scrollWidth > node.clientWidth + 1 && getComputedStyle(node).overflow !== "visible").map((node) => node.innerText.slice(0, 30));
-            /* A placeholder is never cut: its text, set in the field's own font, fits the field's content box. */
-            const field = section.querySelector<HTMLInputElement>("[data-voice-companion-key] input")!;
-            const style = getComputedStyle(field);
-            const pen = document.createElement("canvas").getContext("2d")!;
-            pen.font = `${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
-            const room = field.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
-            const placeholder = { text: field.placeholder, width: Math.ceil(pen.measureText(field.placeholder).width), room: Math.floor(room) };
-            return { insideViewport: box.left >= 0 && box.top >= 0 && box.right <= innerWidth && box.bottom <= innerHeight, sectionWidth: Math.round(section.getBoundingClientRect().width), overflowsDialog: section.scrollWidth > section.clientWidth + 1, cut, placeholder };
+            return { insideViewport: box.left >= 0 && box.top >= 0 && box.right <= innerWidth && box.bottom <= innerHeight, sectionWidth: Math.round(section.getBoundingClientRect().width), overflowsDialog: section.scrollWidth > section.clientWidth + 1, cut };
           });
           expect([dialog.insideViewport, dialog.overflowsDialog, dialog.cut], `${label}: the rows fit the dialog`).toEqual([true, false, []]);
-          expect(dialog.placeholder.text, `${label}: the replace placeholder shows`).toBe(translate(lang, "voiceCompanion.settings.key.replace"));
-          expect(dialog.placeholder.width, `${label}: the whole placeholder fits its field (${JSON.stringify(dialog.placeholder)})`).toBeLessThanOrEqual(dialog.placeholder.room);
           await page.screenshot({ path: path.join(HANDOFF, `settings-on-${label}.png`) });
           const monthSpend = await section.locator("[data-voice-companion-usage]").innerText();
           /* Codex V3 chosen: the key and the cap close, nothing asks for a key, and the last Codex call shows with the
@@ -23715,7 +23791,8 @@ describe("floating voice companion", () => {
             controls: node.querySelectorAll("input, button, select").length,
             keyWords: /\bkey\b|ключ|OpenAI|\$/iu.test(node.querySelector("[data-voice-companion-codex]")?.textContent ?? ""),
           }));
-          expect(codexRows, `${label}: the switch and the choice alone, and no word of a key`).toEqual({ controls: 3, keyWords: false });
+          /* The switch, the two choices and the call-memory row's two controls (3 on main before that row came). */
+          expect(codexRows, `${label}: the switch and the choice alone, and no word of a key`).toEqual({ controls: 5, keyWords: false });
           const codexDialog = await page.evaluate(() => {
             const box = document.querySelector<HTMLElement>("[data-voice-companion-settings]")!.getBoundingClientRect();
             const section = document.querySelector<HTMLElement>("[data-voice-companion-setting]")!;
@@ -23748,11 +23825,12 @@ describe("floating voice companion", () => {
           await page.waitForSelector("[data-voice-companion]", { state: "detached", timeout: 10_000 });
           expect(pageErrors, label).toEqual([]);
           expect((await writes(page)).starts, `${label}: mounting started no call`).toEqual([]);
-          cases.push({ viewport: `${viewport.width}x${viewport.height}`, lang, scheme, choices, mountedBeforeEnable: 0, settingsWrites: (await writes(page)).settings, keyWrites: 1, keyEchoed: false, keyFieldAfterSave: afterKey.value, keyStatus: afterKey.status, dialog, codex: { lastCall: codexLastCall, rows: codexRows, dialog: codexDialog }, shellMount: { block: placed.block, lane: placed.lane, overlapArea: placed.overlapArea, textUnderCharacter: placed.textUnderCharacter } });
+          cases.push({ viewport: `${viewport.width}x${viewport.height}`, lang, scheme, choices, mountedBeforeEnable: 0, settingsWrites: (await writes(page)).settings, keyStatus, dialog, codex: { lastCall: codexLastCall, rows: codexRows, dialog: codexDialog }, shellMount: { block: placed.block, lane: placed.lane, overlapArea: placed.overlapArea, textUnderCharacter: placed.textUnderCharacter } });
         } finally { await context.close(); }
       }
       /* The real backend with no key refuses in words before any microphone prompt, and points at the settings;
-         a key from the environment takes precedence and is said so, with the field closed. */
+         a key from the environment takes precedence and is said so, and «Open Keys» closes the dialog onto «Keys»
+         at the OpenAI key, labelled as set by its variable. */
       for (const lang of ["en", "uk"] as const) {
         const { context, page, pageErrors } = await openVoice(browser, server.base, "&mount=product", { viewport: VIEWPORT, scheme: lang === "en" ? "dark" : "light", lang, motion: "reduce", product: true });
         try {
@@ -23776,13 +23854,20 @@ describe("floating voice companion", () => {
         try {
           await openSettings(env.page);
           await env.page.locator("[data-voice-companion-enable]").click();
-          const form = env.page.locator('[data-voice-companion-key][data-key-source="env"]');
-          await form.waitFor({ timeout: 10_000 });
-          expect(await form.locator("input").isDisabled(), `environment key, ${lang}: the field is closed`).toBe(true);
-          expect((await form.locator("[data-voice-companion-key-status]").innerText()).trim(), `environment key, ${lang}`).toBe(translate(lang, "voiceCompanion.settings.key.env"));
+          const row = env.page.locator('[data-voice-companion-key][data-key-source="env"]');
+          await row.waitFor({ timeout: 10_000 });
+          expect(await row.locator("input").count(), `environment key, ${lang}: no field`).toBe(0);
+          expect((await row.locator("[data-voice-companion-key-status] span").first().innerText()).trim(), `environment key, ${lang}`).toBe(translate(lang, "voiceCompanion.settings.key.env"));
           await env.page.screenshot({ path: path.join(HANDOFF, `settings-env-key-${lang}.png`) });
+          await row.locator("[data-voice-companion-open-keys]").click();
+          await env.page.waitForSelector("[data-voice-companion-settings]", { state: "detached", timeout: 10_000 });
+          const openai = env.page.locator("[data-rail-menu-panel] [data-header-menu-page='keys'] [data-keys-row='openai']");
+          await openai.waitFor({ timeout: 10_000 });
+          expect((await openai.locator("[data-keys-env-tail]").innerText()).trim(), `environment key, ${lang}: «Keys» says the variable sets it`).toBe(`· ${translate(lang, "keys.state.envShort")}`);
+          expect(await env.page.evaluate(() => document.activeElement?.getAttribute("data-keys-eye")), `environment key, ${lang}: focus on the OpenAI key's eye`).toBe("openai");
+          await env.page.screenshot({ path: path.join(HANDOFF, `settings-env-key-to-keys-${lang}.png`) });
           expect(env.pageErrors).toEqual([]);
-          cases.push({ lang, environmentKey: "said to take precedence; the field and Save are disabled" });
+          cases.push({ lang, environmentKey: "said to take precedence, no field; «Open Keys» closed the dialog onto «Keys» at the OpenAI key" });
         } finally { await env.context.close(); }
       }
       /* Codex V3 chosen and no key anywhere: Talk opens the microphone and asks the session route to start, with no
@@ -30880,6 +30965,9 @@ describe("role avatars: Delegatus in each role's costume on answers, internal ca
         const line = bar?.querySelector("[data-mobile2-chat-state]")?.parentElement ?? null;
         return bar ? { marks: bar.querySelectorAll(".role-mark").length, avatars: bar.querySelectorAll("[data-role-avatar]").length, line: line?.textContent ?? null, lineOver: line ? line.scrollWidth - line.clientWidth : null } : null;
       })(),
+      /* The dark theme swaps every avatar for the keyline-free drawing by CSS (roleAvatarDarkCss.ts); the light theme leaves the picture alone. */
+      swapped: [...document.querySelectorAll("img[data-role-avatar]")].filter((image) => getComputedStyle(image).content.startsWith("url(")).length,
+      avatars: document.querySelectorAll("img[data-role-avatar]").length,
       sideways: document.documentElement.scrollWidth - innerWidth,
       broken: [...document.images].filter((image) => image.hasAttribute("data-role-avatar") && !(image.complete && image.naturalWidth > 0)).length,
     };
@@ -30906,6 +30994,8 @@ describe("role avatars: Delegatus in each role's costume on answers, internal ca
             await page.addStyleTag({ content: "[data-attention-toast] { display: none !important; }" });
             /* The frame variant production draws by default (the layout's boot script, which the fixture does not run). */
             await page.evaluate((frame) => document.documentElement.setAttribute("data-role-frame", frame), DEFAULT_ROLE_FRAME);
+            /* And the stylesheet the layout emits for the dark theme's avatars. */
+            await page.addStyleTag({ content: roleAvatarDarkCss() });
             const scope = shape.phone ? "[data-testid='mobile-focused-pane']" : view === "seat" ? "[data-kanban-seat]" : "[data-agent-window] .reader-slot:not([data-incoming])";
             await page.waitForSelector(`${scope} [data-tts-message] [data-tts-body]`, { timeout: 30_000 }).catch(() => undefined);
             if (view === "seat") await page.waitForFunction((scope) => document.querySelectorAll(`${scope} [data-agent-author]`).length >= 12, scope, { timeout: 20_000 }).catch(() => undefined);
@@ -30918,6 +31008,7 @@ describe("role avatars: Delegatus in each role's costume on answers, internal ca
             if (reading.sideways > 0) failures.push(`${label}: scrolls ${reading.sideways}px sideways`);
             if (reading.broken) failures.push(`${label}: ${reading.broken} avatars did not load`);
             if (!reading.answers.length) failures.push(`${label}: no answer rendered`);
+            if (reading.swapped !== (scheme === "dark" ? reading.avatars : 0)) failures.push(`${label}: ${reading.swapped} of ${reading.avatars} avatars wear the keyline-free picture, expected ${scheme === "dark" ? "all" : "none"}`);
             for (const answer of reading.answers) {
               if (answer.avatar !== `${role}:${answerSize}`) failures.push(`${label}: an answer draws ${answer.avatar}, not ${role}:${answerSize}`);
               if (answer.engine !== "Claude" || answer.engineInsideAvatar) failures.push(`${label}: an answer's engine reads ${JSON.stringify(answer.engine)} apart from the avatar: ${!answer.engineInsideAvatar}`);

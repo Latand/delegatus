@@ -1415,7 +1415,7 @@ test("failed rollback checkpoints retry with bounded backoff until the mirror co
   expect(scheduled).toHaveLength(0);
 });
 
-test("production-sized read burn-in defers full snapshot loading until its checkpoint", () => {
+test("production-sized read burn-in checkpoints the current cached snapshot without reloading history", () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-registry-read-no-snapshot-"));
   const filename = path.join(directory, "agent-registry.json");
   const seed = new AgentRegistry(filename);
@@ -1462,7 +1462,10 @@ test("production-sized read burn-in defers full snapshot loading until its check
   expect(snapshotLoads).toBe(startupLoads);
 
   checkpoints.shift()!();
-  expect(snapshotLoads).toBe(startupLoads + 1);
+  expect(snapshotLoads).toBe(startupLoads);
+  const mirrored = JSON.parse(fs.readFileSync(filename, "utf8"));
+  expect(Object.keys(mirrored.receipts)).toHaveLength(18_000);
+  expect(mirrored._sqliteRevision).toBe(registry.storageDiagnostics().revision);
   expect(registry.storageDiagnostics().mirrorDirty).toBeFalse();
 });
 

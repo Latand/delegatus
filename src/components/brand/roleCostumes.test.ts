@@ -29,7 +29,7 @@ describe("role costumes", () => {
   test("the twelve approved role costumes and the neutral drawing stay distinct", () => {
     const approved = ROLE_IDS.filter((role) => role !== "curator");
     expect(approved).toHaveLength(12);
-    expect(new Set([...approved, "neutral"].map(costumeSvg)).size).toBe(13);
+    expect(new Set([...approved, "neutral"].map((role) => costumeSvg(role))).size).toBe(13);
   });
 
   test("curator changes only the cleaner's cap fabric to lime", () => {
@@ -78,5 +78,27 @@ describe("role costumes", () => {
       expect(box.right).toBeLessThanOrEqual(61);
       expect(box.bottom).toBeLessThanOrEqual(62);
     }
+  });
+
+  test("the dark drawing is the light one without the keyline filter", () => {
+    for (const role of FRAME_ROLES) {
+      const light = costumeSvg(role);
+      const dark = costumeSvg(role, "dark");
+      expect(light).toBe(costumeSvg(role, "light"));
+      expect(dark).not.toContain("<filter");
+      expect(dark).not.toContain("feMorphology");
+      expect(dark).not.toContain("url(#k)");
+      expect(dark).toBe(light.replace(/<filter id="k".*?<\/filter>/, "").replace(' filter="url(#k)"', ""));
+    }
+  });
+
+  test("the keyline is a ring in the light drawing and absent from the dark one", async () => {
+    /* One pixel row out from the body's left edge at mid height: the ring is pale and opaque there, the dark drawing is clear. */
+    const probe = async (svg: string) => {
+      const { data, info } = await sharp(Buffer.from(svg), { density: 72 * 8 }).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+      return data[(Math.round(36 * 8) * info.width + Math.round(9.4 * 8)) * info.channels + 3]!;
+    };
+    expect(await probe(costumeSvg("builder"))).toBeGreaterThan(60);
+    expect(await probe(costumeSvg("builder", "dark"))).toBe(0);
   });
 });

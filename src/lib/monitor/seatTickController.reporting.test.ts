@@ -120,6 +120,69 @@ describe("seat auto-rotation through production seams", () => {
     for (let i = 0; i < 3; i++) { f.advance(5); await f.check(); }
     expect(f.spawns).toHaveLength(1); expect(f.cards()).toHaveLength(1); expect(f.reports()).toHaveLength(1);
   }));
+  test("seat tick launches its successor through the production spawn defer without a request scope", () => fixture(async f => {
+    const { productionSpawnCommandDependencies: spawn } = await import("@/lib/agent/spawnCommand");
+    const { productionSeatCommandDependencies } = await import("@/lib/orchestrator/seatCommand");
+    const original = { ...spawn };
+    const env = { ...process.env };
+    let launched = false;
+    let deferredWork: Promise<void> | undefined;
+    let finish!: () => void;
+    const finished = new Promise<void>(resolve => { finish = resolve; });
+    const cwd = path.dirname(f.registryPath);
+    const account = { engine: "claude" as const, accountId: "rotation-test", kind: "managed" as const,
+      home: path.join(cwd, "account"), transcriptRoot: path.join(cwd, "projects"), env: { NODE_ENV: "test" } };
+    Object.assign(process.env, { LLV_SPAWN_TRANSPORT: "structured", LLV_STRUCTURED_HOSTS: "1", LLV_RUNTIME_EVENTS: "1", NEXT_PUBLIC_RUNTIME_UI: "1",
+      LLV_RUNTIME_HOST_SOCKET: path.join(cwd, "fixture.sock") });
+    Object.assign(spawn, {
+      registry: () => f.registry,
+      engineReadiness: () => "connected",
+      assertStructuredRuntime: () => {},
+      resolveHealthySpawnAccount: async () => account,
+      resolveSpawnAccount: () => account,
+      resolvePinnedSpawnAdmission: async () => ({ kind: "admissible", basis: "current", stale: false, retryAt: null }),
+      runtimeHostClient: () => ({}),
+      defer: (work: () => Promise<void>) => original.defer(() => {
+        deferredWork = work();
+        return deferredWork;
+      }),
+      publishFilesRevision: async () => {},
+      spawnStructuredConversation: async (input: Parameters<typeof spawn.spawnStructuredConversation>[0]) => {
+        const successorPath = path.join(cwd, "successor.jsonl");
+        fs.writeFileSync(successorPath, "");
+        f.registry.settleSpawn(input.receipt.launchId, {
+          key: { engine: "claude", sessionId: "rotation-successor" }, artifactPath: successorPath,
+          cwd, accountId: account.accountId, launchProfile: input.receipt.launchProfile,
+          status: "live", host: null, claimEpoch: 0, claimOwner: null, pendingAction: null,
+        });
+        launched = true;
+        finish();
+        return { ok: true, target: null, path: successorPath, effectivePermissionMode: "default", launchId: input.receipt.launchId,
+          conversationId: input.receipt.conversationId, launched: true, retrySafe: false, initialMessage: "delivered", state: "settled" };
+      },
+    });
+    f.command.spawn = productionSeatCommandDependencies.spawn;
+    f.command.engineReadiness = () => "connected";
+    f.command.startBoardReport = () => {};
+    f.command.stampRegistryIdentity = () => {};
+    try {
+      await f.check();
+      expect(f.state().autoRotation?.lastAttempt).toMatchObject({ state: "rotated" });
+      await finished;
+      await deferredWork;
+      expect(launched).toBe(true);
+      expect(f.active().predecessorConversationId).toBe(f.original.conversationId);
+      expect(f.active().intent.launchId).toBeTruthy();
+      expect(f.active().intent.error).toBeNull();
+      expect(f.registry.spawnReceiptForClientAttempt(f.active().intent.clientRequestId)?.state).toBe("completed");
+      expect(f.cards().every(card => card.status === "done")).toBe(true);
+    } finally {
+      await deferredWork?.catch(() => {});
+      Object.assign(spawn, original);
+      for (const key of Object.keys(process.env)) if (!(key in env)) delete process.env[key];
+      Object.assign(process.env, env);
+    }
+  }));
   test("busy seat receives one steer-or-queue nudge at fifteen minutes and rotates only after the turn ends", () => fixture(async f => {
     f.turn(true);
     for (let i = 0; i < 3; i++) { await f.check(); f.advance(5); }

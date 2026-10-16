@@ -24,7 +24,7 @@ afterEach(() => {
   fs.rmSync(root, { recursive: true, force: true });
 });
 function request(body: unknown, headers: Record<string, string> = {}) {
-  return new NextRequest("http://localhost/api/asks-you/key", { method: "PUT", headers: { host: "localhost", origin: "http://localhost", "content-type": "application/json", ...headers }, body: JSON.stringify(body) });
+  return new NextRequest("http://localhost/api/asks-you/key", { method: "PUT", headers: { host: "localhost", origin: "http://localhost", "sec-fetch-site": "same-origin", "content-type": "application/json", ...headers }, body: JSON.stringify(body) });
 }
 for (const existing of [false, true]) test(`staging refuses before reading the body and preserves the shared key (${existing})`, async () => {
   const filename = openRouterKeyPath();

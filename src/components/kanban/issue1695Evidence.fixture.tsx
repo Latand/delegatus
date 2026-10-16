@@ -196,8 +196,8 @@ const VOICE_PRODUCT = VOICE && new URLSearchParams(location.search).get("mount")
    `voiceCompanion.loaded` back rather than its own clock, which may have passed the next minute. */
 const VOICE_LOADED = Math.floor(Date.now() / 60_000) * 60;
 const voice = { loaded: VOICE_LOADED, delivered: new URLSearchParams(location.search).get("delivered") === "1", answered: new URLSearchParams(location.search).get("delivered") === "1", dispatches: 0, finished: false, events: [] as CompanionEvent[],
-  /* What the settings routes were asked to write. The key itself is never kept: its length is all the driver needs. */
-  settingsWrites: [] as Array<Record<string, unknown>>, keyWrites: [] as number[], sessionStarts: [] as Array<Record<string, unknown>>, settingsOpened: 0 };
+  /* What the settings routes were asked to write. */
+  settingsWrites: [] as Array<Record<string, unknown>>, sessionStarts: [] as Array<Record<string, unknown>>, settingsOpened: 0 };
 const voicePlan = (): CompanionPlan => ({ type: "pro", limitReached: false, observedAt: VOICE_LOADED * 1000,
   primary: { usedPercent: 23, resetsAt: VOICE_LOADED + 7_200, windowMinutes: 300 }, secondary: { usedPercent: 77, resetsAt: VOICE_LOADED + 4 * 86_400, windowMinutes: 10_080 } });
 const VOICE_CODEX = new URLSearchParams(location.search).get("backend") === "codex";
@@ -1587,6 +1587,48 @@ const stageChainPipelines: Pipeline[] = STAGE_CHAIN ? (() => {
         { stageId: "build", attempts: [attempt(1, "passed", null, done(30))] },
         { stageId: "confirm-each-attachment-arrives-whole-on-the-phone-the-desktop-and-the-bridge", attempts: [attempt(1, "running", null, { startedAt: iso(8 * MIN), ...passVia("build") })] },
       ], { stageId: "confirm-each-attachment-arrives-whole-on-the-phone-the-desktop-and-the-bridge", state: "running", input: null, activatedBy: null }),
+    /* The wide row hangs a fix under its gate: two gates, each with its own fix; Review fired once, Visual runs, Ui fix has no attempt. */
+    pipeline("p-chain-gates", L("Review and check the export screens", "Переглянути і перевірити екрани експорту"), "t-chain-gates", "running",
+      [stage("build", "builder", "review"), stage("review", "reviewer", "visual", { kind: "run", onFail: { to: "fix", maxRounds: 2 } }), stage("visual", "reviewer", null, { kind: "run", onFail: { to: "ui-fix", maxRounds: 2 } }), stage("fix", "builder", "review"), stage("ui-fix", "builder", "visual")],
+      [
+        { stageId: "build", attempts: [attempt(1, "passed", null, done(90))] },
+        { stageId: "review", attempts: [attempt(1, "failed", null, { ...done(70), ...passVia("build") }), attempt(2, "passed", null, { ...done(50), ...passVia("fix") })] },
+        { stageId: "fix", attempts: [attempt(1, "passed", null, { ...done(60), ...failVia("review") })] },
+        { stageId: "visual", attempts: [attempt(1, "running", null, { startedAt: iso(10 * MIN), ...passVia("review") })] },
+      ], { stageId: "visual", state: "running", input: null, activatedBy: null }),
+    /* Two gates in a row, each with a fix wider than its gate and no attempt yet: the earlier fix takes the room up to the later fix, and wraps at spaces only. */
+    pipeline("p-chain-gates-long", L("Critique and review the sync screens", "Критика і рев’ю екранів синхронізації"), "t-chain-gates-long", "running",
+      [stage("build", "builder", "critique"), stage("critique", "architect", "review", { onFail: { to: "critique-fix", maxRounds: 2 } }), stage("review", "reviewer", null, { kind: "run", onFail: { to: "review-fix", maxRounds: 2 } }), stage("critique-fix", "builder", "critique"), stage("review-fix", "builder", "review")],
+      [
+        { stageId: "build", attempts: [attempt(1, "passed", null, done(90))] },
+        { stageId: "critique", attempts: [attempt(1, "passed", null, { ...done(70), ...passVia("build") })] },
+        { stageId: "review", attempts: [attempt(1, "running", null, { startedAt: iso(10 * MIN), ...passVia("critique") })] },
+      ], { stageId: "review", state: "running", input: null, activatedBy: null }),
+    /* One fix shared by two gates is drawn once, under the first; it runs now because Visual failed. */
+    pipeline("p-chain-shared", L("Review and check the import screens", "Переглянути і перевірити екрани імпорту"), "t-chain-shared", "running",
+      [stage("build", "builder", "review"), stage("review", "reviewer", "visual", { kind: "run", onFail: { to: "fix", maxRounds: 2 } }), stage("visual", "reviewer", "merge", { kind: "run", onFail: { to: "fix", maxRounds: 2 } }), stage("fix", "builder", "review"), stage("merge", "cleaner", null)],
+      [
+        { stageId: "build", attempts: [attempt(1, "passed", null, done(90))] },
+        { stageId: "review", attempts: [attempt(1, "passed", null, { ...done(70), ...passVia("build") })] },
+        { stageId: "visual", attempts: [attempt(1, "failed", null, { ...done(50), ...passVia("review") })] },
+        { stageId: "fix", attempts: [attempt(1, "running", null, { startedAt: iso(10 * MIN), ...failVia("visual") })] },
+      ], { stageId: "fix", state: "running", input: null, activatedBy: failVia("visual").activatedBy }),
+    /* A fix that failed with a stage after its gate: the lane waits on the operator. */
+    pipeline("p-chain-failed", L("Critique the sync, then review it", "Критика синхронізації, потім рев’ю"), "t-chain-failed", "needs_decision",
+      [stage("build", "builder", "critique"), stage("critique", "architect", "review", { onFail: { to: "critique-fix", maxRounds: 2 } }), stage("critique-fix", "builder", "critique"), stage("review", "reviewer", null, { kind: "run" })],
+      [
+        { stageId: "build", attempts: [attempt(1, "passed", null, done(90))] },
+        { stageId: "critique", attempts: [attempt(1, "failed", null, { ...done(70), ...passVia("build") })] },
+        { stageId: "critique-fix", attempts: [attempt(1, "failed", null, { ...done(60), ...failVia("critique") })] },
+      ], { stageId: "critique-fix", state: "needs_decision", input: null, activatedBy: null }),
+    /* A fix with a name wider than its gate: the fix wraps inside its pill, the pass stages stay on one line, nothing overlaps. */
+    pipeline("p-chain-wide-long", L("Check every attachment on arrival", "Перевірити кожне вкладення при надходженні"), "t-chain-wide-long", "running",
+      [stage("build", "builder", "review"), stage("review", "reviewer", "merge", { kind: "run", onFail: { to: "review-fix-after-the-attachment-check", maxRounds: 2 } }), stage("review-fix-after-the-attachment-check", "builder", "review"), stage("merge", "cleaner", null)],
+      [
+        { stageId: "build", attempts: [attempt(1, "passed", null, done(90))] },
+        { stageId: "review", attempts: [attempt(1, "failed", null, { ...done(70), ...passVia("build") })] },
+        { stageId: "review-fix-after-the-attachment-check", attempts: [attempt(1, "running", null, { startedAt: iso(10 * MIN), ...failVia("review") })] },
+      ], { stageId: "review-fix-after-the-attachment-check", state: "running", input: null, activatedBy: failVia("review").activatedBy }),
   ];
 })() : [];
 
@@ -1891,6 +1933,11 @@ const tasks: BoardTask[] = [
     task("t-chain-live", "blocked", L("Build, review and merge the export", "Зібрати, переглянути і злити експорт"), "", 10 * MIN),
     task("t-chain-long", "blocked", L("Confirm every attachment arrives whole", "Підтвердити, що кожне вкладення доходить цілим"), "", 8 * MIN),
     task("t-chain-wide", "assigned", L("Keep the review fix on the card, wide", "Залишити виправлення рев’ю на картці, широка"), "", 45 * MIN),
+    task("t-chain-gates", "assigned", L("Review and check the export screens", "Переглянути і перевірити екрани експорту"), "", 44 * MIN),
+    task("t-chain-gates-long", "assigned", L("Critique and review the sync screens", "Критика і рев’ю екранів синхронізації"), "", 45 * MIN),
+    task("t-chain-shared", "assigned", L("Review and check the import screens", "Переглянути і перевірити екрани імпорту"), "", 43 * MIN),
+    task("t-chain-failed", "assigned", L("Critique the sync, then review it", "Критика синхронізації, потім рев’ю"), "", 42 * MIN),
+    task("t-chain-wide-long", "assigned", L("Check every attachment on arrival", "Перевірити кожне вкладення при надходженні"), "", 41 * MIN),
   ] : []),
   ...(LABELS ? [task("t-labels", "assigned", "Build the board header lane", "Design, build and critique; the critique sent the first build back.", 2 * MIN)] : []),
   ...(REVIEW_SPENT ? [task("t-review-spent", "assigned", "Show the retry count in the banner", "The last review failed, and the fix after it was never reviewed.", 3 * MIN)] : []),
@@ -3804,6 +3851,9 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   if (SCENARIO === "service-tier" && url.pathname === "/api/roles") return json({ roles: ROLE_DEFAULTS.map(role => ({ ...role, promptPreview: role.promptScaffold, config: { ...role.config, ...(role.id === "reviewer" ? { serviceTier: "ultrafast" } : {}) }, shipped: { config: role.config } })) });
   if (SCENARIO === "memory-settings" && ["/api/telemetry", "/api/memory/settings", "/api/asks-you/key", "/api/asks-you"].includes(url.pathname)) return serverFetch(url.pathname + url.search, init);
   if (HEADER_MENU && HEADER_ROUTES.includes(url.pathname)) return serverFetch(url.pathname + url.search, init);
+  /* «Keys» (docs/design/keys-settings.md): the driver answers the section's routes, or hands them to the real ones. */
+  if ((HEADER_MENU || SCENARIO === "memory-settings" || SCENARIO === "keys") && url.pathname.startsWith("/api/keys")) return serverFetch(url.pathname + url.search, init);
+  if (SCENARIO === "keys" && url.pathname === "/api/transcribe/backend") return serverFetch(url.pathname + url.search, init);
   /* Role memory (docs/design/role-memory.md §3.1): `&rolememory=1` hands the rules window and the card's lesson line to the driver's real routes. */
   if (ROLE_MEMORY && url.pathname.startsWith("/api/role-memory")) return serverFetch(url.pathname + url.search, init);
   if (url.pathname === "/api/task-icons") return serverFetch(url.pathname + url.search);
@@ -4467,14 +4517,15 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     voice.sessionStarts.push({ project: body.project, locale: body.locale, offer: typeof body.sdp === "string" && body.sdp.startsWith("v=0") });
     return json({ code: "CODEX_LIMIT_REACHED", resetsAt: VOICE_LOADED + 7_200 }, 409);
   }
-  if (VOICE && url.pathname === "/api/voice-companion/key" && method === "PUT") {
-    if (voiceSettings.keySource === "env") return json({ code: "KEY_FROM_ENV" }, 409);
-    const key = String((JSON.parse(String(init?.body ?? "{}")) as { key?: unknown }).key ?? "");
-    if (!key.trim() || /\s/u.test(key.trim())) return json({ code: "INVALID_KEY" }, 400);
-    voice.keyWrites.push(key.length);
-    voiceSettings.keySource = "file";
-    return json(voiceSettings);
-  }
+  /* «Keys», which the settings row opens on the OpenAI key (docs/design/keys-settings.md §4): the list as its route answers it, on placeholders. */
+  if (VOICE && url.pathname === "/api/keys") return json({ staging: false, owner: true, keys: [
+    { id: "openrouter", variable: "OPENROUTER_API_KEY", source: "missing", masked: null },
+    { id: "openai", variable: "OPENAI_API_KEY", source: voiceSettings.keySource, masked: voiceSettings.keySource === "missing" ? null : "sk-proj-••••••••2222" },
+    { id: "elevenlabs", variable: "ELEVENLABS_API_KEY", source: "missing", masked: null },
+    { id: "soniox", variable: "SONIOX_API_KEY", source: "missing", masked: null },
+    { id: "fishaudio", variable: "FISH_AUDIO_API_KEY", source: "missing", masked: null },
+    { id: "telegram", variable: "DELEGATUS_TELEGRAM_BOT_TOKEN", source: "missing", masked: null },
+  ] });
   if (VOICE && url.pathname === "/api/telemetry") return json({ enabled: false, locked: false, noticeDismissed: true });
   if (VOICE && url.pathname === "/api/memory/settings") return json({ enabled: false, capUsd: 5, spentUsd: 0 });
   if (url.pathname === "/api/log/provenance" && ROLE_AVATARS) {
