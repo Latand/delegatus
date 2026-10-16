@@ -1985,10 +1985,10 @@ test("a recovery helper that cannot take its plan removes it", async () => {
 });
 
 
-for (const failurePhase of ["none", "files", "page", "chunk", "output"] as const) {
+for (const failurePhase of ["none", "files", "page", "chunk", "output", "journal"] as const) {
   test(`relaunch readiness persists phases across exec and rollback, failure=${failurePhase}`, async () => {
     const failed = failurePhase !== "none";
-    const pageFails = failurePhase === "page" || failurePhase === "output";
+    const pageFails = failurePhase === "page" || failurePhase === "output" || failurePhase === "journal";
     const fixture = install();
     const running = await start(fixture);
     const before = await until(() => { const record = readRecord(fixture.state); return record.web.state === "healthy" ? record : null; });
@@ -2021,37 +2021,45 @@ for (const failurePhase of ["none", "files", "page", "chunk", "output"] as const
       process.on("SIGTERM", () => { server.stop(true); process.exit(0); });
     `);
     const outputFile = path.join(path.dirname(before.requestFile), path.basename(before.requestFile).replace("request-", "startup-output-"));
+    const installId = path.basename(before.requestFile).slice("request-".length, -".json".length);
+    const evidenceFile = path.join(path.dirname(before.requestFile), `readiness-${installId}.json`);
     if (failurePhase === "output") mkdirSync(outputFile);
+    if (failurePhase === "journal") { rmSync(evidenceFile, { force: true }); mkdirSync(evidenceFile); }
     writeFileSync(before.releasePointer, JSON.stringify({ ...next, checkoutHead: fixture.first }));
     writeFileSync(before.requestFile, JSON.stringify({ requestId: "readiness-trial", role: "relaunch", target: next.sha, rollbackPointer: null }));
     const resultFile = `${before.requestFile}.result.json`;
     const result = await until(() => existsSync(resultFile) ? JSON.parse(readFileSync(resultFile, "utf8")) : null, 15_000);
     expect(result.state).toBe(failed ? "rolled-back" : "done");
-    const installId = path.basename(before.requestFile).slice("request-".length, -".json".length);
-    const directory = path.dirname(before.requestFile);
-    const evidenceFile = path.join(directory, `readiness-${installId}.json`);
-    const runs = JSON.parse(readFileSync(evidenceFile, "utf8")).runs;
-    const candidate = runs.find((run: { revision: string }) => run.revision === next.sha);
-    expect(candidate.status).toBe(failed ? "failed" : "ready");
-    expect(candidate.phases.files.attempts).toBeGreaterThanOrEqual(1);
-    expect(candidate.phases.files.status).toBe(failurePhase === "files" ? "failed" : "ready");
-    if (failurePhase === "files") {
-      expect(candidate.phases.page.attempts).toBe(0);
-      expect(candidate.phases.page.status).toBe("pending");
+    let runs: Array<{ revision: string; status: string; elapsedMs: number; phases: Record<string, { attempts: number; elapsedMs: number; status: string }> }> = [];
+    if (failurePhase === "journal") {
+      expect(readRecord(fixture.state).web).toMatchObject({ state: "healthy", revision: fixture.first.slice(0, 7) });
+      expect(statSync(evidenceFile).isDirectory()).toBe(true);
     } else {
-      expect(candidate.phases.page.attempts).toBeGreaterThanOrEqual(2);
-      expect(candidate.phases.page.status).toBe(pageFails ? "failed" : "ready");
-      expect(candidate.phases.page.elapsedMs).toBeGreaterThanOrEqual(200);
+      runs = JSON.parse(readFileSync(evidenceFile, "utf8")).runs;
+      const candidate = runs.find((run: { revision: string }) => run.revision === next.sha)!;
+      expect(candidate.status).toBe(failed ? "failed" : "ready");
+      expect(candidate.phases.files.attempts).toBeGreaterThanOrEqual(1);
+      expect(candidate.phases.files.status).toBe(failurePhase === "files" ? "failed" : "ready");
+      if (failurePhase === "files") {
+        expect(candidate.phases.page.attempts).toBe(0);
+        expect(candidate.phases.page.status).toBe("pending");
+      } else {
+        expect(candidate.phases.page.attempts).toBeGreaterThanOrEqual(2);
+        expect(candidate.phases.page.status).toBe(pageFails ? "failed" : "ready");
+        expect(candidate.phases.page.elapsedMs).toBeGreaterThanOrEqual(200);
+      }
+      expect(candidate.elapsedMs).toBeLessThan(3_000);
+      expect(candidate.phases.chunk.status).toBe(failurePhase === "none" ? "ready" : failurePhase === "chunk" ? "failed" : "pending");
+      expect(statSync(evidenceFile).mode & 0o777).toBe(0o600);
     }
-    expect(candidate.elapsedMs).toBeLessThan(3_000);
-    expect(candidate.phases.chunk.status).toBe(failurePhase === "none" ? "ready" : failurePhase === "chunk" ? "failed" : "pending");
-    expect(statSync(evidenceFile).mode & 0o777).toBe(0o600);
     if (failed) {
-      expect(runs.at(-1).revision).toBe(fixture.first);
-      expect(runs.at(-1).status).toBe("ready");
+      if (failurePhase !== "journal") {
+        expect(runs.at(-1)!.revision).toBe(fixture.first);
+        expect(runs.at(-1)!.status).toBe("ready");
+      }
       if (failurePhase === "output") {
         expect(running.output()).toContain("could not persist candidate startup output; continuing rollback");
-      } else {
+      } else if (failurePhase !== "journal") {
         const output = JSON.parse(readFileSync(outputFile, "utf8"));
         expect(output.revision).toBe(next.sha);
         expect(output.stderr).toContain("candidate startup diagnostic");

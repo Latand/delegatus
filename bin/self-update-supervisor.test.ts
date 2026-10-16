@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
@@ -8,6 +8,7 @@ import { join } from "node:path";
 import {
   createLauncherRecord,
   createReadinessJournal,
+  TERMINAL_BOOTSTRAP_TIMEOUT_MS,
   waitForPageAndChunk,
   exitError,
   hostEntrypoint,
@@ -283,9 +284,15 @@ describe("probePageAndChunk", () => {
 
   test("does not expose malformed bearer values from fetch errors", async () => {
     const token = `fixture-prefix\nfixture-suffix`;
-    const error = await probePageAndChunk(port, 5_000, { authorization: `Bearer ${token}` });
+    const file = join(root, "malformed-header-readiness.json");
+    const journal = createReadinessJournal(file, { revision: "candidate", pid: 125 });
+    const error = await probePageAndChunk(port, 5_000, { authorization: `Bearer ${token}` }, journal.observe);
+    journal.finish(error);
     expect(error).toMatch(/^Viewer readiness probe failed( \([A-Za-z0-9_]+\))?$/);
     expect(error).not.toContain(token);
+    const persisted = readFileSync(file, "utf8");
+    expect(persisted).not.toContain("fixture-prefix");
+    expect(persisted).not.toContain("fixture-suffix");
   });
 
   test("a refused connection and a timeout are told apart without the error's text", async () => {
@@ -391,78 +398,119 @@ test.each(["gate-expired", "issuer-changed", "launcher-changed"] as const)("watc
 
 describe("bounded page and chunk readiness", () => {
   for (const slowPhase of ["page", "html", "chunk"] as const) {
-    test(`retries after one stalled ${slowPhase} and persists all phase attempts`, async () => {
-      let pages = 0;
-      let chunks = 0;
-      const server = createServer((request, response) => {
-        if (request.url === "/") {
-          pages += 1;
-          if (pages === 1 && slowPhase === "page") {
-            setTimeout(() => response.end('<script src="/_next/static/chunks/app.js"></script>'), 200).unref();
-            return;
-          }
-          response.writeHead(200, { "content-type": "text/html" });
-          if (pages === 1 && slowPhase === "html") {
-            response.flushHeaders();
-            setTimeout(() => response.end('<script src="/_next/static/chunks/app.js"></script>'), 200).unref();
-            return;
-          }
-          response.end('<script src="/_next/static/chunks/app.js"></script>');
-        } else {
-          chunks += 1;
-          if (chunks === 1 && slowPhase === "chunk") {
-            setTimeout(() => response.end("// late chunk"), 200).unref();
-            return;
-          }
-          response.end("// ready");
-        }
-      });
-      await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+    test(`retries after one stalled ${slowPhase} with deterministic time`, async () => {
       const file = join(root, `readiness-${slowPhase}.json`);
       const journal = createReadinessJournal(file, { revision: "candidate", pid: 123 });
+      let now = 0;
+      let attempts = 0;
       try {
-        const error = await waitForPageAndChunk((server.address() as { port: number }).port, {
+        const error = await waitForPageAndChunk(43123, {
           timeoutMs: 2_000, attemptTimeoutMs: 100, intervalMs: 20, onPhase: journal.observe,
+          now: () => now,
+          sleep: async milliseconds => { now += milliseconds; },
+          probe: async (_port, _timeout, _headers, onPhase) => {
+            attempts++;
+            const stalledPhase = attempts === 1 ? slowPhase : null;
+            const phase = "page";
+            onPhase({ phase, status: "running" });
+            now += stalledPhase && slowPhase !== "chunk" ? 100 : 1;
+            if (slowPhase === "chunk") {
+              onPhase({ phase: "page", status: "ready" });
+              onPhase({ phase: "chunk", status: "running" });
+              now += stalledPhase ? 99 : 1;
+              onPhase({ phase: "chunk", status: stalledPhase ? "failed" : "ready", detail: stalledPhase ? "probe-failed" : null });
+            } else {
+              onPhase({ phase, status: stalledPhase ? "failed" : "ready", detail: stalledPhase ? "probe-failed" : null });
+            }
+            return stalledPhase ? "probe-failed" : null;
+          },
         });
         journal.finish(error);
         expect(error).toBeNull();
         const run = JSON.parse(readFileSync(file, "utf8")).runs[0];
         expect(run.status).toBe("ready");
-        expect(run.phases.page.attempts).toBeGreaterThanOrEqual(2);
+        expect(attempts).toBe(2);
+        expect(run.phases.page.attempts).toBe(2);
         expect(run.phases.page.status).toBe("ready");
-        expect(run.phases.chunk.attempts).toBe(slowPhase === "chunk" ? 2 : 1);
-        expect(run.phases.chunk.status).toBe("ready");
-        expect(run.phases[slowPhase === "html" ? "page" : slowPhase].elapsedMs).toBeGreaterThanOrEqual(100);
-      } finally { server.closeAllConnections(); server.close(); }
+        if (slowPhase === "chunk") expect(run.phases.chunk).toMatchObject({ attempts: 2, status: "ready" });
+        else expect(run.phases.chunk).toMatchObject({ attempts: 0, status: "pending" });
+        expect(now).toBe(slowPhase === "chunk" ? 122 : 121);
+      } finally { rmSync(file, { force: true }); }
+    });
+
+    test(`a permanent ${slowPhase} stall exhausts the shared deadline deterministically`, async () => {
+      const file = join(root, `permanent-${slowPhase}.json`);
+      const journal = createReadinessJournal(file, { revision: "failed", pid: 124 });
+      let now = 0;
+      let attempts = 0;
+      const budgets: number[] = [];
+      try {
+        const failure = await waitForPageAndChunk(43123, {
+          timeoutMs: 350, attemptTimeoutMs: 100, intervalMs: 30, onPhase: journal.observe,
+          now: () => now,
+          sleep: async milliseconds => { now += milliseconds; },
+          probe: async (_port, budget, _headers, onPhase) => {
+            attempts++;
+            budgets.push(budget);
+            const phase = slowPhase === "chunk" ? "chunk" : "page";
+            if (slowPhase === "chunk") {
+              onPhase({ phase: "page", status: "running" });
+              now += 1;
+              onPhase({ phase: "page", status: "ready" });
+              onPhase({ phase, status: "running" });
+              now += 99;
+            } else {
+              onPhase({ phase, status: "running" });
+              now += 100;
+            }
+            onPhase({ phase, status: "failed", detail: "probe-failed" });
+            return "probe-failed";
+          },
+        });
+        journal.finish(failure);
+        expect(failure).toBe("probe-failed");
+        expect(attempts).toBe(3);
+        expect(budgets).toEqual([100, 100, 90]);
+        expect(now).toBe(360);
+        const run = JSON.parse(readFileSync(file, "utf8")).runs[0];
+        expect(run.status).toBe("failed");
+        expect(run.phases[slowPhase === "chunk" ? "chunk" : "page"]).toMatchObject({ attempts: 3, status: "failed" });
+      } finally { rmSync(file, { force: true }); }
     });
   }
 
-  for (const phase of ["page", "chunk"] as const) {
-    test(`a ${phase} that never answers exhausts one deadline and records the failure`, async () => {
-      const server = createServer((request, response) => {
-        if (phase === "chunk" && request.url === "/") response.end('<script src="/_next/static/chunks/app.js"></script>');
+  test("terminal handoff covers candidate and rollback startup bounds", () => {
+    expect(TERMINAL_BOOTSTRAP_TIMEOUT_MS).toBeGreaterThanOrEqual(2 * (15_000 + 90_000 + 90_000));
+    expect(TERMINAL_BOOTSTRAP_TIMEOUT_MS).toBeLessThan(10 * 60_000);
+  });
+
+  test("a real never-ready child settles under a parent watchdog", async () => {
+    const child = spawn(process.execPath, ["--eval", `
+      import { createServer } from "node:http";
+      import { waitForPageAndChunk } from ${JSON.stringify(new URL("./self-update-supervisor.mjs", import.meta.url).href)};
+      const server = createServer(() => {});
+      await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+      await waitForPageAndChunk(server.address().port, { timeoutMs: 250, attemptTimeoutMs: 100, intervalMs: 10 });
+      server.closeAllConnections(); server.close();
+    `], { detached: process.platform !== "win32", stdio: ["ignore", "pipe", "pipe"], env: process.env });
+    const output: Buffer[] = [];
+    child.stdout.on("data", chunk => output.push(Buffer.from(chunk)));
+    child.stderr.on("data", chunk => output.push(Buffer.from(chunk)));
+    let watchdogFired = false;
+    const watchdog = setTimeout(() => {
+      watchdogFired = true;
+      if (child.pid && process.platform !== "win32") process.kill(-child.pid, "SIGKILL");
+      else child.kill("SIGKILL");
+    }, 2_000);
+    try {
+      const result = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(resolve => {
+        child.once("exit", (code, signal) => resolve({ code, signal }));
       });
-      await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
-      const file = join(root, `never-${phase}.json`);
-      const journal = createReadinessJournal(file, { revision: "failed", pid: 123 });
-      const started = performance.now();
-      try {
-        const failure = await waitForPageAndChunk((server.address() as { port: number }).port, {
-          timeoutMs: 350, attemptTimeoutMs: 200, intervalMs: 30, onPhase: journal.observe,
-        });
-        journal.finish(failure);
-        const elapsed = performance.now() - started;
-        expect(failure).toContain("Timeout");
-        expect(elapsed).toBeGreaterThanOrEqual(340);
-        expect(elapsed).toBeLessThan(650);
-        const run = JSON.parse(readFileSync(file, "utf8")).runs[0];
-        expect(run.status).toBe("failed");
-        expect(run.phases[phase].status).toBe("failed");
-        expect(run.phases[phase].attempts).toBe(2);
-        expect(run.elapsedMs).toBeGreaterThanOrEqual(340);
-      } finally { server.closeAllConnections(); server.close(); }
-    });
-  }
+      expect(watchdogFired).toBe(false);
+      expect(result.code).toBe(0);
+      expect(Buffer.concat(output).toString()).toBe("");
+    } finally { clearTimeout(watchdog); }
+  });
 
   test("journal measures phase time including backoff and retains bounded runs across reopen", () => {
     const file = join(root, "reopened-readiness.json");
@@ -481,5 +529,36 @@ describe("bounded page and chunk readiness", () => {
     const runs = JSON.parse(readFileSync(file, "utf8")).runs;
     expect(runs).toHaveLength(4);
     expect(runs.map((run: { revision: string }) => run.revision)).toEqual(["rollback-0", "rollback-1", "rollback-2", "rollback-3"]);
+  });
+
+  test("journal failures at initial, phase and final writes stay best effort and details are sanitized", () => {
+    const file = join(root, "unwritable-readiness.json");
+    mkdirSync(file);
+    const initial = createReadinessJournal(file, { revision: "candidate", pid: 123 });
+    expect(() => initial.observe({ phase: "files", status: "running" })).not.toThrow();
+    const blocked = join(root, "blocked-readiness.json");
+    const journal = createReadinessJournal(blocked, { revision: "candidate", pid: 123 });
+    rmSync(blocked);
+    mkdirSync(blocked);
+    expect(() => journal.observe({ phase: "page", status: "failed", detail: "spawn /private/sentinel with secret-value" })).not.toThrow();
+    expect(() => journal.finish("spawn /private/sentinel with secret-value")).not.toThrow();
+    const privacyFile = join(root, "private-detail.json");
+    const privateJournal = createReadinessJournal(privacyFile, { revision: "candidate", pid: 123 });
+    privateJournal.observe({ phase: "page", status: "failed", detail: "spawn /private/sentinel with secret-value" });
+    privateJournal.finish("spawn /private/sentinel with secret-value");
+    const persisted = readFileSync(privacyFile, "utf8");
+    expect(persisted).not.toContain("/private/sentinel");
+    expect(persisted).not.toContain("secret-value");
+
+    const legacyFile = join(root, "legacy-private-detail.json");
+    writeFileSync(legacyFile, JSON.stringify({
+      version: 1,
+      runs: [{ revision: "old", detail: "spawn /private/sentinel with secret-value",
+        phases: { files: { detail: "spawn /private/sentinel with secret-value" } } }],
+    }));
+    createReadinessJournal(legacyFile, { revision: "current", pid: 126 });
+    const migrated = readFileSync(legacyFile, "utf8");
+    expect(migrated).not.toContain("/private/sentinel");
+    expect(migrated).not.toContain("secret-value");
   });
 });

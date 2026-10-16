@@ -38,6 +38,9 @@ import { basename, dirname, join } from "node:path";
 import { appDirIn } from "./appDir.mjs";
 
 export const RECORD_VERSION = 1;
+// Runtime host (15s), files (90s), and page+chunk (90s), for both the
+// candidate and rollback release, plus bounded terminal polling/exec slack.
+export const TERMINAL_BOOTSTRAP_TIMEOUT_MS = 420_000;
 const REQUEST_ROLES = new Set(["web", "runtime-host", "relaunch"]);
 
 /**
@@ -366,6 +369,8 @@ function readinessError(error) {
   return kind ? `Viewer readiness probe failed (${kind})` : "Viewer readiness probe failed";
 }
 
+/** @typedef {{ phase: "files" | "page" | "chunk", status: "running" | "ready" | "failed", elapsedMs?: number, detail?: string | null }} ReadinessPhase */
+
 
 /**
  * A restarted web process is ready when `GET /` answers 200 and so does the
@@ -377,6 +382,10 @@ function readinessError(error) {
  * `headers` carries the `probe` service tag (`probeHeadersFrom`): on a team
  * install the page is shown only to a member, and the tag is how the
  * launcher's own probe reads it (sign-in-and-team §4.2).
+ * @param {number} port
+ * @param {number} [timeoutMs]
+ * @param {Record<string, string>} [headers]
+ * @param {(event: ReadinessPhase) => void} [onPhase]
  */
 export async function probePageAndChunk(port, timeoutMs = 5_000, headers = {}, onPhase = () => {}) {
   const signal = AbortSignal.timeout(timeoutMs);
@@ -407,20 +416,34 @@ export async function probePageAndChunk(port, timeoutMs = 5_000, headers = {}, o
 
 // One budget for the complete page+chunk sequence, including retry backoff.
 // A refused member credential cannot improve by waiting; preserve its receipt.
+/** @param {number} port
+ * @param {{ timeoutMs?: number, attemptTimeoutMs?: number, intervalMs?: number, headers?: Record<string, string>, onPhase?: (event: ReadinessPhase) => void, now?: () => number, sleep?: (milliseconds: number) => Promise<void>, probe?: (port: number, timeoutMs: number, headers: Record<string, string>, onPhase: (event: ReadinessPhase) => void) => Promise<string | null> }} [options]
+ */
 export async function waitForPageAndChunk(port, {
   timeoutMs = 90_000, attemptTimeoutMs = 5_000, intervalMs = 200,
-  headers = {}, onPhase = () => {},
+  headers = {}, onPhase = () => {}, now = () => performance.now(),
+  sleep = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds)),
+  probe = probePageAndChunk,
 } = {}) {
-  const deadline = performance.now() + timeoutMs;
+  const deadline = now() + timeoutMs;
   let failure = "Viewer readiness deadline expired";
-  while (performance.now() < deadline) {
-    failure = await probePageAndChunk(port, Math.max(1, Math.ceil(Math.min(attemptTimeoutMs, deadline - performance.now()))), headers, onPhase);
+  while (now() < deadline) {
+    failure = await probe(port, Math.max(1, Math.ceil(Math.min(attemptTimeoutMs, deadline - now()))), headers, onPhase);
     if (!failure || /^GET \/ answered 40[13]$/.test(failure)) return failure;
-    const remaining = deadline - performance.now();
+    const remaining = deadline - now();
     if (remaining <= 0) break;
-    await new Promise(resolve => setTimeout(resolve, Math.min(intervalMs, remaining)));
+    await sleep(Math.min(intervalMs, remaining));
   }
   return failure;
+}
+
+function readinessReason(detail) {
+  if (detail === null || detail === undefined) return null;
+  if (detail === "Viewer readiness deadline expired") return "deadline";
+  if (/^GET \/ answered [1-5]\d\d$/.test(detail)
+    || /^GET \/_next\/static\/[^\s]+\.js answered [1-5]\d\d$/.test(detail)) return "http-status";
+  if (/^Viewer readiness probe failed(?: \([A-Za-z][A-Za-z0-9_]{0,39}\))?$/.test(detail)) return "probe-error";
+  return "probe-failed";
 }
 
 /** A bounded record survives launcher exec, including a rollback's own boot.
@@ -431,7 +454,17 @@ export function createReadinessJournal(file, { revision, pid }, clock = () => pe
   let runs;
   try { runs = JSON.parse(readFileSync(file, "utf8")).runs; } catch { /* first boot */ }
   if (!Array.isArray(runs)) runs = [];
-  runs = runs.slice(-3);
+  runs = runs.slice(-3).map(previous => {
+    if (!previous || typeof previous !== "object") return previous;
+    return {
+      ...previous,
+      detail: readinessReason(previous.detail),
+      phases: Object.fromEntries(["files", "page", "chunk"].map(phase => [phase, {
+        ...(previous.phases?.[phase] ?? {}),
+        detail: readinessReason(previous.phases?.[phase]?.detail),
+      }])),
+    };
+  });
   const started = clock();
   const run = { revision, pid, startedAt: new Date().toISOString(), status: "running", elapsedMs: 0,
     phases: Object.fromEntries(["files", "page", "chunk"].map(phase => [phase, { attempts: 0, elapsedMs: 0, status: "pending" }])) };
@@ -439,13 +472,19 @@ export function createReadinessJournal(file, { revision, pid }, clock = () => pe
   const phaseStarts = new Map();
   const save = () => {
     run.elapsedMs = Math.max(0, Math.round(clock() - started));
-    mkdirSync(dirname(file), { recursive: true });
     const temporary = `${file}.${process.pid}.tmp`;
-    writeFileSync(temporary, JSON.stringify({ version: 1, runs }) + "\n", { mode: 0o600 });
-    renameSync(temporary, file);
+    try {
+      mkdirSync(dirname(file), { recursive: true });
+      writeFileSync(temporary, JSON.stringify({ version: 1, runs }) + "\n", { mode: 0o600 });
+      renameSync(temporary, file);
+    } catch {
+      try { rmSync(temporary, { force: true }); } catch { /* cleanup is best effort too */ }
+      /* diagnostics never own candidate cleanup or rollback */
+    }
   };
   save();
   return {
+    /** @param {ReadinessPhase} event */
     observe({ phase, status, detail = null }) {
       const entry = run.phases[phase];
       if (status === "running") {
@@ -454,13 +493,13 @@ export function createReadinessJournal(file, { revision, pid }, clock = () => pe
       }
       entry.status = status;
       entry.elapsedMs = Math.max(0, Math.round(clock() - phaseStarts.get(phase)));
-      entry.detail = detail;
+      entry.detail = readinessReason(detail);
       save();
     },
     /** @param {string | null} [detail] */
     finish(detail = null) {
       run.status = detail ? "failed" : "ready";
-      run.detail = detail;
+      run.detail = readinessReason(detail);
       save();
     },
   };

@@ -820,9 +820,13 @@ async function waitForReadiness(port, timeoutMs = READINESS_TIMEOUT_MS, processH
 
   while (performance.now() < deadline) {
     if (processHandle?.state.spawnError) {
+      onPhase({ phase: "files", status: "running" });
+      onPhase({ phase: "files", status: "failed", detail: "Viewer readiness probe failed" });
       throw new Error(`could not start (${processHandle.state.spawnError.message})`);
     }
     if (processHandle && (processHandle.child.exitCode !== null || processHandle.child.signalCode !== null)) {
+      onPhase({ phase: "files", status: "running" });
+      onPhase({ phase: "files", status: "failed", detail: "Viewer readiness probe failed" });
       throw new Error(`exited before it answered (${processHandle.child.signalCode ? `signal ${processHandle.child.signalCode}` : `exit code ${processHandle.child.exitCode}`})`);
     }
     onPhase({ phase: "files", status: "running" });
