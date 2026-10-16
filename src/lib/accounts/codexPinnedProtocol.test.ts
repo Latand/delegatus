@@ -251,6 +251,21 @@ describe("an executable without its own pin", () => {
     expect(calls).toHaveLength(1);
   });
 
+  test("a field added inside an existing server request is refused, because the host could not decode it", async () => {
+    // Incoming requests are decoded strictly against the pin; an extra key is unrecognized.
+    const approval = { threadId: "thread", turnId: "turn", itemId: "item", startedAtMs: 1, command: "echo example" };
+    const pin = new CodexPinnedProtocol("0.162.1");
+    expect(() => pin.assertServerRequest("item/commandExecution/requestApproval", approval)).not.toThrow();
+    expect(() => pin.assertServerRequest("item/commandExecution/requestApproval", { ...approval, futureHint: "x" })).toThrow("server-params.futureHint: unrecognized_keys");
+    const extend = (text: string) => {
+      const bundle = JSON.parse(text);
+      bundle.definitions.CommandExecutionRequestApprovalParams.properties.futureHint = { type: ["string", "null"] };
+      return JSON.stringify(bundle);
+    };
+    const { generate } = recording(async () => { const base = pinned("0.162.1"); return { stable: extend(base.stable), experimental: extend(base.experimental) }; });
+    await expect(resolveCodexProtocol("0.162.5", "codex-fixture", noEnv, generate)).rejects.toThrow("CLI 0.162.5 has no pinned schema and is not an additive extension of pin 0.162.1. Pin the CLI to a supported version, or regenerate with scripts/generate-codex-protocol.ts and review compatibility. Supported: 0.163.0, 0.162.1, 0.159.0, 0.154.0; breaks: stable CommandExecutionRequestApprovalParams.futureHint: added inside a server request; experimental CommandExecutionRequestApprovalParams.futureHint: added inside a server request");
+  });
+
   test("a CLI older than every pin, or an unparsed version, is refused without running it", async () => {
     const { calls, generate } = recording(async () => pinned("0.163.0"));
     await expect(resolveCodexProtocol("0.150.0", "codex-fixture", noEnv, generate)).rejects.toThrow("CLI 0.150.0 has no pinned schema and no older pin to compare it with. Pin the CLI");

@@ -38,6 +38,12 @@ app-server is spawned (`resolveCodexProtocol` in `codexPinnedProtocol.ts`):
    optional, a changed type, reference or default, and a new server-request
    method all count as breaks. A new server request is refused because Codex
    can hold a turn on a request the adapter was never reviewed to answer.
+   For the same reason the server-request union and every definition its
+   params reach must stay unchanged apart from descriptions and titles: the
+   host decodes each incoming request strictly against the pin, so an added
+   optional field, enum value or variant there would make an existing
+   approval, question, elicitation or tool call unanswerable. 0.159.0 changed
+   that closure (`McpServerElicitationRequestParams`); 0.163.0 left it intact.
 4. An additive CLI runs under the pin. Every payload is still validated
    against the reviewed schema, so a method or field that only the newer CLI
    has stays unusable until it is pinned. Errors name both versions
@@ -54,7 +60,8 @@ app-server is spawned (`resolveCodexProtocol` in `codexPinnedProtocol.ts`):
 
 Verdicts are cached per CLI version for the life of the process, with at most
 eight entries and the oldest evicted. Concurrent launches share one
-generation. A failed or timed-out generation (30 seconds) refuses that launch
+generation. A failed or timed-out generation (30 seconds for each of the
+stable and experimental runs, so at most 60 seconds) refuses that launch
 and is not cached, so the next launch tries again. Generation runs under the
 `codex.protocol-admission` loop-monitor label. Against the real 0.163.0 and
 0.162.1 executables (posing as 0.163.9 and 0.161.0), one admission took

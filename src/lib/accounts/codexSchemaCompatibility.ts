@@ -3,8 +3,11 @@
  * shape the adapter reads must keep its fields. Allowed: new definitions,
  * new optional properties, new enum values and new union variants. A new
  * server-request method is refused: Codex can hold a turn on a request the
- * adapter was never reviewed to answer. Everything else counts as a break.
- * Pure over parsed JSON; reports paths only, never schema values. */
+ * adapter was never reviewed to answer. For the same reason the definitions a
+ * server request's params reach must not change at all: the host decodes every
+ * incoming request strictly against the pin, so an added field or enum value
+ * there makes an existing request unanswerable. Everything else counts as a
+ * break. Pure over parsed JSON; reports paths only, never schema values. */
 
 type Json = unknown;
 type Row = Record<string, Json>;
@@ -47,6 +50,50 @@ function discriminator(variant: Json): string | null {
   const tags = Object.entries(variant.properties).flatMap(([name, shape]) =>
     isRow(shape) && Array.isArray(shape.enum) && shape.enum.length === 1 ? [`${name}=${JSON.stringify(shape.enum[0])}`] : []);
   return tags.length ? tags.sort().join("&") : null;
+}
+
+/** The first path where two shapes differ beyond annotations, for the strict closure. */
+function difference(left: Json, right: Json, path: string, position: Position = "schema"): string | null {
+  if (equal(left, right, position)) return null;
+  if (position === "value" || !isRow(left) || !isRow(right)) return `${path}: changed`;
+  for (const key of new Set([...Object.keys(left), ...Object.keys(right)])) {
+    if (position === "schema" && ANNOTATIONS.has(key)) continue;
+    const child: Position = position === "map" ? "schema" : MAPS.has(key) ? "map" : VALUES.has(key) ? "value" : "schema";
+    // Property names stand for themselves, as in the additive report.
+    const at = position === "schema" && key === "properties" ? path : `${path}.${key}`;
+    if (!Object.prototype.hasOwnProperty.call(left, key)) return `${at}: added`;
+    if (!Object.prototype.hasOwnProperty.call(right, key)) return `${at}: removed`;
+    const before = left[key], after = right[key];
+    if (child === "schema" && Array.isArray(before) && Array.isArray(after)) {
+      if (before.length !== after.length) return `${at}: changed`;
+      for (const [index, item] of before.entries()) {
+        const found = difference(item, after[index], `${at}[${discriminator(item) ?? index}]`);
+        if (found) return found;
+      }
+    } else {
+      const found = difference(before, after, at, child);
+      if (found) return found;
+    }
+  }
+  return `${path}: changed`;
+}
+
+/** Definitions an incoming server request decodes against: ServerRequest and everything it references. */
+function serverRequestClosure(defs: Row): Set<string> {
+  const closure = new Set<string>(), queue = ["ServerRequest"];
+  const references = (value: Json): void => {
+    if (Array.isArray(value)) value.forEach(references);
+    else if (isRow(value)) for (const [key, child] of Object.entries(value)) {
+      if (key === "$ref" && typeof child === "string" && child.startsWith("#/definitions/")) queue.push(child.slice("#/definitions/".length).replaceAll("/", "."));
+      else references(child);
+    }
+  };
+  for (let name = queue.pop(); name !== undefined; name = queue.pop()) {
+    if (closure.has(name) || !Object.prototype.hasOwnProperty.call(defs, name)) continue;
+    closure.add(name);
+    references(defs[name]);
+  }
+  return closure;
 }
 
 function types(value: Json): string {
@@ -98,10 +145,14 @@ export function codexSchemaBreaks(pinned: Json, candidate: Json): string[] {
     }
   };
   const before = definitions(pinned), after = definitions(candidate);
+  const strict = serverRequestClosure(before);
   for (const [name, shape] of Object.entries(before)) {
     if (breaks.length >= MAX_BREAKS) break;
     if (!Object.prototype.hasOwnProperty.call(after, name)) { report(name, "definition removed"); continue; }
+    const reported = breaks.length;
     compare(shape, after[name], name, name === "ServerRequest" ? tags => report(name, `new server request ${tags}`) : undefined);
+    const changed = breaks.length === reported && strict.has(name) ? difference(shape, after[name], name) : null;
+    if (changed) breaks.push(`${changed} inside a server request`);
   }
   return breaks;
 }

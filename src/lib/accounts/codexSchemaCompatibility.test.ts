@@ -71,3 +71,44 @@ describe("synthetic changes", () => {
     expect(breaks.join(" ")).not.toContain("Start a turn");
   });
 });
+
+/* Delegatus decodes every incoming server request strictly against the pin
+ * (unknown keys refused), so the whole closure its params reach must match. */
+describe("the server-request closure", () => {
+  const approval = (decision: object = { type: "string", enum: ["accept", "decline"] }, extra: Record<string, object> = {}) => ({
+    $schema: "http://json-schema.org/draft-07/schema#",
+    definitions: {
+      ServerRequest: { oneOf: [method("item/commandExecution/requestApproval", { $ref: "#/definitions/v2/ApprovalParams" })] },
+      ServerNotification: { oneOf: [method("turn/started", { $ref: "#/definitions/v2/TurnStarted" })] },
+      v2: {
+        ApprovalParams: { type: "object", required: ["threadId"], description: "Approve.", properties: { threadId: { type: "string" }, decisions: { type: "array", items: { $ref: "#/definitions/Decision" } }, ...extra } },
+        TurnStarted: { type: "object", properties: { turnId: { type: "string" } } },
+      },
+      Decision: decision,
+    },
+  });
+
+  test("an optional property, enum value or variant inside it is a break naming the path", () => {
+    expect(codexSchemaBreaks(approval(), approval(undefined, { futureHint: { type: "string" } }))).toEqual(["v2.ApprovalParams.futureHint: added inside a server request"]);
+    expect(codexSchemaBreaks(approval(), approval({ type: "string", enum: ["accept", "decline", "defer"] }))).toEqual(["Decision.enum: changed inside a server request"]);
+    expect(codexSchemaBreaks(approval({ oneOf: [{ type: "string", enum: ["accept"] }] }), approval({ oneOf: [{ type: "string", enum: ["accept"] }, { type: "object" }] }))).toEqual(["Decision.oneOf: changed inside a server request"]);
+  });
+
+  test("outside it the same additions stay additive, and annotations never count", () => {
+    const notification = approval() as ReturnType<typeof approval> & { definitions: { v2: { TurnStarted: { properties: Record<string, object> } } } };
+    notification.definitions.v2.TurnStarted.properties.extra = { type: "boolean" };
+    expect(codexSchemaBreaks(approval(), notification)).toEqual([]);
+    const reworded = approval() as ReturnType<typeof approval> & { definitions: { v2: { ApprovalParams: { description: string } } } };
+    reworded.definitions.v2.ApprovalParams.description = "Reworded.";
+    expect(codexSchemaBreaks(approval(), reworded)).toEqual([]);
+  });
+
+  test("an optional field added to a real approval request is refused", () => {
+    // The decoder rejects `futureHint` as unrecognized_keys, so Codex would hold the turn.
+    const extended = read("0.162.1", "experimental");
+    extended.definitions.CommandExecutionRequestApprovalParams.properties.futureHint = { type: ["string", "null"] };
+    expect(codexSchemaBreaks(read("0.162.1", "experimental"), extended)).toEqual(["CommandExecutionRequestApprovalParams.futureHint: added inside a server request"]);
+    // History: 0.159.0 changed McpServerElicitationRequestParams inside this closure.
+    expect(codexSchemaBreaks(read("0.154.0", "experimental"), read("0.159.0", "experimental"))).toContain('McpServerElicitationRequestParams.oneOf[mode="openai/userVerification"]._meta: added inside a server request');
+  });
+});
