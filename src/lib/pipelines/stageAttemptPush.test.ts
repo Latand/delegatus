@@ -111,13 +111,16 @@ test.each([{ legacy: false }, { legacy: true }])("B: a foreign commit is refused
 test("B: a commit made without the launch receipt variables is refused", async () => {
   const f = await fixture();
   try {
-    const secondEnvironment: NodeJS.ProcessEnv = { ...f.env };
+    const secondEnvironment: NodeJS.ProcessEnv = { ...f.env, GIT_AUTHOR_NAME: "Operator",
+      GIT_AUTHOR_EMAIL: ["operator", "example.invalid"].join("@"),
+      GIT_COMMITTER_NAME: "Operator", GIT_COMMITTER_EMAIL: ["operator", "example.invalid"].join("@"), GIT_CONFIG_COUNT: "0" };
     delete secondEnvironment.LLV_STAGE_GIT_RECEIPT;
     delete secondEnvironment.LLV_STAGE_GIT_WORKTREE;
     const made = await realExec("git", ["commit", "--allow-empty", "-m", "second environment"], f.lane, secondEnvironment);
     expect(made.code, made.stderr).toBe(0);
     const head = await f.own("rev-parse", "HEAD");
-    await f.push();
+    const pushed = await realExec("git", ["push", "--no-verify", "origin", "HEAD:refs/heads/pipeline/proof"], f.lane, f.env);
+    expect(pushed.code, pushed.stderr).toBe(0);
     const result = await f.settle();
     expect(result?.ok).toBe(false);
     if (!result || result.ok) throw new Error("commit without the launch receipt was accepted");
