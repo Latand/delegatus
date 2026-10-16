@@ -925,6 +925,21 @@ test("the Live backend answers board questions with read tools and the prompt ke
   await f.service.close(s.sessionId);
 });
 
+test("an explicit send request with no tool or fresh receipt never hands a fabricated delivery to speech", async () => {
+  const f = fixture();
+  f.provider.responder = () => backendResponse("fabricated-delivery", [message("Yes, I passed it to the orchestrator.")]);
+  const s = await f.service.start({ project: "fixture", locale: "en", sdp: "v=0" });
+  f.provider.replay(s.providerId, said("Ask the orchestrator to review the plan.", 0), delegationCreated("no-send", 500));
+  await f.service.drain(s.sessionId);
+
+  expect(f.sends()).toBe(0);
+  expect(f.admission.callReports(s.sessionId).requests).toHaveLength(0);
+  expect(f.service.transcriptRecord(s.sessionId).entries.filter(entry => entry.kind === "tool")).toHaveLength(0);
+  expect(spoken(f).at(-1)?.content).toBe("Nothing was sent: this call has no delivery confirmation.");
+  expect(spoken(f).at(-1)?.content).not.toContain("passed it to the orchestrator");
+  await f.service.close(s.sessionId);
+});
+
 test("a restarted service closes the session it no longer owns before anything else, once, and keeps the admitted delivery", async () => {
   const f = fixture();
   const old = await f.service.start({ project: "fixture", locale: "en", sdp: "v=0", requestId: "before-restart" });

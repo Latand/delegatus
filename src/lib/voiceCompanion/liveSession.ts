@@ -12,6 +12,7 @@ import { CompanionBoardReads, READ_TOOL_NAMES, VOICE_IMAGES, type SpeechReadResu
 import { LiveTranscript } from "./liveTranscript";
 import { jsonObject, type LiveConnection, type LiveProvider } from "./provider";
 import { cleanStrings, withoutCredentials, withoutLocalPaths, withoutSeparators } from "./redaction";
+import { explicitDelegationRequest } from "./gate";
 import { speechParts, messageSpokenText } from "./reportSpeech";
 import { backendRequest, type BackendItem } from "./sessionConfig";
 import { COMPANION_TOOL_REGISTRY, DELEGATION_TOOLS, EGRESS_TOOLS, PRIVATE_RESULT_TOOLS, runCompanionTool } from "./tools";
@@ -448,7 +449,9 @@ export class CompanionLiveSessions {
       this.admission.showAwaiting(active.id, delegationId, awaiting.map(request => request.proposalId));
       const scrub = (text: string) => withoutLocalPaths(withoutCredentials(text, active.secrets));
       const awaitingList = awaiting.map(request => scrub(`- ${request.handle}, project ${JSON.stringify(reportHeaderName(request.project, stored.locale))}, sent ${request.sentMinutesAgo} min ago, ${request.progressReports} progress report(s)${request.askedBack ? ", the orchestrator asked back" : ""}: ${JSON.stringify(askGist(request.instruction))}`)).join("\n").slice(-3000);
-      const latest = (sourceTurn === undefined ? stored.inputs.slice(-1) : stored.inputs.filter(row => row.turn === sourceTurn)).map(row => row.text).join(" ").slice(-2_000);
+      const latestInput = (sourceTurn === undefined ? stored.inputs.slice(-1) : stored.inputs.filter(row => row.turn === sourceTurn)).map(row => row.text).join(" ");
+      const latest = latestInput.slice(-2_000);
+      const explicitSendRequested = explicitDelegationRequest(latestInput).admit;
       const input: BackendItem[] = [...(active.memory ? [{ role: "developer", content: active.memory }] : []), { role: "user", content: `Project currently in view: ${projectLabel}. Default reads and sends to this project; a named project overrides it.\n${active.projectDirectory}\nReads earlier in this call, newest last:\n${previousReads || "(none)"}\n\nRequests sent to the orchestrator in this call that still wait for its report:\n${awaitingList || "(none)"}\nAn ask that repeats or rephrases one of these passes its handle as pending_request. orchestrator_reports reads what came back.\n\nThe conversation so far, oldest first:\n${record || "(no transcript yet)"}${active.privateHistory ? "\nThe voice's replies since a Telegram group was read in this call are withheld from you, and so are the reads made while it was read. If the operator asks to send something the voice said since then, ask them to say in their own words what to send." : ""}\n\nThe operator's latest turn, which this delegation answers: ${latest ? JSON.stringify(scrub(latest)) : "(not transcribed yet)"}\nAct on that turn alone. Earlier turns only resolve what it refers to; never add an earlier request it does not ask to send.\n\nThe voice delegated here. Answer it with the registry tools, or write and send the task the operator explicitly asked to send.${waiting
         ? `\n\nA request to the orchestrator is waiting for the operator's answer and has not been sent: "${waiting.instruction}". When the operator has just answered it, pass that answer on with resolve_orchestrator_confirmation.` : ""}` }];
       const calls = new Set<string>();
@@ -486,7 +489,12 @@ export class CompanionLiveSessions {
         if (!asked.length || final) {
           const text = output.filter(item => item.type === "message" && Array.isArray(item.content)).flatMap(item => (item.content as unknown[]).map(jsonObject))
             .filter(part => part?.type === "output_text" && typeof part.text === "string").map(part => part!.text as string).join(" ");
-          this.say(active, delegationId, delegationSpeech(text || (final ? spentRoundSpeech(tried, viewed) : "Done."), facts));
+          const answer = text || (final ? spentRoundSpeech(tried, viewed) : "Done.");
+          const unsupportedDelivery = explicitSendRequested && facts.length === 0
+            ? stored.locale === "uk" ? "Нічого не надіслано: у цьому дзвінку немає підтвердження доставки."
+              : "Nothing was sent: this call has no delivery confirmation."
+            : answer;
+          this.say(active, delegationId, delegationSpeech(unsupportedDelivery, facts));
           // A report this answer asked to hear again follows its short introduction.
           this.speakReports(active);
           return;
