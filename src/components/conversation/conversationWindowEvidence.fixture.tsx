@@ -1,3 +1,5 @@
+import { DeputyBlock } from "./DeputyBlock";
+import type { SeatDeputyView } from "@/lib/orchestrator/deputyView";
 "use client";
 
 /**
@@ -90,6 +92,7 @@ const MANDATE = [
 const ECHO = `You are the Orchestrator. Drive work through the production Viewer MCP tools.\n\n${MANDATE}\n\n## Handoff\nSupersedes the predecessor seat.`;
 
 export type ConversationWindowCase =
+  | "parallel-failure"
   | "delivery-settlement"
   | "delivery-stalled"
   | "delivery-check-card"
@@ -1778,13 +1781,24 @@ function mountOwnMessageSteps(root: HTMLElement): void {
   reactRoot.render(pane(file));
 }
 
+function ParallelFailureFixture() {
+  const uk = params.get("lang") === "uk";
+  const deputy = { askId: "deputy_failure", seatConversationId: "conversation_seat", deputyConversationId: "conversation_parallel",
+    ask: { text: uk ? "Поясни причину збою в паралельному запитанні та перевір, чи збереглося вкладення." : "Explain why the parallel question failed and check whether the attachment was preserved.", images: 1, sender: null, origin: { kind: "operator" } },
+    artifactPath: null, forkRecordCount: 0, forkBytes: 0, state: "ended", startedAt: "2026-10-15T20:36:13.000Z", activatedAt: null,
+    endedAt: "2026-10-15T20:36:16.000Z", outcome: "failed", error: uk ? "Не вдалося записати належність до задачі: перевищено час очікування сховища." : "Task membership could not be recorded: storage admission timed out.",
+    attempt: 0, retryable: true, touched: { taskIds: [], pipelineIds: [], conversationIds: [] }, result: null } as SeatDeputyView;
+  return <main data-parallel-failure className="mx-auto max-w-3xl p-3"><DeputyBlock deputy={deputy} /></main>;
+}
+
 setLocale((params.get("lang") as Locale | null) ?? "en");
 const root = document.getElementById("root");
 const requested = (params.get("case") as ConversationWindowCase | null) ?? "receipt-delivered";
 /* The lifecycle case mounts the production window itself — the feed, the
    composer and a fake host behind them — so it takes over the root rather than
    rendering one arranged frame. */
-if (root && requested === "lifecycle") mountLifecycle(root);
+if (root && requested === "parallel-failure") createRoot(root).render(<ParallelFailureFixture />);
+else if (root && requested === "lifecycle") mountLifecycle(root);
 else if (root && requested === "payload-notice") mountPayloadNotice(root);
 else if (root && (requested === "long-history" || requested === "codex-history")) mountLongHistory(root);
 else if (root && requested === "own-message-steps") mountOwnMessageSteps(root);

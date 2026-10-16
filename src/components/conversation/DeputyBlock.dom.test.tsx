@@ -483,3 +483,27 @@ for (const locale of ["en", "uk"] as const) {
     expect(chipHost.querySelector("button")!.title).toBe("start this one");
   });
 }
+
+
+test("parallel C: a failed ask keeps its question, shows the reason and retries with one action", async () => {
+  const previousFetch = globalThis.fetch;
+  const requests: unknown[] = [];
+  globalThis.fetch = (async (_url, init) => {
+    requests.push(JSON.parse(String(init?.body)));
+    return Response.json({ ok: false, error: "The previous delivery is still being checked" }, { status: 409 });
+  }) as typeof fetch;
+  try {
+    const { host } = mount([deputy({ state: "ended", outcome: "failed", endedAt: at(40),
+      error: "Task membership could not be recorded", retryable: true, attempt: 0 } as Partial<SeatDeputyView>)]);
+    await settle();
+    expect(host.querySelector("[data-deputy-head]")?.textContent).toContain("Add a task: reviewer for #2244");
+    expect(host.querySelector("[data-deputy-failure]")?.textContent).toContain("Task membership could not be recorded");
+    const button = host.querySelector<HTMLButtonElement>("[data-deputy-retry]");
+    expect(button?.textContent).toBe("Retry");
+    flushSync(() => button!.click());
+    await settle();
+    expect(requests).toEqual([{ retryAskId: "deputy_1", clientRequestId: "deputy_retry_deputy_1_1" }]);
+    expect(host.querySelector("[role=alert]")?.textContent).toContain("The previous delivery is still being checked");
+    expect(host.querySelector("[data-deputy-head]")?.textContent).toContain("Add a task: reviewer for #2244");
+  } finally { globalThis.fetch = previousFetch; }
+});

@@ -15,8 +15,8 @@
  * Every stage announces itself and every failure is printed on **stdout**
  * before a nonzero exit: a runner that reports "exit code 1" and nothing else
  * is not a diagnosis, and this script is the first thing a Windows change has
- * to get past. It prints shapes and counts, never paths — the runner's own
- * directories are not interesting and this repository is public.
+ * to get past. It normally prints shapes and counts. Failed Windows snapshot
+ * attempts include raw command output to diagnose query/encoding errors.
  */
 
 import fs from "node:fs";
@@ -29,6 +29,7 @@ import { windowsProcessCwd } from "@/lib/proc/windowsCwd";
 import { windowsProcessIdentity } from "@/lib/proc/windowsIdentity";
 import { tryLockFenceExclusive } from "@/runtime-host/fenceLock";
 import { RuntimeHostFence } from "@/runtime-host/runtimeHostFence";
+import { requireWindowsSnapshot } from "./verify-windows-snapshot";
 
 const EXPECTED_BACKEND: Partial<Record<NodeJS.Platform, string>> = {
   linux: "linux",
@@ -156,7 +157,7 @@ function verifyFenceBootstrap(): void {
   console.log("fence bootstrap: created its own directory and record, refused a rival, and handed over");
 }
 
-function verifyWindowsReaders(): void {
+async function verifyWindowsReaders(): Promise<void> {
   const backend = selectProcBackend();
 
   stage("the process-identity token");
@@ -177,8 +178,7 @@ function verifyWindowsReaders(): void {
   console.log(`working directory: read from the process parameters, ${cwd.length} characters, matches this process`);
 
   stage("the Win32_Process snapshot");
-  const listed = backend.listProcesses();
-  if (listed.length < 5) fail(`the Win32_Process snapshot listed ${listed.length} processes; PowerShell or the CSV parse is broken`);
+  const listed = await requireWindowsSnapshot();
   const self = listed.find((entry) => entry.pid === process.pid);
   if (!self) fail("the Win32_Process snapshot does not contain this process");
   if (!self.argv[0]) fail("the command line of this process did not survive argv splitting");
@@ -207,7 +207,7 @@ try {
   verifyForeignFunctionInterface(platform);
   verifyFenceLock();
   verifyFenceBootstrap();
-  if (platform === "win32") verifyWindowsReaders();
+  if (platform === "win32") await verifyWindowsReaders();
   console.log("platform readers verified");
 } catch (error) {
   /* stdout, not stderr: a Windows runner that reported "exit code 1" and no
