@@ -1,10 +1,11 @@
 # Pinned Codex app-server boundary
 
-Delegatus pins the generated app-server schemas for Codex 0.154.0, 0.159.0
-and 0.162.1. The last is the installed CLI used to ground this change.
-Each version has the CLI's stable and experimental bundles and their SHA-256
-digests under `src/lib/accounts/protocol/`. The generated TypeScript closure
-for the current server-request union and its response types sits alongside it.
+Delegatus pins the generated app-server schemas for Codex 0.154.0, 0.159.0,
+0.162.1 and 0.163.0. Each version has the CLI's stable and experimental
+bundles and their SHA-256 digests under `src/lib/accounts/protocol/`. The
+generated TypeScript closure for the server-request union and its response
+types sits beside 0.162.1; the 0.163.0 closure is byte-identical, so the
+router keeps importing it from there.
 
 Regenerate with the exact executable being reviewed:
 
@@ -17,7 +18,49 @@ and without `--experimental`, and `generate-ts --experimental` for the current
 router. Generated schema bundles are retained verbatim. A new supported version
 also needs an explicit pin in `codexPinnedProtocol.ts` and a compatibility
 review; installing a different CLI cannot silently change the adapter's wire
-contract. An unpinned executable is refused before an app-server is spawned.
+contract.
+
+## An executable without its own pin
+
+The Codex CLI updates itself. On 2026-10-16 an update to 0.163.0 made every
+Codex stage refuse at launch until the CLI was pinned back, although that
+schema only added to 0.162.1. An unpinned executable is now compared before an
+app-server is spawned (`resolveCodexProtocol` in `codexPinnedProtocol.ts`):
+
+1. The pin it is compared with is the newest pin older than the CLI. A CLI
+   older than every pin, or a version that does not parse, is refused.
+2. The executable generates its own stable and experimental bundles
+   asynchronously, into a temporary directory that is removed afterwards.
+3. `codexSchemaBreaks` (`codexSchemaCompatibility.ts`) checks that both
+   bundles extend the pin additively. Allowed: new definitions, new optional
+   properties, new enum values and new union variants. A removed definition,
+   property, enum value or variant, a property that became required or
+   optional, a changed type, reference or default, and a new server-request
+   method all count as breaks. A new server request is refused because Codex
+   can hold a turn on a request the adapter was never reviewed to answer.
+4. An additive CLI runs under the pin. Every payload is still validated
+   against the reviewed schema, so a method or field that only the newer CLI
+   has stays unusable until it is pinned. Errors name both versions
+   (`CLI 0.163.4 (under pin 0.163.0)`). The registry keeps the pin as the
+   host's protocol version, so a successor reconnects under the same contract,
+   and older releases can still read the record. The runtime diagnostics
+   report the CLI's own version, and the protocol receipt carries
+   `unpinnedCli` with the CLI version and the digest of its generated
+   experimental bundle. The admission is also logged once with a
+   `[codex protocol]` prefix.
+5. A break refuses the launch. The message gives the remedy (pin the CLI to a
+   supported version, or regenerate and review), the supported versions and
+   the first three breaking paths. It names paths only and never schema values.
+
+Verdicts are cached per CLI version for the life of the process, with at most
+eight entries and the oldest evicted. Concurrent launches share one
+generation. A failed or timed-out generation (30 seconds) refuses that launch
+and is not cached, so the next launch tries again. The comparison is
+synchronous and took 10–20 ms per bundle on the pinned schemas. Generation
+runs under the `codex.protocol-admission` loop-monitor label.
+
+The fallback does not replace review. It keeps lanes running across an
+additive update, and it never widens the contract the adapter writes.
 
 The boundary validates outgoing methods, fields and response decisions against
 the selected pin. Schema errors name the CLI version, method and field path,
@@ -89,7 +132,7 @@ waiter; a different answer is refused. A confirmed identical retry returns the
 existing result. Automatic server resolution never manufactures an answer
 receipt, and a late replay cannot reopen a terminal attention.
 
-On all three reviewed pins, Unix hosts launch the app-server with its native private Unix
+On every reviewed pin, Unix hosts launch the app-server with its native private Unix
 WebSocket listener. Its socket directory lives under the Viewer's home, which
 is shared with host CLI processes in the container installation. Directory and
 socket permissions, UID, PID, kernel start token and boot epoch are checked

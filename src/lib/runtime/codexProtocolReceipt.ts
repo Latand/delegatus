@@ -18,6 +18,11 @@ export function normalizeCodexProtocolReceipt(value: unknown): RuntimeHostDiagno
       ? { webSearch: provider.webSearch, imageGeneration: provider.imageGeneration } : null,
     models: [], anomalies: Number.isSafeInteger(source.anomalies) && (source.anomalies as number) >= 0 ? source.anomalies as number : 0,
   };
+  const unpinned = record(source.unpinnedCli);
+  if (typeof unpinned.cliVersion === "string" && /^\d+\.\d+\.\d+$/.test(unpinned.cliVersion) && unpinned.cliVersion.length <= 80
+    && typeof unpinned.cliSchemaDigest === "string" && /^[a-f0-9]{64}$/.test(unpinned.cliSchemaDigest)) {
+    receipt.unpinnedCli = { cliVersion: unpinned.cliVersion, cliSchemaDigest: unpinned.cliSchemaDigest };
+  }
   const models = Array.isArray(source.models) ? source.models : [];
   let truncated = source.modelsTruncated === true || models.length > 64;
   for (const value of models.slice(0, 64)) {

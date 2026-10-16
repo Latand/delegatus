@@ -1,8 +1,15 @@
-import { spawnSync } from "node:child_process";
+import { execFile, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { fromJSONSchema, type ZodType } from "zod";
-import current from "./protocol/0.162.1/experimental.json";
-import currentStable from "./protocol/0.162.1/stable.json";
-import currentManifest from "./protocol/0.162.1/manifest.json";
+import current from "./protocol/0.163.0/experimental.json";
+import currentStable from "./protocol/0.163.0/stable.json";
+import currentManifest from "./protocol/0.163.0/manifest.json";
+import prior from "./protocol/0.162.1/experimental.json";
+import priorStable from "./protocol/0.162.1/stable.json";
+import priorManifest from "./protocol/0.162.1/manifest.json";
 import previous from "./protocol/0.159.0/experimental.json";
 import previousStable from "./protocol/0.159.0/stable.json";
 import previousManifest from "./protocol/0.159.0/manifest.json";
@@ -10,6 +17,8 @@ import oldest from "./protocol/0.154.0/experimental.json";
 import oldestStable from "./protocol/0.154.0/stable.json";
 import oldestManifest from "./protocol/0.154.0/manifest.json";
 import { CodexAppServerProtocolError } from "./codexAppServerProtocol";
+import { codexSchemaBreaks } from "./codexSchemaCompatibility";
+import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 
 type Schema = { [key: string]: unknown; properties?: Record<string, Schema | boolean | undefined>; oneOf?: Schema[]; anyOf?: Schema[]; $ref?: string; type?: string | string[]; definitions?: Record<string, Schema> };
 // Generated JSON includes namespace maps and boolean schemas. Navigation uses
@@ -17,6 +26,7 @@ type Schema = { [key: string]: unknown; properties?: Record<string, Schema | boo
 function generatedSchema(value: unknown): Schema { return value as Schema; }
 const pins = [
   { schema: generatedSchema(current), stable: generatedSchema(currentStable), manifest: currentManifest },
+  { schema: generatedSchema(prior), stable: generatedSchema(priorStable), manifest: priorManifest },
   { schema: generatedSchema(previous), stable: generatedSchema(previousStable), manifest: previousManifest },
   { schema: generatedSchema(oldest), stable: generatedSchema(oldestStable), manifest: oldestManifest },
 ];
@@ -58,17 +68,37 @@ function strictObjects(value: unknown): unknown {
   return result;
 }
 
+const REMEDY = "Pin the CLI to a supported version, or regenerate with scripts/generate-codex-protocol.ts and review compatibility";
+const supported = () => pins.map(row => row.manifest.version).join(", ");
+
+/** An executable whose own generated schema extends `pin` additively. */
+export interface CodexUnpinnedCli {
+  cliVersion: string;
+  /** SHA-256 of the executable's generated experimental bundle. */
+  cliSchemaDigest: string;
+}
+
 export class CodexPinnedProtocol {
+  /** The reviewed pin whose contract every payload is validated against. */
   readonly version: string;
+  /** What the executable reports; differs from `version` only under an additive fallback. */
+  readonly cliVersion: string;
   readonly schemaDigest: string;
+  readonly unpinned: CodexUnpinnedCli | null;
   private readonly pin: typeof pins[number];
 
-  constructor(version = currentManifest.version) {
+  constructor(version = currentManifest.version, unpinned: CodexUnpinnedCli | null = null) {
     const pin = pins.find(row => row.manifest.version === version);
-    if (!pin) throw new CodexAppServerProtocolError(`CLI ${version} has no pinned schema; supported: ${pins.map(row => row.manifest.version).join(", ")}. Regenerate with scripts/generate-codex-protocol.ts and review compatibility`);
+    if (!pin) throw new CodexAppServerProtocolError(`CLI ${version} has no pinned schema. ${REMEDY}. Supported: ${supported()}`);
     this.pin = pin;
     this.version = version;
+    this.cliVersion = unpinned?.cliVersion ?? version;
+    this.unpinned = unpinned;
     this.schemaDigest = pin.manifest.sha256.experimental;
+  }
+
+  private get label(): string {
+    return this.unpinned ? `CLI ${this.cliVersion} (under pin ${this.version})` : `CLI ${this.version}`;
   }
 
   hasMethod(kind: "ClientRequest" | "ClientNotification" | "ServerRequest" | "ServerNotification", method: string, stable = false): boolean {
@@ -146,12 +176,96 @@ export class CodexPinnedProtocol {
       const fields = issue.code === "unrecognized_keys" ? [...issue.path, ...issue.keys] : issue.path;
       // Only method/path/code: payloads and schema error values may hold secrets.
       const digest = source === this.pin.stable ? this.pin.manifest.sha256.stable : this.schemaDigest;
-      throw new CodexAppServerProtocolError(`CLI ${this.version} ${method} ${path}.${fields.join(".") || "<root>"}: ${issue.code}; pinned schema ${digest.slice(0, 12)}`);
+      throw new CodexAppServerProtocolError(`${this.label} ${method} ${path}.${fields.join(".") || "<root>"}: ${issue.code}; pinned schema ${digest.slice(0, 12)}`);
     }
   }
 
   private unsupported(method: string, path: string, stable = false): never {
     const digest = stable ? this.pin.manifest.sha256.stable : this.schemaDigest;
-    throw new CodexAppServerProtocolError(`CLI ${this.version} ${method} ${path} is absent from ${stable ? "stable " : ""}pinned schema ${digest.slice(0, 12)}`);
+    throw new CodexAppServerProtocolError(`${this.label} ${method} ${path} is absent from ${stable ? "stable " : ""}pinned schema ${digest.slice(0, 12)}`);
   }
 }
+
+/* An unreviewed CLI (a self-update) is admitted only under the newest older
+ * pin, and only when the executable's own generated schemas extend that pin
+ * additively. Payloads stay validated against the reviewed pin, so the wire
+ * contract cannot change silently; any break refuses with the remedy. */
+export type CodexSchemaGenerator = (binary: string, env: NodeJS.ProcessEnv) => Promise<{ stable: string; experimental: string }>;
+const GENERATION_TIMEOUT_MS = 30_000;
+const MAX_ADMISSIONS = 8;
+// Keyed by CLI version: the generator is deterministic for an executable
+// version. Bounded, oldest evicted; failed generation is never retained.
+const admissions = new Map<string, Promise<CodexUnpinnedCli>>();
+
+function semver(version: string): [number, number, number] | null {
+  const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(version);
+  return match ? [Number(match[1]), Number(match[2]), Number(match[3])] : null;
+}
+
+function compareSemver(left: [number, number, number], right: [number, number, number]): number {
+  return left[0] - right[0] || left[1] - right[1] || left[2] - right[2];
+}
+
+function nearestOlderPin(version: string): typeof pins[number] | undefined {
+  const target = semver(version);
+  if (!target) return undefined;
+  return pins.filter(row => compareSemver(semver(row.manifest.version)!, target) < 0)
+    .sort((left, right) => compareSemver(semver(right.manifest.version)!, semver(left.manifest.version)!))[0];
+}
+
+export const generateCodexSchemas: CodexSchemaGenerator = async (binary, env) => {
+  const scratch = await fs.promises.mkdtemp(path.join(os.tmpdir(), "delegatus-codex-schema-"));
+  try {
+    const result = { stable: "", experimental: "" };
+    for (const name of ["stable", "experimental"] as const) {
+      const out = path.join(scratch, name);
+      await new Promise<void>((resolve, reject) => execFile(binary,
+        ["app-server", "generate-json-schema", "--out", out, ...(name === "experimental" ? ["--experimental"] : [])],
+        { env, timeout: GENERATION_TIMEOUT_MS, maxBuffer: 1024 * 1024 },
+        error => error ? reject(new CodexAppServerProtocolError(`generate-json-schema${name === "experimental" ? " --experimental" : ""} failed (${error.killed ? "timed out" : `exit ${String(error.code ?? error.signal ?? "unknown")}`})`)) : resolve()));
+      result[name] = await fs.promises.readFile(path.join(out, "codex_app_server_protocol.schemas.json"), "utf8");
+    }
+    return result;
+  } finally { await fs.promises.rm(scratch, { recursive: true, force: true }); }
+};
+
+async function admitUnpinned(version: string, pin: typeof pins[number], binary: string, env: NodeJS.ProcessEnv, generate: CodexSchemaGenerator, forget: () => void): Promise<CodexUnpinnedCli> {
+  const pinned = pin.manifest.version;
+  let generated: Awaited<ReturnType<CodexSchemaGenerator>>;
+  try { generated = await generate(binary, env); }
+  catch (error) {
+    // A comparison verdict is retained; a failed generation is retried by the next launch.
+    forget();
+    const detail = error instanceof Error ? error.message.replace(/^Codex app-server protocol error: /, "") : "generation failed";
+    throw new CodexAppServerProtocolError(`CLI ${version} has no pinned schema and its schema could not be compared with pin ${pinned}. ${REMEDY}. Supported: ${supported()}; cause: ${detail}`);
+  }
+  let breaks: string[];
+  try {
+    breaks = [...codexSchemaBreaks(pin.stable, JSON.parse(generated.stable)).map(row => `stable ${row}`),
+      ...codexSchemaBreaks(pin.schema, JSON.parse(generated.experimental)).map(row => `experimental ${row}`)].slice(0, 3);
+  } catch { breaks = ["generated schema is not JSON"]; }
+  // The remedy precedes the details: protocol errors are clipped to 500 characters.
+  if (breaks.length) throw new CodexAppServerProtocolError(`CLI ${version} has no pinned schema and is not an additive extension of pin ${pinned}. ${REMEDY}. Supported: ${supported()}; breaks: ${breaks.map(row => row.slice(0, 100)).join("; ")}`);
+  const cliSchemaDigest = createHash("sha256").update(generated.experimental).digest("hex");
+  console.warn(`[codex protocol] CLI ${version} has no pinned schema; admitted under pin ${pinned} because its generated schema (${cliSchemaDigest.slice(0, 12)}) extends that pin additively. Regenerate with scripts/generate-codex-protocol.ts and review compatibility to pin it`);
+  return { cliVersion: version, cliSchemaDigest };
+}
+
+/** Select the protocol for an executable's `--version`: its own pin, or the
+ * additive fallback above. Asynchronous: generation runs a child process. */
+export async function resolveCodexProtocol(version: string, binary: string, env: NodeJS.ProcessEnv, generate: CodexSchemaGenerator = generateCodexSchemas): Promise<CodexPinnedProtocol> {
+  if (pins.some(row => row.manifest.version === version)) return new CodexPinnedProtocol(version);
+  const pin = nearestOlderPin(version);
+  if (!pin) throw new CodexAppServerProtocolError(`CLI ${version} has no pinned schema and no older pin to compare it with. ${REMEDY}. Supported: ${supported()}`);
+  let admission = admissions.get(version);
+  if (!admission) {
+    const started: Promise<CodexUnpinnedCli> = withViewerOperation("codex.protocol-admission", () =>
+      admitUnpinned(version, pin, binary, env, generate, () => { if (admissions.get(version) === started) admissions.delete(version); }));
+    admission = started;
+    admissions.set(version, started);
+    while (admissions.size > MAX_ADMISSIONS) admissions.delete(admissions.keys().next().value!);
+  }
+  return new CodexPinnedProtocol(pin.manifest.version, await admission);
+}
+
+export function resetCodexProtocolAdmissionsForTest(): void { admissions.clear(); }
