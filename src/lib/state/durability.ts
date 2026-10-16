@@ -1,3 +1,4 @@
+import { observeSqlite } from "@/lib/sqliteReadAttribution";
 import { stateLockAttempt } from "./lockWait";
 import type { Database as BunDatabase } from "bun:sqlite";
 import fs from "node:fs";
@@ -140,7 +141,7 @@ function inspect(filename: string, pragma: StateDatabase["check"], readonly: boo
   let db: BunDatabase | null = null;
   try {
     const Database = sqliteDatabase();
-    db = readonly ? new Database(filename, { readonly: true }) : new Database(filename, { readwrite: true });
+    db = readonly ? observeSqlite(new Database(filename, { readonly: true }), "state-durability") : observeSqlite(new Database(filename, { readwrite: true }), "state-durability");
     db.exec("PRAGMA busy_timeout = 5000");
     const rows = db.query<Record<string, unknown>, []>(`PRAGMA ${pragma}`).all();
     const messages = rows.map((row) => String(Object.values(row)[0]));
@@ -159,7 +160,7 @@ export function readRevision(database: StateDatabase): string {
   if (database.revisionSql) {
     let db: BunDatabase | null = null;
     try {
-      db = new (sqliteDatabase())(database.filename, { readonly: true });
+      db = observeSqlite(new (sqliteDatabase())(database.filename, { readonly: true }), "state-durability");
       db.exec("PRAGMA busy_timeout = 0");
       const row = stateLockAttempt("state.durability.revision", () => db!.query<{ revision: unknown }, []>(database.revisionSql!).get());
       if (row && row.revision !== null && row.revision !== undefined) return `rev:${String(row.revision)}`;
@@ -504,7 +505,7 @@ function swapDamagedDatabase(
 function holdWriteLock(filename: string): BunDatabase | null {
   let db: BunDatabase | null = null;
   try {
-    db = new (sqliteDatabase())(filename, { readwrite: true });
+    db = observeSqlite(new (sqliteDatabase())(filename, { readwrite: true }), "state-durability");
     db.exec("PRAGMA busy_timeout = 5000");
     db.exec("BEGIN IMMEDIATE");
     return db;
@@ -602,7 +603,7 @@ export function backupDatabase(
   let source: BunDatabase | null = null;
   try {
     /* `VACUUM INTO` holds only a read transaction: writers carry on. */
-    source = new (sqliteDatabase())(database.filename, { readonly: true });
+    source = observeSqlite(new (sqliteDatabase())(database.filename, { readonly: true }), "state-durability");
     source.exec("PRAGMA busy_timeout = 5000");
     source.query("VACUUM INTO ?").run(partial);
   } catch (error) {
@@ -613,7 +614,7 @@ export function backupDatabase(
   }
   try {
     /* A backup is one self-contained file: no WAL to lose beside it. */
-    const copy = new (sqliteDatabase())(partial, { readwrite: true });
+    const copy = observeSqlite(new (sqliteDatabase())(partial, { readwrite: true }), "state-durability");
     try { copy.exec("PRAGMA journal_mode = DELETE"); } finally { copy.close(); }
     const verdict = inspect(partial, "integrity_check", false);
     if (verdict.verdict !== "ok") throw new Error(`the copy failed its check: ${verdict.verdict === "corrupt" ? verdict.detail : verdict.detail}`);

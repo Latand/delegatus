@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useId, useState, type ChangeEvent, type FormEvent } from "react";
+import { useEffect, useId, useState } from "react";
 import { createPortal } from "react-dom";
 
+import { onOpenKeys, openKeys } from "@/components/keys/openKeys";
 import { Z } from "@/components/layers";
 import { useNowSeconds } from "@/hooks/useNowSeconds";
 import { useVoiceCompanionSettings } from "@/hooks/useVoiceCompanionSettings";
@@ -28,7 +29,9 @@ export function VoiceCompanionSettingsHost() {
   useEffect(() => {
     const show = () => setOpen(true);
     window.addEventListener(OPEN_VOICE_COMPANION_SETTINGS_EVENT, show);
-    return () => window.removeEventListener(OPEN_VOICE_COMPANION_SETTINGS_EVENT, show);
+    /* «Open Keys» on the OpenAI key hands the screen to the menu's «Keys» page. */
+    const stopKeys = onOpenKeys(() => setOpen(false));
+    return () => { stopKeys(); window.removeEventListener(OPEN_VOICE_COMPANION_SETTINGS_EVENT, show); };
   }, []);
   useEffect(() => {
     if (!open) return;
@@ -55,30 +58,19 @@ export function VoiceCompanionSettingsHost() {
  * managed account's subscription, and the rows show the last call with that
  * account's plan window and ask for no key. The API is the default.
  *
- * The key field is write-only. What is typed goes to the Viewer once and is
- * cleared here; nothing ever comes back but where a key is taken from (a saved
- * file, the environment, nowhere), so there is no value to show or to reveal.
+ * The OpenAI key is entered in «Keys» (docs/design/keys-settings.md §4):
+ * this row says where the key is taken from (a saved file, the environment,
+ * nowhere) and opens «Keys» on it.
  */
 export function VoiceCompanionSetting() {
   const { t, locale } = useLocale();
-  const { settings, busy, error, update, saveKey } = useVoiceCompanionSettings(true);
-  const [key, setKey] = useState("");
-  const [keySaved, setKeySaved] = useState(false);
+  const { settings, busy, error, update } = useVoiceCompanionSettings(true);
   /* What is being typed into the cap; null shows the saved one. */
   const [capDraft, setCapDraft] = useState<string | null>(null);
-  const ids = { key: useId(), keyHint: useId(), cap: useId(), capHint: useId(), backend: useId() };
+  const ids = { cap: useId(), capHint: useId(), backend: useId() };
   const speech = locale === "uk" ? "uk" as const : "en" as const;
   const announce = () => window.dispatchEvent(new Event(COMPANION_SETTINGS_EVENT));
   const change = async (value: Parameters<typeof update>[0]) => { if (await update(value)) announce(); };
-  const submitKey = async (event: FormEvent) => {
-    event.preventDefault();
-    if (!key.trim() || busy) return;
-    setKeySaved(false);
-    const saved = await saveKey(key.trim());
-    /* Cleared whatever the answer: a refused key is typed again, never kept in the page. */
-    setKey("");
-    if (saved) { setKeySaved(true); announce(); }
-  };
   const commitCap = async () => {
     if (capDraft === null || !settings) return;
     const value = Number(capDraft.replace(",", "."));
@@ -90,7 +82,6 @@ export function VoiceCompanionSetting() {
   const lastCall = settings?.lastSession;
   const lastCallDuration = lastCall ? `${Math.floor(lastCall.seconds / 60)}:${String(Math.floor(lastCall.seconds % 60)).padStart(2, "0")}` : "";
   const lastCallDate = lastCall ? new Intl.DateTimeFormat(locale, { day: "numeric", month: speech === "uk" ? "long" : "short", timeZone: "UTC" }).format(new Date(lastCall.endedAt)) : "";
-  const fromEnvironment = settings?.keySource === "env";
   const codexCall = settings?.lastCodexSession;
   const plan = codexCall?.plan ?? null;
   const clock = useNowSeconds(60_000);
@@ -98,8 +89,6 @@ export function VoiceCompanionSetting() {
   const codexCallDate = codexCall ? new Intl.DateTimeFormat(locale, { day: "numeric", month: speech === "uk" ? "long" : "short" }).format(new Date(codexCall.endedAt)) : "";
   const readAt = plan ? new Intl.DateTimeFormat(locale, now - plan.observedAt < 86_400_000 ? { hour: "2-digit", minute: "2-digit", hourCycle: "h23" } : { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(new Date(plan.observedAt)) : "";
   const tone = planTone(plan);
-  /* The masked field holds what is being typed and nothing else: no saved key is ever put into it. */
-  const typed = { type: "password", value: key, onChange: (event: ChangeEvent<HTMLInputElement>) => { setKey(event.target.value); setKeySaved(false); } } as const;
   const field = "min-h-9 w-full min-w-0 rounded-[8px] border border-border bg-well px-2.5 text-[13px] text-primary placeholder:text-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-55";
   return (
     <div className="mt-4" data-voice-companion-setting>
@@ -123,19 +112,14 @@ export function VoiceCompanionSetting() {
                   </label>
                   {selected && backend === "api" ? (
                     <div className="flex min-w-0 flex-col gap-4 pl-[26px] max-sm:pl-0">
-                      <form className="min-w-0" onSubmit={(event) => void submitKey(event)} data-voice-companion-key data-key-source={settings.keySource}>
-                        <label htmlFor={ids.key} className="text-[13px] font-semibold text-primary">{t("voiceCompanion.settings.key")}</label>
-                        <div className="mt-1.5 flex gap-2">
-                          <input id={ids.key} {...typed} disabled={busy || fromEnvironment}
-                            autoComplete="off" autoCapitalize="off" autoCorrect="off" spellCheck={false} data-1p-ignore="" data-lpignore="true" aria-describedby={ids.keyHint}
-                            placeholder={t(settings.keySource === "file" ? "voiceCompanion.settings.key.replace" : "voiceCompanion.settings.key.placeholder")} className={field} />
-                          <button type="submit" disabled={busy || fromEnvironment || !key.trim()} className="min-h-9 shrink-0 rounded-[8px] border border-border px-3 text-[13px] font-semibold text-primary hover:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-45">{t("voiceCompanion.settings.key.save")}</button>
-                        </div>
-                        <p id={ids.keyHint} role="status" className="mt-1.5 text-[12px] leading-snug text-muted" data-voice-companion-key-status>
-                          <span className={settings.keySource === "missing" ? "" : "font-semibold text-primary"}>{keySaved ? t("voiceCompanion.settings.key.saved") : t(`voiceCompanion.settings.key.${settings.keySource}`)}</span>{" "}
-                          {fromEnvironment ? null : t("voiceCompanion.settings.key.kept")}
+                      <div className="min-w-0" data-voice-companion-key data-key-source={settings.keySource}>
+                        <p className="text-[13px] font-semibold text-primary">{t("voiceCompanion.settings.key")}</p>
+                        <p role="status" className="mt-1 flex flex-wrap items-center gap-x-1.5 text-[12px] leading-snug text-muted" data-voice-companion-key-status>
+                          <span className={settings.keySource === "missing" ? "" : "font-semibold text-primary"}>{t(`voiceCompanion.settings.key.${settings.keySource}`)}</span>
+                          <span aria-hidden>·</span>
+                          <button type="button" data-voice-companion-open-keys="" onClick={() => openKeys("openai")} className="min-h-9 rounded-[6px] font-semibold text-accent hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 max-sm:min-h-11">{t("keys.open")}</button>
                         </p>
-                      </form>
+                      </div>
                       <div className="min-w-0" data-voice-companion-cap>
                         <label htmlFor={ids.cap} className="text-[13px] font-semibold text-primary">{t("voiceCompanion.settings.cap")}</label>
                         <div className="mt-1.5 flex items-center gap-2">

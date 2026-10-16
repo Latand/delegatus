@@ -1,3 +1,4 @@
+import { observeSqlite, parseSqliteJson } from "@/lib/sqliteReadAttribution";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -29,7 +30,7 @@ export class SqliteHandoffQueueStore implements HandoffQueueStore {
     /* Bound to the file at its name: a queue the activation fallback set
        aside is reopened, never written through the moved handle. */
     this.db = openCurrentDatabase(filename, () => {
-      const db = new sqlite.Database(filename, { create: true, strict: true });
+      const db = observeSqlite(new sqlite.Database(filename, { create: true, strict: true }), "handoff-queue");
       db.exec("PRAGMA busy_timeout = 5000; PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL; PRAGMA journal_size_limit = 67108864;");
       db.exec(`
         CREATE TABLE IF NOT EXISTS handoff_rows (
@@ -75,14 +76,14 @@ export class SqliteHandoffQueueStore implements HandoffQueueStore {
     const rows = this.db
       .query<{ value_json: string }, []>("SELECT value_json FROM handoff_rows ORDER BY row_order ASC")
       .all();
-    return rows.map((row) => JSON.parse(row.value_json) as HandoffRow);
+    return rows.map((row) => parseSqliteJson(row.value_json, this.db) as HandoffRow);
   }
 
   loadHistory(): HandoffRow[] {
     const rows = this.db
       .query<{ value_json: string }, []>("SELECT value_json FROM handoff_history ORDER BY row_order ASC")
       .all();
-    return rows.map((row) => JSON.parse(row.value_json) as HandoffRow);
+    return rows.map((row) => parseSqliteJson(row.value_json, this.db) as HandoffRow);
   }
 
   loadDrainingGenerations(): string[] {

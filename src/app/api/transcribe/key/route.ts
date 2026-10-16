@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 
-import { rejectCrossOrigin } from "@/lib/sameOrigin";
+import { keysOwnerGate } from "@/lib/keys/access";
 import { LIVE_KEY_ENV, liveKeySource, transcribeBackendInfo, writeTranscribeKey, type TranscribeBackendInfo } from "@/lib/transcribeBackend";
 import type { ApiError } from "@/lib/types";
 
@@ -13,11 +13,12 @@ const MAX_KEY_LENGTH = 512;
  * Save a live dictation provider's key from the setup guide (#2004). The body
  * is never logged and the key is never answered back: the reply is the same
  * availability report `GET /api/transcribe/backend` gives. There is no GET on
- * this path, since nothing here is meant to be read.
+ * this path, since nothing here is meant to be read. Like every key writer it
+ * takes the owner gate of the Keys page (`docs/design/keys-settings.md` §9).
  */
 export async function PUT(req: NextRequest): Promise<NextResponse<TranscribeBackendInfo | (ApiError & { code?: string })>> {
-  const rejection = rejectCrossOrigin(req);
-  if (rejection) return rejection;
+  const rejection = keysOwnerGate(req);
+  if (rejection) return rejection as NextResponse<ApiError>;
 
   let body: { provider?: unknown; key?: unknown };
   try {
