@@ -2405,6 +2405,13 @@ test.each(["before-recovery", "account-lock"] as const)("recovering an unsubmitt
     dispatches.push(input.receipt.launchId);
     return { path: null } as never;
   });
+  // The activation harness provisions a synthetic worktree. Supply its HEAD
+  // only at the native Git boundary; keep admission and recovery real.
+  const provision = await import("@/lib/workflows/provision");
+  const execute = provision.realExec;
+  const gitHead = spyOn(provision, "realExec").mockImplementation((command, args, cwd, ...rest) =>
+    command === "git" && args.join(" ") === "rev-parse HEAD" && cwd === before.activation!.input.cwd
+      ? { code: 0, stdout: ORIGIN_MAIN_SHA, stderr: "" } : execute(command, args, cwd, ...rest));
   const hold = () => drain.writeDrain(drain.drainFile(), { id: "unsubmitted-recovery", target: "a".repeat(40), since: new Date().toISOString(), until: 0, persistent: true });
   let resume!: () => void;
   let locking: Promise<void> | undefined;
@@ -2430,6 +2437,7 @@ test.each(["before-recovery", "account-lock"] as const)("recovering an unsubmitt
     await (recovering ?? engineModule.drainStageActivations(recoveryPorts));
     await engineModule.drainStageActivations(recoveryPorts);
     expect(dispatches).toHaveLength(0);
+    expect(gitHead).not.toHaveBeenCalled();
     expect(Object.values(registry.readOnlySnapshot().receipts)).toHaveLength(0);
     const held = loadPipelines()[0]!.runs[0]!.attempts[0]!;
     expect(held).toMatchObject({ n: before.n, launchId: null, spawnCalls: 1, activation: {
@@ -2443,13 +2451,18 @@ test.each(["before-recovery", "account-lock"] as const)("recovering an unsubmitt
     await engineModule.drainStageActivations(recoveryPorts);
     await engineModule.drainStageActivations(recoveryPorts);
     expect(dispatches).toHaveLength(1);
+    const launched = spawn.mock.calls[0]![0];
+    expect(launched.account.env.LLV_STAGE_GIT_WORKTREE).toBe(before.activation!.input.cwd);
+    expect(JSON.parse(fs.readFileSync(path.join(launched.account.env.LLV_STAGE_GIT_RECEIPT!, "start.json"), "utf8"))).toMatchObject({
+      launchId: launched.receipt.launchId, head: ORIGIN_MAIN_SHA, worktree: before.activation!.input.cwd,
+    });
     const receipts = Object.values(registry.readOnlySnapshot().receipts);
     expect(receipts).toHaveLength(1);
     expect(receipts[0]!.clientAttemptId).toBe(before.activation!.clientAttemptId);
     expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.spawnCalls).toBe(1);
   } finally {
     resume?.(); await locking; await recovering;
-    lock?.mockRestore(); resolve.mockRestore(); client.mockRestore(); spawn.mockRestore();
+    lock?.mockRestore(); resolve.mockRestore(); client.mockRestore(); spawn.mockRestore(); gitHead.mockRestore();
     drain.releaseDrain(drain.drainFile(), "unsubmitted-recovery"); setAgentRegistryForTests(null);
   }
 });

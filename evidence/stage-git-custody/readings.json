@@ -798,5 +798,329 @@
     "No performance gain is claimed.",
     "The final handoff also corrects a settlement comment; runtime statements match the verified merge.",
     "Changed-file lint completed with zero errors and five warnings."
-  ]
+  ],
+  "publicationRepair": {
+    "acceptedCommit": "0d7f2cab32b7e461ec1537666a035e248bebe2cd",
+    "base": "d395e7c7324e2653acd37edbbf644814f622deb1",
+    "cause": "Recovery fixtures have a synthetic checkout without a Git HEAD. Native guard preparation refuses it before dispatch.",
+    "change": "Supply the deterministic checkout HEAD at the native Git boundary; assert no preparation while held and durable starting-head proof at dispatch. Production code is unchanged.",
+    "sourceFiles": [
+      {
+        "path": "src/lib/git/agentHistoryGuard.test.ts",
+        "sha256": "3f7d6eddefd73f4b7865182b1161991100b9a8b5363c525e5fabda7c6797dfbb"
+      },
+      {
+        "path": "src/lib/git/agentHistoryGuard.ts",
+        "sha256": "a971166736abb8aeb04ec05ef583c45907061dfe22fcd8256b57b0f1e64087f2"
+      },
+      {
+        "path": "src/lib/git/stageAttemptGuard.ts",
+        "sha256": "675c86d100ca9223cfd09b3816e2d7862d7ed4e4a128aed395d74bc61dd8a3f8"
+      },
+      {
+        "path": "src/lib/performanceSpans.ts",
+        "sha256": "36e3e25baad3bf1bdf674a20681a82660b322614b2fbc13f07eb75bc96ad399e"
+      },
+      {
+        "path": "src/lib/pipelines/engine.ports.test.ts",
+        "sha256": "06b47645910301257f989655a3f9be892966b5e8a96abde8232f22844a31494f"
+      },
+      {
+        "path": "src/lib/pipelines/engine.recovery.test.ts",
+        "sha256": "9806bb3f1d7c3285873ec617384bdde22f272a770326355281c80f2732a13c19"
+      },
+      {
+        "path": "src/lib/pipelines/engine.ts",
+        "sha256": "07b6d741c19918f25ac279b0cfededa369b2dd6eee4d24b22c3892156730cb25"
+      },
+      {
+        "path": "src/lib/pipelines/git.test.ts",
+        "sha256": "5964ca932d6379904731c1a23c42bfd3effca556cad40194e758383d632cad95"
+      },
+      {
+        "path": "src/lib/pipelines/git.ts",
+        "sha256": "0050fa2fcb5faf49d0758c6265befc6901a009f9abadc073ec16f6ba83a480d1"
+      },
+      {
+        "path": "src/lib/pipelines/stageAttemptPush.ts",
+        "sha256": "a2e54673fabdafb5aade4a25bb87d560cda880373566016ac106a193ebd9c33d"
+      },
+      {
+        "path": "src/lib/pipelines/stageBranch.ts",
+        "sha256": "d6091c3c03ffd2c2a34f839ee8a19ae3d1a28b3c14b3f568d9c7d9c834836e5c"
+      },
+      {
+        "path": "src/lib/pipelines/terminalReap.test.ts",
+        "sha256": "4139bb7357c6ea6db0ac37624fa5e5282b078e770baa37ae38772d1fad7d5e06"
+      }
+    ],
+    "sourceDigest": "de2f6f3936e52c8b5306c84999e99c2a6a2a2c375cae752fa5c4ed623ce6159c",
+    "observations": [
+      {
+        "label": "accepted-red",
+        "observedAt": "2026-10-16T00:23:38.235685+00:00",
+        "command": [
+          "bash",
+          "$GATE_SLOT",
+          "bun",
+          "test",
+          "src/lib/pipelines/engine.recovery.test.ts",
+          "-t",
+          "recovering an unsubmitted reserving activation stays held"
+        ],
+        "exitCode": 1,
+        "elapsedSeconds": 3.468,
+        "counts": {
+          "pass": 0,
+          "fail": 2
+        },
+        "cases": [
+          {
+            "status": "fail",
+            "name": "recovering an unsubmitted reserving activation stays held at before-recovery"
+          },
+          {
+            "status": "fail",
+            "name": "recovering an unsubmitted reserving activation stays held at account-lock"
+          }
+        ]
+      },
+      {
+        "label": "merged-main",
+        "observedAt": "2026-10-16T00:23:45.930757+00:00",
+        "command": [
+          "bash",
+          "$GATE_SLOT",
+          "bun",
+          "test",
+          "src/lib/pipelines/engine.recovery.test.ts",
+          "-t",
+          "recovering an unsubmitted reserving activation stays held"
+        ],
+        "exitCode": 0,
+        "elapsedSeconds": 1.335,
+        "counts": {
+          "pass": 2,
+          "fail": 0
+        },
+        "cases": [
+          {
+            "status": "pass",
+            "name": "recovering an unsubmitted reserving activation stays held at before-recovery"
+          },
+          {
+            "status": "pass",
+            "name": "recovering an unsubmitted reserving activation stays held at account-lock"
+          }
+        ]
+      },
+      {
+        "label": "repair-green",
+        "observedAt": "2026-10-16T00:24:43.419293+00:00",
+        "command": [
+          "bash",
+          "$GATE_SLOT",
+          "bun",
+          "test",
+          "src/lib/pipelines/engine.recovery.test.ts",
+          "-t",
+          "recovering an unsubmitted reserving activation stays held"
+        ],
+        "exitCode": 0,
+        "elapsedSeconds": 5.43,
+        "counts": {
+          "pass": 2,
+          "fail": 0
+        },
+        "cases": [
+          {
+            "status": "pass",
+            "name": "recovering an unsubmitted reserving activation stays held at before-recovery"
+          },
+          {
+            "status": "pass",
+            "name": "recovering an unsubmitted reserving activation stays held at account-lock"
+          }
+        ]
+      },
+      {
+        "label": "repair-full-recovery",
+        "observedAt": "2026-10-16T00:25:21.615649+00:00",
+        "command": [
+          "bash",
+          "$GATE_SLOT",
+          "bun",
+          "test",
+          "src/lib/pipelines/engine.recovery.test.ts"
+        ],
+        "exitCode": 0,
+        "elapsedSeconds": 30.87,
+        "counts": {
+          "pass": 103,
+          "fail": 0
+        },
+        "cases": [
+          {
+            "status": "pass",
+            "name": "recovering an unsubmitted reserving activation stays held at before-recovery"
+          },
+          {
+            "status": "pass",
+            "name": "recovering an unsubmitted reserving activation stays held at account-lock"
+          }
+        ],
+        "caseSelection": "The repaired recovery seams; counts cover the entire file."
+      },
+      {
+        "label": "publication-gate-first-run",
+        "observedAt": "2026-10-16T00:37:48.736664+00:00",
+        "command": [
+          "bash",
+          "$GATE_SLOT",
+          "bun",
+          "scripts/local-gate.ts",
+          "pre-push"
+        ],
+        "exitCode": 1,
+        "elapsedSeconds": 736.857,
+        "workingTree": "Accepted commit plus the recovery fixture repair; source digest recorded above.",
+        "outcomes": [
+          "pre-push: privacy",
+          "pre-push: push checks",
+          "pre-push: types: passed in 106 s",
+          "pre-push: eslint: passed in 6 s",
+          "pre-push: touched tests: failed (1)",
+          "touched-tests: base commit d395e7c7324e2653acd37edbbf644814f622deb1",
+          "touched-tests: reviewed head commit 0d7f2cab32b7e461ec1537666a035e248bebe2cd (head sample runs the working tree)",
+          "touched-tests: head 460855ms",
+          "touched-tests: baseline run 274134ms (tests 273636ms; 3 failing file(s))",
+          "touched-tests: 0 new file(s), judged on head alone",
+          "NEW src/lib/pipelines/engine.providerBudget.test.ts: <runner error> runner did not finish (124)",
+          "PRE-EXISTING src/lib/pipelines/engine.creation.test.ts: a stage completes and its successor waits for both update roles: early-switch-off",
+          "PRE-EXISTING src/lib/pipelines/engine.ports.test.ts: managed early admission holds actual pipeline launches across recovery until terminal status",
+          "PRE-EXISTING src/lib/pipelines/engine.ports.test.ts: managed drain-switch-off admission holds actual pipeline launches across recovery until terminal status",
+          "touched-tests: 1 new failures, 3 pre-existing failures, 0 fixed, 0 removed/skipped, 0 flaky",
+          "pre-push: Linux backend: stopped when \"touched tests\" failed; nothing was judged",
+          "pre-push: Linux tests: stopped when \"touched tests\" failed; nothing was judged",
+          "pre-push: \"touched tests\" failed: 1; gate failed"
+        ]
+      },
+      {
+        "label": "publication-gate-unchanged-confirmation",
+        "observedAt": "2026-10-16T00:51:16.670280+00:00",
+        "command": [
+          "bash",
+          "$GATE_SLOT",
+          "bun",
+          "scripts/local-gate.ts",
+          "pre-push"
+        ],
+        "exitCode": 1,
+        "elapsedSeconds": 741.345,
+        "workingTree": "Same source as the first full gate run.",
+        "outcomes": [
+          "pre-push: privacy",
+          "pre-push: push checks",
+          "pre-push: types: passed in 16 s",
+          "pre-push: eslint: passed in 7 s",
+          "pre-push: touched tests: failed (1)",
+          "touched-tests: base commit d395e7c7324e2653acd37edbbf644814f622deb1",
+          "touched-tests: reviewed head commit 0d7f2cab32b7e461ec1537666a035e248bebe2cd (head sample runs the working tree)",
+          "touched-tests: head 443324ms",
+          "touched-tests: baseline run 296107ms (tests 295621ms; 3 failing file(s))",
+          "touched-tests: 0 new file(s), judged on head alone",
+          "NEW src/lib/pipelines/engine.providerBudget.test.ts: <runner error> runner did not finish (124)",
+          "PRE-EXISTING src/lib/pipelines/engine.creation.test.ts: a stage completes and its successor waits for both update roles: early-switch-off",
+          "PRE-EXISTING src/lib/pipelines/engine.ports.test.ts: managed early admission holds actual pipeline launches across recovery until terminal status",
+          "PRE-EXISTING src/lib/pipelines/engine.ports.test.ts: managed drain-switch-off admission holds actual pipeline launches across recovery until terminal status",
+          "touched-tests: 1 new failures, 3 pre-existing failures, 0 fixed, 0 removed/skipped, 0 flaky",
+          "pre-push: Linux backend: stopped when \"touched tests\" failed; nothing was judged",
+          "pre-push: Linux tests: stopped when \"touched tests\" failed; nothing was judged",
+          "pre-push: \"touched tests\" failed: 1; gate failed"
+        ]
+      },
+      {
+        "label": "provider-budget-isolated",
+        "observedAt": "2026-10-16T00:56:26.213183+00:00",
+        "command": [
+          "bash",
+          "$GATE_SLOT",
+          "bun",
+          "scripts/local-gate-tests.ts",
+          "--base",
+          "d395e7c7324e2653acd37edbbf644814f622deb1",
+          "src/lib/pipelines/engine.providerBudget.test.ts"
+        ],
+        "exitCode": 0,
+        "elapsedSeconds": 278.082,
+        "outcomes": [
+          "touched-tests: reviewed head commit 0d7f2cab32b7e461ec1537666a035e248bebe2cd (head sample runs the working tree)",
+          "touched-tests: head 277866ms",
+          "touched-tests: green head; no baseline checkout or sample needed"
+        ]
+      },
+      {
+        "label": "linux-backend",
+        "observedAt": "2026-10-16T00:56:50.067407+00:00",
+        "command": [
+          "bash",
+          "$GATE_SLOT",
+          "bun",
+          "scripts/verify-platform-backend.ts",
+          "--expect",
+          "linux"
+        ],
+        "exitCode": 0,
+        "elapsedSeconds": 0.198,
+        "outcomes": [
+          "backend: linux selects \"linux\"",
+          "--- bun:ffi reaches the platform C library",
+          "bun:ffi: libc.so.6 loaded and getpid agrees with process.pid",
+          "--- the runtime-host fence lock",
+          "fence lock: exclusive, releasable, and does not block reads of the owner record",
+          "--- a fence created from nothing, as a first boot does",
+          "open flags this platform reports: O_RDWR=0x2 O_CREAT=0x40 O_EXCL=0x80 O_NOFOLLOW=0x20000",
+          "fence bootstrap: created its own directory and record, refused a rival, and handed over",
+          "platform readers verified"
+        ]
+      },
+      {
+        "label": "linux-tests",
+        "observedAt": "2026-10-16T00:56:58.866490+00:00",
+        "command": [
+          "bash",
+          "$GATE_SLOT",
+          "bun",
+          "scripts/local-gate-tests.ts",
+          "--base",
+          "d395e7c7324e2653acd37edbbf644814f622deb1",
+          "src/lib/proc/memory.test.ts",
+          "src/lib/proc/portable.test.ts",
+          "src/lib/proc/darwinIdentity.test.ts",
+          "src/lib/proc/index.test.ts",
+          "src/lib/proc/windowsSnapshot.test.ts",
+          "src/lib/proc/windowsIdentity.test.ts",
+          "src/lib/proc/windowsCwd.test.ts",
+          "src/lib/proc/windows.test.ts",
+          "src/lib/processGroup.test.ts",
+          "src/lib/platformHome.test.ts",
+          "src/lib/runtime/localEndpoint.test.ts",
+          "src/lib/scanner/describe.test.ts",
+          "src/lib/state/durableJson.test.ts",
+          "src/runtime-host/socket.test.ts",
+          "src/runtime-host/runtimeHostFence.test.ts",
+          "bin/server-runtime.test.ts",
+          "bin/bind-guard.test.ts"
+        ],
+        "exitCode": 0,
+        "elapsedSeconds": 1.441,
+        "outcomes": [
+          "touched-tests: reviewed head commit 0d7f2cab32b7e461ec1537666a035e248bebe2cd (head sample runs the working tree)",
+          "touched-tests: head 1181ms",
+          "touched-tests: green head; no baseline checkout or sample needed"
+        ]
+      }
+    ],
+    "remainingBlocker": "Two full pre-push runs classify the provider-budget runner deadline as NEW. Its isolated head sample passes. Publication remains blocked; coverage and gate limits are unchanged."
+  }
 }

@@ -63,6 +63,7 @@ Run each file separately from a scratch export, through the installed
 
 ```sh
 bash "$GATE_SLOT" bun test src/lib/pipelines/engine.ports.test.ts
+bash "$GATE_SLOT" bun test src/lib/pipelines/engine.recovery.test.ts
 bash "$GATE_SLOT" bun test src/lib/pipelines/terminalReap.test.ts
 bash "$GATE_SLOT" bun test src/lib/pipelines/git.test.ts
 bash "$GATE_SLOT" bun test src/lib/pipelines/engine.settlement.test.ts
@@ -78,3 +79,22 @@ Two managed-admission assertions fail on both main and the change in this
 isolated environment; their names and baseline results are retained. Hosted
 required checks belong to the subsequent Delegatus publication. No performance
 gain is claimed.
+
+Publication repair reproduced both unsubmitted-activation recovery failures on
+the accepted commit and confirmed both passed on the merged main base. Their
+synthetic checkout had no readable Git HEAD, so guard preparation correctly
+failed before dispatch. The fixture now supplies its deterministic HEAD only
+for that checkout's native Git read. Both recovery seams also assert that no
+guard preparation occurs under the drain and that the released dispatch carries
+the persisted launch, starting head and checkout proof. The full recovery file
+passes all 103 cases. Production admission, recovery and publication fences are
+unchanged by this repair. Its observations are recorded separately in
+`publicationRepair` in the evidence file.
+
+Two full pre-push rehearsals cleared the recovery failures and passed types,
+lint and privacy. Both stopped when `engine.providerBudget.test.ts` exceeded
+its five-minute file deadline; the corresponding main samples completed in
+274 and 296 seconds. That file passed alone on the repaired source in
+278 seconds. The full publication gate remains blocked by that runner
+timeout. No test coverage or gate limit was changed to accommodate it.
+The Linux backend probe and all 17 scoped Linux test files pass separately.
