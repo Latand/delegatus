@@ -8,6 +8,7 @@ import type { DeliveryReceipt, EngineHost, FirstDispatchEvidence, HostState, Que
 import {
   CONTROL_SETTLEMENT_WINDOW_MS,
   StructuredDeliveryQueue,
+  type StructuredDeliveryTransition,
   type StructuredDeliveryEffect,
   type StructuredDeliveryQueuePort,
 } from "./structuredDeliveryQueue";
@@ -1487,6 +1488,65 @@ test("a send an earlier executor already took is never delivered a second time",
 
   expect(sent).toEqual([]);
   expect(transitions).toEqual([]);
+});
+
+test("a dropped steer is retried after a concurrent control pass reads its stale delivering snapshot", async () => {
+  const statuses = new Map<string, { status: StructuredDeliveryTransition | "pending"; reason?: string | null }>([
+    ["supplement", { status: "queued" }],
+    ["interrupt", { status: "pending" }],
+  ]);
+  let includeInterrupt = false;
+  let active = true;
+  let resolveSteer!: (value: "dropped") => void;
+  let resolveInterrupt!: () => void;
+  let interruptStarted!: () => void;
+  let queuedTransition!: () => void;
+  const observedSteer = new Promise<"dropped">((resolve) => { resolveSteer = resolve; });
+  const interruptGate = new Promise<void>((resolve) => { resolveInterrupt = resolve; });
+  const interruptEntered = new Promise<void>((resolve) => { interruptStarted = resolve; });
+  const becameQueued = new Promise<void>((resolve) => { queuedTransition = resolve; });
+  const target = host(async () => ({ outcome: "turn-started", turnId: "successor-turn" }));
+  target.health = async () => ({ ...idleState(), status: active ? "active" : "idle", activeTurnRef: active ? "original-turn" : null });
+  target.steer = async () => ({ turnId: "original-turn", observe: () => observedSteer });
+  target.interrupt = async () => {
+    interruptStarted();
+    await interruptGate;
+    active = false;
+  };
+  const queue = new StructuredDeliveryQueue({
+    effects: async () => [
+      ...(includeInterrupt ? [{
+        id: "effect:interrupt",
+        kind: "runtime.interrupt",
+        eventSeq: 1,
+        payload: { operationId: "interrupt", conversationId: "conversation-one", turnId: "original-turn" },
+      }] : []),
+      ...(statuses.get("supplement")?.status === "queued" || statuses.get("supplement")?.status === "delivering" ? [{
+        id: "effect:supplement",
+        kind: "runtime.send",
+        eventSeq: 2,
+        payload: { operationId: "supplement", conversationId: "conversation-one", text: "continue after rotation", policy: "steer-or-queue" },
+      }] : []),
+    ],
+    status: async (id) => statuses.get(id) ?? null,
+    transition: async (id, status, details) => {
+      statuses.set(id, { status, reason: details?.reason });
+      if (id === "supplement" && status === "queued" && details?.reason === "steer-dropped") queuedTransition();
+    },
+  }, () => target);
+
+  await queue.drain();
+  expect(statuses.get("supplement")?.status).toBe("delivering");
+
+  includeInterrupt = true;
+  const concurrentPass = queue.drain();
+  await interruptEntered;
+  resolveSteer("dropped");
+  await becameQueued;
+  resolveInterrupt();
+  await concurrentPass;
+
+  expect(statuses.get("supplement")?.status).toBe("delivered");
 });
 
 test("a steered send the dying host took is not delivered again when the host returns", async () => {

@@ -1838,9 +1838,29 @@ export class StructuredDeliveryQueue {
          through to the engine call, so a send an executor was already
          delivering could be delivered a SECOND time by whichever pass caught
          the journal at a bad moment. */
-      const durable = durableStatuses.get(effect.operationId) ?? null;
+      let durable = durableStatuses.get(effect.operationId) ?? null;
       if (effect.kind === "inject" && this.activeInjections.has(effect.operationId)) continue;
       if (this.activeSteers.has(effect.operationId)) continue;
+      if (durable?.status === "delivering") {
+        /* A detached steer observer may have settled this operation while this
+           pass was awaiting an earlier control. Its initial status snapshot
+           still says `delivering`; only a fresh read can distinguish a live
+           delivery from the newly queued retry. */
+        const current = await this.checking(lane, effect, "refreshing the delivering fence", () => this.readStatus(effect.operationId));
+        if (!current.readable) {
+          this.noteWait(effect, "evidence-unreadable", { wake: "retry", detail: "delivery journal status is unavailable" });
+          return this.fenceUnavailable();
+        }
+        durable = current.value;
+        durableStatuses.set(effect.operationId, durable);
+        if (durable && TERMINAL_DELIVERY_STATUSES.has(durable.status)) {
+          this.settleProgress(effect.operationId, durable.status, durable.reason);
+          forgetRetirementOperation(effect.operationId);
+          this.firstDispatches.delete(effect.operationId);
+          this.contendedRecoveries.delete(effect.operationId);
+          continue;
+        }
+      }
       if (durable?.status === "delivering") {
         if (await this.checking(lane, effect, "reading who holds the delivering fence",
           () => this.deliveringOwnerDisposition(effect.conversationId, durable.reason)) !== "abandoned") {
