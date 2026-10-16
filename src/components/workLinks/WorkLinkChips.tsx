@@ -159,10 +159,13 @@ export function WorkLinksPanel({ target, resolved }: { target: WorkLinkTarget; r
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const links = resolved?.links ?? [];
+  /* An attach waits: the server parses and validates the reference. A detach
+     is drawn at once by the provider and takes no lock. */
   const run = async (action: "attach" | "detach", link: string) => {
-    setBusy(true);
+    if (action === "attach") setBusy(true);
+    setError(null);
     const refusal = await edit(target, action, link);
-    setBusy(false);
+    if (action === "attach") setBusy(false);
     setError(refusal);
     if (!refusal && action === "attach") setDraft("");
   };
@@ -183,7 +186,6 @@ export function WorkLinksPanel({ target, resolved }: { target: WorkLinkTarget; r
                   type="button"
                   className="wl-detach"
                   data-work-link-detach={link.key}
-                  disabled={busy}
                   aria-label={t("workLinks.detachAria", { link: `#${link.number}` })}
                   title={t("workLinks.detachAria", { link: `#${link.number}` })}
                   onClick={() => void run("detach", `${link.repository}#${link.number}`)}

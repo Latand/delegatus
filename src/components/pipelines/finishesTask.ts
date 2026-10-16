@@ -25,7 +25,14 @@ export function finishesTaskOffer(pipeline: Pipeline, taskId: string | null | un
   return { checked: finishesTask(pipeline, taskId), open: openPipelinesOnTask(pipelines, taskId, pipeline.id).length };
 }
 
-/** Sets or clears the flag with `link-task`, an upsert, and says so. */
+/** The record with the flag set or cleared, as `link-task` leaves it. */
+export function withFinishesTask(pipeline: Pipeline, taskId: string, finishes: boolean): Pipeline {
+  const others = (pipeline.finishesTaskIds ?? []).filter((id) => id !== taskId);
+  return { ...pipeline, finishesTaskIds: finishes ? [...others, taskId] : others };
+}
+
+/** Sets or clears the flag with `link-task`, an upsert, and says so. The check
+    flips at once through the record the write predicts; a refusal flips it back. */
 export async function toggleFinishesTask(
   ports: PipelinePorts,
   pipeline: Pipeline,
@@ -35,7 +42,7 @@ export async function toggleFinishesTask(
   show: (text: string, error?: boolean) => void,
 ): Promise<void> {
   const next = !finishesTask(pipeline, taskId);
-  const result = await ports.patch(pipeline.id, { action: "link-task", taskId, finishes: next });
-  if (result.ok) show(t(next ? "pipelineBlock.finish.set" : "pipelineBlock.finish.cleared", { title }));
-  else show(t("pipelineBlock.finish.failed", { title, error: result.error }), true);
+  show(t(next ? "pipelineBlock.finish.set" : "pipelineBlock.finish.cleared", { title }));
+  const result = await ports.patch(pipeline.id, { action: "link-task", taskId, finishes: next }, withFinishesTask(pipeline, taskId, next));
+  if (!result.ok) show(t("pipelineBlock.finish.failed", { title, error: result.error }), true);
 }

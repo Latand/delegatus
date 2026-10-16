@@ -52,6 +52,7 @@ import { loadExpandedTasks, persistExpandedTasks } from "./scheme/taskStacks";
 import { clearWorkflowDraftStorage } from "./workflows/WorkflowDraftPane";
 import { dropLegacyWorkflowDrafts, isWorkflowDraftId } from "./workflows/workflowModel";
 import { pushTaskToast, TaskToastHost } from "./tasks/taskToast";
+import { cleanTitle } from "@/lib/title";
 import { MobileBoardDock, mobileBoardOf } from "./mobile/MobileBoard";
 import { MobileKanban } from "./mobile/MobileKanban";
 import { useMobileBoardRowActions } from "./mobile/MobileRowActions";
@@ -491,6 +492,20 @@ function ProjectDashboardView({
      freshest generation so a resumed conversation lists once under its current
      file. */
   const favoriteRows = useMemo(() => resolveFavoriteRows(files, favoriteIds), [files, favoriteIds]);
+  /* A close, a restore or a star the server refused for good was already drawn
+     back by the outbox (audit B44); the board says which one and why, once. */
+  const boardRejections = board.rejections;
+  useEffect(() => {
+    if (!boardRejections?.length) return;
+    for (const rejection of boardRejections) {
+      const file = rejection.target ? files.find((entry) => entry.path === rejection.target || entry.conversationId === rejection.target) : undefined;
+      const name = (file ? cleanTitle(file.title ?? "", 48) : "") || t("kanban.untitledConversation");
+      const key = rejection.kind === "close" ? "board.rejected.close" : rejection.kind === "restore" ? "board.rejected.restore" : rejection.kind === "set-favorite" ? "board.rejected.favorite" : "board.rejected.other";
+      pushTaskToast("err", t(key, { conversation: name, code: rejection.code }));
+    }
+    board.clearRejections(boardRejections.map((rejection) => rejection.id));
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- the files and the setter are read when a rejection arrives
+  }, [boardRejections]);
   /* Conversation auto-collapse (#112/#1158): genuine user placements, manual
      expansions, and favorites pin a card against collapse. */
   const pinnedPaths = useMemo(
