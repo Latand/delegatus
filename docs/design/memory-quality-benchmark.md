@@ -2,9 +2,11 @@
 
 Status: analysis and design, no product change. Written 2026-10-16 against
 `main` at `02f9301fc`; every `file:line` is from that commit. Live records
-were read once, read-only, at 2026-10-16 12:28 UTC (section 3.1 says how) and
-read again at about 13:35 UTC to regenerate every figure with the script in the
-appendix.
+were read once, read-only, at 2026-10-16 12:28 UTC (section 3.1 says how); that
+export was not kept. A second read-only export at 14:19 UTC re-ran the script
+in the appendix, which applies the 12:28:42 cutoff to every field a later
+update can overwrite; the appendix says what that run reproduced and which
+figures no later read can reproduce.
 Projects other than this repository are named by letter and kind, as in
 `docs/design/role-memory-to-prompts.md`: A is this repository, B an ERP
 customization on a shared stand, C a bot and web-app product, D a dispatching
@@ -78,7 +80,7 @@ text that reaches no stage agent; they are listed last for completeness.
 | Fix-round lesson | Same call; when the attempt was activated by a fail edge, the request quotes up to five handed findings and asks for the class (`roleStage.ts:35-42`, `roleRender.ts:72-85`) | As above; `none` must say why the class cannot recur (stated in the text; the server does not check it) | 566 fix-round requests |
 | Problem report | `leave_lesson` with `problem` stores the report on the request row; the seat tick offers it on the agenda (`roleProblems.ts:77`, `src/lib/monitor/seatTickSources.ts:659`) | Writes no rule | 22 |
 | Seat rule | The designated seat calls `leave_lesson` unasked (`bindings.ts:2571-2577` → `roleStage.ts:158-176`) | Designation checked server-side; same text guards | 70 written, 48 active |
-| Curator | A scheduled curator conversation calls `curate_rules` read and apply (`src/lib/mcp/server.ts:3400`, guard `src/lib/memory/curation/guard.ts:12-34`, apply `curation/apply.ts:51`); brief and checklist in `curation/brief.ts:1-16`; due at 10 new lessons or 6 hours (`roleTypes.ts:12-13`, `curation/store.ts:113`) | Every active rule accounted for; operator-kept rules stay | 69 passes since 2026-10-12 23:08 UTC (64 succeeded, 4 failed, 1 launching); 697 curator rewrites |
+| Curator | A scheduled curator conversation calls `curate_rules` read and apply (`src/lib/mcp/server.ts:3400`, guard `src/lib/memory/curation/guard.ts:12-34`, apply `curation/apply.ts:51`); brief and checklist in `curation/brief.ts:1-16`; due at 10 new lessons or 6 hours (`roleTypes.ts:12-13`, `curation/store.ts:113`) | Every active rule accounted for; operator-kept rules stay | 69 passes since 2026-10-12 23:08 UTC (state at the cutoff: 64 succeeded, 4 failed, 1 still launching; the last one ended 20 minutes later); 697 curator rewrites |
 | Retention on write | `appendRule` and `retainRules` (`roleConsolidate.ts:59-100`): a word-for-word repeat merges; over 10 000 code points (`roleTypes.ts:11`) the head of the leaving order goes, never-curated rules first (`roleConsolidate.ts:50-56`) | No model; nothing deleted | 25 rules archived for budget, 20 of them never curated (3.2) |
 | Operator | The rules window: remove, return, revert (`src/app/api/role-memory/route.ts`) | Operator authority | 3 history entries |
 | History and egress | Versions as archived rows (`roleStore.ts:230-249`); scope history keeps every curator-pass entry plus the last 500 entries of any kind (`keepHistory`, `roleStore.ts:39-42`; curator entries inside the window use its slots); every stored text is a known value for the publication gate and the relays (`roleStore.ts:541-745`) | Fails closed | 864 version rows; the busiest scope holds 440 history entries, 25 of them curator passes |
@@ -112,8 +114,8 @@ tokens are an estimate at four bytes per token, no tokenizer was run):
 
 | Path | Write | Selection and delivery | Observed |
 | --- | --- | --- | --- |
-| `search_memory` on demand | None: a derived index over engine memories, instructions and skills (`memory-index.sqlite`; `src/lib/memory/index.ts`) | The agent queries; opening a hit records `opened` (`src/lib/mcp/server.ts:3413`) | 1,869 opened hits since 2026-10-02 (1,867 from searches, 2 from injections). Index: 6,099 Codex references, 759 Claude references, 355 preferences, 333 skills, 293 project facts |
-| Injection into operator turns | Same index | `UserPromptSubmit` hook (`spawnPolicy.ts:490`, `codexAppServerHost.ts:1466`) → `offerForHook` (`controller.ts:22-193`): operator-originated turns only: agent deliveries and machine launch briefs skipped, later human submissions eligible (`:85-96`); clean conversations skipped (`:51-53`), per-project switch and a judged selection (`injection.ts:25`) | October: 348 judged turns, 323 with no match, 178 with no candidate, 683 skipped, 13 failed. 23 items injected ever, into 13 conversations; 2 opened, 0 cited (`memory_offers`, `index.ts:142`, `:845`) |
+| `search_memory` on demand | None: a derived index over engine memories, instructions and skills (`memory-index.sqlite`; `src/lib/memory/index.ts`) | The agent queries; opening a hit records `opened` (`src/lib/mcp/server.ts:3413`) | 1,869 opened hits since 2026-10-02 (1,867 from searches, 2 from injections). Index at the snapshot read, a derived and rebuilt table with no history: 6,099 Codex references, 759 Claude references, 355 preferences, 333 skills, 293 project facts |
+| Injection into operator turns | Same index | `UserPromptSubmit` hook (`spawnPolicy.ts:490`, `codexAppServerHost.ts:1466`) → `offerForHook` (`controller.ts:22-193`): operator-originated turns only: agent deliveries and machine launch briefs skipped, later human submissions eligible (`:85-96`); clean conversations skipped (`:51-53`), per-project switch and a judged selection (`injection.ts:25`) | October: 348 judged turns, 323 with no match, 178 with no candidate, 683 skipped, 13 failed, read once from the index's running monthly counters (`memory_injection_activity`, `index.ts:666-686`), which carry no time per event and so cannot be re-read for a cutoff (the same counters read at 14:26 UTC held 350, 325, 188, 689 and 15). 23 items injected up to the cutoff, into 13 conversations; 2 opened, 0 cited (`memory_offers` rows carry their own time, `index.ts:142`, `:845`; query in the appendix) |
 
 Which pipeline-stage turns can receive an injection, by the code at
 `controller.ts:51-96`:
@@ -203,9 +205,14 @@ is the unmeasured kind.
   `board_maintenance_runs`. Nothing was written. `curate_rules` read was
   refused to this stage (`CURATE_CALLER`: only the live curator may call it,
   `guard.ts:13-34`), so the store was read through the snapshot. The snapshot
-  was removed with the stage's scratch directory; the appendix gives the export
-  and the script, and a second export at about 13:35 UTC reproduced every
-  figure here under the same cutoff.
+  was removed with the stage's scratch directory. The appendix gives the export
+  and the script. A second export at 14:19 UTC (digests in the appendix), run
+  through the script, reproduced every figure here that a cutoff can restore; it
+  also showed that the first version of the script was not cutoff-safe (it gave
+  50 rules with work from two or more tasks where this document says 49),
+  which is why the script now filters merge, split and version links by the
+  cutoff. The appendix lists the figures that are point-in-time reads and
+  cannot be reproduced.
 - **Transcripts.** `conversation_messages` for each case's stages,
   `search_transcripts` for rule-id citations and for the requirement.
 - **What each attempt received.** Nothing records the rule ids delivered to
@@ -225,7 +232,9 @@ is the unmeasured kind.
   a task id, the marker of the fix-round wording; the first curator pass ran
   at 23:08); R2, fix-round wording, problem reports and the curator, to
   2026-10-15 14:57 (variant 4 role prompts installed, which moved the universal
-  memory classes into the shipped prompts); R3 after that.
+  memory classes into the shipped prompts); R3 after that. A regime is a period,
+  not an experiment: the curator and the problem-report path begin inside R1 and
+  R2, variant 4 prompts begin R3, and task mix and models were not held fixed.
 - **Finding classes.** A keyword pass with Unicode-aware word starts, six
   classes, English terms and Ukrainian stems, written out in the appendix
   script. Over the 811 reviewer findings on builder lanes since 2026-10-10 it
@@ -245,15 +254,26 @@ rewrote a rule, with 95 % Wilson intervals:
 | R3 | 83 | 82 (99 %, 93–100) | 2 of 47 so far; 14 of 47 evicted for budget |
 
 The rule cohorts are original fix-round rules: split descendants and version
-rows are excluded (appendix). Requests outside fix rounds (the stage was not
-activated by a fail edge) answered `none` in 8 % (R0), 69 % (R1), 65 % (R2)
-and 82 % (R3) of requests; the reason given is almost always that existing
-rules already cover the work (a keyword reading: R2 183 of 203, R3 68 of 80).
+rows are excluded (appendix). The regimes differ in more than the wording
+(3.1 lists the concurrent changes), so the table records rates by period;
+older cohorts also had longer to meet a curator pass.
 
-**Self-assessment (observation).** A builder outside a fix round answers its
-request before any review. Of those answers that claimed existing rules cover
-the work and were reviewed, the next review failed in 52 of 110 (47 %,
-38–57) in R1, 67 of 114 (59 %, 50–67) in R2 and 32 of 40 (80 %, 65–90) in R3.
+*First-pass requests* are stage requests that were not activated by a fail
+edge and whose lane had no finished reviewer verdict when the attempt started.
+773 requests were not activated by a fail edge; 113 of them follow a review
+(later retries, and stages with fix-like names that no fail edge activated),
+so the first-pass cohort is the other 660. They answered `none` in 5 % (R0,
+5 of 99), 67 % (R1, 143 of 215), 62 % (R2, 164 of 264) and 82 % (R3, 67 of
+82); the reason given is almost always that existing rules already cover the
+work (a keyword reading: R2 150 of 164, R3 58 of 67).
+
+**Self-assessment (observation).** A builder in the first-pass cohort answers
+its request before any review of its lane. Of those answers that claimed
+existing rules cover the work and were followed by a review, the next review
+failed in 49 of 103 (48 %, 38–57) in R1, 65 of 112 (58 %, 49–67) in R2 and
+32 of 40 (80 %, 65–90) in R3 (R0: 1 of 4). Counting every request that no fail
+edge activated would add 11 such builder answers that came after earlier
+reviews (R0 2, R1 7, R2 2).
 
 **Retention (observation).** Rules written by agents reach the curator
 within about two days (median life of a rule archived as task-specific: 47.8
@@ -324,7 +344,10 @@ delivered memory (counts as role here / role everywhere / project / machine,
 UTF-8 bytes of the rule lines, and a digest), the action, the error and the
 attribution. The digest is the first eight hex digits of the SHA-256 of the
 ordered rule ids, one per line, in render order; the appendix script prints it,
-so a reader can check a block without the rule texts. "Relevant" ids are the
+so a reader can check a block without the rule texts. That digest covers the
+ids only: two blocks with one digest list the same rules, not the same text.
+Where a claim depends on text, the script also prints a content digest (ids and
+the texts in force at the attempt's start); cases 1 and 2 give both. "Relevant" ids are the
 stage author's judgement of which delivered rules bear on the task; no second
 judge has checked them, which is what criterion 5's calibration sample is for.
 Zero is stated where a clean role receives nothing by design. Four narratives
@@ -336,7 +359,7 @@ ids and transcript paths stay in the lane's final handoff.
 
 - *Prompt.* A `build` stage brief with the pinned specification of the theme
   change; the stored scaffold carries the rendered-work block.
-- *Delivered.* 97 rules (36/41/5/15), 23,714 B, digest `c7475016`. Relevant:
+- *Delivered.* 97 rules (36/41/5/15), 23,714 B, digest `c7475016` (content `13c2f9fb`). Relevant:
   `r_90146d0a76745b43` (which stylesheet rule wins, checked by computed style
   in a built page) and `r_77fc7abe32501e22` (states of prototype controls, hover
   and disabled among them).
@@ -353,8 +376,11 @@ ids and transcript paths stay in the lane's final handoff.
 - *Prompt.* A fix brief quoting the three findings (round 1) and the one
   finding of the second review (round 2), each with the fix-round lesson
   request.
-- *Delivered.* Round 1: the block of case 1 unchanged (digest `c7475016`).
-  Round 2: 97 rules, 23,844 B, digest `6c974345`, which now holds
+- *Delivered.* Round 1: the same 97 rule ids as case 1 (id digest `c7475016`)
+  with different text in one of them: 23,809 B against 23,714 B, because
+  `r_ac39458a8661f4a5` was rewritten between the two starts (205 to 300 UTF-8
+  bytes; content digest `13c2f9fb` becomes `6ff468d8`). Round 2: 97 rules,
+  23,844 B, id digest `6c974345` (content `f1ac6939`), which now holds
   `r_04f612d544543a78`. Relevant in both: `r_90146d0a76745b43`.
 - *Action.* Round 1 fixed the three findings and wrote a new lesson,
   `r_04f612d544543a78`, for the same class as `r_90146d0a76745b43`, narrower
@@ -581,19 +607,26 @@ narration well and degrades readability in the rules it keeps.
 
 ### 3.4 Before and after
 
-1. **Lesson-request wording, R0 → R1 → R2 (whole store).** "Most stages do
-   neither" cut fix-round writing from 99 % to 53 %; naming the findings and
-   asking for their class brought it back to 98 %, and the share of fix-round
-   rules the curator later judged task-specific fell from 82 % (R0) to 29 %
-   (R2). The instruction moves both what is written and how general it is.
-   The judge is the curator, itself a model; criterion 10's calibration
-   sample is what would make this a measurement.
+1. **Lesson-request wording, R0 → R1 → R2 (whole store).** Observed: the
+   fix-round write rate was 99 % under the first wording, 53 % when the
+   wording became "most stages do neither", and 98 % when it named the findings
+   and asked for their class; the share of fix-round rules the curator later
+   judged task-specific was 82 % (R0) and 29 % (R2). These are cohort
+   differences and they are facts. They do not isolate the wording: R2 also
+   introduced the curator and the problem-report path, the task and model mix
+   changed between regimes, older cohorts had longer to meet a curator pass,
+   and the judge of "task-specific" is the curator, itself a model. No paired
+   replay and no concurrent A/B has run, so the effect of the instruction alone,
+   and its size, is unmeasured. The write-side replay of 4.1 and the A/B of
+   4.3 are the designs that would measure it; criterion 10's calibration sample
+   would make the judge's part a measurement.
 2. **The first curator passes (project A builder block).** 28.9 KB → 14.8 KB
    in one night; rules with two or more tasks behind them went from 4
    (2026-10-12) to 49 (now). Review outcomes cannot show the effect (3.2).
 3. **Variant 4 prompts and the in-instructions sweep.** 23.8 KB → 15.8 KB;
-   with 12 builder lanes reviewed since in project A, outcomes cannot show an
-   effect.
+   12 lanes of project A started a builder attempt after that pass ended
+   (10:21:26 UTC) and 2 of them had been reviewed by the cutoff, so outcomes
+   cannot show an effect.
 4. **Rule-level, within a lane (cases 2 and 4).** In both, the class recurred
    after its rule entered delivery, and the rule was rewritten to cover the
    new instance. These are the only before/after comparisons whose units match
@@ -604,11 +637,12 @@ narration well and degrades readability in the rules it keeps.
 
 Observed:
 
-- The write instruction controls the write rate and, with the curator as
-  judge, the generality of what is written (3.4.1).
-- A request outside a fix round is answered before review, and its typical
-  answer ("my rules covered it") is followed by a failed review in 47–80 % of
-  cases.
+- Write rate and the task-specific share of what is written differ by regime,
+  and the wording is one of several concurrent changes (3.4.1); the effect of
+  the instruction alone is unmeasured.
+- A first-pass request is answered before any review of its lane, and its
+  typical answer ("my rules covered it") is followed by a failed review in
+  48–80 % of cases (R1 to R3).
 - In the builder scope of project A, a full scope evicted each new uncurated
   lesson within minutes (20 never-curated evictions, median 0.33 hours; 25
   evictions in all, median 0.45 hours, five of them curated rules that left
@@ -667,38 +701,85 @@ written afterwards are all on record.
   and green on the fixed one. Judged second: a clean reviewer judge, blind to
   the condition, asked only whether the finding's class is present; k = 2 per
   item, with the disagreement rate reported as the noise band.
-- **Engine memory is a controlled factor.** The files a Claude or Codex stage
-  loaded are unversioned, and nothing captured them at any failed attempt
-  (1.4), so their content at that attempt cannot be recovered. The historical
-  replay therefore runs every arm with engine memory switched off (the clean
-  launch flag, `spawnPolicy.ts:531-534`). It measures what learned rules do
-  without engine memory, and it differs from the recorded production run by
-  that factor; every result states this. A prospective experiment closes the
-  gap: from the day the ledger of 4.4.1 ships, each engine start stores a
-  private copy of the engine memory files it loaded, keyed by hash, and later
-  items replay with the files as received.
-- **Recoverable inputs and the pilot manifest.** Historical items need five
-  inputs, all recoverable without a model call: the base commit (resolves in
-  the repository's object store), the brief and the pinned specification (on the
-  pipeline record), the rendered scaffold (on the attempt), and the learned
-  block (reconstructed from scope history while the attempt lies inside the
-  retained window, 4.4.2). The appendix script counts the candidates at the
-  snapshot: 210 builder lanes whose first review failed, 144 whose fix round
-  wrote or rewrote a rule, 136 with all five inputs recoverable (32
-  rendered-state, 78 contract-or-seam, 26 evidence-or-claim). The pilot
-  manifest is the lowest SHA-256 of the pipeline id in each stratum (4, 3, 3),
-  ten items, manifest digest `3c6e4d3937fb`.
+- **Engine memory is a controlled factor, switched off apart from the learned
+  block.** The files a Claude or Codex stage loaded are unversioned, and
+  nothing captured them at any failed attempt (1.4), so their content at that
+  attempt cannot be recovered. The historical replay therefore runs every arm
+  with engine memory off. It measures what learned rules do without engine
+  memory and differs from the recorded production run by that factor; every
+  result states this. The clean launch flag cannot do it, because at the pinned
+  code `cleanMemory` also removes the treatment: `learnedRulesForLaunchProfile`
+  returns nothing for a clean profile (`roleLaunch.ts:34-35`), Claude drops its
+  appended system prompt (`claudeStreamBrokerHost.ts:923`) and Codex drops its
+  developer instructions (`codexAppServerHost.ts:1620`). An M1 or M3 arm
+  launched that way would receive no rules. The replay launcher needs two
+  independent settings: engine memory off (for Claude `autoMemoryEnabled:
+  false` in the settings file and `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1` in the
+  environment, the two things `spawnPolicy.ts:531-534` sets for a clean launch;
+  for Codex the `memories` feature off, `codexAppServerHost.ts:1489-1490`),
+  and the frozen block delivered through the channel production uses (Claude
+  `--append-system-prompt`, Codex `developerInstructions`) with `cleanMemory`
+  false. That is a replay-only launch option that does not exist today.
+  Acceptance, before any paid run: a no-model dry run builds the launch
+  arguments, the settings file and the Codex configuration for M0, M1 and M3
+  without starting an engine and asserts that engine memory is disabled in all
+  three arms, that M0 carries no learned block, that M1 carries exactly the
+  reconstructed ids and texts, and that M3 carries M1 plus the one added rule,
+  each matching the manifest's digests. That dry run has not been written or
+  run. A prospective experiment closes the gap: from the day the ledger of
+  4.4.1 ships, each engine start stores a private copy of the engine memory
+  files it loaded, keyed by hash, and later items replay with the files as
+  received.
+- **The frozen first message.** What a builder is shown first is not the
+  stored `definition.prompt`. `renderStagePrompt` (`src/lib/pipelines/prompts.ts:45-141`)
+  builds it: the stage template with `{{task}}` and `{{prev.output}}` expanded,
+  where the relayed text is the attempt's persisted `input`
+  (`prompts.ts:57-72`; `engine.ts:7149-7156`), then the pinned task and
+  specification, the role scaffold, the branch, base and delivery lines, the
+  worker limit and the test-command guidance resolved at launch
+  (`resolveStageTestGuidance`, a machine-local value). For a message over
+  32,000 bytes, `composeStageInput` (`stageInput.ts:26-100`;
+  `structuredContent.ts:40`) delivers file references with short excerpts instead of the
+  specification or the relay. The bundle holds the complete rendered message
+  with every substitution made and the test guidance fixed to one text, its byte
+  length and SHA-256, and a flag when the original launch exceeded the inline
+  limit and so delivered excerpts and files; the replay delivers the inline
+  form and the report says so.
+- **Recoverable inputs, validation and the pilot manifest.** Historical items
+  need five inputs: the base commit (resolves in the repository's object
+  store), the brief and the pinned specification (on the pipeline record), the
+  rendered scaffold (on the attempt), and the learned block (reconstructed
+  from scope history while the attempt lies inside the retained window, 4.4.2).
+  The appendix script counts the candidates at the snapshot: 210 builder lanes
+  whose first review failed, 144 whose fix round wrote or rewrote a rule, 136
+  with all five inputs present (32 rendered-state, 78 contract-or-seam, 26
+  evidence-or-claim). Presence is not enough, so the validation pass of the
+  appendix (no model call, no cost) assembles each message offline and drops an
+  item when the base commit does not resolve, a `{{...}}` placeholder remains,
+  a template that places `{{prev.output}}` has an empty persisted input (a root
+  stage has none and needs none), or the message names a URL, a pull request, an
+  issue or a `gh` call whose content is not frozen into the bundle. Run on the
+  14:19 UTC export, 74 of the 136 candidates pass; the 62 that fail all name a
+  live reference, and none fails on a placeholder, a missing relay or a missing
+  base. The pilot takes the lowest SHA-256 of the pipeline id in each stratum
+  among the items that pass (4, 3, 3). Three of the ten items first drawn
+  (digest `3c6e4d3937fb`) name a pull request and were replaced by the next
+  lowest hash in their stratum; the validated manifest of ten has digest
+  `a330fd597223`. Its messages are 8.8 to 35.1 KB; one exceeds the inline
+  limit because it carries a relayed design of about 24 KB, which the first
+  version of the bundle (base object, prompt, specification, scaffold) would
+  have left out. A byte comparison of an assembled message with the first user
+  message recorded in the original transcript was not run in this pass.
 - **Retained input bundle.** A private directory outside any checkout holds,
   per pilot item: the pipeline id, stage and attempt, a git bundle of the base
-  commit, the brief, the specification, the scaffold, the ordered rule ids with
-  their texts at that time, and the finding texts. A validation pass (no model
-  call, no cost) runs before any paid run: the base commit resolves from the
-  bundle, the reconstructed ids hash to the recorded digest, and every file is
-  non-empty. Missing-input policy: an item that fails validation is dropped and
-  replaced by the next lowest hash in its stratum, and the number dropped is
-  reported with the results.
+  commit, the complete rendered first message and its digest, the specification,
+  the scaffold, the ordered rule ids with their texts at that time, the finding
+  texts, and a frozen copy of anything the message references that can change
+  (a pull request's text and diff at the attempt's start). Missing-input policy:
+  an item that fails validation is dropped and replaced by the next lowest hash
+  in its stratum, and the number dropped is reported with the results.
 - **Size.** Pilot: 10 items (four rendered-state, three contract or seam,
-  three evidence or claim) from the manifest above, conditions M1 and M3 with
+  three evidence or claim) from the validated manifest above, conditions M1 and M3 with
   engine memory off, two runs each: 40 builder runs. Full set: 30 items over
   three projects and all four conditions. Run under the project's worker cap,
   in scratch exports, never against live state.
@@ -726,7 +807,7 @@ definitions below; the last three need judging and the ledger of 4.4.
 | --- | --- | --- |
 | Fix-round write rate | lesson or rewrite ÷ fix-round requests | R3: 82 of 83 |
 | Write precision | written rules not archived as task-specific, stale, problem or no-reader ÷ written rules, after one curator pass | R2 fix rounds: 95 of 135 |
-| None-claim accuracy | builder requests outside fix rounds answering "covered" whose next review passed ÷ those reviewed | R3: 8 of 40 |
+| None-claim accuracy | first-pass builder requests (3.2) answering "covered" whose next review passed ÷ those reviewed | R3: 8 of 40 |
 | Budget evictions of never-curated rules | count and median life, population of the appendix | 20, 0.33 hours (25 and 0.45 hours with the 5 curated rules) |
 | Recurrence capture | active rules with `tasks ≥ 2` | 49 of 228 |
 | Role block bytes | per role and project at each engine start | builder A 17.5 KB |
@@ -803,7 +884,7 @@ worked; none should ship without its metric being computable first.
 | --- | --- | --- | --- |
 | 1 | Delivery ledger and lasting history (4.4.1, 4.4.2) | `roleLaunch.ts`, `roleStore.ts` | Delivered sets reconstructable for 100 % of attempts; this is the precondition for criteria 3, 5, 6 and 7 |
 | 2 | Stop evicting a lesson nobody has curated: while a scope is over its bound, keep never-curated lessons until one curator pass has seen them, and run the pass early when a scope crosses 90 % | `roleConsolidate.ts:59-72`, curation trigger | Budget evictions of never-curated rules: 20 → 0 (population of the appendix); no scope over its bound after a pass |
-| 3 | Move the request of a stage outside a fix round to where the agent knows something: ask what the stage corrected on its own way, and drop the "covered" answer | `roleRender.ts:91-95` | None-claim accuracy rises above 50 %, or that request is retired; write precision of its rules holds |
+| 3 | Move the request of a first-pass stage to where the agent knows something: ask what the stage corrected on its own way, and drop the "covered" answer | `roleRender.ts:91-95` | None-claim accuracy rises above 50 %, or that request is retired; write precision of its rules holds |
 | 4 | In a fix round, list the ids of the two or three delivered rules nearest to each handed finding and ask for a rewrite when one names the class | `roleStage.ts:35-42`, `roleRender.ts:72-85` | Share of fix-round lessons later merged into a rule the same attempt had received (needs the ledger) falls; rewrite share rises; replay M3 avoid rate holds |
 | 5 | A readability floor for curator rewrites: split before compressing; no slash chains; one class per rule | `curation/brief.ts:7` | Compression index back under 10 %; replay compliance on rewritten rules at least equal to the original texts |
 | 6 | Tell seats who reads what: the seat notice names the clean roles and the level test, and a rule meant to be enforced at review goes to the reviewer prompt through the existing promotion step | `roleRender.ts:14-15`; promotion in `role-memory-to-prompts.md` §5.3 | Seat rules archived for level or no-reader fall; findings whose class has a builder rule and no reviewer block, counted per week |
@@ -861,20 +942,44 @@ recommendation is first.
 ## Appendix: reproducing every number
 
 Every aggregate in sections 1 to 4 comes from the export and the script
-below. A second reader needs no choice beyond the project keys.
+below, except the point-in-time reads named under "Point-in-time reads that
+no later read can reproduce", which are marked non-reproducible. A second reader needs no choice
+beyond the project keys.
 
-**Cutoff.** `T = 2026-10-16T12:28:42Z`. Records stamped after `T` are ignored,
-so a later run reproduces the figures here. The script compares epoch
-milliseconds, because as text `…12:28:42.582Z` sorts before `…12:28:42Z`
-and one request after the cutoff would slip in (the 1,340th request).
+**Cutoff.** `T = 2026-10-16T12:28:42Z`. Records stamped after `T` are ignored.
+The script compares epoch milliseconds, because as text `…12:28:42.582Z` sorts
+before `…12:28:42Z` and one request after the cutoff would slip in (the
+1,340th request).
 
-**Input provenance.** One read-only open of the Viewer's `state.sqlite` (the
-file under the Viewer's state directory) with `bun:sqlite` in `readonly` mode.
-The first read took 443 ms at 12:28:42 UTC; the second, which regenerated every
-figure with the script below, ran at about 13:35 UTC. The store only appends,
-so the second read reproduces the first once the cutoff is applied. The export
-files hold rule and prompt text and stay in a private directory outside any
-checkout; the script prints counts, ids and hashes only.
+**The store is not append-only.** Request rows are written once. Four other
+kinds are overwritten in place, and the script restores each to its state at
+`T` from a field that survives:
+
+| Record | What is overwritten | How the script restores the state at `T` |
+| --- | --- | --- |
+| Curation pass | `state`, `endedAt`, `counts` when the pass ends (one pass was claimed at 12:26:02 and ended at 12:48:32, so a later read shows it succeeded) | Pass state at `T` from its own `endedAt` |
+| Scope | `active`, `revision` (the `history` list only grows) | Walks `history` backwards from the current list |
+| Rule | `reason`, `changedAt`, `curatedAt`, `state`; a curator pass restamps `changedAt` of every rule it keeps; `mergedFrom`, `splitFrom` and `versions` links | A disposition counts only when `changedAt <= T`, which is correct when no rule that was inactive at `T` was touched afterwards: the script prints that count and it must be 0 (it was 0 at 14:19 UTC; 188 rules had been touched after `T`, none of them inactive at `T`). Merge, split and version links are kept only if the linked row was made by `T` |
+| Pipeline | Attempts are updated while they run | Only attempts started or completed by `T` are read; a verdict is set once, at completion |
+
+**Input provenance and digests.** One read-only open of the Viewer's
+`state.sqlite` (the file under the Viewer's state directory) with `bun:sqlite`
+in `readonly` mode, per read. The 12:28 UTC export (443 ms) was not kept, and
+the figures of this document come from it. The second export, at 14:19:06 UTC,
+was run through the script below and reproduced every line of the expected
+output table, including the pass states and the count of rules with two or
+more tasks, which the first version of the script got wrong (50 rather than
+49) because it followed merge and split links written after `T`. Of the case
+blocks of 3.3 only those of cases 1 and 2 were re-run on it. Its files, by the first
+twelve hex digits of their SHA-256: `role_memory.json` `a1df9f9b48a6`,
+`role_memory_curation.json` `a9d8d8881c76`, `pipelines.json` `fead0e6c80f0`,
+`pipelines_archive.json` `7f2cedb413f7`. It lived in the stage's scratch
+directory and was removed with it, so those digests prove what was run and
+cannot be re-checked here. Retention rule for any later use of this method:
+write the export once to a private directory outside any checkout, record its
+SHA-256 and time next to every figure derived from it, and re-run the script on
+that file, never on the live store. The export files hold rule and prompt text
+and stay private; the script prints counts, ids and hashes only.
 
 ```ts
 // export.ts: bun export.ts <path to state.sqlite> <private output dir>
@@ -888,17 +993,31 @@ for (const c of ["role_memory", "role_memory_curation", "pipelines", "pipelines_
 db.close();
 ```
 
-The shared-recall figures (1.3) come from a second read-only open of
-`memory-index.sqlite`:
+The shared-recall offer figures (1.3) come from a read-only open of
+`memory-index.sqlite`. Offers carry their own time, so these reproduce for any
+cutoff:
 
 ```sql
-select channel, count(*) offers, count(distinct conversation_id) conversations
-from memory_offers where at <= '2026-10-16T12:28:42.000Z' group by channel;
--- inject: 23 offers, 13 conversations; search: 1,867 offers (all opened)
+select channel, outcome, count(*) offers, count(distinct conversation_id) conversations
+from memory_offers where at <= '2026-10-16T12:28:42.000Z' group by channel, outcome;
+-- inject: 23 offers (2 opened, 21 without an outcome), 13 conversations; search: 1,867 offers, all opened
+-- opened hits, by the time they were opened: select channel, count(*) from memory_offers
+--   where outcome = 'opened' and outcome_at <= '2026-10-16T12:28:42.000Z' group by channel  -- 2 and 1,867
 ```
 
 The 13 injected conversations were matched against the stage attempts of the
 1,058 pipeline records (`attempts[].conversationId`); none matched.
+
+**Point-in-time reads that no later read can reproduce.** The October counters
+of judged, skipped, no-match, no-candidate and failed turns (1.3) are monthly
+totals in `memory_injection_activity` (`index.ts:666-686`), incremented in
+place with no time per event. They were read once, at the snapshot (348, 683,
+323, 178, 13). The same counters at 14:26 UTC read 350, 689, 325, 188 and 15,
+and no query can recover the values at `T`; treat the 1.3 figures as a reading
+of that moment, usable for scale only. The same holds for the index
+composition (6,099 Codex references and so on): the index is a derived table
+that is rebuilt, with no history. The sizes of the engine memory files (1.4)
+are file metadata read at the snapshot.
 
 **Claude file-memory inventory (1.4).** Metadata only, no file is opened:
 `stat` on `projects/<repository key>/memory` under each configured Claude
@@ -955,6 +1074,7 @@ const textAt = (id: string, t: number) => ((versions.get(id) ?? []).filter(v => 
 const block = (project: string, role: string | null, t: number) =>   // readable scopes: roleStore.ts:109-111
   [...(role ? [`role:${project}:${role}`, `role:*:${role}`] : []), `project:${project}`, "machine"].flatMap(scope => activeAt(scope, t).map(id => ({ scope, id })));
 const bytes = (b: { id: string }[], t: number) => new TextEncoder().encode(b.map(x => `- [${x.id}] ${textAt(x.id, t)}`).join("\n")).byteLength;
+const contentDigest = (b: { id: string }[], t: number) => crypto.createHash("sha256").update(b.map(x => `- [${x.id}] ${textAt(x.id, t)}`).join("\n")).digest("hex").slice(0, 8);   // ids AND texts at t
 const digest = (b: { id: string }[]) => crypto.createHash("sha256").update(b.map(x => x.id).join("\n")).digest("hex").slice(0, 8);
 const projA = process.env.PROJECT_A ?? "";                       // the key of the repository under analysis
 
@@ -989,23 +1109,35 @@ console.log({ ruleRows: rowsAtT.length, activeAtT: active.length, versionRows: r
   requests: reqs.length, answers: reqs.reduce((a: any, r: any) => (a[kindOf(r)] = (a[kindOf(r)] ?? 0) + 1, a), {}), failEdgeRequests: reqs.filter(fixEdge).length,
   curatorRewriteEntries: scopes.flatMap((s: any) => s.history).filter((h: any) => h.pass && upTo(h.at)).reduce((n: number, h: any) => n + (h.rewritten ?? []).length, 0),
   passes: curation.filter((p: any) => upTo(p.claimedAt)).length });
+// A pass row is overwritten when it ends, so its state at T comes from its own endedAt.
+const passStateAtT: Record<string, number> = {};
+for (const p of curation.filter((p: any) => p.kind === "pass" && upTo(p.claimedAt))) { const s = p.endedAt && upTo(p.endedAt) ? p.state : "launching"; passStateAtT[s] = (passStateAtT[s] ?? 0) + 1; }
+console.log({ passStateAtT });
+// Drift guard: rule rows are overwritten in place (reason, changedAt, curatedAt, state), and a curator pass restamps changedAt of
+// every rule it keeps. The disposition filters below trust "changedAt <= T" for a rule that was not active at T; that holds only
+// if no such rule (archived or merged by T) was touched again after T. The last field must print 0.
+const activeAtTSet = new Set(active);
+console.log({ ruleRowsTouchedAfterT: rules.filter((r: any) => !upTo(r.changedAt)).length, inactiveAtTButTouchedAfter: rules.filter((r: any) => !r.versionOf && upTo(r.createdAt) && !activeAtTSet.has(r.id) && !upTo(r.changedAt)).length });
 
 console.log("== 3.2 lesson answers by wording");
 show("fix-round requests that wrote or rewrote:", byRegime(reqs.filter(fixEdge), (r: any) => r.at, (r: any) => ["lesson", "rewrite"].includes(kindOf(r))));
 const fixRules = rules.filter((r: any) => upTo(r.createdAt) && r.source.fixRound && !r.splitFrom && !r.versionOf);   // original rules only
 show("fix-round rules archived as task-specific:", byRegime(fixRules, (r: any) => r.createdAt, (r: any) => r.reason === "task-specific" && upTo(r.changedAt)));
 show("fix-round rules archived for budget:", byRegime(fixRules, (r: any) => r.createdAt, (r: any) => r.reason === "budget" && upTo(r.changedAt)));
-const outside = reqs.filter((r: any) => !fixEdge(r));                 // stages not activated by a fail edge
-show("requests outside fix rounds answered none:", byRegime(outside, (r: any) => r.at, (r: any) => kindOf(r) === "none"));
-show("…of which claim existing rules cover it:", byRegime(outside.filter((r: any) => kindOf(r) === "none"), (r: any) => r.at, (r: any) => COVERED.test(r.none)));
-const selfAssessed: Record<string, number[]> = {};                    // builder, outside fix rounds, "covered", then the next review
-for (const r of outside.filter((r: any) => r.roleId === "builder" && kindOf(r) === "none" && COVERED.test(r.none))) {
+const priorReview = (r: any) => { const a = attemptOf(r); return attemptsOf(pipeBy.get(r.pipelineId)).some((x: any) => x.role === "reviewer" && x.verdict?.status && x.completedAt && ms(x.completedAt) <= ms(a.startedAt)); };
+const notFix = reqs.filter((r: any) => !fixEdge(r));                  // not activated by a fail edge: also later retries and stages named like fixes
+const firstPass = notFix.filter((r: any) => !priorReview(r));         // and no reviewer verdict had finished in the lane when the attempt started
+console.log({ notActivatedByFailEdge: notFix.length, ofThemWithAReviewFinishedEarlier: notFix.length - firstPass.length });
+show("first-pass requests answered none:", byRegime(firstPass, (r: any) => r.at, (r: any) => kindOf(r) === "none"));
+show("…of which claim existing rules cover it:", byRegime(firstPass.filter((r: any) => kindOf(r) === "none"), (r: any) => r.at, (r: any) => COVERED.test(r.none)));
+const selfAssessed: Record<string, number[]> = {};                    // builder, first pass, "covered", then the next review
+for (const r of firstPass.filter((r: any) => r.roleId === "builder" && kindOf(r) === "none" && COVERED.test(r.none))) {
   const all = attemptsOf(pipeBy.get(r.pipelineId)), a = attemptOf(r);
   const review = all.filter((x: any) => x.role === "reviewer" && x.verdict?.status && a.completedAt && ms(x.startedAt) >= ms(a.completedAt)).sort((x: any, y: any) => ms(x.startedAt) - ms(y.startedAt))[0];
   if (!review) continue;
   const g = regime(r.at); selfAssessed[g] ??= [0, 0]; selfAssessed[g][1]++; if (review.verdict.status === "fail") selfAssessed[g][0]++;
 }
-show("next review failed after a 'covered' answer:", selfAssessed);
+show("next review failed after a first-pass 'covered' answer:", selfAssessed);
 
 console.log("== 3.2 retention and shape");
 const budget = rules.filter((r: any) => r.kind === "rule" && !r.versionOf && r.reason === "budget" && upTo(r.changedAt));
@@ -1013,18 +1145,29 @@ const life = (r: any) => (ms(r.changedAt) - ms(r.createdAt)) / 3.6e6;
 const neverCurated = budget.filter((r: any) => !(r.curatedAt && ms(r.curatedAt) < ms(r.changedAt)));
 console.log({ budgetArchives: budget.length, neverCurated: neverCurated.length, neverCuratedMedianHours: +median(neverCurated.map(life)).toFixed(4),
   curatedBefore: budget.length - neverCurated.length, allMedianHours: +median(budget.map(life)).toFixed(4) });
+const lifeOf = (reason: string) => rules.filter((r: any) => !r.versionOf && r.reason === reason && upTo(r.changedAt)).map(life);   // createdAt to the archive, in hours
+const p90 = (a: number[]) => [...a].sort((x, y) => x - y)[Math.ceil(0.9 * a.length) - 1];
+console.log({ taskSpecific: [lifeOf("task-specific").length, +median(lifeOf("task-specific")).toFixed(1)], inInstructions: [lifeOf("in-instructions").length, +median(lifeOf("in-instructions")).toFixed(1)],
+  budgetAll: [budget.length, +median(budget.map(life)).toFixed(2), +p90(budget.map(life)).toFixed(1)], budgetNeverCurated: [neverCurated.length, +median(neverCurated.map(life)).toFixed(2), +p90(neverCurated.map(life)).toFixed(1)],
+  budgetCurated: [budget.length - neverCurated.length, +median(budget.filter(r => !neverCurated.includes(r)).map(life)).toFixed(1)] });   // [n, median, p90]
 const cp = (s: string) => [...s].length, comp = (t: string) => (t.match(/\//g) ?? []).length >= 3 || (t.match(/;/g) ?? []).length >= 2;
 const rewritten = active.filter(id => (ruleBy.get(id).versions ?? []).some((v: string) => upTo(ruleBy.get(v)?.changedAt ?? "9999")));
 const firstText = (id: string) => (versions.get(id) ?? []).filter(v => upTo(v.changedAt)).sort((a, b) => ms(a.changedAt) - ms(b.changedAt))[0]?.rule ?? ruleBy.get(id).rule;
 console.log({ activeRewrittenAtLeastOnce: rewritten.length, compressedAtFirstWriting: rewritten.filter(id => comp(firstText(id))).length,
   compressedNow: rewritten.filter(id => comp(textAt(id, T))).length, compressedAmongAllActive: active.filter(id => comp(textAt(id, T))).length,
   activeAtCap300: active.filter(id => cp(textAt(id, T)) === 300).length, sixOrMoreVersions: active.filter(id => (ruleBy.get(id).versions ?? []).length >= 6).length });
+const slashPer100 = (ts: string[]) => +(100 * ts.reduce((n, x) => n + (x.match(/\//g) ?? []).length, 0) / ts.reduce((n, x) => n + cp(x), 0)).toFixed(2);   // pooled over the rules
+const meanLen = (ts: string[]) => Math.round(ts.reduce((n, x) => n + cp(x), 0) / ts.length);
+console.log({ slashesPer100CharsFirstText: slashPer100(rewritten.map(firstText)), slashesPer100CharsNow: slashPer100(rewritten.map(id => textAt(id, T))),
+  meanLengthFirstText: meanLen(rewritten.map(firstText)), meanLengthNow: meanLen(rewritten.map(id => textAt(id, T))), meanLengthAllActive: meanLen(active.map(id => textAt(id, T))) });
 const taskKeys = new Map<string, Set<string>>();
 for (const r of reqs) for (const id of [...r.ruleIds, ...(r.rewrote ? [r.rewrote] : [])]) taskKeys.set(id, (taskKeys.get(id) ?? new Set()).add(r.taskId ?? `pipeline:${r.pipelineId}`));
 const kids = new Map<string, string[]>(); for (const r of rules) if (!r.versionOf && r.mergedInto && upTo(r.mergedAt ?? r.changedAt)) kids.set(r.mergedInto, [...(kids.get(r.mergedInto) ?? []), r.id]);
 const tasksOf = (id: string) => { const keys = new Set<string>(), seen = new Set<string>(), todo = [id];
   while (todo.length) { const c = todo.pop()!; if (seen.has(c)) continue; seen.add(c); for (const k of taskKeys.get(c) ?? []) keys.add(k);
-    todo.push(...(kids.get(c) ?? []), ...(ruleBy.get(c)?.mergedFrom ?? []), ...(ruleBy.get(c)?.splitFrom ? [ruleBy.get(c).splitFrom] : []), ...(versions.get(c) ?? []).map(v => v.id)); }
+    const row = ruleBy.get(c);   // merge, split and version links are rewritten in place: keep only those made by T
+    todo.push(...(kids.get(c) ?? []), ...(row?.mergedFrom ?? []).filter((m: string) => upTo(ruleBy.get(m)?.mergedAt ?? ruleBy.get(m)?.changedAt ?? "9999")),
+      ...(row?.splitFrom && upTo(row.createdAt) ? [row.splitFrom] : []), ...(versions.get(c) ?? []).filter(v => upTo(v.changedAt)).map(v => v.id)); }
   return keys.size; };
 const tc = active.map(tasksOf); console.log({ tasksAtLeast2: tc.filter(n => n >= 2).length, exactly2: tc.filter(n => n === 2).length, atLeast3: tc.filter(n => n >= 3).length });
 
@@ -1050,12 +1193,18 @@ for (const p of pipelines) { const all = attemptsOf(p);
     for (const f of a.verdict.findings) { const text = typeof f === "string" ? f : f.text; n++;
       const isUk = /[іїєґ]/i.test(text), c = classesOf(text); if (isUk) { uk++; if (!c.length) ukUntagged++; if (!ascii.some(re => re.test(text))) ukUntaggedAscii++; }
       if (c.length) { tagged++; if (c.some(k => have.has(k))) saturated++; } } } }
+const passEnd = ms("2026-10-16T10:21:26Z");   // the post-variant-4 curator pass for project A ended (section 3.3, case 13)
+const lanesSince = new Set<string>(), reviewedSince = new Set<string>();
+for (const p of pipelines.filter((p: any) => p.project === projA)) { const all = attemptsOf(p);
+  if (all.some((a: any) => a.role === "builder" && a.startedAt && ms(a.startedAt) >= passEnd && upTo(a.startedAt))) lanesSince.add(p.id);
+  if (all.some((a: any) => a.role === "reviewer" && a.verdict?.status && ms(a.startedAt) >= passEnd && upTo(a.startedAt))) reviewedSince.add(p.id); }
+console.log({ lanesWithABuilderAttemptSincePass: lanesSince.size, lanesReviewedSincePass: reviewedSince.size });
 console.log({ findings: n, ukrainian: uk, tagged, saturated, ukUntaggedUnicode: ukUntagged, ukUntaggedAsciiEnglishOnly: ukUntaggedAscii });
 
 console.log("== 3.3 delivered blocks of the traced attempts");
 for (const [name, project, role, at] of JSON.parse(process.env.TRACES ?? "[]") as [string, string, string, string][]) {
   const b = block(project, role, ms(at)); const n = (f: (s: string) => boolean) => b.filter(x => f(x.scope)).length;
-  console.log(name, b.length, `${n(s => s.startsWith("role:") && !s.includes(":*:"))}/${n(s => s.includes(":*:"))}/${n(s => s.startsWith("project"))}/${n(s => s === "machine")}`, bytes(b, ms(at)), digest(b)); }
+  console.log(name, b.length, `${n(s => s.startsWith("role:") && !s.includes(":*:"))}/${n(s => s.includes(":*:"))}/${n(s => s.startsWith("project"))}/${n(s => s === "machine")}`, bytes(b, ms(at)), digest(b), contentDigest(b, ms(at))); }
 console.log("== 4.4 history window of the busiest scope");
 const busiest = scopes.map((s: any) => [s.scope, s.history.filter((h: any) => upTo(h.at))] as const).sort((a, b) => b[1].length - a[1].length)[0];
 console.log({ entries: busiest[1].length, passEntries: busiest[1].filter((h: any) => h.pass).length, firstEntry: busiest[1][0].at });
@@ -1080,7 +1229,8 @@ const quota: Record<string, number> = { "rendered-state": 4, "contract-or-seam":
 const pilot = Object.keys(quota).flatMap(k => items.filter(i => i.stratum === k).sort((a, b) => sha(a.id).localeCompare(sha(b.id))).slice(0, quota[k]));
 console.log({ failedFirst, wroteOrRewrote: wrote, recoverableInputs: items.length, strata: items.reduce((a: any, i) => (a[i.stratum] = (a[i.stratum] ?? 0) + 1, a), {}),
   pilotManifestDigest: sha(pilot.map(i => i.id).sort().join("\n")).slice(0, 12), pilotSize: pilot.length });
-fs.writeFileSync(`${dir}/pilot-manifest.json`, JSON.stringify(pilot));   // keep this file outside any checkout
+fs.writeFileSync(`${dir}/pilot-manifest.json`, JSON.stringify(pilot));   // keep these files outside any checkout
+fs.writeFileSync(`${dir}/replay-candidates.json`, JSON.stringify(items));
 
 console.log("== 4.2 write precision, findings never handed to a fix round, rendered-work block");
 const r2 = rules.filter((r: any) => upTo(r.createdAt) && r.source.fixRound && !r.splitFrom && !r.versionOf && regime(r.createdAt) === "R2");
@@ -1096,23 +1246,79 @@ for (const p of pipelines) for (const a of attemptsOf(p)) if (a.role === "builde
 console.log({ builderAttemptsSinceVariant4: afterV4, withRenderedWorkBlock: withBlock });
 ```
 
+**Pilot validation (4.1).** Run after the analysis script, on the same
+directory, with `REPO` set to a checkout of the commit under analysis. It
+renders each candidate's first message with the engine's own function and
+applies the checks of 4.1.
+
+```ts
+// bun validate-pilot.ts <dir with the exports and replay-candidates.json>; REPO is a checkout of the commit under analysis.
+// Offline: no model call. Run with HOME, XDG_CONFIG_HOME and LLV_STATE_DIR pointing at scratch directories.
+// Writes the complete rendered first messages to <dir>/bundle/ (private: they hold briefs and specifications).
+import fs from "node:fs";
+import crypto from "node:crypto";
+import { execFileSync } from "node:child_process";
+const dir = process.argv[2];
+const { renderStagePrompt } = await import(`${process.env.REPO}/src/lib/pipelines/prompts.ts`);
+const load = (n: string) => JSON.parse(fs.readFileSync(`${dir}/${n}.json`, "utf8"));
+const pipes = new Map<string, any>([...load("pipelines_archive"), ...load("pipelines")].map((p: any) => [p.id, p]));
+const candidates = load("replay-candidates") as { id: string; stratum: string }[];
+const sha = (s: string) => crypto.createHash("sha256").update(s).digest("hex");
+const quota: Record<string, number> = { "rendered-state": 4, "contract-or-seam": 3, "evidence-or-claim": 3 };
+const LIVE_REF = /https?:\/\/\S+|(?:pull request|PR|issue)s? #\d+|gh (?:pr|issue) \w+/i;
+const INLINE_LIMIT = 32_000;
+function check(id: string) {
+  const p = pipes.get(id);
+  const attempts = p.runs.flatMap((r: any) => r.attempts.map((a: any) => ({ stage: r.stageId, ...a })));
+  const stageOf = (sid: string) => p.stages.find((s: any) => s.id === sid);
+  const b1 = attempts.filter((a: any) => a.effectiveRole?.roleId === "builder" && !stageOf(a.stage)?.onFail).sort((x: any, y: any) => Date.parse(x.startedAt) - Date.parse(y.startedAt))[0];
+  const d = b1.definition, template = String(d.prompt ?? "");
+  const bound = { ...stageOf(b1.stage), prompt: template, ...(d.role ? { role: d.role } : {}), ...(d.sandbox ? { sandbox: d.sandbox } : {}), ...(d.outputs ? { outputs: d.outputs } : {}), effectiveRole: b1.effectiveRole };
+  const input = b1.input ?? "";
+  const rendered: string = renderStagePrompt(p, bound, b1.effectiveRole, input, 30, "frozen test guidance");
+  let baseOk = false; try { execFileSync("git", ["-C", p.repoDir, "cat-file", "-e", `${p.baseRef}^{commit}`], { stdio: "ignore" }); baseOk = true; } catch {}
+  const reasons: string[] = [];
+  if (!baseOk) reasons.push("base commit missing");
+  if (/\{\{[^}]*\}\}/.test(rendered)) reasons.push("unresolved placeholder");
+  if (template.includes("{{prev.output}}") && !input.trim()) reasons.push("relay missing");
+  if (LIVE_REF.test(rendered)) reasons.push("live reference");
+  return { id, reasons, rendered, bytes: Buffer.byteLength(rendered), relayBytes: Buffer.byteLength(input), spilled: Buffer.byteLength(rendered) > INLINE_LIMIT, digest: sha(rendered).slice(0, 12) };
+}
+const chosen: ReturnType<typeof check>[] = [], dropped: { id: string; stratum: string; reasons: string[] }[] = [];
+for (const [stratum, n] of Object.entries(quota)) {
+  const ordered = candidates.filter(c => c.stratum === stratum).sort((a, b) => sha(a.id).localeCompare(sha(b.id)));
+  let kept = 0;
+  for (const c of ordered) { if (kept === n) break; const r = check(c.id); if (r.reasons.length) { dropped.push({ id: c.id.slice(0, 8), stratum, reasons: r.reasons }); continue; } chosen.push(r); kept++; }
+}
+fs.mkdirSync(`${dir}/bundle`, { recursive: true });
+for (const r of chosen) fs.writeFileSync(`${dir}/bundle/${r.id.slice(0, 8)}.message.txt`, r.rendered);
+console.log(JSON.stringify({ eligible: chosen.length, dropped, manifestDigest: sha(chosen.map(r => r.id).sort().join("\n")).slice(0, 12),
+  items: chosen.map(r => ({ id: r.id.slice(0, 8), bytes: r.bytes, relayBytes: r.relayBytes, exceedsInlineLimit: r.spilled, messageDigest: r.digest })) }, null, 1));
+// the same check over every recoverable candidate
+const tally: Record<string, number> = {}, passing: Record<string, number> = {}; let ok = 0;
+for (const c of candidates) { const rs = check(c.id).reasons; for (const r of rs) tally[r] = (tally[r] ?? 0) + 1; if (!rs.length) { ok++; passing[c.stratum] = (passing[c.stratum] ?? 0) + 1; } }
+console.log(JSON.stringify({ candidates: candidates.length, passing: ok, passingByStratum: passing, failures: tally }));
+```
+
 **Expected output** (lines of the script's output, cutoff `T`):
 
 | Section | Output |
 | --- | --- |
-| Store totals | 1,731 rule rows, 228 active, 864 version rows, 1,339 requests (616 lesson, 145 rewrite, 554 none, 22 problem, 2 open), 566 fix-round requests, 697 curator rewrite entries, 69 passes |
+| Store totals | 1,731 rule rows, 228 active, 864 version rows, 1,339 requests (616 lesson, 145 rewrite, 554 none, 22 problem, 2 open), 566 fix-round requests, 697 curator rewrite entries, 69 passes (64 succeeded, 4 failed, 1 launching at `T`); drift guard 0 |
 | Fix-round requests that wrote or rewrote | R0 82/83, R1 103/194, R2 201/206, R3 82/83 |
 | Fix-round rules archived as task-specific | R0 124/152, R1 39/80, R2 39/135, R3 2/47; for budget R3 14/47 |
-| Requests outside fix rounds answered none | R0 10/124, R1 164/239, R2 203/313, R3 80/97; "covered" claims 8, 162, 183, 68 |
-| Next review failed after a "covered" answer | R1 52/110, R2 67/114, R3 32/40 (R0 2/6) |
-| Budget archives | 25 in all, 20 never curated (median 0.3314 h), 5 curated before eviction; median of all 25 is 0.45 h |
-| Shape of active rules | 136 rewritten at least once, 11 compressed at first writing, 73 now, 77 of all 228; 13 at the 300-point cap; 37 with six or more versions; 49 with two or more tasks (30 with exactly two) |
+| First-pass requests answered none | 773 requests not activated by a fail edge, 113 of them after a finished review; first-pass R0 5/99, R1 143/215, R2 164/264, R3 67/82; "covered" claims 5, 141, 150, 58 |
+| Next review failed after a first-pass "covered" answer | R1 49/103, R2 65/112, R3 32/40 (R0 1/4) |
+| Retention | Median life from creation to archive: 350 rules archived as task-specific 47.8 h, 90 as in-instructions 48.1 h. Budget archives: 25 in all (median 0.45 h, p90 3.6 h), 20 never curated (median 0.33 h, p90 1.2 h), 5 curated before eviction (median 3.6 h) |
+| Shape of active rules | 136 rewritten at least once, 11 compressed at first writing, 73 now, 77 of all 228; slashes per hundred characters 0.12 at first writing, 0.93 now (pooled over those 136 rules); mean length 242 then 233 code points (239 over all 228 active); 13 at the 300-point cap; 37 with six or more versions; 49 with two or more tasks (30 with exactly two) |
 | Role blocks, project A | builder 73 rules 17,469 B; seat 46, 10,936 B; architect 43, 10,122 B; prod-auditor 33, 7,277 B; visual critic 24, 5,181 B; maintainer and merger 23, 4,897 B |
 | First review failed, project A | R0 38/71, R1 40/78, R2 58/98, R3 19/23; other projects R0 4/4, R1 21/42, R2 26/56, R3 17/25 |
+| Lanes since the post-variant-4 pass | 12 lanes of project A started a builder attempt after 2026-10-16 10:21:26 UTC; 2 had a reviewer verdict by `T` |
 | Findings | 811 reviewer findings on builder lanes since 2026-10-10 (351 Ukrainian); 724 tagged; 702 of them in a class the builder's block also held; 32 Ukrainian findings untagged by the Unicode classifier, 131 by an ASCII, English-only pass |
 | Delivered blocks | see the digest column of the trace table in 3.3 |
 | History of the busiest scope | 440 entries, 25 of them curator passes, first entry 2026-10-10 |
-| Replay candidates | 210 builder lanes whose first review failed; 144 whose fix round wrote or rewrote a rule; 136 with all inputs recoverable (32 rendered-state, 78 contract-or-seam, 26 evidence-or-claim); pilot manifest of 10, digest `3c6e4d3937fb` |
+| Replay candidates | 210 builder lanes whose first review failed; 144 whose fix round wrote or rewrote a rule; 136 with all five inputs present (32 rendered-state, 78 contract-or-seam, 26 evidence-or-claim); first draw of 10, digest `3c6e4d3937fb` |
+| Pilot validation | 74 of 136 pass (17 rendered-state, 42 contract-or-seam, 15 evidence-or-claim); the 62 failures are all live references; 3 of the first ten replaced; 10 eligible, manifest digest `a330fd597223` |
 | Write precision, R2 | 135 fix-round rules, 40 lost to task-specific, stale or problem, so 95 survive |
 | Findings never handed to a fix round | reviewer 1 of 541, visual critic 6 of 240, verifier 8 of 8, prod-auditor 4 of 4 |
 | Rendered-work block | 28 of 190 builder attempts since 2026-10-15 14:57 |
@@ -1123,7 +1329,10 @@ console.log({ builderAttemptsSinceVariant4: afterV4, withRenderedWorkBlock: with
   2026-10-11 11:29 UTC, R1 until the first request that carries a task id
   (2026-10-12 23:15:40), R2 until 2026-10-15 14:57, R3 after.
 - *Fix-round request*: the stage attempt it answers was activated by a `fail`
-  edge. *Outside fix rounds* is every other request.
+  edge. A request that was not activated by a fail edge also includes later
+  retries and stages with fix-like names. *First pass* is a request not
+  activated by a fail edge whose lane had no reviewer attempt with a verdict
+  finished when the attempt started.
 - *Original fix-round rules* (the cohorts 152, 80, 135, 47): rules whose source
   is a fix round, excluding `splitFrom` descendants and version rows
   (`versionOf`).
@@ -1147,12 +1356,14 @@ console.log({ builderAttemptsSinceVariant4: afterV4, withRenderedWorkBlock: with
   `changedAt`. The script prints both populations.
 - *Replay candidates*: the lane's first builder attempt outside a gate, its
   first following review failed, and the first fail-edge builder attempt
-  answered with a lesson or a rewrite. *Recoverable* means the base commit
+  answered with a lesson or a rewrite. *Inputs present* means the base commit
   resolves in the repository's object store, the brief, the pinned
   specification and the rendered scaffold are stored on the pipeline record,
   and the attempt started at or after the scope's first retained non-pass
   history entry. Stratum by the first review's finding classes: any
-  `rendered`, else any `seam` or `contract`, else the rest. The pilot takes
-  the lowest SHA-256 of the pipeline id in each stratum (4, 3, 3).
+  `rendered`, else any `seam` or `contract`, else the rest. The first draw
+  takes the lowest SHA-256 of the pipeline id in each stratum (4, 3, 3). The
+  pilot takes the same draw among the candidates that pass the validation
+  pass (4.1), in the same order.
 - *Bytes* of a block: UTF-8 bytes of the `- [id] text` lines of all four
   scopes joined by newlines (header, notices and pointers excluded).
