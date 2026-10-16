@@ -1076,8 +1076,18 @@ export class StructuredDeliveryQueue {
       }
       targets.push([conversationId, this.startLane(conversationId, async (lane) => {
         if (this.port.deferTarget?.(conversationId)) {
-          for (const effect of grouped.get(conversationId) ?? []) this.noteWait(effect, "startup", { wake: "event" });
-          return true;
+          const deferred = grouped.get(conversationId) ?? [];
+          // Explicit termination uses the recorded session identity without
+          // adopting its host. Keep sends and automatic idle retirement behind
+          // startup's ownership fence; drainTarget still enforces handoff and
+          // the control's original settlement deadline.
+          const kills: DeliveryEffect[] = [];
+          for (const effect of deferred) {
+            if (effect.kind === "kill" && !effect.onlyIfIdle) kills.push(effect);
+            else this.noteWait(effect, "startup", { wake: "event" });
+          }
+          if (kills.length === 0) return true;
+          return await this.drainTarget(kills, lane) || kills.length < deferred.length;
         }
         for (const prepare of targetPreparations.get(conversationId) ?? []) await prepare();
         return this.drainTarget(grouped.get(conversationId) ?? [], lane);

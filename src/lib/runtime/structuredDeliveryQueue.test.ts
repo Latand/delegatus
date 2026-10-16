@@ -1820,6 +1820,78 @@ test("a structured kill terminates its host and completes its receipt", async ()
   ]);
 });
 
+test("an explicit kill settles during startup deferral while sends and idle retirement stay deferred", async () => {
+  const statuses = new Map<string, string>();
+  const terminated: string[] = [];
+  const inputs: string[] = [];
+  let handoffHeld = true;
+  const effects: StructuredDeliveryEffect[] = [
+    { id: "send-held", kind: "runtime.send", eventSeq: 1, payload: {
+      operationId: "send-held", conversationId: "conversation-held", text: "keep pending", policy: "queue",
+    } },
+    { id: "retire-held", kind: "runtime.kill", eventSeq: 2, payload: {
+      operationId: "retire-held", conversationId: "conversation-held",
+      sessionKey: { engine: "codex", sessionId: "thread-held" },
+      onlyIfIdle: { revision: 1, writerClaim: "owner:held" },
+    } },
+    { id: "kill-held", kind: "runtime.kill", eventSeq: 3, payload: {
+      operationId: "kill-held", conversationId: "conversation-held",
+      sessionKey: { engine: "codex", sessionId: "thread-held" },
+    } },
+    { id: "send-healthy", kind: "runtime.send", eventSeq: 4, payload: {
+      operationId: "send-healthy", conversationId: "conversation-healthy", text: "keep working", policy: "queue",
+    } },
+  ];
+  const queue = new StructuredDeliveryQueue({
+    handoffHeld: () => handoffHeld,
+    deferTarget: (id) => id === "conversation-held",
+    effects: async () => effects,
+    status: async (id) => ({ status: statuses.get(id) ?? "queued", revision: 1 }),
+    hostClaim: async () => "owner:healthy",
+    transition: async (id, status) => { statuses.set(id, status); },
+  }, (id) => id === "conversation-healthy" ? host(async (entry) => {
+    inputs.push(entry.id);
+    return { outcome: "turn-started", turnId: "turn-healthy" };
+  }) : null, async (id, key) => {
+    terminated.push(`${id}:${key.sessionId}`);
+    return true;
+  });
+
+  await queue.drain();
+  expect(terminated).toEqual([]);
+  handoffHeld = false;
+  await queue.drain();
+  expect(terminated).toEqual(["conversation-held:thread-held"]);
+  expect(statuses.get("kill-held")).toBe("delivered");
+  expect(statuses.get("retire-held")).toBeUndefined();
+  expect(statuses.get("send-held")).toBeUndefined();
+  expect(statuses.get("send-healthy")).toBe("delivered");
+  expect(inputs).toEqual(["send-healthy"]);
+
+  await queue.drain();
+  expect(statuses.get("send-held")).toBeUndefined();
+  expect(terminated).toEqual(["conversation-held:thread-held"]);
+});
+
+test("an expired explicit kill settles during startup deferral without terminating a host", async () => {
+  const transitions: Array<[string, string]> = [];
+  let terminations = 0;
+  const queue = new StructuredDeliveryQueue({
+    deferTarget: () => true,
+    effects: async () => [{ id: "expired-kill", kind: "runtime.kill", eventSeq: 1, payload: {
+      operationId: "expired-kill", conversationId: "conversation-held",
+      sessionKey: { engine: "codex", sessionId: "thread-held" },
+    } }],
+    status: async () => ({ status: "queued", revision: 1,
+      admittedAt: new Date(Date.now() - CONTROL_SETTLEMENT_WINDOW_MS - 1_000).toISOString() }),
+    transition: async (id, status) => { transitions.push([id, status]); },
+  }, () => null, async () => { terminations += 1; return true; });
+
+  await queue.drain();
+  expect(terminations).toBe(0);
+  expect(transitions).toEqual([["expired-kill", "failed"]]);
+});
+
 for (const order of ["reconfigure-then-kill", "kill-then-reconfigure"] as const) {
   test(`a delivered kill fences a pending same-generation reconfigure admitted ${order}`, async () => {
     const reconfigure = {
