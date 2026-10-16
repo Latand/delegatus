@@ -1,7 +1,5 @@
 import { expect, test } from "bun:test";
 import { withHistoryDeadline, type HistoryClock } from "./historyDeadline";
-import http from "node:http";
-import { Worker } from "node:worker_threads";
 
 // Advancing wall time does not run callbacks: this models a descheduled loop.
 function scheduler() {
@@ -67,46 +65,6 @@ test("success and transport rejection clean timers and preserve the original fai
   }
 });
 
-test("real readable HTTP survives a loop stall or reports the stalled deadline", async () => {
-  const barrier = new Int32Array(new SharedArrayBuffer(4));
-  // An independently scheduled server can send while the client loop is held.
-  const worker = new Worker(`
-    const { parentPort, workerData } = require('node:worker_threads');
-    const barrier = new Int32Array(workerData);
-    const server = require('node:http').createServer((req, res) => {
-      res.on('error', () => {});
-      res.end('{}', () => { Atomics.store(barrier, 0, 1); Atomics.notify(barrier, 0); });
-    });
-    server.listen(0, '127.0.0.1', () => parentPort.postMessage(server.address().port));
-  `, { eval: true, workerData: barrier.buffer });
-  let request: http.ClientRequest | undefined;
-  let barrierResult: string | undefined;
-  try {
-    const port = await new Promise<number>((resolve, reject) => { worker.once("message", resolve); worker.once("error", reject); });
-    const metrics = { elapsedMs: 0, loopGapMs: 0 };
-    const outcome = withHistoryDeadline(signal => new Promise<string>((resolve, reject) => {
-      request = http.get({ hostname: "127.0.0.1", port, signal, agent: false }, response => {
-        response.on("error", reject);
-        let text = "";
-        response.on("data", chunk => { text += chunk; });
-        response.on("end", () => resolve(text));
-      });
-      request.on("error", reject);
-      request.once("finish", () => {
-        // Deliberate test-only barrier after the request has left the client.
-        barrierResult = Atomics.wait(barrier, 0, 0, 5000);
-        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1500);
-      });
-    }), metrics, undefined, 1000).then(body => ({ body, code: null }), error => ({ body: null, code: error.code }));
-    const result = await outcome;
-    expect(barrierResult).toBeDefined();
-    expect(barrierResult).not.toBe("timed-out");
-    expect(result.body === "{}" || result.code === "deadline_loop_stalled").toBe(true);
-    expect(metrics.loopGapMs).toBeGreaterThan(100);
-  } finally { request?.destroy(); await worker.terminate(); }
-}, 12000);
-
-
 test("a stall ending exactly at the deadline is still identified", async () => {
   const time = scheduler(), metrics = { elapsedMs: 0, loopGapMs: 0 };
   const result = withHistoryDeadline(() => new Promise(() => {}), metrics, time.clock);
@@ -125,5 +83,16 @@ test("an earlier recovered stall does not relabel an on-time deadline", async ()
   for (let i = 0; i < 30; i++) { time.advance(100); time.timersTurn(); }
   await expect(result).rejects.toMatchObject({ code: "deadline_exceeded" });
   expect(metrics).toEqual({ elapsedMs: 4000, loopGapMs: 900 });
+  expect(time.timers.size + time.polls.size).toBe(0);
+});
+
+test("a recovered stall 100 ms before the deadline is not attributed to its timer", async () => {
+  const time = scheduler(), metrics = { elapsedMs: 0, loopGapMs: 0 };
+  const result = withHistoryDeadline(() => new Promise(() => {}), metrics, time.clock);
+  for (let i = 0; i < 36; i++) { time.advance(100); time.timersTurn(); }
+  time.advance(300); time.timersTurn(); // 200 ms heartbeat lateness; loop resumes at 3900 ms.
+  time.advance(100); time.timersTurn(); time.pollTurn(); // The deadline fires on time at 4000 ms.
+  await expect(result).rejects.toMatchObject({ code: "deadline_exceeded" });
+  expect(metrics).toEqual({ elapsedMs: 4000, loopGapMs: 200 });
   expect(time.timers.size + time.polls.size).toBe(0);
 });

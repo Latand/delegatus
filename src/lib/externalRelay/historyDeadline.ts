@@ -20,6 +20,7 @@ export async function withHistoryDeadline<T>(
   timeoutMs = 4000,
 ): Promise<T> {
   const start = clock.now();
+  const deadlineAt = start + timeoutMs;
   let last = start, lastStallAt = -Infinity, finished = false;
   const controller = new AbortController();
   let cancelPulse = () => {}, cancelPoll = () => {};
@@ -35,10 +36,10 @@ export async function withHistoryDeadline<T>(
   let cancelDeadline = () => {};
   const deadline = new Promise<never>((_, reject) => {
     cancelDeadline = clock.later(() => {
-      // The heartbeat may have run first after the same stall. Retain its
-      // sample even when the stall ends exactly at the deadline.
+      // Attribute a stall only when it spans this deadline callback's event
+      // loop turn. A recovered heartbeat from an earlier turn is historical.
       observe();
-      const stalled = clock.now() - lastStallAt <= 100;
+      const stalled = lastStallAt >= deadlineAt;
       const expire = () => {
         if (finished) return;
         const error = new ExternalRelayError(stalled ? "deadline_loop_stalled" : "deadline_exceeded");
