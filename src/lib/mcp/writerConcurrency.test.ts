@@ -25,7 +25,7 @@ test.skipIf(!process.env.MCP_SQL_OBSERVER)("native SQL observer reconciles handl
     const ready = path.join(root, `${mode}.ready`);
     const child = ownFixtureChild(Bun.spawn({
       cmd: [process.execPath, ...(observed ? ["--preload", path.resolve("scripts/sqlite-observer.ts")] : []), path.join(import.meta.dir, "writerConcurrencyChild.ts")],
-      env: { ...process.env, LLV_STATE_DIR: root, MCP_SQL_OBSERVER: observed ? process.env.MCP_SQL_OBSERVER : undefined, MCP_SQL_EVENTS: observed ? events : undefined, LLV_WRITER_OBSERVER_CONTROL: mode,
+      env: { ...process.env, LLV_STATE_DIR: root, MCP_BENCH_SCRATCH_ROOT: path.dirname(root), MCP_SQL_OBSERVER: observed ? process.env.MCP_SQL_OBSERVER : undefined, MCP_SQL_EVENTS: observed ? events : undefined, LLV_WRITER_OBSERVER_CONTROL: mode,
         LLV_WRITER_DATABASE: mode === "overhead" ? path.join(root, `overhead-${overheadSample}.sqlite`) : database,
         LLV_WRITER_READY: ready, LLV_WRITER_HOLD_MS: String(holdMs) },
       stdout: "pipe", stderr: "pipe",

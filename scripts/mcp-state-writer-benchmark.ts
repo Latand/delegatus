@@ -280,8 +280,9 @@ export async function runStateWriterSample(): Promise<void> {
     const pendingAfterDrain = calls.filter(row => row.phase === "measured" && row.completed === undefined).length;
     // Re-query uncertain mutations under their original keys. Settled replies
     // are already evidence; recovery adds no replay burst for those successes.
-    // This phase is outside the measurement window and cannot improve its
-    // completed/failed counters. Save the returned disposition verbatim.
+    // Original requests can still settle during recovery; their saved offer
+    // and completion times retain that distinction. A retry answer never
+    // replaces an original reply or its latency. Save it separately.
     const reconciliationDeadline = Date.now() + 300_000;
     const mutations = calls.filter(row => row.name !== "list_tasks");
     const uncertain = mutations.filter(row => {

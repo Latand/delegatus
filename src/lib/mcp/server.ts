@@ -4705,7 +4705,7 @@ export async function createProductionViewerMcpService(hostHealthProbe = false, 
       },
     };
   }
-  // Initialize the Viewer's existing binding graph before serving requests.
+  // Initialize the Viewer's binding graph before the first tool dispatch.
   // Receipt construction remains lazy for the inline service; task calls keep
   // their complete service and protocol work in the owned executor.
   const {

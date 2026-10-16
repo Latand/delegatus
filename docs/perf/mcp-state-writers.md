@@ -1,6 +1,6 @@
 # MCP state writers: production audit and fix design
 
-Audit date: 2026-10-15 UTC. The original audit changed documentation only. Production processes were observed through procfs, descriptor metadata, existing journals and SQLite connections opened with `mode=ro` and `PRAGMA query_only=ON`. No production signals, checkpoints, PRAGMAs that change storage, application mutations, deployments or restarts were issued. Later implementation and isolated measurements follow the audit; the latest change is the [task-worker channel](#task-worker-channel), whose full acceptance matrix remains pending.
+Audit date: 2026-10-15 UTC. The original audit changed documentation only. Production processes were observed through procfs, descriptor metadata, existing journals and SQLite connections opened with `mode=ro` and `PRAGMA query_only=ON`. No production signals, checkpoints, PRAGMAs that change storage, application mutations, deployments or restarts were issued. Later implementation and isolated measurements follow the audit; the [108-sample study](#acceptance-matrix-with-bounded-task-execution) publishes every required cohort. The strict Viewer loop bounds and nominal-window coverage remain unmet.
 
 ## Answer and limits
 
@@ -12,11 +12,11 @@ The shared WAL's inode/size/mtime tuple changed **33 times in 30.014 seconds**, 
 
 The audited implementation permits direct MCP domain writes and retains handles per opened collection. Centralizing all managed MCP calls in the existing Viewer MCP service can eliminate the local database footprint while retaining the existing command and receipt implementation. Lifecycle hardening must also cover death of the actual agent while another descendant keeps its stdio descriptor open. No orphan cleanup is justified by this census.
 
-**Accepted measurement boundary:** the controller's decision continuation, settled attempt 1, accepts the passive production baseline and its OS-level counters. Production tracing is prohibited. Exact SQL connection counts, commits and lock waits per process belong to the isolated before/after test with identical synthetic load described below. The audit is complete within that accepted boundary; executing and reviewing the synthetic comparison belongs to the build and review stages. Its results remain outstanding, and no performance improvement is claimed here.
+**Accepted measurement boundary:** the controller's decision continuation, settled attempt 1, accepts the passive production baseline and its OS-level counters. Production tracing is prohibited. Exact SQL connection counts, commits and lock waits per process belong to the isolated before/after test with identical synthetic load described below. The audit is complete within that accepted boundary; executing and reviewing the synthetic comparison belongs to the build and review stages. Results were outstanding when the original audit was written. The collected comparison and its remaining acceptance failures are published below.
 
 ## Scope, revisions and evidence ledger
 
-All file:line references below are at **main `45d25ac796d5824713c9fb57d65f57efea61041b`**. Local HEAD, origin/main and a read-only `git ls-remote origin refs/heads/main` agreed at 05:10:56Z. The Viewer PID 1834964 and every sampled server had the release-directory suffix `781ecd4c3348`; the stored self-update pointer named **`781ecd4c33482d7486683d19d61a8b0bc8c14d38`**. A scoped `git diff --stat 781ecd4c33482d7486683d19d61a8b0bc8c14d38 HEAD -- bin/mcp-server.mjs src/lib/mcp src/lib/tasks/store.ts src/lib/state/sqliteStateStore.ts` at 05:12:29Z was empty. The cited MCP/task/store code therefore matches that release's source. This does not attest the rest of the deployment. [E2]
+Code references in the production-audit sections are at **main `45d25ac796d5824713c9fb57d65f57efea61041b`**. Later implementation and measurement sections name their frozen revisions. Local HEAD, origin/main and a read-only `git ls-remote origin refs/heads/main` agreed at 05:10:56Z. The Viewer PID 1834964 and every sampled server had the release-directory suffix `781ecd4c3348`; the stored self-update pointer named **`781ecd4c33482d7486683d19d61a8b0bc8c14d38`**. A scoped `git diff --stat 781ecd4c33482d7486683d19d61a8b0bc8c14d38 HEAD -- bin/mcp-server.mjs src/lib/mcp src/lib/tasks/store.ts src/lib/state/sqliteStateStore.ts` at 05:12:29Z was empty. The cited MCP/task/store code therefore matches that release's source. This does not attest the rest of the deployment. [E2]
 
 | Evidence | UTC bounds | Command / query and result |
 |---|---|---|
@@ -572,17 +572,16 @@ SHA-256 is `823120f2466be96ec02cdc2acb8c91fc3d00ea278b8c2db717831ddeb2fc3b54`;
 the response SHA-256 is
 `05f6b520ab8bfa5d625e42b223a8da1918261c85a0300fe373a1a4b1abd30cb6`.
 
-**Performance acceptance still fails.** The lower call latency and connection
-count coexist with a Viewer loop regression at a load with no SQL contention.
-`mutateTasksAsync` yields while waiting for admission, then calls synchronous
-`mutateTasks`; `writeTaskState`, `stateFromBody` and `committedRows` still decode
-and prepare the task collection on the Viewer thread. Timer-turn dispatch
+**This historical candidate failed performance acceptance.** Its lower call latency and connection
+count coexisted with a Viewer loop regression at a load with no SQL contention.
+In that candidate, `mutateTasksAsync` yielded while waiting for admission, then called synchronous
+`mutateTasks`; `writeTaskState`, `stateFromBody` and `committedRows` decoded
+and prepared the task collection on the Viewer thread. Timer-turn dispatch
 cannot interrupt an individual synchronous mutation. The SQLite lock layer,
 heap, snapshot and board-poll implementations remain untouched by this lane.
-The original-audit comparison, three alternating repeats at 1/19/37 clients,
+At this checkpoint the original-audit comparison, three alternating repeats at 1/19/37 clients,
 shared-task and HTTP load modes, and timed-out-call final-state reconciliation
-remain outstanding. This evidence supports a draft PR with the performance
-defect recorded; it does not satisfy the complete acceptance matrix.
+were outstanding. The [collected matrix](#acceptance-matrix-with-bounded-task-execution) below supplies every cohort record for the later executor and documents the remaining coverage gaps.
 
 Recovery verification rebuilt the MCP bundle and passed the launcher suite
 (25 tests, one native-CLI skip), forwarding (12), HTTP (13), and TypeScript.
@@ -664,7 +663,7 @@ resumed; a partial sample stays on disk and refuses replacement.
 The native observer records successful row statements with transaction and call
 identity. The comparer replays committed statements into an in-memory copy of
 the seed and requires its complete final rows to match the post-teardown
-snapshot. Collection revisions order concurrent commits. Original-key queries,
+snapshot. Collection revisions order concurrent commits. Retries of the original mutation tool with its original arguments and key,
 final MCP receipts and this row history reconcile lost replies. Protocol
 failures remain failures in the measured counters. An unknown reply remains in
 the response record even when the history proves its final effect. Direct
@@ -678,25 +677,31 @@ sample with every mutation reply replaced by unknown, and reject independent
 changes to row order and the controller flag. Archived four-column diagnostics
 remain readable with their original, narrower comparison boundary.
 
-Run from a clean candidate checkout with its dependencies installed. `GATE`
+Run from a clean candidate checkout with its dependencies installed. `BASELINE` names the matched main revision already merged into the candidate. The subshell scopes the isolated environment to these checks. `GATE`
 names the supplied owned runner; `SQLITE_INCLUDE` names the directory containing
 `sqlite3ext.h`. Omitting `--seed` and `--capabilities` generates a fresh synthetic
 seed with the existing concurrency fixture. Supplying both reuses an archived
 seed and its matching fixture capabilities.
 
 ```sh
-RUN_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/delegatus-mcp-study.XXXXXXXX")"
+RUN_ROOT="$(mktemp -d "${TMPDIR:?set TMPDIR to an owned scratch directory}/delegatus-mcp-study.XXXXXXXX")"
+(
+mkdir -p "$RUN_ROOT/home" "$RUN_ROOT/config" "$RUN_ROOT/state"
+export HOME="$RUN_ROOT/home" XDG_CONFIG_HOME="$RUN_ROOT/config"
+export TMPDIR="$RUN_ROOT" LLV_STATE_DIR="$RUN_ROOT/state"
+export LLV_VIEWER_CONTROL_URL="http://127.0.0.1:1"
 OBSERVER="$RUN_ROOT/observer.so"
-bash "$GATE" cc -I "$SQLITE_INCLUDE" -O2 -fPIC -shared scripts/sqlite-observer.c -o "$OBSERVER"
-python3 -B scripts/mcp-state-writer-matrix.py --output "$RUN_ROOT" --gate "$GATE" --observer "$OBSERVER" --baseline "$BASELINE" --candidate HEAD --audit 45d25ac
-python3 -B scripts/mcp-state-writer-matrix.py --compare "$RUN_ROOT"
-bash "$GATE" python3 -B scripts/mcp-state-writer-matrix.py --verify-comparer "$RUN_ROOT"
+rtk proxy bash "$GATE" cc -I "$SQLITE_INCLUDE" -O2 -fPIC -shared scripts/sqlite-observer.c -o "$OBSERVER"
+LLV_OWNED_RUN_TIMEOUT_MS=86400000 rtk proxy bash "$GATE" python3 -B scripts/mcp-state-writer-matrix.py --output "$RUN_ROOT/study" --gate "$GATE" --observer "$OBSERVER" --baseline "$BASELINE" --candidate HEAD --audit 45d25ac --sides candidate main audit
+LLV_OWNED_RUN_TIMEOUT_MS=3600000 rtk proxy bash "$GATE" python3 -B scripts/mcp-state-writer-matrix.py --compare "$RUN_ROOT/study"
+rtk proxy bash "$GATE" python3 -B scripts/mcp-state-writer-matrix.py --verify-comparer "$RUN_ROOT/study"
+rtk proxy bash "$GATE" python3 -B scripts/mcp-state-writer-matrix.py --summarize "$RUN_ROOT/study" "$RUN_ROOT/acceptance.json" "$RUN_ROOT/acceptance.md"
+)
 ```
 
-The complete alternating matrix is required before performance acceptance.
+The outer collection has a 24-hour owned-runner deadline; every nested sample retains its own admission and resource quota. The full analysis has a one-hour deadline. The complete alternating matrix is required before performance acceptance.
 
-The Viewer initializes its existing binding module before accepting MCP
-requests. Its inline receipt service remains lazy, and the managed stdio
+The Viewer initializes its binding module before its first tool dispatch. The benchmark awaits this initialization before opening its listener. Its inline receipt service remains lazy, and the managed stdio
 adapter returns before importing that module. Task calls continue through the
 executor. Loading the binding module in isolation opened no SQLite connection.
 Two diagnostic repetitions with 30 seconds warmup and 120 seconds measured
@@ -984,8 +989,7 @@ privacy gate pass. All runs use explicit test paths and isolated state under
 the owned runner. Removing access-key withdrawal leaves the old worker alive
 after Settings answers; removing idempotent reservation disposal admits an
 oversized follow-up and starts another worker. Both regression tests fail with
-their guards absent and pass after restoration. The new transport still owes
-the complete alternating performance matrix.
+their guards absent and pass after restoration. The complete alternating measurements for the later initialization change follow below.
 
 ### Private task channel diagnostic
 
@@ -1021,6 +1025,264 @@ were no uncertain mutation replies requiring recovery in these samples.
 
 The candidate cohort median p99 must be at least 0.394239 ms, while the audit
 median can be no greater than 0.193023 ms, regardless of the third repetition.
-**Performance acceptance remains unmet.** The complete 108-sample matrix is
+**Performance acceptance remains unmet.** At this diagnostic checkpoint the complete 108-sample matrix was
 still required. The immutable aggregate and all per-process balances are in
 [`mcp-state-writers-task-channel-diagnostic.json`](../../evidence/mcp-state-writers-task-channel-diagnostic.json).
+
+### Acceptance matrix with bounded task execution
+
+Frozen product revisions: candidate `97c1a8bc186abd8d68c0daa8c6063ec3f32604c3`, matched main `75da49d3d60ece7e4e62d11ce4c7a530a3512004`, original audit `45d25ac796d5824713c9fb57d65f57efea61041b`.
+
+Every sample uses 30 seconds warmup and 300 seconds measured load. Revision order alternates candidate/main/audit, audit/main/candidate, candidate/main/audit. The [JSON matrix](../../evidence/mcp-state-writers-matrix.json) includes runtime, dependency, seed and observer identities, actual quotas, per-process connection balances, all observations and normalized equivalence checks.
+
+| Clients / transport / tasks | Candidate p99 / max | Main p99 / max | Audit p99 / max | No loop regression |
+|---|---:|---:|---:|---|
+| 1-stdio-independent | 0.264959 / 3.001259 | 0.213759 / 2.785111 | 0.204799 / 2.478469 | no |
+| 1-stdio-shared | 0.248703 / 3.080855 | 0.242047 / 2.674284 | 0.237311 / 3.037928 | no |
+| 1-http-independent | 0.760319 / 4.063445 | 43.876351 / 91.947883 | 14.925823 / 80.481424 | yes |
+| 1-http-shared | 0.821247 / 4.019456 | 41.549823 / 96.268349 | 14.868479 / 78.775287 | yes |
+| 19-stdio-independent | 0.583167 / 16.361698 | 30.474239 / 108.756693 | 26.296319 / 131.025647 | yes |
+| 19-stdio-shared | 0.781823 / 17.951357 | 48.889855 / 188.814542 | 13.213695 / 89.141227 | yes |
+| 19-http-independent | 1.157119 / 8.840065 | 28487.712767 / 28487.631448 | 1035.993087 / 4316.429328 | yes |
+| 19-http-shared | 1.089535 / 7.091370 | 13337.886719 / 15024.932072 | 391.380991 / 1415.447730 | yes |
+| 37-stdio-independent | 3.205119 / 30.554621 | 91.750399 / 270.906988 | 30.081023 / 131.772799 | yes |
+| 37-stdio-shared | 2.299903 / 38.036176 | 75.038719 / 288.069228 | 29.278207 / 192.805337 | yes |
+| 37-http-independent | 1.287167 / 12.052943 | 35097.935871 / 35093.447451 | 17054.040063 / 17053.284109 | yes |
+| 37-http-shared | 1.413119 / 9.051527 | 31977.373695 / 31976.393637 | 13262.389247 / 13258.022845 | yes |
+
+The following rows retain every repetition. Calls are offered/completed/failed; completed includes settled failures, so successful calls equal completed minus failed. Pending counts are at measurement end/after the 35-second drain/after bounded recovery, before teardown. Processes are peak/observed runtime births/derived gone/survivors; gone is births minus survivors, supported by empty private-namespace teardown. Descriptors are peak adapter/total main-database descriptors. Connections are total main-database opens/explicit closes/reclaimed at process exit across all phases; commits and contention frequency use the measured window.
+
+| Sample | Loop p99 / max, ms | Loop start/end lateness, ms | Calls | Pending | Processes | Descriptors | Connections | State commits | SQL contention / 10,000 completed | Lease refusals |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| candidate-1-stdio-independent-1 | 0.265471 / 2.941944 | 0/0 | 300/300/0 | 0/0/0 | 5/5/5/0 | 0/5 | 1592/1589/3 | 480 | 0.000 | 0 |
+| main-1-stdio-independent-1 | 0.209663 / 2.566202 | 0/0 | 300/300/0 | 0/0/0 | 3/3/3/0 | 5/5 | 11294/11291/3 | 570 | 0.000 | 0 |
+| audit-1-stdio-independent-1 | 0.192511 / 1.924573 | 0/0 | 300/300/0 | 0/0/0 | 3/3/3/0 | 5/5 | 11294/11291/3 | 480 | 0.000 | 0 |
+| audit-1-stdio-independent-2 | 0.241151 / 2.478469 | 0/0 | 300/300/0 | 0/0/0 | 3/3/3/0 | 5/5 | 11294/11291/3 | 480 | 0.000 | 0 |
+| main-1-stdio-independent-2 | 0.278527 / 3.079738 | 1/0 | 300/300/0 | 0/0/0 | 3/3/3/0 | 5/5 | 11294/11291/3 | 570 | 0.000 | 0 |
+| candidate-1-stdio-independent-2 | 0.250111 / 3.853740 | 0/0 | 300/300/0 | 0/0/0 | 5/5/5/0 | 0/5 | 1592/1589/3 | 480 | 0.000 | 0 |
+| candidate-1-stdio-independent-3 | 0.264959 / 3.001259 | 1/0 | 300/300/0 | 0/0/0 | 5/5/5/0 | 0/5 | 1592/1589/3 | 480 | 0.000 | 0 |
+| main-1-stdio-independent-3 | 0.213759 / 2.785111 | 0/0 | 300/300/0 | 0/0/0 | 3/3/3/0 | 5/5 | 11294/11291/3 | 570 | 0.000 | 0 |
+| audit-1-stdio-independent-3 | 0.204799 / 2.594680 | 0/0 | 300/300/0 | 0/0/0 | 3/3/3/0 | 5/5 | 11294/11291/3 | 480 | 0.000 | 0 |
+| candidate-1-stdio-shared-1 | 0.200191 / 2.102814 | 0/0 | 300/300/0 | 0/0/0 | 5/5/5/0 | 0/5 | 1592/1589/3 | 480 | 0.000 | 0 |
+| main-1-stdio-shared-1 | 0.215807 / 2.563595 | 0/0 | 300/300/0 | 0/0/0 | 3/3/3/0 | 5/5 | 11294/11291/3 | 570 | 0.000 | 0 |
+| audit-1-stdio-shared-1 | 0.232447 / 2.425066 | 1/1 | 300/300/0 | 0/0/0 | 3/3/3/0 | 5/5 | 11294/11291/3 | 480 | 0.000 | 0 |
+| audit-1-stdio-shared-2 | 0.237311 / 3.037928 | 0/1 | 300/300/0 | 0/0/0 | 3/3/3/0 | 5/5 | 11294/11291/3 | 480 | 0.000 | 0 |
+| main-1-stdio-shared-2 | 0.242047 / 2.674284 | 0/0 | 300/300/0 | 0/0/0 | 3/3/3/0 | 5/5 | 11294/11291/3 | 570 | 0.000 | 0 |
+| candidate-1-stdio-shared-2 | 0.610303 / 3.173174 | 1/0 | 300/300/0 | 0/0/0 | 5/5/5/0 | 0/5 | 1592/1589/3 | 480 | 0.000 | 0 |
+| candidate-1-stdio-shared-3 | 0.248703 / 3.080855 | 0/0 | 300/300/0 | 0/0/0 | 5/5/5/0 | 0/5 | 1592/1589/3 | 480 | 0.000 | 0 |
+| main-1-stdio-shared-3 | 0.320511 / 3.804605 | 0/0 | 300/300/0 | 0/0/0 | 3/3/3/0 | 5/5 | 11294/11291/3 | 570 | 0.000 | 0 |
+| audit-1-stdio-shared-3 | 0.313087 / 3.119449 | 0/0 | 300/300/0 | 0/0/0 | 3/3/3/0 | 5/5 | 11294/11291/3 | 480 | 0.000 | 0 |
+| candidate-1-http-independent-1 | 0.760319 / 3.693526 | 0/0 | 300/300/0 | 0/0/0 | 3/3/3/0 | 0/5 | 1592/1589/3 | 480 | 0.000 | 0 |
+| main-1-http-independent-1 | 41.320447 / 91.947883 | 0/0 | 300/300/0 | 0/0/0 | 1/1/1/0 | 0/5 | 11294/11291/3 | 570 | 0.000 | 0 |
+| audit-1-http-independent-1 | 14.319615 / 94.061425 | 24/0 | 300/300/0 | 0/0/0 | 1/1/1/0 | 0/5 | 11294/11291/3 | 480 | 0.000 | 0 |
+| audit-1-http-independent-2 | 15.278079 / 63.797252 | 24/0 | 300/300/0 | 0/0/0 | 1/1/1/0 | 0/5 | 11294/11291/3 | 480 | 0.000 | 0 |
+| main-1-http-independent-2 | 43.876351 / 118.867023 | 60/0 | 300/300/0 | 0/0/0 | 1/1/1/0 | 0/5 | 11294/11291/3 | 570 | 0.000 | 0 |
+| candidate-1-http-independent-2 | 0.738815 / 4.063445 | 0/0 | 300/300/0 | 0/0/0 | 3/3/3/0 | 0/5 | 1592/1589/3 | 480 | 0.000 | 0 |
+| candidate-1-http-independent-3 | 0.877567 / 4.421020 | 1/1 | 300/300/0 | 0/0/0 | 3/3/3/0 | 0/5 | 1592/1589/3 | 480 | 0.000 | 0 |
+| main-1-http-independent-3 | 45.613055 / 83.050115 | 1/0 | 300/300/0 | 0/0/0 | 1/1/1/0 | 0/5 | 11294/11291/3 | 570 | 0.000 | 0 |
+| audit-1-http-independent-3 | 14.925823 / 80.481424 | 23/0 | 300/300/0 | 0/0/0 | 1/1/1/0 | 0/5 | 11294/11291/3 | 480 | 0.000 | 0 |
+| candidate-1-http-shared-1 | 0.840703 / 4.019456 | 1/1 | 300/300/0 | 0/0/0 | 3/3/3/0 | 0/5 | 1592/1589/3 | 480 | 0.000 | 0 |
+| main-1-http-shared-1 | 45.121535 / 96.268349 | 0/0 | 300/300/0 | 0/0/0 | 1/1/1/0 | 0/5 | 11294/11291/3 | 570 | 0.000 | 0 |
+| audit-1-http-shared-1 | 15.097855 / 71.982826 | 28/0 | 300/300/0 | 0/0/0 | 1/1/1/0 | 0/5 | 11294/11291/3 | 480 | 0.000 | 0 |
+| audit-1-http-shared-2 | 14.852095 / 78.775287 | 27/0 | 300/300/0 | 0/0/0 | 1/1/1/0 | 0/5 | 11294/11291/3 | 480 | 0.000 | 0 |
+| main-1-http-shared-2 | 41.549823 / 92.347668 | 60/0 | 300/300/0 | 0/0/0 | 1/1/1/0 | 0/5 | 11294/11291/3 | 570 | 0.000 | 0 |
+| candidate-1-http-shared-2 | 0.762367 / 4.245237 | 0/0 | 300/300/0 | 0/0/0 | 3/3/3/0 | 0/5 | 1592/1589/3 | 480 | 0.000 | 0 |
+| candidate-1-http-shared-3 | 0.821247 / 3.265647 | 0/1 | 300/300/0 | 0/0/0 | 3/3/3/0 | 0/5 | 1592/1589/3 | 480 | 0.000 | 0 |
+| main-1-http-shared-3 | 41.353215 / 106.196032 | 59/1 | 300/300/0 | 0/0/0 | 1/1/1/0 | 0/5 | 11294/11291/3 | 570 | 0.000 | 0 |
+| audit-1-http-shared-3 | 14.868479 / 80.188442 | 35/0 | 300/300/0 | 0/0/0 | 1/1/1/0 | 0/5 | 11294/11291/3 | 480 | 0.000 | 0 |
+| candidate-19-stdio-independent-1 | 0.642047 / 28.382580 | 1/1 | 5700/5700/0 | 0/0/0 | 41/41/41/0 | 0/5 | 30104/30101/3 | 9120 | 0.000 | 0 |
+| main-19-stdio-independent-1 | 51.314687 / 270.139575 | 44/23 | 5700/5700/4586 | 363/0/0 | 39/171/171/0 | 95/95 | 187129/186603/526 | 2709 | 1133.333 | 5950 |
+| audit-19-stdio-independent-1 | 26.296319 / 131.025647 | 1/1 | 5700/5700/0 | 45/0/0 | 39/39/39/0 | 95/95 | 218758/218701/57 | 9287 | 3838.596 | 385470 |
+| audit-19-stdio-independent-2 | 28.082175 / 229.919333 | 0/0 | 5700/5700/0 | 23/0/0 | 39/39/39/0 | 95/95 | 218181/218124/57 | 8954 | 3664.912 | 374764 |
+| main-19-stdio-independent-2 | 30.015487 / 108.756693 | 1/1 | 5700/5700/3117 | 460/0/0 | 39/128/128/0 | 95/95 | 371365/371003/362 | 5888 | 2331.579 | 12012 |
+| candidate-19-stdio-independent-2 | 0.583167 / 13.804293 | 0/0 | 5700/5700/0 | 1/0/0 | 41/41/41/0 | 0/5 | 30104/30101/3 | 9118 | 0.000 | 0 |
+| candidate-19-stdio-independent-3 | 0.483583 / 16.361698 | 1/0 | 5700/5700/0 | 0/0/0 | 41/41/41/0 | 0/5 | 30104/30101/3 | 9120 | 0.000 | 0 |
+| main-19-stdio-independent-3 | 30.474239 / 90.204956 | 3/2 | 5700/5700/2664 | 317/0/0 | 39/123/123/0 | 95/95 | 401214/400882/332 | 6806 | 2656.140 | 14221 |
+| audit-19-stdio-independent-3 | 11.583487 / 89.670393 | 0/0 | 5700/5700/0 | 44/0/0 | 39/39/39/0 | 95/95 | 218698/218641/57 | 8897 | 3689.474 | 463504 |
+| candidate-19-stdio-shared-1 | 0.781823 / 13.120033 | 1/1 | 5700/5700/1620 | 0/0/0 | 41/41/41/0 | 0/5 | 30104/30101/3 | 9120 | 0.000 | 0 |
+| main-19-stdio-shared-1 | 48.889855 / 209.700031 | 1/7 | 5700/5700/3292 | 213/0/0 | 39/111/111/0 | 95/95 | 332011/331701/310 | 7182 | 2770.175 | 14356 |
+| audit-19-stdio-shared-1 | 13.082623 / 103.701885 | 1/0 | 5700/5700/1620 | 16/0/0 | 39/39/39/0 | 95/95 | 218210/218153/57 | 8990 | 3742.105 | 335297 |
+| audit-19-stdio-shared-2 | 13.213695 / 80.426874 | 1/0 | 5700/5700/1620 | 30/0/0 | 39/39/39/0 | 95/95 | 217983/217926/57 | 8927 | 3726.316 | 320024 |
+| main-19-stdio-shared-2 | 49.512447 / 165.562498 | 59/0 | 5700/5700/3854 | 353/0/0 | 39/131/131/0 | 95/95 | 281228/280843/385 | 5722 | 2233.333 | 11661 |
+| candidate-19-stdio-shared-2 | 0.763903 / 23.201881 | 0/0 | 5700/5700/1620 | 5/0/0 | 41/41/41/0 | 0/5 | 30104/30101/3 | 9100 | 0.000 | 0 |
+| candidate-19-stdio-shared-3 | 1.053695 / 17.951357 | 0/0 | 5700/5700/1620 | 6/0/0 | 41/41/41/0 | 0/5 | 30104/30101/3 | 9098 | 0.000 | 0 |
+| main-19-stdio-shared-3 | 40.108031 / 188.814542 | 1/0 | 5700/5700/3276 | 358/0/0 | 39/112/112/0 | 95/95 | 346062/345766/296 | 7219 | 2782.456 | 15143 |
+| audit-19-stdio-shared-3 | 14.434303 / 89.141227 | 5/0 | 5700/5700/1620 | 28/0/0 | 39/39/39/0 | 95/95 | 218128/218071/57 | 8911 | 3719.298 | 323403 |
+| candidate-19-http-independent-1 | 1.441791 / 8.840065 | 0/0 | 5700/5700/10 | 13/0/0 | 3/3/3/0 | 0/5 | 30084/30081/3 | 9078 | 0.000 | 0 |
+| main-19-http-independent-1 | 28487.712767 / 28487.631448 | 12893/6954 | 5700/5700/0 | 1438/1078/0 | 1/1/1/0 | 0/5 | 215279/215276/3 | 8303 | 0.000 | 0 |
+| audit-19-http-independent-1 | 1016.070143 / 10041.816943 | 29/1562 | 5700/5700/0 | 171/0/0 | 1/1/1/0 | 0/5 | 214442/214439/3 | 8770 | 0.000 | 0 |
+| audit-19-http-independent-2 | 1260.388351 / 2856.262471 | 1060/899 | 5700/5700/0 | 14/0/0 | 1/1/1/0 | 0/5 | 214442/214439/3 | 9136 | 0.000 | 0 |
+| main-19-http-independent-2 | 22682.796031 / 22670.371870 | 1038/4234 | 5700/5700/0 | 1497/1079/0 | 1/1/1/0 | 0/5 | 215279/215276/3 | 8180 | 0.000 | 0 |
+| candidate-19-http-independent-2 | 1.157119 / 15.597325 | 1/1 | 5700/5700/0 | 14/0/0 | 3/3/3/0 | 0/5 | 30104/30101/3 | 9106 | 0.000 | 0 |
+| candidate-19-http-independent-3 | 1.145855 / 4.277701 | 3/1 | 5700/5700/0 | 4/0/0 | 3/3/3/0 | 0/5 | 30104/30101/3 | 9164 | 0.000 | 0 |
+| main-19-http-independent-3 | 28756.148223 / 28752.378811 | 1873/10399 | 5700/5700/0 | 2014/1635/0 | 1/1/1/0 | 0/5 | 215697/215694/3 | 7366 | 0.000 | 0 |
+| audit-19-http-independent-3 | 1035.993087 / 4316.429328 | 0/3138 | 5700/5700/0 | 33/0/0 | 1/1/1/0 | 0/5 | 214442/214439/3 | 8990 | 0.000 | 0 |
+| candidate-19-http-shared-1 | 1.180671 / 10.247171 | 0/0 | 5700/5700/1620 | 7/0/0 | 3/3/3/0 | 0/5 | 30104/30101/3 | 9094 | 0.000 | 0 |
+| main-19-http-shared-1 | 13337.886719 / 13334.578833 | 8657/5768 | 5700/5700/1683 | 167/0/0 | 1/1/1/0 | 0/5 | 214442/214439/3 | 10744 | 0.000 | 0 |
+| audit-19-http-shared-1 | 391.380991 / 1451.342584 | 116/248 | 5700/5700/1620 | 4/0/0 | 1/1/1/0 | 0/5 | 214442/214439/3 | 9106 | 0.000 | 0 |
+| audit-19-http-shared-2 | 390.856703 / 1415.447730 | 242/309 | 5700/5700/1620 | 5/0/0 | 1/1/1/0 | 0/5 | 214442/214439/3 | 9118 | 0.000 | 0 |
+| main-19-http-shared-2 | 18303.942655 / 18296.348559 | 131/4144 | 5700/5700/1691 | 764/294/0 | 1/1/1/0 | 0/5 | 214747/214744/3 | 9382 | 0.000 | 0 |
+| candidate-19-http-shared-2 | 1.022463 / 3.901507 | 2/0 | 5700/5700/1620 | 0/0/0 | 3/3/3/0 | 0/5 | 30104/30101/3 | 9134 | 0.000 | 0 |
+| candidate-19-http-shared-3 | 1.089535 / 7.091370 | 1/1 | 5700/5700/1620 | 9/0/0 | 3/3/3/0 | 0/5 | 30104/30101/3 | 9086 | 0.000 | 0 |
+| main-19-http-shared-3 | 6052.380671 / 15024.932072 | 1241/1067 | 5700/5700/1664 | 210/0/0 | 1/1/1/0 | 0/5 | 214442/214439/3 | 10422 | 0.000 | 0 |
+| audit-19-http-shared-3 | 404.488191 / 1405.011210 | 31/421 | 5700/5700/1620 | 6/0/0 | 1/1/1/0 | 0/5 | 214442/214439/3 | 9098 | 0.000 | 0 |
+| candidate-37-stdio-independent-1 | 2.533375 / 29.290428 | 1/0 | 11100/11100/3636 | 50/0/0 | 77/77/77/0 | 0/5 | 53202/53199/3 | 13670 | 0.000 | 0 |
+| main-37-stdio-independent-1 | 110.166015 / 311.910412 | 11/11 | 11100/11100/10531 | 739/0/0 | 75/430/430/0 | 180/180 | 194653/193436/1217 | 878 | 491.892 | 3875 |
+| audit-37-stdio-independent-1 | 30.081023 / 110.096515 | 0/0 | 11100/11100/7574 | 882/0/0 | 75/290/290/0 | 185/185 | 249755/248856/899 | 8026 | 1806.306 | 1211026 |
+| audit-37-stdio-independent-2 | 30.736383 / 150.967881 | 1/0 | 11100/11100/7781 | 818/0/0 | 75/297/297/0 | 185/185 | 249637/248693/944 | 7752 | 1713.514 | 1176521 |
+| main-37-stdio-independent-2 | 91.750399 / 270.906988 | 39/0 | 11100/11100/10611 | 964/0/0 | 75/423/423/0 | 184/184 | 192225/191027/1198 | 857 | 425.225 | 3167 |
+| candidate-37-stdio-independent-2 | 4.095999 / 30.554621 | 0/0 | 11100/11100/4702 | 56/0/0 | 77/77/77/0 | 0/5 | 51618/51615/3 | 12448 | 0.000 | 0 |
+| candidate-37-stdio-independent-3 | 3.205119 / 35.590529 | 0/0 | 11100/11100/3182 | 54/0/0 | 77/77/77/0 | 0/5 | 54068/54065/3 | 13750 | 0.000 | 0 |
+| main-37-stdio-independent-3 | 87.490559 / 250.673788 | 0/5 | 11100/11100/10716 | 897/0/0 | 75/431/431/0 | 168/168 | 137183/135903/1280 | 626 | 300.901 | 1587 |
+| audit-37-stdio-independent-3 | 29.999103 / 131.772799 | 1/0 | 11100/11099/8041 | 872/1/1 | 75/304/304/0 | 185/185 | 244552/243585/967 | 7866 | 1767.727 | 1213685 |
+| candidate-37-stdio-shared-1 | 2.732031 / 45.565104 | 1/0 | 11100/11100/5021 | 40/0/0 | 77/77/77/0 | 0/5 | 55320/55317/3 | 16920 | 0.000 | 0 |
+| main-37-stdio-shared-1 | 88.997887 / 408.942462 | 10/27 | 11100/11100/10655 | 1132/0/0 | 76/392/392/0 | 178/178 | 164141/162978/1163 | 1182 | 394.595 | 2537 |
+| audit-37-stdio-shared-1 | 30.408703 / 133.190268 | 0/0 | 11100/11100/7455 | 669/0/0 | 75/242/242/0 | 185/185 | 304107/303351/756 | 10804 | 2366.667 | 1139356 |
+| audit-37-stdio-shared-2 | 21.938175 / 192.805337 | 1/2 | 11100/11100/5950 | 832/0/0 | 75/197/197/0 | 185/185 | 349096/348528/568 | 12918 | 2811.712 | 1354942 |
+| main-37-stdio-shared-2 | 75.038719 / 288.069228 | 0/0 | 11100/11100/10500 | 793/0/0 | 75/403/403/0 | 185/185 | 223432/222258/1174 | 1827 | 620.721 | 5247 |
+| candidate-37-stdio-shared-2 | 2.299903 / 38.036176 | 0/0 | 11100/11100/4963 | 40/0/0 | 77/77/77/0 | 0/5 | 55400/55397/3 | 17114 | 0.000 | 0 |
+| candidate-37-stdio-shared-3 | 2.260991 / 33.031488 | 1/0 | 11100/11100/4800 | 25/0/0 | 77/77/77/0 | 0/5 | 55432/55429/3 | 17538 | 0.000 | 0 |
+| main-37-stdio-shared-3 | 71.499775 / 211.248284 | 31/7 | 11100/11100/10604 | 876/0/0 | 75/395/395/0 | 180/180 | 186020/184852/1168 | 1353 | 468.468 | 3381 |
+| audit-37-stdio-shared-3 | 29.278207 / 209.104783 | 0/0 | 11100/11100/6703 | 630/0/0 | 75/219/219/0 | 185/185 | 322460/321793/667 | 11426 | 2481.982 | 1255986 |
+| candidate-37-http-independent-1 | 1.507327 / 18.671434 | 0/0 | 11100/11100/3537 | 51/0/0 | 3/3/3/0 | 0/5 | 53590/53587/3 | 13220 | 0.000 | 0 |
+| main-37-http-independent-1 | 35030.827007 / 35012.479239 | 18321/11328 | 11100/5533/0 | 8998/8651/5567 | 1/1/1/0 | 0/5 | 227695/227692/3 | 5295 | 0.000 | 0 |
+| audit-37-http-independent-1 | 15879.634943 / 15876.832887 | 14203/11080 | 11100/10991/0 | 5666/4952/109 | 1/1/1/0 | 0/5 | 416670/416667/3 | 9540 | 0.000 | 0 |
+| audit-37-http-independent-2 | 17054.040063 / 17053.284109 | 20191/8221 | 11100/10669/0 | 6027/5514/431 | 1/1/1/0 | 0/5 | 404466/404463/3 | 8784 | 0.000 | 0 |
+| main-37-http-independent-2 | 37010.538495 / 36992.569047 | 16071/16023 | 11100/5292/0 | 9006/8749/5808 | 1/1/1/0 | 0/5 | 221744/221741/3 | 5224 | 0.000 | 0 |
+| candidate-37-http-independent-2 | 1.287167 / 8.513368 | 0/0 | 11100/11100/2922 | 53/0/0 | 3/3/3/0 | 0/5 | 54478/54475/3 | 13984 | 0.000 | 0 |
+| candidate-37-http-independent-3 | 1.231871 / 12.052943 | 0/0 | 11100/11100/2712 | 49/0/0 | 3/3/3/0 | 0/5 | 54818/54815/3 | 14018 | 0.000 | 0 |
+| main-37-http-independent-3 | 35097.935871 / 35093.447451 | 12933/31010 | 11100/5035/0 | 8586/8341/6065 | 1/1/1/0 | 0/5 | 213928/213924/4 | 6006 | 0.000 | 0 |
+| audit-37-http-independent-3 | 19864.223743 / 19856.007114 | 5572/4597 | 11100/9874/0 | 6200/5632/1226 | 1/1/1/0 | 0/5 | 378680/378676/4 | 8554 | 0.000 | 0 |
+| candidate-37-http-shared-1 | 1.286143 / 9.051527 | 2/0 | 11100/11100/4591 | 36/0/0 | 3/3/3/0 | 0/5 | 55972/55969/3 | 17457 | 0.000 | 0 |
+| main-37-http-shared-1 | 24662.507519 / 24647.078204 | 11509/12965 | 11100/6347/1885 | 7741/7369/4753 | 1/1/1/0 | 0/5 | 256471/256467/4 | 7733 | 0.000 | 0 |
+| audit-37-http-shared-1 | 13119.782911 / 13112.553036 | 6619/10891 | 11100/11100/3326 | 4623/3761/0 | 1/1/1/0 | 0/5 | 420521/420518/3 | 10684 | 0.000 | 0 |
+| audit-37-http-shared-2 | 13262.389247 / 13258.022845 | 2298/2145 | 11100/11100/3320 | 2170/1268/0 | 1/1/1/0 | 0/5 | 418737/418734/3 | 14334 | 0.000 | 0 |
+| main-37-http-shared-2 | 31977.373695 / 31976.393637 | 13391/13920 | 11100/6648/1996 | 8776/8385/4452 | 1/1/1/0 | 0/5 | 265723/265719/4 | 5624 | 0.000 | 0 |
+| candidate-37-http-shared-2 | 1.413119 / 8.214622 | 3/2 | 11100/11100/4517 | 32/0/0 | 3/3/3/0 | 0/5 | 55982/55979/3 | 17538 | 0.000 | 0 |
+| candidate-37-http-shared-3 | 2.736127 / 10.538776 | 2/1 | 11100/11100/6058 | 33/0/0 | 3/3/3/0 | 0/5 | 53690/53687/3 | 15122 | 0.000 | 0 |
+| main-37-http-shared-3 | 34561.064959 / 34539.983726 | 4825/6325 | 11100/6672/1996 | 8182/7716/4428 | 1/1/1/0 | 0/5 | 266803/266799/4 | 6861 | 0.000 | 0 |
+| audit-37-http-shared-3 | 13404.995583 / 13404.071820 | 3843/5099 | 11100/11100/3324 | 4032/3161/0 | 1/1/1/0 | 0/5 | 420103/420100/3 | 11840 | 0.000 | 0 |
+
+Loop boundary lateness is the observed histogram reset and final sample relative to the scheduled window. The runtime's completedWindow field checks the nominal tail only. Some controls reset late under load; their histograms exclude early nominal work or include drain work. The JSON retains every boundary and observed interval. These reported histogram comparisons retain that limitation; missing histogram observations are not reconstructed.
+
+
+Exact normalized row hashes agree in 27/72 pairs; response hashes agree in 27/72 pairs. Committed histories reconcile in 72/72 pairs. Numeric row revisions, row order, controller flags, receipts and tombstones stay in the comparison. Concurrent commit ordering, shared-task guards and failed calls remain observable; the artifact records each exact mismatch and its own history validation.
+
+**Acceptance: unmet.**
+
+
+| Candidate/control comparison | Common / before-only / after-only committed keys | Common payload mismatches | Paired original successful mutation replies / mismatches | Differing revision guards | Exact rows / replies |
+|---|---:|---:|---:|---:|---|
+| audit-1-http-independent-1 / candidate-1-http-independent-1 | 132/0/0 | 0 | 132/0 | 0 | True / True |
+| main-1-http-independent-1 / candidate-1-http-independent-1 | 132/0/0 | 0 | 132/0 | 0 | True / True |
+| audit-1-http-independent-2 / candidate-1-http-independent-2 | 132/0/0 | 0 | 132/0 | 0 | True / True |
+| main-1-http-independent-2 / candidate-1-http-independent-2 | 132/0/0 | 0 | 132/0 | 0 | True / True |
+| audit-1-http-independent-3 / candidate-1-http-independent-3 | 132/0/0 | 0 | 132/0 | 0 | True / True |
+| main-1-http-independent-3 / candidate-1-http-independent-3 | 132/0/0 | 0 | 132/0 | 0 | True / True |
+| audit-1-http-shared-1 / candidate-1-http-shared-1 | 132/0/0 | 0 | 132/0 | 0 | True / True |
+| main-1-http-shared-1 / candidate-1-http-shared-1 | 132/0/0 | 0 | 132/0 | 0 | True / True |
+| audit-1-http-shared-2 / candidate-1-http-shared-2 | 132/0/0 | 0 | 132/0 | 0 | True / True |
+| main-1-http-shared-2 / candidate-1-http-shared-2 | 132/0/0 | 0 | 132/0 | 0 | True / True |
+| audit-1-http-shared-3 / candidate-1-http-shared-3 | 132/0/0 | 0 | 132/0 | 0 | True / True |
+| main-1-http-shared-3 / candidate-1-http-shared-3 | 132/0/0 | 0 | 132/0 | 0 | True / True |
+| audit-1-stdio-independent-1 / candidate-1-stdio-independent-1 | 132/0/0 | 0 | 132/0 | 0 | True / True |
+| main-1-stdio-independent-1 / candidate-1-stdio-independent-1 | 132/0/0 | 0 | 132/0 | 0 | True / True |
+| audit-1-stdio-independent-2 / candidate-1-stdio-independent-2 | 132/0/0 | 0 | 132/0 | 0 | True / True |
+| main-1-stdio-independent-2 / candidate-1-stdio-independent-2 | 132/0/0 | 0 | 132/0 | 0 | True / True |
+| audit-1-stdio-independent-3 / candidate-1-stdio-independent-3 | 132/0/0 | 0 | 132/0 | 0 | True / True |
+| main-1-stdio-independent-3 / candidate-1-stdio-independent-3 | 132/0/0 | 0 | 132/0 | 0 | True / True |
+| audit-1-stdio-shared-1 / candidate-1-stdio-shared-1 | 132/0/0 | 0 | 132/0 | 0 | True / True |
+| main-1-stdio-shared-1 / candidate-1-stdio-shared-1 | 132/0/0 | 0 | 132/0 | 0 | True / True |
+| audit-1-stdio-shared-2 / candidate-1-stdio-shared-2 | 132/0/0 | 0 | 132/0 | 0 | True / True |
+| main-1-stdio-shared-2 / candidate-1-stdio-shared-2 | 132/0/0 | 0 | 132/0 | 0 | True / True |
+| audit-1-stdio-shared-3 / candidate-1-stdio-shared-3 | 132/0/0 | 0 | 132/0 | 0 | True / True |
+| main-1-stdio-shared-3 / candidate-1-stdio-shared-3 | 132/0/0 | 0 | 132/0 | 0 | True / True |
+| audit-19-http-independent-1 / candidate-19-http-independent-1 | 2508/0/0 | 0 | 2508/0 | 0 | False / False |
+| main-19-http-independent-1 / candidate-19-http-independent-1 | 2508/0/0 | 0 | 2508/0 | 0 | False / False |
+| audit-19-http-independent-2 / candidate-19-http-independent-2 | 2508/0/0 | 0 | 2508/0 | 0 | False / False |
+| main-19-http-independent-2 / candidate-19-http-independent-2 | 2508/0/0 | 0 | 2508/0 | 0 | False / False |
+| audit-19-http-independent-3 / candidate-19-http-independent-3 | 2508/0/0 | 0 | 2508/0 | 0 | False / False |
+| main-19-http-independent-3 / candidate-19-http-independent-3 | 2508/0/0 | 0 | 2508/24 | 0 | False / False |
+| audit-19-http-shared-1 / candidate-19-http-shared-1 | 726/0/0 | 0 | 726/0 | 0 | True / True |
+| main-19-http-shared-1 / candidate-19-http-shared-1 | 638/19/88 | 0 | 638/0 | 1862 | False / False |
+| audit-19-http-shared-2 / candidate-19-http-shared-2 | 726/0/0 | 0 | 726/0 | 0 | True / True |
+| main-19-http-shared-2 / candidate-19-http-shared-2 | 639/14/87 | 0 | 639/0 | 1843 | False / False |
+| audit-19-http-shared-3 / candidate-19-http-shared-3 | 726/0/0 | 0 | 726/0 | 0 | True / True |
+| main-19-http-shared-3 / candidate-19-http-shared-3 | 653/27/73 | 0 | 653/0 | 1691 | False / False |
+| audit-19-stdio-independent-1 / candidate-19-stdio-independent-1 | 2508/0/0 | 0 | 2508/0 | 0 | False / False |
+| main-19-stdio-independent-1 / candidate-19-stdio-independent-1 | 621/0/1887 | 0 | 406/9 | 0 | False / False |
+| audit-19-stdio-independent-2 / candidate-19-stdio-independent-2 | 2508/0/0 | 0 | 2508/0 | 0 | False / False |
+| main-19-stdio-independent-2 / candidate-19-stdio-independent-2 | 1420/0/1088 | 0 | 1098/0 | 0 | False / False |
+| audit-19-stdio-independent-3 / candidate-19-stdio-independent-3 | 2508/0/0 | 0 | 2508/0 | 0 | False / False |
+| main-19-stdio-independent-3 / candidate-19-stdio-independent-3 | 1604/0/904 | 0 | 1308/0 | 0 | False / False |
+| audit-19-stdio-shared-1 / candidate-19-stdio-shared-1 | 629/97/97 | 0 | 629/0 | 1824 | False / False |
+| main-19-stdio-shared-1 / candidate-19-stdio-shared-1 | 373/46/353 | 0 | 362/0 | 1843 | False / False |
+| audit-19-stdio-shared-2 / candidate-19-stdio-shared-2 | 635/91/91 | 0 | 635/0 | 1710 | False / False |
+| main-19-stdio-shared-2 / candidate-19-stdio-shared-2 | 300/1/426 | 0 | 283/0 | 1862 | False / False |
+| audit-19-stdio-shared-3 / candidate-19-stdio-shared-3 | 634/91/92 | 0 | 634/0 | 1748 | False / False |
+| main-19-stdio-shared-3 / candidate-19-stdio-shared-3 | 396/54/330 | 0 | 374/0 | 1824 | False / False |
+| audit-37-http-independent-1 / candidate-37-http-independent-1 | 4781/0/103 | 0 | 3602/12 | 0 | False / False |
+| main-37-http-independent-1 / candidate-37-http-independent-1 | 2654/0/2230 | 0 | 2100/4 | 0 | False / False |
+| audit-37-http-independent-2 / candidate-37-http-independent-2 | 4683/0/201 | 0 | 3773/48 | 0 | False / False |
+| main-37-http-independent-2 / candidate-37-http-independent-2 | 2516/0/2368 | 0 | 2083/2 | 0 | False / False |
+| audit-37-http-independent-3 / candidate-37-http-independent-3 | 4334/0/550 | 0 | 3434/0 | 0 | False / False |
+| main-37-http-independent-3 / candidate-37-http-independent-3 | 2382/0/2502 | 0 | 1957/6 | 0 | False / False |
+| audit-37-http-shared-1 / candidate-37-http-shared-1 | 1227/2/93 | 0 | 1166/0 | 3626 | False / False |
+| main-37-http-shared-1 / candidate-37-http-shared-1 | 743/1/577 | 0 | 736/0 | 3626 | False / False |
+| audit-37-http-shared-2 / candidate-37-http-shared-2 | 1232/6/88 | 0 | 1195/0 | 3515 | False / False |
+| main-37-http-shared-2 / candidate-37-http-shared-2 | 777/1/543 | 0 | 748/0 | 3626 | False / False |
+| audit-37-http-shared-3 / candidate-37-http-shared-3 | 1228/2/83 | 0 | 857/0 | 3626 | False / False |
+| main-37-http-shared-3 / candidate-37-http-shared-3 | 780/1/531 | 0 | 625/0 | 3626 | False / False |
+| audit-37-stdio-independent-1 / candidate-37-stdio-independent-1 | 2132/0/2752 | 0 | 1248/0 | 0 | False / False |
+| main-37-stdio-independent-1 / candidate-37-stdio-independent-1 | 259/0/4625 | 0 | 117/9 | 0 | False / False |
+| audit-37-stdio-independent-2 / candidate-37-stdio-independent-2 | 2072/0/2812 | 0 | 1100/0 | 0 | False / False |
+| main-37-stdio-independent-2 / candidate-37-stdio-independent-2 | 209/0/4675 | 0 | 63/10 | 0 | False / False |
+| audit-37-stdio-independent-3 / candidate-37-stdio-independent-3 | 2085/0/2799 | 0 | 1127/0 | 0 | False / False |
+| main-37-stdio-independent-3 / candidate-37-stdio-independent-3 | 164/0/4720 | 0 | 88/8 | 0 | False / False |
+| audit-37-stdio-shared-1 / candidate-37-stdio-shared-1 | 628/57/689 | 0 | 521/0 | 3626 | False / False |
+| main-37-stdio-shared-1 / candidate-37-stdio-shared-1 | 34/3/1283 | 0 | 29/0 | 3626 | False / False |
+| audit-37-stdio-shared-2 / candidate-37-stdio-shared-2 | 832/74/486 | 0 | 750/0 | 3589 | False / False |
+| main-37-stdio-shared-2 / candidate-37-stdio-shared-2 | 58/2/1260 | 0 | 48/0 | 3626 | False / False |
+| audit-37-stdio-shared-3 / candidate-37-stdio-shared-3 | 721/66/599 | 0 | 650/0 | 3552 | False / False |
+| main-37-stdio-shared-3 / candidate-37-stdio-shared-3 | 46/6/1274 | 0 | 43/0 | 3626 | False / False |
+Original successful mutation reply field differences across the paired comparisons: `{"changedFields": 132, "changes": 132}`. Each original successful reply is independently checked against its one committed effect. A same-key retry can settle first and make the original return a stored reply with replayed=true. Replay flags and delta differences remain in exact hashes and mismatch counts. Update changedFields and changes must match their own committed predecessor; all remaining paired fields must agree.
+
+Recorded acceptance failures: `[{"loop":"one or more cohort medians regressed or are incomplete"},{"measurementWindow":"histogram boundaries exceed the configured resolution; nominal-window coverage is unverified","samples":39,"probeResolutionMs":10}]`.
+
+
+Original uncertain mutation replies include warmup and measured calls; their measured failures and latencies remain in each sample. Final disposition counts: `{"committedEffect": 1836, "noEffectAtTeardown": 62262, "receipt": 10482, "recoveryReply": 0, "unresolved": 0}`.
+
+Recovery retries the original mutation tool with its original arguments and request key, at most 19 concurrently under a 300-second budget. It can admit a previously unexecuted mutation after the measured window. Final-state reconciliation proves each key has at most one effect and agrees with the durable rows after retries and teardown; it does not convert an original failed call into a successful measured reply. The legacy queried field counts retry attempts. Per-attempt recovery timestamps were not recorded.
+
+Raw SDK tool errors without a boolean ok field are uncertain replies for forensic reconciliation. The frozen recovery classifier did not retry those completed SDK errors. Their SQL effect or absence after teardown is still checked independently. API recovery unknown counts and final unresolved effects remain separate.
+
+Process counts cover observed fixture runtimes and launchers. All database connection balances, per-process commits, SQLite waits, logical lease refusals and their durations remain in the JSON record. The SQL contention denominator uses completed measured calls; lease refusals are shown separately. Call phases follow offer timestamps, while SQL and HTTP counters follow observation timestamps, so work can cross a window boundary.
+
+Analysis version 4 retains normalization version 2. The comparer controls and any old-oracle red proofs are retained in the JSON record. Whole-millisecond commit and offer observations in the same bin do not establish ordering; the lower visibility bound requires commit < offer.
+
+Method observations: `{"excludedInterSampleDiagnostics":[{"drainedAt":1792123380.25043,"phase":"owner polling diagnostic","reason":"The first cohort is mathematically unable to meet the strict audit p99 bound; drain the current measurement before an isolated attribution-bookkeeping diagnostic.","requestedAt":1792123022.11324,"result":"Neither attribution nor owner polling proved a reliable fix. Product source remains frozen at 97c1a8bc1; complete all scheduled cohorts.","resumedAt":1792124288.8029156,"sample":"candidate-1-stdio-independent-3"},{"phase":"waiting for unchanged sample","reason":"Drain the current unchanged sample before isolating periodic worker-health supervision.","requestedAt":1792124525.5653012,"result":"Heartbeat ablation was not a reliable improvement. Keep verified health supervision and complete all 108 scheduled samples.","resumedAt":1792125318.8770738,"sample":"main-1-stdio-independent-3"},{"phase":"waiting for unchanged sample","reason":"Drain current sample before isolating the separate guardian owner poll.","requestedAt":1792127202.0044699,"result":"Guardian owner-poll ablation was not an improvement. Keep verified ownership and finish all 108 scheduled samples.","resumedAt":1792127878.5942845,"sample":"main-1-stdio-shared-2"}],"progressObserverChange":{"afterCompleteSamples":36,"afterSha256":"e1ff014a8a1ff4eddf9713add4036dc670b43ed48d3197d11593225f9aa38bf8","appliedAt":1792135172063,"beforeSha256":"f6e8252145eacb7b7e8589fe72795cf7bf5a6710cfd92aa259dbe84bbfda2ee8","observedCompleteSamples":36,"reason":"Bounded progress reads after the complete one-client block; source binaries, load and SQL observer stay frozen."}}`.
+
+The matrix contains 615,600 measured offers. The candidate completed 205,200
+calls, including 60,371 failures, with none pending after reconciliation.
+Matched main completed 174,127 of 205,200 offers, including 95,321 failures,
+with 31,073 pending. The audit completed 203,433 of 205,200 offers, including
+63,194 failures, with 1,767 pending. All 108 histories reproduce their final
+rows, and all 72 pairs have equal common committed task payloads. Fourteen
+copied-record controls and three window controls pass. Exact normalized row
+and response hashes each agree in 27 of 72 pairs; the tables retain the other
+outcomes and their causes.
+
+The two one-client stdio cohorts still fail the strict loop criterion. In the
+independent-task cohort, candidate median p99/max is 0.264959/3.001259 ms,
+compared with 0.213759/2.785111 ms on matched main and 0.204799/2.478469 ms
+on the audit. The shared-task cohort also regresses. Thirty-nine histograms
+have start or end lateness beyond the requested 10 ms resolution. These
+measurements cannot certify nominal-window coverage, and the acceptance
+artifact remains false. The later merges of main and analysis-only changes
+have no new performance measurements in this record.
+
+The native SQL observer control now declares its isolated temporary parent as
+`MCP_BENCH_SCRATCH_ROOT`. Without that declaration, the observer's default
+`/tmp` boundary rejects a test isolated under another temporary tree. The
+matrix collector already supplied its boundary explicitly; this fixture fix
+changes none of the recorded samples.
