@@ -1,6 +1,7 @@
 import { performanceSpans, performanceSites, performanceProcess } from "./performanceSpans";
 import { startLoopWatchdog } from "./loopWatchdog";
 import { AsyncLocalStorage } from "node:async_hooks";
+import { createLoopHeapSignals } from "./loopHeapSignals";
 
 export type ViewerOperation = "runtime.startup-row" | "controller.account-migration" | "orchestrator.deputy" | "voice.orchestrator-read" | "telegram.review-polls" | "accounts.migration-target" | "pipelines.startup-admission" | "pipelines.mutation" | "pipelines.controller-mutation" | "runtime.delivery.deputy-authority"
   | "registry.prepare" | "runtime.startup" | "runtime.spawn-recovery" | "agent.deferred-spawn" | "state.rollback-checkpoint"
@@ -38,7 +39,7 @@ export function createLoopLogSink(write = (line: string, done: () => void) => { 
 
 /** Completed operations survive until the next timer: their synchronous work
     can have returned before that timer is allowed to run. */
-export function createViewerLoopMonitor(log?: (line: string) => void, now = () => performance.now(), spans = performanceSpans) {
+export function createViewerLoopMonitor(log?: (line: string) => void, now = () => performance.now(), spans = performanceSpans, heapSignals = createLoopHeapSignals(undefined, undefined, now)) {
   const sink = createLoopLogSink();
   let writeLog = log ?? sink.enqueue;
   const context = new AsyncLocalStorage<ViewerOperation>();
@@ -52,6 +53,7 @@ export function createViewerLoopMonitor(log?: (line: string) => void, now = () =
   const tick = () => {
     const at = now();
     const gapMs = Math.max(0, at - last - 10);
+    const memory = heapSignals.sample(last, at, gapMs);
     if (gapMs > 500) {
       const named = new Map<ViewerOperation, { name: ViewerOperation; durationMs: number; completed: boolean; count: number }>();
       for (const op of [...completed, ...active]) {
@@ -74,7 +76,7 @@ export function createViewerLoopMonitor(log?: (line: string) => void, now = () =
       const window = scheduler?.samples.filter(row => row.utcMs >= Date.now() - (at - last) - 200) ?? [];
       const first = window[0], final = window.at(-1);
       const revision = process.env.LLV_HOT_STATE_RELEASE_REVISION;
-      writeLog(`[viewer loop-gap] ${JSON.stringify({ gapMs: Math.round(gapMs), operations,
+      writeLog(`[viewer loop-gap] ${JSON.stringify({ gapMs: Math.round(gapMs), operations, ...memory,
         role: process.env.LLV_STATE_OWNER === "runtime-host" ? "runtime-host" : "viewer",
         ...performanceProcess, revision: performanceProcess.revision ?? (revision && /^[a-f0-9]{7,40}$/.test(revision) ? revision : null), sequence: ++sequence, lastTick: last, tick: at, utc: new Date().toISOString(),
         pendingOperations: active.size, activeDropped, completedDropped, logDropped: sink.dropped(),
@@ -148,12 +150,13 @@ export function createViewerLoopMonitor(log?: (line: string) => void, now = () =
     start() {
       if (timer) return;
       last = now();
+      heapSignals.start();
       watchdog = startLoopWatchdog();
       spans.observeSite(watchdog.site);
       const poll = () => { tick(); timer = setTimeout(poll, 10); timer.unref(); };
       timer = setTimeout(poll, 10); timer.unref();
     },
-    stop() { if (timer) clearTimeout(timer); timer = undefined; completed = []; spans.observeSite(); void watchdog?.stop().catch(() => {}); watchdog = undefined; },
+    stop() { if (timer) clearTimeout(timer); timer = undefined; heapSignals.stop(); completed = []; spans.observeSite(); void watchdog?.stop().catch(() => {}); watchdog = undefined; },
   };
 }
 export const viewerLoopMonitor = shared.__delegatusLoopMonitor ??= createViewerLoopMonitor();
