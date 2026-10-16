@@ -6,6 +6,8 @@ const QUESTION_DENIAL = "Orchestrator operator decisions require a Delegatus for
 
 /** Codex 0.162.1 leaves async questions available when the sync setting is off.
  * Its PreToolUse boundary rejects both before execution, including control tools.
+ * 0.163.0 removes every question tool from the surface with that setting; the
+ * hook stays for the older pins.
  * Compose with the existing cleanup hook so neither policy replaces the other. */
 export function codexOperatorQuestionPolicy(home?: string) {
   const config = codexProcessCleanupConfig(home);

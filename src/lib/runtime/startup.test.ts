@@ -2774,15 +2774,14 @@ test.each(["codex", "claude"] as const)(
           client,
           orchestratorSeats: () => [],
           refreshTranscriptState: async () => {},
+          schedule: () => ({ unref() {} }),
           resolveCodexOwner: () => null,
           resolveClaudeOwner: () => null,
           ...(engine === "codex" ? { adoptClaude: async () => [] } : { adopt: async () => [] }),
         });
       }, () => fs.readFileSync(targetPath, "utf8").trim() === "candidate", {
         schedule: () => ({ unref() {} }),
-      })).rejects.toThrow(
-        `structured startup left 1 eligible host(s) owned by the incumbent Viewer: ${engine}:${sessionId}`,
-      );
+      })).resolves.toBeUndefined();
       expect(activations).toBe(1);
       expect(procBackend.pidAlive(identities.engine.pid)).toBe(true);
 
@@ -2933,6 +2932,11 @@ test.each(["codex", "claude"] as const)(
     const scheduledRetries: Array<() => void> = [];
     const scheduledRetryDelays: number[] = [];
     const startupLogs: unknown[][] = [];
+    let restoreClock = () => {};
+    dependencies.schedule = (callback, delayMs) => {
+      scheduledRetries.push(callback); scheduledRetryDelays.push(delayMs);
+      return { unref() {} };
+    };
 
     try {
       await waitFor(() => fs.existsSync(readyPath), 5_000);
@@ -2983,15 +2987,11 @@ test.each(["codex", "claude"] as const)(
         schedule: () => ({ unref() {} }),
       });
       expect(activations).toBe(1);
-      expect(didStructuredHostStartupFail()).toBe(true);
+      expect(didStructuredHostStartupFail()).toBe(false);
       expect(scheduledRetries).toHaveLength(1);
-      expect(scheduledRetryDelays).toEqual([100]);
+      expect(scheduledRetryDelays).toEqual([1000]);
       expect(replacementAttempts).toBe(0);
-      expect(startupLogs).toHaveLength(1);
-      expect(startupLogs[0]![0]).toBe("[structured hosts] startup adoption failed; retry scheduled");
-      expect(startupLogs[0]![1]).toMatchObject({
-        category: "runtime-host-unavailable", attempt: 1, retryInMs: 100,
-      });
+      expect(startupLogs).toEqual([]);
       const refused = registry.readOnlySnapshot().entries[`${engine}:${sessionId}`]!;
       expect(refused.structuredHost?.process).toEqual(identities.engine);
       expect(refused.claimOwner).toBe(`structured-host:${JSON.stringify(identities.viewer)}`);
@@ -3008,16 +3008,18 @@ test.each(["codex", "claude"] as const)(
         structuredHost: { endpoint: "stdio:released", process: null },
       });
 
-      /* Keep the first pass on the production adopter so its unresolved-host
-         assertion proves the refusal. Once the incumbent has released the row,
-         the retry uses the fixture host adapter while the scheduler still owns
-         when the second pass runs. */
+      /* Boot is ready while the incumbent owns this row. Its isolated timer
+         retries after the hand-over, using the production claim checks. */
       if (engine === "codex") dependencies.adopt = adoptCodexReplacement;
       else dependencies.adoptClaude = adoptClaudeReplacement;
       const retry = scheduledRetries.shift();
       if (!retry) throw new Error("structured startup retry was not scheduled");
+      const clock = spyOn(Date, "now").mockReturnValue(Date.now() + 1000);
+      restoreClock = () => clock.mockRestore();
       retry();
-      await waitFor(() => !didStructuredHostStartupFail() && replacementAttempts === 1);
+      await waitFor(() => hasStructuredDeliveryHost({ engine, sessionId }) && replacementAttempts === 1, 1000);
+      await adoptStructuredHostsAtStartup(dependencies);
+      restoreClock();
 
       expect(scheduledRetries).toEqual([]);
       expect(replacementAttempts).toBe(1);
@@ -3031,6 +3033,7 @@ test.each(["codex", "claude"] as const)(
         structuredHost: { process: { pid: replacements[0]!.pid } },
       });
     } finally {
+      restoreClock();
       await releaseStructuredDeliveryHost({ engine, sessionId });
       await bindStructuredDeliveryQueue([], { registry, client: null });
       if (procBackend.pidAlive(incumbent.pid)) incumbent.kill("SIGKILL");
