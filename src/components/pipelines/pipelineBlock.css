@@ -292,6 +292,21 @@
     left: var(--pb-rail-x); top: 50%; height: calc(50% + var(--pb-chain-gap));
     border-left: 1px dashed var(--pb-rail);
   }
+  /* A branch adds nothing to its unit's width, so a long fix never moves its gate
+     or a later pass stage to a new line: the pill takes its gate's width (at
+     least 8rem) and the name wraps inside it. A gate with a later branch of its
+     own keeps to its column, so two branches never meet. */
+  .pblock .pb-chain .pb-unit > .pb-step[data-step="branch"] { contain: inline-size; justify-self: stretch; }
+  .pblock .pb-chain .pb-unit > .pb-step[data-step="branch"] > .pb-pill {
+    flex: none; width: max-content; max-width: max(100%, 8rem); height: auto; min-height: 22px; padding-block: 2px;
+  }
+  .pblock .pb-chain .pb-unit:has(~ .pb-unit > .pb-step[data-step="branch"]) > .pb-step[data-step="branch"] > .pb-pill { max-width: 100%; }
+  .pblock .pb-chain .pb-unit > .pb-step[data-step="branch"] .pb-name { white-space: normal; overflow-wrap: anywhere; }
+  .pblock .pb-chain .pb-unit > .pb-step[data-step="branch"] .pb-pill .pret,
+  .pblock .pb-chain .pb-unit > .pb-step[data-step="branch"] .pb-pill .ccircle { flex-shrink: 0; }
+  @media (pointer: coarse) {
+    .pblock[data-density="task"] .pb-chain .pb-unit > .pb-step[data-step="branch"] > .pb-pill { height: auto; min-height: 30px; }
+  }
   .pblock .pb-chain .pb-branch-word { display: none; }
 }
 

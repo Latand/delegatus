@@ -364,8 +364,12 @@ in this horizontal form only.
 - From 380px the unit is a two-column grid: the arrow and the stage on the
   first row, each branch under the stage, indented by `--pb-branch-indent`, on
   the narrow form's dashed elbow. The pass row stays one line; a unit wraps
-  whole, so a stage never leaves its fix behind. A fix wider than its stage
-  opens that much space before the next arrow.
+  whole, so a stage never leaves its fix behind. A branch adds nothing to its
+  unit's width (`contain: inline-size`): a fix wider than its stage never
+  moves the stage or a later pass stage to a new line. Its pill takes the
+  stage's width, at least 8rem, and the name wraps inside it; a stage with a
+  later branch of its own keeps its fix to its column, so two fixes never
+  meet.
 - A fix shared by two gates is drawn once, under the first gate that fails to
   it; the other gate says it with its `↺ n/m` mark.
 - The word «branch» is its own span (`.pb-branch-word`) and is hidden in the

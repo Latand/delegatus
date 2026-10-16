@@ -38,6 +38,8 @@ export type StageChainLane = {
   overlaps: string[];
   /** The rects of what shares the row with the pills: the work links and the age. */
   beside?: Box[];
+  /** The pass row's room, and the room the pass stages need on one line with no branch at all. */
+  pass?: { room: number; need: number };
 };
 
 /** A script for `page.evaluate`: the lane row under `selector`, read from
@@ -86,7 +88,15 @@ export const measureStageChain = (selector: string) => `(() => {
     const r = el.getBoundingClientRect();
     return { left: r.left, top: r.top, right: r.right, bottom: r.bottom };
   });
-  return { width: block.getBoundingClientRect().width, direction: getComputedStyle(block.querySelector(".pb-pills")).flexDirection, steps, overlaps, beside };
+  /* The pass stages on one line, branches left out: each pill, the arrow before it with its 4 px margin, and the row's 4 px gaps. */
+  const row = block.querySelector(".pb-chain > .pb-pills");
+  const main = [...row.querySelectorAll(".pb-step:not([data-step=branch])")];
+  const need = main.reduce((sum, step) => {
+    const arrow = step.querySelector(":scope > .pb-arrow");
+    return sum + step.querySelector(".pb-pill").getBoundingClientRect().width + (arrow ? arrow.getBoundingClientRect().width + parseFloat(getComputedStyle(arrow).marginInlineEnd || "0") : 0);
+  }, 0) + 4 * Math.max(0, main.length - 1);
+  const pass = { room: row.clientWidth, need };
+  return { width: block.getBoundingClientRect().width, direction: getComputedStyle(row).flexDirection, steps, overlaps, beside, pass };
 })()`;
 
 const drawn = (content: string) => content !== "none" && content !== "normal";
@@ -154,18 +164,19 @@ export function wideStageChainFailures(label: string, lane: StageChainLane, gate
   }
   const main = lane.steps.filter((step) => step.kind !== "branch");
   const branches = lane.steps.filter((step) => step.kind === "branch");
+  /* A branch's width never moves a pass stage to a new line: when the pass stages fit one line without any branch, they share one top. */
+  if (lane.pass && lane.pass.need <= lane.pass.room && main.some((step) => Math.abs(step.top - main[0]!.top) > 1)) {
+    fail(`the pass stages need ${lane.pass.need} px of ${lane.pass.room} px and still stand on ${new Set(main.map((step) => Math.round(step.top))).size} lines`);
+  }
   main.forEach((step, index) => {
     if (drawn(step.before.content) || drawn(step.after.content)) fail(`${step.stage}: a main stage draws a connector`);
     if (index > 0 && step.arrow === "none") fail(`${step.stage}: no arrow before it`);
-    /* The branch row below a gate: the next main stage on the same line starts after the widest of the two. */
+    /* A branch adds nothing to its unit: the next main stage on the same line follows its gate by the arrow and its gaps. */
     const next = main[index + 1];
     if (next && Math.abs(next.top - step.top) <= 1) {
-      const under = branches.filter((entry) => Math.abs(entry.left - 28 - step.left) <= 1 && entry.top > step.bottom);
-      const overhang = Math.max(0, ...under.map((entry) => entry.right - step.right));
       const gap = next.left - step.right;
       if (gap < 0) fail(`${next.stage}: starts ${-gap} px before ${step.stage} ends`);
-      /* The arrow and its two 4 px gaps, plus what the branch is wider than its gate by. */
-      if (gap > 4 + 12 + 4 + overhang + 4) fail(`${next.stage}: ${gap} px after ${step.stage}, ${overhang} px of it a wider branch`);
+      if (gap > 4 + 12 + 4 + 4) fail(`${next.stage}: ${gap} px after ${step.stage}, expected the arrow and its gaps only`);
     }
   });
   for (const step of branches) {

@@ -1613,7 +1613,7 @@ const stageChainPipelines: Pipeline[] = STAGE_CHAIN ? (() => {
         { stageId: "critique", attempts: [attempt(1, "failed", null, { ...done(70), ...passVia("build") })] },
         { stageId: "critique-fix", attempts: [attempt(1, "failed", null, { ...done(60), ...failVia("critique") })] },
       ], { stageId: "critique-fix", state: "needs_decision", input: null, activatedBy: null }),
-    /* A fix with a name wider than its gate: the extra width opens before the next arrow, nothing overlaps. */
+    /* A fix with a name wider than its gate: the fix wraps inside its pill, the pass stages stay on one line, nothing overlaps. */
     pipeline("p-chain-wide-long", L("Check every attachment on arrival", "Перевірити кожне вкладення при надходженні"), "t-chain-wide-long", "running",
       [stage("build", "builder", "review"), stage("review", "reviewer", "merge", { kind: "run", onFail: { to: "review-fix-after-the-attachment-check", maxRounds: 2 } }), stage("review-fix-after-the-attachment-check", "builder", "review"), stage("merge", "cleaner", null)],
       [

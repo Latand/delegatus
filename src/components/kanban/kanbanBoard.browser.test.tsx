@@ -17573,7 +17573,7 @@ describe("wide card: each fail branch hangs under the stage it fails from", () =
   /*
    * A lane of 380 px or more keeps its pass row on one line and draws a fail
    * branch under the stage it fails from, on the narrow form's dashed elbow,
-   * not at the end of the chain. Read over `?scenario=stage-chain` at three
+   * not at the end of the chain. Read over `?scenario=stage-chain` at six
    * desktop widths, in both colour schemes and both languages, from geometry
    * and computed style. STAGE_CHAIN_STAMP=before records the same frames on a
    * checkout without the change and asserts nothing about the layout.
@@ -17600,7 +17600,7 @@ describe("wide card: each fail branch hangs under the stage it fails from", () =
     const failures: string[] = [];
     const readings: Record<string, Record<string, Lane>> = {};
     try {
-      for (const width of [1280, 1440, 1920]) for (const scheme of ["light", "dark"] as const) for (const lang of ["en", "uk"] as const) {
+      for (const width of [1024, 1180, 1280, 1366, 1440, 1920]) for (const scheme of ["light", "dark"] as const) for (const lang of ["en", "uk"] as const) {
         const key = `${width}-${scheme}-${lang}`;
         const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=stage-chain`, { width, height: 1100 }, scheme, lang);
         try {
