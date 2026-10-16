@@ -1,5 +1,5 @@
 {
-  "recordedAt": "2026-10-16T00:09:30.148621+00:00",
+  "recordedAt": "2026-10-16T00:13:58.724680+00:00",
   "requirementDate": "2026-10-15",
   "mainRevision": "d395e7c7324e2653acd37edbbf644814f622deb1",
   "initialMainRevision": "5bd026c067e562af075ce25d838482a3c8b00a3f",
@@ -38,7 +38,7 @@
     },
     {
       "source": "current main",
-      "command": "bun test src/lib/pipelines/engine.recovery.test.ts -t replayed membership|without an envelope|activation drain recovers the original registry|contended retry claim|two activation controllers|a pre-host retry rechecks|legacy unresolved membership|a pre-host retry budget|envelope recovery yields|raw SQLite|permanent storage admission|typed storage admission",
+      "command": "bun test src/lib/pipelines/engine.recovery.test.ts -t 'replayed membership|without an envelope|activation drain recovers the original registry|contended retry claim|two activation controllers|a pre-host retry rechecks|legacy unresolved membership|a pre-host retry budget|envelope recovery yields|raw SQLite|permanent storage admission|typed storage admission'",
       "pass": 6,
       "fail": 40,
       "summary": "Ran 46 tests across 1 file. [9.87s]",
