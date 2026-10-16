@@ -2,42 +2,32 @@
 
 ## Originating requirement
 
-The operator, 2026-10-16, dictated in Russian into the orchestrator seat's chat
-(journal admission 13:10:27 UTC). The message opened with text the operator
-pasted from the seat panel; the requirement is its closing paragraph,
-verbatim:
+The operator, 2026-10-16, dictated the requirement in Russian into the
+orchestrator seat's chat (journal admission 13:10:27 UTC), after pasting text
+from the seat panel. The dictation is a private conversation, so this document
+paraphrases it in English and quotes none of it. The requirement, in the
+operator's order:
 
-> «Смотри, какая хуйня: я отвечал тебе на эти все, э-э, вопросы очень быстро. А
-> ты их получил очень поздно, и только после того, как оркестратор ответил в
-> самом конце каждый раз. Я думаю, что это неправильно. У нас должен быть
-> общий... у нас должна быть общий буфер сообщения, который наполняется, у
-> которого есть какой-то определённый размер, или таймер, по которому, вот,
-> срабатывает цик-цик, или, э-э, или, например, как. Это я отвечаю на
-> сообщение, то оно сразу может ставиться на в. На отправку, и если, например,
-> до оркестратора это сообщение ещё не дошло, и как бы, как бы не прошло ещё,
-> не прошла ещё отправка по какой-то причине, и мы можем дополнить её другими
-> сообщениями, нужно в эту очередь положить новые сообщения. Всё, что
-> касается... всё, что новое приходит. То есть, и всё это, ну, как
-> конденсировать в одном сообщении. Ну, соответственно, там же есть лимит
-> какой-то, его нужно проверить, но. Это всё должно быть не отдельными
-> сообщениями приходить, а вот в тот момент, когда ему наконец-то дошло, чтобы
-> туда пришло, ему сразу всё вместе. Сможешь как-то это продумать?»
-
-In English: I answered all these questions very quickly, and you received them
-very late, each one only after the orchestrator had replied at the very end.
-That is wrong. There should be one shared message buffer that fills up, with
-some size, or a timer that fires. When I answer, the answer is queued for
-sending at once; if it has not reached the orchestrator yet, we can add other
-messages to it. Everything new that arrives goes into that queue and is
-condensed into one message. There is some limit, and it has to be checked. At
-the moment the orchestrator can finally take it, everything arrives together.
+1. The operator answered a series of questions very quickly. The seat received
+   the answers very late, each one only after the seat had finished its reply
+   at the end of a turn. That is wrong.
+2. There should be one shared message buffer that fills up and is bounded by a
+   size or by a timer.
+3. An answer is queued for sending at once. While it has not reached the
+   orchestrator, other messages can be added to the same queue: everything new
+   that arrives goes into it.
+4. All of it is condensed into one message. There is a limit, and it has to be
+   checked.
+5. The messages should not arrive separately. At the moment the orchestrator
+   can finally take input, everything arrives together.
+6. The operator asked for this to be thought through.
 
 **One difference from the brief.** The pinned specification says the six
 answers were given "within about a minute each". The seat's decision records
 say all six were decided within 9.3 seconds, 12:59:39.3–12:59:48.6 UTC (§2).
 The design does not depend on the spacing.
 
-**Reading of «конденсировать».** This design reads it as "put into one
+**Reading of "condense" (item 4).** This design reads it as "put into one
 message": each message keeps its exact words. Rewriting or summarising would
 lose words the seat must act on (each of the six answers carried a 64-hex
 digest the seat had to quote back to publish the right report). Summarising is
@@ -54,11 +44,14 @@ that hand-over: when the seat's turn ends, the queue hands every eligible
 queued message to the seat as **one** user message, in the order they were
 sent, each under a one-line header, within the same 32,000-byte bound that
 every single message has today. Each message keeps its own operation, key and
-receipt, and each settles `delivered` with the same turn. Operator chat rides
-in the same combined message and never waits more than the remainder of the
-turn that is running. Delivery still goes to the current seat only, through
+receipt, and each settles `delivered` with the same turn. An operator chat
+rides in the first combined message handed over after the running turn, however
+long the ordinary backlog is (§5.5, §5.8). Delivery still goes to the current seat only, through
 the dispatch gate of the seat-single-channel design. Nothing changes in the
-runtime host or the journal schema. Codex seats already take mid-turn messages
+runtime host (`src/runtime-host/**`) or the journal schema. Three Viewer-side
+records gain an optional field: the operation-owner row (a batch id), the
+Claude delivery ledger entry (the part layout) and the engine echo event (the
+member ids); the receipt readers learn to follow them (§5.6). Codex seats already take mid-turn messages
 by steering and are left as they are. Worker and stage conversations are left
 as they are: in seven days of records, 6 of 3,600 of their sends waited behind
 another, against 122 of 1,883 on seats.
@@ -89,8 +82,8 @@ Times are UTC on 2026-10-16 unless stated.
   running turn, on Claude they wait in the Viewer's durable queue for idle.
 - **Claude busy sends** (`docs/verification/claude-busy-send-no-interrupt.md`,
   2026-10-15). After the operator saw their extra instructions arrive as a tool
-  rejection («Я просто пытаюсь отправить дополнительные инструкции… хотя я
-  просто докидываю контекст», seat chat 2026-10-15 13:38 UTC), the Claude
+  rejection and said they meant added context, not a cancellation (seat chat,
+  2026-10-15 13:38 UTC; paraphrased), the Claude
   broker declared `sendWaitsForRunningTurn`
   (`src/lib/runtime/claudeStreamBrokerHost.ts:650-654`). An operator chat sent
   to a busy Claude seat now waits for the turn and starts the next one. The
@@ -103,11 +96,10 @@ Times are UTC on 2026-10-16 unless stated.
   project's orchestrator resolves its target at dispatch to the current seat,
   with the verdict asked per effect in `drainTarget` and again at the engine
   call. §5.10 composes with it.
-- Searches: `search_transcripts` project-scoped and unscoped in English and
-  Russian ("coalesce queued messages into one turn seat busy batch",
-  "несколько сообщений одним сообщением пачкой оркестратору", "The user doesn't
-  want to proceed … interrupt operator message Claude busy"); `search_memory`
-  ("queued messages batch one turn orchestrator interrupt claude busy"). No
+- Searches: `search_transcripts` project-scoped and unscoped, in English and
+  in Russian (queued messages coalesced into one turn while a seat is busy; the
+  CLI's tool-rejection text after an interrupt); `search_memory` (queued
+  messages, batch, one turn, orchestrator, interrupt, Claude busy). No
   earlier design of coalescing exists. The hits were this lane, #2742's own
   work and the 2026-10-15 interrupt incident.
 
@@ -323,8 +315,9 @@ A queued effect joins the hand-over when all hold:
   each conversation's `activeSeatEpoch` and `revokedSeatEpoch`
   (`src/lib/orchestrator/seats.ts:216-221`) and is read with one `stat` and one
   map lookup (`:1433-1446`); a small accessor answers "active seat" from it,
-  never with a file read per pass. An index that is not ready joins nothing,
-  and delivery falls back to today's one-by-one;
+  never with a file read per pass, and the member's seat verdict of §5.10 is
+  `open`. An index that is not ready joins nothing, and delivery falls back to
+  today's one-by-one;
 - the host declares a new capability `coalescesQueuedInput` (only
   `ClaudeStreamBrokerHost`);
 - `kind: "send"` with policy `queue`, `steer-or-queue`, or `interrupt-active`
@@ -357,8 +350,9 @@ together), and a timer delays every lone operator message.
 ### 5.4 Composition, order and dedup
 
 - **Order.** Journal `eventSeq` order, which is the order of admission, the
-  order the drain already uses. Operator chat keeps its chronological place:
-  being in the same message is what keeps it from waiting (§5.8).
+  order the drain already uses, inside each combined message. Which members
+  share the first message when they do not all fit is decided by §5.5, where an
+  operator chat may precede older ordinary members that were held back.
 - **One frame, one part per message.** The combined input is one stream-json
   `user` frame. For each message, in order: a header text block, the message's
   images, the message's own text block. The text is each message's exact text.
@@ -368,6 +362,10 @@ together), and a timer delays every lone operator message.
   [Delegatus] 6 messages arrived while you were working. They follow in the order they were sent.
   [1/6 · from the operator · sent 12:59:39 UTC]
   ```
+
+  When older ordinary messages did not fit and are held for the next turn
+  (§5.5), the intro line ends with "N older messages are held for your next
+  turn."
 
   The author label comes from the admitted `origin`: the operator (a member
   acting as operator counts as the operator), an agent with its role, or a
@@ -386,57 +384,157 @@ together), and a timer delays every lone operator message.
      one is carried as its header plus "same text as 2/6". Both settle
      `delivered`.
 
-### 5.5 Size bound and overflow
+### 5.5 Size bound, overflow and priority
 
-- **Bound per combined message:** 32,000 UTF-8 bytes of text, headers
-  included; at most 16 images, 18 MiB raw. These are today's per-message
-  bounds (§4), so a combined message is never larger than a single message the
-  seat already accepts. Codex accepts 1,048,576 characters and the Claude CLI
-  passed 8,388,608; the bound is kept for the seat's context (case B) and the
-  broker's stdout frame.
-- **Past the bound:** members are packed in order, each combined message as
-  full as the bound allows. Filling in order this way gives the fewest
-  messages possible while keeping order. Members that do not fit stay `queued`
-  and lead the next combined message at the next turn end, with whatever
-  arrived meanwhile.
+- **Bound per combined message:** 32,000 UTF-8 bytes of text, headers and the
+  intro line included (the intro reserves 256 bytes of the budget); at most 16
+  images, 18 MiB raw. These are today's per-message bounds (§4), so a combined
+  message is never larger than a single message the seat already accepts. Codex
+  accepts 1,048,576 characters and the Claude CLI passed 8,388,608; the bound
+  is kept for the seat's context (case B) and the broker's stdout frame.
+- **Two classes.** A *priority* member is an operator chat: `kind: "send"`,
+  policy `interrupt-active`, origin the operator (the test the operator hold at
+  `structuredDeliveryQueue.ts:1970-1985` already applies; a member acting as
+  the operator counts). Every other member is *ordinary*, form answers and
+  Telegram replies included: they carry no instruction to jump the line, and the
+  operator's requirement ("Originating requirement", items 3 and 5) asks that
+  they arrive together, not in front.
+- **Which members go first.** The candidate sequence is the priority members in
+  admission order, followed by the ordinary members in admission order. A
+  combined message takes the **longest prefix of that sequence that fits the
+  bound**. It never skips a member to fit a later, smaller one. The members it
+  took are rendered inside the message in admission order, so the seat reads
+  them chronologically.
+- **The one exception to chronological order.** An operator chat can be read
+  before ordinary messages that were admitted earlier than it, when those do
+  not fit. The headers show every member's sent time, and the intro line says
+  how many older messages are held for the next turn. Ordinary members keep
+  their relative order across combined messages: no ordinary member passes
+  another ordinary member, and the exception applies to nothing but operator
+  chat. Each member's receipt settles with the combined message that carried it.
+- **Past the bound:** the members not taken form the next candidate sequence
+  the same way (priority first again) at the next turn end, together with
+  whatever arrived meanwhile. Each message is as full as the bound allows, in
+  sequence order, which gives the fewest messages possible without reordering.
+  An operator chat that arrives during the turn is therefore in the first
+  combined message handed over after that turn, however long the ordinary
+  backlog is: the backlog adds turns only to itself. If priority members alone
+  exceed the bound (several long chats), they fill the first message in order
+  and the rest lead the next; ordinary members wait behind them.
 - **A member too large to share** (its text plus a header over 32,000 bytes)
-  goes alone with no header, exactly as it would today.
+  goes alone with no header, exactly as it would today. It is placed by its
+  class like any other member.
+
+Overflow case, the one the build tests pin: three queued ordinary messages of
+15,000 bytes each, then a short operator chat of 80 bytes. First combined
+message: the chat and the first two ordinary messages (30,080 bytes of text
+plus three headers and the intro, under 32,000). Second, at the next turn end:
+the third ordinary message. With FIFO packing the chat would have been in the
+second message, one more model turn away, and an arbitrarily long backlog would
+add arbitrarily many turns.
 
 The observed bursts were 3,813 bytes (six answers), 7,522 bytes (the 12:24
 wave) and, with the two operator chats, the seat tick and the deputy note of
 13:00–13:09, 9,182 bytes. Each fits in one message.
 
-### 5.6 Per-message identity and receipts
+### 5.6 Per-message identity, receipts and confirmation authority
 
 The order of steps for one hand-over, inside the conversation's existing lane:
 
 1. Each member passes its own `queued → delivering` compare-and-set
-   (`structuredDeliveryQueue.ts:2054-2066`), with its own progress phase. A
-   member whose transition fails (settled, withdrawn, taken by another
-   executor) drops out before anything is written.
-2. The queue composes the batch from the members that transitioned: id
-   `inbox_<first 32 hex of sha256 of the member operation ids in order>`, text,
-   images, and a part layout (operation id, origin, text range, image count per
-   member).
-3. A new controller port `bindDeliveryBatch(batchId, members)` records the
-   membership on each member's delivery record through the registry's off-loop
-   writer, next to `bindDeliveryGeneration` (`structuredDeliveryQueue.ts:2040-2052`,
-   `src/lib/runtime/structuredDeliveryController.ts:930-935`). If it cannot be
-   written, every member goes back to `queued` and nothing is sent.
-4. One `host.send(batchEntry)`. The broker records the entry and its part
-   layout in its delivery ledger and writes one frame.
+   (`structuredDeliveryQueue.ts:2054-2066`), with its own progress phase, and
+   its own `authorizeDispatch(operationId, conversationId)`
+   (`structuredDeliveryController.ts:973-979`, which also guards owner-relay
+   first prompts). A member whose transition or authorization fails drops out
+   before anything is written, by the outcome a single send gets.
+2. The queue composes the batch from the members that passed: a pure function
+   `composeBatch(members)` returns the batch id, the text, the images, the
+   `contentDigest` of the combined content and a part layout (per member:
+   operation id, the member's own `contentDigest`, text range, image range).
+   The batch id is `inbox_` plus the first 32 hex of the sha256 of the ordered
+   `operationId:contentDigest` pairs, so the id commits to the membership and
+   to each member's content.
+3. A new controller port `bindDeliveryBatch(batchId, members)` writes
+   `batchId` and the generation on **every** member's operation-owner row in
+   one registry write through the off-loop writer, next to
+   `bindDeliveryGeneration` (`structuredDeliveryQueue.ts:2040-2052`,
+   `structuredDeliveryController.ts:930-935`). All rows or none. If it cannot
+   be written, every member goes back to `queued` and nothing is sent.
+4. One `host.send(batchEntry)`. `QueueEntry` gains an optional `parts` layout.
+   The broker's `recordQueued` writes the entry **with** its layout to the
+   delivery ledger before the frame is written, and `sameQueueEntry`
+   (`claudeStreamBrokerHost.ts:395-401`) compares the layout too, so a replay
+   of the id with a different membership is refused as a different payload
+   (`:154-160`). The ledger keeps one entry and one replay UUID for the batch;
+   the rule that one UUID is never allocated to separate entries
+   (`confirmDelivered`, `:166-174`) is untouched and not worked around.
 5. One receipt settles every member through the existing `settleSendOutcome`
-   (`structuredDeliveryQueue.ts:2215-2304`): `delivered` with the batch's turn
-   id. The Claude broker confirms the batch by its replay echo, whose content
-   digest is the batch's (`claudeStreamBrokerHost.ts:535-569` joins text
-   blocks and collects images in order, so the per-part layout does not change
-   the digest).
+   (`structuredDeliveryQueue.ts:2215-2304`): `delivered`, with the batch id as
+   turn id. The Claude broker confirms the batch by its replay echo, whose
+   content digest is the batch's (`claudeStreamBrokerHost.ts:535-569` joins
+   text blocks and collects images in order, so the per-part layout does not
+   change the digest). The assistant turn is named after the batch entry, so
+   the delivery disclosure, which matches a receipt to a turn by either id
+   (`src/components/runtime/deliveryState.ts:73`), attaches every member to the
+   one turn.
 
 This differs from #2742's native batching. There the CLI combines several
 inputs it was given separately, and the broker cannot tell which echo belongs
 to which input. Here Delegatus writes one input, the CLI echoes that input,
-and the membership was recorded before the write. No text match ever confirms
-a member.
+and the membership was recorded in two places before the write.
+
+#### Who may call a member delivered: the membership and digest authority
+
+`confirmedSend(file, operationId)` (`src/lib/runtime/confirmedSend.ts:8-93`)
+answers for one operation by finding the ledger entry whose id is the
+operation id and whose digest is the owner row's `contentDigest` (`:35-36`,
+`:44-45`). A batch member has no ledger entry of its own, so today it would
+answer `false` even with the batch confirmed. The design changes the reader,
+not the ledger:
+
+- **Two records, and a recomputation, must agree.** For an owner row with a
+  `batchId`, `confirmedSend` (a) loads the ledger state whose entry id is that
+  `batchId` in the owner's target generation; (b) requires its `parts` to list
+  this operation id with a part digest equal to the owner row's
+  `contentDigest`; (c) recomputes the batch id from the ordered
+  `operationId:contentDigest` pairs of those parts and the entry's
+  `contentDigest` from its recorded content, and requires both to equal the
+  recorded values. Any mismatch, a missing `parts`, a `batchId` on a Codex
+  conversation or a ledger without the batch entry answers `false`. The owner
+  row alone proves nothing; the ledger alone proves nothing. No text, time or
+  count match ever confirms a member.
+- **Then the batch is judged by the evidence a single send gets.** The body of
+  `confirmedSend` after the lookup moves into one helper that takes
+  `(generation, entryId, entryDigest, consumeCanonicalTurn)`: a durable
+  operation-bound echo (`:39`, `:46`), or a canonical transcript user turn allocated
+  by digest (`:47-91`). A member passes `(batchId, batchDigest)`, a single send
+  passes `(operationId, owner.contentDigest)`. Members never compete for the
+  UUID, because only the batch entry holds one; the second member's query finds
+  the allocation already made and is answered from it.
+- **Every consumer goes through that one function**, so none keeps a private
+  copy of the rule. The build plan adds a case for each:
+
+  | Consumer | Place | Question |
+  |---|---|---|
+  | Receipt query (`message_receipt`, resolution of a send) | `sendSettlement.ts:866` | is this in-flight or uncertain member delivered? |
+  | Read-only receipt projection | `sendSettlement.ts:1125` | same, without writing |
+  | Startup and late terminal reconciliation | `structuredDeliveryController.ts:483` | unsettled `delivering` or uncertain members after a restart |
+  | Original-key reconciliation (`confirmedDelivery` port) | `structuredDeliveryController.ts:890` | a re-sent key whose first attempt may have landed |
+  | Explicit retry | `http.ts:845` | do not resend a member the batch already delivered |
+
+- **Crash between the batch echo and the members' settlements.** The ledger
+  holds the batch entry, its parts and the durable operation-bound echo; the
+  registry holds `batchId` on every member row (step 3 precedes step 4). After
+  a restart each member's receipt query, and the startup pass, call
+  `confirmedSend` and obtain `delivered` for each member from the batch
+  evidence, with no write to the engine. A member that had already been marked
+  `uncertain` is not a fence against this: the receipt path still asks for
+  confirmation of an in-flight or duplicate-risk send
+  (`sendSettlement.ts:859-866`).
+- **Crash before the batch echo.** The batch entry may or may not have reached
+  the engine and has no echo, so `confirmedSend` answers `false` for every
+  member; they settle `uncertain` together (§5.7) and are never resent without
+  the existing verify-first rule.
 
 Each member keeps its operation id, idempotency key and receipt:
 `message_receipt` answers `delivered` for each, the form-answer worker sees
@@ -444,14 +542,35 @@ Each member keeps its operation id, idempotency key and receipt:
 delivered, and the seat tick sees its wake delivered. Delivery progress shows
 "handed over in one message with N others" on each member.
 
+#### Per-member echo timestamps
+
+The broker emits one `deliveryEcho` for the batch, naming the batch id
+(`claudeStreamBrokerHost.ts:1538`, typed at `engineHost.ts:103`). The controller stamps
+`engineEchoAt` only on a progress record with exactly that id
+(`structuredDeliveryController.ts:1744-1748`), and the batch has none. The
+echo therefore carries the membership: `deliveryEcho` gains
+`memberOperationIds`, copied from the entry's `parts` the broker already holds
+in memory when it handles the echo. In the controller loop the observation is
+fanned out at observation time: for each member id whose progress record
+belongs to the same conversation, `progressStore.timing(memberId,
+{ engineEchoAt: echo.at })`. `timing` writes each field once
+(`deliveryProgress.ts:345-357`), so an echo observed twice stamps nothing
+twice. Every member keeps its own `ingressAt` and receives the one real shared
+`engineEchoAt`. A replayed history supplies no arrival time
+(`deliveryProgress.ts:88-90`), so as for a single send an echo first seen after
+a restart leaves `engineEchoAt` empty; the measurement excludes such members
+and reports how many (§8).
+
 ### 5.7 Failure and recovery
 
 | Outcome of the one host call | Every member |
 |---|---|
-| refused before any write (`stale-turn`, `dead-host`, a refusal from `authorize`) | back to `queued`, as for a single send today (`structuredDeliveryQueue.ts:2277-2292`) |
-| refused for a reason that fails a single send | that same terminal state |
+| refused before any write for a reason that waits (`stale-turn`, `dead-host`), or the seat verdict `unknown` at the engine call (`StructuredDispatchDeferredError`) | back to `queued`, as for a single send today (`structuredDeliveryQueue.ts:2277-2292`); the next pass recomposes, with a new batch id if the membership changed |
+| the seat was revoked before the write (the engine-call check of lane 95a3552c throws `StructuredSendRefusedError` with `SEND_SEAT_REVOKED_REASON`) | **`failed`** with that reason, proven unexecuted; not `queued`. Each member's own class then decides what happens next (§5.10) |
+| one member's own `authorizeDispatch` refuses | that member settles as a single send's refusal would; the others go back to `queued` and are recomposed |
+| refused for another reason that fails a single send | that same terminal state |
 | thrown after the write, outcome unknown | `uncertain` through `terminalizeUnverified` (`:2271`); absorbing, never resent |
-| Viewer restart while members are `delivering` | the existing reconciliation of `delivering` rows, keyed by the batch binding: the broker ledger shows the batch confirmed → all `delivered`; otherwise all `uncertain` |
+| Viewer restart while members are `delivering` | the confirmation authority of §5.6: the batch confirmed by the ledger → each member `delivered`; no batch echo → all `uncertain` |
 
 The blast radius of an unknown outcome grows from one message to the batch.
 The same evidence that settles one message settles the batch, and an
@@ -459,16 +578,18 @@ The same evidence that settles one message settles the batch, and an
 
 ### 5.8 Priority: operator chat
 
-An operator chat that arrives during a turn joins the next combined message,
-at its chronological place, and is read when the running turn ends. The worst
-wait is the remainder of one turn; it never waits behind other queued
-messages, because they all go in the same turn. On a coalescing host the hold
-of `structuredDeliveryQueue.ts:1970-1985` is no longer needed and is skipped:
-it exists so that an operator replacement leads, and here nothing is replaced
-and nobody is behind anybody.
+An operator chat (the priority class of §5.5) that arrives during a turn is
+placed in the first combined message handed over after that turn ends. The
+worst wait is the remainder of one turn, whatever the ordinary backlog: the
+packing of §5.5 puts it ahead of any ordinary member that would not fit with
+it, and ordinary members keep their order and their receipts. This replaces the
+hold of `structuredDeliveryQueue.ts:1970-1985` on a coalescing host. That hold
+exists so that an operator replacement leads; here the chat is carried in the
+same message as the members that fit, so the hold is skipped, and the packing
+supplies its purpose.
 
-Interrupting the turn is excluded by the operator's own words of 2026-10-15
-(their extra instructions were read as a cancellation). The explicit Stop
+Interrupting the turn is excluded by the operator's statement of 2026-10-15
+that added instructions are context, not a cancellation. The explicit Stop
 control is unchanged.
 
 ### 5.9 Mid-turn steering
@@ -488,16 +609,50 @@ control is unchanged.
 
 ### 5.10 The current seat only
 
-Batching composes with the seat-single-channel design (lane 95a3552c):
+Batching composes with the seat-single-channel design (lane 95a3552c, its
+`seatChannel.ts` and dispatch gate at branch head `51f8adaa1`). That design
+asks the seat verdict per effect at the drain
+(`structuredDeliveryQueue.ts` `drainTarget`, where `revoked` fails the effect
+with `SEND_SEAT_REVOKED_REASON` and `unknown` holds it) and again in the
+engine-call `authorize()`, which throws `StructuredSendRefusedError` for a
+revoked seat. Its rotation pass then applies a **per-operation class**
+(`seatDeliveryDisposition`, by client-key namespace). The batch does not
+replace those rules with its own; it keeps each member's key, so each member
+keeps its class:
 
-- the seat verdict is asked per member at the drain, before its `delivering`
-  transition; a member for a revoked seat never joins and is withdrawn and
-  redirected by that design's rotation pass;
-- `authorize()` runs once at the engine call for the batch; a revocation
-  landing between composition and the write sends every member back to
-  `queued`, and the rotation pass then moves them;
-- messages the rotation pass redirects to the new seat are new operations
-  queued at that seat, and join its next combined message.
+| Member | Class | When the batch is refused for a revoked seat |
+|---|---|---|
+| form answer (`prototype-decision:*`), Telegram reply, voice directive, spawn notice | owner follows | `failed` with the reason; the rotation pass records `owner`; the owner sees the failure and sends once to the current seat |
+| seat-tick wake, board report, auto-rotation nudge, deputy note, interruption continuation, rotation mandate | epoch-bound | `failed` with the reason; the pass drops it and the failed receipt is the record; the successor has its own wake |
+| operator chat, relay, `send_message`, `bridge_directive` | channel | `failed` with the reason; the pass re-admits it once to the current seat under `seat-redirect:<hash of the operation id>` with the redirect note, and it joins that seat's next combined message |
+
+- **At the drain:** the verdict is asked per member before its `delivering`
+  transition. A revoked seat fails the member with the reason and it never
+  joins; `unknown` blocks the rest of the conversation's pass
+  (`evidence-unreadable`), so nothing is composed from a half-known seat.
+- **At the engine call:** `authorize()` runs once for the batch, immediately
+  before the frame is written. A revocation that landed after composition
+  throws; the host writes nothing; every member settles `failed` with
+  `SEND_SEAT_REVOKED_REASON` (§5.7). The old seat receives no byte.
+- **Concurrent rotation.** Members the composer has already moved to
+  `delivering` are "in an executor's hands": the rotation pass's withdrawal
+  answers `too-late` for them and re-reads them once they settle. If the
+  engine-call check refused, each carries the reason and the pass applies its
+  class as above; if the write had already happened, they are `delivered` to the
+  seat that was current when dispatch began, and the pass records that and
+  re-sends nothing. Members still `queued` when the pass runs are withdrawn
+  and classified by the pass as for any message, and the next composition never
+  sees them.
+- **Redirected messages** are new operations queued at the new seat and join
+  its next combined message. A redirected message begins with the redirect
+  note, not with the header pattern of §5.4, so it is not mistaken for a forged
+  header.
+
+The test of the combination (§8, test 8) puts a decision, an operator chat and
+a seat-tick wake in one candidate batch and revokes the seat before the write.
+Required result: no write to the old seat; the chat re-admitted exactly once
+to the current seat; the decision failed for its owner, who sends it once; the
+wake failed and dropped with its receipt.
 
 The build of this design lands after lane 95a3552c's build, because both edit
 the dispatch region of `drainTarget` (§8, step 0).
@@ -525,6 +680,8 @@ No new control, label or panel.
 The hand-over runs inside the conversation's existing delivery lane and adds
 one composition (linear in the members) and one registry write per combined
 message, through the off-loop writer. The eligibility check is a map lookup.
+A member's receipt query reads the same ledger file a single send's does, once;
+the batch lookup is one more `find` in the loaded states.
 Per project rules, any new asynchronous step is labelled for the loop monitor
 (`delivery.inbox-batch`). No speed claim is made.
 
@@ -570,6 +727,11 @@ added instructions not to be read as a cancellation.
 - a) Orchestrators only *(recommended)*
 - b) Every agent, workers and stages included
 
+**Q4. When the backlog is longer than one message, where does an operator chat go?**
+- a) In the first message, ahead of older ordinary messages that do not fit; the
+  ordinary messages keep their order in the next messages *(recommended)*
+- b) Strictly in order of arrival (a chat can then be several turns away)
+
 The size limit needs no decision: §4 gives the numbers, and §5.5 keeps today's
 per-message bound.
 
@@ -607,45 +769,99 @@ closed port.
    user turns in total, two `result`s, one replay echo with the six parts, six
    receipts `delivered`, zero `interrupt` control requests. **Red on main:**
    seven turns.
-3. **Bounds:** three 15,000-byte members → two combined messages, the third
-   waiting for the next turn end; 17 one-image members → 16 and 1; one
-   31,990-byte member goes alone without a header.
-4. **Failures:** a refusal before the write → all `queued`; a throw after the
-   write → all `uncertain` and no second write; one member's `delivering`
-   compare-and-set lost → excluded; `bindDeliveryBatch` unwritable → nothing
-   written, all `queued`.
-5. **Restart:** members `delivering` with a binding; a ledger with the batch
-   confirmed → all `delivered`; without → all `uncertain`.
+3. **Bounds and priority:**
+   - *Overflow with an operator chat* (the case that fails FIFO packing): three
+     queued ordinary 15,000-byte members, then an 80-byte operator chat. Expect
+     two combined messages, `[chat, o1, o2]` then `[o3]`, the chat in the first.
+     Red on a FIFO packer: `[o1, o2]` then `[o3, chat]`.
+   - A 40-member ordinary backlog of 15,000 bytes each, then a chat: the chat is
+     in the first message; across all messages the ordinary members keep their
+     admission order; every member's receipt is `delivered` with the turn id of
+     the message that carried it.
+   - Two 20,000-byte chats plus ordinary members: the first message holds one
+     chat and no ordinary member; the second chat leads the second message.
+   - 17 one-image members → 16 and 1; one 31,990-byte member goes alone
+     without a header.
+4. **Failures:** a refusal that waits (`stale-turn`, `dead-host`) → all `queued`;
+   a throw after the write → all `uncertain` and no second write; one member's
+   `delivering` compare-and-set lost → excluded; one member's
+   `authorizeDispatch` refusing → that member settles, the rest recompose under
+   a new batch id; `bindDeliveryBatch` unwritable → nothing written, all
+   `queued`.
+5. **Confirmation, restart and every receipt reader:** a batch of three
+   members, the broker's operation-bound echo written to the ledger, then the
+   process killed before any member settles. After a real restart, query each
+   original member through `message_receipt` (`sendSettlement.ts:866`), the
+   read-only projection (`:1125`), the startup and late reconciliation
+   (`structuredDeliveryController.ts:483`), the original-key reconciliation
+   (`:890`) and the explicit retry (`http.ts:845`): each answers `delivered`
+   from the batch evidence, and no host write, ledger append or resend happens.
+   Red on main: `confirmedSend` returns `false` for every member while the
+   batch is `accepted`. Negative cases, all `false`: an owner row without a
+   `batchId`; a ledger batch whose parts omit the member; a part digest that
+   differs from the owner's `contentDigest`; a batch id that does not
+   recompute from its parts; a batch entry without an echo (members settle
+   `uncertain`); a `batchId` on a Codex conversation; two members with
+   identical text, where only the binding tells them apart.
 6. **Dedup:** two members with the same origin and digest → the second carried
    as a reference, both `delivered`.
 7. **Scope:** a non-seat conversation with three queued sends → three turns,
    as today; a Codex seat → steering unchanged; an unknown seat index →
    one-by-one.
-8. **Current seat:** with lane 95a3552c's gate, a revocation between
-   composition and the write → all `queued`, nothing written.
+8. **Current seat:** with lane 95a3552c's gate, one candidate batch holding a
+   decision (`prototype-decision:*`), an operator chat and a seat-tick wake, and
+   a revocation between composition and the write. Expect no write to the old
+   seat; every member `failed` with `SEND_SEAT_REVOKED_REASON`; after the
+   rotation pass, the chat re-admitted exactly once to the current seat, the
+   decision left to its owner (one send by the owner), and the wake dropped
+   with its failed receipt as the record. Repeat with the revocation landing
+   while the members are `delivering` (the pass answers `too-late`, then
+   classifies them after they settle), and with a verdict `unknown` at the
+   engine call (all `queued`).
 9. **Feed:** `src/lib/runtime/agentRecordAuthors.test.ts` and the provenance
    tests return one author per part; the parser test splits the row.
+10. **Echo timestamps:** a batch of N members with distinct `ingressAt`: after
+    the echo, every member has its own `ingressAt` and the one shared
+    `engineEchoAt`, and the latency query returns N values. The same echo
+    observed twice stamps nothing twice. An echo first seen after a restart
+    leaves `engineEchoAt` empty, and the query reports those members as
+    excluded rather than imputing a time.
 
 ### Step 2. The composer
 
-New `src/lib/runtime/inboxBatch.ts`, pure: eligibility of a run, ordered
-packing within the bounds, headers and their escaping, dedup, batch id, part
-layout. Unit tests beside it.
+New `src/lib/runtime/inboxBatch.ts`, pure: eligibility of a run, the class of
+a member, the priority-first candidate sequence and its longest-fitting-prefix
+packing (§5.5), headers and their escaping, dedup, the batch id and digest, the
+part layout, and `verifyBatchMembership` (the recomputation of §5.6, shared with
+the receipt reader). Unit tests beside it.
 
 ### Step 3. The host
 
-`src/lib/runtime/engineHost.ts`: the `coalescesQueuedInput` capability and an
-optional `parts` layout on `QueueEntry`. `src/lib/runtime/claudeStreamBrokerHost.ts`:
-write the blocks per part, record the layout in the ledger, confirm by the
-batch's echo as today.
+`src/lib/runtime/engineHost.ts`: the `coalescesQueuedInput` capability, an
+optional `parts` layout on `QueueEntry` and `memberOperationIds` on
+`deliveryEcho` (`:103`). `src/lib/runtime/claudeStreamBrokerHost.ts`: write the
+blocks per part, record the layout in the ledger with `recordQueued`, compare it
+in `sameQueueEntry`, confirm by the batch's echo as today and put the member
+ids on the echo event.
+
+### Step 3b. The receipt readers
+
+`src/lib/runtime/confirmedSend.ts`: follow an owner row's `batchId` to the
+ledger's batch entry, verify membership and digests, and judge the batch by the
+existing evidence ladder (§5.6); the five consumers keep calling the one
+function. `src/lib/agent/registry.ts`: the optional `batchId` on the
+operation-owner row and the all-or-none writer used by `bindDeliveryBatch`.
+Tests 5 and 10 above are written before this step and are red until it.
 
 ### Step 4. The queue
 
 `src/lib/runtime/structuredDeliveryQueue.ts`, `drainTarget`: accumulate members
 that passed their checks and transitions, flush at the first ineligible effect
-or the bound, settle every member from the one receipt; skip the operator hold
-of `:1970-1985` on a coalescing host. `structuredDeliveryController.ts`: the
-seat predicate and `bindDeliveryBatch` port; the registry writer beside
+or the bound, settle every member from the one receipt, each member by its own class when the
+seat was revoked (§5.7, §5.10); skip the operator hold of `:1970-1985` on a
+coalescing host. `structuredDeliveryController.ts`: the seat predicate, the
+`bindDeliveryBatch` port, and the echo fan-out in the event loop at `:1744-1748`
+(`timing` for each member id); the registry writer beside
 `bindDeliveryOperationGenerationOffLoop` in `src/lib/agent/registry.ts`.
 Delivery progress: the "handed over with N others" detail.
 
@@ -675,15 +891,21 @@ read-only query, run the same way before and after.
   a seat (§2.4's definition), count the distinct receipt turn ids. Main on
   2026-10-16: the ten inputs read 13:03:07–13:09:17 carried ten turn ids; the
   12:24 wave, seven inputs, seven sends. Acceptance: inputs that wait through one turn
-  share one turn id per bound-sized message.
+  share one turn id per bound-sized message, and an operator chat queued during
+  a turn carries the turn id of the first message handed over after it, with an
+  ordinary backlog of any length.
 - **Latency from send to seat read.** Ingress (delivery progress `ingressAt`)
-  to engine echo (`engineEchoAt`). Main: §2.1 (7 min 15.6 s to 8 min 42.9 s,
-  of which about 2 min 50 s was the Viewer stall) and §2.4 (p50 123 s, p90
-  402 s, max 592 s for 122 sends over seven days). Acceptance: within one
-  combined message, the last member's latency exceeds the first's only by
+  to engine echo (`engineEchoAt`), per member: its own `ingressAt` and the echo
+  that its combined message shares (§5.6, per-member echo timestamps), so the
+  query returns N latencies for N members. Main: §2.1 (7 min 15.6 s to 8 min
+  42.9 s, of which about 2 min 50 s was the Viewer stall) and §2.4 (p50 123 s,
+  p90 402 s, max 592 s for 122 sends over seven days). Acceptance: within one
+  combined message the echo is the same, so a member that arrived later has the
+  shorter latency, and the first member's latency exceeds the last's by exactly
   their difference in ingress time; the seven-day p90 is reported against
   402 s, with the deploy, the load (seat count and sends per day) and the
-  window stated beside it.
+  window stated beside it, and the number of members excluded for lack of an
+  echo timestamp.
 - **Replay estimate (inferred from the 2026-10-16 records).** On the same
   timeline with the stall unchanged, the first pass that could deliver
   (13:03:07) would have handed over the 13:00:01 chat and the six answers as
@@ -717,15 +939,15 @@ read-only query, run the same way before and after.
 
 ## 9. Checked against the requirement
 
-| The operator's words | Where the design meets them |
+| The operator's requirement (numbered as in "Originating requirement") | Where the design meets them |
 |---|---|
-| «я отвечал… очень быстро. А ты их получил очень поздно… только после того, как оркестратор ответил в самом конце каждый раз» | §3.2 names the cause; §5.3 hands over everything queued at the first turn end; §8 measures it |
-| «общий буфер сообщения, который наполняется» | §5.1: the seat's queued journal operations, with everything new appended in order |
-| «у которого есть какой-то определённый размер, или таймер» | §5.5 (size: 32,000 bytes, fewest messages past it); §5.3 and Q1 (timer) |
-| «если… до оркестратора это сообщение ещё не дошло… мы можем дополнить её другими сообщениями» | §5.2: every message still queued joins the next hand-over |
-| «всё это… конденсировать в одном сообщении» | §5.4: one user message, each message's exact words under its own header |
-| «там же есть лимит какой-то, его нужно проверить» | §4: verified numbers for Delegatus, the Claude CLI and API, and Codex |
-| «в тот момент, когда ему наконец-то дошло… ему сразу всё вместе» | §5.3 and §5.6: one engine call, one turn, every receipt settled together |
+| 1. Answers given very quickly were read very late, each only after the seat's reply at the end of a turn | §3.2 names the cause; §5.3 hands over everything queued at the first turn end; §8 measures it |
+| 2. One shared buffer that fills up | §5.1: the seat's queued journal operations, with everything new appended in order |
+| 2. Bounded by a size or a timer | §5.5 (size: 32,000 bytes, fewest messages past it); §5.3 and Q1 (timer) |
+| 3. A message that has not reached the orchestrator can be joined by others | §5.2: every message still queued joins the next hand-over |
+| 4. Condensed into one message | §5.4: one user message, each message's exact words under its own header |
+| 4. The limit has to be checked | §4: verified numbers for Delegatus, the Claude CLI and API, and Codex |
+| 5. At the moment the orchestrator can take input, everything arrives together | §5.3, §5.6 and §5.8: one engine call, one turn, every receipt settled together; an operator chat is in the first one |
 
 ## 10. Notes
 
