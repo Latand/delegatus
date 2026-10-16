@@ -1983,3 +1983,93 @@ test("a recovery helper that cannot take its plan removes it", async () => {
     expect(existsSync(planFile)).toBe(false);
   }
 });
+
+
+for (const failurePhase of ["none", "files", "page", "chunk", "output", "journal"] as const) {
+  test(`relaunch readiness persists phases across exec and rollback, failure=${failurePhase}`, async () => {
+    const failed = failurePhase !== "none";
+    const pageFails = failurePhase === "page" || failurePhase === "output" || failurePhase === "journal";
+    const fixture = install();
+    const running = await start(fixture);
+    const before = await until(() => { const record = readRecord(fixture.state); return record.web.state === "healthy" ? record : null; });
+    const next = release(fixture, "readiness-trial");
+    const supervisor = path.join(next.dir, "bin", "self-update-supervisor.mjs");
+    writeFileSync(supervisor, readFileSync(supervisor, "utf8")
+      .replace("timeoutMs = 90_000, attemptTimeoutMs = 5_000", "timeoutMs = 1_000, attemptTimeoutMs = 200")
+      .replace("timeoutMs = 5_000, headers = {}", "timeoutMs = 200, headers = {}"));
+    const launcher = path.join(next.dir, "bin", "cli.mjs");
+    writeFileSync(launcher, readFileSync(launcher, "utf8").replace("const RESTART_READINESS_TIMEOUT_MS = 90_000", "const RESTART_READINESS_TIMEOUT_MS = 1_000"));
+    writeFileSync(path.join(next.dir, "node_modules", ".bin", "next"), `
+      console.log("discarded startup prefix " + "x".repeat(70_000));
+      console.log("▲ Next.js fixture startup line");
+      console.error("candidate startup diagnostic");
+      let pages = 0;
+      const server = Bun.serve({ hostname: "127.0.0.1", port: Number(process.env.PORT ?? process.argv[process.argv.indexOf("--port") + 1]),
+        fetch(request) {
+          const pathname = new URL(request.url).pathname;
+          if (pathname === "/api/files" && ${failurePhase === "files"}) return new Promise(() => {});
+          if (pathname.startsWith("/_next/") && ${failurePhase === "chunk"}) return new Promise(() => {});
+          if (pathname === "/") {
+            pages += 1;
+            if (${pageFails}) return new Promise(() => {});
+            if (${!failed} && pages === 1) return new Promise(resolve => setTimeout(() => resolve(new Response("late page")), 600));
+            return new Response('<script src="/_next/static/chunks/app.js"></script>');
+          }
+          return new Response("ready");
+        }
+      });
+      process.on("SIGTERM", () => { server.stop(true); process.exit(0); });
+    `);
+    const outputFile = path.join(path.dirname(before.requestFile), path.basename(before.requestFile).replace("request-", "startup-output-"));
+    const installId = path.basename(before.requestFile).slice("request-".length, -".json".length);
+    const evidenceFile = path.join(path.dirname(before.requestFile), `readiness-${installId}.json`);
+    if (failurePhase === "output") mkdirSync(outputFile);
+    if (failurePhase === "journal") { rmSync(evidenceFile, { force: true }); mkdirSync(evidenceFile); }
+    writeFileSync(before.releasePointer, JSON.stringify({ ...next, checkoutHead: fixture.first }));
+    writeFileSync(before.requestFile, JSON.stringify({ requestId: "readiness-trial", role: "relaunch", target: next.sha, rollbackPointer: null }));
+    const resultFile = `${before.requestFile}.result.json`;
+    const result = await until(() => existsSync(resultFile) ? JSON.parse(readFileSync(resultFile, "utf8")) : null, 15_000);
+    expect(result.state).toBe(failed ? "rolled-back" : "done");
+    let runs: Array<{ revision: string; status: string; elapsedMs: number; phases: Record<string, { attempts: number; elapsedMs: number; status: string }> }> = [];
+    if (failurePhase === "journal") {
+      expect(readRecord(fixture.state).web).toMatchObject({ state: "healthy", revision: fixture.first.slice(0, 7) });
+      expect(statSync(evidenceFile).isDirectory()).toBe(true);
+    } else {
+      runs = JSON.parse(readFileSync(evidenceFile, "utf8")).runs;
+      const candidate = runs.find((run: { revision: string }) => run.revision === next.sha)!;
+      expect(candidate.status).toBe(failed ? "failed" : "ready");
+      expect(candidate.phases.files.attempts).toBeGreaterThanOrEqual(1);
+      expect(candidate.phases.files.status).toBe(failurePhase === "files" ? "failed" : "ready");
+      if (failurePhase === "files") {
+        expect(candidate.phases.page.attempts).toBe(0);
+        expect(candidate.phases.page.status).toBe("pending");
+      } else {
+        expect(candidate.phases.page.attempts).toBeGreaterThanOrEqual(2);
+        expect(candidate.phases.page.status).toBe(pageFails ? "failed" : "ready");
+        expect(candidate.phases.page.elapsedMs).toBeGreaterThanOrEqual(200);
+      }
+      expect(candidate.phases.chunk.status).toBe(failurePhase === "none" ? "ready" : failurePhase === "chunk" ? "failed" : "pending");
+      expect(statSync(evidenceFile).mode & 0o777).toBe(0o600);
+    }
+    if (failed) {
+      if (failurePhase !== "journal") {
+        expect(runs.at(-1)!.revision).toBe(fixture.first);
+        expect(runs.at(-1)!.status).toBe("ready");
+      }
+      if (failurePhase === "output") {
+        expect(running.output()).toContain("could not persist candidate startup output; continuing rollback");
+      } else if (failurePhase !== "journal") {
+        const output = JSON.parse(readFileSync(outputFile, "utf8"));
+        expect(output.revision).toBe(next.sha);
+        expect(output.stderr).toContain("candidate startup diagnostic");
+        expect(output.stdout).toContain("▲ Next.js fixture startup line");
+        expect(output.stdout).not.toContain("discarded startup prefix");
+        expect(output.stdout.length).toBeLessThanOrEqual(32 * 1024);
+        expect(output.stderr.length).toBeLessThanOrEqual(32 * 1024);
+        expect(statSync(outputFile).mode & 0o777).toBe(0o600);
+      }
+    }
+    expect(readRecord(fixture.state).launcher.pid).toBe(before.launcher.pid);
+    expect(running.child.exitCode).toBeNull();
+  }, 25_000);
+}

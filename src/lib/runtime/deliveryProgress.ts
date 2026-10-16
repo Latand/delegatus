@@ -1,3 +1,4 @@
+import { observeSqlite, parseSqliteJson } from "@/lib/sqliteReadAttribution";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -153,9 +154,9 @@ function withPhase(current: Pick<DeliveryProgressRecord, "phaseHistory" | "phase
   return { phaseHistory: history.slice(dropped), phaseHistoryDropped: (current?.phaseHistoryDropped ?? 0) + dropped };
 }
 
-function parseRecord(json: string): DeliveryProgressRecord | null {
+function parseRecord(json: string, db: BunDatabase): DeliveryProgressRecord | null {
   try {
-    const value = JSON.parse(json) as DeliveryProgressRecord;
+    const value = parseSqliteJson(json, db) as DeliveryProgressRecord;
     if (!value || typeof value.operationId !== "string" || !isDeliveryWaitReason(value.waitReason)) return null;
     return value;
   } catch {
@@ -373,7 +374,7 @@ export class DeliveryProgressStore implements DeliveryProgressSink {
         "SELECT record_json FROM delivery_progress WHERE operation_id = ?",
       ).get(operationId);
       if (!row) return null;
-      const record = parseRecord(row.record_json);
+      const record = parseRecord(row.record_json, this.connection());
       if (!record) return undefined;
       this.records.set(operationId, record);
       this.trimMemory();
@@ -485,7 +486,7 @@ export class DeliveryProgressStore implements DeliveryProgressSink {
                 THEN json_extract(record_json, '$.terminal.state') END = 'uncertain'
           `).all(this.now() - DELIVERY_PROGRESS_TERMINAL_RETENTION_MS);
           for (const row of rows) {
-            const record = parseRecord(row.record_json);
+            const record = parseRecord(row.record_json, this.connection());
             if (record) uncertain.set(record.operationId, record);
           }
         }
@@ -605,7 +606,7 @@ export class DeliveryProgressStore implements DeliveryProgressSink {
     if (this.db) return this.db;
     fs.mkdirSync(path.dirname(this.filename!), { recursive: true, mode: 0o700 });
     const Database = sqliteDatabase();
-    const db = new Database(this.filename!, { create: true, strict: true });
+    const db = observeSqlite(new Database(this.filename!, { create: true, strict: true }), "delivery-progress");
     try {
       db.exec("PRAGMA busy_timeout = 0; PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;");
       db.exec(SCHEMA);
@@ -660,7 +661,7 @@ export class DeliveryProgressStore implements DeliveryProgressSink {
         )
       `).all(this.now() - DELIVERY_PROGRESS_TERMINAL_RETENTION_MS, TERMINAL_ROW_LIMIT + OPEN_ROW_LIMIT);
       for (const row of rows) {
-        const record = parseRecord(row.record_json);
+        const record = parseRecord(row.record_json, this.connection());
         if (record && !this.records.has(record.operationId)) this.records.set(record.operationId, record);
       }
       this.trimMemory();
@@ -745,12 +746,12 @@ export function readDeliveryProgress(
     const filename = file ?? deliveryProgressPath();
     if (!fs.existsSync(filename)) return found;
     const Database = sqliteDatabase();
-    db = new Database(filename, { readonly: true, strict: true });
+    db = observeSqlite(new Database(filename, { readonly: true, strict: true }), "delivery-progress");
     db.exec("PRAGMA busy_timeout = 0");
     const read = db.query<{ record_json: string }, [string]>("SELECT record_json FROM delivery_progress WHERE operation_id = ?");
     for (const operationId of operationIds.slice(0, 200)) {
       const row = read.get(operationId);
-      const record = row ? parseRecord(row.record_json) : null;
+      const record = row ? parseRecord(row.record_json, db) : null;
       if (record) found.set(operationId, record);
     }
   } catch {

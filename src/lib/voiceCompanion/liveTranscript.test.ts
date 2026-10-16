@@ -1,6 +1,26 @@
 import { expect, test } from "bun:test";
 import { LiveTranscript } from "./liveTranscript";
 
+test("the privacy cut follows fragment arrival and drops a straddling voice segment whole", () => {
+  const transcript = new LiveTranscript();
+  transcript.fragment("companion", "Safe earlier answer.", 0, 100);
+  transcript.fragment("companion", "Before the read;", 2_000, 2_100);
+  const mark = transcript.arrivalCount();
+  transcript.fragment("operator", "Read the group.", 2_200, 2_300);
+  // Provider time can run backwards; arrival still puts this after the mark.
+  transcript.fragment("companion", " private straddling fragment.", 2_050, 2_100);
+  transcript.fragment("companion", "Private later answer.", 5_000, 5_100);
+  transcript.fragment("operator", "Send my new request.", 6_000, 6_100);
+  expect(transcript.record({ withholdCompanionFrom: mark })).toEqual([
+    { speaker: "companion", text: "Safe earlier answer." },
+    { speaker: "operator", text: "Read the group." },
+    { speaker: "operator", text: "Send my new request." },
+  ]);
+  expect(transcript.record().filter(row => row.speaker === "companion").map(row => row.text)).toEqual([
+    "Safe earlier answer.", "Before the read; private straddling fragment.", "Private later answer.",
+  ]);
+});
+
 test("the browser playback transcript bundles without server state or Node imports", async () => {
   const result = await Bun.build({ entrypoints: ["src/lib/voiceCompanion/liveTranscript.ts"], target: "browser" });
   expect(result.success).toBe(true);

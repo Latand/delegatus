@@ -23,6 +23,8 @@ const TOKEN_TAIL = TOKEN.slice(TOKEN.indexOf(":") + 1);
 /* A capability-shaped value for an invented conversation. */
 const AGENT_CAPABILITY = "A".repeat(43);
 const AGENT = { [VIEWER_SPAWN_CAPABILITY_HEADER]: AGENT_CAPABILITY };
+/* The stamp a Delegatus page's own fetch carries, which connecting a bot (a catalog key) requires. */
+const PAGE = { "sec-fetch-site": "same-origin", origin: "http://127.0.0.1" };
 const TEAM = { id: -1000000000101, type: "supergroup", title: "Team Reports" };
 /* The Viewer host's home for document roots: a sandbox, never the real one. */
 const HOME = path.join(SANDBOX, "home");
@@ -72,7 +74,7 @@ function leaks(body: string): boolean {
 
 async function connected() {
   transport.script("getMe", ok({ id: BOT_ID, is_bot: true, first_name: "Report Bot", username: "report_test_bot" }));
-  const response = await operatorRoute.POST(request("/api/telegram/bot", { method: "POST", body: { action: "connect", token: TOKEN } }));
+  const response = await operatorRoute.POST(request("/api/telegram/bot", { method: "POST", headers: PAGE, body: { action: "connect", token: TOKEN } }));
   expect(response.status).toBe(200);
   await service.stopPoller();
   transport.script("getUpdates", ok([
@@ -93,7 +95,7 @@ test("token never serialised: connect, status, chat edits and every agent answer
   transport.script("sendMessage", ok({ message_id: 6, date: 3 }));
   bodies.push(await text(await agentRoute.POST(request("/api/telegram/bot/agent", { method: "POST", headers: AGENT, body: { op: "send", clientRequestId: "r1", chat: "team-reports", text: "report" } }))));
   /* A refused connect echoes nothing of what it was given. */
-  bodies.push(await text(await operatorRoute.POST(request("/api/telegram/bot", { method: "POST", body: { action: "connect", token: `${TOKEN}x` } }))));
+  bodies.push(await text(await operatorRoute.POST(request("/api/telegram/bot", { method: "POST", headers: PAGE, body: { action: "connect", token: `${TOKEN}x` } }))));
   for (const body of bodies) expect(leaks(body)).toBe(false);
   expect(bodies[1]).toContain("Report Bot");
 });
@@ -221,7 +223,7 @@ test("with no bot connected the chats read still answers, with a note naming the
 test("add and test are the operator's: a chat added by id is allowed, a test post goes out, and an agent is refused both", async () => {
   transport.handlers.getWebhookInfo = () => ok({ url: "https://example.invalid/hook" });
   transport.script("getMe", ok({ id: BOT_ID, is_bot: true, first_name: "Report Bot", username: "report_test_bot" }));
-  expect((await operatorRoute.POST(request("/api/telegram/bot", { method: "POST", body: { action: "connect", token: TOKEN } }))).status).toBe(200);
+  expect((await operatorRoute.POST(request("/api/telegram/bot", { method: "POST", headers: PAGE, body: { action: "connect", token: TOKEN } }))).status).toBe(200);
 
   const refusedAdd = await operatorRoute.POST(request("/api/telegram/bot", { method: "POST", headers: AGENT, body: { action: "add", chat: "-1000000000404" } }));
   expect(refusedAdd.status).toBe(403);

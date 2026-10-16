@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 
+import { onOpenKeys } from "@/components/keys/openKeys";
 import type { OnboardingMarker, OnboardingPatch, OnboardingStepId } from "@/lib/onboarding/marker";
 
 /**
@@ -103,6 +104,10 @@ export function useOnboarding(): {
       setOpening((value) => value + 1);
     };
     window.addEventListener(OPEN_EVENT, onOpen);
+    /* The voice step's «Open Keys» hands the screen to the menu's «Keys» page.
+       The dialog steps aside without a verdict: an unfinished guide is still
+       unfinished, and opens again as one. */
+    const stopKeys = onOpenKeys(() => setMode(null));
     let cancelled = false;
     void fetch("/api/onboarding")
       .then(async (response) => response.ok ? (await response.json()) as { marker: OnboardingMarker | null; seatTickCheckMinutes?: unknown } : null)
@@ -123,6 +128,7 @@ export function useOnboarding(): {
       });
     return () => {
       cancelled = true;
+      stopKeys();
       window.removeEventListener(OPEN_EVENT, onOpen);
     };
   }, []);
