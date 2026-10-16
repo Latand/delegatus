@@ -79,12 +79,43 @@ async function checkRearchivedDeliveryOwner(prepared: boolean) {
   expect(held.file.heldDeliveries[deliveryId]!.contentDigest).toBe(previousDigest);
 }
 
+async function checkHeldColdSnapshotAfterDatabaseReplacement(prepared: boolean) {
+  const dataset = buildRegistryPerformanceDataset(directory(), scaledRegistryPerformanceShape(0.02));
+  const store = new SqliteAgentRegistryStore(dataset.filename, {
+    initialSnapshot: () => { throw new Error("fixture already imported"); }, normalize: normalizeRegistry,
+  });
+  stores.push(store);
+  if (prepared) await store.prepareReadOnlySnapshot();
+
+  const operationId = dataset.coldOperationIds[0]!;
+  const heldFirst = store.snapshot();
+  const heldCached = store.snapshot();
+  const replacement = `${dataset.filename}.replacement`;
+  fs.copyFileSync(dataset.filename, replacement);
+  fs.renameSync(replacement, dataset.filename);
+
+  // The snapshot has not read its archived owner yet. Reopening the current
+  // store must leave this already-issued mutable view readable and closeable.
+  expect(store.snapshot().file.deliveryOperationOwners[operationId]).toBeDefined();
+  expect(() => store.close()).not.toThrow();
+  expect(heldFirst.file.deliveryOperationOwners[operationId]).toBeDefined();
+  expect(heldCached.file.deliveryOperationOwners[operationId]).toBeDefined();
+}
+
 test("writer snapshots refresh archived owner defaults after delivery re-archive", async () => {
   await checkRearchivedDeliveryOwner(false);
 });
 
 test("prepared reader snapshots refresh archived owner defaults after delivery re-archive", async () => {
   await checkRearchivedDeliveryOwner(true);
+});
+
+test("writer snapshots preserve unread archived rows across database replacement", async () => {
+  await checkHeldColdSnapshotAfterDatabaseReplacement(false);
+});
+
+test("prepared reader snapshots preserve unread archived rows across database replacement", async () => {
+  await checkHeldColdSnapshotAfterDatabaseReplacement(true);
 });
 
 test("the writer cache retains hot rows and reads archived owners through the merged reader", () => {

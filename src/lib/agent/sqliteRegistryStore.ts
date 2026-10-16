@@ -781,6 +781,9 @@ export class SqliteAgentRegistryStore {
   private preparedReader: SqliteAgentRegistryStore | null = null;
   private preparingReader: Promise<SqliteRegistrySnapshot> | null = null;
   private closed = false;
+  /** Used while the wrapper retires a replaced inode, letting issued cold
+      snapshots finish against their still-open reader connection. */
+  private snapshotReadDatabase: BunDatabase | null = null;
   /** Weak ownership keeps issued snapshots detached without retaining callers'
       snapshots for the lifetime of the store. A close materializes only the
       snapshots callers still hold, before their lazy archive readers close. */
@@ -943,7 +946,7 @@ export class SqliteAgentRegistryStore {
         const db = new Database(filename, { readonly: true, strict: true });
         db.exec("PRAGMA busy_timeout = 5000");
         return db;
-      }, { reopened: (db) => this.onDatabaseReopened(db) });
+      }, { reopened: (db, previous) => this.onDatabaseReopened(db, previous) });
       const table = this.db.query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'registry_meta'").get();
       if (!table || !this.imported()) {
         this.db.close();
@@ -1000,7 +1003,7 @@ export class SqliteAgentRegistryStore {
         db.transaction(() => installRegistryArchive(db)).immediate();
       }
       return db;
-    }, { reopened: (db) => this.onDatabaseReopened(db) });
+    }, { reopened: (db, previous) => this.onDatabaseReopened(db, previous) });
     this.grantJournalReady = true;
     this.changesReady = Boolean(this.db.query("SELECT 1 FROM sqlite_master WHERE name='registry_changes'").get());
     this.recordsSource = this.changesReady ? "registry_records" : "registry_rows";
@@ -1232,12 +1235,15 @@ export class SqliteAgentRegistryStore {
   }
 
   close(): void {
-    this.preserveIssuedSnapshots();
-    this.closed = true;
-    this.writerSnapshotCache = null;
-    this.writerSnapshotStarted = false;
-    this.preparedReader?.close();
-    this.db.close();
+    try {
+      this.preserveIssuedSnapshots();
+    } finally {
+      this.closed = true;
+      this.writerSnapshotCache = null;
+      this.writerSnapshotStarted = false;
+      try { this.preparedReader?.close(); }
+      finally { this.db.close(); }
+    }
   }
 
   private preserveIssuedSnapshots(): void {
@@ -1263,7 +1269,12 @@ export class SqliteAgentRegistryStore {
     return snapshot;
   }
 
-  private onDatabaseReopened(db: BunDatabase): void {
+  private onDatabaseReopened(db: BunDatabase, previousDb?: BunDatabase): void {
+    if (previousDb) {
+      this.snapshotReadDatabase = previousDb;
+      try { this.preserveIssuedSnapshots(); }
+      finally { this.snapshotReadDatabase = null; }
+    }
     // A restored file may have the same revision and counter stamp as the file
     // it replaced. No parsed row or assembled grant from the old inode holds.
     this.rowCache.clear();
@@ -2068,7 +2079,9 @@ export class SqliteAgentRegistryStore {
   ): () => unknown {
     return () => {
       // The immutable version id pins payload truth for an already-held view.
-      if (databaseFileIdentity(this.filename) !== identity) throw new DatabaseReplacedError("registry view was replaced; request a fresh snapshot");
+      if (!this.snapshotReadDatabase && databaseFileIdentity(this.filename) !== identity) {
+        throw new DatabaseReplacedError("registry view was replaced; request a fresh snapshot");
+      }
       /* An operation owner normalizes against its delivery, which commits
          can change; every other archived row reads the same until its
          pinned grant decision is replaced. */
@@ -2085,7 +2098,8 @@ export class SqliteAgentRegistryStore {
         this.coldReaderRows.delete(id); this.coldReaderRows.set(id,cached);
         return cached.row;
       }
-      const raw = this.db.query<{ value_json: string }, [number]>("SELECT value_json FROM registry_archive WHERE id=?").get(id);
+      const raw = (this.snapshotReadDatabase ?? this.db)
+        .query<{ value_json: string }, [number]>("SELECT value_json FROM registry_archive WHERE id=?").get(id);
       if (!raw) throw new Error("registry archive version is missing");
       this.onRowPayloadRead?.(collection,1);
       this.onRowPayloadParse?.(collection,1);
