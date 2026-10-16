@@ -7,8 +7,8 @@ export type PipelineSandbox = "full" | "restricted";
 
 /** A write whose stated expectation (`expectedStageDigest`, `expectedStageId`,
     `expectedAttempt`) no longer holds: nothing was changed. */
-export type PipelineGuardErrorCode = "STAGE_CHANGED";
-export type PipelineGuardField = "expectedStageDigest" | "expectedStageId" | "expectedAttempt" | "expectedConversationId" | "expectedRevision" | "addRounds";
+export type PipelineGuardErrorCode = "STAGE_CHANGED" | "short_id_ambiguous";
+export type PipelineGuardField = "expectedStageDigest" | "expectedStageId" | "expectedAttempt" | "expectedConversationId" | "expectedRevision" | "addRounds" | "acceptedSha";
 
 export type PipelineRepoPreflightErrorCode =
   | "missing"

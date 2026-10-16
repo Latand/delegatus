@@ -1,3 +1,4 @@
+import { shortId } from "@/lib/shortIds";
 import type { IssueReportLanguage } from "./approvalForm";
 import type { IssueReportFinding } from "./scrub";
 import type { IssueReportPreview } from "./store";
@@ -80,7 +81,7 @@ export function issueReportPreviewText(preview: PreviewText, language: IssueRepo
   const place = (hint: IssueReportFinding) => (hint.where === "title" ? copy.inTitle
     : `${hint.lines.length > 1 ? copy.lines : copy.line} ${hint.lines.join(", ")}`) + (hint.reading === "decoded" ? `, ${copy.decoded}` : "");
   return [
-    copy.heading, `${copy.digest}: ${preview.digest}`, "",
+    copy.heading, `${copy.digest}: ${shortId(preview.digest)}`, "",
     `**━━ ${copy.from} ━━**`,
     `> ${copy.title}`, preview.title,
     `> ${copy.body}`, preview.body, ...(leavesFenceOpen(preview.body) ? ["```"] : []),

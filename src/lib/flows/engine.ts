@@ -1,3 +1,4 @@
+import { shortId } from "@/lib/shortIds";
 import { waitForStateLock } from "@/lib/state/lockWait";
 import { classifyProviderCondition } from "@/lib/pipelines/providerConditions";
 import { durableStageTurnEvidence } from "@/lib/pipelines/durableEvidence";
@@ -339,14 +340,14 @@ export async function captureReviewHead(flow: Flow, round: Round, signal?: Abort
     const remoteSha = (await resolveFlowRemoteHead(flow.cwd, flow.headRef, signal));
     if (remoteSha !== headSha) {
       const detail = remoteSha
-        ? `review remote head mismatch before launch: local ${headSha}, origin/${flow.headRef} ${remoteSha}`
+        ? `review remote head mismatch before launch: local ${shortId(headSha)}, origin/${flow.headRef} ${shortId(remoteSha)}`
         : `review remote head is unavailable before launch: origin/${flow.headRef}`;
       markNeedsDecision(flow, detail);
       throw new Error(detail);
     }
   }
   if (round.n === 1 && flow.targetSha && headSha.toLowerCase() !== flow.targetSha.toLowerCase()) {
-    const detail = `review target changed before launch: expected ${flow.targetSha}, found ${headSha}`;
+    const detail = `review target changed before launch: expected ${shortId(flow.targetSha)}, found ${shortId(headSha)}`;
     markNeedsDecision(flow, detail);
     throw new Error(detail);
   }

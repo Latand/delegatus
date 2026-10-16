@@ -144,9 +144,9 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     }
     target = { ref: body.ref };
   } else {
-    if (typeof body.revision !== "string" || !/^[0-9a-f]{40}$/i.test(body.revision)) {
+    if (typeof body.revision !== "string" || !/^[0-9a-f]{7,40}$/i.test(body.revision)) {
       return NextResponse.json(
-        { error: "revision must be a full 40-character commit SHA", reason: "revision_invalid" },
+        { error: "revision must be a commit SHA or prefix of at least 7 characters", reason: "revision_invalid" },
         { status: 400 },
       );
     }
@@ -160,6 +160,8 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       const receipt = await service.deployRevision({ ...target, idempotencyKey: body.idempotencyKey });
       return NextResponse.json(receipt, { status: receipt.state === "accepted" ? 202 : 409 });
     }
+    if ("revision" in target && target.revision.length < 40) return NextResponse.json(
+      { error: "pass the full SHA or a ref", reason: "revision_invalid" }, { status: 400 });
     const receipt = await requestViewerDeployment({ ...target, idempotencyKey: body.idempotencyKey });
     return NextResponse.json(receipt, { status: receipt.state === "busy" ? 409 : 202 });
   } catch (error) {

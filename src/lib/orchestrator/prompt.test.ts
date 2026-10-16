@@ -1,3 +1,4 @@
+import { shortId } from "@/lib/shortIds";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -739,7 +740,7 @@ test("successive mandate renders read saved rows, variants and revision from the
     expect(second).toContain("| builder | codex | gpt-6-sol | medium |");
     expect(second).toContain("domain=frontend: claude/opus/high");
     expect(second).toContain("size=trivial: codex/gpt-5.6-luna/medium");
-    expect(second).toContain(`Registry revision: ${nextRevision}. Registry health: healthy.`);
+    expect(second).toContain(`Registry revision: ${shortId(nextRevision)}. Registry health: healthy.`);
     expect(second).not.toContain(firstRevision);
     expect(second).not.toContain("| builder | codex | gpt-6.1-sol | high |");
     expect(second.split(ORCHESTRATOR_ROLE_TABLE_HEADING)).toHaveLength(2);

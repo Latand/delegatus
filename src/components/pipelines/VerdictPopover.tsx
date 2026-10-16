@@ -1,5 +1,6 @@
 "use client";
 
+import { shortId } from "@/lib/shortIds";
 import { RefreshCw } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
@@ -186,7 +187,7 @@ export function VerdictPopover({
       {attempt.reviewHeadSha ? (
         <div className="flex items-center gap-1.5">
           <span className="shrink-0 text-label font-semibold text-secondary">{t("pipelineVerdict.reviewerSha", { sha: attempt.reviewHeadSha.slice(0, 8) })}</span>
-          <code className="min-w-0 truncate font-mono text-[10px] text-primary" title={attempt.reviewHeadSha}>{attempt.reviewHeadSha}</code>
+          <code className="min-w-0 truncate font-mono text-[10px] text-primary" title={attempt.reviewHeadSha}>{shortId(attempt.reviewHeadSha)}</code>
         </div>
       ) : null}
 

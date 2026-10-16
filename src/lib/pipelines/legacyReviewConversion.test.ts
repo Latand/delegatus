@@ -186,7 +186,7 @@ test("conversion is explicit, revision-fenced, attributed and idempotent by clie
   const h = harness();
   const draft = await legacyDraft(h.ports);
   expect((await patchPipeline(draft.id, { action: "convert-legacy-review", expectedRevision: pipelineRevision(draft) } as never, h.ports, creator)).status).toBe(400);
-  expect((await convert(draft, { expectedRevision: "0".repeat(64) }, h.ports)).code).toBe("STAGE_CHANGED");
+  expect((await convert(draft, { expectedRevision: "0".repeat(8) }, h.ports)).code).toBe("STAGE_CHANGED");
   expect((await convert(draft, {}, h.ports, stranger)).status).toBe(403);
   process.env.LLV_PIPELINE_LEGACY_REVIEW_CONVERSION = "0";
   expect((await convert(draft, {}, h.ports)).error).toContain("disabled");
@@ -194,7 +194,8 @@ test("conversion is explicit, revision-fenced, attributed and idempotent by clie
   expect(current().stages.find((stage) => stage.id === "reviewer")!.kind).toBe("review-loop");
 
   const revision = pipelineRevision(current());
-  const accepted = await convert(draft, { reviewLimit: 2 }, h.ports);
+  const accepted = await convert(draft, { reviewLimit: 2, expectedRevision: revision.slice(0, 8) }, h.ports);
+  expect(accepted.legacyReviewConversion?.expectedRevision).toBe(revision);
   expect(accepted.error).toBeUndefined();
   expect(accepted.replayed).toBe(false);
   expect(accepted.legacyReviewConversion).toMatchObject({ clientRequestId: "convert-1", stageId: "reviewer", fixerStageId: "reviewer-fix", reviewLimit: 2, reviewLimitSource: "request", actor: creator });
@@ -401,7 +402,7 @@ test("an unexecuted conversion reverts explicitly; once a new attempt ran it is 
   const h = harness();
   const draft = await legacyDraft(h.ports);
   expect((await convert(draft, {}, h.ports)).error).toBeUndefined();
-  const revert = (clientRequestId: string) => patchPipeline(draft.id, { action: "revert-legacy-review", clientRequestId, stageId: "reviewer", expectedRevision: pipelineRevision(current()) } as never, h.ports, creator);
+  const revert = (clientRequestId: string) => patchPipeline(draft.id, { action: "revert-legacy-review", clientRequestId, stageId: "reviewer", expectedRevision: pipelineRevision(current()).slice(0, 8) } as never, h.ports, creator);
   const reverted = await revert("revert-1");
   expect(reverted.error).toBeUndefined();
   expect(current().stages).toEqual(draft.stages);

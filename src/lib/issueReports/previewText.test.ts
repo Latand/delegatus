@@ -111,6 +111,6 @@ test("in Ukrainian only the report and the agent's judgment keep their own langu
     if (!line.trim() || own.has(line) || line === "```") continue;
     /* A hint's quoted span and a judgment's text are the report's own words. */
     const frame = line.startsWith("- ") ? line.slice(0, line.indexOf(": ")) : line.includes(": ") && Object.values(JUDGMENT).some((value) => line.endsWith(value)) ? line.slice(0, line.indexOf(": ")) : line;
-    expect(frame.replace(/Delegatus|issue|URL|IP|[0-9a-f]{64}/g, "")).not.toMatch(/[A-Za-z]{2,}/);
+    expect(frame.replace(/Delegatus|issue|URL|IP|[0-9a-f]{8}/g, "")).not.toMatch(/[A-Za-z]{2,}/);
   }
 });

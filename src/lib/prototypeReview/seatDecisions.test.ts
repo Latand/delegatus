@@ -363,3 +363,30 @@ test("a seat decision skips one question and exposes it through the column and M
   const read = await (await reviewReadPOST(request("/api/prototype-reviews/read", {}), seat)).json() as PrototypeReviewRead;
   expect(read.rounds[0]!.decision!.answers).toEqual(answers);
 });
+
+test("an issue-report reference stores the exact full consent form and legacy composed forms still publish", async () => {
+  const { recordIssueReportPreview } = await import("@/lib/issueReports/store");
+  const { issueReportApprovalForm } = await import("@/lib/issueReports/approvalForm");
+  const { operatorLocale } = await import("@/lib/operator/settings");
+  const preview = recordIssueReportPreview({ title: "A repeated answer", body: "The tool answered twice." }, "conversation_reporter");
+  const response = await publishPOST(request("/api/prototype-reviews", { clientRequestId: "report-reference", issueReport: preview.digest.slice(0, 8) }), seat);
+  expect(response.status).toBe(200);
+  const id = (await response.json()).reviewId;
+  const stored = loadSeatRounds().find(round => round.id === id)!;
+  const form = issueReportApprovalForm(preview, operatorLocale() ?? "en");
+  expect(stored.title).toBe(form.title); expect(stored.questions).toEqual(form.questions);
+  const old = await publishPOST(request("/api/prototype-reviews", { clientRequestId: "report-full-form", ...form }), seat);
+  expect(old.status).toBe(200);
+  const mixed = await publishPOST(request("/api/prototype-reviews", { clientRequestId: "report-mixed", issueReport: preview.digest.slice(0, 8), title: "Override" }), seat);
+  expect(mixed.status).toBe(400);
+});
+
+test("review id prefixes resolve, keep full values and refuse unknown or ambiguous ids", async () => {
+  const { resolvePrototypeReviewId } = await import("./store");
+  const a = "pr_12345678" + "a".repeat(24), b = "pr_12345678" + "b".repeat(24);
+  expect(resolvePrototypeReviewId([{ id: a }], a.slice(0, 11))).toBe(a);
+  expect(resolvePrototypeReviewId([{ id: a }], a)).toBe(a);
+  expect(resolvePrototypeReviewId([{ id: a }], "pr_ffffffff")).toBeNull();
+  expect(() => resolvePrototypeReviewId([{ id: a }, { id: b }], a.slice(0, 11))).toThrow("ambiguous");
+  expect(resolvePrototypeReviewId([{ id: a }, { id: b }], b.slice(0, 15))).toBe(b);
+});

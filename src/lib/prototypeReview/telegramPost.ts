@@ -1,3 +1,4 @@
+import { shortenHashesInText } from "@/lib/shortIds";
 import fs from "node:fs/promises";
 import crypto from "node:crypto";
 import sharp from "sharp";
@@ -36,7 +37,7 @@ function withReviewLink(message: TelegramRichMessage, round: PrototypeReviewRoun
 /** Only a definitive Telegram limit refusal uses this smaller rich carousel. */
 export function renderPrototypeTelegramSummary(round: PrototypeReviewRound, slides: readonly PrototypeSlide[], taskTitle = ""): TelegramRichMessage {
   const compact = { ...round, title: round.title.slice(0, 120),
-    questions: round.questions?.map(q => ({ ...q, text: q.text.slice(0, 80), options: q.options.map(o => ({ ...o, label: o.label.slice(0, 40) })) })),
+    questions: round.questions?.map(q => ({ ...q, text: q.text.slice(0, 80), options: q.options.map(o => ({ ...o, label: shortenHashesInText(o.label).slice(0, 40) })) })),
     variants: round.variants.map(v => ({ ...v, description: v.description.slice(0, 160) })) };
   const previews = round.variants.flatMap(v => slides.filter(s => s.variantNumber === v.number).slice(0, 1).map(s => ({ ...s, caption: s.caption.slice(0, 160) })));
   const message = renderPrototypeTelegram(compact, previews, taskTitle.slice(0, 200));
@@ -99,7 +100,7 @@ export function renderPrototypeTelegram(round: PrototypeReviewRound, slides: rea
   }
   for (const [i, question] of (round.questions ?? []).entries()) {
     const heading = `<b>${attribute(`Питання ${i + 1}/${round.questions!.length} · ${question.text.replace(/\s+/g, " ")}${question.multiple ? " (можна кілька)" : ""}`)}</b>`;
-    const options = question.options.map((option, j) => `${String.fromCharCode(97 + j)}) ${attribute(option.label.replace(/\s+/g, " "))}${option.recommended ? " ✅" : ""}`);
+    const options = question.options.map((option, j) => `${String.fromCharCode(97 + j)}) ${attribute(shortenHashesInText(option.label).replace(/\s+/g, " "))}${option.recommended ? " ✅" : ""}`);
     lines.push(`<p>${[heading, ...options, ...(question.other ? ["+ Інше — у коментарі"] : [])].join("<br>")}</p>`, "");
   }
   lines.push("---", `Як відповісти: дайте текстовий reply на цей пост або його опитування: 1b, 2a; 1: b; рекомендовані; або відповідь своїми словами. Рішення записує лише текстовий reply власника. Голоси показують думки учасників. Можна також надіслати клону ${prototypeReference(round)} і відповідь, або скористатися кнопкою. Застереження до рекомендованих відповідей теж збережуться. Повне рев’ю — у Delegatus.`, "");
@@ -114,7 +115,7 @@ export function renderPrototypeTelegram(round: PrototypeReviewRound, slides: rea
   }
   for (const [i, question] of (round.questions ?? []).entries()) {
     plain.push(`Питання ${i + 1}/${round.questions!.length} · ${question.text}${question.multiple ? " (можна кілька)" : ""}`,
-      ...question.options.map((o, j) => `${String.fromCharCode(97 + j)}) ${o.label}${o.recommended ? " ✅" : ""}`),
+      ...question.options.map((o, j) => `${String.fromCharCode(97 + j)}) ${shortenHashesInText(o.label)}${o.recommended ? " ✅" : ""}`),
       ...(question.other ? ["+ Інше — у коментарі"] : []), "");
   }
   plain.push(`Дайте текстовий reply на цей пост або його опитування: 1b, 2a; 1: b; рекомендовані; або відповідь своїми словами. Рішення записує лише текстовий reply власника. Голоси показують думки учасників. Можна також надіслати клону ${prototypeReference(round)} і відповідь, або скопійований рядок. Застереження теж збережуться. Повне рев’ю — у Delegatus.`);

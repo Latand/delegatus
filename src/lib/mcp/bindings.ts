@@ -1,3 +1,6 @@
+import { resolvePrototypeReviewId as resolveStoredReviewId } from "@/lib/prototypeReview/store";
+import { resolveIssueReportDigest } from "@/lib/issueReports/store";
+import { shortId, shortenHashesInText } from "@/lib/shortIds";
 import { decidePrototype } from "@/lib/prototypeReview/decision";
 import { deliverPrototypeDecision } from "@/lib/prototypeReview/deliveryWorker";
 import { findPrototypeRound } from "@/lib/prototypeReview/store";
@@ -580,6 +583,11 @@ async function postViewerControl(
         } });
       }
     }
+    if (result.code === "short_id_ambiguous") throw new McpToolRefusal(message, {
+      code: "short_id_ambiguous", retryable: false, status: response.status,
+      field: text(result.field) || "reviewId",
+      ...(Array.isArray(result.candidates) ? { candidates: result.candidates.filter(value => typeof value === "string").slice(0, 8) } : {}),
+    });
     const operationId = text(result.operationId);
     if (operationId) {
       throw new McpToolRefusal(message, {
@@ -1960,7 +1968,10 @@ async function issueReportTool(args: McpToolArgs, control: ViewerControlDependen
       next: "Return PREVIEW with this digest, exact title and body, your privacy judgment and remaining hints as a short list beside the text. The operator decides last and may approve text with hints. Publication is the orchestrator seat's after approval.",
     };
   }
-  const digest = text(args.digest);
+  const givenDigest = text(args.digest);
+  const resolvedDigest = await resolveIssueReportDigest(givenDigest ?? "", directory);
+  if (resolvedDigest.kind === "ambiguous") throw refuse("digest is ambiguous; pass more characters", "short_id_ambiguous", { field: "digest", retryable: false, candidates: resolvedDigest.candidates });
+  const digest = resolvedDigest.kind === "match" ? resolvedDigest.value : givenDigest;
   if (!digest) throw refuse(`${action} needs the digest a preview answered`, "issue_report_invalid", { field: "digest" });
   const stored = readIssueReportPreview(digest, directory);
   if (!stored) {
@@ -1975,8 +1986,8 @@ async function issueReportTool(args: McpToolArgs, control: ViewerControlDependen
     if (!seat) return view(stored);
     return {
       ...view({ ...(markIssueReportShown(digest, seat, { directory }) ?? stored), hints: stored.hints, hintWarnings: stored.hintWarnings }),
-      approvalForm: issueReportApprovalForm(stored, previewLanguage),
-      next: "Put previewText in chat exactly as it is: it marks where the published text starts and ends, and carries privacyJudgment, the remaining hints and hintWarnings after it. The operator may approve text with hints. Then ask with publish_prototype_review, omitting taskId, passing approvalForm's title and questions unchanged. Publish after the operator answers: publication reads the newest such form you published after this reading and needs its first option, the one naming this whole digest, chosen by a person. A form taken on its recommendations, a set-aside question, «Other», a custom note or an agent's decision does not approve it.",
+      approvalForm: { issueReport: resolvedDigest.reference ?? shortId(stored.digest) },
+      next: "Put previewText in chat exactly as it is: it marks where the published text starts and ends, and carries privacyJudgment, the remaining hints and hintWarnings after it. The operator may approve text with hints. Then ask with publish_prototype_review, omitting taskId, passing approvalForm.issueReport. Publish after the operator answers: publication reads the newest such form you published after this reading and needs its first option, the one naming this report, chosen by a person. A form taken on its recommendations, a set-aside question, «Other», a custom note or an agent's decision does not approve it.",
     };
   }
   if (action !== "publish") throw refuse("action is hints, preview, show or publish", "issue_report_invalid", { field: "action" });
@@ -2019,16 +2030,16 @@ async function issueReportTool(args: McpToolArgs, control: ViewerControlDependen
     const label = issueReportApprovalReplies(digest)[previewLanguage];
     const explanation = {
       no_form: {
-        en: "Nothing was published: you have not asked the operator in a decision form since you read this preview back. Call publish_prototype_review without taskId, with approvalForm from show unchanged, and publish after they answer.",
-        uk: "Нічого не опубліковано: після показу цього звіту ви не питали оператора у формі рішення. Викличте publish_prototype_review без taskId, передавши approvalForm із show без змін, і публікуйте після відповіді.",
+        en: "Nothing was published: you have not asked the operator in a decision form since you read this preview back. Call publish_prototype_review without taskId, with issueReport from show, and publish after they answer.",
+        uk: "Нічого не опубліковано: після показу цього звіту ви не питали оператора у формі рішення. Викличте publish_prototype_review без taskId, передавши issueReport із show, і публікуйте після відповіді.",
       },
       not_answered: {
         en: `Nothing was published: the operator has not answered decision form ${form?.id} yet.`,
         uk: `Нічого не опубліковано: оператор ще не відповів на форму рішення ${form?.id}.`,
       },
       not_an_approval: {
-        en: `Nothing was published: the answer to decision form ${form?.id} does not approve this report. Only the option «${label}», chosen by a person, approves it; a form taken on its recommendations, «Other», a custom note or an agent's decision does not.`,
-        uk: `Нічого не опубліковано: відповідь на форму рішення ${form?.id} не схвалює цей звіт. Схвалює лише варіант «${label}», обраний людиною; рекомендації за замовчуванням, «Інше», власна примітка чи рішення агента не схвалюють.`,
+        en: `Nothing was published: the answer to decision form ${form?.id} does not approve this report. Only the option «${shortenHashesInText(label)}», chosen by a person, approves it; a form taken on its recommendations, «Other», a custom note or an agent's decision does not.`,
+        uk: `Нічого не опубліковано: відповідь на форму рішення ${form?.id} не схвалює цей звіт. Схвалює лише варіант «${shortenHashesInText(label)}», обраний людиною; рекомендації за замовчуванням, «Інше», власна примітка чи рішення агента не схвалюють.`,
       },
     }[reason];
     throw refuse(explanation[previewLanguage], "issue_report_approval_required", { status: 403, reason, ...(form ? { reviewId: form.id } : {}) });
@@ -2406,6 +2417,7 @@ async function pipelineAction(args: McpToolArgs, dependencies: ViewerMcpDomainDe
     if (result.details) throw new McpToolRefusal(message, { code: result.code, details: result.details });
     /* A refused conversion carries its editable preview. */
     if (result.legacyReviewPreview) throw new McpToolRefusal(message, { legacyReviewPreview: result.legacyReviewPreview });
+    if (result.code === "short_id_ambiguous") throw new McpToolRefusal(message, { code: result.code, field: result.field, retryable: false, status: result.status });
     if (action === "publish" || action === "takeover" || action === "set-delivery-remote") throw new McpToolRefusal(message, { code: "delivery_refused", status: result.status });
     if (action === "attach-link" || action === "detach-link") throw new McpToolRefusal(message, { code: result.code ?? "WORK_LINK_INVALID", field: "link", status: result.status });
     /* A stale guard names what moved, so the caller re-reads before retrying. */
@@ -3485,7 +3497,7 @@ async function deployExactSha(
   dependencies: ViewerMcpDomainDependencies,
 ): Promise<McpToolPayload> {
   const revision = required(args, "revision");
-  if (!/^[0-9a-f]{40}$/i.test(revision)) throw new Error("revision must be a full 40-character commit SHA");
+  if (!/^[0-9a-f]{7,40}$/i.test(revision)) throw new Error("revision must be a commit SHA or prefix of at least 7 characters");
 
   const authority = viewerSeatAuthority(dependencies);
   if (!authority.ok) {
@@ -4523,7 +4535,7 @@ async function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDo
 
   const change: SeatTickSettingsChange = {};
   if (args.autonomy !== undefined) change.autonomy = args.autonomy as SeatTickSettingsChange["autonomy"];
-  if (args.autonomyDecision !== undefined) change.autonomyDecision = args.autonomyDecision as SeatTickSettingsChange["autonomyDecision"];
+  if (args.autonomyDecision !== undefined) change.autonomyDecision = structuredClone(args.autonomyDecision) as SeatTickSettingsChange["autonomyDecision"];
   if (args.release !== undefined) change.release = args.release as SeatTickSettingsChange["release"];
   if (args.autoRotate !== undefined) change.autoRotate = args.autoRotate as SeatTickSettingsChange["autoRotate"];
   if (args.maintenance !== undefined) change.maintenance = args.maintenance as SeatTickSettingsChange["maintenance"];
@@ -4566,7 +4578,8 @@ async function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDo
     };
     const review = change.autonomyDecision?.review;
     if (review) {
-      const round = findPrototypeRound(change.autonomyDecision?.taskId ?? null, review.reviewId);
+      const round = mcpPrototypeRound(change.autonomyDecision?.taskId ?? null, review.reviewId);
+      if (round) review.reviewId = round.id;
       if (!round || round.nativeAssociation || canonicalOrchestratorProject(round.project || project) !== project) throw new Error("autonomy cannot decide this form");
     }
     const applied = dependencies.writeTickSettings || dependencies.readTickSettings
@@ -7177,7 +7190,10 @@ async function escalateThroughService(
   if (round) {
     /* The round is the operator's question: it has to exist in this project
        and still wait, or the wait would leave the seat for a form nobody sees. */
-    const task = dependencies.loadTasks().find(candidate => candidate.prototypeReviews?.some(held => held.id === round.reviewId));
+    const tasks = dependencies.loadTasks();
+    const resolved = resolvePrototypeReviewId([...tasks.filter(task => canonicalOrchestratorProject(task.project) === project).flatMap(task => task.prototypeReviews ?? []), ...loadSeatRounds(project)], round.reviewId);
+    if (resolved) round.reviewId = resolved;
+    const task = tasks.find(candidate => candidate.prototypeReviews?.some(held => held.id === round.reviewId));
     const seatRound = task ? null : loadSeatRounds().find(held => held.id === round.reviewId);
     if ((!task && !seatRound) || canonicalOrchestratorProject(task?.project ?? seatRound!.project) !== project) {
       throw new McpToolRefusal(`no decision round ${round.reviewId} in this project: ask with publish_prototype_review first and pass the reviewId it answers`, { code: "ROUND_NOT_FOUND" });
@@ -7228,6 +7244,10 @@ async function dismissAttentionTool(args: McpToolArgs, dependencies: ViewerMcpDo
   let target: DismissalTarget;
   try {
     target = parseDismissalTarget(args.target, { allowSubjects: false });
+    if (target.kind === "prototype") {
+      const round = mcpPrototypeRound(target.taskId, target.reviewId);
+      if (round) target = { ...target, reviewId: round.id };
+    }
   } catch (error) {
     if (error instanceof DismissalError) throw new McpToolRefusal(error.message, { code: error.code });
     throw error;
@@ -7929,4 +7949,19 @@ export function viewerMcpBindings(
     telegram_bot_messages: (args, context) => telegramBotMessages(args, viewerControlForCall(controlDependencies, context)),
     issue_report: (args, context) => issueReportTool(args, viewerControlForCall(controlDependencies, context), domainDependencies),
   };
+}
+
+function resolvePrototypeReviewId(...args: Parameters<typeof resolveStoredReviewId>): ReturnType<typeof resolveStoredReviewId> {
+  try { return resolveStoredReviewId(...args); }
+  catch (error) {
+    if ((error as { code?: string }).code === "short_id_ambiguous") throw new McpToolRefusal("reviewId is ambiguous; pass more characters", { code: "short_id_ambiguous", field: "reviewId", retryable: false, candidates: (error as { candidates?: string[] }).candidates });
+    throw error;
+  }
+}
+function mcpPrototypeRound(taskId: string | null, given: string) {
+  try { return findPrototypeRound(taskId, given); }
+  catch (error) {
+    if ((error as { code?: string }).code === "short_id_ambiguous") throw new McpToolRefusal("reviewId is ambiguous; pass more characters", { code: "short_id_ambiguous", field: "reviewId", retryable: false, candidates: (error as { candidates?: string[] }).candidates });
+    throw error;
+  }
 }

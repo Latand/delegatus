@@ -179,13 +179,13 @@ test("measure every tool through the MCP service and budget common board answers
   expect(detail.task.assignments.length).toBe(8);
   expect(detail.task.details.length).toBeGreaterThan(6000);
   const fullList = await call("list_tasks", { ids: ["task-0"], full: true });
-  expect(fullList.tasks[0]).toEqual(detail.task);
+  expect({ ...fullList.tasks[0], revision: fullList.tasks[0].revision.slice(0, 16) }).toEqual(detail.task);
   const fullWrite = await call("update_task", { taskId: "task-0", status: "assigned", full: true });
   expect(fullWrite.task.assignments.length).toBe(8);
   expect(fullWrite.revision).not.toBe(detail.task.revision);
   const latest = await call("list_tasks", { ids: ["task-0"] });
   expect(latest.tasks[0].status).toBe("assigned");
-  expect(latest.tasks[0].revision).toBe(fullWrite.revision);
+  expect(latest.tasks[0].revision).toBe(fullWrite.revision.slice(0, 16));
   const live = await call("agent_activity", { liveOnly: true, compact: true });
   expect(live.count).toBe(0);
   expect(live.excludedGoneCount).toBe(100);
