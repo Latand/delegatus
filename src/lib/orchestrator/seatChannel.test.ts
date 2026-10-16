@@ -20,11 +20,11 @@ afterEach(() => {
   Object.assign(process.env, environment);
 });
 const AT = "2026-10-16T12:06:32.000Z";
-function designate(runtime: ComposerPayloadRuntime, next = false, project = "channel-project") {
+function designate(runtime: ComposerPayloadRuntime, next = false, project = "channel-project", at = AT) {
   const target = next ? runtime.successor! : runtime;
   const key = next ? "channel-next" : "channel-first";
-  beginOrchestratorSeatIntent({ project, mandate: "coordinate", mode: "existing", clientRequestId: key, now: AT });
-  completeOrchestratorSeatIntent({ project, clientRequestId: key, conversationId: target.conversationId, path: target.artifactPath, now: AT });
+  beginOrchestratorSeatIntent({ project, mandate: "coordinate", mode: "existing", clientRequestId: key, now: at });
+  completeOrchestratorSeatIntent({ project, clientRequestId: key, conversationId: target.conversationId, path: target.artifactPath, now: at });
 }
 async function fixture(run: (runtime: ComposerPayloadRuntime, ports: SeatChannelPorts) => Promise<void>) {
   setSystemTime(new Date(AT));
@@ -94,6 +94,28 @@ test("epoch-bound board reports are failed with a record and never redirected", 
   expect(runtime.journal.operationResult(original.operationId)?.receipt.reason).toBe(SEND_SEAT_REVOKED_REASON);
 }));
 
+test("an older revocation leaves a re-designated seat's fresh mandate deliverable", async () => fixture(async (runtime, ports) => {
+  designate(runtime);
+  const secondAt = new Date(Date.parse(AT) + 1_000).toISOString();
+  designate(runtime, true, "channel-project", secondAt);
+  const firstRevocation = orchestratorRevocations().find(row => row.project === "channel-project" && row.conversationId === runtime.conversationId)!;
+  const thirdAt = new Date(Date.parse(AT) + 2_000).toISOString();
+  designate(runtime, false, "channel-project", thirdAt);
+  setSystemTime(new Date(Date.parse(AT) + 3_000));
+
+  const fresh = await ports.enqueue({ path: runtime.artifactPath, conversationId: runtime.conversationId,
+    clientMessageId: "orchmandate_after_return", text: "Handle the current mandate", images: [], policy: "queue" });
+  if (!fresh?.ok) throw new Error("fixture admission failed");
+
+  expect(await reconcileSeatChannel(firstRevocation, ports)).toBe(true);
+  expect(seatChannelRecord(fresh.operationId)).toBeNull();
+  expect(runtime.journal.operationResult(fresh.operationId)?.receipt.status).toBe("queued");
+  await runtime.holdTurn!(false);
+  await waitFor(() => runtime.delivered.length === 1);
+  expect(runtime.delivered[0]!.text).toBe("Handle the current mandate");
+  expect(runtime.successor!.delivered).toHaveLength(0);
+}));
+
 test("legacy sends to a revoked id are refused while history and stop metadata remain intact", async () => fixture(async (runtime) => {
   designate(runtime); designate(runtime, true);
   let commands = 0;
@@ -106,6 +128,45 @@ test("legacy sends to a revoked id are refused while history and stop metadata r
   expect(readOrchestratorSeatFileOrNull()?.revocations.at(-1)?.conversationId).toBe(runtime.conversationId);
   expect((await seatRecipientVerdictAsync([runtime.conversationId])).kind).toBe("revoked");
   expect(currentSeat("channel-project")?.conversationId).toBe(runtime.successor!.conversationId);
+}));
+
+test("legacy pane sends recheck seat authority after recovery waits", async () => fixture(async runtime => {
+  designate(runtime);
+  let actuations = 0;
+  const outcome = await deliverConversationMessage({ pid: 1, path: "",
+    clientMessageId: "legacy-rotated-during-recovery", text: "Do not reach the retired pane", images: [] }, {
+    registry: runtime.registry,
+    recover: async () => null,
+    listFiles: async () => [{ pid: 1, proc: "running", engine: "codex", path: runtime.artifactPath } as never],
+    targetForKnownPid: async () => { designate(runtime, true); return "%1"; },
+    sendText: async () => { actuations++; },
+  } as never);
+
+  expect(actuations).toBe(0);
+  expect(outcome).toMatchObject({ ok: false, status: 409, successorConversationId: runtime.successor!.conversationId });
+}));
+
+test("legacy child relays refuse a root seat revoked while transcript lookup waits", async () => fixture(async runtime => {
+  designate(runtime);
+  designate(runtime, true);
+  const childPath = path.join(path.dirname(runtime.artifactPath), "child-session.jsonl");
+  const child = runtime.registry.ensureConversation("codex", childPath, "fixture-account");
+  let hostDeliveries = 0;
+  const outcome = await deliverConversationMessage({ pid: null, path: childPath, conversationId: child.id,
+    clientMessageId: "legacy-relay-to-revoked-root", text: "Do not relay to the retired root", images: [] }, {
+    registry: runtime.registry,
+    recover: async () => null,
+    pathAllowed: () => true,
+    listFiles: async () => [
+      { path: childPath, parent: runtime.artifactPath, engine: "codex", root: path.dirname(childPath), title: "child" } as never,
+      { path: runtime.artifactPath, parent: null, engine: "codex", root: path.dirname(runtime.artifactPath), title: "root" } as never,
+    ],
+    resumeSpecFor: (_root: string, pathname: string) => pathname === childPath ? null : ({ command: "resume", args: [], cwd: path.dirname(runtime.artifactPath), env: {} }) as never,
+    deliver: async () => { hostDeliveries++; return { ok: true as const, outcome: "resumed" as const, target: "%root" }; },
+  } as never);
+
+  expect(hostDeliveries).toBe(0);
+  expect(outcome).toMatchObject({ ok: false, status: 409, successorConversationId: runtime.successor!.conversationId });
 }));
 
 test("a project temporarily without a seat keeps its withdrawn words until activation", async () => fixture(async (runtime, ports) => {
@@ -183,6 +244,39 @@ test("withdrawal cannot end a message that entered dispatch during its journal w
     } } as typeof ports.client;
   expect(await withdrawRuntimeWake(original.operationId, SEND_SEAT_REVOKED_REASON, client)).toBe("too-late");
   expect(runtime.journal.operationResult(original.operationId)?.receipt.status).toBe("delivering");
+}));
+
+test("a held withdrawal that loses its registry race is never redirected", async () => fixture(async (runtime, ports) => {
+  designate(runtime);
+  const original = await ports.enqueue({ path: runtime.artifactPath, conversationId: runtime.conversationId,
+    clientMessageId: "held-withdrawal-race", text: "This may already have arrived", images: [], policy: "queue" });
+  if (!original?.ok) throw new Error("fixture admission failed");
+  designate(runtime, true);
+  const snapshot = runtime.registry.deliverySnapshotForOperation(original.operationId);
+  const owner = snapshot.deliveryOperationOwners[original.operationId]!;
+  const delivery = snapshot.heldDeliveries[owner.deliveryId]!;
+  const racingRegistry = new Proxy(runtime.registry, {
+    get(target, key) {
+      if (key === "readOnlySnapshot") return () => {
+        const current = target.readOnlySnapshot();
+        return { ...current, heldDeliveries: { ...current.heldDeliveries, [delivery.id]: { ...delivery, state: "held" } } };
+      };
+      if (key === "deliveryWrite") return async (metadata: Parameters<typeof target.deliveryWrite>[0], write: () => unknown) => {
+        if (metadata.label === "delivery.seat-channel") return { acquired: true, value: "too-late" as const };
+        return target.deliveryWrite(metadata, write as never);
+      };
+      const value = Reflect.get(target, key, target) as unknown;
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+  const client = { ...ports.client, operationStatus: async () => null } as typeof ports.client;
+  let successorAdmissions = 0;
+  const lostRace = { ...ports, registry: racingRegistry, client,
+    enqueue: async (request: Parameters<SeatChannelPorts["enqueue"]>[0]) => { successorAdmissions++; return ports.enqueue(request); } };
+
+  await reconcileSeatChannel(orchestratorRevocations().at(-1)!, lostRace);
+  expect(successorAdmissions).toBe(0);
+  expect(seatChannelRecord(original.operationId)?.outcome).toBe("too-late");
 }));
 
 test("channel state writes wait off the event loop while a peer owns the SQLite writer", async () => fixture(async (runtime, ports) => {
