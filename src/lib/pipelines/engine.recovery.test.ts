@@ -2687,6 +2687,81 @@ test.each(["native", "filename-generation", "operation-conflict", "generation-co
   } finally { setAgentRegistryForTests(null); }
 });
 
+test.each([true, false])("activation replay verifies original operation attribution (uncertain envelope: %s)", async hasEnvelope => {
+  for (const outcome of ["matching", "conflict", "revoked-during-message-lookup"] as const) {
+    const f = await stagedRecoveryHarness("uncertain", { nativeTranscript: true });
+    await tickPipelines([], f.h.ports);
+    const launchId = f.launchId();
+    if (!hasEnvelope) f.registry.preserveSpawnArtifactOwnership(launchId, "");
+    const receipt = f.registry.readOnlySnapshot().receipts[launchId]!;
+    const pathname = receipt.artifactPath!;
+    const pipeline = loadPipelines()[0]!;
+    const attempt = pipeline.runs[0]!.attempts[0]!;
+    const now = Date.parse(f.h.ports.now());
+    fs.writeFileSync(pathname, [
+      { timestamp: new Date(now - 2_000).toISOString(), type: "session_meta", payload: { id: receipt.key!.sessionId } },
+      { timestamp: new Date(now - 1_000).toISOString(), type: "event_msg", payload: { type: "task_started" } },
+      { timestamp: new Date(now).toISOString(), type: "response_item", payload: { type: "message", role: "assistant", content: [{ type: "output_text", text: "Original launch is working" }] } },
+    ].map(record => JSON.stringify(record)).join("\n") + "\n");
+    f.h.ports.sourcePathAllowed = candidate => candidate === pathname;
+    f.h.ports.durableTurnEvidence = durableStageTurnEvidence;
+    const status = f.client.operationStatus.bind(f.client);
+    f.client.operationStatus = async id => {
+      const result = await status(id);
+      if (outcome === "revoked-during-message-lookup" && id === `spawn_message_${launchId}`) {
+        const { withPipelineMutation } = await import("./store");
+        await withPipelineMutation(async (pipelines, persist) => {
+          const live = pipelines.find(candidate => candidate.id === pipeline.id)!;
+          live.runs[0]!.attempts[0]!.launchId = "replacement-launch";
+          await persist([live]);
+        });
+      }
+      return outcome === "conflict" && id === `spawn_message_${launchId}` && result
+        ? { ...result, receipt: { ...result.receipt, conversationId: "conversation_wrong" } }
+        : result;
+    };
+    attempt.state = "spawning";
+    const stages = pipeline.stages;
+    const activationFence = JSON.stringify([pipeline.state, pipeline.cursor?.stageId, stages,
+      pipeline.graphEdits, pipeline.pausedAt, pipeline.resumedAt, pipeline.closedAt,
+      ...(pipeline.controlGeneration === undefined ? [] : [pipeline.controlGeneration])]);
+    const clientAttemptId = receipt.clientAttemptId ?? `activation-replay-${hasEnvelope}-${outcome}`;
+    attempt.activation = {
+      id: `replayed-activation-${hasEnvelope}-${outcome}`,
+      phase: "reserving",
+      input: { role: pipeline.stages[0]!.effectiveRole, prompt: "Build", cwd: pipeline.worktreeDir,
+        project: pipeline.project, clientAttemptId, title: pipeline.task, runtimeProfile: {}, membership: {} } as never,
+      clientAttemptId,
+      startedAt: attempt.startedAt!,
+      fence: activationFence,
+      replay: true,
+    };
+    savePipelines([pipeline]);
+    const beforeLookups = f.lookups.length;
+    await engineModule.drainStageActivations(f.h.ports);
+    const current = loadPipelines()[0]!;
+    if (outcome === "matching") {
+      expect(current).toMatchObject({ state: "running", runs: [{ attempts: [{ n: 1, state: "running", launchId, conversationId: receipt.conversationId }] }] });
+      expect(f.starts()).toBe(1);
+      expect(f.messages()).toBe(1);
+    } else if (outcome === "conflict") {
+      expect(current.state).toBe("needs_decision");
+      expect(current.stateDetail).toContain("runtime operation identity conflicts with the staged launch");
+      expect(current.runs[0]!.attempts[0]!.state).not.toBe("running");
+      expect(f.starts()).toBe(1);
+      expect(f.messages()).toBe(1);
+    } else {
+      expect(current.runs[0]!.attempts[0]!.launchId).toBe("replacement-launch");
+      expect(current.runs[0]!.attempts[0]!.state).not.toBe("running");
+      expect(f.starts()).toBe(1);
+      expect(f.messages()).toBe(1);
+    }
+    expect(f.lookups.slice(beforeLookups)).toEqual([launchId, `spawn_message_${launchId}`]);
+    if (outcome !== "revoked-during-message-lookup") expect(current.runs[0]!.attempts[0]!.launchId).toBe(launchId);
+    setAgentRegistryForTests(null);
+  }
+});
+
 
 test("two activation controllers claim one pre-host retry and reserve one successor", async () => {
   const f = await failedMembershipReplay();

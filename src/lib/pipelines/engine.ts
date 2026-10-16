@@ -298,6 +298,9 @@ export interface PipelinePorts {
   /** Fresh keyed state at an asynchronous retry boundary. */
   spawnReceiptState?(launchId: string): PipelineSpawnReceipt["state"] | null;
   recoverStagedLaunch?(launchId: string, eligible: () => boolean): Promise<void>;
+  /** Confirms both original runtime operations still belong to this launch.
+      The eligibility callback is checked after each read, outside the pipeline lease. */
+  originalLaunchOperations?(launchId: string, conversationId: string, eligible: () => boolean): Promise<"matched" | "conflict" | "unknown">;
   failStageLaunch?(launchId: string, conversationId: string, reason: string): boolean;
   claimSpawnRetry(launchId: string, claimId: string): "claimed" | "settled" | "conflict" | Promise<"claimed" | "settled" | "conflict">;
   /** Original launch/message journal evidence, freshly fenced by the failed
@@ -1619,6 +1622,24 @@ export function defaultPipelinePorts(
         }
         await recoverStagedStructuredLaunch(launchId, registry, client, { eligible });
       } finally { invalidateRegistryProjection(); }
+    }),
+    originalLaunchOperations: async (launchId, conversationId, eligible) => withViewerOperation("pipelines.evidence", async () => {
+      const client = dependencies.spawnRecoveryClient ? dependencies.spawnRecoveryClient() : runtimeHostClient();
+      if (!client) return "unknown";
+      let launch: Awaited<ReturnType<RuntimeHostClient["operationStatus"]>>;
+      let message: Awaited<ReturnType<RuntimeHostClient["operationStatus"]>>;
+      try {
+        launch = await client.operationStatus(launchId);
+        if (!eligible()) return "unknown";
+        message = await client.operationStatus(`spawn_message_${launchId}`);
+        if (!eligible()) return "unknown";
+      } catch { return "unknown"; }
+      const conflict = (operation: typeof launch, id: string) => !!operation
+        && (operation.operationId !== id || operation.receipt.operationId !== id
+          || operation.receipt.conversationId !== conversationId);
+      if (conflict(launch, launchId) || conflict(message, `spawn_message_${launchId}`)) return "conflict";
+      if (!launch || !message || launch.receipt.kind !== "spawn" || message.receipt.kind !== "send") return "unknown";
+      return eligible() ? "matched" : "unknown";
     }),
     failStageLaunch: (launchId, conversationId, reason) => {
       // Refresh at the write boundary: a receipt that published meanwhile wins.
@@ -6103,6 +6124,21 @@ async function spawnRunStage(
 ): Promise<void> {
   const recoveringReservation = attempt.activation?.replay === true;
   try {
+    if (recoveringReservation && attempt.launchId && attempt.conversationId) {
+      const nativeTurn = await attemptTurnTranscript(pipeline, stage.id, attempt, ports);
+      if (nativeTurn?.operationConflict) {
+        if (attempt.activation) attempt.activation.phase = "settled";
+        park(pipeline, "runtime operation identity conflicts with the staged launch; original launch retained", attempt);
+        await persist();
+        return;
+      }
+      if (nativeTurn?.pathname) {
+        reopenDeliveredAttempt(pipeline, attempt, nativeTurn.pathname);
+        if (attempt.activation) attempt.activation.phase = "settled";
+        await persist();
+        return;
+      }
+    }
     /* Carry the text-free role-memory selector through every spawn. Clean
        stages carry only their clean mark. */
     const memory = stageMemoryForLaunch(pipeline, stage, attempt.effectiveRole.roleId ?? null);
@@ -8545,18 +8581,26 @@ async function waitForStagedLaunch(
     return;
   }
   if (recovery.phase !== "unpublished" && !recovery.stopped) {
-    const turnPath = await attemptTurnTranscript(attempt, ports);
-    if (turnPath) {
+    const turn = await attemptTurnTranscript(pipeline, stage.id, attempt, ports);
+    if (turn?.operationConflict) {
+      park(pipeline, "runtime operation identity conflicts with the staged launch; original launch retained", attempt);
+      return;
+    }
+    if (turn?.pathname) {
       delete attempt.controllerWait;
-      reopenDeliveredAttempt(pipeline, attempt, turnPath);
+      reopenDeliveredAttempt(pipeline, attempt, turn.pathname);
       return;
     }
   }
   if (recovery.stopped || unixMs(ports.now()) - recovery.startedAt >= STAGED_RECOVERY_BUDGET_MS) {
-    const turnPath = await attemptTurnTranscript(attempt, ports);
-    if (turnPath) {
+    const turn = await attemptTurnTranscript(pipeline, stage.id, attempt, ports);
+    if (turn?.operationConflict) {
+      park(pipeline, "runtime operation identity conflicts with the staged launch; original launch retained", attempt);
+      return;
+    }
+    if (turn?.pathname) {
       delete attempt.controllerWait;
-      reopenDeliveredAttempt(pipeline, attempt, turnPath);
+      reopenDeliveredAttempt(pipeline, attempt, turn.pathname);
       return;
     }
     // The host's own process bounds the watch: the tick it is gone, or can no
@@ -8615,10 +8659,14 @@ async function waitForUnresolvedLaunch(pipeline: Pipeline, stage: PipelineStage,
     park(pipeline, SPAWN_GENERATION_CONFLICT, attempt);
     return;
   }
-  const pathname = await attemptTurnTranscript(attempt, ports);
-  if (pathname) {
+  const turn = await attemptTurnTranscript(pipeline, stage.id, attempt, ports);
+  if (turn?.operationConflict) {
+    park(pipeline, "runtime operation identity conflicts with the staged launch; original launch retained", attempt);
+    return;
+  }
+  if (turn?.pathname) {
     delete attempt.controllerWait;
-    reopenDeliveredAttempt(pipeline, attempt, pathname);
+    reopenDeliveredAttempt(pipeline, attempt, turn.pathname);
     return;
   }
   const now = ports.now();
@@ -8700,12 +8748,12 @@ function deliveryUnverifiedAttempt(pipeline: Pipeline, attempt: PipelineStageAtt
 
 async function deliveredAttemptPath(pipeline: Pipeline, attempt: PipelineStageAttempt, ports: PipelinePorts): Promise<string | null> {
   if (!deliveryUnverifiedAttempt(pipeline, attempt)) return null;
-  return await attemptTurnTranscript(attempt, ports);
+  return (await attemptTurnTranscript(pipeline, currentStage(pipeline)!.id, attempt, ports))?.pathname ?? null;
 }
 
 /** The attempt's own transcript, once it holds a native turn this attempt
     started. Its launch receipt names it before the receipt completes. */
-async function attemptTurnTranscript(attempt: PipelineStageAttempt, ports: PipelinePorts): Promise<string | null> {
+async function attemptTurnTranscript(pipeline: Pipeline, stageId: string, attempt: PipelineStageAttempt, ports: PipelinePorts): Promise<{ pathname: string | null; operationConflict?: boolean } | null> {
   if (!attempt.conversationId) return null;
   const receipt = attempt.launchId ? ports.spawnReceipt(attempt.launchId) : null;
   const recovery = stagedLaunchRecovery(receipt);
@@ -8720,10 +8768,23 @@ async function attemptTurnTranscript(attempt: PipelineStageAttempt, ports: Pipel
   const nativeWorkAt = Math.max(evidence?.turnStartedAt ?? 0, evidence?.lastAgentEventAt ?? 0);
   if (!evidence || evidence.launchOnly || evidence.turn === "unknown"
     || nativeWorkAt < unixMs(attemptEvidenceFloor(attempt))) return null;
+  const stillCurrent = () => {
+    const latest = findPipelineRecord(pipeline.id);
+    const currentAttempt = latest?.runs.find(run => run.stageId === stageId)?.attempts.find(item => item.n === attempt.n);
+    return !!latest && ["running", "needs_decision"].includes(latest.state)
+      && latest.cursor?.stageId === stageId && currentAttempt?.launchId === attempt.launchId
+      && currentAttempt?.conversationId === attempt.conversationId && !currentAttempt?.completedAt
+      && !currentAttempt?.verdict && !currentAttempt?.report
+      && (!attempt.activation || currentAttempt?.activation?.id === attempt.activation.id);
+  };
+  if (!stillCurrent()) return null;
+  const operations = await ports.originalLaunchOperations?.(attempt.launchId!, attempt.conversationId, stillCurrent) ?? "unknown";
+  if (operations === "conflict") return { pathname: null, operationConflict: true };
+  if (operations !== "matched" || !stillCurrent()) return null;
   const current = attempt.launchId ? ports.spawnReceipt(attempt.launchId) : null;
   if (receipt && (!current || current.conversationId !== receipt.conversationId || current.currentGeneration === false
     || current.stagedTranscript !== receipt.stagedTranscript || current.state !== receipt.state || current.error !== receipt.error)) return null;
-  return pathname;
+  return { pathname, operationConflict: false };
 }
 
 function reopenDeliveredAttempt(pipeline: Pipeline, attempt: PipelineStageAttempt, pathname: string): void {
