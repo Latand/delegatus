@@ -46,20 +46,26 @@ decision asked.
 
 ## 2. Summary
 
-- **Inventory:** 136 rows in section 5. 128 of them reach the server (a row
-  groups presses that share one handler and one outcome); 8 are local actions
+- **Inventory:** 166 rows in section 5. 156 of them reach the server (a row
+  groups presses that share one handler and one outcome); 10 are local actions
   on the same surfaces, kept for completeness. They come from 329 reachable
-  components with about 1,350 event-handler attributes. A verifier pass found
-  rows that had been folded into a neighbour's exemption (the external-relay
-  controls, Copilot account selection, the linked-install sharing switches,
-  provider key saves, team profile edits, the Telegram Off choice, the update
-  check); each now has its own row and class. Handlers not in the tables
-  change only browser state and are immediate by construction (section 5.9).
+  components with about 1,350 event-handler attributes. Two verifier
+  passes found rows that had been folded into a neighbour's exemption (the
+  external-relay controls, Copilot account selection, the linked-install sharing
+  switches, provider key saves, team profile edits, the Telegram Off choice, the
+  update check; then the restore of a hidden account, the local Telegram
+  settings, the known-chat choice, the board outbox's silent refusal, session
+  and passkey removal, the health-check controls, avatar generation, clone
+  cancel and Sync now) and explicit read controls the write scan could not see;
+  each now has its own row and class. Handlers not in the tables
+  change only browser state and are immediate; section 5.9 lists the explicit
+  read and retry controls and bounds that claim (section 5.10).
   Fourteen mutation-bearing component files are unreachable from any page and
-  are excluded (section 5.10).
-- **Classes:** 43 rows **A** (already optimistic, or local), 44 rows **B**
-  (should become optimistic; 36 changes, B1–B36), 48 rows **C** (legitimately
-  wait, reason named), and one row (L5) that takes the class of the lane action
+  are excluded (section 5.11).
+- **Classes:** 42 rows **A** (already optimistic, or local), 56 rows **B**
+  (should become optimistic; 45 changes, B1–B45), 67 rows **C** (legitimately
+  wait, reason named; three repairs F1–F3 add the pending state or error line
+  some of them lack), and one row (L5) that takes the class of the lane action
   it sends. The counts are computed from the section 5 tables by the script in
   section 11.
 - **The busiest surfaces mostly conform already.** Kanban card moves, edits,
@@ -72,8 +78,11 @@ decision asked.
   questions in the feed («Надіслати», up to 10 s of "Sending…"), permission
   Allow/Deny, the prototype review window's save, lane pause/resume and the
   "finishes the task" check, link/unlink, show-on-board, launch-row dismissal,
-  new tasks, conversation rename, Undo of an edit still being written, and
-  about twenty settings, account, team and relay rows.
+  new tasks, conversation rename, Undo of an edit still being written, the
+  restore of a hidden account, the local Telegram settings and the known-chat
+  choice, and about twenty more settings, account, team and relay rows. Two
+  failures are silent today: a permanent refusal of a board close, restore or
+  star (B44) and a failed Resolve or Undo in the report log (B43).
 - **Why it matters here:** the production Viewer logged 9,830 event-loop
   gaps of 0.5 s or more, 4,792 longer than 1 s and 2,913 longer than 3 s
   (max 19.2 s) between 2026-10-15 21:00 UTC and 2026-10-16 12:44 UTC
@@ -92,7 +101,7 @@ decision asked.
 submit or keyboard command an operator makes in the Viewer UI. Background
 traffic (presence beacons, log and host-target polls, the board-presence `HEAD`,
 the task album's "seen" bookkeeping, the setup guide's initial marker) is not an
-action and is listed only in section 5.9.
+action and is listed only in section 5.10.
 
 **How the inventory was built.**
 
@@ -111,6 +120,17 @@ action and is listed only in section 5.9.
    `layout.tsx` and `route.ts`, `src/instrumentation.ts` and `src/proxy.ts`.
    Reachable means imported by a page; a reachable component that no current
    view renders would still be listed.
+5. Explicit reads and retries (added after the second verifier pass): every
+   press handler whose callee reads from the server (`retry`, `reload`,
+   `refresh`, `recheck`, `load*`, `older`, `more`, `sync`), found by `grep -rnE`
+   over the `onClick` attributes of `src/components` and `src/app`, and every
+   file that holds a `fetch(` and is named nowhere in the first version.
+   Section 5.9 lists the result.
+6. Per-control re-read (second verifier pass): the account restore, Telegram,
+   team, health-check, external-relay, linked-install and report-log controls
+   were read control by control against their handlers and routes. A grouped
+   row states the handler of each control it covers. Other grouped rows were
+   not re-read control by control in this pass; section 9 says so.
 
 **Latency.** "Measured" cites a committed measurement or the production log;
 "est." is derived from the route's code path and has no timing of its own. The
@@ -130,8 +150,9 @@ measured without a new instrument (deferred, section 10). The common context:
 | `/api/answer` confirmation wait | up to 10,000 ms, polled every 500 ms | `src/app/api/answer/route.ts:19`, `:20`, `:105` |
 
 **Not done.** No browser was driven and nothing was rendered: the audit changes
-no UI. No request was sent to the operator's running Delegatus. Where behaviour
-is unclear from code, section 9 says so.
+no UI, and every "held response" behaviour in sections 5 and 6 is read from
+the handler and the route, not observed. No request was sent to the operator's
+running Delegatus. Where behaviour is unclear from code, section 9 says so.
 
 ## 4. Optimistic mechanisms that exist today
 
@@ -171,8 +192,8 @@ section 6), C waits with the reason named.
 | K6 | Hide a group; hide idle; hide finished; show a hidden group | `KanbanBoard.tsx:1269`, `:1327` (menu `:1434`, `:1442`, divider `:3330`), `:1241`; `MobileKanban.tsx:1051`, `:1059`; `MobileTaskScreen.tsx:699` | At once (M1) | Group comes back; per-task receipt | est. | A |
 | K7 | Dismiss a card's flag; Undo | `KanbanBoard.tsx:1300` (`:1321`, `:1322`); `MobileKanban.tsx:1075`; `mobile/MobileRowActions.tsx:51` | At once (M3) | Layer removed; error receipt | est. | A |
 | K8 | Show an off-board task on the board | `KanbanBoard.tsx:2534` (tray `kanban/HiddenTray.tsx:75`); `MobileKanban.tsx:1109` | Tray closes; the card appears after the PATCH and the task refetch; receipt after the answer | Error receipt; no card | est. one PATCH + refetch | **B4** |
-| K9 | Restore a conversation closed on the board | `KanbanBoard.tsx:2527` (tray `HiddenTray.tsx:90`) → M4 | At once | Outbox retries | est. | A |
-| K10 | Close a conversation on the board (reader ⋯) | `KanbanBoard.tsx:1745` → `ProjectDashboard.tsx:1429` (M4) | At once; receipt with Undo | Outbox retries | est. | A |
+| K9 | Restore a conversation closed on the board | `KanbanBoard.tsx:2527` (tray `HiddenTray.tsx:90`) → M4 | At once | Outbox retries a lost or throttled write; a **permanent refusal** (`INVALID_REQUEST`, `PAYLOAD_TOO_LARGE`) sheds the single mutation and the card silently goes back to the tray (`useBoardState.ts:704`, `:850`–`:866`); the snapshot reads `sync: "current"` again once the outbox is empty (`:612`) and carries no failure | est. | **B44** |
+| K10 | Close a conversation on the board (reader ⋯) | `KanbanBoard.tsx:1745` → `ProjectDashboard.tsx:1429` (M4) | At once; receipt with Undo | Same as K9: retries a lost write; on a permanent refusal the conversation silently reappears on the board | est. | **B44** |
 | K11 | Dismiss a launch that did not start (one / all) | `KanbanBoard.tsx:794` (buttons `KanbanCard.tsx:335`, `:367`) → `kanban/kanbanAssignments.ts:91`, `:102` | Nothing changes until the PATCH and the refetch | Card flashes; **no words** | est. one PATCH per launch, sequential | **B5** |
 | K12 | Link a conversation to a task | `KanbanBoard.tsx:1770` (menu `:1716`) → `kanbanAssignments.ts:28` | Nothing moves until the POST and the refetch; receipt after | Error receipt | est. | **B6** |
 | K13 | Unlink | `KanbanBoard.tsx:1727` | Same as K12 | 409 explained in a receipt | est. | **B6** |
@@ -198,7 +219,7 @@ Lane actions in the card menu are in 5.4.
 | W8 | Retry delivery from a decision pointer in a seat conversation | `decisions/DecisionPointer.tsx:59` | Button disabled until the answer | Error under the record | est. | **B14** |
 | W9 | Update decision: Deploy now | `selfUpdate/AutoDrainDecision.tsx:17` | Pending until the answer | "Superseded" / "failed" in place | est. | C — irreversible (starts the release switch) |
 | W10 | Update decision: Keep waiting | same | Pending until the answer | same | est. | **B15** |
-| W11 | Resolve a seat's question in the report log; undo | `orchestrator/reportLog/ReportLog.tsx:164` | At once (M3) | Layer removed | est. | A |
+| W11 | Resolve a seat's question in the report log; undo | `orchestrator/reportLog/ReportLog.tsx:164` (`resolve`; buttons `:194`, `:237`; the call `void dismiss(…)` at `:167` discards its result) → `sendDismissal` (`attention/dismissalOverlay.ts:231`) | At once (M3) | **Silent rollback**: a network error or a non-OK answer removes the layer and `sendDismissal` returns `{ ok: false, error }` (`dismissalOverlay.ts:247`, `:257`), and `resolve` drops that value; the question returns to «open» with no words, for both Resolve and Undo. A held 400 answer reproduces it | est. | **B43** |
 | W12 | Open a prototype notice or a card's review button | `prototypeReview/PrototypeNoticeRow.tsx:33`; `PrototypeReviewButton.tsx:53` | Navigation | — | — | A (local) |
 | W13 | Return from a followed attention request | `attention/AttentionHost.tsx:355` | Viewport restored first; the record is written after | Control stays for a second press | est. | A |
 
@@ -287,12 +308,19 @@ Lane actions in the card menu are in 5.4.
 | S15 | Delete call memory | `voiceCompanion/CallMemorySetting.tsx:15` | Writing | Retry | est. | C — irreversible |
 | S16 | Telemetry | `telemetry/TelemetrySettings.tsx:30` | Busy | Error | est. | **B25** |
 | S17a | Seat reports: turn Telegram reports Off ("Log only") | `orchestrator/SeatReports.tsx:155` → `save(null)` `:74`; `ProjectReportsOverview.tsx:81` | The stored choice changes only after the PUT answers; `reset()` follows | Error line under the control | est. one local write: the route handles `null` with `setReportTelegram(project, null)` and resolves no chat or link (`src/app/api/projects/settings/route.ts:157`–`:158`) | **B30** |
-| S17 | Seat reports: choose a chat or paste a link | `SeatReports.tsx:74`; `ProjectReportsOverview.tsx:81`; `onboarding/TelegramReportsStep.tsx:118` | Saving | Error with the server's message | est. Telegram lookup for a pasted link | C — server-computed (the server resolves the link and checks the bot is in the chat, `route.ts:124`–`:155`) |
-| S18 | Telegram sign-in, bot, report groups | `hooks/useTelegramConnection.ts:111`; `useTelegramBot.ts:63`; `useTelegramReports.ts:92` | Busy | Failure code | est. | C — server-computed (external service) |
+| S17b | Seat reports: choose a chat the bot already lists (pick, then Save) | `orchestrator/SeatReports.tsx:161` (`reports.save` `:164`; hook `:74`); `ProjectReportsOverview.tsx:81` (`write`, picked at `:108`, `:140`); `onboarding/TelegramReportsStep.tsx:118` | The stored choice, the chip face and the one-line reading change only after the PUT answers; the control reads «saving» | Error line under the control | est. one local write: for a chat that `service.listChats()` already knows (`src/app/api/projects/settings/route.ts:134`–`:139`) the route skips `addChat` (its guard is `:141`, the call `:143`) and goes straight to `setReportTelegram` (`:155`); only `CHAT_NOT_ALLOWED` (409, `:153`) can still refuse it | **B42** |
+| S17 | Seat reports: paste a Telegram link, or name a chat the bot does not list | `SeatReports.tsx:161`; `ProjectReportsOverview.tsx:128`; `TelegramReportsStep.tsx:118` | Saving | Error with the server's message | est. one Telegram lookup | C — server-computed (the remote branch is `service.addChat` at `route.ts:141`–`:143`: `getChat` and `getChatMember` prove the chat exists and the bot is in it; the result names the chat) |
+| S18a | Telegram sign-in, connect the bot with a token, refresh the bot's chats, add a chat by reference, test post, disconnect the bot | `hooks/useTelegramConnection.ts:111`; `hooks/useTelegramBot.ts:63` (`connect` `:99`, `refresh` `:98`, `addChat` `:101`, `testPost` `:106`, `remove` `:108`); `TelegramBot.tsx:192`, `:240`, `:375`, `:444`, `:448` | Busy | Failure code | est. one Telegram request | C — server-computed (external service: `getMe`, `getChat`, a test message); the disconnect is C — irreversible (it deletes the stored token and the chat store) |
+| S18b | Telegram bot: let agents post in a chat (switch) and rename its alias | `TelegramBot.tsx:119` (`toggle` `:100`–`:101`), alias blur `:153` → `useTelegramBot.ts:100` `setChat` → `src/app/api/telegram/bot/route.ts:58` | Every switch and alias field is disabled while `busy` (`useTelegramBot.ts:63`); the switch keeps its old position until the POST answers | Failure code line under the card | est. one local store write: `service.setChat` validates the id and alias and persists (`src/lib/telegram/bot/service.ts:575`–`:587`), no Telegram request | **B38** |
+| S18c | Telegram bot: save the document roots | `TelegramBot.tsx:271` → `useTelegramBot.ts:107` `setDocumentRoots` → `route.ts:68` | Form disabled while `busy`; the draft closes only after the answer | Failure code line | est. one local write: `service.setDocumentRoots` normalizes the paths and persists (`service.ts:475`–`:487`) | **B39** |
+| S18d | Daily report: enable, disable, time, source group modes | `TelegramReports.tsx:296`, `:306`, `:317`, `:157` (`setMode` `:154`) → `useTelegramReports.ts:123` `saveSettings` → `act` `:92` → `src/app/api/telegram/reports/route.ts:75` | All report controls are disabled while `busy`; each switch or time keeps its old value until the answer | `FailureNote` in the section | est. one local write: the branch only validates, sanitizes and updates the stored settings (`route.ts:75`–`:102`) | **B40** |
+| S18e | Daily report: save the prompt | `TelegramReports.tsx:226` → `useTelegramReports.ts:145` `savePrompt` → `route.ts:75` (`prompt`) | Editor and buttons disabled; the editor closes only after the answer | `FailureNote` above the textarea, text kept | est. one local write | **B41** |
+| S18f | Daily report: Run now; load the group list; open the prompt editor | `TelegramReports.tsx:345`, `:163`, `:339` → `useTelegramReports.ts:152`, `:153`, `:124` → `route.ts:104`, `:115`, `?prompt=1` | Busy; Run now becomes the `running` row after the 202 | `FailureNote` | est. `run-now` is durable at once, the source pass takes tens of seconds; `groups` is a bounded connector read | C — server-computed (the run, the connector's group list and the stored prompt text come from the server) |
 | S19 | Push notifications | `PushBell.tsx:35` | Browser permission prompt, then subscribe | — | est. | C — server-computed (permission, subscription) |
 | S20 | Learned rules: delete, restore, revert | `roleMemory/LearnedRules.tsx:146` | Waits | "save" error | est. | **B26** |
 | S21 | Summarise the memory profile | `roleMemory/useMemoryProfile.ts:62` | Streams | Error | est. | C — server-computed (summary) |
 | S22 | Linked installations: key, connect, code, remove | `links/LinkedSettingsDialog.tsx:149`, `:160`, `:174`, `:187` | Busy | Error | est. | C — server-computed (codes, peers) |
+| S22b | Linked installations: Sync now | `links/LinkedSettingsDialog.tsx:240` → `linkedAction` `:160` → `POST /api/links/peers/[id]` → `syncPeer` (`src/lib/links/client.ts:124`) | Every dialog control is disabled (`busy`) until the peer answers and the list is refreshed; no label of its own | `linkError` at the top of the dialog (`:232`) and the peer's error line | est. one call to the peer machine | C — server-computed (the sync contacts the peer; its outcome is the content) |
 | S23 | Language, sound, keep-awake, context mode | `LanguageToggle.tsx:19`; `SoundToggle.tsx:137`; `KeepAwakeControl.tsx:107`; `ContextToggle.tsx:36` | Local | — | — | A (local) |
 | S24 | Automatic updates on/off (self-update dialog) | `selfUpdate/SelfUpdateDialog.tsx:136` → `:70` | Button pending until the answer; the label flips with the returned snapshot | Error in the dialog | est. | **B27** |
 
@@ -310,33 +338,83 @@ Lane actions in the card menu are in 5.4.
 |---|---|---|---|---|---|---|
 | R1 | Switch the active account | `hooks/useEngineAccounts.ts:859` | At once, rollback with a notice (the whole panel is locked while it writes) | Restored + notice | est. | A |
 | R2 | Add an account, sign in, submit a login code («Надіслати код»), cancel a login | `useEngineAccounts.ts:781`, `:903`, `:930`, `:947`; `AccountsPanel.tsx:1130`, `:1152` | Busy | Notice | est. | C — server-computed (external auth) |
-| R3 | Remove / restore an account; clean up orphans | `useEngineAccounts.ts:1008`, `:1042`, `:1175` | Removing | Refusal names what holds it | est. | C — conflict (refused while in use) |
+| R3 | Remove an account (every engine); clean up orphans | `hooks/useEngineAccounts.ts:1008`, `:1175` | Removing | Refusal names what holds it | est. | C — conflict (refused while in use) |
+| R3b | Restore a hidden default account (Main, Default) from account setup or from the removal summary, every engine | `useEngineAccounts.ts:1041` `restore` (offers `AccountsPanel.tsx:758`, summary `:772`) → `POST /api/accounts/{codex,claude}` `restore` (`src/app/api/accounts/codex/route.ts:22`, `claude/route.ts:99`) | `runMutation("restore")` locks the panel (`busy`); the hidden row stays absent until the POST **and** a refresh both answer | Summary marked `restored: failed`, or the panel notice `accounts.removed.restoreFailed` | est. one local registry write. The routes only call `restoreLegacyCodexAccount` (`src/lib/accounts/codex.ts:722`) and `restoreLegacyClaudeAccount` (`claude.ts:787`), which delete `legacyHidden` from the registry; no sign-in, no new home, no live-work guard (an "already listed" 404 is harmless) | **B37** |
 | R4 | Refresh limits; reset credits; copy terminal command | `useEngineAccounts.ts:1109`, `:1137`, `:1073` | Busy | Notice | est. | C — server-computed (credit reset is irreversible) |
 | R5a | Claude provider editor: save an existing provider account | `AccountsPanel.tsx:804` (`request("save")`, PATCH) | Busy until the answer; the form stays open | Error line in the editor | est. one local write: `updateProviderClaudeAccount` (`src/lib/accounts/claude.ts:551`–`:584`) persists, no provider request | **B32** |
 | R5 | Claude provider editor: add a new provider account; "list models" | `AccountsPanel.tsx:804` (`request("save")` POST, `request("provider-models")`) | Busy | Error | est. one provider request: the route lists the provider's models before creating (`src/app/api/accounts/claude/route.ts:65`–`:86`) | C — server-computed (remote model list and token check) |
 | R6a | Copilot: use another account | `CopilotFooterRow.tsx:168` → `post` `:71`–`:90` | **No pending state**: the old "active" badge stays and the old row's button stays pressable until the POST answers, then `setBody` redraws | Alert at the foot of the row (`:263`) | est. one local write | **B33** |
-| R6 | Copilot: add an account, restore a hidden one, sign in, cancel a sign-in, choose plaintext storage | `CopilotFooterRow.tsx:238`, `:259`, `:174`, `:181`, `:188`, `:195`, `:196` → `post` | No busy state; the row changes when the answer redraws it | Alert at the foot of the row | est. | C — server-computed (a managed home and its sign-in supervisor are created or advanced on the server; the sign-in itself is external auth) |
+| R6 | Copilot: add an account, sign in, cancel a sign-in, choose plaintext storage | `CopilotFooterRow.tsx:238`, `:174`, `:181`, `:188`, `:195`, `:196` → `post` | No busy state; the row changes when the answer redraws it | Alert at the foot of the row | est. | C — server-computed (a managed home and its sign-in supervisor are created or advanced on the server; the sign-in itself is external auth) |
+| R6b | Copilot: restore the hidden Default account | `CopilotFooterRow.tsx:257` (`HiddenAccountOffer`, `restoring` flag) → `post` → `src/app/api/accounts/copilot/route.ts:83` | The offer is disabled; the account row appears only when `post` redraws the list | Alert at the foot of the row (`:263`) | est. one local registry write: `restoreLegacyCopilotAccount` (`src/lib/accounts/copilot.ts:302`) removes `legacyHidden` and writes the registry, nothing else | **B37** |
 | R6c | Copilot: remove an account | `CopilotFooterRow.tsx:95` (confirm `:215`) | Confirm closes; no busy state until the answer | Refusal block under the row, with Retry (`:229`) | est. | C — conflict (refused while live sessions, conversations or a sign-in hold the account: `src/app/api/accounts/copilot/route.ts:119`–`:127`) |
-| R7 | Crown a project; favourite; archive a project or a switchboard card | `hooks/useProjectCuration.ts:75`; `ProjectDashboard.tsx:485` (M4); `hooks/useArchivedProjects.ts`, `hooks/useArchivedPaths.ts` (local storage) | At once | Crown restored on failure | est. | A |
+| R7a | Crown a project | `hooks/useProjectCuration.ts:75` | At once | Crown restored on failure | est. | A |
+| R7b | Favourite a conversation (the star) | `ProjectDashboard.tsx:485` → `useBoardState.ts:1197` `setFavorite` (M4) | At once | Outbox retries a lost write; a permanent refusal sheds the mutation and the star silently flips back (same path as K9) | est. | **B44** |
+| R7c | Archive a project or a switchboard card | `hooks/useArchivedProjects.ts`, `hooks/useArchivedPaths.ts` (local storage) | At once | — | — | A (local) |
 | R8 | Create a project | `ProjectRail.tsx:767`; `mobile/MobileProjectSheet.tsx:198` → `useProjectCuration.ts:97` | Busy | Error | est. | C — server-computed (directory, key) |
 | R9 | Delete a project's transcripts | `ProjectTrash.tsx:234` | Confirm, busy | Count of failures | est. | C — irreversible |
 | R10 | Designate / confirm an orchestrator seat | `orchestrator/useSeatConfirm.ts:149`; `MobileSeatCard.tsx:281` | Submitting | Failure | est. | C — server-computed (spawns the seat) |
 | R11b | Team member: rename, pick a colour (self or owner) | `team/MembersTab.tsx:422`, `:440` → `patch` `:330` | `busy`; the heading, avatar and selected colour radio (`aria-checked` from `member.color`, `:438`) change only after the PATCH and `refreshTeamView` | Error line in the member dialog | est. one local write; the route authorizes the caller and persists the operator's value (`src/app/api/team/members/[id]/route.ts:27`–`:34`) | **B34** |
-| R11 | Team: sign in, join, approve requests and sessions, invites, revoke or restore members, passkeys, sign out | `team/MembersTab.tsx:63`, `:69`, `:257`, `:333`, `:401`, `:412`; `team/SessionsTab.tsx:49`–`:57`; `team/TeamPage.tsx:37`, `:106`; `team/SignInCard.tsx:279`; `team/JoinCard.tsx:93`; `headerMenu/HeaderMenu.tsx:49` | Busy | Error | est. | C — server-computed (authorization and credentials) |
+| R11 | Team: sign in, join, approve requests, invites, revoke or restore members, own Telegram link, add a passkey, header sign-out | `team/MembersTab.tsx:63`, `:69`, `:257`, `:333`, `:401`; `team/TeamPage.tsx:37`, `:106`; `team/SignInCard.tsx:279`; `team/JoinCard.tsx:93`; `headerMenu/HeaderMenu.tsx:49` | Where the handler sets `busy` (join, approve a sign-in, member PATCH, add a passkey, claim, sign-in steps) the form is disabled; `answerRequest` (`MembersTab.tsx:63`), `withdraw` (`:69`) and the "not me" step set none | `answerRequest` and the forms show `errorText` (`team/ui.tsx:42` returns the error as a value); `withdraw` (`:69`), the "not me" step (`SignInCard.tsx:279`), `TeamPage.tsx:37` and `HeaderMenu.tsx:49` ignore the answer and reload, change screen or redirect | est. | C — server-computed (authorization and credentials) |
+| R11c | Team: end another session, "sign out everywhere else", sign out this session | `team/SessionsTab.tsx:47`–`:58` (`signOut`, `signOutElsewhere`; buttons `:77`, `:102`) | **No pending state** (no `busy`, the button stays pressable) and the answers of `teamRequest` are not read: the row disappears only after the next `load()`; the current-session branch redirects to `/sign-in` even when the request was refused | **None**: a refused or lost DELETE ends in a reload with the session still listed, nothing said | est. one local write | C — irreversible (an ended session cannot be brought back; the credential is cleared on the server, so the redirect for the current session waits for it) with **F2** (pending state, error line, no redirect on a refusal) |
+| R11d | Team: remove a passkey | `team/MembersTab.tsx:411` `removePasskey` (button `:483`) | **No pending state**; the DELETE answer is ignored, then `loadPasskeys` and `refreshTeamView` reload | **None**: a 403 or network failure leaves the key listed with no words | est. one local write | C — irreversible (the registered credential is deleted and can only be registered again) with **F2** |
 | R12 | Phone access QR | `AccessQrButton.tsx:107` | Loading | Error | est. | C — server-computed (one-time URL) |
 | R13 | Self-update: update, retry, install action, restart | `selfUpdate/SelfUpdateDialog.tsx:70` (`:129`–`:131`) | Pending | Error | est. | C — irreversible |
 | R13b | Self-update: "Check now" / "Retry check" / "Check again" | `selfUpdate/SelfUpdateView.tsx:203`–`:208`, `:392` → `actions.check` `selfUpdate/SelfUpdateDialog.tsx:137` → `act` `:70` → `POST /api/self-update/check` | The button is disabled while `pending` holds `check`; the "checking" status line comes from the server snapshot (`SelfUpdateView.tsx:308`), not from the press | Error in the dialog | est. one remote revision lookup | C — server-computed (the result is the remote's current revision) |
 | R14 | External relay: pair a relay; create a voice clone | `externalRelay/ExternalRelaySection.tsx:262`, `:284`, `:293`; `CloneCreate.tsx:144` | Busy | Error | est. | C — server-computed (external service) |
+| R14g | External relay: generate avatar candidates for a voice clone | `externalRelay/CloneCreate.tsx:132` `generate` (button `:357`) → `POST …/clone-avatars` | The button reads "generating" and is disabled; the form stays usable | `setError` with the relay's code | est. an image generation at the external service, seconds to tens of seconds, not measured | C — server-computed (the candidates are generated images; there is nothing to draw) |
+| R14h | External relay: cancel a pending clone request | `CloneCreate.tsx:210` `cancel` (button `:457`) → `DELETE …/clone-requests/[id]` | `busy` disables the Cancel button; the card stays "waiting" until the answer, then returns to the form | `setError` in the waiting card; `not_found` counts as cancelled | est. one round trip to the external relay | C — conflict (the creation may have finished at the external service while the cancel travelled; its answer decides between the form and the created card) |
 | R14b | External relay: "answered here" switch of a target | `externalRelay/ExternalRelaySection.tsx:487` → `act` `:574` (`actions.route` `:585`–`:586`) → `PATCH …/targets/[targetId]` | `busy` disables every relay control; the switch keeps its old position until the request and `onChanged` finish | Error line of the relay card | est. one round trip to the external relay: the route stores the relay's own answer (`src/app/api/external-relay/relays/[id]/targets/[targetId]/route.ts:37`–`:67`) | C — server-computed (the external relay confirms who answers) |
 | R14c | External relay: target engine, model, effort | `ExternalRelaySection.tsx:494`, `:498`, `:503` → `patchTarget` `:585` | Same lock; old values stay until the answer | Error line of the relay card | est. one local store write (`src/app/api/external-relay/relays/[id]/route.ts:61`–`:103`) | **B35** |
 | R14d | External relay: concurrency, member limit, owner tier | `ExternalRelaySection.tsx:511`, `:405`–`:419` (limit field), `:522` → `patchTarget` | Same | Same | est. | **B35** |
 | R14e | External relay: pause / resume | `ExternalRelaySection.tsx:605` → `act` `:574` | Menu item disabled while busy; the state line changes after the answer | Error line of the relay card | est. one local write; the route also revokes the relay's running owner runs afterwards (`route.ts:111`) | **B36** |
 | R14f | External relay: disconnect | `ExternalRelaySection.tsx:609` | Busy | Error | est. | C — irreversible (unpairs the relay; pairing needs a new code from the external service) |
 | R15 | Setup guide: mark a step done / skipped | `onboarding/OnboardingDialog.tsx:253` (`mark`; `putOnboarding` result discarded, `onboarding/useOnboarding.ts:56`–`:66` returns `null` on refusal or network failure) | The step changes at once | **Silent**: the check stays changed, nothing is restored, no error | est. | **B29** |
-| R16 | Setup guide: health check start/stop; phone access on/off | `onboarding/CheckStep.tsx:128`, `:139`; `PhoneStep.tsx:96` | Busy | Error | est. | C — server-computed |
+| R16a | Setup guide: health check Start / Check again | `onboarding/CheckStep.tsx:128` (`start`; button `:332`) | **No in-flight state**: the button stays enabled and nothing changes until the POST answers with a run; a second press sends a second POST | Error line `data-health-start-failed` (`:328`) with the server's reason | est. one run admission (the run's rows are then polled once a second) | C — server-computed (the run id, the engine it uses and the row list are chosen by the server; `NO_ENGINE` is a common refusal) with **F3** (pending state at once, no double POST) |
+| R16b | Setup guide: health check Stop | `CheckStep.tsx:139` (`stop`; button `:331`) | **No pending state and no `response.ok` check**: the button stays enabled until the poll shows `stopped` | **None**: a refusal or a network error is swallowed (`:145`, "the poll shows whatever the server did") | est. one cancel plus cleanup | **B45** |
+| R16c | Setup guide: phone access on / off | `onboarding/PhoneStep.tsx:96` (`act`) | `busy` set at once; the buttons wait for the answer | `failure` line with the code and detail | est. a Tailscale install or sign-in step | C — server-computed (the access state is the server's) |
 | R17 | Task sheet: create (and send to agents) | `tasks/TaskSheet.tsx:43` | Busy through create and send | Error in the composer; send outcome toast | est. | **B7** (create); send C — server-computed per target |
 
-### 5.9 Local-only interactions and background traffic
+### 5.9 Explicit read, reload and retry controls
+
+The write-site scan of section 3 does not see a press that only reads. The
+verifier showed that these are operator actions with a wait of their own, so
+the scan was extended: every `onClick`, `onChange` or `onSubmit` in
+`src/components` and `src/app` whose callee name reads like a server read
+(`retry`, `reload`, `refresh`, `recheck`, `load*`, `older`, `more`, `sync`,
+`check`) was listed with `grep -rnE` and each hit read to its fetch. The
+content behind a read is the server's, so it cannot be drawn ahead of the
+answer: class C, reason **server-computed** unless the row says otherwise. What
+a row can still owe is the failure line, and those gaps are the repairs of
+section 6 (**F1**).
+
+| # | Action | Handler | Now | Fail | Lat. | Cl. |
+|---|---|---|---|---|---|---|
+| X1 | Conversation lists: Load more; Retry | `ConversationList.tsx:102`, `:84`; `DesktopConversations.tsx:106`, `:91`; `Switchboard.tsx:216`, `:202`; `mobile/MobileInlineCatalog.tsx:109` → `hooks/useConversationCatalog.ts:247`, `:254` | The next page is requested; the list stays | The catalog's error row with Retry | est. one catalog page | C — server-computed (the catalog page) |
+| X2 | Global search: Load more; Retry; "mine" filter | `search/GlobalSearch.tsx:342`, `:382`, `:177` → `search/useTranscriptSearch.ts:271`, `:276` | `loading` while the page comes | `data-search-error` row with Retry | est. one search page | C — server-computed (search results) |
+| X3 | Task album: Load more; Retry | `taskAlbum/TaskAlbum.tsx:290`, `:247` → `load` `:106` | Button shows a spinner and is disabled | Error block with Retry only while the album is empty (`:244`); **Load more that fails with pictures on screen says nothing** | est. one album page | C — server-computed (indexed pictures) with **F1** |
+| X4 | Team activity: Load more | `team/ActivityTab.tsx:198` → `load` `:91` | Button disabled | `failed` is shown only while there is no data (`:144`); **a failed Load more says nothing** | est. one events page | C — server-computed with **F1** |
+| X5 | Report log: Older | `orchestrator/reportLog/ReportLog.tsx:144` → `useReportLog.ts:150` `loadOlder` | Button reads "loading" (`loadingOlder`) | **Silent**: `fetchPage` returns `null`, the flag clears and the button returns | est. one cursor page | C — server-computed with **F1** |
+| X6 | File preview: Load more (text); Reload after a failure | `preview/TextPane.tsx:288` → `loadMore` `:86`; `preview/ArtifactPreviewHost.tsx:273` → `reload` | Button disabled, "Loading" until the ranged bytes arrive; Reload restarts the read | The pane is replaced by the failure card with the path and Reload (`ArtifactPreviewHost.tsx:261`) | est. one ranged read | C — server-computed (file bytes) |
+| X7 | Previous seats: open the notes; Retry | `orchestrator/PreviousSeats.tsx:300`, `:311`, `:442` → `useSeatNotes` `:113` | Notes area in a loading state when the notes are not already on the board | "Failed" line with Retry | est. one task list read | C — server-computed (the notes text) |
+| X8 | Read-aloud voice list: Retry | `feed/SpeakMenu.tsx:455` (effect `:263`) | Loading row | The list error with Retry | est. one provider voice list | C — server-computed (the provider's voices) |
+| X9 | Re-read after a failure: setup guide engines and voices, role mapping, orchestrator "Recheck", activity page, native queue, attach panes | `onboarding/EnginesStep.tsx:142`; `onboarding/VoiceStep.tsx:259`; `onboarding/AgentMappingTable.tsx:439`; `orchestrator/OrchestratorPanel.tsx:704`; `activity/ActivityDesktop.tsx:134` (`ActivityDashboard.tsx:830`); `NativeQueuePanel.tsx:205`; `resources/AttachControls.tsx:118` | Loading state in place of the failure | The same surface shows the next failure | est. one read each | C — server-computed (status of engines, mappings, seat, queue, panes) |
+| X10 | Conversation migration: Retry; Keep the current engine (rollback) | `MigrationRibbon.tsx:102` and its sibling button → `BranchPane.tsx:260` `recover` → `postConversationMigration` | Ribbon shows the migration state; the call is made in the background | `setRecoveryError` under the ribbon | est. one recovery request | C — conflict (the call carries the migration's revision; the server decides whether the retry still applies) |
+| X11 | Retry a failed launch chip | `conversation/LaunchChips.tsx:107` → `ProjectDashboard.tsx:1387` `retryLaunch` | A lane launch re-runs the stage (`retryPipelineLaunch`, the L2 guard) and toasts a refusal; any other launch opens a new draft with the old goal at once | Toast with the reason | est. one lane write | A (local) for the draft; the lane retry is L2 (C — conflict) |
+| X12 | Receipt chip Retry on a failed or uncertain delivery | `runtime/ReceiptChip.tsx:126` → `TmuxComposer.tsx:5978` | As C3 | As C3 | est. | C — conflict, as C3 |
+| X13 | Telegram connect: Retry | `TelegramConnect.tsx:369` | As S18a | As S18a | est. | C — server-computed, as S18a |
+
+**What bounds the claim of section 5.10.** A handler not named in sections
+5.1–5.9 was either matched by this cross-check as a local state change or is
+not a press (an effect, a poll, a timer, a scroll prefetch such as the older
+log page, `hooks/useLogTail.ts:413`, which `LogFeed.tsx:1079` starts from the
+scroll position). The 34 files that hold a `fetch(` and were named nowhere in
+the first version were read at their fetch sites and in the controls that reach them: the press-driven ones are X1–X13
+(`useConversationCatalog` and `useTranscriptSearch` through their callers, the
+preview, seat-notes, voice-list and report-log reads); the rest load from an
+effect, a poll or a scroll position, and are listed in section 5.10 when they
+are not shown by a view's own mount.
+
+### 5.10 Local-only interactions and background traffic
 
 Of the about 1,350 handler attributes in reachable components, every one not
 listed above is meant to change only browser state (open/close, fold, select, navigate,
@@ -348,9 +426,17 @@ tables by file, and the controls of every file with a write site were re-read
 after the pass (the relay, Copilot, linked-install, team, update and key rows). Background requests that are not operator actions:
 `hooks/useViewPresence.ts:214`, `hooks/logBus.ts:92`,
 `hooks/hostTargetBus.ts:75`, `hooks/useFiles.ts:1318`,
-`taskAlbum/TaskAlbum.tsx:135`, `onboarding/useOnboarding.ts:122`.
+`taskAlbum/TaskAlbum.tsx:135`, `onboarding/useOnboarding.ts:122`, and the
+loaders that run from an effect on mount or a timer: `hooks/runtimeBus.ts:241`,
+`hooks/useCodexRealtime.ts:212`, `hooks/useDeliveryProgress.ts:47`,
+`hooks/useTimeline.ts:21`, `components/ProjectAccounts.tsx:94`,
+`components/BurndownPanel.tsx:118`, `components/runtime/DeploymentStatusPill.tsx:28`,
+`components/StagingBadge.tsx:25`, `feed/messageProvenance.tsx:568`,
+`feed/cards/ImageCard.tsx:25`, `kanban/remoteFeed.ts:50`,
+`selfUpdate/useSelfUpdateFeed.ts:120`, `team/teamClient.ts:40`,
+`tasks/taskIconLoader.ts:38`, `taskAlbum/albumSummaries.ts:51`.
 
-### 5.10 Unreachable code (excluded)
+### 5.11 Unreachable code (excluded)
 
 No page imports these, so no operator can press them:
 `scheme/SchemeBoard.tsx`, `scheme/TaskCard.tsx`, `scheme/BulkActionBar.tsx`,
@@ -394,6 +480,26 @@ longer exists, in which case the nearest surface that still shows the subject.
 | B34 | Team member name and colour (R11b) | Heading, avatar and the selected colour radio use a local overlay of the typed name / picked colour until `refreshTeamView` shows the stored one | Restore the previous name and colour; the form reverts to the stored name | The error line in the member dialog (existing `setError`, `errorText`) |
 | B35 | External relay target settings (R14c, R14d) | Draw the predicted target (engine with its default model and no effort, model with its kept effort, effort, concurrency, member limit, owner tier) in the relay card at once; the controls of other targets stay usable | Restore the stored target; the member-limit field returns its stored text | The relay card's error line. "Answered here" (R14b) stays C: the external relay confirms it |
 | B36 | External relay pause / resume (R14e) | The state line shows paused or resumed and the menu label flips at once | Restore the previous state | The relay card's error line |
+| B37 | Restore a hidden default account (R3b, R6b) | Put the account's row back in the list at once (its id and label come from the offer or from the removal summary; the sign-in state reads "checking" until the refresh), mark the summary `restored: done` and drop the offer | Remove the row, bring the offer and the summary back with `restored: failed`; an "already listed" 404 counts as done | Existing: the summary's failed line or the panel notice `accounts.removed.restoreFailed` (Codex, Claude); the footer alert `CopilotFooterRow.tsx:263` (Copilot) |
+| B38 | Telegram bot: posting switch and alias (S18b) | Flip the switch (or the alias) in the chat row at once from a local copy of the chat; lock only the row, not every chat, while its write is in flight | Restore the chat's stored `postAllowed` and alias; an `alias_taken` or `alias_invalid` answer puts the field back to the stored text | The existing failure line under the bot card (`ERROR_KEYS`) |
+| B39 | Telegram bot: document roots (S18c) | Close the form and list the saved roots at once | Reopen the form with the typed paths | The existing failure line; `document_roots_invalid` is explained as today |
+| B40 | Daily report settings (S18d) | Show the new switch state, time or source mode from a local copy of `settings`; the other report controls stay usable | Restore the stored settings copy | `FailureNote` in the report section |
+| B41 | Daily report prompt (S18e) | Close the editor and show "edited by you" at once | Reopen the editor with the typed text (kept in state until the answer) | `FailureNote` above the textarea |
+| B42 | Choose a chat the bot already lists (S17b) | Show the chosen chat and name as the stored destination at once, drawn from the listed chat's title; `reset()` runs | Restore the previous `reportTelegram`, chosen chat and typed name; `CHAT_NOT_ALLOWED` (the bot left meanwhile) lands here | The existing failure line (`failed`) under the control; links and unknown chats keep today's wait (S17) |
+| B43 | Report-log Resolve / Undo (W11) | Unchanged: the question moves to resolved (or back) through M3 | The layer is already taken back by `sendDismissal`; additionally keep its `{ ok: false, error }` instead of discarding it in `resolve` (`ReportLog.tsx:164`) | A line beside the report question that was pressed, with the server's words, for both Resolve and Undo; cleared by the next press or after a poll that agrees |
+| B44 | Board outbox: permanent refusal (K9, K10, R7b) | Unchanged: close, restore and star apply at once | When `drain` sheds a single rejected mutation (`useBoardState.ts:860`), also publish it on the snapshot as a bounded list `rejections` (kind, target path or id, code, time; at most five, cleared when read); the optimistic board reverts as today | `ProjectDashboard.tsx` reads `rejections` and raises `pushTaskToast("err", …)` naming the conversation and the code; the star and the tray read the same list. Nothing else in the outbox changes |
+| B45 | Health check Stop (R16b) | Show "stopping" at once and disable the button (the poll replaces it with the stopped row) | On a refusal or a lost request, put Stop back | A new line under the controls, beside the existing start error (`data-health-start-failed`) |
+
+**Repairs to retained waits.** These rows stay class C because the server owns
+the content or the effect is irreversible, but they lack the feedback the rule
+asks of a wait: a pending state at once and an error in place. They are in the
+fix line without a class change.
+
+| # | Rows | Missing now | Repair | Error shows |
+|---|---|---|---|---|
+| F1 | X3, X4, X5 (Load more, Older) | A failed page request is swallowed while content is on screen | Keep the `failed` flag next to the button and clear it on the next press | A line beside the button ("Could not load more") with the button doubling as Retry |
+| F2 | R11c, R11d (sessions, passkeys) | No pending state; the DELETE answer is not read; the current-session branch redirects after a refusal | Pending state on the pressed row (the button disabled, "Ending…" / "Removing…"); read `teamRequest`'s answer; redirect only after `ok` | An error line in the tab or dialog (`errorText`, as the neighbouring forms) |
+| F3 | R16a (health Start) | The button stays enabled; a second press sends a second POST | Disable at once and show "starting" until the run appears or the request fails | The existing `data-health-start-failed` line |
 
 ## 7. The «Надіслати» button that triggered the rule
 
@@ -403,7 +509,7 @@ not asked again. From the evidence:
 - Only three buttons read exactly «Надіслати» in the Ukrainian UI:
   `voiceCompanion.send` (the voice companion proposal, V1), `common.send`
   (multi-question and typed answers in the feed question card, C10), and the
-  Telegram password submit (settings row S18, `telegram.passwordSubmit`).
+  Telegram password submit (settings row S18a, `telegram.passwordSubmit`).
 - The complaint came at 12:06:57 UTC inside a voice call. In the call that
   preceded it, the companion proposed a request at 12:04:47 UTC that required a
   confirmation; the card waited in `awaiting_confirmation`, the call ended at
@@ -438,8 +544,14 @@ predicted value and rolls it back (section 4). The fix line extends those:
 3. **Decisions (B12–B14):** one draft store for both the column and the review
    window (the column's `drafts` map), so a refused save always comes back with
    its words wherever it was made; fix the column's `answering` filter.
-4. **Everything else (B1–B3, B15–B27, B29–B36):** component state, switched before the
-   request, using the failure branches those components already have. The
+4. **Board preferences (B44):** the outbox already applies close, restore and
+   star at once; the missing piece is publication. `useBoardState`'s shed of a
+   single rejected mutation (`:860`) records it on a bounded `rejections` list
+   in the snapshot, and `ProjectDashboard` turns each entry into the board's
+   existing error toast (`pushTaskToast`). No new surface, no new library.
+5. **Everything else (B1–B3, B15–B27, B29–B43, B45) and the repairs F1–F3:**
+   component state, switched before the request, using the failure branches
+   those components already have. The
    template is M7. A shared hook for these rows is heavier than the rows
    themselves.
 
@@ -455,18 +567,19 @@ error text in place; a second press during the request sends nothing twice.
 | Slice | Items | Files | Risk | Tests to extend or add |
 |---|---|---|---|---|
 | 1. The reported button and the answers | B1, B2, B3 | `voiceCompanion/VoiceCompanion.tsx`, `feed/QuestionCard.tsx`, `attention/PermissionActions.tsx`, `runtime/ConversationAttention.tsx` | Low: client only, existing failure paths | `voiceCompanion/voiceCompanionProduct.dom.test.tsx`, `feed/QuestionCard.delivery.dom.test.tsx`, a new `PermissionActions.dom.test.tsx` |
-| 2. Board cards and lanes | B4–B11, B17, B28 | `kanban/useTaskMutations.ts`, `kanban/KanbanBoard.tsx`, `mobile/MobileKanban.tsx`, `kanban/kanbanAssignments.ts`, `hooks/useFiles.ts`, `kanban/pipelinePorts.ts`, `kanban/usePipelineActions.ts`, `pipelines/finishesTask.ts`, `kanban/stageDrafts.ts`, `pipelines/StagePlaceholderPane.tsx`, `tasks/useTaskCreateDraft.ts`, `tasks/TaskSheet.tsx`, `workLinks/*` | Medium: shared task and pipeline caches; the provisional card must be replaced exactly once | `kanban/KanbanBoard.dom.test.tsx`, `mobile/MobileKanban.dom.test.tsx`, `kanban/KanbanDrafts.dom.test.tsx`, `tasks/TaskSheet.dom.test.tsx`, `pipelines/StagePlaceholderPane.dom.test.tsx`, new tests beside `pipelinePorts.ts` and `useFiles.ts` |
-| 3. Decisions | B12–B15 | `hooks/usePrototypeReview.ts`, `prototypeReview/PrototypeReview.tsx`, `decisions/useOperatorDecisions.ts`, `decisions/DecisionColumn.tsx`, `decisions/DecisionCard.tsx`, `decisions/DecisionPointer.tsx`, `selfUpdate/AutoDrainDecision.tsx` | Medium: reverses the review window's wait chosen in #2747's fix round; the kept draft must survive a close and another task's review opening | `prototypeReview/PrototypeReview.dom.test.tsx`, `decisions/DecisionColumn.dom.test.tsx`, a new `DecisionPointer` test |
-| 4. Rename and settings | B16, B18–B27, B29, B30 | `session/SessionTitle.tsx`, `links/ShareProjectRow.tsx`, `links/LinkedSettingsDialog.tsx`, `onboarding/OnboardingDialog.tsx`, `orchestrator/SeatReports.tsx`, `memory/MemoryPage.tsx`, `orchestrator/WorkerLimitChip.tsx`, `orchestrator/useMaintainerRole.ts`, `MicButton.tsx`, `feed/SpeakButton.tsx`, `hooks/useVoiceCompanionSettings.ts`, `telemetry/TelemetrySettings.tsx`, `roleMemory/LearnedRules.tsx`, `selfUpdate/SelfUpdateDialog.tsx` | Low | `session/SessionTitle.dom.test.tsx`, `memory/MemoryPage.dom.test.tsx`, `orchestrator/WorkerLimitChip.dom.test.tsx`, `feed/SpeakButton.dom.test.tsx`, `MicButton.keyboard.dom.test.tsx`, `roleMemory/LearnedRules.render.test.tsx`, new tests for the rest |
-| 5. Keys, accounts, team and relay | B31–B36 | `asks/OpenRouterKeyField.tsx`, `onboarding/VoiceStep.tsx`, `hooks/useVoiceCompanionSettings.ts`, `AccountsPanel.tsx`, `CopilotFooterRow.tsx`, `team/MembersTab.tsx`, `externalRelay/ExternalRelaySection.tsx` | Medium for the key rows (a failed save must hand the typed secret back to the field and nowhere else); low for the rest | `asks/OpenRouterKeyField.dom.test.tsx`, existing `CopilotFooterRow`, team and relay DOM tests, new tests for the provider editor and the voice step |
+| 2. Board cards and lanes | B4–B11, B17, B28, B44 | `kanban/useTaskMutations.ts`, `kanban/KanbanBoard.tsx`, `mobile/MobileKanban.tsx`, `kanban/kanbanAssignments.ts`, `hooks/useFiles.ts`, `kanban/pipelinePorts.ts`, `kanban/usePipelineActions.ts`, `pipelines/finishesTask.ts`, `kanban/stageDrafts.ts`, `pipelines/StagePlaceholderPane.tsx`, `tasks/useTaskCreateDraft.ts`, `tasks/TaskSheet.tsx`, `workLinks/*`, `hooks/useBoardState.ts`, `ProjectDashboard.tsx` | Medium: shared task and pipeline caches and the board outbox every device uses; the provisional card must be replaced exactly once | `kanban/KanbanBoard.dom.test.tsx`, `mobile/MobileKanban.dom.test.tsx`, `kanban/KanbanDrafts.dom.test.tsx`, `tasks/TaskSheet.dom.test.tsx`, `pipelines/StagePlaceholderPane.dom.test.tsx`, new tests beside `pipelinePorts.ts` and `useFiles.ts`, `hooks/useBoardState.test.ts` (a held 400 `INVALID_REQUEST` for one queued close, restore and star: the rejection is published) |
+| 3. Decisions | B12–B15, B43 | `hooks/usePrototypeReview.ts`, `prototypeReview/PrototypeReview.tsx`, `decisions/useOperatorDecisions.ts`, `decisions/DecisionColumn.tsx`, `decisions/DecisionCard.tsx`, `decisions/DecisionPointer.tsx`, `selfUpdate/AutoDrainDecision.tsx`, `orchestrator/reportLog/ReportLog.tsx` | Medium: reverses the review window's wait chosen in #2747's fix round; the kept draft must survive a close and another task's review opening | `prototypeReview/PrototypeReview.dom.test.tsx`, `decisions/DecisionColumn.dom.test.tsx`, a new `DecisionPointer` test, `orchestrator/reportLog/ReportLog.dom.test.tsx` (a rejected dismissal shows its words and Undo does too) |
+| 4. Rename and settings | B16, B18–B27, B29, B30, B38–B42, B45, F1, F3 | `session/SessionTitle.tsx`, `links/ShareProjectRow.tsx`, `links/LinkedSettingsDialog.tsx`, `onboarding/OnboardingDialog.tsx`, `orchestrator/SeatReports.tsx`, `memory/MemoryPage.tsx`, `orchestrator/WorkerLimitChip.tsx`, `orchestrator/useMaintainerRole.ts`, `MicButton.tsx`, `feed/SpeakButton.tsx`, `hooks/useVoiceCompanionSettings.ts`, `telemetry/TelemetrySettings.tsx`, `roleMemory/LearnedRules.tsx`, `selfUpdate/SelfUpdateDialog.tsx`, `TelegramBot.tsx`, `hooks/useTelegramBot.ts`, `TelegramReports.tsx`, `hooks/useTelegramReports.ts`, `ProjectReportsOverview.tsx`, `onboarding/TelegramReportsStep.tsx`, `onboarding/CheckStep.tsx`, `taskAlbum/TaskAlbum.tsx`, `team/ActivityTab.tsx`, `orchestrator/reportLog/useReportLog.ts` | Low | `session/SessionTitle.dom.test.tsx`, `memory/MemoryPage.dom.test.tsx`, `orchestrator/WorkerLimitChip.dom.test.tsx`, `feed/SpeakButton.dom.test.tsx`, `MicButton.keyboard.dom.test.tsx`, `roleMemory/LearnedRules.render.test.tsx`, `TelegramBot.dom.test.tsx`, `hooks/useTelegramReports.dom.test.tsx`, `onboarding/CheckStep.dom.test.tsx`, `taskAlbum/TaskAlbum.dom.test.tsx`, new tests for the rest |
+| 5. Keys, accounts, team and relay | B31–B37, F2 | `asks/OpenRouterKeyField.tsx`, `onboarding/VoiceStep.tsx`, `hooks/useVoiceCompanionSettings.ts`, `AccountsPanel.tsx`, `CopilotFooterRow.tsx`, `team/MembersTab.tsx`, `team/SessionsTab.tsx`, `externalRelay/ExternalRelaySection.tsx`, `hooks/useEngineAccounts.ts` | Medium for the key rows (a failed save must hand the typed secret back to the field and nowhere else); low for the rest | `asks/OpenRouterKeyField.dom.test.tsx`, existing `AccountsPanel.dom.test.tsx`, `hooks/useEngineAccounts.test.ts` (a held restore shows the row at once, a refusal removes it), `CopilotFooterRow`, team and relay DOM tests, new tests for the provider editor and the voice step |
 
 The line touches no runtime-host code, no Bun pin and no deploy path. Every UI
 change still owes rendered evidence through the existing drivers (kanban board
 driver, conversation-window driver, phone driver) in en and uk, light and dark.
 
 The fix line is complete when every B row of section 5 maps to a B entry here
-and every entry appears in one slice: B1–B3 slice 1; B4–B11, B17, B28 slice 2;
-B12–B15 slice 3; B16, B18–B27, B29, B30 slice 4; B31–B36 slice 5.
+and every entry appears in one slice: B1–B3 slice 1; B4–B11, B17, B28, B44
+slice 2; B12–B15, B43 slice 3; B16, B18–B27, B29, B30, B38–B42, B45 and the
+repairs F1, F3 slice 4; B31–B37 and the repair F2 slice 5.
 
 **Open work on the same files, to recheck when the line starts:** PR #2962
 changes `pipelines/pipelineModel.ts` and `PipelineTemplatePicker.tsx`; the open
@@ -482,14 +595,18 @@ the audit's revision.
 - How long an event read can be held: the voice companion's `events()` awaits
   `active?.processing` before answering (`liveSession.ts`, after `command`);
   its duration is not visible from code.
-- A board-preferences mutation shed by bisection after a 4xx
-  (`useBoardState.ts:589`) rolls back, and no operator-visible message for it
-  was found in `useBoardState.ts`.
+- Which permanent refusals a real board write can meet: the shed path of
+  `useBoardState.ts:850`–`:866` is read in code and reproduced on paper with a
+  `400 {error:"INVALID_REQUEST"}`; no production refusal was seen. B44
+  publishes it either way.
 - Whether the task route accepts `board` together with M1's revision guard:
   `board` is a permitted field (`src/app/api/tasks/[id]/route.ts:26`); the
   guard's behaviour with it was not traced.
 - How quickly a permission row leaves after success depends on the files poll;
   not measured.
+- Grouped rows outside the controls listed in section 3, item 6, rest on the
+  first pass's reading of each group's shared handler. A later verifier pass
+  found several such groups hiding a different control; more may remain.
 - Reachability is by imports; a reachable component that no current view
   renders would be over-counted.
 
@@ -503,11 +620,14 @@ the audit's revision.
 - **Optimism for class C:** kills, deletes and resets (irreversible); retry,
   skip, accept-head and one more round (conflict-guarded); native Codex queue
   edits (conflict); external sign-ins and links (server-computed).
+- **Optimism for explicit reads** (section 5.9: Load more, Older, Reload,
+  Retry, search pages): the content is the server's, so nothing can be drawn
+  ahead of it. Only their missing failure lines are in the fix line (F1).
 - **Accounts panel lock:** the active-account switch is optimistic, but every
   row is disabled while any account write runs (`AccountsPanel.tsx:539`).
 - **Edge-control lock** while an edge write runs (`StageEdgeControls.tsx:68`).
 - **Local thumbnails while task-draft images upload** (C19).
-- **Deleting the unreachable components** in 5.10: a cleanup, outside this
+- **Deleting the unreachable components** in 5.11: a cleanup, outside this
   rule.
 - **Request-duration logging** in the Viewer, which would let a later audit
   measure route latency directly.
@@ -523,7 +643,7 @@ the audit's revision.
   decline, dismiss and preview have no caller), `session/sessionTitleApi.ts` (the rename client of C14),
   `hooks/useBridgeReportRelay.ts` (background cursor acknowledgement, not an
   action), and `workflows/workflowModel.ts` and `flows/flowModel.ts`
-  (reachable only from the unreachable strips of 5.10).
+  (reachable only from the unreachable strips of 5.11).
 - Waits: `grep -rlE "set(Busy|Saving|Pending|Sending|Submitting|…)\(true"` over
   the same trees (66 files).
 - Reachability: an import-graph walk from the app entry points (329 reachable
@@ -534,10 +654,10 @@ the audit's revision.
   `role == "viewer"`, count `gapMs`. Result: 9,830 records; 9,813 above 500 ms
   and 17 at exactly 500 ms; 4,792 above 1,000 ms; 2,913 above 3,000 ms; maximum
   19,220 ms. Read-only.
-- Class counts: parse every row of the tables in sections 5.1–5.8 (a first
+- Class counts: parse every row of the tables in sections 5.1–5.9 (a first
   cell of the form `K3b`), take the last cell's leading class (`A`, `**B…**`,
   `C`, `as L1–L4`) and count the distinct `**B<n>**` ids. At this revision:
-  136 rows (43 A, 44 B, 48 C, 1 inherited) and 36 B ids; 8 rows are marked
+  166 rows (42 A, 56 B, 67 C, 1 inherited) and 45 B ids; 10 rows are marked
   `(local)`.
 - Call journal: the two voice sessions of 2026-10-16 between 11:47 and 12:26
   UTC, read for `utterance`, `request` and `session_end` records. Read-only;
