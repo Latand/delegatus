@@ -1,11 +1,16 @@
-import "next/dist/server/node-environment-baseline";
 import { expect, spyOn, test } from "bun:test";
-import { after } from "next/server";
-import { AfterContext } from "next/dist/server/after/after-context";
-import { workAsyncStorage, type WorkStore } from "next/dist/server/app-render/work-async-storage.external";
-import { workUnitAsyncStorage, type WorkUnitStore } from "next/dist/server/app-render/work-unit-async-storage.external";
-import { productionSpawnCommandDependencies } from "./spawnCommand";
-import { viewerLoopMonitor } from "@/lib/viewerLoopMonitor";
+import type { WorkStore } from "next/dist/server/app-render/work-async-storage.external";
+import type { WorkUnitStore } from "next/dist/server/app-render/work-unit-async-storage.external";
+
+// Next captures global AsyncLocalStorage when its module graph first loads.
+// Bootstrap before importing any part of that graph, including spawnCommand.
+await import("next/dist/server/node-environment-baseline");
+const { after } = await import("next/server");
+const { AfterContext } = await import("next/dist/server/after/after-context");
+const { workAsyncStorage } = await import("next/dist/server/app-render/work-async-storage.external");
+const { workUnitAsyncStorage } = await import("next/dist/server/app-render/work-unit-async-storage.external");
+const { productionSpawnCommandDependencies } = await import("./spawnCommand");
+const { viewerLoopMonitor } = await import("@/lib/viewerLoopMonitor");
 
 const turn = () => new Promise<void>(resolve => setImmediate(resolve));
 
