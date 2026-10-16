@@ -44,6 +44,9 @@ import { readEvidence } from "./evidence";
 import { StructuredSendRefusedError, type EngineHost, type HostState } from "./engineHost";
 import { StructuredDeliveryQueue, type StructuredDeliveryQueueTiming } from "./structuredDeliveryQueue";
 import { deliveryProgressStore, type DeliveryProgressSink, type DeliveryProgressStore } from "./deliveryProgress";
+import { DeliveryWake } from "./deliveryWake";
+import { DeliveryEffectPages } from "./deliveryEffectPages";
+import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { applyStructuredReconfigure, type StructuredReconfigureDependencies } from "./structuredReconfigure";
 import { coalesceReadyEngineDeltas, projectEngineHostEvent } from "./engineHostEvents";
 import { observeCodexSubagentEvent } from "./codexSubagentDetection";
@@ -847,6 +850,7 @@ export async function bindStructuredDeliveryQueue(
     get: (operationId) => progressStore.get(operationId),
     open: () => progressStore.open(),
   };
+  const effectPages = new DeliveryEffectPages(client, () => scheduleAutomaticRetry());
   const queue = new StructuredDeliveryQueue(
     {
       progress,
@@ -920,7 +924,7 @@ export async function bindStructuredDeliveryQueue(
         controllerDiagnosticError("[structured delivery] a failed switch's hold could not be written; it stays owed", { operationId: effect.operationId });
         return false;
       },
-      effects: (kinds, afterEventSeq) => client.effectBatch(kinds, afterEventSeq),
+      effects: (kinds, afterEventSeq) => effectPages.read(kinds, afterEventSeq),
       idleContinuationCurrent: async (conversationId, fence) => {
         const session = await readRuntimeSession(client, { conversationId });
         // This operation itself blocks retirement. Admission and the claim
@@ -1285,7 +1289,7 @@ export async function bindStructuredDeliveryQueue(
       : null,
     dependencies.queueTiming,
   );
-  let drainTimer: ReturnType<typeof setTimeout> | null = null;
+  const drainWake = new DeliveryWake(() => { if (!stopped) void withViewerOperation("runtime.delivery-wake", () => drainWithRetry()); });
   let settleTimer: ReturnType<typeof setInterval> | null = null;
   let watchdogTimer: ReturnType<typeof setInterval> | null = null;
   let settlementSweepTimer: ReturnType<typeof setInterval> | null = null;
@@ -1307,16 +1311,7 @@ export async function bindStructuredDeliveryQueue(
         registry: () => registry, client: () => client, recover: dependencies.recover, kick: requestDrain,
         authorizeDispatch: authorizeRecovery, interruptionContinuation: true });
     }, { onlyIfChanged }).finally(() => { guarding = null; });
-  const scheduleDrain = (delayMs = DELIVERY_DRAIN_COALESCE_MS): boolean => {
-    if (stopped || drainTimer) return false;
-    drainTimer = setTimeout(() => {
-      drainTimer = null;
-      if (stopped) return;
-      void drainWithRetry();
-    }, delayMs);
-    drainTimer.unref?.();
-    return true;
-  };
+  const scheduleDrain = (delayMs = DELIVERY_DRAIN_COALESCE_MS): boolean => !stopped && drainWake.schedule(delayMs);
   const drainWithRetry = async (afterAdmission = false): Promise<void> => {
     if (stopped) return;
     try {
@@ -1912,15 +1907,13 @@ export async function bindStructuredDeliveryQueue(
   state.activeRegistry = registry;
   setStructuredDeliveryKick(() => {
     if (stopped) return;
-    if (drainTimer) clearTimeout(drainTimer);
-    drainTimer = null;
+    drainWake.cancel();
     return drainWithRetry(true);
   });
   state.stopActive = () => {
     stopped = true;
     queue.retire();
-    if (drainTimer) clearTimeout(drainTimer);
-    drainTimer = null;
+    drainWake.cancel();
     if (settleTimer) clearInterval(settleTimer);
     settleTimer = null;
     if (watchdogTimer) clearInterval(watchdogTimer);

@@ -910,9 +910,11 @@ export class StructuredDeliveryQueue {
     this.timing = { ...STRUCTURED_DELIVERY_TIMING, ...timing };
   }
 
-  drain(options: { safety?: boolean } = {}): Promise<void> {
+  drain(options: { safety?: boolean; afterAdmission?: boolean } = {}): Promise<void> {
     if (this.retirementExecutor.retired) return Promise.resolve();
-    if (!this.passRetry.ready()) { this.retrySoon(); return Promise.resolve(); }
+    // Fresh admitted work owns a new wake, even when an older listing failed.
+    // Preserve the failure budget; a successful pass still resets it below.
+    if (!options.afterAdmission && !this.passRetry.ready()) { this.retrySoon(); return Promise.resolve(); }
     if (this.activeDrain) {
       /* A watchdog pass is a safety net: one already running covers it. */
       if (options.safety) return this.activeDrain;
@@ -943,7 +945,7 @@ export class StructuredDeliveryQueue {
     /* The preceding drain owner reports its own failure. This barrier still
        evaluates the journal state created by the completed admission. */
     if (precedingDrain) await precedingDrain.catch(() => undefined);
-    await this.drain();
+    await this.drain({ afterAdmission: true });
   }
 
   private async drainUntilSettled(safety = false): Promise<void> {
@@ -1408,7 +1410,12 @@ export class StructuredDeliveryQueue {
       try { this.port.unlistedWakeDue?.(unlistedDue); }
       catch (error) { this.diagnosticError("[structured delivery] unlisted wake failed", { error: failureReason(error) }); }
     }
-    if (wake && !this.activeDrain) await this.drain({ safety: true }).catch(() => undefined);
+    if (wake) {
+      // A wake discovered during an in-flight listing belongs to its next
+      // pass. Keep it owed now, even if no later watchdog tick arrives.
+      if (this.activeDrain) { this.rerun = true; this.retrySoon(); }
+      else await this.drain({ safety: true }).catch(() => undefined);
+    }
   }
 
   /**

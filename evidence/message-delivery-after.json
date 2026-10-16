@@ -1,0 +1,115 @@
+{
+  "measuredAt": "2026-10-16T16:15:16.260Z",
+  "runtime": "1.4.0",
+  "sourceSha256": "86b63313b87681a4cb780421ecc809c5b76faabaa8f3e1c97e9efc86c6ed472b",
+  "listing": [
+    {
+      "trial": 0,
+      "retainedPending": 200,
+      "passes": 30,
+      "rpcCalls": 90,
+      "wireResultBytes": 166206,
+      "elapsedMs": 19.538140999997267
+    },
+    {
+      "trial": 1,
+      "retainedPending": 200,
+      "passes": 30,
+      "rpcCalls": 90,
+      "wireResultBytes": 166206,
+      "elapsedMs": 15.37135099999432
+    },
+    {
+      "trial": 2,
+      "retainedPending": 200,
+      "passes": 30,
+      "rpcCalls": 90,
+      "wireResultBytes": 166206,
+      "elapsedMs": 17.290924000000814
+    }
+  ],
+  "load": {
+    "trials": 3,
+    "rpcPerTrial": 100,
+    "sendsPerModePerTrial": 20,
+    "busySliceMs": 2000,
+    "engine": "recording EngineHost",
+    "ingress": "real runtime HTTP send handler, registry admission and bound delivery controller",
+    "journal": "real SQLite RuntimeJournal",
+    "transport": "separate runtime-host process"
+  },
+  "trials": [
+    {
+      "trial": 0,
+      "rpc": {
+        "samples": 100,
+        "newConnections": 0,
+        "viewerP50Ms": 1.6177850000000262,
+        "handlerP50Ms": 0.9767060000000356,
+        "viewerP95Ms": 3.6936880000000087
+      },
+      "delivery": {
+        "idle": {
+          "samples": 20,
+          "p50Ms": 39.12521599999991,
+          "p95Ms": 52.71427499999993,
+          "maxMs": 131.40519800000004
+        },
+        "busy": {
+          "samples": 20,
+          "p50Ms": 2050.1364649999996,
+          "p95Ms": 2069.303201999999,
+          "maxMs": 2169.9420949999985
+        }
+      }
+    },
+    {
+      "trial": 1,
+      "rpc": {
+        "samples": 100,
+        "newConnections": 0,
+        "viewerP50Ms": 0.5907589999987977,
+        "handlerP50Ms": 0.4179149999981746,
+        "viewerP95Ms": 0.7713699999949313
+      },
+      "delivery": {
+        "idle": {
+          "samples": 20,
+          "p50Ms": 30.830748000000312,
+          "p95Ms": 38.45647099999769,
+          "maxMs": 41.04357899999741
+        },
+        "busy": {
+          "samples": 20,
+          "p50Ms": 2047.8687619999982,
+          "p95Ms": 2052.604754,
+          "maxMs": 2062.4127569999982
+        }
+      }
+    },
+    {
+      "trial": 2,
+      "rpc": {
+        "samples": 100,
+        "newConnections": 0,
+        "viewerP50Ms": 0.6320610000111628,
+        "handlerP50Ms": 0.4811619999964023,
+        "viewerP95Ms": 0.9596539999911329
+      },
+      "delivery": {
+        "idle": {
+          "samples": 20,
+          "p50Ms": 37.3571030000021,
+          "p95Ms": 43.35046099999454,
+          "maxMs": 46.95966500000213
+        },
+        "busy": {
+          "samples": 20,
+          "p50Ms": 2067.269967,
+          "p95Ms": 2106.0923550000007,
+          "maxMs": 2154.07099800001
+        }
+      }
+    }
+  ]
+}
