@@ -166,8 +166,9 @@ test("the audit rules are the same in both dark scopes and never reach the light
   const [system, pinned] = auditBlocks();
   expect(system).toBe(pinned);
   expect(system.length).toBeGreaterThan(2000);
-  /* `--dc-hover` is declared only by the two dark scopes; the light theme reads each rule's fallback. */
-  expect(RULES.match(/--dc-hover:/g)?.length).toBe(2);
+  /* `--dc-hover` is declared only inside the two dark scopes (the lift, the raised-surface reset, the card lift in each); the light theme reads each rule's fallback. */
+  expect(RULES.match(/--dc-hover:/g)?.length).toBe(6);
+  expect(system.match(/--dc-hover:/g)?.length).toBe(3);
   expect(TOKENS).not.toContain("--dc-hover");
   for (const sheet of ["../components/kanban/kanbanBoard.css", "../components/pipelines/pipelineBlock.css"]) {
     const uses = fs.readFileSync(path.join(import.meta.dir, sheet), "utf8").match(/var\(--dc-hover[^;]*;/g) ?? [];
@@ -258,4 +259,60 @@ test("a hover row in a menu on the card lifts to raised; only menus that are rai
   expect(luminance(sunken)).toBeLessThan(luminance(card));
   expect(luminance(raised)).toBeGreaterThan(luminance(card));
   for (const label of [muted, secondary, primary]) expect(contrast(label, raised)).toBeGreaterThanOrEqual(4.6);
+});
+
+/* Review of PR #2965, second round. */
+
+/** Selectors of the component rules that draw a `:focus-visible` outline or shadow at a share of a colour (`color-mix`, an alpha). */
+function translucentFocusRules(): Set<string> {
+  const found = new Set<string>();
+  const walk = (directory: string): void => {
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+      const full = path.join(directory, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else if (/\.css$/.test(entry.name) && !full.endsWith("darkControls.css")) {
+        for (const match of fs.readFileSync(full, "utf8").matchAll(/^([^{}\n]*:focus-visible)\s*\{([^}]*)\}/gm)) {
+          if (/(?:outline|box-shadow)[^;]*(?:color-mix\([^;]*\d+%|rgba\(|rgb\([^)]*\/)/.test(match[2])) found.add(match[1].trim());
+        }
+      }
+    }
+  };
+  walk(path.join(import.meta.dir, ".."));
+  return found;
+}
+
+test("the stage-lesson outline was 2:1 and a translucent authored focus rule is left in neither dark scope", () => {
+  /* 40 % accent over the dark surfaces, as the rule is drawn. */
+  for (const ground of [card, canvas, raised]) {
+    expect(contrast(over(accent, 0.4, ground), ground)).toBeLessThan(2.1);
+    expect(contrast(accent, ground)).toBeGreaterThanOrEqual(5.3);
+  }
+  const rules = translucentFocusRules();
+  for (const selector of [".pblock .stage-lesson:focus-visible", ".kb .pane:focus-visible", ".kb .reader.conv:focus-visible"]) expect(rules.has(selector)).toBe(true);
+  for (const scope of RULES.split(/(?=^\/\* `data-theme="dark"` pins)/m)) {
+    const lines = scope.replace(/^ +/gm, "");
+    for (const selector of rules) {
+      const prefix = scope.includes(":root:not([data-theme=\"light\"])") ? ':root:not([data-theme="light"])' : ':root[data-theme="dark"]';
+      expect(lines).toMatch(new RegExp(`^${prefix.replace(/[[\]().]/g, "\\$&")} ${selector.replace(/[[\]().]/g, "\\$&")} \\{ (?:outline-color|box-shadow): (?:var\\(--color-accent\\)|(?:inset )?0 0 0 2px var\\(--color-accent\\)); \\}`, "m"));
+    }
+  }
+});
+
+test("the board's raised surfaces keep the well for hover fills and the cards inside them lift again, in both scopes", () => {
+  /* Raised on raised draws no step; the well is the step below it. */
+  expect(raised).not.toBe(card);
+  expect(luminance(well)).toBeLessThan(luminance(raised));
+  const board = fs.readFileSync(path.join(import.meta.dir, "../components/kanban/kanbanBoard.css"), "utf8");
+  /* Some declaration block of the selector paints the surface. */
+  const paints = (selector: string, background: string): boolean =>
+    [...board.matchAll(new RegExp(`^${selector.replace(/\./g, "\\.")} \\{[^}]*\\}`, "gm"))].some((rule) => rule[0].includes(`background: var(--${background})`));
+  for (const surface of [".kb .gsheet", ".kb .popover", ".kb .menu"]) expect(paints(surface, "surface-raised")).toBe(true);
+  for (const surface of [".kb .pane", ".kb .card"]) expect(paints(surface, "surface-card")).toBe(true);
+  for (const scope of RULES.split(/(?=^\/\* `data-theme="dark"` pins)/m)) {
+    const lines = scope.replace(/^ +/gm, "");
+    expect(lines).toContain(".kb :is(.gsheet, .popover, .menu) { --dc-hover: var(--surface-well); }");
+    expect(lines).toContain(".kb :is(.pane, .card) { --dc-hover: var(--color-raised); }");
+    /* The reset follows the declaration it overrides. */
+    expect(lines.indexOf("{ --dc-hover: var(--color-raised); }")).toBeLessThan(lines.indexOf(".kb :is(.gsheet, .popover, .menu)"));
+  }
 });
