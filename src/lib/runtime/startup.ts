@@ -1911,7 +1911,7 @@ export async function claudeStartupHostOptions(
     allowSubagents: entry.launchProfile?.allowSubagents ?? false,
     operatorDecisionForms: operatorDecisionFormsRequired(agentRole, entry.artifactPath),
     cleanMemory: entry.launchProfile?.cleanMemory === true,
-    appendSystemPrompt: await learnedRulesForLaunchProfile(entry.launchProfile, identity ? { engine: "claude", ...identity, cwd: entry.cwd, home: owner?.home, env: access.env, claudeSettingsPath: launchPaths?.spawnPolicyBaseSettingsPath } : undefined),
+    appendSystemPrompt: await learnedRulesForLaunchProfile(entry.launchProfile, identity ? { engine: "claude", ...identity, cwd: entry.cwd, home: owner?.home, env: access.env, claudeSettingsPath: launchPaths?.spawnPolicyBaseSettingsPath, providerAccount: Boolean(owner?.claudeProvider) } : undefined),
     mcpServers: entry.launchProfile?.mcpServers ?? ["viewer"],
     mcpStatePath: launchPaths?.mcpStatePath,
     readOnly: launchProfileEngineReadOnly(entry.launchProfile),

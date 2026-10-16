@@ -514,7 +514,7 @@ async function publishClaudeSuccessorHost(
       identity.capability,
     );
     const launchPaths = claudeHostLaunchPaths(input.target);
-    const appendSystemPrompt = await learnedRulesForLaunchProfile(input.profile, { engine: "claude", ...memoryStartIdentity(input.registry, input.conversationId, input.receipt.path), cwd: input.profile.cwd, home: input.target.home, env: access.env, claudeSettingsPath: launchPaths.spawnPolicyBaseSettingsPath });
+    const appendSystemPrompt = await learnedRulesForLaunchProfile(input.profile, { engine: "claude", ...memoryStartIdentity(input.registry, input.conversationId, input.receipt.path), cwd: input.profile.cwd, home: input.target.home, env: access.env, claudeSettingsPath: launchPaths.spawnPolicyBaseSettingsPath, providerAccount: Boolean(input.target.claudeProvider) });
     if (input.ownsOperation && !await input.ownsOperation()
       || !input.registry.ownsStructuredHostClaim(key, claimed.claimOwner, claimed.claimEpoch)) throw Error("successor ownership changed during memory preparation");
     host = await ClaudeStreamBrokerHost.adopt(input.receipt.nativeId, {

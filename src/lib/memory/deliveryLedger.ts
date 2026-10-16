@@ -23,6 +23,8 @@ export interface MemoryEngineStart {
   nativeMemoryEnabled?: boolean;
   /** Fallback used by the native Claude spawn policy when home settings are absent. */
   claudeSettingsPath?: string | null;
+  /** Claude provider starts pass --setting-sources "" and exclude home/project settings. */
+  providerAccount?: boolean;
 }
 type Selection = ReturnType<typeof learnedRulesSnapshot>;
 export interface MemoryDelivery {
@@ -79,14 +81,22 @@ async function engineMemory(start: MemoryEngineStart, clean: boolean) {
     } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
     type Settings = { autoMemoryEnabled?: boolean; autoMemoryDirectory?: string; env?: Record<string, string> };
     const homeSettings = await optionalFile(path.join(home, "settings.json"));
-    const baseSettings = homeSettings ?? (start.claudeSettingsPath ? await optionalFile(start.claudeSettingsPath) : null);
-    let settings: Settings = baseSettings ? JSON.parse(baseSettings.toString("utf8")) : {};
-    for (const settingsFile of [path.join(root, ".claude", "settings.json"), path.join(root, ".claude", "settings.local.json")]) {
-      const data = await optionalFile(settingsFile);
-      if (data) { const next = JSON.parse(data.toString("utf8")) as Settings; settings = { ...settings, ...next, env: { ...settings.env, ...next.env } }; }
+    const baseSettings = !homeSettings && start.claudeSettingsPath ? await optionalFile(start.claudeSettingsPath) : null;
+    let settings: Settings = start.providerAccount
+      ? (homeSettings ? {} : baseSettings ? JSON.parse(baseSettings.toString("utf8")) as Settings : {})
+      : (homeSettings ?? baseSettings) ? JSON.parse((homeSettings ?? baseSettings)!.toString("utf8")) as Settings : {};
+    if (!start.providerAccount) {
+      for (const settingsFile of [path.join(root, ".claude", "settings.json"), path.join(root, ".claude", "settings.local.json")]) {
+        const data = await optionalFile(settingsFile);
+        if (data) { const next = JSON.parse(data.toString("utf8")) as Settings; settings = { ...settings, ...next, env: { ...settings.env, ...next.env } }; }
+      }
     }
     if (settings.autoMemoryEnabled === false || settings.env?.CLAUDE_CODE_DISABLE_AUTO_MEMORY === "1") return [];
-    const directory = settings.autoMemoryDirectory ?? path.join(home, "projects", root.replace(/[^a-zA-Z0-9]/g, "-"), "memory");
+    if (start.env?.CLAUDE_CODE_DISABLE_AUTO_MEMORY === "1" && !settings.env?.CLAUDE_CODE_DISABLE_AUTO_MEMORY) return [];
+    const configuredDirectory = settings.autoMemoryDirectory;
+    const directory = configuredDirectory === "~" || configuredDirectory?.startsWith("~/")
+      ? path.resolve(home, configuredDirectory === "~" ? "." : configuredDirectory.slice(2))
+      : configuredDirectory ?? path.join(home, "projects", root.replace(/[^a-zA-Z0-9]/g, "-"), "memory");
     file = path.resolve(start.cwd, directory, "MEMORY.md");
   }
   const data = await optionalFile(file);

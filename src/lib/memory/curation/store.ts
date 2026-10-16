@@ -8,7 +8,7 @@ import { canonicalScope, projectScope, roleMemoryCollection, roleScope } from ".
 import { crossProjectRoleScope, MACHINE_SCOPE } from "../roleScopes";
 import { scopeChars } from "../roleConsolidate";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
-import { ROLE_MEMORY_BOUND, type RoleMemoryScopeRow, CURATION_CLAIM_COOLDOWN_MS, CURATION_INTERVAL_MS, CURATION_NEW_LESSONS, type CuratorPassView } from "../roleTypes";
+import { ROLE_MEMORY_BOUND, type RoleMemoryRule, type RoleMemoryScopeRow, CURATION_CLAIM_COOLDOWN_MS, CURATION_INTERVAL_MS, CURATION_NEW_LESSONS, type CuratorPassView } from "../roleTypes";
 
 export interface CuratorPass extends CuratorPassView {
   kind: "pass";
@@ -134,11 +134,14 @@ export function curationStatus(project: string, now = Date.now()) {
     if (!summary) {
       const held = projectRow(project);
       let active = false, pressure = false, newLessons = 0;
+      const activeByCanonicalScope = new Map<string, Map<string, RoleMemoryRule>>();
       for (const row of curationScopes(project)) {
         const rules = row.active.flatMap(id => { const rule = collection?.get(`r:${id}`); return rule?.kind === "rule" && rule.state === "active" && !rule.versionOf ? [rule] : []; });
         active ||= rules.length > 0;
-        // A full, already-curated scope does not cause an endless sequence of passes.
-        pressure ||= rules.some(rule => !rule.curatedAt) && scopeChars(rules) >= ROLE_MEMORY_BOUND * 0.9;
+        const canonical = canonicalScope(row.scope);
+        const grouped = activeByCanonicalScope.get(canonical) ?? new Map();
+        for (const rule of rules) grouped.set(rule.id, rule);
+        activeByCanonicalScope.set(canonical, grouped);
         const since = [row.curatedAt, held?.lastClaimAt].filter((at): at is string => !!at).sort().at(-1) ?? "";
         const curatedRevisions = new Map<string, number>();
         for (const change of row.history) if (change.by === "curator") {
@@ -150,6 +153,13 @@ export function curationStatus(project: string, now = Date.now()) {
           const revision = held?.claimRevisions ? Math.max(held.claimRevisions[revisionScope] ?? 0, curatedRevisions.get(revisionScope) ?? 0) : null;
           if (revision === null ? change.at > since : change.revision > revision) newLessons += change.added.length + (change.rewritten?.length ?? 0) + change.merged.length;
         }
+      }
+      // Aliased physical rows represent one scope in the launch snapshot. Apply
+      // the early trigger to their deduplicated canonical rule set as a whole.
+      for (const rules of activeByCanonicalScope.values()) {
+        const scopeRules = [...rules.values()];
+        // A full, already-curated scope does not cause an endless sequence of passes.
+        pressure ||= scopeRules.some(rule => !rule.curatedAt) && scopeChars(scopeRules) >= ROLE_MEMORY_BOUND * 0.9;
       }
       summary = { active, pressure, newLessons, lastAt: held?.lastAt ?? null };
       summaries.delete(key); summaries.set(key, { stamp, summary });

@@ -1958,7 +1958,7 @@ export async function claudeStructuredHostOptions(
     allowSubagents: profile.allowSubagents,
     operatorDecisionForms: operatorDecisionFormsRequired(agentRole, input.spec.transcript),
     cleanMemory: profile.cleanMemory === true,
-    appendSystemPrompt: await learnedRulesForLaunchProfile(profile, input.receipt && input.registry ? { engine: "claude", ...memoryStartIdentity(input.registry, input.receipt.conversationId), cwd: input.spec.cwd, home: input.account.home, env: access.env, claudeSettingsPath: launchPaths.spawnPolicyBaseSettingsPath } : undefined),
+    appendSystemPrompt: await learnedRulesForLaunchProfile(profile, input.receipt && input.registry ? { engine: "claude", ...memoryStartIdentity(input.registry, input.receipt.conversationId), cwd: input.spec.cwd, home: input.account.home, env: access.env, claudeSettingsPath: launchPaths.spawnPolicyBaseSettingsPath, providerAccount: Boolean(input.account.claudeProvider) } : undefined),
     mcpServers: profile.mcpServers,
     validateTelegramGrant,
     readOnly: launchProfileEngineReadOnly(profile),

@@ -250,6 +250,30 @@ test("Claude fallback spawn settings and settings environment switches match nat
   expect(memoryDeliveries()[1].delivery.engineMemory).toEqual([]);
 });
 
+test("Claude tilde memory paths expand against engine HOME and provider launches use provider sources", async () => {
+  const input = start("claude");
+  const engineHome = path.join(root, `engine-home-${n}`);
+  input.home = engineHome;
+  const tildeRoot = path.join(engineHome, "custom-memory");
+  write(path.join(engineHome, "settings.json"), JSON.stringify({ autoMemoryDirectory: "~/custom-memory" }));
+  write(path.join(tildeRoot, "MEMORY.md"), "Provider native memory copy.");
+  await learnedRulesForLaunchProfile(profile, input);
+  expect(memoryDeliveries()[0]!.delivery.engineMemory).toEqual([{ kind: "claude-index", hash: digest("Provider native memory copy."), bytes: 28, loadedBytes: 28 }]);
+
+  // Provider launches pass --setting-sources "". The account and project files
+  // are therefore absent from Claude's effective settings and cannot suppress
+  // the generated policy's native memory default or redirect its index.
+  input.providerAccount = true;
+  write(path.join(engineHome, "settings.json"), JSON.stringify({ autoMemoryEnabled: false, autoMemoryDirectory: path.join(root, "excluded") }));
+  const project = path.join(input.cwd, ".claude");
+  write(path.join(project, "settings.local.json"), JSON.stringify({ autoMemoryEnabled: false }));
+  const defaultIndex = path.join(engineHome, "projects", input.cwd.replace(/[^a-zA-Z0-9]/g, "-"), "memory", "MEMORY.md");
+  write(defaultIndex, "Provider default memory index.");
+  await learnedRulesForLaunchProfile(profile, input);
+  const providerExpected = { kind: "claude-index" as const, hash: digest("Provider default memory index."), bytes: 30, loadedBytes: 30 };
+  expect(memoryDeliveries()[1]!.delivery.engineMemory).toEqual([providerExpected]);
+});
+
 
 test.each([false, true])("private copies refuse a state path inside a checkout, including a symlink: %s", async linked => {
   const checkout = path.join(root, `archive-checkout-${n}`);

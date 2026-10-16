@@ -8,6 +8,7 @@ import { defaultSeatTickSources } from "@/lib/monitor/seatTickSources";
 import { input as tickInput } from "@/lib/boardMaintenance/testFixture";
 import { roleIsClean } from "../eligibility";
 import { ROLE_MEMORY_BOUND, CURATION_INTERVAL_MS, type RoleMemoryRule, type RuleSource } from "../roleTypes";
+import { scopeChars } from "../roleConsolidate";
 import { canonicalScope, leaveLessons, newRuleId, projectView, recordLessonRequest, learnedRulesBlock, roleMemoryCollection, roleScope, projectScope, restoreRule, deleteRule, storedLessonTexts } from "../roleStore";
 import { applyCuration, revertCuratorPass, type CurationApply } from "./apply";
 import { claimPass, currentPass, curationStatus, curationView, machinePass, patchPass, readPass, type CuratorPass } from "./store";
@@ -834,6 +835,38 @@ test("ninety percent schedules early curation, a full scope keeps unseen lessons
   applyCuration(retried, input({ [scope]: active }));
   for (const id of added) expect(row(id).curatedAt).toBeTruthy();
   expect(curationStatus(PROJECT, NOW + 63 * 60_000).due).toBe(false);
+});
+
+test("aliased physical scopes share the early curation pressure threshold", () => {
+  const oldScope = roleScope(PROJECT, "builder");
+  const currentProject = "curation-pressure-renamed";
+  const currentScope = roleScope(currentProject, "builder");
+  const rulesFor = (scope: string, prefix: string) => Array.from({ length: 15 }, (_, i) => fixture(scope, {
+    rule: `${prefix} ${i}: ${"preserve the scoped operational guidance and verify ownership before applying changes. ".repeat(4)}`.slice(0, 300),
+    curatedAt: at(),
+  }));
+  const oldRules = rulesFor(oldScope, "Retained prior rule");
+  const currentRules = rulesFor(currentScope, "Current canonical rule");
+  const priorPass = pass();
+  ended(priorPass);
+
+  const newLesson: RuleSource = { project: PROJECT, pipelineId: "alias-pressure", stageId: "build", attempt: 1, roleId: "builder", fixRound: false, conversationId: "conversation_alias_pressure" };
+  recordLessonRequest({ ...newLesson, at: at(2000) });
+  leaveLessons({ request: newLesson, source: newLesson, lessons: [{ scope: "role", rule: "Inspect the merged role scope before the next write.", why }], none: null, now: at(2000) });
+
+  expect(persistProjectAliases([{ source: PROJECT, target: currentProject, displayName: currentProject }])).toBe(true);
+  const collection = roleMemoryCollection()!;
+  const oldActive = collection.get(`s:${oldScope}`);
+  const currentActive = collection.get(`s:${currentScope}`);
+  if (oldActive?.kind !== "scope" || currentActive?.kind !== "scope") throw Error("aliased scope rows missing");
+  const merged = [...oldActive.active, ...currentActive.active];
+  expect(merged).toHaveLength(31);
+  expect(scopeChars(oldActive.active.map(id => row(id)))).toBeLessThan(ROLE_MEMORY_BOUND * 0.9);
+  expect(scopeChars(currentActive.active.map(id => row(id)))).toBeLessThan(ROLE_MEMORY_BOUND * 0.9);
+  expect(scopeChars(merged.map(id => row(id)))).toBeGreaterThanOrEqual(ROLE_MEMORY_BOUND * 0.9);
+  expect(oldRules.every(id => row(id).state === "active")).toBe(true);
+  expect(currentRules.every(id => row(id).state === "active")).toBe(true);
+  expect(curationStatus(currentProject, NOW + 31 * 60_000)).toMatchObject({ due: true, newLessons: 1 });
 });
 
 test("a scope containing only unseen lessons may exceed budget until a bounded curator partition commits", () => {
