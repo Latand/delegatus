@@ -97,6 +97,32 @@ test("the full form keeps originals, captions and videos; safe routes serve copi
   expect((await prototypeMediaGET(request(media.url!),"task-prototype",id,"f".repeat(64),"video")).status).toBe(404);
   expect(JSON.stringify(review)).not.toContain(process.env.HOME!);
 });
+test("short prototype media references refuse colliding review and media prefixes", async () => {
+  const id = await publish(await fullInput("media-prefix-collision"));
+  const review = (await read()).rounds[0]!;
+  const imageId = review.variants[0]!.frames[0]!.image.id;
+  const videoId = review.variants[0]!.videos[0]!.media.id;
+  const collidingReview = `${id.slice(0, 11)}${id[11] === "a" ? "b" : "a"}${id.slice(12)}`;
+  mutatePrototypeRound("task-prototype", id, round => {
+    const frame = round.variants[0]!.frames[0]!;
+    frame.original = { ...frame.image, id: `${imageId.slice(0, 8)}${imageId[8] === "a" ? "b" : "a"}${imageId.slice(9)}` };
+    const otherVideo = round.variants[0]!.videos[1]!.media;
+    round.variants[0]!.videos[1]!.media = { ...otherVideo, id: `${videoId.slice(0, 8)}${videoId[8] === "a" ? "b" : "a"}${videoId.slice(9)}` };
+  });
+  const imageCollision = await imageGET(request(`/api/image?taskId=task-prototype&prototype=${id.slice(0, 11)}&media=${imageId.slice(0, 8)}`));
+  expect(imageCollision.status).toBe(409);
+  const videoCollision = await prototypeMediaGET(request("/api/prototypes/media"), "task-prototype", id, videoId.slice(0, 8), "video");
+  expect(videoCollision.status).toBe(409);
+
+  mutatePrototypeRound("task-prototype", id, (round, taskRow) => {
+    if (!taskRow?.prototypeReviews) throw new Error("published round is missing from its task");
+    const original = structuredClone(round);
+    round.id = collidingReview;
+    taskRow.prototypeReviews.push(original);
+  });
+  const reviewCollision = await imageGET(request(`/api/image?taskId=task-prototype&prototype=${id.slice(0, 11)}&media=${imageId}`));
+  expect(reviewCollision.status).toBe(409);
+});
 test("directory convention pairs original and changed pictures and skips subdirectories", async () => {
   const dir = await source(); await fs.mkdir(path.join(dir,"bundle"));
   await fs.writeFile(path.join(dir,"variant-1-layout-1440-en-original.png"),PNG);

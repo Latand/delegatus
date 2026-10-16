@@ -287,6 +287,7 @@ test("default prototype media references shorten and retain resolvable ids", asy
   expect(payload).not.toMatch(/[a-f0-9]{20,}/i);
   expect(payload).toContain("prototype=pr_aaaaaaaa");
   expect(payload).toContain("media=bbbbbbbb");
+  expect(payload).toContain("/prototypes/pr_aaaaaaaa/video/dddddddd");
   expect(payload).toContain("/video/dddddddd");
   expect(result).toMatchObject({ ok: true, rounds: [{ variants: [{ frames: [{ image: { id: "bbbbbbbb" }, original: { id: "cccccccc" } }], videos: [{ media: { id: "dddddddd" } }] }] }] });
 });
