@@ -194,6 +194,11 @@
   :root:not([data-theme="light"]) .composer-ghost:focus-visible,
   :root:not([data-theme="light"]) button[data-composer-send]:focus-visible { --tw-ring-color: transparent; }
   :root:not([data-theme="light"]) .kb .reader.conv:focus-visible { box-shadow: inset 0 0 0 2px var(--color-accent); }
+  /* A control with no focus style of its own (the seat and reader icon buttons,
+     the feed's summaries, report links) shows the browser ring, near-white
+     here; it takes the accent. Colour only and no specificity, so every
+     drawn or removed outline keeps its own. */
+  :where(:root:not([data-theme="light"])) :where(:focus-visible) { outline-color: var(--color-accent); }
 
   /* Hover and press washes that sank into the well or the canvas take the
      raised surface; a press adds a strong line, since a lighter fill would take
@@ -394,6 +399,11 @@
 :root[data-theme="dark"] .composer-ghost:focus-visible,
 :root[data-theme="dark"] button[data-composer-send]:focus-visible { --tw-ring-color: transparent; }
 :root[data-theme="dark"] .kb .reader.conv:focus-visible { box-shadow: inset 0 0 0 2px var(--color-accent); }
+/* A control with no focus style of its own (the seat and reader icon buttons,
+   the feed's summaries, report links) shows the browser ring, near-white
+   here; it takes the accent. Colour only and no specificity, so every
+   drawn or removed outline keeps its own. */
+:where(:root[data-theme="dark"]) :where(:focus-visible) { outline-color: var(--color-accent); }
 
 /* Hover and press washes that sank into the well or the canvas take the
    raised surface; a press adds a strong line, since a lighter fill would take

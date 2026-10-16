@@ -147,6 +147,8 @@ test("the phone Stop, the switch knob and the focus ring hold their floors", () 
   expect(contrast(card, accent)).toBeGreaterThanOrEqual(5.8);
   expect(contrast(muted, sunken)).toBeGreaterThanOrEqual(5.4);
   for (const ground of [canvas, card, raised, sunken, well]) expect(contrast(accent, ground)).toBeGreaterThanOrEqual(5.3);
+  /* The browser's own ring takes the accent without outranking any authored outline. */
+  for (const block of auditBlocks()) expect(block).toContain(":where(:root) :where(:focus-visible) { outline-color: var(--color-accent); }");
 });
 
 test("a hover wash lifts to the raised surface and keeps every label over 4.5:1", () => {
