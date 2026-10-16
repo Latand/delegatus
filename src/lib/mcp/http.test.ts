@@ -306,6 +306,7 @@ test("the HTTP endpoint publishes exactly the stdio server's tools, schemas and 
     const [overHttp, overStdio] = await Promise.all([http.listTools(), stdio.listTools()]);
     expect(overHttp.tools.length).toBeGreaterThan(30);
     expect(overHttp.tools).toEqual(overStdio.tools);
+    expect(overHttp.tools.map(tool => tool.name)).not.toContain("suggest_replies");
     expect(http.getInstructions()).toBe(stdio.getInstructions());
     expect(http.getServerVersion()).toEqual(stdio.getServerVersion());
   } finally {

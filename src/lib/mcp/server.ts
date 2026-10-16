@@ -50,6 +50,7 @@ import {
 
 import { runAsMcpHttpCaller, type McpHttpCaller } from "./callerContext";
 import type { McpToolPolicy } from "./toolAllowlist";
+import { MCP_TOOL_CATALOG_CAPABILITY } from "./toolCatalog";
 
 export const MCP_SERVER_NAME = "viewer";
 
@@ -4551,6 +4552,7 @@ for (const name of MCP_TOOL_NAMES) TOOL_INPUT_SCHEMAS[name] = TOOL_INPUT_SCHEMAS
 export function createViewerMcpServer(service: McpToolService): McpServer {
   const server = new McpServer({ name: MCP_SERVER_NAME, version: "1.0.0" }, {
     instructions: viewerMcpInstructions(),
+    capabilities: { experimental: { [MCP_TOOL_CATALOG_CAPABILITY]: { version: 1, tools: [...MCP_TOOL_NAMES] } } },
   });
   for (const toolName of MCP_TOOL_NAMES) {
     const taskMutation = toolName === "create_task" || toolName === "update_task";
@@ -4615,6 +4617,28 @@ export function createViewerMcpServer(service: McpToolService): McpServer {
       }
     });
   }
+  return server;
+}
+
+/** The retired name exists only for a runtime-host-admitted update probe.
+ * Ordinary stdio and HTTP servers never register it, so agents cannot discover
+ * the compatibility surface in tools/list. */
+export function createViewerMcpHealthProbeServer(service: McpToolService): McpServer {
+  const server = createViewerMcpServer(service);
+  // Older installed deployers compare the candidate against their full catalog.
+  // Removal conditions: docs/verification/managed-mcp-catalog.md#bridge-removal.
+  // This registration never enters bindings, policy, receipts or agent prompts.
+  server.registerTool("suggest_replies", {
+    description: "Deprecated update compatibility entry. Always refuses; use publish_prototype_review with a decision form.",
+    inputSchema: z.looseObject({}),
+    annotations: { readOnlyHint: true, destructiveHint: false },
+  }, async () => {
+    const result = {
+      ok: false, code: "tool_retired", retryable: false,
+      error: "Reply drafts are retired. Use publish_prototype_review with questions and no taskId to ask the operator in a decision form.",
+    };
+    return { isError: true, structuredContent: result, content: [{ type: "text", text: result.error }] };
+  });
   return server;
 }
 
@@ -4692,7 +4716,9 @@ export async function startViewerMcpServer(): Promise<void> {
   delete process.env[MCP_HEALTH_PROBE_CAPABILITY_ENV];
   const hostHealthProbe = await admittedMcpHealthProbe(healthProbeCapability);
   const service = await createProductionViewerMcpService(hostHealthProbe, true);
-  const server = createViewerMcpServer(service);
+  const server = hostHealthProbe
+    ? createViewerMcpHealthProbeServer(service)
+    : createViewerMcpServer(service);
   const transport = new StdioServerTransport();
   // The SDK does not close its transport on EOF. A dead client (including a
   // killed launcher) must not leave domain timers or in-flight reads resident.

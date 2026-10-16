@@ -349,7 +349,7 @@ test("documented bootstrap input obtains host-owned admission through the final 
   Object.assign(environment, {
     HOME: sandbox,
     XDG_CONFIG_HOME: path.join(sandbox, "config"),
-    TMPDIR: path.join(sandbox, "tmp"),
+    TMPDIR: sandbox,
     LLV_STATE_DIR: state,
     LLV_RUNTIME_EVENTS: "1",
     LLV_RUNTIME_HOST_SOCKET: socketPath,
@@ -414,7 +414,7 @@ test("documented bootstrap input obtains host-owned admission through the final 
       calls: { deploymentStatus: true, boardSnapshot: true },
       ok: true,
     });
-    expect(result.health.mcpRuntime?.tools).toHaveLength(MCP_TOOL_NAMES.length);
+    expect(result.health.mcpRuntime?.tools).toEqual([...MCP_TOOL_NAMES, "suggest_replies"].sort());
     expect(fs.existsSync(socketPath)).toBe(false);
     const successor = new RuntimeHostFence(`${socketPath}.lock`);
     successor.acquire();
@@ -1160,7 +1160,7 @@ test("the first successor boot publishes and probes the MCP runtime after an old
         },
       },
     });
-    expect(result.health.tools).toHaveLength(MCP_TOOL_NAMES.length);
+    expect(result.health.tools).toEqual([...MCP_TOOL_NAMES, "suggest_replies"].sort());
     const target = JSON.parse(fs.readFileSync(path.join(fixture.state, "viewer-release.json"), "utf8"));
     expect(target).toMatchObject({
       revision,

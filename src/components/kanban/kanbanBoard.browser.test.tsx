@@ -65,6 +65,89 @@ import { readClaudeCredentials } from "@/lib/accounts/claudeCredentials";
 const browserTest = browserCase(process.env.LLV_KANBAN_BROWSER_TEST === "1");
 const LAUNCH: LaunchOptions = { headless: true, args: ["--no-sandbox"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) };
 
+describe("managed MCP catalog failure", () => {
+  browserTest("cause and retry guidance in the Updates panel", async () => {
+    const before = process.env.LLV_MCP_CATALOG_BEFORE === "1";
+    const out = path.resolve(".artifacts/managed-mcp-catalog", before ? "before" : "after");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    const { MANAGED_STEPS, idleCheck, idleUpdate, stoppedProcess } = await import("@/lib/selfUpdate/types");
+    const OLD = "7".repeat(40), TARGET = "a".repeat(40), at = "2026-10-16T08:00:00.000Z";
+    const rev = (sha: string) => ({ sha, short: sha.slice(0, 7), version: "1.13.0", date: at });
+    const processView = (pid: number) => ({ ...stoppedProcess(), state: "healthy", pid, revision: OLD.slice(0, 7), startedAt: at, lastHealthAt: at, lastHealthOk: true });
+    const failures = [
+      ["legacy", "MCP runtime is missing tools: suggest_replies", "selfUpdate.mcp.legacy", "suggest_replies"],
+      ["declared", "MCP candidate did not register declared tools: new_read. Retrying the same image will not help; choose a corrected release.", "selfUpdate.mcp.declared", "new_read"],
+      ["contract", "MCP candidate is missing deployment contract tools: board_snapshot. Retrying the same image will not help; choose a corrected release.", "selfUpdate.mcp.contract", "board_snapshot"],
+      ["invalid", "MCP candidate tool catalog is invalid. Retrying the same image will not help; choose a corrected release.", "selfUpdate.mcp.invalid", ""],
+      ["temporary", "MCP startup timed out", null, ""],
+    ] as const;
+    const readings: unknown[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const width of before ? [390, 1440] : [390, 800, 1440]) {
+        const context = await browser.newContext({ viewport: { width, height: width === 390 ? 844 : 900 }, colorScheme: theme, reducedMotion: "reduce", ...(width === 390 ? { isMobile: true, hasTouch: true } : {}) });
+        const page = await context.newPage();
+        const errors: string[] = [];
+        page.on("pageerror", error => errors.push(error.message));
+        try {
+          await context.addInitScript(({ lang, theme }) => {
+            localStorage.setItem("llv_lang", lang); localStorage.setItem("llv-theme", theme);
+            const streams: Record<string, ((event: { data: string }) => void)[]>[] = [];
+            let Source = window.EventSource;
+            Object.defineProperty(window, "EventSource", { configurable: true, get: () => Source, set: (Base: typeof EventSource) => {
+              Source = class extends Base {
+                constructor(url: string | URL) {
+                  super(url);
+                  if (String(url).startsWith("/api/self-update/events") && !String(url).includes("readOnly")) {
+                    const listeners: Record<string, ((event: { data: string }) => void)[]> = {}; streams.push(listeners);
+                    Object.assign(this, { addEventListener: (type: string, listener: (event: { data: string }) => void) => { (listeners[type] ??= []).push(listener); } });
+                  }
+                }
+              } as typeof EventSource;
+            } });
+            Object.assign(window, { catalogEmit: (data: unknown) => { for (const listeners of streams) for (const listener of listeners.state ?? []) listener({ data: JSON.stringify(data) }); } });
+          }, { lang, theme });
+          await page.goto(server.base);
+          await page.evaluate(theme => document.documentElement.setAttribute("data-theme", theme), theme);
+          await page.waitForSelector(width === 390 ? "[data-phone-card], [data-mobile2-shell], [data-mobile-shell]" : "[data-kanban-board]");
+          await page.evaluate(() => window.dispatchEvent(new Event("llv:open-self-update")));
+          const dialog = page.locator("[data-self-update-dialog]"); await dialog.waitFor();
+          for (const [state, reason, key, tools] of before ? failures.slice(0, 1) : failures) {
+            const snapshot = {
+              mode: "managed", unsupportedReason: null, installed: rev(OLD), available: rev(TARGET), serving: { web: rev(OLD), runtimeHost: rev(OLD) },
+              check: idleCheck(), busy: null, processes: { web: processView(1001), runtimeHost: processView(1002) },
+              meta: { branch: "main", remote: "", checkout: null, pollMinutes: 60, serverTime: at },
+              update: { ...idleUpdate(MANAGED_STEPS), state: "failed", target: TARGET, targetShort: TARGET.slice(0, 7), targetVersion: "1.13.0", startedAt: at, finishedAt: "2026-10-16T08:00:39.900Z",
+                steps: MANAGED_STEPS.map((name, index) => ({ name, state: index < 3 ? "done" : index === 3 ? "failed" : "pending", startedAt: at, durationMs: index === 3 ? 11900 : index === 1 ? 28000 : 0, tail: index === 3 ? [reason] : [], exitCode: null,
+                  failure: null })) },
+            };
+            await page.evaluate(data => (window as unknown as { catalogEmit(data: unknown): void }).catalogEmit(data), snapshot);
+            const panel = dialog.locator("[data-update='failed']"); await panel.waitFor();
+            await panel.scrollIntoViewIfNeeded();
+            const cause = await panel.locator("[data-cause]").innerText();
+            const guidance = await panel.locator("[data-retry-guidance]").count() ? await panel.locator("[data-retry-guidance]").textContent() : null;
+            if (before) { expect(cause).toBe(reason); expect(guidance).toBeNull(); }
+            else {
+              expect(cause).toBe(key ? translate(lang, key, { tools }) : reason);
+              expect(guidance).toBe(translate(lang, state === "temporary" ? "selfUpdate.mcp.retryTemporary" : state === "legacy" ? "selfUpdate.mcp.retryLegacy" : "selfUpdate.mcp.retryCandidate"));
+              for (const selector of ["[data-cause]", "[data-retry-guidance]", "[data-action='retry']"]) {
+                const box = await panel.locator(selector).boundingBox();
+                expect(box).not.toBeNull(); expect(box!.x).toBeGreaterThanOrEqual(0); expect(box!.x + box!.width).toBeLessThanOrEqual(width);
+                expect(box!.y).toBeGreaterThanOrEqual(0); expect(box!.y + box!.height).toBeLessThanOrEqual(width === 390 ? 844 : 900);
+              }
+            }
+            await panel.screenshot({ path: path.join(out, `${lang}-${theme}-${width}-${state}.png`) });
+            readings.push({ lang, theme, width, state, cause, guidance });
+          }
+          expect(errors).toEqual([]);
+        } finally { await context.close(); }
+      }
+      fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify({ before, readings }, null, 2));
+    } finally { await browser.close(); server.stop(); }
+  }, 90_000);
+});
+
 describe("machine worker limit", () => {
   browserTest("machine worker limit: desktop setting, seat face and popover in both languages and themes", async () => {
     const out = path.resolve(".artifacts/machine-worker-limit/desktop"); fs.mkdirSync(out, { recursive: true });
