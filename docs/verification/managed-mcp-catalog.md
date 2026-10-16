@@ -42,9 +42,12 @@ The machine-readable verification record is `evidence/managed-mcp-catalog.json`.
 
 Run each explicit test path through `bash scripts/gate-slot.sh bun test <path>`. This stage used the installed gate wrapper named by its launch instructions. All commands ran in source exports, with private HOME, config, state and temporary directories. For short Unix socket paths, a held directory descriptor exposed the same scratch directory through `/proc/<runner-pid>/fd/<descriptor>`; every created file remained in that owned scratch directory.
 
-On a scratch root outside the standard OS temp prefixes, add a preload after the project's own `test-preload.ts`. That preload claims a narrower process temp directory, so HOME, XDG_CONFIG_HOME and LLV_STATE_DIR must then be placed inside that directory too. Otherwise the state guard classifies the sibling config as operator state. The extra preload used this body after importing the export's `test-preload.ts`:
+On a scratch root outside the standard OS temp prefixes, add a preload after the project's own `test-preload.ts`. That preload claims a narrower process temp directory, so HOME, XDG_CONFIG_HOME and LLV_STATE_DIR must then be placed inside that directory too. Otherwise the state guard classifies the sibling config as operator state. The extra preload used the following layout, importing the export's `test-preload.ts` first:
 
 ```ts
+import fs from "node:fs";
+import path from "node:path";
+await import(path.resolve("test-preload.ts"));
 const root = process.env.TMPDIR!;
 for (const [key, name] of Object.entries({
   HOME: "home", XDG_CONFIG_HOME: "config", LLV_STATE_DIR: "state",
@@ -58,3 +61,11 @@ for (const [key, name] of Object.entries({
 Pass it with `bun test --preload <private-preload> <explicit-test-paths>`. The first attempts with sibling config directories produced the same six launcher/adapter timeouts on main and head; the final runs use the nested layout. Neither production code nor the committed test preload changes for this adaptation.
 
 The Viewer runtime verifier constructs its own sibling config directory. In the private export only, its copied `sandboxEnvironment` used `TMPDIR: sandbox` instead of `TMPDIR: path.join(sandbox, "tmp")`. This keeps every sandbox directory under its declared temp root, with no owner token supplied. The build, loaded production modules, server startup and HTTP probes use the candidate's unchanged artifacts. The committed verifier remains unchanged; the evidence distinguishes this adapted run from the initial refusal.
+
+## Verification result
+
+The final selection passed 500 tests, with two existing opt-in Docker cases skipped. The new cases failed on main: ten catalog cases (A), two compatibility cases (B), and ten panel cases (C). The old-prober pairing passed with the bridge and failed with exactly `MCP runtime is missing tools: suggest_replies` when the bridge was excluded.
+
+TypeScript, changed-file ESLint, the production build, MCP answer-size budgets, Linux backend verification and runtime negative controls passed. The Viewer loaded all 25 compiled modules and served HTTP 200 with the private temp-root adaptation above. Its compiled Codex socket probe passed. The runtime host completed succession and answered 27/27 listener and socket observations over 15 seconds under Bun 1.4.0. The browser driver passed both captures; all 60 head frames and eight main frames were visually inspected. The JSON record carries commands, source checksums, frame checksums and the measured results.
+
+`origin/main` was fetched and merged without a rebase; it remained at the recorded base. Required hosted checks run after Delegatus publishes the branch. The PR mapping is the A–C table above; the retained compatibility entry's removal remains the tracked follow-up in this document.
