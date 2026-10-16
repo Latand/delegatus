@@ -1122,5 +1122,196 @@
       }
     ],
     "remainingBlocker": "Two full pre-push runs classify the provider-budget runner deadline as NEW. Its isolated head sample passes. Publication remains blocked; coverage and gate limits are unchanged."
+  },
+  "publicationRetry": {
+    "startingCommit": "f1a13ed32276d99068e23facd3837151dabc3311",
+    "base": "d395e7c7324e2653acd37edbbf644814f622deb1",
+    "cause": "Two synthetic-checkout recovery fixtures lacked a native Git HEAD; their repair is retained. The monolithic provider-budget file passed alone at the five-minute boundary but exceeded the unchanged deadline in both earlier full-hook runs.",
+    "change": "Move complete provider-budget test families into three files with independent file runs. Test bodies concatenate byte-for-byte to the original after imports are removed; all 164 registered names retain their order. No product code, assertions, fixture implementation, timeout or hook changes.",
+    "isolation": "Scratch exports; private HOME, XDG_CONFIG_HOME, XDG_CACHE_HOME, XDG_DATA_HOME, TMPDIR, LLV_STATE_DIR and agent configuration roots; closed loopback Viewer control URL. Heavy commands use scripts/gate-slot.sh. Each comparator file and baseline receives fresh isolated roots.",
+    "inventory": {
+      "unchanged": true,
+      "count": 164,
+      "files": [
+        {
+          "path": "src/lib/pipelines/engine.providerBudget.test.ts",
+          "count": 74
+        },
+        {
+          "path": "src/lib/pipelines/engine.providerBudgetChains.test.ts",
+          "count": 62
+        },
+        {
+          "path": "src/lib/pipelines/engine.providerBudgetKinds.test.ts",
+          "count": 28
+        }
+      ]
+    },
+    "sourceFiles": [
+      {
+        "path": "src/lib/pipelines/engine.recovery.test.ts",
+        "sha256": "9806bb3f1d7c3285873ec617384bdde22f272a770326355281c80f2732a13c19"
+      },
+      {
+        "path": "src/lib/pipelines/engine.providerBudget.test.ts",
+        "sha256": "c53009032ae1d3887163e21ae4e29d8ba5c561715e5a13051b18806dde1f573c"
+      },
+      {
+        "path": "src/lib/pipelines/engine.providerBudgetChains.test.ts",
+        "sha256": "6ab8138877184cf33803c64440b5325e1c208fd8ef29828ee736bdfe8d452351"
+      },
+      {
+        "path": "src/lib/pipelines/engine.providerBudgetKinds.test.ts",
+        "sha256": "b17d74ed4cf0c6208f5834e804d08c9bcea7a5eefa17c66349e0c7298135f6d4"
+      }
+    ],
+    "sourceDigest": "fcf46e9bbaad8145ad481c00d8d41225b23376b5b861c09c219a42b576c31898",
+    "observations": [
+      {
+        "label": "original-recovery",
+        "command": [
+          "bash",
+          "scripts/gate-slot.sh",
+          "bun",
+          "scripts/local-gate-tests.ts",
+          "--base",
+          "d395e7c7324e2653acd37edbbf644814f622deb1",
+          "./src/lib/pipelines/engine.recovery.test.ts"
+        ],
+        "exitCode": 1,
+        "startedAt": "2026-10-16T00:56:05Z",
+        "elapsedSeconds": 46.552,
+        "outcomes": [
+          "touched-tests: base commit d395e7c7324e2653acd37edbbf644814f622deb1",
+          "touched-tests: reviewed head commit 0d7f2cab32b7e461ec1537666a035e248bebe2cd (head sample runs the working tree)",
+          "touched-tests: head 36271ms",
+          "touched-tests: baseline run 1980ms (tests 1514ms; 1 failing file(s))",
+          "touched-tests: 0 new file(s), judged on head alone",
+          "touched-tests: flaky confirmation 3 reruns per side, 8015ms (shared budget 300000ms)",
+          "NEW src/lib/pipelines/engine.recovery.test.ts: recovering an unsubmitted reserving activation stays held at before-recovery",
+          "NEW src/lib/pipelines/engine.recovery.test.ts: recovering an unsubmitted reserving activation stays held at account-lock",
+          "touched-tests: 2 new failures, 0 pre-existing failures, 0 fixed, 0 removed/skipped, 0 flaky"
+        ]
+      },
+      {
+        "label": "repaired-recovery",
+        "command": [
+          "bash",
+          "scripts/gate-slot.sh",
+          "bun",
+          "scripts/local-gate-tests.ts",
+          "--base",
+          "d395e7c7324e2653acd37edbbf644814f622deb1",
+          "./src/lib/pipelines/engine.recovery.test.ts"
+        ],
+        "exitCode": 0,
+        "startedAt": "2026-10-16T00:57:18Z",
+        "elapsedSeconds": 33.088,
+        "outcomes": [
+          "touched-tests: base commit d395e7c7324e2653acd37edbbf644814f622deb1",
+          "touched-tests: reviewed head commit 0d7f2cab32b7e461ec1537666a035e248bebe2cd (head sample runs the working tree)",
+          "touched-tests: head 32857ms",
+          "touched-tests: green head; no baseline checkout or sample needed"
+        ]
+      },
+      {
+        "label": "original-provider",
+        "command": [
+          "bash",
+          "scripts/gate-slot.sh",
+          "bun",
+          "scripts/local-gate-tests.ts",
+          "--base",
+          "d395e7c7324e2653acd37edbbf644814f622deb1",
+          "./src/lib/pipelines/engine.providerBudget.test.ts"
+        ],
+        "exitCode": 0,
+        "startedAt": "2026-10-16T00:56:29Z",
+        "elapsedSeconds": 300.317,
+        "outcomes": [
+          "touched-tests: base commit d395e7c7324e2653acd37edbbf644814f622deb1",
+          "touched-tests: reviewed head commit 0d7f2cab32b7e461ec1537666a035e248bebe2cd (head sample runs the working tree)",
+          "touched-tests: head 300031ms",
+          "touched-tests: green head; no baseline checkout or sample needed"
+        ]
+      },
+      {
+        "label": "split-lint",
+        "command": [
+          "bash",
+          "scripts/gate-slot.sh",
+          "bun",
+          "scripts/eslint-changes.ts",
+          "--base",
+          "d395e7c7324e2653acd37edbbf644814f622deb1",
+          "./src/lib/pipelines/engine.providerBudget.test.ts",
+          "./src/lib/pipelines/engine.providerBudgetChains.test.ts",
+          "./src/lib/pipelines/engine.providerBudgetKinds.test.ts"
+        ],
+        "exitCode": 0,
+        "startedAt": "2026-10-16T01:00:25Z",
+        "elapsedSeconds": 2.216,
+        "outcomes": [
+          "0 errors introduced by this change",
+          "0 errors already on the base in the changed files (not blocking)"
+        ]
+      },
+      {
+        "label": "repaired-touched",
+        "command": [
+          "bash",
+          "scripts/gate-slot.sh",
+          "bun",
+          "scripts/local-gate-tests.ts",
+          "--base",
+          "d395e7c7324e2653acd37edbbf644814f622deb1",
+          "./src/lib/git/agentHistoryGuard.test.ts",
+          "./src/lib/performanceSpans.test.ts",
+          "./src/lib/pipelines/engine.accountGuard.test.ts",
+          "./src/lib/pipelines/engine.activation.test.ts",
+          "./src/lib/pipelines/engine.containment.test.ts",
+          "./src/lib/pipelines/engine.controllerPass.test.ts",
+          "./src/lib/pipelines/engine.controllerSnapshot.test.ts",
+          "./src/lib/pipelines/engine.cpuAdmissionPolling.test.ts",
+          "./src/lib/pipelines/engine.cpuQueue.test.ts",
+          "./src/lib/pipelines/engine.creation.test.ts",
+          "./src/lib/pipelines/engine.ports.test.ts",
+          "./src/lib/pipelines/engine.providerBudget.test.ts",
+          "./src/lib/pipelines/engine.providerBudgetChains.test.ts",
+          "./src/lib/pipelines/engine.providerBudgetKinds.test.ts",
+          "./src/lib/pipelines/engine.providerChains.test.ts",
+          "./src/lib/pipelines/engine.providerSignals.test.ts",
+          "./src/lib/pipelines/engine.provisioning.test.ts",
+          "./src/lib/pipelines/engine.publication.test.ts",
+          "./src/lib/pipelines/engine.recovery.test.ts",
+          "./src/lib/pipelines/engine.routing.test.ts",
+          "./src/lib/pipelines/engine.settlement.test.ts",
+          "./src/lib/pipelines/engine.succession.test.ts",
+          "./src/lib/pipelines/engine.watchdogRegression.test.ts",
+          "./src/lib/pipelines/git.test.ts",
+          "./src/lib/pipelines/terminalReap.test.ts"
+        ],
+        "exitCode": 0,
+        "startedAt": "2026-10-16T01:00:12Z",
+        "elapsedSeconds": 577.171,
+        "outcomes": [
+          "touched-tests: base commit d395e7c7324e2653acd37edbbf644814f622deb1",
+          "touched-tests: reviewed head commit f1a13ed32276d99068e23facd3837151dabc3311 (head sample runs the working tree)",
+          "touched-tests: head 550056ms",
+          "touched-tests: baseline run 4294ms (tests 3831ms; 3 failing file(s))",
+          "touched-tests: 2 new file(s), judged on head alone",
+          "touched-tests: flaky confirmation 3 reruns per side, 22529ms (shared budget 300000ms)",
+          "FLAKY src/lib/pipelines/engine.publication.test.ts: claude successor auth cut retains the source reset retry (base 4 pass/0 fail; head 3 pass/1 fail)",
+          "PRE-EXISTING src/lib/pipelines/engine.creation.test.ts: a stage completes and its successor waits for both update roles: early-switch-off",
+          "PRE-EXISTING src/lib/pipelines/engine.ports.test.ts: managed early admission holds actual pipeline launches across recovery until terminal status",
+          "PRE-EXISTING src/lib/pipelines/engine.ports.test.ts: managed drain-switch-off admission holds actual pipeline launches across recovery until terminal status",
+          "touched-tests: 0 new failures, 3 pre-existing failures, 0 fixed, 0 removed/skipped, 1 flaky"
+        ]
+      }
+    ],
+    "notes": [
+      "Current origin/main stayed at the recorded base throughout these checks.",
+      "No performance gain is claimed; the file boundary is the unit of the unchanged publication deadline."
+    ]
   }
 }

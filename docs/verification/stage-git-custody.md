@@ -95,6 +95,18 @@ Two full pre-push rehearsals cleared the recovery failures and passed types,
 lint and privacy. Both stopped when `engine.providerBudget.test.ts` exceeded
 its five-minute file deadline; the corresponding main samples completed in
 274 and 296 seconds. That file passed alone on the repaired source in
-278 seconds. The full publication gate remains blocked by that runner
+278 seconds. At that point the full publication gate was blocked by that runner
 timeout. No test coverage or gate limit was changed to accommodate it.
 The Linux backend probe and all 17 scoped Linux test files pass separately.
+
+The publication retry splits the provider-budget cases by family into
+`engine.providerBudget.test.ts` (74 cases),
+`engine.providerBudgetChains.test.ts` (62 cases), and
+`engine.providerBudgetKinds.test.ts` (28 cases). Concatenating their bodies
+after removing the imports reproduces the original source byte for byte.
+The ordered inventory retains all 164 names. Each file receives the existing
+isolated process and five-minute deadline; product code, assertions, fixtures
+and hook limits remain unchanged. The full 25-file touched-test selection
+passes with no new failures. The comparator retains the failures reproduced
+on current main, including their names, in `publicationRetry` in the evidence
+file. The normal push hook must judge the final committed tree again.
