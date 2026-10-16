@@ -1,9 +1,10 @@
+import { readAttribution, startReadAttributionSampler } from "./readAttribution";
 import { performanceSpans, performanceSites, performanceProcess } from "./performanceSpans";
 import { startLoopWatchdog } from "./loopWatchdog";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createLoopHeapSignals } from "./loopHeapSignals";
 
-export type ViewerOperation = "runtime.startup-row" | "controller.account-migration" | "orchestrator.deputy" | "voice.orchestrator-read" | "telegram.review-polls" | "accounts.migration-target" | "pipelines.startup-admission" | "pipelines.mutation" | "pipelines.controller-mutation" | "runtime.delivery.deputy-authority"
+export type ViewerOperation = "memory.engine-start" | "memory.curation-status" | "runtime.startup-row" | "controller.account-migration" | "orchestrator.deputy" | "voice.orchestrator-read" | "telegram.review-polls" | "accounts.migration-target" | "pipelines.startup-admission" | "pipelines.mutation" | "pipelines.controller-mutation" | "runtime.delivery.deputy-authority"
   | "registry.prepare" | "runtime.startup" | "runtime.spawn-recovery" | "agent.deferred-spawn" | "state.rollback-checkpoint"
   | "pipelines.controller-read" | "pipelines.controller-decode" | "pipelines.controller-materialize"
   | "pipelines.controller-checkpoint" | "pipelines.controller-select" | "pipelines.delivery-liveness"
@@ -13,7 +14,7 @@ export type ViewerOperation = "runtime.startup-row" | "controller.account-migrat
   | "prototype.publish" | "prototype.copy" | "prototype.state" | "prototype.delivery" | "prototype.telegram"
   | "codex.protocol-admission"
   | "pipelines.controller-job" | "pipelines.controller-lane" | "pipelines.controller-schedule"
-  | "telegram.outbound-state" | "telegram.outbound-publication" | "orchestrator.recipient-authority";
+  | "telegram.outbound-state" | "telegram.outbound-publication" | "links.telegram-publication" | "orchestrator.recipient-authority";
 type Operation = { name: ViewerOperation; start: number; end?: number };
 const shared = globalThis as typeof globalThis & { __delegatusLoopMonitor?: ReturnType<typeof createViewerLoopMonitor> };
 
@@ -66,7 +67,10 @@ export function createViewerLoopMonitor(log?: (line: string) => void, now = () =
           entry.count++;
         } else named.set(op.name, { name: op.name, durationMs, completed: op.end !== undefined, count: 1 });
       }
-      const operations = [...named.values()].sort((a, b) => b.durationMs - a.durationMs).slice(0, 16);
+      const reads = readAttribution.snapshot(at - last);
+      const operations = [...named.values()].sort((a, b) => b.durationMs - a.durationMs).slice(0, 16).map(op => ({ ...op,
+        readBytes: reads.operations.find(row => row.name === op.name)?.readBytes ?? 0,
+        decodedJsonBytes: reads.operations.find(row => row.name === op.name)?.decodedJsonBytes ?? 0 }));
       const attribution = spans.snapshot(last);
       // Keep measured synchronous blockers when long awaited spans fill the
       // report. Remaining slots retain awaits/events in duration order.
@@ -81,6 +85,7 @@ export function createViewerLoopMonitor(log?: (line: string) => void, now = () =
         ...performanceProcess, revision: performanceProcess.revision ?? (revision && /^[a-f0-9]{7,40}$/.test(revision) ? revision : null), sequence: ++sequence, lastTick: last, tick: at, utc: new Date().toISOString(),
         pendingOperations: active.size, activeDropped, completedDropped, logDropped: sink.dropped(),
         requests: spans.requests(),
+        reads,
         attribution: { pending: attribution.pending, dropped: attribution.dropped, droppedMs: attribution.droppedMs,
           omitted: Math.max(0, attribution.records.length - longest.length),
           slices: longest.map(row => ({ ...row, site: performanceSites[row.site],
@@ -109,6 +114,7 @@ export function createViewerLoopMonitor(log?: (line: string) => void, now = () =
         monotonic: at, utc: new Date().toISOString(), requests: spans.requests(), logDropped: sink.dropped() })}`);
       lastSummary = at;
     }
+    readAttribution.clear();
     spans.clear();
     activeDropped = completedDropped = 0;
     last = at;
@@ -135,7 +141,7 @@ export function createViewerLoopMonitor(log?: (line: string) => void, now = () =
         completed.splice(shortest, 1);
         completedDropped++;
       };
-      return context.run(name, () => {
+      return readAttribution.run(name, () => context.run(name, () => {
         try {
           const result = work();
           if (result && typeof (result as unknown as Promise<unknown>).then === "function") {
@@ -144,12 +150,13 @@ export function createViewerLoopMonitor(log?: (line: string) => void, now = () =
           finish();
           return result;
         } catch (error) { finish(); throw error; }
-      });
+      }));
     },
     tick,
     start() {
       if (timer) return;
       last = now();
+      startReadAttributionSampler();
       heapSignals.start();
       watchdog = startLoopWatchdog();
       spans.observeSite(watchdog.site);

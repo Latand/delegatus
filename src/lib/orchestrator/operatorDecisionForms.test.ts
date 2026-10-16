@@ -2,7 +2,7 @@ import { expect, spyOn, test } from "bun:test";
 import type { RuntimeHostClient } from "@/lib/runtime/client";
 import { ORCHESTRATOR_SYSTEM_PROMPT, orchestratorMandateForDelivery } from "./prompt";
 
-test("every delivered seat mandate asks operator decisions through a durable form", () => {
+test("every delivered seat mandate asks operator decisions through a durable form", async () => {
   for (const input of [ORCHESTRATOR_SYSTEM_PROMPT, "Coordinate this project.", "Prototype review: our own wording."]) {
     const mandate = orchestratorMandateForDelivery(input);
     for (const rule of [
@@ -34,7 +34,7 @@ test("fresh seat and worker profiles select the native question policy independe
       account: { engine: "claude" as const, accountId: "legacy", home: "/account", kind: "legacy" as const, transcriptRoot: "/transcripts", env: { NODE_ENV: "test" as const } },
     };
     expect(operatorDecisionFormsRequired(role)).toBe(role === "orchestrator");
-    const options = claudeStructuredHostOptions(input, { env: { NODE_ENV: "test" }, host: {} }, undefined, undefined, role);
+    const options = await claudeStructuredHostOptions(input, { env: { NODE_ENV: "test" }, host: {} }, undefined, undefined, role);
     expect(options.operatorDecisionForms).toBe(role === "orchestrator");
   }
 });
@@ -57,10 +57,10 @@ test("re-hosting a designated conversation applies the seat policy even without 
   const entry = registry.upsert({ key: { engine: "claude", sessionId: "question-seat" }, artifactPath: seatPath,
     cwd: "/repo", accountId: null, launchProfile: emptyLaunchProfile({ cwd: "/repo" }),
     status: "dead", host: null, claimEpoch: 0, claimOwner: null, pendingAction: null });
-  const options = claudeStartupHostOptions(entry, null, null, { NODE_ENV: "test", LLV_STATE_DIR: process.env.LLV_STATE_DIR });
+  const options = await claudeStartupHostOptions(entry, null, null, { NODE_ENV: "test", LLV_STATE_DIR: process.env.LLV_STATE_DIR });
   expect(options.operatorDecisionForms).toBe(true);
   const { claudeStructuredHostOptions } = await import("@/lib/runtime/structuredSpawn");
-  const resumed = claudeStructuredHostOptions({
+  const resumed = await claudeStructuredHostOptions({
     spec: { command: "fixture-engine", engine: "claude", cwd: "/repo", windowName: "fixture", transcript: seatPath, launchProfile: entry.launchProfile },
     account: { engine: "claude", accountId: "legacy", kind: "legacy", home: "/account", transcriptRoot: "/transcripts", env: { NODE_ENV: "test" as const } },
   }, { env: { NODE_ENV: "test" }, host: {} });

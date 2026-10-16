@@ -1,3 +1,4 @@
+import { observeSqlite, parseSqliteJson } from "@/lib/sqliteReadAttribution";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -280,7 +281,7 @@ function collectClaudeLedgerDigests(directory: string, digests: Set<string>, ret
 function openReadonlyDatabase(filename: string): BunDatabase {
   const sqlite = process.getBuiltinModule?.("bun:sqlite") as typeof import("bun:sqlite") | undefined;
   if (!sqlite) throw new Error("runtime image reachability requires the Bun runtime");
-  return new sqlite.Database(filename, { readonly: true, strict: true });
+  return observeSqlite(new sqlite.Database(filename, { readonly: true, strict: true }), "runtime-image");
 }
 
 /** Receipt statuses meaning the payload terminally reached the agent: the
@@ -289,10 +290,10 @@ function openReadonlyDatabase(filename: string): BunDatabase {
     terminals (failed/rejected) keep pinning their refs. */
 const TERMINAL_DELIVERED_RECEIPT_STATUSES = new Set(["delivered", "turn-started", "steered"]);
 
-function journalOperationRetired(receiptJson: unknown, retireBefore: number): boolean {
+function journalOperationRetired(receiptJson: unknown, retireBefore: number, db: BunDatabase): boolean {
   if (typeof receiptJson !== "string" || !receiptJson.trim()) return false;
   let receipt: unknown;
-  try { receipt = JSON.parse(receiptJson); } catch { return false; }
+  try { receipt = parseSqliteJson(receiptJson, db); } catch { return false; }
   if (!receipt || typeof receipt !== "object" || Array.isArray(receipt)) return false;
   const record = receipt as Record<string, unknown>;
   if (typeof record.status !== "string" || !TERMINAL_DELIVERED_RECEIPT_STATUSES.has(record.status)) return false;
@@ -306,9 +307,9 @@ type JournalOperationReachabilityRow = {
   receipt_json: string;
 };
 
-function journalReceiptRecord(value: string): Record<string, unknown> | null {
+function journalReceiptRecord(value: string, db: BunDatabase): Record<string, unknown> | null {
   try {
-    const parsed = JSON.parse(value) as unknown;
+    const parsed = parseSqliteJson(value, db) as unknown;
     return parsed && typeof parsed === "object" && !Array.isArray(parsed)
       ? parsed as Record<string, unknown>
       : null;
@@ -317,9 +318,9 @@ function journalReceiptRecord(value: string): Record<string, unknown> | null {
   }
 }
 
-function retiredJournalOperationIds(rows: readonly JournalOperationReachabilityRow[], retireBefore: number): Set<string> {
+function retiredJournalOperationIds(rows: readonly JournalOperationReachabilityRow[], retireBefore: number, db: BunDatabase): Set<string> {
   const rowsById = new Map(rows.map((row) => [row.operation_id, row]));
-  const receiptsById = new Map(rows.map((row) => [row.operation_id, journalReceiptRecord(row.receipt_json)]));
+  const receiptsById = new Map(rows.map((row) => [row.operation_id, journalReceiptRecord(row.receipt_json, db)]));
   const parentIds = new Set<string>();
   for (const receipt of receiptsById.values()) {
     if (typeof receipt?.retryOfOperationId === "string") parentIds.add(receipt.retryOfOperationId);
@@ -342,7 +343,7 @@ function retiredJournalOperationIds(rows: readonly JournalOperationReachabilityR
   for (const members of groups.values()) {
     const leaves = [...members].filter((operationId) => !parentIds.has(operationId));
     if (leaves.length === 0 || !leaves.every((operationId) =>
-      journalOperationRetired(rowsById.get(operationId)?.receipt_json, retireBefore))) continue;
+      journalOperationRetired(rowsById.get(operationId)?.receipt_json, retireBefore, db))) continue;
     for (const operationId of members) retired.add(operationId);
   }
   return retired;
@@ -365,19 +366,19 @@ function collectJournalDigests(filename: string, digests: Set<string>, retireBef
         const columns = new Set((db.query("PRAGMA table_info(operations)").all() as Array<{ name: string }>).map((column) => column.name));
         if (columns.has("operation_id")) {
           const rows = db.query("SELECT operation_id, request_json, receipt_json FROM operations").all() as JournalOperationReachabilityRow[];
-          const retired = retiredJournalOperationIds(rows, retireBefore);
+          const retired = retiredJournalOperationIds(rows, retireBefore, db);
           for (const row of rows) {
             if (retired.has(row.operation_id)) continue;
             for (const raw of [row.request_json, row.receipt_json]) {
-              if (raw.trim()) collectDigests(JSON.parse(raw), digests, retireBefore);
+              if (raw.trim()) collectDigests(parseSqliteJson(raw, db), digests, retireBefore);
             }
           }
         } else {
           const rows = db.query("SELECT request_json, receipt_json FROM operations").all() as Array<Pick<JournalOperationReachabilityRow, "request_json" | "receipt_json">>;
           for (const row of rows) {
-            if (journalOperationRetired(row.receipt_json, retireBefore)) continue;
+            if (journalOperationRetired(row.receipt_json, retireBefore, db)) continue;
             for (const raw of [row.request_json, row.receipt_json]) {
-              if (raw.trim()) collectDigests(JSON.parse(raw), digests, retireBefore);
+              if (raw.trim()) collectDigests(parseSqliteJson(raw, db), digests, retireBefore);
             }
           }
         }
@@ -388,7 +389,7 @@ function collectJournalDigests(filename: string, digests: Set<string>, retireBef
         for (const row of rows) {
           for (const column of columns) {
             const raw = row[column];
-          if (typeof raw === "string" && raw.trim()) collectDigests(JSON.parse(raw), digests, retireBefore);
+          if (typeof raw === "string" && raw.trim()) collectDigests(parseSqliteJson(raw, db), digests, retireBefore);
         }
       }
     }
@@ -404,7 +405,7 @@ function collectRegistrySqliteDigests(filename: string, digests: Set<string>, re
     const table = db.query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'registry_rows'").get();
     if (!table) return;
     const rows = db.query("SELECT value_json FROM registry_rows").all() as Array<{ value_json: string }>;
-    for (const row of rows) collectDigests(JSON.parse(row.value_json), digests, retireBefore);
+    for (const row of rows) collectDigests(parseSqliteJson(row.value_json, db), digests, retireBefore);
   } finally {
     db.close();
   }

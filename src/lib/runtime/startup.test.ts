@@ -75,9 +75,9 @@ test.each(["full", "restricted"] as const)("startup replays durable Codex sandbo
       refreshTranscriptState: async () => {}, orchestratorSeats: () => [],
       resolveCodexOwner: () => null,
       adopt: async (store, optionsFor) => {
-        const options = optionsFor(store.readOnlySnapshot().entries["codex:access-thread"]!);
+        const options = await optionsFor(store.readOnlySnapshot().entries["codex:access-thread"]!);
         try {
-          expect(options).toMatchObject({ sandbox: sandbox === "full" ? "danger-full-access" : "workspace-write", approvalPolicy: "on-request" });
+          expect(options).toMatchObject({ sandbox: sandbox === "full" ? "danger-full-access" : "workspace-write", approvalPolicy: "on-request", nativeMemoryEnabled: false });
         } finally { options.releaseCleanup?.(); }
         return [];
       }, adoptClaude: async () => [],
@@ -122,14 +122,14 @@ test.each(["codex", "claude"] as const)("legacy %s seat profiles receive the cur
       resolveClaudeOwner: () => ({ home: directory, kind: "managed", transcriptRoot: directory, env: { NODE_ENV: "test", HOME: directory } }),
       adopt: async (_store, optionsFor) => {
         if (engine === "codex") {
-          const options = optionsFor(registry.snapshot().entries[`${engine}:${sessionId}`]!);
+          const options = await optionsFor(registry.snapshot().entries[`${engine}:${sessionId}`]!);
           instructions = (options as { developerInstructions?: string }).developerInstructions;
         }
         return [];
       },
       adoptClaude: async (_store, optionsFor) => {
         if (engine === "claude") {
-          const options = optionsFor(registry.snapshot().entries[`${engine}:${sessionId}`]!);
+          const options = await optionsFor(registry.snapshot().entries[`${engine}:${sessionId}`]!);
           instructions = (options as { appendSystemPrompt?: string }).appendSystemPrompt;
         }
         return [];
@@ -172,11 +172,11 @@ test.each(["codex", "claude"] as const)("startup keeps an undesignated pipeline 
       registry, client: null, refreshTranscriptState: async () => {}, orchestratorSeats: () => [],
       resolveCodexOwner: () => null, resolveClaudeOwner: () => null,
       adopt: async (store, optionsFor) => {
-        if (engine === "codex") options = optionsFor(store.readOnlySnapshot().entries[`codex:${engine}-pipeline-orchestrator`]!) as { cleanMemory?: boolean; developerInstructions?: string; appendSystemPrompt?: string };
+        if (engine === "codex") options = await optionsFor(store.readOnlySnapshot().entries[`codex:${engine}-pipeline-orchestrator`]!) as { cleanMemory?: boolean; developerInstructions?: string; appendSystemPrompt?: string };
         return [];
       },
       adoptClaude: async (store, optionsFor) => {
-        if (engine === "claude") options = optionsFor(store.readOnlySnapshot().entries[`claude:${engine}-pipeline-orchestrator`]!) as { cleanMemory?: boolean; developerInstructions?: string; appendSystemPrompt?: string };
+        if (engine === "claude") options = await optionsFor(store.readOnlySnapshot().entries[`claude:${engine}-pipeline-orchestrator`]!) as { cleanMemory?: boolean; developerInstructions?: string; appendSystemPrompt?: string };
         return [];
       },
     });
@@ -354,12 +354,12 @@ test.each([
       }),
       adopt: async (received, optionsFor) => {
         expect(received).toBe(registry);
-        codexOptions = optionsFor(registry.snapshot().entries["codex:startup-thread"]!);
+        codexOptions = await optionsFor(registry.snapshot().entries["codex:startup-thread"]!);
         return [];
       },
       adoptClaude: async (received, optionsFor) => {
         expect(received).toBe(registry);
-        claudeOptions = optionsFor(registry.snapshot().entries["codex:startup-thread"]!);
+        claudeOptions = await optionsFor(registry.snapshot().entries["codex:startup-thread"]!);
         return [];
       },
     });
@@ -454,7 +454,7 @@ test("server startup resumes a legacy-owned Claude row against its own home and 
       }),
       adopt: async () => [],
       adoptClaude: async (received, optionsFor) => {
-        claudeOptions = optionsFor(received.snapshot().entries[`claude:${sessionId}`]!);
+        claudeOptions = await optionsFor(received.snapshot().entries[`claude:${sessionId}`]!);
         return [];
       },
     });
@@ -512,7 +512,7 @@ test("server startup says so when a Claude row no account owns loses its MCP gra
       resolveClaudeOwner: () => null,
       adopt: async () => [],
       adoptClaude: async (received, optionsFor) => {
-        claudeOptions = optionsFor(received.snapshot().entries[`claude:${sessionId}`]!);
+        claudeOptions = await optionsFor(received.snapshot().entries[`claude:${sessionId}`]!);
         return [];
       },
     });
@@ -5478,12 +5478,12 @@ for (const engine of ["claude", "codex"] as const) test(`a ${engine} host raised
       refreshTranscriptState: async () => {},
       resolveCodexOwner: () => ({ home, kind: "managed" }),
       resolveClaudeOwner: () => ({ home, kind: "managed", transcriptRoot, env: { NODE_ENV: "test", HOME: directory } }),
-      adopt: async (received, optionsFor) => engine !== "codex" ? [] : raise(() => CodexAppServerHost.adopt(sessionId, {
-        ...optionsFor(received.readOnlySnapshot().entries[`codex:${sessionId}`]!),
+      adopt: async (received, optionsFor) => engine !== "codex" ? [] : raise(async () => CodexAppServerHost.adopt(sessionId, {
+        ...await optionsFor(received.readOnlySnapshot().entries[`codex:${sessionId}`]!),
         spawnProcess: spawnProcess as never,
       })),
-      adoptClaude: async (received, optionsFor) => engine !== "claude" ? [] : raise(() => ClaudeStreamBrokerHost.adopt(sessionId, {
-        ...optionsFor(received.readOnlySnapshot().entries[`claude:${sessionId}`]!),
+      adoptClaude: async (received, optionsFor) => engine !== "claude" ? [] : raise(async () => ClaudeStreamBrokerHost.adopt(sessionId, {
+        ...await optionsFor(received.readOnlySnapshot().entries[`claude:${sessionId}`]!),
         readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }),
         spawnProcess: spawnProcess as never,
       })),
@@ -6138,5 +6138,31 @@ test("REVIEW D1 stale owner capture is discarded before its durable write", asyn
     if (previousState === undefined) delete process.env.LLV_STATE_DIR;
     else process.env.LLV_STATE_DIR = previousState;
     fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test.each(["codex", "claude"] as const)("%s boot adoption rechecks ownership after asynchronous memory preparation", async engine => {
+  const { adoptCodexRegistryHosts, adoptClaudeRegistryHosts } = await import("./registry");
+  for (const superseded of [false, true]) {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-memory-adoption-"));
+    const registry = new AgentRegistry(path.join(directory, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+    const key = { engine, sessionId: "memory-startup-fixture" };
+    registry.upsert({ key, artifactPath: path.join(directory, "session.jsonl"), cwd: directory, accountId: null,
+      launchProfile: emptyLaunchProfile({ cwd: directory, cleanMemory: true }), status: "dead", host: null,
+      claimEpoch: 0, claimOwner: null, pendingAction: null,
+      structuredHost: { kind: engine === "codex" ? "codex-app-server" : "claude-broker", endpoint: "stdio:old", process: null,
+        eventCursor: 0, protocolVersion: null, writerClaimEpoch: 0, activeTurnRef: null, pendingAttention: [], activeFlags: [] } });
+    let opened = 0;
+    const adopt = engine === "codex" ? adoptCodexRegistryHosts : adoptClaudeRegistryHosts;
+    try {
+      await adopt(registry, async entry => {
+        await Promise.resolve();
+        if (superseded) registry.releaseStructuredHostClaim(key, entry.claimOwner!, entry.claimEpoch);
+        return { cwd: directory, cleanMemory: true };
+      }, { NODE_ENV: "test", LLV_STRUCTURED_HOSTS: "1" }, () => true, undefined, {
+        adoptHost: async () => { opened++; throw Error("fixture engine refused"); },
+      });
+      expect(opened).toBe(superseded ? 0 : 1);
+    } finally { fs.rmSync(directory, { recursive: true, force: true }); }
   }
 });

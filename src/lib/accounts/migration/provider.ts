@@ -1,4 +1,4 @@
-import { learnedRulesForLaunchProfile, roleMemoryProfileForIdentity } from "@/lib/memory/roleLaunch";
+import { learnedRulesForLaunchProfile, memoryStartIdentity, roleMemoryProfileForIdentity } from "@/lib/memory/roleLaunch";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -9,6 +9,7 @@ import type { AccountContext, AccountManager } from "@/lib/accounts/contracts";
 import { CodexAppServerClient, CodexAppServerError } from "@/lib/accounts/codexAppServer";
 import { realClaudeLoginPorts } from "@/lib/accounts/claudeLogin";
 import { resumeCwd } from "@/lib/agent/cli";
+import { codexNativeMemoryEnabled } from "@/lib/agent/codexSpawnPolicy";
 import { normalizeClaudeLaunchModel } from "@/lib/agent/models";
 import { agentRegistry, type AgentRegistry, type TmuxHostEvidence } from "@/lib/agent/registry";
 import { sessionKey, sessionKeyId } from "@/lib/agent/sessionKey";
@@ -369,11 +370,18 @@ async function publishCodexSuccessorHost(input: StructuredHostPublicationInput):
     throw error;
   }
   try {
+    // A migration successor never widens native delegation, regardless of the
+    // source profile, so its memories feature follows that denied policy.
+    const nativeMemoryEnabled = await codexNativeMemoryEnabled(input.target.home, false, input.profile.cleanMemory === true);
+    const developerInstructions = await learnedRulesForLaunchProfile(input.profile, { engine: "codex", ...memoryStartIdentity(input.registry, input.conversationId, input.receipt.path), cwd: input.profile.cwd, home: input.target.home, env: access.env, nativeMemoryEnabled });
+    if (input.ownsOperation && !await input.ownsOperation()
+      || !input.registry.ownsStructuredHostClaim(key, claimed.claimOwner, claimed.claimEpoch)) throw Error("successor ownership changed during memory preparation");
     host = await CodexAppServerHost.adopt(input.receipt.nativeId, {
       cwd: input.profile.cwd,
       codexHome: input.target.home,
       cleanMemory: input.profile.cleanMemory === true,
-      developerInstructions: learnedRulesForLaunchProfile(input.profile),
+      nativeMemoryEnabled,
+      developerInstructions,
       fileAuthCredentials: input.target.kind === "managed",
       model: input.profile.model ?? undefined,
       effort: input.profile.effort ?? undefined,
@@ -505,18 +513,22 @@ async function publishClaudeSuccessorHost(
       input.target.env,
       identity.capability,
     );
+    const launchPaths = claudeHostLaunchPaths(input.target);
+    const appendSystemPrompt = await learnedRulesForLaunchProfile(input.profile, { engine: "claude", ...memoryStartIdentity(input.registry, input.conversationId, input.receipt.path), cwd: input.profile.cwd, home: input.target.home, env: access.env, claudeSettingsPath: launchPaths.spawnPolicyBaseSettingsPath, providerAccount: Boolean(input.target.claudeProvider) });
+    if (input.ownsOperation && !await input.ownsOperation()
+      || !input.registry.ownsStructuredHostClaim(key, claimed.claimOwner, claimed.claimEpoch)) throw Error("successor ownership changed during memory preparation");
     host = await ClaudeStreamBrokerHost.adopt(input.receipt.nativeId, {
       cwd: input.profile.cwd,
       claudeProjectsDir: input.target.transcriptRoot,
       cleanMemory: input.profile.cleanMemory === true,
-      appendSystemPrompt: learnedRulesForLaunchProfile(input.profile),
+      appendSystemPrompt,
       /* The successor is a re-host like any other, so it carries the grant the
          row already holds, the same way boot adoption and a fresh spawn do
          (#1732). The durable profile's list is already bounded by
          `grantedMcpServers`, so replaying it can only narrow, never widen.
          `allowSubagents` is deliberately not replayed here: it has no such
          bound, and widening native sub-agents is not a re-host's decision. */
-      ...claudeHostLaunchPaths(input.target),
+      ...launchPaths,
       mcpServers: input.profile.mcpServers,
       /* The Telegram tool is optional, so with Telegram disconnected the
          successor starts without the tool for this run, as any launch does. */

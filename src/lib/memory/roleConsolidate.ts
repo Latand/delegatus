@@ -1,9 +1,10 @@
 import { ROLE_MEMORY_BOUND, type RoleMemoryRule } from "./roleTypes";
 
-/* Consolidation keeps a scope under its bound without a model call: a lesson
+/* Consolidation applies the budget to curated rules without a model call: a lesson
    that repeats an active rule (case, spacing and a closing full stop aside)
    merges into it; curation order decides what leaves when the scope exceeds
-   its bound, with uncurated rules leaving before curated ones. Every symbol counts: "x > 0" and "x < 0", or "set -x" and
+   its bound. Never-curated lessons wait for a curator; only curated rules
+   may leave for budget. Every symbol counts: "x > 0" and "x < 0", or "set -x" and
    "set +x", ask for different things. Similar wording is never merged: two
    rules that share most of their words can still ask for different things, or
    opposite ones, and only a model could combine them without losing one.
@@ -61,8 +62,8 @@ export function retainRules(rules: readonly RoleMemoryRule[], at: string, protec
   const changed: RoleMemoryRule[] = [];
   const archived: string[] = [];
   while (active.length > 1 && scopeChars(active) > bound) {
-    let index = active.findIndex(rule => !protectedIds.has(rule.id) && !rule.keptByOperatorAt);
-    if (index < 0) index = active.findIndex(rule => !protectedIds.has(rule.id));
+    let index = active.findIndex(rule => !!rule.curatedAt && !protectedIds.has(rule.id) && !rule.keptByOperatorAt);
+    if (index < 0) index = active.findIndex(rule => !!rule.curatedAt && !protectedIds.has(rule.id));
     if (index < 0) break;
     const [left] = active.splice(index, 1);
     changed.push({ ...left!, state: "archived", reason: "budget", changedAt: at });

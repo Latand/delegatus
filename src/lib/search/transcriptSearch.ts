@@ -1,3 +1,4 @@
+import { observeSqlite } from "@/lib/sqliteReadAttribution";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -260,7 +261,7 @@ function openWriterDatabase(): Database {
   const filename = statePath("transcript-search.sqlite");
   fs.mkdirSync(path.dirname(filename), { recursive: true, mode: 0o700 });
   const Database = sqliteDatabase();
-  const db = new Database(filename, { create: true, strict: true });
+  const db = observeSqlite(new Database(filename, { create: true, strict: true }), "transcript-search");
   try {
     db.exec("PRAGMA busy_timeout = 5000; PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA foreign_keys = ON;");
     db.exec(`
@@ -347,7 +348,7 @@ function openQueryDatabase(): Database {
     throw error;
   }
   const Database = sqliteDatabase();
-  const db = new Database(filename, { readonly: true, strict: true });
+  const db = observeSqlite(new Database(filename, { readonly: true, strict: true }), "transcript-search");
   try {
     db.exec("PRAGMA busy_timeout = 250; PRAGMA query_only = ON; PRAGMA foreign_keys = ON;");
     const identity = `${stat.dev}:${stat.ino}`;

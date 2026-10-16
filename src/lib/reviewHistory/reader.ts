@@ -1,3 +1,4 @@
+import { observeSqlite, parseSqliteJson } from "@/lib/sqliteReadAttribution";
 import type { Database } from "bun:sqlite";
 import fs from "node:fs";
 import os from "node:os";
@@ -39,7 +40,7 @@ export function reviewHistorySelectionSource(directory = archiveDirectory()) {
     if (fs.existsSync(filename)) {
       const sqlite = process.getBuiltinModule?.("bun:sqlite") as typeof import("bun:sqlite") | undefined;
       if (!sqlite) throw new ArchiveReadError("ARCHIVE_UNAVAILABLE");
-      db = new sqlite.Database(filename, { readonly: true, strict: true });
+      db = observeSqlite(new sqlite.Database(filename, { readonly: true, strict: true }), "review-history");
       db.exec("PRAGMA query_only=ON; BEGIN");
       const initialized = db.query("SELECT 1 FROM state_collections WHERE collection='flows'").get();
       if (!initialized) throw new ArchiveReadError("ARCHIVE_NOT_INITIALIZED");
@@ -60,7 +61,7 @@ export function reviewHistorySelectionSource(directory = archiveDirectory()) {
     if (!row) return null;
     if (row.bytes > MAX_ROW_BYTES) throw new ArchiveReadError("ARCHIVE_TOO_LARGE", 413);
     try {
-      const value = JSON.parse(row.value_json!);
+      const value = parseSqliteJson(row.value_json!, db!);
       if (!decodeFlow(value) || value.id !== id) throw new Error("invalid row");
       return value;
     } catch { throw new ArchiveReadError("ARCHIVE_UNAVAILABLE"); }
@@ -76,7 +77,7 @@ export function reviewHistorySelectionSource(directory = archiveDirectory()) {
       const row = db.query<{ value_json: string | null }, [string]>("SELECT CASE WHEN length(value_json)<=1024 THEN value_json END AS value_json FROM registry_rows WHERE collection='conversationAliases' AND row_key=?").get(current);
       if (!row) return current;
       let alias: unknown;
-      try { alias = JSON.parse(row.value_json!); } catch { return id; }
+      try { alias = parseSqliteJson(row.value_json!, db!); } catch { return id; }
       if (typeof alias !== "string" || !alias) return id;
       current = alias;
     }

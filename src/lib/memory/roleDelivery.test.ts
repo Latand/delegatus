@@ -1,4 +1,5 @@
 import { afterAll, expect, spyOn, test } from "bun:test";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -14,16 +15,17 @@ const { CodexAppServerHost } = await import("@/lib/runtime/codexAppServerHost");
 const { ClaudeStreamBrokerHost } = await import("@/lib/runtime/claudeStreamBrokerHost");
 const { leaveLessons, recordLessonRequest } = await import("./roleStore");
 const { learnedRulesForLaunchProfile, sweepOldLearnedRulesFiles, LEARNED_RULES_MAX_BYTES } = await import("./roleLaunch");
+const { engineMemoryVersion, memoryDeliveries } = await import("./deliveryLedger");
 const { renderLearnedRules } = await import("./roleRender");
 const ownership = await import("@/lib/stateOwnership");
 const text = "Validate the ownership of durable receipts before replaying their acknowledgement.";
 
-test("the host renders its text-free launch marker into instructions without writing a rules file", () => {
+test("the host renders its text-free launch marker into instructions without writing a rules file", async () => {
   const source = { project: "delivery-trial", pipelineId: "delivery-trial", stageId: "build", attempt: 1, roleId: "builder", fixRound: false, conversationId: "conversation_delivery_trial" };
   recordLessonRequest({ ...source, at: "2026-10-11T00:00:00.000Z" });
   leaveLessons({ request: source, source, none: null, lessons: [{ scope: "role", rule: text, why: "A stored receipt was replayed with a different owner." }] });
   const profile = emptyLaunchProfile({ cwd: sandbox, learnedRules: { project: source.project, roleId: source.roleId } });
-  const options = claudeStructuredHostOptions({ spec: { cwd: sandbox, launchProfile: profile }, account: { home: sandbox, kind: "managed" } } as never, { env: {}, host: {} } as never);
+  const options = await claudeStructuredHostOptions({ spec: { cwd: sandbox, launchProfile: profile }, account: { home: sandbox, kind: "managed" } } as never, { env: {}, host: {} } as never);
   expect(options.appendSystemPrompt).toContain(text);
   expect(JSON.stringify(profile)).not.toContain(text);
   expect(fs.existsSync(path.join(process.env.LLV_STATE_DIR!, "role-memory", "launch"))).toBe(false);
@@ -45,6 +47,7 @@ test.each(["codex", "claude"] as const)("%s fresh and resumed starts reload the 
     if (transcript) registry.upsert({ key: { engine, sessionId }, artifactPath: transcript, cwd, accountId: "account-a", launchProfile, status: "dead", host: null, claimEpoch: 0, claimOwner: null, pendingAction: null });
     const begun = beginLegacySpawnFixture(registry, { engine, cwd, transport: "structured", launchProfile, ...(transcript ? { purpose: "resume-successor", expectedArtifactPath: transcript, conversationId: conversation!.id } : {}) });
     if (begun.kind !== "created") throw new Error("delivery fixture receipt missing");
+    registry.rememberMembership(begun.receipt.conversationId, { kind: "pipeline", containerId: project, role: "builder", slot: "build:1", stageId: "build", stageOrder: 0, round: 1, parentConversationId: null });
     const Host = engine === "codex" ? CodexAppServerHost : ClaudeStreamBrokerHost;
     const seen: unknown[] = [];
     const capture = async (options: unknown) => { seen.push(options); throw new Error("captured delivery options"); };
@@ -63,9 +66,62 @@ test.each(["codex", "claude"] as const)("%s fresh and resumed starts reload the 
       expect((seen[1] as Record<string, string>)[channel]).toContain(rewritten);
       expect((seen[1] as Record<string, string>)[channel]).not.toContain(text);
       expect(resumed ? adopt.mock.calls.length : start.mock.calls.length).toBe(2);
+      const rows = memoryDeliveries().filter(row => row.delivery.conversationId === begun.receipt.conversationId);
+      expect(rows).toHaveLength(2);
+      expect(rows.map(row => row.delivery.engine)).toEqual([engine, engine]);
+      expect(rows.map(row => row.delivery.attempt)).toEqual(Array.from({ length: 2 }, () => ({ pipelineId: project, stageId: "build", attempt: 1 })));
+      expect(rows.map(row => row.delivery.rules.find(item => item.id === rule.id)?.hash)).toEqual([text, rewritten].map(value => crypto.createHash("sha256").update(value).digest("hex")));
+      expect(rows[1].delivery.bytes).toBe(Buffer.byteLength((seen[1] as Record<string, string>)[channel]));
       expect(fs.existsSync(path.join(process.env.LLV_STATE_DIR!, "role-memory", "launch"))).toBe(false);
     } finally { start.mockRestore(); adopt.mockRestore(); }
   }
+});
+
+test.each([
+  { resumed: false, allowSubagents: false }, { resumed: true, allowSubagents: false },
+  { resumed: false, allowSubagents: true }, { resumed: true, allowSubagents: true },
+])("Codex starts share the effective native-memory decision with the ledger (resumed: $resumed, allowed: $allowSubagents)", async ({ resumed, allowSubagents }) => {
+  const cwd = fs.mkdtempSync(path.join(sandbox, "codex-memory-policy-"));
+  const project = `codex-memory-policy-${resumed}-${allowSubagents}`;
+  const source = { project, pipelineId: project, stageId: "build", attempt: 1, roleId: "builder", fixRound: false, conversationId: `conversation_${project}` };
+  recordLessonRequest({ ...source, at: "2026-10-11T00:00:00.000Z" });
+  leaveLessons({ request: source, source, none: null, lessons: [{ scope: "role", rule: text, why: "A stored receipt was replayed with a different owner." }] });
+  const launchProfile = emptyLaunchProfile({ cwd, allowSubagents, learnedRules: { project, roleId: "builder" } });
+  const codexHome = path.join(cwd, "codex-home");
+  fs.mkdirSync(path.join(codexHome, "memories"), { recursive: true });
+  fs.writeFileSync(path.join(codexHome, "config.toml"), "[features]\nmemories = true\n");
+  const summary = "Account memory that the denied launch cannot load.";
+  fs.writeFileSync(path.join(codexHome, "memories", "memory_summary.md"), summary);
+  const registry = new AgentRegistry(path.join(cwd, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const sessionId = crypto.randomUUID();
+  const transcript = resumed ? path.join(cwd, `${sessionId}.jsonl`) : null;
+  if (transcript) {
+    fs.writeFileSync(transcript, JSON.stringify({ type: "session_meta", payload: { id: sessionId } }) + "\n");
+    const conversation = registry.ensureConversation("codex", transcript, "account-a");
+    registry.upsert({ key: { engine: "codex", sessionId }, artifactPath: transcript, cwd, accountId: "account-a", launchProfile, status: "dead", host: null, claimEpoch: 0, claimOwner: null, pendingAction: null });
+    void conversation;
+  }
+  const begun = beginLegacySpawnFixture(registry, { engine: "codex", cwd, transport: "structured", launchProfile,
+    ...(transcript ? { purpose: "resume-successor", expectedArtifactPath: transcript, conversationId: registry.conversationForPath(transcript)!.id } : {}) });
+  if (begun.kind !== "created") throw Error("Codex memory-policy receipt missing");
+  const seen: Record<string, unknown>[] = [];
+  const capture = async (options: unknown) => { seen.push(options as Record<string, unknown>); throw Error("captured Codex memory-policy start"); };
+  const start = spyOn(CodexAppServerHost, "start").mockImplementation(capture as never);
+  const adopt = spyOn(CodexAppServerHost, "adopt").mockImplementation(async (_id, options) => capture(options) as never);
+  const prompt = "Fixture brief";
+  try {
+    await expect(defaultStartHost({ engine: "codex", registry, receipt: begun.receipt,
+      spec: { command: "codex", engine: "codex", cwd, windowName: "memory-policy", transcript: transcript ?? undefined, launchProfile },
+      account: { engine: "codex", accountId: "account-a", kind: "managed", home: codexHome, transcriptRoot: cwd, env: { NODE_ENV: "test" } },
+      ...{ prompt }, client: {} as import("@/lib/runtime/client").RuntimeHostClient }, "fixture-capability")).rejects.toThrow("captured Codex memory-policy start");
+    const delivery = memoryDeliveries().find(row => row.delivery.conversationId === begun.receipt.conversationId)!.delivery;
+    const enabled = allowSubagents;
+    expect(seen[0]?.nativeMemoryEnabled).toBe(enabled);
+    expect(seen[0]?.developerInstructions).toContain(text);
+    expect(delivery.engineMemory).toEqual(enabled ? [{ kind: "codex-summary", hash: crypto.createHash("sha256").update(summary).digest("hex"), bytes: Buffer.byteLength(summary), loadedBytes: Buffer.byteLength(summary) }] : []);
+    if (enabled) expect(engineMemoryVersion(delivery.engineMemory[0]!.hash)?.toString()).toBe(summary);
+    expect((resumed ? adopt.mock.calls.length : start.mock.calls.length)).toBe(1);
+  } finally { start.mockRestore(); adopt.mockRestore(); registry.close(); }
 });
 
 test.each(["codex", "claude"] as const)("%s receives a seat-written rule on fresh and resumed engine starts from another account", async engine => {
@@ -103,31 +159,31 @@ test.each(["codex", "claude"] as const)("%s receives a seat-written rule on fres
       expect(delivered[channel]).toContain("Earlier seats and stage agents");
       expect(delivered[channel]).toContain("create_task");
       expect(delivered[channel]).not.toContain("When you report with stage_report");
-      const builder = learnedRulesForLaunchProfile({ learnedRules: { project, roleId: "builder" } })!;
+      const builder = await learnedRulesForLaunchProfile({ learnedRules: { project, roleId: "builder" } })!;
       expect(builder).not.toContain(rule);
       expect(builder).toContain("Check the pinned acceptance criteria");
     } finally { start.mockRestore(); adopt.mockRestore(); }
   }
 });
 
-test("clean profiles and the kill switch exclude rules on every engine start", () => {
+test("clean profiles and the kill switch exclude rules on every engine start", async () => {
   const profile = { learnedRules: { project: "delivery-trial", roleId: "builder" } };
-  expect(learnedRulesForLaunchProfile(undefined)).toBeUndefined();
-  expect(learnedRulesForLaunchProfile({ ...profile, cleanMemory: true })).toBeUndefined();
-  expect(learnedRulesForLaunchProfile({ learnedRules: { project: "delivery-trial", roleId: "reviewer" } })).toBeUndefined();
+  expect(await learnedRulesForLaunchProfile(undefined)).toBeUndefined();
+  expect(await learnedRulesForLaunchProfile({ ...profile, cleanMemory: true })).toBeUndefined();
+  expect(await learnedRulesForLaunchProfile({ learnedRules: { project: "delivery-trial", roleId: "reviewer" } })).toBeUndefined();
   process.env.LLV_ROLE_MEMORY = "off";
-  try { expect(learnedRulesForLaunchProfile(profile)).toBeUndefined(); }
+  try { expect(await learnedRulesForLaunchProfile(profile)).toBeUndefined(); }
   finally { delete process.env.LLV_ROLE_MEMORY; }
 });
 
-test("an unreadable store logs the failure and starts without rules", () => {
+test("an unreadable store logs the failure and starts without rules", async () => {
   const previous = process.env.LLV_STATE_DIR;
   process.env.LLV_STATE_DIR = path.join(sandbox, "unreadable");
   fs.mkdirSync(process.env.LLV_STATE_DIR);
   fs.writeFileSync(path.join(process.env.LLV_STATE_DIR, "state.sqlite"), "broken fixture database");
   const warn = spyOn(console, "warn").mockImplementation(() => {});
   try {
-    expect(learnedRulesForLaunchProfile({ learnedRules: { project: "delivery-trial", roleId: "builder" } })).toBeUndefined();
+    expect(await learnedRulesForLaunchProfile({ learnedRules: { project: "delivery-trial", roleId: "builder" } })).toBeUndefined();
     expect(warn).toHaveBeenCalled();
   } finally { process.env.LLV_STATE_DIR = previous; warn.mockRestore(); }
 });
@@ -192,7 +248,7 @@ test("all production host start sites go through the declared option builders", 
   const declared = new Map([
     ["structuredSpawn.ts", 2], ["startup.ts", 2], ["../accounts/migration/provider.ts", 2],
   ]);
-  for (const [file, count] of declared) expect((fs.readFileSync(path.join(runtime, file), "utf8").match(/(?:appendSystemPrompt|developerInstructions): learnedRulesForLaunchProfile\(/g) ?? []).length).toBe(count);
+  for (const [file, count] of declared) expect((fs.readFileSync(path.join(runtime, file), "utf8").match(/await learnedRulesForLaunchProfile\(/g) ?? []).length).toBe(count);
   const callers: { file: string; count: number }[] = [];
   const hostNames = new Set(["ClaudeStreamBrokerHost", "CodexAppServerHost"]);
   const wrapperNames = new Set(["startCodexStructuredHost", "startClaudeStructuredHost"]);
@@ -227,4 +283,24 @@ test("all production host start sites go through the declared option builders", 
     { file: "runtime/registry.ts", count: 4 },
     { file: "runtime/structuredSpawn.ts", count: 4 },
   ]);
+});
+
+
+test.each(["codex", "claude"] as const)("%s does not dispatch a receipt cancelled after memory preparation", async engine => {
+  const cwd = fs.mkdtempSync(path.join(sandbox, "cancelled-start-"));
+  const registry = new AgentRegistry(path.join(cwd, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const launchProfile = emptyLaunchProfile({ cwd, cleanMemory: true });
+  const begun = beginLegacySpawnFixture(registry, { engine, cwd, transport: "structured", launchProfile });
+  if (begun.kind !== "created") throw Error("missing fixture receipt");
+  const Host = engine === "codex" ? CodexAppServerHost : ClaudeStreamBrokerHost;
+  const dispatch = spyOn(Host, "start").mockImplementation(async () => { throw Error("unexpected native dispatch"); });
+  try {
+    await expect(defaultStartHost({ engine, registry, receipt: begun.receipt,
+      spec: { command: engine, engine, cwd, windowName: "cancelled", launchProfile },
+      account: { engine, accountId: "account-a", kind: "managed", home: cwd, transcriptRoot: cwd, env: { NODE_ENV: "test" } },
+      "prompt": "Fixture brief", client: {} as import("@/lib/runtime/client").RuntimeHostClient,
+      authorize: async () => { registry.failSpawn(begun.receipt.launchId, "fixture cancellation"); },
+    }, "fixture-capability")).rejects.toThrow("changed during memory preparation");
+    expect(dispatch).not.toHaveBeenCalled();
+  } finally { dispatch.mockRestore(); registry.close(); }
 });
