@@ -1,3 +1,4 @@
+import { readAttribution } from "./readAttribution";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 
@@ -84,7 +85,7 @@ export function createPerformanceSpans(now = monotonicNow) {
       currentSpan = record.span;
       currentSite = record.site; observeSite?.(currentSite);
       // A synchronous stack has no async context allocation per row.
-      try { return work(); } catch (error) { record.failed = true; throw error; }
+      try { return readAttribution.sync(site, work, 0, site === "runtime.parse" ? bytes : 0, site !== "state.json" && site !== "runtime.parse"); } catch (error) { record.failed = true; throw error; }
       finally { finish(record); currentSpan = parentSpan; currentSite = parentSite; observeSite?.(currentSite); }
     },
     async wait<T>(site: PerformanceSite, work: () => Promise<T>): Promise<T> {

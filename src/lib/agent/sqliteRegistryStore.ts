@@ -1,3 +1,4 @@
+import { observeSqlite, parseSqliteJson } from "@/lib/sqliteReadAttribution";
 import { performanceSpans } from "@/lib/performanceSpans";
 import fs from "node:fs";
 import crypto from "node:crypto";
@@ -853,7 +854,7 @@ export class SqliteAgentRegistryStore {
       /* Bound to the file at its name like the writer below, so a preview
          held across a fallback restore reads the registry that now carries it. */
       this.db = openCurrentDatabase(filename, () => {
-        const db = new Database(filename, { readonly: true, strict: true });
+        const db = observeSqlite(new Database(filename, { readonly: true, strict: true }), "registry");
         db.exec("PRAGMA busy_timeout = 5000");
         return db;
       }, { reopened: (db) => this.onDatabaseReopened(db) });
@@ -871,7 +872,7 @@ export class SqliteAgentRegistryStore {
     /* Bound to the file at its name: a registry the activation fallback
        replaced is reopened, never written through the moved handle. */
     this.db = openCurrentDatabase(filename, () => {
-      const db = new Database(filename, { create: true, strict: true });
+      const db = observeSqlite(new Database(filename, { create: true, strict: true }), "registry");
       db.exec("PRAGMA busy_timeout = 5000; PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL; PRAGMA journal_size_limit = 67108864; PRAGMA foreign_keys = ON; PRAGMA auto_vacuum = INCREMENTAL;");
       db.exec(`
         CREATE TABLE IF NOT EXISTS registry_meta (
@@ -1395,7 +1396,7 @@ export class SqliteAgentRegistryStore {
     }
     for (const field of META_FIELDS) {
       const value = this.meta(field);
-      if (value !== null) input[field] = JSON.parse(value);
+      if (value !== null) input[field] = parseSqliteJson(value, this.db);
     }
     yield;
     const file = this.normalizePartial(input);
@@ -1486,7 +1487,7 @@ export class SqliteAgentRegistryStore {
       `SELECT value_json FROM ${this.recordsSource} WHERE collection=? AND row_key=?`).get("deliveryOperationOwners",operationId);
     this.onRowPayloadRead?.("deliveryOperationOwners",stored ? 1 : 0);
     if (stored) this.onRowPayloadParse?.("deliveryOperationOwners",1);
-    const owner = stored ? JSON.parse(stored.value_json) as { deliveryId?: string } : undefined;
+    const owner = stored ? parseSqliteJson(stored.value_json, this.db) as { deliveryId?: string } : undefined;
     const delivery = owner?.deliveryId
       ? this.db.query<{ row_key: string; value_json: string }, [string]>(
         `SELECT row_key,value_json FROM ${this.recordsSource} WHERE collection='heldDeliveries' AND row_key=?`).get(owner.deliveryId)
@@ -1496,7 +1497,7 @@ export class SqliteAgentRegistryStore {
     if (delivery) this.onRowPayloadParse?.("heldDeliveries",1);
     return this.normalizePartial({ version: 2,entries: {},receipts: {},
       deliveryOperationOwners: owner ? { [operationId]: owner } : {},
-      heldDeliveries: delivery ? { [delivery.row_key]: JSON.parse(delivery.value_json) } : {},
+      heldDeliveries: delivery ? { [delivery.row_key]: parseSqliteJson(delivery.value_json, this.db) } : {},
     }).deliveryOperationOwners[operationId];
   }
 
@@ -1533,7 +1534,7 @@ export class SqliteAgentRegistryStore {
         if (collection === "meta") {
           if (!META_FIELDS.includes(key as typeof META_FIELDS[number])) continue;
           const raw = this.meta(key);
-          const normalized = this.normalize({ version: 2, entries: {}, receipts: {}, [key]: raw === null ? undefined : JSON.parse(raw) });
+          const normalized = this.normalize({ version: 2, entries: {}, receipts: {}, [key]: raw === null ? undefined : parseSqliteJson(raw, this.db) });
           (file as unknown as Record<string, unknown>)[key] = normalized[key as typeof META_FIELDS[number]];
           continue;
         }
@@ -1580,7 +1581,7 @@ export class SqliteAgentRegistryStore {
           reaches(authorityDependency("row",rowIdentity));
           const current = (parsed ?? this.db.query<{ value_json: string }, [string, string]>(
             `SELECT value_json FROM ${this.recordsSource} WHERE collection=? AND row_key=?`).get(kind,key)?.value_json) as unknown;
-          const attestor = (typeof current === "string" ? JSON.parse(current) : current) as
+          const attestor = (typeof current === "string" ? parseSqliteJson(current, this.db) : current) as
             { engine?: string; generations?: { id?: string; path?: string }[]; evidence?: { launchId?: string } } | undefined;
           if (kind === "conversations") {
             for (const generation of attestor?.generations ?? []) {
@@ -1604,7 +1605,7 @@ export class SqliteAgentRegistryStore {
         if (!changed) {
           const stored = this.rowCache.get(kind)?.get(key)?.valueJson
             ?? this.db.query<{ value_json: string }, [string, string]>("SELECT value_json FROM registry_hot_rows WHERE collection=? AND row_key=?").get(kind,key)?.value_json;
-          if (stored) candidate = JSON.parse(stored) as object;
+          if (stored) candidate = parseSqliteJson(stored, this.db) as object;
         }
         if (!rowClaimsBeyondBaselineGrant(candidate)) { this.forgetHotGrant(identity); return; }
         const dependencies = new Set<string>();
@@ -1683,7 +1684,7 @@ export class SqliteAgentRegistryStore {
     const records = (kind: RowCollection) => input[kind] as Record<string, unknown>;
     /* A transaction's rows can hold the tracking proxies of other rows, which
        structured cloning refuses; they persist as JSON, so they copy as JSON. */
-    const copy = (value: unknown) => transaction ? JSON.parse(JSON.stringify(value)) as unknown : structuredClone(value);
+    const copy = (value: unknown) => transaction ? parseSqliteJson(JSON.stringify(value), this.db) as unknown : structuredClone(value);
     records(collection)[key] = copy(row);
     dependencies?.add(authorityDependency("row",grantDecisionKey(collection,key)));
     const read = (kind: RowCollection, id: string) => {
@@ -1696,7 +1697,7 @@ export class SqliteAgentRegistryStore {
       }
       const raw = this.db.query<{ value_json: string }, [string,string]>(`SELECT value_json FROM ${this.recordsSource} WHERE collection=? AND row_key=?`).get(kind,id);
       this.onRowPayloadRead?.(kind,raw ? 1 : 0);
-      if (raw) records(kind)[id] = JSON.parse(raw.value_json);
+      if (raw) records(kind)[id] = parseSqliteJson(raw.value_json, this.db);
     };
     const subject = row as { artifactPath?: string; key?: { engine: string; sessionId: string }; conversationId?: string };
     const entryKey = collection === "entries" ? key : subject.key ? `${subject.key.engine}:${subject.key.sessionId}` : null;
@@ -1786,7 +1787,7 @@ export class SqliteAgentRegistryStore {
         CASE WHEN json_type(value_json,'$.requestDigest')='text' AND json_extract(value_json,'$.requestDigest')!=''
           THEN json_extract(value_json,'$.command.operationId') END AS operation_id
         FROM registry_archive WHERE id IN (${ids.map(() => "?").join(",")})`).all(...ids);
-      for (const row of claims) this.coldRowProjections.set(row.id,{ claimsGrant: rowClaimsBeyondBaselineGrant(JSON.parse(row.claims)),operationId: row.operation_id });
+      for (const row of claims) this.coldRowProjections.set(row.id,{ claimsGrant: rowClaimsBeyondBaselineGrant(parseSqliteJson(row.claims, this.db)),operationId: row.operation_id });
     }
   }
 
@@ -1895,7 +1896,7 @@ export class SqliteAgentRegistryStore {
       if (!raw) throw new Error("registry archive version is missing");
       this.onRowPayloadRead?.(collection,1);
       this.onRowPayloadParse?.(collection,1);
-      const value = JSON.parse(raw.value_json) as { deliveryId?: string };
+      const value = parseSqliteJson(raw.value_json, this.db) as { deliveryId?: string };
       const delivery = collection === "deliveryOperationOwners" && value.deliveryId ? deliveries!.read()[value.deliveryId] : undefined;
       const normalized = this.normalizePartial({ version: 2,entries: {},receipts: {},[collection]: { [key]: value },
         ...(delivery ? { heldDeliveries: { [delivery.id]: delivery } } : {}) });
@@ -2128,7 +2129,7 @@ export class SqliteAgentRegistryStore {
           this.onRowPayloadRead?.(collection,1);
           this.onRowPayloadParse?.(collection,1);
           const dependencies = new Set<string>();
-          const decided = this.decideStoredRow(collection,key,JSON.parse(raw.value_json),dependencies) as GrantProfileRow;
+          const decided = this.decideStoredRow(collection,key,parseSqliteJson(raw.value_json, this.db),dependencies) as GrantProfileRow;
           decision = { lists: grantLists(collection,decided).map(list => list && [...list]),dependencies };
           this.coldGrantDecisions.set(id,decision);
           for (const dependency of dependencies) {
@@ -2323,7 +2324,7 @@ export class SqliteAgentRegistryStore {
         this.onRowPayloadParse?.(collection,stored.length);
         for (const { id,value_json: json } of stored) {
           const key = keyOf.get(id)!;
-          const normalized = this.normalizePartial({ version: 2,entries: {},receipts: {},[collection]: { [key]: JSON.parse(json) } });
+          const normalized = this.normalizePartial({ version: 2,entries: {},receipts: {},[collection]: { [key]: parseSqliteJson(json, this.db) } });
           const row = (normalized[collection] as Record<string, unknown>)[key];
           results.set(id,row === undefined ? undefined : deepFreeze(projector.project(row as never)));
         }
@@ -2413,7 +2414,7 @@ export class SqliteAgentRegistryStore {
         .map(row => ({ launchId: row.launchId, conversationId: row.conversationId, state: row.state }));
       // Lazy transaction rows contain proxies; serialize only the selected
       // scalar evidence before the transaction ends.
-      return JSON.parse(JSON.stringify({ hosts, deliveries, launches })) as { hosts: typeof hosts; deliveries: typeof deliveries; launches: typeof launches };
+      return parseSqliteJson(JSON.stringify({ hosts, deliveries, launches }), this.db) as { hosts: typeof hosts; deliveries: typeof deliveries; launches: typeof launches };
     });
   }
 
@@ -2632,7 +2633,7 @@ export class SqliteAgentRegistryStore {
         const edge = this.db.query<{ parent: string; source: string }, [string]>(`SELECT json_extract(value_json, '$.parentConversationId') AS parent, json_extract(value_json, '$.source') AS source FROM ${this.recordsSource} WHERE collection = 'lineageEdges' AND row_key = ?`).get(conversationId);
         if (!edge || edge.source !== "viewer-spawn") continue;
         const stored = this.db.query<{ value_json: string }, [string]>(`SELECT value_json FROM ${this.recordsSource} WHERE collection = 'memberships' AND row_key = ?`).get(conversationId);
-        const memberships = stored ? JSON.parse(stored.value_json) as { kind: string }[] : [];
+        const memberships = stored ? parseSqliteJson(stored.value_json, this.db) as { kind: string }[] : [];
         this.onRowPayloadRead?.("lineageEdges", 1);
         this.onRowPayloadRead?.("memberships", stored ? 1 : 0);
         children.set(conversationId, { conversationId, parentConversationId: canonicalParent(edge.parent), pipeline: memberships.some(item => item.kind === "pipeline"), deputy: memberships.some(item => item.kind === "orchestrator") });
@@ -2652,7 +2653,7 @@ export class SqliteAgentRegistryStore {
       seen.add(current);
       const alias = this.db.query<{ value_json: string }, [string]>(`SELECT value_json FROM ${this.recordsSource} WHERE collection = 'conversationAliases' AND row_key = ?`).get(current);
       if (!alias) break;
-      const next: unknown = JSON.parse(alias.value_json);
+      const next: unknown = parseSqliteJson(alias.value_json, this.db);
       if (typeof next !== "string") break;
       current = next;
     }
@@ -2667,7 +2668,7 @@ export class SqliteAgentRegistryStore {
         const conversationId = this.workerConversationId(id);
         const row = this.db.query<{ generations: string }, [string]>(`SELECT json_extract(value_json, '$.generations') AS generations FROM ${this.recordsSource} WHERE collection = 'conversations' AND row_key = ?`).get(conversationId);
         this.onRowPayloadRead?.("conversations", row ? 1 : 0);
-        const generations = row?.generations ? JSON.parse(row.generations) as { launchProfile?: { cwd?: string } }[] : [];
+        const generations = row?.generations ? parseSqliteJson(row.generations, this.db) as { launchProfile?: { cwd?: string } }[] : [];
         result.set(id, { conversationId, directories: generations.toReversed().flatMap(generation => generation.launchProfile?.cwd ? [generation.launchProfile.cwd] : []) });
       }
       this.db.exec("COMMIT");
@@ -2761,7 +2762,7 @@ export class SqliteAgentRegistryStore {
     ).get(launchId);
     this.onRowPayloadRead?.("receipts", row ? 1 : 0);
     if (!row?.value_json) return null;
-    const receipt = JSON.parse(row.value_json) as { spawnCapabilityDigest?: unknown; conversationId?: unknown };
+    const receipt = parseSqliteJson(row.value_json, this.db) as { spawnCapabilityDigest?: unknown; conversationId?: unknown };
     if (typeof authentication !== "string") {
       return receipt.conversationId === authentication.conversationId ? authentication.conversationId : null;
     }
@@ -3532,7 +3533,7 @@ export class SqliteAgentRegistryStore {
         const stored = this.meta(field);
         /* Through the registry's normalizer, as every row is: a meta value
            persisted before an engine existed has no key for it (#2045). */
-        if (stored !== null) value = this.normalize({ version: 2, entries: {}, receipts: {}, [field]: JSON.parse(stored) })[field] as typeof value;
+        if (stored !== null) value = this.normalize({ version: 2, entries: {}, receipts: {}, [field]: parseSqliteJson(stored, this.db) })[field] as typeof value;
         loaded = true;
         loadedMeta.set(field, value);
         /* Only a mutation compares against the baseline. */
@@ -3590,7 +3591,7 @@ export class SqliteAgentRegistryStore {
   ): unknown {
     if (!useCache || this.coldKeys.has(grantDecisionKey(collection,key))) {
       this.onRowPayloadParse?.(collection, 1);
-      return JSON.parse(valueJson);
+      return parseSqliteJson(valueJson, this.db);
     }
     let collectionCache = this.rowCache.get(collection);
     if (!collectionCache) {
@@ -3599,7 +3600,7 @@ export class SqliteAgentRegistryStore {
     }
     const cached = collectionCache.get(key);
     if (cached?.valueJson === valueJson) return cached.parsed;
-    const parsed = JSON.parse(valueJson);
+    const parsed = parseSqliteJson(valueJson, this.db);
     this.onRowPayloadParse?.(collection, 1);
     collectionCache.set(key, { valueJson, parsed });
     return parsed;
@@ -3623,7 +3624,7 @@ export class SqliteAgentRegistryStore {
         this.localRows.set(grantDecisionKey(collection,key),{ dataVersion: stamps.after.split(":")[0]!,valueJson });
         while (this.localRows.size > 128) this.localRows.delete(this.localRows.keys().next().value!);
         if (valueJson === null) { cache?.delete(key); continue; }
-        cache?.set(key,{ valueJson,parsed: JSON.parse(valueJson) });
+        cache?.set(key,{ valueJson,parsed: parseSqliteJson(valueJson, this.db) });
       }
     }
   }
@@ -3651,7 +3652,7 @@ export class SqliteAgentRegistryStore {
         `SELECT value_json FROM ${this.recordsSource} WHERE collection = ? AND row_key = ?`,
       ).get(collection, key)?.value_json;
       if (!raw) continue;
-      const value = JSON.parse(raw) as unknown;
+      const value = parseSqliteJson(raw, this.db) as unknown;
       if (collection === "conversations" || collection === "lineageEdges") {
         for (const target of indexGrantSource(previous, collection, key, value)) rows.delete(target);
         if (collection === "lineageEdges") indexChildGrantSources(previous, key, value as RegistryFile["lineageEdges"][string]);
@@ -3828,7 +3829,7 @@ export function sqliteRegistryStoreImported(filename: string): boolean {
   if (!fs.existsSync(filename)) return false;
   const sqlite = process.getBuiltinModule?.("bun:sqlite") as typeof import("bun:sqlite") | undefined;
   if (!sqlite) throw new Error("SQLite registry modes require the Bun runtime");
-  const db = new sqlite.Database(filename, { readonly: true, strict: true });
+  const db = observeSqlite(new sqlite.Database(filename, { readonly: true, strict: true }), "registry");
   try {
     db.exec("PRAGMA busy_timeout = 5000");
     const table = db.query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'registry_meta'").get();

@@ -1,3 +1,4 @@
+import { observeSqlite, parseSqliteJson } from "@/lib/sqliteReadAttribution";
 import { performanceSpans } from "@/lib/performanceSpans";
 import crypto from "node:crypto";
 import { viewerLoopMonitor, withViewerOperation } from "@/lib/viewerLoopMonitor";
@@ -342,7 +343,7 @@ function connectDatabase(filename: string): Database {
 function connectRawDatabase(filename: string): Database {
   return stateLockAttempt("state.connection", () => {
     fs.mkdirSync(path.dirname(filename), { recursive: true, mode: 0o700 });
-    const db = new (sqliteDatabase())(filename, { create: true, strict: true });
+    const db = observeSqlite(new (sqliteDatabase())(filename, { create: true, strict: true }), "state");
     try {
       db.exec("PRAGMA busy_timeout = 0");
       db.exec("PRAGMA synchronous = FULL");
@@ -360,7 +361,7 @@ function connectReadonlyDatabase(filename: string): Database {
 
 function connectRawReadonlyDatabase(filename: string): Database {
   const Database = sqliteDatabase();
-  const db = new Database(filename, { readonly: true, strict: true });
+  const db = observeSqlite(new Database(filename, { readonly: true, strict: true }), "state");
   db.exec("PRAGMA busy_timeout = 0");
   db.exec("PRAGMA foreign_keys = ON");
   return db;
@@ -977,7 +978,7 @@ export async function readCompactPipelineEvidence<T>(filename: string, prior: Co
       else {
         const raw = performanceSpans.sync("state.sql-next", () => read.get(header.collection, header.row_key))!.value_json;
         let value: unknown;
-        try { value = performanceSpans.sync("state.json", () => JSON.parse(raw), 1, Buffer.byteLength(raw)); }
+        try { value = performanceSpans.sync("state.json", () => parseSqliteJson(raw, db), 1, Buffer.byteLength(raw)); }
         catch (error) { throw new Error(`corrupt ${header.collection} SQLite row: ${header.row_key}`, { cause: error }); }
         rows.set(key, { revision: header.revision, value: project(value, header.collection) });
       }
@@ -1020,7 +1021,7 @@ export function readStateCollectionsRows(
       const records = result.get(row.collection) ?? [];
       result.set(row.collection, records);
       if (row.row_key === null || row.value_json === null) continue;
-      try { records.push(JSON.parse(row.value_json) as unknown); }
+      try { records.push(parseSqliteJson(row.value_json, db) as unknown); }
       catch (error) {
         throw new Error(`corrupt ${row.collection} SQLite row: ${row.row_key}`, { cause: error });
       }
@@ -1062,7 +1063,7 @@ export async function visitStateCollectionsRows(
       if (next.done) break;
       const row = next.value;
       let value: unknown;
-      try { value = performanceSpans.sync("state.json", () => JSON.parse(row.value_json), 1, Buffer.byteLength(row.value_json)); }
+      try { value = performanceSpans.sync("state.json", () => parseSqliteJson(row.value_json, db), 1, Buffer.byteLength(row.value_json)); }
       catch (error) { throw new Error(`corrupt ${row.collection} SQLite row: ${row.row_key}`, { cause: error }); }
       visit(value, row.collection);
       if (performance.now() - slice >= 4) {
@@ -2029,7 +2030,7 @@ export class SqliteStateCollection<T> {
     ).all(this.options.collection);
     const records = rows.map((row) => {
       this.decodeRow(row.value_json); // strict parse before publication
-      return JSON.parse(row.value_json) as T;
+      return parseSqliteJson(row.value_json, this.readDb) as T;
     });
     return rememberRecordBytes(records, rows.map((row) => row.value_json), (record) => this.options.decode(record) !== null);
   }
@@ -2042,7 +2043,7 @@ export class SqliteStateCollection<T> {
 
   private decodeRow(valueJson: string): T | null {
     try {
-      const decoded = this.options.decode(JSON.parse(valueJson) as unknown);
+      const decoded = this.options.decode(parseSqliteJson(valueJson, this.readDb) as unknown);
       if (decoded === null && this.options.strictDecode && !this.options.preserveRejectedRecords) {
         throw new Error(`${this.options.collection} SQLite row is malformed`);
       }

@@ -1,3 +1,4 @@
+import { readAttribution } from "./readAttribution";
 import { performanceSpans, performanceSites, performanceProcess } from "./performanceSpans";
 import { startLoopWatchdog } from "./loopWatchdog";
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -61,7 +62,10 @@ export function createViewerLoopMonitor(log?: (line: string) => void, now = () =
           entry.count++;
         } else named.set(op.name, { name: op.name, durationMs, completed: op.end !== undefined, count: 1 });
       }
-      const operations = [...named.values()].sort((a, b) => b.durationMs - a.durationMs).slice(0, 16);
+      const reads = readAttribution.snapshot(at - last);
+      const operations = [...named.values()].sort((a, b) => b.durationMs - a.durationMs).slice(0, 16).map(op => ({ ...op,
+        readBytes: reads.operations.find(row => row.name === op.name)?.readBytes ?? 0,
+        decodedJsonBytes: reads.operations.find(row => row.name === op.name)?.decodedJsonBytes ?? 0 }));
       const attribution = spans.snapshot(last);
       // Keep measured synchronous blockers when long awaited spans fill the
       // report. Remaining slots retain awaits/events in duration order.
@@ -76,6 +80,7 @@ export function createViewerLoopMonitor(log?: (line: string) => void, now = () =
         ...performanceProcess, revision: performanceProcess.revision ?? (revision && /^[a-f0-9]{7,40}$/.test(revision) ? revision : null), sequence: ++sequence, lastTick: last, tick: at, utc: new Date().toISOString(),
         pendingOperations: active.size, activeDropped, completedDropped, logDropped: sink.dropped(),
         requests: spans.requests(),
+        reads,
         attribution: { pending: attribution.pending, dropped: attribution.dropped, droppedMs: attribution.droppedMs,
           omitted: Math.max(0, attribution.records.length - longest.length),
           slices: longest.map(row => ({ ...row, site: performanceSites[row.site],
@@ -104,6 +109,7 @@ export function createViewerLoopMonitor(log?: (line: string) => void, now = () =
         monotonic: at, utc: new Date().toISOString(), requests: spans.requests(), logDropped: sink.dropped() })}`);
       lastSummary = at;
     }
+    readAttribution.clear();
     spans.clear();
     activeDropped = completedDropped = 0;
     last = at;
@@ -130,7 +136,7 @@ export function createViewerLoopMonitor(log?: (line: string) => void, now = () =
         completed.splice(shortest, 1);
         completedDropped++;
       };
-      return context.run(name, () => {
+      return readAttribution.run(name, () => context.run(name, () => {
         try {
           const result = work();
           if (result && typeof (result as unknown as Promise<unknown>).then === "function") {
@@ -139,7 +145,7 @@ export function createViewerLoopMonitor(log?: (line: string) => void, now = () =
           finish();
           return result;
         } catch (error) { finish(); throw error; }
-      });
+      }));
     },
     tick,
     start() {

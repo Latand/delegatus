@@ -1,3 +1,4 @@
+import { observeSqlite, parseSqliteJson } from "@/lib/sqliteReadAttribution";
 import { runWithNativeCallProof } from "@/lib/attention/nativeCallProof";
 import { nativeAdmissionMessage, type NativeCallerRefusal } from "@/lib/attention/nativeCaller";
 import crypto from "node:crypto";
@@ -1754,7 +1755,7 @@ export class SqliteMcpReceiptStore implements McpRecoveryReceiptStore {
        handle. The journal mode cannot change inside a transaction, so these
        pragmas run before the schema transaction. */
     this.db = openCurrentDatabase(filename, () => {
-      const db = new sqlite.Database(filename, { create: true, strict: true });
+      const db = observeSqlite(new sqlite.Database(filename, { create: true, strict: true }), "mcp-receipts");
       db.exec("PRAGMA busy_timeout = 5000; PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL; PRAGMA journal_size_limit = 67108864; PRAGMA auto_vacuum = INCREMENTAL;");
       return db;
     }, { reopened: () => this.initializeSchema() });
@@ -1952,7 +1953,7 @@ export class SqliteMcpReceiptStore implements McpRecoveryReceiptStore {
     if (receipt.binding_json !== null) {
       let parsed: unknown;
       try {
-        parsed = JSON.parse(receipt.binding_json);
+        parsed = parseSqliteJson(receipt.binding_json, this.db);
       } catch (error) {
         throw new Error("invalid MCP receipt database binding JSON", { cause: error });
       }
@@ -2114,7 +2115,7 @@ export class SqliteMcpReceiptStore implements McpRecoveryReceiptStore {
   private parseResult(key: string, serialized: string): McpToolResult {
     let parsed: unknown;
     try {
-      parsed = JSON.parse(serialized);
+      parsed = parseSqliteJson(serialized, this.db);
     } catch (error) {
       throw new Error("invalid MCP receipt database result JSON", { cause: error });
     }
