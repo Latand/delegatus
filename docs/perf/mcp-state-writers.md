@@ -694,6 +694,34 @@ python3 -B scripts/mcp-state-writer-matrix.py --compare "$RUN_ROOT"
 
 The complete alternating matrix is required before performance acceptance.
 
+The Viewer initializes its existing binding module before accepting MCP
+requests. Its inline receipt service remains lazy, and the managed stdio
+adapter returns before importing that module. Task calls continue through the
+executor. Loading the binding module in isolation opened no SQLite connection.
+Two diagnostic repetitions with 30 seconds warmup and 120 seconds measured
+load reduced stdio loop p99 from 0.395263/0.407551 ms with deferred binding
+initialization to 0.192639/0.195455 ms with initialization before serving.
+These shorter probes identify a startup difference; they do not replace the
+complete acceptance matrix below.
+
+Before this adjustment, candidate `048535abf` completed twenty full-window
+samples against matched main `d395e7c73` and original audit `45d25ac`.
+The candidate's independent-stdio median p99/max was 0.509439/2.950696 ms;
+matched main was 0.204415/2.814844 ms and audit was 0.193791/3.132405 ms.
+Shared-stdio medians were 0.394751/2.114389 ms for candidate,
+0.199167/2.710410 ms for main, and 0.203391/2.010166 ms for audit.
+This candidate failed performance acceptance. Its first native HTTP sample
+recorded 0.577023/3.096848 ms against main's 46.039039/131.001025 ms;
+that single pair establishes no cohort verdict.
+
+All twenty samples completed their 300 offered calls with zero failures,
+pending calls or surviving processes. All thirteen available candidate/control
+pairs have equal normalized response and durable-row hashes, and each history
+reproduces its final rows. The owned controller ended between measurements;
+all twenty complete records remain in
+[`mcp-state-writers-viewer-initialization-diagnostic.json`](../../evidence/mcp-state-writers-viewer-initialization-diagnostic.json).
+The changed candidate needs a fresh complete matrix with a new source freeze.
+
 ### Acceptance rules for the resumed matrix
 
 The resumed matrix freezes the candidate after merging main. Each of the twelve

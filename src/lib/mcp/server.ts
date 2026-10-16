@@ -4681,6 +4681,15 @@ export async function createProductionViewerMcpService(hostHealthProbe = false, 
       },
     };
   }
+  // Initialize the Viewer's existing binding graph before serving requests.
+  // Receipt construction remains lazy for the inline service; task calls keep
+  // their complete service and protocol work in the owned executor.
+  const {
+    productionViewerControlDependencies,
+    viewerMcpBindings,
+    viewerMcpRecoverableTools,
+    viewerMcpToolPolicy,
+  } = await import("./bindings");
   if (!hostHealthProbe && !taskExecutor) {
     const { TASK_EXECUTOR_TOOLS, viewerTaskExecutor } = await import("./taskExecutor");
     const { currentMcpHttpCaller } = await import("./callerContext");
@@ -4696,12 +4705,6 @@ export async function createProductionViewerMcpService(hostHealthProbe = false, 
       return (await inline).callTool(name, args, context);
     } };
   }
-  const {
-    productionViewerControlDependencies,
-    viewerMcpBindings,
-    viewerMcpRecoverableTools,
-    viewerMcpToolPolicy,
-  } = await import("./bindings");
   const controlDependencies = productionViewerControlDependencies(hostHealthProbe);
   return withMcpDispatchTurns(createMcpToolService(
     viewerMcpBindings(undefined, controlDependencies),
