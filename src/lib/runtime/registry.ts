@@ -801,6 +801,7 @@ export async function adoptCodexRegistryHosts(
   dependencies: {
     adoptHost?: (sessionId: string, options: CodexAppServerHostOptions) => Promise<CodexAppServerHost>;
     onAdopted?: (item: AdoptedCodexHost) => void;
+    onFailure?: (entry: AgentRegistryEntry, error: unknown) => void;
     claimHost?: (entry: AgentRegistryEntry, owner: ProcessIdentity) => Promise<AgentRegistryEntry | null>;
     /** The ownership check before `adopt`; production resolves the tasks. */
     admit?: (entry: AgentRegistryEntry, snapshot: RegistryFile) => { error: string } | null;
@@ -895,6 +896,7 @@ export async function adoptCodexRegistryHosts(
             return;
           }
           // A refused cell (work that cannot be contained) or a failed open; the next message relaunches it.
+          dependencies.onFailure?.(entry, error);
           console.error(`[structured hosts] boot adoption of ${sessionKeyId(entry.key)} failed: ${error instanceof Error ? error.message : String(error)}`);
           if (socketOwner && !processIdentityProvenDead(socketOwner.process)) {
             registry.releaseStructuredHostClaim(entry.key, claimed.claimOwner!, claimed.claimEpoch);
@@ -933,6 +935,7 @@ export async function adoptClaudeRegistryHosts(
   dependencies: {
     adoptHost?: (sessionId: string, options: ClaudeStreamBrokerHostOptions) => Promise<ClaudeStreamBrokerHost>;
     onAdopted?: (item: AdoptedClaudeHost) => void;
+    onFailure?: (entry: AgentRegistryEntry, error: unknown) => void;
     claimHost?: (entry: AgentRegistryEntry, owner: ProcessIdentity) => Promise<AgentRegistryEntry | null>;
     /** The ownership check before `adopt`; production resolves the tasks. */
     admit?: (entry: AgentRegistryEntry, snapshot: RegistryFile) => { error: string } | null;
@@ -1018,6 +1021,7 @@ export async function adoptClaudeRegistryHosts(
             return;
           }
           // A refused cell (work that cannot be contained) or a failed open; the next message relaunches it.
+          dependencies.onFailure?.(entry, error);
           console.error(`[structured hosts] boot adoption of ${sessionKeyId(entry.key)} failed: ${error instanceof Error ? error.message : String(error)}`);
           registry.setStructuredHostClaimed(entry.key, {
             ...claimed.structuredHost,
