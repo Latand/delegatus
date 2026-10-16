@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 
-import { clockText, dateTimeText } from "@/components/activity/format";
+import { browserZone, clockText, dateTimeText } from "@/components/activity/format";
 import { clearedByText } from "@/components/attention/decision";
 import { mergeReasonText } from "@/components/pipelines/pipelineBlockModel";
 import { useLocale, type TFunction } from "@/lib/i18n";
@@ -23,14 +23,6 @@ import { foldChronology, type ChronologyEntry } from "./taskChronologyModel";
  * the orchestrator owns the lane, else its ⋯) and the record's own words
  * under «Details». There is no «now» entry: the state line above says it.
  */
-
-const browserZone = (): string => {
-  try {
-    return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
-  } catch {
-    return "UTC";
-  }
-};
 
 const TONE: Partial<Record<ChronologyEntry["kind"], "ok" | "bad" | "warn">> = {
   "attempt-passed": "ok",

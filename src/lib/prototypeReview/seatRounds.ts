@@ -16,7 +16,7 @@ import type { PrototypeReviewRound } from "./types";
  */
 
 export const SEAT_DECISIONS_COLLECTION = "seat-decisions";
-/** Rounds the collection keeps; past it the oldest answered one leaves first. */
+/** Rounds the collection keeps; past it the oldest delivered one leaves first. */
 export const SEAT_ROUNDS_LIMIT = PROTOTYPE_LIMITS.storedRounds;
 
 const collections = new Map<string, { identity: string; collection: SqliteStateCollection<PrototypeReviewRound> }>();
@@ -101,9 +101,9 @@ export function mutateSeatRound<T>(reviewId: string, change: (round: PrototypeRe
   });
 }
 
-/** Store a new seat round. Past the limit the oldest answered rounds leave,
+/** Store a new seat round. Past the limit the oldest delivered rounds leave,
     and their ids come back so their media goes with them; a collection full of
-    open questions takes no further one. */
+    unresolved decisions takes no further one. */
 export function insertSeatRound(round: PrototypeReviewRound): string[] {
   if (round.taskId !== null) throw new PrototypeError("a seat round has no task");
   const store = collection("write")!;
@@ -112,7 +112,7 @@ export function insertSeatRound(round: PrototypeReviewRound): string[] {
   let count = held.length + 1;
   for (const old of held) {
     if (count <= SEAT_ROUNDS_LIMIT) break;
-    if (!old.decision) continue;
+    if (old.decision?.delivery.state !== "sent") continue;
     removed.push(old.id); count--;
   }
   if (count > SEAT_ROUNDS_LIMIT) throw new PrototypeError(`the orchestrator already has ${SEAT_ROUNDS_LIMIT} questions waiting; nothing was published`, 409);

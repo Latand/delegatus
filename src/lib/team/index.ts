@@ -12,7 +12,7 @@
  */
 
 import type { MessageSender, TeamActor, TeamModule } from "./contract";
-import { accessKeyWithheld, authenticatedOwner, isHumanActor, refuseAnonymous, teamActor } from "./actor";
+import { activeDeliveryActor, telegramOwnerActor, accessKeyWithheld, authenticatedOwner, isHumanActor, refuseAnonymous, teamActor } from "./actor";
 import { memberInitials } from "./contract";
 import { claimMessageAuthor, settleMessageAuthor } from "./authorship";
 import { messageTextDigest, recordMessageAuthor, recordTeamEvent } from "./events";
@@ -22,7 +22,7 @@ import { sessionBoundStream } from "./streams";
 import { recordConversationEvent } from "./subjects";
 import { teamTelegramHook } from "./telegramSignIn";
 
-export { accessKeyWithheld, authenticatedOwner, claimMessageAuthor, isHumanActor, recordConversationEvent, recordMessageAuthor, recordTeamEvent, refuseAnonymous, sessionBoundStream, settleMessageAuthor, teamActor, teamMode, teamTelegramHook };
+export { activeDeliveryActor, telegramOwnerActor, accessKeyWithheld, authenticatedOwner, claimMessageAuthor, isHumanActor, recordConversationEvent, recordMessageAuthor, recordTeamEvent, refuseAnonymous, sessionBoundStream, settleMessageAuthor, teamActor, teamMode, teamTelegramHook };
 export type { MessageAuthorClaim, PriorSubmission } from "./contract";
 
 /** `client message id → sender`, for the ids a feed asks about. Members are

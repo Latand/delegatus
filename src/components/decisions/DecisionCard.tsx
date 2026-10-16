@@ -111,7 +111,8 @@ export function DecisionRow({ decision, onOpen }: { decision: OperatorDecisionVi
       onClick={onOpen}
     >
       <Mark className="h-4 w-4 shrink-0 text-accent" aria-hidden />
-      <span className="min-w-0 flex-1 truncate text-ui font-semibold text-primary">{decision.title}</span>
+      <span className={`min-w-0 flex-1 text-ui font-semibold text-primary ${decision.decision ? "[overflow-wrap:anywhere]" : "truncate"}`}>{decision.title}</span>
+      {decision.decision ? <span data-decision-delivery={decision.decision.delivery.state} className="shrink-0 text-caption font-semibold text-warning">{t(decision.decision.delivery.phase === "attention" && decision.decision.delivery.state === "pending" ? "decisions.state.failed" : `decisions.state.${decision.decision.delivery.state}`)}</span> : null}
       <ChevronDown className="h-4 w-4 shrink-0 text-muted" aria-hidden />
     </button>
   );
@@ -241,15 +242,16 @@ export function DecisionRecord({ decision, onRetry, retrying = false, retryError
   const made = decision.decision;
   if (!made) return null;
   const state = made.delivery.state;
-  const retry = !decision.nativeAssociationState && onRetry && made.delivery.retryable && state !== "pending" && state !== "sent";
-  const tone = decision.nativeAssociationState === "approved" || state === "sent" ? "bg-success-soft text-success" : state === "pending" ? "bg-sunken text-secondary" : "bg-warning-soft text-warning";
+  const retry = !decision.nativeAssociationState && onRetry && made.delivery.retryable && (made.delivery.phase === "attention" || state !== "pending" && state !== "sent");
+  const attention = made.delivery.phase === "attention";
+  const tone = decision.nativeAssociationState === "approved" || state === "sent" ? "bg-success-soft text-success" : state === "pending" && !attention ? "bg-sunken text-secondary" : "bg-warning-soft text-warning";
   return (
     <section data-decision-card="answered" data-decision-review={decision.id} aria-label={t("decisions.recordAria", { title: decision.title })} className="min-w-0 rounded-surface border border-border bg-card">
-      <header className="flex min-w-0 items-center gap-1.5 px-3 py-2">
+      <header className="flex min-w-0 flex-wrap items-start gap-1.5 px-3 py-2">
         <CircleCheck className="h-4 w-4 shrink-0 text-success" aria-hidden />
         <span className="shrink-0 text-ui font-semibold text-primary">{t("decisions.answeredAt", { time: decisionClock(made.at, locale) })}</span>
-        <span className="min-w-0 flex-1 truncate text-label text-muted">· {decision.title}</span>
-        <span data-decision-delivery={state} className={`shrink-0 rounded-full px-1.5 py-0.5 text-caption font-semibold ${tone}`}>{t(decision.nativeAssociationState === "approved" ? "decisions.accessApproved" : decision.nativeAssociationState === "refused" ? "decisions.accessRefused" : `decisions.state.${state}`)}</span>
+        <span data-decision-record-title="" className="order-last min-w-0 basis-full text-ui font-semibold text-primary [overflow-wrap:anywhere]">{decision.title}</span>
+        <span data-decision-delivery={state} className={`ml-auto shrink-0 rounded-full px-1.5 py-0.5 text-caption font-semibold ${tone}`}>{t(decision.nativeAssociationState === "approved" ? "decisions.accessApproved" : decision.nativeAssociationState === "refused" ? "decisions.accessRefused" : attention && state === "pending" ? "decisions.state.failed" : `decisions.state.${state}`)}</span>
       </header>
       {made.rejected ? <p data-decision-rejected="" className="m-0 px-3 pb-2.5 text-ui font-semibold text-warning">{t("proto.rejected")}</p> : null}
       {decision.questions?.length ? (

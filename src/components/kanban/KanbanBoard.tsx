@@ -498,18 +498,30 @@ export function KanbanBoard(props: KanbanBoardProps) {
   openReadersRef.current = openReaders;
   /* The readers a card holds open, for where a new draft stands (kanbanModel's `openReaders`). */
   const unfoldedReaders = useMemo(() => new Set(openReaders.filter((reader) => !reader.folded).map((reader) => reader.key)), [openReaders]);
-  const modelNow = Math.floor(props.now / 15) * 15;
+  /* A card held by the pointer keeps the board as it was when it was lifted: a
+     poll or the wall clock that lands mid-drag would rebuild the model and
+     render every card it touched in the middle of a frame (about 70 ms a poll on
+     a board of 48 cards), and a render that moved or dropped the held card
+     would pull it from under the ghost. The drop releases it, and the board
+     catches up in one render. */
+  const [dragHold] = useState(() => ({ held: false, now: 0, latest: 0 }));
+  const [, setDragReleased] = useState(0);
+  const held = dragHold.held;
+  const modelNow = held ? dragHold.now : Math.floor(props.now / 15) * 15;
+  // eslint-disable-next-line react-hooks/immutability -- The hold is a plain cell the drag writes between renders; this is the clock last drawn, which a drag that starts freezes.
+  dragHold.latest = modelNow;
   const buildKanbanModel = useMemo(() => createKanbanModel(), []);
   /* A catalog update rebuilds the model, and a card whose content did not change
      stays the object it was, so only the cards it touched render again (#2218). */
   const previousModel = useRef<KanbanModel | null>(null);
   // eslint-disable-next-line react-hooks/refs -- Identity cache: the ref only decides which equal object is kept, never what the model holds.
   const model: KanbanModel = useMemo(() => {
+    if (held && previousModel.current) return previousModel.current;
     const built = buildKanbanModel({ bands, tasks: effectiveTasks, pipelines, projection, files, flows: props.flows, statusOverrides: statuses, cardFilter: props.overview?.keep, reasonFilter, seat: seatRefs, query, openReaders: unfoldedReaders, launched: isLaunchedConversation, now: modelNow });
     const shared = reuseKanbanModel(previousModel.current, built);
     previousModel.current = shared;
     return shared;
-  }, [buildKanbanModel, bands, effectiveTasks, pipelines, projection, files, props.flows, statuses, props.overview?.keep, reasonFilter, seatRefs, query, unfoldedReaders, modelNow]);
+  }, [buildKanbanModel, bands, effectiveTasks, pipelines, projection, files, props.flows, statuses, props.overview?.keep, reasonFilter, seatRefs, query, unfoldedReaders, modelNow, held]);
   const cardsById = useMemo(() => {
     const map = new Map<string, KanbanCardModel>();
     for (const status of KANBAN_STATUSES) for (const card of model.columns[status].cards) map.set(card.id, card);
@@ -1824,7 +1836,6 @@ export function KanbanBoard(props: KanbanBoardProps) {
      field or a reader starts a drag after 8 px, and a click without movement
      does what it always did. The ghost and the hint are drawn by hand, so a
      drag renders nothing in React. */
-  const draggingCard = useRef(false);
   const dragHintText = t("kanban.dragHint");
   const onCardPointerDown = useCallback((card: KanbanCardModel, event: React.PointerEvent<HTMLElement>) => {
     if (event.button !== 0 || event.pointerType === "touch" || !card.task || !rootRef.current) return;
@@ -1836,9 +1847,13 @@ export function KanbanBoard(props: KanbanBoardProps) {
       event,
       hint: dragHintText,
       onDrop: (to) => move(card, to),
-      onActive: (active) => { draggingCard.current = active; },
+      onActive: (active) => {
+        dragHold.held = active;
+        dragHold.now = dragHold.latest;
+        if (!active) setDragReleased((count) => count + 1);
+      },
     });
-  }, [move, dragHintText]);
+  }, [move, dragHintText, dragHold]);
 
   /* ── Keys: undo and redo, find ───────────────────────────────────────── */
   /* The Stages sheet stands over the board: while it is open, no key the
@@ -2597,7 +2612,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
   useColumnDwell(rootRef, {
     enabled: widthControls,
     canWiden: (status) => !wideColumns.pinned && !stripStatuses.has(status) && (wideShelf ? wideShelf !== status : status !== "assigned"),
-    busy: () => menuOpenRef.current || sheetOpen.current || draggingCard.current,
+    busy: () => menuOpenRef.current || sheetOpen.current || dragHold.held,
     widen: wideColumns.widenIfNarrow,
   });
 
@@ -2886,7 +2901,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
   return (
     <AccountChoiceContext.Provider value={accountChoice}>
     <KanbanDraftContext.Provider value={draftActions}>
-    <div ref={rootRef} className="kb" data-kanban-board="" data-mode={mode} data-bar-menu={menu.open?.value.kind === "create" || menu.open?.value.kind === "tray" ? "" : undefined}>
+    <div ref={rootRef} className="kb" data-kanban-board="" data-mode={mode} data-agent-window-open={shown || incoming ? "" : undefined} data-bar-menu={menu.open?.value.kind === "create" || menu.open?.value.kind === "tray" ? "" : undefined}>
       <CardFlights placements={placements} rootRef={rootRef} />
       {props.overview ? null : <SeatActionWires rootRef={rootRef} phone={false} seatRefs={seatRefs} tasks={storedTasks} pipelines={pipelines} files={files} onJump={jumpToWiredCard} />}
       {/* The project board's one header bar (#1801, docs/design/board-header.md): where am I, what is

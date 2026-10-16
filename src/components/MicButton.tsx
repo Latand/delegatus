@@ -408,6 +408,7 @@ export function MicButtonView({
         title={phase === "busy" ? t("mic.recognizing") : phase === "starting" ? t("mic.connecting") : t("mic.dictateHint")}
         disabled={phase !== "idle" || busy}
         onClick={handleMain}
+        data-mic-phase={phase}
         /* Hover/focus telegraphs an imminent press — mint the live token now
            so the press itself only waits for the microphone. */
         onPointerEnter={prewarmLiveToken}
@@ -418,7 +419,7 @@ export function MicButtonView({
         }}
         className={
           anchored
-            ? `relative inline-flex shrink-0 items-center justify-center rounded-control focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-60 ${
+            ? `composer-ghost relative inline-flex shrink-0 items-center justify-center rounded-control focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-60 ${
                 /* 32px visual, 44px hit via the pseudo-element (rule 8). */
                 isMobile ? "h-8 w-8 before:absolute before:-inset-1.5 before:content-['']" : "p-2"
               } ${phase === "starting" ? "bg-accent/10 text-accent" : "text-muted hover:bg-sunken hover:text-accent"}`

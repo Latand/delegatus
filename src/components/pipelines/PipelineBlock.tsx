@@ -95,21 +95,27 @@ function loopSuffixes(t: TFunction, summary: KanbanPipeline, nameOf: (stage: Pip
 
 const drawn = (suffix: Suffix | null): suffix is Suffix => Boolean(suffix && suffix.arc.state !== "rest");
 
-function StagePill({ pipeline, chip, name, suffix, interactive, selected, onOpen }: {
+function StagePill({ pipeline, chip, name, suffix, interactive, selected, onOpen, onCard }: {
   pipeline: Pipeline;
   chip: KanbanStageChip;
   name: string;
   suffix: Suffix | null;
-  /** A pill that opens the stage's conversation where it has one; on a card it is text. */
+  /** A pill that opens the stage's conversation where it has one. */
   interactive: boolean;
   selected: boolean;
   onOpen?: (pipeline: Pipeline, stage: PipelineStage) => void;
+  /** The pill is on a card's one-line chain: it opens an agent that exists
+      (the card holds no form for one that has not started) and is plain text
+      where nothing opens. `face` says the chain sits inside one button, the
+      phone card's face, where a pill cannot be a button: it marks itself and
+      the face resolves the tap (`stageAt`). */
+  onCard?: "button" | "face";
 }) {
   const { t } = useLocale();
   const state = graphStateWord(t, chip.state);
   const attempt = latestAttempt(pipeline, chip.stage.id);
   const conversation = Boolean(attempt?.agentPath || attempt?.conversationId);
-  const openable = interactive && Boolean(onOpen) && (conversation || stageDraftable(pipeline, chip.stage.id));
+  const openable = interactive && Boolean(onOpen) && (conversation || (!onCard && stageDraftable(pipeline, chip.stage.id)));
   const who = whoRuns(t, pipeline, chip.stage);
   const rework = chip.rework ? t("kanban.graph.workingAgain") : null;
   const aria = [
@@ -128,12 +134,15 @@ function StagePill({ pipeline, chip, name, suffix, interactive, selected, onOpen
       {drawn(suffix) ? <ReturnSuffix arc={suffix.arc} title={suffix.title} /> : null}
     </>
   );
+  if (onCard === "face" && interactive && conversation) {
+    return <span className={className} data-stage={chip.stage.id} data-stage-open={chip.stage.id} title={hover}>{body}</span>;
+  }
   return openable ? (
     <button type="button" className={className} data-stage={chip.stage.id} aria-label={aria} title={hover} onClick={() => onOpen!(pipeline, chip.stage)}>
       {body}
     </button>
   ) : (
-    <span className={className} data-stage={chip.stage.id} title={hover} {...(interactive ? { role: "img", "aria-label": aria } : {})}>
+    <span className={className} data-stage={chip.stage.id} title={hover} {...(interactive && !onCard ? { role: "img", "aria-label": aria } : {})}>
       {body}
     </span>
   );
@@ -185,12 +194,15 @@ function ChainPills({ summary, nameOf, suffixes, selected, onOpenStage }: {
  * current stage alone. A name too long even for that wraps inside its pill:
  * no pill in the fold ellipsizes, so every fold that settles shows it whole.
  */
-function CardLine({ summary, nameOf, suffixes, age, tail }: {
+function CardLine({ summary, nameOf, suffixes, age, tail, opens, onOpenStage }: {
   summary: KanbanPipeline;
   nameOf: (stage: PipelineStage) => string;
   suffixes: ReadonlyMap<string, Suffix>;
   age: React.ReactNode;
   tail: React.ReactNode;
+  /** Whether the pills open their agent, and how: as buttons, or through the button around the chain. */
+  opens: "button" | "face" | null;
+  onOpenStage?: (pipeline: Pipeline, stage: PipelineStage) => void;
 }) {
   const { t } = useLocale();
   const levels = useMemo(() => cardChainLevels(cardChain(summary)), [summary]);
@@ -232,7 +244,7 @@ function CardLine({ summary, nameOf, suffixes, age, tail }: {
     <span key={entry.kind === "stage" ? entry.chip.stage.id : `${entry.kind}-${index}`} className="pb-step">
       {index > 0 ? <span className="pb-arrow" aria-hidden="true">→</span> : null}
       {entry.kind === "stage" ? (
-        <StagePill pipeline={summary.pipeline} chip={entry.chip} name={nameOf(entry.chip.stage)} suffix={suffixes.get(entry.chip.stage.id) ?? null} interactive={false} selected={false} />
+        <StagePill pipeline={summary.pipeline} chip={entry.chip} name={nameOf(entry.chip.stage)} suffix={suffixes.get(entry.chip.stage.id) ?? null} interactive={opens !== null} selected={false} onOpen={onOpenStage} onCard={opens ?? "button"} />
       ) : entry.kind === "passed" ? (
         <span className="pb-pill tone-ok st-passed fold" data-fold="passed" title={t("pipelineBlock.foldPassed", { count: entry.n })}>
           <StageToneMark state="passed" />
@@ -463,6 +475,28 @@ function GraphSlot({ summary, names, selected, onOpenStage }: {
   );
 }
 
+/** How far from a pill a tap still lands on it: the pill is 22 px tall, so 11 px
+    above and below make the 44 px a finger needs, and half the 4 px gap sideways. */
+const PILL_REACH = { x: 2, y: 11 };
+
+/** The stage a tap at (x, y) landed on in a card whose pills are marked
+    `data-stage-open` (`stagesInFace`): the nearest pill within reach, or null
+    for a tap on the card itself. */
+export function stageAt(face: Element, x: number, y: number): { pipelineId: string; stageId: string } | null {
+  let best: { pipelineId: string; stageId: string } | null = null;
+  let nearest = Infinity;
+  for (const pill of face.querySelectorAll<HTMLElement>("[data-stage-open]")) {
+    const rect = pill.getBoundingClientRect();
+    const dx = Math.max(rect.left - x, 0, x - rect.right);
+    const dy = Math.max(rect.top - y, 0, y - rect.bottom);
+    if (dx > PILL_REACH.x || dy > PILL_REACH.y) continue;
+    const pipelineId = pill.closest<HTMLElement>("[data-pipeline]")?.dataset.pipeline;
+    const distance = dx * dx + dy * dy;
+    if (pipelineId && distance < nearest) { nearest = distance; best = { pipelineId, stageId: pill.dataset.stageOpen! }; }
+  }
+  return best;
+}
+
 export interface PipelineBlockProps {
   summary: KanbanPipeline;
   density: PipelineBlockDensity;
@@ -479,7 +513,13 @@ export interface PipelineBlockProps {
   /** Task density: the operator opened the graph in place of the chain. */
   graphOpen?: boolean;
   onToggleGraph?: (open: boolean) => void;
+  /** Task and screen density: a pill opens its stage. Card density: a pill whose
+      stage has an agent opens that agent, on the closed card as on the open one
+      (a lane managed elsewhere has none to open). */
   onOpenStage?: (pipeline: Pipeline, stage: PipelineStage) => void;
+  /** Card density inside one button (the phone card's face): the pills cannot be
+      buttons there, so the face reads which one a tap landed on (`stageAt`). */
+  stagesInFace?: boolean;
   /** Screen density: opens a recorded earlier attempt through the normal reader. */
   onOpenAttempt?: (target: StageNavTarget) => void;
   /** The head's ›: the Stages sheet on the desktop, the pipeline screen on the phone. */
@@ -582,7 +622,7 @@ export function PipelineBlock(props: PipelineBlockProps) {
             <span className="min-w-0 [overflow-wrap:anywhere]" data-cpu-queue>{progress}</span>
             <span className="pb-grow" />{text}
           </span>
-        ) : <CardLine summary={summary} nameOf={nameOf} suffixes={suffixes} age={ageNode} tail={text} />}
+        ) : <CardLine summary={summary} nameOf={nameOf} suffixes={suffixes} age={ageNode} tail={text} opens={props.managedOn || !props.onOpenStage ? null : props.stagesInFace ? "face" : "button"} onOpenStage={props.onOpenStage} />}
         {aside ? (
           <span className={`pb-line${reasonLine ? " reason" : " sub"}`}>{reasonLine}<span className="pb-grow" />{aside}</span>
         ) : reasonLine}

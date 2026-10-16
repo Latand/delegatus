@@ -160,6 +160,43 @@ const text = (element: Element | null) => (element?.textContent ?? "").replace(/
 const section = (el: HTMLElement, name: string) => el.querySelector<HTMLElement>(`[data-section="${name}"]`);
 const button = (el: HTMLElement, action: string) => el.querySelector<HTMLButtonElement>(`[data-action="${action}"]`);
 
+describe("MCP update failure guidance", () => {
+  for (const locale of ["en", "uk"] as const) {
+    test.each([
+      ["MCP runtime is missing tools: suggest_replies", "installed updater", "Встановлений оновлювач"],
+      ["MCP candidate did not register declared tools: new_read. Retrying the same image will not help; choose a corrected release.", "declares MCP tools", "заявляє інструменти MCP"],
+      ["MCP candidate is missing deployment contract tools: board_snapshot. Retrying the same image will not help; choose a corrected release.", "required for deployment", "потрібні для розгортання"],
+      ["MCP candidate tool catalog is invalid. Retrying the same image will not help; choose a corrected release.", "invalid MCP tool catalog", "некоректний каталог інструментів MCP"],
+    ])(`catalog failures explain cause and futile retry in ${locale}: %s`, (reason, en, uk) => {
+      setLocale(locale);
+      const s = snapshot({ mode: "managed", ...available(), update: {
+        ...idleUpdate(MANAGED_STEPS), state: "failed", target: NEW, targetShort: NEW.slice(0, 7),
+        startedAt: AT, finishedAt: new Date(NOW).toISOString(),
+        steps: pendingSteps(MANAGED_STEPS).map(step => step.name === "health"
+          ? { ...step, state: "failed", failure: null, tail: [reason] } : step),
+      } });
+      const el = render(s);
+      expect(text(el.querySelector("[data-cause]"))).toContain(locale === "en" ? en : uk);
+      const guidance = text(el.querySelector("[data-retry-guidance]"));
+      expect(guidance).toContain(locale === "en" ? "will not help" : "не допоможе");
+      expect(button(el, "retry")?.title).toBe(guidance);
+      button(el, "retry")!.click();
+      expect(calls).toEqual(["retry"]);
+    });
+
+    test(`a transient MCP failure explains that retry may help in ${locale}`, () => {
+      setLocale(locale);
+      const el = render(snapshot({ mode: "managed", ...available(), update: {
+        ...idleUpdate(MANAGED_STEPS), state: "failed", target: NEW, targetShort: NEW.slice(0, 7), startedAt: AT, finishedAt: new Date(NOW).toISOString(),
+        steps: pendingSteps(MANAGED_STEPS).map(step => step.name === "health"
+          ? { ...step, state: "failed", failure: null, tail: ["MCP startup timed out"] } : step),
+      } }));
+      expect(text(el.querySelector("[data-cause]"))).toBe("MCP startup timed out");
+      expect(text(el.querySelector("[data-retry-guidance]"))).toContain(locale === "en" ? "may help" : "може допомогти");
+    });
+  }
+});
+
 describe("automatic updates", () => {
   test.each(["en", "uk"] as const)("the expired hold explains admitted launches and retry time in %s", locale => {
     setLocale(locale);

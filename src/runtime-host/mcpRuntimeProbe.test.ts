@@ -16,6 +16,62 @@ import { McpProbeStdioTransport } from "./mcpProbeStdioTransport";
 import { mcpProbeCallFailures, mcpProbeFailureDetail, probeControlUrl, probeMcpRuntime, VIEWER_CONTROL_URL_ENV } from "./mcpRuntimeProbe";
 import { serveRuntimeHost } from "./socket";
 
+async function candidateCatalogProbe(declared: unknown, registered: string[]) {
+  const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-mcp-candidate-catalog-"));
+  const worker = path.join(sandbox, "candidate.mjs");
+  fs.writeFileSync(worker, `
+    import { Server } from ${JSON.stringify(require.resolve("@modelcontextprotocol/sdk/server/index.js"))};
+    import { StdioServerTransport } from ${JSON.stringify(require.resolve("@modelcontextprotocol/sdk/server/stdio.js"))};
+    import { CallToolRequestSchema, ListToolsRequestSchema } from ${JSON.stringify(require.resolve("@modelcontextprotocol/sdk/types.js"))};
+    const server = new Server({name:"candidate-catalog",version:"1"},{capabilities:{tools:{},experimental:{"delegatus/tool-catalog":${JSON.stringify(declared)}}}});
+    server.setRequestHandler(ListToolsRequestSchema,()=>({tools:${JSON.stringify(registered)}.map(name=>({name,inputSchema:{type:"object"}}))}));
+    server.setRequestHandler(CallToolRequestSchema,(request)=>{
+      if (!${JSON.stringify(registered)}.includes(request.params.name)) throw new Error("Tool is not registered");
+      return {content:[],structuredContent:{ok:true}};
+    });
+    await server.connect(new StdioServerTransport());
+  `);
+  try {
+    return await probeMcpRuntime({
+      command: process.execPath, args: [worker], cwd: process.cwd(),
+      env: { [VIEWER_CONTROL_URL_ENV]: "http://127.0.0.1:1" },
+      runtime: { source: "managed", revision: "7".repeat(40), releaseId: "candidate-catalog", artifactDigest: "a".repeat(64), stagedAt: "2026-10-16T08:00:00.000Z" },
+      timeoutMs: 2_000,
+    });
+  } finally { fs.rmSync(sandbox, { recursive: true, force: true }); }
+}
+
+test("candidate catalog: intentionally removed tools pass independently of the prober catalog", async () => {
+  const tools = ["deployment_status", "board_snapshot", "candidate_only_read"];
+  expect(await candidateCatalogProbe({ version: 1, tools }, tools)).toMatchObject({ ok: true, tools: [...tools].sort() });
+});
+
+test("candidate catalog: a pre-declaration release uses its own list for rollback and bootstrap", async () => {
+  const tools = ["deployment_status", "board_snapshot"];
+  expect(await candidateCatalogProbe(undefined, tools)).toMatchObject({ ok: true });
+});
+
+test("candidate catalog: an unregistered declaration fails even when the prober never shipped that tool", async () => {
+  const evidence = await candidateCatalogProbe({ version: 1, tools: [...MCP_TOOL_NAMES, "candidate_only_read"] }, [...MCP_TOOL_NAMES]);
+  expect(evidence.ok).toBe(false);
+  expect(evidence.detail).toContain("MCP candidate did not register declared tools: candidate_only_read");
+});
+
+test("candidate catalog: the stable deploy contract cannot be removed by the candidate", async () => {
+  const tools = MCP_TOOL_NAMES.filter(name => name !== "board_snapshot");
+  const evidence = await candidateCatalogProbe({ version: 1, tools }, tools);
+  expect(evidence.ok).toBe(false);
+  expect(evidence.detail).toContain("MCP candidate is missing deployment contract tools: board_snapshot");
+});
+
+test.each([{}, { version: 2, tools: [] }, { version: 1, tools: "deployment_status" }, { version: 1, tools: [] }, { version: 1, tools: [" "] }, { version: 1, tools: ["board_snapshot", "board_snapshot"] }])(
+  "candidate catalog: a malformed declaration fails closed (%j)", async (declared) => {
+    const evidence = await candidateCatalogProbe(declared, [...MCP_TOOL_NAMES]);
+    expect(evidence.ok).toBe(false);
+    expect(evidence.detail).toContain("MCP candidate tool catalog is invalid");
+  },
+);
+
 /* Every probe reads its own port-0 control stub. A missing control endpoint
    is rejected before spawning the runtime. */
 function candidateControl() {
@@ -187,7 +243,7 @@ test("host-admitted managed MCP probes discover the complete surface, call requi
         processReady: true,
         calls: { deploymentStatus: true, boardSnapshot: true },
       });
-      expect(evidence.tools).toHaveLength(MCP_TOOL_NAMES.length);
+      expect(evidence.tools).toEqual([...MCP_TOOL_NAMES, "suggest_replies"].sort());
       expect(evidence.tools).toContain("deployment_status");
       expect(evidence.tools).toContain("board_snapshot");
       expect(evidence.callFailures).toBeUndefined();

@@ -75,6 +75,8 @@ export interface PrototypeDecision {
   at: string;
   /** The person who decided; the background delivery sends in their name. Local only. */
   decidedBy?: { kind: "operator" } | { kind: "member"; memberId: string } | { kind: "agent"; conversationId: string };
+  /** Verified relay owner, local only; revalidated against the same member before dispatch. */
+  telegramUserId?: string;
   /** Local proof recorded only after the native-association authorization gate. */
   nativeAssociationApproval?: "owner-session" | "paired-owner";
   /** 1 for the first decision of a round; a changed decision raises it and gets a message key of its own. */
@@ -91,6 +93,11 @@ export interface PrototypeDecision {
     /** Failed or unconfirmed attempts, including admitted ones the journal later showed failed, and when that run began. Cleared when the message lands or the operator retries. */
     failures?: number;
     failingSince?: string;
+    attempts?: number;
+    startedAt?: string;
+    exhaustedAt?: string;
+    /** Fenced predecessors retained when a saved answer follows seat succession. */
+    predecessors?: Array<{ conversationId: string; operationId: string }>;
   };
 }
 export interface PrototypeReviewRound {
@@ -139,7 +146,7 @@ export interface PrototypeRoundView extends Omit<PrototypeReviewRound, "publicat
     frames: Array<Omit<PrototypeFrame, "image" | "original"> & { image: PrototypeMediaView; original?: PrototypeMediaView }>;
     videos: Array<{ media: PrototypeMediaView; caption: string }>;
   }>;
-  decision?: Omit<PrototypeDecision, "delivery" | "decidedBy" | "nativeAssociationApproval" | "revision"> & { delivery: { state: PrototypeDeliveryState; retryable: boolean; phase?: PrototypeDeliveryPhase } };
+  decision?: Omit<PrototypeDecision, "delivery" | "decidedBy" | "telegramUserId" | "nativeAssociationApproval" | "revision"> & { delivery: { state: PrototypeDeliveryState; retryable: boolean; phase?: PrototypeDeliveryPhase } };
 }
 /** A read's round. Superseded rounds name the later decided round that retired
     them; the mark is derived on read and never crosses to another installation. */
@@ -159,6 +166,8 @@ export interface PrototypeReviewRead {
 }
 export interface PrototypeReviewReplica { summary: PrototypeReviewSummary; rounds: PrototypeRoundView[]; historyTruncated?: true }
 export interface PrototypeReviewSummary {
+  /** Local attention obligations, including older decided rounds. */
+  undelivered?: Array<{ reviewId: string; title: string; at: string }>;
   asks?: "questions";
   waitingDismissal?: { at: string; by: import("@/lib/attention/dismissalTypes").DismissedBy };
   latestReviewId: string;

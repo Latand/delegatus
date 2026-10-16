@@ -33,7 +33,10 @@ import { remoteCardsFor, useRemoteFeed, type RemoteCard } from "@/components/kan
 import { remoteLaneNote, remoteLaneSummary } from "@/components/pipelines/remoteLaneSummary";
 import { cardWaitsForCpu, pipelineTitle } from "@/components/kanban/PipelineSection";
 import { useTaskMutations, type StatusMoveOutcome, type StatusMoveOptions, type TaskMutationPorts } from "@/components/kanban/useTaskMutations";
-import { PipelineBlock } from "@/components/pipelines/PipelineBlock";
+import { PipelineBlock, stageAt } from "@/components/pipelines/PipelineBlock";
+import { attemptNavTarget, resolveStageNavFile } from "@/components/pipelines/pipelineModel";
+import { latestAttempt } from "@/lib/pipelines/stageChip";
+import { formatConversationHash } from "@/lib/accounts/identity";
 import { PhoneCardPrototypeButton, usePrototypeButton } from "@/components/prototypeReview/PrototypeReviewButton";
 import { TaskIcon } from "@/components/tasks/TaskIcon";
 import { updateTask } from "@/components/tasks/taskApi";
@@ -41,7 +44,7 @@ import { blockAgeSeconds } from "@/components/pipelines/pipelineBlockModel";
 import { humanizeDuration } from "@/components/turnDuration";
 import { fileModelLabel } from "@/components/utils";
 import { useLocale, type MessageKey, type TFunction } from "@/lib/i18n";
-import type { Pipeline } from "@/lib/pipelines/types";
+import type { Pipeline, PipelineStage } from "@/lib/pipelines/types";
 import type { BoardTask, TaskStatus } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 
@@ -491,7 +494,7 @@ function RemoteCardLines({ remote, title, nowMs, withLane }: { remote: RemoteCar
   );
 }
 
-function CardView({ item, now, project, remoteAgents, remote, onOpen, onLongPress, lift, onDismiss, onUndo, onAnswer }: {
+function CardView({ item, now, project, remoteAgents, remote, onOpen, onOpenStage, onLongPress, lift, onDismiss, onUndo, onAnswer }: {
   item: PhoneCard;
   /** The task runs on another linked machine. */
   remote: RemoteCard | null;
@@ -501,6 +504,8 @@ function CardView({ item, now, project, remoteAgents, remote, onOpen, onLongPres
   project: string | null;
   remoteAgents: readonly RemoteAgentView[];
   onOpen: (() => void) | null;
+  /** A tap on a stage pill of the card's lane opens that stage's agent; a tap anywhere else is `onOpen`. */
+  onOpenStage: ((pipeline: Pipeline, stage: PipelineStage) => void) | null;
   onLongPress: (() => void) | null;
   /** A task card can be lifted and dropped on a column. */
   lift: Lift | null;
@@ -574,7 +579,7 @@ function CardView({ item, now, project, remoteAgents, remote, onOpen, onLongPres
       {/* The needs-you question has its own slot below motion. */}
       {item.kind === "task" ? <TaskStatusNote note={card.task?.note} nowMs={nowMs} /> : null}
       {item.shown && !loose ? (
-        <PipelineBlock summary={item.shown} density="card" nowMs={nowMs} taskTitle={item.kind === "task" ? title : null} aside={othersText(t, item)} reasonLine={!state} />
+        <PipelineBlock summary={item.shown} density="card" nowMs={nowMs} taskTitle={item.kind === "task" ? title : null} aside={othersText(t, item)} reasonLine={!state} onOpenStage={onOpen ? onOpenStage ?? undefined : undefined} stagesInFace />
       ) : null}
       {loose ? <LooseLine item={item} now={now} /> : <AskLine item={item} />}
       <AgentsLine item={item} nowMs={nowMs} remote={remote !== null} />
@@ -604,7 +609,13 @@ function CardView({ item, now, project, remoteAgents, remote, onOpen, onLongPres
     "data-phone-card-pipeline": item.shown?.pipeline.id,
   };
   const face = onOpen ? (
-    <button type="button" {...data} aria-label={remote ? `${label}, ${t("kanban.remote.hint", { host: remote.host })}` : label} className={className} style={faceStyle} onClick={onOpen}>{body}</button>
+    <button type="button" {...data} aria-label={remote ? `${label}, ${t("kanban.remote.hint", { host: remote.host })}` : label} className={className} style={faceStyle} onClick={(event) => {
+      /* The pills are not buttons here (the face is one), so the tap is read against them. */
+      const hit = onOpenStage && item.shown ? stageAt(event.currentTarget, event.clientX, event.clientY) : null;
+      const stage = hit && item.shown?.pipeline.id === hit.pipelineId ? item.shown.pipeline.stages.find((candidate) => candidate.id === hit.stageId) : undefined;
+      if (stage) onOpenStage!(item.shown!.pipeline, stage);
+      else onOpen();
+    }}>{body}</button>
   ) : (
     <div {...data} className={className} style={faceStyle}>{body}</div>
   );
@@ -1181,6 +1192,15 @@ export function MobileKanban(props: MobileKanbanProps) {
     nav.openSheet("card");
   };
 
+  /* A stage's agent from its pill on the card: the conversation the board already holds, or its link when this board does not carry it. */
+  const openStage = (pipeline: Pipeline, stage: PipelineStage): void => {
+    const target = attemptNavTarget(latestAttempt(pipeline, stage.id));
+    if (!target) return;
+    const file = resolveStageNavFile(target, props.files);
+    if (file) props.onOpenConversation(file);
+    else window.location.hash = formatConversationHash({ conversationId: target.conversationId ?? undefined, path: target.agentPath ?? "" });
+  };
+
   const open = (item: PhoneCard): (() => void) | null => {
     if (item.kind === "task") {
       const task = item.card.task;
@@ -1215,6 +1235,7 @@ export function MobileKanban(props: MobileKanbanProps) {
       remoteAgents={item.card.task ? remoteAgents.filter((row) => row.task === item.card.task!.id) : []}
       remote={item.card.task ? remoteCards.get(item.card.task.id) ?? null : null}
       onOpen={open(item)}
+      onOpenStage={openStage}
       onLongPress={() => openSheet(item)}
       lift={item.kind === "task" && item.card.task ? { status: item.card.status, onDrop: (to) => move(item, to) } : null}
       onDismiss={item.reasons.length ? () => sendCardDismissal(item, false) : null}

@@ -35,7 +35,7 @@ afterAll(async () => {
 
 const { flushSync } = await import("react-dom");
 const { createRoot } = await import("react-dom/client");
-const { PipelineBlock, PipelineStateLine } = await import("./PipelineBlock");
+const { PipelineBlock, PipelineStateLine, stageAt } = await import("./PipelineBlock");
 const { summarizePipeline } = await import("@/components/kanban/kanbanModel");
 const { WorkLinksProvider } = await import("@/components/workLinks/workLinksContext");
 const { setLocale, translate } = await import("@/lib/i18n");
@@ -164,6 +164,43 @@ test("stage names stay the pipeline's in Ukrainian, and the state words are the 
   const host = mount(<PipelineBlock summary={summary} density="task" nowMs={NOW_MS} onOpenStage={() => {}} />);
   expect(texts(host, ".pb-pill[data-stage] .pb-name")).toEqual(["Implement", "Review", "Verify", "Merge"]);
   expect(host.querySelector(".pstate-word")?.textContent).toBe(translate("uk", "pipelineState.needs_decision"));
+});
+
+test("a card line given an opener makes each stage with an agent a button that opens it, and leaves the rest text (2026-10-16)", () => {
+  const summary = summarizePipeline(searchPipeline());
+  const opened: Array<[string, string]> = [];
+  const host = mount(<PipelineBlock summary={summary} density="card" nowMs={NOW_MS} onOpenStage={(pipeline, stage) => opened.push([pipeline.id, stage.id])} />);
+  /* Implement, Review and Verify have run; Merge waits with no agent and no form on a closed card. */
+  expect([...host.querySelectorAll("button.pb-pill[data-stage]")].map((pill) => pill.getAttribute("data-stage"))).toEqual(["implement", "review", "verify"]);
+  expect(host.querySelector('span.pb-pill[data-stage="merge"]')).not.toBeNull();
+  expect(host.querySelector('[data-stage="merge"]')?.getAttribute("role")).toBeNull();
+  expect(host.querySelector('button.pb-pill[data-stage="verify"]')?.getAttribute("aria-label")).toContain("Verify");
+  click(host.querySelector('button.pb-pill[data-stage="verify"]'));
+  click(host.querySelector('button.pb-pill[data-stage="implement"]'));
+  expect(opened).toEqual([["p-search", "verify"], ["p-search", "implement"]]);
+});
+
+test("a card line inside one button marks the pills that hold an agent and resolves a tap against them; a lane managed elsewhere opens nothing", () => {
+  const summary = summarizePipeline(searchPipeline());
+  const opened: string[] = [];
+  const host = mount(<PipelineBlock summary={summary} density="card" nowMs={NOW_MS} stagesInFace onOpenStage={(_pipeline, stage) => opened.push(stage.id)} />);
+  expect(host.querySelectorAll("button")).toHaveLength(0);
+  expect([...host.querySelectorAll("[data-stage-open]")].map((pill) => pill.getAttribute("data-stage-open"))).toEqual(["implement", "review", "verify"]);
+  /* Pills 22 px tall in a row: a tap 10 px above one reaches it, 12 px does not, and a tap between two takes the nearer. */
+  const rects: Record<string, [number, number]> = { implement: [0, 60], review: [64, 120], verify: [124, 190] };
+  for (const pill of host.querySelectorAll<HTMLElement>("[data-stage-open]")) {
+    const [left, right] = rects[pill.dataset.stageOpen!]!;
+    pill.getBoundingClientRect = () => ({ left, right, top: 100, bottom: 122, width: right - left, height: 22, x: left, y: 100 } as DOMRect);
+  }
+  expect(stageAt(host, 30, 111)).toEqual({ pipelineId: "p-search", stageId: "implement" });
+  expect(stageAt(host, 100, 90)).toEqual({ pipelineId: "p-search", stageId: "review" });
+  expect(stageAt(host, 100, 133)).toEqual({ pipelineId: "p-search", stageId: "review" });
+  expect(stageAt(host, 100, 88)).toBeNull();
+  expect(stageAt(host, 100, 134)).toBeNull();
+  expect(stageAt(host, 62, 111)).not.toBeNull();
+  expect(stageAt(host, 220, 111)).toBeNull();
+  const managed = mount(<PipelineBlock summary={summary} density="card" nowMs={NOW_MS} onOpenStage={() => {}} managedOn={{ host: "laptop", note: null, reason: null }} />);
+  expect(managed.querySelectorAll("button.pb-pill, [data-stage-open]")).toHaveLength(0);
 });
 
 test("the card line is passive: no control in it, the PR as text, the reason in warning words, and a finished lane one muted line", () => {

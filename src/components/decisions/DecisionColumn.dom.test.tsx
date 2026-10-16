@@ -426,3 +426,20 @@ for (const touch of [false, true]) test(`a native association can be revoked in 
   const expected = { project: "project-a", reviewId: SEAT, chosen: [], comment: "", answers: [{ questionId: "identity", options: [0] }, { questionId: "evidence", options: [0] }] };
   expect(posts).toEqual([expected, expected]);
 });
+
+
+test("C: an undelivered answer is shown as a record and retry uses the saved answer", async () => {
+  const held = seatDecision({ decision: { chosen: [], comment: "Keep the recommendation.", answers: [{ questionId: "when", options: [0] }, { questionId: "why", options: [0] }], at: "2026-10-16T08:00:00Z", delivery: { state: "pending", phase: "attention", retryable: true } } });
+  const posts: unknown[] = [];
+  globalThis.fetch = (async (_input: unknown, init?: RequestInit) => {
+    if (init?.method === "POST") posts.push(JSON.parse(String(init.body)));
+    return new Response(JSON.stringify({ project: "project-a", decisions: [] }));
+  }) as typeof fetch;
+  const host = await render(<DecisionList project="project-a" initial={[held]} />);
+  expect(host.querySelector('[data-decision-card="answered"]')).not.toBeNull();
+  expect(host.querySelector("[data-decision-send]")).toBeNull();
+  expect(host.textContent).toContain("Keep the recommendation.");
+  expect(host.querySelector("[data-decision-delivery]")?.textContent).toContain("not delivered");
+  await click(host.querySelector("[data-decision-retry]"));
+  expect(posts).toEqual([{ project: "project-a", reviewId: SEAT, retry: true }]);
+});
