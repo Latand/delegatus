@@ -158,3 +158,30 @@ test("a prompt save closes the editor and reads as edited by you at once, and a 
   expect(latest?.reports?.settings.promptIsDefault).toBe(true);
   expect(latest?.failure?.code).toBe("action_failed");
 });
+
+test("two refused settings writes together leave the stored settings, not the first press's prediction", async () => {
+  const posts: unknown[] = [];
+  const release: Array<(response: Response) => void> = [];
+  globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+    if ((init?.method ?? "GET") === "POST") {
+      posts.push(JSON.parse(String(init!.body)));
+      return new Promise<Response>((resolve) => { release.push(resolve); });
+    }
+    return new Response(JSON.stringify({ reports: payload(true) }), { status: 200 });
+  }) as unknown as typeof fetch;
+  await mount();
+  const stored = latest!.reports!.settings;
+  await act(async () => {
+    void latest!.saveSettings({ ...stored, enabled: false });
+    void latest!.saveSettings({ ...stored, enabled: false, time: "11:30" });
+    await Bun.sleep(0);
+  });
+  expect(latest?.reports?.settings.time).toBe("11:30");
+  const refusal = () => new Response(JSON.stringify({ code: "action_failed" }), { status: 500 });
+  await act(async () => { release[0]!(refusal()); await Bun.sleep(0); });
+  /* The newer press is still out and stays drawn. */
+  expect(latest?.reports?.settings.time).toBe("11:30");
+  await act(async () => { release[1]!(refusal()); await Bun.sleep(0); });
+  expect(latest?.reports?.settings).toEqual(stored);
+  expect(latest?.failure?.code).toBe("action_failed");
+});

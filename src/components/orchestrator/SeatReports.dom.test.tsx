@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Window } from "happy-dom";
-import { act } from "react";
+import { act, useEffect } from "react";
 import { createRoot, type Root } from "react-dom/client";
 
 import { translate } from "@/lib/i18n";
@@ -276,4 +276,37 @@ test("the chip's value is the chosen chat's title, the alias only without one, a
   expect(seatReportsReading({ reportTelegram: { chat: "atlas-design-reviews", name: "Atlas" }, reportChatTitle: null, reportNameSuggestion: null }, t).face).toBe("atlas-design-reviews");
   expect(seatReportsReading({ reportTelegram: { chat: null }, reportChatTitle: null, reportNameSuggestion: null }, t)).toEqual({ face: "Log", line: "Reports go to the log only.", chat: null });
   expect(seatReportsReading(null, t).face).toBe("Log");
+});
+
+test("two choices drawn together and both refused leave the stored choice, not the first press's prediction", async () => {
+  const served = globalThis.fetch;
+  const refusals: Array<() => void> = [];
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (init?.method === "PUT" && String(input).includes("/api/projects/settings")) {
+      await new Promise<void>((resolve) => { refusals.push(resolve); });
+      return json({ error: "settings store busy" }, 503);
+    }
+    return served(input, init);
+  }) as typeof fetch;
+  const seen: { current: ReturnType<typeof useProjectReports> | null } = { current: null };
+  function Probe() {
+    const reports = useProjectReports("repo-beta");
+    useEffect(() => { seen.current = reports; }, [reports]);
+    return null;
+  }
+  container = document.createElement("div");
+  document.body.appendChild(container);
+  root = createRoot(container);
+  await act(async () => root!.render(<Probe />));
+  await settle();
+  const stored = seen.current!.settings;
+  expect(stored?.reportTelegram?.chat).toBe("team-reports");
+  const logOnly = { reportTelegram: null, reportChatTitle: null, reportNameSuggestion: null };
+  const lounge = { reportTelegram: { chat: "design-lounge" }, reportChatTitle: "Design Lounge", reportNameSuggestion: null };
+  await act(async () => { void seen.current!.save(null, logOnly); void seen.current!.save({ chat: "design-lounge", name: "Beta" }, lounge); await new Promise((resolve) => setTimeout(resolve, 0)); });
+  expect(seen.current!.settings?.reportTelegram?.chat).toBe("design-lounge");
+  await act(async () => { refusals[0]!(); await new Promise((resolve) => setTimeout(resolve, 0)); });
+  expect(seen.current!.settings?.reportTelegram?.chat).toBe("design-lounge");
+  await act(async () => { refusals[1]!(); await new Promise((resolve) => setTimeout(resolve, 0)); });
+  expect(seen.current!.settings).toEqual(stored);
 });

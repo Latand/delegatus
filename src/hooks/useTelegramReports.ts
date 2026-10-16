@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { TelegramReportPromptPayload, TelegramReportSettings, TelegramReportsPayload } from "@/lib/telegram/reportContracts";
 
@@ -50,13 +50,17 @@ function codeOf(json: Record<string, unknown>): string {
 }
 
 export function useTelegramReports(active: boolean): TelegramReportsState {
-  const [reports, setReports] = useState<TelegramReportsPayload | null>(null);
+  /* The last payload the server gave, and the settings presses still on their
+     way: the drawn reports are the payload with the newest press laid over it. */
+  const [stored, setReports] = useState<TelegramReportsPayload | null>(null);
+  const [presses, setPresses] = useState<ReadonlyArray<{ id: number; settings: TelegramReportSettings }>>([]);
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<TelegramReportsFailure | null>(null);
   const [openReport, setOpenReport] = useState<{ id: string; text: string } | null>(null);
   const [groups, setGroups] = useState<{ id: string; title: string }[] | null>(null);
   const [prompt, setPrompt] = useState<TelegramReportPromptPayload | null>(null);
   const sequence = useRef(0);
+  const reports = useMemo(() => (stored && presses.length > 0 ? { ...stored, settings: presses[presses.length - 1]!.settings } : stored), [stored, presses]);
 
   const load = useCallback(async () => {
     const current = ++sequence.current;
@@ -112,16 +116,18 @@ export function useTelegramReports(active: boolean): TelegramReportsState {
     }
   }, []);
   /* The report settings and the prompt are local writes: each shows at once
-     and locks nothing, and a refusal puts the stored settings back (audit
-     B40, B41). The latest press wins: an older answer does not undo a newer one. */
+     and locks nothing, and a refusal puts the last settings the server gave
+     back, with the presses still out drawn over them (audit B40, B41). An
+     older answer does not undo a newer one. */
   const settingsWrite = useRef(0);
   const drawnSettings = useCallback(async (settings: TelegramReportSettings, body: Record<string, unknown>) => {
     const mine = ++settingsWrite.current;
-    let before: TelegramReportsPayload | null = null;
-    setReports((held) => { before = held; return held ? { ...held, settings } : held; });
-    const answer = await act(body, true);
-    if (!answer.ok && mine === settingsWrite.current && !answer.json.reports) setReports((held) => before ?? held);
-    return answer;
+    setPresses((held) => [...held, { id: mine, settings }]);
+    try {
+      return await act(body, true);
+    } finally {
+      setPresses((held) => held.filter((press) => press.id !== mine));
+    }
   }, [act]);
 
   return {

@@ -1,7 +1,7 @@
 "use client";
 
 import { ChevronRight, LoaderCircle, Send } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 import { useAnchoredBox } from "@/components/feed/SpeakMenu";
@@ -54,7 +54,11 @@ function settingsOf(body: Partial<ProjectReportSettings>): ProjectReportSettings
 
 export function useProjectReports(project: string): ProjectReportsRead {
   /* Keyed by project, so a project switch never shows the previous one's. */
-  const [read, setRead] = useState<{ project: string; settings: ProjectReportSettings } | null>(null);
+  const [stored, setRead] = useState<{ project: string; settings: ProjectReportSettings } | null>(null);
+  /* Predicted choices still on their way; a refusal drops only its own. */
+  const [presses, setPresses] = useState<ReadonlyArray<{ id: number; project: string; settings: ProjectReportSettings }>>([]);
+  const pressCount = useRef(0);
+  const appliedPress = useRef(0);
   const [saving, setSaving] = useState(false);
   const [failed, setFailed] = useState<string | null>(null);
   const [generation, setGeneration] = useState(0);
@@ -74,8 +78,8 @@ export function useProjectReports(project: string): ProjectReportsRead {
   }, [project, generation]);
   const reload = useCallback(() => setGeneration((value) => value + 1), []);
   const save = useCallback(async (outcome: { chat: string; name: string; topicId?: number } | { link: string; name: string } | null, drawn?: ProjectReportSettings) => {
-    let before: { project: string; settings: ProjectReportSettings } | null = null;
-    if (drawn) setRead((held) => { before = held; return { project, settings: drawn }; });
+    const mine = ++pressCount.current;
+    if (drawn) setPresses((held) => [...held, { id: mine, project, settings: drawn }]);
     else setSaving(true);
     setFailed(null);
     try {
@@ -88,16 +92,22 @@ export function useProjectReports(project: string): ProjectReportsRead {
         const body = await response.json().catch(() => ({})) as { message?: unknown };
         throw new Error(outcome && "link" in outcome && typeof body.message === "string" ? body.message : "");
       }
-      setRead({ project, settings: settingsOf(await response.json().catch(() => ({})) as Partial<ProjectReportSettings>) });
+      const answered = settingsOf(await response.json().catch(() => ({})) as Partial<ProjectReportSettings>);
+      /* An answer older than one already taken never overwrites it. */
+      if (mine > appliedPress.current) { appliedPress.current = mine; setRead({ project, settings: answered }); }
       return true;
     } catch (error) {
-      if (drawn) setRead(before);
       setFailed(error instanceof Error ? error.message : "");
       return false;
     } finally {
-      if (!drawn) setSaving(false);
+      if (drawn) setPresses((held) => held.filter((press) => press.id !== mine));
+      else setSaving(false);
     }
   }, [project]);
+  const read = useMemo(() => {
+    const newest = presses.filter((press) => press.project === project).at(-1);
+    return newest ? { project, settings: newest.settings } : stored;
+  }, [stored, presses, project]);
   return { settings: read?.project === project ? read.settings : null, saving, failed, save, reload };
 }
 

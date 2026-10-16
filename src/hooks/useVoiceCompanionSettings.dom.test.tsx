@@ -80,3 +80,24 @@ test("releasing an uncertain session still waits for the server", async () => {
   await server.answer(0, Response.json({ ...STORED }));
   expect(seen!.busy).toBe(false);
 });
+
+test("two refused writes together leave the stored values, not the first press's prediction", async () => {
+  const server = holdPuts();
+  await mount();
+  await act(async () => { void seen!.update({ callMemory: true }); void seen!.update({ enabled: false }); await new Promise((resolve) => setTimeout(resolve, 0)); });
+  expect([seen!.settings?.callMemory, seen!.settings?.enabled]).toEqual([true, false]);
+  await server.answer(0, Response.json({ code: "COMPANION_UNAVAILABLE" }, { status: 503 }));
+  /* The first refusal drops its own press only; the second stays drawn. */
+  expect([seen!.settings?.callMemory, seen!.settings?.enabled]).toEqual([false, false]);
+  await server.answer(1, Response.json({ code: "COMPANION_UNAVAILABLE" }, { status: 503 }));
+  expect([seen!.settings?.callMemory, seen!.settings?.enabled]).toEqual([false, true]);
+});
+
+test("an older accepted write answering after a newer refusal is kept", async () => {
+  const server = holdPuts();
+  await mount();
+  await act(async () => { void seen!.update({ callMemory: true }); void seen!.update({ enabled: false }); await new Promise((resolve) => setTimeout(resolve, 0)); });
+  await server.answer(1, Response.json({ code: "COMPANION_UNAVAILABLE" }, { status: 503 }));
+  await server.answer(0, Response.json({ ...STORED, callMemory: true }));
+  expect([seen!.settings?.callMemory, seen!.settings?.enabled]).toEqual([true, true]);
+});

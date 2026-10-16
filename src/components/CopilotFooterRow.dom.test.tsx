@@ -154,3 +154,27 @@ test("a restored Default is listed at once with its sign-in unchecked, a refusal
     expect(live.posts).toHaveLength(2);
   } finally { live.restore(); }
 });
+
+test("a «Use» and a restore out together, both refused, leave the list as the server gave it", async () => {
+  const hidden = { cli: { present: true, reason: null }, active: "work", accounts: [row({ id: "work", label: "Work", active: true }), row({ id: "extra", label: "Extra" })], hidden: [{ id: "default", label: "Default" }] };
+  const releases: Array<(response: Response) => void> = [];
+  const live = await renderLive(hidden, () => new Promise<Response>((resolve) => { releases.push(resolve); }));
+  try {
+    const badge = (id: string) => live.host.querySelector(`[data-copilot-account="${id}"]`)?.textContent?.includes("active");
+    await click(live.host.querySelector('[data-copilot-account="extra"] button.text-accent'));
+    await click(live.host.querySelector('[data-account-restore="default"]'));
+    expect(live.posts).toHaveLength(2);
+    expect(badge("extra")).toBe(true);
+    expect(live.host.querySelector('[data-copilot-account="default"]')).not.toBeNull();
+    const refuse = () => act(async () => { releases.shift()!(Response.json({ error: "Copilot accounts are busy" }, { status: 503 })); await new Promise((resolve) => setTimeout(resolve, 0)); });
+    await refuse();
+    /* The select's refusal takes the badge back and keeps the restored row drawn. */
+    expect(badge("work")).toBe(true);
+    expect(badge("extra")).toBe(false);
+    expect(live.host.querySelector('[data-copilot-account="default"]')).not.toBeNull();
+    await refuse();
+    expect(live.host.querySelector('[data-copilot-account="default"]')).toBeNull();
+    expect(live.host.querySelector('[data-account-hidden-offer="default"]')).not.toBeNull();
+    expect(badge("work")).toBe(true);
+  } finally { live.restore(); }
+});
