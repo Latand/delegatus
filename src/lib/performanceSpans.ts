@@ -14,6 +14,7 @@ export const performanceSites = [
   "controller.port-start", "controller.git-wait", "controller.runtime-wait", "controller.store-wait", "controller.other-wait",
   "http.dispatch", "http.response-ready",
   "pipeline.git-guard-prepare", "pipeline.attempt-push-proof",
+  "orchestrator.seat-stat", "orchestrator.seat-read", "orchestrator.seat-parse", "orchestrator.seat-index",
 ] as const;
 export type PerformanceSite = typeof performanceSites[number];
 type Slice = { sequence: number; span: number; parent: number; site: number; kind: "sync" | "await" | "event";

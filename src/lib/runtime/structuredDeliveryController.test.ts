@@ -113,7 +113,7 @@ test("startup adoption repairs a stale completed structured launch before draini
   delete legacyEntry.structuredHostOperationId;
   registry.upsert({ ...legacyEntry, pendingAction: "spawn" });
 
-  expect(conversationDeliverabilityFromRecord(registry.snapshot(), {
+  expect(await conversationDeliverabilityFromRecord(registry.snapshot(), {
     conversationId: begun.receipt.conversationId,
   })).toMatchObject({ condition: "synchronizing", deliverable: false });
 
@@ -130,7 +130,7 @@ test("startup adoption repairs a stale completed structured launch before draini
   try {
     await bindStructuredDeliveryQueue([], { registry, client });
     expect(registry.readOnlySnapshot().entries[`codex:${sessionId}`]?.pendingAction).toBeNull();
-    expect(conversationDeliverabilityFromRecord(registry.snapshot(), {
+    expect(await conversationDeliverabilityFromRecord(registry.snapshot(), {
       conversationId: begun.receipt.conversationId,
     })).toMatchObject({ condition: "deliverable", deliverable: true });
   } finally {
