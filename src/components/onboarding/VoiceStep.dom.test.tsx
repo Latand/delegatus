@@ -3,14 +3,14 @@ import { act } from "react";
 import type { Root } from "react-dom/client";
 
 import { installActEnv } from "@/test-helpers/actEnv";
-import { installOnboardingDom, jsonResponse, settle, typeInto } from "@/test-helpers/onboardingDom";
+import { installOnboardingDom, jsonResponse, settle } from "@/test-helpers/onboardingDom";
 import type { TranscribeBackend, TranscribeBackendInfo } from "@/lib/transcribeBackend";
 
 /*
- * The Voice step (#2004, design §2.6): pick the backend, paste a live key, and
+ * The Voice step (#2004, design §2.6): pick the backend, see where a live
+ * backend's key comes from and open «Keys» on it (keys-settings.md §4), and
  * one Check that reports the real answer in a sentence. The routes are stubbed
- * with the answers the real ones give; the key typed here must never be shown
- * again once it is saved.
+ * with the answers the real ones give.
  */
 
 const harness = installOnboardingDom();
@@ -19,8 +19,7 @@ installActEnv();
    is loaded only once the window exists. */
 const { createRoot } = await import("react-dom/client");
 const { VoiceStep } = await import("./VoiceStep");
-
-const FAKE_KEY = ["fixture", "voice", "value", "42"].join("-");
+const { OPEN_KEYS_EVENT } = await import("@/components/keys/openKeys");
 
 function info(backend: TranscribeBackend, over: Partial<Record<TranscribeBackend, { available?: boolean; keySource?: "env" | "file" | null }>> = {}, lockedByEnv = false): TranscribeBackendInfo {
   return {
@@ -77,45 +76,46 @@ test("four rows in the store's order; choosing one saves it at once", async () =
   const rows = Array.from(host.querySelectorAll("[data-voice-backend]")).map((row) => row.getAttribute("data-voice-backend"));
   expect(rows).toEqual(["local", "chatgpt", "elevenlabs", "soniox"]);
   expect(host.querySelector<HTMLInputElement>("[data-voice-backend=local] input[type=radio]")?.checked).toBe(true);
-  expect(host.querySelector("[data-voice-key-field]")).toBeNull();
+  expect(host.querySelector("[data-voice-key]")).toBeNull();
 
   await click(host.querySelector("[data-voice-backend=soniox] input[type=radio]"));
   expect(harness.calls.find((call) => call.method === "POST")?.body).toEqual({ backend: "soniox" });
   expect(host.querySelector<HTMLInputElement>("[data-voice-backend=soniox] input[type=radio]")?.checked).toBe(true);
-  expect(host.querySelector("[data-voice-key-field=soniox]")).not.toBeNull();
+  expect(host.querySelector("[data-voice-key=soniox]")).not.toBeNull();
 });
 
-test("a saved key goes to the key route and is never shown again", async () => {
+test("a live row has no key field: it says whether the key is set and opens «Keys» on that key", async () => {
   let current = info("soniox");
-  harness.setRoute((url, init) => {
-    if (url.endsWith("/api/transcribe/key") && init?.method === "PUT") {
-      current = info("soniox", { soniox: { available: true, keySource: "file" } });
-      return jsonResponse(current);
-    }
-    if (url.endsWith("/api/transcribe/backend")) return jsonResponse(current);
-    return undefined;
-  });
-  const host = await mount();
-  const field = host.querySelector<HTMLInputElement>("[data-voice-key-field=soniox] input")!;
-  expect(field.type).toBe("password");
-  await act(async () => typeInto(field, `  ${FAKE_KEY}  `));
-  await click(host.querySelector("[data-voice-key-save]"));
-  expect(harness.calls.find((call) => call.method === "PUT")?.body).toEqual({ provider: "soniox", key: FAKE_KEY });
-  expect(host.textContent).toContain("Key saved. It is never shown again.");
-  expect(host.textContent).toContain("Key on file");
-  expect(host.innerHTML).not.toContain(FAKE_KEY);
-  expect(host.querySelector("[data-voice-key-field=soniox] input")).toBeNull();
+  harness.setRoute((url) => url.endsWith("/api/transcribe/backend") ? jsonResponse(current) : undefined);
+  const asked: unknown[] = [];
+  const listen = (event: Event) => asked.push((event as CustomEvent).detail);
+  window.addEventListener(OPEN_KEYS_EVENT, listen);
+  try {
+    const host = await mount();
+    const row = host.querySelector("[data-voice-key=soniox]")!;
+    expect(row.getAttribute("data-key-source")).toBe("missing");
+    expect(row.textContent).toContain("No key yet");
+    expect(host.querySelector("[data-voice-backend=soniox] input:not([type=radio])")).toBeNull();
+    await click(row.querySelector("[data-voice-open-keys=soniox]"));
+    expect(asked).toEqual([{ key: "soniox" }]);
 
-  /* Replace opens an empty field; it never fills in what is on file. */
-  await click(host.querySelector("[data-voice-key-replace]"));
-  expect(host.querySelector<HTMLInputElement>("[data-voice-key-field=soniox] input")?.value).toBe("");
+    /* A key saved in «Keys» shows here without reopening the step. */
+    current = info("soniox", { soniox: { available: true, keySource: "file" } });
+    await act(async () => { window.dispatchEvent(new Event("delegatus:provider-key-changed")); });
+    await act(async () => settle());
+    expect(host.querySelector("[data-voice-key=soniox]")?.getAttribute("data-key-source")).toBe("file");
+    expect(host.textContent).toContain("Key on file");
+  } finally {
+    window.removeEventListener(OPEN_KEYS_EVENT, listen);
+  }
 });
 
 test("a key from the environment cannot be edited here, and says which variable", async () => {
   harness.setRoute((url) => url.endsWith("/api/transcribe/backend") ? jsonResponse(info("elevenlabs", { elevenlabs: { available: true, keySource: "env" } })) : undefined);
   const host = await mount();
-  expect(host.querySelector("[data-voice-key-field=elevenlabs] input")).toBeNull();
+  expect(host.querySelector("[data-voice-key=elevenlabs]")?.getAttribute("data-key-source")).toBe("env");
   expect(host.textContent).toContain("Key comes from the environment (ELEVENLABS_API_KEY); it cannot be changed here.");
+  expect(host.querySelector("[data-voice-open-keys=elevenlabs]")).not.toBeNull();
 });
 
 test("the environment lock makes every row read-only", async () => {
@@ -127,7 +127,7 @@ test("the environment lock makes every row read-only", async () => {
 
 const liveCases: Array<[string, () => Response, string, "success" | "danger"]> = [
   ["a minted token", () => jsonResponse({ token: "short-lived", provider: "soniox" }), "Live dictation works with Soniox.", "success"],
-  ["no key (503)", () => jsonResponse({ error: "missing Soniox key" }, 503), "No key on file for Soniox. Paste it above and save.", "danger"],
+  ["no key (503)", () => jsonResponse({ error: "missing Soniox key" }, 503), "No key on file for Soniox. Add it in Keys.", "danger"],
   ["a refused key (502)", () => jsonResponse({ error: "Soniox token: HTTP 401" }, 502), "Soniox refused the key: Soniox token: HTTP 401.", "danger"],
 ];
 for (const [name, answer, expected, tone] of liveCases) {

@@ -4,14 +4,15 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { installActEnv } from "@/test-helpers/actEnv";
 import { setLocale, translate } from "@/lib/i18n";
-import { KeyPanel, KeyStateWord, MemoryPanel, MemoryReadingProvider, MemoryStateWord } from "./MemoryPage";
+import { OPEN_KEYS_EVENT, type OpenKeysRequest } from "@/components/keys/openKeys";
+import { MemoryPanel, MemoryReadingProvider, MemoryStateWord } from "./MemoryPage";
 
-/* Shared memory's page and the key's page of the header menu, over stubs of
-   the product's own two endpoints. */
+/* Shared memory's page of the header menu, over a stub of the product's own
+   endpoint. A missing key opens «Keys» on the OpenRouter key. */
 
 const dom = new Window();
 Object.assign(globalThis, { window: dom, document: dom.document, navigator: dom.navigator,
-  localStorage: dom.localStorage, Node: dom.Node, HTMLElement: dom.HTMLElement, HTMLInputElement: dom.HTMLInputElement, Event: dom.Event });
+  localStorage: dom.localStorage, Node: dom.Node, HTMLElement: dom.HTMLElement, HTMLInputElement: dom.HTMLInputElement, Event: dom.Event, CustomEvent: dom.CustomEvent });
 installActEnv();
 const originalFetch = globalThis.fetch;
 let root: Root | undefined;
@@ -24,18 +25,19 @@ afterEach(() => {
 const COUNTS = { decisions: 214, delivered: 61, prepared: 69, noCandidates: 48, noMatches: 97, skipped: 12, failed: 5 };
 const ZERO = { decisions: 0, delivered: 0, prepared: 0, noCandidates: 0, noMatches: 0, skipped: 0, failed: 0 };
 type Handler = (url: string, init?: RequestInit) => unknown;
-/** Answers memory at `/api/memory/settings` and the key at `/api/asks-you/key`; a Response passes through. */
-function serve(memory: Handler, key: Handler = () => ({ present: true, source: "file" })) {
+/** Answers memory at `/api/memory/settings`; a Response passes through. */
+function serve(memory: Handler) {
   globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
     const url = String(input);
-    const answer = await (url.includes("/api/asks-you/key") ? key(url, init) : memory(url, init));
+    expect(url).toContain("/api/memory/settings");
+    const answer = await memory(url, init);
     return answer instanceof Response ? answer : Response.json(answer);
   }) as typeof fetch;
 }
 async function render(project = "fixture-project") {
   const host = document.createElement("div"); document.body.appendChild(host); root = createRoot(host);
   await act(async () => {
-    root!.render(<MemoryReadingProvider project={project}><MemoryStateWord /><MemoryStateWord short /><KeyStateWord /><MemoryPanel /><KeyPanel /></MemoryReadingProvider>);
+    root!.render(<MemoryReadingProvider project={project}><MemoryStateWord /><MemoryStateWord short /><MemoryPanel /></MemoryReadingProvider>);
   });
   await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); });
   return host;
@@ -51,7 +53,7 @@ const switchOf = (host: HTMLElement) => host.querySelector<HTMLButtonElement>("[
 for (const lang of ["en", "uk"] as const) test(`${lang}: each state reads as a word beside its dot, and the page agrees with it`, async () => {
   setLocale(lang);
   for (const state of ["working", "off", "noKey", "capped"] as const) {
-    serve(() => view(state), () => ({ present: state !== "noKey", source: state === "noKey" ? null : "file" }));
+    serve(() => view(state));
     const host = await render();
     const word = host.querySelector("[data-memory-state]")!;
     expect(word.getAttribute("data-memory-state")).toBe(state);
@@ -92,29 +94,31 @@ for (const lang of ["en", "uk"] as const) test(`${lang}: the numbers, the month 
   ]);
 });
 
-for (const lang of ["en", "uk"] as const) test(`${lang}: without a key, «Enter the key» opens the product's key field where it was pressed`, async () => {
+for (const lang of ["en", "uk"] as const) test(`${lang}: without a key, «Open Keys» asks for «Keys» on the OpenRouter key, and a key saved there lifts the block`, async () => {
   setLocale(lang);
   let saved = false;
-  serve(() => view(saved ? "working" : "noKey"), (_url, init) => {
-    if (init?.method === "PUT") { saved = true; return { present: true, source: "file" }; }
-    return { present: saved, source: saved ? "file" : null };
-  });
-  const host = await render();
-  const reason = host.querySelector("[data-memory-reason]")!;
-  expect(reason.textContent).toContain(translate(lang, "memoryPage.reason.noKey"));
-  expect(reason.querySelector("input")).toBeNull();
-  await act(async () => { reason.querySelector<HTMLButtonElement>("[data-memory-enter-key]")!.click(); });
-  const input = host.querySelector<HTMLInputElement>("[data-memory-reason] [data-provider-key] input")!;
-  expect(input).not.toBeNull();
-  await act(async () => {
-    input.value = "fixture-key";
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-    host.querySelector("[data-memory-reason] form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
-  });
-  await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); });
-  expect(host.querySelector("[data-memory-state]")!.getAttribute("data-memory-state")).toBe("working");
-  expect(host.querySelector("[data-memory-reason]")).toBeNull();
-  expect(host.textContent).not.toContain("fixture-key");
+  serve(() => view(saved ? "working" : "noKey"));
+  const asked: OpenKeysRequest[] = [];
+  const listen = (event: Event) => asked.push((event as CustomEvent<OpenKeysRequest>).detail);
+  window.addEventListener(OPEN_KEYS_EVENT, listen);
+  try {
+    const host = await render();
+    const reason = host.querySelector("[data-memory-reason]")!;
+    expect(reason.textContent).toContain(translate(lang, "memoryPage.reason.noKey"));
+    /* The field that was here moved to «Keys»: one place keys are entered. */
+    expect(reason.querySelector("input")).toBeNull();
+    const button = reason.querySelector<HTMLButtonElement>("[data-memory-enter-key]")!;
+    expect(button.textContent).toBe(translate(lang, "keys.open"));
+    await act(async () => { button.click(); });
+    expect(asked).toEqual([{ key: "openrouter" }]);
+    expect(host.querySelector("input")).toBeNull();
+    saved = true;
+    await act(async () => { window.dispatchEvent(new Event("delegatus:provider-key-changed")); await new Promise(resolve => setTimeout(resolve, 0)); });
+    expect(host.querySelector("[data-memory-state]")!.getAttribute("data-memory-state")).toBe("working");
+    expect(host.querySelector("[data-memory-reason]")).toBeNull();
+  } finally {
+    window.removeEventListener(OPEN_KEYS_EVENT, listen);
+  }
 });
 
 for (const lang of ["en", "uk"] as const) test(`${lang}: unavailable status keeps the saved switch usable through GET and PUT`, async () => {
@@ -146,37 +150,13 @@ for (const lang of ["en", "uk"] as const) test(`${lang}: a failed PUT says so un
   expect(host.querySelector("[data-memory-numbers]")!.textContent).toBe(numbers);
 });
 
-for (const lang of ["en", "uk"] as const) test(`${lang}: staging without a key directs both pages to production and draws no field`, async () => {
+for (const lang of ["en", "uk"] as const) test(`${lang}: staging without a key directs the page to production and offers no way to enter one`, async () => {
   setLocale(lang);
-  serve(() => ({ ...view("noKey"), reasons: ["noKey", "notOwner"], staging: true }), () => ({ present: false, source: null, staging: true }));
+  serve(() => ({ ...view("noKey"), reasons: ["noKey", "notOwner"], staging: true }));
   const host = await render();
   expect(host.querySelector("[data-memory-reason]")!.textContent).toBe(translate(lang, "memoryPage.reason.noKeyStaging"));
   expect(host.querySelector("[data-memory-enter-key]")).toBeNull();
-  expect(host.querySelector("[data-provider-key]")).toBeNull();
-  expect(host.querySelector("[data-key-page]")!.textContent).toContain(translate(lang, "providerKey.staging"));
-});
-
-for (const lang of ["en", "uk"] as const) test(`${lang}: the key page: Saved with Replace, Missing with the field, the environment with neither`, async () => {
-  setLocale(lang);
-  for (const key of [{ present: true, source: "file" }, { present: false, source: null }, { present: true, source: "env" }] as const) {
-    serve(() => view("working"), () => key);
-    const host = await render();
-    const page = host.querySelector("[data-key-page]")!;
-    expect(page.textContent).toContain(translate(lang, "keyPage.for"));
-    expect(page.querySelector("[data-key-state]")!.textContent).toBe(translate(lang, key.present ? "keyPage.saved" : "keyPage.missing"));
-    if (key.source === "file") {
-      expect(page.querySelector("input")).toBeNull();
-      await act(async () => { page.querySelector<HTMLButtonElement>("[data-key-replace]")!.click(); });
-      expect(page.querySelector("input")).not.toBeNull();
-    } else if (key.source === null) {
-      expect(page.querySelector("input")).not.toBeNull();
-    } else {
-      expect(page.querySelector("input")).toBeNull();
-      expect(page.querySelector("[data-key-replace]")).toBeNull();
-      expect(page.textContent).toContain(translate(lang, "keyPage.env"));
-    }
-    act(() => root?.unmount()); root = undefined; document.body.innerHTML = "";
-  }
+  expect(host.querySelector("input")).toBeNull();
 });
 
 for (const enabled of [true, false]) test(`a previous release response keeps the project switch usable (${enabled})`, async () => {

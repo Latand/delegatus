@@ -2,29 +2,26 @@
 
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 
-import { OpenRouterKeyField } from "@/components/asks/OpenRouterKeyField";
 import { memoryBlocked, memoryTone, money, monthName, monthResets, type MemoryTone, type MemoryView } from "@/components/headerMenu/headerMenuModel";
+import { openKeys } from "@/components/keys/openKeys";
 import { ProjectSettingRow } from "@/components/ProjectSettingRow";
 import { useLocale } from "@/lib/i18n";
 
-/* Shared memory and the OpenRouter key as rows of the header's menu
-   (docs/design/header-menu.md): each row says
-   its state as a word beside a coloured dot, and one step in is a page with
-   the per-project switch, what blocks memory and how to lift that, the month
-   in three numbers with the rest behind Details, and the key's field opened
-   where it was asked for. Everything is read from and written to the
-   product's own `/api/memory/settings` and `/api/asks-you/key`. */
+/* Shared memory as a row of the header's menu
+   (docs/design/header-menu.md): the row says its state as a word beside a
+   coloured dot, and one step in is a page with the per-project switch, what
+   blocks memory and how to lift that, and the month in three numbers with the
+   rest behind Details. A missing OpenRouter key opens «Keys» on that key
+   (docs/design/keys-settings.md §4). Everything is read from and written to
+   the product's own `/api/memory/settings`. */
 
-export type KeyView = { present: boolean; source: "env" | "file" | null; staging?: boolean };
 export type MemorySize = "menu" | "sheet";
 
 interface Reading {
   /** The project the switch belongs to; none on the overview, which has no memory row. */
   project: string | null;
   memory: MemoryView | null;
-  key: KeyView | null;
   memoryError: "read" | "save" | null;
-  keyFailed: boolean;
   busy: boolean;
   setEnabled: (enabled: boolean) => void;
 }
@@ -34,9 +31,7 @@ const MemoryReading = createContext<Reading | null>(null);
 /** One reading for every row and page of an open menu, refreshed while it is open. */
 export function MemoryReadingProvider({ project, children }: { project: string | null; children: ReactNode }) {
   const [memory, setMemory] = useState<(MemoryView & { project: string }) | null>(null);
-  const [key, setKey] = useState<KeyView | null>(null);
   const [memoryError, setMemoryError] = useState<"read" | "save" | null>(null);
-  const [keyFailed, setKeyFailed] = useState(false);
   const [busy, setBusy] = useState(false);
   /* A read that started before a write, or before the project changed, never lands over what came after it. */
   const revision = useRef(0);
@@ -54,15 +49,8 @@ export function MemoryReadingProvider({ project, children }: { project: string |
         if (current === revision.current && !abort.signal.aborted) { setMemory({ ...value, project }); setMemoryError(null); }
       } catch { if (current === revision.current && !abort.signal.aborted) setMemoryError("read"); }
     };
-    const readKey = async () => {
-      try {
-        const response = await fetch("/api/asks-you/key", { signal: abort.signal, cache: "no-store" });
-        if (!response.ok) throw Error();
-        const value = await response.json() as KeyView;
-        if (!abort.signal.aborted) { setKey(value); setKeyFailed(false); }
-      } catch { if (!abort.signal.aborted) setKeyFailed(true); }
-    };
-    const refresh = () => { void readMemory(); void readKey(); };
+    /* A key saved in «Keys» lifts memory's «no key» at once. */
+    const refresh = () => { void readMemory(); };
     refresh();
     window.addEventListener("delegatus:provider-key-changed", refresh);
     const timer = setInterval(refresh, 15_000);
@@ -87,9 +75,7 @@ export function MemoryReadingProvider({ project, children }: { project: string |
   const value: Reading = {
     project,
     memory: memory && memory.project === project ? memory : null,
-    key,
     memoryError,
-    keyFailed,
     busy,
     setEnabled: (enabled) => void setEnabled(enabled),
   };
@@ -136,20 +122,6 @@ export function MemoryStateWord({ short = false, size = "menu" }: { short?: bool
   );
 }
 
-/** The key's state: Saved or Missing. `lead`: the line that opens the key's page, in the size of a row's name. */
-export function KeyStateWord({ size = "menu", lead = false }: { size?: MemorySize; lead?: boolean }) {
-  const { t } = useLocale();
-  const { key, keyFailed } = useMemoryReading();
-  const state = key ? (key.present ? "saved" : "missing") : keyFailed ? "unknown" : "loading";
-  return (
-    <span data-key-state={state} className={lead
-      ? `${STATE} font-semibold text-primary ${size === "sheet" ? "text-body" : "text-[12px]"}`
-      : `${STATE} ${size === "sheet" ? "text-label" : "text-[11px] leading-[14px]"}`}>
-      <Dot className={state === "saved" ? "bg-success" : state === "missing" ? "bg-warning" : "bg-muted"} />
-      <span className="truncate">{state === "saved" ? t("keyPage.saved") : state === "missing" ? t("keyPage.missing") : state === "unknown" ? t("memoryState.unknown") : "…"}</span>
-    </span>
-  );
-}
 
 const ACT = {
   menu: "h-7 rounded-[7px] border border-border bg-card px-2.5 text-[11.5px] font-semibold text-primary hover:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40",
@@ -164,7 +136,6 @@ export function MemoryPanel({ size = "menu" }: { size?: MemorySize }) {
   const lang = locale === "uk" ? "uk" : "en";
   const reading = useMemoryReading();
   const { memory, memoryError, setEnabled } = reading;
-  const [keyOpen, setKeyOpen] = useState(false);
   const [details, setDetails] = useState(false);
   /* The switch keeps the last setting read; what blocks it and the month are not vouched for after a failed read. */
   const readFailed = memoryError === "read";
@@ -208,8 +179,7 @@ export function MemoryPanel({ size = "menu" }: { size?: MemorySize }) {
         <div className={PAD[size]}>
           <div role={readFailed ? "alert" : "status"} data-memory-reason={tone} className={`flex flex-col items-start gap-1.5 rounded-[8px] bg-warning-soft ${sheet ? "px-3 py-2.5 text-body" : "px-2 py-1.5 text-[12px]"} leading-snug text-primary`}>
             <span>{reason}</span>
-            {tone === "noKey" && !staging && !keyOpen ? <button type="button" data-memory-enter-key="" className={ACT[size]} onClick={() => setKeyOpen(true)}>{t("memoryPage.enterKey")}</button> : null}
-            {tone === "noKey" && !staging && keyOpen ? <OpenRouterKeyField size={size} /> : null}
+            {tone === "noKey" && !staging ? <button type="button" data-memory-enter-key="" className={ACT[size]} onClick={() => openKeys("openrouter")}>{t("keys.open")}</button> : null}
           </div>
         </div>
       ) : null}
@@ -238,30 +208,6 @@ export function MemoryPanel({ size = "menu" }: { size?: MemorySize }) {
           ) : null}
         </div>
       ) : null}
-    </div>
-  );
-}
-
-/** One step in from the key row: what uses the key, whether it is saved, and the field behind Replace. */
-export function KeyPanel({ size = "menu" }: { size?: MemorySize }) {
-  const { t } = useLocale();
-  const { key, keyFailed } = useMemoryReading();
-  const [open, setOpen] = useState(false);
-  const env = key?.source === "env";
-  const staging = Boolean(key?.staging);
-  const field = key !== null && !env && !staging && (open || !key.present);
-  const sheet = size === "sheet";
-  return (
-    <div data-key-page="" className={`flex flex-col font-normal ${sheet ? "gap-2.5 pb-4" : "gap-1.5 pb-1.5"} ${PAD[size]}`}>
-      <span className={`${LINE[size]} text-muted`}>{t("keyPage.for")}</span>
-      <div className={`flex items-center gap-2 ${sheet ? "min-h-11" : "min-h-7"}`}>
-        <span className="flex min-w-0 flex-1"><KeyStateWord size={size} lead /></span>
-        {key?.present && !env && !staging && !open ? <button type="button" data-key-replace="" className={ACT[size]} onClick={() => setOpen(true)}>{t("keyPage.replace")}</button> : null}
-      </div>
-      {env ? <span className={`${LINE[size]} text-muted`}>{t("keyPage.env")}</span> : null}
-      {staging ? <span className={`${LINE[size]} text-muted`}>{t("providerKey.staging")}</span> : null}
-      {keyFailed ? <span role="alert" className={`${LINE[size]} text-danger`}>{t("providerKey.failed")}</span> : null}
-      {field ? <OpenRouterKeyField size={size} onSaved={() => setOpen(false)} /> : null}
     </div>
   );
 }

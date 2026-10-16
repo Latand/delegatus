@@ -295,9 +295,9 @@ Lane actions in the card menu are in 5.4.
 | S10 | Dictation backend (mic menu) | `MicButton.tsx:157` | Saving until the answer | Error | est. | **B22** |
 | S11 | Dictation backend (setup guide) | `onboarding/VoiceStep.tsx:218` | At once | Restored + error | est. | A |
 | S12 | Read-aloud backend / voice | `feed/SpeakButton.tsx:425` | Waits | Error | est. | **B23** |
-| S13a | OpenRouter key (Asks-you and shared memory) | `asks/OpenRouterKeyField.tsx:15` → `PUT /api/asks-you/key` | Field emptied at once, input and button disabled until the answer, then "saved" | "Invalid key" / failed alert under the field | est. one local file write; the route checks the key's syntax and writes it (`src/app/api/asks-you/key/route.ts:36`–`:38`), no provider request | **B31** — deferred to the keys settings lane (section 12) |
-| S13b | Dictation provider key (setup guide) | `onboarding/VoiceStep.tsx:112` → `PUT /api/transcribe/key` | Saving until the answer; field emptied only after success | Note with the reason; 409 when the key comes from the environment | est. one local file write; the route checks shape and environment ownership (`src/app/api/transcribe/key/route.ts:31`–`:44`) | **B31** — deferred to the keys settings lane (section 12) |
-| S13c | Voice companion key | `hooks/useVoiceCompanionSettings.ts:23` (`key`) → `PUT /api/voice-companion/key` | Busy until the answer | Error code under the field | est. one local file write; `saveKey` validates syntax and writes (`src/lib/voiceCompanion/storage.ts:360`–`:363`) | **B31** — deferred to the keys settings lane (section 12) |
+| S13a | OpenRouter key (Asks-you and shared memory) | `asks/OpenRouterKeyField.tsx:15` → `PUT /api/asks-you/key` | Field emptied at once, input and button disabled until the answer, then "saved" | "Invalid key" / failed alert under the field | est. one local file write; the route checks the key's syntax and writes it (`src/app/api/asks-you/key/route.ts:36`–`:38`), no provider request | **B31** — deferred; the field moved to the «Keys» page (section 12) |
+| S13b | Dictation provider key (setup guide) | `onboarding/VoiceStep.tsx:112` → `PUT /api/transcribe/key` | Saving until the answer; field emptied only after success | Note with the reason; 409 when the key comes from the environment | est. one local file write; the route checks shape and environment ownership (`src/app/api/transcribe/key/route.ts:31`–`:44`) | **B31** — deferred; the field moved to the «Keys» page (section 12) |
+| S13c | Voice companion key | `hooks/useVoiceCompanionSettings.ts:23` (`key`) → `PUT /api/voice-companion/key` | Busy until the answer | Error code under the field | est. one local file write; `saveKey` validates syntax and writes (`src/lib/voiceCompanion/storage.ts:360`–`:363`) | **B31** — deferred; the field moved to the «Keys» page (section 12) |
 | S14 | Voice companion settings (other than the key) | `useVoiceCompanionSettings.ts:23` (`settings`) | Busy | Error | est. | **B24**; releasing an uncertain session stays C (section 12) |
 | S15 | Delete call memory | `voiceCompanion/CallMemorySetting.tsx:15` | Writing | Retry | est. | C — irreversible |
 | S16 | Telemetry | `telemetry/TelemetrySettings.tsx:30` | Busy | Error | est. | **B25** |
@@ -678,10 +678,11 @@ fails on the sources before its slice and passes after it.
 | 4 | B16, B18–B27, B29, B30, B38–B42, B45; repairs F1, F3 |
 | 5 | B32–B37; repair F2 |
 
-**Deferred.** B31 (the key saves S13a–S13c) is left to the open settings
-lane for API keys, which replaces those rows with one keys page; changing the
-same fields here would collide with it. Its row in section 6 stands as the
-change that page should make.
+**Deferred.** B31 (the key saves S13a–S13c) was left to the settings lane
+for API keys, which was open while this line ran. It has since merged (#2979):
+the three fields are gone, and every key is replaced from the one «Keys»
+page. Making that page's replace optimistic is a follow-up for the page; its
+row in section 6 stands as the change to make there.
 
 **Kept waiting on a closer reading (class C).** Two presses inside entries
 that are otherwise optimistic now:
@@ -704,7 +705,7 @@ refusals and older pages say so in place» renders, in en and uk, light and
 dark: the refused older page of the album (1440, 768, 390) and of the report
 log (1440) with its line beside «Show older» (F1); a refused dismissal of a
 launch that did not start, its row back on the card and the reason in the
-board's receipt (B11); and a close the board refuses for good, which comes
+board's receipt (B5); and a close the board refuses for good, which comes
 back with the toast that names the conversation and the code (B44), at 1440
 and 768. Its readings are `evidence/optimistic-ui/older-failed.json` and
 `evidence/optimistic-ui/refused-dismissals.json`.
