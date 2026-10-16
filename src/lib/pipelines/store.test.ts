@@ -1177,3 +1177,41 @@ test("runtime-switch state survives store reopening and malformed targets are re
   pipeline.runs[0]!.attempts[0]!.runtimeSwitches = [record];
   record.to.model = 123 as never; expect(() => savePipelines([pipeline])).toThrow("malformed pipeline record"); expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.runtimeSwitches![0]!.to.model).toBe("gpt-6.1-sol");
 }));
+
+
+test("archive moves use bounded transactions and never enumerate retained archive payloads", async () => isolatedDelivery(async () => {
+  const make = (id: string) => {
+    const row = deliveryFixture(id); row.state = "closed"; row.cursor = null;
+    row.closedAt = "2026-07-02T00:00:00Z"; row.publication = "internal";
+    return row;
+  };
+  savePipelines(Array.from({ length: 40 },(_,i) => make(`cold-page-${i}`)));
+  let commits = 0;
+  expect(await archiveSettledPipelines(Date.parse("2026-08-01T00:00:00Z"),{ beforeCommit: () => { commits++; } })).toBe(40);
+  expect(commits).toBe(3);
+  savePipelines([make("newly-settled")]);
+  const parse = spyOn(JSON,"parse");
+  try {
+    expect(await archiveSettledPipelines(Date.parse("2026-08-01T00:00:00Z"))).toBe(1);
+    expect(parse.mock.calls.filter(([value]) => typeof value === "string" && value.includes('"id":"cold-page-'))).toHaveLength(0);
+  } finally { parse.mockRestore(); }
+  expect(loadArchivedPipelines()).toHaveLength(41);
+}));
+
+
+test("a failed archive page retains its source rows and the next sweep completes without duplicates", async () => isolatedDelivery(async () => {
+  const rows = Array.from({ length: 33 },(_,i) => {
+    const row = deliveryFixture(`retry-page-${i}`); row.state = "closed"; row.cursor = null;
+    row.closedAt = "2026-07-02T00:00:00Z"; row.publication = "internal"; return row;
+  });
+  savePipelines(rows);
+  let page = 0;
+  await expect(archiveSettledPipelines(Date.parse("2026-08-01T00:00:00Z"),{
+    beforeCommit: () => { if (++page === 2) throw new Error("refused page"); },
+  })).rejects.toThrow("refused page");
+  expect(loadArchivedPipelines()).toHaveLength(16);
+  expect(loadPipelines()).toHaveLength(17);
+  expect(await archiveSettledPipelines(Date.parse("2026-08-01T00:00:00Z"))).toBe(17);
+  expect(loadPipelines()).toEqual([]);
+  expect(new Set(loadArchivedPipelines().map(row => row.id)).size).toBe(33);
+}));
