@@ -3241,16 +3241,16 @@ async function getConversation(
   });
 }
 
-function conversationDeliverability(
+async function conversationDeliverability(
   args: McpToolArgs,
   dependencies: Pick<ViewerMcpDomainDependencies, "registrySnapshot">,
-): McpToolPayload {
+): Promise<McpToolPayload> {
   const conversationId = text(args.conversationId);
   const transcriptPath = text(args.transcriptPath) || text(args.path);
   if (!conversationId && !transcriptPath) {
     throw new Error("conversationId or transcriptPath is required");
   }
-  const result = conversationDeliverabilityFromRecord(dependencies.registrySnapshot(), {
+  const result = await conversationDeliverabilityFromRecord(dependencies.registrySnapshot(), {
     conversationId,
     transcriptPath,
   });

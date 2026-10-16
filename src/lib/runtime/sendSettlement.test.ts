@@ -2303,6 +2303,41 @@ test("an explicit status recovery with late canonical delivery never rearms the 
   } finally { active.close(); }
 });
 
+test("late canonical delivery remains observable after seat rotation", async () => {
+  const active = fixture("late-confirmation-after-rotation", { engine: "claude" });
+  try {
+    const text = "check the release";
+    const { operationId, deliveryId } = acceptSend(active, { text });
+    active.journal.transitionOperation(operationId, "delivering");
+    active.journal.transitionOperation(operationId, "uncertain");
+    active.registry.recordDeliveryOutcome(deliveryId, "failed", SEND_UNVERIFIED_REASON, "unverified");
+    const ledger = new FileClaudeDeliveryLedger();
+    ledger.recordQueued(active.generationId, { id: operationId, text }, "turn-started");
+    ledger.confirmDelivered(active.generationId, operationId, "echo-user");
+
+    const { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } = await import("@/lib/orchestrator/seats");
+    const project = "late-confirmation-seat";
+    const successorPath = path.join(path.dirname(active.transcriptPath), "successor.jsonl");
+    const successor = active.registry.ensureConversation("claude", successorPath, null);
+    const designate = (conversationId: string, transcriptPath: string, clientRequestId: string) => {
+      beginOrchestratorSeatIntent({ project, mandate: "coordinate work", clientRequestId, mode: "existing" });
+      completeOrchestratorSeatIntent({ project, clientRequestId, conversationId, path: transcriptPath });
+    };
+    designate(active.conversationId, active.transcriptPath, "late-confirmation-seat-before");
+    designate(successor.id, successor.generations.at(-1)!.path, "late-confirmation-seat-after");
+
+    const response = await handleRuntimeRetry(new NextRequest("http://127.0.0.1/api/runtime/operations/check/retry", {
+      method: "POST", headers: { host: "127.0.0.1", "content-type": "application/json" },
+      body: JSON.stringify({ action: "retry-uncertain" }),
+    }), operationId, { enabled: () => true, client: () => active.client, registry: () => active.registry, kick: async () => {} });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ receipt: { status: "delivered", resend: "not-needed" } });
+    expect(active.journal.effectBatch(100)).toEqual([]);
+    expect(active.journal.operationResult(operationId)?.receipt.status).toBe("uncertain");
+    expect(Object.keys(active.registry.readOnlySnapshot().deliveryOperationOwners)).toEqual([operationId]);
+  } finally { active.close(); }
+});
+
 test("a late canonical acknowledgement corrects the progress record that ended uncertain, kept across reopen, and sends nothing", async () => {
   /* Review of incident 2026-10-06: the receipt read corrected the delivery
      record and left the progress record saying `uncertain` beside it, and
