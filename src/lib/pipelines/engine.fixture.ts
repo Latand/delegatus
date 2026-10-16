@@ -28,6 +28,7 @@ import type { DurableQuotaObservation } from "@/lib/accounts/migration/contracts
 import { CONTROLLER_ARTIFACT_GIT_PATHS } from "./controllerArtifacts";
 import { realExec } from "@/lib/workflows/provision";
 import { worktreeDiskWait } from "@/lib/state/diskPressure";
+import { agentPublicationIdentityEnv } from "@/lib/git/agentPublicationIdentity";
 
 process.env.LLV_STATE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "llv-pipeline-engine-"));
 const engineModule = await import("./engine");
@@ -159,6 +160,13 @@ function harness() {
         const stamp = Math.floor(Date.parse(attempt?.startedAt ?? new Date(clock).toISOString()) / 1000);
         return Promise.resolve(ports.exec("git", ["rev-parse", "HEAD"], cwd)).then(head => ({ code: 0,
           stdout: `${head.stdout.trim()}\0HEAD@{${stamp}}\0commit: stage work\n`, stderr: "" }));
+      }
+      if (args[0] === "log" && args.includes("--no-walk")) {
+        const identity = agentPublicationIdentityEnv(process.env);
+        return { code: 0, stdout: args.slice(args.indexOf("--no-walk") + 1)
+          .filter(sha => /^[0-9a-f]{40}$/.test(sha))
+          .map(sha => `${sha}\0${identity.GIT_AUTHOR_NAME}\0${identity.GIT_AUTHOR_EMAIL}\0${identity.GIT_COMMITTER_NAME}\0${identity.GIT_COMMITTER_EMAIL}`)
+          .join("\n") + "\n", stderr: "" };
       }
       if (args[0] === "write-tree") return { code: 0, stdout: `${"8".repeat(40)}\n`, stderr: "" };
       if (args[0] === "symbolic-ref") return { code: 0, stdout: `refs/heads/${loadPipelines()[0]?.branch ?? "pipeline/test"}\n`, stderr: "" };
