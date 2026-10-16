@@ -121,9 +121,10 @@ describe("a card prints its times without building a formatter each time (2026-1
     expect(dateTimeText(AT, "uk", "UTC")).toContain("12:05");
   });
 
-  test("the browser's zone is asked for once in half a minute", () => {
+  test("the browser's zone is asked for once in half a minute, whatever time earlier files left in its cache", () => {
     const realNow = Date.now;
-    let now = 1_800_000_000_000;
+    /* Past anything an earlier file in this process could have read at, so a cached read is always stale at the start. */
+    let now = realNow() + 10 * 365 * 24 * 60 * 60 * 1000;
     Date.now = () => now;
     try {
       const first = built(() => { browserZone(); });
@@ -132,6 +133,18 @@ describe("a card prints its times without building a formatter each time (2026-1
       expect([second, third]).toEqual([0, 1]);
       expect(first).toBeLessThanOrEqual(1);
       expect(browserZone()).toBe(Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC");
+    } finally { Date.now = realNow; }
+  });
+
+  test("a clock that went back past the last read is asked again, not served the old zone until it catches up", () => {
+    const realNow = Date.now;
+    let now = realNow() + 20 * 365 * 24 * 60 * 60 * 1000;
+    Date.now = () => now;
+    try {
+      built(() => { browserZone(); });
+      expect(built(() => { now += 5_000; browserZone(); })).toBe(0);
+      expect(built(() => { now -= 3_600_000; browserZone(); })).toBe(1);
+      expect(built(() => { now += 5_000; browserZone(); })).toBe(0);
     } finally { Date.now = realNow; }
   });
 });

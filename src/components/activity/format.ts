@@ -127,10 +127,12 @@ function format(locale: Locale, tz: string, options: Intl.DateTimeFormatOptions,
 let zone: { name: string; readAt: number } | null = null;
 const ZONE_TTL_MS = 30_000;
 
-/** The browser's time zone, read at most once in half a minute: asking is as slow as building a formatter, and a card asks per render. */
+/** The browser's time zone, read at most once in half a minute: asking is as slow as building a formatter, and a card asks per render.
+    A clock that went back past the last read (a corrected clock, a resumed machine) makes the age negative: that is stale, not fresh. */
 export function browserZone(): string {
   const now = Date.now();
-  if (zone && now - zone.readAt < ZONE_TTL_MS) return zone.name;
+  const age = now - (zone?.readAt ?? Number.NEGATIVE_INFINITY);
+  if (zone && age >= 0 && age < ZONE_TTL_MS) return zone.name;
   let name = "UTC";
   try {
     name = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";

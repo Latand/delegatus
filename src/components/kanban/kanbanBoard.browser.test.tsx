@@ -20595,23 +20595,45 @@ describe("closed-card agent open rendered evidence", () => {
           await page.waitForTimeout(120);
           expect(await page.locator("[data-agent-window-frame]").count(), `${lang}: a drag opens nothing`).toBe(0);
 
-          /* A click opens the agent in the window, at once, with the card still closed and no link followed. */
+          /* A click opens the agent in the window with no round trip first: every fetch the page makes from the click
+             until the frame is drawn is held (the fixture answers them in the page, so the page's own `fetch` is the
+             seam), so a window that waits on one never shows and the case fails. The milliseconds are logged as a
+             measurement only; the claim asserted is the property, which a loaded machine cannot flip. */
+          type Open = { down: number; shown: number | null; frameAfterCommit: boolean | null; held: number };
           await page.evaluate(() => {
-            const w = window as unknown as { __open: { down: number; shown: number | null } };
-            w.__open = { down: 0, shown: null };
-            addEventListener("pointerdown", () => { w.__open.down = performance.now(); }, { capture: true, once: true });
+            const w = window as unknown as { __open: Open; __release: () => void };
+            const open: Open = { down: 0, shown: null, frameAfterCommit: null, held: 0 };
+            w.__open = open;
+            const pending: Array<() => void> = [];
+            const realFetch = window.fetch;
+            let holding = true;
+            window.fetch = ((...args: Parameters<typeof fetch>) => {
+              if (!holding) return realFetch.apply(window, args);
+              open.held += 1;
+              return new Promise<Response>((resolve, reject) => { pending.push(() => realFetch.apply(window, args).then(resolve, reject)); });
+            }) as typeof fetch;
+            w.__release = () => { holding = false; window.fetch = realFetch; for (const resume of pending.splice(0)) resume(); };
+            addEventListener("pointerdown", () => { open.down = performance.now(); }, { capture: true, once: true });
+            addEventListener("click", () => {
+              requestAnimationFrame(() => { open.frameAfterCommit = !!document.querySelector("[data-agent-window-frame]"); });
+            }, { capture: true, once: true });
             new MutationObserver((_records, observer) => {
-              if (document.querySelector("[data-agent-window-frame]")) { w.__open.shown = performance.now(); observer.disconnect(); }
+              if (document.querySelector("[data-agent-window-frame]")) { open.shown = performance.now(); observer.disconnect(); }
             }).observe(document.body, { childList: true, subtree: true });
           });
           const hash = await page.evaluate(() => location.hash);
-          await pill.click();
-          await page.locator("[data-agent-window-frame]").waitFor({ timeout: 2000 });
-          const opened = await page.evaluate(() => (window as unknown as { __open: { down: number; shown: number | null } }).__open);
-          expect(opened.shown, `${lang}: the window drew`).not.toBeNull();
-          const ms = Math.round((opened.shown! - opened.down) * 10) / 10;
-          console.log(JSON.stringify({ surface: "desktop-1440", lang, pointerDownToWindowMs: ms }));
-          expect(ms, `${lang}: the window is in the commit the click makes, not a round trip behind it`).toBeLessThan(250);
+          let opened: Open;
+          try {
+            await pill.click();
+            await page.locator("[data-agent-window-frame]").waitFor({ timeout: 2000 });
+            await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+            opened = await page.evaluate(() => (window as unknown as { __open: Open }).__open);
+          } finally {
+            await page.evaluate(() => (window as unknown as { __release: () => void }).__release());
+          }
+          expect(opened.shown, `${lang}: the window drew with every fetch held back`).not.toBeNull();
+          console.log(JSON.stringify({ surface: "desktop-1440", lang, pointerDownToWindowMs: Math.round((opened.shown! - opened.down) * 10) / 10, fetchesHeldMeanwhile: opened.held }));
+          expect(opened.frameAfterCommit, `${lang}: the frame is there one animation frame after the click, in the commit the click makes`).toBe(true);
           expect(await page.evaluate(() => location.hash), `${lang}: no link was followed`).toBe(hash);
           expect(await cardNow().getAttribute("data-collapsed"), `${lang}: the card stays closed`).toBe("1");
           await page.waitForTimeout(400);
