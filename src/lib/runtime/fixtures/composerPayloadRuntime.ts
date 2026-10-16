@@ -44,6 +44,8 @@ export interface ComposerPayloadRuntime {
   journal: RuntimeJournal;
   /** Every message the engine accepted, with bytes read back from server storage. */
   delivered: DeliveredPayload[];
+  /** Resolves when the named fixture engine records its next accepted message. */
+  waitForDelivery(conversationId: string, count: number): Promise<void>;
   handle(request: Request): Promise<Response>;
   receipts(): Promise<RuntimeOperationReceipt[]>;
   /** A second conversation hosted by a native-queue Codex thread. The queue
@@ -157,6 +159,10 @@ export async function startComposerPayloadRuntime(directory: string, options: { 
   let available = true;
   let busy = options.holdFirstTurn === true;
   const delivered: DeliveredPayload[] = [];
+  const deliveryWaiters = new Map<string, Set<() => void>>();
+  const notifyDelivery = (conversationId: string) => {
+    for (const waiter of deliveryWaiters.get(conversationId) ?? []) waiter();
+  };
   /* Recovery reports only what the fake host really is: while it is down no
      host starts, so the queue fences the admitted send as never executed. */
   const recovered = (spawned: boolean): StructuredRecoveryResult => ({
@@ -171,7 +177,7 @@ export async function startComposerPayloadRuntime(directory: string, options: { 
   const send = engine.send.bind(engine);
   engine.send = async (entry) => {
     if (!available) throw new Error("the fixture engine host is down");
-    if (!engine.ledger.receipts.has(entry.id)) delivered.push(readDelivered(entry));
+    if (!engine.ledger.receipts.has(entry.id)) { delivered.push(readDelivered(entry)); notifyDelivery(conversation.id); }
     return send(entry);
   };
   const successor = options.secondConversation ? (() => {
@@ -186,7 +192,7 @@ export async function startComposerPayloadRuntime(directory: string, options: { 
     const nextDelivered: DeliveredPayload[] = [];
     const nextEngine = Object.assign(new FakeEngineHost(), { onStateChange: () => () => {} });
     const nextSend = nextEngine.send.bind(nextEngine);
-    nextEngine.send = async entry => { if (!nextEngine.ledger.receipts.has(entry.id)) nextDelivered.push(readDelivered(entry)); return nextSend(entry); };
+    nextEngine.send = async entry => { if (!nextEngine.ledger.receipts.has(entry.id)) { nextDelivered.push(readDelivered(entry)); notifyDelivery(next.id); } return nextSend(entry); };
     return { conversationId: next.id, artifactPath: nextPath, delivered: nextDelivered, key: nextKey, host: nextEngine };
   })() : undefined;
   const bind = () => bindStructuredDeliveryQueue([{ key, host: engine }, ...(successor ? [{ key: successor.key, host: successor.host }] : [])], {
@@ -251,6 +257,22 @@ export async function startComposerPayloadRuntime(directory: string, options: { 
     registry,
     journal,
     delivered,
+    waitForDelivery(conversationId, count) {
+      const current = () => conversationId === conversation.id ? delivered.length
+        : successor?.conversationId === conversationId ? successor.delivered.length : 0;
+      if (current() >= count) return Promise.resolve();
+      return new Promise<void>(resolve => {
+        const waiters = deliveryWaiters.get(conversationId) ?? new Set<() => void>();
+        const waiter = () => {
+          if (current() < count) return;
+          waiters.delete(waiter);
+          if (!waiters.size) deliveryWaiters.delete(conversationId);
+          resolve();
+        };
+        waiters.add(waiter);
+        deliveryWaiters.set(conversationId, waiters);
+      });
+    },
     queue,
     successor,
     async holdTurn(value) { busy = value; await bind(); },

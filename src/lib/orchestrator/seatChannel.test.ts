@@ -12,6 +12,7 @@ import { boardReportMessageId } from "./boardReportRun";
 import { deputyNoteKey } from "./deputySweep";
 import { bridgeDirectiveId } from "@/lib/bridge/directive";
 import { spawnNoticeMessageId } from "@/lib/spawnNotice/sweep";
+import { onSeatChannelChange } from "./seatChannelSignal";
 
 const environment = { ...process.env };
 afterEach(() => {
@@ -27,7 +28,10 @@ function designate(runtime: ComposerPayloadRuntime, next = false, project = "cha
   beginOrchestratorSeatIntent({ project, mandate: "coordinate", mode: "existing", clientRequestId: key, now: at });
   completeOrchestratorSeatIntent({ project, clientRequestId: key, conversationId: target.conversationId, path: target.artifactPath, now: at });
 }
-async function fixture(run: (runtime: ComposerPayloadRuntime, ports: SeatChannelPorts) => Promise<void>) {
+async function fixture(run: (runtime: ComposerPayloadRuntime, ports: SeatChannelPorts) => Promise<void>, options: { sourceInitiallyUnavailable?: boolean; pauseDeliveryQueue?: boolean } = {}) {
+  // These cases drive reconciliation explicitly. Keep any process-wide startup
+  // listener from racing the fixture's controlled pass after designation.
+  onSeatChannelChange(() => {});
   setSystemTime(new Date(AT));
   const root = fs.mkdtempSync(path.join(process.env.TMPDIR!, "seat-channel-fixture-"));
   const runtime = await startComposerPayloadRuntime(root, { secondConversation: true, holdFirstTurn: true });
@@ -36,7 +40,10 @@ async function fixture(run: (runtime: ComposerPayloadRuntime, ports: SeatChannel
   const fixtureId = ++fixtureSequence;
   let operation = 0;
   const ports: SeatChannelPorts = { registry: runtime.registry, client, now: () => Date.parse(AT), ownsTraffic: () => true,
-    enqueue: request => enqueueStructuredMessage({ operationId: `seat_fixture_${fixtureId}_${++operation}`, ...request }, { enabled: () => true, registry: () => runtime.registry, client: () => client }),
+    enqueue: request => enqueueStructuredMessage({ operationId: `seat_fixture_${fixtureId}_${++operation}`, ...request }, {
+      enabled: () => true, registry: () => runtime.registry, client: () => client,
+      ...(options.pauseDeliveryQueue ? { kick: async () => {} } : {}),
+    }),
     withdrawNative: async (conversationId, operationId) => {
       const entry = (await client.nativeQueueRead?.(conversationId))?.find(item => item.entryId === operationId);
       if (!entry || entry.nativeSubmissionId || !client.nativeQueueTransition) return false;
@@ -44,23 +51,9 @@ async function fixture(run: (runtime: ComposerPayloadRuntime, ports: SeatChannel
       return (await client.nativeQueueRead?.(conversationId))?.find(item => item.entryId === operationId)?.state === "refused";
     },
   };
-  try { await runtime.hostUp(); await run(runtime, ports); }
+  try { if (!options.sourceInitiallyUnavailable) await runtime.hostUp(); await run(runtime, ports); }
   finally { await runtime.close(); fs.rmSync(root, { recursive: true, force: true }); }
 }
-async function waitFor(check: () => boolean) {
-  for (let i = 0; i < 150 && !check(); i++) await Bun.sleep(10);
-  expect(check()).toBe(true);
-}
-async function reconcileUntil(revocation: ReturnType<typeof orchestratorRevocations>[number], ports: SeatChannelPorts, check: () => boolean) {
-  let settled = false;
-  for (let tick = 0; tick < 100 && !check(); tick++) {
-    settled = await reconcileSeatChannel(revocation, ports);
-    if (!check()) await Bun.sleep(10);
-  }
-  expect(check()).toBe(true);
-  return settled;
-}
-
 for (const [key, origin] of [
   ["composer-fixture", { kind: "operator" as const }],
   ["worker-fixture", { kind: "agent" as const, role: "worker", conversationId: "conversation_worker" }],
@@ -72,16 +65,11 @@ for (const [key, origin] of [
   if (!original?.ok) throw new Error("fixture admission failed");
   designate(runtime, true);
   const revoked = orchestratorRevocations().at(-1)!;
-  let settled = await reconcileSeatChannel(revoked, ports);
-  for (let tick = 0; !settled && tick < 100; tick++) {
-    expect(runtime.delivered).toHaveLength(0);
-    await Bun.sleep(10);
-    settled = await reconcileSeatChannel(revoked, ports);
-  }
+  const settled = await reconcileSeatChannel(revoked, ports);
   expect({ settled, outcome: seatChannelRecord(original.operationId)?.outcome,
     status: runtime.journal.operationResult(original.operationId)?.receipt.status }).toMatchObject({ settled: true });
   await runtime.holdTurn!(false);
-  await waitFor(() => runtime.successor!.delivered.length === 1);
+  await runtime.waitForDelivery(runtime.successor!.conversationId, 1);
   expect(runtime.delivered).toHaveLength(0);
   expect(runtime.successor!.delivered[0]!.text).toMatch(/^\[Delegatus\] Redirected to you, the current orchestrator:/);
   expect(runtime.successor!.delivered[0]!.text).toEndWith("\nCheck the saved instruction.");
@@ -96,7 +84,7 @@ for (const [key, origin] of [
   });
   expect(lookupOriginalSend(runtime.registry.readOnlySnapshot(), { conversationId: runtime.conversationId, clientMessageId: key, text: "Check the saved instruction.", origin }))
     .toMatchObject({ kind: "found", receipt: { state: "delivered", redirectedTo: { operationId: record.toOperationId } } });
-}));
+}, { sourceInitiallyUnavailable: true, pauseDeliveryQueue: true }));
 
 test("epoch-bound board reports are failed with a record and never redirected", async () => fixture(async (runtime, ports) => {
   designate(runtime);
@@ -105,13 +93,14 @@ test("epoch-bound board reports are failed with a record and never redirected", 
   if (!original?.ok) throw new Error("fixture admission failed");
   designate(runtime, true);
   const revoked = orchestratorRevocations().at(-1)!;
-  await reconcileUntil(revoked, ports, () => seatChannelRecord(original.operationId)?.outcome === "dropped");
+  expect(await reconcileSeatChannel(revoked, ports)).toBe(true);
+  expect(seatChannelRecord(original.operationId)?.outcome).toBe("dropped");
   await runtime.holdTurn!(false);
   expect(seatChannelRecord(original.operationId)?.outcome).toBe("dropped");
   expect(runtime.delivered).toHaveLength(0);
   expect(runtime.successor!.delivered).toHaveLength(0);
   expect(runtime.journal.operationResult(original.operationId)?.receipt.reason).toBe(SEND_SEAT_REVOKED_REASON);
-}));
+}, { sourceInitiallyUnavailable: true, pauseDeliveryQueue: true }));
 
 test("an older revocation leaves a re-designated seat's fresh mandate deliverable", async () => fixture(async (runtime, ports) => {
   designate(runtime);
@@ -130,7 +119,7 @@ test("an older revocation leaves a re-designated seat's fresh mandate deliverabl
   expect(seatChannelRecord(fresh.operationId)).toBeNull();
   expect(runtime.journal.operationResult(fresh.operationId)?.receipt.status).toBe("queued");
   await runtime.holdTurn!(false);
-  await waitFor(() => runtime.delivered.length === 1);
+  await runtime.waitForDelivery(runtime.conversationId, 1);
   expect(runtime.delivered[0]!.text).toBe("Handle the current mandate");
   expect(runtime.successor!.delivered).toHaveLength(0);
 }));
@@ -233,12 +222,14 @@ test("a project temporarily without a seat keeps its withdrawn words until activ
   expect(await resolveSendReceipt(original.operationId, { registry: runtime.registry, client: ports.client })).toMatchObject({ state: "in-flight", resend: "verify-first" });
   beginOrchestratorSeatIntent({ project: "channel-project", mandate: "restored", mode: "existing", clientRequestId: "restore-seat", now: AT });
   completeOrchestratorSeatIntent({ project: "channel-project", clientRequestId: "restore-seat", conversationId: runtime.conversationId, path: runtime.artifactPath, now: AT });
-  await reconcileUntil(revocation, ports, () => seatChannelRecord(original.operationId)?.outcome === "redirected");
+  expect(await reconcileSeatChannel(revocation, ports)).toBe(true);
+  expect(seatChannelRecord(original.operationId)?.outcome).toBe("redirected");
+  await runtime.hostUp();
   await runtime.holdTurn!(false);
-  await waitFor(() => runtime.delivered.length === 1);
+  await runtime.waitForDelivery(runtime.conversationId, 1);
   expect(runtime.successor!.delivered).toHaveLength(0);
   expect(runtime.delivered[0]!.text).toEndWith("\nKeep these words");
-}));
+}, { sourceInitiallyUnavailable: true, pauseDeliveryQueue: true }));
 
 test("withdrawn owner messages stay with their retry owner", async () => fixture(async (runtime, ports) => {
   designate(runtime);
@@ -247,7 +238,8 @@ test("withdrawn owner messages stay with their retry owner", async () => fixture
   if (!original?.ok) throw new Error("fixture admission failed");
   designate(runtime, true);
   const revoked = orchestratorRevocations().at(-1)!;
-  await reconcileUntil(revoked, ports, () => seatChannelRecord(original.operationId)?.outcome === "owner");
+  expect(await reconcileSeatChannel(revoked, ports)).toBe(true);
+  expect(seatChannelRecord(original.operationId)?.outcome).toBe("owner");
   expect(runtime.successor!.delivered).toHaveLength(0);
 }));
 
@@ -270,23 +262,18 @@ test("a redirect whose admission acknowledgement is lost keeps its bound success
   const lostAck = { ...ports, enqueue: async (request: Parameters<SeatChannelPorts["enqueue"]>[0]) => {
     await ports.enqueue(request); throw new Error("admission acknowledgement lost");
   } };
-  let ackError: unknown;
-  for (let tick = 0; tick < 100 && !ackError; tick++) {
-    try { await reconcileSeatChannel(revoked, lostAck); }
-    catch (error) { ackError = error; }
-    if (!ackError) await Bun.sleep(10);
-  }
-  expect(ackError).toBeInstanceOf(Error);
-  expect((ackError as Error).message).toContain("acknowledgement lost");
-  await waitFor(() => runtime.successor!.delivered.length === 1);
+  await expect(reconcileSeatChannel(revoked, lostAck)).rejects.toThrow("admission acknowledgement lost");
+  await runtime.holdTurn!(false);
+  await runtime.waitForDelivery(runtime.successor!.conversationId, 1);
   beginOrchestratorSeatIntent({ project: "channel-project", mandate: "return", mode: "existing", clientRequestId: "seat-return", now: AT });
   completeOrchestratorSeatIntent({ project: "channel-project", clientRequestId: "seat-return", conversationId: runtime.conversationId, path: runtime.artifactPath, now: AT });
-  await reconcileUntil(revoked, ports, () => seatChannelRecord(original.operationId)?.outcome === "redirected");
+  expect(await reconcileSeatChannel(revoked, ports)).toBe(true);
+  expect(seatChannelRecord(original.operationId)?.outcome).toBe("redirected");
   await runtime.holdTurn!(false);
   expect(runtime.delivered).toHaveLength(0);
   expect(runtime.successor!.delivered).toHaveLength(1);
   expect(await resolveSendReceipt(original.operationId, { registry: runtime.registry, client: ports.client })).toMatchObject({ state: "delivered" });
-}));
+}, { sourceInitiallyUnavailable: true, pauseDeliveryQueue: true }));
 
 test("a deferred first reconciliation pass retries before one successor admission", async () => fixture(async (runtime, ports) => {
   designate(runtime);
@@ -311,13 +298,41 @@ test("a deferred first reconciliation pass retries before one successor admissio
   expect(runtime.successor!.delivered).toHaveLength(0);
   expect(seatChannelRecord(original.operationId)?.outcome).toBe("too-late");
 
-  expect(await reconcileUntil(revoked, ports, () => seatChannelRecord(original.operationId)?.outcome === "redirected")).toBe(true);
+  expect(await reconcileSeatChannel(revoked, ports)).toBe(true);
+  expect(seatChannelRecord(original.operationId)?.outcome).toBe("redirected");
   expect(runtime.delivered).toHaveLength(0);
   await runtime.holdTurn!(false);
-  await waitFor(() => runtime.successor!.delivered.length === 1);
+  await runtime.waitForDelivery(runtime.successor!.conversationId, 1);
   expect(runtime.delivered).toHaveLength(0);
   expect(runtime.successor!.delivered[0]!.text).toEndWith("\nDeliver only to the successor");
-}));
+}, { sourceInitiallyUnavailable: true, pauseDeliveryQueue: true }));
+
+test("withdrawal treats a lost acknowledgement after the same terminal transition as withdrawn", async () => fixture(async (runtime, ports) => {
+  designate(runtime);
+  const original = await ports.enqueue({ path: runtime.artifactPath, conversationId: runtime.conversationId,
+    clientMessageId: "withdrawal-lost-ack", text: "Withdraw exactly once", images: [], policy: "queue" });
+  if (!original?.ok) throw new Error("fixture admission failed");
+  designate(runtime, true);
+  const revoked = orchestratorRevocations().at(-1)!;
+  let transitions = 0;
+  const client = new Proxy(ports.client, { get(target, property) {
+    const value = Reflect.get(target, property, target);
+    if (property === "transitionOperation") return async (...args: Parameters<NonNullable<typeof target.transitionOperation>>) => {
+      transitions++;
+      await value.apply(target, args);
+      throw new Error("withdrawal acknowledgement lost after commit");
+    };
+    return typeof value === "function" ? value.bind(target) : value;
+  } }) as typeof ports.client;
+  const result = await reconcileSeatChannel(revoked, { ...ports, client });
+  expect(result).toBe(true);
+  expect(transitions).toBe(1);
+  expect(seatChannelRecord(original.operationId)?.outcome).toBe("redirected");
+  await runtime.holdTurn!(false);
+  await runtime.waitForDelivery(runtime.successor!.conversationId, 1);
+  expect(runtime.delivered).toHaveLength(0);
+  expect(runtime.successor!.delivered).toHaveLength(1);
+}, { sourceInitiallyUnavailable: true, pauseDeliveryQueue: true }));
 
 test("withdrawal cannot end a message that entered dispatch during its journal wait", async () => fixture(async (runtime, ports) => {
   const original = await ports.enqueue({ path: runtime.artifactPath, conversationId: runtime.conversationId,

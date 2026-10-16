@@ -154,6 +154,7 @@ export async function withdrawRuntimeWake(operationId: string, reason: string, c
     return settled.receipt.status === "failed" ? "withdrawn" : "too-late";
   } catch {
     const after = await client.operationStatus(current.operationId, { currentRetryLeaf: true });
+    if (after && ["failed", "rejected"].includes(after.receipt.status) && after.receipt.reason === reason) return "withdrawn";
     return after && ["delivering", "applying", "delivered", "applied", "answered"].includes(after.receipt.status) ? "too-late" : "unknown";
   }
 }
