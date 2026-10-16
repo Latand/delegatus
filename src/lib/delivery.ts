@@ -87,11 +87,12 @@ async function legacySeatRefusal(registry: AgentRegistry, conversation: Pick<Reg
     id => resolveConversationAlias(snapshot, id as `conversation_${string}`));
 }
 
-function legacySeatRefusalSync(registry: AgentRegistry, conversation: Pick<RegistryConversation, "id"> | null) {
+function legacySeatRefusalSync(conversation: Pick<RegistryConversation, "id"> | null) {
   if (!conversation) return null;
-  const snapshot = registry.conversationDeliverySnapshot({ conversationId: conversation.id });
-  return orchestratorRecipientRefusal(conversationIdsResolvingTo(snapshot, conversation.id),
-    id => resolveConversationAlias(snapshot, id as `conversation_${string}`));
+  // This guard runs inside registry admission's synchronous transaction. The
+  // identity is already resolved at the async boundary; reading a registry
+  // snapshot here can wait on the writer whose transaction is calling us.
+  return orchestratorRecipientRefusal([conversation.id]);
 }
 
 function seatRefusalFailure(refusal: NonNullable<Awaited<ReturnType<typeof legacySeatRefusal>>>): DeliveryFailure {
@@ -831,7 +832,7 @@ export async function deliverConversationMessage(message: ConversationMessage, o
   const seatRefusal = await legacySeatRefusal(registry, conversation);
   if (seatRefusal) return { ok: false, outcome: "failed", admission: "refused", ...seatRefusal };
   const seatAdmissionGuard: DeliveryAdmissionGuard = () => {
-    const refusal = legacySeatRefusalSync(registry, conversation);
+    const refusal = legacySeatRefusalSync(conversation);
     if (refusal) throw new DeliveryAdmissionRefusedError(refusal.error);
   };
   const admissionGuard: DeliveryAdmissionGuard = reconciledDeadHost => {

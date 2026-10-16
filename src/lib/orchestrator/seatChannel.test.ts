@@ -20,6 +20,7 @@ afterEach(() => {
   Object.assign(process.env, environment);
 });
 const AT = "2026-10-16T12:06:32.000Z";
+let fixtureSequence = 0;
 function designate(runtime: ComposerPayloadRuntime, next = false, project = "channel-project", at = AT) {
   const target = next ? runtime.successor! : runtime;
   const key = next ? "channel-next" : "channel-first";
@@ -32,9 +33,17 @@ async function fixture(run: (runtime: ComposerPayloadRuntime, ports: SeatChannel
   const runtime = await startComposerPayloadRuntime(root, { secondConversation: true, holdFirstTurn: true });
   const client = new UnixRuntimeHostClient(path.join(root, "rt.sock"));
   process.env.LLV_RUNTIME_HOST_SOCKET = path.join(root, "rt.sock");
+  const fixtureId = ++fixtureSequence;
   let operation = 0;
   const ports: SeatChannelPorts = { registry: runtime.registry, client, now: () => Date.parse(AT), ownsTraffic: () => true,
-    enqueue: request => enqueueStructuredMessage({ operationId: `seat_fixture_${++operation}`, ...request }, { enabled: () => true, registry: () => runtime.registry, client: () => client }) };
+    enqueue: request => enqueueStructuredMessage({ operationId: `seat_fixture_${fixtureId}_${++operation}`, ...request }, { enabled: () => true, registry: () => runtime.registry, client: () => client }),
+    withdrawNative: async (conversationId, operationId) => {
+      const entry = (await client.nativeQueueRead?.(conversationId))?.find(item => item.entryId === operationId);
+      if (!entry || entry.nativeSubmissionId || !client.nativeQueueTransition) return false;
+      await client.nativeQueueTransition(operationId, { phase: "refused", reason: SEND_SEAT_REVOKED_REASON });
+      return (await client.nativeQueueRead?.(conversationId))?.find(item => item.entryId === operationId)?.state === "refused";
+    },
+  };
   try { await runtime.hostUp(); await run(runtime, ports); }
   finally { await runtime.close(); fs.rmSync(root, { recursive: true, force: true }); }
 }
