@@ -27,6 +27,7 @@ import { RISE_FRAME_SHARE, RISE_MS } from "@/lib/voiceCompanion/motion";
 import { CONTROL_SELECTOR, LANE_HEIGHTS, NARROW_LANE_WIDTHS } from "@/lib/voiceCompanion/placement";
 import { DEMO_IDS, demoAnswer, demoInstruction, SCENARIOS, scenarioText } from "@/lib/voiceCompanion/scenarios";
 import { DELEGATION_LINGER_MS, REPORT_CAP } from "@/components/voiceCompanion/VoiceCompanion";
+import { roleAvatarDarkCss } from "@/components/brand/roleAvatarDarkCss";
 import { browserCase, caseChromium as chromium, captureWorkerLimitFrames, capturePrototypeQuestions, capturePrototypeSkipRows, captureSeatMandateHandover, openFixture, serveEvidenceFixture, waitForSectionOpen } from "./issue1695BrowserHarness";
 import { kanbanLayoutMode } from "./KanbanBoard";
 import { ORCHESTRATOR_BURST_LIMIT, ORCHESTRATOR_WIRE_FADE_MS, ORCHESTRATOR_WIRE_HOLD_MS } from "./orchestratorArrows";
@@ -30880,6 +30881,9 @@ describe("role avatars: Delegatus in each role's costume on answers, internal ca
         const line = bar?.querySelector("[data-mobile2-chat-state]")?.parentElement ?? null;
         return bar ? { marks: bar.querySelectorAll(".role-mark").length, avatars: bar.querySelectorAll("[data-role-avatar]").length, line: line?.textContent ?? null, lineOver: line ? line.scrollWidth - line.clientWidth : null } : null;
       })(),
+      /* The dark theme swaps every avatar for the keyline-free drawing by CSS (roleAvatarDarkCss.ts); the light theme leaves the picture alone. */
+      swapped: [...document.querySelectorAll("img[data-role-avatar]")].filter((image) => getComputedStyle(image).content.startsWith("url(")).length,
+      avatars: document.querySelectorAll("img[data-role-avatar]").length,
       sideways: document.documentElement.scrollWidth - innerWidth,
       broken: [...document.images].filter((image) => image.hasAttribute("data-role-avatar") && !(image.complete && image.naturalWidth > 0)).length,
     };
@@ -30906,6 +30910,8 @@ describe("role avatars: Delegatus in each role's costume on answers, internal ca
             await page.addStyleTag({ content: "[data-attention-toast] { display: none !important; }" });
             /* The frame variant production draws by default (the layout's boot script, which the fixture does not run). */
             await page.evaluate((frame) => document.documentElement.setAttribute("data-role-frame", frame), DEFAULT_ROLE_FRAME);
+            /* And the stylesheet the layout emits for the dark theme's avatars. */
+            await page.addStyleTag({ content: roleAvatarDarkCss() });
             const scope = shape.phone ? "[data-testid='mobile-focused-pane']" : view === "seat" ? "[data-kanban-seat]" : "[data-agent-window] .reader-slot:not([data-incoming])";
             await page.waitForSelector(`${scope} [data-tts-message] [data-tts-body]`, { timeout: 30_000 }).catch(() => undefined);
             if (view === "seat") await page.waitForFunction((scope) => document.querySelectorAll(`${scope} [data-agent-author]`).length >= 12, scope, { timeout: 20_000 }).catch(() => undefined);
@@ -30918,6 +30924,7 @@ describe("role avatars: Delegatus in each role's costume on answers, internal ca
             if (reading.sideways > 0) failures.push(`${label}: scrolls ${reading.sideways}px sideways`);
             if (reading.broken) failures.push(`${label}: ${reading.broken} avatars did not load`);
             if (!reading.answers.length) failures.push(`${label}: no answer rendered`);
+            if (reading.swapped !== (scheme === "dark" ? reading.avatars : 0)) failures.push(`${label}: ${reading.swapped} of ${reading.avatars} avatars wear the keyline-free picture, expected ${scheme === "dark" ? "all" : "none"}`);
             for (const answer of reading.answers) {
               if (answer.avatar !== `${role}:${answerSize}`) failures.push(`${label}: an answer draws ${answer.avatar}, not ${role}:${answerSize}`);
               if (answer.engine !== "Claude" || answer.engineInsideAvatar) failures.push(`${label}: an answer's engine reads ${JSON.stringify(answer.engine)} apart from the avatar: ${!answer.engineInsideAvatar}`);

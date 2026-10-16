@@ -1,7 +1,7 @@
 # MCP short ids: no long hashes for agents to retype
 
 Status: implemented, 2026-10-16. Audit base: `02f9301f` on main.
-Implementation integrates main through `7b9a0f86`.
+Implementation integrates main through `a880de28`.
 
 ## 0. Originating requirement
 
