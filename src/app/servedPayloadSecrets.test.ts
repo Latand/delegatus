@@ -227,7 +227,9 @@ test("no build artifact carries the per-process agent capability", () => {
 });
 
 test("the built «Keys» routes answer the list without a value, and a value only to the operator's own page", async () => {
-  /* docs/design/keys-settings.md §9: the list carries masked values for the page and nothing for any other caller. */
+  /* docs/design/keys-settings.md §9: the list carries masked values for the page and nothing for any other caller.
+     Without a build there is no server to ask; «the production build exists» above is the test that fails for it. */
+  if (!built) return;
   const page = { origin, "sec-fetch-site": "same-origin", "content-type": "application/json" };
   const plain = await fetch(`${origin}/api/keys`);
   expect(plain.status).toBe(200);
