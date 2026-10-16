@@ -143,7 +143,7 @@ function StagePill({ pipeline, chip, name, suffix, interactive, selected, onOpen
     return <span className={className} data-stage={chip.stage.id} data-stage-open={chip.stage.id} title={hover}>{body}</span>;
   }
   return openable ? (
-    <button type="button" className={className} data-stage={chip.stage.id} aria-label={aria} title={hover} onClick={() => onOpen!(pipeline, chip.stage)}>
+    <button type="button" className={className} data-stage={chip.stage.id} data-attempt-path={attempt?.agentPath} aria-label={aria} title={hover} onClick={() => onOpen!(pipeline, chip.stage)}>
       {body}
     </button>
   ) : (

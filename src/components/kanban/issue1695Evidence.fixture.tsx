@@ -3237,6 +3237,9 @@ const OLDER_FAILS = params.get("olderfails") === "1";
    good, so what the click took away comes back with the reason. */
 const DISMISS_REFUSED = params.get("dismissrefused") === "1";
 const BOARD_REFUSES = params.get("boardrefuses") === "1";
+/* `&settingsrefuse=1`: every write to the voice companion's settings is refused
+   with COMPANION_UNAVAILABLE, so a press flips and meets its reason. */
+const SETTINGS_REFUSE = params.get("settingsrefuse") === "1";
 function mockRender(width: number, height: number, hue: number, label: string, phone = false): string {
   const canvas = document.createElement("canvas");
   canvas.width = width;
@@ -4521,6 +4524,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     return json({ calls: held.callMemoryRows });
   }
   if (VOICE && url.pathname === "/api/voice-companion/settings") {
+    if (method === "PUT" && SETTINGS_REFUSE) return json({ code: "COMPANION_UNAVAILABLE" }, 503);
     if (method === "PUT") { const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>; voice.settingsWrites.push(body); Object.assign(voiceSettings, body); }
     return json(voiceSettings);
   }

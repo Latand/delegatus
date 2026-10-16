@@ -183,6 +183,12 @@ export function TaskAlbum({ taskId, title, pipelines, files, onClose }: TaskAlbu
   galleryRef.current = gallery;
   const readGallery = useCallback(() => galleryRef.current, []);
   const body = useRef<HTMLDivElement>(null);
+  const moreFailedLine = useRef<HTMLParagraphElement>(null);
+  /* The refusal line comes into view when it appears: «Show older» sits at the
+     foot of the scroller, so a line after it would start below the edge. */
+  useEffect(() => {
+    if (moreFailed) moreFailedLine.current?.scrollIntoView({ block: "nearest" });
+  }, [moreFailed]);
   /* The header's «N new» brings the first new picture into view and onto
      the keyboard's focus, wherever its group sits. */
   const showFirstNew = useCallback(() => {
@@ -298,7 +304,7 @@ export function TaskAlbum({ taskId, title, pipelines, files, onClose }: TaskAlbu
                   {t("album.loadMore")}
                 </button>
               ) : null}
-              {moreFailed && page?.nextCursor ? <p role="alert" data-album-more-failed="" className="m-0 self-center text-label text-danger">{t("album.loadMoreFailed")}</p> : null}
+              {moreFailed && page?.nextCursor ? <p ref={moreFailedLine} role="alert" data-album-more-failed="" className="m-0 self-center text-label text-danger">{t("album.loadMoreFailed")}</p> : null}
             </div>
           )}
         </div>

@@ -15493,10 +15493,11 @@ describe("optimistic UI fix line: refusals and older pages say so in place", () 
             await page.waitForSelector("[data-album-item]", { timeout: 10_000 });
             await page.locator("[data-album-more]").click();
             await page.waitForSelector("[data-album-more-failed]", { timeout: 10_000 });
-            await page.locator("[data-album-more-failed]").scrollIntoViewIfNeeded();
+            /* Read the line as it lands: the driver scrolls nothing on its own. */
+            const landed = await lineReading(page, "[data-album-more-failed]");
             await page.waitForTimeout(300);
             await page.screenshot({ path: path.join(pngDir, `${label}.png`) });
-            check(label, await lineReading(page, "[data-album-more-failed]"), t("album.loadMoreFailed"));
+            check(label, landed, t("album.loadMoreFailed"));
             if (!(await page.locator("[data-album-more]").isEnabled())) failures.push(`${label}: «Show older» is not offered again`);
             if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
           } finally { await context.close(); }
@@ -15510,11 +15511,12 @@ describe("optimistic UI fix line: refusals and older pages say so in place", () 
             await page.locator("[data-attention-toast-dismiss]").click().catch(() => {});
             await page.locator("[data-report-log-older]").click();
             await page.waitForSelector("[data-report-log-older-failed]", { timeout: 10_000 });
-            await page.evaluate(() => { const scroller = document.querySelector("[data-report-log] .overflow-y-auto"); if (scroller) scroller.scrollTop = scroller.scrollHeight; });
+            /* Read the line as it lands: the driver scrolls nothing on its own. */
+            const landed = await lineReading(page, "[data-report-log-older-failed]");
             await page.mouse.move(0, 0);
             await page.waitForTimeout(300);
             await page.locator("[data-report-log]").screenshot({ path: path.join(pngDir, `${label}.png`) });
-            check(label, await lineReading(page, "[data-report-log-older-failed]"), t("reportLog.olderFailed"));
+            check(label, landed, t("reportLog.olderFailed"));
             if (!(await page.locator("[data-report-log-older]").isEnabled())) failures.push(`${label}: «Show older» is not offered again`);
             if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
           } finally { await context.close(); }
@@ -15567,7 +15569,16 @@ describe("optimistic UI fix line: refusals and older pages say so in place", () 
             const text = (await receipt.locator(".msg").textContent()) ?? "";
             const [head] = template(lang, "kanban.dismissLaunchFailed", {}, "error");
             const sent = await page.evaluate(() => (window as unknown as { evidence: { assignments: Array<{ method: string }> } }).evidence.assignments.filter((entry) => entry.method === "PATCH").length);
-            readings[label] = { leftAtOnce, text, sent, back: await page.locator(row).count() };
+            /* The receipt's text against its own background, through a canvas so a colour-mix() reads as RGB. */
+            const contrast = await receipt.evaluate((element) => {
+              const rgb = (colour: string) => { const canvas = document.createElement("canvas"); canvas.width = canvas.height = 1; const g = canvas.getContext("2d")!; g.fillStyle = colour; g.fillRect(0, 0, 1, 1); return [...g.getImageData(0, 0, 1, 1).data.slice(0, 3)]; };
+              const lum = ([r, g, b]: number[]) => { const lin = (v: number) => { const c = v / 255; return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; }; return 0.2126 * lin(r!) + 0.7152 * lin(g!) + 0.0722 * lin(b!); };
+              const style = getComputedStyle(element);
+              const [a, b] = [lum(rgb(style.color)), lum(rgb(style.backgroundColor))].sort((x, y) => y - x);
+              return Math.round(((a! + 0.05) / (b! + 0.05)) * 100) / 100;
+            });
+            readings[label] = { leftAtOnce, text, sent, back: await page.locator(row).count(), contrast };
+            if (contrast < 4.5) failures.push(`${label}: the receipt's text reads ${contrast}:1 against its background`);
             if (!leftAtOnce) failures.push(`${label}: the row did not leave on the click`);
             if (!text.startsWith(head!) || !text.includes("the launch started after all")) failures.push(`${label}: the receipt reads «${text}»`);
             if (sent !== 1) failures.push(`${label}: ${sent} dismissal(s) sent`);
@@ -15593,10 +15604,32 @@ describe("optimistic UI fix line: refusals and older pages say so in place", () 
             await page.mouse.move(0, 0);
             await page.screenshot({ path: path.join(pngDir, `${label}.png`) });
             const text = ((await toast.textContent()) ?? "").replace(/^✕/, "").trim();
+            /* The row that came back is read whole beside the toast: every text range
+               of its block is clear of the toast's box, and inside the window. */
+            const cover = await page.evaluate(() => {
+              const block = document.querySelector('[data-pipeline="p-closed"]');
+              const box = document.querySelector("[data-task-toasts] [role=status]")?.getBoundingClientRect();
+              if (!block || !box) return { block: Boolean(block), toast: Boolean(box), hits: -1, inside: false };
+              const walker = document.createTreeWalker(block, NodeFilter.SHOW_TEXT);
+              let hits = 0;
+              let inside = true;
+              for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+                if (!node.textContent?.trim()) continue;
+                const range = document.createRange();
+                range.selectNodeContents(node);
+                for (const rect of range.getClientRects()) {
+                  if (rect.width === 0) continue;
+                  if (rect.left < box.right && rect.right > box.left && rect.top < box.bottom && rect.bottom > box.top) hits++;
+                  if (rect.top < 0 || rect.bottom > window.innerHeight) inside = false;
+                }
+              }
+              return { block: true, toast: true, hits, inside };
+            });
             const mutations = await page.evaluate(() => (window as unknown as { evidence: { boardMutations: Array<{ kind: string; path?: string }> } }).evidence.boardMutations.filter((mutation) => mutation.kind === "close").length);
             const toasts = await page.locator("[role=status]").filter({ hasText: tail!.trim() }).count();
-            readings[label] = { leftAtOnce, text, mutations, toasts };
+            readings[label] = { leftAtOnce, text, mutations, toasts, cover };
             if (!leftAtOnce) failures.push(`${label}: the reader did not close on the click`);
+            if (cover.hits !== 0 || !cover.inside) failures.push(`${label}: the restored row is ${JSON.stringify(cover)} beside the toast`);
             if (!text.startsWith(head!) || !text.includes(tail!.trim())) failures.push(`${label}: the toast reads «${text}»`);
             if (mutations !== 1) failures.push(`${label}: ${mutations} close(s) sent`);
             if (toasts !== 1) failures.push(`${label}: ${toasts} toasts say the close was refused`);
@@ -22085,6 +22118,59 @@ describe("floating voice companion", () => {
       fs.writeFileSync("evidence/voice-companion/call-memory.json",JSON.stringify({ driver:"src/components/kanban/kanbanBoard.browser.test.tsx",synthetic:true,viewportBasis:"configured scene width",measurements },null,2)+"\n");
     } finally { await browser.close(); server.stop(); }
   });
+
+  /*
+   * Audit B24: a press on a voice setting flips at once, and a refusal brings it
+   * back with the reason read beside the control that was pressed
+   * (`&settingsrefuse=1`). «Show the voice» sits at the dialog's top and «Call
+   * memory» below it, with three notes under its switch. The reason is read the
+   * moment it lands, with no scroll of the driver's own: every text range of it
+   * sits inside the dialog's scroller and the window.
+   */
+  browserTest("a refused voice setting reads its reason beside the control pressed", async () => {
+    const out = path.resolve(".artifacts/voice-settings-refused");
+    const pngDir = path.resolve(process.env.OPTIMISTIC_UI_PNG_DIR ?? out);
+    fs.mkdirSync(pngDir, { recursive: true });
+    fs.mkdirSync("evidence/optimistic-ui", { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const failures: string[] = [];
+    const readings: Record<string, unknown> = {};
+    try {
+      for (const width of [1440, 390] as const) for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) for (const press of ["enable", "memory"] as const) {
+        const label = `voice-refused-${press}-${width}-${lang}-${scheme}`;
+        const { context, page, pageErrors } = await openVoice(browser, server.base, "&mount=product&backend=codex&callmemory=three&settingsrefuse=1", { viewport: { width, height: 844 }, lang, scheme, product: true, phone: width === 390, motion: "reduce" });
+        try {
+          await page.evaluate(() => window.dispatchEvent(new Event("delegatus:open-voice-companion-settings")));
+          const dialog = page.locator("[data-voice-companion-settings]");
+          await dialog.locator("[data-voice-companion-enable]").waitFor();
+          await page.waitForFunction(() => !document.querySelector("[data-call-memory] [role=status]")?.textContent?.includes("…"));
+          const control = press === "enable" ? dialog.locator("[data-voice-companion-enable]") : dialog.locator("[data-call-memory] input[role=switch]");
+          const before = await control.isChecked();
+          if (width === 390) await control.tap(); else await control.click();
+          await page.waitForSelector("[data-voice-companion-setting-error]", { timeout: 10_000 });
+          const reading = await page.evaluate(() => {
+            const line = document.querySelector<HTMLElement>("[data-voice-companion-setting-error]")!;
+            const scroller = document.querySelector<HTMLElement>("[data-voice-companion-settings]")!.getBoundingClientRect();
+            const range = document.createRange(); range.selectNodeContents(line);
+            const rects = [...range.getClientRects()].filter((rect) => rect.width > 0);
+            const cut = rects.filter((rect) => rect.top < Math.max(0, scroller.top) - 0.5 || rect.bottom > Math.min(innerHeight, scroller.bottom) + 0.5 || rect.left < scroller.left - 0.5 || rect.right > scroller.right + 0.5).length;
+            return { text: line.textContent, code: line.getAttribute("data-voice-companion-setting-error"), cut, boxes: rects.length };
+          });
+          await page.waitForTimeout(300);
+          await page.screenshot({ path: path.join(pngDir, `${label}.png`) });
+          const after = await control.isChecked();
+          readings[label] = { ...reading, before, after };
+          if (reading.cut) failures.push(`${label}: ${reading.cut} of ${reading.boxes} line box(es) outside the dialog or the window`);
+          if (reading.code !== "COMPANION_UNAVAILABLE" || !reading.text) failures.push(`${label}: the reason reads ${JSON.stringify(reading)}`);
+          if (after !== before) failures.push(`${label}: the switch did not come back to ${before}`);
+          if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+        } finally { await context.close(); }
+      }
+      fs.writeFileSync("evidence/optimistic-ui/voice-settings-refused.json", JSON.stringify({ failures, readings }, null, 2) + "\n");
+      expect(failures).toEqual([]);
+    } finally { await browser.close(); server.stop(); }
+  }, 600_000);
 
   browserTest("placement leaves skipped card contents unmeasured until they scroll into view", async () => {
     const out = path.resolve(".artifacts/voice-companion-skipped-layout");

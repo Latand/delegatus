@@ -51,7 +51,7 @@ import { isPlacedTask } from "./scheme/taskGeometry";
 import { loadExpandedTasks, persistExpandedTasks } from "./scheme/taskStacks";
 import { clearWorkflowDraftStorage } from "./workflows/WorkflowDraftPane";
 import { dropLegacyWorkflowDrafts, isWorkflowDraftId } from "./workflows/workflowModel";
-import { pushTaskToast, TaskToastHost } from "./tasks/taskToast";
+import { pushTaskToast, scrollClearOfToasts, TaskToastHost } from "./tasks/taskToast";
 import { cleanTitle } from "@/lib/title";
 import { MobileBoardDock, mobileBoardOf } from "./mobile/MobileBoard";
 import { MobileKanban } from "./mobile/MobileKanban";
@@ -502,6 +502,15 @@ function ProjectDashboardView({
       const name = (file ? cleanTitle(file.title ?? "", 48) : "") || t("kanban.untitledConversation");
       const key = rejection.kind === "close" ? "board.rejected.close" : rejection.kind === "restore" ? "board.rejected.restore" : rejection.kind === "set-favorite" ? "board.rejected.favorite" : "board.rejected.other";
       pushTaskToast("err", t(key, { conversation: name, code: rejection.code }));
+      /* The toast floats over the board's foot: a closed or restored row drawn
+         back there is brought up above it, once the toast has mounted. */
+      if (rejection.target && (rejection.kind === "close" || rejection.kind === "restore")) {
+        const target = rejection.target;
+        window.requestAnimationFrame(() => {
+          const pill = document.querySelector(`[data-attempt-path="${CSS.escape(target)}"]`);
+          scrollClearOfToasts(pill?.closest(".pblock") ?? pill ?? null);
+        });
+      }
     }
     board.clearRejections(boardRejections.map((rejection) => rejection.id));
     // eslint-disable-next-line react-hooks/exhaustive-deps -- the files and the setter are read when a rejection arrives

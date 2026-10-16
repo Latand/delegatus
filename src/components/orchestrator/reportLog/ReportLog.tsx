@@ -125,6 +125,13 @@ export function ReportLog({ project, active = true, variant, headless = false, i
     writeSeenSeq(project, newest);
   }, [active, off, newest, project]);
 
+  /* A refused older page names itself where it was asked: the line comes into
+     view when it appears, not a scroll below the button that was pressed. */
+  const olderFailedLine = useRef<HTMLParagraphElement | null>(null);
+  useEffect(() => {
+    if (log.olderFailed) olderFailedLine.current?.scrollIntoView({ block: "nearest" });
+  }, [log.olderFailed]);
+
   const column = variant === "column";
   const rows = useMemo(
     () => reportLogRows(log.entries, log.asks, { reports: !log.olderReports, asks: !log.olderAsks }),
@@ -146,7 +153,7 @@ export function ReportLog({ project, active = true, variant, headless = false, i
       >
         {log.loadingOlder ? t("reportLog.loading") : t("reportLog.older")}
       </button>
-      {log.olderFailed ? <p role="alert" data-report-log-older-failed="" className="mt-1 text-center text-label text-danger">{t("reportLog.olderFailed")}</p> : null}
+      {log.olderFailed ? <p ref={olderFailedLine} role="alert" data-report-log-older-failed="" className="mt-1 text-center text-label text-danger">{t("reportLog.olderFailed")}</p> : null}
     </div>
   );
   const surface = column ? "desktop" : "phone";
