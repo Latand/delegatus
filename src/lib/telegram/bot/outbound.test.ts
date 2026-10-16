@@ -115,6 +115,99 @@ test("published retention is bounded and pending receipts survive expiry; observ
   } finally { f.cleanup(); }
 });
 
+test("disconnected forwarding receipts expire on a later send and retention skips forwarding history", async () => {
+  const f = fixture();
+  const now = Math.floor(Date.now() / 1000);
+  const disconnected = { ...message, target: null, messageId: 700, date: now - 2 * 86400 };
+  try {
+    await recordOutbound(f.filename, disconnected);
+    const db = new Database(f.filename);
+    try {
+      db.query("UPDATE relay_outbound SET state='forwarding', attempts=1 WHERE message_id=?").run(disconnected.messageId);
+      db.query("INSERT INTO relay_outbound_handoffs (key, link, destination, due) VALUES (?, ?, ?, ?)")
+        .run(JSON.stringify([disconnected.botId, disconnected.chatId, disconnected.messageId]), "peer", "{}", now * 1000);
+    } finally { db.close(); }
+
+    await recordOutbound(f.filename, { ...message, messageId: 701, date: now });
+    const afterExpiry = new Database(f.filename, { readonly: true });
+    try {
+      expect(afterExpiry.query("SELECT state, attempts FROM relay_outbound WHERE message_id=?").get(disconnected.messageId))
+        .toEqual({ state: "terminal", attempts: 1 });
+      expect(afterExpiry.query("SELECT reason FROM relay_publication_results WHERE key=?").get(JSON.stringify([disconnected.botId, disconnected.chatId, disconnected.messageId])))
+        .toEqual({ reason: "expired" });
+      expect(afterExpiry.query("SELECT 1 FROM relay_outbound_handoffs WHERE key=?").get(JSON.stringify([disconnected.botId, disconnected.chatId, disconnected.messageId])))
+        .toBeNull();
+    } finally { afterExpiry.close(); }
+
+    const age = new Database(f.filename);
+    try { age.query("UPDATE relay_outbound SET date=? WHERE message_id=?").run(now - 31 * 86400 - 1, disconnected.messageId); }
+    finally { age.close(); }
+    await recordOutbound(f.filename, { ...message, messageId: 702, date: now + 1 });
+    const afterRetention = new Database(f.filename, { readonly: true });
+    try { expect(afterRetention.query("SELECT 1 FROM relay_outbound WHERE message_id=?").get(disconnected.messageId)).toBeNull(); }
+    finally { afterRetention.close(); }
+
+    const history = new Database(f.filename);
+    try {
+      history.exec(`WITH RECURSIVE seq(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM seq WHERE n<100000)
+        INSERT INTO relay_outbound (key, bot_id, chat_id, topic_id, date, message_id, value_json, is_question, send_key, state, due, attempts)
+        SELECT 'old-forward-'||n, '42', '41', 7, ${now - 31 * 86400}, 1000+n, '{}', 0, 'old', 'forwarding', 0, 1 FROM seq`);
+      const plan = history.query<{ detail: string }, [number]>(`EXPLAIN QUERY PLAN SELECT key FROM relay_outbound
+        WHERE state NOT IN ('pending', 'forwarding') AND date<? ORDER BY date, key LIMIT 64`).all(now - 30 * 86400);
+      expect(plan.map(row => row.detail).join(" ")).toContain("relay_outbound_retention_eligible");
+    } finally { history.close(); }
+    await recordOutbound(f.filename, { ...message, messageId: 703, date: now + 2 });
+    const retained = new Database(f.filename, { readonly: true });
+    try {
+      expect(retained.query("SELECT count(*) AS count FROM relay_outbound WHERE state='forwarding' AND key LIKE 'old-forward-%'").get())
+        .toEqual({ count: 99984 });
+    } finally { retained.close(); }
+  } finally { f.cleanup(); }
+});
+
+test("both outbound expiry passes seek expired dates through matching partial indexes", async () => {
+  const f = fixture();
+  try {
+    await recordOutbound(f.filename, message);
+    const db = new Database(f.filename);
+    try {
+      const forwarding = db.query<{ detail: string }, [number]>(`EXPLAIN QUERY PLAN SELECT key FROM relay_outbound
+        WHERE state IN ('unrouted', 'forwarding') AND date<=? ORDER BY date, key LIMIT 16`).all(message.date - 86400);
+      const all = db.query<{ detail: string }, [number]>(`EXPLAIN QUERY PLAN SELECT key FROM relay_outbound
+        WHERE state IN ('pending', 'unrouted', 'forwarding') AND date<=? ORDER BY date, key LIMIT 16`).all(message.date - 86400);
+      expect(forwarding.map(row => row.detail).join(" ")).toContain("relay_outbound_expiry_forwarding");
+      expect(all.map(row => row.detail).join(" ")).toContain("relay_outbound_expiry");
+      expect(forwarding.map(row => row.detail).join(" ")).not.toContain("TEMP B-TREE");
+      expect(all.map(row => row.detail).join(" ")).not.toContain("TEMP B-TREE");
+    } finally { db.close(); }
+  } finally { f.cleanup(); }
+});
+
+test("legacy handoff rows gain a due key without losing their persisted retry deadline", async () => {
+  const f = fixture();
+  try {
+    await recordOutbound(f.filename, message);
+    const due = message.date * 1000 + 4321;
+    const legacy = new Database(f.filename);
+    try {
+      legacy.query("UPDATE relay_outbound SET state='forwarding', due=? WHERE key=?").run(due, JSON.stringify([message.botId, message.chatId, message.messageId]));
+      legacy.query("INSERT INTO relay_outbound_handoffs (key, link, destination) VALUES (?, ?, ?)")
+        .run(JSON.stringify([message.botId, message.chatId, message.messageId]), "legacy-link", "{}");
+      legacy.exec("DROP INDEX relay_outbound_handoff_link_due");
+      legacy.exec("ALTER TABLE relay_outbound_handoffs DROP COLUMN due");
+    } finally { legacy.close(); }
+    await recordOutbound(f.filename, { ...message, messageId: 19 });
+    const migrated = new Database(f.filename, { readonly: true });
+    try {
+      expect(migrated.query<{ due: number }, [string]>("SELECT due FROM relay_outbound_handoffs WHERE key=?")
+        .get(JSON.stringify([message.botId, message.chatId, message.messageId]))?.due).toBe(due);
+      const plan = migrated.query<{ detail: string }, [string, number]>(`EXPLAIN QUERY PLAN SELECT key FROM relay_outbound_handoffs
+        WHERE link=? AND due<=? ORDER BY due, key LIMIT 16`).all("legacy-link", due);
+      expect(plan.map(row => row.detail).join(" ")).toContain("relay_outbound_handoff_link_due");
+    } finally { migrated.close(); }
+  } finally { f.cleanup(); }
+});
+
 test.each(["unpaired", "target-changed", "owner-changed", "chat-revoked", "revoked-after-await"])("publication refuses %s without discarding custody", async kind => {
   const f = fixture(); let calls = 0; let current = message.target; let allowed = true;
   const worker = new OutboundPublication(f.filename, { target: () => current, allowed: () => allowed,
@@ -143,6 +236,35 @@ test("429 delay is durable, shared by siblings and preserved by a new queue owne
     worker = new OutboundPublication(f.filename, ports); now = 59000; worker.wake(); await worker.idle(); expect(calls).toBe(1);
     now = 60000; worker.wake(); await worker.idle(); expect(calls).toBe(3);
     expect(await pendingOutbound(f.filename, now)).toEqual([]);
+  } finally { await worker.stop(); f.cleanup(); }
+});
+
+test.each([400, 403, 409])("durable publication %s ends once and records the service reason", async status => {
+  const f = fixture(); let calls = 0;
+  const ports = { target: () => message.target, allowed: () => true, now: () => message.date * 1000,
+    publish: async () => { calls++; throw new ExternalRelayError("fixture_refusal", status); } };
+  let worker = new OutboundPublication(f.filename, ports);
+  try {
+    await recordOutbound(f.filename, message);
+    worker.wake(); await worker.idle(); await worker.stop();
+    worker = new OutboundPublication(f.filename, ports); worker.wake(); await worker.idle();
+    expect(calls).toBe(1);
+    const db = new Database(f.filename, { readonly: true });
+    try { expect(db.query("SELECT state, reason FROM relay_outbound JOIN relay_publication_results USING(key)").get())
+      .toEqual({ state: "terminal", reason: `${status}:fixture_refusal` }); }
+    finally { db.close(); }
+  } finally { await worker.stop(); f.cleanup(); }
+});
+
+test("an expired receipt never reaches the service and its Telegram text stays readable", async () => {
+  const f = fixture(); let calls = 0;
+  const worker = new OutboundPublication(f.filename, { target: () => message.target, allowed: () => true,
+    now: () => (message.date + 86400) * 1000, publish: () => { calls++; return "published"; } });
+  try {
+    await recordOutbound(f.filename, message); worker.wake(); await worker.idle();
+    expect(calls).toBe(0);
+    expect(await pendingOutbound(f.filename, Number.MAX_SAFE_INTEGER)).toEqual([]);
+    expect((await scopedOutbound(f.filename, message.botId, message.chatId, message.topicId, message.date + 86400))[0]?.text).toBe(message.text);
   } finally { await worker.stop(); f.cleanup(); }
 });
 

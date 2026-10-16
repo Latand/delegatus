@@ -1082,7 +1082,7 @@ export async function selectControllerPipelines(kind: import("@/lib/state/pipeli
 }
 
 export async function controllerPipelineVersion(id: string): Promise<string> {
-  return waitForStateLock("pipelines.controller-version", () => stateLockAttempt("pipelines.controller-version", () => pipelineStore().pipelineControllerVersion(id)));
+  return withViewerOperation("pipelines.controller-read", () => waitForStateLock("pipelines.controller-version", () => stateLockAttempt("pipelines.controller-version", () => performanceSpans.sync("controller.ownership", () => pipelineStore().pipelineControllerVersion(id)))));
 }
 export async function findControllerPipeline(id: string): Promise<Pipeline | null> {
   return waitForStateLock("pipelines.controller-candidate", () => stateLockAttempt("pipelines.controller-candidate", () => pipelineStore().pipelineControllerCandidate(id)));
@@ -1111,6 +1111,9 @@ export async function controllerFlowAttached(id: string): Promise<boolean> {
 }
 export async function selectPipelineControllerWork(now: number, excluded: readonly string[]) {
   return waitForStateLock("pipelines.controller-schedule", () => stateLockAttempt("pipelines.controller-schedule", () => pipelineStore().pipelineTickWork(now, excluded)));
+}
+export async function deferPipelineControllerWork(work: import("@/lib/state/pipelineControllerSchedule").PipelineTickWork) {
+  return (await waitForStateLock("pipelines.controller-schedule", pipelineStore)).deferPipelineTick(work);
 }
 export async function pipelineControllerReady(now: number, excluded: readonly string[]) {
   return waitForStateLock("pipelines.controller-schedule", () => stateLockAttempt("pipelines.controller-schedule", () => pipelineStore().pipelineTickReady(now, excluded)));
@@ -1934,11 +1937,11 @@ export async function archiveSettledPipelines(
   nowMs = Date.now(),
   options: { beforeCommit?: () => void } = {},
 ): Promise<number> {
-  return pipelineStore().moveMatchingTo(
+  return withViewerOperation("pipelines.controller-read", () => pipelineStore().moveMatchingTo(
     archiveStore(),
     (pipeline) => pipelineSettledForArchive(pipeline, nowMs),
     options,
-  );
+  ));
 }
 
 export function checkpointPipelineRollbackMirrorsForDemotion(): { pipelines: number; pipelinesArchive: number } {

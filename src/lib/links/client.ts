@@ -1,3 +1,4 @@
+import { exchangeTelegramPublications, validTelegramPublicationPart, type TelegramPublicationPart } from "./telegramPublication";
 import { sharedLinkState } from "./runtimeState";
 import dns from "node:dns/promises";
 import http from "node:http";
@@ -179,6 +180,8 @@ async function runSyncPeer(id: string, recover: boolean): Promise<{ peer: Link; 
     const agentState = agentCursors(`peer:${id}`);
     let agentMore = false;
     let messageMoved = 0;
+    let tp: TelegramPublicationPart = { v: 1 };
+    let publicationCalls = 0;
     // Each sync confirms the current lists before exporting queued words.
     let messagesAgreed = false;
     for (let calls = 0; calls < MAX_SYNC_CALLS; calls++) {
@@ -210,7 +213,7 @@ async function runSyncPeer(id: string, recover: boolean): Promise<{ peer: Link; 
       const push = pushAgents ? { ...(taskParts.push ?? {}), agents: pushAgents } : taskParts.push;
       const messageLink = linkedPeer("peer", id);
       const sm = messagesAgreed && !send && remoteTotal === null ? seatMessagesPart(messageLink) : { v: 1 as const };
-      const answer = await call(target, "/api/peer/v1/boards/sync", "POST", { v: 1, sm, store: ownBoardStoreId(), now: Date.now(), s: localHash, have: remoteHash, taskWireVersion: TASK_WIRE_VERSION,
+      const answer = await call(target, "/api/peer/v1/boards/sync", "POST", { v: 1, sm, ...(messagesAgreed && publicationCalls < 4 && (tp.destination || tp.out?.length || tp.ack?.length) ? { tp } : {}), store: ownBoardStoreId(), now: Date.now(), s: localHash, have: remoteHash, taskWireVersion: TASK_WIRE_VERSION,
         ...(batch ? { shared: batch, index: sent, total: local.length } : {}),
         ...(remoteTotal !== null ? { want: received.length } : {}), ...taskParts,
         ...(linked.size ? { agents: encodeCursor(agentState.pull), ...(agentState.pullOffset ? { agentPage: agentState.pullOffset } : {}) } : {}), ...(push ? { push } : {}) }, { "x-delegatus-peer": `${peer.grantId}.${peer.token}` });
@@ -238,6 +241,9 @@ async function runSyncPeer(id: string, recover: boolean): Promise<{ peer: Link; 
         continue;
       }
       store = answer.body.store;
+      let publicationMore = false;
+      if (answer.body.tp !== undefined && !validTelegramPublicationPart(answer.body.tp)) throw new LinkError("malformed");
+
       if (answer.body.sm !== undefined && !validSeatMessagePart(answer.body.sm)) throw new LinkError("malformed");
       recordSeatMessages(`peer:${id}`, answer.body.sm !== undefined);
       if (messageLink && answer.body.sm !== undefined) {
@@ -314,6 +320,16 @@ async function runSyncPeer(id: string, recover: boolean): Promise<{ peer: Link; 
       // A shared list that changed in this answer can link a project whose
       // rows have not moved yet; one more call carries them.
       messagesAgreed = !send && remoteTotal === null && answer.body.s === remoteHash && answer.body.need !== true;
+      if (messagesAgreed && answer.body.tp !== undefined && publicationCalls < 4) {
+        stillLinked();
+        const advertised = !!tp.destination;
+        tp = await exchangeTelegramPublications(linkedPeer("peer", id), answer.body.tp, undefined, () => { stillLinked(); });
+        stillLinked();
+        publicationCalls++;
+        const receivedPublication = answer.body.tp as TelegramPublicationPart;
+        if (tp.out?.length || tp.ack?.length || receivedPublication.out?.length || receivedPublication.ack?.length) messageMoved++;
+        publicationMore = publicationCalls < 4 && !!(tp.out?.length || tp.ack?.length || (!advertised && tp.destination));
+      }
       if (recovering && messagesAgreed) {
         putPeer({ ...stillLinked(), state: "active", error: null });
         recovering = false;
@@ -324,7 +340,7 @@ async function runSyncPeer(id: string, recover: boolean): Promise<{ peer: Link; 
       const localKeys = new Set(local.map((project) => project.key));
       const linkedAfter = new Set(remote.map((project) => project.key).filter((key) => localKeys.has(key)));
       const linkedSame = linkedAfter.size === linked.size && [...linkedAfter].every((key) => linked.has(key));
-      if (!send && remoteTotal === null && answer.body.s === remoteHash && answer.body.need !== true && (!linked.size || !exchange?.pending()) && !agentMore && !messageMore && !messagesPending(id) && (linkedSame || !exchange)) break;
+      if (!send && remoteTotal === null && answer.body.s === remoteHash && answer.body.need !== true && (!linked.size || !exchange?.pending()) && !agentMore && !messageMore && !publicationMore && !messagesPending(id) && (linkedSame || !exchange)) break;
       agentMore = false;
       if (calls === MAX_SYNC_CALLS - 1) throw new LinkError("malformed");
     }
