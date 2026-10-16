@@ -17,6 +17,8 @@ const POLL_MS = 30_000;
 export type TelegramBotState = {
   status: TelegramBotStatusPayload | null;
   busy: boolean;
+  /** Chats whose posting switch or alias is being written: only their row waits. */
+  pending?: ReadonlySet<string>;
   /** The last action's sanitized error code, or `"transport"`. */
   failure: { code: string } | null;
   refresh(fresh?: boolean): Promise<void>;
@@ -60,8 +62,8 @@ export function useTelegramBot(enabled: boolean): TelegramBotState {
     }
   }, []);
 
-  const act = useCallback(async (body: Record<string, unknown>): Promise<Record<string, unknown> | null> => {
-    setBusy(true);
+  const act = useCallback(async (body: Record<string, unknown>, quiet = false): Promise<Record<string, unknown> | null> => {
+    if (!quiet) setBusy(true);
     setFailure(null);
     const sequence = ++sequenceRef.current;
     try {
@@ -80,9 +82,34 @@ export function useTelegramBot(enabled: boolean): TelegramBotState {
       setFailure({ code: "transport" });
       return null;
     } finally {
-      setBusy(false);
+      if (!quiet) setBusy(false);
     }
   }, []);
+  /* A chat's switch, its alias and the document roots are local stores with no
+     Telegram request: each shows at once and a refusal puts the stored value
+     back (audit B38, B39). Only the chat being written waits, so a second
+     press on it sends nothing. */
+  const [pending, setPending] = useState<ReadonlySet<string>>(() => new Set());
+  const pendingRef = useRef(new Set<string>());
+  const drawn = useCallback(async (predict: (held: TelegramBotStatusPayload) => TelegramBotStatusPayload, body: Record<string, unknown>) => {
+    let before: TelegramBotStatusPayload | null = null;
+    setStatus((held) => { before = held; return held ? predict(held) : held; });
+    const answer = await act(body, true);
+    if (!answer) setStatus((held) => before ?? held);
+    return answer;
+  }, [act]);
+  const setChat = useCallback(async (chatId: string, alias: string, postAllowed: boolean) => {
+    if (pendingRef.current.has(chatId)) return;
+    pendingRef.current.add(chatId);
+    setPending(new Set(pendingRef.current));
+    await drawn((held) => ({ ...held, chats: held.chats.map((chat) => chat.chatId === chatId ? { ...chat, alias: alias || null, postAllowed, postable: postAllowed && alias !== "" && chat.member } : chat) }), { action: "chat", chatId, alias, postAllowed });
+    pendingRef.current.delete(chatId);
+    setPending(new Set(pendingRef.current));
+  }, [drawn]);
+  const setDocumentRoots = useCallback(async (roots: string[]) => {
+    if (!roots.length) return (await act({ action: "documents", roots })) !== null;
+    return (await drawn((held) => ({ ...held, documents: { roots, custom: true } }), { action: "documents", roots })) !== null;
+  }, [act, drawn]);
 
   useEffect(() => {
     if (!enabled) return;
@@ -94,17 +121,18 @@ export function useTelegramBot(enabled: boolean): TelegramBotState {
   return {
     status,
     busy,
+    pending,
     failure,
     refresh: async (fresh = false) => { if (fresh) await act({ action: "refresh" }); else await load(); },
     connect: async (token) => { await act({ action: "connect", token }); },
-    setChat: async (chatId, alias, postAllowed) => { await act({ action: "chat", chatId, alias, postAllowed }); },
+    setChat,
     addChat: async (chat, alias) => {
       const body = await act({ action: "add", chat, ...(alias ? { alias } : {}) });
       const added = body?.added as { chat?: unknown } | undefined;
       return typeof added?.chat === "string" ? added.chat : null;
     },
     testPost: async (chat) => (await act({ action: "test", chat })) !== null,
-    setDocumentRoots: async (roots) => (await act({ action: "documents", roots })) !== null,
+    setDocumentRoots,
     remove: async () => { await act({ action: "remove" }); },
   };
 }

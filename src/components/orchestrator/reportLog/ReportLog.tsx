@@ -146,6 +146,7 @@ export function ReportLog({ project, active = true, variant, headless = false, i
       >
         {log.loadingOlder ? t("reportLog.loading") : t("reportLog.older")}
       </button>
+      {log.olderFailed ? <p role="alert" data-report-log-older-failed="" className="mt-1 text-center text-label text-danger">{t("reportLog.olderFailed")}</p> : null}
     </div>
   );
   const surface = column ? "desktop" : "phone";

@@ -131,3 +131,54 @@ test("orchestrator and maintainer rules have named tabs and rows in both languag
     await dom.happyDOM.close();
   }
 });
+
+/* Audit B26: delete leaves at once, a refusal puts the rule back with the
+   save error; restore and a text's revert are predicted the same way. */
+test("a delete leaves the list at once while the write is held, and a refusal brings the rule back with the save error", async () => {
+  const dom = new Window();
+  dom.HTMLElement.prototype.scrollIntoView = () => {};
+  const globals = { window: dom, document: dom.document, navigator: dom.navigator, HTMLElement: dom.HTMLElement };
+  const prior = new Map(Object.keys(globals).map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
+  Object.assign(globalThis, globals);
+  installActEnv();
+  const oldFetch = globalThis.fetch;
+  const rule = { id: "r_held", rule: "Check the export before the report.", why: "A report cited an old export.", state: "active", hints: [], roleId: null, fixRound: false, stageId: "seat", fresh: false, createdAt: "today", changedAt: "today" };
+  const view = { project: "seat-window", enabled: true, scopes: [{ ...scope(100), scope: "project:seat-window", active: [rule] }] };
+  const posts: unknown[] = [];
+  let refuse: () => void = () => {};
+  globalThis.fetch = (async (_input: unknown, init?: RequestInit) => {
+    if (init?.method !== "POST") return Response.json(view);
+    posts.push(JSON.parse(String(init.body)));
+    await new Promise<void>((resolve) => { refuse = resolve; });
+    return Response.json({ error: "busy" }, { status: 503 });
+  }) as unknown as typeof fetch;
+  const host = dom.document.createElement("div"); dom.document.body.append(host);
+  const root = createRoot(host as unknown as HTMLElement);
+  try {
+    await act(async () => { root.render(<RulesWindow project="seat-window" focusRule="r_held" onClose={() => {}} />); await new Promise(resolve => setTimeout(resolve, 0)); });
+    expect(dom.document.querySelector('[data-learned-rule="r_held"]')).not.toBeNull();
+    await act(async () => { (dom.document.querySelector('[data-learned-rule-delete="r_held"]') as unknown as HTMLElement).click(); });
+    expect(dom.document.querySelector('[data-learned-rule="r_held"]')).toBeNull();
+    expect(posts).toEqual([{ project: "seat-window", action: "delete", ruleId: "r_held" }]);
+    await act(async () => { refuse(); await new Promise(resolve => setTimeout(resolve, 0)); });
+    expect(dom.document.querySelector('[data-learned-rule="r_held"]')).not.toBeNull();
+    expect(dom.document.querySelector('[role="alert"]')?.textContent).toBe("The change was not saved. Try again.");
+  } finally {
+    await act(() => root.unmount());
+    globalThis.fetch = oldFetch;
+    for (const [key, value] of prior) if (value) Object.defineProperty(globalThis, key, value); else Reflect.deleteProperty(globalThis, key);
+    await dom.happyDOM.close();
+  }
+});
+
+test("the predicted reading restores a left rule and reverts a rule's text to the chosen version", async () => {
+  const { predictedRules } = await import("./LearnedRules");
+  const left = { id: "r_left", rule: "Old wording.", why: "w", state: "archived", reason: "deleted", hints: [], roleId: null, fixRound: false, stageId: "seat", fresh: false, createdAt: "today", changedAt: "today", versions: [{ id: "v_one", rule: "First wording.", why: "first why", hints: [] }] } as unknown as RuleView;
+  const view = { project: "p", enabled: true, scopes: [{ ...scope(100), left: [left] }] };
+  const restored = predictedRules(view, "restore", "r_left", "2026-10-16T12:00:00.000Z");
+  expect(restored.scopes[0]!.left).toEqual([]);
+  expect(restored.scopes[0]!.active.map((rule) => [rule.id, rule.state, rule.changedAt, "reason" in rule])).toEqual([["r_left", "active", "2026-10-16T12:00:00.000Z", false]]);
+  const reverted = predictedRules(view, "revert", "v_one");
+  expect(reverted.scopes[0]!.left[0]!.rule).toBe("First wording.");
+  expect(predictedRules(view, "revert-pass", "r_left")).toBe(view);
+});

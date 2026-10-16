@@ -89,6 +89,9 @@ export function TaskAlbum({ taskId, title, pipelines, files, onClose }: TaskAlbu
   const [page, setPage] = useState<Omit<AlbumPage, "items"> | null>(null);
   const [loading, setLoading] = useState(true);
   const [failed, setFailed] = useState(false);
+  /* A failed «Load more» with pictures on screen says so beside the button,
+     which doubles as Retry, until the next press (audit F1). */
+  const [moreFailed, setMoreFailed] = useState(false);
   const [open, setOpen] = useState<GalleryImage | null>(null);
   const marked = useRef(false);
   /* The mark the album found when it opened (null: never opened). Every
@@ -105,7 +108,8 @@ export function TaskAlbum({ taskId, title, pipelines, files, onClose }: TaskAlbu
   const endpoint = `/api/tasks/${encodeURIComponent(taskId)}/album`;
   const load = useCallback(async (cursor: string | null, limit?: number) => {
     setLoading(true);
-    setFailed(false);
+    if (cursor) setMoreFailed(false);
+    else setFailed(false);
     try {
       const query = new URLSearchParams();
       if (cursor) query.set("cursor", cursor);
@@ -136,7 +140,8 @@ export function TaskAlbum({ taskId, title, pipelines, files, onClose }: TaskAlbu
         }
       }
     } catch {
-      setFailed(true);
+      if (cursor) setMoreFailed(true);
+      else setFailed(true);
     } finally {
       setLoading(false);
     }
@@ -293,6 +298,7 @@ export function TaskAlbum({ taskId, title, pipelines, files, onClose }: TaskAlbu
                   {t("album.loadMore")}
                 </button>
               ) : null}
+              {moreFailed && page?.nextCursor ? <p role="alert" data-album-more-failed="" className="m-0 self-center text-label text-danger">{t("album.loadMoreFailed")}</p> : null}
             </div>
           )}
         </div>

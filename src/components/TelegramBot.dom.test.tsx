@@ -209,3 +209,80 @@ test("document folders: the field shows every root, a wrapped one included, inst
   }
   expect(field.className).not.toContain("resize-y");
 });
+
+/* Audit B38, B39: through the real hook, a chat's switch, its alias and the
+   document folders show at once; only the written chat waits, and a refusal
+   puts the stored value back with the failure line. */
+async function mountLive(documents: TelegramBotStatusPayload["documents"] = { roots: ["/fixture-home/handoff"], custom: false }) {
+  const { useTelegramBot } = await import("@/hooks/useTelegramBot");
+  const status: TelegramBotStatusPayload = {
+    ...DISCONNECTED_BOT_STATUS,
+    connected: true,
+    bot: { name: "Report Bot", username: "report_test_bot", canReadAllGroupMessages: false, canJoinGroups: true },
+    receiving: "polling",
+    chats: CHATS,
+    documents,
+  };
+  const posts: Array<Record<string, unknown>> = [];
+  let answer: (response: Response) => void = () => {};
+  const saved = globalThis.fetch;
+  globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    if (init?.method !== "POST") return Response.json({ bot: status });
+    posts.push(JSON.parse(String(init.body)));
+    return new Promise<Response>((resolve) => { answer = resolve; });
+  }) as typeof fetch;
+  function Live() {
+    return <TelegramBotSection state={useTelegramBot(true)} />;
+  }
+  container = document.createElement("div");
+  document.body.appendChild(container);
+  root = createRoot(container);
+  await act(async () => root!.render(<Live />));
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+  return {
+    section: container,
+    posts,
+    answer: (response: Response) => act(async () => { answer(response); await new Promise((resolve) => setTimeout(resolve, 0)); }),
+    restore: () => { globalThis.fetch = saved; },
+  };
+}
+
+test("a chat's posting switch flips at once, only that row waits, a second tap sends nothing, and a refusal flips it back with the reason", async () => {
+  const live = await mountLive();
+  try {
+    expect(switchFor(live.section, "Реліз").getAttribute("aria-checked")).toBe("false");
+    const field = fieldFor(live.section, "Реліз")!;
+    await type(field, "release");
+    await tapAfterTyping(field, switchFor(live.section, "Реліз"));
+    expect(switchFor(live.section, "Реліз").getAttribute("aria-checked")).toBe("true");
+    expect(switchFor(live.section, "Реліз").disabled).toBe(true);
+    expect(switchFor(live.section, "Team Reports").disabled).toBe(false);
+    await act(async () => switchFor(live.section, "Реліз").click());
+    expect(live.posts).toEqual([{ action: "chat", chatId: "-1000000000505", alias: "release", postAllowed: true }]);
+    await live.answer(Response.json({ code: "alias_taken" }, { status: 409 }));
+    expect(switchFor(live.section, "Реліз").getAttribute("aria-checked")).toBe("false");
+    /* The field returns to the stored (empty) alias, so the switch waits for one again. */
+    expect(fieldFor(live.section, "Реліз")!.value).toBe("");
+    expect(fieldFor(live.section, "Реліз")!.disabled).toBe(false);
+    expect(live.section.textContent).toContain("Another chat already uses that alias.");
+  } finally { live.restore(); }
+});
+
+test("document folders close on the press and list the saved roots, and a refusal reopens the form with the typed paths", async () => {
+  const live = await mountLive();
+  try {
+    const field = () => live.section.querySelector<HTMLTextAreaElement>("[data-telegram-document-roots-input]")!;
+    const save = () => live.section.querySelector<HTMLButtonElement>("[data-telegram-document-roots-save]")!;
+    await type(field(), "/fixture-home/reports");
+    await act(async () => save().click());
+    expect(field().value).toBe("/fixture-home/reports");
+    expect(live.section.textContent).not.toContain("Using the default folder.");
+    expect(save().disabled).toBe(true);
+    expect(live.posts).toEqual([{ action: "documents", roots: ["/fixture-home/reports"] }]);
+    await live.answer(Response.json({ code: "document_roots_invalid" }, { status: 400 }));
+    expect(field().value).toBe("/fixture-home/reports");
+    /* Save is pressable again: the typed paths differ from the stored default. */
+    expect(save().disabled).toBe(false);
+    expect(live.section.querySelector('[role="alert"]')).not.toBeNull();
+  } finally { live.restore(); }
+});

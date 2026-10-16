@@ -106,6 +106,11 @@ export function useMaintainerRole(enabled: boolean): MaintainerRoleRead {
        service tier — survives a change of model and is dropped with a change
        of engine, where it would name a tier the other engine does not have. */
     const config: RoleConfig = stored.engine === runtime.engine ? { ...stored, ...runtime } : { ...runtime };
+    /* Drawn at once (audit B21); the stored catalogue stays the cache, so a
+       refusal shows it again. */
+    const held = cache;
+    setCatalogue({ ...held!, config });
+    const restore = () => { if (cache === held) setCatalogue(held); };
     try {
       const response = await fetch(ROLES_URL, {
         method: "PUT",
@@ -129,8 +134,10 @@ export function useMaintainerRole(enabled: boolean): MaintainerRoleRead {
         if (current) adopt(current);
         return { ok: false, error: "the agent mapping changed meanwhile; the current value is shown", stale: true };
       }
+      restore();
       return { ok: false, error: typeof body?.error === "string" && body.error ? body.error : `the save was refused (${response.status})`, stale: false };
     } catch {
+      restore();
       return { ok: false, error: "the save got no answer; nothing more was sent", stale: false };
     }
   }, [adopt]);

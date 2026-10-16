@@ -72,13 +72,16 @@ export function MemoryReadingProvider({ project, children }: { project: string |
     if (!project || writing.current) return;
     writing.current = true;
     const current = ++revision.current;
+    /* The switch flips at once (audit B19); a refusal flips it back and the row says so. */
+    let before: (MemoryView & { project: string }) | null = null;
+    setMemory((held) => { before = held; return held && held.project === project ? { ...held, enabled } : held; });
     setBusy(true); setMemoryError(null);
     try {
       const response = await fetch("/api/memory/settings", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ project, enabled }) });
       if (!response.ok) throw Error();
       const value = await response.json() as MemoryView;
       if (current === revision.current) setMemory({ ...value, project });
-    } catch { if (current === revision.current) setMemoryError("save"); }
+    } catch { if (current === revision.current) { setMemory(before); setMemoryError("save"); } }
     finally { writing.current = false; setBusy(false); }
   }, [project]);
   const value: Reading = {
@@ -160,7 +163,7 @@ export function MemoryPanel({ size = "menu" }: { size?: MemorySize }) {
   const { t, locale } = useLocale();
   const lang = locale === "uk" ? "uk" : "en";
   const reading = useMemoryReading();
-  const { memory, memoryError, busy, setEnabled } = reading;
+  const { memory, memoryError, setEnabled } = reading;
   const [keyOpen, setKeyOpen] = useState(false);
   const [details, setDetails] = useState(false);
   /* The switch keeps the last setting read; what blocks it and the month are not vouched for after a failed read. */
@@ -189,7 +192,7 @@ export function MemoryPanel({ size = "menu" }: { size?: MemorySize }) {
         label={t("memoryPage.forProject")}
         hint={memoryError === "save" ? t("memory.save.failed") : blocked ? "" : t("memoryPage.explains")}
         enabled={Boolean(memory?.enabled)}
-        disabled={busy || !memory}
+        disabled={!memory}
         failed={memoryError === "save"}
         variant={size}
         blocked={Boolean(memory?.enabled) && blocked}

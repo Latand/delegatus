@@ -20,10 +20,9 @@ export function useVoiceCompanionSettings(open: boolean): VoiceCompanionSettings
   const [error, setError] = useState<string | null>(null);
   const sequence = useRef(0);
   const pending = useRef(0);
-  const request = useCallback(async (endpoint: "settings" | "key", body?: unknown): Promise<boolean> => {
+  const request = useCallback(async (endpoint: "settings" | "key", body?: unknown, quiet = false): Promise<boolean> => {
     const current = ++sequence.current;
-    pending.current++;
-    setBusy(true);
+    if (!quiet) { pending.current++; setBusy(true); }
     setError(null);
     try {
       const response = await fetch(`/api/voice-companion/${endpoint}`, {
@@ -42,10 +41,21 @@ export function useVoiceCompanionSettings(open: boolean): VoiceCompanionSettings
       if (current === sequence.current) setError("COMPANION_UNAVAILABLE");
       return false;
     } finally {
-      pending.current--;
-      setBusy(pending.current > 0);
+      if (!quiet) { pending.current--; setBusy(pending.current > 0); }
     }
   }, []);
+  /* A setting shows at once and locks nothing (audit B24); a refusal puts the
+     stored value back, unless a newer write already answered over it. Releasing
+     an uncertain session waits: the server decides what is left of it. */
+  const update = useCallback(async (value: Parameters<VoiceCompanionSettingsHook["update"]>[0]): Promise<boolean> => {
+    if ("releaseUncertainSession" in value) return request("settings", value);
+    let before: CompanionSettings | null = null;
+    setSettings((held) => { before = held; return held ? { ...held, ...value } : held; });
+    const mine = sequence.current + 1;
+    const ok = await request("settings", value, true);
+    if (!ok && sequence.current === mine) setSettings(before);
+    return ok;
+  }, [request]);
   const refresh = useCallback(async () => { await request("settings"); }, [request]);
   useEffect(() => {
     if (!open) return;
@@ -53,5 +63,5 @@ export function useVoiceCompanionSettings(open: boolean): VoiceCompanionSettings
     queueMicrotask(() => { if (!disposed) void refresh(); });
     return () => { disposed = true; sequence.current++; };
   }, [open, refresh]);
-  return { settings, busy, error, refresh, update: value => request("settings", value), saveKey: key => request("key", { key }) };
+  return { settings, busy, error, refresh, update, saveKey: key => request("key", { key }) };
 }

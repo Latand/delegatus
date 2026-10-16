@@ -89,9 +89,9 @@ export function useTelegramReports(active: boolean): TelegramReportsState {
   /* Returns the OUTCOME, not just the body: an action that only knows the
      payload cannot tell a rejected save from an accepted one, and would report
      success the server never gave. */
-  const act = useCallback(async (body: Record<string, unknown>): Promise<{ ok: boolean; json: Record<string, unknown> }> => {
+  const act = useCallback(async (body: Record<string, unknown>, quiet = false): Promise<{ ok: boolean; json: Record<string, unknown> }> => {
     sequence.current += 1;
-    setBusy(true);
+    if (!quiet) setBusy(true);
     setFailure(null);
     try {
       const { ok, json } = await readJson(await fetch("/api/telegram/reports", {
@@ -108,9 +108,21 @@ export function useTelegramReports(active: boolean): TelegramReportsState {
       setFailure({ code: "transport" });
       return { ok: false, json: {} };
     } finally {
-      setBusy(false);
+      if (!quiet) setBusy(false);
     }
   }, []);
+  /* The report settings and the prompt are local writes: each shows at once
+     and locks nothing, and a refusal puts the stored settings back (audit
+     B40, B41). The latest press wins: an older answer does not undo a newer one. */
+  const settingsWrite = useRef(0);
+  const drawnSettings = useCallback(async (settings: TelegramReportSettings, body: Record<string, unknown>) => {
+    const mine = ++settingsWrite.current;
+    let before: TelegramReportsPayload | null = null;
+    setReports((held) => { before = held; return held ? { ...held, settings } : held; });
+    const answer = await act(body, true);
+    if (!answer.ok && mine === settingsWrite.current && !answer.json.reports) setReports((held) => before ?? held);
+    return answer;
+  }, [act]);
 
   return {
     reports,
@@ -120,7 +132,7 @@ export function useTelegramReports(active: boolean): TelegramReportsState {
     groups,
     prompt,
     refresh: load,
-    saveSettings: async (settings) => { await act({ action: "settings", settings }); },
+    saveSettings: async (settings) => { await drawnSettings(settings, { action: "settings", settings }); },
     loadPrompt: async () => {
       setBusy(true);
       setFailure(null);
@@ -145,8 +157,12 @@ export function useTelegramReports(active: boolean): TelegramReportsState {
     savePrompt: async (next) => {
       const current = reports?.settings;
       if (!current) return;
-      const { ok } = await act({ action: "settings", settings: current, prompt: next });
-      if (ok) setPrompt(null);
+      /* Closed on the press, reading "edited by you"; a refusal reopens the
+         editor with the typed text and the failure above it (audit B41). */
+      const opened = prompt;
+      setPrompt(null);
+      const { ok } = await drawnSettings({ ...current, promptIsDefault: opened ? next === opened.defaultPrompt : false }, { action: "settings", settings: current, prompt: next });
+      if (!ok && opened) setPrompt({ prompt: next, defaultPrompt: opened.defaultPrompt });
     },
     closePrompt: () => setPrompt(null),
     runNow: async () => { await act({ action: "run-now" }); },

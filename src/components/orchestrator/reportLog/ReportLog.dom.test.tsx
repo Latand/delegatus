@@ -581,3 +581,27 @@ test("a refused Resolve and a refused Undo each come back with the server's word
   expect(host.querySelector('[data-report-resolve-error="4"]')?.textContent).toBe("Could not mark it open again: INVALID_REQUEST");
   expect(dismissals).toHaveLength(3);
 });
+
+/* Audit F1: an «Older» page that does not come says so beside the button, which retries. */
+test("a failed «Show older» says so under the button, and the next press clears it and loads the page", async () => {
+  pages = [page([entry(40), entry(39)], { nextBefore: 39 })];
+  const served = globalThis.fetch;
+  let refuseOlder = true;
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    if (refuseOlder && String(input).includes("before=39")) return new Response("{}", { status: 503 });
+    return served(input, init);
+  }) as typeof fetch;
+  const host = mount();
+  await settle();
+  (host.querySelector("[data-report-log-older]") as HTMLElement).click();
+  await settle();
+  expect(host.querySelector("[data-report-log-older-failed]")?.textContent).toBe("Could not load older reports. Press Show older to try again.");
+  expect(host.querySelector("[data-report-log-older]")).not.toBeNull();
+
+  refuseOlder = false;
+  pages = [page([entry(38), entry(37)], { nextBefore: null })];
+  (host.querySelector("[data-report-log-older]") as HTMLElement).click();
+  await settle();
+  expect(host.querySelector("[data-report-log-older-failed]")).toBeNull();
+  expect([...host.querySelectorAll("[data-report-entry]")].map((row) => row.getAttribute("data-report-entry"))).toEqual(["40", "39", "38", "37"]);
+});
