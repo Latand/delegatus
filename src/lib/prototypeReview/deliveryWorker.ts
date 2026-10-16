@@ -16,8 +16,9 @@ import { telegramBotService } from "@/lib/telegram/bot/service";
  * project's seat from here. Each owed decision is attempted at once, then on a
  * backoff while its attempts fail, then every few seconds while the seat holds
  * it queued behind a running turn. Every Viewer boot sweeps the store and
- * attempts each owed decision, so a decision saved during a deploy or a restart
- * goes out once the Viewer is back. Attempts are idempotent by the decision's
+ * attempts each owed decision within its persisted attempt and age budgets.
+ * A decision saved during a deploy resumes once the Viewer is back. Exhausted
+ * deliveries stay saved and join the seat wake agenda. Attempts are idempotent by the decision's
  * message key and serialized by the round's decision lock.
  *
  * The state lives on `globalThis`: the route bundle that records a decision
@@ -33,6 +34,7 @@ export const PROTOTYPE_DELIVERY_SEAT_POLL_MS = 10_000;
 /** The clock, and the full rescan that catches a decision another process recorded. */
 const TICK_MS = 1_000;
 const RESCAN_MS = 60_000;
+const EXHAUSTED_RECEIPT_RECHECK_MS = 60_000;
 
 interface Running { again: boolean; done: Promise<void> }
 interface WorkerState {
@@ -53,6 +55,7 @@ const productionPorts = (): PrototypeDeliveryPorts => ({ delivery: prototypeDeli
 /** How long after an attempt the next one is due, from what the attempt left. */
 export function prototypeDeliveryDelay(delivery: PrototypeDecision["delivery"]): number {
   if (delivery.state === "sent") return Number.POSITIVE_INFINITY;
+  if (delivery.exhaustedAt) return EXHAUSTED_RECEIPT_RECHECK_MS;
   if (!delivery.conversationId) return PROTOTYPE_DELIVERY_SEAT_POLL_MS;
   const failures = delivery.failures ?? 0;
   if (!failures) return PROTOTYPE_DELIVERY_IN_FLIGHT_MS;

@@ -13,13 +13,21 @@ export const lockRowOptions = {
 
 if (import.meta.main) {
   const [mode, filename, ready, go, argument] = process.argv.slice(2);
-  if (mode === "hold" || mode === "exclusive") {
+  if (mode === "hold" || mode === "exclusive" || mode === "hold-until-release") {
     const db = new Database(filename!);
     db.exec("PRAGMA busy_timeout = 0");
     if (mode === "exclusive") db.exec("PRAGMA locking_mode = EXCLUSIVE");
     db.exec("BEGIN EXCLUSIVE");
     fs.writeFileSync(ready!, "ready");
-    try { await Bun.sleep(Number(argument)); }
+    try {
+      if (mode === "hold-until-release") {
+        const deadline = performance.now() + Number(argument);
+        while (!fs.existsSync(go!)) {
+          if (performance.now() >= deadline) throw new Error("lock holder release watchdog expired");
+          await Bun.sleep(5);
+        }
+      } else await Bun.sleep(Number(argument));
+    }
     finally { db.exec("ROLLBACK"); db.close(); }
   } else if (mode === "writer") {
     const store = new SqliteStateCollection(filename!, lockRowOptions);

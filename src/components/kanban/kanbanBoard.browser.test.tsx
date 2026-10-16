@@ -32961,3 +32961,73 @@ describe("full autonomy", () => {
     } finally { await browser.close(); server.stop(); }
   }, 240_000);
 });
+
+
+describe("saved decision delivery", () => {
+  browserTest("C: the Decisions badge and panel retain saved answers until delivery", async () => {
+    const out = path.resolve(".artifacts/answer-delivery/frames"); fs.mkdirSync(out, { recursive: true });
+    const served = await serveEvidenceFixture(out);
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"], env: { ...process.env, TMPDIR: process.env.LLV_CHROME_TMPDIR ?? process.env.TMPDIR } });
+    const readings: unknown[] = [];
+    try {
+      for (const width of [390, 1440]) for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) {
+        const phone = width === 390;
+        const { context, page, pageErrors } = await openFixture(browser, `${served.base}?decisions=undelivered`, { width, height: phone ? 844 : 900 }, scheme, lang, "reduce", phone);
+        try {
+          if (phone) { await page.locator("[data-mobile2-seat-open]").click(); await page.locator("[data-decision-strip]").click(); }
+          const scope = phone ? '[data-mobile2-sheet="decisions"]' : '[data-decision-column="decisions"]';
+          const column = page.locator(scope);
+          await column.locator('[data-decision-list="3"]').waitFor();
+          expect(await column.locator("[data-decision-tab-count]").textContent()).toBe("3");
+          expect(await column.locator("[data-decision-list-empty]").count()).toBe(0);
+          const ids = await column.locator("[data-decision-review], [data-decision-row]").evaluateAll(nodes => nodes.map(n => n.getAttribute("data-decision-review") ?? n.getAttribute("data-decision-row")));
+          const snapshot = await page.evaluate(async () => (await fetch("/api/projects/decisions?project=atlas")).json());
+          const frames: string[] = [];
+          for (const [index, id] of ids.entries()) {
+            const folded = column.locator(`[data-decision-row="${id}"]`);
+            if (await folded.count()) await folded.click();
+            const record = column.locator(`[data-decision-card="answered"][data-decision-review="${id}"]`);
+            await record.waitFor();
+            expect(await record.locator("[data-decision-send]").count()).toBe(0);
+            const retry = record.locator("[data-decision-retry]"); await retry.scrollIntoViewIfNeeded();
+            expect(await retry.isEnabled()).toBe(true);
+            expect(await record.textContent()).toContain(lang === "uk" ? "її вже збережено" : "it is already saved");
+            expect(await record.evaluate(n => n.scrollWidth - n.clientWidth)).toBeLessThanOrEqual(1);
+            const file = `${lang}-${scheme}-${width}-${index}.png`;
+            await page.screenshot({ path: path.join(out, file) }); frames.push(file);
+          }
+          if (phone) {
+            await column.locator("[data-mobile2-close]").click();
+            const record = page.locator('[data-decision-card="answered"]').first();
+            await record.scrollIntoViewIfNeeded();
+            expect(await record.locator("[data-decision-record-title]").textContent()).toBeTruthy();
+            const file = `${lang}-${scheme}-${width}-feed.png`;
+            await page.screenshot({ path: path.join(out, file) }); frames.push(file);
+            await page.locator("[data-decision-strip]").click();
+          }
+          // Explicit retries keep the answers; the destination receipt clears each obligation.
+          for (const id of ids) {
+            const folded = column.locator(`[data-decision-row="${id}"]`);
+            if (await folded.count()) await folded.click();
+            await column.locator(`[data-decision-review="${id}"] [data-decision-retry]`).click();
+          }
+          await column.locator("[data-decision-list-empty]").waitFor();
+          await column.locator("[data-decision-tab-count]").waitFor({ state: "hidden" });
+          expect(await column.locator("[data-decision-tab-count]").count()).toBe(0);
+          const posts = await page.evaluate(() => (window as unknown as { decisionPosts: unknown[] }).decisionPosts);
+          expect(posts).toHaveLength(3);
+          expect(posts.every(body => (body as { retry?: boolean }).retry === true)).toBe(true);
+          for (const previous of snapshot.decisions) {
+            const actual = await page.evaluate(async ({ project, reviewId }) => (await fetch(`/api/projects/decisions?project=${encodeURIComponent(project)}&review=${reviewId}`)).json(), { project: snapshot.project, reviewId: previous.id });
+            expect(actual.round.decision).toMatchObject({ chosen: previous.decision.chosen, answers: previous.decision.answers, comment: previous.decision.comment, at: previous.decision.at });
+            expect(actual.round.decision.delivery.state).toBe("sent");
+          }
+          expect(pageErrors).toEqual([]);
+          readings.push({ width, lang, scheme, count: 3, savedRecords: ids.length, afterRetry: 0, frames });
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/answer-delivery", { recursive: true });
+      fs.writeFileSync("evidence/answer-delivery/panel.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", readings }, null, 2) + "\n");
+    } finally { await browser.close(); served.stop(); }
+  }, 180_000);
+});

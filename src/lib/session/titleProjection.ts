@@ -239,6 +239,22 @@ export function overlaySessionTitles(
   for (const entry of entries) project(entry);
 }
 
+/** The inventory controller keeps one title projection until its input cursor
+    changes. A new registry owner evicts it; title overrides are read afresh. */
+const controllerTitleState = process as typeof process & {
+  __llvControllerTitleProjection?: { registry: Registry; projection: RegistryProjection | null };
+};
+
+export function overlayControllerSessionTitles(entries: FileEntry[], reuseProjection: boolean): void {
+  const registry = agentRegistry();
+  const cached = controllerTitleState.__llvControllerTitleProjection;
+  const projection = reuseProjection && cached?.registry === registry && cached.projection !== null
+    ? cached.projection : registryProjection(registry);
+  controllerTitleState.__llvControllerTitleProjection = { registry, projection };
+  const project = sessionTitleProjector(true, projection);
+  for (const entry of entries) project(entry);
+}
+
 /** Snapshot-specific title overlay over a completed scanner projection.
  *
  * The durable title store is capped at 2,000 records. UUID/path records apply
@@ -286,6 +302,16 @@ function sessionTitleProjector(
   const conversationByPath = projection?.conversationByPath ?? new Map<string, ViewerConversationId>();
   const aliasesByCanonical = projection?.aliasesByCanonical ?? new Map<string, string[]>();
   const ownedPathsByConversation = projection?.ownedPathsByConversation ?? new Map<string, string[]>();
+  // Resolve each cwd once per overlay, against one current state key. Project
+  // aliases can change independently of the registry snapshot.
+  let resolutionState: string | undefined;
+  const cwdInfos = new Map<string, ReturnType<typeof projectInfoFromCwd>>();
+  const cwdInfo = (cwd: string | null | undefined): ReturnType<typeof projectInfoFromCwd> => {
+    const key = cwd?.trim();
+    if (!key) return null;
+    if (!cwdInfos.has(key)) cwdInfos.set(key, projectInfoFromCwd(key, resolutionState ??= projectResolutionStateKey()));
+    return cwdInfos.get(key) ?? null;
+  };
 
   return (entry) => {
     if (entry.engine !== "claude" && entry.engine !== "codex") return;
@@ -305,6 +331,7 @@ function sessionTitleProjector(
         entry.project = resolveProjectAttribution({
           projectOwnership: conversation?.projectOwnership,
           cwd: latest.launchProfile.cwd,
+          cwdInfo: cwdInfo(latest.launchProfile.cwd),
           launchProfileProject: latest.launchProfile.project,
           fallbackProject: entry.project,
         }).project ?? entry.project;

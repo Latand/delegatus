@@ -1,0 +1,285 @@
+{
+  "driver": "src/components/kanban/kanbanBoard.browser.test.tsx",
+  "readings": [
+    {
+      "width": 390,
+      "lang": "en",
+      "scheme": "light",
+      "count": 3,
+      "savedRecords": 3,
+      "afterRetry": 0,
+      "frames": [
+        "en-light-390-0.png",
+        "en-light-390-1.png",
+        "en-light-390-2.png",
+        "en-light-390-feed.png"
+      ]
+    },
+    {
+      "width": 390,
+      "lang": "en",
+      "scheme": "dark",
+      "count": 3,
+      "savedRecords": 3,
+      "afterRetry": 0,
+      "frames": [
+        "en-dark-390-0.png",
+        "en-dark-390-1.png",
+        "en-dark-390-2.png",
+        "en-dark-390-feed.png"
+      ]
+    },
+    {
+      "width": 390,
+      "lang": "uk",
+      "scheme": "light",
+      "count": 3,
+      "savedRecords": 3,
+      "afterRetry": 0,
+      "frames": [
+        "uk-light-390-0.png",
+        "uk-light-390-1.png",
+        "uk-light-390-2.png",
+        "uk-light-390-feed.png"
+      ]
+    },
+    {
+      "width": 390,
+      "lang": "uk",
+      "scheme": "dark",
+      "count": 3,
+      "savedRecords": 3,
+      "afterRetry": 0,
+      "frames": [
+        "uk-dark-390-0.png",
+        "uk-dark-390-1.png",
+        "uk-dark-390-2.png",
+        "uk-dark-390-feed.png"
+      ]
+    },
+    {
+      "width": 1440,
+      "lang": "en",
+      "scheme": "light",
+      "count": 3,
+      "savedRecords": 3,
+      "afterRetry": 0,
+      "frames": [
+        "en-light-1440-0.png",
+        "en-light-1440-1.png",
+        "en-light-1440-2.png"
+      ]
+    },
+    {
+      "width": 1440,
+      "lang": "en",
+      "scheme": "dark",
+      "count": 3,
+      "savedRecords": 3,
+      "afterRetry": 0,
+      "frames": [
+        "en-dark-1440-0.png",
+        "en-dark-1440-1.png",
+        "en-dark-1440-2.png"
+      ]
+    },
+    {
+      "width": 1440,
+      "lang": "uk",
+      "scheme": "light",
+      "count": 3,
+      "savedRecords": 3,
+      "afterRetry": 0,
+      "frames": [
+        "uk-light-1440-0.png",
+        "uk-light-1440-1.png",
+        "uk-light-1440-2.png"
+      ]
+    },
+    {
+      "width": 1440,
+      "lang": "uk",
+      "scheme": "dark",
+      "count": 3,
+      "savedRecords": 3,
+      "afterRetry": 0,
+      "frames": [
+        "uk-dark-1440-0.png",
+        "uk-dark-1440-1.png",
+        "uk-dark-1440-2.png"
+      ]
+    }
+  ],
+  "sourceSha256": "288b6a12d2360179b3db8b48dea2fdbdd0e2ea3c9499b374ae6102aefa7b3886",
+  "frames": [
+    {
+      "file": "en-light-390-0.png",
+      "sha256": "32cb9ff71f590b7c37a38aea24f6c08f652848b94832fff038ac43e7477ef196",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "file": "en-light-390-1.png",
+      "sha256": "a6d325c9556484150cc1b26e5270d3baa8680b57f73bd21a845b3da18da7bc92",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "file": "en-light-390-2.png",
+      "sha256": "927b53f3d67a42706fbbe74cf7922f589d188b7b876cb78f41d3f4ba37daaca0",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "file": "en-light-390-feed.png",
+      "sha256": "80efe19474b1519a3cf89f6834933ea2e0447e83f1067b1c60c3bd1fdcd59fbe",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "file": "en-dark-390-0.png",
+      "sha256": "9f75fee9e85fe29f35dc501c1357d0f7b67486b39d336f71e83fdb9a30b861c9",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "file": "en-dark-390-1.png",
+      "sha256": "d0b594ada81714a9eb17276a089348fb22ea3ccd462b3500c98429543846c946",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "file": "en-dark-390-2.png",
+      "sha256": "5e613a3f553c687d664b888d577006e6add9f627f8cc33642ee8a150922fbd36",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "file": "en-dark-390-feed.png",
+      "sha256": "f19ff3649ac662c8a29e05a6df95470f3337cab91081280153031f6a51871510",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "file": "uk-light-390-0.png",
+      "sha256": "fa5b2cfdbc46edb677737c017a82d3e4f262a6b797c339110a4988a542bae125",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "file": "uk-light-390-1.png",
+      "sha256": "eba69e8175d549c26a62c27c821a64766a31b117a3269a4daa1668f211153842",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "file": "uk-light-390-2.png",
+      "sha256": "9e5bb6e362241d388c8878f8ef01f1b1978a03996ed598e4905b86e93949f9d8",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "file": "uk-light-390-feed.png",
+      "sha256": "61c3811b11fe28d5366a578dcfc225342747a017ea9f7df4eb0028cfa1cf639e",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "file": "uk-dark-390-0.png",
+      "sha256": "0bf74da1b7e44e640e02de4140cacc6bb868892611f87271d53cf16da9190683",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "file": "uk-dark-390-1.png",
+      "sha256": "1703977cc43d8f31086fe5f0fc1ba2815b5382a8542ff32d066ec897fb6e114d",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "file": "uk-dark-390-2.png",
+      "sha256": "4d3487ee2baf6c48f17ad01853a4b9dfe5a6cf411589bfde8da1fc4adbbd296b",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "file": "uk-dark-390-feed.png",
+      "sha256": "9848a0abf0ee0daad91d47dc86b1363208d9ec7f1fde1ed9c75490d115c84e48",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "file": "en-light-1440-0.png",
+      "sha256": "136dbd5ae07f44c4ec04ae5c6f5e6f1cd240c6b2be27edca4b7a723295c0094a",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "file": "en-light-1440-1.png",
+      "sha256": "63c44d80f6eb4860535132b2636cdf8bfacaaecce138562add2dda839c42dd74",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "file": "en-light-1440-2.png",
+      "sha256": "1722470bd876bd83bbe6b900e98073382d6bcdf23a4061bff65fae06d5901f77",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "file": "en-dark-1440-0.png",
+      "sha256": "d1cc2153ba3017e3fabc35f2a26ea7d623e34f7e18de7e6ec29cba4e111f9856",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "file": "en-dark-1440-1.png",
+      "sha256": "7e7cec6fe3485031104f12793a9305a4d7f880ac86c4902e3beffebd67d22c70",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "file": "en-dark-1440-2.png",
+      "sha256": "589f93d84f6f71d2d8ad11a542fd42fccae758b1315fef5cd014f94fce0a80b2",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "file": "uk-light-1440-0.png",
+      "sha256": "b02a571cb3641bbe2f8725a01bc579dedbff53dbfacf1a817cc7f30de6d33bc1",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "file": "uk-light-1440-1.png",
+      "sha256": "f23dd8b3fcbd4025a870e1f5c0d36111035da21e6e193770554d68e59a3f3404",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "file": "uk-light-1440-2.png",
+      "sha256": "d32aa051837e483b8b0423052d2e012d8d0b5c61b6dea00ab30dcf18502dc263",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "file": "uk-dark-1440-0.png",
+      "sha256": "e0ce71d800c007161035fc2ee12d7ee5b5daa3a1dcf87205bf9d203d344a391f",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "file": "uk-dark-1440-1.png",
+      "sha256": "274df5c1ecc095d202f26cc23bc9ad0f2b1832fc6f95231c3fdbd19614e67308",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "file": "uk-dark-1440-2.png",
+      "sha256": "b7e6ce032c76483adac53db89b091095f21f8859baf68d373debdec7f96fdf21",
+      "width": 1440,
+      "height": 900
+    }
+  ],
+  "visualInspection": "All 24 panel frames and four phone feed frames were opened and inspected. Saved answers, delivery states, full titles and retry controls are visible; the badge and panel clear together after fixture receipts."
+}

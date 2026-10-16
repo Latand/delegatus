@@ -1,3 +1,4 @@
+import { hasUndeliveredDecision } from "./decisionCompletion";
 import { withTaskCompletion } from "./completion";
 import { HANDOFF_DIGEST_TITLE_PREFIX, isProbePrompt } from "./internalConversations";
 import type { BoardTask } from "./types";
@@ -30,7 +31,7 @@ export type GhostKind =
   | "conversation";
 
 /** Why an open, unnamed task is kept. */
-export type GhostKeepReason = "pipeline" | "operator-edit" | "container" | "active-seat" | "still-running";
+export type GhostKeepReason = "pipeline" | "operator-edit" | "container" | "active-seat" | "still-running" | "undelivered-decision";
 
 export interface GhostTranscript {
   /** Last write, epoch ms; null when the file does not exist. */
@@ -114,6 +115,7 @@ export function planGhostSettlement(input: GhostSettlementInput): GhostSettlemen
     if (task.status === "done" || !task.origin || task.origin.refinement !== "pending") continue;
     const kind = ghostKind(task);
     const decide = (reason: GhostKeepReason | null) => decisions.push({ taskId: task.id, project: task.project, kind, settle: reason === null, reason });
+    if (hasUndeliveredDecision(task)) { decide("undelivered-decision"); continue; }
     /* The leaked fixture's placeholders never had a conversation at all. */
     if (kind === "fixture" && !input.pipelineTaskIds.has(task.id)) {
       decide(null);
