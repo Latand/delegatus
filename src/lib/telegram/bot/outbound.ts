@@ -49,6 +49,7 @@ function outboundAttempt<T>(filename: string, write: boolean, work: (db: Databas
         db.exec("CREATE TABLE IF NOT EXISTS relay_publication_cooldowns (key TEXT PRIMARY KEY, until_ms INTEGER NOT NULL)");
         db.exec("CREATE INDEX IF NOT EXISTS relay_outbound_expiry ON relay_outbound(date, key) WHERE state IN ('pending', 'unrouted', 'forwarding')");
         db.exec("CREATE INDEX IF NOT EXISTS relay_outbound_retention ON relay_outbound(date, key) WHERE state <> 'pending'");
+        db.exec("CREATE INDEX IF NOT EXISTS relay_outbound_retention_eligible ON relay_outbound(date, key) WHERE state NOT IN ('pending', 'forwarding')");
         db.exec("CREATE INDEX IF NOT EXISTS relay_outbound_due ON relay_outbound(due, key) WHERE state = 'pending'");
         db.exec("CREATE INDEX IF NOT EXISTS relay_outbound_questions ON relay_outbound(bot_id, chat_id, topic_id, date DESC, message_id DESC) WHERE is_question = 1");
         db.exec("CREATE INDEX IF NOT EXISTS relay_outbound_group ON relay_outbound(bot_id, chat_id, topic_id, send_key, date DESC, message_id DESC)");
@@ -64,7 +65,7 @@ function outboundAttempt<T>(filename: string, write: boolean, work: (db: Databas
     });
 }
 function pruneOutbound(db: Database, before: number): void {
-  const old = db.query<{ key: string }, [number]>("SELECT key FROM relay_outbound WHERE state <> 'pending' AND state <> 'forwarding' AND date < ? ORDER BY date, key LIMIT 64").all(before);
+  const old = db.query<{ key: string }, [number]>("SELECT key FROM relay_outbound WHERE state NOT IN ('pending', 'forwarding') AND date < ? ORDER BY date, key LIMIT 64").all(before);
   for (const row of old) {
     db.query("DELETE FROM relay_outbound_handoffs WHERE key=?").run(row.key);
     db.query("DELETE FROM relay_publication_results WHERE key=?").run(row.key);
@@ -78,6 +79,7 @@ export const isOutboundQuestion = (message: Pick<OutboundMessage, "origin" | "te
 
 export async function recordOutbound(filename: string, message: OutboundMessage): Promise<void> {
   await outboundState(filename, true, db => {
+    expireForwardingOutbound(db, message.date * 1000);
     const key = outboundKey(message);
     const old = db.query<{ value_json: string }, [string]>("SELECT value_json FROM relay_outbound WHERE key=?").get(key);
     if (old && old.value_json !== JSON.stringify(message)) throw new Error("Telegram outbound receipt conflict");
@@ -133,15 +135,18 @@ export async function reserveOutboundAttempt(filename: string, row: OutboundRow,
 }
 
 /** Indexed, finite housekeeping, including rows that never found a route. */
-export function expireOutbound(db: Database, now: number): void {
+function expireOutboundStates(db: Database, now: number, includePending: boolean): void {
+  const states = includePending ? "('pending', 'unrouted', 'forwarding')" : "('unrouted', 'forwarding')";
   const expired = db.query<{ key: string }, [number]>(`SELECT key FROM relay_outbound
-    WHERE state IN ('pending', 'unrouted', 'forwarding') AND date<=? ORDER BY date, key LIMIT 16`)
+    WHERE state IN ${states} AND date<=? ORDER BY date, key LIMIT 16`)
     .all(Math.floor(now / 1000) - 86400);
   for (const row of expired) {
     db.query("UPDATE relay_outbound SET state='terminal' WHERE key=?").run(row.key);
     db.query("INSERT INTO relay_publication_results VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET reason=excluded.reason").run(row.key, "expired");
   }
 }
+export function expireOutbound(db: Database, now: number): void { expireOutboundStates(db, now, true); }
+export function expireForwardingOutbound(db: Database, now: number): void { expireOutboundStates(db, now, false); }
 
 /** Only a confirmed publication reference may supply the scope. An exact
  * parent reserves its send group. At most 32 receipts and 64 KiB of text

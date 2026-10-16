@@ -115,6 +115,52 @@ test("published retention is bounded and pending receipts survive expiry; observ
   } finally { f.cleanup(); }
 });
 
+test("disconnected forwarding receipts expire on a later send and retention skips forwarding history", async () => {
+  const f = fixture();
+  const now = Math.floor(Date.now() / 1000);
+  const disconnected = { ...message, target: null, messageId: 700, date: now - 2 * 86400 };
+  try {
+    await recordOutbound(f.filename, disconnected);
+    const db = new Database(f.filename);
+    try {
+      db.query("UPDATE relay_outbound SET state='forwarding', attempts=1 WHERE message_id=?").run(disconnected.messageId);
+    } finally { db.close(); }
+
+    await recordOutbound(f.filename, { ...message, messageId: 701, date: now });
+    const afterExpiry = new Database(f.filename, { readonly: true });
+    try {
+      expect(afterExpiry.query("SELECT state, attempts FROM relay_outbound WHERE message_id=?").get(disconnected.messageId))
+        .toEqual({ state: "terminal", attempts: 1 });
+      expect(afterExpiry.query("SELECT reason FROM relay_publication_results WHERE key=?").get(JSON.stringify([disconnected.botId, disconnected.chatId, disconnected.messageId])))
+        .toEqual({ reason: "expired" });
+    } finally { afterExpiry.close(); }
+
+    const age = new Database(f.filename);
+    try { age.query("UPDATE relay_outbound SET date=? WHERE message_id=?").run(now - 31 * 86400 - 1, disconnected.messageId); }
+    finally { age.close(); }
+    await recordOutbound(f.filename, { ...message, messageId: 702, date: now + 1 });
+    const afterRetention = new Database(f.filename, { readonly: true });
+    try { expect(afterRetention.query("SELECT 1 FROM relay_outbound WHERE message_id=?").get(disconnected.messageId)).toBeNull(); }
+    finally { afterRetention.close(); }
+
+    const history = new Database(f.filename);
+    try {
+      history.exec(`WITH RECURSIVE seq(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM seq WHERE n<100000)
+        INSERT INTO relay_outbound (key, bot_id, chat_id, topic_id, date, message_id, value_json, is_question, send_key, state, due, attempts)
+        SELECT 'old-forward-'||n, '42', '41', 7, ${now - 31 * 86400}, 1000+n, '{}', 0, 'old', 'forwarding', 0, 1 FROM seq`);
+      const plan = history.query<{ detail: string }, [number]>(`EXPLAIN QUERY PLAN SELECT key FROM relay_outbound
+        WHERE state NOT IN ('pending', 'forwarding') AND date<? ORDER BY date, key LIMIT 64`).all(now - 30 * 86400);
+      expect(plan.map(row => row.detail).join(" ")).toContain("relay_outbound_retention_eligible");
+    } finally { history.close(); }
+    await recordOutbound(f.filename, { ...message, messageId: 703, date: now + 2 });
+    const retained = new Database(f.filename, { readonly: true });
+    try {
+      expect(retained.query("SELECT count(*) AS count FROM relay_outbound WHERE state='forwarding' AND key LIKE 'old-forward-%'").get())
+        .toEqual({ count: 99984 });
+    } finally { retained.close(); }
+  } finally { f.cleanup(); }
+});
+
 test.each(["unpaired", "target-changed", "owner-changed", "chat-revoked", "revoked-after-await"])("publication refuses %s without discarding custody", async kind => {
   const f = fixture(); let calls = 0; let current = message.target; let allowed = true;
   const worker = new OutboundPublication(f.filename, { target: () => current, allowed: () => allowed,

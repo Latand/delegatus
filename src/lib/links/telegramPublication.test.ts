@@ -134,10 +134,41 @@ test("the wire rejects owner authority, extra fields, oversized batches and cred
 test("a bounded page of ineligible receipts cannot starve a later matching bot", async () => {
   const f = fixture();
   try {
-    for (let i = 1; i <= 16; i++) await recordOutbound(f.ports.filename, { ...message, botId: "41", messageId: i });
-    await recordOutbound(f.ports.filename, message);
+    const recent = { ...message, date: Math.floor(Date.now() / 1000) };
+    f.ports.now = () => (recent.date + 5) * 1000;
+    for (let i = 1; i <= 16; i++) await recordOutbound(f.ports.filename, { ...recent, botId: "41", messageId: i });
+    await recordOutbound(f.ports.filename, recent);
     expect((await exchangeTelegramPublications(link, { v: 1, destination }, f.ports)).out).toBeUndefined();
     expect((await exchangeTelegramPublications(link, { v: 1, destination }, f.ports)).out?.[0]?.receipt.botId).toBe("42");
+  } finally { f.cleanup(); }
+});
+
+test("another linked peer cannot postpone a receipt reserved by the eligible peer", async () => {
+  const f = fixture();
+  const peerA: LinkedPeer = { ...link, key: "peer:a", id: "a", install: "install-a" };
+  const peerB: LinkedPeer = { ...link, key: "peer:b", id: "b", install: "install-b" };
+  const destinationFor = (peer: LinkedPeer) => {
+    const connectionId = `connection-${peer.id}`;
+    return { ...route, connectionId, proof: telegramDestinationProof(route, connectionId, "fixture shared bot") };
+  };
+  const destinationA = destinationFor(peerA), destinationB = destinationFor(peerB);
+  let now = message.date * 1000 + 5000;
+  const portsFor = () => ({ ...f.ports, now: () => now,
+    connectionId: (candidate: LinkedPeer) => candidate.id === "a" ? "connection-a" : "connection-b",
+    current: (candidate: LinkedPeer) => candidate });
+  try {
+    await recordOutbound(f.ports.filename, message);
+    const a = portsFor();
+    const first = await exchangeTelegramPublications(peerA, { v: 1, destination: destinationA }, a);
+    expect(first.out?.[0]?.attempts).toBe(1);
+    await exchangeTelegramPublications(peerA, { v: 1, ack: [{ key: first.out![0]!.key, attempts: 1,
+      state: "retry", reason: "unconfirmed" }] }, a);
+    now += 1001;
+
+    const b = await exchangeTelegramPublications(peerB, { v: 1, destination: destinationB }, portsFor());
+    expect(b.out).toBeUndefined();
+    const retry = await exchangeTelegramPublications(peerA, { v: 1, destination: destinationA }, a);
+    expect(retry.out?.[0]?.attempts).toBe(2);
   } finally { f.cleanup(); }
 });
 

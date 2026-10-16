@@ -114,10 +114,11 @@ async function outgoing(link: LinkedPeer, remote: Destination | undefined, ports
     const freshProof = ports.destinationProof(remote, connectionId);
     if (!freshProof || !safeEqual(remote.proof, freshProof)) return [];
     expireOutbound(db, ports.now());
-    const rows = db.query<{ key: string; value_json: string | null; attempts: number; link: string | null; destination: string | null }, [number]>(`
+    const rows = db.query<{ key: string; value_json: string | null; attempts: number; link: string | null; destination: string | null }, [number, string]>(`
       SELECT o.key, CASE WHEN length(CAST(o.value_json AS BLOB))<=131072 THEN o.value_json ELSE NULL END AS value_json, o.attempts, h.link, h.destination FROM relay_outbound o
       LEFT JOIN relay_outbound_handoffs h ON h.key=o.key
-      WHERE o.state IN ('unrouted', 'forwarding') AND o.due<=? ORDER BY o.due, o.key LIMIT 16`).all(ports.now());
+      WHERE o.state IN ('unrouted', 'forwarding') AND o.due<=?
+        AND (h.link IS NULL OR h.link=?) ORDER BY o.due, o.key LIMIT 16`).all(ports.now(), connection(link));
     for (const row of rows) {
       if (row.attempts >= 64) {
         db.query("UPDATE relay_outbound SET state='terminal' WHERE key=?").run(row.key);
