@@ -127,3 +127,37 @@ TypeScript, changed-file ESLint, the publication privacy gate and the required
 hosted PR checks. Evidence records must identify the source revision/digests,
 the comparison main, the command and each observed result. No live state or
 runtime-directory test sweep is involved.
+
+## Observed results
+
+The new regression files were run unchanged on comparison main
+`9d3e9b3df` and implementation `cfd55fc824`. The proof file has 15 failing
+cases and one passing legacy-local control on main; all 16 pass on the
+implementation. The PR file has 21 failing cases on main and all 21 pass
+on the implementation.
+
+The explicit-file runs also pass 101 settlement cases, 171 pipeline Git
+cases, 129 native history-guard cases, nine performance-span cases and all
+24 native publication cases. The ports file passes 139 cases and retains
+two managed-admission failures reproduced on main. The full publication
+file reaches its five-minute deadline on both revisions. Before that cutoff,
+main records five per-test timeouts and head records no failed case. The
+24 native cases finish separately on both revisions.
+
+TypeScript, changed-file ESLint and the committed-fingerprint publication
+privacy gate pass. ESLint reports six existing unused-variable warnings
+and no errors. The machine-readable record is
+`evidence/stage-push-settlement.json`; individual cases precede each file's
+totals and source digests identify the implementation that was exercised.
+
+The complete local pre-push hook passes privacy, types and lint, then refuses
+a provider-budget file timeout in its parallel branch sample. It identifies
+six other failures as pre-existing, including the matched full publication
+file timeout. The provider-budget control subsequently runs alone with all
+74 cases passing on each revision (main 226.51 s, head 224.17 s). The hook's
+refusal and these controls are both retained in the evidence. The hook escape
+is used for the dependency-free worktree after equivalent isolated checks;
+the checkout with frozen dependencies supplies the checks.
+
+The Linux backend rehearsal and the 17 explicit platform test files selected
+by the repository pre-push plan pass on the merged implementation.
