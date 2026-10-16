@@ -287,14 +287,10 @@ function collectionMarkersMatch(db: Database, seeds: readonly StateCollectionSee
 
 export function stateCollectionsInitialized(filename: string, seeds: readonly StateCollectionSeed<unknown>[]): boolean {
   if (!fs.existsSync(filename)) return false;
-  let db: Database | null = null;
   try {
-    db = connectReadonlyDatabase(filename);
-    return collectionMarkersMatch(db, seeds);
+    return collectionMarkersMatch(sharedStateReadonlyDatabase(filename), seeds);
   } catch {
     return false;
-  } finally {
-    db?.close();
   }
 }
 
@@ -710,14 +706,11 @@ export function readStateImport(filename: string, collection: string): StateImpo
 
 function readStateImportAttempt(filename: string, collection: string): StateImportRecord | null {
   if (!fs.existsSync(filename)) return null;
-  const db = connectReadonlyDatabase(filename);
   try {
-    return selectStateImport(db, collection);
+    return selectStateImport(sharedStateReadonlyDatabase(filename), collection);
   } catch (error) {
     if (/no such table/i.test(error instanceof Error ? error.message : String(error))) return null;
     throw error;
-  } finally {
-    db.close();
   }
 }
 
@@ -1002,7 +995,7 @@ export function readStateCollectionsRows(
 ): Map<string, unknown[] | null> {
   const result = new Map<string, unknown[] | null>(collections.map((collection) => [collection, null]));
   if (!fs.existsSync(filename) || collections.length === 0) return result;
-  const db = connectReadonlyDatabase(filename);
+  const db = sharedStateReadonlyDatabase(filename);
   try {
     const placeholders = collections.map(() => "?").join(", ");
     const rows = db.query<{
@@ -1029,8 +1022,6 @@ export function readStateCollectionsRows(
   } catch (error) {
     if (/no such table/i.test(error instanceof Error ? error.message : String(error))) return result;
     throw error;
-  } finally {
-    db.close();
   }
 }
 
@@ -1114,6 +1105,22 @@ export function resetStateReadonlyConnectionCountForTests(): void {
 
 export function stateReadonlyConnectionCountForTests(): number {
   return readonlyConnectionCount;
+}
+
+type StateReadonlyReader = { filename: string; db: Database };
+const stateReadonlyReaderOwner = globalThis as typeof globalThis & { __llvStateReadonlyReader?: StateReadonlyReader };
+/** Shared metadata and controller statements finish synchronously. No transaction or iterator is
+ * held over a yield, so all compiled consumers can share this one connection.
+ * Switching directories closes the previous handle; replacement is guarded by
+ * openCurrentDatabase. Row versions remain the authority across awaits. */
+function sharedStateReadonlyDatabase(filename: string): Database {
+  const current = stateReadonlyReaderOwner.__llvStateReadonlyReader;
+  if (current?.filename === filename) return current.db;
+  current?.db.close();
+  stateReadonlyReaderOwner.__llvStateReadonlyReader = undefined;
+  const db = connectReadonlyDatabase(filename);
+  stateReadonlyReaderOwner.__llvStateReadonlyReader = { filename, db };
+  return db;
 }
 
 export class SqliteStateCollection<T> {
@@ -1231,54 +1238,54 @@ export class SqliteStateCollection<T> {
       reading payloads or constructing a collection census. */
   pipelineControllerRowOrder(): number {
     if (this.options.collection !== "pipelines") throw new Error("pipeline selection requires the pipeline collection");
-    return this.readDb.query<{ last: number }, []>(
+    return sharedStateReadonlyDatabase(this.filename).query<{ last: number }, []>(
       "SELECT COALESCE(MAX(row_order), -1) AS last FROM state_rows WHERE collection = 'pipelines'",
     ).get()!.last;
   }
 
   pipelineControllerVersion(key: string): string {
-    const row = this.readDb.query<{ row_revision: number; generation: number | null }, [string]>(`
+    const row = sharedStateReadonlyDatabase(this.filename).query<{ row_revision: number; generation: number | null }, [string]>(`
       SELECT r.row_revision,w.generation FROM state_rows r LEFT JOIN pipeline_tick_work w ON w.row_key=r.row_key
       WHERE r.collection='pipelines' AND r.row_key=?`).get(key);
     return `${databaseFileIdentity(this.filename)}:${row?.row_revision ?? "missing"}:${row?.generation ?? "missing"}`;
   }
 
   pipelineControllerCandidate(key: string): T | null {
-    const row = this.readDb.query<{ row_revision: number }, [string, string]>(
+    const row = sharedStateReadonlyDatabase(this.filename).query<{ row_revision: number }, [string, string]>(
       "SELECT row_revision FROM state_rows WHERE collection=? AND row_key=?").get(this.options.collection, key);
     return row ? this.controllerRow(key, row.row_revision) : null;
   }
 
   pipelineTickWork(now: number, excluded: readonly string[], limit = 4): PipelineTickWork[] {
-    return selectPipelineTickWork(this.readDb, now, excluded, limit);
+    return selectPipelineTickWork(sharedStateReadonlyDatabase(this.filename), now, excluded, limit);
   }
 
   pipelineAttemptWindow(key: string, after: number, limit: number): PipelineAttemptReference[] {
     if (!Number.isInteger(limit) || limit < 1 || limit > 16) throw new Error("invalid controller attempt budget");
-    const tail = this.readDb.query<PipelineAttemptReference, [string, number, number]>(`SELECT * FROM pipeline_attempt_refs
+    const tail = sharedStateReadonlyDatabase(this.filename).query<PipelineAttemptReference, [string, number, number]>(`SELECT * FROM pipeline_attempt_refs
       WHERE row_key=? AND position>? ORDER BY position LIMIT ?`).all(key, after, limit);
-    if (tail.length < limit) tail.push(...this.readDb.query<PipelineAttemptReference, [string, number, number]>(`SELECT * FROM pipeline_attempt_refs
+    if (tail.length < limit) tail.push(...sharedStateReadonlyDatabase(this.filename).query<PipelineAttemptReference, [string, number, number]>(`SELECT * FROM pipeline_attempt_refs
       WHERE row_key=? AND position<=? ORDER BY position LIMIT ?`).all(key, after, limit-tail.length));
     return tail;
   }
 
   pipelineOtherTerminalHosts(key: string, selected: readonly number[]): boolean {
-    return Boolean(this.readDb.query(`SELECT 1 FROM pipeline_attempt_refs WHERE row_key=? AND terminal=1 AND firstHost=1
+    return Boolean(sharedStateReadonlyDatabase(this.filename).query(`SELECT 1 FROM pipeline_attempt_refs WHERE row_key=? AND terminal=1 AND firstHost=1
       AND position NOT IN (SELECT value FROM json_each(?)) LIMIT 1`).get(key,JSON.stringify(selected)));
   }
 
   pipelineCurrentReferences(key: string, stage: string): PipelineAttemptReference[] {
-    return this.readDb.query<PipelineAttemptReference, [string, string]>(`SELECT * FROM pipeline_attempt_refs
+    return sharedStateReadonlyDatabase(this.filename).query<PipelineAttemptReference, [string, string]>(`SELECT * FROM pipeline_attempt_refs
       WHERE row_key=? AND stageId=? AND historical=0 ORDER BY position DESC LIMIT 1`).all(key,stage);
   }
 
   pipelineOwnerExists(identities: readonly [string, string][], live: boolean): boolean {
-    return identities.some(([kind, identity]) => Boolean(this.readDb.query(`SELECT 1 FROM pipeline_owner_refs
+    return identities.some(([kind, identity]) => Boolean(sharedStateReadonlyDatabase(this.filename).query(`SELECT 1 FROM pipeline_owner_refs
       WHERE kind=? AND identity=? ${live ? "AND live=1" : ""} LIMIT 1`).get(kind,identity)));
   }
 
   pipelineTickReady(now: number, excluded: readonly string[]): boolean {
-    return Boolean(this.readDb.query(`SELECT 1 FROM pipeline_tick_work
+    return Boolean(sharedStateReadonlyDatabase(this.filename).query(`SELECT 1 FROM pipeline_tick_work
       WHERE (dirty=1 OR due_at<=?) AND row_key NOT IN (SELECT value FROM json_each(?)) LIMIT 1`)
       .get(now, JSON.stringify(excluded)));
   }
@@ -1296,10 +1303,18 @@ export class SqliteStateCollection<T> {
     });
   }
 
+  async deferPipelineTick(work: PipelineTickWork): Promise<void> {
+    await stateTransactionAsync(this.filename, "pipelines.controller-schedule", db => {
+      db.query("UPDATE pipeline_tick_work SET dirty=1,due_at=0 WHERE row_key=? AND generation=?")
+        .run(work.row_key, work.generation);
+      db.query("UPDATE pipeline_tick_cursor SET row_order=?,row_key=? WHERE id=1").run(work.row_order, work.row_key);
+    });
+  }
+
   /** Shared with selectors and detached reconciliation, keyed by the SQLite
       row revision, file identity and decoder authority. Pipeline LRU: 64 rows;
       other collections: 512 rows. Each slot retains at most 16 MiB. */
-  private controllerRow(key: string, revision: number, db = this.readDb, identity = databaseFileIdentity(this.filename), authority = this.options.decodeAuthority?.()): T | null {
+  private controllerRow(key: string, revision: number, db = sharedStateReadonlyDatabase(this.filename), identity = databaseFileIdentity(this.filename), authority = this.options.decodeAuthority?.()): T | null {
     const cacheKey = JSON.stringify([this.filename, this.options.collection, "controller-v1", this.options.readCacheKey ?? this.controllerCacheIdentity,
       identity, authority]);
     const slot = collectionReadCache<Map<string, { revision: number; value: T | null; bytes: number }>>(cacheKey);
@@ -1339,13 +1354,13 @@ export class SqliteStateCollection<T> {
   async pipelineControllerSelection(kind: PipelineControllerSelection, throughOrder = Number.MAX_SAFE_INTEGER, keys?: readonly string[]): Promise<T[]> {
     if (this.options.collection !== "pipelines") throw new Error("pipeline selection requires the pipeline collection");
     const identity = databaseFileIdentity(this.filename), authority = this.options.decodeAuthority?.();
-    const db = connectReadonlyDatabase(this.filename);
+    const db = keys ? sharedStateReadonlyDatabase(this.filename) : connectReadonlyDatabase(this.filename);
     try {
-      db.exec("BEGIN");
+      if (!keys) db.exec("BEGIN");
       const records: T[] = [];
       let order = -1, key = "";
       for (;;) {
-        const rows = withViewerOperation("pipelines.controller-select", () => db.query<
+        const rows = withViewerOperation("pipelines.controller-select", () => (keys ? sharedStateReadonlyDatabase(this.filename) : db).query<
           Pick<CollectionRow, "row_key" | "row_order" | "row_revision">, SQLQueryBindings[]>(`
           SELECT w.row_key, w.row_order, r.row_revision FROM pipeline_controller_work w
           ${keys ? "INDEXED BY sqlite_autoindex_pipeline_controller_work_1" : ""}
@@ -1355,7 +1370,7 @@ export class SqliteStateCollection<T> {
           ORDER BY w.row_order, w.row_key LIMIT ?
         `).all(kind, order, order, key, throughOrder, ...(keys ? [JSON.stringify(keys)] : []), 16));
         await mapCooperatively(rows, row => {
-          const decoded = this.controllerRow(row.row_key, row.row_revision, db, identity, authority);
+          const decoded = this.controllerRow(row.row_key, row.row_revision, keys ? sharedStateReadonlyDatabase(this.filename) : db, identity, authority);
           if (decoded) records.push(kind === "hosts" || kind === "running" ? decoded
             : performanceSpans.sync("pipeline.copy", () => (this.options.cloneController ?? this.options.clone)(decoded)));
           order = row.row_order; key = row.row_key;
@@ -1363,11 +1378,11 @@ export class SqliteStateCollection<T> {
         if (rows.length < 16) break;
         await yieldToRuntime();
       }
-      db.exec("COMMIT");
+      if (!keys) db.exec("COMMIT");
       if (databaseFileIdentity(this.filename) !== identity || this.options.decodeAuthority?.() !== authority) throw new StateSnapshotChangedError();
       return records;
-    } catch (error) { rollbackQuietly(db); throw error; }
-    finally { db.close(); }
+    } catch (error) { if (!keys) rollbackQuietly(db); throw error; }
+    finally { if (!keys) db.close(); }
   }
 
   snapshotForController(): T[] {
@@ -1715,7 +1730,7 @@ export class SqliteStateCollection<T> {
     }
   }
 
-  /** Move selected rows to another collection in one SQLite commit. Lease
+  /** Move selected rows in bounded pages, each in one SQLite commit. Lease
       contention must yield: startup can hold the source lease while awaiting
       an RPC on this same event loop. A synchronous wait starves its release. */
   async moveMatchingTo(
@@ -1727,88 +1742,102 @@ export class SqliteStateCollection<T> {
       throw new Error("atomic state moves require two collections in one database");
     }
     assertSqliteWriteAuthority(this.filename);
-    const ordered = [this, target].sort((left, right) => left.options.collection.localeCompare(right.options.collection));
-    const leases = new Map<SqliteStateCollection<T>, string>();
-    try {
-      for (const collection of ordered) leases.set(collection, await collection.acquireLease());
-      const moved = await stateTransactionAsync(this.filename, this.options.collection, db => {
-        assertSqliteWriteAuthority(this.filename);
-        this.assertLease(db, leases.get(this)!);
-        target.assertLease(db, leases.get(target)!);
-        const sourceRows = db.query<CollectionRow, [string]>(`
-          SELECT row_key, value_json, row_order, row_revision, controller_active
-          FROM state_rows WHERE collection = ? ORDER BY row_order, row_key
-        `).all(this.options.collection);
-        const selected = sourceRows.flatMap((row) => {
-          const decoded = this.decodeRow(row.value_json);
-          return decoded !== null && predicate(decoded) ? [{ row, record: decoded }] : [];
-        });
-        if (selected.length === 0) return 0;
-        for (const entry of selected) target.validate(entry.record);
+    const throughOrder = this.readDb.query<{ last: number }, [string]>(
+      "SELECT COALESCE(MAX(row_order),-1) AS last FROM state_rows WHERE collection=?").get(this.options.collection)!.last;
+    let movedTotal = 0, afterOrder = -1, afterKey = "";
+    for (;;) {
+      let page: CollectionRow[] = [];
+      const ordered = [this, target].sort((left, right) => left.options.collection.localeCompare(right.options.collection));
+      const leases = new Map<SqliteStateCollection<T>, string>();
+      try {
+        for (const collection of ordered) leases.set(collection, await collection.acquireLease());
+        const moved = await withViewerOperation("pipelines.controller-checkpoint", () => stateTransactionAsync(this.filename, this.options.collection, db => {
+          assertSqliteWriteAuthority(this.filename);
+          this.assertLease(db, leases.get(this)!);
+          target.assertLease(db, leases.get(target)!);
+          const sourceRows = db.query<CollectionRow, [string, number, number, string, number]>(`
+            SELECT row_key, value_json, row_order, row_revision, controller_active
+            FROM state_rows WHERE collection = ? AND row_order >= ? AND (row_order > ? OR row_key > ?) AND row_order <= ?
+            ORDER BY row_order, row_key LIMIT 16
+          `).all(this.options.collection, afterOrder, afterOrder, afterKey, throughOrder);
+          page = sourceRows;
+          const selected = sourceRows.flatMap((row) => {
+            const decoded = this.decodeRow(row.value_json);
+            return decoded !== null && predicate(decoded) ? [{ row, record: decoded }] : [];
+          });
+          if (selected.length === 0) return 0;
+          for (const entry of selected) target.validate(entry.record);
 
-        const sourceRevision = this.collectionMeta(db)!.revision + 1;
-        const targetMeta = target.collectionMeta(db)!;
-        const targetRows = new Map(db.query<CollectionRow, [string]>(`
-          SELECT row_key, value_json, row_order, row_revision, controller_active
-          FROM state_rows WHERE collection = ?
-        `).all(target.options.collection).map((row) => [row.row_key, row] as const));
-        let targetOrder = Math.max(-1, ...[...targetRows.values()].map((row) => row.row_order)) + 1;
-        const targetPrepared = selected.map(({ record }) => {
-          const key = target.options.key(record);
-          const valueJson = JSON.stringify(record);
-          const controllerActive = target.options.controllerActive?.(record) === false ? 0 : 1;
-          target.assertRowWritable(db, key);
-          const held = targetRows.get(key);
-          return { key, valueJson, controllerActive, held, order: held?.row_order ?? targetOrder++ };
-        });
-        const targetChanged = targetPrepared.filter((entry) => (
-          entry.held?.value_json !== entry.valueJson
-          || entry.held.controller_active !== entry.controllerActive
-        ));
-        const targetRevision = targetChanged.length > 0 ? targetMeta.revision + 1 : targetMeta.revision;
-        const upsert = db.query(`
-          INSERT INTO state_rows(collection, row_key, value_json, row_order, row_revision, controller_active)
-          VALUES (?, ?, ?, ?, ?, ?)
-          ON CONFLICT(collection, row_key) DO UPDATE SET
-            value_json = excluded.value_json,
-            row_revision = excluded.row_revision,
-            controller_active = excluded.controller_active
-        `);
-        const change = db.query(`
-          INSERT INTO state_changes(collection, revision, row_key, operation)
-          VALUES (?, ?, ?, ?)
-        `);
-        for (const entry of targetChanged) {
-          upsert.run(target.options.collection, entry.key, entry.valueJson, entry.order, targetRevision, entry.controllerActive);
-          change.run(target.options.collection, targetRevision, entry.key, "upsert");
-        }
-        const remove = db.query("DELETE FROM state_rows WHERE collection = ? AND row_key = ?");
-        for (const { row } of selected) {
-          remove.run(this.options.collection, row.row_key);
-          change.run(this.options.collection, sourceRevision, row.row_key, "delete");
-        }
-        db.query("UPDATE state_collections SET revision = ? WHERE collection = ?")
-          .run(sourceRevision, this.options.collection);
-        if (targetChanged.length > 0) {
+          const sourceRevision = this.collectionMeta(db)!.revision + 1;
+          const targetMeta = target.collectionMeta(db)!;
+          const targetRows = new Map(selected.flatMap(({ record }) => {
+            const held = db.query<CollectionRow, [string, string]>(`SELECT row_key,value_json,row_order,row_revision,controller_active
+              FROM state_rows WHERE collection=? AND row_key=?`).get(target.options.collection,target.options.key(record));
+            return held ? [[held.row_key,held] as const] : [];
+          }));
+          let targetOrder = db.query<{ last: number }, [string]>(
+            "SELECT COALESCE(MAX(row_order),-1) AS last FROM state_rows WHERE collection=?").get(target.options.collection)!.last + 1;
+          const targetPrepared = selected.map(({ record }) => {
+            const key = target.options.key(record);
+            const valueJson = JSON.stringify(record);
+            const controllerActive = target.options.controllerActive?.(record) === false ? 0 : 1;
+            target.assertRowWritable(db, key);
+            const held = targetRows.get(key);
+            return { key, valueJson, controllerActive, held, order: held?.row_order ?? targetOrder++ };
+          });
+          const targetChanged = targetPrepared.filter((entry) => (
+            entry.held?.value_json !== entry.valueJson
+            || entry.held.controller_active !== entry.controllerActive
+          ));
+          const targetRevision = targetChanged.length > 0 ? targetMeta.revision + 1 : targetMeta.revision;
+          const upsert = db.query(`
+            INSERT INTO state_rows(collection, row_key, value_json, row_order, row_revision, controller_active)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(collection, row_key) DO UPDATE SET
+              value_json = excluded.value_json,
+              row_revision = excluded.row_revision,
+              controller_active = excluded.controller_active
+          `);
+          const change = db.query(`
+            INSERT INTO state_changes(collection, revision, row_key, operation)
+            VALUES (?, ?, ?, ?)
+          `);
+          for (const entry of targetChanged) {
+            upsert.run(target.options.collection, entry.key, entry.valueJson, entry.order, targetRevision, entry.controllerActive);
+            change.run(target.options.collection, targetRevision, entry.key, "upsert");
+          }
+          const remove = db.query("DELETE FROM state_rows WHERE collection = ? AND row_key = ?");
+          for (const { row } of selected) {
+            remove.run(this.options.collection, row.row_key);
+            change.run(this.options.collection, sourceRevision, row.row_key, "delete");
+          }
           db.query("UPDATE state_collections SET revision = ? WHERE collection = ?")
-            .run(targetRevision, target.options.collection);
+            .run(sourceRevision, this.options.collection);
+          if (targetChanged.length > 0) {
+            db.query("UPDATE state_collections SET revision = ? WHERE collection = ?")
+              .run(targetRevision, target.options.collection);
+          }
+          this.pruneChanges(db, sourceRevision);
+          if (targetChanged.length > 0) target.pruneChanges(db, targetRevision);
+          options.beforeCommit?.();
+          return selected.length;
+        }));
+        if (moved > 0) {
+          secureDatabaseFiles(this.filename);
+          this.invalidateAfterCommit();
+          target.invalidateAfterCommit();
         }
-        this.pruneChanges(db, sourceRevision);
-        if (targetChanged.length > 0) target.pruneChanges(db, targetRevision);
-        options.beforeCommit?.();
-        return selected.length;
-      });
-      if (moved > 0) {
-        secureDatabaseFiles(this.filename);
-        this.invalidateAfterCommit();
-        target.invalidateAfterCommit();
+        movedTotal += moved;
+      } finally {
+        for (const collection of [...ordered].reverse()) {
+          const lease = leases.get(collection);
+          if (lease) await collection.releaseLease(lease);
+        }
       }
-      return moved;
-    } finally {
-      for (const collection of [...ordered].reverse()) {
-        const lease = leases.get(collection);
-        if (lease) await collection.releaseLease(lease);
-      }
+      const last = page.at(-1);
+      if (!last || page.length < 16) return movedTotal;
+      afterOrder = last.row_order; afterKey = last.row_key;
+      await yieldToRuntime();
     }
   }
 
@@ -1936,23 +1965,24 @@ export class SqliteStateCollection<T> {
     keys?: readonly string[],
   ): Promise<R> {
     assertSqliteWriteAuthority(this.filename);
-    const revision = this.revision();
+    const authority = this.options.decodeAuthority?.();
     const identity = databaseFileIdentity(this.filename);
     const expected = new Map<string, number>();
     const session = this.track(await this.prepareControllerSnapshot(expected, keys), explicitOnly, true);
     // A synchronous callback may filter all selected rows before its first
     // await. Finish their independent copies in bounded slices beforehand.
     await forEachCooperatively(session.records, () => undefined, { batchSize: 4, timeBudgetMs: 16 });
-    if (this.revision() !== revision) throw new StateSnapshotChangedError();
+    if (this.options.decodeAuthority?.() !== authority) throw new StateSnapshotChangedError();
     if (databaseFileIdentity(this.filename) !== identity) throw new StateSnapshotChangedError();
-    const rowRevision = (key: string) => this.readDb.query<{ row_revision: number }, [string, string]>(
+    const rowRevision = (key: string) => sharedStateReadonlyDatabase(this.filename).query<{ row_revision: number }, [string, string]>(
       "SELECT row_revision FROM state_rows WHERE collection = ? AND row_key = ?",
     ).get(this.options.collection, key)?.row_revision;
     const assertCurrent = (record: T) => {
       const key = this.options.key(record);
-      if (!expected.has(key) || databaseFileIdentity(this.filename) !== identity
+      if (!expected.has(key) || (keys !== undefined && this.options.decodeAuthority?.() !== authority) || databaseFileIdentity(this.filename) !== identity
         || rowRevision(key) !== expected.get(key)) throw new StateSnapshotChangedError();
     };
+    for (const record of session.records) assertCurrent(record);
     return operation(session.records, async records => {
       // Defer a controller pass behind an admitted logical writer. Once its
       // lease is held, SQLite admission yields and rechecks every dirty row.
@@ -2076,7 +2106,7 @@ export class SqliteStateCollection<T> {
     const records: T[] = [];
     let order = -1, key = "";
     for (;;) {
-      const rows = withViewerOperation("pipelines.controller-read", () => this.readDb.query<
+      const rows = withViewerOperation("pipelines.controller-read", () => sharedStateReadonlyDatabase(this.filename).query<
         Pick<CollectionRow, "row_key" | "row_order" | "row_revision">, SQLQueryBindings[]>(`
         SELECT row_key, row_order, row_revision FROM state_rows
         ${keys ? "INDEXED BY sqlite_autoindex_state_rows_1" : ""}
