@@ -1,4 +1,4 @@
-import { startAutoAndSettle } from "./engineEnvironment.fixture";
+import { assertCpuReadGuardSurvivesSpyRestoration, startAutoAndSettle } from "./engineEnvironment.fixture";
 import { expect, spyOn, test, crypto, spawn, fs, os, path, activeDrain, DRAIN_LEASE_MS, initialAuto, writeAuto, initialCheck, SelfUpdateService, idleCheck, accountManager, realExec, engineModule, defaultPipelinePorts, pipelineClaudePermissionMode, tickPipelines, AgentRegistry, setAgentRegistryForTests, newRound, tickFlow, saveFlows, createPipelineFromRequest, registerPipelineTick, loadPipelines, savePipelines, pipelineIdentity, patchPipeline, RUN_STAGES, ORIGIN_MAIN_SHA, entry, harness, REMOTE_BRANCH, finishReported, realWorktreeLane, successorOnPullRequestBranch, create, publishHarness, PUBLISH_STAGES } from "./engine.fixture";
 import type { ServiceDeps, Snapshot, PipelinePorts } from "./engine.fixture";
 
@@ -44,6 +44,11 @@ test("default pipeline projections reuse one registry parse across the historica
     reads.mockRestore();
     setAgentRegistryForTests(null);
   }
+});
+
+test("the CPU sample guard survives projection reader restoration", () => {
+  // Check identity first so a broken fixture fails without touching procfs.
+  assertCpuReadGuardSurvivesSpyRestoration();
 });
 
 test("a pipeline stage keeps its reserved account through a routing change before settlement", async () => {

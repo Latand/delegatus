@@ -20,15 +20,26 @@ setMachineCpuPressureForTests(null);
 
 const readFile = fs.readFileSync;
 let cpuReads = 0;
-const reads = spyOn(fs, "readFileSync").mockImplementation(((...args: Parameters<typeof fs.readFileSync>) => {
+export const guardedReadFile = ((...args: Parameters<typeof fs.readFileSync>) => {
   if (String(args[0]) === "/proc/pressure/cpu") {
     cpuReads++;
     throw new Error("Engine tests must inject their CPU sample");
   }
   return readFile(...args);
-}) as typeof fs.readFileSync);
+}) as typeof fs.readFileSync;
+// Keep this as an ordinary wrapper. Bun reuses a nested spy for this method,
+// whose mockRestore() would otherwise restore the native reader and remove the
+// CPU guard for the remainder of the suite.
+fs.readFileSync = guardedReadFile;
+export function assertCpuReadGuardSurvivesSpyRestoration() {
+  expect(fs.readFileSync).toBe(guardedReadFile);
+  const readsBeforeProbe = cpuReads;
+  expect(() => fs.readFileSync("/proc/pressure/cpu", "utf8")).toThrow("Engine tests must inject their CPU sample");
+  expect(cpuReads).toBe(readsBeforeProbe + 1);
+  cpuReads = readsBeforeProbe;
+}
 afterAll(() => {
-  reads.mockRestore();
+  fs.readFileSync = readFile;
   setMachineCpuPressureForTests(undefined);
   for (const [key, value] of saved) {
     if (value === undefined) delete process.env[key];
