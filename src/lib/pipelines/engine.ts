@@ -8717,8 +8717,9 @@ async function attemptTurnTranscript(attempt: PipelineStageAttempt, ports: Pipel
   if (receipt?.currentGeneration !== undefined && pathname !== receipt.stagedTranscript && pathname !== receipt.transcript) return null;
   const evidence = await ports.durableTurnEvidence(attempt.effectiveRole.engine, pathname);
   // Metadata alone proves no prompt delivery. Require a native turn from this attempt.
+  const nativeWorkAt = Math.max(evidence?.turnStartedAt ?? 0, evidence?.lastAgentEventAt ?? 0);
   if (!evidence || evidence.launchOnly || evidence.turn === "unknown"
-    || (evidence.lastRecordAt ?? evidence.message?.ts ?? 0) < unixMs(attemptEvidenceFloor(attempt))) return null;
+    || nativeWorkAt < unixMs(attemptEvidenceFloor(attempt))) return null;
   const current = attempt.launchId ? ports.spawnReceipt(attempt.launchId) : null;
   if (receipt && (!current || current.conversationId !== receipt.conversationId || current.currentGeneration === false
     || current.stagedTranscript !== receipt.stagedTranscript || current.state !== receipt.state || current.error !== receipt.error)) return null;

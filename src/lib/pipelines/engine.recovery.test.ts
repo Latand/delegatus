@@ -1,4 +1,4 @@
-import { expect, spyOn, test, spawn, fs, path, AccountMutationBusyError, accountManager, engineModule, adoptAttempt, defaultPipelinePorts, terminalFlowStageVerdict, tickPipelines, verdictRoutesAsFail, AgentRegistry, setAgentRegistryForTests, createPipelineFromRequest, loadPipelines, savePipelines, projectPipelineEvents, saveTasks, patchPipeline, RUN_STAGES, ORIGIN_MAIN_SHA, entry, harness, REMOTE_BRANCH, create, forbiddenSleep, frozenWallClock, PASS_TEXT, makeStructuredAttempt, pinStageHead, publishHarness, PUBLISH_STAGES, deliveryRefusalPark, SKIP_STAGES, FAIL_EDGE_STAGES, HOST_UNAVAILABLE, failedReceipt, UNVERIFIED_DELIVERY, reviewFlowPausedOnUnscannedImplementer, REVIEWER_BUSY, reviewFlowEndedOnBusyAccount, interruptedSpawnAttempt, legacySpawnAttempt, stageDigest, buildStageOf, REVIEW_FINDING_BLOCK, flowWithFindings, parkedReviewStage, stagedRecoveryHarness, aliveStagedLaunch, stageHostChild, productionHostSeams, activationDrainFixture, expectPipelineLeaseFree, reserveActivationOnly } from "./engine.fixture";
+import { expect, spyOn, test, spawn, fs, path, AccountMutationBusyError, accountManager, engineModule, adoptAttempt, defaultPipelinePorts, terminalFlowStageVerdict, tickPipelines, verdictRoutesAsFail, AgentRegistry, setAgentRegistryForTests, createPipelineFromRequest, loadPipelines, savePipelines, projectPipelineEvents, saveTasks, patchPipeline, RUN_STAGES, ORIGIN_MAIN_SHA, entry, harness, durableStageTurnEvidence, REMOTE_BRANCH, create, forbiddenSleep, frozenWallClock, PASS_TEXT, makeStructuredAttempt, pinStageHead, publishHarness, PUBLISH_STAGES, deliveryRefusalPark, SKIP_STAGES, FAIL_EDGE_STAGES, HOST_UNAVAILABLE, failedReceipt, UNVERIFIED_DELIVERY, reviewFlowPausedOnUnscannedImplementer, REVIEWER_BUSY, reviewFlowEndedOnBusyAccount, interruptedSpawnAttempt, legacySpawnAttempt, stageDigest, buildStageOf, REVIEW_FINDING_BLOCK, flowWithFindings, parkedReviewStage, stagedRecoveryHarness, aliveStagedLaunch, stageHostChild, productionHostSeams, activationDrainFixture, expectPipelineLeaseFree, reserveActivationOnly } from "./engine.fixture";
 import type { Snapshot, PipelinePorts } from "./engine.fixture";
 
 
@@ -2003,6 +2003,35 @@ test("an unpublished launch whose host is verified alive survives the tick that 
     setAgentRegistryForTests(null);
     await host.end();
   }
+});
+
+test("fresh metadata cannot adopt a native turn older than this attempt", async () => {
+  const f = await aliveStagedLaunch();
+  f.advance(10 * 60_000);
+  await f.wake();
+  expect(loadPipelines()[0]!.state).toBe("needs_decision");
+
+  const floor = Date.parse(f.attempt().startedAt!);
+  const metadataAt = Date.parse(f.h.ports.now()) + 1_000;
+  fs.writeFileSync(f.transcript, [
+    { timestamp: new Date(floor - 50_000).toISOString(), type: "event_msg", payload: { type: "task_started" } },
+    { timestamp: new Date(floor - 40_000).toISOString(), type: "response_item", payload: { type: "message", role: "assistant", content: [{ type: "output_text", text: "Old turn" }] } },
+    { timestamp: new Date(metadataAt).toISOString(), type: "session_meta", payload: { id: "stage" } },
+  ].map(record => JSON.stringify(record)).join("\n") + "\n");
+
+  const evidence = await durableStageTurnEvidence("codex", f.transcript);
+  expect(evidence).toMatchObject({
+    turn: "busy",
+    turnStartedAt: floor - 50_000,
+    lastAgentEventAt: floor - 40_000,
+    lastRecordAt: metadataAt,
+  });
+
+  await f.wake();
+
+  expect(loadPipelines()[0]).toMatchObject({ state: "needs_decision" });
+  expect(f.attempt()).toMatchObject({ state: "needs_decision", error: expect.stringContaining("stage spawn recovery stopped:") });
+  expect(f.starts()).toBe(1);
 });
 
 test("a spawn-recovery park whose own agent then reports is reopened on that attempt and the report is accepted", async () => {
