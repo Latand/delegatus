@@ -1,43 +1,37 @@
 # Optimistic UI audit: every action in the Viewer
 
-> **Operator requirement, 2026-10-16 (voice, relayed; quoted from the pinned
-> specification of this lane):** "actions and UI changes are applied
-> optimistically and fast by default; non-optimistic behaviour is allowed only
-> for errors or edge cases that do not fit; this is a standing rule for the
-> project's UI."
+> **Requirement (2026-10-16, paraphrased from the pinned specification of this
+> lane):** the Viewer applies actions and UI changes optimistically and fast by
+> default. A non-optimistic behaviour is allowed only for errors or edge cases
+> that do not fit that logic. The rule is standing for the project's UI.
 >
-> **Decision form answered 2026-10-16 (12:26 UTC):** «Сначала аудит всех
-> действий в UI, потом общая линия по исправлению».
+> **Decision (2026-10-16):** audit every action in the UI first, then agree one
+> common fix line.
 >
 > **Standing project rule:** `r_4dccc4825132f0f9`.
 
 This document is the audit the decision asked for. It changes no product code.
 The fix line it proposes is section 8.
 
-## 1. The requirement as the operator said it
+## 1. The requirement
 
-The specification quotes the voice gateway's rendering. The operator's own
-words are in the call journal (the voice companion's
-`voice-companion/transcripts/<session>.jsonl` under the installation state
-directory; the call began 12:06 UTC). They are paraphrased here because the
+The pinned specification relays a voice request, paraphrased here because the
 call is private:
 
-- The trigger was one button the operator pressed that stayed on screen for a
-  long time afterwards. The gateway rendered its name as an unclear
-  transcription; a minute later in the same call the operator said that the
-  name is Ukrainian and means «Надіслати» (Send). Section 7 identifies the
-  button.
-- The rule itself matches the gateway's rendering: every action is optimistic
-  and fast by default; something else only when an error or an edge case does
-  not fit that logic.
+- The trigger was one button that stayed on screen for a long time after it was
+  pressed. The call's transcription rendered the button's name unclearly; later
+  in the same call the name was given as the Ukrainian label «Надіслати»
+  (Send). Section 7 identifies the button.
+- The rule itself: every action is optimistic and fast by default; something
+  else only when an error or an edge case does not fit that logic.
 
-**Difference between the rendering and the words.** The rendering asked to
-"handle the rollback or the exceptional case correctly" for that one button and
-called its name unclear. The operator's words name the button by its label and
-make no further scope change. This audit designs from the words: the default is
+**Difference between the rendering and the request.** The transcription
+rendered the request as handling the rollback or the exceptional case for that
+one button. The request itself names the button by its label and makes no
+further scope change. This audit designs from the request: the default is
 optimism everywhere, and every remaining wait in section 5 names its reason.
 
-**Validation against the quote.** Every action that writes to the server is in
+**Validation against the requirement.** Every action that writes to the server is in
 section 5 with its class, each control row carrying its own reason rather than
 inheriting a neighbour's exemption; every class B entry in section 6 says what changes at
 once, what rolls back and where the error shows; every class C entry names
