@@ -1,0 +1,80 @@
+# Stage Git custody
+
+A writable stage can leave its lane checkout behind after committing and pushing
+from a detached linked checkout. Settlement now adopts that push before review
+when the attempt's native Git hooks recorded every commit in the suffix.
+An unproved push is refused, and its refusal stops stage settlement.
+
+| Requirement | Change or diagnosis | Test and evidence |
+| --- | --- | --- |
+| A: explain the original failure | The preceding read-only audit found a detached linked checkout, a pushed descendant, and an unchanged lane HEAD. On main `5bd026c0`, `commitAndAdoptStageBranch` immediately called `commitPipelineStage` for the lane branch; a clean checkout returned its old HEAD. `collectStageProvenance` observed that same checkout. Publication called a remote-ahead tip divergent. `reconcileTerminalStageHosts` rewrote `lastAt` while publication custody retained the host, changing the whole-row revision. | The detached-push, remote-ahead diagnostic, and parked-custody regressions reproduce those mechanisms on main. See the baseline observations in [readings.json](../../evidence/stage-git-custody/readings.json). |
+| B: adopt only this attempt's push | `prepareStageGitGuard` records the launch, checkout, exact starting head and start time before dispatch. The existing author guard records native post-commit receipts and pre-push target evidence. `settleStageAttemptPush` checks the complete suffix and fast-forwards the clean owned lane before its successor can review it. The accepted report records the adopted head. | `engine.ports.test.ts`: tests beginning `attempt Git custody`, including a fresh controller process, foreign and mixed commits, another attempt, missing or malformed receipts, time bounds, dirty files, release, pause, ownership changes, and races before and after fast-forward. Both the 256-commit boundary and its overflow run through native hooks. |
+| C: keep parked revisions stable | A reap with an existing envelope preserves it when its only observation is continued live work or publication custody. The first envelope, settled hosts, exhausted rounds and real transitions retain their existing writes. | `terminalReap.test.ts`: `parked publication custody keeps its revision until a host actually settles` compares three persisted revisions, checks that no stop occurred, then verifies a changed revision when the host disappears. The complete file also exercises the production socket protections. |
+| D: red on main, green on the change | Regression bodies were written first and copied into scratch exports of main. The implementation was checked in a separate scratch export. | [readings.json](../../evidence/stage-git-custody/readings.json) records commands, per-case baseline failures, final file outcomes, and the source digest. |
+
+The main audit points were `src/lib/pipelines/stageBranch.ts:120`,
+`src/lib/pipelines/git.ts:843` and `:873`,
+`src/lib/pipelines/stageProvenance.ts:94`, and
+`src/lib/pipelines/engine.ts:4731` for the old head. Publication compared it at
+`src/lib/pipelines/git.ts:2098`; retry repeated publication at
+`src/lib/pipelines/engine.ts:13150`. The reap retained custody at
+`src/lib/pipelines/engine.ts:9597`, rewrote `lastAt` at `:9615`, and returned a
+change at `:9659`. `src/lib/pipelines/store.ts:31` hashed that changed row.
+These line numbers refer to the pinned main commit above.
+
+The launch adapter copies two environment fields into the selected account's
+environment. `agentPublicationIdentityEnv` retains those fields when the native
+Codex or Claude policy is reapplied, including a restrictive Codex allowlist.
+An unbound launch keeps its existing behavior. Unrelated fixture repositories
+retain their original hooks and push behavior. Commit receipts cover the lane
+checkout and the launching stage's own scratch directory. The existing reservation callback
+runs again after guard preparation, so an activation cancelled during setup
+cannot dispatch a native host. A preparation failure marks that reserved launch
+failed before dispatch.
+
+Proof files live in a launch-specific state directory. Settlement reads each
+file with an 8 KiB bound and inspects at most 256 commits. Every suffix commit
+must have its own native receipt and a committer timestamp inside the attempt's
+window. The candidate must retain both the pipeline base and its accepted head.
+The remote branch, push URL, lane head, cleanliness and delivery authority are
+checked before adoption. A remote outage leaves the attempt committing and
+retries verification; it cannot accept the stale lane head. A remote change
+after fast-forward refuses acceptance and retains the proved local commit.
+
+The existing lane/flow/ownership fence and inherited publication lock still
+surround Git settlement. `verifyPassedHeadIntegration` remains unchanged: a
+single-parent commit added after review still requires a fresh review. The
+new adoption path runs during the producing writable attempt's settlement;
+publication recovery retains its reviewed-head checks. Older attempts with no
+receipts receive no new authority to adopt remote work. These hooks enforce the
+same cooperating-agent boundary as the existing author guard.
+
+The overlapping registry-admission and launch-recovery branches were inspected.
+Their modified admission and recovery regions remain outside this change.
+The implementation started at `5bd026c067e562af075ce25d838482a3c8b00a3f`.
+Current main advanced during verification. It was merged without rebasing at
+`d395e7c7324e2653acd37edbbf644814f622deb1`; integration checks use a scratch
+export of that merge. The evidence distinguishes the original red samples,
+current-main red samples, and integrated results.
+
+Run each file separately from a scratch export, through the installed
+`gate-slot.sh`, with private `HOME`, `XDG_CONFIG_HOME`, `TMPDIR` and
+`LLV_STATE_DIR` values:
+
+```sh
+bash "$GATE_SLOT" bun test src/lib/pipelines/engine.ports.test.ts
+bash "$GATE_SLOT" bun test src/lib/pipelines/terminalReap.test.ts
+bash "$GATE_SLOT" bun test src/lib/pipelines/git.test.ts
+bash "$GATE_SLOT" bun test src/lib/pipelines/engine.settlement.test.ts
+bash "$GATE_SLOT" bun test src/lib/pipelines/parkedPublication.test.ts
+bash "$GATE_SLOT" bun test src/lib/git/agentHistoryGuard.test.ts
+bash "$GATE_SLOT" bun test src/lib/git/agentPublicationIdentity.test.ts
+bash "$GATE_SLOT" bun test src/lib/pipelines/stageProvenance.test.ts
+bash "$GATE_SLOT" bun test src/lib/performanceSpans.test.ts
+```
+
+The evidence also records TypeScript, changed-file lint and publication privacy.
+Two managed-admission assertions fail on both main and the change in this
+isolated environment; their names and baseline results are retained. Hosted
+required checks belong to the subsequent Delegatus publication. No performance
+gain is claimed.

@@ -4706,9 +4706,9 @@ async function commitPassedStage(
       return;
     }
     if (result.deferred) {
-      // The committing cursor is already durable. The guarded final write
-      // retains a waiting observation; a superseding pause needs no intent
-      // checkpoint for an operation that made no Git change.
+      // The cursor and any completed Git effect are already durable. The
+      // final row write is fenced; a superseding pause needs no extra intent
+      // checkpoint just to retain this wait.
       return;
     }
     if (await requestStageCommitRepair(pipeline, stage, attempt, result, ports, persist)) return;

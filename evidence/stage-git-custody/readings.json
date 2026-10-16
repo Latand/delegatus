@@ -1,0 +1,802 @@
+{
+  "version": 1,
+  "observedAt": "2026-10-16T00:08:24.239617+00:00",
+  "pinnedAuditBase": "5bd026c067e562af075ce25d838482a3c8b00a3f",
+  "mergedMain": "d395e7c7324e2653acd37edbbf644814f622deb1",
+  "verifiedMerge": "9482eeac3ad2fd4435f88b1fa3cc6b952460cfe4",
+  "sourceFiles": [
+    {
+      "path": "src/lib/git/agentHistoryGuard.test.ts",
+      "sha256": "3f7d6eddefd73f4b7865182b1161991100b9a8b5363c525e5fabda7c6797dfbb"
+    },
+    {
+      "path": "src/lib/git/agentHistoryGuard.ts",
+      "sha256": "a971166736abb8aeb04ec05ef583c45907061dfe22fcd8256b57b0f1e64087f2"
+    },
+    {
+      "path": "src/lib/git/stageAttemptGuard.ts",
+      "sha256": "675c86d100ca9223cfd09b3816e2d7862d7ed4e4a128aed395d74bc61dd8a3f8"
+    },
+    {
+      "path": "src/lib/performanceSpans.ts",
+      "sha256": "36e3e25baad3bf1bdf674a20681a82660b322614b2fbc13f07eb75bc96ad399e"
+    },
+    {
+      "path": "src/lib/pipelines/engine.ports.test.ts",
+      "sha256": "06b47645910301257f989655a3f9be892966b5e8a96abde8232f22844a31494f"
+    },
+    {
+      "path": "src/lib/pipelines/engine.ts",
+      "sha256": "07b6d741c19918f25ac279b0cfededa369b2dd6eee4d24b22c3892156730cb25"
+    },
+    {
+      "path": "src/lib/pipelines/git.test.ts",
+      "sha256": "5964ca932d6379904731c1a23c42bfd3effca556cad40194e758383d632cad95"
+    },
+    {
+      "path": "src/lib/pipelines/git.ts",
+      "sha256": "0050fa2fcb5faf49d0758c6265befc6901a009f9abadc073ec16f6ba83a480d1"
+    },
+    {
+      "path": "src/lib/pipelines/stageAttemptPush.ts",
+      "sha256": "a2e54673fabdafb5aade4a25bb87d560cda880373566016ac106a193ebd9c33d"
+    },
+    {
+      "path": "src/lib/pipelines/stageBranch.ts",
+      "sha256": "d6091c3c03ffd2c2a34f839ee8a19ae3d1a28b3c14b3f568d9c7d9c834836e5c"
+    },
+    {
+      "path": "src/lib/pipelines/terminalReap.test.ts",
+      "sha256": "4139bb7357c6ea6db0ac37624fa5e5282b078e770baa37ae38772d1fad7d5e06"
+    }
+  ],
+  "sourceDigest": "a6a27f05cbff03fa6e6d601936c0a2f6326c46953cb9109c64a8080105c3ef37",
+  "isolation": {
+    "checkout": "scratch exports",
+    "perFile": [
+      "HOME",
+      "XDG_CONFIG_HOME",
+      "XDG_STATE_HOME",
+      "XDG_CACHE_HOME",
+      "TMPDIR",
+      "LLV_STATE_DIR"
+    ],
+    "runner": "installed gate-slot.sh",
+    "tests": "explicit file paths; one owned gate at a time"
+  },
+  "observations": [
+    {
+      "label": "regressions-main",
+      "command": [
+        "bash",
+        "$GATE_SLOT",
+        "bun",
+        "test",
+        "src/lib/pipelines/engine.ports.test.ts",
+        "-t",
+        "attempt Git custody"
+      ],
+      "exitCode": 1,
+      "counts": {
+        "pass": 1,
+        "fail": 24
+      },
+      "cases": [
+        {
+          "name": "attempt Git custody adopts a proved detached push before review",
+          "status": "fail"
+        },
+        {
+          "name": "attempt Git custody refuses an unproved detached push and fails the stage clearly",
+          "status": "fail"
+        },
+        {
+          "name": "attempt Git custody preserves the fences for foreign",
+          "status": "fail"
+        },
+        {
+          "name": "attempt Git custody preserves the fences for wrong-attempt",
+          "status": "fail"
+        },
+        {
+          "name": "attempt Git custody preserves the fences for missing-start",
+          "status": "fail"
+        },
+        {
+          "name": "attempt Git custody preserves the fences for missing-push",
+          "status": "fail"
+        },
+        {
+          "name": "attempt Git custody preserves the fences for malformed",
+          "status": "fail"
+        },
+        {
+          "name": "attempt Git custody preserves the fences for oversized",
+          "status": "fail"
+        },
+        {
+          "name": "attempt Git custody preserves the fences for mixed",
+          "status": "fail"
+        },
+        {
+          "name": "attempt Git custody preserves the fences for old",
+          "status": "fail"
+        },
+        {
+          "name": "attempt Git custody preserves the fences for future",
+          "status": "fail"
+        },
+        {
+          "name": "attempt Git custody preserves the fences for non-descendant",
+          "status": "fail"
+        },
+        {
+          "name": "attempt Git custody preserves the fences for remote-race",
+          "status": "fail"
+        },
+        {
+          "name": "attempt Git custody preserves the fences for remote-after-merge",
+          "status": "fail"
+        },
+        {
+          "name": "attempt Git custody preserves the fences for local-race",
+          "status": "fail"
+        },
+        {
+          "name": "attempt Git custody preserves the fences for pause",
+          "status": "fail"
+        },
+        {
+          "name": "attempt Git custody preserves the fences for claim-race",
+          "status": "fail"
+        },
+        {
+          "name": "attempt Git custody preserves the fences for dirty",
+          "status": "fail"
+        },
+        {
+          "name": "attempt Git custody preserves the fences for released",
+          "status": "pass"
+        },
+        {
+          "name": "attempt Git custody replays its durable proof in a new controller process",
+          "status": "fail"
+        },
+        {
+          "name": "attempt Git custody bounds the proved suffix at 256 commits (256)",
+          "status": "fail"
+        },
+        {
+          "name": "attempt Git custody bounds the proved suffix at 256 commits (257)",
+          "status": "fail"
+        },
+        {
+          "name": "attempt Git custody rechecks activation after preparing the native guard",
+          "status": "fail"
+        },
+        {
+          "name": "attempt Git custody retries an unavailable remote before accepting the stage",
+          "status": "fail"
+        },
+        {
+          "name": "attempt Git custody refuses a commit outside its owned scratch scope",
+          "status": "fail"
+        }
+      ]
+    },
+    {
+      "label": "report-replay-main",
+      "command": [
+        "bash",
+        "$GATE_SLOT",
+        "bun",
+        "test",
+        "src/lib/pipelines/engine.ports.test.ts",
+        "-t",
+        "restores report provenance"
+      ],
+      "exitCode": 1,
+      "counts": {
+        "pass": 0,
+        "fail": 1
+      },
+      "cases": [
+        {
+          "name": "attempt Git custody restores report provenance after an interrupted fast-forward",
+          "status": "fail"
+        }
+      ]
+    },
+    {
+      "label": "reap-main",
+      "command": [
+        "bash",
+        "$GATE_SLOT",
+        "bun",
+        "test",
+        "src/lib/pipelines/terminalReap.test.ts",
+        "-t",
+        "parked publication custody"
+      ],
+      "exitCode": 1,
+      "counts": {
+        "pass": 0,
+        "fail": 1
+      },
+      "cases": [
+        {
+          "name": "parked publication custody keeps its revision until a host actually settles",
+          "status": "fail"
+        }
+      ]
+    },
+    {
+      "label": "ahead-main",
+      "command": [
+        "bash",
+        "$GATE_SLOT",
+        "bun",
+        "test",
+        "src/lib/pipelines/git.test.ts",
+        "-t",
+        "publication distinguishes an unproved"
+      ],
+      "exitCode": 1,
+      "counts": {
+        "pass": 0,
+        "fail": 1
+      },
+      "cases": [
+        {
+          "name": "publication distinguishes an unproved remote-ahead tip from divergent history",
+          "status": "fail"
+        }
+      ]
+    },
+    {
+      "label": "current-main-regressions",
+      "command": [
+        "bash",
+        "$GATE_SLOT",
+        "bun",
+        "test",
+        "src/lib/pipelines/engine.ports.test.ts",
+        "-t",
+        "attempt Git custody"
+      ],
+      "exitCode": 1,
+      "counts": {
+        "pass": 1,
+        "fail": 25
+      },
+      "cases": [
+        {
+          "name": "attempt Git custody adopts a proved detached push before review",
+          "status": "fail"
+        },
+        {
+          "name": "attempt Git custody refuses an unproved detached push and fails the stage clearly",
+          "status": "fail"
+        },
+        {
+          "name": "attempt Git custody preserves the fences for foreign",
+          "status": "fail"
+        },
+        {
+          "name": "attempt Git custody preserves the fences for wrong-attempt",
+          "status": "fail"
+        },
+        {
+          "name": "attempt Git custody preserves the fences for missing-start",
+          "status": "fail"
+        },
+        {
+          "name": "attempt Git custody preserves the fences for missing-push",
+          "status": "fail"
+        },
+        {
+          "name": "attempt Git custody preserves the fences for malformed",
+          "status": "fail"
+        },
+        {
+          "name": "attempt Git custody preserves the fences for oversized",
+          "status": "fail"
+        },
+        {
+          "name": "attempt Git custody preserves the fences for mixed",
+          "status": "fail"
+        },
+        {
+          "name": "attempt Git custody preserves the fences for old",
+          "status": "fail"
+        },
+        {
+          "name": "attempt Git custody preserves the fences for future",
+          "status": "fail"
+        },
+        {
+          "name": "attempt Git custody preserves the fences for non-descendant",
+          "status": "fail"
+        },
+        {
+          "name": "attempt Git custody preserves the fences for remote-race",
+          "status": "fail"
+        },
+        {
+          "name": "attempt Git custody preserves the fences for remote-after-merge",
+          "status": "fail"
+        },
+        {
+          "name": "attempt Git custody preserves the fences for local-race",
+          "status": "fail"
+        },
+        {
+          "name": "attempt Git custody preserves the fences for pause",
+          "status": "fail"
+        },
+        {
+          "name": "attempt Git custody preserves the fences for claim-race",
+          "status": "fail"
+        },
+        {
+          "name": "attempt Git custody preserves the fences for dirty",
+          "status": "fail"
+        },
+        {
+          "name": "attempt Git custody preserves the fences for released",
+          "status": "pass"
+        },
+        {
+          "name": "attempt Git custody replays its durable proof in a new controller process",
+          "status": "fail"
+        },
+        {
+          "name": "attempt Git custody bounds the proved suffix at 256 commits (256)",
+          "status": "fail"
+        },
+        {
+          "name": "attempt Git custody bounds the proved suffix at 256 commits (257)",
+          "status": "fail"
+        },
+        {
+          "name": "attempt Git custody rechecks activation after preparing the native guard",
+          "status": "fail"
+        },
+        {
+          "name": "attempt Git custody retries an unavailable remote before accepting the stage",
+          "status": "fail"
+        },
+        {
+          "name": "attempt Git custody refuses a commit outside its owned scratch scope",
+          "status": "fail"
+        },
+        {
+          "name": "attempt Git custody restores report provenance after an interrupted fast-forward",
+          "status": "fail"
+        }
+      ]
+    },
+    {
+      "label": "current-main-reap",
+      "command": [
+        "bash",
+        "$GATE_SLOT",
+        "bun",
+        "test",
+        "src/lib/pipelines/terminalReap.test.ts",
+        "-t",
+        "parked publication custody"
+      ],
+      "exitCode": 1,
+      "counts": {
+        "pass": 0,
+        "fail": 1
+      },
+      "cases": [
+        {
+          "name": "parked publication custody keeps its revision until a host actually settles",
+          "status": "fail"
+        }
+      ]
+    },
+    {
+      "label": "current-main-ahead",
+      "command": [
+        "bash",
+        "$GATE_SLOT",
+        "bun",
+        "test",
+        "src/lib/pipelines/git.test.ts",
+        "-t",
+        "publication distinguishes an unproved"
+      ],
+      "exitCode": 1,
+      "counts": {
+        "pass": 0,
+        "fail": 1
+      },
+      "cases": [
+        {
+          "name": "publication distinguishes an unproved remote-ahead tip from divergent history",
+          "status": "fail"
+        }
+      ]
+    },
+    {
+      "label": "current-main-preexisting",
+      "command": [
+        "bash",
+        "$GATE_SLOT",
+        "bun",
+        "test",
+        "src/lib/pipelines/engine.ports.test.ts",
+        "-t",
+        "managed .* admission holds actual"
+      ],
+      "exitCode": 1,
+      "counts": {
+        "pass": 0,
+        "fail": 2
+      },
+      "cases": [
+        {
+          "name": "managed early admission holds actual pipeline launches across recovery until terminal status",
+          "status": "fail"
+        },
+        {
+          "name": "managed drain-switch-off admission holds actual pipeline launches across recovery until terminal status",
+          "status": "fail"
+        }
+      ]
+    },
+    {
+      "label": "integrated-types",
+      "command": [
+        "bash",
+        "$GATE_SLOT",
+        "bun",
+        "node_modules/typescript/bin/tsc",
+        "--noEmit"
+      ],
+      "exitCode": 0,
+      "counts": {},
+      "cases": []
+    },
+    {
+      "label": "integrated-ports",
+      "command": [
+        "bash",
+        "$GATE_SLOT",
+        "bun",
+        "test",
+        "src/lib/pipelines/engine.ports.test.ts"
+      ],
+      "exitCode": 1,
+      "counts": {
+        "pass": 132,
+        "fail": 2
+      },
+      "cases": [
+        {
+          "name": "managed early admission holds actual pipeline launches across recovery until terminal status",
+          "status": "fail"
+        },
+        {
+          "name": "managed drain-switch-off admission holds actual pipeline launches across recovery until terminal status",
+          "status": "fail"
+        },
+        {
+          "name": "attempt Git custody adopts a proved detached push before review",
+          "status": "pass"
+        },
+        {
+          "name": "attempt Git custody refuses an unproved detached push and fails the stage clearly",
+          "status": "pass"
+        },
+        {
+          "name": "attempt Git custody preserves the fences for foreign",
+          "status": "pass"
+        },
+        {
+          "name": "attempt Git custody preserves the fences for wrong-attempt",
+          "status": "pass"
+        },
+        {
+          "name": "attempt Git custody preserves the fences for missing-start",
+          "status": "pass"
+        },
+        {
+          "name": "attempt Git custody preserves the fences for missing-push",
+          "status": "pass"
+        },
+        {
+          "name": "attempt Git custody preserves the fences for malformed",
+          "status": "pass"
+        },
+        {
+          "name": "attempt Git custody preserves the fences for oversized",
+          "status": "pass"
+        },
+        {
+          "name": "attempt Git custody preserves the fences for mixed",
+          "status": "pass"
+        },
+        {
+          "name": "attempt Git custody preserves the fences for old",
+          "status": "pass"
+        },
+        {
+          "name": "attempt Git custody preserves the fences for future",
+          "status": "pass"
+        },
+        {
+          "name": "attempt Git custody preserves the fences for non-descendant",
+          "status": "pass"
+        },
+        {
+          "name": "attempt Git custody preserves the fences for remote-race",
+          "status": "pass"
+        },
+        {
+          "name": "attempt Git custody preserves the fences for remote-after-merge",
+          "status": "pass"
+        },
+        {
+          "name": "attempt Git custody preserves the fences for local-race",
+          "status": "pass"
+        },
+        {
+          "name": "attempt Git custody preserves the fences for pause",
+          "status": "pass"
+        },
+        {
+          "name": "attempt Git custody preserves the fences for claim-race",
+          "status": "pass"
+        },
+        {
+          "name": "attempt Git custody preserves the fences for dirty",
+          "status": "pass"
+        },
+        {
+          "name": "attempt Git custody preserves the fences for released",
+          "status": "pass"
+        },
+        {
+          "name": "attempt Git custody replays its durable proof in a new controller process",
+          "status": "pass"
+        },
+        {
+          "name": "attempt Git custody bounds the proved suffix at 256 commits (256)",
+          "status": "pass"
+        },
+        {
+          "name": "attempt Git custody bounds the proved suffix at 256 commits (257)",
+          "status": "pass"
+        },
+        {
+          "name": "attempt Git custody rechecks activation after preparing the native guard",
+          "status": "pass"
+        },
+        {
+          "name": "attempt Git custody retries an unavailable remote before accepting the stage",
+          "status": "pass"
+        },
+        {
+          "name": "attempt Git custody refuses a commit outside its owned scratch scope",
+          "status": "pass"
+        },
+        {
+          "name": "attempt Git custody restores report provenance after an interrupted fast-forward",
+          "status": "pass"
+        }
+      ]
+    },
+    {
+      "label": "integrated-reap",
+      "command": [
+        "bash",
+        "$GATE_SLOT",
+        "bun",
+        "test",
+        "src/lib/pipelines/terminalReap.test.ts"
+      ],
+      "exitCode": 0,
+      "counts": {
+        "pass": 57,
+        "fail": 0
+      },
+      "cases": [
+        {
+          "name": "parked publication custody keeps its revision until a host actually settles",
+          "status": "pass"
+        }
+      ]
+    },
+    {
+      "label": "integrated-git",
+      "command": [
+        "bash",
+        "$GATE_SLOT",
+        "bun",
+        "test",
+        "src/lib/pipelines/git.test.ts"
+      ],
+      "exitCode": 0,
+      "counts": {
+        "pass": 171,
+        "fail": 0
+      },
+      "cases": [
+        {
+          "name": "publication distinguishes an unproved remote-ahead tip from divergent history",
+          "status": "pass"
+        }
+      ]
+    },
+    {
+      "label": "integrated-settlement",
+      "command": [
+        "bash",
+        "$GATE_SLOT",
+        "bun",
+        "test",
+        "src/lib/pipelines/engine.settlement.test.ts"
+      ],
+      "exitCode": 0,
+      "counts": {
+        "pass": 101,
+        "fail": 0
+      },
+      "cases": []
+    },
+    {
+      "label": "integrated-review-fence",
+      "command": [
+        "bash",
+        "$GATE_SLOT",
+        "bun",
+        "test",
+        "src/lib/pipelines/parkedPublication.test.ts"
+      ],
+      "exitCode": 0,
+      "counts": {
+        "pass": 1,
+        "fail": 0
+      },
+      "cases": []
+    },
+    {
+      "label": "integrated-history",
+      "command": [
+        "bash",
+        "$GATE_SLOT",
+        "bun",
+        "test",
+        "src/lib/git/agentHistoryGuard.test.ts"
+      ],
+      "exitCode": 0,
+      "counts": {
+        "pass": 117,
+        "fail": 0
+      },
+      "cases": []
+    },
+    {
+      "label": "final-comment-types",
+      "command": [
+        "bash",
+        "$GATE_SLOT",
+        "bun",
+        "node_modules/typescript/bin/tsc",
+        "--noEmit"
+      ],
+      "exitCode": 0,
+      "counts": {},
+      "cases": []
+    },
+    {
+      "label": "integrated-lint",
+      "command": [
+        "bash",
+        "$GATE_SLOT",
+        "bun",
+        "node_modules/eslint/bin/eslint.js",
+        "src/lib/git/agentHistoryGuard.test.ts",
+        "src/lib/git/agentHistoryGuard.ts",
+        "src/lib/git/stageAttemptGuard.ts",
+        "src/lib/performanceSpans.ts",
+        "src/lib/pipelines/engine.ports.test.ts",
+        "src/lib/pipelines/engine.ts",
+        "src/lib/pipelines/git.test.ts",
+        "src/lib/pipelines/git.ts",
+        "src/lib/pipelines/stageAttemptPush.ts",
+        "src/lib/pipelines/stageBranch.ts",
+        "src/lib/pipelines/terminalReap.test.ts"
+      ],
+      "exitCode": 0,
+      "counts": {},
+      "cases": []
+    },
+    {
+      "label": "integrated-spans",
+      "command": [
+        "bash",
+        "$GATE_SLOT",
+        "bun",
+        "test",
+        "src/lib/performanceSpans.test.ts"
+      ],
+      "exitCode": 0,
+      "counts": {
+        "pass": 9,
+        "fail": 0
+      },
+      "cases": []
+    },
+    {
+      "label": "integrated-identity",
+      "command": [
+        "bash",
+        "$GATE_SLOT",
+        "bun",
+        "test",
+        "src/lib/git/agentPublicationIdentity.test.ts"
+      ],
+      "exitCode": 0,
+      "counts": {
+        "pass": 5,
+        "fail": 0
+      },
+      "cases": []
+    },
+    {
+      "label": "integrated-provenance",
+      "command": [
+        "bash",
+        "$GATE_SLOT",
+        "bun",
+        "test",
+        "src/lib/pipelines/stageProvenance.test.ts"
+      ],
+      "exitCode": 0,
+      "counts": {
+        "pass": 9,
+        "fail": 0
+      },
+      "cases": []
+    },
+    {
+      "label": "privacy-staged",
+      "command": [
+        "bash",
+        "$GATE_SLOT",
+        "bun",
+        "scripts/privacy-publication-gate.ts",
+        "--repository",
+        "$WORKTREE",
+        "--require-known-values",
+        "--check-commits",
+        "--base",
+        "d395e7c7324e2653acd37edbbf644814f622deb1"
+      ],
+      "exitCode": 0,
+      "outcome": "PRIVACY GATE: PASS"
+    }
+  ],
+  "redEvidence": {
+    "detachedPush": "main accepted the starting head instead of the pushed descendant",
+    "unprovedPush": "native push returned success on main",
+    "attemptFences": "main deferred the mismatch to publication instead of refusing the producing stage",
+    "replay": "main retained the old report head after the Git effect survived",
+    "parkedRevision": "main changed the persisted revision on the first unchanged custody tick",
+    "remoteAhead": "main described a strict descendant as divergence"
+  },
+  "notes": [
+    "The released-delivery case already passed on main and remains a fence.",
+    "Managed early and drain-switch-off admission assertions fail on both current main and the integrated change.",
+    "Git integration proof and publication guards retain their existing rejection of unreviewed application work.",
+    "No performance gain is claimed.",
+    "The final handoff also corrects a settlement comment; runtime statements match the verified merge.",
+    "Changed-file lint completed with zero errors and five warnings."
+  ]
+}
