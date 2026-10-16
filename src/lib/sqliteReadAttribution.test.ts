@@ -7,6 +7,49 @@ import { observeSqlite, parseSqliteJson, sqliteReadCounters } from "./sqliteRead
 import { readAttribution } from "./readAttribution";
 import { createViewerLoopMonitor } from "./viewerLoopMonitor";
 import { openCurrentDatabase } from "./state/currentDatabase";
+import { initializeStateCollections, SqliteStateCollection } from "./state/sqliteStateStore";
+
+test("mixed collections and later bind slots keep the generic reader label", () => {
+  const db = observeSqlite(new Database(":memory:"), "state");
+  try {
+    db.exec("CREATE TABLE state_rows(collection TEXT,row_key TEXT); INSERT INTO state_rows VALUES ('pipelines','tasks'),('tasks','row')");
+    for (const [where, bindings, expected] of [
+      ["collection=?", ["pipelines"], "state.pipelines.all"],
+      ["collection IN (?)", ["pipelines"], "state.pipelines.all"],
+      ["collection IN (?,?)", ["pipelines", "tasks"], "state.all"],
+      ["row_key=? AND collection=?", ["tasks", "pipelines"], "state.all"],
+      ["collection=?2 AND row_key=?1", ["tasks", "pipelines"], "state.all"],
+    ] as const) {
+      readAttribution.clear();
+      db.query(`SELECT row_key FROM state_rows WHERE ${where}`).all(...bindings);
+      const reader = readAttribution.snapshot(1).top.find(row => row.reader.endsWith(".all"));
+      expect(reader!.reader).toBe(expected);
+    }
+  } finally { db.close(); readAttribution.clear(); }
+});
+
+test("transaction JSON bytes belong to the connection that supplied the row", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "read-attribution-transaction-"));
+  const filename = path.join(directory, "state.sqlite");
+  const row = { id: "row", text: "content" };
+  initializeStateCollections(filename, [{ collection: "tasks", schemaVersion: 1, migrationId: "fixture",
+    key: value => (value as typeof row).id, loadRecords: () => [row] }]);
+  const store = new SqliteStateCollection<typeof row>(filename, { collection: "tasks", schemaVersion: 1, busyMessage: "busy",
+    key: value => value.id, decode: value => value as typeof row, clone: structuredClone });
+  const reader = (store as unknown as { readDb: Database }).readDb;
+  try {
+    const identity = sqliteReadCounters(reader)!.connection;
+    const before = sqliteReadCounters(reader)!.decodedJsonBytes;
+    readAttribution.clear();
+    expect(store.boundedPatch(8, tx => tx.get("row"))).toEqual(row);
+    const decoded = readAttribution.snapshot(1).top.find(value => value.reader === "state.json")!;
+    expect(decoded.decodedJsonBytes).toBe(Buffer.byteLength(JSON.stringify(row)));
+    expect(decoded.connection).not.toBe(identity);
+    expect(sqliteReadCounters(reader)!.decodedJsonBytes).toBe(before);
+    expect(store.get("row")).toEqual(row);
+    expect(sqliteReadCounters(reader)!.decodedJsonBytes).toBe(before + Buffer.byteLength(JSON.stringify(row)));
+  } finally { reader.close(); readAttribution.clear(); fs.rmSync(directory, { recursive: true, force: true }); }
+});
 
 test.each(["before", "after"])("prototype guards installed %s decoration are observed and restore native calls", timing => {
   const native = Database.prototype.exec;

@@ -1,6 +1,6 @@
 # SQLite read attribution
 
-The isolated synthetic scenario attributes at least 99.64% of each measured
+The isolated synthetic scenario attributes at least 99.10% of each measured
 pause to named synchronous work with byte counters. In the full-registry
 window, `registry.deliveryOperationOwners.all` reads 460.6 MB and
 `registry.receipts.all` reads 328.1 MB. These are local workload findings.
@@ -41,30 +41,30 @@ already-decoded view cannot erase the workload.
 
 ## Recorded result
 
-Recorded on 2026-10-16 at 15:24:57 UTC, Linux, Bun 1.4.0. MB means 1,000,000 bytes.
+Recorded on 2026-10-16 at 15:47:14 UTC, Linux, Bun 1.4.0. MB means 1,000,000 bytes.
 The read column is sampled main-thread `rchar`, including cached reads.
 
 | Workload | Repetitions | Pause ms | Attributed time | Read MB | Decoded JSON MB |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| pipelines | 33 | 773 | 99.96% | 995.1 | 990.3 |
-| pipelines_archive | 13 | 773 | 100.00% | 1188.4 | 1170.3 |
-| registry.snapshot | 1 | 2043 | 99.64% | 913.9 | 212.7 |
-| deliveryOperationOwners | 1 | 1188 | 100.00% | 282.9 | 45.3 |
+| pipelines | 27 | 756 | 100.00% | 814.2 | 810.2 |
+| pipelines_archive | 8 | 773 | 100.00% | 731.3 | 720.2 |
+| registry.snapshot | 1 | 958 | 99.10% | 913.9 | 212.7 |
+| deliveryOperationOwners | 1 | 754 | 99.80% | 486.7 | 45.3 |
 
 All four gaps report zero dropped reader records. The registry window reads
 913.9 MB for 212.7 MB of decoded JSON: repeated SQLite page access can exceed
 payload size. The owner-only case also reads receipt and conversation
-attestors; its largest aggregate reader is `registry.all` (111.9 MB), followed
+attestors; its largest aggregate reader is `registry.all` (310.2 MB), followed
 by `registry.receipts.all` (92.0 MB). Full archive and pipeline reads appear as
 `state.pipelines_archive.all` and `state.pipelines.all`.
 
-The owner-only case records 22,493 calls without an I/O sample. Byte values
+The owner-only case records 22,998 calls without an I/O sample. Byte values
 are observed lower bounds; they are never extrapolated from sampled calls.
 Decoded JSON bytes count attempted UTF-8 input, including a failed parse.
 
 Three alternating enabled/disabled pairs per case retain the same data and
-load. Median disabled/enabled wall times in ms are 29.35/29.82 (pipelines),
-60.22/74.96 (archive), 1629.68/1633.62 (registry), and 1286.83/1414.72 (owners).
+load. Median disabled/enabled wall times in ms are 34.27/35.98 (pipelines),
+86.61/86.67 (archive), 857.27/864.28 (registry), and 776.66/710.86 (owners).
 This comparison measures incremental counter cost with the connection
 decorators present in both modes. It gives no production CPU estimate or
 speedup claim.
@@ -163,7 +163,7 @@ A final three-way comparison against current main is clean for all four overlapp
 Focused tests cover real SQLite statements and iteration, transaction rollback,
 failed SQL/JSON, file replacement, async interleaving, proc failure, counter
 regression, overflow, process restart, and diagnostic privacy. The store suites,
-type checker, changed-file lint, MCP build and privacy gate are run with
+type checker, changed-file lint, production Next.js/MCP build and privacy gate are run with
 isolated roots and a closed control URL. Hosted checks follow pipeline
 publication.
 
@@ -173,3 +173,9 @@ the same failures on the starting commit: `src/lib/reviewHistory/reader.test.ts`
 (ten bridge-log admission cases). Changed-file lint retains three existing
 errors and introduces none. The baseline and final case identities are recorded
 in `evidence/read-attribution/checks.json`.
+
+Transaction decoders receive the connection that supplied their row, including
+controller selections, bounded writes, atomic moves and preserved-row checks.
+A regression test first fails on the previous implementation and passes after
+that connection is forwarded. Mixed collection reads and later bind slots keep
+a generic reader label, avoiding a false attribution to the first argument.

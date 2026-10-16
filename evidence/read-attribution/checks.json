@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "utc": "2026-10-16T15:29:11.375816+00:00",
+  "utc": "2026-10-16T15:53:44.172495+00:00",
   "startingCommit": "8ba30644e03105bbcdf55c99891f1b9d5d00af6b",
   "mainObserved": "26d057f4626168aff625de7be0aab61298466b1d",
   "runtime": "Bun 1.4.0",
@@ -24,11 +24,11 @@
     "src/lib/runtime/handoffQueueStore.ts": "932e7f824d66b672b64b5e9cd80a10886b6384c8c52d4809f228a2f4d1f1969b",
     "src/lib/runtime/runtimeImageStore.ts": "6f3a472ac8e09f833d28fffa907d07fe8c56ec57a31768abd0623a4b37315e60",
     "src/lib/search/transcriptSearch.ts": "7ab5452c691921650e86a020e3d2934d76cc00b7f9e63a018d75143232d3be5a",
-    "src/lib/sqliteReadAttribution.test.ts": "14143feaa168e8312520028d10be363f35dc683081bac0ccdf3cd716655915d0",
-    "src/lib/sqliteReadAttribution.ts": "2ba6468a89d89af035ce7658a400e9ccf221adb3044036dffd7bf2cf968270fe",
+    "src/lib/sqliteReadAttribution.test.ts": "223bbd5fc45afdbbb13031708746f44e952439e9fbd0ae0c1f2abb8755c7aa6b",
+    "src/lib/sqliteReadAttribution.ts": "e4aa258b789eb73f0cb20dcc829ba80b06e64a4bad6951787f7823297ee21251",
     "src/lib/state/currentDatabase.ts": "caec76d702d70c53b525c71becab3da0919ec3d8f2da93ad3f2277f635399066",
     "src/lib/state/durability.ts": "1db72877f908996cc45af64da3522ab686b336964f54c2cf01dd0396247de576",
-    "src/lib/state/sqliteStateStore.ts": "c39a305d0b5a72adb6085e1d30ea1315b26b2f719c43b69adcd29f36d8bc539f",
+    "src/lib/state/sqliteStateStore.ts": "e4d9843b46aadaf1fd05f380ea6a05b497095c47402f4b05b42b004f1631bb58",
     "src/lib/team/store.ts": "7acd3dbf80791d1f7b02c04cefa5a7b6c250dc91042b6dfbf2b66d2e4d66074f",
     "src/lib/telegram/bot/outbound.ts": "a0be6e2de724766613fd612b4f1df396e1f0c189016ea355e3afeba8d1e8431b",
     "src/lib/telegram/bot/store.ts": "5f350815bdce40d7cf0aa357c0069dd0c83b46b3f72323995d6e73b1b0ad7ae9",
@@ -40,7 +40,7 @@
       "exit": 0,
       "preexisting": false,
       "failures": [],
-      "seconds": 0.2719030240550637,
+      "seconds": 0.2683918939437717,
       "passedCases": 6,
       "failedCases": 0
     },
@@ -49,8 +49,8 @@
       "exit": 0,
       "preexisting": false,
       "failures": [],
-      "seconds": 0.31040347809903324,
-      "passedCases": 5,
+      "seconds": 0.3822602101135999,
+      "passedCases": 7,
       "failedCases": 0
     },
     {
@@ -58,7 +58,7 @@
       "exit": 0,
       "preexisting": false,
       "failures": [],
-      "seconds": 1.6311747629661113,
+      "seconds": 1.6570141538977623,
       "passedCases": 9,
       "failedCases": 0
     },
@@ -67,7 +67,7 @@
       "exit": 0,
       "preexisting": false,
       "failures": [],
-      "seconds": 3.862046789843589,
+      "seconds": 3.7579222458880395,
       "passedCases": 11,
       "failedCases": 0
     },
@@ -76,7 +76,7 @@
       "exit": 0,
       "preexisting": false,
       "failures": [],
-      "seconds": 4.223260569153354,
+      "seconds": 4.069436132907867,
       "passedCases": 10,
       "failedCases": 0
     },
@@ -85,7 +85,7 @@
       "exit": 0,
       "preexisting": false,
       "failures": [],
-      "seconds": 0.5022758839186281,
+      "seconds": 0.5815820239949971,
       "passedCases": 2,
       "failedCases": 0
     },
@@ -94,7 +94,7 @@
       "exit": 0,
       "preexisting": false,
       "failures": [],
-      "seconds": 8.684990641893819,
+      "seconds": 9.007113291881979,
       "passedCases": 22,
       "failedCases": 0
     },
@@ -103,7 +103,7 @@
       "exit": 0,
       "preexisting": false,
       "failures": [],
-      "seconds": 2.3439443728420883,
+      "seconds": 2.567202440928668,
       "passedCases": 22,
       "failedCases": 0
     },
@@ -112,7 +112,7 @@
       "exit": 0,
       "preexisting": false,
       "failures": [],
-      "seconds": 4.675121883163229,
+      "seconds": 5.551872160984203,
       "passedCases": 4,
       "failedCases": 0
     },
@@ -121,7 +121,7 @@
       "exit": 0,
       "preexisting": false,
       "failures": [],
-      "seconds": 36.09114039107226,
+      "seconds": 36.42527351202443,
       "passedCases": 12,
       "failedCases": 0
     },
@@ -130,7 +130,7 @@
       "exit": 0,
       "preexisting": false,
       "failures": [],
-      "seconds": 20.31970317591913,
+      "seconds": 22.866394092096016,
       "passedCases": 99,
       "failedCases": 0
     },
@@ -139,7 +139,7 @@
       "exit": 0,
       "preexisting": false,
       "failures": [],
-      "seconds": 0.670208872994408,
+      "seconds": 0.6142788070719689,
       "passedCases": 8,
       "failedCases": 0
     },
@@ -148,7 +148,7 @@
       "exit": 0,
       "preexisting": false,
       "failures": [],
-      "seconds": 4.923182557104155,
+      "seconds": 6.0289157750085,
       "passedCases": 62,
       "failedCases": 0
     },
@@ -157,7 +157,7 @@
       "exit": 0,
       "preexisting": false,
       "failures": [],
-      "seconds": 0.6075868350453675,
+      "seconds": 0.6924894379917532,
       "passedCases": 27,
       "failedCases": 0
     },
@@ -166,7 +166,7 @@
       "exit": 0,
       "preexisting": false,
       "failures": [],
-      "seconds": 1.111640829127282,
+      "seconds": 1.2042085411958396,
       "passedCases": 21,
       "failedCases": 0
     },
@@ -175,7 +175,7 @@
       "exit": 0,
       "preexisting": false,
       "failures": [],
-      "seconds": 0.3004989931359887,
+      "seconds": 0.3118381800595671,
       "passedCases": 6,
       "failedCases": 0
     },
@@ -184,7 +184,7 @@
       "exit": 0,
       "preexisting": false,
       "failures": [],
-      "seconds": 0.5109968220349401,
+      "seconds": 0.5762984999455512,
       "passedCases": 8,
       "failedCases": 0
     },
@@ -193,7 +193,7 @@
       "exit": 0,
       "preexisting": false,
       "failures": [],
-      "seconds": 0.6203590619843453,
+      "seconds": 0.6725564659573138,
       "passedCases": 32,
       "failedCases": 0
     },
@@ -202,7 +202,7 @@
       "exit": 0,
       "preexisting": false,
       "failures": [],
-      "seconds": 3.2042903951369226,
+      "seconds": 3.931897204136476,
       "passedCases": 53,
       "failedCases": 0
     },
@@ -211,7 +211,7 @@
       "exit": 0,
       "preexisting": false,
       "failures": [],
-      "seconds": 2.1794056850485504,
+      "seconds": 2.100367459934205,
       "passedCases": 53,
       "failedCases": 0
     },
@@ -220,7 +220,7 @@
       "exit": 0,
       "preexisting": false,
       "failures": [],
-      "seconds": 0.33415892510674894,
+      "seconds": 0.33078913507051766,
       "passedCases": 11,
       "failedCases": 0
     },
@@ -229,7 +229,7 @@
       "exit": 0,
       "preexisting": false,
       "failures": [],
-      "seconds": 1.2354431019630283,
+      "seconds": 1.2524630688130856,
       "passedCases": 14,
       "failedCases": 0
     },
@@ -238,7 +238,7 @@
       "exit": 0,
       "preexisting": false,
       "failures": [],
-      "seconds": 0.4049242620822042,
+      "seconds": 0.3531594448722899,
       "passedCases": 11,
       "failedCases": 0
     },
@@ -247,7 +247,7 @@
       "exit": 0,
       "preexisting": false,
       "failures": [],
-      "seconds": 9.325609480962157,
+      "seconds": 7.928942215163261,
       "passedCases": 12,
       "failedCases": 0
     },
@@ -258,7 +258,7 @@
       "failures": [
         "fresh unowned production process imports GETs without claiming ownership or initializing state"
       ],
-      "seconds": 11.400000112131238,
+      "seconds": 15.061654114862904,
       "passedCases": 72,
       "failedCases": 1
     },
@@ -278,7 +278,7 @@
         "unknown-reply cannot turn stale chat text into report context",
         "unpublished cannot turn stale chat text into report context"
       ],
-      "seconds": 0.9007907730992883,
+      "seconds": 1.0501134779769927,
       "passedCases": 10,
       "failedCases": 10
     },
@@ -287,7 +287,7 @@
       "exit": 0,
       "preexisting": false,
       "failures": [],
-      "seconds": 9.802086405921727,
+      "seconds": 9.813890741905198,
       "passedCases": 14,
       "failedCases": 0
     },
@@ -296,7 +296,7 @@
       "exit": 0,
       "preexisting": false,
       "failures": [],
-      "seconds": 1.6152632259763777,
+      "seconds": 1.5890375280287117,
       "passedCases": 8,
       "failedCases": 0
     },
@@ -305,34 +305,34 @@
       "exit": 0,
       "preexisting": false,
       "failures": [],
-      "seconds": 3.817617424065247,
+      "seconds": 3.801735097076744,
       "passedCases": 7,
       "failedCases": 0
     },
     {
       "file": "lint",
       "exit": 0,
-      "seconds": 4.612446858081967
+      "seconds": 5.464583760127425
     },
     {
       "file": "types",
       "exit": 0,
-      "seconds": 13.069475295953453
+      "seconds": 16.7912219541613
     },
     {
       "file": "scenario",
       "exit": 0,
-      "seconds": 35.42732537491247
+      "seconds": 27.58632143889554
     },
     {
       "file": "privacy",
       "exit": 0,
-      "seconds": 16.797735834959894
+      "seconds": 8.953095861012116
     },
     {
       "file": "build",
       "exit": 0,
-      "seconds": 205.2849403580185
+      "seconds": 195.7037729069125
     }
   ],
   "baseline": [
@@ -430,5 +430,11 @@
     }
   ],
   "hostedChecks": "Await pipeline publication; not run by this local campaign.",
-  "newFailures": []
+  "newFailures": [],
+  "transactionRegression": {
+    "test": "transaction JSON bytes belong to the connection that supplied the row",
+    "redOn": "c94a87d851511ba11cb7f5e64ceadd54c220c5aa",
+    "redReason": "decoded bytes were charged to the persistent reader instead of the transaction connection",
+    "green": true
+  }
 }

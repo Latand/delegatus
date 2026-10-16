@@ -30,7 +30,9 @@ export function observeSqlite<T extends Database>(db: T, reader: string): T {
   const observeStatement = (statement: Statement, sql: string) => {
     if (shared.observed.has(statement)) return statement;
     shared.observed.add(statement);
-    const boundCollection = /\bcollection\s*(?:=\s*\?|IN\s*\(\s*\?)/i.test(sql);
+    // A mixed IN list or a later bind slot cannot name one collection.
+    const selector = /\bcollection\s*(?:=\s*\?(?:1)?(?!\d)|IN\s*\(\s*\?(?:1)?\s*\))/i.exec(sql);
+    const boundCollection = !!selector && selector.index + selector[0].indexOf("?") === sql.indexOf("?");
     const literalCollections = [...collections].filter(name => sql.includes(`'${name}'`));
     const literalCollection = literalCollections.length === 1 ? literalCollections[0] : undefined;
     const name = (args: SQLQueryBindings[]) => {

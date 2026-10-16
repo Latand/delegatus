@@ -1310,7 +1310,7 @@ export class SqliteStateCollection<T> {
       const row = db.query<{ value_json: string; row_revision: number }, [string, string]>(
         "SELECT value_json,row_revision FROM state_rows WHERE collection=? AND row_key=?").get(this.options.collection, key);
       if (!row || row.row_revision !== revision) throw new StateSnapshotChangedError();
-      const value = withViewerOperation("pipelines.controller-decode", () => this.decodeRow(row.value_json));
+      const value = withViewerOperation("pipelines.controller-decode", () => this.decodeRow(row.value_json, db));
       const freeze = (item: unknown): void => {
         if (!item || typeof item !== "object" || Object.isFrozen(item)) return;
         Object.freeze(item);
@@ -1401,7 +1401,7 @@ export class SqliteStateCollection<T> {
         `).all(this.options.collection, order, order, key, Math.min(16, limit - selected.length));
         for (const row of rows) {
           order = row.row_order; key = row.row_key;
-          const decoded = this.decodeRow(row.value_json);
+          const decoded = this.decodeRow(row.value_json, db);
           if (decoded !== null && select(decoded)) selected.push(this.options.clone(decoded));
         }
         if (!rows.length) break;
@@ -1489,7 +1489,7 @@ export class SqliteStateCollection<T> {
               `).all(scanLimit + 1);
               for (const row of rows) {
                 consume();
-                const pipeline = this.decodeRow(row.value_json);
+                const pipeline = this.decodeRow(row.value_json, db);
                 if (!pipeline) throw new Error("invalid bounded state row");
                 if ((pipeline as { hiddenAt?: string | null }).hiddenAt) continue;
                 const value = pipeline as { delivery?: { target?: { repository?: string; branch?: string; pr?: number } } };
@@ -1506,7 +1506,7 @@ export class SqliteStateCollection<T> {
                 "SELECT value_json FROM state_rows WHERE collection = ? AND row_key = ?",
               ).get(this.options.collection, key);
               if (!row) return null;
-              const value = this.decodeRow(row.value_json);
+              const value = this.decodeRow(row.value_json, db);
               if (value === null) {
                 if (!this.options.preserveRejectedRecords) throw new Error("invalid bounded state row");
                 return null;
@@ -1591,7 +1591,7 @@ export class SqliteStateCollection<T> {
         AND json_extract(value_json, '$.delivery.disposition') = 'owner'
         AND json_extract(value_json, '$.delivery.target.repository') = ? AND json_extract(value_json, '$.delivery.target.branch') = ? LIMIT 1`).get(query.repository, query.branch);
       if (!row) return null;
-      const decoded = this.decodeRow(row.value_json);
+      const decoded = this.decodeRow(row.value_json, db);
       if (!decoded) throw new Error("invalid indexed owner row");
       return this.options.clone(decoded);
     }
@@ -1607,7 +1607,7 @@ export class SqliteStateCollection<T> {
             ${query.active ? "AND json_extract(value_json, '$.delivery.active') = 1 AND json_extract(value_json, '$.delivery.disposition') = 'owner'" : ""}
             ORDER BY json_extract(value_json, '$.delivery.epoch') DESC LIMIT 1`).get(collection, query.repository, query.branch);
       if (!row) return [];
-      const decoded = this.decodeRow(row.value_json);
+      const decoded = this.decodeRow(row.value_json, db);
       if (!decoded) throw new Error("invalid indexed pipeline row");
       return [this.options.clone(decoded)];
     });
@@ -1741,7 +1741,7 @@ export class SqliteStateCollection<T> {
           FROM state_rows WHERE collection = ? ORDER BY row_order, row_key
         `).all(this.options.collection);
         const selected = sourceRows.flatMap((row) => {
-          const decoded = this.decodeRow(row.value_json);
+          const decoded = this.decodeRow(row.value_json, db);
           return decoded !== null && predicate(decoded) ? [{ row, record: decoded }] : [];
         });
         if (selected.length === 0) return 0;
@@ -2041,9 +2041,9 @@ export class SqliteStateCollection<T> {
     ).get(this.options.collection) ?? null;
   }
 
-  private decodeRow(valueJson: string): T | null {
+  private decodeRow(valueJson: string, db = this.readDb): T | null {
     try {
-      const decoded = this.options.decode(parseSqliteJson(valueJson, this.readDb) as unknown);
+      const decoded = this.options.decode(parseSqliteJson(valueJson, db) as unknown);
       if (decoded === null && this.options.strictDecode && !this.options.preserveRejectedRecords) {
         throw new Error(`${this.options.collection} SQLite row is malformed`);
       }
@@ -2263,8 +2263,8 @@ export class SqliteStateCollection<T> {
     this.options.validate?.(record);
   }
 
-  private protectedRow(row: { value_json: string } | null | undefined): boolean {
-    return Boolean(row && this.options.preserveRejectedRecords && this.decodeRow(row.value_json) === null);
+  private protectedRow(row: { value_json: string } | null | undefined, db: Database): boolean {
+    return Boolean(row && this.options.preserveRejectedRecords && this.decodeRow(row.value_json, db) === null);
   }
 
   private assertRowWritable(db: Database, key: string): void {
@@ -2272,7 +2272,7 @@ export class SqliteStateCollection<T> {
     const row = db.query<{ value_json: string }, [string, string]>(
       "SELECT value_json FROM state_rows WHERE collection = ? AND row_key = ?",
     ).get(this.options.collection, key);
-    if (this.protectedRow(row)) throw new Error(`refusing to overwrite preserved ${this.options.collection} record: ${key}`);
+    if (this.protectedRow(row, db)) throw new Error(`refusing to overwrite preserved ${this.options.collection} record: ${key}`);
   }
 
   private persistChangedRows(ownerToken: string, records: readonly T[], admittedDb?: Database): void {
@@ -2368,7 +2368,7 @@ export class SqliteStateCollection<T> {
           FROM state_rows WHERE collection = ?
         `).all(this.options.collection).map((row) => [row.row_key, row] as const));
         for (const key of [...seen, ...requestedDeletes]) this.assertRowWritable(db, key);
-        const protectedKeys = new Set([...current].filter(([, row]) => this.protectedRow(row)).map(([key]) => key));
+        const protectedKeys = new Set([...current].filter(([, row]) => this.protectedRow(row, db)).map(([key]) => key));
         const encoded = records.map((record, index) => ({
           key: this.options.key(record),
           valueJson: JSON.stringify(record),
