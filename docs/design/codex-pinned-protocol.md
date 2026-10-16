@@ -55,9 +55,11 @@ app-server is spawned (`resolveCodexProtocol` in `codexPinnedProtocol.ts`):
 Verdicts are cached per CLI version for the life of the process, with at most
 eight entries and the oldest evicted. Concurrent launches share one
 generation. A failed or timed-out generation (30 seconds) refuses that launch
-and is not cached, so the next launch tries again. The comparison is
-synchronous and took 10–20 ms per bundle on the pinned schemas. Generation
-runs under the `codex.protocol-admission` loop-monitor label.
+and is not cached, so the next launch tries again. Generation runs under the
+`codex.protocol-admission` loop-monitor label. Against the real 0.163.0 and
+0.162.1 executables (posing as 0.163.9 and 0.161.0), one admission took
+121–136 ms, and the longest event-loop stall during it, sampled by a 1 ms
+timer, was 9 ms.
 
 The fallback does not replace review. It keeps lanes running across an
 additive update, and it never widens the contract the adapter writes.
