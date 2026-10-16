@@ -1,10 +1,10 @@
+import "next/dist/server/node-environment-baseline";
 import { expect, spyOn, test } from "bun:test";
 import type { WorkStore } from "next/dist/server/app-render/work-async-storage.external";
 import type { WorkUnitStore } from "next/dist/server/app-render/work-unit-async-storage.external";
 
 // Next captures global AsyncLocalStorage when its module graph first loads.
 // Bootstrap before importing any part of that graph, including spawnCommand.
-await import("next/dist/server/node-environment-baseline");
 const { after } = await import("next/server");
 const { AfterContext } = await import("next/dist/server/after/after-context");
 const { workAsyncStorage } = await import("next/dist/server/app-render/work-async-storage.external");
