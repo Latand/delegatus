@@ -3923,6 +3923,7 @@ export const en = {
   "runtime.attention.deliveryUncertain": "The answer was dispatched, but its result is unconfirmed. It will not be sent again.",
   "runtime.attention.customAnswer": "Your answer",
   "runtime.attention.answering": "answering…",
+  "runtime.attention.answered": "Answered: {answer}",
   "runtime.attention.expiresIn": "auto-resolves in {seconds}s",
   "runtime.attention.keysHint": "Enter approves · Esc denies",
   "voice.start": "Start continuous voice conversation",

@@ -3,29 +3,46 @@
 import { Check, Loader2, X } from "@/components/icons";
 import { useState } from "react";
 
+import { layerPermissionAnswer, unlayerPermissionAnswer } from "@/components/attention/dismissalOverlay";
+import { requestFilesRefresh } from "@/lib/filesEvents";
 import { useLocale } from "@/lib/i18n";
 import type { FileEntry } from "@/lib/types";
 
 type Decision = "allow" | "deny";
 
+/* The row leaves on the press and comes back on a refusal as a new mount, so
+   what went wrong and what is still on its way live beside the layer. */
+const failures = new Map<string, string>();
+const inFlight = new Set<string>();
+
 /**
  * Allow once / Deny on a Needs-you row whose conversation holds a structured
  * tool permission request (#2215). It sends `conversation_action permission`
  * through the same route the MCP tool uses, keyed by the request, so a double
- * tap replays one operation instead of answering twice. The row drops out on
- * its own once the host reports the request answered.
+ * tap replays one operation instead of answering twice. The answer is drawn
+ * at once: the row and the count leave through the dismissal overlay's
+ * permission layer, and a refusal takes the layer back so the row returns
+ * with its buttons and the reason.
  */
 export function PermissionActions({ file, size = "compact" }: { file: FileEntry; size?: "compact" | "touch" }) {
   const { t } = useLocale();
-  const [busy, setBusy] = useState<Decision | null>(null);
-  const [error, setError] = useState<string | null>(null);
   const permission = file.pendingPermission;
+  const [busy, setBusy] = useState<Decision | null>(null);
+  const [error, setError] = useState<string | null>(() => (permission ? failures.get(permission.id) ?? null : null));
   if (!permission) return null;
 
   const answer = async (decision: Decision) => {
-    if (busy) return;
+    if (busy || inFlight.has(permission.id)) return;
+    inFlight.add(permission.id);
+    failures.delete(permission.id);
     setBusy(decision);
     setError(null);
+    layerPermissionAnswer(permission.id);
+    const refuse = (reason: string) => {
+      failures.set(permission.id, reason);
+      setError(reason);
+      unlayerPermissionAnswer(permission.id);
+    };
     try {
       const response = await fetch("/api/conversation-host", {
         method: "POST",
@@ -40,10 +57,12 @@ export function PermissionActions({ file, size = "compact" }: { file: FileEntry;
         }),
       });
       const body = await response.json().catch(() => ({})) as { ok?: boolean; error?: string };
-      if (!response.ok || body.ok !== true) setError(body.error ?? `HTTP ${response.status}`);
+      if (!response.ok || body.ok !== true) refuse(body.error ?? `HTTP ${response.status}`);
+      else requestFilesRefresh();
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : String(caught));
+      refuse(caught instanceof Error ? caught.message : String(caught));
     } finally {
+      inFlight.delete(permission.id);
       setBusy(null);
     }
   };

@@ -3856,6 +3856,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "runtime.attention.deliveryUncertain": "Відповідь надіслано, але результат не підтверджено. Повторного надсилання не буде.",
   "runtime.attention.customAnswer": "Ваша відповідь",
   "runtime.attention.answering": "відповідаю…",
+  "runtime.attention.answered": "Відповідь: {answer}",
   "runtime.attention.expiresIn": "авторішення через {seconds}с",
   "runtime.attention.keysHint": "Enter схвалює · Esc відхиляє",
   "voice.start": "Почати безперервну голосову розмову",

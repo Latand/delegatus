@@ -420,7 +420,7 @@ async function liveHarness() {
   /** fail: "before" loses the request on its way in; "after" loses the reply to a request the Viewer handled. */
   const failing: { command: "before" | "after" | null } = { command: null };
   /** `start`: held until the test settles it, as a slow mint holds a real start. */
-  const holding: { start: Promise<void> | null } = { start: null };
+  const holding: { start: Promise<void> | null; command: Promise<void> | null } = { start: null, command: null };
   const document = settingsOf({ enabled: true, keySource: "file" });
   harness.setRoute(async (url, init) => {
     const target = new URL(url, "http://127.0.0.1:8898");
@@ -432,6 +432,7 @@ async function liveHarness() {
     if (target.pathname !== "/api/voice-companion/session") return jsonResponse({ error: "not routed in this test" }, 404);
     const body = typeof init?.body === "string" ? JSON.parse(init.body) as { action?: string } : null;
     if (body?.action === "start" && holding.start) await holding.start;
+    if (body?.action === "command" && holding.command) await holding.command;
     const lost = body?.action === "command" ? failing.command : null;
     if (lost === "before") { failing.command = null; return jsonResponse({ code: "COMPANION_UNAVAILABLE" }, 502); }
     const request = new NextRequest(`http://127.0.0.1${target.pathname}${target.search}`, { method: init?.method ?? "GET", headers: { host: "127.0.0.1", "sec-fetch-site": "same-origin" }, ...(typeof init?.body === "string" ? { body: init.body } : {}) });
@@ -653,6 +654,37 @@ test("two visible confirmations keep Send, Cancel, retry and a spoken/tapped rac
         expect(live.sent).toHaveLength(0);
       }
     } finally { await unmountNow(); await live.release(); }
+  }
+}, 15_000);
+
+test("a tapped Send or Cancel draws its stage at once while the request is still on its way, and takes no second tap", async () => {
+  for (const decision of ["send", "cancel"] as const) {
+    const live = await liveHarness();
+    let release = () => {};
+    try {
+      await mount(<VoiceCompanionHost project="project-a" mobile={false} />);
+      await click(document.querySelector("[data-companion-talk]"));
+      await pause();
+      await live.propose(live.provider.sessions[0].id, "Review the plan", "Two plans exist.");
+      const card = () => document.querySelector<HTMLElement>("[data-companion-delegation]");
+      expect(card()?.dataset.stage).toBe("awaiting-confirmation");
+      live.holding.command = new Promise<void>((resolve) => { release = resolve; });
+      await click(card()!.querySelector(decision === "send" ? "[data-companion-send]" : "[data-companion-cancel]"));
+      await pause(700);
+      /* The request is held: the card already reads as the tap asked, the buttons are gone and nothing was admitted. */
+      expect(card()?.dataset.stage).toBe(decision === "send" ? "sending" : "cancelled");
+      expect(card()!.querySelector("[data-companion-send], [data-companion-cancel], [data-companion-confirm-body]")).toBeNull();
+      if (decision === "send") {
+        expect(card()!.querySelector("[data-companion-instruction]")?.textContent).toBe("Review the plan");
+        expect(card()!.querySelector("[data-companion-track]")).not.toBeNull();
+      }
+      expect(live.sent).toEqual([]);
+      live.holding.command = null;
+      release();
+      await pause(700);
+      expect(card()?.dataset.stage).toBe(decision === "send" ? "queued" : "cancelled");
+      expect(live.sent).toHaveLength(decision === "send" ? 1 : 0);
+    } finally { release(); await unmountNow(); await live.release(); }
   }
 }, 15_000);
 

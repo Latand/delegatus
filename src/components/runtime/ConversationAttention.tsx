@@ -87,7 +87,9 @@ export function questionsResolution(attention: RuntimeAttention, optionIndices: 
 export function ConversationAttention({ file }: { file: FileEntry }) {
   const { t } = useLocale();
   const runtime = useRuntimeSession(conversationIdentity(file));
-  const [busyId, setBusyId] = useState<string | null>(null);
+  /* The answer is drawn on its card at once, by attention id, until the host
+     projects the resolution and the card leaves; a refusal takes it back. */
+  const [answered, setAnswered] = useState<Readonly<Record<string, string>>>({});
   const [error, setError] = useState<string | null>(null);
   /* Ids dismissed in this mount; the storage read below covers earlier ones. */
   const [dismissedIds, setDismissedIds] = useState<readonly string[]>([]);
@@ -105,8 +107,9 @@ export function ConversationAttention({ file }: { file: FileEntry }) {
      attempted from an archived card. */
   const archived = isDeadHostSession(runtime);
 
-  const answer = async (attention: RuntimeAttention, resolution: unknown) => {
-    setBusyId(attention.id);
+  const answer = async (attention: RuntimeAttention, resolution: unknown, label: string) => {
+    if (answered[attention.id] !== undefined) return;
+    setAnswered((current) => ({ ...current, [attention.id]: label }));
     setError(null);
     const result = await answerRuntime(
       runtime.session.conversationId,
@@ -114,9 +117,15 @@ export function ConversationAttention({ file }: { file: FileEntry }) {
       resolution,
       mintIdempotencyKey(),
     );
-    if (!result.ok) setError(result.error ?? t("common.failedSend"));
-    setBusyId(null);
+    if (result.ok) return;
+    setAnswered((current) => { const next = { ...current }; delete next[attention.id]; return next; });
+    setError(result.error ?? t("common.failedSend"));
   };
+  const optionLabel = (attention: RuntimeAttention, questionIndex: number, optionIndex: number) => {
+    const questions = attention.request.questions ?? (attention.request.question ? [attention.request.question] : []);
+    return questions[questionIndex]?.options?.[optionIndex]?.label ?? String(optionIndex + 1);
+  };
+  const approveLabel = (attention: RuntimeAttention) => t(attention.kind === "permission" && attention.request.protocol?.engine === "claude" ? "runtime.attention.allowOnce" : "runtime.attention.approve");
 
   /* Issue #765: a dismissed question card leaves the composer region entirely
      — the same exit an engine-confirmed resolution takes — while the attention
@@ -137,20 +146,22 @@ export function ConversationAttention({ file }: { file: FileEntry }) {
           key={attention.id}
           attention={attention}
           archived={archived}
-          busy={busyId === attention.id || attention.state === "resolving"}
+          busy={attention.state === "resolving"}
+          answered={answered[attention.id]}
           onAction={!archived && !attention.unowned && attention.request.protocol?.actions
-            ? (response) => void answer(attention, response) : undefined}
+            ? (response, label) => void answer(attention, response, label) : undefined}
           onApprove={!archived && !attention.unowned && !attention.request.protocol?.actions && (attention.kind === "approval" || attention.kind === "permission")
-            ? () => void answer(attention, approvalResolution(attention, true))
+            ? () => void answer(attention, approvalResolution(attention, true), approveLabel(attention))
             : undefined}
           onDeny={!archived && !attention.unowned && !attention.request.protocol?.actions && (attention.kind === "approval" || attention.kind === "permission")
-            ? () => void answer(attention, approvalResolution(attention, false))
+            ? () => void answer(attention, approvalResolution(attention, false), t("runtime.attention.deny"))
             : undefined}
           onAnswerQuestion={!archived && !attention.unowned && attention.kind === "question"
-            ? (optionIndex) => void answer(attention, questionResolution(attention, optionIndex))
+            ? (optionIndex) => void answer(attention, questionResolution(attention, optionIndex), optionLabel(attention, 0, optionIndex))
             : undefined}
           onAnswerQuestions={!archived && !attention.unowned && attention.kind === "question"
-            ? (optionIndices, customAnswers) => void answer(attention, questionsResolution(attention, optionIndices, customAnswers))
+            ? (optionIndices, customAnswers) => void answer(attention, questionsResolution(attention, optionIndices, customAnswers),
+              optionIndices.map((picked, index) => customAnswers?.[index]?.trim() || picked.map((option) => optionLabel(attention, index, option)).join(", ")).filter(Boolean).join(" · "))
             : undefined}
           onDismiss={!archived && attention.kind === "question" ? () => dismiss(attention) : undefined}
         />
