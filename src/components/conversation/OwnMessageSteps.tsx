@@ -344,7 +344,7 @@ export function useOwnMessageSteps(feed: OwnStepsFeed): OwnSteps {
 }
 
 const STEP_BUTTON = "inline-flex h-full min-w-11 items-center justify-center gap-1 rounded-[8px] text-label font-semibold text-secondary hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40 disabled:opacity-40";
-const COMPACT_STEP = "inline-flex h-full items-center justify-center text-secondary hover:bg-sunken hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40 disabled:opacity-40 disabled:hover:bg-transparent";
+const COMPACT_STEP = "composer-ghost inline-flex h-full items-center justify-center text-secondary hover:bg-sunken hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40 disabled:opacity-40 disabled:hover:bg-transparent";
 
 /** One arrow: the row's labelled button, or the composer row's bare arrow
     (`compact`), which keeps the same name, keys and focus. */
