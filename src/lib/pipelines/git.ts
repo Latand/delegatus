@@ -17,6 +17,7 @@ import { writeJsonDurably } from "@/lib/state/durableJson";
 import { redactBounded, redactMonitorText } from "@/lib/monitor/redact";
 import { deliveryJournal, deliveryOwnerError, findPipelineRecord, pipelineArtifactsDir, pipelineDeliveryLookup, withDeliveryMutationAsync } from "./store";
 
+import { publicationDeadlineOnly } from "./publication";
 import type { Pipeline, PipelinePublicationFailure, PipelinePublicationResult } from "./types";
 import { pathIsDeclaredOutput } from "./stageAccess";
 import { CpuContainmentUnavailable, wrapWorkCommand } from "@/lib/runtime/cpuPlacement";
@@ -1551,7 +1552,8 @@ export function publicationFailureCause(failure: PipelinePublicationFailure): st
   if (failure.step === "preparing publication dependencies") return `installing the worktree's dependencies failed (bun install --frozen-lockfile, ${status})`;
   const lines = failure.outputTail.split("\n").map((line) => line.trim());
   const phase = publicationFailurePhase(failure);
-  const failed = [...new Set(lines.filter((line) => line.startsWith("(fail) ")).map((line) => line.slice(7).replace(/ \[[\d.]+m?s\]$/, "")))];
+  const failed = [...new Set(lines.filter((line) => line.startsWith("(fail) ") || (line.startsWith("NEW ") && !line.includes("<runner error>")))
+    .map((line) => line.slice(line.startsWith("NEW ") ? 4 : 7).replace(/ \[[\d.]+m?s\]$/, "")))];
   const tests = failed.length ? `, ${failed.length} failing test${failed.length === 1 ? "" : "s"}, first: ${failed[0]!.slice(0, 120)}` : "";
   if (phase) return `the repository's pre-push hook failed in its "${phase}" phase (${status}${tests})`;
   const last = lines.filter(Boolean).at(-1);
@@ -1900,15 +1902,18 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
         // remove the prefix that identifies a secret to the shared redactor.
         const output = redactPublicationOutput(executed.stdout, executed.stderr);
         const tail = output.slice(-4000);
-        const phases = [...new Set(output.split("\n").filter((line) => line.startsWith("pre-push: ")))]
-          .slice(-16).filter((line) => !tail.includes(line)).map((line) => line.slice(0, 160)).join("\n");
-        // Long test diagnostics must not erase the hook's phase markers.
+        const lines = output.split("\n");
+        const checks = [...new Set(lines.filter((line) => line.startsWith("pre-push: ")))].slice(-16);
+        const tests = [...new Set(lines.filter((line) => /^(?:\(fail\) |NEW (?!.*<runner error>))/.test(line)))].slice(0, 8);
+        const phases = [...checks, ...tests].filter((line) => !tail.includes(line)).map((line) => line.slice(0, 160)).join("\n");
+        // Long diagnostics must not erase the hook phases or failing test names.
         const timedOut = executed.code === null ? /^command timed out after (\d+)ms/.exec(executed.stderr) : null;
         const hookStop = preparingDependencies ? null : hookBudgetStop(output);
         const outputTail = phases ? `${phases}\n…\n${output.slice(-(4000 - phases.length - 3))}` : tail;
         failureEvidence = { step: preparingDependencies ? "preparing publication dependencies" : "publishing the pipeline branch",
           code: executed.code, signal: executed.signal ?? null,
           durationMs: Math.max(0, Math.round(performance.now() - started)), outputTail,
+          retryableDeadline: !preparingDependencies && publicationDeadlineOnly(output),
           ...(timedOut ? { timedOutMs: Number(timedOut[1]) } : {}), ...(hookStop ? { hookBudgetMs: hookStop.ms, hookStoppedCheck: hookStop.check } : {}) };
       }
       return executed;

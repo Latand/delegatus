@@ -167,3 +167,31 @@ test("the owned runner keeps a nested queue wait outside its execution deadline"
     expect(fs.readFileSync(f.env.CPU_QUEUE_OUTPUT, "utf8")).toBe("nested\n");
   } finally { fs.writeFileSync(f.env.LLV_GATE_PSI_FILE, ""); f.age(); await Promise.resolve(pending).catch(() => {}); f.close(); }
 }, 20_000);
+
+for (const fails of [false, true]) test(`pre-push credits admission across a supervisor and keeps a real touched test verdict (fails: ${fails})`, async () => {
+  const f = fixture();
+  let pending: ReturnType<typeof realExec> | undefined;
+  const file = path.join(f.dir, "publication.test.ts");
+  fs.writeFileSync(file, `import { test, expect } from "bun:test"; test("publication assertion", () => expect(true).toBe(${!fails}));`);
+  const gate = path.join(process.cwd(), "scripts/local-gate.ts");
+  // Both invocations are real processes. The owned slot supervisor inserts a
+  // fresh wait ledger between the caller's ledger and the admitted plan.
+  const admitted = `import { pushDeadline, runSteps, endHook } from ${JSON.stringify(gate)};
+    try { await runSteps("pre-push", [{ name: "touched tests", command: [process.execPath, "test", ${JSON.stringify(file)}], group: "push checks" }], {
+      root: process.cwd(), deadline: pushDeadline(process.env, Date.now(), true), logDir: ${JSON.stringify(f.dir)},
+      prepare: step => ({ command: step.command, env: process.env }) }); } catch (error) { endHook("pre-push", error); }`;
+  const caller = `import { runAdmittedChecks, endHook } from ${JSON.stringify(gate)};
+    const deadline = { at: Date.now() + 4000, startedAt: Date.now() };
+    try { await runAdmittedChecks(["bash", "scripts/gate-slot.sh", process.execPath, "-e", ${JSON.stringify(admitted)}], process.cwd(), process.env, deadline); }
+    catch (error) { endHook("pre-push", error); }`;
+  try {
+    pending = realExec(process.execPath, ["-e", caller], process.cwd(), { ...f.env, LLV_GATE_SLOT_LEASE: "" }, { timeoutMs: 20_000 });
+    await until(() => f.count() === 1);
+    await Bun.sleep(4500); // The original absolute hook deadline has passed.
+    f.age();
+    const result = await pending;
+    expect(result.code, result.stderr).toBe(fails ? 1 : 0);
+    expect(result.stderr).not.toContain("no verdict within");
+    expect(result.stderr).toContain(fails ? "publication assertion" : "touched tests: passed");
+  } finally { fs.writeFileSync(f.env.LLV_GATE_PSI_FILE, ""); f.age(); await Promise.resolve(pending).catch(() => {}); f.close(); }
+}, 25_000);
