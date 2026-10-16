@@ -99,6 +99,7 @@ import {
   registryRowsMatching, registryKeysMatching, registryHasLookupIndex, registryConversationsForPath, registryHasPathIndex,
   registryConversationsForEntryKey, registryHasEntryKeyIndex,
   sqliteRegistryStoreImported,
+  type RegistryDeliveryCompactionChanges,
   type SqliteRegistryReplacement,
   type SqliteRegistrySnapshot,
 } from "./sqliteRegistryStore";
@@ -3101,9 +3102,21 @@ function dropCompactedHeldDelivery(file: RegistryFile, delivery: HeldDelivery): 
   delete file.heldDeliveries[delivery.id];
 }
 
-function compactDeliveryOperationOwners(file: RegistryFile, onlyConversationId?: ViewerConversationId): void {
+function compactDeliveryOperationOwners(
+  file: RegistryFile,
+  onlyConversationId?: ViewerConversationId,
+  touchedConversations?: Iterable<ViewerConversationId>,
+): void {
   const terminalGroups = new Map<ViewerConversationId, Array<[string, DeliveryOperationOwner]>>();
-  for (const [operationId, owner] of (onlyConversationId ? conversationRows(file, "deliveryOperationOwners", onlyConversationId).map(owner => [owner.command.operationId, owner] as const) : Object.entries(file.deliveryOperationOwners))) {
+  const selectedOwners = onlyConversationId
+    ? conversationRegistryEntries(file, "deliveryOperationOwners", onlyConversationId)
+    : touchedConversations
+      ? [...new Set(touchedConversations)].flatMap(id => conversationRegistryEntries(file, "deliveryOperationOwners", id))
+      : Object.entries(file.deliveryOperationOwners);
+  const seen = new Set<string>();
+  for (const [operationId, owner] of selectedOwners) {
+    if (seen.has(operationId)) continue;
+    seen.add(operationId);
     if (owner.terminalState === null) continue;
     const canonicalId = resolveConversationAlias(file, owner.conversationId);
     if (onlyConversationId && canonicalId !== resolveConversationAlias(file, onlyConversationId)) continue;
@@ -3137,8 +3150,43 @@ function terminalDeliveryExpired(delivery: HeldDelivery, nowMs: number | undefin
   return Number.isFinite(settledAt) && nowMs - settledAt > TERMINAL_DELIVERY_RETENTION_MS;
 }
 
-function compactDeliveryReservations(file: RegistryFile, onlyConversationId?: ViewerConversationId, nowMs?: number): number {
-  for (const delivery of (onlyConversationId ? conversationRows(file, "heldDeliveries", onlyConversationId) : Object.values(file.heldDeliveries))) {
+function terminalDeliveryExpiryAt(delivery: HeldDelivery): number | null {
+  const settledAt = Date.parse(delivery.deliveredAt ?? delivery.createdAt);
+  return Number.isFinite(settledAt) ? settledAt + TERMINAL_DELIVERY_RETENTION_MS + 1 : null;
+}
+
+interface DeliveryCompactionOutcome {
+  removed: number;
+  nextExpiryAt: number | null;
+}
+
+function compactDeliveryReservations(
+  file: RegistryFile,
+  onlyConversationId?: ViewerConversationId,
+  nowMs?: number,
+  changes?: RegistryDeliveryCompactionChanges,
+  forceDeliverySweep = false,
+  previousNextExpiryAt: number | null = null,
+): DeliveryCompactionOutcome {
+  const full = onlyConversationId === undefined && (!changes || changes.full);
+  const replaceNextExpiry = full || forceDeliverySweep;
+  let nextExpiryAt = nowMs === undefined ? null : replaceNextExpiry ? null : previousNextExpiryAt;
+  const syncDeliveries = onlyConversationId || full
+    ? undefined
+    : (changes?.deliveryIds ?? []).flatMap(id => file.heldDeliveries[id] ? [file.heldDeliveries[id]!] : []);
+  const deliveryConversationIds = new Set<ViewerConversationId>();
+  if (!onlyConversationId && !full && !forceDeliverySweep) {
+    for (const delivery of syncDeliveries ?? []) deliveryConversationIds.add(resolveConversationAlias(file, delivery.conversationId));
+  }
+  const candidateDeliveries = onlyConversationId
+    ? conversationRows(file, "heldDeliveries", onlyConversationId)
+    : full || forceDeliverySweep
+      ? Object.values(file.heldDeliveries)
+      : [...deliveryConversationIds].flatMap(id => conversationRows(file, "heldDeliveries", id))
+        .filter((delivery, index, all) => all.findIndex(candidate => candidate.id === delivery.id) === index);
+  const ownerConversations = new Set<ViewerConversationId>();
+  if (onlyConversationId) ownerConversations.add(resolveConversationAlias(file, onlyConversationId));
+  for (const delivery of (syncDeliveries ?? candidateDeliveries)) {
     /* Every accepted send gets its row, including the ordinary one whose
        operation id the reservation generated for itself (#1131). The exception
        used to be free — the reservation IS the record under that id — and it
@@ -3147,29 +3195,40 @@ function compactDeliveryReservations(file: RegistryFile, onlyConversationId?: Vi
        common shape was the one nobody could ask about, and its duplicate-send
        evidence was the one that vanished. */
     if (!delivery.requestDigest) continue;
-    file.deliveryOperationOwners[delivery.command.operationId] ??= {
-      conversationId: delivery.conversationId,
-      runtimeConversationId: delivery.runtimeConversationId,
-      clientMessageId: delivery.clientMessageId,
-      deliveryId: delivery.id,
-      command: delivery.command,
-      requestDigest: delivery.requestDigest,
-      contentDigest: delivery.contentDigest,
-      targetGenerationId: delivery.generationId,
-      evidenceText: delivery.text,
-      evidenceImageCount: delivery.runtimeImages.length,
-      createdAt: delivery.createdAt,
-      retryOfOperationId: null,
-      terminalState: null,
-      terminalDisposition: null,
-      terminalReason: null,
-      settledAt: null,
-    };
+    const operationId = delivery.command.operationId;
+    if (!file.deliveryOperationOwners[operationId]) {
+      file.deliveryOperationOwners[operationId] = {
+        conversationId: delivery.conversationId,
+        runtimeConversationId: delivery.runtimeConversationId,
+        clientMessageId: delivery.clientMessageId,
+        deliveryId: delivery.id,
+        command: delivery.command,
+        requestDigest: delivery.requestDigest,
+        contentDigest: delivery.contentDigest,
+        targetGenerationId: delivery.generationId,
+        evidenceText: delivery.text,
+        evidenceImageCount: delivery.runtimeImages.length,
+        createdAt: delivery.createdAt,
+        retryOfOperationId: null,
+        terminalState: null,
+        terminalDisposition: null,
+        terminalReason: null,
+        settledAt: null,
+      };
+      if (!full) ownerConversations.add(resolveConversationAlias(file, delivery.conversationId));
+    }
     syncDeliveryOperationOwnerState(file, delivery);
+    if (!full) ownerConversations.add(resolveConversationAlias(file, delivery.conversationId));
+  }
+  if (!full) {
+    for (const operationId of changes?.ownerOperationIds ?? []) {
+      const owner = file.deliveryOperationOwners[operationId];
+      if (owner) ownerConversations.add(resolveConversationAlias(file, owner.conversationId));
+    }
   }
   const deliveredGroups = new Map<ViewerConversationId, HeldDelivery[]>();
   const failedGroups = new Map<ViewerConversationId, HeldDelivery[]>();
-  for (const delivery of (onlyConversationId ? conversationRows(file, "heldDeliveries", onlyConversationId) : Object.values(file.heldDeliveries))) {
+  for (const delivery of candidateDeliveries) {
     const canonicalId = resolveConversationAlias(file, delivery.conversationId);
     if (onlyConversationId && canonicalId !== resolveConversationAlias(file, onlyConversationId)) continue;
     if (delivery.state === "delivered") {
@@ -3193,6 +3252,8 @@ function compactDeliveryReservations(file: RegistryFile, onlyConversationId?: Vi
           dropCompactedHeldDelivery(file, delivery);
           removed += 1;
         } else {
+          const expiryAt = terminalDeliveryExpiryAt(delivery);
+          if (expiryAt !== null && (nextExpiryAt === null || expiryAt < nextExpiryAt)) nextExpiryAt = expiryAt;
           kept.push(delivery);
         }
       }
@@ -3207,7 +3268,7 @@ function compactDeliveryReservations(file: RegistryFile, onlyConversationId?: Vi
     }
   }
   for (const [conversationId, deliveries] of failedGroups) {
-    const activeCount = (onlyConversationId ? conversationRows(file, "heldDeliveries", onlyConversationId) : Object.values(file.heldDeliveries)).filter((delivery) =>
+    const activeCount = candidateDeliveries.filter((delivery) =>
       resolveConversationAlias(file, delivery.conversationId) === conversationId
       && ["held", "assigned", "delivery-uncertain"].includes(delivery.state)).length;
     const retainedFailed = Math.max(0, Math.min(50, 99 - activeCount));
@@ -3217,8 +3278,8 @@ function compactDeliveryReservations(file: RegistryFile, onlyConversationId?: Vi
       removed += 1;
     }
   }
-  compactDeliveryOperationOwners(file, onlyConversationId);
-  return removed;
+  compactDeliveryOperationOwners(file, onlyConversationId, onlyConversationId || full ? undefined : ownerConversations);
+  return { removed, nextExpiryAt };
 }
 
 function conversationOwnsPath(conversation: RegistryConversation, artifactPath: string): boolean {
@@ -4546,6 +4607,8 @@ export class AgentRegistry {
   private readonly writerDeadlineMs: number | undefined;
   private readonly mcpGrantPolicy: McpGrantPolicy | undefined;
   private readonly sqliteStore: SqliteAgentRegistryStore | null;
+  private lastDeliveryCompactionChangeId: number | null = null;
+  private nextDeliveryCompactionAt: number | null = null;
   /** Synchronous writer admission lends its JSON claim to the mutation. */
   private admittedJsonWriter: RegistryLockClaim | null = null;
   private creditGuardRevision = 0;
@@ -10339,7 +10402,21 @@ export class AgentRegistry {
   }
 
   compactDeliveryReservations(): number {
-    return this.mutate((file) => compactDeliveryReservations(file, undefined, this.now()));
+    const sqlite = this.sqliteMode === "read" || this.sqliteMode === "sqlite" ? this.sqliteStore : null;
+    const nowMs = this.now();
+    const currentChangeId = sqlite?.deliveryCompactionChangeId() ?? null;
+    const expiryDue = this.nextDeliveryCompactionAt !== null && nowMs >= this.nextDeliveryCompactionAt;
+    if (sqlite && this.lastDeliveryCompactionChangeId === currentChangeId && !expiryDue) return 0;
+
+    let observedChangeId = currentChangeId;
+    const result = this.mutate((file) => {
+      const changes = sqlite?.deliveryCompactionChangesSince(this.lastDeliveryCompactionChangeId);
+      if (changes) observedChangeId = changes.changeId;
+      return compactDeliveryReservations(file, undefined, nowMs, changes, expiryDue, this.nextDeliveryCompactionAt);
+    });
+    if (sqlite) this.lastDeliveryCompactionChangeId = observedChangeId;
+    this.nextDeliveryCompactionAt = result.nextExpiryAt;
+    return result.removed;
   }
 
   queueSuccessorCleanup(conversationId: ViewerConversationId, receipt: ProviderReceipt): void {
