@@ -89,24 +89,29 @@ const ports: TaskMutationPorts = {
   changed: () => {},
 };
 
-function mount() {
+/** The board as a poll leaves it: `blockedText` is what the second task says, `now` the wall clock in seconds. */
+function mountLive() {
   patches.length = 0;
   const host = document.createElement("div");
   document.body.appendChild(host);
   const root = createRoot(host);
   roots.push(root);
-  const allTasks = [
-    task("a", "assigned", "Repair old links in the release notes\nTwo anchors point at pages that moved.", {
-      assignments: [{ path: worker.path, conversationId: worker.conversationId, panePid: null, state: "delivered", error: null, at: "2026-09-14T10:00:00.000Z" }],
-    } as Partial<BoardTask>),
-    task("b", "blocked", "Waiting on a review"),
-  ];
-  flushSync(() => root.render(
-    <KanbanBoard project="fixture" groups={[]} manual={[worker]} files={[worker]} flows={[]} pipelines={[]} tasks={[]} allTasks={allTasks} drafts={[]}
-      now={1_800_000_000} loaded catalogFailures={0} selection={new Set()} onOpenConversations={() => {}} seatRefs={null} mutationPorts={ports} />,
-  ));
-  return host;
+  const render = (blockedText: string, now: number) => {
+    const allTasks = [
+      task("a", "assigned", "Repair old links in the release notes\nTwo anchors point at pages that moved.", {
+        assignments: [{ path: worker.path, conversationId: worker.conversationId, panePid: null, state: "delivered", error: null, at: "2026-09-14T10:00:00.000Z" }],
+      } as Partial<BoardTask>),
+      task("b", "blocked", blockedText),
+    ];
+    flushSync(() => root.render(
+      <KanbanBoard project="fixture" groups={[]} manual={[worker]} files={[worker]} flows={[]} pipelines={[]} tasks={[]} allTasks={allTasks} drafts={[]}
+        now={now} loaded catalogFailures={0} selection={new Set()} onOpenConversations={() => {}} seatRefs={null} mutationPorts={ports} />,
+    ));
+  };
+  render("Waiting on a review", 1_800_000_000);
+  return { host, render };
 }
+const mount = () => mountLive().host;
 
 const point = (type: string, x: number, y: number, extra: Record<string, unknown> = {}) =>
   new dom.PointerEvent(type, { bubbles: true, cancelable: true, clientX: x, clientY: y, pointerId: 1, pointerType: "mouse", button: 0, buttons: type === "pointerup" ? 0 : 1, ...extra }) as unknown as Event;
@@ -219,7 +224,7 @@ test("a strip that opens under the dragged card moves its neighbours, and the dr
   prototype.getBoundingClientRect = function (this: HTMLElement) {
     const column = this.classList?.contains("column") ? this.dataset.status as TaskStatus : null;
     if (!column) return { x: 0, y: 0, top: 0, left: 0, bottom: 120, right: 100, width: 100, height: 120, toJSON() {} } as DOMRect;
-    const open = (status: TaskStatus) => status === "inbox" || status === "assigned" || host.querySelector(`.column[data-status="${status}"]`)!.classList.contains("drop");
+    const open = (status: TaskStatus) => status === "inbox" || status === "assigned" || host.querySelector(`.column[data-status="${status}"]`)!.hasAttribute("data-drop");
     const order: TaskStatus[] = ["inbox", "assigned", "blocked", "done"];
     let left = 0;
     for (const status of order) {
@@ -231,11 +236,11 @@ test("a strip that opens under the dragged card moves its neighbours, and the dr
   };
   /* Blocked is 560-608 and Done 608-656 while both are strips; opened, Blocked is 560-840 and Done 840-888. */
   nudge(title, [400, 40], [580, 90]);
-  expect(host.querySelector('.column[data-status="blocked"]')!.classList.contains("drop")).toBe(true);
+  expect(host.querySelector('.column[data-status="blocked"]')!.hasAttribute("data-drop")).toBe(true);
   fire(title, point("pointermove", 620, 90));
   runFrames();
-  expect(host.querySelector('.column[data-status="blocked"]')!.classList.contains("drop"), "620 is inside the opened Blocked").toBe(true);
-  expect(host.querySelector('.column[data-status="done"]')!.classList.contains("drop")).toBe(false);
+  expect(host.querySelector('.column[data-status="blocked"]')!.hasAttribute("data-drop"), "620 is inside the opened Blocked").toBe(true);
+  expect(host.querySelector('.column[data-status="done"]')!.hasAttribute("data-drop")).toBe(false);
   fire(title, point("pointerup", 620, 90));
   await new Promise((resolve) => setTimeout(resolve, 5));
   expect(patches).toEqual([{ id: "a", status: "blocked" }]);
@@ -284,12 +289,12 @@ test("dropping over another column moves the task; over nothing, or after Escape
   const host = mount();
   const title = cardOf(host).querySelector<HTMLElement>("[data-rename]")!;
   nudge(title, [400, 40], [700, 90]);
-  expect(host.querySelector('.column[data-status="blocked"]')!.classList.contains("drop")).toBe(true);
-  expect(host.querySelector('.column[data-status="assigned"]')!.classList.contains("drop")).toBe(false);
+  expect(host.querySelector('.column[data-status="blocked"]')!.hasAttribute("data-drop")).toBe(true);
+  expect(host.querySelector('.column[data-status="assigned"]')!.hasAttribute("data-drop")).toBe(false);
   fire(title, point("pointerup", 700, 90));
   await new Promise((resolve) => setTimeout(resolve, 5));
   expect(patches).toEqual([{ id: "a", status: "blocked" }]);
-  expect(host.querySelector(".column.drop")).toBeNull();
+  expect(host.querySelector(".column[data-drop]")).toBeNull();
 
   const other = mount();
   const handle = cardOf(other).querySelector<HTMLElement>("[data-rename]")!;
@@ -319,4 +324,57 @@ test("a press on a scrollbar belongs to the scroller, and a press beside it does
   const flat = document.createElement("button");
   Object.defineProperties(flat, { scrollHeight: { value: 120 }, clientHeight: { value: 120 }, clientWidth: { value: 90 } });
   expect(isCardHandle({ target: flat, offsetX: 95 })).toBe(true);
+});
+
+test("only a strip carries the class that opens it: the board is restyled once for a strip, and a column that is already open takes an attribute nothing else names (2026-10-16)", async () => {
+  const host = mount();
+  const title = cardOf(host).querySelector<HTMLElement>("[data-rename]")!;
+  const column = (status: TaskStatus) => host.querySelector<HTMLElement>(`.column[data-status="${status}"]`)!;
+  const state = (status: TaskStatus) => [column(status).hasAttribute("data-drop"), column(status).classList.contains("drop-open")];
+  /* Blocked holds a card; Done holds none and is a strip. */
+  expect(column("blocked").classList.contains("strip")).toBe(false);
+  expect(column("done").classList.contains("strip")).toBe(true);
+  nudge(title, [400, 40], [700, 90]);
+  expect(state("blocked")).toEqual([true, false]);
+  expect(column("blocked").classList.contains("drop")).toBe(false);
+  fire(title, point("pointermove", 1000, 90));
+  runFrames();
+  expect(state("blocked")).toEqual([false, false]);
+  expect(state("done")).toEqual([true, true]);
+  fire(title, point("pointerup", 1000, 90));
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  expect(host.querySelector(".column[data-drop], .column.drop-open")).toBeNull();
+});
+
+test("a board held by a pointer does not render a poll or a clock tick, and catches up when the card is let go", async () => {
+  const { host, render } = mountLive();
+  const title = cardOf(host).querySelector<HTMLElement>("[data-rename]")!;
+  const blocked = () => host.querySelector('.column[data-status="blocked"]')!.textContent ?? "";
+  expect(blocked()).toContain("Waiting on a review");
+  nudge(title, [400, 40], [430, 40]);
+  /* A poll and a 30 s clock tick, in the middle of the drag. */
+  render("Waiting on legal", 1_800_000_045);
+  expect(blocked(), "the held board keeps what it drew").toContain("Waiting on a review");
+  expect(blocked()).not.toContain("Waiting on legal");
+  expect(ghost(host)).not.toBeNull();
+  fire(title, point("pointerup", 430, 40));
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  expect(blocked(), "the drop shows the board as it is now").toContain("Waiting on legal");
+  expect(ghost(host)).toBeNull();
+  /* No drag, no hold: the next poll renders at once. */
+  render("Waiting on legal and tax", 1_800_000_050);
+  expect(blocked()).toContain("Waiting on legal and tax");
+});
+
+test("a drag cancelled with Escape releases the held board too", async () => {
+  const { host, render } = mountLive();
+  const title = cardOf(host).querySelector<HTMLElement>("[data-rename]")!;
+  nudge(title, [400, 40], [430, 40]);
+  render("Waiting on legal", 1_800_000_000);
+  expect(host.querySelector('.column[data-status="blocked"]')!.textContent).toContain("Waiting on a review");
+  flushSync(() => { document.dispatchEvent(new dom.KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }) as unknown as Event); });
+  fire(title, point("pointerup", 430, 40));
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  expect(host.querySelector('.column[data-status="blocked"]')!.textContent).toContain("Waiting on legal");
+  expect(patches).toEqual([]);
 });

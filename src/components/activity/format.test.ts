@@ -3,7 +3,7 @@ import { describe, expect, test } from "bun:test";
 import type { ActivityResponse } from "@/lib/activity/report";
 import { translate, type TFunction } from "@/lib/i18n";
 
-import { agentParts, agentText, approxAtLeast, approxText, hoursText, nothingRead, partsRound, trustState } from "./format";
+import { agentParts, agentText, approxAtLeast, approxText, browserZone, clockText, dateTimeText, hoursText, nothingRead, partsRound, trustState } from "./format";
 
 const MIN = 60_000;
 const HOUR = 60 * MIN;
@@ -88,5 +88,63 @@ describe("the trust chip names what was not read", () => {
   test("the Rhythm legend names whose hours the indigo swatches are", () => {
     expect(`${t("activity.rhythm.you")} ${t("activity.rhythm.full")} ${t("activity.rhythm.half")}`).toBe("You: 1 h ½ h");
     expect(`${tUk("activity.rhythm.you")} ${tUk("activity.rhythm.full")} ${tUk("activity.rhythm.half")}`).toBe("Ви: 1 год ½ год");
+  });
+});
+
+describe("a card prints its times without building a formatter each time (2026-10-16)", () => {
+  const AT = Date.UTC(2026, 9, 16, 12, 5);
+  /* Counts the formatters built while `run` goes, by wrapping the constructor the way the page's own calls reach it. */
+  const built = (run: () => void): number => {
+    const Real = Intl.DateTimeFormat;
+    let count = 0;
+    /* A proxy counts a call with `new` and one without, which is how the zone is asked for. */
+    Intl.DateTimeFormat = new Proxy(Real, {
+      apply(target, thisArg, args) { count += 1; return Reflect.apply(target, thisArg, args); },
+      construct(target, args, newTarget) { count += 1; return Reflect.construct(target, args, newTarget); },
+    });
+    try { run(); } finally { Intl.DateTimeFormat = Real; }
+    return count;
+  };
+
+  test("the first print of a shape builds one formatter and the next hundred build none, with the same words", () => {
+    const first = built(() => { expect(clockText(AT, "en", "Pacific/Kiritimati")).toBe("02:05"); });
+    expect(first).toBe(1);
+    const again = built(() => { for (let index = 0; index < 100; index += 1) expect(clockText(AT, "en", "Pacific/Kiritimati")).toBe("02:05"); });
+    expect(again).toBe(0);
+  });
+
+  test("another zone, another locale and another shape are their own formatters and print their own words", () => {
+    expect(clockText(AT, "en", "UTC")).toBe("12:05");
+    expect(clockText(AT, "en", "Asia/Tokyo")).toBe("21:05");
+    expect(dateTimeText(AT, "en", "UTC")).toBe("16 Oct, 12:05");
+    expect(dateTimeText(AT, "uk", "UTC")).not.toBe(dateTimeText(AT, "en", "UTC"));
+    expect(dateTimeText(AT, "uk", "UTC")).toContain("12:05");
+  });
+
+  test("the browser's zone is asked for once in half a minute, whatever time earlier files left in its cache", () => {
+    const realNow = Date.now;
+    /* Past anything an earlier file in this process could have read at, so a cached read is always stale at the start. */
+    let now = realNow() + 10 * 365 * 24 * 60 * 60 * 1000;
+    Date.now = () => now;
+    try {
+      const first = built(() => { browserZone(); });
+      const second = built(() => { now += 29_000; browserZone(); });
+      const third = built(() => { now += 2_000; browserZone(); });
+      expect([second, third]).toEqual([0, 1]);
+      expect(first).toBeLessThanOrEqual(1);
+      expect(browserZone()).toBe(Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC");
+    } finally { Date.now = realNow; }
+  });
+
+  test("a clock that went back past the last read is asked again, not served the old zone until it catches up", () => {
+    const realNow = Date.now;
+    let now = realNow() + 20 * 365 * 24 * 60 * 60 * 1000;
+    Date.now = () => now;
+    try {
+      built(() => { browserZone(); });
+      expect(built(() => { now += 5_000; browserZone(); })).toBe(0);
+      expect(built(() => { now -= 3_600_000; browserZone(); })).toBe(1);
+      expect(built(() => { now += 5_000; browserZone(); })).toBe(0);
+    } finally { Date.now = realNow; }
   });
 });
