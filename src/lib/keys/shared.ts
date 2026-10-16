@@ -142,7 +142,7 @@ export function maskPastedLines(text: string): string[] {
     if (!line || line.startsWith("#")) return line;
     const match = /^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]{0,63})\s*=\s*(.*)$/.exec(line);
     const named = match && echoableName(match[1]) ? match : null;
-    /* A line with an `=` that is no NAME=value shows no tail: its tail is the other side's, not a key's. */
+    /* A line with an `=` that is no NAME=value may hold a key on either side of it, so it shows no tail at all. */
     const value = named ? unquote(named[2]) : line.includes("=") ? "" : unquote(line);
     const masked = value.length > 8 ? `••••${value.slice(-4)}` : "••••";
     return named ? `${named[1]}=${masked}` : masked;
