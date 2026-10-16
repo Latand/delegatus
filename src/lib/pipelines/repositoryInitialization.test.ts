@@ -113,13 +113,27 @@ test("B: content secrets, nested ignore overrides, links and large files never e
   expect(git(dir, "diff", "--cached", "--name-only")).toBe("");
 });
 
-test("B: a subfolder of an existing repository never acquires a nested repository", async () => {
+test.each(["initializer", "board", "creation"])("B: a subfolder of an existing working tree is refused with a reason: %s", async surface => {
   const dir = folder();
   git(dir, "init", "-b", "main", "--template=");
-  fs.mkdirSync(path.join(dir, "nested"));
-  const result = await admit(path.join(dir, "nested"));
-  expect(result.ok).toBe(true);
-  expect(fs.existsSync(path.join(dir, "nested", ".git"))).toBe(false);
+  const nested = path.join(dir, "nested");
+  fs.mkdirSync(nested);
+  if (surface === "initializer") {
+    expect(await admit(nested)).toMatchObject({ ok: false, code: "initialization_refused", detail: expect.stringContaining("existing repository's working tree") });
+  } else if (surface === "board") {
+    const response = await preflight(new NextRequest("http://localhost/api/pipelines/preflight", { method: "POST", headers: { host: "localhost" }, body: JSON.stringify({ repoDir: nested }) }));
+    expect(response.status).toBe(403);
+    expect(JSON.stringify(await response.json())).toContain("existing repository's working tree");
+  } else {
+    const h = ports();
+    const result = await createPipelineFromRequest({ task: "Refuse nested project", repoDir: nested, stages: RUN_STAGES as never }, h.ports);
+    expect(result.status).toBe(403);
+    expect(result.error).toContain("existing repository's working tree");
+    expect(result.pipeline).toBeUndefined();
+  }
+  expect(fs.existsSync(path.join(nested, ".git"))).toBe(false);
+  expect(fs.existsSync(path.join(nested, ".gitignore"))).toBe(false);
+  expect(fs.existsSync(path.join(dir, ".gitignore"))).toBe(false);
 });
 
 test("C: initialization records the directory-to-local-repository succession immediately", async () => {

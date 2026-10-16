@@ -215,6 +215,13 @@ export async function preparePipelineRepository(rawPath: string, initialize = tr
   return withViewerOperation("pipelines.repository-initialization", async () => {
     const admission = await preflightPipelineRepo(rawPath);
     if (admission.ok) {
+      const requested = rawPath.trim();
+      const expanded = requested === "~" || requested.startsWith("~/") ? path.join(os.homedir(), requested.slice(1)) : requested;
+      const candidate = await canonical(expanded);
+      if (candidate !== await canonical(admission.repoDir)) return {
+        ok: false, code: "initialization_refused", path: candidate,
+        detail: "initialization refused inside an existing repository's working tree; select its repository root",
+      };
       const previous = initialize ? await readRepositoryInitialization(admission.repoDir) : undefined;
       if (previous) { await report(admission.repoDir, previous); return { ...admission, repositoryInitialization: previous }; }
       return admission;

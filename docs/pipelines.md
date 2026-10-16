@@ -29,9 +29,9 @@ The complete inventory must fit the bridge's 8 KiB report bound; path names
 have an additional 4,000-byte aggregate bound.
 
 The home directory itself, its ancestors, system paths and Delegatus state
-roots are refused with a reason. Existing repository working trees use their
-repository root. Initialization records the directory-to-local-repository
-succession so the seat, tasks and conversations keep their project. The
+roots are refused with a reason. A subfolder inside an existing repository is
+refused with guidance to select its repository root. Initialization records the
+directory-to-local-repository succession so the seat, tasks and conversations keep their project. The
 repository remains local until a remote is explicitly added. Local lanes
 complete on their lane branch through the existing no-origin behavior.
 
