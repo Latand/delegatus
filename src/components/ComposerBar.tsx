@@ -472,6 +472,7 @@ export function ComposerBar({
           type={slotActs || (dictationRecording && !sendBlocked) ? "button" : "submit"}
           data-mobile2-send={isMobile ? slotKind : undefined}
           data-composer-send={dictationRecording ? "recording" : slotKind}
+          data-composer-send-tone={mode === "context" ? "info" : undefined}
           onClick={
             slotActs
               ? () => sendSlot?.onAct?.()

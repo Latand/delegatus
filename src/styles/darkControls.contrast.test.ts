@@ -12,11 +12,12 @@ import path from "node:path";
 const TOKENS = fs.readFileSync(path.join(import.meta.dir, "tokens.css"), "utf8");
 const RULES = fs.readFileSync(path.join(import.meta.dir, "darkControls.css"), "utf8");
 
-/** The dark override of a token: the second declaration in tokens.css. */
+/** The token's value in tokens.css's dark block (`prefers-color-scheme: dark`), whatever the light value or the declaration order. */
+const DARK_TOKENS = TOKENS.slice(TOKENS.indexOf("@media (prefers-color-scheme: dark)"), TOKENS.indexOf('[data-theme="dark"] {'));
 function dark(name: string): string {
-  const all = [...TOKENS.matchAll(new RegExp(`--${name}:\\s*(#[0-9a-f]{6})`, "gi"))].map((match) => match[1].toLowerCase());
-  expect(all.length).toBeGreaterThanOrEqual(2);
-  return all[1];
+  const match = DARK_TOKENS.match(new RegExp(`--${name}:\\s*(#[0-9a-f]{6})`, "i"));
+  expect(match).not.toBeNull();
+  return match![1].toLowerCase();
 }
 
 const rgb = (hex: string): number[] => [1, 3, 5].map((offset) => parseInt(hex.slice(offset, offset + 2), 16));
@@ -42,9 +43,13 @@ const strong = dark("border-strong");
 const primary = dark("color-primary");
 const muted = dark("color-muted");
 const accent = dark("color-accent");
+const info = dark("color-info");
+const secondary = dark("color-secondary");
 const accentSoft = dark("color-accent-soft");
 const hover = mix(accent, 0.88, primary);
 const pressed = mix(accent, 0.88, canvas);
+const infoHover = mix(info, 0.88, primary);
+const infoPressed = mix(info, 0.88, canvas);
 const pillPressed = mix(accent, 0.25, card);
 
 test("Send and «Говорити» carry a canvas glyph on the accent fill at every state", () => {
@@ -64,6 +69,27 @@ test("composer icons stay legible at rest and on the raised hover", () => {
   expect(contrast(accent, raised)).toBeGreaterThanOrEqual(5.3);
   /* Pressed: a glyph, so the 3:1 non-text floor. */
   expect(contrast(accent, strong)).toBeGreaterThanOrEqual(3);
+});
+
+test("context-mode Send keeps its info fill with a canvas glyph at every state", () => {
+  expect(contrast(canvas, info)).toBeGreaterThanOrEqual(10);
+  expect(contrast(canvas, infoHover)).toBeGreaterThanOrEqual(10);
+  expect(contrast(canvas, infoPressed)).toBeGreaterThanOrEqual(7.9);
+});
+
+test("the hint bubble and the offline chip keep their text contrast", () => {
+  expect(contrast(primary, raised)).toBeGreaterThanOrEqual(12.8);
+  expect(contrast(secondary, canvas)).toBeGreaterThanOrEqual(7.4);
+});
+
+test("a state colour is left alone: muted call, connecting mic, context Send", () => {
+  for (const scope of RULES.split(/(?=^\/\* `data-theme="dark"` pins)/m)) {
+    expect(scope).toContain('.vc-btn:not([data-on]):hover { color: var(--color-accent); }');
+    expect(scope).not.toMatch(/\.vc-btn:hover\s*\{[^}]*color:/);
+    expect(scope).toContain('.composer-ghost:not([aria-pressed="true"]):not([data-mic-phase="starting"]) { color: var(--color-muted); }');
+    expect(scope).toContain('button[data-composer-send][data-composer-send-tone="info"] { --dc-send: var(--color-info); }');
+  }
+  expect(RULES.split(/(?=^\/\* `data-theme="dark"` pins)/m).length).toBe(2);
 });
 
 test("the rules read the tokens the numbers above come from", () => {

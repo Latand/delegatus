@@ -46,26 +46,30 @@
   :root:not([data-theme="light"]) button:active > [data-feed-jump-pill] svg { color: var(--color-primary); }
 
   /* Send: the desktop button is the control; on the phone its 32 px visual is.
-     Stop, a slot that cannot act and the red dictation send keep their own fills. */
+     Stop, a slot that cannot act and the red dictation send keep their own fills.
+     `--dc-send` is the fill: accent, or info (teal) while the composer shows the
+     Контекст mode (`data-composer-send-tone="info"`), whose glyph stays canvas. */
+  :root:not([data-theme="light"]) button[data-composer-send] { --dc-send: var(--color-accent); }
+  :root:not([data-theme="light"]) button[data-composer-send][data-composer-send-tone="info"] { --dc-send: var(--color-info); }
   :root:not([data-theme="light"]) button[data-composer-send="send"]:not([data-mobile2-send]),
   :root:not([data-theme="light"]) button[data-composer-send="queue"]:not([data-mobile2-send]),
   :root:not([data-theme="light"]) [data-composer-send-visual="ready"] {
-    background: var(--color-accent);
+    background: var(--dc-send);
     color: var(--color-canvas);
-    border-color: var(--color-accent);
+    border-color: var(--dc-send);
   }
   :root:not([data-theme="light"]) button[data-composer-send="send"]:not([data-mobile2-send]):hover:not(:disabled),
   :root:not([data-theme="light"]) button[data-composer-send="queue"]:not([data-mobile2-send]):hover:not(:disabled),
   :root:not([data-theme="light"]) button:hover:not(:disabled) > [data-composer-send-visual="ready"] {
-    background: color-mix(in srgb, var(--color-accent) 88%, var(--color-primary));
-    border-color: color-mix(in srgb, var(--color-accent) 88%, var(--color-primary));
+    background: color-mix(in srgb, var(--dc-send) 88%, var(--color-primary));
+    border-color: color-mix(in srgb, var(--dc-send) 88%, var(--color-primary));
     opacity: 1;
   }
   :root:not([data-theme="light"]) button[data-composer-send="send"]:not([data-mobile2-send]):active:not(:disabled),
   :root:not([data-theme="light"]) button[data-composer-send="queue"]:not([data-mobile2-send]):active:not(:disabled),
   :root:not([data-theme="light"]) button:active:not(:disabled) > [data-composer-send-visual="ready"] {
-    background: color-mix(in srgb, var(--color-accent) 88%, var(--color-canvas));
-    border-color: color-mix(in srgb, var(--color-accent) 88%, var(--color-primary));
+    background: color-mix(in srgb, var(--dc-send) 88%, var(--color-canvas));
+    border-color: color-mix(in srgb, var(--dc-send) 88%, var(--color-primary));
   }
   :root:not([data-theme="light"]) button[data-composer-send]:focus-visible:not([data-mobile2-send]),
   :root:not([data-theme="light"]) button[data-mobile2-send]:focus-visible > [data-composer-send-visual] {
@@ -75,8 +79,8 @@
 
   /* The composer's icon buttons: muted at rest, raised with an accent glyph on
      hover (the sunken wash was darker than the card), strong when pressed.
-     A pressed toggle (a live call) keeps its own colours. */
-  :root:not([data-theme="light"]) .composer-ghost:not([aria-pressed="true"]) { color: var(--color-muted); }
+     A pressed toggle (a live call) and the mic while it connects keep their own colours. */
+  :root:not([data-theme="light"]) .composer-ghost:not([aria-pressed="true"]):not([data-mic-phase="starting"]) { color: var(--color-muted); }
   :root:not([data-theme="light"]) .composer-ghost:not([aria-pressed="true"]):hover:not(:disabled) {
     background: var(--color-raised);
     color: var(--color-accent);
@@ -124,10 +128,8 @@
     border-color: var(--color-strong);
     color: var(--color-secondary);
   }
-  :root:not([data-theme="light"]) .vc-btn:hover {
-    background: var(--color-raised);
-    color: var(--color-accent);
-  }
+  :root:not([data-theme="light"]) .vc-btn:hover { background: var(--color-raised); }
+  :root:not([data-theme="light"]) .vc-btn:not([data-on]):hover { color: var(--color-accent); }
   :root:not([data-theme="light"]) .vc-btn:active { background: var(--color-strong); }
 }
 
@@ -163,26 +165,30 @@
 :root[data-theme="dark"] button:active > [data-feed-jump-pill] svg { color: var(--color-primary); }
 
 /* Send: the desktop button is the control; on the phone its 32 px visual is.
-   Stop, a slot that cannot act and the red dictation send keep their own fills. */
+   Stop, a slot that cannot act and the red dictation send keep their own fills.
+   `--dc-send` is the fill: accent, or info (teal) while the composer shows the
+   Контекст mode (`data-composer-send-tone="info"`), whose glyph stays canvas. */
+:root[data-theme="dark"] button[data-composer-send] { --dc-send: var(--color-accent); }
+:root[data-theme="dark"] button[data-composer-send][data-composer-send-tone="info"] { --dc-send: var(--color-info); }
 :root[data-theme="dark"] button[data-composer-send="send"]:not([data-mobile2-send]),
 :root[data-theme="dark"] button[data-composer-send="queue"]:not([data-mobile2-send]),
 :root[data-theme="dark"] [data-composer-send-visual="ready"] {
-  background: var(--color-accent);
+  background: var(--dc-send);
   color: var(--color-canvas);
-  border-color: var(--color-accent);
+  border-color: var(--dc-send);
 }
 :root[data-theme="dark"] button[data-composer-send="send"]:not([data-mobile2-send]):hover:not(:disabled),
 :root[data-theme="dark"] button[data-composer-send="queue"]:not([data-mobile2-send]):hover:not(:disabled),
 :root[data-theme="dark"] button:hover:not(:disabled) > [data-composer-send-visual="ready"] {
-  background: color-mix(in srgb, var(--color-accent) 88%, var(--color-primary));
-  border-color: color-mix(in srgb, var(--color-accent) 88%, var(--color-primary));
+  background: color-mix(in srgb, var(--dc-send) 88%, var(--color-primary));
+  border-color: color-mix(in srgb, var(--dc-send) 88%, var(--color-primary));
   opacity: 1;
 }
 :root[data-theme="dark"] button[data-composer-send="send"]:not([data-mobile2-send]):active:not(:disabled),
 :root[data-theme="dark"] button[data-composer-send="queue"]:not([data-mobile2-send]):active:not(:disabled),
 :root[data-theme="dark"] button:active:not(:disabled) > [data-composer-send-visual="ready"] {
-  background: color-mix(in srgb, var(--color-accent) 88%, var(--color-canvas));
-  border-color: color-mix(in srgb, var(--color-accent) 88%, var(--color-primary));
+  background: color-mix(in srgb, var(--dc-send) 88%, var(--color-canvas));
+  border-color: color-mix(in srgb, var(--dc-send) 88%, var(--color-primary));
 }
 :root[data-theme="dark"] button[data-composer-send]:focus-visible:not([data-mobile2-send]),
 :root[data-theme="dark"] button[data-mobile2-send]:focus-visible > [data-composer-send-visual] {
@@ -192,8 +198,8 @@
 
 /* The composer's icon buttons: muted at rest, raised with an accent glyph on
    hover (the sunken wash was darker than the card), strong when pressed.
-   A pressed toggle (a live call) keeps its own colours. */
-:root[data-theme="dark"] .composer-ghost:not([aria-pressed="true"]) { color: var(--color-muted); }
+   A pressed toggle (a live call) and the mic while it connects keep their own colours. */
+:root[data-theme="dark"] .composer-ghost:not([aria-pressed="true"]):not([data-mic-phase="starting"]) { color: var(--color-muted); }
 :root[data-theme="dark"] .composer-ghost:not([aria-pressed="true"]):hover:not(:disabled) {
   background: var(--color-raised);
   color: var(--color-accent);
@@ -241,8 +247,6 @@
   border-color: var(--color-strong);
   color: var(--color-secondary);
 }
-:root[data-theme="dark"] .vc-btn:hover {
-  background: var(--color-raised);
-  color: var(--color-accent);
-}
+:root[data-theme="dark"] .vc-btn:hover { background: var(--color-raised); }
+:root[data-theme="dark"] .vc-btn:not([data-on]):hover { color: var(--color-accent); }
 :root[data-theme="dark"] .vc-btn:active { background: var(--color-strong); }

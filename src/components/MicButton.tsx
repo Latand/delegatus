@@ -408,6 +408,7 @@ export function MicButtonView({
         title={phase === "busy" ? t("mic.recognizing") : phase === "starting" ? t("mic.connecting") : t("mic.dictateHint")}
         disabled={phase !== "idle" || busy}
         onClick={handleMain}
+        data-mic-phase={phase}
         /* Hover/focus telegraphs an imminent press — mint the live token now
            so the press itself only waits for the microphone. */
         onPointerEnter={prewarmLiveToken}
