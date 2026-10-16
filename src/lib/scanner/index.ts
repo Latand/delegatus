@@ -14,9 +14,11 @@ import { withFlowSnapshot } from "../flows/store";
 import { reconcileEmbeddedReviewFlows, tickPipelines } from "../pipelines/engine";
 import { withPipelineMutation } from "../pipelines/store";
 import { notifyQuestion } from "../push";
-import { overlaySessionTitles, sessionProjectProjection } from "../session/titleProjection";
+import { overlayControllerSessionTitles, sessionProjectProjection } from "../session/titleProjection";
 import { deputyConversationRefs } from "../orchestrator/deputies";
-import { admitScannedConversations } from "../tasks/membership";
+import { loadTasksForList } from "../tasks/store";
+import { waitForStateLock } from "../state/lockWait";
+import { admitScannedConversations, planAdmissions } from "../tasks/membership";
 import { loadPipelinesForProjection } from "../pipelines/store";
 import { panePidMap, resolveTarget } from "../tmux";
 import { tickWorkflows } from "../workflows/engine";
@@ -497,13 +499,20 @@ async function questionRouteReader(entries: readonly FileEntry[]): Promise<(entr
 
 /** Durable controllers run outside request handlers. Flow ordering remains
     stable: workflows observe the flow state from the same controller tick. */
-export async function reconcileFileControllers(entries: FileEntry[]): Promise<void> {
-  await linkEntries(entries, { persist: true });
-  observeCodexSubagentTranscripts(agentRegistry(), entries);
+export async function reconcileFileControllers(
+  entries: FileEntry[],
+  options: { inventoryChanged?: boolean } = {},
+): Promise<void> {
+  // The sidecar already compared the complete scan and a bounded registry
+  // cursor. Link/observation recovery needs another pass only for new inputs.
+  if (options.inventoryChanged !== false) {
+    await linkEntries(entries, { persist: true });
+    observeCodexSubagentTranscripts(agentRegistry(), entries);
+  }
   await yieldToRuntime();
   // Custom session titles (issue #33) must reach push bodies too, so overlay
   // them before notifying — a rename shows the human name in notifications.
-  overlaySessionTitles(entries);
+  overlayControllerSessionTitles(entries, options.inventoryChanged === false);
   /* A worker's question waits on its project's seat first
      (docs/design/attention-auto-resolve.md): it reaches the operator's phone
      only when no seat can be woken for it. */
@@ -553,7 +562,13 @@ export async function reconcileFileControllers(entries: FileEntry[]): Promise<vo
      belongs to a task. Placeholders are minted here, on the durable controller
      pass, in bounded batches — never from a read-only files GET. */
   try {
-    admitScannedConversations(entries, loadPipelinesForProjection());
+    await waitForStateLock("controller.task-admission", () => {
+      const pipelines = loadPipelinesForProjection();
+      if (planAdmissions(entries, loadTasksForList(), pipelines).length > 0) {
+        // Admission derives the plan again under its writer lease.
+        admitScannedConversations(entries, pipelines);
+      }
+    }, { subject: "tasks" });
   } catch (error) {
     console.error("[tasks] skipping conversation admission", error);
   }

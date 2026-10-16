@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { AgentRegistry } from "@/lib/agent/registry";
+import { AgentRegistry, agentRegistry, setAgentRegistryForTests } from "@/lib/agent/registry";
 import type { CodexAccount } from "@/lib/accounts/codex";
 import { structuredContent, type StructuredImageRef } from "@/lib/runtime/structuredContent";
 import { emptyLaunchProfile, type SuccessorProviderPort } from "./contracts";
@@ -432,3 +432,147 @@ test("quota controller cycles preserve routing and transcript ownership", async 
     fs.rmSync(root, { recursive: true, force: true });
   }
 }, 20_000);
+
+
+test("inventory reconciles only file deltas and retries a failed delta before acknowledging it", async () => {
+  const registry = new AgentRegistry(path.join(stateDir, "delta-inventory.json"));
+  const file = (name: string, size = 1) => ({ path: `/delta/${name}.jsonl`, engine: "codex", size, mtime: 1,
+    activity: "idle", title: name, parent: null }) as never;
+  let files = [file("one"), file("two")];
+  const batches: string[][] = [];
+  let fail = false;
+  const controller = new AccountMigrationController(registry, { tick: async () => {} }, null, {
+    scan: async () => ({ files, projectCatalog: [], complete: true }),
+    reconcileInventory: async (current, changed) => {
+      batches.push(changed.map(entry => entry.path));
+      if (fail) throw new Error("retry delta");
+      return current.readOnlySnapshot();
+    },
+    reconcileFlowOwnership: async () => {}, reconcileWorkflowOwnership: async () => {},
+    reconcileHandoffOwnership: async () => {}, reconcileFiles: async () => {},
+    reconcileRuntime: async () => {}, reconcileTaskStore: async () => {}, syncRouting: async () => {},
+    reconcileMigrationCycle: async () => {},
+  });
+  try {
+    await controller.poll(); await controller.poll();
+    expect(batches).toEqual([["/delta/one.jsonl", "/delta/two.jsonl"]]);
+    files = [file("one", 2), file("two")]; fail = true;
+    await expect(controller.poll()).rejects.toThrow("retry delta");
+    fail = false; await controller.poll(); await controller.poll();
+    expect(batches.slice(1)).toEqual([["/delta/one.jsonl"], ["/delta/one.jsonl"]]);
+    files = [file("two")]; await controller.poll();
+    files = [file("one", 2), file("two")]; await controller.poll();
+    expect(batches.at(-1)).toEqual(["/delta/one.jsonl"]);
+    // A new process has no acknowledged inventory: its first pass replays it.
+    const restarted = new AccountMigrationController(registry, { tick: async () => {} }, null, {
+      scan: async () => ({ files, projectCatalog: [], complete: true }),
+      reconcileInventory: async (current, changed) => { batches.push(changed.map(entry => entry.path)); return current.readOnlySnapshot(); },
+      reconcileFlowOwnership: async () => {}, reconcileWorkflowOwnership: async () => {}, reconcileHandoffOwnership: async () => {},
+      reconcileFiles: async () => {}, reconcileRuntime: async () => {}, reconcileTaskStore: async () => {}, syncRouting: async () => {},
+      reconcileMigrationCycle: async () => {},
+    });
+    await restarted.poll();
+    expect(batches.at(-1)).toEqual(["/delta/one.jsonl", "/delta/two.jsonl"]);
+  } finally { registry.close(); }
+});
+
+
+test("an idle migration tick does not sweep all delivery history", async () => {
+  const registry = new AgentRegistry(path.join(stateDir, "no-idle-compaction.json"));
+  const sweep = spyOn(registry, "compactDeliveryReservations");
+  const boardPlacement = spyOn(registry, "markMigrationBoardPlacementProjects");
+  const board = spyOn(registry, "markMigrationBoardProjects");
+  try {
+    await reconcileAccountMigrationCycle(registry, { tick: async () => {} });
+    expect(boardPlacement).not.toHaveBeenCalled();
+    expect(board).not.toHaveBeenCalled();
+    expect(sweep).not.toHaveBeenCalled();
+  } finally { sweep.mockRestore(); boardPlacement.mockRestore(); board.mockRestore(); registry.close(); }
+});
+
+
+test("registry-only custody changes are found by the bounded inventory cursor", async () => {
+  const registry = new AgentRegistry(path.join(stateDir, "cursor-inventory.json"), undefined, undefined, { sqliteMode: "sqlite" });
+  let files = Array.from({ length: 70 }, (_, index) => ({ path: `/cursor/${index}.jsonl`, engine: "codex", size: 1, mtime: 1 }) as never);
+  const batches: string[][] = [];
+  const controller = new AccountMigrationController(registry, { tick: async () => {} }, null, {
+    scan: async () => ({ files, projectCatalog: [], complete: true }),
+    reconcileInventory: async (current, changed) => { batches.push(changed.map(file => file.path)); return current.activityConversationSnapshot(""); },
+    reconcileFlowOwnership: async () => {}, reconcileWorkflowOwnership: async () => {}, reconcileHandoffOwnership: async () => {},
+    reconcileFiles: async () => {}, reconcileRuntime: async () => {}, reconcileTaskStore: async () => {}, syncRouting: async () => {},
+    reconcileMigrationCycle: async () => {},
+  });
+  try {
+    await controller.poll(); await controller.poll();
+    expect(batches).toHaveLength(1);
+    registry.reconcileConversations([{ engine: "codex", path: "/cursor/69.jsonl", accountId: null, launchProfile: emptyLaunchProfile(),
+      turn: { state: "busy", source: "assistant", terminalAt: null }, observedAt: "2026-10-16T00:00:00Z" }], { snapshot: false });
+    // Scanner activity ordering changes between polls. Move the changed path
+    // just outside the next positional batch on each pass.
+    for (let pass = 0; pass < 3; pass++) {
+      const target = files.find(file => (file as { path: string }).path === "/cursor/69.jsonl")!;
+      const others = files.filter(file => file !== target);
+      const position = (64 + pass * 32 + 33) % files.length;
+      files = [...others.slice(0, position), target, ...others.slice(position)];
+      await controller.poll();
+    }
+    expect(batches.at(-1)).toEqual(["/cursor/69.jsonl"]);
+    registry.setEngineRouting("codex", "account-a");
+    await controller.poll();
+    expect(batches.at(-1)).toHaveLength(70);
+  } finally { registry.close(); }
+});
+
+
+test("a registry change after inventory awaits stays visible to the next cursor pass", async () => {
+  const registry = new AgentRegistry(path.join(stateDir, "cursor-await-race.json"), undefined, undefined, { sqliteMode: "sqlite" });
+  const pathname = "/cursor/await.jsonl";
+  registry.reconcileConversations([{ engine: "codex", path: pathname, accountId: null, launchProfile: emptyLaunchProfile(),
+    turn: { state: "idle", source: "empty", terminalAt: null }, observedAt: "2026-10-16T00:00:00Z" }], { snapshot: false });
+  let size = 1;
+  let inject = false;
+  const batches: number[] = [];
+  const controller = new AccountMigrationController(registry, { tick: async () => {} }, null, {
+    scan: async () => ({ files: [{ path: pathname, engine: "codex", mtime: 1, size } as never], projectCatalog: [], complete: true }),
+    reconcileInventory: async (current, changed) => { batches.push(changed[0]!.size); return current.activityConversationSnapshot(pathname); },
+    reconcileFlowOwnership: async () => {}, reconcileWorkflowOwnership: async () => {}, reconcileHandoffOwnership: async () => {},
+    reconcileFiles: async () => {}, reconcileTaskStore: async () => {}, syncRouting: async () => {}, reconcileMigrationCycle: async () => {},
+    reconcileRuntime: async () => {
+      if (!inject) return;
+      inject = false;
+      registry.reconcileConversations([{ engine: "codex", path: pathname, accountId: null, launchProfile: emptyLaunchProfile(),
+        turn: { state: "busy", source: "assistant", terminalAt: null }, observedAt: "2026-10-16T00:01:00Z" }], { snapshot: false });
+    },
+  });
+  try {
+    await controller.poll();
+    size = 2; inject = true; await controller.poll();
+    await controller.poll();
+    expect(batches).toEqual([1, 2, 2]);
+  } finally { registry.close(); }
+});
+
+
+test("the inventory sidecar prepares its shared read view before it starts polling", async () => {
+  const original = agentRegistry();
+  const registry = new AgentRegistry(path.join(stateDir, "prepared-sidecar.json"), undefined, undefined, { sqliteMode: "sqlite" });
+  const globals = globalThis as unknown as Record<string, unknown>;
+  const keys = ["__llvAccountMigrationController", "__llvAccountMigrationStopPolling"];
+  const saved = new Map(keys.map(key => [key, globals[key]]));
+  const worker = process.env.LLV_ACCOUNT_CONTROLLER_INVENTORY_WORKER;
+  const prepare = spyOn(registry, "prepareReadOnlySnapshot");
+  try {
+    setAgentRegistryForTests(registry);
+    globals.__llvAccountMigrationController = { poll: async () => {} };
+    delete globals.__llvAccountMigrationStopPolling;
+    process.env.LLV_ACCOUNT_CONTROLLER_INVENTORY_WORKER = "1";
+    await startAccountMigrationController();
+    expect(prepare).toHaveBeenCalledTimes(1);
+  } finally {
+    (globals.__llvAccountMigrationStopPolling as (() => void) | undefined)?.();
+    for (const [key, value] of saved) { if (value === undefined) delete globals[key]; else globals[key] = value; }
+    if (worker === undefined) delete process.env.LLV_ACCOUNT_CONTROLLER_INVENTORY_WORKER;
+    else process.env.LLV_ACCOUNT_CONTROLLER_INVENTORY_WORKER = worker;
+    prepare.mockRestore(); setAgentRegistryForTests(original); registry.close();
+  }
+});

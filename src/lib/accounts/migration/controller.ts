@@ -1,9 +1,11 @@
 import { withoutUnsupportedApiCredentials } from "@/lib/environmentIsolation";
+import { accountsCollectionRevision } from "@/lib/accounts/accountsStore";
+import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { activeClaudeAccountId, setActiveClaudeAccount } from "@/lib/accounts/claude";
 import { activeCodexAccountId, codexAccountsMutationLocked, codexLoginPaneStatus, listCodexAccounts, setActiveCodexAccount, setCodexAccountLoginPane } from "@/lib/accounts/codex";
 import { managedCodexRuntime } from "@/lib/accounts/codexRuntime";
 import { withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
-import { agentRegistry, conversationLookupFromSnapshot, readOnlyConversationLookupFromSnapshot, RegistryWriterBusyError, type AgentRegistry } from "@/lib/agent/registry";
+import { agentRegistry, RegistryWriterBusyError, type AgentRegistry } from "@/lib/agent/registry";
 import { readTranscriptHosts } from "@/lib/agent/transcriptHost";
 import { yieldToRuntime } from "@/lib/cooperative";
 import type { ChildProcess } from "node:child_process";
@@ -17,8 +19,10 @@ import { coordinatedControllerScan } from "@/lib/scanner/scanCoordinator";
 import { pidAlive, readPpid } from "@/lib/scanner/process";
 import { runReaperCycle } from "@/lib/reaperRuntime";
 import { runHeadlessProcessReaper } from "@/lib/headlessProcessReaper";
+import type { BoardTask } from "@/lib/tasks/types";
 import { pathForPanePid, reconcileTasks } from "@/lib/tasks/reconcile";
-import { mutateTasks } from "@/lib/tasks/store";
+import { loadTasksForList, mutateTasks } from "@/lib/tasks/store";
+import { waitForStateLock } from "@/lib/state/lockWait";
 import { reconcileWorkflowConversationOwnershipCooperatively } from "@/lib/workflows/store";
 import { paneInfo } from "@/lib/tmux";
 import { spawnViewerResidentWorker } from "@/lib/viewerWorkerLifecycle";
@@ -44,10 +48,8 @@ export async function reconcileAccountMigrationCycle(
   delivery: HeldDeliveryPort = deliveryPort,
 ): Promise<void> {
   try {
-    /* Waited for off the loop; one the lock refused is skipped this cycle and
-       the next one compacts. */
-    await registry.deliveryWrite({ label: "delivery.compact" }, () => registry.compactDeliveryReservations());
-    await yieldToRuntime();
+    // Reservation writes and startup already compact their own evidence.
+    // An idle controller must not open a whole-registry mutation for hygiene.
     /* Quota ticks run alongside migration reconciliation so a slow migration
        cannot delay fresh readings. Observe every rejection immediately and
        settle all peers before releasing the controller's running fence. */
@@ -116,7 +118,7 @@ export async function reconcileAccountLogins(): Promise<void> {
 }
 
 type InventorySnapshot = Awaited<ReturnType<typeof reconcileMigrationInventory>>;
-type ConversationLookup = ReturnType<typeof conversationLookupFromSnapshot>;
+type ConversationLookup = Pick<AgentRegistry, "conversationForPath" | "canonicalConversationId" | "conversation">;
 type ControllerScan = Awaited<ReturnType<typeof listFilesWithProjectCatalog>>;
 
 const INCOMPLETE_CONTROLLER_SCAN: ControllerScan = {
@@ -168,29 +170,31 @@ async function reconcileControllerRuntime(registry: AgentRegistry, files: Contro
      that owns traffic instead — see `startStructuredHostRetirement`. */
 }
 
-function reconcileControllerTasks(registry: AgentRegistry, files: ControllerScan["files"]): void {
-  const currentLookup = conversationLookupFromSnapshot(registry.readOnlySnapshot());
-  mutateTasks((current) => {
-    const reconciled = reconcileTasks(files, current, {
-      pathForPanePid: (panePid, entries) => pathForPanePid(entries, panePid, readPpid),
-      panePidAlive: pidAlive,
-      conversationIdForPath: (pathname) => currentLookup.conversationForPath(pathname)?.id ?? null,
-      canonicalConversationId: (conversationId) => conversationId.startsWith("conversation_")
-        ? currentLookup.canonicalConversationId(conversationId as `conversation_${string}`)
-        : null,
-      pathForConversationId: (conversationId) => conversationId.startsWith("conversation_")
-        ? currentLookup.conversation(conversationId as `conversation_${string}`)?.generations.at(-1)?.path ?? null
-        : null,
-    });
-    return { tasks: reconciled.dirty ? reconciled.tasks : undefined, result: undefined };
+async function reconcileControllerTasks(registry: AgentRegistry, files: ControllerScan["files"]): Promise<void> {
+  const reconcile = <Tasks extends readonly BoardTask[]>(tasks: Tasks) => reconcileTasks(files, tasks, {
+    pathForPanePid: (panePid, entries) => pathForPanePid(entries, panePid, readPpid),
+    panePidAlive: pidAlive,
+    conversationIdForPath: (pathname) => registry.conversationForPath(pathname)?.id ?? null,
+    canonicalConversationId: (conversationId) => conversationId.startsWith("conversation_")
+      ? registry.canonicalConversationId(conversationId as `conversation_${string}`) : null,
+    pathForConversationId: (conversationId) => conversationId.startsWith("conversation_")
+      ? registry.conversation(conversationId as `conversation_${string}`)?.generations.at(-1)?.path ?? null : null,
   });
+  await waitForStateLock("controller.tasks", () => {
+    if (!reconcile(loadTasksForList()).dirty) return;
+    mutateTasks((current) => {
+      // Recheck live registry and process evidence after writer admission.
+      const reconciled = reconcile(current);
+      return { tasks: reconciled.dirty ? reconciled.tasks : undefined, result: undefined };
+    });
+  }, { subject: "tasks" });
 }
 
 const DEFAULT_CONTROLLER_CYCLE_PORTS: AccountMigrationControllerCyclePorts = {
   // The inventory sidecar consumes the completed snapshot published by the
   // Viewer. Process-wide coordination cannot cover a separate OS process.
   scan: () => accountControllerScan(),
-  reconcileInventory: (registry, files) => reconcileMigrationInventory(registry, files, { readOnlySnapshot: true }),
+  reconcileInventory: (registry, files) => reconcileMigrationInventory(registry, files, { readOnlySnapshot: true, incrementalInventory: true }),
   reconcileFlowOwnership: reconcileFlowConversationOwnershipCooperatively,
   reconcileWorkflowOwnership: reconcileWorkflowConversationOwnershipCooperatively,
   reconcileHandoffOwnership: reconcileHandoffConversationOwnershipCooperatively,
@@ -201,7 +205,22 @@ const DEFAULT_CONTROLLER_CYCLE_PORTS: AccountMigrationControllerCyclePorts = {
   reconcileMigrationCycle: reconcileAccountMigrationCycle,
 };
 
+/** Only fields consumed by inventory. Presentation/usage overlays may change
+    on every scan without changing a conversation observation. */
+function inventoryFileSignature(file: ControllerScan["files"][number]): string {
+  return JSON.stringify([file.path, file.engine, file.parent, file.size, file.mtime,
+    file.activity, file.activityReason, file.proc, file.pid, file.derivationComplete,
+    Boolean(file.rateLimit), file.cwd, file.launchModel, file.model, file.effort,
+    file.title, file.project, file.goal, file.plan, file.nativeForkSourceThreadId,
+    file.sessionStartedAt]);
+}
+
 export class AccountMigrationController {
+  // Membership bounds the cursor; removed files leave no retained signature.
+  private inventoryInputs = new Map<string, string>();
+  private inventoryRevision: string | null = null;
+  private inventoryContexts = new Map<string, string>();
+  private inventoryCursor = 0;
   private running: Promise<void> | null = null;
   private trailingCycleRequested = false;
   private readonly ports: AccountMigrationControllerCyclePorts;
@@ -233,7 +252,7 @@ export class AccountMigrationController {
     let failure: unknown = null;
     do {
       this.trailingCycleRequested = false;
-      try { await (this.cycle?.() ?? this.run()); }
+      try { await withViewerOperation("controller.account-migration", () => this.cycle?.() ?? this.run()); }
       catch (error) { failure ??= error; }
     } while (this.trailingCycleRequested);
     if (failure) throw failure;
@@ -243,14 +262,52 @@ export class AccountMigrationController {
     const { files, complete } = await this.ports.scan();
     if (!complete) return;
     await yieldToRuntime();
-    const inventorySnapshot = await this.ports.reconcileInventory(this.registry, files);
+    // Routing and account changes can reassign an otherwise unchanged transcript.
+    // These are narrow metadata reads; quota writes do not invalidate inventory.
+    const revision = JSON.stringify([accountsCollectionRevision(),
+      this.registry.engineRouting("claude").activeAccountId, this.registry.engineRouting("codex").activeAccountId]);
+    const nextInputs = new Map(files.map(file => [file.path, inventoryFileSignature(file)]));
+    const contextFor = (pathname: string): string => {
+      const scoped = this.registry.activityConversationSnapshot(pathname);
+      return JSON.stringify([
+        Object.values(scoped.conversations).map(row => [row.id, row.generations.at(-1)?.id,
+          row.generations.find(generation => generation.path === pathname)?.launchProfile, row.turn, row.continuityPaths, row.projectOwnership]),
+        Object.values(scoped.entries).map(row => [row.status, row.host, Boolean(row.structuredHost), row.structuredHost?.process, row.claimOwner, row.pendingAction]),
+        scoped.conversationAliases, scoped.lineageEdges, scoped.memberships,
+        Object.values(scoped.receipts).map(row => [row.launchId, row.state, row.parentConversationId, row.launcher?.conversationId]),
+        Object.values(scoped.heldDeliveries).filter(item => item.state === "delivered").map(item => item.deliveredAt),
+      ]);
+    };
+    // A host, alias or delivery may change without a transcript write. Revisit
+    // at most 32 paths per poll, rotating across the current catalog.
+    const contextChanged = new Set<string>();
+    const cursorPaths = [...nextInputs.keys()].sort();
+    for (let visited = 0; visited < Math.min(32, cursorPaths.length); visited++) {
+      const pathname = cursorPaths[(this.inventoryCursor + visited) % cursorPaths.length]!;
+      if (contextFor(pathname) !== this.inventoryContexts.get(pathname)) contextChanged.add(pathname);
+    }
+    const nextCursor = cursorPaths.length ? (this.inventoryCursor + 32) % cursorPaths.length : 0;
+    const changed = revision !== this.inventoryRevision ? files
+      : files.filter(file => nextInputs.get(file.path) !== this.inventoryInputs.get(file.path) || contextChanged.has(file.path));
+    if (this.inventoryRevision === null || changed.length) {
+      await this.ports.reconcileInventory(this.registry, changed);
+    }
+    // Later phases await independent actors. Acknowledge only the context
+    // inventory just observed, so their changes remain visible to the cursor.
+    const observedContexts = new Map(changed.map(file => [file.path, contextFor(file.path)]));
     await yieldToRuntime();
-    const inventoryLookup = readOnlyConversationLookupFromSnapshot(inventorySnapshot);
+    // Ownership stores can change independently of the scanner. Their lookups
+    // remain keyed and do not need an assembled registry snapshot.
+    const inventoryLookup: ConversationLookup = this.registry;
     await this.ports.reconcileFlowOwnership(inventoryLookup);
     await this.ports.reconcileWorkflowOwnership(inventoryLookup);
     await this.ports.reconcileHandoffOwnership(inventoryLookup);
     await yieldToRuntime();
-    await this.ports.reconcileFiles(files);
+    // Flow/pipeline deadlines and question routing also advance with no file
+    // changes, so their existing scheduled pass keeps the full live catalog.
+    await this.ports.reconcileFiles(files, {
+      inventoryChanged: this.inventoryRevision === null || changed.length > 0 || nextInputs.size !== this.inventoryInputs.size,
+    });
     await yieldToRuntime();
     await this.ports.reconcileRuntime(this.registry, files);
     await yieldToRuntime();
@@ -258,6 +315,13 @@ export class AccountMigrationController {
     await yieldToRuntime();
     await this.ports.syncRouting(this.registry);
     await this.ports.reconcileMigrationCycle(this.registry, this.quota);
+    // A failed phase acknowledges nothing, including incomplete scans and
+    // account/routing changes that arrived while a previous phase awaited.
+    this.inventoryInputs = nextInputs;
+    this.inventoryRevision = revision;
+    this.inventoryCursor = nextCursor;
+    for (const pathname of this.inventoryContexts.keys()) if (!nextInputs.has(pathname)) this.inventoryContexts.delete(pathname);
+    for (const [pathname, context] of observedContexts) this.inventoryContexts.set(pathname, context);
   }
 }
 
@@ -346,6 +410,9 @@ function startInventoryControllerWorker(): void {
 export async function startAccountMigrationController(): Promise<void> {
   await yieldToRuntime();
   const registry = agentRegistry();
+  // The sidecar is another process: it needs the same prepared read owner as
+  // the Viewer, or keyed probes invalidate its writer connection's read view.
+  await withViewerOperation("registry.prepare", () => registry.prepareReadOnlySnapshot());
   const quota = new QuotaController(registry);
   if (process.env.LLV_ACCOUNT_CONTROLLER_INVENTORY_WORKER === "1") {
     startInventoryController(registry, quota);

@@ -346,9 +346,8 @@ function observationUnchanged(
   return delivered === undefined || delivered < observedAt;
 }
 
-async function inventory(files: FileEntry[], registry: AgentRegistry): Promise<ConversationObservation[]> {
+async function inventory(files: FileEntry[], registry: AgentRegistry, snapshot = registry.readOnlySnapshot()): Promise<ConversationObservation[]> {
   const inventoryStartedAt = Date.now();
-  const snapshot = registry.readOnlySnapshot();
   const conversationByPath = new Map<string, RegistryConversation>();
   const launchProfileByPath = new Map<string, RegistryConversation["generations"][number]["launchProfile"]>();
   const hostedPaths = activeRegisteredHostPaths(snapshot);
@@ -532,17 +531,42 @@ async function repairAdoptedForkBoardPlacements(
   });
 }
 
+/** Assemble only the paths a scan changed, through the existing keyed API.
+    Parent paths participate even when their own transcript did not change. */
+function incrementalInventorySnapshot(registry: AgentRegistry, files: FileEntry[]): RegistryFile {
+  const paths = new Set(files.filter(file => engineOf(file) !== null).flatMap(file => file.parent ? [file.path, file.parent] : [file.path]));
+  let result: RegistryFile | undefined;
+  for (const pathname of paths) {
+    const scoped = registry.activityConversationSnapshot(pathname);
+    // An untracked path may belong to a pending launch whose receipt has not
+    // acquired a conversation/path index yet. Preserve its launch profile on
+    // that cold path; a known path needs only its own receipt/host evidence.
+    if (!Object.keys(scoped.conversations).length) return registry.readOnlySnapshot();
+    Object.assign(scoped.entries, registry.spawnRecoverySnapshot(Object.keys(scoped.receipts)).entries);
+    if (!result) { result = scoped; continue; }
+    for (const collection of ["entries", "receipts", "conversations", "conversationAliases", "heldDeliveries"] as const) {
+      Object.assign(result[collection], scoped[collection]);
+    }
+  }
+  return result ?? registry.activityConversationSnapshot("");
+}
+
 export async function reconcileMigrationInventory(
   registry: AgentRegistry = agentRegistry(),
   files?: FileEntry[],
   options: MigrationCoordinatorOptions = {},
 ): Promise<ReturnType<AgentRegistry["snapshot"]>> {
   const entries = files ?? await listFiles();
-  const observations = await inventory(entries, registry);
+  const observations = await inventory(entries, registry, options.incrementalInventory
+    ? incrementalInventorySnapshot(registry, entries) : registry.readOnlySnapshot());
   let snapshot: RegistryFile;
   if (options.readOnlySnapshot) {
-    registry.reconcileConversations(observations, { snapshot: false });
-    snapshot = registry.readOnlySnapshot();
+    if (options.incrementalInventory) {
+      if (observations.length) await registry.deliveryWriteOrBusy({ label: "inventory.reconcile" }, () =>
+        registry.reconcileConversations(observations, { snapshot: false }));
+    } else registry.reconcileConversations(observations, { snapshot: false });
+    snapshot = options.incrementalInventory
+      ? incrementalInventorySnapshot(registry, entries) : registry.readOnlySnapshot();
   } else {
     snapshot = registry.reconcileConversations(observations);
   }
@@ -749,6 +773,8 @@ export interface MigrationCoordinatorOptions {
   deferBoardRepair?: boolean;
   /** The inventory worker reads the result without changing it. */
   readOnlySnapshot?: boolean;
+  /** A scanner delta: read and repair only its conversations and parents. */
+  incrementalInventory?: boolean;
   ownsOperation?: () => Promise<boolean>;
   /** Asked right before the successor is created and at every ownership
       check of its publication, the controller's registration included; a
@@ -807,6 +833,7 @@ async function repairCommittedBoardSuccessions(
     const plan = boardRepairPlan(conversation);
     if (plan) plans.push(plan);
   });
+  if (plans.length === 0) return;
   const placementTransfers: { fromProject: string; toProject: string; paths: string[] }[] = [];
   await forEachCooperatively(plans, (plan) => {
     if (plan.previousProject && plan.previousProject !== plan.project) {
@@ -856,7 +883,7 @@ async function repairCommittedBoardSuccessions(
       });
     }
   });
-  await offLoop(registry, "migration.board", converged[0]?.operationId ?? null, () => registry.markMigrationBoardProjects(converged));
+  if (converged.length > 0) await offLoop(registry, "migration.board", converged[0]!.operationId, () => registry.markMigrationBoardProjects(converged));
 }
 
 /** The caller's account fence, as a target the switch can no longer use. */
