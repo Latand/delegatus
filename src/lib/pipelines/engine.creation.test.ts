@@ -2610,7 +2610,7 @@ test("a dirty read-only stage parks without staging repository changes", async (
   expect(h.calls.some((call) => call.includes("git add"))).toBe(false);
 });
 
-test("restart after a bare spawn reservation parks instead of waiting forever", async () => {
+test("restart after a bare spawn reservation observes evidence under a bounded budget", async () => {
   const h = harness();
   await create(h.ports);
   await tickPipelines([], h.ports);
@@ -2645,8 +2645,16 @@ test("restart after a bare spawn reservation parks instead of waiting forever", 
   savePipelines([pipeline]);
 
   await tickPipelines([], h.ports);
+  const waiting = loadPipelines()[0]!;
+  expect(waiting.state).toBe("running");
+  expect(waiting.stateDetail).toContain("stage spawn evidence pending: receipt starting");
+  const attempt = waiting.runs[0]!.attempts[0]!;
+  h.ports.now = () => new Date(Date.parse(attempt.controllerWait!.startedAt) + 601_000).toISOString();
+  await tickPipelines([], h.ports);
   expect(loadPipelines()[0]!.state).toBe("needs_decision");
-  expect(loadPipelines()[0]!.stateDetail).toContain("cannot recover from receipt state starting");
+  expect(loadPipelines()[0]!.stateDetail).toContain("stage spawn evidence unresolved after bounded recovery: receipt starting");
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.launchId).toBe("launch-reserved");
+  expect(h.spawnInputs).toHaveLength(0);
 });
 
 test("transient structured spawn handshakes retry twice before parking (#1056)", async () => {

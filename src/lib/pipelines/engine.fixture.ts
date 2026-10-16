@@ -1497,15 +1497,15 @@ async function stagedRecoveryHarness(
   let statusFailures = 0;
   const lookups: string[] = [];
   const operations = new Map<string, import("@/lib/runtime/contracts").RuntimeOperationResult>();
-  const record = (id: string, conversationId: string, status: "queued" | "delivered" | "turn-started") => {
-    const result = { receipt: { operationId: id, conversationId, status }, replayed: false } as import("@/lib/runtime/contracts").RuntimeOperationResult;
+  const record = (id: string, conversationId: string, status: "queued" | "delivered" | "turn-started", kind: import("@/lib/runtime/contracts").RuntimeOperationKind = id === launchId ? "spawn" : "send") => {
+    const result = { operationId: id, receipt: { operationId: id, conversationId, status, kind }, replayed: false } as import("@/lib/runtime/contracts").RuntimeOperationResult;
     operations.set(id, result);
     return result;
   };
   const client = {
     command: async (command: Parameters<import("@/lib/runtime/client").RuntimeHostClient["command"]>[0]) => {
       if (!command.operationId || !command.conversationId) throw new Error("fixture requires original operation identity");
-      return operations.get(command.operationId) ?? record(command.operationId, command.conversationId, "queued");
+      return operations.get(command.operationId) ?? record(command.operationId, command.conversationId, "queued", command.kind);
     },
     producerCursor: async () => {
       if (mode === "permanent") throw new RuntimeHostUnavailableError("authentication denied", "UNAUTHORIZED");
@@ -1572,6 +1572,19 @@ async function stagedRecoveryHarness(
   const recover = async (id: string, eligible: () => boolean) => {
     await recoverStagedStructuredLaunch(id, registry, client, { now: () => clock, eligible });
   };
+  h.ports.originalLaunchOperations = async (id, conversationId, eligible) => {
+    const launch = await client.operationStatus(id);
+    if (!eligible()) return "unknown";
+    const message = await client.operationStatus(`spawn_message_${id}`);
+    if (!eligible()) return "unknown";
+    const conflicts = [[id, launch], [`spawn_message_${id}`, message]] as const;
+    if (conflicts.some(([operationId, operation]) => operation &&
+      (operation.operationId !== operationId || operation.receipt.operationId !== operationId
+        || operation.receipt.conversationId !== conversationId))) return "conflict";
+    if (!launch || !message || launch.receipt.kind !== "spawn" || message.receipt.kind !== "send") return "unknown";
+    if (message.receipt.status === "rejected" || message.receipt.status === "failed") return "rejected";
+    return eligible() ? "matched" : "unknown";
+  };
   h.ports.recoverStagedLaunch = recover;
   h.ports.scheduleTick = () => {};
   h.ports.conversationAgentActive = async () => true;
@@ -1602,6 +1615,9 @@ async function aliveStagedLaunch(options: Parameters<typeof stagedRecoveryHarnes
   f.h.ports.durableTurnEvidence = durableStageTurnEvidence;
   const working = () => {
     const at = Date.parse(f.h.ports.now());
+    const receipt = f.registry.readOnlySnapshot().receipts[f.launchId()]!;
+    void f.client.command({ operationId: `spawn_message_${f.launchId()}`, conversationId: receipt.conversationId,
+      kind: "send", text: "Build the change" } as Parameters<import("@/lib/runtime/client").RuntimeHostClient["command"]>[0]);
     fs.writeFileSync(transcript, [
       { timestamp: new Date(at - 2_000).toISOString(), type: "session_meta", payload: { id: "stage" } },
       { timestamp: new Date(at - 1_000).toISOString(), type: "event_msg", payload: { type: "task_started" } },
