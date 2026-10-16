@@ -69,7 +69,7 @@ export function openCurrentDatabase<T extends BunDatabase>(
   options: {
     /** Runs on a connection opened to replace a moved one, through the
         returned handle (a fresh database needs its schema again). */
-    reopened?: (db: T) => void;
+    reopened?: (db: T, previousDb?: T) => void;
   } = {},
 ): T {
   /* Every state database — the task store, the agent registry, the state
@@ -101,9 +101,14 @@ export function openCurrentDatabase<T extends BunDatabase>(
     }
     if (isCurrent()) return;
     const next = connect();
-    try { db.close(); } catch { /* closing a moved file only drops its descriptors */ }
     current = next;
-    options.reopened?.(handle);
+    try {
+      // Give readers a last chance to materialize values from the old inode
+      // before closing it. Most connections have no such held lazy values.
+      options.reopened?.(handle, db);
+    } finally {
+      try { db.close(); } catch { /* closing a moved file only drops its descriptors */ }
+    }
   };
   handle = new Proxy(current.db, {
     get(_target, property) {

@@ -21,19 +21,21 @@ export async function copyText(text: string): Promise<boolean> {
   /* Selecting the textarea takes focus; removing it would leave focus on <body>, out of the dialog or menu the
      copy was pressed in, so Escape and tab order there stop working. Focus goes back where it was. */
   const focused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  /* The element holds the whole text, a key included: it leaves the document on every exit, a throw from
+     select() or execCommand() among them. */
+  const ta = document.createElement("textarea");
   try {
-    const ta = document.createElement("textarea");
     ta.value = text;
     ta.style.position = "fixed";
     ta.style.opacity = "0";
     document.body.appendChild(ta);
     ta.select();
-    const ok = document.execCommand("copy");
-    ta.remove();
-    return ok;
+    return document.execCommand("copy");
   } catch {
     return false;
   } finally {
+    ta.value = "";
+    ta.remove();
     if (focused?.isConnected && document.activeElement !== focused) focused.focus({ preventScroll: true });
   }
 }

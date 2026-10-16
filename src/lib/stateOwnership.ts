@@ -84,9 +84,27 @@ function uniqueStrings(values: readonly (string | undefined)[]): string[] {
   return [...new Set(values.filter((value): value is string => !!value && value.trim().length > 0))];
 }
 
+interface OwnershipTestPaths { home: string; tempRoots: readonly string[] }
+// Entry-point tests exercise both the source graph and the compiled MCP graph.
+// Share their injected platform paths across those two module instances.
+const ownershipPathsKey = Symbol.for("delegatus.stateOwnership.testPaths");
+const ownershipPlatform = globalThis as typeof globalThis & { [ownershipPathsKey]?: OwnershipTestPaths };
+
+/** Test seam: model an operator home inside a wholly owned sandbox, including
+    when the checkout itself lives under the operating system's temp root. */
+export function setStateOwnershipPathsForTests(paths: OwnershipTestPaths): () => void {
+  const previous = ownershipPlatform[ownershipPathsKey];
+  ownershipPlatform[ownershipPathsKey] = paths;
+  return () => {
+    if (previous) ownershipPlatform[ownershipPathsKey] = previous;
+    else delete ownershipPlatform[ownershipPathsKey];
+  };
+}
+
 function underTemp(directory: string, env: NodeJS.ProcessEnv = process.env): boolean {
   const resolved = path.resolve(directory);
-  return uniqueStrings([os.tmpdir(), env.TMPDIR, "/tmp", "/var/tmp"])
+  const roots = ownershipPlatform[ownershipPathsKey]?.tempRoots ?? [os.tmpdir(), "/tmp", "/var/tmp"];
+  return uniqueStrings([...roots, env.TMPDIR])
     .map((root) => path.resolve(root))
     .some((root) => resolved === root || resolved.startsWith(root + path.sep));
 }
@@ -109,7 +127,7 @@ export function operatorOwnedRoots(env: NodeJS.ProcessEnv = process.env): string
      points under a temp root — that is a sandbox a test or a driver built for
      itself, and treating it as the operator's would substitute a throw-away
      directory for the one the caller deliberately chose. */
-  const homes = uniqueStrings([os.homedir(), env.HOME]).filter((home, index) => index === 0 || !underTemp(home, env));
+  const homes = uniqueStrings([ownershipPlatform[ownershipPathsKey]?.home ?? os.homedir(), env.HOME]).filter((home, index) => index === 0 || !underTemp(home, env));
   for (const home of homes) {
     /* Every name the app dir has had, `delegatus` included: a lane's build
        that resolved `~/.config/delegatus` as unguarded would be #1905 with a

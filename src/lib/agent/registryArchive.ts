@@ -45,6 +45,7 @@ export function installRegistryArchive(db: Database): void {
     `CREATE TABLE IF NOT EXISTS registry_changes (
       seq INTEGER PRIMARY KEY AUTOINCREMENT, collection TEXT NOT NULL, row_key TEXT NOT NULL
     )`,
+    `CREATE INDEX IF NOT EXISTS registry_changes_collection_seq ON registry_changes(collection,seq)`,
     ...["registry_rows", "registry_cold"].flatMap(table => ["INSERT", "UPDATE", "DELETE"].map(event => {
       const row = event === "DELETE" ? "OLD" : "NEW";
       return `CREATE TRIGGER IF NOT EXISTS ${table}_changes_${event.toLowerCase()} AFTER ${event} ON ${table}
