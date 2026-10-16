@@ -42,7 +42,7 @@ afterEach(() => {
 function put(body: unknown, host = "127.0.0.1"): Promise<Response> {
   return PUT(new NextRequest("http://127.0.0.1/api/transcribe/key", {
     method: "PUT",
-    headers: { host, "content-type": "application/json" },
+    headers: { host, "content-type": "application/json", "sec-fetch-site": "same-origin" },
     body: JSON.stringify(body),
   }));
 }

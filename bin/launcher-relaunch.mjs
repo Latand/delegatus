@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
 import net from "node:net";
 import { fileURLToPath } from "node:url";
-import { headRevision, probePageAndChunk, readStartIdentity, runtimeHostStartIdentity } from "./self-update-supervisor.mjs";
+import { headRevision, probePageAndChunk, readStartIdentity, runtimeHostStartIdentity, TERMINAL_BOOTSTRAP_TIMEOUT_MS } from "./self-update-supervisor.mjs";
 import { probeHeadersFrom } from "./internalService.mjs";
 import { viewerBootGateKey } from "./viewerGateKey.mjs";
 import { assertLauncherAvailable } from "./launcher-adoption.mjs";
@@ -94,8 +94,8 @@ async function terminalBootstrap(encoded, nextEntry, args) {
   const key = viewerBootGateKey(process.env);
   const headers = probeHeadersFrom(dirname(directory));
   if (key && !/[^\t\x20-\x7e]/.test(key)) headers.authorization = `Bearer ${key.trim()}`;
-  const deadline = Date.now() + 120000;
-  while (Date.now() < deadline) {
+  const deadline = performance.now() + TERMINAL_BOOTSTRAP_TIMEOUT_MS;
+  while (performance.now() < deadline) {
     const trial = read(trialFile); const record = read(recordFile);
     if (trial?.requestId === intent.requestId && trial.state === "rolled-back") failed = true;
     if (record && record.launcher.pid === child.pid && record.launcher.startIdentity && record.launcher.startIdentity === readStartIdentity(child.pid)

@@ -1,3 +1,4 @@
+import { observeSqlite, parseSqliteJson } from "@/lib/sqliteReadAttribution";
 import fs from "node:fs";
 import type { Database } from "bun:sqlite";
 import { openCurrentDatabase } from "@/lib/state/currentDatabase";
@@ -29,7 +30,7 @@ function outboundAttempt<T>(filename: string, write: boolean, work: (db: Databas
   return stateLockAttempt("telegram.outbound-state", () => {
     const sqlite = process.getBuiltinModule?.("bun:sqlite") as typeof import("bun:sqlite") | undefined;
     if (!sqlite) throw new Error("Telegram outbound custody requires the Bun runtime");
-    const db = openCurrentDatabase(filename, () => new sqlite.Database(filename, { readonly: !write, strict: true }));
+    const db = openCurrentDatabase(filename, () => observeSqlite(new sqlite.Database(filename, { readonly: !write, strict: true }), "telegram-outbound"));
     try {
       db.exec("PRAGMA busy_timeout = 0");
       if (write) {
@@ -98,7 +99,7 @@ export async function pendingOutbound(filename: string, now: number): Promise<Ou
   if (!fs.existsSync(filename)) return [];
   return outboundState(filename, false, db => exists(db) ? db.query<{ key: string; value_json: string; attempts: number }, [number]>(
     "SELECT key, value_json, attempts FROM relay_outbound WHERE state='pending' AND due<=? ORDER BY due, key LIMIT 16")
-    .all(now).map(r => ({ key: r.key, message: JSON.parse(r.value_json), attempts: r.attempts })) : []);
+    .all(now).map(r => ({ key: r.key, message: parseSqliteJson(r.value_json, db), attempts: r.attempts })) : []);
 }
 export async function settleOutbound(filename: string, row: OutboundRow, published: boolean, now: number, delayMs?: number): Promise<void> {
   await outboundState(filename, true, db => {
@@ -140,7 +141,7 @@ export async function scopedOutbound(filename: string, botId: string, chatId: st
     const result: OutboundMessage[] = [];
     for (const row of messageId === undefined ? [...group, ...rows] : [...rows, ...group]) {
       if (row.value_json === null) continue;
-      const message = JSON.parse(row.value_json) as OutboundMessage;
+      const message = parseSqliteJson(row.value_json, db) as OutboundMessage;
       if (seen.has(message.messageId)) continue;
       seen.add(message.messageId);
       const size = Buffer.byteLength(message.text);

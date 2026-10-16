@@ -269,3 +269,31 @@ The tests inject processes, clock, commands and transports. Their registry and
 verdict files use temporary private roots. Transport checks use an HTTP stub
 bound to port 0 and synthetic MCP children owned by the test. They never invoke
 systemd, connect to the installation, or change operator state.
+
+
+## Launcher readiness evidence
+
+A replacement launcher waits up to 90 seconds for `/api/files`, then up to
+90 seconds for the page and its first referenced JavaScript chunk together.
+Each HTTP attempt has a five-second cap, shortened to the remaining deadline;
+failed page/chunk attempts wait 200 ms before retrying. A page answering 401
+or 403 ends the check immediately so the existing authentication refusal and
+rollback behavior is preserved. The first ordinary startup retains its
+15-second files budget.
+
+The launcher writes `self-update/readiness-<install-id>.json` under its state
+root before each phase attempt and after each result. It retains four starts,
+including the candidate and the rollback start, with release revision, child
+PID, status, elapsed milliseconds and attempt counters for files, page and
+chunk. Phase elapsed time includes backoff; a pending phase has zero attempts.
+The page phase includes reading its HTML. A page with no script reference
+keeps the existing acceptance behavior and leaves the chunk phase pending.
+
+Before a candidate launcher execs its rollback, it also writes
+`self-update/startup-output-<install-id>.json`: the last 32 Ki characters of
+each startup stream (stdout and stderr), including normally hidden framework
+startup lines. Both files are private (mode 0600); the rollback's startup
+preserves the candidate output tail. Read them locally when investigating a
+failure and redact output before sharing it. These checks do not drain open
+agent turns before the Viewer swap; transport continuity needs a separate
+change.

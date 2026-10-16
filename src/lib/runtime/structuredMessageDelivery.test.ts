@@ -5184,3 +5184,30 @@ test("parallel B: a hostless fork's saved first question reaches the resumed hos
   await reconcileMigrations({} as never, port, reopened);
   expect(received).toHaveLength(1);
 });
+
+
+test.each([false, true])("only a newly committed journal receipt grants an immediate wake (replayed: %s)", async replayed => {
+  const { registry, conversation } = registryWithConversation();
+  recordStructuredOwner(registry, conversation);
+  const journal = new RuntimeJournal(":memory:", { structuredHosts: true });
+  const wakes: Array<boolean | undefined> = [];
+  journal.append({ scope: `session:${conversation.id}`, kind: "session-status", payload: {
+    conversationId: conversation.id, sessionKey: { engine: "codex", sessionId: conversation.generations.at(-1)!.id },
+    hostKind: "codex-app-server", host: "hosted", turn: "idle",
+  } });
+  const client = {
+    readSession: sessionReader(async () => snapshot(conversation.id)),
+    command: async (command: Parameters<RuntimeHostClient["command"]>[0]) => {
+      if (replayed) journal.executeOperation(command);
+      return journal.executeOperation(command);
+    },
+  } as RuntimeHostClient;
+  // A submitted flag has no authority; the journal's result decides the wake.
+  const request = { path: artifactPath, conversationId: conversation.id, operationId: "receipt-wake", clientMessageId: "receipt-wake",
+    text: "queued message", hasImages: false, freshAdmission: true };
+  try {
+    expect(await enqueueStructuredMessage(request, { enabled: () => true, registry: () => registry, client: () => client,
+      kick: fresh => { wakes.push(fresh); } })).toMatchObject({ ok: true, outcome: "queued" });
+    expect(wakes).toEqual(replayed ? [undefined] : [true]);
+  } finally { journal.close(); }
+});

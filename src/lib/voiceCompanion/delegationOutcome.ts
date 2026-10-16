@@ -24,3 +24,83 @@ export function deliveryFailureReason(code?: string): string {
   return code ? `The orchestrator's conversation refused the message (${code.replaceAll("_", " ").toLowerCase()}), so nothing was sent.`
     : "The delivery failed. Nothing reached the orchestrator.";
 }
+
+const SPOKEN_CUT = " The rest of the answer was left out.";
+/** Text Live can take in one append. A longer one keeps its whole sentences
+ * that fit, or else its clauses or words, and says that the rest was left out. */
+export function speakable(text: string, limit = 500): string {
+  if (limit <= 0) return "";
+  if (Buffer.byteLength(text) <= limit) return text;
+  if (limit < Buffer.byteLength(`…${SPOKEN_CUT}`)) {
+    let head = "";
+    for (const char of text) { if (Buffer.byteLength(head + char) > limit) break; head += char; }
+    return head.trimEnd();
+  }
+  let room = limit - Buffer.byteLength(`…${SPOKEN_CUT}`);
+  let head = "";
+  for (const char of text) {
+    room -= Buffer.byteLength(char);
+    if (room < 0) break;
+    head += char;
+  }
+  const end = (pattern: RegExp) => { let last = -1; for (const match of head.matchAll(pattern)) last = match.index + match[0].length; return last; };
+  const at = [/[.!?…](?=\s|$)/gu, /[,;:—](?=\s|$)/gu, /\S(?=\s)/gu].map(end).find(index => index >= head.length / 3) ?? head.length;
+  const kept = head.slice(0, at).trimEnd().replace(/[,;:—]$/u, ".");
+  return `${/[.!?…]$/u.test(kept) ? kept : `${kept}…`}${SPOKEN_CUT}`;
+}
+
+/** Every unsuccessful send gives both backends an explicit delivery fact. */
+export function nothingSent<T extends { status?: unknown; speech?: unknown }>(result: T): T | (T & { sent: false; speech: string }) {
+  if (result.status === "sent") return result;
+  const speech = typeof result.speech === "string" ? result.speech : "";
+  return { ...result, sent: false, speech: /^Nothing (?:was|has been|new was) sent\b/iu.test(speech) ? speech : `Nothing was sent. ${speech}`.trim() };
+}
+
+export interface DeliveryFact { kind: "sent" | "nothing" | "awaiting"; speech: string }
+const DELIVERY_SPEECH: Record<string, string> = {
+  delivered: "The orchestrator received the request.", queued: "The request is queued for the orchestrator.",
+  unknown: "The request's delivery is not confirmed yet.",
+};
+export function deliveryFact(result: Record<string, unknown>): DeliveryFact | null {
+  if (result.status === "sent" && typeof result.delivery === "string" && DELIVERY_SPEECH[result.delivery])
+    return { kind: "sent", speech: DELIVERY_SPEECH[result.delivery] };
+  if (result.status === "awaiting_report")
+    return { kind: "awaiting", speech: "The request is already queued; its report is pending." };
+  if (result.status === "answered")
+    return { kind: "sent", speech: "The orchestrator already received this request." };
+  if (result.status === "awaiting_confirmation") {
+    const instruction = typeof result.instruction === "string" ? result.instruction : "";
+    const reason = typeof result.confirmationReason === "string" ? result.confirmationReason
+      : typeof result.reason === "string" ? result.reason : "";
+    const sentence = (text: string) => `${text.trim().replace(/[.!?…]+$/u, "")}.`;
+    const request = instruction ? ` I would send: ${sentence(speakable(instruction, 180))}` : "";
+    const confirmation = reason ? ` Confirmation reason: ${sentence(speakable(reason, 100))}` : "";
+    return { kind: "awaiting", speech: `Nothing has been sent.${request}${confirmation} Ask the operator whether to send it; their spoken yes or no or the card's buttons will confirm.` };
+  }
+  const fixed: Record<string, string> = {
+    too_long: "Nothing was sent: the task was too long. Ask the operator to say it more briefly.",
+    check_waiting: "Nothing was sent yet: a similar request already waits for the orchestrator's answer. Ask the operator whether this repeats it.",
+    nothing_waiting: "No confirmation is waiting, so nothing was sent.",
+  };
+  const speech = fixed[String(result.status)] ?? (result.code === "private_history_boundary" ? String(result.speech)
+    : typeof result.reason === "string" && result.reason ? result.reason : "The request could not be sent.");
+  return { kind: "nothing", speech: fixed[String(result.status)] ?? String(nothingSent({ speech }).speech) };
+}
+
+/** Delivery facts reserve their bytes before the model's answer is shortened. */
+export function delegationSpeech(answer: string, facts: readonly DeliveryFact[]): string {
+  if (!facts.length) return speakable(answer);
+  const sent = facts.filter(fact => fact.kind === "sent");
+  const ordered = [...sent, ...facts.filter(fact => fact.kind !== "sent")];
+  let speech = [...new Set(ordered.map(fact => fact.speech))].join(" ");
+  if (Buffer.byteLength(speech) > 500) {
+    // Many failures can exhaust an append. Keep all successful delivery states
+    // and the latest refusal within the byte bound.
+    const successes = [...new Set(sent.map(fact => fact.speech))].join(" ");
+    const last = facts.findLast(fact => fact.kind !== "sent");
+    speech = [successes, last ? speakable(last.speech, 500 - Buffer.byteLength(successes) - (successes ? 1 : 0)) : ""].filter(Boolean).join(" ");
+  }
+  if (!sent.length) return speech;
+  const head = speakable(answer, 500 - Buffer.byteLength(speech) - 1);
+  return [head, speech].filter(Boolean).join(" ");
+}
