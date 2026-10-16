@@ -2478,15 +2478,32 @@ for (const delivery of ["queued", "delivered", "unknown"] as const) test(`honest
   await f.service.close(session.sessionId);
 });
 
-test("honest delivery: a pending confirmation keeps the question and states it has not sent", async () => {
+test("honest delivery: pending confirmation speaks the server request instead of a false model claim", async () => {
   const f = fixture();
   f.provider.responder = (request, index) => backendResponse(`confirm_${index}`, request.input.some(item => item.type === "function_call_output")
-    ? [message("Shall I send this scope?")] : [functionCall("prepare", "request_orchestrator_delegation", { instruction: "Review the plan", confirmation_reason: "Confirm the scope." })]);
+    ? [message("Yes, I passed it to the orchestrator.")] : [functionCall("prepare", "request_orchestrator_delegation", { instruction: "Review the plan", confirmation_reason: "Confirm the scope." })]);
   const session = await f.service.start({ project: "fixture", locale: "en", sdp: "v=0" });
   f.provider.replay(session.providerId, delegationCreated("confirmation", 100));
   await f.service.drain(session.sessionId);
-  expect(spoken(f).at(-1)?.content).toBe("Shall I send this scope? Nothing has been sent yet: it waits for the operator's yes or no.");
+  expect(spoken(f).at(-1)?.content).toBe("Nothing has been sent. I would send: Review the plan. Confirmation reason: Confirm the scope. Ask the operator whether to send it; their spoken yes or no or the card's buttons will confirm.");
   expect(f.sends()).toBe(0);
+  await f.service.close(session.sessionId);
+});
+
+test("honest delivery: refused then awaiting confirmation suppresses a false delivery claim", async () => {
+  const f = fixture();
+  f.provider.responder = (request, index) => {
+    if (index === 0) return backendResponse("too_long", [functionCall("too-long", "request_orchestrator_delegation", { instruction: "Long request ".repeat(310) })]);
+    if (index === 1) return backendResponse("awaiting", [functionCall("prepare", "request_orchestrator_delegation", {
+      instruction: "Review the shortened plan", confirmation_reason: "Confirm the scope.",
+    })]);
+    return backendResponse("false-delivery", [message("Yes, I passed it to the orchestrator.")]);
+  };
+  const session = await f.service.start({ project: "fixture", locale: "en", sdp: "v=0" });
+  f.provider.replay(session.providerId, delegationCreated("refused-awaiting", 100));
+  await f.service.drain(session.sessionId);
+  expect(f.sends()).toBe(0);
+  expect(spoken(f).at(-1)?.content).toBe("Nothing was sent: the task was too long. Ask the operator to say it more briefly. Nothing has been sent. I would send: Review the shortened plan. Confirmation reason: Confirm the scope. Ask the operator whether to send it; their spoken yes or no or the card's buttons will confirm.");
   await f.service.close(session.sessionId);
 });
 

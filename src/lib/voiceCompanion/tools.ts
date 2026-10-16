@@ -57,7 +57,7 @@ function spoken(outcome: Awaited<ReturnType<CompanionAdmission["delegate"]>>) {
   if (outcome.state === "answered") return { status: "answered", request: outcome.request.handle, ...(outcome.report ? { report: outcome.report } : {}),
     speech: outcome.report ? "Nothing was sent: the orchestrator already answered this. Answer from its report, keeping each fact with its own subject, in its words."
       : "Nothing was sent: the orchestrator already answered this. Read orchestrator_reports for its answer." };
-  if (outcome.state === "awaiting") return { status: "awaiting_confirmation", reason: outcome.proposal.confirmation?.reason ?? "",
+  if (outcome.state === "awaiting") return { status: "awaiting_confirmation", instruction: outcome.proposal.instruction, reason: outcome.proposal.confirmation?.reason ?? "",
     speech: "Nothing has been sent. Tell the operator in one sentence what would be sent and why you ask, and ask whether to send it. Their spoken yes or no comes back through resolve_orchestrator_confirmation; the card's buttons answer it too." };
   const reason = DELEGATION_REASONS[outcome.code];
   if (outcome.code === "request_other_project") return { status: "refused", code: outcome.code, reason,

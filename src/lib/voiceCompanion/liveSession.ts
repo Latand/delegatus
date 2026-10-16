@@ -510,7 +510,7 @@ export class CompanionLiveSessions {
           if (item.name === "relay_owner_history" && resultObject?.status === "done") ownerHistoryInContext = true;
           tried.push(triedTool(String(item.name), replayArguments, String(resultObject?.speech ?? "no answer")));
           if (DELEGATION_TOOLS.has(String(item.name)) && resultObject) {
-            const fact = deliveryFact(resultObject);
+            const fact = deliveryFact(cleanStrings(resultObject,text=>withoutLocalPaths(withoutCredentials(text,active.secrets))));
             if (fact) facts.push(fact);
           }
           if (resultObject?.code === "private_history_boundary") {

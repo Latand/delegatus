@@ -65,7 +65,15 @@ export function deliveryFact(result: Record<string, unknown>): DeliveryFact | nu
   if (result.status === "sent" && typeof result.delivery === "string" && DELIVERY_SPEECH[result.delivery])
     return { kind: "sent", speech: DELIVERY_SPEECH[result.delivery] };
   if (result.status === "awaiting_report" || result.status === "answered") return null;
-  if (result.status === "awaiting_confirmation") return { kind: "awaiting", speech: "Nothing has been sent yet: it waits for the operator's yes or no." };
+  if (result.status === "awaiting_confirmation") {
+    const instruction = typeof result.instruction === "string" ? result.instruction : "";
+    const reason = typeof result.confirmationReason === "string" ? result.confirmationReason
+      : typeof result.reason === "string" ? result.reason : "";
+    const sentence = (text: string) => `${text.trim().replace(/[.!?…]+$/u, "")}.`;
+    const request = instruction ? ` I would send: ${sentence(speakable(instruction, 180))}` : "";
+    const confirmation = reason ? ` Confirmation reason: ${sentence(speakable(reason, 100))}` : "";
+    return { kind: "awaiting", speech: `Nothing has been sent.${request}${confirmation} Ask the operator whether to send it; their spoken yes or no or the card's buttons will confirm.` };
+  }
   const fixed: Record<string, string> = {
     too_long: "Nothing was sent: the task was too long. Ask the operator to say it more briefly.",
     check_waiting: "Nothing was sent yet: a similar request already waits for the orchestrator's answer. Ask the operator whether this repeats it.",
@@ -89,7 +97,7 @@ export function delegationSpeech(answer: string, facts: readonly DeliveryFact[])
     const last = facts.findLast(fact => fact.kind !== "sent");
     speech = [successes, last ? speakable(last.speech, 500 - Buffer.byteLength(successes) - (successes ? 1 : 0)) : ""].filter(Boolean).join(" ");
   }
-  if (!sent.length && facts.at(-1)?.kind === "nothing") return speech;
+  if (!sent.length) return speech;
   const head = speakable(answer, 500 - Buffer.byteLength(speech) - 1);
   return [head, speech].filter(Boolean).join(" ");
 }
