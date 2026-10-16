@@ -46,6 +46,21 @@ beginCodexFeatureFixture();
  * with an owned prefix, and the Viewer's sweeper removes it once it is stale.
  */
 const run = claimProcessTempRoot(TEST_RUN_TEMP_PREFIX);
+// A launch's environment-level hooksPath outranks every fixture repository's
+// config and even affects `rev-parse --git-path hooks`. Drop launch bindings
+// before test modules load, and keep newly generated guards in this run too.
+for (const key of Object.keys(process.env)) {
+  if (/^GIT_(?:CONFIG(?:_|$)|DIR$|WORK_TREE$|COMMON_DIR$|INDEX_FILE$|OBJECT_DIRECTORY$|ALTERNATE_OBJECT_DIRECTORIES$|IMPLICIT_WORK_TREE$|GRAFT_FILE$|NO_REPLACE_OBJECTS$|REPLACE_REF_BASE$|PREFIX$|SHALLOW_FILE$)/.test(key)
+    || /^LLV_(?:AGENT_GIT_GUARD_DIR|STAGE_GIT_RECEIPT|STAGE_GIT_WORKTREE)$/.test(key)) delete process.env[key];
+}
+for (const key of ["HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME"]) {
+  process.env[key] = path.join(run.root, key.toLowerCase());
+  fs.mkdirSync(process.env[key]!, { recursive: true, mode: 0o700 });
+}
+
+process.env.GIT_CONFIG_NOSYSTEM = "1";
+process.env.GIT_CONFIG_GLOBAL = path.join(process.env.HOME!, ".gitconfig");
+
 beginTestChildOwnership(run.root);
 afterAll(() => run.release());
 

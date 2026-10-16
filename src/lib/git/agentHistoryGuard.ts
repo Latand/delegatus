@@ -15,6 +15,31 @@ const roots = new Map<string, string>();
 export type AgentEnvironment = Readonly<Record<string, string | undefined>>;
 const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";
 
+/** Read at most one generated body. Foreign files can be arbitrarily large;
+ * links and nonregular files never qualify as a cached executable. */
+function verifiedHook(target: string, body: Buffer, digest: string): boolean {
+  let fd: number | undefined;
+  try {
+    const entry = fs.lstatSync(target);
+    if (!entry.isFile() || entry.size !== body.length
+      || (process.platform !== "win32" && (entry.mode & 0o777) !== 0o700)) return false;
+    fd = fs.openSync(target, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0) | (fs.constants.O_NONBLOCK ?? 0));
+    const opened = fs.fstatSync(fd);
+    if (!opened.isFile() || opened.size !== body.length || opened.ino !== entry.ino || opened.dev !== entry.dev) return false;
+    const bytes = Buffer.alloc(body.length + 1);
+    let read = 0;
+    while (read < bytes.length) {
+      const count = fs.readSync(fd, bytes, read, bytes.length - read, null);
+      if (!count) break;
+      read += count;
+    }
+    return read === body.length && crypto.createHash("sha256").update(bytes.subarray(0, read)).digest("hex") === digest;
+  } catch (error) {
+    if (["ENOENT", "ELOOP"].includes((error as NodeJS.ErrnoException).code ?? "")) return false;
+    throw error;
+  } finally { if (fd !== undefined) fs.closeSync(fd); }
+}
+
 /** Git's transaction hook can refuse an amend even with --no-verify or
  * --reset-author. Scope it to the child environment; preserve repository hooks
  * and config, and refuse branch-history replacements that discard another author.
@@ -109,24 +134,45 @@ else
   exec "$target" "$@"
 fi
 `;
-  const hash = crypto.createHash("sha256").update(script).digest("hex").slice(0, 24);
+  const body = Buffer.from(script);
+  const digest = crypto.createHash("sha256").update(body).digest("hex");
+  const hash = digest.slice(0, 24);
   // CLI shims enter the host namespace. Only HOME is mounted at the same
   // writable path there; container /tmp is private and /var/tmp is read-only.
-  const parent = path.join(source.HOME?.trim() || os.homedir(), ".cache", "delegatus", "agent-git-hooks");
+  const parent = path.resolve(source.HOME?.trim() || process.env.HOME?.trim() || os.homedir(), ".cache", "delegatus", "agent-git-hooks");
   let root = roots.get(parent);
+  // A successor process may inherit a generated directory from its launcher.
+  // Only reuse our exact layout and expected digest under this launch's HOME;
+  // never repair an arbitrary path supplied as a guard directory.
+  const inherited = source.LLV_AGENT_GIT_GUARD_DIR;
+  if (!root && inherited && path.basename(inherited) === hash) {
+    const candidate = path.dirname(inherited);
+    if (path.dirname(candidate) === parent && /^guard-[A-Za-z0-9]+$/.test(path.basename(candidate))) {
+      const entry = fs.lstatSync(candidate, { throwIfNoEntry: false });
+      const directory = fs.lstatSync(inherited, { throwIfNoEntry: false });
+      if (entry?.isDirectory() && directory?.isDirectory()) root = candidate;
+    }
+  }
   if (!root) {
     fs.mkdirSync(parent, { recursive: true, mode: 0o700 });
     root = fs.mkdtempSync(path.join(parent, "guard-"));
-    roots.set(parent, root);
   }
+  const rootEntry = fs.lstatSync(root, { throwIfNoEntry: false });
+  if (rootEntry && !rootEntry.isDirectory()) throw new Error("Invalid generated Git hook root");
+  roots.set(parent, root);
   const directory = path.join(root, hash);
+  const existing = fs.lstatSync(directory, { throwIfNoEntry: false });
+  if (existing && !existing.isDirectory()) throw new Error("Invalid generated Git hook directory");
   fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
   for (const hook of hooks) {
     const target = path.join(directory, hook);
-    if (fs.existsSync(target)) continue;
+    if (verifiedHook(target, body, digest)) continue;
     const pending = target + "." + crypto.randomUUID();
-    fs.writeFileSync(pending, script, { mode: 0o700, flag: "wx" });
-    fs.renameSync(pending, target);
+    try {
+      fs.writeFileSync(pending, body, { mode: 0o700, flag: "wx" });
+      fs.renameSync(pending, target);
+    } finally { fs.rmSync(pending, { force: true }); }
+    if (existing) console.warn(`Delegatus: repaired generated Git hook ${hook}; expected sha256 ${digest}`);
   }
   const stageBinding = source.LLV_STAGE_GIT_RECEIPT ? {
     LLV_STAGE_GIT_RECEIPT: source.LLV_STAGE_GIT_RECEIPT,

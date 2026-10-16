@@ -27,6 +27,7 @@ export function beginTestChildOwnership(root: string): void {
   const ledger = path.join(root, "owned-test-children.jsonl");
   fs.writeFileSync(ledger, "", { mode: 0o600 });
   const rawBunSpawn = Bun.spawn;
+  const rawBunSpawnSync = Bun.spawnSync;
   // Linux already owns the complete tree in the test's private service. The
   // portable guardian is a fallback, rather than a second polling supervisor.
   const guardian = process.platform === "linux" ? null : rawBunSpawn([process.execPath, path.resolve(import.meta.dir, "../../../scripts/test-child-guardian.ts"), ledger, JSON.stringify(owner)], { env: process.env, stdin: "ignore", stdout: "ignore", stderr: "inherit" });
@@ -61,11 +62,17 @@ export function beginTestChildOwnership(root: string): void {
     bunChildren.set(child, record(child.pid));
     return child;
   }) as typeof Bun.spawn;
+  Bun.spawnSync = ((...args: Parameters<typeof Bun.spawnSync>) => {
+    const index = Array.isArray(args[0]) ? 1 : 0;
+    const options = args[index] as { env?: NodeJS.ProcessEnv } | undefined;
+    args[index] = { ...options, env: options?.env ?? process.env } as never;
+    return Reflect.apply(rawBunSpawnSync, Bun, args);
+  }) as typeof Bun.spawnSync;
   // Fixtures bind to this recorded runner, including a parent that exits
   // before the fixture's first import. Explicit fixture env overrides win.
   process.env.LLV_FIXTURE_PARENT_IDENTITY = JSON.stringify(owner);
   afterAll(async () => {
-    prototype.spawn = rawNodeSpawn; Bun.spawn = rawBunSpawn;
+    prototype.spawn = rawNodeSpawn; Bun.spawn = rawBunSpawn; Bun.spawnSync = rawBunSpawnSync;
     const survivors = [...nodeChildren].filter(([, identity]) => processIdentityStatus(identity) === "alive").map(([child]) => child);
     const bunSurvivors = [...bunChildren].filter(([, identity]) => processIdentityStatus(identity) === "alive").map(([child]) => child);
     for (const child of survivors) await stopFixtureProcess(child);
