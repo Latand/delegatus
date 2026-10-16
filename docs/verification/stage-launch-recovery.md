@@ -9,8 +9,15 @@ and source hashes are in `evidence/stage-launch-recovery/readings.json`.
 | Finding | Change | Regression in the existing test files |
 | --- | --- | --- |
 | F1 | Reserve once, then retry idempotent membership outside the registry writer under one deadline. Preserve typed contention. | `launchMembership.test.ts`: typed deferral, real peer writer, advancing independent timer, authority withdrawal and deadline/replay. |
-| F2 | Preserve a failed replay before membership can overwrite its admission proof. An unadmitted failed receipt with no host, native key, artifact or conversation generation takes the existing retry claim and persisted backoff. | `engine.recovery.test.ts`: executor exit before binding, legacy park, concurrent controller processes, manual claim collision, late completion, withdrawn proof and budget exhaustion after a controller process restart. |
+| F2 | Defer storage admission contention before an identity is bound. Preserve a failed replay before membership can overwrite its admission proof. An unadmitted failed receipt with no host, native key, artifact or conversation generation takes the existing retry claim and persisted backoff. | `engine.recovery.test.ts`: raw SQLite busy/locked admission, typed deferrals, executor exit before binding, legacy park, concurrent controllers, manual collision, late completion, withdrawn proof and exhaustion after a controller process restart. |
 | F3 | Seed the existing recovery envelope in lookup-only uncertainty. Reconcile the original launch and first-message operations, current generation and timely native turn. | `engine.recovery.test.ts`: incomplete replay without an envelope; operation conflict, generation conflict, generation changes across awaited reads/completion, stale turn and absent evidence. |
+
+Before a reservation callback binds any launch, conversation, transcript or pane,
+raw SQLite busy/locked messages and codes, registry contention and typed lease
+or account-commit deferrals use the existing durable ten-minute launch budget.
+The controller books backoff outside the spawn call. A restart preserves the
+budget's origin, elapsed time and rounds. Reserved identities follow receipt
+reconciliation; permanent storage errors retain their recorded cause.
 
 F2 uses the same `pipeline:stage:launch` claim as manual retry. A busy claim
 keeps the original launch in spawning with durable backoff; it retires nothing
@@ -54,7 +61,7 @@ including remote actions and manual retry, awaits asynchronous admission.
 
 ## Parallel work
 
-The final branch merges current main at `f5c684778`, including PR #2951.
+The final branch merges current main at `d395e7c73`, including PRs #2951 and #2953.
 Its shared F1 admission and initial three membership regressions are inherited
 from main. This branch adds peer release and deadline coverage. The separate
 `spawnEvidence` reader in `registry.ts` supplies fresh F3 evidence without
@@ -62,9 +69,9 @@ loading unrelated history. Missing historical launches reuse the pass projection
 existing launches read fresh evidence. The pipeline adapter preserves terminal
 replay evidence before another membership admission can erase it.
 
-The retry-claim interface and its awaited callers follow the async-admission
-lane. Startup adoption, delivery queues, runtime switching, MCP processes and
-runtime-host source remain with their owning lanes.
+The asynchronous retry-claim interface and its awaited callers are inherited
+from PR #2953. The additional pipeline handling bounds busy claims and rechecks
+the receipt after asynchronous admission.
 
 ## Replay the checks
 
@@ -78,6 +85,9 @@ bun test src/lib/pipelines/engine.recovery.test.ts
 bun test src/lib/pipelines/engine.creation.test.ts
 bun test src/lib/pipelines/spawnRestartRecovery.test.ts
 bun test src/lib/pipelines/engine.ports.test.ts
+bun test src/lib/agent/registry.writerWait.test.ts
+bun test src/lib/pipelines/runtimeSwitch.test.ts
+bun test src/lib/pipelines/engine.providerBudget.test.ts
 ./node_modules/.bin/tsc --noEmit --incremental false
 ```
 
