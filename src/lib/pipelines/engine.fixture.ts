@@ -1582,6 +1582,7 @@ async function stagedRecoveryHarness(
       (operation.operationId !== operationId || operation.receipt.operationId !== operationId
         || operation.receipt.conversationId !== conversationId))) return "conflict";
     if (!launch || !message || launch.receipt.kind !== "spawn" || message.receipt.kind !== "send") return "unknown";
+    if (message.receipt.status === "rejected" || message.receipt.status === "failed") return "rejected";
     return eligible() ? "matched" : "unknown";
   };
   h.ports.recoverStagedLaunch = recover;

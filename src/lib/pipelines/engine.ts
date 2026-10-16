@@ -300,7 +300,7 @@ export interface PipelinePorts {
   recoverStagedLaunch?(launchId: string, eligible: () => boolean): Promise<void>;
   /** Confirms both original runtime operations still belong to this launch.
       The eligibility callback is checked after each read, outside the pipeline lease. */
-  originalLaunchOperations?(launchId: string, conversationId: string, eligible: () => boolean): Promise<"matched" | "conflict" | "unknown">;
+  originalLaunchOperations?(launchId: string, conversationId: string, eligible: () => boolean): Promise<"matched" | "rejected" | "conflict" | "unknown">;
   failStageLaunch?(launchId: string, conversationId: string, reason: string): boolean;
   claimSpawnRetry(launchId: string, claimId: string): "claimed" | "settled" | "conflict" | Promise<"claimed" | "settled" | "conflict">;
   /** Original launch/message journal evidence, freshly fenced by the failed
@@ -1639,6 +1639,7 @@ export function defaultPipelinePorts(
           || operation.receipt.conversationId !== conversationId);
       if (conflict(launch, launchId) || conflict(message, `spawn_message_${launchId}`)) return "conflict";
       if (!launch || !message || launch.receipt.kind !== "spawn" || message.receipt.kind !== "send") return "unknown";
+      if (message.receipt.status === "rejected" || message.receipt.status === "failed") return "rejected";
       return eligible() ? "matched" : "unknown";
     }),
     failStageLaunch: (launchId, conversationId, reason) => {
@@ -6132,6 +6133,12 @@ async function spawnRunStage(
         await persist();
         return;
       }
+      if (nativeTurn?.operationRejected) {
+        if (attempt.activation) attempt.activation.phase = "settled";
+        park(pipeline, "the original first-message operation was rejected; original launch retained", attempt);
+        await persist();
+        return;
+      }
       if (nativeTurn?.pathname) {
         reopenDeliveredAttempt(pipeline, attempt, nativeTurn.pathname);
         if (attempt.activation) attempt.activation.phase = "settled";
@@ -8753,7 +8760,7 @@ async function deliveredAttemptPath(pipeline: Pipeline, attempt: PipelineStageAt
 
 /** The attempt's own transcript, once it holds a native turn this attempt
     started. Its launch receipt names it before the receipt completes. */
-async function attemptTurnTranscript(pipeline: Pipeline, stageId: string, attempt: PipelineStageAttempt, ports: PipelinePorts): Promise<{ pathname: string | null; operationConflict?: boolean } | null> {
+async function attemptTurnTranscript(pipeline: Pipeline, stageId: string, attempt: PipelineStageAttempt, ports: PipelinePorts): Promise<{ pathname: string | null; operationConflict?: boolean; operationRejected?: boolean } | null> {
   if (!attempt.conversationId) return null;
   const receipt = attempt.launchId ? ports.spawnReceipt(attempt.launchId) : null;
   const recovery = stagedLaunchRecovery(receipt);
@@ -8780,6 +8787,7 @@ async function attemptTurnTranscript(pipeline: Pipeline, stageId: string, attemp
   if (!stillCurrent()) return null;
   const operations = await ports.originalLaunchOperations?.(attempt.launchId!, attempt.conversationId, stillCurrent) ?? "unknown";
   if (operations === "conflict") return { pathname: null, operationConflict: true };
+  if (operations === "rejected") return { pathname: null, operationRejected: true };
   if (operations !== "matched" || !stillCurrent()) return null;
   const current = attempt.launchId ? ports.spawnReceipt(attempt.launchId) : null;
   if (receipt && (!current || current.conversationId !== receipt.conversationId || current.currentGeneration === false
@@ -14036,6 +14044,7 @@ async function resolveStageCompletionTarget(
   conversationId: string,
   requestedStageId: string | null,
   ports: PipelinePorts,
+  recoveryEvidence?: StageCompletionRecoveryEvidence | null,
 ): Promise<{ target: StageCompletionTarget; recoveryPath?: string } | { refusal: StageCompletionResult }> {
   const held = pipelines.flatMap((pipeline) => pipeline.runs.flatMap((run) => run.attempts
     .filter((attempt) => !attempt.historical && attempt.conversationId === conversationId)
@@ -14108,9 +14117,21 @@ async function resolveStageCompletionTarget(
     } };
   }
   const recoverable = new Map<StageCompletionTarget, string>();
-  for (const target of runStages) {
-    const pathname = await deliveredAttemptPath(target.pipeline, target.attempt, ports);
-    if (pathname) recoverable.set(target, pathname);
+  if (recoveryEvidence !== undefined) {
+    if (recoveryEvidence) {
+      const target = runStages.find(({ pipeline, stageId, attempt }) => pipeline.id === recoveryEvidence.pipelineId
+        && stageId === recoveryEvidence.stageId && attempt.n === recoveryEvidence.attempt
+        && stageCompletionRuntimeFence(attempt) === recoveryEvidence.runtimeFence);
+      if (target?.attempt.launchId === recoveryEvidence.launchId
+        && sameSpawnReceiptFence(ports.spawnReceipt(target.attempt.launchId), recoveryEvidence.receipt)) {
+        recoverable.set(target, recoveryEvidence.path);
+      }
+    }
+  } else {
+    for (const target of runStages) {
+      const pathname = await deliveredAttemptPath(target.pipeline, target.attempt, ports);
+      if (pathname) recoverable.set(target, pathname);
+    }
   }
   const live = runStages.filter((target) => !unverifiedHandoffSuccessors.has(target)
     && (REPORTABLE_ATTEMPT_STATES.has(target.attempt.state) || recoverable.has(target)
@@ -14133,6 +14154,27 @@ async function resolveStageCompletionTarget(
     } };
   }
   return { target: live[0]!, recoveryPath: recoverable.get(live[0]!) };
+}
+
+type StageCompletionRecoveryEvidence = {
+  pipelineId: string;
+  stageId: string;
+  attempt: number;
+  launchId: string;
+  runtimeFence: string;
+  path: string;
+  receipt: ReturnType<PipelinePorts["spawnReceipt"]>;
+};
+
+function sameSpawnReceiptFence(
+  current: ReturnType<PipelinePorts["spawnReceipt"]>,
+  expected: ReturnType<PipelinePorts["spawnReceipt"]>,
+): boolean {
+  const fingerprint = (receipt: typeof current) => receipt && JSON.stringify([
+    receipt.launchId, receipt.conversationId, receipt.state, receipt.sessionId, receipt.transcript,
+    receipt.stagedTranscript, receipt.staged, receipt.error, receipt.currentGeneration,
+  ]);
+  return fingerprint(current) === fingerprint(expected);
 }
 
 /**
@@ -14168,8 +14210,9 @@ async function backgroundWorkRefusal(target: StageCompletionTarget, ports: Pipel
 function stageCompletionRuntimeFence(attempt: PipelineStageAttempt): string {
   const latest = attempt.runtimeSwitches?.at(-1);
   if (latest?.mode === "handoff" && latest.cutAt && latest.launch?.conversationId === attempt.conversationId
-    && attempt.conversationId !== latest.from.conversationId) return JSON.stringify([latest.id, attempt.conversationId, latest.cutAt]);
-  return JSON.stringify([latest?.id ?? null, attemptEvidenceFloor(attempt), currentRuntimeSeat(attempt), attempt.sessionId, attempt.agentPath]);
+    && attempt.conversationId !== latest.from.conversationId) return JSON.stringify([latest.id, attempt.conversationId, latest.cutAt, attempt.launchId, attempt.state, attempt.error]);
+  return JSON.stringify([latest?.id ?? null, attemptEvidenceFloor(attempt), currentRuntimeSeat(attempt), attempt.sessionId,
+    attempt.agentPath, attempt.launchId, attempt.conversationId, attempt.state, attempt.error]);
 }
 
 /**
@@ -14215,12 +14258,19 @@ export async function reportStageCompletion(
   if ("error" in normalized) return { error: normalized.error, status: 400, code: normalized.code };
   const preview = previewed.target;
   const previewRuntimeFence = stageCompletionRuntimeFence(preview.attempt);
+  const recoveryReceipt = previewed.recoveryPath && preview.attempt.launchId
+    ? ports.spawnReceipt(preview.attempt.launchId) : null;
+  const recoveryEvidence: StageCompletionRecoveryEvidence | null = previewed.recoveryPath && preview.attempt.launchId && recoveryReceipt
+    ? { pipelineId: preview.pipeline.id, stageId: preview.stageId, attempt: preview.attempt.n,
+      launchId: preview.attempt.launchId, runtimeFence: previewRuntimeFence,
+      path: previewed.recoveryPath, receipt: recoveryReceipt }
+    : null;
   const heldWork = await backgroundWorkRefusal(previewed.recoveryPath
     ? { ...preview, attempt: { ...preview.attempt, agentPath: previewed.recoveryPath } }
     : preview, ports);
   if (heldWork) return heldWork;
   return withPipelineMutation(async (pipelines, persist) => {
-    const resolved = await resolveStageCompletionTarget(pipelines, conversationId, requestedStageId, ports);
+    const resolved = await resolveStageCompletionTarget(pipelines, conversationId, requestedStageId, ports, recoveryEvidence);
     if ("refusal" in resolved) return resolved.refusal;
     const { pipeline, stageId, attempt } = resolved.target;
     if (pipeline.id !== preview.pipeline.id || stageId !== preview.stageId || attempt.n !== preview.attempt.n

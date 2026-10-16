@@ -2070,6 +2070,55 @@ test("a spawn-recovery park left by an earlier controller reopens once its agent
   expect(f.messages()).toBe(1);
 });
 
+test("completion recovery reads original operations outside the lease and accepts the current attempt", async () => {
+  const f = await aliveStagedLaunch();
+  f.advance(10 * 60_000);
+  await f.wake();
+  expect(loadPipelines()[0]!.state).toBe("needs_decision");
+  f.working();
+  const operationStatus = f.client.operationStatus.bind(f.client);
+  f.client.operationStatus = async id => {
+    expectPipelineLeaseFree();
+    return operationStatus(id);
+  };
+
+  const result = await engineModule.reportStageCompletion({ verdict: "pass", summary: "Recovered completion" },
+    { kind: "agent", role: "builder", conversationId: f.attempt().conversationId! }, f.h.ports);
+
+  expect(result.error).toBeUndefined();
+  expect(result).toMatchObject({ attempt: 1, report: { verdict: { status: "pass" } } });
+  expect(f.attempt()).toMatchObject({ n: 1, state: "running", launchId: f.launchId(), agentPath: f.transcript });
+  expect(f.starts()).toBe(1);
+});
+
+test("completion recovery refuses native evidence superseded before settlement", async () => {
+  const f = await aliveStagedLaunch();
+  f.advance(10 * 60_000);
+  await f.wake();
+  f.working();
+  const durable = f.h.ports.durableTurnEvidence;
+  let reads = 0;
+  f.h.ports.durableTurnEvidence = async (...args) => {
+    const evidence = await durable(...args);
+    if (++reads === 2) {
+      const { withPipelineMutation } = await import("./store");
+      await withPipelineMutation(async (pipelines, persist) => {
+        pipelines[0]!.runs[0]!.attempts[0]!.launchId = "replacement-launch";
+        await persist();
+      });
+    }
+    return evidence;
+  };
+  const result = await engineModule.reportStageCompletion({ verdict: "pass", summary: "Stale completion" },
+    { kind: "agent", role: "builder", conversationId: f.attempt().conversationId! }, f.h.ports);
+
+  expect(result).toMatchObject({ status: 409 });
+  expect(result.error).toContain("already settled");
+  expect(f.attempt()).toMatchObject({ launchId: "replacement-launch", state: "needs_decision" });
+  expect(f.attempt().report).toBeUndefined();
+  expect(f.starts()).toBe(1);
+});
+
 test("a permanent staged publication refusal parks with its cause", async () => {
   const f = await stagedRecoveryHarness("permanent");
   await tickPipelines([], f.h.ports);
@@ -2688,7 +2737,7 @@ test.each(["native", "filename-generation", "operation-conflict", "generation-co
 });
 
 test.each([true, false])("activation replay verifies original operation attribution (uncertain envelope: %s)", async hasEnvelope => {
-  for (const outcome of ["matching", "conflict", "revoked-during-message-lookup"] as const) {
+  for (const outcome of ["matching", "conflict", "revoked-during-message-lookup", "rejected"] as const) {
     const f = await stagedRecoveryHarness("uncertain", { nativeTranscript: true });
     await tickPipelines([], f.h.ports);
     const launchId = f.launchId();
@@ -2716,9 +2765,11 @@ test.each([true, false])("activation replay verifies original operation attribut
           await persist([live]);
         });
       }
-      return outcome === "conflict" && id === `spawn_message_${launchId}` && result
-        ? { ...result, receipt: { ...result.receipt, conversationId: "conversation_wrong" } }
-        : result;
+      if (outcome === "conflict" && id === `spawn_message_${launchId}` && result)
+        return { ...result, receipt: { ...result.receipt, conversationId: "conversation_wrong" } };
+      if (outcome === "rejected" && id === `spawn_message_${launchId}` && result)
+        return { ...result, receipt: { ...result.receipt, status: "rejected" } };
+      return result;
     };
     attempt.state = "spawning";
     const stages = pipeline.stages;
@@ -2750,9 +2801,15 @@ test.each([true, false])("activation replay verifies original operation attribut
       expect(current.runs[0]!.attempts[0]!.state).not.toBe("running");
       expect(f.starts()).toBe(1);
       expect(f.messages()).toBe(1);
-    } else {
+    } else if (outcome === "revoked-during-message-lookup") {
       expect(current.runs[0]!.attempts[0]!.launchId).toBe("replacement-launch");
       expect(current.runs[0]!.attempts[0]!.state).not.toBe("running");
+      expect(f.starts()).toBe(1);
+      expect(f.messages()).toBe(1);
+    } else {
+      expect(current).toMatchObject({ state: "needs_decision", stateDetail: expect.stringContaining("original first-message operation was rejected") });
+      expect(current.runs[0]!.attempts[0]).toMatchObject({ n: 1, launchId, state: "needs_decision", spawnCalls: 1 });
+      expect(current.runs[0]!.attempts[0]!.activation).toBeUndefined();
       expect(f.starts()).toBe(1);
       expect(f.messages()).toBe(1);
     }
