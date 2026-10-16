@@ -3229,6 +3229,14 @@ if (OVERVIEW_PERFORMANCE) {
    agent's renders have — a desktop board, a phone screen, a wide strip, a
    small crop — so the grid meets the aspect ratios it will meet. */
 const ALBUM = params.get("album") === "1";
+/* `&olderfails=1`: the album's and the report log's older pages are refused,
+   so «Show older» meets the line that says so beside it. */
+const OLDER_FAILS = params.get("olderfails") === "1";
+/* `&dismissrefused=1`: dismissing a launch that did not start is refused, and
+   `&boardrefuses=1`: a board write that closes a conversation is refused for
+   good, so what the click took away comes back with the reason. */
+const DISMISS_REFUSED = params.get("dismissrefused") === "1";
+const BOARD_REFUSES = params.get("boardrefuses") === "1";
 function mockRender(width: number, height: number, hue: number, label: string, phone = false): string {
   const canvas = document.createElement("canvas");
   canvas.width = width;
@@ -3942,7 +3950,9 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       albumOpened.set(taskId, Date.now());
       return json({ ok: true, lastOpenedAt: Date.now() });
     }
-    return json(albumPage(taskId));
+    if (OLDER_FAILS && url.searchParams.has("cursor")) return json({ error: "album index is busy" }, 503);
+    const page = albumPage(taskId);
+    return json(OLDER_FAILS ? { ...page, nextCursor: "older" } : page);
   }
   if (NEW_AGENT && url.pathname === "/api/accounts" && method === "GET") {
     return json(NEW_AGENT_SEED === "signed-out" ? {
@@ -4115,6 +4125,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     if (method === "PATCH") {
       const body = JSON.parse(String(init?.body)) as { mutations?: BoardMutationV1[] };
       evidence.boardMutations.push(...(body.mutations ?? []));
+      if (BOARD_REFUSES && body.mutations?.some((mutation) => mutation.kind === "close")) return json({ error: "INVALID_REQUEST" }, 400);
       const reduced = applyBoardMutations(board, body.mutations ?? []);
       board = { ...reduced, schemaVersion: 1, revision: board.revision + 1, pathAliases: reduced.pathAliases ?? {} };
       return json({ ok: true, applied: true, board });
@@ -4151,6 +4162,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     });
   }
   if (url.pathname === "/api/orchestrator/reports") {
+    if (OLDER_FAILS && url.searchParams.has("before")) return json({ error: "report log is busy" }, 503);
     const known = new Map<string, "task" | "pipeline">([
       ...tasks.map((task) => [task.id, "task"] as const),
       ...pipelines.map((pipeline) => [pipeline.id, "pipeline"] as const),
@@ -4279,6 +4291,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     }
     /* «Launch did not start» dismissed: the row is kept as failed, and an
        unnamed launch placeholder with nothing else on it is done. */
+    if (method === "PATCH" && DISMISS_REFUSED) return json({ error: "the launch started after all" }, 409);
     if (method === "PATCH") {
       const assignments = current.assignments.map((assignment) => (assignment.launchId === body.launchId
         ? { ...assignment, state: "failed" as const, error: "launch did not start (dismissed)", at: new Date().toISOString() }

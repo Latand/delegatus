@@ -15398,6 +15398,201 @@ describe("a task's album: every picture its agents made, one click from the card
   }, 600_000);
 });
 
+describe("optimistic UI fix line: refusals and older pages say so in place", () => {
+  /*
+   * docs/design/optimistic-ui-audit.md, repair F1: a «Show older» that gets no
+   * page says so beside its button, which stays as Retry. The fixture's
+   * `&olderfails=1` refuses the album's and the report log's older pages. The
+   * album is framed at 1440, 768 and 390, the report log beside the seat's
+   * chat at 1440 (the phone's log is the phone driver's), en and uk, light and
+   * dark. Each line's text is measured from its ranges against the viewport
+   * and every clipping ancestor.
+   *
+   *   LLV_KANBAN_BROWSER_TEST=1 bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "optimistic UI fix line"
+   *
+   * Frames go to OPTIMISTIC_UI_PNG_DIR (default `.artifacts/optimistic-ui/`);
+   * readings to `evidence/optimistic-ui/older-failed.json`.
+   */
+  const lineReading = (page: Page, selector: string) => page.evaluate((selector) => {
+    const line = document.querySelector<HTMLElement>(selector);
+    if (!line) return null;
+    let left = 0, right = innerWidth, top = 0, bottom = innerHeight;
+    for (let ancestor = line.parentElement; ancestor; ancestor = ancestor.parentElement) {
+      const style = getComputedStyle(ancestor); const rect = ancestor.getBoundingClientRect();
+      if (/hidden|clip|auto|scroll/.test(style.overflowX)) { left = Math.max(left, rect.left); right = Math.min(right, rect.right); }
+      if (/hidden|clip|auto|scroll/.test(style.overflowY)) { top = Math.max(top, rect.top); bottom = Math.min(bottom, rect.bottom); }
+    }
+    const range = document.createRange(); range.selectNodeContents(line);
+    const rects = [...range.getClientRects()].filter((rect) => rect.width > 0);
+    const cut = rects.filter((rect) => rect.left < left - 0.5 || rect.right > right + 0.5 || rect.top < top - 0.5 || rect.bottom > bottom + 0.5).length;
+    const style = getComputedStyle(line);
+    return { text: line.textContent, role: line.getAttribute("role"), lines: new Set(rects.map((rect) => Math.round(rect.top))).size, cut, color: style.color, size: style.fontSize };
+  }, selector);
+
+  browserTest("the album's and the report log's «Show older» say so beside the button when the page is refused", async () => {
+    const out = path.resolve(".artifacts/optimistic-ui");
+    const pngDir = path.resolve(process.env.OPTIMISTIC_UI_PNG_DIR ?? out);
+    fs.mkdirSync(pngDir, { recursive: true });
+    fs.mkdirSync("evidence/optimistic-ui", { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const failures: string[] = [];
+    const readings: Record<string, unknown> = {};
+    const url = `${server.base}?album=1&olderfails=1`;
+    const check = (label: string, reading: Awaited<ReturnType<typeof lineReading>>, expected: string) => {
+      readings[label] = reading;
+      if (!reading) return void failures.push(`${label}: no failure line`);
+      if (reading.text !== expected) failures.push(`${label}: the line reads «${reading.text}»`);
+      if (reading.role !== "alert") failures.push(`${label}: the line is not announced`);
+      if (reading.cut) failures.push(`${label}: ${reading.cut} line box(es) cut by the window or a scroller`);
+    };
+    try {
+      for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) {
+        const t = (key: string) => translate(lang, key as never);
+        for (const width of [1440, 768, 390] as const) {
+          const label = `album-${width}-${lang}-${scheme}`;
+          const phone = width === 390;
+          const { context, page, pageErrors } = await openFixture(browser, url, phone ? { width, height: 844 } : { width, height: 900 }, scheme, lang, "no-preference", phone);
+          try {
+            if (phone) {
+              await page.waitForSelector("[data-phone-kanban]", { timeout: 30_000 });
+              const tab = page.locator('[data-phone-kanban-tab="assigned"]');
+              if (await tab.count()) await tab.first().click();
+              await page.waitForTimeout(500);
+              const phoneCard = page.locator('[data-phone-card="task:t-search"]').first();
+              await phoneCard.scrollIntoViewIfNeeded();
+              await phoneCard.click();
+              const row = page.locator('[data-phone-task-album="t-search"]');
+              await row.waitFor({ timeout: 10_000 });
+              await row.scrollIntoViewIfNeeded();
+              await row.click();
+            } else {
+              const button = page.locator(`${card("t-search")} [data-album-button="t-search"]`);
+              await button.first().waitFor({ state: "attached", timeout: 30_000 });
+              if (!(await button.first().isVisible())) await page.locator('.tabs-nav [data-tab="assigned"]').first().click().catch(() => {});
+              await button.first().scrollIntoViewIfNeeded();
+              await button.first().click();
+            }
+            await page.waitForSelector("[data-album-item]", { timeout: 10_000 });
+            await page.locator("[data-album-more]").click();
+            await page.waitForSelector("[data-album-more-failed]", { timeout: 10_000 });
+            await page.locator("[data-album-more-failed]").scrollIntoViewIfNeeded();
+            await page.waitForTimeout(300);
+            await page.screenshot({ path: path.join(pngDir, `${label}.png`) });
+            check(label, await lineReading(page, "[data-album-more-failed]"), t("album.loadMoreFailed"));
+            if (!(await page.locator("[data-album-more]").isEnabled())) failures.push(`${label}: «Show older» is not offered again`);
+            if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+          } finally { await context.close(); }
+        }
+        {
+          const label = `report-log-1440-${lang}-${scheme}`;
+          const { context, page, pageErrors } = await openFixture(browser, server.base + "?olderfails=1", VIEWPORT, scheme, lang);
+          try {
+            await page.waitForSelector("[data-report-log] [data-report-log-older]", { timeout: 30_000 });
+            await page.waitForTimeout(600);
+            await page.locator("[data-attention-toast-dismiss]").click().catch(() => {});
+            await page.locator("[data-report-log-older]").click();
+            await page.waitForSelector("[data-report-log-older-failed]", { timeout: 10_000 });
+            await page.evaluate(() => { const scroller = document.querySelector("[data-report-log] .overflow-y-auto"); if (scroller) scroller.scrollTop = scroller.scrollHeight; });
+            await page.mouse.move(0, 0);
+            await page.waitForTimeout(300);
+            await page.locator("[data-report-log]").screenshot({ path: path.join(pngDir, `${label}.png`) });
+            check(label, await lineReading(page, "[data-report-log-older-failed]"), t("reportLog.olderFailed"));
+            if (!(await page.locator("[data-report-log-older]").isEnabled())) failures.push(`${label}: «Show older» is not offered again`);
+            if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+          } finally { await context.close(); }
+        }
+      }
+      fs.writeFileSync("evidence/optimistic-ui/older-failed.json", JSON.stringify({ failures, readings }, null, 2) + "\n");
+      expect(failures).toEqual([]);
+    } finally { await browser.close(); server.stop(); }
+  }, 600_000);
+
+  /*
+   * Audit B11 and B44: dismissing a launch that did not start takes its row off
+   * the card at once, and a refusal puts it back with the reason in the board's
+   * receipt (`&dismissrefused=1`); closing a stopped launch from its reader
+   * takes it off the board at once, and a board that refuses the close for good
+   * brings it back and says so in the task toast (`&boardrefuses=1`). Framed at
+   * 1440 and 768, en and uk, light and dark; readings to
+   * `evidence/optimistic-ui/refused-dismissals.json`.
+   */
+  browserTest("a refused launch dismissal and a refused board close come back with the reason", async () => {
+    const out = path.resolve(".artifacts/optimistic-ui");
+    const pngDir = path.resolve(process.env.OPTIMISTIC_UI_PNG_DIR ?? out);
+    fs.mkdirSync(pngDir, { recursive: true });
+    fs.mkdirSync("evidence/optimistic-ui", { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const failures: string[] = [];
+    const readings: Record<string, unknown> = {};
+    const template = (lang: "en" | "uk", key: string, values: Record<string, string>, hole: string) => translate(lang, key as never, { ...values, [hole]: "\u0000" } as never).split("\u0000");
+    try {
+      for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) for (const width of [1440, 768] as const) {
+        {
+          const label = `dismiss-refused-${width}-${lang}-${scheme}`;
+          const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=ghost-tasks&dismissrefused=1`, { width, height: 900 }, scheme, lang);
+          try {
+            const row = `${card("t-ghost-fixture")} [data-launch-dismiss]`;
+            await page.waitForSelector(card("t-ghost-fixture"), { state: "attached", timeout: 30_000 });
+            if (!(await page.locator(card("t-ghost-fixture")).isVisible())) await page.locator('.tabs-nav [data-tab="assigned"]').first().click().catch(() => {});
+            await page.locator(card("t-ghost-fixture")).scrollIntoViewIfNeeded();
+            await page.waitForSelector(row, { timeout: 10_000 });
+            const gone = page.waitForFunction((selector) => !document.querySelector(selector), row, { timeout: 2_000, polling: "raf" }).then(() => true, () => false);
+            await page.locator(row).click();
+            const leftAtOnce = await gone;
+            const receipt = page.locator("[data-kanban-receipt].error").first();
+            await receipt.waitFor({ timeout: 10_000 });
+            await page.waitForSelector(row, { timeout: 10_000 });
+            await page.mouse.move(0, 0);
+            await page.waitForTimeout(300);
+            await page.screenshot({ path: path.join(pngDir, `${label}.png`) });
+            const text = (await receipt.locator(".msg").textContent()) ?? "";
+            const [head] = template(lang, "kanban.dismissLaunchFailed", {}, "error");
+            const sent = await page.evaluate(() => (window as unknown as { evidence: { assignments: Array<{ method: string }> } }).evidence.assignments.filter((entry) => entry.method === "PATCH").length);
+            readings[label] = { leftAtOnce, text, sent, back: await page.locator(row).count() };
+            if (!leftAtOnce) failures.push(`${label}: the row did not leave on the click`);
+            if (!text.startsWith(head!) || !text.includes("the launch started after all")) failures.push(`${label}: the receipt reads «${text}»`);
+            if (sent !== 1) failures.push(`${label}: ${sent} dismissal(s) sent`);
+            if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+          } finally { await context.close(); }
+        }
+        {
+          const label = `board-close-refused-${width}-${lang}-${scheme}`;
+          const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=stopped-launches&boardrefuses=1`, { width, height: 900 }, scheme, lang);
+          try {
+            await page.waitForSelector(card("t-stopped"), { state: "attached", timeout: 30_000 });
+            if (!(await page.locator(card("t-stopped")).isVisible())) await page.locator(`.tabs-nav [data-tab="${await page.locator(card("t-stopped")).evaluate((element) => element.closest<HTMLElement>(".column")?.dataset.status ?? "")}"]`).first().click().catch(() => {});
+            await page.locator(card("t-stopped")).scrollIntoViewIfNeeded();
+            await page.locator(`${card("t-stopped")} [data-pipeline="p-closed"] .pb-pill[data-stage="build"]`).click();
+            const reader = page.locator('[data-reader-path="spawn:launch-closed"]');
+            await reader.locator("[data-launch-dismiss]").waitFor({ state: "visible" });
+            await reader.locator("[data-launch-dismiss]").click();
+            const leftAtOnce = await reader.waitFor({ state: "detached", timeout: 2_000 }).then(() => true, () => false);
+            const [head, tail] = template(lang, "board.rejected.close", { code: "INVALID_REQUEST" }, "conversation");
+            const toast = page.locator("[role=status]").filter({ hasText: tail!.trim() }).first();
+            await toast.waitFor({ timeout: 10_000 });
+            await page.waitForTimeout(600);
+            await page.mouse.move(0, 0);
+            await page.screenshot({ path: path.join(pngDir, `${label}.png`) });
+            const text = ((await toast.textContent()) ?? "").replace(/^✕/, "").trim();
+            const mutations = await page.evaluate(() => (window as unknown as { evidence: { boardMutations: Array<{ kind: string; path?: string }> } }).evidence.boardMutations.filter((mutation) => mutation.kind === "close").length);
+            const toasts = await page.locator("[role=status]").filter({ hasText: tail!.trim() }).count();
+            readings[label] = { leftAtOnce, text, mutations, toasts };
+            if (!leftAtOnce) failures.push(`${label}: the reader did not close on the click`);
+            if (!text.startsWith(head!) || !text.includes(tail!.trim())) failures.push(`${label}: the toast reads «${text}»`);
+            if (mutations !== 1) failures.push(`${label}: ${mutations} close(s) sent`);
+            if (toasts !== 1) failures.push(`${label}: ${toasts} toasts say the close was refused`);
+            if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+          } finally { await context.close(); }
+        }
+      }
+      fs.writeFileSync("evidence/optimistic-ui/refused-dismissals.json", JSON.stringify({ failures, readings }, null, 2) + "\n");
+      expect(failures).toEqual([]);
+    } finally { await browser.close(); server.stop(); }
+  }, 600_000);
+});
+
 describe("needs-you panel: renders and readings over the real Viewer", () => {
   /*
    * docs/design/needs-you-options.md, option B, as built: the header control,
