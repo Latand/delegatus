@@ -1,7 +1,7 @@
 import { afterAll, beforeEach, describe, expect, test } from "bun:test";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
+import { OWNERSHIP_PRELOAD, ownershipSandbox } from "./state/fixtures/ownershipSandbox";
 
 import { resolveRegistryBackend } from "@/lib/agent/registryBackendIdentity";
 
@@ -21,17 +21,17 @@ import {
  * is what a process with a given environment resolves — and this runner has
  * pinned `LLV_STATE_DIR` for itself before the first module loaded.
  *
- * The probe's "operator home" is a directory inside `node_modules`: it must NOT
- * sit under a temp root, since a `$HOME` under one is exactly the sandbox the
- * mechanism leaves alone.
+ * Platform paths are injected so the probe's operator-shaped home stays
+ * private even when the checkout lives under a system temp root.
  */
 const PROBE = path.join("src", "lib", "state", "fixtures", "stateOwnershipProbe.ts");
-const OPERATOR_HOME = path.join(process.cwd(), "node_modules", ".llv-state-ownership-test", "home");
+const sandbox = ownershipSandbox();
+const OPERATOR_HOME = sandbox.home;
 const STATE_DIRECTORY = path.join(OPERATOR_HOME, ".config", "agent-log-viewer", "state");
 const temporaryRoots: string[] = [];
 
 function temporaryRoot(): string {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-state-ownership-"));
+  const directory = sandbox.temporaryRoot();
   temporaryRoots.push(directory);
   return directory;
 }
@@ -39,7 +39,7 @@ function temporaryRoot(): string {
 /** An operator installation with one legacy store in it: what the incident's
     build found, and what it imported out from under the running Viewer. */
 function seedOperatorHome(): void {
-  fs.rmSync(path.dirname(OPERATOR_HOME), { recursive: true, force: true });
+  fs.rmSync(OPERATOR_HOME, { recursive: true, force: true });
   fs.mkdirSync(STATE_DIRECTORY, { recursive: true });
   fs.writeFileSync(
     path.join(STATE_DIRECTORY, "tasks.json"),
@@ -91,12 +91,12 @@ interface ProbeResult {
 
 function runProbe(mode: "resolve" | "load-stores" | "open-registry" | "resolve-then-disown" | "resolve-then-chdir" | "write-task" | "registry-at", environment: Record<string, string | undefined>): ProbeResult {
   const env: Record<string, string> = {};
-  for (const [key, value] of Object.entries({ ...process.env, ...environment })) {
+  for (const [key, value] of Object.entries({ ...sandbox.environment(), ...environment })) {
     if (value !== undefined) env[key] = value;
   }
   for (const [key, value] of Object.entries(environment)) if (value === undefined) delete env[key];
   const result = Bun.spawnSync({
-    cmd: [process.execPath, PROBE, mode],
+    cmd: [process.execPath, "--preload", OWNERSHIP_PRELOAD, PROBE, mode],
     cwd: process.cwd(),
     env,
     stdout: "pipe",
@@ -132,11 +132,35 @@ beforeEach(() => {
 });
 
 afterAll(() => {
-  fs.rmSync(path.dirname(OPERATOR_HOME), { recursive: true, force: true });
+  fs.rmSync(OPERATOR_HOME, { recursive: true, force: true });
   for (const root of temporaryRoots) fs.rmSync(root, { recursive: true, force: true });
+  sandbox.release();
 });
 
 describe("the operator's state directory", () => {
+  test("probes ignore inherited state, capability and runtime aliases", () => {
+    const temporary = temporaryRoot();
+    const before = snapshot(OPERATOR_HOME);
+    const names = ["STATE_DIR", "STATE_OWNER", "SPAWN_CAPABILITY", "RUNTIME_HOST_SOCKET", "VIEWER_CONTROL_URL"];
+    const saved = new Map<string, string | undefined>();
+    try {
+      for (const name of names) for (const prefix of ["LLV_", "DELEGATUS_"]) {
+        const key = prefix + name;
+        saved.set(key, process.env[key]);
+        process.env[key] = "inherited-fixture-value";
+      }
+      const probe = runProbe("resolve", { ...operatorEnvironment(temporary), [STATE_OWNER_ENV]: "viewer" });
+      expect(probe.status, probe.stderr).toBe(0);
+      expect(JSON.parse(probe.stdout.trim()).stateDirectory).toBe(STATE_DIRECTORY);
+      expect(snapshot(OPERATOR_HOME)).toEqual(before);
+    } finally {
+      for (const [key, value] of saved) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  });
+
   test("a production build that loads the instrumentation and a store writes nothing outside a temp dir", () => {
     const temporary = temporaryRoot();
     const before = snapshot(OPERATOR_HOME);
