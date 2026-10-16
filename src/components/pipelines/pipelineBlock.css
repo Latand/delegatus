@@ -104,7 +104,7 @@
   display: inline-flex; align-items: baseline; gap: 6px; min-width: 0; flex: 0 1 auto;
   padding: 3px 4px; margin-left: -4px; border-radius: 6px; text-align: left; color: inherit;
 }
-.pblock .pb-open:not(:disabled):hover { background: var(--surface-well); }
+.pblock .pb-open:not(:disabled):hover { background: var(--dc-hover, var(--surface-well)); }
 .pblock .pb-open:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 0; }
 .pblock .pb-open > svg { width: 12px; height: 12px; flex: none; align-self: center; color: var(--color-muted); }
 .pblock .pb-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--text-ui); font-weight: 600; color: var(--color-primary); }
@@ -114,7 +114,7 @@
   flex: none; width: 26px; height: 26px; display: inline-flex; align-items: center; justify-content: center;
   border-radius: var(--radius-control); color: var(--color-muted);
 }
-.pblock .pb-icon:hover { background: var(--surface-well); color: var(--color-primary); }
+.pblock .pb-icon:hover { background: var(--dc-hover, var(--surface-well)); color: var(--color-primary); }
 .pblock .pb-icon:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 0; }
 .pblock .pb-icon svg { width: 14px; height: 14px; }
 /* The graph is one hover away on a fine pointer; ⋯ always shows. A touch
@@ -318,7 +318,7 @@
   border-radius: 12px; background: var(--surface-card); box-shadow: var(--shadow-1); text-align: left;
   font-size: var(--text-body); font-weight: 600; color: var(--color-secondary);
 }
-.pblock .pb-attach:active { background: var(--surface-sunken); }
+.pblock .pb-attach:active { background: var(--dc-hover, var(--surface-sunken)); }
 .pblock .pb-attach:focus-visible { outline: 2px solid var(--color-accent); outline-offset: -2px; }
 .pblock .pb-attach .pb-attach-icon { width: 16px; height: 16px; flex: none; color: var(--color-muted); }
 .pblock .pb-attach .pb-attach-label { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -342,7 +342,7 @@
 /* The current stage: its tone's stripe on a raised ground. */
 .pblock .pb-stage.current { box-shadow: inset 3px 0 0 var(--stage-tone); background: color-mix(in srgb, var(--stage-tone) 5%, var(--surface-card)); }
 .pblock .pb-stage-row { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 52px; padding: 7px 10px; text-align: left; color: var(--color-primary); }
-.pblock button.pb-stage-row:active { background: var(--surface-well); }
+.pblock button.pb-stage-row:active { background: var(--dc-hover, var(--surface-well)); }
 .pblock button.pb-stage-row:focus-visible { outline: 2px solid var(--color-accent); outline-offset: -2px; }
 .pblock .pb-stage-row > svg { width: 18px; height: 18px; flex: none; color: var(--color-muted); }
 .pblock .pb-stage-row > .pb-gear { color: var(--color-secondary); }
