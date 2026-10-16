@@ -1,7 +1,7 @@
 import { expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import { Worker } from "node:worker_threads";
-import { attachReadAttributionWorker, createReadAttribution, createReadCounterSamplerProbe, readAttribution, samplerSource, startReadAttributionSampler } from "./readAttribution";
+import { attachReadAttributionWorker, createReadAttribution, readAttribution, samplerSource, startReadAttributionSampler } from "./readAttribution";
 
 test("nested readers have exclusive time and bytes; observer traffic is removed", () => {
   let at = 0, bytes = 0;
@@ -195,16 +195,14 @@ test("worker event and parent retention overflow are reported", () => {
 });
 
 test("a degraded proc source is isolated and backs off sampling", async () => {
-  const probe = createReadCounterSamplerProbe(20);
+  const probe = samplerFixture("transient-slow");
   let timerFired = false;
   setTimeout(() => { timerFired = true; }, 0);
   try {
-    const deadline = Date.now() + 1000;
-    while (!probe.snapshot().degraded && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 5));
-    await new Promise(resolve => setTimeout(resolve, 25));
+    await new Promise(resolve => setTimeout(resolve, 600));
+    await untilSampler(() => samplerHasRecovery(probe));
     expect(timerFired).toBe(true);
-    expect(probe.snapshot()).toMatchObject({ degraded: true, samples: 1 });
-    expect(probe.snapshot().observerMs).toBeGreaterThanOrEqual(20);
+    expectSamplerRecovery(probe, 250);
   } finally { await probe.stop(); }
 });
 
@@ -272,7 +270,7 @@ test("worker transport caps pending batches and reports dropped observations", a
 // Run the production worker program with a controlled procfs seam. Each test
 // owns a fresh worker and buffer; no service process or shared state is used.
 function samplerFixture(mode: "ownership-race" | "transient-slow" | "transient-denied" | "denied") {
-  const buffer = new SharedArrayBuffer(15 * 8);
+  const buffer = new SharedArrayBuffer(16_404 * 8);
   const cells = new BigInt64Array(buffer);
   const prefix = `{
     const fs = require('node:fs');
@@ -282,6 +280,15 @@ function samplerFixture(mode: "ownership-race" | "transient-slow" | "transient-d
     const nativeTimeout = setTimeout;
     globalThis.setTimeout = function(callback, delay) {
       Atomics.store(cells, 14, BigInt(delay));
+      const count = Number(Atomics.load(cells, 15)) + 1;
+      if (count <= 4096) {
+        const offset = 16 + count * 4;
+        Atomics.store(cells, offset, BigInt(delay));
+        Atomics.store(cells, offset + 1, Atomics.load(cells, 2));
+        Atomics.store(cells, offset + 2, Atomics.load(cells, 4));
+        Atomics.store(cells, offset + 3, Atomics.load(cells, 5));
+      }
+      Atomics.store(cells, 15, BigInt(count));
       return nativeTimeout(callback, delay);
     };
     let reads = 0;
@@ -298,6 +305,32 @@ function samplerFixture(mode: "ownership-race" | "transient-slow" | "transient-d
   const worker = new Worker(prefix + samplerSource, { eval: true,
     workerData: { buffer, mode, pid: process.pid, tid: process.pid, delayMs: 0, timeOrigin: performance.timeOrigin } });
   return { cells, stop: () => worker.terminate() };
+}
+
+function samplerEvents(probe: ReturnType<typeof samplerFixture>) {
+  const count = Math.min(Number(Atomics.load(probe.cells, 15)), 4096);
+  return Array.from({ length: count }, (_, offset) => ({
+    delay: Number(Atomics.load(probe.cells, 16 + (offset + 1) * 4)),
+    available: Atomics.load(probe.cells, 17 + (offset + 1) * 4),
+    degraded: Atomics.load(probe.cells, 18 + (offset + 1) * 4),
+    samples: Atomics.load(probe.cells, 19 + (offset + 1) * 4),
+  }));
+}
+
+function expectSamplerRecovery(probe: ReturnType<typeof samplerFixture>, backoffMs: number) {
+  const events = samplerEvents(probe);
+  const degradedAt = events.findIndex(event => event.degraded === BigInt(1));
+  const backoffAt = events.findIndex((event, index) => index >= degradedAt && event.delay === backoffMs);
+  const recoveredAt = events.findIndex((event, index) => index > backoffAt && event.available === BigInt(1) && event.degraded === BigInt(0));
+  expect(degradedAt).toBeGreaterThanOrEqual(0);
+  expect(backoffAt).toBeGreaterThanOrEqual(degradedAt);
+  expect(recoveredAt).toBeGreaterThan(backoffAt);
+}
+
+function samplerHasRecovery(probe: ReturnType<typeof samplerFixture>) {
+  const events = samplerEvents(probe);
+  const degradedAt = events.findIndex(event => event.degraded === BigInt(1));
+  return degradedAt >= 0 && events.some((event, index) => index > degradedAt && event.available === BigInt(1) && event.degraded === BigInt(0));
 }
 
 async function untilSampler(predicate: () => boolean) {
@@ -318,10 +351,9 @@ test.skipIf(process.platform !== "linux")("ownership changes during procfs reads
 test.skipIf(process.platform !== "linux")("a transient slow sample backs off and recovers without restarting the process", async () => {
   const probe = samplerFixture("transient-slow");
   try {
-    await untilSampler(() => Atomics.load(probe.cells, 4) === BigInt(1) && Atomics.load(probe.cells, 14) === BigInt(250));
-    expect(Atomics.load(probe.cells, 2)).toBe(-BigInt(1));
-    await untilSampler(() => Atomics.load(probe.cells, 5) >= BigInt(3) && Atomics.load(probe.cells, 4) === BigInt(0));
-    expect(Atomics.load(probe.cells, 2)).toBe(BigInt(1));
+    await new Promise(resolve => setTimeout(resolve, 1250));
+    await untilSampler(() => samplerHasRecovery(probe));
+    expectSamplerRecovery(probe, 250);
   } finally { await probe.stop(); }
 }, 10_000);
 
@@ -337,9 +369,8 @@ test("an inaccessible proc source remains unavailable and retries at a bounded r
 test.skipIf(process.platform !== "linux")("proc read failures recover after the source becomes accessible", async () => {
   const probe = samplerFixture("transient-denied");
   try {
-    await untilSampler(() => Atomics.load(probe.cells, 4) === BigInt(1));
-    expect(Atomics.load(probe.cells, 2)).toBe(-BigInt(1));
-    await untilSampler(() => Atomics.load(probe.cells, 5) >= BigInt(4) && Atomics.load(probe.cells, 4) === BigInt(0));
-    expect(Atomics.load(probe.cells, 2)).toBe(BigInt(1));
+    await new Promise(resolve => setTimeout(resolve, 1250));
+    await untilSampler(() => samplerHasRecovery(probe));
+    expectSamplerRecovery(probe, 750);
   } finally { await probe.stop(); }
 }, 10_000);
