@@ -12,7 +12,9 @@ import { openExternalRelaySettings } from "@/components/externalRelay/openExtern
 import { KeepAwakeMenuRow, useKeepAwake } from "@/components/KeepAwakeControl";
 import { LanguageToggle } from "@/components/LanguageToggle";
 import { openLinkedSettings } from "@/components/links/openLinkedSettings";
-import { KeyPanel, KeyStateWord, MemoryPanel, MemoryReadingProvider, MemoryStateWord } from "@/components/memory/MemoryPage";
+import { KeysImportPage, KeysMenuPage, KeysStateWord } from "@/components/keys/KeysSection";
+import { onOpenKeys, pendingKeys, settleKeys } from "@/components/keys/openKeys";
+import { MemoryPanel, MemoryReadingProvider, MemoryStateWord } from "@/components/memory/MemoryPage";
 import { MobileMenuSheet, type MobileMenuEntry } from "@/components/mobile/MobileMenuSheet";
 import type { MobileNav } from "@/components/mobile/mobileNav";
 import { onboardingMobileMenuEntries } from "@/components/onboarding/menuEntries";
@@ -28,6 +30,7 @@ import { openTelemetrySettings } from "@/components/telemetry/TelemetrySettings"
 import { showPhoneVoice, usePhoneVoice } from "@/components/voiceCompanion/phoneVoiceStore";
 import { openVoiceCompanionSettings } from "@/components/voiceCompanion/VoiceCompanionSetting";
 import { useLocale } from "@/lib/i18n";
+import type { KeyId } from "@/lib/keys/shared";
 import { WorkerLimitSettingsRow } from "@/components/orchestrator/WorkerLimitChip";
 
 import { HEADER_LAYOUTS, type HeaderItem } from "./headerMenuModel";
@@ -35,13 +38,14 @@ import { HEADER_LAYOUTS, type HeaderItem } from "./headerMenuModel";
 /* The app header's ⋯ (docs/design/header-menu.md): variant 2's row of icon
    cells for the three places opened most, and variant 3's rows under it.
    Settings is a page of the menu with a back row
-   (in place it would pass the menu's 360 px), and its memory and key rows
-   open a page each; Help and learning opens in place. Every entry calls the
-   handler it called before the regrouping. */
+   (in place it would pass the menu's 360 px), and its memory and keys rows
+   open a page each, «Keys» with «Import keys» under it
+   (docs/design/keys-settings.md, Варіант 1); Help and learning opens in place.
+   Every entry calls the handler it called before the regrouping. */
 
-type View = "rest" | "settings" | "memory" | "key";
+type View = "rest" | "settings" | "memory" | "keys" | "keysImport";
 /** The page a back row returns to. */
-const PARENT: Record<Exclude<View, "rest">, View> = { settings: "rest", memory: "settings", key: "settings" };
+const PARENT: Record<Exclude<View, "rest">, View> = { settings: "rest", memory: "settings", keys: "settings", keysImport: "keys" };
 type PhoneView = View | "help" | "rules";
 const PHONE_PARENT: Record<Exclude<PhoneView, "rest">, PhoneView> = { ...PARENT, help: "rest", rules: "rest" };
 
@@ -74,7 +78,13 @@ const TwoLines = ({ title, state }: { title: string; state: ReactNode }) => (
 /** The desktop panel's contents; the trigger and the dismissal stay with the rail's header. */
 export function HeaderMenuPanel({ project, onClose }: { project: string | null; onClose: () => void }) {
   const { t, locale } = useLocale();
-  const [view, setView] = useState<View>("rest");
+  /* A place that asked for a key opened this menu on «Keys» at that key. */
+  const [view, setView] = useState<View>(() => pendingKeys() ? "keys" : "rest");
+  const [focusKey, setFocusKey] = useState<KeyId | null>(() => pendingKeys()?.key ?? null);
+  useEffect(() => {
+    settleKeys();
+    return onOpenKeys(({ key }) => { settleKeys(); setFocusKey(key); setView("keys"); });
+  }, []);
   const [helpOpen, setHelpOpen] = useState(false);
   /* Passive: the app's session guard loads the team view once per page. */
   const team = useTeamView({ load: false });
@@ -89,10 +99,11 @@ export function HeaderMenuPanel({ project, onClose }: { project: string | null; 
     panel.current?.querySelector<HTMLElement>(focusNext.current)?.focus();
     focusNext.current = null;
   }, [view]);
-  const open = (next: View) => { focusNext.current = "[data-rail-menu-back]"; setView(next); };
+  const open = (next: View) => { focusNext.current = "[data-rail-menu-back]"; setFocusKey(null); setView(next); };
   const back = () => {
     if (view === "rest") return;
-    focusNext.current = `[data-rail-menu-${view}]`;
+    /* «Import keys» has no row of its own on the page it returns to: focus lands on that page's back row. */
+    focusNext.current = view === "keysImport" ? "[data-rail-menu-back]" : `[data-rail-menu-${view}]`;
     setView(PARENT[view]);
   };
   const act = (run: () => void) => () => { onClose(); run(); };
@@ -129,9 +140,9 @@ export function HeaderMenuPanel({ project, onClose }: { project: string | null; 
         );
       case "key":
         return (
-          <button key={item} type="button" data-rail-menu-key="" className={`${ROW} py-1`} onClick={() => open("key")}>
+          <button key={item} type="button" data-rail-menu-keys="" className={`${ROW} py-1`} onClick={() => open("keys")}>
             <Icon icon={KeyRound} />
-            <TwoLines title={t("providerKey.label")} state={<KeyStateWord />} />
+            <TwoLines title={t("keys.title")} state={<KeysStateWord />} />
             <ChevronRight className="h-4 w-4 shrink-0 text-muted" aria-hidden />
           </button>
         );
@@ -181,10 +192,15 @@ export function HeaderMenuPanel({ project, onClose }: { project: string | null; 
             {backRow(t("headerMenu.memory"))}
             <MemoryPanel />
           </div>
-        ) : view === "key" ? (
-          <div data-header-menu-page="key">
-            {backRow(t("providerKey.label"))}
-            <KeyPanel />
+        ) : view === "keys" ? (
+          <div data-header-menu-page="keys">
+            {backRow(t("keys.title"))}
+            <KeysMenuPage focusKey={focusKey} onImport={() => open("keysImport")} />
+          </div>
+        ) : view === "keysImport" ? (
+          <div data-header-menu-page="keys-import">
+            {backRow(t("keys.import"))}
+            <KeysImportPage />
           </div>
         ) : (
           <>
@@ -271,12 +287,17 @@ function PhoneMenu({ title, project, nav, create = [], board, rules = [], onClos
   const keepAwake = useKeepAwake();
   const voice = usePhoneVoice();
   /* As on the desktop: a page that opens takes focus on its back row, and back returns it to the row that opened the page. */
-  const [{ view, focus }, setPlace] = useState<{ view: PhoneView; focus: string | null }>({ view: "rest", focus: null });
+  const [{ view, focus }, setPlace] = useState<{ view: PhoneView; focus: string | null }>(() => pendingKeys() ? { view: "keys", focus: null } : { view: "rest", focus: null });
+  const [focusKey, setFocusKey] = useState<KeyId | null>(() => pendingKeys()?.key ?? null);
+  useEffect(() => {
+    settleKeys();
+    return onOpenKeys(({ key }) => { settleKeys(); setFocusKey(key); setPlace({ view: "keys", focus: null }); });
+  }, []);
   useEffect(() => {
     if (focus) document.querySelector<HTMLElement>(`[data-mobile2-sheet='menu'] [data-mobile2-menu-row='${focus}']`)?.focus();
   }, [view, focus]);
-  const go = (next: Exclude<PhoneView, "rest">) => setPlace({ view: next, focus: "back" });
-  const back = () => { if (view !== "rest") setPlace({ view: PHONE_PARENT[view], focus: view }); };
+  const go = (next: Exclude<PhoneView, "rest">) => { setFocusKey(null); setPlace({ view: next, focus: "back" }); };
+  const back = () => { if (view !== "rest") setPlace({ view: PHONE_PARENT[view], focus: view === "keysImport" ? "back" : view }); };
   const close = onClose;
   /* The rows the phone has always had for these entries, with their handlers, icons and test ids. */
   const [guide, walk, mapping, dictation] = onboardingMobileMenuEntries(t, close);
@@ -321,7 +342,7 @@ function PhoneMenu({ title, project, nav, create = [], board, rules = [], onClos
       case "memory":
         return row("memory", Brain, t("headerMenu.memory"), () => go("memory"), <><MemoryStateWord size="sheet" />{chevron}</>);
       case "key":
-        return row("key", KeyRound, t("providerKey.label"), () => go("key"), <><KeyStateWord size="sheet" />{chevron}</>);
+        return row("keys", KeyRound, t("keys.title"), () => go("keys"), <><KeysStateWord size="sheet" />{chevron}</>);
       case "mapping":
         return mapping?.kind === "row" ? { ...mapping, label: t("headerMenu.mapping") } : null;
       case "workers":
@@ -344,7 +365,8 @@ function PhoneMenu({ title, project, nav, create = [], board, rules = [], onClos
   let entries: MobileMenuEntry[];
   if (view === "settings") entries = [backRow(t("headerMenu.settings")), ...settingsItems.flatMap((item) => settingsEntry(item) ?? [])];
   else if (view === "memory") entries = [backRow(t("headerMenu.memory")), { kind: "custom", key: "memory-page", node: <MemoryPanel size="sheet" /> }];
-  else if (view === "key") entries = [backRow(t("providerKey.label")), { kind: "custom", key: "key-page", node: <KeyPanel size="sheet" /> }];
+  else if (view === "keys") entries = [backRow(t("keys.title")), { kind: "custom", key: "keys-page", node: <KeysMenuPage size="sheet" focusKey={focusKey} onImport={() => go("keysImport")} /> }];
+  else if (view === "keysImport") entries = [backRow(t("keys.import")), { kind: "custom", key: "keys-import-page", node: <KeysImportPage size="sheet" /> }];
   else if (view === "help") entries = [backRow(t("headerMenu.help")), ...helpItems];
   else if (view === "rules") entries = [backRow(t("headerMenu.rules")), ...rules];
   else {

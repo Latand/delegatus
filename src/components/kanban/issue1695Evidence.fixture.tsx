@@ -196,8 +196,8 @@ const VOICE_PRODUCT = VOICE && new URLSearchParams(location.search).get("mount")
    `voiceCompanion.loaded` back rather than its own clock, which may have passed the next minute. */
 const VOICE_LOADED = Math.floor(Date.now() / 60_000) * 60;
 const voice = { loaded: VOICE_LOADED, delivered: new URLSearchParams(location.search).get("delivered") === "1", answered: new URLSearchParams(location.search).get("delivered") === "1", dispatches: 0, finished: false, events: [] as CompanionEvent[],
-  /* What the settings routes were asked to write. The key itself is never kept: its length is all the driver needs. */
-  settingsWrites: [] as Array<Record<string, unknown>>, keyWrites: [] as number[], sessionStarts: [] as Array<Record<string, unknown>>, settingsOpened: 0 };
+  /* What the settings routes were asked to write. */
+  settingsWrites: [] as Array<Record<string, unknown>>, sessionStarts: [] as Array<Record<string, unknown>>, settingsOpened: 0 };
 const voicePlan = (): CompanionPlan => ({ type: "pro", limitReached: false, observedAt: VOICE_LOADED * 1000,
   primary: { usedPercent: 23, resetsAt: VOICE_LOADED + 7_200, windowMinutes: 300 }, secondary: { usedPercent: 77, resetsAt: VOICE_LOADED + 4 * 86_400, windowMinutes: 10_080 } });
 const VOICE_CODEX = new URLSearchParams(location.search).get("backend") === "codex";
@@ -3804,6 +3804,9 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   if (SCENARIO === "service-tier" && url.pathname === "/api/roles") return json({ roles: ROLE_DEFAULTS.map(role => ({ ...role, promptPreview: role.promptScaffold, config: { ...role.config, ...(role.id === "reviewer" ? { serviceTier: "ultrafast" } : {}) }, shipped: { config: role.config } })) });
   if (SCENARIO === "memory-settings" && ["/api/telemetry", "/api/memory/settings", "/api/asks-you/key", "/api/asks-you"].includes(url.pathname)) return serverFetch(url.pathname + url.search, init);
   if (HEADER_MENU && HEADER_ROUTES.includes(url.pathname)) return serverFetch(url.pathname + url.search, init);
+  /* «Keys» (docs/design/keys-settings.md): the driver answers the section's routes, or hands them to the real ones. */
+  if ((HEADER_MENU || SCENARIO === "memory-settings" || SCENARIO === "keys") && url.pathname.startsWith("/api/keys")) return serverFetch(url.pathname + url.search, init);
+  if (SCENARIO === "keys" && url.pathname === "/api/transcribe/backend") return serverFetch(url.pathname + url.search, init);
   /* Role memory (docs/design/role-memory.md §3.1): `&rolememory=1` hands the rules window and the card's lesson line to the driver's real routes. */
   if (ROLE_MEMORY && url.pathname.startsWith("/api/role-memory")) return serverFetch(url.pathname + url.search, init);
   if (url.pathname === "/api/task-icons") return serverFetch(url.pathname + url.search);
@@ -4467,14 +4470,15 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     voice.sessionStarts.push({ project: body.project, locale: body.locale, offer: typeof body.sdp === "string" && body.sdp.startsWith("v=0") });
     return json({ code: "CODEX_LIMIT_REACHED", resetsAt: VOICE_LOADED + 7_200 }, 409);
   }
-  if (VOICE && url.pathname === "/api/voice-companion/key" && method === "PUT") {
-    if (voiceSettings.keySource === "env") return json({ code: "KEY_FROM_ENV" }, 409);
-    const key = String((JSON.parse(String(init?.body ?? "{}")) as { key?: unknown }).key ?? "");
-    if (!key.trim() || /\s/u.test(key.trim())) return json({ code: "INVALID_KEY" }, 400);
-    voice.keyWrites.push(key.length);
-    voiceSettings.keySource = "file";
-    return json(voiceSettings);
-  }
+  /* «Keys», which the settings row opens on the OpenAI key (docs/design/keys-settings.md §4): the list as its route answers it, on placeholders. */
+  if (VOICE && url.pathname === "/api/keys") return json({ staging: false, owner: true, keys: [
+    { id: "openrouter", variable: "OPENROUTER_API_KEY", source: "missing", masked: null },
+    { id: "openai", variable: "OPENAI_API_KEY", source: voiceSettings.keySource, masked: voiceSettings.keySource === "missing" ? null : "sk-proj-••••••••2222" },
+    { id: "elevenlabs", variable: "ELEVENLABS_API_KEY", source: "missing", masked: null },
+    { id: "soniox", variable: "SONIOX_API_KEY", source: "missing", masked: null },
+    { id: "fishaudio", variable: "FISH_AUDIO_API_KEY", source: "missing", masked: null },
+    { id: "telegram", variable: "DELEGATUS_TELEGRAM_BOT_TOKEN", source: "missing", masked: null },
+  ] });
   if (VOICE && url.pathname === "/api/telemetry") return json({ enabled: false, locked: false, noticeDismissed: true });
   if (VOICE && url.pathname === "/api/memory/settings") return json({ enabled: false, capUsd: 5, spentUsd: 0 });
   if (url.pathname === "/api/log/provenance" && ROLE_AVATARS) {

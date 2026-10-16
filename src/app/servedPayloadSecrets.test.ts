@@ -49,6 +49,8 @@ let capturedOutput = "";
     genuinely exists, so "no build artifact carries a secret" is asserted against
     something rather than against nothing. */
 let spawnCapability = "";
+/** A key saved where the OpenRouter reader reads it, so «Keys» has a value it must not hand to the wrong caller. */
+const SAVED_KEY = ["sk", "or", "v1", "0".repeat(64)].join("-");
 
 async function freePort(): Promise<number> {
   return new Promise((resolve, reject) => {
@@ -90,6 +92,8 @@ beforeAll(async () => {
   if (!built) return;
   sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-served-payload-"));
   const stateDir = path.join(sandbox, "state");
+  fs.mkdirSync(path.join(sandbox, ".config", "delegatus"), { recursive: true });
+  fs.writeFileSync(path.join(sandbox, ".config", "delegatus", "openrouter-api-key"), SAVED_KEY, { mode: 0o600 });
   const port = await freePort();
   origin = `http://127.0.0.1:${port}`;
   /* The SAME command `package.json` starts the viewer with, under the SAME Bun
@@ -220,6 +224,30 @@ test("no build artifact carries the per-process agent capability", () => {
     if (!/\.(js|json|html|rsc|txt)$/.test(file)) continue;
     expect(fs.readFileSync(file, "utf8")).not.toContain(spawnCapability);
   }
+});
+
+test("the built «Keys» routes answer the list without a value, and a value only to the operator's own page", async () => {
+  /* docs/design/keys-settings.md §9: the list carries masked values for the page and nothing for any other caller. */
+  const page = { origin, "sec-fetch-site": "same-origin", "content-type": "application/json" };
+  const plain = await fetch(`${origin}/api/keys`);
+  expect(plain.status).toBe(200);
+  const plainText = await plain.text();
+  expect(plainText).not.toContain(SAVED_KEY);
+  expect(JSON.parse(plainText)).toMatchObject({ owner: false, keys: expect.arrayContaining([{ id: "openrouter", variable: "OPENROUTER_API_KEY", source: "file", masked: null }]) });
+  const listed = await fetch(`${origin}/api/keys`, { headers: page });
+  const listedText = await listed.text();
+  expect(listedText).not.toContain(SAVED_KEY);
+  expect(listedText).toContain("sk-or-v1-••••••••0000");
+  /* An agent naming itself, and a plain request with no browser stamp, are refused the value. */
+  for (const headers of [{ ...page, "x-llv-spawn-capability": spawnCapability }, { "content-type": "application/json" }]) {
+    const refused = await fetch(`${origin}/api/keys/openrouter/reveal`, { method: "POST", headers, body: "{}" });
+    expect(refused.status).toBe(403);
+    expect(await refused.text()).not.toContain(SAVED_KEY);
+  }
+  const revealed = await fetch(`${origin}/api/keys/openrouter/reveal`, { method: "POST", headers: page, body: JSON.stringify({ purpose: "reveal" }) });
+  expect(revealed.status).toBe(200);
+  expect(revealed.headers.get("cache-control")).toBe("no-store");
+  expect(await revealed.json()).toEqual({ value: SAVED_KEY });
 });
 
 test("the retired legacy orchestrator route is absent from the real build", async () => {

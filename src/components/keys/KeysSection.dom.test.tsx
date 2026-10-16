@@ -1,0 +1,269 @@
+import { afterEach, expect, test } from "bun:test";
+import { Window } from "happy-dom";
+import { act } from "react";
+import type { Root } from "react-dom/client";
+
+import { installActEnv } from "@/test-helpers/actEnv";
+import { setLocale, translate } from "@/lib/i18n";
+import type { ImportPreview, KeysAnswer } from "@/lib/keys/shared";
+
+/*
+ * «Keys», Варіант 1 (docs/design/keys-settings.md): the page over a stub of
+ * its own routes. A value reaches the page only from a reveal answer, and
+ * copy puts it on the clipboard without putting it on the page. Values are
+ * built at run time from runs of one character.
+ */
+
+const dom = new Window({ url: "http://localhost/", width: 1440, height: 900 });
+installActEnv();
+Object.assign(globalThis, {
+  window: dom, document: dom.document, navigator: dom.navigator, Node: dom.Node, HTMLElement: dom.HTMLElement,
+  HTMLInputElement: dom.HTMLInputElement, Event: dom.Event, CustomEvent: dom.CustomEvent, KeyboardEvent: dom.KeyboardEvent,
+  PointerEvent: dom.Event, localStorage: dom.localStorage,
+});
+const clipboard: string[] = [];
+Object.defineProperty(dom.navigator, "clipboard", { configurable: true, value: { writeText: async (text: string) => { clipboard.push(text); } } });
+
+/* react-dom decides at load whether the window supports input events, so it is loaded only once the window exists. */
+const { createRoot } = await import("react-dom/client");
+const { KeysImportPage, KeysMenuPage } = await import("./KeysSection");
+
+/* Name-indexed: a NAME=value line with a key-shaped value reads as a credential to the publication gate. */
+const envLine = (name: string, value: string) => [name, value].join("=");
+
+const OPENROUTER = ["sk", "or", "v1", "0".repeat(64)].join("-");
+const OPENAI = ["sk", "proj", "2".repeat(48)].join("-");
+const PASTED = ["sk", "or", "v1", "3".repeat(64)].join("-");
+
+const answer = (over: Partial<KeysAnswer> = {}): KeysAnswer => ({ staging: false, owner: true, keys: [
+  { id: "openrouter", variable: "OPENROUTER_API_KEY", source: "file", masked: "sk-or-v1-••••••••0000" },
+  { id: "openai", variable: "OPENAI_API_KEY", source: "env", masked: "sk-proj-••••••••2222" },
+  { id: "elevenlabs", variable: "ELEVENLABS_API_KEY", source: "missing", masked: null },
+  { id: "soniox", variable: "SONIOX_API_KEY", source: "failed", masked: null },
+  { id: "fishaudio", variable: "FISH_AUDIO_API_KEY", source: "missing", masked: null },
+  { id: "telegram", variable: "DELEGATUS_TELEGRAM_BOT_TOKEN", source: "missing", masked: null },
+], ...over });
+
+type Call = { url: string; method: string; body: unknown };
+let calls: Call[] = [];
+function serve(list: KeysAnswer, extra: (call: Call) => Response | undefined = () => undefined) {
+  calls = [];
+  globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
+    const call = { url: String(input), method: init?.method ?? "GET", body: typeof init?.body === "string" ? JSON.parse(init.body) : null };
+    calls.push(call);
+    const custom = extra(call);
+    if (custom) return custom;
+    if (call.url === "/api/keys") return Response.json(list);
+    const reveal = /^\/api\/keys\/([a-z]+)\/reveal$/.exec(call.url);
+    if (reveal) return Response.json({ value: reveal[1] === "openai" ? OPENAI : OPENROUTER });
+    return Response.json({ error: "not_found" }, { status: 404 });
+  }) as typeof fetch;
+}
+
+const originalFetch = globalThis.fetch;
+let root: Root | undefined;
+afterEach(() => {
+  act(() => root?.unmount()); root = undefined;
+  document.body.innerHTML = ""; clipboard.length = 0; setLocale("en");
+  globalThis.fetch = originalFetch;
+});
+
+const settle = () => act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); });
+async function mount(node: React.ReactNode) {
+  const host = document.createElement("div"); document.body.appendChild(host); root = createRoot(host);
+  await act(async () => { root!.render(node); });
+  await settle(); await settle();
+  return host;
+}
+const click = async (element: Element | null) => {
+  expect(element).not.toBeNull();
+  await act(async () => { (element as HTMLElement).click(); });
+  await settle(); await settle();
+};
+const row = (host: HTMLElement, id: string) => host.querySelector<HTMLElement>(`[data-keys-row='${id}']`)!;
+
+for (const lang of ["en", "uk"] as const) for (const size of ["menu", "sheet"] as const) test(`${lang} ${size}: six rows; a key set by a variable says so on its row and names the variable in its note, and cannot be replaced`, async () => {
+  setLocale(lang);
+  serve(answer());
+  const host = await mount(<KeysMenuPage size={size} onImport={() => {}} />);
+  expect([...host.querySelectorAll("[data-keys-row]")].map((node) => node.getAttribute("data-keys-row"))).toEqual(["openrouter", "openai", "elevenlabs", "soniox", "fishaudio", "telegram"]);
+  const env = row(host, "openai");
+  expect(env.querySelector("[data-keys-env-tail]")!.textContent).toBe(` · ${translate(lang, "keys.state.envShort")}`);
+  expect(row(host, "openrouter").querySelector("[data-keys-env-tail]")).toBeNull();
+  expect(env.querySelector("[data-keys-masked]")!.textContent).toBe("••••2222");
+  await act(async () => { env.querySelector<HTMLElement>("[data-keys-dot]")!.focus(); });
+  expect(env.querySelector("[data-keys-pop]")!.textContent).toBe(translate(lang, "keys.state.env", { variable: "OPENAI_API_KEY" }));
+  /* Read-only here: no Add, and ⋯ offers the masked copy only. */
+  expect(env.querySelector("[data-keys-add]")).toBeNull();
+  await click(env.querySelector("[data-keys-more]"));
+  expect([...env.querySelectorAll("[data-keys-menu-item]")].map((item) => item.getAttribute("data-keys-menu-item"))).toEqual(["masked"]);
+  await click(row(host, "openrouter").querySelector("[data-keys-more]"));
+  expect([...row(host, "openrouter").querySelectorAll("[data-keys-menu-item]")].map((item) => item.getAttribute("data-keys-menu-item"))).toEqual(["masked", "replace"]);
+  /* An unreadable key says so and can be replaced; unset ones can be added. */
+  expect(row(host, "soniox").textContent).toContain(translate(lang, "keys.state.failedShort"));
+  expect(row(host, "soniox").querySelector("[data-keys-add]")!.textContent).toBe(translate(lang, "keys.replace"));
+  expect(row(host, "telegram").querySelector("[data-keys-add]")!.textContent).toBe(translate(lang, "keys.add"));
+  expect(host.innerHTML).not.toContain("0".repeat(16));
+});
+
+test("copy puts the key on the clipboard without showing it, through one reveal request named copy", async () => {
+  serve(answer());
+  const host = await mount(<KeysMenuPage onImport={() => {}} />);
+  await click(row(host, "openrouter").querySelector("[data-keys-copy]"));
+  expect(clipboard).toEqual([OPENROUTER]);
+  expect(calls.filter((call) => call.url.includes("/reveal"))).toEqual([{ url: "/api/keys/openrouter/reveal", method: "POST", body: { purpose: "copy" } }]);
+  expect(host.innerHTML).not.toContain(OPENROUTER);
+  expect(row(host, "openrouter").querySelector("[data-keys-note='copied']")!.textContent).toBe(translate("en", "keys.copiedShort"));
+});
+
+test("copy masked copies the masked form from the list and asks for no value", async () => {
+  serve(answer());
+  const host = await mount(<KeysMenuPage onImport={() => {}} />);
+  await click(row(host, "openai").querySelector("[data-keys-more]"));
+  await click(row(host, "openai").querySelector("[data-keys-menu-item='masked']"));
+  expect(clipboard).toEqual(["sk-proj-••••••••2222"]);
+  expect(calls.some((call) => call.url.includes("/reveal"))).toBe(false);
+  expect(row(host, "openai").querySelector("[data-keys-note='masked']")!.textContent).toBe(translate("en", "keys.copiedMasked", { masked: "••••2222" }));
+});
+
+test("the eye shows the value until pressed again, and a key set by a variable is revealed the same way", async () => {
+  serve(answer());
+  const host = await mount(<KeysMenuPage onImport={() => {}} />);
+  const eye = () => row(host, "openai").querySelector<HTMLButtonElement>("[data-keys-eye]")!;
+  expect(eye().getAttribute("aria-pressed")).toBe("false");
+  await click(eye());
+  expect(row(host, "openai").querySelector("[data-keys-revealed] code")!.textContent).toBe(OPENAI);
+  expect(row(host, "openai").textContent).toContain(translate("en", "keys.revealHides"));
+  expect(eye().getAttribute("aria-pressed")).toBe("true");
+  expect(calls.filter((call) => call.url.includes("/reveal")).map((call) => call.body)).toEqual([{ purpose: "reveal" }]);
+  await click(eye());
+  expect(host.innerHTML).not.toContain(OPENAI);
+});
+
+test("copy all copies the export's NAME=value lines and says how many", async () => {
+  const text = `# Delegatus keys · 2026-10-16 · 2\n${envLine("OPENROUTER_API_KEY", OPENROUTER)}\n${envLine("OPENAI_API_KEY", OPENAI)}\n`;
+  serve(answer(), (call) => call.url === "/api/keys/export" ? Response.json({ text, count: 2, omitted: [] }) : undefined);
+  const host = await mount(<KeysMenuPage onImport={() => {}} />);
+  await click(host.querySelector("[data-keys-copy-all]"));
+  expect(clipboard).toEqual([text]);
+  expect(host.querySelector("[data-keys-copied-all]")!.textContent).toBe(translate("en", "keys.copiedAll", { count: 2 }));
+  expect(host.innerHTML).not.toContain(OPENROUTER);
+});
+
+test("an invalid replacement is refused in words and the field is emptied", async () => {
+  serve(answer(), (call) => call.method === "PUT" ? Response.json({ code: "invalid_key" }, { status: 400 }) : undefined);
+  const host = await mount(<KeysMenuPage onImport={() => {}} />);
+  await click(row(host, "elevenlabs").querySelector("[data-keys-add]"));
+  const input = row(host, "elevenlabs").querySelector<HTMLInputElement>("[data-keys-field] input")!;
+  expect(input.type).toBe("password");
+  await act(async () => {
+    const setter = Object.getOwnPropertyDescriptor(dom.HTMLInputElement.prototype, "value")!.set!;
+    setter.call(input, "sk_short");
+    input.dispatchEvent(new dom.Event("input", { bubbles: true }) as unknown as Event);
+  });
+  await act(async () => { row(host, "elevenlabs").querySelector("form")!.dispatchEvent(new dom.Event("submit", { bubbles: true, cancelable: true }) as unknown as Event); });
+  await settle();
+  expect(calls.find((call) => call.method === "PUT")).toEqual({ url: "/api/keys/elevenlabs", method: "PUT", body: { value: "sk_short" } });
+  expect(row(host, "elevenlabs").querySelector("[data-keys-error='invalid']")!.textContent).toBe(translate("en", "keys.invalid", { name: "ElevenLabs" }));
+  expect(input.value).toBe("");
+});
+
+for (const lang of ["en", "uk"] as const) test(`${lang}: a team member sees states only, with no value, no action and no transfer`, async () => {
+  setLocale(lang);
+  const list = answer({ owner: false });
+  serve({ ...list, keys: list.keys.map((entry) => ({ ...entry, masked: null })) });
+  const host = await mount(<KeysMenuPage onImport={() => {}} />);
+  expect(host.querySelector("[data-keys-member]")!.textContent).toBe(translate(lang, "keys.member"));
+  expect(row(host, "openrouter").textContent).toContain(translate(lang, "keys.state.file"));
+  expect(row(host, "openai").textContent).toContain(translate(lang, "keys.state.envSource"));
+  expect(host.querySelector("[data-keys-eye], [data-keys-copy], [data-keys-more], [data-keys-add], [data-keys-copy-all], [data-keys-open-import]")).toBeNull();
+});
+
+for (const lang of ["en", "uk"] as const) test(`${lang}: staging shows and copies, and offers no Add, Replace or Import`, async () => {
+  setLocale(lang);
+  serve(answer({ staging: true }));
+  const host = await mount(<KeysMenuPage onImport={() => {}} />);
+  expect(host.querySelector("[data-keys-staging]")!.textContent).toBe(translate(lang, "keys.staging"));
+  expect(host.querySelector("[data-keys-add], [data-keys-open-import]")).toBeNull();
+  expect(row(host, "openrouter").querySelector("[data-keys-copy]")).not.toBeNull();
+  await click(row(host, "openrouter").querySelector("[data-keys-more]"));
+  expect(row(host, "openrouter").querySelector("[data-keys-menu-item='replace']")).toBeNull();
+  expect(host.querySelector("[data-keys-copy-all]")).not.toBeNull();
+});
+
+test("a list that cannot be read says so with a retry", async () => {
+  let fail = true;
+  serve(answer(), (call) => call.url === "/api/keys" && fail ? Response.json({ error: "x" }, { status: 500 }) : undefined);
+  const host = await mount(<KeysMenuPage onImport={() => {}} />);
+  expect(host.querySelector("[data-keys-failed]")!.textContent).toContain(translate("en", "keys.loadFailed"));
+  fail = false;
+  await click(host.querySelector("[data-keys-failed] button"));
+  expect(host.querySelector("[data-keys-failed]")).toBeNull();
+  expect(host.querySelectorAll("[data-keys-row]")).toHaveLength(6);
+});
+
+for (const lang of ["en", "uk"] as const) test(`${lang}: import shows the pasted lines masked and the server's preview, and Apply confirms exactly the rows shown`, async () => {
+  setLocale(lang);
+  const preview: ImportPreview = {
+    rows: [
+      { id: "openrouter", kind: "replaces", masked: "sk-or-v1-••••••••3333", was: "sk-or-v1-••••••••0000" },
+      { id: "openai", kind: "env", masked: "sk-proj-••••••••5555" },
+      { id: "elevenlabs", kind: "invalid" },
+      { id: "soniox", kind: "new", masked: "••••••••4444" },
+      { id: "telegram", kind: "new", masked: "999999999:••••••••6666" },
+    ],
+    unknown: ["LLV_TOKEN"],
+    unparsed: [9],
+  };
+  serve(answer(), (call) => {
+    if (call.url !== "/api/keys/import") return undefined;
+    return (call.body as { confirm?: unknown }).confirm ? Response.json({ saved: ["openrouter", "soniox"], unconfirmed: [], failed: [{ id: "telegram", reason: "telegram_refused" }] }) : Response.json(preview);
+  });
+  const host = await mount(<KeysImportPage />);
+  const area = host.querySelector<HTMLTextAreaElement>("[data-keys-import-text]")!;
+  const text = `# Delegatus keys · 2026-10-15 · 3\n${envLine("OPENROUTER_API_KEY", PASTED)}\nexport ${envLine("SONIOX_API_KEY", `"${"4".repeat(64)}"`)}`;
+  await act(async () => {
+    const setter = Object.getOwnPropertyDescriptor(dom.HTMLTextAreaElement.prototype, "value")!.set!;
+    setter.call(area, text);
+    area.dispatchEvent(new dom.Event("input", { bubbles: true }) as unknown as Event);
+  });
+  await settle(); await settle();
+  expect(calls.filter((call) => call.url === "/api/keys/import")).toEqual([{ url: "/api/keys/import", method: "POST", body: { text } }]);
+  expect([...host.querySelectorAll("[data-keys-import-masked] span")].map((line) => line.textContent)).toEqual([
+    "# Delegatus keys · 2026-10-15 · 3", "OPENROUTER_API_KEY=••••3333", "SONIOX_API_KEY=••••4444",
+  ]);
+  expect(host.innerHTML).not.toContain(PASTED);
+  expect(host.innerHTML).not.toContain("4".repeat(16));
+  expect([...host.querySelectorAll("[data-keys-import-row]")].map((node) => [node.getAttribute("data-keys-import-row"), node.getAttribute("data-keys-import-kind")])).toEqual([
+    ["openrouter", "replaces"], ["openai", "env"], ["elevenlabs", "invalid"], ["soniox", "new"], ["telegram", "new"],
+  ]);
+  expect(host.querySelector("[data-keys-import-row='openrouter']")!.textContent).toContain(translate(lang, "keys.import.replaces", { was: "••••0000" }));
+  expect(host.querySelector("[data-keys-import-unknown]")!.textContent).toBe(translate(lang, "keys.import.unknown", { names: "LLV_TOKEN" }));
+  expect(host.querySelector("[data-keys-import-unparsed]")!.textContent).toBe(translate(lang, "keys.import.unparsed", { lines: "9" }));
+  expect(host.querySelector("[data-keys-import-bot]")!.textContent).toBe(translate(lang, "keys.import.bot"));
+  const apply = host.querySelector<HTMLButtonElement>("[data-keys-import-apply]")!;
+  expect(apply.textContent).toBe(translate(lang, "keys.import.apply", { count: 3 }));
+  await click(apply);
+  expect(calls.filter((call) => call.url === "/api/keys/import").at(-1)!.body).toEqual({ text, confirm: {
+    openrouter: { kind: "replaces", was: "sk-or-v1-••••••••0000" },
+    soniox: { kind: "new" },
+    telegram: { kind: "new" },
+  } });
+  expect(host.querySelector("[data-keys-import-done]")!.textContent).toContain(translate(lang, "keys.import.done", { count: 2 }));
+  expect(host.querySelector("[data-keys-import-not-saved]")!.textContent).toBe(translate(lang, "keys.import.notSaved", { names: translate(lang, "keys.name.telegram") }));
+  /* The pasted text is gone: the field is empty again. */
+  expect(host.querySelector<HTMLTextAreaElement>("[data-keys-import-text]")!.value).toBe("");
+  expect(host.querySelector("[data-keys-import-preview]")).toBeNull();
+});
+
+test("an import with nothing to write offers no Apply that does something", async () => {
+  serve(answer(), (call) => call.url === "/api/keys/import" ? Response.json({ rows: [{ id: "openai", kind: "env", masked: "sk-proj-••••••••5555" }], unknown: [], unparsed: [] }) : undefined);
+  const host = await mount(<KeysImportPage />);
+  const area = host.querySelector<HTMLTextAreaElement>("[data-keys-import-text]")!;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(dom.HTMLTextAreaElement.prototype, "value")!.set!.call(area, `${envLine("OPENAI_API_KEY", OPENAI)}`);
+    area.dispatchEvent(new dom.Event("input", { bubbles: true }) as unknown as Event);
+  });
+  await settle(); await settle();
+  expect(host.querySelector<HTMLButtonElement>("[data-keys-import-apply]")!.disabled).toBe(true);
+});
