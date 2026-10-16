@@ -607,6 +607,8 @@ export const uk: Record<keyof typeof en, Message> = {
   "reportLog.noOpenQuestions": "Відкритих питань немає",
   "reportLog.prevQuestion": "Попереднє відкрите питання",
   "reportLog.nextQuestion": "Наступне відкрите питання",
+  "reportLog.resolveFailed": "Не вдалося позначити вирішеним: {error}",
+  "reportLog.unresolveFailed": "Не вдалося знову відкрити: {error}",
   "reportLog.resolveAll": "Вирішити всі",
   "reportLog.clearResolved": "Прибрати вирішені",
   "reportLog.showResolved": "Показати вирішені ({count})",

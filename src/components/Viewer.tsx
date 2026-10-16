@@ -50,6 +50,7 @@ import { publishBlockerNames, useWantedBlockerNames } from "./selfUpdate/blocker
 import { useSelfUpdateFeed } from "./selfUpdate/useSelfUpdateFeed";
 import { openSelfUpdate } from "./selfUpdate/openSelfUpdate";
 import { SelfUpdateHost } from "./selfUpdate/SelfUpdateDialog";
+import { useDrainDecisionsLeaving } from "./selfUpdate/AutoDrainDecision";
 import { TelemetrySettingsHost } from "./telemetry/TelemetrySettings";
 import { LearnedRulesWindowHost } from "./roleMemory/LearnedRules";
 import { LinkedSettingsHost } from "./links/LinkedSettingsDialog";
@@ -984,7 +985,10 @@ function ViewerApp() {
      lanes the cards and the columns already mark, and a lane dismissed on its
      card leaves every count at once. */
   const updateFeed = useSelfUpdateFeed(true, false);
-  const updateDecision = updateFeed.snapshot?.auto?.decision;
+  /* A «Keep waiting» on its way has already left every list and count. */
+  const drainLeaving = useDrainDecisionsLeaving();
+  const servedDecision = updateFeed.snapshot?.auto?.decision;
+  const updateDecision = servedDecision && !drainLeaving.has(servedDecision.id) ? servedDecision : undefined;
   /* The update surface names the work it waits on by project name and
      conversation title; the server sends keys and ids. */
   const updateBlockers = updateFeed.snapshot?.auto?.blockers;

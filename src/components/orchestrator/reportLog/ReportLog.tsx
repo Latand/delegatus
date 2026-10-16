@@ -161,10 +161,18 @@ export function ReportLog({ project, active = true, variant, headless = false, i
   const [hideResolved, setHideResolved] = useState(() => (typeof window === "undefined" ? false : readHidden(project)));
   const [current, setCurrent] = useState<number | null>(null);
   const listRef = useRef<HTMLOListElement | null>(null);
+  /* A Resolve or an Undo the server refused: the layer is already taken back,
+     and the question it named says why until it is pressed again (audit B43). */
+  const [refused, setRefused] = useState<ReadonlyMap<number, string>>(() => new Map());
   const resolve = (seqs: readonly number[], undo = false) => {
     if (!seqs.length) return;
+    setRefused((held) => (seqs.some((seq) => held.has(seq)) ? new Map([...held].filter(([seq]) => !seqs.includes(seq))) : held));
     const subjects: DismissalSubjectRequest[] = seqs.map((seq) => ({ kind: "report", seq }));
-    void dismiss({ kind: "subjects", subjects }, subjects, { undo, surface });
+    void dismiss({ kind: "subjects", subjects }, subjects, { undo, surface }).then((result) => {
+      if (result.ok) return;
+      const why = t(undo ? "reportLog.unresolveFailed" : "reportLog.resolveFailed", { error: result.error });
+      setRefused((held) => new Map([...held, ...seqs.map((seq) => [seq, why] as const)]));
+    });
   };
   const step = (dir: 1 | -1) => {
     if (!openShown.length) return;
@@ -235,6 +243,7 @@ export function ReportLog({ project, active = true, variant, headless = false, i
               current={current === row.entry.seq}
               touch={!column}
               onResolve={(resolved) => resolve([row.entry.seq], !resolved)}
+              refusal={refused.get(row.entry.seq) ?? null}
               github={log.github}
               locale={locale}
               now={now}
@@ -310,12 +319,13 @@ function openQuestionCount(questions: ReportLogQuestions, entries: readonly Repo
   return openQuestionSeqs(questions, entries, states).length;
 }
 
-function ReportEntry({ entry, question, current, touch, onResolve, github, locale, now, fresh, classLabel, newLabel }: {
+function ReportEntry({ entry, question, current, touch, onResolve, refusal, github, locale, now, fresh, classLabel, newLabel }: {
   entry: ReportLogEntry;
   question: QuestionState;
   current: boolean;
   touch: boolean;
   onResolve: (resolved: boolean) => void;
+  refusal: string | null;
   github: string | null;
   locale: string;
   now?: Date;
@@ -386,6 +396,7 @@ function ReportEntry({ entry, question, current, touch, onResolve, github, local
             </button>
           ))}
       </p>
+      {refusal ? <p role="alert" data-report-resolve-error={entry.seq} className="m-0 text-label font-semibold text-danger [overflow-wrap:anywhere]">{refusal}</p> : null}
     </li>
   );
 }

@@ -615,6 +615,8 @@ export const en = {
   "reportLog.noOpenQuestions": "No open questions",
   "reportLog.prevQuestion": "Previous open question",
   "reportLog.nextQuestion": "Next open question",
+  "reportLog.resolveFailed": "Could not mark it resolved: {error}",
+  "reportLog.unresolveFailed": "Could not mark it open again: {error}",
   "reportLog.resolveAll": "Resolve all",
   "reportLog.clearResolved": "Clear resolved",
   "reportLog.showResolved": "Show resolved ({count})",

@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { fireTasksChanged } from "@/components/tasks/taskApi";
 import { layerPrototypeDismissal, sendDismissal } from "@/components/attention/dismissalOverlay";
 import { prototypeReviewNotices, prototypeReviewSummary } from "@/lib/prototypeReview/model";
-import type { DecidePrototypeInput, PrototypeReviewNotice, PrototypeReviewRead, PrototypeRoundRead } from "@/lib/prototypeReview/types";
+import type { DecidePrototypeInput, PrototypeAnswer, PrototypeReviewNotice, PrototypeReviewRead, PrototypeRoundRead } from "@/lib/prototypeReview/types";
 import type { BoardTask } from "@/lib/tasks/types";
 
 export const OPEN_PROTOTYPE_REVIEW_EVENT = "llv:open-prototype-review";
@@ -34,15 +34,27 @@ export function usePrototypeReviewNotices(tasks: readonly BoardTask[],project?: 
   },[tasks,project,seatDecisions]);
 }
 type DecisionWrite = DecidePrototypeInput | { reviewId: string; retry: true };
-/** What the review shows the moment the operator presses retry on a saved
-    decision, before the server answers: its message on its way. The server's
-    answer replaces it. A new decision gets no such reading: it reads as saved
-    only once the server has written it, because until then closing the review
-    would lose it. */
-export function optimisticPrototypeRead(data: PrototypeReviewRead, body: DecisionWrite): PrototypeReviewRead {
-  if (!("retry" in body)) return data;
+/** What the review shows the moment the operator presses, before the server
+    answers. A retry of a saved decision: its message on its way. A new
+    decision (audit B12): the round reads as saved at once, as the «Рішення»
+    column's answers do, so the window collapses and closes at once; the
+    window keeps the draft until the server writes it, and a refusal puts the
+    round back open with the choice, the words and the reason. The server's
+    answer replaces either reading. */
+export function optimisticPrototypeRead(data: PrototypeReviewRead, body: DecisionWrite, at = new Date().toISOString()): PrototypeReviewRead {
   const round = data.rounds.find(entry => entry.id === body.reviewId);
-  if (!round?.decision || round.decision.delivery.state === "sent") return data;
+  if (!round) return data;
+  if (!("retry" in body)) {
+    if (round.decision) return data;
+    const answers = body.skip ? (round.questions ?? []).map((question): PrototypeAnswer => ({ questionId: question.id, options: [], skipped: true })) : body.answers;
+    const decision: PrototypeRoundRead["decision"] = {
+      chosen: body.chosen, comment: body.comment, at,
+      ...(body.reject ? { rejected: true as const } : {}), ...(body.skip ? { skipped: true as const } : {}), ...(answers ? { answers } : {}),
+      delivery: { state: "pending", retryable: false, phase: "saved" },
+    };
+    return { ...data, waitingReviewId: data.waitingReviewId === round.id ? null : data.waitingReviewId, rounds: data.rounds.map(entry => entry.id === round.id ? { ...entry, decision } : entry) };
+  }
+  if (!round.decision || round.decision.delivery.state === "sent") return data;
   const decision: PrototypeRoundRead["decision"] = { ...round.decision, delivery: { ...round.decision.delivery, phase: round.decision.delivery.state === "no-orchestrator" ? "waiting-seat" : "delivering" } };
   return { ...data, rounds: data.rounds.map(entry => entry.id === round.id ? { ...entry, decision } : entry) };
 }
@@ -77,7 +89,7 @@ export function usePrototypeReview(taskId: string | null,enabled = true) {
   const write = useCallback(async (body: DecisionWrite): Promise<PrototypeWriteResult> => {
     if (!taskId) return { ok: false, error: "Prototype decision could not be saved" };
     writing.current = taskId;
-    /* A retry answers the press at once; a refusal puts back what was there and says why. */
+    /* A press answers at once; a refusal puts back what was there and says why. */
     let before: PrototypeReviewRead | null = null;
     setSnapshot(previous => {
       before = previous.taskId === taskId ? previous.data : null;
