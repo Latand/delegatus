@@ -64,8 +64,9 @@ export async function settleStageAttemptPush(pipeline: Pipeline, attempt: Pipeli
       try { await fs.access(directory); return refuse("the attempt's starting-head receipt is missing"); }
       catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
     }
-    // An old launch has no hooks. Only native creation entries in this exact
-    // worktree's HEAD reflog can recover its proof; a reset/fast-forward cannot.
+    // Only launches predating start receipts use reflog recovery. Once a launch
+    // receipt exists, its commit receipts are authoritative; reflog actions and
+    // timestamps are caller-controlled metadata and cannot fill a missing one.
     const start = raw === null ? { launchId: attempt.launchId, worktree: pipeline.worktreeDir,
       head: pipeline.lastPassedCommit, startedAt: attempt.startedAt } : JSON.parse(raw);
     if (start.launchId !== attempt.launchId || start.worktree !== pipeline.worktreeDir
@@ -106,6 +107,7 @@ export async function settleStageAttemptPush(pipeline: Pipeline, attempt: Pipeli
     }
     let nativeCreated: Set<string> | undefined;
     const nativeCreation = async (sha: string): Promise<boolean> => {
+      if (raw !== null) return false;
       if (!nativeCreated) {
         nativeCreated = new Set();
         const from = Math.floor(Date.parse(attempt.startedAt!) / 1000);

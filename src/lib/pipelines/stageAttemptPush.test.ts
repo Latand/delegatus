@@ -108,6 +108,59 @@ test.each([{ legacy: false }, { legacy: true }])("B: a foreign commit is refused
   } finally { await f.close(); }
 });
 
+test("B: a commit made without the launch receipt variables is refused", async () => {
+  const f = await fixture();
+  try {
+    const secondEnvironment: NodeJS.ProcessEnv = { ...f.env };
+    delete secondEnvironment.LLV_STAGE_GIT_RECEIPT;
+    delete secondEnvironment.LLV_STAGE_GIT_WORKTREE;
+    const made = await realExec("git", ["commit", "--allow-empty", "-m", "second environment"], f.lane, secondEnvironment);
+    expect(made.code, made.stderr).toBe(0);
+    const head = await f.own("rev-parse", "HEAD");
+    await f.push();
+    const result = await f.settle();
+    expect(result?.ok).toBe(false);
+    if (!result || result.ok) throw new Error("commit without the launch receipt was accepted");
+    expect(result.error).toContain(head);
+  } finally { await f.close(); }
+});
+
+test("B: a commit from another agent machine identity is refused", async () => {
+  const f = await fixture();
+  try {
+    const secondEnvironment: NodeJS.ProcessEnv = { ...f.env, DELEGATUS_PUBLICATION_NAME: "Other Machine",
+      DELEGATUS_PUBLICATION_EMAIL: ["noreply", "other.machine.example"].join("@") };
+    Object.assign(secondEnvironment, agentPublicationIdentityEnv({ ...secondEnvironment, HOME: f.root }));
+    delete secondEnvironment.LLV_STAGE_GIT_RECEIPT;
+    delete secondEnvironment.LLV_STAGE_GIT_WORKTREE;
+    const made = await realExec("git", ["commit", "--allow-empty", "-m", "other machine"], f.lane, secondEnvironment);
+    expect(made.code, made.stderr).toBe(0);
+    const head = await f.own("rev-parse", "HEAD");
+    const pushed = await realExec("git", ["push", "--no-verify", "origin", "HEAD:refs/heads/pipeline/proof"], f.lane, f.env);
+    expect(pushed.code, pushed.stderr).toBe(0);
+    const result = await f.settle();
+    expect(result?.ok).toBe(false);
+    if (!result || result.ok) throw new Error("another machine's commit was accepted");
+    expect(result.error).toContain(head);
+  } finally { await f.close(); }
+});
+
+test("B: a reset with GIT_REFLOG_ACTION=commit cannot prove foreign creation", async () => {
+  const f = await fixture();
+  try {
+    await f.git(f.foreign, "commit", "--allow-empty", "-m", "existing foreign commit");
+    const head = await f.git(f.foreign, "rev-parse", "HEAD");
+    await f.git(f.foreign, "push", "origin", "HEAD:refs/heads/pipeline/proof");
+    await f.own("fetch", "origin", "pipeline/proof");
+    const reset = await realExec("git", ["reset", "--hard", "FETCH_HEAD"], f.lane, { ...f.env, GIT_REFLOG_ACTION: "commit" });
+    expect(reset.code, reset.stderr).toBe(0);
+    const result = await f.settle();
+    expect(result?.ok).toBe(false);
+    if (!result || result.ok) throw new Error("a caller-controlled reflog message proved a reset");
+    expect(result.error).toContain(head);
+  } finally { await f.close(); }
+});
+
 test.each([{ pushed: false }, { pushed: true }])("B: legacy native creation is recovered without hooks (push=$pushed)", async ({ pushed }) => {
   const f = await fixture(true);
   try {
