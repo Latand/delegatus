@@ -146,6 +146,35 @@ test("429 delay is durable, shared by siblings and preserved by a new queue owne
   } finally { await worker.stop(); f.cleanup(); }
 });
 
+test.each([400, 403, 409])("durable publication %s ends once and records the service reason", async status => {
+  const f = fixture(); let calls = 0;
+  const ports = { target: () => message.target, allowed: () => true, now: () => message.date * 1000,
+    publish: async () => { calls++; throw new ExternalRelayError("fixture_refusal", status); } };
+  let worker = new OutboundPublication(f.filename, ports);
+  try {
+    await recordOutbound(f.filename, message);
+    worker.wake(); await worker.idle(); await worker.stop();
+    worker = new OutboundPublication(f.filename, ports); worker.wake(); await worker.idle();
+    expect(calls).toBe(1);
+    const db = new Database(f.filename, { readonly: true });
+    try { expect(db.query("SELECT state, reason FROM relay_outbound JOIN relay_publication_results USING(key)").get())
+      .toEqual({ state: "terminal", reason: `${status}:fixture_refusal` }); }
+    finally { db.close(); }
+  } finally { await worker.stop(); f.cleanup(); }
+});
+
+test("an expired receipt never reaches the service and its Telegram text stays readable", async () => {
+  const f = fixture(); let calls = 0;
+  const worker = new OutboundPublication(f.filename, { target: () => message.target, allowed: () => true,
+    now: () => (message.date + 86400) * 1000, publish: () => { calls++; return "published"; } });
+  try {
+    await recordOutbound(f.filename, message); worker.wake(); await worker.idle();
+    expect(calls).toBe(0);
+    expect(await pendingOutbound(f.filename, Number.MAX_SAFE_INTEGER)).toEqual([]);
+    expect((await scopedOutbound(f.filename, message.botId, message.chatId, message.topicId, message.date + 86400))[0]?.text).toBe(message.text);
+  } finally { await worker.stop(); f.cleanup(); }
+});
+
 
 test("unrouted receipts expire with bounded send-time cleanup while pending custody remains", async () => {
   const f = fixture();
