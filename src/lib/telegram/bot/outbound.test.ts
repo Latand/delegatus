@@ -124,6 +124,8 @@ test("disconnected forwarding receipts expire on a later send and retention skip
     const db = new Database(f.filename);
     try {
       db.query("UPDATE relay_outbound SET state='forwarding', attempts=1 WHERE message_id=?").run(disconnected.messageId);
+      db.query("INSERT INTO relay_outbound_handoffs (key, link, destination, due) VALUES (?, ?, ?, ?)")
+        .run(JSON.stringify([disconnected.botId, disconnected.chatId, disconnected.messageId]), "peer", "{}", now * 1000);
     } finally { db.close(); }
 
     await recordOutbound(f.filename, { ...message, messageId: 701, date: now });
@@ -133,6 +135,8 @@ test("disconnected forwarding receipts expire on a later send and retention skip
         .toEqual({ state: "terminal", attempts: 1 });
       expect(afterExpiry.query("SELECT reason FROM relay_publication_results WHERE key=?").get(JSON.stringify([disconnected.botId, disconnected.chatId, disconnected.messageId])))
         .toEqual({ reason: "expired" });
+      expect(afterExpiry.query("SELECT 1 FROM relay_outbound_handoffs WHERE key=?").get(JSON.stringify([disconnected.botId, disconnected.chatId, disconnected.messageId])))
+        .toBeNull();
     } finally { afterExpiry.close(); }
 
     const age = new Database(f.filename);
@@ -158,6 +162,49 @@ test("disconnected forwarding receipts expire on a later send and retention skip
       expect(retained.query("SELECT count(*) AS count FROM relay_outbound WHERE state='forwarding' AND key LIKE 'old-forward-%'").get())
         .toEqual({ count: 99984 });
     } finally { retained.close(); }
+  } finally { f.cleanup(); }
+});
+
+test("both outbound expiry passes seek expired dates through matching partial indexes", async () => {
+  const f = fixture();
+  try {
+    await recordOutbound(f.filename, message);
+    const db = new Database(f.filename);
+    try {
+      const forwarding = db.query<{ detail: string }, [number]>(`EXPLAIN QUERY PLAN SELECT key FROM relay_outbound
+        WHERE state IN ('unrouted', 'forwarding') AND date<=? ORDER BY date, key LIMIT 16`).all(message.date - 86400);
+      const all = db.query<{ detail: string }, [number]>(`EXPLAIN QUERY PLAN SELECT key FROM relay_outbound
+        WHERE state IN ('pending', 'unrouted', 'forwarding') AND date<=? ORDER BY date, key LIMIT 16`).all(message.date - 86400);
+      expect(forwarding.map(row => row.detail).join(" ")).toContain("relay_outbound_expiry_forwarding");
+      expect(all.map(row => row.detail).join(" ")).toContain("relay_outbound_expiry");
+      expect(forwarding.map(row => row.detail).join(" ")).not.toContain("TEMP B-TREE");
+      expect(all.map(row => row.detail).join(" ")).not.toContain("TEMP B-TREE");
+    } finally { db.close(); }
+  } finally { f.cleanup(); }
+});
+
+test("legacy handoff rows gain a due key without losing their persisted retry deadline", async () => {
+  const f = fixture();
+  try {
+    await recordOutbound(f.filename, message);
+    const due = message.date * 1000 + 4321;
+    const legacy = new Database(f.filename);
+    try {
+      legacy.query("UPDATE relay_outbound SET state='forwarding', due=? WHERE key=?").run(due, JSON.stringify([message.botId, message.chatId, message.messageId]));
+      legacy.query("INSERT INTO relay_outbound_handoffs (key, link, destination) VALUES (?, ?, ?)")
+        .run(JSON.stringify([message.botId, message.chatId, message.messageId]), "legacy-link", "{}");
+      legacy.exec("DROP INDEX relay_outbound_handoff_link_due");
+      legacy.exec("ALTER TABLE relay_outbound_handoffs DROP COLUMN due");
+    } finally { legacy.close(); }
+    await recordOutbound(f.filename, { ...message, messageId: 19 });
+    const migrated = new Database(f.filename, { readonly: true });
+    try {
+      expect(migrated.query<{ due: number }, [string]>("SELECT due FROM relay_outbound_handoffs WHERE key=?")
+        .get(JSON.stringify([message.botId, message.chatId, message.messageId]))?.due).toBe(due);
+      const plan = migrated.query<{ detail: string }, [string, number]>(`EXPLAIN QUERY PLAN SELECT key FROM relay_outbound_handoffs
+        WHERE link=? AND due<=? ORDER BY due, key LIMIT 16`).all("legacy-link", due);
+      expect(plan.map(row => row.detail).join(" ")).toContain("relay_outbound_handoff_link_due");
+    } finally { migrated.close(); }
   } finally { f.cleanup(); }
 });
 

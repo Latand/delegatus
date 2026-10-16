@@ -114,32 +114,43 @@ async function outgoing(link: LinkedPeer, remote: Destination | undefined, ports
     const freshProof = ports.destinationProof(remote, connectionId);
     if (!freshProof || !safeEqual(remote.proof, freshProof)) return [];
     expireOutbound(db, ports.now());
-    const rows = db.query<{ key: string; value_json: string | null; attempts: number; link: string | null; destination: string | null }, [number, string]>(`
-      SELECT o.key, CASE WHEN length(CAST(o.value_json AS BLOB))<=131072 THEN o.value_json ELSE NULL END AS value_json, o.attempts, h.link, h.destination FROM relay_outbound o
-      LEFT JOIN relay_outbound_handoffs h ON h.key=o.key
-      WHERE o.state IN ('unrouted', 'forwarding') AND o.due<=?
-        AND (h.link IS NULL OR h.link=?) ORDER BY o.due, o.key LIMIT 16`).all(ports.now(), connection(link));
+    const now = ports.now(), linkKey = connection(link);
+    const select = `SELECT o.key, CASE WHEN length(CAST(o.value_json AS BLOB))<=131072 THEN o.value_json ELSE NULL END AS value_json,
+      o.attempts, h.link, h.destination, h.due FROM relay_outbound_handoffs h INDEXED BY relay_outbound_handoff_link_due
+      JOIN relay_outbound o ON o.key=h.key WHERE h.link=? AND h.due<=? AND o.state='forwarding' ORDER BY h.due, h.key LIMIT 16`;
+    const forwarding = db.query<{ key: string; value_json: string | null; attempts: number; link: string | null; destination: string | null; due: number }, [string, number]>(select)
+      .all(linkKey, now);
+    const unrouted = db.query<{ key: string; value_json: string | null; attempts: number; link: string | null; destination: string | null; due: number }, [number]>(`
+      SELECT key, CASE WHEN length(CAST(value_json AS BLOB))<=131072 THEN value_json ELSE NULL END AS value_json,
+        attempts, NULL AS link, NULL AS destination, due FROM relay_outbound
+      WHERE state='unrouted' AND due<=? ORDER BY due, key LIMIT 16`).all(now);
+    const rows = [...forwarding, ...unrouted].sort((a, b) => a.due - b.due || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0)).slice(0, 16);
     for (const row of rows) {
       if (row.attempts >= 64) {
         db.query("UPDATE relay_outbound SET state='terminal' WHERE key=?").run(row.key);
         db.query("INSERT OR REPLACE INTO relay_publication_results VALUES (?, 'attempts_exhausted')").run(row.key);
+        db.query("DELETE FROM relay_outbound_handoffs WHERE key=?").run(row.key);
         continue;
       }
       if (row.value_json === null) {
         db.query("UPDATE relay_outbound SET state='terminal' WHERE key=?").run(row.key);
         db.query("INSERT OR REPLACE INTO relay_publication_results VALUES (?, 'invalid_receipt')").run(row.key);
+        db.query("DELETE FROM relay_outbound_handoffs WHERE key=?").run(row.key);
         continue;
       }
       const message = parseSqliteJson(row.value_json, db) as OutboundMessage;
       if (message.botId !== remote.botId || message.target || !ports.allowed(message) || (row.link && (row.link !== connection(link)
         || !sameDestination(parseSqliteJson(row.destination!, db), remote)))) {
-        db.query("UPDATE relay_outbound SET due=? WHERE key=?").run(ports.now() + 30000, row.key);
+        const due = now + 30000;
+        db.query("UPDATE relay_outbound SET due=? WHERE key=?").run(due, row.key);
+        if (row.link) db.query("UPDATE relay_outbound_handoffs SET due=? WHERE key=?").run(due, row.key);
         continue;
       }
       const body = relayPublishBody(message);
       if (!body) {
         db.query("UPDATE relay_outbound SET state='terminal' WHERE key=?").run(row.key);
         db.query("INSERT OR REPLACE INTO relay_publication_results VALUES (?, 'invalid_receipt')").run(row.key);
+        db.query("DELETE FROM relay_outbound_handoffs WHERE key=?").run(row.key);
         continue;
       }
       const item: UnsignedItem = { key: row.key, attempts: row.attempts + 1, destination: remote,
@@ -147,9 +158,11 @@ async function outgoing(link: LinkedPeer, remote: Destination | undefined, ports
           date: message.date, topicId: message.topicId, text: body.text } };
       const proof = ports.proof(item);
       if (!proof) return [];
-      db.query("INSERT OR IGNORE INTO relay_outbound_handoffs VALUES (?, ?, ?)").run(row.key, connection(link), JSON.stringify(remote));
+      const due = now + Math.min(300000, 1000 * 2 ** Math.min(row.attempts, 9));
+      db.query("INSERT OR IGNORE INTO relay_outbound_handoffs (key, link, destination, due) VALUES (?, ?, ?, ?)")
+        .run(row.key, linkKey, JSON.stringify(remote), due);
       db.query("UPDATE relay_outbound SET state='forwarding', attempts=attempts+1, due=? WHERE key=?")
-        .run(ports.now() + Math.min(300000, 1000 * 2 ** Math.min(row.attempts, 9)), row.key);
+        .run(due, row.key);
       return [{ ...item, proof }];
     }
     return [];
@@ -161,10 +174,15 @@ async function acceptAck(link: LinkedPeer, ack: Ack, ports: TelegramPublicationP
     authorizeLink(link, ports);
     const bound = db.query<{ link: string }, [string]>("SELECT link FROM relay_outbound_handoffs WHERE key=?").get(ack.key);
     if (bound?.link !== connection(link)) return;
+    const due = ports.now() + (ack.delayMs ?? Math.min(300000, 1000 * 2 ** Math.min(ack.attempts - 1, 9)));
     const changed = db.query(`UPDATE relay_outbound SET state=?, due=?
       WHERE key=? AND state='forwarding' AND attempts=?`).run(ack.state === "retry" ? "forwarding" : ack.state,
-        ports.now() + (ack.delayMs ?? Math.min(300000, 1000 * 2 ** Math.min(ack.attempts - 1, 9))), ack.key, ack.attempts);
-    if (changed.changes) db.query("INSERT OR REPLACE INTO relay_publication_results VALUES (?, ?)").run(ack.key, ack.reason);
+        due, ack.key, ack.attempts);
+    if (changed.changes) {
+      if (ack.state === "retry") db.query("UPDATE relay_outbound_handoffs SET due=? WHERE key=?").run(due, ack.key);
+      else db.query("DELETE FROM relay_outbound_handoffs WHERE key=?").run(ack.key);
+      db.query("INSERT OR REPLACE INTO relay_publication_results VALUES (?, ?)").run(ack.key, ack.reason);
+    }
   });
 }
 async function receive(link: LinkedPeer, item: Item, ports: TelegramPublicationPorts): Promise<Ack> {

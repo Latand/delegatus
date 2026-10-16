@@ -52,6 +52,9 @@ test("handoff pins the authenticated install; only a service acknowledgement set
     await exchangeTelegramPublications(link, { v: 1, ack: [ack] }, f.ports);
     await exchangeTelegramPublications(link, { v: 1, ack: [ack] }, f.ports);
     expect(state(f.ports.filename)).toEqual([{ state: "published", attempts: 1, reason: "published" }]);
+    const completed = new Database(f.ports.filename, { readonly: true });
+    try { expect(completed.query("SELECT 1 FROM relay_outbound_handoffs").get()).toBeNull(); }
+    finally { completed.close(); }
   } finally { f.cleanup(); }
 });
 
@@ -169,6 +172,52 @@ test("another linked peer cannot postpone a receipt reserved by the eligible pee
     expect(b.out).toBeUndefined();
     const retry = await exchangeTelegramPublications(peerA, { v: 1, destination: destinationA }, a);
     expect(retry.out?.[0]?.attempts).toBe(2);
+  } finally { f.cleanup(); }
+});
+
+test("exchange due-row seeks are scoped to one connection and keep unrouted work separately indexed", async () => {
+  const f = fixture();
+  try {
+    await recordOutbound(f.ports.filename, message);
+    const db = new Database(f.ports.filename);
+    try {
+      const forwarding = db.query<{ detail: string }, [string, number]>(`EXPLAIN QUERY PLAN
+        SELECT o.key FROM relay_outbound_handoffs h JOIN relay_outbound o ON o.key=h.key
+        WHERE h.link=? AND h.due<=? AND o.state='forwarding' ORDER BY h.due, h.key LIMIT 16`)
+        .all("peer-b", f.ports.now());
+      const unrouted = db.query<{ detail: string }, [number]>(`EXPLAIN QUERY PLAN SELECT key FROM relay_outbound
+        WHERE state='unrouted' AND due<=? ORDER BY due, key LIMIT 16`).all(f.ports.now());
+      expect(forwarding.map(row => row.detail).join(" ")).toContain("relay_outbound_handoff_link_due");
+      expect(unrouted.map(row => row.detail).join(" ")).toContain("relay_outbound_unrouted_due");
+      expect(forwarding.map(row => row.detail).join(" ")).not.toContain("SCAN h");
+      expect(unrouted.map(row => row.detail).join(" ")).not.toContain("TEMP B-TREE");
+    } finally { db.close(); }
+
+    const peerB: LinkedPeer = { ...link, key: "peer:b", id: "b", install: "install-b" };
+    const peerA: LinkedPeer = { ...link, key: "peer:a", id: "a", install: "install-a" };
+    const connectionFor = (candidate: LinkedPeer) => `connection-${candidate.id}`;
+    const dbWrite = new Database(f.ports.filename);
+    try {
+      dbWrite.query("UPDATE relay_outbound SET state='forwarding', due=? WHERE key=?").run(f.ports.now(), JSON.stringify([message.botId, message.chatId, message.messageId]));
+      dbWrite.query("INSERT OR REPLACE INTO relay_outbound_handoffs (key, link, destination, due) VALUES (?, ?, ?, ?)")
+        .run(JSON.stringify([message.botId, message.chatId, message.messageId]), JSON.stringify([peerB.key, peerB.install]), JSON.stringify(destination), f.ports.now());
+      dbWrite.query(`WITH RECURSIVE seq(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM seq WHERE n<100000)
+        INSERT INTO relay_outbound (key, bot_id, chat_id, topic_id, date, message_id, value_json, is_question, send_key, state, due, attempts)
+        SELECT 'unrelated-peer-'||n, '42', '-41', 7, ?, 100000+n, '{}', 0, 'peer-b', 'forwarding', ?, 1 FROM seq`)
+        .run(message.date, f.ports.now());
+      dbWrite.query(`INSERT INTO relay_outbound_handoffs (key, link, destination, due)
+        SELECT key, ?, ?, ? FROM relay_outbound WHERE key LIKE 'unrelated-peer-%'`)
+        .run(JSON.stringify([peerB.key, peerB.install]), JSON.stringify(destination), f.ports.now());
+    } finally { dbWrite.close(); }
+    const ports: TelegramPublicationPorts = { ...f.ports, connectionId: candidate => connectionFor(candidate), current: candidate => candidate };
+    expect((await exchangeTelegramPublications(peerA, { v: 1, destination: {
+      ...route, connectionId: "connection-a", proof: telegramDestinationProof(route, "connection-a", "fixture shared bot")
+    } }, ports)).out).toBeUndefined();
+    const after = new Database(f.ports.filename, { readonly: true });
+    try {
+      expect(after.query<{ count: number }, [string, number]>("SELECT count(*) AS count FROM relay_outbound_handoffs WHERE link=? AND due=?")
+        .get(JSON.stringify([peerB.key, peerB.install]), f.ports.now())).toEqual({ count: 100001 });
+    } finally { after.close(); }
   } finally { f.cleanup(); }
 });
 

@@ -157,6 +157,6 @@
     "src/lib/externalRelay/prompt.ts",
     "src/lib/externalRelay/publishedReferences.ts"
   ],
-  "sourceSha256": "904cb14ab2e7c7a8adccfb4719e467f5801ef770eefc5aefb17f84f882c71b91",
+  "sourceSha256": "be4ed1220d05f17b6fef2200b6c96b23841b030945e864377bc963ebd5c17279",
   "fixtureClock": "2026-10-11T13:20:05.000Z"
 }

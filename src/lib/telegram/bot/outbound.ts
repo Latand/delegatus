@@ -44,10 +44,19 @@ function outboundAttempt<T>(filename: string, write: boolean, work: (db: Databas
         db.exec("CREATE TABLE IF NOT EXISTS relay_owner_contexts (key TEXT PRIMARY KEY, at INTEGER NOT NULL, previous_at INTEGER NOT NULL)");
         db.exec("CREATE INDEX IF NOT EXISTS relay_owner_contexts_retention ON relay_owner_contexts(at, key)");
         db.exec("CREATE TABLE IF NOT EXISTS relay_publication_results (key TEXT PRIMARY KEY, reason TEXT NOT NULL)");
-        db.exec("CREATE TABLE IF NOT EXISTS relay_outbound_handoffs (key TEXT PRIMARY KEY, link TEXT NOT NULL, destination TEXT NOT NULL)");
-        db.exec("CREATE INDEX IF NOT EXISTS relay_outbound_handoff_due ON relay_outbound(due, key) WHERE state IN ('unrouted', 'forwarding')");
+        db.exec("CREATE TABLE IF NOT EXISTS relay_outbound_handoffs (key TEXT PRIMARY KEY, link TEXT NOT NULL, destination TEXT NOT NULL, due INTEGER NOT NULL DEFAULT 0)");
+        const handoffColumns = db.query<{ name: string }, []>("PRAGMA table_info(relay_outbound_handoffs)").all();
+        if (!handoffColumns.some(column => column.name === "due")) {
+          db.exec("ALTER TABLE relay_outbound_handoffs ADD COLUMN due INTEGER NOT NULL DEFAULT 0");
+          db.exec("UPDATE relay_outbound_handoffs SET due=COALESCE((SELECT due FROM relay_outbound WHERE relay_outbound.key=relay_outbound_handoffs.key), 0)");
+          db.exec("DELETE FROM relay_outbound_handoffs WHERE key IN (SELECT key FROM relay_outbound WHERE state<>'forwarding')");
+        }
+        db.exec("CREATE INDEX IF NOT EXISTS relay_outbound_handoff_link_due ON relay_outbound_handoffs(link, due, key)");
+        db.exec("DROP INDEX IF EXISTS relay_outbound_handoff_due");
+        db.exec("CREATE INDEX IF NOT EXISTS relay_outbound_unrouted_due ON relay_outbound(due, key) WHERE state = 'unrouted'");
         db.exec("CREATE TABLE IF NOT EXISTS relay_publication_cooldowns (key TEXT PRIMARY KEY, until_ms INTEGER NOT NULL)");
         db.exec("CREATE INDEX IF NOT EXISTS relay_outbound_expiry ON relay_outbound(date, key) WHERE state IN ('pending', 'unrouted', 'forwarding')");
+        db.exec("CREATE INDEX IF NOT EXISTS relay_outbound_expiry_forwarding ON relay_outbound(date, key) WHERE state IN ('unrouted', 'forwarding')");
         db.exec("CREATE INDEX IF NOT EXISTS relay_outbound_retention ON relay_outbound(date, key) WHERE state <> 'pending'");
         db.exec("CREATE INDEX IF NOT EXISTS relay_outbound_retention_eligible ON relay_outbound(date, key) WHERE state NOT IN ('pending', 'forwarding')");
         db.exec("CREATE INDEX IF NOT EXISTS relay_outbound_due ON relay_outbound(due, key) WHERE state = 'pending'");
@@ -141,6 +150,7 @@ function expireOutboundStates(db: Database, now: number, includePending: boolean
     WHERE state IN ${states} AND date<=? ORDER BY date, key LIMIT 16`)
     .all(Math.floor(now / 1000) - 86400);
   for (const row of expired) {
+    db.query("DELETE FROM relay_outbound_handoffs WHERE key=?").run(row.key);
     db.query("UPDATE relay_outbound SET state='terminal' WHERE key=?").run(row.key);
     db.query("INSERT INTO relay_publication_results VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET reason=excluded.reason").run(row.key, "expired");
   }
