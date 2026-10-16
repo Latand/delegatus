@@ -15,7 +15,7 @@ import { type RuntimeHostClient } from "./client";
 import { adoptStructuredHostsAtStartup, structuredStartupDeferral, type StructuredStartupDependencies } from "./startup";
 import { bindStructuredDeliveryQueue } from "./structuredDeliveryController";
 import { enqueueStructuredMessage } from "./structuredMessageDelivery";
-import { restartCutEvidenceHolds } from "./restartCutHold";
+import { restartCutEvidenceHolds, restartCutEvidenceUnresolved } from "./restartCutHold";
 
 /* #2761: a successor's startup pass can reach a live worker's row while the
    incumbent still owns it, skip it, and find it released by the incumbent's
@@ -206,16 +206,18 @@ test("a row retry preserves another pipeline row's existing startup deferral", a
   let clock = Date.parse("2026-10-16T12:00:00Z");
   const now = spyOn(Date, "now").mockImplementation(() => clock);
   const timers: { callback: () => void; delay: number }[] = [];
+  let pipelineReads = 0;
   const dependencies: StructuredStartupDependencies = {
     registry, client: runtimeJournalClient(journal), orchestratorSeats: () => [],
     refreshTranscriptState: async () => {}, resolveCodexOwner: () => null,
     resolveClaudeOwner: () => null, adoptClaude: async () => [],
-    pipelineEvidence: () => ({ settled: new Set(), deferred: new Set([conversation.id]) }),
+    pipelineEvidence: () => { pipelineReads++; return { settled: new Set(), deferred: new Set([conversation.id]) }; },
     schedule: (callback, delay) => { timers.push({ callback, delay }); return {}; },
   };
   try {
     await adoptStructuredHostsAtStartup(dependencies);
     expect(structuredStartupDeferral()?.hostKeys).toEqual([`codex:${fenced}`]);
+    const originalDeferralTimer = timers.at(-1)!;
     const rowTimer = timers.shift()!;
     clock += rowTimer.delay; rowTimer.callback();
     const deadline = performance.now() + 3000;
@@ -223,6 +225,100 @@ test("a row retry preserves another pipeline row's existing startup deferral", a
     await adoptStructuredHostsAtStartup(dependencies);
     expect(structuredStartupDeferral()?.hostKeys).toEqual([`codex:${fenced}`]);
     expect(registry.readOnlySnapshot().entries[`codex:${fenced}`]!.claimEpoch).toBe(3);
+    expect(timers).toContain(originalDeferralTimer);
+    const readsBeforeProbe = pipelineReads;
+    const timerIndex = timers.indexOf(originalDeferralTimer);
+    timers.splice(timerIndex, 1);
+    originalDeferralTimer.callback();
+    const probeDeadline = performance.now() + 3_000;
+    while ((pipelineReads === readsBeforeProbe || structuredStartupDeferral()?.nextProbeMs === originalDeferralTimer.delay)
+      && performance.now() < probeDeadline) await Bun.sleep(1);
+    expect(pipelineReads).toBeGreaterThan(readsBeforeProbe);
+  } finally {
+    now.mockRestore(); await bindStructuredDeliveryQueue([], { registry, client: null }); journal.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("a row retry preserves another row's unreadable restart-cut fence and recheck", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-startup-row-restart-cut-fence-"));
+  const registry = new AgentRegistry(path.join(directory, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
+  const retrying = "25300000-0000-0000-0000-000000000080";
+  const held = "25300000-0000-0000-0000-000000000081";
+  const retryingKey = `codex:${retrying}`;
+  const heldKey = `codex:${held}`;
+  passedOverRow(registry, directory, retrying, "unhosted", "handoff");
+  passedOverRow(registry, directory, held, "unhosted", "handoff");
+  const heldEntry = registry.readOnlySnapshot().entries[heldKey]!;
+  registry.upsert({ ...heldEntry, status: "live", claimOwner: null,
+    structuredHost: { ...heldEntry.structuredHost!, process: null } });
+  let clock = Date.parse("2026-10-16T12:00:00Z");
+  const now = spyOn(Date, "now").mockImplementation(() => clock);
+  const scheduled: { callback: () => void; delay: number }[] = [];
+  let ledgerReads = 0;
+  let ledgerUnreadable = true;
+  const ledger = createFakeDeliveryLedger();
+  const host = Object.assign(new FakeEngineHost(ledger), {
+    setWriterFence: () => {}, onEvent: () => () => {}, onStateChange: () => () => {},
+  });
+  const dependencies: StructuredStartupDependencies = {
+    registry, client: runtimeJournalClient(journal), orchestratorSeats: () => [],
+    resolveCodexOwner: () => null, resolveClaudeOwner: () => null, adoptClaude: async () => [],
+    refreshTranscriptState: async () => {},
+    readHostTurnRecord: () => {
+      ledgerReads++;
+      return ledgerUnreadable ? { state: "unreadable", reason: "fixture ledger is unreadable" } : { state: "absent" };
+    },
+    pipelineEvidence: () => ({ settled: new Set(), deferred: new Set() }),
+    adoptCodexHost: async () => host as never,
+    schedule: (callback, delay) => { scheduled.push({ callback, delay }); return {}; },
+  };
+  try {
+    await adoptStructuredHostsAtStartup(dependencies);
+    expect(structuredStartupDeferral()?.hostKeys).toContain(heldKey);
+    expect(restartCutEvidenceHolds(heldKey)).toBe(true);
+    expect(restartCutEvidenceUnresolved(heldKey)).toBe(true);
+    const originalDeferralTimer = scheduled.at(-1)!;
+    const retry = scheduled.findIndex(task => task.delay === 1_000);
+    expect(retry).toBeGreaterThanOrEqual(0);
+    const [rowRetry] = scheduled.splice(retry, 1);
+
+    const row = registry.readOnlySnapshot().entries[retryingKey]!;
+    registry.upsert({ ...row, status: "live", claimOwner: null,
+      structuredHost: { ...row.structuredHost!, process: null } });
+    clock += rowRetry!.delay;
+    rowRetry!.callback();
+    const retryDeadline = performance.now() + 3_000;
+    while (!structuredStartupDeferral()?.hostKeys.includes(retryingKey)
+      && performance.now() < retryDeadline) await Bun.sleep(1);
+
+    expect(structuredStartupDeferral()?.hostKeys).toContain(heldKey);
+    expect(structuredStartupDeferral()?.hostKeys).toContain(retryingKey);
+    expect(restartCutEvidenceHolds(heldKey)).toBe(true);
+    expect(restartCutEvidenceUnresolved(heldKey)).toBe(true);
+    expect(scheduled).toContain(originalDeferralTimer);
+    const readsBeforeProbe = ledgerReads;
+    const timerIndex = scheduled.indexOf(originalDeferralTimer);
+    scheduled.splice(timerIndex, 1);
+    originalDeferralTimer.callback();
+    const probeDeadline = performance.now() + 3_000;
+    while ((ledgerReads === readsBeforeProbe || structuredStartupDeferral()?.nextProbeMs === 1_000)
+      && performance.now() < probeDeadline) await Bun.sleep(1);
+    expect(ledgerReads).toBeGreaterThan(readsBeforeProbe);
+    expect(restartCutEvidenceUnresolved(heldKey)).toBe(true);
+
+    for (const key of [retryingKey, heldKey]) {
+      const entry = registry.readOnlySnapshot().entries[key]!;
+      registry.upsert({ ...entry, status: "dead", claimOwner: null,
+        structuredHost: { ...entry.structuredHost!, process: null } });
+    }
+    ledgerUnreadable = false;
+    const latestProbe = scheduled.at(-1)!;
+    latestProbe.callback();
+    const cleanupDeadline = performance.now() + 3_000;
+    while (structuredStartupDeferral() !== null && performance.now() < cleanupDeadline) await Bun.sleep(1);
+    expect(structuredStartupDeferral()).toBeNull();
   } finally {
     now.mockRestore(); await bindStructuredDeliveryQueue([], { registry, client: null }); journal.close();
     fs.rmSync(directory, { recursive: true, force: true });

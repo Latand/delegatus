@@ -110,6 +110,7 @@ const startupPasses = processStartup.__llvStructuredStartupPasses ??= new WeakMa
     changed. */
 interface DeferredStructuredStartup {
   hostKeys: readonly string[];
+  pipelineHostKeys: readonly string[];
   conversationIds: ReadonlySet<string>;
   fencedReceipts: number;
   /** Rows held for their restart cut evidence, by the stamp last seen. */
@@ -120,6 +121,8 @@ interface DeferredStructuredStartup {
   capAdmitted: boolean;
   message: string;
   delayMs: number;
+  /** A row retry may add evidence while this re-probe is already scheduled. */
+  probeScheduled?: boolean;
 }
 const DEFERRED_STARTUP_REPROBE_INITIAL_MS = 1_000;
 const DEFERRED_STARTUP_REPROBE_MAX_MS = 30_000;
@@ -2704,7 +2707,7 @@ async function adoptStructuredHostsPass(
     if (rowRetry) {
       if (deferredHostKeys.size > 0 || fencedReceipts.length > 0 || held.size > 0 || retryHostKeys.size > 0) {
         rememberDeferredStructuredStartup(
-          dependencies, registry, [...deferredHostKeys], pipelineEvidence.deferred, fencedReceipts.length, held, admitHeldPendingWork, retryHostKeys,
+          dependencies, registry, [...deferredHostKeys], pipelineEvidence.deferred, fencedReceipts.length, held, admitHeldPendingWork, retryHostKeys, true,
         );
       }
       return adoptedHosts;
@@ -2754,18 +2757,29 @@ function rememberDeferredStructuredStartup(
   held: Map<string, RestartCutStamp>,
   capAdmitted: boolean,
   retryHostKeys: ReadonlySet<string>,
+  preserveExisting = false,
 ): void {
-  const hostKeys = [...new Set([...pipelineHostKeys, ...held.keys(), ...retryHostKeys])];
-  const pipelineMessage = pipelineHostKeys.length > 0 || fencedReceipts > 0
-    ? `pipeline startup evidence is unresolved; deferred ${pipelineHostKeys.length} host(s)`
-      + (fencedReceipts > 0 ? ` and ${fencedReceipts} pending launch receipt(s)` : "")
-    : null;
-  const heldMessage = held.size > 0
-    ? `restart cut evidence is unresolved; holding ${held.size} host(s): ${[...held.keys()].join(", ")}`
-    : null;
-  const retryMessage = retryHostKeys.size > 0 ? `waiting for ${retryHostKeys.size} host attachment(s) or interrupted delivery outcome(s)` : null;
-  const message = [pipelineMessage, heldMessage, retryMessage].filter((part) => part !== null).join("; ");
   const previous = deferredStartup;
+  const mergePrevious = preserveExisting && previous !== null;
+  const mergedHeld = mergePrevious ? new Map([...previous.held, ...held]) : held;
+  const mergedConversationIds = mergePrevious
+    ? new Set([...previous.conversationIds, ...conversationIds]) : new Set(conversationIds);
+  const mergedRetryHostKeys = mergePrevious
+    ? new Set([...previous.retryHostKeys, ...retryHostKeys]) : new Set(retryHostKeys);
+  const mergedPipelineHostKeys = mergePrevious
+    ? [...new Set([...previous.pipelineHostKeys, ...pipelineHostKeys])]
+    : [...pipelineHostKeys];
+  const mergedFencedReceipts = mergePrevious ? Math.max(previous.fencedReceipts, fencedReceipts) : fencedReceipts;
+  const hostKeys = [...new Set([...mergedPipelineHostKeys, ...mergedHeld.keys(), ...mergedRetryHostKeys])];
+  const pipelineMessage = mergedPipelineHostKeys.length > 0 || mergedFencedReceipts > 0
+    ? `pipeline startup evidence is unresolved; deferred ${mergedPipelineHostKeys.length} host(s)`
+      + (mergedFencedReceipts > 0 ? ` and ${mergedFencedReceipts} pending launch receipt(s)` : "")
+    : null;
+  const heldMessage = mergedHeld.size > 0
+    ? `restart cut evidence is unresolved; holding ${mergedHeld.size} host(s): ${[...mergedHeld.keys()].join(", ")}`
+    : null;
+  const retryMessage = mergedRetryHostKeys.size > 0 ? `waiting for ${mergedRetryHostKeys.size} host attachment(s) or interrupted delivery outcome(s)` : null;
+  const message = [pipelineMessage, heldMessage, retryMessage].filter((part) => part !== null).join("; ");
   /* Unchanged evidence keeps growing the backoff; evidence that moved (a row
      admitted, another fenced, a held stamp that changed) starts the cadence
      over for what is left. */
@@ -2780,17 +2794,28 @@ function rememberDeferredStructuredStartup(
   const delayMs = sameEvidence
     ? Math.min(previous.delayMs * 2, DEFERRED_STARTUP_REPROBE_MAX_MS)
     : DEFERRED_STARTUP_REPROBE_INITIAL_MS;
-  const state: DeferredStructuredStartup = {
-    hostKeys, conversationIds: new Set(conversationIds), fencedReceipts, held, retryHostKeys,
-    capAdmitted: capAdmitted || (sameEvidence && previous.capAdmitted), message, delayMs,
+  const state: DeferredStructuredStartup = mergePrevious ? previous : {
+    hostKeys, pipelineHostKeys: mergedPipelineHostKeys, conversationIds: mergedConversationIds, fencedReceipts: mergedFencedReceipts,
+    held: mergedHeld, retryHostKeys: mergedRetryHostKeys,
+    capAdmitted: capAdmitted || (sameEvidence && previous?.capAdmitted === true), message, delayMs,
   };
+  if (mergePrevious) {
+    state.hostKeys = hostKeys;
+    state.pipelineHostKeys = mergedPipelineHostKeys;
+    state.conversationIds = mergedConversationIds;
+    state.fencedReceipts = mergedFencedReceipts;
+    state.held = mergedHeld;
+    state.retryHostKeys = mergedRetryHostKeys;
+    state.capAdmitted = capAdmitted || previous.capAdmitted;
+    state.message = message;
+  }
   deferredStartup = state;
   /* Past the cap, pending work takes a row that still cannot be decided, on
      demand as well as in a pass. Automatic stage recovery still waits for
      the evidence to be resolved. */
-  setRestartCutHeldRows(held.keys(), { admitPendingWork: state.capAdmitted });
-  if (!sameEvidence) console.error(`[structured hosts] ${message}; re-probing the evidence`, { hosts: hostKeys, nextProbeMs: delayMs });
-  scheduleDeferredStartupReprobe(dependencies, registry, state);
+  if (!mergePrevious) setRestartCutHeldRows(mergedHeld.keys(), { admitPendingWork: state.capAdmitted });
+  if (!sameEvidence) console.error(`[structured hosts] ${message}; re-probing the evidence`, { hosts: hostKeys, nextProbeMs: state.delayMs });
+  if (!mergePrevious || !state.probeScheduled) scheduleDeferredStartupReprobe(dependencies, registry, state);
 }
 
 function scheduleDeferredStartupReprobe(
@@ -2798,10 +2823,13 @@ function scheduleDeferredStartupReprobe(
   registry: AgentRegistry,
   state: DeferredStructuredStartup,
 ): void {
+  if (state.probeScheduled) return;
+  state.probeScheduled = true;
   const schedule = dependencies.schedule ?? ((callback, delayMs) => setTimeout(callback, delayMs));
   schedule(() => {
     /* A later pass replaced this deferral; its own timer carries it. */
     if (deferredStartup !== state) return;
+    state.probeScheduled = false;
     try { dependencies.assertActive?.(); } catch { return; }
     void reprobeDeferredStructuredStartup(dependencies, registry, state);
   }, state.delayMs).unref?.();
