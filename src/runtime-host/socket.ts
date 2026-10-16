@@ -1,6 +1,7 @@
 import { performanceSpans } from "@/lib/performanceSpans";
 import fs from "node:fs";
 import net from "node:net";
+import { StringDecoder } from "node:string_decoder";
 import path from "node:path";
 
 import type { RuntimeSocketRequest, RuntimeSocketResponse } from "@/lib/runtime/contracts";
@@ -51,6 +52,8 @@ export function serveRuntimeHost(socketPath: string, host: RuntimeHostSocketHand
     try { fs.unlinkSync(socketPath); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
   }
   let activeWaitConnections = 0;
+  let closing = false;
+  const connections = new Map<net.Socket, () => boolean>();
   const server = net.createServer((socket) => {
     /* #1254: a peer that goes away mid-frame is a connection event, and the
        write that discovers it must end this connection and nothing else. Bun
@@ -59,69 +62,90 @@ export function serveRuntimeHost(socketPath: string, host: RuntimeHostSocketHand
        uncaught exception that kills the process owning the stable listener.
        This listener is attached before anything can be written. */
     socket.on("error", () => socket.destroy());
-    const abort = new AbortController();
-    socket.once("close", () => abort.abort());
+    let abort: AbortController | undefined;
+    socket.once("close", () => abort?.abort());
     socket.setTimeout(defaultTimeoutMs, () => socket.destroy());
+    const decoder = new StringDecoder("utf8");
     let buffer = "";
+    let frameBytes = 0;
     let handled = false;
-    let settled = false;
-    /* One-shot terminal settlement: the connection owns exactly one response
-       frame, and a host completing after the caller disconnected (client
-       timeout destroyed its socket, or the server idle timeout fired) must be
-       discarded silently instead of writing to the finished stream — the
-       production ERR_STREAM_ALREADY_FINISHED path. */
-    const settle = (response: RuntimeSocketResponse) => {
-      if (settled) return;
-      settled = true;
-      if (socket.destroyed || socket.writableEnded || !socket.writable) return;
-      // A preserialized result (the snapshot) splices into the frame verbatim,
-      // so its megabytes are not re-stringified once per connection.
-      const frame = performanceSpans.correlate(response.id, () => performanceSpans.sync("runtime.stringify", () => response.ok && response.result instanceof PreserializedJson
-        ? `{"id":${JSON.stringify(response.id)},"ok":true,"result":${response.result.json}}`
-        : JSON.stringify(response)));
-      performanceSpans.event("rpc.send", response.id, Buffer.byteLength(frame));
-      socket.end(frame + "\n");
-    };
-    socket.on("data", (chunk) => {
-      if (handled) return;
-      buffer += String(chunk);
-      if (Buffer.byteLength(buffer) > MAX_FRAME_BYTES) return socket.destroy();
-      // The client opens one connection per request, so one frame owns the
-      // socket and any bytes after its delimiter are intentionally ignored.
+    connections.set(socket, () => handled);
+    socket.once("close", () => connections.delete(socket));
+    const next = () => {
+      if (handled || socket.destroyed) return;
       const newline = buffer.indexOf("\n");
       if (newline < 0) return;
       handled = true;
       const frame = buffer.slice(0, newline);
+      buffer = buffer.slice(newline + 1);
+      frameBytes = Buffer.byteLength(buffer);
+      let settled = false;
+      let keepAlive = false;
+      abort = new AbortController();
+      const settle = (response: RuntimeSocketResponse) => {
+        if (settled) return;
+        settled = true;
+        if (socket.destroyed || socket.writableEnded || !socket.writable) return;
+        keepAlive &&= !closing;
+        const answer = keepAlive ? { ...response, keepAlive: true } : response;
+        const encoded = performanceSpans.correlate(response.id, () => performanceSpans.sync("runtime.stringify", () => response.ok && response.result instanceof PreserializedJson
+          ? `{"id":${JSON.stringify(response.id)},"ok":true,${keepAlive ? '"keepAlive":true,' : ""}"result":${response.result.json}}`
+          : JSON.stringify(answer)));
+        performanceSpans.event("rpc.send", response.id, Buffer.byteLength(encoded));
+        if (!keepAlive) { socket.end(encoded + "\n"); return; }
+        // Only one response may occupy this connection's write buffer. A peer
+        // may send its next serial request before the write callback runs.
+        socket.write(encoded + "\n", () => {
+          if (socket.destroyed) return;
+          if (closing) { socket.end(); return; }
+          abort = undefined;
+          handled = false;
+          socket.setTimeout(defaultTimeoutMs);
+          next();
+        });
+      };
       try {
         const request = JSON.parse(frame) as RuntimeSocketRequest;
         if (!request.id || !request.method) throw new Error("runtime request is malformed");
+        keepAlive = request.keepAlive === true;
         performanceSpans.request(request.id, request.method);
         performanceSpans.event("rpc.receive", request.id);
         if (request.method === "viewer-deployment-request") socket.setTimeout(deploymentTimeoutMs);
         const failure = (): RuntimeSocketResponse => ({ id: request.id, ok: false, error: "runtime request failed" });
+        const run = () => performanceSpans.correlate(request.id, () => performanceSpans.wait("runtime.handler", () => host.handle(request, { signal: abort!.signal })));
         if (request.method === "wait") {
           if (activeWaitConnections >= maxWaitConnections) {
             settle({ id: request.id, ok: false, error: "runtime wait capacity exceeded" });
             return;
           }
-          activeWaitConnections += 1;
-          void performanceSpans.correlate(request.id, () => performanceSpans.wait("runtime.handler", () => host.handle(request, { signal: abort.signal })))
-            .then(settle, () => settle(failure()))
-            .finally(() => { activeWaitConnections -= 1; });
-          return;
+          activeWaitConnections++;
+          void run().then(settle, () => settle(failure())).finally(() => { activeWaitConnections--; }).catch(() => socket.destroy());
+        } else {
+          void run().then(settle, () => settle(failure())).catch(() => socket.destroy());
         }
-        /* Every request carries the connection signal, so a disconnected
-           caller stops read-only work early; mutating journal operations
-           ignore the signal and still complete idempotently. */
-        void performanceSpans.correlate(request.id, () => performanceSpans.wait("runtime.handler", () => host.handle(request, { signal: abort.signal }))).then(settle, () => settle(failure()));
       } catch {
+        keepAlive = false;
         settle({ id: "unknown", ok: false, error: "runtime request is malformed" });
       }
+    };
+    socket.on("data", (chunk: Buffer) => {
+      frameBytes += chunk.length;
+      if (frameBytes > MAX_FRAME_BYTES) { socket.destroy(); return; }
+      buffer += decoder.write(chunk);
+      next();
     });
   });
   // Browser long polls receive their own ceiling below the server-wide cap.
   // The remaining slots keep snapshot, control, and deployment traffic
   // admissible while total file descriptors and journal waiters stay bounded.
+  // Like an HTTP keep-alive listener, closing stops idle leases immediately
+  // while allowing the one response already in flight to finish.
+  const close = server.close.bind(server);
+  server.close = ((callback?: (error?: Error) => void) => {
+    closing = true;
+    for (const [socket, busy] of connections) if (!busy()) socket.destroy();
+    return close(callback);
+  }) as typeof server.close;
   server.maxConnections = maxConnections;
   if (!namedPipe) server.once("listening", () => fs.chmodSync(socketPath, 0o600));
   server.listen(socketPath);

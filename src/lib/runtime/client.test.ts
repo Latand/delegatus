@@ -225,20 +225,18 @@ test("request latency health reports the nearest-rank p95 of the recent window",
   });
   const client = new UnixRuntimeHostClient(socketPath, 5_000, 5_000, 5_000);
   const durations = Array.from({ length: 20 }, (_, index) => index + 1);
-  let reading = 0;
-  const clock = spyOn(performance, "now").mockImplementation(() => {
-    const requestIndex = Math.floor(reading / 2);
-    const elapsed = reading % 2 === 0 ? 0 : durations[requestIndex] ?? durations.at(-1)!;
-    reading += 1;
-    return requestIndex * 100 + elapsed;
-  });
+  let now = 0;
+  let index = 0;
+  const clock = spyOn(performance, "now").mockImplementation(() => now);
+  const receive = servers.at(-1)!;
+  receive.on("connection", socket => socket.prependListener("data", () => { now += durations[index++]!; }));
   try {
     for (let index = 0; index < durations.length; index += 1) await client.events(0);
   } finally {
     clock.mockRestore();
   }
 
-  expect(reading).toBe(40);
+  expect(index).toBe(20);
   expect(runtimeHostRequestHealth()).toEqual({
     samples: 20,
     p95Ms: 19,

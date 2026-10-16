@@ -1076,12 +1076,16 @@ export interface RuntimeReplay {
 }
 
 export interface RuntimeSocketRequest {
+  /** Opt in to serial reuse; older listeners close after the answer. */
+  keepAlive?: boolean;
   id: string;
   method: "runtime-host-health" | "files-revision" | "session-read" | "snapshot" | "events" | "wait" | "append" | "append-session-fenced" | "operation" | "command" | "guarded-command" | "operation-status" | "operation-delivery-action" | "operation-retry" | "effect-batch" | "operation-transition" | "operation-projection-ack" | "producer-cursor" | "viewer-deployment-request" | "viewer-deployment-read" | "viewer-deployment-list" | "viewer-deployment-find" | "viewer-deployment-cancel" | "mcp-health-probe-admission" | "native-queue-read" | "native-queue-transition" | "native-queue-settle-compacted";
   params?: Record<string, unknown>;
 }
 
 export interface RuntimeSocketResponse {
+  /** The listener accepted serial reuse for this connection. */
+  keepAlive?: boolean;
   id: string;
   ok: boolean;
   result?: unknown;
