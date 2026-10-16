@@ -134,3 +134,12 @@ fail on the captured base under the same isolation. Tests that install hooks
 need a private hooks directory with a placeholder file in the isolated Git template; supplying
 that fixture prerequisite clears the hook-setup errors on both revisions.
 No runtime custody or repository-admission change is included here.
+
+Recovery verification repeated all six focused files against the committed
+runtime: 135 tests passed, with no failures. The complete
+`engine.providerBudget.test.ts` also passed all 74 tests in 233 seconds.
+Earlier publication-hook runs, which execute up to three files concurrently,
+had exceeded that file's five-minute budget. The standalone rerun used the same
+runtime source and an isolated state through the supplied gate-slot wrapper.
+The Linux backend verifier and all seventeen platform-gate files also passed:
+194 tests passed, ten were skipped, and none failed.
