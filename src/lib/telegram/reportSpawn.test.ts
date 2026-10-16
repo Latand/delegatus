@@ -1,4 +1,4 @@
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -52,21 +52,24 @@ afterAll(() => {
 });
 
 test("the timer's deferred launch does not go through Next's request-scoped after()", async () => {
-  /* The defect this covers: `executeSpawnRequest` hands its structured launch
-     to `defer`, and the production `defer` is `after()`. A scheduled run has no
-     request scope, so that call throws and every timer-fired structured launch
-     settles launch_failed. */
+  /* A scheduled run explicitly uses the shared background hook. Next's after()
+     still requires a request scope. */
   expect(() => after(async () => undefined)).toThrow();
 
   let ran = false;
   startDeferredSpawnWork(async () => { ran = true; });
-  await Promise.resolve();
+  expect(ran).toBe(false);
+  await new Promise<void>(resolve => setImmediate(resolve));
   expect(ran).toBe(true);
 
-  /* A launch whose deferred work rejects must not take the timer tick with it:
-     the failure is already durable on the receipt. */
-  expect(() => startDeferredSpawnWork(async () => { throw new Error("launch failed"); })).not.toThrow();
-  await Promise.resolve();
+  const log = spyOn(console, "error").mockImplementation(() => {});
+  try {
+    const error = new Error("launch failed");
+    expect(() => startDeferredSpawnWork(async () => { throw error; })).not.toThrow();
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(log).toHaveBeenCalledTimes(1);
+    expect(log).toHaveBeenCalledWith("[spawn] deferred work failed");
+  } finally { log.mockRestore(); }
 });
 
 test("the report grant is resolved by admission, from the class, at call time", () => {
