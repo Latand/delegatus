@@ -27,6 +27,7 @@ import { RISE_FRAME_SHARE, RISE_MS } from "@/lib/voiceCompanion/motion";
 import { CONTROL_SELECTOR, LANE_HEIGHTS, NARROW_LANE_WIDTHS } from "@/lib/voiceCompanion/placement";
 import { DEMO_IDS, demoAnswer, demoInstruction, SCENARIOS, scenarioText } from "@/lib/voiceCompanion/scenarios";
 import { DELEGATION_LINGER_MS, REPORT_CAP } from "@/components/voiceCompanion/VoiceCompanion";
+import { roleAvatarDarkCss } from "@/components/brand/roleAvatarDarkCss";
 import { browserCase, caseChromium as chromium, captureWorkerLimitFrames, capturePrototypeQuestions, capturePrototypeSkipRows, captureSeatMandateHandover, openFixture, serveEvidenceFixture, waitForSectionOpen } from "./issue1695BrowserHarness";
 import { kanbanLayoutMode } from "./KanbanBoard";
 import { ORCHESTRATOR_BURST_LIMIT, ORCHESTRATOR_WIRE_FADE_MS, ORCHESTRATOR_WIRE_HOLD_MS } from "./orchestratorArrows";
@@ -36,7 +37,7 @@ import { maintenanceCardText } from "@/lib/boardMaintenance/text";
 import type { MaintenanceRun } from "@/lib/boardMaintenance/types";
 import { seatTickSettingsCardText } from "@/lib/monitor/cards";
 import { autoRotationCardNotice, type AutoRotationAttempt } from "@/lib/monitor/seatAutoRotation";
-import { measureStageChain, stageChainFailures, type StageChainLane as Lane } from "@/components/pipelines/stageChainMeasure";
+import { measureStageChain, stageChainFailures, wideStageChainFailures, type StageChainLane as Lane } from "@/components/pipelines/stageChainMeasure";
 import { sampleAnswer, sampleMemory } from "@/lib/memory/profile.fixture";
 import { createProfileService } from "@/lib/memory/profileService";
 import type { MemoryProfileView, ProfileRow } from "@/lib/memory/profileTypes";
@@ -17553,7 +17554,8 @@ describe("narrow card: the pipeline stages read as one vertical chain", () => {
           if (wide.width < 380) fail(`t-chain-wide: the lane is ${wide.width} px wide, expected a wide one`);
           if (wide.direction !== "row") fail(`t-chain-wide: the chain is ${wide.direction}, expected row`);
           for (const step of wide.steps.slice(1, 2)) if (step.arrow !== "inline" && step.arrow !== "block" && step.arrow !== "flex") fail(`t-chain-wide/${step.stage}: the arrow is ${step.arrow}`);
-          for (const step of wide.steps) {
+          /* The wide lane's branch hangs under its stage on an elbow of its own (the describe below); its main stages draw no rail and no elbow. */
+          for (const step of wide.steps.filter((entry) => entry.kind !== "branch")) {
             if (step.before.content !== "none" && step.before.content !== "normal") fail(`t-chain-wide/${step.stage}: draws a rail`);
             if (step.after.content !== "none" && step.after.content !== "normal") fail(`t-chain-wide/${step.stage}: draws an elbow`);
           }
@@ -17566,6 +17568,83 @@ describe("narrow card: the pipeline stages read as one vertical chain", () => {
     fs.writeFileSync(`evidence/stage-chain-vertical/${STAMP}.json`, `${JSON.stringify({ readings, failures }, null, 2)}\n`);
     expect(failures).toEqual([]);
   }, 180_000);
+});
+
+describe("wide card: each fail branch hangs under the stage it fails from", () => {
+  /*
+   * A lane of 380 px or more keeps its pass row on one line and draws a fail
+   * branch under the stage it fails from, on the narrow form's dashed elbow,
+   * not at the end of the chain. Read over `?scenario=stage-chain` at seven
+   * desktop widths, in both colour schemes and both languages, from geometry
+   * and computed style. STAGE_CHAIN_STAMP=before records the same frames on a
+   * checkout without the change and asserts nothing about the layout.
+   * Frames go to STAGE_CHAIN_PNG_DIR, outside the tree.
+   */
+  const STAMP = process.env.STAGE_CHAIN_STAMP === "before" ? "before" : "after";
+  const PNG_DIR = process.env.STAGE_CHAIN_PNG_DIR ?? path.join(process.env.HOME ?? ".", "Pictures/delegatus-review/stage-chain-branch");
+  const GATES: Record<string, Record<string, string>> = {
+    "t-chain-wide": { "review-fix": "review" },
+    "t-chain-gates": { fix: "review", "ui-fix": "visual" },
+    "t-chain-gates-long": { "critique-fix": "critique", "review-fix": "review" },
+    "t-chain-shared": { fix: "visual" },
+    "t-chain-failed": { "critique-fix": "critique" },
+    "t-chain-wide-long": { "review-fix-after-the-attachment-check": "review" },
+  };
+  const seatFolded = `try { localStorage.setItem("llv:kanban-seat:v2", JSON.stringify({ height: null, collapsed: { atlas: true }, placement: "top", width: null })); } catch {}`;
+  const byState = (lane: Lane, stage: string) => lane.steps.find((step) => step.stage === stage)!.state;
+
+  browserTest("a fix stands under its gate in every wide lane; the pass row stays one line; the live stage keeps its colour", async () => {
+    const out = path.resolve(".artifacts/stage-chain-branch");
+    fs.mkdirSync(out, { recursive: true });
+    fs.mkdirSync(PNG_DIR, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const failures: string[] = [];
+    const readings: Record<string, Record<string, Lane>> = {};
+    try {
+      for (const width of [1000, 1024, 1180, 1280, 1366, 1440, 1920]) for (const scheme of ["light", "dark"] as const) for (const lang of ["en", "uk"] as const) {
+        const key = `${width}-${scheme}-${lang}`;
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=stage-chain`, { width, height: 1100 }, scheme, lang);
+        try {
+          await context.addInitScript(seatFolded);
+          await page.reload();
+          await page.waitForSelector(`${card("t-chain-wide")} .pblock[data-density="task"]`, { timeout: 30_000 });
+          await page.waitForTimeout(600);
+          const lanes: Record<string, Lane> = {};
+          for (const task of Object.keys(GATES)) {
+            await page.locator(card(task)).scrollIntoViewIfNeeded();
+            await page.waitForTimeout(150);
+            lanes[task] = await page.evaluate(measureStageChain(`[data-kanban-board] .card[data-id="task:${task}"] .pblock[data-density="task"]`)) as Lane;
+            if (!lanes[task]) throw new Error(`${key} ${task}: no lane row drawn`);
+            await page.locator(card(task)).screenshot({ path: path.join(PNG_DIR, `${STAMP}-${key}-${task}.png`) });
+          }
+          readings[key] = lanes;
+          if (STAMP === "before") { expect(pageErrors).toEqual([]); continue; }
+
+          for (const [task, gates] of Object.entries(GATES)) failures.push(...wideStageChainFailures(`${key} ${task}`, lanes[task]!, gates));
+          const fail = (text: string) => failures.push(`${key}: ${text}`);
+          /* A shared fix is drawn once, and the gate that fired it carries the live return mark. */
+          const shared = lanes["t-chain-shared"]!;
+          if (shared.steps.filter((step) => step.stage === "fix").length !== 1) fail("t-chain-shared: the shared fix is not drawn exactly once");
+          const arcLive = await page.locator(`${card("t-chain-shared")} .pb-pill[data-stage="visual"] .pret[data-arc-live="1"]`).count();
+          if (arcLive !== 1) fail(`t-chain-shared: Visual carries ${arcLive} live return marks, expected 1`);
+          /* The live stage stands out: a running pill's border differs from a passed one's, branch or not. */
+          const live = lanes["t-chain-gates"]!;
+          const border = (stage: string) => live.steps.find((step) => step.stage === stage)!.borderColor;
+          if (byState(live, "visual") !== "st-running") fail("t-chain-gates: Visual is not running");
+          if (border("visual") === border("build")) fail("t-chain-gates: the running pill looks like a passed one");
+          const running = shared.steps.find((step) => step.stage === "fix")!;
+          if (running.state !== "st-running" || running.borderColor === shared.steps.find((step) => step.stage === "build")!.borderColor) fail("t-chain-shared: the running fix does not stand out");
+          /* The fix that failed keeps the lane's answer panel. */
+          if (await page.locator(`${card("t-chain-failed")} .pb-answer, ${card("t-chain-failed")} [data-answer-action]`).count() === 0) fail("t-chain-failed: the answer panel is gone");
+          expect(pageErrors).toEqual([]);
+        } finally { await context.close(); }
+      }
+    } finally { await browser.close(); server.stop(); }
+    fs.mkdirSync("evidence/stage-chain-branch", { recursive: true });
+    fs.writeFileSync(`evidence/stage-chain-branch/${STAMP}.json`, `${JSON.stringify({ readings, failures }, null, 2)}\n`);
+    expect(failures).toEqual([]);
+  }, 600_000);
 });
 
 describe("fast TTS header", () => {
@@ -30880,6 +30959,9 @@ describe("role avatars: Delegatus in each role's costume on answers, internal ca
         const line = bar?.querySelector("[data-mobile2-chat-state]")?.parentElement ?? null;
         return bar ? { marks: bar.querySelectorAll(".role-mark").length, avatars: bar.querySelectorAll("[data-role-avatar]").length, line: line?.textContent ?? null, lineOver: line ? line.scrollWidth - line.clientWidth : null } : null;
       })(),
+      /* The dark theme swaps every avatar for the keyline-free drawing by CSS (roleAvatarDarkCss.ts); the light theme leaves the picture alone. */
+      swapped: [...document.querySelectorAll("img[data-role-avatar]")].filter((image) => getComputedStyle(image).content.startsWith("url(")).length,
+      avatars: document.querySelectorAll("img[data-role-avatar]").length,
       sideways: document.documentElement.scrollWidth - innerWidth,
       broken: [...document.images].filter((image) => image.hasAttribute("data-role-avatar") && !(image.complete && image.naturalWidth > 0)).length,
     };
@@ -30906,6 +30988,8 @@ describe("role avatars: Delegatus in each role's costume on answers, internal ca
             await page.addStyleTag({ content: "[data-attention-toast] { display: none !important; }" });
             /* The frame variant production draws by default (the layout's boot script, which the fixture does not run). */
             await page.evaluate((frame) => document.documentElement.setAttribute("data-role-frame", frame), DEFAULT_ROLE_FRAME);
+            /* And the stylesheet the layout emits for the dark theme's avatars. */
+            await page.addStyleTag({ content: roleAvatarDarkCss() });
             const scope = shape.phone ? "[data-testid='mobile-focused-pane']" : view === "seat" ? "[data-kanban-seat]" : "[data-agent-window] .reader-slot:not([data-incoming])";
             await page.waitForSelector(`${scope} [data-tts-message] [data-tts-body]`, { timeout: 30_000 }).catch(() => undefined);
             if (view === "seat") await page.waitForFunction((scope) => document.querySelectorAll(`${scope} [data-agent-author]`).length >= 12, scope, { timeout: 20_000 }).catch(() => undefined);
@@ -30918,6 +31002,7 @@ describe("role avatars: Delegatus in each role's costume on answers, internal ca
             if (reading.sideways > 0) failures.push(`${label}: scrolls ${reading.sideways}px sideways`);
             if (reading.broken) failures.push(`${label}: ${reading.broken} avatars did not load`);
             if (!reading.answers.length) failures.push(`${label}: no answer rendered`);
+            if (reading.swapped !== (scheme === "dark" ? reading.avatars : 0)) failures.push(`${label}: ${reading.swapped} of ${reading.avatars} avatars wear the keyline-free picture, expected ${scheme === "dark" ? "all" : "none"}`);
             for (const answer of reading.answers) {
               if (answer.avatar !== `${role}:${answerSize}`) failures.push(`${label}: an answer draws ${answer.avatar}, not ${role}:${answerSize}`);
               if (answer.engine !== "Claude" || answer.engineInsideAvatar) failures.push(`${label}: an answer's engine reads ${JSON.stringify(answer.engine)} apart from the avatar: ${!answer.engineInsideAvatar}`);

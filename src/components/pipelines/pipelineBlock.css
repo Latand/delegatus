@@ -97,6 +97,8 @@
 .pblock .pb-pills { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; min-width: 0; }
 .pblock .pb-step { display: inline-flex; align-items: center; gap: 4px; min-width: 0; max-width: 100%; }
 .pblock .pb-arrow { flex: none; color: var(--color-muted); font-size: var(--text-label); }
+/* A stage and the fail branches that return to it. The narrow lane and the card lay the steps out flat; the wide lane stacks them (below). */
+.pblock .pb-unit { display: contents; }
 
 /* ── Task density: the lane row ──────────────────────────────────────────── */
 .pblock .pb-head { display: flex; align-items: center; gap: 2px; min-height: 28px; min-width: 0; }
@@ -104,7 +106,7 @@
   display: inline-flex; align-items: baseline; gap: 6px; min-width: 0; flex: 0 1 auto;
   padding: 3px 4px; margin-left: -4px; border-radius: 6px; text-align: left; color: inherit;
 }
-.pblock .pb-open:not(:disabled):hover { background: var(--surface-well); }
+.pblock .pb-open:not(:disabled):hover { background: var(--dc-hover, var(--surface-well)); }
 .pblock .pb-open:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 0; }
 .pblock .pb-open > svg { width: 12px; height: 12px; flex: none; align-self: center; color: var(--color-muted); }
 .pblock .pb-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--text-ui); font-weight: 600; color: var(--color-primary); }
@@ -114,7 +116,7 @@
   flex: none; width: 26px; height: 26px; display: inline-flex; align-items: center; justify-content: center;
   border-radius: var(--radius-control); color: var(--color-muted);
 }
-.pblock .pb-icon:hover { background: var(--surface-well); color: var(--color-primary); }
+.pblock .pb-icon:hover { background: var(--dc-hover, var(--surface-well)); color: var(--color-primary); }
 .pblock .pb-icon:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 0; }
 .pblock .pb-icon svg { width: 14px; height: 14px; }
 /* The graph is one hover away on a fine pointer; ⋯ always shows. A touch
@@ -217,13 +219,16 @@
    Under 380 px (every shelf card, the phone's 342 px lane) the stages stand
    one under another, joined by a 1 px rail, and a fail branch hangs off its
    reviewer on a dashed elbow. The wide lane keeps its row and its arrows; the
-   data-step / --pb-order the chain writes are read only here
-   (docs/design/narrow-card-stage-chain.md). */
+   data-step / --pb-order the chain writes are read here and by the wide form
+   below (docs/design/narrow-card-stage-chain.md). */
 .pblock[data-density="task"] {
   container: pb-lane / inline-size;
   --pb-chain-gap: 8px;
   --pb-rail-x: 15px;
   --pb-branch-indent: 28px;
+  /* 4 px flex gap + the next arrow's 12 px and 4 px margin + the next unit's rail, less an 8 px gap:
+     an earlier fix stops 8 px short of the next unit's elbow. */
+  --pb-branch-reach: calc(4px + 16px + var(--pb-rail-x) - 8px);
   --pb-rail: var(--border-strong);
 }
 @container pb-lane (max-width: 379.98px) {
@@ -257,6 +262,72 @@
   @media (pointer: coarse) {
     .pblock[data-density="task"] .pb-chain .pb-pill { min-height: 30px; }
   }
+}
+
+/* ── Task density: a wide lane draws a fail branch under its stage ──────────
+   From 380 px each stage and the branches that return to it form one unit:
+   the arrow and the stage on the first row, its branches indented under the
+   stage on a dashed elbow, the narrow elbow's values. The pass row stays one
+   line; a unit wraps whole, so a stage never leaves its fix behind. The word
+   "branch" is left to the elbow. */
+@container pb-lane (min-width: 380px) {
+  .pblock .pb-chain > .pb-pills { align-items: flex-start; }
+  .pblock .pb-chain > .pb-pills[data-branches] { row-gap: var(--pb-chain-gap); }
+  .pblock .pb-chain .pb-unit {
+    display: inline-grid; grid-template-columns: auto minmax(0, auto); row-gap: var(--pb-chain-gap);
+    align-items: center; justify-items: start; min-width: 0; max-width: 100%;
+  }
+  .pblock .pb-chain .pb-unit > .pb-step:not([data-step="branch"]) { display: contents; }
+  .pblock .pb-chain .pb-unit > .pb-step > .pb-arrow { grid-column: var(--pb-gc, 1); grid-row: 1; margin-inline-end: 4px; }
+  .pblock .pb-chain .pb-unit > .pb-step:not([data-step="branch"]) > .pb-pill { grid-column: calc(var(--pb-gc, 1) + 1); grid-row: 1; }
+  /* The last gate with a branch and the stages after it are one unit (--pb-gc is a late stage's arrow column):
+     the unit takes the row's free room and its last column, so the branch may reach the lane's right edge. */
+  .pblock .pb-chain .pb-unit[data-tail] { grid-template-columns: var(--pb-columns); flex: 1 1 auto; }
+  .pblock .pb-chain .pb-unit > .pb-step[data-late] > .pb-arrow { margin-inline-start: 4px; }
+  .pblock .pb-chain .pb-unit > .pb-step[data-step="branch"] {
+    grid-column: 2 / -1; position: relative; box-sizing: border-box; max-width: 100%; padding-left: var(--pb-branch-indent);
+  }
+  .pblock .pb-chain .pb-unit > .pb-step[data-step="branch"]::after {
+    content: ""; position: absolute; pointer-events: none; box-sizing: border-box;
+    left: var(--pb-rail-x); top: calc(-1 * var(--pb-chain-gap));
+    width: calc(var(--pb-branch-indent) - var(--pb-rail-x)); height: calc(var(--pb-chain-gap) + 50%);
+    border-left: 1px dashed var(--pb-rail); border-bottom: 1px dashed var(--pb-rail);
+  }
+  /* A second branch of the same stage: the rail runs on past the first one's elbow. */
+  .pblock .pb-chain .pb-unit > .pb-step[data-step="branch"]:has(+ .pb-step[data-step="branch"])::before {
+    content: ""; position: absolute; pointer-events: none; box-sizing: border-box;
+    left: var(--pb-rail-x); top: 50%; height: calc(50% + var(--pb-chain-gap));
+    border-left: 1px dashed var(--pb-rail);
+  }
+  /* A branch adds nothing to its unit's width, so a long fix never moves its gate
+     or a later pass stage to a new line: the pill takes its gate's width (at
+     least 8rem) and the name wraps inside it, at spaces. A gate with a later branch
+     of its own may use the room up to that branch instead: its gate's column plus
+     the flex gap, the next arrow and the next indent, less the 8 px that keeps the
+     two branches apart (--pb-branch-reach). */
+  .pblock .pb-chain .pb-unit > .pb-step[data-step="branch"] { contain: inline-size; justify-self: stretch; }
+  .pblock .pb-chain .pb-unit > .pb-step[data-step="branch"] > .pb-pill {
+    flex: none; width: max-content; max-width: max(100%, 8rem); height: auto; min-height: 22px; padding-block: 2px;
+  }
+  /* An earlier gate's fix counts its longest word toward its unit's width (a cyclic percentage is 0 there),
+     so the unit grows by those few pixels rather than break a word or reach the next elbow; with room it
+     takes its one line, else it wraps at spaces inside the reach. */
+  .pblock .pb-chain .pb-unit:has(~ .pb-unit > .pb-step[data-step="branch"]) > .pb-step[data-step="branch"] {
+    contain: none; margin-inline-end: calc(-1 * var(--pb-branch-reach)); max-width: calc(100% + var(--pb-branch-reach));
+  }
+  .pblock .pb-chain .pb-unit:has(~ .pb-unit > .pb-step[data-step="branch"]) > .pb-step[data-step="branch"] > .pb-pill {
+    width: min(min-content, 9rem); min-width: min(max-content, 100%); max-width: none;
+  }
+  .pblock .pb-chain .pb-unit:has(~ .pb-unit > .pb-step[data-step="branch"]) > .pb-step[data-step="branch"] .pb-name { overflow-wrap: break-word; }
+  .pblock .pb-chain .pb-unit > .pb-step[data-step="branch"] .pb-name { white-space: normal; overflow-wrap: anywhere; }
+  /* The tail's pass stages keep their width: a tail wider than the row overflows rather than ellipsize a stage. */
+  .pblock .pb-chain .pb-unit[data-tail] > .pb-step:not([data-step="branch"]) > .pb-pill { min-width: max-content; }
+  .pblock .pb-chain .pb-unit > .pb-step[data-step="branch"] .pb-pill .pret,
+  .pblock .pb-chain .pb-unit > .pb-step[data-step="branch"] .pb-pill .ccircle { flex-shrink: 0; }
+  @media (pointer: coarse) {
+    .pblock[data-density="task"] .pb-chain .pb-unit > .pb-step[data-step="branch"] > .pb-pill { height: auto; min-height: 30px; }
+  }
+  .pblock .pb-chain .pb-branch-word { display: none; }
 }
 
 /* ── Card density: one line, passive ─────────────────────────────────────── */
@@ -318,7 +389,7 @@
   border-radius: 12px; background: var(--surface-card); box-shadow: var(--shadow-1); text-align: left;
   font-size: var(--text-body); font-weight: 600; color: var(--color-secondary);
 }
-.pblock .pb-attach:active { background: var(--surface-sunken); }
+.pblock .pb-attach:active { background: var(--dc-hover, var(--surface-sunken)); }
 .pblock .pb-attach:focus-visible { outline: 2px solid var(--color-accent); outline-offset: -2px; }
 .pblock .pb-attach .pb-attach-icon { width: 16px; height: 16px; flex: none; color: var(--color-muted); }
 .pblock .pb-attach .pb-attach-label { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -342,7 +413,7 @@
 /* The current stage: its tone's stripe on a raised ground. */
 .pblock .pb-stage.current { box-shadow: inset 3px 0 0 var(--stage-tone); background: color-mix(in srgb, var(--stage-tone) 5%, var(--surface-card)); }
 .pblock .pb-stage-row { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 52px; padding: 7px 10px; text-align: left; color: var(--color-primary); }
-.pblock button.pb-stage-row:active { background: var(--surface-well); }
+.pblock button.pb-stage-row:active { background: var(--dc-hover, var(--surface-well)); }
 .pblock button.pb-stage-row:focus-visible { outline: 2px solid var(--color-accent); outline-offset: -2px; }
 .pblock .pb-stage-row > svg { width: 18px; height: 18px; flex: none; color: var(--color-muted); }
 .pblock .pb-stage-row > .pb-gear { color: var(--color-secondary); }

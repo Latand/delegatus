@@ -1,0 +1,513 @@
+{
+  "baseRevision": "02f9301fc32370210a4af533c1204741c6436f52",
+  "capturedAt": "2026-10-16T12:59:38.088440+00:00",
+  "runtime": "Bun 1.4.0 (34cbb9a40)",
+  "wrapper": {
+    "path": "scripts/gate-slot.sh",
+    "revision": "02f9301fc32370210a4af533c1204741c6436f52"
+  },
+  "isolation": [
+    "HOME",
+    "XDG_CONFIG_HOME",
+    "XDG_CACHE_HOME",
+    "TMPDIR",
+    "LLV_STATE_DIR"
+  ],
+  "viewerControlUrl": "http://127.0.0.1:1",
+  "load": {
+    "workers": 4,
+    "command": [
+      "python3",
+      "-c",
+      "while True: pass"
+    ],
+    "workerCpuSeconds": [
+      107.13,
+      106.33,
+      106.58,
+      106.75
+    ]
+  },
+  "sourceSha256": {
+    "src/lib/stateOwnership.ts": "1ef6f9d23a823cb9c313b34a27a4616f4598bae0bf5e0d515aa249297df6f967",
+    "src/lib/stateOwnership.test.ts": "5bb18cdead121b94c896f45f75a8d47df0ae2dae0b767c78b46b8582de053618",
+    "src/lib/stateOwnership.entryPoints.test.ts": "bdc91cb3cd0c1f236cc8a0ba05019f684aaece4916724ca359e87ecebe0aae30",
+    "src/lib/state/fixtures/ownershipSandbox.ts": "4f0d6b3b7c988985fb903e76a20bb0d31a788a5f6235e122d2925aec826d02bf",
+    "src/lib/pipelines/engineEnvironment.fixture.ts": "5108fd95f84de6caaac29f4a04082bda9b87cc423099877640c4c2558a540f82",
+    "src/lib/pipelines/engine.creation.test.ts": "bff28297a07cfb974d0ae829d15304ee2450ada9ca1edfd6a2bf433296be7117",
+    "src/lib/pipelines/engine.ports.test.ts": "5f8ec58b351786996d80174b112f82323aafaa42e8438f3db5865e1c217550d5"
+  },
+  "base": [
+    {
+      "file": "src/lib/stateOwnership.test.ts",
+      "load": "idle",
+      "exit": 0,
+      "seconds": 0.72,
+      "busyWorkers": 0,
+      "counts": {
+        "pass": 14,
+        "fail": 0
+      },
+      "failures": [],
+      "command": [
+        "bun",
+        "test",
+        "src/lib/stateOwnership.test.ts"
+      ],
+      "reportLines": [
+        "14 pass",
+        "0 fail",
+        "58 expect() calls",
+        "Ran 14 tests across 1 file. [522.00ms]"
+      ]
+    },
+    {
+      "file": "src/lib/stateOwnership.entryPoints.test.ts",
+      "load": "idle",
+      "exit": 0,
+      "seconds": 5.33,
+      "busyWorkers": 0,
+      "counts": {
+        "pass": 30,
+        "fail": 0
+      },
+      "failures": [],
+      "command": [
+        "bun",
+        "test",
+        "src/lib/stateOwnership.entryPoints.test.ts"
+      ],
+      "reportLines": [
+        "30 pass",
+        "0 fail",
+        "136 expect() calls",
+        "Ran 30 tests across 1 file. [5.11s]"
+      ]
+    },
+    {
+      "file": "src/lib/pipelines/engine.creation.test.ts",
+      "load": "idle",
+      "exit": 1,
+      "seconds": 29.25,
+      "busyWorkers": 0,
+      "counts": {
+        "pass": 95,
+        "fail": 2
+      },
+      "failures": [
+        "a stage completes and its successor waits for both update roles: early-switch-off",
+        "lanes in linked checkouts serialize Git writes through their common directory"
+      ],
+      "command": [
+        "bun",
+        "test",
+        "src/lib/pipelines/engine.creation.test.ts"
+      ],
+      "reportLines": [
+        "95 pass",
+        "2 fail",
+        "620 expect() calls",
+        "Ran 97 tests across 1 file. [29.04s]"
+      ]
+    },
+    {
+      "file": "src/lib/pipelines/engine.ports.test.ts",
+      "load": "idle",
+      "exit": 1,
+      "seconds": 121.57,
+      "busyWorkers": 0,
+      "counts": {
+        "pass": 139,
+        "fail": 5
+      },
+      "failures": [
+        "a fixer self-fail with a committed head goes to review with its findings as notes: rejected publication",
+        "managed early admission holds actual pipeline launches across recovery until terminal status",
+        "managed drain-switch-off admission holds actual pipeline launches across recovery until terminal status",
+        "attempt Git custody refuses a later rejected candidate despite an earlier confirmed push",
+        "attempt Git custody settles the later candidate after a rejected push is retried"
+      ],
+      "command": [
+        "bun",
+        "test",
+        "src/lib/pipelines/engine.ports.test.ts"
+      ],
+      "reportLines": [
+        "139 pass",
+        "5 fail",
+        "2756 expect() calls",
+        "Ran 144 tests across 1 file. [121.31s]"
+      ]
+    },
+    {
+      "file": "src/lib/stateOwnership.test.ts",
+      "load": "busy",
+      "exit": 0,
+      "seconds": 0.77,
+      "busyWorkers": 4,
+      "counts": {
+        "pass": 14,
+        "fail": 0
+      },
+      "failures": [],
+      "command": [
+        "bun",
+        "test",
+        "src/lib/stateOwnership.test.ts"
+      ],
+      "reportLines": [
+        "14 pass",
+        "0 fail",
+        "58 expect() calls",
+        "Ran 14 tests across 1 file. [524.00ms]"
+      ]
+    },
+    {
+      "file": "src/lib/stateOwnership.entryPoints.test.ts",
+      "load": "busy",
+      "exit": 0,
+      "seconds": 5.83,
+      "busyWorkers": 4,
+      "counts": {
+        "pass": 30,
+        "fail": 0
+      },
+      "failures": [],
+      "command": [
+        "bun",
+        "test",
+        "src/lib/stateOwnership.entryPoints.test.ts"
+      ],
+      "reportLines": [
+        "30 pass",
+        "0 fail",
+        "136 expect() calls",
+        "Ran 30 tests across 1 file. [5.62s]"
+      ]
+    },
+    {
+      "file": "src/lib/pipelines/engine.creation.test.ts",
+      "load": "busy",
+      "exit": 1,
+      "seconds": 25.57,
+      "busyWorkers": 4,
+      "counts": {
+        "pass": 95,
+        "fail": 2
+      },
+      "failures": [
+        "a stage completes and its successor waits for both update roles: early-switch-off",
+        "lanes in linked checkouts serialize Git writes through their common directory"
+      ],
+      "command": [
+        "bun",
+        "test",
+        "src/lib/pipelines/engine.creation.test.ts"
+      ],
+      "reportLines": [
+        "95 pass",
+        "2 fail",
+        "620 expect() calls",
+        "Ran 97 tests across 1 file. [25.32s]"
+      ]
+    },
+    {
+      "file": "src/lib/pipelines/engine.ports.test.ts",
+      "load": "busy",
+      "exit": 1,
+      "seconds": 109.81,
+      "busyWorkers": 4,
+      "counts": {
+        "pass": 139,
+        "fail": 5
+      },
+      "failures": [
+        "a fixer self-fail with a committed head goes to review with its findings as notes: rejected publication",
+        "managed early admission holds actual pipeline launches across recovery until terminal status",
+        "managed drain-switch-off admission holds actual pipeline launches across recovery until terminal status",
+        "attempt Git custody refuses a later rejected candidate despite an earlier confirmed push",
+        "attempt Git custody settles the later candidate after a rejected push is retried"
+      ],
+      "command": [
+        "bun",
+        "test",
+        "src/lib/pipelines/engine.ports.test.ts"
+      ],
+      "reportLines": [
+        "139 pass",
+        "5 fail",
+        "2756 expect() calls",
+        "Ran 144 tests across 1 file. [109.57s]"
+      ]
+    }
+  ],
+  "head": [
+    {
+      "file": "src/lib/stateOwnership.test.ts",
+      "load": "idle",
+      "exit": 0,
+      "seconds": 0.87,
+      "busyWorkers": 0,
+      "unrelatedStateUnchanged": true,
+      "counts": {
+        "pass": 15,
+        "fail": 0
+      },
+      "failures": [],
+      "command": [
+        "bun",
+        "test",
+        "src/lib/stateOwnership.test.ts"
+      ],
+      "reportLines": [
+        "15 pass",
+        "0 fail",
+        "61 expect() calls",
+        "Ran 15 tests across 1 file. [663.00ms]"
+      ]
+    },
+    {
+      "file": "src/lib/stateOwnership.entryPoints.test.ts",
+      "load": "idle",
+      "exit": 0,
+      "seconds": 5.48,
+      "busyWorkers": 0,
+      "unrelatedStateUnchanged": true,
+      "counts": {
+        "pass": 30,
+        "fail": 0
+      },
+      "failures": [],
+      "command": [
+        "bun",
+        "test",
+        "src/lib/stateOwnership.entryPoints.test.ts"
+      ],
+      "reportLines": [
+        "30 pass",
+        "0 fail",
+        "136 expect() calls",
+        "Ran 30 tests across 1 file. [5.29s]"
+      ]
+    },
+    {
+      "file": "src/lib/pipelines/engine.creation.test.ts",
+      "load": "idle",
+      "exit": 1,
+      "seconds": 30.23,
+      "busyWorkers": 0,
+      "unrelatedStateUnchanged": true,
+      "counts": {
+        "pass": 96,
+        "fail": 1
+      },
+      "failures": [
+        "lanes in linked checkouts serialize Git writes through their common directory"
+      ],
+      "command": [
+        "bun",
+        "test",
+        "src/lib/pipelines/engine.creation.test.ts"
+      ],
+      "reportLines": [
+        "96 pass",
+        "1 fail",
+        "624 expect() calls",
+        "Ran 97 tests across 1 file. [30.05s]"
+      ]
+    },
+    {
+      "file": "src/lib/pipelines/engine.ports.test.ts",
+      "load": "idle",
+      "exit": 1,
+      "seconds": 148.67,
+      "busyWorkers": 0,
+      "unrelatedStateUnchanged": true,
+      "counts": {
+        "pass": 141,
+        "fail": 3
+      },
+      "failures": [
+        "a fixer self-fail with a committed head goes to review with its findings as notes: rejected publication",
+        "attempt Git custody refuses a later rejected candidate despite an earlier confirmed push",
+        "attempt Git custody settles the later candidate after a rejected push is retried"
+      ],
+      "command": [
+        "bun",
+        "test",
+        "src/lib/pipelines/engine.ports.test.ts"
+      ],
+      "reportLines": [
+        "141 pass",
+        "3 fail",
+        "2764 expect() calls",
+        "Ran 144 tests across 1 file. [148.47s]"
+      ]
+    },
+    {
+      "file": "src/lib/stateOwnership.test.ts",
+      "load": "busy",
+      "exit": 0,
+      "seconds": 0.87,
+      "busyWorkers": 4,
+      "unrelatedStateUnchanged": true,
+      "counts": {
+        "pass": 15,
+        "fail": 0
+      },
+      "failures": [],
+      "command": [
+        "bun",
+        "test",
+        "src/lib/stateOwnership.test.ts"
+      ],
+      "reportLines": [
+        "15 pass",
+        "0 fail",
+        "61 expect() calls",
+        "Ran 15 tests across 1 file. [610.00ms]"
+      ]
+    },
+    {
+      "file": "src/lib/stateOwnership.entryPoints.test.ts",
+      "load": "busy",
+      "exit": 0,
+      "seconds": 5.3,
+      "busyWorkers": 4,
+      "unrelatedStateUnchanged": true,
+      "counts": {
+        "pass": 30,
+        "fail": 0
+      },
+      "failures": [],
+      "command": [
+        "bun",
+        "test",
+        "src/lib/stateOwnership.entryPoints.test.ts"
+      ],
+      "reportLines": [
+        "30 pass",
+        "0 fail",
+        "136 expect() calls",
+        "Ran 30 tests across 1 file. [5.04s]"
+      ]
+    },
+    {
+      "file": "src/lib/pipelines/engine.creation.test.ts",
+      "load": "busy",
+      "exit": 1,
+      "seconds": 29.47,
+      "busyWorkers": 4,
+      "unrelatedStateUnchanged": true,
+      "counts": {
+        "pass": 96,
+        "fail": 1
+      },
+      "failures": [
+        "lanes in linked checkouts serialize Git writes through their common directory"
+      ],
+      "command": [
+        "bun",
+        "test",
+        "src/lib/pipelines/engine.creation.test.ts"
+      ],
+      "reportLines": [
+        "96 pass",
+        "1 fail",
+        "624 expect() calls",
+        "Ran 97 tests across 1 file. [29.18s]"
+      ]
+    },
+    {
+      "file": "src/lib/pipelines/engine.ports.test.ts",
+      "load": "busy",
+      "exit": 1,
+      "seconds": 105.94,
+      "busyWorkers": 4,
+      "unrelatedStateUnchanged": true,
+      "counts": {
+        "pass": 141,
+        "fail": 3
+      },
+      "failures": [
+        "a fixer self-fail with a committed head goes to review with its findings as notes: rejected publication",
+        "attempt Git custody refuses a later rejected candidate despite an earlier confirmed push",
+        "attempt Git custody settles the later candidate after a rejected push is retried"
+      ],
+      "command": [
+        "bun",
+        "test",
+        "src/lib/pipelines/engine.ports.test.ts"
+      ],
+      "reportLines": [
+        "141 pass",
+        "3 fail",
+        "2764 expect() calls",
+        "Ran 144 tests across 1 file. [105.66s]"
+      ]
+    }
+  ],
+  "targetFailuresRemaining": 0,
+  "unrelatedFailuresRemaining": 4,
+  "gateNote": "An interactive gate expired after the completed test matrix and lint while its shell was idle. Final type checking and the project comparison run in a fresh owned gate.",
+  "checks": {
+    "types": {
+      "check": "types",
+      "exit": 0,
+      "seconds": 174.52,
+      "command": [
+        "bun",
+        "node_modules/typescript/bin/tsc",
+        "--noEmit"
+      ]
+    },
+    "lint": {
+      "exit": 0,
+      "output": [
+        "0 errors introduced by this change",
+        "0 errors already on the base in the changed files (not blocking)"
+      ]
+    },
+    "comparison": {
+      "check": "comparison",
+      "exit": 0,
+      "seconds": 115.94,
+      "command": [
+        "bun",
+        "scripts/local-gate-tests.ts",
+        "--base",
+        "02f9301fc32370210a4af533c1204741c6436f52",
+        "src/lib/stateOwnership.test.ts",
+        "src/lib/stateOwnership.entryPoints.test.ts",
+        "src/lib/pipelines/engine.creation.test.ts",
+        "src/lib/pipelines/engine.ports.test.ts"
+      ],
+      "output": [
+        "touched-tests: base commit 02f9301fc32370210a4af533c1204741c6436f52",
+        "touched-tests: reviewed head commit 02f9301fc32370210a4af533c1204741c6436f52 (head sample runs the working tree)",
+        "touched-tests: head 113302ms",
+        "touched-tests: baseline run 2482ms (tests 1845ms; 2 failing file(s))",
+        "touched-tests: 0 new file(s), judged on head alone",
+        "PRE-EXISTING src/lib/pipelines/engine.creation.test.ts: lanes in linked checkouts serialize Git writes through their common directory",
+        "PRE-EXISTING src/lib/pipelines/engine.ports.test.ts: a fixer self-fail with a committed head goes to review with its findings as notes: rejected publication",
+        "PRE-EXISTING src/lib/pipelines/engine.ports.test.ts: attempt Git custody refuses a later rejected candidate despite an earlier confirmed push",
+        "PRE-EXISTING src/lib/pipelines/engine.ports.test.ts: attempt Git custody settles the later candidate after a rejected push is retried",
+        "touched-tests: 0 new failures, 4 pre-existing failures, 0 fixed, 0 removed/skipped, 0 flaky"
+      ]
+    },
+    "privacy": {
+      "exit": 0,
+      "output": "PRIVACY GATE: PASS",
+      "base": "02f9301fc32370210a4af533c1204741c6436f52",
+      "scope": "changed source, verification files and branch commits"
+    },
+    "pullRequestText": {
+      "exit": 0,
+      "output": {
+        "privacy": "pass",
+        "exemptMachineTrailerAddresses": 1
+      },
+      "method": "sensitiveClasses and commitMessageAddressReview with the existing machine-trailer exception"
+    }
+  }
+}
