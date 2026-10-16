@@ -234,7 +234,12 @@ and `…/groups/${chatId}/messages?…`; the query is built with one
 `URLSearchParams` from the keys `tz`, `from`, `to`, `cursor`, `limit`, each at
 most once, absent when the caller gave none (S4, S8). Byte cap:
 `relay.limits.max_response_bytes` for H1, 12,000 for H2 and H3 (S7). Request
-timeout: 4 s, inside the 5 s the control channel gives one attempt (R13).
+timeout: one total 4 s deadline covering DNS, connection and body reads. Socket
+idle timeouts are disabled for history. A deadline reached during a Viewer loop
+stall gives readable socket callbacks one poll turn; if no response is confirmed,
+it reports `deadline_loop_stalled`. A deadline without a current loop stall reports
+`deadline_exceeded`. The ordinary deadline stays inside the control channel's
+5 s attempt budget (R13); a stalled Viewer can delay both budgets.
 
 The client validates nothing that Celestia judges: dates, the 31-day span, the
 zone, `limit` and the wire cursor go out as given, and Celestia's verdict comes
@@ -332,8 +337,8 @@ Both kinds of 429 (S16) are treated the same way.
 ### 3.7 The error envelope as plain outcomes
 
 A read answers `{ available: true, … }` or `{ available: false, reason,
-retryAfterSeconds, note }`. `note` is one fixed English sentence per reason; an
-agent relays it in the operator's language. No outcome carries a response body.
+retryAfterSeconds, note }`. `note` gives the reason and the numeric HTTP status
+when available; an agent relays it in the operator's language. No outcome carries a response body.
 
 | Reason | When | Sent to Celestia? |
 |---|---|---|
@@ -346,8 +351,19 @@ agent relays it in the operator's language. No outcome carries a response body.
 | `unsupported_version` | 426 | yes |
 | `rate_limited` | 429 after the rule of §3.6, with `retryAfterSeconds` | yes |
 | `service_error` | 500 or 503: Celestia could not read now (S17) | yes |
-| `unreachable` | DNS, connection, timeout, redirect, a refused address | attempted |
-| `malformed_response` | a 200 whose body is not JSON, fails the schema or exceeds the byte cap | yes |
+| `forbidden` | HTTP 403: access refused | yes |
+| `request_timeout` | HTTP 408: the service timed out receiving the request | yes |
+| `bad_gateway` | HTTP 502: the gateway received an invalid upstream response | yes |
+| `gateway_timeout` | HTTP 504: the gateway timed out waiting upstream | yes |
+| `http_error` | every other HTTP refusal, including redirects; the note names the numeric status | yes |
+| `deadline_exceeded` | total request deadline, without a stalled deadline timer | attempted |
+| `deadline_loop_stalled` | deadline reached during a Viewer loop stall, still unresolved after one poll turn | attempted |
+| `dns_error` | name resolution failed | attempted |
+| `connect_error` | connection refused, reset, interrupted or unavailable | attempted |
+| `tls_error` | TLS certificate or negotiation failure | attempted |
+| `transport_error` | another transport or address-policy failure | attempted |
+| `response_too_large` | a successful HTTP response exceeds the route's byte cap | yes |
+| `malformed_response` | a successful HTTP response whose body is not JSON or fails the schema | yes |
 
 The read changes no relay state on any outcome: a 401 here does not park the
 poller, and nothing is written to the activity map.
@@ -356,10 +372,14 @@ poller, and nothing is written to the activity map.
 
 **What Delegatus's own code guarantees, each with a test (§8):**
 
-1. No log line. The module, the route, the binding and the voice read log
-   nothing. A refusal carries a reason, a status and a retry value. A schema
-   failure discards zod's issue text, which can echo a received value. This
-   follows R10.
+1. One diagnostic line per failed endpoint read, labelled `[relay owner-history]`,
+   contains only `cause`, `routeKind` (`groups` or `messages`), `status` (null
+   before headers), `elapsedMs` and `loopGapMs`. The gap is the largest observed
+   lateness of a 100 ms request-local heartbeat, including the final sample.
+   Logs carry no URL, identifier, title, content, credential, raw error message,
+   stack or response body. Successful reads stay silent. A schema failure
+   discards zod's issue text, which can echo a received value. The operator's
+   2026-10-16 diagnostic decision supersedes the earlier no-log rule here.
 2. No store. Nothing is written under the state directory: no cache, no
    activity note, no file. A page lives in memory for one call.
 3. No MCP receipt. The tool always takes the path that stores no receipt, with
@@ -795,7 +815,7 @@ double)
 6. The response carries `Cache-Control: no-store` and holds no credential and
    no owner id.
 7. An unknown `op` and a body that is not JSON: 400.
-8. A slow double: the route answers `unreachable` inside 5 s.
+8. A slow double: the route answers `deadline_exceeded` inside 5 s when the Viewer loop is responsive.
 
 **C. `src/lib/mcp/relayOwnerHistory.test.ts`** and
 `src/lib/mcp/toolAllowlist.test.ts`
