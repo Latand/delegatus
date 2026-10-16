@@ -940,3 +940,41 @@ after Settings answers; removing idempotent reservation disposal admits an
 oversized follow-up and starts another worker. Both regression tests fail with
 their guards absent and pass after restoration. The new transport still owes
 the complete alternating performance matrix.
+
+### Private task channel diagnostic
+
+Candidate `8f2f1e1fb15d`, matched main `14e3199375a2` and original audit
+`45d25ac` use the same frozen seed, runtimes, dependencies and observer. Six
+samples completed with 30 seconds warmup and 300 seconds measured load. The
+order is candidate/main/audit, then audit/main/candidate. The third candidate
+sample was interrupted after the two audit p99 values made the strict cohort
+median criterion unreachable; its partial directory is retained and excluded.
+
+| Revision | Repetition | Loop p99 / max, ms | Offered / completed / failed | Pending at end / after drain | Process births / survivors | Adapter / total DB descriptors | State commits |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| candidate | 1 | 0.394239 / 1.974228 | 300 / 300 / 0 | 0 / 0 | 5 / 0 | 0 / 5 | 480 |
+| main | 1 | 0.292095 / 3.086414 | 300 / 300 / 0 | 0 / 0 | 3 / 0 | 5 / 5 | 570 |
+| audit | 1 | 0.193023 / 2.029684 | 300 / 300 / 0 | 0 / 0 | 3 / 0 | 5 / 5 | 480 |
+| audit | 2 | 0.186495 / 4.571027 | 300 / 300 / 0 | 0 / 0 | 3 / 0 | 5 / 5 | 480 |
+| main | 2 | 0.186239 / 2.747161 | 300 / 300 / 0 | 0 / 0 | 3 / 0 | 5 / 5 | 570 |
+| candidate | 2 | 0.409855 / 2.186528 | 300 / 300 / 0 | 0 / 0 | 5 / 0 | 0 / 5 | 480 |
+
+Both candidate stdio samples handled zero measured task HTTP calls on the
+Viewer and opened no Viewer database connection. Task protocol, policy, receipt
+and transaction work ran in the one owned task executor. Adapter database
+connections remained zero. SQLite BUSY/LOCKED results, held-lease refusals and
+synchronous lock waits were zero in all six samples. Every opened connection
+was explicitly closed or reclaimed at its process exit; no process or database
+descriptor survived teardown.
+
+All four candidate/control pairs have identical normalized response and row
+hashes. Each sample contains 330 responses including warmup and 2,103 final
+durable rows, with all six SQL columns retained. Every committed history replays
+to its final snapshot, with no unresolved mutation or history violation. There
+were no uncertain mutation replies requiring recovery in these samples.
+
+The candidate cohort median p99 must be at least 0.394239 ms, while the audit
+median can be no greater than 0.193023 ms, regardless of the third repetition.
+**Performance acceptance remains unmet.** The complete 108-sample matrix is
+still required. The immutable aggregate and all per-process balances are in
+[`mcp-state-writers-task-channel-diagnostic.json`](../../evidence/mcp-state-writers-task-channel-diagnostic.json).
