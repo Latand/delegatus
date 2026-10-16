@@ -92,19 +92,25 @@ test("B: content secrets, nested ignore overrides, links and large files never e
   const secret = ["gh", "p_", "a".repeat(36)].join("");
   fs.writeFileSync(path.join(dir, "ordinary.txt"), "a".repeat(16_000) + "token" + "\n".repeat(16_000));
   fs.writeFileSync(path.join(dir, "innocent.txt"), secret);
+  const escaped = [...secret].map(char => String.fromCharCode(92) + "u" + char.charCodeAt(0).toString(16).padStart(4, "0")).join("");
+  fs.writeFileSync(path.join(dir, "escaped.txt"), escaped);
   fs.writeFileSync(path.join(dir, "encoded.txt"), Buffer.from(secret, "utf16le"));
   fs.writeFileSync(path.join(dir, "encoded-be.txt"), Buffer.from(secret, "utf16le").swap16());
   fs.writeFileSync(path.join(dir, "large.bin"), Buffer.alloc(2 * 1024 * 1024 + 1));
   fs.mkdirSync(path.join(dir, "nested"));
-  fs.writeFileSync(path.join(dir, "nested", ".gitignore"), "!.env\n");
+  fs.writeFileSync(path.join(dir, "nested", ".gitignore"), "!.env\n!innocent.txt\n!large.bin\n");
+  fs.writeFileSync(path.join(dir, "nested", "innocent.txt"), secret);
+  fs.writeFileSync(path.join(dir, "nested", "large.bin"), Buffer.alloc(2 * 1024 * 1024 + 1));
   fs.writeFileSync(path.join(dir, "nested", ".env"), secret);
   fs.symlinkSync(path.join(dir, "readme.txt"), path.join(dir, "link.txt"));
   const result = await admit(dir);
   expect(result.ok).toBe(true);
   expect(git(dir, "ls-tree", "-r", "--name-only", "HEAD")).not.toContain("innocent.txt");
-  expect(git(dir, "ls-tree", "-r", "--name-only", "HEAD")).not.toMatch(/large|link|encoded|\.env/);
+  expect(git(dir, "ls-tree", "-r", "--name-only", "HEAD")).not.toMatch(/large|link|encoded|escaped|\.env/);
   expect(JSON.stringify(result)).not.toContain(secret);
   expect(git(dir, "status", "--porcelain")).toBe("");
+  git(dir, "add", "--all");
+  expect(git(dir, "diff", "--cached", "--name-only")).toBe("");
 });
 
 test("B: a subfolder of an existing repository never acquires a nested repository", async () => {
@@ -161,7 +167,6 @@ test("D: a new local repository provisions and completes its branch with no remo
   expect(git(dir, "show-ref", "--verify", "refs/heads/" + lane.branch)).toContain(git(dir, "rev-parse", "HEAD"));
   expect(git(dir, "remote")).toBe("");
 });
-
 
 test("A: an empty folder receives its baseline ignore file and one commit", async () => {
   const dir = folder();
@@ -272,7 +277,6 @@ test("C: both a fresh succession write and a receipt replay yield to a peer-held
   }
 });
 
-
 test("B: existing linked worktrees retain their repository and receive no initialization receipt", async () => {
   const dir = folder();
   expect((await admit(dir)).ok).toBe(true);
@@ -283,7 +287,6 @@ test("B: existing linked worktrees retain their repository and receive no initia
   expect(JSON.stringify(result)).not.toContain("repositoryInitialization");
   expect(git(linked, "branch", "--show-current")).toBe("linked");
 });
-
 
 test("B: a file changed after its snapshot is refused before installation", async () => {
   const dir = folder();
@@ -333,7 +336,6 @@ test.skipIf(process.platform !== "linux")("B: swapping the project for a state s
   } finally { hook.mockRestore(); }
 });
 
-
 test("B: a secret-bearing filename never enters generated ignore rules or a response", async () => {
   const dir = folder();
   const value = ["gh", "p_", "b".repeat(36)].join("");
@@ -344,7 +346,6 @@ test("B: a secret-bearing filename never enters generated ignore rules or a resp
   expect(fs.existsSync(path.join(dir, ".git"))).toBe(false);
   expect(fs.existsSync(path.join(dir, ".gitignore"))).toBe(false);
 });
-
 
 test.each(["link", "encoding", "secret"] as const)("B: an unsafe existing gitignore is preserved: %s", async kind => {
   const dir = folder();
@@ -382,4 +383,39 @@ test("B: an oversized path inventory is refused before any project mutation", as
   expect(result).toMatchObject({ ok: false, code: "initialization_refused", detail: expect.stringContaining("path-list bound") });
   expect(fs.existsSync(path.join(dir, ".git"))).toBe(false);
   expect(fs.existsSync(path.join(dir, ".gitignore"))).toBe(false);
+});
+
+test.each(["LLV_PIPELINE_INIT_MAX_FILES", "LLV_PIPELINE_INIT_MAX_BYTES", "LLV_PIPELINE_INIT_MAX_FILE_BYTES"] as const)("B: generated ignore data also counts toward %s", async name => {
+  const dir = folder();
+  const previous = process.env[name];
+  process.env[name] = name.endsWith("FILES") ? "1" : String(fs.statSync(path.join(dir, "readme.txt")).size);
+  try {
+    expect(await admit(dir)).toMatchObject({ ok: false, code: "initialization_refused", detail: expect.stringContaining("bound") });
+    expect(fs.existsSync(path.join(dir, ".git"))).toBe(false);
+    expect(fs.existsSync(path.join(dir, ".gitignore"))).toBe(false);
+  } finally { if (previous === undefined) delete process.env[name]; else process.env[name] = previous; }
+});
+
+test("B: nested negations cannot re-admit excluded files on a later git add", async () => {
+  const dir = folder();
+  fs.mkdirSync(path.join(dir, "nested"));
+  fs.writeFileSync(path.join(dir, "nested", ".gitignore"), "!private.txt\n!large.bin\n");
+  fs.writeFileSync(path.join(dir, "nested", "private.txt"), ["gh", "p_", "d".repeat(36)].join(""));
+  fs.writeFileSync(path.join(dir, "nested", "large.bin"), Buffer.alloc(2 * 1024 * 1024 + 1));
+  expect((await admit(dir)).ok).toBe(true);
+  git(dir, "add", "--all");
+  expect(git(dir, "diff", "--cached", "--name-only")).toBe("");
+});
+
+test.each(["secret", "large", "ignored"])("B: an unmergeable nested gitignore refuses initialization: %s", async kind => {
+  const dir = folder();
+  fs.mkdirSync(path.join(dir, "nested"));
+  const privateFixture = ["gh", "p_", "e".repeat(36)].join("");
+  const contents = kind === "secret" ? privateFixture : kind === "large" ? "#".repeat(2 * 1024 * 1024 + 1) : "!private.txt\n";
+  fs.writeFileSync(path.join(dir, "nested", ".gitignore"), contents);
+  if (kind === "ignored") fs.writeFileSync(path.join(dir, ".gitignore"), "nested/.gitignore\n");
+  const result = await admit(dir);
+  expect(result).toMatchObject({ ok: false, code: "initialization_refused", detail: expect.stringContaining("gitignore") });
+  expect(fs.existsSync(path.join(dir, ".git"))).toBe(false);
+  expect(fs.readFileSync(path.join(dir, "nested", ".gitignore"), "utf8")).toBe(contents);
 });

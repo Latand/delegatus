@@ -24,6 +24,7 @@ file data and 2,000 directory entries. Configure them with
 `LLV_PIPELINE_INIT_MAX_FILES`, respectively. An individual file above its limit
 is excluded. Exceeding the total size, entry limit or report path-list bound
 refuses initialization before installing Git metadata or editing ignore files.
+Generated ignore files also count toward the final commit's size and file limits.
 The complete inventory must fit the bridge's 8 KiB report bound; path names
 have an additional 4,000-byte aggregate bound.
 

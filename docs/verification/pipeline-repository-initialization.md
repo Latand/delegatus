@@ -2,13 +2,20 @@
 
 The acceptance specification was pinned on 2026-10-16. The base was
 `917189ae562def76980341620987479ab2813cfc` on `origin/main`.
+Verification ran on 2026-10-16 in an isolated export of the delivered source;
+the commit containing this record identifies that source snapshot.
 
 | Acceptance | Implementation | Regression evidence |
 | --- | --- | --- |
-| A: create and board start | `initializeRepository.ts` prepares an inspected baseline on `main`; creation returns the inventory and records a bridge report. The picker checks eligibility without writing. | `repositoryInitialization.test.ts` exercises board eligibility, creation, empty folders, existing ignore rules and executable modes. HTTP route and MCP compact-answer tests verify both response projections. |
+| A: create and board start | `initializeRepository.ts` prepares an inspected baseline on `main`; creation returns the inventory and records a bridge report. The picker checks eligibility without writing. | `repositoryInitialization.test.ts` exercises board eligibility, creation, empty folders, existing ignore rules, executable modes, literal paths and attribute conversion. HTTP route and MCP compact-answer tests verify both response projections. |
 | B: safety | Canonical-root checks, bounded snapshots, secret detection, explicit Git path selection, isolated Git configuration and identity checks precede installation. Existing ignore files receive appended exclusions. | Repository tests cover home/state roots, symlinked state, foreign metadata, nested repositories, secret-bearing content, UTF-16 content, large files, count/byte refusal, inherited hooks/identity and existing linked worktrees. Byte refusal is repeated in a new process. |
 | C: succession | The initializer uses the existing `projectSuccessionFor` and `recordProjectSuccessions` path. State writes use `waitForStateLock`. A durable Git receipt supports recovery and report deduplication. | `succession.test.ts` preserves the seat, task and pre/post-initialization conversations. Repository tests exercise concurrent creators, a fresh process and both fresh/replay writes under a real SQLite peer lock while an independent timer advances. |
 | D: local publication | The initializer creates no remote and uses the existing local delivery path. | The local-lane regression provisions a real worktree and completes its stage; its execution ports refuse fetch, push and forge commands. MCP checks the local publication acknowledgement. |
+
+Unsafe or parent-ignored nested ignore files refuse initialization before mutation.
+Nested ignore exclusions are relative to each ignore file. The secret and
+large-file regression also verifies that a later `git add --all` leaves the
+index unchanged. Generated ignore files count toward the final commit bounds.
 
 The shared contract has no new request field. Its producers are MCP creation,
 HTTP creation, task assignment and draft start/update. The existing preflight
@@ -22,9 +29,12 @@ temporary roots. Source, probes and rendered captures run in scratch exports.
 No runtime or agent directory sweep is used.
 
 Before implementation, the initial A–D cases failed on main at their missing
-behavior. The final 25-case repository file was also replayed on merged main
-`e7507d58863450a1f45b1a93d2b27a059ca13c6e`: 24 failures and one passing
-existing-repository safeguard. The added succession, MCP and
+behavior. The final 32-case repository file was also replayed on merged main
+`e7507d58863450a1f45b1a93d2b27a059ca13c6e`: 31 failures and one passing
+existing-repository safeguard. Five strengthened safety checks also failed on the
+first implementation before the nested-ignore, escaped-secret and generated-bound
+fixes. Three nested-ignore refusal cases also failed on main and the first
+implementation before their fix. The added succession, MCP and
 picker-refusal cases also failed on main. The two HTTP cases failed with 400
 where successful creation and a reasoned safety refusal were required.
 The former HTTP test expecting every plain folder to fail is replaced by those
@@ -48,7 +58,7 @@ with `-t 'pipeline repository initialization'`. It captures ready and refused
 pickers at 390 and 1280 pixels in both languages and themes. Its measurements
 are recorded in `evidence/pipeline-repository-initialization/readings.json`.
 
-Final focused results: 25 repository-initialization tests, 7 succession tests,
+Final focused results: 32 repository-initialization tests, 7 succession tests,
 10 HTTP creation tests, 9 repository-preflight tests, 3 preflight-route tests,
 8 picker DOM tests and the 16-frame browser case passed. The MCP file passed
 its new initialization and replay regression. Its older compact-answer size
@@ -58,6 +68,13 @@ both main and the candidate; it is pre-existing. The broader explicit
 `early-switch-off` expected a second spawn and got one, and the common-Git-dir
 serialization fixture tried writing into a missing hooks directory. Running
 those exact two cases on merged main reproduced both failures.
+
+The push hook completed its branch/base comparisons with ten pre-existing
+assertions and one flaky case, then refused because the unchanged publication
+test file exceeded its five-minute budget. Run alone, that file completed in
+288 seconds: 431 passed and one existing fixture failed while writing a hook
+into a missing directory. The exact fixture failure was reproduced on main.
+The Linux backend check and all 17 scoped Linux test files passed separately.
 
 TypeScript (`tsc --noEmit`), changed-file ESLint and the privacy publication
 gate passed.

@@ -11,6 +11,7 @@ import { projectSuccessionFor, recordProjectSuccessions } from "@/lib/projects/s
 import { globalCache } from "@/lib/scanner/caches";
 import { withFileTransaction } from "@/lib/state/fileTransaction";
 import { waitForStateLock } from "@/lib/state/lockWait";
+import { canonicalSensitiveText } from "@/lib/privacy/canonicalText";
 import { knownProviderSecretOffset } from "@/lib/accounts/providerSecretRedaction";
 import { AUTHORIZATION_HEADER, BEARER_TOKEN, COOKIE_HEADER, JWT_PATTERN, TOKEN_FAMILY_PATTERN } from "@/lib/view/compactText";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
@@ -37,9 +38,14 @@ const inside = (child: string, parent: string) => child === parent || child.star
 const missing = (error: unknown) => (error as NodeJS.ErrnoException).code === "ENOENT";
 // Refusal needs a boolean; avoid the display redactor's per-character decoded
 // copies and unbounded assignment-prefix backtracking on source files.
-const secret = (value: string) => SECRET_ASSIGNMENT.test(value)
+const containsSecret = (value: string) => SECRET_ASSIGNMENT.test(value)
   || /-----BEGIN [A-Z ]*PRIVATE KEY-----/.test(value)
   || SECRET_PATTERNS.some(pattern => pattern.test(value)) || knownProviderSecretOffset(value) !== -1;
+function secret(value: string): boolean {
+  if (containsSecret(value)) return true;
+  const decoded = canonicalSensitiveText(value, true);
+  return decoded.error || decoded.text !== value && containsSecret(decoded.text);
+}
 const label = (value: string) => secret(value) ? "[private path]" : value;
 const limit = (name: string, fallback: number) => {
   const raw = process.env[name];
@@ -112,6 +118,7 @@ async function snapshot(root: string) {
       pathBytes += Buffer.byteLength(relative);
       if (pathBytes > 4_000) throw new Error("project exceeds the initial commit path-list bound");
       if (secret(relative)) throw new Error("project contains a path matching secret patterns; initialization refused");
+      if (entry.name === ".gitignore" && !entry.isFile()) throw new Error("existing gitignore cannot be merged safely; initialization refused");
       if (OMIT_NAME.test(entry.name)) { ignored.push(relative); continue; }
       if (entry.isDirectory()) {
         try { await fs.lstat(path.join(root, relative, ".git")); ignored.push(relative); continue; }
@@ -119,6 +126,7 @@ async function snapshot(root: string) {
         await walk(relative);
       } else if (entry.isFile()) {
         const stat = await fs.lstat(path.join(root, relative));
+        if (entry.name === ".gitignore" && (stat.size > maxFileBytes || stat.nlink !== 1)) throw new Error("existing gitignore cannot be merged safely; initialization refused");
         if (stat.size > maxFileBytes || stat.nlink !== 1) { ignored.push(relative); continue; }
         if (bytes + stat.size > maxBytes) throw new Error("project exceeds the initial commit size bound");
         const file = await readFile(root, relative, Math.min(maxFileBytes, maxBytes - bytes));
@@ -127,7 +135,7 @@ async function snapshot(root: string) {
         if (path.basename(relative) === ".gitignore" && (file.data.includes(0) || !Buffer.from(file.data.toString("utf8")).equals(file.data))) throw new Error("existing gitignore has an unsupported encoding; initialization refused");
         const bigEndian = file.data.length % 2 === 0 ? Buffer.from(file.data).swap16().toString("utf16le") : "";
         if (secret(file.data.toString("utf8")) || secret(file.data.toString("utf16le")) || secret(bigEndian)) {
-          if (relative === ".gitignore") throw new Error("existing gitignore matches secret patterns; initialization refused");
+          if (entry.name === ".gitignore") throw new Error("existing gitignore matches secret patterns; initialization refused");
           ignored.push(relative);
         } else files.push(file);
       } else ignored.push(relative);
@@ -149,6 +157,12 @@ async function git(cwd: string, args: string[]) {
 }
 function ignoreLiteral(relative: string) {
   return "/" + relative.replace(/[\\*?\[\]#! ]/g, "\\$&");
+}
+
+function baselineIgnore(ignored: readonly string[], directory = "") {
+  const prefix = directory ? directory + "/" : "";
+  const paths = ignored.filter(relative => relative.startsWith(prefix)).map(relative => ignoreLiteral(relative.slice(prefix.length)));
+  return "\n# Delegatus baseline exclusions\n" + BASELINE_IGNORE_PATTERNS.join("\n") + "\n" + paths.join("\n") + "\n";
 }
 
 function completeReport(initialization: RepositoryInitialization) {
@@ -236,8 +250,7 @@ export async function preparePipelineRepository(rawPath: string, initialize = tr
       await git(temporary, ["init", "--initial-branch=main", "--template="]);
       const originalIgnore = data.files.find(file => file.relative === ".gitignore");
       const prefix = originalIgnore?.data.toString("utf8") ?? "";
-      const appended = "\n# Delegatus baseline exclusions\n" + BASELINE_IGNORE_PATTERNS.join("\n")
-        + "\n" + data.ignored.map(ignoreLiteral).join("\n") + "\n";
+      const appended = baselineIgnore(data.ignored);
       const ignore = prefix + appended;
       if (secret(ignore)) throw new Error("existing gitignore cannot be merged safely; initialization refused");
       // Respect the folder's existing ignore rules as well as the safety policy.
@@ -249,6 +262,7 @@ export async function preparePipelineRepository(rawPath: string, initialize = tr
       const ignored = data.files.length ? await realExec("git", ["-c", "core.quotePath=false", "check-ignore", "--no-index", "--", ...data.files.map(file => "./" + file.relative)], temporary, gitEnvironment()) : { code: 1, stdout: "" };
       if (ignored.code !== 0 && ignored.code !== 1) throw new Error("local repository ignore check failed");
       const userIgnored = new Set(ignored.stdout.split("\n").filter(Boolean).map(line => (line.startsWith('"') ? JSON.parse(line) as string : line).replace(/^\.\//, "")));
+      if (data.files.some(file => file.relative !== ".gitignore" && path.basename(file.relative) === ".gitignore" && userIgnored.has(file.relative))) throw new Error("existing gitignore is excluded by parent rules and cannot be merged safely; initialization refused");
       data.ignored.push(...userIgnored);
       const selected = data.files.filter(file => !userIgnored.has(file.relative) || file.relative === ".gitignore");
       for (const file of selected) {
@@ -256,10 +270,15 @@ export async function preparePipelineRepository(rawPath: string, initialize = tr
         const destination = path.join(temporary, file.relative);
         await fs.mkdir(path.dirname(destination), { recursive: true });
         await fs.writeFile(destination, file.data, { mode: file.mode & 0o777 });
-        if (path.basename(file.relative) === ".gitignore") await fs.appendFile(destination, appended);
+        if (path.basename(file.relative) === ".gitignore") await fs.appendFile(destination, baselineIgnore(data.ignored, path.posix.dirname(file.relative)));
       }
       await fs.writeFile(path.join(temporary, ".gitignore"), ignore, { mode: originalIgnore ? originalIgnore.mode & 0o777 : 0o644 });
       const committedFiles = [".gitignore", ...selected.filter(file => file.relative !== ".gitignore").map(file => file.relative)].sort();
+      const sizes = [Buffer.byteLength(ignore), ...selected.filter(file => file.relative !== ".gitignore").map(file =>
+        file.size + (path.basename(file.relative) === ".gitignore" ? Buffer.byteLength(baselineIgnore(data.ignored, path.posix.dirname(file.relative))) : 0))];
+      if (committedFiles.length > limit("LLV_PIPELINE_INIT_MAX_FILES", 2000)) throw new Error("project exceeds the initial commit file-count bound");
+      if (sizes.some(size => size > limit("LLV_PIPELINE_INIT_MAX_FILE_BYTES", 2 * 1024 * 1024))) throw new Error("project baseline exceeds the initial commit per-file size bound");
+      if (sizes.reduce((total, size) => total + size, 0) > limit("LLV_PIPELINE_INIT_MAX_BYTES", 32 * 1024 * 1024)) throw new Error("project exceeds the initial commit size bound");
       // Hash the inspected bytes directly. Repository attributes must not transform
       // them or run filters while preparing the first commit.
       const hashes = (await git(temporary, ["hash-object", "--no-filters", "-w", "--", ...committedFiles])).split("\n");
@@ -299,7 +318,7 @@ export async function preparePipelineRepository(rawPath: string, initialize = tr
         catch (error) { if (!missing(error)) throw error; }
         await assertRoot();
         for (const file of selected.filter(file => file.relative !== ".gitignore" && path.basename(file.relative) === ".gitignore")) {
-          await appendIgnore(stableRoot, file, appended);
+          await appendIgnore(stableRoot, file, baselineIgnore(data.ignored, path.posix.dirname(file.relative)));
         }
         if (originalIgnore) await appendIgnore(stableRoot, originalIgnore, appended);
         else await fs.writeFile(path.join(stableRoot, ".gitignore"), ignore, { flag: "wx" });
