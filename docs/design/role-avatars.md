@@ -64,7 +64,7 @@ schemes.
 | what | the shipped mark plus one accessory layer per role (hat, cap, magnifier…) | an image model draws the character in twelve costumes; PNG/WebP files | the `EMBLEM` glyphs already shipped, on a role-coloured tile, or as a corner disc on the mark |
 | cost | the twelve drawings exist as this prototype (`role-avatars/roleAvatarCostumes.ts`). Production is one SVG per role under `public/brand/roles/`, a ~40-line `RoleAvatar` component, and two slot changes in `FeedItem`. A new role costs one accessory layer | paid generation with the operator's confirmation for every round. Twelve consistent poses is the hard part: identity drift across prompts means several rounds and hand retouching | near zero: the art ships already |
 | 16–32 px | 32 and 26 px read well. At 20 px the headgear reads mainly by colour and silhouette. At 16 px colour and the hat shape are left: builder, cleaner, critic and orchestrator stay distinct, the rest blur into each other (frames `variant-1-sheet-2x-*`) | an illustrated raster blurs at 16–26 px, and the browser's downscale differs per DPR | crisp at every size: a 24-unit stroke icon is designed for 16 px |
-| dark/light | one file serves both. Dark-ink outlines vanish on a dark card, so every drawing carries a pale keyline around its silhouette (an SVG filter): invisible on a light card, an edge on a dark one. Hats keep mid-to-light tones (teal beanie, tan fedora, bright blue cap), so no two read alike on dark (frames `variant-1-*-dark-*`) | a raster has a baked background or halo, and one of the two schemes pays for it | follows the palette tokens; already contrast-checked |
+| dark/light | one file serves both. Dark-ink outlines vanish on a dark card, so every drawing was drawn with a pale keyline around its silhouette (an SVG filter): invisible on a light card, an edge on a dark one. The dark theme later dropped it again (§11). Hats keep mid-to-light tones (teal beanie, tan fedora, bright blue cap), so no two read alike on dark (frames `variant-1-*-dark-*`) | a raster has a baked background or halo, and one of the two schemes pays for it | follows the palette tokens; already contrast-checked |
 | repository | text SVG, passes the publication gate like `public/brand/` | a committed PNG fails the privacy gate without a generator manifest (`delegatus-brand.md` §4); rasters cannot be rebuilt from source | no new files |
 | maintenance | an accessory per new role; the mark changes in one place | regenerate the whole set to keep style when one role is added | add one lucide name to `EMBLEM` |
 
@@ -111,7 +111,7 @@ Cleaner: green bandana and a broom. Prod auditor: headlamp. Deployer: flight
 goggles and a launch flame. Merger: a bright blue conductor's cap with a gold
 band and merge badge. Maintainer: a teal knit beanie. Issue reporter: a tan
 fedora with a PRESS card. Visual critic: violet beret. Neutral agent: the plain
-mark. Each drawing has a pale keyline for the dark card.
+mark. Each light drawing has a pale keyline; the dark theme draws none (§11).
 
 Measured (`frames/geometry.json`, both schemes): no frame
 scrolls sideways (0 px at 1440, 1000 and 390). Every answer avatar is a
@@ -473,3 +473,28 @@ Rendered evidence: the kanban driver's «role avatars» block
 (`src/components/kanban/kanbanBoard.browser.test.tsx`) over
 `issue1695Evidence.fixture.tsx?scenario=role-avatars`, readings in
 `evidence/role-avatars/rendered.json`.
+
+## 11. Dark theme: no keyline
+
+On 2026-10-16 the pale glow around the Delegatus avatars in the dark theme was judged unnecessary.
+
+The keyline of §9 (dilate the drawing's alpha by 1.2, flood `#FFF6EE` at 0.55)
+read on the dark card as a pale halo round every figure, in the conversation
+header, on feed answers, internal cards, kanban readers and the phone. The dark
+theme now draws each costume without it; the light theme keeps the drawing as it
+was, keyline included (on a light card the ring is the card's own colour).
+
+- `costumeSvg(role, "dark")` (`src/components/brand/roleCostumes.ts`) is the
+  light drawing minus the filter and the `filter` attribute; nothing else
+  differs, so the drawing keeps its ink box.
+- A `RoleAvatar` is still one `<img>` on the light data URI built once per role;
+  theme CSS cannot reach inside it. `src/components/brand/roleAvatarDarkCss.ts`
+  builds one stylesheet, emitted once by the root layout: the 13 dark pictures as
+  custom properties `--ra-<role>` on `:root`, and one `content: var(--ra-<role>)`
+  rule per role on `img[data-role-avatar]` in the two dark scopes of
+  `tokens.css` (the OS asks for dark and the app is not pinned light, or
+  `data-theme="dark"`). The light theme matches no rule. A row builds no SVG.
+- The dark ink outlines (hat brims, glasses frames, bow tie) now sit straight on
+  the dark card. The costumes already keep mid-to-light hats and the tuxedo's
+  lifted charcoal (§9), and the glasses frames and the body's red edge are the
+  figure's own shape.

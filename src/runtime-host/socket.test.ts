@@ -4,6 +4,7 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 
+import { UnixRuntimeHostClient } from "@/lib/runtime/client";
 import type { RuntimeSocketRequest, RuntimeSocketResponse } from "@/lib/runtime/contracts";
 
 import { testEndpoint } from "./fixtures/testEndpoint";
@@ -163,4 +164,28 @@ test("a write that fails after the peer vanished ends the connection, not the ho
   expect(connection.destroyed).toBe(true);
 
   client.destroy();
+});
+
+test("closing the listener releases its idle reusable connections", async () => {
+  const socketPath = nextEndpoint();
+  const server = serveRuntimeHost(socketPath, stubHost(async request => ({ id: request.id, ok: true, result: 7 })));
+  servers.push(server);
+  await new Promise<void>(resolve => server.once("listening", resolve));
+  const client = new UnixRuntimeHostClient(socketPath);
+  expect(await client.filesRevision()).toBe(7);
+  await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+  expect(server.listening).toBe(false);
+});
+test("the production error listener remains attached after a reusable response", async () => {
+  const socketPath = nextEndpoint();
+  const server = serveRuntimeHost(socketPath, stubHost(async request => ({ id: request.id, ok: true, result: 7 })));
+  servers.push(server);
+  await new Promise<void>(resolve => server.once("listening", resolve));
+  const accepted = new Promise<net.Socket>(resolve => server.once("connection", resolve));
+  const request = new UnixRuntimeHostClient(socketPath).filesRevision();
+  const connection = await accepted;
+  expect(await request).toBe(7);
+  const epipe = Object.assign(new Error("write EPIPE"), { code: "EPIPE" });
+  expect(() => connection.emit("error", epipe)).not.toThrow();
+  expect(connection.destroyed).toBe(true);
 });

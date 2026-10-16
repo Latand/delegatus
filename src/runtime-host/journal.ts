@@ -1950,6 +1950,15 @@ export class RuntimeJournal {
     return { scanned: rows.length, settled };
   }
 
+  private readonly effectReaderGeneration = randomUUID();
+
+  /** Process generation plus both SQLite write witnesses: a peer commit and
+      a replacement journal invalidate a conditional page too. */
+  effectPageVersion(): string {
+    const peer = this.db.query<{ data_version: number }, []>("PRAGMA data_version").get()!.data_version;
+    return `${this.effectReaderGeneration}:${this.totalChanges()}:${peer}`;
+  }
+
   effectBatch(limit = 100, kinds?: readonly string[], afterEventSeq = 0): Array<RuntimeEffect & { eventSeq: number }> {
     if (kinds?.length === 0) return [];
     if (!Number.isSafeInteger(afterEventSeq) || afterEventSeq < 0) throw new Error("runtime effect cursor is invalid");
