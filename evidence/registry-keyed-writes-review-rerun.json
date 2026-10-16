@@ -1,0 +1,3863 @@
+{
+  "schemaVersion": 1,
+  "controlRevision": "02f9301fc32370210a4af533c1204741c6436f52",
+  "sequence": [
+    "main-1",
+    "candidate-1",
+    "main-2",
+    "candidate-2",
+    "main-3",
+    "candidate-3"
+  ],
+  "runtime": "1.4.0",
+  "input": {
+    "sha256": "7ebe8938e8201192c75c869372e5b94ee80681de018fd715ce0c9002122025c1",
+    "registryRows": 46909,
+    "storedJsonBytes": 164805759,
+    "coldRows": 46268,
+    "revision": 405906
+  },
+  "load": {
+    "iterations": 3,
+    "compactionNoChangeTicks": 3,
+    "compactionChangedTicks": 3,
+    "pauseBeforeMs": 25,
+    "pauseAfterMs": 15,
+    "timerMs": 10,
+    "writerProcesses": 1,
+    "heapMetric": "process.memoryUsage().heapUsed peak sampled during the first snapshot, payload reads and operations",
+    "allocationMetric": "peak live JavaScriptCore heap growth over the pre-operation heapSize baseline, sampled every 512 payload parses and at operation end; this captures concurrent heap pressure, while cumulative allocation volume remains unmeasured",
+    "logicalNow": "2026-10-16T08:00:00.000Z",
+    "scope": "Viewer registry executor and Viewer loop monitor in isolation; no browser or whole-application traffic"
+  },
+  "sourceHashes": {
+    "main": {
+      "src/lib/agent/sqliteRegistryStore.ts": "b24c80195d9561d9f391b618773a7b27d8dd4392746f55a0eb72ce1f05b6fc42",
+      "src/lib/agent/registry.ts": "4460d9a6d7bc3227b4ec4180e1dfad472fa9276fe12f2af21f585fe094a0bb5d",
+      "src/lib/agent/registryArchive.ts": "ad7ef5ad699a1f7b6fa293feb794b5d9daa81d670b6edd33641dfa142eaa89f6",
+      "src/lib/performanceSpans.ts": "92e13562c191ed125a772c8b6c9d3e8dab5ca76d31b914e80cd76ed0d1283639",
+      "src/lib/viewerLoopMonitor.ts": "983da223dbca6a1c57045f172a898f6674871b96d7d701e6e62b7cb2fce878a9",
+      "scripts/registry-write-benchmark.ts": "532e9d14da8f2146d7cbf58bb24b71337c075344cc6812d4d4ffe84f0642a3ab"
+    },
+    "candidate": {
+      "src/lib/agent/sqliteRegistryStore.ts": "d70ebd45f92c634d123ac6e21efeb56dedb6134101d13ea67daf0c588aba353b",
+      "src/lib/agent/registry.ts": "50ec33e89a2d27c07b6c062387353d97554b15ac224450784ad67a7ffaa51adc",
+      "src/lib/agent/registryArchive.ts": "7596ed21464a36ee11b38c82d30b5651b43aaf7afc54d41ef0ae76a4361c7640",
+      "src/lib/performanceSpans.ts": "7f635a4f0ce206c0c06eef814bb644292031c917e525af2970b11ecf2113ad44",
+      "src/lib/viewerLoopMonitor.ts": "983da223dbca6a1c57045f172a898f6674871b96d7d701e6e62b7cb2fce878a9",
+      "scripts/registry-write-benchmark.ts": "532e9d14da8f2146d7cbf58bb24b71337c075344cc6812d4d4ffe84f0642a3ab"
+    }
+  },
+  "firstSnapshotAndHeap": {
+    "main": {
+      "storeOpenMs": {
+        "median": 265.205,
+        "samples": [
+          277.119,
+          265.205,
+          261.936
+        ]
+      },
+      "startupPlusFirstSnapshotMs": {
+        "median": 3054.783,
+        "samples": [
+          4318.478,
+          3030.945,
+          3054.783
+        ]
+      },
+      "firstSnapshotMs": {
+        "median": 2792.847,
+        "samples": [
+          4041.359,
+          2765.74,
+          2792.847
+        ]
+      },
+      "firstSnapshotReadBytes": {
+        "median": 908109793,
+        "samples": [
+          908109886,
+          908109793,
+          908109791
+        ]
+      },
+      "firstSnapshotPayloadRows": {
+        "median": 46909,
+        "samples": [
+          46909,
+          46909,
+          46909
+        ]
+      },
+      "subsequentWriterSnapshotP50Ms": {
+        "median": 3203.087,
+        "samples": [
+          4382.281,
+          3203.087,
+          2859.505
+        ]
+      },
+      "peakHeapBytes": {
+        "max": 1168531163,
+        "samples": [
+          1139513068,
+          727944796,
+          1168531163
+        ]
+      }
+    },
+    "candidate": {
+      "storeOpenMs": {
+        "median": 286.079,
+        "samples": [
+          286.079,
+          302.402,
+          280.689
+        ]
+      },
+      "startupPlusFirstSnapshotMs": {
+        "median": 916.807,
+        "samples": [
+          986.657,
+          916.807,
+          758.079
+        ]
+      },
+      "firstSnapshotMs": {
+        "median": 614.405,
+        "samples": [
+          700.578,
+          614.405,
+          477.39
+        ]
+      },
+      "firstSnapshotReadBytes": {
+        "median": 683707981,
+        "samples": [
+          683707952,
+          683707987,
+          683707981
+        ]
+      },
+      "firstSnapshotPayloadRows": {
+        "median": 719,
+        "samples": [
+          719,
+          719,
+          719
+        ]
+      },
+      "subsequentWriterSnapshotP50Ms": {
+        "median": 23.972,
+        "samples": [
+          23.972,
+          18.585,
+          26.195
+        ]
+      },
+      "peakHeapBytes": {
+        "max": 637700009,
+        "samples": [
+          636578500,
+          637700009,
+          635711634
+        ]
+      }
+    }
+  },
+  "workloads": {
+    "main": {
+      "keyed": {
+        "wallMs": {
+          "median": 8.72,
+          "samples": [
+            44.57,
+            8.72,
+            6.536
+          ]
+        },
+        "readBytes": {
+          "median": 559,
+          "samples": [
+            2129,
+            559,
+            558
+          ]
+        },
+        "payloadRows": {
+          "median": 1,
+          "samples": [
+            1,
+            1,
+            1
+          ]
+        },
+        "peakHeapBytes": {
+          "max": 356292369,
+          "samples": [
+            319309981,
+            356182734,
+            356292369
+          ]
+        }
+      },
+      "writer-snapshot": {
+        "wallMs": {
+          "median": 3203.087,
+          "samples": [
+            4382.281,
+            3203.087,
+            2859.505
+          ]
+        },
+        "readBytes": {
+          "median": 908187471,
+          "samples": [
+            908204677,
+            908187471,
+            908181306
+          ]
+        },
+        "payloadRows": {
+          "median": 46909,
+          "samples": [
+            46909,
+            46909,
+            46909
+          ]
+        },
+        "peakHeapBytes": {
+          "max": 778202638,
+          "samples": [
+            778202638,
+            421486291,
+            452198677
+          ]
+        }
+      },
+      "serialized-snapshot": {
+        "wallMs": {
+          "median": 4083.772,
+          "samples": [
+            4083.772,
+            3280.915,
+            4639.015
+          ]
+        },
+        "readBytes": {
+          "median": 908200448,
+          "samples": [
+            908200448,
+            908187914,
+            908209507
+          ]
+        },
+        "payloadRows": {
+          "median": 46909,
+          "samples": [
+            46909,
+            46909,
+            46909
+          ]
+        },
+        "peakHeapBytes": {
+          "max": 475963181,
+          "samples": [
+            470875015,
+            409426019,
+            475963181
+          ]
+        }
+      },
+      "keyed-with-snapshot": {
+        "wallMs": {
+          "median": 3399.763,
+          "samples": [
+            7467.204,
+            3399.763,
+            3364.154
+          ]
+        },
+        "readBytes": {
+          "median": 908536351,
+          "samples": [
+            908577035,
+            908536351,
+            908525567
+          ]
+        },
+        "payloadRows": {
+          "median": 46910,
+          "samples": [
+            46910,
+            46910,
+            46910
+          ]
+        },
+        "peakHeapBytes": {
+          "max": 768139279,
+          "samples": [
+            768139279,
+            693477222,
+            401896176
+          ]
+        }
+      }
+    },
+    "candidate": {
+      "keyed": {
+        "wallMs": {
+          "median": 13.995,
+          "samples": [
+            13.995,
+            16.023,
+            13.196
+          ]
+        },
+        "readBytes": {
+          "median": 14408,
+          "samples": [
+            14409,
+            14408,
+            14401
+          ]
+        },
+        "payloadRows": {
+          "median": 1,
+          "samples": [
+            1,
+            1,
+            1
+          ]
+        },
+        "peakHeapBytes": {
+          "max": 65391710,
+          "samples": [
+            65378016,
+            65391710,
+            65365621
+          ]
+        }
+      },
+      "writer-snapshot": {
+        "wallMs": {
+          "median": 23.972,
+          "samples": [
+            23.972,
+            18.585,
+            26.195
+          ]
+        },
+        "readBytes": {
+          "median": 752,
+          "samples": [
+            752,
+            787,
+            554
+          ]
+        },
+        "payloadRows": {
+          "median": 0,
+          "samples": [
+            0,
+            0,
+            0
+          ]
+        },
+        "peakHeapBytes": {
+          "max": 125939487,
+          "samples": [
+            125929024,
+            125939487,
+            125926666
+          ]
+        }
+      },
+      "serialized-snapshot": {
+        "wallMs": {
+          "median": 10794.511,
+          "samples": [
+            11737.277,
+            10420.141,
+            10794.511
+          ]
+        },
+        "readBytes": {
+          "median": 247754131,
+          "samples": [
+            247768293,
+            247748005,
+            247754131
+          ]
+        },
+        "payloadRows": {
+          "median": 46268,
+          "samples": [
+            46268,
+            46268,
+            46268
+          ]
+        },
+        "peakHeapBytes": {
+          "max": 637700009,
+          "samples": [
+            636578500,
+            637700009,
+            635711634
+          ]
+        }
+      },
+      "keyed-with-snapshot": {
+        "wallMs": {
+          "median": 108.672,
+          "samples": [
+            108.672,
+            84.244,
+            109.519
+          ]
+        },
+        "readBytes": {
+          "median": 388931,
+          "samples": [
+            388936,
+            388897,
+            388931
+          ]
+        },
+        "payloadRows": {
+          "median": 1,
+          "samples": [
+            1,
+            1,
+            1
+          ]
+        },
+        "peakHeapBytes": {
+          "max": 214941279,
+          "samples": [
+            214799114,
+            214772611,
+            214941279
+          ]
+        }
+      }
+    }
+  },
+  "compaction": {
+    "initial": {
+      "main": {
+        "wallMs": {
+          "median": 2560.473,
+          "samples": [
+            3082.971,
+            2560.473,
+            2343.13
+          ]
+        },
+        "readBytes": {
+          "median": 546921779,
+          "samples": [
+            546931070,
+            546921779,
+            546918502
+          ]
+        },
+        "payloadRows": {
+          "median": 20940,
+          "samples": [
+            20940,
+            20940,
+            20940
+          ]
+        },
+        "sampledHeapGrowthBytes": {
+          "median": 351895813,
+          "samples": [
+            353388440,
+            342584243,
+            351895813
+          ]
+        }
+      },
+      "candidate": {
+        "wallMs": {
+          "median": 2281.512,
+          "samples": [
+            3339.18,
+            2143.46,
+            2281.512
+          ]
+        },
+        "readBytes": {
+          "median": 546953788,
+          "samples": [
+            546971245,
+            546950736,
+            546953788
+          ]
+        },
+        "payloadRows": {
+          "median": 20940,
+          "samples": [
+            20940,
+            20940,
+            20940
+          ]
+        },
+        "sampledHeapGrowthBytes": {
+          "median": 378117305,
+          "samples": [
+            377316382,
+            378117305,
+            378126723
+          ]
+        }
+      }
+    },
+    "unchanged": {
+      "main": {
+        "wallMs": {
+          "median": 3571.473,
+          "samples": [
+            4804.941,
+            3571.473,
+            2654.656
+          ]
+        },
+        "readBytes": {
+          "median": 547172392,
+          "samples": [
+            547191311,
+            547172392,
+            547157891
+          ]
+        },
+        "payloadRows": {
+          "median": 20940,
+          "samples": [
+            20940,
+            20940,
+            20940
+          ]
+        },
+        "sampledHeapGrowthBytes": {
+          "median": 235407641,
+          "samples": [
+            354259545,
+            230313292,
+            235407641
+          ]
+        }
+      },
+      "candidate": {
+        "wallMs": {
+          "median": 42.668,
+          "samples": [
+            47.992,
+            38.495,
+            42.668
+          ]
+        },
+        "readBytes": {
+          "median": 2145,
+          "samples": [
+            2148,
+            2145,
+            2103
+          ]
+        },
+        "payloadRows": {
+          "median": 0,
+          "samples": [
+            0,
+            0,
+            0
+          ]
+        },
+        "sampledHeapGrowthBytes": {
+          "median": 0,
+          "samples": [
+            0,
+            0,
+            0
+          ]
+        }
+      }
+    },
+    "oneChange": {
+      "main": {
+        "wallMs": {
+          "median": 3452.429,
+          "samples": [
+            3662.854,
+            3452.429,
+            3338.178
+          ]
+        },
+        "readBytes": {
+          "median": 547255455,
+          "samples": [
+            547255455,
+            547253557,
+            547267577
+          ]
+        },
+        "payloadRows": {
+          "median": 20946,
+          "samples": [
+            20946,
+            20946,
+            20946
+          ]
+        },
+        "sampledHeapGrowthBytes": {
+          "median": 388484922,
+          "samples": [
+            402567654,
+            195600940,
+            388484922
+          ]
+        }
+      },
+      "candidate": {
+        "wallMs": {
+          "median": 63.996,
+          "samples": [
+            98.424,
+            62.738,
+            63.996
+          ]
+        },
+        "readBytes": {
+          "median": 71777,
+          "samples": [
+            77450,
+            71777,
+            71774
+          ]
+        },
+        "payloadRows": {
+          "median": 8,
+          "samples": [
+            8,
+            8,
+            8
+          ]
+        },
+        "sampledHeapGrowthBytes": {
+          "median": 472,
+          "samples": [
+            472,
+            472,
+            472
+          ]
+        }
+      }
+    }
+  },
+  "compactionLoopGaps": {
+    "main": {
+      "timerGapP50Ms": {
+        "median": 1.186,
+        "samples": [
+          1.142,
+          4.226,
+          1.186
+        ]
+      },
+      "timerGapP95Ms": {
+        "median": 3898.787,
+        "samples": [
+          5231.989,
+          3898.787,
+          3656.83
+        ]
+      },
+      "timerGapP99Ms": {
+        "median": 5486.571,
+        "samples": [
+          5702.88,
+          5486.571,
+          4697.643
+        ]
+      },
+      "timerGapMaxMs": {
+        "median": 5486.571,
+        "samples": [
+          5702.88,
+          5486.571,
+          4697.643
+        ]
+      },
+      "viewerGapsOver500Count": {
+        "median": 7,
+        "samples": [
+          7,
+          7,
+          7
+        ]
+      },
+      "viewerGapP95Ms": {
+        "median": 5485,
+        "samples": [
+          5702,
+          5485,
+          4697
+        ]
+      },
+      "viewerGapP99Ms": {
+        "median": 5485,
+        "samples": [
+          5702,
+          5485,
+          4697
+        ]
+      }
+    },
+    "candidate": {
+      "timerGapP50Ms": {
+        "median": 0.103,
+        "samples": [
+          1.193,
+          0.103,
+          0.09
+        ]
+      },
+      "timerGapP95Ms": {
+        "median": 415.262,
+        "samples": [
+          552.565,
+          336.144,
+          415.262
+        ]
+      },
+      "timerGapP99Ms": {
+        "median": 2300.223,
+        "samples": [
+          3359.736,
+          2160.277,
+          2300.223
+        ]
+      },
+      "timerGapMaxMs": {
+        "median": 2300.223,
+        "samples": [
+          3359.736,
+          2160.277,
+          2300.223
+        ]
+      },
+      "viewerGapsOver500Count": {
+        "median": 1,
+        "samples": [
+          4,
+          1,
+          1
+        ]
+      },
+      "viewerGapP95Ms": {
+        "median": 2300,
+        "samples": [
+          3360,
+          2160,
+          2300
+        ]
+      },
+      "viewerGapP99Ms": {
+        "median": 2300,
+        "samples": [
+          3360,
+          2160,
+          2300
+        ]
+      }
+    }
+  },
+  "reports": [
+    {
+      "schemaVersion": 1,
+      "label": "main-1",
+      "runtime": "1.4.0",
+      "at": "2026-10-16T11:28:18.691Z",
+      "input": {
+        "sha256": "7ebe8938e8201192c75c869372e5b94ee80681de018fd715ce0c9002122025c1"
+      },
+      "sourceHashes": {
+        "src/lib/agent/sqliteRegistryStore.ts": "b24c80195d9561d9f391b618773a7b27d8dd4392746f55a0eb72ce1f05b6fc42",
+        "src/lib/agent/registry.ts": "4460d9a6d7bc3227b4ec4180e1dfad472fa9276fe12f2af21f585fe094a0bb5d",
+        "src/lib/agent/registryArchive.ts": "ad7ef5ad699a1f7b6fa293feb794b5d9daa81d670b6edd33641dfa142eaa89f6",
+        "src/lib/performanceSpans.ts": "92e13562c191ed125a772c8b6c9d3e8dab5ca76d31b914e80cd76ed0d1283639",
+        "src/lib/viewerLoopMonitor.ts": "983da223dbca6a1c57045f172a898f6674871b96d7d701e6e62b7cb2fce878a9",
+        "scripts/registry-write-benchmark.ts": "532e9d14da8f2146d7cbf58bb24b71337c075344cc6812d4d4ffe84f0642a3ab"
+      },
+      "load": {
+        "iterations": 3,
+        "compactionNoChangeTicks": 3,
+        "compactionChangedTicks": 3,
+        "pauseBeforeMs": 25,
+        "pauseAfterMs": 15,
+        "timerMs": 10,
+        "writerProcesses": 1,
+        "heapMetric": "process.memoryUsage().heapUsed peak sampled during the first snapshot, payload reads and operations",
+        "allocationMetric": "peak live JavaScriptCore heap growth over the pre-operation heapSize baseline, sampled every 512 payload parses and at operation end; this captures concurrent heap pressure, while cumulative allocation volume remains unmeasured",
+        "logicalNow": "2026-10-16T08:00:00.000Z",
+        "scope": "Viewer registry executor and Viewer loop monitor in isolation; no browser or whole-application traffic"
+      },
+      "results": [
+        {
+          "workload": "keyed",
+          "rows": 46909,
+          "payloadBytes": 164805759,
+          "coldRows": 46268,
+          "storeOpenMs": 282.013,
+          "startupPlusFirstSnapshotMs": 4092.358,
+          "warm": {
+            "wallMs": 3810.345,
+            "readBytes": 908108972,
+            "payloadReads": 46909,
+            "heapUsedAfterBytes": 319309981,
+            "allocatedHeapPeakBytes": 308018628
+          },
+          "operations": [
+            {
+              "wallMs": 44.57,
+              "readBytes": 471648,
+              "payloadReads": 1,
+              "heapUsedAfterBytes": 295997680,
+              "allocatedHeapPeakBytes": 0
+            },
+            {
+              "wallMs": 57.027,
+              "readBytes": 2090,
+              "payloadReads": 1,
+              "heapUsedAfterBytes": 295997680,
+              "allocatedHeapPeakBytes": 0
+            },
+            {
+              "wallMs": 33.88,
+              "readBytes": 2129,
+              "payloadReads": 1,
+              "heapUsedAfterBytes": 295997680,
+              "allocatedHeapPeakBytes": 0
+            }
+          ],
+          "wallMs": {
+            "samples": 3,
+            "p50": 44.57,
+            "p95": 57.027,
+            "p99": 57.027,
+            "max": 57.027
+          },
+          "readBytes": {
+            "samples": 3,
+            "p50": 2129,
+            "p95": 471648,
+            "p99": 471648,
+            "max": 471648
+          },
+          "allocatedHeapPeakBytes": {
+            "samples": 3,
+            "p50": 0,
+            "p95": 0,
+            "p99": 0,
+            "max": 0
+          },
+          "peakHeapBytes": 319309981,
+          "loopGapMs": {
+            "samples": 12,
+            "p50": 0.093,
+            "p95": 104.745,
+            "p99": 104.745,
+            "max": 104.745
+          },
+          "gapsOver50Ms": 3,
+          "viewerGapsOver500Ms": {
+            "samples": 0,
+            "p50": 0,
+            "p95": 0,
+            "p99": 0,
+            "max": 0
+          }
+        },
+        {
+          "workload": "writer-snapshot",
+          "rows": 46909,
+          "payloadBytes": 164805759,
+          "coldRows": 46268,
+          "storeOpenMs": 277.119,
+          "startupPlusFirstSnapshotMs": 4318.478,
+          "warm": {
+            "wallMs": 4041.359,
+            "readBytes": 908109886,
+            "payloadReads": 46909,
+            "heapUsedAfterBytes": 363364869,
+            "allocatedHeapPeakBytes": 351821281
+          },
+          "operations": [
+            {
+              "wallMs": 3201.195,
+              "readBytes": 908184874,
+              "payloadReads": 46909,
+              "heapUsedAfterBytes": 471470298,
+              "allocatedHeapPeakBytes": 452539053
+            },
+            {
+              "wallMs": 4858.348,
+              "readBytes": 908212483,
+              "payloadReads": 46909,
+              "heapUsedAfterBytes": 778202638,
+              "allocatedHeapPeakBytes": 303058952
+            },
+            {
+              "wallMs": 4382.281,
+              "readBytes": 908204677,
+              "payloadReads": 46909,
+              "heapUsedAfterBytes": 301621893,
+              "allocatedHeapPeakBytes": 366521859
+            }
+          ],
+          "wallMs": {
+            "samples": 3,
+            "p50": 4382.281,
+            "p95": 4858.348,
+            "p99": 4858.348,
+            "max": 4858.348
+          },
+          "readBytes": {
+            "samples": 3,
+            "p50": 908204677,
+            "p95": 908212483,
+            "p99": 908212483,
+            "max": 908212483
+          },
+          "allocatedHeapPeakBytes": {
+            "samples": 3,
+            "p50": 366521859,
+            "p95": 452539053,
+            "p99": 452539053,
+            "max": 452539053
+          },
+          "peakHeapBytes": 778202638,
+          "loopGapMs": {
+            "samples": 12,
+            "p50": 0.135,
+            "p95": 4882.386,
+            "p99": 4882.386,
+            "max": 4882.386
+          },
+          "gapsOver50Ms": 3,
+          "viewerGapsOver500Ms": {
+            "samples": 3,
+            "p50": 4403,
+            "p95": 4882,
+            "p99": 4882,
+            "max": 4882
+          }
+        },
+        {
+          "workload": "serialized-snapshot",
+          "rows": 46909,
+          "payloadBytes": 164805759,
+          "coldRows": 46268,
+          "storeOpenMs": 275.004,
+          "startupPlusFirstSnapshotMs": 3435.77,
+          "warm": {
+            "wallMs": 3160.766,
+            "readBytes": 908109852,
+            "payloadReads": 46909,
+            "heapUsedAfterBytes": 390743269,
+            "allocatedHeapPeakBytes": 378651892
+          },
+          "operations": [
+            {
+              "wallMs": 3886.248,
+              "readBytes": 908194492,
+              "payloadReads": 46909,
+              "heapUsedAfterBytes": 338798790,
+              "allocatedHeapPeakBytes": 319799284
+            },
+            {
+              "wallMs": 4083.772,
+              "readBytes": 908200448,
+              "payloadReads": 46909,
+              "heapUsedAfterBytes": 396928681,
+              "allocatedHeapPeakBytes": 385061845
+            },
+            {
+              "wallMs": 4581.086,
+              "readBytes": 908208040,
+              "payloadReads": 46909,
+              "heapUsedAfterBytes": 470875015,
+              "allocatedHeapPeakBytes": 459589727
+            }
+          ],
+          "wallMs": {
+            "samples": 3,
+            "p50": 4083.772,
+            "p95": 4581.086,
+            "p99": 4581.086,
+            "max": 4581.086
+          },
+          "readBytes": {
+            "samples": 3,
+            "p50": 908200448,
+            "p95": 908208040,
+            "p99": 908208040,
+            "max": 908208040
+          },
+          "allocatedHeapPeakBytes": {
+            "samples": 3,
+            "p50": 385061845,
+            "p95": 459589727,
+            "p99": 459589727,
+            "max": 459589727
+          },
+          "peakHeapBytes": 470875015,
+          "loopGapMs": {
+            "samples": 13,
+            "p50": 0.659,
+            "p95": 4603.336,
+            "p99": 4603.336,
+            "max": 4603.336
+          },
+          "gapsOver50Ms": 3,
+          "viewerGapsOver500Ms": {
+            "samples": 3,
+            "p50": 4101,
+            "p95": 4602,
+            "p99": 4602,
+            "max": 4602
+          }
+        },
+        {
+          "workload": "keyed-with-snapshot",
+          "rows": 46909,
+          "payloadBytes": 164805759,
+          "coldRows": 46268,
+          "storeOpenMs": 270.775,
+          "startupPlusFirstSnapshotMs": 2996.537,
+          "warm": {
+            "wallMs": 2725.762,
+            "readBytes": 908110031,
+            "payloadReads": 46909,
+            "heapUsedAfterBytes": 305087203,
+            "allocatedHeapPeakBytes": 293799341
+          },
+          "operations": [
+            {
+              "wallMs": 3221.663,
+              "readBytes": 908635872,
+              "payloadReads": 46910,
+              "heapUsedAfterBytes": 299412504,
+              "allocatedHeapPeakBytes": 365521084
+            },
+            {
+              "wallMs": 7467.204,
+              "readBytes": 908569198,
+              "payloadReads": 46910,
+              "heapUsedAfterBytes": 455951398,
+              "allocatedHeapPeakBytes": 156647296
+            },
+            {
+              "wallMs": 7956.815,
+              "readBytes": 908577035,
+              "payloadReads": 46910,
+              "heapUsedAfterBytes": 768139279,
+              "allocatedHeapPeakBytes": 295103785
+            }
+          ],
+          "wallMs": {
+            "samples": 3,
+            "p50": 7467.204,
+            "p95": 7956.815,
+            "p99": 7956.815,
+            "max": 7956.815
+          },
+          "readBytes": {
+            "samples": 3,
+            "p50": 908577035,
+            "p95": 908635872,
+            "p99": 908635872,
+            "max": 908635872
+          },
+          "allocatedHeapPeakBytes": {
+            "samples": 3,
+            "p50": 295103785,
+            "p95": 365521084,
+            "p99": 365521084,
+            "max": 365521084
+          },
+          "peakHeapBytes": 768139279,
+          "loopGapMs": {
+            "samples": 11,
+            "p50": 0.085,
+            "p95": 7997.017,
+            "p99": 7997.017,
+            "max": 7997.017
+          },
+          "gapsOver50Ms": 3,
+          "viewerGapsOver500Ms": {
+            "samples": 3,
+            "p50": 7504,
+            "p95": 8005,
+            "p99": 8005,
+            "max": 8005
+          }
+        },
+        {
+          "workload": "compaction-control",
+          "rows": 46909,
+          "payloadBytes": 164805759,
+          "coldRows": 46268,
+          "storeOpenMs": 247.427,
+          "startupPlusFirstSnapshotMs": 4347.158,
+          "warm": {
+            "wallMs": 4099.731,
+            "readBytes": 908110002,
+            "payloadReads": 46909,
+            "heapUsedAfterBytes": 409954187,
+            "allocatedHeapPeakBytes": 397915623
+          },
+          "compaction": {
+            "initial": {
+              "registryOpenMs": 28.432,
+              "wallMs": 3082.971,
+              "readBytes": 546931070,
+              "payloadReads": 20940,
+              "allocatedHeapPeakBytes": 353388440,
+              "heapUsedAfterBytes": 379649424
+            },
+            "unchanged": {
+              "samples": 3,
+              "wallMs": {
+                "samples": 3,
+                "p50": 4804.941,
+                "p95": 5655.314,
+                "p99": 5655.314,
+                "max": 5655.314
+              },
+              "readBytes": {
+                "samples": 3,
+                "p50": 547191311,
+                "p95": 547205562,
+                "p99": 547205562,
+                "max": 547205562
+              },
+              "payloadReads": {
+                "samples": 3,
+                "p50": 20940,
+                "p95": 20940,
+                "p99": 20940,
+                "max": 20940
+              },
+              "allocatedHeapPeakBytes": {
+                "samples": 3,
+                "p50": 354259545,
+                "p95": 359933449,
+                "p99": 359933449,
+                "max": 359933449
+              }
+            },
+            "oneChange": {
+              "samples": 3,
+              "wallMs": {
+                "samples": 3,
+                "p50": 3662.854,
+                "p95": 4755.284,
+                "p99": 4755.284,
+                "max": 4755.284
+              },
+              "readBytes": {
+                "samples": 3,
+                "p50": 547255455,
+                "p95": 547260975,
+                "p99": 547260975,
+                "max": 547260975
+              },
+              "payloadReads": {
+                "samples": 3,
+                "p50": 20946,
+                "p95": 20949,
+                "p99": 20949,
+                "max": 20949
+              },
+              "allocatedHeapPeakBytes": {
+                "samples": 3,
+                "p50": 402567654,
+                "p95": 433318468,
+                "p99": 433318468,
+                "max": 433318468
+              }
+            }
+          },
+          "operations": [
+            {
+              "kind": "initial",
+              "wallMs": 3082.971,
+              "readBytes": 546931070,
+              "payloadReads": 20940,
+              "allocatedHeapPeakBytes": 353388440,
+              "heapUsedAfterBytes": 379649424
+            },
+            {
+              "kind": "unchanged",
+              "wallMs": 4402.688,
+              "readBytes": 547185088,
+              "payloadReads": 20940,
+              "heapUsedAfterBytes": 379211622,
+              "allocatedHeapPeakBytes": 235743756
+            },
+            {
+              "kind": "unchanged",
+              "wallMs": 4804.941,
+              "readBytes": 547191311,
+              "payloadReads": 20940,
+              "heapUsedAfterBytes": 756020369,
+              "allocatedHeapPeakBytes": 354259545
+            },
+            {
+              "kind": "unchanged",
+              "wallMs": 5655.314,
+              "readBytes": 547205562,
+              "payloadReads": 20940,
+              "heapUsedAfterBytes": 1139513068,
+              "allocatedHeapPeakBytes": 359933449
+            },
+            {
+              "kind": "one-change",
+              "wallMs": 4755.284,
+              "readBytes": 547255455,
+              "payloadReads": 20943,
+              "heapUsedAfterBytes": 453560096,
+              "allocatedHeapPeakBytes": 402567654
+            },
+            {
+              "kind": "one-change",
+              "wallMs": 3662.854,
+              "readBytes": 547253135,
+              "payloadReads": 20946,
+              "heapUsedAfterBytes": 487801122,
+              "allocatedHeapPeakBytes": 433318468
+            },
+            {
+              "kind": "one-change",
+              "wallMs": 3167.616,
+              "readBytes": 547260975,
+              "payloadReads": 20949,
+              "heapUsedAfterBytes": 391415793,
+              "allocatedHeapPeakBytes": 334386766
+            }
+          ],
+          "wallMs": {
+            "samples": 7,
+            "p50": 4402.688,
+            "p95": 5655.314,
+            "p99": 5655.314,
+            "max": 5655.314
+          },
+          "readBytes": {
+            "samples": 7,
+            "p50": 547205562,
+            "p95": 547260975,
+            "p99": 547260975,
+            "max": 547260975
+          },
+          "allocatedHeapPeakBytes": {
+            "samples": 7,
+            "p50": 354259545,
+            "p95": 433318468,
+            "p99": 433318468,
+            "max": 433318468
+          },
+          "peakHeapBytes": 1139513068,
+          "loopGapMs": {
+            "samples": 24,
+            "p50": 1.142,
+            "p95": 5231.989,
+            "p99": 5702.88,
+            "max": 5702.88
+          },
+          "gapsOver50Ms": 7,
+          "viewerGapsOver500Ms": {
+            "samples": 7,
+            "p50": 4439,
+            "p95": 5702,
+            "p99": 5702,
+            "max": 5702
+          }
+        }
+      ]
+    },
+    {
+      "schemaVersion": 1,
+      "label": "candidate-1",
+      "runtime": "1.4.0",
+      "at": "2026-10-16T11:29:15.474Z",
+      "input": {
+        "sha256": "7ebe8938e8201192c75c869372e5b94ee80681de018fd715ce0c9002122025c1"
+      },
+      "sourceHashes": {
+        "src/lib/agent/sqliteRegistryStore.ts": "d70ebd45f92c634d123ac6e21efeb56dedb6134101d13ea67daf0c588aba353b",
+        "src/lib/agent/registry.ts": "50ec33e89a2d27c07b6c062387353d97554b15ac224450784ad67a7ffaa51adc",
+        "src/lib/agent/registryArchive.ts": "7596ed21464a36ee11b38c82d30b5651b43aaf7afc54d41ef0ae76a4361c7640",
+        "src/lib/performanceSpans.ts": "7f635a4f0ce206c0c06eef814bb644292031c917e525af2970b11ecf2113ad44",
+        "src/lib/viewerLoopMonitor.ts": "983da223dbca6a1c57045f172a898f6674871b96d7d701e6e62b7cb2fce878a9",
+        "scripts/registry-write-benchmark.ts": "532e9d14da8f2146d7cbf58bb24b71337c075344cc6812d4d4ffe84f0642a3ab"
+      },
+      "load": {
+        "iterations": 3,
+        "compactionNoChangeTicks": 3,
+        "compactionChangedTicks": 3,
+        "pauseBeforeMs": 25,
+        "pauseAfterMs": 15,
+        "timerMs": 10,
+        "writerProcesses": 1,
+        "heapMetric": "process.memoryUsage().heapUsed peak sampled during the first snapshot, payload reads and operations",
+        "allocationMetric": "peak live JavaScriptCore heap growth over the pre-operation heapSize baseline, sampled every 512 payload parses and at operation end; this captures concurrent heap pressure, while cumulative allocation volume remains unmeasured",
+        "logicalNow": "2026-10-16T08:00:00.000Z",
+        "scope": "Viewer registry executor and Viewer loop monitor in isolation; no browser or whole-application traffic"
+      },
+      "results": [
+        {
+          "workload": "keyed",
+          "rows": 46909,
+          "payloadBytes": 164805759,
+          "coldRows": 46268,
+          "storeOpenMs": 310.556,
+          "startupPlusFirstSnapshotMs": 821.235,
+          "warm": {
+            "wallMs": 510.679,
+            "readBytes": 683708783,
+            "payloadReads": 719,
+            "heapUsedAfterBytes": 60402187,
+            "allocatedHeapPeakBytes": 48391574
+          },
+          "operations": [
+            {
+              "wallMs": 15.168,
+              "readBytes": 545365,
+              "payloadReads": 1,
+              "heapUsedAfterBytes": 65378016,
+              "allocatedHeapPeakBytes": 0
+            },
+            {
+              "wallMs": 13.995,
+              "readBytes": 14409,
+              "payloadReads": 1,
+              "heapUsedAfterBytes": 65378016,
+              "allocatedHeapPeakBytes": 0
+            },
+            {
+              "wallMs": 12.891,
+              "readBytes": 558,
+              "payloadReads": 1,
+              "heapUsedAfterBytes": 65378016,
+              "allocatedHeapPeakBytes": 0
+            }
+          ],
+          "wallMs": {
+            "samples": 3,
+            "p50": 13.995,
+            "p95": 15.168,
+            "p99": 15.168,
+            "max": 15.168
+          },
+          "readBytes": {
+            "samples": 3,
+            "p50": 14409,
+            "p95": 545365,
+            "p99": 545365,
+            "max": 545365
+          },
+          "allocatedHeapPeakBytes": {
+            "samples": 3,
+            "p50": 0,
+            "p95": 0,
+            "p99": 0,
+            "max": 0
+          },
+          "peakHeapBytes": 65378016,
+          "loopGapMs": {
+            "samples": 12,
+            "p50": 0.093,
+            "p95": 25.693,
+            "p99": 25.693,
+            "max": 25.693
+          },
+          "gapsOver50Ms": 0,
+          "viewerGapsOver500Ms": {
+            "samples": 0,
+            "p50": 0,
+            "p95": 0,
+            "p99": 0,
+            "max": 0
+          }
+        },
+        {
+          "workload": "writer-snapshot",
+          "rows": 46909,
+          "payloadBytes": 164805759,
+          "coldRows": 46268,
+          "storeOpenMs": 286.079,
+          "startupPlusFirstSnapshotMs": 986.657,
+          "warm": {
+            "wallMs": 700.578,
+            "readBytes": 683707952,
+            "payloadReads": 719,
+            "heapUsedAfterBytes": 103462533,
+            "allocatedHeapPeakBytes": 37684370
+          },
+          "operations": [
+            {
+              "wallMs": 78.745,
+              "readBytes": 2353,
+              "payloadReads": 0,
+              "heapUsedAfterBytes": 125929024,
+              "allocatedHeapPeakBytes": 0
+            },
+            {
+              "wallMs": 23.312,
+              "readBytes": 752,
+              "payloadReads": 0,
+              "heapUsedAfterBytes": 125929024,
+              "allocatedHeapPeakBytes": 0
+            },
+            {
+              "wallMs": 23.972,
+              "readBytes": 523,
+              "payloadReads": 0,
+              "heapUsedAfterBytes": 125929024,
+              "allocatedHeapPeakBytes": 0
+            }
+          ],
+          "wallMs": {
+            "samples": 3,
+            "p50": 23.972,
+            "p95": 78.745,
+            "p99": 78.745,
+            "max": 78.745
+          },
+          "readBytes": {
+            "samples": 3,
+            "p50": 752,
+            "p95": 2353,
+            "p99": 2353,
+            "max": 2353
+          },
+          "allocatedHeapPeakBytes": {
+            "samples": 3,
+            "p50": 0,
+            "p95": 0,
+            "p99": 0,
+            "max": 0
+          },
+          "peakHeapBytes": 125929024,
+          "loopGapMs": {
+            "samples": 12,
+            "p50": 0.083,
+            "p95": 96.597,
+            "p99": 96.597,
+            "max": 96.597
+          },
+          "gapsOver50Ms": 1,
+          "viewerGapsOver500Ms": {
+            "samples": 0,
+            "p50": 0,
+            "p95": 0,
+            "p99": 0,
+            "max": 0
+          }
+        },
+        {
+          "workload": "serialized-snapshot",
+          "rows": 46909,
+          "payloadBytes": 164805759,
+          "coldRows": 46268,
+          "storeOpenMs": 232.583,
+          "startupPlusFirstSnapshotMs": 1016.818,
+          "warm": {
+            "wallMs": 784.235,
+            "readBytes": 683707994,
+            "payloadReads": 719,
+            "heapUsedAfterBytes": 106596835,
+            "allocatedHeapPeakBytes": 38721871
+          },
+          "operations": [
+            {
+              "wallMs": 9668.616,
+              "readBytes": 247736203,
+              "payloadReads": 46268,
+              "heapUsedAfterBytes": 366373734,
+              "allocatedHeapPeakBytes": 238086366
+            },
+            {
+              "wallMs": 11737.277,
+              "readBytes": 247768293,
+              "payloadReads": 46268,
+              "heapUsedAfterBytes": 411691289,
+              "allocatedHeapPeakBytes": 281625860
+            },
+            {
+              "wallMs": 20472.326,
+              "readBytes": 247907716,
+              "payloadReads": 46268,
+              "heapUsedAfterBytes": 476981501,
+              "allocatedHeapPeakBytes": 166026343
+            }
+          ],
+          "wallMs": {
+            "samples": 3,
+            "p50": 11737.277,
+            "p95": 20472.326,
+            "p99": 20472.326,
+            "max": 20472.326
+          },
+          "readBytes": {
+            "samples": 3,
+            "p50": 247768293,
+            "p95": 247907716,
+            "p99": 247907716,
+            "max": 247907716
+          },
+          "allocatedHeapPeakBytes": {
+            "samples": 3,
+            "p50": 238086366,
+            "p95": 281625860,
+            "p99": 281625860,
+            "max": 281625860
+          },
+          "peakHeapBytes": 636578500,
+          "loopGapMs": {
+            "samples": 10,
+            "p50": 1.461,
+            "p95": 20652.41,
+            "p99": 20652.41,
+            "max": 20652.41
+          },
+          "gapsOver50Ms": 3,
+          "viewerGapsOver500Ms": {
+            "samples": 3,
+            "p50": 11849,
+            "p95": 20654,
+            "p99": 20654,
+            "max": 20654
+          }
+        },
+        {
+          "workload": "keyed-with-snapshot",
+          "rows": 46909,
+          "payloadBytes": 164805759,
+          "coldRows": 46268,
+          "storeOpenMs": 61.471,
+          "startupPlusFirstSnapshotMs": 835.787,
+          "warm": {
+            "wallMs": 774.316,
+            "readBytes": 683708066,
+            "payloadReads": 719,
+            "heapUsedAfterBytes": 153201887,
+            "allocatedHeapPeakBytes": 3624
+          },
+          "operations": [
+            {
+              "wallMs": 278.066,
+              "readBytes": 199989502,
+              "payloadReads": 1,
+              "heapUsedAfterBytes": 214799114,
+              "allocatedHeapPeakBytes": 0
+            },
+            {
+              "wallMs": 108.672,
+              "readBytes": 388936,
+              "payloadReads": 1,
+              "heapUsedAfterBytes": 214799114,
+              "allocatedHeapPeakBytes": 0
+            },
+            {
+              "wallMs": 103.388,
+              "readBytes": 11948,
+              "payloadReads": 1,
+              "heapUsedAfterBytes": 214799114,
+              "allocatedHeapPeakBytes": 0
+            }
+          ],
+          "wallMs": {
+            "samples": 3,
+            "p50": 108.672,
+            "p95": 278.066,
+            "p99": 278.066,
+            "max": 278.066
+          },
+          "readBytes": {
+            "samples": 3,
+            "p50": 388936,
+            "p95": 199989502,
+            "p99": 199989502,
+            "max": 199989502
+          },
+          "allocatedHeapPeakBytes": {
+            "samples": 3,
+            "p50": 0,
+            "p95": 0,
+            "p99": 0,
+            "max": 0
+          },
+          "peakHeapBytes": 214799114,
+          "loopGapMs": {
+            "samples": 12,
+            "p50": 0.092,
+            "p95": 362.966,
+            "p99": 362.966,
+            "max": 362.966
+          },
+          "gapsOver50Ms": 3,
+          "viewerGapsOver500Ms": {
+            "samples": 0,
+            "p50": 0,
+            "p95": 0,
+            "p99": 0,
+            "max": 0
+          }
+        },
+        {
+          "workload": "compaction-control",
+          "rows": 46909,
+          "payloadBytes": 164805759,
+          "coldRows": 46268,
+          "storeOpenMs": 304.57,
+          "startupPlusFirstSnapshotMs": 985.67,
+          "warm": {
+            "wallMs": 681.1,
+            "readBytes": 683708145,
+            "payloadReads": 719,
+            "heapUsedAfterBytes": 113049382,
+            "allocatedHeapPeakBytes": 41139541
+          },
+          "compaction": {
+            "initial": {
+              "registryOpenMs": 41.168,
+              "wallMs": 3339.18,
+              "readBytes": 546971245,
+              "payloadReads": 20940,
+              "allocatedHeapPeakBytes": 377316382,
+              "heapUsedAfterBytes": 515416609
+            },
+            "unchanged": {
+              "samples": 3,
+              "wallMs": {
+                "samples": 3,
+                "p50": 47.992,
+                "p95": 82.24,
+                "p99": 82.24,
+                "max": 82.24
+              },
+              "readBytes": {
+                "samples": 3,
+                "p50": 2148,
+                "p95": 28259,
+                "p99": 28259,
+                "max": 28259
+              },
+              "payloadReads": {
+                "samples": 3,
+                "p50": 0,
+                "p95": 0,
+                "p99": 0,
+                "max": 0
+              },
+              "allocatedHeapPeakBytes": {
+                "samples": 3,
+                "p50": 0,
+                "p95": 0,
+                "p99": 0,
+                "max": 0
+              }
+            },
+            "oneChange": {
+              "samples": 3,
+              "wallMs": {
+                "samples": 3,
+                "p50": 98.424,
+                "p95": 101.61,
+                "p99": 101.61,
+                "max": 101.61
+              },
+              "readBytes": {
+                "samples": 3,
+                "p50": 77450,
+                "p95": 81507,
+                "p99": 81507,
+                "max": 81507
+              },
+              "payloadReads": {
+                "samples": 3,
+                "p50": 8,
+                "p95": 8,
+                "p99": 8,
+                "max": 8
+              },
+              "allocatedHeapPeakBytes": {
+                "samples": 3,
+                "p50": 472,
+                "p95": 472,
+                "p99": 472,
+                "max": 472
+              }
+            }
+          },
+          "operations": [
+            {
+              "kind": "initial",
+              "wallMs": 3339.18,
+              "readBytes": 546971245,
+              "payloadReads": 20940,
+              "allocatedHeapPeakBytes": 377316382,
+              "heapUsedAfterBytes": 515416609
+            },
+            {
+              "kind": "unchanged",
+              "wallMs": 82.24,
+              "readBytes": 28259,
+              "payloadReads": 0,
+              "heapUsedAfterBytes": 515493240,
+              "allocatedHeapPeakBytes": 0
+            },
+            {
+              "kind": "unchanged",
+              "wallMs": 47.992,
+              "readBytes": 2148,
+              "payloadReads": 0,
+              "heapUsedAfterBytes": 515493240,
+              "allocatedHeapPeakBytes": 0
+            },
+            {
+              "kind": "unchanged",
+              "wallMs": 39.607,
+              "readBytes": 2109,
+              "payloadReads": 0,
+              "heapUsedAfterBytes": 515493240,
+              "allocatedHeapPeakBytes": 0
+            },
+            {
+              "kind": "one-change",
+              "wallMs": 101.61,
+              "readBytes": 73354,
+              "payloadReads": 8,
+              "heapUsedAfterBytes": 515493240,
+              "allocatedHeapPeakBytes": 472
+            },
+            {
+              "kind": "one-change",
+              "wallMs": 72.474,
+              "readBytes": 77450,
+              "payloadReads": 8,
+              "heapUsedAfterBytes": 517405088,
+              "allocatedHeapPeakBytes": 472
+            },
+            {
+              "kind": "one-change",
+              "wallMs": 98.424,
+              "readBytes": 81507,
+              "payloadReads": 8,
+              "heapUsedAfterBytes": 517894030,
+              "allocatedHeapPeakBytes": 472
+            }
+          ],
+          "wallMs": {
+            "samples": 7,
+            "p50": 82.24,
+            "p95": 3339.18,
+            "p99": 3339.18,
+            "max": 3339.18
+          },
+          "readBytes": {
+            "samples": 7,
+            "p50": 73354,
+            "p95": 546971245,
+            "p99": 546971245,
+            "max": 546971245
+          },
+          "allocatedHeapPeakBytes": {
+            "samples": 7,
+            "p50": 472,
+            "p95": 377316382,
+            "p99": 377316382,
+            "max": 377316382
+          },
+          "peakHeapBytes": 517894030,
+          "loopGapMs": {
+            "samples": 28,
+            "p50": 1.193,
+            "p95": 552.565,
+            "p99": 3359.736,
+            "max": 3359.736
+          },
+          "gapsOver50Ms": 7,
+          "viewerGapsOver500Ms": {
+            "samples": 4,
+            "p50": 553,
+            "p95": 3360,
+            "p99": 3360,
+            "max": 3360
+          }
+        }
+      ]
+    },
+    {
+      "schemaVersion": 1,
+      "label": "main-2",
+      "runtime": "1.4.0",
+      "at": "2026-10-16T11:30:31.827Z",
+      "input": {
+        "sha256": "7ebe8938e8201192c75c869372e5b94ee80681de018fd715ce0c9002122025c1"
+      },
+      "sourceHashes": {
+        "src/lib/agent/sqliteRegistryStore.ts": "b24c80195d9561d9f391b618773a7b27d8dd4392746f55a0eb72ce1f05b6fc42",
+        "src/lib/agent/registry.ts": "4460d9a6d7bc3227b4ec4180e1dfad472fa9276fe12f2af21f585fe094a0bb5d",
+        "src/lib/agent/registryArchive.ts": "ad7ef5ad699a1f7b6fa293feb794b5d9daa81d670b6edd33641dfa142eaa89f6",
+        "src/lib/performanceSpans.ts": "92e13562c191ed125a772c8b6c9d3e8dab5ca76d31b914e80cd76ed0d1283639",
+        "src/lib/viewerLoopMonitor.ts": "983da223dbca6a1c57045f172a898f6674871b96d7d701e6e62b7cb2fce878a9",
+        "scripts/registry-write-benchmark.ts": "532e9d14da8f2146d7cbf58bb24b71337c075344cc6812d4d4ffe84f0642a3ab"
+      },
+      "load": {
+        "iterations": 3,
+        "compactionNoChangeTicks": 3,
+        "compactionChangedTicks": 3,
+        "pauseBeforeMs": 25,
+        "pauseAfterMs": 15,
+        "timerMs": 10,
+        "writerProcesses": 1,
+        "heapMetric": "process.memoryUsage().heapUsed peak sampled during the first snapshot, payload reads and operations",
+        "allocationMetric": "peak live JavaScriptCore heap growth over the pre-operation heapSize baseline, sampled every 512 payload parses and at operation end; this captures concurrent heap pressure, while cumulative allocation volume remains unmeasured",
+        "logicalNow": "2026-10-16T08:00:00.000Z",
+        "scope": "Viewer registry executor and Viewer loop monitor in isolation; no browser or whole-application traffic"
+      },
+      "results": [
+        {
+          "workload": "keyed",
+          "rows": 46909,
+          "payloadBytes": 164805759,
+          "coldRows": 46268,
+          "storeOpenMs": 250.483,
+          "startupPlusFirstSnapshotMs": 2942.238,
+          "warm": {
+            "wallMs": 2691.755,
+            "readBytes": 908109088,
+            "payloadReads": 46909,
+            "heapUsedAfterBytes": 356182734,
+            "allocatedHeapPeakBytes": 345108544
+          },
+          "operations": [
+            {
+              "wallMs": 13.348,
+              "readBytes": 471637,
+              "payloadReads": 1,
+              "heapUsedAfterBytes": 12543609,
+              "allocatedHeapPeakBytes": 0
+            },
+            {
+              "wallMs": 8.06,
+              "readBytes": 559,
+              "payloadReads": 1,
+              "heapUsedAfterBytes": 12543609,
+              "allocatedHeapPeakBytes": 0
+            },
+            {
+              "wallMs": 8.72,
+              "readBytes": 521,
+              "payloadReads": 1,
+              "heapUsedAfterBytes": 12543609,
+              "allocatedHeapPeakBytes": 0
+            }
+          ],
+          "wallMs": {
+            "samples": 3,
+            "p50": 8.72,
+            "p95": 13.348,
+            "p99": 13.348,
+            "max": 13.348
+          },
+          "readBytes": {
+            "samples": 3,
+            "p50": 559,
+            "p95": 471637,
+            "p99": 471637,
+            "max": 471637
+          },
+          "allocatedHeapPeakBytes": {
+            "samples": 3,
+            "p50": 0,
+            "p95": 0,
+            "p99": 0,
+            "max": 0
+          },
+          "peakHeapBytes": 356182734,
+          "loopGapMs": {
+            "samples": 12,
+            "p50": 0.076,
+            "p95": 14.502,
+            "p99": 14.502,
+            "max": 14.502
+          },
+          "gapsOver50Ms": 0,
+          "viewerGapsOver500Ms": {
+            "samples": 0,
+            "p50": 0,
+            "p95": 0,
+            "p99": 0,
+            "max": 0
+          }
+        },
+        {
+          "workload": "writer-snapshot",
+          "rows": 46909,
+          "payloadBytes": 164805759,
+          "coldRows": 46268,
+          "storeOpenMs": 265.205,
+          "startupPlusFirstSnapshotMs": 3030.945,
+          "warm": {
+            "wallMs": 2765.74,
+            "readBytes": 908109793,
+            "payloadReads": 46909,
+            "heapUsedAfterBytes": 421486291,
+            "allocatedHeapPeakBytes": 409471607
+          },
+          "operations": [
+            {
+              "wallMs": 2949.297,
+              "readBytes": 908179981,
+              "payloadReads": 46909,
+              "heapUsedAfterBytes": 386756207,
+              "allocatedHeapPeakBytes": 367643289
+            },
+            {
+              "wallMs": 3741.595,
+              "readBytes": 908193823,
+              "payloadReads": 46909,
+              "heapUsedAfterBytes": 401508880,
+              "allocatedHeapPeakBytes": 389561160
+            },
+            {
+              "wallMs": 3203.087,
+              "readBytes": 908187471,
+              "payloadReads": 46909,
+              "heapUsedAfterBytes": 399241042,
+              "allocatedHeapPeakBytes": 387317356
+            }
+          ],
+          "wallMs": {
+            "samples": 3,
+            "p50": 3203.087,
+            "p95": 3741.595,
+            "p99": 3741.595,
+            "max": 3741.595
+          },
+          "readBytes": {
+            "samples": 3,
+            "p50": 908187471,
+            "p95": 908193823,
+            "p99": 908193823,
+            "max": 908193823
+          },
+          "allocatedHeapPeakBytes": {
+            "samples": 3,
+            "p50": 387317356,
+            "p95": 389561160,
+            "p99": 389561160,
+            "max": 389561160
+          },
+          "peakHeapBytes": 421486291,
+          "loopGapMs": {
+            "samples": 13,
+            "p50": 0.1,
+            "p95": 3749.332,
+            "p99": 3749.332,
+            "max": 3749.332
+          },
+          "gapsOver50Ms": 3,
+          "viewerGapsOver500Ms": {
+            "samples": 3,
+            "p50": 3213,
+            "p95": 3753,
+            "p99": 3753,
+            "max": 3753
+          }
+        },
+        {
+          "workload": "serialized-snapshot",
+          "rows": 46909,
+          "payloadBytes": 164805759,
+          "coldRows": 46268,
+          "storeOpenMs": 265.632,
+          "startupPlusFirstSnapshotMs": 3272.436,
+          "warm": {
+            "wallMs": 3006.804,
+            "readBytes": 908109917,
+            "payloadReads": 46909,
+            "heapUsedAfterBytes": 409426019,
+            "allocatedHeapPeakBytes": 397487465
+          },
+          "operations": [
+            {
+              "wallMs": 2836.178,
+              "readBytes": 908178853,
+              "payloadReads": 46909,
+              "heapUsedAfterBytes": 395377814,
+              "allocatedHeapPeakBytes": 376373751
+            },
+            {
+              "wallMs": 3280.915,
+              "readBytes": 908187914,
+              "payloadReads": 46909,
+              "heapUsedAfterBytes": 394614808,
+              "allocatedHeapPeakBytes": 382190164
+            },
+            {
+              "wallMs": 4265.823,
+              "readBytes": 908201680,
+              "payloadReads": 46909,
+              "heapUsedAfterBytes": 372307785,
+              "allocatedHeapPeakBytes": 361261931
+            }
+          ],
+          "wallMs": {
+            "samples": 3,
+            "p50": 3280.915,
+            "p95": 4265.823,
+            "p99": 4265.823,
+            "max": 4265.823
+          },
+          "readBytes": {
+            "samples": 3,
+            "p50": 908187914,
+            "p95": 908201680,
+            "p99": 908201680,
+            "max": 908201680
+          },
+          "allocatedHeapPeakBytes": {
+            "samples": 3,
+            "p50": 376373751,
+            "p95": 382190164,
+            "p99": 382190164,
+            "max": 382190164
+          },
+          "peakHeapBytes": 409426019,
+          "loopGapMs": {
+            "samples": 12,
+            "p50": 0.081,
+            "p95": 4274.471,
+            "p99": 4274.471,
+            "max": 4274.471
+          },
+          "gapsOver50Ms": 3,
+          "viewerGapsOver500Ms": {
+            "samples": 3,
+            "p50": 3290,
+            "p95": 4277,
+            "p99": 4277,
+            "max": 4277
+          }
+        },
+        {
+          "workload": "keyed-with-snapshot",
+          "rows": 46909,
+          "payloadBytes": 164805759,
+          "coldRows": 46268,
+          "storeOpenMs": 246.515,
+          "startupPlusFirstSnapshotMs": 3195.818,
+          "warm": {
+            "wallMs": 2949.303,
+            "readBytes": 908110038,
+            "payloadReads": 46909,
+            "heapUsedAfterBytes": 361952279,
+            "allocatedHeapPeakBytes": 350807910
+          },
+          "operations": [
+            {
+              "wallMs": 2672.749,
+              "readBytes": 908626550,
+              "payloadReads": 46910,
+              "heapUsedAfterBytes": 385176972,
+              "allocatedHeapPeakBytes": 366620876
+            },
+            {
+              "wallMs": 5389.014,
+              "readBytes": 908536351,
+              "payloadReads": 46910,
+              "heapUsedAfterBytes": 693477222,
+              "allocatedHeapPeakBytes": 220648590
+            },
+            {
+              "wallMs": 3399.763,
+              "readBytes": 908506542,
+              "payloadReads": 46910,
+              "heapUsedAfterBytes": 404508649,
+              "allocatedHeapPeakBytes": 392350832
+            }
+          ],
+          "wallMs": {
+            "samples": 3,
+            "p50": 3399.763,
+            "p95": 5389.014,
+            "p99": 5389.014,
+            "max": 5389.014
+          },
+          "readBytes": {
+            "samples": 3,
+            "p50": 908536351,
+            "p95": 908626550,
+            "p99": 908626550,
+            "max": 908626550
+          },
+          "allocatedHeapPeakBytes": {
+            "samples": 3,
+            "p50": 366620876,
+            "p95": 392350832,
+            "p99": 392350832,
+            "max": 392350832
+          },
+          "peakHeapBytes": 693477222,
+          "loopGapMs": {
+            "samples": 11,
+            "p50": 0.093,
+            "p95": 5426.251,
+            "p99": 5426.251,
+            "max": 5426.251
+          },
+          "gapsOver50Ms": 3,
+          "viewerGapsOver500Ms": {
+            "samples": 3,
+            "p50": 3433,
+            "p95": 5426,
+            "p99": 5426,
+            "max": 5426
+          }
+        },
+        {
+          "workload": "compaction-control",
+          "rows": 46909,
+          "payloadBytes": 164805759,
+          "coldRows": 46268,
+          "storeOpenMs": 258.705,
+          "startupPlusFirstSnapshotMs": 3501.629,
+          "warm": {
+            "wallMs": 3242.924,
+            "readBytes": 908110163,
+            "payloadReads": 46909,
+            "heapUsedAfterBytes": 473273253,
+            "allocatedHeapPeakBytes": 460559022
+          },
+          "compaction": {
+            "initial": {
+              "registryOpenMs": 18.318,
+              "wallMs": 2560.473,
+              "readBytes": 546921779,
+              "payloadReads": 20940,
+              "allocatedHeapPeakBytes": 342584243,
+              "heapUsedAfterBytes": 368743373
+            },
+            "unchanged": {
+              "samples": 3,
+              "wallMs": {
+                "samples": 3,
+                "p50": 3571.473,
+                "p95": 5418.329,
+                "p99": 5418.329,
+                "max": 5418.329
+              },
+              "readBytes": {
+                "samples": 3,
+                "p50": 547172392,
+                "p95": 547202674,
+                "p99": 547202674,
+                "max": 547202674
+              },
+              "payloadReads": {
+                "samples": 3,
+                "p50": 20940,
+                "p95": 20940,
+                "p99": 20940,
+                "max": 20940
+              },
+              "allocatedHeapPeakBytes": {
+                "samples": 3,
+                "p50": 230313292,
+                "p95": 230642148,
+                "p99": 230642148,
+                "max": 230642148
+              }
+            },
+            "oneChange": {
+              "samples": 3,
+              "wallMs": {
+                "samples": 3,
+                "p50": 3452.429,
+                "p95": 3523.727,
+                "p99": 3523.727,
+                "max": 3523.727
+              },
+              "readBytes": {
+                "samples": 3,
+                "p50": 547253557,
+                "p95": 547264053,
+                "p99": 547264053,
+                "max": 547264053
+              },
+              "payloadReads": {
+                "samples": 3,
+                "p50": 20946,
+                "p95": 20949,
+                "p99": 20949,
+                "max": 20949
+              },
+              "allocatedHeapPeakBytes": {
+                "samples": 3,
+                "p50": 195600940,
+                "p95": 220623485,
+                "p99": 220623485,
+                "max": 220623485
+              }
+            }
+          },
+          "operations": [
+            {
+              "kind": "initial",
+              "wallMs": 2560.473,
+              "readBytes": 546921779,
+              "payloadReads": 20940,
+              "allocatedHeapPeakBytes": 342584243,
+              "heapUsedAfterBytes": 368743373
+            },
+            {
+              "kind": "unchanged",
+              "wallMs": 3083.638,
+              "readBytes": 547164528,
+              "payloadReads": 20940,
+              "heapUsedAfterBytes": 367198286,
+              "allocatedHeapPeakBytes": 229429240
+            },
+            {
+              "kind": "unchanged",
+              "wallMs": 3571.473,
+              "readBytes": 547172392,
+              "payloadReads": 20940,
+              "heapUsedAfterBytes": 368852178,
+              "allocatedHeapPeakBytes": 230313292
+            },
+            {
+              "kind": "unchanged",
+              "wallMs": 5418.329,
+              "readBytes": 547202674,
+              "payloadReads": 20940,
+              "heapUsedAfterBytes": 367417220,
+              "allocatedHeapPeakBytes": 230642148
+            },
+            {
+              "kind": "one-change",
+              "wallMs": 3523.727,
+              "readBytes": 547240034,
+              "payloadReads": 20943,
+              "heapUsedAfterBytes": 431786591,
+              "allocatedHeapPeakBytes": 178720133
+            },
+            {
+              "kind": "one-change",
+              "wallMs": 3452.429,
+              "readBytes": 547253557,
+              "payloadReads": 20946,
+              "heapUsedAfterBytes": 392652221,
+              "allocatedHeapPeakBytes": 220623485
+            },
+            {
+              "kind": "one-change",
+              "wallMs": 3146.594,
+              "readBytes": 547264053,
+              "payloadReads": 20949,
+              "heapUsedAfterBytes": 349375666,
+              "allocatedHeapPeakBytes": 195600940
+            }
+          ],
+          "wallMs": {
+            "samples": 7,
+            "p50": 3452.429,
+            "p95": 5418.329,
+            "p99": 5418.329,
+            "max": 5418.329
+          },
+          "readBytes": {
+            "samples": 7,
+            "p50": 547202674,
+            "p95": 547264053,
+            "p99": 547264053,
+            "max": 547264053
+          },
+          "allocatedHeapPeakBytes": {
+            "samples": 7,
+            "p50": 229429240,
+            "p95": 342584243,
+            "p99": 342584243,
+            "max": 342584243
+          },
+          "peakHeapBytes": 727944796,
+          "loopGapMs": {
+            "samples": 24,
+            "p50": 4.226,
+            "p95": 3898.787,
+            "p99": 5486.571,
+            "max": 5486.571
+          },
+          "gapsOver50Ms": 7,
+          "viewerGapsOver500Ms": {
+            "samples": 7,
+            "p50": 3619,
+            "p95": 5485,
+            "p99": 5485,
+            "max": 5485
+          }
+        }
+      ]
+    },
+    {
+      "schemaVersion": 1,
+      "label": "candidate-2",
+      "runtime": "1.4.0",
+      "at": "2026-10-16T11:31:16.570Z",
+      "input": {
+        "sha256": "7ebe8938e8201192c75c869372e5b94ee80681de018fd715ce0c9002122025c1"
+      },
+      "sourceHashes": {
+        "src/lib/agent/sqliteRegistryStore.ts": "d70ebd45f92c634d123ac6e21efeb56dedb6134101d13ea67daf0c588aba353b",
+        "src/lib/agent/registry.ts": "50ec33e89a2d27c07b6c062387353d97554b15ac224450784ad67a7ffaa51adc",
+        "src/lib/agent/registryArchive.ts": "7596ed21464a36ee11b38c82d30b5651b43aaf7afc54d41ef0ae76a4361c7640",
+        "src/lib/performanceSpans.ts": "7f635a4f0ce206c0c06eef814bb644292031c917e525af2970b11ecf2113ad44",
+        "src/lib/viewerLoopMonitor.ts": "983da223dbca6a1c57045f172a898f6674871b96d7d701e6e62b7cb2fce878a9",
+        "scripts/registry-write-benchmark.ts": "532e9d14da8f2146d7cbf58bb24b71337c075344cc6812d4d4ffe84f0642a3ab"
+      },
+      "load": {
+        "iterations": 3,
+        "compactionNoChangeTicks": 3,
+        "compactionChangedTicks": 3,
+        "pauseBeforeMs": 25,
+        "pauseAfterMs": 15,
+        "timerMs": 10,
+        "writerProcesses": 1,
+        "heapMetric": "process.memoryUsage().heapUsed peak sampled during the first snapshot, payload reads and operations",
+        "allocationMetric": "peak live JavaScriptCore heap growth over the pre-operation heapSize baseline, sampled every 512 payload parses and at operation end; this captures concurrent heap pressure, while cumulative allocation volume remains unmeasured",
+        "logicalNow": "2026-10-16T08:00:00.000Z",
+        "scope": "Viewer registry executor and Viewer loop monitor in isolation; no browser or whole-application traffic"
+      },
+      "results": [
+        {
+          "workload": "keyed",
+          "rows": 46909,
+          "payloadBytes": 164805759,
+          "coldRows": 46268,
+          "storeOpenMs": 312.043,
+          "startupPlusFirstSnapshotMs": 882.988,
+          "warm": {
+            "wallMs": 570.945,
+            "readBytes": 683708764,
+            "payloadReads": 719,
+            "heapUsedAfterBytes": 61546511,
+            "allocatedHeapPeakBytes": 48776230
+          },
+          "operations": [
+            {
+              "wallMs": 16.023,
+              "readBytes": 545362,
+              "payloadReads": 1,
+              "heapUsedAfterBytes": 65391710,
+              "allocatedHeapPeakBytes": 0
+            },
+            {
+              "wallMs": 14.554,
+              "readBytes": 14408,
+              "payloadReads": 1,
+              "heapUsedAfterBytes": 65391710,
+              "allocatedHeapPeakBytes": 0
+            },
+            {
+              "wallMs": 23.074,
+              "readBytes": 556,
+              "payloadReads": 1,
+              "heapUsedAfterBytes": 65391710,
+              "allocatedHeapPeakBytes": 0
+            }
+          ],
+          "wallMs": {
+            "samples": 3,
+            "p50": 16.023,
+            "p95": 23.074,
+            "p99": 23.074,
+            "max": 23.074
+          },
+          "readBytes": {
+            "samples": 3,
+            "p50": 14408,
+            "p95": 545362,
+            "p99": 545362,
+            "max": 545362
+          },
+          "allocatedHeapPeakBytes": {
+            "samples": 3,
+            "p50": 0,
+            "p95": 0,
+            "p99": 0,
+            "max": 0
+          },
+          "peakHeapBytes": 65391710,
+          "loopGapMs": {
+            "samples": 12,
+            "p50": 0.089,
+            "p95": 34.764,
+            "p99": 34.764,
+            "max": 34.764
+          },
+          "gapsOver50Ms": 0,
+          "viewerGapsOver500Ms": {
+            "samples": 0,
+            "p50": 0,
+            "p95": 0,
+            "p99": 0,
+            "max": 0
+          }
+        },
+        {
+          "workload": "writer-snapshot",
+          "rows": 46909,
+          "payloadBytes": 164805759,
+          "coldRows": 46268,
+          "storeOpenMs": 302.402,
+          "startupPlusFirstSnapshotMs": 916.807,
+          "warm": {
+            "wallMs": 614.405,
+            "readBytes": 683707987,
+            "payloadReads": 719,
+            "heapUsedAfterBytes": 103751602,
+            "allocatedHeapPeakBytes": 37959049
+          },
+          "operations": [
+            {
+              "wallMs": 44.993,
+              "readBytes": 787,
+              "payloadReads": 0,
+              "heapUsedAfterBytes": 125939487,
+              "allocatedHeapPeakBytes": 0
+            },
+            {
+              "wallMs": 18.311,
+              "readBytes": 558,
+              "payloadReads": 0,
+              "heapUsedAfterBytes": 125939487,
+              "allocatedHeapPeakBytes": 0
+            },
+            {
+              "wallMs": 18.585,
+              "readBytes": 2085,
+              "payloadReads": 0,
+              "heapUsedAfterBytes": 125939487,
+              "allocatedHeapPeakBytes": 0
+            }
+          ],
+          "wallMs": {
+            "samples": 3,
+            "p50": 18.585,
+            "p95": 44.993,
+            "p99": 44.993,
+            "max": 44.993
+          },
+          "readBytes": {
+            "samples": 3,
+            "p50": 787,
+            "p95": 2085,
+            "p99": 2085,
+            "max": 2085
+          },
+          "allocatedHeapPeakBytes": {
+            "samples": 3,
+            "p50": 0,
+            "p95": 0,
+            "p99": 0,
+            "max": 0
+          },
+          "peakHeapBytes": 125939487,
+          "loopGapMs": {
+            "samples": 12,
+            "p50": 0.088,
+            "p95": 58.998,
+            "p99": 58.998,
+            "max": 58.998
+          },
+          "gapsOver50Ms": 1,
+          "viewerGapsOver500Ms": {
+            "samples": 0,
+            "p50": 0,
+            "p95": 0,
+            "p99": 0,
+            "max": 0
+          }
+        },
+        {
+          "workload": "serialized-snapshot",
+          "rows": 46909,
+          "payloadBytes": 164805759,
+          "coldRows": 46268,
+          "storeOpenMs": 282.709,
+          "startupPlusFirstSnapshotMs": 824.827,
+          "warm": {
+            "wallMs": 542.118,
+            "readBytes": 683707991,
+            "payloadReads": 719,
+            "heapUsedAfterBytes": 106209986,
+            "allocatedHeapPeakBytes": 38662776
+          },
+          "operations": [
+            {
+              "wallMs": 9000.662,
+              "readBytes": 247726840,
+              "payloadReads": 46268,
+              "heapUsedAfterBytes": 375267636,
+              "allocatedHeapPeakBytes": 246969582
+            },
+            {
+              "wallMs": 10420.141,
+              "readBytes": 247748005,
+              "payloadReads": 46268,
+              "heapUsedAfterBytes": 414819925,
+              "allocatedHeapPeakBytes": 281649212
+            },
+            {
+              "wallMs": 13568.484,
+              "readBytes": 247797776,
+              "payloadReads": 46268,
+              "heapUsedAfterBytes": 492736328,
+              "allocatedHeapPeakBytes": 166969599
+            }
+          ],
+          "wallMs": {
+            "samples": 3,
+            "p50": 10420.141,
+            "p95": 13568.484,
+            "p99": 13568.484,
+            "max": 13568.484
+          },
+          "readBytes": {
+            "samples": 3,
+            "p50": 247748005,
+            "p95": 247797776,
+            "p99": 247797776,
+            "max": 247797776
+          },
+          "allocatedHeapPeakBytes": {
+            "samples": 3,
+            "p50": 246969582,
+            "p95": 281649212,
+            "p99": 281649212,
+            "max": 281649212
+          },
+          "peakHeapBytes": 637700009,
+          "loopGapMs": {
+            "samples": 11,
+            "p50": 0.119,
+            "p95": 13652.323,
+            "p99": 13652.323,
+            "max": 13652.323
+          },
+          "gapsOver50Ms": 3,
+          "viewerGapsOver500Ms": {
+            "samples": 3,
+            "p50": 10511,
+            "p95": 13651,
+            "p99": 13651,
+            "max": 13651
+          }
+        },
+        {
+          "workload": "keyed-with-snapshot",
+          "rows": 46909,
+          "payloadBytes": 164805759,
+          "coldRows": 46268,
+          "storeOpenMs": 301.852,
+          "startupPlusFirstSnapshotMs": 955.682,
+          "warm": {
+            "wallMs": 653.83,
+            "readBytes": 683708065,
+            "payloadReads": 719,
+            "heapUsedAfterBytes": 153188832,
+            "allocatedHeapPeakBytes": 3624
+          },
+          "operations": [
+            {
+              "wallMs": 224.586,
+              "readBytes": 199989502,
+              "payloadReads": 1,
+              "heapUsedAfterBytes": 214772611,
+              "allocatedHeapPeakBytes": 0
+            },
+            {
+              "wallMs": 83.764,
+              "readBytes": 388897,
+              "payloadReads": 1,
+              "heapUsedAfterBytes": 214772611,
+              "allocatedHeapPeakBytes": 0
+            },
+            {
+              "wallMs": 84.244,
+              "readBytes": 11987,
+              "payloadReads": 1,
+              "heapUsedAfterBytes": 214772611,
+              "allocatedHeapPeakBytes": 0
+            }
+          ],
+          "wallMs": {
+            "samples": 3,
+            "p50": 84.244,
+            "p95": 224.586,
+            "p99": 224.586,
+            "max": 224.586
+          },
+          "readBytes": {
+            "samples": 3,
+            "p50": 388897,
+            "p95": 199989502,
+            "p99": 199989502,
+            "max": 199989502
+          },
+          "allocatedHeapPeakBytes": {
+            "samples": 3,
+            "p50": 0,
+            "p95": 0,
+            "p99": 0,
+            "max": 0
+          },
+          "peakHeapBytes": 214772611,
+          "loopGapMs": {
+            "samples": 12,
+            "p50": 0.096,
+            "p95": 303.476,
+            "p99": 303.476,
+            "max": 303.476
+          },
+          "gapsOver50Ms": 3,
+          "viewerGapsOver500Ms": {
+            "samples": 0,
+            "p50": 0,
+            "p95": 0,
+            "p99": 0,
+            "max": 0
+          }
+        },
+        {
+          "workload": "compaction-control",
+          "rows": 46909,
+          "payloadBytes": 164805759,
+          "coldRows": 46268,
+          "storeOpenMs": 281.869,
+          "startupPlusFirstSnapshotMs": 732.25,
+          "warm": {
+            "wallMs": 450.381,
+            "readBytes": 683708143,
+            "payloadReads": 719,
+            "heapUsedAfterBytes": 113856951,
+            "allocatedHeapPeakBytes": 41825092
+          },
+          "compaction": {
+            "initial": {
+              "registryOpenMs": 18.909,
+              "wallMs": 2143.46,
+              "readBytes": 546950736,
+              "payloadReads": 20940,
+              "allocatedHeapPeakBytes": 378117305,
+              "heapUsedAfterBytes": 516570072
+            },
+            "unchanged": {
+              "samples": 3,
+              "wallMs": {
+                "samples": 3,
+                "p50": 38.495,
+                "p95": 40.133,
+                "p99": 40.133,
+                "max": 40.133
+              },
+              "readBytes": {
+                "samples": 3,
+                "p50": 2145,
+                "p95": 26682,
+                "p99": 26682,
+                "max": 26682
+              },
+              "payloadReads": {
+                "samples": 3,
+                "p50": 0,
+                "p95": 0,
+                "p99": 0,
+                "max": 0
+              },
+              "allocatedHeapPeakBytes": {
+                "samples": 3,
+                "p50": 0,
+                "p95": 0,
+                "p99": 0,
+                "max": 0
+              }
+            },
+            "oneChange": {
+              "samples": 3,
+              "wallMs": {
+                "samples": 3,
+                "p50": 62.738,
+                "p95": 67.732,
+                "p99": 67.732,
+                "max": 67.732
+              },
+              "readBytes": {
+                "samples": 3,
+                "p50": 71777,
+                "p95": 75873,
+                "p99": 75873,
+                "max": 75873
+              },
+              "payloadReads": {
+                "samples": 3,
+                "p50": 8,
+                "p95": 8,
+                "p99": 8,
+                "max": 8
+              },
+              "allocatedHeapPeakBytes": {
+                "samples": 3,
+                "p50": 472,
+                "p95": 472,
+                "p99": 472,
+                "max": 472
+              }
+            }
+          },
+          "operations": [
+            {
+              "kind": "initial",
+              "wallMs": 2143.46,
+              "readBytes": 546950736,
+              "payloadReads": 20940,
+              "allocatedHeapPeakBytes": 378117305,
+              "heapUsedAfterBytes": 516570072
+            },
+            {
+              "kind": "unchanged",
+              "wallMs": 40.133,
+              "readBytes": 26682,
+              "payloadReads": 0,
+              "heapUsedAfterBytes": 516609391,
+              "allocatedHeapPeakBytes": 0
+            },
+            {
+              "kind": "unchanged",
+              "wallMs": 38.495,
+              "readBytes": 2145,
+              "payloadReads": 0,
+              "heapUsedAfterBytes": 516609391,
+              "allocatedHeapPeakBytes": 0
+            },
+            {
+              "kind": "unchanged",
+              "wallMs": 33.024,
+              "readBytes": 2106,
+              "payloadReads": 0,
+              "heapUsedAfterBytes": 516609391,
+              "allocatedHeapPeakBytes": 0
+            },
+            {
+              "kind": "one-change",
+              "wallMs": 46.577,
+              "readBytes": 71777,
+              "payloadReads": 8,
+              "heapUsedAfterBytes": 516609391,
+              "allocatedHeapPeakBytes": 472
+            },
+            {
+              "kind": "one-change",
+              "wallMs": 62.738,
+              "readBytes": 75873,
+              "payloadReads": 8,
+              "heapUsedAfterBytes": 516609391,
+              "allocatedHeapPeakBytes": 472
+            },
+            {
+              "kind": "one-change",
+              "wallMs": 67.732,
+              "readBytes": 71738,
+              "payloadReads": 8,
+              "heapUsedAfterBytes": 518346035,
+              "allocatedHeapPeakBytes": 472
+            }
+          ],
+          "wallMs": {
+            "samples": 7,
+            "p50": 46.577,
+            "p95": 2143.46,
+            "p99": 2143.46,
+            "max": 2143.46
+          },
+          "readBytes": {
+            "samples": 7,
+            "p50": 71738,
+            "p95": 546950736,
+            "p99": 546950736,
+            "max": 546950736
+          },
+          "allocatedHeapPeakBytes": {
+            "samples": 7,
+            "p50": 472,
+            "p95": 378117305,
+            "p99": 378117305,
+            "max": 378117305
+          },
+          "peakHeapBytes": 518346035,
+          "loopGapMs": {
+            "samples": 27,
+            "p50": 0.103,
+            "p95": 336.144,
+            "p99": 2160.277,
+            "max": 2160.277
+          },
+          "gapsOver50Ms": 7,
+          "viewerGapsOver500Ms": {
+            "samples": 1,
+            "p50": 2160,
+            "p95": 2160,
+            "p99": 2160,
+            "max": 2160
+          }
+        }
+      ]
+    },
+    {
+      "schemaVersion": 1,
+      "label": "main-3",
+      "runtime": "1.4.0",
+      "at": "2026-10-16T11:32:36.791Z",
+      "input": {
+        "sha256": "7ebe8938e8201192c75c869372e5b94ee80681de018fd715ce0c9002122025c1"
+      },
+      "sourceHashes": {
+        "src/lib/agent/sqliteRegistryStore.ts": "b24c80195d9561d9f391b618773a7b27d8dd4392746f55a0eb72ce1f05b6fc42",
+        "src/lib/agent/registry.ts": "4460d9a6d7bc3227b4ec4180e1dfad472fa9276fe12f2af21f585fe094a0bb5d",
+        "src/lib/agent/registryArchive.ts": "ad7ef5ad699a1f7b6fa293feb794b5d9daa81d670b6edd33641dfa142eaa89f6",
+        "src/lib/performanceSpans.ts": "92e13562c191ed125a772c8b6c9d3e8dab5ca76d31b914e80cd76ed0d1283639",
+        "src/lib/viewerLoopMonitor.ts": "983da223dbca6a1c57045f172a898f6674871b96d7d701e6e62b7cb2fce878a9",
+        "scripts/registry-write-benchmark.ts": "532e9d14da8f2146d7cbf58bb24b71337c075344cc6812d4d4ffe84f0642a3ab"
+      },
+      "load": {
+        "iterations": 3,
+        "compactionNoChangeTicks": 3,
+        "compactionChangedTicks": 3,
+        "pauseBeforeMs": 25,
+        "pauseAfterMs": 15,
+        "timerMs": 10,
+        "writerProcesses": 1,
+        "heapMetric": "process.memoryUsage().heapUsed peak sampled during the first snapshot, payload reads and operations",
+        "allocationMetric": "peak live JavaScriptCore heap growth over the pre-operation heapSize baseline, sampled every 512 payload parses and at operation end; this captures concurrent heap pressure, while cumulative allocation volume remains unmeasured",
+        "logicalNow": "2026-10-16T08:00:00.000Z",
+        "scope": "Viewer registry executor and Viewer loop monitor in isolation; no browser or whole-application traffic"
+      },
+      "results": [
+        {
+          "workload": "keyed",
+          "rows": 46909,
+          "payloadBytes": 164805759,
+          "coldRows": 46268,
+          "storeOpenMs": 255.077,
+          "startupPlusFirstSnapshotMs": 2451.634,
+          "warm": {
+            "wallMs": 2196.557,
+            "readBytes": 908109101,
+            "payloadReads": 46909,
+            "heapUsedAfterBytes": 356292369,
+            "allocatedHeapPeakBytes": 343915767
+          },
+          "operations": [
+            {
+              "wallMs": 9.532,
+              "readBytes": 471636,
+              "payloadReads": 1,
+              "heapUsedAfterBytes": 12464010,
+              "allocatedHeapPeakBytes": 0
+            },
+            {
+              "wallMs": 5.013,
+              "readBytes": 558,
+              "payloadReads": 1,
+              "heapUsedAfterBytes": 12464010,
+              "allocatedHeapPeakBytes": 0
+            },
+            {
+              "wallMs": 6.536,
+              "readBytes": 520,
+              "payloadReads": 1,
+              "heapUsedAfterBytes": 12464010,
+              "allocatedHeapPeakBytes": 0
+            }
+          ],
+          "wallMs": {
+            "samples": 3,
+            "p50": 6.536,
+            "p95": 9.532,
+            "p99": 9.532,
+            "max": 9.532
+          },
+          "readBytes": {
+            "samples": 3,
+            "p50": 558,
+            "p95": 471636,
+            "p99": 471636,
+            "max": 471636
+          },
+          "allocatedHeapPeakBytes": {
+            "samples": 3,
+            "p50": 0,
+            "p95": 0,
+            "p99": 0,
+            "max": 0
+          },
+          "peakHeapBytes": 356292369,
+          "loopGapMs": {
+            "samples": 13,
+            "p50": 0.118,
+            "p95": 10.133,
+            "p99": 10.133,
+            "max": 10.133
+          },
+          "gapsOver50Ms": 0,
+          "viewerGapsOver500Ms": {
+            "samples": 0,
+            "p50": 0,
+            "p95": 0,
+            "p99": 0,
+            "max": 0
+          }
+        },
+        {
+          "workload": "writer-snapshot",
+          "rows": 46909,
+          "payloadBytes": 164805759,
+          "coldRows": 46268,
+          "storeOpenMs": 261.936,
+          "startupPlusFirstSnapshotMs": 3054.783,
+          "warm": {
+            "wallMs": 2792.847,
+            "readBytes": 908109791,
+            "payloadReads": 46909,
+            "heapUsedAfterBytes": 391246643,
+            "allocatedHeapPeakBytes": 379233742
+          },
+          "operations": [
+            {
+              "wallMs": 2594.015,
+              "readBytes": 908175262,
+              "payloadReads": 46909,
+              "heapUsedAfterBytes": 383169985,
+              "allocatedHeapPeakBytes": 364052833
+            },
+            {
+              "wallMs": 2859.505,
+              "readBytes": 908181306,
+              "payloadReads": 46909,
+              "heapUsedAfterBytes": 297910798,
+              "allocatedHeapPeakBytes": 376959100
+            },
+            {
+              "wallMs": 4981.33,
+              "readBytes": 908213792,
+              "payloadReads": 46909,
+              "heapUsedAfterBytes": 452198677,
+              "allocatedHeapPeakBytes": 154374665
+            }
+          ],
+          "wallMs": {
+            "samples": 3,
+            "p50": 2859.505,
+            "p95": 4981.33,
+            "p99": 4981.33,
+            "max": 4981.33
+          },
+          "readBytes": {
+            "samples": 3,
+            "p50": 908181306,
+            "p95": 908213792,
+            "p99": 908213792,
+            "max": 908213792
+          },
+          "allocatedHeapPeakBytes": {
+            "samples": 3,
+            "p50": 364052833,
+            "p95": 376959100,
+            "p99": 376959100,
+            "max": 376959100
+          },
+          "peakHeapBytes": 452198677,
+          "loopGapMs": {
+            "samples": 12,
+            "p50": 0.476,
+            "p95": 5025.254,
+            "p99": 5025.254,
+            "max": 5025.254
+          },
+          "gapsOver50Ms": 3,
+          "viewerGapsOver500Ms": {
+            "samples": 3,
+            "p50": 2869,
+            "p95": 5024,
+            "p99": 5024,
+            "max": 5024
+          }
+        },
+        {
+          "workload": "serialized-snapshot",
+          "rows": 46909,
+          "payloadBytes": 164805759,
+          "coldRows": 46268,
+          "storeOpenMs": 341.655,
+          "startupPlusFirstSnapshotMs": 3838.466,
+          "warm": {
+            "wallMs": 3496.811,
+            "readBytes": 908109900,
+            "payloadReads": 46909,
+            "heapUsedAfterBytes": 391337036,
+            "allocatedHeapPeakBytes": 379475758
+          },
+          "operations": [
+            {
+              "wallMs": 4063.058,
+              "readBytes": 908197752,
+              "payloadReads": 46909,
+              "heapUsedAfterBytes": 349580268,
+              "allocatedHeapPeakBytes": 330405655
+            },
+            {
+              "wallMs": 7279.218,
+              "readBytes": 908250390,
+              "payloadReads": 46909,
+              "heapUsedAfterBytes": 411213687,
+              "allocatedHeapPeakBytes": 0
+            },
+            {
+              "wallMs": 4639.015,
+              "readBytes": 908209507,
+              "payloadReads": 46909,
+              "heapUsedAfterBytes": 369340482,
+              "allocatedHeapPeakBytes": 358479703
+            }
+          ],
+          "wallMs": {
+            "samples": 3,
+            "p50": 4639.015,
+            "p95": 7279.218,
+            "p99": 7279.218,
+            "max": 7279.218
+          },
+          "readBytes": {
+            "samples": 3,
+            "p50": 908209507,
+            "p95": 908250390,
+            "p99": 908250390,
+            "max": 908250390
+          },
+          "allocatedHeapPeakBytes": {
+            "samples": 3,
+            "p50": 330405655,
+            "p95": 358479703,
+            "p99": 358479703,
+            "max": 358479703
+          },
+          "peakHeapBytes": 475963181,
+          "loopGapMs": {
+            "samples": 11,
+            "p50": 0.093,
+            "p95": 7325.446,
+            "p99": 7325.446,
+            "max": 7325.446
+          },
+          "gapsOver50Ms": 3,
+          "viewerGapsOver500Ms": {
+            "samples": 3,
+            "p50": 4666,
+            "p95": 7325,
+            "p99": 7325,
+            "max": 7325
+          }
+        },
+        {
+          "workload": "keyed-with-snapshot",
+          "rows": 46909,
+          "payloadBytes": 164805759,
+          "coldRows": 46268,
+          "storeOpenMs": 280.731,
+          "startupPlusFirstSnapshotMs": 4477.686,
+          "warm": {
+            "wallMs": 4196.955,
+            "readBytes": 908109983,
+            "payloadReads": 46909,
+            "heapUsedAfterBytes": 361951681,
+            "allocatedHeapPeakBytes": 350917645
+          },
+          "operations": [
+            {
+              "wallMs": 3364.154,
+              "readBytes": 908637424,
+              "payloadReads": 46910,
+              "heapUsedAfterBytes": 387055660,
+              "allocatedHeapPeakBytes": 368311436
+            },
+            {
+              "wallMs": 4693.805,
+              "readBytes": 908525567,
+              "payloadReads": 46910,
+              "heapUsedAfterBytes": 396820574,
+              "allocatedHeapPeakBytes": 384541201
+            },
+            {
+              "wallMs": 3194.064,
+              "readBytes": 908501649,
+              "payloadReads": 46910,
+              "heapUsedAfterBytes": 401896176,
+              "allocatedHeapPeakBytes": 389652880
+            }
+          ],
+          "wallMs": {
+            "samples": 3,
+            "p50": 3364.154,
+            "p95": 4693.805,
+            "p99": 4693.805,
+            "max": 4693.805
+          },
+          "readBytes": {
+            "samples": 3,
+            "p50": 908525567,
+            "p95": 908637424,
+            "p99": 908637424,
+            "max": 908637424
+          },
+          "allocatedHeapPeakBytes": {
+            "samples": 3,
+            "p50": 384541201,
+            "p95": 389652880,
+            "p99": 389652880,
+            "max": 389652880
+          },
+          "peakHeapBytes": 401896176,
+          "loopGapMs": {
+            "samples": 13,
+            "p50": 0.151,
+            "p95": 4700.394,
+            "p99": 4700.394,
+            "max": 4700.394
+          },
+          "gapsOver50Ms": 3,
+          "viewerGapsOver500Ms": {
+            "samples": 3,
+            "p50": 3367,
+            "p95": 4704,
+            "p99": 4704,
+            "max": 4704
+          }
+        },
+        {
+          "workload": "compaction-control",
+          "rows": 46909,
+          "payloadBytes": 164805759,
+          "coldRows": 46268,
+          "storeOpenMs": 263.379,
+          "startupPlusFirstSnapshotMs": 3089.546,
+          "warm": {
+            "wallMs": 2826.167,
+            "readBytes": 908110111,
+            "payloadReads": 46909,
+            "heapUsedAfterBytes": 482863714,
+            "allocatedHeapPeakBytes": 470388445
+          },
+          "compaction": {
+            "initial": {
+              "registryOpenMs": 36.632,
+              "wallMs": 2343.13,
+              "readBytes": 546918502,
+              "payloadReads": 20940,
+              "allocatedHeapPeakBytes": 351895813,
+              "heapUsedAfterBytes": 378191199
+            },
+            "unchanged": {
+              "samples": 3,
+              "wallMs": {
+                "samples": 3,
+                "p50": 2654.656,
+                "p95": 2956.162,
+                "p99": 2956.162,
+                "max": 2956.162
+              },
+              "readBytes": {
+                "samples": 3,
+                "p50": 547157891,
+                "p95": 547162803,
+                "p99": 547162803,
+                "max": 547162803
+              },
+              "payloadReads": {
+                "samples": 3,
+                "p50": 20940,
+                "p95": 20940,
+                "p99": 20940,
+                "max": 20940
+              },
+              "allocatedHeapPeakBytes": {
+                "samples": 3,
+                "p50": 235407641,
+                "p95": 235697903,
+                "p99": 235697903,
+                "max": 235697903
+              }
+            },
+            "oneChange": {
+              "samples": 3,
+              "wallMs": {
+                "samples": 3,
+                "p50": 3338.178,
+                "p95": 4298.584,
+                "p99": 4298.584,
+                "max": 4298.584
+              },
+              "readBytes": {
+                "samples": 3,
+                "p50": 547267577,
+                "p95": 547267841,
+                "p99": 547267841,
+                "max": 547267841
+              },
+              "payloadReads": {
+                "samples": 3,
+                "p50": 20946,
+                "p95": 20949,
+                "p99": 20949,
+                "max": 20949
+              },
+              "allocatedHeapPeakBytes": {
+                "samples": 3,
+                "p50": 388484922,
+                "p95": 447007868,
+                "p99": 447007868,
+                "max": 447007868
+              }
+            }
+          },
+          "operations": [
+            {
+              "kind": "initial",
+              "wallMs": 2343.13,
+              "readBytes": 546918502,
+              "payloadReads": 20940,
+              "allocatedHeapPeakBytes": 351895813,
+              "heapUsedAfterBytes": 378191199
+            },
+            {
+              "kind": "unchanged",
+              "wallMs": 2956.162,
+              "readBytes": 547162803,
+              "payloadReads": 20940,
+              "heapUsedAfterBytes": 378279466,
+              "allocatedHeapPeakBytes": 235305090
+            },
+            {
+              "kind": "unchanged",
+              "wallMs": 2654.656,
+              "readBytes": 547157891,
+              "payloadReads": 20940,
+              "heapUsedAfterBytes": 378619982,
+              "allocatedHeapPeakBytes": 235407641
+            },
+            {
+              "kind": "unchanged",
+              "wallMs": 2553.129,
+              "readBytes": 547156729,
+              "payloadReads": 20940,
+              "heapUsedAfterBytes": 380742096,
+              "allocatedHeapPeakBytes": 235697903
+            },
+            {
+              "kind": "one-change",
+              "wallMs": 3241.194,
+              "readBytes": 547235387,
+              "payloadReads": 20943,
+              "heapUsedAfterBytes": 719099449,
+              "allocatedHeapPeakBytes": 317235070
+            },
+            {
+              "kind": "one-change",
+              "wallMs": 4298.584,
+              "readBytes": 547267577,
+              "payloadReads": 20946,
+              "heapUsedAfterBytes": 1168531163,
+              "allocatedHeapPeakBytes": 388484922
+            },
+            {
+              "kind": "one-change",
+              "wallMs": 3338.178,
+              "readBytes": 547267841,
+              "payloadReads": 20949,
+              "heapUsedAfterBytes": 502878087,
+              "allocatedHeapPeakBytes": 447007868
+            }
+          ],
+          "wallMs": {
+            "samples": 7,
+            "p50": 2956.162,
+            "p95": 4298.584,
+            "p99": 4298.584,
+            "max": 4298.584
+          },
+          "readBytes": {
+            "samples": 7,
+            "p50": 547162803,
+            "p95": 547267841,
+            "p99": 547267841,
+            "max": 547267841
+          },
+          "allocatedHeapPeakBytes": {
+            "samples": 7,
+            "p50": 317235070,
+            "p95": 447007868,
+            "p99": 447007868,
+            "max": 447007868
+          },
+          "peakHeapBytes": 1168531163,
+          "loopGapMs": {
+            "samples": 25,
+            "p50": 1.186,
+            "p95": 3656.83,
+            "p99": 4697.643,
+            "max": 4697.643
+          },
+          "gapsOver50Ms": 7,
+          "viewerGapsOver500Ms": {
+            "samples": 7,
+            "p50": 2990,
+            "p95": 4697,
+            "p99": 4697,
+            "max": 4697
+          }
+        }
+      ]
+    },
+    {
+      "schemaVersion": 1,
+      "label": "candidate-3",
+      "runtime": "1.4.0",
+      "at": "2026-10-16T11:33:20.907Z",
+      "input": {
+        "sha256": "7ebe8938e8201192c75c869372e5b94ee80681de018fd715ce0c9002122025c1"
+      },
+      "sourceHashes": {
+        "src/lib/agent/sqliteRegistryStore.ts": "d70ebd45f92c634d123ac6e21efeb56dedb6134101d13ea67daf0c588aba353b",
+        "src/lib/agent/registry.ts": "50ec33e89a2d27c07b6c062387353d97554b15ac224450784ad67a7ffaa51adc",
+        "src/lib/agent/registryArchive.ts": "7596ed21464a36ee11b38c82d30b5651b43aaf7afc54d41ef0ae76a4361c7640",
+        "src/lib/performanceSpans.ts": "7f635a4f0ce206c0c06eef814bb644292031c917e525af2970b11ecf2113ad44",
+        "src/lib/viewerLoopMonitor.ts": "983da223dbca6a1c57045f172a898f6674871b96d7d701e6e62b7cb2fce878a9",
+        "scripts/registry-write-benchmark.ts": "532e9d14da8f2146d7cbf58bb24b71337c075344cc6812d4d4ffe84f0642a3ab"
+      },
+      "load": {
+        "iterations": 3,
+        "compactionNoChangeTicks": 3,
+        "compactionChangedTicks": 3,
+        "pauseBeforeMs": 25,
+        "pauseAfterMs": 15,
+        "timerMs": 10,
+        "writerProcesses": 1,
+        "heapMetric": "process.memoryUsage().heapUsed peak sampled during the first snapshot, payload reads and operations",
+        "allocationMetric": "peak live JavaScriptCore heap growth over the pre-operation heapSize baseline, sampled every 512 payload parses and at operation end; this captures concurrent heap pressure, while cumulative allocation volume remains unmeasured",
+        "logicalNow": "2026-10-16T08:00:00.000Z",
+        "scope": "Viewer registry executor and Viewer loop monitor in isolation; no browser or whole-application traffic"
+      },
+      "results": [
+        {
+          "workload": "keyed",
+          "rows": 46909,
+          "payloadBytes": 164805759,
+          "coldRows": 46268,
+          "storeOpenMs": 295.56,
+          "startupPlusFirstSnapshotMs": 846.494,
+          "warm": {
+            "wallMs": 550.934,
+            "readBytes": 683708760,
+            "payloadReads": 719,
+            "heapUsedAfterBytes": 60667972,
+            "allocatedHeapPeakBytes": 48477144
+          },
+          "operations": [
+            {
+              "wallMs": 22.162,
+              "readBytes": 545358,
+              "payloadReads": 1,
+              "heapUsedAfterBytes": 65365621,
+              "allocatedHeapPeakBytes": 0
+            },
+            {
+              "wallMs": 12.743,
+              "readBytes": 14401,
+              "payloadReads": 1,
+              "heapUsedAfterBytes": 65365621,
+              "allocatedHeapPeakBytes": 0
+            },
+            {
+              "wallMs": 13.196,
+              "readBytes": 552,
+              "payloadReads": 1,
+              "heapUsedAfterBytes": 65365621,
+              "allocatedHeapPeakBytes": 0
+            }
+          ],
+          "wallMs": {
+            "samples": 3,
+            "p50": 13.196,
+            "p95": 22.162,
+            "p99": 22.162,
+            "max": 22.162
+          },
+          "readBytes": {
+            "samples": 3,
+            "p50": 14401,
+            "p95": 545358,
+            "p99": 545358,
+            "max": 545358
+          },
+          "allocatedHeapPeakBytes": {
+            "samples": 3,
+            "p50": 0,
+            "p95": 0,
+            "p99": 0,
+            "max": 0
+          },
+          "peakHeapBytes": 65365621,
+          "loopGapMs": {
+            "samples": 12,
+            "p50": 0.083,
+            "p95": 32.883,
+            "p99": 32.883,
+            "max": 32.883
+          },
+          "gapsOver50Ms": 0,
+          "viewerGapsOver500Ms": {
+            "samples": 0,
+            "p50": 0,
+            "p95": 0,
+            "p99": 0,
+            "max": 0
+          }
+        },
+        {
+          "workload": "writer-snapshot",
+          "rows": 46909,
+          "payloadBytes": 164805759,
+          "coldRows": 46268,
+          "storeOpenMs": 280.689,
+          "startupPlusFirstSnapshotMs": 758.079,
+          "warm": {
+            "wallMs": 477.39,
+            "readBytes": 683707981,
+            "payloadReads": 719,
+            "heapUsedAfterBytes": 103055319,
+            "allocatedHeapPeakBytes": 37289990
+          },
+          "operations": [
+            {
+              "wallMs": 62.278,
+              "readBytes": 2345,
+              "payloadReads": 0,
+              "heapUsedAfterBytes": 125926666,
+              "allocatedHeapPeakBytes": 0
+            },
+            {
+              "wallMs": 20.998,
+              "readBytes": 554,
+              "payloadReads": 0,
+              "heapUsedAfterBytes": 125926666,
+              "allocatedHeapPeakBytes": 0
+            },
+            {
+              "wallMs": 26.195,
+              "readBytes": 516,
+              "payloadReads": 0,
+              "heapUsedAfterBytes": 125926666,
+              "allocatedHeapPeakBytes": 0
+            }
+          ],
+          "wallMs": {
+            "samples": 3,
+            "p50": 26.195,
+            "p95": 62.278,
+            "p99": 62.278,
+            "max": 62.278
+          },
+          "readBytes": {
+            "samples": 3,
+            "p50": 554,
+            "p95": 2345,
+            "p99": 2345,
+            "max": 2345
+          },
+          "allocatedHeapPeakBytes": {
+            "samples": 3,
+            "p50": 0,
+            "p95": 0,
+            "p99": 0,
+            "max": 0
+          },
+          "peakHeapBytes": 125926666,
+          "loopGapMs": {
+            "samples": 12,
+            "p50": 0.09,
+            "p95": 93.1,
+            "p99": 93.1,
+            "max": 93.1
+          },
+          "gapsOver50Ms": 2,
+          "viewerGapsOver500Ms": {
+            "samples": 0,
+            "p50": 0,
+            "p95": 0,
+            "p99": 0,
+            "max": 0
+          }
+        },
+        {
+          "workload": "serialized-snapshot",
+          "rows": 46909,
+          "payloadBytes": 164805759,
+          "coldRows": 46268,
+          "storeOpenMs": 307.859,
+          "startupPlusFirstSnapshotMs": 845.856,
+          "warm": {
+            "wallMs": 537.997,
+            "readBytes": 683707988,
+            "payloadReads": 719,
+            "heapUsedAfterBytes": 106597362,
+            "allocatedHeapPeakBytes": 38714212
+          },
+          "operations": [
+            {
+              "wallMs": 8367.425,
+              "readBytes": 247717223,
+              "payloadReads": 46268,
+              "heapUsedAfterBytes": 373384498,
+              "allocatedHeapPeakBytes": 245088323
+            },
+            {
+              "wallMs": 10794.511,
+              "readBytes": 247754131,
+              "payloadReads": 46268,
+              "heapUsedAfterBytes": 412788551,
+              "allocatedHeapPeakBytes": 281738162
+            },
+            {
+              "wallMs": 12774.109,
+              "readBytes": 247783332,
+              "payloadReads": 46268,
+              "heapUsedAfterBytes": 482221707,
+              "allocatedHeapPeakBytes": 166596382
+            }
+          ],
+          "wallMs": {
+            "samples": 3,
+            "p50": 10794.511,
+            "p95": 12774.109,
+            "p99": 12774.109,
+            "max": 12774.109
+          },
+          "readBytes": {
+            "samples": 3,
+            "p50": 247754131,
+            "p95": 247783332,
+            "p99": 247783332,
+            "max": 247783332
+          },
+          "allocatedHeapPeakBytes": {
+            "samples": 3,
+            "p50": 245088323,
+            "p95": 281738162,
+            "p99": 281738162,
+            "max": 281738162
+          },
+          "peakHeapBytes": 635711634,
+          "loopGapMs": {
+            "samples": 10,
+            "p50": 0.101,
+            "p95": 12860.936,
+            "p99": 12860.936,
+            "max": 12860.936
+          },
+          "gapsOver50Ms": 3,
+          "viewerGapsOver500Ms": {
+            "samples": 3,
+            "p50": 10881,
+            "p95": 12859,
+            "p99": 12859,
+            "max": 12859
+          }
+        },
+        {
+          "workload": "keyed-with-snapshot",
+          "rows": 46909,
+          "payloadBytes": 164805759,
+          "coldRows": 46268,
+          "storeOpenMs": 321.19,
+          "startupPlusFirstSnapshotMs": 1009.251,
+          "warm": {
+            "wallMs": 688.061,
+            "readBytes": 683708062,
+            "payloadReads": 719,
+            "heapUsedAfterBytes": 153201203,
+            "allocatedHeapPeakBytes": 3624
+          },
+          "operations": [
+            {
+              "wallMs": 332.687,
+              "readBytes": 199991070,
+              "payloadReads": 1,
+              "heapUsedAfterBytes": 214941279,
+              "allocatedHeapPeakBytes": 0
+            },
+            {
+              "wallMs": 88.389,
+              "readBytes": 388931,
+              "payloadReads": 1,
+              "heapUsedAfterBytes": 214941279,
+              "allocatedHeapPeakBytes": 0
+            },
+            {
+              "wallMs": 109.519,
+              "readBytes": 11943,
+              "payloadReads": 1,
+              "heapUsedAfterBytes": 214941279,
+              "allocatedHeapPeakBytes": 0
+            }
+          ],
+          "wallMs": {
+            "samples": 3,
+            "p50": 109.519,
+            "p95": 332.687,
+            "p99": 332.687,
+            "max": 332.687
+          },
+          "readBytes": {
+            "samples": 3,
+            "p50": 388931,
+            "p95": 199991070,
+            "p99": 199991070,
+            "max": 199991070
+          },
+          "allocatedHeapPeakBytes": {
+            "samples": 3,
+            "p50": 0,
+            "p95": 0,
+            "p99": 0,
+            "max": 0
+          },
+          "peakHeapBytes": 214941279,
+          "loopGapMs": {
+            "samples": 12,
+            "p50": 0.107,
+            "p95": 441.654,
+            "p99": 441.654,
+            "max": 441.654
+          },
+          "gapsOver50Ms": 3,
+          "viewerGapsOver500Ms": {
+            "samples": 0,
+            "p50": 0,
+            "p95": 0,
+            "p99": 0,
+            "max": 0
+          }
+        },
+        {
+          "workload": "compaction-control",
+          "rows": 46909,
+          "payloadBytes": 164805759,
+          "coldRows": 46268,
+          "storeOpenMs": 295.962,
+          "startupPlusFirstSnapshotMs": 788.719,
+          "warm": {
+            "wallMs": 492.757,
+            "readBytes": 683708139,
+            "payloadReads": 719,
+            "heapUsedAfterBytes": 113406041,
+            "allocatedHeapPeakBytes": 41373605
+          },
+          "compaction": {
+            "initial": {
+              "registryOpenMs": 33.408,
+              "wallMs": 2281.512,
+              "readBytes": 546953788,
+              "payloadReads": 20940,
+              "allocatedHeapPeakBytes": 378126723,
+              "heapUsedAfterBytes": 515911537
+            },
+            "unchanged": {
+              "samples": 3,
+              "wallMs": {
+                "samples": 3,
+                "p50": 42.668,
+                "p95": 46.675,
+                "p99": 46.675,
+                "max": 46.675
+              },
+              "readBytes": {
+                "samples": 3,
+                "p50": 2103,
+                "p95": 26680,
+                "p99": 26680,
+                "max": 26680
+              },
+              "payloadReads": {
+                "samples": 3,
+                "p50": 0,
+                "p95": 0,
+                "p99": 0,
+                "max": 0
+              },
+              "allocatedHeapPeakBytes": {
+                "samples": 3,
+                "p50": 0,
+                "p95": 0,
+                "p99": 0,
+                "max": 0
+              }
+            },
+            "oneChange": {
+              "samples": 3,
+              "wallMs": {
+                "samples": 3,
+                "p50": 63.996,
+                "p95": 72.7,
+                "p99": 72.7,
+                "max": 72.7
+              },
+              "readBytes": {
+                "samples": 3,
+                "p50": 71774,
+                "p95": 71775,
+                "p99": 71775,
+                "max": 71775
+              },
+              "payloadReads": {
+                "samples": 3,
+                "p50": 8,
+                "p95": 8,
+                "p99": 8,
+                "max": 8
+              },
+              "allocatedHeapPeakBytes": {
+                "samples": 3,
+                "p50": 472,
+                "p95": 472,
+                "p99": 472,
+                "max": 472
+              }
+            }
+          },
+          "operations": [
+            {
+              "kind": "initial",
+              "wallMs": 2281.512,
+              "readBytes": 546953788,
+              "payloadReads": 20940,
+              "allocatedHeapPeakBytes": 378126723,
+              "heapUsedAfterBytes": 515911537
+            },
+            {
+              "kind": "unchanged",
+              "wallMs": 46.675,
+              "readBytes": 26680,
+              "payloadReads": 0,
+              "heapUsedAfterBytes": 515949886,
+              "allocatedHeapPeakBytes": 0
+            },
+            {
+              "kind": "unchanged",
+              "wallMs": 42.668,
+              "readBytes": 569,
+              "payloadReads": 0,
+              "heapUsedAfterBytes": 515949886,
+              "allocatedHeapPeakBytes": 0
+            },
+            {
+              "kind": "unchanged",
+              "wallMs": 34.24,
+              "readBytes": 2103,
+              "payloadReads": 0,
+              "heapUsedAfterBytes": 515949886,
+              "allocatedHeapPeakBytes": 0
+            },
+            {
+              "kind": "one-change",
+              "wallMs": 50.782,
+              "readBytes": 71775,
+              "payloadReads": 8,
+              "heapUsedAfterBytes": 515949886,
+              "allocatedHeapPeakBytes": 472
+            },
+            {
+              "kind": "one-change",
+              "wallMs": 72.7,
+              "readBytes": 71774,
+              "payloadReads": 8,
+              "heapUsedAfterBytes": 515949886,
+              "allocatedHeapPeakBytes": 472
+            },
+            {
+              "kind": "one-change",
+              "wallMs": 63.996,
+              "readBytes": 71736,
+              "payloadReads": 8,
+              "heapUsedAfterBytes": 517708231,
+              "allocatedHeapPeakBytes": 472
+            }
+          ],
+          "wallMs": {
+            "samples": 7,
+            "p50": 50.782,
+            "p95": 2281.512,
+            "p99": 2281.512,
+            "max": 2281.512
+          },
+          "readBytes": {
+            "samples": 7,
+            "p50": 71736,
+            "p95": 546953788,
+            "p99": 546953788,
+            "max": 546953788
+          },
+          "allocatedHeapPeakBytes": {
+            "samples": 7,
+            "p50": 472,
+            "p95": 378126723,
+            "p99": 378126723,
+            "max": 378126723
+          },
+          "peakHeapBytes": 517708231,
+          "loopGapMs": {
+            "samples": 27,
+            "p50": 0.09,
+            "p95": 415.262,
+            "p99": 2300.223,
+            "max": 2300.223
+          },
+          "gapsOver50Ms": 7,
+          "viewerGapsOver500Ms": {
+            "samples": 1,
+            "p50": 2300,
+            "p95": 2300,
+            "p99": 2300,
+            "max": 2300
+          }
+        }
+      ]
+    }
+  ]
+}

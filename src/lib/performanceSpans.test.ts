@@ -3,6 +3,17 @@ import { createPerformanceSpans } from "./performanceSpans";
 import { startLoopWatchdog } from "./loopWatchdog";
 import { createLoopLogSink, createViewerLoopMonitor } from "./viewerLoopMonitor";
 
+test("writer snapshot spans carry a numeric watchdog site and appear in loop-gap attribution", () => {
+  let at = 0;
+  const recorder = createPerformanceSpans(() => at);
+  recorder.observeSite(site => { BigInt(site); });
+  const lines: string[] = [];
+  const monitor = createViewerLoopMonitor(line => lines.push(line), () => at, recorder);
+  recorder.sync("registry.writer-snapshot", () => { at += 900; });
+  monitor.tick();
+  expect(JSON.parse(lines[0]!.slice("[viewer loop-gap] ".length)).attribution.slices[0].site).toBe("registry.writer-snapshot");
+});
+
 test.each([1, 80])("gap reports retain synchronous blockers among longer awaits (%i sync slices)", async (syncCount) => {
   let at = 0;
   const recorder = createPerformanceSpans(() => at);

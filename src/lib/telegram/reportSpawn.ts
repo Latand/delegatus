@@ -1,4 +1,6 @@
 import { activeDrain } from "@/lib/selfUpdate/drain";
+import { startDeferredSpawnWork } from "@/lib/agent/spawnDeferral";
+export { startDeferredSpawnWork } from "@/lib/agent/spawnDeferral";
 import type { TelegramReportTrigger } from "./reportContracts";
 import type { NextRequest } from "next/server";
 
@@ -17,9 +19,8 @@ import {
  * KEYBOARD when this fires:
  *
  *  - `defer` does not go through Next's `after()`. `after()` is only legal
- *    inside a request scope; a timer tick has none, so the production
- *    dependency would throw there and every scheduled structured launch would
- *    settle `launch_failed`. The deferred work here is simply started, and its
+ *    inside a request scope; a timer tick has none. Timer callers explicitly
+ *    use the shared background spawn hook. The deferred work is started, and its
  *    failures are terminalized by the same code that terminalizes them behind
  *    a request.
  *  - `internalGrant` names {@link SCHEDULED_REPORT_SESSION_CLASS}, so the
@@ -39,21 +40,6 @@ export interface ReportSpawnInput {
   body: Record<string, unknown>;
   /** Re-read of "reports enabled AND Telegram connected", called by admission. */
   grantActive(): boolean;
-}
-
-/**
- * Deferred launch work for a spawn nobody is waiting on.
- *
- * `executeSpawnRequest` hands its structured launch to `defer` and returns a
- * 202; behind a request Next keeps the response alive until that work settles.
- * A timer has nothing to keep alive, so starting the promise IS the contract.
- * The rejection path is deliberately silent: everything worth recording is
- * already recorded durably by the work itself (a failed receipt), and the
- * error object may carry connector or account text that has no business in a
- * log line.
- */
-export function startDeferredSpawnWork(work: () => Promise<void>): void {
-  void work().catch(() => undefined);
 }
 
 /**
