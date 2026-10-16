@@ -1950,8 +1950,9 @@ describe("MCP tool service", () => {
         "telegram_bot_messages",
         "relay_owner_history",
         "issue_report",
+        "suggest_replies",
       ]);
-      const optionalReadKeys = new Set(["relay_owner_history", "backfill_worktree_projects", "message_receipt", "list_conversations", "search_transcripts", "get_conversation", "conversation_deliverability", "conversation_messages", "get_pipeline", "board_snapshot", "list_flows", "get_flow", "list_pipelines", "list_tasks", "get_task", "deployment_status", "resources", "get_orchestrator", "account_limits", "read_prototype_review", "agent_fleet"]);
+      const optionalReadKeys = new Set(["suggest_replies", "relay_owner_history", "backfill_worktree_projects", "message_receipt", "list_conversations", "search_transcripts", "get_conversation", "conversation_deliverability", "conversation_messages", "get_pipeline", "board_snapshot", "list_flows", "get_flow", "list_pipelines", "list_tasks", "get_task", "deployment_status", "resources", "get_orchestrator", "account_limits", "read_prototype_review", "agent_fleet"]);
       for (const tool of listed.tools) {
         if (optionalReadKeys.has(tool.name)) expect(tool.inputSchema.required ?? []).not.toContain("clientRequestId");
         else expect(tool.inputSchema.required).toContain("clientRequestId");
@@ -1964,9 +1965,8 @@ describe("MCP tool service", () => {
       expect(spawnSchema?.properties).toHaveProperty("mcpServers");
       const createOrchestratorSchema = listed.tools.find((tool) => tool.name === "create_orchestrator")?.inputSchema;
       expect(createOrchestratorSchema?.properties).toHaveProperty("conversationId");
-      /* Reply-draft pills are gone: every operator ask is a decision form, and
-         the route the pills read their drafts from is gone with the tool. */
-      expect(listed.tools.map((tool) => tool.name)).not.toContain("suggest_replies");
+      /* The deprecated protocol bridge has no active action or draft route. */
+      expect(MCP_TOOL_NAMES as readonly string[]).not.toContain("suggest_replies");
       expect(fs.existsSync(path.join(import.meta.dir, "../../app/api/log/suggestions"))).toBe(false);
       expect(fs.existsSync(path.join(import.meta.dir, "../../app/api/log/route.ts"))).toBe(true);
       /* #878: rotation must reach effort parity with create, or a successor
