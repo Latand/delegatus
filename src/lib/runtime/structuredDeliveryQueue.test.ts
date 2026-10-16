@@ -1943,6 +1943,7 @@ for (const order of ["reconfigure-then-kill", "kill-then-reconfigure"] as const)
     });
 
     await queue.drain();
+    expect(statuses.get("reconfigure-one")).toBe("failed");
     deferred = false;
     await queue.drain();
 

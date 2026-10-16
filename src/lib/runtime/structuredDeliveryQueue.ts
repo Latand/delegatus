@@ -1099,10 +1099,19 @@ export class StructuredDeliveryQueue {
             if (effect.kind === "kill" && !effect.onlyIfIdle) kills.push(effect);
             else this.noteWait(effect, "startup", { wake: "event" });
           }
-          if (kills.length === 0) return true;
+          const settleKilledReconfigures = async () => {
+            if (this.port.handoffHeld?.()) return;
+            for (const effect of deferred) {
+              if (isReconfigureEffect(effect) && this.killedReconfigures.has(effect.operationId)) {
+                await this.transitionReconfigure(effect, "failed", { reason: "conversation-killed" });
+              }
+            }
+          };
+          if (kills.length === 0) { await settleKilledReconfigures(); return true; }
           const killedGenerations = new Set<string>();
+          let blocked: boolean;
           try {
-            return await this.drainTarget(kills, lane, undefined, killedGenerations) || kills.length < deferred.length;
+            blocked = await this.drainTarget(kills, lane, undefined, killedGenerations);
           } finally {
             for (const effect of deferred) {
               if (isReconfigureEffect(effect) && (effect.sessionKey
@@ -1110,6 +1119,8 @@ export class StructuredDeliveryQueue {
                 : killedGenerations.size > 0)) this.killedReconfigures.add(effect.operationId);
             }
           }
+          await settleKilledReconfigures();
+          return blocked || kills.length < deferred.length;
         }
         for (const prepare of targetPreparations.get(conversationId) ?? []) await prepare();
         return this.drainTarget(grouped.get(conversationId) ?? [], lane);
