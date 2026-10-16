@@ -193,11 +193,34 @@ export function checkErrorText(check: CheckState, branch: string, t: TFunction):
   return check.error;
 }
 
-/** Why a step failed: our reason worded; a command's failure is its own last
-    fatal or error line; an unexpected failure is the text it carried. */
+/** Recognize both historical and current catalog refusals in stored deploys. */
+function mcpCatalogFailure(text: string, t: TFunction): { cause: string; retry: string } | null {
+  const patterns = [
+    ["MCP runtime is missing tools: ", "selfUpdate.mcp.legacy", "selfUpdate.mcp.retryLegacy"],
+    ["MCP candidate did not register declared tools: ", "selfUpdate.mcp.declared", "selfUpdate.mcp.retryCandidate"],
+    ["MCP candidate is missing deployment contract tools: ", "selfUpdate.mcp.contract", "selfUpdate.mcp.retryCandidate"],
+    ["MCP candidate tool catalog is invalid", "selfUpdate.mcp.invalid", "selfUpdate.mcp.retryCandidate"],
+  ] as const;
+  for (const [prefix, cause, retry] of patterns) {
+    if (!text.startsWith(prefix)) continue;
+    const tools = text.slice(prefix.length).split(". Retrying")[0]!.trim();
+    return { cause: t(cause, { tools }), retry: t(retry) };
+  }
+  return null;
+}
+
+export function managedRetryText(step: Step, t: TFunction): string {
+  const raw = step.failure?.kind === "error" ? step.failure.text : lastError(step.tail);
+  return (raw && mcpCatalogFailure(raw, t)?.retry) || t("selfUpdate.mcp.retryTemporary");
+}
+
+/** Why a step failed, worded locally where the failure has a known cause. */
 export function stepFailureText(step: Step, t: TFunction): string | null {
   const failure = step.failure;
-  if (!failure || failure.kind === "exit") return lastError(step.tail);
+  if (!failure || failure.kind === "exit") {
+    const raw = lastError(step.tail);
+    return raw ? mcpCatalogFailure(raw, t)?.cause ?? raw : null;
+  }
   switch (failure.kind) {
     case "memory": return t("selfUpdate.stepFailure.memory", { available: failure.availableMb, needed: failure.neededMb });
     case "remote-moved": return t("selfUpdate.stepFailure.remoteMoved", { expected: failure.expected, fetched: failure.fetched });
@@ -206,6 +229,6 @@ export function stepFailureText(step: Step, t: TFunction): string | null {
     case "interrupted": return t("selfUpdate.stepFailure.interrupted");
     case "timeout": return t("selfUpdate.stepFailure.timeout", { minutes: failure.minutes });
     case "deployment-lost": return t("selfUpdate.stepFailure.deploymentLost");
-    case "error": return failure.text;
+    case "error": return mcpCatalogFailure(failure.text, t)?.cause ?? failure.text;
   }
 }

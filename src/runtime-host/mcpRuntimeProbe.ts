@@ -4,7 +4,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { ErrorCode } from "@modelcontextprotocol/sdk/types.js";
 
 import { MCP_HEALTH_PROBE_CAPABILITY_ENV } from "@/lib/mcp/healthProbeAdmission";
-import { MCP_TOOL_NAMES } from "@/lib/mcp/server";
+import { candidateDeclaredTools, MCP_DEPLOYMENT_CONTRACT } from "@/lib/mcp/toolCatalog";
 import { redactMonitorText } from "@/lib/monitor/redact";
 import type {
   ViewerMcpRuntimeCallFailure,
@@ -15,10 +15,6 @@ import type {
 import { probeExcerpt } from "./deploymentHealth";
 import { McpProbeStdioTransport } from "./mcpProbeStdioTransport";
 import type { McpHealthProbeAdmissionConsumer } from "./mcpHealthProbeAdmissionChannel";
-
-/* The probe gate is the tool surface this generation ships; a duplicated list
-   silently stops gating whenever a tool is added. */
-const REQUIRED_TOOLS: readonly string[] = MCP_TOOL_NAMES;
 
 export interface McpRuntimeProbeOptions {
   command: string;
@@ -185,6 +181,15 @@ export async function probeMcpRuntime(options: McpRuntimeProbeOptions): Promise<
     if (transport.pid !== null) options.onProcessReady?.(transport.pid);
     const listed = await client.listTools(undefined, { timeout });
     tools = listed.tools.map((tool) => tool.name).sort();
+    const declared = candidateDeclaredTools(client.getServerCapabilities()?.experimental, tools);
+    const missingContract = MCP_DEPLOYMENT_CONTRACT.filter((tool) => !tools.includes(tool));
+    const missingDeclared = declared.filter((tool) => !tools.includes(tool));
+    if (missingContract.length || missingDeclared.length) {
+      const cause = missingContract.length
+        ? `MCP candidate is missing deployment contract tools: ${missingContract.join(", ")}`
+        : `MCP candidate did not register declared tools: ${missingDeclared.join(", ")}`;
+      throw new Error(`${cause}. Retrying the same image will not help; choose a corrected release.`);
+    }
     const requestId = randomUUID();
     const deployment = await client.callTool({
       name: "deployment_status",
@@ -226,15 +231,12 @@ export async function probeMcpRuntime(options: McpRuntimeProbeOptions): Promise<
       if (performance.now() >= readinessDeadline) break;
     }
     boardSnapshot = successfulToolCall(board);
-    const missing = REQUIRED_TOOLS.filter((tool) => !tools.includes(tool));
-    const ok = missing.length === 0 && deploymentStatus && boardSnapshot;
+    const ok = deploymentStatus && boardSnapshot;
     const reads = [
       { name: "deployment_status", ok: deploymentStatus, result: deployment },
       { name: "board_snapshot", ok: boardSnapshot, result: board },
     ];
-    /* Kept whenever a read was refused, including when a missing tool decides
-       the verdict: the refusal is the only account of the candidate's own
-       runtime that survives, and the candidate is retired seconds later. */
+    /* A refused read's own account survives after the candidate is retired. */
     const callFailures = mcpProbeCallFailures(reads);
     evidence = {
       checkedAt,
@@ -246,9 +248,7 @@ export async function probeMcpRuntime(options: McpRuntimeProbeOptions): Promise<
       ...(callFailures.length ? { callFailures } : {}),
       ok,
       ...(ok ? {} : {
-        detail: missing.length
-          ? `MCP runtime is missing tools: ${missing.join(", ")}`
-          : mcpProbeFailureDetail({ controlUrl, calls: reads }),
+        detail: mcpProbeFailureDetail({ controlUrl, calls: reads }),
       }),
     };
   } catch (error) {

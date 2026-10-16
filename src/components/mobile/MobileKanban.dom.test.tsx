@@ -435,6 +435,48 @@ test("a card whose pipeline waits on the operator says the lane's state and draw
   expect(q(host, "[data-phone-kanban-tab=assigned] [data-phone-tab-needs]")!.textContent).toBe("1");
 });
 
+test("a tap on a stage pill of the card's lane opens that stage's agent, within 11 px of it; any other tap opens the task (2026-10-16)", () => {
+  const files = [file(1), file(2)];
+  const running = {
+    id: "running", task: "Mobile data: stop repeated full-board downloads", project: "fixture", state: "running", taskIds: ["t1"],
+    cursor: { stageId: "review", state: "running", input: null, activatedBy: null },
+    stages: [
+      { id: "implement", kind: "run", prompt: "", next: "review", effectiveRole: {} },
+      { id: "review", kind: "run", prompt: "", next: "verify", effectiveRole: {} },
+      { id: "verify", kind: "run", prompt: "", next: null, effectiveRole: {} },
+    ],
+    runs: [
+      { stageId: "implement", attempts: [{ n: 1, state: "passed", startedAt: new Date((NOW - 3_000) * 1000).toISOString(), completedAt: new Date((NOW - 2_000) * 1000).toISOString(), effectiveRole: {}, agentPath: files[0]!.path, conversationId: null }] },
+      { stageId: "review", attempts: [{ n: 1, state: "running", startedAt: new Date((NOW - 600) * 1000).toISOString(), completedAt: null, effectiveRole: {}, agentPath: files[1]!.path, conversationId: null }] },
+    ],
+    createdAt: "2026-09-14T10:00:00.000Z",
+  } as unknown as Pipeline;
+  const { host, opened } = mount({ files, tasks: [task("t1", "assigned", [files[0]!.path, files[1]!.path], "Mobile data: stop repeated full-board downloads")], pipelines: [running] });
+  const card = q(host, '[data-phone-card="task:t1"]')!;
+  /* The pills that hold an agent are marked, and the one that does not is plain. */
+  expect(qa(card, "[data-stage-open]").map((pill) => pill.getAttribute("data-stage-open"))).toEqual(["implement", "review"]);
+  expect(qa(card, "button, a")).toHaveLength(0);
+  const rects: Record<string, [number, number]> = { implement: [20, 90], review: [96, 170] };
+  for (const pill of qa(card, "[data-stage-open]")) {
+    const [left, right] = rects[pill.getAttribute("data-stage-open")!]!;
+    (pill as unknown as { getBoundingClientRect: () => DOMRect }).getBoundingClientRect = () => ({ left, right, top: 200, bottom: 222, width: right - left, height: 22, x: left, y: 200 } as DOMRect);
+  }
+  const tap = (x: number, y: number) => flushSync(() => { card.dispatchEvent(new dom.MouseEvent("click", { bubbles: true, cancelable: true, clientX: x, clientY: y }) as unknown as Event); });
+  tap(130, 211);
+  expect(opened.conversations).toEqual([files[1]!.path]);
+  tap(50, 232);
+  expect(opened.conversations).toEqual([files[1]!.path, files[0]!.path]);
+  expect(opened.tasks).toEqual([]);
+  /* Beyond reach, or between the card's lines: the task, as before. */
+  tap(130, 240);
+  tap(300, 211);
+  expect(opened.tasks).toEqual(["t1", "t1"]);
+  expect(opened.conversations).toHaveLength(2);
+  /* A tap with no position (the keyboard's Enter on the face) is the card's. */
+  click(card);
+  expect(opened.tasks).toEqual(["t1", "t1", "t1"]);
+});
+
 test("coming back to the board lands on the column and the offset the operator left (§3.7)", () => {
   const files = Array.from({ length: 30 }, (_, index) => file(index + 1, { lastAgentWorkAt: (NOW - (index + 1) * 60) * 1000 } as Partial<FileEntry>));
   const tasks = files.map((entry, index) => task(`d${index + 1}`, "done", [entry.path]));

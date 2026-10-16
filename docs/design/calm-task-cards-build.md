@@ -107,7 +107,7 @@ three needs-you controls, whose job the state line and the ⋯ take over.
 | Chevron (expand / collapse), × hide, ⋯ | yes | yes |
 | Task icon (icon picker), title (rename) | yes | yes |
 | Project chip (Overview only) | yes | yes |
-| One-line chain + PR (`PipelineBlock` card density) | yes, with no reason line (§6.2) | no: the lane rows draw it |
+| One-line chain + PR (`PipelineBlock` card density) | yes, with no reason line (§6.2); each stage with an agent is a button that opens that agent (2026-10-16, below) | no: the lane rows draw it |
 | `TaskMotionLine` (hold, working N, waiting, paused, finding recurrence) | becomes the state line's text when no lane owns the line (§5) | same line |
 | `TaskStepsLine`, `TaskStatusNote`, task's own links row | no | yes |
 | Description, Details, edit-failed / incoming-edit notices, resurfaced notice | no | yes, unchanged |
@@ -117,6 +117,16 @@ three needs-you controls, whose job the state line and the ⋯ take over.
 
 A stage panel or a draft forces its card open, as `reading` does today
 (`KanbanCard.tsx:411`).
+
+**The closed card's chain opens agents (operator, 2026-10-16).** This table
+first made the closed chain text. The operator asked that tapping an agent on a
+closed card, for example the Build stage with the sun, open that agent without
+expanding the card through «Працює» first, and that decision replaces the text
+rule. Each pill whose stage has a conversation is a button on the desktop and
+opens it in the agent window through the same path as a lane row's pill; the
+card stays closed. A stage with no conversation yet stays text, because a closed
+card has no place to show its first-message form. The fold chips («N passed»,
+«+N») are counts and stay text. A press that moves is still a drag.
 
 ### 2.4 Phone
 

@@ -1,0 +1,173 @@
+{
+  "board": {
+    "scene": "drag-board",
+    "tasks": 48,
+    "viewport": "1440x900",
+    "path": "3 s, one move per 8 ms"
+  },
+  "cpuThrottling": 4,
+  "load": [
+    "polls",
+    "clock"
+  ],
+  "pollAtMs": [
+    400,
+    1100,
+    1800,
+    2500
+  ],
+  "clockAtMs": 1500,
+  "runs": [
+    {
+      "reading": {
+        "moves": 375,
+        "frames": 82,
+        "frameMs": {
+          "p50": 33.3,
+          "p95": 150,
+          "max": 333.4
+        },
+        "longTasks": {
+          "count": 11,
+          "longestMs": 165.91
+        },
+        "moveCost": {
+          "events": 134,
+          "totalMs": 178.02,
+          "maxMs": 103.89
+        },
+        "layouts": {
+          "count": 16,
+          "totalMs": 167.28
+        },
+        "recalcs": {
+          "count": 88,
+          "totalMs": 667.44
+        },
+        "inputLagMs": {
+          "p95": 8.2,
+          "max": 9.6
+        },
+        "mutations": 198,
+        "mutationKinds": {
+          "attributes:style on article.card": 66,
+          "characterData: on #text.": 43,
+          "attributes:aria-label on span.card-state-dot": 15,
+          "attributes:title on span.age": 11,
+          "attributes:name on input.": 10,
+          "attributes:name on input.hidden": 10
+        }
+      },
+      "frames": {
+        "count": 86,
+        "over20": 46,
+        "over33": 24,
+        "longestMs": 333.4
+      }
+    },
+    {
+      "reading": {
+        "moves": 375,
+        "frames": 80,
+        "frameMs": {
+          "p50": 33.3,
+          "p95": 166.6,
+          "max": 316.7
+        },
+        "longTasks": {
+          "count": 8,
+          "longestMs": 184.61
+        },
+        "moveCost": {
+          "events": 133,
+          "totalMs": 183.76,
+          "maxMs": 104.47
+        },
+        "layouts": {
+          "count": 14,
+          "totalMs": 172.74
+        },
+        "recalcs": {
+          "count": 88,
+          "totalMs": 699.17
+        },
+        "inputLagMs": {
+          "p95": 8,
+          "max": 10.1
+        },
+        "mutations": 201,
+        "mutationKinds": {
+          "attributes:style on article.card": 68,
+          "characterData: on #text.": 42,
+          "attributes:aria-label on span.card-state-dot": 21,
+          "attributes:title on span.age": 11,
+          "attributes:name on input.hidden": 10,
+          "attributes:name on input.w-full": 8
+        }
+      },
+      "frames": {
+        "count": 84,
+        "over20": 48,
+        "over33": 22,
+        "longestMs": 316.7
+      }
+    },
+    {
+      "reading": {
+        "moves": 375,
+        "frames": 73,
+        "frameMs": {
+          "p50": 33.3,
+          "p95": 150,
+          "max": 483.3
+        },
+        "longTasks": {
+          "count": 7,
+          "longestMs": 303.3
+        },
+        "moveCost": {
+          "events": 126,
+          "totalMs": 207.77,
+          "maxMs": 129.54
+        },
+        "layouts": {
+          "count": 13,
+          "totalMs": 261.93
+        },
+        "recalcs": {
+          "count": 82,
+          "totalMs": 670.94
+        },
+        "inputLagMs": {
+          "p95": 8.2,
+          "max": 17.1
+        },
+        "mutations": 202,
+        "mutationKinds": {
+          "attributes:style on article.card": 64,
+          "characterData: on #text.": 46,
+          "attributes:aria-label on span.card-state-dot": 21,
+          "attributes:title on span.age": 11,
+          "attributes:name on input.hidden": 10,
+          "attributes:name on input.w-full": 8
+        }
+      },
+      "frames": {
+        "count": 78,
+        "over20": 45,
+        "over33": 25,
+        "longestMs": 483.3
+      }
+    }
+  ],
+  "median": {
+    "p95FrameMs": 150,
+    "maxFrameMs": 333.4,
+    "longTasks": 8,
+    "longestTaskMs": 184.61,
+    "moveCostMsPerMove": 1.3816541353383458,
+    "inputLagP95Ms": 8.2,
+    "framesOver20ms": 46,
+    "mutations": 201
+  }
+}

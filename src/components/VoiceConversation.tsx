@@ -40,7 +40,7 @@ export function VoiceConversationButton({
         aria-label={label}
         aria-pressed={active}
         onClick={() => void (active ? stop() : start())}
-        className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-control border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${
+        className={`composer-ghost inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-control border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${
           active
             ? "border-danger/60 bg-danger/10 text-danger hover:bg-danger/20"
             : "border-border text-muted hover:bg-sunken hover:text-accent"

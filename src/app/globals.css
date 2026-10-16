@@ -21,6 +21,9 @@
    `html[data-role-frame]`, see src/lib/roleFrames.ts. */
 @import "../styles/roleFrames.css";
 
+/* Dark-theme conversation controls: accent fills, outlines and raised hovers. */
+@import "../styles/darkControls.css";
+
 body {
   background: var(--color-canvas);
   color: var(--color-primary);

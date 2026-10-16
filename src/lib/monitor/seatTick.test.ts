@@ -2120,3 +2120,13 @@ test("a lost spawn without pipeline or lineage is owed in the seat's next wake",
   expect(reasonsOf(decision.verdict)).toEqual(["lane-event"]);
   expect(decision.verdict.kind === "wake" && decision.verdict.items[0]).toMatchObject({ kind: "event", label: `spawn_failed: ${summary}` });
 });
+
+
+test("B: the next bounded wake carries a saved operator answer ahead of open lanes", () => {
+  const answer = "Saved operator answer: use the recommended delivery.";
+  const result = seatTickDecision(input({ events: [], pipelines: [lane()], tasks: [], signals: [{ id: "prototype-answer:round-a:key-a", actionable: true, label: answer }], policy: { ...DEFAULT_SEAT_TICK_POLICY, itemsPerWake: 1 } }));
+  expect(result.verdict.kind).toBe("wake");
+  if (result.verdict.kind !== "wake") return;
+  expect(result.verdict.items.map(item => item.id)).toEqual(["prototype-answer:round-a:key-a"]);
+  expect(result.verdict.items[0]!.label).toBe(answer);
+});

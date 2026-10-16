@@ -645,7 +645,9 @@ test("the send control takes its glyph from sendIcon, and the input box carries 
     flushSync(() => root.render(<ModeHarness />));
     expect(container.querySelector("[data-composer-mode]")).toBeNull();
     expect(container.querySelector('[data-glyph="custom"]')).toBeNull();
+    expect(container.querySelector("[data-composer-send]")!.hasAttribute("data-composer-send-tone")).toBe(false);
     flushSync(() => root.render(<ModeHarness mode="context" />));
+    expect(container.querySelector("[data-composer-send]")!.getAttribute("data-composer-send-tone")).toBe("info");
     const box = container.querySelector("[data-composer-mode]")!;
     expect(box.getAttribute("data-composer-mode")).toBe("context");
     expect(box.className).toContain("border-dashed");
