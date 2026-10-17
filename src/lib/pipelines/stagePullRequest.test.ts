@@ -125,6 +125,8 @@ test("C: a refused PR cannot leave a passing stage without a linked PR", async (
   try {
     f.setRefused(); await f.commit();
     const p = await f.finish(); expect(p.state).toBe("needs_decision"); expect(p.cursor?.stageId).toBe("build");
+    expect(p.runs[0]!.attempts[0]!.state).toBe("needs_decision");
+    expect(p.runs[0]!.attempts[0]!.publicationTextRepair).toBeUndefined();
     expect(p.stateDetail).toContain("pull request"); expect(p.delivery?.target.pr).toBeUndefined();
   } finally { f.close(); }
 });

@@ -4258,7 +4258,7 @@ async function handlePullRequestRefusal(pipeline: Pipeline, attempt: PipelineSta
   const detail = `publishing the passed stage: ${result.error}`;
   attempt.error = detail;
   const privacy = result.privacy;
-  if (!privacy) { await park(pipeline, detail); return; }
+  if (!privacy) { await park(pipeline, detail, attempt); return; }
   const producer = stagePullRequestProducer(pipeline, attempt);
   const producerStage = pipeline.runs.find(run => run.attempts.includes(producer));
   const prior = attempt.publicationTextRepair;
