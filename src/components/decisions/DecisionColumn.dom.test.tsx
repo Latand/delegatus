@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { act } from "react";
+import { act, useEffect } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { Window } from "happy-dom";
 
@@ -31,7 +31,7 @@ Object.assign(globalThis, {
 const { DecisionList, DecisionStripLine } = await import("./DecisionColumn");
 const { DecisionPointer, decisionPointerOf, setDecisionRecordPollForTests } = await import("./DecisionPointer");
 const { openOperatorDecisions, resetDecisionSurfacesForTests, useDecisionSheet, useDecisionSurface } = await import("./decisionSurface");
-const { resetDecisionDraftsForTests } = await import("./useOperatorDecisions");
+const { resetDecisionDraftsForTests, reloadDecisionDraftsForTests } = await import("@/components/prototypeReview/decisionDrafts");
 const { publishPrototypeNotices, resetPrototypeReviewStoreForTests } = await import("@/components/prototypeReview/prototypeReviewStore");
 
 const SEAT = `pr_${"a".repeat(32)}`;
@@ -208,6 +208,98 @@ for (const refusal of ["409", "network"] as const) {
   });
 }
 
+const KEY = (id: string) => `llv.prototypeReview.draft:${id}`;
+const stored = (id: string) => dom.localStorage.getItem(KEY(id));
+
+test("a refused answer survives a reload: the form comes back from this browser's storage with the choice and the exact words", async () => {
+  globalThis.fetch = (async () => new Response(JSON.stringify({ error: "prototype review is unavailable" }), { status: 503 })) as unknown as typeof fetch;
+  let host = await render(<DecisionList project="project-a" initial={[seatDecision()]} />);
+  await click(host.querySelector('[data-prototype-option="when:1"]'));
+  await click(host.querySelector('[data-prototype-other="why"]'));
+  await typeComment(host, "  After the\nbatch ");
+  await click(host.querySelector("[data-decision-send]"));
+  expect(host.querySelector("[data-decision-error]")?.textContent).toContain("prototype review is unavailable");
+  expect(JSON.parse(stored(SEAT)!)).toMatchObject({ comment: "  After the\nbatch ", taskId: null, project: "project-a" });
+  await act(async () => root?.unmount());
+  root = null;
+  host.remove();
+  /* A new page: module memory is gone, storage stays. */
+  reloadDecisionDraftsForTests();
+  host = await render(<DecisionList project="project-a" initial={[seatDecision()]} />);
+  expect(host.querySelector<HTMLTextAreaElement>("[data-decision-comment]")!.value).toBe("  After the\nbatch ");
+  expect(checked(host, '[data-prototype-option="when:1"]')).toBe("true");
+  expect(checked(host, '[data-prototype-other="why"]')).toBe("true");
+  expect(host.querySelector("[data-decision-error]")).toBeNull();
+});
+
+test("words typed in the open form survive opening another row and coming back, with no press on «Відповісти»", async () => {
+  const host = await render(<DecisionList project="project-a" initial={[seatDecision(), taskDecision()]} />);
+  await click(host.querySelector('[data-prototype-option="when:1"]'));
+  await typeComment(host, "Not before CI.");
+  await click(host.querySelector(`[data-decision-row="${TASK}"]`));
+  expect(host.querySelector(`[data-decision-card="open"][data-decision-review="${TASK}"]`)).not.toBeNull();
+  expect(host.querySelector(`[data-decision-row="${SEAT}"]`)).not.toBeNull();
+  /* The task's own form starts clean: the seat's words are not applied to another round. */
+  expect(host.querySelector<HTMLTextAreaElement>("[data-decision-comment]")!.value).toBe("");
+  expect(checked(host, '[data-prototype-option="variant:0"]')).toBe("true");
+  await click(host.querySelector(`[data-decision-row="${SEAT}"]`));
+  expect(host.querySelector<HTMLTextAreaElement>("[data-decision-comment]")!.value).toBe("Not before CI.");
+  expect(checked(host, '[data-prototype-option="when:1"]')).toBe("true");
+});
+
+test("a form unmounted before «Відповісти» comes back from storage, and a form left as it opened stores nothing", async () => {
+  let host = await render(<DecisionList project="project-a" initial={[seatDecision()]} />);
+  expect(stored(SEAT)).toBeNull();
+  await typeComment(host, "Later.");
+  expect(stored(SEAT)).not.toBeNull();
+  await typeComment(host, "");
+  expect(stored(SEAT)).toBeNull();
+  await typeComment(host, "Later.");
+  await act(async () => root?.unmount());
+  root = null;
+  host.remove();
+  host = await render(<DecisionList project="project-a" initial={[seatDecision()]} />);
+  expect(host.querySelector<HTMLTextAreaElement>("[data-decision-comment]")!.value).toBe("Later.");
+});
+
+test("a saved answer removes the stored draft, and the same round opens clean next time", async () => {
+  globalThis.fetch = (async () => new Response(JSON.stringify({ project: "project-a", decisions: [] }), { status: 200 })) as unknown as typeof fetch;
+  const host = await render(<DecisionList project="project-a" initial={[seatDecision()]} />);
+  await typeComment(host, "Go ahead.");
+  expect(stored(SEAT)).not.toBeNull();
+  await click(host.querySelector("[data-decision-send]"));
+  expect(host.querySelector("[data-decision-list-empty]")).not.toBeNull();
+  expect(stored(SEAT)).toBeNull();
+});
+
+test("a stored draft whose questions do not match the round falls back to the recommended answers and keeps the words", async () => {
+  dom.localStorage.setItem(KEY(SEAT), JSON.stringify({ v: 1, reviewId: SEAT, taskId: null, project: "project-a", updatedAt: Date.now(), reject: false, chosen: [], comment: "Old words",
+    answers: [{ questionId: "another", options: [1] }, { questionId: "why", options: [1] }] }));
+  const host = await render(<DecisionList project="project-a" initial={[seatDecision()]} />);
+  expect(checked(host, '[data-prototype-option="when:0"]')).toBe("true");
+  expect(checked(host, '[data-prototype-option="why:0"]')).toBe("true");
+  expect(host.querySelector<HTMLTextAreaElement>("[data-decision-comment]")!.value).toBe("Old words");
+});
+
+test("a read that shows the seat's round gone drops its draft; a failed read never does", async () => {
+  dom.localStorage.setItem(KEY(SEAT), JSON.stringify({ v: 1, reviewId: SEAT, taskId: null, project: "project-a", updatedAt: Date.now(), reject: false, chosen: [], comment: "Words", answers: [{ questionId: "when", options: [1] }, { questionId: "why", options: [0] }] }));
+  let mode: "down" | "gone" | "waiting" = "down";
+  globalThis.fetch = (async () => {
+    if (mode === "down") return new Response(JSON.stringify({ error: "prototype review is unavailable" }), { status: 503 });
+    return new Response(JSON.stringify({ project: "project-a", decisions: mode === "waiting" ? [seatDecision()] : [] }), { status: 200 });
+  }) as unknown as typeof fetch;
+  const read = async () => { await act(async () => { window.dispatchEvent(new dom.Event("llv:tasks-changed") as unknown as Event); await new Promise((resolve) => setTimeout(resolve, 10)); }); };
+  await render(<DecisionList project="project-a" />);
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 10)); });
+  expect(stored(SEAT)).not.toBeNull();
+  mode = "waiting"; await read();
+  expect(stored(SEAT)).not.toBeNull();
+  mode = "down"; await read();
+  expect(stored(SEAT)).not.toBeNull();
+  mode = "gone"; await read();
+  expect(stored(SEAT)).toBeNull();
+});
+
 test("an empty column says nothing waits", async () => {
   const host = await render(<DecisionList project="project-a" initial={[]} />);
   expect(host.querySelector("[data-decision-list-empty]")).not.toBeNull();
@@ -226,7 +318,8 @@ test("a request opens the project's column where one stands, else the sheet", as
   let sheet: unknown = null;
   function Panel({ active }: { active: boolean }) {
     useDecisionSurface("project-a", active, (request) => seen.push(request));
-    sheet = useDecisionSheet();
+    const opened = useDecisionSheet();
+    useEffect(() => { sheet = opened; });
     return null;
   }
   await render(<Panel active />);

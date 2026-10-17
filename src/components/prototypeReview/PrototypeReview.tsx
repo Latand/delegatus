@@ -15,11 +15,12 @@ import { useIsMobile } from "@/hooks/useIsMobile";
 import { useOverlayEscape } from "@/hooks/useOverlayEscape";
 import { usePrototypeReview } from "@/hooks/usePrototypeReview";
 import { useLocale, type TFunction } from "@/lib/i18n";
-import type { PrototypeAnswer, PrototypeMediaView, PrototypeRoundView } from "@/lib/prototypeReview/types";
+import type { PrototypeMediaView, PrototypeRoundView } from "@/lib/prototypeReview/types";
 
 import { normalizePrototypeAnswers, recommendedAnswers } from "@/lib/prototypeReview/questions";
 
 import { DecisionQuestions, selectPrototypeAnswer } from "./DecisionQuestions";
+import { currentDecisionDraft, forgetDecisionDraft, initialDraft, saveDecisionDraft, useStoredDecisionDrafts, type Draft } from "./decisionDrafts";
 import { markPrototypeReviewSeen } from "./prototypeReviewStore";
 import { PrototypeTelegramActions } from "./PrototypeTelegramActions";
 
@@ -38,16 +39,14 @@ interface Slide {
   video?: PrototypeMediaView;
 }
 
-interface Draft { reject: boolean; chosen: number[]; comment: string; answers: PrototypeAnswer[] }
-const initialDraft = (round: PrototypeRoundView | null): Draft => ({ reject: false, chosen: [], comment: "", answers: recommendedAnswers(round?.questions ?? []) });
-/* A save the server refused after its review was closed or replaced: the
-   choice and the exact words wait here, with the reason, for the task's
-   review to open again. */
-const refusedSaves = new Map<string, { drafts: Record<string, Draft>; error: string }>();
+/* The reason a save was refused, kept for the task's review to show when it
+   opens again after the window was closed or replaced. The words themselves
+   wait in the draft store. */
+const refusals = new Map<string, string>();
 /* What a close would lose in the waiting rounds: answers changed from the recommended ones, and comments. */
-const unsavedOf = (rounds: readonly PrototypeRoundView[], drafts: Record<string, Draft>) => ({
-  answers: rounds.some((entry) => !entry.decision && Boolean(entry.questions?.length) && drafts[entry.id] !== undefined && JSON.stringify(drafts[entry.id]!.answers) !== JSON.stringify(recommendedAnswers(entry.questions!))),
-  comment: rounds.some((entry) => !entry.decision && (drafts[entry.id]?.comment.trim() ?? "") !== ""),
+const unsavedRounds = (rounds: readonly PrototypeRoundView[], drafts: Record<string, Draft>) => ({
+  answers: rounds.filter((entry) => !entry.decision && Boolean(entry.questions?.length) && drafts[entry.id] !== undefined && JSON.stringify(drafts[entry.id]!.answers) !== JSON.stringify(recommendedAnswers(entry.questions!))).map((entry) => entry.id),
+  comment: rounds.filter((entry) => !entry.decision && (drafts[entry.id]?.comment.trim() ?? "") !== "").map((entry) => entry.id),
 });
 
 /** A moment as the product writes one: day, month and a 24-hour clock, no seconds. */
@@ -135,9 +134,8 @@ export function PrototypeReview({ taskId, reviewId, taskTitle, onClose }: Protot
   const { data } = review;
   const [picked, setPicked] = useState<string | null>(null);
   const [active, setActive] = useState<Record<string, number>>({});
-  const [drafts, setDrafts] = useState<Record<string, Draft>>(() => refusedSaves.get(taskId)?.drafts ?? {});
-  const [refused, setRefused] = useState<string | null>(() => refusedSaves.get(taskId)?.error ?? null);
-  useEffect(() => { refusedSaves.delete(taskId); }, [taskId]);
+  const [refused, setRefused] = useState<string | null>(() => refusals.get(taskId) ?? null);
+  useEffect(() => { refusals.delete(taskId); }, [taskId]);
   const mounted = useRef(true);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const [rejectAsked, setRejectAsked] = useState(false);
@@ -170,14 +168,19 @@ export function PrototypeReview({ taskId, reviewId, taskTitle, onClose }: Protot
   /* The later decided round that retired this one: the operator already answered there. */
   const successor = round && !round.decision && round.supersededBy ? rounds.find((entry) => entry.id === round.supersededBy) ?? null : null;
   const open = Boolean(round && !round.decision && !round.hidden && !elsewhere && (!successor || reopened.has(round.id)));
+  const drafts = useStoredDecisionDrafts(rounds);
   const draft = (roundId && drafts[roundId]) || initialDraft(round);
+  /* A round that left the read can still be written to by speech that began in it. */
+  const known = useRef(new Map<string, PrototypeRoundView>());
+  useEffect(() => { for (const entry of rounds) known.current.set(entry.id, entry); }, [rounds]);
   useEffect(() => {
     if (round && !round.decision) markPrototypeReviewSeen(round.id);
   }, [round]);
 
   const setDraft = useCallback((change: (held: Draft) => Draft, target: string | null = roundId) => {
     if (!target) return;
-    setDrafts((held) => ({ ...held, [target]: change(held[target] ?? initialDraft(rounds.find(r => r.id === target) ?? null)) }));
+    const own = rounds.find((entry) => entry.id === target) ?? known.current.get(target);
+    if (own) saveDecisionDraft(own, change(currentDecisionDraft(own)));
   }, [roundId, rounds]);
   const toggle = useCallback((number: number) => {
     setDraft((held) => ({ ...held, reject: false, chosen: held.chosen.includes(number) ? held.chosen.filter((own) => own !== number) : [...held.chosen, number].sort((a, b) => a - b) }));
@@ -222,19 +225,20 @@ export function PrototypeReview({ taskId, reviewId, taskTitle, onClose }: Protot
      the tap on the microphone to the last word landing in the field: while it
      is transcribed the field may be empty, and closing then would unmount the
      review before the answer has anywhere to go. */
-  const lost = unsavedOf(rounds, drafts);
-  const answersChanged = lost.answers;
-  const unsaved = answersChanged || lost.comment || speaking;
-  /* A refusal that lands after the window closed keeps the drafts as they were at the close. */
-  const latest = useRef({ rounds, drafts, speaking });
-  useEffect(() => { latest.current = { rounds, drafts, speaking }; }, [rounds, drafts, speaking]);
+  const lost = unsavedRounds(rounds, drafts);
+  const answersChanged = lost.answers.length > 0;
+  const unsaved = answersChanged || lost.comment.length > 0 || speaking;
+  const discard = () => {
+    for (const id of new Set([...lost.answers, ...lost.comment])) forgetDecisionDraft(id);
+    onClose();
+  };
   /* The guard names what is lost: changed answers, else the comment. */
   const guardKind = answersChanged ? "answers" : "comment";
   /* A held key repeats before the first request has redrawn anything. */
   const saveInFlight = useRef(false);
   /* A save in flight already reads as decided, so its round asks nothing on
      close and the window closes at once; a refusal that lands after the
-     close waits in `refusedSaves` for the review to open again. */
+     close leaves the draft in the store for the review to open again. */
   const requestClose = useCallback(() => {
     if (guard) setGuard(false);
     else if (unsaved) setGuard(true);
@@ -337,15 +341,12 @@ export function PrototypeReview({ taskId, reviewId, taskTitle, onClose }: Protot
     if (draft.reject && hasQuestions && !skip && !answersValid) return;
     saveInFlight.current = true;
     setRefused(null);
-    const sent = draft;
     try {
       const result = await review.save({ reviewId: round.id, chosen: draft.chosen, comment: draft.comment, ...(draft.reject ? { reject: true as const } : {}),
         ...(hasQuestions ? skip ? { skip: true as const } : { answers: draft.answers } : {}) });
-      if (!mounted.current) {
-        if (!result.ok) refusedSaves.set(taskId, { drafts: { ...latest.current.drafts, [round.id]: sent }, error: result.error });
-      } else if (result.ok) {
-        setDrafts((held) => Object.fromEntries(Object.entries(held).filter(([id]) => id !== round.id)));
-      }
+      /* Saved: the draft has done its work, whether the window is still up or not. A refusal leaves it as typed. */
+      if (result.ok) forgetDecisionDraft(round.id);
+      else if (!mounted.current) refusals.set(taskId, result.error);
     } finally {
       saveInFlight.current = false;
     }
@@ -660,7 +661,7 @@ export function PrototypeReview({ taskId, reviewId, taskTitle, onClose }: Protot
         </div>
         <div className="flex justify-end gap-2">
           <button type="button" autoFocus className={SECONDARY} data-prototype-guard-keep="" onClick={() => setGuard(false)}>{t("proto.guard.keep")}</button>
-          <button type="button" className={`${SECONDARY} text-danger hover:border-danger/50 hover:text-danger`} data-prototype-guard-discard="" onClick={onClose}>{t("proto.guard.discard")}</button>
+          <button type="button" className={`${SECONDARY} text-danger hover:border-danger/50 hover:text-danger`} data-prototype-guard-discard="" onClick={discard}>{t("proto.guard.discard")}</button>
         </div>
       </div>
     </div>

@@ -719,6 +719,140 @@ describe("prototype Telegram resend", () => {
   }, 240_000);
 });
 
+describe("decision form keeps the operator's typed answer", () => {
+  browserTest("a refused save keeps the choice and the words in the task window and the seat form, and a reload brings them back, at 1440, 1000 and 390px", async () => {
+    const out = path.resolve(".artifacts/decision-form-draft"); fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browserHome = process.env.PLAYWRIGHT_BROWSERS_PATH ? path.dirname(process.env.PLAYWRIGHT_BROWSERS_PATH) : os.tmpdir();
+    fs.mkdirSync(browserHome, { recursive: true });
+    const browserTmp = fs.mkdtempSync(path.join(browserHome, "df-"));
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"], env: { ...process.env, TMPDIR: browserTmp } });
+    const readings: unknown[] = [];
+    const seatId = `pr_${"d".repeat(32)}`, taskRound = `pr_${"e".repeat(32)}`;
+    const typed = "  Залиште стару шапку,\nа рядки зробіть щільнішими.  ";
+    const base = `${server.base}?proto=telegram&tgstate=sent&protoRefuse=1`;
+    /* What a person can read: the error and the typed field are inside the window and clear of the save button. */
+    const reading = (page: Page, field: string, error: string, send: string) => page.evaluate(({ field, error, send }) => {
+      const box = (selector: string) => { const el = document.querySelector<HTMLElement>(selector)!; const r = el.getBoundingClientRect(); return { el, left: r.left, right: r.right, top: r.top, bottom: r.bottom }; };
+      const text = box(error), area = box(field), action = box(send);
+      const range = document.createRange(); range.selectNodeContents(text.el);
+      const lines = [...range.getClientRects()];
+      const inside = (r: { left: number; right: number; top: number; bottom: number }) => r.left >= 0 && r.right <= innerWidth && r.top >= 0 && r.bottom <= innerHeight;
+      return {
+        value: (area.el as HTMLTextAreaElement).value, errorText: text.el.textContent ?? "",
+        errorInside: lines.every(inside), fieldInside: inside(area),
+        errorOverlapsSend: text.left < action.right && text.right > action.left && text.top < action.bottom && text.bottom > action.top,
+      };
+    }, { field, error, send });
+    const stored = (page: Page, id: string) => page.evaluate((key) => localStorage.getItem(key), `llv.prototypeReview.draft:${id}`);
+    try {
+      for (const [width, height] of [[1440, 900], [1000, 700], [390, 844]] as const) for (const lang of ["uk", "en"] as const) for (const theme of ["light", "dark"] as const) {
+        const phone = width === 390;
+        const press = async (locator: import("playwright-core").Locator) => { if (phone) await locator.tap(); else await locator.click(); };
+        const tag = `${width}-${lang}-${theme}`;
+        const { context, page, pageErrors } = await openFixture(browser, `${base}&prototypeTask=t-search&prototypeReview=${taskRound}`, { width, height }, theme, lang, "reduce", phone);
+        try {
+          /* The task's review window. */
+          const field = page.locator("[data-prototype-comment-field]");
+          await field.waitFor();
+          await press(page.locator("[data-prototype-choose]").first());
+          await field.fill(typed);
+          const save = page.locator("[data-prototype-save]");
+          await press(save);
+          await page.locator("[data-prototype-error]").waitFor();
+          await page.waitForFunction(() => (window as unknown as { protoPosts: unknown[] }).protoPosts.length === 1);
+          await field.scrollIntoViewIfNeeded();
+          const refused = await reading(page, "[data-prototype-comment-field]", "[data-prototype-error]", "[data-prototype-save]");
+          expect(refused.value).toBe(typed); expect(refused.errorText).toContain("unavailable");
+          expect(refused.errorInside && refused.fieldInside && !refused.errorOverlapsSend).toBe(true);
+          expect(await page.locator("[data-prototype-choose]").first().getAttribute("aria-checked")).toBe("true");
+          await page.screenshot({ path: path.join(out, `window-${tag}-refused.png`) });
+          await press(save);
+          await page.waitForFunction(() => (window as unknown as { protoPosts: unknown[] }).protoPosts.length === 2);
+          const posts = await page.evaluate(() => (window as unknown as { protoPosts: unknown[] }).protoPosts);
+          expect(posts[1]).toEqual(posts[0]);
+          expect(posts[0]).toMatchObject({ taskId: "t-search", reviewId: taskRound, chosen: [1], comment: typed });
+          expect(await stored(page, taskRound)).not.toBeNull();
+          await page.reload();
+          await field.waitFor();
+          const restored = await field.inputValue();
+          expect(restored).toBe(typed);
+          expect(await page.locator("[data-prototype-choose]").first().getAttribute("aria-checked")).toBe("true");
+          await page.screenshot({ path: path.join(out, `window-${tag}-reloaded.png`) });
+          await page.evaluate(() => (window as unknown as { protoAcceptSaves: () => void }).protoAcceptSaves());
+          await press(page.locator("[data-prototype-save]"));
+          await field.waitFor({ state: "detached" });
+          const retried = await page.evaluate(() => (window as unknown as { protoPosts: unknown[] }).protoPosts);
+          expect(retried).toHaveLength(1);
+          expect(retried[0]).toEqual(posts[0]);
+          expect(await stored(page, taskRound)).toBeNull();
+          await page.screenshot({ path: path.join(out, `window-${tag}-saved.png`) });
+          expect(pageErrors).toEqual([]);
+          readings.push({ surface: "task-window", width, lang, theme, ...refused, restoredEqualsTyped: restored === typed, retrySameAnswer: true, storedAfterSave: null });
+        } finally { await context.close(); }
+
+        /* The «Рішення» card for the seat's own question. */
+        /* At 1000px the seat's form opens in the dialog the link names; elsewhere a row opens it. */
+        const seatUrl = `${base}&decisions=telegram${width === 1000 ? `&project=atlas&prototypeReview=${seatId}` : ""}`;
+        const seat = await openFixture(browser, seatUrl, { width, height }, theme, lang, "reduce", phone);
+        try {
+          const page = seat.page;
+          const open = async () => {
+            const card = page.locator(`[data-decision-card="open"][data-decision-review="${seatId}"]`);
+            if (width !== 1000) {
+              const row = page.locator(`[data-decision-row="${seatId}"]`);
+              /* On the phone the seat card opens a sheet from its strip; the sheet starts on the first decision, so the seat's own row opens its form. */
+              if (phone) {
+                await page.locator("[data-mobile2-seat-open], [data-decision-strip]").first().waitFor();
+                if (!(await page.locator("[data-decision-strip]").count())) await press(page.locator("[data-mobile2-seat-open]"));
+                await page.locator("[data-decision-strip]").waitFor();
+                await press(page.locator("[data-decision-strip]"));
+              }
+              await row.waitFor();
+              await press(row);
+            }
+            return card;
+          };
+          let form = await open();
+          const comment = form.locator("[data-decision-comment]");
+          await press(form.locator('[data-prototype-option="deploy:1"]'));
+          await comment.fill(typed);
+          await press(form.locator("[data-decision-send]"));
+          await form.locator("[data-decision-error]").waitFor();
+          await form.locator("[data-decision-comment]").scrollIntoViewIfNeeded();
+          const refusedSeat = await reading(page, "[data-decision-comment]", "[data-decision-error]", "[data-decision-send]");
+          expect(refusedSeat.value).toBe(typed); expect(refusedSeat.errorText).toContain("unavailable");
+          expect(refusedSeat.errorInside && refusedSeat.fieldInside && !refusedSeat.errorOverlapsSend).toBe(true);
+          expect(await form.locator('[data-prototype-option="deploy:1"]').getAttribute("aria-checked")).toBe("true");
+          await page.screenshot({ path: path.join(out, `seat-${tag}-refused.png`) });
+          await press(form.locator("[data-decision-send]"));
+          await page.waitForFunction(() => (window as unknown as { decisionPosts: unknown[] }).decisionPosts.length === 2);
+          const seatPosts = await page.evaluate(() => (window as unknown as { decisionPosts: unknown[] }).decisionPosts);
+          expect(seatPosts[1]).toEqual(seatPosts[0]);
+          expect(seatPosts[0]).toMatchObject({ reviewId: seatId, comment: typed });
+          expect(await stored(page, seatId)).not.toBeNull();
+          await page.reload();
+          form = await open();
+          expect(await form.locator("[data-decision-comment]").inputValue()).toBe(typed);
+          expect(await form.locator('[data-prototype-option="deploy:1"]').getAttribute("aria-checked")).toBe("true");
+          await page.screenshot({ path: path.join(out, `seat-${tag}-reloaded.png`) });
+          await page.evaluate(() => (window as unknown as { protoAcceptSaves: () => void }).protoAcceptSaves());
+          await press(form.locator("[data-decision-send]"));
+          await page.waitForFunction((id) => !document.querySelector(`[data-decision-card="open"][data-decision-review="${id}"]`), seatId);
+          const sent = await page.evaluate(() => (window as unknown as { decisionPosts: unknown[] }).decisionPosts);
+          expect(sent).toHaveLength(1);
+          expect(sent[0]).toEqual(seatPosts[0]);
+          expect(await stored(page, seatId)).toBeNull();
+          expect(seat.pageErrors).toEqual([]);
+          readings.push({ surface: "seat-form", width, lang, theme, ...refusedSeat, restoredEqualsTyped: true, retrySameAnswer: true, storedAfterSave: null });
+        } finally { await seat.context.close(); }
+      }
+      fs.mkdirSync("evidence/decision-form-draft", { recursive: true });
+      fs.writeFileSync("evidence/decision-form-draft/readings.json", JSON.stringify(readings, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); fs.rmSync(browserTmp, { recursive: true, force: true }); }
+  }, 900_000);
+});
+
 describe("CPU admission queue", () => {
   browserTest("the waiting card shows queue position and remaining minutes, or a stalled queue, in en and uk", async () => {
     const out = path.resolve(".artifacts/cpu-queue");

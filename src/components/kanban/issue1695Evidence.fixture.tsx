@@ -3279,6 +3279,11 @@ function mockRender(width: number, height: number, hue: number, label: string, p
 const PROTO = params.get("proto") ?? (CALM ? "1" : null);
 const protoPosts: unknown[] = [];
 const protoTelegramPosts: unknown[] = [];
+/* `&protoRefuse=1` makes both save endpoints answer as the Viewer does when its
+   state is unavailable (503), until `protoAcceptSaves()` is called. The flag
+   lives in the URL, so a reload keeps refusing and the round stays undecided. */
+let protoRefusing = params.has("protoRefuse");
+const protoRefusal = () => new Response(JSON.stringify({ error: "prototype review is unavailable" }), { status: 503, headers: { "content-type": "application/json" } });
 /* `&tgstate=sent|uncertain|unknown` starts the Telegram record in that state; the default is a failed post. */
 function telegramFixturePost(key: string): PrototypeRoundView["telegramPost"] {
   const state = params.get("tgstate");
@@ -3418,6 +3423,7 @@ if (PROTO) {
   Object.assign(window, {
     protoPosts,
     protoTelegramPosts,
+    protoAcceptSaves: () => { protoRefusing = false; },
     protoHoldSave: () => { (window as unknown as { protoHeldSave?: Promise<void> }).protoHeldSave = new Promise<void>((resolve) => { releaseSave = resolve; }); },
     protoReleaseSave: () => { releaseSave?.(); releaseSave = null; delete (window as unknown as { protoHeldSave?: Promise<void> }).protoHeldSave; },
     protoPhase: (taskId: string, phase: PrototypeDeliveryPhase) => {
@@ -3895,6 +3901,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     if (method === "POST") {
       const body = JSON.parse(String(init?.body)) as { reviewId: string; answers?: PrototypeAnswer[]; comment?: string; chosen?: number[]; reject?: true; retry?: true };
       decisionPosts.push(body);
+      if (protoRefusing) return protoRefusal();
       const held = [...seatRounds, ...Object.values(protoRounds).flat()].find((round) => round.id === body.reviewId);
       if (!held) return json({ error: "review not found" }, 404);
       if (body.retry && held.decision) held.decision = { ...held.decision, delivery: { state: "sent", phase: "delivered", retryable: false } };
@@ -3920,6 +3927,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     if (method === "POST") {
       const body = JSON.parse(String(init?.body)) as { reviewId: string; chosen?: number[]; comment?: string; retry?: true; reject?: true; answers?: PrototypeAnswer[]; skip?: true };
       protoPosts.push({ taskId, ...body });
+      if (protoRefusing) return protoRefusal();
       /* A held save has not been written yet: the decision is recorded only once it is released. */
       await (window as unknown as { protoHeldSave?: Promise<void> }).protoHeldSave;
       const held = rounds.find((entry) => entry.id === body.reviewId);

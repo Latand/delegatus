@@ -1,21 +1,22 @@
 "use client";
 
 import { CircleCheck, GalleryHorizontalEnd, Loader2, MessageCircleQuestionMark, RotateCw, ZoomIn } from "lucide-react";
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { ImageGalleryProvider, Lightbox, type GalleryImage } from "@/components/feed/Lightbox";
 import { Check, ChevronDown } from "@/components/icons";
 import { MicButtonView } from "@/components/MicButton";
+import { currentDecisionDraft, initialDraft, saveDecisionDraft, useStoredDecisionDraft, type Draft } from "@/components/prototypeReview/decisionDrafts";
 import { DecisionQuestions, selectPrototypeAnswer } from "@/components/prototypeReview/DecisionQuestions";
 import { roundGallery } from "@/components/prototypeReview/PrototypeReview";
 import { PrototypeTelegramActions } from "@/components/prototypeReview/PrototypeTelegramActions";
 import { useDictation } from "@/hooks/useDictation";
 import { openPrototypeReview } from "@/hooks/usePrototypeReview";
 import { useLocale, type TFunction } from "@/lib/i18n";
-import { normalizePrototypeAnswers, recommendedAnswers } from "@/lib/prototypeReview/questions";
-import type { OperatorDecisionView, PrototypeAnswer } from "@/lib/prototypeReview/types";
+import { normalizePrototypeAnswers } from "@/lib/prototypeReview/questions";
+import type { OperatorDecisionView } from "@/lib/prototypeReview/types";
 
-import { decisionDraft, type DecisionAnswer } from "./useOperatorDecisions";
+import type { DecisionAnswer } from "./useOperatorDecisions";
 
 /*
  * One operator decision as a form (docs/design/operator-decision-forms.md
@@ -132,18 +133,25 @@ export function DecisionCard({ decision, narrow = false, columns = 1, onAnswer, 
   const { t, locale } = useLocale();
   const questions = decision.questions ?? [];
   const asks = questions.length > 0;
-  /* A form the server refused comes back as the operator left it. */
-  const [answers, setAnswers] = useState<PrototypeAnswer[]>(() => decisionDraft(decision.id)?.answers ?? recommendedAnswers(questions));
-  const [comment, setComment] = useState(() => decisionDraft(decision.id)?.comment ?? "");
-  const [reject, setReject] = useState(() => decisionDraft(decision.id)?.reject === true);
+  /* The draft lives in the store as the operator types, so the form comes back
+     as they left it after a refusal, a fold, a tab switch or a reload, and the
+     review window of the same round shows the same words. */
+  const stored = useStoredDecisionDraft(decision);
+  const { answers, comment, reject, chosen } = stored ?? initialDraft(decision);
+  const latest = useRef(decision);
+  useEffect(() => { latest.current = decision; }, [decision]);
+  const edit = useCallback((change: (held: Draft) => Draft) => {
+    const own = latest.current;
+    saveDecisionDraft(own, change(currentDecisionDraft(own)));
+  }, []);
   const [sending, setSending] = useState(false);
   const [voiceError, setVoiceError] = useState<string | null>(null);
   const field = useRef<HTMLTextAreaElement>(null);
   const insertSpoken = useCallback((spoken: string) => {
-    setComment((held) => (held ? `${held.trimEnd()} ${spoken}` : spoken));
+    edit((held) => ({ ...held, comment: held.comment ? `${held.comment.trimEnd()} ${spoken}` : spoken }));
     setVoiceError(null);
     requestAnimationFrame(() => field.current?.focus({ preventScroll: true }));
-  }, []);
+  }, [edit]);
   const dictation = useDictation({ onError: setVoiceError, onUnclaimedText: insertSpoken, onLiveCommit: insertSpoken });
   const recording = dictation.phase === "rec";
   const shown = dictation.liveText ? (comment ? `${comment.trimEnd()} ` : "") + dictation.liveText : comment;
@@ -155,7 +163,7 @@ export function DecisionCard({ decision, narrow = false, columns = 1, onAnswer, 
   const send = async () => {
     if (!savable) return;
     setSending(true);
-    try { await onAnswer(decision.id, { chosen: [], comment, answers, ...(reject ? { reject: true as const } : {}) }); }
+    try { await onAnswer(decision.id, { chosen: reject ? [] : chosen, comment, answers, ...(reject ? { reject: true as const } : {}) }); }
     finally { setSending(false); }
   };
   const Mark = asks ? MessageCircleQuestionMark : GalleryHorizontalEnd;
@@ -178,7 +186,7 @@ export function DecisionCard({ decision, narrow = false, columns = 1, onAnswer, 
       {asks ? (
         <div className="flex flex-col gap-3 px-3 pt-3" data-prototype-questions="">
           <DecisionQuestions questions={questions} answers={answers} open={!sending} boxed={false} columns={columns}
-            onSelect={(questionId, option) => setAnswers((held) => selectPrototypeAnswer(questions, held, questionId, option))} />
+            onSelect={(questionId, option) => edit((held) => ({ ...held, answers: selectPrototypeAnswer(questions, held.answers, questionId, option) }))} />
         </div>
       ) : null}
       {asks ? (
@@ -186,7 +194,7 @@ export function DecisionCard({ decision, narrow = false, columns = 1, onAnswer, 
           <PrototypeTelegramActions key={decision.id} round={decision} disabled={sending} />
           {decision.variants.length ? (
             <button type="button" role="checkbox" aria-checked={reject} data-decision-reject="" disabled={sending}
-              className={`${SECONDARY} self-start ${reject ? "border-warning/60 bg-warning-soft text-warning" : ""}`} onClick={() => setReject((held) => !held)}>
+              className={`${SECONDARY} self-start ${reject ? "border-warning/60 bg-warning-soft text-warning" : ""}`} onClick={() => edit((held) => ({ ...held, reject: !held.reject, chosen: [] }))}>
               <span aria-hidden className="grid h-4 w-4 place-items-center rounded-sm border border-current">{reject ? <Check className="h-3 w-3" /> : null}</span>{t("proto.reject.none")}
             </button>
           ) : null}
@@ -201,7 +209,7 @@ export function DecisionCard({ decision, narrow = false, columns = 1, onAnswer, 
                 aria-label={t("proto.comment")}
                 placeholder={t(reject ? "proto.reject.needs" : "proto.q.commentPlaceholder")}
                 className={`max-h-32 min-h-8 resize-none bg-transparent py-1 text-body text-primary outline-none placeholder:text-muted [field-sizing:content] [@media(pointer:coarse)]:min-h-10 ${recording ? "w-full" : "min-w-0 flex-1"}`}
-                onChange={(event) => setComment(event.target.value)}
+                onChange={(event) => edit((held) => ({ ...held, comment: event.target.value }))}
                 onKeyDown={(event) => {
                   if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) { event.preventDefault(); void send(); }
                 }}
