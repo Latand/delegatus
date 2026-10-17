@@ -1,4 +1,5 @@
 import { stateLeaseHoldsInFlight } from "@/lib/state/sqliteStateStore";
+import * as stateStore from "@/lib/state/sqliteStateStore";
 import { afterEach, expect, spyOn, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import fs from "node:fs";
@@ -356,4 +357,38 @@ test("health callers across revisions share the cold history read and refuse its
       expect(reads).toBe(1);
     } finally { parse.mockRestore(); }
   } finally { clearTimeout(writer); db.close(); }
+});
+
+test("a caller after a write cannot reuse a completed older evidence result", async () => {
+  const { root, row } = fixture();
+  const db = new Database(path.join(root, "state.sqlite"));
+  const originalRead = stateStore.readCompactPipelineEvidence;
+  let injected = false;
+  let entered!: () => void;
+  const ready = new Promise<void>(resolve => { entered = resolve; });
+  let afterWrite!: Promise<{ issues: unknown[] } | { error: string }>;
+  const read = spyOn(stateStore, "readCompactPipelineEvidence").mockImplementation((async (...args: Parameters<typeof originalRead>) => {
+    const result = await originalRead(...args);
+    if (!injected) {
+      injected = true;
+      // Run after the producer checks its signature, before its pending entry
+      // is retired. The next caller starts strictly after the committed write.
+      queueMicrotask(() => queueMicrotask(() => {
+        db.query("UPDATE state_rows SET value_json=? WHERE collection='pipelines' AND row_key=?")
+          .run(JSON.stringify({ ...row, state: "future-owner" }), row.id);
+        afterWrite = pipelineRegistryHealthAsync().then(issues => ({ issues }), error => ({ error: String(error.message) }));
+        entered();
+      }));
+    }
+    return result;
+  }) as typeof originalRead);
+  try {
+    const first = pipelineRegistryHealthAsync().catch(() => []);
+    await ready;
+    const result = await afterWrite;
+    if ("issues" in result) expect(result.issues).toMatchObject([{ id: row.id, reason: "unknown-but-preserved" }]);
+    else expect(result.error).toBe("pipeline evidence changed during preparation");
+    await first;
+    expect(await pipelineRegistryHealthAsync()).toMatchObject([{ id: row.id, reason: "unknown-but-preserved" }]);
+  } finally { read.mockRestore(); db.close(); }
 });

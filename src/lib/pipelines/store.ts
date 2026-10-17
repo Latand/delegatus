@@ -1171,7 +1171,16 @@ async function preparePipelineEvidence(mode: "startup" | "health" | "ownership" 
   const pendingNamespace = JSON.stringify([filename, evidenceFileIdentity(filename)]);
   const pendingKey = `${pendingNamespace}:${mode}`;
   const existing = pendingEvidence.get(`${pendingNamespace}:startup`) ?? (mode !== "startup" ? pendingEvidence.get(`${pendingNamespace}:ownership`) ?? pendingEvidence.get(`${pendingNamespace}:health`) : undefined) ?? pendingEvidence.get(pendingKey);
-  if (existing) { performanceSpans.event("pipeline.shared"); return existing; }
+  if (existing) {
+    performanceSpans.event("pipeline.shared");
+    const evidence = await existing;
+    // A completed read can remain in the map until its owner resumes. Check
+    // this caller's revision too, including writes after the producer checked.
+    if (evidence.signature !== signature || evidence.signature !== evidenceSignature()) {
+      throw new PipelineStoreError("pipeline evidence changed during preparation");
+    }
+    return evidence;
+  }
   const pending = withViewerOperation("pipelines.evidence", async () => {
     const pipelines: Pipeline[] = [];
     const issues: RegistryRecordIssue[] = [];
