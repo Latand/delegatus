@@ -46,6 +46,7 @@ const ports: ReportRunnerPorts = {
   spawn: async () => ({ status: 202, body: { conversationId: "conversation_report", launchId: "launch_report", ok: true } }),
   reportRunConversation: async () => null,
   conversationLive: async () => true,
+  finishReportTask: async () => {},
   log: () => {},
 };
 
