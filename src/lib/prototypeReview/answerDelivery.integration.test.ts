@@ -188,7 +188,7 @@ test("an exhausted uncertain answer already carried by a confirmed successor wak
     expect(next.delivered[0]!.text).toBe(text);
     const receipt = await peer.handle(new Request(`http://localhost/api/runtime/operations/${operationId}`));
     expect((await receipt.json()).send.state).toBe("delivered");
-    const version = seatTickSignalVersion(signal);
+    const version = seatTickSignalVersion(signal, { conversationId: seat.conversationId!, seatEpoch: seat.seatEpoch });
     const commit = { proposal: false, reasons: [], fingerprint: "confirmed-answer", eventsThrough: 0, children: [], itemsShown: [version], itemLines: [{ version, line: text }] };
     const state = { ...emptySeatTickState(), seatEpoch: seat.seatEpoch, outstandingWake: { clientMessageId: "confirmed-answer-wake", conversationId: next.conversationId, seatEpoch: seat.seatEpoch, operationId, text, commit } };
     writeSeatTickState(project, seatTickWakeCommit(state, commit, Date.now()));

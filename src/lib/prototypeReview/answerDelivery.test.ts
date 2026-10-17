@@ -345,6 +345,51 @@ test("a late delivered journal settles an uncertain reservation without retry", 
   finally { client.mockRestore(); receipt.mockRestore(); }
 });
 
+test("review: a quiet successor tick cannot credit a predecessor-only answer wake", async () => {
+  const { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } = await import("@/lib/orchestrator/seats");
+  const { currentSeat } = await import("@/lib/orchestrator/seatChannel");
+  const { DEFAULT_SEAT_TICK_POLICY, seatTickDecision, seatTickWakeCommit } = await import("@/lib/monitor/seatTick");
+  const { defaultSeatTickSettings, effectiveSeatTickSettings } = await import("@/lib/monitor/seatTickSettings");
+  const { emptySeatTickState } = await import("@/lib/monitor/types");
+  const { writeSeatTickState, peekSeatTickState } = await import("@/lib/monitor/seatTickState");
+  beginOrchestratorSeatIntent({ project: "project-a", mandate: "coordinate", mode: "existing", clientRequestId: "predecessor-seat" });
+  completeOrchestratorSeatIntent({ project: "project-a", clientRequestId: "predecessor-seat", conversationId: "conversation_predecessor", path: "predecessor-transcript" });
+  const predecessor = currentSeat("project-a")!;
+  const saved = decision(); saved.delivery.state = "uncertain"; saved.delivery.exhaustedAt = saved.at;
+  const r = { ...round(), decision: saved }; insertSeatRound(r);
+  const signal = telegramPostSignals("project-a", [], [r])[0]!;
+  const predecessorVersion = (await import("@/lib/monitor/seatTick")).seatTickSignalVersion(signal, { conversationId: predecessor.conversationId!, seatEpoch: predecessor.seatEpoch });
+  const state = seatTickWakeCommit({ ...emptySeatTickState(), seatEpoch: predecessor.seatEpoch }, {
+    proposal: false, reasons: [], fingerprint: "predecessor", eventsThrough: 0, children: [],
+    itemsShown: [predecessorVersion], itemLines: [{ version: predecessorVersion, line: signal.label }],
+  }, NOW);
+  beginOrchestratorSeatIntent({ project: "project-a", mandate: "coordinate", mode: "existing", clientRequestId: "successor-seat" });
+  completeOrchestratorSeatIntent({ project: "project-a", clientRequestId: "successor-seat", conversationId: "conversation_successor", path: "successor-transcript" });
+  const successor = currentSeat("project-a")!;
+  const settings = defaultSeatTickSettings("project-a");
+  settings.enabled = false; settings.updatedAt = new Date(NOW).toISOString();
+  const quiet = seatTickDecision({
+    project: "project-a", now: NOW + 1, seat: { conversationId: successor.conversationId!, seatEpoch: successor.seatEpoch, path: null,
+      designatedAt: new Date(NOW).toISOString(), turn: "idle", activity: null },
+    pipelines: [], tasks: [], events: [], pullRequests: [], pullRequestsUnavailable: null, signals: [], ownLanes: [],
+    children: [], childrenUnavailable: null, changeFingerprint: "quiet", state,
+    policy: DEFAULT_SEAT_TICK_POLICY, settings: effectiveSeatTickSettings(settings, NOW + 1, 60 * 60 * 1000),
+  });
+  expect(quiet.verdict.kind).toBe("quiet");
+  expect(quiet.state.seatEpoch).toBe(successor.seatEpoch);
+  expect(quiet.state.itemsShown).toContain(predecessorVersion);
+  writeSeatTickState("project-a", quiet.state);
+
+  const p = ports(); p.world = { ...world, orchestrator: () => successor.conversationId! };
+  p.delivery.recover = async () => ({ state: "uncertain", operationId: "operation-old" });
+  let sends = 0; p.delivery.send = p.delivery.retry = async () => { sends++; return { state: "sent" }; };
+  await attemptPrototypeDelivery(null, ID, p);
+  expect(findSeatRound(ID)!.decision!.delivery.state).toBe("uncertain");
+  expect(findSeatRound(ID)!.decision!.delivery.wakeReceipt).toBeUndefined();
+  expect(peekSeatTickState("project-a").lastWakeAt).toBe(new Date(NOW).toISOString());
+  expect(sends).toBe(0);
+});
+
 test("uncertain predecessor is verified before the answer follows the replacement seat", async () => {
   insertSeatRound({ ...round(), decision: decision() });
   const p = ports(); p.world = { ...world, orchestrator: () => "conversation_new" };
@@ -372,7 +417,7 @@ test.each(["current", "older-seat", "different-answer", "not-landed", "cut-bulle
   const proofRound = structuredClone(r);
   if (kind === "different-answer") proofRound.decision.delivery.text = "Different answer";
   const signal = telegramPostSignals("project-a", [], [proofRound])[0]!;
-  const version = seatTickSignalVersion(signal);
+  const version = seatTickSignalVersion(signal, { conversationId: seat.conversationId!, seatEpoch: seat.seatEpoch });
   const line = `- [signal] ${signal.id} — ${signal.label}`;
   const state = { ...emptySeatTickState(), seatEpoch: seat.seatEpoch - Number(kind === "older-seat"),
     outstandingWake: { clientMessageId: "seat-tick:fixture", conversationId: seat.conversationId!, seatEpoch: seat.seatEpoch, operationId: "wake-operation", text: kind === "cut-bullet" ? line.slice(0, 50) : line,

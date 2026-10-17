@@ -42,7 +42,7 @@ function deliveredPrototypeWake(round: PrototypeReviewRound): PrototypeDecision[
   const signal = telegramPostSignals(round.project, [], [round]).find(item => item.id.startsWith("prototype-answer:"));
   if (!signal || redactMonitorText(signal.label) !== signal.label) return;
   const state = peekSeatTickState(canonicalOrchestratorProject(round.project));
-  const itemVersion = seatTickSignalVersion(signal);
+  const itemVersion = seatTickSignalVersion(signal, { conversationId: seat.conversationId, seatEpoch: seat.seatEpoch });
   if (!state.accounting || state.accounting.gap || state.seatEpoch !== seat.seatEpoch || !state.lastWakeAt || !state.itemsShown?.includes(itemVersion)) return;
   return { conversationId: seat.conversationId, seatEpoch: seat.seatEpoch, itemVersion, accountedThrough: state.lastWakeAt };
 }
