@@ -4,6 +4,7 @@ import { canonicalProject } from "@/lib/projects/aliases";
 import { projectIdentityFromRemote } from "@/lib/projects/identity";
 import { writeJsonDurably } from "@/lib/state/durableJson";
 import metadata from "../../../package.json";
+import { memorySource } from "./source";
 
 /** The operator opted this repository in; every other project starts closed. */
 const ownProject = projectIdentityFromRemote(metadata.repository.url.replace(/^git\+/, ""), "/")?.project;
@@ -22,9 +23,8 @@ export function setSharedMemoryEnabled(project: string, enabled: boolean) {
   writeJsonDurably(statePath("shared-memory-settings.json"), { ...settings(), [canonicalProject(project)]: enabled });
 }
 
-/** Role memory is always on (operator, 2026-10-07: no per-project switch). The
-    one way to stop it, for safety, is the installation's own setting
-    `LLV_ROLE_MEMORY=off`, which stops both the requests and the injection. */
+/** Installation choice and the emergency override stop requests and delivery
+    together. Existing stores are retained while the engines are selected. */
 export function roleMemoryEnabled(): boolean {
-  return process.env.LLV_ROLE_MEMORY?.trim().toLowerCase() !== "off";
+  return process.env.LLV_ROLE_MEMORY?.trim().toLowerCase() !== "off" && memorySource().choice !== "engines";
 }

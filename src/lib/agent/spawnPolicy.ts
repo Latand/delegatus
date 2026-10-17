@@ -1,3 +1,4 @@
+import { engineMemoryOff } from "@/lib/memory/source";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -525,13 +526,14 @@ export function applyClaudeSpawnPolicy(
     ...excludedProjectMcpServers,
   ])];
   if (disabledMcpjsonServers.length > 0) approvalSettings.disabledMcpjsonServers = disabledMcpjsonServers;
+  const memoryOff = engineMemoryOff(options);
   atomicWrite(result.settingsPath, JSON.stringify({
     ...settingsWithoutMcp,
     ...approvalSettings,
-    ...(options.cleanMemory ? { autoMemoryEnabled: false } : {}),
+    ...(memoryOff ? { autoMemoryEnabled: false } : {}),
     // Claude reapplies settings.env after startup, over the child's launch env.
     env: { ...(record(settingsWithoutMcp.env) ?? {}), ...publicationIdentity,
-      ...(options.cleanMemory ? { CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1" } : {}) },
+      ...(memoryOff ? { CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1" } : {}) },
     hooks: { ...hooks, PreToolUse: preToolUse,
       ...(memoryHook ? { UserPromptSubmit: [...promptHooks, { hooks: [memoryHook] }] } : {}) },
   }, null, 2) + "\n", 0o600);

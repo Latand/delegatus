@@ -1,3 +1,4 @@
+import { SOURCE_STATES, chooseSource, sourceTurnsEnginesOff } from "@/lib/memory/fixtures/source";
 import { agentPublicationIdentityEnv } from "@/lib/git/agentPublicationIdentity";
 import { fakeAgentMemory, fakeHostMemory } from "./fixtures/agentMemory";
 import { EventEmitter } from "node:events";
@@ -50,6 +51,30 @@ import {
 } from "./voicePersona";
 
 const COMPACT_SELECTED: SelectedContextRef = { version: 1, state: "selected", conversationId: "conversation_marker_fixture", capturedAt: "2026-09-22T00:00:00.000Z" };
+test("memory source table reaches fresh and adopted Codex argv and thread overrides", async () => {
+  for (const cleanMemory of [false, true]) for (const resumed of [false, true]) {
+    let original: { args: string[]; config: { features: { memories?: boolean } } } | undefined;
+    for (const state of SOURCE_STATES) {
+      chooseSource(state);
+      const server = new FakeAppServer("memory-source-thread");
+      const captured: { args?: string[]; options?: SpawnOptionsWithoutStdio } = {};
+      const options = { cwd: "/repo", allowSubagents: true, cleanMemory, developerInstructions: "Synthetic Delegatus rules.",
+        eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server, captured) };
+      const host = resumed ? await CodexAppServerHost.adopt("memory-source-thread", options) : await CodexAppServerHost.start(options);
+      try {
+        const params = server.requests.find(r => r.method === (resumed ? "thread/resume" : "thread/start"))!.params as { config: { features: { memories?: boolean } }; developerInstructions?: string };
+        const off = cleanMemory || sourceTurnsEnginesOff(state);
+        expect(captured.args?.includes("features.memories=false")).toBe(off);
+        expect(params.config.features.memories).toBe(off ? false : undefined);
+        if (!resumed && !cleanMemory) expect(params.developerInstructions).toContain("Synthetic Delegatus rules.");
+        const output = { args: captured.args!, config: params.config };
+        if (state === "unchosen") original = structuredClone(output);
+        if (state === "importing" || state === "engines") expect(output).toEqual(original!);
+      } finally { await host.release(); }
+    }
+  }
+});
+
 let metadataState: string;
 let previousMetadataState: string | undefined;
 let restoreFeatures: () => void;

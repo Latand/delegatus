@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { SOURCE_STATES, chooseSource, sourceTurnsEnginesOff } from "@/lib/memory/fixtures/source";
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
@@ -190,6 +191,35 @@ async function launch(engine: "claude" | "codex", seatId: string | null, mcpServ
   const response = await executeSpawnRequest(request, dependencies(engine, overrides));
   return { response, receipt: registry.spawnReceiptForClientAttempt(clientAttemptId) };
 }
+
+test("Claude tmux admission materializes the current memory source at the real launch boundary", async () => {
+  const transport = process.env.LLV_SPAWN_TRANSPORT;
+  process.env.LLV_SPAWN_TRANSPORT = "tmux";
+  try {
+    notSetUp();
+    for (const state of SOURCE_STATES) {
+      chooseSource(state);
+      let reached = false;
+      let settings: { autoMemoryEnabled?: boolean; env?: Record<string, string> } | undefined;
+      const { response } = await launch("claude", null, undefined, {
+        runtimeHostClient: () => null as never,
+        spawnTmuxAgent: async spec => {
+          reached = true;
+          const file = spec.command.match(/'--settings' '([^']+)'/)?.[1];
+          if (file) settings = JSON.parse(fs.readFileSync(file, "utf8"));
+          throw Error("synthetic stop at tmux launch boundary");
+        },
+      }, `memory_source_tmux_${state}`);
+      expect(reached).toBe(true); expect(response.status).toBe(500);
+      expect(settings).toBeDefined();
+      expect(settings?.autoMemoryEnabled).toBe(sourceTurnsEnginesOff(state) ? false : undefined);
+      expect(settings?.env?.CLAUDE_CODE_DISABLE_AUTO_MEMORY).toBe(sourceTurnsEnginesOff(state) ? "1" : undefined);
+    }
+  } finally {
+    chooseSource("unchosen");
+    if (transport === undefined) delete process.env.LLV_SPAWN_TRANSPORT; else process.env.LLV_SPAWN_TRANSPORT = transport;
+  }
+});
 
 async function agentLaunch(engine: "claude" | "codex", seatId: string, overrides: Partial<SpawnCommandDependencies> = {}) {
   const launchId = seatLaunchIds.get(seatId);

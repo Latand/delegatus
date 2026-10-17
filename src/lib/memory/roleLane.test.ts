@@ -1,3 +1,4 @@
+import { chooseSource } from "@/lib/memory/fixtures/source";
 import { afterAll, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
@@ -175,7 +176,7 @@ test("a review's finding becomes the fixer's abstract rule, a fresh builder star
   expect(JSON.stringify(loadPipelines())).not.toContain(RULE);
 
   /* The installation's kill switch: the next builder gets nothing, and nothing more is written. */
-  process.env.LLV_ROLE_MEMORY = "off";
+  chooseSource("engines");
   savePipelines([]);
   const third = await builderLane();
   await tickPipelines([], ports);
@@ -187,7 +188,7 @@ test("a review's finding becomes the fixer's abstract rule, a fresh builder star
   await settle(n, "pass");
   expect(lessonRequestForReport(lane(third), "build", 1, conversation(n))).toBeNull();
   expect(() => leaveLessonForConversation(loadPipelines(), conversation(n), { lesson: { scope: "role", rule: RULE, why: "x" } })).toThrow(/switched off/);
-  delete process.env.LLV_ROLE_MEMORY;
+  chooseSource("unchosen");
 });
 
 test("a stored lesson the fixer quotes never reaches the review gate it relays to, and a gate of any role is clean", async () => {

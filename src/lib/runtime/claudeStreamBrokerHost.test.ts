@@ -1,3 +1,4 @@
+import { SOURCE_STATES, chooseSource, sourceTurnsEnginesOff } from "@/lib/memory/fixtures/source";
 import { agentPublicationIdentityEnv } from "@/lib/git/agentPublicationIdentity";
 import { fakeAgentMemory, fakeHostMemory } from "./fixtures/agentMemory";
 import { EventEmitter } from "node:events";
@@ -75,6 +76,41 @@ test("fresh and resumed Claude carry learned rules once in the append channel", 
       );
       expect(captured.args).not.toContain("--system-prompt");
     } finally { await host.release(); fs.rmSync(directory, { recursive: true, force: true }); }
+  }
+});
+
+test("memory source table reaches fresh and adopted Claude, including settings-free homes", async () => {
+  const previousState = process.env.LLV_STATE_DIR;
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "claude-source-"));
+  process.env.LLV_STATE_DIR = path.join(root, "state");
+  try {
+    for (const configured of [false, true]) for (const cleanMemory of [false, true]) for (const resumed of [false, true]) {
+      let original: string | undefined;
+      for (const state of SOURCE_STATES) {
+        chooseSource(state);
+        const captured: { args?: string[]; options?: SpawnOptionsWithoutStdio } = {};
+        const options = { cwd: root, sessionId: "00000000-0000-0000-0000-000000000000", memoryQueuePath: path.join(root, "fixed-queue.jsonl"), claudeConfigDir: configured ? root : undefined,
+          env: { ...process.env, LLV_SPAWN_CAPABILITY: undefined },
+          cleanMemory, appendSystemPrompt: "Synthetic Delegatus rules.", eventStore: new MemoryEventStore(), readTranscript: () => [],
+          readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }),
+          spawnProcess: fakeSpawn(new FakeClaude(new RecordingDeliveryLedger()), captured) };
+        const host = resumed ? await ClaudeStreamBrokerHost.adopt("00000000-0000-0000-0000-000000000000", options) : await ClaudeStreamBrokerHost.start(options);
+        try {
+          const arg = captured.args![captured.args!.indexOf("--settings") + 1];
+          const body = arg.startsWith("{") ? arg : fs.readFileSync(arg, "utf8");
+          const settings = JSON.parse(body);
+          const off = cleanMemory || sourceTurnsEnginesOff(state);
+          expect(settings.autoMemoryEnabled).toBe(off ? false : undefined);
+          expect(settings.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY).toBe(off ? "1" : undefined);
+          if (!cleanMemory) expect(captured.args![captured.args!.indexOf("--append-system-prompt") + 1]).toContain("Synthetic Delegatus rules.");
+          if (state === "unchosen") original = body;
+          if (state === "importing" || state === "engines") expect(body).toBe(original!);
+        } finally { await host.release(); }
+      }
+    }
+  } finally {
+    if (previousState === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previousState;
+    fs.rmSync(root, { recursive: true, force: true });
   }
 });
 

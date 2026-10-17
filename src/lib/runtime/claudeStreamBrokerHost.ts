@@ -13,6 +13,7 @@ import { effectiveClaudePermissionMode } from "@/lib/agent/cli";
 import type { ProcessIdentity } from "@/lib/agent/registry";
 import { applyClaudeSpawnPolicy, NATIVE_MULTI_AGENT_TOOLS, viewerMcpTransportForLaunch } from "@/lib/agent/spawnPolicy";
 import { agentPublicationIdentityEnv } from "@/lib/git/agentPublicationIdentity";
+import { engineMemoryOff } from "@/lib/memory/source";
 import { claudeTranscriptPath } from "@/lib/agent/transcript";
 import { procBackend } from "@/lib/proc";
 import { captureProcessTree, signalDetachedProcessGroup, type ProcessSignal, type ProcessTreeCapture } from "@/lib/processGroup";
@@ -913,7 +914,10 @@ export class ClaudeStreamBrokerHost implements EngineHost {
         "--settings", settings.settingsPath,
         "--strict-mcp-config", "--mcp-config", settings.mcpConfigPath,
       );
-    } else args.push("--settings", JSON.stringify({ env: agentPublicationIdentityEnv(options.env ?? process.env) }), "--strict-mcp-config");
+    } else args.push("--settings", JSON.stringify({
+      ...(engineMemoryOff(options) ? { autoMemoryEnabled: false } : {}),
+      env: { ...agentPublicationIdentityEnv(options.env ?? process.env), ...(engineMemoryOff(options) ? { CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1" } : {}) },
+    }), "--strict-mcp-config");
     if (options.providerAccount) args.push("--setting-sources", "");
     if (resume) args.push("--resume", sessionId);
     else args.push("--session-id", sessionId);

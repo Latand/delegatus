@@ -1,3 +1,4 @@
+import { SOURCE_STATES, chooseSource, sourceTurnsEnginesOff } from "./fixtures/source";
 import { afterAll, expect, spyOn, test } from "bun:test";
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -77,12 +78,12 @@ test.each(["codex", "claude"] as const)("%s fresh and resumed starts reload the 
   }
 });
 
-test.each([
+test.each(SOURCE_STATES.flatMap(state => [
   { resumed: false, allowSubagents: false }, { resumed: true, allowSubagents: false },
   { resumed: false, allowSubagents: true }, { resumed: true, allowSubagents: true },
-])("Codex starts share the effective native-memory decision with the ledger (resumed: $resumed, allowed: $allowSubagents)", async ({ resumed, allowSubagents }) => {
+].map(row => ({ ...row, state }))))("Codex starts share the effective native-memory decision with the ledger (resumed: $resumed, allowed: $allowSubagents, source: $state)", async ({ resumed, allowSubagents, state }) => {
   const cwd = fs.mkdtempSync(path.join(sandbox, "codex-memory-policy-"));
-  const project = `codex-memory-policy-${resumed}-${allowSubagents}`;
+  const project = `codex-memory-policy-${resumed}-${allowSubagents}-${state}`;
   const source = { project, pipelineId: project, stageId: "build", attempt: 1, roleId: "builder", fixRound: false, conversationId: `conversation_${project}` };
   recordLessonRequest({ ...source, at: "2026-10-11T00:00:00.000Z" });
   leaveLessons({ request: source, source, none: null, lessons: [{ scope: "role", rule: text, why: "A stored receipt was replayed with a different owner." }] });
@@ -109,19 +110,21 @@ test.each([
   const start = spyOn(CodexAppServerHost, "start").mockImplementation(capture as never);
   const adopt = spyOn(CodexAppServerHost, "adopt").mockImplementation(async (_id, options) => capture(options) as never);
   const prompt = "Fixture brief";
+  chooseSource(state);
   try {
     await expect(defaultStartHost({ engine: "codex", registry, receipt: begun.receipt,
       spec: { command: "codex", engine: "codex", cwd, windowName: "memory-policy", transcript: transcript ?? undefined, launchProfile },
       account: { engine: "codex", accountId: "account-a", kind: "managed", home: codexHome, transcriptRoot: cwd, env: { NODE_ENV: "test" } },
       ...{ prompt }, client: {} as import("@/lib/runtime/client").RuntimeHostClient }, "fixture-capability")).rejects.toThrow("captured Codex memory-policy start");
     const delivery = memoryDeliveries().find(row => row.delivery.conversationId === begun.receipt.conversationId)!.delivery;
-    const enabled = allowSubagents;
+    const enabled = allowSubagents && !sourceTurnsEnginesOff(state);
     expect(seen[0]?.nativeMemoryEnabled).toBe(enabled);
-    expect(seen[0]?.developerInstructions).toContain(text);
+    if (state === "engines") expect(seen[0]?.developerInstructions).toBeUndefined();
+    else expect(seen[0]?.developerInstructions).toContain(text);
     expect(delivery.engineMemory).toEqual(enabled ? [{ kind: "codex-summary", hash: crypto.createHash("sha256").update(summary).digest("hex"), bytes: Buffer.byteLength(summary), loadedBytes: Buffer.byteLength(summary) }] : []);
     if (enabled) expect(engineMemoryVersion(delivery.engineMemory[0]!.hash)?.toString()).toBe(summary);
     expect((resumed ? adopt.mock.calls.length : start.mock.calls.length)).toBe(1);
-  } finally { start.mockRestore(); adopt.mockRestore(); registry.close(); }
+  } finally { chooseSource("unchosen"); start.mockRestore(); adopt.mockRestore(); registry.close(); }
 });
 
 test.each(["codex", "claude"] as const)("%s receives a seat-written rule on fresh and resumed engine starts from another account", async engine => {
