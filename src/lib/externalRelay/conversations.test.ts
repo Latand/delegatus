@@ -4,7 +4,7 @@ import path from "node:path";
 import os from "node:os";
 import { conversationAuthority, reserveChainConversation, reserveChainConversationAsync, releaseConversation, readConversations, prepareConversationAccount, sweepConversations, sweepConversationsAsync } from "./conversations";
 import { sampleRequest, contextRequest } from "./request.fixture";
-import { newTargetSettings, reserveRun, dropRun, withFileLock, writeRelayFile, type PairedRelay } from "./store";
+import { externalRelayFile, newTargetSettings, reserveRun, dropRun, withFileLock, writeRelayFile, type PairedRelay } from "./store";
 import { requestSchema, type ExternalRelayRequest } from "./protocol";
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "relay-conversations-"));
 process.env.LLV_STATE_DIR = root;
@@ -74,6 +74,63 @@ test("admission orphan recovery takes the ledger after its lock wait and walks n
     expect(readConversations().find(r => r.id === record.id)?.state).toBe("running");
     expect(reads).not.toHaveBeenCalled();
   } finally { reads.mockRestore(); dropRun("root"); releaseConversation(record.id); }
+});
+
+test("a run-ledger replacement during a sweep keeps the running chain reserved", async () => {
+  const ownerRequest = request("live-run");
+  const record = reserveChainConversation(relay, target, ownerRequest, "member")!;
+  const runsFile = path.join(root, "external-relay/runs.json");
+  writeRelayFile(runsFile, { v: 1, runs: [] });
+  const originalStat = fs.promises.stat.bind(fs.promises);
+  let ledgerStats = 0;
+  const interceptedStat = async (filename: string) => {
+    if (String(filename) === runsFile && ++ledgerStats === 2) {
+      reserveRun({ requestId: "live-run", leaseId: "fixture-lease", relayId: relay.id, targetId: target.id, childPid: null, childIdentity: null,
+        ownerPid: process.pid, ownerIdentity: "fixture", runDir: root, startedAt: new Date().toISOString() });
+    }
+    return originalStat(filename);
+  };
+  const stat = spyOn(fs.promises, "stat").mockImplementation(interceptedStat as typeof fs.promises.stat);
+  try {
+    await sweepConversationsAsync([relay], Date.now(), Date.now() + 5000, relay.id);
+    expect(readConversations().find(row => row.id === record.id)?.state).toBe("running");
+    expect(reserveChainConversation(relay, target, request("reply", "live-run"), "member")).toBeNull();
+  } finally {
+    stat.mockRestore();
+    dropRun("live-run");
+    releaseConversation(record.id);
+  }
+});
+
+test("a conversation-map replacement during a cold lookup is never cached with the old rows", async () => {
+  const api = await import("./conversations");
+  const previousState = process.env.LLV_STATE_DIR;
+  const isolated = fs.mkdtempSync(path.join(os.tmpdir(), "relay-map-cache-race-"));
+  process.env.LLV_STATE_DIR = isolated;
+  const filename = externalRelayFile("runs").replace(/runs\.json$/, "conversations.json");
+  try {
+    const seed = reserveChainConversation(relay, target, request(), "member")!;
+    releaseConversation(seed.id);
+    const rows = readConversations();
+    writeRelayFile(filename, { v: 2, conversations: rows });
+    const replacement = rows.map(row => ({ ...row, anchors: ["replacement-root"] }));
+    const originalStat = fs.promises.stat.bind(fs.promises);
+    let mapStats = 0;
+    const interceptedStat = async (pathLike: string) => {
+      if (pathLike === filename && ++mapStats === 3)
+        writeRelayFile(filename, { v: 2, conversations: replacement });
+      return originalStat(pathLike);
+    };
+    const stat = spyOn(fs.promises, "stat").mockImplementation(interceptedStat as typeof fs.promises.stat);
+    try {
+      expect(await api.lookupChainConversationAsync(relay, target, request("reply", "root"), "member")).toBeNull();
+      expect(mapStats).toBeGreaterThanOrEqual(5);
+    } finally { stat.mockRestore(); }
+  } finally {
+    if (previousState === undefined) delete process.env.LLV_STATE_DIR;
+    else process.env.LLV_STATE_DIR = previousState;
+    fs.rmSync(isolated, { recursive: true, force: true });
+  }
 });
 
 test("unchanged held chain resolution does not rewrite retained conversation history", async () => {

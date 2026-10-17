@@ -25,6 +25,9 @@ const conversationCache = cacheHost.__llvRelayConversationCache ??= new Map<stri
 type RunLedgerCacheEntry = { size: number; mtimeMs: number; ino: number; runs: RunRecord[] };
 const runCacheHost = globalThis as typeof globalThis & { __llvRelayRunLedgerCache?: Map<string, RunLedgerCacheEntry> };
 const runLedgerCache = runCacheHost.__llvRelayRunLedgerCache ??= new Map<string, RunLedgerCacheEntry>();
+function sameFileVersion(left: Pick<fs.Stats, "size" | "mtimeMs" | "ino">, right: Pick<fs.Stats, "size" | "mtimeMs" | "ino">): boolean {
+  return left.size === right.size && left.mtimeMs === right.mtimeMs && left.ino === right.ino;
+}
 const jsonWorkerSource = `
 const { parentPort } = require("node:worker_threads");
 const fs = require("node:fs/promises");
@@ -79,27 +82,38 @@ function conversationJson<T>(kind: "read" | "write", filename: string, value?: u
 }
 async function cachedRunRecords(): Promise<RunRecord[]> {
   const filename = externalRelayFile("runs");
-  const before = await fs.promises.stat(filename).catch(error => (error as NodeJS.ErrnoException).code === "ENOENT" ? null : Promise.reject(error));
-  if (!before) return [];
-  const cached = runLedgerCache.get(filename);
-  if (cached?.size === before.size && cached.mtimeMs === before.mtimeMs && cached.ino === before.ino) return cached.runs;
-  const ledger = await conversationJson<{ v?: unknown; runs?: unknown }>("read", filename);
-  if (ledger.v !== 1 || !Array.isArray(ledger.runs)) throw new Error("invalid run ledger");
-  const after = await fs.promises.stat(filename);
-  const runs = ledger.runs as RunRecord[];
-  runLedgerCache.set(filename, { size: after.size, mtimeMs: after.mtimeMs, ino: after.ino, runs });
-  while (runLedgerCache.size > 8) runLedgerCache.delete(runLedgerCache.keys().next().value!);
-  return runs;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const before = await fs.promises.stat(filename).catch(error => (error as NodeJS.ErrnoException).code === "ENOENT" ? null : Promise.reject(error));
+    if (!before) { runLedgerCache.delete(filename); return []; }
+    const cached = runLedgerCache.get(filename);
+    if (cached && sameFileVersion(cached, before)) return cached.runs;
+    let ledger: { v?: unknown; runs?: unknown };
+    try { ledger = await conversationJson("read", filename); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") continue; throw error; }
+    if (ledger.v !== 1 || !Array.isArray(ledger.runs)) throw new Error("invalid run ledger");
+    const after = await fs.promises.stat(filename).catch(error => (error as NodeJS.ErrnoException).code === "ENOENT" ? null : Promise.reject(error));
+    if (!after || !sameFileVersion(before, after)) continue;
+    const runs = ledger.runs as RunRecord[];
+    runLedgerCache.set(filename, { size: before.size, mtimeMs: before.mtimeMs, ino: before.ino, runs });
+    while (runLedgerCache.size > 8) runLedgerCache.delete(runLedgerCache.keys().next().value!);
+    return runs;
+  }
+  throw new Error("run ledger changed during read");
 }
 async function cachedConversationRows(): Promise<RelayConversation[]> {
   const filename = file();
-  const stat = await fs.promises.stat(filename).catch(error => (error as NodeJS.ErrnoException).code === "ENOENT" ? null : Promise.reject(error));
-  if (!stat) return [];
-  const cached = conversationCache.get(filename);
-  if (cached?.size === stat.size && cached.mtimeMs === stat.mtimeMs && cached.ino === stat.ino) return cached.rows;
-  const rows = await readConversationRowsAsync();
-  await rememberConversationRowsAsync(rows);
-  return rows;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const before = await fs.promises.stat(filename).catch(error => (error as NodeJS.ErrnoException).code === "ENOENT" ? null : Promise.reject(error));
+    if (!before) { conversationCache.delete(filename); return []; }
+    const cached = conversationCache.get(filename);
+    if (cached && sameFileVersion(cached, before)) return cached.rows;
+    const rows = await readConversationRowsAsync();
+    const after = await fs.promises.stat(filename).catch(error => (error as NodeJS.ErrnoException).code === "ENOENT" ? null : Promise.reject(error));
+    if (!after || !sameFileVersion(before, after)) continue;
+    rememberConversationRowsAt(rows, before);
+    return rows;
+  }
+  throw new Error("conversation map changed during read");
 }
 async function cachedScopeRows(relay: PairedRelay, target: RelayTargetSettings, request: ExternalRelayRequest): Promise<RelayConversation[]> {
   const filename = file();
@@ -115,16 +129,20 @@ function rememberConversationRows(rows: RelayConversation[]) {
   const filename = file();
   try {
     const stat = fs.statSync(filename);
-    conversationCache.delete(filename);
-    const scopes = new Map<string, RelayConversation[]>();
-    for (const row of rows) {
-      const key = `${row.relayId}\u0000${row.targetId}\u0000${row.chatKey}`;
-      const group = scopes.get(key) ?? [];
-      group.push(row); scopes.set(key, group);
-    }
-    conversationCache.set(filename, { size: stat.size, mtimeMs: stat.mtimeMs, ino: stat.ino, rows, scopes });
-    while (conversationCache.size > 8) conversationCache.delete(conversationCache.keys().next().value!);
+    rememberConversationRowsAt(rows, stat);
   } catch { conversationCache.delete(filename); }
+}
+function rememberConversationRowsAt(rows: RelayConversation[], stat: Pick<fs.Stats, "size" | "mtimeMs" | "ino">) {
+  const filename = file();
+  conversationCache.delete(filename);
+  const scopes = new Map<string, RelayConversation[]>();
+  for (const row of rows) {
+    const key = `${row.relayId}\u0000${row.targetId}\u0000${row.chatKey}`;
+    const group = scopes.get(key) ?? [];
+    group.push(row); scopes.set(key, group);
+  }
+  conversationCache.set(filename, { size: stat.size, mtimeMs: stat.mtimeMs, ino: stat.ino, rows, scopes });
+  while (conversationCache.size > 8) conversationCache.delete(conversationCache.keys().next().value!);
 }
 function readConversationRows(migrate = false): RelayConversation[] {
   try {
@@ -185,14 +203,7 @@ async function rememberConversationRowsAsync(rows: RelayConversation[]) {
   const filename = file();
   try {
     const stat = await fs.promises.stat(filename);
-    conversationCache.delete(filename);
-    const scopes = new Map<string, RelayConversation[]>();
-    for (const row of rows) {
-      const key = `${row.relayId}\u0000${row.targetId}\u0000${row.chatKey}`;
-      const group = scopes.get(key) ?? []; group.push(row); scopes.set(key, group);
-    }
-    conversationCache.set(filename, { size: stat.size, mtimeMs: stat.mtimeMs, ino: stat.ino, rows, scopes });
-    while (conversationCache.size > 8) conversationCache.delete(conversationCache.keys().next().value!);
+    rememberConversationRowsAt(rows, stat);
   } catch { conversationCache.delete(filename); }
 }
 export function readConversations(): RelayConversation[] { return withViewerOperation("external-relay.chains", () => readConversationRows()); }

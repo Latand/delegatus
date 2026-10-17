@@ -325,9 +325,9 @@ async function readDeliveredTurn(file: string, size: number, root: "claude-proje
       position = start; scanned += bytesRead;
       let complete = buffer.subarray(0, bytesRead).toString("utf8") + partial;
       if (droppingOversizedRecord) {
-        const boundary = complete.indexOf("\n");
+        const boundary = complete.lastIndexOf("\n");
         if (boundary < 0) continue;
-        complete = complete.slice(boundary + 1);
+        complete = complete.slice(0, boundary + 1);
         droppingOversizedRecord = false;
       }
       const lines = complete.split("\n");

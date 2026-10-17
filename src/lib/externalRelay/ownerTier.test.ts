@@ -587,6 +587,46 @@ test("Claude continuation observation retains a delivered turn across large tool
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
+test("Codex and Claude continuation readers skip one oversized record without losing the delivered turn", async () => {
+  const { observeOwnerContinuation } = await import("./ownerRun");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "owner-oversized-record-"));
+  const at = "2026-10-17T12:00:00Z";
+  const receipt = async (id: string) => ({ state: "delivered", acceptedAt: at, settledAt: at, conversationId: id });
+  try {
+    for (const engine of ["codex", "claude"] as const) {
+      const id = `conversation_${engine}`;
+      const transcript = path.join(root, `${engine}.jsonl`);
+      const registry = { conversation: () => ({ id, engine, generations: [{ path: transcript }] }) } as unknown as AgentRegistry;
+      const sources = { registry: () => registry, liveness: async () => [{ reason: "host_alive_turn_idle", lastRecordAt: "2026-10-17T12:00:02Z" }],
+        now: () => Date.parse("2026-10-17T12:00:03Z") } as unknown as Pick<SeatTickSources, "registry" | "liveness" | "now">;
+      const turn = { clientAttemptId: `relay-owner-${engine}`, conversationId: id, claimedAt: at,
+        continuation: { operationId: `relay-owner-${engine}` } };
+      const oldAnswer = engine === "codex"
+        ? { timestamp: "2026-10-17T11:59:59Z", payload: { type: "agent_message", message: "Old answer" } }
+        : { type: "assistant", timestamp: "2026-10-17T11:59:59Z", message: { content: [{ type: "text", text: "Old answer" }] } };
+      const deliveredUser = engine === "codex"
+        ? { timestamp: at, payload: { type: "message", role: "user", content: [{ type: "input_text", text: "new request" }] } }
+        : { type: "user", timestamp: at, message: { content: [{ type: "text", text: "new request" }] } };
+      const oversized = engine === "codex"
+        ? { timestamp: "2026-10-17T12:00:00.500Z", payload: { type: "tool_output", message: "x".repeat(2 * 1024 * 1024) } }
+        : { type: "user", timestamp: "2026-10-17T12:00:00.500Z", message: { content: [{ type: "tool_result", content: "x".repeat(2 * 1024 * 1024) }] } };
+      const answer = engine === "codex"
+        ? { timestamp: "2026-10-17T12:00:01Z", payload: { type: "agent_message", message: "New answer" } }
+        : { type: "assistant", timestamp: "2026-10-17T12:00:01Z", message: { content: [{ type: "text", text: "New answer" }] } };
+      const writeRecords = (...rows: object[]) => fs.writeFileSync(transcript, `${rows.map(row => JSON.stringify(row)).join("\n")}\n`);
+      const observation = () => observeOwnerContinuation(turn, sources, () => receipt(id).then(value => ({ ...value, conversationId: id }) as never));
+      const olderContext = Array.from({ length: 4 }, (_, index) => engine === "codex"
+        ? { timestamp: `2026-10-17T11:59:58.${String(index).padStart(3, "0")}Z`, payload: { type: "tool_output", message: "x".repeat(32 * 1024) } }
+        : { type: "assistant", timestamp: `2026-10-17T11:59:58.${String(index).padStart(3, "0")}Z`, message: { content: [{ type: "tool_use", name: "read_file", input: "x".repeat(32 * 1024) }] } });
+      writeRecords(...olderContext, deliveredUser, oversized, answer);
+      expect(fs.statSync(transcript).size).toBeLessThan(4 * 1024 * 1024);
+      expect(await observation()).toMatchObject({ state: "ended", finalText: "New answer" });
+      writeRecords(...olderContext, oldAnswer, deliveredUser, oversized);
+      expect(await observation()).toMatchObject({ state: "running" });
+    }
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
 test("queued owner continuation authority is bound to its durable operation and conversation", async () => {
   const { ownerRelayOperationAuthorized } = await import("./ownerAuthority");
   const { procBackend } = await import("@/lib/proc");
