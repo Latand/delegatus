@@ -1,0 +1,290 @@
+{
+  "base": "afafbfba9bcdb68f4d7f41bfaefef6eb9163488a",
+  "codeSha256": "fddceb61f206984916cad1736861997c4bfe5bd6484b98145922f93b067e54b3",
+  "measuredAtUtc": "2026-10-17T07:28:50.016830+00:00",
+  "runtime": "Bun 1.4.0",
+  "procedure": "scripts/measure-task-export.ts; VACUUM INTO frozen state; WAL restored in both copies; isolated HOME/XDG_CONFIG_HOME/TMPDIR/LLV_STATE_DIR; control on closed loopback port; owned gate runner; port-0 peer returning 400/malformed",
+  "workload": {
+    "tasks": 2014,
+    "roleMemoryRows": 3507,
+    "roleRules": 1910,
+    "roleRequests": 1495,
+    "roleScopes": 102,
+    "pipelines": 302,
+    "requestBytes": 492598,
+    "policyNow": 1792218160000
+  },
+  "payloadsByteIdentical": true,
+  "mainCpuTickMs": 10,
+  "maxAfterMainCpuWindowUpperBoundMs": 30.0,
+  "before": [
+    {
+      "iteration": 0,
+      "policyNow": 1792218160000,
+      "ms": 26300.521956999997,
+      "cpu": {
+        "user": 26192769,
+        "system": 819267
+      },
+      "memoryClones": 704907,
+      "maxMainGapMs": 26278.662973,
+      "maxMainThreadCpuWindowMs": 26260,
+      "clockTicks": 100,
+      "calls": 1,
+      "bytes": 492598,
+      "error": "malformed",
+      "workerStats": null
+    },
+    {
+      "iteration": 1,
+      "policyNow": 1792218160000,
+      "ms": 22240.226135,
+      "cpu": {
+        "user": 22202064,
+        "system": 364043
+      },
+      "memoryClones": 704907,
+      "maxMainGapMs": 22217.101752000002,
+      "maxMainThreadCpuWindowMs": 22210,
+      "clockTicks": 100,
+      "calls": 2,
+      "bytes": 492598,
+      "error": "malformed",
+      "workerStats": null
+    },
+    {
+      "iteration": 2,
+      "policyNow": 1792218160000,
+      "ms": 23320.514488,
+      "cpu": {
+        "user": 23310303,
+        "system": 354854
+      },
+      "memoryClones": 704907,
+      "maxMainGapMs": 23297.237746000006,
+      "maxMainThreadCpuWindowMs": 23300,
+      "clockTicks": 100,
+      "calls": 3,
+      "bytes": 492598,
+      "error": "malformed",
+      "workerStats": null
+    }
+  ],
+  "afterCompiledWorker": [
+    {
+      "iteration": 0,
+      "policyNow": 1792218160000,
+      "ms": 12940.199813,
+      "cpu": {
+        "user": 234639,
+        "system": 137760
+      },
+      "memoryClones": 0,
+      "maxMainGapMs": 20.127310000000023,
+      "maxMainThreadCpuWindowMs": 20,
+      "clockTicks": 100,
+      "calls": 1,
+      "bytes": 492598,
+      "error": "malformed",
+      "workerStats": {
+        "builds": 1,
+        "cpu": {
+          "user": 12601174,
+          "system": 534064
+        }
+      }
+    },
+    {
+      "iteration": 1,
+      "policyNow": 1792218160000,
+      "ms": 20.896396000000095,
+      "cpu": {
+        "user": 10191,
+        "system": 4921
+      },
+      "memoryClones": 0,
+      "maxMainGapMs": 2.0165559999986726,
+      "maxMainThreadCpuWindowMs": 10,
+      "clockTicks": 100,
+      "calls": 2,
+      "bytes": 492598,
+      "error": "malformed",
+      "workerStats": {
+        "builds": 1,
+        "cpu": {
+          "user": 249,
+          "system": 0
+        }
+      }
+    },
+    {
+      "iteration": 2,
+      "policyNow": 1792218160000,
+      "ms": 19.109859999998662,
+      "cpu": {
+        "user": 8830,
+        "system": 1874
+      },
+      "memoryClones": 0,
+      "maxMainGapMs": 1.168854999999894,
+      "maxMainThreadCpuWindowMs": 10,
+      "clockTicks": 100,
+      "calls": 3,
+      "bytes": 492598,
+      "error": "malformed",
+      "workerStats": {
+        "builds": 1,
+        "cpu": {
+          "user": 164,
+          "system": 0
+        }
+      }
+    }
+  ],
+  "codeDigestAlgorithm": "SHA-256 of each sorted sourceFiles path, NUL, exact file bytes, NUL",
+  "sourceFiles": [
+    "next.config.ts",
+    "scripts/measure-task-export.ts",
+    "src/app/api/peer/v1/[...path]/route.ts",
+    "src/lib/links/boardSync.test.ts",
+    "src/lib/links/client.ts",
+    "src/lib/links/fixtures/taskExport.cases.ts",
+    "src/lib/links/protocol.ts",
+    "src/lib/links/schedule.ts",
+    "src/lib/links/taskExchange.ts",
+    "src/lib/links/taskExport.test.ts",
+    "src/lib/links/taskExportPrivacy.ts",
+    "src/lib/links/taskFeed.ts",
+    "src/lib/links/taskPageBuild.ts",
+    "src/lib/links/taskPageWorker.ts",
+    "src/lib/links/taskServe.ts",
+    "src/lib/memory/roleStore.ts",
+    "src/lib/taskPage.worker.ts",
+    "src/lib/viewerLoopMonitor.ts"
+  ],
+  "beforeMeasuredAtUtc": "2026-10-17T06:39:36.370835+00:00",
+  "checks": [
+    {
+      "name": "role-matcher",
+      "exit": 0,
+      "elapsedS": 6.142,
+      "command": [
+        "bun",
+        "test",
+        "src/lib/memory/roleMatcher.test.ts"
+      ],
+      "isolation": "private HOME/XDG_CONFIG_HOME/TMPDIR/LLV_STATE_DIR; both control URLs on closed loopback port; gate-slot.sh"
+    },
+    {
+      "name": "role-egress",
+      "exit": 0,
+      "elapsedS": 0.92,
+      "command": [
+        "bun",
+        "test",
+        "src/lib/memory/roleEgress.test.ts"
+      ],
+      "isolation": "private HOME/XDG_CONFIG_HOME/TMPDIR/LLV_STATE_DIR; both control URLs on closed loopback port; gate-slot.sh"
+    },
+    {
+      "name": "role-store",
+      "exit": 0,
+      "elapsedS": 4.176,
+      "command": [
+        "bun",
+        "test",
+        "src/lib/memory/roleStore.test.ts"
+      ],
+      "isolation": "private HOME/XDG_CONFIG_HOME/TMPDIR/LLV_STATE_DIR; both control URLs on closed loopback port; gate-slot.sh"
+    },
+    {
+      "name": "transport",
+      "exit": 0,
+      "elapsedS": 89.506,
+      "command": [
+        "bun",
+        "test",
+        "src/lib/links/boardSync.test.ts",
+        "--test-name-pattern",
+        "^(?!.*(?:M3 link RSS|1 000 tasks arrive|one edit costs|1 000 synced edits|2 000 expired Done|an idle call costs)).*"
+      ],
+      "isolation": "private HOME/XDG_CONFIG_HOME/TMPDIR/LLV_STATE_DIR; both control URLs on closed loopback port; gate-slot.sh"
+    },
+    {
+      "name": "lint",
+      "exit": 0,
+      "elapsedS": 2.598,
+      "command": [
+        "node_modules/.bin/eslint",
+        "next.config.ts",
+        "scripts/measure-task-export.ts",
+        "src/app/api/peer/v1/[...path]/route.ts",
+        "src/lib/links/boardSync.test.ts",
+        "src/lib/links/client.ts",
+        "src/lib/links/fixtures/taskExport.cases.ts",
+        "src/lib/links/protocol.ts",
+        "src/lib/links/schedule.ts",
+        "src/lib/links/taskExchange.ts",
+        "src/lib/links/taskExport.test.ts",
+        "src/lib/links/taskExportPrivacy.ts",
+        "src/lib/links/taskFeed.ts",
+        "src/lib/links/taskPageBuild.ts",
+        "src/lib/links/taskPageWorker.ts",
+        "src/lib/links/taskServe.ts",
+        "src/lib/memory/roleStore.ts",
+        "src/lib/taskPage.worker.ts",
+        "src/lib/viewerLoopMonitor.ts"
+      ],
+      "isolation": "private HOME/XDG_CONFIG_HOME/TMPDIR/LLV_STATE_DIR; both control URLs on closed loopback port; gate-slot.sh"
+    },
+    {
+      "name": "types",
+      "exit": 0,
+      "elapsedS": 13.427,
+      "command": [
+        "node_modules/.bin/tsc",
+        "--noEmit"
+      ],
+      "isolation": "private HOME/XDG_CONFIG_HOME/TMPDIR/LLV_STATE_DIR; both control URLs on closed loopback port; gate-slot.sh"
+    },
+    {
+      "name": "build",
+      "exit": 0,
+      "elapsedS": 79.276,
+      "command": [
+        "bun",
+        "run",
+        "build"
+      ],
+      "isolation": "private HOME/XDG_CONFIG_HOME/TMPDIR/LLV_STATE_DIR; both control URLs on closed loopback port; gate-slot.sh"
+    },
+    {
+      "name": "compiled",
+      "exit": 0,
+      "elapsedS": 6.717,
+      "command": [
+        "bun",
+        "test",
+        "src/lib/links/taskExport.test.ts"
+      ],
+      "isolation": "private HOME/XDG_CONFIG_HOME/TMPDIR/LLV_STATE_DIR; both control URLs on closed loopback port; gate-slot.sh",
+      "additionalEnv": {
+        "LLV_TASK_PAGE_BUILT_TEST": "1"
+      }
+    },
+    {
+      "name": "final-replay",
+      "exit": 0,
+      "elapsedS": 13.537,
+      "command": [
+        "bun",
+        "scripts/measure-task-export.ts"
+      ],
+      "isolation": "private HOME/XDG_CONFIG_HOME/TMPDIR/LLV_STATE_DIR; both control URLs on closed loopback port; gate-slot.sh",
+      "additionalEnv": {
+        "NODE_ENV": "test",
+        "LLV_TASK_EXPORT_MEASURE_NOW": "1792218160000"
+      }
+    }
+  ]
+}

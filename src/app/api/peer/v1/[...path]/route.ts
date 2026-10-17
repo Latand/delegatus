@@ -1,3 +1,4 @@
+import { assertTaskExportCurrent } from "@/lib/links/taskExportPrivacy";
 import { exchangeTelegramPublications, telegramPublicationAvailable } from "@/lib/links/telegramPublication";
 import { NextRequest, NextResponse } from "next/server";
 
@@ -11,7 +12,10 @@ import { unauthorizedPeer } from "@/lib/links/peerResponse";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 type Context = { params: Promise<{ path: string[] }> };
-const answer = (body: object, status = 200) => NextResponse.json(body, { status, headers: { "cache-control": "no-store" } });
+const answer = (body: object, status = 200) => {
+  assertTaskExportCurrent(body);
+  return NextResponse.json(body, { status, headers: { "cache-control": "no-store" } });
+};
 const unauthorized = unauthorizedPeer;
 
 async function json(req: NextRequest): Promise<unknown> {
@@ -53,7 +57,8 @@ export async function POST(req: NextRequest, context: Context): Promise<NextResp
     if (current?.id !== grant.id) return unauthorized();
     if (malformed) { markGrantSync(current, "malformed"); return answer({ error: "malformed" }, 400); }
     try {
-      const result = incomingSync(current, input);
+      const result = await incomingSync(current, input);
+      if (authorizePeer(req.headers.get("x-delegatus-peer"), "board:sync")?.id !== current.id) return unauthorized();
       const link = linkedPeer("grant", current.id);
       if (result.status === 200 && link) {
         if (result.agreed) await drainSeatMessages(link);
