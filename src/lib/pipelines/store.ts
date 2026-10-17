@@ -267,6 +267,14 @@ function isPublicationTextRepair(value: unknown): boolean {
     && (repair.answeredAt === undefined || typeof repair.answeredAt === "string" && Number.isFinite(Date.parse(repair.answeredAt)));
 }
 
+function isTerminalOutputPublication(value: unknown): boolean {
+  if (value === undefined) return true;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const publication = value as Record<string, unknown>;
+  return ["localSha", "pullRequestHead"].every(key => typeof publication[key] === "string"
+    && /^[0-9a-f]{40}$/i.test(publication[key] as string));
+}
+
 function isAttempt(value: unknown, index: number): boolean {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const attempt = value as Record<string, unknown>;
@@ -326,6 +334,7 @@ function isAttempt(value: unknown, index: number): boolean {
         && /^[0-9a-f]{40}$/i.test((attempt.publicationIntegration as Record<string, string>)[key]))
     )) &&
     isPublicationTextRepair(attempt.publicationTextRepair) &&
+    isTerminalOutputPublication(attempt.terminalOutputPublication) &&
     (attempt.publicationRetry === undefined || (
       attempt.publicationRetry !== null && typeof attempt.publicationRetry === "object"
       && !Array.isArray(attempt.publicationRetry)

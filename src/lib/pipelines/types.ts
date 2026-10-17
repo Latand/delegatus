@@ -483,6 +483,10 @@ export type PipelineStageAttempt = {
     delivered?: boolean;
     answeredAt?: string;
   };
+  /** A legacy terminal report remains local after an ordinary PR forge
+      refusal; retry the PR against the published head without publishing this
+      output commit. */
+  terminalOutputPublication?: { localSha: string; pullRequestHead: string };
   /** Authoritative projection of the embedded flow. The generation is a
       content digest, so reconciliation remains idempotent across processes and
       independently committed flow/pipeline writes. */

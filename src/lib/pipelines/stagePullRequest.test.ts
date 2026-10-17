@@ -86,7 +86,7 @@ async function fixture(task?: string) {
   const commit = async () => {
     await f.git(f.worktree, "commit", "--allow-empty", "-m", "stage output");
   };
-  return { ...f, calls, finish, commit, setExpectedBody: (body: string) => { expectedBody = body; }, setPrShape: (shape: typeof prShape) => { exists = true; prShape = shape; }, setRace: (call: number, kind: "pause" | "release") => { race = { call, kind }; }, setMissing: () => { exists = false; }, setExisting: () => { exists = true; }, setRefused: () => { refuse = true; }, setLost: () => { loseResponse = true; },
+  return { ...f, calls, finish, commit, setExpectedBody: (body: string) => { expectedBody = body; }, setPrShape: (shape: typeof prShape) => { exists = true; prShape = shape; }, setRace: (call: number, kind: "pause" | "release") => { race = { call, kind }; }, setMissing: () => { exists = false; }, setExisting: () => { exists = true; }, setRefused: (value = true) => { refuse = value; }, setLost: () => { loseResponse = true; },
     close: () => { savePipelines([]); fs.rmSync(f.root, { recursive: true, force: true }); } };
 }
 
@@ -197,6 +197,45 @@ test.each([{ terminalOutput: false }, { terminalOutput: true }])("C: a migrated 
   } finally { f.close(); }
 });
 
+
+test("C: retrying a legacy terminal-output forge refusal never publishes its local report commit", async () => {
+  const f = await fixture();
+  try {
+    await f.commit(); f.setExisting();
+    await f.finish();
+    const current = loadPipelines().find(p => p.id === f.id)!;
+    delete current.delivery!.target.pr;
+    delete current.publication;
+    current.stages[1]!.outputs = ["review.md"];
+    savePipelines([current]);
+    f.setExpectedBody("Review passed.");
+    f.setMissing();
+    await tickPipelines([], f.h.ports);
+    fs.writeFileSync(path.join(f.worktree, "review.md"), "Review passed.\n");
+    const publishedHead = await f.git(f.origin, "rev-parse", `refs/heads/${current.branch}`);
+    f.setRefused();
+    f.h.setConversationActive(false);
+    await engineModule.reportStageCompletion({ verdict: "pass", summary: "Review passed." },
+      { kind: "agent", role: "reviewer", conversationId: "conversation_stage_2" }, f.h.ports);
+    await tickPipelines([finishReported(f.h, "/codex/stage-2.jsonl", "pass", "Review passed.")], f.h.ports);
+    const refused = loadPipelines().find(p => p.id === f.id)!;
+    expect(refused.state).toBe("needs_decision");
+    expect(refused.lastPassedCommit).toBe(publishedHead);
+    expect(refused.runs[1]!.attempts[0]!.state).toBe("needs_decision");
+    expect(refused.runs[1]!.attempts[0]!.terminalOutputPublication).toMatchObject({ pullRequestHead: publishedHead });
+    expect(refused.runs[1]!.attempts[0]!.terminalOutputPublication!.localSha).not.toBe(publishedHead);
+
+    f.setRefused(false); f.setExisting();
+    expect((await engineModule.patchPipeline(f.id, { action: "retry-stage" }, f.h.ports)).error).toBeUndefined();
+    await tickPipelines([], f.h.ports);
+    expect(await f.git(f.origin, "rev-parse", `refs/heads/${current.branch}`)).toBe(publishedHead);
+    const retried = loadPipelines().find(p => p.id === f.id)!;
+    expect(retried.lastPassedCommit).toBe(publishedHead);
+    expect(retried.runs[1]!.attempts[0]!.terminalOutputPublication).toBeUndefined();
+    expect(retried.delivery?.target.pr).toBe(17);
+    expect(retried.state).toBe("completed");
+  } finally { f.close(); }
+});
 
 test("C: summary fingerprint inspection lets an independent scheduler advance", async () => {
   const { pipelinePublicationTextSafe } = await import("./git");

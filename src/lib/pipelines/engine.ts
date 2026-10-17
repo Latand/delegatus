@@ -4290,6 +4290,27 @@ async function retryTerminalStagePublication(
 ): Promise<void> {
   if (ports.deferStageGit) return;
   if (!await settleSummaryRewrite(pipeline, attempt, ports, persist)) return;
+  if (attempt.terminalOutputPublication) {
+    const { localSha, pullRequestHead } = attempt.terminalOutputPublication;
+    const local = await currentPipelineBranchHead(pipeline, ports.exec);
+    if (!local.ok || local.sha !== localSha || pipeline.lastPassedCommit !== pullRequestHead) {
+      await park(pipeline, `legacy terminal-output retry requires unchanged local report ${localSha} and published head ${pullRequestHead}`, attempt);
+      return;
+    }
+    const pr = await withViewerOperation("pipelines.controller-job", () => performanceSpans.wait("pipeline.pull-request", () =>
+      ensureStagePullRequest(pipeline, attempt, ports.exec, pullRequestHead)));
+    if (!pr.ok) {
+      if (pr.privacy) {
+        pipeline.lastPassedCommit = localSha;
+        delete attempt.terminalOutputPublication;
+      }
+      await handlePullRequestRefusal(pipeline, attempt, pr, ports, persist, pullRequestHead);
+      return;
+    }
+    delete attempt.terminalOutputPublication;
+    await advancePipeline(pipeline, stage, ports, attempt);
+    return;
+  }
   if (attempt.publicationTextRepair?.pullRequestHead) {
     const pr = await withViewerOperation("pipelines.controller-job", () => performanceSpans.wait("pipeline.pull-request", () =>
       ensureStagePullRequest(pipeline, attempt, ports.exec, attempt.publicationTextRepair!.pullRequestHead)));
@@ -4955,7 +4976,8 @@ async function commitPassedStage(
       ensureStagePullRequest(pipeline, attempt, ports.exec, pipeline.publishedCommit ?? pipeline.lastPassedCommit)));
     if (!pr.ok) {
       const publishedHead = pipeline.publishedCommit ?? pipeline.lastPassedCommit;
-      pipeline.lastPassedCommit = result.sha;
+      if (pr.privacy) pipeline.lastPassedCommit = result.sha;
+      else attempt.terminalOutputPublication = { localSha: result.sha, pullRequestHead: publishedHead };
       attempt.state = "passed";
       await handlePullRequestRefusal(pipeline, attempt, pr, ports, persist, publishedHead); return;
     }
@@ -10441,7 +10463,7 @@ export async function settlePendingStageGit(ports: PipelinePorts = defaultPipeli
         const current = pipelines.find((pipeline) => pipeline.id === preview.id);
         if (!current || !matches(current)) { abort.abort(); return; }
         const recorded = currentAttempt(current, candidateStage.id)!;
-        if (!candidateAttempt.branchAdoption && !candidateAttempt.commitRepair && !candidateAttempt.publicationRepair && !candidateAttempt.stageCommitWait && !candidateAttempt.publicationTextRepair) return;
+        if (!candidateAttempt.branchAdoption && !candidateAttempt.commitRepair && !candidateAttempt.publicationRepair && !candidateAttempt.stageCommitWait && !candidateAttempt.publicationTextRepair && !candidateAttempt.terminalOutputPublication) return;
         if (candidateAttempt.stageCommitWait) {
           recorded.stageCommitWait = structuredClone(candidateAttempt.stageCommitWait);
           if (candidate.state === current.state) current.stateDetail = candidate.stateDetail;
@@ -10452,6 +10474,13 @@ export async function settlePendingStageGit(ports: PipelinePorts = defaultPipeli
           recorded.completedAt = candidateAttempt.completedAt;
           recorded.error = candidateAttempt.error;
           current.lastPassedCommit = candidate.lastPassedCommit;
+          if (candidate.state === current.state) current.stateDetail = candidate.stateDetail;
+        }
+        if (candidateAttempt.terminalOutputPublication) {
+          recorded.terminalOutputPublication = structuredClone(candidateAttempt.terminalOutputPublication);
+          recorded.state = candidateAttempt.state;
+          recorded.completedAt = candidateAttempt.completedAt;
+          recorded.error = candidateAttempt.error;
           if (candidate.state === current.state) current.stateDetail = candidate.stateDetail;
         }
         if (candidateAttempt.branchAdoption) recorded.branchAdoption = structuredClone(candidateAttempt.branchAdoption);
