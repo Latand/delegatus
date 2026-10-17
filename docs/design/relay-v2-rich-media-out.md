@@ -388,16 +388,17 @@ skipped by the content rules and count as one block each.
 | `inline_media` | `![` … `](` |
 | Links | every `[label](target)`: `target` parses with `URL`, protocol `https:`, no username or password, host not a non-public IP literal (§7.3); `tg:` targets fail as `tg_links` |
 | Reference definitions and footnotes | a line `^\s{0,3}\[[^\]]+\]:` or a `[^…]` marker: outside the subset |
-| Blocks | paragraph, heading, code block, table and list item count one each; a quote counts its inner blocks; `≤ max_blocks` |
+| Blocks | paragraph, heading, code block, each table row and list item count one each; each quote container also counts once at every nesting level, along with its inner blocks; `≤ max_blocks` |
 | Depth | list nesting (indent steps) plus `>` levels, `≤ max_depth` |
 | Table columns | cells of each pipe-table row, split on unescaped `|` outside code, `≤ max_table_columns` |
 
 The service's parser is the authority, and this pass refuses only what the
 contract names. Constructs the contract leaves unnamed (thematic breaks,
 setext headings, task-list markers) pass through, and the service's 422
-`invalid_format` handles them (§7.4). Counting every list item as a block
-over-counts compared with a parser that nests items, so the pass errs toward
-refusing at the boundary. The service also counts its own prefix toward the
+`invalid_format` handles them (§7.4). Every list item and quote container is
+counted independently, so the local pass never admits more contract-defined
+blocks than the service can accept. Table separator syntax has no rendered row;
+the header and every body row count once. The service also counts its own prefix toward the
 32,768 rendered ceiling; a 32,000 source cap leaves 768 characters for it,
 and the install cannot see the prefix.
 
@@ -851,7 +852,7 @@ HOME under `/tmp`, as `ephemeral.probe.test.ts:14` does.
 | 1 | `protocol.test.ts` | a request with `features`, `input.format` and `answer.attachments` keeps all three after `requestSchema`; malformed values are dropped and the request still parses; every service-wire and relay_v1 fixture parses to the same object as before | the fields are stripped |
 | 2 | `poller.test.ts` | descriptor lists both → claim ends with `relay_rich_messages`, `relay_media_out`; only `relay_media_out` listed → neither; `relay:rich_media: false` → neither; no listing → features equal today's | never announced |
 | 3 | `switches.test.ts` | `rich_media` is on when the key is absent or holds anything other than `false`, and off for `false`; an unreadable or malformed file reads as on; existing assertions gain the key | key absent |
-| 4 | `answerV2.test.ts` | plain 4,000 / 4,001 code points with `max_chars` 32,000; rich 32,000 / 32,001 code points; 128,000 / 128,001 UTF-8 bytes; 500 / 501 blocks; depth 16 / 17; 20 / 21 columns; raw HTML, `\<` escaped, `<https://…>`, `![x](https://…)`, `[a](http://…)`, `[a](tg://user?id=1)`, reference definition, footnote; buttons: 2×3 pass, a seventh dropped, label 64 / 65, blank, control character, url 2,048 / 2,049, `http:`, userinfo, an IPv4 loopback literal, a private IPv4 literal, the IPv6 loopback literal, `localhost`; caption 512 / 513 astral emoji; `ignore` with buttons sends none; reply with blank text and one attachment allowed; unknown `reply_to` becomes `null` | module absent |
+| 4 | `answerV2.test.ts` | plain 4,000 / 4,001 code points with `max_chars` 32,000; rich 32,000 / 32,001 code points; 128,000 / 128,001 UTF-8 bytes; 500 / 501 blocks, including table rows and quote containers; 16,000-character nested bracket scan; depth 16 / 17; 20 / 21 columns; raw HTML, `\<` escaped, `<https://…>`, `![x](https://…)`, `[a](http://…)`, `[a](tg://user?id=1)`, reference definition, footnote; buttons: 2×3 pass, a seventh dropped, label 64 / 65, blank, control character, url 2,048 / 2,049, `http:`, userinfo, an IPv4 loopback literal, a private IPv4 literal, the IPv6 loopback literal, `localhost`; caption 512 / 513 astral emoji; `ignore` with buttons sends none; reply with blank text and one attachment allowed; unknown `reply_to` becomes `null` | module absent |
 | 5 | `runner.test.ts` | **negotiation on, rich**: the claimed request carries `features: ["relay_rich_messages"]` and `input.format`; the stub agent answers 5,000 characters of Markdown with a table and one button → the prompt contains `<format>` with the guide JSON verbatim, the schema has `format` and `buttons`, the completion body has `format: "rich_markdown"` and the button | prompt, schema and body lack them |
 | 6 | `runner.test.ts` | **plain over cap under negotiation**: 4,001 characters with `format: "plain"`, no Markdown → the text is not sent as plain: rich if valid, else `failed/invalid_answer`; the stub never sees a 4,001-character plain answer | main posts it |
 | 7 | `runner.test.ts` | **attachment round-trip**: Codex target, `caps.generate`; the stub CLI emits `thread.started`, writes a decodable 2×2 PNG to `$CODEX_HOME/generated_images/<thread>/exec-1.png` and answers with that path, kind `photo` and a caption → the test service receives a PUT on `/requests/<id>/attachments/a0-<hex>` before `/complete`, with the lease, SHA-256, `image/png`, `Content-Length`, `filename*` and bearer headers and the same bytes; the completion lists `{attachment_id, kind: "photo", caption}`; the first PUT's connection is dropped and the retry reuses the id and gets 200; the run directory, and with it the per-run home, is gone after settlement | no PUT, no attachments |
@@ -864,7 +865,7 @@ HOME under `/tmp`, as `ephemeral.probe.test.ts:14` does.
 | 14 | `ownerTier.test.ts` | **owner path**: rich + media negotiated, owner target, fake owner ports; while observed, the fake agent calls the real `relay_answer` binding (attribution `{kind: "agent", conversationId}`) with `rich_markdown`, one button and one PNG under a document root in the private HOME, then ends with 6,000 characters of Markdown → completion carries the full text, `format`, the button and the uploaded attachment; the same flow without negotiation keeps today's prompt bytes and truncation | tool absent, text truncated at `max_chars` |
 | 15 | `ownerAnswer.test.ts` | binding refusals: another conversation, a deputy, a closed entry, no negotiation, a path outside roots, a dot-directory, a text file with a token, a seventh button, a fifth file; a second call replaces the first and deletes its copies | module absent |
 | 16 | `client.test.ts` | `relayPutBytes` sends exactly the headers of §8.4, refuses 3xx, parses `{error:{code, retry_after_s}}`, aborts at its deadline | function absent |
-| 17 | `attachments.test.ts` | kind table: MP3/M4A/MP4 signatures, HTML renamed `.png`, an 8 MiB + 1 generated photo sent as a document, 64 MiB total, `Content-Disposition` for a Cyrillic name | module absent |
+| 17 | `attachments.test.ts` | valid MP3/M4A/MP4/PDF structures, audio/video handler mismatch, missing movie track or PDF page tree, HTML renamed `.png`, an 8 MiB + 1 generated photo sent as a document, 64 MiB total, attribution before worker result, abort cleanup, `Content-Disposition` for a Cyrillic name | module absent |
 | 18 | `ephemeral.probe.test.ts` (gated by `LLV_ANSWER_PROFILE_PROBE=1`) | the §9.1 runs against a port-0 stub with a synthetic ChatGPT-mode auth file, egress closed by a proxy on a closed loopback port: image tool listed, generation saved under the thread directory, a referenced path outside the readable root refused with no edit request, no image item on stdout. The synthetic token is assembled at run time, so no token-shaped literal is committed | probe absent |
 
 **Guards that must stay green**: the hash fixtures of §5;

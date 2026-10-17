@@ -97,30 +97,23 @@ function withoutInlineCode(line: string) {
   chunks.push(line.slice(offset));return chunks.join("");
 }
 function invalidLinks(text:string) {
-  let offset=0;
-  while(offset<text.length) {
-    const start=text.indexOf("[",offset);if(start<0)return false;
-    let end=start+1, depth=1;
-    for(;end<text.length && depth;end++) {
-      if(text[end]==="\\") { end++; continue; }
-      if(text[end]==="[")depth++;
-      else if(text[end]==="]")depth--;
-    }
-    if(depth) return false;
-    offset=start+1;
-    if(text[end]!=="(")continue;
-    let cursor=end+1;
-    const targetStart=cursor;
-    depth=1;
-    while(cursor<text.length && depth>0) {
-      if(text[cursor]==="\\") { cursor+=2; continue; }
+  const labels:number[]=[];
+  for(let index=0;index<text.length;index++) {
+    if(text[index]==="\\") { index++;continue; }
+    if(text[index]==="[") { labels.push(index);continue; }
+    if(text[index]!=="]"||!labels.length)continue;
+    labels.pop();
+    if(text[index+1]!=="(")continue;
+    const targetStart=index+2;let cursor=targetStart,depth=1;
+    while(cursor<text.length&&depth) {
+      if(text[cursor]==="\\") { cursor+=2;continue; }
       if(text[cursor]==="(")depth++;
-      if(text[cursor]===")")depth--;
-      if(depth>0)cursor++;
+      else if(text[cursor]===")")depth--;
+      if(depth)cursor++;
     }
-    if(depth!==0)return true;
-    const target=text.slice(targetStart,cursor).split(/\s/)[0];
-    if(!safeRelayUrl(target))return true;
+    if(depth)return true;
+    if(!safeRelayUrl(text.slice(targetStart,cursor).split(/\s/)[0]))return true;
+    index=cursor;
   }
   return false;
 }
@@ -128,15 +121,19 @@ function invalidLinks(text:string) {
  * checks. Every list item counts, including nested items and quoted blocks. */
 export function richTextRefusal(text: string, caps: AnswerCapabilities): string | null {
   if ([...text].length > caps.richMax || Buffer.byteLength(text) > 128000) return "length";
-  let blocks = 0, paragraph = false, table = false, fence: string | null = null;
+  let blocks = 0, paragraph = false, table = false, fence: string | null = null, previousQuoteDepth=0;
   const lines = text.replace(/\r\n?/g, "\n").split("\n");
   const tableHeader = (line: string, next: string | undefined) => !!next
     && line.includes("|") && /^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?\s*$/.test(next);
   for (let index=0;index<lines.length;index++) {
     const line=lines[index]!;
-    const quotes = (/^(?:\s*>)+/.exec(line)?.[0].match(/>/g) ?? []).length;
+    const quotes = (/^\s{0,3}(?:>\s*)+/.exec(line)?.[0].match(/>/g) ?? []).length;
     if (quotes > caps.depth) return "depth";
-    const content = line.replace(/^(?:\s*>)+\s?/, "");
+    const content = line.replace(/^\s{0,3}(?:>\s*)+/, "");
+    if(quotes!==previousQuoteDepth)paragraph=table=false;
+    if(quotes>previousQuoteDepth)blocks+=quotes-previousQuoteDepth;
+    previousQuoteDepth=quotes;
+    if(blocks>caps.blocks)return "blocks";
     const marker = /^\s{0,3}(`{3,}|~{3,})/.exec(content)?.[1];
     if (fence) { if (marker && marker[0] === fence[0] && marker.length >= fence.length) fence = null; continue; }
     if (marker) { fence = marker; blocks++; paragraph = table = false; continue; }
@@ -152,10 +149,11 @@ export function richTextRefusal(text: string, caps: AnswerCapabilities): string 
     const pipes = visible.split("|");
     const isTable = visible.includes("|") && (table || tableHeader(content, lines[index+1])
       || index>0 && tableHeader(lines[index-1]!,content));
+    const separator=isTable&&index>0&&tableHeader(lines[index-1]!,content);
     if (isTable) {
       const columns = pipes.length - (visible.trimStart().startsWith("|") ? 1 : 0) - (visible.trimEnd().endsWith("|") ? 1 : 0);
       if (columns > caps.columns) return "table_columns";
-      if (!table) blocks++;
+      if (!separator) blocks++;
       table = true; paragraph = false;
     } else if (!content.trim()) { paragraph = table = false; }
     else if (/^\s*#{1,6}\s/.test(content) || list) { blocks++; paragraph = table = false; }

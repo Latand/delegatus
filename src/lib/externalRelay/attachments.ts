@@ -48,7 +48,7 @@ async function runAttachmentWorker<T>(job:AttachmentWorkerJob,signal?:AbortSigna
     const onAbort=()=>finish(signal?.reason instanceof Error?signal.reason:new DOMException("attachment work cancelled","AbortError"));
     signal?.addEventListener("abort",onAbort,{once:true});
     if(signal?.aborted){onAbort();return;}
-    worker.once("message",(event:{data?:unknown;ok?:boolean;value?:T;error?:{message?:string;code?:string};bytes?:Uint8Array;drops?:AnswerDrop[];workerThreadId?:number})=>{
+    const onMessage=(event:{data?:unknown;ok?:boolean;value?:T;error?:{message?:string;code?:string};bytes?:Uint8Array;drops?:AnswerDrop[];workerThreadId?:number})=>{
       if(event && typeof event==="object" && "type" in event && event.type==="delegatus-read-attribution")return;
       const message=(event && typeof event==="object" && "data" in event ? event.data : event) as {ok?:boolean;value?:T;error?:{message?:string;code?:string};bytes?:Uint8Array;drops?:AnswerDrop[];workerThreadId?:number};
       if(!message?.ok) {
@@ -58,7 +58,8 @@ async function runAttachmentWorker<T>(job:AttachmentWorkerJob,signal?:AbortSigna
       if(typeof message.workerThreadId!=="number" || message.workerThreadId===threadId){finish(new Error("relay attachment worker identity was invalid"));return;}
       if(message.drops && "drops" in job) job.drops.splice(0,job.drops.length,...message.drops);
       finish(undefined,(message.bytes ? Buffer.from(message.bytes) : message.value) as T);
-    });
+    };
+    worker.on("message",onMessage);
     worker.once("error",error=>finish(error instanceof Error?error:new Error("relay attachment worker failed")));
     worker.once("exit",code=>{if(!settled)finish(new Error(`relay attachment worker exited (${code})`));});
   });
@@ -75,7 +76,7 @@ export async function validateAttachmentContent(bytes: Buffer, extension: string
     : extension === ".jpg" || extension === ".jpeg" ? bytes[0] === 255 && bytes[1] === 216 && bytes[2] === 255
     : extension === ".pdf" ? bytes.subarray(0,5).toString() === "%PDF-"
     : extension === ".mp3" ? validMp3(bytes)
-    : extension === ".m4a" || extension === ".mp4" ? validIsoMedia(bytes) : true;
+    : extension === ".m4a" || extension === ".mp4" ? validIsoMedia(bytes,extension===".m4a"?"soun":"vide") : true;
   if (!signature) refuse("document_type");
   if (mime.startsWith("image/")) { try { await checkPhotoBytes(bytes); } catch { refuse("document_type"); } }
   if (typeClass(extension) === "text") {
@@ -88,7 +89,7 @@ export async function validateAttachmentContent(bytes: Buffer, extension: string
     if (/(?:<!doctype\s+html\b|<(?:html|head|body|script|iframe|object|embed|form|meta|link|style|title|div|span|p|a|img|table|ul|ol|li|br|section|main|article|svg)\b)/i.test(normalized) || bytes.subarray(0,2).toString() === "MZ" || bytes.subarray(0,2).toString() === "PK" || bytes.subarray(0,4).equals(Buffer.from([127,69,76,70]))) refuse("document_type");
     if (extension === ".json") { try { JSON.parse(normalized); } catch { refuse("document_type"); } }
   }
-  if (extension === ".pdf" && !validPdf(bytes)) refuse("document_type");
+  if (extension === ".pdf" && !await validPdf(bytes)) refuse("document_type");
   return mime;
 }
 function decodeText(bytes: Buffer): string | null {
@@ -108,7 +109,7 @@ function decodeText(bytes: Buffer): string | null {
     return new TextDecoder("utf-8", { fatal:true }).decode(bytes);
   } catch { return null; }
 }
-function validIsoMedia(bytes: Buffer): boolean {
+function validIsoMedia(bytes: Buffer, expectedHandler:"soun"|"vide"): boolean {
   let offset=0, ftyp=false, mediaData=false;
   while(offset+8<=bytes.length) {
     const size=bytes.readUInt32BE(offset), type=bytes.toString("ascii",offset+4,offset+8);
@@ -120,15 +121,37 @@ function validIsoMedia(bytes: Buffer): boolean {
     if(type==="mdat") mediaData=boxSize>header;
     offset+=boxSize;
   }
-  return offset===bytes.length && ftyp && mediaData;
+  if(offset!==bytes.length||!ftyp||!mediaData)return false;
+  const moov=readIsoBoxes(bytes,0,bytes.length)?.find(box=>box.type==="moov");
+  if(!moov)return false;
+  const tracks=readIsoBoxes(bytes,moov.payload,moov.end)?.filter(box=>box.type==="trak")??[];
+  return tracks.some(track=>{
+    const mdia=readIsoBoxes(bytes,track.payload,track.end)?.find(box=>box.type==="mdia");
+    const handler=mdia&&readIsoBoxes(bytes,mdia.payload,mdia.end)?.find(box=>box.type==="hdlr");
+    return !!handler&&handler.end-handler.payload>=12&&bytes.toString("ascii",handler.payload+8,handler.payload+12)===expectedHandler;
+  });
 }
-function validPdf(bytes:Buffer):boolean {
+type IsoBox={type:string;payload:number;end:number};
+function readIsoBoxes(bytes:Buffer,start:number,end:number):IsoBox[]|null {
+  const boxes:IsoBox[]=[];
+  for(let offset=start;offset<end;) {
+    if(offset+8>end)return null;
+    const size=bytes.readUInt32BE(offset),type=bytes.toString("ascii",offset+4,offset+8),header=size===1?16:8;
+    if(offset+header>end)return null;
+    const boxSize=size===0?end-offset:size===1?Number(bytes.readBigUInt64BE(offset+8)):size;
+    if(!Number.isSafeInteger(boxSize)||boxSize<header||boxSize>end-offset)return null;
+    boxes.push({type,payload:offset+header,end:offset+boxSize});offset+=boxSize;
+  }
+  return boxes;
+}
+async function validPdf(bytes:Buffer):Promise<boolean> {
   if(!/^%PDF-\d\.\d/.test(bytes.toString("latin1",0,8)))return false;
-  const text=bytes.toString("latin1");
-  const match=/\bstartxref\s+(\d+)\s+%%EOF\s*$/.exec(text);
-  if(!match)return false;
-  const offset=Number(match[1]);
-  return Number.isSafeInteger(offset) && offset>=8 && offset<bytes.length && /^(?:xref\b|\d+\s+\d+\s+obj\b)/.test(text.slice(offset));
+  try {
+    const {getDocument}=await import("pdfjs-dist/legacy/build/pdf.mjs");
+    const loading=getDocument({data:Uint8Array.from(bytes),isEvalSupported:false,useSystemFonts:false,stopAtErrors:true} as Parameters<typeof getDocument>[0]);
+    try { const document=await loading.promise;if(document.numPages<1)return false;await document.getPage(1);return true; }
+    finally { await loading.destroy(); }
+  } catch { return false; }
 }
 function validMp3(bytes: Buffer): boolean {
   let offset=0;

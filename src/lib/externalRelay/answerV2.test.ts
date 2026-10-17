@@ -37,6 +37,12 @@ test("rich validation checks syntax, code exceptions, blocks, depth and columns"
   expect(richTextRefusal("[a \\[b\\]](https://example.com)", caps)).toBeNull();
   expect(richTextRefusal(Array(500).fill("# x").join("\n"), caps)).toBeNull();
   expect(richTextRefusal(Array(501).fill("# x").join("\n"), caps)).toBe("blocks");
+  const table=(rows:number)=>`| A | B |\n| --- | --- |\n${Array(rows).fill("| x | y |").join("\n")}`;
+  expect(richTextRefusal(table(499),caps)).toBeNull();
+  expect(richTextRefusal(table(500),caps)).toBe("blocks");
+  expect(richTextRefusal(Array.from({length:200},(_,i)=>`> Quote ${i}\n\nParagraph ${i}`).join("\n\n"),caps)).toBe("blocks");
+  expect(richTextRefusal([...Array.from({length:166},(_,i)=>`> Quote ${i}\n\nParagraph ${i}`),"# one","# two"].join("\n\n"),caps)).toBeNull();
+  expect(richTextRefusal([...Array.from({length:167},(_,i)=>`> Quote ${i}\n\nParagraph ${i}`)].join("\n\n"),caps)).toBe("blocks");
   expect(richTextRefusal(Array(500).fill("# a|b").join("\n"), caps)).toBeNull();
   expect(richTextRefusal(Array(501).fill("# a|b").join("\n"), caps)).toBe("blocks");
   expect(richTextRefusal("| a | b |\n| --- | --- |\n| x | y |", caps)).toBeNull();
@@ -46,6 +52,12 @@ test("rich validation checks syntax, code exceptions, blocks, depth and columns"
   expect(richTextRefusal("\\`<b>raw</b>`", caps)).toBe("raw_html");
   expect(richTextRefusal("|" + Array(20).fill("x").join("|") + "|\n|" + Array(20).fill("---").join("|") + "|", caps)).toBeNull();
   expect(richTextRefusal("|" + Array(21).fill("x").join("|") + "|\n|" + Array(21).fill("---").join("|") + "|", caps)).toBe("table_columns");
+});
+test("nested link labels are scanned in linear time at the rich source limit",()=>{
+  const text="[".repeat(16000)+"]".repeat(16000);
+  const start=performance.now();
+  expect(richTextRefusal(text,caps)).toBeNull();
+  expect(performance.now()-start).toBeLessThan(100);
 });
 test("buttons and captions enforce every wire bound", () => {
   const good = { text: "x".repeat(64), url: "https://example.com/" };

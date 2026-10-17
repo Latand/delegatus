@@ -11,6 +11,23 @@ const root = fs.mkdtempSync(path.join("/tmp", "relay-attachments-"));
 const MiB=1024*1024;
 afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
 const caps = answerCapabilities(richRequest(true), "codex");
+const validAudio=Buffer.from(fs.readFileSync(path.join(import.meta.dir,"fixtures/media/valid-audio.m4a.b64"),"utf8").trim(),"base64");
+const validVideo=Buffer.from(fs.readFileSync(path.join(import.meta.dir,"fixtures/media/valid-video.mp4.b64"),"utf8").trim(),"base64");
+function pdfWithObjects(objects:string[]) {
+  let text="%PDF-1.4\n";const offsets=[0];
+  for(let i=0;i<objects.length;i++){offsets.push(Buffer.byteLength(text));text+=`${i+1} 0 obj\n${objects[i]}\nendobj\n`;}
+  const xref=Buffer.byteLength(text);text+=`xref\n0 ${objects.length+1}\n0000000000 65535 f \n`;
+  for(const offset of offsets.slice(1))text+=`${String(offset).padStart(10,"0")} 00000 n \n`;
+  text+=`trailer\n<< /Size ${objects.length+1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+  return Buffer.from(text,"ascii");
+}
+const validPdf=()=>pdfWithObjects([
+  "<< /Type /Catalog /Pages 2 0 R >>",
+  "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+  "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 10 10] /Resources << >> /Contents 4 0 R >>",
+  "<< /Length 0 >>\nstream\n\nendstream",
+]);
+const isoBox=(type:string,payload:Buffer)=>Buffer.concat([Buffer.from([0,0,0,payload.length+8]),Buffer.from(type),payload]);
 async function generated() {
   const dir = fs.mkdtempSync(path.join(root, "generated-"));
   const bytes = await sharp({ create: { width: 2, height: 2, channels: 3, background: "red" } }).png().toBuffer();
@@ -57,12 +74,11 @@ test("a 64 MiB owner attachment batch reads, scans, hashes and stages outside th
 test("content validation decodes text, checks declared structures and rejects truncated media",async()=>{
   const image=(await generated()).bytes;
   const mp3=Buffer.alloc(417);mp3.set([0xff,0xfb,0x90,0x64]);
-  const iso=Buffer.from([0,0,0,16,102,116,121,112,77,52,65,32,0,0,0,0,0,0,0,12,109,100,97,116,1,2,3,4]);
-  const pdf=Buffer.from("%PDF-1.4\nxref\n0 1\n0000000000 65535 f \ntrailer\n<< /Size 1 >>\nstartxref\n9\n%%EOF\n");
+  const pdf=validPdf();
   expect(await validateAttachmentContent(image,".png","photo")).toBe("image/png");
   expect(await validateAttachmentContent(mp3,".mp3","audio")).toBe("audio/mpeg");
-  expect(await validateAttachmentContent(iso,".m4a","audio")).toBe("audio/mp4");
-  expect(await validateAttachmentContent(iso,".mp4","video")).toBe("video/mp4");
+  expect(await validateAttachmentContent(validAudio,".m4a","audio")).toBe("audio/mp4");
+  expect(await validateAttachmentContent(validVideo,".mp4","video")).toBe("video/mp4");
   expect(await validateAttachmentContent(pdf,".pdf","document")).toBe("application/pdf");
   expect(await validateAttachmentContent(Buffer.from("report"),".txt","document")).toBe("text/plain");
   const utf16=Buffer.concat([Buffer.from([0xff,0xfe]),Buffer.from("<html><body>x</body></html>","utf16le")]);
@@ -72,11 +88,32 @@ test("content validation decodes text, checks declared structures and rejects tr
     [Buffer.from("<script>alert(1)</script>"),".txt"],
     [Buffer.from("plain text, not JSON"),".json"],
     [Buffer.from("%PDF-1.4 truncated"),".pdf"],
+    [Buffer.from("%PDF-1.4\nstartxref\n9\n%%EOF\n"),".pdf"],
     [Buffer.from("ID3fixture audio"),".mp3"],
     [Buffer.from([0,0,0,16,102,116,121,112,105,115,111,109]),".mp4"],
   ] as const;
   for(const [bytes,extension] of prohibited) await expect(validateAttachmentContent(bytes,extension,extension===".mp3"?"audio":extension===".mp4"?"video":"document")).rejects.toMatchObject({code:"document_type"});
+  await expect(validateAttachmentContent(validAudio,".mp4","video")).rejects.toMatchObject({code:"document_type"});
+  await expect(validateAttachmentContent(validVideo,".m4a","audio")).rejects.toMatchObject({code:"document_type"});
+  await expect(validateAttachmentContent(validAudio,".m4a","document")).rejects.toMatchObject({code:"document_type"});
+  await expect(validateAttachmentContent(validPdf(),".pdf","audio")).rejects.toMatchObject({code:"document_type"});
+  await expect(validateAttachmentContent(pdfWithObjects(["<< /Type /Catalog >>"]),".pdf","document")).rejects.toMatchObject({code:"document_type"});
+  const ftyp=isoBox("ftyp",Buffer.from("isom\x00\x00\x02\x00isomiso2","binary"));
+  const mdat=isoBox("mdat",Buffer.from([1,2,3]));
+  await expect(validateAttachmentContent(Buffer.concat([ftyp,mdat]),".mp4","video")).rejects.toMatchObject({code:"document_type"});
+  await expect(validateAttachmentContent(Buffer.concat([ftyp,isoBox("moov",Buffer.alloc(0)),mdat]),".mp4","video")).rejects.toMatchObject({code:"document_type"});
   await expect(validateAttachmentContent(Buffer.from('{"ok":true}'),".json","document")).resolves.toBe("application/json");
+});
+test("generated media staging survives attribution messages and cancellation cleans its worker directory",async()=>{
+  const {dir,refs}=await generated();
+  const staged=await stageGeneratedAttachments(refs,dir,new Set(["exec-1.png"]),root,caps,[]);
+  expect(staged).toHaveLength(1);
+  const before=new Set(fs.readdirSync(root).filter(name=>name.startsWith("relay-job-")));
+  const controller=new AbortController();
+  const pending=stageGeneratedAttachments(refs,dir,new Set(["exec-1.png"]),root,caps,[],undefined,controller.signal);
+  setTimeout(()=>controller.abort(new DOMException("test cancelled","AbortError")),0);
+  await expect(pending).rejects.toMatchObject({name:"AbortError"});
+  expect(new Set(fs.readdirSync(root).filter(name=>name.startsWith("relay-job-")))).toEqual(before);
 });
 test("generated staging refuses outside files, symlinks, hardlinks and old files", async () => {
   const { dir, refs } = await generated();
@@ -123,15 +160,14 @@ test("owner files cover every negotiated kind, secret scans and atomic replaceme
   const env={home:root,stateDir:path.join(root,"state")};
   const png=await sharp({create:{width:2,height:2,channels:3,background:"red"}}).png().toBuffer();
   const mp3=Buffer.alloc(417);mp3.set([0xff,0xfb,0x90,0x64]);
-  const iso=Buffer.from([0,0,0,16,102,116,121,112,77,52,65,32,0,0,0,0,0,0,0,12,109,100,97,116,1,2,3,4]);
-  const samples=[ ["photo","photo.png",png], ["document","report.md",Buffer.from("# Report")], ["audio","track.mp3",mp3], ["audio","track.m4a",iso], ["video","clip.mp4",iso] ] as const;
+  const samples=[ ["photo","photo.png",png], ["document","report.md",Buffer.from("# Report")], ["audio","track.mp3",mp3], ["audio","track.m4a",validAudio], ["video","clip.mp4",validVideo] ] as const;
   for(const [kind,name,bytes] of samples){
     const file=path.join(handoff,name);fs.writeFileSync(file,bytes);
     const files=await stageOwnerAttachments([{path:file,kind}],root,caps,[],env);
     expect(files).toHaveLength(1); expect(files[0]?.kind).toBe(kind);
     expect(fs.readFileSync(files[0]!.file)).toEqual(bytes);
   }
-  const pdf=Buffer.from("%PDF-1.4\nxref\n0 1\n0000000000 65535 f \ntrailer\n<< /Size 1 >>\nstartxref\n9\n%%EOF\n");
+  const pdf=validPdf();
   fs.writeFileSync(path.join(handoff,"report.pdf"),pdf);
   expect(await stageOwnerAttachments([{path:path.join(handoff,"report.pdf"),kind:"document"}],root,caps,[],env)).toHaveLength(1);
   fs.writeFileSync(path.join(handoff,"broken.pdf"),Buffer.from("%PDF-1.4 truncated"));
