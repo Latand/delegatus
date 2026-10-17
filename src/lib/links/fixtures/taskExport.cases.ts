@@ -17,6 +17,7 @@ const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-export-"));
 process.env.LLV_STATE_DIR = root;
 const { mutateTasks } = await import("@/lib/tasks/store");
 const { roleMemoryCollection, withoutStoredLessonsIn } = await import("@/lib/memory/roleStore");
+const { persistProjectAliases } = await import("@/lib/projects/aliases");
 const { TaskExchange } = await import("../taskExchange");
 const { installPrefix } = await import("../stamp");
 const { readScanPage } = await import("../taskFeed");
@@ -72,6 +73,44 @@ test("unchanged failing exchange reuses its page without cloning memory per task
     expect(snapshot.mock.calls.length - calls).toBe(0);
     expect(calls).toBeLessThanOrEqual(1);
   } finally { snapshot.mockRestore(); }
+});
+
+test("an unacknowledged export retry observes alias-only project succession", async () => {
+  const f = fixture(1);
+  const source = "dir-alias-source";
+  const target = `repo-${"b".repeat(32)}`;
+  mutateTasks(() => ({ tasks: f.tasks.map(task => ({ ...task, project: source })), result: null }), path.join(root, "tasks.json"));
+  const linked = new Set([target]);
+  const first = await f.exchange.request(linked);
+  expect(first.push?.rows).toEqual([]);
+
+  expect(persistProjectAliases([{ source, target, displayName: "Alias fixture" }])).toBe(true);
+
+  const retry = await f.exchange.request(linked);
+  const fresh = readScanPage("", { self, projects: linked, skipPrefix: null, includeBoard: false, includePrototypeReview: false, peerTaskWireVersion: 0 });
+  expect(retry.push?.rows).toEqual(fresh.rows);
+  expect(retry.push?.rows).toHaveLength(1);
+});
+
+test("an unacknowledged export retry observes recovery-only project succession", async () => {
+  const f = fixture(1);
+  const source = "dir-recovery-source";
+  const target = `repo-${"c".repeat(32)}`;
+  mutateTasks(() => ({ tasks: f.tasks.map(task => ({ ...task, project: source })), result: null }), path.join(root, "tasks.json"));
+  const linked = new Set([target]);
+  const first = await f.exchange.request(linked);
+  expect(first.push?.rows).toEqual([]);
+
+  const { worktreeRecoveryCollection } = await import("@/lib/projects/worktreeRecoveryStore");
+  worktreeRecoveryCollection().boundedPatch(1, tx => tx.put({ source, target, displayName: "Recovery fixture", cwd: "/fixture/worktree",
+    repo: "/fixture/repo", worktree: "fixture", event: { type: "project_moved", id: "recovery-fixture", seq: 1,
+      at, state: "completed", summary: "Fixture succession", project: target, pipelineId: null, stageId: null,
+      attempt: null, conversationId: null, role: null } }));
+
+  const retry = await f.exchange.request(linked);
+  const fresh = readScanPage("", { self, projects: linked, skipPrefix: null, includeBoard: false, includePrototypeReview: false, peerTaskWireVersion: 0 });
+  expect(retry.push?.rows).toEqual(fresh.rows);
+  expect(retry.push?.rows).toHaveLength(1);
 });
 
 test("matcher reads revision before cloning and refreshes after a rule write", () => {

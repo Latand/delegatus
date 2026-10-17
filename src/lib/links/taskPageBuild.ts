@@ -30,7 +30,7 @@ export class TaskPageBuilder {
     const held = this.revisions.get(database);
     if (held?.signature === signature) return held.value;
     const value = [stat ? `${stat.dev}:${stat.ino}` : "absent",
-      [...readStateCollectionRevisions(database, ["tasks", "task_tombstones", "task_export_omissions", "pipelines"])]];
+      [...readStateCollectionRevisions(database, ["tasks", "task_tombstones", "task_export_omissions", "pipelines", "worktree_recovery"])]];
     // One installation, plus at most one explicit fixture task store.
     if (this.revisions.size >= 2) this.revisions.clear();
     this.revisions.set(database, { signature, value });
@@ -52,9 +52,11 @@ export class TaskPageBuilder {
     const database = statePath("state.sqlite");
     const context = () => {
       const seat = fs.statSync(statePath("orchestrator-seats.json"), { bigint: true, throwIfNoEntry: false });
+      const aliases = fs.statSync(statePath("project-aliases.json"), { bigint: true, throwIfNoEntry: false });
       return JSON.stringify([source?.revision(), this.revision(database),
       source && source.database !== database ? this.revision(source.database) : null, storedLessonRevision(),
-      seat ? `${seat.dev}:${seat.ino}:${seat.size}:${seat.mtimeNs}:${seat.ctimeNs}` : "absent"]);
+      seat ? `${seat.dev}:${seat.ino}:${seat.size}:${seat.mtimeNs}:${seat.ctimeNs}` : "absent",
+      aliases ? `${aliases.dev}:${aliases.ino}:${aliases.size}:${aliases.mtimeNs}:${aliases.ctimeNs}` : "absent"]);
     };
     const before = context();
     const key = JSON.stringify([request.kind, request.after, request.filter, this.filesEpoch, before]);
