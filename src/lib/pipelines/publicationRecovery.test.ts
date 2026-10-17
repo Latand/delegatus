@@ -190,6 +190,32 @@ test("a replacement inherits creation receipts for output adopted from the lost 
   } finally { f.close(); }
 });
 
+test("a decision repair after replacement keeps the accepted proof boundary", async () => {
+  const f = await fixture();
+  try {
+    const first = await f.commit("lost attempt output");
+    const old = current().runs[0]!.attempts[0]!;
+    f.h.durableTurns.set(old.agentPath!, { turn: "busy", message: null, lastRecordAt: Date.parse(old.startedAt!) + 1 });
+    f.h.advanceWallClock(600_000); f.h.ports.conversationTurnInterrupted = async () => "dead";
+    await tickPipelines([entry(old.agentPath!)], f.h.ports); await tickPipelines([], f.h.ports);
+    expect(current().runs[0]!.attempts).toHaveLength(2);
+
+    const accepted = await f.commit("replacement implementation");
+    f.refuse(); await f.finish(2);
+    expect(current().state).toBe("needs_decision");
+    expect(current().lastPassedCommit).toBe(accepted);
+    expect(accepted).not.toBe(first);
+
+    await rawPatchPipeline(current().id, { action: "resolve-decision", clientRequestId: "replacement-publication-repair",
+      answer: "Repair the publication failure and retry.", expectedStageId: "build", expectedAttempt: 2,
+      expectedRevision: pipelineRevision(current()) }, f.h.ports, OPERATOR_PAUSE_RESUME_ACTOR);
+    fs.unlinkSync(path.join(f.hooks, "pre-push")); await tickPipelines([], f.h.ports);
+    const repaired = await f.commit("decision repair output"); await f.finish(3);
+    expect(current()).toMatchObject({ lastPassedCommit: repaired, publishedCommit: repaired,
+      cursor: { stageId: "review", state: "pending" } });
+  } finally { f.close(); }
+});
+
 test.each(["foreign", "main-only", "rewritten", "forged-reflog"])("publication preserves an accepted head when the moved producer head is %s", async shape => {
   const f = await fixture();
   try {
@@ -248,6 +274,41 @@ test("a publication decision retains actor, revision, publisher and producer fen
     expect(current().runs[0]!.attempts).toHaveLength(1);
     expect(f.h.spawnInputs).toHaveLength(1);
   } finally { f.close(); }
+});
+
+test("producer reads stay outside the shared mutation lease and stale decisions are refused", async () => {
+  const f = await fixture();
+  const previousWait = process.env.LLV_PIPELINE_LOCK_WAIT_MS;
+  let entered!: () => void;
+  let release!: () => void;
+  const reading = new Promise<void>(resolve => { entered = resolve; });
+  const held = new Promise<void>(resolve => { release = resolve; });
+  try {
+    await f.commit("implementation"); f.refuse(); await f.finish();
+    const parked = current();
+    f.h.ports.conversationAgentActive = async () => { entered(); await held; return false; };
+    process.env.LLV_PIPELINE_LOCK_WAIT_MS = "0";
+    const request = { action: "resolve-decision" as const, clientRequestId: "held-producer-read",
+      answer: "Retry after repairing publication.", expectedStageId: "build", expectedAttempt: 1,
+      expectedRevision: pipelineRevision(parked) };
+    const decision = rawPatchPipeline(parked.id, request, f.h.ports, OPERATOR_PAUSE_RESUME_ACTOR);
+    await reading;
+
+    const other = await createPipelineFromRequest({ task: "Unrelated lane mutation", repoDir: f.repo,
+      baseRef: await f.git(f.repo, "rev-parse", "HEAD"), stages: stages as never }, f.h.ports);
+    expect(other.error).toBeUndefined();
+    const changed = await rawPatchPipeline(parked.id, { action: "pause" }, f.h.ports, OPERATOR_PAUSE_RESUME_ACTOR);
+    expect(changed.error).toBeUndefined();
+    release();
+    const refused = await decision;
+    expect(refused.code).toBe("STAGE_CHANGED");
+    expect(current().runs[0]!.attempts).toHaveLength(1);
+  } finally {
+    release();
+    if (previousWait === undefined) delete process.env.LLV_PIPELINE_LOCK_WAIT_MS;
+    else process.env.LLV_PIPELINE_LOCK_WAIT_MS = previousWait;
+    f.close();
+  }
 });
 
 test.each(["status", "branch", "head"])("a producer repair head raced at its final %s observation stays unpublished", async observation => {

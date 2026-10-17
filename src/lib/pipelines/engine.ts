@@ -12396,6 +12396,7 @@ export function decisionAnswerActorRefusal(
     that the old producer has finished its repair turn. */
 async function resolveDecision(
   pipeline: Pipeline, req: PatchPipelineRequest, actor: PauseResumeActor | null, ports: PipelinePorts,
+  producerEvidence?: { conversationId: string; active: boolean | null; durable: Awaited<ReturnType<typeof stageRepairEvidence>> },
 ): Promise<PipelinePatchResult> {
   const refusal = decisionAnswerActorRefusal(pipeline, actor, req.clientRequestId);
   if (refusal) return refusal;
@@ -12449,18 +12450,18 @@ async function resolveDecision(
     return { error: "the publication or its producer repair is still settling", status: 409 };
   }
   if (publicationDecision) {
-    const producerFence = pipelineRevision(pipeline);
     const worker = publicationRepairWorker(pipeline, attempt) ?? { stage, attempt };
     if (worker.attempt.conversationId) {
-      const active = await ports.conversationAgentActive(worker.attempt.conversationId);
-      const durable = await stageRepairEvidence(worker.attempt, ports);
+      const evidence = producerEvidence?.conversationId === worker.attempt.conversationId ? producerEvidence : null;
+      if (!evidence) return { error: "the decision snapshot changed while checking its producer; read the lane again", status: 409, code: "STAGE_CHANGED" };
+      const active = evidence?.active ?? null;
+      const durable = evidence?.durable ?? null;
       if (active === true || durable?.turn === "busy"
         || ports.conversationDeliveryOutstanding?.(worker.attempt.conversationId)
         || liveBackgroundTasks(durable?.backgroundTasks ?? [], unixMs(ports.now())).length > 0) {
         return { error: "the producer repair turn may still be running or queued", status: 409 };
       }
     }
-    if (pipelineRevision(pipeline) !== producerFence) return { error: "the pipeline changed while checking its producer", status: 409, code: "STAGE_CHANGED" };
   }
   const decision: PipelineDecisionAnswer = {
     clientRequestId: req.clientRequestId, expectedRevision: req.expectedRevision,
@@ -12929,6 +12930,22 @@ export async function patchPipeline(
     });
   }
 
+  let decisionProducerEvidence: { conversationId: string; active: boolean | null; durable: Awaited<ReturnType<typeof stageRepairEvidence>> } | undefined;
+  if (req.action === "resolve-decision") {
+    const snapshot = findPipelineRecord(id);
+    const snapshotStage = snapshot ? currentStage(snapshot) : null;
+    const snapshotAttempt = snapshot && snapshotStage ? currentAttempt(snapshot, snapshotStage.id) : null;
+    if (snapshot && snapshotAttempt && snapshot.state === "needs_decision" && passedStagePublicationPark(snapshot, snapshotAttempt)) {
+      const worker = publicationRepairWorker(snapshot, snapshotAttempt) ?? { stage: snapshotStage!, attempt: snapshotAttempt };
+      if (worker.attempt.conversationId) {
+        const conversationId = worker.attempt.conversationId;
+        const active = await ports.conversationAgentActive(conversationId);
+        const durable = await stageRepairEvidence(worker.attempt, ports);
+        decisionProducerEvidence = { conversationId, active, durable };
+      }
+    }
+  }
+
   let linkRepositories: string[] = [];
   const patched = await withPipelineMutation<PipelinePatchResult>(async (pipelines, persist) => {
     const pipeline = pipelines.find((item) => item.id === id);
@@ -12954,7 +12971,7 @@ export async function patchPipeline(
       return { pipeline };
     }
     if (req.action === "resolve-decision") {
-      const result = await resolveDecision(pipeline, req, actor, ports);
+      const result = await resolveDecision(pipeline, req, actor, ports, decisionProducerEvidence);
       if (result.pipeline && !result.replayed) await persist();
       return result;
     }

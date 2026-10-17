@@ -87,6 +87,7 @@ export async function settleStageAttemptPush(pipeline: Pipeline, attempt: Pipeli
     const run = pipeline.runs?.find(run => run.attempts.some(item => item.launchId === attempt.launchId));
     const attempts = new Map(run?.attempts.map(item => [item.n, item]));
     let child = attempt;
+    let acceptedProofBoundary: string | null = null;
     for (;;) {
       const decision = child.decisionAnswerId ? pipeline.decisionAnswers?.find(answer => answer.clientRequestId === child.decisionAnswerId
         && answer.stageId === run?.stageId && answer.nextAttempt === child.n
@@ -113,7 +114,8 @@ export async function settleStageAttemptPush(pipeline: Pipeline, attempt: Pipeli
       const acceptedBoundary = pipeline.lastPassedCommit;
       const boundaryIsValid = parent.verdict?.status === "pass" && /^[0-9a-f]{40}$/.test(acceptedBoundary)
         && (await exec("git", ["merge-base", "--is-ancestor", acceptedBoundary, start.head], pipeline.worktreeDir)).code === 0;
-      anchor = boundaryIsValid ? acceptedBoundary : parentStart.head;
+      if (decision && boundaryIsValid) acceptedProofBoundary = acceptedBoundary;
+      anchor = acceptedProofBoundary ?? parentStart.head;
       child = parent;
     }
     const remote = delivery.target.remote;
