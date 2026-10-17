@@ -2088,15 +2088,18 @@ async function repository() {
   savePipelines([]);
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "local-publication-"));
   const repo = path.join(root, "repo"); fs.mkdirSync(repo);
+  const h = harness();
   const git = async (cwd: string, ...args: string[]) => {
-    const result = await realExec("git", ["-c", "user.name=Fixture", "-c", "user.email=noreply@example.invalid", ...args], cwd);
+    const date = ["commit", "merge", "rebase", "am"].includes(args[0]!) ? h.ports.now() : undefined;
+    const result = await realExec("git", ["-c", "user.name=Fixture", "-c", "user.email=noreply@example.invalid", ...args], cwd,
+      date ? { GIT_AUTHOR_DATE: date, GIT_COMMITTER_DATE: date } : undefined);
     if (result.code !== 0) throw new Error(result.stderr || result.stdout);
     return result.stdout.trim();
   };
   await git(repo, "init", "-q", "-b", "main");
   await git(repo, "commit", "-q", "--allow-empty", "-m", "base");
   const base = await git(repo, "rev-parse", "HEAD");
-  const h = harness(); let pushes = 0;
+  let pushes = 0;
   h.ports.exec = (...args) => {
     if (args[0] === "git" && args[1][0] === "push") pushes++;
     return realExec(...args);
@@ -2127,6 +2130,7 @@ async function repository() {
   const addRemote = async (name = "origin") => {
     const remote = path.join(root, `${name}.git`);
     await git(repo, "init", "-q", "--bare", "-b", "main", remote);
+    fs.mkdirSync(path.join(remote, "hooks"), { recursive: true });
     await git(repo, "remote", "add", name, remote);
     return remote;
   };

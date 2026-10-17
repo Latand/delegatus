@@ -259,3 +259,32 @@ test("a real process restart resets counter retention and sampling budgets", asy
   expect(fresh.after.dropped).toBe(0);
   expect(fresh.after.readBytes).toBe(0);
 });
+
+test.skipIf(process.platform !== "linux")("production Bun process attributes SQLite bytes after sampler collisions and transient latency", async () => {
+  for (let restart = 0; restart < 2; restart++) {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "read-counter-process-"));
+    const roots = Object.fromEntries(["HOME", "XDG_CONFIG_HOME", "TMPDIR", "LLV_STATE_DIR"].map(name => {
+      const root = path.join(directory, name); fs.mkdirSync(root); return [name, root];
+    }));
+    const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "readAttributionFixture.ts"), "service-recovery"], {
+      env: { ...process.env, ...roots, NODE_ENV: "production" }, stdout: "pipe", stderr: "pipe",
+    });
+    try {
+      const [stdout, stderr, exit] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+      expect(exit, stderr).toBe(0);
+      const report = JSON.parse(stdout);
+      expect(report.nodeEnv).toBe("production");
+      expect(report.gap.reads.samplerDegraded).toBe(false);
+      expect(report.gap.reads.readBytes).toBeGreaterThan(1_000_000);
+      expect(report.gap.reads.sampledCalls).toBeGreaterThan(0);
+      expect(report.gap.reads.top.find((row: { reader: string }) => row.reader === "state.all"))
+        .toMatchObject({ operation: "files.get", connection: report.connection, readBytes: report.gap.reads.readBytes });
+      expect(report.counters.connection).toBe(report.connection);
+      expect(report.counters.readBytes).toBe(report.gap.reads.readBytes);
+      expect(report.gap.operations[0].readBytes).toBe(report.gap.reads.readBytes);
+    } finally {
+      if (child.exitCode === null) { child.kill(); await child.exited; }
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  }
+}, 20_000);

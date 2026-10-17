@@ -7,12 +7,12 @@ export type ReadCounter = { bytes: number; observerBytes: number; observerMs?: n
 type CounterSampler = { buffer: SharedArrayBuffer; cells: BigInt64Array; worker: Worker; failed: boolean };
 let sampler: CounterSampler | undefined;
 let samplerFailed = false;
-const samplerSource = `
+export const samplerSource = `
 const fs = require('node:fs');
 const { workerData } = require('node:worker_threads');
 const cells = new BigInt64Array(workerData.buffer);
 const path = '/proc/' + workerData.pid + '/task/' + workerData.tid + '/io';
-let timer, degraded = false, failures = 0;
+let failures = 0;
 function sample() {
   const started = performance.now();
   if (workerData.delayMs > 0) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, workerData.delayMs);
@@ -23,7 +23,9 @@ function sample() {
     if (!match) throw new Error('counter unavailable');
     const bytes = BigInt(match[1]);
     const ownerAfter = Atomics.load(cells, 8);
-    const owner = ownerBefore === ownerAfter ? ownerBefore : 0;
+    // An ownership collision is an unowned sample, not a source failure.
+    // BigInt atomics require the sentinel to have the same type as the ids.
+    const owner = ownerBefore === ownerAfter ? ownerBefore : 0n;
     const priorOwner = Atomics.load(cells, 11);
     const priorBytes = Atomics.load(cells, 12);
     if (owner !== 0n && owner === priorOwner && bytes >= priorBytes) {
@@ -52,14 +54,15 @@ function sample() {
   const elapsed = performance.now() - started;
   Atomics.add(cells, 3, BigInt(Math.max(0, Math.round(elapsed * 1000))));
   Atomics.add(cells, 5, 1n);
-  if (elapsed > 10 || failures >= 3) {
-    degraded = true;
-    Atomics.store(cells, 4, 1n);
-    clearInterval(timer);
-  }
+  const degraded = elapsed > 10 || failures >= 3;
+  Atomics.store(cells, 4, degraded ? 1n : 0n);
+  if (degraded) Atomics.store(cells, 2, -1n);
+  // A descheduled or temporarily inaccessible proc read must not turn off
+  // diagnostics for the rest of the release. Back off on this worker only;
+  // healthy samples restore availability without waiting on the serving loop.
+  setTimeout(sample, degraded ? Math.min(1000, 250 * Math.max(1, failures)) : 10);
 }
 sample();
-if (!degraded) timer = setInterval(sample, 10);
 `;
 
 function counterSampler(): CounterSampler | undefined {

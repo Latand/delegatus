@@ -14,7 +14,7 @@ export const performanceSites = [
   "controller.admission", "controller.reconcile", "controller.lane", "controller.ownership", "controller.task-note", "controller.job-wait", "state.checkpoint", "state.lease-commit", "state.lease-release",
   "controller.port-start", "controller.git-wait", "controller.runtime-wait", "controller.store-wait", "controller.other-wait",
   "http.dispatch", "http.response-ready",
-  "pipeline.git-guard-prepare", "pipeline.attempt-push-proof",
+  "pipeline.git-guard-prepare", "pipeline.attempt-push-proof", "pipeline.pull-request",
   "orchestrator.seat-stat", "orchestrator.seat-read", "orchestrator.seat-parse", "orchestrator.seat-index",
   "registry.writer-snapshot",
 ] as const;

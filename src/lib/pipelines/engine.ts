@@ -1,3 +1,4 @@
+import { ensureStagePullRequest } from "./stagePullRequest";
 import { stageAttemptPushRefusal } from "./stageAttemptPush";
 import { prepareStageGitGuard } from "@/lib/git/stageAttemptGuard";
 import { controllerPipelineKeys, controllerAttemptSelected, controllerReferences, controllerCloseBudget, controllerRuns, controllerTickFingerprint, controllerOffWindowGuard, controllerAssignmentAttached, controllerSettledAttempt, withControllerPipelineScope } from "./controllerScope";
@@ -4234,6 +4235,8 @@ async function retryTerminalStagePublication(
     pipeline.stateDetail = "publication repair changed the reviewed content; review of the repaired head pending";
     return;
   }
+  const pr = await withViewerOperation("pipelines.controller-job", () => performanceSpans.wait("pipeline.pull-request", () => ensureStagePullRequest(pipeline, attempt, ports.exec)));
+  if (!pr.ok) { attempt.error = `publishing the passed stage: ${pr.error}`; park(pipeline, attempt.error, attempt); return; }
   advancePipeline(pipeline, stage, ports, attempt);
 }
 
@@ -4827,9 +4830,14 @@ async function commitPassedStage(
     && result.sha !== pipeline.lastPassedCommit) {
     attempt.outputBaseHead = pipeline.lastPassedCommit;
   }
-  pipeline.lastPassedCommit = result.sha;
   const terminalLocalOutput = pipeline.publication === undefined && stage.kind === "run" && !allowCommit
     && stage.next === null && !!attemptStage(stage, attempt).outputs?.length;
+  if (terminalLocalOutput && publishesRemoteBranch(pipeline)) {
+    const pr = await withViewerOperation("pipelines.controller-job", () => performanceSpans.wait("pipeline.pull-request", () =>
+      ensureStagePullRequest(pipeline, attempt, ports.exec, pipeline.publishedCommit ?? pipeline.lastPassedCommit)));
+    if (!pr.ok) { parkStage(pr.error); return; }
+  }
+  pipeline.lastPassedCommit = result.sha;
   if (!publishesRemoteBranch(pipeline) || terminalLocalOutput) {
     attempt.state = "passed";
     attempt.completedAt = ports.now();
@@ -4863,6 +4871,8 @@ async function commitPassedStage(
     keepPassedStageUnpublished(pipeline, attempt, published.detail);
     return;
   }
+  const pr = await withViewerOperation("pipelines.controller-job", () => performanceSpans.wait("pipeline.pull-request", () => ensureStagePullRequest(pipeline, attempt, ports.exec)));
+  if (!pr.ok) { parkStage(pr.error); return; }
   advancePipeline(pipeline, stage, ports, attempt);
 }
 

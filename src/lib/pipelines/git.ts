@@ -1209,7 +1209,7 @@ export async function mapReplayPatchLocation(
 }
 
 /** The trusted publication detectors apply to names and messages alike. */
-function publicationTextSafe(text: string): string | null {
+function* publicationTextScan(text: string): Generator<void, string | null> {
   const decoded = canonicalSensitiveText(text, true);
   if (decoded.error) return null;
   const view = decoded.text.normalize("NFKC");
@@ -1220,10 +1220,27 @@ function publicationTextSafe(text: string): string | null {
   for (const fingerprint of publicationFingerprints.fingerprints) {
     const text = "exactOnly" in fingerprint && fingerprint.exactOnly ? normalized : compact;
     for (let offset = 0; offset + fingerprint.length <= text.length; offset++) {
+      if (offset % 256 === 0) yield;
       if (crypto.createHash("sha256").update(text.slice(offset, offset + fingerprint.length)).digest("hex") === fingerprint.sha256) return null;
     }
   }
   return normalized;
+}
+
+function publicationTextSafe(text: string): string | null {
+  const scan = publicationTextScan(text);
+  for (;;) { const next = scan.next(); if (next.done) return next.value; }
+}
+
+/** The controller yields between bounded fingerprint slices while checking
+ * a stage summary; synchronous commit validation keeps the same scanner. */
+export async function pipelinePublicationTextSafe(text: string): Promise<string | null> {
+  const scan = publicationTextScan(text);
+  for (;;) {
+    const next = scan.next();
+    if (next.done) return next.value;
+    await new Promise<void>(resolve => setImmediate(resolve));
+  }
 }
 
 /** Admit the literal attribution mailboxes the publication boundary allows.
