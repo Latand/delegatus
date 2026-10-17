@@ -19,3 +19,12 @@ test("pipeline tick joins one coalesced reconciliation inside the live Viewer pr
   expect(response.status).toBe(200);
   expect(calls).toBe(1);
 });
+
+
+test("a refused tick responds without an uncaught route rejection", async () => {
+  const response = await POST.withDependencies(new NextRequest("http://127.0.0.1:19000/api/pipelines/tick", {
+    method: "POST", headers: { origin: "http://127.0.0.1:19000", host: "127.0.0.1:19000" },
+  }), async () => { throw new Error("private failure detail"); });
+  expect(response.status).toBe(503);
+  expect(await response.text()).not.toContain("private failure detail");
+});
