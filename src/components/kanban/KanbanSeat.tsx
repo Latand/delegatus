@@ -304,17 +304,29 @@ export function KanbanSeat({ project, projectName, projectCwd, files, tasks, boa
     return () => observer.disconnect();
   }, [returnable]);
 
-  const returnToSeat = useCallback(() => {
+  /* The strip hides once the head is back, so focus moves into the seat: the
+     composer, or the fold when the seat shows no composer. */
+  const focusSeat = useCallback(() => {
     const section = sectionRef.current;
-    const page = section?.parentElement;
-    if (!section || !page) return;
+    (section?.querySelector<HTMLElement>("[data-orchestrator-conversation] textarea")
+      ?? section?.querySelector<HTMLElement>("[data-seat-collapse]"))?.focus({ preventScroll: true });
+  }, []);
+
+  const returnToSeat = useCallback(() => {
+    const page = sectionRef.current?.parentElement;
+    if (!page) return;
     const calm = typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     page.scrollTo({ top: 0, behavior: calm ? "auto" : "smooth" });
-    /* The strip hides once the head is back, so focus moves into the seat: the
-       composer, or the fold when the seat shows no composer. */
-    (section.querySelector<HTMLElement>("[data-orchestrator-conversation] textarea")
-      ?? section.querySelector<HTMLElement>("[data-seat-collapse]"))?.focus({ preventScroll: true });
-  }, []);
+    focusSeat();
+  }, [focusSeat]);
+
+  /* A strip that hides while it holds focus (the page was scrolled up by the
+     wheel, not by the strip) would drop focus to the body: it goes to the seat. */
+  useEffect(() => {
+    if (returnShown) return;
+    const strip = sectionRef.current?.parentElement?.querySelector<HTMLElement>(":scope > [data-seat-return]");
+    if (strip && strip.contains(document.activeElement)) focusSeat();
+  }, [returnShown, focusSeat]);
 
   const sized = !side && !seat.collapsed && topWidth !== null;
   const style = side

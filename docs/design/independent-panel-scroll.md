@@ -146,10 +146,14 @@ a trackpad or a finger over it scrolls the page to the top. A click, Enter or Sp
 top and moves focus to the composer (the fold button when the seat shows no composer). The board
 is 32 px shorter so the strip covers none of its rows at the page's end.
 
-The lock on the panels is unchanged. The folded seat, the seat at the side and a window under 800 px
-tall draw no strip; the phone draws none because its document does not scroll and the seat card
-never leaves the screen. Driver case: "a strip pinned to the page returns it to the seat"; readings
-in `evidence/panel-scroll/return.json`.
+The lock on the panels is unchanged. The folded seat and the seat at the side draw no strip. A window
+under 800 px tall starts with the seat folded, so it draws none there until the seat is unfolded. The
+phone draws none because its document does not scroll and the seat card never leaves the screen. While
+the strip is shown it covers the top 32 px of the page, so a composer scrolled to within that distance
+of the page's top has its first line under it; the page's scroll padding brings the caret clear on the
+first keystroke. A strip that holds focus when the wheel hides it hands focus to the composer. Driver
+case: "a strip pinned to the page returns it to the seat"; readings in
+`evidence/panel-scroll/return.json`.
 
 ## States to cover
 

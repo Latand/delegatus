@@ -686,6 +686,41 @@ test("a click scrolls the page to its top and puts the cursor in the composer wi
   expect(section(host).getAttribute("data-collapsed")).toBe("0");
 });
 
+test("a strip that holds focus when it hides hands focus to the composer instead of dropping it to the body", async () => {
+  const watched = stubObserver();
+  try {
+    const host = mountSeat();
+    await settle();
+    const watch = watched.find((entry) => entry.target === host.querySelector("[data-seat-head]"))!;
+    flushSync(() => watch.report([{ isIntersecting: false, boundingClientRect: { top: -400 }, rootBounds: { top: 0 } }]));
+    returnButton(host).focus();
+    expect(dom.document.activeElement as unknown as HTMLElement).toBe(returnButton(host));
+
+    /* The page was scrolled up by the wheel: the head is back and the strip hides. */
+    flushSync(() => watch.report([{ isIntersecting: true, boundingClientRect: { top: 10 }, rootBounds: { top: 0 } }]));
+    expect(returnStrip(host)?.hasAttribute("data-shown")).toBe(false);
+    expect(dom.document.activeElement as unknown as HTMLElement).toBe(host.querySelector("[data-orchestrator-conversation] textarea"));
+  } finally {
+    (globalThis as unknown as { IntersectionObserver: unknown }).IntersectionObserver = undefined;
+  }
+});
+
+test("a strip that hides while focus is elsewhere leaves focus where it was", async () => {
+  const watched = stubObserver();
+  try {
+    const host = mountSeat();
+    await settle();
+    const watch = watched.find((entry) => entry.target === host.querySelector("[data-seat-head]"))!;
+    flushSync(() => watch.report([{ isIntersecting: false, boundingClientRect: { top: -400 }, rootBounds: { top: 0 } }]));
+    const fold = foldButton(host);
+    fold.focus();
+    flushSync(() => watch.report([{ isIntersecting: true, boundingClientRect: { top: 10 }, rootBounds: { top: 0 } }]));
+    expect(dom.document.activeElement as unknown as HTMLElement).toBe(fold);
+  } finally {
+    (globalThis as unknown as { IntersectionObserver: unknown }).IntersectionObserver = undefined;
+  }
+});
+
 test("the return strip is absent while the seat is folded or docked at the side, and the fold still works", async () => {
   const host = mountSeat();
   await settle();

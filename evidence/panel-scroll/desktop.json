@@ -794,7 +794,7 @@
       "layout": "rail-hidden",
       "thumbDrag": {
         "from": 0,
-        "to": 0,
+        "to": 554,
         "selected": ""
       },
       "focus": {
@@ -833,12 +833,10 @@
         "head": {
           "row": "column head, finger down",
           "from": 655,
-          "to": 315
+          "to": 310
         }
       }
     }
   ],
-  "failures": [
-    "rail-hidden: the page's thumb dragged 300 px moved the page only to 0"
-  ]
+  "failures": []
 }
