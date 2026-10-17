@@ -24,6 +24,7 @@ export const en = {
   "workers.machineRunning": "{machine} on machine",
 
   "memory.save.failed": "Could not save the shared memory switch. Try again.",
+  "memory.last.memorySource": "Last operator turn: engine memory recall was paused by the installation’s memory source.",
   "memory.last.projectOff": "Last operator turn: shared memory was off for this project.",
   "memory.last.noKey": "Last operator turn: the OpenRouter key was missing.",
   "memory.last.notOwner": "Last operator turn: this release was no longer serving traffic.",

@@ -9,12 +9,15 @@ import type { Database as BunDatabase } from "bun:sqlite";
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { AjvJsonSchemaValidator } from "@modelcontextprotocol/sdk/validation/ajv";
 import { z } from "zod";
 import { prototypePublishSchema } from "@/lib/prototypeReview/input";
 
 import { FOCUS_TARGET_SHAPES } from "@/lib/attention/targets";
 import { statePath } from "@/lib/configDir";
 import { openCurrentDatabase } from "@/lib/state/currentDatabase";
+import { stateDatabaseBusy, stateLockAttempt, waitForStateLock } from "@/lib/state/lockWait";
+import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { DeadlineExceededError, deadlineSignal } from "@/lib/deadline";
 import { DEFAULT_STALL_AFTER_MS } from "@/lib/lifecycle/limits";
 import { operatorLocale } from "@/lib/operator/settings";
@@ -1724,6 +1727,8 @@ type StoredSqliteReceipt = {
 };
 
 export interface SqliteMcpReceiptStoreOptions {
+  /** Async callers use zero-timeout attempts and yield between retries. */
+  busyTimeoutMs?: number;
   legacyFilePath?: string;
   readReceiptCountCap?: number;
   readReceiptByteCap?: number;
@@ -1756,24 +1761,46 @@ export class SqliteMcpReceiptStore implements McpRecoveryReceiptStore {
        pragmas run before the schema transaction. */
     this.db = openCurrentDatabase(filename, () => {
       const db = observeSqlite(new sqlite.Database(filename, { create: true, strict: true }), "mcp-receipts");
-      db.exec("PRAGMA busy_timeout = 5000; PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL; PRAGMA journal_size_limit = 67108864; PRAGMA auto_vacuum = INCREMENTAL;");
-      return db;
+      try {
+        db.exec(`PRAGMA busy_timeout = ${Math.max(0, Math.floor(options.busyTimeoutMs ?? 5000))}`);
+        const walEnabled = () => db.query<{ journal_mode: string }, []>("PRAGMA journal_mode").get()?.journal_mode === "wal";
+        if (!walEnabled()) {
+          try { db.exec("PRAGMA journal_mode = WAL"); }
+          catch (error) {
+            // A concurrent opener can finish the mode switch while this
+            // connection's read-to-write upgrade is refused immediately.
+            if (!stateDatabaseBusy(error) || !walEnabled()) throw error;
+          }
+        }
+        db.exec("PRAGMA synchronous = FULL");
+        db.exec("PRAGMA journal_size_limit = 67108864");
+        db.exec("PRAGMA auto_vacuum = INCREMENTAL");
+        return db;
+      } catch (error) {
+        db.close();
+        throw error;
+      }
     }, { reopened: () => this.initializeSchema() });
     this.readReceiptCountCap = Math.max(1, Math.floor(options.readReceiptCountCap ?? FILE_RECEIPT_CAP));
     this.readReceiptByteCap = Math.max(1, Math.floor(options.readReceiptByteCap ?? SQLITE_READ_RECEIPT_BYTE_CAP));
     this.boundedPendingTtlMs = Math.max(1, Math.floor(options.boundedPendingTtlMs ?? SQLITE_BOUNDED_PENDING_TTL_MS));
     this.now = options.now ?? Date.now;
-    this.initializeSchema();
-    this.importLegacyFile(options.legacyFilePath);
-    this.db.exec("BEGIN IMMEDIATE");
     try {
-      this.pruneBoundedReceipts(this.now());
-      this.db.exec("COMMIT");
+      this.initializeSchema();
+      this.importLegacyFile(options.legacyFilePath);
+      this.db.exec("BEGIN IMMEDIATE");
+      try {
+        this.pruneBoundedReceipts(this.now());
+        this.db.exec("COMMIT");
+      } catch (error) {
+        try { this.db.exec("ROLLBACK"); } catch { /* transaction already closed */ }
+        throw error;
+      }
+      this.secureFiles();
     } catch (error) {
-      try { this.db.exec("ROLLBACK"); } catch { /* transaction already closed */ }
+      this.db.close();
       throw error;
     }
-    this.secureFiles();
   }
 
   claim(key: string, digest: string, retention: ReceiptRetention, binding?: McpRequestBinding, beforeClaim?: () => void): ReceiptClaim {
@@ -1979,7 +2006,7 @@ export class SqliteMcpReceiptStore implements McpRecoveryReceiptStore {
    * Creates the tables and adds every column a database from an earlier
    * schema lacks, in ONE write transaction. Several MCP processes start cold
    * against the same database at once; the write lock makes one of them
-   * inspect and migrate while the others wait on `busy_timeout` and then find
+   * inspect and migrate while the others retry admission and then find
    * the columns already there. Two processes that both inspected first would
    * both ALTER, and the second would throw "duplicate column name".
    */
@@ -2147,6 +2174,30 @@ export class SqliteMcpReceiptStore implements McpRecoveryReceiptStore {
       }
     }
   }
+}
+
+/** Retry only receipt transactions, never the tool binding they protect. Each
+ * failed attempt has rolled back before yielding, including schema startup. */
+export async function openAsyncMcpReceiptStore(
+  filename: string,
+  options: Omit<SqliteMcpReceiptStoreOptions, "busyTimeoutMs"> = {},
+): Promise<McpRecoveryReceiptStore & { close(): void }> {
+  const attempt = <T>(phase: string, operation: () => T): Promise<T> =>
+    withViewerOperation("mcp.receipts", () => waitForStateLock(`mcp.receipts.${phase}`,
+      () => stateLockAttempt(`mcp.receipts.${phase}`, operation, "mcp-receipts"),
+      { waitMs: 5000, subject: "mcp-receipts" }));
+  const store = await attempt("initialize", () => new SqliteMcpReceiptStore(filename, { ...options, busyTimeoutMs: 0 }));
+  return {
+    claim: (...args) => attempt("claim", () => store.claim(...args)),
+    complete: (...args) => attempt("complete", () => store.complete(...args)),
+    release: (...args) => attempt("release", () => store.release(...args)),
+    lookup: (...args) => attempt("lookup", () => store.lookup(...args)),
+    markDispatching: (...args) => attempt("dispatch", () => store.markDispatching(...args)),
+    bindCreatedTarget: (...args) => attempt("bind", () => store.bindCreatedTarget(...args)),
+    fenceUndispatched: (...args) => attempt("fence", () => store.fenceUndispatched(...args)),
+    settle: (...args) => attempt("settle", () => store.settle(...args)),
+    close: () => store.close(),
+  };
 }
 
 function stable(value: unknown): unknown {
@@ -4550,24 +4601,35 @@ const VIEWER_MCP_BASE_INSTRUCTIONS = "This server is Delegatus, registered under
 // the logical arguments, their digest, downstream payload or durable answer.
 for (const name of MCP_TOOL_NAMES) TOOL_INPUT_SCHEMAS[name] = TOOL_INPUT_SCHEMAS[name].extend({ nativeCallerProof: z.string().regex(/^[A-Za-z0-9_-]{43}$/).optional().describe("Injected by the synchronous Delegatus Claude hook. Omit in ordinary arguments; never invent or copy a proof.") });
 
-export function createViewerMcpServer(service: McpToolService): McpServer {
+// Build fixed protocol schemas once beside the tool definitions.
+// Invalid optional task fields still reach the strict
+// task validation callback below before a receipt can be acquired.
+const TOOL_TRANSPORT_SCHEMAS = Object.fromEntries(MCP_TOOL_NAMES.map(toolName => {
+  const schema = TOOL_INPUT_SCHEMAS[toolName];
+  return [toolName, toolName === "create_task" || toolName === "update_task" ? schema.extend(Object.fromEntries(
+    Object.entries(schema.shape).filter(([, fieldSchema]) => fieldSchema.isOptional())
+      .map(([field, fieldSchema]) => [field, fieldSchema.catch((context: { input: unknown } | undefined) => context?.input)]),
+  )) : schema];
+})) as typeof TOOL_INPUT_SCHEMAS;
+
+export function createViewerMcpServer(service: McpToolService, tools: readonly McpToolName[] = MCP_TOOL_NAMES): McpServer {
+  // The SDK uses JSON Schema validation for outgoing elicitation, while tool
+  // inputs use Zod. Stateless tool calls need no AJV instance or meta-schemas.
+  // Keep the SDK's validator and its lifetime local to this server when used.
+  let elicitationValidator: AjvJsonSchemaValidator | undefined;
   const server = new McpServer({ name: MCP_SERVER_NAME, version: "1.0.0" }, {
     instructions: viewerMcpInstructions(),
+    jsonSchemaValidator: { getValidator(schema) {
+      return (elicitationValidator ??= new AjvJsonSchemaValidator()).getValidator(schema);
+    } },
     capabilities: { experimental: { [MCP_TOOL_CATALOG_CAPABILITY]: { version: 1, tools: [...MCP_TOOL_NAMES] } } },
   });
-  for (const toolName of MCP_TOOL_NAMES) {
+  for (const toolName of tools) {
     const taskMutation = toolName === "create_task" || toolName === "update_task";
     const schema = TOOL_INPUT_SCHEMAS[toolName];
-    // The SDK's default validation error has no retryability or field envelope.
-    // Preserve the published input shape, but carry invalid optional task fields through
-    // to our strict validation below, before dispatch or receipt acquisition.
-    const inputSchema = taskMutation ? schema.extend(Object.fromEntries(
-      Object.entries(schema.shape).filter(([, fieldSchema]) => fieldSchema.isOptional())
-        .map(([field, fieldSchema]) => [field, fieldSchema.catch((context: { input: unknown } | undefined) => context?.input)]),
-    )) : schema;
     server.registerTool(toolName, {
       description: TOOL_DESCRIPTIONS[toolName],
-      inputSchema,
+      inputSchema: TOOL_TRANSPORT_SCHEMAS[toolName],
     }, async (args, extra) => {
       if (taskMutation) {
         const parsed = schema.safeParse(args);
@@ -4583,7 +4645,9 @@ export function createViewerMcpServer(service: McpToolService): McpServer {
          capability the route authenticated; it runs as that caller so every
          resolver reads the request's identity rather than this process's. */
       const httpCaller = mcpHttpCallerFromAuthInfo((extra as { authInfo?: unknown }).authInfo);
-      const timeoutMs = 30_000;
+      const forwardedDeadline = ((extra as { _meta?: Record<string, unknown> })._meta)?.["delegatus/deadlineAt"];
+      const timeoutMs = typeof forwardedDeadline === "number" && Number.isFinite(forwardedDeadline)
+        ? Math.max(0, Math.min(30_000, forwardedDeadline - Date.now())) : 30_000;
       const deadline = deadlineSignal(timeoutMs, {
         /* Over stdio a client's cancel reaches `extra.signal`. Over the
            stateless HTTP endpoint it arrives on a later POST, to another
@@ -4607,7 +4671,7 @@ export function createViewerMcpServer(service: McpToolService): McpServer {
              conversation last pointed at. */
           nativeWork: nativeWorkFromRequestMeta((extra as { _meta?: unknown })._meta),
         });
-        const result = await (httpCaller ? runAsMcpHttpCaller({ capability: httpCaller.capability }, call) : call());
+        const result = await (httpCaller ? runAsMcpHttpCaller(httpCaller, call) : call());
         return {
           content: [{ type: "text" as const, text: JSON.stringify(result) }],
           structuredContent: result,
@@ -4650,11 +4714,11 @@ export const MCP_HTTP_CLIENT_ID = "llv-spawn-capability";
     for a request that did not come through it (every stdio call). */
 function mcpHttpCallerFromAuthInfo(authInfo: unknown): (McpHttpCaller & { cancelSignal: (requestId: unknown) => AbortSignal | null }) | null {
   if (!authInfo || typeof authInfo !== "object") return null;
-  const { clientId, token, extra } = authInfo as { clientId?: unknown; token?: unknown; extra?: { cancelSignal?: unknown } };
+  const { clientId, token, extra } = authInfo as { clientId?: unknown; token?: unknown; extra?: { cancelSignal?: unknown; nativePeer?: McpHttpCaller["nativePeer"]; unidentified?: boolean } };
   if (clientId !== MCP_HTTP_CLIENT_ID || typeof token !== "string" || !token) return null;
   const lookup = typeof extra?.cancelSignal === "function" ? extra.cancelSignal as (requestId: unknown) => unknown : null;
   return {
-    capability: token,
+    ...(extra?.nativePeer ? { nativePeer: extra.nativePeer } : extra?.unidentified ? {} : { capability: token }),
     cancelSignal: (requestId) => {
       const signal = lookup?.(requestId);
       return signal instanceof AbortSignal ? signal : null;
@@ -4663,52 +4727,109 @@ function mcpHttpCallerFromAuthInfo(authInfo: unknown): (McpHttpCaller & { cancel
 }
 
 /**
- * The production tool service: bindings, the shared SQLite receipt store every
- * Viewer MCP server writes (so a clientRequestId replays the same way whichever
- * process or transport it arrives on), the per-call policy, and recovery.
+ * The Viewer owns production bindings, durable receipts, policy and recovery.
+ * Forwarded stdio calls use that same service and original request key.
  */
-export async function createProductionViewerMcpService(hostHealthProbe = false, stdioReads = false): Promise<McpToolService> {
-  /* Only a launched agent can delegate its identity. Candidate probes and
-     legacy clients identified by ancestry keep their existing local surface.
-     The Viewer's HTTP service must never delegate back to itself. */
-  if (stdioReads && !hostHealthProbe && /^[A-Za-z0-9_-]{43}$/.test(process.env.LLV_SPAWN_CAPABILITY ?? "")) {
-    const { VIEWER_LARGE_READS, readFromViewer } = await import("./largeReads");
-    let local: Promise<McpToolService> | null = null;
+export async function createProductionViewerMcpService(hostHealthProbe = false, stdio = false, taskExecutor = false): Promise<McpToolService> {
+  /* Forward before importing policy, bindings or receipts. The Viewer owns
+     one service and rechecks authority before disclosing a saved result.
+     Linux native clients prove their process through a per-call Unix peer
+     challenge. The admitted host probe keeps its local candidate service. */
+  if (stdio && !hostHealthProbe) {
+    const { callViewerMcp } = await import("./largeReads");
+    let active = 0;
     return {
       async callTool(toolName, args, context = {}) {
-        if (VIEWER_LARGE_READS.has(toolName as McpToolName)) {
-          try { return await readFromViewer(toolName as McpToolName, args, context); }
-          catch (error) {
-            return failure(toolName, typeof args.clientRequestId === "string" ? args.clientRequestId : null,
-              "tool_failed", error instanceof Error ? error.message : "Viewer MCP read failed", true);
-          }
-        }
-        if (!local) {
-          const created = createProductionViewerMcpService(hostHealthProbe);
-          local = created;
-          created.catch(() => {
-            if (local === created) local = null;
-          });
-        }
-        return (await local).callTool(toolName, args, context);
+        if (active >= 32) return failure(toolName, typeof args.clientRequestId === "string" ? args.clientRequestId : null,
+          "tool_failed", "The MCP adapter has 32 calls in progress; retry with the original request key.", true);
+        active++;
+        try { return await callViewerMcp(toolName as McpToolName, args, context); }
+        catch (error) {
+          // Once fetch starts, a lost reply cannot establish whether a write
+          // committed. Only the shared service may resolve the original key.
+          const mutation = isMutatingMcpTool(toolName as McpToolName);
+          return failure(toolName, typeof args.clientRequestId === "string" ? args.clientRequestId : null,
+            mutation ? "outcome_unknown" : "tool_failed",
+            error instanceof Error ? error.message : "Viewer MCP request failed", !mutation, false,
+            mutation ? { outcome: "unknown", nextAction: "original-key-lookup" } : {});
+        } finally { active--; }
       },
     };
   }
+  // Initialize the Viewer's binding graph before the first tool dispatch.
+  // Receipt construction remains lazy for the inline service; task calls keep
+  // their complete service and protocol work in the owned executor.
   const {
     productionViewerControlDependencies,
     viewerMcpBindings,
     viewerMcpRecoverableTools,
     viewerMcpToolPolicy,
   } = await import("./bindings");
+  if (!hostHealthProbe && !taskExecutor) {
+    const { TASK_EXECUTOR_TOOLS, viewerTaskExecutor } = await import("./taskExecutor");
+    const { currentMcpHttpCaller } = await import("./callerContext");
+    let inline: Promise<McpToolService> | undefined;
+    return { async callTool(name, args, context) {
+      if (TASK_EXECUTOR_TOOLS.has(name) && currentMcpHttpCaller()) {
+        try { return await viewerTaskExecutor().callTool(name, args, context); }
+        catch (error) {
+          return taskExecutorFailure(name, args, error);
+        }
+      }
+      if (!inline) {
+        const created = createProductionViewerMcpService(hostHealthProbe, false, true);
+        inline = created;
+        created.catch(() => { if (inline === created) inline = undefined; });
+      }
+      return (await inline).callTool(name, args, context);
+    } };
+  }
   const controlDependencies = productionViewerControlDependencies(hostHealthProbe);
-  return createMcpToolService(
+  return withMcpDispatchTurns(createMcpToolService(
     viewerMcpBindings(undefined, controlDependencies),
-    new SqliteMcpReceiptStore(statePath("mcp-receipts.sqlite"), {
+    await openAsyncMcpReceiptStore(statePath("mcp-receipts.sqlite"), {
       legacyFilePath: statePath("mcp-receipts.json"),
     }),
     viewerMcpToolPolicy(undefined, hostHealthProbe),
     { timings: productionMcpToolTimings, recovery: viewerMcpRecoverableTools() },
-  );
+  ));
+}
+
+export function taskExecutorFailure(name: string, args: McpToolArgs, error: unknown): McpToolResult {
+  const mutation = isMutatingMcpTool(name as McpToolName);
+  return failure(name, clientRequestId(args), mutation ? "outcome_unknown" : "tool_failed",
+    error instanceof Error ? error.message : "task executor unavailable", !mutation, false,
+    mutation ? { outcome: "unknown", nextAction: "original-key-lookup" } : {});
+}
+
+/** Start one request per timer turn so a burst of synchronous store reads
+ * leaves the Viewer time to service sockets, cancellation and loop probes.
+ * Awaited operations remain concurrent; no transaction or request key is
+ * combined. Awaiting in the caller preserves its AsyncLocalStorage identity. */
+export function withMcpDispatchTurns(service: McpToolService): McpToolService {
+  const waiting: Array<() => void> = [];
+  let scheduled = false;
+  const next = () => {
+    const resume = waiting.shift();
+    if (!resume) { scheduled = false; return; }
+    setTimeout(() => { resume(); next(); }, 0);
+  };
+  return { async callTool(name, args, context) {
+    await new Promise<void>(resolve => {
+      waiting.push(resolve);
+      if (!scheduled) { scheduled = true; next(); }
+    });
+    if (context?.signal?.aborted || (context?.deadlineAt !== undefined && context.deadlineAt <= Date.now())) {
+      // This queued invocation has entered no policy or receipt code. A prior
+      // invocation under the same key may still have committed, so cancellation
+      // cannot establish that the logical mutation was never executed.
+      const mutation = isMutatingMcpTool(name as McpToolName);
+      return failure(name, clientRequestId(args), mutation ? "outcome_unknown" : "tool_failed",
+        "The MCP request ended while waiting for a dispatch turn.", !mutation, false,
+        mutation ? { outcome: "unknown", nextAction: "original-key-lookup" } : {});
+    }
+    return service.callTool(name, args, context);
+  } };
 }
 
 export async function startViewerMcpServer(): Promise<void> {

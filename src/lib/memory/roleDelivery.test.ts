@@ -1,3 +1,4 @@
+import { SOURCE_STATES, chooseSource, sourceTurnsEnginesOff } from "./fixtures/source";
 import { afterAll, expect, spyOn, test } from "bun:test";
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -14,6 +15,7 @@ const { beginLegacySpawnFixture } = await import("@/lib/agent/registryTestFixtur
 const { CodexAppServerHost } = await import("@/lib/runtime/codexAppServerHost");
 const { ClaudeStreamBrokerHost } = await import("@/lib/runtime/claudeStreamBrokerHost");
 const { leaveLessons, recordLessonRequest } = await import("./roleStore");
+const { stageMemoryForLaunch } = await import("./roleStage");
 const { learnedRulesForLaunchProfile, sweepOldLearnedRulesFiles, LEARNED_RULES_MAX_BYTES } = await import("./roleLaunch");
 const { engineMemoryVersion, memoryDeliveries } = await import("./deliveryLedger");
 const { renderLearnedRules } = await import("./roleRender");
@@ -31,14 +33,18 @@ test("the host renders its text-free launch marker into instructions without wri
   expect(fs.existsSync(path.join(process.env.LLV_STATE_DIR!, "role-memory", "launch"))).toBe(false);
 });
 
-test.each(["codex", "claude"] as const)("%s fresh and resumed starts reload the latest rule from their marker", async engine => {
+test.each(["codex", "claude"] as const)("%s fresh and resumed starts reload rules from a profile saved in engines mode", async engine => {
   for (const resumed of [false, true]) {
     const cwd = fs.mkdtempSync(path.join(sandbox, "host-"));
     const project = `delivery-${engine}-${resumed}`;
     const source = { project, pipelineId: project, stageId: "build", attempt: 1, roleId: "builder", fixRound: false, conversationId: "conversation_delivery_replay" };
     recordLessonRequest({ ...source, at: "2026-10-11T00:00:00.000Z" });
     const rule = leaveLessons({ request: source, source, none: null, lessons: [{ scope: "role", rule: text, why: "A stored receipt was replayed with a different owner." }] }).left[0]!;
-    const launchProfile = emptyLaunchProfile({ cwd, learnedRules: { project, roleId: "builder" } });
+    chooseSource("engines");
+    const stageMemory = stageMemoryForLaunch({ id: project, project }, { id: "build", kind: "run", onFail: null }, "builder");
+    const launchProfile = JSON.parse(JSON.stringify(emptyLaunchProfile({ cwd, cleanMemory: stageMemory.cleanMemory, learnedRules: stageMemory.learnedRules ?? undefined })));
+    expect(launchProfile.learnedRules).toEqual({ project, roleId: "builder" });
+    chooseSource("active");
     const registry = new AgentRegistry(path.join(cwd, "registry.json"), undefined, undefined, { sqliteMode: "off" });
     const sessionId = crypto.randomUUID();
     const transcript = resumed ? path.join(cwd, `${sessionId}.jsonl`) : null;
@@ -73,16 +79,16 @@ test.each(["codex", "claude"] as const)("%s fresh and resumed starts reload the 
       expect(rows.map(row => row.delivery.rules.find(item => item.id === rule.id)?.hash)).toEqual([text, rewritten].map(value => crypto.createHash("sha256").update(value).digest("hex")));
       expect(rows[1].delivery.bytes).toBe(Buffer.byteLength((seen[1] as Record<string, string>)[channel]));
       expect(fs.existsSync(path.join(process.env.LLV_STATE_DIR!, "role-memory", "launch"))).toBe(false);
-    } finally { start.mockRestore(); adopt.mockRestore(); }
+    } finally { chooseSource("unchosen"); start.mockRestore(); adopt.mockRestore(); }
   }
 });
 
-test.each([
+test.each(SOURCE_STATES.flatMap(state => [
   { resumed: false, allowSubagents: false }, { resumed: true, allowSubagents: false },
   { resumed: false, allowSubagents: true }, { resumed: true, allowSubagents: true },
-])("Codex starts share the effective native-memory decision with the ledger (resumed: $resumed, allowed: $allowSubagents)", async ({ resumed, allowSubagents }) => {
+].map(row => ({ ...row, state }))))("Codex starts share the effective native-memory decision with the ledger (resumed: $resumed, allowed: $allowSubagents, source: $state)", async ({ resumed, allowSubagents, state }) => {
   const cwd = fs.mkdtempSync(path.join(sandbox, "codex-memory-policy-"));
-  const project = `codex-memory-policy-${resumed}-${allowSubagents}`;
+  const project = `codex-memory-policy-${resumed}-${allowSubagents}-${state}`;
   const source = { project, pipelineId: project, stageId: "build", attempt: 1, roleId: "builder", fixRound: false, conversationId: `conversation_${project}` };
   recordLessonRequest({ ...source, at: "2026-10-11T00:00:00.000Z" });
   leaveLessons({ request: source, source, none: null, lessons: [{ scope: "role", rule: text, why: "A stored receipt was replayed with a different owner." }] });
@@ -109,19 +115,21 @@ test.each([
   const start = spyOn(CodexAppServerHost, "start").mockImplementation(capture as never);
   const adopt = spyOn(CodexAppServerHost, "adopt").mockImplementation(async (_id, options) => capture(options) as never);
   const prompt = "Fixture brief";
+  chooseSource(state);
   try {
     await expect(defaultStartHost({ engine: "codex", registry, receipt: begun.receipt,
       spec: { command: "codex", engine: "codex", cwd, windowName: "memory-policy", transcript: transcript ?? undefined, launchProfile },
       account: { engine: "codex", accountId: "account-a", kind: "managed", home: codexHome, transcriptRoot: cwd, env: { NODE_ENV: "test" } },
       ...{ prompt }, client: {} as import("@/lib/runtime/client").RuntimeHostClient }, "fixture-capability")).rejects.toThrow("captured Codex memory-policy start");
     const delivery = memoryDeliveries().find(row => row.delivery.conversationId === begun.receipt.conversationId)!.delivery;
-    const enabled = allowSubagents;
+    const enabled = allowSubagents && !sourceTurnsEnginesOff(state);
     expect(seen[0]?.nativeMemoryEnabled).toBe(enabled);
-    expect(seen[0]?.developerInstructions).toContain(text);
+    if (state === "engines") expect(seen[0]?.developerInstructions).toBeUndefined();
+    else expect(seen[0]?.developerInstructions).toContain(text);
     expect(delivery.engineMemory).toEqual(enabled ? [{ kind: "codex-summary", hash: crypto.createHash("sha256").update(summary).digest("hex"), bytes: Buffer.byteLength(summary), loadedBytes: Buffer.byteLength(summary) }] : []);
     if (enabled) expect(engineMemoryVersion(delivery.engineMemory[0]!.hash)?.toString()).toBe(summary);
     expect((resumed ? adopt.mock.calls.length : start.mock.calls.length)).toBe(1);
-  } finally { start.mockRestore(); adopt.mockRestore(); registry.close(); }
+  } finally { chooseSource("unchosen"); start.mockRestore(); adopt.mockRestore(); registry.close(); }
 });
 
 test.each(["codex", "claude"] as const)("%s receives a seat-written rule on fresh and resumed engine starts from another account", async engine => {

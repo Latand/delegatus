@@ -38,7 +38,7 @@ import { forEachStartupBatch } from "./startupWork";
 import { hostlessConversations, hostlessConversationEvidence } from "./hostlessRegistryEvidence";
 import { BRANCH_SHARED_HOST_ERROR, branchSharesRootHost } from "@/lib/conversation/branchControl";
 import { captureProcessIdentity, sameRecordedProcessIdentity } from "@/lib/processIdentity";
-import { canonicalOrchestratorProject, readOrchestratorSeatRetirementEvidenceOrNull, type OrchestratorSeat } from "@/lib/orchestrator/seats";
+import { canonicalOrchestratorProject, isCurrentOrchestratorSeat, readOrchestratorSeatRetirementEvidenceOrNull, type OrchestratorSeat } from "@/lib/orchestrator/seats";
 
 import { isRuntimeHostTransportFailure, readRuntimeSession, runtimeHostClient, type RuntimeHostClient } from "./client";
 import { runtimeHostKindForEngine, runtimeSettingsCapability, runtimeSteerCapability, type RuntimeEventInput, type RuntimeOperationReceipt, type RuntimeSession } from "./contracts";
@@ -906,6 +906,13 @@ export async function bindStructuredDeliveryQueue(
         }
         if (lost) requestAccountMigrationTick();
       },
+      coalescesConversation: (conversationId) => isCurrentOrchestratorSeat(
+        conversationIdsResolvingTo(registry.readOnlySnapshot(), conversationId as ViewerConversationId)),
+      bindDeliveryBatch: async (batchId, members, generationId) => {
+        const bound = await registry.bindDeliveryBatchOffLoop(batchId, members, generationId);
+        if (bound === null) throw new Error(REGISTRY_WRITER_BUSY);
+        return bound;
+      },
       /* Original-key reconciliation reads the host's own evidence: the Claude
          delivery ledger and transcript, the Codex thread. It never writes input. */
       confirmedDelivery: (operationId) => confirmedSend(registry.readOnlySnapshot(), operationId, true),
@@ -1763,11 +1770,7 @@ export async function bindStructuredDeliveryQueue(
         if (next.done) return;
         if (next.value.kind === "item" && next.value.deliveryEcho) {
           const echo = next.value.deliveryEcho;
-          try {
-            if (progressStore.get(echo.operationId)?.conversationId === conversationId) {
-              progressStore.timing(echo.operationId, { engineEchoAt: echo.at });
-            }
-          } catch { /* An observation never delays the journal or delivery. */ }
+          observeDeliveryEcho(progressStore, conversationId, echo, !echo.memberOperationIds || next.value.seq > initialState.eventCursor);
         }
         /* Before the journal append, which retries for as long as the runtime
            host is away: a request nobody can answer is answered now. */
@@ -2582,4 +2585,20 @@ export async function terminateStructuredDeliveryHost(
   expected?: Readonly<ProcessIdentity>,
 ): Promise<boolean> {
   return await state.terminateActiveHost?.(key, expected) ?? false;
+}
+
+
+/** Live observations only; history with no observation time never invents one. */
+export function observeDeliveryEcho(
+  progress: { get(id: string): { conversationId: string } | null | undefined; timing(id: string, fields: { engineEchoAt: string }): unknown },
+  conversationId: string,
+  echo: { operationId: string; at: string | null; memberOperationIds?: string[] },
+  observedLive = true,
+): void {
+  if (!observedLive || !echo.at) return;
+  for (const id of echo.memberOperationIds ?? [echo.operationId]) {
+    try {
+      if (progress.get(id)?.conversationId === conversationId) progress.timing(id, { engineEchoAt: echo.at });
+    } catch { /* Observations never delay journal delivery. */ }
+  }
 }

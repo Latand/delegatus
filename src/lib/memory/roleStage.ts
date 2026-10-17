@@ -7,7 +7,7 @@ import { lessonRequestLines, type HandedFindings } from "./roleRender";
 import { leaveSeatLessons, leaveLessons, lessonRequest, recordLessonRequest, roleMemoryCollection, RoleMemoryRefusal, type LeftLesson } from "./roleStore";
 import { assertGenericRule, problemInput } from "./roleProblems";
 import { scopeKind } from "./roleScopes";
-import { roleMemoryEnabled } from "./settings";
+import { roleMemoryEnabled, roleMemorySelectorEnabled } from "./settings";
 import { lessonText, lessonTextLength, RULE_MAX_CHARS, RULE_MIN_CHARS, WHY_MAX_CHARS, type LessonInput, type ScopeKind, type RewriteInput, type ProblemInput } from "./roleTypes";
 
 /* The three points where role memory meets a pipeline stage: the selector at
@@ -29,7 +29,7 @@ export function stageMemoryExcluded(stage: Pick<PipelineStage, "kind" | "onFail"
     Reading the rules is deferred to each engine start. */
 export function stageMemoryForLaunch(pipeline: Pick<Pipeline, "id" | "project">, stage: Pick<PipelineStage, "id" | "kind" | "onFail">, roleId: string | null): { cleanMemory: boolean; learnedRules: { project: string; roleId: string | null } | null } {
   const cleanMemory = stageMemoryExcluded(stage, roleId);
-  return { cleanMemory, learnedRules: cleanMemory || !roleMemoryEnabled() ? null : { project: pipeline.project, roleId } };
+  return { cleanMemory, learnedRules: cleanMemory || !roleMemorySelectorEnabled() ? null : { project: pipeline.project, roleId } };
 }
 
 function handedFindings(pipeline: Pipeline, attempt: PipelineStageAttempt): HandedFindings | null {

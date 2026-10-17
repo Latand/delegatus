@@ -8,6 +8,7 @@ import { beginCodexFeatureFixture } from "@/lib/agent/codexSpawnPolicyTestFixtur
 import {
   MCP_TOOL_NAMES,
   SqliteMcpReceiptStore,
+  openAsyncMcpReceiptStore,
   createMcpToolService,
   type McpToolBindings,
 } from "./server";
@@ -230,6 +231,10 @@ async function runHttpHost(configPath: string): Promise<void> {
     port: config.port ?? 0,
     fetch: async (request) => {
       const url = new URL(request.url);
+      if (url.pathname === "/api/mcp") {
+        const { handleMcpHttpRequest } = await import("./http");
+        return handleMcpHttpRequest(new NextRequest(request));
+      }
       const current = control();
       if (current.mode === "hold-before") {
         marker("reached");
@@ -290,11 +295,23 @@ async function runHttpHost(configPath: string): Promise<void> {
       return answer;
     },
   });
+  process.env.LLV_VIEWER_CONTROL_URL = `http://127.0.0.1:${server.port}`;
   fs.writeFileSync(config.portFile, String(server.port));
   await new Promise<never>(() => {});
 }
 
-if (process.argv[2] === "http-host") {
+if (process.argv[2] === "hold-sqlite") {
+  const { Database } = await import("bun:sqlite");
+  const db = new Database(process.argv[3]!);
+  const ready = process.argv[4]!;
+  const release = process.argv[5]!;
+  db.exec("PRAGMA busy_timeout = 0");
+  db.exec("BEGIN IMMEDIATE");
+  fs.writeFileSync(ready, "locked");
+  const timer = setTimeout(() => fs.writeFileSync(release, "elapsed"), Number(process.argv[6]));
+  try { await awaitFixtureFile(release); }
+  finally { clearTimeout(timer); db.exec("ROLLBACK"); db.close(); }
+} else if (process.argv[2] === "http-host") {
   await runHttpHost(process.argv[3]!);
 } else if (process.argv[2] === "cold-start") {
   /* ── ROLE: cold concurrent starter (#1490) ───────────────────────────────
@@ -315,7 +332,8 @@ if (process.argv[2] === "http-host") {
   waitUntilFixtureTime(Number(fs.readFileSync(startPath, "utf8")), startPath);
   let outcome: Record<string, unknown>;
   try {
-    const store = new SqliteMcpReceiptStore(filename);
+    // Exercise the same zero-timeout startup admission as the Viewer service.
+    const store = await openAsyncMcpReceiptStore(filename);
     outcome = { index, ok: true, record: await store.lookup(key) };
     store.close();
   } catch (error) {

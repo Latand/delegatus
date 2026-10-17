@@ -35,6 +35,8 @@ printf '%s\\n' "$*" >> "$LLV_TEST_CLAUDE_LOG"
       HOME: sandbox,
       PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
       LLV_TEST_CLAUDE_LOG: claudeLog,
+      LLV_MCP_TRANSPORT: "stdio",
+      DELEGATUS_MCP_TRANSPORT: "stdio",
     },
     stdout: "pipe",
     stderr: "pipe",
@@ -104,7 +106,7 @@ test("the HTTP switch removes the Codex account registration, so each launch dec
   const unregistered = account("b", 'model = "y"\n');
   fs.writeFileSync(path.join(home, ".codex", "config.toml"), STDIO_REGISTRATION);
 
-  const first = run("http");
+  const first = run();
   expect(first).toContain("codex[a]: viewer registration removed");
   expect(first).toContain("codex[b]: viewer not registered");
   /* The table and its sub-table go; everything else stays, and so does the mode. */
@@ -123,7 +125,7 @@ test("the HTTP switch removes the Codex account registration, so each launch dec
 test("a leftover url registration is rewritten to the stdio launcher, never kept", () => {
   const { account, run } = sandbox();
   const leftover = account("a", 'model = "x"\n\n[mcp_servers.viewer]\nurl = "http://127.0.0.1:8898/api/mcp"\nenv_http_headers = { "x-llv-spawn-capability" = "LLV_SPAWN_CAPABILITY" }\n');
-  expect(run()).toContain("codex[a]: viewer switched to stdio");
+  expect(run("stdio")).toContain("codex[a]: viewer switched to stdio");
   const config = fs.readFileSync(leftover, "utf8");
   expect(config).not.toContain("url =");
   expect(config).toContain('command = "bun"');
@@ -178,6 +180,8 @@ printf '%s|%s\\n' "\${CLAUDE_CONFIG_DIR:-user}" "$*" >> "$LLV_TEST_CLAUDE_LOG"
       HOME: sandbox,
       PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
       LLV_TEST_CLAUDE_LOG: claudeLog,
+      LLV_MCP_TRANSPORT: "stdio",
+      DELEGATUS_MCP_TRANSPORT: "stdio",
       XDG_CONFIG_HOME: path.join(sandbox, ".config"),
       /* The user-default registration is the one without a config dir. */
       CLAUDE_CONFIG_DIR: undefined,

@@ -1,0 +1,1218 @@
+{
+  "schemaVersion": 1,
+  "accepted": false,
+  "reason": "The bounded-transfer pair retained higher candidate loop p99 and maximum. Collection stopped during the audit sample; this is an incomplete diagnostic cohort.",
+  "samples": [
+    {
+      "sample": "candidate-1-stdio-independent-1",
+      "manifest": {
+        "sourceRevision": "8f8d356d71aebb0fe115230e5fd7fc8c5d622d2f",
+        "sourceArchiveSha256": "7c8e374d9e32601ca1c63cd38a955ec667c84209ac9842efb46dc752a6835d55",
+        "harnessRevision": "8f8d356d71aebb0fe115230e5fd7fc8c5d622d2f",
+        "harnessFiles": {
+          "scripts/mcp-call-cost-benchmark.ts": "3f9d166247ec3fd1c787f478728477fedd808e6db8fdf57d884feac5160e4549",
+          "scripts/mcp-state-writer-benchmark.ts": "27754508634680358d7c9c3ffd32da9e518e3628b3b3ccb0f1c2205e5bb6969d",
+          "scripts/mcp-state-writer-report.ts": "ac7c2186e39ec4b039c827004ff0c8d55abd23c809b6b456a01ec5d80edda093",
+          "scripts/sqlite-observer.ts": "caa6cc916674d50149db3fd72a0aa15f8c55cff7c66401b13faa969ebef58fdb",
+          "scripts/sqlite-observer.c": "f891a3d3c214fe6613349efb667f36f7f63128ef909b5b4276e2b948f0cfd368",
+          "scripts/mcp-state-writer-matrix.py": "0972dfdb4419fbde278b3301604739d1dee4b7b17775b783e456437a6871b2d5",
+          "src/lib/mcp/writerConcurrencyChild.ts": "b9cca043b40733b9a18abbf836bda4b5852722a757322ab412f116a0bf11d4b5",
+          "src/lib/mcp/ownedFixtureChildren.ts": "8a8fae45b6e9346d77d1be8fb3ee4e54f9182af427554b06751df7ff68ddd280"
+        },
+        "observerSha256": "372ce5a305d4493098fd3669266b167538b88da89dcc4196b7086a1cdef0150f",
+        "bunVersion": "1.4.0",
+        "bunSha256": "33d56b070be6a9e3da0ab013038b43d1645d0534ca811ecdba4472599117eb4b",
+        "nodeVersion": "v22.16.0",
+        "nodeSha256": "8142d37c6f2f372ef040419e7a111a6baf17df89f8078d02447d6c639ae20c1d",
+        "pythonVersion": "3.12.3",
+        "dependencyLockSha256": "3ae798ca5037e503d4f0937eb27e83a824191723c7ad1cd606d545a16774c6ea",
+        "capabilitiesFileSha256": "12a93b3bbe3472a71b23a3488e172aa9085037f3f6a7165613b90ffeaf7219c0",
+        "dependencySnapshotSha256": "f39182db7789a1aeeab6c670f01c07e6829e44a1fb5759e7e8f170e21049ad69",
+        "kernel": "6.8.0-139-generic",
+        "quotaHierarchyLeafFirst": [
+          {
+            "cpu.max": "60000 20000",
+            "memory.max": "8589934592"
+          },
+          {
+            "cpu.max": "360000 20000",
+            "memory.max": "max"
+          },
+          {
+            "cpu.max": "max 100000",
+            "memory.max": "114462744576"
+          },
+          {
+            "cpu.max": "max 100000",
+            "memory.max": "max"
+          },
+          {
+            "cpu.max": "max 100000",
+            "memory.max": "max"
+          },
+          {
+            "cpu.max": "max 100000",
+            "memory.max": "max"
+          },
+          {
+            "cpu.max": "max 100000",
+            "memory.max": "max",
+            "cpuset.cpus.effective": "0-23"
+          },
+          {
+            "cpuset.cpus.effective": "0-23"
+          }
+        ],
+        "seedSha256": "f48fb7e91d9553fea73a13e6382f796288fef10f17fc95ac1241b4c747073e33",
+        "clients": 1,
+        "transport": "stdio",
+        "shared": false,
+        "repeat": 1,
+        "startedAt": 1792098295.201529,
+        "smoke": false
+      },
+      "report": {
+        "clients": 1,
+        "mode": "stdio",
+        "shared": false,
+        "offered": 300,
+        "completed": 300,
+        "failed": 0,
+        "pendingAtEnd": 0,
+        "allPendingAtObservedEnd": 0,
+        "pendingAfterDrain": 0,
+        "allPendingAfterDrain": 0,
+        "drainedAt": 1792098626801,
+        "pendingAfterReconciliation": 0,
+        "allPendingAfterReconciliation": 0,
+        "reconciledAt": 1792098626822,
+        "completedAtEnd": 300,
+        "offeredAfterEnd": 0,
+        "failedAtEnd": 0,
+        "reconciliation": {
+          "mutations": 132,
+          "uncertainReplies": 0,
+          "queried": 0,
+          "settled": 132,
+          "successful": 132,
+          "unknown": 0
+        },
+        "latency": {
+          "p50": 23.50252600001113,
+          "p95": 59.18572799999674,
+          "p99": 75.89248800001224,
+          "max": 84.62269700004254
+        },
+        "seedChecksum": "f48fb7e91d9553fea73a13e6382f796288fef10f17fc95ac1241b4c747073e33",
+        "failures": [],
+        "runtime": {
+          "bunVersion": "1.4.0",
+          "quotaHierarchyLeafFirst": [
+            {
+              "cpu.max": "60000 20000",
+              "memory.max": "8589934592"
+            },
+            {
+              "cpu.max": "360000 20000",
+              "memory.max": "max"
+            },
+            {
+              "cpu.max": "max 100000",
+              "memory.max": "114462744576"
+            },
+            {
+              "cpu.max": "max 100000",
+              "memory.max": "max"
+            },
+            {
+              "cpu.max": "max 100000",
+              "memory.max": "max"
+            },
+            {
+              "cpu.max": "max 100000",
+              "memory.max": "max"
+            },
+            {
+              "cpu.max": "max 100000",
+              "memory.max": "max",
+              "cpuset.cpus.effective": "0-23"
+            },
+            {
+              "cpuset.cpus.effective": "0-23"
+            }
+          ]
+        },
+        "unfinishedViewerCallsAtTeardown": 0,
+        "unfinishedExecutorCallsAtTeardown": 0,
+        "unfinishedAdapterCallsAtTeardown": 0,
+        "sql": {
+          "measurementSeconds": 300,
+          "measuredByDatabase": {
+            "agent-registry.sqlite": {
+              "begin-attempt": 4140,
+              "begin": 4140,
+              "commit-attempt": 4140,
+              "commit": 4140,
+              "commit-kinds": 4140,
+              "committed-changes": 0
+            },
+            "state.sqlite": {
+              "open": 1440,
+              "close-request": 1440,
+              "close": 1440,
+              "begin-attempt": 840,
+              "begin": 840,
+              "rollback": 360,
+              "lease-statement": 480,
+              "commit-attempt": 480,
+              "commit": 480,
+              "commit-kinds": 480,
+              "committed-changes": 660,
+              "domain-statement": 150
+            },
+            "memory": {
+              "begin-attempt": 30,
+              "begin": 30,
+              "commit-attempt": 30,
+              "commit": 30,
+              "commit-kinds": 30,
+              "committed-changes": 3051
+            },
+            "mcp-receipts.sqlite": {
+              "begin-attempt": 240,
+              "begin": 240,
+              "commit-attempt": 240,
+              "commit": 240,
+              "commit-kinds": 240,
+              "committed-changes": 240
+            }
+          },
+          "connections": [
+            {
+              "role": "executor",
+              "pid": 51,
+              "database": "mcp-receipts.sqlite",
+              "opened": 1,
+              "readonly": 0,
+              "closed": 0,
+              "peak": 1,
+              "reclaimedAtExit": 1,
+              "liveAtExit": 1,
+              "currentAfterTeardown": 0,
+              "lifetimeMs": {
+                "count": 0,
+                "p50": 0,
+                "p95": 0,
+                "p99": 0,
+                "max": 0
+              }
+            },
+            {
+              "role": "executor",
+              "pid": 51,
+              "database": "agent-registry.sqlite",
+              "opened": 1,
+              "readonly": 0,
+              "closed": 0,
+              "peak": 1,
+              "reclaimedAtExit": 1,
+              "liveAtExit": 1,
+              "currentAfterTeardown": 0,
+              "lifetimeMs": {
+                "count": 0,
+                "p50": 0,
+                "p95": 0,
+                "p99": 0,
+                "max": 0
+              }
+            },
+            {
+              "role": "executor",
+              "pid": 51,
+              "database": "state.sqlite",
+              "opened": 1592,
+              "readonly": 1192,
+              "closed": 1589,
+              "peak": 5,
+              "reclaimedAtExit": 3,
+              "liveAtExit": 3,
+              "currentAfterTeardown": 0,
+              "lifetimeMs": {
+                "count": 1589,
+                "p50": 1.375351,
+                "p95": 20.291354,
+                "p99": 30.46385,
+                "max": 122.925591
+              }
+            },
+            {
+              "role": "executor",
+              "pid": 51,
+              "database": "memory",
+              "opened": 2,
+              "readonly": 0,
+              "closed": 0,
+              "peak": 2,
+              "reclaimedAtExit": 2,
+              "liveAtExit": 2,
+              "currentAfterTeardown": 0,
+              "lifetimeMs": {
+                "count": 0,
+                "p50": 0,
+                "p95": 0,
+                "p99": 0,
+                "max": 0
+              }
+            }
+          ],
+          "phases": {
+            "cold:executor:mcp-receipts.sqlite:unattributed": {
+              "open": 1,
+              "autocommit-statement-attempt": 1,
+              "commit": 3,
+              "commit-kinds": 3,
+              "committed-changes": 0,
+              "begin-attempt": 2,
+              "begin": 2,
+              "commit-attempt": 2
+            },
+            "cold:executor:agent-registry.sqlite:unattributed": {
+              "open": 1,
+              "autocommit-statement-attempt": 21,
+              "begin-attempt": 4,
+              "begin": 4,
+              "commit-attempt": 3,
+              "commit": 3,
+              "commit-kinds": 3,
+              "committed-changes": 0
+            },
+            "cold:executor:agent-registry.sqlite:conversationAliases": {
+              "commit-attempt": 1,
+              "commit": 1,
+              "commit-kinds": 1,
+              "committed-changes": 0
+            },
+            "cold:executor:state.sqlite:unattributed": {
+              "open": 9,
+              "autocommit-statement-attempt": 4,
+              "begin-attempt": 2,
+              "begin": 2,
+              "lease-statement": 1,
+              "commit-attempt": 1,
+              "commit": 1,
+              "commit-kinds": 1,
+              "committed-changes": 2702,
+              "rollback": 1,
+              "close": 1
+            },
+            "cold:executor:state.sqlite:tasks": {
+              "close-request": 1,
+              "close": 1
+            },
+            "cold:executor:state.sqlite:worktree_recovery": {
+              "close-request": 1,
+              "close": 1
+            },
+            "cold:executor:state.sqlite:pipelines_archive": {
+              "close-request": 3,
+              "close": 3
+            },
+            "cold:executor:memory:unattributed": {
+              "open": 1,
+              "autocommit-statement-attempt": 9,
+              "commit": 9,
+              "commit-kinds": 9,
+              "committed-changes": 0
+            },
+            "cold:executor:memory:pipelines": {
+              "begin-attempt": 1,
+              "begin": 1,
+              "commit-attempt": 1,
+              "commit": 1,
+              "commit-kinds": 1,
+              "committed-changes": 21921
+            },
+            "cold:executor:state.sqlite:pipelines": {
+              "close-request": 1
+            },
+            "warm:executor:agent-registry.sqlite:unattributed": {
+              "begin-attempt": 415,
+              "begin": 415
+            },
+            "warm:executor:agent-registry.sqlite:conversationAliases": {
+              "commit-attempt": 126,
+              "commit": 126,
+              "commit-kinds": 126,
+              "committed-changes": 0
+            },
+            "warm:executor:agent-registry.sqlite:pendingSupersedence": {
+              "commit-attempt": 1,
+              "commit": 1,
+              "commit-kinds": 1,
+              "committed-changes": 0
+            },
+            "warm:executor:agent-registry.sqlite:conversations": {
+              "commit-attempt": 288,
+              "commit": 288,
+              "commit-kinds": 288,
+              "committed-changes": 0
+            },
+            "warm:executor:state.sqlite:unattributed": {
+              "open": 131,
+              "begin-attempt": 69,
+              "begin": 69,
+              "rollback": 36,
+              "close": 60,
+              "close-request": 24
+            },
+            "warm:executor:state.sqlite:pipelines": {
+              "close-request": 18
+            },
+            "warm:executor:memory:unattributed": {
+              "open": 1,
+              "autocommit-statement-attempt": 9,
+              "commit": 9,
+              "commit-kinds": 9,
+              "committed-changes": 0
+            },
+            "warm:executor:memory:tasks": {
+              "begin-attempt": 3,
+              "begin": 3,
+              "commit-attempt": 3,
+              "commit": 3,
+              "commit-kinds": 3,
+              "committed-changes": 24259
+            },
+            "warm:executor:state.sqlite:tasks": {
+              "close-request": 30,
+              "open": 12,
+              "begin-attempt": 15,
+              "begin": 15,
+              "lease-statement": 48,
+              "commit-attempt": 48,
+              "commit": 48,
+              "commit-kinds": 48,
+              "committed-changes": 66,
+              "close": 12,
+              "domain-statement": 15
+            },
+            "warm:executor:state.sqlite:board_maintenance_runs": {
+              "close-request": 48,
+              "close": 48
+            },
+            "warm:executor:mcp-receipts.sqlite:unattributed": {
+              "begin-attempt": 24,
+              "begin": 24,
+              "commit-attempt": 24,
+              "commit": 24,
+              "commit-kinds": 24,
+              "committed-changes": 24
+            },
+            "warm:executor:state.sqlite:worktree_recovery": {
+              "close-request": 23,
+              "close": 23
+            },
+            "measured:executor:agent-registry.sqlite:unattributed": {
+              "begin-attempt": 4140,
+              "begin": 4140
+            },
+            "measured:executor:agent-registry.sqlite:conversationAliases": {
+              "commit-attempt": 1260,
+              "commit": 1260,
+              "commit-kinds": 1260,
+              "committed-changes": 0
+            },
+            "measured:executor:state.sqlite:unattributed": {
+              "open": 1320,
+              "begin-attempt": 690,
+              "begin": 690,
+              "rollback": 360,
+              "close": 600,
+              "close-request": 240
+            },
+            "measured:executor:state.sqlite:worktree_recovery": {
+              "close-request": 240,
+              "close": 240
+            },
+            "measured:executor:agent-registry.sqlite:conversations": {
+              "commit-attempt": 2880,
+              "commit": 2880,
+              "commit-kinds": 2880,
+              "committed-changes": 0
+            },
+            "measured:executor:state.sqlite:pipelines": {
+              "close-request": 180
+            },
+            "measured:executor:memory:tasks": {
+              "begin-attempt": 30,
+              "begin": 30,
+              "commit-attempt": 30,
+              "commit": 30,
+              "commit-kinds": 30,
+              "committed-changes": 3051
+            },
+            "measured:executor:state.sqlite:tasks": {
+              "close-request": 300,
+              "open": 120,
+              "begin-attempt": 150,
+              "begin": 150,
+              "lease-statement": 480,
+              "commit-attempt": 480,
+              "commit": 480,
+              "commit-kinds": 480,
+              "committed-changes": 660,
+              "close": 120,
+              "domain-statement": 150
+            },
+            "measured:executor:state.sqlite:board_maintenance_runs": {
+              "close-request": 480,
+              "close": 480
+            },
+            "measured:executor:mcp-receipts.sqlite:unattributed": {
+              "begin-attempt": 240,
+              "begin": 240,
+              "commit-attempt": 240,
+              "commit": 240,
+              "commit-kinds": 240,
+              "committed-changes": 240
+            }
+          },
+          "commitKinds": {
+            "empty": 4260,
+            "other": 30,
+            "receipt": 240,
+            "leaseAcquire": 120,
+            "domain": 120,
+            "leaseRelease": 120
+          },
+          "commits": 4890,
+          "commitsPerSecond": 16.3,
+          "opensPerSecond": 4.8,
+          "zeroChangedCommits": 4260,
+          "committedChanges": 3951,
+          "failedOpens": 0,
+          "busyResults": 0,
+          "busyHandlerSleeps": 0,
+          "busyHandlerWaitMs": 0,
+          "contentionCalls": 0,
+          "contentionPer10000Completed": 0,
+          "applicationWaitMs": 0,
+          "heldLeaseRefusals": 0,
+          "leaseSqlRefusals": 0,
+          "leaseRetryWaitMs": 0,
+          "leaseAcquisitionMs": {
+            "count": 120,
+            "p50": 1.578799,
+            "p95": 3.095555,
+            "p99": 4.253306,
+            "max": 7.324524
+          },
+          "leaseHoldMs": {
+            "count": 120,
+            "p50": 22.464848,
+            "p95": 36.266095,
+            "p99": 43.184689,
+            "max": 49.110158
+          },
+          "unreleasedLeases": 0,
+          "staleLeaseRemovals": 0,
+          "unobservedLeaseRemovals": 0
+        },
+        "processes": {
+          "peak": 5,
+          "births": 5,
+          "censusBirths": 5,
+          "runtimeRegistrations": 3,
+          "survivors": 0,
+          "peakMainDescriptors": 5,
+          "peakAdapterDescriptors": 0,
+          "peakWalDescriptors": 4,
+          "peakShmDescriptors": 1,
+          "idleMainDescriptors": 5,
+          "postTeardownMainDescriptors": 0,
+          "measuredPeakRssPages": 121306,
+          "sampledCpuTicksLowerBound": 1621
+        },
+        "viewer": {
+          "loopP50": 0.084159,
+          "loopP95": 0.135039,
+          "loopP99": 0.601599,
+          "loopMax": 4.104558,
+          "firstSampleAt": 1792098326803,
+          "lastSampleAt": 1792098626803,
+          "scheduledStartAt": 1792098326802,
+          "scheduledEndAt": 1792098626802,
+          "completedWindow": true,
+          "resetDelayMs": 1,
+          "missingTailMs": 0,
+          "cpuMicros": 3959910,
+          "peakRss": 103325696
+        }
+      }
+    },
+    {
+      "sample": "main-1-stdio-independent-1",
+      "manifest": {
+        "sourceRevision": "14e3199375a2ca4d1a3646eef52fc231794c7915",
+        "sourceArchiveSha256": "a98d08616240032768f9e609c2bfbbe6eed8e8811eae6420c1575109782c8b2f",
+        "harnessRevision": "8f8d356d71aebb0fe115230e5fd7fc8c5d622d2f",
+        "harnessFiles": {
+          "scripts/mcp-call-cost-benchmark.ts": "3f9d166247ec3fd1c787f478728477fedd808e6db8fdf57d884feac5160e4549",
+          "scripts/mcp-state-writer-benchmark.ts": "27754508634680358d7c9c3ffd32da9e518e3628b3b3ccb0f1c2205e5bb6969d",
+          "scripts/mcp-state-writer-report.ts": "ac7c2186e39ec4b039c827004ff0c8d55abd23c809b6b456a01ec5d80edda093",
+          "scripts/sqlite-observer.ts": "caa6cc916674d50149db3fd72a0aa15f8c55cff7c66401b13faa969ebef58fdb",
+          "scripts/sqlite-observer.c": "f891a3d3c214fe6613349efb667f36f7f63128ef909b5b4276e2b948f0cfd368",
+          "scripts/mcp-state-writer-matrix.py": "0972dfdb4419fbde278b3301604739d1dee4b7b17775b783e456437a6871b2d5",
+          "src/lib/mcp/writerConcurrencyChild.ts": "b9cca043b40733b9a18abbf836bda4b5852722a757322ab412f116a0bf11d4b5",
+          "src/lib/mcp/ownedFixtureChildren.ts": "8a8fae45b6e9346d77d1be8fb3ee4e54f9182af427554b06751df7ff68ddd280"
+        },
+        "observerSha256": "372ce5a305d4493098fd3669266b167538b88da89dcc4196b7086a1cdef0150f",
+        "bunVersion": "1.4.0",
+        "bunSha256": "33d56b070be6a9e3da0ab013038b43d1645d0534ca811ecdba4472599117eb4b",
+        "nodeVersion": "v22.16.0",
+        "nodeSha256": "8142d37c6f2f372ef040419e7a111a6baf17df89f8078d02447d6c639ae20c1d",
+        "pythonVersion": "3.12.3",
+        "dependencyLockSha256": "3ae798ca5037e503d4f0937eb27e83a824191723c7ad1cd606d545a16774c6ea",
+        "capabilitiesFileSha256": "12a93b3bbe3472a71b23a3488e172aa9085037f3f6a7165613b90ffeaf7219c0",
+        "dependencySnapshotSha256": "f39182db7789a1aeeab6c670f01c07e6829e44a1fb5759e7e8f170e21049ad69",
+        "kernel": "6.8.0-139-generic",
+        "quotaHierarchyLeafFirst": [
+          {
+            "cpu.max": "60000 20000",
+            "memory.max": "8589934592"
+          },
+          {
+            "cpu.max": "360000 20000",
+            "memory.max": "max"
+          },
+          {
+            "cpu.max": "max 100000",
+            "memory.max": "114462744576"
+          },
+          {
+            "cpu.max": "max 100000",
+            "memory.max": "max"
+          },
+          {
+            "cpu.max": "max 100000",
+            "memory.max": "max"
+          },
+          {
+            "cpu.max": "max 100000",
+            "memory.max": "max"
+          },
+          {
+            "cpu.max": "max 100000",
+            "memory.max": "max",
+            "cpuset.cpus.effective": "0-23"
+          },
+          {
+            "cpuset.cpus.effective": "0-23"
+          }
+        ],
+        "seedSha256": "f48fb7e91d9553fea73a13e6382f796288fef10f17fc95ac1241b4c747073e33",
+        "clients": 1,
+        "transport": "stdio",
+        "shared": false,
+        "repeat": 1,
+        "startedAt": 1792098627.2528303,
+        "smoke": false
+      },
+      "report": {
+        "clients": 1,
+        "mode": "stdio",
+        "shared": false,
+        "offered": 300,
+        "completed": 300,
+        "failed": 0,
+        "pendingAtEnd": 0,
+        "allPendingAtObservedEnd": 0,
+        "pendingAfterDrain": 0,
+        "allPendingAfterDrain": 0,
+        "drainedAt": 1792098959228,
+        "pendingAfterReconciliation": 0,
+        "allPendingAfterReconciliation": 0,
+        "reconciledAt": 1792098959238,
+        "completedAtEnd": 300,
+        "offeredAfterEnd": 0,
+        "failedAtEnd": 0,
+        "reconciliation": {
+          "mutations": 132,
+          "uncertainReplies": 0,
+          "queried": 0,
+          "settled": 132,
+          "successful": 132,
+          "unknown": 0
+        },
+        "latency": {
+          "p50": 61.89310300000943,
+          "p95": 92.93182900000829,
+          "p99": 113.99220700003207,
+          "max": 133.88096300000325
+        },
+        "seedChecksum": "f48fb7e91d9553fea73a13e6382f796288fef10f17fc95ac1241b4c747073e33",
+        "failures": [],
+        "runtime": {
+          "bunVersion": "1.4.0",
+          "quotaHierarchyLeafFirst": [
+            {
+              "cpu.max": "60000 20000",
+              "memory.max": "8589934592"
+            },
+            {
+              "cpu.max": "360000 20000",
+              "memory.max": "max"
+            },
+            {
+              "cpu.max": "max 100000",
+              "memory.max": "114462744576"
+            },
+            {
+              "cpu.max": "max 100000",
+              "memory.max": "max"
+            },
+            {
+              "cpu.max": "max 100000",
+              "memory.max": "max"
+            },
+            {
+              "cpu.max": "max 100000",
+              "memory.max": "max"
+            },
+            {
+              "cpu.max": "max 100000",
+              "memory.max": "max",
+              "cpuset.cpus.effective": "0-23"
+            },
+            {
+              "cpuset.cpus.effective": "0-23"
+            }
+          ]
+        },
+        "unfinishedViewerCallsAtTeardown": 0,
+        "unfinishedExecutorCallsAtTeardown": 0,
+        "unfinishedAdapterCallsAtTeardown": 0,
+        "sql": {
+          "measurementSeconds": 300,
+          "measuredByDatabase": {
+            "agent-registry.sqlite": {
+              "begin-attempt": 3840,
+              "begin": 3840,
+              "commit-attempt": 3840,
+              "commit": 3840,
+              "commit-kinds": 3840,
+              "committed-changes": 0
+            },
+            "state.sqlite": {
+              "open": 10260,
+              "close-request": 10260,
+              "close": 10260,
+              "begin-attempt": 9750,
+              "begin": 9750,
+              "rollback": 9180,
+              "lease-statement": 480,
+              "commit-attempt": 570,
+              "commit": 570,
+              "commit-kinds": 570,
+              "committed-changes": 660,
+              "domain-statement": 150
+            },
+            "memory": {
+              "begin-attempt": 30,
+              "begin": 30,
+              "commit-attempt": 30,
+              "commit": 30,
+              "commit-kinds": 30,
+              "committed-changes": 3051
+            },
+            "mcp-receipts.sqlite": {
+              "begin-attempt": 240,
+              "begin": 240,
+              "commit-attempt": 240,
+              "commit": 240,
+              "commit-kinds": 240,
+              "committed-changes": 240
+            }
+          },
+          "connections": [
+            {
+              "role": "viewer",
+              "pid": 12,
+              "database": "mcp-receipts.sqlite",
+              "opened": 1,
+              "readonly": 0,
+              "closed": 0,
+              "peak": 1,
+              "reclaimedAtExit": 1,
+              "liveAtExit": 1,
+              "currentAfterTeardown": 0,
+              "lifetimeMs": {
+                "count": 0,
+                "p50": 0,
+                "p95": 0,
+                "p99": 0,
+                "max": 0
+              }
+            },
+            {
+              "role": "adapter",
+              "pid": 34,
+              "database": "mcp-receipts.sqlite",
+              "opened": 1,
+              "readonly": 0,
+              "closed": 0,
+              "peak": 1,
+              "reclaimedAtExit": 1,
+              "liveAtExit": 1,
+              "currentAfterTeardown": 0,
+              "lifetimeMs": {
+                "count": 0,
+                "p50": 0,
+                "p95": 0,
+                "p99": 0,
+                "max": 0
+              }
+            },
+            {
+              "role": "adapter",
+              "pid": 34,
+              "database": "state.sqlite",
+              "opened": 11294,
+              "readonly": 10894,
+              "closed": 11291,
+              "peak": 5,
+              "reclaimedAtExit": 3,
+              "liveAtExit": 3,
+              "currentAfterTeardown": 0,
+              "lifetimeMs": {
+                "count": 11291,
+                "p50": 0.916222,
+                "p95": 1.867805,
+                "p99": 35.68798,
+                "max": 103.936743
+              }
+            },
+            {
+              "role": "adapter",
+              "pid": 34,
+              "database": "memory",
+              "opened": 2,
+              "readonly": 0,
+              "closed": 0,
+              "peak": 2,
+              "reclaimedAtExit": 2,
+              "liveAtExit": 2,
+              "currentAfterTeardown": 0,
+              "lifetimeMs": {
+                "count": 0,
+                "p50": 0,
+                "p95": 0,
+                "p99": 0,
+                "max": 0
+              }
+            },
+            {
+              "role": "adapter",
+              "pid": 34,
+              "database": "agent-registry.sqlite",
+              "opened": 1,
+              "readonly": 0,
+              "closed": 0,
+              "peak": 1,
+              "reclaimedAtExit": 1,
+              "liveAtExit": 1,
+              "currentAfterTeardown": 0,
+              "lifetimeMs": {
+                "count": 0,
+                "p50": 0,
+                "p95": 0,
+                "p99": 0,
+                "max": 0
+              }
+            }
+          ],
+          "phases": {
+            "cold:viewer:mcp-receipts.sqlite:unattributed": {
+              "open": 1,
+              "autocommit-statement-attempt": 1,
+              "commit": 3,
+              "commit-kinds": 3,
+              "committed-changes": 0,
+              "begin-attempt": 2,
+              "begin": 2,
+              "commit-attempt": 2
+            },
+            "cold:adapter:mcp-receipts.sqlite:unattributed": {
+              "open": 1,
+              "autocommit-statement-attempt": 1,
+              "begin-attempt": 2,
+              "begin": 2,
+              "commit-attempt": 2,
+              "commit": 2,
+              "commit-kinds": 2,
+              "committed-changes": 0
+            },
+            "cold:adapter:state.sqlite:unattributed": {
+              "open": 9,
+              "autocommit-statement-attempt": 4,
+              "begin-attempt": 2,
+              "begin": 2,
+              "lease-statement": 1,
+              "commit-attempt": 1,
+              "commit": 1,
+              "commit-kinds": 1,
+              "committed-changes": 2702,
+              "rollback": 1,
+              "close": 1
+            },
+            "cold:adapter:state.sqlite:tasks": {
+              "close-request": 1,
+              "close": 1
+            },
+            "cold:adapter:state.sqlite:worktree_recovery": {
+              "close-request": 1,
+              "close": 1
+            },
+            "cold:adapter:state.sqlite:pipelines_archive": {
+              "close-request": 3,
+              "close": 3
+            },
+            "cold:adapter:memory:unattributed": {
+              "open": 1,
+              "autocommit-statement-attempt": 9,
+              "commit": 9,
+              "commit-kinds": 9,
+              "committed-changes": 0
+            },
+            "cold:adapter:memory:pipelines": {
+              "begin-attempt": 1,
+              "begin": 1,
+              "commit-attempt": 1,
+              "commit": 1,
+              "commit-kinds": 1,
+              "committed-changes": 21921
+            },
+            "cold:adapter:state.sqlite:pipelines": {
+              "close-request": 1
+            },
+            "warm:adapter:agent-registry.sqlite:unattributed": {
+              "open": 1,
+              "autocommit-statement-attempt": 21,
+              "begin-attempt": 388,
+              "begin": 388,
+              "commit-attempt": 3,
+              "commit": 3,
+              "commit-kinds": 3,
+              "committed-changes": 0
+            },
+            "warm:adapter:agent-registry.sqlite:pendingSupersedence": {
+              "commit-attempt": 1,
+              "commit": 1,
+              "commit-kinds": 1,
+              "committed-changes": 0
+            },
+            "warm:adapter:agent-registry.sqlite:conversationAliases": {
+              "commit-attempt": 96,
+              "commit": 96,
+              "commit-kinds": 96,
+              "committed-changes": 0
+            },
+            "warm:adapter:agent-registry.sqlite:conversations": {
+              "commit-attempt": 288,
+              "commit": 288,
+              "commit-kinds": 288,
+              "committed-changes": 0
+            },
+            "warm:adapter:memory:unattributed": {
+              "open": 1,
+              "autocommit-statement-attempt": 9,
+              "commit": 9,
+              "commit-kinds": 9,
+              "committed-changes": 0
+            },
+            "warm:adapter:state.sqlite:unattributed": {
+              "open": 1013,
+              "begin-attempt": 959,
+              "begin": 959,
+              "rollback": 918,
+              "close": 942,
+              "close-request": 24
+            },
+            "warm:adapter:memory:tasks": {
+              "begin-attempt": 3,
+              "begin": 3,
+              "commit-attempt": 3,
+              "commit": 3,
+              "commit-kinds": 3,
+              "committed-changes": 24259
+            },
+            "warm:adapter:state.sqlite:tasks": {
+              "close-request": 30,
+              "open": 12,
+              "begin-attempt": 15,
+              "begin": 15,
+              "lease-statement": 48,
+              "commit-attempt": 48,
+              "commit": 48,
+              "commit-kinds": 48,
+              "committed-changes": 66,
+              "close": 12,
+              "domain-statement": 15
+            },
+            "warm:adapter:state.sqlite:pipelines": {
+              "close-request": 900,
+              "begin-attempt": 1,
+              "begin": 1,
+              "commit-attempt": 9,
+              "commit": 9,
+              "commit-kinds": 9,
+              "committed-changes": 0
+            },
+            "warm:adapter:state.sqlite:board_maintenance_runs": {
+              "close-request": 48,
+              "close": 48
+            },
+            "warm:adapter:mcp-receipts.sqlite:unattributed": {
+              "begin-attempt": 24,
+              "begin": 24,
+              "commit-attempt": 24,
+              "commit": 24,
+              "commit-kinds": 24,
+              "committed-changes": 24
+            },
+            "warm:adapter:state.sqlite:worktree_recovery": {
+              "close-request": 23,
+              "close": 23
+            },
+            "measured:adapter:agent-registry.sqlite:unattributed": {
+              "begin-attempt": 3840,
+              "begin": 3840
+            },
+            "measured:adapter:agent-registry.sqlite:conversationAliases": {
+              "commit-attempt": 960,
+              "commit": 960,
+              "commit-kinds": 960,
+              "committed-changes": 0
+            },
+            "measured:adapter:state.sqlite:unattributed": {
+              "open": 10140,
+              "begin-attempt": 9600,
+              "begin": 9600,
+              "rollback": 9180,
+              "close": 9420,
+              "close-request": 240
+            },
+            "measured:adapter:state.sqlite:worktree_recovery": {
+              "close-request": 240,
+              "close": 240
+            },
+            "measured:adapter:agent-registry.sqlite:conversations": {
+              "commit-attempt": 2880,
+              "commit": 2880,
+              "commit-kinds": 2880,
+              "committed-changes": 0
+            },
+            "measured:adapter:memory:tasks": {
+              "begin-attempt": 30,
+              "begin": 30,
+              "commit-attempt": 30,
+              "commit": 30,
+              "commit-kinds": 30,
+              "committed-changes": 3051
+            },
+            "measured:adapter:state.sqlite:tasks": {
+              "close-request": 300,
+              "open": 120,
+              "begin-attempt": 150,
+              "begin": 150,
+              "lease-statement": 480,
+              "commit-attempt": 480,
+              "commit": 480,
+              "commit-kinds": 480,
+              "committed-changes": 660,
+              "close": 120,
+              "domain-statement": 150
+            },
+            "measured:adapter:state.sqlite:pipelines": {
+              "close-request": 9000,
+              "commit-attempt": 90,
+              "commit": 90,
+              "commit-kinds": 90,
+              "committed-changes": 0
+            },
+            "measured:adapter:state.sqlite:board_maintenance_runs": {
+              "close-request": 480,
+              "close": 480
+            },
+            "measured:adapter:mcp-receipts.sqlite:unattributed": {
+              "begin-attempt": 240,
+              "begin": 240,
+              "commit-attempt": 240,
+              "commit": 240,
+              "commit-kinds": 240,
+              "committed-changes": 240
+            },
+            "drain:adapter:mcp-receipts.sqlite:unattributed": {
+              "close-request": 1
+            },
+            "drain:adapter:state.sqlite:unattributed": {
+              "close-request": 2
+            },
+            "drain:adapter:state.sqlite:pipelines_archive": {
+              "close-request": 1
+            },
+            "drain:adapter:memory:unattributed": {
+              "close-request": 2
+            },
+            "drain:adapter:agent-registry.sqlite:unattributed": {
+              "close-request": 1
+            },
+            "drain:viewer:mcp-receipts.sqlite:unattributed": {
+              "close-request": 1
+            }
+          },
+          "commitKinds": {
+            "empty": 4050,
+            "other": 30,
+            "receipt": 240,
+            "leaseAcquire": 120,
+            "domain": 120,
+            "leaseRelease": 120
+          },
+          "commits": 4680,
+          "commitsPerSecond": 15.6,
+          "opensPerSecond": 34.2,
+          "zeroChangedCommits": 4050,
+          "committedChanges": 3951,
+          "failedOpens": 0,
+          "busyResults": 0,
+          "busyHandlerSleeps": 0,
+          "busyHandlerWaitMs": 0,
+          "contentionCalls": 0,
+          "contentionPer10000Completed": 0,
+          "applicationWaitMs": 0,
+          "heldLeaseRefusals": 0,
+          "leaseSqlRefusals": 0,
+          "leaseRetryWaitMs": 0,
+          "leaseAcquisitionMs": {
+            "count": 120,
+            "p50": 1.677603,
+            "p95": 3.203189,
+            "p99": 4.932357,
+            "max": 7.485276
+          },
+          "leaseHoldMs": {
+            "count": 120,
+            "p50": 40.247609,
+            "p95": 78.349779,
+            "p99": 86.289033,
+            "max": 91.51731
+          },
+          "unreleasedLeases": 0,
+          "staleLeaseRemovals": 0,
+          "unobservedLeaseRemovals": 0
+        },
+        "processes": {
+          "peak": 3,
+          "births": 3,
+          "censusBirths": 3,
+          "runtimeRegistrations": 2,
+          "survivors": 0,
+          "peakMainDescriptors": 5,
+          "peakAdapterDescriptors": 5,
+          "peakWalDescriptors": 5,
+          "peakShmDescriptors": 1,
+          "idleMainDescriptors": 5,
+          "postTeardownMainDescriptors": 0,
+          "measuredPeakRssPages": 108174,
+          "sampledCpuTicksLowerBound": 2655
+        },
+        "viewer": {
+          "loopP50": 0.090751,
+          "loopP95": 0.162815,
+          "loopP99": 0.207359,
+          "loopMax": 2.720363,
+          "firstSampleAt": 1792098659228,
+          "lastSampleAt": 1792098959227,
+          "scheduledStartAt": 1792098659227,
+          "scheduledEndAt": 1792098959227,
+          "completedWindow": true,
+          "resetDelayMs": 1,
+          "missingTailMs": 0,
+          "cpuMicros": 3907495,
+          "peakRss": 153559040
+        }
+      }
+    }
+  ],
+  "equivalence": {
+    "normalization": "Generated task IDs and revision tokens by original mutation key; sample ISO times except the fixed seed instant. Numeric SQL row revisions and every other field retained.",
+    "samples": {
+      "candidate-1-stdio-independent-1": {
+        "rows": 2103,
+        "responses": 330,
+        "normalizedRowSha256": "d860e09a254a926bec1a70ea91a8fe2f1bc91162e1decd1798d842b4cda2e314",
+        "normalizedResponseSha256": "19b582553bad73297f847d76166da919304aab7e01c2e5c63a12c8fdc46dd0da",
+        "settledResponseSha256": "950a082b8f498c12d05d4701168f09f5fb106605ffb14a87be7df0e9c3a02ba9",
+        "numericRowRevisionsRetained": true,
+        "durableColumns": [
+          "collection",
+          "controller_active",
+          "row_key",
+          "row_order",
+          "row_revision",
+          "value_json"
+        ],
+        "unresolvedMutations": 0,
+        "unknownMutationRepliesAtReconciliation": 0,
+        "unknownRepliesWithCommittedEffect": 0,
+        "unknownRepliesWithNoCommitAtTeardown": 0,
+        "committedHistoryReplayMatchesFinalRows": true,
+        "committedRowTransactions": 132,
+        "replayedRowSha256": "fdbfddbba66e40a8312e38f529286d536dcf30afb14339e4a1d7008241bbdd52",
+        "finalRowSha256": "fdbfddbba66e40a8312e38f529286d536dcf30afb14339e4a1d7008241bbdd52",
+        "committedCreates": 33,
+        "committedUpdates": 99,
+        "createReceipts": 33,
+        "historyViolations": {}
+      },
+      "main-1-stdio-independent-1": {
+        "rows": 2103,
+        "responses": 330,
+        "normalizedRowSha256": "d860e09a254a926bec1a70ea91a8fe2f1bc91162e1decd1798d842b4cda2e314",
+        "normalizedResponseSha256": "19b582553bad73297f847d76166da919304aab7e01c2e5c63a12c8fdc46dd0da",
+        "settledResponseSha256": "950a082b8f498c12d05d4701168f09f5fb106605ffb14a87be7df0e9c3a02ba9",
+        "numericRowRevisionsRetained": true,
+        "durableColumns": [
+          "collection",
+          "controller_active",
+          "row_key",
+          "row_order",
+          "row_revision",
+          "value_json"
+        ],
+        "unresolvedMutations": 0,
+        "unknownMutationRepliesAtReconciliation": 0,
+        "unknownRepliesWithCommittedEffect": 0,
+        "unknownRepliesWithNoCommitAtTeardown": 0,
+        "committedHistoryReplayMatchesFinalRows": true,
+        "committedRowTransactions": 132,
+        "replayedRowSha256": "c5911a11838e6f651ee9d3ac0fc7e3a17dec7a7b27c1d85d8253bfc0a42f3624",
+        "finalRowSha256": "c5911a11838e6f651ee9d3ac0fc7e3a17dec7a7b27c1d85d8253bfc0a42f3624",
+        "committedCreates": 33,
+        "committedUpdates": 99,
+        "createReceipts": 33,
+        "historyViolations": {}
+      }
+    },
+    "pairs": [
+      {
+        "before": "main-1-stdio-independent-1",
+        "after": "candidate-1-stdio-independent-1",
+        "exactNormalizedRowsEqual": true,
+        "exactNormalizedResponsesEqual": true,
+        "bothHistoriesReconciled": true
+      }
+    ]
+  }
+}

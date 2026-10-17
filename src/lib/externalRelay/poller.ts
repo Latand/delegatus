@@ -10,6 +10,7 @@ import {
 } from "@/lib/agent/headless";
 import { assertStateStartupMutation, mayRunStateStartupMutation } from "@/lib/stateOwnership";
 import { isStagingMode } from "@/lib/staging";
+import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { noteRelayOutcome, relayActivity } from "./activity";
 import { pruneAnswerRecords, relayAnswersRoot, settleInterruptedAnswer, type RelayAnswerDelivery } from "./answers";
 import { discoverRelay, ExternalRelayError, fetchRelayTargets, isUnknownFeatureRefusal, relayCall } from "./client";
@@ -38,7 +39,9 @@ export type PollerState =
   | "unsupported_version"
   | "paused";
 type PollLoop = {
-  abort: AbortController;
+  wake?: () => void;
+  finished?: boolean;
+  retiring?: boolean;
   stopped: boolean;
   state: PollerState;
 };
@@ -70,7 +73,14 @@ const targetRefreshes = (controller.targetRefreshes ??= new Map<
 >());
 const descriptorRefreshes = (controller.descriptorRefreshes ??= new Map<string, TargetRefresh>());
 const forcedDescriptorRefreshes = (controller.forcedDescriptorRefreshes ??= new Map<string, TargetRefresh>());
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+function waitForPollRetry(loop: PollLoop, ms: number): Promise<void> {
+  return new Promise(resolve => {
+    const done = () => { clearTimeout(timer); delete loop.wake; resolve(); };
+    const timer = setTimeout(done, ms);
+    loop.wake = done;
+    if (loop.stopped) done();
+  });
+}
 export function relayPollerStatus(id: string) {
   const loop = loops.get(id);
   const status = { state: loop ? loop.state : ("paused" as const), ...relayActivity(id) };
@@ -83,7 +93,10 @@ export function relayPollerStatus(id: string) {
   }
 }
 export function wakeExternalRelayPoller(id: string) {
-  loops.get(id)?.abort.abort();
+  // A claim POST can acquire a lease at any time, including after a socket
+  // abort. Only a local retry wait may be interrupted; consume every response.
+  const loop = loops.get(id);
+  if (loop?.state !== "rate_limited") loop?.wake?.();
 }
 export async function sweepExternalRelayOrphans(ownerPorts?: OwnerRunPorts): Promise<void> {
   assertStateStartupMutation(externalRelayFile("runs"), "external-relay-sweep");
@@ -208,7 +221,7 @@ async function refreshTargetsNow(id: string): Promise<TargetRefreshOutcome> {
         if (loop) {
           loop.state = "credential_rejected";
           loop.stopped = true;
-          loop.abort.abort();
+          loop.wake?.();
         }
         return "credential_rejected";
       }
@@ -323,9 +336,8 @@ async function poll(
     if (loop.stopped) break;
     await refreshRelayDescriptorFeatures(relay.id, DESCRIPTOR_REFRESH_ON_READ_MS);
     if (loop.stopped) break;
-    loop.abort = new AbortController();
     try {
-      const result = await relayCall<{ request?: unknown }>(
+      const result = await withViewerOperation("telegram.review-polls", () => relayCall<{ request?: unknown }>(
         relay.api_base,
         "/requests/claim",
         "POST",
@@ -334,14 +346,13 @@ async function poll(
         {
           timeoutMs: (Math.min(25, relay.limits.max_wait_s) + 15) * 1000,
           maxBytes: relay.limits.max_response_bytes,
-          signal: loop.abort.signal,
         },
-      );
-      loop.state = "polling";
+      ));
+      if (!loop.stopped) loop.state = "polling";
       backoff = 5000;
       const current = readRelayStore().relays.find((item) => item.id === relay.id);
       if (result.status === 200 && result.body?.request)
-      void runClaimedRequest(current ?? { ...relay, paused: true }, result.body.request, () =>
+      void runClaimedRequest(current && controller.armed ? current : { ...relay, paused: true }, result.body.request, () =>
           wakeExternalRelayPoller(relay.id),
           { onUnknownFeature: () => refreshRelayDescriptorFeatures(relay.id, 0, { force: true }) },
         )
@@ -359,7 +370,6 @@ async function poll(
       if (loop.stopped || !current) break;
     } catch (error) {
       if (loop.stopped) break;
-      if (loop.abort.signal.aborted) continue;
       if (error instanceof ExternalRelayError && error.status === 401) {
         loop.state = "credential_rejected";
         break;
@@ -370,7 +380,7 @@ async function poll(
       }
       if (error instanceof ExternalRelayError && error.status === 429) {
         loop.state = "rate_limited";
-        await sleep((error.retryAfterSeconds ?? 5) * 1000);
+        await waitForPollRetry(loop, (error.retryAfterSeconds ?? 5) * 1000);
         continue;
       }
       if (isUnknownFeatureRefusal(error)) {
@@ -381,7 +391,7 @@ async function poll(
         if (refreshed === "changed") continue;
       }
       loop.state = "unreachable";
-      await sleep(backoff);
+      await waitForPollRetry(loop, backoff);
       backoff = Math.min(backoff * 2, 60_000);
     }
   }
@@ -430,29 +440,41 @@ export function refreshExternalRelayPollers(changedId?: string): void {
       !relays.some((relay) => relay.id === id && !relay.paused)
     ) {
       loop.stopped = true;
-      loop.abort.abort();
-      loops.delete(id);
+      loop.retiring = true;
+      loop.state = "paused";
+      loop.wake?.();
+      if (loop.finished) loops.delete(id);
     }
   for (const relay of relays)
     if (!relay.paused && !loops.has(relay.id)) {
-      const loop = {
-        abort: new AbortController(),
+      const loop: PollLoop = {
         stopped: false,
         state: "polling" as PollerState,
       };
       loops.set(relay.id, loop);
-      void poll(relay, loop);
+      // Settings changes and stop drain the pending HTTP claim before another
+      // loop can replace it. A received lease is still admitted or declined
+      // against the current settings by the runner.
+      void poll(relay, loop).finally(() => {
+        loop.finished = true;
+        if (loop.retiring && loops.get(relay.id) === loop) {
+          loops.delete(relay.id);
+          refreshExternalRelayPollers();
+        }
+      });
     }
 }
 export function stopExternalRelayPollers(): void {
   controller.armed = false;
   if (controller.sweepTimer) clearInterval(controller.sweepTimer);
   controller.sweepTimer = null;
-  for (const loop of loops.values()) {
+  for (const [id, loop] of loops) {
     loop.stopped = true;
-    loop.abort.abort();
+    loop.retiring = true;
+    loop.state = "paused";
+    loop.wake?.();
+    if (loop.finished) loops.delete(id);
   }
-  loops.clear();
 }
 export function externalRelayRows() {
   return readRelayStore().relays.map((relay) => ({

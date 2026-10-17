@@ -225,3 +225,27 @@ test("reserved adoption identity keeps the card when the seat store is unavailab
   expect(map["adopt-operation"]).toEqual({ origin: "operator", submissionId: "orchmandate_fixture", mandate: { kind: "unqualified" } });
   expect(map["paste-operation"]).toEqual({ origin: "operator", submissionId: "operator-paste" });
 });
+
+
+test("seat inbox provenance gives each member its own author and submission", async () => {
+  const { fixtureInboxBatch } = await import("./fixtures/inboxBatch");
+  const ledger = newLedger();
+  const batch = fixtureInboxBatch([{ id: "batch-operator", text: "operator instruction", operator: true }, { id: "batch-relay", text: "agent report" }]);
+  ledger.recordQueued(SESSION_ID, batch, "turn-started");
+  ledger.confirmDelivered(SESSION_ID, batch.id, "batch-user-uuid");
+  const map = claudeMessageProvenance(TRANSCRIPT, { ledger, registrySnapshot: () => emptySnapshot() });
+  expect(map["batch-user-uuid"]?.parts?.map(p => ({ text: p.text, origin: p.provenance.origin })))
+    .toEqual([{ text: "operator instruction", origin: "operator" }, { text: "agent report", origin: "agent" }]);
+});
+
+
+test("seat inbox preserves a seat mandate's own provenance inside a combined input", async () => {
+  const { fixtureInboxBatch } = await import("./fixtures/inboxBatch");
+  const ledger = newLedger();
+  const batch = fixtureInboxBatch([{ id: "spawn_message_rotation-launch", text: "coordinate the board", operator: true }, { id: "ordinary-followup", text: "saved answer", operator: true }]);
+  ledger.recordQueued(SESSION_ID, batch, "turn-started");
+  ledger.confirmDelivered(SESSION_ID, batch.id, "batch-mandate-uuid");
+  const map = claudeMessageProvenance(TRANSCRIPT, { ledger, registrySnapshot: () => emptySnapshot(), orchestratorSeats: () => rotationSeats() });
+  expect(map["batch-mandate-uuid"]?.parts?.[0]!.provenance.mandate).toEqual({ kind: "version", version: 44 });
+  expect(map["batch-mandate-uuid"]?.parts?.[1]!.provenance.mandate).toBeUndefined();
+});

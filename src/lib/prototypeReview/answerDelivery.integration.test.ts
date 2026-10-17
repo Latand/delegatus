@@ -8,6 +8,7 @@ import { startComposerPayloadRuntime, type ComposerPayloadRuntime } from "@/lib/
 import { setConversationHostDependenciesForTests } from "@/app/api/conversation-host/dependencies";
 import { runPrototypeAnswer } from "@/lib/externalRelay/prototypeAnswer";
 import { teamStore, resetTeamStoreForTests } from "@/lib/team/store";
+import { updateRelayStore } from "@/lib/externalRelay/store";
 import { insertSeatRound, findSeatRound, mutateSeatRound } from "./seatRounds";
 import { mintSession, MEMBER_COOKIE } from "@/lib/team/sessions";
 import { attemptPrototypeDelivery, decidePrototype, prototypeDelivery } from "./decision";
@@ -36,8 +37,15 @@ afterAll(async () => {
   }
 });
 
-test.each(["recommended", "explicit"])("B: %s Telegram answer reaches the real destination once in team mode", async kind => {
-  const id = `pr_${(kind === "recommended" ? "a" : "b").repeat(32)}`;
+test.each(["recommended", "explicit", "unlinked-owner"])("B: %s Telegram answer reaches the real destination once in team mode", async kind => {
+  const member = teamStore().member("m_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")!;
+  if (kind === "unlinked-owner") {
+    teamStore().updateMember({ ...member, telegram: null });
+    updateRelayStore(store => ({ ...store, relays: [{ id: "paired", origin: "https://relay.invalid", api_base: "https://relay.invalid/v1", name: "Test", description: "",
+      credential: "x".repeat(43), owner: { namespace: "telegram", id: "123456", display_name: "Owner", handle: null }, pairedAt: "2026-10-16T08:00:00Z", paused: false,
+      limits: { max_response_bytes: 1048576, max_wait_s: 25, max_answer_chars: 4000 }, targets: [] }] }));
+  }
+  const id = `pr_${(kind === "recommended" ? "a" : kind === "explicit" ? "b" : "f").repeat(32)}`;
   const round: PrototypeReviewRound = { id, taskId: null, project: "project-a", title: "Choose delivery", createdAt: "2026-10-16T08:00:00Z", source: { conversationId: runtime.conversationId }, publicationKey: kind, inputDigest: "fixture", variants: [],
     questions: [{ id: "where", text: "Where?", options: [{ label: "Here", recommended: true }, { label: "Later" }] }] };
   insertSeatRound(round);
@@ -46,12 +54,14 @@ test.each(["recommended", "explicit"])("B: %s Telegram answer reaches the real d
   const input = { reviewId: id, chosen: [], comment: "Keep the saved answer.", ...(kind === "recommended" ? { skip: true as const } : { answers: [{ questionId: "where", options: [1] }] }) };
   const result = await runPrototypeAnswer({ round, input }, "message-a", () => {}, { world, delivery: prototypeDelivery, telegramUserId: "123456" }).done;
   expect(result.status).toBe("done");
+  expect(result.answer).toMatchObject({ text: expect.stringContaining("✅ Записав") });
   await settlePrototypeDeliveriesForTests();
   expect(findSeatRound(id)!.decision!.decidedBy).toEqual({ kind: "member", memberId: "m_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" });
   for (let i = 0; i < 200 && runtime.delivered.length === before; i++) await Bun.sleep(10);
   expect(runtime.delivered).toHaveLength(before + 1);
   expect(runtime.delivered.at(-1)!.text).toBe(findSeatRound(id)!.decision!.delivery.text);
   expect((await prototypeDelivery.recover(findSeatRound(id)!.decision!))?.state).toBe("sent");
+  if (kind === "unlinked-owner") teamStore().updateMember(member);
 });
 
 

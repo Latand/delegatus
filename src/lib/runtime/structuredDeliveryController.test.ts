@@ -198,3 +198,28 @@ test("concurrent unpublished releases run once while runtime projection is unava
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
+
+
+test("seat inbox echo stamps every member once with its own ingress and excludes history", async () => {
+  const subject = await import("./structuredDeliveryController");
+  expect(subject.observeDeliveryEcho).toBeFunction();
+  const records = new Map(["one", "two", "foreign"].map((id, i) => [id, { conversationId: id === "foreign" ? "other" : "seat", ingressAt: `2026-10-17T06:00:0${i}.000Z`, engineEchoAt: null as string | null }]));
+  let writes = 0;
+  const progress = { get: (id: string) => records.get(id), timing: (id: string, values: { engineEchoAt: string }) => {
+    const record = records.get(id)!;
+    if (!record.engineEchoAt) { record.engineEchoAt = values.engineEchoAt; writes++; }
+  } };
+  const echo = { operationId: "inbox_batch", memberOperationIds: ["one", "two", "foreign"], at: "2026-10-17T06:01:00.000Z" };
+  subject.observeDeliveryEcho(progress, "seat", echo, false);
+  expect(writes).toBe(0);
+  subject.observeDeliveryEcho(progress, "seat", echo);
+  subject.observeDeliveryEcho(progress, "seat", echo);
+  expect(writes).toBe(2);
+  expect(records.get("one")!.engineEchoAt).toBe(echo.at);
+  expect(records.get("two")!.ingressAt).toBe("2026-10-17T06:00:01.000Z");
+  expect(records.get("foreign")!.engineEchoAt).toBeNull();
+  const latency = ["one", "two"].map(id => Date.parse(records.get(id)!.engineEchoAt!) - Date.parse(records.get(id)!.ingressAt));
+  expect(latency).toEqual([60000, 59000]);
+  subject.observeDeliveryEcho(progress, "seat", { ...echo, at: null });
+  expect(writes).toBe(2);
+});

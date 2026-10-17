@@ -19,7 +19,23 @@ export class StructuredAnswerError extends Error {
   constructor(message: string, readonly outcome: "uncertain" | "unavailable") { super(message); }
 }
 
+export interface InboxBatchPart {
+  operationId: string;
+  contentDigest: string;
+  admittedAt: string;
+  headerStart: number;
+  textStart: number;
+  textEnd: number;
+  imageStart: number;
+  imageEnd: number;
+  origin?: MessageOrigin;
+  selectedContext?: SelectedContextRef;
+  referenceTo?: string;
+  escaped?: boolean;
+}
+
 export interface QueueEntry {
+  parts?: InboxBatchPart[];
   id: string;
   content?: StructuredMessageContent;
   contentDigest?: string;
@@ -53,6 +69,7 @@ export interface FirstDispatchEvidence {
 }
 
 export interface NormalizedQueueEntry {
+  parts?: InboxBatchPart[];
   id: string;
   content: StructuredMessageContent;
   contentDigest: string;
@@ -73,6 +90,7 @@ export function normalizeQueueEntry(entry: QueueEntry): NormalizedQueueEntry {
     ...(entry.runtime ? { runtime: entry.runtime } : {}),
     ...(entry.selectedContext ? { selectedContext: entry.selectedContext } : {}),
     ...(entry.origin ? { origin: entry.origin } : {}),
+    ...(entry.parts ? { parts: structuredClone(entry.parts) } : {}),
   };
 }
 
@@ -100,7 +118,7 @@ export type RuntimeEvent =
   | { kind: "delta"; turnId: string; text: string; seq: number }
   | { kind: "item"; turnId: string | null; item: unknown; phase: "started" | "completed"; voiceResponse?: RuntimeVoiceResponse | null;
     /** Raw live user-echo observation, retained through event replay. */
-    deliveryEcho?: { operationId: string; at: string };
+    deliveryEcho?: { operationId: string; at: string; memberOperationIds?: string[] };
     /** Original native activity observation time; null for history whose time needs transcript evidence. */
     activityAt?: string | null; seq: number }
   | { kind: "voice-chunk"; turnId: string; delivery: RuntimeVoiceDelivery; seq: number }
@@ -163,6 +181,8 @@ export class RuntimeReplayGapError extends Error {
 
 /** Shared structured-host boundary from the issue 25 spike. */
 export interface EngineHost {
+  /** Viewer-composed input at a current seat, only after its turn ends. */
+  readonly coalescesQueuedInput?: boolean;
   readonly nativeQueue?: NativeQueueHost;
   readonly supportsSteer?: boolean;
   /** send() accepts input into the engine's own queue while a turn is active
