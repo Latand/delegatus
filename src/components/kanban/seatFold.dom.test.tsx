@@ -699,7 +699,7 @@ test("a strip that holds focus when it hides hands focus to the composer instead
     /* The page was scrolled up by the wheel: the head is back and the strip hides. */
     flushSync(() => watch.report([{ isIntersecting: true, boundingClientRect: { top: 10 }, rootBounds: { top: 0 } }]));
     expect(returnStrip(host)?.hasAttribute("data-shown")).toBe(false);
-    expect(dom.document.activeElement as unknown as HTMLElement).toBe(host.querySelector("[data-orchestrator-conversation] textarea"));
+    expect(dom.document.activeElement as unknown as HTMLElement).toBe(host.querySelector("[data-orchestrator-conversation] textarea") as HTMLElement);
   } finally {
     (globalThis as unknown as { IntersectionObserver: unknown }).IntersectionObserver = undefined;
   }
