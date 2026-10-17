@@ -337,7 +337,8 @@ export function readLogPage(after: Position, filter: FeedFilter): LogPage {
   const current = resumeOmittedTasks(source, filter, exportable);
   const [revision, wireKey = ""] = after;
   const checkpointed = wireKey.startsWith("x:") ? resolvePageCursor(source.database, wireKey.slice(2), "log") : null;
-  const key = checkpointed?.revision === revision ? checkpointed.cursor : wireKey;
+  if (wireKey.startsWith("x:") && (!checkpointed || checkpointed.revision !== revision)) return { kind: "resync" };
+  const key = checkpointed?.cursor ?? wireKey;
   // Unchanged eligibility context leaves omissions off the idle read path.
   if (revision > current) return { kind: "resync" };
   if (revision === current && !key) return { kind: "page", rows: [], cursor: after, more: false, withheld: [] };

@@ -187,6 +187,8 @@ test("log checkpoints an all-rejected long-key window and reaches the next valid
     expect(second.rows.map(decodeWireRow).map(row => row.id)).toEqual([expected.id]);
     expect(second.more).toBe(false);
     expect(warning).toHaveBeenCalledTimes(4_000);
+    setSystemTime(new Date(Date.parse(at) + 31 * 24 * 60 * 60 * 1_000));
+    expect(readLogPage(first.cursor, f.filter)).toEqual({ kind: "resync" });
   } finally { warning.mockRestore(); }
 });
 
