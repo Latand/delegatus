@@ -1,4 +1,4 @@
-import { repairLinkedTasks } from "./taskRepair";
+import { markTaskExport } from "./taskExportPrivacy";
 import { sharedLinkState } from "./runtimeState";
 /**
  * A's half of the `tasks` part of `boards/sync` (docs/design/linked-installs.md
@@ -11,9 +11,9 @@ import { sharedLinkState } from "./runtimeState";
 import { readPeerTaskWireVersion, readTaskCursor, writeTaskCursor, type TaskCursor } from "./boardLinks";
 import { installPrefix } from "./stamp";
 import { applyTaskRows } from "./taskApply";
-import { isPosition, readLogPage, readScanPage, PAGE_ROWS, type Position } from "./taskFeed";
+import { isPosition, PAGE_ROWS, type Position } from "./taskFeed";
+import { readLogPageInWorker as readLogPage, readScanPageInWorker as readScanPage } from "./taskPageWorker";
 import { decodeWireRow, MalformedRow, TASK_BOARD_WIRE_VERSION, TASK_PROTOTYPE_WIRE_VERSION, type WireRow } from "./taskWire";
-import { taskFeedSource } from "@/lib/tasks/store";
 
 export const TaskSyncError = sharedLinkState("taskExchange.errorClass", () => class TaskSyncError extends Error { constructor(readonly code: "malformed" | "clock" | "quota") { super(code); } });
 
@@ -93,18 +93,16 @@ export class TaskExchange {
 
   /** Starts one sync: counts the rows it moves. */
   begin(): void {
-    repairLinkedTasks();
     this.movedRows = 0;
     this.pullMore = false;
     this.pushMore = false;
   }
 
   /** The parts of the next request, or none while nothing is linked. */
-  request(linked: ReadonlySet<string>): TaskRequest {
+  async request(linked: ReadonlySet<string>): Promise<TaskRequest> {
     if (!linked.size) return {};
     // Sharing may become agreed midway through the connect-time exchange.
-    // Finish the repair before its first scan, so the following idle call writes nothing.
-    repairLinkedTasks();
+    // The page worker finishes the repair before reading its first scan.
     for (const covered of [this.pullCovered, this.pushCovered]) for (const key of covered) if (!linked.has(key)) { covered.delete(key); this.dirty = true; }
     const sorted = [...linked].sort();
     const request: TaskRequest = {};
@@ -121,17 +119,20 @@ export class TaskExchange {
     this.pushMore = false;
     if (!this.pushScan) {
       const uncovered = sorted.filter((key) => !this.pushCovered.has(key));
-      if (this.pushed === null) this.pushScan = { p: sorted.slice(0, SCAN_PROJECTS), after: "", full: true, at: [taskFeedSource()?.revision() ?? 0] };
+      if (this.pushed === null) this.pushScan = { p: sorted.slice(0, SCAN_PROJECTS), after: "", full: true, at: null };
       else if (uncovered.length) this.pushScan = { p: uncovered.slice(0, SCAN_PROJECTS), after: "", full: false, at: null };
     }
     if (this.pushScan && !sameSet(linked, this.pushScan.p)) this.pushScan = null;
     const filter = { self: this.self, skipPrefix: this.peerPrefix, peerTaskWireVersion: this.peerTaskWireVersion, includeBoard: this.peerTaskWireVersion >= TASK_BOARD_WIRE_VERSION, includePrototypeReview: this.peerTaskWireVersion >= TASK_PROTOTYPE_WIRE_VERSION };
     if (this.pushScan) {
-      const page = readScanPage(this.pushScan.after, { ...filter, projects: new Set(this.pushScan.p), skipPrefix: null });
+      const page = await readScanPage(this.pushScan.after, { ...filter, projects: new Set(this.pushScan.p), skipPrefix: null });
+      if (this.pushScan.full && this.pushScan.at === null) this.pushScan.at = page.at;
+      markTaskExport(request, page);
       this.inflight = { kind: "scan", next: page.next, rows: page.rows.length };
       request.push = { rows: page.rows, scan: page.next };
     } else if (this.pushed) {
-      const page = readLogPage(this.pushed, { ...filter, projects: linked });
+      const page = await readLogPage(this.pushed, { ...filter, projects: linked });
+      markTaskExport(request, page);
       if (page.kind === "resync") {
         this.pushed = null;
         this.pushCovered.clear();
@@ -260,11 +261,13 @@ export class TaskExchange {
 
   /** Whether this machine's log holds a linked change the peer has not yet
       taken. A cursor that only passes other projects' writes moves in memory. */
-  hasPush(linked: ReadonlySet<string>): boolean {
+  async hasPush(linked: ReadonlySet<string>): Promise<boolean> {
     if (!linked.size) return false;
     if (this.pushScan || this.pushed === null || [...linked].some((key) => !this.pushCovered.has(key))) return true;
-    const page = readLogPage(this.pushed, { self: this.self, skipPrefix: this.peerPrefix, projects: linked,
+    const pushed = this.pushed;
+    const page = await readLogPage(pushed, { self: this.self, skipPrefix: this.peerPrefix, projects: linked,
       peerTaskWireVersion: this.peerTaskWireVersion, includeBoard: this.peerTaskWireVersion >= TASK_BOARD_WIRE_VERSION, includePrototypeReview: this.peerTaskWireVersion >= TASK_PROTOTYPE_WIRE_VERSION });
+    if (this.pushed !== pushed || this.pushScan) return true;
     if (page.kind === "resync" || page.rows.length) return true;
     if (JSON.stringify(page.cursor) !== JSON.stringify(this.pushed)) this.moved = true;
     this.pushed = page.cursor;

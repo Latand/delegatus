@@ -1119,7 +1119,7 @@ test("a stage parked before spawn replaces the preceding stage note, while newer
   };
   saveTasks([{ ...loadTasks()[0]!, note: stillNewer }]);
   await new Promise(resolve => setTimeout(resolve, 10));
-  writeParkedTaskNote(current(), "signed out", attemptsOf("verify")[0]);
+  await writeParkedTaskNote(current(), "signed out", attemptsOf("verify")[0]);
   expect(loadTasks()[0]!.note).toEqual(stillNewer);
 });
 

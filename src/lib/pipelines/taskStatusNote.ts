@@ -1,6 +1,7 @@
+import { waitForStateLock } from "@/lib/state/lockWait";
 import { operatorLocale, operatorTimeZone } from "@/lib/operator/settings";
 import { patchTask } from "@/lib/tasks/commands";
-import { mutateTasks } from "@/lib/tasks/store";
+import { mutateTaskNote } from "@/lib/tasks/store";
 import type { Pipeline, PipelineStageAttempt } from "./types";
 
 export type ParkedTaskReason = { kind: "signed-out"; engine: "claude" | "codex" } | { kind: "quota-reset" } | { kind: "review-budget" }
@@ -43,7 +44,7 @@ export function parkedTaskNote(detail: string, locale: "en" | "uk", failed = fal
 
 /** Called at the engine's park transition. Compare against the attempt's start
  * under the task lock, so a note its agent just left wins even during settlement. */
-export function writeParkedTaskNote(pipeline: Pipeline, detail: string, attempt?: PipelineStageAttempt | null, reason?: ParkedTaskReason): void {
+export async function writeParkedTaskNote(pipeline: Pipeline, detail: string, attempt?: PipelineStageAttempt | null, reason?: ParkedTaskReason, assertCurrent: () => void = () => {}): Promise<void> {
   if (!pipeline.taskIds.length) return;
   const now = new Date().toISOString();
   /* A pending attempt can park before it has started. Its activating stage's
@@ -54,37 +55,35 @@ export function writeParkedTaskNote(pipeline: Pipeline, detail: string, attempt?
     : null;
   const since = Date.parse(attempt?.startedAt ?? attempt?.activation?.startedAt ?? activatedAt ?? pipeline.createdAt);
   const text = parkedTaskNote(detail, operatorLocale() ?? "uk", attempt?.state === "failed" || attempt?.verdict?.status === "fail", reason);
-  const linked = new Set(pipeline.taskIds);
-  mutateTasks(tasks => {
-    let changed = false;
-    const next = tasks.map(task => {
-      if (!linked.has(task.id) || task.project !== pipeline.project) return task;
-      if (task.note && (task.note.author.kind !== "orchestrator" || "conversationId" in task.note.author) && Date.parse(task.note.updatedAt) >= since) return task;
-      const result = patchTask([task], task.id, { note: text }, now, { actor: "agent", noteAuthor: { kind: "orchestrator" } });
-      if (!result.ok) throw new Error(result.error);
-      changed = true;
-      return result.task;
-    });
-    return { tasks: changed ? next : undefined, result: undefined };
-  });
+  await waitForStateLock("pipelines.task-note", async () => {
+    for (const taskId of new Set(pipeline.taskIds)) {
+      await mutateTaskNote(taskId, task => {
+        assertCurrent();
+        if (task.project !== pipeline.project) return undefined;
+        if (task.note && (task.note.author.kind !== "orchestrator" || "conversationId" in task.note.author) && Date.parse(task.note.updatedAt) >= since) return undefined;
+        const result = patchTask([task], task.id, { note: text }, now, { actor: "agent", noteAuthor: { kind: "orchestrator" } });
+        if (!result.ok) throw new Error(result.error);
+        return result.task;
+      });
+    }
+  }, { subject: "tasks" });
 }
 
 /** Remove an automatic park note after its blocker clears, leaving any note
  * written by a stage agent, orchestrator conversation or operator untouched. */
-export function clearEngineParkedTaskNote(pipeline: Pipeline): void {
+export async function clearEngineParkedTaskNote(pipeline: Pipeline, assertCurrent: () => void = () => {}): Promise<void> {
   if (!pipeline.taskIds.length) return;
-  const linked = new Set(pipeline.taskIds);
   const now = new Date().toISOString();
-  mutateTasks(tasks => {
-    let changed = false;
-    const next = tasks.map(task => {
-      if (!linked.has(task.id) || task.project !== pipeline.project
-        || task.note?.author.kind !== "orchestrator" || task.note.author.conversationId != null) return task;
-      const result = patchTask([task], task.id, { note: null }, now, { actor: "agent", noteAuthor: { kind: "orchestrator" } });
-      if (!result.ok) throw new Error(result.error);
-      changed = true;
-      return result.task;
-    });
-    return { tasks: changed ? next : undefined, result: undefined };
-  });
+  await waitForStateLock("pipelines.task-note", async () => {
+    for (const taskId of new Set(pipeline.taskIds)) {
+      await mutateTaskNote(taskId, task => {
+        assertCurrent();
+        if (task.project !== pipeline.project
+          || task.note?.author.kind !== "orchestrator" || task.note.author.conversationId != null) return undefined;
+        const result = patchTask([task], task.id, { note: null }, now, { actor: "agent", noteAuthor: { kind: "orchestrator" } });
+        if (!result.ok) throw new Error(result.error);
+        return result.task;
+      });
+    }
+  }, { subject: "tasks" });
 }

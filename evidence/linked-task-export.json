@@ -1,0 +1,610 @@
+{
+  "base": "afafbfba9bcdb68f4d7f41bfaefef6eb9163488a",
+  "codeSha256": "4c0e14a7a99024f54ba2f25a856ba7a434a4b5b4aa6ebe7d7c6ba09caeab018b",
+  "measuredAtUtc": "2026-10-17T08:39:02+00:00",
+  "runtime": "Bun 1.4.0",
+  "procedure": "scripts/measure-task-export.ts; read-only SQLite VACUUM INTO snapshot; WAL mode restored in the frozen copy; one unmeasured warm-up sync per process, then worker retirement before timing; three alternating base/final blocks with three measured retries each against fresh run copies of the same frozen input; isolated HOME/XDG_CONFIG_HOME/TMPDIR/LLV_STATE_DIR; control URLs on closed loopback port; owned gate runner; port-0 peer returning 400/malformed",
+  "workload": {
+    "tasks": 2308,
+    "roleMemoryRows": 3547,
+    "roleRules": 1927,
+    "roleRequests": 1518,
+    "roleScopes": 102,
+    "pipelines": 300,
+    "requestBytes": 489069,
+    "policyNow": 1792218160000
+  },
+  "payloadsByteIdentical": true,
+  "mainCpuTickMs": 10,
+  "maxAfterMainCpuWindowUpperBoundMs": 30,
+  "before": [
+    {
+      "block": 1,
+      "iteration": 0,
+      "policyNow": 1792218160000,
+      "ms": 21377.252768000002,
+      "cpu": {
+        "user": 21371580,
+        "system": 311633
+      },
+      "memoryClones": 712947,
+      "maxMainGapMs": 21353.925477,
+      "maxMainThreadCpuWindowMs": 21350,
+      "clockTicks": 100,
+      "calls": 1,
+      "bytes": 489069,
+      "error": "malformed",
+      "workerStats": null
+    },
+    {
+      "block": 1,
+      "iteration": 1,
+      "policyNow": 1792218160000,
+      "ms": 21709.589784999996,
+      "cpu": {
+        "user": 21719892,
+        "system": 307468
+      },
+      "memoryClones": 712947,
+      "maxMainGapMs": 21685.702008,
+      "maxMainThreadCpuWindowMs": 21680,
+      "clockTicks": 100,
+      "calls": 2,
+      "bytes": 489069,
+      "error": "malformed",
+      "workerStats": null
+    },
+    {
+      "block": 1,
+      "iteration": 2,
+      "policyNow": 1792218160000,
+      "ms": 21304.551831000004,
+      "cpu": {
+        "user": 21309828,
+        "system": 307682
+      },
+      "memoryClones": 712947,
+      "maxMainGapMs": 21284.105204000007,
+      "maxMainThreadCpuWindowMs": 21280,
+      "clockTicks": 100,
+      "calls": 3,
+      "bytes": 489069,
+      "error": "malformed",
+      "workerStats": null
+    },
+    {
+      "block": 2,
+      "iteration": 0,
+      "policyNow": 1792218160000,
+      "ms": 21832.827904,
+      "cpu": {
+        "user": 21823458,
+        "system": 384853
+      },
+      "memoryClones": 712947,
+      "maxMainGapMs": 21807.15479,
+      "maxMainThreadCpuWindowMs": 21800,
+      "clockTicks": 100,
+      "calls": 1,
+      "bytes": 489069,
+      "error": "malformed",
+      "workerStats": null
+    },
+    {
+      "block": 2,
+      "iteration": 1,
+      "policyNow": 1792218160000,
+      "ms": 22335.896493999993,
+      "cpu": {
+        "user": 22380358,
+        "system": 373401
+      },
+      "memoryClones": 712947,
+      "maxMainGapMs": 22308.608366999993,
+      "maxMainThreadCpuWindowMs": 22310,
+      "clockTicks": 100,
+      "calls": 2,
+      "bytes": 489069,
+      "error": "malformed",
+      "workerStats": null
+    },
+    {
+      "block": 2,
+      "iteration": 2,
+      "policyNow": 1792218160000,
+      "ms": 22203.357867999992,
+      "cpu": {
+        "user": 22202441,
+        "system": 356855
+      },
+      "memoryClones": 712947,
+      "maxMainGapMs": 22183.136866999994,
+      "maxMainThreadCpuWindowMs": 22190,
+      "clockTicks": 100,
+      "calls": 3,
+      "bytes": 489069,
+      "error": "malformed",
+      "workerStats": null
+    },
+    {
+      "block": 3,
+      "iteration": 0,
+      "policyNow": 1792218160000,
+      "ms": 20879.572661000002,
+      "cpu": {
+        "user": 20860921,
+        "system": 331464
+      },
+      "memoryClones": 712947,
+      "maxMainGapMs": 20857.689533,
+      "maxMainThreadCpuWindowMs": 20860,
+      "clockTicks": 100,
+      "calls": 1,
+      "bytes": 489069,
+      "error": "malformed",
+      "workerStats": null
+    },
+    {
+      "block": 3,
+      "iteration": 1,
+      "policyNow": 1792218160000,
+      "ms": 21377.297906999993,
+      "cpu": {
+        "user": 21396006,
+        "system": 305738
+      },
+      "memoryClones": 712947,
+      "maxMainGapMs": 21357.790820999995,
+      "maxMainThreadCpuWindowMs": 21350,
+      "clockTicks": 100,
+      "calls": 2,
+      "bytes": 489069,
+      "error": "malformed",
+      "workerStats": null
+    },
+    {
+      "block": 3,
+      "iteration": 2,
+      "policyNow": 1792218160000,
+      "ms": 21091.094870999994,
+      "cpu": {
+        "user": 21024332,
+        "system": 365365
+      },
+      "memoryClones": 712947,
+      "maxMainGapMs": 21071.743248,
+      "maxMainThreadCpuWindowMs": 21070,
+      "clockTicks": 100,
+      "calls": 3,
+      "bytes": 489069,
+      "error": "malformed",
+      "workerStats": null
+    }
+  ],
+  "afterCompiledWorker": [
+    {
+      "block": 1,
+      "iteration": 0,
+      "policyNow": 1792218160000,
+      "ms": 12930.747038000001,
+      "cpu": {
+        "user": 149361,
+        "system": 114368
+      },
+      "memoryClones": 0,
+      "maxMainGapMs": 2.760121999999683,
+      "maxMainThreadCpuWindowMs": 10,
+      "clockTicks": 100,
+      "calls": 1,
+      "bytes": 489069,
+      "error": "malformed",
+      "workerStats": {
+        "builds": 1,
+        "cpu": {
+          "user": 12659618,
+          "system": 536528
+        }
+      }
+    },
+    {
+      "block": 1,
+      "iteration": 1,
+      "policyNow": 1792218160000,
+      "ms": 19.70162799999889,
+      "cpu": {
+        "user": 7309,
+        "system": 2811
+      },
+      "memoryClones": 0,
+      "maxMainGapMs": 1.0298659999971278,
+      "maxMainThreadCpuWindowMs": 10,
+      "clockTicks": 100,
+      "calls": 2,
+      "bytes": 489069,
+      "error": "malformed",
+      "workerStats": {
+        "builds": 1,
+        "cpu": {
+          "user": 0,
+          "system": 378
+        }
+      }
+    },
+    {
+      "block": 1,
+      "iteration": 2,
+      "policyNow": 1792218160000,
+      "ms": 19.255114999999932,
+      "cpu": {
+        "user": 5762,
+        "system": 4093
+      },
+      "memoryClones": 0,
+      "maxMainGapMs": 1.4257119999965653,
+      "maxMainThreadCpuWindowMs": 0,
+      "clockTicks": 100,
+      "calls": 3,
+      "bytes": 489069,
+      "error": "malformed",
+      "workerStats": {
+        "builds": 1,
+        "cpu": {
+          "user": 168,
+          "system": 8
+        }
+      }
+    },
+    {
+      "block": 2,
+      "iteration": 0,
+      "policyNow": 1792218160000,
+      "ms": 12921.084513999998,
+      "cpu": {
+        "user": 158565,
+        "system": 118958
+      },
+      "memoryClones": 0,
+      "maxMainGapMs": 4.1246700000010605,
+      "maxMainThreadCpuWindowMs": 10,
+      "clockTicks": 100,
+      "calls": 1,
+      "bytes": 489069,
+      "error": "malformed",
+      "workerStats": {
+        "builds": 1,
+        "cpu": {
+          "user": 12692170,
+          "system": 497386
+        }
+      }
+    },
+    {
+      "block": 2,
+      "iteration": 1,
+      "policyNow": 1792218160000,
+      "ms": 22.586622999999236,
+      "cpu": {
+        "user": 10571,
+        "system": 2098
+      },
+      "memoryClones": 0,
+      "maxMainGapMs": 3.952470000000176,
+      "maxMainThreadCpuWindowMs": 10,
+      "clockTicks": 100,
+      "calls": 2,
+      "bytes": 489069,
+      "error": "malformed",
+      "workerStats": {
+        "builds": 1,
+        "cpu": {
+          "user": 589,
+          "system": 0
+        }
+      }
+    },
+    {
+      "block": 2,
+      "iteration": 2,
+      "policyNow": 1792218160000,
+      "ms": 19.1530210000019,
+      "cpu": {
+        "user": 8491,
+        "system": 1394
+      },
+      "memoryClones": 0,
+      "maxMainGapMs": 1.5122150000024703,
+      "maxMainThreadCpuWindowMs": 20,
+      "clockTicks": 100,
+      "calls": 3,
+      "bytes": 489069,
+      "error": "malformed",
+      "workerStats": {
+        "builds": 1,
+        "cpu": {
+          "user": 349,
+          "system": 14
+        }
+      }
+    },
+    {
+      "block": 3,
+      "iteration": 0,
+      "policyNow": 1792218160000,
+      "ms": 13069.597424,
+      "cpu": {
+        "user": 163448,
+        "system": 121514
+      },
+      "memoryClones": 0,
+      "maxMainGapMs": 4.500222000002395,
+      "maxMainThreadCpuWindowMs": 10,
+      "clockTicks": 100,
+      "calls": 1,
+      "bytes": 489069,
+      "error": "malformed",
+      "workerStats": {
+        "builds": 1,
+        "cpu": {
+          "user": 12809910,
+          "system": 550490
+        }
+      }
+    },
+    {
+      "block": 3,
+      "iteration": 1,
+      "policyNow": 1792218160000,
+      "ms": 21.114323000001605,
+      "cpu": {
+        "user": 4747,
+        "system": 6896
+      },
+      "memoryClones": 0,
+      "maxMainGapMs": 1.5257309999979043,
+      "maxMainThreadCpuWindowMs": 10,
+      "clockTicks": 100,
+      "calls": 2,
+      "bytes": 489069,
+      "error": "malformed",
+      "workerStats": {
+        "builds": 1,
+        "cpu": {
+          "user": 467,
+          "system": 21
+        }
+      }
+    },
+    {
+      "block": 3,
+      "iteration": 2,
+      "policyNow": 1792218160000,
+      "ms": 19.710543000001053,
+      "cpu": {
+        "user": 7643,
+        "system": 2903
+      },
+      "memoryClones": 0,
+      "maxMainGapMs": 1.6467249999986961,
+      "maxMainThreadCpuWindowMs": 10,
+      "clockTicks": 100,
+      "calls": 3,
+      "bytes": 489069,
+      "error": "malformed",
+      "workerStats": {
+        "builds": 1,
+        "cpu": {
+          "user": 206,
+          "system": 10
+        }
+      }
+    }
+  ],
+  "codeDigestAlgorithm": "SHA-256 of each sorted sourceFiles path, NUL, exact file bytes, NUL",
+  "sourceFiles": [
+    "next.config.ts",
+    "scripts/measure-task-export.ts",
+    "src/app/api/peer/v1/[...path]/route.ts",
+    "src/lib/links/boardSync.test.ts",
+    "src/lib/links/client.ts",
+    "src/lib/links/fixtures/taskExport.cases.ts",
+    "src/lib/links/protocol.ts",
+    "src/lib/links/schedule.ts",
+    "src/lib/links/taskExchange.ts",
+    "src/lib/links/taskExport.test.ts",
+    "src/lib/links/taskExportPrivacy.ts",
+    "src/lib/links/taskFeed.ts",
+    "src/lib/links/taskPageBuild.ts",
+    "src/lib/links/taskPageWorker.ts",
+    "src/lib/links/taskServe.ts",
+    "src/lib/memory/roleStore.ts",
+    "src/lib/taskPage.worker.ts",
+    "src/lib/viewerLoopMonitor.ts"
+  ],
+  "beforeMeasuredAtUtc": "2026-10-17T08:34:07+00:00",
+  "checks": [
+    {
+      "name": "role-matcher",
+      "exit": 0,
+      "elapsedS": 6.142,
+      "command": [
+        "bun",
+        "test",
+        "src/lib/memory/roleMatcher.test.ts"
+      ],
+      "isolation": "private HOME/XDG_CONFIG_HOME/TMPDIR/LLV_STATE_DIR; both control URLs on closed loopback port; gate-slot.sh"
+    },
+    {
+      "name": "role-egress",
+      "exit": 0,
+      "elapsedS": 0.92,
+      "command": [
+        "bun",
+        "test",
+        "src/lib/memory/roleEgress.test.ts"
+      ],
+      "isolation": "private HOME/XDG_CONFIG_HOME/TMPDIR/LLV_STATE_DIR; both control URLs on closed loopback port; gate-slot.sh"
+    },
+    {
+      "name": "role-store",
+      "exit": 0,
+      "elapsedS": 4.176,
+      "command": [
+        "bun",
+        "test",
+        "src/lib/memory/roleStore.test.ts"
+      ],
+      "isolation": "private HOME/XDG_CONFIG_HOME/TMPDIR/LLV_STATE_DIR; both control URLs on closed loopback port; gate-slot.sh"
+    },
+    {
+      "name": "transport",
+      "exit": 0,
+      "elapsedS": 89.506,
+      "command": [
+        "bun",
+        "test",
+        "src/lib/links/boardSync.test.ts",
+        "--test-name-pattern",
+        "^(?!.*(?:M3 link RSS|1 000 tasks arrive|one edit costs|1 000 synced edits|2 000 expired Done|an idle call costs)).*"
+      ],
+      "isolation": "private HOME/XDG_CONFIG_HOME/TMPDIR/LLV_STATE_DIR; both control URLs on closed loopback port; gate-slot.sh"
+    },
+    {
+      "name": "lint",
+      "exit": 0,
+      "elapsedS": 2.598,
+      "command": [
+        "node_modules/.bin/eslint",
+        "next.config.ts",
+        "scripts/measure-task-export.ts",
+        "src/app/api/peer/v1/[...path]/route.ts",
+        "src/lib/links/boardSync.test.ts",
+        "src/lib/links/client.ts",
+        "src/lib/links/fixtures/taskExport.cases.ts",
+        "src/lib/links/protocol.ts",
+        "src/lib/links/schedule.ts",
+        "src/lib/links/taskExchange.ts",
+        "src/lib/links/taskExport.test.ts",
+        "src/lib/links/taskExportPrivacy.ts",
+        "src/lib/links/taskFeed.ts",
+        "src/lib/links/taskPageBuild.ts",
+        "src/lib/links/taskPageWorker.ts",
+        "src/lib/links/taskServe.ts",
+        "src/lib/memory/roleStore.ts",
+        "src/lib/taskPage.worker.ts",
+        "src/lib/viewerLoopMonitor.ts"
+      ],
+      "isolation": "private HOME/XDG_CONFIG_HOME/TMPDIR/LLV_STATE_DIR; both control URLs on closed loopback port; gate-slot.sh"
+    },
+    {
+      "name": "types",
+      "exit": 0,
+      "elapsedS": 9.1,
+      "command": [
+        "node_modules/.bin/tsc",
+        "--noEmit"
+      ],
+      "isolation": "private HOME/XDG_CONFIG_HOME/TMPDIR/LLV_STATE_DIR; both control URLs on closed loopback port; gate-slot.sh"
+    },
+    {
+      "name": "build",
+      "exit": 0,
+      "elapsedS": 79.276,
+      "command": [
+        "bun",
+        "run",
+        "build"
+      ],
+      "isolation": "private HOME/XDG_CONFIG_HOME/TMPDIR/LLV_STATE_DIR; both control URLs on closed loopback port; gate-slot.sh"
+    },
+    {
+      "name": "compiled",
+      "exit": 0,
+      "elapsedS": 6.37,
+      "command": [
+        "bun",
+        "test",
+        "src/lib/links/taskExport.test.ts"
+      ],
+      "isolation": "private HOME/XDG_CONFIG_HOME/TMPDIR/LLV_STATE_DIR; both control URLs on closed loopback port; gate-slot.sh",
+      "additionalEnv": {
+        "LLV_TASK_PAGE_BUILT_TEST": "1"
+      }
+    },
+    {
+      "name": "final-replay",
+      "exit": 0,
+      "elapsedS": null,
+      "command": [
+        "bun",
+        "scripts/measure-task-export.ts"
+      ],
+      "isolation": "same frozen input; three alternating base/final blocks, three measured retries per block; isolated HOME/XDG_CONFIG_HOME/TMPDIR/LLV_STATE_DIR; both control URLs on closed loopback port; gate-slot.sh",
+      "additionalEnv": {
+        "NODE_ENV": "test",
+        "LLV_TASK_EXPORT_MEASURE_NOW": "1792218160000"
+      },
+      "result": "9 attempts per revision; identical 489069-byte payloads verified by matching SHA-256 in private run output"
+    },
+    {
+      "name": "final-lint",
+      "exit": 0,
+      "elapsedS": 1,
+      "command": [
+        "node_modules/.bin/eslint",
+        "scripts/measure-task-export.ts"
+      ],
+      "isolation": "private HOME/XDG_CONFIG_HOME/TMPDIR/LLV_STATE_DIR; both control URLs on closed loopback port; gate-slot.sh"
+    },
+    {
+      "name": "final-build",
+      "exit": 0,
+      "elapsedS": null,
+      "command": [
+        "bun",
+        "run",
+        "build"
+      ],
+      "isolation": "private HOME/XDG_CONFIG_HOME/TMPDIR/LLV_STATE_DIR; both control URLs on closed loopback port; gate-slot.sh; archived final source; production and MCP build completed"
+    },
+    {
+      "name": "publication-privacy",
+      "exit": 0,
+      "elapsedS": null,
+      "command": [
+        "bun",
+        "scripts/privacy-publication-gate.ts",
+        "--require-known-values",
+        "--check-commits",
+        "--base",
+        "origin/main"
+      ],
+      "isolation": "private HOME/XDG_CONFIG_HOME/TMPDIR/LLV_STATE_DIR; both control URLs on closed loopback port; gate-slot.sh"
+    }
+  ],
+  "baseCodeSha256": "cfb8dc809bfc77943ca1cc4902869ac8eeb8151293472c19378680d33bf62657",
+  "baseCodeSourceFiles": [
+    "next.config.ts",
+    "scripts/measure-task-export.ts",
+    "src/app/api/peer/v1/[...path]/route.ts",
+    "src/lib/links/boardSync.test.ts",
+    "src/lib/links/client.ts",
+    "src/lib/links/protocol.ts",
+    "src/lib/links/schedule.ts",
+    "src/lib/links/taskExchange.ts",
+    "src/lib/links/taskFeed.ts",
+    "src/lib/links/taskServe.ts",
+    "src/lib/memory/roleStore.ts",
+    "src/lib/viewerLoopMonitor.ts"
+  ],
+  "afterMeasuredAtUtc": "2026-10-17T08:39:02+00:00",
+  "measurementOrder": [
+    "base",
+    "final",
+    "base",
+    "final",
+    "base",
+    "final"
+  ],
+  "measurementBlocks": 3,
+  "warmupSyncsPerProcess": 1
+}

@@ -91,7 +91,17 @@ async function protectControllerArtifactIndex(worktreeDir: string, exec: ExecPor
   const repo = fs.realpathSync(top.stdout.trim());
   const physicalDirectory = path.join(fs.realpathSync(root), CONTROLLER_ARTIFACT_DIRECTORY);
   const relative = path.relative(repo, physicalDirectory).split(path.sep).join("/");
-  if (relative.startsWith("../") || path.isAbsolute(relative)) throw new Error("controller artifacts must stay inside the Git worktree");
+  if (relative.startsWith("../") || path.isAbsolute(relative)) {
+    // A stray core.worktree in the shared config moves the answer of
+    // --show-toplevel away from the checkout. Name the redirect, not just the fence.
+    let message = `controller artifacts must stay inside the Git worktree: ${fs.realpathSync(root)} resolves to Git work tree ${repo}`;
+    const configured = await git(["config", "--get", "core.worktree"]).catch(() => null);
+    const configuredValue = configured?.status === 0 ? configured.stdout.trim() : "";
+    const environmentValue = process.env.GIT_WORK_TREE?.trim() ?? "";
+    if (configuredValue) message += `; core.worktree is set to ${configuredValue} in this repository's config`;
+    if (environmentValue) message += `; GIT_WORK_TREE is set to ${environmentValue}`;
+    throw new Error(message);
+  }
   const namespaceOf = (file: string): string | null => {
     const parts = file.split("/");
     const index = parts.findIndex((part, n) => part === ".artifacts" && parts[n + 1] === "pipeline-stage-inputs");
