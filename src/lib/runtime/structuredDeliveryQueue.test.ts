@@ -8,6 +8,7 @@ import type { DeliveryReceipt, EngineHost, FirstDispatchEvidence, HostState, Que
 import {
   CONTROL_SETTLEMENT_WINDOW_MS,
   StructuredDeliveryQueue,
+  type StructuredDeliveryTransition,
   type StructuredDeliveryEffect,
   type StructuredDeliveryQueuePort,
 } from "./structuredDeliveryQueue";
@@ -1487,6 +1488,65 @@ test("a send an earlier executor already took is never delivered a second time",
 
   expect(sent).toEqual([]);
   expect(transitions).toEqual([]);
+});
+
+test("a dropped steer is retried after a concurrent control pass reads its stale delivering snapshot", async () => {
+  const statuses = new Map<string, { status: StructuredDeliveryTransition | "pending"; reason?: string | null }>([
+    ["supplement", { status: "queued" }],
+    ["interrupt", { status: "pending" }],
+  ]);
+  let includeInterrupt = false;
+  let active = true;
+  let resolveSteer!: (value: "dropped") => void;
+  let resolveInterrupt!: () => void;
+  let interruptStarted!: () => void;
+  let queuedTransition!: () => void;
+  const observedSteer = new Promise<"dropped">((resolve) => { resolveSteer = resolve; });
+  const interruptGate = new Promise<void>((resolve) => { resolveInterrupt = resolve; });
+  const interruptEntered = new Promise<void>((resolve) => { interruptStarted = resolve; });
+  const becameQueued = new Promise<void>((resolve) => { queuedTransition = resolve; });
+  const target = host(async () => ({ outcome: "turn-started", turnId: "successor-turn" }));
+  target.health = async () => ({ ...idleState(), status: active ? "active" : "idle", activeTurnRef: active ? "original-turn" : null });
+  target.steer = async () => ({ turnId: "original-turn", observe: () => observedSteer });
+  target.interrupt = async () => {
+    interruptStarted();
+    await interruptGate;
+    active = false;
+  };
+  const queue = new StructuredDeliveryQueue({
+    effects: async () => [
+      ...(includeInterrupt ? [{
+        id: "effect:interrupt",
+        kind: "runtime.interrupt",
+        eventSeq: 1,
+        payload: { operationId: "interrupt", conversationId: "conversation-one", turnId: "original-turn" },
+      }] : []),
+      ...(statuses.get("supplement")?.status === "queued" || statuses.get("supplement")?.status === "delivering" ? [{
+        id: "effect:supplement",
+        kind: "runtime.send",
+        eventSeq: 2,
+        payload: { operationId: "supplement", conversationId: "conversation-one", text: "continue after rotation", policy: "steer-or-queue" },
+      }] : []),
+    ],
+    status: async (id) => statuses.get(id) ?? null,
+    transition: async (id, status, details) => {
+      statuses.set(id, { status, reason: details?.reason });
+      if (id === "supplement" && status === "queued" && details?.reason === "steer-dropped") queuedTransition();
+    },
+  }, () => target);
+
+  await queue.drain();
+  expect(statuses.get("supplement")?.status).toBe("delivering");
+
+  includeInterrupt = true;
+  const concurrentPass = queue.drain();
+  await interruptEntered;
+  resolveSteer("dropped");
+  await becameQueued;
+  resolveInterrupt();
+  await concurrentPass;
+
+  expect(statuses.get("supplement")?.status).toBe("delivered");
 });
 
 test("a steered send the dying host took is not delivered again when the host returns", async () => {
@@ -3313,4 +3373,41 @@ test.each(["uncertain", "unavailable"] as const)("a %s Codex callback outcome is
   await queue.drain(); await queue.drain();
   expect(writes).toBe(1);
   expect(transitions).toEqual(["delivering", outcome === "uncertain" ? "uncertain" : "failed"]);
+});
+
+for (const boundary of ["drain", "engine", "unknown", "unknown-at-engine"] as const) test(`seat channel fences queued sends at ${boundary}`, async () => {
+  let authority: "open" | "revoked" | "unknown" = boundary === "engine" || boundary === "unknown-at-engine" ? "open" : boundary === "unknown" ? "unknown" : "revoked";
+  let sends = 0;
+  const transitions: { status: string; reason?: string | null }[] = [];
+  const reason = "the orchestrator seat was replaced before this reached it; it was not delivered there";
+  const queue = new StructuredDeliveryQueue({
+    effects: async () => [{ id: "effect:seat-fence", kind: "runtime.send", eventSeq: 1,
+      payload: { kind: "send", operationId: "seat-fence", conversationId: "conversation-one", text: "saved operator answer", policy: "queue" } }],
+    status: async () => ({ status: "queued", revision: 1 }), hostClaim: async () => "owner:1",
+    seatRecipient: () => authority === "open" ? { kind: "open" } : { kind: authority, reason },
+    transition: async (_id, status, details) => {
+      transitions.push({ status, reason: details?.reason });
+      if (status === "delivering") authority = boundary === "unknown-at-engine" ? "unknown" : "revoked";
+    },
+  }, () => host(async () => { sends++; return { outcome: "turn-started", turnId: "turn-one" }; }));
+  await queue.drain();
+  expect(sends).toBe(0);
+  if (boundary === "unknown") expect(transitions).toEqual([]);
+  else if (boundary === "unknown-at-engine") expect(transitions.at(-1)).toMatchObject({ status: "queued" });
+  else expect(transitions.at(-1)).toEqual({ status: "failed", reason });
+});
+
+for (const kind of ["interrupt", "kill"] as const) test(`a revoked seat can still receive the ${kind} control`, async () => {
+  let acted = 0;
+  const target = host(async () => { throw new Error("no message expected"); });
+  target.health = async () => ({ ...idleState(), status: "active", activeTurnRef: "held-turn" });
+  target.interrupt = async () => { acted++; };
+  const queue = new StructuredDeliveryQueue({
+    effects: async () => [{ id: "effect:seat-control", kind: `runtime.${kind}`, eventSeq: 1,
+      payload: { kind, operationId: "seat-control", conversationId: "conversation-one", turnId: "held-turn", sessionKey: { engine: "codex", sessionId: "thread-one" } } }],
+    seatRecipient: () => ({ kind: "revoked", reason: "revoked seat" }),
+    transition: async () => {},
+  }, () => target, async () => { acted++; return true; });
+  await queue.drain();
+  expect(acted).toBe(1);
 });

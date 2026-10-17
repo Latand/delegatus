@@ -111,6 +111,7 @@ interface CurrentReleaseControllerLoaders {
   loadLinkedBoardSync?: () => Promise<{ startLinkedBoardSync: () => void }>;
   /** Optional for the same reason. */
   loadDoneSweep?: () => Promise<{ startDoneSweep: () => void }>;
+  loadSeatChannel?: () => Promise<{ startSeatChannel: () => void }>;
   loadPrototypeDelivery?: () => Promise<{ startPrototypeDeliveryWorker: () => void }>;
   loadSelfUpdateAuto?: () => Promise<{ startSelfUpdateAuto: () => Promise<void> | void }>;
 }
@@ -367,6 +368,7 @@ export async function startCurrentReleaseControllers(
     loadAttentionReconcile: () => import("@/lib/attention/reconcileController"),
     loadLinkedBoardSync: () => import("@/lib/links/schedule"),
     loadDoneSweep: () => import("@/lib/done/sweep"),
+    loadSeatChannel: () => import("@/lib/orchestrator/seatChannel"),
     loadPrototypeDelivery: () => import("@/lib/prototypeReview/deliveryWorker"),
     loadSelfUpdateAuto: () => import("@/lib/selfUpdate/auto"),
   },
@@ -533,6 +535,12 @@ export async function startCurrentReleaseControllers(
      their messages go to the seat from here (docs/design/prototype-review-server.md).
      The first sweep attempts every decision still owed, so a decision saved
      while the Viewer restarted or a deploy ran goes out now. */
+  try {
+    const seatChannel = await loaders.loadSeatChannel?.();
+    seatChannel?.startSeatChannel();
+  } catch (error) {
+    console.error("[seat channel] start failed", error instanceof Error ? error.name : "unknown");
+  }
   try {
     const prototypeDelivery = await loaders.loadPrototypeDelivery?.();
     prototypeDelivery?.startPrototypeDeliveryWorker();

@@ -119,3 +119,14 @@ test.each([true, false])("required durable drain recovery failure refuses autono
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("a seat-channel startup failure leaves saved-answer delivery running", async () => {
+  const started: string[] = [];
+  await startCurrentReleaseControllers({ LLV_ACCOUNT_CONTROLLER_DISABLED: "1" }, {
+    loadFlowPipelineController: async () => ({ startFlowPipelineController: () => { started.push("pipeline"); } }),
+    loadAccountMigrationController: async () => ({ startAccountMigrationController: async () => {} }),
+    loadSeatChannel: async () => ({ startSeatChannel: () => { throw new Error("channel read refused"); } }),
+    loadPrototypeDelivery: async () => ({ startPrototypeDeliveryWorker: () => { started.push("answers"); } }),
+  });
+  expect(started).toEqual(["pipeline", "answers"]);
+});
