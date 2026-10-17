@@ -1,5 +1,5 @@
 import { stateLeaseHoldsInFlight } from "@/lib/state/sqliteStateStore";
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import fs from "node:fs";
 import os from "node:os";
@@ -271,4 +271,89 @@ test("compact ownership preserves unknown owners, duplicate detection and indepe
     expect(await withPipelineStartupAdmission(async available => available, undefined, undefined, true)).toBe(false);
     await expect(pipelineRegistryHealthAsync()).rejects.toThrow("contradictory identities");
   } finally { db.close(); }
+});
+
+test("a changed pipeline keeps validated history for the next evidence read", async () => {
+  const { root, row } = fixture();
+  const db = new Database(path.join(root, "state.sqlite"));
+  const count = 48;
+  try {
+    const insert = db.query("INSERT INTO state_rows(collection,row_key,value_json,row_order,row_revision,controller_active) VALUES('pipelines_archive',?,?,?,1,0)");
+    for (let i = 0; i < count; i++) {
+      const id = `retained-evidence-${i}`;
+      insert.run(id, JSON.stringify({ ...row, id, worktreeDir: `/repo-pipeline-${id}`, branch: `pipeline/synthetic-ownership-evidence-${id}` }), i);
+    }
+    const originalParse = JSON.parse;
+    let changed = false;
+    let reads = 0;
+    const parse = spyOn(JSON, "parse").mockImplementation((text, reviver) => {
+      if (typeof text === "string" && text.includes('"stages":') && text.includes('"runs":')) {
+        reads++;
+        if (!changed) {
+          changed = true;
+          db.query("UPDATE state_rows SET value_json=? WHERE collection='pipelines' AND row_key=?")
+            .run(JSON.stringify({ ...row, state: "future-owner" }), row.id);
+        }
+      }
+      return originalParse(text, reviver);
+    });
+    try {
+      await expect(pipelineRegistryHealthAsync()).rejects.toThrow("pipeline evidence changed during preparation");
+      expect(reads).toBe(count + 1);
+      reads = 0;
+      expect(await pipelineRegistryHealthAsync()).toMatchObject([{ id: row.id, reason: "unknown-but-preserved" }]);
+      expect(reads, "only the changed row needs decoding after a rejected read").toBe(1);
+      db.query("UPDATE state_rows SET value_json='{broken' WHERE collection='pipelines' AND row_key=?").run(row.id);
+      await expect(pipelineRegistryHealthAsync()).rejects.toThrow("corrupt pipelines SQLite row");
+    } finally { parse.mockRestore(); }
+  } finally { db.close(); }
+});
+
+test("health callers across revisions share the cold history read and refuse its stale result", async () => {
+  const { root, row } = fixture();
+  const db = new Database(path.join(root, "state.sqlite"));
+  const count = 48;
+  let second: Promise<unknown> | undefined;
+  let entered!: () => void;
+  const ready = new Promise<void>(resolve => { entered = resolve; });
+  let writer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const insert = db.query("INSERT INTO state_rows(collection,row_key,value_json,row_order,row_revision,controller_active) VALUES('pipelines_archive',?,?,?,1,0)");
+    for (let i = 0; i < count; i++) {
+      const id = `shared-evidence-${i}`;
+      insert.run(id, JSON.stringify({ ...row, id, worktreeDir: `/repo-pipeline-${id}`, branch: `pipeline/synthetic-ownership-evidence-${id}` }), i);
+    }
+    const originalParse = JSON.parse;
+    let reads = 0;
+    let scheduled = false;
+    const parse = spyOn(JSON, "parse").mockImplementation((text, reviver) => {
+      if (typeof text === "string" && text.includes('"stages":') && text.includes('"runs":')) {
+        reads++;
+        if (!scheduled) {
+          scheduled = true;
+          writer = setTimeout(() => {
+            db.query("UPDATE state_rows SET value_json=? WHERE collection='pipelines' AND row_key=?")
+              .run(JSON.stringify({ ...row, state: "future-owner" }), row.id);
+            second = pipelineRegistryHealthAsync().then(() => "accepted", () => "refused");
+            entered();
+          }, 0);
+          // Force the cold reader to reach its cooperative yield before the
+          // next row; the writer and second caller then run during that read.
+          Bun.sleepSync(6);
+        }
+      }
+      return originalParse(text, reviver);
+    });
+    try {
+      const first = pipelineRegistryHealthAsync();
+      // Observe rejection immediately while waiting for the second caller.
+      const firstResult = first.then(() => "accepted", () => "refused");
+      await ready;
+      expect(await Promise.all([firstResult, second!])).toEqual(["refused", "refused"]);
+      expect(reads, "overlapping callers must hydrate retained history once").toBe(count + 1);
+      reads = 0;
+      expect(await pipelineRegistryHealthAsync()).toMatchObject([{ id: row.id, reason: "unknown-but-preserved" }]);
+      expect(reads).toBe(1);
+    } finally { parse.mockRestore(); }
+  } finally { clearTimeout(writer); db.close(); }
 });

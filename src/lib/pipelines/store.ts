@@ -1165,8 +1165,12 @@ function readEvidenceSignature(): string {
     are released when the last admission using that read finishes. */
 async function preparePipelineEvidence(mode: "startup" | "health" | "ownership" = "startup"): Promise<PreparedPipelineEvidence> {
   const signature = evidenceSignature();
-  const pendingKey = `${signature}:${mode}`;
-  const existing = pendingEvidence.get(`${signature}:startup`) ?? (mode !== "startup" ? pendingEvidence.get(`${signature}:ownership`) ?? pendingEvidence.get(`${signature}:health`) : undefined) ?? pendingEvidence.get(pendingKey);
+  const filename = stateDatabaseFile();
+  // Writes can outpace a cold history read. Share that read across revisions;
+  // its final signature check still refuses stale evidence to every caller.
+  const pendingNamespace = JSON.stringify([filename, evidenceFileIdentity(filename)]);
+  const pendingKey = `${pendingNamespace}:${mode}`;
+  const existing = pendingEvidence.get(`${pendingNamespace}:startup`) ?? (mode !== "startup" ? pendingEvidence.get(`${pendingNamespace}:ownership`) ?? pendingEvidence.get(`${pendingNamespace}:health`) : undefined) ?? pendingEvidence.get(pendingKey);
   if (existing) { performanceSpans.event("pipeline.shared"); return existing; }
   const pending = withViewerOperation("pipelines.evidence", async () => {
     const pipelines: Pipeline[] = [];
@@ -1187,8 +1191,11 @@ async function preparePipelineEvidence(mode: "startup" | "health" | "ownership" 
           if (value.ownership) ownership.push(value.ownership);
           if (value.issue) issues.push(value.issue);
         }
-        if (signature !== evidenceSignature()) throw new PipelineStoreError("pipeline evidence changed during preparation");
+        // Keep revision-tagged row validation even when the overall snapshot
+        // lost its admission race. The next read revalidates changed rows;
+        // none of this snapshot becomes authoritative until the check below.
         compactEvidence = prepared;
+        if (signature !== evidenceSignature()) throw new PipelineStoreError("pipeline evidence changed during preparation");
         return { pipelines, ownership, issues, signature };
       }
       compactEvidence = undefined;
