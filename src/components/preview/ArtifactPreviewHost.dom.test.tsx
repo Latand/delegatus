@@ -9,6 +9,7 @@ import { setLocale } from "@/lib/i18n";
 
 import { setLeftShellInset } from "../shellLayout";
 import { useModalLayer } from "../modalLayer";
+import { useMenuDismiss } from "../kanban/kanbanMenus";
 import { ArtifactPreviewHost, roomForSheet } from "./ArtifactPreviewHost";
 import { artifactMetaUrl } from "./artifactResource";
 import { openArtifactPreview } from "./previewBus";
@@ -261,6 +262,52 @@ test("a modal dialog opened over the preview takes the first Escape; the second 
 
   await act(async () => {
     dom.window.dispatchEvent(new dom.KeyboardEvent("keydown", { key: "Escape", bubbles: true }) as never);
+  });
+  expect(surface()).toBeNull();
+});
+
+/* A board menu (the kanban menus dismiss through useMenuDismiss) opened over
+   the preview. */
+function BoardMenu({ anchor, onClose }: { anchor: HTMLElement; onClose: () => void }) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  useMenuDismiss(ref, anchor, onClose);
+  return <div ref={ref} role="menu" data-test-board-menu="" />;
+}
+
+function PreviewWithBoardMenu() {
+  const [anchor, setAnchor] = useState<HTMLElement | null>(null);
+  return (
+    <>
+      <ArtifactPreviewHost mobile={false} />
+      <button data-test-open-menu="" onClick={(event) => setAnchor(event.currentTarget)} />
+      {anchor ? <BoardMenu anchor={anchor} onClose={() => setAnchor(null)} /> : null}
+    </>
+  );
+}
+
+test("a board menu opened over the preview takes the first Escape; the second closes the preview", async () => {
+  textRoutes();
+  await act(async () => {
+    root!.render(<PreviewWithBoardMenu />);
+  });
+  await act(async () => openArtifactPreview(TEXT_PATH));
+  await flush();
+  await flush();
+  expect(surface()).not.toBeNull();
+
+  await act(async () => {
+    (dom.document.querySelector("[data-test-open-menu]") as unknown as HTMLElement).click();
+  });
+  const menu = () => dom.document.querySelector("[data-test-board-menu]");
+  expect(menu()).not.toBeNull();
+
+  await act(async () => {
+    dom.document.body.dispatchEvent(new dom.KeyboardEvent("keydown", { key: "Escape", bubbles: true }) as never);
+  });
+  expect({ menuOpen: menu() !== null, previewOpen: surface() !== null }).toEqual({ menuOpen: false, previewOpen: true });
+
+  await act(async () => {
+    dom.document.body.dispatchEvent(new dom.KeyboardEvent("keydown", { key: "Escape", bubbles: true }) as never);
   });
   expect(surface()).toBeNull();
 });

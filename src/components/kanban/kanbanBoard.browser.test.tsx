@@ -33646,11 +33646,34 @@ describe("overlays opened from a conversation draw above the full-screen view th
           expect(await open("[data-artifact-preview]"), `${tag} the preview stays on the board`).toBe(1);
           await page.locator('.card[data-id="task:t-search"] [data-menu]').evaluate((element) => (element as HTMLElement).click());
           await page.waitForSelector(".kb .menu");
-          expect(await zOf(".kb .menu")).toBeGreaterThan(await zOf("[data-artifact-preview]"));
+          const previewZ = await zOf("[data-artifact-preview]");
+          const menuZ = await zOf(".kb .menu");
+          expect(menuZ).toBeGreaterThan(previewZ);
           await expectOnTop(page, ".kb .menu", `${tag} card menu over the preview`);
           await page.screenshot({ path: path.join(out, `${tag}-board-preview-menu.png`) });
+          /* Escape belongs to the menu opened after the preview, then to the preview. */
+          await page.keyboard.press("Escape");
+          await page.waitForSelector(".kb .menu", { state: "detached", timeout: 5_000 });
+          expect(await open("[data-artifact-preview]"), `${tag} the card menu took the first Escape`).toBe(1);
+          await page.keyboard.press("Escape");
+          await page.waitForSelector("[data-artifact-preview]", { state: "detached", timeout: 5_000 });
+
+          /* The same inside the agent window: its ⋯ menu opened over a preview. */
+          await page.click('.card[data-id="task:t-search"] .pb-pills [data-stage="verify"]');
+          await page.waitForSelector("[data-agent-window] [data-file-link]", { timeout: 15_000 });
+          await page.locator("[data-agent-window] [data-file-link]", { hasText: "plan" }).first().click();
+          await page.waitForSelector("[data-artifact-preview]");
+          await page.locator("[data-agent-window] [data-reader-menu]").first().evaluate((element) => (element as HTMLElement).click());
+          await page.waitForSelector(".kb .menu");
+          await page.keyboard.press("Escape");
+          await page.waitForSelector(".kb .menu", { state: "detached", timeout: 5_000 });
+          expect(await open("[data-artifact-preview]"), `${tag} the reader menu took the first Escape`).toBe(1);
+          expect(await open("[data-agent-window]")).toBe(1);
+          await page.keyboard.press("Escape");
+          await page.waitForSelector("[data-artifact-preview]", { state: "detached", timeout: 5_000 });
+          expect(await open("[data-agent-window]"), `${tag} the preview took the next Escape`).toBe(1);
           expect(pageErrors).toEqual([]);
-          readings.push({ width, height, lang, scheme, previewZ: await zOf("[data-artifact-preview]"), menuZ: await zOf(".kb .menu"), pageErrors });
+          readings.push({ width, height, lang, scheme, previewZ, menuZ, menuEscapeFirst: true, pageErrors });
         } finally { await context.close(); }
       }
       fs.mkdirSync("evidence/reader-overlays", { recursive: true });
