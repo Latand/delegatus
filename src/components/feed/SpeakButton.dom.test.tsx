@@ -763,6 +763,37 @@ test("the menu switches provider, and every answer control follows", async () =>
   second.host.remove();
 });
 
+/* Audit B23: the provider choice shows at once; a refusal puts the stored one back. */
+test("a provider pick is checked at once while the save is held, sends once, and a refusal checks the stored one again with the reason", async () => {
+  const posts: unknown[] = [];
+  let refuse: () => void = () => {};
+  globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    if (url === "/api/tts/backend" && init?.method === "POST") {
+      posts.push(JSON.parse(String(init.body)));
+      await new Promise<void>((resolve) => { refuse = resolve; });
+      return Response.json({ error: "busy" }, { status: 503 });
+    }
+    if (url === "/api/tts/backend") return Response.json(backendInfo);
+    throw new Error("unexpected synthesis");
+  }) as unknown as typeof fetch;
+  const view = await mount("Provider held");
+  const menu = await openMenu(view);
+  const provider = (name: string) => [...menu.querySelectorAll<HTMLButtonElement>("button[data-tts-provider]")].find((button) => button.textContent?.startsWith(name))!;
+  flushSync(() => { provider("ElevenLabs").click(); });
+  await drainUpdates();
+  expect(provider("ElevenLabs").getAttribute("aria-checked")).toBe("true");
+  expect(provider("OpenAI").getAttribute("aria-checked")).toBe("false");
+  flushSync(() => { provider("ElevenLabs").click(); });
+  expect(posts).toEqual([{ backend: "elevenlabs" }]);
+  refuse();
+  await drainUpdates();
+  expect(provider("OpenAI").getAttribute("aria-checked")).toBe("true");
+  expect(menu.textContent).toContain("Could not switch the voice provider");
+  flushSync(() => { view.root.unmount(); });
+  view.host.remove();
+});
+
 test("a provider with no key refuses out loud and names the file to drop it into", async () => {
   const noKey = { ...backendInfo, backend: "elevenlabs" };
   let posts = 0;

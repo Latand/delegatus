@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { performanceSpans } from "@/lib/performanceSpans";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -334,6 +335,10 @@ export function persistedFileScanSnapshot(): FileScanSnapshot | undefined {
 export type PersistedFileScanGeneration = { epoch: string; generation: number };
 
 function writePersistedFileScanSnapshot(snapshot: FileScanSnapshot, scanned: PersistedFileScanGeneration): void {
+  return performanceSpans.sync("scanner.cache-persist", () => persistFileScanSnapshot(snapshot, scanned));
+}
+
+function persistFileScanSnapshot(snapshot: FileScanSnapshot, scanned: PersistedFileScanGeneration): void {
   let temporary: string | undefined;
   let operation = "create state directory";
   let target = statePath(FILE_SCAN_SNAPSHOT_FILE);
@@ -344,13 +349,13 @@ function writePersistedFileScanSnapshot(snapshot: FileScanSnapshot, scanned: Per
     temporary = path.join(path.dirname(filename), `.${path.basename(filename)}.${process.pid}.${crypto.randomUUID()}.tmp`);
     operation = "write temporary snapshot";
     target = temporary;
-    fs.writeFileSync(temporary, JSON.stringify({
+    fs.writeFileSync(temporary, performanceSpans.sync("scanner.cache-encode", () => JSON.stringify({
       version: FILE_SCAN_SNAPSHOT_VERSION,
       schemaVersion: FILE_SCAN_CACHE_SCHEMA_VERSION,
       epoch: scanned.epoch,
       generation: scanned.generation,
       snapshot,
-    }) + "\n", {
+    })) + "\n", {
       encoding: "utf8",
       mode: 0o600,
     });

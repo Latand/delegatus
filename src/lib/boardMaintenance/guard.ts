@@ -1,3 +1,4 @@
+import { registryRowsMatching } from "@/lib/agent/sqliteRegistryStore";
 import { conversationAgentRole } from "@/lib/agent/spawnAdmission";
 import { agentRegistry, readOnlyConversationLookupFromSnapshot } from "@/lib/agent/registry";
 import type { BoardTask } from "@/lib/tasks/types";
@@ -18,7 +19,7 @@ export function maintainerCallerOf(conversationId: string | null, snapshot: Regi
   let run = maintenanceRunForConversation(id);
   let identifiedScheduledRun = Boolean(indexedRunId);
   if (!run) {
-    const receipt = Object.values(snapshot.receipts).find(r => r.conversationId === id && r.agentRole === "maintainer" && r.clientAttemptId?.startsWith("maint_"));
+    const receipt = registryRowsMatching(snapshot, "receipts", "conversationId", id).find(r => r.conversationId === id && r.agentRole === "maintainer" && r.clientAttemptId?.startsWith("maint_"));
     if (receipt?.clientAttemptId) {
       identifiedScheduledRun = true;
       run = readMaintenanceRun(receipt.clientAttemptId);

@@ -8,7 +8,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import { afterEach, expect, test } from "bun:test";
 
@@ -498,4 +498,142 @@ test("publish verification rejects registry integrity drift", () => {
   expect(result.stderr).toContain(
     "dist.integrity does not match the published tarball",
   );
+});
+
+type PublicationJob = {
+  needs?: string;
+  permissions: Record<string, string>;
+  steps: { name?: string; run?: string; env?: Record<string, string>; with?: Record<string, unknown> }[];
+};
+
+test("npm and GitHub Release independently depend only on immutable tag verification", () => {
+  const parsed = Bun.YAML.parse(workflow) as {
+    jobs: Record<string, PublicationJob>;
+    on: { push: { tags: string[] }; workflow_dispatch: { inputs: { tag: { required: boolean } } } };
+  };
+  expect(parsed.on.push.tags).toEqual(["v*"]);
+  expect(parsed.on.workflow_dispatch.inputs.tag.required).toBe(true);
+  expect(parsed.jobs.publish.needs).toBe("verify-tag");
+  expect(parsed.jobs.publish.steps[0].with?.ref).toBe("${{ needs.verify-tag.outputs.revision }}");
+  expect(parsed.jobs["github-release"].needs).toBe("verify-tag");
+  expect(parsed.jobs["verify-tag"].needs).toBeUndefined();
+  expect(parsed.jobs["verify-tag"].steps.some(step => step.name === "Verify immutable release tag")).toBe(true);
+  expect(parsed.jobs["verify-tag"].permissions).toEqual({ contents: "read" });
+  expect(parsed.jobs.publish.permissions).toEqual({ contents: "read", "id-token": "write" });
+  const release = parsed.jobs["github-release"];
+  expect(release.permissions).toEqual({ contents: "write" });
+  expect(release.steps[0].with).toEqual({
+    ref: "${{ needs.verify-tag.outputs.revision }}",
+    "persist-credentials": false,
+  });
+  expect(release.steps.find(step => step.name === "Publish GitHub Release")?.env).toEqual({
+    GH_TOKEN: "${{ github.token }}",
+    GH_REPO: "${{ github.repository }}",
+  });
+  expect(release.steps.some(step => /npm|bun install/.test(step.run ?? ""))).toBe(false);
+});
+
+function githubReleaseFixture(changelog: string, tag = "v1.2.3", refusal = false) {
+  const directory = mkdtempSync(join(tmpdir(), "llv-github-release-"));
+  temporaryDirectories.push(directory);
+  for (const child of ["bin", "home", "config", "state", "tmp"]) mkdirSync(join(directory, child));
+  writeFileSync(join(directory, "CHANGELOG.md"), changelog);
+  const node = Bun.which("node");
+  if (!node) throw new Error("The workflow test requires Node.js");
+  const gh = join(directory, "bin", "gh");
+  writeFileSync(gh, `#!${node}
+const fs = require("node:fs");
+const args = process.argv.slice(2);
+fs.appendFileSync("calls.jsonl", JSON.stringify(args) + "\\n");
+if (args[0] !== "release") process.exit(90);
+if (args[1] === "view") process.exit(fs.existsSync("release.json") ? 0 : 1);
+if (args[1] !== "create") process.exit(91);
+if (process.env.RELEASE_TEST_REFUSAL === "true") {
+  console.error("Synthetic GitHub publication refusal");
+  process.exit(43);
+}
+if (fs.existsSync("release.json")) process.exit(92);
+fs.writeFileSync("release.json", JSON.stringify({
+  tag: args[2],
+  title: args[args.indexOf("--title") + 1],
+  notes: fs.readFileSync(args[args.indexOf("--notes-file") + 1], "utf8"),
+  verifyTag: args.includes("--verify-tag"),
+}));
+`);
+  chmodSync(gh, 0o755);
+  const run = (step: string) => Bun.spawnSync(["bash", "-c", workflowStepScript(step)], {
+    cwd: directory,
+    env: {
+      PATH: `${join(directory, "bin")}:${dirname(node)}:/usr/bin:/bin`,
+      HOME: join(directory, "home"),
+      XDG_CONFIG_HOME: join(directory, "config"),
+      LLV_STATE_DIR: join(directory, "state"),
+      TMPDIR: join(directory, "tmp"),
+      RUNNER_TEMP: join(directory, "tmp"),
+      RELEASE_TAG: tag,
+      RELEASE_TEST_REFUSAL: String(refusal),
+    },
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  return {
+    directory,
+    run,
+    notes: () => readFileSync(join(directory, "tmp", "release-notes.md"), "utf8"),
+    calls: () => readFileSync(join(directory, "calls.jsonl"), "utf8").trim().split("\n").filter(Boolean).map(line => JSON.parse(line) as string[]),
+  };
+}
+
+test("release notes select exactly the requested section and preserve its reference links", () => {
+  const fixture = githubReleaseFixture([
+    "# Changelog", "## [Unreleased]", "Future work", "## [1.2.30] — 2026-01-04", "Other version",
+    "## [1.2.3] — 2026-01-03", "", "### Added", "- Feature ([#12]).", "",
+    "## [1.2.2] — 2026-01-02", "Previous version", "", "[#12]: https://example.org/pull/12",
+    "[#11]: https://example.org/pull/11", "",
+  ].join("\r\n"));
+  const result = fixture.run("Extract version changelog");
+  expect(result.exitCode).toBe(0);
+  expect(fixture.notes()).toBe("### Added\n- Feature ([#12]).\n\n[#12]: https://example.org/pull/12\n");
+});
+
+test("release notes support a final section and a prerelease version", () => {
+  const fixture = githubReleaseFixture("## [1.2.3]\nStable\n\n## [1.2.3-rc.1]\n\n### Fixed\n- Preview fix.\n", "v1.2.3-rc.1");
+  expect(fixture.run("Extract version changelog").exitCode).toBe(0);
+  expect(fixture.notes()).toBe("### Fixed\n- Preview fix.\n");
+});
+
+for (const [name, changelog] of [
+  ["missing", "## [Unreleased]\nFuture work\n## [1.2.30]\nOther version\n"],
+  ["empty", "## [1.2.3]\n\n## [1.2.2]\nOld notes\n"],
+  ["duplicate", "## [1.2.3]\nFirst\n## [1.2.3]\nSecond\n"],
+]) {
+  test(`release notes refuse ${name} version sections`, () => {
+    const fixture = githubReleaseFixture(changelog);
+    const result = fixture.run("Extract version changelog");
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr.toString()).toContain("CHANGELOG section");
+    expect(existsSync(join(fixture.directory, "calls.jsonl"))).toBe(false);
+  });
+}
+
+test("GitHub publication creates the tagged release once and skips it in a fresh process", () => {
+  const fixture = githubReleaseFixture("## [1.2.3]\n\n### Fixed\n- A fix.\n");
+  expect(fixture.run("Extract version changelog").exitCode).toBe(0);
+  expect(fixture.run("Publish GitHub Release").exitCode).toBe(0);
+  expect(JSON.parse(readFileSync(join(fixture.directory, "release.json"), "utf8"))).toEqual({
+    tag: "v1.2.3", title: "Delegatus 1.2.3", notes: "### Fixed\n- A fix.\n", verifyTag: true,
+  });
+  const repeated = fixture.run("Publish GitHub Release");
+  expect(repeated.exitCode).toBe(0);
+  expect(repeated.stdout.toString()).toContain("already exists; skipping");
+  expect(fixture.calls().map(args => args[1])).toEqual(["view", "create", "view"]);
+});
+
+test("GitHub publication failures remain visible in their own job", () => {
+  const fixture = githubReleaseFixture("## [1.2.3]\nA fix.\n", "v1.2.3", true);
+  expect(fixture.run("Extract version changelog").exitCode).toBe(0);
+  const result = fixture.run("Publish GitHub Release");
+  expect(result.exitCode).toBe(43);
+  expect(result.stderr.toString()).toContain("Synthetic GitHub publication refusal");
+  expect(existsSync(join(fixture.directory, "release.json"))).toBe(false);
 });

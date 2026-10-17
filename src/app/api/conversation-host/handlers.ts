@@ -297,6 +297,10 @@ export async function conversationHostPOST(req: NextRequest, options?: { actor: 
       return NextResponse.json({ error: admitted.error, code: admitted.code, admission: "refused" }, { status: admitted.status });
     }
     relay = admitted;
+    if (body.conversationId !== admitted.recipient) {
+      body.conversationId = admitted.recipient;
+      delete body.path;
+    }
     // Terminal evidence answers before either transport can recover a host or
     // reserve again, including the adopted legacy recipient's fallback path.
     if (relay.terminalReceipt || relay.voiceRecoveryReceipt) {

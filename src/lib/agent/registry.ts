@@ -1609,7 +1609,29 @@ function rearmRolledBackMigrationDeliveries(
   }
 }
 
+/** Receipt selection shares the lazy view's transaction and collection order.
+ * Alias keys are selected too: adopted receipts can predate the canonical id. */
+export function registryReceiptsForConversation(file: RegistryFile, id: string): SpawnReceipt[] {
+  const canonical = resolveConversationAlias(file, id as ViewerConversationId);
+  return registryRowsMatching(file, "receipts", "conversationId", conversationIdsResolvingTo(file, canonical))
+    .filter(receipt => resolveConversationAlias(file, receipt.conversationId) === canonical);
+}
+
+function registryReceiptsReferencing(file: RegistryFile, id: string): SpawnReceipt[] {
+  const keys = new Set([
+    ...registryKeysMatching(file, "receipts", "conversationId", id),
+    ...registryKeysMatching(file, "receipts", "parentConversationId", id),
+    ...registryKeysMatching(file, "receipts", "launchProfile.parentConversationId", id),
+  ]);
+  return [...keys].map(key => file.receipts[key]!).filter(Boolean);
+}
+
 const CLAIMABLE_RECEIPT_STATES = new Set(["starting", "pane-bound", "host-verified", "prompt-delivered", "path-pending"]);
+
+/** The same provisioning states in keyed reads and held startup views. */
+export function registryOpenSpawnReceipts(file: RegistryFile): SpawnReceipt[] {
+  return registryRowsMatching(file, "receipts", "state", [...CLAIMABLE_RECEIPT_STATES]);
+}
 
 export function deliveryHasDurableClaimOwner(
   snapshot: RegistryFile,
@@ -1624,7 +1646,7 @@ export function deliveryHasDurableClaimOwner(
     && entry.key.sessionId === current.id
     && entry.artifactPath === current.path
     && ((entry.structuredHost !== null && entry.structuredHost !== undefined) !== (entry.host !== null)))) return true;
-  return Object.values(snapshot.receipts).some((receipt) =>
+  return registryRowsMatching(snapshot, "receipts", "conversationId", conversation.id).some((receipt) =>
     receipt.engine === conversation.engine
     && receipt.conversationId === conversation.id
     && CLAIMABLE_RECEIPT_STATES.has(receipt.state));
@@ -1828,7 +1850,7 @@ function enrollSettledSpawnInDrain(file: RegistryFile, conversation: RegistryCon
     settling: staged, its first message not yet delivered (#2051). */
 function settlingLaunchAccounts(file: RegistryFile): Map<ViewerConversationId, string | null> {
   const accounts = new Map<ViewerConversationId, string | null>();
-  for (const receipt of Object.values(file.receipts)) {
+  for (const receipt of registryRowsMatching(file, "receipts", "state", ["starting", "path-pending"])) {
     if (receipt.purpose !== "launch" || (receipt.state !== "starting" && receipt.state !== "path-pending")) continue;
     accounts.set(resolveConversationAlias(file, receipt.conversationId), receipt.accountId);
   }
@@ -3339,10 +3361,8 @@ function scannerAllocatedProvisionalOwner(conversation: RegistryConversation, pa
 
 function conversationDurabilityScore(file: RegistryFile, conversation: RegistryConversation): number {
   let score = conversation.generations.length > 1 || conversation.migration !== null ? 100 : 0;
-  for (const receipt of Object.values(file.receipts)) {
-    if (receipt.conversationId === conversation.id) score += 20;
-    if (receipt.parentConversationId === conversation.id) score += 5;
-  }
+  score += registryKeysMatching(file, "receipts", "conversationId", conversation.id).length * 20;
+  score += registryKeysMatching(file, "receipts", "parentConversationId", conversation.id).length * 5;
   if (file.lineageEdges[conversation.id]) score += 10;
   for (const edge of Object.values(file.lineageEdges)) if (edge.parentConversationId === conversation.id) score += 5;
   if (file.memberships[conversation.id]?.length) score += 10;
@@ -3694,7 +3714,7 @@ function adoptProvisionalOwner(
   /* The adopted identity's keys are answered under the target from here on, so
      the target inherits the weaker of the two histories. */
   if (!owner.deliveryEvidenceTracked) target.deliveryEvidenceTracked = false;
-  for (const receipt of Object.values(file.receipts)) {
+  for (const receipt of registryReceiptsReferencing(file, owner.id)) {
     if (receipt.conversationId === owner.id) receipt.conversationId = target.id;
     if (receipt.parentConversationId === owner.id) receipt.parentConversationId = target.id;
     if (receipt.launchProfile.parentConversationId === owner.id) {
@@ -5869,8 +5889,7 @@ export class AgentRegistry {
   }
 
   openSpawnReceipts(): SpawnReceipt[] {
-    return this.readKeyed(file => clone(registryRowsMatching(file,"receipts","state",
-      ["starting","pane-bound","host-verified","prompt-delivered","path-pending"])));
+    return this.readKeyed(file => clone(registryOpenSpawnReceipts(file)));
   }
 
   /** Structured ownership rows, including released rows needed by recovery. */
@@ -6058,7 +6077,7 @@ export class AgentRegistry {
       its identity even if an older host finishes cleanup afterwards. */
   discardSpawnCapabilityForOperation(operationId: string, digest?: string): void {
     this.mutate((file) => {
-      for (const receipt of Object.values(file.receipts)) {
+      for (const receipt of registryRowsMatching(file, "receipts", "pendingSpawnCapability.operationId", operationId)) {
         if (receipt.pendingSpawnCapability?.operationId === operationId
           && (digest === undefined || receipt.pendingSpawnCapability.digest === digest)) {
           receipt.pendingSpawnCapability = null;
@@ -6249,7 +6268,7 @@ export class AgentRegistry {
       which has no host binding. The state check and owner release are one CAS. */
   retireUnconsumedSpawn(clientAttemptId: string, reason: string): boolean {
     return this.mutate((file) => {
-      const receipt = Object.values(file.receipts).find((row) => row.clientAttemptId === clientAttemptId);
+      const receipt = registryRowsMatching(file, "receipts", "clientAttemptId", clientAttemptId)[0];
       if (!receipt || receipt.membershipAdmitted !== false || receipt.state !== "starting" || receipt.key || receipt.pane) return false;
       receipt.state = "failed";
       receipt.error = reason;
@@ -6375,7 +6394,7 @@ export class AgentRegistry {
                   entry.launchProfile.title = requestedTitle;
                 }
               }
-              for (const receipt of Object.values(file.receipts)) {
+              for (const receipt of registryReceiptsForConversation(file, existingConversationId)) {
                 if (resolveConversationAlias(file, receipt.conversationId) === existingConversationId
                   && !durableSemanticTitle(receipt.launchProfile.title)) {
                   receipt.launchProfile.title = requestedTitle;
@@ -6464,7 +6483,7 @@ export class AgentRegistry {
         }
       }
       if (conversationId && input.spawnCapabilityDigest) {
-        for (const existing of Object.values(file.receipts)) {
+        for (const existing of registryReceiptsForConversation(file, conversationId)) {
           if (resolveConversationAlias(file, existing.conversationId) === conversationId) {
             existing.spawnCapabilityDigest = null;
             existing.pendingSpawnCapability = null;
@@ -6769,7 +6788,7 @@ export class AgentRegistry {
       const stamped = stampOrchestratorLineage(file, seat, seat.activatedAt ?? seat.designatedAt);
       if (stamped.changed && stamped.engine) file.conversationRevision[stamped.engine] += 1;
       if (stamped.engine) return stamped.changed;
-      const receipt = Object.values(file.receipts).find((candidate) => candidate.conversationId === seat.conversationId);
+      const receipt = seat.conversationId ? registryRowsMatching(file, "receipts", "conversationId", seat.conversationId)[0] : undefined;
       if (!receipt) return false;
       const pending = normalizePendingOrchestratorSeatIdentity(seat);
       if (!pending || isDeepStrictEqual(receipt.pendingOrchestratorSeatIdentity, pending)) return false;
@@ -8246,7 +8265,7 @@ export class AgentRegistry {
       for (const entry of Object.values(file.entries)) {
         if (liveIds.has(sessionKeyId(entry.key))) entry.pendingAction = null;
       }
-      for (const receipt of Object.values(file.receipts)) {
+      for (const receipt of registryRowsMatching(file, "receipts", "state", "starting")) {
         if (receipt.state !== "starting" || !receipt.artifactPath) continue;
         const key = Object.values(file.entries).find((entry) => entry.artifactPath === receipt.artifactPath)?.key;
         if (key && liveIds.has(sessionKeyId(key))) receipt.state = "completed";
@@ -8265,7 +8284,7 @@ export class AgentRegistry {
         || entry.status === "dead"
         || entry.status === "unhosted") return false;
       const receiptCandidates = entry.structuredHostOperationId == null
-        ? Object.values(file.receipts)
+        ? registryRowsMatching(file, "receipts", "artifactPath", entry.artifactPath)
         : [file.receipts[entry.structuredHostOperationId]].filter((receipt): receipt is SpawnReceipt => Boolean(receipt));
       const matchingReceipts = receiptCandidates.filter((receipt) =>
         receipt.state === "completed"
@@ -8782,17 +8801,18 @@ export class AgentRegistry {
   }
 
   launchProfileForPath(artifactPath: string): LaunchProfile | null {
-    const snapshot = this.readOnlySnapshot();
-    for (const conversation of Object.values(snapshot.conversations)) {
-      const generation = conversation.generations.find((item) => item.path === artifactPath);
-      if (generation) return clone(generation.launchProfile);
-      if (conversation.continuityPaths.includes(artifactPath)) {
-        const current = conversation.generations.at(-1);
-        if (current) return clone(current.launchProfile);
+    return this.readKeyed(snapshot => {
+      for (const conversation of registryConversationsForPath(snapshot, artifactPath)) {
+        const generation = conversation.generations.find((item) => item.path === artifactPath);
+        if (generation) return clone(generation.launchProfile);
+        if (conversation.continuityPaths.includes(artifactPath)) {
+          const current = conversation.generations.at(-1);
+          if (current) return clone(current.launchProfile);
+        }
       }
-    }
-    const receipt = Object.values(snapshot.receipts).find((item) => item.artifactPath === artifactPath);
-    return receipt ? clone(receipt.launchProfile) : null;
+      const receipt = registryRowsMatching(snapshot, "receipts", "artifactPath", artifactPath)[0];
+      return receipt ? clone(receipt.launchProfile) : null;
+    });
   }
 
   /** Durable account ownership for a transcript path (issue #891, phase 0).
@@ -8800,18 +8820,20 @@ export class AgentRegistry {
       conversation; deriving the account from the path layout stays in the
       account manager only as recovery for artifacts the registry never saw. */
   transcriptAccountId(engine: AgentEngine, artifactPath: string): string | null {
-    const snapshot = this.readOnlySnapshot();
-    for (const conversation of Object.values(snapshot.conversations)) {
-      if (conversation.engine !== engine) continue;
-      const generation = conversation.generations.find((item) => item.path === artifactPath);
-      if (generation?.accountId) return generation.accountId;
-      if (conversation.continuityPaths.includes(artifactPath)) {
-        const current = conversation.generations.at(-1);
-        if (current?.accountId) return current.accountId;
+    return this.readKeyed(file => {
+      for (const conversation of registryConversationsForPath(file, artifactPath)) {
+        if (conversation.engine !== engine) continue;
+        const generation = conversation.generations.find((item) => item.path === artifactPath);
+        if (generation?.accountId) return generation.accountId;
+        if (conversation.continuityPaths.includes(artifactPath)) {
+          const current = conversation.generations.at(-1);
+          if (current?.accountId) return current.accountId;
+        }
       }
-    }
-    const receipt = Object.values(snapshot.receipts).find((item) => item.artifactPath === artifactPath && item.engine === engine);
-    return receipt?.accountId ?? null;
+      const receipt = registryRowsMatching(file, "receipts", "artifactPath", artifactPath)
+        .find((item) => item.engine === engine);
+      return receipt?.accountId ?? null;
+    });
   }
 
   updateConversationLaunchProfile(
@@ -9861,8 +9883,7 @@ export class AgentRegistry {
         (pathname) => !committedContinuityPaths.has(pathname),
       );
       conversation.migration = { ...migration, phase: "committed", updatedAt: now() };
-      const receipts = Object.values(file.receipts)
-        .filter((receipt) => resolveConversationAlias(file, receipt.conversationId) === conversation.id);
+      const receipts = registryReceiptsForConversation(file, conversation.id);
       const pending = receipts.find((receipt) => receipt.pendingSpawnCapability?.operationId === expectedOperationId);
       const digest = pending?.pendingSpawnCapability?.digest ?? null;
       // A rollback successor can publish without HTTP identity; its archived predecessor still loses access at commit.

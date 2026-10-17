@@ -559,10 +559,37 @@ async function adoptTargets(relayId: string, targets: Target[], engine: RelayEng
  * rows (CloneCreate.tsx); the clone it creates takes the signed-in engine
  * (Claude first) and is answered here.
  */
-function RelayCard({ relay, status, signedIn, onChanged }: { relay: RelayView; status: StatusRow | null; signedIn: Record<RelayEngine, boolean>; onChanged: () => Promise<void> }) {
+function RelayCard({ relay: stored, status, signedIn, onChanged }: { relay: RelayView; status: StatusRow | null; signedIn: Record<RelayEngine, boolean>; onChanged: () => Promise<void> }) {
   const { t, locale } = useLocale();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /* A target's engine, model, effort, concurrency, member limit and owner
+     tier, and pause or resume, are drawn at once over the stored relay and
+     lock nothing (audit B35, B36). Each write takes back only the keys it
+     drew and still holds: a refusal shows the stored value beside the error,
+     an answer leaves the read that follows it. «Answered here» and disconnect wait. */
+  const [drawn, setDrawn] = useState<{ paused?: boolean; targets: Record<string, Partial<Target>> }>({ targets: {} });
+  const relay: RelayView = drawn.paused === undefined && !Object.keys(drawn.targets).length ? stored : {
+    ...stored,
+    paused: drawn.paused ?? stored.paused,
+    targets: stored.targets.map((target) => (drawn.targets[target.id] ? { ...target, ...drawn.targets[target.id] } : target)),
+  };
+  const undraw = (targetId: string | null, patch: Partial<Target> & { paused?: boolean }) => setDrawn((held) => {
+    if (targetId === null) return held.paused === patch.paused ? { targets: held.targets } : held;
+    const own = { ...held.targets[targetId] } as Record<string, unknown>;
+    for (const [key, value] of Object.entries(patch)) if (own[key] === value) delete own[key];
+    const { [targetId]: _target, ...others } = held.targets;
+    return { ...held, targets: Object.keys(own).length ? { ...others, [targetId]: own as Partial<Target> } : others };
+  });
+  const drawnWrite = async (targetId: string | null, patch: Partial<Target> & { paused?: boolean }, body: object) => {
+    setDrawn((held) => (targetId === null ? { ...held, paused: patch.paused } : { ...held, targets: { ...held.targets, [targetId]: { ...held.targets[targetId], ...patch } } }));
+    setError(null);
+    const result = await call<{ warned?: boolean }>(base, "PATCH", body);
+    if (!result.ok) setError(result.error);
+    else if (result.value.warned) setWarned(true);
+    if (result.ok) await onChanged();
+    undraw(targetId, patch);
+  };
   const [warned, setWarned] = useState(false);
   const [open, setOpen] = useState<string | null>(null);
   const cloneable = offersCloneCreate(relay);
@@ -582,7 +609,7 @@ function RelayCard({ relay, status, signedIn, onChanged }: { relay: RelayView; s
   const base = `/api/external-relay/relays/${encodeURIComponent(relay.id)}`;
   const actions: Actions = {
     busy,
-    patchTarget: (target, patch) => void act(base, "PATCH", { target: { id: target.id, ...patch } }),
+    patchTarget: (target, patch) => void drawnWrite(target.id, patch, { target: { id: target.id, ...patch } }),
     route: (target, answeredBy) => void act(`${base}/targets/${encodeURIComponent(target.id)}`, "PATCH", { answered_by: answeredBy }),
   };
   const errorText = (code: string) => relayErrorText(t, code);
@@ -602,7 +629,7 @@ function RelayCard({ relay, status, signedIn, onChanged }: { relay: RelayView; s
         <span data-external-relay-menu="" className="max-sm:[&_[data-bar-more]]:h-11 max-sm:[&_[data-bar-more]]:w-11">
           <BarMoreMenu rows={(close) => (
             <BarMenuGroup name="relay">
-              <button type="button" data-external-relay-pause="" disabled={busy} onClick={() => { close(); void act(base, "PATCH", { paused: !relay.paused }); }} className={`${BAR_MENU_ROW} max-sm:min-h-11`}>
+              <button type="button" data-external-relay-pause="" disabled={busy || drawn.paused !== undefined} onClick={() => { close(); void drawnWrite(null, { paused: !relay.paused }, { paused: !relay.paused }); }} className={`${BAR_MENU_ROW} max-sm:min-h-11`}>
                 {relay.paused ? <Play className="h-[15px] w-[15px] shrink-0 text-secondary" aria-hidden /> : <Pause className="h-[15px] w-[15px] shrink-0 text-secondary" aria-hidden />}
                 {relay.paused ? t("externalRelay.resume") : t("externalRelay.pause")}
               </button>

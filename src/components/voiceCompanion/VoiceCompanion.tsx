@@ -73,6 +73,11 @@ export const DELEGATION_LINGER_MS = 14_000;
 export const NOTICE_LINGER_MS = 12_000;
 /** The delegation's tools: the request and the operator's spoken answer to a confirmation. Their lifecycle is the delegation card, so they get no call card of their own. */
 const DELEGATION_TOOL = "request_orchestrator_delegation";
+/** A tapped Send or Cancel, drawn over a card the server still shows waiting for its answer. */
+function tappedStage(delegation: DelegationView | null, decided: ReadonlyMap<string, "send" | "cancel">): DelegationView | null {
+  const decision = delegation?.stage === "awaiting-confirmation" && delegation.proposal ? decided.get(delegation.proposal.proposalId) : undefined;
+  return decision ? { ...delegation!, stage: decision === "send" ? "sending" : "cancelled" } : delegation;
+}
 const DELEGATION_TOOLS = new Set([DELEGATION_TOOL, "resolve_orchestrator_confirmation"]);
 /** Why a confirmation that waited ended with nothing sent, where the card can say more than "taken back". */
 const UNSENT_NOTE: Record<string, "voiceCompanion.declined" | "voiceCompanion.unanswered"> = {
@@ -427,8 +432,9 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
   const [record, setRecord] = useState<SessionTranscriptRecord | null>(null);
   const [sessionSeen, setSessionSeen] = useState(false);
   const [dragging, setDragging] = useState(false);
-  /* Each proposal owns its pending tap and delivery error independently. */
-  const [decidedFor, setDecidedFor] = useState<ReadonlySet<string>>(() => new Set());
+  /* Each proposal owns its pending tap and delivery error independently. A tapped decision is drawn at once:
+     the card reads as sending (or cancelled) while the server still says it waits, until a read brings a later stage. */
+  const [decidedFor, setDecidedFor] = useState<ReadonlyMap<string, "send" | "cancel">>(() => new Map());
   const deciding = useRef(new Set<string>());
   const [unconfirmedFor, setUnconfirmedFor] = useState<ReadonlySet<string>>(() => new Set());
   const [now, setNow] = useState(() => Date.now());
@@ -530,7 +536,7 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
      One that settles with no answer coming (its delivery unknown, refused, failed) is news the card says, so the
      place is read again as it is then. An answered one brings its own row, and the companion stays where it went.
      A place the operator chose is theirs, and stays. */
-  const requestInFlight = ["sending", "queued", "delivered"].includes(state.delegation?.stage ?? "");
+  const requestInFlight = ["sending", "queued", "delivered"].includes(tappedStage(state.delegation, decidedFor)?.stage ?? "");
   const answered = state.delegation?.stage === "answered";
   useLayoutEffect(() => {
     const was = outsideRows.current;
@@ -614,7 +620,8 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
     const deleg: Floater[] = [];
     for (const delegation of delegations) {
       /* Delivered work stays in view after the conversation ends; a confirmation nobody answered does not. */
-      if (state.phase !== "offline" || ["queued", "delivered", "answered"].includes(delegation.stage)) deleg.push({ kind: "delegation", key: `delegation:${delegation.callId}`, delegation, settled: DELEGATION_SETTLED.has(delegation.stage) });
+      const shown = tappedStage(delegation, decidedFor)!;
+      if (state.phase !== "offline" || ["queued", "delivered", "answered"].includes(shown.stage)) deleg.push({ kind: "delegation", key: `delegation:${shown.callId}`, delegation: shown, settled: DELEGATION_SETTLED.has(shown.stage) });
     }
     // A poll can batch standalone reports and replies to several requests in
     // one render. Their event sequence decides arrival, across every card kind.
@@ -631,7 +638,7 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
     if (state.closure?.incomplete && state.usage?.backend !== "codex" && !awaiting && state.error !== "FINALIZATION_INCOMPLETE") say("closure", "FINALIZATION_INCOMPLETE");
     if (seat === false && state.phase !== "offline") say("seat", "no_orchestrator", "note");
     return [...speech, ...calls, ...deleg, ...reports, ...notices];
-  }, [state.lines, state.calls, state.delegation, state.deliveryCards, state.orchestratorReports, shownBubbles, state.phase, state.error, state.errorResetsAt, state.closure, state.usage?.backend, paced, refusedStart, seat, talks, awaiting, charsOf]);
+  }, [state.lines, state.calls, state.delegation, state.deliveryCards, state.orchestratorReports, shownBubbles, state.phase, state.error, state.errorResetsAt, state.closure, state.usage?.backend, paced, refusedStart, seat, talks, awaiting, charsOf, decidedFor]);
 
   /* When each element arrived and when it settled. The lane is ordered by arrival,
      and one not stamped yet is the newest there is. */
@@ -994,7 +1001,7 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
   }, []);
 
   /* The hand-off: a pellet leaves for the orchestrator, and comes back with the answer. */
-  const stage = state.delegation?.stage ?? null;
+  const stage = tappedStage(state.delegation, decidedFor)?.stage ?? null;
   useEffect(() => {
     const dot = pellet.current;
     const distance = (rail.current?.offsetWidth ?? 0) - 10;
@@ -1099,13 +1106,13 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
   const decide = (proposalId: string, decision: "send" | "cancel") => {
     if (deciding.current.has(proposalId)) return;
     deciding.current.add(proposalId);
-    setDecidedFor((current) => new Set(current).add(proposalId));
+    setDecidedFor((current) => new Map(current).set(proposalId, decision));
     setUnconfirmedFor((current) => { const next = new Set(current); next.delete(proposalId); return next; });
     /* A lost request leaves the card as it was, says so, and takes another tap. The server keeps one
        delivery key per proposal, so a repeated Send recovers the first send and never adds a second. */
     void store.command({ type: "confirmation", proposalId, decision, via: "tap" }).catch(() => {
       deciding.current.delete(proposalId);
-      setDecidedFor((current) => { const next = new Set(current); next.delete(proposalId); return next; });
+      setDecidedFor((current) => { const next = new Map(current); next.delete(proposalId); return next; });
       setUnconfirmedFor((current) => new Set(current).add(proposalId));
       void store.refresh().catch(() => undefined);
     });

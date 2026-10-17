@@ -268,9 +268,13 @@ export function DocumentRootsForm({ state }: { state: TelegramBotState }) {
     element.style.height = "auto";
     element.style.height = `${element.scrollHeight + element.offsetHeight - element.clientHeight}px`;
   }, [value]);
+  /* The form closes on the press and lists the roots as saved; a refusal
+     reopens it with the typed paths (audit B39). */
   const submit = async () => {
     if (state.busy) return;
-    if (await state.setDocumentRoots(roots)) setDraft(null);
+    const typed = value;
+    setDraft(null);
+    if (!await state.setDocumentRoots(roots)) setDraft(typed);
   };
   return (
     <form
@@ -402,14 +406,14 @@ export function TelegramBotSection({ state }: { state: TelegramBotState }) {
             <p className="text-[10.5px] leading-snug text-muted">{t("telegram.bot.noChats", { username: status?.bot?.username ?? "bot" })}</p>
           ) : (
             <ul className="flex flex-col gap-1">
-              {active.map((chat) => <ChatRow key={chat.chatId} chat={chat} botSeesAll={botSeesAll} busy={busy} onSave={save} />)}
+              {active.map((chat) => <ChatRow key={chat.chatId} chat={chat} botSeesAll={botSeesAll} busy={busy || Boolean(state.pending?.has(chat.chatId))} onSave={save} />)}
             </ul>
           )}
           {inactive.length ? (
             <details className="text-[10.5px]">
               <summary className="flex min-h-[44px] cursor-pointer items-center font-semibold text-muted sm:min-h-[28px]">{t("telegram.bot.inactive", { count: inactive.length })}</summary>
               <ul className="mt-1 flex flex-col gap-1">
-                {inactive.map((chat) => <ChatRow key={chat.chatId} chat={chat} botSeesAll={botSeesAll} busy={busy} onSave={save} />)}
+                {inactive.map((chat) => <ChatRow key={chat.chatId} chat={chat} botSeesAll={botSeesAll} busy={busy || Boolean(state.pending?.has(chat.chatId))} onSave={save} />)}
               </ul>
             </details>
           ) : null}

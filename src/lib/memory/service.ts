@@ -1,6 +1,8 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { performanceSpans } from "@/lib/performanceSpans";
+import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 
 import { stateDir } from "@/lib/configDir";
 import { guardedContext } from "@/lib/stateOwnership";
@@ -36,6 +38,8 @@ async function defaultRoots(): Promise<MemoryRoots> {
 /** Refresh on the existing scan cadence. A test/build cannot discover live memories. */
 export async function refreshMemoryIndex(roots?: MemoryRoots) {
   if (!roots && guardedContext()) return;
-  const inventory = await discoverMemorySources(roots ?? await defaultRoots());
-  return memoryIndex().refresh(inventory.sources, { complete: inventory.complete });
+  const inventory = await withViewerOperation("memory.discovery", () =>
+    performanceSpans.wait("memory.discovery", async () => discoverMemorySources(roots ?? await defaultRoots())));
+  return withViewerOperation("memory.refresh", () =>
+    performanceSpans.wait("memory.refresh", () => memoryIndex().refresh(inventory.sources, { complete: inventory.complete })));
 }

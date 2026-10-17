@@ -188,6 +188,10 @@ export function SessionTitle({ file, displayMax = 90, titleClassName = "", class
     setBusy(true);
     setRetryTitle(undefined);
     const trimmed = title && title.trim() ? title.trim() : null;
+    /* The typed title shows at once (audit B16), held over every poll until
+       the server answers; a failure puts the previous reading back. */
+    const prior = optimistic;
+    setOptimistic({ title: trimmed, revision: Number.POSITIVE_INFINITY });
     const result = await saveSessionTitle({
       path: file.path,
       conversationId: file.conversationId,
@@ -206,9 +210,8 @@ export function SessionTitle({ file, displayMax = 90, titleClassName = "", class
       return;
     }
     if (result.status === 409 && allowRetry) {
-      // Adopt the server's record and retry once against its revision.
+      // Retry once against the server's revision; the typed title stays drawn meanwhile.
       const serverRevision = result.conflict?.revision ?? 0;
-      setOptimistic(result.conflict ? { title: result.conflict.title, revision: result.conflict.revision } : { title: null, revision: 0 });
       const retried = await saveSessionTitle({
         path: file.path,
         conversationId: file.conversationId,
@@ -225,12 +228,15 @@ export function SessionTitle({ file, displayMax = 90, titleClassName = "", class
         setBusy(false);
         return;
       }
+      // Adopt the server's record: it is what the conversation is called now.
+      setOptimistic(result.conflict ? { title: result.conflict.title, revision: result.conflict.revision } : { title: null, revision: 0 });
       setAnnounce(t("rename.conflict"));
       setRetryTitle(trimmed);
       setBusy(false);
       return;
     }
-    // Network / other failure: leave the prior title in place, offer a retry.
+    // Network / other failure: put the prior title back, offer a retry.
+    setOptimistic(prior);
     setAnnounce(t("rename.failed"));
     setRetryTitle(trimmed);
     setBusy(false);

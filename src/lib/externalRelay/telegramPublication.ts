@@ -33,7 +33,13 @@ export async function publishDurableTelegramMessage(receipt: TelegramPublishRece
   if (selected.reason || !body) return "skipped";
   const result = await relayCall(selected.relay.api_base, `/targets/${encodeURIComponent(selected.targetId)}/messages`,
     "POST", body, selected.relay.credential, { timeoutMs: 4000, signal: AbortSignal.timeout(5000),
-      prepareBody: () => { authorize(); return body; } });
+      prepareBody: () => {
+        authorize();
+        const current = selectOwnerDestination(readRelayStore().relays);
+        if (current.reason || current.relay.id !== selected.relay.id || current.targetId !== selected.targetId
+          || current.relay.credential !== selected.relay.credential) throw Error("Telegram publication pairing changed");
+        return body;
+      } });
   const reply = result.body as { message_key?: string; replayed?: boolean } | null;
   return result.status === 200 && typeof reply?.message_key === "string" && /^[A-Za-z0-9_-]{1,128}$/.test(reply.message_key)
     && typeof reply.replayed === "boolean" ? "published" : "unconfirmed";

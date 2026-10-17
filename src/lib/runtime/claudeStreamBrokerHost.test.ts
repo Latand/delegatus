@@ -264,7 +264,7 @@ test.each([
   try {
     const reloaded = new AgentRegistry(registry.filename, undefined, undefined, { sqliteMode: "off" });
     const entry = reloaded.readOnlySnapshot().entries[`claude:${sessionId}`]!;
-    const options = claudeStartupHostOptions(entry, null, null, { NODE_ENV: "test", HOME: directory, LLV_STATE_DIR: process.env.LLV_STATE_DIR });
+    const options = await claudeStartupHostOptions(entry, null, null, { NODE_ENV: "test", HOME: directory, LLV_STATE_DIR: process.env.LLV_STATE_DIR });
     const captured: { args?: string[]; options?: SpawnOptionsWithoutStdio } = {};
     const host = await ClaudeStreamBrokerHost.adopt(sessionId, { ...options,
       eventStore: new MemoryEventStore(), readTranscript: () => [],
@@ -2512,11 +2512,11 @@ describe("ClaudeStreamBrokerHost", () => {
     const captured: { args?: string[]; options?: SpawnOptionsWithoutStdio } = {};
     const adopted = await adoptClaudeRegistryHosts(
       registry,
-      (entry) => ({
+      async (entry) => ({
         /* The production boot builder, not a hand-written option object. The
            #1346 fix was asserted against its own options, so nothing ever ran
            this and the managed-only config dir it answered stayed invisible. */
-        ...claudeStartupHostOptions(entry, owner, null, { NODE_ENV: "test" }),
+        ...await claudeStartupHostOptions(entry, owner, null, { NODE_ENV: "test" }),
         deliveryLedger: ledger,
         eventStore: new MemoryEventStore(),
         readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max", version: "2.1.197" }),

@@ -7,11 +7,13 @@ export interface LintSite extends Linter.LintMessage { file: string }
 
 /** React compiler diagnostics embed locations and source frames in message.
  * Keep the explanation and annotations, excluding moving source locations.
+ * A frame's gutter is as wide as its largest line number, so the indent of an
+ * elided span's `…` line moves at line 1000; annotations are compared trimmed.
  */
 export function diagnosticMessage(message: string): string {
   return message.split("\n")
     .filter(line => !/^.*:\d+:\d+$/.test(line) && !/^\s*>?\s*\d+\s*\|/.test(line))
-    .map(line => line.replace(/^\s*\|\s*[\^~]+\s*/, ""))
+    .map(line => line.replace(/^\s*\|\s*[\^~]+\s*/, "").trim())
     .join("\n").replace(/\n{3,}/g, "\n\n").trim();
 }
 

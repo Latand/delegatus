@@ -250,10 +250,19 @@ export function OnboardingDialog({ mode, initialStep, marker, onClose, projects 
     if (view === "guide") visited.current.add(current);
   }, [view, current]);
 
+  /* A step changes at once; a write the server did not keep puts the step
+     back as it was and says so on its row, with Retry (audit B29). */
+  const [markFailed, setMarkFailed] = useState<{ id: OnboardingStepId; state: "done" | "skipped" } | null>(null);
   const mark = (id: OnboardingStepId, state: "done" | "skipped") => {
     if (steps[id] === state) return;
+    const before = steps[id];
     setSteps((value) => ({ ...value, [id]: state }));
-    void putOnboarding({ steps: { [id]: state } });
+    setMarkFailed((held) => (held?.id === id ? null : held));
+    void putOnboarding({ steps: { [id]: state } }).then((marker) => {
+      if (marker) return;
+      setSteps((value) => (value[id] === state ? { ...value, [id]: before } : value));
+      setMarkFailed({ id, state });
+    });
   };
   const markDone = (id: OnboardingStepId) => mark(id, "done");
   const goTo = (id: OnboardingStepId) => {
@@ -396,6 +405,12 @@ export function OnboardingDialog({ mode, initialStep, marker, onClose, projects 
           <span className="min-w-0 flex-1 truncate">{t(STEP_KEY[id])}</span>
           {state === "skipped" && !later ? <span className="text-caption text-muted">{t("onboarding.stepSkipped")}</span> : null}
         </button>
+        {markFailed?.id === id ? (
+          <p role="alert" data-onboarding-mark-failed={id} className="m-0 flex flex-wrap items-center gap-x-2 px-3 py-1 text-label text-danger">
+            {t("onboarding.markFailed")}
+            <button type="button" data-onboarding-mark-retry={id} onClick={() => mark(id, markFailed.state)} className="min-h-8 font-semibold text-accent hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 max-sm:min-h-11">{t("onboarding.retry")}</button>
+          </p>
+        ) : null}
       </li>
     );
   };

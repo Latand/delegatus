@@ -309,3 +309,33 @@ test("the lite (map) variant renders a static runtime summary instead of pickers
   flushSync(() => root.unmount());
   host.remove();
 });
+
+/* Audit B11: a configuration save takes no control lock, and a refusal keeps what was typed beside the reason. */
+test("a held prompt save leaves every control usable, and its refusal keeps the typed words with the reason", async () => {
+  const patches: Array<Record<string, unknown>> = [];
+  let release: (value: unknown) => void = () => {};
+  globalThis.fetch = (async (_url: string, init?: { method?: string; body?: string }) => {
+    if (!init?.method || init.method !== "PATCH") return { ok: true, json: async () => ({ roles: [] }) };
+    patches.push(JSON.parse(init.body ?? "{}") as Record<string, unknown>);
+    return await new Promise((resolve) => { release = resolve; });
+  }) as unknown as typeof fetch;
+
+  const { host, root } = mount(<StagePlaceholderPane slot={slot()} interactive />);
+  openConfig(host);
+  const textarea = host.querySelector("textarea") as HTMLTextAreaElement;
+  const propsKey = Object.keys(textarea).find((key) => key.startsWith("__reactProps$"))!;
+  const propsOf = () => (textarea as unknown as Record<string, { onChange: (e: unknown) => void; onBlur: (e: unknown) => void }>)[propsKey]!;
+  flushSync(() => propsOf().onChange({ target: { value: "Plan the rework carefully" } }));
+  flushSync(() => propsOf().onBlur({}));
+  await Bun.sleep(0);
+  expect(patches).toHaveLength(1);
+  /* Nothing waits on the answer: the field and the pickers stay enabled. */
+  expect(textarea.disabled).toBe(false);
+  expect([...host.querySelectorAll<HTMLButtonElement>('[role="radio"]')].map((radio) => radio.disabled)).not.toContain(true);
+  flushSync(() => release({ ok: false, status: 409, json: async () => ({ error: "stage has already started" }) }));
+  await Bun.sleep(5);
+  expect(host.textContent).toContain("stage has already started");
+  expect((host.querySelector("textarea") as HTMLTextAreaElement).value).toBe("Plan the rework carefully");
+  flushSync(() => root.unmount());
+  host.remove();
+});

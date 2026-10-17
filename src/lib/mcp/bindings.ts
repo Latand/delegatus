@@ -1,3 +1,5 @@
+import { registryReceiptsForConversation } from "@/lib/agent/registry";
+import { registryRowsMatching } from "@/lib/agent/sqliteRegistryStore";
 import { decidePrototype } from "@/lib/prototypeReview/decision";
 import { deliverPrototypeDecision } from "@/lib/prototypeReview/deliveryWorker";
 import { findPrototypeRound } from "@/lib/prototypeReview/store";
@@ -128,7 +130,7 @@ import { deployTaskChanges, projectSnapshots } from "@/lib/bridge/taskChanges";
 import { renderTelegram, type PullRequestLookup } from "@/lib/bridge/telegramReport";
 import { projectDisplayName } from "@/lib/displayNames";
 import { agentMessageOrigin } from "@/lib/runtime/agentMessageAuthor";
-import { orchestratorRelayPayload } from "@/lib/orchestrator/relay";
+import { orchestratorRelayPayload, resolveOrchestratorRelay } from "@/lib/orchestrator/relay";
 import { agentRecordAuthors, type AgentRecordAuthor } from "@/lib/runtime/agentRecordAuthors";
 import { forgeCacheView } from "@/lib/forge/cache";
 import { githubRepositoryOfRemote } from "@/lib/forge/workLinks";
@@ -1769,11 +1771,12 @@ async function sendMessage(
      a chained alias or a superseded path still names its owner — and it stays that way
      without this file having to be kept in step by hand. */
   const lookup = readOnlyConversationLookupFromSnapshot(dependencies.registrySnapshot());
-  const conversation = conversationId
-    ? lookup.conversation(conversationId as `conversation_${string}`)
+  const deliveredConversationId = orchestratorRelayProject && typeof receipt?.conversationId === "string" ? receipt.conversationId : conversationId;
+  const conversation = deliveredConversationId
+    ? lookup.conversation(deliveredConversationId as `conversation_${string}`)
     : lookup.conversationForPath(transcriptPath);
   return {
-    conversationId: (conversation?.id ?? conversationId) || null,
+    conversationId: (conversation?.id ?? deliveredConversationId) || null,
     transcriptPath: (conversation?.generations.at(-1)?.path ?? transcriptPath) || null,
     operationId,
     outcome: settledOutcome,
@@ -2277,7 +2280,7 @@ function inferredPipelineSource(dependencies: ViewerMcpDomainDependencies): stri
   const capability = callerCapability();
   const snapshot = dependencies.registrySnapshot();
   const digest = capability ? crypto.createHash("sha256").update(capability).digest("hex") : null;
-  const receipts = digest ? Object.values(snapshot.receipts).filter(row => row.spawnCapabilityDigest === digest) : [];
+  const receipts = digest ? registryRowsMatching(snapshot, "receipts", "spawnCapabilityDigest", digest) : [];
   const receipt = receipts.length === 1 ? receipts[0] : null;
   const lookup = readOnlyConversationLookupFromSnapshot(snapshot);
   const conversation = authority.kind !== "unidentified" && authority.conversationId
@@ -5305,6 +5308,10 @@ async function sendMessageToOrchestrator(
       transcriptPath: seat?.conversationId === recipient ? seat.path : undefined,
       path: undefined,
     }, control, dependencies, context, orchestratorSendDownstreamKey(key), project);
+    const actualRecipient = typeof outcome.conversationId === "string" ? outcome.conversationId
+      : typeof (outcome.receipt as { conversationId?: unknown } | undefined)?.conversationId === "string"
+        ? (outcome.receipt as { conversationId: string }).conversationId : recipient;
+    if (actualRecipient && actualRecipient !== recipient && context?.bindCreatedTarget) await context.bindCreatedTarget(actualRecipient);
     return redactPayload({
       ...outcome, project, created,
       // Seat metadata describes only the recipient this dispatch actually used.
@@ -5988,8 +5995,7 @@ async function deploymentStatus(
         throw new McpToolRefusal("retirement observation is limited to the caller's own project", { code: "retirement_project_refused" });
       }
       const explicit = text(args.callerLaunchId);
-      const receipt = explicit ? snapshot.receipts[explicit] : Object.values(snapshot.receipts)
-        .filter(candidate => candidate.conversationId === caller.conversationId)
+      const receipt = explicit ? snapshot.receipts[explicit] : registryRowsMatching(snapshot, "receipts", "conversationId", caller.conversationId)
         .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.launchId.localeCompare(a.launchId))[0];
       if (!receipt || receipt.conversationId !== caller.conversationId) {
         throw new McpToolRefusal("retirement observation requires the authenticated caller's spawn receipt", { code: "retirement_receipt_refused" });
@@ -6172,7 +6178,7 @@ function latestReceiptForConversation(
   conversationId: string,
 ): RegistrySnapshot["receipts"][string] | null {
   const lookup = readOnlyConversationLookupFromSnapshot(snapshot);
-  return Object.values(snapshot.receipts ?? {})
+  return registryReceiptsForConversation(snapshot, conversationId)
     .filter((receipt) => lookup.canonicalConversationId(receipt.conversationId) === conversationId)
     .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0] ?? null;
 }
@@ -6182,7 +6188,7 @@ function latestPendingLaunchReceiptForConversation(
   conversationId: string,
 ): RegistrySnapshot["receipts"][string] | null {
   const lookup = readOnlyConversationLookupFromSnapshot(snapshot);
-  return Object.values(snapshot.receipts ?? {})
+  return registryReceiptsForConversation(snapshot, conversationId)
     .filter((receipt) => (
       lookup.canonicalConversationId(receipt.conversationId) === conversationId
       && receipt.transport === "structured"
@@ -7523,7 +7529,14 @@ async function recoverSend(
     return { outcome: "unknown", evidence: "none", reason: "the bound target names no conversation", ids: {} };
   }
   const ports: SendSettlementPorts = dependencies.sendSettlementPorts?.() ?? {};
-  const found = await resolveOriginalSend({ conversationId: binding.target.identity, clientMessageId: binding.downstreamKey,
+  let recipientIdentity = binding.target.identity;
+  if (binding.toolName === "send_message_to_orchestrator" && binding.target.project && binding.sendPayload) {
+    const payload = binding.sendPayload;
+    const relay = resolveOrchestratorRelay(binding.target.project, recipientIdentity, payload,
+      splitRelayMessageText(payload.text)?.body ?? payload.text, binding.downstreamKey);
+    if (relay.ok && relay.operationId) recipientIdentity = relay.recipient;
+  }
+  const found = await resolveOriginalSend({ conversationId: recipientIdentity, clientMessageId: binding.downstreamKey,
     ...(binding.sendPayload ?? (typeof args?.text === "string" ? { text: args.text } : {})) }, ports);
   if (found.kind === "unreadable") {
     return { outcome: "unknown", evidence: "delivery-record", reason: `the delivery record could not be read: ${found.reason}`, ids: {} };
@@ -7609,7 +7622,7 @@ async function recoverSpawn(
   } catch (error) {
     return { outcome: "unknown", evidence: "spawn-receipt", reason: `the launch record could not be read: ${error instanceof Error ? error.message : String(error)}`, ids: {} };
   }
-  let receipts = Object.values(snapshot.receipts).filter((receipt) => receipt.clientAttemptId === key);
+  let receipts = registryRowsMatching(snapshot, "receipts", "clientAttemptId", key);
   if (receipts.length === 0) {
     if (legacy || !args || typeof args.role !== "string" || !args.role.trim() || !dependencies.validateSpawnAdmission) return unknown();
     let body: Record<string, unknown>;
@@ -7647,7 +7660,7 @@ async function recoverSpawn(
     } catch (error) {
       return { outcome: "unknown", evidence: "spawn-receipt", reason: `the launch record could not be read after admission fencing: ${error instanceof Error ? error.message : String(error)}`, ids: {} };
     }
-    receipts = Object.values(snapshot.receipts).filter((receipt) => receipt.clientAttemptId === key);
+    receipts = registryRowsMatching(snapshot, "receipts", "clientAttemptId", key);
     let fence: SpawnAdmissionFence | null;
     try {
       fence = dependencies.readSpawnAdmissionFence(key);

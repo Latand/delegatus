@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useSyncExternalStore } from "react";
 
 import { fireTasksChanged } from "@/components/tasks/taskApi";
 import { admissionSnapshot } from "@/lib/tasks/groupHide";
-import { taskPriority, type BoardTask, type TaskColor, type TaskPriority, type TaskStatus, type TaskHold } from "@/lib/tasks/types";
+import { taskPriority, type BoardTask, type TaskBoardVisibility, type TaskColor, type TaskPriority, type TaskStatus, type TaskHold } from "@/lib/tasks/types";
 
 /**
  * Optimistic status moves for the kanban board (#1695 K2).
@@ -27,12 +27,12 @@ import { taskPriority, type BoardTask, type TaskColor, type TaskPriority, type T
  * column between the response and the next poll.
  *
  * Field edits (#1695 K4b) — the colour label, the icon (#2102), the group
- * hide, the task's text and its agent-facing details (#1834) — ride the same
+ * hide, the task's board preference (shown again from the tray), the task's text and its agent-facing details (#1834) — ride the same
  * per-task queue and the same revision memory, so an edit
  * and a status move of one task never race each other's guard. Their 409 is
  * read the same way:
  * - the server already holds the value: settled;
- * - a colour, an icon or a hide: sent once more with the stored guard, since
+ * - a colour, an icon, a hide or the board preference: sent once more with the stored guard, since
  *   the label, the icon and the hide say nothing about what else changed;
  * - text and details: sent again while the stored field is still the value the
  *   edit started from. When only another part of the text moved (an agent rewrote the
@@ -59,6 +59,10 @@ import { taskPriority, type BoardTask, type TaskColor, type TaskPriority, type T
  * with the lineage it belongs to. A fenced write names the lineage of the
  * write it undoes or redoes, and one from an older lineage is refused without
  * a PATCH, as a stale fence would be.
+ *
+ * An undo of an edit whose write is still out (audit B28) is drawn at once and
+ * queued behind it (`after`): its fence and lineage are read when it leaves
+ * the queue, and `unless` drops it there when the edit it undoes did not save.
  */
 
 export type StatusMoveOutcome =
@@ -80,6 +84,8 @@ export type TaskFieldChange =
   /* `replaces` names the stored hide (its `at`) of a group that came back to
      the board: hiding it again is a new hide, even though the row has one. */
   | { field: "hide"; value: boolean; replaces?: string | null }
+  /* Whether an empty band of the task may be drawn: the tray's «show on board». */
+  | { field: "board"; value: TaskBoardVisibility }
   /* `rebase` receives stored text that moved since the edit began and returns
      the edit applied to it, or null when the edited part itself moved. */
   | { field: "text"; value: string; rebase?: (stored: string) => string | null }
@@ -101,7 +107,7 @@ export type FieldEditOutcome =
   | { kind: "conflict"; field: TaskField; task: BoardTask; serverValue: unknown }
   | { kind: "failed"; field: TaskField; error: string; status: number; code?: string };
 
-export type PatchBody = { expectedProject: string; expectedRevision: string } & ({ status: TaskStatus; hold?: Partial<TaskHold> | null; restoreHold?: TaskHold | null } | { color: TaskColor | "none" } | { priority: TaskPriority } | { icon: string } | { hide: boolean } | { text: string } | { details: string });
+export type PatchBody = { expectedProject: string; expectedRevision: string } & ({ status: TaskStatus; hold?: Partial<TaskHold> | null; restoreHold?: TaskHold | null } | { color: TaskColor | "none" } | { priority: TaskPriority } | { icon: string } | { hide: boolean } | { board: TaskBoardVisibility } | { text: string } | { details: string });
 
 export interface TaskMutationPorts {
   patch(id: string, body: PatchBody): Promise<PatchResult>;
@@ -136,6 +142,7 @@ export function fieldValue(task: BoardTask, field: TaskField): unknown {
   if (field === "priority") return taskPriority(task);
   if (field === "icon") return task.icon ?? null;
   if (field === "hide") return Boolean(task.groupHidden);
+  if (field === "board") return task.board ?? "shown";
   if (field === "details") return task.details ?? "";
   return task.text;
 }
@@ -146,6 +153,7 @@ function changeOf(field: TaskField, value: unknown): TaskFieldChange {
   if (field === "priority") return { field, value: value === "high" || value === "low" ? value : "normal" };
   if (field === "icon") return { field, value: typeof value === "string" && value ? value : null };
   if (field === "hide") return { field, value: Boolean(value) };
+  if (field === "board") return { field, value: value === "hidden" ? "hidden" : "shown" };
   if (field === "details") return { field, value: String(value ?? "") };
   return { field, value: String(value ?? "") };
 }
@@ -157,12 +165,13 @@ export function rowHolds(task: BoardTask, change: TaskFieldChange): boolean {
   if (change.field === "icon") return (task.icon ?? null) === change.value;
   if (change.field === "text") return task.text === change.value;
   if (change.field === "details") return (task.details ?? "") === change.value;
+  if (change.field === "board") return (task.board ?? "shown") === change.value;
   if (!change.value) return !task.groupHidden;
   return Boolean(task.groupHidden) && task.groupHidden!.at !== (change.replaces ?? null);
 }
 
 /** The edits a board shows ahead of the poll, per task. */
-export type FieldEdits = ReadonlyMap<string, { color?: TaskColor | null; priority?: TaskPriority; icon?: string | null; hide?: boolean; text?: string; details?: string; hold?: TaskHold | null }>;
+export type FieldEdits = ReadonlyMap<string, { color?: TaskColor | null; priority?: TaskPriority; icon?: string | null; hide?: boolean; board?: TaskBoardVisibility; text?: string; details?: string; hold?: TaskHold | null }>;
 
 /**
  * The tasks a board draws: the stored rows with the edits this device has sent
@@ -204,6 +213,10 @@ export function drawnTasks(tasks: readonly BoardTask[], edits: FieldEdits, stamp
       stamps.delete(task.id);
       if (edit.hide === false) delete next.groupHidden;
     }
+    if (edit.board) {
+      next.board = edit.board;
+      if (edit.board === "shown") delete next.boardAutoHidden;
+    }
     if (typeof edit.text === "string") {
       next.text = edit.text;
       if (next.origin?.refinement === "pending") next.origin = { ...next.origin, refinement: "titled" };
@@ -226,7 +239,15 @@ export function revisionOf(task: BoardTask): string | null {
    as the fence would be. */
 const NO_FENCE: PatchResult = { ok: false, status: 409, error: "no write of this board to fence on", code: "TASK_REVISION_MISMATCH" };
 
-export interface StatusMoveOptions { fenced?: boolean; lineage?: number; hold?: Partial<TaskHold> | null; restoreHold?: TaskHold | null }
+/** A lineage known now, or one read when the write leaves the queue. */
+export type LineageRef = number | (() => number | undefined);
+
+/** Queue options of a fenced write: wait for `after`, then skip the write when `unless` says so. */
+export interface QueuedWriteOptions { after?: Promise<unknown>; unless?: () => boolean }
+
+export interface StatusMoveOptions extends QueuedWriteOptions { fenced?: boolean; lineage?: LineageRef; hold?: Partial<TaskHold> | null; restoreHold?: TaskHold | null }
+
+const lineageOf = (lineage: LineageRef | undefined): number | undefined => (typeof lineage === "function" ? lineage() : lineage);
 
 export class TaskStatusMutations {
   private readonly overrides = new Map<string, Override>();
@@ -349,7 +370,7 @@ export class TaskStatusMutations {
       that promise to settle, so a bulk edit reaches the server one task at a
       time while every card already shows it. A `fenced` write is guarded by
       this controller's own last revision and a 409 is final (see the header). */
-  edit(task: BoardTask, change: TaskFieldChange, options: { after?: Promise<unknown>; fenced?: boolean; lineage?: number } = {}): Promise<FieldEditOutcome> {
+  edit(task: BoardTask, change: TaskFieldChange, options: QueuedWriteOptions & { fenced?: boolean; lineage?: LineageRef } = {}): Promise<FieldEditOutcome> {
     const id = task.id;
     const fields = this.fieldOverrides.get(id) ?? new Map<TaskField, FieldOverride>();
     const current = fields.get(change.field);
@@ -365,7 +386,12 @@ export class TaskStatusMutations {
     this.emit();
 
     const settled = (promise: Promise<unknown> | undefined) => (promise ?? Promise.resolve()).then(() => undefined, () => undefined);
-    const run = Promise.all([settled(this.chains.get(id)), settled(options.after)]).then(() => this.writeField(task, change, from, options.fenced === true, options.lineage));
+    const run = Promise.all([settled(this.chains.get(id)), settled(options.after)]).then((): Promise<FieldEditOutcome> | FieldEditOutcome => {
+      if (!options.unless?.()) return this.writeField(task, change, from, options.fenced === true, lineageOf(options.lineage));
+      /* Dropped before it left: the board shows the stored row again. */
+      this.settleField(id, change.field, from, null, false);
+      return { kind: "noop", field: change.field };
+    });
     this.chains.set(id, run);
     void run.finally(() => {
       if (this.chains.get(id) === run) this.chains.delete(id);
@@ -399,6 +425,7 @@ export class TaskStatusMutations {
     if (change.field === "priority") return { ...fence, priority: change.value };
     if (change.field === "icon") return { ...fence, icon: change.value ?? "none" };
     if (change.field === "hide") return { ...fence, hide: change.value };
+    if (change.field === "board") return { ...fence, board: change.value };
     if (change.field === "details") return { ...fence, details: change.value };
     return { ...fence, text: change.value };
   }
@@ -487,7 +514,12 @@ export class TaskStatusMutations {
     this.emit();
 
     const previous = this.chains.get(id) ?? Promise.resolve();
-    const write = () => this.write(task, from, to, options);
+    const write = async (): Promise<StatusMoveOutcome> => {
+      if (options.after) await options.after.then(() => undefined, () => undefined);
+      if (!options.unless?.()) return this.write(task, from, to, options);
+      this.settle(id, from, null, false);
+      return { kind: "noop" };
+    };
     const run = previous.then(write, write);
     this.chains.set(id, run);
     void run.finally(() => {
@@ -549,7 +581,8 @@ export class TaskStatusMutations {
   }
 
   private async write(task: BoardTask, from: TaskStatus, to: TaskStatus, options: StatusMoveOptions): Promise<StatusMoveOutcome> {
-    const { fenced, lineage } = options;
+    const { fenced } = options;
+    const lineage = lineageOf(options.lineage);
     const holdPatch = Object.hasOwn(options, "restoreHold") ? { restoreHold: options.restoreHold } : Object.hasOwn(options, "hold") ? { hold: options.hold } : {};
     const id = task.id;
     let guard = fenced ? this.fenceFor(task, lineage) : this.guardFor(task);

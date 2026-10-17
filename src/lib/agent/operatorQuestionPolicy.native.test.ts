@@ -14,8 +14,10 @@ test("native Codex denies async seat questions and preserves worker questions", 
     fs.mkdirSync(path.join(root, "tmp"));
     let requests = 0;
     const inputs: string[] = [];
+    let offered: string[] = [];
     const provider = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
-      const body = await request.json() as { input: Array<{ type: string; output?: string }> };
+      const body = await request.json() as { input: Array<{ type: string; output?: string }>; tools?: Array<{ name?: string }> };
+      if (requests === 0) offered = (body.tools ?? []).flatMap(tool => tool.name && /request_user_input|send_user_message/.test(tool.name) ? [tool.name] : []);
       inputs.push(...body.input.filter(item => item.type === "function_call_output").map(item => item.output ?? ""));
       requests++;
       const output = requests === 1
@@ -62,14 +64,22 @@ test("native Codex denies async seat questions and preserves worker questions", 
       })]);
       expect(code, stderr).toBe(0);
       expect(requests).toBe(2);
-      if (seat) {
+      if (seat && !offered.length) {
+        // 0.163.0 removes every question tool from a seat's surface; the forced call never runs.
+        expect(inputs.join("\n")).toBe("unsupported call: request_user_input_async");
+      } else if (seat) {
+        // 0.162.1 still offers the async tool; the PreToolUse hook denies it with the form guidance.
+        expect(offered).toEqual(["request_user_input_async"]);
         const denial = inputs.join("\n");
         expect(denial).toContain("publish_prototype_review");
         expect(denial).toContain("3–7 questions with a task, 1–7 without a task");
         expect(denial).toContain("Chat and reports point to the form");
         expect(denial).not.toContain("then suggest_replies");
         expect(denial).not.toContain("question bridge report");
-      } else expect(inputs.join("\n")).toContain('"accepted":true');
+      } else {
+        expect(offered).toContain("request_user_input_async");
+        expect(inputs.join("\n")).toContain('"accepted":true');
+      }
     } finally {
       clearTimeout(timeout);
       if (child.exitCode === null) child.kill();

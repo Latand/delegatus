@@ -23,11 +23,11 @@
         },
         {
           "left": 28,
-          "right": 122.234375
+          "right": 110.078125
         }
       ],
       "overlaps": [],
-      "reason": "Memory is added only with an OpenRouter key.Enter the key",
+      "reason": "Memory is added only with an OpenRouter key.Open Keys",
       "numbers": null,
       "keyError": null,
       "pageErrors": []
@@ -39,8 +39,8 @@
       "left": 7,
       "right": 239,
       "top": 36.5,
-      "bottom": 248.75,
-      "height": 212.25,
+      "bottom": 504.75,
+      "height": 468.25,
       "desktop": true,
       "overflow": 0,
       "controls": [
@@ -49,22 +49,50 @@
           "right": 234
         },
         {
-          "left": 190,
+          "left": 20,
           "right": 226
         },
         {
-          "left": 28,
-          "right": 142.75
+          "left": 20,
+          "right": 68.859375
         },
         {
-          "left": 146.75,
-          "right": 218
+          "left": 72.859375,
+          "right": 116.9375
+        },
+        {
+          "left": 181.640625,
+          "right": 226
+        },
+        {
+          "left": 181.640625,
+          "right": 226
+        },
+        {
+          "left": 181.640625,
+          "right": 226
+        },
+        {
+          "left": 181.640625,
+          "right": 226
+        },
+        {
+          "left": 181.640625,
+          "right": 226
+        },
+        {
+          "left": 12,
+          "right": 234
+        },
+        {
+          "left": 12,
+          "right": 234
         }
       ],
       "overlaps": [],
-      "reason": "Memory is added only with an OpenRouter key.Save keyOnly printable ASCII, no spaces. Paste the key again.",
+      "reason": null,
       "numbers": null,
-      "keyError": "Only printable ASCII, no spaces. Paste the key again.",
+      "keyError": "This does not look like a key for OpenRouter. Paste it again.",
       "pageErrors": []
     },
     {
@@ -74,8 +102,8 @@
       "left": 7,
       "right": 239,
       "top": 36.5,
-      "bottom": 248.75,
-      "height": 212.25,
+      "bottom": 489.625,
+      "height": 453.125,
       "desktop": true,
       "overflow": 0,
       "controls": [
@@ -84,22 +112,113 @@
           "right": 234
         },
         {
-          "left": 190,
+          "left": 20,
           "right": 226
         },
         {
-          "left": 28,
-          "right": 142.75
+          "left": 20,
+          "right": 68.859375
         },
         {
-          "left": 146.75,
-          "right": 218
+          "left": 72.859375,
+          "right": 116.9375
+        },
+        {
+          "left": 181.640625,
+          "right": 226
+        },
+        {
+          "left": 181.640625,
+          "right": 226
+        },
+        {
+          "left": 181.640625,
+          "right": 226
+        },
+        {
+          "left": 181.640625,
+          "right": 226
+        },
+        {
+          "left": 181.640625,
+          "right": 226
+        },
+        {
+          "left": 12,
+          "right": 234
+        },
+        {
+          "left": 12,
+          "right": 234
         }
       ],
       "overlaps": [],
-      "reason": "Memory is added only with an OpenRouter key.Save keyCould not save or read the key. Try again.",
+      "reason": null,
       "numbers": null,
-      "keyError": "Could not save or read the key. Try again.",
+      "keyError": "Could not save the key. Try again.",
+      "pageErrors": []
+    },
+    {
+      "lang": "en",
+      "width": 1440,
+      "state": "key-saved",
+      "left": 7,
+      "right": 239,
+      "top": 36.5,
+      "bottom": 406.5,
+      "height": 370,
+      "desktop": true,
+      "overflow": 0,
+      "controls": [
+        {
+          "left": 12,
+          "right": 234
+        },
+        {
+          "left": 134,
+          "right": 162
+        },
+        {
+          "left": 166,
+          "right": 194
+        },
+        {
+          "left": 198,
+          "right": 226
+        },
+        {
+          "left": 181.640625,
+          "right": 226
+        },
+        {
+          "left": 181.640625,
+          "right": 226
+        },
+        {
+          "left": 181.640625,
+          "right": 226
+        },
+        {
+          "left": 181.640625,
+          "right": 226
+        },
+        {
+          "left": 181.640625,
+          "right": 226
+        },
+        {
+          "left": 12,
+          "right": 234
+        },
+        {
+          "left": 12,
+          "right": 234
+        }
+      ],
+      "overlaps": [],
+      "reason": null,
+      "numbers": null,
+      "keyError": null,
       "pageErrors": []
     },
     {
@@ -229,11 +348,51 @@
       "left": 7,
       "right": 239,
       "top": 36.5,
-      "bottom": 188,
-      "height": 151.5,
+      "bottom": 406.5,
+      "height": 370,
       "desktop": true,
       "overflow": 0,
       "controls": [
+        {
+          "left": 12,
+          "right": 234
+        },
+        {
+          "left": 134,
+          "right": 162
+        },
+        {
+          "left": 166,
+          "right": 194
+        },
+        {
+          "left": 198,
+          "right": 226
+        },
+        {
+          "left": 181.640625,
+          "right": 226
+        },
+        {
+          "left": 181.640625,
+          "right": 226
+        },
+        {
+          "left": 181.640625,
+          "right": 226
+        },
+        {
+          "left": 181.640625,
+          "right": 226
+        },
+        {
+          "left": 181.640625,
+          "right": 226
+        },
+        {
+          "left": 12,
+          "right": 234
+        },
         {
           "left": 12,
           "right": 234
@@ -252,11 +411,27 @@
       "left": 7,
       "right": 239,
       "top": 36.5,
-      "bottom": 239.375,
-      "height": 202.875,
+      "bottom": 435.9375,
+      "height": 399.4375,
       "desktop": true,
       "overflow": 0,
       "controls": [
+        {
+          "left": 12,
+          "right": 234
+        },
+        {
+          "left": 134,
+          "right": 162
+        },
+        {
+          "left": 166,
+          "right": 194
+        },
+        {
+          "left": 198,
+          "right": 226
+        },
         {
           "left": 12,
           "right": 234
@@ -275,11 +450,27 @@
       "left": 7,
       "right": 239,
       "top": 36.5,
-      "bottom": 188,
-      "height": 151.5,
+      "bottom": 435.9375,
+      "height": 399.4375,
       "desktop": true,
       "overflow": 0,
       "controls": [
+        {
+          "left": 12,
+          "right": 234
+        },
+        {
+          "left": 134,
+          "right": 162
+        },
+        {
+          "left": 166,
+          "right": 194
+        },
+        {
+          "left": 198,
+          "right": 226
+        },
         {
           "left": 12,
           "right": 234
@@ -433,7 +624,7 @@
         },
         {
           "left": 28,
-          "right": 139.65625
+          "right": 125.921875
         },
         {
           "left": 16,
@@ -441,7 +632,7 @@
         }
       ],
       "overlaps": [],
-      "reason": "Memory is added only with an OpenRouter key.Enter the key",
+      "reason": "Memory is added only with an OpenRouter key.Open Keys",
       "numbers": "0added1checked$0spent of $1",
       "keyError": null,
       "pageErrors": []
@@ -452,9 +643,9 @@
       "state": "invalid-key",
       "left": 0,
       "right": 390,
-      "top": 455.875,
+      "top": 239.875,
       "bottom": 900,
-      "height": 444.125,
+      "height": 660.125,
       "desktop": false,
       "overflow": 0,
       "controls": [
@@ -467,26 +658,50 @@
           "right": 390
         },
         {
-          "left": 326,
+          "left": 16,
+          "right": 269.546875
+        },
+        {
+          "left": 273.546875,
+          "right": 325.921875
+        },
+        {
+          "left": 329.921875,
           "right": 374
         },
         {
-          "left": 28,
-          "right": 280.328125
+          "left": 318.71875,
+          "right": 374
         },
         {
-          "left": 284.328125,
-          "right": 362
+          "left": 318.71875,
+          "right": 374
         },
         {
-          "left": 16,
-          "right": 58.640625
+          "left": 318.71875,
+          "right": 374
+        },
+        {
+          "left": 318.71875,
+          "right": 374
+        },
+        {
+          "left": 318.71875,
+          "right": 374
+        },
+        {
+          "left": 0,
+          "right": 390
+        },
+        {
+          "left": 0,
+          "right": 390
         }
       ],
       "overlaps": [],
-      "reason": "Memory is added only with an OpenRouter key.Save keyOnly printable ASCII, no spaces. Paste the key again.",
-      "numbers": "0added1checked$0spent of $1",
-      "keyError": "Only printable ASCII, no spaces. Paste the key again.",
+      "reason": null,
+      "numbers": null,
+      "keyError": "This does not look like a key for OpenRouter. Paste it again.",
       "pageErrors": []
     },
     {
@@ -495,9 +710,9 @@
       "state": "write-failed",
       "left": 0,
       "right": 390,
-      "top": 455.875,
+      "top": 239.875,
       "bottom": 900,
-      "height": 444.125,
+      "height": 660.125,
       "desktop": false,
       "overflow": 0,
       "controls": [
@@ -510,26 +725,117 @@
           "right": 390
         },
         {
-          "left": 326,
+          "left": 16,
+          "right": 269.546875
+        },
+        {
+          "left": 273.546875,
+          "right": 325.921875
+        },
+        {
+          "left": 329.921875,
           "right": 374
         },
         {
-          "left": 28,
-          "right": 280.328125
+          "left": 318.71875,
+          "right": 374
         },
         {
-          "left": 284.328125,
-          "right": 362
+          "left": 318.71875,
+          "right": 374
         },
         {
-          "left": 16,
-          "right": 58.640625
+          "left": 318.71875,
+          "right": 374
+        },
+        {
+          "left": 318.71875,
+          "right": 374
+        },
+        {
+          "left": 318.71875,
+          "right": 374
+        },
+        {
+          "left": 0,
+          "right": 390
+        },
+        {
+          "left": 0,
+          "right": 390
         }
       ],
       "overlaps": [],
-      "reason": "Memory is added only with an OpenRouter key.Save keyCould not save or read the key. Try again.",
-      "numbers": "0added1checked$0spent of $1",
-      "keyError": "Could not save or read the key. Try again.",
+      "reason": null,
+      "numbers": null,
+      "keyError": "Could not save the key. Try again.",
+      "pageErrors": []
+    },
+    {
+      "lang": "en",
+      "width": 390,
+      "state": "key-saved",
+      "left": 0,
+      "right": 390,
+      "top": 311,
+      "bottom": 900,
+      "height": 589,
+      "desktop": false,
+      "overflow": 0,
+      "controls": [
+        {
+          "left": 342,
+          "right": 386
+        },
+        {
+          "left": 0,
+          "right": 390
+        },
+        {
+          "left": 234,
+          "right": 278
+        },
+        {
+          "left": 282,
+          "right": 326
+        },
+        {
+          "left": 330,
+          "right": 374
+        },
+        {
+          "left": 318.71875,
+          "right": 374
+        },
+        {
+          "left": 318.71875,
+          "right": 374
+        },
+        {
+          "left": 318.71875,
+          "right": 374
+        },
+        {
+          "left": 318.71875,
+          "right": 374
+        },
+        {
+          "left": 318.71875,
+          "right": 374
+        },
+        {
+          "left": 0,
+          "right": 390
+        },
+        {
+          "left": 0,
+          "right": 390
+        }
+      ],
+      "overlaps": [],
+      "reason": null,
+      "numbers": null,
+      "keyError": null,
       "pageErrors": []
     },
     {
@@ -678,15 +984,55 @@
       "state": "environment",
       "left": 0,
       "right": 390,
-      "top": 673.75,
+      "top": 311,
       "bottom": 900,
-      "height": 226.25,
+      "height": 589,
       "desktop": false,
       "overflow": 0,
       "controls": [
         {
           "left": 342,
           "right": 386
+        },
+        {
+          "left": 0,
+          "right": 390
+        },
+        {
+          "left": 234,
+          "right": 278
+        },
+        {
+          "left": 282,
+          "right": 326
+        },
+        {
+          "left": 330,
+          "right": 374
+        },
+        {
+          "left": 318.71875,
+          "right": 374
+        },
+        {
+          "left": 318.71875,
+          "right": 374
+        },
+        {
+          "left": 318.71875,
+          "right": 374
+        },
+        {
+          "left": 318.71875,
+          "right": 374
+        },
+        {
+          "left": 318.71875,
+          "right": 374
+        },
+        {
+          "left": 0,
+          "right": 390
         },
         {
           "left": 0,
@@ -705,15 +1051,31 @@
       "state": "staging-env",
       "left": 0,
       "right": 390,
-      "top": 633.5,
+      "top": 296,
       "bottom": 900,
-      "height": 266.5,
+      "height": 604,
       "desktop": false,
       "overflow": 0,
       "controls": [
         {
           "left": 342,
           "right": 386
+        },
+        {
+          "left": 0,
+          "right": 390
+        },
+        {
+          "left": 234,
+          "right": 278
+        },
+        {
+          "left": 282,
+          "right": 326
+        },
+        {
+          "left": 330,
+          "right": 374
         },
         {
           "left": 0,
@@ -732,15 +1094,31 @@
       "state": "staging-file",
       "left": 0,
       "right": 390,
-      "top": 658.625,
+      "top": 296,
       "bottom": 900,
-      "height": 241.375,
+      "height": 604,
       "desktop": false,
       "overflow": 0,
       "controls": [
         {
           "left": 342,
           "right": 386
+        },
+        {
+          "left": 0,
+          "right": 390
+        },
+        {
+          "left": 234,
+          "right": 278
+        },
+        {
+          "left": 282,
+          "right": 326
+        },
+        {
+          "left": 330,
+          "right": 374
         },
         {
           "left": 0,
@@ -907,7 +1285,7 @@
         },
         {
           "left": 28,
-          "right": 123.03125
+          "right": 150.921875
         },
         {
           "left": 71.703125,
@@ -915,7 +1293,7 @@
         }
       ],
       "overlaps": [],
-      "reason": "Щоб пам’ять підставлялась, потрібен ключ OpenRouter.Ввести ключ",
+      "reason": "Щоб пам’ять підставлялась, потрібен ключ OpenRouter.Відкрити «Ключі»",
       "numbers": "0підставлено2перевірено$0витрачено із $1",
       "keyError": null,
       "pageErrors": []
@@ -927,8 +1305,8 @@
       "left": 7,
       "right": 239,
       "top": 36.5,
-      "bottom": 341.6875,
-      "height": 305.1875,
+      "bottom": 504.75,
+      "height": 468.25,
       "desktop": true,
       "overflow": 0,
       "controls": [
@@ -937,26 +1315,50 @@
           "right": 234
         },
         {
-          "left": 190,
+          "left": 20,
           "right": 226
         },
         {
-          "left": 28,
-          "right": 107.921875
+          "left": 20,
+          "right": 93.625
         },
         {
-          "left": 111.921875,
-          "right": 218
+          "left": 97.625,
+          "right": 162.3125
         },
         {
-          "left": 71.703125,
-          "right": 140.09375
+          "left": 162.390625,
+          "right": 226
+        },
+        {
+          "left": 162.390625,
+          "right": 226
+        },
+        {
+          "left": 162.390625,
+          "right": 226
+        },
+        {
+          "left": 162.390625,
+          "right": 226
+        },
+        {
+          "left": 162.390625,
+          "right": 226
+        },
+        {
+          "left": 12,
+          "right": 234
+        },
+        {
+          "left": 12,
+          "right": 234
         }
       ],
       "overlaps": [],
-      "reason": "Щоб пам’ять підставлялась, потрібен ключ OpenRouter.Зберегти ключЛише друкований ASCII без пробілів. Вставте ключ ще раз.",
-      "numbers": "0підставлено2перевірено$0витрачено із $1",
-      "keyError": "Лише друкований ASCII без пробілів. Вставте ключ ще раз.",
+      "reason": null,
+      "numbers": null,
+      "keyError": "Не схоже на ключ OpenRouter. Вставте його ще раз.",
       "pageErrors": []
     },
     {
@@ -966,8 +1368,8 @@
       "left": 7,
       "right": 239,
       "top": 36.5,
-      "bottom": 341.6875,
-      "height": 305.1875,
+      "bottom": 504.75,
+      "height": 468.25,
       "desktop": true,
       "overflow": 0,
       "controls": [
@@ -976,26 +1378,113 @@
           "right": 234
         },
         {
-          "left": 190,
+          "left": 20,
           "right": 226
         },
         {
-          "left": 28,
-          "right": 107.921875
+          "left": 20,
+          "right": 93.625
         },
         {
-          "left": 111.921875,
-          "right": 218
+          "left": 97.625,
+          "right": 162.3125
         },
         {
-          "left": 71.703125,
-          "right": 140.09375
+          "left": 162.390625,
+          "right": 226
+        },
+        {
+          "left": 162.390625,
+          "right": 226
+        },
+        {
+          "left": 162.390625,
+          "right": 226
+        },
+        {
+          "left": 162.390625,
+          "right": 226
+        },
+        {
+          "left": 162.390625,
+          "right": 226
+        },
+        {
+          "left": 12,
+          "right": 234
+        },
+        {
+          "left": 12,
+          "right": 234
         }
       ],
       "overlaps": [],
-      "reason": "Щоб пам’ять підставлялась, потрібен ключ OpenRouter.Зберегти ключНе вдалося зберегти чи прочитати ключ. Спробуйте ще раз.",
-      "numbers": "0підставлено2перевірено$0витрачено із $1",
-      "keyError": "Не вдалося зберегти чи прочитати ключ. Спробуйте ще раз.",
+      "reason": null,
+      "numbers": null,
+      "keyError": "Не вдалося зберегти ключ. Спробуйте ще раз.",
+      "pageErrors": []
+    },
+    {
+      "lang": "uk",
+      "width": 1440,
+      "state": "key-saved",
+      "left": 7,
+      "right": 239,
+      "top": 36.5,
+      "bottom": 406.5,
+      "height": 370,
+      "desktop": true,
+      "overflow": 0,
+      "controls": [
+        {
+          "left": 12,
+          "right": 234
+        },
+        {
+          "left": 134,
+          "right": 162
+        },
+        {
+          "left": 166,
+          "right": 194
+        },
+        {
+          "left": 198,
+          "right": 226
+        },
+        {
+          "left": 162.390625,
+          "right": 226
+        },
+        {
+          "left": 162.390625,
+          "right": 226
+        },
+        {
+          "left": 162.390625,
+          "right": 226
+        },
+        {
+          "left": 162.390625,
+          "right": 226
+        },
+        {
+          "left": 162.390625,
+          "right": 226
+        },
+        {
+          "left": 12,
+          "right": 234
+        },
+        {
+          "left": 12,
+          "right": 234
+        }
+      ],
+      "overlaps": [],
+      "reason": null,
+      "numbers": null,
+      "keyError": null,
       "pageErrors": []
     },
     {
@@ -1129,11 +1618,51 @@
       "left": 7,
       "right": 239,
       "top": 36.5,
-      "bottom": 188,
-      "height": 151.5,
+      "bottom": 406.5,
+      "height": 370,
       "desktop": true,
       "overflow": 0,
       "controls": [
+        {
+          "left": 12,
+          "right": 234
+        },
+        {
+          "left": 134,
+          "right": 162
+        },
+        {
+          "left": 166,
+          "right": 194
+        },
+        {
+          "left": 198,
+          "right": 226
+        },
+        {
+          "left": 162.390625,
+          "right": 226
+        },
+        {
+          "left": 162.390625,
+          "right": 226
+        },
+        {
+          "left": 162.390625,
+          "right": 226
+        },
+        {
+          "left": 162.390625,
+          "right": 226
+        },
+        {
+          "left": 162.390625,
+          "right": 226
+        },
+        {
+          "left": 12,
+          "right": 234
+        },
         {
           "left": 12,
           "right": 234
@@ -1152,11 +1681,27 @@
       "left": 7,
       "right": 239,
       "top": 36.5,
-      "bottom": 239.375,
-      "height": 202.875,
+      "bottom": 435.9375,
+      "height": 399.4375,
       "desktop": true,
       "overflow": 0,
       "controls": [
+        {
+          "left": 12,
+          "right": 234
+        },
+        {
+          "left": 134,
+          "right": 162
+        },
+        {
+          "left": 166,
+          "right": 194
+        },
+        {
+          "left": 198,
+          "right": 226
+        },
         {
           "left": 12,
           "right": 234
@@ -1175,11 +1720,27 @@
       "left": 7,
       "right": 239,
       "top": 36.5,
-      "bottom": 188,
-      "height": 151.5,
+      "bottom": 435.9375,
+      "height": 399.4375,
       "desktop": true,
       "overflow": 0,
       "controls": [
+        {
+          "left": 12,
+          "right": 234
+        },
+        {
+          "left": 134,
+          "right": 162
+        },
+        {
+          "left": 166,
+          "right": 194
+        },
+        {
+          "left": 198,
+          "right": 226
+        },
         {
           "left": 12,
           "right": 234
@@ -1333,7 +1894,7 @@
         },
         {
           "left": 28,
-          "right": 140.546875
+          "right": 172.09375
         },
         {
           "left": 16,
@@ -1341,7 +1902,7 @@
         }
       ],
       "overlaps": [],
-      "reason": "Щоб пам’ять підставлялась, потрібен ключ OpenRouter.Ввести ключ",
+      "reason": "Щоб пам’ять підставлялась, потрібен ключ OpenRouter.Відкрити «Ключі»",
       "numbers": "0підставлено3перевірено$0витрачено із $1",
       "keyError": null,
       "pageErrors": []
@@ -1352,9 +1913,9 @@
       "state": "invalid-key",
       "left": 0,
       "right": 390,
-      "top": 438,
+      "top": 239.875,
       "bottom": 900,
-      "height": 462,
+      "height": 660.125,
       "desktop": false,
       "overflow": 0,
       "controls": [
@@ -1367,26 +1928,50 @@
           "right": 390
         },
         {
-          "left": 326,
+          "left": 16,
+          "right": 220.953125
+        },
+        {
+          "left": 224.953125,
+          "right": 305.3125
+        },
+        {
+          "left": 309.3125,
           "right": 374
         },
         {
-          "left": 28,
-          "right": 240.953125
+          "left": 296.96875,
+          "right": 374
         },
         {
-          "left": 244.953125,
-          "right": 362
+          "left": 296.96875,
+          "right": 374
         },
         {
-          "left": 16,
-          "right": 93.296875
+          "left": 296.96875,
+          "right": 374
+        },
+        {
+          "left": 296.96875,
+          "right": 374
+        },
+        {
+          "left": 296.96875,
+          "right": 374
+        },
+        {
+          "left": 0,
+          "right": 390
+        },
+        {
+          "left": 0,
+          "right": 390
         }
       ],
       "overlaps": [],
-      "reason": "Щоб пам’ять підставлялась, потрібен ключ OpenRouter.Зберегти ключЛише друкований ASCII без пробілів. Вставте ключ ще раз.",
-      "numbers": "0підставлено3перевірено$0витрачено із $1",
-      "keyError": "Лише друкований ASCII без пробілів. Вставте ключ ще раз.",
+      "reason": null,
+      "numbers": null,
+      "keyError": "Не схоже на ключ OpenRouter. Вставте його ще раз.",
       "pageErrors": []
     },
     {
@@ -1395,9 +1980,9 @@
       "state": "write-failed",
       "left": 0,
       "right": 390,
-      "top": 438,
+      "top": 239.875,
       "bottom": 900,
-      "height": 462,
+      "height": 660.125,
       "desktop": false,
       "overflow": 0,
       "controls": [
@@ -1410,26 +1995,117 @@
           "right": 390
         },
         {
-          "left": 326,
+          "left": 16,
+          "right": 220.953125
+        },
+        {
+          "left": 224.953125,
+          "right": 305.3125
+        },
+        {
+          "left": 309.3125,
           "right": 374
         },
         {
-          "left": 28,
-          "right": 240.953125
+          "left": 296.96875,
+          "right": 374
         },
         {
-          "left": 244.953125,
-          "right": 362
+          "left": 296.96875,
+          "right": 374
         },
         {
-          "left": 16,
-          "right": 93.296875
+          "left": 296.96875,
+          "right": 374
+        },
+        {
+          "left": 296.96875,
+          "right": 374
+        },
+        {
+          "left": 296.96875,
+          "right": 374
+        },
+        {
+          "left": 0,
+          "right": 390
+        },
+        {
+          "left": 0,
+          "right": 390
         }
       ],
       "overlaps": [],
-      "reason": "Щоб пам’ять підставлялась, потрібен ключ OpenRouter.Зберегти ключНе вдалося зберегти чи прочитати ключ. Спробуйте ще раз.",
-      "numbers": "0підставлено3перевірено$0витрачено із $1",
-      "keyError": "Не вдалося зберегти чи прочитати ключ. Спробуйте ще раз.",
+      "reason": null,
+      "numbers": null,
+      "keyError": "Не вдалося зберегти ключ. Спробуйте ще раз.",
+      "pageErrors": []
+    },
+    {
+      "lang": "uk",
+      "width": 390,
+      "state": "key-saved",
+      "left": 0,
+      "right": 390,
+      "top": 311,
+      "bottom": 900,
+      "height": 589,
+      "desktop": false,
+      "overflow": 0,
+      "controls": [
+        {
+          "left": 342,
+          "right": 386
+        },
+        {
+          "left": 0,
+          "right": 390
+        },
+        {
+          "left": 234,
+          "right": 278
+        },
+        {
+          "left": 282,
+          "right": 326
+        },
+        {
+          "left": 330,
+          "right": 374
+        },
+        {
+          "left": 296.96875,
+          "right": 374
+        },
+        {
+          "left": 296.96875,
+          "right": 374
+        },
+        {
+          "left": 296.96875,
+          "right": 374
+        },
+        {
+          "left": 296.96875,
+          "right": 374
+        },
+        {
+          "left": 296.96875,
+          "right": 374
+        },
+        {
+          "left": 0,
+          "right": 390
+        },
+        {
+          "left": 0,
+          "right": 390
+        }
+      ],
+      "overlaps": [],
+      "reason": null,
+      "numbers": null,
+      "keyError": null,
       "pageErrors": []
     },
     {
@@ -1578,15 +2254,55 @@
       "state": "environment",
       "left": 0,
       "right": 390,
-      "top": 673.75,
+      "top": 311,
       "bottom": 900,
-      "height": 226.25,
+      "height": 589,
       "desktop": false,
       "overflow": 0,
       "controls": [
         {
           "left": 342,
           "right": 386
+        },
+        {
+          "left": 0,
+          "right": 390
+        },
+        {
+          "left": 234,
+          "right": 278
+        },
+        {
+          "left": 282,
+          "right": 326
+        },
+        {
+          "left": 330,
+          "right": 374
+        },
+        {
+          "left": 296.96875,
+          "right": 374
+        },
+        {
+          "left": 296.96875,
+          "right": 374
+        },
+        {
+          "left": 296.96875,
+          "right": 374
+        },
+        {
+          "left": 296.96875,
+          "right": 374
+        },
+        {
+          "left": 296.96875,
+          "right": 374
+        },
+        {
+          "left": 0,
+          "right": 390
         },
         {
           "left": 0,
@@ -1605,15 +2321,31 @@
       "state": "staging-env",
       "left": 0,
       "right": 390,
-      "top": 633.5,
+      "top": 296,
       "bottom": 900,
-      "height": 266.5,
+      "height": 604,
       "desktop": false,
       "overflow": 0,
       "controls": [
         {
           "left": 342,
           "right": 386
+        },
+        {
+          "left": 0,
+          "right": 390
+        },
+        {
+          "left": 234,
+          "right": 278
+        },
+        {
+          "left": 282,
+          "right": 326
+        },
+        {
+          "left": 330,
+          "right": 374
         },
         {
           "left": 0,
@@ -1632,15 +2364,31 @@
       "state": "staging-file",
       "left": 0,
       "right": 390,
-      "top": 658.625,
+      "top": 296,
       "bottom": 900,
-      "height": 241.375,
+      "height": 604,
       "desktop": false,
       "overflow": 0,
       "controls": [
         {
           "left": 342,
           "right": 386
+        },
+        {
+          "left": 0,
+          "right": 390
+        },
+        {
+          "left": 234,
+          "right": 278
+        },
+        {
+          "left": 282,
+          "right": 326
+        },
+        {
+          "left": 330,
+          "right": 374
         },
         {
           "left": 0,

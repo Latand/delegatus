@@ -3,7 +3,7 @@ import { credentialMask, maskedSlice } from "./credentialMask";
 
 type Speaker = "operator" | "companion";
 type Snapshot = Extract<Payload, { type: "transcript.snapshot" }>;
-interface Segment { speaker: Speaker; itemId: string; text: string; startMs: number; endMs: number; final: boolean; boundaryMs?: number; partDone?: boolean; turn: number; published?: string; fragments: Array<[number, number]> }
+interface Segment { speaker: Speaker; itemId: string; text: string; startMs: number; endMs: number; final: boolean; boundaryMs?: number; partDone?: boolean; turn: number; published?: string; fragments: Array<[number, number]>; lastArrival: number }
 export const DISPLAY_PAUSE_MS = 1_500;
 
 /** Fresh Live reducer. Timeline gaps segment the record, never authorize a
@@ -18,6 +18,7 @@ export const DISPLAY_PAUSE_MS = 1_500;
 export class LiveTranscript {
   private readonly segments: Segment[] = [];
   private sequence = 0;
+  private arrival = 0;
   private droppedTiming: { itemId: string; fragments: Array<[number, number]> } | null = null;
   private turn = 0;
   private answered = true;
@@ -58,7 +59,7 @@ export class LiveTranscript {
       if (current && !current.final) { current.final = true; current.boundaryMs = startMs; events.push(this.snapshot(current)); }
       if (speaker === "companion") events.push(...this.boundary(startMs));
       else if (this.answered) { this.turn += 1; this.answered = false; }
-      current = { speaker, itemId: `live-${speaker}-${++this.sequence}`, text: "", startMs, endMs, final: false, turn: speaker === "operator" ? this.turn : 0, fragments: [] };
+      current = { speaker, itemId: `live-${speaker}-${++this.sequence}`, text: "", startMs, endMs, final: false, turn: speaker === "operator" ? this.turn : 0, fragments: [], lastArrival: this.arrival };
       this.segments.push(current);
       if (this.segments.length > 64) {
         const gone = this.segments.shift()!;
@@ -67,6 +68,7 @@ export class LiveTranscript {
       }
     }
     current!.fragments.push([startMs, endMs]);
+    current!.lastArrival = ++this.arrival;
     current!.text = (current!.text + delta).slice(0, 4_000);
     current!.endMs = Math.max(current!.endMs, endMs);
     events.push(this.snapshot(current!), ...this.republished(speaker, current!));
@@ -98,10 +100,14 @@ export class LiveTranscript {
   turnOf(itemId: string): number | undefined { return this.segments.find(row => row.itemId === itemId && row.speaker === "operator")?.turn; }
   /** The operator's latest turn, if the operator has spoken. */
   latestTurn(): number | undefined { return this.turn || undefined; }
-  /** The masked record, oldest first, for the backend's context. */
-  record(): Array<{ speaker: Speaker; text: string }> {
+  /** Server-owned order of accepted speech fragments. */
+  arrivalCount(): number { return this.arrival; }
+  /** The masked record, oldest first. A segment that received any speech after
+   * the privacy mark is withheld whole, even if it began before the mark. */
+  record(options: { withholdCompanionFrom?: number } = {}): Array<{ speaker: Speaker; text: string }> {
     const texts = new Map([...this.cleaned("operator"), ...this.cleaned("companion")]);
-    return this.segments.map(row => ({ speaker: row.speaker, text: texts.get(row)! }));
+    return this.segments.filter(row => row.speaker === "operator" || options.withholdCompanionFrom === undefined || row.lastArrival <= options.withholdCompanionFrom)
+      .map(row => ({ speaker: row.speaker, text: texts.get(row)! }));
   }
   finish(): Snapshot[] {
     return this.segments.filter(row => !row.final).map(row => { row.final = true; return this.snapshot(row); });

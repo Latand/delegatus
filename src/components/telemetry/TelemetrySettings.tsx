@@ -1,7 +1,7 @@
 "use client";
 import { createPortal } from "react-dom";
 import { Z } from "@/components/layers";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useLocale } from "@/lib/i18n";
 import { telemetryNotice } from "../../../bin/telemetry-notice.mjs";
 export const openTelemetrySettings = () => window.dispatchEvent(new Event("delegatus:open-settings"));
@@ -13,7 +13,6 @@ export function TelemetrySettingsHost() {
   const { t, locale } = useLocale();
   const [status, setStatus] = useState<Status | null>(null);
   const [open, setOpen] = useState(false);
-  const [busy, setBusy] = useState(false);
   const [error, setError] = useState(false);
   useEffect(() => {
     const show = () => setOpen(true);
@@ -27,14 +26,21 @@ export function TelemetrySettingsHost() {
     window.addEventListener("keydown", escape);
     return () => window.removeEventListener("keydown", escape);
   }, [open]);
+  /* The switch and the notice's dismissal show at once (audit B25); a refusal
+     puts the stored status back with the error. One write at a time. */
+  const saving = useRef(false);
   const save = async (update: Partial<Status>) => {
-    setBusy(true); setError(false);
+    if (saving.current || !status) return;
+    saving.current = true;
+    const before = status;
+    setStatus({ ...before, ...update });
+    setError(false);
     try {
       const r = await fetch("/api/telemetry", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(update) });
       if (!r.ok) throw new Error();
       setStatus(await r.json());
-    } catch { setError(true); }
-    finally { setBusy(false); }
+    } catch { setStatus(before); setError(true); }
+    finally { saving.current = false; }
   };
   if (typeof document === "undefined") return null;
   return createPortal(<>
@@ -42,7 +48,7 @@ export function TelemetrySettingsHost() {
       <p>{telemetryNotice[locale]}</p>
       <div className="mt-2 flex gap-3">
         <button type="button" className="min-h-11 font-semibold text-accent" onClick={() => setOpen(true)}>{t("headerMenu.ping")}</button>
-        <button type="button" className="min-h-11" disabled={busy} onClick={() => void save({ noticeDismissed: true })}>{t("telemetry.dismiss")}</button>
+        <button type="button" className="min-h-11" onClick={() => void save({ noticeDismissed: true })}>{t("telemetry.dismiss")}</button>
       </div>
       {error && <p role="alert">{t("telemetry.error")}</p>}
     </aside>}
@@ -51,7 +57,7 @@ export function TelemetrySettingsHost() {
         <div className="flex items-center justify-between gap-4"><h2 id="telemetry-title" className="text-lg font-semibold">{t("headerMenu.ping")}</h2><button type="button" autoFocus className="min-h-11 px-2" onClick={() => setOpen(false)}>{t("telemetry.close")}</button></div>
         <p className="my-4 text-[13px] leading-relaxed">{telemetryNotice[locale]}</p>
         {status && <label className="flex min-h-11 items-center justify-between gap-4 text-sm font-semibold">
-          {t("telemetry.label")}<input type="checkbox" role="switch" aria-label={t("telemetry.label")} checked={status.enabled} disabled={busy || status.locked} onChange={e => void save({ enabled: e.target.checked })} className="h-6 w-10 shrink-0 accent-[var(--accent)]" />
+          {t("telemetry.label")}<input type="checkbox" role="switch" aria-label={t("telemetry.label")} checked={status.enabled} disabled={status.locked} onChange={e => void save({ enabled: e.target.checked })} className="h-6 w-10 shrink-0 accent-[var(--accent)]" />
         </label>}
         {status?.locked && <p className="mt-3 text-[13px] text-muted">{t("telemetry.locked")}</p>}
         {error && <p role="alert" className="mt-3 text-sm">{t("telemetry.error")}</p>}

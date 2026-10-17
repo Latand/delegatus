@@ -166,16 +166,21 @@ test.each(["uncurated", "curated", "operator-kept"])("an agent rewrite refreshes
   // Leave room for the expanded text, but not for one more full rule.
   const capacity = Math.floor((ROLE_MEMORY_BOUND - codePoints(ruleLine({ ...stored, rule: REVISED }))) / cost);
   const newer: string[] = [];
-  for (let n = 0; n < capacity; n++) newer.push(leave(request(`fill-${n}`, `fill-task-${n}`), `${filler.slice(0, 295)} ${n}`).id);
+  for (let n = 0; n < capacity; n++) {
+    const id = leave(request(`fill-${n}`, `fill-task-${n}`), `${filler.slice(0, 295)} ${n}`).id;
+    newer.push(id);
+    const row = collection.get(`r:${id}`);
+    if (n > 0 && row?.kind === "rule") collection.boundedPatch(1, tx => tx.put({ ...row, curatedAt: row.createdAt }));
+  }
   expect(builder().active.some(rule => rule.id === target.id)).toBe(true);
   const before = builder().active.map(rule => rule.id);
   rewrite(request("again", "task-two"), target.id);
-  expect(builder().active.map(rule => rule.id)).toEqual(retention === "uncurated" ? [...before.filter(id => id !== target.id), target.id] : before);
+  expect(builder().active.map(rule => rule.id)).toEqual(retention === "uncurated" ? [newer[0], target.id, ...before.filter(id => id !== target.id && id !== newer[0])] : before);
   leave(request("next", "task-next"), `Check a different boundary ${"before releasing ".repeat(17)}`.slice(0, 300));
   const after = builder();
   expect(after.active.some(rule => rule.id === target.id)).toBe(true);
   expect(after.left.some(rule => newer.includes(rule.id) && rule.reason === "budget")).toBe(true);
-  if (retention === "uncurated") expect(learnedRulesBlock(PROJECT, "builder").indexOf(target.id)).toBeLessThan(learnedRulesBlock(PROJECT, "builder").indexOf(newer.at(-1)!));
+  if (retention === "uncurated") expect(learnedRulesBlock(PROJECT, "builder").indexOf(target.id)).toBeLessThan(learnedRulesBlock(PROJECT, "builder").indexOf(newer[0]));
 });
 
 test("privacy hints and known values survive a fix-round lesson and rewrite", () => {

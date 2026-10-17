@@ -1,3 +1,4 @@
+import { seatMessageKeys } from "@/lib/orchestrator/seatDeliveryKeys";
 import { createHash } from "node:crypto";
 import { operatorLocale, operatorTimeZone } from "@/lib/operator/settings";
 import { bridgeReportsEnabled, reportHeaderName } from "@/lib/projects/settings";
@@ -234,7 +235,7 @@ export async function runSeatAutoRotation(
   if (JSON.stringify(auto) !== JSON.stringify(decision.next)) { auto = decision.next; persist(); }
   if (decision.kind === "nudge" && input.seat && usage) {
     await deliver({ conversationId: input.seat.conversationId, path: input.seat.path ?? "", pid: null,
-      clientMessageId: `seat-autorotate-nudge-${createHash("sha256").update(`${input.project}:${input.seat.seatEpoch}`).digest("hex")}`,
+      clientMessageId: `${seatMessageKeys.nudge}${createHash("sha256").update(`${input.project}:${input.seat.seatEpoch}`).digest("hex")}`,
       text: `Delegatus auto-rotation: your context is at ${Math.round(usage.tokens! / usage.windowTokens! * 100)}% of the window (provider-reported), over this project's auto-rotation threshold of ${input.settings.autoRotate!.thresholdPercent}%. Delegatus rotates this seat through the normal rotation at your next idle point. Finish or park the current step, record what your successor must know in your monitor note (seat_tick_settings appendLine), and end your turn. If you prefer to write the handoff yourself, call rotate_orchestrator with handoffNotes as your last action. Start no new long work.`,
       images: [], origin: delegatusMessageOrigin("seat-tick", input.project), policy: "steer-or-queue" });
   }

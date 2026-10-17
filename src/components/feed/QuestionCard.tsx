@@ -1,7 +1,7 @@
 "use client";
 
 import { Check, ChevronDown, ChevronRight, Loader2, Pause, RotateCw, Send, TriangleAlert, X } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { useIsMobile } from "@/hooks/useIsMobile";
 
@@ -165,6 +165,9 @@ export function QuestionCard({ file }: { file: FileEntry }) {
   const [answeredAt, setAnsweredAt] = useState<number | null>(null);
   const [answeredPicks, setAnsweredPicks] = useState<Picks>(null);
   const [foldOpen, setFoldOpen] = useState(false);
+  /* An answer is drawn as given the moment it is pressed; this holds a second
+     press (or a key) off until the first one is answered. */
+  const inFlight = useRef(false);
   const pendingToolUseId = pending?.toolUseId ?? null;
   useEffect(() => {
     if (!pendingToolUseId) return;
@@ -213,8 +216,11 @@ export function QuestionCard({ file }: { file: FileEntry }) {
     const menu = file.waitingInput.menu;
     const busy = state === "delivering";
     const sendDialogKey = async (key: string, label: string) => {
-      setState("delivering");
-      setMessage("");
+      if (inFlight.current) return;
+      inFlight.current = true;
+      /* The key is drawn as sent at once; a refusal reopens the menu with the reason. */
+      setState("answered");
+      setMessage(label);
       try {
         const res = await fetch("/api/tmux", {
           method: "POST",
@@ -231,13 +237,12 @@ export function QuestionCard({ file }: { file: FileEntry }) {
         if (!res.ok || !json.ok) {
           setState("failed");
           setMessage(t(deliveryErrorKey(res.status)));
-          return;
         }
-        setState("answered");
-        setMessage(label);
       } catch {
         setState("failed");
         setMessage(t("common.serverUnavailable"));
+      } finally {
+        inFlight.current = false;
       }
     };
     if (state === "answered") {
@@ -341,10 +346,21 @@ export function QuestionCard({ file }: { file: FileEntry }) {
   );
 
   const submit = async (payload: Record<string, unknown>, optimistic: string, selection: Record<number, number[]> | null = null) => {
-    setState("delivering");
-    setMessage("");
+    if (inFlight.current) return;
+    inFlight.current = true;
+    const at = Date.now();
+    /* The answer is drawn as given at once and the reply chips retire with it;
+       a refusal reopens the card with the picks it carried and the reason. */
     setAttempt({ payload, optimistic, selection });
     setFailedAnswers(null);
+    announceQuestionAnswer({ toolUseId: pending.toolUseId, ok: true, text: optimistic, answer: optimistic, at, picks: selection });
+    const refuse = (key: MessageKey) => {
+      announceQuestionAnswer({ toolUseId: pending.toolUseId, ok: false, text: optimistic, key });
+      setState("failed");
+      setMessage(t(key));
+      setAttempt({ payload, optimistic, selection });
+      setFailedAnswers(selection);
+    };
     try {
       const res = await fetch("/api/answer", {
         method: "POST",
@@ -356,28 +372,22 @@ export function QuestionCard({ file }: { file: FileEntry }) {
         if (res.status === 409 && (json.superseded || json.answer)) {
           /* `answer` is the transcript's recorded answer, operator-facing by
              construction; `error` beside it is not, so it is dropped. */
+          announceQuestionAnswer({ toolUseId: pending.toolUseId, ok: false, text: optimistic, key: "question.alreadyAnswered", superseded: json.answer ?? "" });
           setState("superseded");
           setMessage(json.answer ?? t("question.alreadyAnswered"));
           return;
         }
-        setState("failed");
-        setMessage(t(deliveryErrorKey(res.status, json)));
-        setFailedAnswers(selection);
+        refuse(deliveryErrorKey(res.status, json));
         return;
       }
-      const at = Date.now();
-      setState("answered");
-      setMessage(json.answer ?? optimistic);
-      setAnsweredAt(at);
-      setAnsweredPicks(selection);
       /* The card's own answer goes out on the same seam a chip's does, so the
          suggested-reply row retires with it (mobile v2, #1439 lane 4): a chip
          left live under an answered question would re-post and get a 409. */
-      announceQuestionAnswer({ toolUseId: pending.toolUseId, ok: true, text: optimistic, answer: json.answer ?? optimistic, at, picks: selection });
+      if (json.answer && json.answer !== optimistic) announceQuestionAnswer({ toolUseId: pending.toolUseId, ok: true, text: optimistic, answer: json.answer, at, picks: selection });
     } catch {
-      setState("failed");
-      setMessage(t("common.serverUnavailable"));
-      setFailedAnswers(selection);
+      refuse("common.serverUnavailable");
+    } finally {
+      inFlight.current = false;
     }
   };
 

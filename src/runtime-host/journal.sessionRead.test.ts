@@ -10,14 +10,17 @@ import { runtimeScope } from "@/lib/runtime/contracts";
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-session-read-"));
 afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
 
-test("the Codex protocol and capability receipt survives journal restart and keyed reads", () => {
-  const filename = path.join(root, "protocol.sqlite");
+test.each([
+  ["a pinned CLI", "0.162.1", {}],
+  ["an unpinned CLI admitted under a pin", "0.162.7", { unpinnedCli: { cliVersion: "0.162.7", cliSchemaDigest: "b".repeat(64) } }],
+])("the Codex protocol and capability receipt survives journal restart and keyed reads (%s)", (_name, version, unpinned) => {
+  const filename = path.join(root, `protocol-${version}.sqlite`);
   const protocol = { schemaVersion: "0.162.1", schemaDigest: "a".repeat(64), experimentalApi: true,
-    provider: { webSearch: true, imageGeneration: false }, models: [{ id: "text-model", inputModalities: ["text"] }], anomalies: 2 };
+    provider: { webSearch: true, imageGeneration: false }, models: [{ id: "text-model", inputModalities: ["text"] }], anomalies: 2, ...unpinned };
   let journal = new RuntimeJournal(filename);
   try {
     journal.append({ scope: runtimeScope("session", "conversation_protocol"), kind: "session-status", payload: {
-      hostKind: "codex-app-server", diagnostics: { executable: "codex", version: "0.162.1", protocol },
+      hostKind: "codex-app-server", diagnostics: { executable: "codex", version, protocol },
     } });
     expect(journal.snapshot().sessions[0]?.diagnostics?.protocol).toEqual(protocol);
     journal.close();
