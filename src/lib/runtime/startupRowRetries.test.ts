@@ -3,9 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import { expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
+import { createHash } from "node:crypto";
 import { StartupRowRetries, startupRowNotice, startupRowReason } from "./startupRowRetries";
 import { AgentRegistry } from "@/lib/agent/registry";
-import { loadTasks } from "@/lib/tasks/store";
+import { loadTasks, mutateTasks } from "@/lib/tasks/store";
 import { statePath } from "@/lib/configDir";
 
 const KEY = "codex:25300000-0000-0000-0000-000000000071";
@@ -90,6 +91,7 @@ test("quarantine creates one seat-readable task, waits asynchronously for a peer
     expect(timerAdvanced).toBe(true);
     const tasks = loadTasks(file).filter(task => task.text.includes(KEY));
     expect(tasks).toHaveLength(1);
+    expect(tasks[0]!.id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-8[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
     expect(tasks[0]!.text).toContain("missing-rollout");
     await startupRowNotice(entry, null);
     expect(loadTasks(file).find(task => task.id === tasks[0]!.id)?.status).toBe("done");
@@ -125,4 +127,23 @@ test("two due rows each run once, serialize their work and discard a cleared tim
     await Bun.sleep(1);
     expect(seen).toEqual([KEY, other]);
   } finally { release(); fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("legacy quarantine notices are reused, reopened and resolved under their original id", async () => {
+  const key = "codex:25300000-0000-0000-0000-000000000076";
+  const taskId = `startup-quarantine-${createHash("sha256").update(key).digest("hex").slice(0, 32)}`;
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-startup-retry-legacy-"));
+  const entry = { key: { engine: "codex", sessionId: key.slice(6) }, cwd: directory } as never;
+  const file = statePath("tasks.json");
+  const at = "2026-10-17T00:00:00.000Z";
+  try {
+    mutateTasks(tasks => ({ tasks: [...tasks, { id: taskId, project: "dir-fixture", text: "Legacy quarantine fixture", status: "done", placement: "unplaced", assignments: [], createdAt: at, updatedAt: at }], result: undefined }), file);
+    const row = { key, attempts: 3, reason: "adoption-failed" as const, nextAt: 60000, quarantined: true };
+    await startupRowNotice(entry, row);
+    await startupRowNotice(entry, row);
+    expect(loadTasks(file).filter(task => task.id === taskId || task.text.includes(key))).toHaveLength(1);
+    expect(loadTasks(file).find(task => task.id === taskId)?.status).toBe("inbox");
+    await startupRowNotice(entry, null);
+    expect(loadTasks(file).find(task => task.id === taskId)?.status).toBe("done");
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
 });

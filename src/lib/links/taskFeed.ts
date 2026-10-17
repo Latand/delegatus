@@ -7,6 +7,8 @@
  */
 import { taskFeedSource, TASKS_FILE } from "@/lib/tasks/store";
 import fs from "node:fs";
+import path from "node:path";
+import { createHash } from "node:crypto";
 import { statePath } from "@/lib/configDir";
 import type { BoardTask } from "@/lib/tasks/types";
 import { withTaskCompletion } from "@/lib/tasks/completion";
@@ -18,7 +20,7 @@ import { loadPipelinesForList } from "@/lib/pipelines/store";
 import { initializeStateCollections, readStateCollectionRevision, SqliteStateCollection, stateCollectionsInitialized, stateDatabaseSignature } from "@/lib/state/sqliteStateStore";
 import { withoutStoredLessonsIn } from "@/lib/memory/roleStore";
 
-import { encodeTask, type WireRow } from "./taskWire";
+import { decodeWireRow, encodeTask, MalformedRow, type WireRow } from "./taskWire";
 import { isTombstone, tombstoneCollection, tombstoneKey, tombstoneRowKey } from "./tombstones";
 
 /** Everything in the change log up to and including this has been sent:
@@ -60,8 +62,26 @@ class Page {
   rows: WireRow[] = [];
   bytes = 0;
   withheld: string[] = [];
+  constructor(private readonly database: string) {}
   /** Adds the row, or answers false when it would pass a bound. */
   add(row: WireRow, bytes: number, id: string, stub: boolean): boolean {
+    try { decodeWireRow(row); }
+    catch (error) {
+      if (!(error instanceof MalformedRow)) throw error;
+      // A stub can itself be malformed, as can a legacy tombstone. Keep the
+      // cursor moving, and record only the local key and rejected field.
+      // Exclusive creation logs once across peers and worker replacements.
+      const key = `${"gone" in row ? "g" : "t"}:${id}`;
+      const directory = statePath("task-export-rejections");
+      const name = createHash("sha256").update(JSON.stringify([this.database, key])).digest("hex");
+      fs.mkdirSync(directory, { recursive: true });
+      try {
+        fs.writeFileSync(path.join(directory, `${name}.json`), JSON.stringify({ key, field: error.field }), { flag: "wx", mode: 0o600 });
+        console.warn("[links] skipped malformed task export row", { key, field: error.field });
+      }
+      catch (failure) { if ((failure as NodeJS.ErrnoException).code !== "EEXIST") throw failure; }
+      return true;
+    }
     if (this.rows.length >= PAGE_ROWS || (this.rows.length > 0 && this.bytes + bytes > PAGE_BYTES)) return false;
     this.rows.push(row);
     this.bytes += bytes;
@@ -240,8 +260,9 @@ export function readLogPage(after: Position, filter: FeedFilter): LogPage {
   if (revision > current) return { kind: "resync" };
   if (revision === current && !key) return { kind: "page", rows: [], cursor: after, more: false, withheld: [] };
   const tombstones = tombstoneCollection(source.database, false);
-  const page = new Page();
+  const page = new Page(source.database);
   let cursor: Position = after;
+  let continuation: Position = after;
   let scanned = 0;
   let position = { revision, key };
   for (;;) {
@@ -269,12 +290,13 @@ export function readLogPage(after: Position, filter: FeedFilter): LogPage {
       }
       if (row && !page.add(row.row, row.bytes, row.id, row.stub)) {
         const next = batch.entries[index];
-        const last = cursor;
+        const last = continuation;
         // The page ends a revision when the next entry starts another one.
         const ended = next && last[0] !== next.revision && last.length === 2 ? [last[0]] as Position : last;
         return { kind: "page", rows: page.rows, cursor: ended, more: true, withheld: page.withheld };
       }
       cursor = [entry.revision, entry.key];
+      if (isPosition(cursor)) continuation = cursor;
       scanned++;
     }
     const exhausted = batch.entries.length < LOG_BATCH;
@@ -283,8 +305,7 @@ export function readLogPage(after: Position, filter: FeedFilter): LogPage {
       return { kind: "page", rows: page.rows, cursor: [batch.revision], more: false, withheld: page.withheld };
     }
     if (scanned >= MAX_LOG_ENTRIES) {
-      const lastEntry = batch.entries.at(-1)!;
-      return { kind: "page", rows: page.rows, cursor: [lastEntry.revision, lastEntry.key], more: true, withheld: page.withheld };
+      return { kind: "page", rows: page.rows, cursor: continuation, more: true, withheld: page.withheld };
     }
     position = { revision: cursor[0], key: cursor[1] ?? "" };
   }
@@ -300,9 +321,12 @@ export type ScanPage = { rows: WireRow[]; next: string | null; withheld: string[
 export function readScanPage(after: string, filter: FeedFilter): ScanPage {
   const source = taskFeedSource(filter.filePath ?? TASKS_FILE);
   if (!source) return { rows: [], next: null, withheld: [] };
-  const page = new Page();
+  const page = new Page(source.database);
   const exportable = exportableTasks(filter);
   let cursor = after;
+  // Older peers accept only UUID-shaped scan keys. A rejected legacy id may
+  // be visited internally, but cannot become the next page's wire cursor.
+  let continuation = after;
   let read = 0;
   if (!cursor.startsWith("g:")) {
     let from = cursor.startsWith("t:") ? cursor : "t:";
@@ -312,14 +336,15 @@ export function readScanPage(after: string, filter: FeedFilter): ScanPage {
         read++;
         if (filter.projects.has(task.project) && trackOmission(task, source.database, exportable)) {
           const row = encoded(task, filter);
-          if (!page.add(row.row, row.bytes, task.id, row.stub)) return { rows: page.rows, next: cursor, withheld: page.withheld };
+          if (!page.add(row.row, row.bytes, task.id, row.stub)) return { rows: page.rows, next: continuation, withheld: page.withheld };
         }
         cursor = `t:${task.id}`;
+        if (/^t:[0-9a-f-]{36}$/.test(cursor)) continuation = cursor;
       }
-      if (batch.length < SCAN_BATCH) { cursor = "g:"; break; }
+      if (batch.length < SCAN_BATCH) { cursor = continuation = "g:"; break; }
       from = cursor;
     }
-    if (!cursor.startsWith("g:")) return { rows: page.rows, next: cursor, withheld: page.withheld };
+    if (!cursor.startsWith("g:")) return { rows: page.rows, next: continuation, withheld: page.withheld };
   }
   const tombstones = tombstoneCollection(source.database, false);
   if (!tombstones) return { rows: page.rows, next: null, withheld: page.withheld };
@@ -329,11 +354,12 @@ export function readScanPage(after: string, filter: FeedFilter): ScanPage {
       read++;
       if (isTombstone(tomb) && filter.projects.has(tomb.project)) {
         const gone = { id: tomb.id, project: tomb.project, gone: tomb.gone };
-        if (!page.add(gone, Buffer.byteLength(JSON.stringify(gone)), tomb.id, false)) return { rows: page.rows, next: cursor, withheld: page.withheld };
+        if (!page.add(gone, Buffer.byteLength(JSON.stringify(gone)), tomb.id, false)) return { rows: page.rows, next: continuation, withheld: page.withheld };
       }
       cursor = tombstoneRowKey(tomb);
+      if (/^g:[0-9a-f-]{36}$/.test(cursor)) continuation = cursor;
     }
     if (batch.length < SCAN_BATCH) return { rows: page.rows, next: null, withheld: page.withheld };
   }
-  return { rows: page.rows, next: cursor, withheld: page.withheld };
+  return { rows: page.rows, next: continuation, withheld: page.withheld };
 }
