@@ -63,6 +63,7 @@ function collection(purpose: "read" | "write", filename = statePath("state.sqlit
     decode,
     clone: structuredClone,
     strictDecode: false,
+    preserveRejectedRecords: true,
   });
   collections.set(filename, { identity: identity(filename), collection: opened });
   return opened;
@@ -89,6 +90,18 @@ export function loadSeatRounds(project?: string): PrototypeReviewRound[] {
 export function seatRoundPage(after = "", limit = 16): PrototypeReviewRound[] {
   if (!Number.isInteger(limit) || limit < 1 || limit > 16) throw new Error("invalid seat round page limit");
   return collection("read")?.keyRange(after, "\uffff", limit) ?? [];
+}
+
+/** Raw-key continuation lets worker scans skip rejected legacy rows without
+    losing valid rounds later in the collection. `scanned` is the page budget. */
+export function seatRoundPageWithCursor(after = "", limit = 16): { rounds: PrototypeReviewRound[]; cursor: string; scanned: number } {
+  if (!Number.isInteger(limit) || limit < 1 || limit > 16) throw new Error("invalid seat round page limit");
+  const page = collection("read")?.keyRangeEntries(after, "\uffff", limit) ?? [];
+  return {
+    rounds: page.flatMap(row => row.value === null ? [] : [row.value]),
+    cursor: page.at(-1)?.key ?? after,
+    scanned: page.length,
+  };
 }
 
 export function findSeatRound(reviewId: string): PrototypeReviewRound | undefined {

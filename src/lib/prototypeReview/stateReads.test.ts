@@ -6,6 +6,8 @@ import { saveTasks, loadTasks, loadTasksForList, taskFeedSource } from "@/lib/ta
 import { findPrototypeRound, mutatePrototypeRound, withPrototypeState } from "./store";
 import { taskForPrototype } from "./world";
 import { clearSeatRoundsForTests, insertSeatRound } from "./seatRounds";
+import { resetPrototypeDeliveryWorkerForTests, sweepPrototypeDeliveries } from "./deliveryWorker";
+import { prototypeWorld } from "./world";
 import type { BoardTask } from "@/lib/tasks/types";
 import type { PrototypeReviewRound } from "./types";
 const state = process.env.LLV_STATE_DIR!;
@@ -91,6 +93,36 @@ test("the seat worker reads sixteen rounds per keyset page", async () => {
   expect(new Set([...first, ...second, ...third].map(round => round.id)).size).toBe(33);
   expect(seatRoundPage(third[0]!.id)).toHaveLength(0);
   expect(() => seatRoundPage("", 17)).toThrow("invalid seat round page limit");
+});
+
+test("a rejected seat row does not stop recovery of a later valid round", async () => {
+  const bad = "pr_00000000000000000000000000000001";
+  const good = "pr_00000000000000000000000000000002";
+  const seatRound = (id: string, decision = false): PrototypeReviewRound => ({ id, taskId: null, project: "project-fixture",
+    title: "Seat question", createdAt: at, publicationKey: id, inputDigest: "fixture", source: { conversationId: null }, variants: [],
+    ...(decision ? { decision: { chosen: [], comment: "", at, delivery: { state: "pending" as const, clientMessageId: id,
+      conversationId: "conversation-seat", text: "answer" } } } : {}) });
+  insertSeatRound(seatRound(bad));
+  insertSeatRound(seatRound(good, true));
+  const db = new Database(path.join(state, "state.sqlite"));
+  db.query("UPDATE state_rows SET value_json=json_set(value_json,'$.title',7) WHERE collection='seat-decisions' AND row_key=?").run(bad);
+  db.query("UPDATE state_collections SET revision=revision+1 WHERE collection='seat-decisions'").run();
+  db.close();
+
+  const recovered: string[] = [];
+  try {
+    await sweepPrototypeDeliveries({ now: () => Date.parse(at), world: { ...prototypeWorld, orchestrator: () => "conversation-seat" }, delivery: {
+      recover: async decision => { recovered.push(decision.delivery.clientMessageId); return { state: "pending" }; },
+      send: async () => ({ state: "pending" }), retry: async () => ({ state: "pending" }),
+    } }, { force: true, limit: 16 });
+  } finally {
+    const restore = new Database(path.join(state, "state.sqlite"));
+    restore.query("UPDATE state_rows SET value_json=json_set(value_json,'$.title','Seat question') WHERE collection='seat-decisions' AND row_key=?").run(bad);
+    restore.query("UPDATE state_collections SET revision=revision+1 WHERE collection='seat-decisions'").run();
+    restore.close();
+    await resetPrototypeDeliveryWorkerForTests();
+  }
+  expect(recovered).toEqual([good]);
 });
 
 

@@ -4,7 +4,7 @@ import { loadTasksForList, taskFeedSource } from "@/lib/tasks/store";
 import { viewerReleaseOwnsTraffic } from "@/lib/viewerReleaseTraffic";
 import { attemptPrototypeDelivery, prototypeDelivery, type PrototypeDeliveryPorts } from "./decision";
 import type { PrototypeDecision, PrototypeReviewRound } from "./types";
-import { seatRoundPage } from "./seatRounds";
+import { seatRoundPageWithCursor } from "./seatRounds";
 import { prototypeWorld } from "./world";
 import { postPrototypeReviewToTelegram } from "./telegramPost";
 import { reconcileReviewPolls, reviewPollsNeedRecovery } from "@/lib/telegram/bot/reviewPolls";
@@ -45,6 +45,8 @@ interface WorkerState {
   scannedAt: number;
   scanAfter?: string;
   seatScanAfter?: string;
+  postAfter?: string;
+  pollAfter?: string;
   ticking: boolean;
   timer?: ReturnType<typeof setInterval>;
 }
@@ -54,6 +56,13 @@ function workerState(): WorkerState {
   return host[KEY] ??= { owed: new Map(), due: new Map(), running: new Map(), scannedAt: Number.NEGATIVE_INFINITY, ticking: false };
 }
 const productionPorts = (): PrototypeDeliveryPorts => ({ delivery: prototypeDelivery, world: prototypeWorld, now: Date.now });
+
+function rotateRounds<T extends { id: string }>(rounds: readonly T[], after: string | undefined, limit: number): T[] {
+  const ordered = [...rounds].sort((left, right) => left.id.localeCompare(right.id));
+  const start = after === undefined ? 0 : ordered.findIndex(round => round.id > after);
+  const offset = start < 0 ? 0 : start;
+  return [...ordered.slice(offset), ...ordered.slice(0, offset)].slice(0, limit);
+}
 
 /** How long after an attempt the next one is due, from what the attempt left. */
 export function prototypeDeliveryDelay(delivery: PrototypeDecision["delivery"]): number {
@@ -129,14 +138,14 @@ async function scan(state: WorkerState, now: number, bounded: boolean): Promise<
     await new Promise<void>(resolve => setImmediate(resolve));
   }
   for (;;) {
-    const page = withViewerOperation("prototype.state", () => seatRoundPage(state.seatScanAfter));
-    rounds.push(...page);
-    for (const round of page) {
+    const page = withViewerOperation("prototype.state", () => seatRoundPageWithCursor(state.seatScanAfter));
+    rounds.push(...page.rounds);
+    for (const round of page.rounds) {
       if (round.decision && round.decision.delivery.state !== "sent") state.owed.set(round.id, null);
       else { state.owed.delete(round.id); state.due.delete(round.id); }
     }
-    if (page.length < 16) { state.seatScanAfter = undefined; break; }
-    state.seatScanAfter = page.at(-1)!.id;
+    if (page.scanned < 16) { state.seatScanAfter = undefined; break; }
+    state.seatScanAfter = page.cursor;
     if (bounded) break;
     await new Promise<void>(resolve => setImmediate(resolve));
   }
@@ -152,16 +161,18 @@ export async function sweepPrototypeDeliveries(ports: PrototypeDeliveryPorts = p
   const rounds = options.rescan !== false ? await scan(state, now, options.limit !== undefined) : [];
   const attempts: Promise<void>[] = [];
   if (options.rescan !== false) {
-    let posts = 0;
-    for (const round of rounds) if (posts < 16 && round.telegramPost?.state === "pending") {
-      posts++;
-      attempts.push(postPrototypeReviewToTelegram(round, round.telegramPost.key).then(() => {}));
+    const pendingPosts = rounds.filter(round => round.telegramPost?.state === "pending");
+    const posts = rotateRounds(pendingPosts, state.postAfter, 16);
+    if (posts.length) state.postAfter = posts.at(-1)!.id;
+    for (const round of posts) {
+      attempts.push(postPrototypeReviewToTelegram(round, round.telegramPost!.key).then(() => {}));
     }
-    let reconciliations = 0;
-    for (const round of rounds) if (reconciliations < 16 && reviewPollsNeedRecovery(round)) {
+    const pendingPolls = rounds.filter(reviewPollsNeedRecovery);
+    const polls = rotateRounds(pendingPolls, state.pollAfter, 16);
+    if (polls.length) state.pollAfter = polls.at(-1)!.id;
+    for (const round of polls) {
       await new Promise<void>(resolve => setImmediate(resolve));
       if (telegramBotService().hasReviewPollWork(round.id, round.telegramPost!.key)) continue;
-      reconciliations++;
       attempts.push(reconcileReviewPolls(round).catch(() => console.warn("Telegram review polls reconciliation deferred", "storage_unavailable")));
     }
   }
