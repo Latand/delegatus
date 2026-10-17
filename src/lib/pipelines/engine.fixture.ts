@@ -29,6 +29,7 @@ import { CONTROLLER_ARTIFACT_GIT_PATHS } from "./controllerArtifacts";
 import { realExec } from "@/lib/workflows/provision";
 import { worktreeDiskWait } from "@/lib/state/diskPressure";
 import { agentPublicationIdentityEnv } from "@/lib/git/agentPublicationIdentity";
+import { prepareStageGitGuard } from "@/lib/git/stageAttemptGuard";
 
 process.env.LLV_STATE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "llv-pipeline-engine-"));
 const engineModule = await import("./engine");
@@ -340,10 +341,27 @@ async function realWorktreeLane(name: string, stages: unknown[], publication?: "
   // runner's author/committer variables and the repository's Fixture config.
   const { GIT_AUTHOR_NAME, GIT_AUTHOR_EMAIL, GIT_COMMITTER_NAME, GIT_COMMITTER_EMAIL } = agentPublicationIdentityEnv(process.env);
   const identity = { GIT_AUTHOR_NAME, GIT_AUTHOR_EMAIL, GIT_COMMITTER_NAME, GIT_COMMITTER_EMAIL };
-  // Native reflog creation and the controller share one deterministic clock.
+  let agentEnv: Record<string, string | undefined> = identity;
+  let agentWorktree: string | undefined;
+  // Model native dispatch: each reservation gets its own starting head and
+  // generated hooks, including successor stages in the same worktree.
+  const spawnAgent = h.ports.spawnAgent;
+  h.ports.spawnAgent = async (input, onReserved) => {
+    const launchId = `native-${input.clientAttemptId}`;
+    const spawned = await spawnAgent(input, async reservation => {
+      await onReserved({ ...reservation, launchId });
+      const guard = await prepareStageGitGuard(launchId, input.cwd, realExec, h.ports.now());
+      agentEnv = { ...guard, ...agentPublicationIdentityEnv({ ...process.env, ...guard }) };
+      agentWorktree = input.cwd;
+    });
+    return { ...spawned, launchId };
+  };
+  // Agent Git commands and the controller share one deterministic clock.
   const git = async (cwd: string, ...args: string[]) => {
     const date = ["commit", "merge", "rebase", "am"].includes(args[0]!) ? h.ports.now() : undefined;
-    const result = (await realExec("git", args, cwd, { ...identity,
+    // Upstream writers and deliberate custody bypasses are fixture controls;
+    // only commands in the dispatched lane inherit its receipt bindings.
+    const result = (await realExec("git", args, cwd, { ...(cwd === agentWorktree ? agentEnv : identity),
       ...(date ? { GIT_AUTHOR_DATE: date, GIT_COMMITTER_DATE: date } : {}) }));
     if (result.code !== 0) throw new Error(result.stderr || result.stdout);
     return result.stdout.trim();

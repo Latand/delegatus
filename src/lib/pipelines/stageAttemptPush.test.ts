@@ -193,7 +193,7 @@ test("B: legacy reflog recovery refuses a commit made under an operator identity
   } finally { await f.close(); }
 });
 
-test("B: an older start receipt can recover an own merge missing its commit receipt", async () => {
+test.each([{ missing: false }, { missing: true }])("B: a versionless start requires independent receipts for own merges (missing=$missing)", async ({ missing }) => {
   const f = await fixture();
   try {
     await f.commit("own before historical merge");
@@ -206,9 +206,14 @@ test("B: an older start receipt can recover an own merge missing its commit rece
     const start = JSON.parse(await fs.readFile(startPath, "utf8"));
     delete start.commitReceiptVersion;
     await fs.writeFile(startPath, JSON.stringify(start));
-    await fs.rm(path.join(f.receipt, "commits", head), { force: true });
+    if (missing) await fs.rm(path.join(f.receipt, "commits", head), { force: true });
     await f.push();
-    expect(await f.settle()).toEqual({ ok: true, sha: head });
+    const result = await f.settle();
+    if (missing) {
+      expect(result?.ok).toBe(false);
+      if (!result || result.ok) throw new Error("versionless start substituted reflog for a missing receipt");
+      expect(result.error).toContain(head);
+    } else expect(result).toEqual({ ok: true, sha: head });
   } finally { await f.close(); }
 });
 
@@ -327,5 +332,107 @@ test("B: native commit proof can adopt a scratch push whose pre-push hook was by
     const pushed = await realExec("git", ["push", "--no-verify", "origin", "HEAD:refs/heads/pipeline/proof"], scratch, f.env);
     expect(pushed.code, pushed.stderr).toBe(0);
     expect(await f.settle()).toEqual({ ok: true, sha: made });
+  } finally { await f.close(); }
+});
+
+
+test.each(["native", "forged"])("B: an imported merge stays unreceipted with a %s reflog action", async action => {
+  const f = await fixture();
+  try {
+    const own = await f.commit("own before imported merge");
+    await f.push();
+    await f.git(f.foreign, "commit", "--allow-empty", "-m", "advance main");
+    await f.git(f.foreign, "push", "origin", "main");
+    await f.git(f.foreign, "fetch", "origin", "pipeline/proof");
+    await f.git(f.foreign, "checkout", "-b", "pipeline/proof", own);
+    await f.git(f.foreign, "merge", "--no-ff", "-m", "foreign merge", "main");
+    const imported = await f.git(f.foreign, "rev-parse", "HEAD");
+    await f.git(f.foreign, "push", "origin", "HEAD:refs/heads/pipeline/proof");
+    await f.own("fetch", "origin", "pipeline/proof");
+    const result = await realExec("git", ["merge", "--ff-only", "FETCH_HEAD"], f.lane,
+      { ...f.env, ...(action === "forged" ? { GIT_REFLOG_ACTION: "merge foreign: Merge made by fixture" } : {}) });
+    expect(result.code, result.stderr).toBe(0);
+    expect(await fs.access(path.join(f.receipt, "commits", imported)).then(() => true, () => false)).toBe(false);
+    const settled = await f.settle();
+    expect(settled?.ok).toBe(false);
+    if (!settled || settled.ok) throw new Error("imported merge was accepted");
+    expect(settled.error).toContain(imported);
+    expect(await f.own("rev-parse", "HEAD")).toBe(imported);
+  } finally { await f.close(); }
+});
+
+test.each(["versioned", "versionless"])("B: a %s start refuses imported shared-identity commits with forged reflog creation", async version => {
+  const f = await fixture();
+  try {
+    const startPath = path.join(f.receipt, "start.json");
+    const start = JSON.parse(await fs.readFile(startPath, "utf8"));
+    if (version === "versionless") delete start.commitReceiptVersion;
+    await fs.writeFile(startPath, JSON.stringify(start));
+    const foreignEnv: NodeJS.ProcessEnv = { ...f.env, GIT_CONFIG_COUNT: "0",
+      LLV_STAGE_GIT_RECEIPT: undefined, LLV_STAGE_GIT_WORKTREE: undefined };
+    const made = await realExec("git", ["commit", "--allow-empty", "-m", "shared identity outside lane"], f.foreign, foreignEnv);
+    expect(made.code, made.stderr).toBe(0);
+    const imported = await f.git(f.foreign, "rev-parse", "HEAD");
+    await f.git(f.foreign, "push", "origin", "HEAD:refs/heads/pipeline/proof");
+    await f.own("fetch", "origin", "pipeline/proof");
+    const reset = await realExec("git", ["reset", "--hard", "FETCH_HEAD"], f.lane,
+      { ...f.env, GIT_REFLOG_ACTION: "commit" });
+    expect(reset.code, reset.stderr).toBe(0);
+    expect(await fs.access(path.join(f.receipt, "commits", imported)).then(() => true, () => false)).toBe(false);
+    const settled = await f.settle();
+    expect(settled?.ok).toBe(false);
+    if (!settled || settled.ok) throw new Error("versionless start trusted forged creation");
+    expect(settled.error).toContain(imported);
+  } finally { await f.close(); }
+});
+
+test.each(["merge", "no-verify", "fast-forward", "squash"])("B: original post-merge arguments survive a %s", async mode => {
+  const f = await fixture();
+  try {
+    if (mode !== "fast-forward") await f.commit("own before merge");
+    await f.git(f.foreign, "commit", "--allow-empty", "-m", "main advances");
+    await f.git(f.foreign, "push", "origin", "main");
+    await f.own("fetch", "origin", "main");
+    const originalHooks = path.join(f.root, "original-hooks"); await fs.mkdir(originalHooks);
+    const seen = path.join(f.root, "merge-arguments");
+    Object.assign(f.env, { STAGE_PROOF_MERGE_ARGS: seen });
+    await fs.writeFile(path.join(originalHooks, "post-merge"),
+      `#!/bin/sh\nprintf '%s\\n%s\\n' "$#" "$1" > "$STAGE_PROOF_MERGE_ARGS"\n`, { mode: 0o700 });
+    await f.own("config", "core.hooksPath", originalHooks);
+    await f.own("merge", ...(mode === "fast-forward" ? ["--ff-only"]
+      : mode === "squash" ? ["--squash"] : ["--no-ff", ...(mode === "no-verify" ? ["--no-verify"] : []), "-m", "merge main"]), "origin/main");
+    expect(await fs.readFile(seen, "utf8")).toBe(`1\n${mode === "squash" ? "1" : "0"}\n`);
+    const head = await f.own("rev-parse", "HEAD");
+    if (mode === "merge" || mode === "no-verify") {
+      expect(await fs.readFile(path.join(f.receipt, "commits", head), "utf8")).toBe("");
+      await f.push(); expect(await f.settle()).toEqual({ ok: true, sha: head });
+    } else if (mode === "fast-forward") {
+      expect(await fs.access(path.join(f.receipt, "commits", head)).then(() => true, () => false)).toBe(false);
+    }
+  } finally { await f.close(); }
+});
+
+
+test("B: an octopus merge can prove creation when Git omits the ancestral lane head", async () => {
+  const f = await fixture();
+  try {
+    const side = path.join(f.root, "own-side");
+    await f.own("worktree", "add", "-b", "own-side", side, f.pipeline.baseRef);
+    await fs.writeFile(path.join(side, "side.txt"), "own side\n");
+    for (const args of [["add", "side.txt"], ["commit", "-m", "own side"]]) {
+      const result = await realExec("git", args, side, f.env);
+      expect(result.code, result.stderr).toBe(0);
+    }
+    await fs.writeFile(path.join(f.foreign, "main.txt"), "main\n");
+    await f.git(f.foreign, "add", "main.txt");
+    await f.git(f.foreign, "commit", "-m", "new main");
+    await f.git(f.foreign, "push", "origin", "main");
+    await f.own("fetch", "origin", "main");
+    await f.own("merge", "-m", "octopus merge", "origin/main", "own-side");
+    const head = await f.own("rev-parse", "HEAD");
+    const parents = await f.own("show", "-s", "--format=%P", head);
+    expect(parents.split(" ")).not.toContain(f.pipeline.baseRef);
+    expect(await fs.readFile(path.join(f.receipt, "commits", head), "utf8")).toBe("");
+    await f.push(); expect(await f.settle()).toEqual({ ok: true, sha: head });
   } finally { await f.close(); }
 });

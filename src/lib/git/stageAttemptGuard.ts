@@ -66,11 +66,13 @@ if [ "$hook" = post-commit ] || [ "$hook" = post-merge ] || [ "$hook" = post-app
           : > "$receipt/commits/$made"
         done || exit 1
       elif [ "$hook" = post-merge ]; then
-        # post-merge also runs after a fast-forward. Reflog action text comes
-        # from GIT_REFLOG_ACTION, so only a real merge commit proves creation.
-        parents=$(git rev-list --parents -n 1 HEAD) || exit 1
-        set -- $parents
-        if [ "$#" -ge 3 ]; then made=$1; : > "$receipt/commits/$made"; fi
+        # Git retains MERGE_HEAD through post-merge only when this invocation
+        # created a merge. Fast-forwards to existing merges have no merge state.
+        merge_file=$(git rev-parse --git-path MERGE_HEAD) || exit 1
+        if [ -f "$merge_file" ] && git rev-parse --verify -q HEAD^2 >/dev/null; then
+          made=$(git rev-parse HEAD) || exit 1
+          : > "$receipt/commits/$made"
+        fi
       else
         made=$(git rev-parse HEAD) || exit 1
         : > "$receipt/commits/$made"

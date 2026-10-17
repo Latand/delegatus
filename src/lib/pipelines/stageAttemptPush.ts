@@ -75,10 +75,6 @@ export async function settleStageAttemptPush(pipeline: Pipeline, attempt: Pipeli
       || !Number.isFinite(Date.parse(start.startedAt)) || !attempt.startedAt
       || !Number.isFinite(Date.parse(attempt.startedAt)) || !Number.isFinite(Date.parse(now))
       || Date.parse(start.startedAt) < Date.parse(attempt.startedAt) || Date.parse(start.startedAt) > Date.parse(now)) return refuse("the attempt's starting-head receipt is invalid");
-    // A start receipt from before complete hook coverage cannot distinguish a
-    // missing legacy merge receipt from a current unproved commit. Only those
-    // historical launches may use the identity-checked reflog recovery path.
-    const allowLegacyNativeCreation = raw === null || start.commitReceiptVersion !== 1;
     const delivery = pipeline.delivery;
     if (!delivery || !delivery.active || delivery.disposition !== "owner" || delivery.ownerId !== pipeline.id
       || delivery.publish !== "enabled") return null;
@@ -111,15 +107,14 @@ export async function settleStageAttemptPush(pipeline: Pipeline, attempt: Pipeli
       }
     }
     let nativeCreated: Set<string> | undefined;
-    // Older launches may have installed start.json before their hook set was
-    // complete. Reflog entries recover those missing receipts only when the
-    // commit carries the publication identity pinned into the producing agent.
-    const publicationIdentity = agentPublicationIdentityEnv(process.env);
-    const expectedName = publicationIdentity.GIT_AUTHOR_NAME;
-    const expectedEmail = publicationIdentity.GIT_AUTHOR_EMAIL;
     const nativeCreation = async (sha: string): Promise<boolean> => {
-      if (!allowLegacyNativeCreation) return false;
+      // Every existing start receipt, including a versionless one, requires
+      // independent commit receipts. Shared identity and reflog text add none.
+      if (raw !== null) return false;
       if (!nativeCreated) {
+        const publicationIdentity = agentPublicationIdentityEnv(process.env);
+        const expectedName = publicationIdentity.GIT_AUTHOR_NAME;
+        const expectedEmail = publicationIdentity.GIT_AUTHOR_EMAIL;
         nativeCreated = new Set();
         const from = Math.floor(Date.parse(attempt.startedAt!) / 1000);
         const through = Math.floor(Date.parse(attempt.completedAt ?? now) / 1000);
