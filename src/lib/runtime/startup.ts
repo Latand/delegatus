@@ -1,9 +1,12 @@
+import { registryOpenSpawnReceipts } from "@/lib/agent/registry";
 import { startupSnapshot, withStartupRowScope, startupHostInScope } from "./startupSnapshot";
 import { startupRowRetries, startupRowReason, startupRowNotice, type StartupRowReason } from "./startupRowRetries";
 import { verifiedCodexSocketOwner } from "./codexSocketTransport";
+import { waitForStateLock } from "@/lib/state/lockWait";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { operatorDecisionFormsRequired } from "@/lib/orchestrator/operatorDecisionForms";
-import { learnedRulesForLaunchProfile, roleMemoryProfileForIdentity } from "@/lib/memory/roleLaunch";
+import { learnedRulesForLaunchProfile, memoryStartIdentity, roleMemoryProfileForIdentity } from "@/lib/memory/roleLaunch";
+import { codexNativeMemoryEnabled } from "@/lib/agent/codexSpawnPolicy";
 import fs from "node:fs";
 
 import { withoutUnsupportedApiCredentials } from "@/lib/environmentIsolation";
@@ -1884,12 +1887,13 @@ export type ClaudeStartupOwner = {
  * retracted as `not_configured` (#1732). An owner of any kind now answers the
  * same launch paths a fresh spawn of that account would use.
  */
-export function claudeStartupHostOptions(
+export async function claudeStartupHostOptions(
   entry: AgentRegistryEntry,
   owner: ClaudeStartupOwner | null,
   capability: string | null,
   startupEnvironment: NodeJS.ProcessEnv,
   agentRole?: string | null,
+  identity?: ReturnType<typeof memoryStartIdentity>,
 ) {
   const access = materializeStructuredHostAccess(
     structuredHostAccessPolicy(entry.launchProfile),
@@ -1908,7 +1912,7 @@ export function claudeStartupHostOptions(
     allowSubagents: entry.launchProfile?.allowSubagents ?? false,
     operatorDecisionForms: operatorDecisionFormsRequired(agentRole, entry.artifactPath),
     cleanMemory: entry.launchProfile?.cleanMemory === true,
-    appendSystemPrompt: learnedRulesForLaunchProfile(entry.launchProfile),
+    appendSystemPrompt: await learnedRulesForLaunchProfile(entry.launchProfile, identity ? { engine: "claude", ...identity, cwd: entry.cwd, home: owner?.home, env: access.env, claudeSettingsPath: launchPaths?.spawnPolicyBaseSettingsPath, providerAccount: Boolean(owner?.claudeProvider) } : undefined),
     mcpServers: entry.launchProfile?.mcpServers ?? ["viewer"],
     mcpStatePath: launchPaths?.mcpStatePath,
     readOnly: launchProfileEngineReadOnly(entry.launchProfile),
@@ -2298,9 +2302,10 @@ async function adoptStructuredHostsPass(
       structuredHostCell(registry, entry.key.engine, sessionKeyId(entry.key), registry.conversationForPath(entry.artifactPath)?.id);
     const codex = resumeDeferred && codexCandidateCount === 0 ? [] : await (dependencies.adopt ?? adoptCodexRegistryHosts)(
       registry,
-      (entry) => {
+      async (entry) => {
         const memoryCell = adoptionCell(entry);
-        const conversation = registry.conversationForPath(entry.artifactPath);
+        const conversation = registry.conversationForPath(entry.artifactPath) ?? await withViewerOperation("memory.engine-start", () =>
+          waitForStateLock("memory.start-identity", () => registry.ensureConversation(entry.key.engine, entry.artifactPath, entry.accountId)));
         const memoryRole = conversation?.agentRole === "orchestrator" || conversation?.agentRole === "maintainer"
           ? conversation.agentRole
           : null;
@@ -2327,6 +2332,7 @@ async function adoptStructuredHostsPass(
           startupEnvironment,
           capability,
         );
+        const nativeMemoryEnabled = await codexNativeMemoryEnabled(owner?.home, launchProfile?.allowSubagents ?? false, launchProfile?.cleanMemory === true);
         return {
           cwd: entry.cwd,
           codexHome: owner?.home,
@@ -2338,7 +2344,8 @@ async function adoptStructuredHostsPass(
           allowSubagents: launchProfile?.allowSubagents ?? false,
           operatorDecisionForms: operatorDecisionFormsRequired(conversation?.agentRole, entry.artifactPath),
           cleanMemory: launchProfile?.cleanMemory === true,
-          developerInstructions: learnedRulesForLaunchProfile(launchProfile),
+          nativeMemoryEnabled,
+          developerInstructions: await learnedRulesForLaunchProfile(launchProfile, { engine: "codex", ...memoryStartIdentity(registry, conversation.id), cwd: entry.cwd, home: owner?.home, env: access.env, nativeMemoryEnabled }),
           mcpServers: launchProfile?.mcpServers ?? ["viewer"],
           validateTelegramGrant: startupTelegramGrantCheck(registry, entry),
           /* Re-adoption replays the durable grant (issue #687) — a session never
@@ -2365,9 +2372,10 @@ async function adoptStructuredHostsPass(
     await reportProgress("adopting Claude hosts");
     const claude = resumeDeferred && claudeCandidateCount === 0 ? [] : await (dependencies.adoptClaude ?? adoptClaudeRegistryHosts)(
       registry,
-      (entry) => {
+      async (entry) => {
         const memoryCell = adoptionCell(entry);
-        const conversation = registry.conversationForPath(entry.artifactPath);
+        const conversation = registry.conversationForPath(entry.artifactPath) ?? await withViewerOperation("memory.engine-start", () =>
+          waitForStateLock("memory.start-identity", () => registry.ensureConversation(entry.key.engine, entry.artifactPath, entry.accountId)));
         const memoryRole = conversation?.agentRole === "orchestrator" || conversation?.agentRole === "maintainer"
           ? conversation.agentRole
           : null;
@@ -2383,12 +2391,13 @@ async function adoptStructuredHostsPass(
           Boolean(seatMembership && seatMembership.containerId === memoryProject),
         ) ?? undefined;
         const options = {
-          ...claudeStartupHostOptions(
+          ...await claudeStartupHostOptions(
             { ...entry, launchProfile },
             resolveClaudeOwner(entry),
             registry.rotateSpawnCapabilityForPath(entry.artifactPath),
             startupEnvironment,
             registry.conversationForPath(entry.artifactPath)?.agentRole,
+            memoryStartIdentity(registry, conversation.id),
           ),
           validateTelegramGrant: startupTelegramGrantCheck(registry, entry),
         };
@@ -2741,7 +2750,7 @@ async function adoptStructuredHostsPass(
     history; everything else is provisioning the fence covers. */
 function fencedPendingSpawnReceipts(registry: AgentRegistry, deferred: ReadonlySet<string>): SpawnReceipt[] {
   if (deferred.size === 0) return [];
-  return Object.values(startupSnapshot(registry).receipts).filter((receipt) =>
+  return registryOpenSpawnReceipts(startupSnapshot(registry)).filter((receipt) =>
     receipt.state !== "completed"
     && receipt.state !== "failed"
     && receipt.state !== "conflicted"

@@ -257,6 +257,66 @@ test("a refused start is written in the interface language when the step has a s
   expect(host.querySelector("[data-health-start-failed]")?.textContent).toBe("Could not start the check: the check is already running elsewhere");
 });
 
+/* Audit F3 and B45: Start and Stop answer the press at once, send once, and a
+   refusal says why where the press was made. */
+function heldMethod(method: string) {
+  const sent: string[] = [];
+  let release: (response: Response) => void = () => {};
+  const saved = globalThis.fetch;
+  globalThis.fetch = ((url: unknown, init?: RequestInit) => {
+    if ((init?.method ?? "GET") !== method) return Promise.resolve(respond(String(url)));
+    sent.push(String(url));
+    return new Promise<Response>((resolve) => { release = resolve; });
+  }) as typeof fetch;
+  return {
+    sent,
+    answer: (response: Response) => act(async () => { release(response); await new Promise((resolve) => setTimeout(resolve, 20)); }),
+    restore: () => { globalThis.fetch = saved; },
+  };
+}
+
+test("Start reads as starting at once, sends one request however often it is pressed, and a refusal frees it with the reason", async () => {
+  answer = { runtime: RUNTIME, run: null };
+  const host = await render();
+  const server = heldMethod("POST");
+  try {
+    const start = () => host.querySelector<HTMLButtonElement>("[data-health-start]")!;
+    await act(async () => { start().click(); });
+    expect(start().disabled).toBe(true);
+    expect(start().textContent).toBe("Starting…");
+    await act(async () => { start().click(); start().click(); });
+    expect(server.sent).toEqual(["/api/onboarding/health"]);
+    await server.answer(json({ error: "the check is already running elsewhere" }, 409));
+    expect(start().disabled).toBe(false);
+    expect(start().textContent).toBe("Run the check");
+    expect(host.querySelector("[data-health-start-failed]")?.textContent).toBe("Could not start the check: the check is already running elsewhere");
+  } finally { server.restore(); }
+});
+
+test("Stop reads as stopping at once, sends once, and a refusal or a lost request puts Stop back with the reason", async () => {
+  answer = runOf("running", [row("spawn", "passed"), row("delivery", "running"), row("report", "waiting"), row("wake", "waiting"), row("filing", "waiting")]).answer;
+  const host = await render();
+  const server = heldMethod("DELETE");
+  try {
+    const stop = () => host.querySelector<HTMLButtonElement>("[data-health-stop]")!;
+    await act(async () => { stop().click(); });
+    expect(stop().disabled).toBe(true);
+    expect(stop().textContent).toBe("Stopping…");
+    await act(async () => { stop().click(); });
+    expect(server.sent).toEqual(["/api/onboarding/health?run=run00004"]);
+    await server.answer(json({ error: "the run is finishing its cleanup" }, 409));
+    expect(stop().disabled).toBe(false);
+    expect(stop().textContent).toBe("Stop");
+    expect(host.querySelector("[data-health-stop-failed]")?.textContent).toBe("Could not stop the check: the run is finishing its cleanup");
+
+    /* A request that never answers is said too, and the next press clears it. */
+    globalThis.fetch = ((url: unknown, init?: RequestInit) => (init?.method === "DELETE" ? Promise.reject(new Error("network down")) : Promise.resolve(respond(String(url))))) as typeof fetch;
+    await act(async () => { stop().click(); await new Promise((resolve) => setTimeout(resolve, 20)); });
+    expect(stop().disabled).toBe(false);
+    expect(host.querySelector("[data-health-stop-failed]")?.textContent).toBe("Could not stop the check: network down");
+  } finally { server.restore(); }
+});
+
 test("the reset time follows the interface language, date and hour:minute", () => {
   const iso = "2100-01-02T17:00:00.000Z";
   expect(resetTime(iso, "en")).not.toMatch(/:\d\d:\d\d/);

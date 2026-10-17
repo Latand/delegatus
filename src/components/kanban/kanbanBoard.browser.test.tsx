@@ -15415,6 +15415,234 @@ describe("a task's album: every picture its agents made, one click from the card
   }, 600_000);
 });
 
+describe("optimistic UI fix line: refusals and older pages say so in place", () => {
+  /*
+   * docs/design/optimistic-ui-audit.md, repair F1: a «Show older» that gets no
+   * page says so beside its button, which stays as Retry. The fixture's
+   * `&olderfails=1` refuses the album's and the report log's older pages. The
+   * album is framed at 1440, 768 and 390, the report log beside the seat's
+   * chat at 1440 (the phone's log is the phone driver's), en and uk, light and
+   * dark. Each line's text is measured from its ranges against the viewport
+   * and every clipping ancestor.
+   *
+   *   LLV_KANBAN_BROWSER_TEST=1 bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "optimistic UI fix line"
+   *
+   * Frames go to OPTIMISTIC_UI_PNG_DIR (default `.artifacts/optimistic-ui/`);
+   * readings to `evidence/optimistic-ui/older-failed.json`.
+   */
+  const lineReading = (page: Page, selector: string) => page.evaluate((selector) => {
+    const line = document.querySelector<HTMLElement>(selector);
+    if (!line) return null;
+    let left = 0, right = innerWidth, top = 0, bottom = innerHeight;
+    for (let ancestor = line.parentElement; ancestor; ancestor = ancestor.parentElement) {
+      const style = getComputedStyle(ancestor); const rect = ancestor.getBoundingClientRect();
+      if (/hidden|clip|auto|scroll/.test(style.overflowX)) { left = Math.max(left, rect.left); right = Math.min(right, rect.right); }
+      if (/hidden|clip|auto|scroll/.test(style.overflowY)) { top = Math.max(top, rect.top); bottom = Math.min(bottom, rect.bottom); }
+    }
+    const range = document.createRange(); range.selectNodeContents(line);
+    const rects = [...range.getClientRects()].filter((rect) => rect.width > 0);
+    const cut = rects.filter((rect) => rect.left < left - 0.5 || rect.right > right + 0.5 || rect.top < top - 0.5 || rect.bottom > bottom + 0.5).length;
+    const style = getComputedStyle(line);
+    return { text: line.textContent, role: line.getAttribute("role"), lines: new Set(rects.map((rect) => Math.round(rect.top))).size, cut, color: style.color, size: style.fontSize };
+  }, selector);
+
+  browserTest("the album's and the report log's «Show older» say so beside the button when the page is refused", async () => {
+    const out = path.resolve(".artifacts/optimistic-ui");
+    const pngDir = path.resolve(process.env.OPTIMISTIC_UI_PNG_DIR ?? out);
+    fs.mkdirSync(pngDir, { recursive: true });
+    fs.mkdirSync("evidence/optimistic-ui", { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const failures: string[] = [];
+    const readings: Record<string, unknown> = {};
+    const url = `${server.base}?album=1&olderfails=1`;
+    const check = (label: string, reading: Awaited<ReturnType<typeof lineReading>>, expected: string) => {
+      readings[label] = reading;
+      if (!reading) return void failures.push(`${label}: no failure line`);
+      if (reading.text !== expected) failures.push(`${label}: the line reads «${reading.text}»`);
+      if (reading.role !== "alert") failures.push(`${label}: the line is not announced`);
+      if (reading.cut) failures.push(`${label}: ${reading.cut} line box(es) cut by the window or a scroller`);
+    };
+    try {
+      for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) {
+        const t = (key: string) => translate(lang, key as never);
+        for (const width of [1440, 768, 390] as const) {
+          const label = `album-${width}-${lang}-${scheme}`;
+          const phone = width === 390;
+          const { context, page, pageErrors } = await openFixture(browser, url, phone ? { width, height: 844 } : { width, height: 900 }, scheme, lang, "no-preference", phone);
+          try {
+            if (phone) {
+              await page.waitForSelector("[data-phone-kanban]", { timeout: 30_000 });
+              const tab = page.locator('[data-phone-kanban-tab="assigned"]');
+              if (await tab.count()) await tab.first().click();
+              await page.waitForTimeout(500);
+              const phoneCard = page.locator('[data-phone-card="task:t-search"]').first();
+              await phoneCard.scrollIntoViewIfNeeded();
+              await phoneCard.click();
+              const row = page.locator('[data-phone-task-album="t-search"]');
+              await row.waitFor({ timeout: 10_000 });
+              await row.scrollIntoViewIfNeeded();
+              await row.click();
+            } else {
+              const button = page.locator(`${card("t-search")} [data-album-button="t-search"]`);
+              await button.first().waitFor({ state: "attached", timeout: 30_000 });
+              if (!(await button.first().isVisible())) await page.locator('.tabs-nav [data-tab="assigned"]').first().click().catch(() => {});
+              await button.first().scrollIntoViewIfNeeded();
+              await button.first().click();
+            }
+            await page.waitForSelector("[data-album-item]", { timeout: 10_000 });
+            await page.locator("[data-album-more]").click();
+            await page.waitForSelector("[data-album-more-failed]", { timeout: 10_000 });
+            /* Read the line as it lands: the driver scrolls nothing on its own. */
+            const landed = await lineReading(page, "[data-album-more-failed]");
+            await page.waitForTimeout(300);
+            await page.screenshot({ path: path.join(pngDir, `${label}.png`) });
+            check(label, landed, t("album.loadMoreFailed"));
+            if (!(await page.locator("[data-album-more]").isEnabled())) failures.push(`${label}: «Show older» is not offered again`);
+            if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+          } finally { await context.close(); }
+        }
+        {
+          const label = `report-log-1440-${lang}-${scheme}`;
+          const { context, page, pageErrors } = await openFixture(browser, server.base + "?olderfails=1", VIEWPORT, scheme, lang);
+          try {
+            await page.waitForSelector("[data-report-log] [data-report-log-older]", { timeout: 30_000 });
+            await page.waitForTimeout(600);
+            await page.locator("[data-attention-toast-dismiss]").click().catch(() => {});
+            await page.locator("[data-report-log-older]").click();
+            await page.waitForSelector("[data-report-log-older-failed]", { timeout: 10_000 });
+            /* Read the line as it lands: the driver scrolls nothing on its own. */
+            const landed = await lineReading(page, "[data-report-log-older-failed]");
+            await page.mouse.move(0, 0);
+            await page.waitForTimeout(300);
+            await page.locator("[data-report-log]").screenshot({ path: path.join(pngDir, `${label}.png`) });
+            check(label, landed, t("reportLog.olderFailed"));
+            if (!(await page.locator("[data-report-log-older]").isEnabled())) failures.push(`${label}: «Show older» is not offered again`);
+            if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+          } finally { await context.close(); }
+        }
+      }
+      fs.writeFileSync("evidence/optimistic-ui/older-failed.json", JSON.stringify({ failures, readings }, null, 2) + "\n");
+      expect(failures).toEqual([]);
+    } finally { await browser.close(); server.stop(); }
+  }, 600_000);
+
+  /*
+   * Audit B5 and B44: dismissing a launch that did not start takes its row off
+   * the card at once, and a refusal puts it back with the reason in the board's
+   * receipt (`&dismissrefused=1`); closing a stopped launch from its reader
+   * takes it off the board at once, and a board that refuses the close for good
+   * brings it back and says so in the task toast (`&boardrefuses=1`). Framed at
+   * 1440 and 768, en and uk, light and dark; readings to
+   * `evidence/optimistic-ui/refused-dismissals.json`.
+   */
+  browserTest("a refused launch dismissal and a refused board close come back with the reason", async () => {
+    const out = path.resolve(".artifacts/optimistic-ui");
+    const pngDir = path.resolve(process.env.OPTIMISTIC_UI_PNG_DIR ?? out);
+    fs.mkdirSync(pngDir, { recursive: true });
+    fs.mkdirSync("evidence/optimistic-ui", { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const failures: string[] = [];
+    const readings: Record<string, unknown> = {};
+    const template = (lang: "en" | "uk", key: string, values: Record<string, string>, hole: string) => translate(lang, key as never, { ...values, [hole]: "\u0000" } as never).split("\u0000");
+    try {
+      for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) for (const width of [1440, 768] as const) {
+        {
+          const label = `dismiss-refused-${width}-${lang}-${scheme}`;
+          const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=ghost-tasks&dismissrefused=1`, { width, height: 900 }, scheme, lang);
+          try {
+            const row = `${card("t-ghost-fixture")} [data-launch-dismiss]`;
+            await page.waitForSelector(card("t-ghost-fixture"), { state: "attached", timeout: 30_000 });
+            if (!(await page.locator(card("t-ghost-fixture")).isVisible())) await page.locator('.tabs-nav [data-tab="assigned"]').first().click().catch(() => {});
+            await page.locator(card("t-ghost-fixture")).scrollIntoViewIfNeeded();
+            await page.waitForSelector(row, { timeout: 10_000 });
+            const gone = page.waitForFunction((selector) => !document.querySelector(selector), row, { timeout: 2_000, polling: "raf" }).then(() => true, () => false);
+            await page.locator(row).click();
+            const leftAtOnce = await gone;
+            const receipt = page.locator("[data-kanban-receipt].error").first();
+            await receipt.waitFor({ timeout: 10_000 });
+            await page.waitForSelector(row, { timeout: 10_000 });
+            await page.mouse.move(0, 0);
+            await page.waitForTimeout(300);
+            await page.screenshot({ path: path.join(pngDir, `${label}.png`) });
+            const text = (await receipt.locator(".msg").textContent()) ?? "";
+            const [head] = template(lang, "kanban.dismissLaunchFailed", {}, "error");
+            const sent = await page.evaluate(() => (window as unknown as { evidence: { assignments: Array<{ method: string }> } }).evidence.assignments.filter((entry) => entry.method === "PATCH").length);
+            /* The receipt's text against its own background, through a canvas so a colour-mix() reads as RGB. */
+            const contrast = await receipt.evaluate((element) => {
+              const rgb = (colour: string) => { const canvas = document.createElement("canvas"); canvas.width = canvas.height = 1; const g = canvas.getContext("2d")!; g.fillStyle = colour; g.fillRect(0, 0, 1, 1); return [...g.getImageData(0, 0, 1, 1).data.slice(0, 3)]; };
+              const lum = ([r, g, b]: number[]) => { const lin = (v: number) => { const c = v / 255; return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; }; return 0.2126 * lin(r!) + 0.7152 * lin(g!) + 0.0722 * lin(b!); };
+              const style = getComputedStyle(element);
+              const [a, b] = [lum(rgb(style.color)), lum(rgb(style.backgroundColor))].sort((x, y) => y - x);
+              return Math.round(((a! + 0.05) / (b! + 0.05)) * 100) / 100;
+            });
+            readings[label] = { leftAtOnce, text, sent, back: await page.locator(row).count(), contrast };
+            if (contrast < 4.5) failures.push(`${label}: the receipt's text reads ${contrast}:1 against its background`);
+            if (!leftAtOnce) failures.push(`${label}: the row did not leave on the click`);
+            if (!text.startsWith(head!) || !text.includes("the launch started after all")) failures.push(`${label}: the receipt reads «${text}»`);
+            if (sent !== 1) failures.push(`${label}: ${sent} dismissal(s) sent`);
+            if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+          } finally { await context.close(); }
+        }
+        {
+          const label = `board-close-refused-${width}-${lang}-${scheme}`;
+          const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=stopped-launches&boardrefuses=1`, { width, height: 900 }, scheme, lang);
+          try {
+            await page.waitForSelector(card("t-stopped"), { state: "attached", timeout: 30_000 });
+            if (!(await page.locator(card("t-stopped")).isVisible())) await page.locator(`.tabs-nav [data-tab="${await page.locator(card("t-stopped")).evaluate((element) => element.closest<HTMLElement>(".column")?.dataset.status ?? "")}"]`).first().click().catch(() => {});
+            await page.locator(card("t-stopped")).scrollIntoViewIfNeeded();
+            await page.locator(`${card("t-stopped")} [data-pipeline="p-closed"] .pb-pill[data-stage="build"]`).click();
+            const reader = page.locator('[data-reader-path="spawn:launch-closed"]');
+            await reader.locator("[data-launch-dismiss]").waitFor({ state: "visible" });
+            await reader.locator("[data-launch-dismiss]").click();
+            const leftAtOnce = await reader.waitFor({ state: "detached", timeout: 2_000 }).then(() => true, () => false);
+            const [head, tail] = template(lang, "board.rejected.close", { code: "INVALID_REQUEST" }, "conversation");
+            const toast = page.locator("[role=status]").filter({ hasText: tail!.trim() }).first();
+            await toast.waitFor({ timeout: 10_000 });
+            await page.waitForTimeout(600);
+            await page.mouse.move(0, 0);
+            await page.screenshot({ path: path.join(pngDir, `${label}.png`) });
+            const text = ((await toast.textContent()) ?? "").replace(/^✕/, "").trim();
+            /* The row that came back is read whole beside the toast: every text range
+               of its block is clear of the toast's box, and inside the window. */
+            const cover = await page.evaluate(() => {
+              const block = document.querySelector('[data-pipeline="p-closed"]');
+              const box = document.querySelector("[data-task-toasts] [role=status]")?.getBoundingClientRect();
+              if (!block || !box) return { block: Boolean(block), toast: Boolean(box), hits: -1, inside: false };
+              const walker = document.createTreeWalker(block, NodeFilter.SHOW_TEXT);
+              let hits = 0;
+              let inside = true;
+              for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+                if (!node.textContent?.trim()) continue;
+                const range = document.createRange();
+                range.selectNodeContents(node);
+                for (const rect of range.getClientRects()) {
+                  if (rect.width === 0) continue;
+                  if (rect.left < box.right && rect.right > box.left && rect.top < box.bottom && rect.bottom > box.top) hits++;
+                  if (rect.top < 0 || rect.bottom > window.innerHeight) inside = false;
+                }
+              }
+              return { block: true, toast: true, hits, inside };
+            });
+            const mutations = await page.evaluate(() => (window as unknown as { evidence: { boardMutations: Array<{ kind: string; path?: string }> } }).evidence.boardMutations.filter((mutation) => mutation.kind === "close").length);
+            const toasts = await page.locator("[role=status]").filter({ hasText: tail!.trim() }).count();
+            readings[label] = { leftAtOnce, text, mutations, toasts, cover };
+            if (!leftAtOnce) failures.push(`${label}: the reader did not close on the click`);
+            if (cover.hits !== 0 || !cover.inside) failures.push(`${label}: the restored row is ${JSON.stringify(cover)} beside the toast`);
+            if (!text.startsWith(head!) || !text.includes(tail!.trim())) failures.push(`${label}: the toast reads «${text}»`);
+            if (mutations !== 1) failures.push(`${label}: ${mutations} close(s) sent`);
+            if (toasts !== 1) failures.push(`${label}: ${toasts} toasts say the close was refused`);
+            if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+          } finally { await context.close(); }
+        }
+      }
+      fs.writeFileSync("evidence/optimistic-ui/refused-dismissals.json", JSON.stringify({ failures, readings }, null, 2) + "\n");
+      expect(failures).toEqual([]);
+    } finally { await browser.close(); server.stop(); }
+  }, 600_000);
+});
+
 describe("needs-you panel: renders and readings over the real Viewer", () => {
   /*
    * docs/design/needs-you-options.md, option B, as built: the header control,
@@ -21890,6 +22118,59 @@ describe("floating voice companion", () => {
       fs.writeFileSync("evidence/voice-companion/call-memory.json",JSON.stringify({ driver:"src/components/kanban/kanbanBoard.browser.test.tsx",synthetic:true,viewportBasis:"configured scene width",measurements },null,2)+"\n");
     } finally { await browser.close(); server.stop(); }
   });
+
+  /*
+   * Audit B24: a press on a voice setting flips at once, and a refusal brings it
+   * back with the reason read beside the control that was pressed
+   * (`&settingsrefuse=1`). «Show the voice» sits at the dialog's top and «Call
+   * memory» below it, with three notes under its switch. The reason is read the
+   * moment it lands, with no scroll of the driver's own: every text range of it
+   * sits inside the dialog's scroller and the window.
+   */
+  browserTest("a refused voice setting reads its reason beside the control pressed", async () => {
+    const out = path.resolve(".artifacts/voice-settings-refused");
+    const pngDir = path.resolve(process.env.OPTIMISTIC_UI_PNG_DIR ?? out);
+    fs.mkdirSync(pngDir, { recursive: true });
+    fs.mkdirSync("evidence/optimistic-ui", { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const failures: string[] = [];
+    const readings: Record<string, unknown> = {};
+    try {
+      for (const width of [1440, 390] as const) for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) for (const press of ["enable", "memory"] as const) {
+        const label = `voice-refused-${press}-${width}-${lang}-${scheme}`;
+        const { context, page, pageErrors } = await openVoice(browser, server.base, "&mount=product&backend=codex&callmemory=three&settingsrefuse=1", { viewport: { width, height: 844 }, lang, scheme, product: true, phone: width === 390, motion: "reduce" });
+        try {
+          await page.evaluate(() => window.dispatchEvent(new Event("delegatus:open-voice-companion-settings")));
+          const dialog = page.locator("[data-voice-companion-settings]");
+          await dialog.locator("[data-voice-companion-enable]").waitFor();
+          await page.waitForFunction(() => !document.querySelector("[data-call-memory] [role=status]")?.textContent?.includes("…"));
+          const control = press === "enable" ? dialog.locator("[data-voice-companion-enable]") : dialog.locator("[data-call-memory] input[role=switch]");
+          const before = await control.isChecked();
+          if (width === 390) await control.tap(); else await control.click();
+          await page.waitForSelector("[data-voice-companion-setting-error]", { timeout: 10_000 });
+          const reading = await page.evaluate(() => {
+            const line = document.querySelector<HTMLElement>("[data-voice-companion-setting-error]")!;
+            const scroller = document.querySelector<HTMLElement>("[data-voice-companion-settings]")!.getBoundingClientRect();
+            const range = document.createRange(); range.selectNodeContents(line);
+            const rects = [...range.getClientRects()].filter((rect) => rect.width > 0);
+            const cut = rects.filter((rect) => rect.top < Math.max(0, scroller.top) - 0.5 || rect.bottom > Math.min(innerHeight, scroller.bottom) + 0.5 || rect.left < scroller.left - 0.5 || rect.right > scroller.right + 0.5).length;
+            return { text: line.textContent, code: line.getAttribute("data-voice-companion-setting-error"), cut, boxes: rects.length };
+          });
+          await page.waitForTimeout(300);
+          await page.screenshot({ path: path.join(pngDir, `${label}.png`) });
+          const after = await control.isChecked();
+          readings[label] = { ...reading, before, after };
+          if (reading.cut) failures.push(`${label}: ${reading.cut} of ${reading.boxes} line box(es) outside the dialog or the window`);
+          if (reading.code !== "COMPANION_UNAVAILABLE" || !reading.text) failures.push(`${label}: the reason reads ${JSON.stringify(reading)}`);
+          if (after !== before) failures.push(`${label}: the switch did not come back to ${before}`);
+          if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+        } finally { await context.close(); }
+      }
+      fs.writeFileSync("evidence/optimistic-ui/voice-settings-refused.json", JSON.stringify({ failures, readings }, null, 2) + "\n");
+      expect(failures).toEqual([]);
+    } finally { await browser.close(); server.stop(); }
+  }, 600_000);
 
   browserTest("placement leaves skipped card contents unmeasured until they scroll into view", async () => {
     const out = path.resolve(".artifacts/voice-companion-skipped-layout");

@@ -22,6 +22,7 @@ export interface TaskSyncWrite {
   /** Keep an accepted equal-stamp placeholder recovery from becoming a local edit. */
   preserveStamp(id: string, group: TaskSyncGroup): void;
   isStampPreserved(id: string, group: TaskSyncGroup): boolean;
+  projectWatermark(project: string): string | null;
 }
 
 /** Local digest of a group. `chosen` belongs to the text group: naming a task
@@ -71,7 +72,8 @@ export function newestStamp(task: Pick<BoardTask, "sync" | "updatedAt">, prefix:
 
 /** The largest stamp among a project's rows and its floor (M.3). */
 export function projectWatermark(tasks: readonly BoardTask[], project: string, write: Pick<TaskSyncWrite, "read" | "self">): string | null {
-  let mark: string | null = null;
+  let mark: string | null = "projectWatermark" in write && typeof write.projectWatermark === "function"
+    ? write.projectWatermark(project) : null;
   for (const task of tasks) if (task.project === project) mark = maxStamp(mark, newestStamp(task, write.self.prefix));
   const floor = write.read(floorKey(project));
   return maxStamp(mark, isFloor(floor) ? floor.floor : null);

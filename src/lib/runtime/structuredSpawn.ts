@@ -14,7 +14,8 @@ import { accountManager } from "@/lib/accounts/manager";
 import { claudeSettingsPath } from "@/lib/accounts/claude";
 import { claudeValidityFromLimitRead } from "@/lib/accounts/spawnHealth";
 import { explicitLaunchProfileSandbox, launchProfileEngineReadOnly, type LaunchProfile, type ViewerConversationId } from "@/lib/accounts/migration/contracts";
-import { learnedRulesForLaunchProfile } from "@/lib/memory/roleLaunch";
+import { learnedRulesForLaunchProfile, memoryStartIdentity } from "@/lib/memory/roleLaunch";
+import { codexNativeMemoryEnabled } from "@/lib/agent/codexSpawnPolicy";
 import type { SpawnAccountAdmission } from "@/lib/agent/accountLiveness";
 import { effectiveClaudePermissionMode, resolveCopilotBinary, type AgentEngine, type ResumeSpec } from "@/lib/agent/cli";
 import { identityMaterializationFence, resolveConversationAlias, structuredClaimIdentity, type AgentRegistry, type AgentRegistryEntry, type ProcessIdentity, type RegistryFile, type SpawnReceipt, type StructuredHostColumns } from "@/lib/agent/registry";
@@ -1231,6 +1232,16 @@ function admittedStructuredLaunchInput(input: StructuredSpawnInput): StructuredS
   return { ...input, receipt, spec: { ...input.spec, launchProfile: receipt.launchProfile } };
 }
 
+/** Memory preparation yields before native dispatch; a cancelled or changed
+    receipt must not open an engine from its earlier options. */
+function assertMemoryPreparedStartCurrent(input: StructuredSpawnInput): void {
+  const current = admittedStructuredLaunchInput(input).receipt;
+  if (["completed", "failed", "conflicted"].includes(current.state)
+    || JSON.stringify(current.launchProfile) !== JSON.stringify(input.spec.launchProfile)) {
+    throw Error("structured spawn changed during memory preparation");
+  }
+}
+
 interface HostBinding {
   stopPersistence(): void;
   unregister(): Promise<void>;
@@ -1930,23 +1941,24 @@ export async function startCopilotStructuredHost(
 }
 
 /** Production option builder shared by fresh and resumed Claude hosts. */
-export function claudeStructuredHostOptions(
-  input: Pick<StructuredSpawnInput, "spec" | "account">,
+export async function claudeStructuredHostOptions(
+  input: Pick<StructuredSpawnInput, "spec" | "account"> & Partial<Pick<StructuredSpawnInput, "receipt" | "registry">>,
   access: Pick<StructuredHostAccessMaterialization, "env" | "host">,
   initialEventCursor?: number,
   validateTelegramGrant?: () => void,
   agentRole?: string | null,
 ) {
   const profile = input.spec.launchProfile ?? {} as LaunchProfile;
+  const launchPaths = claudeHostLaunchPaths(input.account);
   return {
     cwd: input.spec.cwd,
     claudeProjectsDir: input.account.transcriptRoot,
-    ...claudeHostLaunchPaths(input.account),
+    ...launchPaths,
     providerAccount: Boolean(input.account.claudeProvider),
     allowSubagents: profile.allowSubagents,
     operatorDecisionForms: operatorDecisionFormsRequired(agentRole, input.spec.transcript),
     cleanMemory: profile.cleanMemory === true,
-    appendSystemPrompt: learnedRulesForLaunchProfile(profile),
+    appendSystemPrompt: await learnedRulesForLaunchProfile(profile, input.receipt && input.registry ? { engine: "claude", ...memoryStartIdentity(input.registry, input.receipt.conversationId), cwd: input.spec.cwd, home: input.account.home, env: access.env, claudeSettingsPath: launchPaths.spawnPolicyBaseSettingsPath, providerAccount: Boolean(input.account.claudeProvider) } : undefined),
     mcpServers: profile.mcpServers,
     validateTelegramGrant,
     readOnly: launchProfileEngineReadOnly(profile),
@@ -2007,6 +2019,7 @@ export async function defaultStartHost(
   const access = materializeStructuredHostAccess(structuredHostAccessPolicy(profile), input.account.env, capability);
   const env = access.env;
   if (input.engine === "codex") {
+    const nativeMemoryEnabled = await codexNativeMemoryEnabled(input.account.home, profile.allowSubagents, profile.cleanMemory === true);
     const options = {
       cwd: input.spec.cwd,
       codexHome: input.account.home,
@@ -2017,7 +2030,8 @@ export async function defaultStartHost(
       allowSubagents: profile.allowSubagents,
       operatorDecisionForms: operatorDecisionFormsRequired(input.receipt.agentRole, input.receipt.artifactPath ?? input.spec.transcript),
       cleanMemory: profile.cleanMemory === true,
-      developerInstructions: learnedRulesForLaunchProfile(profile),
+      nativeMemoryEnabled,
+      developerInstructions: await learnedRulesForLaunchProfile(profile, { engine: "codex", ...memoryStartIdentity(input.registry, input.receipt.conversationId), cwd: input.spec.cwd, home: input.account.home, env, nativeMemoryEnabled }),
       mcpServers: profile.mcpServers,
       validateTelegramGrant,
       /* Plugin grant from the durable profile (issue #687): present only for
@@ -2031,16 +2045,20 @@ export async function defaultStartHost(
       ...engineProcess.codex,
       ...(memoryCell ? { memoryCell } : {}),
     };
+    await input.authorize?.();
+    assertMemoryPreparedStartCurrent(input);
     return resumeSessionId
       ? await CodexAppServerHost.adopt(resumeSessionId, options)
       : await CodexAppServerHost.start(options);
   }
   const form = structuredClaudeLaunchForm(input);
   const options = {
-    ...claudeStructuredHostOptions(input, { env, host: access.host }, initialEventCursor, validateTelegramGrant, input.receipt.agentRole),
+    ...await claudeStructuredHostOptions(input, { env, host: access.host }, initialEventCursor, validateTelegramGrant, input.receipt.agentRole),
     ...engineProcess.claude,
     ...(memoryCell ? { memoryCell } : {}),
   };
+  await input.authorize?.();
+  assertMemoryPreparedStartCurrent(input);
   return form.kind === "resume"
     ? await ClaudeStreamBrokerHost.adopt(form.sessionId, options)
     : await ClaudeStreamBrokerHost.start({ ...options, ...(form.sessionId ? { sessionId: form.sessionId } : {}) });

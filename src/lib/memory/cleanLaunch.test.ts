@@ -45,11 +45,11 @@ test("one decision: clean roles and review gates of any role, from a stage or a 
   expect(conversationMemoryExcluded({ agentRole: "builder", launchProfile: {} })).toBe(false);
 });
 
-test("the launch profile's mark reaches the Claude host options", () => {
+test("the launch profile's mark reaches the Claude host options", async () => {
   const account = { kind: "managed", accountId: "account-a", home: home(), transcriptRoot: home(), env: {} } as never;
-  const options = (cleanMemory?: boolean) => claudeStructuredHostOptions({ spec: { cwd: "/repo", launchProfile: emptyLaunchProfile({ cwd: "/repo", ...(cleanMemory ? { cleanMemory } : {}) }) } as never, account }, { env: {}, host: {} } as never);
-  expect(options(true).cleanMemory).toBe(true);
-  expect(options().cleanMemory).toBe(false);
+  const options = async (cleanMemory?: boolean) => await claudeStructuredHostOptions({ spec: { cwd: "/repo", launchProfile: emptyLaunchProfile({ cwd: "/repo", ...(cleanMemory ? { cleanMemory } : {}) }) } as never, account }, { env: {}, host: {} } as never);
+  expect((await options(true)).cleanMemory).toBe(true);
+  expect((await options()).cleanMemory).toBe(false);
 });
 
 test("a clean Claude launch turns auto memory off and installs no shared-memory hook", () => {
@@ -108,14 +108,14 @@ class FakeAppServer extends EventEmitter {
   }
 }
 
-test("a clean Codex launch passes memories off to the app-server and its thread, and installs no hook", async () => {
-  const launch = async (cleanMemory: boolean) => {
+test("Codex launches pass the shared effective-memory decision to the app-server", async () => {
+  const launch = async (cleanMemory: boolean, nativeMemoryEnabled?: boolean) => {
     const codexHome = home();
     const server = new FakeAppServer();
     let args: string[] = [];
     const host = await CodexAppServerHost.start({
       /* Sub-agents allowed: a denied launch already turns every unreviewed feature off, memories among them. */
-      cwd: "/repo", codexHome, cleanMemory, allowSubagents: true, env: LAUNCH_ENV, eventStore: new MemoryEventStore(),
+      cwd: "/repo", codexHome, cleanMemory, nativeMemoryEnabled, allowSubagents: true, env: LAUNCH_ENV, eventStore: new MemoryEventStore(),
       spawnProcess: ((_command: string, launched: string[]) => { args = launched; return server as unknown as ChildProcessWithoutNullStreams; }) as never,
     });
     const config = (server.requests.find((request) => request.method === "thread/start")?.params as { config: { features: Record<string, unknown> } }).config;
@@ -130,4 +130,7 @@ test("a clean Codex launch passes memories off to the app-server and its thread,
   expect(builder.args).not.toContain("features.memories=false");
   expect(builder.features.memories).not.toBe(false);
   expect(builder.hooks).toContain("shared-memory-");
+  const policyDisabled = await launch(false, false);
+  expect(policyDisabled.args).toContain("features.memories=false");
+  expect(policyDisabled.features.memories).not.toBe(false);
 });

@@ -73,7 +73,7 @@ test.skipIf(process.env.LLV_CLAUDE_PROVIDER_SMOKE !== "1")("production host fenc
     const env = { ...context.env, HOME: root, XDG_CONFIG_HOME: path.join(root, "config"), DISABLE_TELEMETRY: "1" };
     const binary = process.env.LLV_CLAUDE_BINARY ?? "claude";
     const fresh = freshSpecFor("claude", root, { claudeConfigDir: account.home, model: "opus" });
-    const launch = claudeStructuredHostOptions({ spec: fresh, account: context }, { env, host: {} });
+    const launch = await claudeStructuredHostOptions({ spec: fresh, account: context }, { env, host: {} });
     host = await ClaudeStreamBrokerHost.start({ ...launch, binary, requestTimeoutMs: 20_000 });
     const sessionId = host.identity.sessionId;
     await host.send({ id: "fresh", text: "Reply with pong" });
@@ -87,7 +87,7 @@ test.skipIf(process.env.LLV_CLAUDE_PROVIDER_SMOKE !== "1")("production host fenc
     await host.release(); host = null;
     const resumed = resumeSpecForSession("claude", sessionId, root, account.home, { model: "opus" });
     expect(resumed).not.toBeNull();
-    const resumedLaunch = claudeStructuredHostOptions({ spec: resumed!, account: context }, { env, host: {} });
+    const resumedLaunch = await claudeStructuredHostOptions({ spec: resumed!, account: context }, { env, host: {} });
     host = await ClaudeStreamBrokerHost.adopt(sessionId, { ...resumedLaunch, binary, requestTimeoutMs: 20_000 });
     await host.send({ id: "resumed", text: "Reply with pong again" }).catch(() => {
       throw new Error(`resumed delivery lacked confirmation; requests=${seen.length}`);

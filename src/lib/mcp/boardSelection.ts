@@ -1,3 +1,4 @@
+import { observeSqlite, parseSqliteJson } from "@/lib/sqliteReadAttribution";
 import type { Database, SQLQueryBindings } from "bun:sqlite";
 import { createHash } from "node:crypto";
 import { canonicalProject, projectAliasSnapshot } from "@/lib/projects/aliases";
@@ -28,7 +29,7 @@ export class BoardSelection {
   readonly work = { metadataRows: 0, recordReads: 0, rebuilds: 0 };
   constructor(private filename: string, private collection: "tasks" | "pipelines" | "flows", private projects: ProjectSelection = defaultProjects) {
     const Database = sqliteDatabase();
-    this.db = new Database(":memory:");
+    this.db = observeSqlite(new Database(":memory:"), "board-selection");
     this.db.exec(`CREATE TABLE rows(id TEXT PRIMARY KEY, time TEXT, project TEXT, status TEXT, placement TEXT, priority TEXT, hidden INTEGER, text TEXT);
       CREATE INDEX row_time ON rows(time DESC,id DESC);
       CREATE INDEX row_project ON rows(project,time DESC,id DESC);
@@ -58,19 +59,19 @@ export class BoardSelection {
     this.db.query("DELETE FROM terms WHERE id=?").run(id);
     this.db.query("DELETE FROM links WHERE pipeline=?").run(id);
   }
-  private put(row: Metadata) {
+  private put(row: Metadata, source: Database) {
     this.work.metadataRows++;
     this.remove(row.id);
     this.db.query("INSERT INTO rows VALUES (?,?,?,?,?,?,?,?)").run(row.id, row.time, row.project, row.status, row.placement, row.priority, row.hidden, row.text.toLowerCase());
     const add = this.db.query("INSERT OR IGNORE INTO terms VALUES (?,?)");
     for (const term of grams(row.text.toLowerCase())) add.run(term, row.id);
-    if (this.collection === "pipelines") for (const task of JSON.parse(row.links) as string[]) {
+    if (this.collection === "pipelines") for (const task of parseSqliteJson(row.links, source) as string[]) {
       this.db.query("INSERT OR IGNORE INTO links VALUES (?,?)").run(task, row.id);
     }
   }
   sync(snapshot?: Database | null) {
     const Database = sqliteDatabase();
-    const source = snapshot ?? new Database(this.filename, { readonly: true });
+    const source = snapshot ?? observeSqlite(new Database(this.filename, { readonly: true }), "board-selection");
     try {
       if (!snapshot) source.exec("BEGIN");
       const meta = source.query<{ revision: number; change_floor: number }, [string]>("SELECT revision,change_floor FROM state_collections WHERE collection=?").get(this.collection);
@@ -84,11 +85,11 @@ export class BoardSelection {
         if (reset || !changes.length) {
           this.work.rebuilds++;
           this.db.exec("DELETE FROM rows; DELETE FROM terms; DELETE FROM links;");
-          for (const row of source.query<Metadata, [string]>(this.metadataSql()).all(this.collection)) this.put(row);
+          for (const row of source.query<Metadata, [string]>(this.metadataSql()).all(this.collection)) this.put(row, source);
         } else for (const { row_key } of changes) {
           if (this.collection === "tasks" && !row_key.startsWith("t:")) continue;
           const row = source.query<Metadata, [string, string]>(`${this.metadataSql()} AND row_key=?`).get(this.collection, row_key);
-          if (row) this.put(row);
+          if (row) this.put(row, source);
           else this.remove(this.collection === "tasks" ? row_key.slice(2) : row_key);
         }
       })();
@@ -101,7 +102,7 @@ export class BoardSelection {
   }
   projectKeys<T>(source: Source<T>): string[] {
     const Database = sqliteDatabase();
-    const database = source.database ?? new Database(this.filename, { readonly: true });
+    const database = source.database ?? observeSqlite(new Database(this.filename, { readonly: true }), "board-selection");
     try {
       return database.query<{ project: string }, [string]>("SELECT DISTINCT json_extract(value_json,'$.project') AS project FROM state_rows WHERE collection=?")
         .all(this.collection).flatMap(row => typeof row.project === "string" ? [row.project] : []);
@@ -110,7 +111,7 @@ export class BoardSelection {
   /** Project directory counts read scalar fields without materializing tasks. */
   openTaskCounts<T>(source: Source<T>): Array<{ project: string; count: number }> {
     const Database = sqliteDatabase();
-    const database = source.database ?? new Database(this.filename, { readonly: true });
+    const database = source.database ?? observeSqlite(new Database(this.filename, { readonly: true }), "board-selection");
     try {
       return database.query<{ project: string; count: number }, []>(`SELECT json_extract(value_json,'$.project') AS project,
         SUM(CASE WHEN json_extract(value_json,'$.status') IN ('inbox','assigned','blocked') THEN 1 ELSE 0 END) AS count
@@ -122,7 +123,7 @@ export class BoardSelection {
    * is joined at read time, so a cache refresh needs no registry revision. */
   referenceRecords<T>(source: Source<T>, project: string): T[] {
     const Database = sqliteDatabase();
-    const database = source.database ?? new Database(this.filename, { readonly: true });
+    const database = source.database ?? observeSqlite(new Database(this.filename, { readonly: true }), "board-selection");
     try {
       const projects = project ? [project, ...Object.keys(this.projects.aliases()).filter(key => this.projects.canonical(key) === project)] : [];
       const where = projects.length ? ` AND json_extract(value_json,'$.project') IN (${projects.map(() => "?").join(",")})` : "";
@@ -136,7 +137,7 @@ export class BoardSelection {
         WHERE json_extract(attempt.value,'$.report.provenance.pullRequest.number') IS NOT NULL
       ),'[]'))))` : "";
       return database.query<{ value: string }, SQLQueryBindings[]>(`SELECT json_object(${fields}${provenance}) AS value FROM state_rows
-        WHERE collection=?${this.collection === "tasks" ? " AND row_key GLOB 't:*'" : ""}${where}`).all(this.collection, ...projects).map(row => JSON.parse(row.value));
+        WHERE collection=?${this.collection === "tasks" ? " AND row_key GLOB 't:*'" : ""}${where}`).all(this.collection, ...projects).map(row => parseSqliteJson(row.value, database));
     } finally { if (!source.database) database.close(); }
   }
   page<T, Row>(source: Source<T>, scope: BoardScope, cursor: unknown, limit: number, project: (record: T) => Row) {

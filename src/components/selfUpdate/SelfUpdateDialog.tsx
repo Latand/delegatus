@@ -55,6 +55,8 @@ export function SelfUpdateDialog({ onClose }: { onClose: () => void }) {
   const [webRestart, setWebRestart] = useState<{ pid: number | null } | null>(null);
   const [firstWebPid, setFirstWebPid] = useState<number | null | undefined>(undefined);
   const panelRef = useRef<HTMLDivElement>(null);
+  const [autoDrawn, setAutoDrawn] = useState<boolean | null>(null);
+  const autoOut = useRef(false);
   const now = useClock(s?.meta.serverTime);
 
   if (s && firstWebPid === undefined) setFirstWebPid(s.processes.web.pid);
@@ -133,7 +135,16 @@ export function SelfUpdateDialog({ onClose }: { onClose: () => void }) {
 
   const actions: ViewActions = {
     installAction: () => setConfirming("install-action"),
-    toggleAuto: () => { if (s?.auto) void act("auto", "/api/self-update/auto", { enabled: !s.auto.enabled }); },
+    /* The switch flips at once (audit B27) and stays pressable; one write is
+       out at a time, and its answer (or a refusal's error) replaces the drawn
+       value with the server's. */
+    toggleAuto: () => {
+      if (!s?.auto || autoOut.current) return;
+      const enabled = !(autoDrawn ?? s.auto.enabled);
+      autoOut.current = true;
+      setAutoDrawn(enabled);
+      void act("auto-write", "/api/self-update/auto", { enabled }).finally(() => { autoOut.current = false; setAutoDrawn(null); });
+    },
     check: () => { void act("check", "/api/self-update/check"); },
     update: () => setConfirming("update"),
     retry: () => setConfirming("retry"),
@@ -220,7 +231,7 @@ export function SelfUpdateDialog({ onClose }: { onClose: () => void }) {
 
   const title = t("selfUpdate.title");
   const body = s
-    ? <SelfUpdateView snapshot={s} live={feed.live} state={state} actions={actions} />
+    ? <SelfUpdateView snapshot={autoDrawn !== null && s.auto ? { ...s, auto: { ...s.auto, enabled: autoDrawn } } : s} live={feed.live} state={state} actions={actions} />
     : feed.failure !== null
       ? <p role="alert" data-self-update-failure="" className="m-0 rounded-[8px] bg-danger-soft px-2.5 py-2 text-ui text-danger [overflow-wrap:anywhere]">{t("selfUpdate.loadFailed")}</p>
       : <p className="m-0 text-ui text-muted">{t("selfUpdate.loading")}</p>;

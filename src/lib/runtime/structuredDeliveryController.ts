@@ -1,3 +1,6 @@
+import { registryRowsMatching } from "@/lib/agent/sqliteRegistryStore";
+import { seatRecipientVerdict, seatRecipientVerdictAsync, setSeatChannelNativeWithdrawal } from "@/lib/orchestrator/seatChannel";
+import { conversationIdsResolvingTo, readOnlyConversationLookupFromSnapshot } from "@/lib/agent/registry";
 import { detachCodexHostForViewerRestart } from "./registry";
 import { spawnDiagnosticErrorForRegistry } from "@/lib/agent/spawnDiagnostics";
 import { creditGuardBlock } from "@/lib/accounts/creditGuard";
@@ -16,7 +19,7 @@ import { conversationActorRunning, recordObservedWait, recordWait, restoreMissin
 /** How many times a failed switch's hold is asked for before it is given up
     and logged; each attempt waits up to the registry's lock deadline. */
 const SWITCH_HOLD_WRITE_ATTEMPTS = 6;
-import { NativeQueueExecutor } from "./nativeQueueExecutor";
+import { NativeQueueExecutor, withdrawNativeSeatMessage } from "./nativeQueueExecutor";
 import { RetryBackoff } from "./retryBackoff";
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -41,7 +44,7 @@ import { isRuntimeHostTransportFailure, readRuntimeSession, runtimeHostClient, t
 import { runtimeHostKindForEngine, runtimeSettingsCapability, runtimeSteerCapability, type RuntimeEventInput, type RuntimeOperationReceipt, type RuntimeSession } from "./contracts";
 import { confirmedSend } from "./confirmedSend";
 import { readEvidence } from "./evidence";
-import { StructuredSendRefusedError, type EngineHost, type HostState } from "./engineHost";
+import { StructuredDispatchDeferredError, StructuredSendRefusedError, type EngineHost, type HostState } from "./engineHost";
 import { StructuredDeliveryQueue, type StructuredDeliveryQueueTiming } from "./structuredDeliveryQueue";
 import { deliveryProgressStore, type DeliveryProgressSink, type DeliveryProgressStore } from "./deliveryProgress";
 import { DeliveryWake } from "./deliveryWake";
@@ -775,6 +778,12 @@ export async function bindStructuredDeliveryQueue(
   let requestDrain = () => {};
   const nativeReconciliations = new Map<string, Promise<void>>();
   const nativeRetries = new Map<string, RetryBackoff>();
+  const seatRecipient = (conversationId: string) => {
+    const snapshot = registry.conversationDeliverySnapshot({ conversationId });
+    const lookup = readOnlyConversationLookupFromSnapshot(snapshot);
+    return seatRecipientVerdict(conversationIdsResolvingTo(snapshot, lookup.canonicalConversationId(conversationId as ViewerConversationId)),
+      id => lookup.canonicalConversationId(id as ViewerConversationId));
+  };
   const authorizeAccountDispatch = (conversationId: string) => {
     assertPipelineTurnAllowed(conversationId, registry);
     const conversation = registry.conversation(conversationId as ViewerConversationId);
@@ -783,9 +792,15 @@ export async function bindStructuredDeliveryQueue(
     const observation = registry.quotaObservations("codex").find(item => item.accountId === accountId);
     if (creditGuardBlock("codex", observation?.limits)) throw new StructuredSendRefusedError("Codex paid-credit guard reached; continue on an allowed account with capacity");
   };
+  setSeatChannelNativeWithdrawal((conversationId, operationId) => withdrawNativeSeatMessage(conversationId, operationId, client, nativeQueueExecutor));
   const nativeQueueExecutor = new NativeQueueExecutor({
     client,
-    authorizeDispatch: authorizeAccountDispatch,
+    authorizeDispatch: conversationId => {
+      const verdict = seatRecipient(conversationId);
+      if (verdict.kind === "revoked") throw new StructuredSendRefusedError(verdict.reason);
+      if (verdict.kind === "unknown") throw new StructuredDispatchDeferredError(verdict.reason);
+      authorizeAccountDispatch(conversationId);
+    },
     resolveHost: hostResolver(registry, hosts),
     /* Off the loop, a hand-off's own row included (C3, A8). */
     settled: async (entry) => { await settleNativeQueueEntry(registry, entry, progressStore); },
@@ -984,6 +999,13 @@ export async function bindStructuredDeliveryQueue(
         if (!ownerRelaySpawnAuthorized(receipt?.clientAttemptId))
           throw new StructuredSendRefusedError("owner relay first prompt authorization revoked");
       },
+      seatRecipientAsync: async conversationId => {
+        const snapshot = registry.conversationDeliverySnapshot({ conversationId });
+        const lookup = readOnlyConversationLookupFromSnapshot(snapshot);
+        return seatRecipientVerdictAsync(conversationIdsResolvingTo(snapshot, lookup.canonicalConversationId(conversationId as ViewerConversationId)),
+          id => lookup.canonicalConversationId(id as ViewerConversationId));
+      },
+      seatRecipient,
       conversationRetired: conversationId => runtimeSwitchRetirementReason(conversationId, registry),
       /* Who may write to this conversation's engine right now (#1131): the
          evidence a `delivering` row is compared against before it is called
@@ -1168,7 +1190,7 @@ export async function bindStructuredDeliveryQueue(
       if (!await durableAuthority() || !idleAuthority()) return false;
       const settleKilledLaunches = async () => {
         const reason = "structured launch host was intentionally terminated";
-        for (const receipt of Object.values(registry.readOnlySnapshot().receipts)) {
+        for (const receipt of registryRowsMatching(registry.readOnlySnapshot(), "receipts", "conversationId", conversationId)) {
           if (receipt.transport !== "structured" || receipt.conversationId !== conversationId
             || !receipt.key || sessionKeyId(receipt.key) !== sessionKeyId(expectedKey)
             || receipt.state === "completed" || receipt.state === "conflicted"

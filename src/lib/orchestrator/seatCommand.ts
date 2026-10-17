@@ -1,3 +1,4 @@
+import { seatMessageKeys } from "@/lib/orchestrator/seatDeliveryKeys";
 import type { NextRequest } from "next/server";
 import fs from "node:fs";
 
@@ -1145,7 +1146,7 @@ async function runOrchestratorSeatRequest(
       path: deliveryTarget.path,
       /* Derived, never minted: a retry after a lost response reuses the same
          id and the delivery receipts answer it instead of delivering twice. */
-      clientMessageId: `orchmandate_${clientRequestId}`,
+      clientMessageId: `${seatMessageKeys.mandate}${clientRequestId}`,
       /* The intent's recorded mandate and role table are what completes: a
          pending replay whose caller recomposed its text, or whose registry
          changed since the first attempt, must not deliver a second variant

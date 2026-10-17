@@ -1,3 +1,5 @@
+import { observeSqlite, parseSqliteJson } from "@/lib/sqliteReadAttribution";
+import { performanceSpans } from "@/lib/performanceSpans";
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import fsSync from "node:fs";
@@ -64,7 +66,7 @@ export class MemoryIndex {
     for (const entry of proofs) {
       if (entry.proof) {
         if (!includeSlugProofs) continue;
-        try { if (!claudeMemoryDirectoryProofCurrent(JSON.parse(entry.proof))) continue; }
+        try { if (!claudeMemoryDirectoryProofCurrent(parseSqliteJson(entry.proof, this.database()))) continue; }
         catch { continue; }
       }
       const aliased = canonicalProject(entry.key);
@@ -124,7 +126,7 @@ export class MemoryIndex {
     const filename = statePath("memory-index.sqlite");
     // The state resolver owns the directory; this module never claims live state.
     fsSync.mkdirSync(path.dirname(filename), { recursive: true, mode: 0o700 });
-    this.db = new sqlite.Database(filename, { create: true });
+    this.db = observeSqlite(new sqlite.Database(filename, { create: true }), "memory-index");
     fsSync.chmodSync(filename, 0o600);
     try {
       this.db.exec(`
@@ -188,27 +190,34 @@ export class MemoryIndex {
   }
 
   async refresh(sources: readonly MemorySource[], options: { complete?: boolean } = {}) {
-    const db = this.database();
-    this.normalizeProjects(db);
+    const db = performanceSpans.sync("memory.refresh", () => {
+      const db = this.database();
+      this.normalizeProjects(db);
+      return db;
+    });
     const result = { filesRead: 0, filesSkipped: 0, entriesIndexed: 0, filesFailed: 0 };
-    const nativeResolution = sources.some(source => ["codex_memory", "codex_summary", "rollout_summary"].includes(source.sourceKind)) ? projectResolutionStateKey() : null;
+    const nativeResolution = performanceSpans.sync("memory.refresh", () =>
+      sources.some(source => ["codex_memory", "codex_summary", "rollout_summary"].includes(source.sourceKind)) ? projectResolutionStateKey() : null);
     for (const source of sources) {
       try {
         const stat = await fs.stat(source.path);
         if (!stat.isFile() || stat.size > 4 * 1024 * 1024) {
-          db.transaction(() => this.removeSource(source.path))();
+          performanceSpans.sync("memory.refresh", () => db.transaction(() => this.removeSource(source.path))());
           result.filesSkipped++; continue;
         }
-        const identity = JSON.stringify([stat.size, stat.mtimeMs, stat.ctimeMs, source.project, source.sourceKind, source.engine, source.loadedByDefault,
-          ["codex_memory", "codex_summary", "rollout_summary"].includes(source.sourceKind) ? nativeResolution : null]);
-        const previous = db.query<{ identity: string }, [string]>("SELECT identity FROM memory_files WHERE path = ?").get(source.path);
+        const { identity, previous } = performanceSpans.sync("memory.refresh", () => ({
+          identity: JSON.stringify([stat.size, stat.mtimeMs, stat.ctimeMs, source.project, source.sourceKind, source.engine, source.loadedByDefault,
+            ["codex_memory", "codex_summary", "rollout_summary"].includes(source.sourceKind) ? nativeResolution : null]),
+          previous: db.query<{ identity: string }, [string]>("SELECT identity FROM memory_files WHERE path = ?").get(source.path),
+        }));
         if (previous?.identity === identity) { result.filesSkipped++; continue; }
         const content = await fs.readFile(source.path, "utf8");
         const after = await fs.stat(source.path);
         if (after.size !== stat.size || after.mtimeMs !== stat.mtimeMs || after.ctimeMs !== stat.ctimeMs) { result.filesFailed++; continue; }
         result.filesRead++;
-        const entries = [...new Map(parseMemory(source, content).map(entry => [entry.anchor, entry])).values()];
-        db.transaction(() => {
+        const entries = performanceSpans.sync("memory.refresh", () =>
+          [...new Map(parseMemory(source, content).map(entry => [entry.anchor, entry])).values()]);
+        performanceSpans.sync("memory.refresh", () => db.transaction(() => {
           this.removeSource(source.path);
           for (const entry of entries) {
             const id = "m_" + crypto.createHash("sha256").update(`${source.engine}\0${source.path}\0${entry.anchor}`).digest("hex").slice(0, 24);
@@ -223,20 +232,22 @@ export class MemoryIndex {
             db.query("INSERT INTO memory_fts VALUES (?, ?, ?, ?)").run(id, title, summary, searchableBody);
           }
           db.query("INSERT OR REPLACE INTO memory_files VALUES (?, ?)").run(source.path, identity);
-        })();
+        })());
         result.entriesIndexed += entries.length;
         if (!entries.length) result.filesSkipped++;
       } catch { result.filesFailed++; } // Counts only: paths and personal content never enter logs.
     }
     if (options.complete && !result.filesFailed) {
       // Only absent source files leave the derivative. Disuse never removes anything.
-      const listed = new Set(sources.map(source => source.path));
-      db.transaction(() => {
-        for (const row of db.query<{ path: string }, []>("SELECT path FROM memory_files").all()) {
-          if (listed.has(row.path)) continue;
-          this.removeSource(row.path);
-        }
-      })();
+      performanceSpans.sync("memory.refresh", () => {
+        const listed = new Set(sources.map(source => source.path));
+        db.transaction(() => {
+          for (const row of db.query<{ path: string }, []>("SELECT path FROM memory_files").all()) {
+            if (listed.has(row.path)) continue;
+            this.removeSource(row.path);
+          }
+        })();
+      });
     }
     return result;
   }
@@ -259,7 +270,7 @@ export class MemoryIndex {
         id: item.id, engine: item.engine, kind: item.kind, scope: item.scope, project: item.project,
         sourcePath: displayPath(item.sourcePath), sourceKind: item.sourceKind,
         title: item.title, summary: item.summary, writtenAt: item.writtenAt,
-        flags: JSON.parse(item.flags) as string[],
+        flags: parseSqliteJson(item.flags, this.database()) as string[],
       };
       page.items.push(hit);
       if (Buffer.byteLength(JSON.stringify(page)) > Math.min(MEMORY_RESPONSE_BYTES, input.maxBytes ?? MEMORY_RESPONSE_BYTES)) {
@@ -281,7 +292,7 @@ export class MemoryIndex {
       db.query("INSERT OR IGNORE INTO memory_offers VALUES (?, ?, ?, ?, 'search', NULL, 'opened', ?)").run(id, ledgerKey, conversationId, at, at);
       db.query("UPDATE memory_offers SET outcome = 'opened', outcome_at = ? WHERE memory_id = ? AND conversation_id = ? AND channel = 'inject' AND outcome IS NULL").run(at, id, conversationId);
     };
-    const opened = { ...item, sourcePath: displayPath(item.sourcePath), flags: JSON.parse(item.flags) as string[] };
+    const opened = { ...item, sourcePath: displayPath(item.sourcePath), flags: parseSqliteJson(item.flags, this.database()) as string[] };
     const budget = Math.min(MEMORY_RESPONSE_BYTES, maxBytes);
     if (Buffer.byteLength(JSON.stringify({ item: opened })) <= budget) {
       recordOpened();
@@ -381,7 +392,7 @@ export class MemoryIndex {
           // half the remaining budget; an unfinished one only drops the slug.
           const stored = db.query<{ project: string; proof: string | null }, [string]>("SELECT project, proof FROM memory_project_scopes WHERE key = ?").get(slug);
           let directories: ClaudeMemoryDirectoryProof | undefined;
-          try { if (stored?.proof && canonicalProject(stored.project) === canonical) directories = JSON.parse(stored.proof); } catch { /* walk again */ }
+          try { if (stored?.proof && canonicalProject(stored.project) === canonical) directories = parseSqliteJson(stored.proof, this.database()); } catch { /* walk again */ }
           if (directories && claudeMemoryDirectoryProofCurrent(directories)) { keys.add(slug); recorded.add(slug); proofs.set(slug, directories); continue; }
           const walkDeadline = performance.now() + (deadline - performance.now()) / 2;
           try {
@@ -444,10 +455,10 @@ export class MemoryIndex {
         const page = hits.all(query, projectKeys, engine, offset);
         for (const found of page) {
           check();
-          const foundFlags = JSON.parse(found.flags) as string[];
+          const foundFlags = parseSqliteJson(found.flags, this.database()) as string[];
           if (foundFlags.includes("retired")) continue;
           const hit = await resolvePointer(found);
-          const flags = hit === found ? foundFlags : JSON.parse(hit.flags) as string[];
+          const flags = hit === found ? foundFlags : parseSqliteJson(hit.flags, this.database()) as string[];
           // The root index can supply search terms for a topic, while its own
           // text is already loaded. Unloaded nested references remain offers.
           if (hit.sourceKind === "claude_index" && hit.engine === engine && !flags.includes("deferred_index")) continue;

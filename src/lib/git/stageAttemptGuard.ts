@@ -13,7 +13,7 @@ export async function prepareStageGitGuard(launchId: string, worktree: string, e
   const head = await exec("git", ["rev-parse", "HEAD"], worktree);
   if (head.code !== 0 || !/^[0-9a-f]{40}$/.test(head.stdout.trim())) throw new Error("stage Git guard cannot read the starting head");
   await fs.mkdir(directory, { recursive: true, mode: 0o700 });
-  const start = { launchId, worktree, head: head.stdout.trim(), startedAt: now };
+  const start = { launchId, worktree, head: head.stdout.trim(), startedAt: now, commitReceiptVersion: 1 };
   try { await fs.writeFile(path.join(directory, "start.json"), JSON.stringify(start), { flag: "wx", mode: 0o600 }); }
   catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
@@ -41,11 +41,12 @@ lane_git() (
   git -C "$lane" "$@"
 )
 stage_refuse() {
-  printf '%s\\n' 'stage push refused: commit outside the lane worktree has no proof from this attempt; commit in the lane worktree and let Delegatus publish' > "$receipt/refused"
+  unproved=\${1:-$(git rev-parse HEAD 2>/dev/null || printf unknown)}
+  printf '%s\\n' "stage push refused: commit $unproved was not created in the attempt worktree during this attempt; commit in the lane worktree and let Delegatus publish" > "$receipt/refused"
   cat "$receipt/refused" >&2
   exit 1
 }
-if [ "$hook" = post-commit ]; then
+if [ "$hook" = post-commit ] || [ "$hook" = post-merge ] || [ "$hook" = post-applypatch ] || [ "$hook" = post-rewrite ]; then
   common=$(git rev-parse --path-format=absolute --git-common-dir) || exit 1
   lane_common=$(lane_git rev-parse --path-format=absolute --git-common-dir) || exit 1
   if [ "$common" = "$lane_common" ]; then
@@ -57,9 +58,25 @@ if [ "$hook" = post-commit ]; then
       case "$producer/" in "$scratch/"*) owned=true ;; esac
     fi
     if [ "$owned" = true ]; then
-      made=$(git rev-parse HEAD) || exit 1
       mkdir -p "$receipt/commits"
-      : > "$receipt/commits/$made"
+      if [ "$hook" = post-rewrite ]; then
+        printf '%s\\n' "$input" | while read -r old made rest; do
+          case "$made" in *[!0-9a-f]*|'') exit 1 ;; esac
+          [ "\${#made}" = 40 ] || exit 1
+          : > "$receipt/commits/$made"
+        done || exit 1
+      elif [ "$hook" = post-merge ]; then
+        # Git retains MERGE_HEAD through post-merge only when this invocation
+        # created a merge. Fast-forwards to existing merges have no merge state.
+        merge_file=$(git rev-parse --git-path MERGE_HEAD) || exit 1
+        if [ -f "$merge_file" ] && git rev-parse --verify -q HEAD^2 >/dev/null; then
+          made=$(git rev-parse HEAD) || exit 1
+          : > "$receipt/commits/$made"
+        fi
+      else
+        made=$(git rev-parse HEAD) || exit 1
+        : > "$receipt/commits/$made"
+      fi
     fi
   fi
 fi
@@ -76,11 +93,17 @@ if [ "$hook" = pre-push ]; then
     case "$new" in *[!0]*) ;; *) continue ;; esac
     if [ "$new" != "$lane_head" ]; then
       git merge-base --is-ancestor "$base" "$new" || stage_refuse
-      commits=$(git rev-list --max-count=257 "$base..$new") || stage_refuse
+      commits=$(git rev-list "$base..$new") || stage_refuse
       count=0
       for made in $commits; do
         count=$((count + 1))
-        [ "$count" -le 256 ] && [ -f "$receipt/commits/$made" ] || stage_refuse
+        if [ ! -f "$receipt/commits/$made" ]; then
+          # Imported upstream history is checked against the actual delivery
+          # remote's base by the controller. A tracking ref only lets the
+          # candidate reach that verification; it grants no adoption proof.
+          published=$(git for-each-ref --contains="$made" --count=1 --format='%(refname)' refs/remotes/origin/) || stage_refuse "$made"
+          [ -n "$published" ] || stage_refuse "$made"
+        fi
       done
       [ "$count" -gt 0 ] || stage_refuse
     fi

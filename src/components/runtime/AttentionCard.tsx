@@ -19,13 +19,16 @@ export interface AttentionCardProps {
   attention: RuntimeAttention;
   onApprove?: () => void;
   onDeny?: () => void;
-  onAction?: (response: unknown) => void;
+  onAction?: (response: unknown, label: string) => void;
   onAnswerQuestion?: (optionIndex: number, questionIndex?: number) => void;
   onAnswerQuestions?: (answers: number[][], customAnswers?: string[]) => void;
   /** Issue #765: hide the card from the live composer region without touching
       the attention itself — the operator's own skip, never a resolution. */
   onDismiss?: () => void;
   busy?: boolean;
+  /** The answer the operator gave on this device, drawn in place of the
+      controls until the host projects the resolution and the card leaves. */
+  answered?: string;
   /** Dead-host archive (issue #247 §5): the request died with its host, so the
       card stays as history — dimmed, no buttons, no focus trap, one caption. */
   archived?: boolean;
@@ -39,7 +42,8 @@ export interface AttentionCardProps {
  * reduced motion. The `autoResolutionMs` countdown is display-only — only an
  * engine-confirmed resolution closes the card (Sol: no client auto-resolve).
  */
-export function AttentionCard({ attention, onApprove, onDeny, onAction, onAnswerQuestion, onAnswerQuestions, onDismiss, busy, archived = false }: AttentionCardProps) {
+export function AttentionCard({ attention, onApprove, onDeny, onAction, onAnswerQuestion, onAnswerQuestions, onDismiss, busy: resolving, answered, archived = false }: AttentionCardProps) {
+  const busy = resolving || answered !== undefined;
   const { t } = useLocale();
   const isMobile = useIsMobile();
   const cardRef = useRef<HTMLDivElement>(null);
@@ -171,7 +175,14 @@ export function AttentionCard({ attention, onApprove, onDeny, onAction, onAnswer
         ? t(attention.codexReceipt.recovery.outcome === "callback-unavailable" ? "runtime.attention.callbackUnavailable" : "runtime.attention.deliveryUncertain")
         : attention.request.detail}</div> : null}
 
-      {questions.length > 0 && !archived && !attention.unowned ? (
+      {answered !== undefined && !archived ? (
+        <div data-attention-answered="" role="status" className="mt-3 inline-flex min-w-0 items-center gap-1.5 text-[13px] font-semibold text-primary">
+          <Check className="h-4 w-4 shrink-0 text-success" aria-hidden />
+          <span className="min-w-0 [overflow-wrap:anywhere]">{t("runtime.attention.answered", { answer: answered })}</span>
+        </div>
+      ) : null}
+
+      {questions.length > 0 && !archived && !attention.unowned && answered === undefined ? (
         <div className="mt-2 space-y-3">
           {questions.map((question, questionIndex) => {
             const freeText = question.isOther === true || !question.options?.length;
@@ -237,12 +248,12 @@ export function AttentionCard({ attention, onApprove, onDeny, onAction, onAnswer
           </div>
       ) : null}
 
-      {onAction && !archived && !attention.unowned ? (
+      {onAction && !archived && !attention.unowned && answered === undefined ? (
         <div className="mt-3 flex flex-wrap items-start gap-2">
           {attention.request.protocol?.actions?.map((action, index) => (
             <div key={index} className="min-w-0 max-w-full">
               <button className="rounded-[8px] border border-border bg-canvas px-3 py-1.5 text-[13px] font-bold text-primary disabled:opacity-60"
-                disabled={busy} onClick={() => onAction(action.response)}>
+                disabled={busy} onClick={() => onAction(action.response, t(`runtime.attention.action.${action.kind}`))}>
                 {t(`runtime.attention.action.${action.kind}`)}
               </button>
               {action.detail && attention.request.protocol!.actions!.findIndex(candidate => candidate.detail === action.detail) === index ? <pre className="mt-1 max-w-full whitespace-pre-wrap break-all text-[12px] text-muted">{action.detail}</pre> : null}
@@ -251,7 +262,7 @@ export function AttentionCard({ attention, onApprove, onDeny, onAction, onAnswer
         </div>
       ) : null}
 
-      {(attention.kind === "approval" || attention.kind === "permission") && (onApprove || onDeny) && !archived && !attention.unowned ? (
+      {(attention.kind === "approval" || attention.kind === "permission") && (onApprove || onDeny) && !archived && !attention.unowned && answered === undefined ? (
         <div className="mt-3 flex flex-wrap items-center gap-2">
           {onApprove ? (
             <button
@@ -276,7 +287,7 @@ export function AttentionCard({ attention, onApprove, onDeny, onAction, onAnswer
         </div>
       ) : null}
 
-      {busy && !archived ? (
+      {resolving && answered === undefined && !archived ? (
         <div className="mt-2 inline-flex items-center gap-1.5 text-[12px] font-semibold text-muted">
           <Loader2 className="h-3.5 w-3.5 animate-spin motion-reduce:animate-none" aria-hidden /> {t("runtime.attention.answering")}
         </div>

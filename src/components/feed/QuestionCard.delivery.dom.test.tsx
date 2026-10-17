@@ -135,10 +135,13 @@ test("a rejected answer clears the selection, hides the raw error and offers a r
   await settle();
 
   expect(posts).toBe(1);
+  /* The answer was drawn as given while it was out (audit B2), so the card
+     that reopened is a new element: read the option again. */
+  const reopened = [...host.querySelectorAll("button")].find((node) => node.textContent?.includes("Structured"))!;
   /* The option no longer asserts an acceptance that never happened. */
-  expect(option!.textContent).not.toContain("✓");
-  expect(option!.className).not.toContain("bg-accent/10");
-  expect(option!.getAttribute("data-choice-state")).toBe("failed");
+  expect(reopened.textContent).not.toContain("✓");
+  expect(reopened.className).not.toContain("bg-accent/10");
+  expect(reopened.getAttribute("data-choice-state")).toBe("failed");
   /* The card still says the agent is waiting — and now that is true. */
   expect(host.textContent).toContain(en["question.waiting"]);
   /* Translated copy at the boundary; the driver's own sentence never renders. */
@@ -192,6 +195,56 @@ test("a rejected submit keeps the picks on screen, visibly failed and still edit
   await settle();
   expect(optionOf("Terminal").getAttribute("data-choice-state")).toBeNull();
 
+  flushSync(() => { root.unmount(); });
+  host.remove();
+});
+
+/* Audit B2: the answer is drawn as given the moment it is pressed, and a
+   refusal reopens the card with the picks it carried. */
+test("an option's answer shows at once while the request is held, sends once, and a refusal reopens the card", async () => {
+  const held: ((response: Response) => void)[] = [];
+  globalThis.fetch = mock(() => new Promise<Response>((resolve) => { held.push(resolve); })) as unknown as typeof fetch;
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  flushSync(() => { root.render(<QuestionCard file={questionFile()} />); });
+  const option = [...host.querySelectorAll("button")].find((node) => node.textContent?.includes("Terminal"))!;
+  flushSync(() => { option.click(); });
+  await settle();
+  expect(held).toHaveLength(1);
+  expect(host.textContent).toContain(en["question.answered"].replace("{text}", "Terminal"));
+  expect(host.textContent).not.toContain(en["common.sending"]);
+  /* Nothing is left to press twice while the request is out. */
+  expect([...host.querySelectorAll("button")].some((node) => node.textContent?.includes("Structured"))).toBe(false);
+
+  held[0]!(new Response(JSON.stringify({ ok: false, delivered: false }), { status: 502 }));
+  await settle();
+  const failed = [...host.querySelectorAll("button")].find((node) => node.textContent?.includes("Terminal"))!;
+  expect(failed.getAttribute("data-choice-state")).toBe("failed");
+  expect(host.querySelector('[role="alert"]')?.textContent).toContain(en["question.errorNotDelivered"]);
+  expect(held).toHaveLength(1);
+  flushSync(() => { root.unmount(); });
+  host.remove();
+});
+
+test("a terminal menu key shows as sent at once, and a refusal brings the menu back with the reason", async () => {
+  const held: ((response: Response) => void)[] = [];
+  globalThis.fetch = mock(() => new Promise<Response>((resolve) => { held.push(resolve); })) as unknown as typeof fetch;
+  const file = { ...questionFile(), pendingQuestion: null, waitingInput: { target: "%1", since: 1_000, screenTail: "", menu: { question: "Proceed?", tabs: [], options: [{ value: 1, label: "Yes" }, { value: 2, label: "No" }] } } } as unknown as FileEntry;
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  flushSync(() => { root.render(<QuestionCard file={file} />); });
+  const yes = [...host.querySelectorAll("button")].find((node) => node.textContent?.includes("Yes"))!;
+  flushSync(() => { yes.click(); });
+  await settle();
+  expect(host.textContent).toContain(en["question.sentToPane"].replace("{text}", "Yes"));
+  expect(held).toHaveLength(1);
+  held[0]!(new Response(JSON.stringify({ ok: false }), { status: 409 }));
+  await settle();
+  expect(host.textContent).toContain(en["question.errorMoved"]);
+  expect([...host.querySelectorAll("button")].find((node) => node.textContent?.includes("Yes"))?.hasAttribute("disabled")).toBe(false);
+  expect(held).toHaveLength(1);
   flushSync(() => { root.unmount(); });
   host.remove();
 });

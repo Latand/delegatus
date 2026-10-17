@@ -1,3 +1,4 @@
+import { observeSqlite } from "@/lib/sqliteReadAttribution";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -7,6 +8,7 @@ import type { Database as BunDatabase } from "bun:sqlite";
 
 import { statePath } from "@/lib/configDir";
 import { spawnLeasedHelper, unrefLeasedHelper } from "@/lib/helperLease";
+import { performanceSpans } from "@/lib/performanceSpans";
 import { SNIPPET_MATCH_CLOSE, SNIPPET_MATCH_OPEN } from "./snippet";
 import { isFunctionWord, queryUnits, widerExpression, type QueryUnit } from "./queryUnits";
 import { resolveProjectScope, type ProjectScope } from "./projectScope";
@@ -260,7 +262,7 @@ function openWriterDatabase(): Database {
   const filename = statePath("transcript-search.sqlite");
   fs.mkdirSync(path.dirname(filename), { recursive: true, mode: 0o700 });
   const Database = sqliteDatabase();
-  const db = new Database(filename, { create: true, strict: true });
+  const db = observeSqlite(new Database(filename, { create: true, strict: true }), "transcript-search");
   try {
     db.exec("PRAGMA busy_timeout = 5000; PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA foreign_keys = ON;");
     db.exec(`
@@ -347,7 +349,7 @@ function openQueryDatabase(): Database {
     throw error;
   }
   const Database = sqliteDatabase();
-  const db = new Database(filename, { readonly: true, strict: true });
+  const db = observeSqlite(new Database(filename, { readonly: true, strict: true }), "transcript-search");
   try {
     db.exec("PRAGMA busy_timeout = 250; PRAGMA query_only = ON; PRAGMA foreign_keys = ON;");
     const identity = `${stat.dev}:${stat.ino}`;
@@ -511,34 +513,41 @@ async function* transcriptLines(pathname: string): AsyncGenerator<{ bytes: Buffe
   let lineNumber = 1;
   let streamOffset = 0;
   for await (const chunk of fs.createReadStream(pathname)) {
-    const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-    let start = 0;
-    while (true) {
-      const newline = bytes.indexOf(0x0a, start);
-      if (newline < 0) break;
-      const tail = bytes.subarray(start, newline);
-      const totalBytes = fragmentBytes + tail.length;
-      const combined = fragments.length
-        ? Buffer.concat(tail.length ? [...fragments, tail] : fragments, totalBytes)
-        : tail;
-      const line = combined.at(-1) === 0x0d ? combined.subarray(0, -1) : combined;
-      yield { bytes: line, byteOffset: lineOffset, lineNumber };
-      lineNumber += 1;
-      fragments = [];
-      fragmentBytes = 0;
-      start = newline + 1;
-      lineOffset = streamOffset + start;
-    }
-    if (start < bytes.length) {
-      const remainder = bytes.subarray(start);
-      fragments.push(remainder);
-      fragmentBytes += remainder.length;
-    }
-    streamOffset += bytes.length;
+    const lines = performanceSpans.sync("transcript.index", () => {
+      const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      const rows: Array<{ bytes: Buffer; byteOffset: number; lineNumber: number }> = [];
+      let start = 0;
+      while (true) {
+        const newline = bytes.indexOf(0x0a, start);
+        if (newline < 0) break;
+        const tail = bytes.subarray(start, newline);
+        const totalBytes = fragmentBytes + tail.length;
+        const combined = fragments.length
+          ? Buffer.concat(tail.length ? [...fragments, tail] : fragments, totalBytes)
+          : tail;
+        const line = combined.at(-1) === 0x0d ? combined.subarray(0, -1) : combined;
+        rows.push({ bytes: line, byteOffset: lineOffset, lineNumber });
+        lineNumber += 1;
+        fragments = [];
+        fragmentBytes = 0;
+        start = newline + 1;
+        lineOffset = streamOffset + start;
+      }
+      if (start < bytes.length) {
+        const remainder = bytes.subarray(start);
+        fragments.push(remainder);
+        fragmentBytes += remainder.length;
+      }
+      streamOffset += bytes.length;
+      return rows;
+    });
+    for (const line of lines) yield line;
   }
   if (fragmentBytes) {
-    const combined = fragments.length === 1 ? fragments[0]! : Buffer.concat(fragments, fragmentBytes);
-    const line = combined.at(-1) === 0x0d ? combined.subarray(0, -1) : combined;
+    const line = performanceSpans.sync("transcript.index", () => {
+      const combined = fragments.length === 1 ? fragments[0]! : Buffer.concat(fragments, fragmentBytes);
+      return combined.at(-1) === 0x0d ? combined.subarray(0, -1) : combined;
+    });
     yield { bytes: line, byteOffset: lineOffset, lineNumber };
   }
 }
@@ -548,37 +557,45 @@ async function* readTranscriptMessages(source: TranscriptIndexSource): AsyncGene
   const recent = new Map<string, RecentMessage>();
   const recentOrder: Array<{ key: string; message: RecentMessage }> = [];
   for await (const line of transcriptLines(source.path)) {
-    if (!line.bytes.length) continue;
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(line.bytes.toString("utf8"));
-    } catch {
-      continue;
-    }
-    const message = messageFromRecord(record(parsed) ?? {}, source, line.byteOffset, line.lineNumber);
-    if (!message) continue;
-    if (message.representation !== "claude") {
-      const key = `${message.speaker}\0${message.body}`;
-      const previous = recent.get(key);
-      const closeInTime = previous
-        && (message.timestamp !== null && previous.timestamp !== null
-          ? Math.abs(message.timestamp - previous.timestamp) <= 2
-          : message.lineNumber - previous.lineNumber <= 2);
-      if (previous && previous.representation !== message.representation && closeInTime) continue;
-      const remembered = {
-        representation: message.representation,
+    const indexed = performanceSpans.sync("transcript.index", () => {
+      if (!line.bytes.length) return null;
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(line.bytes.toString("utf8"));
+      } catch {
+        return null;
+      }
+      const message = messageFromRecord(record(parsed) ?? {}, source, line.byteOffset, line.lineNumber);
+      if (!message) return null;
+      if (message.representation !== "claude") {
+        const key = `${message.speaker}\0${message.body}`;
+        const previous = recent.get(key);
+        const closeInTime = previous
+          && (message.timestamp !== null && previous.timestamp !== null
+            ? Math.abs(message.timestamp - previous.timestamp) <= 2
+            : message.lineNumber - previous.lineNumber <= 2);
+        if (previous && previous.representation !== message.representation && closeInTime) return null;
+        const remembered = {
+          representation: message.representation,
+          timestamp: message.timestamp,
+          lineNumber: message.lineNumber,
+        };
+        recent.set(key, remembered);
+        recentOrder.push({ key, message: remembered });
+        while (recentOrder.length > 8) {
+          const expired = recentOrder.shift()!;
+          if (recent.get(expired.key) === expired.message) recent.delete(expired.key);
+        }
+      }
+      return {
+        body: message.body,
+        speaker: message.speaker,
         timestamp: message.timestamp,
+        byteOffset: message.byteOffset,
         lineNumber: message.lineNumber,
       };
-      recent.set(key, remembered);
-      recentOrder.push({ key, message: remembered });
-      while (recentOrder.length > 8) {
-        const expired = recentOrder.shift()!;
-        if (recent.get(expired.key) === expired.message) recent.delete(expired.key);
-      }
-    }
-    const { representation: _representation, ...indexed } = message;
-    yield indexed;
+    });
+    if (indexed) yield indexed;
   }
 }
 
@@ -593,78 +610,84 @@ export async function indexTranscriptSources(
   sources: readonly TranscriptIndexSource[],
   options: TranscriptIndexOptions = {},
 ): Promise<TranscriptIndexResult> {
-  const db = openWriterDatabase();
+  const db = performanceSpans.sync("transcript.index", openWriterDatabase);
   const readMessages = options.readMessages ?? readTranscriptMessages;
   let filesRead = 0;
   let filesSkipped = 0;
   let messagesIndexed = 0;
   const failures: TranscriptIndexResult["failures"] = [];
   try {
-    const identity = db.query<FileIdentityRow, [string]>(
+    const identity = performanceSpans.sync("transcript.index", () => db.query<FileIdentityRow, [string]>(
       "SELECT size, mtime_ms, project, engine FROM transcript_files WHERE path = ?",
-    );
-    const updateMetadata = db.query(
+    ));
+    const updateMetadata = performanceSpans.sync("transcript.index", () => db.query(
       "UPDATE transcript_files SET project = ?, engine = ? WHERE path = ?",
-    );
+    ));
     for (const source of sources) {
-      const current = identity.get(source.path);
+      const current = performanceSpans.sync("transcript.index", () => identity.get(source.path));
       if (current?.size === source.size && current.mtime_ms === source.mtimeMs) {
         if (current.project !== source.project || current.engine !== source.engine) {
-          updateMetadata.run(source.project, source.engine, source.path);
+          performanceSpans.sync("transcript.index", () => updateMetadata.run(source.project, source.engine, source.path));
         }
-        filesSkipped += 1;
+        performanceSpans.sync("transcript.index", () => { filesSkipped += 1; });
         continue;
       }
-      filesRead += 1;
-      db.exec("BEGIN IMMEDIATE");
+      performanceSpans.sync("transcript.index", () => {
+        filesRead += 1;
+        db.exec("BEGIN IMMEDIATE");
+      });
       try {
         // Retain unchanged rows when a transcript grows: their IDs and undated
         // fallback times belong to existing paging snapshots. New IDs never reuse
         // deleted IDs, including after a complete prune of the index.
-        db.query(`
+        performanceSpans.sync("transcript.index", () => db.query(`
           INSERT INTO transcript_files(path, size, mtime_ms, project, engine, messages_count, indexed_at)
           VALUES (?, ?, ?, ?, ?, 0, ?)
           ON CONFLICT(path) DO UPDATE SET size = excluded.size, mtime_ms = excluded.mtime_ms,
             project = excluded.project, engine = excluded.engine, indexed_at = excluded.indexed_at
-        `).run(source.path, source.size, source.mtimeMs, source.project, source.engine, Math.floor(Date.now() / 1_000));
-        let lastId = db.query<{ last_id: number }, []>("SELECT last_id FROM transcript_search_sequence WHERE singleton = 1").get()!.last_id;
-        const existing = db.query<{ id: number; speaker: string; timestamp: number | null; byte_offset: number; line_number: number; body: string }, [string, number]>(
+        `).run(source.path, source.size, source.mtimeMs, source.project, source.engine, Math.floor(Date.now() / 1_000)));
+        let lastId = performanceSpans.sync("transcript.index", () => db.query<{ last_id: number }, []>("SELECT last_id FROM transcript_search_sequence WHERE singleton = 1").get()!.last_id);
+        const existing = performanceSpans.sync("transcript.index", () => db.query<{ id: number; speaker: string; timestamp: number | null; byte_offset: number; line_number: number; body: string }, [string, number]>(
           "SELECT id, speaker, timestamp, byte_offset, line_number, body FROM transcript_messages WHERE transcript_path = ? AND message_index = ?",
-        );
-        const insert = db.query(`
+        ));
+        const insert = performanceSpans.sync("transcript.index", () => db.query(`
           INSERT INTO transcript_messages(id, transcript_path, message_index, speaker, timestamp, byte_offset, line_number, body, body_hash, sort_timestamp)
           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `);
+        `));
         let messageIndex = 0;
         for await (const message of readMessages(source)) {
-          const prior = existing.get(source.path, messageIndex);
-          if (prior && prior.body === message.body && prior.speaker === message.speaker
-            && prior.timestamp === message.timestamp && prior.byte_offset === message.byteOffset
-            && prior.line_number === message.lineNumber) {
+          performanceSpans.sync("transcript.index", () => {
+            const prior = existing.get(source.path, messageIndex);
+            if (prior && prior.body === message.body && prior.speaker === message.speaker
+              && prior.timestamp === message.timestamp && prior.byte_offset === message.byteOffset
+              && prior.line_number === message.lineNumber) {
+              messageIndex += 1;
+              return;
+            }
+            if (prior) {
+              db.query("DELETE FROM transcript_messages_fts WHERE rowid = ?").run(prior.id);
+              db.query("DELETE FROM transcript_messages WHERE id = ?").run(prior.id);
+            }
+            const id = ++lastId;
+            insert.run(id, source.path, messageIndex, message.speaker, message.timestamp,
+              message.byteOffset, message.lineNumber, message.body, normalizedBodyHash(message.body),
+              message.timestamp ?? source.mtimeMs / 1000);
+            db.query("INSERT INTO transcript_messages_fts(rowid, body) VALUES (?, ?)").run(id, message.body);
             messageIndex += 1;
-            continue;
-          }
-          if (prior) {
-            db.query("DELETE FROM transcript_messages_fts WHERE rowid = ?").run(prior.id);
-            db.query("DELETE FROM transcript_messages WHERE id = ?").run(prior.id);
-          }
-          const id = ++lastId;
-          insert.run(id, source.path, messageIndex, message.speaker, message.timestamp,
-            message.byteOffset, message.lineNumber, message.body, normalizedBodyHash(message.body),
-            message.timestamp ?? source.mtimeMs / 1000);
-          db.query("INSERT INTO transcript_messages_fts(rowid, body) VALUES (?, ?)").run(id, message.body);
-          messageIndex += 1;
+          });
         }
-        db.query(`DELETE FROM transcript_messages_fts WHERE rowid IN (
+        performanceSpans.sync("transcript.index", () => db.query(`DELETE FROM transcript_messages_fts WHERE rowid IN (
           SELECT id FROM transcript_messages WHERE transcript_path = ? AND message_index >= ?
-        )`).run(source.path, messageIndex);
-        db.query("DELETE FROM transcript_messages WHERE transcript_path = ? AND message_index >= ?").run(source.path, messageIndex);
-        db.query("UPDATE transcript_search_sequence SET last_id = ? WHERE singleton = 1").run(lastId);
-        db.query("UPDATE transcript_files SET messages_count = ? WHERE path = ?").run(messageIndex, source.path);
-        db.exec("COMMIT");
-        messagesIndexed += messageIndex;
+        )`).run(source.path, messageIndex));
+        performanceSpans.sync("transcript.index", () => {
+          db.query("DELETE FROM transcript_messages WHERE transcript_path = ? AND message_index >= ?").run(source.path, messageIndex);
+          db.query("UPDATE transcript_search_sequence SET last_id = ? WHERE singleton = 1").run(lastId);
+          db.query("UPDATE transcript_files SET messages_count = ? WHERE path = ?").run(messageIndex, source.path);
+          db.exec("COMMIT");
+          messagesIndexed += messageIndex;
+        });
       } catch (error) {
-        try { db.exec("ROLLBACK"); } catch { /* transaction did not open */ }
+        performanceSpans.sync("transcript.index", () => { try { db.exec("ROLLBACK"); } catch { /* transaction did not open */ } });
         failures.push({
           path: source.path,
           error: error instanceof Error ? error.message : String(error),
@@ -672,24 +695,31 @@ export async function indexTranscriptSources(
       }
     }
     if (options.complete) {
-      const currentPaths = new Set(sources.map((source) => source.path));
-      const indexed = db.query<{ path: string }, []>("SELECT path FROM transcript_files").all();
-      db.exec("BEGIN IMMEDIATE");
+      const { currentPaths, indexed } = performanceSpans.sync("transcript.index", () => ({
+        currentPaths: new Set(sources.map((source) => source.path)),
+        indexed: db.query<{ path: string }, []>("SELECT path FROM transcript_files").all(),
+      }));
+      performanceSpans.sync("transcript.index", () => db.exec("BEGIN IMMEDIATE"));
       try {
-        for (const row of indexed) {
-          if (!currentPaths.has(row.path)) removeTranscript(db, row.path);
-        }
-        db.exec("COMMIT");
+        performanceSpans.sync("transcript.index", () => {
+          for (const row of indexed) {
+            if (!currentPaths.has(row.path)) removeTranscript(db, row.path);
+          }
+          db.exec("COMMIT");
+        });
       } catch (error) {
-        try { db.exec("ROLLBACK"); } catch { /* transaction did not open */ }
+        performanceSpans.sync("transcript.index", () => { try { db.exec("ROLLBACK"); } catch { /* transaction did not open */ } });
         throw error;
       }
       // Release the write lock and yield between bounded FTS merge steps.
       if (!failures.length) {
         while (true) {
-          const before = db.query<{ n: number }, []>("SELECT total_changes() AS n").get()!.n;
-          db.query("INSERT INTO transcript_messages_fts(transcript_messages_fts, rank) VALUES('merge', 256)").run();
-          const after = db.query<{ n: number }, []>("SELECT total_changes() AS n").get()!.n;
+          const { before, after } = performanceSpans.sync("transcript.index", () => {
+            const before = db.query<{ n: number }, []>("SELECT total_changes() AS n").get()!.n;
+            db.query("INSERT INTO transcript_messages_fts(transcript_messages_fts, rank) VALUES('merge', 256)").run();
+            const after = db.query<{ n: number }, []>("SELECT total_changes() AS n").get()!.n;
+            return { before, after };
+          });
           if (after - before <= 1) break;
           await new Promise<void>((resolve) => setImmediate(resolve));
         }
@@ -697,7 +727,7 @@ export async function indexTranscriptSources(
     }
     return { filesRead, filesSkipped, messagesIndexed, failures };
   } finally {
-    db.close();
+    performanceSpans.sync("transcript.index", () => db.close());
   }
 }
 

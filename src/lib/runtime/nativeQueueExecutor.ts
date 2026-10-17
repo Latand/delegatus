@@ -1,6 +1,7 @@
+import { SEND_SEAT_REVOKED_REASON } from "@/lib/orchestrator/seatChannel";
 import { nativeQueueInputMatches } from "./nativeQueueContent";
 import type { RuntimeHostClient } from "./client";
-import { StructuredSendRefusedError, type EngineHost } from "./engineHost";
+import { StructuredDispatchDeferredError, StructuredSendRefusedError, type EngineHost } from "./engineHost";
 import { NativeQueueNotSubmittedError, NativeQueueProtocolRefusal, type NativeCodexQueue, type NativeQueueInput } from "./nativeCodexQueue";
 import { sameNativeQueueBinding, type NativeQueueBinding, type NativeQueueCommand, type NativeQueueProof, type NativeQueueRecord, type NativeQueueVersion } from "./nativeQueueContracts";
 import type { DeliveryWaitReason } from "./deliveryWaitReason";
@@ -199,6 +200,11 @@ export class NativeQueueExecutor {
         await transition({ phase: "acknowledged", turnId: result.turnId });
       }
     } catch (error) {
+      if (error instanceof StructuredDispatchDeferredError && !actuated) {
+        if (prepared) await client.transitionOperation(command.operationId, "queued", { reason: error.message });
+        note("evidence-unreadable", error.message);
+        return false;
+      }
       // A journal CAS failure is another executor's ownership, never a new attempt.
       /* Its reads are the entry's current wait as much as the normal path's (A6). */
       const current = await step("reading the delivery journal status", () => client.operationStatus(command.operationId));
@@ -280,4 +286,43 @@ export class NativeQueueExecutor {
     }
     return pending;
   }
+}
+
+/** Delete through the existing durable native mutation protocol. A failed or lost
+    delete keeps custody; neither a local flag nor an absent ACK proves removal. */
+export async function withdrawNativeSeatMessage(conversationId: string, operationId: string, client: RuntimeHostClient,
+  executor: NativeQueueExecutor): Promise<boolean> {
+  if (!client.nativeQueueRead) return false;
+  const entry = (await client.nativeQueueRead(conversationId)).find(row => row.entryId === operationId);
+  if (!entry) return false;
+  if (entry.state === "removed" || entry.state === "refused") return true;
+  if (entry.state === "admitted" && !entry.nativeSubmissionId) {
+    if (!client.nativeQueueTransition) return false;
+    try {
+      const result = await client.nativeQueueTransition(operationId, { phase: "seat-withdrawal", reason: SEND_SEAT_REVOKED_REASON });
+      const after = (await client.nativeQueueRead(conversationId)).find(row => row.entryId === operationId);
+      return result.receipt.status === "failed" && after?.state === "refused" && after.reason === SEND_SEAT_REVOKED_REASON;
+    } catch {
+      // `prepared` makes the operation `delivering` before the executor calls
+      // Codex. A losing conditional claim keeps custody for canonical evidence
+      // or a later acknowledged native deletion.
+      return false;
+    }
+  }
+  if (!entry.nativeSubmissionId || entry.state !== "queued") return false;
+  const { createHash } = await import("node:crypto");
+  const prefix = `seat_withdraw_${createHash("sha256").update(operationId).digest("hex").slice(0, 40)}`;
+  let key = prefix;
+  for (let attempt = 0; attempt < 32; attempt++) {
+    key = attempt ? `${prefix}_${attempt}` : prefix;
+    const prior = await client.operationStatus(key);
+    if (!prior || ["queued", "pending"].includes(prior.receipt.status)) break;
+    if (prior.receipt.status !== "applied" && prior.receipt.status !== "failed") return false;
+    if (attempt === 31) return false;
+  }
+  const command = { kind: "native-queue" as const, action: "delete" as const, conversationId,
+    binding: entry.binding, entryId: entry.entryId, expectedRevision: entry.revision, idempotencyKey: key, operationId: key };
+  await client.command(command);
+  await executor.execute({ ...command, eventSeq: 0 });
+  return (await client.nativeQueueRead(conversationId)).find(row => row.entryId === operationId)?.state === "removed";
 }

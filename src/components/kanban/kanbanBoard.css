@@ -803,6 +803,12 @@
   box-shadow: var(--shadow-2); font-size: var(--text-ui); animation: kb-receipt-in var(--motion-base) var(--ease-standard);
 }
 .kb .receipt.error { background: var(--color-danger); color: #fff; }
+/* Dark theme's danger is a light red: white on it reads 2.9:1, so the error
+   receipt takes it down toward black until the white text clears 4.5:1. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .kb .receipt.error { background: color-mix(in srgb, var(--color-danger) 70%, #000); }
+}
+[data-theme="dark"] .kb .receipt.error { background: color-mix(in srgb, var(--color-danger) 70%, #000); }
 .kb .receipt .msg { flex: 1 1 auto; min-width: 0; overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
 .kb .receipt.error .msg { white-space: normal; overflow: visible; display: block; }
 .kb .receipt .act { white-space: nowrap; height: 30px; padding: 0 10px; border-radius: var(--radius-control); font-weight: 700; color: inherit; background: rgb(255 255 255 / 0.14); }

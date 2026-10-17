@@ -250,6 +250,7 @@ export interface RuntimeRetirementClaim {
 }
 
 export interface RuntimeOperationReceipt {
+  redirectedTo?: { operationId: string; conversationId: string };
   /** Exclusive automatic teardown authority, held until actuation ends. */
   retirementClaim?: RuntimeRetirementClaim | null;
   nativeQueue?: {

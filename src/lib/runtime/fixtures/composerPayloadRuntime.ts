@@ -44,6 +44,8 @@ export interface ComposerPayloadRuntime {
   journal: RuntimeJournal;
   /** Every message the engine accepted, with bytes read back from server storage. */
   delivered: DeliveredPayload[];
+  /** Resolves when the named fixture engine records its next accepted message. */
+  waitForDelivery(conversationId: string, count: number): Promise<void>;
   handle(request: Request): Promise<Response>;
   receipts(): Promise<RuntimeOperationReceipt[]>;
   /** A second conversation hosted by a native-queue Codex thread. The queue
@@ -54,6 +56,8 @@ export interface ComposerPayloadRuntime {
       session as hosted, so a send is admitted and then fenced by the queue.
       This makes it available again and republishes it. */
   hostUp(): Promise<void>;
+  holdTurn?(busy: boolean): Promise<void>;
+  successor?: { conversationId: string; artifactPath: string; delivered: DeliveredPayload[] };
   close(): Promise<void>;
 }
 
@@ -95,7 +99,13 @@ function readDelivered(entry: QueueEntry): DeliveredPayload {
   };
 }
 
-export async function startComposerPayloadRuntime(directory: string): Promise<ComposerPayloadRuntime> {
+/** Fixed synthetic session identities keep succession tests reproducible. */
+function fixtureSessionId(index: number): string {
+  const digit = String(index);
+  return [digit.repeat(8), digit.repeat(4), `4${digit.repeat(3)}`, `8${digit.repeat(3)}`, digit.repeat(12)].join("-");
+}
+
+export async function startComposerPayloadRuntime(directory: string, options: { secondConversation?: boolean; holdFirstTurn?: boolean } = {}): Promise<ComposerPayloadRuntime> {
   isolateComposerPayloadRuntime(directory);
   const stateDirectory = process.env.LLV_STATE_DIR!;
   const registry = new AgentRegistry(
@@ -105,7 +115,7 @@ export async function startComposerPayloadRuntime(directory: string): Promise<Co
     { sqliteMode: "off" },
   );
   setAgentRegistryForTests(registry);
-  const sessionId = crypto.randomUUID();
+  const sessionId = options.secondConversation ? fixtureSessionId(1) : crypto.randomUUID();
   const artifactPath = path.join(directory, "sessions", `${sessionId}.jsonl`);
   const profile = emptyLaunchProfile({ cwd: directory });
   registry.reconcileConversations([{
@@ -147,7 +157,12 @@ export async function startComposerPayloadRuntime(directory: string): Promise<Co
   await once(server, "listening");
   const client = new UnixRuntimeHostClient(socketPath, 30_000, 30_000, 30_000);
   let available = true;
+  let busy = options.holdFirstTurn === true;
   const delivered: DeliveredPayload[] = [];
+  const deliveryWaiters = new Map<string, Set<() => void>>();
+  const notifyDelivery = (conversationId: string) => {
+    for (const waiter of deliveryWaiters.get(conversationId) ?? []) waiter();
+  };
   /* Recovery reports only what the fake host really is: while it is down no
      host starts, so the queue fences the admitted send as never executed. */
   const recovered = (spawned: boolean): StructuredRecoveryResult => ({
@@ -156,14 +171,31 @@ export async function startComposerPayloadRuntime(directory: string): Promise<Co
   const recover = async (): Promise<StructuredRecoveryResult | null> => available ? recovered(false) : null;
   const engine = Object.assign(new FakeEngineHost(), { onStateChange: () => () => {} });
   const health = engine.health.bind(engine);
-  engine.health = async () => available ? health() : { ...await health(), status: "dead", pid: null, processStartIdentity: null };
+  Object.assign(engine, { supportsSteer: false });
+  engine.health = async () => available ? { ...await health(), ...(busy ? { status: "active" as const, activeTurnRef: "held-turn" } : {}) }
+    : { ...await health(), status: "dead", pid: null, processStartIdentity: null };
   const send = engine.send.bind(engine);
   engine.send = async (entry) => {
     if (!available) throw new Error("the fixture engine host is down");
-    if (!engine.ledger.receipts.has(entry.id)) delivered.push(readDelivered(entry));
+    if (!engine.ledger.receipts.has(entry.id)) { delivered.push(readDelivered(entry)); notifyDelivery(conversation.id); }
     return send(entry);
   };
-  const bind = () => bindStructuredDeliveryQueue([{ key, host: engine }], {
+  const successor = options.secondConversation ? (() => {
+    const nextId = fixtureSessionId(2);
+    const nextPath = path.join(directory, "sessions", `${nextId}.jsonl`);
+    registry.reconcileConversations([{ engine: "codex", path: nextPath, accountId: "fixture-account", launchProfile: profile,
+      turn: { state: "idle", source: "empty", terminalAt: null }, observedAt: new Date().toISOString() }]);
+    const next = registry.conversationForPath(nextPath)!;
+    const nextKey = { engine: "codex" as const, sessionId: nextId };
+    const source = registry.readOnlySnapshot().entries[`${key.engine}:${key.sessionId}`]!;
+    registry.upsert({ ...source, key: nextKey, artifactPath: nextPath });
+    const nextDelivered: DeliveredPayload[] = [];
+    const nextEngine = Object.assign(new FakeEngineHost(), { onStateChange: () => () => {} });
+    const nextSend = nextEngine.send.bind(nextEngine);
+    nextEngine.send = async entry => { if (!nextEngine.ledger.receipts.has(entry.id)) { nextDelivered.push(readDelivered(entry)); notifyDelivery(next.id); } return nextSend(entry); };
+    return { conversationId: next.id, artifactPath: nextPath, delivered: nextDelivered, key: nextKey, host: nextEngine };
+  })() : undefined;
+  const bind = () => bindStructuredDeliveryQueue([{ key, host: engine }, ...(successor ? [{ key: successor.key, host: successor.host }] : [])], {
     registry,
     client,
     recover: async () => (await recover()) ?? recovered(false),
@@ -225,7 +257,25 @@ export async function startComposerPayloadRuntime(directory: string): Promise<Co
     registry,
     journal,
     delivered,
+    waitForDelivery(conversationId, count) {
+      const current = () => conversationId === conversation.id ? delivered.length
+        : successor?.conversationId === conversationId ? successor.delivered.length : 0;
+      if (current() >= count) return Promise.resolve();
+      return new Promise<void>(resolve => {
+        const waiters = deliveryWaiters.get(conversationId) ?? new Set<() => void>();
+        const waiter = () => {
+          if (current() < count) return;
+          waiters.delete(waiter);
+          if (!waiters.size) deliveryWaiters.delete(conversationId);
+          resolve();
+        };
+        waiters.add(waiter);
+        deliveryWaiters.set(conversationId, waiters);
+      });
+    },
     queue,
+    successor,
+    async holdTurn(value) { busy = value; await bind(); },
     async handle(request) {
       const url = new URL(request.url);
       const next = new NextRequest(new URL(url.pathname + url.search, "http://localhost"), {

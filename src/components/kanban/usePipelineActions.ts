@@ -7,7 +7,9 @@ import { RECEIPT_MS } from "@/components/mobile/MobileReceipt";
 
 import type { ReceiptAction } from "./KanbanReceipts";
 import { stageNames } from "./PipelineSection";
-import { isStageChanged, type PipelinePorts } from "./pipelinePorts";
+import type { Pipeline } from "@/lib/pipelines/types";
+
+import { isStageChanged, predictedPauseResume, type PipelinePorts } from "./pipelinePorts";
 import { actionObserved, pipelineActionOptions, type PipelineActionKind } from "./stagesModel";
 
 /**
@@ -37,6 +39,11 @@ import { actionObserved, pipelineActionOptions, type PipelineActionKind } from "
  * pipeline and check the action first. A write with no answer may or may not
  * have run: it is reported as not confirmed, with a Check again that only
  * reads, never a resend.
+ *
+ * Pause and resume are drawn at once (audit B8): the intent carries the record
+ * the card drew, the port layers the predicted state over every surface before
+ * the request, and a refusal or a write with no answer takes it back. They take
+ * no busy lock; a second press while one is out sends nothing.
  */
 
 export interface PipelineActionIntent {
@@ -51,6 +58,8 @@ export interface PipelineActionIntent {
   expectedAttempt: number | null;
   /** One more round and Accept as is: the request's idempotency key, minted once per intent. */
   requestId?: string;
+  /** The record the card drew: pause and resume predict their result from it. */
+  pipeline?: Pipeline;
 }
 
 /** Skip and Close are the two acts the engine cannot take back. */
@@ -89,7 +98,10 @@ export function usePipelineActions(ports: PipelinePorts, show: Show, t: TFunctio
   send.current = (intent, recheck) => {
     const { pipelineId, title, action } = intent;
     if (inflight.current.has(pipelineId)) return;
-    busy(pipelineId, action);
+    /* A retry reads the record first and predicts from what it read. */
+    let predicted = intent.pipeline && !recheck ? predictedPauseResume(intent.pipeline, action) : null;
+    if (predicted) inflight.current.add(pipelineId);
+    else busy(pipelineId, action);
     const label = (stage: string | null) => t(`kanban.pipelineAct.label.${action}`, { stage: stage ?? "" });
     void (async () => {
       const stageName = intent.stageName;
@@ -110,6 +122,7 @@ export function usePipelineActions(ports: PipelinePorts, show: Show, t: TFunctio
           return;
         }
         revision = current.revision ?? null;
+        if (recheck && intent.pipeline) predicted = predictedPauseResume(current.pipeline, action);
         if (revisionBound && !revision) {
           busy(pipelineId, null);
           show(t("kanban.pipelineAct.unread", { action: label(stageName) }), { label: t("kanban.retry"), run: () => send.current(intent, true) }, { error: true });
@@ -122,7 +135,7 @@ export function usePipelineActions(ports: PipelinePorts, show: Show, t: TFunctio
           ? { action, addRounds: 1, expectedRevision: revision ?? "", clientRequestId: intent.requestId ?? mintRequestId() }
           : action === "accept-head"
             ? { action, expectedRevision: revision ?? "", clientRequestId: intent.requestId ?? mintRequestId() }
-            : { action });
+            : { action }, predicted ?? undefined);
       busy(pipelineId, null);
       if (result.ok) {
         /* For retry and skip the engine checked this stage and attempt before acting. */

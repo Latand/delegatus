@@ -6096,6 +6096,118 @@ browserTest("permission row: the headline truncates, the age stays, and Allow on
 }, 300_000);
 
 /*
+ * Optimistic UI, audit B3 (W5): the permission row leaves on the press and a
+ * refusal brings it back with its buttons and the reason in the row. The phone's
+ * Needs-you sheet at 390 and 430 and the desktop popover at 1440 and 768, in en
+ * and uk, light and dark, on the fixture's `?permission=refuse` scene, whose host
+ * holds the answer until the driver lets it refuse:
+ *
+ *   LLV_SWIPE_BROWSER_TEST=1 CHROME_BIN=google-chrome-stable \
+ *     bun test src/components/mobile/issue1671Evidence.browser.test.tsx -t "permission row refusal"
+ *
+ * Frames go to `LLV_PERMISSION_FRAMES` (default `.artifacts/permission-refusal`,
+ * not committed); readings to `evidence/optimistic-ui/permission-refusal.json`.
+ */
+browserTest("permission row refusal: the row leaves on the press, comes back with its buttons and the whole reason", async () => {
+  const frames = path.resolve(process.env.LLV_PERMISSION_FRAMES || ".artifacts/permission-refusal");
+  fs.mkdirSync(frames, { recursive: true });
+  const { base: fixtureBase, stop } = await serveFixture();
+  const browser = await launchChromium();
+  const readings: Record<string, unknown> = {};
+  const failures: string[] = [];
+  /* The alert's own text, measured from ranges beside the row's buttons. */
+  const readRefusal = (page: Page) => page.evaluate(() => {
+    const actions = document.querySelector<HTMLElement>("[data-permission-actions]");
+    const alert = actions?.querySelector<HTMLElement>("[role=alert]") ?? null;
+    const rects: DOMRect[] = [];
+    if (alert) {
+      const walker = document.createTreeWalker(alert, NodeFilter.SHOW_TEXT);
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        const range = document.createRange(); range.selectNodeContents(node);
+        rects.push(...[...range.getClientRects()].filter((r) => r.width > 0));
+      }
+    }
+    const style = alert ? getComputedStyle(alert) : null;
+    const holder = actions?.getBoundingClientRect() ?? null;
+    const buttons = actions ? [...actions.querySelectorAll<HTMLButtonElement>("button")].map((b) => ({ text: b.textContent?.trim() ?? "", disabled: b.disabled, ...(({ x, y, right, bottom }) => ({ x, y, right, bottom }))(b.getBoundingClientRect()) })) : [];
+    return {
+      width: innerWidth,
+      overflow: document.documentElement.scrollWidth - innerWidth,
+      text: alert?.textContent ?? null,
+      textOverflow: style?.textOverflow ?? null,
+      cut: alert ? alert.scrollWidth > alert.clientWidth + 0.5 : null,
+      lines: new Set(rects.map((r) => Math.round(r.top))).size,
+      left: rects.length ? Math.min(...rects.map((r) => r.left)) : null,
+      right: rects.length ? Math.max(...rects.map((r) => r.right)) : null,
+      holder: holder ? { x: holder.x, right: holder.right } : null,
+      buttons,
+    };
+  });
+  try {
+    for (const scheme of SCHEMES) for (const lang of ["en", "uk"] as const) {
+      const refusal = lang === "uk" ? "Хост відхилив відповідь: запит уже закрито." : "The host refused the answer: the request is already closed.";
+      const expected = translate(lang, "attention.permissionFailed", { error: refusal });
+      for (const surface of [{ name: "phone", width: 390, height: 844 }, { name: "phone", width: 430, height: 932 }, { name: "desktop", width: 1440, height: 900 }, { name: "desktop", width: 768, height: 900 }] as const) {
+        const key = `${surface.name}-${surface.width}-${lang}-${scheme}`;
+        const phone = surface.name === "phone";
+        const context = await browser.newContext({ viewport: { width: surface.width, height: surface.height }, hasTouch: phone, isMobile: phone, deviceScaleFactor: phone ? 3 : 2, colorScheme: scheme });
+        await context.addInitScript((language) => { localStorage.setItem("llv_lang", language); }, lang);
+        try {
+          const page = await context.newPage();
+          const pageErrors: string[] = [];
+          page.on("pageerror", (error) => pageErrors.push(error.message));
+          await page.goto(`${fixtureBase}/?permission=refuse#p=atlas`);
+          if (phone) {
+            await page.waitForSelector("[data-mobile2-open='attention']", { timeout: 20_000 });
+            await pause(page, 600);
+            await page.locator("[data-mobile2-open='attention']").click();
+          } else {
+            await page.waitForSelector("[data-attention-count]", { timeout: 20_000 });
+            await pause(page, 600);
+            await page.locator("[data-attention-count]").click();
+          }
+          await page.waitForSelector(PERMISSION_ROW, { timeout: 10_000 });
+          await pause(page, 400);
+          const allow = page.locator("[data-permission-allow]").first();
+          if (phone) await allow.tap(); else await allow.click();
+          await pause(page, 300);
+          const leftAtOnce = (await page.locator(PERMISSION_ROW).count()) === 0;
+          const sent = await page.evaluate(() => (window as unknown as { evidence: { permissionAnswers: unknown[] } }).evidence.permissionAnswers.length);
+          await page.screenshot({ path: path.join(frames, `${key}-answered.png`) });
+          await page.evaluate(() => (window as unknown as { evidence: { releasePermission: () => void } }).evidence.releasePermission());
+          const reason = await page.waitForSelector("[data-permission-actions] [role=alert]", { state: "attached", timeout: 10_000 }).catch(() => null);
+          await pause(page, 300);
+          await page.screenshot({ path: path.join(frames, `${key}-refused.png`) });
+          if (!reason) { failures.push(`${key}: the refusal never shows beside the returned row`); await page.close(); continue; }
+          const back = await readRefusal(page);
+          const own: string[] = [];
+          if (!leftAtOnce) own.push("the row stays while the answer is out");
+          if (sent !== 1) own.push(`${sent} answers sent`);
+          if (back.text !== expected) own.push(`the reason reads ${JSON.stringify(back.text)}`);
+          if (back.cut) own.push("the reason is cut by its box");
+          if (back.left === null || back.right === null || back.left < 0 || back.right > back.width) own.push(`the reason leaves the viewport: ${back.left}..${back.right} of ${back.width}`);
+          if (back.holder && back.left !== null && back.right !== null && (back.left < back.holder.x - 0.5 || back.right > back.holder.right + 0.5)) own.push("the reason leaves its row");
+          if (back.overflow > 0) own.push(`the page overflows by ${back.overflow}`);
+          if (back.buttons.length !== 2 || back.buttons.some((b) => b.disabled)) own.push(`the buttons are not back: ${JSON.stringify(back.buttons)}`);
+          if (pageErrors.length) own.push(`page errors: ${pageErrors.join(" | ")}`);
+          failures.push(...own.map((label) => `${key}: ${label}`));
+          readings[key] = { leftAtOnce, sent, reason: back.text, lines: back.lines, cut: back.cut, buttons: back.buttons.map((b) => b.text) };
+          await page.close();
+        } finally {
+          await context.close();
+        }
+      }
+    }
+  } finally {
+    await browser.close();
+    stop();
+  }
+  fs.mkdirSync("evidence/optimistic-ui", { recursive: true });
+  fs.writeFileSync("evidence/optimistic-ui/permission-refusal.json", `${JSON.stringify({ failures, readings }, null, 2)}\n`);
+  if (failures.length) throw new Error(failures.join("\n"));
+}, 600_000);
+
+/*
  * "Asks you" (docs/research/attention-classifier.md §7) on the phone at
  * 390 × 844, en and uk, on the fixture's `?asks=1` scene: a task whose agent
  * ended its turn asking the operator carries the «asks you» badge and the

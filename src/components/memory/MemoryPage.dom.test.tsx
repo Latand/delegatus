@@ -180,7 +180,9 @@ test("a completed toggle survives an older refresh and refreshes pause during a 
   await act(async () => { window.dispatchEvent(new Event("delegatus:provider-key-changed")); });
   expect(getCalls).toBe(2);
   await act(async () => { switchOf(host).click(); });
-  expect(switchOf(host).disabled).toBe(true);
+  /* Drawn at once and left usable (audit B19). */
+  expect(switchOf(host).getAttribute("aria-checked")).toBe("true");
+  expect(switchOf(host).disabled).toBe(false);
   await act(async () => { window.dispatchEvent(new Event("delegatus:provider-key-changed")); });
   expect(getCalls).toBe(2);
   await act(async () => { resolveWrite(Response.json(state(true))); await new Promise(resolve => setTimeout(resolve, 0)); });
@@ -222,4 +224,22 @@ for (const lang of ["en", "uk"] as const) for (const reason of ["noCandidates", 
   const host = await render();
   expect(host.querySelector("[data-memory-status] [data-memory-last-turn]")?.textContent?.trim()).toBe(translate(lang, `memory.last.${reason}`));
   expect(host.querySelectorAll("[data-memory-status]")).toHaveLength(1);
+});
+
+/* Audit B19: the switch flips at once; a refusal flips it back and the row says so. */
+test("a refused toggle flips the switch back and marks the row failed", async () => {
+  let refuse: () => void = () => {};
+  const puts: unknown[] = [];
+  serve((_url, init) => init?.method === "PUT"
+    ? (puts.push(JSON.parse(String(init.body))), new Promise<Response>((resolve) => { refuse = () => resolve(Response.json({ error: "busy" }, { status: 503 })); }))
+    : view("off"));
+  const host = await render();
+  expect(switchOf(host).getAttribute("aria-checked")).toBe("false");
+  await act(async () => { switchOf(host).click(); });
+  expect(switchOf(host).getAttribute("aria-checked")).toBe("true");
+  await act(async () => { switchOf(host).click(); });
+  expect(puts).toEqual([{ project: "fixture-project", enabled: true }]);
+  await act(async () => { refuse(); await new Promise((resolve) => setTimeout(resolve, 0)); });
+  expect(switchOf(host).getAttribute("aria-checked")).toBe("false");
+  expect(host.textContent).toContain(translate("en", "memory.save.failed"));
 });

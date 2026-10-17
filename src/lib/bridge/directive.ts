@@ -1,3 +1,4 @@
+import { seatMessageKeys } from "@/lib/orchestrator/seatDeliveryKeys";
 /**
  * The root → manager direction (§4).
  *
@@ -38,7 +39,7 @@ export function bridgeDirectiveId(rootTurnId: string, utterance: number): string
   if (!Number.isInteger(utterance) || utterance < 0) {
     throw new Error("a bridge directive id requires a non-negative integer utterance index");
   }
-  return `bridge_d_${rootTurnId}_${utterance}`;
+  return `${seatMessageKeys.bridge}${rootTurnId}_${utterance}`;
 }
 
 /** Render the correlation trailer. */

@@ -1,3 +1,4 @@
+import { registryRowsMatching } from "@/lib/agent/sqliteRegistryStore";
 import { conversationAgentRole } from "@/lib/agent/spawnAdmission";
 import { readOnlyConversationLookupFromSnapshot, type agentRegistry } from "@/lib/agent/registry";
 import { conversationProjectKey } from "@/lib/accounts/conversationProject";
@@ -13,7 +14,7 @@ export function curatorCallerOf(conversationId: string | null, snapshot: Snapsho
   if (!roleMemoryEnabled() || !conversationId) throw new RoleMemoryRefusal("CURATE_CALLER", "only the live curator conversation may curate rules");
   const id = readOnlyConversationLookupFromSnapshot(snapshot).canonicalConversationId(conversationId as `conversation_${string}`);
   let pass = passForConversation(id);
-  const receipt = Object.values(snapshot.receipts).find(r => r.conversationId === id && r.agentRole === "curator" && r.clientAttemptId?.startsWith("curate_") && !r.rejection && !["failed", "conflicted"].includes(r.state));
+  const receipt = registryRowsMatching(snapshot, "receipts", "conversationId", id).find(r => r.conversationId === id && r.agentRole === "curator" && r.clientAttemptId?.startsWith("curate_") && !r.rejection && !["failed", "conflicted"].includes(r.state));
   if (!receipt) throw new RoleMemoryRefusal("CURATE_CALLER", "curator has no admitted pass receipt");
   const conversationRole = conversationAgentRole(snapshot, id);
   if (conversationRole !== "curator" && (conversationRole !== null || receipt.agentRole !== "curator")) {

@@ -23,7 +23,7 @@ const matchMediaStub = (query: string) => ({
   dispatchEvent() { return false; },
 });
 (dom as unknown as { matchMedia: typeof matchMediaStub }).matchMedia = matchMediaStub;
-const json = (body: unknown) => Promise.resolve(new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } }));
+const json = (body: unknown, status = 200) => Promise.resolve(new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } }));
 Object.assign(globalThis, {
   window: dom,
   document: dom.document,
@@ -49,7 +49,12 @@ Object.assign(globalThis, {
       }
       return json({ ok: true, reportNameSuggestion: nameSuggestion, ...reportSettings });
     }
-    if (url.includes("/api/onboarding")) return json({ marker: null });
+    /* The route answers every kept write with the marker it wrote. */
+    if (url.includes("/api/onboarding")) {
+      if (init?.method !== "PUT") return json({ marker: null });
+      if (onboardingRefusal) return json({ error: onboardingRefusal }, 500);
+      return json({ marker: { schemaVersion: 1, completedAt: null, dismissedAt: null, reason: null, steps: {}, lastHealth: null, walk: null } });
+    }
     if (url.includes("/api/external-relay")) return json(relayBody);
     if (url.includes("/api/roles")) return json(rolesBody);
     if (url.includes("/api/transcribe/backend")) return json({ backend: "local", lockedByEnv: false, options: [] });
@@ -84,6 +89,8 @@ const { OnboardingDialog } = await import("./OnboardingDialog");
 /* The engine stores read `/api/accounts` once per process; each case that
    answers it differently starts them afresh. */
 const { resetEngineAccountsStoresForTests } = await import("@/hooks/useEngineAccounts");
+/* When set, the onboarding route refuses every write with this error. */
+let onboardingRefusal: string | null = null;
 function answerAccounts(body: unknown): void {
   accountsBody = body;
   resetEngineAccountsStoresForTests();
@@ -296,6 +303,39 @@ test("the relay service step is optional: it offers the engine that answers, and
   expect(host.querySelector("[data-onboarding-current]")?.getAttribute("data-onboarding-current")).toBe("engines");
   flushSync(() => root.unmount());
   host.remove();
+});
+
+/* Audit B29: a step mark shows at once; a write the server did not keep puts
+   the step back as it was and says so on its row, and Retry sends it again. */
+test("a step mark the server did not keep puts the step back and says so on its row, with Retry", async () => {
+  answerAccounts({ claude: { active: "a", accounts: [signedIn("a", "Main")] }, codex: { active: "", accounts: [] } });
+  const host = document.createElement("div");
+  document.body.appendChild(host);
+  const root = createRoot(host);
+  requests.length = 0;
+  onboardingRefusal = "the marker file is read-only";
+  try {
+    flushSync(() => root.render(<OnboardingDialog mode="guide" initialStep="relay" marker={null} onClose={() => {}} />));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    flushSync(() => host.querySelector<HTMLElement>("[data-onboarding-primary]")!.click());
+    /* The step is skipped at once: the guide moves on before the write answers. */
+    expect(host.querySelector("[data-onboarding-current]")?.getAttribute("data-onboarding-current")).toBe("engines");
+    await until(() => Boolean(host.querySelector("[data-onboarding-mark-failed=relay]")));
+    expect(host.querySelector("[data-onboarding-mark-failed=relay]")?.textContent).toContain("Couldn't save this step");
+    const writes = () => requests.filter((request) => request.url.includes("/api/onboarding") && request.method === "PUT").map((request) => request.body);
+    expect(writes()).toEqual([{ steps: { relay: "skipped" } }]);
+
+    onboardingRefusal = null;
+    flushSync(() => host.querySelector<HTMLElement>("[data-onboarding-mark-retry=relay]")!.click());
+    expect(host.querySelector("[data-onboarding-mark-failed=relay]")).toBeNull();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(writes()).toEqual([{ steps: { relay: "skipped" } }, { steps: { relay: "skipped" } }]);
+    expect(host.querySelector("[data-onboarding-mark-failed=relay]")).toBeNull();
+  } finally {
+    onboardingRefusal = null;
+    flushSync(() => root.unmount());
+    host.remove();
+  }
 });
 
 test("the relay service step left without pairing is done, never skipped, when a relay was paired before", async () => {
@@ -584,7 +624,8 @@ test("a connected bot lists the chats that accept posts, allows another in place
   await until(() => Boolean(host.querySelector("[data-onboarding-report-saved]")));
   expect(requests.find((request) => request.url.includes("/api/projects/settings") && request.method === "PUT")!.body).toEqual({ project: "widgets", reportTelegram: { chat: "team-reports", name: "Widgets" } });
   expect(host.querySelector("[data-onboarding-report-saved]")?.textContent).toBe("Reports go to the log and to team-reports.");
-  expect(requests.some((request) => request.url.includes("/api/onboarding") && JSON.stringify(request.body) === JSON.stringify({ steps: { telegram: "done" } }))).toBe(true);
+  /* The destination shows at once (audit B42); the step is marked once the server keeps it. */
+  await until(() => requests.some((request) => request.url.includes("/api/onboarding") && JSON.stringify(request.body) === JSON.stringify({ steps: { telegram: "done" } })));
   done();
 });
 

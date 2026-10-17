@@ -846,7 +846,7 @@ test("recipient authority indexes retained history once across distinct recipien
     fs.writeFileSync(seatsPath, history(10002), "utf8");
     expect(await orchestratorRecipientRefusalAsync(["conversation_historic_0", firstRecipient.id], resolveAlias)).toMatchObject({
       status: 409,
-      error: "orchestrator seat was rotated; send to conversation_successor",
+      error: expect.stringContaining("conversation_successor; send there."),
       successorConversationId: "conversation_successor",
     });
     expect(asyncReadSpy.mock.calls.filter(([filePath]) => filePath === seatsPath)).toHaveLength(2);

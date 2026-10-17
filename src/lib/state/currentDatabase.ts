@@ -1,3 +1,4 @@
+import { bindSqliteReadIdentity } from "@/lib/sqliteReadAttribution";
 import type { Database as BunDatabase } from "bun:sqlite";
 import fs from "node:fs";
 import path from "node:path";
@@ -119,5 +120,6 @@ export function openCurrentDatabase<T extends BunDatabase>(
       return Reflect.set(current.db, property, value, current.db);
     },
   });
+  bindSqliteReadIdentity(handle, () => current.db);
   return handle;
 }

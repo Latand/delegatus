@@ -7,7 +7,7 @@ export type RulePrivacyHint = StaticFindingClass | "email_address";
    project or machine starts with them. Everything here lives in Delegatus's
    own state and nowhere else. */
 
-/** Each scope's injected text stays within this many characters (code points). */
+/** Scope target in code points; unseen lessons can overflow until curation. */
 export const ROLE_MEMORY_BOUND = 10_000;
 export const CURATION_NEW_LESSONS = 10;
 export const CURATION_INTERVAL_MS = 6 * 60 * 60_000;
@@ -145,7 +145,8 @@ export interface RoleMemoryScopeRow {
   revision: number;
   /** Current revision counter namespace; succession starts a fresh joined namespace. */
   revisionScope?: string;
-  /** Active ids in order of leaving: never-curated, then curated low to high. */
+  /** Never-curated ids first, then curated low to high. Only curated ids can
+      leave for budget; the first segment awaits curation. */
   active: string[];
   history: ScopeHistoryEntry[];
   curatedAt?: string;
