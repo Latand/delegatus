@@ -7,6 +7,10 @@ const SANDBOX = fs.mkdtempSync(path.join(os.tmpdir(), "llv-telegram-runner-"));
 const OLD_STATE = process.env.LLV_STATE_DIR;
 process.env.LLV_STATE_DIR = path.join(SANDBOX, "state");
 
+const { admitReservedLaunch } = await import("@/lib/tasks/launchMembership");
+const { commitTaskMembership } = await import("@/lib/tasks/membership");
+const { loadTasks } = await import("@/lib/tasks/store");
+const { createTask } = await import("@/lib/tasks/commands");
 const { CONNECTOR_RETRY_WINDOW_MS, TelegramReportRunner, RUN_TIMEOUT_MS } = await import("./reportRunner");
 const { readTelegramReports, readReportText, reportInboxPath, reportSourcesPath, updateTelegramReports } = await import("./reportStore");
 const { DEFAULT_DAILY_REPORT_PROMPT, reportConversationTitle } = await import("./reportPrompt");
@@ -15,6 +19,13 @@ const { DEFAULT_DAILY_REPORT_PROMPT, reportConversationTitle } = await import(".
 const DAILY_REPORT_TAG = "#report_tag";
 
 import { mcpServersForScheduledReport } from "@/lib/agent/mcpAllowlist";
+import { taskShowsOnBoard } from "@/lib/tasks/boardVisibility";
+import { projectTaskWorkflows } from "@/components/tasks/taskWorkflowModel";
+import { buildTaskBands } from "@/components/scheme/taskBands";
+import type { SchemeLayout } from "@/components/scheme/layout";
+import { buildKanbanModel } from "@/components/kanban/kanbanModel";
+import type { FileEntry } from "@/lib/types";
+import { reportAttemptId, TELEGRAM_REPORT_PROJECT } from "./reportLineage";
 
 import type { ReportRunnerPorts } from "./reportRunner";
 import type { TelegramConnectorReadiness } from "./reportSources";
@@ -94,6 +105,9 @@ class FakePorts implements ReportRunnerPorts {
     status: 202,
     body: { conversationId: "conversation_report", launchId: "launch_report", ok: true },
   };
+  admitTask = false;
+  finishAdmittedTask = false;
+  finishedRuns: string[] = [];
   live = true;
   logs: string[] = [];
   now() { return this.clock; }
@@ -160,7 +174,24 @@ class FakePorts implements ReportRunnerPorts {
   async spawn(input: ReportSpawnInput) {
     this.spawns.push(input.body);
     this.grants.push(mcpServersForScheduledReport({ grantActive: input.grantActive() }));
+    if (this.admitTask) {
+      const clientAttemptId = String(input.body.clientAttemptId);
+      const conversationId = `conversation_${clientAttemptId}`;
+      admitReservedLaunch({ engine: "codex", cwd: String(input.body.cwd), explicitProject: String(input.body.project), clientAttemptId, taskIds: null },
+        { conversationId, launchId: `launch_${clientAttemptId}` }, reason => { throw new Error(reason); }, {
+          commit: membership => commitTaskMembership(membership, path.join(SANDBOX, "state", "tasks.json")),
+          pipelineContext: () => null,
+          projectForCwd: () => "fixture",
+        });
+      this.spawnResult = { status: 202, body: { conversationId, launchId: `launch_${clientAttemptId}`, ok: true } };
+    }
     return this.spawnResult;
+  }
+  async finishReportTask(runId: string, finishedAt: string) {
+    if (!this.finishAdmittedTask) return;
+    this.finishedRuns.push(runId);
+    const { finishTelegramReportTask } = await import("./reportTask");
+    await finishTelegramReportTask(runId, finishedAt);
   }
   async conversationLive() { return this.live; }
   log(code: string) { this.logs.push(code); }
@@ -806,6 +837,52 @@ test("the scheduled run fires once a day, and a Viewer restart catches up a miss
   expect(ports.spawns.length).toBe(2);
   expect(readTelegramReports().history.length).toBe(1);
   expect(afterRestart.payload().history[0].status).toBe("running");
+});
+
+test("a settled scheduled report retires its admitted placeholder and keeps its conversation", async () => {
+  const ports = new FakePorts();
+  ports.admitTask = true;
+  ports.finishAdmittedTask = true;
+  const tasksFile = path.join(SANDBOX, "state", "tasks.json");
+  const ordinary = createTask([], { project: TELEGRAM_REPORT_PROJECT, text: "Untitled task", placement: "unplaced" }, [], { now: () => new Date(NOW).toISOString(), id: () => "ordinary-task" });
+  if (!ordinary.ok) throw new Error(ordinary.error);
+  const { saveTasks } = await import("@/lib/tasks/store");
+  saveTasks([ordinary.task], tasksFile);
+  enableReports();
+  const runner = new TelegramReportRunner(ports);
+
+  await runner.tick();
+  const runId = activeRunId();
+  const attempt = reportAttemptId(runId);
+  const admitted = loadTasks(tasksFile);
+  expect(admitted).toHaveLength(2);
+  const placeholder = admitted.find(row => row.origin?.kind === "launch" && row.origin.key === attempt);
+  expect(placeholder).toMatchObject({ status: "assigned", project: TELEGRAM_REPORT_PROJECT, text: ordinary.task.text });
+  expect(taskShowsOnBoard(placeholder!, false, { now: NOW })).toBe(true);
+
+  agentWrites(`${DAILY_REPORT_TAG}\nQUIET\n`);
+  ports.clock = NOW + 5 * 60_000;
+  await runner.tick();
+
+  expect(readTelegramReports().history[0]).toMatchObject({ status: "quiet", conversationId: `conversation_${attempt}` });
+  expect(ports.finishedRuns).toEqual([runId]);
+  expect(ports.logs).not.toContain("task_settlement_failed");
+  const settledTasks = loadTasks(tasksFile);
+  const settled = settledTasks.find(row => row.origin?.kind === "launch" && row.origin.key === attempt);
+  expect(settled).toMatchObject({ status: "done", board: "hidden", project: TELEGRAM_REPORT_PROJECT });
+  expect(settled!.assignments.map(row => row.conversationId)).toContain(`conversation_${attempt}`);
+  expect(taskShowsOnBoard(settled!, false, { now: ports.clock })).toBe(false);
+  expect(settledTasks.find(row => row.id === ordinary.task.id)).toMatchObject({ status: ordinary.task.status, text: ordinary.task.text });
+
+  const file = { path: "report.jsonl", conversationId: `conversation_${attempt}`, project: TELEGRAM_REPORT_PROJECT, title: "Daily report", root: "codex-sessions", kind: "session", fmt: "codex", engine: "codex", mtime: ports.clock / 1000, size: 100, activity: "live", proc: null, pid: null, parent: null, model: null, pendingQuestion: null, waitingInput: null, name: "report" } as FileEntry;
+  const node = { file, x: 0, y: 0, w: 600, h: 680, isRoot: true, tasks: [], under: [], lineageOrderKey: "1" };
+  const layout = { nodes: [node], groups: [], stacks: [], decks: [], drafts: [], slots: [], regionTasks: [], edges: [], links: [], loops: [], byPath: new Map([[file.path, node]]), width: 600, height: 680 } as unknown as SchemeLayout;
+  const projection = projectTaskWorkflows(settledTasks, [], [], [file]);
+  const bands = buildTaskBands(layout, { tasks: settledTasks, projection, untitled: "Untitled", deferDoneVisibility: true });
+  const board = buildKanbanModel({ bands, tasks: settledTasks, pipelines: [], projection, files: [file], now: ports.clock / 1000 });
+  expect(Object.values(board.columns).flatMap(column => column.cards).some(card => card.task?.id === settled!.id)).toBe(false);
+  const hidden = board.hiddenGroups.find(card => card.task?.id === settled!.id);
+  expect(hidden?.members[0]?.file.conversationId).toBe(`conversation_${attempt}`);
 });
 
 test("a rejected launch is a visible failed row, not silence", async () => {

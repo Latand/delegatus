@@ -24,6 +24,7 @@ import {
   slotInstant,
 } from "./reportSchedule";
 import { reportAttemptId, TELEGRAM_REPORT_PROJECT } from "./reportLineage";
+import { finishTelegramReportTask } from "./reportTask";
 import {
   awaitTelegramConnectorReady,
   connectorReadPort,
@@ -101,6 +102,7 @@ export type ReportRunnerLogCode =
   | "sources_failed"
   | "launch_failed"
   | "launch_rejected"
+  | "task_settlement_failed"
   | "run_failed";
 
 export interface ReportRunnerPorts {
@@ -130,6 +132,8 @@ export interface ReportRunnerPorts {
   reportRunConversation(runId: string): Promise<string | null>;
   /** Whether the launched conversation is still able to produce a report. */
   conversationLive(conversationId: string): Promise<boolean>;
+  /** Close the placeholder admitted for a report after its result settles. */
+  finishReportTask(runId: string, finishedAt: string): Promise<void>;
   log(code: ReportRunnerLogCode): void;
 }
 
@@ -187,6 +191,7 @@ export const productionReportRunnerPorts: ReportRunnerPorts = {
   spawn: launchReportConversation,
   reportRunConversation,
   conversationLive,
+  finishReportTask: finishTelegramReportTask,
   log: (code) => console.error(`[telegram report] ${code}`),
 };
 
@@ -398,7 +403,7 @@ export class TelegramReportRunner {
       await this.executeLocked(runId);
     } catch {
       this.ports.log("run_failed");
-      this.settle(runId, "failed", "launch_failed", false);
+      await this.settle(runId, "failed", "launch_failed", false);
     } finally {
       this.planning.delete(runId);
     }
@@ -452,7 +457,7 @@ export class TelegramReportRunner {
     const recorded = await this.verifiedIdentity();
     if (!recorded) {
       this.ports.log("account_check_failed");
-      this.settle(runId, "failed", "account_check_failed", false);
+      await this.settle(runId, "failed", "account_check_failed", false);
       return;
     }
     /* Every read from here on is bound to the generation that recorded the id
@@ -475,7 +480,7 @@ export class TelegramReportRunner {
       const readiness = await this.ports.connectorReady(recorded.credentialRef);
       if (!readiness.ready) {
         this.ports.log("connector_unavailable");
-        this.settle(runId, "failed", "connector_unavailable", false, { requeue: readiness.reason === "unavailable" });
+        await this.settle(runId, "failed", "connector_unavailable", false, { requeue: readiness.reason === "unavailable" });
         return;
       }
       /* Readiness can start the feed after beginRun's provisional end. Finalize
@@ -501,12 +506,12 @@ export class TelegramReportRunner {
         live = await port.getMe();
       } catch {
         this.ports.log("account_check_failed");
-        this.settle(runId, "failed", "account_check_failed", false);
+        await this.settle(runId, "failed", "account_check_failed", false);
         return;
       }
       if (!sameTelegramAccount(live, recorded)) {
         this.ports.log("account_mismatch");
-        this.settle(runId, "account-mismatch", null, false);
+        await this.settle(runId, "account-mismatch", null, false);
         return;
       }
 
@@ -530,7 +535,7 @@ export class TelegramReportRunner {
         sourcesPath = writeReportSources(runId, plan);
       } catch {
         this.ports.log("sources_failed");
-        this.settle(runId, "failed", "sources_failed", false);
+        await this.settle(runId, "failed", "sources_failed", false);
         return;
       }
     } finally {
@@ -554,7 +559,7 @@ export class TelegramReportRunner {
     if (this.ports.connection().credentialRef !== recorded.credentialRef) {
       this.ports.log("account_mismatch");
       deleteRunScratch(runId);
-      this.settle(runId, "account-mismatch", null, false);
+      await this.settle(runId, "account-mismatch", null, false);
       return;
     }
     /* The operator's own brief, with the Viewer's non-negotiable preamble in
@@ -600,7 +605,7 @@ export class TelegramReportRunner {
       });
     } catch {
       this.ports.log("launch_failed");
-      this.settle(runId, "failed", "launch_failed", false);
+      await this.settle(runId, "failed", "launch_failed", false);
       return;
     }
     if (active.trigger === "scheduled" && spawned.body.code === "AUTO_UPDATE_DRAIN") return;
@@ -608,7 +613,7 @@ export class TelegramReportRunner {
     const admitted = spawned.status >= 200 && spawned.status < 300 && spawned.body.ok !== false && conversationId !== null;
     if (!admitted) {
       this.ports.log("launch_rejected");
-      this.settle(runId, "failed", "launch_failed", false);
+      await this.settle(runId, "failed", "launch_failed", false);
       return;
     }
     updateTelegramReports((state) => {
@@ -661,11 +666,11 @@ export class TelegramReportRunner {
     const outcome = classifyReportOutput(ingested);
     if (outcome.kind === "ok") {
       saveReportText(active.runId, outcome.report);
-      this.settle(active.runId, "ok", null, true);
+      await this.settle(active.runId, "ok", null, true);
       return;
     }
     if (outcome.kind === "quiet") {
-      this.settle(active.runId, "quiet", null, false);
+      await this.settle(active.runId, "quiet", null, false);
       return;
     }
     if (outcome.kind === "invalid" && ingested !== null) {
@@ -673,7 +678,7 @@ export class TelegramReportRunner {
          format, items numbered [1] [2] [4]. Filing it as the day's report
          would advance the window over a day nobody has actually read, so it
          fails and the window stays owed. */
-      this.settle(active.runId, "failed", "invalid_report", false);
+      await this.settle(active.runId, "failed", "invalid_report", false);
       return;
     }
     const startedAt = Date.parse(active.startedAt);
@@ -684,8 +689,8 @@ export class TelegramReportRunner {
          sources, or the process that was doing so is gone and the run is an
          orphan no restart would otherwise clear. */
       if (active.admissionDeferred && active.trigger === "scheduled") return;
-      if (!this.planning.has(active.runId)) this.settle(active.runId, "failed", "launch_failed", false);
-      else if (expired) this.settle(active.runId, "failed", "timed_out", false);
+      if (!this.planning.has(active.runId)) await this.settle(active.runId, "failed", "launch_failed", false);
+      else if (expired) await this.settle(active.runId, "failed", "timed_out", false);
       return;
     }
     const alive = await this.ports.conversationLive(conversationId);
@@ -693,59 +698,67 @@ export class TelegramReportRunner {
       /* A run that ended — including a connector crash that took the turn down
          with it — never silently succeeds. It becomes a failed row the
          operator can retry, and the window it did not cover stays owed. */
-      this.settle(active.runId, "failed", "run_ended_without_report", false);
+      await this.settle(active.runId, "failed", "run_ended_without_report", false);
       return;
     }
-    if (expired) this.settle(active.runId, "failed", "timed_out", false);
+    if (expired) await this.settle(active.runId, "failed", "timed_out", false);
   }
 
-  private settle(
+  private async settle(
     runId: string,
     status: TelegramReportRow["status"],
     errorCode: TelegramReportErrorCode | null,
     hasReport: boolean,
     options: { requeue?: boolean } = {},
-  ): void {
+  ): Promise<void> {
+    const active = readTelegramReports().active;
+    if (!active || active.runId !== runId) return;
+    try {
+      await this.ports.finishReportTask(runId, new Date(this.ports.now()).toISOString());
+    } catch {
+      this.ports.log("task_settlement_failed");
+      return;
+    }
     updateTelegramReports((state) => {
-      const active = state.active;
-      if (!active || active.runId !== runId) return;
+      const current = state.active;
+      if (!current || current.runId !== runId) return;
       state.active = null;
       /* The one bounded re-queue (#1133), armed only by a run that failed
          purely on the connector being absent and only when that run was not
          itself the re-queue. */
-      state.retry = options.requeue && !active.retry
-        ? { runId: active.runId, trigger: active.trigger, armedAt: new Date(this.ports.now()).toISOString() }
+      state.retry = options.requeue && !current.retry
+        ? { runId: current.runId, trigger: current.trigger, armedAt: new Date(this.ports.now()).toISOString() }
         : null;
       state.history = [{
-        id: active.runId,
-        trigger: active.trigger,
-        startedAt: active.startedAt,
+        id: current.runId,
+        trigger: current.trigger,
+        startedAt: current.startedAt,
         finishedAt: new Date(this.ports.now()).toISOString(),
-        windowStart: active.windowStart,
-        windowEnd: active.windowEnd,
+        windowStart: current.windowStart,
+        windowEnd: current.windowEnd,
         status,
         errorCode,
-        conversationId: active.conversationId,
+        conversationId: current.conversationId,
         hasReport,
-        promptVersion: active.promptVersion,
+        promptVersion: current.promptVersion,
       }, ...state.history];
       /* Failures pin both bounds; a retry must not accumulate more work. */
       if (status !== "ok" && status !== "quiet") {
         const owed = state.cursor.unreportedSinceAt;
-        if (!owed || Date.parse(active.windowStart) < Date.parse(owed)) {
-          state.cursor.unreportedSinceAt = active.windowStart;
-          state.cursor.unreportedUntilAt = active.windowEnd;
+        if (!owed || Date.parse(current.windowStart) < Date.parse(owed)) {
+          state.cursor.unreportedSinceAt = current.windowStart;
+          state.cursor.unreportedUntilAt = current.windowEnd;
         }
-        state.cursor.unreportedUntilAt ??= active.windowEnd;
+        state.cursor.unreportedUntilAt ??= current.windowEnd;
         return;
       }
-      state.cursor.lastSuccessfulWindowEndAt = active.windowEnd;
+      state.cursor.lastSuccessfulWindowEndAt = current.windowEnd;
       state.cursor.unreportedSinceAt = null;
       state.cursor.unreportedUntilAt = null;
       /* A retry covering an older window leaves today's slot owed. A run
          whose window reached today's slot satisfies it whoever asked for it. */
       const today = localDayKey(this.ports.now(), REPORT_TIME_ZONE);
-      if (Date.parse(active.windowEnd) >= slotInstant(today, state.settings.time, REPORT_TIME_ZONE)) {
+      if (Date.parse(current.windowEnd) >= slotInstant(today, state.settings.time, REPORT_TIME_ZONE)) {
         state.cursor.lastScheduledDay = today;
       } else if (state.cursor.lastScheduledDay === today) {
         state.cursor.lastScheduledDay = null;
