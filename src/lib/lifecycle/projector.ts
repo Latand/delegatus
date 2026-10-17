@@ -167,10 +167,13 @@ export function projectPipelineEvents(pipelines: Pipeline[]): LifecycleEventInpu
           });
         }
         const rewrite = attempt.publicationTextRepair;
-        if (rewrite && rewrite.state !== "answered") {
+        if (rewrite) {
+          // Seat wakes omit routine progress. Retain the refusal after a fast
+          // answer, with the same key, so projection cannot miss the request.
+          const phase = rewrite.state === "exhausted" ? "exhausted" : "requested";
           events.push({ ...lineage,
-            key: attemptKey(pipeline, run.stageId, attempt, `summary-rewrite:${rewrite.rounds}:${rewrite.state}:${createHash("sha256").update(rewrite.detail).digest("hex").slice(0, 16)}`),
-            type: rewrite.state === "exhausted" ? "stage_blocked" : "stage_waiting",
+            key: attemptKey(pipeline, run.stageId, attempt, `summary-rewrite:${rewrite.rounds}:${phase}:${createHash("sha256").update(rewrite.detail).digest("hex").slice(0, 16)}`),
+            type: "stage_blocked",
             at: rewrite.requestedAt,
             summary: rewrite.detail,
           });

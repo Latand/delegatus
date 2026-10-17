@@ -284,7 +284,18 @@ test("PR summary rewrite preserves attempt, accepted SHA, verdict and provenance
     expect(initial.runs[0]!.attempts[0]!.error).toContain("body [redacted]");
     const { projectPipelineEvents } = await import("@/lib/lifecycle/projector");
     const events = projectPipelineEvents([initial]);
-    expect(events.find(event => event.type === "stage_waiting")?.summary).toContain("absolute-path");
+    const refusal = events.find(event => event.key.includes("summary-rewrite:"))!;
+    const { isTerminalHighSignalEvent } = await import("@/lib/lifecycle/vocabulary");
+    expect(refusal.summary).toContain("absolute-path");
+    expect(isTerminalHighSignalEvent(refusal.type)).toBe(true); // The seat's actual wake filter.
+    const answered = structuredClone(initial);
+    answered.runs[0]!.attempts[0]!.publicationTextRepair!.state = "answered";
+    expect(projectPipelineEvents([answered]).find(event => event.key === refusal.key)?.summary).toBe(refusal.summary);
+    const exhausted = structuredClone(initial);
+    exhausted.runs[0]!.attempts[0]!.publicationTextRepair!.state = "exhausted";
+    const exhaustedRefusal = projectPipelineEvents([exhausted]).find(event => event.key.includes("summary-rewrite:"))!;
+    expect(exhaustedRefusal.key).not.toBe(refusal.key);
+    expect(isTerminalHighSignalEvent(exhaustedRefusal.type)).toBe(true);
     expect(JSON.stringify(events)).not.toContain(unsafeSummary);
     expect(f.sends).toHaveLength(1);
     expect(f.sends[0]!.text).toContain("absolute-path");
