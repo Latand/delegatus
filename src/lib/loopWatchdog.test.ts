@@ -41,18 +41,23 @@ const setup = `
     if (performance.now() > readyDeadline) throw Error("watchdog did not start");
     watchdog.heartbeat(); await delay(20);
   }
+  const rssDeadline = performance.now() + 10000;
+  while (process.platform === "linux" && !((watchdog.snapshot().samples.at(-1)?.rssBytes ?? -1) > 0)) {
+    if (performance.now() > rssDeadline) throw Error("RSS sampler did not start");
+    watchdog.heartbeat(); await delay(20);
+  }
 `;
 
 test("trigger storage is numeric, fixed, and unpublished rows are rejected", () => {
   const cells = new BigInt64Array(new SharedArrayBuffer(loopWatchdogLayout.cells * 8));
-  expect(cells.byteLength).toBe(43_272);
+  expect(cells.byteLength).toBe(52_904);
   expect(readLoopStall(cells)).toBeNull();
   const at = loopWatchdogLayout.trigger;
-  [0, 1_500_000, 100_000, 12345, 7, 1_400_000].forEach((value, offset) => Atomics.store(cells, at + offset, BigInt(value)));
+  [0, 1_500_000, 100_000, 12345, 7, 1_400_000, 100, 200, 12000, 12300].forEach((value, offset) => Atomics.store(cells, at + offset, BigInt(value)));
   expect(readLoopStall(cells)).toBeNull();
   Atomics.store(cells, at, BigInt(1));
   expect(readLoopStall(cells)).toEqual({ sequence: 1, monotonicUs: 1_500_000, heartbeatUs: 100_000,
-    utcMs: 12345, site: 7, ageMs: 1400 });
+    utcMs: 12345, site: 7, ageMs: 1400, rssBeforeBytes: 100, rssBytes: 200, rssBeforeUtcMs: 12000, rssUtcMs: 12300 });
 });
 
 test("independent worker records a stale heartbeat before recovery, once per stall, across fresh processes", async () => {
@@ -85,6 +90,67 @@ test("independent worker records a stale heartbeat before recovery, once per sta
   }
 }, 45_000);
 
+test.skipIf(process.platform !== "linux")("worker observes real RSS growth while a labelled main-thread phase is blocked", async () => {
+  const report = await runProbe(setup + `
+    watchdog.heartbeat(); watchdog.site(7);
+    const before = watchdog.snapshot().samples.at(-1);
+    const began = Date.now();
+    const retained = [];
+    const until = performance.now() + 2200;
+    // Touch every page in two allocations during the stalled interval.
+    retained.push(Buffer.alloc(64 * 1024 * 1024, 1));
+    while (performance.now() < until) {
+      if (performance.now() > until - 500 && retained.length === 1) retained.push(Buffer.alloc(64 * 1024 * 1024, 2));
+    }
+    const recovered = Date.now();
+    const snapshot = watchdog.snapshot();
+    await watchdog.stop();
+    console.log(JSON.stringify({ began, recovered, before, stall: snapshot.stall, samples: snapshot.samples,
+      sentinel: retained[1][0] }));
+  `);
+  expect(report.sentinel).toBe(2);
+  expect(report.stall.site).toBe(7);
+  expect(report.stall.rssBeforeBytes).toBeGreaterThan(0);
+  expect(report.stall.rssBeforeUtcMs).toBeLessThanOrEqual(report.began);
+  const interior = report.samples.filter((row: { rssUtcMs: number }) => row.rssUtcMs > report.began && row.rssUtcMs < report.recovered);
+  expect(interior.length).toBeGreaterThan(1);
+  expect(Math.max(...interior.map((row: { rssBytes: number }) => row.rssBytes)) - report.before.rssBytes).toBeGreaterThan(96 * 1024 * 1024);
+}, 30_000);
+
+test.skipIf(process.platform !== "linux")("production monitor serializes the stall-time phase and RSS while heap coverage stays explicit", async () => {
+  const monitorUrl = new URL("viewerLoopMonitor.ts", moduleUrl).href;
+  const spansUrl = new URL("performanceSpans.ts", moduleUrl).href;
+  const report = await runProbe(`
+    const { createViewerLoopMonitor } = await import(${JSON.stringify(monitorUrl)});
+    const { createPerformanceSpans } = await import(${JSON.stringify(spansUrl)});
+    const spans = createPerformanceSpans(); const lines = [];
+    const monitor = createViewerLoopMonitor(line => lines.push(line), () => performance.now(), spans);
+    monitor.start();
+    await Bun.sleep(1200);
+    const began = Date.now();
+    const retained = [];
+    monitor.run("http.render", () => spans.sync("http.render", () => {
+      retained.push(Buffer.alloc(64 * 1024 * 1024, 3));
+      const end = performance.now() + 1800; while (performance.now() < end) {}
+    }));
+    const recovered = Date.now();
+    await Bun.sleep(400); monitor.stop();
+    const row = lines.filter(line => line.startsWith("[viewer loop-gap] ")).map(line => JSON.parse(line.slice(18)))
+      .find(row => row.gapMs > 1500);
+    console.log(JSON.stringify({ row, began, recovered, sentinel: retained[0][0] }));
+  `);
+  expect(report.sentinel).toBe(3);
+  expect(report.row.scheduler.stall.site).toBe("http.render");
+  expect(report.row.scheduler.stall.utcMs).toBeGreaterThan(report.began);
+  expect(report.row.scheduler.stall.utcMs).toBeLessThan(report.recovered);
+  expect(report.row.scheduler.rss.source).toBe("proc-status-worker");
+  expect(report.row.scheduler.rss.deltaBytes).toBeGreaterThan(48 * 1024 * 1024);
+  expect(report.row.scheduler.rss.sampleToUtcMs).toBeLessThan(report.recovered);
+  expect(report.row.heap).toMatchObject({ source: "unavailable", deltaBytes: null, unavailable: "nonblocking-heap-sampling-unavailable" });
+  expect(report.row.operations).toContainEqual(expect.objectContaining({ name: "http.render", completed: true }));
+  expect(report.row.attribution.slices).toContainEqual(expect.objectContaining({ site: "http.render", kind: "sync" }));
+}, 30_000);
+
 test("actual producer wraps at 600 samples and a healthy heartbeat never triggers", async () => {
   const report = await runProbe(setup + `
     const heartbeat = setInterval(() => watchdog.heartbeat(), 10);
@@ -98,6 +164,7 @@ test("actual producer wraps at 600 samples and a healthy heartbeat never trigger
     clearInterval(heartbeat); await watchdog.stop();
     console.log(JSON.stringify({ count: snapshot.samples.length, stall: snapshot.stall,
       first: snapshot.samples[0].sequence, last: snapshot.samples.at(-1).sequence,
+      rssReads: new Set(snapshot.samples.map(row => row.rssUtcMs).filter(at => at > 0)).size,
       ordered: snapshot.samples.every((row, i, rows) => !i || row.sequence > rows[i - 1].sequence) }));
   `, 100_000);
   expect(report.count).toBeLessThanOrEqual(600);
@@ -105,4 +172,8 @@ test("actual producer wraps at 600 samples and a healthy heartbeat never trigger
   expect(report.last - report.first).toBeLessThanOrEqual(599);
   expect(report.ordered).toBe(true);
   expect(report.stall).toBeNull();
+  if (process.platform === "linux") {
+    expect(report.rssReads).toBeGreaterThan(1);
+    expect(report.rssReads).toBeLessThanOrEqual(61);
+  }
 }, 110_000);

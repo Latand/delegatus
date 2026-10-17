@@ -6,6 +6,7 @@ import { createLoopHeapSignals } from "./loopHeapSignals";
 
 export type ViewerOperation = "memory.engine-start" | "memory.curation-status" | "runtime.startup-row" | "controller.account-migration" | "orchestrator.deputy" | "voice.orchestrator-read" | "telegram.review-polls" | "accounts.migration-target" | "pipelines.startup-admission" | "pipelines.mutation" | "pipelines.controller-mutation" | "runtime.delivery.deputy-authority"
   | "transcript.index" | "memory.discovery" | "memory.refresh"
+  | "http.render"
   | "registry.prepare" | "runtime.startup" | "runtime.spawn-recovery" | "agent.deferred-spawn" | "state.rollback-checkpoint"
   | "pipelines.controller-read" | "pipelines.controller-decode" | "pipelines.controller-materialize"
   | "pipelines.controller-checkpoint" | "pipelines.controller-select" | "pipelines.delivery-liveness"
@@ -81,6 +82,8 @@ export function createViewerLoopMonitor(log?: (line: string) => void, now = () =
       const scheduler = watchdog?.snapshot();
       const window = scheduler?.samples.filter(row => row.utcMs >= Date.now() - (at - last) - 200) ?? [];
       const first = window[0], final = window.at(-1);
+      const rss = window.filter(row => row.rssBytes >= 0 && row.rssUtcMs >= 0);
+      const rssFirst = rss[0], rssFinal = rss.at(-1);
       const revision = process.env.LLV_HOT_STATE_RELEASE_REVISION;
       writeLog(`[viewer loop-gap] ${JSON.stringify({ gapMs: Math.round(gapMs), operations, ...memory,
         role: process.env.LLV_STATE_OWNER === "runtime-host" ? "runtime-host" : "viewer",
@@ -94,6 +97,11 @@ export function createViewerLoopMonitor(log?: (line: string) => void, now = () =
             overlapMs: Math.max(0, Math.min(row.end, at) - Math.max(row.start, last)) })),
           coverage: "partial", unresolved: "unknown-runtime-or-native" },
         scheduler: { available: scheduler?.available ?? false, samples: window.length,
+          rss: { source: rssFirst ? "proc-status-worker" : "unavailable",
+            beforeBytes: rssFirst?.rssBytes ?? null, afterBytes: rssFinal?.rssBytes ?? null,
+            deltaBytes: rssFirst && rssFinal ? rssFinal.rssBytes - rssFirst.rssBytes : null,
+            peakBytes: rss.length ? Math.max(...rss.map(row => row.rssBytes)) : null,
+            sampleFromUtcMs: rssFirst?.rssUtcMs ?? null, sampleToUtcMs: rssFinal?.rssUtcMs ?? null },
           // The worker records this while the main loop is still stale. Its
           // timestamp is not the recovery callback's timestamp. Sequence can
           // repeat across reports until a later stall replaces this record.

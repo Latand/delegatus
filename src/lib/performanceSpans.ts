@@ -19,6 +19,7 @@ export const performanceSites = [
   "registry.writer-snapshot",
   "scanner.ipc-frame", "scanner.ipc-decode", "scanner.publication", "scanner.cache-encode", "scanner.cache-persist",
   "transcript.feed", "transcript.index", "memory.discovery", "memory.refresh",
+  "http.render",
 ] as const;
 export type PerformanceSite = typeof performanceSites[number];
 type Slice = { sequence: number; span: number; parent: number; site: number; kind: "sync" | "await" | "event";

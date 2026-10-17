@@ -1,6 +1,7 @@
 import { checkpointHotStateRollbackMirrorsForDemotion } from "./state/checkpointRollbackMirrors";
 export { checkpointHotStateRollbackMirrorsForDemotion } from "./state/checkpointRollbackMirrors";
 import { viewerLoopMonitor } from "@/lib/viewerLoopMonitor";
+import { installServingNextRenderMonitor } from "@/lib/nextRenderMonitor";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -896,6 +897,7 @@ export async function installSpawnCapabilityResolverAtStartup(): Promise<void> {
 
 export async function registerViewerRuntime(): Promise<void> {
   viewerLoopMonitor.start();
+  await installServingNextRenderMonitor();
   discardUnsupportedApiCredentials();
 
   await installSpawnCapabilityResolverAtStartup();
