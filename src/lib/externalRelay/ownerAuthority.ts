@@ -12,6 +12,11 @@ export function liveOwnerRelayConversation(conversationId: string): boolean {
   return liveOwnerRelayRun(conversationId) !== null;
 }
 
+export function liveOwnerRelayRequest(conversationId: string) {
+  const run = liveOwnerRelayRun(conversationId);
+  return run ? { requestId: run.requestId, relayId: run.relayId, targetId: run.targetId } : null;
+}
+
 function liveOwnerRelayRun(conversationId: string): RunRecord | null {
   try {
     const ledger = JSON.parse(fs.readFileSync(externalRelayFile("runs"), "utf8")) as RunLedger;

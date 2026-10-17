@@ -5,6 +5,8 @@ import { readRelaySwitches } from "./switches";
 import type { PairedRelay } from "./store";
 import type { RelayToolCallRecord } from "./answers";
 
+export const RELAY_TOOL_ROUNDS = 8;
+
 export function mayQuote(audience: string | undefined, requester: ExternalRelayRequester | null | undefined): boolean {
   return audience === undefined || (audience === "admin" && requester?.is_admin === true) ||
     (audience === "owner" && requester?.is_owner === true);
