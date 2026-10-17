@@ -142,6 +142,38 @@ test("B: standard connection URLs and PGP private key armor are ignored from the
   expect(fs.readFileSync(path.join(dir, "settings.toml"), "utf8")).toContain(password);
 });
 
+test("P1: common INI, YAML and htpasswd credentials stay excluded from the initial and later index", async () => {
+  const dir = folder();
+  const valueOne = "fixture-value-" + "a".repeat(36);
+  const valueTwo = "fixture-value-" + "b".repeat(36);
+  const awsField = ["aws", "secret", "access", "key"].join("_");
+  const passField = ["pa", "ss"].join("");
+  fs.writeFileSync(path.join(dir, "storage.ini"), `${awsField} = ${valueOne}\n`);
+  fs.writeFileSync(path.join(dir, "database.yml"), `database:\n  ${passField}: ${valueTwo}\n`);
+  fs.writeFileSync(path.join(dir, ".htpasswd"), "fixture-user:fixture-hash\n");
+
+  const result = await admit(dir);
+  expect(result.ok).toBe(true);
+  const committed = git(dir, "ls-tree", "-r", "--name-only", "HEAD");
+  expect(committed).toContain("readme.txt");
+  expect(committed).not.toMatch(/storage\.ini|database\.yml|\.htpasswd/);
+  expect(git(dir, "check-ignore", "storage.ini")).toBe("storage.ini");
+  expect(git(dir, "check-ignore", "database.yml")).toBe("database.yml");
+  expect(git(dir, "check-ignore", ".htpasswd")).toBe(".htpasswd");
+  const outward = JSON.stringify({ result, reports: readBridgeReportLog().reports });
+  expect(outward).toContain("storage.ini");
+  expect(outward).toContain("database.yml");
+  expect(outward).toContain(".htpasswd");
+  expect(outward).not.toContain(valueOne);
+  expect(outward).not.toContain(valueTwo);
+  expect(outward).not.toContain("fixture-user:fixture-hash");
+  expect(git(dir, "show", "HEAD:.gitignore")).not.toContain(valueOne);
+  expect(git(dir, "show", "HEAD:.gitignore")).not.toContain(valueTwo);
+
+  git(dir, "add", "--all");
+  expect(git(dir, "diff", "--cached", "--name-only")).toBe("");
+});
+
 test.each(["initializer", "board", "creation"])("B: inherited Git discovery overrides cannot hide an enclosing repository: %s", async surface => {
   const parent = folder();
   git(parent, "init", "-b", "main", "--template=");
@@ -389,7 +421,8 @@ test("C: fresh succession and receipt replay yield at the contended write bounda
       let ticks = 0;
       const timer = setInterval(() => ticks++, 5);
       try {
-        await Bun.sleep(35);
+        const heartbeatDeadline = performance.now() + 2_000;
+        while (ticks < 3 && performance.now() < heartbeatDeadline) await Bun.sleep(2);
         expect(ticks).toBeGreaterThanOrEqual(3);
         expect(fs.existsSync(release)).toBe(false);
       } finally { clearInterval(timer); }
@@ -401,9 +434,11 @@ test("C: fresh succession and receipt replay yield at the contended write bounda
       // must stall its own event loop while the peer holds the database lock.
       const controlReady = path.join(dir, "sync-ready");
       const controlGo = path.join(dir, "sync-go");
+      const controlBlocked = path.join(dir, "sync-blocked");
+      const controlRelease = path.join(dir, "sync-release");
       const holderReady = path.join(dir, "control-peer-ready");
-      const holder = Bun.spawn([process.execPath, "src/lib/state/lockWait.fixture.ts", "hold", database, holderReady, controlGo, "manual:350"], { env: process.env, stdout: "ignore", stderr: "pipe" });
-      const control = Bun.spawn([process.execPath, "src/lib/state/lockWait.fixture.ts", "sync-probe", database, controlReady, controlGo, "1200"], { env: process.env, stdout: "pipe", stderr: "pipe" });
+      const holder = Bun.spawn([process.execPath, "src/lib/state/lockWait.fixture.ts", "hold", database, holderReady, controlRelease, "manual"], { env: process.env, stdout: "ignore", stderr: "pipe" });
+      const control = Bun.spawn([process.execPath, "src/lib/state/lockWait.fixture.ts", "sync-probe", database, controlReady, controlGo, "500", controlBlocked], { env: process.env, stdout: "pipe", stderr: "pipe" });
       try {
         const controlDeadline = performance.now() + 10_000;
         while (!fs.existsSync(holderReady) || !fs.existsSync(controlReady)) {
@@ -412,8 +447,18 @@ test("C: fresh succession and receipt replay yield at the contended write bounda
           await Bun.sleep(2);
         }
         fs.writeFileSync(controlGo, "go");
+        const attemptDeadline = performance.now() + 10_000;
+        while (!fs.existsSync(controlBlocked)) {
+          if (control.exitCode !== null) throw new Error("synchronous writer exited before confirming SQLite lock contention");
+          if (performance.now() > attemptDeadline) throw new Error("synchronous writer did not confirm SQLite lock contention");
+          await Bun.sleep(2);
+        }
+        // The marker is written only after BEGIN IMMEDIATE timed out on the
+        // held lock, so scheduling before the SQLite attempt cannot release it.
+        fs.writeFileSync(controlRelease, "release");
         const output = await new Response(control.stdout).text();
         expect(await control.exited).toBe(0);
+        expect(JSON.parse(output)).toMatchObject({ blocked: true });
         expect(JSON.parse(output).maxGap).toBeGreaterThan(200);
         expect(await holder.exited).toBe(0);
       } finally {

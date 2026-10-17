@@ -22,13 +22,14 @@ import type { PipelineRepoPreflight, RepositoryInitialization } from "./types";
 
 export const BASELINE_IGNORE_PATTERNS = [
   ".env*", "*.pem", "*.key", "*.p12", "*.pfx", "*.ppk", "*.jks", "*.keystore", "id_rsa*", "id_ed25519*",
+  ".htpasswd", "*.htpasswd",
   "*credential*", "*secret*", ".gitconfig*", ".npmrc*", ".yarnrc*", ".pypirc*", ".netrc*", ".git-credentials*", "auth.json", "token.json", "tokens.json",
   ".aws/", ".docker/", ".terraform/", "*.tfstate*", ".ssh/", ".gnupg/", ".azure/", ".kube/", ".config/",
   "node_modules/", ".next/", "dist/", "build/", "out/", "coverage/",
   ".delegatus-initialization*", ".cache/", ".venv/", "venv/", "__pycache__/", ".DS_Store",
 ] as const;
-const OMIT_NAME = /^(?:\.env.*|.*\.(?:pem|key|p12|pfx|ppk|jks|keystore)|id_(?:rsa|ed25519).*|.*(?:credential|secret).*|\.(?:(?:gitconfig|npmrc|yarnrc|pypirc|netrc|git-credentials).*|aws|docker|terraform|ssh|gnupg|azure|kube|config)|(?:auth|tokens?)\.json|.*\.tfstate.*|\.delegatus-initialization.*|node_modules|\.next|dist|build|out|coverage|\.cache|\.?venv|__pycache__|\.DS_Store)$/i;
-const SECRET_ASSIGNMENT = /(?:password|passwd|pwd|api[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret|private[_-]?key|authorization|bearer|secret|token)\b\s*["']?\s*[:=]\s*["']?[^\s"'\x00]+/i;
+const OMIT_NAME = /^(?:\.env.*|.*\.(?:pem|key|p12|pfx|ppk|jks|keystore|htpasswd)|\.htpasswd|id_(?:rsa|ed25519).*|.*(?:credential|secret).*|\.(?:(?:gitconfig|npmrc|yarnrc|pypirc|netrc|git-credentials).*|aws|docker|terraform|ssh|gnupg|azure|kube|config)|(?:auth|tokens?)\.json|.*\.tfstate.*|\.delegatus-initialization.*|node_modules|\.next|dist|build|out|coverage|\.cache|\.?venv|__pycache__|\.DS_Store)$/i;
+const SECRET_ASSIGNMENT = /(?:aws[_-]?secret[_-]?access[_-]?key|password|passwd|pass|pwd|api[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret|private[_-]?key|authorization|bearer|secret|token)\b\s*["']?\s*[:=]\s*["']?[^\s"'\x00]+/i;
 const SECRET_PATTERNS = [AUTHORIZATION_HEADER, BEARER_TOKEN, COOKIE_HEADER, JWT_PATTERN, TOKEN_FAMILY_PATTERN]
   .map(pattern => new RegExp(pattern === AUTHORIZATION_HEADER || pattern === COOKIE_HEADER
     ? pattern.source.replaceAll("\\s", "[\\t ]") : pattern.source, pattern.flags.replace("g", "")));

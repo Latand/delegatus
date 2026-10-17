@@ -12,7 +12,7 @@ export const lockRowOptions = {
 };
 
 if (import.meta.main) {
-  const [mode, filename, ready, go, argument] = process.argv.slice(2);
+  const [mode, filename, ready, go, argument, attempt] = process.argv.slice(2);
   if (mode === "hold" || mode === "exclusive") {
     const db = new Database(filename!);
     db.exec("PRAGMA busy_timeout = 0");
@@ -34,10 +34,16 @@ if (import.meta.main) {
     let last = performance.now(), maxGap = 0;
     const timer = setInterval(() => { const now = performance.now(); maxGap = Math.max(maxGap, now - last); last = now; }, 5);
     const start = performance.now();
+    let blocked = false;
     try {
-      db.exec("BEGIN IMMEDIATE"); db.exec("ROLLBACK");
+      try { db.exec("BEGIN IMMEDIATE"); db.exec("ROLLBACK"); }
+      catch (error) {
+        if (!attempt || !/locked|busy/i.test(error instanceof Error ? error.message : String(error))) throw error;
+        blocked = true;
+        fs.writeFileSync(attempt, "SQLite confirmed lock contention");
+      }
       await Bun.sleep(10);
-      console.log(JSON.stringify({ elapsed: performance.now() - start, maxGap }));
+      console.log(JSON.stringify({ elapsed: performance.now() - start, maxGap, blocked }));
     } finally { clearInterval(timer); db.close(); }
   } else if (mode === "writer") {
     const store = new SqliteStateCollection(filename!, lockRowOptions);
