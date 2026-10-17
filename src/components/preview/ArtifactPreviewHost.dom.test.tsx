@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Window } from "happy-dom";
-import { act } from "react";
+import { act, useRef, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 
 import { installActEnv } from "@/test-helpers/actEnv";
@@ -8,6 +8,8 @@ import { formatArtifactFragment } from "@/lib/artifact/fragment";
 import { setLocale } from "@/lib/i18n";
 
 import { setLeftShellInset } from "../shellLayout";
+import { useModalLayer } from "../modalLayer";
+import { useMenuDismiss } from "../kanban/kanbanMenus";
 import { ArtifactPreviewHost, roomForSheet } from "./ArtifactPreviewHost";
 import { artifactMetaUrl } from "./artifactResource";
 import { openArtifactPreview } from "./previewBus";
@@ -210,6 +212,104 @@ test("escape closes the preview, restores opener focus and never touches history
   expect(surface()).toBeNull();
   expect(dom.location.hash).toBe(hashBefore);
   expect(dom.document.activeElement).toBe(opener);
+});
+
+/* A dialog that coordinates only through the modal-layer stack (search, the
+   decision sheet, the pickers), the way every body-portalled dialog does. */
+function Dialog({ onClose }: { onClose: () => void }) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  useModalLayer({ containerRef: ref, onClose });
+  return (
+    <div ref={ref} tabIndex={-1} data-test-dialog="">
+      <input data-test-dialog-input="" />
+    </div>
+  );
+}
+
+function PreviewWithDialog() {
+  const [dialog, setDialog] = useState(false);
+  return (
+    <>
+      <ArtifactPreviewHost mobile={false} />
+      <button data-test-open-dialog="" onClick={() => setDialog(true)} />
+      {dialog ? <Dialog onClose={() => setDialog(false)} /> : null}
+    </>
+  );
+}
+
+test("a modal dialog opened over the preview takes the first Escape; the second closes the preview", async () => {
+  textRoutes();
+  await act(async () => {
+    root!.render(<PreviewWithDialog />);
+  });
+  await act(async () => openArtifactPreview(TEXT_PATH));
+  await flush();
+  await flush();
+  expect(surface()).not.toBeNull();
+
+  await act(async () => {
+    (dom.document.querySelector("[data-test-open-dialog]") as unknown as HTMLElement).click();
+  });
+  const dialog = () => dom.document.querySelector("[data-test-dialog]");
+  const input = dom.document.querySelector("[data-test-dialog-input]") as unknown as HTMLElement;
+  expect(dialog()).not.toBeNull();
+  input.focus();
+
+  await act(async () => {
+    input.dispatchEvent(new dom.KeyboardEvent("keydown", { key: "Escape", bubbles: true }) as never);
+  });
+  expect({ dialogOpen: dialog() !== null, previewOpen: surface() !== null }).toEqual({ dialogOpen: false, previewOpen: true });
+
+  await act(async () => {
+    dom.window.dispatchEvent(new dom.KeyboardEvent("keydown", { key: "Escape", bubbles: true }) as never);
+  });
+  expect(surface()).toBeNull();
+});
+
+/* A board menu (the kanban menus dismiss through useMenuDismiss) opened over
+   the preview. */
+function BoardMenu({ anchor, onClose }: { anchor: HTMLElement; onClose: () => void }) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  useMenuDismiss(ref, anchor, onClose);
+  return <div ref={ref} role="menu" data-test-board-menu="" />;
+}
+
+function PreviewWithBoardMenu() {
+  const [anchor, setAnchor] = useState<HTMLElement | null>(null);
+  return (
+    <>
+      <ArtifactPreviewHost mobile={false} />
+      <button data-test-open-menu="" onClick={(event) => setAnchor(event.currentTarget)} />
+      {anchor ? <BoardMenu anchor={anchor} onClose={() => setAnchor(null)} /> : null}
+    </>
+  );
+}
+
+test("a board menu opened over the preview takes the first Escape; the second closes the preview", async () => {
+  textRoutes();
+  await act(async () => {
+    root!.render(<PreviewWithBoardMenu />);
+  });
+  await act(async () => openArtifactPreview(TEXT_PATH));
+  await flush();
+  await flush();
+  expect(surface()).not.toBeNull();
+
+  await act(async () => {
+    (dom.document.querySelector("[data-test-open-menu]") as unknown as HTMLElement).click();
+  });
+  const menu = () => dom.document.querySelector("[data-test-board-menu]");
+  expect(menu()).not.toBeNull();
+
+  await act(async () => {
+    dom.document.body.dispatchEvent(new dom.KeyboardEvent("keydown", { key: "Escape", bubbles: true }) as never);
+  });
+  expect({ menuOpen: menu() !== null, previewOpen: surface() !== null }).toEqual({ menuOpen: false, previewOpen: true });
+
+  await act(async () => {
+    dom.document.body.dispatchEvent(new dom.KeyboardEvent("keydown", { key: "Escape", bubbles: true }) as never);
+  });
+  expect(surface()).toBeNull();
 });
 
 test("switching artifacts reuses the same sheet element", async () => {

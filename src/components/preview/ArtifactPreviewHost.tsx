@@ -22,9 +22,10 @@ import {
 } from "./artifactResource";
 import { frameSource, HtmlPane, MarkdownPane } from "./DocumentPanes";
 import { ImagePane } from "./ImagePane";
+import { useOverlayEscape } from "@/hooks/useOverlayEscape";
 import { onArtifactPreview } from "./previewBus";
 import { TextPane } from "./TextPane";
-import { Z } from "@/components/layers";
+import { above } from "@/components/layers";
 
 /* pdf.js is megabytes; its chunk must not exist on the network until the first
    PDF preview actually opens. */
@@ -190,7 +191,10 @@ function PreviewSheet({
   const failure = current?.failure ?? null;
   const [width, setWidth] = useState(storedWidth);
   const inset = useLeftShellInset();
-  useModalLayer({ containerRef, onClose });
+  const isTopLayer = useModalLayer({ containerRef, onClose });
+  /* Opened over a full-screen conversation, the preview takes Escape before the
+     window under it does — but only while no modal dialog sits above it. */
+  useOverlayEscape(onClose, true, isTopLayer);
 
   /* The meta round-trip is the load this surface exists for, keyed to the
      open request; an aborted (superseded) read settles nothing. */
@@ -312,13 +316,15 @@ function PreviewSheet({
       data-artifact-preview
       data-artifact-state={state}
       data-artifact-kind={kind ?? ""}
-      className={`fixed ${Z.sheet} flex flex-col border-border bg-card shadow-1 focus-visible:outline-none ${
+      className={`fixed flex flex-col border-border bg-card shadow-1 focus-visible:outline-none ${
         mobile ? "inset-0" : "inset-y-0 right-0 border-l"
       }`}
       data-artifact-preview-inset={mobile ? undefined : inset}
       /* `max()/min()` in CSS so the viewport term stays live without a resize
          listener; the inset term re-renders with the dock beside it. */
-      style={mobile ? undefined : { width: `max(${MIN_WIDTH}px, min(${width}px, calc(100vw - ${MIN_CONVERSATION + inset}px)))` }}
+      style={mobile
+        ? { zIndex: above("reader") }
+        : { zIndex: above("reader"), width: `max(${MIN_WIDTH}px, min(${width}px, calc(100vw - ${MIN_CONVERSATION + inset}px)))` }}
     >
       {mobile ? null : (
         <div

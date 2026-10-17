@@ -1,0 +1,469 @@
+{
+  "driver": "src/components/kanban/kanbanBoard.browser.test.tsx",
+  "readings": [
+    {
+      "width": 1440,
+      "height": 900,
+      "lang": "uk",
+      "scheme": "light",
+      "host": "window",
+      "hostZ": 64,
+      "rows": 7,
+      "models": 7,
+      "accountPanel": true,
+      "before": "Opus 5.5 · Легкі",
+      "after": "Sonnet · Легкі",
+      "preview": {
+        "plan": {
+          "state": "ready",
+          "bodyHit": true,
+          "scroller": true,
+          "top": 0,
+          "zIndex": 65
+        },
+        "page": {
+          "state": "ready",
+          "bodyHit": true,
+          "scroller": false,
+          "top": null,
+          "zIndex": 65
+        },
+        "log": {
+          "state": "ready",
+          "bodyHit": true,
+          "scroller": true,
+          "top": 0,
+          "zIndex": 65
+        },
+        "shot": {
+          "state": "ready",
+          "bodyHit": true,
+          "scroller": false,
+          "top": null,
+          "zIndex": 65
+        },
+        "report": {
+          "state": "ready",
+          "bodyHit": true,
+          "scroller": false,
+          "top": null,
+          "zIndex": 65
+        },
+        "gone": {
+          "state": "missing",
+          "bodyHit": true,
+          "scroller": false,
+          "top": null,
+          "zIndex": 65
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "width": 1440,
+      "height": 900,
+      "lang": "uk",
+      "scheme": "light",
+      "host": "sheet",
+      "hostZ": 62,
+      "rows": 6,
+      "models": 7,
+      "accountPanel": false,
+      "before": "Opus 5.5 · Легкі",
+      "after": "Sonnet · Легкі",
+      "preview": {
+        "plan": {
+          "state": "ready",
+          "bodyHit": true,
+          "scroller": true,
+          "top": 0,
+          "zIndex": 65
+        },
+        "page": {
+          "state": "ready",
+          "bodyHit": true,
+          "scroller": false,
+          "top": null,
+          "zIndex": 65
+        },
+        "log": {
+          "state": "ready",
+          "bodyHit": true,
+          "scroller": true,
+          "top": 0,
+          "zIndex": 65
+        },
+        "shot": {
+          "state": "ready",
+          "bodyHit": true,
+          "scroller": false,
+          "top": null,
+          "zIndex": 65
+        },
+        "report": {
+          "state": "ready",
+          "bodyHit": true,
+          "scroller": false,
+          "top": null,
+          "zIndex": 65
+        },
+        "gone": {
+          "state": "missing",
+          "bodyHit": true,
+          "scroller": false,
+          "top": null,
+          "zIndex": 65
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "width": 1440,
+      "height": 900,
+      "lang": "en",
+      "scheme": "dark",
+      "host": "window",
+      "hostZ": 64,
+      "rows": 7,
+      "models": 7,
+      "accountPanel": true,
+      "before": "Opus 5.5 · Light",
+      "after": "Sonnet · Light",
+      "preview": {
+        "plan": {
+          "state": "ready",
+          "bodyHit": true,
+          "scroller": true,
+          "top": 0,
+          "zIndex": 65
+        },
+        "page": {
+          "state": "ready",
+          "bodyHit": true,
+          "scroller": false,
+          "top": null,
+          "zIndex": 65
+        },
+        "log": {
+          "state": "ready",
+          "bodyHit": true,
+          "scroller": true,
+          "top": 0,
+          "zIndex": 65
+        },
+        "shot": {
+          "state": "ready",
+          "bodyHit": true,
+          "scroller": false,
+          "top": null,
+          "zIndex": 65
+        },
+        "report": {
+          "state": "ready",
+          "bodyHit": true,
+          "scroller": false,
+          "top": null,
+          "zIndex": 65
+        },
+        "gone": {
+          "state": "missing",
+          "bodyHit": true,
+          "scroller": false,
+          "top": null,
+          "zIndex": 65
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "width": 1440,
+      "height": 900,
+      "lang": "en",
+      "scheme": "dark",
+      "host": "sheet",
+      "hostZ": 62,
+      "rows": 6,
+      "models": 7,
+      "accountPanel": false,
+      "before": "Opus 5.5 · Light",
+      "after": "Sonnet · Light",
+      "preview": {
+        "plan": {
+          "state": "ready",
+          "bodyHit": true,
+          "scroller": true,
+          "top": 0,
+          "zIndex": 65
+        },
+        "page": {
+          "state": "ready",
+          "bodyHit": true,
+          "scroller": false,
+          "top": null,
+          "zIndex": 65
+        },
+        "log": {
+          "state": "ready",
+          "bodyHit": true,
+          "scroller": true,
+          "top": 0,
+          "zIndex": 65
+        },
+        "shot": {
+          "state": "ready",
+          "bodyHit": true,
+          "scroller": false,
+          "top": null,
+          "zIndex": 65
+        },
+        "report": {
+          "state": "ready",
+          "bodyHit": true,
+          "scroller": false,
+          "top": null,
+          "zIndex": 65
+        },
+        "gone": {
+          "state": "missing",
+          "bodyHit": true,
+          "scroller": false,
+          "top": null,
+          "zIndex": 65
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "width": 1000,
+      "height": 760,
+      "lang": "uk",
+      "scheme": "light",
+      "host": "window",
+      "hostZ": 64,
+      "rows": 7,
+      "models": 7,
+      "accountPanel": true,
+      "before": "Opus 5.5 · Легкі",
+      "after": "Sonnet · Легкі",
+      "preview": {
+        "plan": {
+          "state": "ready",
+          "bodyHit": true,
+          "scroller": true,
+          "top": 0,
+          "zIndex": 65
+        },
+        "page": {
+          "state": "ready",
+          "bodyHit": true,
+          "scroller": false,
+          "top": null,
+          "zIndex": 65
+        },
+        "log": {
+          "state": "ready",
+          "bodyHit": true,
+          "scroller": true,
+          "top": 0,
+          "zIndex": 65
+        },
+        "shot": {
+          "state": "ready",
+          "bodyHit": true,
+          "scroller": false,
+          "top": null,
+          "zIndex": 65
+        },
+        "report": {
+          "state": "ready",
+          "bodyHit": true,
+          "scroller": false,
+          "top": null,
+          "zIndex": 65
+        },
+        "gone": {
+          "state": "missing",
+          "bodyHit": true,
+          "scroller": false,
+          "top": null,
+          "zIndex": 65
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "width": 1000,
+      "height": 760,
+      "lang": "uk",
+      "scheme": "light",
+      "host": "sheet",
+      "hostZ": 62,
+      "rows": 6,
+      "models": 7,
+      "accountPanel": false,
+      "before": "Opus 5.5 · Легкі",
+      "after": "Sonnet · Легкі",
+      "preview": {
+        "plan": {
+          "state": "ready",
+          "bodyHit": true,
+          "scroller": true,
+          "top": 0,
+          "zIndex": 65
+        },
+        "page": {
+          "state": "ready",
+          "bodyHit": true,
+          "scroller": false,
+          "top": null,
+          "zIndex": 65
+        },
+        "log": {
+          "state": "ready",
+          "bodyHit": true,
+          "scroller": true,
+          "top": 0,
+          "zIndex": 65
+        },
+        "shot": {
+          "state": "ready",
+          "bodyHit": true,
+          "scroller": false,
+          "top": null,
+          "zIndex": 65
+        },
+        "report": {
+          "state": "ready",
+          "bodyHit": true,
+          "scroller": false,
+          "top": null,
+          "zIndex": 65
+        },
+        "gone": {
+          "state": "missing",
+          "bodyHit": true,
+          "scroller": false,
+          "top": null,
+          "zIndex": 65
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "width": 1000,
+      "height": 760,
+      "lang": "en",
+      "scheme": "dark",
+      "host": "window",
+      "hostZ": 64,
+      "rows": 7,
+      "models": 7,
+      "accountPanel": true,
+      "before": "Opus 5.5 · Light",
+      "after": "Sonnet · Light",
+      "preview": {
+        "plan": {
+          "state": "ready",
+          "bodyHit": true,
+          "scroller": true,
+          "top": 0,
+          "zIndex": 65
+        },
+        "page": {
+          "state": "ready",
+          "bodyHit": true,
+          "scroller": false,
+          "top": null,
+          "zIndex": 65
+        },
+        "log": {
+          "state": "ready",
+          "bodyHit": true,
+          "scroller": true,
+          "top": 0,
+          "zIndex": 65
+        },
+        "shot": {
+          "state": "ready",
+          "bodyHit": true,
+          "scroller": false,
+          "top": null,
+          "zIndex": 65
+        },
+        "report": {
+          "state": "ready",
+          "bodyHit": true,
+          "scroller": false,
+          "top": null,
+          "zIndex": 65
+        },
+        "gone": {
+          "state": "missing",
+          "bodyHit": true,
+          "scroller": false,
+          "top": null,
+          "zIndex": 65
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "width": 1000,
+      "height": 760,
+      "lang": "en",
+      "scheme": "dark",
+      "host": "sheet",
+      "hostZ": 62,
+      "rows": 6,
+      "models": 7,
+      "accountPanel": false,
+      "before": "Opus 5.5 · Light",
+      "after": "Sonnet · Light",
+      "preview": {
+        "plan": {
+          "state": "ready",
+          "bodyHit": true,
+          "scroller": true,
+          "top": 0,
+          "zIndex": 65
+        },
+        "page": {
+          "state": "ready",
+          "bodyHit": true,
+          "scroller": false,
+          "top": null,
+          "zIndex": 65
+        },
+        "log": {
+          "state": "ready",
+          "bodyHit": true,
+          "scroller": true,
+          "top": 0,
+          "zIndex": 65
+        },
+        "shot": {
+          "state": "ready",
+          "bodyHit": true,
+          "scroller": false,
+          "top": null,
+          "zIndex": 65
+        },
+        "report": {
+          "state": "ready",
+          "bodyHit": true,
+          "scroller": false,
+          "top": null,
+          "zIndex": 65
+        },
+        "gone": {
+          "state": "missing",
+          "bodyHit": true,
+          "scroller": false,
+          "top": null,
+          "zIndex": 65
+        }
+      },
+      "pageErrors": []
+    }
+  ]
+}
