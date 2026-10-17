@@ -268,3 +268,21 @@ test.each(["task", "tombstone"] as const)("expired %s scan checkpoints restart a
     expect(received).toEqual([expected.id]);
   } finally { warning.mockRestore(); }
 });
+
+test("older UUID row cursors continue after real task and tombstone keys", () => {
+  const secondId = ["40000000", "0000", "4000", "8000", "000000000002"].join("-");
+  const f = fixture([task(validId), task(secondId)]);
+  const taskPage = readScanPage(`t:${validId}`, f.filter);
+  expect(taskPage.rows.map(decodeWireRow).map(row => row.id)).toEqual([secondId]);
+  expect(taskPage.next).toBeNull();
+
+  const source = taskFeedSource(f.filePath)!;
+  const gone = nextStamp(null, Date.parse(at), self.prefix);
+  tombstoneCollection(source.database, true)!.boundedPatch(2, tx => {
+    tx.put({ id: validId, project, gone, o: self.prefix });
+    tx.put({ id: secondId, project, gone, o: self.prefix });
+  });
+  const tombstonePage = readScanPage(`g:${validId}`, f.filter);
+  expect(tombstonePage.rows).toEqual([{ id: secondId, project, gone }]);
+  expect(tombstonePage.next).toBeNull();
+});
