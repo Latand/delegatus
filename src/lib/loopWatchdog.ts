@@ -11,7 +11,7 @@ export const loopWatchdogLayout = { slots, fields, site: slots * fields + 1,
   heartbeat: slots * fields + 2, trigger: slots * fields + 3, cells: slots * fields + 13 } as const;
 const { heartbeat, trigger } = loopWatchdogLayout;
 const source = `
-const { workerData } = require('node:worker_threads');
+const { workerData, parentPort } = require('node:worker_threads');
 const fs = require('node:fs');
 const cells = new BigInt64Array(workerData.buffer);
 let sequence = 0;
@@ -22,6 +22,7 @@ let paths = [];
 const throttles = new Map();
 let throttleTotal = 0n;
 let schedulerWaitAvailable = false;
+let rssReady = false, readinessSent = false;
 try { schedulerWaitAvailable = fs.readFileSync("/proc/sys/kernel/sched_schedstats", "utf8").trim() === "1"; } catch {}
 try {
   const group = fs.readFileSync('/proc/' + workerData.pid + '/cgroup', 'utf8').split('0::')[1].trim();
@@ -47,8 +48,8 @@ function sample() {
     rssPending = true; lastRssAt = monotonicMs;
     fs.promises.readFile('/proc/' + workerData.pid + '/status', 'utf8').then(status => {
       const match = /^VmRSS:\\s+(\\d+) kB$/m.exec(status);
-      rssBytes = match ? BigInt(match[1]) * 1024n : -1n; rssUtcMs = BigInt(Date.now());
-    }, () => { rssBytes = -1n; rssUtcMs = -1n; }).finally(() => { rssPending = false; });
+      rssBytes = match ? BigInt(match[1]) * 1024n : -1n; rssUtcMs = BigInt(Date.now()); rssReady = true;
+    }, () => { rssBytes = -1n; rssUtcMs = -1n; rssReady = true; }).finally(() => { rssPending = false; });
   }
   let running = -1n, waiting = -1n, throttle = -1n, readBytes = -1n, readCalls = -1n;
   try {
@@ -101,11 +102,13 @@ function sample() {
     Atomics.store(cells, ${trigger}, next);
     lastTriggeredHeartbeat = heartbeat; lastTriggeredAt = monotonicMs;
   }
+  if (rssReady && !readinessSent) { readinessSent = true; parentPort.postMessage('ready'); }
 }
-sample(); setInterval(sample, 100);
+if (workerData.startupDelayMs > 0) setTimeout(() => { sample(); setInterval(sample, 100); }, workerData.startupDelayMs);
+else { sample(); setInterval(sample, 100); }
 `;
 
-export function startLoopWatchdog() {
+export function startLoopWatchdog(options: { startupDelayMs?: number } = {}) {
   const buffer = new SharedArrayBuffer(loopWatchdogLayout.cells * 8);
   const cells = new BigInt64Array(buffer);
   const beat = () => Atomics.store(cells, heartbeat, BigInt(Math.round(performance.now() * 1000)));
@@ -113,13 +116,18 @@ export function startLoopWatchdog() {
   Atomics.store(cells, slots * fields + 1, BigInt(-1));
   let failed = false;
   let worker: Worker | undefined;
+  let resolveReady!: () => void;
+  const ready = new Promise<void>((resolve) => { resolveReady = resolve; });
   try {
-    worker = new Worker(source, { eval: true, workerData: { buffer, pid: process.pid, timeOrigin: performance.timeOrigin } });
-    worker.on("error", () => { failed = true; });
-    worker.on("exit", () => { failed = true; });
+    worker = new Worker(source, { eval: true, workerData: { buffer, pid: process.pid, timeOrigin: performance.timeOrigin,
+      startupDelayMs: Math.max(0, options.startupDelayMs ?? 0) } });
+    worker.on("message", () => resolveReady());
+    worker.on("error", () => { failed = true; resolveReady(); });
+    worker.on("exit", () => { failed = true; resolveReady(); });
     worker.unref();
-  } catch { failed = true; }
+  } catch { failed = true; resolveReady(); }
   return {
+    ready,
     heartbeat: beat,
     site(site: number) { Atomics.store(cells, slots * fields + 1, BigInt(site)); },
     snapshot() {

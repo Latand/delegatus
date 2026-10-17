@@ -42,7 +42,8 @@ export function createLoopLogSink(write = (line: string, done: () => void) => { 
 
 /** Completed operations survive until the next timer: their synchronous work
     can have returned before that timer is allowed to run. */
-export function createViewerLoopMonitor(log?: (line: string) => void, now = () => performance.now(), spans = performanceSpans, heapSignals = createLoopHeapSignals(undefined, undefined, now)) {
+export function createViewerLoopMonitor(log?: (line: string) => void, now = () => performance.now(), spans = performanceSpans, heapSignals = createLoopHeapSignals(undefined, undefined, now),
+  watchdogFactory: () => ReturnType<typeof startLoopWatchdog> = () => startLoopWatchdog()) {
   const sink = createLoopLogSink();
   let writeLog = log ?? sink.enqueue;
   const context = new AsyncLocalStorage<ViewerOperation>();
@@ -169,14 +170,15 @@ export function createViewerLoopMonitor(log?: (line: string) => void, now = () =
     },
     tick,
     start() {
-      if (timer) return;
+      if (timer) return watchdog?.ready;
       last = now();
       startReadAttributionSampler();
       heapSignals.start();
-      watchdog = startLoopWatchdog();
+      watchdog = watchdogFactory();
       spans.observeSite(watchdog.site);
       const poll = () => { tick(); timer = setTimeout(poll, 10); timer.unref(); };
       timer = setTimeout(poll, 10); timer.unref();
+      return watchdog.ready;
     },
     stop() { if (timer) clearTimeout(timer); timer = undefined; heapSignals.stop(); completed = []; spans.observeSite(); void watchdog?.stop().catch(() => {}); watchdog = undefined; },
   };
