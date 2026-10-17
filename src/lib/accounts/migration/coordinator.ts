@@ -8,6 +8,7 @@ import { listCodexAccounts } from "@/lib/accounts/codex";
 import {
   agentRegistry,
   deliveryHasDurableClaimOwner,
+  registryReceiptsForConversation,
   RegistryWriterBusyError,
   type AgentRegistry,
   type ConversationObservation,
@@ -699,7 +700,7 @@ function sourceNeverStarted(
   if (conversation.turn.state !== "unknown" || conversation.turn.observedAt !== null) return false;
   if (fs.existsSync(source.path)) return false;
   const snapshot = registry.readOnlySnapshot();
-  const unmaterializedLaunch = Object.values(snapshot.receipts).some((receipt) =>
+  const unmaterializedLaunch = registryReceiptsForConversation(snapshot, conversation.id).some((receipt) =>
     receipt.purpose === "launch"
     && resolveConversationAlias(snapshot, receipt.conversationId) === conversation.id
     && receipt.artifactLifecycle === "pending"

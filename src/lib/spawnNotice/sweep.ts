@@ -1,3 +1,4 @@
+import { seatMessageKeys } from "@/lib/orchestrator/seatDeliveryKeys";
 import crypto from "node:crypto";
 
 import type { MessageOrigin } from "@/lib/runtime/messageOrigin";
@@ -79,11 +80,13 @@ export interface SpawnNoticeSweepPorts {
   settle(child: string, turnIds: readonly string[], settlement: SpawnNoticeSettlement, at: string): void;
   deliver(request: SpawnNoticeDeliveryRequest): Promise<SpawnNoticeDeliveryAnswer>;
   log?(message: string, error?: unknown): void;
+  revokedAttempt?(attempt: SpawnNoticeAttempt): Promise<boolean>;
+  clearAttempt?(child: string): void | Promise<void>;
 }
 
 /** One key per child turn, bounded for the delivery layer's 128-character key. */
 export function spawnNoticeMessageId(child: string, turnId: string): string {
-  return `spawn_notice_${crypto.createHash("sha256").update(`${child}:${turnId}`).digest("hex")}`;
+  return `${seatMessageKeys.spawn}${crypto.createHash("sha256").update(`${child}:${turnId}`).digest("hex")}`;
 }
 
 const VERDICT = /^\s*\**\s*Verdict:\s*\**\s*(pass|fail|needs_decision)\b/gim;
@@ -225,7 +228,7 @@ export async function sweepSpawnNotices(ports: SpawnNoticeSweepPorts): Promise<v
 }
 
 async function sweepChild(child: string, rows: SpawnNoticeTurn[], ports: SpawnNoticeSweepPorts): Promise<void> {
-  const record = ports.childRecord(child);
+  let record = ports.childRecord(child);
   const obsolete = rows.filter(row => {
     if (row.outcome !== "lost") return false;
     const recipient = ports.recipient(row.launcherConversationId);
@@ -240,6 +243,10 @@ async function sweepChild(child: string, rows: SpawnNoticeTurn[], ports: SpawnNo
   }
   /* A notice already handed over is finished first, exactly as it was
      written, whatever the child has done since. */
+  if (record?.attempt && await ports.revokedAttempt?.(record.attempt)) {
+    await ports.clearAttempt?.(child);
+    record = { ...record, attempt: null };
+  }
   if (record?.attempt) {
     const attempt = { ...record.attempt, attempts: record.attempt.attempts + 1 };
     ports.recordAttempt(child, attempt);

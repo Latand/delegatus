@@ -78,8 +78,11 @@ function ProjectLine({ line, postable, onSaved }: {
   const refused = stored !== LOG_ONLY && !postable.some((chat) => chat.alias === stored) ? stored : null;
   const needsName = picked !== null && picked !== LOG_ONLY && !line.reportName;
 
+  /* A listed chat or «Log only» is stored without a Telegram request: the
+     select shows it at once and stays usable, and a refusal shows the stored
+     one again beside the reason (audit B30, B42). A pasted link waits. */
   const write = async (chat: string, reportName: string | null, pastedLink?: string) => {
-    setSaving(true);
+    if (pastedLink) setSaving(true);
     setFailed(null);
     try {
       const response = await fetch("/api/projects/settings", {
@@ -91,14 +94,15 @@ function ProjectLine({ line, postable, onSaved }: {
         const body = await response.json().catch(() => ({})) as { message?: unknown };
         throw new Error(pastedLink && typeof body.message === "string" ? body.message : "");
       }
-      setPicked(null);
       setName("");
       setLink("");
       await onSaved();
+      setPicked(null);
     } catch (error) {
+      if (!pastedLink) setPicked(null);
       setFailed(error instanceof Error ? error.message : "");
     } finally {
-      setSaving(false);
+      if (pastedLink) setSaving(false);
     }
   };
 

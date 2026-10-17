@@ -974,6 +974,41 @@ test("a refused agent write keeps the choice, names the refusal beside the picke
   expect(save()).not.toBeNull();
 });
 
+/* Audit B21: the runtime reads as stored on Save, before the write answers;
+   a refusal puts the choice back as a draft beside the reason. */
+test("a held agent write shows the runtime as stored at once, leaves nothing to press twice, and a refusal brings the draft back with the reason", async () => {
+  const { root } = await mount();
+  await open(root);
+  const served = globalThis.fetch;
+  let refuse: () => void = () => {};
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (init?.method === "PUT" && String(input).startsWith("/api/roles")) {
+      requests.push({ url: String(input), method: "PUT", body: JSON.parse(String(init.body)) });
+      await new Promise<void>((resolve) => { refuse = resolve; });
+      return json({ error: "invalid codex effort" }, 400);
+    }
+    return served(input, init);
+  }) as typeof fetch;
+  try {
+    choose(effortSelect(), "high");
+    press(save());
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    flushSync(() => root.render(view()));
+    expect(effortSelect().value).toBe("high");
+    expect(mGroup()!.querySelector("[data-seat-tick-maintenance-about]")?.textContent).toBe("One Codex agent (GPT-6.1-Sol, high) tidies task statuses and texts.");
+    expect(save()).toBeNull();
+    expect(rolePuts()).toHaveLength(1);
+    refuse();
+    await settle(root);
+    expect(body().querySelector("[data-seat-tick-agent-error]")?.textContent).toBe("invalid codex effort");
+    expect(effortSelect().value).toBe("high");
+    expect(save()).not.toBeNull();
+    expect(rolePuts()).toHaveLength(1);
+  } finally {
+    globalThis.fetch = served;
+  }
+});
+
 test("a stale mapping revision shows the current value and asks again instead of overwriting it", async () => {
   const { root } = await mount();
   await open(root);

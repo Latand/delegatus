@@ -25,18 +25,23 @@ export function ShareProjectRow({ project, variant }: { project: string; variant
   }, [project, retry]);
   const eligible = view?.known.some((row) => row.key === project) ?? false;
   const enabled = eligible && Boolean(view?.shared.all || view?.shared.projects.includes(project));
+  /* The switch flips at once (audit B18); a refusal flips it back and marks
+     the row failed. A press while a write is out sends nothing. */
   const toggle = async () => {
     if (!view || !eligible || saving || view.shared.all) return;
+    const before = view;
+    const next = !enabled;
     setSaving(true); setFailed(false);
+    setView({ ...before, shared: { ...before.shared, projects: next ? [...new Set([...before.shared.projects, project])] : before.shared.projects.filter((key) => key !== project) } });
     try {
-      const response = await fetch("/api/links/shared", { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ project, enabled: !enabled }) });
+      const response = await fetch("/api/links/shared", { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ project, enabled: next }) });
       if (!response.ok) throw new Error("failed");
       setView(await response.json() as View);
-    } catch { setFailed(true); }
+    } catch { setView(before); setFailed(true); }
     finally { setSaving(false); }
   };
   return <><ProjectSettingRow label={t("links.shareProject")} hint={failed ? t("links.shareFailed") : eligible ? t(enabled ? "links.shareOn" : "links.shareOff") : t("links.cannotShare")}
-    enabled={enabled} disabled={!view || !eligible || saving || view.shared.all} failed={failed} variant={variant}
+    enabled={enabled} disabled={!view || !eligible || view.shared.all} failed={failed} variant={variant}
     rowProps={{ "data-share-project": enabled ? "on" : "off" }} switchProps={{ "data-share-project-switch": "", onClick: () => void toggle() }} />
     {failed && !view ? <button type="button" className={`${variant === "sheet" ? "px-4" : "px-2"} text-left text-ui text-accent`} onClick={() => setRetry((value) => value + 1)}>{t("links.retryShare")}</button> : null}</>;
 }

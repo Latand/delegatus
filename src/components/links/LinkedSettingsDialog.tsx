@@ -201,7 +201,27 @@ export function LinkedSettingsDialog({ onClose }: { onClose: () => void }) {
     } catch { setMintRefusal("unavailable"); }
     finally { setBusy(false); }
   };
-  const share = (change: { all: boolean } | { project: string; enabled: boolean }) => void linkedAction("/api/links/shared", "PATCH", change);
+  /* A sharing choice flips at once from one local copy of `shared` (audit
+     B18), with no dialog lock; a refusal puts the copy back and says why in
+     the dialog's alert. One write at a time: a press while one is out waits
+     for the answer it would race. */
+  const sharing = useRef(false);
+  const share = async (change: { all: boolean } | { project: string; enabled: boolean }) => {
+    if (!shared || sharing.current) return;
+    sharing.current = true;
+    const before = shared;
+    const projects = "all" in change ? before.shared.projects
+      : change.enabled ? [...new Set([...before.shared.projects, change.project])] : before.shared.projects.filter((key) => key !== change.project);
+    setShared({ ...before, shared: { ...before.shared, all: "all" in change ? change.all : before.shared.all, projects } });
+    setLinkError(null); setNotice(null);
+    try {
+      const response = await fetch("/api/links/shared", { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(change) });
+      const result = await response.json().catch(() => null) as (SharedState & { error?: string }) | null;
+      if (!response.ok || !result?.shared) { setShared(before); setLinkError(result?.error ?? "unavailable"); return; }
+      setShared(result);
+    } catch { setShared(before); setLinkError("unavailable"); }
+    finally { sharing.current = false; }
+  };
   const projects = shared ? [...new Map<string, { key: string; name: string; local: boolean }>([
     ...shared.states.flatMap((peer) => peer.projects.map((project) => [project.key, { key: project.key, name: project.name, local: false }] as const)),
     ...shared.known.map((project) => [project.key, { ...project, local: true }] as const),
@@ -363,9 +383,9 @@ export function LinkedSettingsDialog({ onClose }: { onClose: () => void }) {
           <section className="space-y-3 border-t border-border pt-5" aria-label={t("links.sharedProjects")}>
             <h3 className="text-body font-semibold text-primary">{t("links.sharedProjects")}</h3>
             <p className="text-ui text-muted">{t("links.shareDefault")}</p>
-            <label className="flex min-h-11 items-center gap-3 text-ui text-primary"><input type="checkbox" checked={shared?.shared.all ?? false} disabled={busy || !shared} onChange={(event) => share({ all: event.target.checked })} />{t("links.shareAll")}</label>
+            <label className="flex min-h-11 items-center gap-3 text-ui text-primary"><input type="checkbox" checked={shared?.shared.all ?? false} disabled={!shared} onChange={(event) => void share({ all: event.target.checked })} />{t("links.shareAll")}</label>
             {projects.map((project) => <div key={project.key} className="rounded-[8px] border border-border px-3 py-2 text-ui" data-shared-project={project.key}>
-              <label className="flex min-h-10 items-center gap-3 text-primary"><input type="checkbox" checked={project.local && (shared!.shared.all || shared!.shared.projects.includes(project.key))} disabled={busy || !project.local || shared!.shared.all} onChange={(event) => share({ project: project.key, enabled: event.target.checked })} /><span>{project.name}</span></label>
+              <label className="flex min-h-10 items-center gap-3 text-primary"><input type="checkbox" checked={project.local && (shared!.shared.all || shared!.shared.projects.includes(project.key))} disabled={!project.local || shared!.shared.all} onChange={(event) => void share({ project: project.key, enabled: event.target.checked })} /><span>{project.name}</span></label>
               {shared?.states.map((peer) => { const state = peer.projects.find((row) => row.key === project.key)?.state; return state ? <p key={peer.id} className="pl-7 text-muted" data-share-state={state}>{t(state === "linked" ? "links.linked" : state === "only-here" ? "links.onlyHere" : "links.onlyThere", { peer: peer.label })}</p> : null; })}
             </div>)}
             {shared && !shared.known.length ? <p className="text-ui text-muted">{t("links.cannotShare")}</p> : null}

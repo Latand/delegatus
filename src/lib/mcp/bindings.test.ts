@@ -4601,14 +4601,18 @@ test("MCP note authors follow authenticated attribution and round-trip through r
   const now = "2026-10-02T10:00:00.000Z";
   saveTasks([{ id: "note-mcp", project: "viewer", text: "Review the card", status: "inbox", placement: "unplaced", assignments: [], createdAt: now, updatedAt: now }]);
   for (const kind of ["agent", "manager"] as const) {
-    const bindings = viewerMcpBindings(undefined, undefined, { loadTasks, listPipelineRecords: () => [], callerAttribution: () => ({ kind, conversationId: "conversation_fixture", role: "builder" }) } as never);
+    let pipelineReads = 0;
+    const bindings = viewerMcpBindings(undefined, undefined, { loadTasks, listPipelineRecords: () => { pipelineReads++; return []; }, callerAttribution: () => ({ kind, conversationId: "conversation_fixture", role: "builder" }) } as never);
     const service = createMcpToolService(bindings, new MemoryMcpReceiptStore());
     const result = await service.callTool("update_task", { clientRequestId: `note-${kind}`, taskId: "note-mcp", note: "Waiting for review.", conversationId: "spoof", full: true });
     expect(result).toMatchObject({ ok: true, changedFields: expect.arrayContaining(["note"]), task: { note: { author: kind === "manager" ? { kind: "orchestrator" } : { kind: "agent", conversationId: "conversation_fixture" } } } });
+    expect(pipelineReads).toBe(0);
     const read = await service.callTool("get_task", { clientRequestId: `read-note-${kind}`, taskId: "note-mcp" });
     expect(read).toMatchObject({ ok: true, task: { note: { text: "Waiting for review." } } });
+    const beforeClear = pipelineReads;
     const clear = await service.callTool("update_task", { clientRequestId: `clear-note-${kind}`, taskId: "note-mcp", note: null });
     expect(clear.ok).toBe(true);
+    expect(pipelineReads).toBe(beforeClear);
     expect(loadTasks()[0]!.note).toBeUndefined();
   }
 });

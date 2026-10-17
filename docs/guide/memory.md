@@ -48,9 +48,10 @@ Claude or Codex agent also carries the memories selected as relevant to it.
 - **Where.** The **Shared memory** page under **Settings** in the sidebar's ⋯
   menu. The Settings row names memory's state in a word: working, off, key
   needed or capped.
-- **What it needs.** Selection needs an OpenRouter key, entered on its own
-  page beside it. It sends redacted context to that provider and shares the
-  Asks-you monthly cap.
+- **What it needs.** Selection needs an OpenRouter key, entered in
+  **Settings → Keys**; without one, the memory page's **Open Keys** opens that
+  page on the OpenRouter key. It sends redacted context to that provider and
+  shares the Asks-you monthly cap.
 - **What it shows.** The memory page shows the month's counts and says why
   memory is not added, with the action beside the reason.
 

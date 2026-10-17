@@ -50,6 +50,7 @@ import { publishBlockerNames, useWantedBlockerNames } from "./selfUpdate/blocker
 import { useSelfUpdateFeed } from "./selfUpdate/useSelfUpdateFeed";
 import { openSelfUpdate } from "./selfUpdate/openSelfUpdate";
 import { SelfUpdateHost } from "./selfUpdate/SelfUpdateDialog";
+import { useDrainDecisionsLeaving } from "./selfUpdate/AutoDrainDecision";
 import { TelemetrySettingsHost } from "./telemetry/TelemetrySettings";
 import { LearnedRulesWindowHost } from "./roleMemory/LearnedRules";
 import { LinkedSettingsHost } from "./links/LinkedSettingsDialog";
@@ -59,6 +60,7 @@ import { VoiceComposerHost } from "./voice/VoiceComposerHost";
 import { VoicePipHost } from "./voice/VoicePipHost";
 import { VoiceCompanionHost } from "./voiceCompanion/VoiceCompanionHost";
 import { VoiceCompanionSettingsHost } from "./voiceCompanion/VoiceCompanionSetting";
+import { onOpenKeys } from "./keys/openKeys";
 import { focusHandoffBus } from "./attention/focusHandoffBus";
 import { expandKanbanSeat } from "./kanban/kanbanSeatStore";
 import { textField } from "./kanban/taskText";
@@ -763,6 +765,13 @@ function ViewerApp() {
       return next;
     });
   }, []);
+  /* «Open Keys» from a place that asked for a key (docs/design/keys-settings.md
+     §4): the phone opens its menu sheet, and a desktop with the rail put away
+     brings the rail back, whose ⋯ menu then opens on «Keys». */
+  useEffect(() => onOpenKeys(() => {
+    if (isMobile) { if (mobileNav.getState().sheet !== "menu") mobileNav.openSheet("menu"); }
+    else setRailHidden(false);
+  }), [isMobile, mobileNav]);
 
   /* The overview board has no project view state to report: presence publishes
      the overview context/slice here, and ProjectDashboard takes over the moment
@@ -984,7 +993,10 @@ function ViewerApp() {
      lanes the cards and the columns already mark, and a lane dismissed on its
      card leaves every count at once. */
   const updateFeed = useSelfUpdateFeed(true, false);
-  const updateDecision = updateFeed.snapshot?.auto?.decision;
+  /* A «Keep waiting» on its way has already left every list and count. */
+  const drainLeaving = useDrainDecisionsLeaving();
+  const servedDecision = updateFeed.snapshot?.auto?.decision;
+  const updateDecision = servedDecision && !drainLeaving.has(servedDecision.id) ? servedDecision : undefined;
   /* The update surface names the work it waits on by project name and
      conversation title; the server sends keys and ids. */
   const updateBlockers = updateFeed.snapshot?.auto?.blockers;

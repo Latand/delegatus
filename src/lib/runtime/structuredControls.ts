@@ -1,3 +1,4 @@
+import { registryReceiptsForConversation } from "@/lib/agent/registry";
 import { structuredHostsEnabled } from "./flags";
 import { agentRegistry, type AgentRegistry, type ProcessIdentity, type StructuredHostColumns } from "@/lib/agent/registry";
 import { reconfigurationFromBody, type AgentReconfiguration } from "@/lib/agent/reconfigure";
@@ -293,7 +294,7 @@ export async function dispatchStructuredControl(
   const structuredKill = request.action === "kill" && !entry.host;
   const completedStructuredOwnership = request.action === "reconfigure"
     && !entry.host
-    && Object.values(snapshot.receipts).some((receipt) =>
+    && registryReceiptsForConversation(snapshot, conversation.id).some((receipt) =>
       receipt.transport === "structured"
         && receipt.state === "completed"
         && registry.canonicalConversationId(receipt.conversationId) === conversation.id);

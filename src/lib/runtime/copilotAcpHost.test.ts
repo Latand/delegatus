@@ -279,7 +279,7 @@ describe("CopilotAcpHost", () => {
     const saved = Object.fromEntries(names.map((name) => [name, process.env[name]]));
     const cwd = process.cwd();
     for (const name of names) delete process.env[name];
-    Object.assign(process.env, { HOME: setup.home, ...setup.env });
+    Object.assign(process.env, { HOME: setup.home, LLV_MCP_TRANSPORT: "stdio", ...setup.env });
     process.chdir(setup.appRoot);
     try {
       const child = new FakeCopilot();
@@ -335,8 +335,8 @@ describe("CopilotAcpHost", () => {
     expect(fallback.args).toEqual([path.join(fs.realpathSync(shape.appRoot), "bin", "mcp-server.mjs")]);
   });
 
-  test("with the HTTP transport selected Copilot gets the shared endpoint and the capability header Claude sends", async () => {
-    const viewer = await writtenViewerConfig({ ...dockerShape(), env: { LLV_MCP_TRANSPORT: "http" } });
+  test("with the default transport Copilot gets the shared endpoint and the capability header Claude sends", async () => {
+    const viewer = await writtenViewerConfig({ ...dockerShape(), env: { LLV_MCP_TRANSPORT: "" } });
     expect(viewer).toEqual({
       type: "http",
       url: "http://127.0.0.1:8898/api/mcp",

@@ -1,4 +1,5 @@
-import { afterAll, beforeAll, expect, test } from "bun:test";
+import { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } from "@/lib/orchestrator/seats";
+import { afterAll, beforeAll, expect, setSystemTime, test } from "bun:test";
 import path from "node:path";
 import { NextRequest } from "next/server";
 import { UnixRuntimeHostClient } from "@/lib/runtime/client";
@@ -7,9 +8,10 @@ import { startComposerPayloadRuntime, type ComposerPayloadRuntime } from "@/lib/
 import { setConversationHostDependenciesForTests } from "@/app/api/conversation-host/dependencies";
 import { runPrototypeAnswer } from "@/lib/externalRelay/prototypeAnswer";
 import { teamStore, resetTeamStoreForTests } from "@/lib/team/store";
-import { insertSeatRound, findSeatRound } from "./seatRounds";
+import { updateRelayStore } from "@/lib/externalRelay/store";
+import { insertSeatRound, findSeatRound, mutateSeatRound } from "./seatRounds";
 import { mintSession, MEMBER_COOKIE } from "@/lib/team/sessions";
-import { decidePrototype, prototypeDelivery } from "./decision";
+import { attemptPrototypeDelivery, decidePrototype, prototypeDelivery } from "./decision";
 import { deliverPrototypeDecision, resetPrototypeDeliveryWorkerForTests, settlePrototypeDeliveriesForTests } from "./deliveryWorker";
 import { prototypeWorld } from "./world";
 import type { PrototypeReviewRound } from "./types";
@@ -35,8 +37,15 @@ afterAll(async () => {
   }
 });
 
-test.each(["recommended", "explicit"])("B: %s Telegram answer reaches the real destination once in team mode", async kind => {
-  const id = `pr_${(kind === "recommended" ? "a" : "b").repeat(32)}`;
+test.each(["recommended", "explicit", "unlinked-owner"])("B: %s Telegram answer reaches the real destination once in team mode", async kind => {
+  const member = teamStore().member("m_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")!;
+  if (kind === "unlinked-owner") {
+    teamStore().updateMember({ ...member, telegram: null });
+    updateRelayStore(store => ({ ...store, relays: [{ id: "paired", origin: "https://relay.invalid", api_base: "https://relay.invalid/v1", name: "Test", description: "",
+      credential: "x".repeat(43), owner: { namespace: "telegram", id: "123456", display_name: "Owner", handle: null }, pairedAt: "2026-10-16T08:00:00Z", paused: false,
+      limits: { max_response_bytes: 1048576, max_wait_s: 25, max_answer_chars: 4000 }, targets: [] }] }));
+  }
+  const id = `pr_${(kind === "recommended" ? "a" : kind === "explicit" ? "b" : "f").repeat(32)}`;
   const round: PrototypeReviewRound = { id, taskId: null, project: "project-a", title: "Choose delivery", createdAt: "2026-10-16T08:00:00Z", source: { conversationId: runtime.conversationId }, publicationKey: kind, inputDigest: "fixture", variants: [],
     questions: [{ id: "where", text: "Where?", options: [{ label: "Here", recommended: true }, { label: "Later" }] }] };
   insertSeatRound(round);
@@ -45,12 +54,14 @@ test.each(["recommended", "explicit"])("B: %s Telegram answer reaches the real d
   const input = { reviewId: id, chosen: [], comment: "Keep the saved answer.", ...(kind === "recommended" ? { skip: true as const } : { answers: [{ questionId: "where", options: [1] }] }) };
   const result = await runPrototypeAnswer({ round, input }, "message-a", () => {}, { world, delivery: prototypeDelivery, telegramUserId: "123456" }).done;
   expect(result.status).toBe("done");
+  expect(result.answer).toMatchObject({ text: expect.stringContaining("✅ Записав") });
   await settlePrototypeDeliveriesForTests();
   expect(findSeatRound(id)!.decision!.decidedBy).toEqual({ kind: "member", memberId: "m_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" });
   for (let i = 0; i < 200 && runtime.delivered.length === before; i++) await Bun.sleep(10);
   expect(runtime.delivered).toHaveLength(before + 1);
   expect(runtime.delivered.at(-1)!.text).toBe(findSeatRound(id)!.decision!.delivery.text);
   expect((await prototypeDelivery.recover(findSeatRound(id)!.decision!))?.state).toBe("sent");
+  if (kind === "unlinked-owner") teamStore().updateMember(member);
 });
 
 
@@ -89,4 +100,57 @@ test("B: revoking the saved member during retry preparation refuses dispatch", a
     expect(response.status).toBeGreaterThanOrEqual(400);
     expect(peer.delivered).toHaveLength(0);
   } finally { await peer.close(); }
+});
+
+for (const explicitRetry of [false, true]) test(`seat channel: a saved answer follows rotation after admission (Retry: ${explicitRetry})`, async () => {
+  setSystemTime(new Date("2026-10-16T12:05:00.000Z"));
+  const root = path.join(process.env.TMPDIR!, `seat-succession-${explicitRetry}`);
+  const peer = await startComposerPayloadRuntime(root, { secondConversation: true, holdFirstTurn: true });
+  process.env.LLV_RUNTIME_HOST_SOCKET = path.join(root, "rt.sock");
+  try {
+    await peer.hostUp();
+    const next = peer.successor!;
+    const ports = { world: prototypeWorld, delivery: prototypeDelivery, now: Date.now };
+    const designate = (conversationId: string, artifactPath: string, key: string) => {
+      beginOrchestratorSeatIntent({ project: "seat-answer-project", mandate: "coordinate", mode: "existing", clientRequestId: key });
+      completeOrchestratorSeatIntent({ project: "seat-answer-project", clientRequestId: key, conversationId, path: artifactPath });
+    };
+    designate(peer.conversationId, peer.artifactPath, "seat-answer-first");
+    const id = `pr_${(explicitRetry ? "e" : "d").repeat(32)}`;
+    insertSeatRound({ id, taskId: null, project: "seat-answer-project", title: "Saved answer at rotation", createdAt: new Date().toISOString(),
+      source: { conversationId: peer.conversationId }, publicationKey: "rotation-answer", inputDigest: "fixture", variants: [],
+      questions: [{ id: "rotate", text: "Proceed?", options: [{ label: "Proceed", recommended: true }] }] });
+    decidePrototype(new NextRequest("http://localhost", { headers: { host: "localhost" } }), null,
+      { reviewId: id, chosen: [], answers: [{ questionId: "rotate", options: [0] }], comment: "Preserve this saved instruction." },
+      prototypeWorld);
+    await attemptPrototypeDelivery(null, id, ports);
+    const original = findSeatRound(id)!.decision!.delivery.operationId!;
+    expect(original).toBeTruthy();
+    expect(peer.delivered).toHaveLength(0);
+    if (explicitRetry) {
+      // The explicit Retry path first fences its queued predecessor; admit another queued attempt under its saved key.
+      await peer.journal.transitionOperation(original, "failed", { reason: "fixture retry" });
+      const retried = await peer.handle(new Request(`http://localhost/api/runtime/operations/${original}`, { method: "POST" }));
+      expect(retried.status).toBe(202);
+      const response = await retried.json();
+      mutateSeatRound(id, round => { round.decision!.delivery.operationId = response.operationId; round.decision!.delivery.state = "pending"; });
+    }
+    const queued = findSeatRound(id)!.decision!.delivery.operationId!;
+    expect(["queued", "pending"]).toContain(peer.journal.operationResult(queued)?.receipt.status ?? "missing");
+    designate(next.conversationId, next.artifactPath, "seat-answer-successor");
+    await attemptPrototypeDelivery(null, id, ports);
+    await peer.holdTurn!(false);
+    for (let pass = 0; pass < 100 && !next.delivered.length; pass++) { await Bun.sleep(10); await attemptPrototypeDelivery(null, id, ports); }
+    expect(peer.delivered).toHaveLength(0);
+    expect(next.delivered).toHaveLength(1);
+    expect(next.delivered[0]!.text).toBe(findSeatRound(id)!.decision!.delivery.text);
+    expect(findSeatRound(id)!.decision!.delivery.conversationId).toBe(next.conversationId);
+    expect(findSeatRound(id)!.decision!.delivery.predecessors).toContainEqual({ conversationId: peer.conversationId, operationId: queued });
+    expect(peer.journal.operationResult(queued)?.receipt.status).toBe("failed");
+    await attemptPrototypeDelivery(null, id, ports);
+    expect(next.delivered).toHaveLength(1);
+  } finally {
+    await peer.close();
+    setSystemTime();
+  }
 });

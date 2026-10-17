@@ -17,7 +17,7 @@ function fixture() {
       SELECT 1 FROM registry_records c WHERE c.collection='conversations'
         AND c.row_key=json_extract(r.value_json,'$.conversationId'))
     ORDER BY r.row_key LIMIT 1`).get()!;
-  const receipt = JSON.parse(raw.value_json) as { launchId: string; conversationId: `conversation_${string}` };
+  const receipt = JSON.parse(raw.value_json) as { launchId: string; conversationId: `conversation_${string}`; artifactPath: string; accountId: string | null };
   db.close();
   const reads = new Map<string, number>();
   const registry = new AgentRegistry(path.join(directory, "agent-registry.json"), undefined, undefined, {
@@ -55,6 +55,28 @@ test("an absent original-send key reads only its recipient's retained delivery r
     })).toEqual({ kind: "absent" });
     expect(f.reads.get("heldDeliveries") ?? 0).toBeLessThan(20);
     expect(f.reads.get("deliveryOperationOwners") ?? 0).toBeLessThan(20);
+  } finally { f.close(); }
+});
+
+test("an absent transcript owner leaves retained conversations and receipts unread", () => {
+  const f = fixture();
+  try {
+    expect(f.registry.transcriptAccountId("codex", "/sessions/absent-owner.jsonl")).toBeNull();
+    expect(f.reads.get("conversations") ?? 0).toBe(0);
+    expect(f.reads.get("receipts") ?? 0).toBe(0);
+  } finally { f.close(); }
+});
+
+test("a transcript owner lookup reads only that path's retained evidence", () => {
+  const f = fixture();
+  try {
+    const conversation = f.registry.conversation(f.receipt.conversationId)!;
+    const generation = conversation.generations.find(item => item.path === f.receipt.artifactPath);
+    const expected = generation?.accountId || f.receipt.accountId;
+    f.reads.clear();
+    expect(f.registry.transcriptAccountId("codex", f.receipt.artifactPath)).toBe(expected);
+    expect(f.reads.get("conversations") ?? 0).toBeLessThan(10);
+    expect(f.reads.get("receipts") ?? 0).toBeLessThan(30);
   } finally { f.close(); }
 });
 

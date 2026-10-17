@@ -1,3 +1,4 @@
+import { seatMessageKeys } from "@/lib/orchestrator/seatDeliveryKeys";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { tryConversationActuation } from "@/lib/deliveryActuation";
 import { withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
@@ -118,7 +119,7 @@ export function deputySeatNoteRequest(deputy: Pick<OrchestratorDeputy, "seatPath
 }
 
 export function deputyNoteKey(askId: string, attempt = 0): string {
-  return `deputy_note_${crypto.createHash("sha256").update(attempt ? `${askId}:retry:${attempt}` : askId).digest("hex").slice(0, 40)}`;
+  return `${seatMessageKeys.deputy}${crypto.createHash("sha256").update(attempt ? `${askId}:retry:${attempt}` : askId).digest("hex").slice(0, 40)}`;
 }
 
 /** Whether the deputy's own transcript ends on an answer: its last

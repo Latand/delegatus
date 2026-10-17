@@ -125,8 +125,18 @@ function useHealthCheck() {
     return () => clearInterval(id);
   }, [read, runId, settled]);
 
+  /* Start says «starting» at once and sends once until the run appears or the
+     request fails (audit F3): the server picks the run, so it still waits. */
+  const [stopping, setStopping] = useState<string | null>(null);
+  const [stopError, setStopError] = useState<string | null>(null);
+  const [starting, setStarting] = useState(false);
+  const startOut = useRef(false);
   const start = async () => {
+    if (startOut.current) return;
+    startOut.current = true;
+    setStarting(true);
     setError(null);
+    setStopError(null);
     try {
       const response = await fetch("/api/onboarding/health", { method: "POST" });
       const body = await readJson(response);
@@ -134,19 +144,28 @@ function useHealthCheck() {
       else setError({ reason: body?.error ?? `HTTP ${response.status}`, code: body?.code ?? null });
     } catch (reason) {
       setError({ reason: reason instanceof Error ? reason.message : String(reason), code: null });
+    } finally {
+      startOut.current = false;
+      setStarting(false);
     }
   };
+  /* Stop says «stopping» at once and sends once; the poll replaces it with the
+     stopped run. A refusal or a lost request puts Stop back and says why (audit B45). */
   const stop = async () => {
-    if (!runId) return;
+    if (!runId || stopping === runId) return;
+    setStopping(runId);
+    setStopError(null);
     try {
       const response = await fetch(`/api/onboarding/health?run=${encodeURIComponent(runId)}`, { method: "DELETE" });
       const body = await readJson(response);
       if (body?.run) setAnswer(body);
-    } catch {
-      /* The poll shows whatever the server did. */
+      if (!response.ok || !body?.run) { setStopping(null); setStopError(body?.error ?? `HTTP ${response.status}`); }
+    } catch (reason) {
+      setStopping(null);
+      setStopError(reason instanceof Error ? reason.message : String(reason));
     }
   };
-  return { answer, loaded, error, start, stop };
+  return { answer, loaded, error, start, stop, starting, stopping: stopping !== null && stopping === runId, stopError };
 }
 
 /** What a row shows: after Stop, a row that never ran is not waiting any more. */
@@ -244,7 +263,7 @@ export function CheckStep({ noEngine, onGoEngines, onLeave, onSkip, onOwnsPrimar
   onOwnsPrimary?: (owns: boolean) => void;
 }) {
   const { t } = useLocale();
-  const { answer, loaded, error, start, stop } = useHealthCheck();
+  const { answer, loaded, error, start, stop, starting, stopping, stopError } = useHealthCheck();
   const [now, setNow] = useState(() => Date.now());
   const run = answer?.run ?? null;
   const running = run?.state === "running";
@@ -326,10 +345,11 @@ export function CheckStep({ noEngine, onGoEngines, onLeave, onSkip, onOwnsPrimar
         {/* A refusal the step has its own sentence for is written in the
             interface language; anything else quotes what the server said. */}
         {error ? <p data-health-start-failed="" className="text-label leading-[1.45] text-danger">{error.code === "NO_ENGINE" ? t("onboarding.check.noEngine") : t("onboarding.check.startFailed", { reason: error.reason })}</p> : null}
+        {stopError && running ? <p role="alert" data-health-stop-failed="" className="text-label leading-[1.45] text-danger">{t("onboarding.check.stopFailed", { reason: stopError })}</p> : null}
         <div ref={controls} className="flex flex-wrap gap-2">
           {running
-            ? <button type="button" data-health-stop="" onClick={() => void stop()} className={secondary}>{t("onboarding.check.stop")}</button>
-            : <button type="button" data-health-start="" disabled={cleaning || !loaded} onClick={() => void start()} className={ownsPrimary ? primary : secondary}>{run ? t("onboarding.check.again") : t("onboarding.check.start")}</button>}
+            ? <button type="button" data-health-stop="" disabled={stopping} onClick={() => void stop()} className={secondary}>{t(stopping ? "onboarding.check.stopping" : "onboarding.check.stop")}</button>
+            : <button type="button" data-health-start="" disabled={cleaning || !loaded || starting} onClick={() => void start()} className={ownsPrimary ? primary : secondary}>{starting ? t("onboarding.check.starting") : run ? t("onboarding.check.again") : t("onboarding.check.start")}</button>}
           {!run ? <button type="button" data-health-skip="" onClick={onSkip} className="inline-flex h-8 items-center justify-center rounded-[8px] px-3 text-ui font-semibold text-secondary hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 max-sm:h-11 max-sm:flex-1">{t("onboarding.check.skip")}</button> : null}
         </div>
       </div>

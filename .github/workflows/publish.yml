@@ -20,31 +20,23 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  publish:
+  verify-tag:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      id-token: write # OIDC for npm trusted publishing
+    outputs:
+      revision: ${{ steps.tag.outputs.revision }}
     steps:
       - uses: actions/checkout@v4
         with:
           ref: refs/tags/${{ env.RELEASE_TAG }}
           fetch-depth: 0
-
-      - uses: oven-sh/setup-bun@v2
-
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-          registry-url: https://registry.npmjs.org
-
-      # Node 24 already bundles npm >= 11.5.1 with its provenance deps (sigstore)
-      # intact. Reinstalling npm@latest here intermittently ships a broken global
-      # tree missing 'sigstore', which fails `npm publish` under trusted
-      # publishing (MODULE_NOT_FOUND: sigstore). Use the bundled npm instead.
-      - run: npm --version
 
       - name: Verify immutable release tag
+        id: tag
         shell: bash
         run: |
           set -euo pipefail
@@ -86,7 +78,90 @@ jobs:
             exit 1
           fi
 
+          printf 'revision=%s\n' "$tag_commit" >> "$GITHUB_OUTPUT"
+
           echo "Verified refs/tags/${RELEASE_TAG} at tag object $tag_object and commit $tag_commit"
+
+  github-release:
+    needs: verify-tag
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.verify-tag.outputs.revision }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Extract version changelog
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --input-type=module > "$RUNNER_TEMP/release-notes.md" <<'NODE'
+          import { readFileSync } from "node:fs";
+
+          const version = process.env.RELEASE_TAG.slice(1);
+          const lines = readFileSync("CHANGELOG.md", "utf8").split(/\r?\n/);
+          const heading = `## [${version}]`;
+          const starts = lines.flatMap((line, index) =>
+            line === heading || line.startsWith(`${heading} `) ? [index] : []);
+          if (starts.length !== 1) throw new Error(`Expected one CHANGELOG section for ${version}`);
+          const body = [];
+          for (const line of lines.slice(starts[0] + 1)) {
+            if (line.startsWith("## ") || /^\[[^\]]+\]:/.test(line)) break;
+            body.push(line);
+          }
+          const notes = body.join("\n").trim();
+          if (!notes) throw new Error(`Empty CHANGELOG section for ${version}`);
+          // Preserve the section's reference links without including other versions.
+          const references = lines.filter((line) => {
+            const match = line.match(/^\[([^\]]+)\]:/);
+            return match && notes.includes(`[${match[1]}]`);
+          });
+          process.stdout.write(`${notes}\n${references.length ? `\n${references.join("\n")}\n` : ""}`);
+          NODE
+
+      - name: Publish GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if gh release view "$RELEASE_TAG" > /dev/null 2>&1; then
+            echo "GitHub Release $RELEASE_TAG already exists; skipping"
+          else
+            gh release create "$RELEASE_TAG" --verify-tag \
+              --title "Delegatus ${RELEASE_TAG#v}" \
+              --notes-file "$RUNNER_TEMP/release-notes.md"
+          fi
+
+  publish:
+    needs: verify-tag
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # OIDC for npm trusted publishing
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.verify-tag.outputs.revision }}
+          fetch-depth: 0
+
+      - uses: oven-sh/setup-bun@v2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+
+      # Node 24 already bundles npm >= 11.5.1 with its provenance deps (sigstore)
+      # intact. Reinstalling npm@latest here intermittently ships a broken global
+      # tree missing 'sigstore', which fails `npm publish` under trusted
+      # publishing (MODULE_NOT_FOUND: sigstore). Use the bundled npm instead.
+      - run: npm --version
 
       - name: Check npm registry
         id: registry

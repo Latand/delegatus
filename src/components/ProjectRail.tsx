@@ -19,6 +19,7 @@ import { CatalogFailureNotice } from "./CatalogFailureNotice";
 import { DirectoryPicker, isDirectoryPath, splitDirectoryPath } from "./DirectoryPicker";
 import { FlipRow } from "./FlipRow";
 import { HeaderMenuPanel } from "./headerMenu/HeaderMenu";
+import { onOpenKeys, pendingKeys } from "./keys/openKeys";
 import { ChevronLeft, ChevronRight, Crown, FolderPlus, MoreHorizontal, Search } from "./icons";
 import { BoardRowsSkeleton } from "./skeletons";
 import { LanguageToggle } from "./LanguageToggle";
@@ -481,7 +482,9 @@ function RailRow({ summary, active, now, columns, crowned, onSelect, onToggleCro
  */
 export function RailHeaderMenu({ project }: { project: string | null }) {
   const { t } = useLocale();
-  const [open, setOpen] = useState(false);
+  /* «Open Keys» from a place that asked for a key opens the menu; the panel opens its «Keys» page. */
+  const [open, setOpen] = useState(() => pendingKeys() !== null);
+  useEffect(() => onOpenKeys(() => setOpen(true)), []);
   const ref = useRef<HTMLDivElement | null>(null);
   const trigger = useRef<HTMLButtonElement | null>(null);
   useEffect(() => {

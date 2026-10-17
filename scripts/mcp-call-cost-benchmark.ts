@@ -3,6 +3,17 @@ import path from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 
+if (process.argv.includes('--state-writer-sample')) {
+ await (await import('./mcp-state-writer-benchmark')).stateWriterBenchmark();
+ process.exit(0);
+}
+if (process.argv.includes('--state-writer-report')) {
+ const root = process.argv[process.argv.indexOf('--state-writer-report') + 1];
+ if (!root) throw new Error('Supply the saved synthetic sample directory');
+ console.log(JSON.stringify(await (await import('./mcp-state-writer-report')).stateWriterReport(root), null, 2));
+ process.exit(0);
+}
+
 /* eslint-disable @typescript-eslint/no-explicit-any -- generated fixture records cross many domain unions. */
 const runSide = process.argv.includes('--run-side');
 const coldFixtures = process.argv.includes('--cold-fixtures');

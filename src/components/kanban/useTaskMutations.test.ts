@@ -733,3 +733,65 @@ test("a saved reason is drawn before the poll and an older poll cannot replace i
   expect(drawn.hold).toEqual(saved.hold);
   expect(mutations.holdFor(original)).toEqual(saved.hold);
 });
+
+/* Audit B4: «show on board» from the tray rides the same queue as a hide. */
+test("showing an off-board task draws it on the board at once, is guarded, and a refusal takes it off again", async () => {
+  const server = scripted();
+  const mutations = new TaskStatusMutations(server.ports);
+  const offBoard = withFields(task("a", "inbox", 1), { board: "hidden" });
+  const done = mutations.edit(offBoard, { field: "board", value: "shown" });
+  expect(mutations.edits().get("a")).toEqual({ board: "shown" });
+  expect(drawnTasks([offBoard], mutations.edits(), new Map())[0]!.board).toBe("shown");
+  await flush();
+  expect(server.patches).toHaveLength(1);
+  expect(server.patches[0]!.body).toEqual({ board: "shown", expectedProject: "fixture", expectedRevision: REV(1) });
+  server.patches[0]!.answer.resolve({ ok: false, status: 409, code: "TASK_BOARD_FULL", error: "board is full" });
+  expect(await done).toEqual({ kind: "failed", field: "board", error: "board is full", status: 409, code: "TASK_BOARD_FULL" });
+  expect(mutations.edits().has("a")).toBe(false);
+  expect(drawnTasks([offBoard], mutations.edits(), new Map())[0]!.board).toBe("hidden");
+});
+
+/* Audit B28: an undo of an edit whose write is still out. */
+test("an undo queued behind an unanswered edit is drawn at once and leaves with the fence that edit's answer set", async () => {
+  const server = scripted();
+  const mutations = new TaskStatusMutations(server.ports);
+  const original = task("a", "inbox", 1);
+  const saved = deferred<boolean>();
+  let lineage: number | undefined;
+  let outcomeOfEdit: boolean | undefined;
+  void mutations.edit(original, { field: "text", value: "Renamed" }).then((outcome) => {
+    if (outcome.kind === "saved") lineage = outcome.lineage;
+    outcomeOfEdit = outcome.kind === "saved";
+    saved.resolve(outcomeOfEdit);
+  });
+  const undo = mutations.edit(original, { field: "text", value: original.text }, { fenced: true, lineage: () => lineage, after: saved.promise, unless: () => outcomeOfEdit === false });
+  /* The reversal shows before the edit it undoes has answered. */
+  expect(mutations.edits().get("a")).toEqual({ text: original.text });
+  await flush();
+  expect(server.patches).toHaveLength(1);
+  server.patches[0]!.answer.resolve({ ok: true, task: withFields(task("a", "inbox", 2), { text: "Renamed" }) });
+  await flush();
+  expect(server.patches).toHaveLength(2);
+  expect(server.patches[1]!.body).toEqual({ text: original.text, expectedProject: "fixture", expectedRevision: REV(2) });
+  server.patches[1]!.answer.resolve({ ok: true, task: task("a", "inbox", 3) });
+  expect((await undo).kind).toBe("saved");
+});
+
+test("an undo queued behind an edit that did not save is dropped before it leaves, and the stored value shows", async () => {
+  const server = scripted();
+  const mutations = new TaskStatusMutations(server.ports);
+  const original = task("a", "inbox", 1);
+  const saved = deferred<boolean>();
+  let outcomeOfEdit: boolean | undefined;
+  void mutations.move(original, "assigned").then((outcome) => {
+    outcomeOfEdit = outcome.kind === "saved";
+    saved.resolve(outcomeOfEdit);
+  });
+  const undo = mutations.move(original, "inbox", { fenced: true, after: saved.promise, unless: () => outcomeOfEdit === false });
+  expect(mutations.statuses().get("a")).toBe("inbox");
+  await flush();
+  server.patches[0]!.answer.resolve({ ok: false, status: 500, error: "store busy" });
+  expect(await undo).toEqual({ kind: "noop" });
+  expect(server.patches).toHaveLength(1);
+  expect(mutations.statuses().has("a")).toBe(false);
+});

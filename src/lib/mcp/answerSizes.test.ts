@@ -47,6 +47,9 @@ function flowCorpus(count: number, now: number) {
   }));
 }
 
+// The census builds and pages 240-row corpora through every MCP tool. Its
+// serialized byte budgets are the contract; allow the setup to finish on a
+// runner sharing CPU with the other runtime verdict checks.
 test("measure every tool through the MCP service and budget common board answers", async () => {
   const now = Date.parse("2026-09-20T09:00:00.000Z");
   const pipelines = pipelineCorpus(240, 2);
@@ -239,7 +242,7 @@ test("measure every tool through the MCP service and budget common board answers
   const successor = await call("list_tasks", { project: "size-board-successor", ids: ["task-0"] });
   expect(successor.count).toBe(1);
   expect(successor.tasks[0].project).toBe("size-board-successor");
-});
+}, 15_000);
 
 test("flow pages reach every stored row newest first within budget, using keyed reads and incremental selection", async () => {
   const { boardSelection } = await import("./boardSelection");
@@ -556,6 +559,14 @@ test("real service uses keyed reads and replays only changed selection rows on a
   await call("list_tasks", { ids: [tasks[30]!.id], limit: 1 });
   expect(taskReads - keyedReads).toBe(1);
   expect(taskIndex.work.metadataRows - beforeTasks).toBe(1);
+  const linkPage = await call("list_tasks", { ids: [tasks[20]!.id, tasks[50]!.id], limit: 50 });
+  expect(linkPage.tasks.find((task: { id: string }) => task.id === tasks[20]!.id).pipelineIds).toEqual([pipelines[20]!.id, pipelines[50]!.id]);
+  expect(linkPage.tasks.find((task: { id: string }) => task.id === tasks[50]!.id).pipelineIds).toEqual([]);
+  pipelines[50]!.taskIds = [tasks[50]!.id];
+  savePipelines(pipelines.filter(pipeline => pipeline.id !== pipelines[20]!.id));
+  const nextLinkPage = await call("list_tasks", { ids: [tasks[20]!.id, tasks[50]!.id], limit: 50 });
+  expect(nextLinkPage.tasks.find((task: { id: string }) => task.id === tasks[20]!.id).pipelineIds).toEqual([]);
+  expect(nextLinkPage.tasks.find((task: { id: string }) => task.id === tasks[50]!.id).pipelineIds).toEqual([pipelines[50]!.id]);
   console.log(`Indexed 10000-card service: changed-ID reads=1, single task update metadata=1, single pipeline update metadata=1`);
   } finally { process.env.LLV_STATE_DIR = previousState; }
 }, 30_000);

@@ -1,8 +1,9 @@
 import path from "node:path";
 
+// Lifecycle fixtures can build the production bundle inside their own sandbox.
 const result = await Bun.build({
   entrypoints: [path.join(process.cwd(), "src/lib/mcp/entry.ts")],
-  outdir: path.join(process.cwd(), "dist"),
+  outdir: process.argv[2] ?? path.join(process.cwd(), "dist"),
   naming: "mcp-server.mjs",
   target: "node",
   format: "esm",

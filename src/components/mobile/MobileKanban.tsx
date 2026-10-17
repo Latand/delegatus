@@ -39,7 +39,6 @@ import { latestAttempt } from "@/lib/pipelines/stageChip";
 import { formatConversationHash } from "@/lib/accounts/identity";
 import { PhoneCardPrototypeButton, usePrototypeButton } from "@/components/prototypeReview/PrototypeReviewButton";
 import { TaskIcon } from "@/components/tasks/TaskIcon";
-import { updateTask } from "@/components/tasks/taskApi";
 import { blockAgeSeconds } from "@/components/pipelines/pipelineBlockModel";
 import { humanizeDuration } from "@/components/turnDuration";
 import { fileModelLabel } from "@/components/utils";
@@ -1104,13 +1103,14 @@ export function MobileKanban(props: MobileKanbanProps) {
       if (outcome.kind === "failed") showReceipt(t("kanban.showFailed", { title, error: outcome.error }), null, { error: true });
     });
   }, [controller, t]);
+  /* Drawn in its column at once through the task controller; a refusal takes it off again. */
   const showTask = useCallback((task: BoardTask) => {
     const title = task.text.split(/\r?\n/, 1)[0]?.trim() || t("kanban.untitled");
-    void updateTask(task.id, { board: "shown" }).then((error) => {
-      if (error) showReceipt(t("kanban.showFailed", { title, error }), null, { error: true });
-      else showReceipt(t("kanban.shownReceipt", { title }));
+    showReceipt(t("kanban.shownReceipt", { title }));
+    void controller.edit(tasksById.current.get(task.id) ?? task, { field: "board", value: "shown" }).then((outcome) => {
+      if (outcome.kind === "failed") showReceipt(t("kanban.showFailed", { title, error: outcome.error }), null, { error: true });
     });
-  }, [t]);
+  }, [controller, t]);
 
   const [sheetFor, setSheetFor] = useState<string | null>(null);
   const itemsByKey = useMemo(() => {

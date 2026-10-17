@@ -295,10 +295,10 @@ Lane actions in the card menu are in 5.4.
 | S10 | Dictation backend (mic menu) | `MicButton.tsx:157` | Saving until the answer | Error | est. | **B22** |
 | S11 | Dictation backend (setup guide) | `onboarding/VoiceStep.tsx:218` | At once | Restored + error | est. | A |
 | S12 | Read-aloud backend / voice | `feed/SpeakButton.tsx:425` | Waits | Error | est. | **B23** |
-| S13a | OpenRouter key (Asks-you and shared memory) | `asks/OpenRouterKeyField.tsx:15` → `PUT /api/asks-you/key` | Field emptied at once, input and button disabled until the answer, then "saved" | "Invalid key" / failed alert under the field | est. one local file write; the route checks the key's syntax and writes it (`src/app/api/asks-you/key/route.ts:36`–`:38`), no provider request | **B31** |
-| S13b | Dictation provider key (setup guide) | `onboarding/VoiceStep.tsx:112` → `PUT /api/transcribe/key` | Saving until the answer; field emptied only after success | Note with the reason; 409 when the key comes from the environment | est. one local file write; the route checks shape and environment ownership (`src/app/api/transcribe/key/route.ts:31`–`:44`) | **B31** |
-| S13c | Voice companion key | `hooks/useVoiceCompanionSettings.ts:23` (`key`) → `PUT /api/voice-companion/key` | Busy until the answer | Error code under the field | est. one local file write; `saveKey` validates syntax and writes (`src/lib/voiceCompanion/storage.ts:360`–`:363`) | **B31** |
-| S14 | Voice companion settings (other than the key) | `useVoiceCompanionSettings.ts:23` (`settings`) | Busy | Error | est. | **B24** |
+| S13a | OpenRouter key (Asks-you and shared memory) | `asks/OpenRouterKeyField.tsx:15` → `PUT /api/asks-you/key` | Field emptied at once, input and button disabled until the answer, then "saved" | "Invalid key" / failed alert under the field | est. one local file write; the route checks the key's syntax and writes it (`src/app/api/asks-you/key/route.ts:36`–`:38`), no provider request | **B31** — deferred; the field moved to the «Keys» page (section 12) |
+| S13b | Dictation provider key (setup guide) | `onboarding/VoiceStep.tsx:112` → `PUT /api/transcribe/key` | Saving until the answer; field emptied only after success | Note with the reason; 409 when the key comes from the environment | est. one local file write; the route checks shape and environment ownership (`src/app/api/transcribe/key/route.ts:31`–`:44`) | **B31** — deferred; the field moved to the «Keys» page (section 12) |
+| S13c | Voice companion key | `hooks/useVoiceCompanionSettings.ts:23` (`key`) → `PUT /api/voice-companion/key` | Busy until the answer | Error code under the field | est. one local file write; `saveKey` validates syntax and writes (`src/lib/voiceCompanion/storage.ts:360`–`:363`) | **B31** — deferred; the field moved to the «Keys» page (section 12) |
+| S14 | Voice companion settings (other than the key) | `useVoiceCompanionSettings.ts:23` (`settings`) | Busy | Error | est. | **B24**; releasing an uncertain session stays C (section 12) |
 | S15 | Delete call memory | `voiceCompanion/CallMemorySetting.tsx:15` | Writing | Retry | est. | C — irreversible |
 | S16 | Telemetry | `telemetry/TelemetrySettings.tsx:30` | Busy | Error | est. | **B25** |
 | S17a | Seat reports: turn Telegram reports Off ("Log only") | `orchestrator/SeatReports.tsx:155` → `save(null)` `:74`; `ProjectReportsOverview.tsx:81` | The stored choice changes only after the PUT answers; `reset()` follows | Error line under the control | est. one local write: the route handles `null` with `setReportTelegram(project, null)` and resolves no chat or link (`src/app/api/projects/settings/route.ts:157`–`:158`) | **B30** |
@@ -311,7 +311,7 @@ Lane actions in the card menu are in 5.4.
 | S18e | Daily report: save the prompt | `TelegramReports.tsx:226` → `useTelegramReports.ts:145` `savePrompt` → `route.ts:75` (`prompt`) | Editor and buttons disabled; the editor closes only after the answer | `FailureNote` above the textarea, text kept | est. one local write | **B41** |
 | S18f | Daily report: Run now; load the group list; open the prompt editor | `TelegramReports.tsx:345`, `:163`, `:339` → `useTelegramReports.ts:152`, `:153`, `:124` → `route.ts:104`, `:115`, `?prompt=1` | Busy; Run now becomes the `running` row after the 202 | `FailureNote` | est. `run-now` is durable at once, the source pass takes tens of seconds; `groups` is a bounded connector read | C — server-computed (the run, the connector's group list and the stored prompt text come from the server) |
 | S19 | Push notifications | `PushBell.tsx:35` | Browser permission prompt, then subscribe | — | est. | C — server-computed (permission, subscription) |
-| S20 | Learned rules: delete, restore, revert | `roleMemory/LearnedRules.tsx:146` | Waits | "save" error | est. | **B26** |
+| S20 | Learned rules: delete, restore, revert | `roleMemory/LearnedRules.tsx:146` | Waits | "save" error | est. | **B26**; undoing a curator's pass stays C (section 12) |
 | S21 | Summarise the memory profile | `roleMemory/useMemoryProfile.ts:62` | Streams | Error | est. | C — server-computed (summary) |
 | S22 | Linked installations: key, connect, code, remove | `links/LinkedSettingsDialog.tsx:149`, `:160`, `:174`, `:187` | Busy | Error | est. | C — server-computed (codes, peers) |
 | S22b | Linked installations: Sync now | `links/LinkedSettingsDialog.tsx:240` → `linkedAction` `:160` → `POST /api/links/peers/[id]` → `syncPeer` (`src/lib/links/client.ts:124`) | Every dialog control is disabled (`busy`) until the peer answers and the list is refreshed; no label of its own | `linkError` at the top of the dialog (`:232`) and the peer's error line | est. one call to the peer machine | C — server-computed (the sync contacts the peer; its outcome is the content) |
@@ -661,3 +661,51 @@ the audit's revision.
   the voice directive id; memory for "optimistic UI rollback error in place".
   The relevant earlier answer is #2747 and its fix round, cited in sections 4
   and 8; no earlier audit of all actions exists.
+
+## 12. Fix line outcome (2026-10-16)
+
+The fix line ran as section 8 planned, one commit per slice, each with DOM
+tests that hold the request open, check the result drawn at once, answer
+with a refusal and check the prior state and the error in place, and press
+again while the request is out to check nothing is sent twice. Every new test
+fails on the sources before its slice and passes after it.
+
+| Slice | Entries done |
+|---|---|
+| 1 | B1, B2, B3 |
+| 2 | B4–B11, B17, B28, B44 |
+| 3 | B12–B15, B43 |
+| 4 | B16, B18–B27, B29, B30, B38–B42, B45; repairs F1, F3 |
+| 5 | B32–B37; repair F2 |
+
+**Deferred.** B31 (the key saves S13a–S13c) was left to the settings lane
+for API keys, which was open while this line ran. It has since merged (#2979):
+the three fields are gone, and every key is replaced from the one «Keys»
+page. Making that page's replace optimistic is a follow-up for the page; its
+row in section 6 stands as the change to make there.
+
+**Kept waiting on a closer reading (class C).** Two presses inside entries
+that are otherwise optimistic now:
+
+- *Releasing an uncertain voice session* (part of S14, B24): the server
+  decides what is left of a provider session that may or may not have opened,
+  and a released session cannot be taken back. It keeps the panel's busy
+  state; every other voice companion setting is drawn at once.
+  C — irreversible.
+- *Undoing a curator's pass* (part of S20, B26): the server holds which rules
+  the pass changed, so the client cannot draw the result. Delete, restore and
+  a single rule's revert are drawn at once. C — server-computed.
+
+The waits each entry already named stay as section 6 describes them: a pasted
+Telegram link (S17), a new provider account and its model list (R5), and
+«Answered here» on a relay target (R14b).
+
+**Rendered evidence.** The kanban driver's block «optimistic UI fix line:
+refusals and older pages say so in place» renders, in en and uk, light and
+dark: the refused older page of the album (1440, 768, 390) and of the report
+log (1440) with its line beside «Show older» (F1); a refused dismissal of a
+launch that did not start, its row back on the card and the reason in the
+board's receipt (B5); and a close the board refuses for good, which comes
+back with the toast that names the conversation and the code (B44), at 1440
+and 768. Its readings are `evidence/optimistic-ui/older-failed.json` and
+`evidence/optimistic-ui/refused-dismissals.json`.

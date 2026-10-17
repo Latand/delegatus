@@ -1,3 +1,5 @@
+import { SEND_SEAT_REVOKED_REASON, seatChannelRecord } from "@/lib/orchestrator/seatChannel";
+export { SEND_SEAT_REVOKED_REASON } from "@/lib/orchestrator/seatChannel";
 import {
   agentRegistry,
   conversationRegistryEntries,
@@ -178,6 +180,7 @@ export type SendResendGuidance =
   | "verify-first";
 
 export interface SendReceipt {
+  redirectedTo?: { operationId: string; conversationId: string };
   operationId: string;
   /** What was accepted under this id. Read from the durable record, so it
       survives the journal that admitted it. `inject` (#1560) is here for the
@@ -292,7 +295,7 @@ function resendGuidance(
   disposition: DeliveryTerminalDisposition | null,
   reason: string | null,
 ): { duplicateRisk: boolean; resend: SendResendGuidance } {
-  const fenced = disposition === "lost" || (disposition === null && reason === SEND_LOST_REASON);
+  const fenced = disposition === "lost" || (disposition === null && (reason === SEND_LOST_REASON || reason === SEND_SEAT_REVOKED_REASON));
   return fenced
     ? { duplicateRisk: false, resend: "safe" }
     : { duplicateRisk: true, resend: "verify-first" };
@@ -415,6 +418,7 @@ export function runtimeReceiptForSend(receipt: SendReceipt): RuntimeOperationRec
     at: receipt.settledAt ?? receipt.acceptedAt ?? new Date(0).toISOString(),
     ...(receipt.acceptedAt ? { admittedAt: receipt.acceptedAt } : {}),
     ...(receipt.resend ? { resend: receipt.resend } : {}),
+    ...(receipt.redirectedTo ? { redirectedTo: receipt.redirectedTo } : {}),
     ...(receipt.delivery ? { delivery: receipt.delivery } : {}),
     ...(receipt.interruptedTurnId ? { interruptedTurnId: receipt.interruptedTurnId } : {}),
     revision: 1,
@@ -467,7 +471,7 @@ export function journalVerdict(
     return {
       state: "failed",
       disposition: "lost",
-      reason: reason === SEND_DISCARDED_REASON ? SEND_DISCARDED_REASON : SEND_LOST_REASON,
+      reason: reason === SEND_DISCARDED_REASON || reason === SEND_SEAT_REVOKED_REASON ? reason : SEND_LOST_REASON,
     };
   }
   if (status === "uncertain") {
@@ -793,6 +797,34 @@ export async function resolveSendReceipt(
   operationId: string,
   ports: SendSettlementPorts = {},
 ): Promise<SendReceipt | null> {
+  const seen = new Set<string>();
+  let targetOperation = operationId;
+  let redirectedTo: SendReceipt["redirectedTo"];
+  for (let step = 0; step < 32; step++) {
+    if (seen.has(targetOperation)) return null;
+    seen.add(targetOperation);
+    const redirect = seatChannelRecord(targetOperation);
+    if (!redirect || redirect.class !== "channel" || redirect.outcome === "dropped") break;
+    if (redirect.outcome !== "redirected" || !redirect.toOperationId || !redirect.toConversationId) {
+      const original = sendReceiptFor((ports.registry ?? agentRegistry()).readOnlySnapshot(), operationId);
+      return original ? { ...original, state: "in-flight", reason: "awaiting delivery to the current orchestrator", resend: "verify-first", duplicateRisk: false } : null;
+    }
+    targetOperation = redirect.toOperationId;
+    redirectedTo = { operationId: targetOperation, conversationId: redirect.toConversationId };
+  }
+  if (redirectedTo && seen.size === 32) {
+    const tail = seatChannelRecord(targetOperation);
+    if (tail?.class === "channel" && tail.outcome !== "dropped") {
+      const original = sendReceiptFor((ports.registry ?? agentRegistry()).readOnlySnapshot(), operationId);
+      return original ? { ...original, state: "in-flight", reason: "redirect evidence exceeds the read budget", resend: "verify-first", duplicateRisk: false } : null;
+    }
+  }
+  if (redirectedTo) {
+    const original = sendReceiptFor((ports.registry ?? agentRegistry()).readOnlySnapshot(), operationId);
+    const target = await settleSendReceipt(targetOperation, ports);
+    return original && target ? { ...target, operationId, conversationId: original.conversationId,
+      clientMessageId: original.clientMessageId, redirectedTo } : null;
+  }
   const receipt = await settleSendReceipt(operationId, ports);
   if (receipt) mirrorReceiptProgress(receipt, ports.progress === undefined ? ownedDeliveryProgressStore() : ports.progress);
   return receipt;
@@ -1078,8 +1110,26 @@ export function lookupOriginalSend(file: RegistryFile, binding: OriginalSendBind
       || owner.deliveryId !== deliveryId || owner.retryOfOperationId))
     || (reservation && (!matches(reservation.conversationId) || reservation.clientMessageId !== binding.clientMessageId
       || reservation.command.operationId !== operationId))) return { kind: "contradictory" };
-  const receipt = sendReceiptFor(file, operationId);
+  let receipt = sendReceiptFor(file, operationId);
   if (!receipt) return { kind: "absent" };
+  const seen = new Set<string>();
+  let nextOperation = operationId;
+  for (let step = 0; step < 32; step++) {
+    if (seen.has(nextOperation)) {
+      receipt = { ...receipt, state: "in-flight", reason: "redirect evidence is incomplete", resend: "verify-first", duplicateRisk: false };
+      break;
+    }
+    seen.add(nextOperation);
+    const redirect = seatChannelRecord(nextOperation);
+    if (!redirect || redirect.class !== "channel" || redirect.outcome === "dropped") break;
+    const next = redirect.toOperationId ? sendReceiptFor(file, redirect.toOperationId) : null;
+    receipt = next && redirect.toConversationId ? { ...next, operationId, conversationId: receipt.conversationId,
+      clientMessageId: receipt.clientMessageId, redirectedTo: { operationId: next.operationId, conversationId: redirect.toConversationId } }
+      : { ...receipt, state: "in-flight", reason: "awaiting delivery to the current orchestrator", resend: "verify-first", duplicateRisk: false };
+    if (!next || !redirect.toOperationId || redirect.outcome !== "redirected") break;
+    nextOperation = redirect.toOperationId;
+    if (step === 31) receipt = { ...receipt, state: "in-flight", reason: "redirect evidence exceeds the read budget", resend: "verify-first", duplicateRisk: false };
+  }
   /* The caller's argument is compared against the forms ADMISSION can have
      stored it in, not against itself (#1609): the send route trims before it
      reserves, so measuring the raw argument against the trimmed record turned

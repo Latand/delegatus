@@ -139,7 +139,8 @@ Pipeline stages cannot create another pipeline. Every stage's prompt forbids it,
 - `pause` — hold coordinator transitions and pause a legacy stage's embedded review flow.
 - `resume` — return to the saved pipeline phase and resume a legacy stage's embedded flow.
 - `override-stage` — change a stage definition from its next attempt. For a running structured run stage, `applyNow: true` moves its runtime immediately while preserving its current attempt, worktree, branch and receipts. Only engine, model, effort, service tier and account may change now. The operator, creator or authorized project seat can request it; a stale stage digest, an already reported stage, or a conflicting open switch is refused before cutting the turn. For a same-engine account change, target migration directories are checked before admission. An unsafe directory answers 409 `RUNTIME_SWITCH_UNAVAILABLE` with repair guidance and leaves the stage definition and running attempt unchanged. Repair the directory or choose another account, then repeat the request. The provider checks again before copying history; a later filesystem change can still require rollback. `expectedAttempt` and `expectedConversationId` name the attempt and conversation the choice was made on; when a retry has started another agent since, the request answers 409 `STAGE_CHANGED` and changes nothing.
-- `retry-stage` — restore the last passed commit and start a fresh attempt.
+- `retry-stage` — retry the current stage. A passed stage waiting for publication retries verification and publication of its accepted work without launching another attempt.
+- `resolve-decision` — answer a settled stage question, or request a fresh run attempt after publication of a passed stage parks. Supply `answer`, `expectedStageId`, `expectedAttempt`, `expectedRevision` and a stable `clientRequestId`. A publication continuation keeps the current checkout and carries the refusal output into its prompt. Pending publication, queued repair delivery, a busy producer or unresolved survivors prevent the new attempt.
 - `skip-stage` — record an operator skip and follow `next`.
 - `close` — close the pipeline and any legacy embedded flow while retaining history, the worktree, and any live stage panes for inspection. A close first asks the runtime host to end each resident stage host; when the calling process has no structured control channel at all (an MCP host process), it ends the host by the identity the registry recorded (pid, start identity, boot epoch). That path acts only on an attempt affirmatively bound to the row: the attempt names the conversation the row is the current generation of, and its launch has a receipt naming that same conversation; no launch, no receipt, or a receipt naming another conversation is unresolved ownership and nothing is signalled. The same authority (the row still naming that exact process for that conversation, no orchestrator seat) is asked again after every await inside the termination and one step before each signal. The report says which Delegatus generation started the host and whether it still exists. A signal that was sent and did not end the whole authorized tree — a survivor, a refused signal — leaves the close refused with the pids named, and the survivors' identities are kept on the attempt: until each is proven gone, no later close may terminalize the attempt on registry or transcript evidence, however dead the row looks.
 
@@ -192,6 +193,20 @@ creating another stage writer. Alive or unavailable identities refuse these
 actions with no reset or launch.
 
 When a park happened before the stage produced a verdict, `retry-stage` and `skip-stage` refuse with 409 while the attempt's pane still hosts a live agent — resetting the worktree under a mid-turn agent would let its strays land in the next stage commit. Wait for the agent to exit or kill the pane, then retry.
+
+A writable producer may commit a repair after its pass was accepted. Publication
+can advance to that head when the worktree is clean, the accepted head remains
+an ancestor, and the attempt's creation receipts prove the new head and its
+suffix. The next review receives that exact revision. A foreign head, a head
+made only on main, a rewrite of accepted history or a changed observation parks
+with the accepted commit preserved.
+
+A replacement after host loss also verifies the prefix left by the interrupted
+attempt. It follows the recorded same-stage replacement links and checks exact
+commit receipts from those launches, including output adopted from their scratch
+worktrees. A fresh publication decision can carry the accepted producer's proof
+the same way. Each launch's start must name this worktree; a new starting head,
+shared Git identity or caller-supplied reflog text grants no creation proof.
 
 The pipeline tick runs in the same durable scanner-controller pass as the flow tick. `GET /api/files` remains a pure read and includes the current pipeline records for the project UI. The pipeline store fails closed on malformed or future-schema state, and that failure is contained: the files payload carries `pipelinesError` and serves everything else, and the shared tick skips pipelines while flows, workflows, and tasks keep running.
 

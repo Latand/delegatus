@@ -1,3 +1,5 @@
+import { seatMessageKeys } from "@/lib/orchestrator/seatDeliveryKeys";
+import { SEND_SEAT_REVOKED_REASON } from "@/lib/orchestrator/seatChannel";
 import { canonicalOrchestratorProject } from "@/lib/orchestrator/seats";
 import { nativeAssociationCurrent } from "@/lib/attention/nativeCallerSources";
 import { NATIVE_ASSOCIATION_AUTHORIZATION_ERROR } from "@/lib/attention/nativeAssociationForm";
@@ -134,7 +136,7 @@ export const prototypeDelivery: PrototypeDelivery = {
     if (!journal) return { state: "uncertain", operationId };
     if (["pending", "queued"].includes(journal.receipt.status)) {
       try {
-        journal = await client.transitionOperation(journal.operationId, "failed", { reason: SEND_LOST_REASON }, { fromStatuses: ["pending", "queued"] });
+        journal = await client.transitionOperation(journal.operationId, "failed", { reason: SEND_SEAT_REVOKED_REASON }, { fromStatuses: ["pending", "queued"] });
       } catch {
         journal = await client.operationStatus(operationId, { currentRetryLeaf: true });
       }
@@ -184,13 +186,13 @@ export async function refreshPrototypeDelivery(taskId: string | null,reviewId: s
   });
 }
 
-const messageKey = (reviewId: string, revision: number) => revision === 1 ? `prototype-decision:${reviewId}` : `prototype-decision:${reviewId}:${revision}`;
+const messageKey = (reviewId: string, revision: number) => revision === 1 ? `${seatMessageKeys.decision}${reviewId}` : `${seatMessageKeys.decision}${reviewId}:${revision}`;
 function decidedBy(request: PrototypeDeliveryContext): NonNullable<PrototypeDecision["decidedBy"]> {
   if (inProcess(request)) {
     if (request.kind === "autonomous-seat") return { kind: "agent", conversationId: request.conversationId };
     if (request.telegramUserId !== undefined) {
       const actor = telegramOwnerActor(request.telegramUserId);
-      if (!actor) throw new PrototypeError("verified Telegram owner is no longer an active member", 403);
+      if (!actor) throw new PrototypeError("Цей Telegram-акаунт не має чинного доступу до команди. Перевірте доступ і прив’язку Telegram у налаштуваннях Delegatus", 403);
       return actor;
     }
     return { kind: "operator" };
@@ -346,7 +348,7 @@ export async function attemptPrototypeDelivery(taskId: string | null, reviewId: 
       // Re-read every captured decision and seat after asynchronous evidence.
       decision = await revalidate();
       let seat = await withPrototypeState(() => ports.world.orchestrator(round.project));
-      if (recovered?.state === "failed" && recovered.operationId && seat && seat !== decision.delivery.conversationId) {
+      if ((recovered?.state === "failed" || recovered?.state === "pending") && recovered.operationId && seat && seat !== decision.delivery.conversationId) {
         decision = await update(held => { held.delivery.operationId = recovered!.operationId; });
         recovered = ports.delivery.retire ? await ports.delivery.retire(decision).catch((): PrototypeDeliveryResult => ({ state: "uncertain" })) : recovered;
         decision = await revalidate();

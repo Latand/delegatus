@@ -30,6 +30,7 @@ const nextConfig: NextConfig = {
       ".next/server/self-update-work-worker.js",
       ".next/server/transcript-search-index-worker.js",
       ".next/server/transcript-search-query-worker.js",
+      ".next/server/mcp-task-worker.js",
       ".next/server/chunks/**",
     ],
   },
@@ -54,6 +55,8 @@ const nextConfig: NextConfig = {
         "self-update-work-worker": "./src/lib/selfUpdateWork.worker.ts",
         "transcript-search-index-worker": "./src/lib/transcriptSearchIndex.worker.ts",
         "transcript-search-query-worker": "./src/lib/transcriptSearchQuery.worker.ts",
+        // The shared MCP graph imports App Router APIs, including after().
+        "mcp-task-worker": { import: "./src/lib/mcpTask.worker.ts", layer: "rsc" },
       });
     }
     return config;

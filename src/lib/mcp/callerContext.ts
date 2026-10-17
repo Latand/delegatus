@@ -19,7 +19,9 @@ import { AsyncLocalStorage } from "node:async_hooks";
  */
 export interface McpHttpCaller {
   /** The per-agent spawn capability the request presented. Never logged. */
-  capability: string;
+  capability?: string;
+  /** Kernel-authenticated native stdio peer; checked again before each use. */
+  nativePeer?: import("@/lib/processIdentity").ProcessIdentity;
 }
 
 const STORE_KEY = Symbol.for("llv.mcp.httpCaller");

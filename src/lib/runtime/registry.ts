@@ -794,13 +794,14 @@ export async function demoteSkippedStructuredRegistryHosts(
 /** Boot seam: resume selected durable Codex rows when structured hosting is enabled. */
 export async function adoptCodexRegistryHosts(
   registry: AgentRegistry,
-  optionsFor: (entry: AgentRegistryEntry) => CodexAppServerHostOptions,
+  optionsFor: (entry: AgentRegistryEntry) => CodexAppServerHostOptions | Promise<CodexAppServerHostOptions>,
   env: NodeJS.ProcessEnv = process.env,
   shouldAdopt: StructuredHostAdoptionFilter = () => true,
   processed?: StructuredHostAdoptionProgress,
   dependencies: {
     adoptHost?: (sessionId: string, options: CodexAppServerHostOptions) => Promise<CodexAppServerHost>;
     onAdopted?: (item: AdoptedCodexHost) => void;
+    onFailure?: (entry: AgentRegistryEntry, error: unknown) => void;
     claimHost?: (entry: AgentRegistryEntry, owner: ProcessIdentity) => Promise<AgentRegistryEntry | null>;
     /** The ownership check before `adopt`; production resolves the tasks. */
     admit?: (entry: AgentRegistryEntry, snapshot: RegistryFile) => { error: string } | null;
@@ -866,10 +867,20 @@ export async function adoptCodexRegistryHosts(
         try {
           const retainedProtocolVersion = claimed.structuredHost.protocolVersion;
           const options = {
-            ...optionsFor(claimed),
+            ...await optionsFor(claimed),
             initialEventCursor: claimed.structuredHost.eventCursor,
             ...(socketOwner ? { socketOwner, readProtocolVersion: () => retainedProtocolVersion ?? "unknown" } : {}),
           };
+          // Preparing memory can wait for state admission. Recheck both the
+          // writer claim and admission before opening a new engine generation.
+          const fresh = registry.readOnlySnapshot();
+          const current = fresh.entries[sessionKeyId(entry.key)];
+          if (!current || !registry.ownsStructuredHostClaim(entry.key, claimed.claimOwner!, claimed.claimEpoch)
+            || !shouldAdopt(current) || (dependencies.admit ?? adoptionRefusal)(current, fresh)) {
+            registry.releaseStructuredHostClaim(entry.key, claimed.claimOwner!, claimed.claimEpoch);
+            options.releaseCleanup?.();
+            return;
+          }
           /* The production static method calls `this.open`; keep its class
              receiver instead of extracting it into an unbound function. */
           const host = dependencies.adoptHost
@@ -895,6 +906,7 @@ export async function adoptCodexRegistryHosts(
             return;
           }
           // A refused cell (work that cannot be contained) or a failed open; the next message relaunches it.
+          dependencies.onFailure?.(entry, error);
           console.error(`[structured hosts] boot adoption of ${sessionKeyId(entry.key)} failed: ${error instanceof Error ? error.message : String(error)}`);
           if (socketOwner && !processIdentityProvenDead(socketOwner.process)) {
             registry.releaseStructuredHostClaim(entry.key, claimed.claimOwner!, claimed.claimEpoch);
@@ -926,13 +938,14 @@ export async function adoptCodexRegistryHosts(
 /** Boot seam: resume selected durable Claude broker rows when structured hosting is enabled. */
 export async function adoptClaudeRegistryHosts(
   registry: AgentRegistry,
-  optionsFor: (entry: AgentRegistryEntry) => ClaudeStreamBrokerHostOptions,
+  optionsFor: (entry: AgentRegistryEntry) => ClaudeStreamBrokerHostOptions | Promise<ClaudeStreamBrokerHostOptions>,
   env: NodeJS.ProcessEnv = process.env,
   shouldAdopt: StructuredHostAdoptionFilter = () => true,
   processed?: StructuredHostAdoptionProgress,
   dependencies: {
     adoptHost?: (sessionId: string, options: ClaudeStreamBrokerHostOptions) => Promise<ClaudeStreamBrokerHost>;
     onAdopted?: (item: AdoptedClaudeHost) => void;
+    onFailure?: (entry: AgentRegistryEntry, error: unknown) => void;
     claimHost?: (entry: AgentRegistryEntry, owner: ProcessIdentity) => Promise<AgentRegistryEntry | null>;
     /** The ownership check before `adopt`; production resolves the tasks. */
     admit?: (entry: AgentRegistryEntry, snapshot: RegistryFile) => { error: string } | null;
@@ -991,9 +1004,19 @@ export async function adoptClaudeRegistryHosts(
         }
         try {
           const options = {
-            ...optionsFor(claimed),
+            ...await optionsFor(claimed),
             initialEventCursor: claimed.structuredHost.eventCursor,
           };
+          // Preparing memory can wait for state admission. Recheck both the
+          // writer claim and admission before opening a new engine generation.
+          const fresh = registry.readOnlySnapshot();
+          const current = fresh.entries[sessionKeyId(entry.key)];
+          if (!current || !registry.ownsStructuredHostClaim(entry.key, claimed.claimOwner!, claimed.claimEpoch)
+            || !shouldAdopt(current) || (dependencies.admit ?? adoptionRefusal)(current, fresh)) {
+            registry.releaseStructuredHostClaim(entry.key, claimed.claimOwner!, claimed.claimEpoch);
+            options.releaseCleanup?.();
+            return;
+          }
           /* Claude adoption has the same receiver-bound static open seam. */
           const host = dependencies.adoptHost
             ? await dependencies.adoptHost(entry.key.sessionId, options)
@@ -1018,6 +1041,7 @@ export async function adoptClaudeRegistryHosts(
             return;
           }
           // A refused cell (work that cannot be contained) or a failed open; the next message relaunches it.
+          dependencies.onFailure?.(entry, error);
           console.error(`[structured hosts] boot adoption of ${sessionKeyId(entry.key)} failed: ${error instanceof Error ? error.message : String(error)}`);
           registry.setStructuredHostClaimed(entry.key, {
             ...claimed.structuredHost,

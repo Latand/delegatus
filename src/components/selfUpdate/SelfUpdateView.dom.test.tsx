@@ -31,6 +31,7 @@ Object.assign(globalThis, {
 
 const { SelfUpdateView } = await import("./SelfUpdateView");
 const { publishBlockerNames } = await import("./blockerNames");
+const { resetDrainDecisionsForTests } = await import("./AutoDrainDecision");
 const { actionError, day } = await import("./selfUpdateCopy");
 type ActionError = import("./selfUpdateCopy").ActionError;
 const { setLocale } = await import("@/lib/i18n");
@@ -375,6 +376,30 @@ describe("automatic updates", () => {
       expect(text(card?.querySelector('[role="alert"]') ?? null)).toBe("Could not record the decision. Try again.");
       expect(button(el, "deploy-now")?.disabled).toBe(false);
     } finally { globalThis.fetch = savedFetch; }
+  });
+
+  /* Audit B15: «Keep waiting» leaves at once; a lost answer brings the card back with the reason. */
+  test("Keep waiting takes the card away at once while the answer is held, sends once, and a lost answer brings it back with the reason", async () => {
+    const savedFetch = globalThis.fetch;
+    const posted: unknown[] = [];
+    let fail!: () => void;
+    globalThis.fetch = ((_input: unknown, init?: RequestInit) => {
+      posted.push(JSON.parse(String(init?.body)));
+      return new Promise<Response>((_resolve, reject) => { fail = () => reject(new TypeError("network")); });
+    }) as unknown as typeof fetch;
+    try {
+      const el = render(decided());
+      flushSync(() => button(el, "keep-waiting")!.click());
+      expect(el.querySelector("[data-auto-drain-decision]")).toBeNull();
+      expect(posted).toEqual([{ decisionId: "drain-current", choice: "keep-waiting" }]);
+      fail();
+      await Bun.sleep(0);
+      await Bun.sleep(0);
+      const card = el.querySelector("[data-auto-drain-decision]");
+      expect(card).not.toBeNull();
+      expect(text(card?.querySelector('[role="alert"]') ?? null)).toBe("Could not record the decision. Try again.");
+      expect(posted).toHaveLength(1);
+    } finally { globalThis.fetch = savedFetch; resetDrainDecisionsForTests(); }
   });
 
   test("the switch, blockers, serving revisions and history are visible", () => {

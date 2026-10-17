@@ -14,6 +14,7 @@ import {
   relayPollerStatus,
   stopExternalRelayPollers,
   sweepExternalRelayOrphans,
+  wakeExternalRelayPoller,
 } from "./poller";
 import { externalRelayFile, reserveRun, readRelayStore, readRunLedger, updateRelayStore, type PairedRelay, type RelayTargetSettings } from "./store";
 import { startTestRelay } from "./testRelay";
@@ -531,6 +532,7 @@ test("429 waits for Retry-After before another claim", async () => {
     ensureExternalRelayPollers();
     for (let i = 0; i < 30 && claims === 0; i++) await Bun.sleep(20);
     expect(claims).toBe(1);
+    wakeExternalRelayPoller("relay");
     await Bun.sleep(250);
     expect(claims).toBe(1);
     await Bun.sleep(850);
@@ -744,6 +746,48 @@ function pairedRelay(id: string, origin: string, targets: RelayTargetSettings[])
 }
 const storedTargets = (id: string) =>
   readRelayStore().relays.find((relay) => relay.id === id)?.targets;
+
+test.each(["completion", "refresh", "stop"])("%s preserves a claim assigned to the poll already on the wire", async action => {
+  const previous = readRelayStore().relays;
+  const relayId = `claim-wake-${action}`;
+  let entered!: () => void, release!: () => void, releaseNext!: () => void, settle!: (event: string) => void;
+  const waiting = new Promise<void>(resolve => { entered = resolve; });
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const nextGate = new Promise<void>(resolve => { releaseNext = resolve; });
+  const outcome = new Promise<string>(resolve => { settle = resolve; });
+  const completions: unknown[] = [];
+  let claims = 0;
+  const server = await startTestRelay(async (req, body) => {
+    if (req.url?.endsWith("/targets")) return { body: { targets: [] } };
+    if (req.url?.endsWith("/requests/claim")) {
+      if (++claims > 1) { await nextGate; return { status: 204 }; }
+      entered(); await gate;
+      return { body: { request: { ...sampleRequest, request_id: `claim-after-${action}-wake` } } };
+    }
+    if (req.url?.endsWith("/complete")) {
+      completions.push(body); settle("completed"); stopExternalRelayPollers(); releaseNext();
+      return { body: { status: "accepted", duplicate: false } };
+    }
+    return { status: 404 };
+  });
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    updateRelayStore(store => ({ ...store, relays: [pairedRelay(relayId, server.origin, [])] }));
+    ensureExternalRelayPollers();
+    await Promise.race([waiting, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("claim did not start")), 3000); })]);
+    clearTimeout(timer);
+    if (action === "completion") wakeExternalRelayPoller(relayId);
+    else if (action === "refresh") refreshExternalRelayPollers(relayId);
+    else stopExternalRelayPollers();
+    release();
+    expect(await Promise.race([outcome, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("claim was lost")), 3000); })])).toBe("completed");
+    expect(completions).toMatchObject([{ lease_id: sampleRequest.lease_id, outcome: "declined", reason: "not_configured" }]);
+  } finally {
+    clearTimeout(timer); release(); stopExternalRelayPollers(); releaseNext();
+    updateRelayStore(store => ({ ...store, relays: previous }));
+    await server.close();
+  }
+});
 test("the claim loop refreshes targets first, merges them, and advertises slots from the new list", async () => {
   const slots: unknown[] = [];
   const features: unknown[] = [];

@@ -255,3 +255,44 @@ test("an attach on a pipeline redraws the task card that aggregates it from the 
   expect(card(host).querySelector('[data-work-links="t-chips"]')).toBeNull();
   expect(card(host).querySelector("[data-card-chain]")).not.toBeNull();
 });
+
+/* Audit B17: a detach is drawn at once and comes back on a refusal. */
+test("a detach takes the row off at once while the request is held, survives a poll meanwhile, and a refusal brings it back with the reason", async () => {
+  const { WorkLinksPanel, useWorkLinks } = await import("./WorkLinkChips").then(async (chipsModule) => ({ ...chipsModule, ...(await import("./workLinksContext")) }));
+  const held: Array<(response: Response) => void> = [];
+  const sent: unknown[] = [];
+  const before = globalThis.fetch;
+  globalThis.fetch = ((_input: RequestInfo | URL, init?: RequestInit) => {
+    sent.push(JSON.parse(String(init?.body)));
+    return new Promise<Response>((resolve) => { held.push(resolve); });
+  }) as typeof fetch;
+  try {
+    const target = { kind: "task" as const, id: "t-chips" };
+    function Panel() {
+      const { of } = useWorkLinks();
+      return <WorkLinksPanel target={target} resolved={of(target)} />;
+    }
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    const root = createRoot(host);
+    roots.push(root);
+    flushSync(() => root.render(<WorkLinksProvider value={boardLinks}><Panel /></WorkLinksProvider>));
+    const rows = () => [...host.querySelectorAll("[data-work-link-row]")].map((entry) => entry.getAttribute("data-work-link-row"));
+    expect(rows()).toContain("acme/widgets#2059");
+    click(host.querySelector('[data-work-link-detach="acme/widgets#2059"]'));
+    await tick();
+    expect(rows()).not.toContain("acme/widgets#2059");
+    expect(sent).toEqual([{ detachLinks: "acme/widgets#2059" }]);
+    /* A poll that lands while the detach is out does not bring the row back. */
+    flushSync(() => root.render(<WorkLinksProvider value={{ ...boardLinks, tasks: { ...boardLinks.tasks } }}><Panel /></WorkLinksProvider>));
+    await tick();
+    expect(rows()).not.toContain("acme/widgets#2059");
+    held[0]!(new Response(JSON.stringify({ error: "not attached by hand" }), { status: 409, headers: { "content-type": "application/json" } }));
+    await tick(20);
+    expect(rows()).toContain("acme/widgets#2059");
+    expect(host.querySelector("[data-work-link-error]")?.textContent).toBe("not attached by hand");
+    expect(sent).toHaveLength(1);
+  } finally {
+    globalThis.fetch = before;
+  }
+});

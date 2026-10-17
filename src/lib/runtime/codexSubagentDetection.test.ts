@@ -502,3 +502,20 @@ test("a new detector process retains its durable boundary and observes activity 
   expect(events).toHaveLength(1);
   expect(events[0]?.at).toBe(activityAt);
 });
+
+
+test("a catalog beyond SQLite's bind limit still records denied native activity", () => {
+  setSystemTime(new Date("2030-01-01T00:00:00.000Z"));
+  const fixture = launched();
+  fixture.registry.close();
+  const registry = new AgentRegistry(path.join(root, "registry.json"), undefined, undefined, { sqliteMode: "sqlite" });
+  try {
+    fs.appendFileSync(fixture.parentPath, JSON.stringify({ timestamp: "2030-01-01T00:00:00.000Z", type: "response_item",
+      payload: { type: "function_call", namespace: "multi_agent_v1", name: "spawn_agent", call_id: "large-catalog-denial" } }) + "\n");
+    const entries = Array.from({ length: 33_000 }, (_, n) => ({ engine: "codex", path: path.join(root, "missing", `missing-${n}.jsonl`), size: 0, mtime: 0 }) as FileEntry);
+    entries.push({ engine: "codex", path: fixture.parentPath, size: fs.statSync(fixture.parentPath).size,
+      mtime: fs.statSync(fixture.parentPath).mtimeMs / 1000 } as FileEntry);
+    observeCodexSubagentTranscripts(registry, entries);
+    expect(queryLifecycleEvents({ conversationId: fixture.conversation.id }).events).toHaveLength(1);
+  } finally { registry.close(); }
+});

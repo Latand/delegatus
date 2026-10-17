@@ -52,6 +52,20 @@ The local dictation environment lives in `~/.cache/delegatus/whisper-venv`
 (`~/.cache/agent-log-viewer/whisper-venv` on an install from before the
 rename).
 
+## Keys
+
+**Settings → Keys** in the sidebar's ⋯ menu (the board menu's **Settings** on
+a phone) holds the API keys Delegatus reads itself: OpenRouter, OpenAI,
+ElevenLabs, Soniox, Fish Audio and the Telegram bot token. Each row says
+whether its key is saved here, set by its environment variable (which wins and
+is changed there) or not set. The eye shows a key for 30 seconds; copy puts it
+on the clipboard without showing it; ⋯ copies its masked form or replaces it.
+**Copy all keys** copies one `NAME=value` line per set key, and **Import
+keys** on another machine reads the same lines, shows what each one would do
+and writes nothing until you apply it. A key keeps the file it had: the ones
+above, plus `openrouter-api-key`, `soniox-api-key` and `fishaudio-api-key`.
+Only the owner of a team install can show, copy, import or change a key.
+
 ## Language
 
 The interface speaks English and Ukrainian. Switch it under **Settings** in

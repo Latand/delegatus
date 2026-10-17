@@ -3,6 +3,7 @@
    module graph below, which resolves the operator's state directory while it
    loads (#1905). See `@/lib/state/owner/mcp`. */
 import "../../../bin/envAlias.mjs";
+import "./stdioLifetime";
 import "@/lib/state/owner/mcp";
 import { discardUnsupportedApiCredentials } from "@/lib/environmentIsolation";
 

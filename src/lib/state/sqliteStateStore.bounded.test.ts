@@ -38,6 +38,16 @@ test("controller caches follow decoding authority and refuse writes that race sn
     await expect(store.reconcileSnapshot(() => { entered = true; })).rejects.toThrow(StateSnapshotChangedError);
     expect(entered).toBe(false);
     expect(store.get("row-0")?.value).toBe(520);
+    onDecode = () => {};
+    authority = 30;
+    await store.reconcileSnapshot(async (records,persist,assertCurrent) => {
+      await Promise.resolve();
+      authority = 40;
+      expect(() => assertCurrent(records[0]!)).toThrow(StateSnapshotChangedError);
+      records[0]!.value = 999;
+      await expect(persist(records)).rejects.toThrow(StateSnapshotChangedError);
+    }, undefined, true, ["row-0"]);
+    expect(store.get("row-0")?.value).toBe(540);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
@@ -378,5 +388,27 @@ test("a fresh process upgrades the pre-compact reference schema before ordinary 
       upgraded.query("UPDATE state_rows SET value_json=json_set(value_json,'$.runs[0].attempts[0].output','new output') WHERE collection='pipelines'").run();
       expect(upgraded.query("SELECT count(*) AS n FROM ref_upgrade_probe").get()).toEqual({ n: 0 });
     } finally { upgraded.close(); }
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+
+test("paged moves preserve an identical target row under its own key selector", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "collection-move-keys-"));
+  const filename = path.join(dir, "state.sqlite");
+  const row: Row = { key: "one", value: 1 };
+  const sourceOptions = { collection: "source", schemaVersion: 1, busyMessage: "busy",
+    key: (value: Row) => value.key, decode: (value: unknown) => value as Row, clone: (value: Row) => structuredClone(value) };
+  const targetOptions = { ...sourceOptions, collection: "target", key: (value: Row) => `target-${value.key}` };
+  try {
+    initializeStateCollections(filename, [sourceOptions, targetOptions].map(options => ({
+      ...options, migrationId: "one", loadRecords: () => [row],
+    })));
+    const source = new SqliteStateCollection(filename, sourceOptions);
+    const target = new SqliteStateCollection(filename, targetOptions);
+    const revision = target.revision();
+    expect(await source.moveMatchingTo(target, () => true)).toBe(1);
+    expect(source.snapshot()).toEqual([]);
+    expect(target.get("target-one")).toEqual(row);
+    expect(target.revision()).toBe(revision);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });

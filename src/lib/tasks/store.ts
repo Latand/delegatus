@@ -7,7 +7,7 @@ import { isTaskNote } from "./note";
 
 import { statePath } from "@/lib/configDir";
 import { deepFreeze } from "@/lib/deepFreeze";
-import { canonicalProject, projectAliasSnapshot } from "@/lib/projects/aliases";
+import { canonicalProject, projectAliasResolver, projectAliasSnapshot } from "@/lib/projects/aliases";
 import { FileTransactionBusyError } from "@/lib/state/fileTransaction";
 import { assertNotOperatorStateUnderTest } from "@/lib/stateOwnership";
 import {
@@ -25,7 +25,7 @@ import {
 import { readStateImport, SqliteStateCollection, type StateImportRecord, type StateImportRow } from "@/lib/state/sqliteStateStore";
 
 import { linkedContext } from "@/lib/links/linked";
-import { snapshotGroups, stampLinkedRows, type GroupSnapshot, type TaskSyncWrite } from "@/lib/links/taskStamp";
+import { groupDigest, snapshotGroups, stampLinkedRows, type GroupSnapshot, type TaskSyncWrite } from "@/lib/links/taskStamp";
 import { tombstoneCollection, tombstoneRowKey, type TombstoneRow } from "@/lib/links/tombstones";
 
 import { snapshotTasks, stampTaskRevisions, taskFingerprint, taskRevision } from "./revision";
@@ -43,8 +43,9 @@ export const TASKS_FILE = statePath("tasks.json");
 // omitted placement/revision. Response coercion must not migrate other rows.
 const persistedRows = new WeakMap<BoardTask, unknown>();
 function committedRows(tasks: BoardTask[], before: ReturnType<typeof snapshotTasks>, replacements: boolean, sync?: { write: TaskSyncWrite; groups: ReadonlyMap<string, GroupSnapshot> }): unknown[] {
+  const canonical = projectAliasResolver();
   for (const task of tasks) {
-    task.project = canonicalProject(task.project);
+    task.project = canonical(task.project);
     const prior = before.get(task.id);
     const completed = withTaskCompletion(task, prior ? { ...task, status: prior.status } : task);
     Object.assign(task, completed);
@@ -184,7 +185,7 @@ function validAttachments(value: unknown): boolean {
  * A pinned row with no usable position is downgraded to `unplaced` so the board
  * never tries to render a positionless card. Returns null for unusable rows.
  */
-function coerceTask(value: unknown): BoardTask | null {
+function coerceTask(value: unknown, canonical = canonicalProject): BoardTask | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const raw = value as Partial<BoardTask>;
   const structural =
@@ -213,7 +214,7 @@ function coerceTask(value: unknown): BoardTask | null {
   const task: BoardTask = {
     ...raw,
     id: raw.id!,
-    project: canonicalProject(raw.project!),
+    project: canonical(raw.project!),
     status: raw.status!,
     hold: storedTaskHold(raw.hold),
     ...(steps ? { steps } : {}),
@@ -307,8 +308,9 @@ function stateRows(tasksRows: unknown[], recentCreates: RecentCreate[], migratio
 function stateFromBody(raw: TasksFile | undefined): TasksFileState {
   if (raw === undefined) return { tasks: [], recentCreates: [], migrations: {} };
   if (!raw || !Array.isArray(raw.tasks)) throw new Error("invalid persisted task state");
+  const canonical = projectAliasResolver();
   const decoded = raw.tasks.map(value => {
-    const task = coerceTask(value);
+    const task = coerceTask(value, canonical);
     if (!task) throw new Error("invalid persisted task row");
     persistedRows.set(task, value);
     return task;
@@ -548,8 +550,15 @@ export function taskSelectionSource(filePath = TASKS_FILE) {
   };
 }
 
-const listSnapshots = new WeakMap<object, { aliases: string; tasks: readonly BoardTask[] }>();
-const listRows = new WeakMap<object, { aliases: string; task: BoardTask }>();
+const taskListOwner = globalThis as typeof globalThis & { __delegatusTaskListReaders?: {
+  rows: WeakMap<object, { aliases: string; task: BoardTask }>;
+  snapshots: WeakMap<object, { aliases: string; tasks: readonly BoardTask[] }>;
+} };
+// Raw collections have one bounded shared owner; weak keys give the derived
+// task views the same lifetime across separately compiled route bundles.
+const taskListReaders = taskListOwner.__delegatusTaskListReaders ??= { rows: new WeakMap(), snapshots: new WeakMap() };
+const listRows = taskListReaders.rows;
+const listSnapshots = taskListReaders.snapshots;
 /** Immutable list source. SQLite refreshes changed rows by revision; a repeated
  * list does not clone and validate every task and assignment again.
  *
@@ -609,8 +618,13 @@ function taskSyncWrite(filePath: string): { write: TaskSyncWrite; companion: Non
   const puts = new Map<string, TombstoneRow>();
   const removed = new Set<string>();
   const preservedStamps = new Set<string>();
+  const aliases = projectAliasSnapshot().aliases;
   const write: TaskSyncWrite = {
     linked: context.all, self: context.self, now: Date.now,
+    projectWatermark: project => {
+      const projects = [project, ...Object.keys(aliases).filter(alias => canonicalProject(alias) === project)];
+      return openTaskCollection(legacyDatabasePath(filePath)).maxTaskProjectStamp(projects, context.self!.prefix);
+    },
     read: (key) => puts.get(key) ?? (removed.has(key) ? null : companion.get(key)),
     put: (row) => { const key = tombstoneRowKey(row); puts.set(key, row); removed.delete(key); },
     remove: (key) => { puts.delete(key); removed.add(key); },
@@ -791,6 +805,51 @@ export function taskFeedSource(filePath = TASKS_FILE) {
     }),
     parse: (valueJson: string) => coerceTask(JSON.parse(valueJson)),
   };
+}
+
+/** A validated keyed task, retaining legacy reads before promotion. */
+export function loadPrototypeTask(taskId: string, filePath = TASKS_FILE): BoardTask | null {
+  const collection = taskCollection(filePath, "read");
+  if (!collection) return loadTasks(filePath).find(task => task.id === taskId) ?? null;
+  const row = collection.get(`t:${taskId}`);
+  if (!row) return null;
+  const task = coerceTask(row);
+  if (!task) throw new Error("invalid persisted task row");
+  return task;
+}
+
+/** One prototype round update. Unlinked tasks need only their own row;
+ * linked text changes keep the board writer's project watermark and stamps.
+ * A round update cannot delete tasks or change the tombstone companion. */
+export function mutateTaskPrototypeRound<R>(taskId: string, reviewId: string,
+  change: (round: PrototypeReviewRound | undefined, task: BoardTask | null) => R, filePath = TASKS_FILE): R {
+  const collection = taskCollection(filePath, "write")!;
+  const sync = taskSyncWrite(filePath);
+  return collection.boundedPatch(2, tx => {
+    const raw = tx.get(`t:${taskId}`);
+    const task = raw ? coerceTask(raw) : null;
+    if (raw && !task) throw new Error("invalid persisted task row");
+    const round = task?.prototypeReviews?.find(round => round.id === reviewId);
+    if (!task || !round) return change(undefined, task);
+    const before = snapshotTasks([task]);
+    const previous = JSON.stringify(round);
+    const ownGroups = sync?.write.linked.has(task.project)
+      ? snapshotGroups([task], sync.write.linked, taskFingerprint) : undefined;
+    const result = change(round, task);
+    if (JSON.stringify(round) === previous) return result;
+    task.updatedAt = new Date().toISOString();
+    if (sync && ownGroups) {
+      const prior = ownGroups.get(task.id)!;
+      const groupChanged = Object.entries(prior.digests).some(([group, digest]) =>
+        groupDigest(task, group as keyof typeof prior.digests) !== digest);
+      // Poll bookkeeping leaves replicated groups intact. Only a semantic
+      // group change needs the project's watermark; peer views stay shared.
+      if (groupChanged) stampLinkedRows([task], ownGroups, sync.write, taskFingerprint);
+    }
+    const row = committedRows([task], before, false)[0]!;
+    tx.put(row as TaskStateRow);
+    return result;
+  });
 }
 
 /** Advisory Telegram outcomes are installation-local. Touch one task row and

@@ -2,6 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { performanceSites, performanceSpans } from "@/lib/performanceSpans";
 
 import { scheduleTranscriptIndex, waitForTranscriptIndexIdleForTests } from "@/lib/search/transcriptFeed";
 import { searchTranscripts } from "@/lib/search/transcriptSearch";
@@ -10,6 +11,31 @@ import { conversationCatalogSnapshot, replaceConversationCatalog } from "./conve
 import { collectFileScanInWorker, fileScanWorkerEnabled, fileScanWorkerLaunch } from "./fileScanWorker";
 
 const directories: string[] = [];
+
+for (const invalid of [false, true]) {
+  test(`scanner diagnostics: ${invalid ? "decode refusal" : "successful publication"}`, async () => {
+    const catalog = [{ path: "/sessions/fixture.jsonl", project: "repo-fixture", engine: "codex", size: 100, mtime: 100 }];
+    const frame = invalid ? "invalid json" : JSON.stringify({ type: "complete",
+      snapshot: { files: [], projectCatalog: [], conversationCatalog: catalog, complete: true } });
+    const { directory, workerPath } = fixtureWorker(`process.stdin.resume(); process.stdin.on("end", () => console.log(${JSON.stringify(frame)}));`);
+    performanceSpans.clear();
+    try {
+      const result = collectFileScanInWorker({ persist: false }, undefined, {
+        launch: { executable: process.execPath, workerPath }, cwd: directory,
+        transcriptIndexScheduler: () => {},
+      });
+      if (invalid) await expect(result).rejects.toThrow("invalid JSON");
+      else await result;
+      const rows = performanceSpans.snapshot().records.map(row => ({ ...row, name: performanceSites[row.site] }));
+      expect(rows.some(row => row.name === "scanner.ipc-frame" && row.kind === "sync")).toBe(true);
+      expect(rows.find(row => row.name === "scanner.ipc-decode")).toMatchObject({
+        kind: "sync", failed: invalid, bytes: Buffer.byteLength(frame),
+      });
+      expect(rows.some(row => row.name === "scanner.publication")).toBe(!invalid);
+      expect(rows.some(row => row.name === "transcript.feed")).toBe(!invalid);
+    } finally { performanceSpans.clear(); }
+  });
+}
 
 afterEach(() => {
   for (const directory of directories.splice(0)) {

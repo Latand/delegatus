@@ -1,0 +1,133 @@
+{
+  "failures": [],
+  "readings": {
+    "voice-refused-enable-1440-en-light": {
+      "text": "Voice Delegatus is unavailable. Try again.",
+      "code": "COMPANION_UNAVAILABLE",
+      "cut": 0,
+      "boxes": 1,
+      "before": false,
+      "after": false
+    },
+    "voice-refused-memory-1440-en-light": {
+      "text": "Voice Delegatus is unavailable. Try again.",
+      "code": "COMPANION_UNAVAILABLE",
+      "cut": 0,
+      "boxes": 1,
+      "before": true,
+      "after": true
+    },
+    "voice-refused-enable-1440-en-dark": {
+      "text": "Voice Delegatus is unavailable. Try again.",
+      "code": "COMPANION_UNAVAILABLE",
+      "cut": 0,
+      "boxes": 1,
+      "before": false,
+      "after": false
+    },
+    "voice-refused-memory-1440-en-dark": {
+      "text": "Voice Delegatus is unavailable. Try again.",
+      "code": "COMPANION_UNAVAILABLE",
+      "cut": 0,
+      "boxes": 1,
+      "before": true,
+      "after": true
+    },
+    "voice-refused-enable-1440-uk-light": {
+      "text": "Голосовий Delegatus недоступний. Спробуйте ще раз.",
+      "code": "COMPANION_UNAVAILABLE",
+      "cut": 0,
+      "boxes": 1,
+      "before": false,
+      "after": false
+    },
+    "voice-refused-memory-1440-uk-light": {
+      "text": "Голосовий Delegatus недоступний. Спробуйте ще раз.",
+      "code": "COMPANION_UNAVAILABLE",
+      "cut": 0,
+      "boxes": 1,
+      "before": true,
+      "after": true
+    },
+    "voice-refused-enable-1440-uk-dark": {
+      "text": "Голосовий Delegatus недоступний. Спробуйте ще раз.",
+      "code": "COMPANION_UNAVAILABLE",
+      "cut": 0,
+      "boxes": 1,
+      "before": false,
+      "after": false
+    },
+    "voice-refused-memory-1440-uk-dark": {
+      "text": "Голосовий Delegatus недоступний. Спробуйте ще раз.",
+      "code": "COMPANION_UNAVAILABLE",
+      "cut": 0,
+      "boxes": 1,
+      "before": true,
+      "after": true
+    },
+    "voice-refused-enable-390-en-light": {
+      "text": "Voice Delegatus is unavailable. Try again.",
+      "code": "COMPANION_UNAVAILABLE",
+      "cut": 0,
+      "boxes": 1,
+      "before": false,
+      "after": false
+    },
+    "voice-refused-memory-390-en-light": {
+      "text": "Voice Delegatus is unavailable. Try again.",
+      "code": "COMPANION_UNAVAILABLE",
+      "cut": 0,
+      "boxes": 1,
+      "before": true,
+      "after": true
+    },
+    "voice-refused-enable-390-en-dark": {
+      "text": "Voice Delegatus is unavailable. Try again.",
+      "code": "COMPANION_UNAVAILABLE",
+      "cut": 0,
+      "boxes": 1,
+      "before": false,
+      "after": false
+    },
+    "voice-refused-memory-390-en-dark": {
+      "text": "Voice Delegatus is unavailable. Try again.",
+      "code": "COMPANION_UNAVAILABLE",
+      "cut": 0,
+      "boxes": 1,
+      "before": true,
+      "after": true
+    },
+    "voice-refused-enable-390-uk-light": {
+      "text": "Голосовий Delegatus недоступний. Спробуйте ще раз.",
+      "code": "COMPANION_UNAVAILABLE",
+      "cut": 0,
+      "boxes": 2,
+      "before": false,
+      "after": false
+    },
+    "voice-refused-memory-390-uk-light": {
+      "text": "Голосовий Delegatus недоступний. Спробуйте ще раз.",
+      "code": "COMPANION_UNAVAILABLE",
+      "cut": 0,
+      "boxes": 2,
+      "before": true,
+      "after": true
+    },
+    "voice-refused-enable-390-uk-dark": {
+      "text": "Голосовий Delegatus недоступний. Спробуйте ще раз.",
+      "code": "COMPANION_UNAVAILABLE",
+      "cut": 0,
+      "boxes": 2,
+      "before": false,
+      "after": false
+    },
+    "voice-refused-memory-390-uk-dark": {
+      "text": "Голосовий Delegatus недоступний. Спробуйте ще раз.",
+      "code": "COMPANION_UNAVAILABLE",
+      "cut": 0,
+      "boxes": 2,
+      "before": true,
+      "after": true
+    }
+  }
+}

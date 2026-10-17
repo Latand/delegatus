@@ -646,3 +646,44 @@ test("the history holds the last fifty edits", async () => {
   /* Fifty undone from 52 moves leaves the card where the second move left it. */
   expect(columnOf(view.host, "a")).toBe("inbox");
 });
+
+/* Audit B28: Undo of an edit whose own write is still out is drawn at once. */
+test("Ctrl+Z on a move still being written puts the card back at once and writes the undo fenced on that move's answer", async () => {
+  const view = mount([task("a", "inbox", "Write the release notes")]);
+  view.store.holdNext();
+  const card = cardEl(view.host, "a")!;
+  card.focus();
+  press(card, "]");
+  await tick();
+  expect(columnOf(view.host, "a")).toBe("assigned");
+  ctrlZ();
+  /* Drawn before the move it undoes has answered; nothing more is sent yet. */
+  expect(columnOf(view.host, "a")).toBe("inbox");
+  await tick();
+  expect(view.store.patches).toHaveLength(1);
+  view.store.answer(false);
+  await tick();
+  await tick();
+  expect(bodies(view.store.patches)).toEqual([
+    { status: "assigned", expectedProject: "fixture", expectedRevision: REV(1) },
+    { status: "inbox", expectedProject: "fixture", expectedRevision: REV(11), restoreHold: null },
+  ]);
+  expect(columnOf(view.host, "a")).toBe("inbox");
+});
+
+test("Ctrl+Z on a move whose write then fails drops the undo and leaves the card where the server has it", async () => {
+  const view = mount([task("a", "inbox", "Write the release notes")]);
+  view.store.holdNext();
+  const card = cardEl(view.host, "a")!;
+  card.focus();
+  press(card, "]");
+  await tick();
+  ctrlZ();
+  expect(columnOf(view.host, "a")).toBe("inbox");
+  view.store.answer(true);
+  await tick();
+  await tick();
+  expect(view.store.patches).toHaveLength(1);
+  expect(columnOf(view.host, "a")).toBe("inbox");
+  expect(receipts(view.host).some((receipt) => receipt.text === "«Write the release notes» is back in Inbox")).toBe(false);
+});

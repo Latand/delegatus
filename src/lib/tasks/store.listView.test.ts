@@ -101,3 +101,29 @@ test("every write reaches the next list, and the list a reader already holds sta
   expect(loadTasksForList(file).map((row) => row.id)).toEqual(["a", "c", "d"]);
   expect(before.map((row) => row.id)).toEqual(["a", "b", "c"]);
 });
+
+test("task row batches refresh project aliases between reads and mutations", () => {
+  const file = store();
+  const previous = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = path.dirname(file);
+  const aliases = path.join(path.dirname(file), "project-aliases.json");
+  const replaceAliases = (value: Record<string, string>) => fs.writeFileSync(aliases,
+    JSON.stringify({ schemaVersion: 1, aliases: value, displayNames: {} }));
+  try {
+    replaceAliases({ proj: "first-project" });
+    const first = loadTasksForList(file);
+    expect(first.filter(row => row.id !== "c").map(row => row.project)).toEqual(["first-project", "first-project"]);
+    replaceAliases({ proj: "first-project", "first-project": "second-project-name" });
+    mutateTasks(current => {
+      expect(current[0]!.project).toBe("second-project-name");
+      current[0]!.text = "Updated in the current project";
+      return { tasks: current, result: null };
+    }, file);
+    expect(loadTasks(file).filter(row => row.id !== "c").map(row => row.project)).toEqual(["second-project-name", "second-project-name"]);
+    expect(first[0]!.project).toBe("first-project");
+    expect(loadTasks(file).find(row => row.id === "c")?.project).toBe("other");
+  } finally {
+    if (previous === undefined) delete process.env.LLV_STATE_DIR;
+    else process.env.LLV_STATE_DIR = previous;
+  }
+});

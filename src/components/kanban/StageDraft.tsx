@@ -90,7 +90,10 @@ export function StageDraftMessage({ pipeline, stage, name, drafts, ports }: {
     : ended && attempts.every(neverLaunched) ? "ended" : ended ? "started" : "starting";
   const field = useRef<HTMLTextAreaElement>(null);
   const edit = useRef<HTMLButtonElement>(null);
-  const editing = Boolean(draft);
+  /* A save closes the editor at once and shows the new words while the read and the guarded write run;
+     a save that does not land reopens it in the phase that says why (audit B10). */
+  const saving = draft?.phase === "saving";
+  const editing = Boolean(draft) && !saving;
   const hadFocus = useRef(false);
 
   /* The editor takes focus when it opens, caret at the end; closing it hands
@@ -103,10 +106,10 @@ export function StageDraftMessage({ pipeline, stage, name, drafts, ports }: {
     element.setSelectionRange(element.value.length, element.value.length);
   }, [editing]);
   useEffect(() => {
-    if (editing || !hadFocus.current) return;
+    if (editing || !hadFocus.current || !edit.current) return;
     hadFocus.current = false;
-    edit.current?.focus({ preventScroll: true });
-  }, [editing]);
+    edit.current.focus({ preventScroll: true });
+  }, [editing, saving]);
   /* The field grows with its text, as the prototype's does. */
   useLayoutEffect(() => {
     const element = field.current;
@@ -115,7 +118,6 @@ export function StageDraftMessage({ pipeline, stage, name, drafts, ports }: {
     element.style.height = `${Math.min(260, element.scrollHeight + 2)}px`;
   }, [draft?.text]);
 
-  const saving = draft?.phase === "saving";
   /* Empty words are a real edit (the stage keeps only its wiring), so only an unchanged draft has nothing to save. */
   const canSave = Boolean(draft) && !saving && stagePromptExtra(draft!.text) !== stagePromptExtra(draft!.base);
   const save = (keepMine = false) => {
@@ -127,20 +129,20 @@ export function StageDraftMessage({ pipeline, stage, name, drafts, ports }: {
     drafts.drop(key);
   };
 
-  const words = stored || (stageReceivesPrevOutput(stage.prompt) ? t("kanban.draft.onlyPrevOutput") : t("kanban.draft.onlyTask"));
+  const wiringWords = stageReceivesPrevOutput(stage.prompt) ? t("kanban.draft.onlyPrevOutput") : t("kanban.draft.onlyTask");
+  const words = stored || wiringWords;
   return (
     <div className={`msg user draft${editing ? " editing" : ""}`} data-draft-message={key}>
       <div className="bubble">
         {draft?.phase === "started" || draft?.phase === "ended" ? (
           <DraftLeftover kind={draft.phase === "ended" ? "ended" : "undelivered"} draft={draft} draftKey={key} name={name} drafts={drafts} onOpenConversation={null} />
-        ) : draft ? (
+        ) : draft && !saving ? (
           <>
             <textarea
               ref={field}
               className="draft-edit"
               rows={3}
               value={draft.text}
-              readOnly={saving}
               aria-label={t("kanban.draft.fieldAria", { stage: name })}
               data-draft-field={key}
               onChange={(event) => drafts.edit(key, event.target.value)}
@@ -181,10 +183,15 @@ export function StageDraftMessage({ pipeline, stage, name, drafts, ports }: {
               </div>
             ) : null}
             <div className="draft-acts">
-              <span className="hint">{saving ? t("kanban.draft.saving") : t("kanban.draft.hint")}</span>
-              <button type="button" className="btn quiet" data-draft-cancel={key} disabled={saving} onClick={cancel}>{t("common.cancel")}</button>
+              <span className="hint">{t("kanban.draft.hint")}</span>
+              <button type="button" className="btn quiet" data-draft-cancel={key} onClick={cancel}>{t("common.cancel")}</button>
               <button type="button" className="btn primary" data-draft-save={key} disabled={!canSave} onClick={() => save()}>{t("kanban.draft.save")}</button>
             </div>
+          </>
+        ) : saving ? (
+          <>
+            <span className={`btext${stagePromptExtra(draft!.text) ? "" : " wiring"}`} data-draft-saving-text={key}>{stagePromptExtra(draft!.text) || wiringWords}</span>
+            <div className="draft-acts"><span className="hint" role="status" data-draft-saving={key}>{t("kanban.draft.saving")}</span></div>
           </>
         ) : (
           <>
