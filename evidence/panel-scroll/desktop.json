@@ -4,8 +4,8 @@
       "layout": "rail-open",
       "row": "column top, up",
       "input": "wheel",
-      "from": 687,
-      "to": 687,
+      "from": 655,
+      "to": 655,
       "panelFrom": 0,
       "panelTo": 0
     },
@@ -13,8 +13,8 @@
       "layout": "rail-open",
       "row": "column top, up",
       "input": "gesture",
-      "from": 687,
-      "to": 687,
+      "from": 655,
+      "to": 655,
       "panelFrom": 0,
       "panelTo": 0
     },
@@ -22,8 +22,8 @@
       "layout": "rail-open",
       "row": "column top, up",
       "input": "key",
-      "from": 687,
-      "to": 687,
+      "from": 655,
+      "to": 655,
       "panelFrom": 0,
       "panelTo": 0
     },
@@ -34,7 +34,7 @@
       "from": 0,
       "to": 0,
       "panelFrom": 0,
-      "panelTo": 1738
+      "panelTo": 1770
     },
     {
       "layout": "rail-open",
@@ -42,8 +42,8 @@
       "input": "gesture",
       "from": 0,
       "to": 0,
-      "panelFrom": 1738,
-      "panelTo": 1738
+      "panelFrom": 1770,
+      "panelTo": 1770
     },
     {
       "layout": "rail-open",
@@ -94,8 +94,8 @@
       "layout": "rail-hidden",
       "row": "column top, up",
       "input": "wheel",
-      "from": 687,
-      "to": 687,
+      "from": 655,
+      "to": 655,
       "panelFrom": 0,
       "panelTo": 0
     },
@@ -103,8 +103,8 @@
       "layout": "rail-hidden",
       "row": "column top, up",
       "input": "gesture",
-      "from": 687,
-      "to": 687,
+      "from": 655,
+      "to": 655,
       "panelFrom": 0,
       "panelTo": 0
     },
@@ -112,8 +112,8 @@
       "layout": "rail-hidden",
       "row": "column top, up",
       "input": "key",
-      "from": 687,
-      "to": 687,
+      "from": 655,
+      "to": 655,
       "panelFrom": 0,
       "panelTo": 0
     },
@@ -124,7 +124,7 @@
       "from": 0,
       "to": 0,
       "panelFrom": 0,
-      "panelTo": 1667
+      "panelTo": 1699
     },
     {
       "layout": "rail-hidden",
@@ -132,8 +132,8 @@
       "input": "gesture",
       "from": 0,
       "to": 0,
-      "panelFrom": 1667,
-      "panelTo": 1667
+      "panelFrom": 1699,
+      "panelTo": 1699
     },
     {
       "layout": "rail-hidden",
@@ -184,8 +184,8 @@
       "layout": "tabs",
       "row": "column top, up",
       "input": "wheel",
-      "from": 612,
-      "to": 612,
+      "from": 580,
+      "to": 580,
       "panelFrom": 0,
       "panelTo": 0
     },
@@ -193,8 +193,8 @@
       "layout": "tabs",
       "row": "column top, up",
       "input": "gesture",
-      "from": 612,
-      "to": 612,
+      "from": 580,
+      "to": 580,
       "panelFrom": 0,
       "panelTo": 0
     },
@@ -202,8 +202,8 @@
       "layout": "tabs",
       "row": "column top, up",
       "input": "key",
-      "from": 612,
-      "to": 612,
+      "from": 580,
+      "to": 580,
       "panelFrom": 0,
       "panelTo": 0
     },
@@ -214,7 +214,7 @@
       "from": 0,
       "to": 0,
       "panelFrom": 0,
-      "panelTo": 1719
+      "panelTo": 1751
     },
     {
       "layout": "tabs",
@@ -222,8 +222,8 @@
       "input": "gesture",
       "from": 0,
       "to": 0,
-      "panelFrom": 1719,
-      "panelTo": 1719
+      "panelFrom": 1751,
+      "panelTo": 1751
     },
     {
       "layout": "tabs",
@@ -321,8 +321,8 @@
       "layout": "rail-open",
       "row": "column top, up",
       "input": "wheel",
-      "from": 687,
-      "to": 207,
+      "from": 655,
+      "to": 175,
       "panelFrom": 0,
       "panelTo": 0
     },
@@ -330,8 +330,8 @@
       "layout": "rail-open",
       "row": "column top, up",
       "input": "gesture",
-      "from": 687,
-      "to": 87,
+      "from": 655,
+      "to": 55,
       "panelFrom": 0,
       "panelTo": 0
     },
@@ -339,7 +339,7 @@
       "layout": "rail-open",
       "row": "column top, up",
       "input": "key",
-      "from": 687,
+      "from": 655,
       "to": 0,
       "panelFrom": 0,
       "panelTo": 0
@@ -349,9 +349,9 @@
       "row": "column end, down",
       "input": "wheel",
       "from": 0,
-      "to": 687,
+      "to": 655,
       "panelFrom": 0,
-      "panelTo": 1738
+      "panelTo": 1770
     },
     {
       "layout": "rail-open",
@@ -359,15 +359,15 @@
       "input": "gesture",
       "from": 0,
       "to": 600,
-      "panelFrom": 1738,
-      "panelTo": 1738
+      "panelFrom": 1770,
+      "panelTo": 1770
     },
     {
       "layout": "rail-open",
       "row": "conversation end, down",
       "input": "wheel",
       "from": 0,
-      "to": 687,
+      "to": 655,
       "panelFrom": 362,
       "panelTo": 362
     },
@@ -385,7 +385,7 @@
       "row": "conversation end, down",
       "input": "key",
       "from": 0,
-      "to": 687,
+      "to": 655,
       "panelFrom": 362,
       "panelTo": 362
     },
@@ -411,8 +411,8 @@
       "layout": "rail-hidden",
       "row": "column top, up",
       "input": "wheel",
-      "from": 687,
-      "to": 207,
+      "from": 655,
+      "to": 175,
       "panelFrom": 0,
       "panelTo": 0
     },
@@ -420,8 +420,8 @@
       "layout": "rail-hidden",
       "row": "column top, up",
       "input": "gesture",
-      "from": 687,
-      "to": 87,
+      "from": 655,
+      "to": 55,
       "panelFrom": 0,
       "panelTo": 0
     },
@@ -429,7 +429,7 @@
       "layout": "rail-hidden",
       "row": "column top, up",
       "input": "key",
-      "from": 687,
+      "from": 655,
       "to": 0,
       "panelFrom": 0,
       "panelTo": 0
@@ -439,9 +439,9 @@
       "row": "column end, down",
       "input": "wheel",
       "from": 0,
-      "to": 687,
+      "to": 655,
       "panelFrom": 0,
-      "panelTo": 1667
+      "panelTo": 1699
     },
     {
       "layout": "rail-hidden",
@@ -449,15 +449,15 @@
       "input": "gesture",
       "from": 0,
       "to": 600,
-      "panelFrom": 1667,
-      "panelTo": 1667
+      "panelFrom": 1699,
+      "panelTo": 1699
     },
     {
       "layout": "rail-hidden",
       "row": "conversation end, down",
       "input": "wheel",
       "from": 0,
-      "to": 687,
+      "to": 655,
       "panelFrom": 362,
       "panelTo": 362
     },
@@ -475,7 +475,7 @@
       "row": "conversation end, down",
       "input": "key",
       "from": 0,
-      "to": 687,
+      "to": 655,
       "panelFrom": 362,
       "panelTo": 362
     },
@@ -501,8 +501,8 @@
       "layout": "tabs",
       "row": "column top, up",
       "input": "wheel",
-      "from": 612,
-      "to": 132,
+      "from": 580,
+      "to": 100,
       "panelFrom": 0,
       "panelTo": 0
     },
@@ -510,8 +510,8 @@
       "layout": "tabs",
       "row": "column top, up",
       "input": "gesture",
-      "from": 612,
-      "to": 12,
+      "from": 580,
+      "to": 0,
       "panelFrom": 0,
       "panelTo": 0
     },
@@ -519,7 +519,7 @@
       "layout": "tabs",
       "row": "column top, up",
       "input": "key",
-      "from": 612,
+      "from": 580,
       "to": 0,
       "panelFrom": 0,
       "panelTo": 0
@@ -529,18 +529,18 @@
       "row": "column end, down",
       "input": "wheel",
       "from": 0,
-      "to": 612,
+      "to": 580,
       "panelFrom": 0,
-      "panelTo": 1719
+      "panelTo": 1751
     },
     {
       "layout": "tabs",
       "row": "column end, down",
       "input": "gesture",
       "from": 0,
-      "to": 600,
-      "panelFrom": 1719,
-      "panelTo": 1719
+      "to": 580,
+      "panelFrom": 1751,
+      "panelTo": 1751
     },
     {
       "layout": "tabs",
@@ -556,7 +556,7 @@
       "row": "conversation end, down",
       "input": "gesture",
       "from": 0,
-      "to": 600,
+      "to": 580,
       "panelFrom": 418,
       "panelTo": 418
     },
@@ -565,7 +565,7 @@
       "row": "conversation end, down",
       "input": "key",
       "from": 0,
-      "to": 612,
+      "to": 580,
       "panelFrom": 418,
       "panelTo": 418
     },
@@ -645,15 +645,15 @@
       "layout": "rail-open",
       "row": "page scrollbar, up",
       "input": "wheel",
-      "from": 687,
-      "to": 447
+      "from": 655,
+      "to": 415
     },
     {
       "layout": "rail-open",
       "row": "column head, up",
       "input": "wheel",
-      "from": 687,
-      "to": 447
+      "from": 655,
+      "to": 415
     },
     {
       "layout": "rail-open",
@@ -680,15 +680,15 @@
       "layout": "rail-hidden",
       "row": "page scrollbar, up",
       "input": "wheel",
-      "from": 687,
-      "to": 447
+      "from": 655,
+      "to": 415
     },
     {
       "layout": "rail-hidden",
       "row": "column head, up",
       "input": "wheel",
-      "from": 687,
-      "to": 447
+      "from": 655,
+      "to": 415
     },
     {
       "layout": "rail-hidden",
@@ -715,15 +715,15 @@
       "layout": "tabs",
       "row": "page scrollbar, up",
       "input": "wheel",
-      "from": 612,
-      "to": 372
+      "from": 580,
+      "to": 340
     },
     {
       "layout": "tabs",
       "row": "column head, up",
       "input": "wheel",
-      "from": 612,
-      "to": 372
+      "from": 580,
+      "to": 340
     },
     {
       "layout": "tabs",
@@ -773,14 +773,14 @@
       "layout": "rail-open",
       "thumbDrag": {
         "from": 0,
-        "to": 566,
+        "to": 554,
         "selected": ""
       },
       "sideways": {
         "scrollLeft": 211,
         "page": [
-          687,
-          687
+          655,
+          655
         ]
       },
       "focus": {
@@ -794,7 +794,7 @@
       "layout": "rail-hidden",
       "thumbDrag": {
         "from": 0,
-        "to": 566,
+        "to": 0,
         "selected": ""
       },
       "focus": {
@@ -808,7 +808,7 @@
       "layout": "tabs",
       "thumbDrag": {
         "from": 0,
-        "to": 572,
+        "to": 557,
         "selected": ""
       },
       "focus": {
@@ -827,16 +827,18 @@
       "touch": {
         "body": {
           "row": "column top, finger down",
-          "from": 687,
-          "to": 687
+          "from": 655,
+          "to": 655
         },
         "head": {
           "row": "column head, finger down",
-          "from": 687,
-          "to": 350
+          "from": 655,
+          "to": 315
         }
       }
     }
   ],
-  "failures": []
+  "failures": [
+    "rail-hidden: the page's thumb dragged 300 px moved the page only to 0"
+  ]
 }

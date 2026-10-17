@@ -82,3 +82,19 @@ test("the seat's conversation and a column keep their vertical scroll to themsel
   });
   expect(sideways).toEqual([]);
 });
+
+/* The lock traps the way back up once the page has scrolled to the tasks, so
+   the page keeps one strip pinned to its top, outside both panels, for the
+   wheel to land on. It takes no layout, it sits above the seat and the column
+   heads, and the board gives up its 32 px so the strip covers no row at the
+   page's end. The browser half is the same driver case. */
+test("the strip that returns the page to the seat is pinned to the page and costs the board 32 px", () => {
+  const strip = declarationsFor(".kb .kb-page > .seat-return");
+  expect(strip.get("position")).toBe("sticky");
+  expect(strip.get("top")).toBe("0");
+  expect(strip.get("height")).toBe("0");
+  expect(Number(strip.get("z-index"))).toBeGreaterThan(Number(declarationsFor(".kb .seat-grip").get("z-index")));
+  expect(declarationsFor(".kb .kb-page > .seat-return > button").get("height")).toBe("32px");
+  expect(declarationsFor(".kb .kb-page:has(> .seat-return) > .board-frame").get("height")).toBe("max(440px, 100% - 32px)");
+  expect(declarationsFor(".kb .kb-page:has(> .seat-return) > .board-frame").get("height")).not.toBe(declarationsFor(".kb .board-frame").get("height"));
+});

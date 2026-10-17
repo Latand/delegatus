@@ -132,6 +132,25 @@ were heavier: a new grip or "to the orchestrator / to the board" buttons duplica
 scroll-snap between the seat and the board changes every resting position the operator has today, and
 JavaScript wheel routing does by hand what one CSS property does.
 
+## The way back: a strip pinned to the page
+
+The lock traps the page once it is low. One wheel notch from a column head moves the page, the
+conversation slides under the pointer, and the contained feed takes every later notch (687 → 447 at
+1440 px). The bar's Orchestrator button and `O` fold the seat from there, so neither returns to it.
+
+`KanbanSeat` draws one strip as the first child of `.kb-page`, only for the seat on top and open. It
+is `position: sticky; top: 0` with no height of its own and a 32 px button, so it belongs to the
+page scroller and stays under the pointer while the page scrolls up. It is visible only while the
+seat's head is above it (an `IntersectionObserver` rooted at the page, no per-scroll work). A wheel,
+a trackpad or a finger over it scrolls the page to the top. A click, Enter or Space scrolls to the
+top and moves focus to the composer (the fold button when the seat shows no composer). The board
+is 32 px shorter so the strip covers none of its rows at the page's end.
+
+The lock on the panels is unchanged. The folded seat, the seat at the side and a window under 800 px
+tall draw no strip; the phone draws none because its document does not scroll and the seat card
+never leaves the screen. Driver case: "a strip pinned to the page returns it to the seat"; readings
+in `evidence/panel-scroll/return.json`.
+
 ## States to cover
 
 - Desktop 1440×900 with the rail open (scroll mode) and hidden (wide grid), and 1000×800 with the
