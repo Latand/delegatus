@@ -12,6 +12,10 @@ import { accountTerminalCommand } from "@/lib/accounts/terminalLaunch";
 import { createManagedClaudeAccount } from "@/lib/accounts/claude";
 import { headlessCodexThreadConfig } from "@/lib/codexHeadlessConfig";
 import { SOURCE_STATES, chooseSource, sourceTurnsEnginesOff } from "./fixtures/source";
+import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
+import { stageMemoryForLaunch } from "./roleStage";
+import { learnedRulesForLaunchProfile } from "./roleLaunch";
+import { leaveLessons, recordLessonRequest } from "./roleStore";
 
 const previous = process.env.LLV_STATE_DIR;
 const SID = "00000000-0000-0000-0000-000000000000";
@@ -120,4 +124,25 @@ test("resume reads the new setting rather than the original launch profile", () 
     }
     expect(original.launchProfile).not.toHaveProperty("memorySource");
   }
+});
+
+test.each(["claude", "codex"] as const)("%s resumes a stage's saved role selector after leaving engines mode", async engine => {
+  const project = `saved-selector-${engine}`;
+  const rule = "Check the current pipeline stage before deciding which memory to load.";
+  const source = { project, pipelineId: `${project}-pipeline`, stageId: "build", attempt: 1, roleId: "builder", fixRound: false, conversationId: `${project}-writer` };
+  recordLessonRequest({ ...source, at: "2026-10-17T00:00:00.000Z" });
+  leaveLessons({ request: source, source, none: null, lessons: [{ scope: "role", rule, why: "A resumed stage lost its role selector." }] });
+
+  chooseSource("engines");
+  const selected = stageMemoryForLaunch({ id: "pipeline", project }, { id: "build", kind: "run", onFail: null }, "builder");
+  const savedProfile = JSON.parse(JSON.stringify(emptyLaunchProfile({ cwd: root, cleanMemory: selected.cleanMemory, learnedRules: selected.learnedRules ?? undefined })));
+  expect(savedProfile.learnedRules).toEqual({ project, roleId: "builder" });
+  expect(await learnedRulesForLaunchProfile(savedProfile)).toBeUndefined();
+
+  chooseSource("active");
+  const resumedProfile = JSON.parse(JSON.stringify(savedProfile));
+  expect(await learnedRulesForLaunchProfile(resumedProfile)).toContain(rule);
+
+  const clean = stageMemoryForLaunch({ id: "pipeline", project }, { id: "review", kind: "run", onFail: { to: "build", maxRounds: 1 } }, "builder");
+  expect(clean).toEqual({ cleanMemory: true, learnedRules: null });
 });

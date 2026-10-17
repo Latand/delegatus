@@ -16,6 +16,7 @@ const { createPipelineFromRequest, reportStageCompletion, tickPipelines } = awai
 const { registerPipelineTick } = await import("@/lib/pipelines/controllerSignal");
 const { loadPipelines, savePipelines } = await import("@/lib/pipelines/store");
 const { learnedRulesBlock } = await import("./roleStore");
+const { learnedRulesForLaunchProfile } = await import("./roleLaunch");
 const { leaveLessonForConversation, lessonRequestForReport } = await import("./roleStage");
 type PipelinePorts = import("@/lib/pipelines/engine").PipelinePorts;
 type SpawnInput = Parameters<PipelinePorts["spawnAgent"]>[0];
@@ -175,7 +176,8 @@ test("a review's finding becomes the fixer's abstract rule, a fresh builder star
   expect(fresh.prompt).not.toContain(RULE);
   expect(JSON.stringify(loadPipelines())).not.toContain(RULE);
 
-  /* The installation's kill switch: the next builder gets nothing, and nothing more is written. */
+  /* Engines mode retains the selector for a future Delegatus resume, while
+     current delivery and lesson writes stay switched off. */
   chooseSource("engines");
   savePipelines([]);
   const third = await builderLane();
@@ -183,7 +185,8 @@ test("a review's finding becomes the fixer's abstract rule, a fresh builder star
   await tickPipelines([], ports);
   const off = spawned.at(-1)!;
   expect(off.role.roleId).toBe("builder");
-  expect(off.learnedRules ?? null).toBeNull();
+  expect(off.learnedRules).toEqual({ project: PROJECT, roleId: "builder" });
+  expect(await learnedRulesForLaunchProfile({ learnedRules: off.learnedRules ?? undefined })).toBeUndefined();
   const n = spawned.length;
   await settle(n, "pass");
   expect(lessonRequestForReport(lane(third), "build", 1, conversation(n))).toBeNull();

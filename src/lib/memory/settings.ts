@@ -23,8 +23,14 @@ export function setSharedMemoryEnabled(project: string, enabled: boolean) {
   writeJsonDurably(statePath("shared-memory-settings.json"), { ...settings(), [canonicalProject(project)]: enabled });
 }
 
+/** The text-free role selector remains durable while the engines are selected,
+    so a later Delegatus launch can resume with the current rules. */
+export function roleMemorySelectorEnabled(): boolean {
+  return process.env.LLV_ROLE_MEMORY?.trim().toLowerCase() !== "off";
+}
+
 /** Installation choice and the emergency override stop requests and delivery
-    together. Existing stores are retained while the engines are selected. */
+    together. Existing stores and launch selectors are retained. */
 export function roleMemoryEnabled(): boolean {
-  return process.env.LLV_ROLE_MEMORY?.trim().toLowerCase() !== "off" && memorySource().choice !== "engines";
+  return roleMemorySelectorEnabled() && memorySource().choice !== "engines";
 }

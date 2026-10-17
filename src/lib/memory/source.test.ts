@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { statePath } from "@/lib/configDir";
 import { memorySource, engineMemoryOff, readMemorySourceFile, setMemorySource } from "./source";
-import { roleMemoryEnabled } from "./settings";
+import { roleMemoryEnabled, roleMemorySelectorEnabled } from "./settings";
 import { SOURCE_STATES, CHANGED_AT, chooseSource, sourceTurnsEnginesOff } from "./fixtures/source";
 
 let root: string;
@@ -22,8 +22,10 @@ test.each([...SOURCE_STATES])("source %s keeps clean and role decisions separate
   expect(engineMemoryOff()).toBe(sourceTurnsEnginesOff(state));
   expect(engineMemoryOff({ cleanMemory: true })).toBe(true);
   expect(roleMemoryEnabled()).toBe(state !== "engines");
+  expect(roleMemorySelectorEnabled()).toBe(true);
   process.env.LLV_ROLE_MEMORY = " OFF ";
   expect(roleMemoryEnabled()).toBe(false);
+  expect(roleMemorySelectorEnabled()).toBe(false);
 });
 
 test("missing, malformed, unsupported and oversized files remain unchosen", () => {

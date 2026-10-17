@@ -15,6 +15,7 @@ const { beginLegacySpawnFixture } = await import("@/lib/agent/registryTestFixtur
 const { CodexAppServerHost } = await import("@/lib/runtime/codexAppServerHost");
 const { ClaudeStreamBrokerHost } = await import("@/lib/runtime/claudeStreamBrokerHost");
 const { leaveLessons, recordLessonRequest } = await import("./roleStore");
+const { stageMemoryForLaunch } = await import("./roleStage");
 const { learnedRulesForLaunchProfile, sweepOldLearnedRulesFiles, LEARNED_RULES_MAX_BYTES } = await import("./roleLaunch");
 const { engineMemoryVersion, memoryDeliveries } = await import("./deliveryLedger");
 const { renderLearnedRules } = await import("./roleRender");
@@ -32,14 +33,18 @@ test("the host renders its text-free launch marker into instructions without wri
   expect(fs.existsSync(path.join(process.env.LLV_STATE_DIR!, "role-memory", "launch"))).toBe(false);
 });
 
-test.each(["codex", "claude"] as const)("%s fresh and resumed starts reload the latest rule from their marker", async engine => {
+test.each(["codex", "claude"] as const)("%s fresh and resumed starts reload rules from a profile saved in engines mode", async engine => {
   for (const resumed of [false, true]) {
     const cwd = fs.mkdtempSync(path.join(sandbox, "host-"));
     const project = `delivery-${engine}-${resumed}`;
     const source = { project, pipelineId: project, stageId: "build", attempt: 1, roleId: "builder", fixRound: false, conversationId: "conversation_delivery_replay" };
     recordLessonRequest({ ...source, at: "2026-10-11T00:00:00.000Z" });
     const rule = leaveLessons({ request: source, source, none: null, lessons: [{ scope: "role", rule: text, why: "A stored receipt was replayed with a different owner." }] }).left[0]!;
-    const launchProfile = emptyLaunchProfile({ cwd, learnedRules: { project, roleId: "builder" } });
+    chooseSource("engines");
+    const stageMemory = stageMemoryForLaunch({ id: project, project }, { id: "build", kind: "run", onFail: null }, "builder");
+    const launchProfile = JSON.parse(JSON.stringify(emptyLaunchProfile({ cwd, cleanMemory: stageMemory.cleanMemory, learnedRules: stageMemory.learnedRules ?? undefined })));
+    expect(launchProfile.learnedRules).toEqual({ project, roleId: "builder" });
+    chooseSource("active");
     const registry = new AgentRegistry(path.join(cwd, "registry.json"), undefined, undefined, { sqliteMode: "off" });
     const sessionId = crypto.randomUUID();
     const transcript = resumed ? path.join(cwd, `${sessionId}.jsonl`) : null;
@@ -74,7 +79,7 @@ test.each(["codex", "claude"] as const)("%s fresh and resumed starts reload the 
       expect(rows.map(row => row.delivery.rules.find(item => item.id === rule.id)?.hash)).toEqual([text, rewritten].map(value => crypto.createHash("sha256").update(value).digest("hex")));
       expect(rows[1].delivery.bytes).toBe(Buffer.byteLength((seen[1] as Record<string, string>)[channel]));
       expect(fs.existsSync(path.join(process.env.LLV_STATE_DIR!, "role-memory", "launch"))).toBe(false);
-    } finally { start.mockRestore(); adopt.mockRestore(); }
+    } finally { chooseSource("unchosen"); start.mockRestore(); adopt.mockRestore(); }
   }
 });
 
