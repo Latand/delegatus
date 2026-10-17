@@ -9,7 +9,9 @@ import { taskFeedSource, TASKS_FILE } from "@/lib/tasks/store";
 import fs from "node:fs";
 import { statePath } from "@/lib/configDir";
 import type { BoardTask } from "@/lib/tasks/types";
-import { taskShowsOnBoard } from "@/lib/tasks/boardVisibility";
+import { withTaskCompletion } from "@/lib/tasks/completion";
+import type { FileEntry } from "@/lib/types";
+import { DONE_TASK_BOARD_RETENTION_MS, taskShowsOnBoard } from "@/lib/tasks/boardVisibility";
 import { taskSeatHoldingSnapshot } from "@/lib/tasks/seatHolding";
 import { lastScannedFiles } from "@/lib/scanner/scanCache";
 import { loadPipelinesForList } from "@/lib/pipelines/store";
@@ -34,6 +36,7 @@ export function isPosition(value: unknown): value is Position {
     && (value.length === 1 || (typeof value[1] === "string" && value[1].length > 0 && value[1].length <= 64));
 }
 
+export type FeedFiles = readonly Pick<FileEntry, "path" | "conversationId" | "pendingQuestion" | "waitingInput">[];
 export type FeedFilter = {
   self: { id: string; prefix: string };
   /** The projects linked over this link. */
@@ -45,6 +48,10 @@ export type FeedFilter = {
   includePrototypeReview?: boolean;
   peerTaskWireVersion?: number;
   filePath?: string;
+  /** The caller's completed scanner observation, carried into the worker. */
+  files?: FeedFiles;
+  validity?: { until: number };
+  now?: number;
 };
 
 export type LogPage = { kind: "page"; rows: WireRow[]; cursor: Position; more: boolean; withheld: string[] } | { kind: "resync" };
@@ -72,9 +79,9 @@ function encoded(task: BoardTask, filter: FeedFilter) {
     quotes (its text, details, prototype review titles, variants and decision
     comments, an original record or a replica) is withheld
     (src/lib/memory/roleStore.ts); the local task keeps it. A role memory that
-    cannot be read throws, and the page is not sent. */
+    cannot be read or completely compiled throws, and the page is not sent. */
 export function outboundTask(task: BoardTask): BoardTask {
-  return withoutStoredLessonsIn(task);
+  return withoutStoredLessonsIn(task, { requireComplete: true });
 }
 
 type OmittedTask = { id: string; project: string };
@@ -86,12 +93,21 @@ const omittedCollections = new Map<string, SqliteStateCollection<OmittedTask>>()
 type EligibilitySweep = {
   taskRevision: number;
   omissionRevision: number;
-  files: ReturnType<typeof lastScannedFiles>;
+  files: FeedFiles | null;
   pipelineRevision: number | null;
   seats: string;
   after: string | null;
 };
 const eligibilitySweeps = new Map<string, Map<string, EligibilitySweep>>();
+function eligibilityScope(self: string, projects: Iterable<string>): string {
+  return JSON.stringify([self, [...projects].sort()]);
+}
+/** An unchanged log request must keep advancing a bounded omission sweep.
+ * Its empty page becomes reusable only after the last omission was inspected. */
+export function taskEligibilitySweepPending(database: string, self: string, projects: Iterable<string>): boolean {
+  const sweep = eligibilitySweeps.get(database)?.get(eligibilityScope(self, projects));
+  return !!sweep && sweep.after !== null;
+}
 type EligibilityRevisions = Pick<EligibilitySweep, "taskRevision" | "omissionRevision" | "pipelineRevision">;
 const eligibilityRevisions = new Map<string, { signature: string; pipelineSignature: string; revisions: EligibilityRevisions }>();
 
@@ -146,11 +162,11 @@ function resumeOmittedTasks(source: NonNullable<ReturnType<typeof taskFeedSource
   const omissions = omittedTasks(source.database);
   if (!omissions) return source.revision();
   const context = {
-    ...readEligibilityRevisions(source, omissions), files: lastScannedFiles(), seats: seatSignature(),
+    ...readEligibilityRevisions(source, omissions), files: filter.files ?? lastScannedFiles(), seats: seatSignature(),
   };
   let sweeps = eligibilitySweeps.get(source.database);
   if (!sweeps) eligibilitySweeps.set(source.database, sweeps = new Map());
-  const scope = JSON.stringify([filter.self.id, [...filter.projects].sort()]);
+  const scope = eligibilityScope(filter.self.id, filter.projects);
   let sweep = sweeps.get(scope);
   // Snapshot identities and store revisions are constant-time idle checks.
   // Finish a started sweep before observing newer context, so frequent scans
@@ -191,19 +207,25 @@ function trackOmission(task: BoardTask, database: string, eligible: (task: Board
  * Context is read lazily, once per page, only when an expired row needs it. */
 function exportableTasks(filter: FeedFilter): (task: BoardTask) => boolean {
   let holdsSeat: ReturnType<typeof taskSeatHoldingSnapshot> | undefined;
-  let files: ReturnType<typeof lastScannedFiles> | undefined;
+  let files: FeedFiles | null | undefined;
   let pipelines: ReturnType<typeof loadPipelinesForList> | undefined;
-  const now = Date.now();
-  return (task) => task.status !== "done" || (!!task.machine && task.machine !== filter.self.id) || taskShowsOnBoard(task, true, {
+  const now = filter.now ?? Date.now();
+  return (task) => {
+    if (filter.validity && task.status === "done") {
+      const expires = Date.parse(withTaskCompletion(task).doneAt!) + DONE_TASK_BOARD_RETENTION_MS + 1;
+      if (expires > now) filter.validity.until = Math.min(filter.validity.until, expires);
+    }
+    return task.status !== "done" || (!!task.machine && task.machine !== filter.self.id) || taskShowsOnBoard(task, true, {
     now,
     get holdsSeat() { return (holdsSeat ??= taskSeatHoldingSnapshot())(task) === "holds"; },
     get members() {
-      files ??= lastScannedFiles() ?? [];
+      files ??= filter.files ?? lastScannedFiles() ?? [];
       return files.filter((file) => task.assignments.some((assignment) =>
         (assignment.conversationId && assignment.conversationId === file.conversationId) || assignment.path === file.path));
     },
     get pipelines() { return pipelines ??= loadPipelinesForList(); },
   });
+  };
 }
 
 /** One log page after `after`, or `resync` when the log no longer reaches

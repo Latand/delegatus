@@ -2373,13 +2373,13 @@ function markVerdictRecoverySucceeded(attempt: PipelineStageAttempt, now: string
   };
 }
 
-function recordVerdictRecoveryMiss(
+async function recordVerdictRecoveryMiss(
   pipeline: Pipeline,
   attempt: PipelineStageAttempt,
   ports: PipelinePorts,
   reason: string,
   messageTs: number | null,
-): void {
+): Promise<void> {
   const now = ports.now();
   const recovery = attempt.verdictRecovery?.state === "pending"
     ? attempt.verdictRecovery
@@ -2404,7 +2404,7 @@ function recordVerdictRecoveryMiss(
   attempt.verdictRecovery = next;
   if (next.state === "exhausted") {
     attempt.completedAt = now;
-    park(
+    await park(
       pipeline,
       `stage verdict recovery exhausted after ${VERDICT_RECOVERY_MAX_CHECKS} checks: ${reason}`,
       attempt,
@@ -2433,23 +2433,25 @@ async function unregisteredStageHostDeathEvidence(
     : null;
 }
 
-const stageSettlementEffects = new WeakMap<Pipeline, Array<() => void>>();
+const taskNoteAuthority = new WeakMap<Pipeline, () => void>();
 
-function writeEngineParkedTaskNote(pipeline: Pipeline, detail: string, attempt?: PipelineStageAttempt | null, reason?: ParkedTaskReason): void {
+const stageSettlementEffects = new WeakMap<Pipeline, Array<() => Promise<void>>>();
+
+async function writeEngineParkedTaskNote(pipeline: Pipeline, detail: string, attempt?: PipelineStageAttempt | null, reason?: ParkedTaskReason): Promise<void> {
   const effects = stageSettlementEffects.get(pipeline);
-  if (effects) effects.push(() => writeParkedTaskNote(pipeline, detail, attempt, reason));
-  else writeParkedTaskNote(pipeline, detail, attempt, reason);
+  if (effects) effects.push(() => writeParkedTaskNote(pipeline, detail, attempt, reason, taskNoteAuthority.get(pipeline)));
+  else await writeParkedTaskNote(pipeline, detail, attempt, reason, taskNoteAuthority.get(pipeline));
 }
 
-function clearEngineTaskNote(pipeline: Pipeline): void {
+async function clearEngineTaskNote(pipeline: Pipeline): Promise<void> {
   const effects = stageSettlementEffects.get(pipeline);
-  if (effects) effects.push(() => clearEngineParkedTaskNote(pipeline));
-  else clearEngineParkedTaskNote(pipeline);
+  if (effects) effects.push(() => clearEngineParkedTaskNote(pipeline, taskNoteAuthority.get(pipeline)));
+  else await clearEngineParkedTaskNote(pipeline, taskNoteAuthority.get(pipeline));
 }
 
-function park(pipeline: Pipeline, detail: string, attempt?: PipelineStageAttempt | null, reason?: ParkedTaskReason): void {
+async function park(pipeline: Pipeline, detail: string, attempt?: PipelineStageAttempt | null, reason?: ParkedTaskReason): Promise<void> {
   const noteReason = reason ?? (detail.startsWith("rate limited until ") ? { kind: "quota-reset" as const } : undefined);
-  if (pipeline.state !== "needs_decision" || pipeline.stateDetail !== detail) writeEngineParkedTaskNote(pipeline, detail, attempt, noteReason);
+  if (pipeline.state !== "needs_decision" || pipeline.stateDetail !== detail) await writeEngineParkedTaskNote(pipeline, detail, attempt, noteReason);
   if (attempt && attempt.state !== "failed") attempt.state = "needs_decision";
   if (attempt?.providerWait?.stageRetry && reason?.kind !== "provider-retry") {
     delete attempt.providerWait.stageRetry;
@@ -2476,8 +2478,8 @@ function recordProviderTargetExhaustion(attempt: PipelineStageAttempt, accountId
 
 /** Admission before reservation owns the next cut. Quota refusals keep a
     usage fence that successful authentication alone cannot clear. */
-function parkProviderTarget(pipeline: Pipeline, attempt: PipelineStageAttempt, detail: string,
-  ports: PipelinePorts, refusal?: ProjectAccountRefusedError, reason?: ParkedTaskReason): void {
+async function parkProviderTarget(pipeline: Pipeline, attempt: PipelineStageAttempt, detail: string,
+  ports: PipelinePorts, refusal?: ProjectAccountRefusedError, reason?: ParkedTaskReason): Promise<void> {
   const wait = attempt.providerWait!;
   const at = ports.now();
   const engine = attempt.effectiveRole.engine;
@@ -2496,7 +2498,7 @@ function parkProviderTarget(pipeline: Pipeline, attempt: PipelineStageAttempt, d
   const detailWithCut = `stage cut by ${wait.condition.label}; target preflight failed: ${detail}`;
   recordProviderRecovery(attempt, "park", wait.condition, detailWithCut, at);
   attempt.completedAt = at;
-  park(pipeline, detailWithCut, attempt, reason);
+  await park(pipeline, detailWithCut, attempt, reason);
 }
 
 function knownReset(...candidates: Array<number | null | undefined>): number | null {
@@ -2540,7 +2542,7 @@ function scheduleProviderWake(ports: PipelinePorts, resumeAt: string): void {
 
 /** A quota budget limits continuations of this attempt. Its next reset still
     owes a fresh stage retry, durably fenced against operator control changes. */
-function parkProviderUsageLimit(pipeline: Pipeline, attempt: PipelineStageAttempt, detail: string, ports: PipelinePorts, retryAt?: string, fallback?: boolean): void {
+async function parkProviderUsageLimit(pipeline: Pipeline, attempt: PipelineStageAttempt, detail: string, ports: PipelinePorts, retryAt?: string, fallback?: boolean): Promise<void> {
   const wait = attempt.providerWait!;
   const now = unixMs(ports.now());
   if (wait.failedAccounts?.length) {
@@ -2552,7 +2554,7 @@ function parkProviderUsageLimit(pipeline: Pipeline, attempt: PipelineStageAttemp
   fallback ??= reset <= now;
   if (fallback && (attempt.providerFallbackRetries ?? 0) >= 1) {
     wait.retryCancelled = true;
-    park(pipeline, `${detail}; automatic ${wait.resetsAt === null ? "unknown-reset" : "elapsed-reset"} retry exhausted; waiting for operator decision`, attempt);
+    await park(pipeline, `${detail}; automatic ${wait.resetsAt === null ? "unknown-reset" : "elapsed-reset"} retry exhausted; waiting for operator decision`, attempt);
     return;
   }
   wait.resumeAt = retryAt ?? new Date(reset > now ? reset : now + 30 * 60_000).toISOString();
@@ -2560,7 +2562,7 @@ function parkProviderUsageLimit(pipeline: Pipeline, attempt: PipelineStageAttemp
   const message = `${parkedTaskNote(detail, operatorLocale() ?? "uk", false, reason)}\n${detail}`;
   wait.stageRetry = { controlGeneration: pipeline.controlGeneration ?? null, detail: message, fallback };
   attempt.completedAt = ports.now();
-  park(pipeline, message, attempt, reason);
+  await park(pipeline, message, attempt, reason);
   scheduleProviderWake(ports, wait.resumeAt);
 }
 
@@ -2688,7 +2690,7 @@ async function waitForProviderTransport(pipeline: Pipeline, attempt: PipelineSta
     { budgetMs: SPAWN_HOST_WAIT_BUDGET_MS, retryMaxMs: SPAWN_HOST_RETRY_MAX_MS }) === "exhausted") {
     recordProviderRecovery(attempt, "park", condition, detail, now);
     attempt.completedAt = now;
-    park(pipeline, `provider transport recovery exhausted after 10 minutes; ${detail}`, attempt);
+    await park(pipeline, `provider transport recovery exhausted after 10 minutes; ${detail}`, attempt);
   } else {
     if (cutAt !== undefined) attempt.controllerWait!.providerCutAt ??= cutAt;
     pipeline.stateDetail = `waiting for provider transport; ${detail}`;
@@ -2759,7 +2761,7 @@ async function recoverProviderCut(
   const time = unixMs(now);
   let wait = attempt.providerWait;
   if (wait?.retryCancelled) {
-    park(pipeline, PROVIDER_OPERATOR_CANCELLED_DETAIL, attempt);
+    await park(pipeline, PROVIDER_OPERATOR_CANCELLED_DETAIL, attempt);
     await persist();
     return true;
   }
@@ -2824,14 +2826,14 @@ async function recoverProviderCut(
   }
   const bounded = !wait.actionAt && (condition.kind === "transient" || condition.kind === "auth_required" || condition.kind === "usage_limit") && wait.tries >= 3
     || condition.kind === "usage_limit" && !wait.resetsAt && time - unixMs(wait.startedAt) >= 6 * 60 * 60_000;
-  const parkCut = (reason: string) => {
+  const parkCut = async (reason: string) => {
     recordProviderRecovery(attempt, "park", condition, reason, now);
     attempt.completedAt = now;
     const sourceReset = (condition.kind === "auth_required" || condition.kind === "transient")
       && providerRetryReset(pipeline, attempt, ports) !== null;
     if (sourceReset && wait.accountId) wait.failedAccounts = [...new Set([...(wait.failedAccounts ?? []), wait.accountId])];
-    if (condition.kind === "usage_limit" || sourceReset) parkProviderUsageLimit(pipeline, attempt, reason, ports);
-    else park(pipeline, reason, attempt);
+    if (condition.kind === "usage_limit" || sourceReset) await parkProviderUsageLimit(pipeline, attempt, reason, ports);
+    else await park(pipeline, reason, attempt);
   };
   const waitForAccountPolicy = async (accountId: string, operation: string): Promise<boolean> => {
     let allowed: string[] | null | undefined;
@@ -2850,7 +2852,7 @@ async function recoverProviderCut(
     try {
       const allowed = ports.allowedAccountIds?.(pipeline.project, engine);
       if (allowed?.length && allowed.every(id => triedAccounts.includes(id) || wait.failedAccounts?.includes(id))) {
-        parkCut(`stage cut by ${condition.label}; every allowed account was tried; last: ${wait.text}`);
+        await parkCut(`stage cut by ${condition.label}; every allowed account was tried; last: ${wait.text}`);
         return true;
       }
     } catch { /* The ordinary bounded recovery below still applies. */ }
@@ -2862,7 +2864,7 @@ async function recoverProviderCut(
     || condition.kind === "usage_limit" && providerAccountHasNewWindow(pipeline, attempt, engine, target, ports));
   if (bounded && !finalSpare
     || condition.kind === "turn_cut" && !wait.actionAt && wait.tries >= 2 || condition.kind === "other") {
-    parkCut(`stage cut by ${condition.label} after ${wait.tries} tries; last: ${wait.text}`);
+    await parkCut(`stage cut by ${condition.label} after ${wait.tries} tries; last: ${wait.text}`);
     return true;
   }
   if (unixMs(attempt.controllerWait?.retryAfter ?? "") > time) return true;
@@ -2873,7 +2875,7 @@ async function recoverProviderCut(
   if (migration?.retry && await waitForAccountPolicy(migration.targetId, "persisted migration")) return true;
   if (wait.actionAt) return true; // This closing record belongs to an already resumed turn.
   if (condition.kind === "auth_required" && !target) {
-    parkCut(`stage cut by authentication required; no other allowed account; last: ${wait.text}`);
+    await parkCut(`stage cut by authentication required; no other allowed account; last: ${wait.text}`);
     return true;
   }
   pipeline.stateDetail = `waiting for ${condition.label}${wait.accountId ? ` on account ${ports.accountLabel?.(engine, wait.accountId) ?? wait.accountId}` : ""}${wait.resetsAt ? ` to reset at ${new Date(wait.resetsAt * 1_000).toISOString()}` : condition.resetLabel ? ` (${condition.resetLabel})` : ""}; next try at ${wait.resumeAt}; keeping the current worktree`;
@@ -2894,7 +2896,7 @@ async function recoverProviderCut(
     try {
       const allowed = ports.allowedAccountIds?.(pipeline.project, engine);
       if (allowed && !allowed.includes(wait.accountId)) {
-        parkCut(`stage cut by ${condition.label}; source account is no longer allowed`);
+        await parkCut(`stage cut by ${condition.label}; source account is no longer allowed`);
         return true;
       }
     } catch (error) { await waitForProviderTransport(pipeline, attempt, condition, `account authorization unavailable: ${String(error)}`, ports, persist); return true; }
@@ -2993,7 +2995,7 @@ async function relaunchCutStage(pipeline: Pipeline, stage: PipelineStage, attemp
   if (condition.kind === "host_death" && losses >= 1) {
     attempt.completedAt = ports.now();
     recordProviderRecovery(attempt, "park", condition, "stage host died without output twice; automatic relaunch exhausted", attempt.completedAt);
-    park(pipeline, "stage host died without output twice; automatic relaunch exhausted", attempt);
+    await park(pipeline, "stage host died without output twice; automatic relaunch exhausted", attempt);
     return true;
   }
   const providerLimit = condition.kind === "usage_limit" || condition.kind === "auth_required" || condition.kind === "transient";
@@ -3001,7 +3003,7 @@ async function relaunchCutStage(pipeline: Pipeline, stage: PipelineStage, attemp
     if (await operatorStopHoldsStageRecovery(pipeline, attempt, ports, persist)) return false;
     if (!providerLimit) return true;
     if (!attempt.paneId && attempt.conversationId && ports.conversationRegistered?.(attempt.conversationId) === false) {
-      park(pipeline, "provider account recovery cannot verify recorded host ownership; waiting for operator decision", attempt);
+      await park(pipeline, "provider account recovery cannot verify recorded host ownership; waiting for operator decision", attempt);
       await persist();
       return false;
     }
@@ -3009,7 +3011,7 @@ async function relaunchCutStage(pipeline: Pipeline, stage: PipelineStage, attemp
     if (await operatorStopHoldsStageRecovery(pipeline, attempt, ports, persist)) return false;
     if (activity === "unchanged") return true;
     if (activity === "newer") {
-      park(pipeline, "provider account recovery cancelled after newer stage activity; waiting for operator decision", attempt);
+      await park(pipeline, "provider account recovery cancelled after newer stage activity; waiting for operator decision", attempt);
       await persist();
     } else await waitForProviderTransport(pipeline, attempt, condition, "unchanged cut evidence is unavailable", ports, persist);
     return false;
@@ -3031,7 +3033,7 @@ async function relaunchCutStage(pipeline: Pipeline, stage: PipelineStage, attemp
       { budgetMs: SPAWN_HOST_WAIT_BUDGET_MS, retryMaxMs: SPAWN_HOST_RETRY_MAX_MS }) === "exhausted") {
       recordProviderRecovery(attempt, "park", condition, reason, now);
       attempt.completedAt = now;
-      park(pipeline, reason, attempt);
+      await park(pipeline, reason, attempt);
     } else pipeline.stateDetail = `waiting for the cut stage host to terminate after ${condition.label}; ${stopReason}`;
     await persist();
     return true;
@@ -3046,7 +3048,7 @@ async function relaunchCutStage(pipeline: Pipeline, stage: PipelineStage, attemp
   const input = renderCutRetryInput(attempt.input, attempt.n, condition.label);
   setCursorState(pipeline, stage.id, "pending");
   pipeline.cursor!.input = input;
-  const retry = newAttempt(pipeline, stage);
+  const retry = await newAttempt(pipeline, stage);
   if (retry) {
     retry.input = input;
     retry.usageLimitedAccounts = attempt.usageLimitedAccounts;
@@ -3173,10 +3175,10 @@ function latestAcceptedRun(pipeline: Pipeline, stageId: string): PipelineStageAt
   return null;
 }
 
-function newAttempt(pipeline: Pipeline, stage: PipelineStage): PipelineStageAttempt | null {
+async function newAttempt(pipeline: Pipeline, stage: PipelineStage): Promise<PipelineStageAttempt | null> {
   const run = runFor(pipeline, stage.id);
   if (!run) {
-    park(pipeline, "pipeline stage run record is missing");
+    await park(pipeline, "pipeline stage run record is missing");
     return null;
   }
   const cursorRelay = pipeline.cursor?.stageId === stage.id ? pipeline.cursor : null;
@@ -3710,12 +3712,12 @@ function publishesRemoteBranch(pipeline: Pick<Pipeline, "publication" | "deliver
 /** Advance along the pass edge, persisting the relay record: the completed
     attempt's output is the next activation's `{{prev.output}}`, written in the
     same mutation as the verdict/commit that produced it (exactly-once, #353). */
-function advancePipeline(
+async function advancePipeline(
   pipeline: Pipeline, stage: PipelineStage, ports: PipelinePorts, attempt?: PipelineStageAttempt | null,
   /** `accept-head` (#2187 §3.4): the operator took the unreviewed head, so the
       `stop-after-fix` stop is already behind this lane. */
   accepted = false,
-): void {
+): Promise<void> {
   const successor = passSuccessor(pipeline, stage, attempt);
   const detail = successor.handoff && !successor.recheck ? FAIL_EDGE_BUDGET_SPENT_DETAIL : null;
   /* #1938, #2187: a fix that took a spent budget's last findings and wrote a
@@ -3732,11 +3734,11 @@ function advancePipeline(
     && failEdgeExhaustion(successor.handoff.source.onFail) === "stop-after-fix"
     && successor.handoff.attempt?.reviewedHead !== pipeline.lastPassedCommit
   ) {
-    parkForReview(pipeline, stage, attempt, successor.handoff, ports);
+    await parkForReview(pipeline, stage, attempt, successor.handoff, ports);
     return;
   }
   if (successor.next === null) {
-    clearEngineTaskNote(pipeline);
+    await clearEngineTaskNote(pipeline);
     pipeline.cursor = null;
     pipeline.state = "completed";
     pipeline.stateDetail = detail;
@@ -3877,13 +3879,13 @@ function terminalGrantIsLastRound(pipeline: Pipeline, grant: PipelineReviewGrant
 /** Stop a lane whose spent review budget left an unreviewed head (#1938). The
     fix attempt stays passed; no reviewer pass and no completion is recorded,
     and `continue-review` is the way on. */
-function parkForReview(
+async function parkForReview(
   pipeline: Pipeline,
   fixStage: PipelineStage,
   fixAttempt: PipelineStageAttempt,
   handoff: { source: PipelineStage; attempt: PipelineStageAttempt | null },
   ports: PipelinePorts,
-): void {
+): Promise<void> {
   const review = handoff.attempt;
   const reviewedHead = review?.reviewedHead ?? null;
   const verdict = review?.verdict?.status ?? "fail";
@@ -3902,7 +3904,7 @@ function parkForReview(
   pipeline.state = "needs_review";
   pipeline.pausedState = null;
   pipeline.stateDetail = reviewPendingDetail(pipeline.reviewPending);
-  writeEngineParkedTaskNote(pipeline, pipeline.stateDetail, fixAttempt);
+  await writeEngineParkedTaskNote(pipeline, pipeline.stateDetail, fixAttempt);
 }
 
 /** Recover terminal parks written before resumable budget metadata existed.
@@ -3928,7 +3930,7 @@ function terminalReviewPendingFromAttempt(
   };
 }
 
-function reconcileTerminalReviewPending(pipeline: Pipeline): boolean {
+async function reconcileTerminalReviewPending(pipeline: Pipeline): Promise<boolean> {
   if (pipeline.reviewPending || (pipeline.state !== "needs_decision" && pipeline.pausedState !== "needs_decision")) return false;
   const stage = currentStage(pipeline);
   const attempt = stage ? currentAttempt(pipeline, stage.id) : null;
@@ -3937,7 +3939,7 @@ function reconcileTerminalReviewPending(pipeline: Pipeline): boolean {
   pipeline.reviewPending = pending;
   if (pipeline.state === "needs_decision") {
     pipeline.stateDetail = reviewPendingDetail(pending);
-    writeParkedTaskNote(pipeline, pipeline.stateDetail, attempt, { kind: "review-budget" });
+    await writeParkedTaskNote(pipeline, pipeline.stateDetail, attempt, { kind: "review-budget" }, taskNoteAuthority.get(pipeline));
   }
   return true;
 }
@@ -3945,7 +3947,7 @@ function reconcileTerminalReviewPending(pipeline: Pipeline): boolean {
 /** Stored automatic budget stops belong to the owner. A retained failed
     re-check owes one final fix; an already passed final fix owes its successor.
     Explicit stops, blocked reviews and operator questions retain their wait. */
-function reconcileDefaultAdvanceBudgetPark(pipeline: Pipeline, ports: PipelinePorts): boolean {
+async function reconcileDefaultAdvanceBudgetPark(pipeline: Pipeline, ports: PipelinePorts): Promise<boolean> {
   if (pipeline.state !== "needs_decision" && pipeline.state !== "needs_review") return false;
   const pending = pipeline.reviewPending;
   if (!pending) return false;
@@ -3968,10 +3970,10 @@ function reconcileDefaultAdvanceBudgetPark(pipeline: Pipeline, ports: PipelinePo
   } else {
     if (pipeline.state !== "needs_review" || !review.budgetSpent || fix.activatedBy?.stageId !== reviewStage.id
       || fix.activatedBy.attempt !== review.n || !fix.activatedBy.budgetSpent) return false;
-    advancePipeline(pipeline, fixStage, ports, fix, true);
+    await advancePipeline(pipeline, fixStage, ports, fix, true);
   }
   delete pipeline.reviewPending;
-  clearEngineTaskNote(pipeline);
+  await clearEngineTaskNote(pipeline);
   return true;
 }
 
@@ -4019,15 +4021,15 @@ function budgetSpentInput(
   return `${boundedStageRelay(output, MAX_STAGE_RELAY_BYTES - Buffer.byteLength(note) - 2)}\n\n${note}`;
 }
 
-function keepPassedStageUnpublished(
+async function keepPassedStageUnpublished(
   pipeline: Pipeline,
   attempt: PipelineStageAttempt,
   detail: string,
-): void {
+): Promise<void> {
   const message = `passed but unpublished: ${detail}`;
   // The initial durable reservation is in flight, not a blocked publication.
   if (pipeline.stateDetail !== message && !/reserved for execution|awaiting durable delivery admission/.test(detail)) {
-    writeEngineParkedTaskNote(pipeline, message, attempt);
+    await writeEngineParkedTaskNote(pipeline, message, attempt);
   }
   attempt.error = message;
   pipeline.state = "running";
@@ -4140,12 +4142,12 @@ function commitsRefusedByPrivacy(failure: import("./types").PipelinePublicationF
  * A refused stage that changed files, or whose commits privacy refused,
  * proceeds to its bounded producer repair.
  */
-function retryRefusedPublication(
+async function retryRefusedPublication(
   pipeline: Pipeline,
   attempt: PipelineStageAttempt,
   published: RefusedPublication,
   ports: PipelinePorts,
-): boolean {
+): Promise<boolean> {
   const operation = pipeline.delivery?.operation;
   const failure = published.failure;
   const notLanded = publicationNotLanded(published);
@@ -4174,13 +4176,13 @@ function retryRefusedPublication(
     pipeline.publishedCommit = null;
     const reserved = queuePipelinePublication(pipeline, ports.exec, { acceptedSha: pipeline.lastPassedCommit, publishedSha: null });
     if (!reserved.ok) return false;
-    keepPassedStageUnpublished(pipeline, attempt, reserved.remote === "unreachable" ? reserved.detail : "publication retry reserved");
+    await keepPassedStageUnpublished(pipeline, attempt, reserved.remote === "unreachable" ? reserved.detail : "publication retry reserved");
     ports.scheduleTick?.(0);
     return true;
   }
   const schedule = deadlineOnly ? `automatic capacity retry ${record!.failures} at ${record!.retryAt}`
     : `automatic retry ${record!.failures} of ${PUBLICATION_RETRY_DELAYS_MS.length} at ${record!.retryAt}`;
-  keepPassedStageUnpublished(pipeline, attempt, deadlineOnly ? `a check reached its execution deadline without a verdict; ${schedule}`
+  await keepPassedStageUnpublished(pipeline, attempt, deadlineOnly ? `a check reached its execution deadline without a verdict; ${schedule}`
     : notLanded ? `${publicationInterruptionCause(failure)}; ${schedule}`
     : `${publicationFailureCause(failure!)}. The stage changed no files; ${schedule}`);
   ports.scheduleTick?.(Math.max(1_000, wait));
@@ -4213,12 +4215,12 @@ async function retryTerminalStagePublication(
       : `the accepted head cannot be verified before completion: ${current.error}`);
     // Head verification can be retried without discarding the accepted pass.
     attempt.error = detail;
-    park(pipeline, detail);
+    await park(pipeline, detail);
     return;
   }
   if (!publishesRemoteBranch(pipeline)) {
     attempt.error = null;
-    advancePipeline(pipeline, stage, ports, attempt);
+    await advancePipeline(pipeline, stage, ports, attempt);
     return;
   }
   const published = queuePipelinePublication(pipeline, ports.exec, {
@@ -4226,19 +4228,19 @@ async function retryTerminalStagePublication(
     publishedSha: pipeline.publishedCommit ?? null,
   });
   if (!published.ok) {
-    if (retryRefusedPublication(pipeline, attempt, published, ports)) return;
+    if (await retryRefusedPublication(pipeline, attempt, published, ports)) return;
     if (await requestStagePublicationRepair(pipeline, stage, attempt, published, ports, persist)) return;
     attempt.error = afterCommitRepair(attempt, passedPublicationParkDetail(attempt, published));
-    park(pipeline, attempt.error);
+    await park(pipeline, attempt.error);
     return;
   }
   if (published.remote === "unavailable") {
     attempt.error = `publishing the passed stage: ${MISSING_DELIVERY_REMOTE}`;
-    park(pipeline, attempt.error);
+    await park(pipeline, attempt.error);
     return;
   }
   if (published.remote === "unreachable") {
-    keepPassedStageUnpublished(pipeline, attempt, published.detail);
+    await keepPassedStageUnpublished(pipeline, attempt, published.detail);
     return;
   }
   delete attempt.publicationRetry;
@@ -4252,8 +4254,8 @@ async function retryTerminalStagePublication(
     return;
   }
   const pr = await withViewerOperation("pipelines.controller-job", () => performanceSpans.wait("pipeline.pull-request", () => ensureStagePullRequest(pipeline, attempt, ports.exec)));
-  if (!pr.ok) { attempt.error = `publishing the passed stage: ${pr.error}`; park(pipeline, attempt.error, attempt); return; }
-  advancePipeline(pipeline, stage, ports, attempt);
+  if (!pr.ok) { attempt.error = `publishing the passed stage: ${pr.error}`; await park(pipeline, attempt.error, attempt); return; }
+  await advancePipeline(pipeline, stage, ports, attempt);
 }
 
 /** The `{{prev.output}}` payload a fail edge forwards: the failed attempt's
@@ -4270,7 +4272,7 @@ function failEdgeInput(parsed: ParsedStageVerdict): string | null {
   return combined || null;
 }
 
-function routeFailedAttempt(
+async function routeFailedAttempt(
   pipeline: Pipeline,
   stage: PipelineStage,
   attempt: PipelineStageAttempt,
@@ -4285,7 +4287,7 @@ function routeFailedAttempt(
       answered): nothing was reviewed, so there are no findings to hand past a
       spent budget and the edge loops and parks as it always did. */
   reviewed = true,
-): boolean {
+): Promise<boolean> {
   if (!stage.onFail) return false;
   const terminalGrant = terminalReviewGrantForAttempt(pipeline, stage, attempt);
   // Exhausting host recovery is still an uncompleted review of this fix.
@@ -4295,9 +4297,9 @@ function routeFailedAttempt(
     const pending = reviewed ? terminalReviewPendingFromAttempt(pipeline, stage, attempt) : null;
     if (pending) {
       pipeline.reviewPending = pending;
-      park(pipeline, reviewPendingDetail(pipeline.reviewPending), attempt, { kind: "review-budget" });
+      await park(pipeline, reviewPendingDetail(pipeline.reviewPending), attempt, { kind: "review-budget" });
     } else {
-      park(pipeline, `budget spent: ${attempt.verdict?.findings?.length ?? 0} findings left (${stage.id}): ${detail}`, attempt);
+      await park(pipeline, `budget spent: ${attempt.verdict?.findings?.length ?? 0} findings left (${stage.id}): ${detail}`, attempt);
     }
     return true;
   }
@@ -4350,7 +4352,7 @@ function routeFailedAttempt(
     return true;
   }
   if (targetStage && parkOnExhaustedBudget) {
-    park(pipeline, `fail-edge budget exhausted after ${used} round(s) (onExhausted: ${failEdgeExhaustion(stage.onFail)}): ${detail}`, attempt);
+    await park(pipeline, `fail-edge budget exhausted after ${used} round(s) (onExhausted: ${failEdgeExhaustion(stage.onFail)}): ${detail}`, attempt);
     return true;
   }
   return false;
@@ -4573,7 +4575,7 @@ async function settlePublicationRepair(
     repair.outcome = { status: "rejected", reason };
     await persist();
     attempt.error = afterCommitRepair(attempt, publicationRepairParkDetail(repair, reason));
-    park(pipeline, attempt.error);
+    await park(pipeline, attempt.error);
     return false;
   };
   if (!repair.committedSha) {
@@ -4696,17 +4698,17 @@ async function stageCommitRepairSettled(
   const repair = publication ? attempt.publicationRepair : attempt.commitRepair;
   if (!repair) return true;
   const worker = publication ? publicationRepairWorker(pipeline, attempt) : { stage, attempt };
-  const parkRepair = (why: string) => {
+  const parkRepair = async (why: string) => {
     const detail = publication ? publicationRepairParkDetail(attempt.publicationRepair!, why)
       : afterCommitRepair(attempt, why.includes(repair.detail) ? why : `${repair.detail}\n${why}`);
     attempt.error = detail;
-    park(pipeline, detail, publication ? undefined : attempt);
+    await park(pipeline, detail, publication ? undefined : attempt);
   };
   const asked = publication ? "The producer was asked once to repair the refused publication" : "The stage was asked once to repair its files";
   // The intent checkpoint can outlive final settlement. Replay its rejection
   // before considering settledAt permission to try the commit again.
   if (repair.outcome?.status === "rejected") {
-    parkRepair(repair.outcome.reason);
+    await parkRepair(repair.outcome.reason);
     return false;
   }
   if (repair.settledAt) return true;
@@ -4715,7 +4717,7 @@ async function stageCommitRepairSettled(
   const giveUp = async (why: string) => {
     repair.outcome = { status: "rejected", reason: why };
     repair.settledAt = ports.now();
-    parkRepair(why);
+    await parkRepair(why);
     await persist();
     return false;
   };
@@ -4769,7 +4771,7 @@ async function commitPassedStage(
   /* Every park after a requested repair keeps the refusal it was about. */
   const parkStage = (reason: string) => park(pipeline, afterCommitRepair(attempt, reason), attempt);
   const pushRefusal = await stageAttemptPushRefusal(attempt.launchId);
-  if (pushRefusal !== null) { parkStage(pushRefusal); return; }
+  if (pushRefusal !== null) { await parkStage(pushRefusal); return; }
   const allowCommit = stage.kind === "run" && attempt.effectiveRole.access === "read-write";
   const protectedHead = stage.kind === "run" && !allowCommit ? pipeline.lastPassedCommit : null;
   const repair = attempt.commitRepair;
@@ -4812,7 +4814,7 @@ async function commitPassedStage(
       attempt.commitRepair.outcome = { status: "rejected", reason: afterCommitRepair(attempt, result.error) };
       await persist();
     }
-    parkStage(result.error);
+    await parkStage(result.error);
     return;
   }
   if (attempt.stageCommitWait) {
@@ -4820,19 +4822,19 @@ async function commitPassedStage(
     delete attempt.stageCommitWait;
   }
   if (stage.kind === "review-loop" && result.sha !== attempt.reviewHeadSha) {
-    parkStage(`approved review flow head mismatch during settlement: reviewed ${attempt.reviewHeadSha ?? "no exact head"}, settled ${result.sha}`);
+    await parkStage(`approved review flow head mismatch during settlement: reviewed ${attempt.reviewHeadSha ?? "no exact head"}, settled ${result.sha}`);
     return;
   }
   if (pipeline.lastPassedCommit && result.sha !== pipeline.lastPassedCommit) {
     const ancestor = (await ports.exec("git", ["merge-base", "--is-ancestor", pipeline.lastPassedCommit, result.sha], pipeline.worktreeDir));
     if (ancestor.code !== 0 && (ancestor.code !== 1 || !allowCommit)) {
-      parkStage(`stage head ${result.sha} does not descend from accepted head ${pipeline.lastPassedCommit}; ${ancestor.stderr.trim() || "reconciliation requires a writable builder stage"}`);
+      await parkStage(`stage head ${result.sha} does not descend from accepted head ${pipeline.lastPassedCommit}; ${ancestor.stderr.trim() || "reconciliation requires a writable builder stage"}`);
       return;
     }
     if (ancestor.code === 1) {
       result = (await reconcilePipelineStageHead(pipeline, result.sha, ports.exec));
       if (!result.ok) {
-        parkStage(result.error);
+        await parkStage(result.error);
         return;
       }
     }
@@ -4851,13 +4853,13 @@ async function commitPassedStage(
   if (terminalLocalOutput && publishesRemoteBranch(pipeline)) {
     const pr = await withViewerOperation("pipelines.controller-job", () => performanceSpans.wait("pipeline.pull-request", () =>
       ensureStagePullRequest(pipeline, attempt, ports.exec, pipeline.publishedCommit ?? pipeline.lastPassedCommit)));
-    if (!pr.ok) { parkStage(pr.error); return; }
+    if (!pr.ok) { await parkStage(pr.error); return; }
   }
   pipeline.lastPassedCommit = result.sha;
   if (!publishesRemoteBranch(pipeline) || terminalLocalOutput) {
     attempt.state = "passed";
     attempt.completedAt = ports.now();
-    advancePipeline(pipeline, stage, ports, attempt);
+    await advancePipeline(pipeline, stage, ports, attempt);
     return;
   }
   /* Under `remote-branch`, publish before the next stage can gate on the
@@ -4875,21 +4877,21 @@ async function commitPassedStage(
     publishedSha: pipeline.publishedCommit ?? null,
   });
   if (!published.ok) {
-    parkStage(`publishing the passed stage: ${published.error}`);
+    await parkStage(`publishing the passed stage: ${published.error}`);
     return;
   }
   pipeline.publishedCommit = published.remote === "published" ? published.sha : null;
   if (published.remote === "unavailable") {
-    parkStage(`publishing the passed stage: ${MISSING_DELIVERY_REMOTE}`);
+    await parkStage(`publishing the passed stage: ${MISSING_DELIVERY_REMOTE}`);
     return;
   }
   if (published.remote === "unreachable") {
-    keepPassedStageUnpublished(pipeline, attempt, published.detail);
+    await keepPassedStageUnpublished(pipeline, attempt, published.detail);
     return;
   }
   const pr = await withViewerOperation("pipelines.controller-job", () => performanceSpans.wait("pipeline.pull-request", () => ensureStagePullRequest(pipeline, attempt, ports.exec)));
-  if (!pr.ok) { parkStage(pr.error); return; }
-  advancePipeline(pipeline, stage, ports, attempt);
+  if (!pr.ok) { await parkStage(pr.error); return; }
+  await advancePipeline(pipeline, stage, ports, attempt);
 }
 
 /** A legacy review flow can return to its read-only producer after a finding.
@@ -5035,7 +5037,7 @@ async function settleStageVerdict(
   if ("failureReason" in parsed) {
     attempt.completedAt = ports.now();
     setCursorState(pipeline, stage.id, "pending");
-    park(pipeline, parsed.failureReason, attempt);
+    await park(pipeline, parsed.failureReason, attempt);
     return;
   }
   attempt.verdict = parsed.verdict;
@@ -5085,14 +5087,14 @@ async function settleStageVerdict(
        re-checks a terminal gate before completion (#2247); `stop-after-fix`
        waits in needs_review when the fix wrote a new head (#2187). */
     if (parsed.verdict.blocked === true) {
-      park(pipeline, parsed.verdict.blockedReason!, attempt);
+      await park(pipeline, parsed.verdict.blockedReason!, attempt);
       return;
     }
     const routesAsFail = verdictRoutesAsFail(parsed);
     const decisionRoutedAsFail = routesAsFail && parsed.verdict.status === "needs_decision";
     if (
       routesAsFail
-      && routeFailedAttempt(
+      && await routeFailedAttempt(
         pipeline,
         stage,
         attempt,
@@ -5104,7 +5106,7 @@ async function settleStageVerdict(
       if (decisionRoutedAsFail) attempt.decisionRequested = true;
       return;
     }
-    park(pipeline, parsed.verdict.findings?.[0] ?? `stage verdict: ${parsed.verdict.status}`, attempt);
+    await park(pipeline, parsed.verdict.findings?.[0] ?? `stage verdict: ${parsed.verdict.status}`, attempt);
     return;
   }
   attempt.state = "committing";
@@ -5205,7 +5207,7 @@ function deployCutHoldsAttempt(cut: StageInterruption | null, ports: PipelinePor
 }
 
 const MEMORY_WAIT_BUDGET = { budgetMs: 30 * 60_000, retryBaseMs: 60_000, retryMaxMs: 5 * 60_000 };
-function retryOutOfMemoryStage(pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt, kill: AgentMemoryKill, ports: PipelinePorts): void {
+async function retryOutOfMemoryStage(pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt, kill: AgentMemoryKill, ports: PipelinePorts): Promise<void> {
   const attempts = runFor(pipeline, stage.id)!.attempts;
   const previous = attempts[attempts.indexOf(attempt) - 1];
   const error = memoryKillText(kill);
@@ -5214,19 +5216,19 @@ function retryOutOfMemoryStage(pipeline: Pipeline, stage: PipelineStage, attempt
   attempt.error = error;
   attempt.outOfMemory = { at: kill.at, limitBytes: kill.limitBytes, limit: kill.limit };
   if (previous?.outOfMemory) {
-    park(pipeline, `${error}; the automatic retry was killed the same way`, attempt);
+    await park(pipeline, `${error}; the automatic retry was killed the same way`, attempt);
     return;
   }
   pipeline.state = "running";
   pipeline.stateDetail = `${error}; retrying once memory recovers`;
   setCursorState(pipeline, stage.id, "pending");
-  const retry = newAttempt(pipeline, stage);
+  const retry = await newAttempt(pipeline, stage);
   if (!retry) return;
   retry.input = renderOutOfMemoryRetryInput(attempt.input, attempt.n, kill);
   retry.memoryWait = { startedAt: ports.now(), rounds: 0, retryAfter: new Date(unixMs(ports.now()) + 60_000).toISOString(), budgetMs: MEMORY_WAIT_BUDGET.budgetMs, retryMaxMs: MEMORY_WAIT_BUDGET.retryMaxMs };
   ports.scheduleTick?.(60_000);
 }
-function waitForMemory(pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt, ports: PipelinePorts): boolean {
+async function waitForMemory(pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt, ports: PipelinePorts): Promise<boolean> {
   const wait = attempt.memoryWait;
   if (!wait) return false;
   const now = ports.now();
@@ -5237,7 +5239,7 @@ function waitForMemory(pipeline: Pipeline, stage: PipelineStage, attempt: Pipeli
   const headroom = ports.memoryHeadroom?.(kill.limitBytes);
   if (!headroom || headroom.availableBytes >= headroom.requiredBytes) { delete attempt.memoryWait; pipeline.stateDetail = null; return false; }
   const next = nextBoundedWait(wait, wait.startedAt, now, MEMORY_WAIT_BUDGET);
-  if (!next) { park(pipeline, `${memoryKillText(kill)}; memory did not recover within 30 minutes`, attempt); return true; }
+  if (!next) { await park(pipeline, `${memoryKillText(kill)}; memory did not recover within 30 minutes`, attempt); return true; }
   attempt.memoryWait = next.wait;
   pipeline.stateDetail = `${memoryKillText(kill)}; waiting for memory: ${(headroom.availableBytes / 2 ** 30).toFixed(1)} of ${(headroom.requiredBytes / 2 ** 30).toFixed(1)} GB free`;
   ports.scheduleTick?.(next.delayMs);
@@ -5441,7 +5443,7 @@ async function operatorStopHoldsStageRecovery(pipeline: Pipeline, attempt: Pipel
     attempt.providerWait.retryCancelled = true;
     delete attempt.providerWait.stageRetry;
   }
-  park(pipeline, "provider recovery cancelled by operator stop; waiting for operator decision", attempt);
+  await park(pipeline, "provider recovery cancelled by operator stop; waiting for operator decision", attempt);
   await persist();
   return true;
 }
@@ -5477,7 +5479,7 @@ async function replaceInterruptedStageAttempt(
       attempt.providerWait.retryCancelled = true;
       delete attempt.providerWait.stageRetry;
     }
-    park(pipeline, "restart recovery cancelled after newer stage activity; waiting for operator decision", attempt);
+    await park(pipeline, "restart recovery cancelled after newer stage activity; waiting for operator decision", attempt);
     await persist();
     return true;
   };
@@ -5489,7 +5491,7 @@ async function replaceInterruptedStageAttempt(
      Each new service boot or recorded deploy cut owes its own replacement. */
   if (previous?.bootId === bootId) {
     if (previous.replacedAttempt !== undefined && !interruption.cut) {
-      park(pipeline, secondInterruptionParkDetail(attempt.restartContext?.cause, interruption), attempt);
+      await park(pipeline, secondInterruptionParkDetail(attempt.restartContext?.cause, interruption), attempt);
       await persist();
       return true;
     }
@@ -5497,7 +5499,7 @@ async function replaceInterruptedStageAttempt(
     // than a replacement attempt. Keep its bounded compatibility behavior.
     if (previous.clientMessageId) {
       if (unixMs(ports.now()) - unixMs(previous.requestedAt) < SEVERED_TURN_PARK_SILENCE_MS) return true;
-      park(pipeline, "the legacy restart continuation did not resume the stage; retry-stage to start a fresh attempt", attempt);
+      await park(pipeline, "the legacy restart continuation did not resume the stage; retry-stage to start a fresh attempt", attempt);
       await persist();
       return true;
     }
@@ -5579,7 +5581,7 @@ async function replaceInterruptedStageAttempt(
   }
   const restarted = (ended ?? interruption).restarted;
   if (stopped.outcome !== "stopped" && stopped.outcome !== "not-running") {
-    park(pipeline, interruptedTurnRecoveryParkDetail("termination", restarted), attempt);
+    await park(pipeline, interruptedTurnRecoveryParkDetail("termination", restarted), attempt);
     await persist();
     return true;
   }
@@ -5593,7 +5595,7 @@ async function replaceInterruptedStageAttempt(
   /* A lost host whose agent this recovery had to stop was an orphan: its
      stream was gone while its process kept running (#2790). */
   const orphanStopped = cause === "host-lost" && ended?.kind === "dead";
-  startReplacementAttempt(pipeline, stage, attempt, cause, { bootId, requestedAt, lastRecordAt }, latest, ports,
+  await startReplacementAttempt(pipeline, stage, attempt, cause, { bootId, requestedAt, lastRecordAt }, latest, ports,
     { hostEnded, orphanStopped });
   await persist();
   return true;
@@ -5617,23 +5619,23 @@ const CUT_ATTEMPT_REPORT_CHARS = 1_500;
 /** Ends an interrupted attempt and reserves the one fresh attempt that
     replaces it: the same bound definition, activation input and checkout, so
     the worktree and its uncommitted work carry over. */
-function startReplacementAttempt(
+async function startReplacementAttempt(
   pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt,
   cause: PipelineStageInterruptionCause,
   recovery: { bootId: string; requestedAt: string; lastRecordAt: number | null },
   durable: StageTurnEvidence | null | undefined,
   ports: PipelinePorts,
   lost: { hostEnded?: string | null; orphanStopped?: boolean } = {},
-): void {
+): Promise<void> {
   attempt.state = "failed";
   attempt.completedAt = ports.now();
   const why = cause === "host-lost" && lost.hostEnded ? ` (${lost.hostEnded})` : "";
   const orphan = lost.orphanStopped ? "; its agent process was still running and Delegatus stopped it by its recorded identity" : "";
   attempt.error = `${INTERRUPTION_WORDS[cause].error}${why}${orphan}; replaced by a fresh stage attempt`;
   attempt.restartRecovery ??= { ...recovery };
-  const replacement = newAttempt(pipeline, stage);
+  const replacement = await newAttempt(pipeline, stage);
   if (!runFor(pipeline, stage.id) || !replacement) {
-    park(pipeline, interruptedTurnRecoveryParkDetail("reservation", cause === "restart"), attempt);
+    await park(pipeline, interruptedTurnRecoveryParkDetail("reservation", cause === "restart"), attempt);
     return;
   }
   replacement.effectiveRole = structuredClone(attempt.effectiveRole);
@@ -5846,7 +5848,7 @@ async function reconcileSeveredStageTurn(
       ? "handled" : "continue";
   }
   if (nowMs - unixMs(witness.resumedAt) < SEVERED_TURN_PARK_SILENCE_MS) return "continue";
-  park(pipeline, SEVERED_TURN_PARK_DETAIL, attempt);
+  await park(pipeline, SEVERED_TURN_PARK_DETAIL, attempt);
   await persist();
   return "handled";
 }
@@ -5967,7 +5969,7 @@ async function holdForBackgroundTasks(
   const step = stepBackgroundWait(prior, live, durable.lastRecordAt ?? null, now, "the stage settles on the turn after it reports");
   attempt.backgroundWait = step.wait;
   if (step.expired) {
-    park(pipeline, step.reason, attempt);
+    await park(pipeline, step.reason, attempt);
     await persist();
     return "parked";
   }
@@ -6178,13 +6180,13 @@ async function spawnRunStage(
       const nativeTurn = await attemptTurnTranscript(pipeline, stage.id, attempt, ports);
       if (nativeTurn?.operationConflict) {
         if (attempt.activation) attempt.activation.phase = "settled";
-        park(pipeline, "runtime operation identity conflicts with the staged launch; original launch retained", attempt);
+        await park(pipeline, "runtime operation identity conflicts with the staged launch; original launch retained", attempt);
         await persist();
         return;
       }
       if (nativeTurn?.operationRejected) {
         if (attempt.activation) attempt.activation.phase = "settled";
-        park(pipeline, "the original first-message operation was rejected; original launch retained", attempt);
+        await park(pipeline, "the original first-message operation was rejected; original launch retained", attempt);
         await persist();
         return;
       }
@@ -6364,7 +6366,7 @@ async function spawnRunStage(
         return;
       }
       if (result === "exhausted") throw new Error(controllerWaitParkDetail(attempt, now, replayReceipt.error ?? "membership admission failed"));
-      park(pipeline, `stage spawn retry ${result}: ${redactBounded(replayReceipt.error ?? "failed receipt", 300)}; original launch retained`, attempt);
+      await park(pipeline, `stage spawn retry ${result}: ${redactBounded(replayReceipt.error ?? "failed receipt", 300)}; original launch retained`, attempt);
       return;
     }
     const recovery = stagedLaunchRecovery(replayReceipt);
@@ -6404,7 +6406,7 @@ async function spawnRunStage(
       } else attempt.effectiveRole.serviceTier = spawned.serviceTier;
     }
     attempt.state = "running";
-    clearEngineTaskNote(pipeline);
+    await clearEngineTaskNote(pipeline);
     setCursorState(pipeline, stage.id, "running");
     if (pipeline.stateDetail?.startsWith("rate limited until ")
       || pipeline.stateDetail?.startsWith("stage spawn deferred: ")) pipeline.stateDetail = null;
@@ -6427,7 +6429,7 @@ async function spawnRunStage(
       const failedAt = ports.now();
       if (bookControllerWaitRound(attempt, activationNow, failedAt, ports,
         { budgetMs: SPAWN_HOST_WAIT_BUDGET_MS, retryMaxMs: SPAWN_HOST_RETRY_MAX_MS }) === "exhausted") {
-        park(pipeline, controllerWaitParkDetail(attempt, failedAt, detail), attempt);
+        await park(pipeline, controllerWaitParkDetail(attempt, failedAt, detail), attempt);
         return;
       }
       attempt.state = "pending";
@@ -6447,7 +6449,7 @@ async function spawnRunStage(
         || error instanceof AccountAuthenticationRequiredError && error.accountId === wait.switchedAccountId
         || classifyProviderCondition(attempt.effectiveRole.engine, null, detail).kind === "auth_required";
       if (!accountFailure && !(error instanceof CodexServiceTierUnavailableError)) {
-        parkProviderUsageLimit(pipeline, attempt, `stage cut by ${wait.condition.label}; target preflight failed: ${detail}`, ports);
+        await parkProviderUsageLimit(pipeline, attempt, `stage cut by ${wait.condition.label}; target preflight failed: ${detail}`, ports);
         return;
       }
       const engine = attempt.effectiveRole.engine;
@@ -6481,13 +6483,13 @@ async function spawnRunStage(
           }
         } catch { /* Unavailable selection evidence keeps the durable reset obligation. */ }
       }
-      parkProviderUsageLimit(pipeline, attempt, `stage cut by ${wait.condition.label}; target preflight failed: ${detail}`, ports);
+      await parkProviderUsageLimit(pipeline, attempt, `stage cut by ${wait.condition.label}; target preflight failed: ${detail}`, ports);
     } else if (wait?.condition.kind === "auth_required" && wait.turnTs === 0 && wait.switchedAccountId
       && !attempt.launchId && !attempt.conversationId && !attempt.agentPath && !attempt.paneId
       && (error instanceof ProjectAccountRefusedError || error instanceof AccountAuthenticationRequiredError)) {
       // A refusal before reservation leaves no host to reconcile. Record the
       // target's cut so later authentication or quota proof can re-admit it.
-      parkProviderTarget(pipeline, attempt, detail, ports,
+      await parkProviderTarget(pipeline, attempt, detail, ports,
         error instanceof ProjectAccountRefusedError ? error : undefined);
     } else {
       if (!attempt.launchId && !attempt.conversationId && !attempt.agentPath && !attempt.paneId
@@ -6495,7 +6497,7 @@ async function spawnRunStage(
         if (error instanceof AccountAuthenticationRequiredError) attempt.accountId = error.accountId;
         attempt.completedAt = ports.now();
       }
-      park(pipeline, detail, attempt);
+      await park(pipeline, detail, attempt);
     }
   } finally {
     /* The key only means "this spawn is in flight in this process". */
@@ -6665,7 +6667,7 @@ export async function drainRuntimeSwitches(ports: PipelinePorts): Promise<boolea
           checkTarget();
           // Allocation and cleanup completion commit together. A crash before
           // this write repeats the same stop keys; after it activation owns n+1.
-          await withPipelineMutation((pipelines, persist) => {
+          await withPipelineMutation(async (pipelines, persist) => {
             const live = pipelines.find(item => item.id === pipeline.id);
             const current = live && currentAttempt(live, stage.id);
             if (!live || !current || activationFence(live) !== fence || JSON.stringify(current) !== expectedAttempt) throw new RuntimeSwitchSuperseded();
@@ -6673,7 +6675,7 @@ export async function drainRuntimeSwitches(ports: PipelinePorts): Promise<boolea
             const retry = current.runtimeSwitches!.find(item => item.id === record.id)!.retry!;
             retry.completedAt = ports.now(); delete retry.pendingReason;
             resetStageForRetry(live, stage);
-            const next = newAttempt(live, stage)!;
+            const next = (await newAttempt(live, stage))!;
             next.input = current.input;
             next.activatedBy = current.activatedBy ? { ...current.activatedBy } : null;
             next.restartContext = { previousAttempt: current.n, transcriptPath: record.from.agentPath };
@@ -6966,7 +6968,7 @@ async function reconcileStageAccountGuard(pipeline: Pipeline, stage: PipelineSta
   } catch { return true; }
   attempt.state = "failed"; attempt.completedAt = ports.now(); attempt.error = attempt.suspension.detail;
   resetStageForRetry(pipeline, stage);
-  const next = newAttempt(pipeline, stage)!;
+  const next = (await newAttempt(pipeline, stage))!;
   next.input = attempt.input;
   next.activatedBy = attempt.activatedBy ? { ...attempt.activatedBy } : null;
   next.restartContext = { previousAttempt: attempt.n, transcriptPath: attempt.agentPath };
@@ -6988,8 +6990,8 @@ async function tickRunStage(
   const canSpendRecoveryCheck = () => ports.monotonicNow() < recoveryAccountingDeadline;
   const prior = currentAttempt(pipeline, stage.id);
   const attempt = pipeline.cursor?.state === "pending" && prior && ["passed", "failed", "needs_decision", "skipped"].includes(prior.state)
-    ? newAttempt(pipeline, stage)
-    : prior ?? newAttempt(pipeline, stage);
+    ? await newAttempt(pipeline, stage)
+    : prior ?? await newAttempt(pipeline, stage);
   if (!attempt || pipeline.state === "needs_decision" || attempt.activation) return;
   if (openRuntimeSwitch(attempt)) {
     const switchRecord = openRuntimeSwitch(attempt)!;
@@ -7035,7 +7037,7 @@ async function tickRunStage(
     const publication = ports.structuredDeliveryPublication?.() ?? "ready";
     if (publication === "unbound") { ports.cpuAdmissionSuspend?.(cpuStageKey(pipeline)); return; }
     if (await holdStageLaunchForUpdate(pipeline, ports, persist)) return;
-    if (waitForMemory(pipeline, stage, attempt, ports)) {
+    if (await waitForMemory(pipeline, stage, attempt, ports)) {
       ports.cpuAdmissionSuspend?.(cpuStageKey(pipeline));
       return;
     }
@@ -7075,7 +7077,7 @@ async function tickRunStage(
       } catch (error) {
         const reason = error instanceof Error ? error.message : String(error);
         attempt.completedAt = activationNow;
-        park(pipeline, `stage cut by ${engine} usage limit: account capacity lookup unavailable; last: ${redactBounded(reason, 300)}`, attempt);
+        await park(pipeline, `stage cut by ${engine} usage limit: account capacity lookup unavailable; last: ${redactBounded(reason, 300)}`, attempt);
         return;
       }
       if (resolution.kind !== "available" || unavailableIds.includes(resolution.account.accountId)) {
@@ -7098,7 +7100,7 @@ async function tickRunStage(
           || !resetsAt && unixMs(activationNow) - unixMs(wait.startedAt) >= 6 * 60 * 60_000) {
           attempt.completedAt = activationNow;
           recordProviderRecovery(attempt, "park", condition, "account capacity recovery exhausted", activationNow);
-          parkProviderUsageLimit(pipeline, attempt, `stage cut by ${condition.label}: no account capacity returned; capacity recovery exhausted after ${wait.capacityProbes ?? 0} due probes`, ports);
+          await parkProviderUsageLimit(pipeline, attempt, `stage cut by ${condition.label}: no account capacity returned; capacity recovery exhausted after ${wait.capacityProbes ?? 0} due probes`, ports);
           return;
         }
         const delay = untilReset > 0 ? Math.min(15 * 60_000, untilReset) : 15 * 60_000;
@@ -7120,8 +7122,8 @@ async function tickRunStage(
       const wait = attempt.providerWait;
       if (readiness === "signed-out" && wait?.turnTs === 0 && wait.switchedAccountId
         && !attempt.launchId && !attempt.conversationId && !attempt.agentPath && !attempt.paneId)
-        parkProviderTarget(pipeline, attempt, detail, ports, undefined, { kind: "signed-out", engine });
-      else park(pipeline, detail, attempt, readiness === "signed-out" ? { kind: "signed-out", engine } : undefined);
+        await parkProviderTarget(pipeline, attempt, detail, ports, undefined, { kind: "signed-out", engine });
+      else await park(pipeline, detail, attempt, readiness === "signed-out" ? { kind: "signed-out", engine } : undefined);
       return;
     }
     /* A publication this process is merely between is transient. Waiting for it
@@ -7139,7 +7141,7 @@ async function tickRunStage(
         await persist();
         return;
       }
-      park(
+      await park(
         pipeline,
         controllerWaitParkDetail(attempt, activationNow, "structured delivery controller is unavailable"),
         attempt,
@@ -7233,7 +7235,7 @@ async function tickRunStage(
       }
       await spawnRunStage(pipeline, stage, attempt, spawnInput, activationNow, ports, persist, true);
     } catch (error) {
-      park(pipeline, error instanceof Error ? error.message : String(error), attempt);
+      await park(pipeline, error instanceof Error ? error.message : String(error), attempt);
     }
 
     return;
@@ -7241,13 +7243,13 @@ async function tickRunStage(
 
   if (attempt.state === "spawning") {
     if (!spawnsThisProcess.has(attemptKey(pipeline, stage, attempt)) && !attempt.launchId) {
-      park(pipeline, "stage spawn was interrupted before durable launch evidence", attempt);
+      await park(pipeline, "stage spawn was interrupted before durable launch evidence", attempt);
       return;
     }
     if (!spawnsThisProcess.has(attemptKey(pipeline, stage, attempt)) && attempt.launchId) {
       const receipt = ports.spawnReceipt(attempt.launchId);
       if (!receipt) {
-        park(pipeline, "stage spawn receipt disappeared before recovery", attempt);
+        await park(pipeline, "stage spawn receipt disappeared before recovery", attempt);
         return;
       }
       clearStagedLaunchWait(pipeline, attempt, receipt);
@@ -7268,16 +7270,16 @@ async function tickRunStage(
         const deferred = await deferRetiredLaunchRetry(pipeline, stage, attempt, receipt, now, now, ports);
         if (deferred === "waiting") return;
         if (deferred === "exhausted") {
-          park(pipeline, controllerWaitParkDetail(attempt, now, receipt.error), attempt);
+          await park(pipeline, controllerWaitParkDetail(attempt, now, receipt.error), attempt);
           return;
         }
         if (deferred === "delivered") {
-          park(pipeline, unverifiedLaunchRetryRefusal(receipt.error), attempt);
+          await park(pipeline, unverifiedLaunchRetryRefusal(receipt.error), attempt);
           return;
         }
       }
       if (receipt.state === "failed" || receipt.state === "conflicted" || (receipt.state === "starting" && !receipt.paneId && !receipt.transcript)) {
-        park(pipeline, receipt.error ?? `stage spawn cannot recover from receipt state ${receipt.state}`, attempt);
+        await park(pipeline, receipt.error ?? `stage spawn cannot recover from receipt state ${receipt.state}`, attempt);
         return;
       }
     }
@@ -7298,7 +7300,7 @@ async function tickRunStage(
      lag behind receipt settlement or fail to answer, so it has no authority to
      hide the recorded drain cause behind a later transcript park (#1326). */
   if (terminalSpawnFailure && !(isUnverifiedDeliverySpawnFailure(terminalSpawnFailure) && attempt.agentPath)) {
-    park(pipeline, terminalSpawnFailure, attempt);
+    await park(pipeline, terminalSpawnFailure, attempt);
     return;
   }
   if (!attempt.agentPath) {
@@ -7312,9 +7314,9 @@ async function tickRunStage(
       return;
     }
     if (structuredActive === false) {
-      park(pipeline, "structured stage ended before its session was discovered", attempt);
+      await park(pipeline, "structured stage ended before its session was discovered", attempt);
     }
-    else if (attempt.paneId && !(await ports.paneAgentAlive(attempt.paneId))) park(pipeline, "stage agent exited before its session was discovered", attempt);
+    else if (attempt.paneId && !(await ports.paneAgentAlive(attempt.paneId))) await park(pipeline, "stage agent exited before its session was discovered", attempt);
     return;
   }
   const entry = entries.find((candidate) => candidate.path === attempt!.agentPath);
@@ -7426,7 +7428,7 @@ async function tickRunStage(
     }
     if (!(attempt.providerWait?.turnTs && attempt.providerWait.turnTs > 0) && durable?.firstProviderCutAt
       && Math.max(unixMs(pipeline.pausedAt ?? ""), unixMs(pipeline.resumedAt ?? "")) > durable.firstProviderCutAt) {
-      park(pipeline, "provider recovery cancelled by operator control during the stage; waiting for operator decision", attempt);
+      await park(pipeline, "provider recovery cancelled by operator control during the stage; waiting for operator decision", attempt);
       await persist();
       return;
     }
@@ -7437,7 +7439,7 @@ async function tickRunStage(
       }
       delete attempt.controllerWait;
       if (notice) {
-        park(pipeline, "provider recovery cancelled after newer stage activity; waiting for operator decision", attempt);
+        await park(pipeline, "provider recovery cancelled after newer stage activity; waiting for operator decision", attempt);
         await persist();
         return;
       }
@@ -7529,7 +7531,7 @@ async function tickRunStage(
          for the one thing only it can produce (#1756). */
       if (await requestStageVerdictOnce(pipeline, stage, attempt, ports, durable.message!.ts, structuredActive, persist) === "asked") return;
       if (!canSpendRecoveryCheck()) return;
-      recordVerdictRecoveryMiss(
+      await recordVerdictRecoveryMiss(
         pipeline,
         attempt,
         ports,
@@ -7565,13 +7567,13 @@ async function tickRunStage(
       return;
     }
     pipeline.stateDetail = null;
-    if (oomDeath) { retryOutOfMemoryStage(pipeline, stage, attempt, oomDeath, ports); return; }
+    if (oomDeath) { await retryOutOfMemoryStage(pipeline, stage, attempt, oomDeath, ports); return; }
     if (rerunHostLostReadOnlyStage(pipeline, stage, attempt, ports)) return;
     attempt.state = "failed";
     attempt.completedAt = ports.now();
     attempt.error = HISTORICAL_MISSING_STAGE_VERDICT;
-    if (routeFailedAttempt(pipeline, stage, attempt, HISTORICAL_MISSING_STAGE_VERDICT, HISTORICAL_MISSING_STAGE_VERDICT, true, false)) return;
-    park(pipeline, HISTORICAL_MISSING_STAGE_VERDICT, attempt);
+    if (await routeFailedAttempt(pipeline, stage, attempt, HISTORICAL_MISSING_STAGE_VERDICT, HISTORICAL_MISSING_STAGE_VERDICT, true, false)) return;
+    await park(pipeline, HISTORICAL_MISSING_STAGE_VERDICT, attempt);
     return;
   }
   if (heldForDeployCut) return;
@@ -7580,7 +7582,7 @@ async function tickRunStage(
        not an ended stage — wait for the scan or the terminal turn evidence. */
     if (durable) return;
     if (structuredActive === false && canSpendRecoveryCheck()) {
-      recordVerdictRecoveryMiss(
+      await recordVerdictRecoveryMiss(
         pipeline,
         attempt,
         ports,
@@ -7592,7 +7594,7 @@ async function tickRunStage(
       && !(await ports.paneAgentAlive(attempt.paneId))
       && canSpendRecoveryCheck()
     ) {
-      recordVerdictRecoveryMiss(
+      await recordVerdictRecoveryMiss(
         pipeline,
         attempt,
         ports,
@@ -7610,7 +7612,7 @@ async function tickRunStage(
   const message = ports.lastMessage(entry);
   if (!message || message.ts <= unixMs(attemptEvidenceFloor(attempt))) {
     if (structuredActive === false && canSpendRecoveryCheck()) {
-      recordVerdictRecoveryMiss(
+      await recordVerdictRecoveryMiss(
         pipeline,
         attempt,
         ports,
@@ -7622,7 +7624,7 @@ async function tickRunStage(
       && !(await ports.paneAgentAlive(attempt.paneId))
       && canSpendRecoveryCheck()
     ) {
-      recordVerdictRecoveryMiss(
+      await recordVerdictRecoveryMiss(
         pipeline,
         attempt,
         ports,
@@ -7637,7 +7639,7 @@ async function tickRunStage(
     ?? fenced;
   if (!parsed) {
     if (!canSpendRecoveryCheck()) return;
-    recordVerdictRecoveryMiss(
+    await recordVerdictRecoveryMiss(
       pipeline,
       attempt,
       ports,
@@ -7787,8 +7789,8 @@ async function tickReviewStage(
 ): Promise<void> {
   const prior = currentAttempt(pipeline, stage.id);
   const attempt = pipeline.cursor?.state === "pending" && prior && ["passed", "failed", "needs_decision", "skipped"].includes(prior.state)
-    ? newAttempt(pipeline, stage)
-    : prior ?? newAttempt(pipeline, stage);
+    ? await newAttempt(pipeline, stage)
+    : prior ?? await newAttempt(pipeline, stage);
   if (!attempt || pipeline.state === "needs_decision") return;
   if ((attempt.state === "passed" || attempt.state === "skipped") && pipeline.cursor?.state === "committing") {
     (await retryTerminalStagePublication(pipeline, stage, attempt, ports, persist));
@@ -7801,19 +7803,19 @@ async function tickReviewStage(
   if (attempt.state === "pending" && await holdStageLaunchForUpdate(pipeline, ports, persist)) return;
   const implementer = latestAcceptedRun(pipeline, stage.id);
   if (!implementer?.agentPath) {
-    park(pipeline, "review-loop stage requires an accepted run session", attempt);
+    await park(pipeline, "review-loop stage requires an accepted run session", attempt);
     return;
   }
   if (attempt.state === "pending") {
     const expected = attempt.expectedReviewHeadSha ?? pipeline.lastPassedCommit;
-    if (!expected) { park(pipeline, "review-loop stage requires a verified pipeline commit", attempt); return; }
+    if (!expected) { await park(pipeline, "review-loop stage requires a verified pipeline commit", attempt); return; }
     if (ports.deferStageGit && !attempt.flowId) {
       const local = ports.reviewIngressHead?.(pipeline);
       if (!local) { ports.cpuAdmissionSuspend?.(cpuStageKey(pipeline)); return; }
       if (!local.ok || local.sha !== expected) {
         attempt.expectedReviewHeadSha = expected;
         const refusal = await publishReviewIngressHead(pipeline, attempt, ports);
-        if (!refusal.ok) park(pipeline, refusal.detail, attempt);
+        if (!refusal.ok) await park(pipeline, refusal.detail, attempt);
         return;
       }
     }
@@ -7826,7 +7828,7 @@ async function tickReviewStage(
 
   if (!attempt.expectedReviewHeadSha) {
     if (!pipeline.lastPassedCommit) {
-      park(pipeline, "review-loop stage requires a verified pipeline commit", attempt);
+      await park(pipeline, "review-loop stage requires a verified pipeline commit", attempt);
       return;
     }
     attempt.expectedReviewHeadSha = pipeline.lastPassedCommit;
@@ -7842,7 +7844,7 @@ async function tickReviewStage(
         pipeline.stateDetail = ingress.detail;
         return;
       }
-      park(pipeline, ingress.detail, attempt);
+      await park(pipeline, ingress.detail, attempt);
       return;
     }
     attempt.error = null;
@@ -7891,7 +7893,7 @@ async function tickReviewStage(
       roundLimit: DEFAULT_FAIL_EDGE_ROUNDS,
     }, entries, preparedGit ?? undefined);
     if (!created.flow) {
-      park(pipeline, `creating the review flow failed: ${created.error ?? "unknown error"}`, attempt);
+      await park(pipeline, `creating the review flow failed: ${created.error ?? "unknown error"}`, attempt);
       return;
     }
     attachReviewFlowAttempt(attempt, created.flow);
@@ -7902,22 +7904,22 @@ async function tickReviewStage(
       throw error;
     }
     if (created.flow.state === "paused") {
-      park(pipeline, `review flow startup paused: ${created.flow.stateDetail ?? "kickoff delivery failed"}`, attempt);
+      await park(pipeline, `review flow startup paused: ${created.flow.stateDetail ?? "kickoff delivery failed"}`, attempt);
       return;
     }
     const note = reviewNote(pipeline, attemptStage(stage, attempt), attempt.effectiveRole);
     if ("error" in note) {
-      park(pipeline, note.error, attempt);
+      await park(pipeline, note.error, attempt);
       return;
     }
     const advanced = ports.patchFlow(created.flow.id, "advance", note.note);
-    if (advanced.error) park(pipeline, `advancing the review flow failed: ${advanced.error}`, attempt);
+    if (advanced.error) await park(pipeline, `advancing the review flow failed: ${advanced.error}`, attempt);
     return;
   }
 
   const flow = ports.getFlow(attempt.flowId);
   if (!flow) {
-    park(pipeline, "embedded review flow record disappeared", attempt);
+    await park(pipeline, "embedded review flow record disappeared", attempt);
     return;
   }
   if (flow.state === "paused") {
@@ -7927,7 +7929,7 @@ async function tickReviewStage(
     const exhausted = deferred === "exhausted"
       ? ` (after ${attempt.controllerWait?.rounds ?? 0} automatic resumes over ${Math.round(controllerWaitElapsedMs(attempt, unixMs(ports.now())) / 1_000)}s)`
       : "";
-    park(pipeline, `review flow paused in ${phase}: ${flow.stateDetail ?? "operator decision required"}${exhausted}`, attempt);
+    await park(pipeline, `review flow paused in ${phase}: ${flow.stateDetail ?? "operator decision required"}${exhausted}`, attempt);
     return;
   }
   /* The bounded wait booked by the scan resume above or the launch retry
@@ -7942,11 +7944,11 @@ async function tickReviewStage(
   if (flow.state === "waiting_ready" && flow.rounds.length === 0) {
     const note = reviewNote(pipeline, attemptStage(stage, attempt), attempt.effectiveRole);
     if ("error" in note) {
-      park(pipeline, note.error, attempt);
+      await park(pipeline, note.error, attempt);
       return;
     }
     const advanced = ports.patchFlow(flow.id, "advance", note.note);
-    if (advanced.error) park(pipeline, `advancing the review flow failed: ${advanced.error}`, attempt);
+    if (advanced.error) await park(pipeline, `advancing the review flow failed: ${advanced.error}`, attempt);
     return;
   }
   attachReviewFlowAttempt(attempt, flow);
@@ -7989,7 +7991,7 @@ async function tickReviewStage(
       const exhausted = deferredLaunch === "exhausted"
         ? ` (after ${attempt.controllerWait?.rounds ?? 0} automatic launch retries over ${Math.round(controllerWaitElapsedMs(attempt, unixMs(ports.now())) / 1_000)}s)`
         : "";
-      park(pipeline, `${terminalError}${exhausted}`, attempt);
+      await park(pipeline, `${terminalError}${exhausted}`, attempt);
     }
   }
 }
@@ -8220,7 +8222,7 @@ async function provisionPendingPipelines(ports: PipelinePorts, throughOrder: num
 /** Applies one pre-pass outcome under the lease, or declines it (#1799). The
     record is re-read here, so everything the decision rested on is checked
     against the record as it stands now. */
-function applyProvisionOutcome(pipeline: Pipeline, outcome: PipelineProvisionOutcome | undefined, ports: PipelinePorts): boolean {
+async function applyProvisionOutcome(pipeline: Pipeline, outcome: PipelineProvisionOutcome | undefined, ports: PipelinePorts): Promise<boolean> {
   if (!outcome || pipeline.state !== "provisioning" || pipeline.hiddenAt || pipeline.closedAt) return false;
   const fence = provisionFence(pipeline);
   if ((Object.keys(fence) as Array<keyof typeof fence>).some((key) => fence[key] !== outcome.fence[key])) return false;
@@ -8239,7 +8241,7 @@ function applyProvisionOutcome(pipeline: Pipeline, outcome: PipelineProvisionOut
     deliveryJournal(pipeline, "recovery", preservationDetail);
   }
   if (outcome.error) {
-    deferOrParkProvisioning(pipeline, outcome.error, ports);
+    await deferOrParkProvisioning(pipeline, outcome.error, ports);
     return true;
   }
   delete pipeline.provisioningWait;
@@ -8264,7 +8266,7 @@ function transientProvisioningFailure(error: string): TransientGitFailure | null
  * under the lease. A real error, and a transient one whose budget is spent,
  * park with the cause and the action that clears it.
  */
-function deferOrParkProvisioning(pipeline: Pipeline, error: string, ports: PipelinePorts): void {
+async function deferOrParkProvisioning(pipeline: Pipeline, error: string, ports: PipelinePorts): Promise<void> {
   /* A disk wait spends no retry budget and never parks: the lane says why it
      waits and the next tick after space returns provisions it. */
   if (error.includes(DISK_SPACE_WAIT_PREFIX)) {
@@ -8276,7 +8278,7 @@ function deferOrParkProvisioning(pipeline: Pipeline, error: string, ports: Pipel
   const kind = transientProvisioningFailure(error);
   if (!kind) {
     delete pipeline.provisioningWait;
-    park(pipeline, error);
+    await park(pipeline, error);
     return;
   }
   const { cause, fix } = describeTransientGitFailure(kind, error);
@@ -8286,7 +8288,7 @@ function deferOrParkProvisioning(pipeline: Pipeline, error: string, ports: Pipel
     const wait = pipeline.provisioningWait;
     const seconds = wait ? Math.round(Math.max(0, unixMs(now) - unixMs(wait.startedAt)) / 1_000) : 0;
     delete pipeline.provisioningWait;
-    park(pipeline, `gave up after ${wait?.rounds ?? 0} retries over ${seconds}s: ${cause} (${error}); retry-stage ${fix}`);
+    await park(pipeline, `gave up after ${wait?.rounds ?? 0} retries over ${seconds}s: ${cause} (${error}); retry-stage ${fix}`);
     return;
   }
   pipeline.provisioningWait = next.wait;
@@ -8309,10 +8311,10 @@ async function tickPipeline(
        recording what they produced. A lane the pre-pass did not reach — it was
        admitted after the pre-pass read the registry, or its record moved under
        the work — stays in `provisioning` and the next tick provisions it. */
-    applyProvisionOutcome(pipeline, provisioned.get(pipeline.id), ports);
+    await applyProvisionOutcome(pipeline, provisioned.get(pipeline.id), ports);
   } else if (pipeline.state === "running") {
     const stage = currentStage(pipeline);
-    if (!stage) park(pipeline, "pipeline cursor points to an unknown stage");
+    if (!stage) await park(pipeline, "pipeline cursor points to an unknown stage");
     else if (stage.kind === "run") {
       await tickRunStage(pipeline, stage, entries, ports, persist, recoveryAccountingDeadline);
     }
@@ -8403,13 +8405,13 @@ async function approvedReviewHeadHolds(pipeline: Pipeline, attempt: PipelineStag
     return true;
   }
   if ("park" in fence) {
-    park(pipeline, fence.park, attempt);
+    await park(pipeline, fence.park, attempt);
     return false;
   }
   const next = nextBoundedWait(wait, now, now, APPROVED_REMOTE_HEAD_WAIT);
   if (!next) {
     const seconds = Math.round(Math.max(0, unixMs(now) - unixMs(wait!.startedAt)) / 1_000);
-    park(pipeline, `${APPROVED_REMOTE_HEAD_UNVERIFIED} after ${wait!.rounds} automatic retries over ${seconds}s: ${fence.retry}`, attempt);
+    await park(pipeline, `${APPROVED_REMOTE_HEAD_UNVERIFIED} after ${wait!.rounds} automatic retries over ${seconds}s: ${fence.retry}`, attempt);
     return false;
   }
   attempt.remoteHeadWait = next.wait;
@@ -8578,7 +8580,7 @@ function neverStartedLaunch(pipeline: Pipeline, attempt: PipelineStageAttempt, p
  * The registry's failed receipt fences late publication and owns retry claims.
  * Closing the pipeline and retry-stage settle here directly; the controller's
  * own pass asks the host first (`settleAbandonedLaunch`). */
-function settleNeverStartedLaunch(pipeline: Pipeline, attempt: PipelineStageAttempt, ports: PipelinePorts, exhausted = false): boolean {
+function settleNeverStartedLaunchState(pipeline: Pipeline, attempt: PipelineStageAttempt, ports: PipelinePorts, exhausted = false): boolean {
   const settlement = neverStartedLaunch(pipeline, attempt, ports, exhausted);
   if (!settlement || !attempt.launchId || !attempt.conversationId) return false;
   const { recovery } = settlement;
@@ -8588,7 +8590,12 @@ function settleNeverStartedLaunch(pipeline: Pipeline, attempt: PipelineStageAtte
   attempt.error = reason;
   attempt.completedAt ??= ports.now();
   delete attempt.controllerWait;
-  if (pipeline.state !== "closed") park(pipeline, `${reason}; use retry-stage to start a fresh attempt`, attempt);
+  return true;
+}
+
+async function settleNeverStartedLaunch(pipeline: Pipeline, attempt: PipelineStageAttempt, ports: PipelinePorts, exhausted = false): Promise<boolean> {
+  if (!settleNeverStartedLaunchState(pipeline, attempt, ports, exhausted)) return false;
+  if (pipeline.state !== "closed") await park(pipeline, `${attempt.error}; use retry-stage to start a fresh attempt`, attempt);
   return true;
 }
 
@@ -8617,7 +8624,7 @@ async function settleAbandonedLaunch(pipeline: Pipeline, attempt: PipelineStageA
   const settlement = neverStartedLaunch(pipeline, attempt, ports, false);
   if (!settlement) return false;
   if (pipeline.state !== "closed" && await liveHostOfSpentLaunch(attempt, settlement.recovery, ports) !== null) return false;
-  return settleNeverStartedLaunch(pipeline, attempt, ports);
+  return await settleNeverStartedLaunch(pipeline, attempt, ports);
 }
 
 /** The receipt's recovery record says only what the probes saw, and a loaded
@@ -8633,13 +8640,13 @@ async function waitForStagedLaunch(
 ): Promise<void> {
   const receipt = attempt.launchId ? ports.spawnReceipt(attempt.launchId) : null;
   if (receipt?.staged && receipt.currentGeneration === false) {
-    park(pipeline, SPAWN_GENERATION_CONFLICT, attempt);
+    await park(pipeline, SPAWN_GENERATION_CONFLICT, attempt);
     return;
   }
   if (recovery.phase !== "unpublished" && !recovery.stopped) {
     const turn = await attemptTurnTranscript(pipeline, stage.id, attempt, ports);
     if (turn?.operationConflict) {
-      park(pipeline, "runtime operation identity conflicts with the staged launch; original launch retained", attempt);
+      await park(pipeline, "runtime operation identity conflicts with the staged launch; original launch retained", attempt);
       return;
     }
     if (turn?.pathname) {
@@ -8651,7 +8658,7 @@ async function waitForStagedLaunch(
   if (recovery.stopped || unixMs(ports.now()) - recovery.startedAt >= STAGED_RECOVERY_BUDGET_MS) {
     const turn = await attemptTurnTranscript(pipeline, stage.id, attempt, ports);
     if (turn?.operationConflict) {
-      park(pipeline, "runtime operation identity conflicts with the staged launch; original launch retained", attempt);
+      await park(pipeline, "runtime operation identity conflicts with the staged launch; original launch retained", attempt);
       return;
     }
     if (turn?.pathname) {
@@ -8674,8 +8681,8 @@ async function waitForStagedLaunch(
     }
     const reason = recovery.stopped ? recovery.reason
       : `${STAGED_RECOVERY_EXHAUSTED} after ${recovery.checks} checks; original launch and first-message operation retained; last result: ${recovery.reason}`;
-    if (!settleNeverStartedLaunch(pipeline, attempt, ports, true)) {
-      park(pipeline, `${SPAWN_RECOVERY_PARK_PREFIX}${reason}; original launch retained`, attempt);
+    if (!await settleNeverStartedLaunch(pipeline, attempt, ports, true)) {
+      await park(pipeline, `${SPAWN_RECOVERY_PARK_PREFIX}${reason}; original launch retained`, attempt);
     }
     return;
   }
@@ -8708,16 +8715,16 @@ function unresolvedSpawnPark(attempt: PipelineStageAttempt): boolean {
 async function waitForUnresolvedLaunch(pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt, ports: PipelinePorts): Promise<void> {
   const receipt = attempt.launchId ? ports.spawnReceipt(attempt.launchId) : null;
   if (!receipt || receipt.state === "failed" || receipt.state === "conflicted") {
-    park(pipeline, `stage spawn receipt ${receipt?.state ?? "missing"}: ${redactBounded(receipt?.error ?? "original receipt unavailable", 300)}; original launch retained`, attempt);
+    await park(pipeline, `stage spawn receipt ${receipt?.state ?? "missing"}: ${redactBounded(receipt?.error ?? "original receipt unavailable", 300)}; original launch retained`, attempt);
     return;
   }
   if (receipt.currentGeneration === false && receipt.staged) {
-    park(pipeline, SPAWN_GENERATION_CONFLICT, attempt);
+    await park(pipeline, SPAWN_GENERATION_CONFLICT, attempt);
     return;
   }
   const turn = await attemptTurnTranscript(pipeline, stage.id, attempt, ports);
   if (turn?.operationConflict) {
-    park(pipeline, "runtime operation identity conflicts with the staged launch; original launch retained", attempt);
+    await park(pipeline, "runtime operation identity conflicts with the staged launch; original launch retained", attempt);
     return;
   }
   if (turn?.pathname) {
@@ -8729,7 +8736,7 @@ async function waitForUnresolvedLaunch(pipeline: Pipeline, stage: PipelineStage,
   if (!attempt.controllerWait || unixMs(attempt.controllerWait.retryAfter) <= unixMs(now)) {
     if (bookControllerWaitRound(attempt, now, now, ports,
       { budgetMs: STAGED_RECOVERY_BUDGET_MS, retryMaxMs: SPAWN_HOST_RETRY_MAX_MS }) === "exhausted") {
-      park(pipeline, `stage spawn evidence unresolved after bounded recovery: receipt ${receipt?.state ?? "missing"}; no matching current native turn; original launch and first-message operation retained`, attempt);
+      await park(pipeline, `stage spawn evidence unresolved after bounded recovery: receipt ${receipt?.state ?? "missing"}; no matching current native turn; original launch and first-message operation retained`, attempt);
       return;
     }
   }
@@ -8880,7 +8887,7 @@ function newerAutomaticProviderPrompt(attempt: PipelineStageAttempt, durable: St
 /** A harness wake or controller continuation can meet the same cut chain
     without an operator answering. Advance the open chain's witness and retain
     the stage retry; a quota record in a quota chain also names its reset. */
-function refreshHarnessProviderCut(pipeline: Pipeline, attempt: PipelineStageAttempt, durable: StageTurnEvidence | null, ports: PipelinePorts): boolean {
+async function refreshHarnessProviderCut(pipeline: Pipeline, attempt: PipelineStageAttempt, durable: StageTurnEvidence | null, ports: PipelinePorts): Promise<boolean> {
   const wait = attempt.providerWait;
   const notice = durable?.turn === "terminal" ? durable.terminalProviderMessage : null;
   const quota = wait?.condition.kind === "usage_limit" && !!notice
@@ -8897,7 +8904,7 @@ function refreshHarnessProviderCut(pipeline: Pipeline, attempt: PipelineStageAtt
     wait.resetsAt = reset;
     if (wait.stageRetry && wait.resumeAt !== new Date(reset * 1_000 + 60_000).toISOString()) {
       const reason = pipeline.stateDetail?.split("\n").slice(1).join("\n") || "stage cut by provider usage limit";
-      parkProviderUsageLimit(pipeline, attempt, reason, ports);
+      await parkProviderUsageLimit(pipeline, attempt, reason, ports);
     }
   }
   if (wait.stageRetry) scheduleProviderWake(ports, wait.resumeAt);
@@ -8907,7 +8914,7 @@ function refreshHarnessProviderCut(pipeline: Pipeline, attempt: PipelineStageAtt
 /** Agent output closed the parked chain and the turn ended in a newer one. The
     retry moves to that chain: the wait the running tick opens for its cut, a
     fresh budget, and that condition's own retry time. */
-function moveParkedProviderRetry(pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt, durable: StageTurnEvidence | null, ports: PipelinePorts): boolean {
+async function moveParkedProviderRetry(pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt, durable: StageTurnEvidence | null, ports: PipelinePorts): Promise<boolean> {
   const message = durable?.turn === "terminal" ? durable.terminalProviderMessage : null;
   if (!attempt.providerWait?.stageRetry || durable?.requestedCutOpen !== false || !durable.firstProviderCutAt
     || !message || message.ts <= attempt.providerWait.turnTs) return false;
@@ -8919,8 +8926,8 @@ function moveParkedProviderRetry(pipeline: Pipeline, stage: PipelineStage, attem
   const wait = openProviderWait(stage, attempt, notice, ports);
   const detail = `stage cut by ${notice.condition.label}; last: ${wait.text}`;
   recordProviderRecovery(attempt, "park", notice.condition, detail, ports.now());
-  if (notice.condition.kind === "transient") parkProviderUsageLimit(pipeline, attempt, detail, ports, wait.resumeAt, false);
-  else parkProviderUsageLimit(pipeline, attempt, detail, ports);
+  if (notice.condition.kind === "transient") await parkProviderUsageLimit(pipeline, attempt, detail, ports, wait.resumeAt, false);
+  else await parkProviderUsageLimit(pipeline, attempt, detail, ports);
   return true;
 }
 
@@ -8943,8 +8950,8 @@ async function providerCutActivity(pipeline: Pipeline, attempt: PipelineStageAtt
     if (durable?.promptHistoryComplete === false && wait.turnTs > 0 && !closed) return "unknown";
     if (newerExternalProviderPrompt(attempt, durable)) return "newer";
     const stage = currentStage(pipeline);
-    if (stage && moveParkedProviderRetry(pipeline, stage, attempt, durable, ports)) await persist();
-    else if (refreshHarnessProviderCut(pipeline, attempt, durable, ports)) await persist();
+    if (stage && await moveParkedProviderRetry(pipeline, stage, attempt, durable, ports)) await persist();
+    else if (await refreshHarnessProviderCut(pipeline, attempt, durable, ports)) await persist();
     const saved = attempt.providerWait ?? wait;
     if (!attempt.report && !attempt.verdict && durable?.turn === "busy" && newerAutomaticProviderPrompt(attempt, durable)) return "unknown";
     if (attempt.report || attempt.verdict || durable?.message && durable.message.ts > saved.turnTs
@@ -8966,7 +8973,7 @@ function needsProviderContinuationCancellation(attempt: PipelineStageAttempt | u
     && !(wait.retryCancelled && attempt.error === PROVIDER_RETRY_CANCELLED_BY_PAUSE));
 }
 
-function cancelProviderStageRetry(pipeline: Pipeline, attempt: PipelineStageAttempt, detail: string): void {
+async function cancelProviderStageRetry(pipeline: Pipeline, attempt: PipelineStageAttempt, detail: string): Promise<void> {
   const wait = attempt.providerWait;
   if (!wait || wait.retryCancelled) return;
   const oldDetail = wait.stageRetry?.detail;
@@ -8975,7 +8982,7 @@ function cancelProviderStageRetry(pipeline: Pipeline, attempt: PipelineStageAtte
   delete attempt.controllerWait;
   attempt.error = detail;
   if (pipeline.stateDetail === oldDetail) pipeline.stateDetail = detail;
-  writeEngineParkedTaskNote(pipeline, detail, attempt);
+  await writeEngineParkedTaskNote(pipeline, detail, attempt);
 }
 
 /** Old readers persisted agent notifications as operator cancellation. Repair
@@ -9011,7 +9018,7 @@ async function reconcileMisclassifiedProviderCancellation(pipeline: Pipeline, st
   pipeline.pausedState = null;
   pipeline.stateDetail = "restoring provider recovery after an authenticated stage notification";
   recordProviderRecovery(attempt, "wait", wait!.condition, pipeline.stateDetail, ports.now());
-  clearEngineTaskNote(pipeline);
+  await clearEngineTaskNote(pipeline);
   await persist();
   return true;
 }
@@ -9052,7 +9059,7 @@ async function reconcileParkedRestartCut(pipeline: Pipeline, stage: PipelineStag
   pipeline.state = "running";
   pipeline.stateDetail = null;
   setCursorState(pipeline, stage.id, "running");
-  clearEngineTaskNote(pipeline);
+  await clearEngineTaskNote(pipeline);
   await persist();
   return true;
 }
@@ -9161,7 +9168,7 @@ async function reconcileParkedProviderRetry(pipeline: Pipeline, ports: PipelineP
         attempt.completedAt = null;
         delete attempt.controllerWait;
         resetStageForRetry(pipeline, stage);
-        clearEngineTaskNote(pipeline);
+        await clearEngineTaskNote(pipeline);
         await persist();
         ports.scheduleTick?.(0);
         return true;
@@ -9206,7 +9213,7 @@ async function reconcileParkedProviderRetry(pipeline: Pipeline, ports: PipelineP
     const retryAt = new Date(wait.resetsAt !== null ? wait.resetsAt * 1_000 + 60_000
       : unixMs(attempt.completedAt) + 30 * 60_000).toISOString();
     if (target) delete wait.retryCancelled;
-    parkProviderUsageLimit(pipeline, attempt, attempt.error, ports, retryAt, target ? false : undefined);
+    await parkProviderUsageLimit(pipeline, attempt, attempt.error, ports, retryAt, target ? false : undefined);
     await persist();
   }
   const retry = wait?.stageRetry;
@@ -9217,11 +9224,11 @@ async function reconcileParkedProviderRetry(pipeline: Pipeline, ports: PipelineP
       && (retry.fallback !== false || !["auth_required", "transient"].includes(wait.condition.kind))
     || retry.controlGeneration !== (pipeline.controlGeneration ?? null)
     || pipeline.stateDetail !== retry.detail || attempt.error !== retry.detail) {
-    cancelProviderStageRetry(pipeline, attempt, "automatic provider retry cancelled; waiting for operator decision");
+    await cancelProviderStageRetry(pipeline, attempt, "automatic provider retry cancelled; waiting for operator decision");
     return true;
   }
   if (!attempt.paneId && attempt.conversationId && ports.conversationRegistered?.(attempt.conversationId) === false) {
-    cancelProviderStageRetry(pipeline, attempt, "automatic provider retry cannot verify recorded host ownership; waiting for operator decision");
+    await cancelProviderStageRetry(pipeline, attempt, "automatic provider retry cannot verify recorded host ownership; waiting for operator decision");
     return true;
   }
   const confirmUnchangedCut = async () => {
@@ -9232,18 +9239,18 @@ async function reconcileParkedProviderRetry(pipeline: Pipeline, ports: PipelineP
     if (state === "unchanged" && (!attempt.conversationId
       || ports.conversationDeliveryOutstanding?.(attempt.conversationId) !== true)) return true;
     if (state === "newer") {
-      cancelProviderStageRetry(pipeline, attempt, "automatic provider retry cancelled after newer stage activity; waiting for operator decision");
+      await cancelProviderStageRetry(pipeline, attempt, "automatic provider retry cancelled after newer stage activity; waiting for operator decision");
     } else if (state !== "working") {
       const now = ports.now();
       if (bookControllerWaitRound(attempt, now, now, ports,
         { budgetMs: SPAWN_HOST_WAIT_BUDGET_MS, retryMaxMs: 30_000 }) === "exhausted") {
-        cancelProviderStageRetry(pipeline, attempt, "automatic provider retry could not confirm unchanged cut evidence; waiting for operator decision");
+        await cancelProviderStageRetry(pipeline, attempt, "automatic provider retry could not confirm unchanged cut evidence; waiting for operator decision");
       }
     }
     return false;
   };
   if (await providerCutActivity(pipeline, attempt, ports, persist) === "newer") {
-    cancelProviderStageRetry(pipeline, attempt, "automatic provider retry cancelled after newer stage activity; waiting for operator decision");
+    await cancelProviderStageRetry(pipeline, attempt, "automatic provider retry cancelled after newer stage activity; waiting for operator decision");
     return true;
   }
   if (attempt.providerWait !== wait || !wait.stageRetry) return true;
@@ -9253,7 +9260,7 @@ async function reconcileParkedProviderRetry(pipeline: Pipeline, ports: PipelineP
   if (remaining > 0 && !target) { scheduleProviderWake(ports, wait.resumeAt); return false; }
   const elsewhere = pipelineTasksRunElsewhere(pipeline.taskIds, loadTasks());
   if (elsewhere) {
-    cancelProviderStageRetry(pipeline, attempt, "automatic provider retry cancelled because the task runs elsewhere; waiting for operator decision");
+    await cancelProviderStageRetry(pipeline, attempt, "automatic provider retry cancelled because the task runs elsewhere; waiting for operator decision");
     return true;
   }
   if (!await confirmUnchangedCut()) return true;
@@ -9270,7 +9277,7 @@ async function reconcileParkedProviderRetry(pipeline: Pipeline, ports: PipelineP
     if (stopped.outcome === "unresolved") rememberUnresolvedTermination(attempt, stopped, now);
     if (stopped.outcome === "unresolved" || bookControllerWaitRound(attempt, now, now, ports,
       { budgetMs: SPAWN_HOST_WAIT_BUDGET_MS, retryMaxMs: SPAWN_HOST_RETRY_MAX_MS }) === "exhausted") {
-      cancelProviderStageRetry(pipeline, attempt, "automatic provider retry could not terminate its recorded host; waiting for operator decision");
+      await cancelProviderStageRetry(pipeline, attempt, "automatic provider retry could not terminate its recorded host; waiting for operator decision");
       return true;
     }
     return true;
@@ -9285,7 +9292,7 @@ async function reconcileParkedProviderRetry(pipeline: Pipeline, ports: PipelineP
   delete wait.stageRetry;
   delete attempt.controllerWait;
   resetStageForRetry(pipeline, stage);
-  const next = newAttempt(pipeline, stage);
+  const next = await newAttempt(pipeline, stage);
   if (next) {
     const fallback = !target && (retry.fallback ?? (wait.resetsAt === null));
     next.providerFallbackRetries = (attempt.providerFallbackRetries ?? 0) + (fallback ? 1 : 0);
@@ -9304,7 +9311,7 @@ async function reconcileParkedProviderRetry(pipeline: Pipeline, ports: PipelineP
       }
     }
   }
-  clearEngineTaskNote(pipeline);
+  await clearEngineTaskNote(pipeline);
   await persist();
   ports.scheduleTick?.(0);
   return true;
@@ -9348,13 +9355,13 @@ async function reconcileParkedStructuredSpawn(pipeline: Pipeline, ports: Pipelin
     const result = await deferRetiredLaunchRetry(pipeline, stage, attempt, receipt, now, now, ports);
     if (result === "waiting") return true;
     if (result === "exhausted") {
-      park(pipeline, controllerWaitParkDetail(attempt, now, receipt.error!), attempt);
+      await park(pipeline, controllerWaitParkDetail(attempt, now, receipt.error!), attempt);
       return true;
     }
     return false;
   }
   if (receipt?.staged && receipt.currentGeneration === false) {
-    park(pipeline, SPAWN_GENERATION_CONFLICT, attempt);
+    await park(pipeline, SPAWN_GENERATION_CONFLICT, attempt);
     return true;
   }
   if (
@@ -9540,7 +9547,7 @@ async function deferRetiredLaunchRetry(
     if (!["stopped", "not-running"].includes(stopped.outcome)) {
       if (stopped.outcome === "unresolved") rememberUnresolvedTermination(attempt, stopped, now);
       if (stopped.outcome === "unresolved") {
-        park(pipeline, `failed startup recovery could not terminate its recorded host: ${redactBounded(stopped.error, 300)}`, attempt);
+        await park(pipeline, `failed startup recovery could not terminate its recorded host: ${redactBounded(stopped.error, 300)}`, attempt);
         return "waiting";
       }
       if (bookControllerWaitRound(attempt, since, now, ports,
@@ -9581,7 +9588,7 @@ async function deferRetiredLaunchRetry(
   attempt.error = null;
   if ((prepublicationInterruption || receipt.neverBegan) && pipeline.state === "needs_decision") {
     pipeline.state = "running";
-    clearEngineTaskNote(pipeline);
+    await clearEngineTaskNote(pipeline);
   }
   setCursorState(pipeline, stage.id, "pending");
   syncControllerWaitStateDetail(pipeline, attempt, failure);
@@ -10038,7 +10045,7 @@ function remoteActionFence(pipeline: Pipeline): string {
 }
 
 /** Adopt a verified skip under its durable lane fence, then reserve publication. */
-function applySkippedStage(pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt, sha: string, ports: PipelinePorts): void {
+async function applySkippedStage(pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt, sha: string, ports: PipelinePorts): Promise<void> {
   const previousHead = pipeline.lastPassedCommit;
   pipeline.lastPassedCommit = sha;
   attempt.state = "skipped";
@@ -10054,18 +10061,18 @@ function applySkippedStage(pipeline: Pipeline, stage: PipelineStage, attempt: Pi
       acceptedSha: sha, publishedSha: pipeline.publishedCommit ?? null,
     });
     if (!published.ok) {
-      park(pipeline, `publishing the skipped stage: ${published.error}`, attempt);
+      await park(pipeline, `publishing the skipped stage: ${published.error}`, attempt);
     } else if (published.remote === "unavailable") {
-      park(pipeline, `publishing the skipped stage: ${MISSING_DELIVERY_REMOTE}`, attempt);
+      await park(pipeline, `publishing the skipped stage: ${MISSING_DELIVERY_REMOTE}`, attempt);
     } else if (published.remote === "unreachable") {
       setCursorState(pipeline, stage.id, "committing");
-      keepPassedStageUnpublished(pipeline, attempt, published.detail);
+      await keepPassedStageUnpublished(pipeline, attempt, published.detail);
     } else {
       pipeline.publishedCommit = published.sha;
-      advancePipeline(pipeline, stage, ports, attempt);
+      await advancePipeline(pipeline, stage, ports, attempt);
     }
   } else {
-    advancePipeline(pipeline, stage, ports, attempt);
+    await advancePipeline(pipeline, stage, ports, attempt);
   }
 }
 
@@ -10203,7 +10210,7 @@ export async function settlePendingRemoteActions(ports: PipelinePorts = defaultP
       }
       if (action.action === "skip-stage") {
         pipeline.stateDetail = null;
-        applySkippedStage(pipeline, currentStage(pipeline)!, currentAttempt(pipeline, currentStage(pipeline)!.id)!, result.sha, ports);
+        await applySkippedStage(pipeline, currentStage(pipeline)!, currentAttempt(pipeline, currentStage(pipeline)!.id)!, result.sha, ports);
         recordHandLaunch(pipeline, action.actor, ports.now());
       }
       if (action.action === "retry-stage" || pipeline.stateDetail === "delivery takeover accepted; remote reconciliation pending") pipeline.stateDetail = null;
@@ -10292,7 +10299,7 @@ export async function settlePendingStageGit(ports: PipelinePorts = defaultPipeli
         if (!current || !matches(current)) return;
         const recorded = currentAttempt(current, stage.id);
         const cause = error instanceof Error ? error.message : "Pipeline locking unavailable";
-        park(current, recorded ? afterCommitRepair(recorded, cause) : cause, recorded);
+        await park(current, recorded ? afterCommitRepair(recorded, cause) : cause, recorded);
         await persist([current]); changed = true;
       });
       continue;
@@ -10307,7 +10314,7 @@ export async function settlePendingStageGit(ports: PipelinePorts = defaultPipeli
       return await performanceSpans.wait("controller.git-wait", async () => await ports.exec(command, args, cwd, env, { ...options, signal: abort.signal, inheritFd: descriptor, timeoutMs: command === "timeout" ? 5_000 : options?.timeoutMs ?? 60_000 }));
     };
     const candidate = performanceSpans.sync("pipeline.copy", () => structuredClone(preview));
-    const effects: Array<() => void> = [];
+    const effects: Array<() => Promise<void>> = [];
     stageSettlementEffects.set(candidate, effects);
     const candidateStage = currentStage(candidate)!;
     const candidateAttempt = currentAttempt(candidate, candidateStage.id)!;
@@ -10367,7 +10374,7 @@ export async function settlePendingStageGit(ports: PipelinePorts = defaultPipeli
         const current = pipelines.find((pipeline) => pipeline.id === preview.id);
         if (!current || !matches(current)) return;
         Object.assign(current, candidate);
-        for (const effect of effects) effect();
+        for (const effect of effects) await effect();
         await persist([current]);
         changed = true;
         settledIds?.add(current.id);
@@ -10493,6 +10500,7 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
           || pipelineHasActivation(pipeline)) continue;
         if (requiresReviewIngress(pipeline) && (tickStore.__llvCpuIngressReads?.has(cpuStageKey(pipeline))
           || ingressHeads.get(pipeline.id)?.fence !== reviewIngressFence(pipeline))) continue;
+        taskNoteAuthority.set(pipeline, () => assertCurrent(pipeline));
         const lanePorts = controllerSnapshotPorts(admissionPorts, () => assertCurrent(pipeline), pipeline.id);
         if (await tickPipeline(pipeline, entries, lanePorts, async () => await persist([pipeline]),
           ports.monotonicNow() + VERDICT_RECOVERY_ACCOUNTING_BUDGET_MS, new Map())) {
@@ -10597,7 +10605,7 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
       if (!pipeline || pipeline.state !== "closed") return;
       let changed = false;
       for (const run of controllerRuns(pipeline)) for (const attempt of run.attempts) {
-        if (controllerAttemptSelected(pipeline.id, run.stageId, attempt.n)) changed = settleNeverStartedLaunch(pipeline, attempt, ports) || changed;
+        if (controllerAttemptSelected(pipeline.id, run.stageId, attempt.n)) changed = settleNeverStartedLaunchState(pipeline, attempt, ports) || changed;
       }
       if (changed) { tx.put(pipeline); closedLaunchesChanged = true; }
     }, 2);
@@ -10613,6 +10621,7 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
       let changed = await reconcilePipelineFallbackTasks(pipelines, persist) || closedLaunchesChanged;
       await forEachCooperatively(pipelines, pipeline => withViewerOperation("pipelines.controller-lane", async () => {
         if (scoped && pipelineControllerJobLanes().includes(pipeline.id)) return;
+        taskNoteAuthority.set(pipeline, () => assertCurrent(pipeline));
         const lanePorts = controllerSnapshotPorts(controllerPorts, () => assertCurrent(pipeline), pipeline.id);
         if (publishesRemoteBranch(pipeline) && !pipeline.delivery) return;
         const persistPipeline = async () => await persist([pipeline]);
@@ -10661,7 +10670,7 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
           const receipt = lanePorts.spawnReceipt(recoveredLaunch.launchId);
           const recovery = stagedLaunchRecovery(receipt);
           if (receipt?.staged && receipt.currentGeneration === false) {
-            park(pipeline, SPAWN_GENERATION_CONFLICT, currentAttempt(pipeline, recoveredLaunch.stageId)!);
+            await park(pipeline, SPAWN_GENERATION_CONFLICT, currentAttempt(pipeline, recoveredLaunch.stageId)!);
           } else if (receipt?.state === "completed" && receipt.conversationId === recoveredLaunch.conversationId) {
             const attempt = currentAttempt(pipeline, recoveredLaunch.stageId)!;
             clearStagedLaunchWait(pipeline, attempt, receipt);
@@ -10690,8 +10699,8 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
         pipelineChanged = performanceSpans.sync("controller.lane", () => reconcilePipelineEmbeddedFlows(pipeline, lanePorts)) || pipelineChanged;
         pipelineChanged = reconcilePendingPipelineAdoptions(pipeline, lanePorts) || pipelineChanged;
         pipelineChanged = await reconcileHistoricalAttempts(pipeline, entries, lanePorts) || pipelineChanged;
-        pipelineChanged = reconcileTerminalReviewPending(pipeline) || pipelineChanged;
-        pipelineChanged = reconcileDefaultAdvanceBudgetPark(pipeline, lanePorts) || pipelineChanged;
+        pipelineChanged = await reconcileTerminalReviewPending(pipeline) || pipelineChanged;
+        pipelineChanged = await reconcileDefaultAdvanceBudgetPark(pipeline, lanePorts) || pipelineChanged;
         // Evidence above may be synchronized while a stop remains unresolved.
         // Recovery below can advance the cursor, publish a verdict or resume a
         // flow, so it needs the same pipeline-wide admission as ordinary ticks.
@@ -12484,7 +12493,7 @@ async function resolveDecision(
   setCursorState(pipeline, stage.id, "pending");
   pipeline.cursor!.input = renderDecisionInput(attempt.input, decision);
   recordHandLaunch(pipeline, actor, decision.at);
-  const next = newAttempt(pipeline, stage)!;
+  const next = (await newAttempt(pipeline, stage))!;
   next.decisionAnswerId = decision.clientRequestId;
   if (publicationDecision && pipeline.delivery?.operation?.state === "settled") delete pipeline.delivery.operation;
   pipeline.decisionAnswers = [...(pipeline.decisionAnswers ?? []), decision];
@@ -12537,9 +12546,9 @@ function continueReview(
  * continue-review's actor rule; the acceptance is recorded, and a replay of
  * the same clientRequestId answers with it. No host or Git work here.
  */
-function acceptHead(
+async function acceptHead(
   pipeline: Pipeline, req: PatchPipelineRequest, actor: PauseResumeActor | null, ports: PipelinePorts,
-): PipelinePatchResult {
+): Promise<PipelinePatchResult> {
   const refusal = continueReviewActorRefusal(pipeline, actor);
   if (refusal) return { ...refusal, error: "only the pipeline creator conversation, the project's current designated seat for a lane an agent created, or a direct user action can accept this head" };
   if (!actor) return { error: "accept-head needs an actor", status: 403 };
@@ -12587,7 +12596,7 @@ function acceptHead(
   };
   pipeline.reviewAcceptances = [...(pipeline.reviewAcceptances ?? []), acceptance];
   delete pipeline.reviewPending;
-  advancePipeline(pipeline, fixStage, ports, fix, true);
+  await advancePipeline(pipeline, fixStage, ports, fix, true);
   recordHandLaunch(pipeline, actor, acceptance.at);
   return { pipeline, reviewAcceptance: acceptance, replayed: false };
 }
@@ -12987,7 +12996,7 @@ export async function patchPipeline(
       return result;
     }
     if (req.action === "accept-head") {
-      const result = acceptHead(pipeline, req, actor, ports);
+      const result = await acceptHead(pipeline, req, actor, ports);
       if (result.pipeline && !result.replayed) await persist();
       return result;
     }
@@ -13342,7 +13351,7 @@ export async function patchPipeline(
         for (const run of pipeline.runs) for (const attempt of run.attempts) {
           if (attempt.activation) attempt.activation.cancelRequested = true;
         }
-        if (attempt) cancelProviderStageRetry(pipeline, attempt, PROVIDER_RETRY_CANCELLED_BY_PAUSE);
+        if (attempt) await cancelProviderStageRetry(pipeline, attempt, PROVIDER_RETRY_CANCELLED_BY_PAUSE);
         pipeline.pausedState = pipeline.state;
         pipeline.state = "paused";
         pipeline.pausedAt = ports.now();
@@ -13493,7 +13502,7 @@ export async function patchPipeline(
           await persist();
           return { error: "the stalled attempt made progress while its host was stopping; retry was cancelled", status: 409 };
         }
-        park(pipeline, "confirmed stalled attempt was stopped for retry", attempt);
+        await park(pipeline, "confirmed stalled attempt was stopped for retry", attempt);
         await persist();
       }
       if (pipeline.state !== "needs_decision") return { error: "pipeline does not have a stage awaiting retry", status: 409 };
@@ -13559,12 +13568,12 @@ export async function patchPipeline(
         }
         return { conflict: null, claimRequired: false };
       };
-      if (attempt && settleNeverStartedLaunch(pipeline, attempt, ports)) await persist();
+      if (attempt && await settleNeverStartedLaunch(pipeline, attempt, ports)) await persist();
       const initialReceipt = validateRetryReceipt();
       if (initialReceipt.conflict) return initialReceipt.conflict;
       if (stage?.kind === "review-loop") {
         if (!(ports.remoteActionSupported ?? servingControllerSupports)("retry-stage")) return { error: "the serving controller cannot perform retry-stage remoteAction; update the Viewer before retrying", status: 409 };
-        if (attempt) cancelProviderStageRetry(pipeline, attempt, "automatic provider retry cancelled by operator retry");
+        if (attempt) await cancelProviderStageRetry(pipeline, attempt, "automatic provider retry cancelled by operator retry");
         pipeline.remoteAction = { id: crypto.randomUUID(), action: "retry-stage", state: "pending",
           fence: remoteActionFence(pipeline), at: ports.now(), actor,
           ...(receiptRetry ? { retryReceipt: { launchId: retryLaunchId!, state: (ports.spawnReceiptState ? ports.spawnReceiptState(retryLaunchId!) : ports.spawnReceipt(retryLaunchId!)?.state)!,
@@ -13608,7 +13617,7 @@ export async function patchPipeline(
         delete pipeline.delivery.operation;
         pipeline.publishedCommit = null;
       }
-      if (attempt) cancelProviderStageRetry(pipeline, attempt, "automatic provider retry cancelled by operator retry");
+      if (attempt) await cancelProviderStageRetry(pipeline, attempt, "automatic provider retry cancelled by operator retry");
       resetStageForRetry(pipeline, stage);
       recordHandLaunch(pipeline, actor, ports.now());
     } else if (req.action === "skip-stage") {
@@ -13630,7 +13639,7 @@ export async function patchPipeline(
         }
         return { pipeline };
       }
-      cancelProviderStageRetry(pipeline, attempt, "automatic provider retry cancelled by stage skip");
+      await cancelProviderStageRetry(pipeline, attempt, "automatic provider retry cancelled by stage skip");
       pipeline.remoteAction = { id: crypto.randomUUID(), action: "skip-stage", state: "pending",
         fence: remoteActionFence(pipeline), at: ports.now(), actor };
       pipeline.stateDetail = "stage skip accepted; cleanup and checkout verification pending";
@@ -13957,9 +13966,9 @@ export async function patchPipeline(
         acknowledgeHosts: req.acknowledgeHosts === true,
         flow: attempt?.flowId && stage ? { id: attempt.flowId, stageId: stage.id, attempt: attempt.n } : null,
       };
-      if (attempt) cancelProviderStageRetry(pipeline, attempt, "automatic provider retry cancelled by close");
+      if (attempt) await cancelProviderStageRetry(pipeline, attempt, "automatic provider retry cancelled by close");
       retainCloseHosts(pipeline);
-      if (stage && (!attempt || (pipeline.cursor?.state === "pending" && TERMINAL_ATTEMPT_STATES.has(attempt.state)))) newAttempt(pipeline, stage);
+      if (stage && (!attempt || (pipeline.cursor?.state === "pending" && TERMINAL_ATTEMPT_STATES.has(attempt.state)))) await newAttempt(pipeline, stage);
       delete pipeline.activationCloseRequested;
       pipeline.state = "closed";
       pipeline.cursor = null;
