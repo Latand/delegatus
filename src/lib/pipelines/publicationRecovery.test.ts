@@ -128,6 +128,25 @@ test("a receipted producer commit after acceptance proceeds to review", async ()
   } finally { f.close(); }
 });
 
+test("a fresh attempt can finish after the controller accepted and committed dirty producer output", async () => {
+  const f = await fixture();
+  try {
+    fs.writeFileSync(path.join(f.lane(), "file.txt"), "implementation output\n");
+    f.refuse(); await f.finish();
+    const accepted = await f.git(f.lane(), "rev-parse", "HEAD");
+    expect(fs.existsSync(path.join(stageGitReceiptDirectory(current().runs[0]!.attempts[0]!.launchId!), "commits", accepted))).toBe(false);
+    expect(current().state).toBe("needs_decision");
+    await rawPatchPipeline(current().id, { action: "resolve-decision", clientRequestId: "dirty-output-retry",
+      answer: "Run the stage again.", expectedStageId: "build", expectedAttempt: 1,
+      expectedRevision: pipelineRevision(current()) }, f.h.ports, OPERATOR_PAUSE_RESUME_ACTOR);
+    fs.unlinkSync(path.join(f.hooks, "pre-push"));
+    await tickPipelines([], f.h.ports);
+    const repaired = await f.commit("fresh attempt repair"); await f.finish(2);
+    expect(current()).toMatchObject({ state: "running", lastPassedCommit: repaired, publishedCommit: repaired,
+      cursor: { stageId: "review", state: "pending" } });
+  } finally { f.close(); }
+});
+
 test.each(["proved", "unproved"])("a replacement checks the lost attempt's %s commits", async proof => {
   const f = await fixture();
   try {

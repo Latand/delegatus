@@ -95,7 +95,10 @@ export async function settleStageAttemptPush(pipeline: Pipeline, attempt: Pipeli
       if (parentN === undefined) break;
       const parent = attempts.get(parentN);
       if (!parent || parent.n >= child.n || !parent.launchId || !parent.completedAt
-        || (!decision && parent.restartRecovery?.replacementAttempt !== child.n)) return refuse("the replacement's creation lineage is invalid");
+        || (!decision && (child.restartContext?.previousAttempt !== parent.n
+          || child.restartContext.transcriptPath !== parent.agentPath
+          || (parent.restartRecovery?.replacementAttempt !== undefined && parent.restartRecovery.replacementAttempt !== child.n))))
+        return refuse("the replacement's creation lineage is invalid");
       const parentDirectory = stageGitReceiptDirectory(parent.launchId);
       const parentRaw = await smallFile(path.join(parentDirectory, "start.json"));
       const parentStart = parentRaw ? JSON.parse(parentRaw) : null;
@@ -107,7 +110,10 @@ export async function settleStageAttemptPush(pipeline: Pipeline, attempt: Pipeli
       if ((await exec("git", ["merge-base", "--is-ancestor", parentStart.head, anchor], pipeline.worktreeDir)).code !== 0)
         return refuse("the replacement dropped its starting history");
       directories.push(parentDirectory);
-      anchor = parentStart.head;
+      const acceptedBoundary = pipeline.lastPassedCommit;
+      const boundaryIsValid = parent.verdict?.status === "pass" && /^[0-9a-f]{40}$/.test(acceptedBoundary)
+        && (await exec("git", ["merge-base", "--is-ancestor", acceptedBoundary, start.head], pipeline.worktreeDir)).code === 0;
+      anchor = boundaryIsValid ? acceptedBoundary : parentStart.head;
       child = parent;
     }
     const remote = delivery.target.remote;
