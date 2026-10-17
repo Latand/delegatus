@@ -97,6 +97,7 @@ test.each([false, true])("a real refused pre-push admits one fresh decision atte
     const request = { action: "resolve-decision" as const, clientRequestId: "repair-publication", answer: "Repair the failing test and run the checks again.",
       expectedStageId: "build", expectedAttempt: 1, expectedRevision: pipelineRevision(parked) };
     const actor = OPERATOR_PAUSE_RESUME_ACTOR;
+    f.h.setConversationActive(false);
     const accepted = await rawPatchPipeline(parked.id, request, f.h.ports, actor);
     expect(accepted.error).toBeUndefined();
     expect((await rawPatchPipeline(parked.id, request, f.h.ports, actor)).replayed).toBe(true);
@@ -136,6 +137,7 @@ test("a fresh attempt can finish after the controller accepted and committed dir
     const accepted = await f.git(f.lane(), "rev-parse", "HEAD");
     expect(fs.existsSync(path.join(stageGitReceiptDirectory(current().runs[0]!.attempts[0]!.launchId!), "commits", accepted))).toBe(false);
     expect(current().state).toBe("needs_decision");
+    f.h.setConversationActive(false);
     await rawPatchPipeline(current().id, { action: "resolve-decision", clientRequestId: "dirty-output-retry",
       answer: "Run the stage again.", expectedStageId: "build", expectedAttempt: 1,
       expectedRevision: pipelineRevision(current()) }, f.h.ports, OPERATOR_PAUSE_RESUME_ACTOR);
@@ -206,6 +208,7 @@ test("a decision repair after replacement keeps the accepted proof boundary", as
     expect(current().lastPassedCommit).toBe(accepted);
     expect(accepted).not.toBe(first);
 
+    f.h.setConversationActive(false);
     await rawPatchPipeline(current().id, { action: "resolve-decision", clientRequestId: "replacement-publication-repair",
       answer: "Repair the publication failure and retry.", expectedStageId: "build", expectedAttempt: 2,
       expectedRevision: pipelineRevision(current()) }, f.h.ports, OPERATOR_PAUSE_RESUME_ACTOR);
@@ -273,6 +276,50 @@ test("a publication decision retains actor, revision, publisher and producer fen
     expect((await rawPatchPipeline(parked.id, publisherRequest, f.h.ports, OPERATOR_PAUSE_RESUME_ACTOR)).status).toBe(409);
     expect(current().runs[0]!.attempts).toHaveLength(1);
     expect(f.h.spawnInputs).toHaveLength(1);
+  } finally { f.close(); }
+});
+
+test.each(["unavailable", "unknown"] as const)("a publication decision stays parked when producer evidence is %s", async evidenceKind => {
+  const f = await fixture();
+  try {
+    await f.commit("implementation"); f.refuse(); await f.finish();
+    const parked = current();
+    f.h.ports.conversationAgentActive = async () => null;
+    f.h.ports.durableTurnEvidence = async () => {
+      if (evidenceKind === "unavailable") throw new Error("transcript read failed");
+      return { turn: "unknown", message: null };
+    };
+    const result = await rawPatchPipeline(parked.id, { action: "resolve-decision", clientRequestId: `unknown-producer-${evidenceKind}`,
+      answer: "Retry after repairing publication.", expectedStageId: "build", expectedAttempt: 1,
+      expectedRevision: pipelineRevision(parked) }, f.h.ports, OPERATOR_PAUSE_RESUME_ACTOR);
+    expect(result.status).toBe(409);
+    expect(result.error).toContain("producer repair turn");
+    expect(current()).toEqual(parked);
+    expect(current().runs[0]!.attempts).toHaveLength(1);
+    expect(f.h.spawnInputs).toHaveLength(1);
+  } finally { f.close(); }
+});
+
+test("terminal evidence for the repair turn permits a decision when activity is unavailable", async () => {
+  const f = await fixture();
+  try {
+    await f.commit("implementation"); f.refuse(); await f.finish();
+    const parked = current();
+    const attempt = parked.runs[0]!.attempts[0]!;
+    const requestedAt = f.h.ports.now();
+    const responseAt = Date.parse(requestedAt) + 1;
+    attempt.publicationRepair = { sha: parked.lastPassedCommit!, baseSha: parked.baseRef,
+      operationId: parked.delivery!.operation!.id, stageId: "build", attempt: 1, refusedAt: requestedAt,
+      detail: "pre-push refused", paths: [], messageTs: Date.parse(requestedAt) - 1,
+      requestedAt, settledAt: requestedAt };
+    savePipelines([parked]);
+    f.h.ports.conversationAgentActive = async () => null;
+    f.h.ports.durableTurnEvidence = async () => ({ turn: "terminal", message: { text: "repair response", ts: responseAt }, lastRecordAt: responseAt });
+    const result = await rawPatchPipeline(parked.id, { action: "resolve-decision", clientRequestId: "terminal-repair-evidence",
+      answer: "Retry after the producer finished its repair turn.", expectedStageId: "build", expectedAttempt: 1,
+      expectedRevision: pipelineRevision(current()) }, f.h.ports, OPERATOR_PAUSE_RESUME_ACTOR);
+    expect(result.error).toBeUndefined();
+    expect(current().runs[0]!.attempts).toHaveLength(2);
   } finally { f.close(); }
 });
 

@@ -12456,9 +12456,14 @@ async function resolveDecision(
       if (!evidence) return { error: "the decision snapshot changed while checking its producer; read the lane again", status: 409, code: "STAGE_CHANGED" };
       const active = evidence?.active ?? null;
       const durable = evidence?.durable ?? null;
+      const repair = attempt.publicationRepair;
+      const repairFinished = !!repair?.requestedAt && durable?.turn === "terminal"
+        && (durable.message?.ts ?? 0) > (repair.messageTs ?? 0)
+        && (durable.lastRecordAt ?? durable.message?.ts ?? 0) >= unixMs(repair.requestedAt);
       if (active === true || durable?.turn === "busy"
         || ports.conversationDeliveryOutstanding?.(worker.attempt.conversationId)
-        || liveBackgroundTasks(durable?.backgroundTasks ?? [], unixMs(ports.now())).length > 0) {
+        || liveBackgroundTasks(durable?.backgroundTasks ?? [], unixMs(ports.now())).length > 0
+        || (active !== false && !repairFinished)) {
         return { error: "the producer repair turn may still be running or queued", status: 409 };
       }
     }
