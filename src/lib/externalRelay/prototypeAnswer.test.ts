@@ -19,6 +19,15 @@ import { startTestRelay } from "./testRelay";
 const at = "2026-10-01T00:00:00.000Z";
 const owner: Member = { id: "m_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", name: "Owner", role: "owner", status: "active", color: "sky",
   telegram: null, createdAt: at, createdBy: "claim", revokedAt: null };
+function seedOwnerAndPairing(): void {
+  if (teamStore().member(owner.id)) teamStore().updateMember(owner);
+  else teamStore().insertMember(owner);
+  const pairing: PairedRelay = { id: "test-pairing", origin: "http://127.0.0.1:1", api_base: "http://127.0.0.1:1/v1",
+    name: "Test", description: "", credential: "x".repeat(43),
+    owner: { namespace: "telegram", id: "111111", display_name: "Owner", handle: null }, pairedAt: at, paused: false,
+    limits: { max_response_bytes: 1048576, max_wait_s: 25, max_answer_chars: 4000 }, targets: [] };
+  updateRelayStore(store => ({ ...store, relays: [pairing, ...store.relays.filter(relay => relay.id !== pairing.id)] }));
+}
 afterAll(async () => { await resetPrototypeDeliveryWorkerForTests(); resetTeamStoreForTests(); setSystemTime(); });
 
 for (const storage of ["task", "seat"] as const) test.each([
@@ -72,7 +81,9 @@ for (const storage of ["task", "seat"] as const) test.each([
 });
 
 test("Telegram and member headers grant no web decision identity", async () => {
-  teamStore().updateMember(owner);
+  seedOwnerAndPairing();
+  expect(teamStore().member(owner.id)).toEqual(owner);
+  expect(telegramOwnerActor("111111")).toEqual({ kind: "member", memberId: owner.id });
   const round = telegramRound("forged-web-identity");
   saveTasks([telegramTask([round])]);
   for (const [key, value] of [["x-telegram-user-id", "111111"], ["x-llv-member-id", owner.id], ["authorization", "Bearer 111111"]]) {
@@ -85,23 +96,28 @@ test("Telegram and member headers grant no web decision identity", async () => {
 });
 
 test("pairing authority is read without creating, pruning or repairing settings", () => {
-  teamStore().updateMember(owner);
   const file = externalRelayFile("relays");
-  const original = fs.readFileSync(file);
+  const original = fs.existsSync(file) ? fs.readFileSync(file) : null;
   try {
-    const settings = JSON.parse(original.toString());
+    seedOwnerAndPairing();
+    expect(telegramOwnerActor("111111")).toEqual({ kind: "member", memberId: owner.id });
+    const originalSettings = fs.readFileSync(file);
+    const settings = JSON.parse(originalSettings.toString());
     settings.pending = [{ expires_at: "2000-01-01T00:00:00Z" }];
     const bytes = JSON.stringify(settings);
     fs.writeFileSync(file, bytes);
     expect(telegramOwnerActor("111111")).toEqual({ kind: "member", memberId: owner.id });
     expect(fs.readFileSync(file, "utf8")).toBe(bytes);
-    for (const bytes of ["{broken", JSON.stringify({ v: 1, relays: [null], pending: [] })]) {
-      fs.writeFileSync(file, bytes);
+    for (const malformed of ["{broken", JSON.stringify({ v: 1, relays: [null], pending: [] })]) {
+      fs.writeFileSync(file, malformed);
       expect(telegramOwnerActor("111111")).toBeNull();
-      expect(fs.readFileSync(file, "utf8")).toBe(bytes);
+      expect(fs.readFileSync(file, "utf8")).toBe(malformed);
     }
     fs.rmSync(file);
     expect(telegramOwnerActor("111111")).toBeNull();
     expect(fs.existsSync(file)).toBe(false);
-  } finally { fs.writeFileSync(file, original); }
+  } finally {
+    if (original) fs.writeFileSync(file, original);
+    else fs.rmSync(file, { force: true });
+  }
 });
