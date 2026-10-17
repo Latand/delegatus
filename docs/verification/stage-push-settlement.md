@@ -45,7 +45,12 @@ records show why a late manual link does not establish controller delivery.
 Settlement reads ancestry and worktree reflog evidence in pages of 128.
 There is no total commit or push-receipt cap. Native receipts attest commits,
 true merges, applied patches and every rewritten commit, and existing
-repository hooks still receive their original input. A commit's author or
+repository hooks still receive their original input and arguments. A merge
+receipt requires Git's in-progress `MERGE_HEAD` state during `post-merge`.
+Fast-forwarding to an existing merge has no such state, regardless of its
+parent count or caller-supplied reflog action. Ordinary, `--no-verify` and
+octopus merges retain creation proof; squash and fast-forward hooks retain
+Git's native argument. A commit's author or
 committer date does not override a native creation receipt.
 
 An unreceipted commit is accepted only with a native creation entry in this
@@ -56,6 +61,11 @@ rebase creation and true-merge entries. Fetch, checkout, reset and fast-forward
 entries do not prove creation. This is the defined fallback for launches that
 predate the hooks; it also covers a local commit made before hook preparation.
 An unknown commit is refused with its full hash and missing-evidence reason.
+
+Every existing starting receipt, including a versionless receipt, requires
+independent commit receipts for its own suffix. A matching shared publication
+identity and reflog text cannot fill a missing receipt. Only launches with no
+starting receipt retain the pre-receipt recovery path.
 
 Existing starting receipts, accepted ancestry, clean owned branches, outstanding push
 candidates, exact delivery ownership and final local/remote checks remain
@@ -184,8 +194,14 @@ preload also confines global config, templates and hooks to its private root.
 `realWorktreeLane` now explicitly supplies the four publication identity
 fields when modeling agent Git commands. Stage-PR commits use that same helper
 and deterministic clock. The repository-local Fixture config stays available
-as a control. Production receipt and identity checks retain their existing
-behavior, including the refusal of caller-controlled reflog creation claims.
+as a control. The native fixture also prepares the real starting receipt and
+generated hooks at every fake dispatch, using the reserved client attempt id for its
+launch binding. Successor stages get their own starting head and receipts.
+Bindings follow commands in the dispatched lane; upstream writers and deliberate
+unguarded custody controls retain their own environment. Detached agent commands
+use the custody fixture's explicit launch environment.
+Settlement uses those receipts without resolving an ambient publication
+identity. The no-start legacy path retains its identity check.
 
 Two fresh-process regression cases run successor-lane and PR creation checks
 with missing or conflicting ambient identities. The conflicting case also
@@ -194,10 +210,10 @@ private global config, assert that those files stay unchanged, fail before the
 fixture repair, and pass afterwards. Each child runs one explicit test file
 so the engine fixture's cleanup remains scoped to its process.
 
-The final complete touched-tests phase passes in both environments: publisher
-zero new / six pre-existing failures; agent zero new / five pre-existing
-failures. Both have zero flaky outcomes. The focused PR file passes all 23
-cases. The exact explicit-file command, environment construction, 35 red
+The fixture-only complete touched-tests phase passed in both environments:
+publisher zero new / six pre-existing failures; agent zero new / five
+pre-existing failures. Both have zero flaky outcomes. The focused PR file
+passes all 23 cases. The exact explicit-file command, environment construction, 35 red
 identities, baseline findings and tested source digests are recorded in
 `evidence/stage-push-environment.json`. These phase runs execute the modified
 working tree on top of `490e9fad7`; the source digests identify that tree.
@@ -206,3 +222,51 @@ TypeScript, changed-file ESLint and the committed-fingerprint publication
 privacy check pass. The required hosted checks (`privacy-publication`,
 `privacy-tracker-audit`, `runtime-gate`, `typecheck`) run after the pipeline
 publishes the fresh commits. This repair performs no push or rebase.
+
+
+## Creation-proof review corrections (2026-10-17)
+
+The repeated publisher replay of `490e9fad7` confirms exactly 35 new,
+seven pre-existing and zero flaky failures against `02f9301fc`. Its unchanged
+two-file agent control has zero new, two pre-existing and zero flaky failures.
+The only identity difference is the presence of the four launch-provided Git
+author/committer fields. Both modes scrub the same inherited configuration and
+isolate HOME, XDG_CONFIG_HOME, TMPDIR and LLV_STATE_DIR.
+
+The review regression cases cover imported merge commits with native and forged
+reflog actions, shared-identity imported commits with versioned and versionless
+starts, and original post-merge hooks for ordinary, `--no-verify`, fast-forward
+and squash merges. The reviewed implementation fails seven of those eight
+cases. Remote review base `1d55d9d23` passes seven; its existing failure is the
+extra forged-action imported merge control. The final implementation passes
+all eight. An additional octopus case proves that an ancestral original lane
+head need not remain a direct parent of a genuine merge.
+
+The former versionless missing-merge-receipt success assertion is replaced by a
+pair requiring independent evidence: a retained receipt succeeds, and a missing
+receipt refuses with the exact commit hash. Existing successor, rebase and PR
+assertions remain intact. The shared native fixture now models the production
+reservation and guard preparation instead of relying on versionless recovery.
+
+The shared paths remain `prepareStageGitGuard` at dispatch, environment
+bindings in agent publication policy, native hook receipt writers, and
+`settleStageAttemptPush` plus its early refusal reader at settlement. No new
+stored field, publication path or retry mechanism is introduced.
+
+The final phase and static-check outcomes are recorded in
+`evidence/stage-push-environment.json` under `proofFixVerification`. All runs
+use the installed gate-slot wrapper, explicit paths and private state. The
+pipeline owns publication and the required hosted checks after publication.
+
+After the full phases, TypeScript required the fixture's partial Git environment
+to use a partial-record type. Bun 1.4.0 emits byte-identical JavaScript before
+and after that erased annotation correction. The evidence retains both the
+tested and final TypeScript digests plus their common JavaScript digest.
+
+The final complete 26-file phases pass against `02f9301fc`: publisher zero new,
+six pre-existing and zero flaky failures (head 436,101 ms); agent zero new,
+five pre-existing and zero flaky failures (head 429,207 ms). The proof file's
+32 cases and PR file's 23 cases pass. The 16 focused rebase and custody controls
+also pass with their assertions unchanged. TypeScript, changed-file ESLint and
+the committed-fingerprint publication privacy gate pass. No push, rebase,
+merge or runtime restart is part of this correction.

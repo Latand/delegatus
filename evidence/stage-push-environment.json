@@ -8,8 +8,8 @@
     "configIsolation": "the pre-push hook and test preload scrub inherited Git repository/config bindings; the preload also isolates HOME, global config and templates"
   },
   "red": {
-    "command": "the complete phaseCommand, with the publisher environment",
-    "headMs": 497627,
+    "command": "phaseCommand with the publisher environment",
+    "headMs": 453936,
     "newFailures": [
       "src/lib/pipelines/engine.ports.test.ts: a fixer self-fail with a committed head goes to review with its findings as notes: Another issue noticed",
       "src/lib/pipelines/engine.ports.test.ts: a fixer self-fail with a committed head goes to review with its findings as notes: Users cannot save",
@@ -57,18 +57,26 @@
       "src/lib/pipelines/git.test.ts: an unpinned base without origin resolves local main without fetching"
     ],
     "confirmation": "three reruns per side; zero flaky outcomes",
-    "exitCode": 1
+    "exitCode": 1,
+    "elapsedSeconds": 519.81,
+    "flaky": 0,
+    "newFailureCount": 35
   },
   "unchangedAgentControl": {
+    "command": "phaseCommand restricted to the two original affected files with the agent environment",
+    "headMs": 73445,
+    "elapsedSeconds": 74.93,
+    "newFailures": 0,
+    "preExistingFailures": [
+      "src/lib/pipelines/engine.ports.test.ts: managed early admission holds actual pipeline launches across recovery until terminal status",
+      "src/lib/pipelines/engine.ports.test.ts: managed drain-switch-off admission holds actual pipeline launches across recovery until terminal status"
+    ],
+    "flaky": 0,
+    "exitCode": 0,
     "files": [
       "src/lib/pipelines/engine.ports.test.ts",
       "src/lib/pipelines/stagePullRequest.test.ts"
-    ],
-    "headMs": 75891,
-    "newFailures": 0,
-    "preExistingFailures": 2,
-    "exitCode": 0,
-    "command": "phaseCommand restricted to the two listed explicit files, with the agent environment"
+    ]
   },
   "newRegressionRed": {
     "files": [
@@ -88,7 +96,10 @@
     "exitCode": 0
   },
   "testedSourceSha256": {
-    "src/lib/pipelines/engine.fixture.ts": "76acba3bb559bdfa34493000a5429229002168304a80eac01b7d4aed4da49dfd",
+    "src/lib/git/stageAttemptGuard.ts": "76faae9c559d5c34e45d76190cba121a8d0977f6906a7168be5516c9021fc445",
+    "src/lib/pipelines/stageAttemptPush.ts": "1125e280ae6a23cbbd9766b54f0cacda6ac9c8072b3dc6c7c518dffb7399dd33",
+    "src/lib/pipelines/engine.fixture.ts": "98355d2de160512458d19370a491c3d121a3b89716ed22f4c33fc38252ddaf53",
+    "src/lib/pipelines/stageAttemptPush.test.ts": "f0024b42c7d8793e5ff5c9109e9a3ba117760ebf91d02b4348fb494a9a59f656",
     "src/lib/pipelines/stagePullRequest.test.ts": "3002e5f8352d14507beaa6142f58ebce0409617d0ee507a46a4531ae8f621957"
   },
   "phaseCommand": [
@@ -126,18 +137,20 @@
     "src/lib/pipelines/engine.cpuAdmissionPolling.test.ts"
   ],
   "environmentConstruction": [
-    "Start from the agent shell environment with fresh HOME, XDG_CONFIG_HOME, TMPDIR and LLV_STATE_DIR.",
-    "Apply pipelinePublicationHookEnv() before starting the comparator.",
-    "For publisher mode, remove every GIT_AUTHOR_* and GIT_COMMITTER_* entry from the complete child environment.",
-    "For agent mode, retain the four launch-provided publication identity fields.",
-    "The hook comparator creates another isolated environment for each explicit file."
+    "Start from the agent shell environment; scrub inherited Git repository/config and stage receipt bindings before the comparator.",
+    "Mirror publication runtime-setting removal and retain gate, privacy and publication settings for the isolated rehearsal.",
+    "Use fresh HOME, XDG_CONFIG_HOME, TMPDIR and LLV_STATE_DIR for every run.",
+    "Publisher mode removes the four GIT_AUTHOR_NAME, GIT_AUTHOR_EMAIL, GIT_COMMITTER_NAME and GIT_COMMITTER_EMAIL fields; agent mode retains them.",
+    "The parent carries no author or committer dates. These four identity fields are the controlled difference between the two modes.",
+    "The comparator creates another private environment per explicit file; the preload confines global config, templates and generated hooks."
   ],
   "runtime": "Bun 1.4.0 (34cbb9a40) on Linux",
-  "admissionWrapperSource": "scripts/gate-slot.sh from installed release 6d7968348548",
-  "review": "Read-only diff review: the identity override is limited to native fixture commands; inherited config confinement remains in the test preload; production receipt and identity checks are unchanged.",
+  "admissionWrapperSource": "scripts/gate-slot.sh from installed release ee43312b4aca",
+  "review": "The merge writer requires native MERGE_HEAD state and preserves positional arguments. Existing starts require independent commit receipts, including versionless starts. Native fixtures prepare real launch bindings; existing successor, PR and rebase assertions stay enabled.",
   "publisherGreen": {
     "command": "phaseCommand with the publisher environment",
-    "headMs": 529146,
+    "headMs": 436101,
+    "elapsedSeconds": 437.73,
     "newFailures": 0,
     "preExistingFailures": [
       "src/lib/pipelines/engine.controllerPass.test.ts: a bounded reconciliation preserves another lane's CPU ticket and FIFO age",
@@ -150,15 +163,10 @@
     "flaky": 0,
     "exitCode": 0
   },
-  "unchangedProductSha256": {
-    "src/lib/pipelines/stageAttemptPush.ts": "8d7bb4f358493d3b4ff547cbb2a20b168e6f98b00c71fae8490f560b43004ebb",
-    "src/lib/git/stageAttemptGuard.ts": "374f9bab229bfefe80fc33e461158db0d6beb594450fb8bb1b6901b74a7b6fdc",
-    "src/lib/git/agentPublicationIdentity.ts": "32ade4fed149ec099a3c5e0f5f191366133f4ecf5f47e74057bebe45d48a77a2",
-    "src/lib/pipelines/git.ts": "98fe808ba12fc5fb805773cf0a510f6d1e0df07774e2a7697f19637df760031c"
-  },
   "agentGreen": {
     "command": "phaseCommand with the agent environment",
-    "headMs": 431297,
+    "headMs": 429207,
+    "elapsedSeconds": 430.73,
     "newFailures": 0,
     "preExistingFailures": [
       "src/lib/pipelines/engine.controllerPass.test.ts: a bounded reconciliation preserves another lane's CPU ticket and FIFO age",
@@ -177,7 +185,8 @@
         "node_modules/typescript/bin/tsc",
         "--noEmit"
       ],
-      "exitCode": 0
+      "exitCode": 0,
+      "elapsedSeconds": 10.07
     },
     {
       "command": [
@@ -185,12 +194,14 @@
         "scripts/eslint-changes.ts",
         "--base",
         "490e9fad711068b687a8796754bd62779d4f030f",
+        "./src/lib/git/stageAttemptGuard.ts",
+        "./src/lib/pipelines/stageAttemptPush.ts",
         "./src/lib/pipelines/engine.fixture.ts",
+        "./src/lib/pipelines/stageAttemptPush.test.ts",
         "./src/lib/pipelines/stagePullRequest.test.ts"
       ],
       "exitCode": 0,
-      "introducedErrors": 0,
-      "baseErrors": 0
+      "elapsedSeconds": 2.15
     },
     {
       "command": [
@@ -199,16 +210,207 @@
         "--require-known-values",
         "--check-commits",
         "--base",
-        "02f9301fc32370210a4af533c1204741c6436f52",
-        "--paths",
-        "./src/lib/pipelines/engine.fixture.ts",
-        "./src/lib/pipelines/stagePullRequest.test.ts",
-        "./docs/verification/stage-push-settlement.md",
-        "./evidence/stage-push-environment.json"
+        "02f9301fc32370210a4af533c1204741c6436f52"
       ],
       "exitCode": 0,
+      "elapsedSeconds": 14.49,
       "result": "PRIVACY GATE: PASS"
     }
   ],
-  "hostedChecks": "privacy-publication, privacy-tracker-audit, runtime-gate and typecheck must run after pipeline publication; this stage performs no push."
+  "hostedChecks": "privacy-publication, privacy-tracker-audit, runtime-gate and typecheck must run after pipeline publication; this stage performs no push.",
+  "fixtureOnlyProductSha256": {},
+  "publicationInvocation": {
+    "producer": "publishPipelineBranch in src/lib/pipelines/git.ts",
+    "command": "git push <delivery remote> <accepted SHA>:<delivery branch>",
+    "environment": "pipelinePublicationHookEnv, lessonPublicationEnv and engineForgeWriteEnv plus LLV_GATE_PUSH_DEADLINE; realExec overlays the parent and removes keys whose override is undefined.",
+    "identity": "pipelinePublicationHookEnv leaves Git author/committer identity fields unchanged; the Viewer publisher has none while launched agents have all four."
+  },
+  "proofFixVerification": {
+    "reviewedSource": "bdc2d1cd965bcc34e0572ac7a22006afbf5adf80",
+    "sourceState": "working tree on reviewedSource; testedSourceSha256 identifies tested TypeScript and finalSourceSha256 identifies final files; the erased annotation correction has runtime equivalence evidence",
+    "remoteReviewBase": {
+      "revision": "1d55d9d2307cdb7af055def4d3182c263cc149b7",
+      "command": [
+        "bun",
+        "test",
+        "src/lib/pipelines/stageAttemptPush.test.ts",
+        "--test-name-pattern=^B: (an imported merge stays|a .* start refuses imported shared-identity|original post-merge arguments)"
+      ],
+      "exitCode": 1,
+      "elapsedSeconds": 5.62,
+      "cases": [
+        {
+          "status": "pass",
+          "name": "B: an imported merge stays unreceipted with a native reflog action"
+        },
+        {
+          "status": "fail",
+          "name": "B: an imported merge stays unreceipted with a forged reflog action"
+        },
+        {
+          "status": "pass",
+          "name": "B: a versioned start refuses imported shared-identity commits with forged reflog creation"
+        },
+        {
+          "status": "pass",
+          "name": "B: a versionless start refuses imported shared-identity commits with forged reflog creation"
+        },
+        {
+          "status": "pass",
+          "name": "B: original post-merge arguments survive a merge"
+        },
+        {
+          "status": "pass",
+          "name": "B: original post-merge arguments survive a no-verify"
+        },
+        {
+          "status": "pass",
+          "name": "B: original post-merge arguments survive a fast-forward"
+        },
+        {
+          "status": "pass",
+          "name": "B: original post-merge arguments survive a squash"
+        }
+      ]
+    },
+    "regressionRed": {
+      "revision": "bdc2d1cd965bcc34e0572ac7a22006afbf5adf80",
+      "command": [
+        "bun",
+        "test",
+        "src/lib/pipelines/stageAttemptPush.test.ts",
+        "--test-name-pattern=^B: (an imported merge stays|a .* start refuses imported shared-identity|original post-merge arguments)"
+      ],
+      "exitCode": 1,
+      "elapsedSeconds": 5.47,
+      "cases": [
+        {
+          "status": "fail",
+          "name": "B: an imported merge stays unreceipted with a native reflog action"
+        },
+        {
+          "status": "fail",
+          "name": "B: an imported merge stays unreceipted with a forged reflog action"
+        },
+        {
+          "status": "pass",
+          "name": "B: a versioned start refuses imported shared-identity commits with forged reflog creation"
+        },
+        {
+          "status": "fail",
+          "name": "B: a versionless start refuses imported shared-identity commits with forged reflog creation"
+        },
+        {
+          "status": "fail",
+          "name": "B: original post-merge arguments survive a merge"
+        },
+        {
+          "status": "fail",
+          "name": "B: original post-merge arguments survive a no-verify"
+        },
+        {
+          "status": "fail",
+          "name": "B: original post-merge arguments survive a fast-forward"
+        },
+        {
+          "status": "fail",
+          "name": "B: original post-merge arguments survive a squash"
+        }
+      ]
+    },
+    "publisherPhase": {
+      "command": "phaseCommand with the publisher environment",
+      "headMs": 436101,
+      "elapsedSeconds": 437.73,
+      "newFailures": 0,
+      "preExistingFailures": [
+        "src/lib/pipelines/engine.controllerPass.test.ts: a bounded reconciliation preserves another lane's CPU ticket and FIFO age",
+        "src/lib/pipelines/engine.creation.test.ts: a stage completes and its successor waits for both update roles: early-switch-off",
+        "src/lib/pipelines/engine.creation.test.ts: lanes in linked checkouts serialize Git writes through their common directory",
+        "src/lib/pipelines/engine.ports.test.ts: managed early admission holds actual pipeline launches across recovery until terminal status",
+        "src/lib/pipelines/engine.ports.test.ts: managed drain-switch-off admission holds actual pipeline launches across recovery until terminal status",
+        "src/lib/pipelines/git.test.ts: an unpinned base without origin resolves local main without fetching"
+      ],
+      "flaky": 0,
+      "exitCode": 0
+    },
+    "agentPhase": {
+      "command": "phaseCommand with the agent environment",
+      "headMs": 429207,
+      "elapsedSeconds": 430.73,
+      "newFailures": 0,
+      "preExistingFailures": [
+        "src/lib/pipelines/engine.controllerPass.test.ts: a bounded reconciliation preserves another lane's CPU ticket and FIFO age",
+        "src/lib/pipelines/engine.creation.test.ts: a stage completes and its successor waits for both update roles: early-switch-off",
+        "src/lib/pipelines/engine.creation.test.ts: lanes in linked checkouts serialize Git writes through their common directory",
+        "src/lib/pipelines/engine.ports.test.ts: managed early admission holds actual pipeline launches across recovery until terminal status",
+        "src/lib/pipelines/engine.ports.test.ts: managed drain-switch-off admission holds actual pipeline launches across recovery until terminal status"
+      ],
+      "flaky": 0,
+      "exitCode": 0
+    },
+    "nativeProofCases": 32,
+    "nativePullRequestCases": 23,
+    "versionlessAssertionChange": "Retained-receipt own merges succeed; missing-receipt own merges refuse with the exact hash. Reflog text and shared identity cannot replace a missing receipt on an existing start.",
+    "extraBaselineFailure": "The forged-action imported-merge case is already red on the remote review base and is retained in the final green coverage.",
+    "runtimeEquivalentTypeCorrection": {
+      "file": "src/lib/pipelines/engine.fixture.ts",
+      "testedTypeScriptSha256": "98355d2de160512458d19370a491c3d121a3b89716ed22f4c33fc38252ddaf53",
+      "finalTypeScriptSha256": "3e6e4f4408129dd7fc0a23b80f54af166a98e2cd6a39901c0172c443d8fd8c5a",
+      "transpiledJavaScriptSha256": "6e09a73b47bcd9986f811251a72b5e61b0ef9e07fcc74bb1193a8e06dd0558fb",
+      "comparison": "Bun 1.4.0 Transpiler with loader ts and target bun emits byte-identical JavaScript before and after the erased partial-environment type correction"
+    },
+    "staticChecks": [
+      {
+        "command": [
+          "bun",
+          "node_modules/typescript/bin/tsc",
+          "--noEmit"
+        ],
+        "exitCode": 0,
+        "elapsedSeconds": 10.07
+      },
+      {
+        "command": [
+          "bun",
+          "scripts/eslint-changes.ts",
+          "--base",
+          "490e9fad711068b687a8796754bd62779d4f030f",
+          "./src/lib/git/stageAttemptGuard.ts",
+          "./src/lib/pipelines/stageAttemptPush.ts",
+          "./src/lib/pipelines/engine.fixture.ts",
+          "./src/lib/pipelines/stageAttemptPush.test.ts",
+          "./src/lib/pipelines/stagePullRequest.test.ts"
+        ],
+        "exitCode": 0,
+        "elapsedSeconds": 2.15
+      },
+      {
+        "command": [
+          "bun",
+          "scripts/privacy-publication-gate.ts",
+          "--require-known-values",
+          "--check-commits",
+          "--base",
+          "02f9301fc32370210a4af533c1204741c6436f52"
+        ],
+        "exitCode": 0,
+        "elapsedSeconds": 14.49,
+        "result": "PRIVACY GATE: PASS"
+      }
+    ],
+    "focusedFixtureControls": {
+      "file": "src/lib/pipelines/engine.ports.test.ts",
+      "testNamePattern": "^(a rebased builder|rewritten builder history|attempt Git custody preserves the fences)",
+      "pass": 16,
+      "fail": 0
+    }
+  },
+  "finalSourceSha256": {
+    "src/lib/git/stageAttemptGuard.ts": "76faae9c559d5c34e45d76190cba121a8d0977f6906a7168be5516c9021fc445",
+    "src/lib/pipelines/stageAttemptPush.ts": "1125e280ae6a23cbbd9766b54f0cacda6ac9c8072b3dc6c7c518dffb7399dd33",
+    "src/lib/pipelines/engine.fixture.ts": "3e6e4f4408129dd7fc0a23b80f54af166a98e2cd6a39901c0172c443d8fd8c5a",
+    "src/lib/pipelines/stageAttemptPush.test.ts": "f0024b42c7d8793e5ff5c9109e9a3ba117760ebf91d02b4348fb494a9a59f656",
+    "src/lib/pipelines/stagePullRequest.test.ts": "3002e5f8352d14507beaa6142f58ebce0409617d0ee507a46a4531ae8f621957"
+  }
 }
