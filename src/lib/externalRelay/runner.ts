@@ -774,6 +774,7 @@ export async function runClaimedRequest(
         if (!(error instanceof OwnerContinuationRefused) || !conversation || !owner) throw error;
         run = null;
         if (error.reason === "unavailable") {
+          if (conversation.conversationId) ownerTools?.unbindConversation(conversation.conversationId);
           Object.assign(conversation, { conversationId: null, seen: [], staticDigest: null });
           await releaseConversationAsync(conversation.id, { conversationId: null, seen: [], staticDigest: null, state: "running", runningRequestId: requestId }, Date.now() + 5000);
           await changeRunAsync(requestId, current => ({ ...current, conversationId: undefined,

@@ -3239,6 +3239,81 @@ test("owner reply chains reuse one conversation, learn bot answers and bind only
   } finally { await server.close(); }
 });
 
+test("owner continuation refusal revokes the old service-tool binding before fallback", async () => {
+  const { productionDomainDependencies, viewerMcpBindings } = await import("@/lib/mcp/bindings");
+  const posts: unknown[] = [];
+  const server = await startTestRelay((req, body) => {
+    if (req.url?.endsWith("/tool-calls")) {
+      const call = body as { call_id: string; tool: string };
+      if ("describe" in (body as object)) {
+        const lookupResults = JSON.parse(fs.readFileSync(path.join(import.meta.dir, "fixtures/service-wire/lookup_results.json"), "utf8"));
+        return { body: { ...lookupResults.truncated, call_id: call.call_id } };
+      }
+      posts.push(body);
+      return { body: { ...x1Results.action_ok, call_id: call.call_id, tool: call.tool } };
+    }
+    return { body: { status: "ok" } };
+  });
+  const paired = relay(`${server.origin}/v1`); paired.targets[0]!.ownerTier = true;
+  updateRelayStore(store => ({ ...store, relays: [paired] })); setRelaySwitch("chain_conversations", true);
+  let callerConversationId = "";
+  const bindings = viewerMcpBindings(undefined, { get: async () => ({}), post: async () => ({}) }, {
+    ...productionDomainDependencies,
+    callerAttribution: () => ({ kind: "agent", conversationId: callerConversationId, role: null }),
+  });
+  const conversations = (turn: number) => {
+    const message = (id: string, reply_to: string | null, self = false) => ({ ...contextRequest.input.conversation[0]!, id, reply_to,
+      author: { key: self ? "fixture-bot" : contextRequest.input.requester.key, name: self ? "Assistant" : "Owner", self }, text: `Fixture turn ${id}` });
+    const prior = turn > 1 ? [message("turn-1", null), message("bot-1", "turn-1", true)] : [];
+    const beforeCurrent = turn > 2 ? [message("turn-2", "bot-1"), message("bot-2", "turn-2", true)] : [];
+    return [...prior, ...beforeCurrent, message(`turn-${turn}`, turn === 1 ? null : `bot-${turn - 1}`)];
+  };
+  const make = (turn: number) => ({ ...contextRequest, request_id: `owner-binding-turn-${turn}`, chat: { key: "fixture-owner-binding-chain" },
+    answer: { max_chars: 1000, progress: "none" as const }, input: { ...contextRequest.input, tools: ownerRequest().input.tools,
+      requester: { ...contextRequest.input.requester, is_owner: true }, respond_to: `turn-${turn}`, conversation: conversations(turn) } });
+  let launches = 0, continuationAttempts = 0, observeTurn = 0, staleRefused = false, staleWireCalls = 0;
+  const accessMedia = async (id: string) => {
+    callerConversationId = id;
+    await bindings.relay_service_tools({ op: "describe", names: ["get_media"] });
+    await bindings.relay_service_tools({ op: "call", calls: [{ tool: "get_media", arguments: {} }] });
+  };
+  const ports: import("./ownerRun").OwnerRunPorts = {
+    launch: async () => ({ status: 202, body: { conversationId: `conversation_binding_${++launches}` } }),
+    continue: async turn => {
+      continuationAttempts++;
+      if (continuationAttempts === 1) return { ok: false, structured: true, outcome: "failed", status: 409, admission: "refused",
+        error: "the conversation cannot be resumed" };
+      expect(turn.conversationId).toBe("conversation_binding_2");
+      return { ok: true, structured: true, target: turn.conversationId!, outcome: "held", operationId: turn.clientAttemptId };
+    },
+    observe: async () => {
+      observeTurn++;
+      if (observeTurn === 2) {
+        callerConversationId = "conversation_binding_1";
+        const postsBeforeStaleCall = posts.length;
+        try {
+          await bindings.relay_service_tools({ op: "describe", names: ["get_media"] });
+          await bindings.relay_service_tools({ op: "call", calls: [{ tool: "get_media", arguments: {} }] });
+        }
+        catch (error) { staleRefused = (error as { details?: { code?: string } }).details?.code === "relay_tools_unavailable"; }
+        staleWireCalls = posts.length - postsBeforeStaleCall;
+        await accessMedia("conversation_binding_2");
+      } else if (observeTurn === 3) {
+        await accessMedia("conversation_binding_2");
+      }
+      return { state: "ended", finalText: "Done" };
+    },
+    stop: async () => {}, pollMs: 1,
+  };
+  try {
+    expect((await runClaimedRequest(paired, make(1), undefined, { ownerPorts: ports }))?.outcome).toBe("answered");
+    expect((await runClaimedRequest(paired, make(2), undefined, { ownerPorts: ports }))?.outcome).toBe("answered");
+    expect(staleWireCalls).toBe(0); expect(staleRefused).toBe(true);
+    expect((await runClaimedRequest(paired, make(3), undefined, { ownerPorts: ports }))?.outcome).toBe("answered");
+    expect(launches).toBe(2); expect(continuationAttempts).toBe(2); expect(posts).toHaveLength(2);
+  } finally { await server.close(); }
+});
+
 for (const refusal of ["busy", "unavailable", "accepted-failure"] as const) test(`owner chain continuation ${refusal} has no duplicate execution`, async () => {
   const server = await startTestRelay(() => ({ body: { status: "ok" } }));
   const paired = relay(`${server.origin}/v1`); paired.targets[0]!.ownerTier = true;
