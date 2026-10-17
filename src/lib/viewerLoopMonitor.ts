@@ -16,6 +16,7 @@ export type ViewerOperation = "tasks.note" | "mcp.receipts" | "mcp.tasks.executo
   | "runtime.rpc" | "runtime.delivery-list" | "runtime.delivery-wake"
   | "external-relay.owner-history"
   | "mcp.project-prefix" | "issue-report.resolve" | "self-update.revision-prefix"
+  | "external-relay.owner-history" | "relay.service-tools" | "relay.tool-index"
   | "prototype.publish" | "prototype.copy" | "prototype.state" | "prototype.delivery" | "prototype.telegram"
   | "codex.protocol-admission"
   | "pipelines.controller-job" | "pipelines.controller-lane" | "pipelines.controller-schedule"

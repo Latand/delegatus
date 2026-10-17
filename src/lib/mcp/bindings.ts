@@ -1,6 +1,7 @@
 import { resolvePrototypeReviewId as resolveStoredReviewId } from "@/lib/prototypeReview/store";
 import { resolveIssueReportDigest } from "@/lib/issueReports/store";
 import { shortId, shortenHashesInText } from "@/lib/shortIds";
+import { relayServiceToolsOp } from "@/lib/externalRelay/ownerServiceTools";
 import { registryReceiptsForConversation } from "@/lib/agent/registry";
 import { registryRowsMatching } from "@/lib/agent/sqliteRegistryStore";
 import { decidePrototype } from "@/lib/prototypeReview/decision";
@@ -7987,6 +7988,13 @@ export function viewerMcpBindings(
     telegram_bot_send: (args, context) => telegramBotSend(args, viewerControlForCall(controlDependencies, context)),
     telegram_bot_send_media: (args, context) => telegramBotSendMedia(args, viewerControlForCall(controlDependencies, context)),
     telegram_bot_send_document: (args, context) => telegramBotSendDocument(args, viewerControlForCall(controlDependencies, context)),
+    relay_service_tools: async (args) => {
+      const caller = attributionOf(domainDependencies);
+      const result = caller.kind === "agent" && !caller.via && caller.conversationId
+        ? await relayServiceToolsOp(caller.conversationId, args) : null;
+      if (result === null) throw new McpToolRefusal("Service tools exist only while you answer a relay message as its owner.", { code: "relay_tools_unavailable", retryable: false });
+      return result;
+    },
     relay_owner_history: (args, context) => relayOwnerHistory(args, viewerControlForCall(controlDependencies, context), domainDependencies),
     telegram_bot_messages: (args, context) => telegramBotMessages(args, viewerControlForCall(controlDependencies, context)),
     issue_report: (args, context) => issueReportTool(args, viewerControlForCall(controlDependencies, context), domainDependencies),
