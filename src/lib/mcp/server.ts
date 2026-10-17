@@ -4634,7 +4634,7 @@ for (const name of MCP_TOOL_NAMES) TOOL_INPUT_SCHEMAS[name] = TOOL_INPUT_SCHEMAS
 // Build fixed protocol schemas once beside the tool definitions.
 // Invalid optional task fields still reach the strict
 // task validation callback below before a receipt can be acquired.
-const TOOL_TRANSPORT_SCHEMAS = Object.fromEntries(MCP_TOOL_NAMES.map(toolName => {
+export const TOOL_TRANSPORT_SCHEMAS = Object.fromEntries(MCP_TOOL_NAMES.map(toolName => {
   const schema = TOOL_INPUT_SCHEMAS[toolName];
   return [toolName, toolName === "create_task" || toolName === "update_task" ? schema.extend(Object.fromEntries(
     Object.entries(schema.shape).filter(([, fieldSchema]) => fieldSchema.isOptional())

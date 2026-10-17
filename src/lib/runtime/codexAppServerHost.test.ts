@@ -5227,7 +5227,7 @@ describe("CodexAppServerHost", () => {
     const deployment = {
       deploymentId: "deployment_seat_successor",
       phase: "succeeded",
-      revision: "e".repeat(40),
+      revision: "e".repeat(8),
     };
     let controlRequests = 0;
     const control = Bun.serve({
@@ -5402,7 +5402,7 @@ describe("CodexAppServerHost", () => {
         ok: true,
         toolName: "deployment_status",
         count: 1,
-        deployments: [{ ...deployment, revision: "eeeeeeee" }],
+        deployments: [deployment],
       });
       expect(controlRequests).toBe(1);
       const events = new FileRuntimeEventStore(eventsPath).load(successorReady.sessionId);

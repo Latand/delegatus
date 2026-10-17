@@ -253,11 +253,14 @@ test("tools/list shortens hashes in input-field descriptions", async () => {
   if (process.env.MCP_SIZE_OUTPUT) return;
   const { Client } = await import("@modelcontextprotocol/sdk/client/index.js");
   const { InMemoryTransport } = await import("@modelcontextprotocol/sdk/inMemory.js");
-  const { createViewerMcpServer, TOOL_INPUT_SCHEMAS, createMcpToolService, MemoryMcpReceiptStore } = await import("./server");
+  const { createViewerMcpServer, TOOL_INPUT_SCHEMAS, TOOL_TRANSPORT_SCHEMAS, createMcpToolService, MemoryMcpReceiptStore } = await import("./server");
   const { z } = await import("zod");
   const original = TOOL_INPUT_SCHEMAS.get_task;
+  const originalTransport = TOOL_TRANSPORT_SCHEMAS.get_task;
   const planted = "d".repeat(40);
-  TOOL_INPUT_SCHEMAS.get_task = z.object({ taskId: z.string().describe(`Identifier ${planted}`) }) as never;
+  const schema = z.object({ taskId: z.string().describe(`Identifier ${planted}`) });
+  TOOL_INPUT_SCHEMAS.get_task = schema as never;
+  TOOL_TRANSPORT_SCHEMAS.get_task = schema as never;
   const server = createViewerMcpServer(createMcpToolService(viewerMcpBindings, new MemoryMcpReceiptStore()));
   const client = new Client({ name: "catalog-short-ids", version: "1" });
   const [left, right] = InMemoryTransport.createLinkedPair();
@@ -269,6 +272,7 @@ test("tools/list shortens hashes in input-field descriptions", async () => {
   } finally {
     await client.close(); await server.close();
     TOOL_INPUT_SCHEMAS.get_task = original;
+    TOOL_TRANSPORT_SCHEMAS.get_task = originalTransport;
   }
 });
 

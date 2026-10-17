@@ -12,7 +12,7 @@ import { waitForStateLock } from "@/lib/state/lockWait";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { admittedSource, expandPrototypeInput, PrototypeError, PROTOTYPE_LIMITS, unreadableSource } from "./input";
 import { openedAt } from "@/lib/artifact/localFile";
-import { insertSeatRound, loadSeatRounds, mutateSeatRound } from "./seatRounds";
+import { findSeatRound, insertSeatRound, loadSeatRounds, mutateSeatRound } from "./seatRounds";
 import type { PrototypeMedia, PrototypeReviewRound, PublishPrototypeInput } from "./types";
 
 const MIME: Record<string, PrototypeMedia["mime"]> = {

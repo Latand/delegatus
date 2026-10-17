@@ -2732,7 +2732,7 @@ test("a stage completion call is attributed by the server, and a caller cannot n
       seq: 1,
       at: "2026-09-18T00:00:00.000Z",
       verdict: { status: "fail", findingCount: 1, severityCounts: { P0: 1, P1: 0, P2: 0, P3: 0 } },
-      provenance: { head: "0".repeat(40), branch: "pipeline/x", dirty: false, outputs: [] },
+      provenance: { head: "0".repeat(8), branch: "pipeline/x", dirty: false, outputs: [] },
       calls: 1,
     },
   });
@@ -4457,7 +4457,7 @@ test("continue-review forwards its receipt key, added budget and server actor, a
   const unregister = registerPipelineTick(async () => { ticks += 1; });
   try {
     const answer = await service.callTool("pipeline_action", request);
-    expect(answer).toMatchObject({ ok: true, reviewContinuation: { clientRequestId: "continue-1", stageId: "review", rounds: 2, reviewedHead: "1".repeat(40), currentHead: "2".repeat(40) } });
+    expect(answer).toMatchObject({ ok: true, reviewContinuation: { clientRequestId: "continue-1", stageId: "review", rounds: 2, reviewedHead: "1".repeat(8), currentHead: "2".repeat(8) } });
     expect(calls).toEqual([{ request: { clientRequestId: "continue-1", action: "continue-review", addRounds: 2, expectedRevision: request.expectedRevision }, actor: { kind: "agent", role: "orchestrator", conversationId: "conversation_creator" } }]);
     await Promise.resolve();
     expect(ticks).toBe(1);
