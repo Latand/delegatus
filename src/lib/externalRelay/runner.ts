@@ -5,7 +5,7 @@ import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { resolveOwnerOutboundContext } from "./ownerOutboundContext";
 import { capacityWaiters, olderCapacityWaiter, enterRelayHold, leaveRelayHold, releasingRelayHolds, type RelayHoldCause } from "./hold";
 import { relayRequestDeadline } from "./deadline";
-import { ownerRelayAuthorized } from "./ownerAuthority";
+import { ownerRelayAuthorized, ownerRelayAuthorizedAsync } from "./ownerAuthority";
 import { matchPrototypeAnswer } from "@/lib/prototypeReview/telegramAnswer";
 import { runPrototypeAnswer } from "./prototypeAnswer";
 import { resolveOwnerBridgeContext } from "./ownerBridgeContext";
@@ -629,7 +629,8 @@ export async function runClaimedRequest(
     const hydrated = await hydrateToolIndex(relay, request, lease, runtime, deadline.at);
     request.input = hydrated.request.input;
     callAbort.signal.throwIfAborted();
-    if (owner && !prototype && callableTools(request).length) ownerTools = openOwnerServiceTools(relay, target, request, hydrated.guidance, lease, runtime ?? {}, allowOwnerReply!);
+    if (owner && !prototype && callableTools(request).length) ownerTools = openOwnerServiceTools(relay, target, request, hydrated.guidance, lease, runtime ?? {},
+      () => ownerRelayAuthorizedAsync(relay.id, target.id, requestId));
     if (!owner && callableTools(request).length) loop = createToolLoop(relay, request, lease, runtime, (tool, done, failed) => {
       if (!steps && request.answer.progress === "notes") {
         newestProgress = { kind: done ? "tool_done" : "tool_start", label: tool, tool,
@@ -667,6 +668,7 @@ export async function runClaimedRequest(
           hardCapMs: Math.min(target.hardCapMinutes * 60_000, runtime?.timeoutMs ?? Infinity), ports: runtime?.ownerPorts,
           onConversation: async (conversationId) => {
             await changeRunAsync(requestId, current => ({ ...current, conversationId }), Date.now() + 5000);
+            ownerTools?.bindConversation(conversationId);
             recorder?.bindConversation(conversationId);
           },
           ...(steps ? { onProgress: steps.observe } : {}),

@@ -1,4 +1,5 @@
 import { afterAll, expect, spyOn, test } from "bun:test";
+import dns from "node:dns/promises";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -95,7 +96,7 @@ async function withAdapter(id: string, handler: Parameters<typeof startTestRelay
   const { openOwnerServiceTools, relayServiceToolsOp } = await import("./ownerServiceTools");
   const { externalRelayFile } = await import("./store");
   const { procBackend } = await import("@/lib/proc");
-  const { ownerRelayAuthorized } = await import("./ownerAuthority");
+  const { ownerRelayAuthorizedAsync } = await import("./ownerAuthority");
   const saved = ["runs", "relays"].map(kind => {
     const file = externalRelayFile(kind as "runs" | "relays");
     return { file, bytes: fs.existsSync(file) ? fs.readFileSync(file) : null };
@@ -109,7 +110,8 @@ async function withAdapter(id: string, handler: Parameters<typeof startTestRelay
     conversationId: "conversation_owner_tools", ownerPid: process.pid, ownerIdentity: procBackend.processIdentity(process.pid), ownerTurn: {} }] }));
   const adapter = openOwnerServiceTools(relay, relay.targets[0]!, request, [],
     { signal: abort.signal, ack, lose: () => abort.abort() }, runtime,
-    () => ownerRelayAuthorized(relay.id, request.target_id, id));
+    () => ownerRelayAuthorizedAsync(relay.id, request.target_id, id));
+  adapter.bindConversation("conversation_owner_tools");
   try { await work({ own: binding(), request, relay, abort, adapter, op: (args, wait) => relayServiceToolsOp("conversation_owner_tools", args, wait) }); }
   finally {
     await adapter.dispose(); await server.close();
@@ -137,6 +139,47 @@ test("discovery, describe-before-action, unknown and handoff tools never dispatc
       expect(await own.relay_service_tools(args(tool))).toMatchObject({ results: [{ status: "denied", code: "not_permitted" }] });
     expect(posts).toBe(0);
   });
+});
+
+test("list, describe and call avoid synchronous authority file and process probes", async () => {
+  const { procBackend } = await import("@/lib/proc");
+  await withAdapter("async-authority", (_req, body) => ({ body: okResult(body, { ...x1Results.action_ok!, effect: "read" }) }), async ({ own }) => {
+    const fileRead = spyOn(fs, "readFileSync");
+    const identity = spyOn(procBackend, "processIdentity");
+    try {
+      await own.relay_service_tools({ op: "list", query: "media" });
+      await own.relay_service_tools({ op: "describe", names: ["get_media"] });
+      await own.relay_service_tools(args("get_media"));
+      expect(fileRead.mock.calls.filter(([file]) => String(file).endsWith("/external-relay/runs.json") || String(file).endsWith("/external-relay/relays.json"))).toHaveLength(0);
+      expect(identity).not.toHaveBeenCalled();
+    } finally { fileRead.mockRestore(); identity.mockRestore(); }
+  });
+});
+
+test.each(["initial", "retry"] as const)("pause during DNS resolution refuses the %s action send", async phase => {
+  let posts = 0, lookupStarted!: () => void, release!: (addresses: Array<{ address: string; family: number }>) => void;
+  let lookups = 0;
+  const started = new Promise<void>(resolve => { lookupStarted = resolve; });
+  const held = new Promise<Array<{ address: string; family: number }>>(resolve => { release = resolve; });
+  const lookup = spyOn(dns, "lookup").mockImplementation((() => {
+    lookups++;
+    if (phase === "retry" && lookups === 1) return Promise.resolve([{ address: "127.0.0.1", family: 4 }]);
+    lookupStarted(); return held;
+  }) as unknown as typeof dns.lookup);
+  try { await withAdapter(`pause-during-dns-${phase}`, (_req, body) => {
+    posts++;
+    return phase === "retry" && posts === 1 ? { status: 503, body: { error: { code: "temporary" } } } : { body: okResult(body) };
+  }, async ({ own, relay }) => {
+    const port = new URL(relay.api_base).port;
+    relay.api_base = `http://relay-fixture.invalid:${port}/v1`;
+    await own.relay_service_tools({ op: "describe", names: ["create_poll"] });
+    const pending = own.relay_service_tools(args("create_poll"));
+    await started;
+    updateRelayStore(store => ({ ...store, relays: store.relays.map(row => ({ ...row, paused: true })) }));
+    release([{ address: "127.0.0.1", family: 4 }]);
+    expect(await pending).toMatchObject({ status: "relay_tools_unavailable" });
+    expect(posts).toBe(phase === "retry" ? 1 : 0);
+  }, phase === "retry" ? { sleep: async () => {} } : {}); } finally { lookup.mockRestore(); release([]); }
 });
 
 test("confirmation pending preserves summary and expiry, stops further calls locally", async () => {

@@ -71,6 +71,25 @@ export function ownerRelayAuthorized(relayId: string, targetId: string, requestI
   } catch { return false; }
 }
 
+/** Async request-bound check for the inline MCP adapter. Its live owner lease
+ * supplies process custody; this check reads current persisted revocation state
+ * without blocking the Viewer loop or probing process identity synchronously. */
+export async function ownerRelayAuthorizedAsync(relayId: string, targetId: string, requestId: string): Promise<boolean> {
+  try {
+    const [storeText, ledgerText] = await Promise.all([
+      fs.promises.readFile(externalRelayFile("relays"), "utf8"),
+      fs.promises.readFile(externalRelayFile("runs"), "utf8"),
+    ]);
+    const store = JSON.parse(storeText) as RelayStore;
+    const ledger = JSON.parse(ledgerText) as RunLedger;
+    const relay = store.relays.find(row => row.id === relayId);
+    const target = relay?.targets.find(row => row.id === targetId);
+    const run = ledger.runs.find(row => row.requestId === requestId && row.relayId === relayId && row.targetId === targetId);
+    return store.v === 1 && ledger.v === 1 && !!run?.ownerTurn && !run.ownerTurn.cancel
+      && relay?.paused === false && target?.enabled === true && (target.ownerTier === true || run.ownerTurn.prototype === true);
+  } catch { return false; }
+}
+
 /** Recovery retains the original owner launch's authority, across processes. */
 export function ownerRelaySpawnAuthorized(clientAttemptId: string | null | undefined): boolean {
   if (!clientAttemptId?.startsWith("relay-owner-")) return true;

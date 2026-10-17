@@ -3,7 +3,6 @@ import type { ExternalRelayRequest } from "./protocol";
 import type { PairedRelay, RelayTargetSettings } from "./store";
 import { canonical, createToolLoop, RELAY_TOOL_ROUNDS, toolSleep, type ToolLoopRuntime, type ToolProjection } from "./toolLoop";
 import { compactToolIndex, describeToolIndex, type ToolGuidance } from "./toolIndex";
-import { liveOwnerRelayRequest } from "./ownerAuthority";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 
 export const relayServiceToolsSchema = z.object({
@@ -16,8 +15,9 @@ export const relayServiceToolsSchema = z.object({
 type Args = z.infer<typeof relayServiceToolsSchema>;
 type BatchReply = { status: string; results: (ToolProjection & { note?: string } | { tool: string; status: string })[]; callsLeft: number; actionSent: boolean };
 type Adapter = ReturnType<typeof openOwnerServiceTools>;
-const shared = globalThis as typeof globalThis & { __llvRelayOwnerServiceTools?: Map<string, Adapter> };
+const shared = globalThis as typeof globalThis & { __llvRelayOwnerServiceTools?: Map<string, Adapter>; __llvRelayOwnerServiceConversations?: Map<string, Adapter> };
 const registry = () => shared.__llvRelayOwnerServiceTools ??= new Map();
+const conversations = () => shared.__llvRelayOwnerServiceConversations ??= new Map();
 const note = (result: ToolProjection): string | undefined => {
   if (result.status === "confirmation_pending") return "Confirmation was requested in the chat; the action has not run. Tell the owner and make no further call.";
   if (result.status === "outcome_unknown" || result.status === "execution_unknown" || result.execution_unknown) return "The action may have happened. Say so; do not repeat it.";
@@ -29,18 +29,18 @@ const note = (result: ToolProjection): string | undefined => {
 /** One live request owns one loop; no lease or credential crosses the MCP boundary. */
 export function openOwnerServiceTools(relay: PairedRelay, target: RelayTargetSettings, request: ExternalRelayRequest,
   guidance: ToolGuidance[], lease: { signal: AbortSignal; lose: () => void; ack: () => Promise<boolean> },
-  runtime: ToolLoopRuntime, authorize: () => boolean) {
+  runtime: ToolLoopRuntime, authorize: () => boolean | Promise<boolean>) {
   const closed = new AbortController();
   const signal = AbortSignal.any([lease.signal, closed.signal]);
   let open = true;
-  const check = () => {
-    if (!authorize()) { open = false; closed.abort(); }
+  const check = async () => {
+    if (!await authorize()) { open = false; closed.abort(); }
     signal.throwIfAborted();
   };
-  const loop = createToolLoop(relay, request, { signal, lose: lease.lose, ack: async () => {
-    check(); const acknowledged = await lease.ack(); check(); return acknowledged;
+  const loop = createToolLoop(relay, request, { signal, lose: lease.lose, beforeSend: check, ack: async () => {
+    await check(); const acknowledged = await lease.ack(); await check(); return acknowledged;
   } }, { ...runtime, sleep: async (ms, sleepSignal) => {
-    check(); await (runtime.sleep ?? toolSleep)(ms, sleepSignal); check();
+    await check(); await (runtime.sleep ?? toolSleep)(ms, sleepSignal); await check();
   } });
   const described = new Set<string>();
   const batches = new Map<string, Promise<BatchReply>>();
@@ -48,11 +48,16 @@ export function openOwnerServiceTools(relay: PairedRelay, target: RelayTargetSet
   let rounds = 0;
   let closing: Promise<void> | null = null;
   const adapter = {
-    relayId: relay.id, targetId: target.id,
+    requestId: request.request_id, relayId: relay.id, targetId: target.id,
     get records() { return loop.records; },
     get available() { return open && !signal.aborted; },
+    bindConversation(conversationId: string) {
+      const prior = conversations().get(conversationId);
+      if (prior && prior !== adapter) throw new Error("owner service conversation already registered");
+      conversations().set(conversationId, adapter);
+    },
     async op(args: Args, waitMs: number) {
-      check();
+      await check();
       if (args.op === "list") {
         const terms = (args.query ?? "").toLowerCase().split(/\s+/).filter(Boolean);
         return { tools: compactToolIndex(request).filter(tool => terms.every(term => `${tool.name} ${tool.summary}`.toLowerCase().includes(term))) };
@@ -111,6 +116,7 @@ export function openOwnerServiceTools(relay: PairedRelay, target: RelayTargetSet
     },
     close(status = "cancelled"): Promise<void> {
       open = false;
+      for (const [conversationId, owner] of conversations()) if (owner === adapter) conversations().delete(conversationId);
       return closing ??= (async () => {
         if (status === "done" && active) {
           let timer: ReturnType<typeof setTimeout> | undefined;
@@ -134,9 +140,9 @@ export function openOwnerServiceTools(relay: PairedRelay, target: RelayTargetSet
 /** Null is deliberately the same refusal for every failed authority or lifetime check. */
 export function relayServiceToolsOp(conversationId: string, input: unknown, waitMs = 20_000) {
   return withViewerOperation("relay.service-tools", async () => {
-    const owner = liveOwnerRelayRequest(conversationId);
-    const adapter = owner && registry().get(owner.requestId);
-    if (!adapter?.available || adapter.relayId !== owner!.relayId || adapter.targetId !== owner!.targetId) return null;
-    return adapter.op(relayServiceToolsSchema.parse(input), waitMs);
+    const adapter = conversations().get(conversationId);
+    if (!adapter?.available || registry().get(adapter.requestId) !== adapter) return null;
+    try { return await adapter.op(relayServiceToolsSchema.parse(input), waitMs); }
+    catch (error) { if (!adapter.available) return null; throw error; }
   });
 }
