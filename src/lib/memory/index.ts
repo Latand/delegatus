@@ -196,17 +196,20 @@ export class MemoryIndex {
       return db;
     });
     const result = { filesRead: 0, filesSkipped: 0, entriesIndexed: 0, filesFailed: 0 };
-    const nativeResolution = sources.some(source => ["codex_memory", "codex_summary", "rollout_summary"].includes(source.sourceKind)) ? projectResolutionStateKey() : null;
+    const nativeResolution = performanceSpans.sync("memory.refresh", () =>
+      sources.some(source => ["codex_memory", "codex_summary", "rollout_summary"].includes(source.sourceKind)) ? projectResolutionStateKey() : null);
     for (const source of sources) {
       try {
         const stat = await fs.stat(source.path);
         if (!stat.isFile() || stat.size > 4 * 1024 * 1024) {
-          db.transaction(() => this.removeSource(source.path))();
+          performanceSpans.sync("memory.refresh", () => db.transaction(() => this.removeSource(source.path))());
           result.filesSkipped++; continue;
         }
-        const identity = JSON.stringify([stat.size, stat.mtimeMs, stat.ctimeMs, source.project, source.sourceKind, source.engine, source.loadedByDefault,
-          ["codex_memory", "codex_summary", "rollout_summary"].includes(source.sourceKind) ? nativeResolution : null]);
-        const previous = db.query<{ identity: string }, [string]>("SELECT identity FROM memory_files WHERE path = ?").get(source.path);
+        const { identity, previous } = performanceSpans.sync("memory.refresh", () => ({
+          identity: JSON.stringify([stat.size, stat.mtimeMs, stat.ctimeMs, source.project, source.sourceKind, source.engine, source.loadedByDefault,
+            ["codex_memory", "codex_summary", "rollout_summary"].includes(source.sourceKind) ? nativeResolution : null]),
+          previous: db.query<{ identity: string }, [string]>("SELECT identity FROM memory_files WHERE path = ?").get(source.path),
+        }));
         if (previous?.identity === identity) { result.filesSkipped++; continue; }
         const content = await fs.readFile(source.path, "utf8");
         const after = await fs.stat(source.path);
@@ -236,13 +239,15 @@ export class MemoryIndex {
     }
     if (options.complete && !result.filesFailed) {
       // Only absent source files leave the derivative. Disuse never removes anything.
-      const listed = new Set(sources.map(source => source.path));
-      db.transaction(() => {
-        for (const row of db.query<{ path: string }, []>("SELECT path FROM memory_files").all()) {
-          if (listed.has(row.path)) continue;
-          this.removeSource(row.path);
-        }
-      })();
+      performanceSpans.sync("memory.refresh", () => {
+        const listed = new Set(sources.map(source => source.path));
+        db.transaction(() => {
+          for (const row of db.query<{ path: string }, []>("SELECT path FROM memory_files").all()) {
+            if (listed.has(row.path)) continue;
+            this.removeSource(row.path);
+          }
+        })();
+      });
     }
     return result;
   }
