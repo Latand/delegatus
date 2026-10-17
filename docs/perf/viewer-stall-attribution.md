@@ -46,7 +46,7 @@ unpublished trigger sentinel is rejected by the reader.
 | Persisted scan snapshot writer | `scanner.cache-encode`, `scanner.cache-persist` | Same recorder; existing persistence path |
 | Transcript feed background runner | `transcript.index` | Awaited span plus loop-monitor operation |
 | Memory service discovery and refresh | `memory.discovery`, `memory.refresh` | Awaited spans plus loop-monitor operations |
-| Memory parse, database initialization and entry transaction | `memory.refresh` | Synchronous spans and watchdog site |
+| Memory project resolution, source identity reads, oversize removal, parse, entry transaction and complete pruning | `memory.refresh` | Synchronous spans and watchdog site; the site is restored around each asynchronous file operation |
 | Existing response JSON encoding | `files.encode`, `runtime.stringify`, plus `scanner.cache-encode` | Synchronous spans and watchdog site |
 | Next serving tracer render entry points | `http.render` | Synchronous entry span and awaited loop-monitor operation |
 
@@ -148,9 +148,13 @@ Runs were serial, three at the base followed by three with attribution.
 overhead from scheduling variation. Neither revision reproduced the
 fourteen-second stall. This change claims no speed improvement.
 
-## Settled-continuation overhead
+## Historical settled-continuation overhead
 
-The final watchdog/monitor source was compared with the task's starting
+This measurement is retained as historical evidence. Its watchdog and monitor
+fingerprints predate the final diagnostic sources, so it does not establish the
+idle-cost condition for the final recorder.
+
+An earlier watchdog/monitor source was compared with the task's starting
 revision in fresh private child processes, alternating the order within each
 of five pairs per mode under one gate admission. Every child warmed up for
 one second, then ran 200 batches at a 20 ms period. The loaded case performed
@@ -170,7 +174,7 @@ results varied substantially and establish no speed improvement. These runs
 exercise the idle monitor and JSON work, without claiming production-equivalent
 load or identifying the fourteen-second caller.
 
-The complete measurement source, parameters, data SHA-256 and every timing
+The complete historical measurement source, parameters, data SHA-256 and every timing
 are retained under `continuation.overhead` in the evidence JSON. To reproduce,
 make scratch exports named `base` and `candidate`, supply their dependencies,
 and write `protocolSource` verbatim to `idle.ts` beside them. Use the starting
@@ -178,6 +182,39 @@ revision above for `base` and the containing commit for `candidate`. Run
 `bun idle.ts` through the gate wrapper with isolated HOME, XDG_CONFIG_HOME,
 LLV_STATE_DIR and TMPDIR. The protocol uses `isolatedEnvironment` for every
 child. It never loads a serving profiler.
+
+## Final-source settled-continuation overhead
+
+After the memory attribution fix, the paired run used the original baseline
+`225c3c166f710a6723ffa3309f0437d2f732df3c` and source revision
+`59339d0afcab15bad861dcdce3c3d448934a5602`. Fresh scratch exports ran under
+Bun 1.4.0 through one gate admission. Each child warmed up for one second and
+ran 200 batches at 20 ms intervals; the JSON-load phase serialized and parsed
+three times per batch over the same 10,000 deterministic rows. Run order
+alternated within five pairs in each mode. All input digests matched
+(`0d7b7c3aa91f91b6d1bb3cad9d72a87db923580e3f206216875eccea55ceb8cf`), and
+each loaded checksum was 6,000,000. CPU is whole-process user plus system time,
+including the watchdog worker.
+
+| Mode (four-second phase) | Base median CPU (ms) | Final-source median CPU (ms) |
+| --- | ---: | ---: |
+| Idle | 96.559 | 93.042 |
+| JSON load | 2111.233 | 1733.812 |
+
+The paired mean idle difference was +0.119 percentage points of one core;
+the two-sided 95% interval was [−0.576, +0.815]. This fixture detects no idle
+increase and the interval remains wide enough to include a small cost. The
+loaded interval was [−22.736, +12.095] percentage points, with substantial
+run-to-run variation. These results establish neither a production-equivalent
+load nor a performance gain, and they do not identify the production stall
+caller.
+
+The complete final-source protocol, all twenty raw observations and a SHA-256
+manifest for every TypeScript source and test changed in the diagnostic lane
+through the measured revision are stored under
+`continuation.finalSourceOverhead` in the evidence JSON. This run supersedes
+the earlier overhead evidence for final-source claims; the earlier raw run
+remains under `continuation.overhead` with its historical provenance.
 
 ## Verification before the settled continuation
 
@@ -241,6 +278,27 @@ run after the pipeline publishes and a pull request exists. No push, PR
 creation, deploy or production acceptance run was performed in this
 continuation. The exact production caller and automatic-GC contribution
 remain unproven.
+
+## Final-source fix verification
+
+Revision `59339d0afcab15bad861dcdce3c3d448934a5602` passed the two explicit
+memory paths under isolated HOME, XDG_CONFIG_HOME, TMPDIR and LLV_STATE_DIR:
+`src/lib/memory/service.test.ts` (2 tests, 21 assertions) and
+`src/lib/memory/index.test.ts` (62 tests, 2,781 assertions). The service test
+holds the source read, checks that the watchdog site is unknown during the
+wait, then injects bounded CPU into a resumed segment and complete pruning; the
+watchdog site and corresponding synchronous slices both identify
+`memory.refresh`.
+
+Typecheck (`bunx tsc --noEmit`), local privacy-publication, and the production
+build passed from the exact source export. The build emitted its existing CSS
+warning for `::highlight(tts-karaoke)`. With the scratch-only TMPDIR harness
+adjustment, the Viewer loaded 25/25 modules and GET `/` returned HTTP 200. The
+runtime host completed succession and answered 27/27 requests on both
+endpoints over fifteen seconds. The hosted `privacy-tracker-audit` and
+aggregate `runtime-gate` verdicts remain for pipeline publication. No service
+was deployed; the production caller and the loaded thirty-minute acceptance
+window remain unobserved.
 
 ## Deployment acceptance remains pending
 
