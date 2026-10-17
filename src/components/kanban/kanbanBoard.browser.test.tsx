@@ -33541,7 +33541,7 @@ describe("overlays opened from a conversation draw above the full-screen view th
             await page.waitForSelector("[data-artifact-preview]", { timeout: 5_000 });
             await page.waitForFunction(() => document.querySelector("[data-artifact-preview]")?.getAttribute("data-artifact-state") !== "loading", undefined, { timeout: 10_000 });
             const state = await page.locator("[data-artifact-preview]").getAttribute("data-artifact-state");
-            expect(state, `${tag} ${name} preview state`).toBe(name === "gone" ? "missing" : name === "report" ? state : "ready");
+            expect(state, `${tag} ${name} preview state`).toBe(name === "gone" ? "missing" : "ready");
             await expectOnTop(page, "[data-artifact-preview]", `${tag} ${name} preview`);
             await expectOnTop(page, `[data-artifact-preview] button[aria-label="${translate(lang, "preview.close")}"]`, `${tag} ${name} close`);
             await expectOnTop(page, "[data-artifact-preview] [data-preview-open-external]", `${tag} ${name} open-external`);
@@ -33558,11 +33558,10 @@ describe("overlays opened from a conversation draw above the full-screen view th
               expect(body.scroller).toBe(true);
               await page.mouse.move(width - 200, height / 2);
               await page.mouse.wheel(0, 600);
-              await page.waitForTimeout(200);
-              const scrolled = await page.evaluate(() => {
+              const scrolled = await page.waitForFunction(() => {
                 const root = document.querySelector<HTMLElement>("[data-artifact-preview]")!;
                 return [...root.querySelectorAll<HTMLElement>("*")].some((element) => element.scrollTop > 0 && element.scrollHeight > element.clientHeight);
-              });
+              }, undefined, { timeout: 5_000 }).then(() => true, () => false);
               expect(scrolled, `${tag} ${name} body scrolls under the wheel`).toBe(true);
             }
             if (name === "plan") await frame("preview-md");

@@ -191,9 +191,10 @@ function PreviewSheet({
   const failure = current?.failure ?? null;
   const [width, setWidth] = useState(storedWidth);
   const inset = useLeftShellInset();
-  useModalLayer({ containerRef, onClose });
-  /* Opened over a full-screen conversation, the preview takes Escape before the window under it does. */
-  useOverlayEscape(onClose);
+  const isTopLayer = useModalLayer({ containerRef, onClose });
+  /* Opened over a full-screen conversation, the preview takes Escape before the
+     window under it does — but only while no modal dialog sits above it. */
+  useOverlayEscape(onClose, true, isTopLayer);
 
   /* The meta round-trip is the load this surface exists for, keyed to the
      open request; an aborted (superseded) read settles nothing. */
