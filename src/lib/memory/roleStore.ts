@@ -5,7 +5,7 @@ import path from "node:path";
 import { statePath } from "@/lib/configDir";
 import { staticSensitiveClasses } from "@/lib/privacy/staticDetectors";
 import { canonicalProject } from "@/lib/projects/aliases";
-import { initializeStateCollections, SqliteStateCollection, stateCollectionsInitialized } from "@/lib/state/sqliteStateStore";
+import { initializeStateCollections, SqliteStateCollection, stateCollectionsInitialized, stateDatabaseSignature } from "@/lib/state/sqliteStateStore";
 
 import { appendRule, lessonPatternSource, retainRules, sameRule, scopeChars } from "./roleConsolidate";
 import { roleMemoryEnabled } from "./settings";
@@ -578,10 +578,34 @@ export function storedLessonTexts(): string[] {
 const LESSON_MATCHER_SOURCE_LIMIT = 32_000;
 interface LessonMatcher { pattern: RegExp; prefilter: RegExp | null }
 interface LessonSource { source: string; words: string[]; anchor?: string }
-let matcherCache: { key: string; matchers: LessonMatcher[] } | null = null;
+let matcherCache: { key: string; matchers: LessonMatcher[]; skipped: number } | null = null;
+/** The readable store revision and file identity, without cloning its rows. */
+const privacyRevisionHost = globalThis as typeof globalThis & {
+  __llvLessonPrivacyRevision?: { file: string; signature: string; revision: string };
+};
+export function storedLessonRevision(): string {
+  try {
+    const file = statePath("state.sqlite");
+    const identity = () => {
+      const stat = fs.statSync(file, { bigint: true, throwIfNoEntry: false });
+      return stat ? `${stat.dev}:${stat.ino}:${stat.ctimeNs}` : "absent";
+    };
+    const signature = `${identity()}:${stateDatabaseSignature(file)}`;
+    const cached = privacyRevisionHost.__llvLessonPrivacyRevision;
+    if (cached?.file === file && cached.signature === signature) return cached.revision;
+    const held = roleMemoryCollection();
+    const stat = held ? fs.statSync(held.filename, { bigint: true }) : null;
+    const revision = held && stat ? `${stat.dev}:${stat.ino}:${held.signature()}` : "";
+    if (`${identity()}:${stateDatabaseSignature(file)}` === signature) privacyRevisionHost.__llvLessonPrivacyRevision = { file, signature, revision };
+    return revision;
+  } catch { throw new RoleMemoryRefusal("LESSON_PRIVACY_UNAVAILABLE", UNREADABLE); }
+}
+
 /** Bounded alternatives in longest-first order, cached for this store signature. */
 function storedLessonMatchers(): LessonMatcher[] {
-  const { rows: all, signature } = readableRows();
+  const signature = storedLessonRevision();
+  if (matcherCache?.key === signature) return matcherCache.matchers;
+  const { rows: all } = readableRows();
   if (matcherCache?.key !== signature) {
     const matchers: LessonMatcher[] = [];
     let skipped = 0;
@@ -635,7 +659,8 @@ function storedLessonMatchers(): LessonMatcher[] {
       chunk.push(source);
     }
     compile(chunk);
-    matcherCache = { key: signature, matchers };
+    if (storedLessonRevision() !== signature) throw new RoleMemoryRefusal("LESSON_PRIVACY_UNAVAILABLE", UNREADABLE);
+    matcherCache = { key: signature, matchers, skipped };
     if (skipped) console.warn(`stored-lesson matcher skipped ${skipped} oversized or uncompilable lesson text(s)`);
   }
   return matcherCache.matchers;
@@ -679,8 +704,11 @@ export function withoutStoredLessons(text: string): string {
 
 /** withoutStoredLessons over every text a record holds, however deep; the
     record itself when none quotes a lesson. */
-export function withoutStoredLessonsIn<T>(value: T): T {
+export function withoutStoredLessonsIn<T>(value: T, options: { requireComplete?: boolean } = {}): T {
   const matchers = storedLessonMatchers();
+  if (options.requireComplete && matcherCache?.skipped) {
+    throw new RoleMemoryRefusal("LESSON_PRIVACY_UNAVAILABLE", "a stored lesson could not be compiled by the privacy matcher; nothing was sent");
+  }
   if (!matchers.length) return value;
   const walk = (item: unknown): unknown => {
     if (typeof item === "string") return withholdLessons(item, matchers);

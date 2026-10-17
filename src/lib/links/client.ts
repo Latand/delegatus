@@ -1,3 +1,4 @@
+import { assertTaskExportCurrent } from "./taskExportPrivacy";
 import { exchangeTelegramPublications, validTelegramPublicationPart, type TelegramPublicationPart } from "./telegramPublication";
 import { sharedLinkState } from "./runtimeState";
 import dns from "node:dns/promises";
@@ -51,6 +52,7 @@ export async function peerTarget(input: string, scope: "board:sync" = "board:syn
 }
 
 async function call(target: Target, route: string, method: "GET" | "POST" | "DELETE", body?: object, headers: Record<string, string> = {}, hostOverride?: string): Promise<{ status: number; body: Record<string, unknown>; bytesRead: number; bytesWritten: number }> {
+  assertTaskExportCurrent(body);
   const encoded = body === undefined ? undefined : Buffer.from(JSON.stringify(body));
   const transport = target.url.protocol === "https:" ? https : http;
   return new Promise((resolve, reject) => {
@@ -207,7 +209,9 @@ async function runSyncPeer(id: string, recover: boolean): Promise<{ peer: Link; 
         agentState.pull = null; agentState.pushed = null;
         agentState.pullOffset = 0; agentState.pushOffset = 0;
       }
-      const taskParts = exchange?.request(linked) ?? {};
+      const taskParts = await exchange?.request(linked) ?? {};
+      stillLinked();
+      if (sharedDigest(sharedProjects()) !== currentHash || sharedDigest(remoteProjects(id)) !== remoteHash) throw new LinkError("sharing-changed");
       const outboundAgents = linked.size && agentCapable.has(id) ? agentPart(`peer:${id}`, agentState.pushed, linked, agentState.pushOffset) : null;
       const pushAgents = outboundAgents && ("rows" in outboundAgents || "reset" in outboundAgents) ? outboundAgents : null;
       const push = pushAgents ? { ...(taskParts.push ?? {}), agents: pushAgents } : taskParts.push;
@@ -359,6 +363,8 @@ async function runSyncPeer(id: string, recover: boolean): Promise<{ peer: Link; 
     if (sameLink(live, peer) && live.state !== "revoked" && (live.state !== "failing" || live.error !== code)) {
       putPeer({ ...live, state: "failing", error: code });
     }
+    const known = new Set(["malformed", "clock", "quota", "revoked", "not-found", "unreachable", "not-delegatus", "sharing-changed"]);
+    console.warn(`[linked boards] sync failed: ${known.has(code) ? code : "unavailable"}`);
     throw error;
   }
 }

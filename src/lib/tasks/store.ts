@@ -1,3 +1,4 @@
+import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { waitForStateLock } from "@/lib/state/lockWait";
 import fs from "node:fs";
 import { readFindingKey, reconcileOpenFindings, validStoredFinding } from "./finding";
@@ -24,6 +25,8 @@ import {
 } from "@/lib/state/legacyImport";
 import { readStateImport, SqliteStateCollection, type StateImportRecord, type StateImportRow } from "@/lib/state/sqliteStateStore";
 
+import { TASK_SYNC_GROUPS } from "./types";
+import { derivedStamp } from "@/lib/links/stamp";
 import { linkedContext } from "@/lib/links/linked";
 import { groupDigest, snapshotGroups, stampLinkedRows, type GroupSnapshot, type TaskSyncWrite } from "@/lib/links/taskStamp";
 import { tombstoneCollection, tombstoneRowKey, type TombstoneRow } from "@/lib/links/tombstones";
@@ -850,6 +853,38 @@ export function mutateTaskPrototypeRound<R>(taskId: string, reviewId: string,
     tx.put(row as TaskStateRow);
     return result;
   });
+}
+
+/** Notes are installation-local and cannot change replicated groups, task
+ * membership or tombstones. Each transaction reads and writes one named row;
+ * the callback sees the latest task after asynchronous admission. */
+export async function mutateTaskNote(taskId: string,
+  change: (task: BoardTask) => BoardTask | undefined, filePath = TASKS_FILE,
+  options: { waitMs?: number; signal?: AbortSignal } = {}): Promise<void> {
+  await withViewerOperation("tasks.note", () => waitForStateLock("tasks.note", () => {
+    const collection = taskCollection(filePath, "write")!;
+    const context = linkedContext();
+    collection.boundedPatch(2, tx => {
+      const raw = tx.get(`t:${taskId}`);
+      if (!raw) return;
+      const task = coerceTask(raw);
+      if (!task) throw new Error("invalid persisted task row");
+      const next = change(structuredClone(task));
+      if (!next || JSON.stringify(next.note) === JSON.stringify(task.note)) return;
+      // Retain stored extensions and pin any derived linked stamps before
+      // changing updatedAt, so a local note leaves every replicated group alone.
+      const row = { ...raw, updatedAt: next.updatedAt } as unknown as BoardTask;
+      if (context.self && context.all.has(task.project)) {
+        const stamps = { ...task.sync?.s };
+        for (const group of TASK_SYNC_GROUPS) stamps[group] ??= derivedStamp(task.updatedAt, context.self.prefix);
+        row.sync = { s: stamps, o: task.sync?.o ?? context.self.prefix };
+      }
+      if (next.note) row.note = next.note;
+      else delete row.note;
+      stampTaskRevisions([row], snapshotTasks([task]), false);
+      tx.put(row as unknown as TaskStateRow);
+    });
+  }, { ...options, subject: "tasks" }));
 }
 
 /** Advisory Telegram outcomes are installation-local. Touch one task row and

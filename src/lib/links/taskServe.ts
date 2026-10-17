@@ -1,4 +1,4 @@
-import { repairLinkedTasks } from "./taskRepair";
+import { markTaskExport } from "./taskExportPrivacy";
 /**
  * B's half of the `tasks` part of `boards/sync` (docs/design/linked-installs.md
  * M.5). B never calls out and holds no cursor: A names the position, B answers
@@ -6,10 +6,10 @@ import { repairLinkedTasks } from "./taskRepair";
  */
 import { linkedPeer, linkedContext } from "./linked";
 import { applyTaskRows } from "./taskApply";
-import { isPosition, readLogPage, readScanPage, PAGE_ROWS, type Position } from "./taskFeed";
+import { isPosition, PAGE_ROWS, type Position } from "./taskFeed";
+import { readLogPageInWorker as readLogPage, readScanPageInWorker as readScanPage } from "./taskPageWorker";
 import { decodeWireRow, MalformedRow, TASK_BOARD_WIRE_VERSION, TASK_PROTOTYPE_WIRE_VERSION } from "./taskWire";
 import type { Grant } from "./state";
-import { taskFeedSource } from "@/lib/tasks/store";
 
 const SCAN_CURSOR = /^(t:[0-9a-f-]{36}|g:([0-9a-f-]{36})?)?$/;
 const PROJECT = /^repo-[0-9a-f]{32}$/;
@@ -21,7 +21,7 @@ export type ServeOutcome = { error: "malformed" | "clock" | "quota" } | { parts:
  * `agreed` says both sides hold each other's current shared list; until they
  * do, the two sides could disagree on what is linked, so no row moves.
  */
-export function serveTasks(grant: Grant, wire: Record<string, unknown>, agreed: boolean): ServeOutcome {
+export async function serveTasks(grant: Grant, wire: Record<string, unknown>, agreed: boolean): Promise<ServeOutcome> {
   if (wire.tasks === undefined && wire.push === undefined) return { parts: {}, moved: false };
   const pull = wire.tasks;
   const push = wire.push;
@@ -32,7 +32,6 @@ export function serveTasks(grant: Grant, wire: Record<string, unknown>, agreed: 
   if (push !== undefined && !(object(push) && Array.isArray(push.rows) && push.rows.length <= PAGE_ROWS
     && (isPosition(push.through) !== (push.scan !== undefined)) && (push.scan === undefined || push.scan === null || (typeof push.scan === "string" && SCAN_CURSOR.test(push.scan))))) return { error: "malformed" };
   if (!agreed) return { parts: { tasks: { wait: true } }, moved: false };
-  repairLinkedTasks();
   const context = linkedContext();
   const link = linkedPeer("grant", grant.id);
   if (!context.self || !link) return { parts: { tasks: { wait: true } }, moved: false };
@@ -60,14 +59,16 @@ export function serveTasks(grant: Grant, wire: Record<string, unknown>, agreed: 
     if (object(scan)) {
       const projects = new Set((scan.p as string[]).filter((key) => link.projects.has(key)));
       // The position a resync ends on is read before its first row.
-      const at: Position | undefined = scan.after === "" ? [taskFeedSource()?.revision() ?? 0] : undefined;
-      const page = readScanPage(scan.after as string, { ...filter, projects, skipPrefix: null });
+      const page = await readScanPage(scan.after as string, { ...filter, projects, skipPrefix: null });
+      const at = scan.after === "" ? page.at : undefined;
+      markTaskExport(parts, page);
       parts.tasks = { cursor: pull.after, ...(page.rows.length ? { rows: page.rows } : {}), scan: page.next, ...(at ? { at } : {}) };
       moved ||= page.rows.length > 0;
     } else if (pull.after === null) {
       parts.tasks = { resync: true };
     } else {
-      const page = readLogPage(pull.after as Position, { ...filter, projects: link.projects });
+      const page = await readLogPage(pull.after as Position, { ...filter, projects: link.projects });
+      markTaskExport(parts, page);
       if (page.kind === "resync") parts.tasks = { resync: true };
       else {
         parts.tasks = { cursor: page.cursor, ...(page.rows.length ? { rows: page.rows } : {}), ...(page.more ? { more: true } : {}) };
