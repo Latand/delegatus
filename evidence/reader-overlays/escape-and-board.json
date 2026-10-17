@@ -1,0 +1,23 @@
+{
+  "driver": "src/components/kanban/kanbanBoard.browser.test.tsx",
+  "readings": [
+    {
+      "width": 1440,
+      "height": 900,
+      "lang": "uk",
+      "scheme": "light",
+      "previewZ": 65,
+      "menuZ": 70,
+      "pageErrors": []
+    },
+    {
+      "width": 1000,
+      "height": 760,
+      "lang": "en",
+      "scheme": "dark",
+      "previewZ": 65,
+      "menuZ": 70,
+      "pageErrors": []
+    }
+  ]
+}

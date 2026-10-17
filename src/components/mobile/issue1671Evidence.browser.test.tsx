@@ -11794,3 +11794,91 @@ describe("keys settings", () => {
     expect(failures).toEqual([]);
   }, 3_600_000);
 });
+
+browserTest("what a full-screen conversation opens draws above it on the phone: the runtime sheet picks a model and a document preview opens and closes", async () => {
+  /* The phone's reader hosts sit on the `reader` layer; the runtime sheet is a popover and the preview is one step
+     above `reader` (`src/components/layers.ts`). The conversation is deep-linked, so no board is under it. */
+  const out = path.resolve(".artifacts/reader-overlays-phone"); fs.mkdirSync(out, { recursive: true });
+  const text = `# Rollout plan\n\n${Array.from({ length: 40 }, (_, step) => `## Step ${step + 1}\n\nRe-run the rebuild against live traffic and compare the alias swap window with step ${step}.\n`).join("\n")}`;
+  const { base, stop } = await (async () => {
+    const served = await serveEvidenceFixture(out, "src/components/mobile/issue1671Evidence.fixture.tsx", {
+      "/api/artifact": (request: Request) => {
+        const url = new URL(request.url), name = path.basename(url.searchParams.get("path") ?? "");
+        if (name !== "plan.md" && name !== "run.txt") return Response.json({ error: "missing", code: "not-found" }, { status: 404 });
+        if (url.searchParams.get("mode") === "meta") return Response.json({ name, kind: "text", mime: name === "plan.md" ? "text/markdown" : "text/plain", size: text.length, mtimeMs: 1790000000000, etag: "\"fixture\"" });
+        return new Response(text, { headers: { "content-type": name === "plan.md" ? "text/markdown; charset=utf-8" : "text/plain; charset=utf-8", etag: "\"fixture\"" } });
+      },
+    });
+    return { base: served.base.replace(/\/$/, ""), stop: served.stop };
+  })();
+  const browser = await launchChromium();
+  const readings: unknown[] = [];
+  try {
+    for (const { lang, scheme } of [{ lang: "uk", scheme: "light" }, { lang: "en", scheme: "dark" }] as const) {
+      const context = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true, deviceScaleFactor: 2, colorScheme: scheme });
+      await context.addInitScript(`try { localStorage.setItem("llv_lang", ${JSON.stringify(lang)}); } catch {}`);
+      try {
+        const page = await context.newPage();
+        const pageErrors: string[] = [];
+        page.on("pageerror", (error) => pageErrors.push(error.message));
+        const cdp = await context.newCDPSession(page);
+        const shot = (name: string) => page.screenshot({ path: path.join(out, `${lang}-${scheme}-${name}.png`) });
+        await page.goto(`${base}/?account=spare&overlay-links#c=conversation_running`);
+        await page.waitForSelector("[data-runtime-pill]", { timeout: 20_000 });
+        await page.waitForSelector("[data-file-link]", { timeout: 20_000 });
+        await pause(page, 600);
+        const chip = () => page.evaluate(() => document.querySelector("[data-runtime-pill]")?.textContent?.replace(/\s+/g, " ").trim() ?? "");
+        const before = await chip();
+
+        /* The runtime sheet: its parts answer a hit test, a tapped model row reconfigures, and the chip says so. */
+        await tap(page, cdp, "[data-runtime-pill]");
+        await page.waitForSelector("[data-runtime-sheet]", { timeout: 5_000 });
+        await pause(page, 400);
+        for (const [selector, label] of [["[data-runtime-sheet] h2", "title"], ["[data-runtime-sheet-close]", "close"], ["[data-runtime-sheet] [role=\"radiogroup\"] [data-runtime-sheet-row]", "first row"]] as const) {
+          const part = await reachable(page, selector, "[data-runtime-sheet]");
+          expect(part, `${lang} ${scheme} sheet ${label}`).toMatchObject({ inside: true, hitOwn: true });
+        }
+        await shot("runtime-sheet");
+        const requests = (await page.evaluate(() => (window as unknown as { evidence: { runtimeRequests: unknown[] } }).evidence.runtimeRequests.length));
+        await page.evaluate(() => {
+          [...document.querySelectorAll<HTMLElement>("[data-runtime-sheet-row]")].find((row) => row.getAttribute("aria-checked") === "false")?.setAttribute("data-evidence-pick", "1");
+        });
+        await tap(page, cdp, "[data-evidence-pick]");
+        await pause(page, 700);
+        const sent = await page.evaluate(() => (window as unknown as { evidence: { runtimeRequests: unknown[] } }).evidence.runtimeRequests.length);
+        expect(sent, `${lang} ${scheme} a tap on another row sends a reconfigure`).toBeGreaterThan(requests);
+        if (await page.locator("[data-runtime-sheet]").count()) await tap(page, cdp, "[data-runtime-sheet-close]");
+        await page.waitForSelector("[data-runtime-sheet]", { state: "detached", timeout: 5_000 });
+        const after = await chip();
+
+        /* The document preview: opened from the link in the feed, whole over the conversation, closed by its ×. */
+        for (const name of ["plan", "log"]) {
+          await page.evaluate((word) => [...document.querySelectorAll<HTMLElement>("[data-file-link]")].find((link) => link.textContent === word)?.scrollIntoView({ block: "center" }), name);
+          await pause(page, 300);
+          const link = (await page.locator("[data-file-link]", { hasText: name }).first().boundingBox())!;
+          await touch(cdp, [[link.x + link.width / 2, link.y + link.height / 2]]);
+          await page.waitForSelector("[data-artifact-preview]", { timeout: 5_000 });
+          await page.waitForFunction(() => document.querySelector("[data-artifact-preview]")?.getAttribute("data-artifact-state") === "ready", undefined, { timeout: 10_000 });
+          const close = `[data-artifact-preview] button[aria-label="${translate(lang, "preview.close")}"]`;
+          const reading = await page.evaluate((closeSelector) => {
+            const root = document.querySelector<HTMLElement>("[data-artifact-preview]")!;
+            const box = root.getBoundingClientRect();
+            const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height * 0.6);
+            return { covers: box.left <= 0.5 && box.top <= 0.5 && box.width >= innerWidth - 0.5 && box.height >= innerHeight - 0.5, bodyHit: Boolean(hit && root.contains(hit)), zIndex: Number(getComputedStyle(root).zIndex), closeHeight: document.querySelector<HTMLElement>(closeSelector)!.getBoundingClientRect().height };
+          }, close);
+          expect(reading).toMatchObject({ covers: true, bodyHit: true, zIndex: 65 });
+          expect(reading.closeHeight).toBeGreaterThanOrEqual(44);
+          expect(await reachable(page, close, "[data-artifact-preview]"), `${lang} ${scheme} ${name} close`).toMatchObject({ inside: true, hitOwn: true });
+          if (name === "plan") await shot("preview-md");
+          await tap(page, cdp, close);
+          await page.waitForSelector("[data-artifact-preview]", { state: "detached", timeout: 5_000 });
+          expect(await page.locator("[data-runtime-pill]").count()).toBeGreaterThan(0);
+        }
+        expect(pageErrors).toEqual([]);
+        readings.push({ lang, scheme, viewport: { width: 390, height: 844 }, before, after, runtimeRequests: sent - requests, pageErrors });
+      } finally { await context.close(); }
+    }
+    fs.mkdirSync("evidence/reader-overlays", { recursive: true });
+    fs.writeFileSync("evidence/reader-overlays/phone.json", JSON.stringify({ driver: "src/components/mobile/issue1671Evidence.browser.test.tsx", readings }, null, 2));
+  } finally { await browser.close(); stop(); }
+}, 300_000);

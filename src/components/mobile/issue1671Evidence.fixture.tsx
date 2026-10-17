@@ -126,6 +126,7 @@ if (new URLSearchParams(location.search).has("stages")) {
    `?account=` so one page can be asked for a long one, which is what crowds a
    390 px meta line. */
 const ACCOUNT = new URLSearchParams(location.search).get("account") || "spare";
+const OVERLAY_LINKS = new URLSearchParams(location.search).has("overlay-links");
 const RUNNING_PATH = `/state/agent-log-viewer/shared/accounts/claude/${ACCOUNT}/projects/atlas/running.jsonl`;
 /* #1846: `&runtime=structured` puts the running conversation on a structured host, mid-turn, so its runtime
    pill picks an account for the conversation itself; `&next=` names the account ready to take the next
@@ -1419,6 +1420,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   /* The linked stage install's agents and lanes (`?synced=1`): the driver serves them. */
   if (SYNCED && url.pathname === "/api/links/agents") return serverFetch(url.pathname + url.search);
   if (url.pathname.startsWith("/api/tts")) return serverFetch(url.pathname + url.search, init);
+  if (OVERLAY_LINKS && url.pathname.startsWith("/api/artifact")) return serverFetch(url.pathname + url.search, init);
   if (url.pathname === "/api/log/provenance" && AGENT_LABEL) return json((await deliveredAgentEvidence()).provenance);
   if (STAGE_AGENT && ["/api/conversation-host", "/api/tmux", "/api/runtime/send"].includes(url.pathname) && method === "POST") {
     const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
@@ -1727,7 +1729,10 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   }
   /* The feed's poll transport (the fixture has no log stream). */
   if (url.pathname === "/api/logs" && method === "POST") {
-    const evidenceFeed = CONTEXT_MODE !== null ? contextModeFeed() : AGENT_LABEL ? (await deliveredAgentEvidence()).feed : FEED;
+    const baseFeed = CONTEXT_MODE !== null ? contextModeFeed() : AGENT_LABEL ? (await deliveredAgentEvidence()).feed : FEED;
+    /* `&overlay-links`: the running conversation's last answer links a document of each preview kind, the way a
+       real answer does, so a driver opens the preview from the feed. */
+    const evidenceFeed = OVERLAY_LINKS ? `${baseFeed}${JSON.stringify({ type: "assistant", timestamp: iso(20), message: { role: "assistant", content: [{ type: "text", text: "Files from this run: [plan](/repo/notes/plan.md), [log](/repo/notes/run.txt)." }] } })}\n` : baseFeed;
     const asked = JSON.parse(String(init?.body ?? "{}")) as { reqs?: Array<{ id: string; path: string; offset: number }> };
     const chunks: Record<string, { offset: number; start: number; size: number; data: string }> = {};
     (asked.reqs ?? []).forEach((request, index) => {
