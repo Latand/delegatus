@@ -1254,7 +1254,10 @@ for (const failsAfterWait of [false, true]) test(`capacity retries survive a con
     expect(h.current().runs[0]!.attempts[0]!.publicationRetry).toMatchObject({ failures: 1, retryAt: "2026-10-16T10:01:00.000Z" });
     const engine = path.join(import.meta.dir, "engine.ts");
     const restart = async () => {
-      const script = `import { defaultPipelinePorts, tickPipelines } from ${JSON.stringify(engine)};
+      const script = `const stagePullRequest = await import(${JSON.stringify(path.join(import.meta.dir, "stagePullRequest.ts"))});
+      const { spyOn } = await import("bun:test");
+      spyOn(stagePullRequest, "ensureStagePullRequest").mockResolvedValue({ ok: true });
+      const { defaultPipelinePorts, tickPipelines } = await import(${JSON.stringify(engine)});
         const ports = { ...defaultPipelinePorts(), now: () => ${JSON.stringify(new Date(clock).toISOString())}, scheduleTick: () => {},
           conversationAgentActive: async () => false, stageHostResident: async () => false, paneAgentAlive: async () => false, getFlow: () => null, worktreePresent: () => true };
         for (let n = 0; n < 8; n++) await tickPipelines([], ports);`;
