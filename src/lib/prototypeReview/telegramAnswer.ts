@@ -1,4 +1,4 @@
-import { loadTasks } from "@/lib/tasks/store";
+import { loadTasksForList } from "@/lib/tasks/store";
 import { runsElsewhere } from "@/lib/links/linked";
 import { prototypeReviewSummary } from "./model";
 import { normalizePrototypeAnswers, recommendedAnswers } from "./questions";
@@ -123,7 +123,7 @@ export function parsePrototypeAnswer(round: PrototypeReviewRound, text: string, 
 
 /** Match all retained rounds before filtering: a short-reference collision refuses identity.
     Only the runner's saved request record admits replay of an already recorded decision. */
-export function matchPrototypeAnswer(text: string, tasks: readonly BoardTask[] = loadTasks(), replayReviewId?: string,
+export function matchPrototypeAnswer(text: string, tasks: readonly BoardTask[] = loadTasksForList(), replayReviewId?: string,
   seatRounds: readonly PrototypeReviewRound[] = loadSeatRounds(), replyToText?: string): PrototypeAnswerMatch | null {
   const explicit = /#proto-[a-f0-9]{8}\b/i.test(normalizeTelegramAnswer(text));
   const identity = explicit ? text : replyToText ?? "";

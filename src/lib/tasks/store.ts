@@ -25,7 +25,7 @@ import {
 import { readStateImport, SqliteStateCollection, type StateImportRecord, type StateImportRow } from "@/lib/state/sqliteStateStore";
 
 import { linkedContext } from "@/lib/links/linked";
-import { snapshotGroups, stampLinkedRows, type GroupSnapshot, type TaskSyncWrite } from "@/lib/links/taskStamp";
+import { groupDigest, snapshotGroups, stampLinkedRows, type GroupSnapshot, type TaskSyncWrite } from "@/lib/links/taskStamp";
 import { tombstoneCollection, tombstoneRowKey, type TombstoneRow } from "@/lib/links/tombstones";
 
 import { snapshotTasks, stampTaskRevisions, taskFingerprint, taskRevision } from "./revision";
@@ -548,8 +548,15 @@ export function taskSelectionSource(filePath = TASKS_FILE) {
   };
 }
 
-const listSnapshots = new WeakMap<object, { aliases: string; tasks: readonly BoardTask[] }>();
-const listRows = new WeakMap<object, { aliases: string; task: BoardTask }>();
+const taskListOwner = globalThis as typeof globalThis & { __delegatusTaskListReaders?: {
+  rows: WeakMap<object, { aliases: string; task: BoardTask }>;
+  snapshots: WeakMap<object, { aliases: string; tasks: readonly BoardTask[] }>;
+} };
+// Raw collections have one bounded shared owner; weak keys give the derived
+// task views the same lifetime across separately compiled route bundles.
+const taskListReaders = taskListOwner.__delegatusTaskListReaders ??= { rows: new WeakMap(), snapshots: new WeakMap() };
+const listRows = taskListReaders.rows;
+const listSnapshots = taskListReaders.snapshots;
 /** Immutable list source. SQLite refreshes changed rows by revision; a repeated
  * list does not clone and validate every task and assignment again.
  *
@@ -791,6 +798,41 @@ export function taskFeedSource(filePath = TASKS_FILE) {
     }),
     parse: (valueJson: string) => coerceTask(JSON.parse(valueJson)),
   };
+}
+
+/** One prototype round update. Unlinked tasks need only their own row;
+ * linked text changes keep the board writer's project watermark and stamps.
+ * A round update cannot delete tasks or change the tombstone companion. */
+export function mutateTaskPrototypeRound<R>(taskId: string, reviewId: string,
+  change: (round: PrototypeReviewRound | undefined, task: BoardTask | null) => R, filePath = TASKS_FILE): R {
+  const collection = taskCollection(filePath, "write")!;
+  const sync = taskSyncWrite(filePath);
+  return collection.boundedPatch(2, tx => {
+    const raw = tx.get(`t:${taskId}`);
+    const task = raw ? coerceTask(raw) : null;
+    const round = task?.prototypeReviews?.find(round => round.id === reviewId);
+    if (!task || !round) return change(undefined, task);
+    const before = snapshotTasks([task]);
+    const previous = JSON.stringify(round);
+    const ownGroups = sync?.write.linked.has(task.project)
+      ? snapshotGroups([task], sync.write.linked, taskFingerprint) : undefined;
+    const result = change(round, task);
+    if (JSON.stringify(round) === previous) return result;
+    task.updatedAt = new Date().toISOString();
+    if (sync && ownGroups) {
+      const prior = ownGroups.get(task.id)!;
+      const groupChanged = Object.entries(prior.digests).some(([group, digest]) =>
+        groupDigest(task, group as keyof typeof prior.digests) !== digest);
+      // Poll bookkeeping leaves replicated groups intact. Only a semantic
+      // group change needs the project's watermark; peer views stay shared.
+      const baseline = groupChanged ? loadTasksForList(filePath) : [task];
+      const groups = groupChanged ? snapshotGroups(baseline, sync.write.linked, taskFingerprint) : ownGroups;
+      stampLinkedRows(baseline.map(item => item.id === task.id ? task : item), groups, sync.write, taskFingerprint);
+    }
+    const row = committedRows([task], before, false)[0]!;
+    tx.put(row as TaskStateRow);
+    return result;
+  });
 }
 
 /** Advisory Telegram outcomes are installation-local. Touch one task row and

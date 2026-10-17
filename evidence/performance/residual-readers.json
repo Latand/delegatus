@@ -1,0 +1,894 @@
+{
+  "baseRevision": "d84e0e2e2578075a63024e4d7d08a9070c321c1a",
+  "command": "bun scripts/measure-residual-readers.ts <output.json> <label>",
+  "isolation": "fresh HOME, XDG config/cache/data, TMPDIR, Codex/Claude homes, LLV_STATE_DIR; no LLV_STATE_OWNER; NODE_ENV=test; closed Viewer control URL",
+  "order": [
+    "base-5",
+    "work-5",
+    "base-6",
+    "work-6",
+    "base-7",
+    "work-7"
+  ],
+  "aggregation": "median of the three per-process medians; synchronous durations include scheduling delay; rchar includes counter overhead; bytes/call = bytes/burst divided by 20",
+  "deliverySourceSha256": {
+    "scripts/measure-residual-readers.ts": "aeb4bd3df5dea496979c21b9236bf2fefb27fb069109ea17c095e3943673481c",
+    "src/lib/accounts/migration/coordinator.ts": "90bbdabd8a2417726a6dbddce0eda1fe3caad3033ed23e128b007ff948204a06",
+    "src/lib/agent/accountLiveness.ts": "b69f2f1ff8dca270dac60de6f7411cd47523e0fb5191ca119acb8e529fb08450",
+    "src/lib/agent/receiptReads.test.ts": "15c4ed25e3bb95aa1eb88737726ba14c1c1f9422b59c1438b00fbc8c6eca2538",
+    "src/lib/agent/registry.ts": "4211257e6cfa81f928481dfd08a69cea0630bacc934db9ec18f594f9d34c3a38",
+    "src/lib/agent/sqliteRegistryStore.ts": "0e1352db65836f67fbe1df6235c19d3a54d1e3ba1888b40584579d8b43c6ce6f",
+    "src/lib/boardMaintenance/guard.ts": "244014a7d49dea1e96eb1a55b3c4de943887a9bc0d9bbb1a88fe3c7b318d492e",
+    "src/lib/links/taskSync.test.ts": "ffcc2643a308d7580aa22229a9e44561b3aeb8bbf2358a264c2889704854d631",
+    "src/lib/mcp/bindings.ts": "acdc17de08bce8bb0e88e4c2f40b83e1b78f77631ae00660fc863470ac8af106",
+    "src/lib/memory/controller.ts": "c3c3bb6213ee5305a8d7b62c91180eab5f91815164a27bee21ea48e217f63d19",
+    "src/lib/memory/curation/guard.ts": "c5aed72a5cbc70c7ab7eb724d870be3b0d6e93b1fa86c8f13875b76aef9d18ed",
+    "src/lib/orchestrator/boardReportRun.ts": "18d3521f44749d83a04a8874e1bfd7f1dd50e7639130418690c4a35073c8328f",
+    "src/lib/pipelines/runtimeSwitchRecovery.ts": "b5425aaa47051c6d685cc54d77cbf9716d46a1dfc5e1eb14ab566434c70ead82",
+    "src/lib/prototypeReview/deliveryWorker.test.ts": "ebcc11bc9dffa791d5cc33f7238721b19ebd97131950bbef597fbb5a0e3846d3",
+    "src/lib/prototypeReview/deliveryWorker.ts": "e833e0183f420e4bff70b9708d8801bb48ae84214aae02a662af6c37638e0d06",
+    "src/lib/prototypeReview/http.ts": "a7b846f4cbf0447e4ac042bbb792a3347126fc2e77ddb1ea321a2367c95d606c",
+    "src/lib/prototypeReview/read.ts": "1611309f800a9ab22bc54ee4ca79d8a04a7d6917382866a245007d802adba75d",
+    "src/lib/prototypeReview/seatRounds.ts": "2bbafbbbcfb3e7d97d282ad93da6b540aebdc10134d79648036a444059f81878",
+    "src/lib/prototypeReview/stateReads.test.ts": "0358a9a9c1fbc61549c02be5f0831b4d9dde4bfadd4b9e990acc2edf3fec3b4a",
+    "src/lib/prototypeReview/store.ts": "c4dd6719056911f5c458ed5d04eb655e34270adb1aa66017fbf847656a819c3c",
+    "src/lib/prototypeReview/telegramAnswer.ts": "7037159aa66842feef4b0cce121d27cad0998b8bb35ea00efb54e784b2a6c775",
+    "src/lib/prototypeReview/telegramPost.ts": "73cd3b985afcb6ef835df604b70cf6a36e172de13fe0701961efad754625360e",
+    "src/lib/prototypeReview/world.ts": "13394d9abb12c8ac4ab0fc7d9a923863e2604098ba9c6517b9949f369cd4312b",
+    "src/lib/reaperRuntime.ts": "5cc968b7b956acee2ea4dc7eeb19fded69308ccb0f18dfd6a7c5824b9086e2ac",
+    "src/lib/runtime/agentMessageAuthor.ts": "4952b8e1a3c13a391b8712b164e1597e4611894152447c5c1e66aa8b6d043e4e",
+    "src/lib/runtime/codexSubagentDetection.test.ts": "a1aa916de88cc80880c5e631797229ffe84a1dd6f9be408517188d0da560cb62",
+    "src/lib/runtime/codexSubagentDetection.ts": "965856fbaa583c3bc1b373858eb7662d0fde99fa3620a43e4f902e8a6f112c11",
+    "src/lib/runtime/startup.ts": "1ca2bc5d1abf4648e90ae9619794d367c44779bc5d61d659a958be1a267b9355",
+    "src/lib/runtime/structuredControls.ts": "aa5ea6a3a6d8e80122c2211e59e17cf377171fc8e1f72556507ae2479b817599",
+    "src/lib/runtime/structuredDeliveryController.ts": "a3fc14b523329815b43efee98f049b952f403120feb9894de77b2582ac272b3e",
+    "src/lib/runtime/structuredMessageDelivery.ts": "7f0b41a3830a9a10e30ae9fdc02fdc2151bb5df9edfa85da1a1173b68a9e26e9",
+    "src/lib/scanner/effort.test.ts": "71176b8b4593108815c829c0bd0bba734e7239de5e6f14b4e5b02018d5633604",
+    "src/lib/scanner/effort.ts": "245ffcb62d07441ed7c49550ae6533b183fb88970955d711cf4fa02c118ef8ea",
+    "src/lib/scanner/index.ts": "6c6e6faa24d01b22cd2af919f73961cd11c1e94524807420ac3047d1a6a26e91",
+    "src/lib/scanner/observe.ts": "35fb5100b08f402487aa502f2161701dddc740431e6bfd1f10fad80904529df4",
+    "src/lib/tasks/store.ts": "ca1dccdc7752856161fbd9ccfc096a2abe9f62e4342cba05a3247a8bd0106670"
+  },
+  "summary": {
+    "receipt-ownership": {
+      "synchronousMsPerCall": {
+        "base": 14.839436999999634,
+        "work": 0.04131999999981417
+      },
+      "synchronousMsPerTick": {
+        "base": 302.61941899999965,
+        "work": 0.8480620000000272
+      },
+      "readBytesPerCall": {
+        "base": 242.25,
+        "work": 10.5
+      },
+      "readBytesPerTick": {
+        "base": 4845,
+        "work": 210
+      }
+    },
+    "prototype-round-read": {
+      "synchronousMsPerCall": {
+        "base": 52.18771299999935,
+        "work": 0.054539000000204396
+      },
+      "synchronousMsPerTick": {
+        "base": 1058.3548530000007,
+        "work": 1.1211950000001707
+      },
+      "readBytesPerCall": {
+        "base": 2701.7,
+        "work": 10.5
+      },
+      "readBytesPerTick": {
+        "base": 54034,
+        "work": 210
+      }
+    },
+    "prototype-round-write": {
+      "synchronousMsPerCall": {
+        "base": 154.45394300000044,
+        "work": 6.795554999999695
+      },
+      "synchronousMsPerTick": {
+        "base": 2984.0819980000015,
+        "work": 145.8082430000004
+      },
+      "readBytesPerCall": {
+        "base": 7415815.1,
+        "work": 332259
+      },
+      "readBytesPerTick": {
+        "base": 148316302,
+        "work": 6645180
+      }
+    }
+  },
+  "runs": [
+    {
+      "label": "base-5",
+      "at": "2026-10-17T00:27:38.341Z",
+      "bun": "1.4.0",
+      "fixtureSha256": "b0df54796b164cc9f8e065619345f062f3e586ce11af146ef28218a245a6052b",
+      "load": {
+        "receiptCount": 10971,
+        "taskCount": 1705,
+        "callsPerTick": 20,
+        "ticks": 9,
+        "measuredCallsPerWorkload": 180,
+        "concurrentWriters": 0,
+        "coldReceiptRows": 10951,
+        "registry": {
+          "rows": 10971,
+          "bytes": 35622379
+        },
+        "taskBytes": 4026415
+      },
+      "machine": {
+        "cpuMax": null,
+        "memoryMax": null,
+        "loadavg": "6.90 5.27 6.16 8/4877 1585830"
+      },
+      "sourceSha256": {
+        "src/lib/agent/registry.ts": "21b37ba484f89d45c08859d2029866d234f37d10107502fb1a7395f833a18f3c",
+        "src/lib/agent/sqliteRegistryStore.ts": "f157980d849bac109260734105b88bd63dddd69258fdf7dd6d73a4359bcec47a",
+        "src/lib/agent/registryArchive.ts": "7596ed21464a36ee11b38c82d30b5651b43aaf7afc54d41ef0ae76a4361c7640",
+        "src/lib/tasks/store.ts": "ec35b127953f4752c4e3a50a9b7c71da888e0ff581ab206717785e140776befe",
+        "src/lib/prototypeReview/store.ts": "747255705b4c93ff2a356362ce8f1efee1d9d2a5b0b9bdc39ee5deab5f4da0c8",
+        "src/lib/prototypeReview/deliveryWorker.ts": "7533ac0886cdefea2a18dd831452335c52fbfb9cdf3b43137649d6fab550d5ca",
+        "src/lib/prototypeReview/seatRounds.ts": "39bace70beb09a8b9cb156db4be662536e8c40eaa9a9f9cda41b61675f6fd261",
+        "scripts/measure-residual-readers.ts": "aeb4bd3df5dea496979c21b9236bf2fefb27fb069109ea17c095e3943673481c"
+      },
+      "results": {
+        "receipt-ownership": {
+          "processCpuMs": {
+            "user": 1819.176,
+            "system": 979.675
+          },
+          "synchronousMsPerCall": {
+            "median": 14.729217999999491,
+            "max": 31.09204100000079
+          },
+          "synchronousMsPerTick": {
+            "median": 300.1100659999993,
+            "max": 331.7291070000001
+          },
+          "readBytesPerTick": {
+            "median": 4848,
+            "max": 4924
+          },
+          "readBytesPerCall": {
+            "median": 242.4,
+            "max": 246.2
+          }
+        },
+        "prototype-round-read": {
+          "processCpuMs": {
+            "user": 9220.656,
+            "system": 749.928
+          },
+          "synchronousMsPerCall": {
+            "median": 50.327878000000055,
+            "max": 102.656081000001
+          },
+          "synchronousMsPerTick": {
+            "median": 1051.536999,
+            "max": 1384.5233790000002
+          },
+          "readBytesPerTick": {
+            "median": 54034,
+            "max": 54268
+          },
+          "readBytesPerCall": {
+            "median": 2701.7,
+            "max": 2713.4
+          }
+        },
+        "prototype-round-write": {
+          "processCpuMs": {
+            "user": 23822.11,
+            "system": 1810.201
+          },
+          "synchronousMsPerCall": {
+            "median": 131.11761699999988,
+            "max": 243.81631800000105
+          },
+          "synchronousMsPerTick": {
+            "median": 2712.5436520000003,
+            "max": 3094.012935999999
+          },
+          "readBytesPerTick": {
+            "median": 148315814,
+            "max": 148475758
+          },
+          "readBytesPerCall": {
+            "median": 7415790.7,
+            "max": 7423787.9
+          }
+        }
+      }
+    },
+    {
+      "label": "work-5",
+      "at": "2026-10-17T00:27:43.338Z",
+      "bun": "1.4.0",
+      "fixtureSha256": "b0df54796b164cc9f8e065619345f062f3e586ce11af146ef28218a245a6052b",
+      "load": {
+        "receiptCount": 10971,
+        "taskCount": 1705,
+        "callsPerTick": 20,
+        "ticks": 9,
+        "measuredCallsPerWorkload": 180,
+        "concurrentWriters": 0,
+        "coldReceiptRows": 10951,
+        "registry": {
+          "rows": 10971,
+          "bytes": 35622379
+        },
+        "taskBytes": 4026415
+      },
+      "machine": {
+        "cpuMax": null,
+        "memoryMax": null,
+        "loadavg": "7.07 5.33 6.17 7/4841 1587685"
+      },
+      "sourceSha256": {
+        "src/lib/agent/registry.ts": "4211257e6cfa81f928481dfd08a69cea0630bacc934db9ec18f594f9d34c3a38",
+        "src/lib/agent/sqliteRegistryStore.ts": "0e1352db65836f67fbe1df6235c19d3a54d1e3ba1888b40584579d8b43c6ce6f",
+        "src/lib/agent/registryArchive.ts": "7596ed21464a36ee11b38c82d30b5651b43aaf7afc54d41ef0ae76a4361c7640",
+        "src/lib/tasks/store.ts": "ca1dccdc7752856161fbd9ccfc096a2abe9f62e4342cba05a3247a8bd0106670",
+        "src/lib/prototypeReview/store.ts": "c4dd6719056911f5c458ed5d04eb655e34270adb1aa66017fbf847656a819c3c",
+        "src/lib/prototypeReview/deliveryWorker.ts": "e833e0183f420e4bff70b9708d8801bb48ae84214aae02a662af6c37638e0d06",
+        "src/lib/prototypeReview/seatRounds.ts": "2bbafbbbcfb3e7d97d282ad93da6b540aebdc10134d79648036a444059f81878",
+        "scripts/measure-residual-readers.ts": "aeb4bd3df5dea496979c21b9236bf2fefb27fb069109ea17c095e3943673481c"
+      },
+      "results": {
+        "receipt-ownership": {
+          "processCpuMs": {
+            "user": 18.451,
+            "system": 1.812
+          },
+          "synchronousMsPerCall": {
+            "median": 0.04120999999986452,
+            "max": 1.2770810000001802
+          },
+          "synchronousMsPerTick": {
+            "median": 0.8448849999999766,
+            "max": 2.743133999999827
+          },
+          "readBytesPerTick": {
+            "median": 210,
+            "max": 210
+          },
+          "readBytesPerCall": {
+            "median": 10.5,
+            "max": 10.5
+          }
+        },
+        "prototype-round-read": {
+          "processCpuMs": {
+            "user": 16.246,
+            "system": 1.677
+          },
+          "synchronousMsPerCall": {
+            "median": 0.0534059999999954,
+            "max": 0.11384300000008807
+          },
+          "synchronousMsPerTick": {
+            "median": 1.0957519999997203,
+            "max": 1.3531520000001365
+          },
+          "readBytesPerTick": {
+            "median": 210,
+            "max": 210
+          },
+          "readBytesPerCall": {
+            "median": 10.5,
+            "max": 10.5
+          }
+        },
+        "prototype-round-write": {
+          "processCpuMs": {
+            "user": 1076.014,
+            "system": 58.387
+          },
+          "synchronousMsPerCall": {
+            "median": 5.999152999999751,
+            "max": 27.52909499999987
+          },
+          "synchronousMsPerTick": {
+            "median": 128.06502200000068,
+            "max": 155.70451400000002
+          },
+          "readBytesPerTick": {
+            "median": 6645179,
+            "max": 6837690
+          },
+          "readBytesPerCall": {
+            "median": 332258.95,
+            "max": 341884.5
+          }
+        }
+      }
+    },
+    {
+      "label": "base-6",
+      "at": "2026-10-17T00:28:37.533Z",
+      "bun": "1.4.0",
+      "fixtureSha256": "b0df54796b164cc9f8e065619345f062f3e586ce11af146ef28218a245a6052b",
+      "load": {
+        "receiptCount": 10971,
+        "taskCount": 1705,
+        "callsPerTick": 20,
+        "ticks": 9,
+        "measuredCallsPerWorkload": 180,
+        "concurrentWriters": 0,
+        "coldReceiptRows": 10951,
+        "registry": {
+          "rows": 10971,
+          "bytes": 35622379
+        },
+        "taskBytes": 4026415
+      },
+      "machine": {
+        "cpuMax": null,
+        "memoryMax": null,
+        "loadavg": "8.70 6.10 6.39 6/4920 1614840"
+      },
+      "sourceSha256": {
+        "src/lib/agent/registry.ts": "21b37ba484f89d45c08859d2029866d234f37d10107502fb1a7395f833a18f3c",
+        "src/lib/agent/sqliteRegistryStore.ts": "f157980d849bac109260734105b88bd63dddd69258fdf7dd6d73a4359bcec47a",
+        "src/lib/agent/registryArchive.ts": "7596ed21464a36ee11b38c82d30b5651b43aaf7afc54d41ef0ae76a4361c7640",
+        "src/lib/tasks/store.ts": "ec35b127953f4752c4e3a50a9b7c71da888e0ff581ab206717785e140776befe",
+        "src/lib/prototypeReview/store.ts": "747255705b4c93ff2a356362ce8f1efee1d9d2a5b0b9bdc39ee5deab5f4da0c8",
+        "src/lib/prototypeReview/deliveryWorker.ts": "7533ac0886cdefea2a18dd831452335c52fbfb9cdf3b43137649d6fab550d5ca",
+        "src/lib/prototypeReview/seatRounds.ts": "39bace70beb09a8b9cb156db4be662536e8c40eaa9a9f9cda41b61675f6fd261",
+        "scripts/measure-residual-readers.ts": "aeb4bd3df5dea496979c21b9236bf2fefb27fb069109ea17c095e3943673481c"
+      },
+      "results": {
+        "receipt-ownership": {
+          "processCpuMs": {
+            "user": 1981.919,
+            "system": 1242.906
+          },
+          "synchronousMsPerCall": {
+            "median": 14.839436999999634,
+            "max": 34.53151000000071
+          },
+          "synchronousMsPerTick": {
+            "median": 302.61941899999965,
+            "max": 450.1642529999999
+          },
+          "readBytesPerTick": {
+            "median": 4845,
+            "max": 4883
+          },
+          "readBytesPerCall": {
+            "median": 242.25,
+            "max": 244.15
+          }
+        },
+        "prototype-round-read": {
+          "processCpuMs": {
+            "user": 11877.463,
+            "system": 1071.278
+          },
+          "synchronousMsPerCall": {
+            "median": 63.24675099999877,
+            "max": 116.29535599999872
+          },
+          "synchronousMsPerTick": {
+            "median": 1553.8064630000008,
+            "max": 1917.712204000003
+          },
+          "readBytesPerTick": {
+            "median": 53797,
+            "max": 54031
+          },
+          "readBytesPerCall": {
+            "median": 2689.85,
+            "max": 2701.55
+          }
+        },
+        "prototype-round-write": {
+          "processCpuMs": {
+            "user": 28355.025,
+            "system": 2044.937
+          },
+          "synchronousMsPerCall": {
+            "median": 154.45394300000044,
+            "max": 319.1727030000002
+          },
+          "synchronousMsPerTick": {
+            "median": 2984.0819980000015,
+            "max": 3997.5918459999994
+          },
+          "readBytesPerTick": {
+            "median": 148316326,
+            "max": 148475916
+          },
+          "readBytesPerCall": {
+            "median": 7415816.3,
+            "max": 7423795.8
+          }
+        }
+      }
+    },
+    {
+      "label": "work-6",
+      "at": "2026-10-17T00:28:42.991Z",
+      "bun": "1.4.0",
+      "fixtureSha256": "b0df54796b164cc9f8e065619345f062f3e586ce11af146ef28218a245a6052b",
+      "load": {
+        "receiptCount": 10971,
+        "taskCount": 1705,
+        "callsPerTick": 20,
+        "ticks": 9,
+        "measuredCallsPerWorkload": 180,
+        "concurrentWriters": 0,
+        "coldReceiptRows": 10951,
+        "registry": {
+          "rows": 10971,
+          "bytes": 35622379
+        },
+        "taskBytes": 4026415
+      },
+      "machine": {
+        "cpuMax": null,
+        "memoryMax": null,
+        "loadavg": "8.65 6.13 6.40 9/4899 1614894"
+      },
+      "sourceSha256": {
+        "src/lib/agent/registry.ts": "4211257e6cfa81f928481dfd08a69cea0630bacc934db9ec18f594f9d34c3a38",
+        "src/lib/agent/sqliteRegistryStore.ts": "0e1352db65836f67fbe1df6235c19d3a54d1e3ba1888b40584579d8b43c6ce6f",
+        "src/lib/agent/registryArchive.ts": "7596ed21464a36ee11b38c82d30b5651b43aaf7afc54d41ef0ae76a4361c7640",
+        "src/lib/tasks/store.ts": "ca1dccdc7752856161fbd9ccfc096a2abe9f62e4342cba05a3247a8bd0106670",
+        "src/lib/prototypeReview/store.ts": "c4dd6719056911f5c458ed5d04eb655e34270adb1aa66017fbf847656a819c3c",
+        "src/lib/prototypeReview/deliveryWorker.ts": "e833e0183f420e4bff70b9708d8801bb48ae84214aae02a662af6c37638e0d06",
+        "src/lib/prototypeReview/seatRounds.ts": "2bbafbbbcfb3e7d97d282ad93da6b540aebdc10134d79648036a444059f81878",
+        "scripts/measure-residual-readers.ts": "aeb4bd3df5dea496979c21b9236bf2fefb27fb069109ea17c095e3943673481c"
+      },
+      "results": {
+        "receipt-ownership": {
+          "processCpuMs": {
+            "user": 39.696,
+            "system": 0.858
+          },
+          "synchronousMsPerCall": {
+            "median": 0.050623000000086904,
+            "max": 2.49971400000004
+          },
+          "synchronousMsPerTick": {
+            "median": 1.0805770000001758,
+            "max": 3.7568130000004203
+          },
+          "readBytesPerTick": {
+            "median": 210,
+            "max": 248
+          },
+          "readBytesPerCall": {
+            "median": 10.5,
+            "max": 12.4
+          }
+        },
+        "prototype-round-read": {
+          "processCpuMs": {
+            "user": 19.276,
+            "system": 0.619
+          },
+          "synchronousMsPerCall": {
+            "median": 0.054539000000204396,
+            "max": 0.14596399999982168
+          },
+          "synchronousMsPerTick": {
+            "median": 1.169010999999955,
+            "max": 1.4913339999998243
+          },
+          "readBytesPerTick": {
+            "median": 210,
+            "max": 210
+          },
+          "readBytesPerCall": {
+            "median": 10.5,
+            "max": 10.5
+          }
+        },
+        "prototype-round-write": {
+          "processCpuMs": {
+            "user": 1203.82,
+            "system": 80.851
+          },
+          "synchronousMsPerCall": {
+            "median": 6.795554999999695,
+            "max": 11.7208270000001
+          },
+          "synchronousMsPerTick": {
+            "median": 145.8082430000004,
+            "max": 172.5505430000003
+          },
+          "readBytesPerTick": {
+            "median": 6645180,
+            "max": 6837683
+          },
+          "readBytesPerCall": {
+            "median": 332259,
+            "max": 341884.15
+          }
+        }
+      }
+    },
+    {
+      "label": "base-7",
+      "at": "2026-10-17T00:29:34.603Z",
+      "bun": "1.4.0",
+      "fixtureSha256": "b0df54796b164cc9f8e065619345f062f3e586ce11af146ef28218a245a6052b",
+      "load": {
+        "receiptCount": 10971,
+        "taskCount": 1705,
+        "callsPerTick": 20,
+        "ticks": 9,
+        "measuredCallsPerWorkload": 180,
+        "concurrentWriters": 0,
+        "coldReceiptRows": 10951,
+        "registry": {
+          "rows": 10971,
+          "bytes": 35622379
+        },
+        "taskBytes": 4026415
+      },
+      "machine": {
+        "cpuMax": null,
+        "memoryMax": null,
+        "loadavg": "8.83 6.55 6.53 7/4929 1617524"
+      },
+      "sourceSha256": {
+        "src/lib/agent/registry.ts": "21b37ba484f89d45c08859d2029866d234f37d10107502fb1a7395f833a18f3c",
+        "src/lib/agent/sqliteRegistryStore.ts": "f157980d849bac109260734105b88bd63dddd69258fdf7dd6d73a4359bcec47a",
+        "src/lib/agent/registryArchive.ts": "7596ed21464a36ee11b38c82d30b5651b43aaf7afc54d41ef0ae76a4361c7640",
+        "src/lib/tasks/store.ts": "ec35b127953f4752c4e3a50a9b7c71da888e0ff581ab206717785e140776befe",
+        "src/lib/prototypeReview/store.ts": "747255705b4c93ff2a356362ce8f1efee1d9d2a5b0b9bdc39ee5deab5f4da0c8",
+        "src/lib/prototypeReview/deliveryWorker.ts": "7533ac0886cdefea2a18dd831452335c52fbfb9cdf3b43137649d6fab550d5ca",
+        "src/lib/prototypeReview/seatRounds.ts": "39bace70beb09a8b9cb156db4be662536e8c40eaa9a9f9cda41b61675f6fd261",
+        "scripts/measure-residual-readers.ts": "aeb4bd3df5dea496979c21b9236bf2fefb27fb069109ea17c095e3943673481c"
+      },
+      "results": {
+        "receipt-ownership": {
+          "processCpuMs": {
+            "user": 1977.237,
+            "system": 1041.942
+          },
+          "synchronousMsPerCall": {
+            "median": 15.671615000000202,
+            "max": 36.205133999999816
+          },
+          "synchronousMsPerTick": {
+            "median": 318.43307599999935,
+            "max": 362.0060590000003
+          },
+          "readBytesPerTick": {
+            "median": 4845,
+            "max": 4921
+          },
+          "readBytesPerCall": {
+            "median": 242.25,
+            "max": 246.05
+          }
+        },
+        "prototype-round-read": {
+          "processCpuMs": {
+            "user": 9309.078,
+            "system": 690.501
+          },
+          "synchronousMsPerCall": {
+            "median": 52.18771299999935,
+            "max": 71.42631700000129
+          },
+          "synchronousMsPerTick": {
+            "median": 1058.3548530000007,
+            "max": 1179.9665080000013
+          },
+          "readBytesPerTick": {
+            "median": 54148,
+            "max": 54343
+          },
+          "readBytesPerCall": {
+            "median": 2707.4,
+            "max": 2717.15
+          }
+        },
+        "prototype-round-write": {
+          "processCpuMs": {
+            "user": 29083.406,
+            "system": 2057.8
+          },
+          "synchronousMsPerCall": {
+            "median": 163.9185559999969,
+            "max": 247.1935850000009
+          },
+          "synchronousMsPerTick": {
+            "median": 3256.3318629999994,
+            "max": 3491.4532560000007
+          },
+          "readBytesPerTick": {
+            "median": 148316302,
+            "max": 148476076
+          },
+          "readBytesPerCall": {
+            "median": 7415815.1,
+            "max": 7423803.8
+          }
+        }
+      }
+    },
+    {
+      "label": "work-7",
+      "at": "2026-10-17T00:29:40.360Z",
+      "bun": "1.4.0",
+      "fixtureSha256": "b0df54796b164cc9f8e065619345f062f3e586ce11af146ef28218a245a6052b",
+      "load": {
+        "receiptCount": 10971,
+        "taskCount": 1705,
+        "callsPerTick": 20,
+        "ticks": 9,
+        "measuredCallsPerWorkload": 180,
+        "concurrentWriters": 0,
+        "coldReceiptRows": 10951,
+        "registry": {
+          "rows": 10971,
+          "bytes": 35622379
+        },
+        "taskBytes": 4026415
+      },
+      "machine": {
+        "cpuMax": null,
+        "memoryMax": null,
+        "loadavg": "8.87 6.63 6.55 11/4920 1617634"
+      },
+      "sourceSha256": {
+        "src/lib/agent/registry.ts": "4211257e6cfa81f928481dfd08a69cea0630bacc934db9ec18f594f9d34c3a38",
+        "src/lib/agent/sqliteRegistryStore.ts": "0e1352db65836f67fbe1df6235c19d3a54d1e3ba1888b40584579d8b43c6ce6f",
+        "src/lib/agent/registryArchive.ts": "7596ed21464a36ee11b38c82d30b5651b43aaf7afc54d41ef0ae76a4361c7640",
+        "src/lib/tasks/store.ts": "ca1dccdc7752856161fbd9ccfc096a2abe9f62e4342cba05a3247a8bd0106670",
+        "src/lib/prototypeReview/store.ts": "c4dd6719056911f5c458ed5d04eb655e34270adb1aa66017fbf847656a819c3c",
+        "src/lib/prototypeReview/deliveryWorker.ts": "e833e0183f420e4bff70b9708d8801bb48ae84214aae02a662af6c37638e0d06",
+        "src/lib/prototypeReview/seatRounds.ts": "2bbafbbbcfb3e7d97d282ad93da6b540aebdc10134d79648036a444059f81878",
+        "scripts/measure-residual-readers.ts": "aeb4bd3df5dea496979c21b9236bf2fefb27fb069109ea17c095e3943673481c"
+      },
+      "results": {
+        "receipt-ownership": {
+          "processCpuMs": {
+            "user": 21.691,
+            "system": 0.864
+          },
+          "synchronousMsPerCall": {
+            "median": 0.04131999999981417,
+            "max": 1.8813789999999244
+          },
+          "synchronousMsPerTick": {
+            "median": 0.8480620000000272,
+            "max": 3.3486649999999827
+          },
+          "readBytesPerTick": {
+            "median": 210,
+            "max": 248
+          },
+          "readBytesPerCall": {
+            "median": 10.5,
+            "max": 12.4
+          }
+        },
+        "prototype-round-read": {
+          "processCpuMs": {
+            "user": 18.478,
+            "system": 3.152
+          },
+          "synchronousMsPerCall": {
+            "median": 0.05548399999997855,
+            "max": 0.9148069999996551
+          },
+          "synchronousMsPerTick": {
+            "median": 1.1211950000001707,
+            "max": 2.1589869999997973
+          },
+          "readBytesPerTick": {
+            "median": 210,
+            "max": 248
+          },
+          "readBytesPerCall": {
+            "median": 10.5,
+            "max": 12.4
+          }
+        },
+        "prototype-round-write": {
+          "processCpuMs": {
+            "user": 1432.27,
+            "system": 108.163
+          },
+          "synchronousMsPerCall": {
+            "median": 8.065424999999777,
+            "max": 13.687372999999752
+          },
+          "synchronousMsPerTick": {
+            "median": 162.30738699999984,
+            "max": 202.43618199999946
+          },
+          "readBytesPerTick": {
+            "median": 6645186,
+            "max": 6837696
+          },
+          "readBytesPerCall": {
+            "median": 332259.3,
+            "max": 341884.8
+          }
+        }
+      }
+    }
+  ],
+  "verification": {
+    "testCommand": "bun test <explicit test file>, one isolated process per file through scripts/gate-slot.sh",
+    "testFiles": {
+      "src/lib/accounts/migration/coordinatorNeverStarted.test.ts": "pass",
+      "src/lib/accounts/migration/coordinatorNoOpInventory.test.ts": "pass",
+      "src/lib/accounts/migration/coordinatorTurnAuthority.test.ts": "pass",
+      "src/lib/agent/accountLiveness.test.ts": "pass",
+      "src/lib/agent/identityMaterialization.test.ts": "pass",
+      "src/lib/agent/receiptReads.test.ts": "pass",
+      "src/lib/agent/registry.spawnCapabilityHandover.test.ts": "pass",
+      "src/lib/agent/registry.sqlite.test.ts": "pass",
+      "src/lib/agent/sqliteRegistryStore.keyedWrites.test.ts": "pass",
+      "src/lib/agent/sqliteRegistryStore.readOnlyView.test.ts": "pass",
+      "src/lib/agent/sqliteRegistryStore.refresh.test.ts": "pass",
+      "src/lib/links/taskSync.test.ts": "pass",
+      "src/lib/mcp/bindings.test.ts": "same failure on base",
+      "src/lib/memory/controller.test.ts": "pass",
+      "src/lib/orchestrator/boardReportRun.test.ts": "pass",
+      "src/lib/prototypeReview/decision.integration.test.ts": "pass",
+      "src/lib/prototypeReview/decision.test.ts": "pass",
+      "src/lib/prototypeReview/deliveryWorker.test.ts": "pass",
+      "src/lib/prototypeReview/fences.test.ts": "pass",
+      "src/lib/prototypeReview/http.test.ts": "pass",
+      "src/lib/prototypeReview/mcpReceipts.test.ts": "pass",
+      "src/lib/prototypeReview/seatDecisions.test.ts": "pass",
+      "src/lib/prototypeReview/stateReads.test.ts": "pass",
+      "src/lib/prototypeReview/telegramAnswer.test.ts": "pass",
+      "src/lib/prototypeReview/telegramPost.test.ts": "pass",
+      "src/lib/reaperRuntime.test.ts": "pass",
+      "src/lib/runtime/codexSubagentDetection.test.ts": "pass",
+      "src/lib/runtime/startup.handoverRetry.test.ts": "pass",
+      "src/lib/runtime/startup.quarantine.test.ts": "pass",
+      "src/lib/runtime/startup.test.ts": "same failures on base",
+      "src/lib/runtime/startupFinalization.integration.test.ts": "same failures on base",
+      "src/lib/runtime/startupRowRetries.test.ts": "pass",
+      "src/lib/runtime/startupStatus.test.ts": "pass",
+      "src/lib/runtime/structuredControls.test.ts": "pass",
+      "src/lib/runtime/structuredDeliveryController.test.ts": "pass",
+      "src/lib/runtime/structuredMessageDelivery.keyed.test.ts": "pass",
+      "src/lib/runtime/structuredMessageDelivery.test.ts": "pass",
+      "src/lib/scanner/effort.test.ts": "pass"
+    },
+    "baselineComparisons": {
+      "src/lib/mcp/bindings.test.ts": {
+        "base": "106 pass, 1 fail",
+        "candidate": "106 pass, 1 fail",
+        "cause": "placement fixture expects empty stderr; existing deferred migration warning is present"
+      },
+      "src/lib/runtime/startup.test.ts": {
+        "base": "145 pass, 4 fail",
+        "candidate": "145 pass, 4 fail",
+        "cause": "same scheduled retry, delivered spawn settlement, pipeline retry and deferred-evidence assertions"
+      },
+      "src/lib/runtime/startupFinalization.integration.test.ts": {
+        "base": "21 pass, 2 fail",
+        "candidate": "21 pass, 2 fail",
+        "cause": "same empty-stderr assertions with an existing state ownership warning"
+      }
+    },
+    "runtimeHarness": "Existing Viewer verifier in the scratch export: TMPDIR is the whole private sandbox; socket paths retain the owned process-fd alias and refuse an external temporary-directory fallback.",
+    "build": {
+      "command": "bun run build",
+      "exitCode": 0
+    },
+    "viewer": {
+      "command": "bun scripts/verify-viewer-runtime.ts",
+      "result": {
+        "checkedAt": "2026-10-17T00:33:25.699Z",
+        "runtime": "bun 1.4.0",
+        "modules": {
+          "probed": 25,
+          "loaded": 25,
+          "failures": []
+        },
+        "served": {
+          "status": 200,
+          "bytes": 82416,
+          "readyMs": 3210
+        },
+        "ok": true
+      }
+    },
+    "compiledCodexSocket": {
+      "command": "bun scripts/verify-viewer-runtime.ts --codex-socket",
+      "result": {
+        "ok": true,
+        "runtime": "bun 1.4.0",
+        "process": "Viewer (compiled Next server, .next/server)",
+        "evidence": {
+          "entry": ".next/server/app/api/account-migrations/[intentId]/route.js",
+          "module": "898387",
+          "frameBytes": 1083,
+          "roundTripMs": 1
+        }
+      }
+    },
+    "runtimeHost": {
+      "command": "bun scripts/verify-runtime-host.ts",
+      "result": {
+        "checkedAt": "2026-10-17T00:33:35.254Z",
+        "runtime": "bun 1.4.0",
+        "succession": {
+          "predecessorReadyMs": 508,
+          "successorTookOverMs": 503,
+          "completed": true
+        },
+        "listener": {
+          "windowMs": 15000,
+          "polls": 27,
+          "answered": 27,
+          "abandoned": 13
+        },
+        "socket": {
+          "polls": 27,
+          "answered": 27,
+          "abandoned": 13
+        },
+        "ok": true
+      }
+    },
+    "nativeCodex": {
+      "command": "bun scripts/verify-native-codex-runtime.ts <pinned CLI> --engine-only, plus --shared-only",
+      "results": [
+        [
+          "catalog-test",
+          0
+        ],
+        [
+          "worker-restart-test",
+          0
+        ],
+        [
+          "runtime-host",
+          0
+        ],
+        [
+          "native-0.154.0",
+          0
+        ],
+        [
+          "native-0.159.0",
+          0
+        ],
+        [
+          "native-shared",
+          0
+        ]
+      ]
+    },
+    "typecheck": {
+      "command": "node node_modules/typescript/bin/tsc --noEmit",
+      "exitCode": 0
+    },
+    "lint": {
+      "command": "node node_modules/eslint/bin/eslint.js <changed TypeScript files>",
+      "exitCode": 0
+    },
+    "privacyTrackerFixtures": {
+      "command": "bun test scripts/privacy-publication-gate.test.ts -t GitHub",
+      "result": "17 pass, 0 fail; English and Ukrainian OCR available"
+    },
+    "privacyPublication": {
+      "command": "bun run privacy:check",
+      "result": "PRIVACY GATE: PASS"
+    }
+  }
+}

@@ -1,3 +1,4 @@
+import { registryRowsMatching } from "@/lib/agent/sqliteRegistryStore";
 import { detachCodexHostForViewerRestart } from "./registry";
 import { spawnDiagnosticErrorForRegistry } from "@/lib/agent/spawnDiagnostics";
 import { creditGuardBlock } from "@/lib/accounts/creditGuard";
@@ -1168,7 +1169,7 @@ export async function bindStructuredDeliveryQueue(
       if (!await durableAuthority() || !idleAuthority()) return false;
       const settleKilledLaunches = async () => {
         const reason = "structured launch host was intentionally terminated";
-        for (const receipt of Object.values(registry.readOnlySnapshot().receipts)) {
+        for (const receipt of registryRowsMatching(registry.readOnlySnapshot(), "receipts", "conversationId", conversationId)) {
           if (receipt.transport !== "structured" || receipt.conversationId !== conversationId
             || !receipt.key || sessionKeyId(receipt.key) !== sessionKeyId(expectedKey)
             || receipt.state === "completed" || receipt.state === "conflicted"

@@ -1,3 +1,4 @@
+import { registryRowsMatching } from "@/lib/agent/sqliteRegistryStore";
 import type { RegistryFile } from "@/lib/agent/registry";
 import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
 import { conversationProjectKey } from "@/lib/accounts/conversationProject";
@@ -34,7 +35,7 @@ export function agentMessageOrigin(
   const conversation = conversationId?.startsWith("conversation_")
     ? snapshot.conversations[conversationId as ViewerConversationId] : undefined;
   const receipt = !conversation && conversationId
-    ? Object.values(snapshot.receipts).find((row) => row.conversationId === conversationId)
+    ? registryRowsMatching(snapshot, "receipts", "conversationId", conversationId)[0]
     : undefined;
   const profile = conversation?.generations.at(-1)?.launchProfile ?? receipt?.launchProfile;
   const cwd = profile?.cwd ?? receipt?.cwd;

@@ -289,3 +289,46 @@ test("retries the runtime admits that each end failed keep their failure history
   expect(stored(id).delivery.failures).toBeUndefined(); expect(stored(id).delivery.failingSince).toBeUndefined();
   expect((await shown(id)).delivery.phase).toBe("delivered");
 });
+
+
+test("bounded delivery passes rotate permanently due decisions and recover after worker reset", async () => {
+  const roundId = (n: number) => `pr_${n.toString(16).padStart(32, "0")}`;
+  const seed = await publish("bounded-seed");
+  const { ports, state } = seat();
+  decidePrototype(request(), TASK, { reviewId: seed, chosen: [1], comment: "" }, ports.world);
+  const template = loadTasks()[0]!;
+  const round = template.prototypeReviews![0]!;
+  saveTasks(Array.from({ length: 40 }, (_, n) => ({ ...template, id: `bounded-${n}`,
+    prototypeReviews: [{ ...round, id: roundId(n), taskId: `bounded-${n}`,
+      decision: { ...round.decision!, delivery: { ...round.decision!.delivery, clientMessageId: `bounded-${n}`, operationId: `operation-${n}` } } }] })));
+  const seen: string[] = [];
+  ports.delivery = { recover: async decision => { seen.push(decision.delivery.clientMessageId); return { state: "pending" }; },
+    send: async () => { throw new Error("already admitted"); }, retry: async () => { throw new Error("already pending"); } };
+  for (let pass = 0; pass < 6; pass++) {
+    const before = seen.length;
+    await sweepPrototypeDeliveries(ports, { force: true, limit: 16 });
+    expect(seen.length - before).toBeLessThanOrEqual(16);
+  }
+  expect(new Set(seen).size).toBe(40);
+  await resetPrototypeDeliveryWorkerForTests();
+  seen.length = 0;
+  await sweepPrototypeDeliveries(ports, { force: true, limit: 16 });
+  expect(seen).toHaveLength(16);
+  expect(state.sends).toHaveLength(0);
+  const childSource = `
+    import { sweepPrototypeDeliveries } from ${JSON.stringify(new URL("./deliveryWorker.ts", import.meta.url).pathname)};
+    const counts = []; let calls = 0;
+    const ports = { now: () => Date.parse("2030-01-01T00:00:00.000Z"),
+      world: { orchestrator: () => "conversation_seat" },
+      delivery: { recover: async decision => { calls++; return { state: "pending", operationId: decision.delivery.operationId }; },
+        send: async () => { throw new Error("already admitted"); }, retry: async () => { throw new Error("already pending"); } } };
+    for (let n = 0; n < 2; n++) { const before = calls; await sweepPrototypeDeliveries(ports, { force: true, limit: 16 }); counts.push(calls-before); }
+    console.log(JSON.stringify({ counts }));
+  `;
+  for (let restart = 0; restart < 2; restart++) {
+    const child = Bun.spawnSync([process.execPath, "-e", childSource], { env: { ...process.env }, stdout: "pipe", stderr: "pipe", timeout: 10_000 });
+    expect(child.exitCode).toBe(0);
+    const result = JSON.parse(new TextDecoder().decode(child.stdout)) as { counts: number[] };
+    expect(result.counts).toEqual([16, 16]);
+  }
+});

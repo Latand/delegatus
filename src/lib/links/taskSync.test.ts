@@ -1,5 +1,6 @@
-import { afterEach, expect, spyOn, test } from "bun:test";
+import { afterEach, expect, spyOn, setSystemTime, test } from "bun:test";
 import { spawnSync } from "node:child_process";
+import { taskRevision } from "@/lib/tasks/revision";
 import type { TaskWithRevision } from "@/lib/tasks/revision";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
@@ -8,7 +9,7 @@ import path from "node:path";
 
 import { projectIdentityFromRemote } from "@/lib/projects/identity";
 import { deleteTask, patchTask, createTask } from "@/lib/tasks/commands";
-import { loadTasks, loadTasksFile, mutateTasksFile, mutateTasks, mutateLinkedTasks, taskFeedSource } from "@/lib/tasks/store";
+import { loadTasks, loadTasksFile, mutateTasksFile, mutateTasks, mutateLinkedTasks, taskFeedSource, mutateTaskPrototypeRound } from "@/lib/tasks/store";
 import { BOARD_TASKS_PER_PROJECT_LIMIT } from "@/lib/tasks/commands";
 import { countBoardTasks, DONE_TASK_BOARD_RETENTION_MS } from "@/lib/tasks/boardVisibility";
 import { type BoardTask } from "@/lib/tasks/types";
@@ -39,6 +40,7 @@ afterEach(() => {
   if (original.config === undefined) delete process.env.XDG_CONFIG_HOME; else process.env.XDG_CONFIG_HOME = original.config;
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
   resetRowBudgetsForTests();
+  setSystemTime();
 });
 
 /** An install that shares `key` with one linked peer, without any network. */
@@ -576,4 +578,34 @@ test("peer arrivals preserve membership, bound bands, and repair legacy done arr
   expect(readStateCollectionRevision(db, "tasks")).toBe(afterChoice);
   expect(find(file, legacy.id)!.board).toBeUndefined();
   expect(loadTasksFile(file).recentCreates).toEqual(receipts);
+});
+
+
+test("a bounded prototype write retains linked watermarks, no-op revisions and peer rows", () => {
+  setSystemTime(new Date("2026-10-01T00:00:00.000Z"));
+  const { file } = linkedInstall();
+  const task = create(file, "Prototype task");
+  const round: PrototypeReviewRound = { id: `pr_${"c".repeat(32)}`, taskId: task.id, project: key, title: "Layout",
+    createdAt: "2026-10-01T00:00:00.000Z", source: { conversationId: null }, publicationKey: "fixture", inputDigest: "fixture", variants: [] };
+  mutateTasks(tasks => { tasks.find(t => t.id === task.id)!.prototypeReviews = [round]; return { tasks, result: undefined }; }, file);
+  const future = peerRow({ id: THIRD, text: "Future peer" }, Date.parse("2026-10-01T00:00:01.000Z"));
+  expect(applyTaskRows([decodeWireRow(future)], peerLink, { filePath: file }).changed).toBe(1);
+  const peer = find(file, future.id)!;
+  const initial = find(file, task.id)!;
+  mutateTaskPrototypeRound(task.id, round.id, held => { held!.title = "Updated layout"; }, file);
+  const changed = find(file, task.id)!;
+  expect(changed.prototypeReviews![0]!.title).toBe("Updated layout");
+  expect(changed.sync!.s.text! > peer.sync!.s.text!).toBe(true);
+  expect(taskRevision(changed)).not.toBe(taskRevision(initial));
+  expect(find(file, peer.id)).toEqual(peer);
+  mutateTaskPrototypeRound(task.id, round.id, () => {}, file);
+  expect(find(file, task.id)).toEqual(changed);
+  expect(() => mutateTaskPrototypeRound(task.id, round.id, held => { held!.title = "Discarded"; throw new Error("refused"); }, file)).toThrow("refused");
+  expect(find(file, task.id)).toEqual(changed);
+  mutateTaskPrototypeRound(task.id, round.id, held => {
+    held!.telegramPost = { key: "fixture-post", state: "sent", at: "2026-10-01T00:00:00.000Z" };
+  }, file);
+  const bookkeeping = find(file, task.id)!;
+  expect(bookkeeping.sync!.s).toEqual(changed.sync!.s);
+  expect(find(file, peer.id)).toEqual(peer);
 });

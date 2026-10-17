@@ -84,6 +84,13 @@ export function loadSeatRounds(project?: string): PrototypeReviewRound[] {
     .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
 }
 
+/** Keyset page for the background worker; cold reads decode at most sixteen
+    rounds, and a resumed cursor never needs a collection snapshot. */
+export function seatRoundPage(after = "", limit = 16): PrototypeReviewRound[] {
+  if (!Number.isInteger(limit) || limit < 1 || limit > 16) throw new Error("invalid seat round page limit");
+  return collection("read")?.keyRange(after, "\uffff", limit) ?? [];
+}
+
 export function findSeatRound(reviewId: string): PrototypeReviewRound | undefined {
   return collection("read")?.get(reviewId) ?? undefined;
 }
