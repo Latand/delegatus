@@ -35,9 +35,13 @@ function yourValue(row: ActivityProjectRow, unread: boolean, locale: Locale, t: 
   return `${row.coverage.complete ? "" : "≥ "}${hoursText(row.humanHours, locale, t)}`;
 }
 
-export function ActivityProjectPicker({ data, names, selected, unread, onSelect, locale, t }: {
-  data: ActivityResponse;
-  names: ReadonlyMap<string | null, string>;
+export function ActivityProjectPicker({ data, names, entries, selected, unread, onSelect, locale, t }: {
+  data?: ActivityResponse;
+  names?: ReadonlyMap<string | null, string>;
+  /** Rows given by the caller in place of the time report's projects (the
+      token prototype, docs/design/activity-token-usage.md §9), already in
+      their order, each with the value it prints. */
+  entries?: ReadonlyArray<{ project: string; label: string; value: string }>;
   selected: string | null;
   /** None of your input was read for the range. */
   unread: boolean;
@@ -54,20 +58,20 @@ export function ActivityProjectPicker({ data, names, selected, unread, onSelect,
 
   /* The projects the list draws, in its default order: your reported hours,
      then agent time. A row with no project cannot be chosen. */
-  const rows = useMemo(() => data.projects
+  const rows: ReadonlyArray<{ project: string; label: string; value: string }> = useMemo(() => entries ?? (data?.projects ?? [])
     .filter((row) => row.project !== null && (row.humanMs > 0 || row.wallMs > 0 || row.requests > 0 || !row.coverage.complete))
-    .sort((a, b) => b.humanHours - a.humanHours || b.humanMs - a.humanMs || b.wallMs - a.wallMs), [data.projects]);
+    .sort((a, b) => b.humanHours - a.humanHours || b.humanMs - a.humanMs || b.wallMs - a.wallMs)
+    .map((row) => ({
+      project: row.project!,
+      label: names?.get(row.project) ?? row.project!,
+      value: `${yourValue(row, unread, locale, t)} · ${approxAtLeast(row.wallMs, !row.agentCoverage.complete, t)}`,
+    })), [entries, data, names, unread, locale, t]);
   const options: Option[] = useMemo(() => {
     const matched = rows
-      .map((row) => ({ row, label: names.get(row.project) ?? row.project! }))
-      .filter(({ row, label }) => matchesProject(label, row.project!, query))
-      .map(({ row, label }) => ({
-        project: row.project,
-        label,
-        value: `${yourValue(row, unread, locale, t)} · ${approxAtLeast(row.wallMs, !row.agentCoverage.complete, t)}`,
-      }));
+      .filter((row) => matchesProject(row.label, row.project, query))
+      .map((row) => ({ project: row.project, label: row.label, value: row.value }));
     return query.trim() ? matched : [{ project: null, label: t("activity.filter.all"), value: null }, ...matched];
-  }, [rows, names, query, unread, locale, t]);
+  }, [rows, query, t]);
   const activeIndex = options.length ? Math.min(active, options.length - 1) : 0;
 
   const show = () => {

@@ -179,6 +179,27 @@
   --mark-track: #f1ede6;
   --mark-hatch: var(--border-strong);
   --mark-stripe: rgb(255 253 250 / 0.78);
+  /* Token usage prototype (docs/design/activity-token-usage.md §9.1): the
+     dataviz reference categorical order, validated on the card surface in
+     both themes (adjacent CVD ΔE ≥ 8.4, normal-vision ΔE ≥ 19.3). Three light
+     steps sit under 3:1, so every value they carry is also printed. Slots
+     past eight fold into «other». */
+  --mark-series-1: #2a78d6;
+  --mark-series-2: #eb6834;
+  --mark-series-3: #1baf7a;
+  --mark-series-4: #eda100;
+  --mark-series-5: #e87ba4;
+  --mark-series-6: #008300;
+  --mark-series-7: #6250d6;
+  --mark-series-8: #e34948;
+  --mark-series-other: var(--border-strong);
+  /* The four token kinds are a neutral ink ramp, so a kind never reads as a
+     model, role or person: cache reads (most of every total) are the quietest
+     step, output the darkest. Every kind is also printed with its number. */
+  --mark-kind-1: #c4c0b7;
+  --mark-kind-2: #98948b;
+  --mark-kind-3: #6b6861;
+  --mark-kind-4: #2f2e2b;
 
   /* ── §1.6 Motion ───────────────────────────────────────────────────────── */
   --motion-fast: 120ms; /* hover, press, chip state         */
@@ -297,6 +318,18 @@
     --mark-track: #1f222b;
     --mark-hatch: #3c404c;
     --mark-stripe: rgb(25 27 35 / 0.8);
+    --mark-series-1: #3987e5;
+    --mark-series-2: #d95926;
+    --mark-series-3: #199e70;
+    --mark-series-4: #c98500;
+    --mark-series-5: #d55181;
+    --mark-series-6: #008300;
+    --mark-series-7: #9085e9;
+    --mark-series-8: #e66767;
+    --mark-kind-1: #454955;
+    --mark-kind-2: #6c7180;
+    --mark-kind-3: #9ba0ad;
+    --mark-kind-4: #dfe1e7;
 
     --color-user: #262a36;
 
@@ -382,6 +415,18 @@
   --mark-track: #1f222b;
   --mark-hatch: #3c404c;
   --mark-stripe: rgb(25 27 35 / 0.8);
+  --mark-series-1: #3987e5;
+  --mark-series-2: #d95926;
+  --mark-series-3: #199e70;
+  --mark-series-4: #c98500;
+  --mark-series-5: #d55181;
+  --mark-series-6: #008300;
+  --mark-series-7: #9085e9;
+  --mark-series-8: #e66767;
+  --mark-kind-1: #454955;
+  --mark-kind-2: #6c7180;
+  --mark-kind-3: #9ba0ad;
+  --mark-kind-4: #dfe1e7;
 
   --color-user: #262a36;
 

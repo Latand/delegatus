@@ -135,6 +135,14 @@
  * opens the owner's `?member=all` link lands on their own page with `member`
  * gone from the address.
  *
+ * With BOARD_CAPTURE_CASE=activity-tokens it frames the four numbered
+ * variants of the token usage prototype (docs/design/activity-token-usage.md
+ * §9, the route /activity/tokens-prototype over invented fixture data) with a
+ * free range and a project filter, the range popover open and closed, at
+ * 1440, 1024 and 390 px, light and dark, in uk (and en at 1440 light), and
+ * measures overflow, cut text, the popover and the range segments. With
+ * ACTIVITY_RENDER_DIR set, the frames are copied there.
+ *
  * With BOARD_CAPTURE_CASE=lightbox it walks the full-screen image viewer
  * through one conversation's 26 invented pictures (#2144): inbox attachments,
  * markdown images and pictures a tool showed its agent, interleaved. It opens
@@ -7934,6 +7942,146 @@ async function registryHistoryMain(): Promise<void> {
   if (report.failures.length) throw new Error(report.failures.join("; "));
 }
 
+/* ------------------------------------------------------------------------- */
+/* BOARD_CAPTURE_CASE=activity-tokens: the token usage prototype variants    */
+/* ------------------------------------------------------------------------- */
+
+/* The prototype route (docs/design/activity-token-usage.md §9) draws invented
+   fixture data in the browser, so the home needs no seeding beyond its empty
+   directories. Each variant is framed with the free range 1–16 October and
+   the orchard-client filter applied, once with the custom range popover open
+   and once closed, at 1440 × 900, 1024 × 768 (between the named widths) and
+   390 × 844, light and dark, in Ukrainian; English at 1440 light. Frames are
+   full-page (the viewport grows to the page's scroll height) and named
+   variant-N-<width>-<theme>-<state>[-en].png. Each frame is measured from the
+   DOM: no sideways overflow, no cut text, the popover inside the viewport,
+   every range segment whole, the variant number printed. */
+const TOKEN_VARIANTS = [1, 2, 3, 4] as const;
+const TOKEN_SIZES: ReadonlyArray<{ width: number; height: number; phone: boolean }> = [
+  { width: 1440, height: 900, phone: false },
+  { width: 1024, height: 768, phone: false },
+  { width: 390, height: 844, phone: true },
+];
+
+function readTokenFrame() {
+  const page = document.querySelector<HTMLElement>("[data-activity-page]")!;
+  const inView = (el: Element | null) => {
+    if (!el) return null;
+    const r = el.getBoundingClientRect();
+    return { left: Math.round(r.left), right: Math.round(r.right), top: Math.round(r.top), bottom: Math.round(r.bottom), inside: r.left >= 0 && r.right <= window.innerWidth + 0.5 && r.top >= 0 && r.bottom <= window.innerHeight + 0.5 };
+  };
+  const cut: string[] = [];
+  for (const el of Array.from(page.querySelectorAll<HTMLElement>("span, button, a, h1, th, td, label, div"))) {
+    if (!el.childNodes.length || Array.from(el.childNodes).some((node) => node.nodeType === 1 && (node as Element).tagName !== "svg")) continue;
+    const text = (el.textContent ?? "").trim();
+    if (!text) continue;
+    if (el.scrollWidth > el.clientWidth + 1 && getComputedStyle(el).overflow !== "visible") cut.push(text);
+  }
+  const segments = Array.from(document.querySelectorAll<HTMLElement>("[data-token-range-option]")).map((button) => ({
+    option: button.dataset.tokenRangeOption ?? "",
+    text: (button.textContent ?? "").trim(),
+    whole: button.scrollWidth <= button.clientWidth + 1,
+    width: Math.round(button.getBoundingClientRect().width),
+  }));
+  const header = document.querySelector("[data-token-header]")?.getBoundingClientRect();
+  return {
+    width: window.innerWidth,
+    scrollWidth: Math.max(document.documentElement.scrollWidth, page.scrollWidth),
+    scrollHeight: page.scrollHeight,
+    banner: document.querySelector("[data-token-variant]")?.textContent ?? "",
+    layout: page.dataset.tokenLayout ?? "",
+    popover: inView(document.querySelector("[data-token-range-popover]")),
+    inputs: Array.from(document.querySelectorAll<HTMLInputElement>("[data-token-range-input]")).map((input) => input.value),
+    chips: Array.from(document.querySelectorAll("[data-activity-scope-chip]")).map((chip) => chip.textContent ?? ""),
+    hero: document.querySelector("[data-token-hero]")?.textContent ?? "",
+    headerHeight: header ? Math.round(header.height) : null,
+    segments,
+    cut,
+  };
+}
+
+async function activityTokensMain(): Promise<void> {
+  for (const dir of [OUT_DIR, path.join(BASE, "tmp"), path.join(BASE, "tmux"), STATE_DIR, path.join(HOME, ".codex/sessions"), path.join(HOME, ".claude/projects")]) fs.mkdirSync(dir, { recursive: true });
+  /* The Viewer control URL on a closed port: nothing this run starts can reach a live Viewer. */
+  SERVER_EXTRA_ENV.LLV_VIEWER_CONTROL_URL = "http://127.0.0.1:9";
+  const port = await freePort();
+  const baseUrl = `http://127.0.0.1:${port}`;
+  const failures: string[] = [];
+  const must = (ok: boolean, message: string) => { if (!ok) failures.push(message); };
+  const report: Record<string, unknown> = { commit: captureCommit(), case: "activity-tokens", frames: {} as Record<string, unknown> };
+  const shots: string[] = [];
+  let server: ChildProcess | null = null;
+  let browser: Browser | null = null;
+  try {
+    server = startServer(port);
+    await waitForServer(baseUrl, server);
+    /* Native date inputs draw in the browser's own language. */
+    browser = await chromium.launch({
+      args: ["--no-sandbox", "--disable-dev-shm-usage", "--lang=uk"],
+      env: { ...process.env, LANGUAGE: "uk", LANG: "uk_UA.UTF-8" },
+      ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}),
+    });
+    const frames = report.frames as Record<string, unknown>;
+    const cases = TOKEN_VARIANTS.flatMap((variant) => [
+      ...TOKEN_SIZES.flatMap((size) => (["light", "dark"] as const).flatMap((theme) => (["open", "applied"] as const).map((state) => ({ variant, size, theme, state, lang: "uk" as const })))),
+      { variant, size: TOKEN_SIZES[0]!, theme: "light" as const, state: "applied" as const, lang: "en" as const },
+    ]);
+    for (const { variant, size, theme, state, lang } of cases) {
+      const name = `variant-${variant}-${size.width}-${theme}-${state === "open" ? "range-open" : "range-applied"}${lang === "en" ? "-en" : ""}`;
+      if (!browser.isConnected()) browser = await chromium.launch({ args: ["--no-sandbox", "--disable-dev-shm-usage", "--lang=uk"], env: { ...process.env, LANGUAGE: "uk", LANG: "uk_UA.UTF-8" }, ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) });
+      const context = await browser.newContext({
+        viewport: { width: size.width, height: size.height },
+        colorScheme: theme,
+        locale: lang === "uk" ? "uk-UA" : "en-GB",
+        reducedMotion: "reduce",
+        ...(size.phone ? { isMobile: true, hasTouch: true, deviceScaleFactor: 2 } : {}),
+      });
+      await context.addInitScript(seedInit);
+      await context.addInitScript((value: string) => localStorage.setItem("llv_lang", value), lang);
+      const page = await context.newPage();
+      const by = variant === 4 ? "member" : "model";
+      await page.goto(`${baseUrl}/activity/tokens-prototype?variant=${variant}&range=custom&from=2026-10-01&to=2026-10-16&project=repo-orchard-client&by=${by}&open=${state === "open" ? 1 : 0}`, { waitUntil: "domcontentloaded", timeout: 120_000 });
+      await page.waitForSelector(`[data-token-prototype="${variant}"]`, { timeout: 120_000 });
+      await page.waitForTimeout(500);
+      const first = await page.evaluate(readTokenFrame);
+      if (first.scrollHeight > size.height) {
+        await page.setViewportSize({ width: size.width, height: Math.min(first.scrollHeight, 7_000) });
+        await page.waitForTimeout(300);
+      }
+      const reading = await page.evaluate(readTokenFrame);
+      const file = path.join(OUT_DIR, `${name}.png`);
+      await page.screenshot({ path: file });
+      shots.push(file);
+      frames[name] = reading;
+      must(reading.layout === (size.phone ? "phone" : "desktop"), `${name}: the ${reading.layout} layout at ${size.width}px`);
+      must(reading.banner.includes(lang === "uk" ? `Варіант ${variant} з 4` : `Variant ${variant} of 4`), `${name}: the banner reads ${JSON.stringify(reading.banner)}`);
+      must(reading.scrollWidth <= reading.width + 1, `${name}: the page runs ${reading.scrollWidth - reading.width}px sideways`);
+      must(reading.cut.length === 0, `${name}: text cut by its box: ${JSON.stringify(reading.cut)}`);
+      must(reading.segments.length === 5 && reading.segments.every((segment) => segment.whole), `${name}: range segments ${JSON.stringify(reading.segments)}`);
+      must(reading.chips.some((chip) => chip.includes("orchard-client")), `${name}: no orchard-client filter chip (${JSON.stringify(reading.chips)})`);
+      if (state === "open") {
+        must(reading.popover !== null && reading.popover.inside, `${name}: the range popover ${JSON.stringify(reading.popover)} leaves the viewport`);
+        must(reading.inputs.join(" ") === "2026-10-01 2026-10-16", `${name}: the date fields hold ${reading.inputs.join(" ")}`);
+      } else must(reading.popover === null, `${name}: the range popover is open`);
+      await context.close();
+    }
+  } finally {
+    await browser?.close().catch(() => undefined);
+    await stop(server);
+  }
+  report.failures = failures;
+  const scrub = (value: unknown) => JSON.parse(JSON.stringify(value).split(HOME).join("$HOME"));
+  fs.writeFileSync(path.join(OUT_DIR, "activity-tokens.json"), JSON.stringify(scrub(report), null, 2) + "\n", "utf8");
+  const target = process.env.ACTIVITY_RENDER_DIR?.trim();
+  if (target) {
+    fs.mkdirSync(target, { recursive: true });
+    for (const file of [...shots, path.join(OUT_DIR, "activity-tokens.json")]) fs.copyFileSync(file, path.join(target, path.basename(file)));
+  }
+  console.log(`activity-tokens: ${shots.length} frames in ${target || OUT_DIR}; ${failures.length} failures`);
+  for (const failure of failures) console.log(`  - ${failure}`);
+  if (failures.length) process.exitCode = 1;
+}
+
 if (process.env.BOARD_CAPTURE_CASE === "registry-history") await registryHistoryMain();
 else if (process.env.BOARD_CAPTURE_CASE === "hydration") await hydrationMain();
 else if (process.env.BOARD_CAPTURE_CASE === "twice-switched-link") await twiceSwitchedLinkMain();
@@ -7944,6 +8092,7 @@ else if (["self-update-install", "managed-update"].includes(process.env.BOARD_CA
 else if (process.env.BOARD_CAPTURE_CASE === "linking") await linkingMain();
 else if (process.env.BOARD_CAPTURE_CASE === "activity") await activityMain();
 else if (process.env.BOARD_CAPTURE_CASE === "activity-members") await activityMembersMain();
+else if (process.env.BOARD_CAPTURE_CASE === "activity-tokens") await activityTokensMain();
 else if (process.env.BOARD_CAPTURE_CASE === "lightbox") await lightboxMain();
 else if (process.env.BOARD_CAPTURE_CASE === "resources") await resourcesMain();
 else if (process.env.BOARD_CAPTURE_CASE === "file-preview") await filePreviewMain();
