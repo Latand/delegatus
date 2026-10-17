@@ -200,9 +200,11 @@ test("a delivery that keeps failing asks for attention on the review, the card a
   expect(prototypeReviewNotices(loadTasks())).toEqual([expect.objectContaining({ id: `prototype-delivery:${id}`, reviewId: id, undelivered: true, target: { kind: "prototype-review", taskId: TASK, reviewId: id } })]);
   // The client computes the same notice from the board's summary alone.
   expect(prototypeReviewNotices(withPrototypeReviewSummaries(loadTasks()) as never)).toHaveLength(1);
-  // The operator's retry starts the wait over and sends at once.
+  // The operator's retry starts the wait over and reports the host's refusal.
   state.clock = Date.now();
-  expect((await reviewPOST(request({ reviewId: id, retry: true }), TASK, ports.world, ports.delivery, ports.now)).status).toBe(200);
+  const retry = await reviewPOST(request({ reviewId: id, retry: true }), TASK, ports.world, ports.delivery, ports.now);
+  expect(retry.status).toBe(503);
+  expect((await retry.json()).error).toContain("поки не вдалося доставити");
   await settlePrototypeDeliveriesForTests();
   expect(state.sends).toHaveLength(6);
   expect((await shown(id)).delivery.phase).toBe("delivering");
