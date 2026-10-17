@@ -2335,6 +2335,7 @@ async function createPipeline(args: McpToolArgs, context?: McpToolCallContext, d
   if (result.queued) {
     return redactPayload({
       ...pipelineAcknowledgement(result.pipeline),
+      ...(result.repositoryInitialization ? { repositoryInitialization: result.repositoryInitialization } : {}),
       queued: true,
       queuedBecause: result.queued.reason,
       note: PIPELINE_CREATION_QUEUED_NOTE,
@@ -2347,6 +2348,7 @@ async function createPipeline(args: McpToolArgs, context?: McpToolCallContext, d
      had just sent them — a median 10 KB per create. get_pipeline reads it. */
   return redactPayload({
     ...pipelineAcknowledgement(result.pipeline),
+    ...(result.repositoryInitialization ? { repositoryInitialization: result.repositoryInitialization } : {}),
     ...(result.pipeline.delivery ? { delivery: deliveryAcknowledgement(result.pipeline) } : {}),
     ...(result.warnings?.length ? { warnings: result.warnings } : {}),
     ...newLegacyReviewFields(result),

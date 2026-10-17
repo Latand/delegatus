@@ -17,7 +17,8 @@ import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
 import { canonicalProject } from "@/lib/projects/aliases";
 import { postPrototypeReviewToTelegram } from "./telegramPost";
 
-export function prototypeFailure(error: unknown): NextResponse {
+export function prototypeFailure(error: unknown, route = "prototype review"): NextResponse {
+  if (!(error instanceof PrototypeError)) console.error(`[prototype review] ${route}`, error);
   return NextResponse.json({ error: error instanceof PrototypeError ? error.message : "prototype review is unavailable" }, { status: error instanceof PrototypeError ? error.status : 503 });
 }
 /** The same project fence as reads, resolved by round for taskless forms too. */
@@ -42,7 +43,7 @@ export async function resendTelegramPOST(request: NextRequest, world: PrototypeW
     const key = `${round.id}:resend:${body.clientRequestId.trim()}`;
     const telegramPost = await postPrototypeReviewToTelegram(round, key);
     return NextResponse.json({ reviewId: round.id, telegramPost }, { headers: { "cache-control": "private, no-store" } });
-  } catch (error) { return prototypeFailure(error); }
+  } catch (error) { return prototypeFailure(error, "POST /api/prototype-reviews/telegram"); }
 }
 /** The project whose designated orchestrator is calling, or null. Only that
     seat may ask without a task (docs/design/operator-decision-forms.md §2.1). */
@@ -94,7 +95,7 @@ export async function reviewScopePOST(request: NextRequest,world: PrototypeWorld
     const target = await withPrototypeState(() => body.mode === "publish" ? publicationTarget(request,body.taskId,world) : readTarget(request,body.taskId,world));
     if (!target.caller.conversationId) throw new PrototypeError("caller could not be identified",403);
     return NextResponse.json({ conversationId: target.caller.conversationId, taskId: target.taskId },{ headers: { "cache-control": "private, no-store" } });
-  } catch (error) { return prototypeFailure(error); }
+  } catch (error) { return prototypeFailure(error, "POST /api/prototype-reviews/scope"); }
 }
 /** A seat's answered rounds whose message is not yet known delivered take the
     receipt's word before they are read, as a task's rounds do in reviewGET.
@@ -112,7 +113,7 @@ export async function reviewReadPOST(request: NextRequest,world: PrototypeWorld 
       return NextResponse.json(readSeatRounds(target.seat!),{ headers: { "cache-control": "private, no-store" } });
     }
     return reviewGET(request,target.taskId,world);
-  } catch (error) { return prototypeFailure(error); }
+  } catch (error) { return prototypeFailure(error, "POST /api/prototype-reviews/read"); }
 }
 export async function publishPOST(request: NextRequest,world: PrototypeWorld = prototypeWorld): Promise<NextResponse> {
   const rejected = rejectCrossOrigin(request); if (rejected) return rejected;
@@ -133,7 +134,7 @@ export async function publishPOST(request: NextRequest,world: PrototypeWorld = p
       ...(round.critic ? { critic: { stageId: round.critic.stageId, attempt: round.critic.attempt, outcome: round.critic.outcome } } : {}),
       ...(round.questions ? { questions: round.questions.length } : {}),
       frames: round.variants.reduce((n,v) => n + v.frames.length,0), videos: round.variants.reduce((n,v) => n + v.videos.length,0) });
-  } catch (error) { return prototypeFailure(error); }
+  } catch (error) { return prototypeFailure(error, "POST /api/prototype-reviews"); }
 }
 /** A read reports the decision's delivery as the background delivery last left it, and never waits on it. */
 export async function reviewGET(request: NextRequest,taskId: string,world: PrototypeWorld = prototypeWorld): Promise<NextResponse> {
@@ -141,7 +142,7 @@ export async function reviewGET(request: NextRequest,taskId: string,world: Proto
   const anonymous = refuseAnonymous(teamActor(request)); if (anonymous) return anonymous;
   try {
     return NextResponse.json(readPrototypeReviews(taskForPrototype(taskId,world.caller(request))),{ headers: { "cache-control": "private, no-store" } });
-  } catch (error) { return prototypeFailure(error); }
+  } catch (error) { return prototypeFailure(error, "GET /api/tasks/[id]/prototypes"); }
 }
 export async function reviewPOST(request: NextRequest,taskId: string,world: PrototypeWorld = prototypeWorld,delivery: PrototypeDelivery = prototypeDelivery,now: () => number = Date.now): Promise<NextResponse> {
   const rejected = rejectCrossOrigin(request); if (rejected) return rejected;
@@ -159,7 +160,7 @@ export async function reviewPOST(request: NextRequest,taskId: string,world: Prot
     if ("retry" in body) await retryPrototypeDecision(request,taskId,body.reviewId,{ delivery, world, now });
     else if (decidePrototype(request,taskId,body,world)) deliverPrototypeDecision(taskId,body.reviewId,{ delivery, world, now });
     return NextResponse.json(readPrototypeReviews(taskForPrototype(taskId,caller)),{ headers: { "cache-control": "private, no-store" } });
-  } catch (error) { return prototypeFailure(error); }
+  } catch (error) { return prototypeFailure(error, "POST /api/tasks/[id]/prototypes"); }
 }
 
 /** The operator's own read of a project's open decisions: the «Рішення»
@@ -184,7 +185,7 @@ export async function decisionsGET(request: NextRequest,project: string,world: P
       }
     }
     return NextResponse.json({ ...operatorDecisions(project), ...(review ? { round: operatorDecisionRound(project,review) } : {}) },{ headers: { "cache-control": "private, no-store" } });
-  } catch (error) { return prototypeFailure(error); }
+  } catch (error) { return prototypeFailure(error, "GET /api/projects/decisions"); }
 }
 /** One answer from the column: a seat's question or a task's waiting round,
     found by its id within the project, decided through the same decision path
@@ -213,7 +214,7 @@ export async function decisionsPOST(request: NextRequest,world: PrototypeWorld =
     if ("retry" in body) await retryPrototypeDecision(request,taskId,body.reviewId,{ delivery, world, now: Date.now });
     else if (decidePrototype(request,taskId,body,world)) deliverPrototypeDecision(taskId,body.reviewId,{ delivery, world, now: Date.now });
     return NextResponse.json(operatorDecisions(key),{ headers: { "cache-control": "private, no-store" } });
-  } catch (error) { return prototypeFailure(error); }
+  } catch (error) { return prototypeFailure(error, "POST /api/projects/decisions"); }
 }
 
 /** An explicit resend waits for its delivery verdict instead of acknowledging a

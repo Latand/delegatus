@@ -1,0 +1,80 @@
+{
+  "driver": "src/components/kanban/kanbanBoard.browser.test.tsx",
+  "readings": [
+    {
+      "width": 1440,
+      "lang": "en",
+      "theme": "light",
+      "reachable": true,
+      "intervalHours": 12,
+      "fits": true,
+      "pageErrors": []
+    },
+    {
+      "width": 1440,
+      "lang": "en",
+      "theme": "dark",
+      "reachable": true,
+      "intervalHours": 12,
+      "fits": true,
+      "pageErrors": []
+    },
+    {
+      "width": 1440,
+      "lang": "uk",
+      "theme": "light",
+      "reachable": true,
+      "intervalHours": 12,
+      "fits": true,
+      "pageErrors": []
+    },
+    {
+      "width": 1440,
+      "lang": "uk",
+      "theme": "dark",
+      "reachable": true,
+      "intervalHours": 12,
+      "fits": true,
+      "pageErrors": []
+    },
+    {
+      "width": 390,
+      "lang": "en",
+      "theme": "light",
+      "reachable": true,
+      "intervalHours": 12,
+      "fits": true,
+      "pageErrors": []
+    },
+    {
+      "width": 390,
+      "lang": "en",
+      "theme": "dark",
+      "reachable": true,
+      "intervalHours": 12,
+      "fits": true,
+      "pageErrors": []
+    },
+    {
+      "width": 390,
+      "lang": "uk",
+      "theme": "light",
+      "reachable": true,
+      "intervalHours": 12,
+      "fits": true,
+      "pageErrors": []
+    },
+    {
+      "width": 390,
+      "lang": "uk",
+      "theme": "dark",
+      "reachable": true,
+      "intervalHours": 12,
+      "fits": true,
+      "pageErrors": []
+    }
+  ],
+  "capturedAt": "2026-10-17T14:45:28.748455+00:00",
+  "base": "32e5a6e91824659604d54ac00dce19977f666c0e",
+  "command": "LLV_KANBAN_BROWSER_TEST=1 bun test src/components/kanban/kanbanBoard.browser.test.tsx --test-name-pattern \"role memory curator in the seat tick panel\""
+}
