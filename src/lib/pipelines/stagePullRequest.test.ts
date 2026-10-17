@@ -1,7 +1,42 @@
 import { expect, test } from "bun:test";
-import { fs, path, realExec, engineModule, tickPipelines, loadPipelines, savePipelines, finishReported, realWorktreeLane } from "./engine.fixture";
+import { fs, os, path, realExec, engineModule, tickPipelines, loadPipelines, savePipelines, finishReported, realWorktreeLane } from "./engine.fixture";
 
 const REMOTE = "https://github.com/example/widgets.git";
+test.each(["publisher", "conflicting"])("native stage fixtures choose their own Git identity in the %s environment", async (mode) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "stage-git-environment-"));
+  try {
+    const home = path.join(root, "home"), hooks = path.join(root, "hooks");
+    fs.mkdirSync(home); fs.mkdirSync(hooks);
+    const hook = path.join(hooks, "pre-commit"), config = path.join(home, ".gitconfig");
+    fs.writeFileSync(hook, "#!/bin/sh\nexit 99\n", { mode: 0o755 });
+    const configText = `[core]\n hooksPath = ${hooks.replaceAll("\\", "/")}\n`;
+    fs.writeFileSync(config, configText);
+    const env: NodeJS.ProcessEnv = { ...process.env, HOME: home, XDG_CONFIG_HOME: home,
+      TMPDIR: root, LLV_STATE_DIR: path.join(root, "state"), GIT_CONFIG_GLOBAL: config,
+      GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "core.hooksPath", GIT_CONFIG_VALUE_0: hooks };
+    // realExec overlays process.env; undefined must remove inherited values.
+    for (const key of Object.keys(env)) if (/^GIT_(?:AUTHOR_|COMMITTER_)/.test(key)) env[key] = undefined;
+    if (mode === "conflicting") Object.assign(env, {
+      GIT_AUTHOR_NAME: "Ambient", GIT_COMMITTER_NAME: "Ambient",
+      GIT_AUTHOR_EMAIL: ["ambient", "example.invalid"].join("@"),
+      GIT_COMMITTER_EMAIL: ["ambient", "example.invalid"].join("@"),
+      DELEGATUS_PUBLICATION_NAME: "Fixture Agent",
+      DELEGATUS_PUBLICATION_EMAIL: ["noreply", "fixture.invalid"].join("@"),
+    });
+    // Each file owns its engine fixture's lifecycle, so run them separately.
+    for (const [file, pattern] of [
+      ["engine.ports.test.ts", "^a successor lane on a pull request branch settles its passed stage after a (completed|closed) lane$"],
+      ["stagePullRequest.test.ts", "^C: controller creates and links a delivery PR before advancing to review$"],
+    ]) {
+      const result = await realExec(process.execPath, ["test", `./src/lib/pipelines/${file}`, `--test-name-pattern=${pattern}`],
+        process.cwd(), env, { timeoutMs: 20_000 });
+      expect(result.code, result.stdout + result.stderr).toBe(0);
+    }
+    expect(fs.readFileSync(config, "utf8")).toBe(configText);
+    expect(fs.readFileSync(hook, "utf8")).toBe("#!/bin/sh\nexit 99\n");
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+}, 60_000);
+
 async function fixture() {
   const f = await realWorktreeLane("stage-pr", [
     { id: "build", kind: "run", role: { roleId: "builder" }, access: "read-write", prompt: "Build", next: "review" },
@@ -48,10 +83,7 @@ async function fixture() {
     return loadPipelines().find(p => p.id === f.id)!;
   };
   const commit = async () => {
-    const date = new Date(Date.parse(p.runs[0]!.attempts[0]!.startedAt!) + 1000).toISOString();
-    const r = await realExec("git", ["commit", "--allow-empty", "-m", "stage output"], f.worktree,
-      { GIT_AUTHOR_DATE: date, GIT_COMMITTER_DATE: date });
-    expect(r.code, r.stderr).toBe(0);
+    await f.git(f.worktree, "commit", "--allow-empty", "-m", "stage output");
   };
   return { ...f, calls, finish, commit, setPrShape: (shape: typeof prShape) => { exists = true; prShape = shape; }, setRace: (call: number, kind: "pause" | "release") => { race = { call, kind }; }, setMissing: () => { exists = false; }, setExisting: () => { exists = true; }, setRefused: () => { refuse = true; }, setLost: () => { loseResponse = true; },
     close: () => { savePipelines([]); fs.rmSync(f.root, { recursive: true, force: true }); } };

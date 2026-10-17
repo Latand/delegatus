@@ -336,10 +336,15 @@ async function realWorktreeLane(name: string, stages: unknown[], publication?: "
   const { realExec } = await import("@/lib/workflows/provision");
   const { realProvisionExec } = await import("./git");
   const h = harness();
+  // Model the identity pinned into a launched agent, independently of the
+  // runner's author/committer variables and the repository's Fixture config.
+  const { GIT_AUTHOR_NAME, GIT_AUTHOR_EMAIL, GIT_COMMITTER_NAME, GIT_COMMITTER_EMAIL } = agentPublicationIdentityEnv(process.env);
+  const identity = { GIT_AUTHOR_NAME, GIT_AUTHOR_EMAIL, GIT_COMMITTER_NAME, GIT_COMMITTER_EMAIL };
   // Native reflog creation and the controller share one deterministic clock.
   const git = async (cwd: string, ...args: string[]) => {
     const date = ["commit", "merge", "rebase", "am"].includes(args[0]!) ? h.ports.now() : undefined;
-    const result = (await realExec("git", args, cwd, date ? { GIT_AUTHOR_DATE: date, GIT_COMMITTER_DATE: date } : undefined));
+    const result = (await realExec("git", args, cwd, { ...identity,
+      ...(date ? { GIT_AUTHOR_DATE: date, GIT_COMMITTER_DATE: date } : {}) }));
     if (result.code !== 0) throw new Error(result.stderr || result.stdout);
     return result.stdout.trim();
   };
