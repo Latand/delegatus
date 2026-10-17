@@ -101,7 +101,7 @@ Each command receives its own database backup through `LLV_STATE_DIR`.
 
 ## Verification
 
-The full touched-test gate completed 32 explicit files against `e4a86ff27da4` with zero new failures. It recorded 9 failures reproduced on the base and 1 intermittent assertions under its confirmation rules. Branch and baseline runs took 89.560 s and 17.415 s respectively. Typecheck and changed-file ESLint passed. Exact known outcomes are in the evidence JSON.
+The full touched-test gate completed 32 explicit files against `e4a86ff27da4` with zero new failures. It recorded 9 failures reproduced on the base and one intermittent assertion under its confirmation rules. Branch and baseline runs took 89.560 s and 17.415 s respectively. Typecheck and changed-file ESLint passed. Exact known outcomes are in the evidence JSON.
 
 The hook's `discover` and `plan` functions select every touched and adjacent test.
 The recorded gate adds the startup, legacy-import and fleet-binding integration
