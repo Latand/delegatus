@@ -234,7 +234,10 @@ export async function incomingSync(grant: Grant, input: unknown): Promise<{ stat
     agentAck = (pushAgents as { cursor: string }).cursor;
   }
   if (agreed) touchAgents(`grant:${grant.id}`);
-  const agents = agreed && agentAfter !== undefined && projects.size ? agentPart(`grant:${grant.id}`, agentAfter, projects, agentPage as number) : undefined;
+  const agents = agreed && agentAfter !== undefined && projects.size ? await agentPart(`grant:${grant.id}`, agentAfter, projects, agentPage as number) : undefined;
+  // Filtering yields: revoke a changed grant or sharing scope before serialization.
+  if (!readGrants().grants.some(row => row.id === grant.id && row.hash === grant.hash && row.install === grant.install && row.scopes.includes("board:sync")) || sharedDigest(sharedProjects()) !== localHash
+    || sharedDigest(remoteProjects(grant.id)) !== remoteHash) return { status: 400, body: { error: "malformed" } };
   // M.10: an idle call writes no grant file; a page with rows counts as movement.
   usedGrant(grant, !!messageMoved || served.moved || Boolean((pushAgents as { rows?: unknown[] } | undefined)?.rows?.length) || Boolean(agents && "rows" in agents));
   return { status: 200, agreed, body: { v: 1, sm: { v: 1 }, now: Date.now(), store: ownBoardStoreId(), s: localHash, taskWireVersion: TASK_WIRE_VERSION,
