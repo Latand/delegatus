@@ -409,6 +409,9 @@ function openRawDatabase(filename: string): Database {
           )`);
         db.exec(`CREATE INDEX IF NOT EXISTS state_rows_collection_order
             ON state_rows(collection, row_order)`);
+        db.exec(`CREATE INDEX IF NOT EXISTS state_rows_task_project
+            ON state_rows(json_extract(value_json,'$.project'), row_key)
+            WHERE collection='tasks' AND json_valid(value_json)`);
         db.exec(`CREATE INDEX IF NOT EXISTS state_rows_controller_active
             ON state_rows(collection, controller_active, row_order)`);
         db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS pipeline_delivery_owner
@@ -1460,15 +1463,39 @@ export class SqliteStateCollection<T> {
 
   /** Indexed keyset page. The caller owns the upper bound and continuation. */
   keyRange(after: string, through: string, limit: number): T[] {
-    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 512) throw new Error("invalid state page limit");
-    return this.readDb.query<Pick<CollectionRow, "value_json">, [string, string, string, number]>(`
-      SELECT value_json FROM state_rows
-      WHERE collection = ? AND row_key > ? AND row_key <= ? ORDER BY row_key LIMIT ?
-    `).all(this.options.collection, after, through, limit).flatMap((row) => {
-      const decoded = this.decodeRow(row.value_json);
-      if (decoded === null && !this.options.preserveRejectedRecords) throw new Error("invalid bounded state row");
-      return decoded === null ? [] : [this.options.clone(decoded)];
+    return this.keyRangeEntries(after, through, limit).flatMap(({ value }) => {
+      if (value === null && !this.options.preserveRejectedRecords) throw new Error("invalid bounded state row");
+      return value === null ? [] : [value];
     });
+  }
+
+  /** Indexed raw-key page for collections whose read contract skips rejected
+      rows. The cursor advances over every key, while decoding stays bounded. */
+  keyRangeEntries(after: string, through: string, limit: number): Array<{ key: string; value: T | null }> {
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 512) throw new Error("invalid state page limit");
+    return this.readDb.query<Pick<CollectionRow, "row_key" | "value_json">, [string, string, string, number]>(`
+      SELECT row_key, value_json FROM state_rows
+      WHERE collection = ? AND row_key > ? AND row_key <= ? ORDER BY row_key LIMIT ?
+    `).all(this.options.collection, after, through, limit).map((row) => {
+      const decoded = this.decodeRow(row.value_json);
+      return { key: row.row_key, value: decoded === null ? null : this.options.clone(decoded) };
+    });
+  }
+
+  /** Project-scoped replica watermark without materializing task rows. The
+      partial expression index excludes every other state collection/project. */
+  maxTaskProjectStamp(project: string, prefix: string): string | null {
+    const fields = ["text", "status", "look", "place", "links", "machine", "handover"] as const;
+    const ms = "CAST(MAX(0, MIN(9999999999999, COALESCE(CAST((julianday(json_extract(value_json,'$.updatedAt'))-2440587.5)*86400000 AS INTEGER),0))) AS INTEGER)";
+    const fallback = `printf('%013d.000.%s',${ms},?)`;
+    const effective = fields.map(field => `COALESCE(json_extract(value_json,'$.sync.s.${field}'),${fallback})`);
+    const rowStamp = `max(${effective.join(",")})`;
+    const row = this.readDb.query<{ stamp: string | null }, string[]>(`
+      SELECT MAX(${rowStamp}) AS stamp FROM state_rows
+      INDEXED BY state_rows_task_project
+      WHERE collection='tasks' AND json_valid(value_json) AND json_extract(value_json,'$.project')=?
+    `).get(...effective.map(() => prefix), project);
+    return row?.stamp ?? null;
   }
 
   /** A bounded read/modify/write transaction. No collection materialization.

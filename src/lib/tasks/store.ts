@@ -618,6 +618,7 @@ function taskSyncWrite(filePath: string): { write: TaskSyncWrite; companion: Non
   const preservedStamps = new Set<string>();
   const write: TaskSyncWrite = {
     linked: context.all, self: context.self, now: Date.now,
+    projectWatermark: project => openTaskCollection(legacyDatabasePath(filePath)).maxTaskProjectStamp(project, context.self!.prefix),
     read: (key) => puts.get(key) ?? (removed.has(key) ? null : companion.get(key)),
     put: (row) => { const key = tombstoneRowKey(row); puts.set(key, row); removed.delete(key); },
     remove: (key) => { puts.delete(key); removed.add(key); },
@@ -837,9 +838,7 @@ export function mutateTaskPrototypeRound<R>(taskId: string, reviewId: string,
         groupDigest(task, group as keyof typeof prior.digests) !== digest);
       // Poll bookkeeping leaves replicated groups intact. Only a semantic
       // group change needs the project's watermark; peer views stay shared.
-      const baseline = groupChanged ? loadTasksForList(filePath) : [task];
-      const groups = groupChanged ? snapshotGroups(baseline, sync.write.linked, taskFingerprint) : ownGroups;
-      stampLinkedRows(baseline.map(item => item.id === task.id ? task : item), groups, sync.write, taskFingerprint);
+      if (groupChanged) stampLinkedRows([task], ownGroups, sync.write, taskFingerprint);
     }
     const row = committedRows([task], before, false)[0]!;
     tx.put(row as TaskStateRow);

@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import { taskRevision } from "@/lib/tasks/revision";
 import type { TaskWithRevision } from "@/lib/tasks/revision";
 import { randomUUID } from "node:crypto";
+import { Database } from "bun:sqlite";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -212,6 +213,41 @@ test("the stamp step stamps linked tasks only, per changed group, and leaves eve
     return { tasks, result: tasks[index]! };
   }, file);
   expect(assigned.sync!.s).toEqual(moved.sync!.s);
+});
+
+test("a linked prototype semantic write stamps one row with the indexed project watermark", () => {
+  setSystemTime(new Date("2026-10-17T00:00:00.000Z"));
+  const { file, db } = linkedInstall();
+  const review = "pr_00000000000000000000000000000001";
+  const peerStamp = `9999999999000.000.${installPrefix(PEER)}`;
+  const sync = { o: installPrefix(PEER), s: { text: peerStamp, status: peerStamp, look: peerStamp,
+    place: peerStamp, links: peerStamp, machine: peerStamp, handover: peerStamp } };
+  mutateTasks(() => ({ tasks: Array.from({ length: 1025 }, (_, index) => {
+    const id = `linked-${String(index).padStart(4, "0")}`;
+    return { id, project: key, machine: PEER, sync, status: "inbox" as const, text: `peer task ${index}`,
+      placement: "unplaced" as const, assignments: [], createdAt: "2026-10-01T00:00:00.000Z", updatedAt: "2026-10-01T00:00:00.000Z",
+      ...(index === 0 ? { prototypeReviews: [{ id: review, taskId: id, project: key, title: "Before", createdAt: "2026-10-01T00:00:00.000Z",
+        publicationKey: "prototype-watermark", inputDigest: "fixture", source: { conversationId: null }, variants: [] }] } : {}) };
+  }), result: null }), file);
+  expect(find(file, "linked-0000")!.prototypeReviews?.map(round => round.id)).toEqual([review]);
+  expect(taskFeedSource(file)!.get("linked-0000")?.prototypeReviews?.map(round => round.id)).toEqual([review]);
+  const stringify = JSON.stringify;
+  let taskFingerprints = 0;
+  const spy = spyOn(JSON, "stringify").mockImplementation((...args) => {
+    if (new Error().stack?.includes("taskFingerprint")) taskFingerprints++;
+    return Reflect.apply(stringify, JSON, args) as string;
+  });
+  try {
+    mutateTaskPrototypeRound("linked-0000", review, round => { round!.title = "After"; }, file);
+  } finally { spy.mockRestore(); }
+  expect(taskFingerprints).toBeLessThanOrEqual(4);
+  expect(find(file, "linked-0000")!.sync!.s.text).toBe("9999999999000.001." + installPrefix(SELF));
+  const database = new Database(db);
+  const plan = database.query<{ detail: string }, [string]>(`EXPLAIN QUERY PLAN SELECT MAX(json_extract(value_json,'$.sync.s.text'))
+    FROM state_rows INDEXED BY state_rows_task_project WHERE collection='tasks' AND json_valid(value_json) AND json_extract(value_json,'$.project')=?`).all(key)
+    .map(row => row.detail).join(" ");
+  database.close();
+  expect(plan).toContain("state_rows_task_project");
 });
 
 test("deleting a linked task writes its tombstone and the project floor in the same commit; a refused write writes neither", () => {
