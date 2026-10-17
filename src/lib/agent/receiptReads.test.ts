@@ -1,47 +1,12 @@
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
+import { receiptHotCallers, replayReceiptCaller } from "./receiptHotCallers.fixture";
 import { afterEach, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
-import { AgentRegistry, deliveryHasDurableClaimOwner, normalizeRegistry, type RegistryFile } from "./registry";
+import { deliveryHasDurableClaimOwner, type RegistryFile } from "./registry";
 import { registryRowsMatching, SqliteAgentRegistryStore } from "./sqliteRegistryStore";
 
-const roots: string[] = [];
-const stores: SqliteAgentRegistryStore[] = [];
-afterEach(() => {
-  for (const store of stores.splice(0)) store.close();
-  for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
-});
-function fixture(count = 513) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "receipt-read-")); roots.push(root);
-  const seed = new AgentRegistry(path.join(root, "seed.json"), undefined, undefined, { sqliteMode: "off" });
-  const original = seed.ensureConversation("codex", "/fixture/current.jsonl", null);
-  seed.close();
-  const id = "conversation_selected" as const;
-  const at = "2026-10-01T00:00:00.000Z";
-  const conversation = { ...original, id, createdAt: at, updatedAt: at,
-    generations: original.generations.map(g => ({ ...g, id: "current", host: null, createdAt: at })) };
-  const initial = normalizeRegistry({ version: 2, entries: {}, conversations: { [id]: conversation },
-    receipts: Object.fromEntries(Array.from({ length: count }, (_, n) => {
-      const selected = n === count - 1;
-      const key = `receipt-${n.toString().padStart(5, "0")}`;
-      return [key, { launchId: key, conversationId: selected ? id : `conversation_history_${n}`, engine: "codex",
-        cwd: "/fixture", createdAt: at, state: selected ? "starting" : "completed", transport: "structured", error: null,
-        artifactPath: selected ? "/fixture/current.jsonl" : `/fixture/history-${n}.jsonl`,
-        launchProfile: emptyLaunchProfile({ cwd: "/fixture", title: "Receipt read fixture", mcpServers: ["viewer"] }) }];
-    })) });
-  let reads = 0;
-  const filename = path.join(root, "registry.sqlite");
-  const open = () => {
-    const store = new SqliteAgentRegistryStore(filename, { initialSnapshot: initial, normalize: normalizeRegistry,
-      onRowPayloadRead: (collection, n) => { if (collection === "receipts") reads += n; } });
-    stores.push(store); return store;
-  };
-  const store = open();
-  while (store.archiveInactive(250)) { /* seed retained production history */ }
-  return { store, open, initial, id, filename, reset: () => { reads = 0; }, reads: () => reads };
-}
+import { receiptReadFixture as fixture, closeReceiptReadFixtures, observeReceiptSelections } from "./receiptRead.fixture";
+
+afterEach(closeReceiptReadFixtures);
 
 test("each ownership check reads only the recipient receipts, including a fresh view per call", () => {
   const f = fixture();
@@ -84,10 +49,10 @@ test("indexed receipt selections see pending edits, deletes and inserts in colle
     file.receipts["receipt-00000"]!.conversationId = f.id;
     delete file.receipts["receipt-00512"];
     file.receipts.inserted = { ...selected, launchId: "inserted" };
-    expect(registryRowsMatching(file, "receipts", "conversationId", f.id).map(r => r.launchId))
+    expect(registryRowsMatching(file, "receipts", "conversationId", [f.id, "conversation_missing", f.id]).map(r => r.launchId))
       .toEqual(["receipt-00000", "inserted"]);
   }, false);
-  expect(registryRowsMatching(f.store.readOnlySnapshot().file, "receipts", "conversationId", f.id).map(r => r.launchId))
+  expect(registryRowsMatching(f.store.readOnlySnapshot().file, "receipts", "conversationId", [f.id, "conversation_missing", f.id]).map(r => r.launchId))
     .toEqual(["receipt-00000", "inserted"]);
 });
 
@@ -145,10 +110,10 @@ test("held receipt selections keep their cut across a peer rebind", async () => 
     ["clientAttemptId", "previous-attempt", "next-attempt"],
     ["pendingSpawnCapability.operationId", "previous-operation", "next-operation"],
   ] as const) {
-    expect(registryRowsMatching(held, "receipts", field, previous).some(row => row.launchId === "receipt-00512")).toBe(true);
-    expect(registryRowsMatching(held, "receipts", field, next).some(row => row.launchId === "receipt-00512")).toBe(false);
+    expect(registryRowsMatching(held, "receipts", field, ["missing", previous, previous]).some(row => row.launchId === "receipt-00512")).toBe(true);
+    expect(registryRowsMatching(held, "receipts", field, ["missing", next]).some(row => row.launchId === "receipt-00512")).toBe(false);
     const fresh = f.store.readOnlySnapshot().file;
-    expect(registryRowsMatching(fresh, "receipts", field, next).some(row => row.launchId === "receipt-00512")).toBe(true);
+    expect(registryRowsMatching(fresh, "receipts", field, ["missing", next]).some(row => row.launchId === "receipt-00512")).toBe(true);
   }
 });
 
@@ -160,4 +125,65 @@ test("conflicting launch diagnostics select in collection order without reading 
   const selected = registryRowsMatching(f.store.readOnlySnapshot().file, "receipts", "launchId", ["receipt-00512", "receipt-00000"]);
   expect(selected.map(row => row.launchId)).toEqual(["receipt-00000", "receipt-00512"]);
   expect(f.reads()).toBeLessThanOrEqual(2);
+});
+
+test.each([
+  ["duplicate canonical ids", ["conversation_selected", "conversation_selected"]],
+  ["distinct canonical ids", ["conversation_missing", "conversation_selected"]],
+] as const)("receipt multi-value selectors seek indexes: %s", async (_name, ids) => {
+  const f = fixture(2049);
+  await f.store.prepareRecoveryIndexes();
+  const { plans } = observeReceiptSelections(f.store);
+  f.reset();
+  expect(registryRowsMatching(f.store.readOnlySnapshot().file, "receipts", "conversationId", ids).map(row => row.launchId))
+    .toEqual(["receipt-02048"]);
+  expect(f.reads()).toBeLessThanOrEqual(1);
+  expect(plans.length).toBeGreaterThan(0);
+  expect(plans.filter(detail => /(?:SCAN|SEARCH) (registry_rows|registry_hot_rows|a)( |$)/.test(detail) && !detail.includes("<expr>=?"))).toEqual([]);
+});
+
+// Each HTTP consumer's receipt-bearing liveness request, plus the fleet join.
+test.each([...receiptHotCallers])("%s keeps receipt work narrow with retained history", async caller => {
+  const f = fixture(2049);
+  await f.store.prepareRecoveryIndexes();
+  const { plans } = observeReceiptSelections(f.store);
+  f.reset();
+  const { snapshot } = await replayReceiptCaller(caller, f.store);
+  expect(snapshot.conversations.map(row => row.conversationId)).toEqual([f.id]);
+  expect(f.reads()).toBeLessThanOrEqual(2);
+  expect(plans.length).toBeGreaterThan(0);
+  expect(plans.filter(detail => /(?:SCAN|SEARCH) (registry_rows|registry_hot_rows|a)( |$)/.test(detail) && !detail.includes("<expr>=?"))).toEqual([]);
+});
+
+test("empty and absent receipt selections do no payload work", async () => {
+  const f = fixture();
+  await f.store.prepareRecoveryIndexes();
+  const { plans } = observeReceiptSelections(f.store);
+  f.reset();
+  const view = f.store.readOnlySnapshot().file;
+  f.reset();
+  expect(registryRowsMatching(view, "receipts", "conversationId", [])).toEqual([]);
+  expect(plans).toEqual([]);
+  expect(registryRowsMatching(view, "receipts", "conversationId", ["missing", "also-missing", "missing"])).toEqual([]);
+  expect(f.reads()).toBe(0);
+  expect(plans.filter(detail => /(?:SCAN|SEARCH) (registry_rows|registry_hot_rows|a)( |$)/.test(detail) && !detail.includes("<expr>=?"))).toEqual([]);
+});
+
+test("multiple lookup values merge hot and archived matches in collection order", async () => {
+  const f = fixture();
+  await f.store.prepareRecoveryIndexes();
+  f.store.mutate(file => {
+    file.receipts["receipt-00512"]!.conversationId = "conversation_second";
+    file.receipts["receipt-00000"]!.conversationId = f.id;
+    file.receipts["receipt-00001"]!.conversationId = f.id;
+  }, false);
+  const select = (store: SqliteAgentRegistryStore) => registryRowsMatching(store.readOnlySnapshot().file,
+    "receipts", "conversationId", ["conversation_second", f.id, f.id]).map(row => row.launchId);
+  const before = f.store.readOnlySnapshot().file;
+  expect(select(f.store)).toEqual(["receipt-00000", "receipt-00001", "receipt-00512"]);
+  f.open().mutate(file => { delete file.receipts["receipt-00000"]; file.receipts["receipt-00001"]!.conversationId = "conversation_other"; }, false);
+  expect(registryRowsMatching(before, "receipts", "conversationId", [f.id, "conversation_second"]).map(row => row.launchId))
+    .toEqual(["receipt-00000", "receipt-00001", "receipt-00512"]);
+  expect(select(f.store)).toEqual(["receipt-00512"]);
+  expect(select(f.open())).toEqual(["receipt-00512"]);
 });

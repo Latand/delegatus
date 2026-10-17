@@ -1,0 +1,851 @@
+{
+  "baseRevision": "afafbfba9bcdb68f4d7f41bfaefef6eb9163488a",
+  "selectorSha256": "0d9470a8e175e4d5e1b0b3bf8977d1543517fb1b67fb0bdddceee28358ee5314",
+  "dataset": {
+    "receiptRows": 32769,
+    "archivedRows": 32768,
+    "activeRows": 1,
+    "databaseBytes": 132366336,
+    "inputSha256": "954fff5f015a682125b80c9b65953ec788c7baae7e70b686ff57f638f379c2e0"
+  },
+  "before": {
+    "runtime": "1.4.0",
+    "inputSha256": "954fff5f015a682125b80c9b65953ec788c7baae7e70b686ff57f638f379c2e0",
+    "count": 32769,
+    "repeats": 3,
+    "measurement": "receipt selector rchar minus proc-read bytes; synchronous selector wall time; shared consumer paths without HTTP transport",
+    "passes": [
+      {
+        "pass": 1,
+        "requests": [
+          {
+            "caller": "agent_activity",
+            "bytes": 91148288,
+            "syncMs": 167.53962799999977,
+            "maxMs": 167.50105699999995,
+            "calls": 2,
+            "requestMs": 205.5818549999999,
+            "payloadRows": 0,
+            "rows": 1,
+            "plans": [
+              "MERGE (UNION ALL)",
+              "LEFT",
+              "SEARCH r USING INDEX registry_rows_collection_order (collection=?)",
+              "CORRELATED SCALAR SUBQUERY 4",
+              "SEARCH c USING COVERING INDEX sqlite_autoindex_registry_cold_1 (collection=? AND row_key=?)",
+              "RIGHT",
+              "SEARCH a USING INDEX registry_archive_order (collection=?)",
+              "SEARCH c USING INDEX sqlite_autoindex_registry_cold_1 (collection=? AND row_key=?)",
+              "SEARCH r USING INDEX registry_lookup_artifactPath (collection=? AND <expr>=?)",
+              "SEARCH a USING INDEX registry_archive_artifactPath (collection=? AND <expr>=?)"
+            ]
+          },
+          {
+            "caller": "agent_fleet",
+            "bytes": 182272000,
+            "syncMs": 329.22876899999983,
+            "maxMs": 168.09952999999996,
+            "calls": 3,
+            "requestMs": 332.6898430000001,
+            "payloadRows": 0,
+            "rows": 1,
+            "plans": [
+              "MERGE (UNION ALL)",
+              "LEFT",
+              "SEARCH r USING INDEX registry_rows_collection_order (collection=?)",
+              "CORRELATED SCALAR SUBQUERY 4",
+              "SEARCH c USING COVERING INDEX sqlite_autoindex_registry_cold_1 (collection=? AND row_key=?)",
+              "RIGHT",
+              "SEARCH a USING INDEX registry_archive_order (collection=?)",
+              "SEARCH c USING INDEX sqlite_autoindex_registry_cold_1 (collection=? AND row_key=?)",
+              "SEARCH r USING INDEX registry_lookup_artifactPath (collection=? AND <expr>=?)",
+              "SEARCH a USING INDEX registry_archive_artifactPath (collection=? AND <expr>=?)"
+            ]
+          },
+          {
+            "caller": "get_orchestrator",
+            "bytes": 91148288,
+            "syncMs": 164.06458500000008,
+            "maxMs": 164.02173300000004,
+            "calls": 2,
+            "requestMs": 166.43887600000016,
+            "payloadRows": 0,
+            "rows": 1,
+            "plans": [
+              "MERGE (UNION ALL)",
+              "LEFT",
+              "SEARCH r USING INDEX registry_rows_collection_order (collection=?)",
+              "CORRELATED SCALAR SUBQUERY 4",
+              "SEARCH c USING COVERING INDEX sqlite_autoindex_registry_cold_1 (collection=? AND row_key=?)",
+              "RIGHT",
+              "SEARCH a USING INDEX registry_archive_order (collection=?)",
+              "SEARCH c USING INDEX sqlite_autoindex_registry_cold_1 (collection=? AND row_key=?)",
+              "SEARCH r USING INDEX registry_lookup_artifactPath (collection=? AND <expr>=?)",
+              "SEARCH a USING INDEX registry_archive_artifactPath (collection=? AND <expr>=?)"
+            ]
+          },
+          {
+            "caller": "update_task",
+            "bytes": 91148288,
+            "syncMs": 161.59170399999994,
+            "maxMs": 161.56383400000004,
+            "calls": 2,
+            "requestMs": 162.96734600000036,
+            "payloadRows": 0,
+            "rows": 1,
+            "plans": [
+              "MERGE (UNION ALL)",
+              "LEFT",
+              "SEARCH r USING INDEX registry_rows_collection_order (collection=?)",
+              "CORRELATED SCALAR SUBQUERY 4",
+              "SEARCH c USING COVERING INDEX sqlite_autoindex_registry_cold_1 (collection=? AND row_key=?)",
+              "RIGHT",
+              "SEARCH a USING INDEX registry_archive_order (collection=?)",
+              "SEARCH c USING INDEX sqlite_autoindex_registry_cold_1 (collection=? AND row_key=?)",
+              "SEARCH r USING INDEX registry_lookup_artifactPath (collection=? AND <expr>=?)",
+              "SEARCH a USING INDEX registry_archive_artifactPath (collection=? AND <expr>=?)"
+            ]
+          },
+          {
+            "caller": "attention.needs-you",
+            "bytes": 91148288,
+            "syncMs": 164.05719800000043,
+            "maxMs": 164.0275730000003,
+            "calls": 2,
+            "requestMs": 165.34604199999967,
+            "payloadRows": 0,
+            "rows": 1,
+            "plans": [
+              "MERGE (UNION ALL)",
+              "LEFT",
+              "SEARCH r USING INDEX registry_rows_collection_order (collection=?)",
+              "CORRELATED SCALAR SUBQUERY 4",
+              "SEARCH c USING COVERING INDEX sqlite_autoindex_registry_cold_1 (collection=? AND row_key=?)",
+              "RIGHT",
+              "SEARCH a USING INDEX registry_archive_order (collection=?)",
+              "SEARCH c USING INDEX sqlite_autoindex_registry_cold_1 (collection=? AND row_key=?)",
+              "SEARCH r USING INDEX registry_lookup_artifactPath (collection=? AND <expr>=?)",
+              "SEARCH a USING INDEX registry_archive_artifactPath (collection=? AND <expr>=?)"
+            ]
+          },
+          {
+            "caller": "seat.status",
+            "bytes": 91148288,
+            "syncMs": 173.21912199999997,
+            "maxMs": 173.1880940000001,
+            "calls": 2,
+            "requestMs": 174.50164300000006,
+            "payloadRows": 0,
+            "rows": 1,
+            "plans": [
+              "MERGE (UNION ALL)",
+              "LEFT",
+              "SEARCH r USING INDEX registry_rows_collection_order (collection=?)",
+              "CORRELATED SCALAR SUBQUERY 4",
+              "SEARCH c USING COVERING INDEX sqlite_autoindex_registry_cold_1 (collection=? AND row_key=?)",
+              "RIGHT",
+              "SEARCH a USING INDEX registry_archive_order (collection=?)",
+              "SEARCH c USING INDEX sqlite_autoindex_registry_cold_1 (collection=? AND row_key=?)",
+              "SEARCH r USING INDEX registry_lookup_artifactPath (collection=? AND <expr>=?)",
+              "SEARCH a USING INDEX registry_archive_artifactPath (collection=? AND <expr>=?)"
+            ]
+          }
+        ]
+      },
+      {
+        "pass": 2,
+        "requests": [
+          {
+            "caller": "agent_activity",
+            "bytes": 91148288,
+            "syncMs": 107.59383599999956,
+            "maxMs": 107.57060599999977,
+            "calls": 2,
+            "requestMs": 131.42638799999986,
+            "payloadRows": 0,
+            "rows": 1,
+            "plans": [
+              "MERGE (UNION ALL)",
+              "LEFT",
+              "SEARCH r USING INDEX registry_rows_collection_order (collection=?)",
+              "CORRELATED SCALAR SUBQUERY 4",
+              "SEARCH c USING COVERING INDEX sqlite_autoindex_registry_cold_1 (collection=? AND row_key=?)",
+              "RIGHT",
+              "SEARCH a USING INDEX registry_archive_order (collection=?)",
+              "SEARCH c USING INDEX sqlite_autoindex_registry_cold_1 (collection=? AND row_key=?)",
+              "SEARCH r USING INDEX registry_lookup_artifactPath (collection=? AND <expr>=?)",
+              "SEARCH a USING INDEX registry_archive_artifactPath (collection=? AND <expr>=?)"
+            ]
+          },
+          {
+            "caller": "agent_fleet",
+            "bytes": 182272000,
+            "syncMs": 205.81446700000015,
+            "maxMs": 104.39555199999995,
+            "calls": 3,
+            "requestMs": 207.95415200000025,
+            "payloadRows": 0,
+            "rows": 1,
+            "plans": [
+              "MERGE (UNION ALL)",
+              "LEFT",
+              "SEARCH r USING INDEX registry_rows_collection_order (collection=?)",
+              "CORRELATED SCALAR SUBQUERY 4",
+              "SEARCH c USING COVERING INDEX sqlite_autoindex_registry_cold_1 (collection=? AND row_key=?)",
+              "RIGHT",
+              "SEARCH a USING INDEX registry_archive_order (collection=?)",
+              "SEARCH c USING INDEX sqlite_autoindex_registry_cold_1 (collection=? AND row_key=?)",
+              "SEARCH r USING INDEX registry_lookup_artifactPath (collection=? AND <expr>=?)",
+              "SEARCH a USING INDEX registry_archive_artifactPath (collection=? AND <expr>=?)"
+            ]
+          },
+          {
+            "caller": "get_orchestrator",
+            "bytes": 91148288,
+            "syncMs": 116.45292500000005,
+            "maxMs": 116.42748399999982,
+            "calls": 2,
+            "requestMs": 117.67292099999986,
+            "payloadRows": 0,
+            "rows": 1,
+            "plans": [
+              "MERGE (UNION ALL)",
+              "LEFT",
+              "SEARCH r USING INDEX registry_rows_collection_order (collection=?)",
+              "CORRELATED SCALAR SUBQUERY 4",
+              "SEARCH c USING COVERING INDEX sqlite_autoindex_registry_cold_1 (collection=? AND row_key=?)",
+              "RIGHT",
+              "SEARCH a USING INDEX registry_archive_order (collection=?)",
+              "SEARCH c USING INDEX sqlite_autoindex_registry_cold_1 (collection=? AND row_key=?)",
+              "SEARCH r USING INDEX registry_lookup_artifactPath (collection=? AND <expr>=?)",
+              "SEARCH a USING INDEX registry_archive_artifactPath (collection=? AND <expr>=?)"
+            ]
+          },
+          {
+            "caller": "update_task",
+            "bytes": 91148288,
+            "syncMs": 102.73257600000034,
+            "maxMs": 102.69560200000024,
+            "calls": 2,
+            "requestMs": 103.88777900000014,
+            "payloadRows": 0,
+            "rows": 1,
+            "plans": [
+              "MERGE (UNION ALL)",
+              "LEFT",
+              "SEARCH r USING INDEX registry_rows_collection_order (collection=?)",
+              "CORRELATED SCALAR SUBQUERY 4",
+              "SEARCH c USING COVERING INDEX sqlite_autoindex_registry_cold_1 (collection=? AND row_key=?)",
+              "RIGHT",
+              "SEARCH a USING INDEX registry_archive_order (collection=?)",
+              "SEARCH c USING INDEX sqlite_autoindex_registry_cold_1 (collection=? AND row_key=?)",
+              "SEARCH r USING INDEX registry_lookup_artifactPath (collection=? AND <expr>=?)",
+              "SEARCH a USING INDEX registry_archive_artifactPath (collection=? AND <expr>=?)"
+            ]
+          },
+          {
+            "caller": "attention.needs-you",
+            "bytes": 91148288,
+            "syncMs": 101.72689600000012,
+            "maxMs": 101.7025819999999,
+            "calls": 2,
+            "requestMs": 102.94849199999999,
+            "payloadRows": 0,
+            "rows": 1,
+            "plans": [
+              "MERGE (UNION ALL)",
+              "LEFT",
+              "SEARCH r USING INDEX registry_rows_collection_order (collection=?)",
+              "CORRELATED SCALAR SUBQUERY 4",
+              "SEARCH c USING COVERING INDEX sqlite_autoindex_registry_cold_1 (collection=? AND row_key=?)",
+              "RIGHT",
+              "SEARCH a USING INDEX registry_archive_order (collection=?)",
+              "SEARCH c USING INDEX sqlite_autoindex_registry_cold_1 (collection=? AND row_key=?)",
+              "SEARCH r USING INDEX registry_lookup_artifactPath (collection=? AND <expr>=?)",
+              "SEARCH a USING INDEX registry_archive_artifactPath (collection=? AND <expr>=?)"
+            ]
+          },
+          {
+            "caller": "seat.status",
+            "bytes": 91148288,
+            "syncMs": 104.07903399999987,
+            "maxMs": 104.04830300000003,
+            "calls": 2,
+            "requestMs": 105.1835430000001,
+            "payloadRows": 0,
+            "rows": 1,
+            "plans": [
+              "MERGE (UNION ALL)",
+              "LEFT",
+              "SEARCH r USING INDEX registry_rows_collection_order (collection=?)",
+              "CORRELATED SCALAR SUBQUERY 4",
+              "SEARCH c USING COVERING INDEX sqlite_autoindex_registry_cold_1 (collection=? AND row_key=?)",
+              "RIGHT",
+              "SEARCH a USING INDEX registry_archive_order (collection=?)",
+              "SEARCH c USING INDEX sqlite_autoindex_registry_cold_1 (collection=? AND row_key=?)",
+              "SEARCH r USING INDEX registry_lookup_artifactPath (collection=? AND <expr>=?)",
+              "SEARCH a USING INDEX registry_archive_artifactPath (collection=? AND <expr>=?)"
+            ]
+          }
+        ]
+      },
+      {
+        "pass": 3,
+        "requests": [
+          {
+            "caller": "agent_activity",
+            "bytes": 91148288,
+            "syncMs": 100.1452760000002,
+            "maxMs": 100.11428100000012,
+            "calls": 2,
+            "requestMs": 135.4794439999996,
+            "payloadRows": 0,
+            "rows": 1,
+            "plans": [
+              "MERGE (UNION ALL)",
+              "LEFT",
+              "SEARCH r USING INDEX registry_rows_collection_order (collection=?)",
+              "CORRELATED SCALAR SUBQUERY 4",
+              "SEARCH c USING COVERING INDEX sqlite_autoindex_registry_cold_1 (collection=? AND row_key=?)",
+              "RIGHT",
+              "SEARCH a USING INDEX registry_archive_order (collection=?)",
+              "SEARCH c USING INDEX sqlite_autoindex_registry_cold_1 (collection=? AND row_key=?)",
+              "SEARCH r USING INDEX registry_lookup_artifactPath (collection=? AND <expr>=?)",
+              "SEARCH a USING INDEX registry_archive_artifactPath (collection=? AND <expr>=?)"
+            ]
+          },
+          {
+            "caller": "agent_fleet",
+            "bytes": 182272000,
+            "syncMs": 196.25571099999888,
+            "maxMs": 98.52209399999992,
+            "calls": 3,
+            "requestMs": 197.96368399999938,
+            "payloadRows": 0,
+            "rows": 1,
+            "plans": [
+              "MERGE (UNION ALL)",
+              "LEFT",
+              "SEARCH r USING INDEX registry_rows_collection_order (collection=?)",
+              "CORRELATED SCALAR SUBQUERY 4",
+              "SEARCH c USING COVERING INDEX sqlite_autoindex_registry_cold_1 (collection=? AND row_key=?)",
+              "RIGHT",
+              "SEARCH a USING INDEX registry_archive_order (collection=?)",
+              "SEARCH c USING INDEX sqlite_autoindex_registry_cold_1 (collection=? AND row_key=?)",
+              "SEARCH r USING INDEX registry_lookup_artifactPath (collection=? AND <expr>=?)",
+              "SEARCH a USING INDEX registry_archive_artifactPath (collection=? AND <expr>=?)"
+            ]
+          },
+          {
+            "caller": "get_orchestrator",
+            "bytes": 91148288,
+            "syncMs": 94.60310800000025,
+            "maxMs": 94.58054900000025,
+            "calls": 2,
+            "requestMs": 95.63098399999944,
+            "payloadRows": 0,
+            "rows": 1,
+            "plans": [
+              "MERGE (UNION ALL)",
+              "LEFT",
+              "SEARCH r USING INDEX registry_rows_collection_order (collection=?)",
+              "CORRELATED SCALAR SUBQUERY 4",
+              "SEARCH c USING COVERING INDEX sqlite_autoindex_registry_cold_1 (collection=? AND row_key=?)",
+              "RIGHT",
+              "SEARCH a USING INDEX registry_archive_order (collection=?)",
+              "SEARCH c USING INDEX sqlite_autoindex_registry_cold_1 (collection=? AND row_key=?)",
+              "SEARCH r USING INDEX registry_lookup_artifactPath (collection=? AND <expr>=?)",
+              "SEARCH a USING INDEX registry_archive_artifactPath (collection=? AND <expr>=?)"
+            ]
+          },
+          {
+            "caller": "update_task",
+            "bytes": 91148288,
+            "syncMs": 93.0128339999992,
+            "maxMs": 92.98560199999974,
+            "calls": 2,
+            "requestMs": 93.98524799999996,
+            "payloadRows": 0,
+            "rows": 1,
+            "plans": [
+              "MERGE (UNION ALL)",
+              "LEFT",
+              "SEARCH r USING INDEX registry_rows_collection_order (collection=?)",
+              "CORRELATED SCALAR SUBQUERY 4",
+              "SEARCH c USING COVERING INDEX sqlite_autoindex_registry_cold_1 (collection=? AND row_key=?)",
+              "RIGHT",
+              "SEARCH a USING INDEX registry_archive_order (collection=?)",
+              "SEARCH c USING INDEX sqlite_autoindex_registry_cold_1 (collection=? AND row_key=?)",
+              "SEARCH r USING INDEX registry_lookup_artifactPath (collection=? AND <expr>=?)",
+              "SEARCH a USING INDEX registry_archive_artifactPath (collection=? AND <expr>=?)"
+            ]
+          },
+          {
+            "caller": "attention.needs-you",
+            "bytes": 91148288,
+            "syncMs": 97.40514600000006,
+            "maxMs": 97.38163199999963,
+            "calls": 2,
+            "requestMs": 98.34477400000014,
+            "payloadRows": 0,
+            "rows": 1,
+            "plans": [
+              "MERGE (UNION ALL)",
+              "LEFT",
+              "SEARCH r USING INDEX registry_rows_collection_order (collection=?)",
+              "CORRELATED SCALAR SUBQUERY 4",
+              "SEARCH c USING COVERING INDEX sqlite_autoindex_registry_cold_1 (collection=? AND row_key=?)",
+              "RIGHT",
+              "SEARCH a USING INDEX registry_archive_order (collection=?)",
+              "SEARCH c USING INDEX sqlite_autoindex_registry_cold_1 (collection=? AND row_key=?)",
+              "SEARCH r USING INDEX registry_lookup_artifactPath (collection=? AND <expr>=?)",
+              "SEARCH a USING INDEX registry_archive_artifactPath (collection=? AND <expr>=?)"
+            ]
+          },
+          {
+            "caller": "seat.status",
+            "bytes": 91148288,
+            "syncMs": 93.36495800000102,
+            "maxMs": 93.33026400000017,
+            "calls": 2,
+            "requestMs": 94.51253199999974,
+            "payloadRows": 0,
+            "rows": 1,
+            "plans": [
+              "MERGE (UNION ALL)",
+              "LEFT",
+              "SEARCH r USING INDEX registry_rows_collection_order (collection=?)",
+              "CORRELATED SCALAR SUBQUERY 4",
+              "SEARCH c USING COVERING INDEX sqlite_autoindex_registry_cold_1 (collection=? AND row_key=?)",
+              "RIGHT",
+              "SEARCH a USING INDEX registry_archive_order (collection=?)",
+              "SEARCH c USING INDEX sqlite_autoindex_registry_cold_1 (collection=? AND row_key=?)",
+              "SEARCH r USING INDEX registry_lookup_artifactPath (collection=? AND <expr>=?)",
+              "SEARCH a USING INDEX registry_archive_artifactPath (collection=? AND <expr>=?)"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "after": {
+    "runtime": "1.4.0",
+    "inputSha256": "954fff5f015a682125b80c9b65953ec788c7baae7e70b686ff57f638f379c2e0",
+    "count": 32769,
+    "repeats": 3,
+    "measurement": "receipt selector rchar minus proc-read bytes; synchronous selector wall time; shared consumer paths without HTTP transport",
+    "passes": [
+      {
+        "pass": 1,
+        "requests": [
+          {
+            "caller": "agent_activity",
+            "bytes": 36864,
+            "syncMs": 0.08793500000024324,
+            "maxMs": 0.058523000000150205,
+            "calls": 2,
+            "requestMs": 34.880321000000095,
+            "payloadRows": 0,
+            "rows": 1,
+            "plans": [
+              "MERGE (UNION ALL)",
+              "LEFT",
+              "SEARCH r USING INDEX registry_lookup_conversationId (collection=? AND <expr>=?)",
+              "CORRELATED SCALAR SUBQUERY 4",
+              "SEARCH c USING COVERING INDEX sqlite_autoindex_registry_cold_1 (collection=? AND row_key=?)",
+              "RIGHT",
+              "SEARCH a USING INDEX registry_archive_conversationId (collection=? AND <expr>=?)",
+              "SEARCH c USING INDEX sqlite_autoindex_registry_cold_1 (collection=? AND row_key=?)",
+              "SEARCH r USING INDEX registry_lookup_artifactPath (collection=? AND <expr>=?)",
+              "SEARCH a USING INDEX registry_archive_artifactPath (collection=? AND <expr>=?)"
+            ]
+          },
+          {
+            "caller": "agent_fleet",
+            "bytes": 0,
+            "syncMs": 0.04022799999984272,
+            "maxMs": 0.01670800000010786,
+            "calls": 4,
+            "requestMs": 1.8460289999998167,
+            "payloadRows": 0,
+            "rows": 1,
+            "plans": [
+              "MERGE (UNION ALL)",
+              "LEFT",
+              "SEARCH r USING INDEX registry_lookup_conversationId (collection=? AND <expr>=?)",
+              "CORRELATED SCALAR SUBQUERY 4",
+              "SEARCH c USING COVERING INDEX sqlite_autoindex_registry_cold_1 (collection=? AND row_key=?)",
+              "RIGHT",
+              "SEARCH a USING INDEX registry_archive_conversationId (collection=? AND <expr>=?)",
+              "SEARCH c USING INDEX sqlite_autoindex_registry_cold_1 (collection=? AND row_key=?)",
+              "SEARCH r USING INDEX registry_lookup_artifactPath (collection=? AND <expr>=?)",
+              "SEARCH a USING INDEX registry_archive_artifactPath (collection=? AND <expr>=?)"
+            ]
+          },
+          {
+            "caller": "get_orchestrator",
+            "bytes": 0,
+            "syncMs": 0.027195999999776177,
+            "maxMs": 0.015396999999893524,
+            "calls": 2,
+            "requestMs": 1.0186280000000352,
+            "payloadRows": 0,
+            "rows": 1,
+            "plans": [
+              "MERGE (UNION ALL)",
+              "LEFT",
+              "SEARCH r USING INDEX registry_lookup_conversationId (collection=? AND <expr>=?)",
+              "CORRELATED SCALAR SUBQUERY 4",
+              "SEARCH c USING COVERING INDEX sqlite_autoindex_registry_cold_1 (collection=? AND row_key=?)",
+              "RIGHT",
+              "SEARCH a USING INDEX registry_archive_conversationId (collection=? AND <expr>=?)",
+              "SEARCH c USING INDEX sqlite_autoindex_registry_cold_1 (collection=? AND row_key=?)",
+              "SEARCH r USING INDEX registry_lookup_artifactPath (collection=? AND <expr>=?)",
+              "SEARCH a USING INDEX registry_archive_artifactPath (collection=? AND <expr>=?)"
+            ]
+          },
+          {
+            "caller": "update_task",
+            "bytes": 0,
+            "syncMs": 0.024197000000185653,
+            "maxMs": 0.015980000000126893,
+            "calls": 2,
+            "requestMs": 0.6619049999999334,
+            "payloadRows": 0,
+            "rows": 1,
+            "plans": [
+              "MERGE (UNION ALL)",
+              "LEFT",
+              "SEARCH r USING INDEX registry_lookup_conversationId (collection=? AND <expr>=?)",
+              "CORRELATED SCALAR SUBQUERY 4",
+              "SEARCH c USING COVERING INDEX sqlite_autoindex_registry_cold_1 (collection=? AND row_key=?)",
+              "RIGHT",
+              "SEARCH a USING INDEX registry_archive_conversationId (collection=? AND <expr>=?)",
+              "SEARCH c USING INDEX sqlite_autoindex_registry_cold_1 (collection=? AND row_key=?)",
+              "SEARCH r USING INDEX registry_lookup_artifactPath (collection=? AND <expr>=?)",
+              "SEARCH a USING INDEX registry_archive_artifactPath (collection=? AND <expr>=?)"
+            ]
+          },
+          {
+            "caller": "attention.needs-you",
+            "bytes": 0,
+            "syncMs": 0.020265999999764972,
+            "maxMs": 0.010673999999880834,
+            "calls": 2,
+            "requestMs": 0.611297999999806,
+            "payloadRows": 0,
+            "rows": 1,
+            "plans": [
+              "MERGE (UNION ALL)",
+              "LEFT",
+              "SEARCH r USING INDEX registry_lookup_conversationId (collection=? AND <expr>=?)",
+              "CORRELATED SCALAR SUBQUERY 4",
+              "SEARCH c USING COVERING INDEX sqlite_autoindex_registry_cold_1 (collection=? AND row_key=?)",
+              "RIGHT",
+              "SEARCH a USING INDEX registry_archive_conversationId (collection=? AND <expr>=?)",
+              "SEARCH c USING INDEX sqlite_autoindex_registry_cold_1 (collection=? AND row_key=?)",
+              "SEARCH r USING INDEX registry_lookup_artifactPath (collection=? AND <expr>=?)",
+              "SEARCH a USING INDEX registry_archive_artifactPath (collection=? AND <expr>=?)"
+            ]
+          },
+          {
+            "caller": "seat.status",
+            "bytes": 0,
+            "syncMs": 0.012514000000237502,
+            "maxMs": 0.00739600000019891,
+            "calls": 2,
+            "requestMs": 0.5102630000001227,
+            "payloadRows": 0,
+            "rows": 1,
+            "plans": [
+              "MERGE (UNION ALL)",
+              "LEFT",
+              "SEARCH r USING INDEX registry_lookup_conversationId (collection=? AND <expr>=?)",
+              "CORRELATED SCALAR SUBQUERY 4",
+              "SEARCH c USING COVERING INDEX sqlite_autoindex_registry_cold_1 (collection=? AND row_key=?)",
+              "RIGHT",
+              "SEARCH a USING INDEX registry_archive_conversationId (collection=? AND <expr>=?)",
+              "SEARCH c USING INDEX sqlite_autoindex_registry_cold_1 (collection=? AND row_key=?)",
+              "SEARCH r USING INDEX registry_lookup_artifactPath (collection=? AND <expr>=?)",
+              "SEARCH a USING INDEX registry_archive_artifactPath (collection=? AND <expr>=?)"
+            ]
+          }
+        ]
+      },
+      {
+        "pass": 2,
+        "requests": [
+          {
+            "caller": "agent_activity",
+            "bytes": 36864,
+            "syncMs": 0.04577900000003865,
+            "maxMs": 0.02937900000006266,
+            "calls": 2,
+            "requestMs": 26.580171000000064,
+            "payloadRows": 0,
+            "rows": 1,
+            "plans": [
+              "MERGE (UNION ALL)",
+              "LEFT",
+              "SEARCH r USING INDEX registry_lookup_conversationId (collection=? AND <expr>=?)",
+              "CORRELATED SCALAR SUBQUERY 4",
+              "SEARCH c USING COVERING INDEX sqlite_autoindex_registry_cold_1 (collection=? AND row_key=?)",
+              "RIGHT",
+              "SEARCH a USING INDEX registry_archive_conversationId (collection=? AND <expr>=?)",
+              "SEARCH c USING INDEX sqlite_autoindex_registry_cold_1 (collection=? AND row_key=?)",
+              "SEARCH r USING INDEX registry_lookup_artifactPath (collection=? AND <expr>=?)",
+              "SEARCH a USING INDEX registry_archive_artifactPath (collection=? AND <expr>=?)"
+            ]
+          },
+          {
+            "caller": "agent_fleet",
+            "bytes": 0,
+            "syncMs": 0.02852900000016234,
+            "maxMs": 0.011021000000027925,
+            "calls": 4,
+            "requestMs": 1.2592709999998988,
+            "payloadRows": 0,
+            "rows": 1,
+            "plans": [
+              "MERGE (UNION ALL)",
+              "LEFT",
+              "SEARCH r USING INDEX registry_lookup_conversationId (collection=? AND <expr>=?)",
+              "CORRELATED SCALAR SUBQUERY 4",
+              "SEARCH c USING COVERING INDEX sqlite_autoindex_registry_cold_1 (collection=? AND row_key=?)",
+              "RIGHT",
+              "SEARCH a USING INDEX registry_archive_conversationId (collection=? AND <expr>=?)",
+              "SEARCH c USING INDEX sqlite_autoindex_registry_cold_1 (collection=? AND row_key=?)",
+              "SEARCH r USING INDEX registry_lookup_artifactPath (collection=? AND <expr>=?)",
+              "SEARCH a USING INDEX registry_archive_artifactPath (collection=? AND <expr>=?)"
+            ]
+          },
+          {
+            "caller": "get_orchestrator",
+            "bytes": 0,
+            "syncMs": 0.014236999999866384,
+            "maxMs": 0.008248999999977968,
+            "calls": 2,
+            "requestMs": 0.6053729999998723,
+            "payloadRows": 0,
+            "rows": 1,
+            "plans": [
+              "MERGE (UNION ALL)",
+              "LEFT",
+              "SEARCH r USING INDEX registry_lookup_conversationId (collection=? AND <expr>=?)",
+              "CORRELATED SCALAR SUBQUERY 4",
+              "SEARCH c USING COVERING INDEX sqlite_autoindex_registry_cold_1 (collection=? AND row_key=?)",
+              "RIGHT",
+              "SEARCH a USING INDEX registry_archive_conversationId (collection=? AND <expr>=?)",
+              "SEARCH c USING INDEX sqlite_autoindex_registry_cold_1 (collection=? AND row_key=?)",
+              "SEARCH r USING INDEX registry_lookup_artifactPath (collection=? AND <expr>=?)",
+              "SEARCH a USING INDEX registry_archive_artifactPath (collection=? AND <expr>=?)"
+            ]
+          },
+          {
+            "caller": "update_task",
+            "bytes": 0,
+            "syncMs": 0.012297999999873355,
+            "maxMs": 0.0062709999999697175,
+            "calls": 2,
+            "requestMs": 0.5335620000000745,
+            "payloadRows": 0,
+            "rows": 1,
+            "plans": [
+              "MERGE (UNION ALL)",
+              "LEFT",
+              "SEARCH r USING INDEX registry_lookup_conversationId (collection=? AND <expr>=?)",
+              "CORRELATED SCALAR SUBQUERY 4",
+              "SEARCH c USING COVERING INDEX sqlite_autoindex_registry_cold_1 (collection=? AND row_key=?)",
+              "RIGHT",
+              "SEARCH a USING INDEX registry_archive_conversationId (collection=? AND <expr>=?)",
+              "SEARCH c USING INDEX sqlite_autoindex_registry_cold_1 (collection=? AND row_key=?)",
+              "SEARCH r USING INDEX registry_lookup_artifactPath (collection=? AND <expr>=?)",
+              "SEARCH a USING INDEX registry_archive_artifactPath (collection=? AND <expr>=?)"
+            ]
+          },
+          {
+            "caller": "attention.needs-you",
+            "bytes": 0,
+            "syncMs": 0.013220999999930427,
+            "maxMs": 0.006648999999924854,
+            "calls": 2,
+            "requestMs": 0.43829500000015287,
+            "payloadRows": 0,
+            "rows": 1,
+            "plans": [
+              "MERGE (UNION ALL)",
+              "LEFT",
+              "SEARCH r USING INDEX registry_lookup_conversationId (collection=? AND <expr>=?)",
+              "CORRELATED SCALAR SUBQUERY 4",
+              "SEARCH c USING COVERING INDEX sqlite_autoindex_registry_cold_1 (collection=? AND row_key=?)",
+              "RIGHT",
+              "SEARCH a USING INDEX registry_archive_conversationId (collection=? AND <expr>=?)",
+              "SEARCH c USING INDEX sqlite_autoindex_registry_cold_1 (collection=? AND row_key=?)",
+              "SEARCH r USING INDEX registry_lookup_artifactPath (collection=? AND <expr>=?)",
+              "SEARCH a USING INDEX registry_archive_artifactPath (collection=? AND <expr>=?)"
+            ]
+          },
+          {
+            "caller": "seat.status",
+            "bytes": 0,
+            "syncMs": 0.010692000000062762,
+            "maxMs": 0.005856999999878099,
+            "calls": 2,
+            "requestMs": 0.37620499999979984,
+            "payloadRows": 0,
+            "rows": 1,
+            "plans": [
+              "MERGE (UNION ALL)",
+              "LEFT",
+              "SEARCH r USING INDEX registry_lookup_conversationId (collection=? AND <expr>=?)",
+              "CORRELATED SCALAR SUBQUERY 4",
+              "SEARCH c USING COVERING INDEX sqlite_autoindex_registry_cold_1 (collection=? AND row_key=?)",
+              "RIGHT",
+              "SEARCH a USING INDEX registry_archive_conversationId (collection=? AND <expr>=?)",
+              "SEARCH c USING INDEX sqlite_autoindex_registry_cold_1 (collection=? AND row_key=?)",
+              "SEARCH r USING INDEX registry_lookup_artifactPath (collection=? AND <expr>=?)",
+              "SEARCH a USING INDEX registry_archive_artifactPath (collection=? AND <expr>=?)"
+            ]
+          }
+        ]
+      },
+      {
+        "pass": 3,
+        "requests": [
+          {
+            "caller": "agent_activity",
+            "bytes": 36864,
+            "syncMs": 0.047823999999764055,
+            "maxMs": 0.036274999999932334,
+            "calls": 2,
+            "requestMs": 20.716327000000092,
+            "payloadRows": 0,
+            "rows": 1,
+            "plans": [
+              "MERGE (UNION ALL)",
+              "LEFT",
+              "SEARCH r USING INDEX registry_lookup_conversationId (collection=? AND <expr>=?)",
+              "CORRELATED SCALAR SUBQUERY 4",
+              "SEARCH c USING COVERING INDEX sqlite_autoindex_registry_cold_1 (collection=? AND row_key=?)",
+              "RIGHT",
+              "SEARCH a USING INDEX registry_archive_conversationId (collection=? AND <expr>=?)",
+              "SEARCH c USING INDEX sqlite_autoindex_registry_cold_1 (collection=? AND row_key=?)",
+              "SEARCH r USING INDEX registry_lookup_artifactPath (collection=? AND <expr>=?)",
+              "SEARCH a USING INDEX registry_archive_artifactPath (collection=? AND <expr>=?)"
+            ]
+          },
+          {
+            "caller": "agent_fleet",
+            "bytes": 0,
+            "syncMs": 0.0346559999998135,
+            "maxMs": 0.014177999999901658,
+            "calls": 4,
+            "requestMs": 0.8491820000003827,
+            "payloadRows": 0,
+            "rows": 1,
+            "plans": [
+              "MERGE (UNION ALL)",
+              "LEFT",
+              "SEARCH r USING INDEX registry_lookup_conversationId (collection=? AND <expr>=?)",
+              "CORRELATED SCALAR SUBQUERY 4",
+              "SEARCH c USING COVERING INDEX sqlite_autoindex_registry_cold_1 (collection=? AND row_key=?)",
+              "RIGHT",
+              "SEARCH a USING INDEX registry_archive_conversationId (collection=? AND <expr>=?)",
+              "SEARCH c USING INDEX sqlite_autoindex_registry_cold_1 (collection=? AND row_key=?)",
+              "SEARCH r USING INDEX registry_lookup_artifactPath (collection=? AND <expr>=?)",
+              "SEARCH a USING INDEX registry_archive_artifactPath (collection=? AND <expr>=?)"
+            ]
+          },
+          {
+            "caller": "get_orchestrator",
+            "bytes": 0,
+            "syncMs": 0.009625000000141881,
+            "maxMs": 0.005036000000018248,
+            "calls": 2,
+            "requestMs": 0.43190999999978885,
+            "payloadRows": 0,
+            "rows": 1,
+            "plans": [
+              "MERGE (UNION ALL)",
+              "LEFT",
+              "SEARCH r USING INDEX registry_lookup_conversationId (collection=? AND <expr>=?)",
+              "CORRELATED SCALAR SUBQUERY 4",
+              "SEARCH c USING COVERING INDEX sqlite_autoindex_registry_cold_1 (collection=? AND row_key=?)",
+              "RIGHT",
+              "SEARCH a USING INDEX registry_archive_conversationId (collection=? AND <expr>=?)",
+              "SEARCH c USING INDEX sqlite_autoindex_registry_cold_1 (collection=? AND row_key=?)",
+              "SEARCH r USING INDEX registry_lookup_artifactPath (collection=? AND <expr>=?)",
+              "SEARCH a USING INDEX registry_archive_artifactPath (collection=? AND <expr>=?)"
+            ]
+          },
+          {
+            "caller": "update_task",
+            "bytes": 0,
+            "syncMs": 0.00955999999996493,
+            "maxMs": 0.0055179999999381835,
+            "calls": 2,
+            "requestMs": 0.44528300000001764,
+            "payloadRows": 0,
+            "rows": 1,
+            "plans": [
+              "MERGE (UNION ALL)",
+              "LEFT",
+              "SEARCH r USING INDEX registry_lookup_conversationId (collection=? AND <expr>=?)",
+              "CORRELATED SCALAR SUBQUERY 4",
+              "SEARCH c USING COVERING INDEX sqlite_autoindex_registry_cold_1 (collection=? AND row_key=?)",
+              "RIGHT",
+              "SEARCH a USING INDEX registry_archive_conversationId (collection=? AND <expr>=?)",
+              "SEARCH c USING INDEX sqlite_autoindex_registry_cold_1 (collection=? AND row_key=?)",
+              "SEARCH r USING INDEX registry_lookup_artifactPath (collection=? AND <expr>=?)",
+              "SEARCH a USING INDEX registry_archive_artifactPath (collection=? AND <expr>=?)"
+            ]
+          },
+          {
+            "caller": "attention.needs-you",
+            "bytes": 0,
+            "syncMs": 0.008407999999690219,
+            "maxMs": 0.00497799999993731,
+            "calls": 2,
+            "requestMs": 0.339144000000033,
+            "payloadRows": 0,
+            "rows": 1,
+            "plans": [
+              "MERGE (UNION ALL)",
+              "LEFT",
+              "SEARCH r USING INDEX registry_lookup_conversationId (collection=? AND <expr>=?)",
+              "CORRELATED SCALAR SUBQUERY 4",
+              "SEARCH c USING COVERING INDEX sqlite_autoindex_registry_cold_1 (collection=? AND row_key=?)",
+              "RIGHT",
+              "SEARCH a USING INDEX registry_archive_conversationId (collection=? AND <expr>=?)",
+              "SEARCH c USING INDEX sqlite_autoindex_registry_cold_1 (collection=? AND row_key=?)",
+              "SEARCH r USING INDEX registry_lookup_artifactPath (collection=? AND <expr>=?)",
+              "SEARCH a USING INDEX registry_archive_artifactPath (collection=? AND <expr>=?)"
+            ]
+          },
+          {
+            "caller": "seat.status",
+            "bytes": 0,
+            "syncMs": 0.008175999999821215,
+            "maxMs": 0.004801000000043132,
+            "calls": 2,
+            "requestMs": 0.3510989999999765,
+            "payloadRows": 0,
+            "rows": 1,
+            "plans": [
+              "MERGE (UNION ALL)",
+              "LEFT",
+              "SEARCH r USING INDEX registry_lookup_conversationId (collection=? AND <expr>=?)",
+              "CORRELATED SCALAR SUBQUERY 4",
+              "SEARCH c USING COVERING INDEX sqlite_autoindex_registry_cold_1 (collection=? AND row_key=?)",
+              "RIGHT",
+              "SEARCH a USING INDEX registry_archive_conversationId (collection=? AND <expr>=?)",
+              "SEARCH c USING INDEX sqlite_autoindex_registry_cold_1 (collection=? AND row_key=?)",
+              "SEARCH r USING INDEX registry_lookup_artifactPath (collection=? AND <expr>=?)",
+              "SEARCH a USING INDEX registry_archive_artifactPath (collection=? AND <expr>=?)"
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

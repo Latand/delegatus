@@ -685,7 +685,7 @@ function createRuntimeHostSupervisor(config, bunRuntime, environment, packageRoo
     const packaged = release.dir === packageRoot;
     const child = spawn(bunRuntime, ["--bun", packaged ? config.entrypoint : hostEntrypoint(release.dir)], viewerChildProcessOptions({
       cwd: release.dir,
-      env: environment,
+      env: cliRuntimeHostEnvironment(environment, config, release.sha),
       stdio: ["ignore", "pipe", "pipe"],
     }));
     const state = {
@@ -1229,7 +1229,7 @@ async function main() {
       tailscaleProcessRef,
       runtimeHostSupervisor,
       release.dir,
-      runtimeHostEnvironment,
+      cliRuntimeHostEnvironment(runtimeHostEnvironment, runtimeHostConfig, release.sha),
       {
         restarting,
         stateDirectory: runtimeHostConfig.stateDirectory,

@@ -56,6 +56,10 @@ export function createViewerLoopMonitor(log?: (line: string) => void, now = () =
   let timer: ReturnType<typeof setTimeout> | undefined;
   const tick = () => {
     const at = now();
+    // The launcher pins each child to its own release, including checkout
+    // installs with no container identity or hot-state activation record.
+    const revision = performanceProcess.revision ?? [process.env.LLV_DIAGNOSTIC_REVISION, process.env.LLV_HOT_STATE_RELEASE_REVISION]
+      .find(value => value && /^[a-f0-9]{7,40}$/.test(value)) ?? null;
     watchdog?.heartbeat();
     const gapMs = Math.max(0, at - last - 10);
     const memory = heapSignals.sample(last, at, gapMs);
@@ -85,10 +89,9 @@ export function createViewerLoopMonitor(log?: (line: string) => void, now = () =
       const first = window[0], final = window.at(-1);
       const rss = window.filter(row => row.rssBytes >= 0 && row.rssUtcMs >= 0);
       const rssFirst = rss[0], rssFinal = rss.at(-1);
-      const revision = process.env.LLV_HOT_STATE_RELEASE_REVISION;
       writeLog(`[viewer loop-gap] ${JSON.stringify({ gapMs: Math.round(gapMs), operations, ...memory,
         role: process.env.LLV_STATE_OWNER === "runtime-host" ? "runtime-host" : "viewer",
-        ...performanceProcess, revision: performanceProcess.revision ?? (revision && /^[a-f0-9]{7,40}$/.test(revision) ? revision : null), sequence: ++sequence, lastTick: last, tick: at, utc: new Date().toISOString(),
+        ...performanceProcess, revision, sequence: ++sequence, lastTick: last, tick: at, utc: new Date().toISOString(),
         pendingOperations: active.size, activeDropped, completedDropped, logDropped: sink.dropped(),
         requests: spans.requests(),
         reads,
@@ -126,7 +129,7 @@ export function createViewerLoopMonitor(log?: (line: string) => void, now = () =
     }
     completed = [];
     if (at - lastSummary >= 60_000) {
-      writeLog(`[performance summary] ${JSON.stringify({ ...performanceProcess, role: process.env.LLV_STATE_OWNER === "runtime-host" ? "runtime-host" : "viewer",
+      writeLog(`[performance summary] ${JSON.stringify({ ...performanceProcess, revision, role: process.env.LLV_STATE_OWNER === "runtime-host" ? "runtime-host" : "viewer",
         monotonic: at, utc: new Date().toISOString(), requests: spans.requests(), logDropped: sink.dropped() })}`);
       lastSummary = at;
     }

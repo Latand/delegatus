@@ -449,3 +449,21 @@ test("launcher forwards Fish Audio credentials", () => {
   const name = ["FISH", "AUDIO", "API", "KEY"].join("_");
   expect(withoutUnsupportedApiCredentials({ [name]: "provider-fixture" })).toEqual({ [name]: "provider-fixture" });
 });
+
+test("each launched release pins diagnostic identity and clears an inherited predecessor", () => {
+  const config = { socketPath: "fixture.sock", fencePath: "fixture.lock", journalPath: "fixture.sqlite" };
+  const base = { LLV_DIAGNOSTIC_REVISION: "a".repeat(40) };
+  const revision = "b".repeat(40);
+  expect(cliRuntimeHostEnvironment(base, config, revision).LLV_DIAGNOSTIC_REVISION).toBe(revision);
+  for (const invalid of [null, "", "invalid"]) {
+    expect(cliRuntimeHostEnvironment(base, config, invalid).LLV_DIAGNOSTIC_REVISION).toBeUndefined();
+  }
+  expect(base.LLV_DIAGNOSTIC_REVISION).toBe("a".repeat(40));
+  for (const selected of [revision, null]) {
+    const child = Bun.spawnSync([process.execPath, "-e", "process.stdout.write(JSON.stringify(process.env.LLV_DIAGNOSTIC_REVISION ?? null))"], {
+      env: cliRuntimeHostEnvironment({ ...process.env, ...base }, config, selected),
+    });
+    expect(child.exitCode).toBe(0);
+    expect(JSON.parse(child.stdout.toString())).toBe(selected);
+  }
+});
