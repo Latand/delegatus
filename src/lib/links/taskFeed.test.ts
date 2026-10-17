@@ -238,3 +238,33 @@ test("log checkpoints an all-rejected tombstone window and reaches the next vali
     expect(warning).toHaveBeenCalledTimes(4_000);
   } finally { warning.mockRestore(); }
 });
+
+test.each(["task", "tombstone"] as const)("expired %s scan checkpoints restart and return the later valid row", kind => {
+  const warning = spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    const invalid = Array.from({ length: 2_048 }, (_, index) => `!invalid-${String(index).padStart(5, "0")}`);
+    const expected = task("00000000-0000-0000-0000-000000000000");
+    const f = fixture(kind === "task" ? [...invalid, expected.id].map(id => task(id)) : []);
+    if (kind === "tombstone") {
+      const source = taskFeedSource(f.filePath)!;
+      const gone = nextStamp(null, Date.parse(at), self.prefix);
+      tombstoneCollection(source.database, true)!.boundedPatch(invalid.length + 1, tx => {
+        for (const id of [...invalid, expected.id]) tx.put({ id, project, gone, o: self.prefix });
+      });
+    }
+
+    const first = readScanPage(kind === "task" ? "" : "g:", f.filter);
+    expect(first.rows).toEqual([]);
+    expect(first.next).toMatch(new RegExp(`^${kind === "task" ? "t" : "g"}:[0-9a-f-]{36}$`));
+
+    setSystemTime(new Date(Date.parse(at) + 31 * 24 * 60 * 60 * 1_000));
+    const received: string[] = [];
+    let cursor: string | null = first.next;
+    while (cursor) {
+      const resumed = readScanPage(cursor, f.filter);
+      received.push(...resumed.rows.map(decodeWireRow).map(row => row.id));
+      cursor = resumed.next;
+    }
+    expect(received).toEqual([expected.id]);
+  } finally { warning.mockRestore(); }
+});

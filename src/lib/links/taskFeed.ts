@@ -413,9 +413,15 @@ export function readScanPage(after: string, filter: FeedFilter): ScanPage {
   const exportable = exportableTasks(filter);
   const token = after.startsWith("t:") || after.startsWith("g:") ? after.slice(2) : "";
   const taskCheckpoint = after.startsWith("t:") ? resolvePageCursor(source.database, token, "scan-task") : null;
+  let tombstones = after.startsWith("g:") ? tombstoneCollection(source.database, false) : null;
   const tombstoneCheckpoint = after.startsWith("g:") ? resolvePageCursor(source.database, token, "scan-tombstone") : null;
   let cursor = taskCheckpoint?.cursor ?? tombstoneCheckpoint?.cursor ?? after;
-  let continuation = after;
+  // Older peers encode both row keys and checkpoint tokens as UUID cursors.
+  // Checkpoint tokens avoid existing row keys, so an unresolved UUID with no
+  // matching row is expired/missing and must restart the full scan.
+  if (after.startsWith("t:") && !taskCheckpoint && /^t:[0-9a-f-]{36}$/.test(after) && !source.get(token)) cursor = "";
+  if (after.startsWith("g:") && !tombstoneCheckpoint && /^g:[0-9a-f-]{36}$/.test(after) && !tombstones?.get(tombstoneKey(token))) cursor = "";
+  let continuation = cursor;
   let continuationCursor = cursor;
   let read = 0;
   if (!cursor.startsWith("g:")) {
@@ -436,7 +442,7 @@ export function readScanPage(after: string, filter: FeedFilter): ScanPage {
     }
     if (!cursor.startsWith("g:")) return { rows: page.rows, next: scanCursor(source.database, cursor, continuation, continuationCursor, "scan-task", token => !!source.get(token)), withheld: page.withheld };
   }
-  const tombstones = tombstoneCollection(source.database, false);
+  tombstones ??= tombstoneCollection(source.database, false);
   if (!tombstones) return { rows: page.rows, next: null, withheld: page.withheld };
   while (read < MAX_SCAN_KEYS) {
     const batch = tombstones.keyRange(cursor, "g:\uffff", SCAN_BATCH);
