@@ -336,3 +336,126 @@ test("B: retention keeps every undelivered answer and retires only confirmed del
   expect(insertSeatRound(round())).toEqual([first]);
   expect(findSeatRound(ID)).toBeDefined();
 }, 15000);
+
+
+test("a late delivered journal settles an uncertain reservation without retry", async () => {
+  const receipt = spyOn(settlement, "resolveSendReceipt").mockResolvedValue({ operationId: "operation-old", kind: "send", state: "failed", duplicateRisk: true, resend: "verify-first", reason: settlement.SEND_UNVERIFIED_REASON, conversationId: "conversation_old", clientMessageId: "key", acceptedAt: null, settledAt: null, evidence: "delivery-record" });
+  const client = spyOn(runtime, "runtimeHostClient").mockReturnValue({ operationStatus: async () => ({ operationId: "operation-old", receipt: { status: "delivered" } }) } as never);
+  try { expect(await prototypeDelivery.recover(decision())).toEqual({ state: "sent", operationId: "operation-old" }); }
+  finally { client.mockRestore(); receipt.mockRestore(); }
+});
+
+test("uncertain predecessor is verified before the answer follows the replacement seat", async () => {
+  insertSeatRound({ ...round(), decision: decision() });
+  const p = ports(); p.world = { ...world, orchestrator: () => "conversation_new" };
+  p.delivery.recover = async () => ({ state: "uncertain", operationId: "operation-old" });
+  let retired = 0, sends = 0;
+  p.delivery.retire = async () => { retired++; return { state: "failed", operationId: "operation-old" }; };
+  p.delivery.send = async saved => { sends++; expect(saved.delivery.conversationId).toBe("conversation_new"); return { state: "sent", operationId: "operation-new" }; };
+  await attemptPrototypeDelivery(null, ID, p);
+  await attemptPrototypeDelivery(null, ID, p);
+  expect(retired).toBe(1); expect(sends).toBe(1);
+});
+
+test.each(["current", "older-seat", "different-answer", "not-landed", "cut-bullet", "accounting-gap", "redacted-answer", "rotation"])("a complete delivered wake settles an exhausted answer only with current exact evidence: %s", async kind => {
+  const { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } = await import("@/lib/orchestrator/seats");
+  const { currentSeat } = await import("@/lib/orchestrator/seatChannel");
+  const { emptySeatTickState } = await import("@/lib/monitor/types");
+  const { seatTickSignalVersion, seatTickWakeCommit } = await import("@/lib/monitor/seatTick");
+  const { writeSeatTickState } = await import("@/lib/monitor/seatTickState");
+  beginOrchestratorSeatIntent({ project: "project-a", mandate: "coordinate", mode: "existing", clientRequestId: "wake-evidence-seat" });
+  completeOrchestratorSeatIntent({ project: "project-a", clientRequestId: "wake-evidence-seat", conversationId: "conversation_current", path: "fixture-transcript" });
+  const seat = currentSeat("project-a")!;
+  const saved = decision(); saved.delivery.state = "uncertain"; saved.delivery.exhaustedAt = saved.at;
+  if (kind === "redacted-answer") saved.delivery.text = ["See", "", "home", "fixture", "notes"].join("/");
+  const r = { ...round(), decision: saved }; insertSeatRound(r);
+  const proofRound = structuredClone(r);
+  if (kind === "different-answer") proofRound.decision.delivery.text = "Different answer";
+  const signal = telegramPostSignals("project-a", [], [proofRound])[0]!;
+  const version = seatTickSignalVersion(signal);
+  const line = `- [signal] ${signal.id} — ${signal.label}`;
+  const state = { ...emptySeatTickState(), seatEpoch: seat.seatEpoch - Number(kind === "older-seat"),
+    outstandingWake: { clientMessageId: "seat-tick:fixture", conversationId: seat.conversationId!, seatEpoch: seat.seatEpoch, operationId: "wake-operation", text: kind === "cut-bullet" ? line.slice(0, 50) : line,
+      commit: { proposal: false, reasons: [], fingerprint: "fixture", eventsThrough: 0, children: [], itemsShown: [version], itemLines: [{ version, line }] } } };
+  writeSeatTickState("project-a", kind === "not-landed" ? state : seatTickWakeCommit(state, state.outstandingWake.commit, NOW));
+  if (kind === "accounting-gap") {
+    const { peekSeatTickState } = await import("@/lib/monitor/seatTickState");
+    const peek = spyOn(await import("@/lib/monitor/seatTickState"), "peekSeatTickState").mockReturnValue({ ...peekSeatTickState("project-a"), accounting: { filename: "fixture", revision: 1, gap: "unreadable" } });
+    try {
+      const p = ports(); p.delivery.recover = async () => ({ state: "uncertain", operationId: "operation-old" });
+      await attemptPrototypeDelivery(null, ID, p);
+      expect(findSeatRound(ID)!.decision!.delivery.state).toBe("uncertain");
+    } finally { peek.mockRestore(); }
+    return;
+  }
+  const p = ports(); p.world = { ...world, orchestrator: () => seat.conversationId! };
+  p.delivery.recover = async () => ({ state: "uncertain", operationId: "operation-old" });
+  let sends = 0; p.delivery.send = p.delivery.retry = async () => { sends++; return { state: "sent" }; };
+  const tickState = await import("@/lib/monitor/seatTickState");
+  const peek = tickState.peekSeatTickState;
+  const rotation = kind === "rotation" ? spyOn(tickState, "peekSeatTickState").mockImplementation(project => {
+    const state = peek(project);
+    beginOrchestratorSeatIntent({ project, mandate: "coordinate", mode: "existing", clientRequestId: "wake-evidence-next" });
+    completeOrchestratorSeatIntent({ project, clientRequestId: "wake-evidence-next", conversationId: "conversation_replacement", path: "replacement-transcript" });
+    return state;
+  }) : null;
+  try { await attemptPrototypeDelivery(null, ID, p); } finally { rotation?.mockRestore(); }
+  expect(findSeatRound(ID)!.decision!.delivery.state).toBe(kind === "current" ? "sent" : "uncertain");
+  if (kind === "current") {
+    const { prototypeRoundMetadata } = await import("./model");
+    expect(prototypeRoundMetadata(findSeatRound(ID)!).decision!.delivery).toEqual({ state: "sent", retryable: false });
+  }
+  expect(findSeatRound(ID)!.decision!.delivery.operationId).toBe("operation-old");
+  expect(sends).toBe(0);
+});
+
+
+test.each(["seat", "task"])("explicit %s resend returns an uncertainty explanation and never replays input", async kind => {
+  const { decisionsPOST, reviewPOST } = await import("./http");
+  const saved = decision(); saved.delivery.state = "uncertain";
+  if (kind === "seat") insertSeatRound({ ...round(), decision: saved });
+  else saveTasks([task([{ ...round("task-a"), decision: saved }])]);
+  const p = ports();
+  p.delivery.recover = async () => ({ state: "uncertain", operationId: "operation-old" });
+  let sends = 0; p.delivery.send = p.delivery.retry = async () => { sends++; return { state: "sent" }; };
+  const req = new NextRequest("http://localhost/api/projects/decisions", { method: "POST", headers: { host: "localhost", "content-type": "application/json" }, body: JSON.stringify({ project: "project-a", reviewId: ID, retry: true }) });
+  const response = kind === "seat" ? await decisionsPOST(req, p.world, p.delivery) : await reviewPOST(req, "task-a", p.world, p.delivery, p.now);
+  expect(response.status).toBe(409);
+  expect((await response.json()).error).toContain("ризик дублювання");
+  expect(sends).toBe(0);
+});
+
+test.each(["seat", "task"])("Telegram resend of a decided %s form explains the saved-answer delivery action", async kind => {
+  const { resendTelegramPOST } = await import("./http");
+  if (kind === "seat") insertSeatRound({ ...round(), decision: decision() });
+  else saveTasks([task([{ ...round("task-a"), decision: decision() }])]);
+  const response = await resendTelegramPOST(new NextRequest("http://localhost/api/prototype-reviews/telegram", { method: "POST", headers: { host: "localhost" }, body: JSON.stringify({ reviewId: ID, clientRequestId: "resend-decided" }) }), world);
+  expect(response.status).toBe(409);
+  expect((await response.json()).error).toContain("поточному координатору");
+});
+
+test.each(["sent", "pending", "failed", "no-orchestrator"] as const)("explicit resend reports %s from the actual delivery attempt", async outcome => {
+  const { decisionsPOST } = await import("./http");
+  insertSeatRound({ ...round(), decision: { ...decision(), delivery: { ...decision().delivery, state: "uncertain", attempts: 10, exhaustedAt: new Date(NOW).toISOString() } } });
+  const p = ports();
+  p.world = { ...world, orchestrator: () => outcome === "no-orchestrator" ? null : "conversation_current" };
+  if (outcome === "no-orchestrator") mutateSeatRound(ID, r => { r.decision!.delivery.conversationId = null; });
+  p.delivery.recover = async () => null;
+  let sends = 0; p.delivery.send = async saved => { sends++; expect(saved.delivery.conversationId).toBe("conversation_current"); return { state: outcome === "no-orchestrator" ? "failed" : outcome, operationId: "operation-current" }; };
+  const req = () => new NextRequest("http://localhost/api/projects/decisions", { method: "POST", headers: { host: "localhost" }, body: JSON.stringify({ project: "project-a", reviewId: ID, retry: true }) });
+  const response = await decisionsPOST(req(), p.world, p.delivery);
+  expect(response.status).toBe(outcome === "failed" ? 503 : outcome === "no-orchestrator" ? 409 : 200);
+  expect(sends).toBe(outcome === "no-orchestrator" ? 0 : 1);
+  if (outcome === "sent") { expect((await decisionsPOST(req(), p.world, p.delivery)).status).toBe(200); expect(sends).toBe(1); }
+});
+
+
+test("a saved failed operation waits when the project has no current seat", async () => {
+  insertSeatRound({ ...round(), decision: decision() });
+  const p = ports(); p.world = { ...world, orchestrator: () => null };
+  p.delivery.recover = async () => ({ state: "failed", operationId: "operation-old" });
+  let sends = 0; p.delivery.send = p.delivery.retry = async () => { sends++; return { state: "sent" }; };
+  await attemptPrototypeDelivery(null, ID, p);
+  expect(sends).toBe(0);
+  expect(findSeatRound(ID)!.decision!.delivery).toMatchObject({ state: "no-orchestrator", operationId: "operation-old", conversationId: "conversation_old" });
+});
