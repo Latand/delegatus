@@ -194,7 +194,7 @@ test("worker event and parent retention overflow are reported", () => {
   expect(report.readBytes).toBe(512);
 });
 
-test("a degraded proc source is isolated and backs off sampling", async () => {
+test.skipIf(process.platform !== "linux")("a degraded proc source is isolated and backs off sampling", async () => {
   const probe = samplerFixture("transient-slow");
   let timerFired = false;
   setTimeout(() => { timerFired = true; }, 0);
