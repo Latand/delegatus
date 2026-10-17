@@ -469,6 +469,10 @@ function openRawDatabase(filename: string): Database {
           && pipelineEvidenceIndexReady(db)
           && db.query<{ journal_mode: string }, []>("PRAGMA journal_mode").get()?.journal_mode === "wal"
           && db.query<{ name: string }, []>("PRAGMA table_info(state_collections)").all().some(row => row.name === "change_floor")) return db;
+        // The readiness check above is read-only. Any path below can mutate
+        // the shared database, so an older or partial schema may only be
+        // repaired by the release that currently owns SQLite writes.
+        assertSqliteInitializationAuthority(filename);
         db.exec("PRAGMA journal_mode = WAL");
         db.exec("PRAGMA auto_vacuum = INCREMENTAL");
         db.exec("BEGIN IMMEDIATE");
