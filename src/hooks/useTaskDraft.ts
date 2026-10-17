@@ -173,6 +173,23 @@ export function useTaskDraft(project: string, submit: (overrideText?: string) =>
     }
   };
 
+  /** What a commit took from the draft, kept so a refused create can hand it back. */
+  const capture = (text: string): TaskDraftCapture => ({ text, requestId: requestIdRef.current, ...stateRef.current });
+
+  /** Put a refused create's draft back: its request id (so a retry still
+      dedups to one task), deadline and images, and its text before whatever
+      was typed since. */
+  const restore = (taken: TaskDraftCapture) => {
+    requestIdRef.current = taken.requestId;
+    stateRef.current = { dueAt: stateRef.current.dueAt ?? taken.dueAt, dueTz: stateRef.current.dueAt ? stateRef.current.dueTz : taken.dueTz, attachments: [...taken.attachments, ...stateRef.current.attachments] };
+    setDueAt(stateRef.current.dueAt);
+    setDueTz(stateRef.current.dueTz);
+    setAttachments(stateRef.current.attachments);
+    const typed = composer.textRef.current.trim();
+    composer.setText(typed ? `${taken.text}\n\n${typed}` : taken.text);
+    persist(composer.textRef.current);
+  };
+
   const discard = () => {
     reset();
     composer.setStatus({ kind: "ok", text: translate(getLocale(), "tasks.draftDiscarded") });
@@ -190,8 +207,12 @@ export function useTaskDraft(project: string, submit: (overrideText?: string) =>
     stagedAttachments,
     getRequestId: () => requestIdRef.current,
     reset,
+    capture,
+    restore,
     discard,
   };
 }
 
 export type UseTaskDraftReturn = ReturnType<typeof useTaskDraft>;
+
+export interface TaskDraftCapture { text: string; requestId: string; dueAt?: string; dueTz?: string; attachments: TaskAttachment[] }

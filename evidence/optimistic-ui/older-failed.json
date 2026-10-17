@@ -1,0 +1,133 @@
+{
+  "failures": [],
+  "readings": {
+    "album-1440-en-light": {
+      "text": "Could not load older images. Press Show older to try again.",
+      "role": "alert",
+      "lines": 1,
+      "cut": 0,
+      "color": "rgb(198, 40, 40)",
+      "size": "11px"
+    },
+    "album-768-en-light": {
+      "text": "Could not load older images. Press Show older to try again.",
+      "role": "alert",
+      "lines": 1,
+      "cut": 0,
+      "color": "rgb(198, 40, 40)",
+      "size": "11px"
+    },
+    "album-390-en-light": {
+      "text": "Could not load older images. Press Show older to try again.",
+      "role": "alert",
+      "lines": 1,
+      "cut": 0,
+      "color": "rgb(198, 40, 40)",
+      "size": "11px"
+    },
+    "report-log-1440-en-light": {
+      "text": "Could not load older reports. Press Show older to try again.",
+      "role": "alert",
+      "lines": 1,
+      "cut": 0,
+      "color": "rgb(198, 40, 40)",
+      "size": "11px"
+    },
+    "album-1440-en-dark": {
+      "text": "Could not load older images. Press Show older to try again.",
+      "role": "alert",
+      "lines": 1,
+      "cut": 0,
+      "color": "rgb(240, 113, 113)",
+      "size": "11px"
+    },
+    "album-768-en-dark": {
+      "text": "Could not load older images. Press Show older to try again.",
+      "role": "alert",
+      "lines": 1,
+      "cut": 0,
+      "color": "rgb(240, 113, 113)",
+      "size": "11px"
+    },
+    "album-390-en-dark": {
+      "text": "Could not load older images. Press Show older to try again.",
+      "role": "alert",
+      "lines": 1,
+      "cut": 0,
+      "color": "rgb(240, 113, 113)",
+      "size": "11px"
+    },
+    "report-log-1440-en-dark": {
+      "text": "Could not load older reports. Press Show older to try again.",
+      "role": "alert",
+      "lines": 1,
+      "cut": 0,
+      "color": "rgb(240, 113, 113)",
+      "size": "11px"
+    },
+    "album-1440-uk-light": {
+      "text": "Не вдалося завантажити старіші зображення. Натисніть «Показати старіші», щоб спробувати знову.",
+      "role": "alert",
+      "lines": 1,
+      "cut": 0,
+      "color": "rgb(198, 40, 40)",
+      "size": "11px"
+    },
+    "album-768-uk-light": {
+      "text": "Не вдалося завантажити старіші зображення. Натисніть «Показати старіші», щоб спробувати знову.",
+      "role": "alert",
+      "lines": 1,
+      "cut": 0,
+      "color": "rgb(198, 40, 40)",
+      "size": "11px"
+    },
+    "album-390-uk-light": {
+      "text": "Не вдалося завантажити старіші зображення. Натисніть «Показати старіші», щоб спробувати знову.",
+      "role": "alert",
+      "lines": 2,
+      "cut": 0,
+      "color": "rgb(198, 40, 40)",
+      "size": "11px"
+    },
+    "report-log-1440-uk-light": {
+      "text": "Не вдалося завантажити старіші звіти. Натисніть «Показати старіші», щоб спробувати знову.",
+      "role": "alert",
+      "lines": 2,
+      "cut": 0,
+      "color": "rgb(198, 40, 40)",
+      "size": "11px"
+    },
+    "album-1440-uk-dark": {
+      "text": "Не вдалося завантажити старіші зображення. Натисніть «Показати старіші», щоб спробувати знову.",
+      "role": "alert",
+      "lines": 1,
+      "cut": 0,
+      "color": "rgb(240, 113, 113)",
+      "size": "11px"
+    },
+    "album-768-uk-dark": {
+      "text": "Не вдалося завантажити старіші зображення. Натисніть «Показати старіші», щоб спробувати знову.",
+      "role": "alert",
+      "lines": 1,
+      "cut": 0,
+      "color": "rgb(240, 113, 113)",
+      "size": "11px"
+    },
+    "album-390-uk-dark": {
+      "text": "Не вдалося завантажити старіші зображення. Натисніть «Показати старіші», щоб спробувати знову.",
+      "role": "alert",
+      "lines": 2,
+      "cut": 0,
+      "color": "rgb(240, 113, 113)",
+      "size": "11px"
+    },
+    "report-log-1440-uk-dark": {
+      "text": "Не вдалося завантажити старіші звіти. Натисніть «Показати старіші», щоб спробувати знову.",
+      "role": "alert",
+      "lines": 2,
+      "cut": 0,
+      "color": "rgb(240, 113, 113)",
+      "size": "11px"
+    }
+  }
+}

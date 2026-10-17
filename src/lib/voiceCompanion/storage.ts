@@ -31,6 +31,7 @@ export interface CompanionSettings {
   lastCodexSession?: { seconds: number; endedAt: number; plan: CompanionPlan | null };
 }
 export interface StoredProposal {
+  admittedAt?: number;
   proposal: Proposal;
   sourceText: string;
   expiresAt: number;

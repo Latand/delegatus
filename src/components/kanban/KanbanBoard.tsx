@@ -20,7 +20,6 @@ import { clearedLine } from "@/components/attention/decision";
 import { finishesTaskOffer, toggleFinishesTask } from "@/components/pipelines/finishesTask";
 import type { BranchGroup } from "@/components/projectModel";
 import type { SchemeLayout } from "@/components/scheme/layout";
-import { updateTask } from "@/components/tasks/taskApi";
 import { TaskIcon } from "@/components/tasks/TaskIcon";
 import { TaskIconPicker } from "@/components/tasks/TaskIconPicker";
 import { sendDismissal } from "@/components/attention/dismissalOverlay";
@@ -54,8 +53,9 @@ import { WorkLinksPanel } from "@/components/workLinks/WorkLinkChips";
 import { useWorkLinks, type WorkLinkTarget } from "@/components/workLinks/workLinksContext";
 import { KanbanReceipts, useReceipts } from "./KanbanReceipts";
 import { cardDismissal } from "./cardDismissal";
+import { isProvisionalTaskId } from "@/components/tasks/useTaskCreateDraft";
 import { drawnTasks, useTaskMutations, type FieldEditOutcome, type StatusMoveOutcome, type TaskMutationPorts } from "./useTaskMutations";
-import { assignmentRefFor, browserAssignmentPorts, dismissUnstartedLaunch, dismissUnstartedLaunches, type AssignmentPorts } from "./kanbanAssignments";
+import { assignmentRefFor, browserAssignmentPorts, dismissUnstartedLaunch, dismissUnstartedLaunches, optimisticAssignment, predictDismissedLaunches, predictLink, predictUnlink, type AssignmentPorts } from "./kanbanAssignments";
 import { SeatActionWires } from "./SeatActionWires";
 import { allCards, cardAnchors, cardOnScreen, conversationOwners, cssEscape, kanbanFocusIndex, readerArrived, readerShown } from "./kanbanFocus";
 import { closeReader, followPaths, openReader, ReaderMemory, type OpenReader } from "./readerMemory";
@@ -419,6 +419,8 @@ export function KanbanBoard(props: KanbanBoardProps) {
   const { receipts, show, dismiss } = useReceipts();
 
   const { controller, statuses, edits } = useTaskMutations(allTasks, props.mutationPorts);
+  /* A card still being written shows the saving bar: a pending write, or a new task drawn ahead of its create. */
+  const pendingIds = useMemo(() => ({ pending: (id: string) => controller.pending(id) || isProvisionalTaskId(id) }), [controller]);
   /* Which cards show a pipeline's graph or its summary, as the operator chose. */
   const [graphChoices, setGraphChoices] = useState<ReadonlyMap<string, boolean>>(() => new Map());
   const toggleGraph = useCallback((cardId: string, pipelineId: string, open: boolean) => {
@@ -788,16 +790,19 @@ export function KanbanBoard(props: KanbanBoardProps) {
     void element.offsetWidth;
     element.classList.add("flash");
   }, []);
-  /* Launches that did not start, one row's or all of them: dismissing marks
-     each row failed on the server, and the refreshed tasks take the rows
-     away. A refusal (one did start after all) flashes the card. */
+  /* Launches that did not start, one row's or all of them: the rows leave the
+     card at once, marked failed as the server marks them. A refusal (one did
+     start after all) puts them back, flashes the card and says why. */
   const dismissLaunch = useCallback((card: KanbanCardModel, launches: readonly { launchId: string | null; conversationId: string | null }[]) => {
-    if (!card.task || !launches.length) return;
-    const answer = launches.length === 1 ? dismissUnstartedLaunch(card.task.id, launches[0]!) : dismissUnstartedLaunches(card.task.id, launches);
+    const raw = card.task ? tasksById.current.get(card.task.id) ?? card.task : null;
+    if (!raw || !launches.length) return;
+    const answer = optimisticAssignment(predictDismissedLaunches(raw, launches), () => launches.length === 1 ? dismissUnstartedLaunch(raw.id, launches[0]!) : dismissUnstartedLaunches(raw.id, launches));
     void answer.then((result) => {
-      if (!result.ok) flash(card.id);
+      if (result.ok) return;
+      flash(card.id);
+      show(t("kanban.dismissLaunchFailed", { error: result.error }), undefined, { error: true });
     });
-  }, [flash]);
+  }, [flash, show, t]);
   /* The card moves of a render fly from where the cards were (`CardFlights`). */
   const placements = useMemo(() => {
     const byCard = new Map<string, TaskStatus>();
@@ -841,7 +846,10 @@ export function KanbanBoard(props: KanbanBoardProps) {
   const stepRef = useRef<(direction: HistoryDirection, chosen?: HistoryEntry) => boolean>(() => false);
   /** Undo or redo `chosen`, or the top of its stack. False when there is nothing to take, or `chosen` is not on that stack. */
   const step = useCallback((direction: HistoryDirection, chosen?: HistoryEntry) => stepRef.current(direction, chosen), []);
-  const applyEntry = (entry: HistoryEntry, direction: HistoryDirection) => {
+  /** `inFlight`: the edit's own write is still out. The step is drawn now and
+      its write queues behind that one; `skipped` runs when that write did not
+      save, so the step is dropped instead (audit B28). */
+  const applyEntry = (entry: HistoryEntry, direction: HistoryDirection, inFlight: { skipped: () => void } | null = null) => {
     const stacks = historyRef.current;
     /* While this write is out the entry is on neither stack. A new edit
        recorded meanwhile cleared the redo stack, so an undo must not come back
@@ -871,11 +879,13 @@ export function KanbanBoard(props: KanbanBoardProps) {
       /* A task that left the board was changed elsewhere, too. */
       if (!raw) return { target, kind: "conflict" as const, error: "" };
       let outcome: StatusMoveOutcome | FieldEditOutcome;
-      const fence = { fenced: true, lineage: entry.lineages?.get(target.taskId) };
+      const fence = inFlight
+        ? { fenced: true, lineage: () => entry.lineages?.get(target.taskId), after: entry.settled, unless: () => entry.saved === false }
+        : { fenced: true, lineage: entry.lineages?.get(target.taskId) };
       if (entry.kind === "status") outcome = await controller.move(raw, undoing ? entry.from : entry.to, { ...fence, ...(Object.hasOwn(entry, "fromHold") ? { restoreHold: undoing ? entry.fromHold ?? null : entry.toHold ?? null } : {}) });
       else if (entry.kind === "text") outcome = await controller.edit(raw, { field: "text", value: undoing ? entry.before : entry.after }, fence);
       else {
-        const write = controller.edit(raw, undoing ? { field: "hide", value: false } : { field: "hide", value: true, replaces: raw.groupHidden?.at ?? null }, { ...fence, after: chain });
+        const write = controller.edit(raw, undoing ? { field: "hide", value: false } : { field: "hide", value: true, replaces: raw.groupHidden?.at ?? null }, { ...fence, after: inFlight ? Promise.all([chain, entry.settled]) : chain });
         chain = write;
         outcome = await write;
       }
@@ -883,6 +893,12 @@ export function KanbanBoard(props: KanbanBoardProps) {
       return { target, kind: outcome.kind, error: outcome.kind === "failed" ? outcome.error : "" };
     });
     void Promise.all(writes).then((results) => {
+      if (inFlight && entry.saved === false) {
+        /* The edit never saved: nothing was undone, and the step moves on to the next entry. */
+        dismiss(receiptId);
+        inFlight.skipped();
+        return;
+      }
       const saved = results.filter((result) => result.kind !== "conflict" && result.kind !== "failed").map((result) => result.target);
       const refused = results.filter((result) => result.kind === "conflict").map((result) => result.target);
       const failed = results.filter((result) => result.kind === "failed");
@@ -935,14 +951,12 @@ export function KanbanBoard(props: KanbanBoardProps) {
     if (chosen && !stacks.withdraw(chosen, direction)) return false;
     const entry = chosen ?? (direction === "undo" ? stacks.takeUndo() : stacks.takeRedo());
     if (!entry) return false;
-    /* An edit still being written is undone once its write has answered; one
-       that did not save is skipped for the next. */
-    const answered = (saved: boolean) => {
-      if (saved) applyEntry(entry, direction);
-      else if (!chosen) step(direction);
-    };
-    if (entry.saved === undefined) void entry.settled.then(answered);
-    else answered(entry.saved);
+    /* An edit still being written is undone at once, its write queued behind
+       that one's; one that did not save is skipped for the next. */
+    const skipped = () => { if (!chosen) step(direction); };
+    if (entry.saved === undefined) applyEntry(entry, direction, { skipped });
+    else if (entry.saved) applyEntry(entry, direction);
+    else skipped();
     return true;
   };
 
@@ -1586,7 +1600,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
         label,
         why: busy ? t("kanban.pipelineAct.busy", { action: t(`kanban.pipelineAct.pending.${busy}`) }) : refusalWhy(option) ?? why,
         disabled: Boolean(busy) || option.refusal !== null,
-        onSelect: () => startPipelineAction({ pipelineId: pipeline.id, title, action: option.action, stageId: option.stageId, stageName, expectedAttempt: option.attempt }),
+        onSelect: () => startPipelineAction({ pipelineId: pipeline.id, title, action: option.action, stageId: option.stageId, stageName, expectedAttempt: option.attempt, pipeline }),
       };
     };
     const retry = options.get("retry-stage")!;
@@ -1731,9 +1745,12 @@ export function KanbanBoard(props: KanbanBoardProps) {
           onSelect: () => {
             if (!task || !ref) return;
             const taskTitle = card?.titlePending ? t("kanban.untitled") : card?.title ?? "";
-            void assignments.unlink(task.id, ref).then((answer) => {
-              if (answer.ok) show(t("kanban.unlinked", { conversation: name, task: taskTitle }));
-              else if (answer.status === 409) show(t("kanban.unlinkOwn", { conversation: name, task: taskTitle }), undefined, { error: true });
+            /* The reader leaves the card at once; a refusal brings it back. */
+            const receiptId = show(t("kanban.unlinked", { conversation: name, task: taskTitle }));
+            void optimisticAssignment(predictUnlink(task, ref), () => assignments.unlink(task.id, ref)).then((answer) => {
+              if (answer.ok) return;
+              dismiss(receiptId);
+              if (answer.status === 409) show(t("kanban.unlinkOwn", { conversation: name, task: taskTitle }), undefined, { error: true });
               else show(t("kanban.unlinkFailed", { conversation: name, error: answer.error }), undefined, { error: true });
             });
           },
@@ -1770,9 +1787,12 @@ export function KanbanBoard(props: KanbanBoardProps) {
   const linkTo = (view: ReaderView, task: BoardTask) => {
     const name = conversationName(view);
     const taskTitle = task.text.split(/\r?\n/, 1)[0]?.trim() || t("kanban.untitled");
-    void assignments.link(task.id, view.file.path).then((answer) => {
-      if (answer.ok) show(t("kanban.linked", { conversation: name, task: taskTitle }));
-      else show(t("kanban.linkFailed", { conversation: name, error: answer.error }), undefined, { error: true });
+    /* The reader moves under the target card at once; a refusal takes it back. */
+    const receiptId = show(t("kanban.linked", { conversation: name, task: taskTitle }));
+    void optimisticAssignment(predictLink(tasksById.current.get(task.id) ?? task, view.file), () => assignments.link(task.id, view.file.path)).then((answer) => {
+      if (answer.ok) return;
+      dismiss(receiptId);
+      show(t("kanban.linkFailed", { conversation: name, error: answer.error }), undefined, { error: true });
     });
   };
 
@@ -2531,13 +2551,20 @@ export function KanbanBoard(props: KanbanBoardProps) {
   }, [props.onRestoreConversation, show, t]);
 
   /* ── Show an off-board task again (existing `board` preference) ───────── */
+  /* The card is drawn in its column at once through the task controller; a
+     refusal takes it off again and says why, with Retry. */
   const showOnBoard = useCallback((task: BoardTask) => {
     const title = task.text.split(/\r?\n/, 1)[0]?.trim() || t("kanban.untitled");
-    void updateTask(task.id, { board: "shown" }).then((error) => {
-      if (error) show(t("kanban.showFailed", { title, error }), undefined, { error: true });
-      else show(t("kanban.shownReceipt", { title }));
-    });
-  }, [show, t]);
+    const run = () => {
+      const receiptId = show(t("kanban.shownReceipt", { title }));
+      void controller.edit(tasksById.current.get(task.id) ?? task, { field: "board", value: "shown" }).then((outcome) => {
+        if (outcome.kind !== "failed") return;
+        dismiss(receiptId);
+        show(t("kanban.showFailed", { title, error: outcome.error }), { label: t("kanban.retry"), run }, { error: true });
+      });
+    };
+    run();
+  }, [controller, dismiss, show, t]);
 
   /* The Overview narrows permanently, so its columns read «3 of 41» and an
      empty one says so, exactly as they do under a search. */
@@ -2748,7 +2775,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
       remoteAgents={remoteAgents}
       remoteAgentsByTask={remoteAgentsByTask}
       remoteCards={remoteCards}
-      pendingIds={controller}
+      pendingIds={pendingIds}
       editing={editing}
       failedEdits={failedEdits}
       incomingEdits={incomingEdits}

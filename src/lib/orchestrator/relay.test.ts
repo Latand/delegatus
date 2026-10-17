@@ -492,7 +492,7 @@ for (const [mount, post] of [POST, legacyPOST, orchestratorPOST].entries()) {
           expect(await originalRetry.json()).toMatchObject({ operationId: receipt.operationId, outcome: "delivered" });
           expect(delivered).toHaveLength(sendCount);
           expect(registry.readOnlySnapshot().heldDeliveries).toEqual(before.heldDeliveries);
-          if (rotate) expect((await post(request(sender.capability, { ...body, clientMessageId: "fresh-former-seat" }))).status).toBe(409);
+          if (rotate) expect((await post(request(sender.capability, { ...body, clientMessageId: "fresh-former-seat" }))).status).toBe(200);
         });
       }
     }
@@ -651,7 +651,7 @@ test("project-only HTTP retries recover the original recipient after rotation", 
   expect(otherReceipt.operationId).not.toBe(receipt.operationId);
   expect(otherReceipt.receipt.conversationId).toBe(successor.id);
   expect(Object.values(registry.readOnlySnapshot().heldDeliveries)).toHaveLength(3);
-  expect((await orchestratorPOST(request(sender.capability, { ...body, conversationId: recipient.id, clientMessageId: "fresh-former" }))).status).toBe(409);
+  expect((await orchestratorPOST(request(sender.capability, { ...body, conversationId: recipient.id, clientMessageId: "fresh-former" }))).status).toBe(200);
 });
 
 test("HTTP retries retain durable sender attribution after its project display name changes", async () => {
@@ -667,7 +667,10 @@ test("HTTP retries retain durable sender attribution after its project display n
   for (const retryBody of [body, { ...body, conversationId: recipient.id }]) {
     const retry = await orchestratorPOST(request(sender.capability, retryBody));
     expect(retry.status).toBe(200);
-    expect(await retry.json()).toMatchObject({ operationId: receipt.operationId, receipt: { conversationId: recipient.id, origin: receipt.receipt.origin, text: receipt.receipt.text } });
+    expect(await retry.json()).toMatchObject({ operationId: receipt.operationId, receipt: { conversationId: recipient.id } });
+    const owner = registry.readOnlySnapshot().deliveryOperationOwners[receipt.operationId];
+    expect(owner.command.origin).toEqual(receipt.receipt.origin);
+    expect(owner.evidenceText).toBe(receipt.receipt.text);
   }
   expect(Object.values(registry.readOnlySnapshot().heldDeliveries)).toHaveLength(1);
   expect((await orchestratorPOST(request(sender.capability, { ...body, text: "changed" }))).status).toBe(409);
@@ -717,13 +720,14 @@ test("former recipients require the original sender, key and payload; fresh send
   expect(await retry.json()).toMatchObject({ operationId: receipt.operationId });
   for (const post of [POST, legacyPOST, orchestratorPOST]) {
     const relay = { ...body, orchestratorRelayProject: "project-b" };
-    expect((await post(request(sender.capability, { ...relay, clientMessageId: "fresh-revoked" }))).status).toBe(409);
+    const moved = await post(request(sender.capability, { ...relay, clientMessageId: "fresh-revoked" }));
+    expect({ status: moved.status, body: await moved.json() }).toMatchObject({ status: 200, body: { receipt: { conversationId: successor.id } } });
     expect((await post(request(sender.capability, { ...relay, text: "changed" }))).status).toBe(409);
   }
   const fresh = await orchestratorPOST(request(sender.capability, { project: "project-b", text: "fresh", clientMessageId: "current-recipient" }));
   expect(fresh.status).toBe(200);
   expect(await fresh.json()).toMatchObject({ receipt: { conversationId: successor.id } });
-  expect(Object.values(registry.readOnlySnapshot().heldDeliveries)).toHaveLength(2);
+  expect(Object.values(registry.readOnlySnapshot().heldDeliveries)).toHaveLength(3);
 });
 
 function durableRelayTools(sender: ReturnType<typeof actor>, store: InstanceType<typeof SqliteMcpReceiptStore>, loseResponse = false, rootCaller = false) {
@@ -908,4 +912,30 @@ test("linked relay preserves a terminal resume failure across admission recovery
     expect(recovered).toMatchObject({ st: "refused", code: "delivery_failed", operationId: first.operationId });
     expect(admitted).toBe(1);
   } finally { setLinkedSeatEnqueueForTests(null); }
+});
+
+for (const loseResponse of [false, true]) test(`MCP relay follows a seat rotated between binding and HTTP admission (lost response: ${loseResponse})`, async () => {
+  realAdmission();
+  const sender = actor("project-a");
+  const previous = actor("project-b");
+  let successor = previous;
+  let posts = 0;
+  const tools = toolsFor(sender, { post: async (pathname, body, headers) => {
+    if (++posts === 1) successor = actor("project-b");
+    const response = await orchestratorPOST(request(undefined, body, headers));
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error);
+    if (loseResponse) throw new McpDispatchUncertainError("response lost after redirected admission");
+    return result;
+  } });
+  const args = { clientRequestId: "mcp-seat-admission-race", project: "project-b", text: "Review the saved plan." };
+  const result = await tools.service.callTool("send_message_to_orchestrator", args);
+  expect(result).toMatchObject({ ok: true, conversationId: successor.id });
+  if (!result.ok) throw new Error("relay failed");
+  expect(delivered).toHaveLength(1);
+  expect(delivered[0]!.conversationId).toBe(successor.id);
+  const recovered = await tools.service.callTool("send_message_to_orchestrator", args);
+  expect(recovered).toMatchObject({ ok: true, operationId: result.operationId });
+  expect(posts).toBe(1);
+  expect(delivered).toHaveLength(1);
 });

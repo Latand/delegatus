@@ -7,6 +7,7 @@ const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-role-memory-launch-")
 process.env.LLV_STATE_DIR = path.join(sandbox, "state");
 afterAll(() => fs.rmSync(sandbox, { recursive: true, force: true }));
 const { composeStageInput } = await import("@/lib/pipelines/stageInput");
+const { resolveStageTestGuidance } = await import("@/lib/pipelines/testGuidance");
 const { renderStagePrompt } = await import("@/lib/pipelines/prompts");
 const { buildPipeline } = await import("@/lib/pipelines/store");
 const { realExec } = await import("@/lib/workflows/provision");
@@ -44,14 +45,15 @@ for (const language of ["en", "uk"] as const) test(`a full ${language} stage pro
     effectiveRole: { roleId: "builder", engine: "codex", model: null, effort: "high", access: "read-write", promptScaffold: "Builder guidance." } };
   const pipeline = buildPipeline({ id: project, task: "the task", spec: "Keep all the rules", project, repoDir: "/repo", stages: [stage], srcPath: null, srcConversationId: null, now: "now" });
   pipeline.worktreeDir = checkout;
-  const base = Buffer.byteLength(renderStagePrompt(pipeline, stage, stage.effectiveRole, "a")) - 1;
+  const guidance = resolveStageTestGuidance();
+  const base = Buffer.byteLength(renderStagePrompt(pipeline, stage, stage.effectiveRole, "a", undefined, guidance)) - 1;
   const previous = "a".repeat(MAX_STRUCTURED_TEXT_BYTES - base);
-  const expected = renderStagePrompt(pipeline, stage, stage.effectiveRole, previous);
+  const expected = renderStagePrompt(pipeline, stage, stage.effectiveRole, previous, undefined, guidance);
   expect(Buffer.byteLength(expected)).toBe(MAX_STRUCTURED_TEXT_BYTES);
   const message = await composeStageInput(pipeline, stage, stage.effectiveRole, previous, checkout, realExec);
   expect(message).toBe(expected);
   const profile = emptyLaunchProfile({ cwd: checkout, learnedRules: { project, roleId: "builder" } });
-  const options = claudeStructuredHostOptions({ spec: { cwd: checkout, launchProfile: profile }, account: { home: sandbox, kind: "managed" } } as never, { env: {}, host: {} } as never);
+  const options = await claudeStructuredHostOptions({ spec: { cwd: checkout, launchProfile: profile }, account: { home: sandbox, kind: "managed" } } as never, { env: {}, host: {} } as never);
   for (const scope of [`role:${project}:builder`, `project:${project}`, "machine"]) {
     expect(activeRules(scope).length).toBeGreaterThan(25);
     for (const rule of activeRules(scope)) {
@@ -62,3 +64,14 @@ for (const language of ["en", "uk"] as const) test(`a full ${language} stage pro
   }
   expect(fs.existsSync(path.join(process.env.LLV_STATE_DIR!, "role-memory", "launch"))).toBe(false);
 }, 60_000);
+
+test("each clean engine start durably records its empty delivery", async () => {
+  const previous = process.env.LLV_STATE_DIR;
+  const directory = path.join(sandbox, "empty-delivery-state");
+  process.env.LLV_STATE_DIR = directory;
+  try {
+    const { learnedRulesForLaunchProfile } = await import("./roleLaunch");
+    expect(await learnedRulesForLaunchProfile({ cleanMemory: true }, { engine: "codex", conversationId: "conversation_empty_start", cwd: checkout, home: sandbox })).toBeUndefined();
+    expect(fs.existsSync(path.join(directory, "role-memory", "delivery.sqlite"))).toBe(true);
+  } finally { process.env.LLV_STATE_DIR = previous; }
+});

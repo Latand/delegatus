@@ -74,5 +74,5 @@ test.each(["codex", "claude"] as const)("%s undesignated pipeline orchestrator k
   if (resumed.kind !== "created") throw new Error("fixture resume failed");
   expect(resumed.receipt.launchProfile).toMatchObject({ cleanMemory: true, learnedRules: selector });
   const { learnedRulesForLaunchProfile } = await import("@/lib/memory/roleLaunch");
-  expect(learnedRulesForLaunchProfile(resumed.receipt.launchProfile)).toBeUndefined();
+  expect(await learnedRulesForLaunchProfile(resumed.receipt.launchProfile)).toBeUndefined();
 });

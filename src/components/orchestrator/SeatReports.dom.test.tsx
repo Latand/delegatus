@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Window } from "happy-dom";
-import { act } from "react";
+import { act, useEffect } from "react";
 import { createRoot, type Root } from "react-dom/client";
 
 import { translate } from "@/lib/i18n";
@@ -220,6 +220,53 @@ test("a rejected topic link shows Telegram's reason in the picker", async () => 
 /* The closed chip names a chat by the title the picker shows: two aliases
    that share their first fifteen characters truncate alike, their titles do
    not. Without a known title it falls back to the alias. */
+/* Audit B30, B42: «Log only» and a chat the bot already lists show as stored
+   at once; a refusal puts the stored choice, the pick and the typed name back. */
+function holdPuts(): () => Promise<void> {
+  const served = globalThis.fetch;
+  let refuse: () => void = () => {};
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (init?.method === "PUT" && String(input).includes("/api/projects/settings")) {
+      puts.push(JSON.parse(String(init.body)));
+      await new Promise<void>((resolve) => { refuse = resolve; });
+      return json({ error: "settings store busy" }, 503);
+    }
+    return served(input, init);
+  }) as typeof fetch;
+  return async () => { await act(async () => { refuse(); }); await settle(); };
+}
+
+test("a listed chat shows as the destination at once, a second press sends nothing, and a refusal brings back the pick and the typed name", async () => {
+  const section = await mount("repo-alpha");
+  await click(q(section, "[data-seat-reports-switch]"));
+  await click(q(section, '[data-seat-reports-chat="design-lounge"]'));
+  await act(async () => reactProps(q(section, "[data-seat-reports-name]")!).onChange!({ target: { value: "Alpha team" } }));
+  const refuse = holdPuts();
+  await click(q(section, "[data-seat-reports-save]"));
+  expect(q(section, "[data-seat-reports-line]")!.textContent).toBe("Reports go to the log and to Design Lounge.");
+  expect(q<HTMLButtonElement>(section, "[data-seat-reports-save]")?.disabled ?? true).toBe(true);
+  await click(q(section, "[data-seat-reports-save]"));
+  expect(puts).toEqual([{ project: "repo-alpha", reportTelegram: { chat: "design-lounge", name: "Alpha team" } }]);
+  await refuse();
+  expect(q(section, "[data-seat-reports-line]")!.textContent).not.toBe("Reports go to the log and to Design Lounge.");
+  expect(q(section, '[data-seat-reports-chat="design-lounge"]')!.getAttribute("aria-checked")).toBe("true");
+  expect(q<HTMLInputElement>(section, "[data-seat-reports-name]")!.value).toBe("Alpha team");
+  expect(section.querySelector('[role="alert"]')!.textContent).toBe(translate("en", "seatReports.failed"));
+});
+
+test("Off shows «log only» at once and a refusal brings the stored chat back with the reason", async () => {
+  const section = await mount("repo-beta");
+  const refuse = holdPuts();
+  await click(q(section, "[data-seat-reports-switch]"));
+  expect(q<HTMLButtonElement>(section, "[data-seat-reports-switch]")!.getAttribute("aria-checked")).toBe("false");
+  expect(q(section, "[data-seat-reports-line]")!.textContent).toBe("Reports go to the log only.");
+  expect(puts).toEqual([{ project: "repo-beta", reportTelegram: null }]);
+  await refuse();
+  expect(q<HTMLButtonElement>(section, "[data-seat-reports-switch]")!.getAttribute("aria-checked")).toBe("true");
+  expect(q(section, "[data-seat-reports-line]")!.textContent).toBe("Reports go to the log and to Team Reports.");
+  expect(section.querySelector('[role="alert"]')!.textContent).toBe(translate("en", "seatReports.failed"));
+});
+
 test("the chip's value is the chosen chat's title, the alias only without one, and Log when nothing posts", () => {
   const t = (key: Parameters<typeof translate>[1], params?: Record<string, string | number>) => translate("en", key, params);
   const reviews = seatReportsReading({ reportTelegram: { chat: "atlas-design-reviews", name: "Atlas" }, reportChatTitle: "Design review", reportNameSuggestion: null }, t);
@@ -229,4 +276,37 @@ test("the chip's value is the chosen chat's title, the alias only without one, a
   expect(seatReportsReading({ reportTelegram: { chat: "atlas-design-reviews", name: "Atlas" }, reportChatTitle: null, reportNameSuggestion: null }, t).face).toBe("atlas-design-reviews");
   expect(seatReportsReading({ reportTelegram: { chat: null }, reportChatTitle: null, reportNameSuggestion: null }, t)).toEqual({ face: "Log", line: "Reports go to the log only.", chat: null });
   expect(seatReportsReading(null, t).face).toBe("Log");
+});
+
+test("two choices drawn together and both refused leave the stored choice, not the first press's prediction", async () => {
+  const served = globalThis.fetch;
+  const refusals: Array<() => void> = [];
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (init?.method === "PUT" && String(input).includes("/api/projects/settings")) {
+      await new Promise<void>((resolve) => { refusals.push(resolve); });
+      return json({ error: "settings store busy" }, 503);
+    }
+    return served(input, init);
+  }) as typeof fetch;
+  const seen: { current: ReturnType<typeof useProjectReports> | null } = { current: null };
+  function Probe() {
+    const reports = useProjectReports("repo-beta");
+    useEffect(() => { seen.current = reports; }, [reports]);
+    return null;
+  }
+  container = document.createElement("div");
+  document.body.appendChild(container);
+  root = createRoot(container);
+  await act(async () => root!.render(<Probe />));
+  await settle();
+  const stored = seen.current!.settings;
+  expect(stored?.reportTelegram?.chat).toBe("team-reports");
+  const logOnly = { reportTelegram: null, reportChatTitle: null, reportNameSuggestion: null };
+  const lounge = { reportTelegram: { chat: "design-lounge" }, reportChatTitle: "Design Lounge", reportNameSuggestion: null };
+  await act(async () => { void seen.current!.save(null, logOnly); void seen.current!.save({ chat: "design-lounge", name: "Beta" }, lounge); await new Promise((resolve) => setTimeout(resolve, 0)); });
+  expect(seen.current!.settings?.reportTelegram?.chat).toBe("design-lounge");
+  await act(async () => { refusals[0]!(); await new Promise((resolve) => setTimeout(resolve, 0)); });
+  expect(seen.current!.settings?.reportTelegram?.chat).toBe("design-lounge");
+  await act(async () => { refusals[1]!(); await new Promise((resolve) => setTimeout(resolve, 0)); });
+  expect(seen.current!.settings).toEqual(stored);
 });

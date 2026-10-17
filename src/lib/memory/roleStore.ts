@@ -11,7 +11,7 @@ import { appendRule, lessonPatternSource, retainRules, sameRule, scopeChars } fr
 import { roleMemoryEnabled } from "./settings";
 import { curationView } from "./curation/store";
 import { crossProjectRoleScope, isCrossProjectRoleScope, MACHINE_SCOPE, scopeKind, scopeProject, scopeRole } from "./roleScopes";
-import { renderLearnedRules } from "./roleRender";
+import { renderLearnedRulesSelection } from "./roleRender";
 import {
   MAX_LESSONS_PER_ATTEMPT, ROLE_MEMORY_BOUND,
   type LessonInput, type LessonRequestRow, type RoleMemoryProjectView, type RoleMemoryRow,
@@ -34,10 +34,12 @@ import {
    same aliases without writing. */
 
 const COLLECTION = "role_memory";
-const HISTORY_LIMIT = 500;
-/** Pass rollback records cannot age out while the window still offers Undo. */
+export const ROLE_MEMORY_HISTORY_LIMIT = 10_000;
+/** Keep 10,000 ordinary changes independently of every curator Undo record.
+ * At 141 daily writes this covers over 70 days; delivery rows keep their own
+ * ordered ids and content hashes, so reconstruction never depends on this window. */
 function keepHistory(entries: ScopeHistoryEntry[]): ScopeHistoryEntry[] {
-  const recent = new Set(entries.slice(-HISTORY_LIMIT));
+  const recent = new Set(entries.filter(entry => !entry.pass).slice(-ROLE_MEMORY_HISTORY_LIMIT));
   return entries.filter(entry => !!entry.pass || recent.has(entry));
 }
 
@@ -177,18 +179,27 @@ export function activeRules(scope: string): RoleMemoryRule[] {
 }
 
 /** The block a new stage of this role and project starts with. */
-export function learnedRulesBlock(project: string, roleId: string | null, maxBytes = Infinity): string {
+export function learnedRulesSnapshot(project: string, roleId: string | null, maxBytes = Infinity) {
   // A process start resolves aliases in its snapshot; it never joins or migrates state.
   const all = rows();
   const resolve = scopeResolver();
   const byId = new Map(all.flatMap(row => row.kind === "rule" ? [[row.id, row] as const] : []));
-  return renderLearnedRules(readableScopes(project, roleId).map(scope => {
+  const scopes = readableScopes(project, roleId).map(scope => {
     const active = all.flatMap(row => row.kind === "scope" && resolve(row.scope) === scope ? row.active : [])
       .flatMap(id => { const found = byId.get(id); return found?.state === "active" && !found.versionOf ? [found] : []; });
     // Two aliased rows can exceed one scope's bound before an owner joins them.
     // Apply the same retention decision to this snapshot without writing it.
-    return { scope, rules: retainRules(active, new Date().toISOString()).active.reverse() };
-  }), maxBytes);
+    const revisions = all.flatMap(row => row.kind === "scope" && resolve(row.scope) === scope
+      ? [{ scope: row.scope, revision: row.revision, revisionScope: row.revisionScope ?? row.scope }] : []);
+    return { scope, revisions, rules: retainRules(active, new Date().toISOString()).active.reverse() };
+  });
+  const rendered = renderLearnedRulesSelection(scopes, maxBytes);
+  return { block: rendered.block, scopes: scopes.map(({ scope, revisions }) => ({ scope, revisions })),
+    rules: rendered.rules.map(rule => ({ id: rule.id, hash: crypto.createHash("sha256").update(rule.rule).digest("hex") })) };
+}
+
+export function learnedRulesBlock(project: string, roleId: string | null, maxBytes = Infinity): string {
+  return learnedRulesSnapshot(project, roleId, maxBytes).block;
 }
 
 export function lessonRequest(pipelineId: string, stageId: string, attempt: number): LessonRequestRow | null {

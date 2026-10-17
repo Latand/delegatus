@@ -1,3 +1,4 @@
+import { observeSqlite, parseSqliteJson } from "@/lib/sqliteReadAttribution";
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import fsSync from "node:fs";
@@ -64,7 +65,7 @@ export class MemoryIndex {
     for (const entry of proofs) {
       if (entry.proof) {
         if (!includeSlugProofs) continue;
-        try { if (!claudeMemoryDirectoryProofCurrent(JSON.parse(entry.proof))) continue; }
+        try { if (!claudeMemoryDirectoryProofCurrent(parseSqliteJson(entry.proof, this.database()))) continue; }
         catch { continue; }
       }
       const aliased = canonicalProject(entry.key);
@@ -124,7 +125,7 @@ export class MemoryIndex {
     const filename = statePath("memory-index.sqlite");
     // The state resolver owns the directory; this module never claims live state.
     fsSync.mkdirSync(path.dirname(filename), { recursive: true, mode: 0o700 });
-    this.db = new sqlite.Database(filename, { create: true });
+    this.db = observeSqlite(new sqlite.Database(filename, { create: true }), "memory-index");
     fsSync.chmodSync(filename, 0o600);
     try {
       this.db.exec(`
@@ -259,7 +260,7 @@ export class MemoryIndex {
         id: item.id, engine: item.engine, kind: item.kind, scope: item.scope, project: item.project,
         sourcePath: displayPath(item.sourcePath), sourceKind: item.sourceKind,
         title: item.title, summary: item.summary, writtenAt: item.writtenAt,
-        flags: JSON.parse(item.flags) as string[],
+        flags: parseSqliteJson(item.flags, this.database()) as string[],
       };
       page.items.push(hit);
       if (Buffer.byteLength(JSON.stringify(page)) > Math.min(MEMORY_RESPONSE_BYTES, input.maxBytes ?? MEMORY_RESPONSE_BYTES)) {
@@ -281,7 +282,7 @@ export class MemoryIndex {
       db.query("INSERT OR IGNORE INTO memory_offers VALUES (?, ?, ?, ?, 'search', NULL, 'opened', ?)").run(id, ledgerKey, conversationId, at, at);
       db.query("UPDATE memory_offers SET outcome = 'opened', outcome_at = ? WHERE memory_id = ? AND conversation_id = ? AND channel = 'inject' AND outcome IS NULL").run(at, id, conversationId);
     };
-    const opened = { ...item, sourcePath: displayPath(item.sourcePath), flags: JSON.parse(item.flags) as string[] };
+    const opened = { ...item, sourcePath: displayPath(item.sourcePath), flags: parseSqliteJson(item.flags, this.database()) as string[] };
     const budget = Math.min(MEMORY_RESPONSE_BYTES, maxBytes);
     if (Buffer.byteLength(JSON.stringify({ item: opened })) <= budget) {
       recordOpened();
@@ -381,7 +382,7 @@ export class MemoryIndex {
           // half the remaining budget; an unfinished one only drops the slug.
           const stored = db.query<{ project: string; proof: string | null }, [string]>("SELECT project, proof FROM memory_project_scopes WHERE key = ?").get(slug);
           let directories: ClaudeMemoryDirectoryProof | undefined;
-          try { if (stored?.proof && canonicalProject(stored.project) === canonical) directories = JSON.parse(stored.proof); } catch { /* walk again */ }
+          try { if (stored?.proof && canonicalProject(stored.project) === canonical) directories = parseSqliteJson(stored.proof, this.database()); } catch { /* walk again */ }
           if (directories && claudeMemoryDirectoryProofCurrent(directories)) { keys.add(slug); recorded.add(slug); proofs.set(slug, directories); continue; }
           const walkDeadline = performance.now() + (deadline - performance.now()) / 2;
           try {
@@ -444,10 +445,10 @@ export class MemoryIndex {
         const page = hits.all(query, projectKeys, engine, offset);
         for (const found of page) {
           check();
-          const foundFlags = JSON.parse(found.flags) as string[];
+          const foundFlags = parseSqliteJson(found.flags, this.database()) as string[];
           if (foundFlags.includes("retired")) continue;
           const hit = await resolvePointer(found);
-          const flags = hit === found ? foundFlags : JSON.parse(hit.flags) as string[];
+          const flags = hit === found ? foundFlags : parseSqliteJson(hit.flags, this.database()) as string[];
           // The root index can supply search terms for a topic, while its own
           // text is already loaded. Unloaded nested references remain offers.
           if (hit.sourceKind === "claude_index" && hit.engine === engine && !flags.includes("deferred_index")) continue;

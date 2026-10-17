@@ -127,8 +127,9 @@ facts on each `.pb-step`, which only the vertical CSS reads:
 
   Ties keep DOM order.
 
-**Anchor of a branch.** The first main chip, in `summary.chips` order, whose
-`stage.onFail?.to` is the branch's id. This is the reviewer, and `summary.loops`
+**Anchor of a branch.** The main chip whose
+`stage.onFail?.to` is the branch's id: of several, the one that last fired the
+branch, else the first in `summary.chips` order. This is the reviewer, and `summary.loops`
 holds the same pair. If no main chip fails to it (for example, only another
 branch does), the anchor is the last main chip. The branch then keeps its
 place at the end, as today.
@@ -249,6 +250,8 @@ The rules:
   `.pb-pills` and `.pb-step` render pixel for pixel as they do at the merge
   base: arrows, wrap, and branches at the end. The new attributes and the
   `--pb-order` custom property are read only inside the container query.
+  (The branches at the end changed on 2026-10-16: see "The wide lane draws a
+  branch under its stage" below.)
 - **The pill.** Its size, padding, outline, tone classes, glyph and badge,
   `CountCircle`, `ReturnSuffix`, colours, tooltip, aria label and click target.
   The only exception is the name wrapping in the vertical chain.
@@ -348,7 +351,49 @@ No ADR: the change is reversible CSS plus three attributes.
 - "не стрелочка идёт сбоку": the arrow is not drawn in the vertical chain.
 - The review-fix branch hangs off its reviewer on a dashed elbow, indented, so
   it does not read as the next step.
-- Wide layouts are untouched.
+- Wide layouts are untouched (until the section below).
+
+## The wide lane draws a branch under its stage
+
+Operator, 2026-10-16: a fail branch drawn as a «branch: Fix» pill at the end of
+the wide row reads badly; draw it as a branch under the review it comes from,
+in this horizontal form only.
+
+- `ChainPills` wraps each main step in a `.pb-unit` together with the branches
+  whose gate (`chainSteps().anchor`) it is. Under 380px the unit is
+  `display: contents`, so the narrow form sees the flat steps it always saw.
+- From 380px the unit is a two-column grid: the arrow and the stage on the
+  first row, each branch under the stage, indented by `--pb-branch-indent`, on
+  the narrow form's dashed elbow. The pass row stays one line; a unit wraps
+  whole, so a stage never leaves its fix behind. A branch adds nothing to its
+  unit's width (`contain: inline-size`): a fix wider than its stage never
+  moves the stage or a later pass stage to a new line. Its pill takes the
+  stage's width, at least 8rem, and the name wraps inside it. A stage with a
+  later branch of its own may use the room up to that branch's elbow: the next
+  unit's rail stands 15px right of its column, so the earlier fix reaches
+  `--pb-branch-reach` (4 + 16 + 15 − 8 = 27px) past its column and stops 8px
+  short of the elbow, which therefore crosses no pill. That fix counts its
+  longest word toward its unit's width (a cyclic percentage is 0 in the
+  intrinsic contribution, so it asks no more), so a word never breaks and the
+  elbow never meets the pill: the unit grows by the few pixels the word needs,
+  and the gap before the next arrow with it. The last gate with a
+  branch and the stages after it are one unit (`data-tail`): the unit takes
+  the row's free room (`flex: 1 1 auto`, its last column `1fr`), so that fix
+  may use the room under the later stages up to the lane's right edge before
+  it wraps, and still adds nothing to the pass row's width. Its pass stages
+  keep their width (`min-width: max-content`): a tail wider than the row
+  overflows by a few pixels rather than ellipsize a stage.
+- A fix shared by two gates is drawn once, under the gate that last fired it
+  (the `activatedBy` of its latest fail-activated attempt), else under the
+  first gate that fails to it; the other gate says it with its `↺ n/m` mark.
+  The narrow form reads the same anchor.
+- The word «branch» is its own span (`.pb-branch-word`) and is hidden in the
+  wide form, where the position and the elbow say it. Accessible names are
+  unchanged.
+- The card and screen densities are unchanged.
+- `wideStageChainFailures` (`stageChainMeasure.ts`) holds the geometry; the
+  kanban board driver's "wide card" block reads it over `?scenario=stage-chain`
+  and records `evidence/stage-chain-branch/`.
 
 ## Deferred — not currently justified
 

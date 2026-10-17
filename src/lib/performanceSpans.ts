@@ -1,3 +1,4 @@
+import { readAttribution } from "./readAttribution";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 
@@ -15,6 +16,7 @@ export const performanceSites = [
   "http.dispatch", "http.response-ready",
   "pipeline.git-guard-prepare", "pipeline.attempt-push-proof", "pipeline.pull-request",
   "orchestrator.seat-stat", "orchestrator.seat-read", "orchestrator.seat-parse", "orchestrator.seat-index",
+  "registry.writer-snapshot",
 ] as const;
 export type PerformanceSite = typeof performanceSites[number];
 type Slice = { sequence: number; span: number; parent: number; site: number; kind: "sync" | "await" | "event";
@@ -84,7 +86,7 @@ export function createPerformanceSpans(now = monotonicNow) {
       currentSpan = record.span;
       currentSite = record.site; observeSite?.(currentSite);
       // A synchronous stack has no async context allocation per row.
-      try { return work(); } catch (error) { record.failed = true; throw error; }
+      try { return readAttribution.sync(site, work, 0, site === "runtime.parse" ? bytes : 0, site !== "state.json" && site !== "runtime.parse"); } catch (error) { record.failed = true; throw error; }
       finally { finish(record); currentSpan = parentSpan; currentSite = parentSite; observeSite?.(currentSite); }
     },
     async wait<T>(site: PerformanceSite, work: () => Promise<T>): Promise<T> {

@@ -5,7 +5,7 @@ import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
 import { loadPipelines } from "@/lib/pipelines/store";
 import { canonicalProject } from "@/lib/projects/aliases";
 import { projectForCwd } from "@/lib/scanner/describe";
-import { orchestratorSeatFor } from "@/lib/orchestrator/seats";
+import { currentSeat } from "@/lib/orchestrator/seatChannel";
 import { loadTasks } from "@/lib/tasks/store";
 import { runsElsewhere } from "@/lib/links/linked";
 import type { PrototypeReviewRound } from "./types";
@@ -40,8 +40,7 @@ export const prototypeWorld: PrototypeWorld = {
     return found[0] ?? null;
   },
   orchestrator(project) {
-    const seat = orchestratorSeatFor(project);
-    return seat.active?.conversationId ?? null;
+    return currentSeat(project)?.conversationId ?? null;
   },
 };
 export function taskForPrototype(taskId: string, caller: PrototypeCaller, write = false) {

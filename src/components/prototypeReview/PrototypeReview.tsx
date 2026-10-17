@@ -225,20 +225,18 @@ export function PrototypeReview({ taskId, reviewId, taskTitle, onClose }: Protot
   const lost = unsavedOf(rounds, drafts);
   const answersChanged = lost.answers;
   const unsaved = answersChanged || lost.comment || speaking;
-  /* A save answers after the render that sent it: a close waiting for it reads the rounds, the drafts and the speech as they are then. */
+  /* A refusal that lands after the window closed keeps the drafts as they were at the close. */
   const latest = useRef({ rounds, drafts, speaking });
   useEffect(() => { latest.current = { rounds, drafts, speaking }; }, [rounds, drafts, speaking]);
   /* The guard names what is lost: changed answers, else the comment. */
   const guardKind = answersChanged ? "answers" : "comment";
   /* A held key repeats before the first request has redrawn anything. */
   const saveInFlight = useRef(false);
-  /* A save in flight is no decision yet: the first close waits for the
-     server's word and closes once the decision is written, or stays with the
-     choice, the words and the reason when it is refused. */
-  const closeOnSave = useRef(false);
+  /* A save in flight already reads as decided, so its round asks nothing on
+     close and the window closes at once; a refusal that lands after the
+     close waits in `refusedSaves` for the review to open again. */
   const requestClose = useCallback(() => {
     if (guard) setGuard(false);
-    else if (saveInFlight.current && !closeOnSave.current) closeOnSave.current = true;
     else if (unsaved) setGuard(true);
     else onClose();
   }, [guard, unsaved, onClose]);
@@ -343,20 +341,10 @@ export function PrototypeReview({ taskId, reviewId, taskTitle, onClose }: Protot
     try {
       const result = await review.save({ reviewId: round.id, chosen: draft.chosen, comment: draft.comment, ...(draft.reject ? { reject: true as const } : {}),
         ...(hasQuestions ? skip ? { skip: true as const } : { answers: draft.answers } : {}) });
-      const closing = closeOnSave.current;
-      closeOnSave.current = false;
       if (!mounted.current) {
-        if (!result.ok) refusedSaves.set(taskId, { drafts: { ...drafts, [round.id]: sent }, error: result.error });
+        if (!result.ok) refusedSaves.set(taskId, { drafts: { ...latest.current.drafts, [round.id]: sent }, error: result.error });
       } else if (result.ok) {
         setDrafts((held) => Object.fromEntries(Object.entries(held).filter(([id]) => id !== round.id)));
-        /* The waited-for close leaves only this round's words behind: another
-           round's unsaved words, answers or speech still ask first. */
-        if (closing) {
-          const now = latest.current;
-          const left = unsavedOf(now.rounds, Object.fromEntries(Object.entries(now.drafts).filter(([id]) => id !== round.id)));
-          if (left.answers || left.comment || now.speaking) setGuard(true);
-          else onClose();
-        }
       }
     } finally {
       saveInFlight.current = false;

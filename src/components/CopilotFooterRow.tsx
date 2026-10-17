@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { hiddenAccountsOf, removalRefusalOf, type AccountRemovalRefusal as Refusal, type HiddenAccount } from "@/hooks/useEngineAccounts";
 import { consumePendingAccountPanel, onAccountPanelRequest } from "@/lib/accounts/openPanel";
@@ -36,6 +36,9 @@ export interface CopilotAccountsBody {
   error?: string;
 }
 
+/** What a press expects the list to become, computed over whatever list it lands on. */
+type Prediction = (held: CopilotAccountsBody) => CopilotAccountsBody;
+
 function isBody(value: unknown): value is CopilotAccountsBody {
   const body = value as Partial<CopilotAccountsBody> | null;
   return Boolean(body && typeof body === "object" && body.cli && Array.isArray(body.accounts));
@@ -47,7 +50,13 @@ const LIVE_LOGIN_PHASES = ["starting", "awaiting_browser", "awaiting_storage_cho
     and the setup guide's Engines step (#2166): one sign-in implementation. */
 export function useCopilotAccounts({ polling, onChanged }: { polling: boolean; onChanged?: () => void }) {
   const { t } = useLocale();
-  const [body, setBody] = useState<CopilotAccountsBody | null>(null);
+  /* The last list the server gave, and the predictions still on their way: the
+     drawn list is the stored one with each prediction laid over it in press
+     order, so a refusal drops only its own. */
+  const [served, setBody] = useState<CopilotAccountsBody | null>(null);
+  const [presses, setPresses] = useState<ReadonlyArray<{ id: number; predict: Prediction }>>([]);
+  const pressCount = useRef(0);
+  const body = useMemo(() => (served ? presses.reduce((held, press) => press.predict(held), served) : null), [served, presses]);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
   const [refusal, setRefusal] = useState<Refusal | null>(null);
@@ -68,25 +77,39 @@ export function useCopilotAccounts({ polling, onChanged }: { polling: boolean; o
     return () => window.clearInterval(timer);
   }, [polling, body, load]);
 
-  const post = async (payload: Record<string, unknown>) => {
+  /* `predicted`, when given, is laid over the list before the request and taken
+     off on a refusal (audit B33, B37); `settled` names a refusal status that means the
+     change already holds, so the list is read again instead. */
+  const post = async (payload: Record<string, unknown>, predicted?: Prediction, settled?: number): Promise<boolean> => {
     setError(null);
+    const mine = ++pressCount.current;
+    if (predicted) setPresses((held) => [...held, { id: mine, predict: predicted }]);
     try {
       const response = await fetch("/api/accounts/copilot", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(payload),
       });
-      const next: unknown = await response.json();
+      const next: unknown = await response.json().catch(() => null);
+      if (!response.ok && response.status === settled) {
+        void load();
+        onChanged?.();
+        return true;
+      }
       if (!response.ok) {
         setError((next as { error?: string } | null)?.error ?? t("copilot.accounts.failed"));
-        return;
+        return false;
       }
       if (isBody(next)) {
         setBody(next);
         onChanged?.();
       }
+      return true;
     } catch {
       setError(t("copilot.accounts.failed"));
+      return false;
+    } finally {
+      if (predicted) setPresses((held) => held.filter((press) => press.id !== mine));
     }
   };
 
@@ -144,6 +167,14 @@ export function CopilotAccountList({ accounts }: { accounts: CopilotAccounts }) 
   const { t } = useLocale();
   const { body, error, copied, refusal, load, post, copy, remove, dismissRefusal } = accounts;
   const [restoring, setRestoring] = useState(false);
+  /* The "active" badge moves on the press; both rows' Use waits for the answer. */
+  const [selecting, setSelecting] = useState(false);
+  const select = (id: string) => {
+    if (!body || selecting) return;
+    setSelecting(true);
+    void post({ action: "select", id }, (held) => ({ ...held, active: id, accounts: held.accounts.map((account) => ({ ...account, active: account.id === id })) }))
+      .finally(() => setSelecting(false));
+  };
   const [label, setLabel] = useState("");
   /* Removal arms on the first click and runs on the confirm, as in the
      Claude and Codex lists. */
@@ -165,7 +196,7 @@ export function CopilotAccountList({ accounts }: { accounts: CopilotAccounts }) 
             {account.active ? (
               <span className="shrink-0 text-[10px] font-semibold text-muted">{t("copilot.accounts.active")}</span>
             ) : (
-              <button type="button" className="shrink-0 rounded px-1.5 text-[10.5px] font-semibold text-accent hover:bg-accent-soft" onClick={() => void post({ action: "select", id: account.id })}>
+              <button type="button" disabled={selecting} className="shrink-0 rounded px-1.5 text-[10.5px] font-semibold text-accent hover:bg-accent-soft disabled:opacity-45" onClick={() => select(account.id)}>
                 {t("copilot.accounts.use")}
               </button>
             )}
@@ -255,8 +286,13 @@ export function CopilotAccountList({ accounts }: { accounts: CopilotAccounts }) 
           account={account}
           busy={restoring}
           onRestore={() => {
+            /* The row is back at once, its sign-in unchecked until the next
+               read; a refusal takes it off and offers it again (audit B37). An
+               "already listed" answer means it is back. */
             setRestoring(true);
-            void post({ action: "restore", id: account.id }).finally(() => setRestoring(false));
+            const row: CopilotAccountRow = { id: account.id, label: account.label, kind: "legacy", active: false, auth: "unknown", user: null, loginCommand: null, login: null };
+            const predicted: Prediction = (held) => ({ ...held, accounts: held.accounts.some((listed) => listed.id === account.id) ? held.accounts : [row, ...held.accounts], hidden: (held.hidden ?? []).filter((hidden) => hidden.id !== account.id) });
+            void post({ action: "restore", id: account.id }, predicted, 404).finally(() => setRestoring(false));
           }}
         />
       ))}

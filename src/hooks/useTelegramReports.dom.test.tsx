@@ -107,3 +107,81 @@ test("an accepted save closes the editor and takes the settings the save returne
      answer — the acknowledgement is that state, not a client-side guess. */
   expect(latest?.reports?.settings.promptIsDefault).toBe(false);
 });
+
+/* Audit B40, B41: the report settings and the prompt show at once and lock
+   nothing; a refusal puts the stored settings back and reopens the editor with
+   the typed text. */
+function held(): { posts: unknown[]; answer: (response: Response) => Promise<void> } {
+  const posts: unknown[] = [];
+  let release: (response: Response) => void = () => {};
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(typeof input === "string" || input instanceof URL ? input : input.url);
+    if ((init?.method ?? "GET") === "POST") {
+      posts.push(JSON.parse(String(init!.body)));
+      return new Promise<Response>((resolve) => { release = resolve; });
+    }
+    if (url.includes("prompt=1")) return new Response(JSON.stringify({ prompt: "Write it in Ukrainian.", defaultPrompt: "Write one report." }), { status: 200 });
+    return new Response(JSON.stringify({ reports: payload(true) }), { status: 200 });
+  }) as unknown as typeof fetch;
+  return { posts, answer: (response) => act(async () => { release(response); await Bun.sleep(0); }) };
+}
+
+test("a settings change shows at once without locking the section, and a refusal puts the stored settings back", async () => {
+  const server = held();
+  await mount();
+  let saving: Promise<void> = Promise.resolve();
+  await act(async () => { saving = latest!.saveSettings({ enabled: false, time: "11:30", groups: [], promptIsDefault: true }); await Bun.sleep(0); });
+  expect(latest?.reports?.settings.enabled).toBe(false);
+  expect(latest?.reports?.settings.time).toBe("11:30");
+  expect(latest?.busy).toBe(false);
+  expect(server.posts).toEqual([{ action: "settings", settings: { enabled: false, time: "11:30", groups: [], promptIsDefault: true } }]);
+  await server.answer(new Response(JSON.stringify({ code: "action_failed" }), { status: 500 }));
+  await act(async () => { await saving; });
+  expect(latest?.reports?.settings.enabled).toBe(true);
+  expect(latest?.reports?.settings.time).toBe("10:00");
+  expect(latest?.failure?.code).toBe("action_failed");
+});
+
+test("a prompt save closes the editor and reads as edited by you at once, and a refusal reopens it with the typed text", async () => {
+  const server = held();
+  await mount();
+  await act(async () => { await latest!.loadPrompt(); });
+  let saving: Promise<void> = Promise.resolve();
+  await act(async () => { saving = latest!.savePrompt("Пиши звіт українською."); await Bun.sleep(0); });
+  expect(latest?.prompt).toBeNull();
+  expect(latest?.reports?.settings.promptIsDefault).toBe(false);
+  expect(latest?.busy).toBe(false);
+  expect(server.posts).toHaveLength(1);
+  await server.answer(new Response(JSON.stringify({ code: "action_failed" }), { status: 500 }));
+  await act(async () => { await saving; });
+  expect(latest?.prompt?.prompt).toBe("Пиши звіт українською.");
+  expect(latest?.reports?.settings.promptIsDefault).toBe(true);
+  expect(latest?.failure?.code).toBe("action_failed");
+});
+
+test("two refused settings writes together leave the stored settings, not the first press's prediction", async () => {
+  const posts: unknown[] = [];
+  const release: Array<(response: Response) => void> = [];
+  globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+    if ((init?.method ?? "GET") === "POST") {
+      posts.push(JSON.parse(String(init!.body)));
+      return new Promise<Response>((resolve) => { release.push(resolve); });
+    }
+    return new Response(JSON.stringify({ reports: payload(true) }), { status: 200 });
+  }) as unknown as typeof fetch;
+  await mount();
+  const stored = latest!.reports!.settings;
+  await act(async () => {
+    void latest!.saveSettings({ ...stored, enabled: false });
+    void latest!.saveSettings({ ...stored, enabled: false, time: "11:30" });
+    await Bun.sleep(0);
+  });
+  expect(latest?.reports?.settings.time).toBe("11:30");
+  const refusal = () => new Response(JSON.stringify({ code: "action_failed" }), { status: 500 });
+  await act(async () => { release[0]!(refusal()); await Bun.sleep(0); });
+  /* The newer press is still out and stays drawn. */
+  expect(latest?.reports?.settings.time).toBe("11:30");
+  await act(async () => { release[1]!(refusal()); await Bun.sleep(0); });
+  expect(latest?.reports?.settings).toEqual(stored);
+  expect(latest?.failure?.code).toBe("action_failed");
+});

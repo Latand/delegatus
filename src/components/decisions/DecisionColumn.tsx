@@ -82,11 +82,11 @@ export function DecisionList({ project, active = true, focus, touch = false, ini
     body = decisions.map((decision) => decision.id === expanded?.id
       ? decision.decision
         ? <DecisionRecord key={decision.id} decision={decision}
-          onRetry={() => void read.answer(decision.id, { retry: true })}
-          retryError={read.error?.reviewId === decision.id ? read.error.message : null}
+          onRetry={() => void read.answer(decision.id, { retry: true }, decision)}
+          retryError={read.error?.reviewId === decision.id && read.error.kind !== "revoke" ? read.error.message : null}
           onRevoke={() => read.answer(decision.id, { chosen: [], comment: "",
-          answers: (decision.questions ?? []).map(question => ({ questionId: question.id, options: [0] })) })}
-          revokeError={read.error?.reviewId === decision.id ? read.error.message : null} />
+          answers: (decision.questions ?? []).map(question => ({ questionId: question.id, options: [0] })) }, decision)}
+          revokeError={read.error?.reviewId === decision.id && read.error.kind !== "retry" ? read.error.message : null} />
         : <DecisionCard key={decision.id} decision={decision} narrow={narrow} columns={columns} onAnswer={read.answer} error={read.error?.reviewId === decision.id ? read.error.message : null} />
       : <DecisionRow key={decision.id} decision={decision} onOpen={() => setPicked(decision.id)} />);
   }

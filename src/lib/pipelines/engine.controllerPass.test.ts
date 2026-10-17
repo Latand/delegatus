@@ -2,8 +2,8 @@ import { expect, test, harness, create, BUILD_ONLY, loadPipelines, savePipelines
 import { FlowPipelineController, type FlowPipelineControllerHeartbeat } from "./controller";
 import { tickPipelinesController } from "./controllerPass";
 import { pipelineControllerJobLanes, settlePipelineControllerJobs, startPipelineControllerJob, takePipelineControllerJobChanges } from "./controllerJobs";
-import { controllerAttemptWindow, controllerOtherTerminalHosts, controllerHostHasLiveWork, controllerFlowAttached, acknowledgePipelineControllerWork, archiveSettledPipelines, controllerPipelineVersion, findControllerPipeline, pipelineControllerReady, selectControllerPipelines, selectPipelineControllerWork, withPipelineMutation, withPipelineControllerMutation, controllerUnclaimedPublications } from "./store";
-import { SqliteStateCollection } from "@/lib/state/sqliteStateStore";
+import { controllerAttemptWindow, controllerOtherTerminalHosts, controllerHostHasLiveWork, controllerFlowAttached, acknowledgePipelineControllerWork, archiveSettledPipelines, controllerPipelineVersion, findControllerPipeline, pipelineControllerReady, selectControllerPipelines, selectPipelineControllerWork, withPipelineMutation, withPipelineControllerMutation, controllerUnclaimedPublications, PipelineStoreError } from "./store";
+import { SqliteStateCollection, StateSnapshotChangedError, resetStateReadonlyConnectionCountForTests, stateReadonlyConnectionCountForTests } from "@/lib/state/sqliteStateStore";
 import { spyOn } from "bun:test";
 import { performanceSpans, performanceSites } from "@/lib/performanceSpans";
 import { instanceCpuAdmissionFile, instanceCpuAdmissionQueue } from "@/lib/runtime/cpuAdmissionScope";
@@ -793,4 +793,125 @@ test("indexed fallback membership preserves off-window conversation, launch and 
       },undefined,new Map([[lane.id,[]]]));
     }
   }
+});
+
+
+test.each(["snapshot", "evidence"] as const)("a stale %s preparation leaves only its lane pending while peers finish the same pass", async kind => {
+  const { h, lane } = await committing();
+  const rows = ["stale-lane","fresh-peer"].map(id => {
+    const row = structuredClone(lane); row.id = id;
+    Object.assign(row,pipelineIdentity(id,row.task,row.repoDir));
+    row.state = "paused"; row.cursor = null; row.runs = row.runs.map(run => ({ ...run,attempts: [] }));
+    row.delivery = undefined; row.publication = "internal";
+    row.unconfirmedHosts = [{ stageId: "build",attempt: 1,conversationId: id,agentPath: null,paneId: id,
+      operationId: null,detail: "pending disappearance",at: h.ports.now() }];
+    return row;
+  });
+  savePipelines(rows);
+  const observed: string[] = [];
+  h.ports.stageHostResident = async target => { observed.push(target.conversationId!); return true; };
+  const original = SqliteStateCollection.prototype.pipelineControllerCandidate;
+  let stale = true;
+  const read = spyOn(SqliteStateCollection.prototype,"pipelineControllerCandidate").mockImplementation(function(this: SqliteStateCollection<unknown>, key) {
+    if (stale && key === "stale-lane") { stale = false; throw kind === "snapshot" ? new StateSnapshotChangedError() : new PipelineStoreError("pipeline evidence changed during preparation"); }
+    return original.call(this,key);
+  });
+  try { await tickPipelinesController([],h.ports); }
+  finally { read.mockRestore(); }
+  expect(observed).toEqual(["fresh-peer"]);
+  const db = new Database(path.join(process.env.LLV_STATE_DIR!,"state.sqlite"),{ readonly: true });
+  try { expect(db.query("SELECT dirty,attempt_cursor FROM pipeline_tick_work WHERE row_key='stale-lane'").get())
+    .toEqual({ dirty: 1,attempt_cursor: 0 }); }
+  finally { db.close(); }
+  await tickPipelinesController([],h.ports);
+  expect(observed).toContain("stale-lane");
+});
+
+test("scoped selectors reuse one read connection across all lane and attempt reads", async () => {
+  const { h, lane } = await committing();
+  lane.state = "paused"; lane.cursor = null; lane.runs = lane.runs.map(run => ({ ...run,attempts: [] }));
+  lane.delivery = undefined; lane.publication = "internal";
+  savePipelines([lane,...Array.from({ length: 3 },(_,i) => {
+    const peer = structuredClone(lane); peer.id = `reader-peer-${i}`;
+    Object.assign(peer,pipelineIdentity(peer.id,peer.task,peer.repoDir)); return peer;
+  })]);
+  await tickPipelinesController([],h.ports);
+  resetStateReadonlyConnectionCountForTests();
+  await withControllerPipelineScope([lane.id], async () => {
+    for (let n = 0; n < 3; n++) {
+      for (const kind of ["running","hosts","cleanup","pending-stage","publication"] as const) await selectControllerPipelines(kind);
+      await findControllerPipeline(lane.id); await controllerAttemptWindow(lane.id,0,"build");
+      await controllerPipelineVersion(lane.id); await controllerFlowAttached("absent");
+    }
+  });
+  await tickPipelinesController([],h.ports);
+  expect(stateReadonlyConnectionCountForTests()).toBeLessThanOrEqual(1);
+});
+
+
+test("a lane edit during awaited evidence preserves that edit and lets its peer finish", async () => {
+  const { h, lane } = await committing();
+  const rows = ["awaited-lane","awaited-peer"].map(id => {
+    const row = structuredClone(lane); row.id = id;
+    Object.assign(row,pipelineIdentity(id,row.task,row.repoDir));
+    row.state = "paused"; row.delivery = undefined; row.publication = "internal";
+    row.cursor!.state = "running";
+    Object.assign(row.runs[0]!.attempts[0]!,{ historical: true,state: "running",verdict: null,
+      agentPath: `/fixture/${id}.jsonl`,conversationId: id,launchId: null });
+    return row;
+  });
+  savePipelines(rows);
+  const observed: string[] = [];
+  let change = true;
+  h.ports.durableTurnEvidence = async (_engine,pathname) => {
+    observed.push(pathname);
+    if (change && pathname === "/fixture/awaited-lane.jsonl") {
+      change = false;
+      await withPipelineMutation(async (fresh,persist) => {
+        fresh.find(row => row.id === "awaited-lane")!.stateDetail = "concurrent lane edit";
+        await persist([fresh.find(row => row.id === "awaited-lane")!]);
+      });
+    }
+    return null;
+  };
+  await tickPipelinesController([],h.ports);
+  expect(observed).toContain("/fixture/awaited-peer.jsonl");
+  expect(loadPipelines().find(row => row.id === "awaited-lane")!.stateDetail).toBe("concurrent lane edit");
+  const db = new Database(path.join(process.env.LLV_STATE_DIR!,"state.sqlite"),{ readonly: true });
+  try { expect(db.query("SELECT dirty,attempt_cursor FROM pipeline_tick_work WHERE row_key='awaited-lane'").get())
+    .toEqual({ dirty: 1,attempt_cursor: 0 }); }
+  finally { db.close(); }
+});
+
+
+test("refused preparations retain their windows and advance the durable fair walk across restart", async () => {
+  const { h, lane } = await committing();
+  const rows = Array.from({ length: 20 },(_,i) => {
+    const row = structuredClone(lane); row.id = `refused-${i.toString().padStart(2,"0")}`;
+    Object.assign(row,pipelineIdentity(row.id,row.task,row.repoDir));
+    row.state = "paused"; row.cursor = null; row.runs = row.runs.map(run => ({ ...run,attempts: [] }));
+    row.delivery = undefined; row.publication = "internal"; return row;
+  });
+  savePipelines(rows);
+  const observed = new Set<string>();
+  const read = spyOn(SqliteStateCollection.prototype,"pipelineControllerCandidate").mockImplementation(key => {
+    observed.add(key); throw new StateSnapshotChangedError();
+  });
+  try { await tickPipelinesController([],h.ports); }
+  finally { read.mockRestore(); }
+  expect(observed.size).toBe(4);
+  const source = `import { SqliteStateCollection,StateSnapshotChangedError } from "./src/lib/state/sqliteStateStore.ts";
+    import { tickPipelinesController } from "./src/lib/pipelines/controllerPass.ts";
+    const seen=new Set();
+    SqliteStateCollection.prototype.pipelineControllerCandidate=function(key){seen.add(key);throw new StateSnapshotChangedError();};
+    for(let i=0;i<20;i++)await tickPipelinesController([]);
+    console.log(JSON.stringify([...seen]));`;
+  const child = Bun.spawnSync({ cmd: [process.execPath,"-e",source],env: { ...process.env,LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1" },stdout: "pipe",stderr: "pipe" });
+  expect(child.exitCode).toBe(0);
+  const resumed = JSON.parse(child.stdout.toString()) as string[];
+  expect(resumed.some(key => !observed.has(key))).toBe(true);
+  expect(new Set([...observed,...resumed]).size).toBe(20);
+  const db = new Database(path.join(process.env.LLV_STATE_DIR!,"state.sqlite"),{ readonly: true });
+  try { expect(db.query("SELECT COUNT(*) AS n FROM pipeline_tick_work WHERE dirty=1 AND attempt_cursor=0").get()).toEqual({ n: 20 }); }
+  finally { db.close(); }
 });

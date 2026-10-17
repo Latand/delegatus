@@ -47,6 +47,9 @@ function flowCorpus(count: number, now: number) {
   }));
 }
 
+// The census builds and pages 240-row corpora through every MCP tool. Its
+// serialized byte budgets are the contract; allow the setup to finish on a
+// runner sharing CPU with the other runtime verdict checks.
 test("measure every tool through the MCP service and budget common board answers", async () => {
   const now = Date.parse("2026-09-20T09:00:00.000Z");
   const pipelines = pipelineCorpus(240, 2);
@@ -239,7 +242,7 @@ test("measure every tool through the MCP service and budget common board answers
   const successor = await call("list_tasks", { project: "size-board-successor", ids: ["task-0"] });
   expect(successor.count).toBe(1);
   expect(successor.tasks[0].project).toBe("size-board-successor");
-});
+}, 15_000);
 
 test("flow pages reach every stored row newest first within budget, using keyed reads and incremental selection", async () => {
   const { boardSelection } = await import("./boardSelection");

@@ -57,6 +57,10 @@ const pipelines = new Map<string, PipelineEntry>();
    report log's tick read this one layer, so both change on the same click. */
 const reports = new Map<number, ReportEntry>();
 const prototypes = new Map<string, { taskId: string; mark: AttentionDismissalMark | null; until: number }>();
+/* A tool permission request answered on this device, by its request id: its
+   needs-you row and the count leave at once, until the host's projection no
+   longer carries the request or the bound passes. */
+const permissions = new Map<string, number>();
 const listeners = new Set<() => void>();
 let version = 0;
 
@@ -81,6 +85,19 @@ function drop(now: number): void {
   for (const [key, entry] of pipelines) if (entry.until <= now) pipelines.delete(key);
   for (const [key, entry] of reports) if (entry.until <= now) reports.delete(key);
   for (const [key, entry] of prototypes) if (entry.until <= now) prototypes.delete(key);
+  for (const [key, until] of permissions) if (until <= now) permissions.delete(key);
+}
+
+/** Draw a permission request as answered on every surface that reads the
+    polled files, before the host confirms it. */
+export function layerPermissionAnswer(requestId: string, nowMs = Date.now()): void {
+  permissions.set(requestId, nowMs + OVERLAY_TTL_MS);
+  notify();
+}
+
+/** The answer was refused or lost: the request asks again. */
+export function unlayerPermissionAnswer(requestId: string): void {
+  if (permissions.delete(requestId)) notify();
 }
 
 /** Layer a dismissal (or its undo) over what the board draws, now. `local`
@@ -132,15 +149,17 @@ export function overlayDismissals(
   /* An expired layer goes quietly: the next poll re-renders anyway, and a
      store read during render must not change what it answers. */
   drop(nowMs);
-  if (!conversations.size && !pipelines.size && !reports.size) return null;
+  if (!conversations.size && !pipelines.size && !reports.size && !permissions.size) return null;
   const sameMark = (a: AttentionDismissalMark | null | undefined, b: AttentionDismissalMark | null) =>
     (a?.at ?? null) === (b?.at ?? null);
-  const nextFiles = conversations.size || reports.size
+  const nextFiles = conversations.size || reports.size || permissions.size
     ? files.map((file) => {
       const entry = conversations.size ? conversations.get(file.conversationId ?? "") ?? conversations.get(file.path) : undefined;
       const asks = reports.size ? unresolvedAsks(file) : null;
-      if ((!entry || sameMark(file.attentionDismissal, entry.mark)) && !asks) return file;
+      const answered = file.pendingPermission ? permissions.has(file.pendingPermission.id) : false;
+      if ((!entry || sameMark(file.attentionDismissal, entry.mark)) && !asks && !answered) return file;
       const next = { ...file };
+      if (answered) next.pendingPermission = null;
       if (entry && !sameMark(file.attentionDismissal, entry.mark)) {
         delete next.attentionDismissal;
         if (entry.mark) next.attentionDismissal = entry.mark;
@@ -287,5 +306,6 @@ export function resetDismissalOverlayForTests(): void {
   pipelines.clear();
   reports.clear();
   prototypes.clear();
+  permissions.clear();
   notify();
 }

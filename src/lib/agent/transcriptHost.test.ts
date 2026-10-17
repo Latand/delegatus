@@ -318,6 +318,7 @@ interface FakeHostState {
   resumeBegan: boolean;
   quarantineAfterResumeBegin: boolean;
   listFileReads: number;
+  listFilesWait: (() => Promise<void>) | null;
 }
 
 function fakeHost(
@@ -353,11 +354,13 @@ function fakeHost(
     resumeBegan: false,
     quarantineAfterResumeBegin: false,
     listFileReads: 0,
+    listFilesWait: null,
   };
 
   const resolver = createTranscriptHostResolver({
     listFiles: async () => {
       state.listFileReads += 1;
+      await state.listFilesWait?.();
       return [state.entry];
     },
     panes: async () => {
@@ -431,6 +434,28 @@ function fakeHost(
 }
 
 describe("transcript host resolver", () => {
+  test("a seat revoked during resolver discovery blocks legacy pane delivery", async () => {
+    const { resolver, state } = fakeHost();
+    let enterDiscovery!: () => void;
+    let releaseDiscovery!: () => void;
+    const discoveryEntered = new Promise<void>(resolve => { enterDiscovery = resolve; });
+    const discovery = new Promise<void>(resolve => { releaseDiscovery = resolve; });
+    state.listFilesWait = async () => { enterDiscovery(); await discovery; };
+    let revoked = false;
+    const authorityGuard = () => { if (revoked) throw new Error("seat revoked"); };
+    const delivery = resolver.deliverToTranscriptHost({ entry: state.entry, spec, payload: "must not reach the old seat",
+      authorityGuard } as never);
+
+    await discoveryEntered;
+    revoked = true;
+    releaseDiscovery();
+    const outcome = await delivery;
+
+    expect(outcome.ok).toBeFalse();
+    expect(state.spawnCalls).toBe(0);
+    expect(state.deliverAttempts).toBe(0);
+  });
+
   test("elects canonical ownership from a supplied transcript snapshot without another scan", async () => {
     const { resolver, state } = fakeHost();
     const supplied = [{ ...state.entry, title: "Current resource title", activity: "recent" as const }];

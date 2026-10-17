@@ -754,3 +754,48 @@ test("an unavailable board is never cached, so a later mount still holds until i
   expect(second.getSnapshot()).toMatchObject({ loaded: true, prefs: prefsWith({ hidden: ["/b"] }) });
   second.dispose();
 });
+
+/* Audit B44: a permanent refusal is published, not only drawn back. */
+test("a close, a restore and a star the server refuses for good are published as rejections until cleared", async () => {
+  const backing = fakeServer({ proj: boardOf(1, { manual: ["/a"], hidden: ["/b"] }) });
+  const fetcher = async (input: string, init?: RequestInit) => {
+    if (init && (init.method ?? "GET") !== "GET") return { ok: false, status: 400, json: async () => ({ error: "INVALID_REQUEST" }) };
+    return backing.fetcher(input, init);
+  };
+  const store = createBoardStore({ project: "proj", fetcher, storage: null, scheduler: idleScheduler().scheduler });
+  await settle();
+  store.mutate([{ kind: "close", path: "/a" }]);
+  /* Drawn at once, before the server answered. */
+  expect(store.getSnapshot().prefs.hidden).toContain("/a");
+  await settle();
+  store.mutate([{ kind: "restore", path: "/b", placement: "auto" }]);
+  await settle();
+  store.mutate([{ kind: "set-favorite", id: "conversation-c", favorite: true }]);
+  await settle();
+  const snapshot = store.getSnapshot();
+  /* The board is drawn back as it was, and each refusal is named. */
+  expect(snapshot.prefs.hidden).toEqual(["/b"]);
+  expect(snapshot.prefs.favorites).toEqual([]);
+  expect(snapshot.rejections?.map((rejection) => [rejection.kind, rejection.target, rejection.code])).toEqual([
+    ["close", "/a", "INVALID_REQUEST"], ["restore", "/b", "INVALID_REQUEST"], ["set-favorite", "conversation-c", "INVALID_REQUEST"],
+  ]);
+  store.clearRejections(snapshot.rejections!.map((rejection) => rejection.id));
+  expect(store.getSnapshot().rejections).toBeUndefined();
+  store.dispose();
+});
+
+test("published rejections keep the newest five", async () => {
+  const backing = fakeServer({ proj: boardOf(1) });
+  const fetcher = async (input: string, init?: RequestInit) => {
+    if (init && (init.method ?? "GET") !== "GET") return { ok: false, status: 400, json: async () => ({ error: "INVALID_REQUEST" }) };
+    return backing.fetcher(input, init);
+  };
+  const store = createBoardStore({ project: "proj", fetcher, storage: null, scheduler: idleScheduler().scheduler });
+  await settle();
+  for (let index = 0; index < 7; index += 1) {
+    store.mutate([{ kind: "close", path: `/p${index}` }]);
+    await settle();
+  }
+  expect(store.getSnapshot().rejections?.map((rejection) => rejection.target)).toEqual(["/p2", "/p3", "/p4", "/p5", "/p6"]);
+  store.dispose();
+});

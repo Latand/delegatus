@@ -58,3 +58,14 @@ test("React compiler codeframes do not key on source lines or surrounding edits"
   expect(compareErrors([site(message(10, "before();"), 10)], [site(message(20, "changed();"), 20)]).introduced).toEqual([]);
   expect(compareErrors([site(message(10, "before();"), 10)], [site(message(20, "changed();"), 20), site(message(30, "another();"), 30)]).introduced).toHaveLength(1);
 });
+test("an elided codeframe keys the same when its span crosses line 1000", () => {
+  const gutter = (n: number, width: number) => String(n).padStart(width);
+  const message = (start: number) => {
+    const end = start + 40; const width = String(end).length; const pad = " ".repeat(width);
+    return `Error: Cannot access variable before it is declared\n\n\`move\` is accessed before it is declared.\n\n/source/board.tsx:${start}:3\n> ${gutter(start, width)} | const move = useCallback(() => {\n  ${pad} | ^^^^^^^^^^^^^^^^\n  ${pad} …\n  ${pad} | ^^^^ \`move\` is declared here\n> ${gutter(end, width)} | }, []);`;
+  };
+  const site = (start: number): LintSite => ({ file: "board.tsx", severity: 2, ruleId: "react-hooks/immutability", message: message(start), line: start, column: 3 });
+  expect(message(949)).toContain("\n      …");
+  expect(message(963)).toContain("\n       …");
+  expect(compareErrors([site(949)], [site(963)]).introduced).toEqual([]);
+});

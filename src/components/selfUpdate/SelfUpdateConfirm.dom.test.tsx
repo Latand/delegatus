@@ -292,3 +292,34 @@ describe("the Update dialog asks before it applies", () => {
     expect((posts[0]!.body as { retry: boolean }).retry).toBe(true);
   });
 });
+
+/* Audit B27: the automatic-updates switch flips at once and stays pressable;
+   one write is out at a time, and a refusal shows the stored value with the error. */
+describe("the automatic-updates switch", () => {
+  test("flips at once, sends once while the write is out, and a refusal shows the stored value again with the error", async () => {
+    const withAuto = (enabled: boolean): Snapshot => ({ ...snapshot("ready"), auto: { availability: "available", enabled, off: null, phase: "idle", target: null, green: null, blockers: null, waitingSince: null, longWait: false } });
+    const posts: { path: string; body: unknown }[] = [];
+    let refuse: () => void = () => {};
+    globals.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input);
+      if (init?.method === "POST") {
+        posts.push({ path, body: init.body ? JSON.parse(String(init.body)) : undefined });
+        await new Promise<void>((resolve) => { refuse = resolve; });
+        return new Response(JSON.stringify({ error: "the auto-update state is read-only", code: "auto-unavailable" }), { status: 409, headers: { "content-type": "application/json" } });
+      }
+      return new Response(JSON.stringify(withAuto(false)), { status: 200, headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+    await mount(<SelfUpdateDialog onClose={() => {}} />);
+    for (let wait = 0; wait < 40 && !dom.document.querySelector("[data-action='toggle-auto']"); wait++) await act(async () => { await new Promise((resolve) => setTimeout(resolve, 25)); });
+    const toggle = () => button(dom.document, "[data-action='toggle-auto']");
+    expect(toggle().textContent).toBe("Turn on");
+    await act(async () => { toggle().click(); });
+    expect(toggle().textContent).toBe("Turn off");
+    expect(toggle().disabled).toBe(false);
+    await act(async () => { toggle().click(); });
+    expect(posts).toEqual([{ path: "/api/self-update/auto", body: { enabled: true } }]);
+    await act(async () => { refuse(); await new Promise((resolve) => setTimeout(resolve, 10)); });
+    expect(toggle().textContent).toBe("Turn on");
+    expect(dom.document.querySelector("[data-error='action']")).not.toBeNull();
+  });
+});

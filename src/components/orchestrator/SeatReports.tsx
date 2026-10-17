@@ -1,7 +1,7 @@
 "use client";
 
 import { ChevronRight, LoaderCircle, Send } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 import { useAnchoredBox } from "@/components/feed/SpeakMenu";
@@ -40,8 +40,10 @@ export type ProjectReportsRead = {
   settings: ProjectReportSettings | null;
   saving: boolean;
   failed: string | null;
-  /** Writes the choice; null stores "Log only". True once stored. */
-  save(outcome: { chat: string; name: string; topicId?: number } | { link: string; name: string } | null): Promise<boolean>;
+  /** Writes the choice; null stores "Log only". True once stored. `drawn`, when
+      the client can tell the result (Log only, a chat the bot already lists),
+      is shown at once and taken back on a refusal (audit B30, B42). */
+  save(outcome: { chat: string; name: string; topicId?: number } | { link: string; name: string } | null, drawn?: ProjectReportSettings): Promise<boolean>;
   /** Reads the stored choice again: the overview may have moved it. */
   reload(): void;
 };
@@ -52,7 +54,11 @@ function settingsOf(body: Partial<ProjectReportSettings>): ProjectReportSettings
 
 export function useProjectReports(project: string): ProjectReportsRead {
   /* Keyed by project, so a project switch never shows the previous one's. */
-  const [read, setRead] = useState<{ project: string; settings: ProjectReportSettings } | null>(null);
+  const [stored, setRead] = useState<{ project: string; settings: ProjectReportSettings } | null>(null);
+  /* Predicted choices still on their way; a refusal drops only its own. */
+  const [presses, setPresses] = useState<ReadonlyArray<{ id: number; project: string; settings: ProjectReportSettings }>>([]);
+  const pressCount = useRef(0);
+  const appliedPress = useRef(0);
   const [saving, setSaving] = useState(false);
   const [failed, setFailed] = useState<string | null>(null);
   const [generation, setGeneration] = useState(0);
@@ -71,8 +77,10 @@ export function useProjectReports(project: string): ProjectReportsRead {
     return () => { cancelled = true; };
   }, [project, generation]);
   const reload = useCallback(() => setGeneration((value) => value + 1), []);
-  const save = useCallback(async (outcome: { chat: string; name: string; topicId?: number } | { link: string; name: string } | null) => {
-    setSaving(true);
+  const save = useCallback(async (outcome: { chat: string; name: string; topicId?: number } | { link: string; name: string } | null, drawn?: ProjectReportSettings) => {
+    const mine = ++pressCount.current;
+    if (drawn) setPresses((held) => [...held, { id: mine, project, settings: drawn }]);
+    else setSaving(true);
     setFailed(null);
     try {
       const response = await fetch("/api/projects/settings", {
@@ -84,15 +92,22 @@ export function useProjectReports(project: string): ProjectReportsRead {
         const body = await response.json().catch(() => ({})) as { message?: unknown };
         throw new Error(outcome && "link" in outcome && typeof body.message === "string" ? body.message : "");
       }
-      setRead({ project, settings: settingsOf(await response.json().catch(() => ({})) as Partial<ProjectReportSettings>) });
+      const answered = settingsOf(await response.json().catch(() => ({})) as Partial<ProjectReportSettings>);
+      /* An answer older than one already taken never overwrites it. */
+      if (mine > appliedPress.current) { appliedPress.current = mine; setRead({ project, settings: answered }); }
       return true;
     } catch (error) {
       setFailed(error instanceof Error ? error.message : "");
       return false;
     } finally {
-      setSaving(false);
+      if (drawn) setPresses((held) => held.filter((press) => press.id !== mine));
+      else setSaving(false);
     }
   }, [project]);
+  const read = useMemo(() => {
+    const newest = presses.filter((press) => press.project === project).at(-1);
+    return newest ? { project, settings: newest.settings } : stored;
+  }, [stored, presses, project]);
   return { settings: read?.project === project ? read.settings : null, saving, failed, save, reload };
 }
 
@@ -153,7 +168,10 @@ export function SeatReportsBody({ project, projectName, reports, surface }: {
     /* Off: a project that posts stores "Log only"; one that never chose, or
        already chose the log, keeps its record untouched. */
     if (stored !== null) {
-      if (await reports.save(null)) { reset(); setSaved(true); }
+      /* «Log only» shows at once; a refusal brings the stored chat back. */
+      reset();
+      setSaved(true);
+      if (!await reports.save(null, { ...settings!, reportTelegram: { chat: null }, reportChatTitle: null })) setSaved(false);
       return;
     }
     reset();
@@ -161,6 +179,20 @@ export function SeatReportsBody({ project, projectName, reports, surface }: {
   const save = async () => {
     if (!canSave || (choice === null && !link.trim())) return;
     const outcome = link.trim() ? { link: link.trim(), name: name.trim() } : { chat: choice!, name: name.trim(), ...(choice === stored && settings?.reportTelegram?.topicId ? { topicId: settings.reportTelegram.topicId } : {}) };
+    if (!("link" in outcome)) {
+      /* A chat the bot already lists is stored without a Telegram request: it
+         shows at once, and a refusal puts the stored choice and the typed name back. */
+      const draft = { draftOn, picked, typedName };
+      reset();
+      setSaved(true);
+      if (!await reports.save(outcome, { ...settings!, reportTelegram: outcome, reportChatTitle: title(outcome.chat) })) {
+        setSaved(false);
+        setDraftOn(draft.draftOn);
+        setPicked(draft.picked ?? outcome.chat);
+        setTypedName(draft.typedName ?? outcome.name);
+      }
+      return;
+    }
     if (await reports.save(outcome)) {
       /* A pasted link can add the chat to the bot on the server; read the
          bot's chats again so the new chat is not shown as one agents may not post in. */

@@ -22,16 +22,25 @@ const matchMediaStub = (query: string) => ({
 Object.assign(globalThis, {
   window: dom, document: dom.document, navigator: dom.navigator, Node: dom.Node, HTMLElement: dom.HTMLElement,
   HTMLInputElement: dom.HTMLInputElement, Event: dom.Event, MouseEvent: dom.MouseEvent, PointerEvent: dom.Event,
-  KeyboardEvent: dom.KeyboardEvent, sessionStorage: dom.sessionStorage, localStorage: dom.localStorage, matchMedia: matchMediaStub,
+  KeyboardEvent: dom.KeyboardEvent, CustomEvent: dom.CustomEvent, sessionStorage: dom.sessionStorage, localStorage: dom.localStorage, matchMedia: matchMediaStub,
 });
 
 const originalFetch = globalThis.fetch;
+/* The «Keys» list as the route answers it: states and masked values, never a value. */
+const KEYS = { staging: false, owner: true, keys: [
+  { id: "openrouter", variable: "OPENROUTER_API_KEY", source: "file", masked: "sk-or-v1-••••••••0000" },
+  { id: "openai", variable: "OPENAI_API_KEY", source: "env", masked: "sk-proj-••••••••2222" },
+  { id: "elevenlabs", variable: "ELEVENLABS_API_KEY", source: "missing", masked: null },
+  { id: "soniox", variable: "SONIOX_API_KEY", source: "missing", masked: null },
+  { id: "fishaudio", variable: "FISH_AUDIO_API_KEY", source: "missing", masked: null },
+  { id: "telegram", variable: "DELEGATUS_TELEGRAM_BOT_TOKEN", source: "missing", masked: null },
+] };
 const working = { enabled: true, reasons: [], keySource: "file", capUsd: 5, spentUsd: 1.214, month: "2026-10",
   counts: { decisions: 214, delivered: 61, prepared: 69, noCandidates: 48, noMatches: 97, skipped: 12, failed: 5 } };
 globalThis.fetch = (async (input: unknown) => {
   const url = String(input);
   if (url.includes("/api/memory/settings")) return Response.json(working);
-  if (url.includes("/api/asks-you/key")) return Response.json({ present: true, source: "file" });
+  if (url.endsWith("/api/keys")) return Response.json(KEYS);
   if (url.includes("/api/operator/worker-limit")) return Response.json({ machine: { value: 8 }, project: { key: "atlas", value: null, effective: 8, source: "machine" }, running: { here: 7, machine: 19 } });
   return Response.json({}, { status: 404 });
 }) as typeof fetch;
@@ -39,6 +48,7 @@ globalThis.fetch = (async (input: unknown) => {
 const { HeaderMenuPanel, HeaderMenuSheet } = await import("./HeaderMenu");
 const { RailHeaderMenu } = await import("@/components/ProjectRail");
 const { OPEN_VOICE_COMPANION_SETTINGS_EVENT } = await import("@/components/voiceCompanion/VoiceCompanionSetting");
+const { openKeys } = await import("@/components/keys/openKeys");
 const { hidePhoneVoice, readPhoneVoice, resetPhoneVoiceForTests, setPhoneVoiceAvailable } = await import("@/components/voiceCompanion/phoneVoiceStore");
 
 let root: Root | undefined;
@@ -83,7 +93,8 @@ for (const lang of ["en", "uk"] as const) test(`${lang}: at rest, three cells an
   expect(document.activeElement).toBe(back);
   const page = host.querySelector("[data-header-menu-page='settings']")!;
   expect(page.querySelector("[data-rail-menu-memory] [data-memory-state]")!.textContent).toBe(translate(lang, "memoryState.working", { count: 61 }));
-  expect(page.querySelector("[data-rail-menu-key] [data-key-state]")!.textContent).toBe(translate(lang, "keyPage.saved"));
+  expect(page.querySelector("[data-rail-menu-keys]")!.textContent).toContain(translate(lang, "keys.title"));
+  expect(page.querySelector("[data-rail-menu-keys] [data-keys-state]")!.textContent).toBe(translate(lang, "keys.rowState", { set: 2, total: 6 }));
   expect(page.querySelector("[data-rail-menu-agent-mapping]")!.textContent).toBe(translate(lang, "headerMenu.mapping"));
   expect(page.querySelector("[data-header-menu-workers]")!.textContent).toContain(translate(lang, "workers.hereRunning", { here: 7, machine: 19 }));
   expect(page.querySelector("[data-rail-menu-external-relay]")!.textContent).toBe(translate(lang, "headerMenu.relay"));
@@ -196,7 +207,56 @@ test("the overview has no project: Settings carries no memory state and its page
   expect(settings.textContent).toContain("10");
   await click(settings);
   expect(host.querySelector("[data-rail-menu-memory]")).toBeNull();
-  expect(host.querySelector("[data-rail-menu-key]")).not.toBeNull();
+  expect(host.querySelector("[data-rail-menu-keys]")).not.toBeNull();
+});
+
+for (const lang of ["en", "uk"] as const) test(`${lang}: Settings → Keys is a page of the menu with Import keys under it, where the OpenRouter key row was`, async () => {
+  setLocale(lang);
+  const host = await mount(<HeaderMenuPanel project="atlas" onClose={() => {}} />);
+  await click(host.querySelector("[data-rail-menu-settings]"));
+  await click(host.querySelector("[data-rail-menu-keys]"));
+  expect(host.querySelector("[data-rail-menu-back]")!.textContent).toBe(`${translate(lang, "headerMenu.back")}·${translate(lang, "keys.title")}`);
+  const rows = [...host.querySelectorAll("[data-keys-row]")].map((row) => [row.getAttribute("data-keys-row"), row.getAttribute("data-keys-source")]);
+  expect(rows).toEqual([["openrouter", "file"], ["openai", "env"], ["elevenlabs", "missing"], ["soniox", "missing"], ["fishaudio", "missing"], ["telegram", "missing"]]);
+  await click(host.querySelector("[data-keys-open-import]"));
+  expect(host.querySelector("[data-header-menu-page='keys-import'] [data-keys-import-text]")).not.toBeNull();
+  await click(host.querySelector("[data-rail-menu-back]"));
+  expect(host.querySelector("[data-header-menu-page='keys']")).not.toBeNull();
+  expect(document.activeElement).toBe(host.querySelector("[data-rail-menu-back]"));
+  await click(host.querySelector("[data-rail-menu-back]"));
+  expect(document.activeElement).toBe(host.querySelector("[data-rail-menu-keys]"));
+});
+
+test("«Open Keys» from a place that asked for a key opens the closed ⋯ menu on «Keys», with that key's field open", async () => {
+  const host = await mount(<RailHeaderMenu project="atlas" />);
+  expect(host.querySelector("[data-rail-menu-panel]")).toBeNull();
+  await act(async () => { openKeys("soniox"); });
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); });
+  expect(host.querySelector("[data-rail-menu-panel] [data-header-menu-page='keys']")).not.toBeNull();
+  expect(host.querySelector("[data-keys-row='soniox'] [data-keys-field='soniox'] input")).not.toBeNull();
+  expect(document.activeElement).toBe(host.querySelector("[data-keys-field='soniox'] input"));
+  expect(host.querySelectorAll("[data-keys-field]")).toHaveLength(1);
+});
+
+test("«Open Keys» while the menu shows another page switches it to «Keys»; a set key takes focus on its first button", async () => {
+  const host = await mount(<HeaderMenuPanel project="atlas" onClose={() => {}} />);
+  await click(host.querySelector("[data-rail-menu-settings]"));
+  await click(host.querySelector("[data-rail-menu-memory]"));
+  await act(async () => { openKeys("openrouter"); });
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); });
+  expect(host.querySelector("[data-header-menu-page='keys']")).not.toBeNull();
+  expect(host.querySelector("[data-keys-field]")).toBeNull();
+  expect(document.activeElement).toBe(host.querySelector("[data-keys-eye='openrouter']"));
+});
+
+test("phone: «Open Keys» turns the open menu sheet to «Keys» on that key", async () => {
+  dom.innerWidth = 390;
+  const nav = { closeSheet: () => {}, leave: () => {} } as unknown as MobileNav;
+  await mount(<HeaderMenuSheet title="atlas" project="atlas" nav={nav} board={[]} onClose={() => {}} />);
+  await act(async () => { openKeys("fishaudio"); });
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); });
+  expect(document.querySelector("[data-mobile2-sheet='menu'] [data-keys-page]")).not.toBeNull();
+  expect(document.querySelector("[data-keys-field='fishaudio'] input")).not.toBeNull();
 });
 
 test("phone: create cells, the board's rows, the header's cells and rows, and the project's rules as a page; Settings is a page of the sheet", async () => {
@@ -223,7 +283,7 @@ test("phone: create cells, the board's rows, the header's cells and rows, and th
   await click(sheet.querySelector("[data-mobile2-menu-row='back']"));
   await click(sheet.querySelector("[data-mobile2-menu-row='settings']"));
   const page = [...sheet.querySelectorAll("[data-mobile2-menu-row]")].map((row) => row.getAttribute("data-mobile2-menu-row"));
-  expect(page).toEqual(["back", "memory", "key", "agent-mapping", "dictation", "voice-companion", "linked-settings", "external-relay", "ping"]);
+  expect(page).toEqual(["back", "memory", "keys", "agent-mapping", "dictation", "voice-companion", "linked-settings", "external-relay", "ping"]);
   expect(sheet.textContent).toContain(translate("en", "mobile2.menu.sound"));
   await click(sheet.querySelector("[data-mobile2-menu-row='memory']"));
   expect(sheet.querySelector("[data-memory-page]")).not.toBeNull();
@@ -245,7 +305,8 @@ test("desktop: Escape closes the menu from every page and hands focus back to �
     ["settings", ["[data-rail-menu-settings]"]],
     ["memory", ["[data-rail-menu-settings]", "[data-rail-menu-memory]"]],
     ["memory, then back", ["[data-rail-menu-settings]", "[data-rail-menu-memory]", "[data-rail-menu-back]"]],
-    ["key", ["[data-rail-menu-settings]", "[data-rail-menu-key]"]],
+    ["keys", ["[data-rail-menu-settings]", "[data-rail-menu-keys]"]],
+    ["import keys", ["[data-rail-menu-settings]", "[data-rail-menu-keys]", "[data-keys-open-import]"]],
   ];
   for (const [name, path] of pages) {
     await click(trigger);
@@ -265,7 +326,7 @@ test("phone: a page takes focus on its back row, and back returns it to the row 
   );
   const row = (key: string) => document.querySelector<HTMLElement>(`[data-mobile2-sheet='menu'] [data-mobile2-menu-row='${key}']`);
   const press = async (key: string) => { row(key)!.focus(); await click(row(key)); };
-  for (const path of [["settings", "memory"], ["settings", "key"], ["help"], ["rules"]]) {
+  for (const path of [["settings", "memory"], ["settings", "keys"], ["help"], ["rules"]]) {
     for (const key of path) {
       await press(key);
       expect([key, document.activeElement?.getAttribute("data-mobile2-menu-row")]).toEqual([key, "back"]);

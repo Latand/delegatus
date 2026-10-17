@@ -490,3 +490,31 @@ test("the mobile variant renders an always-visible 44px launcher", () => {
   expect(pencil.className).toContain("h-11");
   expect(pencil.className).toContain("w-11");
 });
+
+/* Audit B16: the typed title shows before the request answers; a failure puts the old one back with Retry. */
+test("a rename shows the typed title while the request is held, opens no second save, and a failure restores the old title with Retry", async () => {
+  let release: (status: number) => void = () => {};
+  (globalThis as { fetch?: unknown }).fetch = async (url: string, init?: { body?: string }) => {
+    calls.push({ url, body: init?.body ? JSON.parse(init.body) : {} });
+    const status = await new Promise<number>((resolve) => { release = resolve; });
+    return { ok: status < 300, status, json: async () => ({ error: "unavailable" }) } as unknown as Response;
+  };
+  const view = mount(entry());
+  const pencil = view.host.querySelector('button[aria-label^="Rename"]') as HTMLButtonElement;
+  flushSync(() => pencil.click());
+  const input = view.host.querySelector('input[aria-label="Session title"]') as HTMLInputElement;
+  flushSync(() => typeInto(input, "Login flow rework"));
+  flushSync(() => dispatch(input, new dom.KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true })));
+  await settle();
+  expect(view.host.textContent).toContain("Login flow rework");
+  expect(view.host.textContent).not.toContain("Fix the login bug");
+  /* The pencil opens nothing while the save is out. */
+  flushSync(() => pencil.click());
+  expect(view.host.querySelector('input[aria-label="Session title"]')).toBeNull();
+  release(500);
+  await settle();
+  expect(calls).toHaveLength(1);
+  expect(view.host.textContent).toContain("Fix the login bug");
+  expect(view.host.textContent).not.toContain("Login flow rework");
+  expect(view.host.textContent).toContain("Couldn't save the name");
+});

@@ -1,9 +1,10 @@
+import { orchestratorRecipientRefusal, orchestratorRecipientRefusalAsync } from "@/lib/orchestrator/seats";
 import { DeliveryAdmissionRefusedError, type DeliveryAdmissionGuard } from "@/lib/deliveryAdmission";
 import { memoryIndex } from "@/lib/memory/service";
 import { registeredHostForPath } from "@/lib/conversation/registeredHost";
 import { resumeEligibility, resumeSpecFor, type AgentEngine } from "@/lib/agent/cli";
 import type { AgentReconfiguration } from "@/lib/agent/reconfigure";
-import { agentRegistry, deliveryMayHaveArrived, REGISTRY_WRITER_BUSY, serviceTierForSpeed, type AgentRegistry, type AgentRegistryEntry, type RegistryConversation, type TmuxHostEvidence } from "@/lib/agent/registry";
+import { agentRegistry, conversationIdsResolvingTo, resolveConversationAlias, deliveryMayHaveArrived, REGISTRY_WRITER_BUSY, serviceTierForSpeed, type AgentRegistry, type AgentRegistryEntry, type RegistryConversation, type TmuxHostEvidence } from "@/lib/agent/registry";
 import { conversationAgentRole } from "@/lib/agent/spawnAdmission";
 import type { HeldDelivery } from "@/lib/accounts/migration/contracts";
 import { accountManager, ProjectAccountRefusedError, resolveResumeAccountId } from "@/lib/accounts/manager";
@@ -79,10 +80,30 @@ export interface DeliveryFailure {
   admission?: "refused";
 }
 
+async function legacySeatRefusal(registry: AgentRegistry, conversation: Pick<RegistryConversation, "id"> | null) {
+  if (!conversation) return null;
+  const snapshot = registry.conversationDeliverySnapshot({ conversationId: conversation.id });
+  return orchestratorRecipientRefusalAsync(conversationIdsResolvingTo(snapshot, conversation.id),
+    id => resolveConversationAlias(snapshot, id as `conversation_${string}`));
+}
+
+function legacySeatRefusalSync(conversation: Pick<RegistryConversation, "id"> | null) {
+  if (!conversation) return null;
+  // This guard runs inside registry admission's synchronous transaction. The
+  // identity is already resolved at the async boundary; reading a registry
+  // snapshot here can wait on the writer whose transaction is calling us.
+  return orchestratorRecipientRefusal([conversation.id]);
+}
+
+function seatRefusalFailure(refusal: NonNullable<Awaited<ReturnType<typeof legacySeatRefusal>>>): DeliveryFailure {
+  return { ok: false, outcome: "failed", admission: "refused", ...refusal };
+}
+
 /** A send or resume addressed to a terminally superseded round (issue #383)
     must never implicitly fork it through recovery — it answers with a
     redirectable pointer to the live chain end instead. Explicit "resume here"
     clears the edge first and never reaches this guard. */
+
 function supersededRejection(
   registry: AgentRegistry,
   conversation: Pick<RegistryConversation, "id" | "supersededBy"> | null,
@@ -507,6 +528,8 @@ export async function resumeConversation(
   }
   const registry = overrides.registry ?? agentRegistry();
   const known = registry.conversationForPath(filePath);
+  const seatRefusal = await legacySeatRefusal(registry, known);
+  if (seatRefusal) return { ok: false, outcome: "failed", admission: "refused", ...seatRefusal };
   const rejected = supersededRejection(registry, known);
   if (rejected) return rejected;
   const recover = overrides.recover ?? recoverDeadStructuredConversation;
@@ -806,16 +829,32 @@ export async function deliverConversationMessage(message: ConversationMessage, o
        refused before anything is typed. */
     if (!conversation) return failure(message.conversationId ? "conversation is unknown to the viewer" : "delivery target is unavailable", 404);
   }
+  const seatRefusal = await legacySeatRefusal(registry, conversation);
+  if (seatRefusal) return { ok: false, outcome: "failed", admission: "refused", ...seatRefusal };
+  const seatAdmissionGuard: DeliveryAdmissionGuard = () => {
+    const refusal = legacySeatRefusalSync(conversation);
+    if (refusal) throw new DeliveryAdmissionRefusedError(refusal.error);
+  };
+  const admissionGuard: DeliveryAdmissionGuard = reconciledDeadHost => {
+    seatAdmissionGuard();
+    message.admissionGuard?.(reconciledDeadHost);
+  };
+  const recoveryAuthorityGuard = () => {
+    seatAdmissionGuard();
+    message.recoveryAuthorityGuard?.();
+  };
   const rejected = supersededRejection(registry, conversation);
   if (rejected) return rejected;
   if (conversation) {
     try {
-      message.admissionGuard?.();
+      admissionGuard();
       const recovered = await (overrides.recover ?? recoverDeadStructuredConversation)(
-        { path: message.path, conversationId: conversation.id, admissionGuard: message.admissionGuard,
-          authorityGuard: message.recoveryAuthorityGuard, origin: message.origin },
+        { path: message.path, conversationId: conversation.id, admissionGuard,
+          authorityGuard: recoveryAuthorityGuard, origin: message.origin },
         { registry },
       );
+      const afterRecoveryRefusal = await legacySeatRefusal(registry, conversation);
+      if (afterRecoveryRefusal) return seatRefusalFailure(afterRecoveryRefusal);
       if (!recovered && conversationAgentRole(registry.readOnlySnapshot(), conversation.id) === "curator") {
         return failure("curator recovery is unavailable until its designated seat is admitted", 409);
       }
@@ -828,8 +867,8 @@ export async function deliverConversationMessage(message: ConversationMessage, o
           clientMessageId: message.clientMessageId,
           // Our admitted successor changes the receipt and host identity. Seat
           // authority still applies when reserving its original-key message.
-          admissionGuard: recovered.admissionGuard ?? (recovered.spawned ? message.recoveryAuthorityGuard ?? message.admissionGuard : message.admissionGuard),
-          recoveryAuthorityGuard: message.recoveryAuthorityGuard,
+          admissionGuard: recovered.admissionGuard ?? (recovered.spawned ? recoveryAuthorityGuard : admissionGuard),
+          recoveryAuthorityGuard,
           text,
           hasImages: images.length > 0,
           ...(message.origin ? { origin: message.origin } : {}),
@@ -877,6 +916,7 @@ export async function deliverConversationMessage(message: ConversationMessage, o
     }
   }
   const filePath = pidAddressed ? null : conversation?.generations.at(-1)?.path ?? message.path;
+  const deliveryMessage = conversation && !message.conversationId ? { ...message, conversationId: conversation.id } : message;
   const progress = overrides.progress === undefined ? ownedDeliveryProgressStore() : overrides.progress;
   if (conversation && !message.reservedDeliveryId) {
     const reservedConversation = conversation;
@@ -912,7 +952,7 @@ export async function deliverConversationMessage(message: ConversationMessage, o
           [],
           contentDigest,
           message.origin ? { origin: message.origin } : {},
-          { admissionGuard: message.admissionGuard },
+          { admissionGuard },
         );
       } catch (error) {
         return failure(error, 409);
@@ -984,7 +1024,7 @@ export async function deliverConversationMessage(message: ConversationMessage, o
       const claimed = claim.value;
       if (claimed) {
         const claimedConversation = registry.conversation(conversation.id);
-        return actuateConversationMessage(message, overrides, {
+        return actuateConversationMessage(deliveryMessage, overrides, {
           filePath: pidAddressed ? null : claimedConversation?.generations.find((generation) => generation.id === claimed.generationId)?.path ?? filePath,
           deliveryId: claimed.id,
           acceptedOperationId: claimed.command.operationId,
@@ -1009,7 +1049,7 @@ export async function deliverConversationMessage(message: ConversationMessage, o
   /* Reached only with a reservation the drain already claimed and settles
      itself: the actuation owns that reservation's record while it types. */
   const drained = message.reservedDeliveryId ? registry.readOnlySnapshot().heldDeliveries[message.reservedDeliveryId] ?? null : null;
-  return actuateConversationMessage(message, overrides, { filePath, deliveryId: null, acceptedOperationId: null, drained });
+  return actuateConversationMessage(deliveryMessage, overrides, { filePath, deliveryId: null, acceptedOperationId: null, drained });
 }
 
 /** What a settled reservation answers a send under its request: delivered, possibly delivered (#1131), or failed. */
@@ -1136,6 +1176,14 @@ async function actuateConversationMessage(
     } catch { /* The hook also fails open if its derivative is unavailable. */ }
   };
   const conversationForTerminal = message.conversationId ? registry.conversation(message.conversationId as `conversation_${string}`) : null;
+  const currentSeatRefusal = async (target: Pick<RegistryConversation, "id"> | null) => {
+    const refusal = await legacySeatRefusal(registry, target);
+    return refusal ? seatRefusalFailure(refusal) : null;
+  };
+  const currentSeatAuthorityGuard = (target: Pick<RegistryConversation, "id"> | null): DeliveryAdmissionGuard => () => {
+    const refusal = legacySeatRefusalSync(target);
+    if (refusal) throw new DeliveryAdmissionRefusedError(refusal.error, refusal);
+  };
   /* The paths are recorded before anything is typed, off the loop. Refused,
      nothing is typed: the send fails before actuation, its images are deleted
      and its reservation discarded the way a failure there always is. */
@@ -1157,12 +1205,16 @@ async function actuateConversationMessage(
        confirmed below — every early 409/403 return above and below happens
        before any file touches disk, so a rejected request never orphans one. */
     if (target !== null) {
+      const refusal = await currentSeatRefusal(conversationForTerminal);
+      if (refusal) return await settle(refusal);
       const bundle = materializePayload();
       imagePaths = bundle.imagePaths;
       await recordArtifacts();
+      const finalRefusal = await currentSeatRefusal(conversationForTerminal);
+      if (finalRefusal) return await settle(finalRefusal);
       recordTerminal(bundle.payload);
       dispatching();
-      await (overrides.sendText ?? sendText)(target, bundle.payload);
+      await (overrides.sendText ?? sendText)(target, bundle.payload, currentSeatAuthorityGuard(conversationForTerminal));
       actuation = "completed";
       return await settle({ ok: true, target, ...(imagePaths.length ? { imagePaths } : {}) });
     }
@@ -1200,12 +1252,17 @@ async function actuateConversationMessage(
       mcpServers: entryProfile?.mcpServers,
     });
     if (spec) {
+      const refusal = await currentSeatRefusal(registry.conversationForPath(entry.path) ?? conversationForTerminal);
+      if (refusal) return await settle(refusal);
       const bundle = materializePayload();
       imagePaths = bundle.imagePaths;
       await recordArtifacts();
+      const finalRefusal = await currentSeatRefusal(registry.conversationForPath(entry.path) ?? conversationForTerminal);
+      if (finalRefusal) return await settle(finalRefusal);
       recordTerminal(bundle.payload);
       dispatching();
-      const outcome = await hostOutcome((overrides.deliver ?? deliverToTranscriptHost)({ entry, spec, payload: bundle.payload }));
+      const outcome = await hostOutcome((overrides.deliver ?? deliverToTranscriptHost)({ entry, spec, payload: bundle.payload,
+        authorityGuard: currentSeatAuthorityGuard(registry.conversationForPath(entry.path) ?? conversationForTerminal) }));
       if (!outcome.ok) { actuation = outcome.actuation === "started" ? "started" : "none"; return await settle(cleanupFailedImageDelivery(outcome, imagePaths)); }
       actuation = "completed";
       return await settle({ ...outcome, ...(imagePaths.length ? { imagePaths } : {}) });
@@ -1243,14 +1300,23 @@ async function actuateConversationMessage(
     if (!rootSpec) {
       return await settle(failure("root session is unavailable for messaging", 409));
     }
+    const sourceRefusal = await currentSeatRefusal(registry.conversationForPath(entry.path) ?? conversationForTerminal);
+    if (sourceRefusal) return await settle(sourceRefusal);
+    const rootRefusal = await currentSeatRefusal(registry.conversationForPath(root.path));
+    if (rootRefusal) return await settle(rootRefusal);
     const bundle = materializePayload();
     imagePaths = bundle.imagePaths;
     await recordArtifacts();
+    const finalSourceRefusal = await currentSeatRefusal(registry.conversationForPath(entry.path) ?? conversationForTerminal);
+    if (finalSourceRefusal) return await settle(finalSourceRefusal);
+    const finalRootRefusal = await currentSeatRefusal(registry.conversationForPath(root.path));
+    if (finalRootRefusal) return await settle(finalRootRefusal);
     const relayText = `User message for your branch «${entry.title.slice(0, 100)}» — forward it or handle it yourself:\n${bundle.payload}`;
     const imageField = imagePaths.length ? { imagePaths } : {};
     recordTerminal(relayText, root.path, true);
     dispatching();
-    const outcome = await hostOutcome((overrides.deliver ?? deliverToTranscriptHost)({ entry: root, spec: rootSpec, payload: relayText }));
+    const outcome = await hostOutcome((overrides.deliver ?? deliverToTranscriptHost)({ entry: root, spec: rootSpec, payload: relayText,
+      authorityGuard: currentSeatAuthorityGuard(registry.conversationForPath(root.path)) }));
     if (!outcome.ok) { actuation = outcome.actuation === "started" ? "started" : "none"; return await settle(cleanupFailedImageDelivery(outcome, imagePaths)); }
     actuation = "completed";
     return await settle({ ...outcome, ...imageField });
@@ -1266,6 +1332,9 @@ async function actuateConversationMessage(
       deleteInboxImages(imagePaths);
     }
     settleRecord(uncertain ? "uncertain" : "failed", error instanceof Error ? error.message : String(error));
-    return absorbing(failure(error, 500, uncertain ? "started" : undefined));
+    if (error instanceof DeliveryAdmissionRefusedError && error.details?.status === 409) {
+      return await settle(seatRefusalFailure(error.details));
+    }
+    return absorbing(failure(error, error instanceof DeliveryAdmissionRefusedError ? 409 : 500, uncertain ? "started" : undefined));
   }
 }

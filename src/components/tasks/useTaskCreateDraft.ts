@@ -2,11 +2,28 @@
 
 import { useEffect, useRef } from "react";
 
-import { useTaskDraft } from "@/hooks/useTaskDraft";
+import { applyTaskSnapshot, revertTaskSnapshot } from "@/hooks/useFiles";
+import { useTaskDraft, type TaskDraftCapture } from "@/hooks/useTaskDraft";
 import { useLocale } from "@/lib/i18n";
 import type { BoardTask } from "@/lib/tasks/types";
 
 import { createTask, type CreateTaskInput } from "./taskApi";
+
+const PROVISIONAL_PREFIX = "provisional:";
+
+/** Whether a task id is a card drawn ahead of its create. */
+export function isProvisionalTaskId(id: string): boolean {
+  return id.startsWith(PROVISIONAL_PREFIX);
+}
+
+function provisionalTask(project: string, taken: TaskDraftCapture, placement: Pick<CreateTaskInput, "placement" | "pos">): BoardTask {
+  const at = new Date().toISOString();
+  return {
+    id: `${PROVISIONAL_PREFIX}${taken.requestId}`, project, status: "inbox", text: taken.text, placement: placement.placement,
+    ...(placement.pos ? { pos: placement.pos } : {}), ...(taken.dueAt ? { dueAt: taken.dueAt, dueTz: taken.dueTz } : {}),
+    ...(taken.attachments.length ? { attachments: taken.attachments } : {}), assignments: [], createdAt: at, updatedAt: at,
+  };
+}
 
 /**
  * The project's task draft, wired to one create: what every surface that makes a task from the shared composer
@@ -14,8 +31,10 @@ import { createTask, type CreateTaskInput } from "./taskApi";
  *
  * The text (or a dictated override), the deadline, the staged images and the draft's request id go to the task
  * route, so a double press or a retry after a lost answer resolves to one task. Empty text, a busy composer or a
- * voice send in flight create nothing. A refusal keeps the draft and shows the route's words; a created task
- * resets the draft and is handed to `onCreated`.
+ * voice send in flight create nothing. The composer resets on the press and a provisional Inbox card, keyed by the
+ * request id and drawn as saving, stands in for the task until the route answers; the created task (or the one a
+ * retry matched) replaces it and is handed to `onCreated`. A refusal takes the card off, puts the text, deadline
+ * and images back into the composer and shows the route's words.
  */
 export function useTaskCreateDraft(
   project: string,
@@ -36,27 +55,28 @@ export function useTaskCreateDraft(
       composer.setStatus({ kind: "err", text: t("tasks.composerNeedsText") });
       return;
     }
-    composer.setBusy(true);
+    const taken = draft.capture(text);
+    const card = provisionalTask(project, taken, placement);
+    applyTaskSnapshot(card, false);
     composer.setStatus(null);
-    try {
-      const created = await createTask({
-        project,
-        text,
-        ...placement,
-        dueAt: draft.dueAt,
-        dueTz: draft.dueTz,
-        attachments: draft.stagedAttachments(),
-        clientRequestId: draft.getRequestId(),
-      });
-      if ("error" in created) {
-        composer.setStatus({ kind: "err", text: created.error });
-        return;
-      }
-      draft.reset();
-      onCreated(created.task);
-    } finally {
-      composer.setBusy(false);
+    draft.reset();
+    const created = await createTask({
+      project,
+      text,
+      ...placement,
+      dueAt: taken.dueAt,
+      dueTz: taken.dueTz,
+      attachments: taken.attachments,
+      clientRequestId: taken.requestId,
+    });
+    revertTaskSnapshot(card.id);
+    if ("error" in created) {
+      draft.restore(taken);
+      composer.setStatus({ kind: "err", text: created.error });
+      return;
     }
+    applyTaskSnapshot(created.task, true);
+    onCreated(created.task);
   };
   useEffect(() => {
     saveRef.current = save;

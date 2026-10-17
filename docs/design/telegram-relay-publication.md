@@ -23,8 +23,10 @@ The existing agent-message view keeps its previous attribution behavior.
 The production queue admits at most 16 indexed pending rows per tick. It runs
 asynchronously after sends and startup, with one shared bot-service owner,
 five-second transport deadlines including DNS, persistent exponential backoff and persistent
-429 cooldowns. A 404 holds the target for five minutes; a 403 holds its chat
-for five minutes. Before replay and again after DNS, the emission guard checks
+429 cooldowns. A 404 holds the target for five minutes. A 400, 403 or 409 ends that
+publication with its bounded status and reason recorded. Transient attempts
+stop after 64 attempts or at the original Telegram date plus 24 hours.
+Before replay and again after DNS, the emission guard checks
 the connected bot, pairing, target, owner and posting policy. Revocation leaves
 the obligation pending. The idempotent service endpoint receives the original
 Telegram identity and text after a restart. Recovery never sends to Telegram.
@@ -32,8 +34,10 @@ Uncertain Telegram sends retain their original send claim without inventing a
 receipt. A publication-target lookup failure before the first Telegram call
 settles text, photo, album and document claims with zero sent IDs, so the
 original request key can retry. Completed sends replay their receipt even
-when that lookup is unavailable. Posts made without a selected pairing remain
-locally recorded and unrouted; a later pairing cannot adopt them automatically.
+when that lookup is unavailable. Posts made without a selected production
+pairing remain locally recorded.
+An authenticated linked install can publish those receipts through its own
+production pairing, as described below. A later local pairing cannot adopt them.
 
 Unicode and encoded JSON publication limits retain a visible truncation marker.
 The full confirmed text remains local. Confirmed service mappings also retain
@@ -59,7 +63,9 @@ receipt text and origin restored when publication was truncated.
 Competing question groups remain ambiguous and grant no authority. An opaque
 chat key or owner ID alone cannot supply a topic; an unknown or conflicting
 scope continues to require clarification. Settled and unrouted old receipts are pruned in
-batches of at most 64 on sends and publication settlement; pending publication custody survives retention expiry.
+batches of at most 64 on sends and publication settlement. Expired pending
+publications become terminal when visited; retained receipts remain available
+for local context reads.
 All new database waits use asynchronous admission and zero SQLite busy waits,
 with named loop-monitor operations. No performance improvement is claimed.
 
@@ -76,9 +82,11 @@ Celestia main `0997461ccf4d6e8752d03d3df2ed40ebc8187659` confirms that
 `owner_telegram_user_id`. Delegatus's pairing confirmation preserves both.
 The selected pairing's positive Telegram owner id is the review's private-chat
 recipient. Section 6 P4 of the pinned Celestia design permits that recipient
-when its owner-chat switch is on. That main revision has no publish route yet;
-404 remains the expected unavailable outcome until Celestia ships Part B.
-No deployed-switch or live private-loop success is claimed here.
+when its owner-chat switch is on. That revision predates Part B. The service
+now supplies
+`POST /api/relay/v1/targets/{target_id}/messages`; a 404 still means the
+endpoint or its switch is unavailable. The regression below exercises the
+supported interface in isolated installs; it makes no production deployment claim.
 
 Prototype publication uses this private destination instead of the project's
 report group. Telegram confirms the recipient through `getChat`; a changed
@@ -116,3 +124,72 @@ to the fixture path and running
 `bash scripts/gate-slot.sh bun test src/lib/externalRelay/ownerPrivateLoop.test.ts`.
 Use an isolated HOME, XDG configuration, state and temporary root, and a
 closed loopback Viewer control URL, as required for all relay tests.
+
+## Publication through a linked install
+
+Bot-free links omit publication parts and keep their existing idle wire.
+A single token-file existence check admits discovery when a bot is connected;
+there is no discovery cache.
+
+The optional `tp` part of the authenticated v1 board exchange carries at most
+one receipt and one acknowledgement per call, in either direction. An older
+peer ignores this part; the sender keeps its obligation. Both installs must
+still share a project. Discovery advertises only the connected bot and the
+selected production pairing's route and Telegram owner. The sender compares
+the bot identity and verifies the receiving install's proof for that bot and
+peer grant. A known local pairing must agree with the owner; a sender with no
+local service pairing can use the receiving install's authorized pairing. It sends no receipt text before
+that match. The first match pins the link, install and destination in
+`relay_outbound_handoffs`; other peers and changed destinations cannot adopt it.
+The sender's existing outbox keeps the original bot, chat, topic, message ID,
+Telegram timestamp, text and provenance. Pairing credentials stay on the
+receiving install. A handoff never calls Telegram. The receipt carries a
+SHA-256 HMAC over its identity, attempt, destination and text, signed with
+the connected bot token. The receiving install verifies it with its own bot
+token and a constant-time comparison before publication and again after
+waits. An authenticated board peer with only public bot and owner IDs cannot
+manufacture receipts for that bot. The bot token is never transferred. Discovery is also signed with that token and
+bound to the peer grant ID shared by both ends. The sender verifies this proof
+before exporting any text; a proof copied from another link is refused.
+
+Publication movement uses the existing sync burst schedule, including while
+boards are closed; an otherwise idle link polls at most five minutes apart.
+Each sync makes at most four publication exchanges. Each exchange attempts at
+most one service request with the existing five-second deadline. Each handoff
+candidate read visits at most 16 indexed rows and yields through asynchronous SQLite
+admission. Skipped rows move behind a 30-second due time to let later rows
+progress. Before dispatch, the sender persists its attempt and backoff; lost
+responses and process restarts cannot reset the 64-attempt budget. The receiver
+checks the live link, shared boundary, bot and frozen destination after waits
+and at HTTP emission, and uses the existing publisher and credential store.
+Celestia checks that the selected target and chat belong to that pairing.
+Its idempotent `(chat_id, message_id)` insert supplies assistant provenance.
+Peer input cannot supply owner flags, a model prompt or an owner identity.
+
+A confirmed service response settles the sender as published. A 429 persists
+the service's delay both at the receiver's pairing and in the sender's outbox.
+A 400, 403 or 409 ends that receipt, with the status and bounded error code in
+`relay_publication_results`. No credential or response payload enters the
+journal. A transient refusal retries within the original 24-hour window.
+Text beyond 12,000 Unicode code points is truncated deterministically with
+`[truncated]`; JSON encoding also remains within 65,536 bytes. The full text
+stays in the sending install's journal.
+
+`src/lib/links/telegramPublication.test.ts` runs the real sender, pairing,
+authenticated board route, sync client and publication transport in two
+isolated processes. It runs with the sender on either side of the link. A
+send is followed by a real sender restart, a publication with a lost response,
+and another restart before replay. The service fixture stores one row and
+serves it in the subsequent claim. The parsed relay input and actual answer
+prompt include the report as `author.self: true`, followed by the human's
+reply whose `reply_to` equals that report's service identity. The human is a
+member with `is_owner: false`. Separate adversarial cases cover owner/bot
+mismatches, revoked links, changed destinations, authority-bearing fields,
+expiry, terminal refusals and durable cooldowns. This is context evidence
+through the service wire, beyond the Telegram send receipt.
+
+`evidence/telegram-publication-context.json` retains the actual parsed claims
+and prompts from both directions, the stored-row and retry counts, and a
+digest of the source files that produced them. Regenerate it by setting
+`LLV_TELEGRAM_PUBLICATION_EVIDENCE` to that path when running the test above
+in isolated state. Its clock and identifiers are synthetic.

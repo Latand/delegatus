@@ -443,3 +443,64 @@ test("C: an undelivered answer is shown as a record and retry uses the saved ans
   await click(host.querySelector("[data-decision-retry]"));
   expect(posts).toEqual([{ project: "project-a", reviewId: SEAT, retry: true }]);
 });
+
+/* Audit B13/B14: a decided record's Retry and Revoke stay in place and draw their result at once. */
+function heldPosts(answer: () => Response, read?: () => Response) {
+  const posts: unknown[] = [];
+  let release: () => void = () => {};
+  globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
+    if (init?.method !== "POST") return read ? read() : new Response(JSON.stringify({ project: "project-a", decisions: [] }), { status: 200 });
+    posts.push(JSON.parse(String(init.body)));
+    await new Promise<void>((resolve) => { release = resolve; });
+    return answer();
+  }) as typeof fetch;
+  return { posts, release: () => act(async () => { release(); await new Promise((resolve) => setTimeout(resolve, 0)); }) };
+}
+const failedRecord = () => seatDecision({ decision: { chosen: [], answers: [{ questionId: "when", options: [0] }, { questionId: "why", options: [0] }], comment: "", at: "2026-10-11T14:46:00.000Z", delivery: { state: "failed", retryable: true } } });
+
+test("the column's Retry keeps the record in place as sending while the request is held, sends once, and a refusal restores it with the reason", async () => {
+  const server = heldPosts(() => new Response(JSON.stringify({ error: "prototype decision is busy" }), { status: 409 }));
+  const host = await render(<DecisionList project="project-a" initial={[failedRecord()]} />);
+  await click(host.querySelector("[data-decision-retry]"));
+  expect(host.querySelector('[data-decision-card="answered"]')).not.toBeNull();
+  expect(host.querySelector("[data-decision-delivery]")?.getAttribute("data-decision-delivery")).toBe("pending");
+  expect(host.querySelector("[data-decision-retry]")).toBeNull();
+  await server.release();
+  expect(server.posts).toEqual([{ project: "project-a", reviewId: SEAT, retry: true }]);
+  expect(host.querySelector("[data-decision-delivery]")?.getAttribute("data-decision-delivery")).toBe("failed");
+  expect(host.querySelector("[data-decision-retry]")).not.toBeNull();
+  expect(host.querySelector("[data-decision-retry-error]")?.textContent).toContain("prototype decision is busy");
+  expect(host.textContent).not.toContain("Access could not be revoked");
+});
+
+test("the column's Revoke reads as refused at once and a refusal brings the approval and its button back with the reason", async () => {
+  const active = seatDecision({ nativeAssociationState: "approved", source: { conversationId: null },
+    decision: { chosen: [], answers: [{ questionId: "when", options: [1] }, { questionId: "why", options: [1] }], comment: "", at: "2026-10-15T09:00:00Z", delivery: { state: "no-orchestrator", retryable: true } } });
+  const server = heldPosts(() => new Response(JSON.stringify({ error: "association store busy" }), { status: 409 }));
+  const host = await render(<DecisionList project="project-a" initial={[active]} />);
+  await click(host.querySelector("[data-native-association-revoke]"));
+  expect(host.textContent).toContain("Access refused");
+  expect(host.querySelector("[data-native-association-revoke]")).toBeNull();
+  await server.release();
+  expect(server.posts).toHaveLength(1);
+  expect(host.textContent).toContain("Access approved");
+  expect(host.querySelector("[data-native-association-revoke]")).not.toBeNull();
+  expect(host.querySelector('[role="alert"]')?.textContent).toContain("association store busy");
+  expect(host.querySelector("[data-decision-retry-error]")).toBeNull();
+});
+
+test("the pointer's Retry draws the message on its way at once, sends once, and a refusal restores the record with the reason", async () => {
+  const round = failedRecord();
+  const server = heldPosts(() => new Response(JSON.stringify({ error: "prototype decision is busy" }), { status: 409 }),
+    () => new Response(JSON.stringify({ project: "project-a", decisions: [], round }), { status: 200 }));
+  const host = await render(<DecisionPointer target={{ reviewId: SEAT, project: "project-a", title: "Deploy tonight?" }} />);
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+  await click(host.querySelector("[data-decision-retry]"));
+  expect(host.querySelector("[data-decision-delivery]")?.getAttribute("data-decision-delivery")).toBe("pending");
+  expect(host.querySelector("[data-decision-retry]")).toBeNull();
+  await server.release();
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+  expect(server.posts).toHaveLength(1);
+  expect(host.querySelector("[data-decision-delivery]")?.getAttribute("data-decision-delivery")).toBe("failed");
+  expect(host.querySelector("[data-decision-retry-error]")?.textContent).toContain("prototype decision is busy");
+});

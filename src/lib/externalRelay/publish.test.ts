@@ -151,6 +151,22 @@ test("durable publication rechecks authorization after DNS before any HTTP emiss
   } finally { await server.close(); updateRelayStore(s => ({ ...s, relays: [] })); }
 });
 
+test("credential rotation during DNS refuses the old credential before HTTP emission", async () => {
+  const { publishDurableTelegramMessage } = await import("./telegramPublication");
+  const { destinationRelay } = await import("./ownerDestination.fixture");
+  const { updateRelayStore } = await import("./store");
+  let calls = 0;
+  const server = await startTestRelay(() => { calls++; return { body: { message_key: "fixture", replayed: false } }; });
+  const paired = destinationRelay(); paired.api_base = `${server.origin}/v1`;
+  updateRelayStore(s => ({ ...s, relays: [paired] }));
+  try {
+    const pending = publishDurableTelegramMessage(receipt, () => {});
+    updateRelayStore(s => ({ ...s, relays: s.relays.map(r => ({ ...r, credential: "r".repeat(43) })) }));
+    await expect(pending).rejects.toThrow("pairing changed");
+    expect(calls).toBe(0);
+  } finally { await server.close(); updateRelayStore(s => ({ ...s, relays: [] })); }
+});
+
 
 test.each(["", "invalid key", "x".repeat(129)])("durable publication keeps an invalid acknowledgement pending (%s)", async messageKey => {
   const { publishDurableTelegramMessage } = await import("./telegramPublication");

@@ -156,3 +156,25 @@ test("the machine face in Ukrainian has no dot and missing readings draw nothing
   await act(async () => { root.render(<WorkerLimitChip project="one" workers={null} />); });
   expect(host.textContent).toBe("");
 });
+
+/* Audit B20: a limit shows on the chip at once, the field stays usable, and a refusal restores it. */
+test("a held limit save shows on the chip at once, leaves the field usable, sends once, and a refusal restores the chip and says so", async () => {
+  const writes: unknown[] = [];
+  let refuse: () => void = () => {};
+  globalThis.fetch = (async (_input, init) => {
+    writes.push(JSON.parse(String(init?.body)));
+    await new Promise<void>((resolve) => { refuse = resolve; });
+    return Response.json({}, { status: 500 });
+  }) as typeof fetch;
+  const host = await mount();
+  const popover = await open(host);
+  const field = popover.querySelector("input")!;
+  await blur(field, "12");
+  expect(host.querySelector("button")!.textContent).toBe("workers 7 / 12");
+  expect(field.disabled).toBe(false);
+  await blur(field, "13");
+  expect(writes).toEqual([{ project: "one", value: 12 }]);
+  await act(async () => { refuse(); await new Promise((resolve) => setTimeout(resolve, 0)); });
+  expect(host.querySelector("button")!.textContent).toBe("workers 7 / 10");
+  expect(document.querySelector("[data-worker-limit-popover]")!.textContent).toContain("Could not save");
+});

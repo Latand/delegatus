@@ -1,3 +1,4 @@
+import { seatRecipientVerdict, seatRecipientVerdictAsync, SEND_SEAT_REVOKED_REASON } from "@/lib/orchestrator/seatChannel";
 import { spawnDiagnosticError, spawnDiagnosticErrorFor } from "@/lib/agent/spawnDiagnostics";
 import { DeliveryAdmissionRefusedError, type DeliveryAdmissionGuard } from "@/lib/deliveryAdmission";
 import { ownerRelaySpawnAuthorized } from "@/lib/externalRelay/ownerAuthority";
@@ -129,7 +130,7 @@ export interface StructuredMessageDependencies {
   enabled?: () => boolean;
   client?: () => RuntimeHostClient | null;
   registry?: () => AgentRegistry;
-  kick?: () => void;
+  kick?: (freshAdmission?: boolean) => void;
   requestMigrationTick?: () => void;
   startupFailed?: () => boolean;
   startupRecovered?: () => void;
@@ -246,25 +247,7 @@ function reservationFor(registry: AgentRegistry, operationId: string): HeldDeliv
     .find((candidate) => candidate.command.operationId === operationId) ?? null;
 }
 
-function reservationMatchesDeliveryRequest(
-  registry: AgentRegistry,
-  request: HeldStructuredMessageRequest,
-  operationId: string,
-): boolean {
-  const conversationId = request.conversationId;
-  const clientMessageId = request.clientMessageId;
-  if (!conversationId || !clientMessageId || !request.deliveryId || request.command?.operationId !== operationId) return false;
-  const reservation = reservationFor(registry, operationId);
-  if (!reservation
-    || reservation.id !== request.deliveryId
-    || reservation.conversationId !== conversationId
-    || reservation.clientMessageId !== clientMessageId
-    || reservation.command.operationId !== operationId) return false;
-  const admission = registry.deliveryAdmissionForKey(conversationId, clientMessageId);
-  return admission.outcome === "admitted"
-    && admission.operationId === operationId
-    && admission.deliveryId === reservation.id;
-}
+
 
 /** Serializes preflight → publication → reservation per (conversation,
     client message id) within this process. Two racing changed payloads see a
@@ -1133,7 +1116,40 @@ async function deliverHeldAttempt(
 ): Promise<HeldStructuredMessageOutcome> {
   const operationId = request.command?.operationId
     ?? registry.readOnlySnapshot().heldDeliveries[request.deliveryId]?.command.operationId ?? request.deliveryId;
-  const authorityFence = () => deputyDrainFence(request, operationId, registry);
+  const seatAuthority = () => {
+    const id = request.conversationId ?? reservationFor(registry, operationId)?.conversationId;
+    if (!id) return { kind: "unknown" as const, reason: "orchestrator seat authority is unavailable" };
+    const snapshot = registry.conversationDeliverySnapshot({ conversationId: id, path: request.path });
+    const lookup = readOnlyConversationLookupFromSnapshot(snapshot);
+    return seatRecipientVerdict(conversationIdsResolvingTo(snapshot, lookup.canonicalConversationId(id as ViewerConversationId)),
+      value => lookup.canonicalConversationId(value as ViewerConversationId));
+  };
+  const authorityFence = async () => {
+    const deputy = await deputyDrainFence(request, operationId, registry);
+    if (deputy !== undefined) return deputy;
+    const delivery = reservationFor(registry, operationId);
+    const id = request.conversationId ?? delivery?.conversationId;
+    if (!id) return heldForRetry("orchestrator seat authority is unavailable");
+    const snapshot = registry.conversationDeliverySnapshot({ conversationId: id, path: request.path });
+    const lookup = readOnlyConversationLookupFromSnapshot(snapshot);
+    const canonical = lookup.canonicalConversationId(id as ViewerConversationId);
+    const authority = await seatRecipientVerdictAsync(conversationIdsResolvingTo(snapshot, canonical),
+      value => lookup.canonicalConversationId(value as ViewerConversationId));
+    if (authority.kind === "unknown") return heldForRetry(authority.reason);
+    if (authority.kind === "open") return undefined;
+    if (!delivery) return "failed" as const;
+    const runtime = (dependencies.client ?? runtimeHostClient)();
+    if (!runtime) return heldForRetry("seat withdrawal awaits the runtime journal");
+    const journal = await runtime.operationStatus(operationId);
+    if (journal) {
+      const { withdrawRuntimeWake } = await import("@/lib/orchestrator/seatChannel");
+      if (await withdrawRuntimeWake(operationId, SEND_SEAT_REVOKED_REASON, runtime) !== "withdrawn")
+        return heldForRetry("seat withdrawal awaits journal settlement");
+    }
+    const ended = await registry.deliveryWrite({ label: "delivery.seat-cutoff", operationId },
+      () => registry.recordDeliveryOutcome(delivery.id, "failed", SEND_SEAT_REVOKED_REASON, "lost"));
+    return ended.acquired ? "failed" as const : heldForRetry("seat withdrawal awaits the registry writer");
+  };
   const initialAuthority = await authorityFence();
   if (initialAuthority !== undefined) return initialAuthority;
   const refuseOwnerPrompt = async (): Promise<HeldStructuredMessageOutcome | undefined> => {
@@ -1185,10 +1201,7 @@ async function deliverHeldAttempt(
        its message, attachments and operation id, and the reason (#1974). It
        used to be recorded `delivery-uncertain`, which settlement must treat
        as possibly executed, for a message that provably never left. */
-    const rotatedSeatReservation = deliverability.condition === "superseded"
-      && deliverability.reason.startsWith("orchestrator seat was ")
-      && reservationMatchesDeliveryRequest(registry, request, operationId);
-    if (deliverability.condition !== "reclaimed" && !rotatedSeatReservation) {
+    if (deliverability.condition !== "reclaimed") {
       return heldForRetry(deliverability.reason);
     }
     /* Recorded before the recovery is awaited (A5): a recovery that hangs is
@@ -1204,6 +1217,7 @@ async function deliverHeldAttempt(
         origin: request.command?.origin,
         operationId: request.command?.operationId ?? request.deliveryId,
         authorityGuard: () => {
+          if (seatAuthority().kind !== "open") throw new DeliveryAdmissionRefusedError("orchestrator-recipient-revoked");
           if (!deputyDrainAuthorityCurrent(request, operationId, registry)) {
             throw new DeliveryAdmissionRefusedError("deputy-delivery-authority-changed");
           }
@@ -1265,7 +1279,9 @@ async function deliverHeldAttempt(
     progress.wait("dispatching");
     if (!ownerFirstPromptAllowed(registry, operationId))
       return await refuseOwnerPrompt() ?? heldForRetry("owner first prompt authorization changed");
-    const fenced = await deputyDrainDispatchFence(request, operationId, registry, () => client.command({
+    const fenced = await deputyDrainDispatchFence(request, operationId, registry, () => {
+      if (seatAuthority().kind !== "open") throw new DeliveryAdmissionRefusedError("orchestrator-recipient-revoked");
+      return client.command({
       kind: command.kind,
       operationId: command.operationId,
       conversationId: request.runtimeConversationId ?? request.conversationId,
@@ -1282,7 +1298,7 @@ async function deliverHeldAttempt(
       /* #1117: the authorship persisted on the held record survives the
          migration hold — the drained message re-attributes exactly as admitted. */
       ...(command.origin ? { origin: command.origin } : {}),
-    }));
+    }); });
     if ("blocked" in fenced) return fenced.blocked;
     const result = fenced.dispatched;
     if (result.receipt.status === "queued" || result.receipt.status === "pending") progress.admitted();
@@ -1296,6 +1312,8 @@ async function deliverHeldAttempt(
     if (latest.receipt.status === "failed" || latest.receipt.status === "rejected") return "failed";
     return "delivery-uncertain";
   } catch {
+    const refused = await authorityFence();
+    if (refused !== undefined) return refused;
     return "delivery-uncertain";
   }
 }
@@ -1371,21 +1389,34 @@ export async function enqueueStructuredMessage(
   const recipientIds = recipient
     ? conversationIdsResolvingTo(recipientSnapshot, recipient.id as ViewerConversationId)
     : [];
-  const recipientKey = request.clientMessageId?.trim();
-  const boundRecipient = Boolean(recipient && recipientKey
-    && registry.deliveryAdmissionForKey(recipient.id, recipientKey).outcome === "admitted");
   // This guard also runs inside the reservation transaction. Its registry
   // identity is captured before admission; the seat store is re-read at use.
-  const recipientRefusal = () => recipient && !boundRecipient
+  const recipientRefusal = () => recipient
     ? orchestratorRecipientRefusal(recipientIds,
       id => recipientLookup.canonicalConversationId(id as ViewerConversationId))
     : null;
-  const recipientRefusalAsync = async () => recipient && !boundRecipient
+  const recipientRefusalAsync = async () => recipient
     ? orchestratorRecipientRefusalAsync(recipientIds,
       id => recipientLookup.canonicalConversationId(id as ViewerConversationId))
     : null;
   const refusedRecipient = await recipientRefusalAsync();
-  if (refusedRecipient) return refusedBeforeReservation({ ok: false, structured: true, outcome: "failed", ...refusedRecipient });
+  if (refusedRecipient) {
+    if (refusedRecipient.status === 409 && recipient && request.clientMessageId) {
+      const { lookupOriginalSend, resolveSendReceipt, runtimeReceiptForSend } = await import("./sendSettlement");
+      const original = lookupOriginalSend(registry.readOnlySnapshot(), { conversationId: recipient.id,
+        clientMessageId: request.clientMessageId, text: request.text, origin: request.origin });
+      if (original.kind === "found") {
+        const receipt = await resolveSendReceipt(original.operationId, { registry, client: (dependencies.client ?? runtimeHostClient)(), progress: null });
+        if (receipt && (receipt.state !== "in-flight" || receipt.redirectedTo)) {
+          const common = { structured: true as const, operationId: original.operationId, receipt: runtimeReceiptForSend(receipt) };
+          return receipt.state === "failed" ? { ...common, ok: false, outcome: "failed", status: 409, error: receipt.reason ?? refusedRecipient.error,
+            successorConversationId: refusedRecipient.successorConversationId }
+            : { ...common, ok: true, target: recipient.id, outcome: receipt.state === "delivered" ? "delivered" : "queued" };
+        }
+      }
+    }
+    return refusedBeforeReservation({ ok: false, structured: true, outcome: "failed", ...refusedRecipient });
+  }
   const callerGuard = request.admissionGuard;
   request = { ...request, admissionGuard: reconciled => {
     callerGuard?.(reconciled);
@@ -2122,7 +2153,11 @@ export async function enqueueStructuredMessage(
         nextWakeMs: STRUCTURED_DELIVERY_TIMING.retryMs,
       });
     }
-    (dependencies.kick ?? kickStructuredDeliveryQueue)();
+    // Only a newly committed pending operation owns an immediate admission
+    // wake. Replays and observer kicks retain the listing failure backoff.
+    const kick = dependencies.kick ?? kickStructuredDeliveryQueue;
+    if (result.replayed === false && (receipt.status === "queued" || receipt.status === "pending")) kick(true);
+    else kick();
     const outcome = receipt.status === "delivering" || receipt.status === "delivered" ? receipt.status : "queued";
     return {
       ok: true,

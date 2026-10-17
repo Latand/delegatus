@@ -74,7 +74,7 @@ test("Codex responses keep original option labels and custom answers under their
   } });
 });
 
-describe.each(["0.154.0", "0.159.0", "0.162.1"])("Codex %s projected question responses", version => {
+describe.each(["0.154.0", "0.159.0", "0.162.1", "0.163.0"])("Codex %s projected question responses", version => {
   test.each(["", " \t\n"])("keeps visible choices aligned when blank labels are %j", blank => {
     const protocol = new CodexPinnedProtocol(version);
     const method = "item/tool/requestUserInput";

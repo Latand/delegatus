@@ -10,7 +10,7 @@ import { StructuredAnswerError, StructuredSendRefusedError } from "./engineHost"
 import type { FirstDispatchEvidence } from "./engineHost";
 import { basename } from "node:path";
 import { isNonblockingCodexQuestion } from "./codexAttention";
-import { CodexPinnedProtocol, installedCodexVersion } from "@/lib/accounts/codexPinnedProtocol";
+import { CodexPinnedProtocol, installedCodexVersion, resolveCodexProtocol, type CodexSchemaGenerator } from "@/lib/accounts/codexPinnedProtocol";
 import { parseAppServerMessage } from "@/lib/accounts/codexAppServerProtocol";
 import { decodeCodexServerRequest, encodeCodexServerResponse, resolveCodexAttentionResponse } from "./codexServerRequests";
 import { codexAnswerMatchesDispatch, codexRequestDigest, codexRequestIdentity, sameCodexRequest, type CodexRequestReceipt } from "./codexRequestReceipt";
@@ -209,6 +209,8 @@ export interface CodexAppServerHostOptions {
   /** Dependency injection for protocol compatibility rehearsals. Production
       identifies the selected executable with --version before spawning. */
   readProtocolVersion?: typeof installedCodexVersion;
+  /** Schema generation for an unpinned executable's additive admission. */
+  generateProtocolSchemas?: CodexSchemaGenerator;
   model?: string;
   effort?: string;
   allowSubagents?: boolean;
@@ -216,6 +218,8 @@ export interface CodexAppServerHostOptions {
   operatorDecisionForms?: boolean;
   /** No automatic memory: no shared-memory hook and Codex's memories feature off. */
   cleanMemory?: boolean;
+  /** Effective native-memory decision shared with the delivery ledger. */
+  nativeMemoryEnabled?: boolean;
   developerInstructions?: string;
   mcpServers?: string[];
   validateTelegramGrant?: () => void;
@@ -1469,7 +1473,7 @@ export class CodexAppServerHost implements EngineHost {
       spawn(command, args, { ...spawnOptions, stdio: ["pipe", "pipe", "pipe"] }));
     const binary = options.binary ?? process.env.LLV_CODEX_BINARY ?? "codex";
     let protocol: CodexPinnedProtocol;
-    try { protocol = new CodexPinnedProtocol((options.readProtocolVersion ?? installedCodexVersion)(binary, options.env ?? process.env)); }
+    try { protocol = await resolveCodexProtocol((options.readProtocolVersion ?? installedCodexVersion)(binary, options.env ?? process.env), binary, options.env ?? process.env, options.generateProtocolSchemas); }
     catch (error) { options.releaseCleanup?.(); throw error; }
     let features: ReturnType<typeof readCodexFeatures>;
     let cleanupArgs: string[];
@@ -1487,7 +1491,7 @@ export class CodexAppServerHost implements EngineHost {
     const granted = grantedPlugins(options.plugins);
     if (!options.allowSubagents) subagentFeatures.plugins = granted.length > 0;
     /* A clean launch reads none of Codex's own memories. */
-    if (options.cleanMemory) subagentFeatures.memories = false;
+    if (options.cleanMemory || options.nativeMemoryEnabled === false) subagentFeatures.memories = false;
     const args = [
       "-c", `agents.enabled=${options.allowSubagents === true}`,
       ...(options.allowSubagents === true ? [] : ["-c", 'approvals_reviewer="user"']),
@@ -3073,8 +3077,8 @@ export class CodexAppServerHost implements EngineHost {
       ...memoryField(this.memoryCell),
       activeFlags: [...this.activeFlags, ...(this.nativeQueue ? [NATIVE_QUEUE_CAPABILITY] : []), ...(this.injectCapability === "supported" ? [NATIVE_INJECT_CAPABILITY] : []), ...(this.protocol.hasRequestField("turn/start", "model") && this.protocol.hasRequestField("turn/start", "effort") && Array.isArray(record(this.modelCatalog)?.data) ? [NATIVE_TURN_PROFILE_CAPABILITY] : [])],
       account: this.account,
-      diagnostics: { executable: this.selectedExecutable, version: this.protocolVersion, nativeQueue: !!this.nativeQueue, queueCapability: this.queueCapability, injectCapability: this.injectCapability, authRecovery: this.authRecovery,
-        protocol: normalizeCodexProtocolReceipt({ schemaVersion: this.protocol.version, schemaDigest: this.protocol.schemaDigest, experimentalApi: this.experimentalApi,
+      diagnostics: { executable: this.selectedExecutable, version: this.protocolVersion === null ? null : this.protocol.cliVersion, nativeQueue: !!this.nativeQueue, queueCapability: this.queueCapability, injectCapability: this.injectCapability, authRecovery: this.authRecovery,
+        protocol: normalizeCodexProtocolReceipt({ schemaVersion: this.protocol.version, schemaDigest: this.protocol.schemaDigest, experimentalApi: this.experimentalApi, unpinnedCli: this.protocol.unpinned,
           provider: this.providerCapabilities, models: record(this.modelCatalog)?.data, anomalies: this.protocolAnomalies }) },
     };
   }

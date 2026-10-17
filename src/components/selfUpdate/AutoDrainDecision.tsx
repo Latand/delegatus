@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useSyncExternalStore } from "react";
 import { useLocale } from "@/lib/i18n";
 import type { AutoView } from "@/lib/selfUpdate/auto";
 import type { Snapshot } from "@/lib/selfUpdate/types";
@@ -8,15 +8,50 @@ import type { Snapshot } from "@/lib/selfUpdate/types";
 import { blockerRows, useBlockerNames } from "./blockerNames";
 import { DRAIN_DECISION_EVENT, selfUpdateTicket, type DrainDecisionAnswer } from "./useSelfUpdateFeed";
 
+/* «Keep waiting» leaves every list at once (audit B15): the decision is held
+   here while its answer is on the way, so the Needs-you queue, its count and
+   the dialog all drop it in the same frame. A refusal brings it back with the
+   reason, which outlives the row's own unmount. Deploy now still waits: it
+   starts the release switch. */
+let leaving: ReadonlySet<string> = new Set();
+const refusals = new Map<string, string>();
+const listeners = new Set<() => void>();
+const publish = (next: ReadonlySet<string>) => {
+  leaving = next;
+  for (const listener of listeners) listener();
+};
+const subscribe = (listener: () => void) => {
+  listeners.add(listener);
+  return () => { listeners.delete(listener); };
+};
+const EMPTY: ReadonlySet<string> = new Set();
+
+/** Update decisions whose «Keep waiting» is on its way: no list shows them. */
+export function useDrainDecisionsLeaving(): ReadonlySet<string> {
+  return useSyncExternalStore(subscribe, () => leaving, () => EMPTY);
+}
+
+/** Tests only. */
+export function resetDrainDecisionsForTests(): void {
+  refusals.clear();
+  publish(new Set());
+}
+
 /** The same operator decision in the update dialog and both Needs-you lists. */
 export function AutoDrainDecision({ decision }: { decision: NonNullable<AutoView["decision"]> }) {
   const { t } = useLocale();
   const names = useBlockerNames();
+  const away = useDrainDecisionsLeaving().has(decision.id);
   const [pending, setPending] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(() => refusals.get(decision.id) ?? null);
   const choose = async (choice: "deploy-now" | "keep-waiting") => {
-    setPending(true);
+    if (pending || leaving.has(decision.id)) return;
+    const optimistic = choice === "keep-waiting";
+    refusals.delete(decision.id);
+    if (optimistic) publish(new Set([...leaving, decision.id]));
+    else setPending(true);
     setError(null);
+    let refusal: string | null = null;
     // Its place among the feed's snapshots is taken now, before the answer.
     const ticket = selfUpdateTicket();
     const accept = (snapshot: Snapshot) => window.dispatchEvent(new window.CustomEvent<DrainDecisionAnswer>(DRAIN_DECISION_EVENT, { detail: { snapshot, ticket } }));
@@ -25,17 +60,28 @@ export function AutoDrainDecision({ decision }: { decision: NonNullable<AutoView
         body: JSON.stringify({ decisionId: decision.id, choice }) });
       if (response.status === 409) {
         // Answered elsewhere or overtaken: the refusal carries what is true now.
-        const refusal = await response.json().catch(() => null) as { snapshot?: Snapshot } | null;
-        setError(t("selfUpdate.auto.decision.superseded"));
-        if (refusal?.snapshot?.meta) accept(refusal.snapshot);
+        const body = await response.json().catch(() => null) as { snapshot?: Snapshot } | null;
+        refusal = t("selfUpdate.auto.decision.superseded");
+        if (body?.snapshot?.meta) accept(body.snapshot);
         return;
       }
       if (!response.ok) throw new Error(String(response.status));
       accept(await response.json() as Snapshot);
     } catch {
-      setError(t("selfUpdate.auto.decision.failed"));
-    } finally { setPending(false); }
+      refusal = t("selfUpdate.auto.decision.failed");
+    } finally {
+      if (refusal) {
+        refusals.set(decision.id, refusal);
+        setError(refusal);
+      }
+      if (optimistic) {
+        const next = new Set(leaving);
+        next.delete(decision.id);
+        publish(next);
+      } else setPending(false);
+    }
   };
+  if (away) return null;
   const blockers = decision.blockers;
   return <div data-needs-you-kind="update" data-auto-drain-decision={decision.id} className="flex min-w-0 flex-col gap-2 rounded-[8px] border border-warning p-3 text-ui [overflow-wrap:anywhere]">
     <p className="m-0 font-semibold text-primary">{t("selfUpdate.auto.decision.title")}</p>
