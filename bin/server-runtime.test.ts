@@ -14,6 +14,7 @@ import { loadWorkflows } from "@/lib/workflows/store";
 import { runtimeHostEndpoint } from "@/lib/runtime/localEndpoint";
 import { RuntimeHostFence } from "@/runtime-host/runtimeHostFence";
 import { hermeticTailscaleEnvironment } from "@/test-helpers/tailscaleStub";
+import { installedRelease } from "./self-update-supervisor.mjs";
 
 import {
   browserOpenCommand,
@@ -465,5 +466,29 @@ test("each launched release pins diagnostic identity and clears an inherited pre
     });
     expect(child.exitCode).toBe(0);
     expect(JSON.parse(child.stdout.toString())).toBe(selected);
+  }
+});
+
+test("a packaged revision reaches both launched children when the package has no checkout", () => {
+  const packageRoot = fs.mkdtempSync(path.join(os.tmpdir(), "delegatus-package-revision-"));
+  const revision = "e".repeat(40);
+  try {
+    fs.writeFileSync(path.join(packageRoot, "package.json"), JSON.stringify({ version: "1.0.0", gitHead: revision }));
+    const release = installedRelease(path.join(packageRoot, "missing-pointer.json"), packageRoot);
+    expect(release).toEqual({ dir: packageRoot, sha: revision, published: false });
+
+    const config = { socketPath: "fixture.sock", fencePath: "fixture.lock", journalPath: "fixture.sqlite" };
+    const runtimeHostEnvironment = cliRuntimeHostEnvironment({ LLV_DIAGNOSTIC_REVISION: "old" }, config, release.sha);
+    const viewerEnvironment = cliRuntimeHostEnvironment({ LLV_DIAGNOSTIC_REVISION: "old" }, config, release.sha);
+    for (const childEnvironment of [runtimeHostEnvironment, viewerEnvironment]) {
+      expect(childEnvironment.LLV_DIAGNOSTIC_REVISION).toBe(revision);
+      const child = Bun.spawnSync([process.execPath, "-e", "process.stdout.write(process.env.LLV_DIAGNOSTIC_REVISION ?? 'null')"], {
+        env: childEnvironment,
+      });
+      expect(child.exitCode).toBe(0);
+      expect(child.stdout.toString()).toBe(revision);
+    }
+  } finally {
+    fs.rmSync(packageRoot, { recursive: true, force: true });
   }
 });

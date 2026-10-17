@@ -21,7 +21,7 @@ import {
 
 /* The launcher's half of self-update (#2007). A real git checkout and a
    release worktree stand in for an install; nothing is started or signalled. */
-const root = mkdtempSync("/var/tmp/self-update-launcher-");
+const root = mkdtempSync(join(tmpdir(), "self-update-launcher-"));
 const checkout = join(root, "checkout");
 const release = join(root, "release");
 const identity = ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false"];
@@ -88,6 +88,19 @@ describe("installedRelease", () => {
   test("an unreadable pointer falls back to the package root", () => {
     writeFileSync(pointer, "{not json");
     expect(installedRelease(pointer, checkout).dir).toBe(checkout);
+  });
+
+  test("a package manifest supplies the revision when the package root has no checkout", () => {
+    const packageRoot = join(root, "unpacked-package");
+    const revision = "d".repeat(40);
+    mkdirSync(packageRoot, { recursive: true });
+    writeFileSync(join(packageRoot, "package.json"), JSON.stringify({ version: "1.0.0", gitHead: revision }));
+    expect(installedRelease(pointer, packageRoot)).toEqual({ dir: packageRoot, sha: revision, published: false });
+
+    writeFileSync(join(packageRoot, "package.json"), JSON.stringify({ version: "1.0.0" }));
+    expect(installedRelease(pointer, packageRoot)).toEqual({ dir: packageRoot, sha: null, published: false });
+    writeFileSync(join(packageRoot, "package.json"), JSON.stringify({ version: "1.0.0", gitHead: "not-a-revision" }));
+    expect(installedRelease(pointer, packageRoot)).toEqual({ dir: packageRoot, sha: null, published: false });
   });
 });
 

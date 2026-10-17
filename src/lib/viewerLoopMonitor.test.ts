@@ -27,22 +27,29 @@ test("every loop-gap carries memory signals; ordinary ticks advance the heap bas
   monitor.stop();
 });
 
-test("checkout gap and summary records name the serving child revision before activation", () => {
-  const previous = process.env.LLV_DIAGNOSTIC_REVISION;
+test.each(["viewer", "runtime-host"])("%s gap and summary records name the serving child revision before activation", role => {
+  const previous = { diagnostic: process.env.LLV_DIAGNOSTIC_REVISION, owner: process.env.LLV_STATE_OWNER };
   const oldRevision = performanceProcess.revision;
   let at = 0;
   const lines: string[] = [];
   try {
+    process.env.LLV_STATE_OWNER = role;
     process.env.LLV_DIAGNOSTIC_REVISION = "1234567890abcdef1234567890abcdef12345678";
     performanceProcess.revision = null;
     const monitor = createViewerLoopMonitor(line => lines.push(line), () => at, createPerformanceSpans(() => at));
     at = 61_000; monitor.tick(); monitor.stop();
     expect(lines).toHaveLength(2);
-    for (const line of lines) expect(JSON.parse(line.slice(line.indexOf("] ") + 2)).revision).toBe(process.env.LLV_DIAGNOSTIC_REVISION);
+    expect(lines[0]!.startsWith("[viewer loop-gap] ")).toBe(true);
+    expect(lines[1]!.startsWith("[performance summary] ")).toBe(true);
+    for (const line of lines) expect(JSON.parse(line.slice(line.indexOf("] ") + 2))).toMatchObject({
+      revision: process.env.LLV_DIAGNOSTIC_REVISION,
+      role,
+    });
   } finally {
     performanceProcess.revision = oldRevision;
-    if (previous === undefined) delete process.env.LLV_DIAGNOSTIC_REVISION;
-    else process.env.LLV_DIAGNOSTIC_REVISION = previous;
+    for (const [key, value] of [["LLV_DIAGNOSTIC_REVISION", previous.diagnostic], ["LLV_STATE_OWNER", previous.owner]] as const) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
   }
 });
 
