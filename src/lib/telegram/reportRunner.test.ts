@@ -107,6 +107,7 @@ class FakePorts implements ReportRunnerPorts {
   };
   admitTask = false;
   finishAdmittedTask = false;
+  finishFailuresRemaining = 0;
   finishedRuns: string[] = [];
   live = true;
   logs: string[] = [];
@@ -188,8 +189,12 @@ class FakePorts implements ReportRunnerPorts {
     return this.spawnResult;
   }
   async finishReportTask(runId: string, finishedAt: string) {
-    if (!this.finishAdmittedTask) return;
     this.finishedRuns.push(runId);
+    if (this.finishFailuresRemaining > 0) {
+      this.finishFailuresRemaining -= 1;
+      throw new Error("task store unavailable");
+    }
+    if (!this.finishAdmittedTask) return;
     const { finishTelegramReportTask } = await import("./reportTask");
     await finishTelegramReportTask(runId, finishedAt);
   }
@@ -808,6 +813,36 @@ test("a disconnected account cannot run a report, and its stored reports are cle
   expect(refused).toEqual({ ok: false, code: "reports_disabled" });
 });
 
+for (const scenario of [
+  { name: "quiet", output: `${DAILY_REPORT_TAG}\nQUIET\n`, expected: { status: "quiet", hasReport: false } },
+  { name: "successful", output: `${DAILY_REPORT_TAG}\n[1] A report item\n`, expected: { status: "ok", hasReport: true } },
+] as const) {
+  test(`task settlement retry preserves a consumed ${scenario.name} result across restart`, async () => {
+    const ports = new FakePorts();
+    ports.finishFailuresRemaining = 1;
+    enableReports();
+    const runner = new TelegramReportRunner(ports);
+    await runner.tick();
+    const runId = activeRunId();
+    agentWrites(scenario.output);
+    ports.live = false;
+    ports.clock += 5 * 60_000;
+
+    await runner.tick();
+    const held = readTelegramReports().active;
+    expect(held?.pendingSettlement).toMatchObject(scenario.expected);
+    expect(fs.existsSync(reportInboxPath(runId))).toBe(false);
+    expect(readTelegramReports().history).toHaveLength(0);
+    expect(ports.finishedRuns).toEqual([runId]);
+
+    await new TelegramReportRunner(ports).tick();
+    expect(readTelegramReports().active).toBeNull();
+    expect(readTelegramReports().history[0]).toMatchObject({ ...scenario.expected, conversationId: "conversation_report" });
+    expect(ports.finishedRuns).toEqual([runId, runId]);
+    if (scenario.expected.hasReport) expect(readReportText(runId)).toBe(scenario.output.trim());
+  });
+}
+
 test("the scheduled run fires once a day, and a Viewer restart catches up a missed slot", async () => {
   const ports = new FakePorts();
   enableReports();
@@ -883,6 +918,27 @@ test("a settled scheduled report retires its admitted placeholder and keeps its 
   expect(Object.values(board.columns).flatMap(column => column.cards).some(card => card.task?.id === settled!.id)).toBe(false);
   const hidden = board.hiddenGroups.find(card => card.task?.id === settled!.id);
   expect(hidden?.members[0]?.file.conversationId).toBe(`conversation_${attempt}`);
+
+  /* Logout during the next admitted run must retire its exact launch task. A
+     refused task write keeps the obligation until a fresh runner retries it. */
+  ports.clock = NOW + 24 * 60 * 60_000;
+  await runner.tick();
+  const logoutRunId = activeRunId();
+  const logoutAttempt = reportAttemptId(logoutRunId);
+  expect(loadTasks(tasksFile).find(row => row.origin?.kind === "launch" && row.origin.key === logoutAttempt)).toMatchObject({ status: "assigned" });
+  ports.finishFailuresRemaining = 1;
+  ports.connectionState = { version: 1, status: "disconnected", credentialRef: null, identity: null, lastHealthCheckAt: null, errorCode: null, identityIdUpgradedAt: null };
+  await runner.tick();
+  expect(readTelegramReports().active?.pendingSettlement).toMatchObject({ status: "failed", errorCode: "not_connected" });
+  expect(loadTasks(tasksFile).find(row => row.origin?.kind === "launch" && row.origin.key === logoutAttempt)).toMatchObject({ status: "assigned" });
+
+  await new TelegramReportRunner(ports).tick();
+  const logoutTask = loadTasks(tasksFile).find(row => row.origin?.kind === "launch" && row.origin.key === logoutAttempt);
+  expect(logoutTask).toMatchObject({ status: "done", board: "hidden", project: TELEGRAM_REPORT_PROJECT });
+  expect(taskShowsOnBoard(logoutTask!, false, { now: ports.clock })).toBe(false);
+  expect(loadTasks(tasksFile).find(row => row.id === ordinary.task.id)).toMatchObject({ status: ordinary.task.status, text: ordinary.task.text });
+  expect(readTelegramReports().active).toBeNull();
+  expect(readTelegramReports().settings.enabled).toBe(false);
 });
 
 test("a rejected launch is a visible failed row, not silence", async () => {

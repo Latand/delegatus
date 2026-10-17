@@ -38,7 +38,8 @@ import {
   deleteReportArtifacts,
   deleteRunScratch,
   effectiveReportPrompt,
-  ingestReportInbox,
+  consumeReportInbox,
+  readReportInbox,
   readTelegramReports,
   reportInboxPath,
   reportWorkspaceDir,
@@ -256,7 +257,7 @@ export class TelegramReportRunner {
     if (this.running) return;
     this.running = true;
     try {
-      this.reconcileDisconnected();
+      if (!(await this.reconcileDisconnected())) return;
       await this.finalizeActiveRun();
       const file = readTelegramReports();
       if (file.active) {
@@ -356,12 +357,17 @@ export class TelegramReportRunner {
   /** A Telegram that is neither connected nor holding a credential has been
       logged out or locally deleted; its reports are readings of that account
       and go with it. */
-  private reconcileDisconnected(): void {
+  private async reconcileDisconnected(): Promise<boolean> {
     const connection = this.ports.connection();
-    if (connection.status !== "disconnected" || connection.credentialRef !== null) return;
+    if (connection.status !== "disconnected" || connection.credentialRef !== null) return true;
     const file = readTelegramReports();
-    if (!file.settings.enabled && file.history.length === 0 && !file.active) return;
+    if (!file.settings.enabled && file.history.length === 0 && !file.active) return true;
+    if (file.active) {
+      await this.settle(file.active.runId, "failed", "not_connected", false);
+      if (readTelegramReports().active) return false;
+    }
     clearTelegramReports();
+    return true;
   }
 
   /**
@@ -662,7 +668,12 @@ export class TelegramReportRunner {
   private async finalizeActiveRun(): Promise<void> {
     const active = readTelegramReports().active;
     if (!active) return;
-    const ingested = ingestReportInbox(active.runId);
+    if (active.pendingSettlement) {
+      await this.settle(active.runId, active.pendingSettlement.status, active.pendingSettlement.errorCode,
+        active.pendingSettlement.hasReport, { requeue: active.pendingSettlement.requeue });
+      return;
+    }
+    const ingested = readReportInbox(active.runId);
     const outcome = classifyReportOutput(ingested);
     if (outcome.kind === "ok") {
       saveReportText(active.runId, outcome.report);
@@ -706,13 +717,22 @@ export class TelegramReportRunner {
 
   private async settle(
     runId: string,
-    status: TelegramReportRow["status"],
+    status: Exclude<TelegramReportRow["status"], "running">,
     errorCode: TelegramReportErrorCode | null,
     hasReport: boolean,
     options: { requeue?: boolean } = {},
   ): Promise<void> {
-    const active = readTelegramReports().active;
+    let active = readTelegramReports().active;
     if (!active || active.runId !== runId) return;
+    const pendingSettlement = active.pendingSettlement ?? { status, errorCode, hasReport, ...(options.requeue ? { requeue: true } : {}) };
+    updateTelegramReports((state) => {
+      if (state.active?.runId === runId && !state.active.pendingSettlement) {
+        state.active.pendingSettlement = pendingSettlement;
+      }
+    });
+    active = readTelegramReports().active;
+    if (!active || active.runId !== runId) return;
+    consumeReportInbox(runId);
     try {
       await this.ports.finishReportTask(runId, new Date(this.ports.now()).toISOString());
     } catch {
@@ -726,7 +746,7 @@ export class TelegramReportRunner {
       /* The one bounded re-queue (#1133), armed only by a run that failed
          purely on the connector being absent and only when that run was not
          itself the re-queue. */
-      state.retry = options.requeue && !current.retry
+      state.retry = pendingSettlement.requeue && !current.retry
         ? { runId: current.runId, trigger: current.trigger, armedAt: new Date(this.ports.now()).toISOString() }
         : null;
       state.history = [{
@@ -736,14 +756,14 @@ export class TelegramReportRunner {
         finishedAt: new Date(this.ports.now()).toISOString(),
         windowStart: current.windowStart,
         windowEnd: current.windowEnd,
-        status,
-        errorCode,
+        status: pendingSettlement.status,
+        errorCode: pendingSettlement.errorCode,
         conversationId: current.conversationId,
-        hasReport,
+        hasReport: pendingSettlement.hasReport,
         promptVersion: current.promptVersion,
       }, ...state.history];
       /* Failures pin both bounds; a retry must not accumulate more work. */
-      if (status !== "ok" && status !== "quiet") {
+      if (pendingSettlement.status !== "ok" && pendingSettlement.status !== "quiet") {
         const owed = state.cursor.unreportedSinceAt;
         if (!owed || Date.parse(current.windowStart) < Date.parse(owed)) {
           state.cursor.unreportedSinceAt = current.windowStart;
@@ -765,7 +785,7 @@ export class TelegramReportRunner {
       }
     });
     /* The source plan and the inbox belong to the run, not to its history. */
-    if (hasReport) deleteRunScratch(runId);
+    if (pendingSettlement.hasReport) deleteRunScratch(runId);
     else deleteReportArtifacts(runId);
   }
 
