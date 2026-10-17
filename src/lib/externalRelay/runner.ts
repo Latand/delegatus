@@ -1,9 +1,11 @@
+import { hydrateToolIndex } from "./toolIndex";
+import { openOwnerServiceTools } from "./ownerServiceTools";
 import { waitForStateLock } from "@/lib/state/lockWait";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { resolveOwnerOutboundContext } from "./ownerOutboundContext";
 import { capacityWaiters, olderCapacityWaiter, enterRelayHold, leaveRelayHold, releasingRelayHolds, type RelayHoldCause } from "./hold";
 import { relayRequestDeadline } from "./deadline";
-import { ownerRelayAuthorized } from "./ownerAuthority";
+import { ownerRelayAuthorized, ownerRelayAuthorizedAsync } from "./ownerAuthority";
 import { matchPrototypeAnswer } from "@/lib/prototypeReview/telegramAnswer";
 import { runPrototypeAnswer } from "./prototypeAnswer";
 import { resolveOwnerBridgeContext } from "./ownerBridgeContext";
@@ -37,7 +39,7 @@ import {
   type ExternalRelayCompletion,
   type ExternalRelayProgress,
 } from "./protocol";
-import { callableTools, createToolLoop, toolSleep, type ToolLoopRuntime } from "./toolLoop";
+import { callableTools, RELAY_TOOL_ROUNDS, createToolLoop, toolSleep, type ToolLoopRuntime } from "./toolLoop";
 import { answerPrompt, toolRoundPrompt, conversationTurnPrompt, conversationRoundPrompt } from "./prompt";
 import { progressForEvent } from "./progress";
 import { createRelaySteps } from "./progressSteps";
@@ -264,6 +266,7 @@ export async function runClaimedRequest(
   let admissionHeld = false;
   const admissionCutoff = () => admissionHeld ? deadline.declineAt : deadline.at;
   let rounds = 0;
+  let ownerTools: ReturnType<typeof openOwnerServiceTools> | null = null;
   let loop: ReturnType<typeof createToolLoop> | null = null;
   let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   let cadenceTimer: ReturnType<typeof setTimeout> | null = null;
@@ -272,7 +275,7 @@ export async function runClaimedRequest(
   let finishing: Promise<ExternalRelayCompletion> | null = null;
   let chain: { continued: boolean; promptBytes: number } | undefined;
   let resultDelivered = false;
-  const loopRecord = () => ({ ...(loop ? { rounds, toolCalls: loop.records } : {}), ...(chain ? { chain } : {}) });
+  const loopRecord = () => ({ ...(loop ? { rounds, toolCalls: loop.records } : ownerTools?.records.length ? { toolCalls: ownerTools.records } : {}), ...(chain ? { chain } : {}) });
   const finish = (body: ExternalRelayCompletion): Promise<ExternalRelayCompletion> => {
     if (finishing) return finishing;
     finishing = (async () => {
@@ -633,7 +636,7 @@ export async function runClaimedRequest(
       return await finish(declined(leaseId, "busy"));
     }
     const lose = () => { leaseUnavailable = true; run?.cancel(); callAbort.abort(); };
-    if (!owner && callableTools(request).length) loop = createToolLoop(relay, request, {
+    const lease = {
       signal: callAbort.signal, lose,
       ack: async () => {
         while (!acked && !leaseUnavailable) {
@@ -644,7 +647,13 @@ export async function runClaimedRequest(
         }
         return acked && !leaseUnavailable;
       },
-    }, runtime, (tool, done, failed) => {
+    };
+    const hydrated = await hydrateToolIndex(relay, request, lease, runtime, deadline.at);
+    request.input = hydrated.request.input;
+    callAbort.signal.throwIfAborted();
+    if (owner && !prototype && callableTools(request).length) ownerTools = openOwnerServiceTools(relay, target, request, hydrated.guidance, lease, runtime ?? {},
+      () => ownerRelayAuthorizedAsync(relay.id, target.id, requestId));
+    if (!owner && callableTools(request).length) loop = createToolLoop(relay, request, lease, runtime, (tool, done, failed) => {
       if (!steps && request.answer.progress === "notes") {
         newestProgress = { kind: done ? "tool_done" : "tool_start", label: tool, tool,
           status: done ? (failed ? "failed" : "completed") : "running", at: new Date().toISOString() };
@@ -657,9 +666,9 @@ export async function runClaimedRequest(
     } : undefined);
     let result: Awaited<ReturnType<typeof runEphemeralAgent>["done"]> | null = null;
     let completion: ExternalRelayDecision | null = null;
-    for (rounds = 1; rounds <= (loop ? 8 : 1); rounds++) {
+    for (rounds = 1; rounds <= (loop ? RELAY_TOOL_ROUNDS : 1); rounds++) {
       if (Date.now() >= deadline.at) return await finish(declined(leaseId, "busy"));
-      const final = rounds === 8 || !!loop && loop.callsLeft() === 0;
+      const final = rounds === RELAY_TOOL_ROUNDS || !!loop && loop.callsLeft() === 0;
       runFinished = false;
       try {
         if (rounds === 1 && activeDrain()) {
@@ -700,6 +709,7 @@ export async function runClaimedRequest(
               await releaseConversationAsync(conversation.id, patch, Date.now() + 5000);
               if (cursor) Object.assign(conversation, patch);
             }
+            ownerTools?.bindConversation(conversationId);
             recorder?.bindConversation(conversationId);
           },
           ...(steps ? { onProgress: steps.observe } : {}),
@@ -711,7 +721,9 @@ export async function runClaimedRequest(
           effort: target.effort,
           account: selectedAccount(),
           ["prompt"]: conversation ? persistentPrompt : roundPrompt,
-          schema: loop ? (final ? (loop.sawUnknown ? replyAnswerSchema : loop.actionSent ? answerSchema : handoffAnswerSchema) : roundSchema(loop.tools, { handoff: !loop.actionSent })) : offersHandoff(request) ? handoffAnswerSchema : answerSchema,
+          schema: loop ? (final ? (loop.sawUnknown ? replyAnswerSchema : loop.actionSent ? answerSchema : handoffAnswerSchema) : roundSchema(loop.tools, { handoff: !loop.actionSent }))
+            : ownerTools ? (ownerTools.sawUnknown ? replyAnswerSchema : ownerTools.actionSent ? answerSchema : offersHandoff(request) ? handoffAnswerSchema : answerSchema)
+              : offersHandoff(request) ? handoffAnswerSchema : answerSchema,
           runDir: loop ? path.join(runDir, `round-${rounds}`) : runDir,
           hardCapMs: target.hardCapMinutes * 60_000,
           webSearch: profile.webSearch,
@@ -781,6 +793,7 @@ export async function runClaimedRequest(
         }
         rounds--; continue;
       }
+      await ownerTools?.close(result.status);
       if (conversation && !owner) {
         if (result.sessionId) conversation.sessionId = result.sessionId;
         else { conversationBroken = true; if (result.status === "done") result = { ...result, status: "failed" }; }
@@ -793,7 +806,8 @@ export async function runClaimedRequest(
       cancelStalledRun();
       if (leaseUnavailable) return null;
       const decision = result?.status === "done"
-        ? loop && !final ? checkedRound(result.answer, request, { handoff: !loop.actionSent, ignore: !loop.sawUnknown }) : checkedAnswer(result.answer, request, { handoff: !loop?.actionSent, ignore: !loop?.sawUnknown })
+        ? loop && !final ? checkedRound(result.answer, request, { handoff: !loop.actionSent, ignore: !loop.sawUnknown })
+          : checkedAnswer(result.answer, request, { handoff: !loop?.actionSent && !ownerTools?.actionSent, ignore: !loop?.sawUnknown && !ownerTools?.sawUnknown })
         : null;
       if (steps && decision && !("kind" in decision)) {
         steps.observe({ writingAnswer: true });
@@ -849,6 +863,7 @@ export async function runClaimedRequest(
     if (cadenceTimer) clearTimeout(cadenceTimer);
     if (heartbeatTimer) clearInterval(heartbeatTimer);
     callAbort.abort();
+    await ownerTools?.dispose();
     let releasePin = true;
     if (conversation && owner) {
       try {

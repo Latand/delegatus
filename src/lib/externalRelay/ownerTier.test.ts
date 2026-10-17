@@ -740,3 +740,29 @@ test("revoking an unadmitted continuation interrupts without killing its pinned 
     expect(actions).not.toContain("kill");
   } finally { control.mockRestore(); dropRun(requestId); }
 });
+
+test("owner callable tools use a compact index and on-demand MCP instructions", async () => {
+  const { ownerRequest } = await import("./toolLoop.fixture");
+  const r = ownerRequest();
+  const { ownerContinuationPrompt } = await import("./ownerRun");
+  const prompts = [ownerRunPrompt(r, instruction(), 30),
+    ownerContinuationPrompt(r, instruction(), 30, { seen: [], staticDigest: null }).prompt];
+  for (const prompt of prompts) {
+    const tools = JSON.parse(prompt.match(/<tools>\n([^]*?)\n<\/tools>/)![1]!);
+    expect(tools.find((t: { name: string }) => t.name === "react_to_message")).toBeDefined();
+    expect(tools.every((t: object) => !("parameters" in t) && !("spec" in t))).toBe(true);
+    expect(prompt).toContain("relay_service_tools");
+    expect(prompt).toContain("Describe an action before calling it");
+    expect(prompt).not.toContain(r.input.tool_guidance!);
+  }
+});
+
+
+test("handoff-only owner prompts retain their pinned base bytes", async () => {
+  const { createHash } = await import("node:crypto");
+  const { ownerRequest } = await import("./toolLoop.fixture");
+  const r = ownerRequest(); r.input.tools = r.input.tools!.filter(tool => tool.mode === "handoff");
+  // Measured from the same fixture and instruction at 8bcb1e41.
+  expect(createHash("sha256").update(ownerRunPrompt(r, instruction(), 30)).digest("hex"))
+    .toBe("3ade8197b2eb3d5c76968652d2538445804ba344330c1e980adf10c6edf47e99");
+});

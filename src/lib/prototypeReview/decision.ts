@@ -1,5 +1,5 @@
 import { seatMessageKeys } from "@/lib/orchestrator/seatDeliveryKeys";
-import { SEND_SEAT_REVOKED_REASON } from "@/lib/orchestrator/seatChannel";
+import { currentSeat, SEND_SEAT_REVOKED_REASON } from "@/lib/orchestrator/seatChannel";
 import { canonicalOrchestratorProject } from "@/lib/orchestrator/seats";
 import { nativeAssociationCurrent } from "@/lib/attention/nativeCallerSources";
 import { NATIVE_ASSOCIATION_AUTHORIZATION_ERROR } from "@/lib/attention/nativeAssociationForm";
@@ -27,6 +27,29 @@ import { prototypeWorld, type PrototypeWorld } from "./world";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { PROTOTYPE_DELIVERY_MAX_ATTEMPTS, prototypeDeliveryExhausted } from "./deliveryPolicy";
 import { prototypeTextLength } from "./textLength";
+import { telegramPostSignals } from "./telegramPostSignals";
+import { seatTickSignalVersion } from "@/lib/monitor/seatTick";
+import { peekSeatTickState } from "@/lib/monitor/seatTickState";
+import { redactMonitorText } from "@/lib/monitor/redact";
+
+/** The wake controller credits only complete bullets after recipient confirmation.
+ * Its bounded item versions bind the exact saved answer and message key to a
+ * seat epoch. A predecessor's showing, a cut/redacted answer, or an unlanded
+ * plan cannot settle this decision. The original receipt keeps its own truth. */
+function deliveredPrototypeWake(round: PrototypeReviewRound): PrototypeDecision["delivery"]["wakeReceipt"] | undefined {
+  const seat = currentSeat(round.project);
+  if (!seat?.conversationId) return;
+  const signal = telegramPostSignals(round.project, [], [round]).find(item => item.id.startsWith("prototype-answer:"));
+  if (!signal || redactMonitorText(signal.label) !== signal.label) return;
+  const state = peekSeatTickState(canonicalOrchestratorProject(round.project));
+  const itemVersion = seatTickSignalVersion(signal, { conversationId: seat.conversationId, seatEpoch: seat.seatEpoch });
+  if (!state.accounting || state.accounting.gap || state.seatEpoch !== seat.seatEpoch || !state.lastWakeAt || !state.itemsShown?.includes(itemVersion)) return;
+  return { conversationId: seat.conversationId, seatEpoch: seat.seatEpoch, itemVersion, accountedThrough: state.lastWakeAt };
+}
+function wakeSeatCurrent(project: string, receipt: NonNullable<PrototypeDecision["delivery"]["wakeReceipt"]>): boolean {
+  const seat = currentSeat(project);
+  return seat?.conversationId === receipt.conversationId && seat.seatEpoch === receipt.seatEpoch;
+}
 
 export type PrototypeDeliveryContext = NextRequest | { kind: "operator-in-process"; telegramUserId?: string; authorize: () => void } | { kind: "autonomous-seat"; conversationId: string; project: string; authorize: () => void };
 const inProcess = (request: PrototypeDeliveryContext): request is Extract<PrototypeDeliveryContext, { kind: string }> => "kind" in request && (request.kind === "operator-in-process" || request.kind === "autonomous-seat");
@@ -122,8 +145,9 @@ export const prototypeDelivery: PrototypeDelivery = {
       }
       // A terminal journal failure proves non-execution too. An open journal
       // cannot undo the durable reservation's terminal outcome.
-      if (journalRequiresVerification(journal?.receipt.reason)) return { state: "uncertain", operationId };
       const verdict = journal && journalVerdict(journal.receipt.status, journal.receipt.reason);
+      if (verdict?.state === "delivered") return { state: "sent", operationId };
+      if (journalRequiresVerification(journal?.receipt.reason)) return { state: "uncertain", operationId };
       return { state: receipt.resend === "safe" || verdict?.disposition === "lost" ? "failed" : "uncertain", operationId };
     }
     return { state: receipt?.state === "in-flight" ? "pending" : "uncertain", operationId };
@@ -322,6 +346,7 @@ export async function attemptPrototypeDelivery(taskId: string | null, reviewId: 
       let decision = round?.decision;
       if (!round || !decision || decision.delivery.state === "sent") return decision ?? null;
       const key = decision.delivery.clientMessageId;
+      const wakeReceipt = await withPrototypeState(() => deliveredPrototypeWake(round));
       const at = () => new Date(ports.now()).toISOString();
       const update = (change: (held: PrototypeDecision) => void) => withPrototypeState(() => mutatePrototypeRound(taskId, reviewId, held => {
         if (held.decision?.delivery.clientMessageId !== key) throw new SupersededDecision();
@@ -333,6 +358,12 @@ export async function attemptPrototypeDelivery(taskId: string | null, reviewId: 
         if (held?.delivery.clientMessageId !== key) throw new SupersededDecision();
         return held;
       };
+      if (wakeReceipt) return update(held => {
+        if (!wakeSeatCurrent(round.project, wakeReceipt)) return;
+        held.delivery.state = "sent";
+        held.delivery.wakeReceipt = wakeReceipt;
+        delete held.delivery.failures; delete held.delivery.failingSince; delete held.delivery.exhaustedAt;
+      });
       const exhausted = prototypeDeliveryExhausted(decision, ports.now());
       if (exhausted && !decision.delivery.exhaustedAt) {
         decision = await update(held => { held.delivery.exhaustedAt = at(); });
@@ -348,7 +379,7 @@ export async function attemptPrototypeDelivery(taskId: string | null, reviewId: 
       // Re-read every captured decision and seat after asynchronous evidence.
       decision = await revalidate();
       let seat = await withPrototypeState(() => ports.world.orchestrator(round.project));
-      if ((recovered?.state === "failed" || recovered?.state === "pending") && recovered.operationId && seat && seat !== decision.delivery.conversationId) {
+      if ((recovered?.state === "failed" || recovered?.state === "pending" || recovered?.state === "uncertain") && recovered.operationId && seat && seat !== decision.delivery.conversationId) {
         decision = await update(held => { held.delivery.operationId = recovered!.operationId; });
         recovered = ports.delivery.retire ? await ports.delivery.retire(decision).catch((): PrototypeDeliveryResult => ({ state: "uncertain" })) : recovered;
         decision = await revalidate();
@@ -364,13 +395,15 @@ export async function attemptPrototypeDelivery(taskId: string | null, reviewId: 
       }
       const mayDispatch = () => withPrototypeState(() => prototypeAuthorCurrent(decision!));
       let result: PrototypeDeliveryResult;
-      if (recovered === null || recovered.state === "failed" && recovered.operationId) {
+      if (!seat && recovered?.state !== "sent") result = { state: "no-orchestrator", ...(recovered?.operationId ? { operationId: recovered.operationId } : {}) };
+      else if (recovered === null || recovered.state === "failed" && recovered.operationId) {
         if (exhausted) {
           result = recovered ?? { state: decision.delivery.state };
         } else {
           if (!await mayDispatch()) result = { state: "failed" };
           else {
             decision = await update(held => {
+              if (ports.world.orchestrator(round.project) !== seat) throw new SupersededDecision();
               if (recovered === null && seat) held.delivery.conversationId = seat;
               if (recovered?.operationId) held.delivery.operationId = recovered.operationId;
               held.delivery.state = "pending";

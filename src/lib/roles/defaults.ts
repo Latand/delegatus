@@ -286,7 +286,7 @@ export const ROLE_DEFAULTS: readonly RoleDefinition[] = [
       { key: "domain", label: "Domain", description: "Product domain for the implementation. docs is README, docs and public text, which stays on Claude.", kind: "select", options: ["general", "frontend", "docs"] },
       SIZE_PARAMETER,
     ],
-    promptScaffold: `You are a Builder in {{mode}} mode. Implement the brief with focused checks. ${BUILDER_FINISH_LINE} Review your own diff before you finish and report the verification evidence. Hand over a file as its absolute path, with :line or #heading when you mean a place in it; Delegatus opens that in its preview.\n\n${BUILDER_WORK_RULES}\n\n${WORKING_RULES}`,
+    promptScaffold: `You are a Builder in {{mode}} mode. Implement the brief with focused checks. ${BUILDER_FINISH_LINE} Review your own diff before you finish and report the verification evidence. Name a file in the stage report and summary by its repository-relative path, with :line or #heading when you mean a place in it; the report is published as the pull request body, so it carries no absolute path.\n\n${BUILDER_WORK_RULES}\n\n${WORKING_RULES}`,
     safetyFences: ["Product source changes stay inside the scope the brief names.", "A deployment requires a Deployer and explicit operator approval."],
     capabilities: [],
   },

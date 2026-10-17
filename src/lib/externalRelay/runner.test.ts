@@ -3187,6 +3187,7 @@ for (const retry of [false, true]) test(`owner completion rechecks cutoff after 
 
 test("owner reply chains reuse one conversation, learn bot answers and bind only the current authority", async () => {
   const { liveOwnerRelayConversation, ownerRelayPayload } = await import("./ownerAuthority");
+  const { relayServiceToolsOp } = await import("./ownerServiceTools");
   const { readConversations } = await import("./conversations");
   const server = await startTestRelay(() => ({ body: { status: "ok" } }));
   const paired = relay(`${server.origin}/v1`); paired.targets[0]!.ownerTier = true;
@@ -3197,7 +3198,7 @@ test("owner reply chains reuse one conversation, learn bot answers and bind only
     const message = (id: string, reply_to: string | null, self = false) => ({ ...contextRequest.input.conversation[0]!, id, reply_to,
       author: { key: self ? "fixture-bot" : contextRequest.input.requester.key, name: self ? "Assistant" : "Owner", self }, text: `Fixture turn ${id}` });
     return { ...contextRequest, request_id: `chain-owner-${n}`, chat: { key: "fixture-owner-chain" }, answer: { max_chars: 1000, progress: "none" as const }, input: {
-      ...contextRequest.input, instructions: "Static fixture instructions. ".repeat(1000), requester: { ...contextRequest.input.requester, is_owner: true },
+      ...contextRequest.input, tools: ownerRequest().input.tools, instructions: "Static fixture instructions. ".repeat(1000), requester: { ...contextRequest.input.requester, is_owner: true },
       respond_to: `turn-${n}`, conversation: [ ...(includeRoot && n > 1 ? [message("turn-1", null), message("bot-1", "turn-1", true)] : []), message(`turn-${n}`, parent) ] } };
   };
   const ports: import("./ownerRun").OwnerRunPorts = {
@@ -3210,7 +3211,11 @@ test("owner reply chains reuse one conversation, learn bot answers and bind only
       expect(ownerRelayPayload("context", "conversation_chain_fixture")?.text).toContain(current.endsWith("2") ? "Fixture turn turn-2" : "Fixture turn turn-3");
       return { ok: true, structured: true, target: turn.conversationId!, outcome: "held", operationId: turn.clientAttemptId };
     },
-    observe: async () => ({ state: "ended", finalText: "Done" }), stop: async () => {}, pollMs: 1,
+    observe: async () => {
+      const listed = await relayServiceToolsOp("conversation_chain_fixture", { op: "list" });
+      expect(listed).toHaveProperty("tools");
+      return { state: "ended", finalText: "Done" };
+    }, stop: async () => {}, pollMs: 1,
   };
   try {
     for (const n of [1, 2, 3]) {
@@ -3223,6 +3228,7 @@ test("owner reply chains reuse one conversation, learn bot answers and bind only
         expect(initial?.pendingCursor).toBeUndefined();
       }
       expect(liveOwnerRelayConversation("conversation_chain_fixture")).toBe(false);
+      expect(await relayServiceToolsOp("conversation_chain_fixture", { op: "list" })).toBeNull();
       expect(ownerRelayPayload("context", "conversation_chain_fixture")).toBeNull();
     }
     expect(launches).toBe(1); expect(readConversations()).toHaveLength(1);
@@ -3363,5 +3369,54 @@ test("owner pins survive member subthreads and refuse another chat or requester"
     for (const request of [otherChat, otherRequester])
       expect((await runClaimedRequest(paired, request, undefined, { ownerPorts: ports, command }))?.outcome).toBe("answered");
     expect(deliveries).toEqual(["conversation_scope_1"]); expect(launches).toBe(3);
+  } finally { await server.close(); }
+});
+
+test("a member on-demand claim is filled before the first round and still calls its read", async () => {
+  const full = x1Request("member");
+  const request = structuredClone(full);
+  request.request_id = "member_on_demand";
+  request.input.tools = request.input.tools!.map(tool => tool.mode === "direct" ? { ...tool, parameters: undefined, spec: "0123456789abcdef" } : tool);
+  request.input.tool_guidance = null;
+  const run = await runLoopCase({ request, features: ["relay_tool_calls", "relay_tools_on_demand"], response: body => {
+    if ("describe" in body) return { body: { ...x1Results.ok, call_id: body.call_id, tool: "", tools: full.input.tools!.filter(tool => tool.mode === "direct"),
+      guidance: [{ tools: ["search_docs"], text: "Search the advertised documents." }] } };
+    return { body: { ...x1Results.ok, call_id: body.call_id } };
+  } });
+  expect(run.completion).toMatchObject({ outcome: "answered" });
+  expect(run.calls).toHaveLength(2);
+  expect(run.calls[0]).toHaveProperty("describe");
+  expect(run.calls[1]).toHaveProperty("tool", "search_docs");
+  expect(run.rounds[0].prompt).toContain("parameters");
+  expect(run.rounds[0].prompt).toContain("Search the advertised documents.");
+});
+
+
+test("owner tool lease loss interrupts the owner and completes nothing", async () => {
+  const { productionDomainDependencies, viewerMcpBindings } = await import("@/lib/mcp/bindings");
+  const request = requestSchema.parse(contextRequest);
+  request.request_id = "owner_tool_lease_loss"; request.input.requester!.is_owner = true;
+  request.input.tools = ownerRequest().input.tools;
+  const stops: string[] = []; let posts = 0, observed = false;
+  const server = await startTestRelay((req) => {
+    if (req.url?.endsWith("/tool-calls")) { posts++; return { status: 409, body: { error: { code: "lease_lost" } } }; }
+    return { body: { status: "ok" } };
+  });
+  const paired = relay(`${server.origin}/v1`); paired.targets[0]!.ownerTier = true;
+  updateRelayStore(store => ({ ...store, relays: [paired] }));
+  const bindings = viewerMcpBindings(undefined, { get: async () => ({}), post: async () => ({}) }, {
+    ...productionDomainDependencies, callerAttribution: () => ({ kind: "agent", conversationId: "conversation_owner_lease_loss", role: null }),
+  });
+  try {
+    const result = await runClaimedRequest(paired, request, undefined, { command: "/missing-owner-cli", timeoutMs: 5000, ownerPorts: {
+      launch: async () => ({ status: 202, body: { conversationId: "conversation_owner_lease_loss" } }),
+      observe: async () => {
+        if (!observed) { observed = true; await bindings.relay_service_tools({ op: "call", calls: [{ tool: "get_media", arguments: {} }] }); }
+        return { state: stops.length ? "ended" : "running" };
+      }, stop: async (_id, action) => { stops.push(action); }, pollMs: 1,
+    } });
+    expect(result).toBeNull(); expect(stops).toEqual(["interrupt"]); expect(posts).toBe(1);
+    await expect(bindings.relay_service_tools({ op: "list" })).rejects.toMatchObject({ details: { code: "relay_tools_unavailable" } });
+    expect(posts).toBe(1);
   } finally { await server.close(); }
 });

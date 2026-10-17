@@ -109,8 +109,8 @@ function run(taskId: string | null, reviewId: string, ports: PrototypeDeliveryPo
 }
 
 /** A decision was recorded, changed or asked to be retried: attempt it now. */
-export function deliverPrototypeDecision(taskId: string | null, reviewId: string, ports: PrototypeDeliveryPorts = productionPorts()): void {
-  void run(taskId, reviewId, ports);
+export function deliverPrototypeDecision(taskId: string | null, reviewId: string, ports: PrototypeDeliveryPorts = productionPorts()): Promise<void> {
+  return run(taskId, reviewId, ports);
 }
 
 /** A production tick reads one indexed task page. A boot/explicit sweep

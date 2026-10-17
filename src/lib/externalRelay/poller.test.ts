@@ -983,3 +983,9 @@ test("chain and legacy local switches never advertise an unagreed wire feature",
     setRelaySwitch("compact", false); expect(relayClaimCapabilities().kinds).toEqual(["answer"]);
   } finally { if (previous) fs.writeFileSync(file, previous); else fs.rmSync(file, { force: true }); }
 });
+
+test("claim advertises on-demand tools only when the stored descriptor offers them", () => {
+  expect(relayClaimCapabilities({ features: ["relay_tool_calls", "relay_tools_on_demand"] }).features).toContain("relay_tools_on_demand");
+  expect(relayClaimCapabilities({ features: ["relay_tool_calls"] }).features).not.toContain("relay_tools_on_demand");
+  expect(relayClaimCapabilities().features).not.toContain("relay_tools_on_demand");
+});

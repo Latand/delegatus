@@ -1,5 +1,6 @@
 import { RelayChatsView } from "@/components/externalRelay/RelayChats";
 import type { RelayChatsPayload } from "@/lib/externalRelay/relayChats";
+import { PipelineTemplatePicker } from "@/components/pipelines/PipelineTemplatePicker";
 import { AttentionCard } from "@/components/runtime/AttentionCard";
 import { codexAttentionActions, projectCodexAttentionActions } from "@/lib/runtime/codexAttentionActions";
 import { questionsResolution } from "@/components/runtime/ConversationAttention";
@@ -2738,6 +2739,7 @@ function transcriptOf(pathname: string): string {
 }
 
 const params = new URLSearchParams(location.search);
+const PIPELINE_INIT = params.get("pipelineinit");
 
 /* The orchestrator's wires (docs/design/orchestrator-arrows.md). The seat made the lanes on five open
    tasks and spawned the export implementer; `&many=1` fills the board to about a hundred cards, a third
@@ -3281,6 +3283,11 @@ function mockRender(width: number, height: number, hue: number, label: string, p
 const PROTO = params.get("proto") ?? (CALM ? "1" : null);
 const protoPosts: unknown[] = [];
 const protoTelegramPosts: unknown[] = [];
+/* `&protoRefuse=1` makes both save endpoints answer as the Viewer does when its
+   state is unavailable (503), until `protoAcceptSaves()` is called. The flag
+   lives in the URL, so a reload keeps refusing and the round stays undecided. */
+let protoRefusing = params.has("protoRefuse");
+const protoRefusal = () => new Response(JSON.stringify({ error: "prototype review is unavailable" }), { status: 503, headers: { "content-type": "application/json" } });
 /* `&tgstate=sent|uncertain|unknown` starts the Telegram record in that state; the default is a failed post. */
 function telegramFixturePost(key: string): PrototypeRoundView["telegramPost"] {
   const state = params.get("tgstate");
@@ -3420,6 +3427,7 @@ if (PROTO) {
   Object.assign(window, {
     protoPosts,
     protoTelegramPosts,
+    protoAcceptSaves: () => { protoRefusing = false; },
     protoHoldSave: () => { (window as unknown as { protoHeldSave?: Promise<void> }).protoHeldSave = new Promise<void>((resolve) => { releaseSave = resolve; }); },
     protoReleaseSave: () => { releaseSave?.(); releaseSave = null; delete (window as unknown as { protoHeldSave?: Promise<void> }).protoHeldSave; },
     protoPhase: (taskId: string, phase: PrototypeDeliveryPhase) => {
@@ -3828,6 +3836,9 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     && ["/api/files", "/api/tasks"].includes(url.pathname)) return serverFetch(input, init);
 
   const method = (init?.method ?? "GET").toUpperCase();
+  if (PIPELINE_INIT && url.pathname === "/api/pipelines/preflight") return PIPELINE_INIT === "refused"
+    ? new Response(JSON.stringify({ error: "initialization refused for the Delegatus state directory", code: "initialization_refused", path: "/project" }), { status: 403 })
+    : json({ ok: true, repoDir: "/project", gitCommonDir: "/project/.git", worktreeParent: "/" });
   if (WORKER_SCENE && url.pathname === "/api/operator/settings") {
     return json({ ok: true, locale: { value: new URLSearchParams(location.search).get("lang") ?? "en", source: "chosen", changedAt: iso(0) }, timeZone: null });
   }
@@ -3897,6 +3908,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     if (method === "POST") {
       const body = JSON.parse(String(init?.body)) as { reviewId: string; answers?: PrototypeAnswer[]; comment?: string; chosen?: number[]; reject?: true; retry?: true };
       decisionPosts.push(body);
+      if (protoRefusing) return protoRefusal();
       const held = [...seatRounds, ...Object.values(protoRounds).flat()].find((round) => round.id === body.reviewId);
       if (!held) return json({ error: "review not found" }, 404);
       if (body.retry && held.decision) held.decision = { ...held.decision, delivery: { state: "sent", phase: "delivered", retryable: false } };
@@ -3922,6 +3934,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     if (method === "POST") {
       const body = JSON.parse(String(init?.body)) as { reviewId: string; chosen?: number[]; comment?: string; retry?: true; reject?: true; answers?: PrototypeAnswer[]; skip?: true };
       protoPosts.push({ taskId, ...body });
+      if (protoRefusing) return protoRefusal();
       /* A held save has not been written yet: the decision is recorded only once it is released. */
       await (window as unknown as { protoHeldSave?: Promise<void> }).protoHeldSave;
       const held = rounds.find((entry) => entry.id === body.reviewId);
@@ -4850,7 +4863,7 @@ if (dockWidth === "440" || dockWidth === "360") localStorage.setItem(`llvOrchest
 const relayChainEvidence: RelayChatsPayload = { relays: [{ id: "fixture-relay", name: "Example relay", origin: "https://relay.example" }], chats:
   (["member", "admin", "owner"] as const).map((authority, i) => ({ id: `chain-${i}`, relayId: "fixture-relay", relayName: "Example relay", targetId: "fixture-target", targetName: "Support bot", chatKey: "fixture-chat-chain-key", authority,
     engine: "claude", turns: 3, compactions: 0, createdAt: "2026-10-17T10:00:00Z", lastTurnAt: "2026-10-17T10:00:00Z", state: "idle", file: { ...files[0]!, path: `fixture-chain-${i}`, title: `Chain ${i}` } })) };
-createRoot(document.getElementById("root")!).render(SCENARIO === "relay-chain-list" ? <RelayChatsView relayId="fixture-relay" payload={relayChainEvidence} /> : dockWidth === "440" || dockWidth === "360" ? (
+createRoot(document.getElementById("root")!).render(PIPELINE_INIT ? <PipelineTemplatePicker repoDir="/project" onCreate={async () => ({})} onCreated={() => {}} onClose={() => {}} /> : SCENARIO === "relay-chain-list" ? <RelayChatsView relayId="fixture-relay" payload={relayChainEvidence} /> : dockWidth === "440" || dockWidth === "360" ? (
   <div className="flex h-full min-h-0">
     <OrchestratorDock project={PROJECT} projectName="Atlas" files={files} onClose={() => {}} />
     <div className="min-w-0 flex-1"><Viewer /></div>
