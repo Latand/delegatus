@@ -192,7 +192,7 @@ function decidedBy(request: PrototypeDeliveryContext): NonNullable<PrototypeDeci
     if (request.kind === "autonomous-seat") return { kind: "agent", conversationId: request.conversationId };
     if (request.telegramUserId !== undefined) {
       const actor = telegramOwnerActor(request.telegramUserId);
-      if (!actor) throw new PrototypeError("verified Telegram owner is no longer an active member", 403);
+      if (!actor) throw new PrototypeError("Цей Telegram-акаунт не має чинного доступу до команди. Перевірте доступ і прив’язку Telegram у налаштуваннях Delegatus", 403);
       return actor;
     }
     return { kind: "operator" };
