@@ -2421,22 +2421,39 @@ export class SqliteAgentRegistryStore {
     });
     livenessReaders.set(file,() => {
       const projection = this.db.query("SELECT 1 FROM sqlite_master WHERE type='table' AND name='registry_liveness_entries'").get();
-      const entryRows = projection
+      const indexedEntryKeys = () => (projection
         ? this.db.query<{ row_key: string }, []>("SELECT row_key FROM registry_liveness_entries ORDER BY row_order").all()
         : this.db.query<{ row_key: string }, []>(`SELECT row_key FROM ${this.recordsSource} WHERE collection='entries' AND (
           json_extract(value_json,'$.status')!='dead' OR json_extract(value_json,'$.host') IS NOT NULL
           OR json_extract(value_json,'$.structuredHost.process') IS NOT NULL OR json_extract(value_json,'$.claimOwner') IS NOT NULL
           OR json_extract(value_json,'$.pendingAction') IS NOT NULL
           OR COALESCE(json_array_length(value_json,'$.structuredTerminationSurvivors'),0)>0
-        ) ORDER BY row_order`).all();
-      const entries = entryRows.map(row => file.entries[row.row_key]).filter((row): row is AgentRegistryEntry => !!row);
+        ) ORDER BY row_order`).all()).map(row => row.row_key);
+      const pinnedEntryKeys = pinnedEntries
+        ? pinnedEntries(indexedEntryKeys, entry => entry.status !== "dead" || entry.host !== null
+          || entry.structuredHost?.process != null || entry.claimOwner !== null || entry.pendingAction !== null
+          || (entry.structuredTerminationSurvivors?.length ?? 0) > 0)
+        : indexedEntryKeys();
+      const entries = pinnedEntryKeys.map(key => file.entries[key]).filter((row): row is AgentRegistryEntry => !!row);
       const entryKeys = entries.map(row => `${row.key.engine}:${row.key.sessionId}`);
-      const receiptKeys = new Set((projection
+      const entryKeySet = new Set(entryKeys);
+      const operationIds = new Set(entries.flatMap(entry => entry.structuredHostOperationId ? [entry.structuredHostOperationId] : []));
+      const indexedReceiptKeys = () => (projection
         ? this.db.query<{ row_key: string }, []>("SELECT row_key FROM registry_liveness_receipts ORDER BY row_order").all()
         : this.db.query<{ row_key: string }, []>(`SELECT row_key FROM ${this.recordsSource} WHERE collection='receipts' AND (
           json_extract(value_json,'$.state') NOT IN ('completed','failed','conflicted')
           OR json_extract(value_json,'$.admissionOwner') IS NOT NULL OR json_extract(value_json,'$.queuedPinnedSpawn') IS NOT NULL
-        ) ORDER BY row_order`).all()).map(row => row.row_key));
+        ) ORDER BY row_order`).all()).map(row => row.row_key);
+      const receiptHasHost = (receipt: RegistryFile["receipts"][string]) =>
+        receipt.verifiedHost?.agent != null || receipt.pane?.panePid != null;
+      const holdsLiveness = (receipt: RegistryFile["receipts"][string]) =>
+        !["completed", "failed", "conflicted"].includes(receipt.state)
+        || receipt.admissionOwner != null || receipt.queuedPinnedSpawn != null
+        || (receiptHasHost(receipt) && (entryKeySet.has(`${receipt.key?.engine}:${receipt.key?.sessionId}`)
+          || operationIds.has(receipt.launchId)));
+      const receiptKeys = new Set(pinnedReceipts
+        ? pinnedReceipts(indexedReceiptKeys, holdsLiveness)
+        : indexedReceiptKeys());
       if (entryKeys.length) {
         const placeholders = entryKeys.map(() => "?").join(",");
         for (const row of this.db.query<{ row_key: string }, string[]>(`SELECT r.row_key FROM registry_rows r INDEXED BY registry_liveness_receipt_session
