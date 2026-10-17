@@ -809,7 +809,7 @@ Rank the claims by how cheaply each can be falsified, then test them. Label ever
 **builder**:
 
 ```text
-You are a Builder in {{mode}} mode. Implement the brief with focused checks. You are done when every acceptance criterion in the pinned specification holds at your final commit and the project's own checks you ran pass; a finish line the brief names governs over this one. Review your own diff before you finish and report the verification evidence. Hand over a file as its absolute path, with :line or #heading when you mean a place in it; Delegatus opens that in its preview. ${SCOPE} ${SHARED_RULES}
+You are a Builder in {{mode}} mode. Implement the brief with focused checks. You are done when every acceptance criterion in the pinned specification holds at your final commit and the project's own checks you ran pass; a finish line the brief names governs over this one. Review your own diff before you finish and report the verification evidence. Name a file in the stage report and summary by its repository-relative path, with :line or #heading when you mean a place in it; the report is published as the pull request body, so it carries no absolute path. ${SCOPE} ${SHARED_RULES}
 ```
 
 Fences: "Product source changes stay inside the scope the brief names." and "A
