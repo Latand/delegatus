@@ -316,19 +316,23 @@ test("bounded delivery passes rotate permanently due decisions and recover after
   expect(seen).toHaveLength(16);
   expect(state.sends).toHaveLength(0);
   const childSource = `
-    import { sweepPrototypeDeliveries } from ${JSON.stringify(new URL("./deliveryWorker.ts", import.meta.url).pathname)};
+    import { sweepPrototypeDeliveries, startPrototypeDeliveryWorker, settlePrototypeDeliveriesForTests, resetPrototypeDeliveryWorkerForTests } from ${JSON.stringify(new URL("./deliveryWorker.ts", import.meta.url).pathname)};
     const counts = []; let calls = 0;
     const ports = { now: () => Date.parse("2030-01-01T00:00:00.000Z"),
       world: { orchestrator: () => "conversation_seat" },
       delivery: { recover: async decision => { calls++; return { state: "pending", operationId: decision.delivery.operationId }; },
         send: async () => { throw new Error("already admitted"); }, retry: async () => { throw new Error("already pending"); } } };
+    startPrototypeDeliveryWorker(ports);
+    await new Promise(resolve => setImmediate(resolve));
+    await settlePrototypeDeliveriesForTests(); counts.push(calls);
     for (let n = 0; n < 2; n++) { const before = calls; await sweepPrototypeDeliveries(ports, { force: true, limit: 16 }); counts.push(calls-before); }
+    await resetPrototypeDeliveryWorkerForTests();
     console.log(JSON.stringify({ counts }));
   `;
   for (let restart = 0; restart < 2; restart++) {
     const child = Bun.spawnSync([process.execPath, "-e", childSource], { env: { ...process.env }, stdout: "pipe", stderr: "pipe", timeout: 10_000 });
     expect(child.exitCode).toBe(0);
     const result = JSON.parse(new TextDecoder().decode(child.stdout)) as { counts: number[] };
-    expect(result.counts).toEqual([16, 16]);
+    expect(result.counts).toEqual([16, 16, 16]);
   }
 });

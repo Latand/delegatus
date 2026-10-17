@@ -1,114 +1,115 @@
 {
-  "baseRevision": "d84e0e2e2578075a63024e4d7d08a9070c321c1a",
+  "baseRevision": "4119ffba3a42530c74ff484d81bce1721db62485",
   "command": "bun scripts/measure-residual-readers.ts <output.json> <label>",
-  "isolation": "fresh HOME, XDG config/cache/data, TMPDIR, Codex/Claude homes, LLV_STATE_DIR; no LLV_STATE_OWNER; NODE_ENV=test; closed Viewer control URL",
+  "isolation": "fresh HOME, XDG config/cache/data, TMPDIR, Codex/Claude homes, LLV_STATE_DIR; no LLV_STATE_OWNER; NODE_ENV=test; closed Viewer control URL; sequential resource-gated commands",
   "order": [
-    "base-5",
-    "work-5",
-    "base-6",
-    "work-6",
-    "base-7",
-    "work-7"
+    "base-final-1",
+    "candidate-final-1",
+    "base-final-2",
+    "candidate-final-2",
+    "base-final-3",
+    "candidate-final-3"
   ],
   "aggregation": "median of the three per-process medians; synchronous durations include scheduling delay; rchar includes counter overhead; bytes/call = bytes/burst divided by 20",
   "deliverySourceSha256": {
-    "scripts/measure-residual-readers.ts": "aeb4bd3df5dea496979c21b9236bf2fefb27fb069109ea17c095e3943673481c",
+    "scripts/measure-residual-readers.ts": "a0a44e4003276030480d282bad6aec25becc86e335a43117ae07a6237c20b504",
     "src/lib/accounts/migration/coordinator.ts": "90bbdabd8a2417726a6dbddce0eda1fe3caad3033ed23e128b007ff948204a06",
     "src/lib/agent/accountLiveness.ts": "b69f2f1ff8dca270dac60de6f7411cd47523e0fb5191ca119acb8e529fb08450",
-    "src/lib/agent/receiptReads.test.ts": "15c4ed25e3bb95aa1eb88737726ba14c1c1f9422b59c1438b00fbc8c6eca2538",
+    "src/lib/agent/receiptReads.test.ts": "95d004f10a1c710837f2989e7c51f95c9c8c628e68f0e2c9188b78d898b12a9e",
     "src/lib/agent/registry.ts": "4211257e6cfa81f928481dfd08a69cea0630bacc934db9ec18f594f9d34c3a38",
-    "src/lib/agent/sqliteRegistryStore.ts": "0e1352db65836f67fbe1df6235c19d3a54d1e3ba1888b40584579d8b43c6ce6f",
+    "src/lib/agent/sqliteRegistryStore.ts": "a76efbdff8a4cd9167fc60b3fcfabdac672587ee4fecc810cff5ca86ebe08ba9",
     "src/lib/boardMaintenance/guard.ts": "244014a7d49dea1e96eb1a55b3c4de943887a9bc0d9bbb1a88fe3c7b318d492e",
     "src/lib/links/taskSync.test.ts": "ffcc2643a308d7580aa22229a9e44561b3aeb8bbf2358a264c2889704854d631",
-    "src/lib/mcp/bindings.ts": "acdc17de08bce8bb0e88e4c2f40b83e1b78f77631ae00660fc863470ac8af106",
+    "src/lib/mcp/bindings.ts": "28403346e472757a6df9db93ff94bbd9331ebc54967b36133501157153d036f3",
     "src/lib/memory/controller.ts": "c3c3bb6213ee5305a8d7b62c91180eab5f91815164a27bee21ea48e217f63d19",
     "src/lib/memory/curation/guard.ts": "c5aed72a5cbc70c7ab7eb724d870be3b0d6e93b1fa86c8f13875b76aef9d18ed",
-    "src/lib/orchestrator/boardReportRun.ts": "18d3521f44749d83a04a8874e1bfd7f1dd50e7639130418690c4a35073c8328f",
+    "src/lib/orchestrator/boardReportRun.ts": "5bbceafb8e8733b523063075cf31ca976db56bfa11e4e30cf6df7ba827d3e1af",
     "src/lib/pipelines/runtimeSwitchRecovery.ts": "b5425aaa47051c6d685cc54d77cbf9716d46a1dfc5e1eb14ab566434c70ead82",
-    "src/lib/prototypeReview/deliveryWorker.test.ts": "ebcc11bc9dffa791d5cc33f7238721b19ebd97131950bbef597fbb5a0e3846d3",
-    "src/lib/prototypeReview/deliveryWorker.ts": "e833e0183f420e4bff70b9708d8801bb48ae84214aae02a662af6c37638e0d06",
+    "src/lib/prototypeReview/deliveryWorker.test.ts": "49b981a0e04e76930703360c3c27199615470886295e524d154b8594411dae77",
+    "src/lib/prototypeReview/deliveryWorker.ts": "b70f65b0cdeb80bb0ed1dbeb98fa9fceb17dc6ac6b0e9e4db3a6c479ee133d00",
     "src/lib/prototypeReview/http.ts": "a7b846f4cbf0447e4ac042bbb792a3347126fc2e77ddb1ea321a2367c95d606c",
     "src/lib/prototypeReview/read.ts": "1611309f800a9ab22bc54ee4ca79d8a04a7d6917382866a245007d802adba75d",
     "src/lib/prototypeReview/seatRounds.ts": "2bbafbbbcfb3e7d97d282ad93da6b540aebdc10134d79648036a444059f81878",
-    "src/lib/prototypeReview/stateReads.test.ts": "0358a9a9c1fbc61549c02be5f0831b4d9dde4bfadd4b9e990acc2edf3fec3b4a",
-    "src/lib/prototypeReview/store.ts": "c4dd6719056911f5c458ed5d04eb655e34270adb1aa66017fbf847656a819c3c",
+    "src/lib/prototypeReview/stateReads.test.ts": "d24be181cc72e34e08c885e07ad6fb6f21a06ede51e60ab99fe204927bf3dd20",
+    "src/lib/prototypeReview/store.ts": "2c936e74b9f4eb57da3e6a89d1f1814b20411415e9b8889f1d72491a3233f987",
     "src/lib/prototypeReview/telegramAnswer.ts": "7037159aa66842feef4b0cce121d27cad0998b8bb35ea00efb54e784b2a6c775",
     "src/lib/prototypeReview/telegramPost.ts": "73cd3b985afcb6ef835df604b70cf6a36e172de13fe0701961efad754625360e",
-    "src/lib/prototypeReview/world.ts": "13394d9abb12c8ac4ab0fc7d9a923863e2604098ba9c6517b9949f369cd4312b",
+    "src/lib/prototypeReview/world.ts": "7a5dcbddce3b245247c694e0c28aba7ee5461fcc8c98a18865df6aa02d337c90",
     "src/lib/reaperRuntime.ts": "5cc968b7b956acee2ea4dc7eeb19fded69308ccb0f18dfd6a7c5824b9086e2ac",
     "src/lib/runtime/agentMessageAuthor.ts": "4952b8e1a3c13a391b8712b164e1597e4611894152447c5c1e66aa8b6d043e4e",
     "src/lib/runtime/codexSubagentDetection.test.ts": "a1aa916de88cc80880c5e631797229ffe84a1dd6f9be408517188d0da560cb62",
     "src/lib/runtime/codexSubagentDetection.ts": "965856fbaa583c3bc1b373858eb7662d0fde99fa3620a43e4f902e8a6f112c11",
+    "src/lib/runtime/startup.test.ts": "606c788f471bea0e89347076d7cfd9b4b8a2ae04a119b98300883d97233d5e17",
     "src/lib/runtime/startup.ts": "1ca2bc5d1abf4648e90ae9619794d367c44779bc5d61d659a958be1a267b9355",
     "src/lib/runtime/structuredControls.ts": "aa5ea6a3a6d8e80122c2211e59e17cf377171fc8e1f72556507ae2479b817599",
-    "src/lib/runtime/structuredDeliveryController.ts": "a3fc14b523329815b43efee98f049b952f403120feb9894de77b2582ac272b3e",
-    "src/lib/runtime/structuredMessageDelivery.ts": "7f0b41a3830a9a10e30ae9fdc02fdc2151bb5df9edfa85da1a1173b68a9e26e9",
+    "src/lib/runtime/structuredDeliveryController.ts": "b90247cf2d335827c00973ab5f417f2e8c036e9f11dc5434f7a486d62b48f0f2",
+    "src/lib/runtime/structuredMessageDelivery.ts": "c022bd2f3f9c099a9974b2b7bc381d69cdb45275b6fa8b7966d0177485c1408d",
     "src/lib/scanner/effort.test.ts": "71176b8b4593108815c829c0bd0bba734e7239de5e6f14b4e5b02018d5633604",
     "src/lib/scanner/effort.ts": "245ffcb62d07441ed7c49550ae6533b183fb88970955d711cf4fa02c118ef8ea",
     "src/lib/scanner/index.ts": "6c6e6faa24d01b22cd2af919f73961cd11c1e94524807420ac3047d1a6a26e91",
     "src/lib/scanner/observe.ts": "35fb5100b08f402487aa502f2161701dddc740431e6bfd1f10fad80904529df4",
-    "src/lib/tasks/store.ts": "ca1dccdc7752856161fbd9ccfc096a2abe9f62e4342cba05a3247a8bd0106670"
+    "src/lib/tasks/store.ts": "e641bc87021f8dedfd79d2cefaac5a85b6e8038561c1422ba78a8610e20c1e32"
   },
   "summary": {
     "receipt-ownership": {
       "synchronousMsPerCall": {
-        "base": 14.839436999999634,
-        "work": 0.04131999999981417
+        "base": 13.549143000000186,
+        "candidate": 0.0387180000002445
       },
       "synchronousMsPerTick": {
-        "base": 302.61941899999965,
-        "work": 0.8480620000000272
+        "base": 274.0010249999996,
+        "candidate": 0.7938639999997577
       },
       "readBytesPerCall": {
-        "base": 242.25,
-        "work": 10.5
+        "base": 244.15,
+        "candidate": 10.5
       },
       "readBytesPerTick": {
-        "base": 4845,
-        "work": 210
+        "base": 4883,
+        "candidate": 210
       }
     },
     "prototype-round-read": {
       "synchronousMsPerCall": {
-        "base": 52.18771299999935,
-        "work": 0.054539000000204396
+        "base": 44.68531499999881,
+        "candidate": 0.05535300000019561
       },
       "synchronousMsPerTick": {
-        "base": 1058.3548530000007,
-        "work": 1.1211950000001707
+        "base": 898.4487680000002,
+        "candidate": 1.159990000000107
       },
       "readBytesPerCall": {
-        "base": 2701.7,
-        "work": 10.5
+        "base": 2711.3,
+        "candidate": 10.5
       },
       "readBytesPerTick": {
-        "base": 54034,
-        "work": 210
+        "base": 54226,
+        "candidate": 210
       }
     },
     "prototype-round-write": {
       "synchronousMsPerCall": {
-        "base": 154.45394300000044,
-        "work": 6.795554999999695
+        "base": 117.513082999998,
+        "candidate": 5.228824999999688
       },
       "synchronousMsPerTick": {
-        "base": 2984.0819980000015,
-        "work": 145.8082430000004
+        "base": 2371.2277429999995,
+        "candidate": 105.77520699999968
       },
       "readBytesPerCall": {
-        "base": 7415815.1,
-        "work": 332259
+        "base": 7415821.85,
+        "candidate": 332263.2
       },
       "readBytesPerTick": {
-        "base": 148316302,
-        "work": 6645180
+        "base": 148316437,
+        "candidate": 6645264
       }
     }
   },
   "runs": [
     {
-      "label": "base-5",
-      "at": "2026-10-17T00:27:38.341Z",
+      "label": "base-final-1",
+      "at": "2026-10-17T01:24:47.737Z",
       "bun": "1.4.0",
       "fixtureSha256": "b0df54796b164cc9f8e065619345f062f3e586ce11af146ef28218a245a6052b",
       "load": {
@@ -128,7 +129,7 @@
       "machine": {
         "cpuMax": null,
         "memoryMax": null,
-        "loadavg": "6.90 5.27 6.16 8/4877 1585830"
+        "loadavg": "5.82 5.08 5.18 4/4235 2403646"
       },
       "sourceSha256": {
         "src/lib/agent/registry.ts": "21b37ba484f89d45c08859d2029866d234f37d10107502fb1a7395f833a18f3c",
@@ -138,286 +139,82 @@
         "src/lib/prototypeReview/store.ts": "747255705b4c93ff2a356362ce8f1efee1d9d2a5b0b9bdc39ee5deab5f4da0c8",
         "src/lib/prototypeReview/deliveryWorker.ts": "7533ac0886cdefea2a18dd831452335c52fbfb9cdf3b43137649d6fab550d5ca",
         "src/lib/prototypeReview/seatRounds.ts": "39bace70beb09a8b9cb156db4be662536e8c40eaa9a9f9cda41b61675f6fd261",
-        "scripts/measure-residual-readers.ts": "aeb4bd3df5dea496979c21b9236bf2fefb27fb069109ea17c095e3943673481c"
+        "src/lib/prototypeReview/world.ts": "80c8d8717160f5db9014c507803907a970ce22f42c4aae17ae1e103d7982f92d",
+        "src/lib/prototypeReview/decision.ts": "2970509569bfc01367c6266b66f9d88ab3b194abfe47e9eef91791de06e7d8cb",
+        "scripts/measure-residual-readers.ts": "a0a44e4003276030480d282bad6aec25becc86e335a43117ae07a6237c20b504"
       },
       "results": {
         "receipt-ownership": {
           "processCpuMs": {
-            "user": 1819.176,
-            "system": 979.675
+            "user": 1659.553,
+            "system": 1041.764
           },
           "synchronousMsPerCall": {
-            "median": 14.729217999999491,
-            "max": 31.09204100000079
+            "median": 14.264180000000124,
+            "max": 26.86110800000006
           },
           "synchronousMsPerTick": {
-            "median": 300.1100659999993,
-            "max": 331.7291070000001
+            "median": 291.25088099999994,
+            "max": 307.0536350000002
           },
           "readBytesPerTick": {
-            "median": 4848,
-            "max": 4924
-          },
-          "readBytesPerCall": {
-            "median": 242.4,
-            "max": 246.2
-          }
-        },
-        "prototype-round-read": {
-          "processCpuMs": {
-            "user": 9220.656,
-            "system": 749.928
-          },
-          "synchronousMsPerCall": {
-            "median": 50.327878000000055,
-            "max": 102.656081000001
-          },
-          "synchronousMsPerTick": {
-            "median": 1051.536999,
-            "max": 1384.5233790000002
-          },
-          "readBytesPerTick": {
-            "median": 54034,
-            "max": 54268
-          },
-          "readBytesPerCall": {
-            "median": 2701.7,
-            "max": 2713.4
-          }
-        },
-        "prototype-round-write": {
-          "processCpuMs": {
-            "user": 23822.11,
-            "system": 1810.201
-          },
-          "synchronousMsPerCall": {
-            "median": 131.11761699999988,
-            "max": 243.81631800000105
-          },
-          "synchronousMsPerTick": {
-            "median": 2712.5436520000003,
-            "max": 3094.012935999999
-          },
-          "readBytesPerTick": {
-            "median": 148315814,
-            "max": 148475758
-          },
-          "readBytesPerCall": {
-            "median": 7415790.7,
-            "max": 7423787.9
-          }
-        }
-      }
-    },
-    {
-      "label": "work-5",
-      "at": "2026-10-17T00:27:43.338Z",
-      "bun": "1.4.0",
-      "fixtureSha256": "b0df54796b164cc9f8e065619345f062f3e586ce11af146ef28218a245a6052b",
-      "load": {
-        "receiptCount": 10971,
-        "taskCount": 1705,
-        "callsPerTick": 20,
-        "ticks": 9,
-        "measuredCallsPerWorkload": 180,
-        "concurrentWriters": 0,
-        "coldReceiptRows": 10951,
-        "registry": {
-          "rows": 10971,
-          "bytes": 35622379
-        },
-        "taskBytes": 4026415
-      },
-      "machine": {
-        "cpuMax": null,
-        "memoryMax": null,
-        "loadavg": "7.07 5.33 6.17 7/4841 1587685"
-      },
-      "sourceSha256": {
-        "src/lib/agent/registry.ts": "4211257e6cfa81f928481dfd08a69cea0630bacc934db9ec18f594f9d34c3a38",
-        "src/lib/agent/sqliteRegistryStore.ts": "0e1352db65836f67fbe1df6235c19d3a54d1e3ba1888b40584579d8b43c6ce6f",
-        "src/lib/agent/registryArchive.ts": "7596ed21464a36ee11b38c82d30b5651b43aaf7afc54d41ef0ae76a4361c7640",
-        "src/lib/tasks/store.ts": "ca1dccdc7752856161fbd9ccfc096a2abe9f62e4342cba05a3247a8bd0106670",
-        "src/lib/prototypeReview/store.ts": "c4dd6719056911f5c458ed5d04eb655e34270adb1aa66017fbf847656a819c3c",
-        "src/lib/prototypeReview/deliveryWorker.ts": "e833e0183f420e4bff70b9708d8801bb48ae84214aae02a662af6c37638e0d06",
-        "src/lib/prototypeReview/seatRounds.ts": "2bbafbbbcfb3e7d97d282ad93da6b540aebdc10134d79648036a444059f81878",
-        "scripts/measure-residual-readers.ts": "aeb4bd3df5dea496979c21b9236bf2fefb27fb069109ea17c095e3943673481c"
-      },
-      "results": {
-        "receipt-ownership": {
-          "processCpuMs": {
-            "user": 18.451,
-            "system": 1.812
-          },
-          "synchronousMsPerCall": {
-            "median": 0.04120999999986452,
-            "max": 1.2770810000001802
-          },
-          "synchronousMsPerTick": {
-            "median": 0.8448849999999766,
-            "max": 2.743133999999827
-          },
-          "readBytesPerTick": {
-            "median": 210,
-            "max": 210
-          },
-          "readBytesPerCall": {
-            "median": 10.5,
-            "max": 10.5
-          }
-        },
-        "prototype-round-read": {
-          "processCpuMs": {
-            "user": 16.246,
-            "system": 1.677
-          },
-          "synchronousMsPerCall": {
-            "median": 0.0534059999999954,
-            "max": 0.11384300000008807
-          },
-          "synchronousMsPerTick": {
-            "median": 1.0957519999997203,
-            "max": 1.3531520000001365
-          },
-          "readBytesPerTick": {
-            "median": 210,
-            "max": 210
-          },
-          "readBytesPerCall": {
-            "median": 10.5,
-            "max": 10.5
-          }
-        },
-        "prototype-round-write": {
-          "processCpuMs": {
-            "user": 1076.014,
-            "system": 58.387
-          },
-          "synchronousMsPerCall": {
-            "median": 5.999152999999751,
-            "max": 27.52909499999987
-          },
-          "synchronousMsPerTick": {
-            "median": 128.06502200000068,
-            "max": 155.70451400000002
-          },
-          "readBytesPerTick": {
-            "median": 6645179,
-            "max": 6837690
-          },
-          "readBytesPerCall": {
-            "median": 332258.95,
-            "max": 341884.5
-          }
-        }
-      }
-    },
-    {
-      "label": "base-6",
-      "at": "2026-10-17T00:28:37.533Z",
-      "bun": "1.4.0",
-      "fixtureSha256": "b0df54796b164cc9f8e065619345f062f3e586ce11af146ef28218a245a6052b",
-      "load": {
-        "receiptCount": 10971,
-        "taskCount": 1705,
-        "callsPerTick": 20,
-        "ticks": 9,
-        "measuredCallsPerWorkload": 180,
-        "concurrentWriters": 0,
-        "coldReceiptRows": 10951,
-        "registry": {
-          "rows": 10971,
-          "bytes": 35622379
-        },
-        "taskBytes": 4026415
-      },
-      "machine": {
-        "cpuMax": null,
-        "memoryMax": null,
-        "loadavg": "8.70 6.10 6.39 6/4920 1614840"
-      },
-      "sourceSha256": {
-        "src/lib/agent/registry.ts": "21b37ba484f89d45c08859d2029866d234f37d10107502fb1a7395f833a18f3c",
-        "src/lib/agent/sqliteRegistryStore.ts": "f157980d849bac109260734105b88bd63dddd69258fdf7dd6d73a4359bcec47a",
-        "src/lib/agent/registryArchive.ts": "7596ed21464a36ee11b38c82d30b5651b43aaf7afc54d41ef0ae76a4361c7640",
-        "src/lib/tasks/store.ts": "ec35b127953f4752c4e3a50a9b7c71da888e0ff581ab206717785e140776befe",
-        "src/lib/prototypeReview/store.ts": "747255705b4c93ff2a356362ce8f1efee1d9d2a5b0b9bdc39ee5deab5f4da0c8",
-        "src/lib/prototypeReview/deliveryWorker.ts": "7533ac0886cdefea2a18dd831452335c52fbfb9cdf3b43137649d6fab550d5ca",
-        "src/lib/prototypeReview/seatRounds.ts": "39bace70beb09a8b9cb156db4be662536e8c40eaa9a9f9cda41b61675f6fd261",
-        "scripts/measure-residual-readers.ts": "aeb4bd3df5dea496979c21b9236bf2fefb27fb069109ea17c095e3943673481c"
-      },
-      "results": {
-        "receipt-ownership": {
-          "processCpuMs": {
-            "user": 1981.919,
-            "system": 1242.906
-          },
-          "synchronousMsPerCall": {
-            "median": 14.839436999999634,
-            "max": 34.53151000000071
-          },
-          "synchronousMsPerTick": {
-            "median": 302.61941899999965,
-            "max": 450.1642529999999
-          },
-          "readBytesPerTick": {
-            "median": 4845,
+            "median": 4883,
             "max": 4883
           },
           "readBytesPerCall": {
-            "median": 242.25,
+            "median": 244.15,
             "max": 244.15
           }
         },
         "prototype-round-read": {
           "processCpuMs": {
-            "user": 11877.463,
-            "system": 1071.278
+            "user": 8406.578,
+            "system": 662.145
           },
           "synchronousMsPerCall": {
-            "median": 63.24675099999877,
-            "max": 116.29535599999872
+            "median": 47.150863000000754,
+            "max": 84.8535609999999
           },
           "synchronousMsPerTick": {
-            "median": 1553.8064630000008,
-            "max": 1917.712204000003
+            "median": 966.6391329999988,
+            "max": 1022.6088290000007
           },
           "readBytesPerTick": {
-            "median": 53797,
-            "max": 54031
+            "median": 54226,
+            "max": 54421
           },
           "readBytesPerCall": {
-            "median": 2689.85,
-            "max": 2701.55
+            "median": 2711.3,
+            "max": 2721.05
           }
         },
         "prototype-round-write": {
           "processCpuMs": {
-            "user": 28355.025,
-            "system": 2044.937
+            "user": 21247.329,
+            "system": 1726.993
           },
           "synchronousMsPerCall": {
-            "median": 154.45394300000044,
-            "max": 319.1727030000002
+            "median": 121.42392299999483,
+            "max": 175.95101400000203
           },
           "synchronousMsPerTick": {
-            "median": 2984.0819980000015,
-            "max": 3997.5918459999994
+            "median": 2439.030212999998,
+            "max": 2549.0563280000024
           },
           "readBytesPerTick": {
-            "median": 148316326,
-            "max": 148475916
+            "median": 148316556,
+            "max": 148476181
           },
           "readBytesPerCall": {
-            "median": 7415816.3,
-            "max": 7423795.8
+            "median": 7415827.8,
+            "max": 7423809.05
           }
         }
       }
     },
     {
-      "label": "work-6",
-      "at": "2026-10-17T00:28:42.991Z",
+      "label": "candidate-final-1",
+      "at": "2026-10-17T01:24:52.845Z",
       "bun": "1.4.0",
       "fixtureSha256": "b0df54796b164cc9f8e065619345f062f3e586ce11af146ef28218a245a6052b",
       "load": {
@@ -437,53 +234,55 @@
       "machine": {
         "cpuMax": null,
         "memoryMax": null,
-        "loadavg": "8.65 6.13 6.40 9/4899 1614894"
+        "loadavg": "5.92 5.12 5.19 5/4286 2403935"
       },
       "sourceSha256": {
         "src/lib/agent/registry.ts": "4211257e6cfa81f928481dfd08a69cea0630bacc934db9ec18f594f9d34c3a38",
-        "src/lib/agent/sqliteRegistryStore.ts": "0e1352db65836f67fbe1df6235c19d3a54d1e3ba1888b40584579d8b43c6ce6f",
+        "src/lib/agent/sqliteRegistryStore.ts": "a76efbdff8a4cd9167fc60b3fcfabdac672587ee4fecc810cff5ca86ebe08ba9",
         "src/lib/agent/registryArchive.ts": "7596ed21464a36ee11b38c82d30b5651b43aaf7afc54d41ef0ae76a4361c7640",
-        "src/lib/tasks/store.ts": "ca1dccdc7752856161fbd9ccfc096a2abe9f62e4342cba05a3247a8bd0106670",
-        "src/lib/prototypeReview/store.ts": "c4dd6719056911f5c458ed5d04eb655e34270adb1aa66017fbf847656a819c3c",
-        "src/lib/prototypeReview/deliveryWorker.ts": "e833e0183f420e4bff70b9708d8801bb48ae84214aae02a662af6c37638e0d06",
+        "src/lib/tasks/store.ts": "e641bc87021f8dedfd79d2cefaac5a85b6e8038561c1422ba78a8610e20c1e32",
+        "src/lib/prototypeReview/store.ts": "2c936e74b9f4eb57da3e6a89d1f1814b20411415e9b8889f1d72491a3233f987",
+        "src/lib/prototypeReview/deliveryWorker.ts": "b70f65b0cdeb80bb0ed1dbeb98fa9fceb17dc6ac6b0e9e4db3a6c479ee133d00",
         "src/lib/prototypeReview/seatRounds.ts": "2bbafbbbcfb3e7d97d282ad93da6b540aebdc10134d79648036a444059f81878",
-        "scripts/measure-residual-readers.ts": "aeb4bd3df5dea496979c21b9236bf2fefb27fb069109ea17c095e3943673481c"
+        "src/lib/prototypeReview/world.ts": "7a5dcbddce3b245247c694e0c28aba7ee5461fcc8c98a18865df6aa02d337c90",
+        "src/lib/prototypeReview/decision.ts": "2970509569bfc01367c6266b66f9d88ab3b194abfe47e9eef91791de06e7d8cb",
+        "scripts/measure-residual-readers.ts": "a0a44e4003276030480d282bad6aec25becc86e335a43117ae07a6237c20b504"
       },
       "results": {
         "receipt-ownership": {
           "processCpuMs": {
-            "user": 39.696,
-            "system": 0.858
+            "user": 13.559,
+            "system": 0.62
           },
           "synchronousMsPerCall": {
-            "median": 0.050623000000086904,
-            "max": 2.49971400000004
+            "median": 0.0387180000002445,
+            "max": 0.1273340000002463
           },
           "synchronousMsPerTick": {
-            "median": 1.0805770000001758,
-            "max": 3.7568130000004203
+            "median": 0.7938639999997577,
+            "max": 0.9867460000000392
           },
           "readBytesPerTick": {
-            "median": 210,
-            "max": 248
+            "median": 172,
+            "max": 210
           },
           "readBytesPerCall": {
-            "median": 10.5,
-            "max": 12.4
+            "median": 8.6,
+            "max": 10.5
           }
         },
         "prototype-round-read": {
           "processCpuMs": {
-            "user": 19.276,
-            "system": 0.619
+            "user": 15.636,
+            "system": 2.861
           },
           "synchronousMsPerCall": {
-            "median": 0.054539000000204396,
-            "max": 0.14596399999982168
+            "median": 0.054113000000143074,
+            "max": 0.09662699999989854
           },
           "synchronousMsPerTick": {
-            "median": 1.169010999999955,
-            "max": 1.4913339999998243
+            "median": 1.1063680000002023,
+            "max": 1.2563430000000153
           },
           "readBytesPerTick": {
             "median": 210,
@@ -496,31 +295,31 @@
         },
         "prototype-round-write": {
           "processCpuMs": {
-            "user": 1203.82,
-            "system": 80.851
+            "user": 933.539,
+            "system": 67.57
           },
           "synchronousMsPerCall": {
-            "median": 6.795554999999695,
-            "max": 11.7208270000001
+            "median": 5.423108999999386,
+            "max": 9.361691000000064
           },
           "synchronousMsPerTick": {
-            "median": 145.8082430000004,
-            "max": 172.5505430000003
+            "median": 110.11661600000025,
+            "max": 134.13033900000028
           },
           "readBytesPerTick": {
-            "median": 6645180,
-            "max": 6837683
+            "median": 6645264,
+            "max": 6837734
           },
           "readBytesPerCall": {
-            "median": 332259,
-            "max": 341884.15
+            "median": 332263.2,
+            "max": 341886.7
           }
         }
       }
     },
     {
-      "label": "base-7",
-      "at": "2026-10-17T00:29:34.603Z",
+      "label": "base-final-2",
+      "at": "2026-10-17T01:25:31.893Z",
       "bun": "1.4.0",
       "fixtureSha256": "b0df54796b164cc9f8e065619345f062f3e586ce11af146ef28218a245a6052b",
       "load": {
@@ -540,7 +339,7 @@
       "machine": {
         "cpuMax": null,
         "memoryMax": null,
-        "loadavg": "8.83 6.55 6.53 7/4929 1617524"
+        "loadavg": "4.54 4.88 5.11 5/4243 2404748"
       },
       "sourceSha256": {
         "src/lib/agent/registry.ts": "21b37ba484f89d45c08859d2029866d234f37d10107502fb1a7395f833a18f3c",
@@ -550,21 +349,23 @@
         "src/lib/prototypeReview/store.ts": "747255705b4c93ff2a356362ce8f1efee1d9d2a5b0b9bdc39ee5deab5f4da0c8",
         "src/lib/prototypeReview/deliveryWorker.ts": "7533ac0886cdefea2a18dd831452335c52fbfb9cdf3b43137649d6fab550d5ca",
         "src/lib/prototypeReview/seatRounds.ts": "39bace70beb09a8b9cb156db4be662536e8c40eaa9a9f9cda41b61675f6fd261",
-        "scripts/measure-residual-readers.ts": "aeb4bd3df5dea496979c21b9236bf2fefb27fb069109ea17c095e3943673481c"
+        "src/lib/prototypeReview/world.ts": "80c8d8717160f5db9014c507803907a970ce22f42c4aae17ae1e103d7982f92d",
+        "src/lib/prototypeReview/decision.ts": "2970509569bfc01367c6266b66f9d88ab3b194abfe47e9eef91791de06e7d8cb",
+        "scripts/measure-residual-readers.ts": "a0a44e4003276030480d282bad6aec25becc86e335a43117ae07a6237c20b504"
       },
       "results": {
         "receipt-ownership": {
           "processCpuMs": {
-            "user": 1977.237,
-            "system": 1041.942
+            "user": 1577.545,
+            "system": 943.241
           },
           "synchronousMsPerCall": {
-            "median": 15.671615000000202,
-            "max": 36.205133999999816
+            "median": 13.549143000000186,
+            "max": 19.578660000000127
           },
           "synchronousMsPerTick": {
-            "median": 318.43307599999935,
-            "max": 362.0060590000003
+            "median": 274.0010249999996,
+            "max": 282.8783590000003
           },
           "readBytesPerTick": {
             "median": 4845,
@@ -577,53 +378,53 @@
         },
         "prototype-round-read": {
           "processCpuMs": {
-            "user": 9309.078,
-            "system": 690.501
+            "user": 7718.961,
+            "system": 602.327
           },
           "synchronousMsPerCall": {
-            "median": 52.18771299999935,
-            "max": 71.42631700000129
+            "median": 44.412233000000924,
+            "max": 54.186799000000974
           },
           "synchronousMsPerTick": {
-            "median": 1058.3548530000007,
-            "max": 1179.9665080000013
+            "median": 894.1096610000004,
+            "max": 946.6029699999999
           },
           "readBytesPerTick": {
-            "median": 54148,
-            "max": 54343
+            "median": 54187,
+            "max": 54538
           },
           "readBytesPerCall": {
-            "median": 2707.4,
-            "max": 2717.15
+            "median": 2709.35,
+            "max": 2726.9
           }
         },
         "prototype-round-write": {
           "processCpuMs": {
-            "user": 29083.406,
-            "system": 2057.8
+            "user": 20291.46,
+            "system": 1683.821
           },
           "synchronousMsPerCall": {
-            "median": 163.9185559999969,
-            "max": 247.1935850000009
+            "median": 117.513082999998,
+            "max": 137.84296099999847
           },
           "synchronousMsPerTick": {
-            "median": 3256.3318629999994,
-            "max": 3491.4532560000007
+            "median": 2371.2277429999995,
+            "max": 2446.1273819999988
           },
           "readBytesPerTick": {
-            "median": 148316302,
-            "max": 148476076
+            "median": 148316388,
+            "max": 148476094
           },
           "readBytesPerCall": {
-            "median": 7415815.1,
-            "max": 7423803.8
+            "median": 7415819.4,
+            "max": 7423804.7
           }
         }
       }
     },
     {
-      "label": "work-7",
-      "at": "2026-10-17T00:29:40.360Z",
+      "label": "candidate-final-2",
+      "at": "2026-10-17T01:25:36.600Z",
       "bun": "1.4.0",
       "fixtureSha256": "b0df54796b164cc9f8e065619345f062f3e586ce11af146ef28218a245a6052b",
       "load": {
@@ -643,83 +444,295 @@
       "machine": {
         "cpuMax": null,
         "memoryMax": null,
-        "loadavg": "8.87 6.63 6.55 11/4920 1617634"
+        "loadavg": "4.42 4.85 5.10 10/4244 2405004"
       },
       "sourceSha256": {
         "src/lib/agent/registry.ts": "4211257e6cfa81f928481dfd08a69cea0630bacc934db9ec18f594f9d34c3a38",
-        "src/lib/agent/sqliteRegistryStore.ts": "0e1352db65836f67fbe1df6235c19d3a54d1e3ba1888b40584579d8b43c6ce6f",
+        "src/lib/agent/sqliteRegistryStore.ts": "a76efbdff8a4cd9167fc60b3fcfabdac672587ee4fecc810cff5ca86ebe08ba9",
         "src/lib/agent/registryArchive.ts": "7596ed21464a36ee11b38c82d30b5651b43aaf7afc54d41ef0ae76a4361c7640",
-        "src/lib/tasks/store.ts": "ca1dccdc7752856161fbd9ccfc096a2abe9f62e4342cba05a3247a8bd0106670",
-        "src/lib/prototypeReview/store.ts": "c4dd6719056911f5c458ed5d04eb655e34270adb1aa66017fbf847656a819c3c",
-        "src/lib/prototypeReview/deliveryWorker.ts": "e833e0183f420e4bff70b9708d8801bb48ae84214aae02a662af6c37638e0d06",
+        "src/lib/tasks/store.ts": "e641bc87021f8dedfd79d2cefaac5a85b6e8038561c1422ba78a8610e20c1e32",
+        "src/lib/prototypeReview/store.ts": "2c936e74b9f4eb57da3e6a89d1f1814b20411415e9b8889f1d72491a3233f987",
+        "src/lib/prototypeReview/deliveryWorker.ts": "b70f65b0cdeb80bb0ed1dbeb98fa9fceb17dc6ac6b0e9e4db3a6c479ee133d00",
         "src/lib/prototypeReview/seatRounds.ts": "2bbafbbbcfb3e7d97d282ad93da6b540aebdc10134d79648036a444059f81878",
-        "scripts/measure-residual-readers.ts": "aeb4bd3df5dea496979c21b9236bf2fefb27fb069109ea17c095e3943673481c"
+        "src/lib/prototypeReview/world.ts": "7a5dcbddce3b245247c694e0c28aba7ee5461fcc8c98a18865df6aa02d337c90",
+        "src/lib/prototypeReview/decision.ts": "2970509569bfc01367c6266b66f9d88ab3b194abfe47e9eef91791de06e7d8cb",
+        "scripts/measure-residual-readers.ts": "a0a44e4003276030480d282bad6aec25becc86e335a43117ae07a6237c20b504"
       },
       "results": {
         "receipt-ownership": {
           "processCpuMs": {
-            "user": 21.691,
-            "system": 0.864
+            "user": 32.623,
+            "system": 2.462
           },
           "synchronousMsPerCall": {
-            "median": 0.04131999999981417,
-            "max": 1.8813789999999244
+            "median": 0.04277400000000853,
+            "max": 1.4965680000000248
           },
           "synchronousMsPerTick": {
-            "median": 0.8480620000000272,
-            "max": 3.3486649999999827
+            "median": 0.9645810000001802,
+            "max": 3.300053999999818
           },
           "readBytesPerTick": {
             "median": 210,
-            "max": 248
+            "max": 286
           },
           "readBytesPerCall": {
             "median": 10.5,
-            "max": 12.4
+            "max": 14.3
           }
         },
         "prototype-round-read": {
           "processCpuMs": {
-            "user": 18.478,
-            "system": 3.152
+            "user": 16.558,
+            "system": 0
           },
           "synchronousMsPerCall": {
-            "median": 0.05548399999997855,
-            "max": 0.9148069999996551
+            "median": 0.05535300000019561,
+            "max": 0.17306299999972907
           },
           "synchronousMsPerTick": {
-            "median": 1.1211950000001707,
-            "max": 2.1589869999997973
+            "median": 1.159990000000107,
+            "max": 1.4644929999999476
           },
           "readBytesPerTick": {
             "median": 210,
-            "max": 248
+            "max": 210
           },
           "readBytesPerCall": {
             "median": 10.5,
-            "max": 12.4
+            "max": 10.5
           }
         },
         "prototype-round-write": {
           "processCpuMs": {
-            "user": 1432.27,
-            "system": 108.163
+            "user": 862.688,
+            "system": 59.528
           },
           "synchronousMsPerCall": {
-            "median": 8.065424999999777,
-            "max": 13.687372999999752
+            "median": 5.228824999999688,
+            "max": 6.489360000000033
           },
           "synchronousMsPerTick": {
-            "median": 162.30738699999984,
-            "max": 202.43618199999946
+            "median": 105.77520699999968,
+            "max": 106.96868900000027
           },
           "readBytesPerTick": {
-            "median": 6645186,
-            "max": 6837696
+            "median": 6645264,
+            "max": 6837718
           },
           "readBytesPerCall": {
-            "median": 332259.3,
-            "max": 341884.8
+            "median": 332263.2,
+            "max": 341885.9
+          }
+        }
+      }
+    },
+    {
+      "label": "base-final-3",
+      "at": "2026-10-17T01:26:14.447Z",
+      "bun": "1.4.0",
+      "fixtureSha256": "b0df54796b164cc9f8e065619345f062f3e586ce11af146ef28218a245a6052b",
+      "load": {
+        "receiptCount": 10971,
+        "taskCount": 1705,
+        "callsPerTick": 20,
+        "ticks": 9,
+        "measuredCallsPerWorkload": 180,
+        "concurrentWriters": 0,
+        "coldReceiptRows": 10951,
+        "registry": {
+          "rows": 10971,
+          "bytes": 35622379
+        },
+        "taskBytes": 4026415
+      },
+      "machine": {
+        "cpuMax": null,
+        "memoryMax": null,
+        "loadavg": "3.54 4.59 5.00 3/4153 2407507"
+      },
+      "sourceSha256": {
+        "src/lib/agent/registry.ts": "21b37ba484f89d45c08859d2029866d234f37d10107502fb1a7395f833a18f3c",
+        "src/lib/agent/sqliteRegistryStore.ts": "f157980d849bac109260734105b88bd63dddd69258fdf7dd6d73a4359bcec47a",
+        "src/lib/agent/registryArchive.ts": "7596ed21464a36ee11b38c82d30b5651b43aaf7afc54d41ef0ae76a4361c7640",
+        "src/lib/tasks/store.ts": "ec35b127953f4752c4e3a50a9b7c71da888e0ff581ab206717785e140776befe",
+        "src/lib/prototypeReview/store.ts": "747255705b4c93ff2a356362ce8f1efee1d9d2a5b0b9bdc39ee5deab5f4da0c8",
+        "src/lib/prototypeReview/deliveryWorker.ts": "7533ac0886cdefea2a18dd831452335c52fbfb9cdf3b43137649d6fab550d5ca",
+        "src/lib/prototypeReview/seatRounds.ts": "39bace70beb09a8b9cb156db4be662536e8c40eaa9a9f9cda41b61675f6fd261",
+        "src/lib/prototypeReview/world.ts": "80c8d8717160f5db9014c507803907a970ce22f42c4aae17ae1e103d7982f92d",
+        "src/lib/prototypeReview/decision.ts": "2970509569bfc01367c6266b66f9d88ab3b194abfe47e9eef91791de06e7d8cb",
+        "scripts/measure-residual-readers.ts": "a0a44e4003276030480d282bad6aec25becc86e335a43117ae07a6237c20b504"
+      },
+      "results": {
+        "receipt-ownership": {
+          "processCpuMs": {
+            "user": 1556.644,
+            "system": 947.684
+          },
+          "synchronousMsPerCall": {
+            "median": 13.415805000000091,
+            "max": 20.255560999999943
+          },
+          "synchronousMsPerTick": {
+            "median": 271.73167600000033,
+            "max": 275.70126900000014
+          },
+          "readBytesPerTick": {
+            "median": 4883,
+            "max": 4921
+          },
+          "readBytesPerCall": {
+            "median": 244.15,
+            "max": 246.05
+          }
+        },
+        "prototype-round-read": {
+          "processCpuMs": {
+            "user": 7735.797,
+            "system": 683.226
+          },
+          "synchronousMsPerCall": {
+            "median": 44.68531499999881,
+            "max": 65.14728699999978
+          },
+          "synchronousMsPerTick": {
+            "median": 898.4487680000002,
+            "max": 995.4014289999996
+          },
+          "readBytesPerTick": {
+            "median": 54226,
+            "max": 54499
+          },
+          "readBytesPerCall": {
+            "median": 2711.3,
+            "max": 2724.95
+          }
+        },
+        "prototype-round-write": {
+          "processCpuMs": {
+            "user": 19112.081,
+            "system": 1646.292
+          },
+          "synchronousMsPerCall": {
+            "median": 110.26575299999968,
+            "max": 129.89935700000206
+          },
+          "synchronousMsPerTick": {
+            "median": 2223.738169,
+            "max": 2291.949885000002
+          },
+          "readBytesPerTick": {
+            "median": 148316437,
+            "max": 148475987
+          },
+          "readBytesPerCall": {
+            "median": 7415821.85,
+            "max": 7423799.35
+          }
+        }
+      }
+    },
+    {
+      "label": "candidate-final-3",
+      "at": "2026-10-17T01:26:19.075Z",
+      "bun": "1.4.0",
+      "fixtureSha256": "b0df54796b164cc9f8e065619345f062f3e586ce11af146ef28218a245a6052b",
+      "load": {
+        "receiptCount": 10971,
+        "taskCount": 1705,
+        "callsPerTick": 20,
+        "ticks": 9,
+        "measuredCallsPerWorkload": 180,
+        "concurrentWriters": 0,
+        "coldReceiptRows": 10951,
+        "registry": {
+          "rows": 10971,
+          "bytes": 35622379
+        },
+        "taskBytes": 4026415
+      },
+      "machine": {
+        "cpuMax": null,
+        "memoryMax": null,
+        "loadavg": "3.74 4.61 5.01 1/4152 2407640"
+      },
+      "sourceSha256": {
+        "src/lib/agent/registry.ts": "4211257e6cfa81f928481dfd08a69cea0630bacc934db9ec18f594f9d34c3a38",
+        "src/lib/agent/sqliteRegistryStore.ts": "a76efbdff8a4cd9167fc60b3fcfabdac672587ee4fecc810cff5ca86ebe08ba9",
+        "src/lib/agent/registryArchive.ts": "7596ed21464a36ee11b38c82d30b5651b43aaf7afc54d41ef0ae76a4361c7640",
+        "src/lib/tasks/store.ts": "e641bc87021f8dedfd79d2cefaac5a85b6e8038561c1422ba78a8610e20c1e32",
+        "src/lib/prototypeReview/store.ts": "2c936e74b9f4eb57da3e6a89d1f1814b20411415e9b8889f1d72491a3233f987",
+        "src/lib/prototypeReview/deliveryWorker.ts": "b70f65b0cdeb80bb0ed1dbeb98fa9fceb17dc6ac6b0e9e4db3a6c479ee133d00",
+        "src/lib/prototypeReview/seatRounds.ts": "2bbafbbbcfb3e7d97d282ad93da6b540aebdc10134d79648036a444059f81878",
+        "src/lib/prototypeReview/world.ts": "7a5dcbddce3b245247c694e0c28aba7ee5461fcc8c98a18865df6aa02d337c90",
+        "src/lib/prototypeReview/decision.ts": "2970509569bfc01367c6266b66f9d88ab3b194abfe47e9eef91791de06e7d8cb",
+        "scripts/measure-residual-readers.ts": "a0a44e4003276030480d282bad6aec25becc86e335a43117ae07a6237c20b504"
+      },
+      "results": {
+        "receipt-ownership": {
+          "processCpuMs": {
+            "user": 10.274,
+            "system": 2.102
+          },
+          "synchronousMsPerCall": {
+            "median": 0.038360999999895284,
+            "max": 0.07184000000006563
+          },
+          "synchronousMsPerTick": {
+            "median": 0.7856679999999869,
+            "max": 0.9558199999996759
+          },
+          "readBytesPerTick": {
+            "median": 210,
+            "max": 210
+          },
+          "readBytesPerCall": {
+            "median": 10.5,
+            "max": 10.5
+          }
+        },
+        "prototype-round-read": {
+          "processCpuMs": {
+            "user": 14.085,
+            "system": 2.784
+          },
+          "synchronousMsPerCall": {
+            "median": 0.05736799999976938,
+            "max": 0.23290699999961362
+          },
+          "synchronousMsPerTick": {
+            "median": 1.1998600000001716,
+            "max": 1.3610060000000885
+          },
+          "readBytesPerTick": {
+            "median": 210,
+            "max": 210
+          },
+          "readBytesPerCall": {
+            "median": 10.5,
+            "max": 10.5
+          }
+        },
+        "prototype-round-write": {
+          "processCpuMs": {
+            "user": 860.684,
+            "system": 58.841
+          },
+          "synchronousMsPerCall": {
+            "median": 5.13743599999998,
+            "max": 7.367933999999877
+          },
+          "synchronousMsPerTick": {
+            "median": 103.87776600000007,
+            "max": 108.30363299999999
+          },
+          "readBytesPerTick": {
+            "median": 6645322,
+            "max": 6837758
+          },
+          "readBytesPerCall": {
+            "median": 332266.1,
+            "max": 341887.9
           }
         }
       }
@@ -728,167 +741,461 @@
   "verification": {
     "testCommand": "bun test <explicit test file>, one isolated process per file through scripts/gate-slot.sh",
     "testFiles": {
-      "src/lib/accounts/migration/coordinatorNeverStarted.test.ts": "pass",
-      "src/lib/accounts/migration/coordinatorNoOpInventory.test.ts": "pass",
-      "src/lib/accounts/migration/coordinatorTurnAuthority.test.ts": "pass",
-      "src/lib/agent/accountLiveness.test.ts": "pass",
-      "src/lib/agent/identityMaterialization.test.ts": "pass",
-      "src/lib/agent/receiptReads.test.ts": "pass",
-      "src/lib/agent/registry.spawnCapabilityHandover.test.ts": "pass",
-      "src/lib/agent/registry.sqlite.test.ts": "pass",
-      "src/lib/agent/sqliteRegistryStore.keyedWrites.test.ts": "pass",
-      "src/lib/agent/sqliteRegistryStore.readOnlyView.test.ts": "pass",
-      "src/lib/agent/sqliteRegistryStore.refresh.test.ts": "pass",
-      "src/lib/links/taskSync.test.ts": "pass",
-      "src/lib/mcp/bindings.test.ts": "same failure on base",
-      "src/lib/memory/controller.test.ts": "pass",
-      "src/lib/orchestrator/boardReportRun.test.ts": "pass",
-      "src/lib/prototypeReview/decision.integration.test.ts": "pass",
-      "src/lib/prototypeReview/decision.test.ts": "pass",
-      "src/lib/prototypeReview/deliveryWorker.test.ts": "pass",
-      "src/lib/prototypeReview/fences.test.ts": "pass",
-      "src/lib/prototypeReview/http.test.ts": "pass",
-      "src/lib/prototypeReview/mcpReceipts.test.ts": "pass",
-      "src/lib/prototypeReview/seatDecisions.test.ts": "pass",
-      "src/lib/prototypeReview/stateReads.test.ts": "pass",
-      "src/lib/prototypeReview/telegramAnswer.test.ts": "pass",
-      "src/lib/prototypeReview/telegramPost.test.ts": "pass",
-      "src/lib/reaperRuntime.test.ts": "pass",
-      "src/lib/runtime/codexSubagentDetection.test.ts": "pass",
-      "src/lib/runtime/startup.handoverRetry.test.ts": "pass",
-      "src/lib/runtime/startup.quarantine.test.ts": "pass",
-      "src/lib/runtime/startup.test.ts": "same failures on base",
-      "src/lib/runtime/startupFinalization.integration.test.ts": "same failures on base",
-      "src/lib/runtime/startupRowRetries.test.ts": "pass",
-      "src/lib/runtime/startupStatus.test.ts": "pass",
-      "src/lib/runtime/structuredControls.test.ts": "pass",
-      "src/lib/runtime/structuredDeliveryController.test.ts": "pass",
-      "src/lib/runtime/structuredMessageDelivery.keyed.test.ts": "pass",
-      "src/lib/runtime/structuredMessageDelivery.test.ts": "pass",
-      "src/lib/scanner/effort.test.ts": "pass"
+      "src/lib/agent/receiptReads.test.ts": {
+        "exitCode": 0,
+        "pass": 6,
+        "fail": 0,
+        "failures": []
+      },
+      "src/lib/prototypeReview/stateReads.test.ts": {
+        "exitCode": 0,
+        "pass": 9,
+        "fail": 0,
+        "failures": []
+      },
+      "src/lib/prototypeReview/deliveryWorker.test.ts": {
+        "exitCode": 0,
+        "pass": 11,
+        "fail": 0,
+        "failures": []
+      },
+      "src/lib/links/taskSync.test.ts": {
+        "exitCode": 0,
+        "pass": 18,
+        "fail": 0,
+        "failures": []
+      },
+      "src/lib/runtime/codexSubagentDetection.test.ts": {
+        "exitCode": 0,
+        "pass": 34,
+        "fail": 0,
+        "failures": []
+      },
+      "src/lib/scanner/effort.test.ts": {
+        "exitCode": 0,
+        "pass": 10,
+        "fail": 0,
+        "failures": []
+      },
+      "src/lib/accounts/migration/coordinatorNeverStarted.test.ts": {
+        "exitCode": 0,
+        "pass": 4,
+        "fail": 0,
+        "failures": []
+      },
+      "src/lib/accounts/migration/coordinatorNoOpInventory.test.ts": {
+        "exitCode": 0,
+        "pass": 8,
+        "fail": 0,
+        "failures": []
+      },
+      "src/lib/accounts/migration/coordinatorTurnAuthority.test.ts": {
+        "exitCode": 0,
+        "pass": 24,
+        "fail": 0,
+        "failures": []
+      },
+      "src/lib/agent/accountLiveness.test.ts": {
+        "exitCode": 0,
+        "pass": 1,
+        "fail": 0,
+        "failures": []
+      },
+      "src/lib/agent/identityMaterialization.test.ts": {
+        "exitCode": 0,
+        "pass": 1,
+        "fail": 0,
+        "failures": []
+      },
+      "src/lib/agent/registry.spawnCapabilityHandover.test.ts": {
+        "exitCode": 0,
+        "pass": 6,
+        "fail": 0,
+        "failures": []
+      },
+      "src/lib/agent/registry.sqlite.test.ts": {
+        "exitCode": 0,
+        "pass": 69,
+        "fail": 0,
+        "failures": []
+      },
+      "src/lib/agent/sqliteRegistryStore.keyedWrites.test.ts": {
+        "exitCode": 0,
+        "pass": 11,
+        "fail": 0,
+        "failures": []
+      },
+      "src/lib/agent/sqliteRegistryStore.readOnlyView.test.ts": {
+        "exitCode": 0,
+        "pass": 22,
+        "fail": 0,
+        "failures": []
+      },
+      "src/lib/agent/sqliteRegistryStore.refresh.test.ts": {
+        "exitCode": 0,
+        "pass": 4,
+        "fail": 0,
+        "failures": []
+      },
+      "src/lib/mcp/bindings.test.ts": {
+        "exitCode": 1,
+        "pass": 106,
+        "fail": 1,
+        "failures": [
+          "task placement bindings require atomic guards and classify field refusals as non-retryable"
+        ]
+      },
+      "src/lib/memory/controller.test.ts": {
+        "exitCode": 0,
+        "pass": 116,
+        "fail": 0,
+        "failures": []
+      },
+      "src/lib/orchestrator/boardReportRun.test.ts": {
+        "exitCode": 0,
+        "pass": 9,
+        "fail": 0,
+        "failures": []
+      },
+      "src/lib/prototypeReview/decision.integration.test.ts": {
+        "exitCode": 0,
+        "pass": 14,
+        "fail": 0,
+        "failures": []
+      },
+      "src/lib/prototypeReview/decision.test.ts": {
+        "exitCode": 0,
+        "pass": 4,
+        "fail": 0,
+        "failures": []
+      },
+      "src/lib/prototypeReview/fences.test.ts": {
+        "exitCode": 0,
+        "pass": 14,
+        "fail": 0,
+        "failures": []
+      },
+      "src/lib/prototypeReview/http.test.ts": {
+        "exitCode": 0,
+        "pass": 30,
+        "fail": 0,
+        "failures": []
+      },
+      "src/lib/prototypeReview/mcpReceipts.test.ts": {
+        "exitCode": 0,
+        "pass": 11,
+        "fail": 0,
+        "failures": []
+      },
+      "src/lib/prototypeReview/seatDecisions.test.ts": {
+        "exitCode": 0,
+        "pass": 17,
+        "fail": 0,
+        "failures": []
+      },
+      "src/lib/prototypeReview/telegramAnswer.test.ts": {
+        "exitCode": 0,
+        "pass": 39,
+        "fail": 0,
+        "failures": []
+      },
+      "src/lib/prototypeReview/telegramPost.test.ts": {
+        "exitCode": 0,
+        "pass": 14,
+        "fail": 0,
+        "failures": []
+      },
+      "src/lib/reaperRuntime.test.ts": {
+        "exitCode": 0,
+        "pass": 62,
+        "fail": 0,
+        "failures": []
+      },
+      "src/lib/runtime/startup.handoverRetry.test.ts": {
+        "exitCode": 0,
+        "pass": 4,
+        "fail": 0,
+        "failures": []
+      },
+      "src/lib/runtime/startup.quarantine.test.ts": {
+        "exitCode": 0,
+        "pass": 7,
+        "fail": 0,
+        "failures": []
+      },
+      "src/lib/runtime/startup.test.ts": {
+        "exitCode": 1,
+        "pass": 146,
+        "fail": 3,
+        "failures": [
+          "deferred pipeline evidence completes the pass with both engines retained, reconciles pending spawns outside the fence, and re-probes only the evidence until it moves (#1501)",
+          "startup settles a delivered pipeline retry and collapses its rebooted predecessor exactly once",
+          "startup terminalizes a delivered Claude spawn whose unverifiable host claim survived reboot"
+        ]
+      },
+      "src/lib/runtime/startupFinalization.integration.test.ts": {
+        "exitCode": 1,
+        "pass": 21,
+        "fail": 2,
+        "failures": [
+          "historical failed launches do not retain startup admission across one full runtime snapshot per receipt",
+          "the full retained history completes within the promoted serving budget"
+        ]
+      },
+      "src/lib/runtime/startupRowRetries.test.ts": {
+        "exitCode": 0,
+        "pass": 5,
+        "fail": 0,
+        "failures": []
+      },
+      "src/lib/runtime/startupStatus.test.ts": {
+        "exitCode": 0,
+        "pass": 4,
+        "fail": 0,
+        "failures": []
+      },
+      "src/lib/runtime/structuredControls.test.ts": {
+        "exitCode": 0,
+        "pass": 73,
+        "fail": 0,
+        "failures": []
+      },
+      "src/lib/runtime/structuredDeliveryController.test.ts": {
+        "exitCode": 0,
+        "pass": 4,
+        "fail": 0,
+        "failures": []
+      },
+      "src/lib/runtime/structuredMessageDelivery.keyed.test.ts": {
+        "exitCode": 0,
+        "pass": 1,
+        "fail": 0,
+        "failures": []
+      },
+      "src/lib/runtime/structuredMessageDelivery.test.ts": {
+        "exitCode": 0,
+        "pass": 152,
+        "fail": 0,
+        "failures": []
+      }
     },
     "baselineComparisons": {
       "src/lib/mcp/bindings.test.ts": {
-        "base": "106 pass, 1 fail",
-        "candidate": "106 pass, 1 fail",
-        "cause": "placement fixture expects empty stderr; existing deferred migration warning is present"
+        "candidate": {
+          "pass": 106,
+          "fail": 1,
+          "failures": [
+            "task placement bindings require atomic guards and classify field refusals as non-retryable"
+          ]
+        },
+        "base": {
+          "pass": 106,
+          "fail": 1,
+          "failures": [
+            "task placement bindings require atomic guards and classify field refusals as non-retryable"
+          ]
+        },
+        "newFailures": []
       },
       "src/lib/runtime/startup.test.ts": {
-        "base": "145 pass, 4 fail",
-        "candidate": "145 pass, 4 fail",
-        "cause": "same scheduled retry, delivered spawn settlement, pipeline retry and deferred-evidence assertions"
+        "candidate": {
+          "pass": 146,
+          "fail": 3,
+          "failures": [
+            "deferred pipeline evidence completes the pass with both engines retained, reconciles pending spawns outside the fence, and re-probes only the evidence until it moves (#1501)",
+            "startup settles a delivered pipeline retry and collapses its rebooted predecessor exactly once",
+            "startup terminalizes a delivered Claude spawn whose unverifiable host claim survived reboot"
+          ]
+        },
+        "base": {
+          "pass": 145,
+          "fail": 4,
+          "failures": [
+            "deferred pipeline evidence completes the pass with both engines retained, reconciles pending spawns outside the fence, and re-probes only the evidence until it moves (#1501)",
+            "scheduled startup retry releases a demoted-superseded retained host",
+            "startup settles a delivered pipeline retry and collapses its rebooted predecessor exactly once",
+            "startup terminalizes a delivered Claude spawn whose unverifiable host claim survived reboot"
+          ]
+        },
+        "newFailures": []
       },
       "src/lib/runtime/startupFinalization.integration.test.ts": {
-        "base": "21 pass, 2 fail",
-        "candidate": "21 pass, 2 fail",
-        "cause": "same empty-stderr assertions with an existing state ownership warning"
+        "candidate": {
+          "pass": 21,
+          "fail": 2,
+          "failures": [
+            "historical failed launches do not retain startup admission across one full runtime snapshot per receipt",
+            "the full retained history completes within the promoted serving budget"
+          ]
+        },
+        "base": {
+          "pass": 21,
+          "fail": 2,
+          "failures": [
+            "historical failed launches do not retain startup admission across one full runtime snapshot per receipt",
+            "the full retained history completes within the promoted serving budget"
+          ]
+        },
+        "newFailures": []
       }
     },
-    "runtimeHarness": "Existing Viewer verifier in the scratch export: TMPDIR is the whole private sandbox; socket paths retain the owned process-fd alias and refuse an external temporary-directory fallback.",
+    "selectedTaskValidation": {
+      "base": {
+        "pass": 3,
+        "fail": 0,
+        "failures": []
+      },
+      "candidateBeforeFix": {
+        "pass": 0,
+        "fail": 3,
+        "failures": [
+          "prototype round rejects a malformed selected task",
+          "prototype task rejects a malformed selected task",
+          "prototype write rejects a malformed selected task"
+        ]
+      },
+      "candidateFinal": {
+        "pass": 3,
+        "fail": 0
+      },
+      "fixture": "malformed selected persisted task; round read, task read, round update"
+    },
+    "performanceRedControls": {
+      "receiptOwnershipBaseExitCode": 1,
+      "prototypeReadBaseExitCode": 1
+    },
+    "typecheck": {
+      "command": "bun node_modules/typescript/bin/tsc --noEmit",
+      "exitCode": 0
+    },
+    "lint": {
+      "command": "bun node_modules/eslint/bin/eslint.js <changed TypeScript files>",
+      "exitCode": 0
+    },
     "build": {
       "command": "bun run build",
       "exitCode": 0
     },
     "viewer": {
-      "command": "bun scripts/verify-viewer-runtime.ts",
-      "result": {
-        "checkedAt": "2026-10-17T00:33:25.699Z",
-        "runtime": "bun 1.4.0",
-        "modules": {
-          "probed": 25,
-          "loaded": 25,
-          "failures": []
-        },
-        "served": {
-          "status": 200,
-          "bytes": 82416,
-          "readyMs": 3210
-        },
-        "ok": true
-      }
+      "checkedAt": "2026-10-17T01:28:09.531Z",
+      "runtime": "bun 1.4.0",
+      "modules": {
+        "probed": 25,
+        "loaded": 25,
+        "failures": []
+      },
+      "served": {
+        "status": 200,
+        "bytes": 82407,
+        "readyMs": 2930
+      },
+      "ok": true
     },
     "compiledCodexSocket": {
-      "command": "bun scripts/verify-viewer-runtime.ts --codex-socket",
-      "result": {
-        "ok": true,
-        "runtime": "bun 1.4.0",
-        "process": "Viewer (compiled Next server, .next/server)",
-        "evidence": {
-          "entry": ".next/server/app/api/account-migrations/[intentId]/route.js",
-          "module": "898387",
-          "frameBytes": 1083,
-          "roundTripMs": 1
-        }
+      "ok": true,
+      "runtime": "bun 1.4.0",
+      "process": "Viewer (compiled Next server, .next/server)",
+      "evidence": {
+        "entry": ".next/server/app/api/account-migrations/[intentId]/route.js",
+        "module": "945291",
+        "frameBytes": 1083,
+        "roundTripMs": 1
       }
     },
     "runtimeHost": {
-      "command": "bun scripts/verify-runtime-host.ts",
-      "result": {
-        "checkedAt": "2026-10-17T00:33:35.254Z",
-        "runtime": "bun 1.4.0",
-        "succession": {
-          "predecessorReadyMs": 508,
-          "successorTookOverMs": 503,
-          "completed": true
+      "checkedAt": "2026-10-17T01:28:16.121Z",
+      "runtime": "bun 1.4.0",
+      "succession": {
+        "predecessorReadyMs": 508,
+        "successorTookOverMs": 503,
+        "completed": true
+      },
+      "listener": {
+        "windowMs": 15000,
+        "polls": 27,
+        "answered": 27,
+        "abandoned": 13
+      },
+      "socket": {
+        "polls": 27,
+        "answered": 27,
+        "abandoned": 13
+      },
+      "recovery": {
+        "retained": {
+          "image": "agent-log-viewer:rehearsal-aaaaaaaaaaaa",
+          "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "container": "llv-runtime-host-aaaaaaaaaaaa-8da5b43f3b8c"
         },
-        "listener": {
-          "windowMs": 15000,
-          "polls": 27,
-          "answered": 27,
-          "abandoned": 13
+        "failed": {
+          "image": "delegatus:rehearsal-dddddddddddd",
+          "revision": "dddddddddddddddddddddddddddddddddddddddd",
+          "container": "delegatus-runtime-host-dddddddddddd-f2708ccc4718"
         },
-        "socket": {
-          "polls": 27,
-          "answered": 27,
-          "abandoned": 13
-        },
-        "ok": true
-      }
+        "docker": [
+          "container inspect delegatus-runtime-host-dddddddddddd-f2708ccc4718",
+          "container update --restart no delegatus-runtime-host-dddddddddddd-f2708ccc4718",
+          "container stop --time 40 delegatus-runtime-host-dddddddddddd-f2708ccc4718",
+          "container rm -f delegatus-runtime-host-dddddddddddd-f2708ccc4718"
+        ]
+      },
+      "ok": true
     },
     "nativeCodex": {
-      "command": "bun scripts/verify-native-codex-runtime.ts <pinned CLI> --engine-only, plus --shared-only",
-      "results": [
-        [
-          "catalog-test",
-          0
-        ],
-        [
-          "worker-restart-test",
-          0
-        ],
-        [
-          "runtime-host",
-          0
-        ],
-        [
-          "native-0.154.0",
-          0
-        ],
-        [
-          "native-0.159.0",
-          0
-        ],
-        [
-          "native-shared",
-          0
-        ]
+      "native-0.154.0": {
+        "command": "bun scripts/verify-native-codex-runtime.ts <supported Codex fixture> --engine-only",
+        "exitCode": 0
+      },
+      "native-0.159.0": {
+        "command": "bun scripts/verify-native-codex-runtime.ts <supported Codex fixture> --engine-only",
+        "exitCode": 0
+      },
+      "native-shared": {
+        "command": "bun scripts/verify-native-codex-runtime.ts --shared-only",
+        "exitCode": 0
+      }
+    },
+    "runtimeControls": {
+      "runtime-controls": {
+        "exitCode": 0
+      },
+      "controls_scripts_bun-runtime-workflow.test.ts": {
+        "exitCode": 0
+      },
+      "controls_scripts_verify-viewer-runtime.test.ts": {
+        "exitCode": 0
+      },
+      "controls_src_runtime-host_hostRehearsal.test.ts": {
+        "exitCode": 0
+      },
+      "controls_src_runtime-host_hostRehearsalRun.test.ts": {
+        "exitCode": 0
+      },
+      "controls_src_runtime-host_journalStartup.test.ts": {
+        "exitCode": 0
+      },
+      "controls_src_runtime-host_deploymentProxy.test.ts": {
+        "exitCode": 0
+      }
+    },
+    "trackerAuditFixtures": {
+      "command": "bun test scripts/privacy-publication-gate.test.ts --test-name-pattern GitHub",
+      "exitCode": 0,
+      "pass": 17,
+      "fail": 0,
+      "failures": [],
+      "ocrLanguages": [
+        "eng",
+        "ukr"
       ]
     },
-    "typecheck": {
-      "command": "node node_modules/typescript/bin/tsc --noEmit",
-      "exitCode": 0
+    "runtimeHarness": "Scratch-only Viewer verifier adaptation: TMPDIR covers the private sandbox; HOME uses an owned process-fd alias on Linux; socket sandboxes stay inside the stage scratch tree. Committed verifier restored before its held tests.",
+    "publicationPrivacy": {
+      "command": "bun scripts/privacy-publication-gate.ts --require-known-values --check-commits --base 4119ffba --paths <changed files>",
+      "exitCode": 0,
+      "checkedAt": "2026-10-17T01:30:26.857460+00:00",
+      "fingerprints": "scripts/privacy-known-value-fingerprints.json"
     },
-    "lint": {
-      "command": "node node_modules/eslint/bin/eslint.js <changed TypeScript files>",
-      "exitCode": 0
-    },
-    "privacyTrackerFixtures": {
-      "command": "bun test scripts/privacy-publication-gate.test.ts -t GitHub",
-      "result": "17 pass, 0 fail; English and Ukrainian OCR available"
-    },
-    "privacyPublication": {
-      "command": "bun run privacy:check",
-      "result": "PRIVACY GATE: PASS"
-    }
+    "hostedChecks": "privacy-publication, privacy-tracker-audit and runtime-gate run after pipeline publication and PR creation"
   }
 }

@@ -92,3 +92,46 @@ test("the seat worker reads sixteen rounds per keyset page", async () => {
   expect(seatRoundPage(third[0]!.id)).toHaveLength(0);
   expect(() => seatRoundPage("", 17)).toThrow("invalid seat round page limit");
 });
+
+
+test("prototype reads preserve the legacy view before state promotion", () => {
+  const directory = fs.mkdtempSync(path.join(state, "prototype-legacy-"));
+  try {
+    fs.writeFileSync(path.join(directory, "tasks.json"), JSON.stringify({ tasks: tasks() }));
+    const source = `
+      import { findPrototypeRound } from ${JSON.stringify(new URL("./store.ts", import.meta.url).pathname)};
+      import { taskForPrototype } from ${JSON.stringify(new URL("./world.ts", import.meta.url).pathname)};
+      import { taskFeedSource } from ${JSON.stringify(new URL("../tasks/store.ts", import.meta.url).pathname)};
+      if (taskFeedSource() !== null) throw new Error("import should be refused before promotion");
+      const round = findPrototypeRound("task-1024", ${JSON.stringify(review)});
+      const task = taskForPrototype("task-1024", { conversationId: null, project: null });
+      console.log(JSON.stringify({ review: round?.id, task: task.id }));
+    `;
+    const child = Bun.spawnSync([process.execPath, "-e", source], {
+      env: { ...process.env, LLV_STATE_DIR: directory, NEXT_PHASE: "phase-production-build" },
+      stdout: "pipe", stderr: "pipe", timeout: 10_000,
+    });
+    expect(new TextDecoder().decode(child.stderr)).toBe("");
+    expect(child.exitCode).toBe(0);
+    expect(JSON.parse(new TextDecoder().decode(child.stdout))).toEqual({ review, task: "task-1024" });
+    expect(fs.existsSync(path.join(directory, "state.sqlite"))).toBe(false);
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
+
+test.each(["round", "task", "write"])("prototype %s rejects a malformed selected task", operation => {
+  saveTasks(tasks());
+  const db = new Database(path.join(state, "state.sqlite"));
+  const status = (value: string) => {
+    db.query("UPDATE state_rows SET value_json=json_set(value_json,'$.status',?),row_revision=row_revision+1 WHERE collection='tasks' AND row_key='t:task-1024'").run(value);
+    db.query("UPDATE state_collections SET revision=revision+1 WHERE collection='tasks'").run();
+    db.query("INSERT INTO state_changes(collection,revision,row_key,operation) SELECT collection,revision,'t:task-1024','upsert' FROM state_collections WHERE collection='tasks'").run();
+  };
+  status("broken");
+  try {
+    const read = operation === "round" ? () => findPrototypeRound("task-1024", review)
+      : operation === "task" ? () => taskForPrototype("task-1024", { conversationId: null, project: null })
+      : () => mutatePrototypeRound("task-1024", review, () => {});
+    expect(read).toThrow("invalid persisted task row");
+  } finally { status("inbox"); db.close(); }
+});

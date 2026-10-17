@@ -130,7 +130,7 @@ import { deployTaskChanges, projectSnapshots } from "@/lib/bridge/taskChanges";
 import { renderTelegram, type PullRequestLookup } from "@/lib/bridge/telegramReport";
 import { projectDisplayName } from "@/lib/displayNames";
 import { agentMessageOrigin } from "@/lib/runtime/agentMessageAuthor";
-import { orchestratorRelayPayload } from "@/lib/orchestrator/relay";
+import { orchestratorRelayPayload, resolveOrchestratorRelay } from "@/lib/orchestrator/relay";
 import { agentRecordAuthors, type AgentRecordAuthor } from "@/lib/runtime/agentRecordAuthors";
 import { forgeCacheView } from "@/lib/forge/cache";
 import { githubRepositoryOfRemote } from "@/lib/forge/workLinks";
@@ -1767,11 +1767,12 @@ async function sendMessage(
      a chained alias or a superseded path still names its owner — and it stays that way
      without this file having to be kept in step by hand. */
   const lookup = readOnlyConversationLookupFromSnapshot(dependencies.registrySnapshot());
-  const conversation = conversationId
-    ? lookup.conversation(conversationId as `conversation_${string}`)
+  const deliveredConversationId = orchestratorRelayProject && typeof receipt?.conversationId === "string" ? receipt.conversationId : conversationId;
+  const conversation = deliveredConversationId
+    ? lookup.conversation(deliveredConversationId as `conversation_${string}`)
     : lookup.conversationForPath(transcriptPath);
   return {
-    conversationId: (conversation?.id ?? conversationId) || null,
+    conversationId: (conversation?.id ?? deliveredConversationId) || null,
     transcriptPath: (conversation?.generations.at(-1)?.path ?? transcriptPath) || null,
     operationId,
     outcome: settledOutcome,
@@ -5303,6 +5304,10 @@ async function sendMessageToOrchestrator(
       transcriptPath: seat?.conversationId === recipient ? seat.path : undefined,
       path: undefined,
     }, control, dependencies, context, orchestratorSendDownstreamKey(key), project);
+    const actualRecipient = typeof outcome.conversationId === "string" ? outcome.conversationId
+      : typeof (outcome.receipt as { conversationId?: unknown } | undefined)?.conversationId === "string"
+        ? (outcome.receipt as { conversationId: string }).conversationId : recipient;
+    if (actualRecipient && actualRecipient !== recipient && context?.bindCreatedTarget) await context.bindCreatedTarget(actualRecipient);
     return redactPayload({
       ...outcome, project, created,
       // Seat metadata describes only the recipient this dispatch actually used.
@@ -7518,7 +7523,14 @@ async function recoverSend(
     return { outcome: "unknown", evidence: "none", reason: "the bound target names no conversation", ids: {} };
   }
   const ports: SendSettlementPorts = dependencies.sendSettlementPorts?.() ?? {};
-  const found = await resolveOriginalSend({ conversationId: binding.target.identity, clientMessageId: binding.downstreamKey,
+  let recipientIdentity = binding.target.identity;
+  if (binding.toolName === "send_message_to_orchestrator" && binding.target.project && binding.sendPayload) {
+    const payload = binding.sendPayload;
+    const relay = resolveOrchestratorRelay(binding.target.project, recipientIdentity, payload,
+      splitRelayMessageText(payload.text)?.body ?? payload.text, binding.downstreamKey);
+    if (relay.ok && relay.operationId) recipientIdentity = relay.recipient;
+  }
+  const found = await resolveOriginalSend({ conversationId: recipientIdentity, clientMessageId: binding.downstreamKey,
     ...(binding.sendPayload ?? (typeof args?.text === "string" ? { text: args.text } : {})) }, ports);
   if (found.kind === "unreadable") {
     return { outcome: "unknown", evidence: "delivery-record", reason: `the delivery record could not be read: ${found.reason}`, ids: {} };

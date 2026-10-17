@@ -260,7 +260,7 @@ export class RuntimeHost {
       } else if (request.method === "native-queue-transition") {
         if (!this.structuredHosts) throw new Error("structured hosts are disabled");
         const transition = request.params?.transition as NativeQueueTransition | undefined;
-        if (!transition || !["prepared", "acknowledged", "observed-queued", "withdrawn", "removed", "refused", "uncertain", "proven"].includes(transition.phase)) throw new Error("native queue transition is invalid");
+        if (!transition || !["prepared", "seat-withdrawal", "acknowledged", "observed-queued", "withdrawn", "removed", "refused", "uncertain", "proven"].includes(transition.phase)) throw new Error("native queue transition is invalid");
         result = this.journal.nativeQueueTransition(String(request.params?.operationId ?? ""), transition);
       } else if (request.method === "native-queue-settle-compacted") {
         if (!this.structuredHosts) throw new Error("structured hosts are disabled");

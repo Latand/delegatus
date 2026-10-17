@@ -340,6 +340,8 @@ export class StructuredHostAdoptionCleanupError<Host extends EngineHost = Engine
 }
 
 /** A local precondition refused a send before a mutating engine request. */
+export class StructuredDispatchDeferredError extends Error {}
+
 export class StructuredSendRefusedError extends Error {
   constructor(message: string) { super(message); this.name = "StructuredSendRefusedError"; }
 }

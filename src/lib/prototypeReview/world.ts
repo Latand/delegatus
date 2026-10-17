@@ -5,8 +5,8 @@ import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
 import { pipelineSelectionSource, loadPipelinesForList } from "@/lib/pipelines/store";
 import { canonicalProject } from "@/lib/projects/aliases";
 import { projectForCwd } from "@/lib/scanner/describe";
-import { orchestratorSeatFor } from "@/lib/orchestrator/seats";
-import { taskFeedSource } from "@/lib/tasks/store";
+import { currentSeat } from "@/lib/orchestrator/seatChannel";
+import { loadPrototypeTask } from "@/lib/tasks/store";
 import { runsElsewhere } from "@/lib/links/linked";
 import type { PrototypeReviewRound } from "./types";
 import { PrototypeError } from "./input";
@@ -40,12 +40,11 @@ export const prototypeWorld: PrototypeWorld = {
     return found[0] ?? null;
   },
   orchestrator(project) {
-    const seat = orchestratorSeatFor(project);
-    return seat.active?.conversationId ?? null;
+    return currentSeat(project)?.conversationId ?? null;
   },
 };
 export function taskForPrototype(taskId: string, caller: PrototypeCaller, write = false) {
-  const task = taskFeedSource()?.get(taskId);
+  const task = loadPrototypeTask(taskId);
   if (!task) throw new PrototypeError("task not found",404);
   if (caller.conversationId && (!caller.project || canonicalProject(task.project) !== canonicalProject(caller.project))) throw new PrototypeError("prototype access is limited to the caller's project",403);
   if (write && runsElsewhere(task)) throw new PrototypeError("this task's prototypes are owned by another installation",409);

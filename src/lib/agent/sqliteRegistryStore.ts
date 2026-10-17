@@ -69,8 +69,8 @@ const ROW_COLLECTION_KEYS: ReadonlySet<string> = new Set(ROW_COLLECTIONS);
 /** The rows whose MCP grant lists a complete load decides from other rows. */
 const READER_GRANT_COLLECTIONS: ReadonlySet<RowCollection> = new Set(["entries", "receipts", "conversations"]);
 type LookupValue = string | readonly string[];
-type LookupField = "parentConversationId" | "launchProfile.parentConversationId" | "pendingSpawnCapability.operationId" | "conversationId" | "artifactPath" | "command.operationId" | "deliveryId" | "alias" | "clientAttemptId" | "spawnCapabilityDigest" | "pendingSpawnCapability.digest" | "state" | "status" | "key.sessionId" | "requestDigest" | "supersedes.conversationId" | "structuredHost.kind";
-const LOOKUP_PATHS: Record<LookupField, string> = { parentConversationId: "$.parentConversationId", "launchProfile.parentConversationId": "$.launchProfile.parentConversationId", "pendingSpawnCapability.operationId": "$.pendingSpawnCapability.operationId", conversationId: "$.conversationId", artifactPath: "$.artifactPath", "command.operationId": "$.command.operationId", deliveryId: "$.deliveryId", alias: "$", clientAttemptId: "$.clientAttemptId", spawnCapabilityDigest: "$.spawnCapabilityDigest", "pendingSpawnCapability.digest": "$.pendingSpawnCapability.digest", state: "$.state", status: "$.status", "key.sessionId": "$.key.sessionId", requestDigest: "$.requestDigest", "supersedes.conversationId": "$.supersedes.conversationId", "structuredHost.kind": "$.structuredHost.kind" };
+type LookupField = "launchId" | "parentConversationId" | "launchProfile.parentConversationId" | "pendingSpawnCapability.operationId" | "conversationId" | "artifactPath" | "command.operationId" | "deliveryId" | "alias" | "clientAttemptId" | "spawnCapabilityDigest" | "pendingSpawnCapability.digest" | "state" | "status" | "key.sessionId" | "requestDigest" | "supersedes.conversationId" | "structuredHost.kind";
+const LOOKUP_PATHS: Record<LookupField, string> = { launchId: "$.launchId", parentConversationId: "$.parentConversationId", "launchProfile.parentConversationId": "$.launchProfile.parentConversationId", "pendingSpawnCapability.operationId": "$.pendingSpawnCapability.operationId", conversationId: "$.conversationId", artifactPath: "$.artifactPath", "command.operationId": "$.command.operationId", deliveryId: "$.deliveryId", alias: "$", clientAttemptId: "$.clientAttemptId", spawnCapabilityDigest: "$.spawnCapabilityDigest", "pendingSpawnCapability.digest": "$.pendingSpawnCapability.digest", state: "$.state", status: "$.status", "key.sessionId": "$.key.sessionId", requestDigest: "$.requestDigest", "supersedes.conversationId": "$.supersedes.conversationId", "structuredHost.kind": "$.structuredHost.kind" };
 type KeyedReader = (collection: RowCollection, field: LookupField, value: LookupValue) => string[];
 type ProjectionReader = (collection: RowCollection, projector: RegistryRowProjector<RowCollection, unknown>) => Array<[string, unknown]>;
 interface RegistryFileReaders {
@@ -1032,7 +1032,7 @@ export class SqliteAgentRegistryStore {
     for (const [field, jsonPath] of Object.entries(LOOKUP_PATHS)) {
       // Recovery indexes are prepared separately with a yield between
       // each build; accumulating their scans here breaks the cold-loop bound.
-      if (["requestDigest", "supersedes.conversationId", "structuredHost.kind", "parentConversationId", "launchProfile.parentConversationId", "pendingSpawnCapability.operationId"].includes(field)) continue;
+      if (["launchId", "requestDigest", "supersedes.conversationId", "structuredHost.kind", "parentConversationId", "launchProfile.parentConversationId", "pendingSpawnCapability.operationId"].includes(field)) continue;
       if (options.allowArchiveMigration === false
         && !["conversationId", "artifactPath", "command.operationId", "alias"].includes(field)) continue;
       this.db.exec(`CREATE INDEX IF NOT EXISTS registry_lookup_${field.replaceAll(".", "_")} ON registry_rows(collection, json_extract(value_json, '${jsonPath}'), row_order)${field === 'alias' ? " WHERE collection = 'conversationAliases'" : ''}`);
@@ -1473,6 +1473,8 @@ export class SqliteAgentRegistryStore {
   async prepareRecoveryIndexes(signal?: AbortSignal): Promise<void> {
     if (this.options.readOnly || this.options.allowArchiveMigration === false) return;
     for (const [name, table, field, collection] of [
+      ["registry_lookup_launchId", "registry_rows", "launchId", "receipts"],
+      ["registry_archive_launchId", "registry_archive", "launchId", "receipts"],
       ["registry_lookup_parentConversationId", "registry_rows", "parentConversationId", "receipts"],
       ["registry_lookup_launchProfile_parentConversationId", "registry_rows", "launchProfile.parentConversationId", "receipts"],
       ["registry_lookup_pendingSpawnCapability_operationId", "registry_rows", "pendingSpawnCapability.operationId", "receipts"],

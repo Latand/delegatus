@@ -1,3 +1,4 @@
+import { currentSeat } from "./seatChannel";
 import type { NextRequest } from "next/server";
 
 import { callerConversationId, operatorBrowserRequest } from "@/lib/agent/operatorAuthority";
@@ -98,6 +99,8 @@ export function resolveOrchestratorRelay(
   const targetProject = canonicalOrchestratorProject(project);
   const target = orchestratorSeatFor(targetProject);
   const key = clientMessageId?.slice(0, 128).trim();
+  const formerRecipient = recipient !== undefined && orchestratorRevocations().some(previous =>
+    canonicalOrchestratorProject(previous.project) === targetProject && previous.conversationId === recipient);
   let operationId: string | undefined;
   let terminalReceipt: SendReceipt | undefined;
   let voiceRecoveryReceipt: SendReceipt | undefined;
@@ -114,15 +117,17 @@ export function resolveOrchestratorRelay(
           .filter(previous => canonicalOrchestratorProject(previous.project) === targetProject)
           .map(previous => canonical(previous.conversationId)),
       ]);
-      const originalRows = [
+      const keyRows = [
         ...Object.values(snapshot.heldDeliveries),
         ...Object.values(snapshot.deliveryOperationOwners),
       ].filter(row => row.clientMessageId === key
         && projectRecipients.has(canonical(row.conversationId))
-        && (recipient === undefined || canonical(row.conversationId) === canonical(recipient))
-        && (sameMessageOrigin(row.command.origin, payload.origin)
-          || (seat && row.command.origin?.kind === "agent" && row.command.origin.role === "orchestrator"
-            && row.command.origin.conversationId === seat.conversationId)));
+        && (recipient === undefined || formerRecipient || canonical(row.conversationId) === canonical(recipient)));
+      const originalRows = keyRows.filter(row => sameMessageOrigin(row.command.origin, payload.origin)
+        || (seat && row.command.origin?.kind === "agent" && row.command.origin.role === "orchestrator"
+          && row.command.origin.conversationId === seat.conversationId));
+      if (recipient !== undefined && keyRows.length && !originalRows.length)
+        return refused("idempotency_conflict", "the relay key belongs to another sender", 409);
       const originals = new Set(originalRows.map(row => canonical(row.conversationId)));
       if (originals.size > 1) return refused("idempotency_conflict", "the relay key has more than one original recipient", 409);
       if (originals.size === 1) {
@@ -137,14 +142,18 @@ export function resolveOrchestratorRelay(
         if (original.kind !== "found") return refused("idempotency_conflict", "the relay key does not match its original send", 409);
         operationId = original.operationId;
         if (voiceBinding) voiceRecoveryReceipt = original.receipt;
-        if (original.receipt.state !== "in-flight") terminalReceipt = original.receipt;
+        terminalReceipt = original.receipt;
         recipient = originalRecipient;
       }
     } catch {
       return refused("relay_evidence_unavailable", "the original relay binding could not be read", 503);
     }
   }
-  recipient ??= target.active?.conversationId ?? undefined;
+  if (recipient && !operationId && recipient !== target.active?.conversationId
+    && orchestratorRevocations().some(previous => canonicalOrchestratorProject(previous.project) === targetProject && previous.conversationId === recipient)) {
+    recipient = currentSeat(targetProject)?.conversationId ?? undefined;
+  }
+  recipient ??= currentSeat(targetProject)?.conversationId ?? undefined;
   if (voiceBinding && !operationId && (target.active?.conversationId !== voiceBinding.proposal.recipient.conversationId
     || target.active?.seatEpoch !== voiceBinding.proposal.recipient.seatEpoch)) {
     return refused("voice_seat_changed", "the orchestrator changed before delivery admission", 409);

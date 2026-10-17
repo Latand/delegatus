@@ -71,7 +71,7 @@ for (const workload of ["receipt-ownership", "prototype-round-read", "prototype-
     readBytesPerCall: summary(bytes.map(value => value/callsPerTick)) };
 }
 const read = (name: string) => { try { return fs.readFileSync(name, "utf8").trim(); } catch { return null; } };
-const files = ["src/lib/agent/registry.ts", "src/lib/agent/sqliteRegistryStore.ts", "src/lib/agent/registryArchive.ts", "src/lib/tasks/store.ts", "src/lib/prototypeReview/store.ts", "src/lib/prototypeReview/deliveryWorker.ts", "src/lib/prototypeReview/seatRounds.ts", "scripts/measure-residual-readers.ts"];
+const files = ["src/lib/agent/registry.ts", "src/lib/agent/sqliteRegistryStore.ts", "src/lib/agent/registryArchive.ts", "src/lib/tasks/store.ts", "src/lib/prototypeReview/store.ts", "src/lib/prototypeReview/deliveryWorker.ts", "src/lib/prototypeReview/seatRounds.ts", "src/lib/prototypeReview/world.ts", "src/lib/prototypeReview/decision.ts", "scripts/measure-residual-readers.ts"];
 fs.writeFileSync(output, JSON.stringify({ label, at: new Date().toISOString(), bun: Bun.version, fixtureSha256: digest,
   load: { receiptCount, taskCount, callsPerTick, ticks, measuredCallsPerWorkload: callsPerTick*ticks, concurrentWriters: 0, coldReceiptRows, registry, taskBytes },
   machine: { cpuMax: read("/sys/fs/cgroup/cpu.max"), memoryMax: read("/sys/fs/cgroup/memory.max"), loadavg: read("/proc/loadavg") },

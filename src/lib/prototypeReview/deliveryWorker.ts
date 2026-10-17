@@ -188,7 +188,7 @@ async function tick(ports: PrototypeDeliveryPorts): Promise<void> {
   try {
     const now = ports.now();
     const rescan = state.scanAfter !== undefined || state.seatScanAfter !== undefined || now - state.scannedAt >= RESCAN_MS;
-    if (!rescan && ![...state.owed.keys()].some(reviewId => !state.running.has(reviewId) && (state.due.get(reviewId) ?? 0) <= now)) return;
+    if (!rescan && state.owed.size === 0) return;
     // A predecessor release left running beside its successor stops attempting; the successor's boot swept the store.
     if (!viewerReleaseOwnsTraffic()) return;
     await sweepPrototypeDeliveries(ports, { rescan, limit: 16 })
@@ -198,13 +198,13 @@ async function tick(ports: PrototypeDeliveryPorts): Promise<void> {
   } finally { state.ticking = false; }
 }
 
-/** At the Viewer's start: every owed decision is attempted once, then the clock runs. */
+/** At Viewer start, take one bounded page; the clock continues its cursor. */
 export function startPrototypeDeliveryWorker(ports: PrototypeDeliveryPorts = productionPorts()): void {
   const state = workerState();
   if (state.timer) return;
   state.timer = setInterval(() => { void tick(ports); }, TICK_MS);
   state.timer.unref?.();
-  void sweepPrototypeDeliveries(ports, { force: true })
+  void sweepPrototypeDeliveries(ports, { force: true, limit: 16 })
     .catch(error => console.error("[prototype delivery] boot sweep failed", error instanceof Error ? error.message : String(error)));
 }
 

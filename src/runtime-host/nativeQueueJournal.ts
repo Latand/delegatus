@@ -230,7 +230,14 @@ export class NativeQueueJournal {
         || !nativeQueueInputMatches(version, observed.input)) throw new Error("native queue observation conflicts with the frozen input");
       transition = { phase: "acknowledged", nativeSubmissionId: observed.id };
     }
-    if (transition.phase === "prepared") {
+    if (transition.phase === "seat-withdrawal") {
+      if (command.action !== "add" || entry.state !== "admitted" || version.input || entry.nativeSubmissionId || entry.proof) {
+        throw new Error("native add already crossed the dispatch boundary");
+      }
+      entry.state = "refused";
+      entry.reason = transition.reason;
+      entry.mutationOperationId = null;
+    } else if (transition.phase === "prepared") {
       if (!Array.isArray(transition.input) || transition.input.length === 0) throw new Error("native queue input is invalid");
       if (transition.binding && !sameNativeQueueBinding(transition.binding, entry.binding)) {
         if (command.action !== "add" || entry.state !== "admitted" || version.input || entry.nativeSubmissionId || entry.proof) {

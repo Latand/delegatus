@@ -916,3 +916,25 @@ test("a report asked for again is owed once more from its own text, by report or
   expect(admission.rereadReport(session.id, "k9", "delegation-b")).toEqual({ status: "not_found" });
   expect(keys).toHaveLength(1);
 });
+
+test("a queued voice directive follows a revoked seat across admission restart", async () => {
+  let recipient: Recipient = { project: "voice-rotation", conversationId: "conversation_voice_first", seatEpoch: 1, engine: "codex" };
+  const sent: { conversationId: string; text: string; key: string }[] = [];
+  const paths: import("./admission").CompanionDeliveryPaths = {
+    recipient: () => recipient, reports: () => [],
+    send: async ({ delivery, text }) => { sent.push({ conversationId: delivery.recipient.conversationId, text, key: delivery.clientMessageId });
+      return { status: "queued", operationId: `voice-operation-${sent.length}` }; },
+    receipt: async delivery => delivery.recipient.conversationId === "conversation_voice_first" ? "seat-revoked" : "pending",
+  };
+  const admission = new CompanionAdmission(new CompanionStorage(), paths, () => Date.parse("2026-10-16T12:05:04Z"));
+  const session = admission.create({ project: "voice-rotation", locale: "en", authority: "live-model" });
+  await admission.delegate(session.id, "rotation-call", "rotation-input", "Review the pending plan.");
+  recipient = { ...recipient, conversationId: "conversation_voice_next", seatEpoch: 2 };
+  const restarted = new CompanionAdmission(new CompanionStorage(), paths, () => Date.parse("2026-10-16T12:06:32Z"));
+  await restarted.pollReceipts(session.id);
+  await restarted.pollReceipts(session.id);
+  expect(sent.map(row => row.conversationId)).toEqual(["conversation_voice_first", "conversation_voice_next"]);
+  expect(sent[1]!.text).toStartWith("[Delegatus] Redirected to you, the current orchestrator:");
+  expect(sent[1]!.text).toContain("Review the pending plan.");
+  expect(sent[1]!.key).not.toBe(sent[0]!.key);
+});

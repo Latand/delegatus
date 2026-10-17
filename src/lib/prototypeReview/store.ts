@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { statePath } from "@/lib/configDir";
 import { sniffAgrees } from "@/lib/artifact/serve";
-import { loadTasksForList, mutateTasks, taskFeedSource, mutateTaskPrototypeRound } from "@/lib/tasks/store";
+import { loadTasksForList, mutateTasks, loadPrototypeTask, mutateTaskPrototypeRound } from "@/lib/tasks/store";
 import type { BoardTask } from "@/lib/tasks/types";
 import { withFileTransaction } from "@/lib/state/fileTransaction";
 import { waitForStateLock } from "@/lib/state/lockWait";
@@ -130,7 +130,8 @@ export function mutatePrototypeRound<T>(taskId: string | null, reviewId: string,
 }
 export function findPrototypeRound(taskId: string | null, reviewId: string): PrototypeReviewRound | undefined {
   if (taskId === null) return findSeatRound(reviewId);
-  return taskFeedSource()?.get(taskId)?.prototypeReviews?.find(r => r.id === reviewId);
+  const task = loadPrototypeTask(taskId);
+  return task?.prototypeReviews?.find(r => r.id === reviewId);
 }
 /** Metadata is a task extension in the existing revisioned, linked SQLite store.
     A null task is the seat asking without one: the round goes to the seat's

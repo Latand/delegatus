@@ -109,7 +109,7 @@ test("receipt selectors use scoped indexes with large ineligible history", async
   await f.store.prepareRecoveryIndexes();
   const db = new Database(f.filename, { readonly: true });
   try {
-    for (const field of ["conversationId", "artifactPath", "parentConversationId", "launchProfile.parentConversationId", "pendingSpawnCapability.operationId", "pendingSpawnCapability.digest", "spawnCapabilityDigest", "clientAttemptId", "state"]) {
+    for (const field of ["launchId", "conversationId", "artifactPath", "parentConversationId", "launchProfile.parentConversationId", "pendingSpawnCapability.operationId", "pendingSpawnCapability.digest", "spawnCapabilityDigest", "clientAttemptId", "state"]) {
       const plan = db.query<{ detail: string }, []>(`EXPLAIN QUERY PLAN SELECT row_key,row_order FROM registry_hot_rows
         WHERE collection='receipts' AND json_extract(value_json,'$.${field}') IN ('fixture')
         UNION ALL SELECT a.row_key,a.row_order FROM registry_archive a CROSS JOIN registry_cold c
@@ -150,4 +150,14 @@ test("held receipt selections keep their cut across a peer rebind", async () => 
     const fresh = f.store.readOnlySnapshot().file;
     expect(registryRowsMatching(fresh, "receipts", field, next).some(row => row.launchId === "receipt-00512")).toBe(true);
   }
+});
+
+
+test("conflicting launch diagnostics select in collection order without reading unrelated receipts", async () => {
+  const f = fixture();
+  await f.store.prepareRecoveryIndexes();
+  f.reset();
+  const selected = registryRowsMatching(f.store.readOnlySnapshot().file, "receipts", "launchId", ["receipt-00512", "receipt-00000"]);
+  expect(selected.map(row => row.launchId)).toEqual(["receipt-00000", "receipt-00512"]);
+  expect(f.reads()).toBeLessThanOrEqual(2);
 });

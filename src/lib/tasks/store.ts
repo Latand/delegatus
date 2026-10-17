@@ -800,6 +800,17 @@ export function taskFeedSource(filePath = TASKS_FILE) {
   };
 }
 
+/** A validated keyed task, retaining legacy reads before promotion. */
+export function loadPrototypeTask(taskId: string, filePath = TASKS_FILE): BoardTask | null {
+  const collection = taskCollection(filePath, "read");
+  if (!collection) return loadTasks(filePath).find(task => task.id === taskId) ?? null;
+  const row = collection.get(`t:${taskId}`);
+  if (!row) return null;
+  const task = coerceTask(row);
+  if (!task) throw new Error("invalid persisted task row");
+  return task;
+}
+
 /** One prototype round update. Unlinked tasks need only their own row;
  * linked text changes keep the board writer's project watermark and stamps.
  * A round update cannot delete tasks or change the tombstone companion. */
@@ -810,6 +821,7 @@ export function mutateTaskPrototypeRound<R>(taskId: string, reviewId: string,
   return collection.boundedPatch(2, tx => {
     const raw = tx.get(`t:${taskId}`);
     const task = raw ? coerceTask(raw) : null;
+    if (raw && !task) throw new Error("invalid persisted task row");
     const round = task?.prototypeReviews?.find(round => round.id === reviewId);
     if (!task || !round) return change(undefined, task);
     const before = snapshotTasks([task]);

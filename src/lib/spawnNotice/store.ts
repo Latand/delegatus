@@ -229,3 +229,28 @@ export function pruneSpawnNotices(before: string, limit = 256): number {
   });
   return doomed.length;
 }
+
+export async function reopenRevokedSpawnNotice(child: string, operationId: string): Promise<void> {
+  const records = collection(false);
+  if (!records) return;
+  const rows = records.keyRange(`t:${child}:`, `t:${child}:\uffff`, 256)
+    .filter((row): row is SpawnNoticeTurn => row.kind === "turn" && row.state === "sent" && row.operationId === operationId);
+  if (!rows.length) return;
+  await records.boundedPatchAsync(rows.length * 2 + 2, tx => {
+    for (const row of rows) {
+      const current = tx.get(spawnNoticeTurnKey(child, row.turnId));
+      if (current?.kind === "turn" && current.operationId === operationId && current.state === "sent")
+        tx.put({ ...current, state: "pending", settledAt: null });
+    }
+    const held = tx.get(childKey(child));
+    if (held?.kind === "child") tx.put({ ...held, lastSentAt: null, attempt: null });
+  });
+}
+export async function clearRevokedSpawnNoticeAttempt(child: string): Promise<void> {
+  const records = collection(false);
+  if (!records) return;
+  await records.boundedPatchAsync(2, tx => {
+    const held = tx.get(childKey(child));
+    if (held?.kind === "child") tx.put({ ...held, attempt: null });
+  });
+}

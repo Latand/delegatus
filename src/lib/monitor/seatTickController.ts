@@ -1,3 +1,4 @@
+import { seatMessageKeys } from "@/lib/orchestrator/seatDeliveryKeys";
 import { pendingAutonomyReports, autonomyActive } from "./autonomy";
 import { expireSeatAutonomy, expireSeatSchedule } from "./seatTickSettings";
 import { releaseControllerForSources } from "@/lib/release/production";
@@ -535,7 +536,7 @@ function wakeClientMessageId(
   const fingerprint = context.operatorInstructions
     ? crypto.createHash("sha512").update(JSON.stringify([context.fingerprint, context.operatorInstructions])).digest("hex").slice(0, context.fingerprint.length)
     : context.fingerprint;
-  return boundedWakeIdentity(`seat-tick:${project}:${seatEpoch}:${context.lastWakeAt ?? "first"}:${shape}:${fingerprint}`
+  return boundedWakeIdentity(`${seatMessageKeys.tick}${project}:${seatEpoch}:${context.lastWakeAt ?? "first"}:${shape}:${fingerprint}`
     + wakePromptIdentity(context.monitorPrompt)
     + releasedWakeIdentity(context.releasedWake ?? null), project, seatEpoch);
 }
@@ -566,7 +567,7 @@ function wakeClientMessageId(
 function boundedWakeIdentity(identity: string, project: string, seatEpoch: number): string {
   if (runtimeIdempotencyKeyAdmissible(identity)) return identity;
   const tail = `:${seatEpoch}:digest-${crypto.createHash("sha256").update(identity).digest("hex").slice(0, 32)}`;
-  const head = `seat-tick:${project}`;
+  const head = `${seatMessageKeys.tick}${project}`;
   return `${head.slice(0, Math.max(0, RUNTIME_IDEMPOTENCY_KEY_LIMIT - tail.length))}${tail}`;
 }
 
