@@ -1,3 +1,4 @@
+import { relayServiceToolsOp } from "@/lib/externalRelay/ownerServiceTools";
 import { registryReceiptsForConversation } from "@/lib/agent/registry";
 import { registryRowsMatching } from "@/lib/agent/sqliteRegistryStore";
 import { decidePrototype } from "@/lib/prototypeReview/decision";
@@ -2333,6 +2334,7 @@ async function createPipeline(args: McpToolArgs, context?: McpToolCallContext, d
   if (result.queued) {
     return redactPayload({
       ...pipelineAcknowledgement(result.pipeline),
+      ...(result.repositoryInitialization ? { repositoryInitialization: result.repositoryInitialization } : {}),
       queued: true,
       queuedBecause: result.queued.reason,
       note: PIPELINE_CREATION_QUEUED_NOTE,
@@ -2345,6 +2347,7 @@ async function createPipeline(args: McpToolArgs, context?: McpToolCallContext, d
      had just sent them — a median 10 KB per create. get_pipeline reads it. */
   return redactPayload({
     ...pipelineAcknowledgement(result.pipeline),
+    ...(result.repositoryInitialization ? { repositoryInitialization: result.repositoryInitialization } : {}),
     ...(result.pipeline.delivery ? { delivery: deliveryAcknowledgement(result.pipeline) } : {}),
     ...(result.warnings?.length ? { warnings: result.warnings } : {}),
     ...newLegacyReviewFields(result),
@@ -7951,6 +7954,13 @@ export function viewerMcpBindings(
     telegram_bot_send: (args, context) => telegramBotSend(args, viewerControlForCall(controlDependencies, context)),
     telegram_bot_send_media: (args, context) => telegramBotSendMedia(args, viewerControlForCall(controlDependencies, context)),
     telegram_bot_send_document: (args, context) => telegramBotSendDocument(args, viewerControlForCall(controlDependencies, context)),
+    relay_service_tools: async (args) => {
+      const caller = attributionOf(domainDependencies);
+      const result = caller.kind === "agent" && !caller.via && caller.conversationId
+        ? await relayServiceToolsOp(caller.conversationId, args) : null;
+      if (result === null) throw new McpToolRefusal("Service tools exist only while you answer a relay message as its owner.", { code: "relay_tools_unavailable", retryable: false });
+      return result;
+    },
     relay_owner_history: (args, context) => relayOwnerHistory(args, viewerControlForCall(controlDependencies, context), domainDependencies),
     telegram_bot_messages: (args, context) => telegramBotMessages(args, viewerControlForCall(controlDependencies, context)),
     issue_report: (args, context) => issueReportTool(args, viewerControlForCall(controlDependencies, context), domainDependencies),
