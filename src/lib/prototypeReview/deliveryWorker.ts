@@ -1,9 +1,10 @@
+import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { runsElsewhere } from "@/lib/links/linked";
-import { loadTasksForList } from "@/lib/tasks/store";
+import { loadTasksForList, taskFeedSource } from "@/lib/tasks/store";
 import { viewerReleaseOwnsTraffic } from "@/lib/viewerReleaseTraffic";
 import { attemptPrototypeDelivery, prototypeDelivery, type PrototypeDeliveryPorts } from "./decision";
-import type { PrototypeDecision } from "./types";
-import { loadSeatRounds } from "./seatRounds";
+import type { PrototypeDecision, PrototypeReviewRound } from "./types";
+import { seatRoundPageWithCursor } from "./seatRounds";
 import { prototypeWorld } from "./world";
 import { postPrototypeReviewToTelegram } from "./telegramPost";
 import { reconcileReviewPolls, reviewPollsNeedRecovery } from "@/lib/telegram/bot/reviewPolls";
@@ -42,6 +43,18 @@ interface WorkerState {
   due: Map<string, number>;
   running: Map<string, Running>;
   scannedAt: number;
+  scanAfter?: string;
+  seatScanAfter?: string;
+  postTaskAfter?: string;
+  postTaskRoundAfter?: string;
+  pollTaskAfter?: string;
+  pollTaskRoundAfter?: string;
+  postSeatAfter?: string;
+  postSeatRoundAfter?: string;
+  pollSeatAfter?: string;
+  pollSeatRoundAfter?: string;
+  preferSeatPost?: boolean;
+  preferSeatPoll?: boolean;
   ticking: boolean;
   timer?: ReturnType<typeof setInterval>;
 }
@@ -87,7 +100,10 @@ function run(taskId: string | null, reviewId: string, ports: PrototypeDeliveryPo
           state.owed.delete(reviewId); state.due.delete(reviewId);
         } else state.due.set(reviewId, ports.now() + prototypeDeliveryDelay(decision.delivery));
       } while (entry.again);
-    } finally { state.running.delete(reviewId); }
+    } finally {
+      state.running.delete(reviewId);
+      if (!state.owed.has(reviewId)) state.due.delete(reviewId);
+    }
   })();
   return entry.done;
 }
@@ -97,43 +113,132 @@ export function deliverPrototypeDecision(taskId: string | null, reviewId: string
   void run(taskId, reviewId, ports);
 }
 
-/** Every decision on this installation whose message is still owed. */
-function scan(state: WorkerState, now: number): void {
-  const owed = new Map<string, string | null>();
-  for (const task of loadTasksForList()) {
-    if (runsElsewhere(task)) continue;
+/** A production tick reads one indexed task page. A boot/explicit sweep
+ * completes the cursor with a yield between pages. New decisions enter `owed`
+ * immediately, so a page boundary never loses work recorded while yielding. */
+async function scan(state: WorkerState, now: number, bounded: boolean): Promise<void> {
+  const source = taskFeedSource();
+  const inspect = (task: ReturnType<typeof loadTasksForList>[number]) => {
+    const elsewhere = runsElsewhere(task);
     for (const round of task.prototypeReviews ?? []) {
-      if (round.decision && round.decision.delivery.state !== "sent") owed.set(round.id, task.id);
+      if (!elsewhere && round.decision && round.decision.delivery.state !== "sent") state.owed.set(round.id, task.id);
+      else { state.owed.delete(round.id); state.due.delete(round.id); }
+    }
+  };
+  if (!source) {
+    for (const task of loadTasksForList()) inspect(task);
+    state.scannedAt = now;
+  } else for (;;) {
+    const page = withViewerOperation("prototype.state", () => source.keyRange(state.scanAfter ?? "t:", "t;", 16));
+    for (const task of page) inspect(task);
+    if (page.length < 16) { state.scanAfter = undefined; state.scannedAt = now; break; }
+    state.scanAfter = `t:${page.at(-1)!.id}`;
+    if (bounded) break;
+    await new Promise<void>(resolve => setImmediate(resolve));
+  }
+  for (;;) {
+    const page = withViewerOperation("prototype.state", () => seatRoundPageWithCursor(state.seatScanAfter));
+    for (const round of page.rounds) {
+      if (round.decision && round.decision.delivery.state !== "sent") state.owed.set(round.id, null);
+      else { state.owed.delete(round.id); state.due.delete(round.id); }
+    }
+    if (page.scanned < 16) { state.seatScanAfter = undefined; break; }
+    state.seatScanAfter = page.cursor;
+    if (bounded) break;
+    await new Promise<void>(resolve => setImmediate(resolve));
+  }
+}
+
+type DeliveryKind = "post" | "poll";
+
+/** Visit one indexed task page at a time. If the page still has eligible
+    rounds after the batch, keep its task cursor and resume after the last
+    visited round before moving to the next task page. */
+function taskDeliveryBatch(state: WorkerState, kind: DeliveryKind, limit: number): PrototypeReviewRound[] {
+  const source = taskFeedSource();
+  const after = kind === "post" ? state.postTaskAfter : state.pollTaskAfter;
+  const roundAfter = kind === "post" ? state.postTaskRoundAfter : state.pollTaskRoundAfter;
+  const tasks = source ? withViewerOperation("prototype.state", () => source.keyRange(after ?? "t:", "t;", 16)) : loadTasksForList();
+  const candidates = tasks.flatMap(task => task.prototypeReviews ?? []).filter(round =>
+    (kind === "post" ? round.telegramPost?.state === "pending" : reviewPollsNeedRecovery(round))
+      && (roundAfter === undefined || round.id > roundAfter))
+    .sort((left, right) => left.id.localeCompare(right.id));
+  const selected = candidates.slice(0, limit);
+  if (source && selected.length === limit) {
+    if (kind === "post") state.postTaskRoundAfter = selected.at(-1)!.id;
+    else state.pollTaskRoundAfter = selected.at(-1)!.id;
+  } else {
+    const next = source && tasks.length === 16 ? `t:${tasks.at(-1)!.id}` : undefined;
+    if (kind === "post") { state.postTaskAfter = next; state.postTaskRoundAfter = undefined; }
+    else { state.pollTaskAfter = next; state.pollTaskRoundAfter = undefined; }
+    if (!source) {
+      if (kind === "post") state.postTaskRoundAfter = selected.length === limit ? selected.at(-1)!.id : undefined;
+      else state.pollTaskRoundAfter = selected.length === limit ? selected.at(-1)!.id : undefined;
     }
   }
-  for (const round of loadSeatRounds()) {
-    if (round.decision && round.decision.delivery.state !== "sent") owed.set(round.id, null);
+  return selected;
+}
+
+/** Seat rounds use the same page/round split so a busy first page cannot
+    permanently hide later rounds. */
+function seatDeliveryBatch(state: WorkerState, kind: DeliveryKind, limit: number): PrototypeReviewRound[] {
+  const after = kind === "post" ? state.postSeatAfter : state.pollSeatAfter;
+  const roundAfter = kind === "post" ? state.postSeatRoundAfter : state.pollSeatRoundAfter;
+  const page = withViewerOperation("prototype.state", () => seatRoundPageWithCursor(after, 16));
+  const candidates = page.rounds.filter(round =>
+    (kind === "post" ? round.telegramPost?.state === "pending" : reviewPollsNeedRecovery(round))
+      && (roundAfter === undefined || round.id > roundAfter))
+    .sort((left, right) => left.id.localeCompare(right.id));
+  const selected = candidates.slice(0, limit);
+  if (selected.length === limit) {
+    if (kind === "post") state.postSeatRoundAfter = selected.at(-1)!.id;
+    else state.pollSeatRoundAfter = selected.at(-1)!.id;
+  } else {
+    const next = page.scanned === 16 ? page.cursor : undefined;
+    if (kind === "post") { state.postSeatAfter = next; state.postSeatRoundAfter = undefined; }
+    else { state.pollSeatAfter = next; state.pollSeatRoundAfter = undefined; }
   }
-  state.owed = owed;
-  for (const reviewId of [...state.due.keys()]) if (!owed.has(reviewId)) state.due.delete(reviewId);
-  state.scannedAt = now;
+  return selected;
+}
+
+function deliveryBatch(state: WorkerState, kind: DeliveryKind): PrototypeReviewRound[] {
+  const seatFirst = kind === "post" ? state.preferSeatPost === true : state.preferSeatPoll === true;
+  if (kind === "post") state.preferSeatPost = !seatFirst;
+  else state.preferSeatPoll = !seatFirst;
+  const first = seatFirst ? seatDeliveryBatch(state, kind, 16) : taskDeliveryBatch(state, kind, 16);
+  const remaining = 16 - first.length;
+  if (!remaining) return first;
+  const second = seatFirst ? taskDeliveryBatch(state, kind, remaining) : seatDeliveryBatch(state, kind, remaining);
+  return [...first, ...second];
 }
 
 /** Attempts every owed decision that is due (all of them with `force`) and waits for them. */
-export async function sweepPrototypeDeliveries(ports: PrototypeDeliveryPorts = productionPorts(), options: { force?: boolean; rescan?: boolean } = {}): Promise<void> {
+export async function sweepPrototypeDeliveries(ports: PrototypeDeliveryPorts = productionPorts(), options: { force?: boolean; rescan?: boolean; limit?: number } = {}): Promise<void> {
   const state = workerState();
   const now = ports.now();
-  if (options.rescan !== false) scan(state, now);
+  if (options.rescan !== false) await scan(state, now, options.limit !== undefined);
   const attempts: Promise<void>[] = [];
   if (options.rescan !== false) {
-    const rounds = [...loadTasksForList().filter(t => !runsElsewhere(t)).flatMap(t => t.prototypeReviews ?? []), ...loadSeatRounds()];
-    for (const round of rounds) if (round.telegramPost?.state === "pending") {
-      attempts.push(postPrototypeReviewToTelegram(round, round.telegramPost.key).then(() => {}));
+    const posts = deliveryBatch(state, "post");
+    for (const round of posts) {
+      attempts.push(postPrototypeReviewToTelegram(round, round.telegramPost!.key).then(() => {}, () => {}));
     }
-    let reconciliations = 0;
-    for (const round of rounds) if (reconciliations < 16 && reviewPollsNeedRecovery(round)) {
+    const polls = deliveryBatch(state, "poll");
+    for (const round of polls) {
       await new Promise<void>(resolve => setImmediate(resolve));
       if (telegramBotService().hasReviewPollWork(round.id, round.telegramPost!.key)) continue;
-      reconciliations++;
       attempts.push(reconcileReviewPolls(round).catch(() => console.warn("Telegram review polls reconciliation deferred", "storage_unavailable")));
     }
   }
-  for (const [reviewId, taskId] of state.owed) {
+  const entries = state.owed.entries();
+  const visits = Math.min(state.owed.size, options.limit ?? Number.POSITIVE_INFINITY);
+  for (let n = 0; n < visits; n++) {
+    const next = entries.next().value;
+    if (!next) break;
+    const [reviewId, taskId] = next;
+    // Move visited entries behind their peers so a permanently pending first
+    // page cannot starve another decision, even when every attempt is due.
+    if (options.limit !== undefined) { state.owed.delete(reviewId); state.owed.set(reviewId, taskId); }
     if (state.running.has(reviewId)) { attempts.push(state.running.get(reviewId)!.done); continue; }
     if (!options.force && (state.due.get(reviewId) ?? 0) > now) continue;
     attempts.push(run(taskId, reviewId, ports));
@@ -147,24 +252,24 @@ async function tick(ports: PrototypeDeliveryPorts): Promise<void> {
   state.ticking = true;
   try {
     const now = ports.now();
-    const rescan = now - state.scannedAt >= RESCAN_MS;
-    if (!rescan && ![...state.owed.keys()].some(reviewId => !state.running.has(reviewId) && (state.due.get(reviewId) ?? 0) <= now)) return;
+    const rescan = state.scanAfter !== undefined || state.seatScanAfter !== undefined || now - state.scannedAt >= RESCAN_MS;
+    if (!rescan && state.owed.size === 0) return;
     // A predecessor release left running beside its successor stops attempting; the successor's boot swept the store.
     if (!viewerReleaseOwnsTraffic()) return;
-    void sweepPrototypeDeliveries(ports, { rescan })
+    await sweepPrototypeDeliveries(ports, { rescan, limit: 16 })
       .catch(error => console.error("[prototype delivery] sweep failed", error instanceof Error ? error.message : String(error)));
   } catch (error) {
     console.error("[prototype delivery] sweep failed", error instanceof Error ? error.message : String(error));
   } finally { state.ticking = false; }
 }
 
-/** At the Viewer's start: every owed decision is attempted once, then the clock runs. */
+/** At Viewer start, take one bounded page; the clock continues its cursor. */
 export function startPrototypeDeliveryWorker(ports: PrototypeDeliveryPorts = productionPorts()): void {
   const state = workerState();
   if (state.timer) return;
   state.timer = setInterval(() => { void tick(ports); }, TICK_MS);
   state.timer.unref?.();
-  void sweepPrototypeDeliveries(ports, { force: true })
+  void sweepPrototypeDeliveries(ports, { force: true, limit: 16 })
     .catch(error => console.error("[prototype delivery] boot sweep failed", error instanceof Error ? error.message : String(error)));
 }
 
@@ -180,4 +285,11 @@ export async function resetPrototypeDeliveryWorkerForTests(): Promise<void> {
   state.timer = undefined;
   state.owed.clear(); state.due.clear();
   state.scannedAt = Number.NEGATIVE_INFINITY;
+  state.scanAfter = undefined;
+  state.seatScanAfter = undefined;
+  state.postTaskAfter = undefined; state.postTaskRoundAfter = undefined;
+  state.pollTaskAfter = undefined; state.pollTaskRoundAfter = undefined;
+  state.postSeatAfter = undefined; state.postSeatRoundAfter = undefined;
+  state.pollSeatAfter = undefined; state.pollSeatRoundAfter = undefined;
+  state.preferSeatPost = undefined; state.preferSeatPoll = undefined;
 }

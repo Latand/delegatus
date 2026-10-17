@@ -1,3 +1,4 @@
+import { registryOpenSpawnReceipts } from "@/lib/agent/registry";
 import { startupSnapshot, withStartupRowScope, startupHostInScope } from "./startupSnapshot";
 import { startupRowRetries, startupRowReason, startupRowNotice, type StartupRowReason } from "./startupRowRetries";
 import { verifiedCodexSocketOwner } from "./codexSocketTransport";
@@ -2749,7 +2750,7 @@ async function adoptStructuredHostsPass(
     history; everything else is provisioning the fence covers. */
 function fencedPendingSpawnReceipts(registry: AgentRegistry, deferred: ReadonlySet<string>): SpawnReceipt[] {
   if (deferred.size === 0) return [];
-  return Object.values(startupSnapshot(registry).receipts).filter((receipt) =>
+  return registryOpenSpawnReceipts(startupSnapshot(registry)).filter((receipt) =>
     receipt.state !== "completed"
     && receipt.state !== "failed"
     && receipt.state !== "conflicted"

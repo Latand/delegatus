@@ -1,3 +1,4 @@
+import { registryRowsMatching } from "@/lib/agent/sqliteRegistryStore";
 import fs from "node:fs";
 import path from "node:path";
 import type { AgentRegistry, SpawnReceipt } from "@/lib/agent/registry";
@@ -136,7 +137,7 @@ export function recordCodexSubagentViolation(
   if (!generation) return false;
   // Scanner imports also have a default false profile. A launch receipt proves
   // Delegatus actually imposed the permission on this conversation.
-  const launched = (receipts ?? Object.values(registry.readOnlySnapshot().receipts)).filter((receipt) =>
+  const launched = (receipts ?? registryRowsMatching(registry.readOnlySnapshot(), "receipts", "artifactPath", parentPath)).filter((receipt) =>
     receipt.engine === "codex" && receipt.artifactPath === parentPath && hasCodexLaunchEvidence(receipt)
     && Date.parse(receipt.createdAt) <= Date.parse(activityAt))
     .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0];
@@ -205,6 +206,17 @@ function collectCodexSubagentTranscripts(registry: AgentRegistry, entries: reado
   const children = childObservations.get(registry) ?? new Set<string>();
   childObservations.set(registry, children);
   const completedChildren: string[] = [];
+  const loadReceipts = () => {
+    const paths = [...new Set(entries.filter(entry => entry.engine === "codex").map(entry => entry.path))];
+    const snapshot = registry.readOnlySnapshot();
+    const selected: SpawnReceipt[] = [];
+    // Bound statement work and bind count even when a scanner catalog grows
+    // past SQLite's parameter limit. Every path belongs to one batch.
+    for (let offset = 0; offset < paths.length; offset += 64) {
+      selected.push(...registryRowsMatching(snapshot, "receipts", "artifactPath", paths.slice(offset, offset + 64)));
+    }
+    return selected;
+  };
   let receipts: SpawnReceipt[] | undefined;
   const events: LifecycleEventInput[] = [];
   const at = new Date().toISOString();
@@ -222,14 +234,14 @@ function collectCodexSubagentTranscripts(registry: AgentRegistry, entries: reado
     if (parentPath && child && entry.sessionStartedAt) {
       const key = `${parentPath}:${child}`;
       if (children.has(key)) continue;
-      receipts ??= Object.values(registry.readOnlySnapshot().receipts);
+      receipts ??= loadReceipts();
       if (recordCodexSubagentViolation(registry, parentPath, `child:${child}`, "thread_spawn", at,
         collect, receipts, entry.sessionStartedAt)) completedChildren.push(key);
     }
   }
   // Calls whose child never materializes are still native activity. Reuse the
   // scanner's bounded tail reader; never search conversation prose or scripts.
-  if (entries.some((entry) => entry.engine === "codex")) receipts ??= Object.values(registry.readOnlySnapshot().receipts);
+  if (entries.some((entry) => entry.engine === "codex")) receipts ??= loadReceipts();
   const deniedPaths = new Set(receipts?.filter((receipt) => receipt.engine === "codex" && hasCodexLaunchEvidence(receipt) && receipt.launchProfile.allowSubagents === false)
     .map((receipt) => receipt.artifactPath));
   const observations = transcriptObservations.get(registry) ?? new Map<string, string>();

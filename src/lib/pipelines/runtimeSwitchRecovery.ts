@@ -1,3 +1,4 @@
+import { registryRowsMatching } from "@/lib/agent/sqliteRegistryStore";
 import type { AgentRegistry } from "@/lib/agent/registry";
 import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
 import { structuredRecoveryPending } from "@/lib/runtime/structuredRecovery";
@@ -34,7 +35,7 @@ export async function retireRuntimeSwitchProducers(record: PipelineRuntimeSwitch
   const cleanup = Object.values(snapshot.pendingSuccessorCleanups).find(item => item.conversationId === id);
   if (cleanup) return `old migration successor cleanup is pending${cleanup.lastError ? `: ${cleanup.lastError}` : ""}`;
   if (record.launch?.conversationId && structuredRecoveryPending(record.launch.conversationId)) return "old successor recovery is still settling";
-  const pending = Object.values(snapshot.receipts).find(receipt =>
+  const pending = registryRowsMatching(snapshot, "receipts", "conversationId", [id, ...(record.launch?.conversationId ? [record.launch.conversationId] : [])]).find(receipt =>
     [id, record.launch?.conversationId].includes(receipt.conversationId)
     && receipt.purpose === "resume-successor" && !["completed", "failed", "conflicted"].includes(receipt.state));
   if (pending) return `old host recovery reservation is still ${pending.state}`;

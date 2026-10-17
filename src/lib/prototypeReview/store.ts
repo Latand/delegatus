@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { statePath } from "@/lib/configDir";
 import { sniffAgrees } from "@/lib/artifact/serve";
-import { loadTasks, mutateTasks } from "@/lib/tasks/store";
+import { loadTasksForList, mutateTasks, loadPrototypeTask, mutateTaskPrototypeRound } from "@/lib/tasks/store";
 import type { BoardTask } from "@/lib/tasks/types";
 import { withFileTransaction } from "@/lib/state/fileTransaction";
 import { waitForStateLock } from "@/lib/state/lockWait";
@@ -29,7 +29,7 @@ export function decisionLock(reviewId: string): string {
 const DECISION_LOCK_LEFTOVER = /^(pr_[a-f0-9]{32})\.decision\.lock\.write-locks?$/;
 /** Under the publication lock, retire only directories marked by this store. */
 async function removeOrphanCopies(): Promise<void> {
-  const rounds = await withPrototypeState(() => [...loadTasks().flatMap(task => task.prototypeReviews ?? []), ...loadSeatRounds()]);
+  const rounds = await withPrototypeState(() => [...loadTasksForList().flatMap(task => task.prototypeReviews ?? []), ...loadSeatRounds()]);
   const live = new Set(rounds.filter(round => !round.mediaRemovedAt).map(round => round.id));
   /* A round keeps its decision after its pictures are retired, so its lock is
      kept for as long as a task holds the round at all. */
@@ -123,20 +123,15 @@ async function copyMedia(raw: string, staging: string): Promise<PrototypeMedia> 
     which has no task to hand the change (docs/design/operator-decision-forms.md §2.2). */
 export function mutatePrototypeRound<T>(taskId: string | null, reviewId: string, change: (round: PrototypeReviewRound, task: BoardTask | null) => T): T {
   if (taskId === null) return mutateSeatRound(reviewId, round => change(round, null));
-  return mutateTasks(tasks => {
-    const task = tasks.find(t => t.id === taskId);
-    const round = task?.prototypeReviews?.find(r => r.id === reviewId);
-    if (!task || !round) throw new PrototypeError("review not found",404);
-    const before = JSON.stringify(round);
-    const result = change(round,task);
-    if (JSON.stringify(round) === before) return { tasks: undefined, result };
-    task.updatedAt = new Date().toISOString();
-    return { tasks, result };
+  return mutateTaskPrototypeRound(taskId, reviewId, (round, task) => {
+    if (!round || !task) throw new PrototypeError("review not found", 404);
+    return change(round, task);
   });
 }
 export function findPrototypeRound(taskId: string | null, reviewId: string): PrototypeReviewRound | undefined {
   if (taskId === null) return findSeatRound(reviewId);
-  return loadTasks().find(t => t.id === taskId)?.prototypeReviews?.find(r => r.id === reviewId);
+  const task = loadPrototypeTask(taskId);
+  return task?.prototypeReviews?.find(r => r.id === reviewId);
 }
 /** Metadata is a task extension in the existing revisioned, linked SQLite store.
     A null task is the seat asking without one: the round goes to the seat's
@@ -150,9 +145,9 @@ async function publishRound(input: PublishPrototypeInput, taskId: string | null,
   const inputDigest = crypto.createHash("sha256").update(JSON.stringify(input)).digest("hex");
   const id = `pr_${crypto.createHash("sha256").update(publicationKey).digest("hex").slice(0,32)}`;
   const replay = () => {
-    const existing = [...loadTasks().flatMap(t => t.prototypeReviews ?? []), ...loadSeatRounds()].find(r => r.publicationKey === publicationKey);
+    const existing = [...loadTasksForList().flatMap(t => t.prototypeReviews ?? []), ...loadSeatRounds()].find(r => r.publicationKey === publicationKey);
     if (existing && (existing.inputDigest !== inputDigest || existing.taskId !== taskId)) throw new PrototypeError("publication key already belongs to another payload",409);
-    return existing;
+    return existing ? structuredClone(existing) : undefined;
   };
   const held = await withPrototypeState(replay); if (held) return held;
   // The resolved task also covers a pipeline publication with no explicit taskId.
