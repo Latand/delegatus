@@ -966,6 +966,9 @@ export async function registerViewerRuntime(): Promise<void> {
     await startupBarrier.run(() => viewerLoopMonitor.run("registry.prepare", () => agentRegistry().prepareReadOnlySnapshot(startupAbort.signal)));
     assertStartupActive();
     let activatedAuthority: HotStateAuthority | null = null;
+    const { retireCuratorPlaceholdersAtStartup } = await import("@/lib/memory/curation/cleanup");
+    await startupBarrier.run(() => retireCuratorPlaceholdersAtStartup(undefined, assertStartupActive));
+    assertStartupActive();
     await completeViewerRuntimeActivation({
       initializeOperatorCapability: initializeOperatorSpawnCapabilityAtStartup,
       runWorktreeRecovery: async () => {
