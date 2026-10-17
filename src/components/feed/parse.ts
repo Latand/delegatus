@@ -315,7 +315,7 @@ export type Item = (
      delivered through the structured/SDK path — its engine uuid joins the
      delivery ledger, so the renderer can resolve it into the operator's bubble
      or an internal relay card. Without evidence it renders as this system row. */
-  | { kind: "sysmsg"; label: string; text: string; deliveredMessage?: { engineMessageId: string | null; ts: unknown } }
+  | { kind: "sysmsg"; label: string; text: string; deliveredMessage?: { engineMessageId: string | null; ts: unknown; partIndex?: number } }
   | { kind: "compact"; ts: unknown; trigger?: string; preTokens?: number; summary?: string }
   | { kind: "raw"; text: string; err: boolean; processingError?: { recordType: string; message: string } }
 ) & { structuredUserRef?: string };
@@ -3017,7 +3017,7 @@ function createReducerSession(cfg: FeedSessionConfig, history: CodexHistory | nu
   };
   /* Inbound teammate traffic arrives as user text wrapped in <teammate-message>;
      idle_notification JSON bodies collapse to a thin service-style row. */
-  const addUserText = (ts: unknown, text: string, isHarness = false, deliveredMessage?: { engineMessageId: string | null; ts: unknown }) => {
+  const addUserText = (ts: unknown, text: string, isHarness = false, deliveredMessage?: { engineMessageId: string | null; ts: unknown; partIndex?: number }) => {
     if (isHarness) return void addSysMsg(text, tr("render.system"), deliveredMessage);
     const rest = text.replace(TMSG_RE, (_whole, _tag: string, attrs: string, body: string) => {
       const peer = tmsgAttr(attrs, "teammate_id") || tmsgAttr(attrs, "from") || tr("render.teammate");
@@ -3056,7 +3056,7 @@ function createReducerSession(cfg: FeedSessionConfig, history: CodexHistory | nu
   /* Codex stores human input and harness context in user-role response rows.
      Known envelope markers identify harness rows. Echoed composer messages
      keep their user classification even when their text starts similarly. */
-  const addSysMsg = (text: string, fallbackLabel?: string, deliveredMessage?: { engineMessageId: string | null; ts: unknown }) => {
+  const addSysMsg = (text: string, fallbackLabel?: string, deliveredMessage?: { engineMessageId: string | null; ts: unknown; partIndex?: number }) => {
     push({ kind: "sysmsg", label: sysMsgLabel(text, fallbackLabel), text, ...(deliveredMessage ? { deliveredMessage } : {}) });
   };
   /* An agent-origin structured record (#1117) is inter-agent traffic: it
@@ -4414,4 +4414,42 @@ export function buildFeed(file: FileEntry, lines: string[], showSvc: boolean, li
   const session = createFeedSession({ engine: file.engine, fmt: file.fmt, cwd: file.cwd, showSvc, lineFilter });
   const snap = session.feed(lines, 0, file.activity === "live");
   return { items: snap.items.map((entry) => entry.item), hiddenServiceCount: snap.hiddenServiceCount };
+}
+
+
+/** A batch is split only by the server's ledger evidence. Literal header-shaped
+ * input cannot manufacture another author's bubble or hide a transcript row. */
+export function splitInboxBatchFeed(
+  feed: FeedSnapshot,
+  partsFor: (engineMessageId: string) => import("@/lib/runtime/messageOrigin").InboxDeliveredPart[] | undefined,
+): FeedSnapshot {
+  const seen = new Set<string>();
+  const items: FeedEntry[] = [];
+  let changed = false;
+  // Keep the original image items and source identities; only the recorded
+  // image ranges choose which message they accompany.
+  const images = new Map<string, FeedEntry[]>();
+  for (const e of feed.items) {
+    const id = (e as FeedEntry & { deliveryId?: string }).deliveryId;
+    if (id && e.item.kind === "image") {
+      const list = images.get(id) ?? []; list.push(e); images.set(id, list);
+    }
+  }
+  for (const e of feed.items) {
+    const id = e.item.kind === "sysmsg" ? e.item.deliveredMessage?.engineMessageId
+      : (e as FeedEntry & { deliveryId?: string }).deliveryId;
+    const parts = id ? partsFor(id) : undefined;
+    if (!id || !parts?.length) { items.push(e); continue; }
+    changed = true;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    const ts = e.item.kind === "sysmsg" ? e.item.deliveredMessage!.ts : null;
+    for (const [i, part] of parts.entries()) {
+      const key = `${e.key}:inbox:${part.operationId}`;
+      items.push({ ...e, key, anchorKey: `${e.anchorKey ?? e.key}:inbox:${part.operationId}`,
+        item: { kind: "sysmsg", label: "", text: part.text, deliveredMessage: { engineMessageId: id, ts, partIndex: i } } });
+      items.push(...(images.get(id) ?? []).slice(part.imageStart, part.imageEnd).map((image, n) => ({ ...image, key: `${key}:image:${n}`, anchorKey: `${key}:image:${n}` })));
+    }
+  }
+  return changed ? { ...feed, items } : feed;
 }

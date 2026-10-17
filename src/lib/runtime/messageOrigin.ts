@@ -45,7 +45,18 @@ export function sameMessageOrigin(left: MessageOrigin | undefined, right: Messag
  * value the renderer resolves a delivered system row with. Client-safe on
  * purpose — the server join module and the browser share this one type.
  */
+export interface InboxDeliveredPart {
+  textStart: number;
+  textEnd: number;
+  operationId: string;
+  text: string;
+  imageStart: number;
+  imageEnd: number;
+  provenance: DeliveredMessageProvenance;
+}
+
 export interface DeliveredMessageProvenance {
+  parts?: InboxDeliveredPart[];
   origin: "operator" | "agent";
   senderRole?: string;
   senderProject?: string;

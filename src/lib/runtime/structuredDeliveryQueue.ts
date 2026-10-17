@@ -1,3 +1,5 @@
+import { withViewerOperation } from "@/lib/viewerLoopMonitor";
+import { composeBatch, type InboxMember } from "./inboxBatch";
 import type { SeatRecipientVerdict } from "@/lib/orchestrator/seatChannel";
 import { blockingHostActivityFlags } from "./hostActivityFlags";
 import { NativeQueueProtocolRefusal } from "./nativeCodexQueue";
@@ -48,6 +50,9 @@ interface StructuredOperationStatus {
 }
 
 export interface StructuredDeliveryQueuePort {
+  /** Only affirmative current-seat authority opts a conversation in. */
+  coalescesConversation?(conversationId: string): boolean | undefined;
+  bindDeliveryBatch?(batchId: string, operationIds: readonly string[], generationId: string): boolean | Promise<boolean>;
   seatRecipient?(conversationId: string): SeatRecipientVerdict;
   seatRecipientAsync?(conversationId: string): Promise<SeatRecipientVerdict>;
   /** Durable withdrawal of a pipeline attempt, including after replacement. */
@@ -1725,7 +1730,137 @@ export class StructuredDeliveryQueue {
     const conversationId = effects[0]?.conversationId;
     const readHold = () => conversationId ? this.port.switchHold?.(conversationId) ?? null : null;
     let hold = readHold();
+    const canCoalesce = (effect: DeliveryEffect): boolean => {
+      if (effect.kind !== "send") return false;
+      const host = this.resolveHost(effect.conversationId);
+      return !effect.onlyIfIdle && (effect.turnId === undefined || effect.turnId === null)
+        && ["queue", "steer-or-queue", "interrupt-active"].includes(effect.policy ?? "")
+        && host?.coalescesQueuedInput === true && host.sendWaitsForRunningTurn === true
+        && host.supportsSteer === false && host.supportsQueuedSend === false
+        && this.port.coalescesConversation?.(effect.conversationId) === true && !!this.port.bindDeliveryBatch;
+    };
+    // Choose a bounded membership set before any selected message is claimed
+    // `delivering`. Overflow stays in its existing queued slot for the next
+    // turn, so a large inbox adds no claim/requeue write cycle.
+    const coalescingEffects = effects.filter(canCoalesce) as SendEffect[];
+    const coalescingBacklog = new Map(coalescingEffects.map(effect => [effect.operationId, effect] as const));
+    if (coalescingEffects.length) {
+      const { coalescingIds, selectedIds } = await withViewerOperation("delivery.inbox-batch", async () => {
+        const coalescingIds = new Set(coalescingEffects.map(effect => effect.operationId));
+        const membership = composeBatch(coalescingEffects.map(effect => {
+          const status = durableStatuses.get(effect.operationId);
+          const entry: QueueEntry = {
+            id: effect.operationId,
+            content: effect.content,
+            contentDigest: effect.contentDigest,
+            text: effect.content.text,
+            images: effect.content.images,
+            expectedTurnId: null,
+            ...(effect.runtime ? { runtime: effect.runtime } : {}),
+            ...(effect.selectedContext ? { selectedContext: effect.selectedContext } : {}),
+            ...(effect.origin ? { origin: effect.origin } : {}),
+          };
+          return { entry, admittedAt: status?.admittedAt ?? status?.at ?? "", eventSeq: effect.eventSeq,
+            priority: effect.policy === "interrupt-active" && effect.origin?.kind === "operator" };
+        }));
+        return { coalescingIds, selectedIds: new Set(membership.members.map(member => member.entry.id)) };
+      });
+      effects = effects.filter(effect => !coalescingIds.has(effect.operationId) || selectedIds.has(effect.operationId));
+    }
+    type Prepared = { member: InboxMember; effect: SendEffect; host: EngineHost; context: SendSettlementContext; generationId: string };
+    let pendingBatch: Prepared[] = [];
+    const releaseBatch = async (reason: string) => {
+      const pending = pendingBatch; pendingBatch = [];
+      for (const p of pending) {
+        this.firstDispatches.delete(p.effect.operationId);
+        await this.transitionUnlessSettled(p.effect.operationId, "queued", { reason });
+      }
+    };
+    const flushBatch = async (): Promise<boolean> => withViewerOperation("delivery.inbox-batch", async () => {
+      if (!pendingBatch.length) return false;
+      const pending = pendingBatch;
+      if (lane?.released || this.retirementExecutor.retired || this.port.handoffHeld?.()) {
+        await releaseBatch("inbox hand-over deferred"); return true;
+      }
+      const lastSelectedSeq = Math.max(...pending.map(p => p.member.eventSeq));
+      const selectedOrdinaryBefore = pending.filter(p => !p.member.priority && p.member.eventSeq < lastSelectedSeq).length;
+      const backlogOrdinaryBefore = [...coalescingBacklog.values()].filter(effect => effect.eventSeq < lastSelectedSeq
+        && !(effect.policy === "interrupt-active" && effect.origin?.kind === "operator")).length;
+      const composed = composeBatch(pending.map(p => p.member), Math.max(0, backlogOrdinaryBefore - selectedOrdinaryBefore));
+      const selectedIds = new Set(composed.members.map(m => m.entry.id));
+      const selected = pending.filter(p => selectedIds.has(p.effect.operationId));
+      const remaining = pending.filter(p => !selectedIds.has(p.effect.operationId));
+      // Unselected members keep their own original slot for the next turn.
+      for (const p of remaining) await this.transitionUnlessSettled(p.effect.operationId, "queued", { reason: "inbox message bound" });
+      pendingBatch = selected;
+      const first = selected[0]!;
+      const priorityRuntime = selected.find(p => p.member.priority && p.effect.runtime)?.effect.runtime;
+      if (priorityRuntime) composed.entry.runtime = priorityRuntime;
+      try {
+        if (composed.entry.parts && !await this.checking(lane, first.effect, "binding delivery.inbox-batch", async () =>
+          this.port.bindDeliveryBatch!(composed.entry.id, selected.map(p => p.effect.operationId), first.generationId))) {
+          await releaseBatch("inbox membership could not be bound"); this.retrySoon(); return true;
+        }
+      } catch {
+        await releaseBatch("inbox membership could not be bound"); this.retrySoon(); return true;
+      }
+      // The bind may have waited. Refresh every durable fence before actuation.
+      for (const p of selected) {
+        const state = await this.readStatus(p.effect.operationId);
+        const settled = await this.readSettled(p.effect.operationId);
+        if (!state.readable || (state.value && state.value.status !== "delivering") || !settled.readable || settled.value) {
+          await releaseBatch("inbox member changed before hand-over"); this.retrySoon(); return true;
+        }
+      }
+      let memberRefused: Prepared | undefined;
+      const authorize = () => {
+        if (lane?.released || this.retirementExecutor.retired || this.port.handoffHeld?.()
+          || this.resolveHost(first.effect.conversationId) !== first.host) throw new StructuredDispatchDeferredError("inbox hand-over deferred");
+        const seat = this.port.seatRecipient?.(first.effect.conversationId);
+        if (seat?.kind === "unknown") throw new StructuredDispatchDeferredError(seat.reason);
+        if (seat?.kind === "revoked") throw new StructuredSendRefusedError(seat.reason);
+        const retired = this.port.conversationRetired?.(first.effect.conversationId);
+        if (retired) throw new StructuredSendRefusedError(retired);
+        for (const p of selected) {
+          try { this.port.authorizeDispatch?.(p.effect.operationId, p.effect.conversationId); }
+          catch (error) { memberRefused = p; throw error; }
+        }
+      };
+      let outcome: { receipt: DeliveryReceipt } | { error: unknown };
+      try {
+        authorize();
+        outcome = { receipt: await first.host.send(composed.entry, undefined, authorize) };
+      } catch (error) { outcome = { error }; }
+      pendingBatch = [];
+      if (memberRefused && "error" in outcome) {
+        for (const p of selected) {
+          if (p === memberRefused) await this.settleSendOutcome(p.effect, p.host, outcome, p.context);
+          else await this.transitionUnlessSettled(p.effect.operationId, "queued", { reason: "inbox member authorization refused" });
+        }
+        this.retrySoon(); return true;
+      }
+      let stopped = remaining.length > 0;
+      for (const p of selected) {
+        this.firstDispatches.delete(p.effect.operationId);
+        this.noteWait(p.effect, "dispatching", { lane, detail: `handed over in one message with ${selected.length - 1} others` });
+        if ("error" in outcome && !(outcome.error instanceof StructuredDispatchDeferredError)
+          && !(outcome.error instanceof StructuredSendRefusedError) && !(outcome.error instanceof NativeQueueProtocolRefusal)) {
+          await this.terminalizeUnverified(p.effect.operationId, `${DELIVERY_UNVERIFIED_AFTER_ACTUATION}: ${failureReason(outcome.error)}`);
+          stopped = true;
+        } else if (await this.settleSendOutcome(p.effect, p.host, outcome, p.context) === "stop") stopped = true;
+      }
+      return stopped;
+    });
+    try {
     for (const [index, effect] of effects.entries()) {
+      const priorityRuntimeCanJoin = effect.kind === "send" && effect.policy === "interrupt-active" && effect.origin?.kind === "operator"
+        && effect.runtime && pendingBatch.every(p => !p.effect.runtime);
+      if (pendingBatch.length && (!canCoalesce(effect)
+        || pendingBatch[0]!.host !== this.resolveHost(effect.conversationId)
+        || (JSON.stringify(pendingBatch[0]!.effect.runtime) !== JSON.stringify(effect.kind === "send" || effect.kind === "steer" ? effect.runtime : undefined)
+          && !priorityRuntimeCanJoin))) {
+        if (await flushBatch()) return true;
+      }
       /* Everything after a blocking step waits on this conversation. */
       const blockRest = (reason: DeliveryWaitReason, wake: "retry" | "event" = "event", detail?: string | null) => {
         for (const later of effects.slice(index + 1)) {
@@ -2060,7 +2195,7 @@ export class StructuredDeliveryQueue {
       });
       if (effect.kind === "send" && (effect.policy === "queue" || steerOrQueue)
         && !steersIntoTurn && !queuesDuringTurn
-        && laterOperatorReplacement) {
+        && laterOperatorReplacement && !canCoalesce(effect)) {
         /* Keep this follow-up in its original journal slot until the explicit
            operator replacement has completed. This applies across the
            interrupt boundary too: an idle host must not let the earlier note
@@ -2148,7 +2283,10 @@ export class StructuredDeliveryQueue {
            read the same queued row is refused here, so its write can never be
            taken as a replay and send the message again. */
         { fromStatuses: ["pending", "queued"] },
-      ))) continue;
+      ))) {
+        coalescingBacklog.delete(effect.operationId);
+        continue;
+      }
       this.noteWait(effect, shouldInterrupt ? "interrupting" : "dispatching", { lane, attempted: true, wake: "event" });
       if (effect.onlyIfIdle) {
         const claimed = await this.readStatus(effect.operationId);
@@ -2243,6 +2381,19 @@ export class StructuredDeliveryQueue {
         if (retired) throw new StructuredSendRefusedError(retired);
         this.port.authorizeDispatch?.(effect.operationId, effect.conversationId);
       };
+      if (canCoalesce(effect)) {
+        try { authorize(); }
+        catch (error) {
+          coalescingBacklog.delete(effect.operationId);
+          await this.settleSendOutcome(effect, host, { error }, settlement);
+          await releaseBatch("inbox member authorization refused");
+          return true;
+        }
+        pendingBatch.push({ effect, host, context: settlement, generationId: health.sessionKey,
+          member: { entry, admittedAt: durable?.admittedAt ?? durable?.at ?? "", eventSeq: effect.eventSeq,
+            priority: effect.policy === "interrupt-active" && effect.origin?.kind === "operator" } });
+        continue;
+      }
       try {
         if (this.port.handoffHeld?.()) {
           this.firstDispatches.delete(effect.operationId);
@@ -2295,7 +2446,11 @@ export class StructuredDeliveryQueue {
       }
       if (await this.settleSendOutcome(effect, host, sent, settlement) === "stop") return true;
     }
-    return Boolean(switchDeferred) || nativeReceiptUnavailable || updateHeld;
+    return await flushBatch() || Boolean(switchDeferred) || nativeReceiptUnavailable || updateHeld;
+    } finally {
+      // A failed/unknown check while gathering can never dispatch a partial run.
+      if (pendingBatch.length) await releaseBatch("inbox preparation deferred");
+    }
   }
 
   /** Settles one handed-over send from the host's answer, inline or after the

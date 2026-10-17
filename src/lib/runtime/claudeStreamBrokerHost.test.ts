@@ -3944,3 +3944,30 @@ test("seat launches deny native questions while workers keep them on fresh and a
     } finally { await host.release(); }
   }
 });
+
+
+test("seat inbox broker persists layout before writing and refuses a changed layout under the same id", async () => {
+  const { fixtureInboxBatch } = await import("./fixtures/inboxBatch");
+  const entry = fixtureInboxBatch([{ id: "wire-one", text: "first exact body", operator: true }, { id: "wire-two", text: "second exact body" }]);
+  const ledger = new RecordingDeliveryLedger();
+  const child = new FakeClaude(ledger);
+  const events = new MemoryEventStore();
+  const host = await ClaudeStreamBrokerHost.start({ cwd: "/repo", deliveryLedger: ledger, eventStore: events,
+    readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }), readTranscript: () => [], spawnProcess: fakeSpawn(child, {}) });
+  try {
+    const sending = host.send(entry);
+    void sending.catch(() => undefined);
+    const frame = child.inputs.find(input => input.type === "user")!;
+    const blocks = (frame.message as { content: Array<{ type: string; text?: string }> }).content;
+    expect(blocks.filter(b => b.type === "text").map(b => b.text).join("")).toBe(entry.content!.text);
+    expect(blocks).toHaveLength(4);
+    expect(ledger.load(host.identity.sessionId)[0]!.entry.parts).toEqual(entry.parts);
+    const changed = structuredClone(entry); changed.parts![0]!.origin = { kind: "agent" };
+    await expect(host.send(changed)).rejects.toThrow("different payload");
+    child.emitJson({ type: "user", isReplay: true, uuid: "wire-inbox-echo", message: { role: "user", content: blocks } });
+    expect(await sending).toMatchObject({ turnId: entry.id });
+    const echoed = events.load(host.identity.sessionId).find(e => e.kind === "item" && e.deliveryEcho);
+    expect(echoed?.kind === "item" ? echoed.deliveryEcho : undefined)
+      .toMatchObject({ operationId: entry.id, memberOperationIds: ["wire-one", "wire-two"] });
+  } finally { await host.release(); }
+});

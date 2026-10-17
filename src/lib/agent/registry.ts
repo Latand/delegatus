@@ -724,6 +724,8 @@ export type DeliveryAdmissionEvidence =
   | { outcome: "unknown"; reason: string };
 
 export interface DeliveryOperationOwner {
+  /** One Viewer-composed Claude input, committed before the engine write. */
+  batchId?: string;
   conversationId: ViewerConversationId;
   runtimeConversationId: ViewerConversationId;
   clientMessageId: string | null;
@@ -3009,6 +3011,7 @@ function normalizeDeliveryOperationOwners(
         deliveryId: owner.deliveryId,
         command: { ...canonicalHeldDeliveryCommand(owner.command, operationId), operationId },
         requestDigest: owner.requestDigest,
+        ...(typeof owner.batchId === "string" && /^inbox_[a-f0-9]{32}$/.test(owner.batchId) ? { batchId: owner.batchId } : {}),
         contentDigest: typeof owner.contentDigest === "string"
           ? owner.contentDigest
           : referencedDelivery?.contentDigest ?? settledDelivery?.contentDigest ?? null,
@@ -10740,7 +10743,8 @@ export class AgentRegistry {
       immediately before it hands the operation to that host. */
   bindDeliveryOperationGeneration(operationId: string, generationId: string): boolean {
     if (!operationId || !generationId) return false;
-    if (!this.readOnlySnapshot().deliveryOperationOwners[operationId]?.retryOfOperationId) return true;
+    const owner = this.readOnlySnapshot().deliveryOperationOwners[operationId];
+    if (!owner?.retryOfOperationId && !owner?.batchId) return true;
     return this.writeDeliveryOperationGeneration(operationId, generationId);
   }
 
@@ -10748,16 +10752,35 @@ export class AgentRegistry {
       the event loop. Null when the lock stayed held and nothing was written. */
   async bindDeliveryOperationGenerationOffLoop(operationId: string, generationId: string): Promise<boolean | null> {
     if (!operationId || !generationId) return false;
-    if (!this.readOnlySnapshot().deliveryOperationOwners[operationId]?.retryOfOperationId) return true;
+    const owner = this.readOnlySnapshot().deliveryOperationOwners[operationId];
+    if (!owner?.retryOfOperationId && !owner?.batchId) return true;
     const write = await this.whenWriterHeld({ label: "delivery.bind-generation", operationId },
       () => this.writeDeliveryOperationGeneration(operationId, generationId));
+    return write.acquired ? write.value : null;
+  }
+
+  /** Atomically binds every member and its generation through the off-loop writer.
+      Missing, terminal or cross-conversation members refuse the entire write. */
+  async bindDeliveryBatchOffLoop(batchId: string, operationIds: readonly string[], generationId: string): Promise<boolean | null> {
+    if (!/^inbox_[a-f0-9]{32}$/.test(batchId) || operationIds.length < 2 || operationIds.length > 1000
+      || new Set(operationIds).size !== operationIds.length || !generationId) return false;
+    const write = await this.whenWriterHeld({ label: "delivery.inbox-batch", operationId: operationIds[0]! }, () => this.mutate(file => {
+      const owners = operationIds.map(id => file.deliveryOperationOwners[id]);
+      const conversation = owners[0] && file.conversations[owners[0].conversationId];
+      if (!conversation || conversation.engine !== "claude" || !conversation.generations.some(g => g.id === generationId)
+        || owners.some(owner => !owner || owner.conversationId !== conversation.id || owner.terminalState !== null
+          || owner.command.kind !== "send")) return false;
+      for (const owner of owners) { owner!.batchId = batchId; owner!.targetGenerationId = generationId; }
+      return true;
+    }));
     return write.acquired ? write.value : null;
   }
 
   private writeDeliveryOperationGeneration(operationId: string, generationId: string): boolean {
     return this.mutate((file) => {
       const owner = file.deliveryOperationOwners[operationId];
-      if (!owner?.retryOfOperationId) return false;
+      if (!owner?.retryOfOperationId && !owner?.batchId) return false;
+      delete owner.batchId;
       owner.targetGenerationId = generationId;
       return true;
     });

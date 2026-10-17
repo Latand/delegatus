@@ -224,6 +224,7 @@ interface RecipientAuthorityRecord {
   revokedAt?: string;
 }
 interface RecipientAuthorityIndex {
+  activeConversations: Set<string>;
   currentSeats: Map<string, string | null>;
   records: Map<string, RecipientAuthorityRecord>;
   revocationCount: number;
@@ -1452,6 +1453,17 @@ export function orchestratorRecipientRefusal(
   });
 }
 
+/** Affirmative current-seat membership from the already hydrated shared index.
+ * Missing or changed authority keeps the original individual-delivery path. */
+export function isCurrentOrchestratorSeat(conversationIds: readonly string[]): boolean {
+  const filename = seatsFile();
+  const revision = seatFileRevisionSync(filename);
+  if (revision === null) return false;
+  const index = recipientAuthorityCache().indexes.get(recipientAuthorityIndexKey(filename, revision));
+  return !!index && conversationIds.some(id => index.activeConversations?.has(id))
+    && recipientAuthorityRefusal(index, conversationIds, identityConversationAlias) === null;
+}
+
 /** Hydrate and index seat authority before a caller reaches synchronous
     admission. The sync check above only stats the file and reads one Map key. */
 export async function orchestratorRecipientRefusalAsync(
@@ -1612,7 +1624,7 @@ function recipientAuthorityIndexIn(
     delete record.successorConversationId;
     if (successor) record.successorConversationId = successor;
   }
-  return { records: authority, currentSeats: new Map(Object.entries(file.seats).map(([project, seat]) => [project, seat.conversationId])), revocationCount: file.revocations.length };
+  return { activeConversations: new Set(Object.values(file.seats).filter(seat => seat.state === "active" && seat.conversationId).map(seat => seat.conversationId!)), records: authority, currentSeats: new Map(Object.entries(file.seats).map(([project, seat]) => [project, seat.conversationId])), revocationCount: file.revocations.length };
 }
 
 function updateRecipientAuthorityIndexAfterWrite(
@@ -1658,6 +1670,7 @@ function updateRecipientAuthorityIndexAfterWrite(
     delete record.successorConversationId;
     if (successor) record.successorConversationId = successor;
   }
+  index.activeConversations = new Set(Object.values(file.seats).filter(seat => seat.state === "active" && seat.conversationId).map(seat => seat.conversationId!));
   index.currentSeats = new Map(Object.entries(file.seats).map(([project, seat]) => [project, seat.conversationId]));
   index.revocationCount = file.revocations.length;
   return index;

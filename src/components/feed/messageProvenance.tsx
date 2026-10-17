@@ -34,6 +34,7 @@ export interface ProvenanceLookup {
   /** Delivery evidence for one feed row — the Claude ledger's id join first,
       then the occurrence join — or null when nothing proves its authorship. */
   forItem(item: Item): MatchedDeliveryProvenance | null;
+  inboxPartsFor?(engineMessageId: string): DeliveredMessageProvenance["parts"];
   /**
    * WHICH submission a delivery identity belongs to (#1950 round 2): the
    * `dedup` token a structured Codex record carries in its own marker,
@@ -210,6 +211,13 @@ function parseProvenance(entry: unknown): DeliveredMessageProvenance | null {
   const channel = body.origin === "operator" ? messageChannel(body.channel) : undefined;
   return {
     origin: body.origin,
+    ...(Array.isArray(body.parts) && body.parts.length <= 1000 ? { parts: body.parts.flatMap(part => {
+      if (!part || typeof part !== "object" || typeof part.operationId !== "string" || typeof part.text !== "string"
+        || !Number.isSafeInteger(part.imageStart) || !Number.isSafeInteger(part.imageEnd) || part.imageStart < 0 || part.imageEnd < part.imageStart) return [];
+      // Nested batches never occur: refuse nested arrays before recursion.
+      const provenance = part.provenance && !part.provenance.parts ? parseProvenance(part.provenance) : null;
+      return provenance ? [{ operationId: part.operationId, text: part.text, textStart: part.textStart, textEnd: part.textEnd, imageStart: part.imageStart, imageEnd: part.imageEnd, provenance }] : [];
+    }) } : {}),
     ...(senderRole ? { senderRole } : {}),
     ...(senderProject ? { senderProject } : {}),
     ...(senderConversationId ? { senderConversationId } : {}),
@@ -413,7 +421,7 @@ function lookupFor(
   const forItem = (item: Item): MatchedDeliveryProvenance | null => {
     if (item.kind === "sysmsg" && item.deliveredMessage?.engineMessageId) {
       const byId = data.messages[item.deliveredMessage.engineMessageId];
-      if (byId) return byId;
+      if (byId) return item.deliveredMessage.partIndex === undefined ? byId : byId.parts?.[item.deliveredMessage.partIndex]?.provenance ?? null;
     }
     return assignment.get(item) ?? null;
   };
@@ -421,6 +429,7 @@ function lookupFor(
   const memoryKey = (item: Item) => item.structuredUserRef ?? nativeUserRefFor(item) ?? (item.kind === "sysmsg" ? item.deliveredMessage?.engineMessageId : null);
   return {
     forItem,
+    inboxPartsFor: id => data.messages[id]?.parts,
     memoryFor: item => {
       const key = memoryKey(item);
       return key ? data.memoryOffers?.[key] ?? [] : [];
