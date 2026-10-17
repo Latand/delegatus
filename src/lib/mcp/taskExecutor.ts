@@ -13,7 +13,7 @@ export const TASK_EXECUTOR_TOOLS = TASK_CHANNEL_TOOLS;
 const MAX_PENDING = TASK_CHANNEL_CALLS;
 const MAX_INPUT_BYTES = TASK_CHANNEL_INPUT_BYTES;
 export const TASK_EXECUTOR_FRAME_BYTES = 32 * 1024 * 1024;
-// The HTTP envelope contains both structuredContent and its escaped text copy.
+// Legacy HTTP clients still receive structuredContent and its text copy.
 export const TASK_EXECUTOR_HTTP_FRAME_BYTES = TASK_CHANNEL_REPLY_BYTES;
 export type ExecutorHttpResponse = { status: number; headers: [string, string][]; body: ReadableStream<Uint8Array> };
 type ExecutorResult = McpToolResult | { conversationId: string | null } | { http: ExecutorHttpResponse };
@@ -170,7 +170,7 @@ export class McpTaskExecutor {
     if (!TASK_EXECUTOR_TOOLS.has(toolName)) throw new Error("unsupported task HTTP tool");
     const result = await this.request("httpTaskCall", {
       toolName, body, url: request.url,
-      headers: [...request.headers].filter(([name]) => ["accept", "content-type", "mcp-protocol-version", "mcp-session-id"].includes(name)),
+      headers: [...request.headers].filter(([name]) => ["accept", "content-type", "mcp-protocol-version", "mcp-session-id", "user-agent"].includes(name)),
     }, caller, context);
     if (!("http" in result) || !result.http || typeof result.http !== "object") throw new Error("invalid task executor HTTP reply");
     const response = result.http as ExecutorHttpResponse;

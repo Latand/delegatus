@@ -1,0 +1,197 @@
+[
+  {
+    "ok": true,
+    "toolName": "list_tasks",
+    "clientRequestId": null,
+    "replayed": false,
+    "hasMore": true,
+    "nextCursor": "fixture-page-two",
+    "tasks": [
+      {
+        "id": "task_fixture_0",
+        "project": "repo-fixture",
+        "status": "inbox",
+        "text": "Inspect the transport 0",
+        "updatedAt": "2026-01-01T00:00:00.000Z",
+        "revision": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "pipelineIds": [],
+        "assignmentCount": 0,
+        "detailsLength": 0
+      },
+      {
+        "id": "task_fixture_1",
+        "project": "repo-fixture",
+        "status": "inbox",
+        "text": "Inspect the transport 1",
+        "updatedAt": "2026-01-01T00:00:00.000Z",
+        "revision": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "pipelineIds": [],
+        "assignmentCount": 0,
+        "detailsLength": 0
+      },
+      {
+        "id": "task_fixture_2",
+        "project": "repo-fixture",
+        "status": "inbox",
+        "text": "Inspect the transport 2",
+        "updatedAt": "2026-01-01T00:00:00.000Z",
+        "revision": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "pipelineIds": [],
+        "assignmentCount": 0,
+        "detailsLength": 0
+      },
+      {
+        "id": "task_fixture_3",
+        "project": "repo-fixture",
+        "status": "inbox",
+        "text": "Inspect the transport 3",
+        "updatedAt": "2026-01-01T00:00:00.000Z",
+        "revision": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "pipelineIds": [],
+        "assignmentCount": 0,
+        "detailsLength": 0
+      },
+      {
+        "id": "task_fixture_4",
+        "project": "repo-fixture",
+        "status": "inbox",
+        "text": "Inspect the transport 4",
+        "updatedAt": "2026-01-01T00:00:00.000Z",
+        "revision": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "pipelineIds": [],
+        "assignmentCount": 0,
+        "detailsLength": 0
+      },
+      {
+        "id": "task_fixture_5",
+        "project": "repo-fixture",
+        "status": "inbox",
+        "text": "Inspect the transport 5",
+        "updatedAt": "2026-01-01T00:00:00.000Z",
+        "revision": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "pipelineIds": [],
+        "assignmentCount": 0,
+        "detailsLength": 0
+      },
+      {
+        "id": "task_fixture_6",
+        "project": "repo-fixture",
+        "status": "inbox",
+        "text": "Inspect the transport 6",
+        "updatedAt": "2026-01-01T00:00:00.000Z",
+        "revision": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "pipelineIds": [],
+        "assignmentCount": 0,
+        "detailsLength": 0
+      },
+      {
+        "id": "task_fixture_7",
+        "project": "repo-fixture",
+        "status": "inbox",
+        "text": "Inspect the transport 7",
+        "updatedAt": "2026-01-01T00:00:00.000Z",
+        "revision": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "pipelineIds": [],
+        "assignmentCount": 0,
+        "detailsLength": 0
+      }
+    ],
+    "count": 8,
+    "total": 12,
+    "remainingCount": 4,
+    "omittedCount": 0,
+    "cursorReset": false,
+    "compact": true,
+    "omittedRecordCount": 8
+  },
+  {
+    "ok": true,
+    "toolName": "conversation_messages",
+    "clientRequestId": null,
+    "replayed": false,
+    "conversationId": "conversation_fixture",
+    "records": [
+      {
+        "seq": 0,
+        "kind": "message",
+        "role": "assistant",
+        "ts": "2026-01-01T00:00:00.000Z",
+        "text": "The fixture check completed. Keep the same task and read the next page.",
+        "truncated": false
+      },
+      {
+        "seq": 1,
+        "kind": "message",
+        "role": "assistant",
+        "ts": "2026-01-01T00:00:00.000Z",
+        "text": "The fixture check completed. Keep the same task and read the next page.",
+        "truncated": false
+      },
+      {
+        "seq": 2,
+        "kind": "message",
+        "role": "assistant",
+        "ts": "2026-01-01T00:00:00.000Z",
+        "text": "The fixture check completed. Keep the same task and read the next page.",
+        "truncated": false
+      },
+      {
+        "seq": 3,
+        "kind": "message",
+        "role": "assistant",
+        "ts": "2026-01-01T00:00:00.000Z",
+        "text": "The fixture check completed. Keep the same task and read the next page.",
+        "truncated": false
+      },
+      {
+        "seq": 4,
+        "kind": "message",
+        "role": "assistant",
+        "ts": "2026-01-01T00:00:00.000Z",
+        "text": "The fixture check completed. Keep the same task and read the next page.",
+        "truncated": false
+      }
+    ],
+    "hasMore": false,
+    "cursor": null
+  },
+  {
+    "ok": true,
+    "toolName": "update_task",
+    "clientRequestId": "fixture-update",
+    "replayed": false,
+    "changedFields": [
+      "status"
+    ],
+    "revision": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "taskId": "task_fixture",
+    "project": "repo-fixture"
+  },
+  {
+    "ok": false,
+    "toolName": "list_tasks",
+    "clientRequestId": null,
+    "replayed": false,
+    "code": "tool_failed",
+    "error": "The fixture store is unavailable.",
+    "retryable": true
+  },
+  {
+    "ok": false,
+    "toolName": "create_task",
+    "clientRequestId": "fixture-invalid",
+    "replayed": false,
+    "code": "TASK_INVALID_FIELD",
+    "error": "details: Invalid input: expected string, received number",
+    "retryable": false,
+    "details": {
+      "field": "details",
+      "issues": [
+        {
+          "field": "details",
+          "message": "Invalid input: expected string, received number"
+        }
+      ]
+    }
+  }
+]

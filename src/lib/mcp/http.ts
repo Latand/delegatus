@@ -10,6 +10,8 @@ import { mcpHttpRefusal as refusal } from "./httpResponse";
 import {
   createProductionViewerMcpService,
   createViewerMcpServer,
+  mcpTextResultClient,
+  mcpToolResponse,
   MCP_HTTP_CLIENT_ID,
   MCP_TOOL_NAMES,
   taskExecutorFailure,
@@ -196,6 +198,9 @@ export async function handleMcpHttpRequest(request: NextRequest): Promise<Respon
   if (connectionId && !CONNECTION_PATTERN.test(connectionId)) {
     return refusal(400, -32600, "The MCP connection identifier is malformed.");
   }
+  // Both shipped native HTTP clients send their MCP client name here. This
+  // selects presentation only, including for connections opened before deploy.
+  const textOnly = mcpTextResultClient(request.headers.get("user-agent")?.split("/", 1)[0]);
   const inflight = inflightCalls();
   /* Reserve each id only once. This also protects clients that connected
      before connection headers were negotiated and still share the legacy
@@ -243,12 +248,10 @@ export async function handleMcpHttpRequest(request: NextRequest): Promise<Respon
       } catch (error) {
         const args = (messages[0]?.params as { arguments?: unknown } | undefined)?.arguments;
         const result = taskExecutorFailure(requested, args && typeof args === "object" && !Array.isArray(args) ? args as Record<string, unknown> : {}, error);
-        return Response.json({ jsonrpc: "2.0", id: messages[0]?.id, result: {
-          content: [{ type: "text", text: JSON.stringify(result) }], structuredContent: result, isError: true,
-        } });
+        return Response.json({ jsonrpc: "2.0", id: messages[0]?.id, result: mcpToolResponse(result, textOnly) });
       }
     }
-    server = createViewerMcpServer(service, tools);
+    server = createViewerMcpServer(service, tools, textOnly);
     const transport = new WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
     await server.connect(transport);
     const response = await transport.handleRequest(request, {

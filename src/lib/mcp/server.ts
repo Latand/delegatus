@@ -4617,7 +4617,21 @@ const TOOL_TRANSPORT_SCHEMAS = Object.fromEntries(MCP_TOOL_NAMES.map(toolName =>
   )) : schema];
 })) as typeof TOOL_INPUT_SCHEMAS;
 
-export function createViewerMcpServer(service: McpToolService, tools: readonly McpToolName[] = MCP_TOOL_NAMES): McpServer {
+/** Presentation only: neither a client name nor a User-Agent
+ * grants caller identity or authority. */
+export function mcpTextResultClient(name: unknown): boolean {
+  return name === "codex-mcp-client" || name === "claude-code";
+}
+
+export function mcpToolResponse(result: McpToolResult, textOnly: boolean) {
+  return {
+    content: [{ type: "text" as const, text: JSON.stringify(result) }],
+    ...(textOnly ? {} : { structuredContent: result }),
+    ...(result.ok ? {} : { isError: true }),
+  };
+}
+
+export function createViewerMcpServer(service: McpToolService, tools: readonly McpToolName[] = MCP_TOOL_NAMES, textOnly = false): McpServer {
   // The SDK uses JSON Schema validation for outgoing elicitation, while tool
   // inputs use Zod. Stateless tool calls need no AJV instance or meta-schemas.
   // Keep the SDK's validator and its lifetime local to this server when used.
@@ -4629,6 +4643,12 @@ export function createViewerMcpServer(service: McpToolService, tools: readonly M
     } },
     capabilities: { experimental: { [MCP_TOOL_CATALOG_CAPABILITY]: { version: 1, tools: [...MCP_TOOL_NAMES] } } },
   });
+  // Codex code mode can forward the whole envelope to its model. Claude
+  // forwards content and retains structuredContent as metadata. Keep their
+  // JSON text once; internal clients still consume the structured object.
+  // No registered tool declares outputSchema, so text-only output is valid.
+  const response = (result: McpToolResult) => mcpToolResponse(result,
+    textOnly || mcpTextResultClient(server.server.getClientVersion()?.name));
   for (const toolName of tools) {
     const taskMutation = toolName === "create_task" || toolName === "update_task";
     const schema = TOOL_INPUT_SCHEMAS[toolName];
@@ -4643,7 +4663,7 @@ export function createViewerMcpServer(service: McpToolService, tools: readonly M
           const result = failure(toolName, String((args as McpToolArgs).clientRequestId), "TASK_INVALID_FIELD",
             issues.map(issue => `${issue.field}: ${issue.message}`).join("; "), false, false,
             { field: issues[0]?.field, issues });
-          return { content: [{ type: "text" as const, text: JSON.stringify(result) }], structuredContent: result, isError: true };
+          return response(result);
         }
       }
       /* A call over the shared HTTP endpoint names its caller by the
@@ -4677,11 +4697,7 @@ export function createViewerMcpServer(service: McpToolService, tools: readonly M
           nativeWork: nativeWorkFromRequestMeta((extra as { _meta?: unknown })._meta),
         });
         const result = await (httpCaller ? runAsMcpHttpCaller(httpCaller, call) : call());
-        return {
-          content: [{ type: "text" as const, text: JSON.stringify(result) }],
-          structuredContent: result,
-          ...(result.ok ? {} : { isError: true }),
-        };
+        return response(result);
       } finally {
         deadline.release();
       }
