@@ -732,11 +732,10 @@ describe("decision form keeps the operator's typed answer", () => {
     const typed = "  Залиште стару шапку,\nа рядки зробіть щільнішими.  ";
     const base = `${server.base}?proto=telegram&tgstate=sent&protoRefuse=1`;
     /* What a person can read: the error and the typed field are inside the window and clear of the save button. */
-    const reading = (page: Page, field: string, error: string, send: string) => page.evaluate(({ field, error, send }) => {
+    const reading = (page: Page, field: string, error: string | null, send: string) => page.evaluate(({ field, error, send }) => {
       const box = (selector: string) => { const el = document.querySelector<HTMLElement>(selector)!; const r = el.getBoundingClientRect(); return { el, left: r.left, right: r.right, top: r.top, bottom: r.bottom }; };
-      const text = box(error), area = box(field), action = box(send);
-      const range = document.createRange(); range.selectNodeContents(text.el);
-      const lines = [...range.getClientRects()];
+      const text = error ? box(error) : null, area = box(field), action = box(send);
+      const lines = text ? (() => { const range = document.createRange(); range.selectNodeContents(text.el); return [...range.getClientRects()]; })() : [];
       /* Inside the window and inside every scrolling ancestor's visible area: a scroller clips what lies past its edge. */
       const clips = (el: HTMLElement) => {
         const boxes: { left: number; right: number; top: number; bottom: number }[] = [];
@@ -751,11 +750,16 @@ describe("decision form keeps the operator's typed answer", () => {
         return (r: { left: number; right: number; top: number; bottom: number }) => bounds.every((b) => r.left >= b.left - 0.5 && r.right <= b.right + 0.5 && r.top >= b.top - 0.5 && r.bottom <= b.bottom + 0.5);
       };
       return {
-        value: (area.el as HTMLTextAreaElement).value, errorText: text.el.textContent ?? "",
-        errorInside: lines.length > 0 && lines.every(insideOf(text.el)), fieldInside: insideOf(area.el)(area),
-        errorOverlapsSend: text.left < action.right && text.right > action.left && text.top < action.bottom && text.bottom > action.top,
+        value: (area.el as HTMLTextAreaElement).value, errorText: text?.el.textContent ?? "",
+        errorInside: text ? lines.length > 0 && lines.every(insideOf(text.el)) : null, fieldInside: insideOf(area.el)(area), sendInside: insideOf(action.el)(action),
+        errorOverlapsSend: text ? text.left < action.right && text.right > action.left && text.top < action.bottom && text.bottom > action.top : null,
+        /* Air between the error's last line and the nearest scroll edge below it. */
+        sendAirBelow: Math.min(...[innerHeight, ...clips(action.el).map((b) => b.bottom)].map((edge) => edge - action.bottom)),
+        errorAirBelow: text ? Math.min(...[innerHeight, ...clips(text.el).map((b) => b.bottom)].map((edge) => edge - text.bottom)) : null,
       };
     }, { field, error, send });
+    /* The key goes away once the save resolves, a beat after the optimistic form detaches. */
+    const draftGone = (page: Page, id: string) => page.waitForFunction((key) => localStorage.getItem(key) === null, `llv.prototypeReview.draft:${id}`);
     const stored = (page: Page, id: string) => page.evaluate((key) => localStorage.getItem(key), `llv.prototypeReview.draft:${id}`);
     try {
       for (const [width, height] of [[1440, 900], [1000, 700], [390, 844]] as const) for (const lang of ["uk", "en"] as const) for (const theme of ["light", "dark"] as const) {
@@ -776,6 +780,7 @@ describe("decision form keeps the operator's typed answer", () => {
           await field.scrollIntoViewIfNeeded();
           const refused = await reading(page, "[data-prototype-comment-field]", "[data-prototype-error]", "[data-prototype-save]");
           expect(refused.value).toBe(typed); expect(refused.errorText).toContain("unavailable");
+          expect(refused.errorText.trim().startsWith(lang === "uk" ? "Відповідь не збережено:" : "The answer was not saved:")).toBe(true);
           expect(refused.errorInside && refused.fieldInside && !refused.errorOverlapsSend).toBe(true);
           expect(await page.locator("[data-prototype-choose]").first().getAttribute("aria-checked")).toBe("true");
           await page.screenshot({ path: path.join(out, `window-${tag}-refused.png`) });
@@ -790,6 +795,10 @@ describe("decision form keeps the operator's typed answer", () => {
           const restored = await field.inputValue();
           expect(restored).toBe(typed);
           expect(await page.locator("[data-prototype-choose]").first().getAttribute("aria-checked")).toBe("true");
+          await field.scrollIntoViewIfNeeded();
+          await page.locator("[data-prototype-save]").scrollIntoViewIfNeeded();
+          const reloadedWindow = await reading(page, "[data-prototype-comment-field]", null, "[data-prototype-save]");
+          expect(reloadedWindow.value).toBe(typed); expect(reloadedWindow.fieldInside && reloadedWindow.sendInside).toBe(true);
           await page.screenshot({ path: path.join(out, `window-${tag}-reloaded.png`) });
           await page.evaluate(() => (window as unknown as { protoAcceptSaves: () => void }).protoAcceptSaves());
           await press(page.locator("[data-prototype-save]"));
@@ -797,10 +806,11 @@ describe("decision form keeps the operator's typed answer", () => {
           const retried = await page.evaluate(() => (window as unknown as { protoPosts: unknown[] }).protoPosts);
           expect(retried).toHaveLength(1);
           expect(retried[0]).toEqual(posts[0]);
+          await draftGone(page, taskRound);
           expect(await stored(page, taskRound)).toBeNull();
           await page.screenshot({ path: path.join(out, `window-${tag}-saved.png`) });
           expect(pageErrors).toEqual([]);
-          readings.push({ surface: "task-window", width, lang, theme, ...refused, restoredEqualsTyped: restored === typed, retrySameAnswer: true, storedAfterSave: null });
+          readings.push({ surface: "task-window", width, lang, theme, ...refused, reloaded: reloadedWindow, restoredEqualsTyped: restored === typed, retrySameAnswer: true, storedAfterSave: null });
         } finally { await context.close(); }
 
         /* The «Рішення» card for the seat's own question. */
@@ -835,6 +845,9 @@ describe("decision form keeps the operator's typed answer", () => {
           await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
           const refusedSeat = await reading(page, "[data-decision-comment]", "[data-decision-error]", "[data-decision-send]");
           expect(refusedSeat.value).toBe(typed); expect(refusedSeat.errorText).toContain("unavailable");
+          expect(refusedSeat.errorText.startsWith(lang === "uk" ? "Відповідь не збережено:" : "The answer was not saved:")).toBe(true);
+          /* The footer's normal padding (12px) stays under the last line of the error. */
+          expect(refusedSeat.errorAirBelow).toBeGreaterThanOrEqual(11.5);
           expect(refusedSeat.errorInside && refusedSeat.fieldInside && !refusedSeat.errorOverlapsSend).toBe(true);
           expect(await form.locator('[data-prototype-option="deploy:1"]').getAttribute("aria-checked")).toBe("true");
           await page.screenshot({ path: path.join(out, `seat-${tag}-refused.png`) });
@@ -848,6 +861,11 @@ describe("decision form keeps the operator's typed answer", () => {
           form = await open();
           expect(await form.locator("[data-decision-comment]").inputValue()).toBe(typed);
           expect(await form.locator('[data-prototype-option="deploy:1"]').getAttribute("aria-checked")).toBe("true");
+          /* The footer's end, padding included, so the field and the button are not left on the scroll edge. */
+          await form.locator("[data-decision-footer]").evaluate((el) => el.scrollIntoView({ block: "nearest" }));
+          const reloadedSeat = await reading(page, "[data-decision-comment]", null, "[data-decision-send]");
+          expect(reloadedSeat.value).toBe(typed); expect(reloadedSeat.fieldInside && reloadedSeat.sendInside).toBe(true);
+          expect(reloadedSeat.sendAirBelow).toBeGreaterThanOrEqual(11.5);
           await page.screenshot({ path: path.join(out, `seat-${tag}-reloaded.png`) });
           await page.evaluate(() => (window as unknown as { protoAcceptSaves: () => void }).protoAcceptSaves());
           await press(form.locator("[data-decision-send]"));
@@ -855,9 +873,10 @@ describe("decision form keeps the operator's typed answer", () => {
           const sent = await page.evaluate(() => (window as unknown as { decisionPosts: unknown[] }).decisionPosts);
           expect(sent).toHaveLength(1);
           expect(sent[0]).toEqual(seatPosts[0]);
+          await draftGone(page, seatId);
           expect(await stored(page, seatId)).toBeNull();
           expect(seat.pageErrors).toEqual([]);
-          readings.push({ surface: "seat-form", width, lang, theme, ...refusedSeat, restoredEqualsTyped: true, retrySameAnswer: true, storedAfterSave: null });
+          readings.push({ surface: "seat-form", width, lang, theme, ...refusedSeat, reloaded: reloadedSeat, restoredEqualsTyped: true, retrySameAnswer: true, storedAfterSave: null });
         } finally { await seat.context.close(); }
       }
       fs.mkdirSync("evidence/decision-form-draft", { recursive: true });

@@ -346,7 +346,8 @@ export function PrototypeReview({ taskId, reviewId, taskTitle, onClose }: Protot
         ...(hasQuestions ? skip ? { skip: true as const } : { answers: draft.answers } : {}) });
       /* Saved: the draft has done its work, whether the window is still up or not. A refusal leaves it as typed. */
       if (result.ok) forgetDecisionDraft(round.id);
-      else if (!mounted.current) refusals.set(taskId, result.error);
+      else if (mounted.current) setRefused(result.error);
+      else refusals.set(taskId, result.error);
     } finally {
       saveInFlight.current = false;
     }
@@ -357,9 +358,9 @@ export function PrototypeReview({ taskId, reviewId, taskTitle, onClose }: Protot
 
   const banners = (
     <>
-      {review.error ?? refused ? (
+      {refused ?? review.error ? (
         <p role="alert" data-prototype-error="" className="m-0 flex items-start gap-2 border-b border-danger/30 bg-danger-soft px-4 py-2 text-label font-semibold text-danger">
-          <TriangleAlert className="mt-px h-3.5 w-3.5 shrink-0" aria-hidden /> {review.error ?? refused}
+          <TriangleAlert className="mt-px h-3.5 w-3.5 shrink-0" aria-hidden /> {refused ? t("decisions.refused", { error: refused }) : review.error}
         </p>
       ) : null}
       {elsewhere ? (

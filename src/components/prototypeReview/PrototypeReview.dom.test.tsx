@@ -857,7 +857,8 @@ describe("a saved decision answers at once", () => {
     expect(document.querySelector("[data-prototype-decision]")).toBeNull();
     expect(document.querySelector<HTMLTextAreaElement>("[data-prototype-comment-field]")!.value).toBe("Keep these words.");
     expect(document.querySelector<HTMLElement>('[data-prototype-choose="1"]')!.getAttribute("aria-checked")).toBe("true");
-    expect(document.querySelector("[data-prototype-error]")?.textContent).toContain("prototype review is unavailable");
+    // The banner leads with the same words as the seat card, so the refusal says the answer was not saved.
+    expect(document.querySelector("[data-prototype-error]")?.textContent?.trim()).toBe("The answer was not saved: prototype review is unavailable");
     expect(JSON.parse(draftOf(earlierId)!)).toMatchObject({ comment: "Keep these words.", chosen: [1] });
     // A retry sends the same answer.
     await act(async () => { document.querySelector<HTMLElement>("[data-prototype-save]")!.click(); });
