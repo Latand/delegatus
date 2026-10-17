@@ -1,10 +1,12 @@
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, expect, setDefaultTimeout, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { generateKeyPairSync } from "node:crypto";
 import type { Flow } from "@/lib/flows/types";
+
+setDefaultTimeout(30_000);
 
 // Store modules bind some paths at import time. Run these real controller
 // regressions in a child so their state and module caches cannot affect the
@@ -42,11 +44,13 @@ function fixture() {
   const remote = path.join(root, "remote.git");
   let workingRepo = repo;
   const git = (...args: string[]) => {
-    const result = spawnSync("git", ["-c", "user.name=Fixture", "-c", "user.email=noreply@example.invalid", ...args], { cwd: workingRepo, encoding: "utf8" });
+    const result = spawnSync("git", ["-c", "user.name=Fixture", "-c", "user.email=noreply@example.invalid", ...args], { cwd: workingRepo, encoding: "utf8",
+      env: { ...process.env, GIT_AUTHOR_DATE: "2026-10-01T00:00:00Z", GIT_COMMITTER_DATE: "2026-10-01T00:00:00Z" } });
     if (result.status !== 0) throw new Error(result.stderr);
     return result.stdout.trim();
   };
   git("init", "-q", "-b", "main"); git("init", "-q", "--bare", remote);
+  fs.mkdirSync(path.join(repo, ".git", "hooks"), { recursive: true });
   git("commit", "-q", "--allow-empty", "-m", "base"); const base = git("rev-parse", "HEAD");
   const lane = pipelineCorpus(2, 1)[1]!;
   git("checkout", "-q", "-b", lane.branch);
@@ -684,15 +688,18 @@ test("a hook that stopped at the deadline it was handed is retried as an interru
     const deadline = Number(fs.readFileSync(handed, "utf8"));
     expect(deadline).toBeGreaterThanOrEqual(before + 14 * 60_000);
     expect(deadline).toBeLessThanOrEqual(Date.now() + 14 * 60_000);
-    const cause = "the pre-push hook's 14-minute budget ran out before its \"touched tests\" check reached a verdict, and the push did not reach the remote";
     expect(h.pushes()).toBe(1);
     expect(h.current().state).toBe("running");
-    expect(h.current().stateDetail).toBe(`passed but unpublished: ${cause}; automatic retry 1 of 3 at 2026-10-04T10:01:00.000Z`);
-    expect(h.current().delivery!.operation!.result).toMatchObject({ ok: false, outcome: "not-landed", failure: { hookBudgetMs: 840_000, hookStoppedCheck: "touched tests", changedFiles: 1 } });
+    expect(h.current().stateDetail).toBe("passed but unpublished: a check reached its execution deadline without a verdict; automatic capacity retry 1 at 2026-10-04T10:01:00.000Z");
+    expect(h.current().delivery!.operation!.result).toMatchObject({ ok: false, outcome: "not-landed", failure: { retryableDeadline: true, hookBudgetMs: 840_000, hookStoppedCheck: "touched tests", changedFiles: 1 } });
     for (const wait of [60_000, 5 * 60_000, 15 * 60_000]) { clock += wait; for (let n = 0; n < 8; n++) await tickPipelines([], ports); }
     expect(h.pushes()).toBe(4);
     expect(h.current().state).toBe("needs_decision");
-    expect(h.current().stateDetail!.split("\n")[0]).toBe(`publishing the passed stage: ${cause}; retried 3 times. Nothing on this branch caused it: check that the hook can finish on this machine (time limit, memory, a stopped Viewer), then retry-stage.`);
+    expect(h.current().stateDetail).toContain("after 3 automatic retries");
+    fs.writeFileSync(h.hook, "#!/bin/sh\nexit 0\n", { mode: 0o700 });
+    expect((await patchPipeline(h.lane.id, { action: "publish" }, ports)).error).toBeUndefined();
+    for (let n = 0; n < 8; n++) await tickPipelines([], ports);
+    expect(h.current().state).toBe("completed");
   } finally { h.cleanup(); }
 });
 
@@ -720,7 +727,7 @@ test("a hook stopped at its deadline stays an interrupted push when the Viewer s
     for (let n = 0; n < 8; n++) await tickPipelines([], ports);
     expect(h.pushes()).toBe(1);
     expect(h.current().state).toBe("running");
-    expect(h.current().stateDetail).toContain("automatic retry 1 of 3");
+    expect(h.current().stateDetail).toContain("automatic capacity retry 1");
   } finally { h.cleanup(); }
 });
 
@@ -1234,4 +1241,105 @@ test("a signal-ended publisher keeps its signal and tail through remote reconcil
     expect(h.current().delivery!.operation!.result).toMatchObject({ outcome: "not-landed", failure: { code: null, signal: "SIGTERM" } });
   } finally { h.cleanup(); }
 });
+for (const failsAfterWait of [false, true]) test(`capacity retries survive a controller process restart and settle the next verdict (fails: ${failsAfterWait})`, async () => {
+  const h = fixture();
+  try {
+    const head = trailingLane(h, 2, { "src/work.ts": "export const work = 1;\n" });
+    fs.writeFileSync(h.hook, "#!/bin/sh\necho 'pre-push: touched tests: failed (124)' >&2\necho 'owned runner: deadline expired' >&2\nexit 1\n", { mode: 0o700 });
+    let clock = Date.parse("2026-10-16T10:00:00.000Z");
+    const ports = { ...h.ports, now: () => new Date(clock).toISOString(), scheduleTick: () => {} };
+    expect((await patchPipeline(h.lane.id, { action: "publish" }, ports)).error).toBeUndefined();
+    for (let n = 0; n < 8; n++) await tickPipelines([], ports);
+    expect(h.current().state).toBe("running");
+    expect(h.current().runs[0]!.attempts[0]!.publicationRetry).toMatchObject({ failures: 1, retryAt: "2026-10-16T10:01:00.000Z" });
+    const engine = path.join(import.meta.dir, "engine.ts");
+    const restart = async () => {
+      const script = `const stagePullRequest = await import(${JSON.stringify(path.join(import.meta.dir, "stagePullRequest.ts"))});
+      const { spyOn } = await import("bun:test");
+      spyOn(stagePullRequest, "ensureStagePullRequest").mockResolvedValue({ ok: true });
+      const { defaultPipelinePorts, tickPipelines } = await import(${JSON.stringify(engine)});
+        const ports = { ...defaultPipelinePorts(), now: () => ${JSON.stringify(new Date(clock).toISOString())}, scheduleTick: () => {},
+          conversationAgentActive: async () => false, stageHostResident: async () => false, paneAgentAlive: async () => false, getFlow: () => null, worktreePresent: () => true };
+        for (let n = 0; n < 8; n++) await tickPipelines([], ports);`;
+      const outcome = await realExec(process.execPath, ["-e", script], process.cwd(), { ...process.env, LLV_STATE_DIR: state }, { timeoutMs: 30_000 });
+      expect(outcome.code, outcome.stderr).toBe(0);
+    };
+    // A new controller process sees the durable future retry and does no push.
+    await restart();
+    expect(h.current().runs[0]!.attempts[0]!.publicationRetry!.failures).toBe(1);
+    // A transient overload clears before the bounded retry budget is spent.
+    clock += 60_000; await restart();
+    fs.writeFileSync(h.hook, failsAfterWait
+      ? "#!/bin/sh\necho 'pre-push: touched tests: failed (1)' >&2\necho '(fail) named publication assertion [2.00ms]' >&2\nexit 1\n"
+      : "#!/bin/sh\nexit 0\n", { mode: 0o700 });
+    clock += 5 * 60_000; await restart();
+    expect(h.current().state).toBe(failsAfterWait ? "needs_decision" : "completed");
+    if (failsAfterWait) {
+      expect(h.current().stateDetail!.split("\n")[0]).toContain("named publication assertion");
+      expect(h.current().publishedCommit).toBeNull();
+    } else expect(h.current().publishedCommit).toBe(head);
+  } finally { h.cleanup(); }
+}, 90_000);
+
+test("owned-runner cleanup refusal parks despite a deadline marker", async () => {
+  const h = fixture();
+  try {
+    trailingLane(h, 2, { "src/work.ts": "export const work = 1;\n" });
+    fs.writeFileSync(h.hook, "#!/bin/sh\necho 'pre-push: touched tests: failed (1)' >&2\necho 'owned runner: execution guard expired' >&2\necho 'owned runner: budget cleanup failed: child tree could not be stopped' >&2\nexit 1\n", { mode: 0o700 });
+    expect((await patchPipeline(h.lane.id, { action: "publish" }, h.ports)).error).toBeUndefined();
+    await h.tick();
+    expect(h.pushes()).toBe(1);
+    expect(h.current().state).toBe("needs_decision");
+    expect(h.current().delivery!.operation!.result!.failure).toMatchObject({ retryableDeadline: false });
+    expect(h.current().stateDetail!.split("\n")[0]).toContain("touched tests");
+  } finally { h.cleanup(); }
+});
+
+test("permanent capacity deadlines stop after three retries across controller restarts", async () => {
+  const h = fixture();
+  try {
+    trailingLane(h, 2, { "src/work.ts": "export const work = 1;\n" });
+    const attempts = path.join(h.root, "push-attempts");
+    fs.writeFileSync(h.hook, `#!/bin/sh\necho attempt >> '${attempts}'\necho 'pre-push: touched tests: failed (124)' >&2\necho 'owned runner: deadline expired' >&2\nexit 1\n`, { mode: 0o700 });
+    let clock = Date.parse("2026-10-16T11:00:00.000Z");
+    const ports = { ...h.ports, now: () => new Date(clock).toISOString(), scheduleTick: () => {} };
+    expect((await patchPipeline(h.lane.id, { action: "publish" }, ports)).error).toBeUndefined();
+    for (let n = 0; n < 8; n++) await tickPipelines([], ports);
+    expect(h.pushes()).toBe(1);
+    const engine = path.join(import.meta.dir, "engine.ts");
+    const restart = async () => {
+      const script = `import { defaultPipelinePorts, tickPipelines } from ${JSON.stringify(engine)};
+        const ports = { ...defaultPipelinePorts(), now: () => ${JSON.stringify(new Date(clock).toISOString())}, scheduleTick: () => {},
+          conversationAgentActive: async () => false, stageHostResident: async () => false, paneAgentAlive: async () => false, getFlow: () => null, worktreePresent: () => true };
+        for (let n = 0; n < 8; n++) await tickPipelines([], ports);`;
+      const outcome = await realExec(process.execPath, ["-e", script], process.cwd(), { ...process.env, LLV_STATE_DIR: state }, { timeoutMs: 30_000 });
+      expect(outcome.code, outcome.stderr).toBe(0);
+    };
+    await restart();
+    for (const wait of [60_000, 5 * 60_000, 15 * 60_000]) { clock += wait; await restart(); }
+    expect(fs.readFileSync(attempts, "utf8").trim().split("\n")).toHaveLength(4);
+    expect(h.current().state).toBe("needs_decision");
+    expect(h.current().runs[0]!.attempts[0]!.publicationRetry).toMatchObject({ failures: 3, exhausted: true });
+    expect(h.current().stateDetail!.split("\n")[0]).toContain("after 3 automatic retries");
+    clock += 60 * 60_000;
+    await restart();
+    expect(fs.readFileSync(attempts, "utf8").trim().split("\n")).toHaveLength(4);
+    expect(h.current().state).toBe("needs_decision");
+  } finally { h.cleanup(); }
+}, 90_000);
+
+test("a named touched assertion vetoes deadline recovery before log truncation", async () => {
+  const h = fixture();
+  try {
+    trailingLane(h, 2, { "src/work.ts": "export const work = 1;\n" });
+    fs.writeFileSync(h.hook, `#!/bin/sh\necho 'pre-push: touched tests: failed (1)' >&2\necho 'NEW src/work.test.ts: publication assertion' >&2\n${"echo diagnostic >&2\n".repeat(500)}echo 'owned runner: deadline expired' >&2\nexit 1\n`, { mode: 0o700 });
+    expect((await patchPipeline(h.lane.id, { action: "publish" }, h.ports)).error).toBeUndefined();
+    await h.tick();
+    expect(h.current().state).toBe("needs_decision");
+    expect(h.current().stateDetail!.split("\n")[0]).toContain("first: src/work.test.ts: publication assertion");
+    expect(h.current().delivery!.operation!.result!.failure).toMatchObject({ retryableDeadline: false });
+    expect(h.current().delivery!.operation!.result!.failure!.outputTail.length).toBeLessThanOrEqual(4000);
+  } finally { h.cleanup(); }
+});
+
 }

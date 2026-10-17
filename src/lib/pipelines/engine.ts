@@ -4095,8 +4095,7 @@ function stageHeadAccepted(attempt: PipelineStageAttempt | null): boolean {
   return attempt?.verdict?.status === "pass" || attempt?.acceptedForReview === true;
 }
 
-/** One minute, five, fifteen: long enough for the base branch or the machine
-    to change, short enough that a lane is not forgotten. Then it parks. */
+/** One minute, five, fifteen: every automatic publication retry is bounded. */
 const PUBLICATION_RETRY_DELAYS_MS = [60_000, 5 * 60_000, 15 * 60_000];
 
 type RefusedPublication = { error: string; failure?: import("./types").PipelinePublicationFailure; outcome?: "not-landed" };
@@ -4111,6 +4110,9 @@ function publicationNotLanded(published: RefusedPublication): boolean {
 function passedPublicationParkDetail(attempt: PipelineStageAttempt, published: RefusedPublication): string {
   const failure = published.failure;
   const retried = attempt.publicationRetry?.exhausted ? `; retried ${PUBLICATION_RETRY_DELAYS_MS.length} times` : "";
+  if (failure?.retryableDeadline && attempt.publicationRetry?.exhausted) {
+    return `publishing the passed stage: a check reached its execution deadline without a verdict after ${PUBLICATION_RETRY_DELAYS_MS.length} automatic retries. This is a capacity failure; once capacity is available, use publish to try again.\n${published.error}`;
+  }
   if (publicationNotLanded(published)) {
     return `publishing the passed stage: ${publicationInterruptionCause(failure)}${retried}. Nothing on this branch caused it: check that the hook can finish on this machine (time limit, memory, a stopped Viewer), then retry-stage.\n${published.error}`;
   }
@@ -4134,8 +4136,9 @@ function commitsRefusedByPrivacy(failure: import("./types").PipelinePublicationF
  * and tries again instead of asking a person at once: a refusal of a head that
  * changes nothing, or a push interrupted before it reached the remote (the
  * hook was not allowed to finish, so there is no verdict about the branch).
- * Each failed operation is counted once on the attempt; the wait is durable
- * across ticks and restarts, and the last failure parks with its cause.
+ * Execution deadlines without a decisive refusal retry on the same bounded
+ * backoff as other interruptions. Each failed operation is counted once on
+ * the attempt; the limit is durable across ticks and restarts.
  * A refused stage that changed files, or whose commits privacy refused,
  * proceeds to its bounded producer repair.
  */
@@ -4148,8 +4151,9 @@ async function retryRefusedPublication(
   const operation = pipeline.delivery?.operation;
   const failure = published.failure;
   const notLanded = publicationNotLanded(published);
+  const deadlineOnly = failure?.retryableDeadline === true;
   if (!operation || operation.state !== "settled") return false;
-  if (!notLanded && (!failure || failure.changedFiles !== 0 || commitsRefusedByPrivacy(failure))) return false;
+  if (!deadlineOnly && !notLanded && (!failure || failure.changedFiles !== 0 || commitsRefusedByPrivacy(failure))) return false;
   const previous = attempt.publicationRetry?.sha === operation.sha ? attempt.publicationRetry : undefined;
   let record = previous;
   if (previous?.operationId !== operation.id) {
@@ -4161,7 +4165,7 @@ async function retryRefusedPublication(
     }
     // A publisher that died with its Viewer left no evidence and its cause
     // went with the restart: the first retry is immediate, and still counted.
-    const delay = failures === 1 && notLanded && !failure ? 0 : PUBLICATION_RETRY_DELAYS_MS[failures - 1]!;
+    const delay = failures === 1 && notLanded && !failure ? 0 : PUBLICATION_RETRY_DELAYS_MS[Math.min(failures, PUBLICATION_RETRY_DELAYS_MS.length) - 1]!;
     record = { sha: operation.sha, operationId: operation.id, failures,
       retryAt: new Date(unixMs(ports.now()) + delay).toISOString() };
     attempt.publicationRetry = record;
@@ -4176,8 +4180,10 @@ async function retryRefusedPublication(
     ports.scheduleTick?.(0);
     return true;
   }
-  const schedule = `automatic retry ${record!.failures} of ${PUBLICATION_RETRY_DELAYS_MS.length} at ${record!.retryAt}`;
-  await keepPassedStageUnpublished(pipeline, attempt, notLanded ? `${publicationInterruptionCause(failure)}; ${schedule}`
+  const schedule = deadlineOnly ? `automatic capacity retry ${record!.failures} at ${record!.retryAt}`
+    : `automatic retry ${record!.failures} of ${PUBLICATION_RETRY_DELAYS_MS.length} at ${record!.retryAt}`;
+  await keepPassedStageUnpublished(pipeline, attempt, deadlineOnly ? `a check reached its execution deadline without a verdict; ${schedule}`
+    : notLanded ? `${publicationInterruptionCause(failure)}; ${schedule}`
     : `${publicationFailureCause(failure!)}. The stage changed no files; ${schedule}`);
   ports.scheduleTick?.(Math.max(1_000, wait));
   return true;

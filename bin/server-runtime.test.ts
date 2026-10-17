@@ -14,6 +14,7 @@ import { loadWorkflows } from "@/lib/workflows/store";
 import { runtimeHostEndpoint } from "@/lib/runtime/localEndpoint";
 import { RuntimeHostFence } from "@/runtime-host/runtimeHostFence";
 import { hermeticTailscaleEnvironment } from "@/test-helpers/tailscaleStub";
+import { installedRelease } from "./self-update-supervisor.mjs";
 
 import {
   browserOpenCommand,
@@ -448,4 +449,60 @@ test("Viewer crash signals fail the launcher while operator stops are clean", as
 test("launcher forwards Fish Audio credentials", () => {
   const name = ["FISH", "AUDIO", "API", "KEY"].join("_");
   expect(withoutUnsupportedApiCredentials({ [name]: "provider-fixture" })).toEqual({ [name]: "provider-fixture" });
+});
+
+test("each launched release pins diagnostic identity and clears an inherited predecessor", () => {
+  const config = { socketPath: "fixture.sock", fencePath: "fixture.lock", journalPath: "fixture.sqlite" };
+  const base = { LLV_DIAGNOSTIC_REVISION: "a".repeat(40) };
+  const revision = "b".repeat(40);
+  expect(cliRuntimeHostEnvironment(base, config, revision).LLV_DIAGNOSTIC_REVISION).toBe(revision);
+  for (const invalid of [null, "", "invalid"]) {
+    expect(cliRuntimeHostEnvironment(base, config, invalid).LLV_DIAGNOSTIC_REVISION).toBeUndefined();
+  }
+  expect(base.LLV_DIAGNOSTIC_REVISION).toBe("a".repeat(40));
+  for (const selected of [revision, null]) {
+    const child = Bun.spawnSync([process.execPath, "-e", "process.stdout.write(JSON.stringify(process.env.LLV_DIAGNOSTIC_REVISION ?? null))"], {
+      env: cliRuntimeHostEnvironment({ ...process.env, ...base }, config, selected),
+    });
+    expect(child.exitCode).toBe(0);
+    expect(JSON.parse(child.stdout.toString())).toBe(selected);
+  }
+});
+
+test("a packaged revision reaches both launched children inside a consumer checkout", () => {
+  const packageRoot = fs.mkdtempSync(path.join(os.tmpdir(), "delegatus-package-revision-"));
+  const consumerRoot = path.join(packageRoot, "consumer");
+  const installedPackage = path.join(consumerRoot, "node_modules", "delegatus-cli");
+  const revision = "e".repeat(40);
+  try {
+    fs.mkdirSync(installedPackage, { recursive: true });
+    const git = (args: string[]) => {
+      const result = Bun.spawnSync(["git", ...args], { cwd: consumerRoot, stdout: "pipe", stderr: "pipe" });
+      if (result.exitCode !== 0) throw new Error(result.stderr.toString());
+      return result.stdout.toString().trim();
+    };
+    git(["init", "--initial-branch=main"]);
+    fs.writeFileSync(path.join(consumerRoot, "tracked.txt"), "consumer checkout\n");
+    git(["add", "tracked.txt"]);
+    git(["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false", "commit", "-m", "consumer"]);
+    const consumerRevision = git(["rev-parse", "HEAD"]);
+    fs.writeFileSync(path.join(installedPackage, "package.json"), JSON.stringify({ version: "1.0.0", gitHead: revision }));
+    const release = installedRelease(path.join(packageRoot, "missing-pointer.json"), installedPackage);
+    expect(release).toEqual({ dir: installedPackage, sha: revision, published: false });
+    expect(consumerRevision).not.toBe(revision);
+
+    const config = { socketPath: "fixture.sock", fencePath: "fixture.lock", journalPath: "fixture.sqlite" };
+    const runtimeHostEnvironment = cliRuntimeHostEnvironment({ LLV_DIAGNOSTIC_REVISION: "old" }, config, release.sha);
+    const viewerEnvironment = cliRuntimeHostEnvironment({ LLV_DIAGNOSTIC_REVISION: "old" }, config, release.sha);
+    for (const childEnvironment of [runtimeHostEnvironment, viewerEnvironment]) {
+      expect(childEnvironment.LLV_DIAGNOSTIC_REVISION).toBe(revision);
+      const child = Bun.spawnSync([process.execPath, "-e", "process.stdout.write(process.env.LLV_DIAGNOSTIC_REVISION ?? 'null')"], {
+        env: childEnvironment,
+      });
+      expect(child.exitCode).toBe(0);
+      expect(child.stdout.toString()).toBe(revision);
+    }
+  } finally {
+    fs.rmSync(packageRoot, { recursive: true, force: true });
+  }
 });

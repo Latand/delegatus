@@ -96,6 +96,15 @@ export function isGitCheckout(dir) {
   return existsSync(join(dir, ".git"));
 }
 
+function packageRevision(packageRoot) {
+  try {
+    const revision = JSON.parse(readFileSync(join(packageRoot, "package.json"), "utf8")).gitHead;
+    return typeof revision === "string" && /^[0-9a-f]{40}$/.test(revision) ? revision : null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * The release the next start runs: the published pointer when its directory
  * is a built checkout of the named commit, else the package root.
@@ -107,7 +116,7 @@ export function isGitCheckout(dir) {
  * @returns {{ dir: string, sha: string | null, published: boolean }}
  */
 export function installedRelease(pointerFile, packageRoot) {
-  const rootHead = headRevision(packageRoot);
+  const rootHead = isGitCheckout(packageRoot) ? headRevision(packageRoot) : null;
   try {
     const parsed = JSON.parse(readFileSync(pointerFile, "utf8"));
     if (parsed.kind === "package" && typeof parsed.dir === "string" && /^[0-9a-f]{40}$/.test(parsed.sha)) {
@@ -126,7 +135,7 @@ export function installedRelease(pointerFile, packageRoot) {
   } catch {
     /* No pointer yet, or an unreadable one: the package root is the release. */
   }
-  return { dir: packageRoot, sha: rootHead, published: false };
+  return { dir: packageRoot, sha: rootHead ?? packageRevision(packageRoot), published: false };
 }
 
 /** The runtime host's entry inside one release, chosen the way
