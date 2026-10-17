@@ -1,0 +1,214 @@
+{
+  "date": "2026-10-17",
+  "startingHead": "490e9fad711068b687a8796754bd62779d4f030f",
+  "comparisonBase": "02f9301fc32370210a4af533c1204741c6436f52",
+  "environmentDifference": {
+    "agent": "GIT_AUTHOR_NAME, GIT_AUTHOR_EMAIL, GIT_COMMITTER_NAME and GIT_COMMITTER_EMAIL carry the configured publication identity",
+    "publisher": "the same four variables are absent",
+    "configIsolation": "the pre-push hook and test preload scrub inherited Git repository/config bindings; the preload also isolates HOME, global config and templates"
+  },
+  "red": {
+    "command": "the complete phaseCommand, with the publisher environment",
+    "headMs": 497627,
+    "newFailures": [
+      "src/lib/pipelines/engine.ports.test.ts: a fixer self-fail with a committed head goes to review with its findings as notes: Another issue noticed",
+      "src/lib/pipelines/engine.ports.test.ts: a fixer self-fail with a committed head goes to review with its findings as notes: Users cannot save",
+      "src/lib/pipelines/engine.ports.test.ts: a fixer self-fail with a committed head goes to review with its findings as notes: historical red tests",
+      "src/lib/pipelines/engine.ports.test.ts: a fixer routes plain fail through fenced verdict using structured state",
+      "src/lib/pipelines/engine.ports.test.ts: a fixer routes plain fail through recorded report using structured state",
+      "src/lib/pipelines/engine.ports.test.ts: a fixer routes plain fail through reported plus fenced completion using structured state",
+      "src/lib/pipelines/engine.ports.test.ts: a fixer routes fail without findings through fenced verdict using structured state",
+      "src/lib/pipelines/engine.ports.test.ts: a fixer routes fail without findings through recorded report using structured state",
+      "src/lib/pipelines/engine.ports.test.ts: a fixer routes fail without findings through reported plus fenced completion using structured state",
+      "src/lib/pipelines/engine.ports.test.ts: a fixer routes prose never classifies through fenced verdict using structured state",
+      "src/lib/pipelines/engine.ports.test.ts: a fixer routes prose never classifies through recorded report using structured state",
+      "src/lib/pipelines/engine.ports.test.ts: a fixer routes prose never classifies through reported plus fenced completion using structured state",
+      "src/lib/pipelines/engine.ports.test.ts: a fixer routes long output plain fail through fenced verdict using structured state",
+      "src/lib/pipelines/engine.ports.test.ts: a fixer routes long output plain fail through recorded report using structured state",
+      "src/lib/pipelines/engine.ports.test.ts: a fixer routes long output plain fail through reported plus fenced completion using structured state",
+      "src/lib/pipelines/engine.ports.test.ts: a successor lane on a pull request branch settles its passed stage after a completed lane",
+      "src/lib/pipelines/engine.ports.test.ts: a successor lane on a pull request branch settles its passed stage after a closed lane",
+      "src/lib/pipelines/engine.ports.test.ts: a rebased builder reconciles accepted content and continues with fast-forward delivery",
+      "src/lib/pipelines/engine.ports.test.ts: rewritten builder history parks with the dropped accepted commit and preserves delivery",
+      "src/lib/pipelines/stagePullRequest.test.ts: C: controller creates and links a delivery PR before advancing to review",
+      "src/lib/pipelines/stagePullRequest.test.ts: C: an existing delivery PR is discovered without another create",
+      "src/lib/pipelines/stagePullRequest.test.ts: C: a lost creation response recovers the PR from the delivery branch",
+      "src/lib/pipelines/stagePullRequest.test.ts: C: a refused PR cannot leave a passing stage without a linked PR",
+      "src/lib/pipelines/stagePullRequest.test.ts: C: private stage text cannot reach a PR write (path)",
+      "src/lib/pipelines/stagePullRequest.test.ts: C: private stage text cannot reach a PR write (email)",
+      "src/lib/pipelines/stagePullRequest.test.ts: C: private stage text cannot reach a PR write (credential)",
+      "src/lib/pipelines/stagePullRequest.test.ts: C: pause during forge await 1 cannot accept a stale PR result",
+      "src/lib/pipelines/stagePullRequest.test.ts: C: pause during forge await 2 cannot accept a stale PR result",
+      "src/lib/pipelines/stagePullRequest.test.ts: C: pause during forge await 3 cannot accept a stale PR result",
+      "src/lib/pipelines/stagePullRequest.test.ts: C: release during forge await 1 cannot accept a stale PR result",
+      "src/lib/pipelines/stagePullRequest.test.ts: C: release during forge await 2 cannot accept a stale PR result",
+      "src/lib/pipelines/stagePullRequest.test.ts: C: release during forge await 3 cannot accept a stale PR result",
+      "src/lib/pipelines/stagePullRequest.test.ts: C: the repository's privacy gate can refuse otherwise public summary text",
+      "src/lib/pipelines/stagePullRequest.test.ts: C: a migrated lane gets its PR before review finishes (local output=false)",
+      "src/lib/pipelines/stagePullRequest.test.ts: C: a migrated lane gets its PR before review finishes (local output=true)"
+    ],
+    "preExistingFailures": [
+      "src/lib/pipelines/engine.controllerPass.test.ts: a bounded reconciliation preserves another lane's CPU ticket and FIFO age",
+      "src/lib/pipelines/engine.creation.test.ts: a stage completes and its successor waits for both update roles: early-switch-off",
+      "src/lib/pipelines/engine.creation.test.ts: lanes in linked checkouts serialize Git writes through their common directory",
+      "src/lib/pipelines/engine.ports.test.ts: a fixer self-fail with a committed head goes to review with its findings as notes: rejected publication",
+      "src/lib/pipelines/engine.ports.test.ts: managed early admission holds actual pipeline launches across recovery until terminal status",
+      "src/lib/pipelines/engine.ports.test.ts: managed drain-switch-off admission holds actual pipeline launches across recovery until terminal status",
+      "src/lib/pipelines/git.test.ts: an unpinned base without origin resolves local main without fetching"
+    ],
+    "confirmation": "three reruns per side; zero flaky outcomes",
+    "exitCode": 1
+  },
+  "unchangedAgentControl": {
+    "files": [
+      "src/lib/pipelines/engine.ports.test.ts",
+      "src/lib/pipelines/stagePullRequest.test.ts"
+    ],
+    "headMs": 75891,
+    "newFailures": 0,
+    "preExistingFailures": 2,
+    "exitCode": 0,
+    "command": "phaseCommand restricted to the two listed explicit files, with the agent environment"
+  },
+  "newRegressionRed": {
+    "files": [
+      "src/lib/pipelines/stagePullRequest.test.ts"
+    ],
+    "testNamePattern": "^native stage fixtures choose their own Git identity",
+    "failed": [
+      "publisher",
+      "conflicting"
+    ],
+    "exitCode": 1
+  },
+  "focusedGreen": {
+    "file": "src/lib/pipelines/stagePullRequest.test.ts",
+    "pass": 23,
+    "fail": 0,
+    "exitCode": 0
+  },
+  "testedSourceSha256": {
+    "src/lib/pipelines/engine.fixture.ts": "76acba3bb559bdfa34493000a5429229002168304a80eac01b7d4aed4da49dfd",
+    "src/lib/pipelines/stagePullRequest.test.ts": "3002e5f8352d14507beaa6142f58ebce0409617d0ee507a46a4531ae8f621957"
+  },
+  "phaseCommand": [
+    "bash",
+    "<installed-release>/scripts/gate-slot.sh",
+    "bun",
+    "scripts/local-gate-tests.ts",
+    "--base",
+    "02f9301fc32370210a4af533c1204741c6436f52",
+    "src/lib/pipelines/engine.ports.test.ts",
+    "src/lib/pipelines/engine.publication.test.ts",
+    "src/lib/pipelines/git.test.ts",
+    "src/lib/pipelines/stageAttemptPush.test.ts",
+    "src/lib/pipelines/stagePullRequest.test.ts",
+    "src/lib/git/agentHistoryGuard.test.ts",
+    "src/lib/performanceSpans.test.ts",
+    "src/lib/pipelines/engine.providerBudgetKinds.test.ts",
+    "src/lib/pipelines/engine.providerBudget.test.ts",
+    "src/lib/pipelines/engine.provisioning.test.ts",
+    "src/lib/pipelines/engine.succession.test.ts",
+    "src/lib/pipelines/engine.creation.test.ts",
+    "src/lib/pipelines/engine.containment.test.ts",
+    "src/lib/pipelines/engine.controllerPass.test.ts",
+    "src/lib/pipelines/engine.providerChains.test.ts",
+    "src/lib/pipelines/engine.controllerSnapshot.test.ts",
+    "src/lib/pipelines/engine.settlement.test.ts",
+    "src/lib/pipelines/engine.accountGuard.test.ts",
+    "src/lib/pipelines/engine.providerBudgetChains.test.ts",
+    "src/lib/pipelines/engine.routing.test.ts",
+    "src/lib/pipelines/engine.activation.test.ts",
+    "src/lib/pipelines/engine.cpuQueue.test.ts",
+    "src/lib/pipelines/engine.providerSignals.test.ts",
+    "src/lib/pipelines/engine.recovery.test.ts",
+    "src/lib/pipelines/engine.watchdogRegression.test.ts",
+    "src/lib/pipelines/engine.cpuAdmissionPolling.test.ts"
+  ],
+  "environmentConstruction": [
+    "Start from the agent shell environment with fresh HOME, XDG_CONFIG_HOME, TMPDIR and LLV_STATE_DIR.",
+    "Apply pipelinePublicationHookEnv() before starting the comparator.",
+    "For publisher mode, remove every GIT_AUTHOR_* and GIT_COMMITTER_* entry from the complete child environment.",
+    "For agent mode, retain the four launch-provided publication identity fields.",
+    "The hook comparator creates another isolated environment for each explicit file."
+  ],
+  "runtime": "Bun 1.4.0 (34cbb9a40) on Linux",
+  "admissionWrapperSource": "scripts/gate-slot.sh from installed release 6d7968348548",
+  "review": "Read-only diff review: the identity override is limited to native fixture commands; inherited config confinement remains in the test preload; production receipt and identity checks are unchanged.",
+  "publisherGreen": {
+    "command": "phaseCommand with the publisher environment",
+    "headMs": 529146,
+    "newFailures": 0,
+    "preExistingFailures": [
+      "src/lib/pipelines/engine.controllerPass.test.ts: a bounded reconciliation preserves another lane's CPU ticket and FIFO age",
+      "src/lib/pipelines/engine.creation.test.ts: a stage completes and its successor waits for both update roles: early-switch-off",
+      "src/lib/pipelines/engine.creation.test.ts: lanes in linked checkouts serialize Git writes through their common directory",
+      "src/lib/pipelines/engine.ports.test.ts: managed early admission holds actual pipeline launches across recovery until terminal status",
+      "src/lib/pipelines/engine.ports.test.ts: managed drain-switch-off admission holds actual pipeline launches across recovery until terminal status",
+      "src/lib/pipelines/git.test.ts: an unpinned base without origin resolves local main without fetching"
+    ],
+    "flaky": 0,
+    "exitCode": 0
+  },
+  "unchangedProductSha256": {
+    "src/lib/pipelines/stageAttemptPush.ts": "8d7bb4f358493d3b4ff547cbb2a20b168e6f98b00c71fae8490f560b43004ebb",
+    "src/lib/git/stageAttemptGuard.ts": "374f9bab229bfefe80fc33e461158db0d6beb594450fb8bb1b6901b74a7b6fdc",
+    "src/lib/git/agentPublicationIdentity.ts": "32ade4fed149ec099a3c5e0f5f191366133f4ecf5f47e74057bebe45d48a77a2",
+    "src/lib/pipelines/git.ts": "98fe808ba12fc5fb805773cf0a510f6d1e0df07774e2a7697f19637df760031c"
+  },
+  "agentGreen": {
+    "command": "phaseCommand with the agent environment",
+    "headMs": 431297,
+    "newFailures": 0,
+    "preExistingFailures": [
+      "src/lib/pipelines/engine.controllerPass.test.ts: a bounded reconciliation preserves another lane's CPU ticket and FIFO age",
+      "src/lib/pipelines/engine.creation.test.ts: a stage completes and its successor waits for both update roles: early-switch-off",
+      "src/lib/pipelines/engine.creation.test.ts: lanes in linked checkouts serialize Git writes through their common directory",
+      "src/lib/pipelines/engine.ports.test.ts: managed early admission holds actual pipeline launches across recovery until terminal status",
+      "src/lib/pipelines/engine.ports.test.ts: managed drain-switch-off admission holds actual pipeline launches across recovery until terminal status"
+    ],
+    "flaky": 0,
+    "exitCode": 0
+  },
+  "staticChecks": [
+    {
+      "command": [
+        "bun",
+        "node_modules/typescript/bin/tsc",
+        "--noEmit"
+      ],
+      "exitCode": 0
+    },
+    {
+      "command": [
+        "bun",
+        "scripts/eslint-changes.ts",
+        "--base",
+        "490e9fad711068b687a8796754bd62779d4f030f",
+        "./src/lib/pipelines/engine.fixture.ts",
+        "./src/lib/pipelines/stagePullRequest.test.ts"
+      ],
+      "exitCode": 0,
+      "introducedErrors": 0,
+      "baseErrors": 0
+    },
+    {
+      "command": [
+        "bun",
+        "scripts/privacy-publication-gate.ts",
+        "--require-known-values",
+        "--check-commits",
+        "--base",
+        "02f9301fc32370210a4af533c1204741c6436f52",
+        "--paths",
+        "./src/lib/pipelines/engine.fixture.ts",
+        "./src/lib/pipelines/stagePullRequest.test.ts",
+        "./docs/verification/stage-push-settlement.md",
+        "./evidence/stage-push-environment.json"
+      ],
+      "exitCode": 0,
+      "result": "PRIVACY GATE: PASS"
+    }
+  ],
+  "hostedChecks": "privacy-publication, privacy-tracker-audit, runtime-gate and typecheck must run after pipeline publication; this stage performs no push."
+}

@@ -161,3 +161,48 @@ the checkout with frozen dependencies supplies the checks.
 
 The Linux backend rehearsal and the 17 explicit platform test files selected
 by the repository pre-push plan pass on the merged implementation.
+
+## Publisher environment regression (2026-10-17)
+
+On `490e9fad7`, the hook's complete 26-file touched-tests selection against
+`02f9301fc` reproduces exactly 35 NEW failures and seven pre-existing failures.
+Three confirmation runs per side retain all 35 failures. The two affected
+files are `engine.ports.test.ts` (19 new failures) and
+`stagePullRequest.test.ts` (16). The unchanged two-file agent control has zero
+new failures and two pre-existing failures.
+
+The controlled difference is the four `GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL`,
+`GIT_COMMITTER_NAME` and `GIT_COMMITTER_EMAIL` variables: agents inherit the
+configured publication identity, while the publisher has none of them.
+`pipelinePublicationHookEnv` preserves Git identity variables, and `realExec`
+overlays its supplied environment onto the parent environment. With those
+variables absent, the fixtures' repository-local Fixture identity becomes the
+commit identity. The legacy creation check expects the publication identity.
+The hook and test preload already scrub inherited Git config bindings; the
+preload also confines global config, templates and hooks to its private root.
+
+`realWorktreeLane` now explicitly supplies the four publication identity
+fields when modeling agent Git commands. Stage-PR commits use that same helper
+and deterministic clock. The repository-local Fixture config stays available
+as a control. Production receipt and identity checks retain their existing
+behavior, including the refusal of caller-controlled reflog creation claims.
+
+Two fresh-process regression cases run successor-lane and PR creation checks
+with missing or conflicting ambient identities. The conflicting case also
+uses custom publication settings. Both inherit a rejecting hooksPath and a
+private global config, assert that those files stay unchanged, fail before the
+fixture repair, and pass afterwards. Each child runs one explicit test file
+so the engine fixture's cleanup remains scoped to its process.
+
+The final complete touched-tests phase passes in both environments: publisher
+zero new / six pre-existing failures; agent zero new / five pre-existing
+failures. Both have zero flaky outcomes. The focused PR file passes all 23
+cases. The exact explicit-file command, environment construction, 35 red
+identities, baseline findings and tested source digests are recorded in
+`evidence/stage-push-environment.json`. These phase runs execute the modified
+working tree on top of `490e9fad7`; the source digests identify that tree.
+
+TypeScript, changed-file ESLint and the committed-fingerprint publication
+privacy check pass. The required hosted checks (`privacy-publication`,
+`privacy-tracker-audit`, `runtime-gate`, `typecheck`) run after the pipeline
+publishes the fresh commits. This repair performs no push or rebase.
