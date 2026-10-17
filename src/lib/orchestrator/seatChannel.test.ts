@@ -461,3 +461,62 @@ test("a fresh process resumes open records outside the recent-rotation window", 
     await child.exited;
   }
 }));
+
+
+test("seat inbox revocation composes with channel, owner and epoch reconciliation", async () => fixture(async (runtime, ports) => {
+  designate(runtime);
+  // This test owns a second executor. Retire the fixture's idle controller
+  // before admission so only this executor can claim its three operations.
+  const { bindStructuredDeliveryQueue } = await import("@/lib/runtime/structuredDeliveryController");
+  await bindStructuredDeliveryQueue([], { registry: runtime.registry, client: null });
+  const { StructuredDeliveryQueue } = await import("@/lib/runtime/structuredDeliveryQueue");
+  const { seatRecipientVerdict } = await import("./seatChannel");
+  const { isCurrentOrchestratorSeat } = await import("./seats");
+  const keys = ["prototype-decision:inbox-fixture", "composer-inbox-fixture", "seat-tick:inbox-fixture"];
+  const admitted: string[] = [];
+  for (const [i, key] of keys.entries()) {
+    const result = await ports.enqueue({ path: runtime.artifactPath, conversationId: runtime.conversationId,
+      operationId: `inbox-rotation-${i}`, clientMessageId: key, text: `inbox instruction ${i}`, images: [],
+      origin: i === 1 ? { kind: "operator" } : { kind: "agent", role: "reviewer" }, policy: i === 1 ? "interrupt-active" : "queue" });
+    if (!result?.ok) throw new Error("fixture admission failed");
+    admitted.push(result.operationId);
+  }
+  await seatRecipientVerdictAsync([runtime.conversationId]);
+  expect(isCurrentOrchestratorSeat).toBeFunction();
+  expect(isCurrentOrchestratorSeat([runtime.conversationId])).toBe(true);
+  let writes = 0;
+  const engine: import("@/lib/runtime/engineHost").EngineHost = { coalescesQueuedInput: true, supportsSteer: false, supportsQueuedSend: false, sendWaitsForRunningTurn: true,
+    attach: () => ({ async *[Symbol.asyncIterator]() {} }),
+    health: async () => ({ status: "idle", sessionKey: "fixture-batch-generation", endpoint: "fixture:host", pid: null,
+      processStartIdentity: null, eventCursor: 0, protocolVersion: null, activeTurnRef: null, pendingAttention: [], activeFlags: [], account: null }),
+    send: async (_entry, _proof, authorize) => { authorize?.(); writes++; throw new Error("revoked batch wrote to engine"); },
+    interrupt: async () => { throw new Error("batch interrupted"); }, answer: async () => {}, release: async () => {},
+  };
+  const queue = new StructuredDeliveryQueue({
+    effects: async () => runtime.journal.effectBatch(100), status: async id => runtime.journal.operationResult(id)?.receipt ?? null,
+    hostClaim: () => "fixture-owner", coalescesConversation: () => true,
+    seatRecipient: id => seatRecipientVerdict([id]),
+    transition: async (...args) => { runtime.journal.transitionOperation(...args); },
+    bindDeliveryBatch: async () => {
+      designate(runtime, true);
+      const revocation = orchestratorRevocations().at(-1)!;
+      await reconcileSeatChannel(revocation, ports);
+      expect(admitted.map(id => seatChannelRecord(id)?.outcome)).toEqual(Array(3).fill("too-late"));
+      return true;
+    },
+  }, () => engine);
+  await queue.drain();
+  expect(writes).toBe(0);
+  expect(admitted.map(id => runtime.journal.operationResult(id)?.receipt)).toEqual(Array(3).fill(expect.objectContaining({ status: "failed", reason: SEND_SEAT_REVOKED_REASON })));
+  expect(isCurrentOrchestratorSeat([runtime.conversationId])).toBe(false);
+  const revocation = orchestratorRevocations().at(-1)!;
+  await reconcileSeatChannel(revocation, ports); await reconcileSeatChannel(revocation, ports);
+  expect(admitted.map(id => seatChannelRecord(id)?.outcome)).toEqual(["owner", "redirected", "dropped"]);
+  const owner = await ports.enqueue({ path: runtime.successor!.artifactPath, conversationId: runtime.successor!.conversationId,
+    operationId: "inbox-owner-retry", clientMessageId: keys[0]!, text: "inbox instruction 0", images: [], policy: "queue" });
+  expect(owner?.ok).toBe(true);
+  await runtime.holdTurn!(false);
+  await runtime.waitForDelivery(runtime.successor!.conversationId, 2);
+  expect(runtime.delivered).toHaveLength(0);
+  expect(runtime.successor!.delivered).toHaveLength(2);
+}, { pauseDeliveryQueue: true }));

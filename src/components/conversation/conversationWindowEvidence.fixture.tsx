@@ -30,10 +30,11 @@ import { OrchestratorConversation } from "@/components/orchestrator/Orchestrator
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { attachModeFor, capabilitiesFor } from "@/components/agentCapabilities";
 
+import { MessageProvenanceProvider, provenanceLookupFor } from "@/components/feed/messageProvenance";
 import { FeedItem } from "@/components/feed/FeedItem";
 import { ImageGalleryProvider, Lightbox, type GalleryImage } from "@/components/feed/Lightbox";
 import { ImagePane } from "@/components/preview/ImagePane";
-import { buildFeed, type Item } from "@/components/feed/parse";
+import { createFeedSession, splitInboxBatchFeed, buildFeed, type Item } from "@/components/feed/parse";
 import { codexHistoryCorpus, codexHistorySeams, historyCall } from "@/components/feed/__fixtures__/codexHistory";
 import { LogFeed } from "@/components/LogFeed";
 import { RuntimeComposerReceipts, TmuxComposer } from "@/components/TmuxComposer";
@@ -95,6 +96,7 @@ const MANDATE = [
 const ECHO = `You are the Orchestrator. Drive work through the production Viewer MCP tools.\n\n${MANDATE}\n\n## Handoff\nSupersedes the predecessor seat.`;
 
 export type ConversationWindowCase =
+  | "seat-inbox"
   | "parallel-failure"
   | "attention-answer"
   | "delivery-settlement"
@@ -1849,7 +1851,8 @@ const requested = (params.get("case") as ConversationWindowCase | null) ?? "rece
 /* The lifecycle case mounts the production window itself — the feed, the
    composer and a fake host behind them — so it takes over the root rather than
    rendering one arranged frame. */
-if (root && requested === "attention-answer") mountAttentionAnswer(root);
+if (root && requested === "seat-inbox") createRoot(root).render(<InboxFixture />);
+else if (root && requested === "attention-answer") mountAttentionAnswer(root);
 else if (root && requested === "parallel-failure") createRoot(root).render(<ParallelFailureFixture />);
 else if (root && requested === "lifecycle") mountLifecycle(root);
 else if (root && requested === "payload-notice") mountPayloadNotice(root);
@@ -1862,4 +1865,17 @@ else if (root && requested === "delivery-stalled") {
 } else if (root) {
   if (requested === "image-viewers") installCaptureBytes();
   createRoot(root).render(<Fixture id={requested} />);
+}
+
+
+function InboxFixture() {
+  const data = JSON.parse(params.get("batch")!) as { text: string; messages: Record<string, import("@/lib/runtime/messageOrigin").DeliveredMessageProvenance> };
+  const parsed = createFeedSession({ engine: "claude", fmt: "claude", showSvc: true, lineFilter: "" }).feed([
+    JSON.stringify({ type: "user", uuid: "inbox-render-uuid", promptSource: "sdk", timestamp: "2026-10-17T06:00:00Z", message: { role: "user", content: data.text } }),
+  ], 0, false);
+  const feed = splitInboxBatchFeed(parsed, id => data.messages[id]?.parts);
+  const lookup = provenanceLookupFor({ messages: data.messages }, feed.items.map(e => e.item));
+  return <main data-evidence-case="seat-inbox" className="mx-auto max-w-3xl space-y-4 bg-canvas px-3 py-5 text-primary">
+    <MessageProvenanceProvider value={lookup}>{feed.items.map(e => <div key={e.key} data-inbox-member><FeedItem item={e.item} /></div>)}</MessageProvenanceProvider>
+  </main>;
 }

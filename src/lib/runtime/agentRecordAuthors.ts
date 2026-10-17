@@ -69,9 +69,10 @@ export function agentRecordAuthors(
   engine: "claude" | "codex" | "copilot",
   records: ReadonlyArray<AuthorEvidenceRecord>,
   context: ReadonlyArray<AuthorEvidenceRecord> | null = null,
+  claudeOrigins?: ReturnType<typeof claudeMessageProvenance>,
 ): Map<number, AgentRecordAuthor> {
   const authors = new Map<number, AgentRecordAuthor>();
-  const ledger = engine === "claude" ? claudeMessageProvenance(transcriptPath) : {};
+  const ledger = engine === "claude" ? claudeOrigins ?? claudeMessageProvenance(transcriptPath) : {};
   const fallback = new Map<number, DeliveredMessageProvenance>();
   if (context?.length) {
     const occurrences = deliveredMessageOccurrences(transcriptPath);
@@ -93,7 +94,7 @@ export function agentRecordAuthors(
     if (record.role !== "user") return;
     const { origin } = recordEvidence(record, engine, NO_OCCURRENCE_DIGESTS);
     const provenance = record.sourceId ? ledger[record.sourceId] ?? null : null;
-    if (provenance?.origin === "operator") return;
+    if (provenance?.parts || provenance?.origin === "operator") return;
     if (provenance?.origin === "agent") {
       authors.set(index, authorFromProvenance(provenance));
       return;
@@ -107,4 +108,15 @@ export function agentRecordAuthors(
     if (origin?.kind === "agent") authors.set(index, authorFromOrigin(origin));
   });
   return authors;
+}
+
+
+/** conversation_messages keeps the transcript row and exposes its separate
+ * authors without attributing the entire batch to any one of them. */
+export function agentRecordPartAuthors(transcriptPath: string, records: readonly AuthorEvidenceRecord[], ledger = claudeMessageProvenance(transcriptPath)) {
+  return new Map(records.flatMap((record, index) => {
+    const parts = record.role === "user" && record.sourceId ? ledger[record.sourceId]?.parts : undefined;
+    return parts ? [[index, parts.map(p => ({ operationId: p.operationId, textStart: p.textStart, textEnd: p.textEnd,
+      author: p.provenance.origin === "agent" ? authorFromProvenance(p.provenance) : { kind: "operator" as const } }))] as const] : [];
+  }));
 }

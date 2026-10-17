@@ -397,7 +397,8 @@ function sameQueueEntry(left: QueueEntry, right: QueueEntry): boolean {
   const normalizedRight = normalizeQueueEntry(right);
   return normalizedLeft.id === normalizedRight.id
     && normalizedLeft.contentDigest === normalizedRight.contentDigest
-    && normalizedLeft.expectedTurnId === normalizedRight.expectedTurnId;
+    && normalizedLeft.expectedTurnId === normalizedRight.expectedTurnId
+    && JSON.stringify(normalizedLeft.parts) === JSON.stringify(normalizedRight.parts);
 }
 
 function deliveryRecord(value: unknown): ClaudeDeliveryRecord | null {
@@ -647,6 +648,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
   // before one result, or combine them into a replay with one canonical UUID;
   // native batching cannot currently preserve our per-input receipt identity.
   readonly supportsQueuedSend = false;
+  readonly coalescesQueuedInput = true;
   // Claude Code answers an interrupt during a tool call by rejecting that tool
   // use ("The user doesn't want to proceed with this tool use. ... STOP what
   // you are doing"), so an ordinary message that interrupted would reach the
@@ -991,7 +993,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     };
   }
 
-  async send(entry: QueueEntry): Promise<DeliveryReceipt> {
+  async send(entry: QueueEntry, _firstDispatch?: import("./engineHost").FirstDispatchEvidence, authorizeDispatch?: () => void): Promise<DeliveryReceipt> {
     if (this.unavailable()) return { outcome: "rejected", reason: "dead-host" };
     if (!entry.id) throw new Error("queue entry id is required");
     const normalized = normalizeQueueEntry(entry);
@@ -1010,15 +1012,23 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     }
     const existingPending = this.pendingDeliveries.get(entry.id);
     if (existingPending) return existingPending.promise;
-    const blocks: JsonObject[] = normalized.content.images.map((image) => ({
-      type: "image",
-      source: {
-        type: "base64",
-        media_type: image.mime,
-        data: this.readImage(image).toString("base64"),
-      },
-    }));
-    if (normalized.content.text) blocks.push({ type: "text", text: normalized.content.text });
+    const imageBlock = (image: StructuredImageRef): JsonObject => ({ type: "image", source: {
+      type: "base64", media_type: image.mime, data: this.readImage(image).toString("base64"),
+    } });
+    const blocks: JsonObject[] = [];
+    if (normalized.parts?.length) {
+      let end = 0;
+      for (const [index, part] of normalized.parts.entries()) {
+        if (part.textStart > end) blocks.push({ type: "text", text: normalized.content.text.slice(end, part.textStart) });
+        blocks.push(...normalized.content.images.slice(part.imageStart, part.imageEnd).map(imageBlock));
+        end = normalized.parts[index + 1]?.headerStart ?? normalized.content.text.length;
+        blocks.push({ type: "text", text: normalized.content.text.slice(part.textStart, end) });
+      }
+    } else {
+      blocks.push(...normalized.content.images.map(imageBlock));
+      if (normalized.content.text) blocks.push({ type: "text", text: normalized.content.text });
+    }
+    authorizeDispatch?.();
     const disposition: ClaudeDeliveryState["disposition"] = duplicate?.disposition
       ?? (this.activeTurnId ? "queued-next-turn" : "turn-started");
     try {
@@ -1535,7 +1545,8 @@ export class ClaudeStreamBrokerHost implements EngineHost {
         }
       }
       this.emit({ kind: "item", turnId: this.activeTurnId, item: sanitizedUserReplay(message, content), phase: "completed",
-        ...(echoOperationId ? { deliveryEcho: { operationId: echoOperationId, at: receivedAt } } : {}) });
+        ...(echoOperationId ? { deliveryEcho: { operationId: echoOperationId, at: receivedAt,
+          ...(delivery?.entry.parts ? { memberOperationIds: delivery.entry.parts.map(part => part.operationId) } : {}) } } : {}) });
       return;
     }
     if (type === "stream_event") {

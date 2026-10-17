@@ -131,7 +131,8 @@ import { renderTelegram, type PullRequestLookup } from "@/lib/bridge/telegramRep
 import { projectDisplayName } from "@/lib/displayNames";
 import { agentMessageOrigin } from "@/lib/runtime/agentMessageAuthor";
 import { orchestratorRelayPayload, resolveOrchestratorRelay } from "@/lib/orchestrator/relay";
-import { agentRecordAuthors, type AgentRecordAuthor } from "@/lib/runtime/agentRecordAuthors";
+import { claudeMessageProvenance } from "@/lib/runtime/claudeMessageProvenance";
+import { agentRecordAuthors, agentRecordPartAuthors, type AgentRecordAuthor } from "@/lib/runtime/agentRecordAuthors";
 import { forgeCacheView } from "@/lib/forge/cache";
 import { githubRepositoryOfRemote } from "@/lib/forge/workLinks";
 import { languageMismatchWarning } from "@/lib/i18n/proseLanguage";
@@ -3416,10 +3417,13 @@ function withRecordAuthors<T extends { seq: number; role: string; ts: string | n
   if (!records.some((record) => record.role === "user")) return records;
   const context = readMessageAuthorContext(source, records);
   const authorRecords = context ?? records;
-  const agentAuthors = agentRecordAuthors(transcriptPath, source.engine, authorRecords, context);
+  const claudeOrigins = source.engine === "claude" ? claudeMessageProvenance(transcriptPath) : undefined;
+  const agentAuthors = agentRecordAuthors(transcriptPath, source.engine, authorRecords, context, claudeOrigins);
+  const partAuthors = claudeOrigins ? agentRecordPartAuthors(transcriptPath, records, claudeOrigins) : new Map();
+  const contextPartAuthors = claudeOrigins ? agentRecordPartAuthors(transcriptPath, authorRecords, claudeOrigins) : new Map();
   const humanBySeq = new Map<number, RecordAuthor>();
   for (const [index, author] of recordAuthors(conversationId, authorRecords.map((record, index) => ({
-    role: agentAuthors.has(index) ? "system" : record.role,
+    role: agentAuthors.has(index) || contextPartAuthors.has(index) ? "system" : record.role,
     ts: record.ts,
     text: record.sourceText ?? record.text,
   })))) humanBySeq.set(authorRecords[index]!.seq, author);
@@ -3432,7 +3436,9 @@ function withRecordAuthors<T extends { seq: number; role: string; ts: string | n
     if (human) authors.set(index, human);
     else if (agent) authors.set(index, agent);
   });
-  return authors.size ? records.map((record, index) => (authors.has(index) ? { ...record, author: authors.get(index)! } : record)) : records;
+  return records.map((record, index) => partAuthors.has(index)
+    ? { ...record, parts: partAuthors.get(index)! }
+    : authors.has(index) ? { ...record, author: authors.get(index)! } : record);
 }
 
 type ViewerSeatRefusal = "deputy" | "not-designated" | "no-seat" | "cross-project" | "foreign-project";

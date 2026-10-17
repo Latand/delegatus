@@ -5449,3 +5449,52 @@ describe("attention answer shows at once and a refusal brings the card back", ()
     } finally { await browser.close(); served.stop(); fs.closeSync(chromeDir); fs.rmSync(chromeTmp, { recursive: true, force: true }); }
   }, 600_000);
 });
+
+
+describe("seat inbox attribution", () => {
+  browserTest("four combined parts render their own bubbles in both languages and themes", async () => {
+    const subject = await import("@/lib/runtime/inboxBatch").catch(() => null);
+    expect(subject?.composeBatch).toBeFunction();
+    const { composeBatch } = subject!;
+    const { structuredContent } = await import("@/lib/runtime/structuredContent");
+    const { claudeMessageProvenance } = await import("@/lib/runtime/claudeMessageProvenance");
+    const texts = ["Keep the release on hold.", "First saved answer: use the short form.", "Second saved answer: keep the original words.", "Review complete: the checks passed."];
+    const batch = composeBatch(texts.map((text, i) => ({ entry: { id: `render-${i}`, ...structuredContent(text, []),
+      origin: i < 3 ? { kind: "operator" as const } : { kind: "agent" as const, role: "reviewer" } },
+      admittedAt: `2026-10-17T06:00:0${i}.000Z`, eventSeq: i, priority: i === 0 }))).entry;
+    const messages = claudeMessageProvenance("/fixtures/seat-inbox.jsonl", {
+      ledger: { load: () => [{ entry: batch, delivered: true, engineMessageId: "inbox-render-uuid", disposition: "turn-started" }] } as never,
+      registrySnapshot: () => ({ deliveryOperationOwners: {} } as never),
+    });
+    const out = path.resolve(".artifacts/seat-inbox"); fs.mkdirSync(out, { recursive: true });
+    const served = await serveEvidenceFixture(out, FIXTURE);
+    const chromeTmp = fs.mkdtempSync(path.join(os.tmpdir(), "inbox-chrome-"));
+    const chromeDir = fs.openSync(chromeTmp, "r");
+    let browser: Browser | null = null;
+    const evidence: Record<string, unknown> = {};
+    try {
+      browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"],
+        env: { ...process.env, TMPDIR: process.platform === "linux" ? `/proc/${process.pid}/fd/${chromeDir}` : chromeTmp } });
+      for (const width of [390, 1280]) for (const theme of ["light", "dark"] as const) for (const lang of ["en", "uk"] as const) {
+        const id = `${width}-${theme}-${lang}`;
+        const payload = encodeURIComponent(JSON.stringify({ text: batch.content!.text, messages }));
+        const { context, page, pageErrors } = await openFixture(browser, `${served.base}?case=seat-inbox&lang=${lang}&batch=${payload}`, { width, height: 900 }, theme, lang);
+        try {
+          await page.waitForSelector("[data-inbox-member]");
+          const rows = page.locator("[data-inbox-member]");
+          expect(await rows.count()).toBe(4);
+          for (const [i, text] of texts.entries()) expect(await rows.nth(i).innerText()).toContain(text);
+          expect(await page.locator("body").innerText()).not.toContain("messages arrived while you were working");
+          const measurement = await page.evaluate(() => ({ rows: document.querySelectorAll("[data-inbox-member]").length,
+            overflowX: document.documentElement.scrollWidth - innerWidth, text: document.querySelector("main")?.textContent }));
+          expect(measurement.overflowX).toBeLessThanOrEqual(1);
+          expect(pageErrors).toEqual([]);
+          evidence[id] = measurement;
+          await page.screenshot({ path: path.join(out, `${id}.png`), fullPage: true });
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence", { recursive: true });
+      fs.writeFileSync("evidence/seat-inbox-render.json", JSON.stringify(evidence, null, 2) + "\n");
+    } finally { await browser?.close(); served.stop(); fs.closeSync(chromeDir); fs.rmSync(chromeTmp, { recursive: true, force: true }); }
+  }, 60_000);
+});

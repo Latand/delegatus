@@ -180,6 +180,7 @@ export type SendResendGuidance =
   | "verify-first";
 
 export interface SendReceipt {
+  turnId?: string;
   redirectedTo?: { operationId: string; conversationId: string };
   operationId: string;
   /** What was accepted under this id. Read from the durable record, so it
@@ -338,6 +339,7 @@ export function sendReceiptFor(file: RegistryFile, operationId: string): SendRec
       conversationId,
       clientMessageId,
       state: "delivered",
+      ...(owner?.batchId ? { turnId: owner.batchId } : {}),
       reason: null,
       acceptedAt,
       settledAt: attempt ? attempt.settledAt : delivery?.deliveredAt ?? owner?.settledAt ?? null,
@@ -419,6 +421,7 @@ export function runtimeReceiptForSend(receipt: SendReceipt): RuntimeOperationRec
     ...(receipt.acceptedAt ? { admittedAt: receipt.acceptedAt } : {}),
     ...(receipt.resend ? { resend: receipt.resend } : {}),
     ...(receipt.redirectedTo ? { redirectedTo: receipt.redirectedTo } : {}),
+    ...(receipt.turnId ? { turnId: receipt.turnId } : {}),
     ...(receipt.delivery ? { delivery: receipt.delivery } : {}),
     ...(receipt.interruptedTurnId ? { interruptedTurnId: receipt.interruptedTurnId } : {}),
     revision: 1,
@@ -1174,6 +1177,7 @@ async function projectCurrentSend(
     && (projected.state === "in-flight" || projected.duplicateRisk)
     && await confirmedSend(registry.readOnlySnapshot(), operationId)) {
     return { readable: true, value: { ...projected, state: "delivered", reason: null,
+      ...(registry.readOnlySnapshot().deliveryOperationOwners[operationId]?.batchId ? { turnId: registry.readOnlySnapshot().deliveryOperationOwners[operationId]!.batchId } : {}),
       duplicateRisk: false, resend: "not-needed", evidence: "delivery-record" } };
   }
   if (projected.state !== "in-flight") return { readable: true, value: projected };
@@ -1188,7 +1192,8 @@ async function projectCurrentSend(
   const verdict = journalVerdict(receipt?.status ?? null, receipt?.reason);
   if (!verdict) return { readable: true, value: { ...projected, evidence: "delivery-journal", ...routeFields(receipt) } };
   if (verdict.state === "delivered") {
-    return { readable: true, value: { ...projected, state: "delivered", reason: null, duplicateRisk: false, resend: "not-needed", evidence: "delivery-journal", ...routeFields(receipt) } };
+    return { readable: true, value: { ...projected, state: "delivered", reason: null,
+      ...(registry.readOnlySnapshot().deliveryOperationOwners[operationId]?.batchId ? { turnId: registry.readOnlySnapshot().deliveryOperationOwners[operationId]!.batchId } : {}), duplicateRisk: false, resend: "not-needed", evidence: "delivery-journal", ...routeFields(receipt) } };
   }
   return {
     readable: true,
