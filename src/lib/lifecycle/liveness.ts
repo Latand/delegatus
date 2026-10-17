@@ -9,9 +9,10 @@ import { agentRegistry, resolveConversationAlias, structuredClaimIdentity } from
 import { registryLivenessRows, registryRowsMatching } from "@/lib/agent/sqliteRegistryStore";
 import { isAbortError } from "@/lib/deadline";
 import { hostProviderRetryAt } from "@/lib/limitsThrottle";
-import { getPipelines } from "@/lib/pipelines/engine";
+import { pipelineSelectionSource, loadPipelines } from "@/lib/pipelines/store";
+import { flowSelectionSource, loadFlows } from "@/lib/flows/store";
+import { readHistoryProjection, historyPipelineRef, historyHeadlessFlows } from "@/lib/state/historyProjection";
 import type { Pipeline, PipelineStageAttempt } from "@/lib/pipelines/types";
-import { loadFlows } from "@/lib/flows/store";
 import type { Flow } from "@/lib/flows/types";
 import { completedFileScan } from "@/lib/scanner/scanCache";
 import type { PendingPermissionRequest } from "@/lib/runtime/permissionRequests";
@@ -284,6 +285,13 @@ export function defaultEvidenceByteBudget(limit: number): number {
 export type LivenessRegistrySnapshot = Pick<RegistryFile, "entries" | "conversations">
   & Partial<Pick<RegistryFile, "conversationAliases" | "receipts">>;
 
+/** Only recorded headless ownership is read by the liveness projection. */
+export type LivenessFlow = Pick<Flow, "reviewerMode"> & {
+  rounds: Pick<Flow["rounds"][number], "reviewerPid" | "reviewerIdentity" | "reviewerPath" | "reviewerConversationId">[];
+};
+
+export interface LivenessProjectionOptions { signal?: AbortSignal; deadlineMs?: number }
+
 export interface AgentLivenessSources {
   now(): number;
   /** The clock the phase timings are read on. Production omits it and times on
@@ -310,10 +318,13 @@ export interface AgentLivenessSources {
       as null like a path that names no file. */
   describeTranscript(transcriptPath: string, options?: { strict?: boolean }): Promise<LivenessTranscript | null>;
   registrySnapshot(): LivenessRegistrySnapshot;
-  pipelines(): Pipeline[];
+  pipelines: {
+    (): Pipeline[];
+    forLiveness?: (targets: { conversationId: string | null; path: string }[], options?: LivenessProjectionOptions) => Promise<(AgentLivenessPipelineRef | null)[]>;
+  };
   /** Active review-loop ownership, read only to resolve detached reviewers that
       intentionally have no structured-host registry entry. */
-  flows?(): Flow[];
+  flows?: { (): Flow[]; forLiveness?: (options?: LivenessProjectionOptions) => Promise<LivenessFlow[]> };
   /** Turn state and newest-record freshness from ONE tail read. `strict`
       throws an I/O failure other than a missing file, which otherwise reads
       as null like a torn tail. */
@@ -346,8 +357,12 @@ export function productionLivenessSources(
     }),
     describeTranscript: describeTranscriptPath,
     registrySnapshot: () => agentRegistry().readOnlySnapshot(),
-    pipelines: () => getPipelines().pipelines,
-    flows: () => loadFlows(),
+    pipelines: Object.assign(() => loadPipelines(), { forLiveness: (targets: { conversationId: string | null; path: string }[], options: LivenessProjectionOptions = {}) =>
+      readHistoryProjection(db => targets.map(target => historyPipelineRef(db, target.conversationId, target.path)), { ...options, collections: ["pipelines"] }) }),
+    flows: Object.assign(() => loadFlows(), { forLiveness: (options: LivenessProjectionOptions = {}) => {
+      pipelineSelectionSource(); flowSelectionSource();
+      return readHistoryProjection(historyHeadlessFlows, { ...options, collections: ["flows"] });
+    } }),
     transcriptEvidence: readLivenessTranscriptEvidence,
     probe: livenessProbe(),
   };
@@ -500,7 +515,7 @@ function hostEvidence(
 
 /** Process ownership survives control phases and later review rounds. */
 function headlessHostEvidence(
-  flows: readonly Flow[],
+  flows: readonly LivenessFlow[],
   transcriptPath: string | null,
   conversationId: string | null,
   probe: LivenessProbe,
@@ -813,7 +828,7 @@ function hostedTranscriptPaths(snapshot: LivenessRegistrySnapshot, probe: Livene
 }
 
 function activeHeadlessTranscriptPaths(
-  flows: readonly Flow[],
+  flows: readonly LivenessFlow[],
   registry: LivenessRegistrySnapshot,
   probe: LivenessProbe,
 ): Set<string> {
@@ -903,6 +918,7 @@ const ANSWER_SPENT = Symbol("liveness-answer-budget-spent");
 
 /** The one clock a bounded answer shares between its phases. */
 interface AnswerBudget {
+  deadlineMs?: number;
   /** The work, or `ANSWER_SPENT` once the budget has ended. Rejects when the
       caller cancels, without waiting for the work to notice. */
   within<T>(work: Promise<T>): Promise<T | typeof ANSWER_SPENT>;
@@ -926,6 +942,7 @@ function answerBudget(budgetMs: number | null, signal: AbortSignal | null): Answ
   });
   void interrupted?.catch(() => undefined);
   return {
+    deadlineMs: budgetMs === null ? undefined : performance.now() + budgetMs,
     within: <T>(work: Promise<T>) => {
       if (!ended && !interrupted) return work;
       /* The loser keeps running; its rejection has nobody left to read it. */
@@ -1061,8 +1078,9 @@ async function livenessSnapshotWithin(
   const conversationForPath = (path: string) => (paths ??= conversationPathIndex(registry)).get(path) ?? null;
   let entriesInRegistry: AgentRegistryEntry[] | undefined;
   const registryEntries = () => entriesInRegistry ??= Object.values(registry.entries);
-  const pipelines = pipelineIndex(sources.pipelines());
-  const flows = sources.flows?.() ?? [];
+  const pipelines = pipelineIndex(sources.pipelines.forLiveness ? [] : sources.pipelines());
+  const projectionOptions = { ...(request.signal ? { signal: request.signal } : {}), deadlineMs: answer.deadlineMs };
+  const flows = await (sources.flows?.forLiveness ? sources.flows.forLiveness(projectionOptions) : sources.flows?.() ?? []);
   const hostedPaths = new Set([
     ...hostedTranscriptPaths(registry, sources.probe),
     ...activeHeadlessTranscriptPaths(flows, registry, sources.probe),
@@ -1326,6 +1344,7 @@ async function livenessSnapshotWithin(
      timing measures the phase it is named after instead of splitting the
      per-row registry and lineage lookups across both. */
   const rowProjectionStartedAt = phaseClock();
+  const narrowRefs = await sources.pipelines.forLiveness?.(hydratable.map(entry => ({ conversationId: conversationForPath(entry.path) ?? entry.conversationId, path: entry.path })), projectionOptions);
   let unreadable = 0;
   /* Rows whose tail answered. A read the answer budget left behind is not one. */
   let answered = 0;
@@ -1388,7 +1407,7 @@ async function livenessSnapshotWithin(
       lastRecordMs,
       silentForMs: verdict.verified ? silentForMs : null,
       host,
-      pipeline: (conversationId ? pipelines.byConversation.get(conversationId) : undefined)
+      pipeline: narrowRefs ? narrowRefs[index] : (conversationId ? pipelines.byConversation.get(conversationId) : undefined)
         ?? pipelines.byPath.get(entry.path)
         ?? null,
       evidenceSource: (!attempted ? "projection" : evidence !== null ? "transcript" : "unreadable") as AgentLivenessRecord["evidenceSource"],

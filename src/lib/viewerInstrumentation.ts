@@ -325,7 +325,7 @@ export async function completeViewerReleaseDemotion(
 
 export async function initializeHotStateStoresAtStartup(
   boundary: HotStateCutoverBoundary = { authority: null, reimportLegacy: false },
-  options: { afterCollectionImport?: (collection: string) => void } = {},
+  options: { afterCollectionImport?: (collection: string) => void; signal?: AbortSignal } = {},
 ): Promise<HotStateAuthority | null> {
   const [flows, pipelines, workflows] = await Promise.all([
     import("@/lib/flows/store"),
@@ -344,6 +344,9 @@ export async function initializeHotStateStoresAtStartup(
   pipelines.loadPipelines();
   pipelines.loadArchivedPipelines();
   workflows.loadWorkflows();
+  // Requests consume the persisted narrow projections from their first call.
+  const { readHistoryProjection } = await import("@/lib/state/historyProjection");
+  await readHistoryProjection(() => undefined, { startup: true, signal: options.signal });
   if (boundary.authority?.mode === "preparing") {
     return completeHotStatePreparation(path.dirname(statePath("state.sqlite")), boundary.authority);
   }
@@ -959,7 +962,7 @@ export async function registerViewerRuntime(): Promise<void> {
     assertStartupActive();
     const { sweepOldLearnedRulesFiles } = await import("@/lib/memory/roleLaunch");
     try { sweepOldLearnedRulesFiles(); } catch { console.warn("[role-memory] old launch-file cleanup unavailable"); }
-    const authority = await initializeHotStateStoresAtStartup(boundary);
+    const authority = await initializeHotStateStoresAtStartup(boundary, { signal: startupAbort.signal });
     const { ensureLegacyCollectionsImported } = await import("@/lib/state/legacyCollections");
     await ensureLegacyCollectionsImported();
     const { agentRegistry } = await import("@/lib/agent/registry");

@@ -1,0 +1,990 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-10-17T13:56:28.267124+00:00",
+  "baseCommit": "7367fd9f3658671f9b5581bb046c1c0d752f7134",
+  "measuredSourceSha256": "50fff8e690707e80db5d8a5ba642742bc92a72db7495f83739b5debefbccd5a4",
+  "sourceFileSha256": {
+    "scripts/measure-history-projection.ts": "694ddeb0211ce678d547fe5f125a9165580c5338ffa69fd28a7701ff105dce74",
+    "src/lib/agent/registry.ts": "ced51ad76cf6d8e80182acede5777b2a696d65f92b055dd5fc434a5bfcd5ed32",
+    "src/lib/lifecycle/liveness.ts": "379663a30cbb2f6f39a1be07b33bf391f80ee356521754f409ed0ced3ef642a2",
+    "src/lib/mcp/bindings.ts": "ff219666430065653bf35f36d6434ad8d119ade19eb7e5fb29464c1273bdd0b6",
+    "src/lib/mcp/curateRules.test.ts": "5ad2231b670c34b435a6dd8892d81168ce5e3642f0911fd77d13b7044cd4034a",
+    "src/lib/memory/curation/admission.ts": "74b9ae4a35b76b088a900a311e2c020704c36062f33b50b3d4456a84bd8164a0",
+    "src/lib/memory/curation/curation.test.ts": "b75a8e34821ce0390f3f01108fece115b7348326e008d4e3da68556b793195c4",
+    "src/lib/memory/curation/evalServer.fixture.ts": "45c1087520ce820aefa710c45a6fc22831abad214ebe111caa3b41eafbe65082",
+    "src/lib/memory/curation/read.ts": "ccd355c588504843c23a59d32f600e4fdb371f7e464bd2841853f2ea2f8526af",
+    "src/lib/memory/curation/reviewLessons.test.ts": "40a1b315e5d7ea1cbaa8f683b847f76ade70305d234a7ad6f476fcae9ddb7320",
+    "src/lib/state/historyProjection.test.ts": "52e1c41c08943a1b886139d5d19407ebc0698f96e067830dccc7130e6e0b8458",
+    "src/lib/state/historyProjection.ts": "86d35a7a3b03bb7536177bfe2e267f474c848281dcd0df4fe110ff2a933b888d",
+    "src/lib/state/hotStateStores.sqlite.test.ts": "7fc03817862035c24d6efe986291ef97ed1cb786491e98a58c20fe7545c5a215",
+    "src/lib/state/pipelineEvidenceIndex.ts": "adfecb6309684ad3e235aef6549e78d7ce4e857867c46ea0913648d8a9eaec2c",
+    "src/lib/viewerInstrumentation.ts": "a6380b54e9645ab5a1943829e4b8200561196f0755d021ad978342e8e0edca6d",
+    "src/lib/viewerLoopMonitor.ts": "dacc660c5a0744150d69a4f915b9618d7ce5871932b51b2c4c751f4f21577844"
+  },
+  "runtime": {
+    "bun": "1.4.0",
+    "platform": "linux"
+  },
+  "data": {
+    "capturedAt": "2026-10-17T13:21:38.289238+00:00",
+    "stateSha256": "68cd07ab167b32a6d73424b6017ac49afe8390bc2d0514c9fc5e4437cce35b9d",
+    "registrySha256": "d46724c8ef016f15f30ae4fc61ec5b4ec89e6393ab485dbd6240809d8e8ded70"
+  },
+  "method": {
+    "freshProcessPairsPerOperation": 3,
+    "coldCallsPerProcess": 1,
+    "warmCallsPerProcess": 3,
+    "timerIntervalMs": 10,
+    "timeWindowNow": "2026-10-17T12:00:00.000Z",
+    "readBytes": "main-thread Linux rchar delta including counter-read overhead",
+    "mainThreadMs": "main-thread schedstat run counter delta; sub-millisecond calls can fall below update resolution",
+    "sourceSetup": "schema installation, corpus sizing and target selection precede measured calls"
+  },
+  "statistics": {
+    "history": {
+      "legacy": {
+        "cold": {
+          "elapsedMs": {
+            "min": 787.3328309999999,
+            "median": 891.847787,
+            "max": 962.4818660000001
+          },
+          "mainThreadMs": {
+            "min": 785.99024,
+            "median": 889.440757,
+            "max": 959.404809
+          },
+          "readBytes": {
+            "min": 160411225,
+            "median": 160411230,
+            "max": 160411293
+          },
+          "decodedJsonBytes": {
+            "min": 153203262,
+            "median": 153203262,
+            "max": 153203262
+          },
+          "maxTimerGapMs": {
+            "min": 778.8300409999999,
+            "median": 883.5113620000001,
+            "max": 954.631043
+          }
+        },
+        "warm": {
+          "elapsedMs": {
+            "min": 750.9003859999998,
+            "median": 814.8612439999999,
+            "max": 972.622304
+          },
+          "mainThreadMs": {
+            "min": 750.519217,
+            "median": 813.455679,
+            "max": 971.475606
+          },
+          "readBytes": {
+            "min": 159862716,
+            "median": 159863030,
+            "max": 159863419
+          },
+          "decodedJsonBytes": {
+            "min": 153203262,
+            "median": 153203262,
+            "max": 153203262
+          },
+          "maxTimerGapMs": {
+            "min": 749.4922329999999,
+            "median": 813.9466789999999,
+            "max": 971.8561489999997
+          }
+        }
+      },
+      "projection": {
+        "cold": {
+          "elapsedMs": {
+            "min": 1420.433996,
+            "median": 1667.153532,
+            "max": 2722.794448
+          },
+          "mainThreadMs": {
+            "min": 1022.28732,
+            "median": 1220.819518,
+            "max": 1298.800796
+          },
+          "readBytes": {
+            "min": 338558217,
+            "median": 338558218,
+            "max": 338558218
+          },
+          "decodedJsonBytes": {
+            "min": 0,
+            "median": 0,
+            "max": 0
+          },
+          "maxTimerGapMs": {
+            "min": 6.312325999999985,
+            "median": 9.611478999999918,
+            "max": 152.16784400000006
+          }
+        },
+        "warm": {
+          "elapsedMs": {
+            "min": 0.3342329999998128,
+            "median": 0.42413600000008955,
+            "max": 0.5840130000001409
+          },
+          "mainThreadMs": {
+            "min": 0,
+            "median": 0.255733,
+            "max": 0.804565
+          },
+          "readBytes": {
+            "min": 154,
+            "median": 191,
+            "max": 16538
+          },
+          "decodedJsonBytes": {
+            "min": 0,
+            "median": 0,
+            "max": 0
+          },
+          "maxTimerGapMs": {
+            "min": 0.06523199999992357,
+            "median": 0.08560899999974936,
+            "max": 0.6658460000001014
+          }
+        }
+      }
+    },
+    "admission": {
+      "legacy": {
+        "cold": {
+          "elapsedMs": {
+            "min": 494.62517199999996,
+            "median": 517.084251,
+            "max": 524.513255
+          },
+          "mainThreadMs": {
+            "min": 490.274989,
+            "median": 509.528034,
+            "max": 519.942325
+          },
+          "readBytes": {
+            "min": 783881637,
+            "median": 783881674,
+            "max": 783881674
+          },
+          "decodedJsonBytes": {
+            "min": 5461844,
+            "median": 5461844,
+            "max": 5461844
+          },
+          "maxTimerGapMs": {
+            "min": 485.42404899999997,
+            "median": 507.732897,
+            "max": 515.2216349999999
+          }
+        },
+        "warm": {
+          "elapsedMs": {
+            "min": 0.06894600000009632,
+            "median": 0.11691999999993641,
+            "max": 0.17620399999998426
+          },
+          "mainThreadMs": {
+            "min": 0,
+            "median": 0,
+            "max": 0
+          },
+          "readBytes": {
+            "min": 150,
+            "median": 150,
+            "max": 151
+          },
+          "decodedJsonBytes": {
+            "min": 0,
+            "median": 0,
+            "max": 0
+          },
+          "maxTimerGapMs": {
+            "min": 0.07593299999996361,
+            "median": 0.08096299999999701,
+            "max": 0.15584799999999177
+          }
+        }
+      },
+      "projection": {
+        "cold": {
+          "elapsedMs": {
+            "min": 3.8195840000000203,
+            "median": 4.140311999999994,
+            "max": 4.5725700000000415
+          },
+          "mainThreadMs": {
+            "min": 3.603956,
+            "median": 3.916114,
+            "max": 5.000529
+          },
+          "readBytes": {
+            "min": 176385,
+            "median": 176385,
+            "max": 176385
+          },
+          "decodedJsonBytes": {
+            "min": 7960,
+            "median": 7960,
+            "max": 7960
+          },
+          "maxTimerGapMs": {
+            "min": 0.18312300000002324,
+            "median": 0.20746800000000576,
+            "max": 0.22965499999997974
+          }
+        },
+        "warm": {
+          "elapsedMs": {
+            "min": 0.8827180000000112,
+            "median": 1.1388849999999593,
+            "max": 2.776475000000005
+          },
+          "mainThreadMs": {
+            "min": 0.334584,
+            "median": 1.042759,
+            "max": 2.781635
+          },
+          "readBytes": {
+            "min": 4242,
+            "median": 4279,
+            "max": 4279
+          },
+          "decodedJsonBytes": {
+            "min": 1969,
+            "median": 1969,
+            "max": 1969
+          },
+          "maxTimerGapMs": {
+            "min": 0.07609800000000178,
+            "median": 0.09001200000000154,
+            "max": 0.780428000000029
+          }
+        }
+      }
+    }
+  },
+  "measurements": {
+    "history": {
+      "legacy": [
+        {
+          "mode": "legacy",
+          "operation": "curator-counts-and-liveness-history",
+          "sourceRows": 1153,
+          "sourceBytes": 153203262,
+          "now": 1792238400000,
+          "measurements": [
+            {
+              "repeat": 0,
+              "cold": true,
+              "elapsedMs": 787.3328309999999,
+              "maxTimerGapMs": 778.8300409999999,
+              "mainThreadMs": 785.99024,
+              "readBytes": 160411230,
+              "decodedJsonBytes": 153203262,
+              "count": 4113
+            },
+            {
+              "repeat": 1,
+              "cold": false,
+              "elapsedMs": 750.9003859999998,
+              "maxTimerGapMs": 750.330412,
+              "mainThreadMs": 750.519217,
+              "readBytes": 159862795,
+              "decodedJsonBytes": 153203262,
+              "count": 4113
+            },
+            {
+              "repeat": 2,
+              "cold": false,
+              "elapsedMs": 828.3187940000003,
+              "maxTimerGapMs": 822.9075579999999,
+              "mainThreadMs": 827.496035,
+              "readBytes": 159863341,
+              "decodedJsonBytes": 153203262,
+              "count": 4113
+            },
+            {
+              "repeat": 3,
+              "cold": false,
+              "elapsedMs": 972.622304,
+              "maxTimerGapMs": 971.8561489999997,
+              "mainThreadMs": 971.475606,
+              "readBytes": 159863030,
+              "decodedJsonBytes": 153203262,
+              "count": 4113
+            }
+          ]
+        },
+        {
+          "mode": "legacy",
+          "operation": "curator-counts-and-liveness-history",
+          "sourceRows": 1153,
+          "sourceBytes": 153203262,
+          "now": 1792238400000,
+          "measurements": [
+            {
+              "repeat": 0,
+              "cold": true,
+              "elapsedMs": 962.4818660000001,
+              "maxTimerGapMs": 954.631043,
+              "mainThreadMs": 959.404809,
+              "readBytes": 160411225,
+              "decodedJsonBytes": 153203262,
+              "count": 4113
+            },
+            {
+              "repeat": 1,
+              "cold": false,
+              "elapsedMs": 846.7022479999998,
+              "maxTimerGapMs": 846.2831990000002,
+              "mainThreadMs": 846.270905,
+              "readBytes": 159862716,
+              "decodedJsonBytes": 153203262,
+              "count": 4113
+            },
+            {
+              "repeat": 2,
+              "cold": false,
+              "elapsedMs": 807.1474330000001,
+              "maxTimerGapMs": 803.2133680000002,
+              "mainThreadMs": 805.681917,
+              "readBytes": 159863419,
+              "decodedJsonBytes": 153203262,
+              "count": 4113
+            },
+            {
+              "repeat": 3,
+              "cold": false,
+              "elapsedMs": 866.2241720000002,
+              "maxTimerGapMs": 856.3484629999998,
+              "mainThreadMs": 863.873747,
+              "readBytes": 159863030,
+              "decodedJsonBytes": 153203262,
+              "count": 4113
+            }
+          ]
+        },
+        {
+          "mode": "legacy",
+          "operation": "curator-counts-and-liveness-history",
+          "sourceRows": 1153,
+          "sourceBytes": 153203262,
+          "now": 1792238400000,
+          "measurements": [
+            {
+              "repeat": 0,
+              "cold": true,
+              "elapsedMs": 891.847787,
+              "maxTimerGapMs": 883.5113620000001,
+              "mainThreadMs": 889.440757,
+              "readBytes": 160411293,
+              "decodedJsonBytes": 153203262,
+              "count": 4113
+            },
+            {
+              "repeat": 1,
+              "cold": false,
+              "elapsedMs": 814.8612439999999,
+              "maxTimerGapMs": 813.9466789999999,
+              "mainThreadMs": 813.455679,
+              "readBytes": 159862795,
+              "decodedJsonBytes": 153203262,
+              "count": 4113
+            },
+            {
+              "repeat": 2,
+              "cold": false,
+              "elapsedMs": 754.3234689999999,
+              "maxTimerGapMs": 749.4922329999999,
+              "mainThreadMs": 753.355462,
+              "readBytes": 159863302,
+              "decodedJsonBytes": 153203262,
+              "count": 4113
+            },
+            {
+              "repeat": 3,
+              "cold": false,
+              "elapsedMs": 786.713307,
+              "maxTimerGapMs": 788.157659,
+              "mainThreadMs": 786.38226,
+              "readBytes": 159862991,
+              "decodedJsonBytes": 153203262,
+              "count": 4113
+            }
+          ]
+        }
+      ],
+      "projection": [
+        {
+          "mode": "projection",
+          "operation": "curator-counts-and-liveness-history",
+          "sourceRows": 1153,
+          "sourceBytes": 153203262,
+          "now": 1792238400000,
+          "measurements": [
+            {
+              "repeat": 0,
+              "cold": true,
+              "elapsedMs": 2722.794448,
+              "maxTimerGapMs": 152.16784400000006,
+              "mainThreadMs": 1298.800796,
+              "readBytes": 338558218,
+              "decodedJsonBytes": 0,
+              "count": 4113
+            },
+            {
+              "repeat": 1,
+              "cold": false,
+              "elapsedMs": 0.42708600000014485,
+              "maxTimerGapMs": 0.08560899999974936,
+              "mainThreadMs": 0.804565,
+              "readBytes": 16538,
+              "decodedJsonBytes": 0,
+              "count": 4113
+            },
+            {
+              "repeat": 2,
+              "cold": false,
+              "elapsedMs": 0.42376100000001315,
+              "maxTimerGapMs": 0.09135100000003149,
+              "mainThreadMs": 0,
+              "readBytes": 154,
+              "decodedJsonBytes": 0,
+              "count": 4113
+            },
+            {
+              "repeat": 3,
+              "cold": false,
+              "elapsedMs": 0.38872300000002724,
+              "maxTimerGapMs": 0.07888899999989007,
+              "mainThreadMs": 0.255733,
+              "readBytes": 191,
+              "decodedJsonBytes": 0,
+              "count": 4113
+            }
+          ]
+        },
+        {
+          "mode": "projection",
+          "operation": "curator-counts-and-liveness-history",
+          "sourceRows": 1153,
+          "sourceBytes": 153203262,
+          "now": 1792238400000,
+          "measurements": [
+            {
+              "repeat": 0,
+              "cold": true,
+              "elapsedMs": 1667.153532,
+              "maxTimerGapMs": 9.611478999999918,
+              "mainThreadMs": 1220.819518,
+              "readBytes": 338558218,
+              "decodedJsonBytes": 0,
+              "count": 4113
+            },
+            {
+              "repeat": 1,
+              "cold": false,
+              "elapsedMs": 0.47681999999986147,
+              "maxTimerGapMs": 0.3620969999999488,
+              "mainThreadMs": 0.680421,
+              "readBytes": 16538,
+              "decodedJsonBytes": 0,
+              "count": 4113
+            },
+            {
+              "repeat": 2,
+              "cold": false,
+              "elapsedMs": 0.3342329999998128,
+              "maxTimerGapMs": 0.6658460000001014,
+              "mainThreadMs": 0,
+              "readBytes": 154,
+              "decodedJsonBytes": 0,
+              "count": 4113
+            },
+            {
+              "repeat": 3,
+              "cold": false,
+              "elapsedMs": 0.5840130000001409,
+              "maxTimerGapMs": 0.08199700000000121,
+              "mainThreadMs": 0,
+              "readBytes": 154,
+              "decodedJsonBytes": 0,
+              "count": 4113
+            }
+          ]
+        },
+        {
+          "mode": "projection",
+          "operation": "curator-counts-and-liveness-history",
+          "sourceRows": 1153,
+          "sourceBytes": 153203262,
+          "now": 1792238400000,
+          "measurements": [
+            {
+              "repeat": 0,
+              "cold": true,
+              "elapsedMs": 1420.433996,
+              "maxTimerGapMs": 6.312325999999985,
+              "mainThreadMs": 1022.28732,
+              "readBytes": 338558217,
+              "decodedJsonBytes": 0,
+              "count": 4113
+            },
+            {
+              "repeat": 1,
+              "cold": false,
+              "elapsedMs": 0.41722200000003795,
+              "maxTimerGapMs": 0.09239099999990685,
+              "mainThreadMs": 0.676166,
+              "readBytes": 16538,
+              "decodedJsonBytes": 0,
+              "count": 4113
+            },
+            {
+              "repeat": 2,
+              "cold": false,
+              "elapsedMs": 0.5712029999999686,
+              "maxTimerGapMs": 0.07249700000011217,
+              "mainThreadMs": 0.615621,
+              "readBytes": 191,
+              "decodedJsonBytes": 0,
+              "count": 4113
+            },
+            {
+              "repeat": 3,
+              "cold": false,
+              "elapsedMs": 0.42413600000008955,
+              "maxTimerGapMs": 0.06523199999992357,
+              "mainThreadMs": 0,
+              "readBytes": 154,
+              "decodedJsonBytes": 0,
+              "count": 4113
+            }
+          ]
+        }
+      ]
+    },
+    "admission": {
+      "legacy": [
+        {
+          "mode": "legacy",
+          "operation": "curator-registry-admission",
+          "sourceRows": 52207,
+          "sourceBytes": 187103963,
+          "now": 1792238400000,
+          "measurements": [
+            {
+              "repeat": 0,
+              "cold": true,
+              "elapsedMs": 517.084251,
+              "maxTimerGapMs": 507.732897,
+              "mainThreadMs": 509.528034,
+              "readBytes": 783881674,
+              "decodedJsonBytes": 5461844,
+              "count": 1
+            },
+            {
+              "repeat": 1,
+              "cold": false,
+              "elapsedMs": 0.09413299999994251,
+              "maxTimerGapMs": 0.07915600000001177,
+              "mainThreadMs": 0,
+              "readBytes": 151,
+              "decodedJsonBytes": 0,
+              "count": 1
+            },
+            {
+              "repeat": 2,
+              "cold": false,
+              "elapsedMs": 0.06894600000009632,
+              "maxTimerGapMs": 0.11035500000002685,
+              "mainThreadMs": 0,
+              "readBytes": 151,
+              "decodedJsonBytes": 0,
+              "count": 1
+            },
+            {
+              "repeat": 3,
+              "cold": false,
+              "elapsedMs": 0.11691999999993641,
+              "maxTimerGapMs": 0.08096299999999701,
+              "mainThreadMs": 0,
+              "readBytes": 151,
+              "decodedJsonBytes": 0,
+              "count": 1
+            }
+          ]
+        },
+        {
+          "mode": "legacy",
+          "operation": "curator-registry-admission",
+          "sourceRows": 52207,
+          "sourceBytes": 187103963,
+          "now": 1792238400000,
+          "measurements": [
+            {
+              "repeat": 0,
+              "cold": true,
+              "elapsedMs": 524.513255,
+              "maxTimerGapMs": 515.2216349999999,
+              "mainThreadMs": 519.942325,
+              "readBytes": 783881637,
+              "decodedJsonBytes": 5461844,
+              "count": 1
+            },
+            {
+              "repeat": 1,
+              "cold": false,
+              "elapsedMs": 0.15716299999996863,
+              "maxTimerGapMs": 0.09259900000006382,
+              "mainThreadMs": 0,
+              "readBytes": 150,
+              "decodedJsonBytes": 0,
+              "count": 1
+            },
+            {
+              "repeat": 2,
+              "cold": false,
+              "elapsedMs": 0.13996800000006715,
+              "maxTimerGapMs": 0.07935099999997419,
+              "mainThreadMs": 0,
+              "readBytes": 150,
+              "decodedJsonBytes": 0,
+              "count": 1
+            },
+            {
+              "repeat": 3,
+              "cold": false,
+              "elapsedMs": 0.1429960000000392,
+              "maxTimerGapMs": 0.07593299999996361,
+              "mainThreadMs": 0,
+              "readBytes": 150,
+              "decodedJsonBytes": 0,
+              "count": 1
+            }
+          ]
+        },
+        {
+          "mode": "legacy",
+          "operation": "curator-registry-admission",
+          "sourceRows": 52207,
+          "sourceBytes": 187103963,
+          "now": 1792238400000,
+          "measurements": [
+            {
+              "repeat": 0,
+              "cold": true,
+              "elapsedMs": 494.62517199999996,
+              "maxTimerGapMs": 485.42404899999997,
+              "mainThreadMs": 490.274989,
+              "readBytes": 783881674,
+              "decodedJsonBytes": 5461844,
+              "count": 1
+            },
+            {
+              "repeat": 1,
+              "cold": false,
+              "elapsedMs": 0.1152630000000272,
+              "maxTimerGapMs": 0.15584799999999177,
+              "mainThreadMs": 0,
+              "readBytes": 150,
+              "decodedJsonBytes": 0,
+              "count": 1
+            },
+            {
+              "repeat": 2,
+              "cold": false,
+              "elapsedMs": 0.11566400000003796,
+              "maxTimerGapMs": 0.110676999999896,
+              "mainThreadMs": 0,
+              "readBytes": 150,
+              "decodedJsonBytes": 0,
+              "count": 1
+            },
+            {
+              "repeat": 3,
+              "cold": false,
+              "elapsedMs": 0.17620399999998426,
+              "maxTimerGapMs": 0.08030699999994795,
+              "mainThreadMs": 0,
+              "readBytes": 150,
+              "decodedJsonBytes": 0,
+              "count": 1
+            }
+          ]
+        }
+      ],
+      "projection": [
+        {
+          "mode": "projection",
+          "operation": "curator-registry-admission",
+          "sourceRows": 52207,
+          "sourceBytes": 187103963,
+          "now": 1792238400000,
+          "measurements": [
+            {
+              "repeat": 0,
+              "cold": true,
+              "elapsedMs": 4.5725700000000415,
+              "maxTimerGapMs": 0.22965499999997974,
+              "mainThreadMs": 5.000529,
+              "readBytes": 176385,
+              "decodedJsonBytes": 7960,
+              "count": 1
+            },
+            {
+              "repeat": 1,
+              "cold": false,
+              "elapsedMs": 2.601538000000005,
+              "maxTimerGapMs": 0.09001200000000154,
+              "mainThreadMs": 1.999936,
+              "readBytes": 4279,
+              "decodedJsonBytes": 1969,
+              "count": 1
+            },
+            {
+              "repeat": 2,
+              "cold": false,
+              "elapsedMs": 1.8405720000000088,
+              "maxTimerGapMs": 0.08356399999996711,
+              "mainThreadMs": 1.250781,
+              "readBytes": 4279,
+              "decodedJsonBytes": 1969,
+              "count": 1
+            },
+            {
+              "repeat": 3,
+              "cold": false,
+              "elapsedMs": 2.776475000000005,
+              "maxTimerGapMs": 0.0928779999999847,
+              "mainThreadMs": 2.781635,
+              "readBytes": 4242,
+              "decodedJsonBytes": 1969,
+              "count": 1
+            }
+          ]
+        },
+        {
+          "mode": "projection",
+          "operation": "curator-registry-admission",
+          "sourceRows": 52207,
+          "sourceBytes": 187103963,
+          "now": 1792238400000,
+          "measurements": [
+            {
+              "repeat": 0,
+              "cold": true,
+              "elapsedMs": 4.140311999999994,
+              "maxTimerGapMs": 0.18312300000002324,
+              "mainThreadMs": 3.603956,
+              "readBytes": 176385,
+              "decodedJsonBytes": 7960,
+              "count": 1
+            },
+            {
+              "repeat": 1,
+              "cold": false,
+              "elapsedMs": 1.1388849999999593,
+              "maxTimerGapMs": 0.1003570000000309,
+              "mainThreadMs": 0.892516,
+              "readBytes": 4279,
+              "decodedJsonBytes": 1969,
+              "count": 1
+            },
+            {
+              "repeat": 2,
+              "cold": false,
+              "elapsedMs": 1.028601999999978,
+              "maxTimerGapMs": 0.780428000000029,
+              "mainThreadMs": 1.218401,
+              "readBytes": 4242,
+              "decodedJsonBytes": 1969,
+              "count": 1
+            },
+            {
+              "repeat": 3,
+              "cold": false,
+              "elapsedMs": 1.198176999999987,
+              "maxTimerGapMs": 0.0976020000000517,
+              "mainThreadMs": 0.91268,
+              "readBytes": 4279,
+              "decodedJsonBytes": 1969,
+              "count": 1
+            }
+          ]
+        },
+        {
+          "mode": "projection",
+          "operation": "curator-registry-admission",
+          "sourceRows": 52207,
+          "sourceBytes": 187103963,
+          "now": 1792238400000,
+          "measurements": [
+            {
+              "repeat": 0,
+              "cold": true,
+              "elapsedMs": 3.8195840000000203,
+              "maxTimerGapMs": 0.20746800000000576,
+              "mainThreadMs": 3.916114,
+              "readBytes": 176385,
+              "decodedJsonBytes": 7960,
+              "count": 1
+            },
+            {
+              "repeat": 1,
+              "cold": false,
+              "elapsedMs": 0.9632740000000126,
+              "maxTimerGapMs": 0.08296899999999141,
+              "mainThreadMs": 1.042759,
+              "readBytes": 4279,
+              "decodedJsonBytes": 1969,
+              "count": 1
+            },
+            {
+              "repeat": 2,
+              "cold": false,
+              "elapsedMs": 0.8827180000000112,
+              "maxTimerGapMs": 0.07609800000000178,
+              "mainThreadMs": 0.454723,
+              "readBytes": 4279,
+              "decodedJsonBytes": 1969,
+              "count": 1
+            },
+            {
+              "repeat": 3,
+              "cold": false,
+              "elapsedMs": 0.9540930000000003,
+              "maxTimerGapMs": 0.08559300000001713,
+              "mainThreadMs": 0.334584,
+              "readBytes": 4242,
+              "decodedJsonBytes": 1969,
+              "count": 1
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "validation": {
+    "typecheck": {
+      "command": [
+        "bun",
+        "node_modules/typescript/bin/tsc",
+        "--noEmit"
+      ],
+      "exitCode": 0
+    },
+    "eslint": {
+      "command": [
+        "bun",
+        "scripts/eslint-changes.ts",
+        "--base",
+        "origin/main"
+      ],
+      "introducedErrors": 0
+    },
+    "touchedTests": {
+      "command": [
+        "bun",
+        "scripts/local-gate-tests.ts",
+        "--base",
+        "origin/main",
+        "./src/lib/mcp/curateRules.test.ts",
+        "./src/lib/memory/curation/curation.test.ts",
+        "./src/lib/memory/curation/reviewLessons.test.ts",
+        "./src/lib/state/hotStateStores.sqlite.test.ts",
+        "./src/lib/state/historyProjection.test.ts",
+        "./src/lib/agent/registry.backendResolution.test.ts",
+        "./src/lib/agent/registry.sqlite.test.ts",
+        "./src/lib/agent/registry.targetedHistory.test.ts",
+        "./src/lib/agent/registry.projectOwnership.test.ts",
+        "./src/lib/agent/registry.reseat.test.ts",
+        "./src/lib/agent/registry.deliveryCompaction.test.ts",
+        "./src/lib/agent/registry.writerWait.test.ts",
+        "./src/lib/agent/registry.engineNative.test.ts",
+        "./src/lib/agent/registry.sqliteOnly.test.ts",
+        "./src/lib/agent/registry.migrationBinding.test.ts",
+        "./src/lib/agent/registry.spawnCapabilityHandover.test.ts",
+        "./src/lib/agent/registry.test.ts",
+        "./src/lib/agent/registry.deliveryRead.test.ts",
+        "./src/lib/agent/registry.admission.test.ts",
+        "./src/lib/lifecycle/liveness.activity.test.ts",
+        "./src/lib/lifecycle/liveness.test.ts",
+        "./src/lib/mcp/bindings.test.ts",
+        "./src/lib/state/pipelineEvidenceIndex.test.ts",
+        "./src/lib/viewerInstrumentation.test.ts",
+        "./src/lib/viewerLoopMonitor.test.ts",
+        "./src/instrumentation.test.ts",
+        "./src/lib/state/legacyCollections.test.ts",
+        "./src/lib/mcp/agentFleet.binding.test.ts"
+      ],
+      "fileCount": 28,
+      "headElapsedMs": 49879,
+      "baselineElapsedMs": 9840,
+      "newFailures": 0,
+      "preExistingFailures": 6,
+      "fixed": 0,
+      "removedOrSkipped": 0,
+      "flaky": 3,
+      "knownOutcomes": [
+        {
+          "classification": "FLAKY",
+          "file": "src/lib/agent/registry.sqlite.test.ts",
+          "test": "production-sized read burn-in checkpoints the current cached snapshot without reloading history (base 4 pass/0 fail; head 3 pass/1 fail)"
+        },
+        {
+          "classification": "FLAKY",
+          "file": "src/lib/mcp/bindings.test.ts",
+          "test": "task placement bindings require atomic guards and classify field refusals as non-retryable (base 4 pass/0 fail; head 3 pass/1 fail)"
+        },
+        {
+          "classification": "FLAKY",
+          "file": "src/lib/mcp/bindings.test.ts",
+          "test": "MCP task writes normalize holds, preserve step operator reasons and server provenance (base 3 pass/1 fail; head 3 pass/1 fail)"
+        },
+        {
+          "classification": "PRE-EXISTING",
+          "file": "src/lib/agent/registry.spawnCapabilityHandover.test.ts",
+          "test": "off: rollback publication without a pending capability revokes predecessor HTTP identity only at commit"
+        },
+        {
+          "classification": "PRE-EXISTING",
+          "file": "src/lib/agent/registry.spawnCapabilityHandover.test.ts",
+          "test": "sqlite: rollback publication without a pending capability revokes predecessor HTTP identity only at commit"
+        },
+        {
+          "classification": "PRE-EXISTING",
+          "file": "src/lib/mcp/agentFleet.binding.test.ts",
+          "test": "fleet reads do not materialize archived registry history on initial or repeated reads"
+        },
+        {
+          "classification": "PRE-EXISTING",
+          "file": "src/lib/mcp/agentFleet.binding.test.ts",
+          "test": "partial inventory and pending evidence are declared and an injected source cannot widen a project"
+        },
+        {
+          "classification": "PRE-EXISTING",
+          "file": "src/lib/state/hotStateStores.sqlite.test.ts",
+          "test": "bounded change retention forces a stale reader through a full reload"
+        },
+        {
+          "classification": "PRE-EXISTING",
+          "file": "src/lib/state/pipelineEvidenceIndex.test.ts",
+          "test": "a contended synchronous initialization refuses promptly, records its wait, and retries intact"
+        }
+      ],
+      "logSha256": "30cd23fe1af44fc41c924729f325dd5ce7b2fd87c0505d892d8c90fbba605ba5"
+    }
+  },
+  "mainRecheck": {
+    "commit": "e4a86ff27da40a747b801f8f20cfd175ca638668",
+    "change": "relay service tools; nearby import and operation-label additions reviewed"
+  }
+}
