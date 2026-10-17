@@ -49,7 +49,7 @@ function render(members: readonly InboxMember[], held: number): QueueEntry {
 
 /** Priority chooses membership; the rendered members retain admission order.
  * The prefix is never back-filled around an input that did not fit. */
-export function composeBatch(input: readonly InboxMember[]): { entry: QueueEntry; members: InboxMember[]; remaining: InboxMember[] } {
+export function composeBatch(input: readonly InboxMember[], heldOrdinaryCount = 0): { entry: QueueEntry; members: InboxMember[]; remaining: InboxMember[] } {
   if (!input.length) throw new Error("inbox batch needs a member");
   // The delivery lane already orders the journal. Do not sort the backlog
   // again on every hand-over; only the bounded chosen prefix needs ordering.
@@ -86,7 +86,8 @@ export function composeBatch(input: readonly InboxMember[]): { entry: QueueEntry
   selected.sort((a, b) => a.eventSeq - b.eventSeq);
   const remaining = ordered.filter(m => !selected.includes(m));
   const held = remaining.filter(m => !m.priority && m.eventSeq < selected.at(-1)!.eventSeq).length;
-  const entry = selected.length === 1 ? { ...normalizeQueueEntry(selected[0]!.entry), expectedTurnId: null } : render(selected, held);
+  const entry = selected.length === 1 ? { ...normalizeQueueEntry(selected[0]!.entry), expectedTurnId: null }
+    : render(selected, Math.max(held, heldOrdinaryCount));
   return { entry, members: selected, remaining };
 }
 

@@ -1743,6 +1743,7 @@ export class StructuredDeliveryQueue {
     // `delivering`. Overflow stays in its existing queued slot for the next
     // turn, so a large inbox adds no claim/requeue write cycle.
     const coalescingEffects = effects.filter(canCoalesce) as SendEffect[];
+    const coalescingBacklog = new Map(coalescingEffects.map(effect => [effect.operationId, effect] as const));
     if (coalescingEffects.length) {
       const { coalescingIds, selectedIds } = await withViewerOperation("delivery.inbox-batch", async () => {
         const coalescingIds = new Set(coalescingEffects.map(effect => effect.operationId));
@@ -1781,7 +1782,11 @@ export class StructuredDeliveryQueue {
       if (lane?.released || this.retirementExecutor.retired || this.port.handoffHeld?.()) {
         await releaseBatch("inbox hand-over deferred"); return true;
       }
-      const composed = composeBatch(pending.map(p => p.member));
+      const lastSelectedSeq = Math.max(...pending.map(p => p.member.eventSeq));
+      const selectedOrdinaryBefore = pending.filter(p => !p.member.priority && p.member.eventSeq < lastSelectedSeq).length;
+      const backlogOrdinaryBefore = [...coalescingBacklog.values()].filter(effect => effect.eventSeq < lastSelectedSeq
+        && !(effect.policy === "interrupt-active" && effect.origin?.kind === "operator")).length;
+      const composed = composeBatch(pending.map(p => p.member), Math.max(0, backlogOrdinaryBefore - selectedOrdinaryBefore));
       const selectedIds = new Set(composed.members.map(m => m.entry.id));
       const selected = pending.filter(p => selectedIds.has(p.effect.operationId));
       const remaining = pending.filter(p => !selectedIds.has(p.effect.operationId));
@@ -1789,6 +1794,8 @@ export class StructuredDeliveryQueue {
       for (const p of remaining) await this.transitionUnlessSettled(p.effect.operationId, "queued", { reason: "inbox message bound" });
       pendingBatch = selected;
       const first = selected[0]!;
+      const priorityRuntime = selected.find(p => p.member.priority && p.effect.runtime)?.effect.runtime;
+      if (priorityRuntime) composed.entry.runtime = priorityRuntime;
       try {
         if (composed.entry.parts && !await this.checking(lane, first.effect, "binding delivery.inbox-batch", async () =>
           this.port.bindDeliveryBatch!(composed.entry.id, selected.map(p => p.effect.operationId), first.generationId))) {
@@ -1846,9 +1853,12 @@ export class StructuredDeliveryQueue {
     });
     try {
     for (const [index, effect] of effects.entries()) {
+      const priorityRuntimeCanJoin = effect.kind === "send" && effect.policy === "interrupt-active" && effect.origin?.kind === "operator"
+        && effect.runtime && pendingBatch.every(p => !p.effect.runtime);
       if (pendingBatch.length && (!canCoalesce(effect)
         || pendingBatch[0]!.host !== this.resolveHost(effect.conversationId)
-        || JSON.stringify(pendingBatch[0]!.effect.runtime) !== JSON.stringify(effect.kind === "send" || effect.kind === "steer" ? effect.runtime : undefined))) {
+        || (JSON.stringify(pendingBatch[0]!.effect.runtime) !== JSON.stringify(effect.kind === "send" || effect.kind === "steer" ? effect.runtime : undefined)
+          && !priorityRuntimeCanJoin))) {
         if (await flushBatch()) return true;
       }
       /* Everything after a blocking step waits on this conversation. */
@@ -2273,7 +2283,10 @@ export class StructuredDeliveryQueue {
            read the same queued row is refused here, so its write can never be
            taken as a replay and send the message again. */
         { fromStatuses: ["pending", "queued"] },
-      ))) continue;
+      ))) {
+        coalescingBacklog.delete(effect.operationId);
+        continue;
+      }
       this.noteWait(effect, shouldInterrupt ? "interrupting" : "dispatching", { lane, attempted: true, wake: "event" });
       if (effect.onlyIfIdle) {
         const claimed = await this.readStatus(effect.operationId);
@@ -2371,6 +2384,7 @@ export class StructuredDeliveryQueue {
       if (canCoalesce(effect)) {
         try { authorize(); }
         catch (error) {
+          coalescingBacklog.delete(effect.operationId);
           await this.settleSendOutcome(effect, host, { error }, settlement);
           await releaseBatch("inbox member authorization refused");
           return true;

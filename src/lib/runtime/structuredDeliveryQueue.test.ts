@@ -3479,7 +3479,8 @@ test("seat inbox priority preserves ordinary admission order across a forty-mess
     await transition(id, status, details, options);
   };
   h.inputs.forEach((e, i) => Object.assign(e.payload, { text: i === 40 ? "c".repeat(80) : String(i).padStart(3, "0") + "o".repeat(14997),
-    policy: i === 40 ? "interrupt-active" : "queue", origin: i === 40 ? { kind: "operator" } : { kind: "agent" } }));
+    policy: i === 40 ? "interrupt-active" : "queue", origin: i === 40 ? { kind: "operator" } : { kind: "agent" },
+    ...(i === 40 ? { runtime: { model: "claude-opus-4-7" } } : {}) }));
   h.idle(); await h.queue.drain();
   expect(claims).toHaveLength(3);
   expect(requeues).toEqual([]);
@@ -3488,9 +3489,24 @@ test("seat inbox priority preserves ordinary admission order across a forty-mess
   for (let i = 1; i < 21; i++) { h.idle(); await h.queue.drain(); }
   expect(h.sends).toHaveLength(20);
   expect(h.sends[0]!.parts?.map(p => p.operationId)).toEqual(["inbox-0", "inbox-1", "inbox-40"]);
+  expect(h.sends[0]!.runtime).toEqual({ model: "claude-opus-4-7" });
+  expect(h.sends[0]!.content!.text).toContain("38 older messages are held for your next turn.");
   const ordinary = h.sends.flatMap(e => e.parts?.map(p => p.operationId) ?? [e.id]).filter(id => id !== "inbox-40");
   expect(ordinary).toEqual(h.inputs.slice(0, 40).map(e => String(e.payload.operationId)));
   expect([...h.rows.values()].every(r => r.status === "delivered")).toBe(true);
+});
+
+test("seat inbox overflow notice counts only older ordinary members still eligible after a lost claim", async () => {
+  const h = inboxHarness(41);
+  h.inputs.forEach((e, i) => Object.assign(e.payload, { text: i === 40 ? "chat" : String(i).padStart(3, "0") + "o".repeat(14997),
+    policy: i === 40 ? "interrupt-active" : "queue", origin: i === 40 ? { kind: "operator" } : { kind: "agent" } }));
+  const transition = h.port.transition;
+  h.port.transition = async (...args) => args[0] === "inbox-0" && args[1] === "delivering"
+    ? (h.rows.get("inbox-0")!.status = "failed", Promise.reject(new Error("compare-and-set lost")))
+    : transition(...args);
+  h.idle(); await h.queue.drain();
+  expect(h.sends[0]!.parts?.map(part => part.operationId)).toEqual(["inbox-1", "inbox-40"]);
+  expect(h.sends[0]!.content!.text).toContain("38 older messages are held for your next turn.");
 });
 
 for (const reason of ["stale-turn", "dead-host"] as const) test(`seat inbox ${reason} returns every member to queued`, async () => {

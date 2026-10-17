@@ -125,37 +125,21 @@ export function agentRecordPartAuthors(
     if (!parts) return [];
     const sourceText = record.sourceText ?? record.text;
     let searchFrom = 0;
-    let sourceCursor = 0;
-    let visibleFrom = 0;
     const projectedParts = parts.flatMap(p => {
       const authoredText = p.text;
-      // The broker's offsets point past each part header. Claude's normalized
-      // block separators can only move that point forward within this message.
-      const sourceStart = sourceText.indexOf(authoredText, Math.max(searchFrom, p.textStart));
+      // Locate the start with a bounded prefix. Transcript normalization trims
+      // the final block and conversation_messages may cut the visible body.
+      const anchorLength = Math.min(32, authoredText.trimEnd().length);
+      const anchor = authoredText.slice(0, anchorLength);
+      const sourceStart = anchor ? sourceText.indexOf(anchor, Math.max(searchFrom, p.textStart)) : -1;
       if (sourceStart < 0) return [];
-      const sourceEnd = sourceStart + authoredText.length;
+      const sourceEnd = sourceStart + (sourceText.startsWith(authoredText, sourceStart) ? authoredText.length : authoredText.trimEnd().length);
       searchFrom = sourceEnd;
-      const projectedGap = projectText(sourceText.slice(sourceCursor, sourceStart));
-      const expectedStart = visibleFrom + projectedGap.length;
-      sourceCursor = sourceEnd;
-      // Match the projected body at its normalized position so repeated text
-      // in a later part's header cannot steal that part's author range.
-      const projected = projectText(authoredText);
-      let textStart = projected && record.text.startsWith(projected, expectedStart) ? expectedStart : -1;
-      if (textStart < 0 && projected) {
-        const nearby = record.text.indexOf(projected, expectedStart);
-        if (nearby >= expectedStart) textStart = nearby;
-      }
-      let clipped = false;
-      if (textStart < 0 && record.truncated) {
-        const visiblePrefix = projectText(authoredText.slice(0, Math.min(authoredText.length, 32)));
-        textStart = visiblePrefix ? record.text.indexOf(visiblePrefix, expectedStart) : -1;
-        clipped = textStart >= 0;
-      }
-      if (textStart < 0) return [];
-      const textEnd = clipped ? record.text.length : textStart + projected.length;
+      const textStart = projectText(sourceText.slice(0, sourceStart)).length;
+      if (textStart >= record.text.length) return [];
+      const projectedEnd = projectText(sourceText.slice(0, sourceEnd)).length;
+      const textEnd = Math.min(record.text.length, projectedEnd);
       if (textEnd <= textStart) return [];
-      visibleFrom = textEnd;
       return [{ operationId: p.operationId, textStart, textEnd,
         author: p.provenance.origin === "agent" ? authorFromProvenance(p.provenance) : { kind: "operator" as const } }];
     });
