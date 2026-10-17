@@ -17,6 +17,8 @@ export const performanceSites = [
   "pipeline.git-guard-prepare", "pipeline.attempt-push-proof", "pipeline.pull-request",
   "orchestrator.seat-stat", "orchestrator.seat-read", "orchestrator.seat-parse", "orchestrator.seat-index",
   "registry.writer-snapshot",
+  "scanner.ipc-frame", "scanner.ipc-decode", "scanner.publication", "scanner.cache-encode", "scanner.cache-persist",
+  "transcript.feed", "transcript.index", "memory.discovery", "memory.refresh",
 ] as const;
 export type PerformanceSite = typeof performanceSites[number];
 type Slice = { sequence: number; span: number; parent: number; site: number; kind: "sync" | "await" | "event";

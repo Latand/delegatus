@@ -5,6 +5,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { createLoopHeapSignals } from "./loopHeapSignals";
 
 export type ViewerOperation = "memory.engine-start" | "memory.curation-status" | "runtime.startup-row" | "controller.account-migration" | "orchestrator.deputy" | "voice.orchestrator-read" | "telegram.review-polls" | "accounts.migration-target" | "pipelines.startup-admission" | "pipelines.mutation" | "pipelines.controller-mutation" | "runtime.delivery.deputy-authority"
+  | "transcript.index" | "memory.discovery" | "memory.refresh"
   | "registry.prepare" | "runtime.startup" | "runtime.spawn-recovery" | "agent.deferred-spawn" | "state.rollback-checkpoint"
   | "pipelines.controller-read" | "pipelines.controller-decode" | "pipelines.controller-materialize"
   | "pipelines.controller-checkpoint" | "pipelines.controller-select" | "pipelines.delivery-liveness"
@@ -53,6 +54,7 @@ export function createViewerLoopMonitor(log?: (line: string) => void, now = () =
   let timer: ReturnType<typeof setTimeout> | undefined;
   const tick = () => {
     const at = now();
+    watchdog?.heartbeat();
     const gapMs = Math.max(0, at - last - 10);
     const memory = heapSignals.sample(last, at, gapMs);
     if (gapMs > 500) {
@@ -92,6 +94,11 @@ export function createViewerLoopMonitor(log?: (line: string) => void, now = () =
             overlapMs: Math.max(0, Math.min(row.end, at) - Math.max(row.start, last)) })),
           coverage: "partial", unresolved: "unknown-runtime-or-native" },
         scheduler: { available: scheduler?.available ?? false, samples: window.length,
+          // The worker records this while the main loop is still stale. Its
+          // timestamp is not the recovery callback's timestamp. Sequence can
+          // repeat across reports until a later stall replaces this record.
+          stall: scheduler?.stall ? { ...scheduler.stall,
+            site: performanceSites[scheduler.stall.site] ?? "unknown-runtime-or-native" } : null,
           runMs: first && final && first.runNs >= 0 && final.runNs >= 0 ? (final.runNs - first.runNs) / 1e6 : null,
           queueMs: first && final && first.queueNs >= 0 && final.queueNs >= 0 ? (final.queueNs - first.queueNs) / 1e6 : null,
           throttleMs: first && final && first.throttleUs >= 0 && final.throttleUs >= 0 ? (final.throttleUs - first.throttleUs) / 1000 : null,
