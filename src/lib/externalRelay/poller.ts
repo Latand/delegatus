@@ -14,7 +14,7 @@ import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { noteRelayOutcome, relayActivity } from "./activity";
 import { pruneAnswerRecords, relayAnswersRoot, settleInterruptedAnswer, type RelayAnswerDelivery } from "./answers";
 import { discoverRelay, ExternalRelayError, fetchRelayTargets, isUnknownFeatureRefusal, relayCall } from "./client";
-import { RELAY_OWNER_TOOLS } from "./protocol";
+import { RELAY_OWNER_TOOLS, RELAY_TOOLS_ON_DEMAND } from "./protocol";
 import {
   advertisedSlots,
   externalRelayTempRoot,
@@ -263,7 +263,8 @@ async function refreshTargetsNow(id: string): Promise<TargetRefreshOutcome> {
 export const CLAIM_FEATURES = ["requester_context", "relay_tool_calls", "relay_tool_actions", "request_deadline"];
 export function relayClaimCapabilities(relay?: Pick<PairedRelay, "features">) {
   const switches = readRelaySwitches();
-  const features = switches.chat_conversations ? [...CLAIM_FEATURES, "chat_conversations"] : CLAIM_FEATURES;
+  const features = [...CLAIM_FEATURES, ...(switches.chat_conversations ? ["chat_conversations"] : []),
+    ...(relay?.features?.includes(RELAY_TOOLS_ON_DEMAND) ? [RELAY_TOOLS_ON_DEMAND] : [])];
   return { kinds: switches.compact ? ["answer", "compact"] : ["answer"],
     features: switches.owner_tools && relay?.features?.includes(RELAY_OWNER_TOOLS)
       ? [...features, RELAY_OWNER_TOOLS] : features };

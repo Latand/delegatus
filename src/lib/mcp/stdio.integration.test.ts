@@ -191,6 +191,38 @@ test("the real stdio server releases retained handles when its client disappears
   expect(exited).toBe(0);
 }, 15_000);
 
+for (const engine of ["codex-mcp-client", "claude-code"]) test(`${engine} receives JSON once through the stable launcher and keeps liveness diagnostics`, async () => {
+  const sandbox = sandboxDir("llv-mcp-model-result-");
+  const environment = identifiedEnvironment(sandbox);
+  const verdicts = [
+    { ok: true, toolName: "list_tasks", clientRequestId: null, replayed: false, items: [] },
+    { ok: false, toolName: "list_tasks", clientRequestId: null, replayed: false, code: "tool_failed", error: "Viewer MCP request returned a malformed response", retryable: true },
+    { ok: false, toolName: "list_tasks", clientRequestId: null, replayed: false, code: "fixture_refused", error: "The fixture refuses this read", retryable: false },
+  ];
+  let calls = 0;
+  const http = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
+    const body = await request.json() as { id: string };
+    const result = verdicts[calls++];
+    return Response.json({ jsonrpc: "2.0", id: body.id, result: {
+      content: [{ type: "text", text: JSON.stringify(result) }], structuredContent: result, ...(result.ok ? {} : { isError: true }),
+    } });
+  } });
+  let session: McpSession | undefined;
+  try {
+    session = await startMcp({ ...environment, LLV_VIEWER_CONTROL_URL: http.url.origin }, engine);
+    const digest = crypto.createHash("sha256").update(environment.LLV_SPAWN_CAPABILITY!).digest("hex");
+    const heartbeat = path.join(environment.LLV_STATE_DIR!, "mcp-runtime", "sessions", `${digest}.json`);
+    for (let index = 0; index < verdicts.length; index++) {
+      const result = await session.client.callTool({ name: "list_tasks", arguments: {} });
+      expect(result.structuredContent).toBeUndefined();
+      expect(result.content).toEqual([{ type: "text", text: JSON.stringify(verdicts[index]) }]);
+      expect(result.isError === true).toBe(index > 0);
+      expect(JSON.parse(fs.readFileSync(heartbeat, "utf8")).failedCalls).toBe(index === 1 ? 1 : 0);
+    }
+    expect(calls).toBe(3);
+  } finally { await session?.close(); http.stop(true); }
+}, 15_000);
+
 test("a managed stdio server never opens local receipts even while that database is locked", async () => {
   const sandbox = sandboxDir("llv-mcp-local-retry-");
   const environment = identifiedEnvironment(sandbox);
