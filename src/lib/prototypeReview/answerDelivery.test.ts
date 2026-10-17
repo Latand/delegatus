@@ -390,6 +390,52 @@ test("review: a quiet successor tick cannot credit a predecessor-only answer wak
   expect(sends).toBe(0);
 });
 
+test.each(["same-seat", "rotated-seat", "cut-bullet"])("review: upgrade rebinds only a complete legacy answer wake two hours later (%s)", async recipientCase => {
+  const { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } = await import("@/lib/orchestrator/seats");
+  const { currentSeat } = await import("@/lib/orchestrator/seatChannel");
+  const { emptySeatTickState } = await import("@/lib/monitor/types");
+  const { seatTickSignalVersion, seatTickWakeCommit } = await import("@/lib/monitor/seatTick");
+  const { writeSeatTickState, peekSeatTickState } = await import("@/lib/monitor/seatTickState");
+  beginOrchestratorSeatIntent({ project: "project-a", mandate: "coordinate", mode: "existing", clientRequestId: "legacy-wake-seat" });
+  completeOrchestratorSeatIntent({ project: "project-a", clientRequestId: "legacy-wake-seat", conversationId: "conversation_legacy", path: "legacy-transcript" });
+  const originalSeat = currentSeat("project-a")!;
+  const saved = decision(); saved.delivery.state = "uncertain"; saved.delivery.exhaustedAt = saved.at;
+  const r = { ...round(), decision: saved }; insertSeatRound(r);
+  const signal = telegramPostSignals("project-a", [], [r])[0]!;
+  const legacyVersion = seatTickSignalVersion(signal, null);
+  const line = `- [signal] ${signal.id} — ${signal.label}`;
+  const commit = {
+    proposal: false, reasons: [], fingerprint: "legacy-wake", eventsThrough: 0, children: [],
+    itemsShown: [legacyVersion], itemLines: [{ version: legacyVersion, line }],
+  };
+  const state = {
+    ...emptySeatTickState(), seatEpoch: originalSeat.seatEpoch,
+    outstandingWake: { clientMessageId: "seat-tick:legacy", conversationId: originalSeat.conversationId!, seatEpoch: originalSeat.seatEpoch,
+      operationId: "legacy-wake-operation", text: `Wake\nItems:\n${recipientCase === "cut-bullet" ? line.slice(0, 50) : line}`, commit },
+  };
+  const landed = seatTickWakeCommit(state, commit, NOW);
+  const currentVersion = seatTickSignalVersion(signal, { conversationId: originalSeat.conversationId!, seatEpoch: originalSeat.seatEpoch });
+  expect(landed.itemsShown?.includes(currentVersion)).toBe(recipientCase !== "cut-bullet");
+  expect(landed.itemsShown?.includes(legacyVersion)).toBe(false);
+  writeSeatTickState("project-a", landed);
+
+  let current = originalSeat;
+  if (recipientCase === "rotated-seat") {
+    beginOrchestratorSeatIntent({ project: "project-a", mandate: "coordinate", mode: "existing", clientRequestId: "legacy-wake-successor" });
+    completeOrchestratorSeatIntent({ project: "project-a", clientRequestId: "legacy-wake-successor", conversationId: "conversation_successor", path: "successor-transcript" });
+    current = currentSeat("project-a")!;
+    writeSeatTickState("project-a", { ...peekSeatTickState("project-a"), seatEpoch: current.seatEpoch });
+  }
+  setSystemTime(NOW + 2 * 60 * 60 * 1000);
+  const p = ports(); p.now = () => NOW + 2 * 60 * 60 * 1000; p.world = { ...world, orchestrator: () => current.conversationId! };
+  p.delivery.recover = async () => ({ state: "uncertain", operationId: "operation-old" });
+  let sends = 0; p.delivery.send = p.delivery.retry = async () => { sends++; return { state: "sent" }; };
+  await attemptPrototypeDelivery(null, ID, p);
+  expect(findSeatRound(ID)!.decision!.delivery.state).toBe(recipientCase === "same-seat" ? "sent" : "uncertain");
+  expect(findSeatRound(ID)!.decision!.delivery.wakeReceipt?.conversationId ?? undefined).toBe(recipientCase === "same-seat" ? originalSeat.conversationId ?? undefined : undefined);
+  expect(sends).toBe(0);
+});
+
 test("uncertain predecessor is verified before the answer follows the replacement seat", async () => {
   insertSeatRound({ ...round(), decision: decision() });
   const p = ports(); p.world = { ...world, orchestrator: () => "conversation_new" };

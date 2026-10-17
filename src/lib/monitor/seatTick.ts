@@ -2289,7 +2289,22 @@ function visibleAgendaVersions(state: SeatTickProjectState, commit: SeatTickWake
   const text = state.outstandingWake?.text;
   if (text === undefined || commit.itemLines === undefined) return commit.itemsShown ?? [];
   const framed = `\n${text}\n`;
-  return commit.itemLines.filter(item => framed.includes(`\n${item.line}\n`)).map(item => item.version);
+  const visible = commit.itemLines.filter(item => framed.includes(`\n${item.line}\n`));
+  const wake = state.outstandingWake;
+  if (!wake) return visible.map(item => item.version);
+  /* Before recipient-bound signal versions shipped, saved prototype answers
+     used the null-recipient hash. Rebind only a complete frozen answer bullet
+     to the recipient the durable wake names while committing its landing. */
+  const rebound = new Map<string, string>();
+  for (const item of visible) {
+    const match = item.line.match(/^- \[signal\] (prototype-answer:\S+) — ([\s\S]*)$/);
+    if (!match) continue;
+    const signal = { id: match[1]!, label: match[2]! };
+    if (item.version === seatTickSignalVersion(signal, null)) {
+      rebound.set(item.version, seatTickSignalVersion(signal, { conversationId: wake.conversationId, seatEpoch: wake.seatEpoch }));
+    }
+  }
+  return [...new Set(visible.map(item => rebound.get(item.version) ?? item.version))];
 }
 
 /** Upgrade retained plans without rewriting their delivery identity or text.
