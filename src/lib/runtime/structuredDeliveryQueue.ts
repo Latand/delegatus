@@ -1731,13 +1731,41 @@ export class StructuredDeliveryQueue {
     const readHold = () => conversationId ? this.port.switchHold?.(conversationId) ?? null : null;
     let hold = readHold();
     const canCoalesce = (effect: DeliveryEffect): boolean => {
+      if (effect.kind !== "send") return false;
       const host = this.resolveHost(effect.conversationId);
-      return effect.kind === "send" && !effect.onlyIfIdle && (effect.turnId === undefined || effect.turnId === null)
+      return !effect.onlyIfIdle && (effect.turnId === undefined || effect.turnId === null)
         && ["queue", "steer-or-queue", "interrupt-active"].includes(effect.policy ?? "")
         && host?.coalescesQueuedInput === true && host.sendWaitsForRunningTurn === true
         && host.supportsSteer === false && host.supportsQueuedSend === false
         && this.port.coalescesConversation?.(effect.conversationId) === true && !!this.port.bindDeliveryBatch;
     };
+    // Choose a bounded membership set before any selected message is claimed
+    // `delivering`. Overflow stays in its existing queued slot for the next
+    // turn, so a large inbox adds no claim/requeue write cycle.
+    const coalescingEffects = effects.filter(canCoalesce) as SendEffect[];
+    if (coalescingEffects.length) {
+      const { coalescingIds, selectedIds } = await withViewerOperation("delivery.inbox-batch", async () => {
+        const coalescingIds = new Set(coalescingEffects.map(effect => effect.operationId));
+        const membership = composeBatch(coalescingEffects.map(effect => {
+          const status = durableStatuses.get(effect.operationId);
+          const entry: QueueEntry = {
+            id: effect.operationId,
+            content: effect.content,
+            contentDigest: effect.contentDigest,
+            text: effect.content.text,
+            images: effect.content.images,
+            expectedTurnId: null,
+            ...(effect.runtime ? { runtime: effect.runtime } : {}),
+            ...(effect.selectedContext ? { selectedContext: effect.selectedContext } : {}),
+            ...(effect.origin ? { origin: effect.origin } : {}),
+          };
+          return { entry, admittedAt: status?.admittedAt ?? status?.at ?? "", eventSeq: effect.eventSeq,
+            priority: effect.policy === "interrupt-active" && effect.origin?.kind === "operator" };
+        }));
+        return { coalescingIds, selectedIds: new Set(membership.members.map(member => member.entry.id)) };
+      });
+      effects = effects.filter(effect => !coalescingIds.has(effect.operationId) || selectedIds.has(effect.operationId));
+    }
     type Prepared = { member: InboxMember; effect: SendEffect; host: EngineHost; context: SendSettlementContext; generationId: string };
     let pendingBatch: Prepared[] = [];
     const releaseBatch = async (reason: string) => {

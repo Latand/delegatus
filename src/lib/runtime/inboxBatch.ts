@@ -55,11 +55,25 @@ export function composeBatch(input: readonly InboxMember[]): { entry: QueueEntry
   // again on every hand-over; only the bounded chosen prefix needs ordering.
   const ordered = [...input];
   if (ordered.some((m, i) => i > 0 && m.eventSeq < ordered[i - 1]!.eventSeq)) throw new Error("inbox members must follow admission order");
-  const candidates = [...ordered.filter(m => m.priority), ...ordered.filter(m => !m.priority)];
+  // Find the first operator item without copying the whole backlog into two
+  // additional arrays. Ordinary members retain their admission order.
+  const priorityCandidates: InboxMember[] = [];
+  const ordinaryCandidates: InboxMember[] = [];
+  const ordinaryPrefix: number[] = [0];
+  const indexByEventSeq = new Map<number, number>();
+  for (const member of ordered) {
+    indexByEventSeq.set(member.eventSeq, ordinaryPrefix.length - 1);
+    (member.priority ? priorityCandidates : ordinaryCandidates).push(member);
+    ordinaryPrefix.push(ordinaryPrefix.at(-1)! + Number(!member.priority));
+  }
+  const candidates = [...priorityCandidates, ...ordinaryCandidates];
   const selected: InboxMember[] = [];
   for (const m of candidates) {
     const proposed = [...selected, m].sort((a, b) => a.eventSeq - b.eventSeq);
-    const held = ordered.filter(other => !other.priority && !proposed.includes(other) && other.eventSeq < proposed.at(-1)!.eventSeq).length;
+    const end = proposed.at(-1)!.eventSeq;
+    const endIndex = indexByEventSeq.get(end)!;
+    const selectedOrdinaryBeforeEnd = proposed.filter(member => !member.priority && member.eventSeq < end).length;
+    const held = ordinaryPrefix[endIndex]! - selectedOrdinaryBeforeEnd;
     const entry = render(proposed, held);
     // Reserve 256 bytes for the intro, in addition to the actual part text.
     const introBytes = Buffer.byteLength(entry.content!.text.slice(0, entry.parts![0]!.headerStart));

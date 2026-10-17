@@ -3396,7 +3396,7 @@ async function conversationMessages(
       ...(args.full === true || args.includeMetadata === true ? { transcriptPath, engine, lastRecordAt: page.lastRecordAt } : {}),
       /* sign-in-and-team §7.1: a human message names its member. */
       records: withRecordAuthors(conversationId, transcriptPath, page.records, {
-        descriptor: pinned.descriptor, size: pinned.stat.size, engine,
+        descriptor: pinned.descriptor, size: pinned.stat.size, engine, redactText: context.redactText,
       }),
       hasMore: page.hasMore,
       cursor: page.cursor ? encodeMessagesCursor(page.cursor, scope) : null,
@@ -3412,14 +3412,15 @@ function withRecordAuthors<T extends { seq: number; role: string; ts: string | n
   conversationId: string | null,
   transcriptPath: string,
   records: T[],
-  source: { descriptor: number; size: number; engine: "claude" | "codex" | "copilot" },
+  source: { descriptor: number; size: number; engine: "claude" | "codex" | "copilot"; redactText?: (text: string) => string },
 ): Array<T & { author?: RecordAuthor | AgentRecordAuthor }> {
   if (!records.some((record) => record.role === "user")) return records;
   const context = readMessageAuthorContext(source, records);
   const authorRecords = context ?? records;
   const claudeOrigins = source.engine === "claude" ? claudeMessageProvenance(transcriptPath) : undefined;
   const agentAuthors = agentRecordAuthors(transcriptPath, source.engine, authorRecords, context, claudeOrigins);
-  const partAuthors = claudeOrigins ? agentRecordPartAuthors(transcriptPath, records, claudeOrigins) : new Map();
+  const partAuthors = claudeOrigins ? agentRecordPartAuthors(transcriptPath, records, claudeOrigins,
+    value => hardenedRedact(source.redactText ? source.redactText(value) : value)) : new Map();
   const contextPartAuthors = claudeOrigins ? agentRecordPartAuthors(transcriptPath, authorRecords, claudeOrigins) : new Map();
   const humanBySeq = new Map<number, RecordAuthor>();
   for (const [index, author] of recordAuthors(conversationId, authorRecords.map((record, index) => ({

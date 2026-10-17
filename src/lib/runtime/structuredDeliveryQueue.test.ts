@@ -3471,9 +3471,21 @@ test("seat inbox acceptance: six answers, chat and wake reach one turn without i
 
 test("seat inbox priority preserves ordinary admission order across a forty-message backlog", async () => {
   const h = inboxHarness(41);
+  const claims: string[] = [], requeues: string[] = [];
+  const transition = h.port.transition;
+  h.port.transition = async (id, status, details, options) => {
+    if (status === "delivering") claims.push(id);
+    if (status === "queued") requeues.push(id);
+    await transition(id, status, details, options);
+  };
   h.inputs.forEach((e, i) => Object.assign(e.payload, { text: i === 40 ? "c".repeat(80) : String(i).padStart(3, "0") + "o".repeat(14997),
     policy: i === 40 ? "interrupt-active" : "queue", origin: i === 40 ? { kind: "operator" } : { kind: "agent" } }));
-  for (let i = 0; i < 21; i++) { h.idle(); await h.queue.drain(); }
+  h.idle(); await h.queue.drain();
+  expect(claims).toHaveLength(3);
+  expect(requeues).toEqual([]);
+  expect([...h.rows.entries()].filter(([, row]) => row.status === "queued").map(([id]) => id))
+    .toEqual(h.inputs.slice(2, 40).map(e => String(e.payload.operationId)));
+  for (let i = 1; i < 21; i++) { h.idle(); await h.queue.drain(); }
   expect(h.sends).toHaveLength(20);
   expect(h.sends[0]!.parts?.map(p => p.operationId)).toEqual(["inbox-0", "inbox-1", "inbox-40"]);
   const ordinary = h.sends.flatMap(e => e.parts?.map(p => p.operationId) ?? [e.id]).filter(id => id !== "inbox-40");

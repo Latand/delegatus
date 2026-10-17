@@ -22,6 +22,7 @@ export interface AuthorEvidenceRecord {
   text: string;
   sourceText?: string;
   sourceId?: string;
+  truncated?: boolean;
 }
 
 function authorFromOrigin(origin: MessageOrigin): AgentRecordAuthor {
@@ -113,10 +114,51 @@ export function agentRecordAuthors(
 
 /** conversation_messages keeps the transcript row and exposes its separate
  * authors without attributing the entire batch to any one of them. */
-export function agentRecordPartAuthors(transcriptPath: string, records: readonly AuthorEvidenceRecord[], ledger = claudeMessageProvenance(transcriptPath)) {
+export function agentRecordPartAuthors(
+  transcriptPath: string,
+  records: readonly AuthorEvidenceRecord[],
+  ledger = claudeMessageProvenance(transcriptPath),
+  projectText: (text: string) => string = text => text,
+) {
   return new Map(records.flatMap((record, index) => {
     const parts = record.role === "user" && record.sourceId ? ledger[record.sourceId]?.parts : undefined;
-    return parts ? [[index, parts.map(p => ({ operationId: p.operationId, textStart: p.textStart, textEnd: p.textEnd,
-      author: p.provenance.origin === "agent" ? authorFromProvenance(p.provenance) : { kind: "operator" as const } }))] as const] : [];
+    if (!parts) return [];
+    const sourceText = record.sourceText ?? record.text;
+    let searchFrom = 0;
+    let sourceCursor = 0;
+    let visibleFrom = 0;
+    const projectedParts = parts.flatMap(p => {
+      const authoredText = p.text;
+      // The broker's offsets point past each part header. Claude's normalized
+      // block separators can only move that point forward within this message.
+      const sourceStart = sourceText.indexOf(authoredText, Math.max(searchFrom, p.textStart));
+      if (sourceStart < 0) return [];
+      const sourceEnd = sourceStart + authoredText.length;
+      searchFrom = sourceEnd;
+      const projectedGap = projectText(sourceText.slice(sourceCursor, sourceStart));
+      const expectedStart = visibleFrom + projectedGap.length;
+      sourceCursor = sourceEnd;
+      // Match the projected body at its normalized position so repeated text
+      // in a later part's header cannot steal that part's author range.
+      const projected = projectText(authoredText);
+      let textStart = projected && record.text.startsWith(projected, expectedStart) ? expectedStart : -1;
+      if (textStart < 0 && projected) {
+        const nearby = record.text.indexOf(projected, expectedStart);
+        if (nearby >= expectedStart) textStart = nearby;
+      }
+      let clipped = false;
+      if (textStart < 0 && record.truncated) {
+        const visiblePrefix = projectText(authoredText.slice(0, Math.min(authoredText.length, 32)));
+        textStart = visiblePrefix ? record.text.indexOf(visiblePrefix, expectedStart) : -1;
+        clipped = textStart >= 0;
+      }
+      if (textStart < 0) return [];
+      const textEnd = clipped ? record.text.length : textStart + projected.length;
+      if (textEnd <= textStart) return [];
+      visibleFrom = textEnd;
+      return [{ operationId: p.operationId, textStart, textEnd,
+        author: p.provenance.origin === "agent" ? authorFromProvenance(p.provenance) : { kind: "operator" as const } }];
+    });
+    return projectedParts.length ? [[index, projectedParts] as const] : [];
   }));
 }
