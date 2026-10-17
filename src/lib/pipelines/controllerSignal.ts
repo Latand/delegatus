@@ -1,12 +1,15 @@
 import { internalServiceHeaders } from "@/lib/agent/callerClaims";
 import { viewerControlOrigin, viewerControlToken } from "@/lib/mcp/controlEndpoint";
 
+export const PIPELINE_TICK_REQUEST_MS = 45_000;
+
 type PipelineTick = () => Promise<void>;
 type Fetcher = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
 interface PipelineSignalState {
   tick: PipelineTick | null;
   scheduled: boolean;
+  trailing?: boolean;
 }
 
 const signalHost = globalThis as typeof globalThis & {
@@ -40,6 +43,7 @@ export async function requestRemotePipelineTick(
     console.error("[pipeline controller] service tag unavailable", error instanceof Error ? error.message : error);
   }
   const response = await fetcher(new URL("/api/pipelines/tick", baseUrl), {
+    signal: AbortSignal.timeout(PIPELINE_TICK_REQUEST_MS),
     method: "POST",
     headers: {
       "content-type": "application/json",
@@ -72,14 +76,19 @@ export function hasLocalPipelineController(): boolean {
 }
 
 export function requestPipelineTick(): void {
-  if (signal.scheduled || signal.tick === null) return;
+  if (signal.tick === null) return;
+  if (signal.scheduled) { signal.trailing = true; return; }
   signal.scheduled = true;
   queueMicrotask(() => {
-    signal.scheduled = false;
+    // Wakes before dispatch are part of this tick. Wakes during it ask for
+    // exactly one later dispatch, without adding observers to its promise.
+    signal.trailing = false;
     const tick = signal.tick;
-    if (tick === null) return;
-    void tick().catch((error) => {
+    void Promise.resolve().then(() => tick?.()).catch((error) => {
       console.error("[pipeline controller] requested tick failed", error);
+    }).finally(() => {
+      signal.scheduled = false;
+      if (signal.trailing) requestPipelineTick();
     });
   });
 }
